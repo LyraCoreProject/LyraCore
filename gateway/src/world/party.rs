@@ -98,6 +98,48 @@ pub struct RealmCharacterPartition {
 }
 
 const PARTY_LOCATION_SHARD_LIMIT: usize = 16;
+pub(crate) const PARTY_COMMAND_ABORT_STEP: &str = "apply_party_command";
+
+pub(crate) fn party_command_abort_configuration(
+    configured: Option<String>,
+) -> Result<Option<String>> {
+    match configured {
+        None => Ok(None),
+        Some(step) if step == PARTY_COMMAND_ABORT_STEP => Ok(Some(step)),
+        Some(step) => anyhow::bail!(
+            "LYRACORE_PARTY_COMMAND_ABORT_AFTER={step} names no party command step; valid step: \
+             {PARTY_COMMAND_ABORT_STEP}"
+        ),
+    }
+}
+
+#[cfg(not(test))]
+fn die_by_party_command_injection() -> ! {
+    log::logger().flush();
+    std::process::abort()
+}
+
+#[cfg(test)]
+fn die_by_party_command_injection() -> ! {
+    panic!("LYRACORE_PARTY_COMMAND_ABORT_AFTER: injected abort");
+}
+
+#[inline]
+fn party_command_abort_point(
+    abort_after: Option<&str>,
+    source_identity: spacetimedb_sdk::Identity,
+    intent_id: u64,
+) {
+    if abort_after != Some(PARTY_COMMAND_ABORT_STEP) {
+        return;
+    }
+    log::error!(
+        "party command {source_identity}/{intent_id}: \
+         LYRACORE_PARTY_COMMAND_ABORT_AFTER={PARTY_COMMAND_ABORT_STEP}; target apply committed, \
+         aborting before source finalization for the Gateway recovery test"
+    );
+    die_by_party_command_injection()
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct PartyHolderObservation {
@@ -369,6 +411,9 @@ pub(crate) fn run_party_command_intent<St: WorldStore>(
     intent: &PartyCommandIntent,
     claim_token: u64,
 ) -> Result<CompanionCommandOutcome> {
+    let abort_after = party_command_abort_configuration(
+        std::env::var("LYRACORE_PARTY_COMMAND_ABORT_AFTER").ok(),
+    )?;
     source.claim_party_command_intent(intent.id, claim_token)?;
 
     if let Some(outcome) = receipt_anywhere(source, intent.source_identity, intent.id)? {
@@ -511,6 +556,7 @@ pub(crate) fn run_party_command_intent<St: WorldStore>(
     };
     let outcome = target.apply_admitted_party_command(&admitted)?;
     if outcome != CompanionCommandOutcome::WaitingForCapacity {
+        party_command_abort_point(abort_after.as_deref(), intent.source_identity, intent.id);
         source.finish_party_command_intent(intent.id, claim_token, outcome)?;
     }
     Ok(outcome)

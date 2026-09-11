@@ -10,7 +10,7 @@
 //! | verb | core | gate semantics (unchanged, documented here for consumers) |
 //! |------|------|------------------------------------------------------------|
 //! | `attack` | `combat::apply_start_attack` | CC-blocked rejected; no self/corpse/cross-map; friendly (green) target rejected when faction data exists; re-arm retargets |
-//! | `request_attack` | `combat::request_attack` | typed acceptance or Refusal; keeps a matching swing timer; acceptance does not imply damage |
+//! | `request_attack` | `combat::request_attack` | typed acceptance or Refusal; keeps a matching swing timer; an in-range Character turns toward the exact target when the facing Gate would block its swing unless an active movement leg owns facing; acceptance does not imply damage |
 //! | `ranged_attack` | `combat::apply_start_ranged_attack` | `attack` gates + ranged weapon equipped (slot 17) |
 //! | `stop_attack` | `combat::stop_attack_for` | unconditional disarm of the actor's outgoing melee row |
 //! | `cast_at` | `spell::request_cast` | normal cast lifecycle; an existing timed cast waits; level comes from the live entity |

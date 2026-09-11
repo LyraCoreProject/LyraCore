@@ -19,6 +19,7 @@ use crate::{game_faction_template, game_world_entity, WorldEntity};
 // defined in `swing.rs` (mirrors `spell::tables`'s identical cross-file `scheduled(..)` pattern).
 use super::*;
 use crate::actor::{ActionRefusal, ActionRefusalKind};
+use crate::creatures::tick::game_creature_spline;
 
 // --- Engagement queries over `game_melee_attack` (the single source of truth for who fights whom).
 // `attacker_guid` is the PK; an engagement "touches" a unit when it is on EITHER side. These three
@@ -554,14 +555,85 @@ pub enum AttackStart {
     AlreadyArmed,
 }
 
-/// Arm melee without resetting a current swing timer. Acceptance does not imply a hit.
+/// Arm melee without resetting a current swing timer. An in-range Character turns toward the
+/// admitted target when Core's facing Gate would block its swing, unless its current movement leg
+/// still owns position and facing. Acceptance does not imply a hit.
 #[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn request_attack(
     ctx: &ReducerContext,
     attacker_guid: u64,
     target_guid: u64,
 ) -> Result<AttackStart, ActionRefusal> {
-    start_attack(ctx, attacker_guid, target_guid, true)
+    let accepted = start_attack(ctx, attacker_guid, target_guid, true)?;
+    face_requested_melee_target(ctx, attacker_guid, target_guid);
+    Ok(accepted)
+}
+
+fn face_requested_melee_target(ctx: &ReducerContext, attacker_guid: u64, target_guid: u64) {
+    let entities = ctx.db.game_world_entity();
+    let Some(mut attacker) = entities.guid().find(attacker_guid) else {
+        return;
+    };
+    if !attacker.is_player() {
+        return;
+    }
+    let Some(target) = entities.guid().find(target_guid) else {
+        return;
+    };
+    let (dx, dy, dz) = (
+        target.x - attacker.x,
+        target.y - attacker.y,
+        target.z - attacker.z,
+    );
+    if dx * dx + dy * dy + dz * dz > MELEE_RANGE_SQ
+        || (dx.abs() <= f32::EPSILON && dy.abs() <= f32::EPSILON)
+    {
+        return;
+    }
+
+    let splines = ctx.db.game_creature_spline();
+    let retained = splines.guid().find(attacker_guid);
+    let now_micros = ctx.timestamp.to_micros_since_unix_epoch().max(0) as u64;
+    if retained.as_ref().is_some_and(|spline| {
+        !spline.facing
+            && spline.dur_ms > 0
+            && spline
+                .start_micros
+                .saturating_add(u64::from(spline.dur_ms) * 1_000)
+                > now_micros
+    }) {
+        return;
+    }
+
+    let orientation = dy.atan2(dx);
+    if crate::spell::is_facing(
+        attacker.x,
+        attacker.y,
+        attacker.orientation,
+        target.x,
+        target.y,
+    ) {
+        return;
+    }
+    let now_ms = (now_micros / 1_000) as u32;
+    let spline_id = retained
+        .as_ref()
+        .map_or(now_ms, |last| now_ms.max(last.spline_id.wrapping_add(1)));
+    let position = (attacker.x, attacker.y, attacker.z);
+    let partition = (attacker.map_id, attacker.instance_id);
+    let grid = (attacker.grid_x, attacker.grid_y);
+    attacker.orientation = orientation;
+    entities.guid().update(attacker);
+    crate::creatures::tick::emit_facing_spline(
+        ctx,
+        attacker_guid,
+        position,
+        orientation,
+        spline_id,
+        partition.0,
+        partition.1,
+        grid,
+    );
 }
 
 fn start_attack(

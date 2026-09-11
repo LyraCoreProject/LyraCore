@@ -170,6 +170,22 @@ fn command_intent(bot_guid: u64) -> party::PartyCommandIntent {
 }
 
 #[test]
+fn party_command_abort_configuration_names_only_the_committed_apply_boundary() {
+    assert_eq!(
+        party::party_command_abort_configuration(None).unwrap(),
+        None
+    );
+    assert_eq!(
+        party::party_command_abort_configuration(Some(party::PARTY_COMMAND_ABORT_STEP.to_string()))
+            .unwrap(),
+        Some(party::PARTY_COMMAND_ABORT_STEP.to_string())
+    );
+    let error =
+        party::party_command_abort_configuration(Some("finish_source".to_string())).unwrap_err();
+    assert!(error.to_string().contains("names no party command step"));
+}
+
+#[test]
 fn a_companion_command_uses_realm_authority_and_the_bots_actual_world_shard() {
     let (realm, world, instances, _) = party_topology();
     party::run(world.as_ref(), 7, GINGER, party::Op::Invite(FAR_BOT)).unwrap();

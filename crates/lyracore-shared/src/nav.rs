@@ -267,11 +267,11 @@ pub fn step_hit(
 /// Nav-grid resolution in yards (one walk sub-cell).
 pub const NAV_RES: f32 = CELL_SIZE / WALK_DIM as f32;
 
-/// Global walk-grid coordinate: `cell_index * 64 + sub_index` (counts DOWN from
-/// +MAP_COORD_MAX like everything else). u32 range 0..65536.
+/// Global walk-grid coordinate, counting down from +MAP_COORD_MAX in 0..65536.
+/// Classify the stored world coordinate before f32 rounding can move it across a cell edge.
 fn grid_coord(coord: f32) -> Option<u32> {
-    let c = (MAP_COORD_MAX - coord) / NAV_RES;
-    if !(0.0..(1024 * WALK_DIM) as f32).contains(&c) {
+    let c = (f64::from(MAP_COORD_MAX) - f64::from(coord)) / f64::from(NAV_RES);
+    if !(0.0..(1024 * WALK_DIM) as f64).contains(&c) {
         return None;
     }
     Some(c as u32)
@@ -289,29 +289,48 @@ fn grid_walkable(
     cache.walkable(grid_to_world(gx), grid_to_world(gy))
 }
 
-/// Straight segment fully walkable? (the A* fast path + the string-pulling test.) Samples
-/// inside the START's own nav cell are exempt: a chaser hugging an obstacle stands in the
-/// blob's conservative margin (movement isn't walkability-gated), and counting its own cell
-/// as blocked failed EVERY sightline — string-pulling collapsed to per-cell micro-steps and
-/// the mob visibly stuttered each tick (live find, 2026-07-10).
+/// Check every crossed cell before accepting a direct route or removing a waypoint.
+/// The start cell is exempt so a mover can escape a conservative obstruction margin.
 fn line_walkable(
     cache: &mut Cache<impl FnMut(u16, u16) -> Option<NavCellData>>,
     from: (f32, f32),
     to: (f32, f32),
 ) -> bool {
-    let start_cell = (grid_coord(from.0), grid_coord(from.1));
-    let (dx, dy) = (to.0 - from.0, to.1 - from.1);
-    let steps = ((dx * dx + dy * dy).sqrt() / (NAV_RES * 0.5))
-        .ceil()
-        .max(1.0) as u32;
-    (0..=steps).all(|i| {
-        let t = i as f32 / steps as f32;
-        let (x, y) = (from.0 + dx * t, from.1 + dy * t);
-        if (grid_coord(x), grid_coord(y)) == start_cell {
-            return true;
+    let (Some(mut x), Some(mut y), Some(tx), Some(ty)) = (
+        grid_coord(from.0),
+        grid_coord(from.1),
+        grid_coord(to.0),
+        grid_coord(to.1),
+    ) else {
+        return false;
+    };
+    // Keep the world segment precise when measuring its grid-boundary intersections.
+    let gx = (f64::from(MAP_COORD_MAX) - f64::from(from.0)) / f64::from(NAV_RES);
+    let gy = (f64::from(MAP_COORD_MAX) - f64::from(from.1)) / f64::from(NAV_RES);
+    let dx = (f64::from(from.0) - f64::from(to.0)) / f64::from(NAV_RES);
+    let dy = (f64::from(from.1) - f64::from(to.1)) / f64::from(NAV_RES);
+    let crossing = |cell: u32, target: u32, origin: f64, delta: f64| match cell.cmp(&target) {
+        std::cmp::Ordering::Less => (cell + 1, (f64::from(cell + 1) - origin) / delta),
+        std::cmp::Ordering::Greater => (cell - 1, (f64::from(cell) - origin) / delta),
+        std::cmp::Ordering::Equal => (cell, f64::INFINITY),
+    };
+    while (x, y) != (tx, ty) {
+        let (nx, cross_x) = crossing(x, tx, gx, dx);
+        let (ny, cross_y) = crossing(y, ty, gy, dy);
+        if cross_x == cross_y && (!grid_walkable(cache, nx, y) || !grid_walkable(cache, x, ny)) {
+            return false;
         }
-        cache.walkable(x, y)
-    })
+        if cross_x <= cross_y {
+            x = nx;
+        }
+        if cross_y <= cross_x {
+            y = ny;
+        }
+        if !grid_walkable(cache, x, y) {
+            return false;
+        }
+    }
+    true
 }
 
 /// Short-leg grid A* with string-pulling. Returns world waypoints from AFTER `from` up to and
@@ -562,7 +581,10 @@ fn search_leg(
         && (stop_dist == 0.0 || (anchor.0 - to.0).hypot(anchor.1 - to.1) > stop_dist)
         && line_walkable(&mut cache, anchor, to)
     {
-        path.pop();
+        let previous = path.iter().rev().nth(1).copied().unwrap_or(from);
+        if line_walkable(&mut cache, previous, to) {
+            path.pop();
+        }
         path.push(to);
     }
     LegSearch {
@@ -624,6 +646,27 @@ mod runtime_tests {
     fn at(nx: usize, ny: usize) -> (f32, f32) {
         let ((cx, cy), _) = walled_cell();
         (sub_center(cx, nx, WALK_DIM), sub_center(cy, ny, WALK_DIM))
+    }
+
+    fn enters_rectangle(from: (f32, f32), to: (f32, f32), bounds: [(f64, f64); 2]) -> bool {
+        let mut entry = 0.0_f64;
+        let mut exit = 1.0_f64;
+        for ((start, end), (low, high)) in [(from.0, to.0), (from.1, to.1)].into_iter().zip(bounds)
+        {
+            let start = f64::from(start);
+            let delta = f64::from(end) - start;
+            if delta == 0.0 {
+                if start <= low || start >= high {
+                    return false;
+                }
+            } else {
+                let a = (low - start) / delta;
+                let b = (high - start) / delta;
+                entry = entry.max(a.min(b));
+                exit = exit.min(a.max(b));
+            }
+        }
+        entry < exit
     }
 
     #[test]
@@ -688,6 +731,93 @@ mod runtime_tests {
             );
             prev = p;
         }
+    }
+
+    #[test]
+    fn find_leg_does_not_cut_a_blocked_cell_corner() {
+        let mut cell = NavCellData {
+            base_z: 50.0,
+            walk: vec![0xff; WALK_BYTES],
+            obs: vec![OBS_NONE; OBS_BYTES],
+        };
+        walk_set(&mut cell.walk, 0, 18, false);
+        let mut fetch = |x, y| ((x, y) == (470, 476)).then(|| cell.clone());
+        let endpoints = [(1398.908, 1190.3529), (1400.2607, 1189.8438)];
+        // The declared cell bounds, checked by segment intersection instead of route sampling.
+        let bounds = [
+            (1_399.479_113_280_773_2, 1_399.999_946_594_238_3),
+            (1_190.104_121_267_795_6, 1_190.624_954_581_260_7),
+        ];
+        for (from, to) in [(endpoints[0], endpoints[1]), (endpoints[1], endpoints[0])] {
+            let (path, _, complete) = find_leg_ex(&mut fetch, from, to, 4096).unwrap();
+            assert!(complete);
+            assert_eq!(path.last(), Some(&to));
+            let mut previous = from;
+            for point in path {
+                assert!(
+                    !enters_rectangle(previous, point, bounds),
+                    "blocked segment {previous:?} -> {point:?}"
+                );
+                previous = point;
+            }
+        }
+    }
+
+    #[test]
+    fn reaching_the_exact_destination_preserves_a_needed_corner_waypoint() {
+        let from = at(10, 0);
+        let center = at(33, 32);
+        let to = (center.0 - NAV_RES * 0.3, center.1 + NAV_RES * 0.25);
+        let (path, _, complete) = find_leg_ex(&mut fetcher(), from, to, 4096).unwrap();
+        assert!(complete);
+        assert_eq!(path.last(), Some(&to));
+        // This wall cell borders the doorway on the approach to the goal.
+        let bounds = [
+            (-8_917.187_159_836_292, -8_916.666_326_522_827),
+            (-182.291_659_712_791_44, -181.770_826_399_326_32),
+        ];
+        let mut previous = from;
+        for point in path {
+            assert!(
+                !enters_rectangle(previous, point, bounds),
+                "blocked final approach {previous:?} -> {point:?}"
+            );
+            previous = point;
+        }
+    }
+
+    #[test]
+    fn route_endpoints_on_either_side_of_a_cell_edge_keep_their_walkability() {
+        let mut cell = NavCellData {
+            base_z: 50.0,
+            walk: vec![0xff; WALK_BYTES],
+            obs: vec![OBS_NONE; OBS_BYTES],
+        };
+        walk_set(&mut cell.walk, 0, 18, false);
+        let mut fetch = |x, y| ((x, y) == (470, 476)).then(|| cell.clone());
+        for (start_x, end_x, reachable) in [
+            (1401.0, 1400.0, true),
+            (1401.0, 1400.0_f32.next_down(), false),
+            (1398.5, 1399.4791, false),
+            (1398.5, 1399.4791_f32.next_down(), true),
+        ] {
+            let route = find_leg(&mut fetch, (start_x, 1190.3), (end_x, 1190.3), 0);
+            assert_eq!(route.is_some(), reachable, "endpoint x={end_x:?}");
+        }
+    }
+
+    #[test]
+    fn a_direct_route_cannot_squeeze_between_blocked_corners() {
+        let mut cell = NavCellData {
+            base_z: 50.0,
+            walk: vec![0xff; WALK_BYTES],
+            obs: vec![OBS_NONE; OBS_BYTES],
+        };
+        walk_set(&mut cell.walk, 1, 2, false);
+        let mut fetch = |x, y| ((x, y) == (470, 470)).then(|| cell.clone());
+        let from = sub_center(470, 2, WALK_DIM);
+        let to = sub_center(470, 0, WALK_DIM);
+        assert!(find_leg(&mut fetch, (from, from), (to, to), 0).is_none());
     }
 
     #[test]

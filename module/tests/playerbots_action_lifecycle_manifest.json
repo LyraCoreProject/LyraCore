@@ -1,0 +1,698 @@
+{
+  "schema": "playerbots-action-lifecycle-v1",
+  "cells": [
+    {
+      "action": "Move.Home",
+      "lifecycle": "success",
+      "case": {
+        "target": "playerbots_rewrite",
+        "name": "runner::playerbots_runner_returns_home_with_observed_arrival_and_one_objective",
+        "source": "module/tests/playerbots_rewrite/runner.rs"
+      }
+    },
+    {
+      "action": "Move.Home",
+      "lifecycle": "waiting",
+      "case": {
+        "target": "playerbots_rewrite",
+        "name": "runner::playerbots_runner_returns_home_with_observed_arrival_and_one_objective",
+        "source": "module/tests/playerbots_rewrite/runner.rs"
+      }
+    },
+    {
+      "action": "Move.Home",
+      "lifecycle": "refusal",
+      "case": {
+        "target": "playerbots_action_lifecycle",
+        "name": "playerbots_home_move_records_a_verified_blocked_route",
+        "source": "module/tests/playerbots_action_lifecycle.rs"
+      }
+    },
+    {
+      "action": "Move.Home",
+      "lifecycle": "cancellation",
+      "case": {
+        "target": "playerbots_action_lifecycle",
+        "name": "playerbots_return_home_cancels_its_real_owned_movement",
+        "source": "module/tests/playerbots_action_lifecycle.rs"
+      }
+    },
+    {
+      "action": "Move.Home",
+      "lifecycle": "expiry",
+      "case": {
+        "target": "playerbots_action_lifecycle",
+        "name": "playerbots_return_home_expires_its_real_owned_movement",
+        "source": "module/tests/playerbots_action_lifecycle.rs"
+      }
+    },
+    {
+      "action": "Move.Entity",
+      "lifecycle": "success",
+      "case": {
+        "target": "playerbots_orders",
+        "name": "playerbots_target_pulls_only_the_exact_eligible_creature_and_releases_controlled_work",
+        "source": "module/tests/playerbots_orders.rs"
+      }
+    },
+    {
+      "action": "Move.Entity",
+      "lifecycle": "waiting",
+      "case": {
+        "target": "playerbots_recovery",
+        "name": "playerbots_recovery_changes_a_stalled_attack_then_defers_without_false_progress",
+        "source": "module/tests/playerbots_recovery.rs"
+      }
+    },
+    {
+      "action": "Move.Entity",
+      "lifecycle": "refusal",
+      "case": {
+        "target": "playerbots_action_lifecycle",
+        "name": "playerbots_quest_move_targets_record_verified_blocked_routes",
+        "source": "module/tests/playerbots_action_lifecycle.rs"
+      }
+    },
+    {
+      "action": "Move.Entity",
+      "lifecycle": "cancellation",
+      "case": {
+        "target": "playerbots_recovery",
+        "name": "playerbots_recovery_stops_an_armed_quest_attack_when_target_control_is_unknown",
+        "source": "module/tests/playerbots_recovery.rs"
+      }
+    },
+    {
+      "action": "Move.Entity",
+      "lifecycle": "expiry",
+      "case": {
+        "target": "playerbots_action_lifecycle",
+        "name": "playerbots_quest_roots_expire_their_real_movement_prerequisites",
+        "source": "module/tests/playerbots_action_lifecycle.rs"
+      }
+    },
+    {
+      "action": "Move.CastingPosition",
+      "lifecycle": "success",
+      "case": {
+        "target": "playerbots_companion",
+        "name": "playerbots_casting_position_retains_one_injured_ally_across_movement_legs",
+        "source": "module/tests/playerbots_companion.rs"
+      }
+    },
+    {
+      "action": "Move.CastingPosition",
+      "lifecycle": "waiting",
+      "case": {
+        "target": "playerbots_companion",
+        "name": "playerbots_priest_retains_one_ally_cast_while_the_leader_moves_then_resumes_follow",
+        "source": "module/tests/playerbots_companion.rs"
+      }
+    },
+    {
+      "action": "Move.CastingPosition",
+      "lifecycle": "refusal",
+      "case": {
+        "target": "playerbots_action_lifecycle",
+        "name": "playerbots_quest_move_targets_record_verified_blocked_routes",
+        "source": "module/tests/playerbots_action_lifecycle.rs"
+      }
+    },
+    {
+      "action": "Move.CastingPosition",
+      "lifecycle": "cancellation",
+      "case": {
+        "target": "playerbots_companion",
+        "name": "playerbots_explicit_cancellation_releases_the_heal_and_resumes_follow",
+        "source": "module/tests/playerbots_companion.rs"
+      }
+    },
+    {
+      "action": "Move.CastingPosition",
+      "lifecycle": "expiry",
+      "case": {
+        "target": "playerbots_action_lifecycle",
+        "name": "playerbots_quest_roots_expire_their_real_movement_prerequisites",
+        "source": "module/tests/playerbots_action_lifecycle.rs"
+      }
+    },
+    {
+      "action": "Move.GameObject",
+      "lifecycle": "success",
+      "case": {
+        "target": "playerbots_quest_loops",
+        "name": "playerbots_simple_gameobject_use_is_autonomous_stateful_and_once_only",
+        "source": "module/tests/playerbots_quest_loops.rs"
+      }
+    },
+    {
+      "action": "Move.GameObject",
+      "lifecycle": "waiting",
+      "case": {
+        "target": "playerbots_recovery_failures",
+        "name": "playerbots_recovery_depleted_target_waits_for_actual_respawn_then_resumes",
+        "source": "module/tests/playerbots_recovery_failures.rs"
+      }
+    },
+    {
+      "action": "Move.GameObject",
+      "lifecycle": "refusal",
+      "case": {
+        "target": "playerbots_action_lifecycle",
+        "name": "playerbots_quest_move_targets_record_verified_blocked_routes",
+        "source": "module/tests/playerbots_action_lifecycle.rs"
+      }
+    },
+    {
+      "action": "Move.GameObject",
+      "lifecycle": "cancellation",
+      "case": {
+        "target": "playerbots_recovery_failures",
+        "name": "playerbots_recovery_cancels_an_owned_gameobject_approach_when_the_target_disappears",
+        "source": "module/tests/playerbots_recovery_failures.rs"
+      }
+    },
+    {
+      "action": "Move.GameObject",
+      "lifecycle": "expiry",
+      "case": {
+        "target": "playerbots_action_lifecycle",
+        "name": "playerbots_quest_roots_expire_their_real_movement_prerequisites",
+        "source": "module/tests/playerbots_action_lifecycle.rs"
+      }
+    },
+    {
+      "action": "Move.RecoveryPosition",
+      "lifecycle": "success",
+      "case": {
+        "target": "playerbots_recovery",
+        "name": "playerbots_recovery_retains_a_partial_route_that_first_moves_away_from_the_leader",
+        "source": "module/tests/playerbots_recovery.rs"
+      }
+    },
+    {
+      "action": "Move.RecoveryPosition",
+      "lifecycle": "waiting",
+      "case": {
+        "target": "playerbots_recovery",
+        "name": "playerbots_recovery_retains_a_partial_route_that_first_moves_away_from_the_leader",
+        "source": "module/tests/playerbots_recovery.rs"
+      }
+    },
+    {
+      "action": "Move.RecoveryPosition",
+      "lifecycle": "refusal",
+      "case": {
+        "target": "playerbots_action_lifecycle",
+        "name": "playerbots_quest_move_targets_record_verified_blocked_routes",
+        "source": "module/tests/playerbots_action_lifecycle.rs"
+      }
+    },
+    {
+      "action": "Move.RecoveryPosition",
+      "lifecycle": "cancellation",
+      "case": {
+        "target": "playerbots_recovery",
+        "name": "playerbots_recovery_replaces_a_recovery_leg_when_the_quest_fight_changes",
+        "source": "module/tests/playerbots_recovery.rs"
+      }
+    },
+    {
+      "action": "Move.RecoveryPosition",
+      "lifecycle": "expiry",
+      "case": {
+        "target": "playerbots_action_lifecycle",
+        "name": "playerbots_recovery_position_expires_with_its_retained_quest",
+        "source": "module/tests/playerbots_action_lifecycle.rs"
+      }
+    },
+    {
+      "action": "Move.AreaTrigger",
+      "lifecycle": "success",
+      "case": {
+        "target": "playerbots_transfer",
+        "name": "playerbots_companion_approaches_the_exact_supported_areatrigger",
+        "source": "module/tests/playerbots_transfer.rs"
+      }
+    },
+    {
+      "action": "Move.AreaTrigger",
+      "lifecycle": "waiting",
+      "case": {
+        "target": "playerbots_transfer",
+        "name": "playerbots_companion_approaches_the_exact_supported_areatrigger",
+        "source": "module/tests/playerbots_transfer.rs"
+      }
+    },
+    {
+      "action": "Move.AreaTrigger",
+      "lifecycle": "refusal",
+      "case": {
+        "target": "playerbots_action_lifecycle",
+        "name": "playerbots_areatrigger_move_records_a_verified_blocked_route",
+        "source": "module/tests/playerbots_action_lifecycle.rs"
+      }
+    },
+    {
+      "action": "Move.AreaTrigger",
+      "lifecycle": "cancellation",
+      "case": {
+        "target": "playerbots_action_lifecycle",
+        "name": "playerbots_transfer_root_cancels_its_real_areatrigger_approach",
+        "source": "module/tests/playerbots_action_lifecycle.rs"
+      }
+    },
+    {
+      "action": "Move.AreaTrigger",
+      "lifecycle": "expiry",
+      "case": {
+        "target": "playerbots_action_lifecycle",
+        "name": "playerbots_return_home_transfer_roots_expire_before_admission",
+        "source": "module/tests/playerbots_action_lifecycle.rs"
+      }
+    },
+    {
+      "action": "Cast",
+      "lifecycle": "success",
+      "case": {
+        "target": "playerbots_rewrite",
+        "name": "playerbots_a_long_bot_cast_waits_for_core_completion",
+        "source": "module/tests/playerbots_rewrite.rs"
+      }
+    },
+    {
+      "action": "Cast",
+      "lifecycle": "waiting",
+      "case": {
+        "target": "playerbots_rewrite",
+        "name": "playerbots_a_long_bot_cast_waits_for_core_completion",
+        "source": "module/tests/playerbots_rewrite.rs"
+      }
+    },
+    {
+      "action": "Cast",
+      "lifecycle": "refusal",
+      "case": {
+        "target": "playerbots_rewrite",
+        "name": "playerbots_an_out_of_range_heal_reports_the_owning_cast_gate",
+        "source": "module/tests/playerbots_rewrite.rs"
+      }
+    },
+    {
+      "action": "Cast",
+      "lifecycle": "cancellation",
+      "case": {
+        "target": "playerbots_rewrite",
+        "name": "playerbots_explicit_cancellation_removes_the_cast_and_retains_its_outcome",
+        "source": "module/tests/playerbots_rewrite.rs"
+      }
+    },
+    {
+      "action": "Cast",
+      "lifecycle": "expiry",
+      "case": {
+        "target": "playerbots_rewrite",
+        "name": "playerbots_an_expired_cast_cannot_heal_later",
+        "source": "module/tests/playerbots_rewrite.rs"
+      }
+    },
+    {
+      "action": "Attack",
+      "lifecycle": "success",
+      "case": {
+        "target": "playerbots_orders",
+        "name": "playerbots_target_pulls_only_the_exact_eligible_creature_and_releases_controlled_work",
+        "source": "module/tests/playerbots_orders.rs"
+      }
+    },
+    {
+      "action": "Attack",
+      "lifecycle": "waiting",
+      "case": {
+        "target": "playerbots_rewrite",
+        "name": "playerbots_an_accepted_attack_without_a_hit_does_not_clear_quest_stall",
+        "source": "module/tests/playerbots_rewrite.rs"
+      }
+    },
+    {
+      "action": "Attack",
+      "lifecycle": "refusal",
+      "case": {
+        "target": "playerbots_rewrite",
+        "name": "playerbots_a_dead_attacker_is_refused_before_engagement",
+        "source": "module/tests/playerbots_rewrite.rs"
+      }
+    },
+    {
+      "action": "Attack",
+      "lifecycle": "cancellation",
+      "case": {
+        "target": "playerbots_recovery",
+        "name": "playerbots_recovery_stops_an_armed_quest_attack_when_target_control_is_unknown",
+        "source": "module/tests/playerbots_recovery.rs"
+      }
+    },
+    {
+      "action": "Attack",
+      "lifecycle": "expiry",
+      "case": {
+        "target": "playerbots_action_lifecycle",
+        "name": "playerbots_quest_roots_expire_their_real_movement_prerequisites",
+        "source": "module/tests/playerbots_action_lifecycle.rs"
+      }
+    },
+    {
+      "action": "Resurrect",
+      "lifecycle": "success",
+      "case": {
+        "target": "playerbots_companion",
+        "name": "playerbots_death_and_resurrection_preserve_role_then_regroup",
+        "source": "module/tests/playerbots_companion.rs"
+      }
+    },
+    {
+      "action": "Resurrect",
+      "lifecycle": "waiting",
+      "case": {
+        "target": "playerbots_companion",
+        "name": "playerbots_death_and_resurrection_preserve_role_then_regroup",
+        "source": "module/tests/playerbots_companion.rs"
+      }
+    },
+    {
+      "action": "Resurrect",
+      "lifecycle": "refusal",
+      "case": {
+        "target": "playerbots_companion",
+        "name": "playerbots_death_and_resurrection_preserve_role_then_regroup",
+        "source": "module/tests/playerbots_companion.rs"
+      },
+      "applicability": "unreachable",
+      "reason": "A present dead body selects repop before release and spirit_res after release; both operations accept those exact states, while a missing body prevents selection.",
+      "contract": "resurrection-valid-states-cannot-refuse"
+    },
+    {
+      "action": "Resurrect",
+      "lifecycle": "cancellation",
+      "case": {
+        "target": "playerbots_action_lifecycle",
+        "name": "playerbots_action_resurrection_cancels_between_release_and_spirit_resurrection",
+        "source": "module/tests/playerbots_action_lifecycle.rs"
+      }
+    },
+    {
+      "action": "Resurrect",
+      "lifecycle": "expiry",
+      "case": {
+        "target": "playerbots_companion",
+        "name": "playerbots_death_and_resurrection_preserve_role_then_regroup",
+        "source": "module/tests/playerbots_companion.rs"
+      },
+      "applicability": "unreachable",
+      "reason": "Resurrection owns no pending handle or deadline, and death recovery must not inherit an unrelated objective deadline that could strand the Character.",
+      "contract": "resurrection-owns-no-deadline"
+    },
+    {
+      "action": "AcceptQuest",
+      "lifecycle": "success",
+      "case": {
+        "target": "playerbots_quest_loops",
+        "name": "playerbots_autonomous_talk_kill_and_collect_loops_run_for_all_starter_classes",
+        "source": "module/tests/playerbots_quest_loops.rs"
+      }
+    },
+    {
+      "action": "AcceptQuest",
+      "lifecycle": "waiting",
+      "case": {
+        "target": "playerbots_quest_catalog",
+        "name": "playerbots_quest_retries_after_deferral_without_replacing_its_purpose",
+        "source": "module/tests/playerbots_quest_catalog.rs"
+      }
+    },
+    {
+      "action": "AcceptQuest",
+      "lifecycle": "refusal",
+      "case": {
+        "target": "playerbots_rewrite",
+        "name": "playerbots_acceptance_reports_range_and_capacity_before_granting_a_quest",
+        "source": "module/tests/playerbots_rewrite.rs"
+      }
+    },
+    {
+      "action": "AcceptQuest",
+      "lifecycle": "cancellation",
+      "case": {
+        "target": "playerbots_action_lifecycle",
+        "name": "playerbots_quest_roots_cancel_their_real_movement_prerequisites",
+        "source": "module/tests/playerbots_action_lifecycle.rs"
+      }
+    },
+    {
+      "action": "AcceptQuest",
+      "lifecycle": "expiry",
+      "case": {
+        "target": "playerbots_action_lifecycle",
+        "name": "playerbots_quest_roots_expire_their_real_movement_prerequisites",
+        "source": "module/tests/playerbots_action_lifecycle.rs"
+      }
+    },
+    {
+      "action": "TurnInQuest",
+      "lifecycle": "success",
+      "case": {
+        "target": "playerbots_quest_loops",
+        "name": "playerbots_autonomous_talk_kill_and_collect_loops_run_for_all_starter_classes",
+        "source": "module/tests/playerbots_quest_loops.rs"
+      }
+    },
+    {
+      "action": "TurnInQuest",
+      "lifecycle": "waiting",
+      "case": {
+        "target": "playerbots_recovery_failures",
+        "name": "playerbots_recovery_unreachable_quest_ender_defers_and_preserves_the_quest",
+        "source": "module/tests/playerbots_recovery_failures.rs"
+      }
+    },
+    {
+      "action": "TurnInQuest",
+      "lifecycle": "refusal",
+      "case": {
+        "target": "playerbots_rewrite",
+        "name": "playerbots_caught_turn_in_refusals_leave_inventory_and_rewards_unchanged",
+        "source": "module/tests/playerbots_rewrite.rs"
+      }
+    },
+    {
+      "action": "TurnInQuest",
+      "lifecycle": "cancellation",
+      "case": {
+        "target": "playerbots_action_lifecycle",
+        "name": "playerbots_quest_roots_cancel_their_real_movement_prerequisites",
+        "source": "module/tests/playerbots_action_lifecycle.rs"
+      }
+    },
+    {
+      "action": "TurnInQuest",
+      "lifecycle": "expiry",
+      "case": {
+        "target": "playerbots_action_lifecycle",
+        "name": "playerbots_quest_roots_expire_their_real_movement_prerequisites",
+        "source": "module/tests/playerbots_action_lifecycle.rs"
+      }
+    },
+    {
+      "action": "LootCreature",
+      "lifecycle": "success",
+      "case": {
+        "target": "playerbots_quest_loops",
+        "name": "playerbots_autonomous_talk_kill_and_collect_loops_run_for_all_starter_classes",
+        "source": "module/tests/playerbots_quest_loops.rs"
+      }
+    },
+    {
+      "action": "LootCreature",
+      "lifecycle": "waiting",
+      "case": {
+        "target": "playerbots_quest_loops",
+        "name": "playerbots_quest_purpose_survives_interruption_death_and_retreats_to_an_observed_position",
+        "source": "module/tests/playerbots_quest_loops.rs"
+      }
+    },
+    {
+      "action": "LootCreature",
+      "lifecycle": "refusal",
+      "case": {
+        "target": "playerbots_recovery_failures",
+        "name": "playerbots_recovery_full_bag_refuses_boundedly_then_resumes_after_inventory_space",
+        "source": "module/tests/playerbots_recovery_failures.rs"
+      }
+    },
+    {
+      "action": "LootCreature",
+      "lifecycle": "cancellation",
+      "case": {
+        "target": "playerbots_action_lifecycle",
+        "name": "playerbots_quest_roots_cancel_their_real_movement_prerequisites",
+        "source": "module/tests/playerbots_action_lifecycle.rs"
+      }
+    },
+    {
+      "action": "LootCreature",
+      "lifecycle": "expiry",
+      "case": {
+        "target": "playerbots_action_lifecycle",
+        "name": "playerbots_quest_roots_expire_their_real_movement_prerequisites",
+        "source": "module/tests/playerbots_action_lifecycle.rs"
+      }
+    },
+    {
+      "action": "UseGameObject",
+      "lifecycle": "success",
+      "case": {
+        "target": "playerbots_quest_loops",
+        "name": "playerbots_simple_gameobject_use_is_autonomous_stateful_and_once_only",
+        "source": "module/tests/playerbots_quest_loops.rs"
+      }
+    },
+    {
+      "action": "UseGameObject",
+      "lifecycle": "waiting",
+      "case": {
+        "target": "playerbots_recovery_failures",
+        "name": "playerbots_recovery_depleted_target_waits_for_actual_respawn_then_resumes",
+        "source": "module/tests/playerbots_recovery_failures.rs"
+      }
+    },
+    {
+      "action": "UseGameObject",
+      "lifecycle": "refusal",
+      "case": {
+        "target": "playerbots_quest_catalog",
+        "name": "playerbots_gameobject_loot_and_simple_use_paths_change_core_state",
+        "source": "module/tests/playerbots_quest_catalog.rs"
+      }
+    },
+    {
+      "action": "UseGameObject",
+      "lifecycle": "cancellation",
+      "case": {
+        "target": "playerbots_action_lifecycle",
+        "name": "playerbots_quest_roots_cancel_their_real_movement_prerequisites",
+        "source": "module/tests/playerbots_action_lifecycle.rs"
+      }
+    },
+    {
+      "action": "UseGameObject",
+      "lifecycle": "expiry",
+      "case": {
+        "target": "playerbots_action_lifecycle",
+        "name": "playerbots_quest_roots_expire_their_real_movement_prerequisites",
+        "source": "module/tests/playerbots_action_lifecycle.rs"
+      }
+    },
+    {
+      "action": "LootGameObject",
+      "lifecycle": "success",
+      "case": {
+        "target": "playerbots_quest_catalog",
+        "name": "playerbots_gameobject_loot_and_simple_use_paths_change_core_state",
+        "source": "module/tests/playerbots_quest_catalog.rs"
+      }
+    },
+    {
+      "action": "LootGameObject",
+      "lifecycle": "waiting",
+      "case": {
+        "target": "playerbots_quest_loops",
+        "name": "playerbots_gameobject_collect_skips_a_depleted_nearer_chest",
+        "source": "module/tests/playerbots_quest_loops.rs"
+      }
+    },
+    {
+      "action": "LootGameObject",
+      "lifecycle": "refusal",
+      "case": {
+        "target": "playerbots_quest_catalog",
+        "name": "playerbots_gameobject_loot_and_simple_use_paths_change_core_state",
+        "source": "module/tests/playerbots_quest_catalog.rs"
+      }
+    },
+    {
+      "action": "LootGameObject",
+      "lifecycle": "cancellation",
+      "case": {
+        "target": "playerbots_action_lifecycle",
+        "name": "playerbots_quest_roots_cancel_their_real_movement_prerequisites",
+        "source": "module/tests/playerbots_action_lifecycle.rs"
+      }
+    },
+    {
+      "action": "LootGameObject",
+      "lifecycle": "expiry",
+      "case": {
+        "target": "playerbots_action_lifecycle",
+        "name": "playerbots_quest_roots_expire_their_real_movement_prerequisites",
+        "source": "module/tests/playerbots_action_lifecycle.rs"
+      }
+    },
+    {
+      "action": "Transfer",
+      "lifecycle": "success",
+      "case": {
+        "target": "playerbots_transfer_restart",
+        "name": "playerbots_companion_enters_and_exits_deadmines_through_real_gateway_routes",
+        "source": "gateway/tests/playerbots_transfer_restart.rs"
+      }
+    },
+    {
+      "action": "Transfer",
+      "lifecycle": "waiting",
+      "case": {
+        "target": "playerbots_transfer",
+        "name": "playerbots_companion_approaches_the_exact_supported_areatrigger",
+        "source": "module/tests/playerbots_transfer.rs"
+      }
+    },
+    {
+      "action": "Transfer",
+      "lifecycle": "refusal",
+      "case": {
+        "target": "playerbots_action_lifecycle",
+        "name": "playerbots_transfer_records_core_refusal_before_intent",
+        "source": "module/tests/playerbots_action_lifecycle.rs"
+      }
+    },
+    {
+      "action": "Transfer",
+      "lifecycle": "cancellation",
+      "case": {
+        "target": "playerbots_action_lifecycle",
+        "name": "playerbots_transfer_root_cancels_its_real_areatrigger_approach",
+        "source": "module/tests/playerbots_action_lifecycle.rs"
+      }
+    },
+    {
+      "action": "Transfer",
+      "lifecycle": "expiry",
+      "case": {
+        "target": "playerbots_action_lifecycle",
+        "name": "playerbots_return_home_transfer_roots_expire_before_admission",
+        "source": "module/tests/playerbots_action_lifecycle.rs"
+      }
+    }
+  ],
+  "guards": [
+    {
+      "target": "playerbots_action_lifecycle",
+      "name": "playerbots_expired_quest_does_not_preempt_resurrection_or_defense",
+      "source": "module/tests/playerbots_action_lifecycle.rs"
+    },
+    {
+      "target": "playerbots_action_lifecycle",
+      "name": "playerbots_admitted_transfer_ignores_an_unrelated_expired_objective",
+      "source": "module/tests/playerbots_action_lifecycle.rs"
+    }
+  ]
+}

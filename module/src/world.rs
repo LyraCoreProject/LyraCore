@@ -1139,6 +1139,7 @@ pub(crate) fn apply_player_login(
     // in; re-stamping here just starts the clock for this new session.
     character.session_start_micros = ctx.timestamp.to_micros_since_unix_epoch() as u64;
 
+    character.owner_identity = owner;
     character.online = true;
     character.first_login = false;
     chars.guid().update(character);
