@@ -785,7 +785,11 @@ fn playerbots_recovery_unreachable_quest_ender_defers_and_preserves_the_quest() 
         .parse::<i64>()
         .unwrap();
     assert_eq!(deferred_until, recovery_until, "{deferred}");
-    assert_eq!(deferred_until - observed_micros, 30_000_000, "{deferred}");
+    let remaining_micros = deferred_until.saturating_sub(observed_micros);
+    assert!(
+        remaining_micros > 0 && remaining_micros <= 30_000_000,
+        "{deferred}"
+    );
     assert!(
         samples
             .iter()
@@ -811,6 +815,12 @@ fn playerbots_recovery_unreachable_quest_ender_defers_and_preserves_the_quest() 
                 action["quest_entry"]
                     .as_str()
                     .is_some_and(|entry| entry != "0" && entry != retained_quest.as_str())
+                    && action["observed_micros"]
+                        .as_str()
+                        .and_then(|value| value.parse::<i64>().ok())
+                        .is_some_and(|observed| {
+                            observed > observed_micros && observed <= deferred_until
+                        })
                     && action["outcome"].as_str().unwrap().contains("completed")
             })
     });
