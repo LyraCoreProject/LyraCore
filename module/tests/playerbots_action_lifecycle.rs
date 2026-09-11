@@ -1069,9 +1069,19 @@ fn playerbots_recovery_position_expires_with_its_retained_quest() {
         "{expired}"
     );
     let recovery = runner["recovery"].as_str().unwrap();
+    let alternative_target = CREATURE_PREFIX | (823u64 << 24) | 1;
     assert!(
-        recovery.contains(&format!("fight = {}", QUEST_ROOTS[5].target))
-            && recovery.contains(&format!("objective = {retained_identity}")),
+        recovery.contains(&format!(
+            "work = (quest = (step = (target = {alternative_target}, quest = 5261), operation = (accept = ())))"
+        )) && recovery.contains(&format!("objective = {current_identity},"))
+            && !recovery.contains(&format!("fight = {}", QUEST_ROOTS[5].target)),
+        "{expired}"
+    );
+    let current_chosen = runner["chosen"].as_str().unwrap();
+    assert!(
+        current_chosen.contains(&format!("move = (entity = {alternative_target})"))
+            && current_chosen.contains("reason = (quest = ())")
+            && current_chosen.contains(&format!("objective = {current_identity}")),
         "{expired}"
     );
     let deferral = runner["deferred_destinations"].as_str().unwrap();
