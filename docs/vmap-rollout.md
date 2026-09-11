@@ -32,8 +32,10 @@ checking generations. A successful import is data-plane evidence, not permission
 
 1. Run the matching profile dry runs and save their completion manifests. Run the apply/resume flow
    once for each World Shard. A retry must resume the same generation rather than creating duplicate
-   chunk rows. For the Instance Pool, first retain the dry-run floor and direct-ray output. Apply the
-   exact same source and profile only when both floors are present and the direct route is clear.
+   chunk rows. For the Instance Pool, first retain the dry-run source identities, calibration and
+   every route sample. Apply the exact same source and profile only when the result is ready: both
+   authored endpoints match their floors, every sample has walkable support and headroom, every
+   height change is within step height, and the movement-step and direct collision probes are clear.
 
    ```bash
    lyracore-importer --vmap "$CLIENT_DATA" --world-profile instances \
@@ -44,8 +46,9 @@ checking generations. A successful import is data-plane evidence, not permission
 
    The dry run must stop if a selected WMO group references an active doodad. Resolve that format
    support against the same client archive before applying. Do not omit the doodad or substitute a
-   flat floor. If the direct route is blocked, stop. Map 36 Navigation Coverage remains unavailable
-   until a multi-floor rasterizer exists for that route.
+   flat floor. If any readiness finding remains, stop. The importer enforces the same readiness Gate
+   before staging. Map 36 Navigation Coverage remains unavailable until a multi-floor rasterizer
+   exists for that route.
 2. Query the active generation on each World Shard and the exact Map 36 generation on the Instance
    Pool. Record each profile, generation id, source and selection identity, chunk count, byte count,
    and digest. The Map 36 selection identity must name `deadmines-entry-exit` and the exact 3 by 3

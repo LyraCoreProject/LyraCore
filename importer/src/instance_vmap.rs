@@ -18,8 +18,34 @@ const MAIN_BYTES: usize = 64 * 64 * 8;
 const MODF_BYTES: usize = 64;
 
 pub(crate) struct GlobalWmoPlacement {
+    pub(crate) map_id: u32,
+    pub(crate) map_name: String,
+    pub(crate) wdt: ArchiveEntry,
     pub(crate) placement: Placement,
+    pub(crate) unique_id: u32,
+    pub(crate) placement_flags: u16,
     pub(crate) doodad_set: u16,
+    pub(crate) name_set: u16,
+}
+
+pub(crate) struct ArchiveEntry {
+    pub(crate) path: String,
+    pub(crate) bytes: usize,
+    pub(crate) blake3: String,
+}
+
+pub(crate) struct WmoGroupEntry {
+    pub(crate) source: ArchiveEntry,
+    pub(crate) touches_selection: bool,
+    pub(crate) active_doodad_refs: Vec<u32>,
+}
+
+pub(crate) struct DoodadInspection {
+    pub(crate) root: ArchiveEntry,
+    pub(crate) selected_start: u32,
+    pub(crate) selected_end: u32,
+    pub(crate) groups: Vec<WmoGroupEntry>,
+    pub(crate) relevant_refs: Vec<u32>,
 }
 
 pub(crate) fn read_global_wmo(
@@ -32,7 +58,20 @@ pub(crate) fn read_global_wmo(
     let bytes = chain
         .read_file(&wdt_name)
         .with_context(|| format!("reading instance WDT {wdt_name}"))?;
-    parse_global_wmo(&bytes).with_context(|| format!("parsing instance WDT {wdt_name}"))
+    let mut global =
+        parse_global_wmo(&bytes).with_context(|| format!("parsing instance WDT {wdt_name}"))?;
+    global.map_name = map_name;
+    global.map_id = slice.map_id;
+    global.wdt = archive_entry(wdt_name, &bytes);
+    Ok(global)
+}
+
+fn archive_entry(path: String, bytes: &[u8]) -> ArchiveEntry {
+    ArchiveEntry {
+        path,
+        bytes: bytes.len(),
+        blake3: blake3::hash(bytes).to_hex().to_string(),
+    }
 }
 
 fn map_internal_name(data_dir: &Path, map_id: u32) -> Result<String> {
@@ -130,6 +169,9 @@ fn parse_global_wmo(bytes: &[u8]) -> Result<GlobalWmoPlacement> {
         bail!("global WMO is destroyable and cannot be staged as static geometry");
     }
     Ok(GlobalWmoPlacement {
+        map_id: 0,
+        map_name: String::new(),
+        wdt: archive_entry(String::new(), bytes),
         placement: Placement {
             name,
             is_wmo: true,
@@ -139,7 +181,10 @@ fn parse_global_wmo(bytes: &[u8]) -> Result<GlobalWmoPlacement> {
             bounds_min: Some(bounds_min),
             bounds_max: Some(bounds_max),
         },
+        unique_id: read_u32(placement, 4),
+        placement_flags,
         doodad_set: read_u16(placement, 58),
+        name_set: read_u16(placement, 60),
     })
 }
 
@@ -199,13 +244,13 @@ fn read_vec3(bytes: &[u8], at: usize) -> Result<[f32; 3]> {
     }
 }
 
-pub(crate) fn refuse_relevant_doodads(
+pub(crate) fn inspect_relevant_doodads(
     chain: &mut PatchChain,
     map_id: u32,
     selected_cells: &BTreeSet<u64>,
     global: &GlobalWmoPlacement,
     convention: Convention,
-) -> Result<()> {
+) -> Result<DoodadInspection> {
     let name = &global.placement.name;
     let root_bytes = chain
         .read_file(name)
@@ -215,31 +260,41 @@ pub(crate) fn refuse_relevant_doodads(
     else {
         bail!("{name} parsed as a group file, expected root");
     };
-    if root.doodad_sets.is_empty() {
-        if root.doodad_defs.is_empty() {
-            return Ok(());
-        }
-        bail!("WMO {name} defines doodads without a doodad set");
+    let root_source = archive_entry(name.clone(), &root_bytes);
+    if root.n_doodad_sets as usize != root.doodad_sets.len()
+        || root.n_doodad_defs as usize != root.doodad_defs.len()
+    {
+        bail!("WMO {name} doodad header counts do not match parsed chunks");
     }
-    let set = root
-        .doodad_sets
-        .get(global.doodad_set as usize)
-        .with_context(|| {
-            format!(
-                "WMO {name} has no selected doodad set {}",
-                global.doodad_set
-            )
-        })?;
-    let active_end = set
-        .start_index
-        .checked_add(set.count)
-        .context("WMO doodad set range overflows")?;
+    let (selected_start, active_end) = if root.doodad_sets.is_empty() {
+        if !root.doodad_defs.is_empty() {
+            bail!("WMO {name} defines doodads without a doodad set");
+        }
+        (0, 0)
+    } else {
+        let set = root
+            .doodad_sets
+            .get(global.doodad_set as usize)
+            .with_context(|| {
+                format!(
+                    "WMO {name} has no selected doodad set {}",
+                    global.doodad_set
+                )
+            })?;
+        (
+            set.start_index,
+            set.start_index
+                .checked_add(set.count)
+                .context("WMO doodad set range overflows")?,
+        )
+    };
     if active_end as usize > root.doodad_defs.len() {
         bail!("WMO {name} selected doodad set extends past MODD definitions");
     }
 
     let stem = &name[..name.len() - 4];
     let mut relevant = BTreeSet::new();
+    let mut groups = Vec::new();
     for ordinal in 0..root.n_groups {
         let group_name = format!("{stem}_{ordinal:03}.wmo");
         let bytes = chain
@@ -250,32 +305,37 @@ pub(crate) fn refuse_relevant_doodads(
         else {
             bail!("{group_name} parsed as a root file, expected group");
         };
-        let active = active_doodad_refs(&group.doodad_refs, set.start_index, active_end);
-        if active.is_empty()
-            || !group_touches_selection(
-                map_id,
-                selected_cells,
-                &global.placement,
-                convention,
-                &group.bounding_box,
-            )?
+        if group
+            .doodad_refs
+            .iter()
+            .any(|index| usize::from(*index) >= root.doodad_defs.len())
         {
-            continue;
+            bail!("WMO group {group_name} references a missing doodad definition");
         }
-        relevant.extend(active);
+        let active = active_doodad_refs(&group.doodad_refs, selected_start, active_end);
+        let touches_selection = group_touches_selection(
+            map_id,
+            selected_cells,
+            &global.placement,
+            convention,
+            &group.bounding_box,
+        )?;
+        if touches_selection {
+            relevant.extend(active.iter().copied());
+        }
+        groups.push(WmoGroupEntry {
+            source: archive_entry(group_name, &bytes),
+            touches_selection,
+            active_doodad_refs: active.into_iter().collect(),
+        });
     }
-    if relevant.is_empty() {
-        return Ok(());
-    }
-
-    let definitions = relevant
-        .into_iter()
-        .map(|index| index.to_string())
-        .collect::<Vec<_>>();
-    bail!(
-        "Map {map_id} selected WMO groups in {name} reference active doodad definitions that the bounded instance extractor cannot yet transform: {}",
-        definitions.join(", ")
-    )
+    Ok(DoodadInspection {
+        root: root_source,
+        selected_start,
+        selected_end: active_end,
+        groups,
+        relevant_refs: relevant.into_iter().collect(),
+    })
 }
 
 fn active_doodad_refs(refs: &[u16], start: u32, end: u32) -> BTreeSet<u32> {
@@ -324,18 +384,14 @@ fn group_touches_selection(
             }
         }
     }
-    let Some(cx0) = lyracore_shared::terrain::cell_index(world_hi[0]) else {
-        return Ok(false);
-    };
-    let Some(cx1) = lyracore_shared::terrain::cell_index(world_lo[0]) else {
-        return Ok(false);
-    };
-    let Some(cy0) = lyracore_shared::terrain::cell_index(world_hi[1]) else {
-        return Ok(false);
-    };
-    let Some(cy1) = lyracore_shared::terrain::cell_index(world_lo[1]) else {
-        return Ok(false);
-    };
+    let cx0 = lyracore_shared::terrain::cell_index(world_hi[0])
+        .context("WMO group high x cannot be represented as a map cell")?;
+    let cx1 = lyracore_shared::terrain::cell_index(world_lo[0])
+        .context("WMO group low x cannot be represented as a map cell")?;
+    let cy0 = lyracore_shared::terrain::cell_index(world_hi[1])
+        .context("WMO group high y cannot be represented as a map cell")?;
+    let cy1 = lyracore_shared::terrain::cell_index(world_lo[1])
+        .context("WMO group low y cannot be represented as a map cell")?;
     Ok((cx0..=cx1).any(|cx| {
         (cy0..=cy1)
             .any(|cy| selected_cells.contains(&lyracore_shared::terrain::cell_key(map_id, cx, cy)))
@@ -394,6 +450,12 @@ mod tests {
         assert_eq!(global.placement.bounds_min, Some([7.0, 8.0, 9.0]));
         assert_eq!(global.placement.bounds_max, Some([10.0, 11.0, 12.0]));
         assert_eq!(global.doodad_set, 2);
+        assert_eq!(global.unique_id, 77);
+        assert_eq!(global.placement_flags, 0);
+        assert_eq!(global.name_set, 0);
+        assert_eq!(global.map_id, 0);
+        assert!(global.map_name.is_empty());
+        assert_eq!(global.wdt.bytes, global_wmo_wdt().len());
     }
 
     #[test]
@@ -492,6 +554,21 @@ mod tests {
             &placement,
             convention,
             &[1.0, -1.0, -1.0, -1.0, 1.0, 1.0]
+        )
+        .is_err());
+
+        let map_edge = Placement {
+            position: [origin, 0.0, -1.0],
+            ..placement
+        };
+        let edge_selected =
+            BTreeSet::from([lyracore_shared::terrain::cell_key(map_id, 0, origin_cell)]);
+        assert!(group_touches_selection(
+            map_id,
+            &edge_selected,
+            &map_edge,
+            convention,
+            &[-2.0, -1.0, -1.0, 2.0, 1.0, 1.0]
         )
         .is_err());
     }

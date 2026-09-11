@@ -222,7 +222,12 @@ pub(crate) fn wmo_all_verts(chain: &mut PatchChain, name: &str) -> Result<Vec<[f
 /// Pick the convention that reproduces the MODF world AABBs across the calibration placements
 /// (mean per-axis corner error, capped sample). Hard-fails above 3 yd — a wrong convention
 /// must never silently rasterize rotated buildings.
-pub(crate) fn calibrate(samples: &[(&Placement, Vec<[f32; 3]>)]) -> Result<Convention> {
+pub(crate) struct Calibration {
+    pub(crate) convention: Convention,
+    pub(crate) q25_error_yards: f32,
+}
+
+fn calibration(samples: &[(&Placement, Vec<[f32; 3]>)]) -> Result<Calibration> {
     let mut candidates = Vec::new();
     for shuffle in [false, true] {
         for sign in [1.0f32, -1.0] {
@@ -313,7 +318,14 @@ pub(crate) fn calibrate(samples: &[(&Placement, Vec<[f32; 3]>)]) -> Result<Conve
              is wrong, refusing to rasterize garbage"
         );
     }
-    Ok(conv)
+    Ok(Calibration {
+        convention: conv,
+        q25_error_yards: err,
+    })
+}
+
+pub(crate) fn calibrate(samples: &[(&Placement, Vec<[f32; 3]>)]) -> Result<Convention> {
+    Ok(calibration(samples)?.convention)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -584,6 +596,13 @@ pub(crate) fn calibrate_from_placements(
     chain: &mut PatchChain,
     placements: &[Placement],
 ) -> Result<Convention> {
+    Ok(calibrate_from_placements_with_evidence(chain, placements)?.convention)
+}
+
+pub(crate) fn calibrate_from_placements_with_evidence(
+    chain: &mut PatchChain,
+    placements: &[Placement],
+) -> Result<Calibration> {
     let mut samples: Vec<(&Placement, Vec<[f32; 3]>)> = Vec::new();
     let mut sample_verts: HashMap<&str, Vec<[f32; 3]>> = HashMap::new();
     let mut sampled_names: HashSet<&str> = HashSet::new();
@@ -605,7 +624,7 @@ pub(crate) fn calibrate_from_placements(
             samples.push((p, verts));
         }
     }
-    calibrate(&samples)
+    calibration(&samples)
 }
 
 // ---------------------------------------------------------------------------------------------

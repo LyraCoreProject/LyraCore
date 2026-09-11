@@ -167,11 +167,13 @@ exact rays. Enabling them is a separate Operator decision after `docs/vmap-rollo
 The importer also has one Instance Vmap Slice named `deadmines-entry-exit`. A direct
 `lyracore-importer --vmap <client Data/ dir> --world-profile instances` dry run reads the global WMO
 placement from Map 36's WDT and retains only the entry, exit radius, and one-cell rasterizer collar.
-It reports the entry and exit floors and the direct collision ray. It refuses selected WMO groups
-that reference active doodads until their nested transforms are supported. Applying this slice is a
-separate Operator step; `./lyracore import vmaps` does not send it to the Instance Pool yet. Map 36
-Navigation Coverage remains unavailable until archive-derived route evidence shows it is needed and
-a multi-floor rasterizer is available.
+It reports the WDT, WMO root and group identities, placement calibration, supported floor samples,
+per-sample height changes, headroom, movement-step collision and the direct collision ray. Applying
+this slice is refused unless every sample is supported, each height change is walkable, both authored
+endpoint heights match, and the route is clear. Selected WMO groups that reference active doodads are
+also refused until their nested transforms are supported. `./lyracore import vmaps` does not send
+this slice to the Instance Pool yet. Map 36 Navigation Coverage remains unavailable until
+archive-derived route evidence shows it is needed and a multi-floor rasterizer is available.
 
 The automated repository checks cover destination plans, profile fences, canned SQL failures, and
 synthetic importer rows. They do not read a real pinned dump or client archives. A lawful real-data

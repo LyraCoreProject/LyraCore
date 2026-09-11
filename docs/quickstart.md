@@ -432,7 +432,9 @@ geometry on each populated World Shard and skips the Instance Pool. It does not 
 
 The direct importer can dry-run the bounded Map 36 entry and exit route with
 `--vmap <client Data/ dir> --world-profile instances`. This is an archive-derived geometry check.
-It does not stage data or enable collision without `--apply`.
+It reports source identities, floor support, height changes, headroom and collision for each retained
+route sample. It does not stage data or enable collision without `--apply`, and `--apply` refuses an
+unsupported or obstructed route.
 
 ---
 
