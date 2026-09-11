@@ -1552,6 +1552,347 @@ fn playerbots_acceptance_restart_transfer_and_lost_ack_apply_once() {
     gateway.stop();
 }
 
+#[test]
+#[ignore = "requires SpacetimeDB, the full Package union, the pinned importer and client archives, Gateway, and the pinned Headless Client"]
+fn playerbots_acceptance_imported_deadmines_floor_carries_follow_through_transfer() {
+    let topology = CompanionTopology::stage_imported_map36("playerbots-imported-deadmines-route");
+    let geometry_before = topology.save_map36_geometry("imported-map36-before-route");
+    assert_imported_map36(&geometry_before);
+    topology.probe_floor(companion::ENTRY_LANDING);
+    topology.probe_floor(companion::EXIT_SOURCE);
+
+    let mut gateway = topology.gateway(false, "imported-map36-route");
+    let mut wire = topology.wire("imported-map36-route");
+    assert_login_owner(&topology);
+    topology.begin();
+    let follow_commands = send_follow_all(&topology, &mut wire);
+
+    let outside = position(&topology, &topology.source, topology.party.leader);
+    let to_entry = wire.move_to(outside, companion::ENTRY_SOURCE);
+    let entry = wire.area_trigger(companion::ENTRY_TRIGGER);
+    topology.wait_for_map(companion::DUNGEON_MAP);
+    wait_for_party_live(&topology, &topology.destination);
+    let entered = topology.save(
+        "imported-map36-entered",
+        json!({"follow": follow_commands, "move": to_entry, "entry": entry}),
+    );
+    assert_old_world_frozen(&entered, "source", "destination");
+    assert_party_landed(&topology, &entered, "destination");
+    let instance_id = assert_party_map36_instance(&topology, &entered);
+    assert_follow_orders(&topology, &entered, "destination");
+    let leader_start = position(&topology, &topology.destination, topology.party.leader);
+    assert!(
+        distance(leader_start, companion::ENTRY_LANDING) < 0.25,
+        "human leader did not land on the declared Deadmines entry: {leader_start:?}"
+    );
+    let companion_start = position(&topology, &topology.destination, topology.party.warrior);
+
+    let leader_move = wire.move_to(leader_start, companion::EXIT_SOURCE);
+    let mut leader_at_exit = None;
+    topology.wait_until(
+        "human leader did not enter the Deadmines exit trigger",
+        || {
+            let current = position(&topology, &topology.destination, topology.party.leader);
+            let ready = distance(current, leader_start) > 0.05
+                && distance(current, companion::EXIT_SOURCE) <= 6.0;
+            leader_at_exit = ready.then_some(current);
+            ready
+        },
+    );
+    let mut retained_leg = None;
+    topology.wait_until("no companion made an imported Map 36 Follow leg", || {
+        retained_leg = imported_follow_leg(&topology, companion_start);
+        retained_leg.is_some()
+    });
+    let retained_leg = retained_leg.unwrap();
+    std::fs::write(
+        topology.evidence_dir.join("imported-map36-follow-leg.json"),
+        serde_json::to_vec_pretty(&retained_leg).unwrap(),
+    )
+    .expect("failed to retain imported Map 36 Follow leg");
+    let (leg_start, leg_destination, ray_destination, leg_instance_id) =
+        assert_imported_follow_leg(&topology, &retained_leg);
+    assert_eq!(leg_instance_id, instance_id);
+    topology.probe_floor(leg_start);
+    topology.probe_floor(leg_destination);
+    topology.probe_leg(leg_instance_id, leg_start, ray_destination);
+    let progressed = topology.save(
+        "imported-map36-follow-progress",
+        json!({
+            "leader_move": leader_move,
+            "leader_at_exit": leader_at_exit,
+            "leg": retained_leg,
+        }),
+    );
+    assert_follow_orders(&topology, &progressed, "destination");
+
+    let geometry_during = topology.save_map36_geometry("imported-map36-during-route");
+    assert_same_map36_geometry(&geometry_before, &geometry_during);
+    let exit = wire.area_trigger(companion::EXIT_TRIGGER);
+    topology.wait_for_map(0);
+    wait_for_party_live(&topology, &topology.source);
+    let mut transfers = topology.transfer_state();
+    topology.wait_until("party Transfer machinery did not settle", || {
+        transfers = topology.transfer_state();
+        transfers_empty(&transfers)
+    });
+    let completed = topology.save(
+        "imported-map36-exited",
+        json!({
+            "progress_phase": progressed["phase"],
+            "exit": exit,
+            "transfer": transfers,
+        }),
+    );
+    assert_old_world_frozen(&completed, "destination", "source");
+    assert_party_whole(&topology, &completed);
+    assert_follow_orders(&topology, &completed, "source");
+    assert_eq!(entered["realm"]["roster"], completed["realm"]["roster"]);
+    assert_transfer_settled(&topology, &completed["extra"]["transfer"]);
+    assert_gateway_transfers(&topology, &gateway.log());
+    let geometry_after = topology.save_map36_geometry("imported-map36-after-route");
+    assert_same_map36_geometry(&geometry_before, &geometry_after);
+    wire.stop();
+    gateway.stop();
+}
+
+fn assert_party_map36_instance(topology: &CompanionTopology, evidence: &Value) -> u64 {
+    let bodies = evidence["destination"]["bodies"].as_array().unwrap();
+    let instances: BTreeSet<_> = bodies
+        .iter()
+        .map(|body| {
+            assert_eq!(body["map_id"], companion::DUNGEON_MAP.to_string());
+            parse_value_u64(body, "instance_id")
+        })
+        .collect();
+    assert_eq!(bodies.len(), topology.party.all().len());
+    assert_eq!(instances.len(), 1, "party landed in different instances");
+    let instance = *instances.first().unwrap();
+    assert_ne!(instance, 0, "Deadmines did not allocate an instance");
+    instance
+}
+
+fn assert_transfer_settled(topology: &CompanionTopology, transfers: &Value) {
+    assert!(
+        transfers_empty(transfers),
+        "Transfer machinery retained: {transfers}"
+    );
+    for guid in topology.party.all() {
+        assert_eq!(topology.current_world(guid), topology.source);
+    }
+}
+
+fn transfers_empty(transfers: &Value) -> bool {
+    for world in ["source", "destination"] {
+        for table in ["out", "in", "intents"] {
+            if transfers[world][table] != json!([]) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn assert_gateway_transfers(topology: &CompanionTopology, log: &str) {
+    for (holder, owner, map) in [
+        (
+            &topology.source,
+            &topology.destination,
+            companion::DUNGEON_MAP,
+        ),
+        (&topology.destination, &topology.source, 0),
+    ] {
+        let prefix = format!(
+            "settle {}: holder={holder} owner={owner} escrow=false ({map}/",
+            topology.party.leader
+        );
+        assert!(log.contains(&prefix), "Gateway Transfer missing: {prefix}");
+    }
+}
+
+fn assert_imported_map36(evidence: &Value) {
+    let config = evidence["config"]
+        .as_array()
+        .and_then(|rows| rows.first())
+        .expect("imported Map 36 config missing");
+    assert_eq!(config["hosts_instances"], "true");
+    assert_eq!(config["nav_enabled"], "false");
+    assert_eq!(config["vmap_enabled"], "true");
+    assert_eq!(config["nav_coverage_enabled"], "false");
+    let generation = evidence["generation"]
+        .as_array()
+        .and_then(|rows| rows.first())
+        .expect("active imported Map 36 generation missing");
+    assert_eq!(evidence["generation"].as_array().unwrap().len(), 1);
+    assert_eq!(generation["map_id"], companion::DUNGEON_MAP.to_string());
+    assert_eq!(generation["state"], "2");
+    assert_eq!(generation["accepted_chunks"], generation["expected_chunks"]);
+    assert!(parse_value_u64(generation, "expected_chunks") > 0);
+    assert!(parse_value_u64(generation, "expected_bytes") > 0);
+    let digest = generation["manifest_digest"].as_str().unwrap();
+    assert_eq!(digest.len(), 64);
+    assert!(digest
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f')));
+    assert!(generation["source_identity"]
+        .as_str()
+        .is_some_and(|identity| !identity.is_empty()));
+    assert!(generation["selection_identity"]
+        .as_str()
+        .is_some_and(|identity| !identity.is_empty()));
+    let receipts = evidence["receipts"].as_array().unwrap();
+    assert_eq!(
+        receipts.len() as u64,
+        parse_value_u64(generation, "expected_chunks")
+    );
+    for receipt in receipts {
+        assert_eq!(receipt["generation_id"], generation["id"]);
+    }
+    for absent in ["terrain", "navigation", "coverage", "coverage_manifest"] {
+        assert_eq!(
+            evidence[absent],
+            json!([]),
+            "imported Map 36 unexpectedly used {absent}: {evidence}"
+        );
+    }
+}
+
+fn assert_same_map36_geometry(before: &Value, after: &Value) {
+    assert_imported_map36(after);
+    for field in ["config", "generation", "navigation_revision"] {
+        assert_eq!(
+            before[field], after[field],
+            "Map 36 {field} changed during the private route"
+        );
+    }
+}
+
+fn imported_follow_leg(topology: &CompanionTopology, start: (f32, f32, f32)) -> Option<Value> {
+    let guid = topology.party.warrior;
+    let runner = topology
+        .query(
+            &topology.destination,
+            &format!("SELECT * FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
+        )
+        .into_iter()
+        .next()?;
+    let action = topology
+        .query(
+            &topology.destination,
+            &format!("SELECT * FROM pkg_playerbots_action WHERE character_guid = {guid}"),
+        )
+        .into_iter()
+        .next()?;
+    let body = topology
+        .query(
+            &topology.destination,
+            &format!(
+                "SELECT guid, map_id, instance_id, x, y, z FROM game_world_entity WHERE guid = {guid}"
+            ),
+        )
+        .into_iter()
+        .next()?;
+    let spline = topology
+        .query(
+            &topology.destination,
+            &format!("SELECT * FROM game_creature_spline WHERE guid = {guid}"),
+        )
+        .into_iter()
+        .next()?;
+    let current = (
+        body["x"].parse::<f32>().ok()?,
+        body["y"].parse::<f32>().ok()?,
+        body["z"].parse::<f32>().ok()?,
+    );
+    let foreground = &runner["foreground"];
+    (body["map_id"] == companion::DUNGEON_MAP.to_string()
+        && body["instance_id"] != "0"
+        && (start.0 - current.0).hypot(start.1 - current.1) > 0.05
+        && spline["facing"] == "false"
+        && parse_u64(&spline, "dur_ms") > 0
+        && foreground.contains(&format!(
+            "action = (move = (entity = {}))",
+            topology.party.leader
+        ))
+        && foreground.contains("reason = (follow = ())")
+        && runner["movement_progress"] != "(none = ())"
+        && action["outcome"].contains("status = (direct = ())")
+        && action["outcome"].contains("coverage = (unknown = ())")
+        && action["outcome"].contains("last_advance_micros = (some ="))
+    .then(|| json!({"guid": guid, "start": start, "body": body, "spline": spline, "runner": runner, "action": action}))
+}
+
+fn assert_imported_follow_leg(
+    topology: &CompanionTopology,
+    evidence: &Value,
+) -> ((f32, f32, f32), (f32, f32, f32), (f32, f32, f32), u64) {
+    let guid = evidence["guid"].as_u64().unwrap();
+    let body = &evidence["body"];
+    let spline = &evidence["spline"];
+    let runner = &evidence["runner"];
+    let action = &evidence["action"];
+    let start = (
+        parse_value_f32(spline, "sx"),
+        parse_value_f32(spline, "sy"),
+        parse_value_f32(spline, "sz"),
+    );
+    let destination = (
+        parse_value_f32(spline, "dx"),
+        parse_value_f32(spline, "dy"),
+        parse_value_f32(spline, "dz"),
+    );
+    let current = (
+        parse_value_f32(body, "x"),
+        parse_value_f32(body, "y"),
+        parse_value_f32(body, "z"),
+    );
+    assert!([start.0, start.1, start.2].into_iter().all(f32::is_finite));
+    assert!([destination.0, destination.1, destination.2,]
+        .into_iter()
+        .all(f32::is_finite));
+    assert!([current.0, current.1, current.2]
+        .into_iter()
+        .all(f32::is_finite));
+    assert!((start.0 - destination.0).hypot(start.1 - destination.1) > 0.05);
+    assert_eq!(spline["map_id"], companion::DUNGEON_MAP.to_string());
+    assert_eq!(spline["instance_id"], body["instance_id"]);
+    assert_eq!(spline["facing"], "false");
+    assert_eq!(action["started_micros"], spline["start_micros"]);
+    let route = sats_field(action["outcome"].as_str().unwrap(), "route");
+    let route_start = sats_field(route, "from");
+    let route_endpoint = sats_field(route, "endpoint");
+    assert!((sats_f32(route_start, "x") - start.0).abs() < 0.0001);
+    assert!((sats_f32(route_start, "y") - start.1).abs() < 0.0001);
+    assert!((sats_f32(route_endpoint, "x") - destination.0).abs() < 0.0001);
+    assert!((sats_f32(route_endpoint, "y") - destination.1).abs() < 0.0001);
+    let clipping = sats_field(route, "clipping");
+    let ray_destination = if clipping == "(none = ())" {
+        destination
+    } else {
+        let attempted = sats_field(clipping, "attempted");
+        (sats_f32(attempted, "x"), sats_f32(attempted, "y"), start.2)
+    };
+    assert!(runner["objective"]
+        .as_str()
+        .is_some_and(|objective| objective.contains("kind = (companion = ())")));
+    assert_eq!(
+        runner["companion_leader_guid"],
+        format!("(some = {})", topology.party.leader)
+    );
+    assert_eq!(runner["deferred_destinations"], "[]");
+    assert!(!runner["failures"].as_str().unwrap().contains("noMovement"));
+    assert!(runner["movement_progress"]
+        .as_str()
+        .is_some_and(|progress| progress.contains("arrived = false")));
+    assert_eq!(parse_value_u64(body, "guid"), guid);
+    (
+        start,
+        destination,
+        ray_destination,
+        parse_value_u64(body, "instance_id"),
+    )
+}
+
 fn latest_intent(topology: &CompanionTopology, database: &str) -> BTreeMap<String, String> {
     let mut intents = topology.query(database, "SELECT * FROM game_party_command_intent");
     intents.sort_by_key(|row| parse_u64(row, "id"));

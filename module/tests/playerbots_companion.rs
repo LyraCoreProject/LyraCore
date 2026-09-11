@@ -6,6 +6,23 @@ use support::{poll_until, Standalone, POLL_TIMEOUT};
 
 const HEAL: &str = "5090100";
 const CHANNEL_HEAL: &str = "5090104";
+const LEGACY_COMPARISON_PACKAGE: &str = "50e2cd10870d2cfb4a36018bbbd559f9d07c2062";
+const LEGACY_GOALS_BLOB: &str = "e72a7f97552d01edfa101d45e1b24b39196ca405";
+const LEGACY_GOALS_EXPRESSIONS: [&str; 13] = [
+    "pub(crate) const FOLLOW_RANGE_YD: f32 = 15.0;",
+    "const FOLLOW_STAND_OFF_YD: f32 = 8.0;",
+    "if should_flee(",
+    "if crate::spell::pending_cast(ctx, me.guid).is_some() {",
+    "let engaged = combat_target(ctx, &me, party.as_ref());",
+    "is_bot(ctx, party.leader_guid)",
+    "if quests_in_this_party {",
+    "if let Some(target) = engaged {",
+    "follow_leader(ctx, &me, party.leader_guid);",
+    "record_goal(ctx, bot.character_guid, goal::FOLLOW, now);",
+    "if flee_at_pct == 0 || max_health == 0 {",
+    "if distance_2d(me.x, me.y, leader.x, leader.y) <= FOLLOW_RANGE_YD {",
+    "FOLLOW_STAND_OFF_YD,",
+];
 const PB002_CORE: &str = "e6a755db0a150bbf73ad97b972fe829f20f6816c";
 const PB002_CORE_TREE: &str = "0769d6b7cd96d7e23a7ad16528399544ece0e2ec";
 const PB002_COLLECTION: &str = "155c9e401afb06d5731acedf8fc35a81dbe4aaa6";
@@ -316,6 +333,235 @@ fn evidence(node: &Standalone, case: &str) {
     std::fs::write(path, serde_json::to_vec_pretty(&record).unwrap()).unwrap();
 }
 
+fn policy_gameplay_state(
+    node: &Standalone,
+    priest: &str,
+    leader: &str,
+    ally: &str,
+) -> serde_json::Value {
+    let entities: Vec<_> = [priest, leader, ally]
+        .into_iter()
+        .map(|guid| {
+            node.query_rows(&format!(
+                "SELECT * FROM game_world_entity WHERE guid = {guid}"
+            ))
+        })
+        .collect();
+    let characters: Vec<_> = [priest, leader, ally]
+        .into_iter()
+        .map(|guid| node.query_rows(&format!("SELECT * FROM game_character WHERE guid = {guid}")))
+        .collect();
+    serde_json::json!({
+        "entities": entities,
+        "characters": characters,
+        "actions": node.query_rows(&format!(
+            "SELECT * FROM pkg_playerbots_action WHERE character_guid = {priest}"
+        )),
+        "pending_casts": node.query_rows(&format!(
+            "SELECT * FROM game_pending_cast WHERE caster_guid = {priest}"
+        )),
+        "cast_events": node.query_rows(&format!(
+            "SELECT * FROM game_spell_cast_event WHERE caster_guid = {priest}"
+        )),
+        "melee": node.query_rows("SELECT * FROM game_melee_attack"),
+        "splines": node.query_rows(&format!(
+            "SELECT * FROM game_creature_spline WHERE guid = {priest}"
+        )),
+    })
+}
+
+fn verify_legacy_goals_source() {
+    let core = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let package = core.join("packages/playerbots");
+    assert_eq!(
+        git(&package, &["hash-object", "src/goals.rs"]),
+        LEGACY_GOALS_BLOB
+    );
+    let source = std::fs::read_to_string(package.join("src/goals.rs")).unwrap();
+    let mut remaining = source.as_str();
+    for expression in LEGACY_GOALS_EXPRESSIONS {
+        let start = remaining
+            .find(expression)
+            .unwrap_or_else(|| panic!("Legacy comparison expression missing: {expression}"));
+        remaining = &remaining[start + expression.len()..];
+    }
+}
+
+fn record_policy_comparison(node: &Standalone, priest: &str, leader: &str, ally: &str) {
+    let facts: Vec<_> = [priest, leader, ally]
+        .into_iter()
+        .map(|guid| {
+            node.query_rows(&format!(
+                "SELECT guid, map_id, instance_id, x, y, z, health, max_health, dead FROM game_world_entity WHERE guid = {guid}"
+            ))[0]
+                .clone()
+        })
+        .collect();
+    let xy = |row: &BTreeMap<String, String>| {
+        (
+            row["x"].parse::<f32>().unwrap(),
+            row["y"].parse::<f32>().unwrap(),
+        )
+    };
+    assert_eq!(xy(&facts[0]), (1200.0, 1200.0));
+    assert_eq!(xy(&facts[1]), (1220.0, 1200.0));
+    assert_eq!(xy(&facts[2]), (1222.0, 1200.0));
+    for (fact, guid) in facts.iter().zip([priest, leader, ally]) {
+        assert_eq!(fact["guid"], guid);
+        assert_eq!(fact["map_id"], "0");
+        assert_eq!(fact["instance_id"], "0");
+        assert_eq!(fact["z"].parse::<f32>().unwrap(), 50.0);
+        assert_eq!(fact["dead"], "false");
+    }
+    assert_eq!(facts[0]["health"], facts[0]["max_health"]);
+    let ally_max_health = facts[2]["max_health"].parse::<u32>().unwrap();
+    assert_eq!(
+        facts[2]["health"].parse::<u32>().unwrap(),
+        (ally_max_health * 25 / 100).max(1)
+    );
+    assert!(node
+        .query_rows(&format!(
+            "SELECT character_guid FROM pkg_playerbots_bot WHERE character_guid = {leader}"
+        ))
+        .is_empty());
+    let memberships: Vec<_> = [priest, leader, ally]
+        .into_iter()
+        .map(|guid| {
+            node.query_rows(&format!(
+                "SELECT group_id, character_guid FROM game_group_member WHERE character_guid = {guid}"
+            ))[0]
+                .clone()
+        })
+        .collect();
+    let group_id = memberships[0]["group_id"].clone();
+    assert!(memberships.iter().all(|row| row["group_id"] == group_id));
+    let party = node.query_rows(&format!(
+        "SELECT group_id, leader_guid FROM game_group WHERE group_id = {group_id}"
+    ));
+    assert_eq!(party.len(), 1);
+    assert_eq!(party[0]["leader_guid"], leader);
+    let personality = node.query_rows(&format!(
+        "SELECT character_guid, flee_at_pct FROM pkg_playerbots_personality WHERE character_guid = {priest}"
+    ));
+    assert_eq!(personality.len(), 1);
+    assert_eq!(personality[0]["flee_at_pct"], "0");
+    let flee_scripts = node.query_rows(
+        "SELECT script_id, event, enabled FROM game_script WHERE event = 'playerbots.flee_at'",
+    );
+    assert!(flee_scripts.iter().all(|row| row["enabled"] == "false"));
+
+    verify_legacy_goals_source();
+
+    let gameplay_before = policy_gameplay_state(node, priest, leader, ally);
+    for field in ["pending_casts", "melee"] {
+        assert_eq!(gameplay_before[field], serde_json::json!([]), "{field}");
+    }
+    let splines = gameplay_before["splines"].as_array().unwrap();
+    assert!(splines.len() <= 1, "{splines:?}");
+    if let Some(stopped) = splines.first() {
+        assert_eq!(stopped["dur_ms"], "0");
+        for (start, destination) in [("sx", "dx"), ("sy", "dy"), ("sz", "dz")] {
+            assert_eq!(stopped[start], stopped[destination]);
+        }
+    }
+    let mut recorded_chosen = None;
+    for _ in 0..4 {
+        pass_once(node, priest);
+        let recorded = runner(node, priest);
+        assert!(
+            recorded["last_outcome"].contains("recorded"),
+            "{recorded:?}"
+        );
+        assert_eq!(
+            node.query_rows(&format!(
+                "SELECT controller FROM pkg_playerbots_bot WHERE character_guid = {priest}"
+            ))[0]["controller"],
+            "(recordOnly = ())"
+        );
+        assert!(recorded["foreground"].contains("none"));
+        assert!(
+            recorded["chosen"].contains(&format!("cast = (target = {ally}, spell = {HEAL})")),
+            "{recorded:?}"
+        );
+        assert!(recorded["chosen"].contains("reason = (heal = ())"));
+        if let Some(chosen) = &recorded_chosen {
+            assert_eq!(&recorded["chosen"], chosen);
+        } else {
+            recorded_chosen = Some(recorded["chosen"].clone());
+        }
+        assert_eq!(
+            policy_gameplay_state(node, priest, leader, ally),
+            gameplay_before
+        );
+    }
+    let recorded_chosen = recorded_chosen.unwrap();
+    let legacy_decision = serde_json::json!({
+        "action": "Move.Entity",
+        "target_guid": leader,
+        "reason": "Follow",
+    });
+    let record_only_decision = serde_json::json!({
+        "action": recorded_chosen.contains("action = (cast =").then_some("Cast"),
+        "target_guid": recorded_chosen
+            .contains(&format!("target = {ally}"))
+            .then_some(ally),
+        "reason": recorded_chosen
+            .contains("reason = (heal = ())")
+            .then_some("Heal"),
+    });
+    assert_eq!(
+        record_only_decision,
+        serde_json::json!({"action": "Cast", "target_guid": ally, "reason": "Heal"})
+    );
+    let compared_fields = ["action", "target_guid", "reason"];
+    let differing_fields: Vec<_> = compared_fields
+        .iter()
+        .copied()
+        .filter(|field| legacy_decision[*field] != record_only_decision[*field])
+        .collect();
+    assert_eq!(differing_fields, compared_fields.to_vec());
+    let known_disagreement = !differing_fields.is_empty();
+    let comparison = serde_json::json!({
+        "schema": "pb012-policy-comparison-v1",
+        "before_cohort_activation": true,
+        "fixed_gameplay_facts": {
+            "entities": facts,
+            "party": party,
+            "memberships": memberships,
+            "personality": personality,
+            "flee_scripts": flee_scripts,
+        },
+        "legacy": {
+            "basis": "SOURCE-DERIVED",
+            "package_commit": LEGACY_COMPARISON_PACKAGE,
+            "goals_blob": LEGACY_GOALS_BLOB,
+            "source_expressions": LEGACY_GOALS_EXPRESSIONS,
+            "decision": legacy_decision,
+        },
+        "record_only": {
+            "basis": "DURABLE",
+            "passes": 4,
+            "chosen_identity": recorded_chosen,
+            "decision": record_only_decision,
+            "spell_id": HEAL,
+        },
+        "compared_fields": compared_fields,
+        "differing_fields": differing_fields,
+        "known_disagreement": known_disagreement,
+        "gameplay_unchanged": true,
+        "gameplay_state": gameplay_before,
+    });
+    let comparison_path =
+        support::log_dir().join(format!("{}-policy-comparison.json", node.shard_name()));
+    std::fs::write(
+        comparison_path,
+        serde_json::to_vec_pretty(&comparison).unwrap(),
+    )
+    .unwrap();
+}
+
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_priest_follows_a_moving_human_leader_without_pulling() {
@@ -379,8 +625,10 @@ fn playerbots_missing_group_parent_holds_the_companion_objective() {
 fn playerbots_priest_retains_one_ally_cast_while_the_leader_moves_then_resumes_follow() {
     let (node, bots) = fixture("playerbots-companion-heal");
     let (priest, leader, ally) = (&bots[0], &bots[1], &bots[2]);
-    node.assert_call("playerbots_fixture_runner_select_cohort", &[priest]);
+    select(&node, priest, "recordOnly");
     node.assert_call("playerbots_fixture_companion_health", &[ally, "25"]);
+    record_policy_comparison(&node, priest, leader, ally);
+    node.assert_call("playerbots_fixture_runner_select_cohort", &[priest]);
     let ally_before = node.query_rows(&format!(
         "SELECT health FROM game_world_entity WHERE guid = {ally}"
     ))[0]["health"]

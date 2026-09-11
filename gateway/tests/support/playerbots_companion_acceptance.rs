@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::net::{TcpListener, TcpStream};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -34,6 +36,12 @@ const AURA_EVIDENCE_COLUMNS: &str = "id, target_guid, caster_guid, spell_id, slo
     amount_remaining, stacks, next_tick_micros, channel_target, enters_combat, proc_flags, \
     proc_chance, proc_ppm, proc_ex, proc_school_mask, proc_family_name, proc_family_flags, \
     proc_charges, proc_icd_ms, proc_ready_micros";
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DungeonGeometry {
+    Fixture,
+    Imported,
+}
 
 #[derive(Clone, Debug)]
 pub struct Party {
@@ -75,6 +83,14 @@ pub struct CompanionTopology {
 
 impl CompanionTopology {
     pub fn stage(name: &str) -> Self {
+        Self::stage_with_geometry(name, DungeonGeometry::Fixture)
+    }
+
+    pub fn stage_imported_map36(name: &str) -> Self {
+        Self::stage_with_geometry(name, DungeonGeometry::Imported)
+    }
+
+    fn stage_with_geometry(name: &str, geometry: DungeonGeometry) -> Self {
         let mut node = support::Standalone::start_persistent(name);
         let source = node.shard_name().to_owned();
         let destination = format!("{source}-instances");
@@ -104,7 +120,7 @@ impl CompanionTopology {
             logon_port,
             world_port,
         };
-        topology.stage_inputs();
+        topology.stage_inputs(geometry);
         topology
     }
 
@@ -139,7 +155,7 @@ impl CompanionTopology {
         }
     }
 
-    fn stage_inputs(&mut self) {
+    fn stage_inputs(&mut self, geometry: DungeonGeometry) {
         for database in [&self.source, &self.destination, &self.realm] {
             self.call(database, "claim_operator", &[]);
         }
@@ -215,10 +231,12 @@ impl CompanionTopology {
             "playerbots_fixture_interact",
             &[&self.party.warrior.to_string(), "false", "0"],
         );
-        let nav = flat_route_nav();
-        for database in [&self.source, &self.destination] {
-            self.call(database, "import_nav_chunks", &[&nav]);
-            self.call(database, "debug_set_nav_enabled", &["true"]);
+        let nav = flat_route_nav(geometry == DungeonGeometry::Fixture);
+        self.call(&self.source, "import_nav_chunks", &[&nav]);
+        self.call(&self.source, "debug_set_nav_enabled", &["true"]);
+        if geometry == DungeonGeometry::Fixture {
+            self.call(&self.destination, "import_nav_chunks", &[&nav]);
+            self.call(&self.destination, "debug_set_nav_enabled", &["true"]);
         }
         self.call(
             &self.source,
@@ -285,6 +303,9 @@ impl CompanionTopology {
             "playerbots_companion_acceptance_destination_stage",
             &[],
         );
+        if geometry == DungeonGeometry::Imported {
+            self.import_map36();
+        }
         let mut enemies: Vec<_> = self
             .query(
                 &self.source,
@@ -319,6 +340,66 @@ impl CompanionTopology {
                 );
             }
         }
+    }
+
+    fn import_map36(&self) {
+        for table in [
+            "game_terrain_chunk",
+            "game_nav_chunk",
+            "game_vmap_generation",
+            "game_vmap_nav_coverage",
+            "game_vmap_nav_coverage_manifest",
+        ] {
+            assert!(
+                self.query(
+                    &self.destination,
+                    &format!("SELECT * FROM {table} WHERE map_id = {DUNGEON_MAP}"),
+                )
+                .is_empty(),
+                "imported Map 36 setup refuses pre-existing {table} rows"
+            );
+        }
+        self.call(&self.destination, "debug_set_nav_enabled", &["false"]);
+        self.call(
+            &self.destination,
+            "debug_set_nav_coverage_enabled",
+            &["false"],
+        );
+        self.call(&self.destination, "debug_set_vmap_enabled", &["false"]);
+
+        let importer = std::env::var_os("PB012_MAP36_IMPORTER_BIN")
+            .expect("PB012_MAP36_IMPORTER_BIN must name the pinned importer");
+        let data = std::env::var_os("PB012_CLIENT_DATA")
+            .expect("PB012_CLIENT_DATA must name the verified client Data directory");
+        let cli = ImporterCli::new(&self.node.owner_token());
+        let output = cli
+            .command(importer)
+            .args(["--vmap"])
+            .arg(&data)
+            .args([
+                "--world-profile",
+                "instances",
+                "--db",
+                &self.destination,
+                "--server",
+                self.node.server(),
+                "--apply",
+            ])
+            .output()
+            .expect("failed to start the pinned Map 36 importer");
+        fs::write(
+            self.evidence_dir.join("map36-importer.stdout"),
+            &output.stdout,
+        )
+        .expect("failed to retain Map 36 importer stdout");
+        fs::write(
+            self.evidence_dir.join("map36-importer.stderr"),
+            &output.stderr,
+        )
+        .expect("failed to retain Map 36 importer stderr");
+        self.node
+            .assert_output_success(&output, "Map 36 vmap import failed");
+        self.call(&self.destination, "debug_set_vmap_enabled", &["true"]);
     }
 
     fn provision_companions(&self) {
@@ -538,6 +619,127 @@ impl CompanionTopology {
         fs::write(path, serde_json::to_vec_pretty(&evidence).unwrap())
             .expect("failed to save companion evidence");
         evidence
+    }
+
+    pub fn save_map36_geometry(&self, phase: &str) -> Value {
+        let evidence = json!({
+            "phase": phase,
+            "config": self.query(
+                &self.destination,
+                "SELECT id, nav_enabled, hosts_instances, vmap_enabled, nav_coverage_enabled \
+                 FROM game_config WHERE id = 0",
+            ),
+            "generation": self.query(
+                &self.destination,
+                &format!(
+                    "SELECT id, map_id, state, expected_chunks, accepted_chunks, expected_bytes, \
+                     manifest_digest, source_identity, selection_identity FROM \
+                     game_vmap_generation WHERE map_id = {DUNGEON_MAP} AND state = 2"
+                ),
+            ),
+            "receipts": self.query(
+                &self.destination,
+                "SELECT generation_id, shard_ordinal, key FROM game_vmap_generation_receipt",
+            ),
+            "navigation_revision": self.query(
+                &self.destination,
+                "SELECT * FROM game_navigation_revision",
+            ),
+            "terrain": self.query(
+                &self.destination,
+                &format!("SELECT key FROM game_terrain_chunk WHERE map_id = {DUNGEON_MAP}"),
+            ),
+            "navigation": self.query(
+                &self.destination,
+                &format!("SELECT key FROM game_nav_chunk WHERE map_id = {DUNGEON_MAP}"),
+            ),
+            "coverage": self.query(
+                &self.destination,
+                &format!(
+                    "SELECT generation_id, cell_key FROM game_vmap_nav_coverage WHERE map_id = \
+                     {DUNGEON_MAP}"
+                ),
+            ),
+            "coverage_manifest": self.query(
+                &self.destination,
+                &format!(
+                    "SELECT generation_id FROM game_vmap_nav_coverage_manifest WHERE map_id = \
+                     {DUNGEON_MAP}"
+                ),
+            ),
+        });
+        fs::write(
+            self.evidence_dir
+                .join(format!("{}.json", phase.replace('_', "-"))),
+            serde_json::to_vec_pretty(&evidence).unwrap(),
+        )
+        .expect("failed to retain Map 36 geometry evidence");
+        evidence
+    }
+
+    pub fn transfer_state(&self) -> Value {
+        let character_predicate = self
+            .party
+            .all()
+            .into_iter()
+            .map(|guid| format!("character_guid = {guid}"))
+            .collect::<Vec<_>>()
+            .join(" OR ");
+        let bot_predicate = self
+            .party
+            .bots()
+            .into_iter()
+            .map(|guid| format!("bot_guid = {guid}"))
+            .collect::<Vec<_>>()
+            .join(" OR ");
+        let world = |database: &str| {
+            json!({
+                "out": self.query(
+                    database,
+                    &format!("SELECT * FROM game_transfer_out WHERE {character_predicate}"),
+                ),
+                "in": self.query(
+                    database,
+                    &format!("SELECT * FROM game_transfer_in WHERE {character_predicate}"),
+                ),
+                "intents": self.query(
+                    database,
+                    &format!("SELECT * FROM game_bot_transfer_intent WHERE {bot_predicate}"),
+                ),
+            })
+        };
+        json!({"source": world(&self.source), "destination": world(&self.destination)})
+    }
+
+    pub fn probe_floor(&self, point: (f32, f32, f32)) {
+        self.call(
+            &self.destination,
+            "debug_floor_probe",
+            &[
+                &DUNGEON_MAP.to_string(),
+                &point.0.to_string(),
+                &point.1.to_string(),
+                &(point.2 + 0.9).to_string(),
+            ],
+        );
+    }
+
+    pub fn probe_leg(&self, instance_id: u64, from: (f32, f32, f32), to: (f32, f32, f32)) {
+        let probe_z = from.2 + 0.9;
+        self.call(
+            &self.destination,
+            "debug_vmap_ray_instance",
+            &[
+                &DUNGEON_MAP.to_string(),
+                &from.0.to_string(),
+                &from.1.to_string(),
+                &probe_z.to_string(),
+                &to.0.to_string(),
+                &to.1.to_string(),
+                &probe_z.to_string(),
+                &instance_id.to_string(),
+            ],
+        );
     }
 
     pub fn save_restart_point(&self, phase: &str, guid: u64, leader_move: Value) -> Value {
@@ -1171,7 +1373,7 @@ fn role_guids(rows: &[BTreeMap<String, String>], class: &str, role: &str) -> Vec
         .collect()
 }
 
-fn flat_route_nav() -> String {
+fn flat_route_nav(include_dungeon: bool) -> String {
     let points = [
         (0, ENTRY_SOURCE),
         (0, EXIT_LANDING),
@@ -1179,7 +1381,10 @@ fn flat_route_nav() -> String {
         (DUNGEON_MAP, EXIT_SOURCE),
     ];
     let mut cells = BTreeMap::new();
-    for (map, (x, y, z)) in points {
+    for (map, (x, y, z)) in points
+        .into_iter()
+        .filter(|(map, _)| include_dungeon || *map == 0)
+    {
         let cx = lyracore_shared::terrain::cell_index(x).unwrap();
         let cy = lyracore_shared::terrain::cell_index(y).unwrap();
         for cell_x in cx - 2..=cx + 2 {
@@ -1193,6 +1398,69 @@ fn flat_route_nav() -> String {
         .map(|((map, cell_x, cell_y), z)| format!("{map},{cell_x},{cell_y},{z},,"))
         .collect::<Vec<_>>()
         .join(";")
+}
+
+struct ImporterCli {
+    directory: PathBuf,
+    path: OsString,
+}
+
+impl ImporterCli {
+    fn new(owner_token: &str) -> Self {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!(
+            "pb012-map36-importer-cli-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir(&directory).expect("failed to create private importer CLI directory");
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
+            .expect("failed to protect private importer CLI directory");
+        fs::write(
+            directory.join("cli.toml"),
+            format!("spacetimedb_token = {owner_token:?}\n"),
+        )
+        .expect("failed to write private importer Owner Token");
+        fs::set_permissions(
+            directory.join("cli.toml"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .expect("failed to protect private importer Owner Token");
+        let wrapper = directory.join("spacetime");
+        fs::write(
+            &wrapper,
+            "#!/bin/sh\nexec \"$PB012_REAL_SPACETIME\" --config-path \
+             \"$PB012_SPACETIME_CONFIG\" \"$@\"\n",
+        )
+        .expect("failed to write private importer spacetime wrapper");
+        fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o700))
+            .expect("failed to make private importer spacetime wrapper executable");
+        let mut paths = vec![directory.clone()];
+        paths.extend(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        ));
+        let path = std::env::join_paths(paths).expect("failed to build private importer PATH");
+        Self { directory, path }
+    }
+
+    fn command(&self, importer: OsString) -> Command {
+        let spacetime = std::env::var_os("SPACETIME_BIN")
+            .expect("SPACETIME_BIN must name the pinned spacetime CLI");
+        let mut command = Command::new(importer);
+        command
+            .env("PATH", &self.path)
+            .env("PB012_REAL_SPACETIME", spacetime)
+            .env("PB012_SPACETIME_CONFIG", self.directory.join("cli.toml"));
+        command
+    }
+}
+
+impl Drop for ImporterCli {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.directory);
+    }
 }
 
 fn reserve_ports() -> [u16; 2] {

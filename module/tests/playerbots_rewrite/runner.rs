@@ -605,15 +605,80 @@ fn playerbots_runner_defers_a_blocked_destination_with_bounded_failure_memory() 
     assert_eq!(position(&node, bot), 1200.0);
     let objective_id = deferred["objective_sequence"].clone();
     select(&node, bot, "frozen");
-    select(&node, bot, "cohort");
-    std::thread::sleep(Duration::from_secs(2));
-    assert_eq!(runner(&node, bot)["objective_sequence"], objective_id);
-    assert_eq!(runner(&node, bot)["objective"], deferred["objective"]);
+    let frozen = runner(&node, bot);
+    let inactive = || {
+        serde_json::json!({
+            "bot": node.query_rows(&format!(
+                "SELECT character_guid, controller, next_think_micros FROM pkg_playerbots_bot WHERE character_guid = {bot}"
+            )),
+            "entity": node.query_rows(&format!(
+                "SELECT map_id, instance_id, x, y, z FROM game_world_entity WHERE guid = {bot}"
+            )),
+            "splines": node.query_rows(&format!(
+                "SELECT guid, dur_ms, sx, sy, sz, dx, dy, dz FROM game_creature_spline WHERE guid = {bot}"
+            )),
+            "casts": node.query_rows(&format!(
+                "SELECT scheduled_id FROM game_pending_cast WHERE caster_guid = {bot}"
+            )),
+        })
+    };
+    let frozen_activity = inactive();
+    assert_eq!(frozen_activity["bot"].as_array().unwrap().len(), 1);
     assert_eq!(
-        runner(&node, bot)["deferred_destinations"],
+        frozen_activity["bot"][0]["controller"].as_str(),
+        Some("(frozen = ())")
+    );
+    assert_eq!(frozen_activity["entity"].as_array().unwrap().len(), 1);
+    assert!(frozen_activity["splines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|spline| {
+            spline["dur_ms"].as_str() == Some("0")
+                && spline["sx"] == spline["dx"]
+                && spline["sy"] == spline["dy"]
+                && spline["sz"] == spline["dz"]
+                && spline["sx"] == frozen_activity["entity"][0]["x"]
+                && spline["sy"] == frozen_activity["entity"][0]["y"]
+                && spline["sz"] == frozen_activity["entity"][0]["z"]
+        }));
+    assert!(frozen_activity["casts"].as_array().unwrap().is_empty());
+    assert_eq!(frozen["objective_sequence"], objective_id);
+    assert_eq!(frozen["objective"], deferred["objective"]);
+    assert_eq!(frozen["failures"], deferred["failures"]);
+    assert_eq!(
+        frozen["deferred_destinations"],
         deferred["deferred_destinations"]
     );
-    assert!(runner(&node, bot)["foreground"].contains("none"));
+    assert_eq!(frozen["last_outcome"], "(frozen = ())");
+    assert_eq!(frozen["foreground"], "(none = ())");
+    std::thread::sleep(Duration::from_secs(6));
+    assert_eq!(runner(&node, bot), frozen);
+    assert_eq!(inactive(), frozen_activity);
+    select(&node, bot, "cohort");
+    let frozen_observed_micros = frozen["observed_micros"].parse::<i64>().unwrap();
+    assert!(poll_until(POLL_TIMEOUT, || {
+        let resumed = runner(&node, bot);
+        resumed["observed_micros"].parse::<i64>().unwrap() > frozen_observed_micros
+            && resumed["last_outcome"].contains("waiting")
+    }));
+    let resumed = runner(&node, bot);
+    let resumed_bot = node.query_rows(&format!(
+        "SELECT character_guid, controller FROM pkg_playerbots_bot WHERE character_guid = {bot}"
+    ));
+    assert_eq!(resumed_bot.len(), 1);
+    assert_eq!(resumed_bot[0]["controller"], "(cohort = ())");
+    assert_eq!(resumed["last_outcome"], "(waiting = ())");
+    assert_eq!(resumed["objective_sequence"], objective_id);
+    assert_eq!(resumed["objective"], deferred["objective"]);
+    assert_eq!(resumed["failures"], deferred["failures"]);
+    assert_eq!(
+        resumed["deferred_destinations"],
+        deferred["deferred_destinations"]
+    );
+    assert!(resumed["chosen"].contains("returnHome"));
+    assert!(resumed["chosen"].contains("hold"));
+    assert!(resumed["foreground"].contains("none"));
     node.assert_call("playerbots_fixture_runner_survival", &[bot]);
     node.assert_call("playerbots_fixture_runner_damage", &[bot, "0", "1"]);
     let prior_move = node.query_rows("SELECT observed_micros FROM pkg_playerbots_action");
