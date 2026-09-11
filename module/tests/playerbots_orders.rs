@@ -514,6 +514,9 @@ fn playerbots_each_issuer_fence_survives_intervening_leadership() {
     let applied_intervening = order(node, &fixture.warrior);
     assert_eq!(applied_intervening["issuer_guid"], fixture.mage);
     set_party_as(&fixture, 0, &second_actor);
+    pass(node, &fixture.warrior);
+    let before_delayed = order(node, &fixture.warrior);
+    evidence(&fixture, "intervening-order-inactive-before-delayed-intent");
     node.assert_call("playerbots_fixture_command_apply", &[&older, &older_token]);
     node.assert_call("playerbots_fixture_command_finish", &[&older, &older_token]);
     let after_delayed = order(node, &fixture.warrior);
@@ -534,7 +537,22 @@ fn playerbots_each_issuer_fence_survives_intervening_leadership() {
     assert!(applied_newer["order"]
         .to_ascii_lowercase()
         .contains("follow"));
-    assert_eq!(after_delayed, applied_intervening);
+    assert_eq!(applied_intervening["active"], "true");
+    assert_eq!(before_delayed["active"], "false");
+    for field in [
+        "character_guid",
+        "group_id",
+        "history",
+        "issuer_fences",
+        "issuer_guid",
+        "issuer_sequence",
+        "last_outcome",
+        "order",
+        "revision",
+    ] {
+        assert_eq!(before_delayed[field], applied_intervening[field]);
+    }
+    assert_eq!(after_delayed, before_delayed);
     assert!(after_delayed["order"].to_ascii_lowercase().contains("stay"));
     assert!(after_delayed["issuer_fences"].contains(&format!(
         "issuer_guid = {}, sequence = {}",
