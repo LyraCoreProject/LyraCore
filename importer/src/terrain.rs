@@ -20,26 +20,22 @@ use wow_mpq::PatchChain;
 
 /// Vanilla map id → client map directory name. Both CONTINENTS are supported: map 0 is the Elwynn
 /// corridor, and map 1 is the Phase B Kalimdor world shard (issue #24) — `--terrain`/`--nav --map 1`
-/// read `World\Maps\Kalimdor\*.adt` through this same code path, self-checks included. Instance maps
-/// are refused (see the map-36 arm).
+/// read `World\Maps\Kalimdor\*.adt` through this same code path, self-checks included. Instance
+/// terrain remains refused because this height row represents only one floor per cell.
 // Deliberate simplification: two-arm match, not Map.dbc — add arms (or read the DBC) when a third
 // CONTINENT matters.
 pub(crate) fn map_dir(map_id: u32) -> Result<&'static str> {
     match map_id {
         0 => Ok("Azeroth"),
         1 => Ok("Kalimdor"),
-        // Work-item 226 / design doc §4: instance maps (Deadmines 36) are WMO geometry — their
-        // walkable floors are NOT in ADT MCNK heightmaps, and `game_terrain_chunk` can't represent
-        // stacked floors anyway. The DECIDED design is NO terrain import for map 36: `ground_z`
-        // returns `None` there and every runtime movement leg keeps its imported spawn/current Z
-        // (the 173/174 baseline-safe fallback). This bail is the guard that keeps a stray
-        // flat/wrong plane from ever replacing that correct `None`. Deliberate, not a TODO.
+        // Deadmines has ADT tiles, but `game_terrain_chunk` cannot represent its stacked floors.
+        // Keep terrain absent until archive and route evidence support a multi-floor representation.
+        // Runtime movement therefore keeps its imported or current Z through the existing fallback.
         36 => bail!(
-            "map 36 (Deadmines) is a WMO instance map — ADT terrain import is DELIBERATELY \
-             unsupported (ground_z None + verbatim spawn Zs is the decided design; \
-             docs/design/instances-and-deadmines.md §4). Do not add an arm here."
+            "map 36 (Deadmines) has stacked instance floors that game_terrain_chunk cannot \
+             represent; terrain import remains unavailable"
         ),
-        m => bail!("no map-name mapping for map {m} — extend terrain::map_dir (continents only; instance maps are WMO — see the map-36 arm)"),
+        m => bail!("no terrain map-name mapping for map {m}"),
     }
 }
 
@@ -146,7 +142,7 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
     let scope = args.world_import_scope()?;
     if scope.bounded_slices.is_empty() {
         println!(
-            "terrain: scope {} has no bounded map slices; WMO instance maps do not have terrain",
+            "terrain: scope {} has no bounded map slices; Instance Vmap Slices do not import terrain",
             scope.name()
         );
         return Ok(());
@@ -460,20 +456,13 @@ mod tests {
     }
 
     #[test]
-    fn map_dir_refuses_instance_map_36_by_design_and_maps_the_continents() {
-        // Work-item 226 / design doc §4: `--terrain --map 36` must fail LOUD — a WMO instance map
-        // has no ADT floors, and importing a stray flat plane would REPLACE the correct
-        // ground_z-None fallback with an actively-wrong height that yanks creatures between floors.
+    fn map_dir_refuses_single_layer_terrain_for_map_36_and_maps_the_continents() {
         assert_eq!(super::map_dir(0).unwrap(), "Azeroth");
         assert_eq!(super::map_dir(1).unwrap(), "Kalimdor");
         let err36 = super::map_dir(36).unwrap_err().to_string();
         assert!(
-            err36.contains("WMO"),
-            "the map-36 refusal names the WMO rationale: {err36}"
-        );
-        assert!(
-            err36.contains("DELIBERATELY"),
-            "…and marks it as decided, not a gap: {err36}"
+            err36.contains("stacked instance floors"),
+            "the map-36 refusal names the floor representation limit: {err36}"
         );
         // Any other unknown map still fails loud (the pre-226 behavior, message widened).
         assert!(super::map_dir(429).is_err());

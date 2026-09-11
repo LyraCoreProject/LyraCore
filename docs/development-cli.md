@@ -147,7 +147,7 @@ The sharded destination plan is fixed:
 | --- | --- | --- |
 | `lyracore` | `alliance-eastern` | Human corridor, Dun Morogh and Loch Modan on map 0 |
 | `lyracore-kalimdor` | `alliance-kalimdor` | Teldrassil and Darkshore on map 1 |
-| `lyracore-instances` | `instances` | whole map 36, with no open-world terrain, navigation or vmap pass |
+| `lyracore-instances` | `instances` | whole map 36, with no open-world terrain or navigation pass |
 
 The single topology uses `alliance-single`, the union of those bounded continent slices and map 36.
 Every importer child names its destination and loopback SpacetimeDB endpoint. The curated
@@ -163,6 +163,23 @@ the rerun repairs a partial family; the complete multi-destination operation is 
 After `import world`, run `./lyracore import vmaps` when exact model/WMO collision data is needed.
 It follows the World Shard profiles and skips the Instance Pool. Importing vmaps does not enable
 exact rays. Enabling them is a separate Operator decision after `docs/vmap-rollout.md` Verification.
+
+The importer also has one Instance Vmap Slice named `deadmines-entry-exit`. A direct
+`lyracore-importer --vmap <client Data/ dir> --world-profile instances` dry run resolves Map 36
+through `Map.dbc` and reads only the two ADT tiles crossed by the entry, exit radius, and one-cell
+collar. It reports the Map.dbc, WDT, ADT, WMO root, and WMO group identities, placement calibration,
+supported floor samples, per-sample height changes, headroom, short collision probes, and the direct
+collision ray. Applying this slice is refused unless the entry and every sample needed to reach the
+exit trigger sphere are supported, the entry and supported endpoint match their authored route
+heights, each height change is walkable, and those static probes are clear. Samples continue to the
+trigger center for diagnostics; the center need not have a floor when the supported route has already
+entered the trigger volume.
+This establishes static geometry suitability, not actual Character movement. The private fixture
+must exercise the ordinary Core route before the attended client check. Selected WMO groups that
+reference active doodads are also refused until their nested transforms are supported. `./lyracore
+import vmaps` does not send this slice to the Instance Pool yet. Map 36 terrain and Navigation
+Coverage remain unavailable until archive-derived evidence supports a representation that preserves
+its floors.
 
 The automated repository checks cover destination plans, profile fences, canned SQL failures, and
 synthetic importer rows. They do not read a real pinned dump or client archives. A lawful real-data

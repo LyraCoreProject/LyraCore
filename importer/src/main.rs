@@ -27,7 +27,7 @@
 //!                                   database — spell_snapshot.rs
 //!   --terrain <client Data/ dir>    ADT heightmap stream (terrain.rs)
 //!   --nav <client Data/ dir>        WMO/M2 nav-grid rasterizer (nav.rs)
-//!   --vmap <client Data/ dir>       exact per-cell collision-triangle extract + pack + import
+//!   --vmap <client Data/ dir>       exact bounded collision-triangle extract + pack + import
 //!                                   (--apply loads `game_vmap_chunk` via import_vmap_chunks; a
 //!                                   dry run stops at report — vmap.rs; #520/#521,
 //!                                   docs/decisions.md §10)
@@ -55,6 +55,7 @@ mod dbc;
 mod eventai;
 mod eventai_presentation;
 mod go_model;
+mod instance_vmap;
 mod item_property;
 mod m2_collision;
 mod nav;
@@ -1399,9 +1400,8 @@ where
     if a.family.is_some() && a.dump.is_none() {
         bail!("--family is only valid with --dump (it names one of the cmangos-dump ETL families)");
     }
-    // `--include-map` extends the `--dump` content slice only (work-item 226): terrain NEVER rides it
-    // (an instance map is WMO geometry — deliberately no ADT import, see terrain::map_dir's guard),
-    // and the DBC/spell streams are map-agnostic.
+    // `--include-map` extends the `--dump` content slice only. Terrain and collision remain separate
+    // archive-derived modes, and the DBC/spell streams are map-agnostic.
     if !a.include_maps.is_empty() {
         if a.dump.is_none() {
             bail!("--include-map is only valid with --dump (it widens the cmangos content slice)");
@@ -4539,8 +4539,8 @@ fn build_packed_spawn_payload(
             // must land on ITS map, not the primary --map's. The dump Z rides through UNALTERED on
             // every path: the importer NEVER snaps spawn Z to terrain (there is no ground_z here at
             // all — runtime creature legs snap with a keep-current-Z fallback, module terrain.rs),
-            // which is exactly the §4 no-ADT-for-WMO-maps design: a map-36 spawn keeps its
-            // floor-correct cmangos Z forever. Pinned by
+            // Map 36 terrain remains absent because one height row cannot represent stacked floors,
+            // so a spawn keeps its floor-correct cmangos Z. Pinned by
             // `include_map_spawns_import_whole_map_with_their_own_map_and_verbatim_z`.
             format!(
                 "{g},{entry},{map},{x},{y},{z},{o},{mt},{respawn_secs}",
@@ -4587,7 +4587,7 @@ fn build_waypoint_rows(
     // 4b) creature_movement_template (work-item 226): ENTRY-keyed paths, expanded onto every
     // in-slice MovementType=2 spawn of that entry that has NO direct rows (direct always wins).
     // Waypoint Zs — like spawn Zs — ride through VERBATIM (no terrain snap exists in the importer;
-    // cmangos waypoints are floor-correct, exactly what a WMO map without ground_z needs, doc §4).
+    // cmangos waypoints are floor-correct, which Map 36 needs while ground_z remains absent).
     // Fail-open per row (a garbled row is skipped, the path just shortens) — waypoints are optional
     // gating data (a pathless mob idles at its spawn), per the fail-open/fail-loud split (§5).
     {
@@ -7676,8 +7676,8 @@ mod tests {
         // one map-1 creature (NOT included — must be dropped), plus a map-36 DOOR gameobject.
         // Pins the three work-item 226 invariants: (a) --include-map imports the whole extra map,
         // (b) each packed row carries its OWN map id (not args.map), and (c) the dump Z rides
-        // through UNALTERED — there is no ground-z snap anywhere in the import path (design doc §4:
-        // map 36 has no terrain; a spawn's cmangos Z IS its floor-correct height forever).
+        // through UNALTERED. There is no ground-z snap in the import path, and Map 36 does not stage
+        // single-layer terrain, so the spawn's cmangos Z remains its authored height.
         let dump = format!(
             "x INSERT INTO `creature` VALUES \
              (1,100,0,1,-8949.95,-132.493,83.5312,0,300,300,0,0),\

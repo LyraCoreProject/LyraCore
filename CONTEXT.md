@@ -25,10 +25,10 @@ A stable name for the import plan assigned to one World Shard or Instance Pool d
 canonical profiles are `alliance-eastern`, `alliance-kalimdor`, `alliance-single`, and `instances`.
 
 **World Import Scope**:
-The authoritative union of Bounded Map Slices, whole maps, and forced creature dependencies owned
-by one World Import Profile. Accepted EventAI summons force their summoned templates into the
-scope, to a fixpoint. It decides spatial import membership for dump, terrain, navigation,
-and vmap modes.
+The authoritative union of Bounded Map Slices, Instance Vmap Slices, whole maps, and forced
+creature dependencies owned by one World Import Profile. Accepted EventAI summons force their
+summoned templates into the scope, to a fixpoint. It decides spatial import membership for dump,
+terrain, navigation, and vmap modes.
 
 **EventAI Source Profile**:
 A named, pinned EventAI input contract. It binds exact decompressed SQL bytes, the source loader,
@@ -61,6 +61,11 @@ participants, next step, due time, and saved random state.
 A named rectangular or circular part of one map, with the anchor used for terrain and navigation
 selection. The anchor is a real ground point on the client heightmap inside the slice, not a WMO
 floor; the terrain and navigation self-checks fail before `--apply` when it is not.
+
+**Instance Vmap Slice**:
+A named entry and exit route on an ADT-backed instance map, with an exit radius and a cell collar
+for collision extraction. It owns only the selected vmap cells. It does not claim terrain,
+Navigation Coverage, or the rest of the instance.
 
 **Realm-core**:
 The shard that holds realm-wide state, including accounts, sessions, groups, whispers, loot rolls, the character-to-shard index, and shard load samples.

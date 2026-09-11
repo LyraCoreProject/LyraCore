@@ -430,6 +430,12 @@ geometry on each populated World Shard and skips the Instance Pool. It does not 
 `debug_set_vmap_enabled true` remains an explicit Operator decision after the checks in
 [`docs/vmap-rollout.md`](./vmap-rollout.md).
 
+The direct importer can dry-run the bounded Map 36 entry and exit route with
+`--vmap <client Data/ dir> --world-profile instances`. This is an archive-derived geometry check.
+It reports source identities, floor support, height changes, headroom and collision for each retained
+route sample. It does not stage data or enable collision without `--apply`, and `--apply` refuses
+unsuitable static geometry. This dry run does not prove ordinary Core movement along the route.
+
 ---
 
 ## 6. Playing from another machine on your LAN

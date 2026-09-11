@@ -20,17 +20,21 @@
 //! already staged and the module derives coverage from it directly. Enumerates the generation's
 //! own cells, batches `prepare_vmap_nav_coverage` calls, and finalizes — resumable by skipping
 //! cells a prior run already covered.
+//!
+//! An Instance Vmap Slice reads only the ADT tiles crossed by its route collar and uses the same
+//! triangle transform, packer, and generation lifecycle as continent geometry. Instance terrain
+//! and Navigation Coverage remain unavailable because their current rows represent one floor per
+//! cell.
 
 use anyhow::{bail, Context, Result};
 use lyracore_shared::terrain::cell_key;
 use lyracore_shared::vmap::{encode, TriClass, VmapTri, HEADER_BYTES, TRI_BYTES};
-#[cfg(test)]
-use std::collections::HashMap;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use wow_dbc::DbcTable;
 use wow_mpq::PatchChain;
 
 use crate::nav::{Mesh, Placement, Tri};
@@ -49,7 +53,7 @@ use crate::nav::{Mesh, Placement, Tri};
 /// convention, not verified against a live tilted placement — flag for a measured follow-up if one
 /// turns up wrong (same "deliberate simplification, revisit when a live case demands it" posture
 /// `nav.rs` uses elsewhere).
-fn apply_full(
+pub(crate) fn apply_full(
     conv: crate::nav::Convention,
     rotation: [f32; 3],
     scale: f32,
@@ -444,6 +448,29 @@ fn preflight_map_ownership(args: &crate::Args, map_id: u32) -> Result<()> {
     }
 }
 
+fn preflight_instance_ownership(args: &crate::Args, map_id: u32) -> Result<()> {
+    let output = sql_query(
+        args,
+        "SELECT id, hosts_instances FROM game_config WHERE id = 0",
+    )
+    .context("query Instance Pool ownership")?;
+    if sql_owns_instance_pool(&output)? {
+        Ok(())
+    } else {
+        bail!(
+            "target Shard {} does not own Instance Pool populations for map {map_id}",
+            args.db
+        )
+    }
+}
+
+fn sql_owns_instance_pool(output: &str) -> Result<bool> {
+    let value: serde_json::Value =
+        serde_json::from_str(output).context("parse JSON SQL Instance Pool response")?;
+    let rows = sql_column_rows(&value, &["id", "hosts_instances"]);
+    Ok(rows.len() == 1 && rows[0][0].as_u64() == Some(0) && rows[0][1].as_bool() == Some(true))
+}
+
 pub(crate) fn run(args: &crate::Args) -> Result<()> {
     if args.vmap_status {
         if args.vmap.is_none() {
@@ -452,9 +479,9 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
         bail!("--vmap-status is a standalone status command; omit --vmap");
     }
     let scope = args.world_import_scope()?;
-    if scope.bounded_slices.is_empty() {
+    if scope.bounded_slices.is_empty() && scope.instance_vmap_slices.is_empty() {
         println!(
-            "vmap: scope {} has no bounded map slices; no vmap generation to import",
+            "vmap: scope {} has no bounded or instance vmap slices; no vmap generation to import",
             scope.name()
         );
         return Ok(());
@@ -474,7 +501,7 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
     let data_dir = Path::new(args.vmap.as_ref().expect("caller checked"));
     let mut chain = crate::collision::open_geometry_chain(data_dir)?;
     let source_identity = format!("client-data-path:{}", data_dir.display());
-    let mut plans = Vec::with_capacity(slices_by_map.len());
+    let mut plans = Vec::with_capacity(slices_by_map.len() + scope.instance_vmap_slices.len());
     for (map_id, slices) in slices_by_map {
         plans.push(
             build_plan(
@@ -494,6 +521,20 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
             })?,
         );
     }
+    for slice in &scope.instance_vmap_slices {
+        plans.push(
+            build_instance_plan(&mut chain, data_dir, slice, &source_identity).with_context(
+                || {
+                    format!(
+                        "vmap scope {} map {} instance slice {}",
+                        scope.name(),
+                        slice.map_id,
+                        slice.name
+                    )
+                },
+            )?,
+        );
+    }
     for plan in &plans {
         println!(
             "vmap: map {} — {} world tris ({} WMO, {} M2) across {} cells, {} packed bytes ({:.1} KB, {} shard row(s))",
@@ -510,12 +551,86 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
             "vmap: manifest {} generation {}",
             plan.manifest, plan.generation_id
         );
+        if let Some(route) = &plan.route_evidence {
+            println!(
+                "vmap: instance route {} geometry_ready={} entry_floor={} supported_exit_sample={} supported_exit={} supported_exit_floor={} center_floor={} direct_step_hit={} violations={} diagnostics={}",
+                route.name,
+                route.geometry_ready(),
+                format_point(route.samples.first().and_then(|sample| sample.support_floor)),
+                route
+                    .supported_exit_sample
+                    .map(|index| index.to_string())
+                    .unwrap_or_else(|| "none".to_owned()),
+                format_position(
+                    route
+                        .supported_exit_sample
+                        .and_then(|index| route.samples[index].supported_position())
+                ),
+                format_point(
+                    route
+                        .supported_exit_sample
+                        .and_then(|index| route.samples[index].support_floor)
+                ),
+                format_point(route.samples.last().and_then(|sample| sample.support_floor)),
+                format_hit(route.direct_step_hit),
+                if route.violations.is_empty() {
+                    "none".to_owned()
+                } else {
+                    route.violations.join(" | ")
+                },
+                if route.diagnostics.is_empty() {
+                    "none".to_owned()
+                } else {
+                    route.diagnostics.join(" | ")
+                }
+            );
+            println!(
+                "vmap: instance selection keys={:?} selected_key_count={} selected_triangle_refs={} packed_key_count={} packed_row_count={} packed_bytes={}",
+                route.selected_keys,
+                route.selected_keys.len(),
+                route.selected_tri_refs,
+                plan.keys.len(),
+                plan.shard_rows,
+                plan.total_bytes,
+            );
+            for sample in &route.samples {
+                println!(
+                    "vmap: instance route sample={} x={:.4} y={:.4} authored_z={:.4} model_floor={} support_floor={} delta={} headroom={} step_hit={}",
+                    sample.index,
+                    sample.position[0],
+                    sample.position[1],
+                    sample.position[2],
+                    format_point(sample.model_floor),
+                    format_point(sample.support_floor),
+                    sample
+                        .floor_delta
+                        .map(|value| format!("{value:.4}"))
+                        .unwrap_or_else(|| "none".to_owned()),
+                    format_hit(sample.headroom_hit),
+                    format_hit(sample.step_hit),
+                );
+            }
+        }
     }
     if !args.apply {
         println!("-- DRY RUN: would stage, append, verify, and activate each map generation");
         return Ok(());
     }
     for plan in &plans {
+        if plan.ownership == VmapOwnership::InstancePool {
+            let route = plan
+                .route_evidence
+                .as_ref()
+                .context("Instance Vmap Slice has no route readiness evidence")?;
+            if !route.geometry_ready() {
+                bail!(
+                    "instance route {} has static geometry findings and is not ready for staging: {}",
+                    route.name,
+                    route.violations.join(" | ")
+                );
+            }
+            preflight_instance_ownership(args, plan.map_id)?;
+        }
         apply_plan(args, plan)?;
     }
     println!("vmap: applied.");
@@ -524,6 +639,7 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
 
 struct VmapPlan {
     map_id: u32,
+    ownership: VmapOwnership,
     source_identity: String,
     selection_identity: String,
     spool: VmapSpool,
@@ -534,6 +650,58 @@ struct VmapPlan {
     generation_id: u64,
     world_tris: usize,
     wmo_tris: usize,
+    route_evidence: Option<InstanceRouteEvidence>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum VmapOwnership {
+    Spatial,
+    InstancePool,
+}
+
+struct InstanceRouteEvidence {
+    name: String,
+    selected_keys: Vec<u64>,
+    selected_tri_refs: usize,
+    samples: Vec<InstanceRouteSample>,
+    supported_exit_sample: Option<usize>,
+    direct_step_hit: Option<[f32; 3]>,
+    violations: Vec<String>,
+    diagnostics: Vec<String>,
+}
+
+struct InstanceMapSource {
+    map_id: u32,
+    map_name: String,
+    map_dbc_path: String,
+    map_dbc_bytes: usize,
+    map_dbc_blake3: String,
+    wdt_path: String,
+    wdt_bytes: usize,
+    wdt_blake3: String,
+}
+
+impl InstanceRouteEvidence {
+    fn geometry_ready(&self) -> bool {
+        self.violations.is_empty()
+    }
+}
+
+struct InstanceRouteSample {
+    index: usize,
+    position: [f32; 3],
+    model_floor: Option<f32>,
+    support_floor: Option<f32>,
+    floor_delta: Option<f32>,
+    headroom_hit: Option<[f32; 3]>,
+    step_hit: Option<[f32; 3]>,
+}
+
+impl InstanceRouteSample {
+    fn supported_position(&self) -> Option<[f32; 3]> {
+        self.support_floor
+            .map(|floor| [self.position[0], self.position[1], floor])
+    }
 }
 
 fn build_plan(
@@ -651,6 +819,31 @@ fn build_plan(
         }
     }
 
+    finish_plan(
+        map_id,
+        source_identity,
+        if restrict_to_scope {
+            format!("map={map_id};slices={}", selections.join(","))
+        } else {
+            let (x0, x1, y0, y1) = ranges[0];
+            format!("map={map_id};cell_x={x0}..{x1};cell_y={y0}..{y1}")
+        },
+        spool,
+        world_tris,
+        wmo_tris,
+        VmapOwnership::Spatial,
+    )
+}
+
+fn finish_plan(
+    map_id: u32,
+    source_identity: &str,
+    selection_identity: String,
+    spool: VmapSpool,
+    world_tris: usize,
+    wmo_tris: usize,
+    ownership: VmapOwnership,
+) -> Result<VmapPlan> {
     let keys = spool.keys()?;
     let mut total_bytes = 0usize;
     let mut shard_rows = 0usize;
@@ -677,13 +870,9 @@ fn build_plan(
     );
     Ok(VmapPlan {
         map_id,
+        ownership,
         source_identity: source_identity.to_owned(),
-        selection_identity: if restrict_to_scope {
-            format!("map={map_id};slices={}", selections.join(","))
-        } else {
-            let (x0, x1, y0, y1) = ranges[0];
-            format!("map={map_id};cell_x={x0}..{x1};cell_y={y0}..{y1}")
-        },
+        selection_identity,
         spool,
         keys,
         total_bytes,
@@ -692,7 +881,533 @@ fn build_plan(
         generation_id,
         world_tris,
         wmo_tris,
+        route_evidence: None,
     })
+}
+
+fn build_instance_plan(
+    chain: &mut PatchChain,
+    data_dir: &Path,
+    slice: &crate::world_import_scope::InstanceVmapSlice,
+    source_identity: &str,
+) -> Result<VmapPlan> {
+    let (x0, x1, y0, y1) = slice.cell_range()?;
+    let selected_cells = (x0..=x1)
+        .flat_map(|cell_x| (y0..=y1).map(move |cell_y| cell_key(slice.map_id, cell_x, cell_y)))
+        .collect::<BTreeSet<_>>();
+    let source = instance_map_source(data_dir, chain, slice.map_id)?;
+    print_instance_map_evidence(&source);
+    let scan = crate::nav::scan_tiles(
+        chain,
+        &source.map_name,
+        slice.map_id,
+        (i32::from(x0), i32::from(x1), i32::from(y0), i32::from(y1)),
+    )?;
+    print_instance_adt_evidence(&scan.sources);
+    let expected_tiles = usize::from(x1 / 16 - x0 / 16 + 1)
+        .checked_mul(usize::from(y1 / 16 - y0 / 16 + 1))
+        .context("instance tile count overflows")?;
+    if scan.sources.len() != expected_tiles {
+        bail!(
+            "instance route {} needs {expected_tiles} ADT tiles but found {}",
+            slice.name,
+            scan.sources.len()
+        );
+    }
+    if scan.placements.is_empty() {
+        bail!("instance route {} has no ADT model placements", slice.name);
+    }
+    let calibration = crate::nav::calibrate_from_placements_with_evidence(chain, &scan.placements)?;
+    let mut inspections = Vec::new();
+    let mut placement_findings = Vec::new();
+    for placement in scan.placements.iter().filter(|placement| placement.is_wmo) {
+        let inspection = crate::instance_vmap::inspect_relevant_doodads(
+            chain,
+            slice.map_id,
+            &selected_cells,
+            placement,
+            calibration.convention,
+        )?;
+        if inspection.touches_selection && inspection.placement_flags & 1 != 0 {
+            placement_findings.push(format!(
+                "Map {} route-relevant WMO {} placement {} is destroyable and cannot be staged as static geometry",
+                slice.map_id,
+                placement.name,
+                inspection.unique_id
+            ));
+        }
+        if !inspection.relevant_refs.is_empty() {
+            placement_findings.push(format!(
+                "Map {} selected WMO groups in {} placement {} reference active doodad definitions that the bounded instance extractor cannot yet transform: {}",
+                slice.map_id,
+                placement.name,
+                inspection.unique_id,
+                inspection
+                    .relevant_refs
+                    .iter()
+                    .map(u32::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        inspections.push((placement, inspection));
+    }
+    print_instance_placement_evidence(&inspections, &calibration);
+    if !placement_findings.is_empty() {
+        bail!("{}", placement_findings.join(" | "));
+    }
+    let spool = VmapSpool::new(slice.map_id)?;
+    let mut route_tris = HashMap::<(u16, u16), Vec<VmapTri>>::new();
+    let mut spool_error = None;
+    let mut selected_tri_refs = 0usize;
+    let mut world_tris = 0usize;
+    let mut wmo_tris = 0usize;
+    for placement in &scan.placements {
+        let mesh = crate::nav::load_mesh(chain, placement)?;
+        for_each_placement_tri(placement, &mesh, calibration.convention, |tri| {
+            if spool_error.is_some() {
+                return;
+            }
+            world_tris += 1;
+            wmo_tris += usize::from(matches!(tri.class, TriClass::Wmo { .. }));
+            let Some((cx0, cx1, cy0, cy1)) = tri_cell_range(&tri) else {
+                return;
+            };
+            for cell_x in cx0..=cx1 {
+                for cell_y in cy0..=cy1 {
+                    let key = cell_key(slice.map_id, cell_x, cell_y);
+                    if selected_cells.contains(&key) {
+                        selected_tri_refs += 1;
+                        if selected_tri_refs > MAX_INSTANCE_SELECTED_TRI_REFS {
+                            spool_error = Some(anyhow::anyhow!(
+                                "bounded instance slice exceeds the {MAX_INSTANCE_SELECTED_TRI_REFS}-triangle-reference output limit"
+                            ));
+                            return;
+                        }
+                        if let Err(error) = spool.append(key, tri) {
+                            spool_error = Some(error);
+                            return;
+                        }
+                        route_tris.entry((cell_x, cell_y)).or_default().push(tri);
+                    }
+                }
+            }
+        });
+    }
+    if let Some(error) = spool_error {
+        return Err(error).context("spooling bounded instance geometry");
+    }
+    let evidence = instance_route_evidence(
+        slice,
+        selected_cells.into_iter().collect(),
+        selected_tri_refs,
+        &route_tris,
+    );
+    let mut plan = finish_plan(
+        slice.map_id,
+        source_identity,
+        slice.selection_identity()?,
+        spool,
+        world_tris,
+        wmo_tris,
+        VmapOwnership::InstancePool,
+    )?;
+    plan.route_evidence = Some(evidence);
+    Ok(plan)
+}
+
+fn instance_route_evidence(
+    slice: &crate::world_import_scope::InstanceVmapSlice,
+    selected_keys: Vec<u64>,
+    selected_tri_refs: usize,
+    tris: &HashMap<(u16, u16), Vec<VmapTri>>,
+) -> InstanceRouteEvidence {
+    let (dx, dy) = (
+        slice.exit[0] - slice.entry[0],
+        slice.exit[1] - slice.entry[1],
+    );
+    let horizontal_distance = (dx * dx + dy * dy).sqrt();
+    let steps = (horizontal_distance / INSTANCE_ROUTE_SAMPLE_YD)
+        .ceil()
+        .max(1.0) as usize;
+    let mut samples = Vec::with_capacity(steps + 1);
+    let mut sample_findings = Vec::with_capacity(steps + 1);
+    let mut prior: Option<([f32; 3], f32)> = None;
+    for index in 0..=steps {
+        let t = index as f32 / steps as f32;
+        let position = [
+            slice.entry[0] + dx * t,
+            slice.entry[1] + dy * t,
+            slice.entry[2] + (slice.exit[2] - slice.entry[2]) * t,
+        ];
+        let (sample, sample_violations) = instance_route_sample(index, position, prior, tris);
+        if let Some(floor) = sample.support_floor {
+            prior = Some((position, floor));
+        }
+        samples.push(sample);
+        sample_findings.push(sample_violations);
+    }
+    let mut supported_exit_sample = None;
+    for (index, (sample, findings)) in samples.iter().zip(&sample_findings).enumerate() {
+        if !findings.is_empty() {
+            break;
+        }
+        if let Some(position) = sample.supported_position() {
+            if point_in_sphere(position, slice.exit, slice.exit_radius)
+                && (position[2] - sample.position[2]).abs() <= lyracore_shared::nav::WALK_STEP_UP
+            {
+                supported_exit_sample = Some(index);
+            }
+        }
+    }
+    let required_end = supported_exit_sample.unwrap_or(samples.len() - 1);
+    let mut violations = Vec::new();
+    let mut diagnostics = Vec::new();
+    for (index, findings) in sample_findings.into_iter().enumerate() {
+        if index <= required_end {
+            violations.extend(findings);
+        } else {
+            diagnostics.extend(findings);
+        }
+    }
+    if samples
+        .first()
+        .and_then(|sample| sample.support_floor)
+        .is_none_or(|floor| (floor - slice.entry[2]).abs() > lyracore_shared::nav::WALK_STEP_UP)
+    {
+        violations.push(format!(
+            "entry floor does not match authored height {:.4} within {:.4} yards",
+            slice.entry[2],
+            lyracore_shared::nav::WALK_STEP_UP
+        ));
+    }
+    if supported_exit_sample.is_none() {
+        violations.push(format!(
+            "no continuously supported route sample reaches the exit trigger radius {:.4} yards",
+            slice.exit_radius
+        ));
+    }
+    if required_end + 1 < samples.len()
+        && samples
+            .last()
+            .and_then(|sample| sample.support_floor)
+            .is_none_or(|floor| (floor - slice.exit[2]).abs() > lyracore_shared::nav::WALK_STEP_UP)
+    {
+        diagnostics.push(format!(
+            "exit center floor does not match authored height {:.4} within {:.4} yards",
+            slice.exit[2],
+            lyracore_shared::nav::WALK_STEP_UP
+        ));
+    }
+    let direct_end = samples
+        .get(required_end)
+        .and_then(InstanceRouteSample::supported_position)
+        .unwrap_or(slice.exit);
+    let direct_step_hit = instance_collision_hit(
+        tris,
+        [
+            slice.entry[0],
+            slice.entry[1],
+            slice.entry[2] + lyracore_shared::nav::WALK_STEP_UP,
+        ],
+        [
+            direct_end[0],
+            direct_end[1],
+            direct_end[2] + lyracore_shared::nav::WALK_STEP_UP,
+        ],
+    );
+    if direct_step_hit.is_some() {
+        violations.push("direct route is obstructed".to_owned());
+    }
+    InstanceRouteEvidence {
+        name: slice.name.clone(),
+        selected_keys,
+        selected_tri_refs,
+        samples,
+        supported_exit_sample,
+        direct_step_hit,
+        violations,
+        diagnostics,
+    }
+}
+
+fn point_in_sphere(point: [f32; 3], center: [f32; 3], radius: f32) -> bool {
+    let [dx, dy, dz] = [
+        point[0] - center[0],
+        point[1] - center[1],
+        point[2] - center[2],
+    ];
+    dx * dx + dy * dy + dz * dz <= radius * radius
+}
+
+const ROUTE_FLOOR_EPSILON_YD: f32 = 0.01;
+/// Static support sampling interval. It finds narrow holes without claiming to reproduce a
+/// Character's committed movement leg, which has caller-specific distance and height behavior.
+const INSTANCE_ROUTE_SAMPLE_YD: f32 = 0.5;
+
+fn instance_route_sample(
+    index: usize,
+    position: [f32; 3],
+    prior: Option<([f32; 3], f32)>,
+    tris: &HashMap<(u16, u16), Vec<VmapTri>>,
+) -> (InstanceRouteSample, Vec<String>) {
+    let probe_z = prior.map_or(position[2], |(_, floor)| floor);
+    let top = [position[0], position[1], probe_z + 2.0];
+    let bottom = [position[0], position[1], probe_z - 200.0];
+    let model_floor = instance_collision_hit(tris, top, bottom).map(|hit| hit[2]);
+    let support_floor = walkable_floor(tris, top, bottom);
+    let mut violations = Vec::new();
+    if model_floor.is_none() || support_floor.is_none() {
+        violations.push(format!("sample {index} has no retained walkable floor"));
+    }
+    if let (Some(model), Some(support)) = (model_floor, support_floor) {
+        if (model - support).abs() > ROUTE_FLOOR_EPSILON_YD {
+            violations.push(format!(
+                "sample {index} model floor {model:.4} is not walkable support {support:.4}"
+            ));
+        }
+    }
+    let floor_delta =
+        prior.and_then(|(_, prior_floor)| support_floor.map(|floor| floor - prior_floor));
+    if let Some(delta) =
+        floor_delta.filter(|delta| delta.abs() > lyracore_shared::nav::WALK_STEP_UP)
+    {
+        violations.push(format!(
+            "sample {index} floor change {:.4} exceeds step height {:.4}",
+            delta,
+            lyracore_shared::nav::WALK_STEP_UP
+        ));
+    }
+    let headroom_hit = support_floor.and_then(|floor| {
+        instance_collision_hit(
+            tris,
+            [position[0], position[1], floor + ROUTE_FLOOR_EPSILON_YD],
+            [
+                position[0],
+                position[1],
+                floor + lyracore_shared::nav::WALK_HEIGHT,
+            ],
+        )
+    });
+    if headroom_hit.is_some() {
+        violations.push(format!("sample {index} has insufficient headroom"));
+    }
+    let step_hit = prior.and_then(|(previous, previous_floor)| {
+        instance_collision_hit(
+            tris,
+            [
+                previous[0],
+                previous[1],
+                previous_floor + lyracore_shared::nav::WALK_STEP_UP,
+            ],
+            [
+                position[0],
+                position[1],
+                previous_floor + lyracore_shared::nav::WALK_STEP_UP,
+            ],
+        )
+    });
+    if step_hit.is_some() {
+        violations.push(format!("sample {index} movement step is obstructed"));
+    }
+    (
+        InstanceRouteSample {
+            index,
+            position,
+            model_floor,
+            support_floor,
+            floor_delta,
+            headroom_hit,
+            step_hit,
+        },
+        violations,
+    )
+}
+
+fn instance_collision_hit(
+    tris: &HashMap<(u16, u16), Vec<VmapTri>>,
+    from: [f32; 3],
+    to: [f32; 3],
+) -> Option<[f32; 3]> {
+    lyracore_shared::vmap::cast_ray(
+        &mut |cell_x, cell_y| tris.get(&(cell_x, cell_y)).cloned(),
+        from,
+        to,
+        lyracore_shared::vmap::RayFlavor::Collision,
+    )
+}
+
+fn walkable_floor(
+    tris: &HashMap<(u16, u16), Vec<VmapTri>>,
+    top: [f32; 3],
+    bottom: [f32; 3],
+) -> Option<f32> {
+    let cell = (
+        lyracore_shared::terrain::cell_index(top[0])?,
+        lyracore_shared::terrain::cell_index(top[1])?,
+    );
+    tris.get(&cell)?
+        .iter()
+        .filter(|tri| matches!(tri.class, TriClass::Wmo { .. }))
+        .filter_map(|tri| {
+            let ab = [
+                tri.verts[1][0] - tri.verts[0][0],
+                tri.verts[1][1] - tri.verts[0][1],
+                tri.verts[1][2] - tri.verts[0][2],
+            ];
+            let ac = [
+                tri.verts[2][0] - tri.verts[0][0],
+                tri.verts[2][1] - tri.verts[0][1],
+                tri.verts[2][2] - tri.verts[0][2],
+            ];
+            let normal = [
+                ab[1] * ac[2] - ab[2] * ac[1],
+                ab[2] * ac[0] - ab[0] * ac[2],
+                ab[0] * ac[1] - ab[1] * ac[0],
+            ];
+            let normal_squared = normal.iter().map(|value| value * value).sum::<f32>();
+            if normal_squared == 0.0
+                || normal[2] * normal[2] < 50.0f32.to_radians().cos().powi(2) * normal_squared
+            {
+                return None;
+            }
+            lyracore_shared::vmap::segment_tri_hit(top, bottom, tri.verts)
+                .map(|t| top[2] + (bottom[2] - top[2]) * t)
+        })
+        .max_by(f32::total_cmp)
+}
+
+fn format_point(value: Option<f32>) -> String {
+    value
+        .map(|value| format!("{value:.4}"))
+        .unwrap_or_else(|| "none".to_owned())
+}
+
+fn format_position(value: Option<[f32; 3]>) -> String {
+    value
+        .map(|point| format!("{:.4},{:.4},{:.4}", point[0], point[1], point[2]))
+        .unwrap_or_else(|| "none".to_owned())
+}
+
+fn format_hit(value: Option<[f32; 3]>) -> String {
+    value
+        .map(|point| format!("{:.4},{:.4},{:.4}", point[0], point[1], point[2]))
+        .unwrap_or_else(|| "clear".to_owned())
+}
+
+fn instance_map_source(
+    data_dir: &Path,
+    chain: &mut PatchChain,
+    map_id: u32,
+) -> Result<InstanceMapSource> {
+    type ClientMap = wow_dbc::vanilla_tables::map::Map;
+    let map_dbc_path = format!("DBFilesClient\\{}", ClientMap::FILENAME);
+    let mut dbc_chain = crate::dbc::open_chain(data_dir)?;
+    let map_dbc = dbc_chain
+        .read_file(&map_dbc_path)
+        .with_context(|| format!("reading {map_dbc_path}"))?;
+    let maps = ClientMap::read(&mut Cursor::new(&map_dbc))
+        .context("parsing Map.dbc for Instance Vmap Slice")?;
+    let mut rows = maps.rows.iter().filter(|row| row.id.id == map_id);
+    let row = rows
+        .next()
+        .with_context(|| format!("Map.dbc has no map {map_id}"))?;
+    if rows.next().is_some() {
+        bail!("Map.dbc has more than one map {map_id}");
+    }
+    if row.internal_name.is_empty()
+        || !row
+            .internal_name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+    {
+        bail!(
+            "Map.dbc map {map_id} has unsafe internal name {:?}",
+            row.internal_name
+        );
+    }
+    let map_name = row.internal_name.clone();
+    let wdt_path = format!("World\\Maps\\{map_name}\\{map_name}.wdt");
+    let wdt = chain
+        .read_file(&wdt_path)
+        .with_context(|| format!("reading instance WDT {wdt_path}"))?;
+    Ok(InstanceMapSource {
+        map_id,
+        map_name,
+        map_dbc_path,
+        map_dbc_bytes: map_dbc.len(),
+        map_dbc_blake3: blake3::hash(&map_dbc).to_hex().to_string(),
+        wdt_path,
+        wdt_bytes: wdt.len(),
+        wdt_blake3: blake3::hash(&wdt).to_hex().to_string(),
+    })
+}
+
+fn print_instance_map_evidence(source: &InstanceMapSource) {
+    println!(
+        "vmap: instance map={} map_name={} map_dbc={} bytes={} blake3={} wdt={} bytes={} blake3={}",
+        source.map_id,
+        source.map_name,
+        source.map_dbc_path,
+        source.map_dbc_bytes,
+        source.map_dbc_blake3,
+        source.wdt_path,
+        source.wdt_bytes,
+        source.wdt_blake3,
+    );
+}
+
+fn print_instance_adt_evidence(adts: &[crate::nav::TileSource]) {
+    println!("vmap: instance ADT count={}", adts.len());
+    for adt in adts {
+        println!(
+            "vmap: instance ADT={} bytes={} blake3={}",
+            adt.path, adt.bytes, adt.blake3
+        );
+    }
+}
+
+fn print_instance_placement_evidence(
+    placements: &[(&Placement, crate::instance_vmap::PlacementInspection)],
+    calibration: &crate::nav::Calibration,
+) {
+    println!(
+        "vmap: instance convention={:?} calibration_q25_yards={:.4}",
+        calibration.convention, calibration.q25_error_yards,
+    );
+    for (placement, inspection) in placements {
+        println!(
+            "vmap: instance placement wmo={} unique_id={} position={:?} rotation={:?} bounds_min={:?} bounds_max={:?} flags={} doodad_set={} name_set={}",
+            placement.name,
+            inspection.unique_id,
+            placement.position,
+            placement.rotation,
+            placement.bounds_min,
+            placement.bounds_max,
+            inspection.placement_flags,
+            inspection.doodad_set,
+            inspection.name_set,
+        );
+        println!(
+            "vmap: instance WMO root={} bytes={} blake3={} selected_doodads={}..{} relevant_refs={:?}",
+            inspection.root.path,
+            inspection.root.bytes,
+            inspection.root.blake3,
+            inspection.selected_start,
+            inspection.selected_end,
+            inspection.relevant_refs,
+        );
+        for group in &inspection.groups {
+            println!(
+                "vmap: instance WMO group={} bytes={} blake3={} touches_selection={} active_doodad_refs={:?}",
+                group.source.path,
+                group.source.bytes,
+                group.source.blake3,
+                group.touches_selection,
+                group.active_doodad_refs,
+            );
+        }
+    }
 }
 
 fn placement_key(placement: &Placement) -> String {
@@ -780,6 +1495,9 @@ const BATCH_BYTES: usize = 28_000;
 /// guards was measured live (`Argument list too long`, os error 7) importing a dense WMO cell near
 /// the Northshire abbey before this cap existed.
 const MAX_ROW_TRI_BYTES: usize = 20_000;
+
+/// Bounds the 45-byte spool records retained by one Instance Vmap Slice to 22.5 MB.
+const MAX_INSTANCE_SELECTED_TRI_REFS: usize = 500_000;
 
 /// Split one cell's triangle list into `lyracore_shared::vmap::encode`d shards, each at most
 /// `MAX_ROW_TRI_BYTES`. Order within a cell doesn't matter (the module concatenates every shard's
@@ -911,8 +1629,8 @@ fn coverage_batches(cells: &[(u16, u16)]) -> Vec<String> {
 }
 
 /// `--vmap-prepare-coverage <generation_id>`: derive and store nav coverage for an already-staged
-/// generation, resumable and manifest-reporting. Reuses `preflight_map_ownership` fail-closed —
-/// coverage never prepares on a shard that does not own the map — and, like `--vmap`, only writes
+/// generation, resumable and manifest-reporting. Reuses `preflight_map_ownership` fail-closed, so
+/// coverage never prepares on a World Shard that does not own the map and, like `--vmap`, only writes
 /// with `--apply`; without it this reports the plan and touches nothing.
 pub(crate) fn run_coverage(args: &crate::Args, generation_id: u64) -> Result<()> {
     let generation = generation_info(args, generation_id)?;
@@ -1198,21 +1916,19 @@ mod tests {
         let placement = Placement {
             name: "World\\wmo\\test.wmo".to_owned(),
             is_wmo: true,
+            unique_id: 1,
             position: [1.0, 2.0, 3.0],
             rotation: [0.0, 90.0, 0.0],
             scale: 1.0,
             bounds_min: None,
             bounds_max: None,
+            wmo: Some(crate::nav::WmoPlacement {
+                flags: 0,
+                doodad_set: 0,
+                name_set: 0,
+            }),
         };
-        let mut shifted = Placement {
-            name: placement.name.clone(),
-            is_wmo: placement.is_wmo,
-            position: placement.position,
-            rotation: placement.rotation,
-            scale: placement.scale,
-            bounds_min: None,
-            bounds_max: None,
-        };
+        let mut shifted = placement.clone();
 
         assert_eq!(placement_key(&placement), placement_key(&placement));
         shifted.position[0] += 1.0;
@@ -1230,6 +1946,252 @@ mod tests {
             0
         )
         .unwrap());
+    }
+
+    #[test]
+    fn instance_ownership_requires_the_exact_config_row() {
+        let owned = r#"[{"schema":{"elements":[{"name":{"some":"id"}},{"name":{"some":"hosts_instances"}}]},"rows":[[0,true]]}]"#;
+        assert!(sql_owns_instance_pool(owned).unwrap());
+        assert!(!sql_owns_instance_pool(&owned.replace("true", "false")).unwrap());
+        assert!(!sql_owns_instance_pool(&owned.replace("[0,true]", "[1,true]")).unwrap());
+        assert!(sql_owns_instance_pool("not json").is_err());
+    }
+
+    fn wmo_tri(verts: [[f32; 3]; 3]) -> VmapTri {
+        VmapTri {
+            verts,
+            class: TriClass::Wmo {
+                group_id: 1,
+                mogp_flags: 0,
+            },
+        }
+    }
+
+    fn ramp(x0: f32, x1: f32, z0: f32, z1: f32) -> Vec<VmapTri> {
+        vec![
+            wmo_tri([[x0, -1.0, z0], [x1, 1.0, z1], [x1, -1.0, z1]]),
+            wmo_tri([[x0, -1.0, z0], [x0, 1.0, z0], [x1, 1.0, z1]]),
+        ]
+    }
+
+    fn route_slice(
+        entry_z: f32,
+        exit_z: f32,
+        exit_radius: f32,
+    ) -> crate::world_import_scope::InstanceVmapSlice {
+        crate::world_import_scope::InstanceVmapSlice {
+            name: "worked-route".to_owned(),
+            map_id: 36,
+            entry: [0.0, 0.0, entry_z],
+            exit: [5.0, 0.0, exit_z],
+            exit_radius,
+            collar_cells: 1,
+        }
+    }
+
+    fn route_cells(tris: &[VmapTri]) -> HashMap<(u16, u16), Vec<VmapTri>> {
+        let mut cells = HashMap::new();
+        for tri in tris {
+            let (cx0, cx1, cy0, cy1) = tri_cell_range(tri).expect("worked triangle is on-map");
+            for cell_x in cx0..=cx1 {
+                for cell_y in cy0..=cy1 {
+                    cells
+                        .entry((cell_x, cell_y))
+                        .or_insert_with(Vec::new)
+                        .push(*tri);
+                }
+            }
+        }
+        cells
+    }
+
+    fn route_evidence(
+        tris: Vec<VmapTri>,
+        entry_z: f32,
+        exit_z: f32,
+        exit_radius: f32,
+    ) -> InstanceRouteEvidence {
+        let cells = route_cells(&tris);
+        let selected_keys = cells
+            .keys()
+            .map(|&(cell_x, cell_y)| lyracore_shared::terrain::cell_key(36, cell_x, cell_y))
+            .collect();
+        let selected_tri_refs = cells.values().map(Vec::len).sum();
+        instance_route_evidence(
+            &route_slice(entry_z, exit_z, exit_radius),
+            selected_keys,
+            selected_tri_refs,
+            &cells,
+        )
+    }
+
+    #[test]
+    fn a_clear_ramp_retains_supported_route_samples() {
+        let evidence = route_evidence(ramp(-1.0, 6.0, 10.0, 12.8), 10.4, 12.4, 0.0);
+        assert!(
+            evidence.geometry_ready(),
+            "violations: {:?}",
+            evidence.violations
+        );
+        assert_eq!(evidence.selected_keys.len(), 4);
+        assert_eq!(evidence.selected_tri_refs, 8);
+        assert_eq!(evidence.samples.len(), 11);
+        assert!(evidence
+            .samples
+            .iter()
+            .all(|sample| sample.support_floor.is_some()
+                && sample.headroom_hit.is_none()
+                && sample.step_hit.is_none()));
+    }
+
+    #[test]
+    fn supported_travel_into_the_exit_volume_does_not_require_center_floor() {
+        let evidence = route_evidence(ramp(-1.0, 4.0, 10.0, 10.0), 10.0, 10.0, 1.5);
+        assert!(
+            evidence.geometry_ready(),
+            "violations: {:?}",
+            evidence.violations
+        );
+        assert_eq!(evidence.supported_exit_sample, Some(8));
+        assert_eq!(
+            evidence.samples[8].supported_position(),
+            Some([4.0, 0.0, 10.0])
+        );
+        assert_eq!(evidence.samples[8].support_floor, Some(10.0));
+        assert_eq!(evidence.samples.last().unwrap().support_floor, None);
+        assert!(evidence
+            .diagnostics
+            .iter()
+            .any(|finding| finding.contains("exit center floor does not match")));
+    }
+
+    #[test]
+    fn missing_support_before_the_exit_volume_refuses_the_route() {
+        let mut tris = ramp(-1.0, 2.0, 10.0, 10.0);
+        tris.extend(ramp(3.5, 4.0, 10.0, 10.0));
+        let evidence = route_evidence(tris, 10.0, 10.0, 1.5);
+        assert!(!evidence.geometry_ready());
+        assert_eq!(evidence.supported_exit_sample, None);
+        assert!(evidence
+            .violations
+            .iter()
+            .any(|violation| violation.contains("sample 5 has no retained walkable floor")));
+        assert!(evidence
+            .violations
+            .iter()
+            .any(|violation| violation.contains("no continuously supported route sample")));
+    }
+
+    #[test]
+    fn a_hole_in_the_retained_floor_refuses_the_route() {
+        let mut tris = ramp(-1.0, 0.75, 10.0, 10.0);
+        tris.extend(ramp(4.25, 6.0, 10.0, 10.0));
+        let evidence = route_evidence(tris, 10.0, 10.0, 0.0);
+        assert!(!evidence.geometry_ready());
+        assert!(evidence
+            .violations
+            .iter()
+            .any(|violation| violation.contains("no retained walkable floor")));
+    }
+
+    #[test]
+    fn an_excessive_drop_or_upper_deck_refuses_the_route() {
+        for (tris, entry_z, exit_z) in [
+            (
+                {
+                    let mut tris = ramp(-1.0, 2.5, 10.0, 10.0);
+                    tris.extend(ramp(2.5, 6.0, 8.0, 8.0));
+                    tris
+                },
+                10.0,
+                8.0,
+            ),
+            (
+                {
+                    let mut tris = ramp(-1.0, 6.0, 10.0, 10.0);
+                    tris.extend(ramp(2.5, 6.0, 11.5, 11.5));
+                    tris
+                },
+                10.0,
+                11.5,
+            ),
+        ] {
+            let evidence = route_evidence(tris, entry_z, exit_z, 0.0);
+            assert!(!evidence.geometry_ready());
+            assert!(evidence
+                .violations
+                .iter()
+                .any(|violation| violation.contains("exceeds step height")));
+        }
+    }
+
+    #[test]
+    fn an_obstruction_on_the_route_refuses_staging_evidence() {
+        let mut tris = ramp(-1.0, 6.0, 10.0, 10.0);
+        tris.extend([
+            wmo_tri([[2.5, -1.0, 10.0], [2.5, 1.0, 20.0], [2.5, -1.0, 20.0]]),
+            wmo_tri([[2.5, -1.0, 10.0], [2.5, 1.0, 10.0], [2.5, 1.0, 20.0]]),
+        ]);
+        let evidence = route_evidence(tris, 10.0, 10.0, 0.0);
+        assert!(!evidence.geometry_ready());
+        assert!(evidence.direct_step_hit.is_some());
+        assert!(evidence
+            .violations
+            .iter()
+            .any(|violation| violation == "direct route is obstructed"));
+    }
+
+    #[test]
+    fn instance_route_reports_both_floors_and_the_direct_collision() {
+        let class = TriClass::Wmo {
+            group_id: 1,
+            mogp_flags: 0,
+        };
+        let tris = vec![
+            VmapTri {
+                verts: [[-1.0, -1.0, 10.0], [1.0, 1.0, 10.0], [1.0, -1.0, 10.0]],
+                class,
+            },
+            VmapTri {
+                verts: [[-1.0, -1.0, 10.0], [-1.0, 1.0, 10.0], [1.0, 1.0, 10.0]],
+                class,
+            },
+            VmapTri {
+                verts: [[4.0, -1.0, 12.0], [6.0, 1.0, 12.0], [6.0, -1.0, 12.0]],
+                class,
+            },
+            VmapTri {
+                verts: [[4.0, -1.0, 12.0], [4.0, 1.0, 12.0], [6.0, 1.0, 12.0]],
+                class,
+            },
+            VmapTri {
+                verts: [[2.5, -1.0, 0.0], [2.5, 1.0, 20.0], [2.5, -1.0, 20.0]],
+                class,
+            },
+            VmapTri {
+                verts: [[2.5, -1.0, 0.0], [2.5, 1.0, 0.0], [2.5, 1.0, 20.0]],
+                class,
+            },
+        ];
+        let by_cell = route_cells(&tris);
+        let selected_keys = by_cell
+            .keys()
+            .map(|&(cell_x, cell_y)| lyracore_shared::terrain::cell_key(36, cell_x, cell_y))
+            .collect();
+        let selected_tri_refs = by_cell.values().map(Vec::len).sum();
+        let slice = crate::world_import_scope::InstanceVmapSlice {
+            name: "worked-route".to_owned(),
+            map_id: 36,
+            entry: [0.0, 0.0, 10.0],
+            exit: [5.0, 0.0, 12.0],
+            exit_radius: 0.0,
+            collar_cells: 1,
+        };
+        let evidence = instance_route_evidence(&slice, selected_keys, selected_tri_refs, &by_cell);
+        assert_eq!(evidence.samples[0].support_floor, Some(10.0));
+        assert_eq!(evidence.samples.last().unwrap().support_floor, Some(12.0));
+        let hit = evidence.direct_step_hit.expect("direct route crosses wall");
+        assert!((hit[0] - 2.5).abs() < 0.001, "unexpected hit {hit:?}");
     }
 
     #[test]
