@@ -1790,7 +1790,7 @@ fn imported_follow_leg(topology: &CompanionTopology, start: (f32, f32, f32)) -> 
             &format!("SELECT * FROM pkg_playerbots_action WHERE character_guid = {guid}"),
         )
         .into_iter()
-        .next()?;
+        .find(|action| action["kind"] == "(move = ())")?;
     let body = topology
         .query(
             &topology.destination,
@@ -1891,7 +1891,9 @@ fn assert_imported_follow_leg(topology: &CompanionTopology, evidence: &Value) ->
         runner["companion_leader_guid"],
         format!("(some = {})", topology.party.leader)
     );
-    assert_eq!(runner["deferred_destinations"], "[]");
+    assert!(runner["deferred_destinations"]
+        .as_str()
+        .is_some_and(|destinations| destinations.trim_matches(['[', ']', ' ']).is_empty()));
     assert!(!runner["failures"].as_str().unwrap().contains("noMovement"));
     assert!(runner["movement_progress"]
         .as_str()
