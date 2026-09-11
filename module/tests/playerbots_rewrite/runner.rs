@@ -545,31 +545,208 @@ fn playerbots_runner_selection_owns_normal_invites_and_group_consent() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn playerbots_runner_objective_deadline_expires_the_retained_cast_identity() {
-    let (node, bots) = fixture("playerbots-runner-deadline", "1");
+fn playerbots_runner_expired_home_does_not_cancel_a_tactical_cast() {
+    let (node, bots) = fixture("playerbots-runner-home-deadline", "1");
     let bot = &bots[0];
     node.assert_call("playerbots_fixture_runner_stage", &[bot, "true"]);
-    select(&node, bot, "cohort");
-    assert!(poll_until(POLL_TIMEOUT, || !node
-        .query_rows("SELECT * FROM game_pending_cast")
-        .is_empty()));
-    let cast_id =
-        node.query_rows("SELECT scheduled_id FROM game_pending_cast")[0]["scheduled_id"].clone();
-    node.assert_call("playerbots_fixture_runner_expire_objective", &[bot]);
-    assert!(poll_until(POLL_TIMEOUT, || runner(&node, bot)["objective"]
-        .contains("deferred")));
-    assert!(node
-        .query_rows("SELECT * FROM game_pending_cast")
-        .is_empty());
-    assert!(node
-        .query_rows("SELECT * FROM pkg_playerbots_action")
-        .iter()
-        .any(|r| r["cast_id"] == cast_id && r["outcome"].contains("expired")));
-    select(&node, bot, "frozen");
-    std::thread::sleep(Duration::from_secs(6));
-    assert!(runner(&node, bot)["objective"].contains("deferred"));
-    assert!(runner(&node, bot)["cast_progress"].contains("none"));
-    assert_eq!(position(&node, bot), 1200.0);
+    node.assert_call("playerbots_fixture_runner_select_cohort", &[bot]);
+    let health_before = node.query_rows(&format!(
+        "SELECT health FROM game_world_entity WHERE guid = {bot}"
+    ))[0]["health"]
+        .parse::<u32>()
+        .unwrap();
+    node.assert_call(
+        "playerbots_fixture_runner_expire_home_during_live_recovery_cast",
+        &[bot],
+    );
+
+    let capture = |label: &str| {
+        let evidence = serde_json::json!({
+            "runner": runner(&node, bot),
+            "actions": node.query_rows(&format!(
+                "SELECT character_guid, kind, target_guid, spell_id, cast_id, outcome FROM pkg_playerbots_action WHERE character_guid = {bot}"
+            )),
+            "pending_cast": node.query_rows(&format!(
+                "SELECT scheduled_id, caster_guid, spell_id, target_guid FROM game_pending_cast WHERE caster_guid = {bot}"
+            )),
+            "cast_events": node.query_rows(&format!(
+                "SELECT id, caster_guid, spell_id, target_guid, kind, is_completion, healed FROM game_spell_cast_event WHERE caster_guid = {bot}"
+            )),
+            "entity": node.query_rows(&format!(
+                "SELECT guid, health, max_health, x, y, z FROM game_world_entity WHERE guid = {bot}"
+            )),
+        });
+        let path = support::log_dir().join(format!("{}-{label}.json", node.shard_name()));
+        std::fs::write(path, serde_json::to_vec_pretty(&evidence).unwrap()).unwrap();
+        evidence
+    };
+    let objective_number = |evidence: &serde_json::Value, field: &str| {
+        let objective = evidence["runner"]["objective"].as_str().unwrap();
+        objective
+            .split_once(&format!("{field} = "))
+            .and_then(|(_, value)| value.split_once(',').map(|(number, _)| number))
+            .unwrap()
+            .parse::<i64>()
+            .unwrap()
+    };
+    let boundary = capture("expired-home-tactical-cast");
+    let boundary_runner = boundary["runner"].as_object().unwrap();
+    let selected = boundary_runner["chosen"]
+        .as_str()
+        .unwrap()
+        .strip_prefix("(some = ")
+        .and_then(|value| value.strip_suffix(')'))
+        .expect("the tactical cast must retain its selected Runner candidate");
+    let actions = boundary["actions"].as_array().unwrap();
+    assert_eq!(actions.len(), 1, "{boundary}");
+    let cast = &actions[0];
+    let cast_id = cast["cast_id"].as_str().unwrap();
+    assert_ne!(cast_id, "0", "{boundary}");
+    assert_eq!(cast["kind"], "(cast = ())", "{boundary}");
+    assert_eq!(cast["spell_id"], "5090100", "{boundary}");
+    assert_eq!(cast["target_guid"], *bot, "{boundary}");
+    assert!(
+        selected.contains(&format!("target = {bot}, spell = 5090100")),
+        "{boundary}"
+    );
+    assert!(
+        selected.contains("reason = (recovery = ())")
+            && boundary_runner["objective"]
+                .as_str()
+                .unwrap()
+                .contains("kind = (returnHome = ())")
+            && boundary_runner["objective"]
+                .as_str()
+                .unwrap()
+                .contains("travelling")
+            && !boundary_runner["failures"]
+                .as_str()
+                .unwrap()
+                .contains("deadline"),
+        "{boundary}"
+    );
+    let objective_identity = objective_number(&boundary, "identity");
+    let objective_deadline = objective_number(&boundary, "deadline_micros");
+    assert!(
+        objective_deadline
+            <= boundary_runner["observed_micros"]
+                .as_str()
+                .unwrap()
+                .parse::<i64>()
+                .unwrap(),
+        "{boundary}"
+    );
+
+    let resolved = poll_until(POLL_TIMEOUT, || {
+        runner(&node, bot)["cast_progress"].contains(&format!(
+            "scheduled_id = {cast_id}, spell = 5090100, target = {bot}"
+        )) && node
+            .query_rows(&format!(
+                "SELECT cast_id, outcome FROM pkg_playerbots_action WHERE character_guid = {bot} AND spell_id = 5090100"
+            ))
+            .iter()
+            .any(|action| {
+                action["cast_id"] == cast_id && action["outcome"] == "(castResolved = ())"
+            })
+            && node
+                .query_rows(&format!(
+                    "SELECT scheduled_id FROM game_pending_cast WHERE caster_guid = {bot}"
+                ))
+                .is_empty()
+    });
+    let completed = capture("tactical-cast-resolved");
+    assert!(resolved, "{completed}");
+    let completed_actions = completed["actions"].as_array().unwrap();
+    assert_eq!(completed_actions.len(), 1, "{completed}");
+    assert_eq!(completed_actions[0]["cast_id"], cast_id, "{completed}");
+    assert_eq!(
+        completed_actions[0]["outcome"], "(castResolved = ())",
+        "{completed}"
+    );
+    assert!(
+        completed["pending_cast"].as_array().unwrap().is_empty(),
+        "{completed}"
+    );
+    let health_after = completed["entity"][0]["health"]
+        .as_str()
+        .unwrap()
+        .parse::<u32>()
+        .unwrap();
+    assert!(health_after > health_before, "{completed}");
+    assert!(
+        completed["cast_events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| {
+                event["caster_guid"] == *bot
+                    && event["target_guid"] == *bot
+                    && event["spell_id"] == "5090100"
+                    && event["kind"] == "2"
+                    && event["is_completion"] == "true"
+                    && event["healed"].as_str().unwrap().parse::<u32>().unwrap() > 0
+            }),
+        "{completed}"
+    );
+    assert!(
+        objective_number(&completed, "identity") == objective_identity
+            && objective_number(&completed, "deadline_micros") == objective_deadline
+            && completed["runner"]["objective"]
+                .as_str()
+                .unwrap()
+                .contains("kind = (returnHome = ())")
+            && completed["runner"]["objective"]
+                .as_str()
+                .unwrap()
+                .contains("travelling")
+            && !completed["runner"]["failures"]
+                .as_str()
+                .unwrap()
+                .contains("deadline")
+            && completed["runner"]["foreground"]
+                .as_str()
+                .unwrap()
+                .contains("none")
+            && completed["runner"]["last_outcome"]
+                .as_str()
+                .unwrap()
+                .contains("castFinished = (resolved = ())"),
+        "{completed}"
+    );
+
+    node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
+    let deferred = capture("home-deferred-after-tactical-cast");
+    assert!(
+        objective_number(&deferred, "identity") == objective_identity
+            && objective_number(&deferred, "deadline_micros") == objective_deadline
+            && deferred["runner"]["candidate_order"]
+                .as_str()
+                .unwrap()
+                .starts_with("(id = (action = (move = (home = ())), reason = (returnHome = ())")
+            && deferred["runner"]["objective"]
+                .as_str()
+                .unwrap()
+                .contains("kind = (returnHome = ())")
+            && deferred["runner"]["objective"]
+                .as_str()
+                .unwrap()
+                .contains("deferred")
+            && deferred["runner"]["failures"]
+                .as_str()
+                .unwrap()
+                .contains("deadline")
+            && deferred["runner"]["foreground"]
+                .as_str()
+                .unwrap()
+                .contains("none")
+            && deferred["runner"]["last_outcome"] == "(refused = (deadline = ()))",
+        "{deferred}"
+    );
+    assert_eq!(
+        deferred["runner"]["cast_progress"], completed["runner"]["cast_progress"],
+        "{deferred}"
+    );
+    assert_eq!(deferred["actions"], completed["actions"], "{deferred}");
     outcomes(&node);
 }
 

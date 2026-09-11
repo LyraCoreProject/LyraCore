@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use support::{poll_until, Standalone, POLL_TIMEOUT};
 
 const TARGET: u64 = (0xF130u64 << 48) | (6u64 << 24) | 1;
+const ALTERNATIVE_TARGET: u64 = (0xF130u64 << 48) | (823u64 << 24) | 1;
 
 fn git(path: &std::path::Path, args: &[&str]) -> String {
     let output = std::process::Command::new("git")
@@ -293,18 +294,41 @@ fn playerbots_recovery_changes_a_stalled_attack_then_defers_without_false_progre
             .contains("noMovement"),
         "{deferred}"
     );
-    assert!(
-        samples
-            .iter()
-            .skip_while(|sample| {
-                sample["elapsed_seconds"].as_f64().unwrap()
-                    < deferred["elapsed_seconds"].as_f64().unwrap()
-            })
-            .any(|sample| {
-                let chosen = sample["runner"]["chosen"].as_str().unwrap();
-                chosen.contains("attack") && !chosen.contains(&format!("attack = {TARGET}"))
-            }),
-        "failed quest target prevented another eligible fight"
+    let alternative = samples
+        .iter()
+        .skip_while(|sample| {
+            sample["elapsed_seconds"].as_f64().unwrap()
+                < deferred["elapsed_seconds"].as_f64().unwrap()
+        })
+        .find(|sample| {
+            let runner = &sample["runner"];
+            let chosen = runner["chosen"].as_str().unwrap();
+            chosen.contains(&format!("move = (entity = {ALTERNATIVE_TARGET})"))
+                && chosen.contains("reason = (quest = ())")
+                && runner["last_outcome"].as_str() == Some("(waiting = ())")
+                && runner["failures"]
+                    .as_str()
+                    .unwrap()
+                    .contains("missingImportedCoverage")
+                && sample["actions"].as_array().unwrap().iter().any(|action| {
+                    action["observed_micros"] == runner["observed_micros"]
+                        && action["kind"].as_str() == Some("(move = ())")
+                        && {
+                            let outcome = action["outcome"].as_str().unwrap();
+                            outcome.contains("destination = (x = 1202, y = 1200")
+                                && outcome.contains(
+                                    "route = (from = (x = 1357, y = 1200), endpoint = (x = 1357, y = 1200), first_waypoint = (none = ()), status = (blocked = ())",
+                                )
+                                && outcome.contains("coverage = (unknown = ())")
+                                && outcome.contains("arrived = false")
+                                && outcome.contains("last_advance_micros = (none = ())")
+                        }
+                })
+        })
+        .expect("failed quest target prevented the exact eligible Quest attempt");
+    assert_ne!(
+        alternative["runner"]["objective_sequence"],
+        samples[0]["runner"]["objective_sequence"]
     );
 }
 

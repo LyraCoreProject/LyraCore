@@ -219,7 +219,7 @@ fn sorted(mut rows: Vec<BTreeMap<String, String>>, key: &str) -> Vec<BTreeMap<St
 fn snapshot(node: &Standalone) -> Value {
     json!({
         "bot": sorted(node.query_rows("SELECT character_guid, controller FROM pkg_playerbots_bot"), "character_guid"),
-        "runner": sorted(node.query_rows("SELECT character_guid, objective_sequence, objective, foreground, chosen, candidate_order, recovery, transfer_checkpoint, last_outcome, failures, history FROM pkg_playerbots_runner"), "character_guid"),
+        "runner": sorted(node.query_rows("SELECT character_guid, objective_sequence, objective, foreground, chosen, candidate_order, recovery, deferred_destinations, transfer_checkpoint, last_outcome, failures, history, observed_micros FROM pkg_playerbots_runner"), "character_guid"),
         "retained_quests": sorted(node.query_rows("SELECT character_guid, runner_objective_identity, quest_entry, target, destination FROM pkg_playerbots_quest_objective"), "character_guid"),
         "quest_cast_rotation": sorted(node.query_rows("SELECT class, role, priority, spell_id, condition FROM pkg_playerbots_rotation WHERE class = 5 AND role = 1 AND condition = 0"), "priority"),
         "quest_cast_spellbook": sorted(node.query_rows("SELECT character_guid, spell_id FROM game_player_spell WHERE spell_id = 585"), "character_guid"),
@@ -1008,6 +1008,7 @@ fn playerbots_recovery_position_expires_with_its_retained_quest() {
         std::thread::sleep(Duration::from_millis(500));
     };
     save(&node, "recovery-position-pending", &pending);
+    assert_real_quest_root(&pending, QUEST_ROOTS[5], &guid);
     let foreground = pending["runner"][0]["foreground"].as_str().unwrap();
     let position = structured_number(foreground, "recoveryPosition");
     assert_eq!(
@@ -1043,23 +1044,86 @@ fn playerbots_recovery_position_expires_with_its_retained_quest() {
     let expired = snapshot(&node);
     save(&node, "recovery-position-expired", &expired);
     let runner = &expired["runner"][0];
-    assert_objective_identity(&pending["runner"][0], runner);
+    let retained_identity = pending["runner"][0]["objective_sequence"]
+        .as_str()
+        .unwrap()
+        .parse::<u64>()
+        .unwrap();
+    let current_identity = runner["objective_sequence"]
+        .as_str()
+        .unwrap()
+        .parse::<u64>()
+        .unwrap();
+    assert!(current_identity >= retained_identity, "{expired}");
     assert!(
         runner["failures"].as_str().unwrap().contains("deadline"),
         "{expired}"
     );
+    let expired_position = format!(
+        "action = (move = (recoveryPosition = {position})), reason = (quest = ()), objective = {retained_identity}), priority = 110)), outcome = "
+    );
+    let history = runner["history"].as_str().unwrap();
     assert!(
-        runner["objective"].as_str().unwrap().contains("deferred"),
+        history.contains(&format!("{expired_position}(cancelled = ())"))
+            && history.contains(&format!("{expired_position}(refused = (deadline = ()))")),
         "{expired}"
     );
+    let recovery = runner["recovery"].as_str().unwrap();
     assert!(
-        runner["history"]
-            .as_str()
-            .unwrap()
-            .contains(&format!("recoveryPosition = {position}")),
+        recovery.contains(&format!("fight = {}", QUEST_ROOTS[5].target))
+            && recovery.contains(&format!("objective = {retained_identity}")),
         "{expired}"
     );
-    assert_eq!(runner["foreground"], "(none = ())", "{expired}");
+    let deferral = runner["deferred_destinations"].as_str().unwrap();
+    assert_eq!(
+        pending["runner"][0]["deferred_destinations"], "",
+        "{pending}"
+    );
+    let deferred_until = structured_number(deferral, "until_micros")
+        .parse::<i64>()
+        .unwrap();
+    let observed_micros = runner["observed_micros"]
+        .as_str()
+        .unwrap()
+        .parse::<i64>()
+        .unwrap();
+    assert!(
+        deferral.contains("x = 1360, y = 1200, z = 50")
+            && deferred_until > observed_micros
+            && deferred_until <= observed_micros.saturating_add(30_000_000),
+        "{expired}"
+    );
+    let objective = runner["objective"].as_str().unwrap();
+    assert!(
+        objective.contains(&format!("identity = {current_identity}"))
+            && objective.contains("kind = (quest = ())"),
+        "{expired}"
+    );
+    let retained = expired["retained_quests"].as_array().unwrap();
+    assert_eq!(retained.len(), 1, "{expired}");
+    let current_identity_text = current_identity.to_string();
+    assert_eq!(
+        retained[0]["runner_objective_identity"].as_str(),
+        Some(current_identity_text.as_str()),
+        "{expired}"
+    );
+    let foreground = runner["foreground"].as_str().unwrap();
+    assert!(!foreground.contains("recoveryPosition"), "{expired}");
+    if current_identity == retained_identity {
+        assert!(objective.contains("stage = (deferred = ())"), "{expired}");
+        assert_eq!(retained[0]["quest_entry"], "7", "{expired}");
+    } else {
+        assert_ne!(retained[0]["quest_entry"], "7", "{expired}");
+        let chosen = runner["chosen"].as_str().unwrap();
+        assert!(
+            chosen.contains(&format!("objective = {current_identity}"))
+                && chosen.contains("reason = (quest = ())")
+                && !chosen.contains("recoveryPosition")
+                && (foreground == "(none = ())"
+                    || foreground.contains(&format!("objective = {current_identity}"))),
+            "{expired}"
+        );
+    }
     assert!(
         expired["movement"]
             .as_array()
@@ -1068,8 +1132,20 @@ fn playerbots_recovery_position_expires_with_its_retained_quest() {
             .all(|row| row["guid"] != guid),
         "expiry of a blocked route must not manufacture a stopped spline: {expired}"
     );
-    assert_eq!(expired["actions"], pending["actions"], "{expired}");
-    assert_eq!(expired["quests"], pending["quests"], "{expired}");
+    let retained_quest = |evidence: &Value| {
+        evidence["quests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|quest| quest["quest_entry"] == "7")
+            .cloned()
+            .unwrap()
+    };
+    assert_eq!(
+        retained_quest(&expired),
+        retained_quest(&pending),
+        "{expired}"
+    );
 }
 
 struct TransferFixture {
