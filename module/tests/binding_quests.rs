@@ -221,7 +221,6 @@ fn binding_items_require_the_circle_and_complete_both_quest_variants_without_rep
     node.assert_call(
         "debug_spawn_gameobject",
         &[
-            "--",
             &FOCUS.to_string(),
             "8",
             "1",
