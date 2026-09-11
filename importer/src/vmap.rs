@@ -1787,13 +1787,34 @@ mod tests {
         }
     }
 
+    fn route_cells(tris: &[VmapTri]) -> HashMap<(u16, u16), Vec<VmapTri>> {
+        let mut cells = HashMap::new();
+        for tri in tris {
+            let (cx0, cx1, cy0, cy1) = tri_cell_range(tri).expect("worked triangle is on-map");
+            for cell_x in cx0..=cx1 {
+                for cell_y in cy0..=cy1 {
+                    cells
+                        .entry((cell_x, cell_y))
+                        .or_insert_with(Vec::new)
+                        .push(*tri);
+                }
+            }
+        }
+        cells
+    }
+
     fn route_evidence(tris: Vec<VmapTri>, entry_z: f32, exit_z: f32) -> InstanceRouteEvidence {
-        let cell = lyracore_shared::terrain::cell_index(0.0).unwrap();
+        let cells = route_cells(&tris);
+        let selected_keys = cells
+            .keys()
+            .map(|&(cell_x, cell_y)| lyracore_shared::terrain::cell_key(36, cell_x, cell_y))
+            .collect();
+        let selected_tri_refs = cells.values().map(Vec::len).sum();
         instance_route_evidence(
             &route_slice(entry_z, exit_z),
-            vec![lyracore_shared::terrain::cell_key(36, cell, cell)],
-            tris.len(),
-            &HashMap::from([((cell, cell), tris)]),
+            selected_keys,
+            selected_tri_refs,
+            &cells,
         )
     }
 
@@ -1805,8 +1826,8 @@ mod tests {
             "violations: {:?}",
             evidence.violations
         );
-        assert_eq!(evidence.selected_keys.len(), 1);
-        assert_eq!(evidence.selected_tri_refs, 2);
+        assert_eq!(evidence.selected_keys.len(), 4);
+        assert_eq!(evidence.selected_tri_refs, 8);
         assert_eq!(evidence.samples.len(), 11);
         assert!(evidence
             .samples
@@ -1907,9 +1928,12 @@ mod tests {
                 class,
             },
         ];
-        let cell = lyracore_shared::terrain::cell_index(0.0).unwrap();
-        let selected_tri_refs = tris.len();
-        let by_cell = HashMap::from([((cell, cell), tris)]);
+        let by_cell = route_cells(&tris);
+        let selected_keys = by_cell
+            .keys()
+            .map(|&(cell_x, cell_y)| lyracore_shared::terrain::cell_key(36, cell_x, cell_y))
+            .collect();
+        let selected_tri_refs = by_cell.values().map(Vec::len).sum();
         let slice = crate::world_import_scope::InstanceVmapSlice {
             name: "worked-route".to_owned(),
             map_id: 36,
@@ -1918,12 +1942,7 @@ mod tests {
             exit_radius: 0.0,
             collar_cells: 1,
         };
-        let evidence = instance_route_evidence(
-            &slice,
-            vec![lyracore_shared::terrain::cell_key(36, cell, cell)],
-            selected_tri_refs,
-            &by_cell,
-        );
+        let evidence = instance_route_evidence(&slice, selected_keys, selected_tri_refs, &by_cell);
         assert_eq!(evidence.samples[0].support_floor, Some(10.0));
         assert_eq!(evidence.samples.last().unwrap().support_floor, Some(12.0));
         let hit = evidence.direct_step_hit.expect("direct route crosses wall");
