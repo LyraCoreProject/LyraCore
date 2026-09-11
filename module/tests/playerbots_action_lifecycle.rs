@@ -1938,6 +1938,22 @@ fn playerbots_action_resurrection_cancels_between_release_and_spirit_resurrectio
         cancelled["runner"][0]["last_outcome"], "(recorded = ())",
         "{cancelled}"
     );
+    let final_history = cancelled["runner"][0]["history"].as_str().unwrap();
+    assert_eq!(
+        final_history.matches(&cancelled_record).count(),
+        1,
+        "{cancelled}"
+    );
+    assert_eq!(
+        final_history.matches(&recorded_record).count(),
+        1,
+        "{cancelled}"
+    );
+    assert!(
+        final_history.find(&cancelled_record).unwrap()
+            < final_history.find(&recorded_record).unwrap(),
+        "{cancelled}"
+    );
 }
 
 #[test]
