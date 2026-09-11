@@ -1758,6 +1758,9 @@ fn companion_command_capacity_waits_without_ack_then_recovers_or_expires() {
     assert!(pending["state"].to_ascii_lowercase().contains("pending"));
     assert_eq!(after_wait, before);
     assert!(waiting_replies.is_empty());
+    source
+        .defer_party_command_intent(waiting_id, 2_001)
+        .unwrap();
 
     let mut blocked = Vec::new();
     for _ in 0..16 {
