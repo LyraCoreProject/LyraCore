@@ -383,6 +383,13 @@ fn playerbots_recovery_exhausts_quest_targets_then_earns_alternative_quest_credi
         &node,
         &format!("SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"),
     );
+    let original_runner = row(
+        &node,
+        &format!("SELECT * FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
+    );
+    let original_destination = tuple_field(&original_runner["objective"], "destination = ")
+        .expect("the original Quest Objective destination is absent")
+        .to_string();
     let original_identity = original["runner_objective_identity"].clone();
     let xp = row(
         &node,
@@ -433,13 +440,22 @@ fn playerbots_recovery_exhausts_quest_targets_then_earns_alternative_quest_credi
     assert!(fallback["chosen"].contains("hold"));
     assert!(fallback["chosen"].contains("reason = (quest = ())"));
     assert!(fallback["failures"].contains("noMovement"));
+    assert_eq!(fallback["recovery"].matches("work = (fight = ").count(), 2);
+    assert_eq!(
+        fallback["recovery"]
+            .matches("deferred_until_micros = (some =")
+            .count(),
+        2
+    );
     for target in [TARGET, TARGET + 1] {
         assert!(
-            fallback["recovery"].contains(&format!("fight = {target}"))
-                && fallback["recovery"].contains("deferred_until_micros = (some ="),
+            fallback["recovery"].contains(&format!("work = (fight = {target})")),
             "{fallback:?}"
         );
     }
+    let observed = fallback["observed_micros"].parse::<i64>().unwrap();
+    let next_eligible = fallback["next_eligible_micros"].parse::<i64>().unwrap();
+    assert!((1..=2_000_000).contains(&next_eligible.saturating_sub(observed)));
 
     std::thread::sleep(Duration::from_millis(1_100));
     node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
@@ -457,7 +473,20 @@ fn playerbots_recovery_exhausts_quest_targets_then_earns_alternative_quest_credi
         retained_alternative["runner_objective_identity"],
         resumed["objective_sequence"]
     );
-    assert!(resumed["deferred_destinations"].contains("x = 1360"));
+    assert_eq!(
+        resumed["deferred_destinations"]
+            .matches("destination = ")
+            .count(),
+        1
+    );
+    assert!(resumed["deferred_destinations"].contains(&original_destination));
+    assert!(resumed["chosen"].contains("acceptQuest"));
+    assert!(resumed["chosen"].contains(&ALTERNATIVE_TARGET.to_string()));
+    assert!(resumed["chosen"].contains("quest = 5261"));
+    assert!(resumed["chosen"].contains("reason = (quest = ())"));
+    for target in [TARGET, TARGET + 1] {
+        assert!(!resumed["recovery"].contains(&format!("fight = {target}")));
+    }
 
     let credited = poll_until(Duration::from_secs(15), || {
         node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
@@ -502,6 +531,7 @@ fn playerbots_recovery_exhausts_quest_targets_then_earns_alternative_quest_credi
         path,
         serde_json::to_vec_pretty(&serde_json::json!({
             "original": original,
+            "original_runner": original_runner,
             "runner": runner,
             "fallback": fallback,
             "resumed": resumed,

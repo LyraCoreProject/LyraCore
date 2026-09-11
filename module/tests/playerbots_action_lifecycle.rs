@@ -1550,7 +1550,15 @@ fn assert_return_home_transfer_expired(
 ) {
     if direct_transfer {
         fixture.node.assert_call(
+            "playerbots_select_controller",
+            &[&fixture.companion, "{\"frozen\":[]}"],
+        );
+        fixture.node.assert_call(
             "playerbots_fixture_runner_expire_objective",
+            &[&fixture.companion],
+        );
+        fixture.node.assert_call(
+            "playerbots_fixture_runner_select_cohort",
             &[&fixture.companion],
         );
         fixture
@@ -1635,12 +1643,6 @@ fn run_return_home_transfer_expiry(direct_transfer: bool) {
         "playerbots-action-return-home-transfer-position-expiry"
     };
     let (fixture, pending) = return_home_transfer_pending(label, direct_transfer);
-    if direct_transfer {
-        fixture.node.assert_call(
-            "playerbots_fixture_runner_select_cohort",
-            &[&fixture.companion],
-        );
-    }
     let expected_action = if direct_transfer {
         format!("transfer = (trigger = {EXIT_TRIGGER}")
     } else {

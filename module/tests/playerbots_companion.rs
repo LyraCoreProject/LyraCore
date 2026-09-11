@@ -342,9 +342,15 @@ fn policy_gameplay_state(
     let entities: Vec<_> = [priest, leader, ally]
         .into_iter()
         .map(|guid| {
-            node.query_rows(&format!(
+            let mut rows = node.query_rows(&format!(
                 "SELECT * FROM game_world_entity WHERE guid = {guid}"
-            ))
+            ));
+            if guid == ally {
+                // Core health regeneration may advance independently. The assertion below keeps
+                // this ally inside the exact Heal policy premise.
+                rows[0].remove("health");
+            }
+            rows
         })
         .collect();
     let characters: Vec<_> = [priest, leader, ally]
@@ -486,6 +492,16 @@ fn record_policy_comparison(node: &Standalone, priest: &str, leader: &str, ally:
             "{recorded:?}"
         );
         assert!(recorded["chosen"].contains("reason = (heal = ())"));
+        let current_ally = node.query_rows(&format!(
+            "SELECT health, max_health, dead FROM game_world_entity WHERE guid = {ally}"
+        ));
+        assert_eq!(current_ally.len(), 1);
+        assert_eq!(current_ally[0]["dead"], "false");
+        assert!(
+            current_ally[0]["health"].parse::<u32>().unwrap() * 100
+                < current_ally[0]["max_health"].parse::<u32>().unwrap() * 80,
+            "{current_ally:?}"
+        );
         if let Some(chosen) = &recorded_chosen {
             assert_eq!(&recorded["chosen"], chosen);
         } else {
