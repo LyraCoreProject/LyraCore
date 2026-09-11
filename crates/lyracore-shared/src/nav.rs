@@ -899,7 +899,7 @@ mod runtime_tests {
                         && y > 0
                         && x < WIDTH as i32 - 1
                         && y < HEIGHT as i32 - 1
-                        && !(x == WALL_X as i32 && !GAP.contains(&(y as usize)));
+                        && (x != WALL_X as i32 || GAP.contains(&(y as usize)));
                     walk_set(&mut cell.walk, local_x, local_y, walkable);
                 }
             }
