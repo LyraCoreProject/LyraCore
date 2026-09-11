@@ -375,6 +375,113 @@ fn playerbots_recovery_changes_a_stalled_attack_then_defers_without_false_progre
     );
 }
 
+fn assert_deferred_quest_fallback(fallback: &BTreeMap<String, String>, original_identity: &str) {
+    assert_eq!(fallback["objective_sequence"], original_identity);
+    assert!(fallback["objective"].contains("stage = (deferred = ())"));
+    assert!(fallback["deferred_destinations"].contains("x = 1360"));
+    assert!(fallback["chosen"].contains("hold"));
+    assert!(fallback["chosen"].contains("reason = (quest = ())"));
+    assert!(fallback["failures"].contains("noMovement"));
+    assert_eq!(fallback["recovery"].matches("work = (fight = ").count(), 2);
+    assert_eq!(
+        fallback["recovery"]
+            .matches("deferred_until_micros = (some =")
+            .count(),
+        2
+    );
+    for target in [TARGET, TARGET + 1] {
+        assert!(
+            fallback["recovery"].contains(&format!("work = (fight = {target})")),
+            "{fallback:?}"
+        );
+    }
+    let observed = fallback["observed_micros"].parse::<i64>().unwrap();
+    let next_eligible = fallback["next_eligible_micros"].parse::<i64>().unwrap();
+    assert!((1..=2_000_000).contains(&next_eligible.saturating_sub(observed)));
+}
+
+struct AlternativeCreditEvidence<'a> {
+    original: &'a BTreeMap<String, String>,
+    original_runner: &'a BTreeMap<String, String>,
+    fallback: &'a BTreeMap<String, String>,
+    resumed: &'a BTreeMap<String, String>,
+    retained_alternative: &'a BTreeMap<String, String>,
+    original_identity: &'a str,
+    xp_before: u32,
+}
+
+fn assert_alternative_quest_credit(
+    node: &Standalone,
+    guid: &str,
+    credited: bool,
+    evidence: AlternativeCreditEvidence<'_>,
+) {
+    let runner = row(
+        node,
+        &format!("SELECT * FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
+    );
+    let alternative = row(
+        node,
+        &format!("SELECT rewarded FROM game_character_quest WHERE character_guid = {guid} AND quest_entry = 5261"),
+    );
+    let after_xp = row(
+        node,
+        &format!("SELECT xp FROM game_world_entity WHERE guid = {guid}"),
+    )["xp"]
+        .parse::<u32>()
+        .unwrap();
+    let quest_seven = row(
+        node,
+        &format!("SELECT counts, rewarded FROM game_character_quest WHERE character_guid = {guid} AND quest_entry = 7"),
+    );
+    let turnin = row(
+        node,
+        &format!("SELECT turnin_count FROM pkg_playerbots_quest_turnin_fixture WHERE character_guid = {guid} AND quest_entry = 5261"),
+    );
+    let actions = node.query_rows(&format!(
+        "SELECT kind, quest_entry FROM pkg_playerbots_action WHERE character_guid = {guid}"
+    ));
+    let path = support::log_dir().join(format!("{}-objective-fallback.json", node.shard_name()));
+    std::fs::write(
+        path,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "original": evidence.original,
+            "original_runner": evidence.original_runner,
+            "runner": runner,
+            "fallback": evidence.fallback,
+            "resumed": evidence.resumed,
+            "retained_alternative": evidence.retained_alternative,
+            "alternative": alternative,
+            "quest_seven": quest_seven,
+            "turnin": turnin,
+            "actions": actions,
+            "xp_before": evidence.xp_before,
+            "xp_after": after_xp,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        credited,
+        "failed Quest targets prevented ordinary alternative Quest credit"
+    );
+    assert_eq!(alternative["rewarded"], "true");
+    assert_eq!(quest_seven["counts"], "0");
+    assert_eq!(quest_seven["rewarded"], "false");
+    assert_eq!(turnin["turnin_count"], "1");
+    assert!(actions.iter().any(|action| {
+        action["kind"].contains("acceptQuest") && action["quest_entry"] == "5261"
+    }));
+    assert!(actions.iter().any(|action| {
+        action["kind"].contains("turnInQuest") && action["quest_entry"] == "5261"
+    }));
+    assert!(after_xp > evidence.xp_before);
+    assert_ne!(runner["objective_sequence"], evidence.original_identity);
+    for target in [TARGET, TARGET + 1] {
+        assert!(!runner["recovery"].contains(&format!("fight = {target}")));
+    }
+}
+
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_recovery_exhausts_quest_targets_then_earns_alternative_quest_credit() {
@@ -501,28 +608,7 @@ fn playerbots_recovery_exhausts_quest_targets_then_earns_alternative_quest_credi
         &node,
         &format!("SELECT * FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
     );
-    assert_eq!(fallback["objective_sequence"], original_identity);
-    assert!(fallback["objective"].contains("stage = (deferred = ())"));
-    assert!(fallback["deferred_destinations"].contains("x = 1360"));
-    assert!(fallback["chosen"].contains("hold"));
-    assert!(fallback["chosen"].contains("reason = (quest = ())"));
-    assert!(fallback["failures"].contains("noMovement"));
-    assert_eq!(fallback["recovery"].matches("work = (fight = ").count(), 2);
-    assert_eq!(
-        fallback["recovery"]
-            .matches("deferred_until_micros = (some =")
-            .count(),
-        2
-    );
-    for target in [TARGET, TARGET + 1] {
-        assert!(
-            fallback["recovery"].contains(&format!("work = (fight = {target})")),
-            "{fallback:?}"
-        );
-    }
-    let observed = fallback["observed_micros"].parse::<i64>().unwrap();
-    let next_eligible = fallback["next_eligible_micros"].parse::<i64>().unwrap();
-    assert!((1..=2_000_000).contains(&next_eligible.saturating_sub(observed)));
+    assert_deferred_quest_fallback(&fallback, &original_identity);
 
     std::thread::sleep(Duration::from_millis(1_100));
     node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
@@ -577,70 +663,20 @@ fn playerbots_recovery_exhausts_quest_targets_then_earns_alternative_quest_credi
         }
         rewarded
     });
-    let runner = row(
+    assert_alternative_quest_credit(
         &node,
-        &format!("SELECT * FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
-    );
-    let alternative = row(
-        &node,
-        &format!("SELECT rewarded FROM game_character_quest WHERE character_guid = {guid} AND quest_entry = 5261"),
-    );
-    let after_xp = row(
-        &node,
-        &format!("SELECT xp FROM game_world_entity WHERE guid = {guid}"),
-    )["xp"]
-        .parse::<u32>()
-        .unwrap();
-    let quest_seven = row(
-        &node,
-        &format!("SELECT counts, rewarded FROM game_character_quest WHERE character_guid = {guid} AND quest_entry = 7"),
-    );
-    let turnin = row(
-        &node,
-        &format!("SELECT turnin_count FROM pkg_playerbots_quest_turnin_fixture WHERE character_guid = {guid} AND quest_entry = 5261"),
-    );
-    let actions = node.query_rows(&format!(
-        "SELECT kind, quest_entry FROM pkg_playerbots_action WHERE character_guid = {guid}"
-    ));
-    let path = support::log_dir().join(format!("{}-objective-fallback.json", node.shard_name()));
-    std::fs::write(
-        path,
-        serde_json::to_vec_pretty(&serde_json::json!({
-            "original": original,
-            "original_runner": original_runner,
-            "runner": runner,
-            "fallback": fallback,
-            "resumed": resumed,
-            "retained_alternative": retained_alternative,
-            "alternative": alternative,
-            "quest_seven": quest_seven,
-            "turnin": turnin,
-            "actions": actions,
-            "xp_before": xp,
-            "xp_after": after_xp,
-        }))
-        .unwrap(),
-    )
-    .unwrap();
-    assert!(
+        &guid,
         credited,
-        "failed Quest targets prevented ordinary alternative Quest credit"
+        AlternativeCreditEvidence {
+            original: &original,
+            original_runner: &original_runner,
+            fallback: &fallback,
+            resumed: &resumed,
+            retained_alternative: &retained_alternative,
+            original_identity: &original_identity,
+            xp_before: xp,
+        },
     );
-    assert_eq!(alternative["rewarded"], "true");
-    assert_eq!(quest_seven["counts"], "0");
-    assert_eq!(quest_seven["rewarded"], "false");
-    assert_eq!(turnin["turnin_count"], "1");
-    assert!(actions.iter().any(|action| {
-        action["kind"].contains("acceptQuest") && action["quest_entry"] == "5261"
-    }));
-    assert!(actions.iter().any(|action| {
-        action["kind"].contains("turnInQuest") && action["quest_entry"] == "5261"
-    }));
-    assert!(after_xp > xp);
-    assert_ne!(runner["objective_sequence"], original_identity);
-    for target in [TARGET, TARGET + 1] {
-        assert!(!runner["recovery"].contains(&format!("fight = {target}")));
-    }
 }
 
 #[test]
@@ -862,17 +898,65 @@ fn playerbots_recovery_invalidates_failed_work_after_an_actual_navigation_import
     let mut node = Standalone::start("playerbots-recovery-geometry");
     node.publish_module();
     record_inputs(&node);
-    let guid = prepare(&node);
+    let guid = prepare_open(&node);
+    node.assert_call(
+        "playerbots_recovery_fixture_keep_two_quest_targets",
+        &[&guid],
+    );
+    node.assert_call("playerbots_recovery_fixture_block_quest_target", &[&guid]);
     node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    let blocked = snapshot(&node, &guid, Duration::ZERO);
     node.assert_call("playerbots_fixture_companion_due", &[&guid]);
-    let deferred = poll_until(Duration::from_secs(40), || {
-        !row(&node, &format!("SELECT character_guid, deferred_destinations FROM pkg_playerbots_runner WHERE character_guid = {guid}"))["deferred_destinations"].trim_matches(['[', ']', ' ']).is_empty()
-    });
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    let observed = snapshot(&node, &guid, Duration::ZERO);
+    node.assert_call("playerbots_recovery_fixture_exhaust_attempt", &[&guid]);
     node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
     let before = snapshot(&node, &guid, Duration::ZERO);
     let path = support::log_dir().join(format!("{}-before-import.json", node.shard_name()));
-    std::fs::write(path, serde_json::to_vec_pretty(&before).unwrap()).unwrap();
-    assert!(deferred, "{before}");
+    std::fs::write(
+        path,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "blocked_move": blocked,
+            "observed_attempt": observed,
+            "deferred_attempt": before,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(blocked["runner"]["chosen"]
+        .as_str()
+        .unwrap()
+        .contains(&format!("move = (entity = {TARGET})")));
+    let blocked_action = blocked["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|action| {
+            action["observed_micros"] == blocked["runner"]["observed_micros"]
+                && action["kind"].as_str() == Some("(move = ())")
+                && action["outcome"].as_str().is_some_and(|outcome| {
+                    outcome.contains("destination = (x = 1364, y = 1204)")
+                        && outcome.contains(
+                            "route = (from = (x = 1361, y = 1200), endpoint = (x = 1361, y = 1200)",
+                        )
+                        && outcome.contains("status = (blocked = ())")
+                        && outcome.contains("coverage = (unknown = ())")
+                        && outcome.contains("arrived = false")
+                })
+        })
+        .expect("the original Quest Fight has no blocked Move Action");
+    let observed_fight = observed["runner"]["recovery"]
+        .as_str()
+        .unwrap()
+        .split("work = ")
+        .find(|attempt| attempt.starts_with(&format!("(fight = {TARGET})")))
+        .expect("the original Quest Fight has no observed Recovery Attempt");
+    assert!(observed_fight.contains(&format!(
+        "last_movement = (some = (started_micros = {}",
+        blocked_action["started_micros"].as_str().unwrap()
+    )));
+    assert!(observed_fight.contains("status = (blocked = ())"));
+    assert!(observed_fight.contains("coverage = (unknown = ())"));
     let failed_fight = before["runner"]["recovery"]
         .as_str()
         .unwrap()
@@ -883,23 +967,19 @@ fn playerbots_recovery_invalidates_failed_work_after_an_actual_navigation_import
         failed_fight.contains("deferred_until_micros = (some"),
         "{before}"
     );
+    assert!(
+        failed_fight.contains("destination = (map_id = 0, instance_id = 0, x = 1364, y = 1204"),
+        "{before}"
+    );
+    assert!(failed_fight.contains("status = (blocked = ())"), "{before}");
+    assert!(
+        failed_fight.contains("coverage = (unknown = ())"),
+        "{before}"
+    );
     assert!(!before["runner"]["failures"]
         .as_str()
         .unwrap()
         .contains("missingImportedCoverage"));
-    assert!(before["actions"].as_array().unwrap().iter().any(|action| {
-        action["observed_micros"] == before["runner"]["observed_micros"]
-            && action["kind"].as_str() == Some("(move = ())")
-            && action["outcome"].as_str().is_some_and(|outcome| {
-                outcome.contains("destination = (x = 1202, y = 1200)")
-                    && outcome.contains(
-                        "route = (from = (x = 1357, y = 1200), endpoint = (x = 1357, y = 1200)",
-                    )
-                    && outcome.contains("status = (blocked = ())")
-                    && outcome.contains("coverage = (unknown = ())")
-                    && outcome.contains("arrived = false")
-            })
-    }));
     node.assert_call("import_nav_chunks_append", &["\"0,999,999,0,,\""]);
     let imported = row(
         &node,
@@ -938,7 +1018,7 @@ fn playerbots_recovery_invalidates_failed_work_after_an_actual_navigation_import
     assert!(after["runner"]["chosen"]
         .as_str()
         .unwrap()
-        .contains(&format!("attack = {TARGET}")));
+        .contains(&format!("move = (entity = {TARGET})")));
     assert!(after["runner"]["recovery"]
         .as_str()
         .unwrap()

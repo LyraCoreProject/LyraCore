@@ -1150,15 +1150,44 @@ fn playerbots_disappeared_target_reselects_without_changing_quest_purpose() {
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_ninth_inaccessible_corpse_reports_an_inconclusive_read() {
     let (node, guid) = fixture("playerbots-quest-loop-corpse-limit", 8, 2, true);
+    node.assert_call(
+        "playerbots_select_controller",
+        &[&guid, "{\"recordOnly\":[]}"],
+    );
     node.assert_call("playerbots_quest_fixture_admit_accept", &[&guid, "33"]);
     drive_until(&node, &guid, Duration::from_secs(10), |node| {
-        query_one(
+        let retained = query_one(
             node,
-            &format!("SELECT quest_entry FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"),
-        )["quest_entry"]
-            == "33"
+            &format!("SELECT quest_entry, target FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"),
+        );
+        let runner = query_one(
+            node,
+            &format!("SELECT character_guid, chosen FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
+        );
+        let source = structured_number(&retained["target"], "guid");
+        retained["quest_entry"] == "33"
+            && runner["chosen"].contains(&source)
+            && runner["chosen"].contains("reason = (quest = ())")
     });
+    let retained = retained_quest_purpose(&node, &guid);
+    let source = structured_number(&retained["target"], "guid");
+    assert!(!rewarded(&node, &guid, 33));
+    assert_eq!(first_quest_count(&quest(&node, &guid, 33).unwrap()), 0);
+    assert!(loot_receipt(&node, &guid).is_none());
+    assert_eq!(item_count(&node, &guid, 750), 0);
+    assert_eq!(turnin_count(&node, &guid, 33), 0);
     node.assert_call("playerbots_quest_loop_fixture_stage_corpse_limit", &[&guid]);
+    node.assert_call("playerbots_quest_fixture_hide_live_target", &["69"]);
+    let inaccessible = node
+        .query_rows("SELECT guid, dead FROM game_world_entity WHERE entry = 69 AND dead = true");
+    assert_eq!(inaccessible.len(), 9, "{inaccessible:?}");
+    assert!(inaccessible.iter().all(|corpse| corpse["guid"] != source));
+    assert!(node
+        .query_rows(&format!(
+            "SELECT guid FROM game_world_entity WHERE guid = {source}"
+        ))
+        .is_empty());
+    node.assert_call("playerbots_fixture_runner_select_cohort", &[&guid]);
     drive_until(&node, &guid, Duration::from_secs(10), |node| {
         query_one(
             node,
@@ -1178,6 +1207,10 @@ fn playerbots_ninth_inaccessible_corpse_reports_an_inconclusive_read() {
     );
     assert!(limited["chosen"].contains("hold"), "{limited:?}");
     assert_eq!(first_quest_count(&quest(&node, &guid, 33).unwrap()), 0);
+    assert!(!rewarded(&node, &guid, 33));
+    assert!(loot_receipt(&node, &guid).is_none());
+    assert_eq!(item_count(&node, &guid, 750), 0);
+    assert_eq!(turnin_count(&node, &guid, 33), 0);
     record(&node, "corpse-limit");
 }
 

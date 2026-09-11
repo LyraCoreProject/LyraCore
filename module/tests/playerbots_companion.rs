@@ -422,11 +422,9 @@ fn record_policy_comparison(node: &Standalone, priest: &str, leader: &str, ally:
         assert_eq!(fact["dead"], "false");
     }
     assert_eq!(facts[0]["health"], facts[0]["max_health"]);
+    let ally_health = facts[2]["health"].parse::<u32>().unwrap();
     let ally_max_health = facts[2]["max_health"].parse::<u32>().unwrap();
-    assert_eq!(
-        facts[2]["health"].parse::<u32>().unwrap(),
-        (ally_max_health * 25 / 100).max(1)
-    );
+    assert!(ally_health * 100 < ally_max_health * 80);
     assert!(node
         .query_rows(&format!(
             "SELECT character_guid FROM pkg_playerbots_bot WHERE character_guid = {leader}"

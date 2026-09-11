@@ -99,6 +99,10 @@ fn prepare(node: &Standalone) -> String {
         !held.is_empty()
     });
     assert!(accepted, "ordinary runner did not accept Quest 7");
+    node.assert_call(
+        "playerbots_recovery_fixture_keep_two_quest_targets",
+        &[&guid],
+    );
     node.assert_call("playerbots_recovery_fixture_block_quest_target", &[&guid]);
     guid
 }
@@ -257,7 +261,7 @@ fn defer_verified_fight(node: &Standalone, guid: &str) -> serde_json::Value {
             action["observed_micros"] == changed_state["runner"]["observed_micros"]
                 && action["kind"].as_str() == Some("(move = ())")
                 && action["outcome"].as_str().is_some_and(|outcome| {
-                    outcome.contains("destination = (x = 1357, y = 1206)")
+                    outcome.contains("destination = (x = 1356.2, y = 1203.6)")
                         && outcome.contains("status = (blocked = ())")
                         && outcome.contains(&format!(
                             "coverage = (verifiedCells = (generation_id = {GENERATION}, checked_cells = 2))"
@@ -271,7 +275,7 @@ fn defer_verified_fight(node: &Standalone, guid: &str) -> serde_json::Value {
         node.assert_call("playerbots_fixture_runner_pass_once", &[guid]);
         !row(
             node,
-            &format!("SELECT deferred_destinations FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
+            &format!("SELECT character_guid, deferred_destinations FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
         )["deferred_destinations"]
             .trim_matches(['[', ']', ' '])
             .is_empty()
@@ -385,7 +389,7 @@ fn playerbots_recovery_retries_exact_work_after_active_coverage_grows() {
     assert!(after["runner"]["chosen"]
         .as_str()
         .unwrap()
-        .contains(&format!("attack = {TARGET}")));
+        .contains(&format!("move = (entity = {TARGET})")));
     assert!(after["runner"]["recovery"]
         .as_str()
         .unwrap()
