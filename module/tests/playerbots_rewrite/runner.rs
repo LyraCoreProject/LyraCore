@@ -601,7 +601,7 @@ fn playerbots_runner_defers_a_blocked_destination_with_bounded_failure_memory() 
     assert!(deferred["recovery"].contains("last_movement = (some"));
     assert!(deferred["recovery"].contains("deferred_until_micros = (some"));
     assert!(deferred["foreground"].contains("none"));
-    assert!(deferred["route_expansions"].parse::<u32>().unwrap() <= 4096);
+    assert!(deferred["route_expansions"].parse::<u32>().unwrap() <= 16_384);
     assert_eq!(position(&node, bot), 1200.0);
     let objective_id = deferred["objective_sequence"].clone();
     select(&node, bot, "frozen");

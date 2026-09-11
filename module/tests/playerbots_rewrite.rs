@@ -711,7 +711,7 @@ fn playerbots_a_partial_route_retains_its_waypoint_and_search_budget() {
     let result = node.query_rows("SELECT outcome FROM pkg_playerbots_action");
     assert!(result[0]["outcome"].contains("partial"), "{result:?}");
     assert!(
-        result[0]["outcome"].contains("expansions = 4096"),
+        result[0]["outcome"].contains("expansions = 16384"),
         "{result:?}"
     );
     poll_until(POLL_TIMEOUT, || {

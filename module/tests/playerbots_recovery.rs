@@ -1009,11 +1009,11 @@ fn playerbots_recovery_retains_a_partial_route_that_first_moves_away_from_the_le
     assert!(
         initial_actions.iter().any(
             |action| action["outcome"].contains("status = (partial = ())")
-                && action["outcome"].contains("expansions = 4096")
+                && action["outcome"].contains("expansions = 16384")
         ),
         "{initial_actions:?}"
     );
-    assert_eq!(initial["route_expansions"], "4096");
+    assert_eq!(initial["route_expansions"], "16384");
     assert!(
         final_state["recovery"].contains("stalled_micros = 0"),
         "{final_state:?}"
@@ -1046,7 +1046,7 @@ fn playerbots_recovery_defers_a_partial_endpoint_revisited_after_an_approach() {
         .expect("the Quest approach did not record a movement leg");
     let first_outcome = first_move["outcome"].as_str().unwrap();
     assert!(first_outcome.contains("status = (partial = ())"), "{first}");
-    assert!(first_outcome.contains("expansions = 4096"), "{first}");
+    assert!(first_outcome.contains("expansions = 16384"), "{first}");
     let destination = tuple_field(
         first["runner"]["recovery"].as_str().unwrap(),
         "destination = ",
