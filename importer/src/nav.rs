@@ -332,7 +332,7 @@ pub(crate) struct Placement {
     pub(crate) wmo: Option<WmoPlacement>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub(crate) struct WmoPlacement {
     pub(crate) flags: u16,
     pub(crate) doodad_set: u16,
@@ -485,6 +485,41 @@ pub(crate) struct TileScan {
     pub(crate) tiles_read: u32,
 }
 
+fn retain_placement(
+    placements: &mut Vec<Placement>,
+    seen: &mut HashMap<(bool, u32), usize>,
+    candidate: Placement,
+    source_path: &str,
+) -> Result<()> {
+    let key = (candidate.is_wmo, candidate.unique_id);
+    if let Some(&index) = seen.get(&key) {
+        if !placements_match(&placements[index], &candidate) {
+            bail!(
+                "{source_path} repeats placement {} with conflicting archive data",
+                candidate.unique_id
+            );
+        }
+        return Ok(());
+    }
+    seen.insert(key, placements.len());
+    placements.push(candidate);
+    Ok(())
+}
+
+fn placements_match(first: &Placement, second: &Placement) -> bool {
+    first.name == second.name
+        && first.is_wmo == second.is_wmo
+        && first.unique_id == second.unique_id
+        && first.position.map(f32::to_bits) == second.position.map(f32::to_bits)
+        && first.rotation.map(f32::to_bits) == second.rotation.map(f32::to_bits)
+        && first.scale.to_bits() == second.scale.to_bits()
+        && first.bounds_min.map(|values| values.map(f32::to_bits))
+            == second.bounds_min.map(|values| values.map(f32::to_bits))
+        && first.bounds_max.map(|values| values.map(f32::to_bits))
+            == second.bounds_max.map(|values| values.map(f32::to_bits))
+        && first.wmo == second.wmo
+}
+
 /// Pass 1: parse every ADT tile in the cell-index box — heights (via the shared `collect_cells`)
 /// plus WMO/M2 placements deduped by `unique_id` (placements repeat on adjacent tiles).
 pub(crate) fn scan_tiles(
@@ -500,7 +535,7 @@ pub(crate) fn scan_tiles(
     let mut cells: Vec<crate::terrain::CellRow> = Vec::new();
     let mut placements: Vec<Placement> = Vec::new();
     let mut sources = Vec::new();
-    let mut seen_ids: HashSet<(bool, u32)> = HashSet::new();
+    let mut seen_ids = HashMap::new();
     let mut tiles_read = 0u32;
     for tx in tx_min..=tx_max {
         for ty in ty_min..=ty_max {
@@ -528,7 +563,7 @@ pub(crate) fn scan_tiles(
             }; // ocean/empty tiles simply don't exist
             tiles_read += 1;
             sources.push(TileSource {
-                path: source_path,
+                path: source_path.clone(),
                 bytes: source_bytes.len(),
                 blake3: blake3::hash(&source_bytes).to_hex().to_string(),
             });
@@ -539,8 +574,10 @@ pub(crate) fn scan_tiles(
                 &mut cells,
             )?;
             for p in &root.wmo_placements {
-                if seen_ids.insert((true, p.unique_id)) {
-                    placements.push(Placement {
+                retain_placement(
+                    &mut placements,
+                    &mut seen_ids,
+                    Placement {
                         name: resolve(&root.wmos, &root.wmo_indices, p.name_id)?.to_string(),
                         is_wmo: true,
                         unique_id: p.unique_id,
@@ -554,12 +591,15 @@ pub(crate) fn scan_tiles(
                             doodad_set: p.doodad_set,
                             name_set: p.name_set,
                         }),
-                    });
-                }
+                    },
+                    &source_path,
+                )?;
             }
             for p in &root.doodad_placements {
-                if seen_ids.insert((false, p.unique_id)) {
-                    placements.push(Placement {
+                retain_placement(
+                    &mut placements,
+                    &mut seen_ids,
+                    Placement {
                         name: resolve(&root.models, &root.model_indices, p.name_id)?.to_string(),
                         is_wmo: false,
                         unique_id: p.unique_id,
@@ -569,8 +609,9 @@ pub(crate) fn scan_tiles(
                         bounds_min: None,
                         bounds_max: None,
                         wmo: None,
-                    });
-                }
+                    },
+                    &source_path,
+                )?;
             }
         }
     }
@@ -948,6 +989,55 @@ mod tests {
             area_id: 0,
             heights: vec![80.0; 145],
         }
+    }
+
+    fn test_placement(is_wmo: bool) -> Placement {
+        Placement {
+            name: if is_wmo { "route.wmo" } else { "route.m2" }.to_owned(),
+            is_wmo,
+            unique_id: 77,
+            position: [1.0, 2.0, 3.0],
+            rotation: [4.0, 5.0, 6.0],
+            scale: 1.0,
+            bounds_min: is_wmo.then_some([0.0, 1.0, 2.0]),
+            bounds_max: is_wmo.then_some([3.0, 4.0, 5.0]),
+            wmo: is_wmo.then_some(WmoPlacement {
+                flags: 0,
+                doodad_set: 1,
+                name_set: 2,
+            }),
+        }
+    }
+
+    #[test]
+    fn repeated_placements_must_match_before_deduplication() {
+        let first = test_placement(true);
+        let mut placements = Vec::new();
+        let mut seen = HashMap::new();
+        retain_placement(&mut placements, &mut seen, first.clone(), "first.adt").unwrap();
+        retain_placement(&mut placements, &mut seen, first, "second.adt").unwrap();
+        assert_eq!(
+            placements.len(),
+            1,
+            "an identical repeat stays deduplicated"
+        );
+
+        let mut conflicting_wmo = test_placement(true);
+        conflicting_wmo.wmo.as_mut().unwrap().doodad_set = 3;
+        let error = retain_placement(&mut placements, &mut seen, conflicting_wmo, "second.adt")
+            .unwrap_err();
+        assert!(error.to_string().contains("conflicting archive data"));
+        assert_eq!(placements[0].wmo.unwrap().doodad_set, 1);
+
+        let first = test_placement(false);
+        let mut placements = Vec::new();
+        let mut seen = HashMap::new();
+        retain_placement(&mut placements, &mut seen, first, "first.adt").unwrap();
+        let mut conflicting_m2 = test_placement(false);
+        conflicting_m2.scale = 2.0;
+        assert!(
+            retain_placement(&mut placements, &mut seen, conflicting_m2, "second.adt").is_err()
+        );
     }
 
     #[test]
