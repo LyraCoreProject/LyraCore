@@ -553,18 +553,59 @@ fn playerbots_runner_objective_deadline_expires_the_retained_cast_identity() {
     assert!(poll_until(POLL_TIMEOUT, || !node
         .query_rows("SELECT * FROM game_pending_cast")
         .is_empty()));
-    let cast_id =
-        node.query_rows("SELECT scheduled_id FROM game_pending_cast")[0]["scheduled_id"].clone();
+    let pending = node.query_rows(
+        "SELECT scheduled_id, caster_guid, spell_id, target_guid FROM game_pending_cast",
+    );
+    assert_eq!(pending.len(), 1, "{pending:?}");
+    let cast_id = pending[0]["scheduled_id"].clone();
+    assert_eq!(pending[0]["caster_guid"], *bot, "{pending:?}");
+    let before = runner(&node, bot);
+    let selected = before["chosen"]
+        .strip_prefix("(some = ")
+        .and_then(|value| value.strip_suffix(')'))
+        .expect("the live cast must be the selected Runner candidate");
+    assert!(before["foreground"].contains(selected), "{before:?}");
+    assert!(
+        before["foreground"].contains(&format!("scheduled_id = {cast_id}")),
+        "{before:?}"
+    );
+    let waiting = node.query_rows("SELECT * FROM pkg_playerbots_action");
+    assert!(
+        waiting.iter().any(|row| {
+            row["character_guid"] == *bot
+                && row["cast_id"] == cast_id
+                && row["spell_id"] == pending[0]["spell_id"]
+                && row["target_guid"] == pending[0]["target_guid"]
+                && row["outcome"].contains("waiting")
+        }),
+        "{waiting:?}"
+    );
     node.assert_call("playerbots_fixture_runner_expire_objective", &[bot]);
-    assert!(poll_until(POLL_TIMEOUT, || runner(&node, bot)["objective"]
-        .contains("deferred")));
+    node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
+    outcomes(&node);
+    let expired = runner(&node, bot);
+    assert!(expired["objective"].contains("deferred"), "{expired:?}");
+    assert!(expired["failures"].contains("deadline"), "{expired:?}");
+    assert!(
+        expired["history"].contains(&format!(
+            "chosen = (some = {selected}), outcome = (castFinished = (expired = ()))"
+        )),
+        "{expired:?}"
+    );
     assert!(node
         .query_rows("SELECT * FROM game_pending_cast")
         .is_empty());
-    assert!(node
-        .query_rows("SELECT * FROM pkg_playerbots_action")
-        .iter()
-        .any(|r| r["cast_id"] == cast_id && r["outcome"].contains("expired")));
+    let actions = node.query_rows("SELECT * FROM pkg_playerbots_action");
+    assert!(
+        actions.iter().any(|row| {
+            row["character_guid"] == *bot
+                && row["cast_id"] == cast_id
+                && row["spell_id"] == pending[0]["spell_id"]
+                && row["target_guid"] == pending[0]["target_guid"]
+                && row["outcome"].contains("expired")
+        }),
+        "{actions:?}"
+    );
     select(&node, bot, "frozen");
     std::thread::sleep(Duration::from_secs(6));
     assert!(runner(&node, bot)["objective"].contains("deferred"));
