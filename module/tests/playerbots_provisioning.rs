@@ -249,12 +249,9 @@ fn playerbots_provisioning_arms_then_reconciles_and_repairs_without_cost() {
             "provisioning": one(&node, &format!("SELECT * FROM pkg_playerbots_provisioning WHERE character_guid = {guid}")),
         }),
     );
-    assert!(runner["last_outcome"]
-        .to_ascii_lowercase()
-        .contains("provisioning"));
-    assert!(runner["chosen"]
-        .to_ascii_lowercase()
-        .contains("provisioning"));
+    for field in ["last_outcome", "chosen"] {
+        assert!(runner[field].to_ascii_lowercase().contains("provisioning"));
+    }
 
     let before = one(
         &node,
