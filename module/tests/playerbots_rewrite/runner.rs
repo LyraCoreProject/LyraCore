@@ -397,6 +397,22 @@ fn playerbots_runner_resurrection_clears_defense_and_resumes_retained_home() {
     node.assert_sql("DELETE FROM game_melee_schedule");
     select(&node, bot, "frozen");
     node.assert_call("playerbots_fixture_runner_select_cohort", &[bot]);
+    let parked_observed_micros = runner(&node, bot)["observed_micros"]
+        .parse::<i64>()
+        .unwrap();
+    node.assert_call("playerbots_fixture_provision_steps", &[bot, "64"]);
+    let provisioning = node.query_rows(&format!(
+        "SELECT action_cursor, next_repair_micros FROM pkg_playerbots_provisioning WHERE character_guid = {bot}"
+    ));
+    assert_eq!(provisioning.len(), 1);
+    assert_eq!(provisioning[0]["action_cursor"], "0", "{provisioning:?}");
+    assert!(
+        provisioning[0]["next_repair_micros"]
+            .parse::<i64>()
+            .unwrap()
+            > parked_observed_micros,
+        "{provisioning:?}"
+    );
 
     let target = ((0xF130u64 << 48) | (5_090_101u64 << 24) | 1).to_string();
     node.assert_call(
