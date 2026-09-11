@@ -580,6 +580,15 @@ fn playerbots_runner_expired_home_does_not_cancel_a_tactical_cast() {
         std::fs::write(path, serde_json::to_vec_pretty(&evidence).unwrap()).unwrap();
         evidence
     };
+    let objective_number = |evidence: &serde_json::Value, field: &str| {
+        let objective = evidence["runner"]["objective"].as_str().unwrap();
+        objective
+            .split_once(&format!("{field} = "))
+            .and_then(|(_, value)| value.split_once(',').map(|(number, _)| number))
+            .unwrap()
+            .parse::<i64>()
+            .unwrap()
+    };
     let boundary = capture("expired-home-tactical-cast");
     let boundary_runner = boundary["runner"].as_object().unwrap();
     let selected = boundary_runner["chosen"]
@@ -596,15 +605,18 @@ fn playerbots_runner_expired_home_does_not_cancel_a_tactical_cast() {
     assert_eq!(cast["kind"], "(cast = ())", "{boundary}");
     assert_eq!(cast["spell_id"], "5090100", "{boundary}");
     assert_eq!(cast["target_guid"], *bot, "{boundary}");
+    let cast_target = cast["target_guid"].as_str().unwrap();
+    let cast_spell = cast["spell_id"].as_str().unwrap();
     assert!(
-        selected.contains(&format!(
-            "target = {}, spell = {}",
-            cast["target_guid"], cast["spell_id"]
-        )),
+        selected.contains(&format!("target = {cast_target}, spell = {cast_spell}")),
         "{boundary}"
     );
     assert!(
         selected.contains("reason = (recovery = ())")
+            && boundary_runner["objective"]
+                .as_str()
+                .unwrap()
+                .contains("kind = (returnHome = ())")
             && boundary_runner["objective"]
                 .as_str()
                 .unwrap()
@@ -613,6 +625,17 @@ fn playerbots_runner_expired_home_does_not_cancel_a_tactical_cast() {
                 .as_str()
                 .unwrap()
                 .contains("deadline"),
+        "{boundary}"
+    );
+    let objective_identity = objective_number(&boundary, "identity");
+    let objective_deadline = objective_number(&boundary, "deadline_micros");
+    assert!(
+        objective_deadline
+            <= boundary_runner["observed_micros"]
+                .as_str()
+                .unwrap()
+                .parse::<i64>()
+                .unwrap(),
         "{boundary}"
     );
 
@@ -668,10 +691,16 @@ fn playerbots_runner_expired_home_does_not_cancel_a_tactical_cast() {
         "{completed}"
     );
     assert!(
-        completed["runner"]["objective"]
-            .as_str()
-            .unwrap()
-            .contains("travelling")
+        objective_number(&completed, "identity") == objective_identity
+            && objective_number(&completed, "deadline_micros") == objective_deadline
+            && completed["runner"]["objective"]
+                .as_str()
+                .unwrap()
+                .contains("kind = (returnHome = ())")
+            && completed["runner"]["objective"]
+                .as_str()
+                .unwrap()
+                .contains("travelling")
             && !completed["runner"]["failures"]
                 .as_str()
                 .unwrap()
@@ -690,10 +719,16 @@ fn playerbots_runner_expired_home_does_not_cancel_a_tactical_cast() {
     node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
     let deferred = capture("home-deferred-after-tactical-cast");
     assert!(
-        deferred["runner"]["chosen"]
-            .as_str()
-            .unwrap()
-            .contains("reason = (returnHome = ())")
+        objective_number(&deferred, "identity") == objective_identity
+            && objective_number(&deferred, "deadline_micros") == objective_deadline
+            && deferred["runner"]["candidate_order"]
+                .as_str()
+                .unwrap()
+                .starts_with("(id = (action = (move = (home = ())), reason = (returnHome = ())")
+            && deferred["runner"]["objective"]
+                .as_str()
+                .unwrap()
+                .contains("kind = (returnHome = ())")
             && deferred["runner"]["objective"]
                 .as_str()
                 .unwrap()
@@ -705,7 +740,16 @@ fn playerbots_runner_expired_home_does_not_cancel_a_tactical_cast() {
             && deferred["runner"]["foreground"]
                 .as_str()
                 .unwrap()
-                .contains("none"),
+                .contains("none")
+            && deferred["runner"]["last_outcome"] == "(refused = (deadline = ()))",
+        "{deferred}"
+    );
+    assert_eq!(
+        deferred["runner"]["chosen"], completed["runner"]["chosen"],
+        "the expired Home pass must not report its unexecuted Candidate as chosen: {deferred}"
+    );
+    assert_eq!(
+        deferred["runner"]["cast_progress"], completed["runner"]["cast_progress"],
         "{deferred}"
     );
     assert_eq!(deferred["actions"], completed["actions"], "{deferred}");
