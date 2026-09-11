@@ -605,10 +605,8 @@ fn playerbots_runner_expired_home_does_not_cancel_a_tactical_cast() {
     assert_eq!(cast["kind"], "(cast = ())", "{boundary}");
     assert_eq!(cast["spell_id"], "5090100", "{boundary}");
     assert_eq!(cast["target_guid"], *bot, "{boundary}");
-    let cast_target = cast["target_guid"].as_str().unwrap();
-    let cast_spell = cast["spell_id"].as_str().unwrap();
     assert!(
-        selected.contains(&format!("target = {cast_target}, spell = {cast_spell}")),
+        selected.contains(&format!("target = {bot}, spell = 5090100")),
         "{boundary}"
     );
     assert!(
