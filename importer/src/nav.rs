@@ -191,10 +191,29 @@ pub(crate) fn aabb(points: impl Iterator<Item = [f32; 3]>) -> ([f32; 3], [f32; 3
     (lo, hi)
 }
 
-/// Every MOVT vertex of a WMO (all groups, NO collidability filter) — calibration compares
-/// against MODF bounds, which cover ALL geometry; the collidable subset can be much smaller
-/// (Stormwind is 2/3 detail-flagged) and its AABB never matches.
-pub(crate) fn wmo_all_verts(chain: &mut PatchChain, name: &str) -> Result<Vec<[f32; 3]>> {
+fn mohd_calibration_points(bounds_min: [f32; 3], bounds_max: [f32; 3]) -> Result<Vec<[f32; 3]>> {
+    if !bounds_min.into_iter().chain(bounds_max).all(f32::is_finite) {
+        bail!("WMO MOHD bounds are not finite");
+    }
+    if (0..3).any(|axis| bounds_min[axis] > bounds_max[axis]) {
+        bail!("WMO MOHD bounds are not ordered");
+    }
+
+    let mut points = Vec::with_capacity(8);
+    for x in [bounds_min[0], bounds_max[0]] {
+        for y in [bounds_min[1], bounds_max[1]] {
+            for z in [bounds_min[2], bounds_max[2]] {
+                points.push([x, y, z]);
+            }
+        }
+    }
+    Ok(points)
+}
+
+/// MOHD and MODF are the authored local and placed bounds of the same WMO. Comparing their
+/// corners checks the placement transform without depending on how tightly MOVT vertices fill
+/// the authored box.
+fn wmo_calibration_points(chain: &mut PatchChain, name: &str) -> Result<Vec<[f32; 3]>> {
     let root_bytes = chain
         .read_file(name)
         .with_context(|| format!("reading WMO root {name}"))?;
@@ -203,24 +222,12 @@ pub(crate) fn wmo_all_verts(chain: &mut PatchChain, name: &str) -> Result<Vec<[f
     else {
         bail!("{name} parsed as a group file, expected root");
     };
-    let stem = name.strip_suffix(".wmo").unwrap_or(name);
-    let mut verts = Vec::new();
-    for g in 0..root.n_groups {
-        let gname = format!("{stem}_{g:03}.wmo");
-        let bytes = chain
-            .read_file(&gname)
-            .with_context(|| format!("reading {gname}"))?;
-        if let wow_wmo::ParsedWmo::Group(group) = wow_wmo::parse_wmo(&mut Cursor::new(&bytes))
-            .with_context(|| format!("parsing {gname}"))?
-        {
-            verts.extend(group.vertex_positions.iter().map(|v| [v.x, v.y, v.z]));
-        }
-    }
-    Ok(verts)
+    mohd_calibration_points(root.bounding_box_min, root.bounding_box_max)
+        .with_context(|| format!("validating WMO root bounds {name}"))
 }
 
 /// Pick the convention that reproduces the MODF world AABBs across the calibration placements
-/// (mean per-axis corner error, capped sample). Hard-fails above 3 yd — a wrong convention
+/// (mean per-axis corner error, capped sample). Hard-fails above 1.5 yd — a wrong convention
 /// must never silently rasterize rotated buildings.
 pub(crate) struct Calibration {
     pub(crate) convention: Convention,
@@ -242,11 +249,8 @@ fn calibration(samples: &[(&Placement, Vec<[f32; 3]>)]) -> Result<Calibration> {
     }
     let mut best: Option<(f32, Convention)> = None;
     for conv in candidates {
-        // Per-sample mean corner error; score by MEDIAN across samples — a handful of
-        // placements ship PADDED authored bounds (stormwind.wmo's extents span 143 yd more
-        // height than its geometry) and would poison a mean.
         let mut errs: Vec<f32> = Vec::new();
-        for (p, verts) in samples {
+        for (p, calibration_points) in samples {
             let (Some(bmin), Some(bmax)) = (p.bounds_min, p.bounds_max) else {
                 continue;
             };
@@ -256,7 +260,7 @@ fn calibration(samples: &[(&Placement, Vec<[f32; 3]>)]) -> Result<Calibration> {
             let want_hi = [c1[0].max(c2[0]), c1[1].max(c2[1]), c1[2].max(c2[2])];
             let pos_w = place_pos(p.position);
             let (got_lo, got_hi) = aabb(
-                verts
+                calibration_points
                     .iter()
                     .map(|v| apply(conv, p.rotation, p.scale, pos_w, *v)),
             );
@@ -269,23 +273,20 @@ fn calibration(samples: &[(&Placement, Vec<[f32; 3]>)]) -> Result<Calibration> {
         if errs.is_empty() {
             continue;
         }
-        // Score by the 25th percentile: tightly-authored bounds fit the CORRECT convention
-        // near-exactly (0.04-0.2 yd on wallpiece/widebridge/animalden), while padded bounds
-        // (stormwind: +143 yd of authored height) are noise under EVERY convention. A wrong
-        // convention has no near-zero fits at all, so the low quantile separates cleanly
-        // where mean and even median drift with the padding mix of the sampled box.
+        // A low quantile keeps an isolated archive outlier from overriding the transform shared
+        // by the retained sample. The refusal below still rejects a sample with no fit.
         errs.sort_by(f32::total_cmp);
         let mean = errs[errs.len() / 4];
         if std::env::var("NAV_DEBUG").is_ok() {
             eprintln!("NAV_DEBUG {conv:?} mean={mean:.2}");
-            for (p, verts) in samples {
+            for (p, calibration_points) in samples {
                 let (Some(bmin), Some(bmax)) = (p.bounds_min, p.bounds_max) else {
                     continue;
                 };
                 let (c1, c2) = (place_pos(bmin), place_pos(bmax));
                 let pos_w = place_pos(p.position);
                 let (got_lo, got_hi) = aabb(
-                    verts
+                    calibration_points
                         .iter()
                         .map(|v| apply(conv, p.rotation, p.scale, pos_w, *v)),
                 );
@@ -675,7 +676,6 @@ pub(crate) fn calibrate_from_placements_with_evidence(
     placements: &[Placement],
 ) -> Result<Calibration> {
     let mut samples: Vec<(&Placement, Vec<[f32; 3]>)> = Vec::new();
-    let mut sample_verts: HashMap<&str, Vec<[f32; 3]>> = HashMap::new();
     let mut sampled_names: HashSet<&str> = HashSet::new();
     for p in placements
         .iter()
@@ -683,17 +683,7 @@ pub(crate) fn calibrate_from_placements_with_evidence(
         .filter(|p| sampled_names.insert(p.name.as_str()))
         .take(32)
     {
-        let verts = match sample_verts.get(p.name.as_str()) {
-            Some(v) => v.clone(),
-            None => {
-                let v = wmo_all_verts(chain, &p.name)?;
-                sample_verts.insert(&p.name, v.clone());
-                v
-            }
-        };
-        if !verts.is_empty() {
-            samples.push((p, verts));
-        }
+        samples.push((p, wmo_calibration_points(chain, &p.name)?));
     }
     calibration(&samples)
 }
@@ -1016,6 +1006,50 @@ mod tests {
                 name_set: 2,
             }),
         }
+    }
+
+    #[test]
+    fn calibration_uses_authored_bounds_when_movt_does_not_fill_their_corners() {
+        // Map 36's retained Deadmines WMO placement, MOHD, and MODF values. MODF matches the
+        // transformed authored box while the actual transformed MOVT cloud is 2.36 yd tighter.
+        let expected = Convention {
+            shuffle: false,
+            sign: 1.0,
+            offset_deg: 180.0,
+        };
+        let authored = mohd_calibration_points(
+            [-242.05612, -172.29312, -52.13956],
+            [311.44223, 162.8655, 57.554893],
+        )
+        .expect("retained MOHD bounds");
+        let mut placement = test_placement(true);
+        placement.position = [17718.262, 29.849575, 17223.072];
+        placement.rotation = [0.0, -91.0, 0.0];
+        placement.bounds_min = Some([17404.025, -22.289986, 17045.37]);
+        placement.bounds_max = Some([17963.29, 87.404465, 17390.137]);
+
+        let modf_world_lo: [f32; 3] = [-323.4707, -896.62305, -22.289986];
+        let modf_world_hi: [f32; 3] = [21.296875, -337.35938, 87.404465];
+        let movt_world_lo: [f32; 3] = [-317.0512, -895.1547, -22.262207];
+        let movt_world_hi: [f32; 3] = [19.425507, -341.70523, 87.37669];
+        let movt_error = (0..3)
+            .map(|axis| {
+                (movt_world_lo[axis] - modf_world_lo[axis]).abs()
+                    + (movt_world_hi[axis] - modf_world_hi[axis]).abs()
+            })
+            .sum::<f32>()
+            / 6.0;
+        assert!((movt_error - 2.360_098_6).abs() < 0.000_1);
+
+        let selected = calibration(&[(&placement, authored)]).expect("authored bounds fit");
+        assert_eq!(selected.convention, expected);
+        assert!(selected.q25_error_yards < 0.002);
+    }
+
+    #[test]
+    fn calibration_refuses_malformed_mohd_bounds() {
+        assert!(mohd_calibration_points([f32::NAN, 0.0, 0.0], [1.0; 3]).is_err());
+        assert!(mohd_calibration_points([2.0, 0.0, 0.0], [1.0; 3]).is_err());
     }
 
     #[test]
