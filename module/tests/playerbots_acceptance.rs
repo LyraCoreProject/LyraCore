@@ -206,6 +206,16 @@ fn stage_journey(node: &Standalone, case: JourneyCase) -> (String, serde_json::V
         ),
     )["character_guid"]
         .clone();
+    let admission_fault_query = format!(
+        "SELECT prerequisite_refused_micros, prerequisite_refusal_detail FROM \
+         pkg_playerbots_acceptance_admission_fault WHERE character_guid = {guid}"
+    );
+    let prerequisite_refusal_observed = support::poll_until(support::POLL_TIMEOUT, || {
+        let admission = query_one(node, &admission_fault_query);
+        admission["prerequisite_refused_micros"].starts_with("(some = ")
+            && admission["prerequisite_refusal_detail"]
+                == "(some = \"must complete the prerequisite quest first\")"
+    });
     let mut sources = node.query_rows(&format!(
         "SELECT guid, x, y, z FROM game_world_entity WHERE guid >= {CREATURE_6} AND guid < {}",
         CREATURE_6 + 10
@@ -238,6 +248,10 @@ fn stage_journey(node: &Standalone, case: JourneyCase) -> (String, serde_json::V
         "actions": node.query_rows(&format!("SELECT * FROM pkg_playerbots_action WHERE character_guid = {guid}")),
     });
     save(node, "journey-staged", staged.clone());
+    assert!(
+        prerequisite_refusal_observed,
+        "scheduled prerequisite Refusal was not observed before the staged boundary: {staged}"
+    );
     (guid, staged)
 }
 
