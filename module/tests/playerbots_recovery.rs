@@ -397,6 +397,12 @@ fn playerbots_recovery_exhausts_quest_targets_then_earns_alternative_quest_credi
     )["xp"]
         .parse::<u32>()
         .unwrap();
+    let started = Instant::now();
+    let exhaustion_path = support::log_dir().join(format!(
+        "{}-objective-fallback-exhaustion.json",
+        node.shard_name()
+    ));
+    let mut exhaustion_samples = Vec::new();
 
     for target in [TARGET, TARGET + 1] {
         let selected = poll_until(POLL_TIMEOUT, || {
@@ -413,21 +419,36 @@ fn playerbots_recovery_exhausts_quest_targets_then_earns_alternative_quest_credi
             }
         });
         assert!(selected, "Quest target {target} was not selected");
-        node.assert_call("playerbots_recovery_fixture_exhaust_attempt", &[&guid]);
-        node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
-        assert_eq!(
-            row(
-                &node,
-                &format!("SELECT runner_objective_identity FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"),
-            )["runner_objective_identity"],
-            original_identity
-        );
-        if target == TARGET {
+        if target == TARGET + 1 {
             node.assert_call(
                 "playerbots_recovery_fixture_expire_quest_target",
-                &[&guid, &target.to_string()],
+                &[&guid, &TARGET.to_string()],
             );
         }
+        node.assert_call("playerbots_recovery_fixture_exhaust_attempt", &[&guid]);
+        node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+        let current_objective = row(
+            &node,
+            &format!("SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"),
+        );
+        exhaustion_samples.push(serde_json::json!({
+            "target_guid": target,
+            "target": row(
+                &node,
+                &format!("SELECT guid, x, y, z, health, dead FROM game_world_entity WHERE guid = {target}"),
+            ),
+            "sample": snapshot(&node, &guid, started.elapsed()),
+            "objective": current_objective.clone(),
+        }));
+        std::fs::write(
+            &exhaustion_path,
+            serde_json::to_vec_pretty(&exhaustion_samples).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            current_objective["runner_objective_identity"],
+            original_identity
+        );
     }
 
     let fallback = row(
