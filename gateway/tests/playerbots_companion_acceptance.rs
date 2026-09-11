@@ -1809,16 +1809,16 @@ fn imported_follow_leg(topology: &CompanionTopology, start: (f32, f32, f32)) -> 
         body["y"].parse::<f32>().ok()?,
         body["z"].parse::<f32>().ok()?,
     );
-    let outcome = action["outcome"].as_str()?;
+    let outcome = action["outcome"].as_str();
     let route = sats_field(outcome, "route");
     let route_start = sats_field(route, "from");
     let route_endpoint = sats_field(route, "endpoint");
     let route_start = (sats_f32(route_start, "x"), sats_f32(route_start, "y"));
     let route_endpoint = (sats_f32(route_endpoint, "x"), sats_f32(route_endpoint, "y"));
-    let objective = runner["objective"].as_str()?;
+    let objective = runner["objective"].as_str();
     let objective_identity = sats_field(objective, "identity");
-    let observed_micros = action["observed_micros"].as_str()?;
-    let history = runner["history"].as_str()?;
+    let observed_micros = action["observed_micros"].as_str();
+    let history = runner["history"].as_str();
     let waiting = format!(
         "(at_micros = {observed_micros}, chosen = (some = (id = (action = (move = (entity = {})), reason = (follow = ()), objective = {objective_identity}), priority = 100)), outcome = (waiting = ()))",
         topology.party.leader
