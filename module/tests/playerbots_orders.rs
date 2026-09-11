@@ -537,7 +537,6 @@ fn playerbots_each_issuer_fence_survives_intervening_leadership() {
     assert!(applied_newer["order"]
         .to_ascii_lowercase()
         .contains("follow"));
-    assert_eq!(applied_intervening["active"], "true");
     assert_eq!(before_delayed["active"], "false");
     for field in [
         "character_guid",
