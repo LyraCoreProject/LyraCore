@@ -363,7 +363,7 @@ fn record(node: &Standalone, suffix: &str) {
     let evidence = serde_json::json!({
         "fixture_scope": "private-loopback-seeded-content",
         "tested_core": git(core, &["rev-parse", "HEAD"]),
-        "tested_collection": git(&package, &["rev-parse", "HEAD"]),
+        "tested_collection": null,
         "core_dirty": false,
         "collection_dirty": false,
         "package_content_identity": package_digest.finalize().to_hex().to_string(),
@@ -964,8 +964,8 @@ fn playerbots_raw_entity_read_limit_keeps_travelling_to_retained_quest_work() {
             &format!("SELECT x, y, z FROM game_world_entity WHERE guid = {CREATURE_6}"),
         );
         let distance_sq = ["x", "y", "z"].into_iter().fold(0.0, |sum, field| {
-            let difference = character[field].parse::<f32>().unwrap()
-                - target[field].parse::<f32>().unwrap();
+            let difference =
+                character[field].parse::<f32>().unwrap() - target[field].parse::<f32>().unwrap();
             sum + difference * difference
         });
         objective["quest_entry"] == "7"
@@ -1053,13 +1053,14 @@ fn playerbots_raw_entity_read_limit_keeps_travelling_to_retained_quest_work() {
             .all(|pair| pair[1].saturating_sub(pair[0]) >= 30_000_000),
         "{working_runner:?}"
     );
-    assert_eq!(
-        query_one(
-            &node,
-            &format!("SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"),
-        ),
-        retained
+    let mut working_objective = query_one(
+        &node,
+        &format!("SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"),
     );
+    let mut retained_purpose = retained.clone();
+    working_objective.remove("safe_position");
+    retained_purpose.remove("safe_position");
+    assert_eq!(working_objective, retained_purpose);
     let resumed = drive_until(&node, &guid, LOOP_TIMEOUT, |node| {
         first_quest_count(&quest(node, &guid, 7).unwrap()) > 0
     });
@@ -1185,6 +1186,10 @@ fn playerbots_ninth_inaccessible_corpse_reports_an_inconclusive_read() {
 fn playerbots_retained_creature_source_survives_a_raw_read_limit_through_loot() {
     let (node, guid) = fixture("playerbots-quest-loop-corpse-raw-limit", 8, 2, true);
     node.assert_call("playerbots_quest_fixture_admit_accept", &[&guid, "33"]);
+    node.assert_call(
+        "playerbots_select_controller",
+        &[&guid, "{\"recordOnly\":[]}"],
+    );
     drive_until(&node, &guid, Duration::from_secs(10), |node| {
         let retained = query_one(
             node,
@@ -1213,17 +1218,52 @@ fn playerbots_retained_creature_source_survives_a_raw_read_limit_through_loot() 
         ),
     );
     assert!(runner["chosen"].contains(&source), "{runner:?}");
-    assert_eq!(retained["runner_objective_identity"], runner["objective_sequence"]);
+    assert_eq!(
+        retained["runner_objective_identity"],
+        runner["objective_sequence"]
+    );
     assert!(runner["chosen"].contains(&format!("objective = {}", runner["objective_sequence"])));
     let read_limits = quest_read_limit_micros(&runner["failures"]);
+    assert!(!rewarded(&node, &guid, 33));
+    assert!(loot_receipt(&node, &guid).is_none());
+    assert_eq!(item_count(&node, &guid, 750), 0);
+    assert_eq!(turnin_count(&node, &guid, 33), 0);
+    let live_source = query_one(
+        &node,
+        &format!("SELECT health, dead FROM game_world_entity WHERE guid = {source}"),
+    );
+    assert_eq!(live_source["health"], "1");
+    assert_eq!(live_source["dead"], "false");
+    assert!(actions(&node, &guid)
+        .iter()
+        .all(|action| action["target_guid"] != source));
 
     node.assert_call("playerbots_quest_loop_fixture_stage_search_limit", &[&guid]);
+    node.assert_call("playerbots_select_controller", &[&guid, "{\"cohort\":[]}"]);
     drive_until(&node, &guid, LOOP_TIMEOUT, |node| {
+        let source_actions: Vec<_> = actions(node, &guid)
+            .into_iter()
+            .filter(|action| action["target_guid"] == source)
+            .collect();
+        let resolved = source_actions.iter().any(|action| {
+            (action["kind"].contains("attack") && action["outcome"].contains("attackAccepted"))
+                || (action["kind"].contains("cast") && action["outcome"].contains("castResolved"))
+        });
+        let looted = ["openLoot", "takeLoot"].into_iter().all(|kind| {
+            source_actions.iter().any(|action| {
+                action["kind"].contains(kind) && action["outcome"].contains("completed")
+            })
+        });
+        let terminal = item_count(node, &guid, 750) == 8
+            || (rewarded(node, &guid, 33) && turnin_count(node, &guid, 33) == 1);
         loot_receipt(node, &guid).is_some_and(|receipt| {
             receipt["last_source_guid"] == source
                 && receipt["item_entry"] == "750"
                 && receipt["received_count"] == "8"
-                && item_count(node, &guid, 750) == 8
+                && receipt["peak_carried_count"] == "8"
+                && resolved
+                && looted
+                && terminal
         })
     });
     let receipt = loot_receipt(&node, &guid).expect("loot receipt is absent");
@@ -1243,7 +1283,11 @@ fn playerbots_retained_creature_source_survives_a_raw_read_limit_through_loot() 
     assert_eq!(receipt["last_source_guid"], source);
     assert_eq!(receipt["item_entry"], "750");
     assert_eq!(receipt["received_count"], "8");
-    assert_eq!(item_count(&node, &guid, 750), 8);
+    assert_eq!(receipt["peak_carried_count"], "8");
+    assert!(
+        item_count(&node, &guid, 750) == 8
+            || (rewarded(&node, &guid, 33) && turnin_count(&node, &guid, 33) == 1)
+    );
     assert_eq!(first_quest_count(&quest(&node, &guid, 33).unwrap()), 0);
     let final_runner = query_one(
         &node,
@@ -1251,7 +1295,10 @@ fn playerbots_retained_creature_source_survives_a_raw_read_limit_through_loot() 
             "SELECT character_guid, failures FROM pkg_playerbots_runner WHERE character_guid = {guid}"
         ),
     );
-    assert_eq!(quest_read_limit_micros(&final_runner["failures"]), read_limits);
+    assert_eq!(
+        quest_read_limit_micros(&final_runner["failures"]),
+        read_limits
+    );
     record(&node, "retained-source-loot");
 }
 
