@@ -792,7 +792,6 @@ fn build_plan(
         world_tris,
         wmo_tris,
         VmapOwnership::Spatial,
-        None,
     )
 }
 
@@ -804,7 +803,6 @@ fn finish_plan(
     world_tris: usize,
     wmo_tris: usize,
     ownership: VmapOwnership,
-    route_evidence: Option<InstanceRouteEvidence>,
 ) -> Result<VmapPlan> {
     let keys = spool.keys()?;
     let mut total_bytes = 0usize;
@@ -843,7 +841,7 @@ fn finish_plan(
         generation_id,
         world_tris,
         wmo_tris,
-        route_evidence,
+        route_evidence: None,
     })
 }
 
@@ -928,7 +926,7 @@ fn build_instance_plan(
         &route_tris,
     );
     let world_tris = mesh.len();
-    finish_plan(
+    let mut plan = finish_plan(
         slice.map_id,
         source_identity,
         slice.selection_identity()?,
@@ -936,8 +934,9 @@ fn build_instance_plan(
         world_tris,
         world_tris,
         VmapOwnership::InstancePool,
-        Some(evidence),
-    )
+    )?;
+    plan.route_evidence = Some(evidence);
+    Ok(plan)
 }
 
 fn instance_route_evidence(
