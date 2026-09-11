@@ -7,6 +7,7 @@ use support::Standalone;
 
 const CREATURE_197: &str = "17379390965327855617";
 const CREATURE_6: &str = "17379390962123407361";
+const CREATURE_823: &str = "17379390975830392833";
 const CREATURE_952: &str = "17379390977994653697";
 const GAMEOBJECT_55: &str = "17370383762768003127";
 const GAMEOBJECT_56: &str = "17370383762768003128";
@@ -856,6 +857,10 @@ fn playerbots_quest_retries_after_deferral_without_replacing_its_purpose() {
     let retained = node.query_rows(&format!(
         "SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {bot}"
     ));
+    assert_eq!(retained.len(), 1);
+    let held = quest(&node, bot, 7);
+    assert_eq!(held["counts"], "0");
+    assert_eq!(held["rewarded"], "false");
     assert!(initial["objective"].contains("quest"));
     assert!(initial["objective"].contains("travelling"), "{initial:?}");
 
@@ -874,15 +879,37 @@ fn playerbots_quest_retries_after_deferral_without_replacing_its_purpose() {
     );
     assert!(deferred["recovery"].contains("work = (fight"));
     assert!(deferred["recovery"].contains("deferred_until_micros = (some"));
+    assert!(
+        deferred["deferred_destinations"].contains("x = 1202, y = 1200.4"),
+        "{deferred:?}"
+    );
+    assert!(deferred["chosen"].contains("acceptQuest"), "{deferred:?}");
+    assert!(deferred["chosen"].contains("quest = 5261"), "{deferred:?}");
+    assert_eq!(deferred["last_outcome"], "(accepted = ())");
+    let useful_actions = node.query_rows(&format!(
+        "SELECT kind, outcome, target_guid, quest_entry FROM pkg_playerbots_action WHERE character_guid = {bot} AND quest_entry = 5261"
+    ));
+    assert_eq!(useful_actions.len(), 1);
+    assert_eq!(useful_actions[0]["kind"], "(acceptQuest = ())");
+    assert_eq!(useful_actions[0]["outcome"], "(completed = ())");
+    assert_eq!(useful_actions[0]["target_guid"], CREATURE_823);
+    assert_eq!(quest(&node, bot, 7), held);
     run_once(&node);
     let waiting = runner(&node, bot);
     let path = support::log_dir().join(format!("{}-waiting-runner.json", node.shard_name()));
     std::fs::write(path, serde_json::to_vec_pretty(&waiting).unwrap()).unwrap();
-    assert_eq!(waiting["objective"], deferred["objective"]);
+    assert!(
+        waiting["objective"].contains("kind = (quest"),
+        "{waiting:?}"
+    );
+    assert!(waiting["chosen"].contains("turnInQuest"), "{waiting:?}");
+    assert!(waiting["chosen"].contains("quest = 5261"), "{waiting:?}");
+    assert_eq!(waiting["last_outcome"], "(accepted = ())");
     assert_eq!(
         waiting["deferred_destinations"],
         deferred["deferred_destinations"]
     );
+    assert_eq!(quest(&node, bot, 7), held);
 
     let retried = support::poll_until(std::time::Duration::from_secs(45), || {
         let state = runner(&node, bot);
@@ -910,7 +937,6 @@ fn playerbots_quest_retries_after_deferral_without_replacing_its_purpose() {
         retried,
         "quest did not retry after its deferral expired: {resumed:?}"
     );
-    assert_eq!(resumed["objective_sequence"], initial["objective_sequence"]);
     assert!(resumed["deferred_destinations"]
         .trim_matches(['[', ']', ' '])
         .is_empty());
@@ -928,6 +954,11 @@ fn playerbots_quest_retries_after_deferral_without_replacing_its_purpose() {
         "SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {bot}"
     ));
     assert_eq!(resumed_retained.len(), 1);
+    assert_eq!(quest(&node, bot, 7), held);
+    assert_eq!(
+        resumed_retained[0]["runner_objective_identity"],
+        resumed["objective_sequence"]
+    );
     for field in [
         "character_guid",
         "quest_entry",
@@ -936,7 +967,6 @@ fn playerbots_quest_retries_after_deferral_without_replacing_its_purpose() {
         "actual_ender_kind",
         "actual_ender_entry",
         "actual_ender",
-        "runner_objective_identity",
         "catalog_revision",
         "reference_source_revision",
         "content_revision",
