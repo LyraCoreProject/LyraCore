@@ -190,6 +190,13 @@ fn tuple_field<'a>(value: &'a str, name: &str) -> Option<&'a str> {
     None
 }
 
+fn point(value: &str) -> Option<(f32, f32)> {
+    let (_, x) = value.split_once("x = ")?;
+    let (x, y) = x.split_once(", y = ")?;
+    let (y, _) = y.split_once(',')?;
+    Some((x.parse().ok()?, y.parse().ok()?))
+}
+
 fn prepare_open(node: &Standalone) -> String {
     let imports =
         node.query_rows("SELECT family, source_sha, file_hash, row_count FROM game_import_meta");
@@ -379,6 +386,25 @@ fn playerbots_recovery_exhausts_quest_targets_then_earns_alternative_quest_credi
         "playerbots_recovery_fixture_keep_two_quest_targets",
         &[&guid],
     );
+    let select_target = |target| {
+        poll_until(POLL_TIMEOUT, || {
+            node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+            let runner = row(
+                &node,
+                &format!("SELECT character_guid, recovery FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
+            );
+            if runner["recovery"].contains(&format!("fight = {target}")) {
+                true
+            } else {
+                std::thread::sleep(Duration::from_millis(1_100));
+                false
+            }
+        })
+    };
+    assert!(
+        select_target(TARGET),
+        "Quest target {TARGET} was not selected"
+    );
     let original = row(
         &node,
         &format!("SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"),
@@ -391,34 +417,54 @@ fn playerbots_recovery_exhausts_quest_targets_then_earns_alternative_quest_credi
         .expect("the original Quest Objective destination is absent")
         .to_string();
     let original_identity = original["runner_objective_identity"].clone();
+    let targets = [TARGET, TARGET + 1].map(|target| {
+        row(
+            &node,
+            &format!(
+                "SELECT guid, x, y, z, health, dead FROM game_world_entity WHERE guid = {target}"
+            ),
+        )
+    });
+    let started = Instant::now();
+    let exhaustion_path = support::log_dir().join(format!(
+        "{}-objective-fallback-exhaustion.json",
+        node.shard_name()
+    ));
+    let mut exhaustion_samples = vec![serde_json::json!({
+        "boundary": "baseline",
+        "sample": snapshot(&node, &guid, Duration::ZERO),
+        "objective": original.clone(),
+        "targets": targets.clone(),
+    })];
+    std::fs::write(
+        &exhaustion_path,
+        serde_json::to_vec_pretty(&exhaustion_samples).unwrap(),
+    )
+    .unwrap();
+    assert!(original["target"].contains("kind = (killCreature = ())"));
+    assert!(original["target"].contains("target_entry = 6"));
+    assert_eq!(original_runner["objective_sequence"], original_identity);
+    let objective_point = point(&original["destination"])
+        .expect("the retained Quest Objective destination has no point");
+    for target in &targets {
+        let dx = target["x"].parse::<f32>().unwrap() - objective_point.0;
+        let dy = target["y"].parse::<f32>().unwrap() - objective_point.1;
+        assert!(dx.hypot(dy) > 0.05);
+    }
     let xp = row(
         &node,
         &format!("SELECT xp FROM game_world_entity WHERE guid = {guid}"),
     )["xp"]
         .parse::<u32>()
         .unwrap();
-    let started = Instant::now();
-    let exhaustion_path = support::log_dir().join(format!(
-        "{}-objective-fallback-exhaustion.json",
-        node.shard_name()
-    ));
-    let mut exhaustion_samples = Vec::new();
 
     for target in [TARGET, TARGET + 1] {
-        let selected = poll_until(POLL_TIMEOUT, || {
-            node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
-            let runner = row(
-                &node,
-                &format!("SELECT character_guid, recovery FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
+        if target != TARGET {
+            assert!(
+                select_target(target),
+                "Quest target {target} was not selected"
             );
-            if runner["recovery"].contains(&format!("fight = {target}")) {
-                true
-            } else {
-                std::thread::sleep(Duration::from_millis(1_100));
-                false
-            }
-        });
-        assert!(selected, "Quest target {target} was not selected");
+        }
         if target == TARGET + 1 {
             node.assert_call(
                 "playerbots_recovery_fixture_expire_quest_target",
@@ -572,7 +618,7 @@ fn playerbots_recovery_exhausts_quest_targets_then_earns_alternative_quest_credi
         "failed Quest targets prevented ordinary alternative Quest credit"
     );
     assert_eq!(alternative["rewarded"], "true");
-    assert_eq!(quest_seven["counts"], "[0]");
+    assert_eq!(quest_seven["counts"], "0");
     assert_eq!(quest_seven["rewarded"], "false");
     assert_eq!(turnin["turnin_count"], "1");
     assert!(actions.iter().any(|action| {
