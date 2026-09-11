@@ -319,7 +319,7 @@ pub fn has_los(
 }
 
 /// Maximum expansions consumed by one route step. Packages reserve this budget before movement.
-pub(crate) const LEG_MAX_EXPANSIONS: u32 = 4096;
+pub(crate) const LEG_MAX_EXPANSIONS: u32 = 16_384;
 
 /// Complete and Partial describe the planned route, including when collision stops this step.
 #[derive(spacetimedb::SpacetimeType, Clone, Debug, PartialEq, Eq)]

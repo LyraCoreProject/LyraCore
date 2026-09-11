@@ -484,7 +484,11 @@ fn search_leg(
     let mut expanded = 0u32;
     let mut found = false;
     let mut best = ((sx, sy), h(sx, sy)); // nearest-approach node for the partial fallback
-    while let Some(Reverse((_, x, y))) = open.pop() {
+    while let Some(Reverse((score, x, y))) = open.pop() {
+        let g0 = g_cost[&(x, y)];
+        if score != g0 + remaining(x, y) {
+            continue;
+        }
         if ((x, y) == (tx, ty) && target_walkable)
             || (stop_dist > 0.0
                 && (grid_to_world(x) - to.0).hypot(grid_to_world(y) - to.1) <= stop_dist
@@ -502,7 +506,6 @@ fn search_leg(
         if hxy < best.1 {
             best = ((x, y), hxy);
         }
-        let g0 = g_cost[&(x, y)];
         for (dx, dy) in [
             (1i64, 0i64),
             (-1, 0),
@@ -863,6 +866,54 @@ mod runtime_tests {
             assert!(line_walkable(&mut cache, previous, point));
             previous = point;
         }
+    }
+
+    #[test]
+    fn stale_queue_entries_do_not_consume_the_detour_budget() {
+        const WIDTH: usize = 192;
+        const HEIGHT: usize = 192;
+        const WALL_X: usize = WIDTH / 2;
+        const GAP: std::ops::Range<usize> = 8..12;
+        const BASE_CELL: u16 = 400;
+        const BUDGET: u32 = 16_384;
+
+        let point = |x: usize, y: usize| {
+            (
+                sub_center(BASE_CELL + (x / WALK_DIM) as u16, x % WALK_DIM, WALK_DIM),
+                sub_center(BASE_CELL + (y / WALK_DIM) as u16, y % WALK_DIM, WALK_DIM),
+            )
+        };
+        let mut fetch = |cell_x: u16, cell_y: u16| {
+            let mut cell = NavCellData {
+                base_z: 0.0,
+                walk: vec![0; WALK_BYTES],
+                obs: vec![OBS_NONE; OBS_BYTES],
+            };
+            let offset_x = (i32::from(cell_x) - i32::from(BASE_CELL)) * WALK_DIM as i32;
+            let offset_y = (i32::from(cell_y) - i32::from(BASE_CELL)) * WALK_DIM as i32;
+            for local_y in 0..WALK_DIM {
+                for local_x in 0..WALK_DIM {
+                    let x = offset_x + local_x as i32;
+                    let y = offset_y + local_y as i32;
+                    let walkable = x > 0
+                        && y > 0
+                        && x < WIDTH as i32 - 1
+                        && y < HEIGHT as i32 - 1
+                        && !(x == WALL_X as i32 && !GAP.contains(&(y as usize)));
+                    walk_set(&mut cell.walk, local_x, local_y, walkable);
+                }
+            }
+            Some(cell)
+        };
+        let from = point(WIDTH / 4, HEIGHT / 2);
+        let to = point(WIDTH * 3 / 4, HEIGHT / 2);
+
+        let search = find_leg_in_range_ex(&mut fetch, from, to, 0.0, BUDGET);
+        let LegOutcome::Complete(path) = search.outcome else {
+            panic!("stale queue entries consumed the detour budget");
+        };
+        assert!(search.expansions < BUDGET);
+        assert_eq!(path.last(), Some(&to));
     }
 
     #[test]
