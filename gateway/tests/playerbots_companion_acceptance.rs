@@ -1610,12 +1610,11 @@ fn playerbots_acceptance_imported_deadmines_floor_carries_follow_through_transfe
         serde_json::to_vec_pretty(&retained_leg).unwrap(),
     )
     .expect("failed to retain imported Map 36 Follow leg");
-    let (leg_start, leg_destination, ray_destination, leg_instance_id) =
-        assert_imported_follow_leg(&topology, &retained_leg);
-    assert_eq!(leg_instance_id, instance_id);
-    topology.probe_floor(leg_start);
-    topology.probe_floor(leg_destination);
-    topology.probe_leg(leg_instance_id, leg_start, ray_destination);
+    let leg = assert_imported_follow_leg(&topology, &retained_leg);
+    assert_eq!(leg.instance_id, instance_id);
+    topology.probe_floor(leg.start);
+    topology.probe_floor(leg.destination);
+    topology.probe_leg(leg.instance_id, leg.start, leg.ray_destination);
     let progressed = topology.save(
         "imported-map36-follow-progress",
         json!({
@@ -1822,10 +1821,14 @@ fn imported_follow_leg(topology: &CompanionTopology, start: (f32, f32, f32)) -> 
     .then(|| json!({"guid": guid, "start": start, "body": body, "spline": spline, "runner": runner, "action": action}))
 }
 
-fn assert_imported_follow_leg(
-    topology: &CompanionTopology,
-    evidence: &Value,
-) -> ((f32, f32, f32), (f32, f32, f32), (f32, f32, f32), u64) {
+struct ImportedFollowLeg {
+    start: (f32, f32, f32),
+    destination: (f32, f32, f32),
+    ray_destination: (f32, f32, f32),
+    instance_id: u64,
+}
+
+fn assert_imported_follow_leg(topology: &CompanionTopology, evidence: &Value) -> ImportedFollowLeg {
     let guid = evidence["guid"].as_u64().unwrap();
     let body = &evidence["body"];
     let spline = &evidence["spline"];
@@ -1885,12 +1888,12 @@ fn assert_imported_follow_leg(
         .as_str()
         .is_some_and(|progress| progress.contains("arrived = false")));
     assert_eq!(parse_value_u64(body, "guid"), guid);
-    (
+    ImportedFollowLeg {
         start,
         destination,
         ray_destination,
-        parse_value_u64(body, "instance_id"),
-    )
+        instance_id: parse_value_u64(body, "instance_id"),
+    }
 }
 
 fn latest_intent(topology: &CompanionTopology, database: &str) -> BTreeMap<String, String> {
