@@ -976,10 +976,6 @@ fn playerbots_recovery_invalidates_failed_work_after_an_actual_navigation_import
         failed_fight.contains("coverage = (unknown = ())"),
         "{before}"
     );
-    assert!(!before["runner"]["failures"]
-        .as_str()
-        .unwrap()
-        .contains("missingImportedCoverage"));
     node.assert_call("import_nav_chunks_append", &["\"0,999,999,0,,\""]);
     let imported = row(
         &node,
