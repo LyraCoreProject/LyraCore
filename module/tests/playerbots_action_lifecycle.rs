@@ -1854,19 +1854,30 @@ fn playerbots_areatrigger_move_records_a_verified_blocked_route() {
 fn playerbots_action_resurrection_cancels_between_release_and_spirit_resurrection() {
     let (node, bots) = fixture("playerbots-action-resurrection-cancellation", 1);
     let bot = &bots[0];
-    node.assert_call("playerbots_select_controller", &[bot, "{\"cohort\":[]}"]);
+    node.assert_call("playerbots_fixture_runner_select_cohort", &[bot]);
     node.assert_call("playerbots_fixture_runner_damage", &[bot, "0", "1000000"]);
-    node.assert_call("playerbots_fixture_runner_due", &[]);
-    node.assert_call("playerbots_fixture_runner_pass", &[]);
+    node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
     let released = snapshot(&node);
     save(&node, "released", &released);
     assert_eq!(released["characters"][0]["dead"], "true", "{released}");
     assert_ne!(released["characters"][0]["player_flags"], "0", "{released}");
+    let released_runner = &released["runner"][0];
+    let accepted_resurrection = released_runner["chosen"].as_str().unwrap();
     assert!(
-        released["runner"][0]["chosen"]
-            .as_str()
-            .unwrap()
-            .contains("resurrection"),
+        accepted_resurrection.contains("action = (resurrect = ())")
+            && accepted_resurrection.contains("reason = (resurrection = ())"),
+        "{released}"
+    );
+    assert_eq!(released_runner["foreground"], "(none = ())", "{released}");
+    assert_eq!(
+        released_runner["last_outcome"], "(accepted = ())",
+        "{released}"
+    );
+    let released_history = released_runner["history"].as_str().unwrap();
+    let accepted_record = format!("chosen = {accepted_resurrection}, outcome = (accepted = ())");
+    assert_eq!(
+        released_history.matches(&accepted_record).count(),
+        1,
         "{released}"
     );
 
@@ -1884,13 +1895,35 @@ fn playerbots_action_resurrection_cancels_between_release_and_spirit_resurrectio
         invalidated["characters"][0]["player_flags"], "0",
         "{invalidated}"
     );
-    assert!(
-        invalidated["runner"][0]["last_outcome"]
-            .as_str()
-            .unwrap()
-            .contains("cancelled"),
+    let invalidated_runner = &invalidated["runner"][0];
+    assert_eq!(
+        invalidated_runner["foreground"], "(none = ())",
         "{invalidated}"
     );
+    let invalidated_history = invalidated_runner["history"].as_str().unwrap();
+    let appended_history = invalidated_history
+        .strip_prefix(released_history)
+        .expect("controller selection must retain the prior Resurrection history");
+    let cancelled_record = format!("chosen = {accepted_resurrection}, outcome = (cancelled = ())");
+    let recorded_record = format!("chosen = {accepted_resurrection}, outcome = (recorded = ())");
+    assert_eq!(
+        appended_history.matches(&cancelled_record).count(),
+        1,
+        "{invalidated}"
+    );
+    let recorded_count = appended_history.matches(&recorded_record).count();
+    assert!(recorded_count <= 1, "{invalidated}");
+    assert_eq!(
+        appended_history.matches("(at_micros = ").count(),
+        1 + recorded_count,
+        "{invalidated}"
+    );
+    if let Some(recorded_at) = appended_history.find(&recorded_record) {
+        assert!(
+            appended_history.find(&cancelled_record).unwrap() < recorded_at,
+            "{invalidated}"
+        );
+    }
     node.assert_call("playerbots_fixture_runner_due", &[]);
     node.assert_call("playerbots_fixture_runner_pass", &[]);
     let cancelled = snapshot(&node);
@@ -1900,11 +1933,24 @@ fn playerbots_action_resurrection_cancels_between_release_and_spirit_resurrectio
         cancelled["characters"][0]["player_flags"], "0",
         "{cancelled}"
     );
+    assert_eq!(
+        cancelled["runner"][0]["last_outcome"], "(recorded = ())",
+        "{cancelled}"
+    );
+    let final_history = cancelled["runner"][0]["history"].as_str().unwrap();
+    assert_eq!(
+        final_history.matches(&cancelled_record).count(),
+        1,
+        "{cancelled}"
+    );
+    assert_eq!(
+        final_history.matches(&recorded_record).count(),
+        1,
+        "{cancelled}"
+    );
     assert!(
-        cancelled["runner"][0]["last_outcome"]
-            .as_str()
-            .unwrap()
-            .contains("recorded"),
+        final_history.find(&cancelled_record).unwrap()
+            < final_history.find(&recorded_record).unwrap(),
         "{cancelled}"
     );
 }
