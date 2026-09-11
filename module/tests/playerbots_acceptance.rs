@@ -1755,6 +1755,7 @@ fn level_gap_snapshot(node: &Standalone, guid: &str) -> serde_json::Value {
         "fixture": node.query_rows(&format!("SELECT * FROM pkg_playerbots_acceptance_level_gap WHERE character_guid = {guid}")),
         "bot": node.query_rows(&format!("SELECT * FROM pkg_playerbots_bot WHERE character_guid = {guid}")),
         "character": node.query_rows(&format!("SELECT guid, level, xp, next_level_xp, health, dead, map_id, instance_id, x, y, z FROM game_world_entity WHERE guid = {guid}")),
+        "graveyard": node.query_rows("SELECT id, map_id, x, y, z, name FROM game_graveyard WHERE id = 105"),
         "quest_template": node.query_rows(&format!("SELECT entry, min_level, prev_quest_id FROM game_quest_template WHERE entry = {LEVEL_GAP_QUEST}")),
         "catalog_quest": node.query_rows(&format!("SELECT quest_entry, min_level, content_revision FROM pkg_playerbots_catalog_quest WHERE quest_entry = {LEVEL_GAP_QUEST}")),
         "end_only_relation": node.query_rows(&format!("SELECT creature_entry, quest_entry, role FROM game_creature_quest WHERE creature_entry = {LEVEL_GAP_END_ONLY_ENTRY}")),
@@ -1769,6 +1770,25 @@ fn level_gap_snapshot(node: &Standalone, guid: &str) -> serde_json::Value {
         "xp_events": node.query_rows("SELECT killed_guid, total_exp, is_kill, created_at FROM game_xp_event"),
         "levelups": node.query_rows("SELECT new_level, created_at FROM game_levelup_event"),
     })
+}
+
+fn assert_level_gap_graveyard(staged: &serde_json::Value) {
+    assert_eq!(staged["graveyard"].as_array().unwrap().len(), 1, "{staged}");
+    assert_eq!(staged["graveyard"][0]["id"], "105", "{staged}");
+    assert_eq!(
+        staged["graveyard"][0]["map_id"], staged["character"][0]["map_id"],
+        "{staged}"
+    );
+    for coordinate in ["x", "y", "z"] {
+        assert_eq!(
+            staged["graveyard"][0][coordinate], staged["character"][0][coordinate],
+            "{staged}"
+        );
+    }
+    let graveyard_x = json_f32(&staged["graveyard"][0]["x"]);
+    let graveyard_y = json_f32(&staged["graveyard"][0]["y"]);
+    assert!((1_150.0..=1_400.0).contains(&graveyard_x), "{staged}");
+    assert!((1_150.0..=1_250.0).contains(&graveyard_y), "{staged}");
 }
 
 #[test]
@@ -1811,6 +1831,7 @@ fn playerbots_acceptance_level_gap_uses_ordinary_kill_xp() {
     assert_eq!(staged["sources"].as_array().unwrap().len(), 66, "{staged}");
     assert_eq!(staged["source_template"][0]["damage_min"], "1", "{staged}");
     assert_eq!(staged["source_template"][0]["damage_max"], "1", "{staged}");
+    assert_level_gap_graveyard(&staged);
     node.assert_call("playerbots_acceptance_begin_level_gap", &[&guid]);
 
     let source_floor = (0xF130u64 << 48) | (u64::from(LEVEL_GAP_SOURCE_ENTRY) << 24) | 1;
@@ -1885,6 +1906,7 @@ fn playerbots_acceptance_level_gap_uses_ordinary_kill_xp() {
     }
     let complete = level_gap_snapshot(&node, &guid);
     save(&node, "level-gap-complete", complete.clone());
+    assert_eq!(complete["graveyard"], staged["graveyard"], "{complete}");
     assert_eq!(complete["character"][0]["level"], "7", "{complete}");
     let source_ceiling = source_floor + LEVEL_GAP_SOURCE_COUNT;
     let mut kills = complete["kills"].as_array().unwrap().clone();

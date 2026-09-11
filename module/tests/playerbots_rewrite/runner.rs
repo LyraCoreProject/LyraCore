@@ -389,6 +389,149 @@ fn playerbots_runner_defense_preserves_home_and_accepted_attack_is_not_progress(
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_runner_resurrection_clears_defense_and_resumes_retained_home() {
+    let (node, bots) = fixture("playerbots-runner-death-defense", "1");
+    let bot = &bots[0];
+    node.assert_call("playerbots_fixture_blocked_quest", &[bot]);
+    node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
+    node.assert_sql("DELETE FROM game_melee_schedule");
+    select(&node, bot, "frozen");
+    node.assert_call("playerbots_fixture_runner_select_cohort", &[bot]);
+
+    let target = ((0xF130u64 << 48) | (5_090_101u64 << 24) | 1).to_string();
+    node.assert_call(
+        "playerbots_fixture_runner_damage_and_park",
+        &[bot, &target, "1"],
+    );
+    node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
+    let defended = runner(&node, bot);
+    assert!(defended["chosen"].contains("defense"), "{defended:?}");
+    assert!(defended["chosen"].contains("attack"), "{defended:?}");
+    assert!(defended["defense_target"].contains(&target), "{defended:?}");
+    assert!(
+        defended["last_target_health"].contains(&target),
+        "{defended:?}"
+    );
+    let retained_objective = defended["objective"].clone();
+    let retained_objective_sequence = defended["objective_sequence"].clone();
+    let retained_quest_progress = defended["quest_progress"].clone();
+    assert!(retained_objective.contains("returnHome"), "{defended:?}");
+    assert!(retained_quest_progress.contains("credit = 0"));
+    let live_target = node.query_rows(&format!(
+        "SELECT health, dead FROM game_world_entity WHERE guid = {target}"
+    ));
+    assert_eq!(live_target.len(), 1);
+    assert_eq!(live_target[0]["dead"], "false");
+    assert!(
+        defended["last_target_health"].contains(&format!("health = {}", live_target[0]["health"])),
+        "{defended:?}"
+    );
+    let living_before = node.query_rows(&format!(
+        "SELECT dead, player_flags FROM game_world_entity WHERE guid = {bot}"
+    ));
+    assert_eq!(living_before[0]["dead"], "false");
+
+    node.assert_call(
+        "playerbots_fixture_runner_damage_and_park",
+        &[bot, &target, "1000000"],
+    );
+    let dead = node.query_rows(&format!(
+        "SELECT dead, player_flags FROM game_world_entity WHERE guid = {bot}"
+    ));
+    assert_eq!(dead[0]["dead"], "true");
+    assert_eq!(dead[0]["player_flags"], living_before[0]["player_flags"]);
+    assert_eq!(
+        runner(&node, bot)["defense_target"],
+        defended["defense_target"]
+    );
+    assert_eq!(
+        runner(&node, bot)["last_target_health"],
+        defended["last_target_health"]
+    );
+
+    node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
+    let released = runner(&node, bot);
+    let ghost = node.query_rows(&format!(
+        "SELECT dead, player_flags FROM game_world_entity WHERE guid = {bot}"
+    ));
+    assert_eq!(ghost[0]["dead"], "true");
+    assert_ne!(ghost[0]["player_flags"], "0");
+    assert_eq!(released["objective"], retained_objective);
+    assert_eq!(released["objective_sequence"], retained_objective_sequence);
+    assert_eq!(released["quest_progress"], retained_quest_progress);
+    assert!(
+        released["defense_target"].contains("none"),
+        "successful Release retained Defense target: {released:?}"
+    );
+    assert!(
+        released["last_target_health"].contains("none"),
+        "{released:?}"
+    );
+    assert_eq!(
+        node.query_rows(&format!(
+            "SELECT health, dead FROM game_world_entity WHERE guid = {target}"
+        )),
+        live_target
+    );
+    node.assert_call(
+        "playerbots_fixture_runner_damage_and_park",
+        &[bot, &target, "1"],
+    );
+    let released_after_hit = runner(&node, bot);
+    assert_eq!(released_after_hit["objective"], retained_objective);
+    assert_eq!(
+        released_after_hit["quest_progress"],
+        retained_quest_progress
+    );
+    assert_eq!(
+        released_after_hit["defense_target"],
+        released["defense_target"]
+    );
+    assert_eq!(
+        released_after_hit["last_target_health"],
+        released["last_target_health"]
+    );
+
+    node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
+    let resurrected = runner(&node, bot);
+    let living = node.query_rows(&format!(
+        "SELECT dead, player_flags FROM game_world_entity WHERE guid = {bot}"
+    ));
+    assert_eq!(living[0]["dead"], "false");
+    assert_eq!(living[0]["player_flags"], living_before[0]["player_flags"]);
+    assert_eq!(resurrected["objective"], retained_objective);
+    assert_eq!(
+        resurrected["objective_sequence"],
+        retained_objective_sequence
+    );
+    assert_eq!(resurrected["quest_progress"], retained_quest_progress);
+    assert!(
+        resurrected["defense_target"].contains("none"),
+        "{resurrected:?}"
+    );
+    assert!(
+        resurrected["last_target_health"].contains("none"),
+        "{resurrected:?}"
+    );
+
+    node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
+    let resumed = runner(&node, bot);
+    assert!(resumed["chosen"].contains("returnHome"), "{resumed:?}");
+    assert!(resumed["chosen"].contains("move"), "{resumed:?}");
+    assert_eq!(resumed["objective_sequence"], retained_objective_sequence);
+    assert_eq!(resumed["quest_progress"], retained_quest_progress);
+    assert!(resumed["defense_target"].contains("none"), "{resumed:?}");
+    assert_eq!(
+        node.query_rows(&format!(
+            "SELECT health, dead FROM game_world_entity WHERE guid = {target}"
+        )),
+        live_target
+    );
+    outcomes(&node);
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_runner_defers_a_blocked_destination_with_bounded_failure_memory() {
     let (node, bots) = fixture("playerbots-runner-deferred", "1");
     let bot = &bots[0];
