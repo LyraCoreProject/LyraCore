@@ -483,6 +483,60 @@ fn target_receipts(topology: &CompanionTopology, target: u64) -> Value {
     })
 }
 
+fn projectile_impact_observation_caught_up(topology: &CompanionTopology, target: u64) -> bool {
+    let database = topology.current_world(topology.party.warrior);
+    let casters = topology
+        .party
+        .bots()
+        .into_iter()
+        .map(|guid| format!("caster_guid = {guid}"))
+        .collect::<Vec<_>>()
+        .join(" OR ");
+    if !topology
+        .query(
+            &database,
+            &format!(
+                "SELECT scheduled_id FROM game_pending_spell_impact WHERE target_guid = {target} \
+                 AND ({casters})"
+            ),
+        )
+        .is_empty()
+    {
+        return false;
+    }
+    let events = topology.query(
+        &database,
+        &format!(
+            "SELECT id, caster_guid, target_guid, spell_id, damage FROM \
+             game_spell_impact_event WHERE target_guid = {target} AND ({casters})"
+        ),
+    );
+    let receipts = topology.query(
+        &database,
+        &format!(
+            "SELECT source_event_id, caster_guid, target_guid, spell_id, damage FROM \
+             pkg_playerbots_companion_impact_receipt WHERE target_guid = {target}"
+        ),
+    );
+    events.iter().all(|event| {
+        receipts.iter().any(|receipt| {
+            receipt["source_event_id"] == event["id"]
+                && ["caster_guid", "target_guid", "spell_id", "damage"]
+                    .into_iter()
+                    .all(|field| receipt[field] == event[field])
+        })
+    })
+}
+
+fn target_health(topology: &CompanionTopology, target: u64) -> u64 {
+    let database = topology.current_world(topology.party.warrior);
+    let rows = topology.query(
+        &database,
+        &format!("SELECT health FROM game_world_entity WHERE guid = {target}"),
+    );
+    parse_u64(one(&rows, "controlled target"), "health")
+}
+
 fn exact_completed_heal(
     topology: &CompanionTopology,
     target: u64,
@@ -934,8 +988,40 @@ fn playerbots_acceptance_human_and_four_companions_complete_the_fixed_route() {
             "attempts": control_attempts,
             "before_handles": before_control["extra"]["handles"],
             "control_aura": exact_control_auras(&topology, second),
+            "handles": owned_combat_handles(&topology, second),
             "receipts": controlled_receipts,
         }),
+    );
+    topology.wait_until(
+        "resolved projectiles against the controlled target did not drain into durable evidence",
+        || {
+            exact_control_auras(&topology, second).len() == 1
+                && owned_combat_handles(&topology, second).is_empty()
+                && projectile_impact_observation_caught_up(&topology, second)
+        },
+    );
+    let settled_receipts = target_receipts(&topology, second);
+    let control_settled = topology.save(
+        "fixed-controlled-target-settled",
+        json!({
+            "control_aura": exact_control_auras(&topology, second),
+            "handles": owned_combat_handles(&topology, second),
+            "receipts": settled_receipts,
+            "target_health": target_health(&topology, second),
+        }),
+    );
+    assert_eq!(
+        control_settled["extra"]["receipts"]["casts"], controlled["extra"]["receipts"]["casts"],
+        "a companion started a new cast against the controlled target"
+    );
+    assert_eq!(
+        control_settled["extra"]["receipts"]["physical"],
+        controlled["extra"]["receipts"]["physical"],
+        "a companion started a new physical attack against the controlled target"
+    );
+    assert_eq!(
+        control_settled["extra"]["control_aura"], controlled["extra"]["control_aura"],
+        "control aura changed while resolved projectiles drained"
     );
     std::thread::sleep(Duration::from_secs(2));
     let control_stable = topology.save(
@@ -944,16 +1030,23 @@ fn playerbots_acceptance_human_and_four_companions_complete_the_fixed_route() {
             "control_aura": exact_control_auras(&topology, second),
             "handles": owned_combat_handles(&topology, second),
             "receipts": target_receipts(&topology, second),
+            "target_health": target_health(&topology, second),
         }),
     );
     assert_eq!(
-        control_stable["extra"]["control_aura"], controlled["extra"]["control_aura"],
+        control_stable["extra"]["control_aura"], control_settled["extra"]["control_aura"],
         "control aura did not remain durable through the cancellation window"
     );
+    assert_eq!(controlled["extra"]["handles"], json!([]));
+    assert_eq!(control_settled["extra"]["handles"], json!([]));
     assert_eq!(control_stable["extra"]["handles"], json!([]));
     assert_eq!(
-        control_stable["extra"]["receipts"], controlled["extra"]["receipts"],
+        control_stable["extra"]["receipts"], control_settled["extra"]["receipts"],
         "a companion damaged the controlled target"
+    );
+    assert_eq!(
+        control_stable["extra"]["target_health"], control_settled["extra"]["target_health"],
+        "controlled target health changed during the stable hold"
     );
     let clear_attempts = topology.apply_fault_when_due(3);
     wait_enemy_dead(&topology, second);
