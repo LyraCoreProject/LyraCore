@@ -1555,11 +1555,15 @@ fn playerbots_acceptance_restart_transfer_and_lost_ack_apply_once() {
 #[test]
 #[ignore = "requires SpacetimeDB, the full Package union, the pinned importer and client archives, Gateway, and the pinned Headless Client"]
 fn playerbots_acceptance_imported_deadmines_floor_carries_follow_through_transfer() {
+    // The trigger center is beyond the WMO floor. This point remains on its entry ramp.
+    let exit_approach = (-14.4154, -391.4037, 63.7006);
+    assert!(distance(exit_approach, companion::EXIT_SOURCE) < 6.0);
     let topology = CompanionTopology::stage_imported_map36("playerbots-imported-deadmines-route");
     let geometry_before = topology.save_map36_geometry("imported-map36-before-route");
     assert_imported_map36(&geometry_before);
     topology.probe_floor(companion::ENTRY_LANDING);
     topology.probe_floor(companion::EXIT_SOURCE);
+    topology.probe_floor(exit_approach);
 
     let mut gateway = topology.gateway(false, "imported-map36-route");
     let mut wire = topology.wire("imported-map36-route");
@@ -1587,7 +1591,7 @@ fn playerbots_acceptance_imported_deadmines_floor_carries_follow_through_transfe
     );
     let companion_start = position(&topology, &topology.destination, topology.party.warrior);
 
-    let leader_move = wire.move_to(leader_start, companion::EXIT_SOURCE);
+    let leader_move = wire.move_to(leader_start, exit_approach);
     let mut leader_at_exit = None;
     topology.wait_until(
         "human leader did not enter the Deadmines exit trigger",
@@ -1619,6 +1623,7 @@ fn playerbots_acceptance_imported_deadmines_floor_carries_follow_through_transfe
         "imported-map36-follow-progress",
         json!({
             "leader_move": leader_move,
+            "exit_approach": exit_approach,
             "leader_at_exit": leader_at_exit,
             "leg": retained_leg,
         }),
