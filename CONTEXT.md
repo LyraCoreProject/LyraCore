@@ -221,7 +221,8 @@ which scopes imported world content.
 A retained purpose with its destination, stage, deadline, catalog revision, and verified progress.
 Tactical interruption does not replace the objective. A companion in a human-led party retains the
 leader identity while refreshing the destination from current party facts; that refresh does not
-replace a retained cast or its identity.
+replace a retained cast or its identity. Deferring Quest work can select another Bot Objective.
+The accepted Quest and its bounded Recovery Attempt remain available for retry.
 
 **Companion Order**:
 An authenticated human leader's retained Follow, Stay, Assist, or Target instruction for one bot.
