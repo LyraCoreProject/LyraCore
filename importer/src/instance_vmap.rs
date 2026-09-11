@@ -244,7 +244,7 @@ mod tests {
     fn transformed_group_bounds_select_only_route_cells() {
         let map_id = 36;
         let origin = 32.0 * 533.333_3;
-        let placement = placement([origin, 0.0, origin]);
+        let route_placement = placement([origin, 0.0, origin]);
         let convention = Convention {
             shuffle: false,
             sign: 1.0,
@@ -259,7 +259,7 @@ mod tests {
         assert!(group_touches_selection(
             map_id,
             &selected,
-            &placement,
+            &route_placement,
             convention,
             &[-1.0, -1.0, -1.0, 1.0, 1.0, 1.0]
         )
@@ -267,15 +267,19 @@ mod tests {
         assert!(!group_touches_selection(
             map_id,
             &selected,
-            &placement,
+            &route_placement,
             convention,
             &[100.0, 100.0, -1.0, 101.0, 101.0, 1.0]
         )
         .unwrap());
-        assert!(
-            group_touches_selection(map_id, &selected, &placement, convention, &[f32::NAN; 6])
-                .is_err()
-        );
+        assert!(group_touches_selection(
+            map_id,
+            &selected,
+            &route_placement,
+            convention,
+            &[f32::NAN; 6]
+        )
+        .is_err());
 
         let map_edge = placement([origin, 0.0, -1.0]);
         let edge_selected =
