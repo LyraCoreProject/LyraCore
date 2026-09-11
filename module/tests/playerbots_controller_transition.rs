@@ -48,6 +48,63 @@ fn legacy_batch_state(node: &Standalone, guid: &str) -> Value {
     })
 }
 
+fn bot_roster_by_guid(rows: &Value, label: &str) -> BTreeMap<u64, Value> {
+    let mut keyed = BTreeMap::new();
+    for row in rows
+        .as_array()
+        .unwrap_or_else(|| panic!("{label} bot roster is not an array: {rows}"))
+    {
+        let guid = row["character_guid"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{label} bot has no Character guid: {row}"))
+            .parse::<u64>()
+            .unwrap();
+        assert!(
+            keyed.insert(guid, row.clone()).is_none(),
+            "{label} bot roster repeats Character {guid}: {rows}"
+        );
+    }
+    keyed
+}
+
+fn assert_migrated_bot_roster(imported: &Value, migrated: &Value) {
+    let imported = bot_roster_by_guid(imported, "imported");
+    let migrated = bot_roster_by_guid(migrated, "migrated");
+    assert_eq!(
+        migrated.len(),
+        imported.len(),
+        "bot roster cardinality changed"
+    );
+    assert_eq!(
+        migrated.keys().collect::<Vec<_>>(),
+        imported.keys().collect::<Vec<_>>(),
+        "bot roster Character identities changed"
+    );
+    for (guid, before) in imported {
+        let after = &migrated[&guid];
+        assert_eq!(before["controller"], "(legacy = ())", "{guid}: {before}");
+        assert_eq!(
+            before["next_think_micros"],
+            i64::MAX.to_string(),
+            "{guid}: {before}"
+        );
+        assert_eq!(after["controller"], "(cohort = ())", "{guid}: {after}");
+        let next_think_micros = after["next_think_micros"]
+            .as_str()
+            .unwrap()
+            .parse::<i64>()
+            .unwrap();
+        assert!(
+            (0..i64::MAX).contains(&next_think_micros),
+            "migration did not wake Character {guid}: {after}"
+        );
+        let mut expected = before;
+        expected["controller"] = after["controller"].clone();
+        expected["next_think_micros"] = after["next_think_micros"].clone();
+        assert_eq!(after, &expected, "migration changed Character {guid}");
+    }
+}
+
 fn batch(guids: &[String]) -> String {
     format!("[{}]", guids.join(","))
 }
@@ -313,13 +370,9 @@ fn playerbots_populated_legacy_batches_resume_after_restart_and_replay_idempoten
             .is_empty(),
         "{evidence}"
     );
-    assert!(
-        evidence["after_restart_and_resume"]["bots"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|row| row["controller"].as_str().unwrap().contains("cohort")),
-        "{evidence}"
+    assert_migrated_bot_roster(
+        &evidence["imported"]["bots"],
+        &evidence["after_restart_and_resume"]["bots"],
     );
     let retained_after = &evidence["after_restart_and_resume"]["retained_runner"][0];
     assert_eq!(
@@ -608,6 +661,7 @@ fn playerbots_cutover_waits_for_stale_in_transit_compatibility_then_migrates_onc
         "character": node.query_rows(&format!("SELECT * FROM game_character WHERE guid = {guid}")),
         "body": node.query_rows(&format!("SELECT * FROM game_world_entity WHERE guid = {guid}")),
     });
+    assert_eq!(settled["bot"]["controller"], "(legacy = ())", "{settled}");
     node.assert_call("playerbots_migrate_legacy_controllers", &[&batch(&guids)]);
     let migrated = json!({
         "bot": bot(&node, guid),
