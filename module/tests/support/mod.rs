@@ -242,7 +242,7 @@ impl Standalone {
     #[allow(dead_code)] // Used by multi-database Gateway Transfer callers.
     pub fn call_database(&self, database: &str, reducer: &str, args: &[&str]) -> Output {
         let mut command = self.command();
-        command.args(["call", "-s", &self.server, database, reducer]);
+        command.args(["call", "-s", &self.server, database, reducer, "--"]);
         command.args(args);
         command.output().expect("failed to call reducer")
     }
