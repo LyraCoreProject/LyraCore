@@ -87,7 +87,11 @@ pub(crate) fn reapply(args: &Args, family: &str, root: &str) -> Result<()> {
         return Ok(());
     }
 
-    call_reducer_args(args, APPLY_REDUCER, &[family, &pack(&deltas)])
+    let family_argument =
+        serde_json::to_string(family).context("encode Package Delta family String argument")?;
+    let packed_argument = serde_json::to_string(&pack(&deltas))
+        .context("encode Package Delta plan String argument")?;
+    call_reducer_args(args, APPLY_REDUCER, &[&family_argument, &packed_argument])
         .with_context(|| format!("{APPLY_REDUCER}({family})"))?;
     eprintln!(
         "{family}: reapplied {} enabled Package Delta(s) over {} row(s).",

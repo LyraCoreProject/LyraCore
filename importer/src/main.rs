@@ -1458,10 +1458,13 @@ impl Args {
     }
 }
 
-/// One `spacetime call` as the CLI identity (the module owner after a local publish) — the shared
-/// path for every reducer-based loader (spawns, gameobjects, terrain).
+/// One `spacetime call` for a reducer whose only argument is a `String`.
+///
+/// The CLI parses each argument as Sats JSON. Encoding here keeps packed newlines and other control
+/// characters inside that one String instead of letting the CLI parse them as JSON syntax.
 pub(crate) fn call_reducer(args: &Args, reducer: &str, payload: &str) -> Result<()> {
-    call_reducer_args(args, reducer, &[payload])
+    let payload = serde_json::to_string(payload).context("encode reducer String argument")?;
+    call_reducer_args(args, reducer, &[&payload])
 }
 
 /// Reducer call with separate positional arguments (generation lifecycle reducers carry both

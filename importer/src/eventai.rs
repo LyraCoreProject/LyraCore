@@ -5225,15 +5225,16 @@ fn map_summon_action(
 
 /// Movement: every action that changes how the subject moves or faces.
 fn map_movement_action(action: [u32; 4], kind: u32) -> Result<NativeAction, Vec<MappingFailure>> {
+    let bool_value = |value: u32| u8::from(value != 0);
     match kind {
         ACTION_COMBAT_MOVEMENT if action[2] == 0 && action[3] == 0 => Ok(movement_action(
             kind,
-            format!("combat-movement:{}", action[1] != 0),
+            format!("combat-movement:{}", bool_value(action[1])),
             None,
         )),
         ACTION_EVADE if action[2] == 0 && action[3] == 0 => Ok(movement_action(
             kind,
-            format!("evade:{}", action[1] != 0),
+            format!("evade:{}", bool_value(action[1])),
             None,
         )),
         ACTION_RANGED_MOVEMENT => Ok(NativeAction {
@@ -5270,7 +5271,7 @@ fn map_movement_action(action: [u32; 4], kind: u32) -> Result<NativeAction, Vec<
         )]),
         ACTION_PAUSE_WAYPOINTS if action[2] == 0 && action[3] == 0 => Ok(movement_action(
             kind,
-            format!("patrol-paused:{}", action[1] != 0),
+            format!("patrol-paused:{}", bool_value(action[1])),
             None,
         )),
         ACTION_SET_RANGED_MODE if action[1] <= 4 && action[3] == 0 => {
@@ -5302,18 +5303,22 @@ fn map_movement_action(action: [u32; 4], kind: u32) -> Result<NativeAction, Vec<
             let target = map_target(action[1]).map_err(|failure| vec![failure])?;
             Ok(movement_action(
                 kind,
-                format!("facing:{target}:{}", action[2] != 0),
+                format!("facing:{target}:{}", bool_value(action[2])),
                 Some(action[1]),
             ))
         }
         ACTION_SET_IMMOBILIZED if action[3] == 0 => Ok(movement_action(
             kind,
-            format!("immobilized:{}:{}", action[1] != 0, action[2] != 0),
+            format!(
+                "immobilized:{}:{}",
+                bool_value(action[1]),
+                bool_value(action[2])
+            ),
             None,
         )),
         ACTION_SET_FOLLOW_MOVEMENT if action[2] == 0 && action[3] == 0 => Ok(movement_action(
             kind,
-            format!("follow-movement:{}", action[1] != 0),
+            format!("follow-movement:{}", bool_value(action[1])),
             None,
         )),
         ACTION_RETREAT => Err(vec![MappingFailure::source(
@@ -8037,7 +8042,7 @@ mod tests {
     }
 
     #[test]
-    fn movement_rows_emit_named_intents_and_inventory_the_exact_raw_values() {
+    fn movement_rows_emit_module_boolean_values_and_inventory_the_exact_raw_values() {
         let source = parse(&dump(&[
             rule(
                 100,
@@ -8094,23 +8099,25 @@ mod tests {
         ]));
         let (entries, guids, templates) = scope();
         let plan = source.assemble(&entries, &guids, &templates);
-        let definitions = plan.definition_rows.join("\n");
+        let definitions = plan.definition_batches.join("\n");
 
         for encoded in [
-            "combat-movement:false",
-            "evade:true",
+            "combat-movement:0",
+            "evade:1",
             "posture:10:150",
             "idle:random-current:15",
             "idle:patrol:0",
-            "patrol-paused:false",
+            "patrol-paused:0",
             "ranged-mode:proximity:35",
             "walking:walk-default",
-            "facing:spawner:false",
-            "immobilized:true:false",
-            "follow-movement:false",
+            "facing:spawner:0",
+            "immobilized:1:0",
+            "follow-movement:0",
         ] {
             assert!(definitions.contains(encoded), "missing `{encoded}`");
         }
+        assert!(!definitions.contains(":true"));
+        assert!(!definitions.contains(":false"));
 
         let profile = fixture_profile(&plan);
         let manifest = plan.compatibility_manifest(&profile, "fixture", LOADER_CONTRACT);
