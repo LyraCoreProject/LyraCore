@@ -64,31 +64,8 @@ pub(crate) fn inspect_relevant_doodads(
         bail!("{name} parsed as a group file, expected root");
     };
     let root_source = archive_entry(name.clone(), &root_bytes);
-    if root.n_doodad_sets as usize != root.doodad_sets.len()
-        || root.n_doodad_defs as usize != root.doodad_defs.len()
-    {
-        bail!("WMO {name} doodad header counts do not match parsed chunks");
-    }
-    let (selected_start, active_end) = if root.doodad_sets.is_empty() {
-        if !root.doodad_defs.is_empty() {
-            bail!("WMO {name} defines doodads without a doodad set");
-        }
-        (0, 0)
-    } else {
-        let set = root
-            .doodad_sets
-            .get(wmo.doodad_set as usize)
-            .with_context(|| format!("WMO {name} has no selected doodad set {}", wmo.doodad_set))?;
-        (
-            set.start_index,
-            set.start_index
-                .checked_add(set.count)
-                .context("WMO doodad set range overflows")?,
-        )
-    };
-    if active_end as usize > root.doodad_defs.len() {
-        bail!("WMO {name} selected doodad set extends past MODD definitions");
-    }
+    let (selected_start, active_end, available_doodad_defs) =
+        selected_doodad_range(&root, wmo.doodad_set, name)?;
 
     let stem = name
         .strip_suffix(".wmo")
@@ -110,7 +87,7 @@ pub(crate) fn inspect_relevant_doodads(
         if group
             .doodad_refs
             .iter()
-            .any(|index| usize::from(*index) >= root.doodad_defs.len())
+            .any(|index| usize::from(*index) >= available_doodad_defs)
         {
             bail!("WMO group {group_name} references a missing doodad definition");
         }
@@ -144,6 +121,39 @@ pub(crate) fn inspect_relevant_doodads(
         touches_selection,
         relevant_refs: relevant.into_iter().collect(),
     })
+}
+
+fn selected_doodad_range(
+    root: &wow_wmo::root_parser::WmoRoot,
+    selected_set: u16,
+    name: &str,
+) -> Result<(u32, u32, usize)> {
+    if root.n_doodad_sets as usize != root.doodad_sets.len()
+        || root.n_doodad_defs as usize != root.doodad_defs.len()
+    {
+        bail!("WMO {name} doodad header counts do not match parsed chunks");
+    }
+    let (start, end) = if root.doodad_sets.is_empty() {
+        if !root.doodad_defs.is_empty() {
+            bail!("WMO {name} defines doodads without a doodad set");
+        }
+        (0, 0)
+    } else {
+        let set = root
+            .doodad_sets
+            .get(selected_set as usize)
+            .with_context(|| format!("WMO {name} has no selected doodad set {selected_set}"))?;
+        (
+            set.start_index,
+            set.start_index
+                .checked_add(set.count)
+                .context("WMO doodad set range overflows")?,
+        )
+    };
+    if end as usize > root.doodad_defs.len() {
+        bail!("WMO {name} selected doodad set extends past MODD definitions");
+    }
+    Ok((start, end, root.doodad_defs.len()))
 }
 
 fn active_doodad_refs(refs: &[u16], start: u32, end: u32) -> BTreeSet<u32> {
@@ -222,6 +232,14 @@ mod tests {
     use super::*;
     use crate::nav::WmoPlacement;
 
+    fn chunk(id: &[u8; 4], body: &[u8]) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(8 + body.len());
+        bytes.extend(id.iter().rev());
+        bytes.extend(u32::try_from(body.len()).unwrap().to_le_bytes());
+        bytes.extend(body);
+        bytes
+    }
+
     fn placement(position: [f32; 3]) -> Placement {
         Placement {
             name: "World\\Wmo\\Dungeon\\Test.wmo".to_owned(),
@@ -299,6 +317,39 @@ mod tests {
         assert_eq!(
             active_doodad_refs(&[1, 2, 3, 7, 8], 2, 8),
             BTreeSet::from([2, 3, 7])
+        );
+    }
+
+    #[test]
+    fn a_surplus_header_count_does_not_hide_a_complete_selected_doodad_set() {
+        const PARSED_DEFINITIONS: u32 = 518;
+        const DECLARED_DEFINITIONS: u32 = 536;
+
+        let mut bytes = chunk(b"MVER", &17u32.to_le_bytes());
+        let mut header = Vec::with_capacity(64);
+        for value in [0, 0, 0, 0, 0, DECLARED_DEFINITIONS, 1, 0, 0] {
+            header.extend(value.to_le_bytes());
+        }
+        header.extend([0; 28]);
+        bytes.extend(chunk(b"MOHD", &header));
+
+        let mut set = [0; 32];
+        set[24..28].copy_from_slice(&PARSED_DEFINITIONS.to_le_bytes());
+        bytes.extend(chunk(b"MODS", &set));
+        bytes.extend(chunk(
+            b"MODD",
+            &vec![0; usize::try_from(PARSED_DEFINITIONS).unwrap() * 40],
+        ));
+
+        let wow_wmo::ParsedWmo::Root(root) = wow_wmo::parse_wmo(&mut Cursor::new(bytes)).unwrap()
+        else {
+            panic!("expected a root WMO");
+        };
+        assert_eq!(root.n_doodad_defs, DECLARED_DEFINITIONS);
+        assert_eq!(root.doodad_defs.len(), PARSED_DEFINITIONS as usize);
+        assert_eq!(
+            selected_doodad_range(&root, 0, "retained Map 36 WMO").unwrap(),
+            (0, PARSED_DEFINITIONS, PARSED_DEFINITIONS as usize)
         );
     }
 
