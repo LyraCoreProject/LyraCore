@@ -61,6 +61,15 @@ pub(crate) enum Mesh {
     M2(Vec<Tri>),
 }
 
+impl Mesh {
+    pub(crate) fn len(&self) -> usize {
+        match self {
+            Self::Wmo(tris) => tris.len(),
+            Self::M2(tris) => tris.len(),
+        }
+    }
+}
+
 /// Collidable triangles of one WMO (all groups), model-local coords, tagged with group id + MOGP
 /// flags. MOPY rule (wowdev): collidable = F_COLLISION (0x08) set, OR neither F_DETAIL (0x04) nor
 /// F_NOCAMCOLLIDE (0x02).
