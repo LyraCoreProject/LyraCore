@@ -1800,34 +1800,59 @@ fn imported_follow_leg(topology: &CompanionTopology, start: (f32, f32, f32)) -> 
         )
         .into_iter()
         .next()?;
-    let spline = topology
-        .query(
-            &topology.destination,
-            &format!("SELECT * FROM game_creature_spline WHERE guid = {guid}"),
-        )
-        .into_iter()
-        .next()?;
+    let splines = topology.query(
+        &topology.destination,
+        &format!("SELECT * FROM game_creature_spline WHERE guid = {guid}"),
+    );
     let current = (
         body["x"].parse::<f32>().ok()?,
         body["y"].parse::<f32>().ok()?,
         body["z"].parse::<f32>().ok()?,
     );
-    let foreground = &runner["foreground"];
+    let outcome = action["outcome"].as_str()?;
+    let route = sats_field(outcome, "route");
+    let route_start = sats_field(route, "from");
+    let route_endpoint = sats_field(route, "endpoint");
+    let route_start = (sats_f32(route_start, "x"), sats_f32(route_start, "y"));
+    let route_endpoint = (sats_f32(route_endpoint, "x"), sats_f32(route_endpoint, "y"));
+    let objective = runner["objective"].as_str()?;
+    let objective_identity = sats_field(objective, "identity");
+    let observed_micros = action["observed_micros"].as_str()?;
+    let history = runner["history"].as_str()?;
+    let waiting = format!(
+        "(at_micros = {observed_micros}, chosen = (some = (id = (action = (move = (entity = {})), reason = (follow = ()), objective = {objective_identity}), priority = 100)), outcome = (waiting = ()))",
+        topology.party.leader
+    );
+    let arrived = format!(
+        "chosen = (some = (id = (action = (hold = ()), reason = (follow = ()), objective = {objective_identity}), priority = 100)), outcome = (arrived = ())"
+    );
+    let waiting_at = history.find(&waiting)?;
+    let arrived_after_waiting = history[waiting_at + waiting.len()..].contains(&arrived);
     (body["map_id"] == companion::DUNGEON_MAP.to_string()
         && body["instance_id"] != "0"
-        && (start.0 - current.0).hypot(start.1 - current.1) > 0.05
-        && spline["facing"] == "false"
-        && parse_u64(&spline, "dur_ms") > 0
-        && foreground.contains(&format!(
-            "action = (move = (entity = {}))",
-            topology.party.leader
-        ))
-        && foreground.contains("reason = (follow = ())")
-        && runner["movement_progress"] != "(none = ())"
-        && action["outcome"].contains("status = (direct = ())")
-        && action["outcome"].contains("coverage = (unknown = ())")
-        && action["outcome"].contains("last_advance_micros = (some ="))
-    .then(|| json!({"guid": guid, "start": start, "body": body, "spline": spline, "runner": runner, "action": action}))
+        && (start.0 - route_start.0).abs() < 0.0001
+        && (start.1 - route_start.1).abs() < 0.0001
+        && (route_start.0 - route_endpoint.0).hypot(route_start.1 - route_endpoint.1) > 0.05
+        && (current.0 - route_endpoint.0).abs() < 0.0001
+        && (current.1 - route_endpoint.1).abs() < 0.0001
+        && splines.is_empty()
+        && runner["foreground"] == "(none = ())"
+        && objective.contains("kind = (companion = ())")
+        && objective.contains("stage = (completed = ())")
+        && objective.contains("last_verified_progress_micros = (some =")
+        && arrived_after_waiting
+        && outcome.contains("status = (direct = ())")
+        && outcome.contains("coverage = (unknown = ())"))
+    .then(|| {
+        json!({
+            "guid": guid,
+            "start_z": start.2,
+            "body": body,
+            "runner": runner,
+            "action": action,
+            "splines": splines,
+        })
+    })
 }
 
 struct ImportedFollowLeg {
@@ -1840,18 +1865,22 @@ struct ImportedFollowLeg {
 fn assert_imported_follow_leg(topology: &CompanionTopology, evidence: &Value) -> ImportedFollowLeg {
     let guid = evidence["guid"].as_u64().unwrap();
     let body = &evidence["body"];
-    let spline = &evidence["spline"];
     let runner = &evidence["runner"];
     let action = &evidence["action"];
+    assert_eq!(action["kind"], "(move = ())");
+    assert!(evidence["splines"].as_array().unwrap().is_empty());
+    let route = sats_field(action["outcome"].as_str().unwrap(), "route");
+    let route_start = sats_field(route, "from");
+    let route_endpoint = sats_field(route, "endpoint");
     let start = (
-        parse_value_f32(spline, "sx"),
-        parse_value_f32(spline, "sy"),
-        parse_value_f32(spline, "sz"),
+        sats_f32(route_start, "x"),
+        sats_f32(route_start, "y"),
+        evidence["start_z"].as_f64().unwrap() as f32,
     );
     let destination = (
-        parse_value_f32(spline, "dx"),
-        parse_value_f32(spline, "dy"),
-        parse_value_f32(spline, "dz"),
+        sats_f32(route_endpoint, "x"),
+        sats_f32(route_endpoint, "y"),
+        parse_value_f32(body, "z"),
     );
     let current = (
         parse_value_f32(body, "x"),
@@ -1866,17 +1895,11 @@ fn assert_imported_follow_leg(topology: &CompanionTopology, evidence: &Value) ->
         .into_iter()
         .all(f32::is_finite));
     assert!((start.0 - destination.0).hypot(start.1 - destination.1) > 0.05);
-    assert_eq!(spline["map_id"], companion::DUNGEON_MAP.to_string());
-    assert_eq!(spline["instance_id"], body["instance_id"]);
-    assert_eq!(spline["facing"], "false");
-    assert_eq!(action["started_micros"], spline["start_micros"]);
-    let route = sats_field(action["outcome"].as_str().unwrap(), "route");
-    let route_start = sats_field(route, "from");
-    let route_endpoint = sats_field(route, "endpoint");
-    assert!((sats_f32(route_start, "x") - start.0).abs() < 0.0001);
-    assert!((sats_f32(route_start, "y") - start.1).abs() < 0.0001);
-    assert!((sats_f32(route_endpoint, "x") - destination.0).abs() < 0.0001);
-    assert!((sats_f32(route_endpoint, "y") - destination.1).abs() < 0.0001);
+    assert!((current.0 - destination.0).abs() < 0.0001);
+    assert!((current.1 - destination.1).abs() < 0.0001);
+    assert_eq!(action["started_micros"], action["observed_micros"]);
+    assert!(route.contains("status = (direct = ())"));
+    assert!(route.contains("coverage = (unknown = ())"));
     let clipping = sats_field(route, "clipping");
     let ray_destination = if clipping == "(none = ())" {
         destination
@@ -1891,13 +1914,31 @@ fn assert_imported_follow_leg(topology: &CompanionTopology, evidence: &Value) ->
         runner["companion_leader_guid"],
         format!("(some = {})", topology.party.leader)
     );
+    assert_eq!(runner["foreground"], "(none = ())");
+    let objective = runner["objective"].as_str().unwrap();
+    assert!(objective.contains("stage = (completed = ())"));
+    assert!(objective.contains("last_verified_progress_micros = (some ="));
+    let objective_identity = sats_field(objective, "identity");
+    let waiting = format!(
+        "(at_micros = {}, chosen = (some = (id = (action = (move = (entity = {})), reason = (follow = ()), objective = {objective_identity}), priority = 100)), outcome = (waiting = ()))",
+        action["observed_micros"].as_str().unwrap(),
+        topology.party.leader
+    );
+    let arrived = format!(
+        "chosen = (some = (id = (action = (hold = ()), reason = (follow = ()), objective = {objective_identity}), priority = 100)), outcome = (arrived = ())"
+    );
+    let history = runner["history"].as_str().unwrap();
+    let waiting_at = history
+        .find(&waiting)
+        .expect("retained Move Action is absent from Runner history");
+    assert!(
+        history[waiting_at + waiting.len()..].contains(&arrived),
+        "Follow arrival did not follow the retained Move Action"
+    );
     assert!(runner["deferred_destinations"]
         .as_str()
         .is_some_and(|destinations| destinations.trim_matches(['[', ']', ' ']).is_empty()));
     assert!(!runner["failures"].as_str().unwrap().contains("noMovement"));
-    assert!(runner["movement_progress"]
-        .as_str()
-        .is_some_and(|progress| progress.contains("arrived = false")));
     assert_eq!(parse_value_u64(body, "guid"), guid);
     ImportedFollowLeg {
         start,
