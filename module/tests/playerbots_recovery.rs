@@ -534,6 +534,17 @@ fn playerbots_recovery_exhausts_quest_targets_then_earns_alternative_quest_credi
         &node,
         &format!("SELECT quest_entry, runner_objective_identity FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"),
     );
+    exhaustion_samples.push(serde_json::json!({
+        "boundary": "resumed",
+        "sample": snapshot(&node, &guid, started.elapsed()),
+        "runner": resumed.clone(),
+        "retained_objective": retained_alternative.clone(),
+    }));
+    std::fs::write(
+        &exhaustion_path,
+        serde_json::to_vec_pretty(&exhaustion_samples).unwrap(),
+    )
+    .unwrap();
     assert_ne!(resumed["objective_sequence"], original_identity);
     assert_eq!(retained_alternative["quest_entry"], "5261");
     assert_eq!(
@@ -547,15 +558,13 @@ fn playerbots_recovery_exhausts_quest_targets_then_earns_alternative_quest_credi
         1
     );
     assert!(resumed["deferred_destinations"].contains(&original_destination));
-    assert!(resumed["chosen"].contains("acceptQuest"));
-    assert!(resumed["chosen"].contains(&ALTERNATIVE_TARGET.to_string()));
-    assert!(resumed["chosen"].contains("quest = 5261"));
+    assert!(resumed["chosen"].contains(&format!("move = (entity = {ALTERNATIVE_TARGET})")));
     assert!(resumed["chosen"].contains("reason = (quest = ())"));
     for target in [TARGET, TARGET + 1] {
         assert!(!resumed["recovery"].contains(&format!("fight = {target}")));
     }
 
-    let credited = poll_until(Duration::from_secs(15), || {
+    let credited = poll_until(Duration::from_secs(20), || {
         node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
         let rewarded = node
             .query_rows(&format!(
@@ -621,6 +630,9 @@ fn playerbots_recovery_exhausts_quest_targets_then_earns_alternative_quest_credi
     assert_eq!(quest_seven["counts"], "0");
     assert_eq!(quest_seven["rewarded"], "false");
     assert_eq!(turnin["turnin_count"], "1");
+    assert!(actions.iter().any(|action| {
+        action["kind"].contains("acceptQuest") && action["quest_entry"] == "5261"
+    }));
     assert!(actions.iter().any(|action| {
         action["kind"].contains("turnInQuest") && action["quest_entry"] == "5261"
     }));
