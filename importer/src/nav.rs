@@ -324,10 +324,6 @@ fn calibration(samples: &[(&Placement, Vec<[f32; 3]>)]) -> Result<Calibration> {
     })
 }
 
-pub(crate) fn calibrate(samples: &[(&Placement, Vec<[f32; 3]>)]) -> Result<Convention> {
-    Ok(calibration(samples)?.convention)
-}
-
 // ---------------------------------------------------------------------------------------------
 // Tile collection
 // ---------------------------------------------------------------------------------------------

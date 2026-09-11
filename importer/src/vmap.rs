@@ -552,9 +552,9 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
         );
         if let Some(route) = &plan.route_evidence {
             println!(
-                "vmap: instance route {} ready={} entry_floor={} exit_floor={} direct_step_hit={} violations={}",
+                "vmap: instance route {} geometry_ready={} entry_floor={} exit_floor={} direct_step_hit={} violations={}",
                 route.name,
-                route.ready(),
+                route.geometry_ready(),
                 format_point(route.samples.first().and_then(|sample| sample.support_floor)),
                 format_point(route.samples.last().and_then(|sample| sample.support_floor)),
                 format_hit(route.direct_step_hit),
@@ -563,6 +563,15 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
                 } else {
                     route.violations.join(" | ")
                 }
+            );
+            println!(
+                "vmap: instance selection keys={:?} selected_key_count={} selected_triangle_refs={} packed_key_count={} packed_row_count={} packed_bytes={}",
+                route.selected_keys,
+                route.selected_keys.len(),
+                route.selected_tri_refs,
+                plan.keys.len(),
+                plan.shard_rows,
+                plan.total_bytes,
             );
             for sample in &route.samples {
                 println!(
@@ -593,9 +602,9 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
                 .route_evidence
                 .as_ref()
                 .context("Instance Vmap Slice has no route readiness evidence")?;
-            if !route.ready() {
+            if !route.geometry_ready() {
                 bail!(
-                    "instance route {} is not ready for staging: {}",
+                    "instance route {} has static geometry findings and is not ready for staging: {}",
                     route.name,
                     route.violations.join(" | ")
                 );
@@ -632,13 +641,15 @@ enum VmapOwnership {
 
 struct InstanceRouteEvidence {
     name: String,
+    selected_keys: Vec<u64>,
+    selected_tri_refs: usize,
     samples: Vec<InstanceRouteSample>,
     direct_step_hit: Option<[f32; 3]>,
     violations: Vec<String>,
 }
 
 impl InstanceRouteEvidence {
-    fn ready(&self) -> bool {
+    fn geometry_ready(&self) -> bool {
         self.violations.is_empty()
     }
 }
@@ -910,7 +921,12 @@ fn build_instance_plan(
     if let Some(error) = spool_error {
         return Err(error).context("spooling bounded instance WMO");
     }
-    let evidence = instance_route_evidence(slice, &route_tris);
+    let evidence = instance_route_evidence(
+        slice,
+        selected_cells.into_iter().collect(),
+        selected_tri_refs,
+        &route_tris,
+    );
     let world_tris = mesh.len();
     finish_plan(
         slice.map_id,
@@ -926,6 +942,8 @@ fn build_instance_plan(
 
 fn instance_route_evidence(
     slice: &crate::world_import_scope::InstanceVmapSlice,
+    selected_keys: Vec<u64>,
+    selected_tri_refs: usize,
     tris: &HashMap<(u16, u16), Vec<VmapTri>>,
 ) -> InstanceRouteEvidence {
     let (dx, dy) = (
@@ -933,7 +951,7 @@ fn instance_route_evidence(
         slice.exit[1] - slice.entry[1],
     );
     let horizontal_distance = (dx * dx + dy * dy).sqrt();
-    let steps = (horizontal_distance / lyracore_shared::nav::OBS_STEP)
+    let steps = (horizontal_distance / INSTANCE_ROUTE_SAMPLE_YD)
         .ceil()
         .max(1.0) as usize;
     let mut samples = Vec::with_capacity(steps + 1);
@@ -991,6 +1009,8 @@ fn instance_route_evidence(
     }
     InstanceRouteEvidence {
         name: slice.name.clone(),
+        selected_keys,
+        selected_tri_refs,
         samples,
         direct_step_hit,
         violations,
@@ -998,6 +1018,9 @@ fn instance_route_evidence(
 }
 
 const ROUTE_FLOOR_EPSILON_YD: f32 = 0.01;
+/// Static support sampling interval. It finds narrow holes without claiming to reproduce a
+/// Character's committed movement leg, which has caller-specific distance and height behavior.
+const INSTANCE_ROUTE_SAMPLE_YD: f32 = 0.5;
 
 fn instance_route_sample(
     index: usize,
@@ -1768,14 +1791,22 @@ mod tests {
         let cell = lyracore_shared::terrain::cell_index(0.0).unwrap();
         instance_route_evidence(
             &route_slice(entry_z, exit_z),
+            vec![lyracore_shared::terrain::cell_key(36, cell, cell)],
+            tris.len(),
             &HashMap::from([((cell, cell), tris)]),
         )
     }
 
     #[test]
-    fn a_clear_ramp_retains_supported_route_steps() {
+    fn a_clear_ramp_retains_supported_route_samples() {
         let evidence = route_evidence(ramp(-1.0, 6.0, 10.0, 12.8), 10.4, 12.4);
-        assert!(evidence.ready(), "violations: {:?}", evidence.violations);
+        assert!(
+            evidence.geometry_ready(),
+            "violations: {:?}",
+            evidence.violations
+        );
+        assert_eq!(evidence.selected_keys.len(), 1);
+        assert_eq!(evidence.selected_tri_refs, 2);
         assert_eq!(evidence.samples.len(), 11);
         assert!(evidence
             .samples
@@ -1790,7 +1821,7 @@ mod tests {
         let mut tris = ramp(-1.0, 0.75, 10.0, 10.0);
         tris.extend(ramp(4.25, 6.0, 10.0, 10.0));
         let evidence = route_evidence(tris, 10.0, 10.0);
-        assert!(!evidence.ready());
+        assert!(!evidence.geometry_ready());
         assert!(evidence
             .violations
             .iter()
@@ -1820,7 +1851,7 @@ mod tests {
             ),
         ] {
             let evidence = route_evidence(tris, entry_z, exit_z);
-            assert!(!evidence.ready());
+            assert!(!evidence.geometry_ready());
             assert!(evidence
                 .violations
                 .iter()
@@ -1836,7 +1867,7 @@ mod tests {
             wmo_tri([[2.5, -1.0, 10.0], [2.5, 1.0, 10.0], [2.5, 1.0, 20.0]]),
         ]);
         let evidence = route_evidence(tris, 10.0, 10.0);
-        assert!(!evidence.ready());
+        assert!(!evidence.geometry_ready());
         assert!(evidence.direct_step_hit.is_some());
         assert!(evidence
             .violations
@@ -1877,6 +1908,7 @@ mod tests {
             },
         ];
         let cell = lyracore_shared::terrain::cell_index(0.0).unwrap();
+        let selected_tri_refs = tris.len();
         let by_cell = HashMap::from([((cell, cell), tris)]);
         let slice = crate::world_import_scope::InstanceVmapSlice {
             name: "worked-route".to_owned(),
@@ -1886,7 +1918,12 @@ mod tests {
             exit_radius: 0.0,
             collar_cells: 1,
         };
-        let evidence = instance_route_evidence(&slice, &by_cell);
+        let evidence = instance_route_evidence(
+            &slice,
+            vec![lyracore_shared::terrain::cell_key(36, cell, cell)],
+            selected_tri_refs,
+            &by_cell,
+        );
         assert_eq!(evidence.samples[0].support_floor, Some(10.0));
         assert_eq!(evidence.samples.last().unwrap().support_floor, Some(12.0));
         let hit = evidence.direct_step_hit.expect("direct route crosses wall");
