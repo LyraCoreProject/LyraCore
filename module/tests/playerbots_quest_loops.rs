@@ -1205,7 +1205,20 @@ fn playerbots_ninth_inaccessible_corpse_reports_an_inconclusive_read() {
         limited["failures"].contains("questReadLimit"),
         "{limited:?}"
     );
-    assert!(limited["chosen"].contains("hold"), "{limited:?}");
+    assert!(
+        limited["chosen"].contains("move = (home = ())"),
+        "{limited:?}"
+    );
+    assert!(limited["chosen"].contains("reason = (returnHome = ())"));
+    let attempted = actions(&node, &guid);
+    for corpse in &inaccessible {
+        assert!(attempted.iter().all(|action| {
+            action["target_guid"] != corpse["guid"]
+                || !["attack", "cast", "openLoot", "takeLoot"]
+                    .iter()
+                    .any(|kind| action["kind"].contains(kind))
+        }));
+    }
     assert_eq!(first_quest_count(&quest(&node, &guid, 33).unwrap()), 0);
     assert!(!rewarded(&node, &guid, 33));
     assert!(loot_receipt(&node, &guid).is_none());
