@@ -182,6 +182,15 @@ fn health(node: &Standalone, guid: &str) -> u32 {
         .unwrap()
 }
 
+fn provisioning_applied_count(node: &Standalone, guid: &str) -> usize {
+    node.query_rows(&format!(
+        "SELECT history FROM pkg_playerbots_provisioning WHERE character_guid = {guid}"
+    ))
+    .first()
+    .map(|row| row["history"].matches("(applied =").count())
+    .unwrap_or_default()
+}
+
 fn spline(node: &Standalone, guid: &str) -> Option<BTreeMap<String, String>> {
     node.query_rows(&format!(
         "SELECT start_micros, dur_ms, sx, sy, dx, dy, spline_id FROM game_creature_spline WHERE guid = {guid}"
@@ -232,11 +241,13 @@ fn pass_once(node: &Standalone, guid: &str) {
 }
 
 /// The largest supported Provisioning Profile has at most 30 actions. Two extra passes cover the
-/// cycle boundary and the Follow selection. A later Follow would exceed the profile's bound.
+/// cycle boundary and the Follow selection. A later Follow would exceed the profile's bound. The
+/// caller captures the applied-count baseline while the selected Runner is parked, before the heal.
 fn resume_follow_after_provisioning(
     node: &Standalone,
     guid: &str,
     objective_sequence: &str,
+    starting_applied_count: usize,
     case: &str,
 ) -> BTreeMap<String, String> {
     const PASS_LIMIT: usize = 32;
@@ -246,13 +257,6 @@ fn resume_follow_after_provisioning(
         "SELECT role FROM pkg_playerbots_bot WHERE character_guid = {guid}"
     ))[0]["role"]
         .clone();
-    let starting_applied_count = node
-        .query_rows(&format!(
-            "SELECT history FROM pkg_playerbots_provisioning WHERE character_guid = {guid}"
-        ))
-        .first()
-        .map(|row| row["history"].matches("(applied =").count())
-        .unwrap_or_default();
     node.assert_call("playerbots_fixture_provision_due", &[guid]);
     let mut saw_provisioning = false;
     for pass in 1..=PASS_LIMIT {
@@ -858,6 +862,7 @@ fn playerbots_explicit_cancellation_releases_the_heal_and_resumes_follow() {
     node.assert_sql("UPDATE game_spell SET cast_time_ms = 60000 WHERE spell_id = 5090100");
     node.assert_call("playerbots_fixture_companion_health", &[ally, "25"]);
     node.assert_call("playerbots_fixture_runner_select_cohort", &[priest]);
+    let starting_applied_count = provisioning_applied_count(&node, priest);
     pass_once(&node, priest);
     let pending = node.query_rows(&format!(
         "SELECT scheduled_id FROM game_pending_cast WHERE caster_guid = {priest}"
@@ -865,6 +870,7 @@ fn playerbots_explicit_cancellation_releases_the_heal_and_resumes_follow() {
     assert_eq!(pending.len(), 1);
     let scheduled_id = pending[0]["scheduled_id"].clone();
     let objective = runner(&node, priest)["objective_sequence"].clone();
+    evidence(&node, "cancel-pending-before-release");
     node.assert_call("playerbots_fixture_cancel", &[priest, "false"]);
     evidence(&node, "cancelled-before-provisioning");
     assert!(node
@@ -880,7 +886,13 @@ fn playerbots_explicit_cancellation_releases_the_heal_and_resumes_follow() {
     assert_eq!(cancelled[0]["outcome"], "(cancelled = ())");
     assert!(runner(&node, priest)["last_outcome"].contains("cancelled"));
     node.assert_call("playerbots_fixture_companion_health", &[ally, "100"]);
-    let resumed = resume_follow_after_provisioning(&node, priest, &objective, "cancel-resume");
+    let resumed = resume_follow_after_provisioning(
+        &node,
+        priest,
+        &objective,
+        starting_applied_count,
+        "cancel-resume",
+    );
     assert!(resumed["companion_heal_target_guid"].contains("none"));
     evidence(&node, "cancel-resume");
 }
@@ -893,6 +905,7 @@ fn playerbots_completion_time_los_refusal_releases_the_heal_and_resumes_follow()
     node.assert_call("debug_set_nav_enabled", &["true"]);
     node.assert_call("playerbots_fixture_companion_health", &[ally, "25"]);
     node.assert_call("playerbots_fixture_runner_select_cohort", &[priest]);
+    let starting_applied_count = provisioning_applied_count(&node, priest);
     pass_once(&node, priest);
     assert!(poll_until(POLL_TIMEOUT, || !node
         .query_rows(&format!(
@@ -900,6 +913,7 @@ fn playerbots_completion_time_los_refusal_releases_the_heal_and_resumes_follow()
         ))
         .is_empty()));
     let objective = runner(&node, priest)["objective_sequence"].clone();
+    evidence(&node, "los-pending-before-release");
     node.assert_call("playerbots_fixture_companion_wall", &[priest, ally]);
     assert!(poll_until(POLL_TIMEOUT, || node
         .query_rows(&format!(
@@ -910,7 +924,13 @@ fn playerbots_completion_time_los_refusal_releases_the_heal_and_resumes_follow()
     assert!(runner(&node, priest)["last_outcome"].contains("refused"));
     assert!(runner(&node, priest)["companion_heal_target_guid"].contains("none"));
     node.assert_call("playerbots_fixture_companion_health", &[ally, "100"]);
-    resume_follow_after_provisioning(&node, priest, &objective, "los-refusal-resume");
+    resume_follow_after_provisioning(
+        &node,
+        priest,
+        &objective,
+        starting_applied_count,
+        "los-refusal-resume",
+    );
     evidence(&node, "los-refusal-resume");
 }
 
