@@ -182,7 +182,7 @@ fn rows_by(
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn imported_stage_skips_a_blocked_scatter_point() {
+fn playerbots_imported_stage_skips_a_blocked_scatter_point() {
     let node = prepare(NavigationFixture::Candidate19Blocked);
     let staged = stage(&node);
     assert!(
@@ -268,7 +268,7 @@ fn imported_stage_skips_a_blocked_scatter_point() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn imported_stage_refuses_an_exhausted_sparse_search_atomically() {
+fn playerbots_imported_stage_refuses_an_exhausted_sparse_search_atomically() {
     let node = prepare(NavigationFixture::FirstFiveOpen);
     let refused = stage(&node);
     assert!(!refused.status.success());
