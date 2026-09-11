@@ -1854,10 +1854,9 @@ fn playerbots_areatrigger_move_records_a_verified_blocked_route() {
 fn playerbots_action_resurrection_cancels_between_release_and_spirit_resurrection() {
     let (node, bots) = fixture("playerbots-action-resurrection-cancellation", 1);
     let bot = &bots[0];
-    node.assert_call("playerbots_select_controller", &[bot, "{\"cohort\":[]}"]);
+    node.assert_call("playerbots_fixture_runner_select_cohort", &[bot]);
     node.assert_call("playerbots_fixture_runner_damage", &[bot, "0", "1000000"]);
-    node.assert_call("playerbots_fixture_runner_due", &[]);
-    node.assert_call("playerbots_fixture_runner_pass", &[]);
+    node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
     let released = snapshot(&node);
     save(&node, "released", &released);
     assert_eq!(released["characters"][0]["dead"], "true", "{released}");
