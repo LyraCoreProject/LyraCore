@@ -461,25 +461,18 @@ fn exact_control_auras(topology: &CompanionTopology, target: u64) -> Vec<BTreeMa
 
 fn target_receipts(topology: &CompanionTopology, target: u64) -> Value {
     let database = topology.current_world(topology.party.warrior);
+    let receipts = |table: &str| {
+        let mut rows = topology.query(
+            &database,
+            &format!("SELECT * FROM {table} WHERE target_guid = {target}"),
+        );
+        rows.sort();
+        rows
+    };
     json!({
-        "physical": topology.query(
-            &database,
-            &format!(
-                "SELECT * FROM pkg_playerbots_companion_combat_receipt WHERE target_guid = {target}"
-            ),
-        ),
-        "casts": topology.query(
-            &database,
-            &format!(
-                "SELECT * FROM pkg_playerbots_companion_cast_receipt WHERE target_guid = {target}"
-            ),
-        ),
-        "impacts": topology.query(
-            &database,
-            &format!(
-                "SELECT * FROM pkg_playerbots_companion_impact_receipt WHERE target_guid = {target}"
-            ),
-        ),
+        "physical": receipts("pkg_playerbots_companion_combat_receipt"),
+        "casts": receipts("pkg_playerbots_companion_cast_receipt"),
+        "impacts": receipts("pkg_playerbots_companion_impact_receipt"),
     })
 }
 
@@ -515,7 +508,8 @@ fn projectile_impact_observation_caught_up(topology: &CompanionTopology, target:
         &database,
         &format!(
             "SELECT source_event_id, caster_guid, target_guid, spell_id, damage FROM \
-             pkg_playerbots_companion_impact_receipt WHERE target_guid = {target}"
+             pkg_playerbots_companion_impact_receipt WHERE target_guid = {target} \
+             AND ({casters})"
         ),
     );
     events.iter().all(|event| {
