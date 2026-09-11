@@ -1515,6 +1515,12 @@ fn playerbots_acceptance_restart_transfer_and_lost_ack_apply_once() {
         intent_a_id, intent_b_id,
         "the second client command reused intent A"
     );
+    let unchanged_reply = format!("STC\tv1|playerbots.order.result|0|1/1|{intent_b_id}|Unchanged");
+    assert_eq!(
+        sent_b["result"]["reply"]["text"].as_str(),
+        Some(unchanged_reply.as_str()),
+        "intent B did not report Unchanged: {sent_b}"
+    );
     let result = topology.save(
         "composition-distinct-unchanged-command",
         json!({
@@ -1523,15 +1529,6 @@ fn playerbots_acceptance_restart_transfer_and_lost_ack_apply_once() {
             "intent_a": intent_a_id,
             "intent_b": intent_b,
         }),
-    );
-    let unchanged_payload = format!("{intent_b_id}|Unchanged");
-    assert!(
-        result["source"]["addon_results"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|row| row["payload"].as_str() == Some(unchanged_payload.as_str())),
-        "intent B did not report Unchanged: {result}"
     );
     assert_distinct_unchanged_command(
         &topology,

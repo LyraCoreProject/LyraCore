@@ -321,6 +321,7 @@ fn evidence(node: &Standalone, case: &str) {
 fn playerbots_priest_follows_a_moving_human_leader_without_pulling() {
     let (node, bots) = fixture("playerbots-companion-follow");
     let (priest, leader) = (&bots[0], &bots[1]);
+    select(&node, priest, "frozen");
     select(&node, priest, "cohort");
     assert!(poll_until(POLL_TIMEOUT, || runner(&node, priest)["chosen"]
         .contains("follow")));

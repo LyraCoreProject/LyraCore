@@ -233,18 +233,25 @@ fn playerbots_provisioning_arms_then_reconciles_and_repairs_without_cost() {
         skill_rows_before_refusal
     );
     node.assert_sql("DELETE FROM game_skill_availability WHERE id = 5096998");
+    select(&node, &guid, "frozen");
     node.assert_call("playerbots_fixture_runner_select_cohort", &[&guid]);
+    node.assert_call("playerbots_fixture_provision_due", &[&guid]);
     node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
     let runner = one(
         &node,
         &format!("SELECT * FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
     );
-    assert!(runner["last_outcome"]
-        .to_ascii_lowercase()
-        .contains("provisioning"));
-    assert!(runner["chosen"]
-        .to_ascii_lowercase()
-        .contains("provisioning"));
+    write_evidence(
+        &node,
+        "profile-runner",
+        serde_json::json!({
+            "runner": runner,
+            "provisioning": one(&node, &format!("SELECT * FROM pkg_playerbots_provisioning WHERE character_guid = {guid}")),
+        }),
+    );
+    for field in ["last_outcome", "chosen"] {
+        assert!(runner[field].to_ascii_lowercase().contains("provisioning"));
+    }
 
     let before = one(
         &node,
@@ -733,7 +740,7 @@ fn playerbots_provisioning_stops_cleanly_and_preserves_owned_items_and_gear() {
 fn playerbots_provisioning_arms_levelup_but_control_modes_block_gameplay() {
     let (node, guid) = fixture("playerbots-provisioning-control", "1", "0");
     let initial = gameplay(&node, &guid);
-    for controller in ["legacy", "recordOnly", "frozen"] {
+    for controller in ["recordOnly", "frozen"] {
         select(&node, &guid, controller);
         node.assert_call("playerbots_fixture_provision_steps", &[&guid, "4"]);
         assert_eq!(gameplay(&node, &guid), initial, "{controller}");

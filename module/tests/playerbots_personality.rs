@@ -172,6 +172,10 @@ fn a_personality_script_decides_for_a_bot_and_a_broken_one_leaves_it_on_its_row(
         &["1", SPAWN_AT.0, SPAWN_AT.1, SPAWN_AT.2, ROLE_DPS],
     );
     let bot = bot_guid(&standalone);
+    standalone.assert_call(
+        "playerbots_controller_transition_fixture_stage_legacy",
+        &[&bot.to_string(), "false"],
+    );
 
     // --- The row alone: a bot at full health has no reason to break off.
     assert_does_not_flee(&standalone, bot, "before any script exists");

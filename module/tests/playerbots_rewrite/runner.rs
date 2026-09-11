@@ -44,6 +44,7 @@ fn playerbots_runner_returns_home_with_observed_arrival_and_one_objective() {
     let (node, bots) = fixture("playerbots-runner-home", "1");
     let bot = &bots[0];
     node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
+    select(&node, bot, "frozen");
     select(&node, bot, "cohort");
     assert!(poll_until(POLL_TIMEOUT, || runner(&node, bot)
         ["foreground"]
@@ -131,6 +132,7 @@ fn playerbots_runner_retains_a_cast_across_real_pushback_and_resumes_home() {
     let bot = &bots[0];
     node.assert_sql("DELETE FROM game_event_reaper_schedule");
     node.assert_call("playerbots_fixture_runner_stage", &[bot, "true"]);
+    select(&node, bot, "frozen");
     select(&node, bot, "cohort");
     assert!(poll_until(POLL_TIMEOUT, || !node
         .query_rows("SELECT * FROM game_pending_cast")
@@ -306,6 +308,7 @@ fn playerbots_runner_survival_cancels_cast_before_movement_and_keeps_the_objecti
     let (node, bots) = fixture("playerbots-runner-preempt", "1");
     let bot = &bots[0];
     node.assert_call("playerbots_fixture_runner_stage", &[bot, "true"]);
+    select(&node, bot, "frozen");
     select(&node, bot, "cohort");
     assert!(poll_until(POLL_TIMEOUT, || !node
         .query_rows("SELECT * FROM game_pending_cast")
@@ -344,6 +347,7 @@ fn playerbots_runner_defense_preserves_home_and_accepted_attack_is_not_progress(
     node.assert_call("playerbots_fixture_blocked_quest", &[bot]);
     node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
     node.assert_sql("DELETE FROM game_melee_schedule");
+    select(&node, bot, "frozen");
     select(&node, bot, "cohort");
     let waiting = poll_until(POLL_TIMEOUT, || {
         runner(&node, bot)["chosen"].contains("returnHome")
@@ -385,12 +389,199 @@ fn playerbots_runner_defense_preserves_home_and_accepted_attack_is_not_progress(
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_runner_resurrection_clears_defense_and_resumes_retained_home() {
+    let (node, bots) = fixture("playerbots-runner-death-defense", "1");
+    let bot = &bots[0];
+    node.assert_call("playerbots_fixture_blocked_quest", &[bot]);
+    node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
+    node.assert_sql("DELETE FROM game_melee_schedule");
+    select(&node, bot, "frozen");
+    node.assert_call("playerbots_fixture_runner_select_cohort", &[bot]);
+    let parked_observed_micros = runner(&node, bot)["observed_micros"]
+        .parse::<i64>()
+        .unwrap();
+    let mut settled_provisioning = None;
+    for _ in 0..64 {
+        node.assert_call("playerbots_fixture_provision_steps", &[bot, "1"]);
+        let provisioning = node.query_rows(&format!(
+            "SELECT * FROM pkg_playerbots_provisioning WHERE character_guid = {bot}"
+        ));
+        assert_eq!(provisioning.len(), 1);
+        let row = &provisioning[0];
+        if row["action_cursor"] == "0"
+            && row["next_repair_micros"].parse::<i64>().unwrap() > parked_observed_micros
+        {
+            settled_provisioning = Some(row.clone());
+            break;
+        }
+    }
+    let settled_provisioning = settled_provisioning.expect("provisioning cycle did not finish");
+
+    let target = ((0xF130u64 << 48) | (5_090_101u64 << 24) | 1).to_string();
+    node.assert_call(
+        "playerbots_fixture_runner_damage_and_park",
+        &[bot, &target, "1"],
+    );
+    node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
+    let defended = runner(&node, bot);
+    assert!(defended["chosen"].contains("defense"), "{defended:?}");
+    assert!(defended["chosen"].contains("attack"), "{defended:?}");
+    assert!(defended["defense_target"].contains(&target), "{defended:?}");
+    assert!(
+        defended["last_target_health"].contains(&target),
+        "{defended:?}"
+    );
+    let retained_objective = defended["objective"].clone();
+    let retained_objective_sequence = defended["objective_sequence"].clone();
+    let retained_quest_progress = defended["quest_progress"].clone();
+    assert!(retained_objective.contains("returnHome"), "{defended:?}");
+    assert!(retained_quest_progress.contains("credit = 0"));
+    let live_target = node.query_rows(&format!(
+        "SELECT health, dead FROM game_world_entity WHERE guid = {target}"
+    ));
+    assert_eq!(live_target.len(), 1);
+    assert_eq!(live_target[0]["dead"], "false");
+    assert!(
+        defended["last_target_health"].contains(&format!("health = {}", live_target[0]["health"])),
+        "{defended:?}"
+    );
+    let living_before = node.query_rows(&format!(
+        "SELECT dead, player_flags FROM game_world_entity WHERE guid = {bot}"
+    ));
+    assert_eq!(living_before[0]["dead"], "false");
+
+    node.assert_call(
+        "playerbots_fixture_runner_damage_and_park",
+        &[bot, &target, "1000000"],
+    );
+    let dead = node.query_rows(&format!(
+        "SELECT dead, player_flags FROM game_world_entity WHERE guid = {bot}"
+    ));
+    assert_eq!(dead[0]["dead"], "true");
+    assert_eq!(dead[0]["player_flags"], living_before[0]["player_flags"]);
+    assert_eq!(
+        runner(&node, bot)["defense_target"],
+        defended["defense_target"]
+    );
+    assert_eq!(
+        runner(&node, bot)["last_target_health"],
+        defended["last_target_health"]
+    );
+
+    node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
+    let released = runner(&node, bot);
+    let ghost = node.query_rows(&format!(
+        "SELECT dead, player_flags FROM game_world_entity WHERE guid = {bot}"
+    ));
+    assert_eq!(ghost[0]["dead"], "true");
+    assert_ne!(ghost[0]["player_flags"], "0");
+    assert_eq!(released["objective"], retained_objective);
+    assert_eq!(released["objective_sequence"], retained_objective_sequence);
+    assert_eq!(released["quest_progress"], retained_quest_progress);
+    assert!(
+        released["defense_target"].contains("none"),
+        "successful Release retained Defense target: {released:?}"
+    );
+    assert!(
+        released["last_target_health"].contains("none"),
+        "{released:?}"
+    );
+    assert_eq!(
+        node.query_rows(&format!(
+            "SELECT health, dead FROM game_world_entity WHERE guid = {target}"
+        )),
+        live_target
+    );
+    node.assert_call(
+        "playerbots_fixture_runner_damage_and_park",
+        &[bot, &target, "1"],
+    );
+    let released_after_hit = runner(&node, bot);
+    assert_eq!(released_after_hit["objective"], retained_objective);
+    assert_eq!(
+        released_after_hit["quest_progress"],
+        retained_quest_progress
+    );
+    assert_eq!(
+        released_after_hit["defense_target"],
+        released["defense_target"]
+    );
+    assert_eq!(
+        released_after_hit["last_target_health"],
+        released["last_target_health"]
+    );
+
+    node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
+    let resurrected = runner(&node, bot);
+    let living = node.query_rows(&format!(
+        "SELECT dead, player_flags FROM game_world_entity WHERE guid = {bot}"
+    ));
+    assert_eq!(living[0]["dead"], "false");
+    assert_eq!(living[0]["player_flags"], living_before[0]["player_flags"]);
+    assert_eq!(resurrected["objective"], retained_objective);
+    assert_eq!(
+        resurrected["objective_sequence"],
+        retained_objective_sequence
+    );
+    assert_eq!(resurrected["quest_progress"], retained_quest_progress);
+    assert!(
+        resurrected["defense_target"].contains("none"),
+        "{resurrected:?}"
+    );
+    assert!(
+        resurrected["last_target_health"].contains("none"),
+        "{resurrected:?}"
+    );
+
+    node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
+    let first_return = runner(&node, bot);
+    assert!(
+        first_return["chosen"].contains("returnHome"),
+        "{first_return:?}"
+    );
+    let mut resumed = first_return;
+    if !resumed["chosen"].contains("move") {
+        assert!(resumed["chosen"].contains("hold"), "{resumed:?}");
+        assert!(resumed["last_outcome"].contains("waiting"), "{resumed:?}");
+        let observed_micros = resumed["observed_micros"].parse::<i64>().unwrap();
+        let next_eligible_micros = resumed["next_eligible_micros"].parse::<i64>().unwrap();
+        assert!(next_eligible_micros > observed_micros, "{resumed:?}");
+        let wait =
+            Duration::from_micros(u64::try_from(next_eligible_micros - observed_micros).unwrap());
+        assert!(wait < POLL_TIMEOUT, "{resumed:?}");
+        std::thread::sleep(wait);
+        node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
+        resumed = runner(&node, bot);
+    }
+    assert!(resumed["chosen"].contains("returnHome"), "{resumed:?}");
+    assert!(resumed["chosen"].contains("move"), "{resumed:?}");
+    assert_eq!(resumed["objective_sequence"], retained_objective_sequence);
+    assert_eq!(resumed["quest_progress"], retained_quest_progress);
+    assert!(resumed["defense_target"].contains("none"), "{resumed:?}");
+    assert_eq!(
+        node.query_rows(&format!(
+            "SELECT health, dead FROM game_world_entity WHERE guid = {target}"
+        )),
+        live_target
+    );
+    assert_eq!(
+        node.query_rows(&format!(
+            "SELECT * FROM pkg_playerbots_provisioning WHERE character_guid = {bot}"
+        )),
+        vec![settled_provisioning]
+    );
+    outcomes(&node);
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_runner_defers_a_blocked_destination_with_bounded_failure_memory() {
     let (node, bots) = fixture("playerbots-runner-deferred", "1");
     let bot = &bots[0];
     node.assert_call("playerbots_fixture_blocked_quest", &[bot]);
     node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
     node.assert_call("gw_abandon_quest", &[&support::actor(bot), "50909"]);
+    select(&node, bot, "frozen");
     select(&node, bot, "cohort");
     let deferred = poll_until(Duration::from_secs(38), || {
         !runner(&node, bot)["deferred_destinations"]
@@ -448,6 +639,7 @@ fn playerbots_runner_never_selects_an_unlearned_rotation_spell() {
     node.assert_sql(&format!(
         "DELETE FROM game_player_spell WHERE character_guid = {bot} AND spell_id = 5090100"
     ));
+    select(&node, bot, "frozen");
     select(&node, bot, "cohort");
     assert!(poll_until(POLL_TIMEOUT, || runner(&node, bot)["objective"]
         .contains("completed")));
@@ -756,6 +948,7 @@ fn playerbots_runner_replaces_a_changed_destination_with_a_new_candidate_identit
     let (node, bots) = fixture("playerbots-runner-destination", "1");
     let bot = &bots[0];
     node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
+    select(&node, bot, "frozen");
     select(&node, bot, "cohort");
     assert!(poll_until(POLL_TIMEOUT, || runner(&node, bot)
         ["foreground"]
@@ -783,6 +976,7 @@ fn playerbots_runner_relinquishes_current_account_ownership_without_cancelling_h
     let bot = &bots[0];
     node.assert_call("playerbots_fixture_runner_stage", &[bot, "true"]);
     node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
+    select(&node, bot, "frozen");
     select(&node, bot, "cohort");
     assert!(poll_until(POLL_TIMEOUT, || runner(&node, bot)
         ["foreground"]
@@ -812,7 +1006,7 @@ fn playerbots_runner_relinquishes_current_account_ownership_without_cancelling_h
     node.assert_call("gw_cast_spell", &[&actor, "5090100", bot]);
     let human_cast =
         node.query_rows("SELECT scheduled_id FROM game_pending_cast")[0]["scheduled_id"].clone();
-    for mode in ["cohort", "legacy", "frozen"] {
+    for mode in ["cohort", "frozen"] {
         select(&node, bot, mode);
         node.assert_call("playerbots_fixture_runner_due", &[]);
         node.assert_call("playerbots_fixture_runner_pass", &[]);
@@ -848,6 +1042,7 @@ fn playerbots_runner_observes_tactical_movement_without_advancing_the_home_clock
         "UPDATE game_creature_spawn SET x = 1000 WHERE guid = {target}"
     ));
     node.assert_sql("DELETE FROM game_melee_schedule");
+    select(&node, bot, "frozen");
     select(&node, bot, "cohort");
     node.assert_call("playerbots_fixture_runner_damage", &[bot, &target, "1"]);
     assert!(poll_until(POLL_TIMEOUT, || runner(&node, bot)["chosen"]
