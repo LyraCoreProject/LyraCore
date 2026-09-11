@@ -1055,10 +1055,47 @@ fn incomplete_quest_target_read(label: &str, stage: impl Fn(&Standalone, &str)) 
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn playerbots_recovery_stops_an_armed_quest_attack_when_the_target_read_is_incomplete() {
-    incomplete_quest_target_read("playerbots-recovery-read-limit", |node, guid| {
-        node.assert_call("playerbots_quest_loop_fixture_stage_search_limit", &[guid]);
-    });
+fn playerbots_recovery_keeps_an_armed_known_quest_target_when_other_reads_are_incomplete() {
+    let mut node = Standalone::start("playerbots-recovery-read-limit");
+    node.publish_module();
+    record_inputs(&node);
+    let guid = prepare(&node);
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    let armed = node.query_rows(&format!(
+        "SELECT * FROM game_melee_attack WHERE attacker_guid = {guid}"
+    ));
+    let before = snapshot(&node, &guid, Duration::ZERO);
+    assert_eq!(armed.len(), 1, "quest attack was not armed");
+
+    node.assert_call("playerbots_quest_loop_fixture_stage_search_limit", &[&guid]);
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    let after = snapshot(&node, &guid, Duration::ZERO);
+    let attacks = node.query_rows(&format!(
+        "SELECT * FROM game_melee_attack WHERE attacker_guid = {guid}"
+    ));
+    std::fs::write(
+        support::log_dir().join(format!("{}-known-target-read.json", node.shard_name())),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "before": before,
+            "after": after,
+            "armed": armed,
+            "attacks": attacks,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let chosen = after["runner"]["chosen"].as_str().unwrap();
+    assert!(chosen.contains(&format!("attack = {TARGET}")), "{after}");
+    assert!(chosen.contains("reason = (quest = ())"), "{after}");
+    assert_eq!(attacks, armed);
+    assert_eq!(before["quest"], after["quest"]);
+    assert_eq!(before["target"]["health"], after["target"]["health"]);
+    assert_eq!(before["runner"]["failures"], after["runner"]["failures"]);
+    assert_eq!(
+        before["runner"]["objective_sequence"],
+        after["runner"]["objective_sequence"]
+    );
 }
 
 #[test]

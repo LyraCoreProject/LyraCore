@@ -955,15 +955,24 @@ fn playerbots_raw_entity_read_limit_keeps_travelling_to_retained_quest_work() {
                 "SELECT quest_entry, destination, target FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"
             ),
         );
-        let chosen = query_one(
+        let character = query_one(
             node,
-            &format!("SELECT objective_sequence, chosen FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
+            &format!("SELECT x, y, z FROM game_world_entity WHERE guid = {guid}"),
         );
+        let target = query_one(
+            node,
+            &format!("SELECT x, y, z FROM game_world_entity WHERE guid = {CREATURE_6}"),
+        );
+        let distance_sq = ["x", "y", "z"].into_iter().fold(0.0, |sum, field| {
+            let difference = character[field].parse::<f32>().unwrap()
+                - target[field].parse::<f32>().unwrap();
+            sum + difference * difference
+        });
         objective["quest_entry"] == "7"
             && objective["destination"].contains(&format!("guid = {CREATURE_6}"))
             && objective["target"].contains("target_entry = 6")
             && objective["target"].contains(&format!("guid = {CREATURE_6}"))
-            && chosen["chosen"].contains(&format!("move = (entity = {CREATURE_6})"))
+            && distance_sq > 100.0 * 100.0
             && first_quest_count(&quest(node, &guid, 7).unwrap()) == 0
     });
     let retained = query_one(
@@ -1014,11 +1023,11 @@ fn playerbots_raw_entity_read_limit_keeps_travelling_to_retained_quest_work() {
         attacks_before
     );
     assert_eq!(first_quest_count(&quest(&node, &guid, 7).unwrap()), 0);
-    drive_until(&node, &guid, LOOP_TIMEOUT, |node| {
+    let working = drive_until(&node, &guid, LOOP_TIMEOUT, |node| {
         let working = query_one(
             node,
             &format!(
-                "SELECT objective_sequence, chosen FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+                "SELECT failures, objective_sequence, chosen FROM pkg_playerbots_runner WHERE character_guid = {guid}"
             ),
         );
         working["objective_sequence"] == limited["objective_sequence"]
@@ -1026,6 +1035,24 @@ fn playerbots_raw_entity_read_limit_keeps_travelling_to_retained_quest_work() {
             && working["chosen"].contains("reason = (quest = ())")
             && working["chosen"].contains(&format!("objective = {}", limited["objective_sequence"]))
     });
+    assert!(
+        working >= 1_250.0,
+        "retained destination travel did not advance: {working}"
+    );
+    let working_runner = query_one(
+        &node,
+        &format!(
+            "SELECT character_guid, failures FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+        ),
+    );
+    let read_limits = quest_read_limit_micros(&working_runner["failures"]);
+    assert!(!read_limits.is_empty(), "{working_runner:?}");
+    assert!(
+        read_limits
+            .windows(2)
+            .all(|pair| pair[1].saturating_sub(pair[0]) >= 30_000_000),
+        "{working_runner:?}"
+    );
     assert_eq!(
         query_one(
             &node,
@@ -1039,20 +1066,6 @@ fn playerbots_raw_entity_read_limit_keeps_travelling_to_retained_quest_work() {
     assert!(
         resumed >= 1_350.0,
         "retained destination was not reached: {resumed}"
-    );
-    let final_runner = query_one(
-        &node,
-        &format!(
-            "SELECT failures, objective_sequence FROM pkg_playerbots_runner WHERE character_guid = {guid}"
-        ),
-    );
-    let read_limits = quest_read_limit_micros(&final_runner["failures"]);
-    assert!(!read_limits.is_empty(), "{final_runner:?}");
-    assert!(
-        read_limits
-            .windows(2)
-            .all(|pair| pair[1].saturating_sub(pair[0]) >= 30_000_000),
-        "{final_runner:?}"
     );
     record(&node, "read-limit");
 }
@@ -1169,26 +1182,77 @@ fn playerbots_ninth_inaccessible_corpse_reports_an_inconclusive_read() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn playerbots_exhausted_raw_corpse_search_reports_an_inconclusive_read() {
+fn playerbots_retained_creature_source_survives_a_raw_read_limit_through_loot() {
     let (node, guid) = fixture("playerbots-quest-loop-corpse-raw-limit", 8, 2, true);
     node.assert_call("playerbots_quest_fixture_admit_accept", &[&guid, "33"]);
     drive_until(&node, &guid, Duration::from_secs(10), |node| {
-        query_one(
+        let retained = query_one(
             node,
-            &format!("SELECT quest_entry FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"),
-        )["quest_entry"]
-            == "33"
+            &format!("SELECT quest_entry, target FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"),
+        );
+        let runner = query_one(
+            node,
+            &format!("SELECT chosen FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
+        );
+        let source = structured_number(&retained["target"], "guid");
+        retained["quest_entry"] == "33"
+            && runner["chosen"].contains(&source)
+            && (runner["chosen"].contains("attack") || runner["chosen"].contains("cast"))
+            && runner["chosen"].contains("reason = (quest = ())")
+            && first_quest_count(&quest(node, &guid, 33).unwrap()) == 0
     });
+    let retained = query_one(
+        &node,
+        &format!("SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"),
+    );
+    let source = structured_number(&retained["target"], "guid");
+    let runner = query_one(
+        &node,
+        &format!(
+            "SELECT chosen, failures, objective_sequence FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+        ),
+    );
+    assert!(runner["chosen"].contains(&source), "{runner:?}");
+    assert_eq!(retained["runner_objective_identity"], runner["objective_sequence"]);
+    assert!(runner["chosen"].contains(&format!("objective = {}", runner["objective_sequence"])));
+    let read_limits = quest_read_limit_micros(&runner["failures"]);
+
     node.assert_call("playerbots_quest_loop_fixture_stage_search_limit", &[&guid]);
-    drive_until(&node, &guid, Duration::from_secs(10), |node| {
-        query_one(
-            node,
-            &format!("SELECT failures FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
-        )["failures"]
-            .contains("questReadLimit")
+    drive_until(&node, &guid, LOOP_TIMEOUT, |node| {
+        loot_receipt(node, &guid).is_some_and(|receipt| {
+            receipt["last_source_guid"] == source
+                && receipt["item_entry"] == "750"
+                && receipt["received_count"] == "8"
+                && item_count(node, &guid, 750) == 8
+        })
     });
+    let receipt = loot_receipt(&node, &guid).expect("loot receipt is absent");
+    let source_actions: Vec<_> = actions(&node, &guid)
+        .into_iter()
+        .filter(|action| action["target_guid"] == source)
+        .collect();
+    assert!(source_actions.iter().any(|action| {
+        (action["kind"].contains("attack") && action["outcome"].contains("attackAccepted"))
+            || (action["kind"].contains("cast") && action["outcome"].contains("castResolved"))
+    }));
+    for kind in ["openLoot", "takeLoot"] {
+        assert!(source_actions.iter().any(|action| {
+            action["kind"].contains(kind) && action["outcome"].contains("completed")
+        }));
+    }
+    assert_eq!(receipt["last_source_guid"], source);
+    assert_eq!(receipt["item_entry"], "750");
+    assert_eq!(receipt["received_count"], "8");
+    assert_eq!(item_count(&node, &guid, 750), 8);
     assert_eq!(first_quest_count(&quest(&node, &guid, 33).unwrap()), 0);
-    record(&node, "corpse-raw-limit");
+    let final_runner = query_one(
+        &node,
+        &format!(
+            "SELECT character_guid, failures FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+        ),
+    );
+    assert_eq!(quest_read_limit_micros(&final_runner["failures"]), read_limits);
+    record(&node, "retained-source-loot");
 }
 
 #[test]
