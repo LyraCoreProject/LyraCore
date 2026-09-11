@@ -883,10 +883,23 @@ fn playerbots_recovery_invalidates_failed_work_after_an_actual_navigation_import
         failed_fight.contains("deferred_until_micros = (some"),
         "{before}"
     );
-    assert!(before["runner"]["failures"]
+    assert!(!before["runner"]["failures"]
         .as_str()
         .unwrap()
         .contains("missingImportedCoverage"));
+    assert!(before["actions"].as_array().unwrap().iter().any(|action| {
+        action["observed_micros"] == before["runner"]["observed_micros"]
+            && action["kind"].as_str() == Some("(move = ())")
+            && action["outcome"].as_str().is_some_and(|outcome| {
+                outcome.contains("destination = (x = 1202, y = 1200)")
+                    && outcome.contains(
+                        "route = (from = (x = 1357, y = 1200), endpoint = (x = 1357, y = 1200)",
+                    )
+                    && outcome.contains("status = (blocked = ())")
+                    && outcome.contains("coverage = (unknown = ())")
+                    && outcome.contains("arrived = false")
+            })
+    }));
     node.assert_call("import_nav_chunks_append", &["\"0,999,999,0,,\""]);
     let imported = row(
         &node,

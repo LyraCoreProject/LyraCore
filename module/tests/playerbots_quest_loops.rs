@@ -1162,7 +1162,7 @@ fn playerbots_ninth_inaccessible_corpse_reports_an_inconclusive_read() {
     drive_until(&node, &guid, Duration::from_secs(10), |node| {
         query_one(
             node,
-            &format!("SELECT failures FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
+            &format!("SELECT character_guid, failures FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
         )["failures"]
             .contains("questReadLimit")
     });
