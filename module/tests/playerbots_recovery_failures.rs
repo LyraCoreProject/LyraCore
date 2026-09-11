@@ -14,6 +14,7 @@ const QUEST_ITEM: u32 = 750;
 const LOOT_SOURCE: u64 = (0xF130u64 << 48) | (69u64 << 24) | 1;
 const RESPAWNING_GAMEOBJECT: u64 = (0xF110u64 << 48) | 5_090_970u64;
 const UNREACHABLE_ENDER: u64 = (0xF130u64 << 48) | (197u64 << 24) | 1;
+const ALTERNATIVE_GIVER: u64 = (0xF130u64 << 48) | (241u64 << 24) | 1;
 
 fn git(path: &std::path::Path, args: &[&str]) -> String {
     let output = std::process::Command::new("git")
@@ -718,6 +719,14 @@ fn playerbots_recovery_unreachable_quest_ender_defers_and_preserves_the_quest() 
                     .as_str()
                     .unwrap()
                     .contains(&movement_destination)
+                && action["outcome"]
+                    .as_str()
+                    .unwrap()
+                    .contains("status = (blocked = ())")
+                && action["outcome"]
+                    .as_str()
+                    .unwrap()
+                    .contains("coverage = (unknown = ())")
         }),
         "{initial}"
     );
@@ -765,26 +774,37 @@ fn playerbots_recovery_unreachable_quest_ender_defers_and_preserves_the_quest() 
         "{deferred}"
     );
     let recovery = runner["recovery"].as_str().unwrap();
+    let current_identity = runner["objective_sequence"].as_str().unwrap();
     assert!(
         recovery.contains(&format!(
+            "work = (quest = (step = (target = {ALTERNATIVE_GIVER}, quest = 40), operation = (accept = ())))"
+        )) && recovery.contains(&format!("objective = {current_identity},")),
+        "{deferred}"
+    );
+    assert!(
+        !recovery.contains(&format!(
             "target = {UNREACHABLE_ENDER}, quest = {UNREACHABLE_ENDER_QUEST}"
-        )) && recovery.contains("operation = (turnIn = ())")
-            && recovery.contains(&format!("objective = {initial_identity}"))
-            && recovery.contains("status = (blocked = ())")
-            && recovery.contains("coverage = (unknown = ())"),
+        )),
+        "{deferred}"
+    );
+    assert!(
+        runner["chosen"].as_str().unwrap().contains(&format!(
+            "acceptQuest = (target = {ALTERNATIVE_GIVER}, quest = 40)"
+        )) && runner["chosen"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("objective = {current_identity}")),
         "{deferred}"
     );
     let deferred_until = integer_after(
         runner["deferred_destinations"].as_str().unwrap(),
         "until_micros = ",
     );
-    let recovery_until = integer_after(recovery, "deferred_until_micros = (some = ");
     let observed_micros = runner["observed_micros"]
         .as_str()
         .unwrap()
         .parse::<i64>()
         .unwrap();
-    assert_eq!(deferred_until, recovery_until, "{deferred}");
     let remaining_micros = deferred_until.saturating_sub(observed_micros);
     assert!(
         remaining_micros > 0 && remaining_micros <= 30_000_000,

@@ -877,8 +877,21 @@ fn playerbots_quest_retries_after_deferral_without_replacing_its_purpose() {
             .is_empty(),
         "{deferred:?}"
     );
-    assert!(deferred["recovery"].contains("work = (fight"));
-    assert!(deferred["recovery"].contains("deferred_until_micros = (some"));
+    let deferred_identity = deferred["objective_sequence"].as_str();
+    assert!(
+        deferred["recovery"].contains(&format!(
+            "work = (quest = (step = (target = {CREATURE_823}, quest = 5261), operation = (accept = ())))"
+        )),
+        "{deferred:?}"
+    );
+    assert!(
+        deferred["recovery"].contains(&format!("objective = {deferred_identity},")),
+        "{deferred:?}"
+    );
+    assert!(
+        !deferred["recovery"].contains(&format!("work = (fight = {CREATURE_6})")),
+        "{deferred:?}"
+    );
     let original_destination = "destination = (map_id = 0, instance_id = 0, x = 1202, y = 1200.4, z = 50, geometry_revision = (none = ()))";
     let original_deferral_prefix = format!("{original_destination}, until_micros = ");
     let original_deferral_deadline = deferred["deferred_destinations"]
@@ -892,6 +905,10 @@ fn playerbots_quest_retries_after_deferral_without_replacing_its_purpose() {
         .unwrap();
     assert!(deferred["chosen"].contains("acceptQuest"), "{deferred:?}");
     assert!(deferred["chosen"].contains("quest = 5261"), "{deferred:?}");
+    assert!(
+        deferred["chosen"].contains(&format!("objective = {deferred_identity}")),
+        "{deferred:?}"
+    );
     assert_eq!(deferred["last_outcome"], "(accepted = ())");
     let useful_actions = node.query_rows(&format!(
         "SELECT kind, outcome, target_guid, quest_entry FROM pkg_playerbots_action WHERE character_guid = {bot} AND quest_entry = 5261"
