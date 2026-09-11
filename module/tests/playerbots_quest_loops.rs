@@ -84,6 +84,20 @@ fn query_one(node: &Standalone, sql: &str) -> BTreeMap<String, String> {
         .unwrap_or_else(|| panic!("query returned no row: {sql}"))
 }
 
+fn quest_read_limit_micros(failures: &str) -> Vec<i64> {
+    const MARKER: &str = "questReadLimit = ()), at_micros = ";
+    failures
+        .match_indices(MARKER)
+        .map(|(index, _)| {
+            let value = &failures[index + MARKER.len()..];
+            let end = value
+                .find(|character: char| !character.is_ascii_digit())
+                .unwrap_or(value.len());
+            value[..end].parse().unwrap()
+        })
+        .collect()
+}
+
 fn quest(node: &Standalone, guid: &str, entry: u32) -> Option<BTreeMap<String, String>> {
     node.query_rows(&format!(
         "SELECT * FROM game_character_quest WHERE character_guid = {guid} AND quest_entry = {entry}"
@@ -926,7 +940,7 @@ fn playerbots_quest_purpose_survives_recovery_and_provisioning() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn playerbots_raw_entity_read_limit_holds_the_retained_quest() {
+fn playerbots_raw_entity_read_limit_keeps_travelling_to_retained_quest_work() {
     let (node, guid) = fixture("playerbots-quest-loop-target-change", 1, 0, true);
     drive_until(&node, &guid, LOOP_TIMEOUT, |node| {
         rewarded(node, &guid, 783)
@@ -934,26 +948,112 @@ fn playerbots_raw_entity_read_limit_holds_the_retained_quest() {
     drive_until(&node, &guid, LOOP_TIMEOUT, |node| {
         quest(node, &guid, 7).is_some()
     });
+    drive_until(&node, &guid, LOOP_TIMEOUT, |node| {
+        let objective = query_one(
+            node,
+            &format!(
+                "SELECT quest_entry, destination, target FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"
+            ),
+        );
+        let chosen = query_one(
+            node,
+            &format!("SELECT objective_sequence, chosen FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
+        );
+        objective["quest_entry"] == "7"
+            && objective["destination"].contains(&format!("guid = {CREATURE_6}"))
+            && objective["target"].contains("target_entry = 6")
+            && objective["target"].contains(&format!("guid = {CREATURE_6}"))
+            && chosen["chosen"].contains(&format!("move = (entity = {CREATURE_6})"))
+            && first_quest_count(&quest(node, &guid, 7).unwrap()) == 0
+    });
+    let retained = query_one(
+        &node,
+        &format!("SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"),
+    );
+    let attacks_before = node.query_rows(&format!(
+        "SELECT * FROM game_melee_attack WHERE attacker_guid = {guid}"
+    ));
     node.assert_call("playerbots_quest_loop_fixture_stage_search_limit", &[&guid]);
     drive_until(&node, &guid, Duration::from_secs(10), |node| {
         query_one(
             node,
-            &format!("SELECT failures FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
+            &format!("SELECT character_guid, failures FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
         )["failures"]
             .contains("questReadLimit")
     });
     let limited = query_one(
         &node,
         &format!(
-            "SELECT failures, chosen FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+            "SELECT failures, chosen, objective_sequence FROM pkg_playerbots_runner WHERE character_guid = {guid}"
         ),
     );
     assert!(
         limited["failures"].contains("questReadLimit"),
         "{limited:?}"
     );
-    assert!(limited["chosen"].contains("hold"), "{limited:?}");
+    assert!(
+        limited["chosen"].contains("move = (home = ())"),
+        "{limited:?}"
+    );
+    assert!(
+        limited["chosen"].contains("reason = (returnHome = ())"),
+        "{limited:?}"
+    );
+    assert!(limited["chosen"].contains(&format!("objective = {}", limited["objective_sequence"])));
+    assert_eq!(
+        query_one(
+            &node,
+            &format!("SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"),
+        ),
+        retained
+    );
+    assert_eq!(
+        node.query_rows(&format!(
+            "SELECT * FROM game_melee_attack WHERE attacker_guid = {guid}"
+        )),
+        attacks_before
+    );
     assert_eq!(first_quest_count(&quest(&node, &guid, 7).unwrap()), 0);
+    drive_until(&node, &guid, LOOP_TIMEOUT, |node| {
+        let working = query_one(
+            node,
+            &format!(
+                "SELECT objective_sequence, chosen FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+            ),
+        );
+        working["objective_sequence"] == limited["objective_sequence"]
+            && working["chosen"].contains(&format!("attack = {CREATURE_6}"))
+            && working["chosen"].contains("reason = (quest = ())")
+            && working["chosen"].contains(&format!("objective = {}", limited["objective_sequence"]))
+    });
+    assert_eq!(
+        query_one(
+            &node,
+            &format!("SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"),
+        ),
+        retained
+    );
+    let resumed = drive_until(&node, &guid, LOOP_TIMEOUT, |node| {
+        first_quest_count(&quest(node, &guid, 7).unwrap()) > 0
+    });
+    assert!(
+        resumed >= 1_350.0,
+        "retained destination was not reached: {resumed}"
+    );
+    let final_runner = query_one(
+        &node,
+        &format!(
+            "SELECT failures, objective_sequence FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+        ),
+    );
+    let read_limits = quest_read_limit_micros(&final_runner["failures"]);
+    assert!(!read_limits.is_empty(), "{final_runner:?}");
+    assert!(
+        read_limits
+            .windows(2)
+            .all(|pair| pair[1].saturating_sub(pair[0]) >= 30_000_000),
+        "{final_runner:?}"
+    );
     record(&node, "read-limit");
 }
 

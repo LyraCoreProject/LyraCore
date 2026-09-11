@@ -155,6 +155,41 @@ fn row(node: &Standalone, sql: &str) -> BTreeMap<String, String> {
     row
 }
 
+fn route_endpoint(outcome: &str) -> Option<(f32, f32)> {
+    let (_, endpoint) = outcome.split_once("endpoint = (x = ")?;
+    let (x, endpoint) = endpoint.split_once(", y = ")?;
+    let (y, _) = endpoint.split_once(')')?;
+    Some((x.parse().ok()?, y.parse().ok()?))
+}
+
+fn retained_route_from(recovery: &str) -> Option<(f32, f32)> {
+    let (_, from) = recovery.split_once("route = (some = (from = (x = ")?;
+    let (x, from) = from.split_once(", y = ")?;
+    let (y, _) = from.split_once(')')?;
+    Some((x.parse().ok()?, y.parse().ok()?))
+}
+
+fn tuple_field<'a>(value: &'a str, name: &str) -> Option<&'a str> {
+    let tuple = &value[value.find(name)? + name.len()..];
+    if !tuple.starts_with('(') {
+        return None;
+    }
+    let mut depth = 0;
+    for (index, byte) in tuple.bytes().enumerate() {
+        match byte {
+            b'(' => depth += 1,
+            b')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&tuple[..=index]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 fn prepare(node: &Standalone) -> String {
     let imports =
         node.query_rows("SELECT family, source_sha, file_hash, row_count FROM game_import_meta");
@@ -718,6 +753,160 @@ fn playerbots_recovery_retains_a_partial_route_that_first_moves_away_from_the_le
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_recovery_defers_a_partial_endpoint_revisited_after_an_approach() {
+    let mut node = Standalone::start("playerbots-recovery-revisited-endpoint");
+    node.publish_module();
+    record_inputs(&node);
+    let guid = prepare(&node);
+    node.assert_call("playerbots_fixture_position", &[&guid, "1340"]);
+    node.assert_call("playerbots_recovery_fixture_partial_route", &[&guid]);
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    let first = snapshot(&node, &guid, Duration::ZERO);
+    let first_move = first["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|action| action["kind"].as_str() == Some("(move = ())"))
+        .expect("the Quest approach did not record a movement leg");
+    let first_outcome = first_move["outcome"].as_str().unwrap();
+    assert!(first_outcome.contains("status = (partial = ())"), "{first}");
+    assert!(first_outcome.contains("expansions = 4096"), "{first}");
+    let destination = tuple_field(
+        first["runner"]["recovery"].as_str().unwrap(),
+        "destination = ",
+    )
+    .expect("retained recovery destination missing")
+    .to_string();
+    let objective = first["runner"]["objective_sequence"].clone();
+    let quest = first["quest"].clone();
+
+    node.assert_call("playerbots_fixture_companion_due", &[&guid]);
+    let started = Instant::now();
+    let mut samples = vec![first];
+    while started.elapsed() < Duration::from_secs(70) {
+        std::thread::sleep(Duration::from_millis(750));
+        samples.push(snapshot(&node, &guid, started.elapsed()));
+    }
+    let path = support::log_dir().join(format!(
+        "{}-revisited-partial-endpoint.json",
+        node.shard_name()
+    ));
+    std::fs::write(path, serde_json::to_vec_pretty(&samples).unwrap()).unwrap();
+
+    let approach_index = samples
+        .iter()
+        .position(|sample| {
+            sample["runner"]["chosen"]
+                .as_str()
+                .unwrap()
+                .contains("recoveryPosition")
+        })
+        .expect("the stalled Quest route did not select a Recovery Position");
+    let stalled_endpoint = route_endpoint(
+        samples[approach_index]["runner"]["recovery"]
+            .as_str()
+            .unwrap(),
+    )
+    .expect("the Recovery Position did not retain the stalled Quest endpoint");
+    let character_position = |sample: &serde_json::Value| {
+        (
+            sample["character"]["x"]
+                .as_str()
+                .unwrap()
+                .parse::<f32>()
+                .unwrap(),
+            sample["character"]["y"]
+                .as_str()
+                .unwrap()
+                .parse::<f32>()
+                .unwrap(),
+        )
+    };
+    let departed_index = samples
+        .iter()
+        .enumerate()
+        .skip(approach_index)
+        .find(|(_, sample)| {
+            let position = character_position(sample);
+            (position.0 - stalled_endpoint.0).hypot(position.1 - stalled_endpoint.1) > 1.0
+        })
+        .map(|(index, _)| index)
+        .expect("the Recovery Position did not move away from the stalled Quest endpoint");
+    let revisited = samples.iter().skip(departed_index + 1).find(|sample| {
+        let position = character_position(sample);
+        let recovery = sample["runner"]["recovery"].as_str().unwrap();
+        let returned_from = retained_route_from(recovery);
+        (position.0 - stalled_endpoint.0).abs() < 0.05
+            && (position.1 - stalled_endpoint.1).abs() < 0.05
+            && recovery.contains(&format!("work = (fight = {TARGET})"))
+            && recovery.contains("status = (partial = ())")
+            && route_endpoint(recovery).is_some_and(|endpoint| {
+                (endpoint.0 - stalled_endpoint.0).abs() < 0.05
+                    && (endpoint.1 - stalled_endpoint.1).abs() < 0.05
+            })
+            && returned_from.is_some_and(|from| {
+                (from.0 - stalled_endpoint.0).hypot(from.1 - stalled_endpoint.1) > 1.0
+            })
+    });
+    assert!(
+        revisited.is_some(),
+        "the Quest route did not revisit {stalled_endpoint:?}"
+    );
+    let (deferred_index, deferred) = samples
+        .iter()
+        .enumerate()
+        .find(|(_, sample)| {
+            !sample["runner"]["deferred_destinations"]
+                .as_str()
+                .unwrap()
+                .trim_matches(['[', ']', ' '])
+                .is_empty()
+        })
+        .expect("the revisited Quest destination was not deferred");
+    assert!(deferred["runner"]["failures"]
+        .as_str()
+        .unwrap()
+        .contains("noMovement"));
+    assert!(deferred["runner"]["failures"]
+        .as_str()
+        .unwrap()
+        .contains("missingImportedCoverage"));
+    assert!(deferred["runner"]["deferred_destinations"]
+        .as_str()
+        .unwrap()
+        .contains(&destination));
+    assert_ne!(deferred["runner"]["objective_sequence"], objective);
+    assert_eq!(deferred["quest"], quest);
+    let alternative = samples[deferred_index..]
+        .iter()
+        .find(|sample| {
+            let runner = &sample["runner"];
+            let chosen = runner["chosen"].as_str().unwrap();
+            let current_objective = runner["objective_sequence"].as_str().unwrap();
+            !runner["deferred_destinations"]
+                .as_str()
+                .unwrap()
+                .trim_matches(['[', ']', ' '])
+                .is_empty()
+                && runner["deferred_destinations"]
+                    .as_str()
+                    .unwrap()
+                    .contains(&destination)
+                && chosen.contains(&format!("entity = {ALTERNATIVE_TARGET}"))
+                && chosen.contains("reason = (quest = ())")
+                && chosen.contains(&format!("objective = {current_objective}"))
+        })
+        .expect("the active destination deferral prevented other useful Quest work");
+    assert_eq!(
+        alternative["runner"]["objective_sequence"],
+        deferred["runner"]["objective_sequence"]
+    );
+    assert_ne!(alternative["runner"]["objective_sequence"], objective);
+    assert_eq!(alternative["quest"], quest);
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_recovery_holds_a_quest_when_its_remaining_targets_are_controlled() {
     let mut node = Standalone::start("playerbots-recovery-controlled");
     node.publish_module();
@@ -792,27 +981,9 @@ fn incomplete_quest_target_read(label: &str, stage: impl Fn(&Standalone, &str)) 
     let attacks = node.query_rows(&format!(
         "SELECT * FROM game_melee_attack WHERE attacker_guid = {guid}"
     ));
-    let path =
-        support::log_dir().join(format!("{}-incomplete-target-read.json", node.shard_name()));
-    std::fs::write(
-        path,
-        serde_json::to_vec_pretty(&serde_json::json!({
-            "before": before, "after": after, "armed": armed, "attacks": attacks,
-        }))
-        .unwrap(),
-    )
-    .unwrap();
-    assert!(
-        after["runner"]["chosen"].as_str().unwrap().contains("hold"),
-        "{after}"
-    );
-    assert!(
-        after["runner"]["failures"]
-            .as_str()
-            .unwrap()
-            .contains("questReadLimit"),
-        "{after}"
-    );
+    let chosen = after["runner"]["chosen"].as_str().unwrap();
+    assert!(chosen.contains("hold = ()"), "{after}");
+    assert!(chosen.contains("reason = (returnHome = ())"), "{after}");
     assert!(attacks.is_empty());
     assert!(after["runner"]["foreground"]
         .as_str()
@@ -823,6 +994,62 @@ fn incomplete_quest_target_read(label: &str, stage: impl Fn(&Standalone, &str)) 
     assert_eq!(
         before["runner"]["objective_sequence"],
         after["runner"]["objective_sequence"]
+    );
+
+    let observed = after["runner"]["observed_micros"]
+        .as_str()
+        .unwrap()
+        .parse::<i64>()
+        .unwrap();
+    let next_eligible = after["runner"]["next_eligible_micros"]
+        .as_str()
+        .unwrap()
+        .parse::<i64>()
+        .unwrap();
+    let wait_micros = next_eligible.saturating_sub(observed);
+    assert!(wait_micros > 0, "{after}");
+    let wait = Duration::from_micros(wait_micros as u64);
+    assert!(wait < POLL_TIMEOUT, "{after}");
+    std::thread::sleep(wait);
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    let resumed = snapshot(&node, &guid, wait);
+    let resumed_attacks = node.query_rows(&format!(
+        "SELECT * FROM game_melee_attack WHERE attacker_guid = {guid}"
+    ));
+    let path =
+        support::log_dir().join(format!("{}-incomplete-target-read.json", node.shard_name()));
+    std::fs::write(
+        path,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "before": before,
+            "after": after,
+            "resumed": resumed,
+            "armed": armed,
+            "attacks": attacks,
+            "resumed_attacks": resumed_attacks,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let resumed_chosen = resumed["runner"]["chosen"].as_str().unwrap();
+    assert!(resumed_chosen.contains("move = (home = ())"), "{resumed}");
+    assert!(
+        resumed_chosen.contains("reason = (returnHome = ())"),
+        "{resumed}"
+    );
+    assert!(
+        resumed["runner"]["failures"]
+            .as_str()
+            .unwrap()
+            .contains("questReadLimit"),
+        "{resumed}"
+    );
+    assert!(resumed_attacks.is_empty());
+    assert_eq!(before["quest"], resumed["quest"]);
+    assert_eq!(before["target"]["health"], resumed["target"]["health"]);
+    assert_eq!(
+        before["runner"]["objective_sequence"],
+        resumed["runner"]["objective_sequence"]
     );
 }
 
