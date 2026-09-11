@@ -39,6 +39,15 @@ fn core_escrow_snapshot(node: &Standalone, guid: &str) -> Value {
     })
 }
 
+fn legacy_batch_state(node: &Standalone, guid: &str) -> Value {
+    json!({
+        "bots": node.query_rows("SELECT * FROM pkg_playerbots_bot"),
+        "runner": runner(node, guid),
+        "goals": node.query_rows("SELECT * FROM pkg_playerbots_goal"),
+        "actions": node.query_rows("SELECT * FROM pkg_playerbots_action"),
+    })
+}
+
 fn batch(guids: &[String]) -> String {
     format!("[{}]", guids.join(","))
 }
@@ -208,34 +217,14 @@ fn playerbots_populated_legacy_batches_resume_after_restart_and_replay_idempoten
     );
     node.assert_sql("UPDATE pkg_playerbots_bot SET next_think_micros = 9223372036854775807");
     node.assert_sql("DELETE FROM game_creature_move_schedule");
-    let preceding_state = json!({
-        "bots": node.query_rows("SELECT * FROM pkg_playerbots_bot"),
-        "runner": runner(&node, retained),
-        "goals": node.query_rows("SELECT * FROM pkg_playerbots_goal"),
-        "actions": node.query_rows("SELECT * FROM pkg_playerbots_action"),
-    });
+    let preceding_state = legacy_batch_state(&node, retained);
     node.publish_module();
-    let imported = json!({
-        "bots": node.query_rows("SELECT * FROM pkg_playerbots_bot"),
-        "runner": runner(&node, retained),
-        "goals": node.query_rows("SELECT * FROM pkg_playerbots_goal"),
-        "actions": node.query_rows("SELECT * FROM pkg_playerbots_action"),
-    });
+    let imported = legacy_batch_state(&node, retained);
     let oversized = node.call("playerbots_migrate_legacy_controllers", &[&batch(&guids)]);
-    let after_oversized = json!({
-        "bots": node.query_rows("SELECT * FROM pkg_playerbots_bot"),
-        "runner": runner(&node, retained),
-        "goals": node.query_rows("SELECT * FROM pkg_playerbots_goal"),
-        "actions": node.query_rows("SELECT * FROM pkg_playerbots_action"),
-    });
+    let after_oversized = legacy_batch_state(&node, retained);
     let unsorted_batch = batch(&[guids[1].clone(), guids[0].clone()]);
     let unsorted = node.call("playerbots_migrate_legacy_controllers", &[&unsorted_batch]);
-    let after_unsorted = json!({
-        "bots": node.query_rows("SELECT * FROM pkg_playerbots_bot"),
-        "runner": runner(&node, retained),
-        "goals": node.query_rows("SELECT * FROM pkg_playerbots_goal"),
-        "actions": node.query_rows("SELECT * FROM pkg_playerbots_action"),
-    });
+    let after_unsorted = legacy_batch_state(&node, retained);
     let retained_before = imported["runner"][0].clone();
     node.assert_call(
         "playerbots_migrate_legacy_controllers",
