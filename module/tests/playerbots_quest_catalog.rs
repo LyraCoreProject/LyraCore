@@ -879,10 +879,17 @@ fn playerbots_quest_retries_after_deferral_without_replacing_its_purpose() {
     );
     assert!(deferred["recovery"].contains("work = (fight"));
     assert!(deferred["recovery"].contains("deferred_until_micros = (some"));
-    assert!(
-        deferred["deferred_destinations"].contains("x = 1202, y = 1200.4"),
-        "{deferred:?}"
-    );
+    let original_destination = "destination = (map_id = 0, instance_id = 0, x = 1202, y = 1200.4, z = 50, geometry_revision = (none = ()))";
+    let original_deferral_prefix = format!("{original_destination}, until_micros = ");
+    let original_deferral_deadline = deferred["deferred_destinations"]
+        .split_once(&original_deferral_prefix)
+        .unwrap_or_else(|| panic!("original Quest destination was not deferred: {deferred:?}"))
+        .1
+        .chars()
+        .take_while(|character| character.is_ascii_digit())
+        .collect::<String>()
+        .parse::<i64>()
+        .unwrap();
     assert!(deferred["chosen"].contains("acceptQuest"), "{deferred:?}");
     assert!(deferred["chosen"].contains("quest = 5261"), "{deferred:?}");
     assert_eq!(deferred["last_outcome"], "(accepted = ())");
@@ -911,16 +918,20 @@ fn playerbots_quest_retries_after_deferral_without_replacing_its_purpose() {
     );
     assert_eq!(quest(&node, bot, 7), held);
 
+    let target = (0xF130u64 << 48) | (6u64 << 24) | 1;
+    let target_text = target.to_string();
     let retried = support::poll_until(std::time::Duration::from_secs(45), || {
         let state = runner(&node, bot);
-        state["deferred_destinations"]
-            .trim_matches(['[', ']', ' '])
-            .is_empty()
-            && state["chosen"].contains("attack")
+        !state["deferred_destinations"].contains(original_destination)
+            && state["chosen"].contains(&format!("attack = {target}"))
+            && state["chosen"].contains("reason = (quest = ())")
     });
     let resumed = runner(&node, bot);
     let resumed_attacks = node.query_rows(&format!(
         "SELECT target_guid FROM game_melee_attack WHERE attacker_guid = {bot}"
+    ));
+    let resumed_actions = node.query_rows(&format!(
+        "SELECT kind, outcome, target_guid, observed_micros FROM pkg_playerbots_action WHERE character_guid = {bot} AND target_guid = {target}"
     ));
     record(&node, "deferred-retry");
     let path = support::log_dir().join(format!("{}-runner.json", node.shard_name()));
@@ -928,7 +939,8 @@ fn playerbots_quest_retries_after_deferral_without_replacing_its_purpose() {
         path,
         serde_json::to_vec_pretty(&serde_json::json!({
             "initial": initial, "deferred": deferred, "waiting": waiting, "resumed": resumed,
-            "resumed_attacks": resumed_attacks
+            "resumed_actions": resumed_actions, "resumed_attacks": resumed_attacks,
+            "original_deferral_deadline": original_deferral_deadline
         }))
         .unwrap(),
     )
@@ -937,19 +949,46 @@ fn playerbots_quest_retries_after_deferral_without_replacing_its_purpose() {
         retried,
         "quest did not retry after its deferral expired: {resumed:?}"
     );
-    assert!(resumed["deferred_destinations"]
-        .trim_matches(['[', ']', ' '])
-        .is_empty());
-    let target = (0xF130u64 << 48) | (6u64 << 24) | 1;
+    assert!(
+        !resumed["deferred_destinations"].contains(original_destination),
+        "{resumed:?}"
+    );
+    let resumed_identity = resumed["objective_sequence"].as_str();
+    let resumed_observed = resumed["observed_micros"].parse::<i64>().unwrap();
+    assert!(
+        resumed_observed >= original_deferral_deadline,
+        "{resumed:?}"
+    );
     assert_eq!(resumed["last_outcome"], "(accepted = ())");
+    assert!(
+        resumed["history"].contains(&format!(
+            "action = (attack = {target}), reason = (quest = ()), objective = {resumed_identity}), priority = 110)), outcome = (accepted = ()))"
+        )),
+        "{resumed:?}"
+    );
     assert_eq!(resumed_attacks.len(), 1);
-    assert_eq!(resumed_attacks[0]["target_guid"], target.to_string());
+    assert_eq!(
+        resumed_attacks[0]["target_guid"].as_str(),
+        target_text.as_str()
+    );
+    assert!(
+        resumed_actions.iter().any(|action| {
+            action["kind"] == "(attack = ())"
+                && action.get("target_guid").map(String::as_str) == Some(target_text.as_str())
+                && action["outcome"].contains("attackAccepted")
+                && action["observed_micros"]
+                    .parse::<i64>()
+                    .is_ok_and(|observed| observed >= original_deferral_deadline)
+        }),
+        "{resumed_actions:?}"
+    );
     let resumed_attempt = resumed["recovery"]
         .split("work = ")
         .find(|attempt| attempt.starts_with(&format!("(fight = {target})")))
         .expect("the same quest fight must have a fresh Recovery Attempt");
     assert!(resumed_attempt.contains("stalled_micros = 0"));
     assert!(resumed_attempt.contains("deferred_until_micros = (none"));
+    assert!(resumed_attempt.contains(&format!("objective = {resumed_identity},")));
     let resumed_retained = node.query_rows(&format!(
         "SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {bot}"
     ));
