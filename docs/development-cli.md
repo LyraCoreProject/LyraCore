@@ -169,13 +169,17 @@ The importer also has one Instance Vmap Slice named `deadmines-entry-exit`. A di
 through `Map.dbc` and reads only the two ADT tiles crossed by the entry, exit radius, and one-cell
 collar. It reports the Map.dbc, WDT, ADT, WMO root, and WMO group identities, placement calibration,
 supported floor samples, per-sample height changes, headroom, short collision probes, and the direct
-collision ray. Applying this slice is refused unless every sample is supported, each height change
-is walkable, both authored endpoint heights match, and those static probes are clear. This establishes
-static geometry suitability, not actual Character movement. The private fixture must exercise the
-ordinary Core route before the attended client check. Selected WMO groups that reference active
-doodads are also refused until their nested transforms are supported. `./lyracore import vmaps` does
-not send this slice to the Instance Pool yet. Map 36 terrain and Navigation Coverage remain
-unavailable until archive-derived evidence supports a representation that preserves its floors.
+collision ray. Applying this slice is refused unless the entry and every sample needed to reach the
+exit trigger sphere are supported, the entry and supported endpoint match their authored route
+heights, each height change is walkable, and those static probes are clear. Samples continue to the
+trigger center for diagnostics; the center need not have a floor when the supported route has already
+entered the trigger volume.
+This establishes static geometry suitability, not actual Character movement. The private fixture
+must exercise the ordinary Core route before the attended client check. Selected WMO groups that
+reference active doodads are also refused until their nested transforms are supported. `./lyracore
+import vmaps` does not send this slice to the Instance Pool yet. Map 36 terrain and Navigation
+Coverage remain unavailable until archive-derived evidence supports a representation that preserves
+its floors.
 
 The automated repository checks cover destination plans, profile fences, canned SQL failures, and
 synthetic importer rows. They do not read a real pinned dump or client archives. A lawful real-data

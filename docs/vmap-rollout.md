@@ -35,10 +35,12 @@ checking generations. A successful import is data-plane evidence, not permission
    once for each World Shard. A retry must resume the same generation rather than creating duplicate
    chunk rows. For the Instance Pool, first retain the dry-run source identities, calibration and
    every route sample. Apply the exact same source and profile only when the static geometry is
-   suitable: both authored endpoints match their floors, every sample has walkable support and
-   headroom, every sampled height change is within step height, and the short and direct collision
-   probes are clear. This is preparation for a private ordinary-Core route check. It does not model
-   the caller-specific committed movement legs.
+   suitable: the entry and every sample needed to reach the exit trigger sphere have walkable
+   support and headroom, the entry and supported endpoint match their authored route heights, every
+   required sampled height change is within step height, and the short and direct collision probes
+   are clear. Samples after the supported endpoint remain diagnostic and may show that the trigger
+   center has no floor. This is preparation for a private ordinary-Core route check. It does not
+   model the caller-specific committed movement legs.
 
    ```bash
    lyracore-importer --vmap "$CLIENT_DATA" --world-profile instances \

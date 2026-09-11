@@ -553,16 +553,35 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
         );
         if let Some(route) = &plan.route_evidence {
             println!(
-                "vmap: instance route {} geometry_ready={} entry_floor={} exit_floor={} direct_step_hit={} violations={}",
+                "vmap: instance route {} geometry_ready={} entry_floor={} supported_exit_sample={} supported_exit={} supported_exit_floor={} center_floor={} direct_step_hit={} violations={} diagnostics={}",
                 route.name,
                 route.geometry_ready(),
                 format_point(route.samples.first().and_then(|sample| sample.support_floor)),
+                route
+                    .supported_exit_sample
+                    .map(|index| index.to_string())
+                    .unwrap_or_else(|| "none".to_owned()),
+                format_position(
+                    route
+                        .supported_exit_sample
+                        .and_then(|index| route.samples[index].supported_position())
+                ),
+                format_point(
+                    route
+                        .supported_exit_sample
+                        .and_then(|index| route.samples[index].support_floor)
+                ),
                 format_point(route.samples.last().and_then(|sample| sample.support_floor)),
                 format_hit(route.direct_step_hit),
                 if route.violations.is_empty() {
                     "none".to_owned()
                 } else {
                     route.violations.join(" | ")
+                },
+                if route.diagnostics.is_empty() {
+                    "none".to_owned()
+                } else {
+                    route.diagnostics.join(" | ")
                 }
             );
             println!(
@@ -645,8 +664,10 @@ struct InstanceRouteEvidence {
     selected_keys: Vec<u64>,
     selected_tri_refs: usize,
     samples: Vec<InstanceRouteSample>,
+    supported_exit_sample: Option<usize>,
     direct_step_hit: Option<[f32; 3]>,
     violations: Vec<String>,
+    diagnostics: Vec<String>,
 }
 
 struct InstanceMapSource {
@@ -674,6 +695,13 @@ struct InstanceRouteSample {
     floor_delta: Option<f32>,
     headroom_hit: Option<[f32; 3]>,
     step_hit: Option<[f32; 3]>,
+}
+
+impl InstanceRouteSample {
+    fn supported_position(&self) -> Option<[f32; 3]> {
+        self.support_floor
+            .map(|floor| [self.position[0], self.position[1], floor])
+    }
 }
 
 fn build_plan(
@@ -1003,7 +1031,7 @@ fn instance_route_evidence(
         .ceil()
         .max(1.0) as usize;
     let mut samples = Vec::with_capacity(steps + 1);
-    let mut violations = Vec::new();
+    let mut sample_findings = Vec::with_capacity(steps + 1);
     let mut prior: Option<([f32; 3], f32)> = None;
     for index in 0..=steps {
         let t = index as f32 / steps as f32;
@@ -1013,32 +1041,68 @@ fn instance_route_evidence(
             slice.entry[2] + (slice.exit[2] - slice.entry[2]) * t,
         ];
         let (sample, sample_violations) = instance_route_sample(index, position, prior, tris);
-        violations.extend(sample_violations);
         if let Some(floor) = sample.support_floor {
             prior = Some((position, floor));
         }
         samples.push(sample);
+        sample_findings.push(sample_violations);
     }
-    for (name, point, floor) in [
-        (
-            "entry",
-            slice.entry,
-            samples.first().and_then(|sample| sample.support_floor),
-        ),
-        (
-            "exit",
-            slice.exit,
-            samples.last().and_then(|sample| sample.support_floor),
-        ),
-    ] {
-        if floor.is_none_or(|floor| (floor - point[2]).abs() > lyracore_shared::nav::WALK_STEP_UP) {
-            violations.push(format!(
-                "{name} floor does not match authored height {:.4} within {:.4} yards",
-                point[2],
-                lyracore_shared::nav::WALK_STEP_UP
-            ));
+    let mut supported_exit_sample = None;
+    for (index, (sample, findings)) in samples.iter().zip(&sample_findings).enumerate() {
+        if !findings.is_empty() {
+            break;
+        }
+        if let Some(position) = sample.supported_position() {
+            if point_in_sphere(position, slice.exit, slice.exit_radius)
+                && (position[2] - sample.position[2]).abs() <= lyracore_shared::nav::WALK_STEP_UP
+            {
+                supported_exit_sample = Some(index);
+            }
         }
     }
+    let required_end = supported_exit_sample.unwrap_or(samples.len() - 1);
+    let mut violations = Vec::new();
+    let mut diagnostics = Vec::new();
+    for (index, findings) in sample_findings.into_iter().enumerate() {
+        if index <= required_end {
+            violations.extend(findings);
+        } else {
+            diagnostics.extend(findings);
+        }
+    }
+    if samples
+        .first()
+        .and_then(|sample| sample.support_floor)
+        .is_none_or(|floor| (floor - slice.entry[2]).abs() > lyracore_shared::nav::WALK_STEP_UP)
+    {
+        violations.push(format!(
+            "entry floor does not match authored height {:.4} within {:.4} yards",
+            slice.entry[2],
+            lyracore_shared::nav::WALK_STEP_UP
+        ));
+    }
+    if supported_exit_sample.is_none() {
+        violations.push(format!(
+            "no continuously supported route sample reaches the exit trigger radius {:.4} yards",
+            slice.exit_radius
+        ));
+    }
+    if required_end + 1 < samples.len()
+        && samples
+            .last()
+            .and_then(|sample| sample.support_floor)
+            .is_none_or(|floor| (floor - slice.exit[2]).abs() > lyracore_shared::nav::WALK_STEP_UP)
+    {
+        diagnostics.push(format!(
+            "exit center floor does not match authored height {:.4} within {:.4} yards",
+            slice.exit[2],
+            lyracore_shared::nav::WALK_STEP_UP
+        ));
+    }
+    let direct_end = samples
+        .get(required_end)
+        .and_then(InstanceRouteSample::supported_position)
+        .unwrap_or(slice.exit);
     let direct_step_hit = instance_collision_hit(
         tris,
         [
@@ -1047,9 +1111,9 @@ fn instance_route_evidence(
             slice.entry[2] + lyracore_shared::nav::WALK_STEP_UP,
         ],
         [
-            slice.exit[0],
-            slice.exit[1],
-            slice.exit[2] + lyracore_shared::nav::WALK_STEP_UP,
+            direct_end[0],
+            direct_end[1],
+            direct_end[2] + lyracore_shared::nav::WALK_STEP_UP,
         ],
     );
     if direct_step_hit.is_some() {
@@ -1060,9 +1124,20 @@ fn instance_route_evidence(
         selected_keys,
         selected_tri_refs,
         samples,
+        supported_exit_sample,
         direct_step_hit,
         violations,
+        diagnostics,
     }
+}
+
+fn point_in_sphere(point: [f32; 3], center: [f32; 3], radius: f32) -> bool {
+    let [dx, dy, dz] = [
+        point[0] - center[0],
+        point[1] - center[1],
+        point[2] - center[2],
+    ];
+    dx * dx + dy * dy + dz * dz <= radius * radius
 }
 
 const ROUTE_FLOOR_EPSILON_YD: f32 = 0.01;
@@ -1205,6 +1280,12 @@ fn walkable_floor(
 fn format_point(value: Option<f32>) -> String {
     value
         .map(|value| format!("{value:.4}"))
+        .unwrap_or_else(|| "none".to_owned())
+}
+
+fn format_position(value: Option<[f32; 3]>) -> String {
+    value
+        .map(|point| format!("{:.4},{:.4},{:.4}", point[0], point[1], point[2]))
         .unwrap_or_else(|| "none".to_owned())
 }
 
@@ -1924,22 +2005,7 @@ mod tests {
         cells
     }
 
-    fn route_evidence(tris: Vec<VmapTri>, entry_z: f32, exit_z: f32) -> InstanceRouteEvidence {
-        let cells = route_cells(&tris);
-        let selected_keys = cells
-            .keys()
-            .map(|&(cell_x, cell_y)| lyracore_shared::terrain::cell_key(36, cell_x, cell_y))
-            .collect();
-        let selected_tri_refs = cells.values().map(Vec::len).sum();
-        instance_route_evidence(
-            &route_slice(entry_z, exit_z, 0.0),
-            selected_keys,
-            selected_tri_refs,
-            &cells,
-        )
-    }
-
-    fn route_evidence_to_trigger(
+    fn route_evidence(
         tris: Vec<VmapTri>,
         entry_z: f32,
         exit_z: f32,
@@ -1961,7 +2027,7 @@ mod tests {
 
     #[test]
     fn a_clear_ramp_retains_supported_route_samples() {
-        let evidence = route_evidence(ramp(-1.0, 6.0, 10.0, 12.8), 10.4, 12.4);
+        let evidence = route_evidence(ramp(-1.0, 6.0, 10.0, 12.8), 10.4, 12.4, 0.0);
         assert!(
             evidence.geometry_ready(),
             "violations: {:?}",
@@ -1980,33 +2046,47 @@ mod tests {
 
     #[test]
     fn supported_travel_into_the_exit_volume_does_not_require_center_floor() {
-        let evidence = route_evidence_to_trigger(ramp(-1.0, 4.0, 10.0, 10.0), 10.0, 10.0, 1.5);
+        let evidence = route_evidence(ramp(-1.0, 4.0, 10.0, 10.0), 10.0, 10.0, 1.5);
         assert!(
             evidence.geometry_ready(),
             "violations: {:?}",
             evidence.violations
         );
-        assert_eq!(evidence.samples[7].support_floor, Some(10.0));
+        assert_eq!(evidence.supported_exit_sample, Some(8));
+        assert_eq!(
+            evidence.samples[8].supported_position(),
+            Some([4.0, 0.0, 10.0])
+        );
+        assert_eq!(evidence.samples[8].support_floor, Some(10.0));
         assert_eq!(evidence.samples.last().unwrap().support_floor, None);
+        assert!(evidence
+            .diagnostics
+            .iter()
+            .any(|finding| finding.contains("exit center floor does not match")));
     }
 
     #[test]
     fn missing_support_before_the_exit_volume_refuses_the_route() {
         let mut tris = ramp(-1.0, 2.0, 10.0, 10.0);
         tris.extend(ramp(3.5, 4.0, 10.0, 10.0));
-        let evidence = route_evidence_to_trigger(tris, 10.0, 10.0, 1.5);
+        let evidence = route_evidence(tris, 10.0, 10.0, 1.5);
         assert!(!evidence.geometry_ready());
+        assert_eq!(evidence.supported_exit_sample, None);
         assert!(evidence
             .violations
             .iter()
             .any(|violation| violation.contains("sample 5 has no retained walkable floor")));
+        assert!(evidence
+            .violations
+            .iter()
+            .any(|violation| violation.contains("no continuously supported route sample")));
     }
 
     #[test]
     fn a_hole_in_the_retained_floor_refuses_the_route() {
         let mut tris = ramp(-1.0, 0.75, 10.0, 10.0);
         tris.extend(ramp(4.25, 6.0, 10.0, 10.0));
-        let evidence = route_evidence(tris, 10.0, 10.0);
+        let evidence = route_evidence(tris, 10.0, 10.0, 0.0);
         assert!(!evidence.geometry_ready());
         assert!(evidence
             .violations
@@ -2036,7 +2116,7 @@ mod tests {
                 11.5,
             ),
         ] {
-            let evidence = route_evidence(tris, entry_z, exit_z);
+            let evidence = route_evidence(tris, entry_z, exit_z, 0.0);
             assert!(!evidence.geometry_ready());
             assert!(evidence
                 .violations
@@ -2052,7 +2132,7 @@ mod tests {
             wmo_tri([[2.5, -1.0, 10.0], [2.5, 1.0, 20.0], [2.5, -1.0, 20.0]]),
             wmo_tri([[2.5, -1.0, 10.0], [2.5, 1.0, 10.0], [2.5, 1.0, 20.0]]),
         ]);
-        let evidence = route_evidence(tris, 10.0, 10.0);
+        let evidence = route_evidence(tris, 10.0, 10.0, 0.0);
         assert!(!evidence.geometry_ready());
         assert!(evidence.direct_step_hit.is_some());
         assert!(evidence
