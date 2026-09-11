@@ -125,6 +125,20 @@ fn runner(node: &Standalone, guid: &str) -> Vec<BTreeMap<String, String>> {
     ))
 }
 
+fn integer_after(value: &str, marker: &str) -> i64 {
+    let tail = value
+        .split_once(marker)
+        .unwrap_or_else(|| panic!("{marker} missing from {value}"))
+        .1;
+    let number: String = tail
+        .chars()
+        .take_while(|character| character.is_ascii_digit() || *character == '-')
+        .collect();
+    number
+        .parse()
+        .unwrap_or_else(|_| panic!("invalid number after {marker} in {value}"))
+}
+
 fn catalog(node: &Standalone, entry: u32) -> serde_json::Value {
     serde_json::json!({
         "header": node.query_rows("SELECT revision, blueprint_revision, reference_source_revision, content_revision, quest_count FROM pkg_playerbots_quest_catalog"),
@@ -735,10 +749,43 @@ fn playerbots_recovery_unreachable_quest_ender_defers_and_preserves_the_quest() 
     });
     let deferred =
         deferred.unwrap_or_else(|| panic!("actual ender was never deferred: {evidence}"));
+    let initial_identity = evidence["initial"]["runner"][0]["objective_sequence"]
+        .as_str()
+        .unwrap();
+    let runner = &deferred["runner"][0];
     assert!(
         deferred["elapsed_seconds"].as_f64().unwrap() <= 32.0,
         "{deferred}"
     );
+    let failures = runner["failures"].as_str().unwrap();
+    assert!(
+        failures.contains("noMovement")
+            && failures.contains("missingImportedCoverage")
+            && !failures.contains("deadline"),
+        "{deferred}"
+    );
+    let recovery = runner["recovery"].as_str().unwrap();
+    assert!(
+        recovery.contains(&format!(
+            "target = {UNREACHABLE_ENDER}, quest = {UNREACHABLE_ENDER_QUEST}"
+        )) && recovery.contains("operation = (turnIn = ())")
+            && recovery.contains(&format!("objective = {initial_identity}"))
+            && recovery.contains("status = (blocked = ())")
+            && recovery.contains("coverage = (unknown = ())"),
+        "{deferred}"
+    );
+    let deferred_until = integer_after(
+        runner["deferred_destinations"].as_str().unwrap(),
+        "until_micros = ",
+    );
+    let recovery_until = integer_after(recovery, "deferred_until_micros = (some = ");
+    let observed_micros = runner["observed_micros"]
+        .as_str()
+        .unwrap()
+        .parse::<i64>()
+        .unwrap();
+    assert_eq!(deferred_until, recovery_until, "{deferred}");
+    assert_eq!(deferred_until - observed_micros, 30_000_000, "{deferred}");
     assert!(
         samples
             .iter()
@@ -757,21 +804,25 @@ fn playerbots_recovery_unreachable_quest_ender_defers_and_preserves_the_quest() 
             .is_some_and(|rows| rows.is_empty())),
         "{evidence}"
     );
+    let retained_quest = UNREACHABLE_ENDER_QUEST.to_string();
+    let useful_alternative = samples.iter().find(|sample| {
+        sample["elapsed_seconds"].as_f64().unwrap() >= deferred["elapsed_seconds"].as_f64().unwrap()
+            && sample["actions"].as_array().unwrap().iter().any(|action| {
+                action["quest_entry"]
+                    .as_str()
+                    .is_some_and(|entry| entry != "0" && entry != retained_quest.as_str())
+                    && action["outcome"].as_str().unwrap().contains("completed")
+            })
+    });
+    let useful_alternative = useful_alternative
+        .unwrap_or_else(|| panic!("no alternative Quest completed during deferral: {evidence}"));
     assert!(
-        samples.iter().any(|sample| {
-            sample["runner"]
-                .as_array()
-                .and_then(|rows| rows.first())
-                .and_then(|row| row["failures"].as_str())
-                .is_some_and(|failures| failures.contains("noMovement"))
-        }),
-        "{evidence}"
-    );
-    assert!(
-        samples.iter().all(|sample| {
-            sample["runner"][0]["objective_sequence"]
-                == evidence["initial"]["runner"][0]["objective_sequence"]
-        }),
-        "{evidence}"
+        useful_alternative["runner"][0]["objective_sequence"]
+            .as_str()
+            .unwrap()
+            .parse::<u64>()
+            .unwrap()
+            > initial_identity.parse::<u64>().unwrap(),
+        "{useful_alternative}"
     );
 }
