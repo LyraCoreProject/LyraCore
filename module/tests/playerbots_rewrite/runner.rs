@@ -400,19 +400,22 @@ fn playerbots_runner_resurrection_clears_defense_and_resumes_retained_home() {
     let parked_observed_micros = runner(&node, bot)["observed_micros"]
         .parse::<i64>()
         .unwrap();
-    node.assert_call("playerbots_fixture_provision_steps", &[bot, "64"]);
-    let provisioning = node.query_rows(&format!(
-        "SELECT action_cursor, next_repair_micros FROM pkg_playerbots_provisioning WHERE character_guid = {bot}"
-    ));
-    assert_eq!(provisioning.len(), 1);
-    assert_eq!(provisioning[0]["action_cursor"], "0", "{provisioning:?}");
-    assert!(
-        provisioning[0]["next_repair_micros"]
-            .parse::<i64>()
-            .unwrap()
-            > parked_observed_micros,
-        "{provisioning:?}"
-    );
+    let mut settled_provisioning = None;
+    for _ in 0..64 {
+        node.assert_call("playerbots_fixture_provision_steps", &[bot, "1"]);
+        let provisioning = node.query_rows(&format!(
+            "SELECT * FROM pkg_playerbots_provisioning WHERE character_guid = {bot}"
+        ));
+        assert_eq!(provisioning.len(), 1);
+        let row = &provisioning[0];
+        if row["action_cursor"] == "0"
+            && row["next_repair_micros"].parse::<i64>().unwrap() > parked_observed_micros
+        {
+            settled_provisioning = Some(row.clone());
+            break;
+        }
+    }
+    let settled_provisioning = settled_provisioning.expect("provisioning cycle did not finish");
 
     let target = ((0xF130u64 << 48) | (5_090_101u64 << 24) | 1).to_string();
     node.assert_call(
@@ -542,6 +545,12 @@ fn playerbots_runner_resurrection_clears_defense_and_resumes_retained_home() {
             "SELECT health, dead FROM game_world_entity WHERE guid = {target}"
         )),
         live_target
+    );
+    assert_eq!(
+        node.query_rows(&format!(
+            "SELECT * FROM pkg_playerbots_provisioning WHERE character_guid = {bot}"
+        )),
+        vec![settled_provisioning]
     );
     outcomes(&node);
 }
