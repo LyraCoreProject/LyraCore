@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorldImportProfile {
@@ -44,6 +44,7 @@ pub(crate) struct WorldImportScope {
     name: String,
     pub(crate) bounded_slices: Vec<BoundedMapSlice>,
     pub(crate) whole_maps: Vec<i64>,
+    pub(crate) instance_vmap_slices: Vec<InstanceVmapSlice>,
     pub(crate) forced_creature_entries: Vec<u64>,
 }
 
@@ -54,6 +55,16 @@ pub(crate) struct BoundedMapSlice {
     pub(crate) bounds: (f64, f64, f64, f64),
     pub(crate) sample: (f64, f64, f64),
     geometry: SliceGeometry,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct InstanceVmapSlice {
+    pub(crate) name: String,
+    pub(crate) map_id: u32,
+    pub(crate) entry: [f32; 3],
+    pub(crate) exit: [f32; 3],
+    pub(crate) exit_radius: f32,
+    pub(crate) collar_cells: u16,
 }
 
 #[derive(Clone, Debug)]
@@ -128,20 +139,34 @@ impl WorldImportScope {
             ]
         };
 
-        let (bounded_slices, whole_maps, forced_creature_entries) = match profile {
-            WorldImportProfile::AllianceEastern => (eastern()?, vec![], eastern_forced_creatures()),
-            WorldImportProfile::AllianceKalimdor => (kalimdor()?, vec![], vec![]),
-            WorldImportProfile::AllianceSingle => {
-                let mut slices = eastern()?;
-                slices.extend(kalimdor()?);
-                (slices, vec![36], eastern_forced_creatures())
-            }
-            WorldImportProfile::Instances => (vec![], vec![36], vec![]),
+        let deadmines = || {
+            vec![InstanceVmapSlice {
+                name: "deadmines-entry-exit".to_owned(),
+                map_id: 36,
+                entry: [-14.573_2, -385.475, 62.456_1],
+                exit: [-14.362_8, -393.38, 64.560_5],
+                exit_radius: 6.0,
+                collar_cells: 1,
+            }]
         };
+        let (bounded_slices, whole_maps, instance_vmap_slices, forced_creature_entries) =
+            match profile {
+                WorldImportProfile::AllianceEastern => {
+                    (eastern()?, vec![], vec![], eastern_forced_creatures())
+                }
+                WorldImportProfile::AllianceKalimdor => (kalimdor()?, vec![], vec![], vec![]),
+                WorldImportProfile::AllianceSingle => {
+                    let mut slices = eastern()?;
+                    slices.extend(kalimdor()?);
+                    (slices, vec![36], deadmines(), eastern_forced_creatures())
+                }
+                WorldImportProfile::Instances => (vec![], vec![36], deadmines(), vec![]),
+            };
         Self::new(
             profile.name(),
             bounded_slices,
             whole_maps,
+            instance_vmap_slices,
             forced_creature_entries,
         )
     }
@@ -175,13 +200,14 @@ impl WorldImportScope {
                 exclude,
             )?,
         };
-        Self::new("legacy", vec![slice], whole_maps, vec![])
+        Self::new("legacy", vec![slice], whole_maps, vec![], vec![])
     }
 
     fn new(
         name: impl Into<String>,
         bounded_slices: Vec<BoundedMapSlice>,
         mut whole_maps: Vec<i64>,
+        instance_vmap_slices: Vec<InstanceVmapSlice>,
         mut forced_creature_entries: Vec<u64>,
     ) -> Result<Self> {
         whole_maps.sort_unstable();
@@ -196,10 +222,21 @@ impl WorldImportScope {
                 bail!("world import scope plans map {map} as both bounded and whole; choose one");
             }
         }
+        for slice in &instance_vmap_slices {
+            if !whole_maps.contains(&i64::from(slice.map_id)) {
+                bail!(
+                    "instance vmap slice {} is outside whole map {}",
+                    slice.name,
+                    slice.map_id
+                );
+            }
+            slice.cell_range()?;
+        }
         Ok(Self {
             name: name.into(),
             bounded_slices,
             whole_maps,
+            instance_vmap_slices,
             forced_creature_entries,
         })
     }
@@ -228,6 +265,78 @@ impl WorldImportScope {
                 .bounded_slices
                 .iter()
                 .any(|slice| slice.map_id == map_id)
+    }
+}
+
+impl InstanceVmapSlice {
+    pub(crate) fn selection_identity(&self) -> Result<String> {
+        let (x0, x1, y0, y1) = self.cell_range()?;
+        Ok(format!(
+            "map={};instance-slice={};cell_x={x0}..{x1};cell_y={y0}..{y1};entry={:.4},{:.4},{:.4};exit={:.4},{:.4},{:.4};exit_radius={:.1};collar={}",
+            self.map_id,
+            self.name,
+            self.entry[0],
+            self.entry[1],
+            self.entry[2],
+            self.exit[0],
+            self.exit[1],
+            self.exit[2],
+            self.exit_radius,
+            self.collar_cells
+        ))
+    }
+
+    pub(crate) fn cell_range(&self) -> Result<(u16, u16, u16, u16)> {
+        if !self.exit_radius.is_finite() || self.exit_radius < 0.0 {
+            bail!("instance vmap exit radius must be a finite non-negative number");
+        }
+        if !self
+            .entry
+            .iter()
+            .chain(&self.exit)
+            .all(|value| value.is_finite())
+        {
+            bail!("instance vmap route points must contain only finite numbers");
+        }
+        let mut cell_x = Vec::new();
+        let mut cell_y = Vec::new();
+        for x in [
+            self.entry[0],
+            self.exit[0] - self.exit_radius,
+            self.exit[0] + self.exit_radius,
+        ] {
+            cell_x.push(
+                lyracore_shared::terrain::cell_index(x)
+                    .context("instance vmap route x is outside the map square")?,
+            );
+        }
+        for y in [
+            self.entry[1],
+            self.exit[1] - self.exit_radius,
+            self.exit[1] + self.exit_radius,
+        ] {
+            cell_y.push(
+                lyracore_shared::terrain::cell_index(y)
+                    .context("instance vmap route y is outside the map square")?,
+            );
+        }
+        let x0 = cell_x.iter().copied().min().unwrap();
+        let x1 = cell_x.iter().copied().max().unwrap();
+        let y0 = cell_y.iter().copied().min().unwrap();
+        let y1 = cell_y.iter().copied().max().unwrap();
+        let collar = self.collar_cells;
+        Ok((
+            x0.checked_sub(collar)
+                .context("instance vmap collar leaves the map square")?,
+            x1.checked_add(collar)
+                .filter(|cell| *cell < 1024)
+                .context("instance vmap collar leaves the map square")?,
+            y0.checked_sub(collar)
+                .context("instance vmap collar leaves the map square")?,
+            y1.checked_add(collar)
+                .filter(|cell| *cell < 1024)
+                .context("instance vmap collar leaves the map square")?,
+        ))
     }
 }
 
@@ -369,6 +478,7 @@ mod tests {
         assert_eq!(eastern.name(), "alliance-eastern");
         assert_eq!(eastern.bounded_slices.len(), 3);
         assert!(eastern.whole_maps.is_empty());
+        assert!(eastern.instance_vmap_slices.is_empty());
         assert_eq!(
             eastern.forced_creature_entries,
             vec![266, 344, 415, 1_343, 5_149, 5_165, 6_166, 6_569, 6_966, 11_406]
@@ -381,11 +491,13 @@ mod tests {
             .bounded_slices
             .iter()
             .all(|slice| slice.map_id == 1));
+        assert!(kalimdor.instance_vmap_slices.is_empty());
 
         let single = WorldImportScope::canonical(WorldImportProfile::AllianceSingle)
             .expect("single profile");
         assert_eq!(single.bounded_slices.len(), 5);
         assert_eq!(single.whole_maps, vec![36]);
+        assert_eq!(single.instance_vmap_slices.len(), 1);
         assert_eq!(
             single.forced_creature_entries,
             eastern.forced_creature_entries
@@ -395,6 +507,18 @@ mod tests {
             WorldImportScope::canonical(WorldImportProfile::Instances).expect("instances profile");
         assert!(instances.bounded_slices.is_empty());
         assert_eq!(instances.whole_maps, vec![36]);
+        assert_eq!(instances.instance_vmap_slices.len(), 1);
+        let route = &instances.instance_vmap_slices[0];
+        assert_eq!(route.name, "deadmines-entry-exit");
+        assert_eq!(route.map_id, 36);
+        assert_eq!(
+            route.cell_range().expect("route cell collar"),
+            (511, 513, 522, 524)
+        );
+        assert_eq!(
+            route.selection_identity().expect("selection identity"),
+            "map=36;instance-slice=deadmines-entry-exit;cell_x=511..513;cell_y=522..524;entry=-14.5732,-385.4750,62.4561;exit=-14.3628,-393.3800,64.5605;exit_radius=6.0;collar=1"
+        );
         assert!(instances.forced_creature_entries.is_empty());
     }
 
@@ -435,6 +559,7 @@ mod tests {
             ],
             vec![],
             vec![],
+            vec![],
         )
         .expect("valid scope");
         assert!(scope.contains(0, -15.0, 0.0, 0.0));
@@ -453,6 +578,7 @@ mod tests {
                     .expect("map-one slice"),
             ],
             vec![36],
+            vec![],
             vec![],
         )
         .expect("valid scope");
@@ -484,7 +610,7 @@ mod tests {
         assert!(
             BoundedMapSlice::rectangle("flat", 0, (1.0, 1.0, 0.0, 2.0), (1.0, 1.0, 0.0)).is_err()
         );
-        assert!(WorldImportScope::new("empty", vec![], vec![], vec![]).is_err());
+        assert!(WorldImportScope::new("empty", vec![], vec![], vec![], vec![]).is_err());
         assert!(WorldImportScope::legacy(
             0,
             Some((-1.0, 1.0, -1.0, 1.0)),

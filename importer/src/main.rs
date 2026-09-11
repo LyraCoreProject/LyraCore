@@ -27,7 +27,7 @@
 //!                                   database — spell_snapshot.rs
 //!   --terrain <client Data/ dir>    ADT heightmap stream (terrain.rs)
 //!   --nav <client Data/ dir>        WMO/M2 nav-grid rasterizer (nav.rs)
-//!   --vmap <client Data/ dir>       exact per-cell collision-triangle extract + pack + import
+//!   --vmap <client Data/ dir>       exact bounded collision-triangle extract + pack + import
 //!                                   (--apply loads `game_vmap_chunk` via import_vmap_chunks; a
 //!                                   dry run stops at report — vmap.rs; #520/#521,
 //!                                   docs/decisions.md §10)
@@ -55,6 +55,7 @@ mod dbc;
 mod eventai;
 mod eventai_presentation;
 mod go_model;
+mod instance_vmap;
 mod item_property;
 mod m2_collision;
 mod nav;

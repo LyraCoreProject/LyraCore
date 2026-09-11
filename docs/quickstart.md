@@ -430,6 +430,10 @@ geometry on each populated World Shard and skips the Instance Pool. It does not 
 `debug_set_vmap_enabled true` remains an explicit Operator decision after the checks in
 [`docs/vmap-rollout.md`](./vmap-rollout.md).
 
+The direct importer can dry-run the bounded Map 36 entry and exit route with
+`--vmap <client Data/ dir> --world-profile instances`. This is an archive-derived geometry check.
+It does not stage data or enable collision without `--apply`.
+
 ---
 
 ## 6. Playing from another machine on your LAN

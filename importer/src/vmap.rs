@@ -20,13 +20,15 @@
 //! already staged and the module derives coverage from it directly. Enumerates the generation's
 //! own cells, batches `prepare_vmap_nav_coverage` calls, and finalizes — resumable by skipping
 //! cells a prior run already covered.
+//!
+//! WMO-only instance maps use an Instance Vmap Slice instead of ADT tiles. The importer reads the
+//! map-wide WDT placement, retains only the route collar, and uses the same triangle transform,
+//! packer, generation lifecycle, and coverage rasterizer as continent geometry.
 
 use anyhow::{bail, Context, Result};
 use lyracore_shared::terrain::cell_key;
 use lyracore_shared::vmap::{encode, TriClass, VmapTri, HEADER_BYTES, TRI_BYTES};
-#[cfg(test)]
-use std::collections::HashMap;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -49,7 +51,7 @@ use crate::nav::{Mesh, Placement, Tri};
 /// convention, not verified against a live tilted placement — flag for a measured follow-up if one
 /// turns up wrong (same "deliberate simplification, revisit when a live case demands it" posture
 /// `nav.rs` uses elsewhere).
-fn apply_full(
+pub(crate) fn apply_full(
     conv: crate::nav::Convention,
     rotation: [f32; 3],
     scale: f32,
@@ -444,6 +446,29 @@ fn preflight_map_ownership(args: &crate::Args, map_id: u32) -> Result<()> {
     }
 }
 
+fn preflight_instance_ownership(args: &crate::Args, map_id: u32) -> Result<()> {
+    let output = sql_query(
+        args,
+        "SELECT id, hosts_instances FROM game_config WHERE id = 0",
+    )
+    .context("query Instance Pool ownership")?;
+    if sql_owns_instance_pool(&output)? {
+        Ok(())
+    } else {
+        bail!(
+            "target Shard {} does not own Instance Pool populations for map {map_id}",
+            args.db
+        )
+    }
+}
+
+fn sql_owns_instance_pool(output: &str) -> Result<bool> {
+    let value: serde_json::Value =
+        serde_json::from_str(output).context("parse JSON SQL Instance Pool response")?;
+    let rows = sql_column_rows(&value, &["id", "hosts_instances"]);
+    Ok(rows.len() == 1 && rows[0][0].as_u64() == Some(0) && rows[0][1].as_bool() == Some(true))
+}
+
 pub(crate) fn run(args: &crate::Args) -> Result<()> {
     if args.vmap_status {
         if args.vmap.is_none() {
@@ -452,9 +477,9 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
         bail!("--vmap-status is a standalone status command; omit --vmap");
     }
     let scope = args.world_import_scope()?;
-    if scope.bounded_slices.is_empty() {
+    if scope.bounded_slices.is_empty() && scope.instance_vmap_slices.is_empty() {
         println!(
-            "vmap: scope {} has no bounded map slices; no vmap generation to import",
+            "vmap: scope {} has no bounded or instance vmap slices; no vmap generation to import",
             scope.name()
         );
         return Ok(());
@@ -474,7 +499,7 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
     let data_dir = Path::new(args.vmap.as_ref().expect("caller checked"));
     let mut chain = crate::collision::open_geometry_chain(data_dir)?;
     let source_identity = format!("client-data-path:{}", data_dir.display());
-    let mut plans = Vec::with_capacity(slices_by_map.len());
+    let mut plans = Vec::with_capacity(slices_by_map.len() + scope.instance_vmap_slices.len());
     for (map_id, slices) in slices_by_map {
         plans.push(
             build_plan(
@@ -494,6 +519,20 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
             })?,
         );
     }
+    for slice in &scope.instance_vmap_slices {
+        plans.push(
+            build_instance_plan(&mut chain, data_dir, slice, &source_identity).with_context(
+                || {
+                    format!(
+                        "vmap scope {} map {} instance slice {}",
+                        scope.name(),
+                        slice.map_id,
+                        slice.name
+                    )
+                },
+            )?,
+        );
+    }
     for plan in &plans {
         println!(
             "vmap: map {} — {} world tris ({} WMO, {} M2) across {} cells, {} packed bytes ({:.1} KB, {} shard row(s))",
@@ -510,12 +549,27 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
             "vmap: manifest {} generation {}",
             plan.manifest, plan.generation_id
         );
+        if let Some(route) = &plan.route_evidence {
+            println!(
+                "vmap: instance route {} entry_floor={:.4} exit_floor={:.4} direct_step_hit={}",
+                route.name,
+                route.entry_floor,
+                route.exit_floor,
+                route
+                    .direct_step_hit
+                    .map(|point| format!("{:.4},{:.4},{:.4}", point[0], point[1], point[2]))
+                    .unwrap_or_else(|| "clear".to_owned())
+            );
+        }
     }
     if !args.apply {
         println!("-- DRY RUN: would stage, append, verify, and activate each map generation");
         return Ok(());
     }
     for plan in &plans {
+        if plan.ownership == VmapOwnership::InstancePool {
+            preflight_instance_ownership(args, plan.map_id)?;
+        }
         apply_plan(args, plan)?;
     }
     println!("vmap: applied.");
@@ -524,6 +578,7 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
 
 struct VmapPlan {
     map_id: u32,
+    ownership: VmapOwnership,
     source_identity: String,
     selection_identity: String,
     spool: VmapSpool,
@@ -534,6 +589,20 @@ struct VmapPlan {
     generation_id: u64,
     world_tris: usize,
     wmo_tris: usize,
+    route_evidence: Option<InstanceRouteEvidence>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum VmapOwnership {
+    Spatial,
+    InstancePool,
+}
+
+struct InstanceRouteEvidence {
+    name: String,
+    entry_floor: f32,
+    exit_floor: f32,
+    direct_step_hit: Option<[f32; 3]>,
 }
 
 fn build_plan(
@@ -651,6 +720,33 @@ fn build_plan(
         }
     }
 
+    finish_plan(
+        map_id,
+        source_identity,
+        if restrict_to_scope {
+            format!("map={map_id};slices={}", selections.join(","))
+        } else {
+            let (x0, x1, y0, y1) = ranges[0];
+            format!("map={map_id};cell_x={x0}..{x1};cell_y={y0}..{y1}")
+        },
+        spool,
+        world_tris,
+        wmo_tris,
+        VmapOwnership::Spatial,
+        None,
+    )
+}
+
+fn finish_plan(
+    map_id: u32,
+    source_identity: &str,
+    selection_identity: String,
+    spool: VmapSpool,
+    world_tris: usize,
+    wmo_tris: usize,
+    ownership: VmapOwnership,
+    route_evidence: Option<InstanceRouteEvidence>,
+) -> Result<VmapPlan> {
     let keys = spool.keys()?;
     let mut total_bytes = 0usize;
     let mut shard_rows = 0usize;
@@ -677,13 +773,9 @@ fn build_plan(
     );
     Ok(VmapPlan {
         map_id,
+        ownership,
         source_identity: source_identity.to_owned(),
-        selection_identity: if restrict_to_scope {
-            format!("map={map_id};slices={}", selections.join(","))
-        } else {
-            let (x0, x1, y0, y1) = ranges[0];
-            format!("map={map_id};cell_x={x0}..{x1};cell_y={y0}..{y1}")
-        },
+        selection_identity,
         spool,
         keys,
         total_bytes,
@@ -692,6 +784,121 @@ fn build_plan(
         generation_id,
         world_tris,
         wmo_tris,
+        route_evidence,
+    })
+}
+
+fn build_instance_plan(
+    chain: &mut PatchChain,
+    data_dir: &Path,
+    slice: &crate::world_import_scope::InstanceVmapSlice,
+    source_identity: &str,
+) -> Result<VmapPlan> {
+    let (x0, x1, y0, y1) = slice.cell_range()?;
+    let selected_cells = (x0..=x1)
+        .flat_map(|cell_x| (y0..=y1).map(move |cell_y| cell_key(slice.map_id, cell_x, cell_y)))
+        .collect::<BTreeSet<_>>();
+    let global = crate::instance_vmap::read_global_wmo(data_dir, chain, slice)?;
+    let convention =
+        crate::nav::calibrate_from_placements(chain, std::slice::from_ref(&global.placement))?;
+    crate::instance_vmap::refuse_relevant_doodads(
+        chain,
+        slice.map_id,
+        &selected_cells,
+        &global,
+        convention,
+    )?;
+    let mesh = crate::nav::load_mesh(chain, &global.placement)?;
+    if !matches!(&mesh, Mesh::Wmo(_)) {
+        bail!("instance WDT placement did not resolve to a WMO mesh");
+    }
+    let spool = VmapSpool::new(slice.map_id)?;
+    let mut route_tris = HashMap::<(u16, u16), Vec<VmapTri>>::new();
+    let mut spool_error = None;
+    let mut selected_tri_refs = 0usize;
+    for_each_placement_tri(&global.placement, &mesh, convention, |tri| {
+        if spool_error.is_some() {
+            return;
+        }
+        let Some((cx0, cx1, cy0, cy1)) = tri_cell_range(&tri) else {
+            return;
+        };
+        for cell_x in cx0..=cx1 {
+            for cell_y in cy0..=cy1 {
+                let key = cell_key(slice.map_id, cell_x, cell_y);
+                if selected_cells.contains(&key) {
+                    selected_tri_refs += 1;
+                    if selected_tri_refs > MAX_INSTANCE_SELECTED_TRI_REFS {
+                        spool_error = Some(anyhow::anyhow!(
+                            "bounded instance slice exceeds the {MAX_INSTANCE_SELECTED_TRI_REFS}-triangle-reference output limit"
+                        ));
+                        return;
+                    }
+                    if let Err(error) = spool.append(key, tri) {
+                        spool_error = Some(error);
+                        return;
+                    }
+                    route_tris.entry((cell_x, cell_y)).or_default().push(tri);
+                }
+            }
+        }
+    });
+    if let Some(error) = spool_error {
+        return Err(error).context("spooling bounded instance WMO");
+    }
+    let evidence = instance_route_evidence(slice, &route_tris)?;
+    let world_tris = mesh.len();
+    finish_plan(
+        slice.map_id,
+        source_identity,
+        slice.selection_identity()?,
+        spool,
+        world_tris,
+        world_tris,
+        VmapOwnership::InstancePool,
+        Some(evidence),
+    )
+}
+
+fn instance_route_evidence(
+    slice: &crate::world_import_scope::InstanceVmapSlice,
+    tris: &HashMap<(u16, u16), Vec<VmapTri>>,
+) -> Result<InstanceRouteEvidence> {
+    let cast = |from: [f32; 3], to: [f32; 3]| {
+        lyracore_shared::vmap::cast_ray(
+            &mut |cell_x, cell_y| tris.get(&(cell_x, cell_y)).cloned(),
+            from,
+            to,
+            lyracore_shared::vmap::RayFlavor::Collision,
+        )
+    };
+    let floor = |point: [f32; 3]| {
+        cast(
+            [point[0], point[1], point[2] + 2.0],
+            [point[0], point[1], point[2] - 200.0],
+        )
+        .map(|hit| hit[2])
+    };
+    let entry_floor =
+        floor(slice.entry).context("instance entry has no retained collision floor")?;
+    let exit_floor = floor(slice.exit).context("instance exit has no retained collision floor")?;
+    let direct_step_hit = cast(
+        [
+            slice.entry[0],
+            slice.entry[1],
+            slice.entry[2] + lyracore_shared::nav::WALK_STEP_UP,
+        ],
+        [
+            slice.exit[0],
+            slice.exit[1],
+            slice.exit[2] + lyracore_shared::nav::WALK_STEP_UP,
+        ],
+    );
+    Ok(InstanceRouteEvidence {
+        name: slice.name.clone(),
+        entry_floor,
+        exit_floor,
+        direct_step_hit,
     })
 }
 
@@ -780,6 +987,9 @@ const BATCH_BYTES: usize = 28_000;
 /// guards was measured live (`Argument list too long`, os error 7) importing a dense WMO cell near
 /// the Northshire abbey before this cap existed.
 const MAX_ROW_TRI_BYTES: usize = 20_000;
+
+/// Bounds the 45-byte spool records retained by one Instance Vmap Slice to 22.5 MB.
+const MAX_INSTANCE_SELECTED_TRI_REFS: usize = 500_000;
 
 /// Split one cell's triangle list into `lyracore_shared::vmap::encode`d shards, each at most
 /// `MAX_ROW_TRI_BYTES`. Order within a cell doesn't matter (the module concatenates every shard's
@@ -911,8 +1121,8 @@ fn coverage_batches(cells: &[(u16, u16)]) -> Vec<String> {
 }
 
 /// `--vmap-prepare-coverage <generation_id>`: derive and store nav coverage for an already-staged
-/// generation, resumable and manifest-reporting. Reuses `preflight_map_ownership` fail-closed —
-/// coverage never prepares on a shard that does not own the map — and, like `--vmap`, only writes
+/// generation, resumable and manifest-reporting. Reuses `preflight_map_ownership` fail-closed, so
+/// coverage never prepares on a World Shard that does not own the map and, like `--vmap`, only writes
 /// with `--apply`; without it this reports the plan and touches nothing.
 pub(crate) fn run_coverage(args: &crate::Args, generation_id: u64) -> Result<()> {
     let generation = generation_info(args, generation_id)?;
@@ -1230,6 +1440,64 @@ mod tests {
             0
         )
         .unwrap());
+    }
+
+    #[test]
+    fn instance_ownership_requires_the_exact_config_row() {
+        let owned = r#"[{"schema":{"elements":[{"name":{"some":"id"}},{"name":{"some":"hosts_instances"}}]},"rows":[[0,true]]}]"#;
+        assert!(sql_owns_instance_pool(owned).unwrap());
+        assert!(!sql_owns_instance_pool(&owned.replace("true", "false")).unwrap());
+        assert!(!sql_owns_instance_pool(&owned.replace("[0,true]", "[1,true]")).unwrap());
+        assert!(sql_owns_instance_pool("not json").is_err());
+    }
+
+    #[test]
+    fn instance_route_reports_both_floors_and_the_direct_collision() {
+        let class = TriClass::Wmo {
+            group_id: 1,
+            mogp_flags: 0,
+        };
+        let tris = vec![
+            VmapTri {
+                verts: [[-1.0, -1.0, 10.0], [1.0, 1.0, 10.0], [1.0, -1.0, 10.0]],
+                class,
+            },
+            VmapTri {
+                verts: [[-1.0, -1.0, 10.0], [-1.0, 1.0, 10.0], [1.0, 1.0, 10.0]],
+                class,
+            },
+            VmapTri {
+                verts: [[4.0, -1.0, 12.0], [6.0, 1.0, 12.0], [6.0, -1.0, 12.0]],
+                class,
+            },
+            VmapTri {
+                verts: [[4.0, -1.0, 12.0], [4.0, 1.0, 12.0], [6.0, 1.0, 12.0]],
+                class,
+            },
+            VmapTri {
+                verts: [[2.5, -1.0, 0.0], [2.5, 1.0, 20.0], [2.5, -1.0, 20.0]],
+                class,
+            },
+            VmapTri {
+                verts: [[2.5, -1.0, 0.0], [2.5, 1.0, 0.0], [2.5, 1.0, 20.0]],
+                class,
+            },
+        ];
+        let cell = lyracore_shared::terrain::cell_index(0.0).unwrap();
+        let by_cell = HashMap::from([((cell, cell), tris)]);
+        let slice = crate::world_import_scope::InstanceVmapSlice {
+            name: "worked-route".to_owned(),
+            map_id: 36,
+            entry: [0.0, 0.0, 10.0],
+            exit: [5.0, 0.0, 12.0],
+            exit_radius: 0.0,
+            collar_cells: 1,
+        };
+        let evidence = instance_route_evidence(&slice, &by_cell).unwrap();
+        assert_eq!(evidence.entry_floor, 10.0);
+        assert_eq!(evidence.exit_floor, 12.0);
+        let hit = evidence.direct_step_hit.expect("direct route crosses wall");
+        assert!((hit[0] - 2.5).abs() < 0.001, "unexpected hit {hit:?}");
     }
 
     #[test]

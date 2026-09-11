@@ -147,7 +147,7 @@ The sharded destination plan is fixed:
 | --- | --- | --- |
 | `lyracore` | `alliance-eastern` | Human corridor, Dun Morogh and Loch Modan on map 0 |
 | `lyracore-kalimdor` | `alliance-kalimdor` | Teldrassil and Darkshore on map 1 |
-| `lyracore-instances` | `instances` | whole map 36, with no open-world terrain, navigation or vmap pass |
+| `lyracore-instances` | `instances` | whole map 36, with no open-world terrain or navigation pass |
 
 The single topology uses `alliance-single`, the union of those bounded continent slices and map 36.
 Every importer child names its destination and loopback SpacetimeDB endpoint. The curated
@@ -163,6 +163,15 @@ the rerun repairs a partial family; the complete multi-destination operation is 
 After `import world`, run `./lyracore import vmaps` when exact model/WMO collision data is needed.
 It follows the World Shard profiles and skips the Instance Pool. Importing vmaps does not enable
 exact rays. Enabling them is a separate Operator decision after `docs/vmap-rollout.md` Verification.
+
+The importer also has one Instance Vmap Slice named `deadmines-entry-exit`. A direct
+`lyracore-importer --vmap <client Data/ dir> --world-profile instances` dry run reads the global WMO
+placement from Map 36's WDT and retains only the entry, exit radius, and one-cell rasterizer collar.
+It reports the entry and exit floors and the direct collision ray. It refuses selected WMO groups
+that reference active doodads until their nested transforms are supported. Applying this slice is a
+separate Operator step; `./lyracore import vmaps` does not send it to the Instance Pool yet. Map 36
+Navigation Coverage remains unavailable until archive-derived route evidence shows it is needed and
+a multi-floor rasterizer is available.
 
 The automated repository checks cover destination plans, profile fences, canned SQL failures, and
 synthetic importer rows. They do not read a real pinned dump or client archives. A lawful real-data
