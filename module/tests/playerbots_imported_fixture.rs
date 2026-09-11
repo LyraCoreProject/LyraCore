@@ -198,7 +198,7 @@ fn imported_stage_skips_a_blocked_scatter_point() {
     );
     let entities = rows_by(
         node.query_rows(
-            "SELECT guid, map_id, x, y, z, level, xp FROM game_world_entity WHERE guid >= 1000000 AND guid < 2000000",
+            "SELECT guid, map_id, instance_id, x, y, z, level, xp FROM game_world_entity WHERE guid >= 1000000 AND guid < 2000000",
         ),
         "guid",
     );
@@ -234,12 +234,13 @@ fn imported_stage_skips_a_blocked_scatter_point() {
     let mut positions = Vec::new();
     for entity in entities.values() {
         assert_eq!(entity["map_id"], "0");
+        assert_eq!(entity["instance_id"], "0");
         assert_eq!(entity["level"], "1");
         assert_eq!(entity["xp"], "0");
         let x: f32 = entity["x"].parse().unwrap();
         let y: f32 = entity["y"].parse().unwrap();
         let z: f32 = entity["z"].parse().unwrap();
-        assert_eq!(z, 83.5312);
+        assert!(z.is_finite() && (z - 83.5312).abs() < 1e-4);
         assert!(positions
             .iter()
             .all(|(prior_x, prior_y)| (prior_x - x).hypot(prior_y - y) > 1.5));
