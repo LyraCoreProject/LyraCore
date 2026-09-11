@@ -128,10 +128,12 @@ fn selected_doodad_range(
     selected_set: u16,
     name: &str,
 ) -> Result<(u32, u32, usize)> {
+    // Some Classic roots overstate the MOHD definition count. The MODD chunk contains the
+    // definitions that can be selected; MOHD must still cover that complete parsed prefix.
     if root.n_doodad_sets as usize != root.doodad_sets.len()
-        || root.n_doodad_defs as usize != root.doodad_defs.len()
+        || (root.n_doodad_defs as usize) < root.doodad_defs.len()
     {
-        bail!("WMO {name} doodad header counts do not match parsed chunks");
+        bail!("WMO {name} doodad header counts do not cover parsed chunks");
     }
     let (start, end) = if root.doodad_sets.is_empty() {
         if !root.doodad_defs.is_empty() {
