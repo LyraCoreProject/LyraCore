@@ -534,7 +534,25 @@ fn playerbots_runner_resurrection_clears_defense_and_resumes_retained_home() {
     );
 
     node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
-    let resumed = runner(&node, bot);
+    let first_return = runner(&node, bot);
+    assert!(
+        first_return["chosen"].contains("returnHome"),
+        "{first_return:?}"
+    );
+    let mut resumed = first_return;
+    if !resumed["chosen"].contains("move") {
+        assert!(resumed["chosen"].contains("hold"), "{resumed:?}");
+        assert!(resumed["last_outcome"].contains("waiting"), "{resumed:?}");
+        let observed_micros = resumed["observed_micros"].parse::<i64>().unwrap();
+        let next_eligible_micros = resumed["next_eligible_micros"].parse::<i64>().unwrap();
+        assert!(next_eligible_micros > observed_micros, "{resumed:?}");
+        let wait =
+            Duration::from_micros(u64::try_from(next_eligible_micros - observed_micros).unwrap());
+        assert!(wait < POLL_TIMEOUT, "{resumed:?}");
+        std::thread::sleep(wait);
+        node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
+        resumed = runner(&node, bot);
+    }
     assert!(resumed["chosen"].contains("returnHome"), "{resumed:?}");
     assert!(resumed["chosen"].contains("move"), "{resumed:?}");
     assert_eq!(resumed["objective_sequence"], retained_objective_sequence);
