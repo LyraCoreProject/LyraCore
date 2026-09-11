@@ -1733,7 +1733,11 @@ fn assert_imported_map36(evidence: &Value) {
     assert_eq!(generation["accepted_chunks"], generation["expected_chunks"]);
     assert!(parse_value_u64(generation, "expected_chunks") > 0);
     assert!(parse_value_u64(generation, "expected_bytes") > 0);
-    let digest = generation["manifest_digest"].as_str().unwrap();
+    let digest = generation["manifest_digest"]
+        .as_str()
+        .unwrap()
+        .strip_prefix("0x")
+        .expect("vmap manifest digest missing byte-value prefix");
     assert_eq!(digest.len(), 64);
     assert!(digest
         .bytes()
