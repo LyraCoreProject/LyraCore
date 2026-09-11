@@ -392,7 +392,30 @@ fn assert_staged(node: &Standalone, guid: &str, case: JourneyCase, staged: &serd
             "{staged}"
         );
     }
-    assert!(staged["runner"].as_array().unwrap().is_empty(), "{staged}");
+    let runners = staged["runner"].as_array().unwrap();
+    assert_eq!(runners.len(), 1, "{staged}");
+    let runner = &runners[0];
+    assert_eq!(runner["character_guid"], guid, "{staged}");
+    assert_eq!(
+        runner["next_eligible_micros"],
+        i64::MAX.to_string(),
+        "{staged}"
+    );
+    assert_eq!(runner["objective_sequence"], "0", "{staged}");
+    assert_eq!(runner["candidate_order"], "", "{staged}");
+    assert_eq!(runner["objective"], "(none = ())", "{staged}");
+    assert_eq!(runner["foreground"], "(none = ())", "{staged}");
+    assert_eq!(runner["chosen"], "(none = ())", "{staged}");
+    assert_eq!(runner["last_outcome"], "(frozen = ())", "{staged}");
+    assert_eq!(runner["transitions"], "0", "{staged}");
+    assert_eq!(
+        runner["history"],
+        format!(
+            "(at_micros = {}, chosen = (none = ()), outcome = (frozen = ()))",
+            journey["staged_micros"].as_str().unwrap()
+        ),
+        "{staged}"
+    );
     assert!(staged["actions"].as_array().unwrap().is_empty(), "{staged}");
     assert_staged_faults(staged);
 

@@ -360,7 +360,8 @@ fn playerbots_cutover_leaves_core_escrow_under_legacy_ownership_without_package_
     node.assert_call(
         "begin_transfer",
         &[
-            "5091201", &actor, "36", "5098078", "-14.5732", "-385.475", "62.4561", "1.5708", "true",
+            "--", "5091201", &actor, "36", "5098078", "-14.5732", "-385.475", "62.4561", "1.5708",
+            "true",
         ],
     );
     let escrowed = core_escrow_snapshot(&node, guid);
@@ -510,7 +511,8 @@ fn playerbots_cutover_leaves_pending_intent_checkpoint_and_escrow_under_legacy_o
     node.assert_call(
         "begin_transfer",
         &[
-            intent_id, &actor, "36", "5098078", "-14.5732", "-385.475", "62.4561", "1.5708", "true",
+            "--", intent_id, &actor, "36", "5098078", "-14.5732", "-385.475", "62.4561", "1.5708",
+            "true",
         ],
     );
     let escrowed = json!({
