@@ -127,8 +127,8 @@ const STATIC_CANDIDATES: [Graveyard; 5] = [
 
 // ---- Instance-map release (work-item 226) --------------------------------------------------
 //
-// An instance map (Deadmines, map 36) has NO imported terrain (WMO geometry — deliberately no ADT
-// import), so `terrain::zone_id_at` can never resolve a zone there,
+// Deadmines (map 36) has ADT tiles, but its stacked floors do not fit the imported single-height
+// terrain rows. `terrain::zone_id_at` therefore cannot resolve a zone there,
 // and it has NO graveyards of its own (`all_on_map(36)` is empty) — the pre-226 chain therefore
 // fell all the way to `nearest(px, py)`, comparing map-36 interior coordinates against map-0
 // consts by raw 2-D distance: a meaningless pick (a Deadmines death "released" at Northshire).
