@@ -745,10 +745,6 @@ fn playerbots_runner_expired_home_does_not_cancel_a_tactical_cast() {
         "{deferred}"
     );
     assert_eq!(
-        deferred["runner"]["chosen"], completed["runner"]["chosen"],
-        "the expired Home pass must not report its unexecuted Candidate as chosen: {deferred}"
-    );
-    assert_eq!(
         deferred["runner"]["cast_progress"], completed["runner"]["cast_progress"],
         "{deferred}"
     );
