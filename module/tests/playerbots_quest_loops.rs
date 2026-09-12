@@ -2,7 +2,7 @@
 
 mod support;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 use support::Standalone;
 
@@ -240,7 +240,7 @@ fn drive_until(
 
 fn actions(node: &Standalone, guid: &str) -> Vec<BTreeMap<String, String>> {
     node.query_rows(&format!(
-        "SELECT kind, target_guid, spell_id, quest_entry, outcome FROM pkg_playerbots_action WHERE character_guid = {guid}"
+        "SELECT kind, target_guid, spell_id, quest_entry, outcome, observed_micros FROM pkg_playerbots_action WHERE character_guid = {guid}"
     ))
 }
 
@@ -1397,6 +1397,116 @@ fn playerbots_quest_uses_a_reward_eligible_target_and_retains_productive_work() 
     ));
     assert_eq!(entitlement.len(), 1, "{entitlement:?}");
     assert_eq!(entitlement[0]["eligible_guid"], guid);
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_quest_fallback_distributes_an_ungrouped_population() {
+    let mut node = Standalone::start("playerbots-quest-loop-fallback-dispersion");
+    node.publish_module();
+    remove_builtin_weather_import_stamp(&node);
+    node.assert_call("claim_operator", &[]);
+    node.assert_call("install_guid_range", &["1000000"]);
+    stage_quest_geometry(&node);
+    node.assert_call(
+        "playerbots_spawn_class_role",
+        &["25", "1200", "1200", "50", "1", "0"],
+    );
+    let mut subjects: Vec<_> = node
+        .query_rows("SELECT character_guid FROM pkg_playerbots_bot")
+        .into_iter()
+        .map(|row| row["character_guid"].clone())
+        .collect();
+    subjects.sort();
+    assert_eq!(subjects.len(), 25, "{subjects:?}");
+    node.assert_call("playerbots_quest_loop_fixture_stage_named", &[&subjects[0]]);
+    node.assert_call(
+        "playerbots_spawn_class_role",
+        &["1", "1360", "1200", "50", "1", "0"],
+    );
+    let foreign = node
+        .query_rows("SELECT character_guid FROM pkg_playerbots_bot")
+        .into_iter()
+        .map(|row| row["character_guid"].clone())
+        .find(|guid| !subjects.contains(guid))
+        .expect("foreign tag owner is absent");
+    node.assert_call(
+        "playerbots_quest_loop_fixture_prepare_dispersion",
+        &[&foreign],
+    );
+    node.assert_call(
+        "debug_add_threat",
+        &[&CREATURE_6.to_string(), &foreign, "1"],
+    );
+    assert_solo_loot_tag(&node, CREATURE_6, &foreign);
+    assert!(node
+        .query_rows("SELECT * FROM game_group_member")
+        .is_empty());
+    let positions: BTreeSet<_> = subjects
+        .iter()
+        .map(|guid| {
+            let entity = query_one(
+                &node,
+                &format!(
+                    "SELECT map_id, instance_id, x, y, z FROM game_world_entity WHERE guid = {guid}"
+                ),
+            );
+            (
+                entity["map_id"].clone(),
+                entity["instance_id"].clone(),
+                entity["x"].clone(),
+                entity["y"].clone(),
+                entity["z"].clone(),
+            )
+        })
+        .collect();
+    assert_eq!(positions.len(), 1, "{positions:?}");
+    node.assert_call("playerbots_quest_loop_fixture_pass_dispersion", &[&foreign]);
+    record(&node, "quest-fallback-dispersion");
+
+    let allowed: BTreeSet<_> = (1..=3).map(|offset| CREATURE_6 + offset).collect();
+    let mut selected = BTreeSet::new();
+    let mut observed = BTreeSet::new();
+    let first_purpose = retained_quest_purpose(&node, &subjects[0]);
+    for guid in &subjects {
+        assert_eq!(retained_quest_purpose(&node, guid), first_purpose);
+        assert_eq!(first_quest_count(&quest(&node, guid, 7).unwrap()), 0);
+        let runner = query_one(
+            &node,
+            &format!(
+                "SELECT chosen, recovery, observed_micros FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+            ),
+        );
+        observed.insert(runner["observed_micros"].clone());
+        assert!(
+            runner["chosen"].contains("reason = (quest = ())"),
+            "{runner:?}"
+        );
+        let target = allowed
+            .iter()
+            .copied()
+            .find(|target| runner["chosen"].contains(&target.to_string()))
+            .unwrap_or_else(|| {
+                panic!("Quest fallback did not choose a nearest target: {runner:?}")
+            });
+        assert!(
+            runner["recovery"].contains(&format!("active = (some = (fight = {target}))")),
+            "{runner:?}"
+        );
+        assert!(actions(&node, guid).iter().any(|action| {
+            action["kind"].contains("move")
+                && action["observed_micros"] == runner["observed_micros"]
+                && action["outcome"].contains("destination")
+                && action["outcome"].contains("arrived = false")
+        }));
+        selected.insert(target);
+    }
+    assert_eq!(observed.len(), 1, "{observed:?}");
+    assert!(
+        selected.len() > 1,
+        "synchronized fallback target: {selected:?}"
+    );
+    assert_solo_loot_tag(&node, CREATURE_6, &foreign);
 }
 
 #[test]
