@@ -18,25 +18,25 @@
     "token_context_record": null
   },
   "candidate": {
-    "core_commit": "fd2687f3056f2964d75bbd483bde68a463499434",
-    "core_tree": "c780a9bfd53823b6e2d88102cfc6da698657f137",
-    "package_commit": "a88e828a7704a4b78e45511f956855a164a69931",
-    "package_tree": "448bc7f29f0d96b37495ebf7b02a382d8aa497f1",
-    "playerbots_tree": "d22e89801ff2e333994cefba09cb3284b00785dd",
+    "core_commit": "916bac3a0649e9abc6030e7f3cd56816b83fc72c",
+    "core_tree": "5496a3f533b6050a42757708cb1ad25f283c74f3",
+    "package_commit": "4e8d98e3d29c8327b55ca679672a8386604620b2",
+    "package_tree": "d16b13959a2da85b3740ae69c929e2f342cbbeb4",
+    "playerbots_tree": "eb0866c86334d9919d431c8ed0bd6adb9c6c7412",
     "dungeons_tree": "8969ccc9475d1f8b28687b7cd818d85165f7e05f",
-    "module_wasm_sha256": "07b74b12851aa15f05d75905d6b66f7cbbafe0bc5b977630b628154c10488ab7",
-    "module_wasm_bytes": 9665319,
-    "build_manifest_sha256": "6b0d303eebba4d7f109bbfdeb718b7ca02ba05461b52e06e4736488d38a4677f",
+    "module_wasm_sha256": "64914c8d36ad1f7f251a580a2cc6515903e605bfb048688333661830bca61b0a",
+    "module_wasm_bytes": 9690011,
+    "build_manifest_sha256": "ebdc8b1a9a80162cdcc20604ee3ed1c787bf30c03247acc7070556a4c3e95036",
     "gateway_sha256": null,
-    "package_content_blake3": "1e849fdc1d99e92495dcc9ed0c6ced3038344cc9a266535a230841052c80bf51",
-    "build_manifest": "/home/t3agent/.cache/playerbots-rewrite/evidence/pb012-quest-dispersion-24ab2c71-2fdc43d0-green-v1/build-manifest.json",
+    "package_content_blake3": "e6b8155c219329122dec3bf4a660c536d051b86e7505c8577365b45c130c3714",
+    "build_manifest": "/home/t3agent/.cache/playerbots-rewrite/evidence/pb012-final-composed-build-916bac3a-4e8d98e3-v2/build-manifest.json",
     "module_wasm_source": {
-      "core_commit": "24ab2c718f9451be993922ac948ddeff02a29b5e",
-      "core_tree": "2dda9d6d293cd5e19e94f0838af1ac3b8ab31277",
-      "package_commit": "2fdc43d0f85cad25296a877578917af74aeac54e",
-      "package_tree": "34394159414ff5ee1a06bed0fcc06f0e027c73bb"
+      "core_commit": "916bac3a0649e9abc6030e7f3cd56816b83fc72c",
+      "core_tree": "5496a3f533b6050a42757708cb1ad25f283c74f3",
+      "package_commit": "4e8d98e3d29c8327b55ca679672a8386604620b2",
+      "package_tree": "d16b13959a2da85b3740ae69c929e2f342cbbeb4"
     },
-    "status": "imported_hour_failed_defense_and_quest_gaps"
+    "status": "combined_candidate_ci_and_imported_hour_running"
   },
   "importer": {
     "merged_core_commit": "375b38c3004b61500ce480a72a681d7999a5c9ca",
