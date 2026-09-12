@@ -1955,7 +1955,7 @@
         "The final 25-bot observation completed 3,600 seconds with 7,180 passes and 90,466 decisions. Every bot was processed. Maximum scheduler lag was 505,859 microseconds; all 27 deferred observations were accounted for. Peak process memory was 885,452,800 bytes. The run still fails imported behavior acceptance, so these measurements do not yet close the deployment-capacity criterion. Original run SHA-256 c53438ee525ccb3d879e1b5d92189d4763505d633ca46dc8a383585b379482f4."
       ],
       "notes": [
-        "Eight of nine acceptance criteria are accepted. The latest imported hour has clear static geometry and zero Refusal spam, but fails behavior on synchronized Quest fallback selection. One Grind interval lacks target evidence. A focused correction and fresh imported hour remain required.",
+        "Eight of nine acceptance criteria are accepted. The last imported hour has clear static geometry and zero Refusal spam, but fails behavior. Its identified defects include collection-search starvation, a Mage Defense death cycle and eight unbounded Completed Quest waits. The corrections need focused checks and a fresh imported hour.",
         "Focused overflow and Transfer regressions retain their passing results. Their caller corrections are composed with productive-target work for the next PR and CI update. The previous remote revision passed all nine canonical Package jobs; final corrected CI remains required.",
         "The ordinary progression model permits automatic training, equipment and supplies. Bots must still earn XP and Quest credit through gameplay. Four later imported quests require level 7; fixture levels or imported requirements must not bypass that gap.",
         "The imported capacity observation is coordinated with PB-012 at the final composed sources. It uses 25 level-one bots for 3,600 measured seconds on private persistent storage, with navigation and collision enabled. Behavior and geometry analysis follow the capture; client-visible motion remains a separate acceptance requirement.",
@@ -2064,7 +2064,7 @@
         },
         {
           "url": "https://github.com/LyraCoreProject/packages/pull/36",
-          "label": "Collection #36, gameplay CI running",
+          "label": "Collection #36, corrections before final CI",
           "status": "review",
           "head_commit": "a88e828a7704a4b78e45511f956855a164a69931"
         },
@@ -2116,6 +2116,12 @@
           "status": "merged",
           "head_commit": "d57a9415abc056e3de3378042484abd315a7619b",
           "merge_commit": "fd2687f3056f2964d75bbd483bde68a463499434"
+        },
+        {
+          "url": "https://github.com/LyraCoreProject/LyraCore/pull/519",
+          "label": "Core gameplay callers #519, draft",
+          "status": "review",
+          "head_commit": "97952c3252e6489aeb30b75ef1009191e2ac90a0"
         }
       ],
       "evidence": [
@@ -2248,12 +2254,18 @@
         "Core #516 merged normally as ba6f1ba57b672c7c468a6a9786d02f4fdef84cdb. Core #518 then merged as fd2687f3056f2964d75bbd483bde68a463499434. Every required check passed, and both merge trees equal their reviewed heads. Their additional changes over the recorded Core build affect only the recovery test caller. The current Collection a88e828a changes only four CI references from the recorded Package build. At 18:22 UTC, its module, datascripts and firewall checks pass in both current runs; gameplay jobs continue. Collection delivery remains held.",
         "The held retirement composition at Core ce2e096b and Collection bd636f05 passes all four Architecture Tests and debug-reducer library compilation. Strict Clippy retains exactly the accepted seventeen findings, with no new diagnostics. All source, Package union, process and temporary-directory cleanup checks pass. The orchestrator independently verified all fifty evidence files and the test executable. Result SHA-256 9a31ff37fdff0f31b528f4ac650088c804995f86a75c0d1afd1e51526c1ce3b8; evidence manifest 447763715f8f94bb438596e8be568f679fa990fb30f248877b58270c37c6c1d4. Retirement delivery and activation remain pending acceptance.",
         "The collection-search regression fails on the old production path at the intended combat-start assertion, then passes with the bounded live-target fallback. Real spell 133 kills the alternative; completed OpenLoot and TakeLoot produce an exact eight-item receipt and one Quest 33 turn-in. The unchanged ninth-inaccessible-corpse case also passes and retains ReadLimit without an invented target. Core caller 2819939d and Collection 97f29a23 are clean. Focused report SHA-256 6849cecb6eac1e2c25368708d4d153726270deeeb9e8e871a719dfd55c303ad8. Root independently verified the logs, snapshots, 35 Package files and actual Wasm identity. Earlier caller and control failures remain preserved; no full-hour acceptance is claimed.",
-        "Independent assessment accounts for every microsecond of interval 373, a 231.727452-second Quest 18 gap for Mage 1000070. Defense consumes 119.772839 seconds, with melee attacks and repeated changes to the latest attacker. The Character dies three times. Source review finds that Defense bypasses the existing class combat strategy. Four nested cast-finish OutOfRange Refusals are retained as a separate observation. This is a failed Quest defense cycle, not an unexplained Grind interval. Assessment SHA-256 fb5011732a38c45bd1a1af8dabcd34f6e51bd4ae15c4fcac4f1c3e64117e1dd8; machine account a77cab53c73d0ee197ce5b30c7bcb0ed1d864600c03b45763ce4db0de3235e6b. Defensive rotation, target retention and the remaining open intervals require correction or causal assessment before another hour."
+        "Independent assessment accounts for every microsecond of interval 373, a 231.727452-second Quest 18 gap for Mage 1000070. Defense consumes 119.772839 seconds, with melee attacks and repeated changes to the latest attacker. The Character dies three times. Source review finds that Defense bypasses the existing class combat strategy. Four nested cast-finish OutOfRange Refusals are retained as a separate observation. This is a failed Quest defense cycle, not an unexplained Grind interval. Assessment SHA-256 fb5011732a38c45bd1a1af8dabcd34f6e51bd4ae15c4fcac4f1c3e64117e1dd8; machine account a77cab53c73d0ee197ce5b30c7bcb0ed1d864600c03b45763ce4db0de3235e6b. Defensive rotation, target retention and the remaining open intervals require correction or causal assessment before another hour.",
+        "The final v16 interval ledger contains each index 0 through 557 exactly once. Eight open Quest 33 gaps repeatedly wait at a Completed destination, where the old expiry path never applies. Movement refreshes the navigation deadline and previously reset the progress clock. The correction uses 120 seconds since an actual Quest effect, independent of the navigation deadline, then the existing 30-second destination deferral. It retains the Quest and permits alternate work. Ledger SHA-256 8454415204fa05a743d97f1c7b8da6eb02792e7d338c7561970aa94bab00b65b; causal assessment a1b0ddc639dafd723467b65f6829e879ca53aef37459b9d941cef3244982c0f8. Classified contention remains an observed contributor, not proof that every long interval is acceptable.",
+        "Offline behavior verifier v10 now counts nested cast-finish Refusals. The retained hour still has zero Refusal-spam violations and exactly the same 558 flagged intervals; 31 previously omitted nested Refusals enter the count. All other behavior fields are unchanged. Output SHA-256 1372dbe16650e3a97a98113d42afab3e2da88f85b2d3373fd11ab555e92683d4; transition receipt 97f63a995b97b64b1477e3b7069d8ecee72705287f48da45eeb7fd071e021589. Original capture, input manifest and earlier analysis remain unchanged.",
+        "The new Mage Defense regression passes once on Core caller 76271989 and Collection 32a90a13. It proves real Fireball damage, retention of the current valid attacker after a second attacker hits, replacement after control or death, and retained Quest purpose. Exact gameplay log SHA-256 e7adce06696878137bf13a17f457f2b8c15e12d76288410d14e5ec1c9a6ba57d; actual Wasm 9ab407863bdd890b9213ab9500f7fa410ae05a0459fedf6a6046fc322feb7185. The v3 wrapper misread the split libtest output; the shared exact-pass parser and root independently confirm one pass. That original incomplete wrapper result remains unchanged. The old Defense boundary is being run separately.",
+        "Core caller correction 2e6ed682 replaces fixed primary-plus-one expectations with the actual live Quest replacement and matching Recovery Fight. It also captures the Priest Smite completion transaction before later casts overwrite the current Action row. Standards and Spec review is clear; focused runtime checks remain queued. Diagnosis SHA-256 6ed7b16556cf3ad0d909a050a427d4ba85b40c1a3f15d8693934a74e3f45c0c4. These are test-only changes and do not clear the failed imported hour.",
+        "Defensive combat focused checks are complete at Core caller 76271989 and Collection 32a90a13. The Mage regression passes in 119.26 seconds, and the unchanged progress and return-home boundary passes in 128.87 seconds. The final combined result is complete with successful cleanup. Result SHA-256 067173924c90a63a9c6a2d93e74c3b2961e0621198b283199875a28a3cf793cc; independent root review 716e4595d2aa3cd06265cafec1012adbb1c829b40010147d18d15da6d9c035eb. This closes the earlier incomplete wrapper and pending boundary work without replacing their original records.",
+        "Core #519 at 97952c32 combines the reviewed collection, Defense, moving-cast and Completed Quest wait callers with the five CI observation corrections. Source review is clear. Formatting, Clippy, Rust tests, Wasm and Runtime Scripts checks pass; the Core durable check is still running. Core production code is unchanged. The Package durable suite includes all five corrected callers without a name filter; its next run awaits the final composed Package fixes."
       ],
       "notes": [
-        "The completed hour fails imported behavior acceptance. Geometry, scheduler accounting, Refusal-spam checks and the four injured-healer intervals are clear. The remaining behavior includes a Mage defensive death cycle and eight open Quest progress gaps.",
-        "The collection-search correction passes both focused cases. Its source and test delivery are being prepared. Defensive combat, target retention and moving-target range failures are being diagnosed before another full hour.",
-        "Core #516 and #518 are merged. Both current Collection a88e828a runs pass firewall, module, datascripts, Transfer and all 46 composition cases. Remaining gameplay CI and reviewed correction delivery are open.",
+        "The completed hour fails behavior acceptance. All 558 flagged intervals are classified, but observed contention does not explain every full interval. Source causes include a Mage defensive death cycle, collection-search starvation and eight unbounded Completed Quest waits.",
+        "Collection search and defensive combat each pass both focused cases. Defense uses real class casts, retains a valid attacker and replaces controlled or dead targets. Completed Quest waits and moving-target casts remain under test. Repeated fixture setup failures have delayed the latter. These isolated corrections are not yet the accepted candidate.",
+        "Core #516 and #518 are merged. Both Collection a88e828a workflows failed durable gameplay; every other job passed, including all 46 composition cases and all three class jobs. Core #519 contains five reviewed Quest-loop caller corrections plus the new regression callers. The next full Package durable suite includes all five corrections and can run alongside the next local hour.",
         "The attended guide and session template are prepared. Their command codec, nine-step route, capture format and diagnostic SQL remain unchanged. Argus access is deferred; no configured Realm update or attended-client sign-off has occurred.",
         "Retirement source and native checks are prepared. Delivery follows automated, imported-world and attended-client acceptance. Stored Legacy meanings and old-table lifecycle handling remain preserved.",
         "Earlier failed observations and their original evidence remain preserved. The latest successful private cleanup did not need the preceding run's cleanup repair."
@@ -2376,8 +2388,8 @@
       ]
     }
   ],
-  "updated_at": "2026-09-12T18:56:04Z",
-  "summary": "Eleven of thirteen tickets are complete. The 25-bot hour fails behavior acceptance. The collection-search correction passes its new gameplay regression and the unchanged no-live-target boundary. A separate Quest gap exposes forced melee defense and repeated target changes in a Mage, followed by three deaths. Defensive combat and the eight open Quest gaps are under investigation. Client acceptance and retirement delivery remain open.",
+  "updated_at": "2026-09-12T20:05:09Z",
+  "summary": "Eleven of thirteen tickets are complete. The last 25-bot hour fails behavior acceptance. Collection search and defensive combat pass their focused checks. Completed Quest waits and moving-target casts remain under test. Core #519 contains the combined gameplay callers. Final Package CI, a fresh imported hour, client acceptance and retirement delivery remain open.",
   "assignments": [
     {
       "agent": "/root",
@@ -2392,21 +2404,21 @@
       "tickets": [
         "PB-012"
       ],
-      "work": "Collection-search focused checks pass. Correct defensive combat so bots use their class rotation and retain useful defensive targets."
+      "work": "Own Core #519 through required checks, review and merge. The two defensive combat checks pass."
     },
     {
       "agent": "pb005_provisioning",
       "tickets": [
         "PB-012"
       ],
-      "work": "Own Collection #36 CI and rebased delivery of the reviewed collection correction. Diagnose repeated moving-target cast range failures."
+      "work": "Finish moving-target cast preparation. Compose the approved corrections in Collection #36 and own its full gameplay CI."
     },
     {
       "agent": "pb007_quests",
       "tickets": [
         "PB-012"
       ],
-      "work": "Account for every flagged interval in the completed hour, with priority on the eight Quest progress gaps still open at the end."
+      "work": "Run the Completed Quest wait regression and correction. Verify that movement and foreign damage cannot reset the two-minute effect bound."
     }
   ]
 }
