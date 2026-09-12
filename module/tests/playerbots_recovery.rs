@@ -1197,29 +1197,32 @@ fn playerbots_recovery_defers_a_partial_endpoint_revisited_after_an_approach() {
         })
         .map(|(index, _)| index)
         .expect("the Recovery Position did not move away from the stalled Quest endpoint");
-    let revisited = samples.iter().skip(departed_index + 1).find(|sample| {
-        let position = character_position(sample);
-        let recovery = sample["runner"]["recovery"].as_str().unwrap();
-        let returned_from = retained_route_from(recovery);
-        (position.0 - stalled_endpoint.0).abs() < 0.05
-            && (position.1 - stalled_endpoint.1).abs() < 0.05
-            && recovery.contains(&format!("work = (fight = {TARGET})"))
-            && recovery.contains("status = (partial = ())")
-            && route_endpoint(recovery).is_some_and(|endpoint| {
-                (endpoint.0 - stalled_endpoint.0).abs() < 0.05
-                    && (endpoint.1 - stalled_endpoint.1).abs() < 0.05
-            })
-            && returned_from.is_some_and(|from| {
-                (from.0 - stalled_endpoint.0).hypot(from.1 - stalled_endpoint.1) > 1.0
-            })
-    });
-    assert!(
-        revisited.is_some(),
-        "the Quest route did not revisit {stalled_endpoint:?}"
-    );
+    let revisited_index = samples
+        .iter()
+        .enumerate()
+        .skip(departed_index + 1)
+        .find(|(_, sample)| {
+            let position = character_position(sample);
+            let recovery = sample["runner"]["recovery"].as_str().unwrap();
+            let returned_from = retained_route_from(recovery);
+            (position.0 - stalled_endpoint.0).abs() < 0.05
+                && (position.1 - stalled_endpoint.1).abs() < 0.05
+                && recovery.contains(&format!("work = (fight = {TARGET})"))
+                && recovery.contains("status = (partial = ())")
+                && route_endpoint(recovery).is_some_and(|endpoint| {
+                    (endpoint.0 - stalled_endpoint.0).abs() < 0.05
+                        && (endpoint.1 - stalled_endpoint.1).abs() < 0.05
+                })
+                && returned_from.is_some_and(|from| {
+                    (from.0 - stalled_endpoint.0).hypot(from.1 - stalled_endpoint.1) > 1.0
+                })
+        })
+        .map(|(index, _)| index)
+        .unwrap_or_else(|| panic!("the Quest route did not revisit {stalled_endpoint:?}"));
     let (deferred_index, deferred) = samples
         .iter()
         .enumerate()
+        .skip(revisited_index)
         .find(|(_, sample)| {
             !sample["runner"]["deferred_destinations"]
                 .as_str()

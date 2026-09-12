@@ -381,6 +381,14 @@ fn verify_legacy_goals_source() {
         .parent()
         .unwrap();
     let package = core.join("packages/playerbots");
+    let collection_path = std::env::var_os("PLAYERBOTS_COMPANION_COMPARISON_COLLECTION")
+        .expect("set PLAYERBOTS_COMPANION_COMPARISON_COLLECTION to the Package checkout");
+    let collection = std::path::Path::new(&collection_path);
+    let committed_goals = format!("{LEGACY_COMPARISON_PACKAGE}:playerbots/src/goals.rs");
+    assert_eq!(
+        git(collection, &["rev-parse", &committed_goals]),
+        LEGACY_GOALS_BLOB
+    );
     assert_eq!(
         git(&package, &["hash-object", "src/goals.rs"]),
         LEGACY_GOALS_BLOB
@@ -564,7 +572,8 @@ fn record_policy_comparison(node: &Standalone, priest: &str, leader: &str, ally:
         "compared_fields": compared_fields,
         "differing_fields": differing_fields,
         "known_disagreement": known_disagreement,
-        "gameplay_unchanged": true,
+        "normalized_gameplay_unchanged": true,
+        "ignored_dynamic_fields": ["entities[2][0].health"],
         "gameplay_state": gameplay_before,
     });
     let comparison_path =
