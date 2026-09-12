@@ -38,7 +38,7 @@ fn outcomes(node: &Standalone) {
     std::fs::write(path, serde_json::to_vec_pretty(&record).unwrap()).unwrap();
 }
 
-fn moving_relocation_fixture(name: &str) -> (Standalone, String) {
+fn moving_relocation_fixture(name: &str) -> (Standalone, String, u32) {
     let (node, bots) = fixture(name, "1");
     let bot = bots[0].clone();
     node.assert_sql("DELETE FROM game_creature_move_schedule");
@@ -46,11 +46,12 @@ fn moving_relocation_fixture(name: &str) -> (Standalone, String) {
     select(&node, &bot, "cohort");
     node.assert_call("playerbots_fixture_move", &[&bot, "1230"]);
     let legs = node.query_rows(&format!(
-        "SELECT dur_ms FROM game_creature_spline WHERE guid = {bot}"
+        "SELECT dur_ms, spline_id FROM game_creature_spline WHERE guid = {bot}"
     ));
     assert_eq!(legs.len(), 1, "{legs:?}");
     assert!(legs[0]["dur_ms"].parse::<u32>().unwrap() > 0);
-    (node, bot)
+    let spline_id = legs[0]["spline_id"].parse().unwrap();
+    (node, bot, spline_id)
 }
 
 fn relocation_state(node: &Standalone, bot: &str, label: &str) -> BTreeMap<String, String> {
@@ -69,15 +70,40 @@ fn relocation_state(node: &Standalone, bot: &str, label: &str) -> BTreeMap<Strin
     entities.into_iter().next().unwrap()
 }
 
+fn assert_relocation_stop(
+    node: &Standalone,
+    bot: &str,
+    destination: &BTreeMap<String, String>,
+    previous_id: u32,
+) {
+    let rows = node.query_rows(&format!(
+        "SELECT * FROM game_creature_spline WHERE guid = {bot}"
+    ));
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    let leg = &rows[0];
+    assert_eq!(leg["dur_ms"], "0", "{leg:?}");
+    assert_eq!(leg["run"], "false");
+    assert_eq!(leg["facing"], "false");
+    assert!(leg["spline_id"].parse::<u32>().unwrap() > previous_id);
+    for field in ["map_id", "instance_id"] {
+        assert_eq!(leg[field], destination[field], "{field}: {leg:?}");
+    }
+    for (start, end, point) in [("sx", "dx", "x"), ("sy", "dy", "y"), ("sz", "dz", "z")] {
+        assert_eq!(leg[start], destination[point], "{start}: {leg:?}");
+        assert_eq!(leg[end], destination[point], "{end}: {leg:?}");
+    }
+}
+
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_teleport_cancels_the_previous_movement_destination() {
-    let (node, bot) = moving_relocation_fixture("playerbots-teleport-moving");
+    let (node, bot, previous_id) = moving_relocation_fixture("playerbots-teleport-moving");
     relocation_state(&node, &bot, "before-teleport");
     node.assert_call("debug_teleport", &[&bot, "0", "1300", "1250", "50", "0"]);
     let landed = relocation_state(&node, &bot, "teleported");
     assert_eq!(landed["x"].parse::<f32>().unwrap(), 1300.0);
     assert_eq!(landed["y"].parse::<f32>().unwrap(), 1250.0);
+    assert_relocation_stop(&node, &bot, &landed, previous_id);
 
     // Tick ordinary movement in this partition while the fixture owns explicit bot decisions.
     node.assert_call("debug_arm_instance_tick", &["0", "500"]);
@@ -95,13 +121,14 @@ fn playerbots_teleport_cancels_the_previous_movement_destination() {
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_teleport_to_the_graveyard_keeps_a_stopped_ghost_there() {
-    let (node, bot) = moving_relocation_fixture("playerbots-teleport-ghost");
+    let (node, bot, _) = moving_relocation_fixture("playerbots-teleport-ghost");
     select(&node, &bot, "frozen");
     let stopped = node.query_rows(&format!(
-        "SELECT dur_ms FROM game_creature_spline WHERE guid = {bot}"
+        "SELECT dur_ms, spline_id FROM game_creature_spline WHERE guid = {bot}"
     ));
     assert_eq!(stopped.len(), 1, "{stopped:?}");
     assert_eq!(stopped[0]["dur_ms"], "0");
+    let previous_id = stopped[0]["spline_id"].parse().unwrap();
     node.assert_call(
         "playerbots_fixture_runner_damage_and_park",
         &[&bot, "0", "1000000"],
@@ -117,6 +144,7 @@ fn playerbots_teleport_to_the_graveyard_keeps_a_stopped_ghost_there() {
         0
     );
     assert_ne!(released["x"], dead["x"]);
+    assert_relocation_stop(&node, &bot, &released, previous_id);
 
     node.assert_call("debug_arm_instance_tick", &["0", "500"]);
     assert!(poll_until(POLL_TIMEOUT, || node
@@ -125,15 +153,57 @@ fn playerbots_teleport_to_the_graveyard_keeps_a_stopped_ghost_there() {
         ))
         .is_empty()));
     let settled = relocation_state(&node, &bot, "after-movement-tick");
-    for field in ["map_id", "instance_id", "x", "y", "z", "dead", "player_flags"] {
+    for field in [
+        "map_id",
+        "instance_id",
+        "x",
+        "y",
+        "z",
+        "dead",
+        "player_flags",
+    ] {
         assert_eq!(settled[field], released[field], "{field}: {settled:?}");
     }
     node.assert_call("debug_spirit_healer_res", &[&bot]);
     let resurrected = relocation_state(&node, &bot, "resurrected");
     assert_eq!(resurrected["dead"], "false");
     for field in ["map_id", "instance_id", "x", "y", "z"] {
-        assert_eq!(resurrected[field], released[field], "{field}: {resurrected:?}");
+        assert_eq!(
+            resurrected[field], released[field],
+            "{field}: {resurrected:?}"
+        );
     }
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_teleport_replaces_a_movement_legs_partition_before_departure() {
+    let (node, bot, previous_id) = moving_relocation_fixture("playerbots-teleport-partition");
+    relocation_state(&node, &bot, "before-departure");
+    node.assert_call("debug_teleport", &[&bot, "1", "1300", "1250", "50", "0"]);
+    assert!(node
+        .query_rows(&format!(
+            "SELECT guid FROM game_world_entity WHERE guid = {bot}"
+        ))
+        .is_empty());
+    let mut destination = node.query_rows(&format!(
+        "SELECT map_id, pending_instance_id, x, y, z FROM game_character WHERE guid = {bot}"
+    ))[0]
+        .clone();
+    destination.insert(
+        "instance_id".into(),
+        destination["pending_instance_id"].clone(),
+    );
+    assert_eq!(destination["map_id"], "1");
+    assert_eq!(destination["x"].parse::<f32>().unwrap(), 1300.0);
+    assert_eq!(destination["y"].parse::<f32>().unwrap(), 1250.0);
+    assert_relocation_stop(&node, &bot, &destination, previous_id);
+    node.assert_call("debug_arm_instance_tick", &["0", "500"]);
+    assert!(poll_until(POLL_TIMEOUT, || node
+        .query_rows(&format!(
+            "SELECT guid FROM game_creature_spline WHERE guid = {bot}"
+        ))
+        .is_empty()));
 }
 
 #[test]
