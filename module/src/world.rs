@@ -860,6 +860,11 @@ pub(crate) fn teleport_player(
     // leg cannot undo this teleport, and peers receive a stop at the new position.
     if let Some(previous) = ctx.db.game_creature_spline().guid().find(player_guid) {
         let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u32;
+        let spline_id = if now_ms > previous.spline_id {
+            now_ms
+        } else {
+            previous.spline_id.wrapping_add(1)
+        };
         crate::creatures::tick::emit_move_spline(
             ctx,
             player_guid,
@@ -867,7 +872,7 @@ pub(crate) fn teleport_player(
             (x, y, z),
             0,
             false,
-            now_ms.max(previous.spline_id.wrapping_add(1)),
+            spline_id,
             map_id,
             instance_id,
             spatial::grid_cell(x, y),
