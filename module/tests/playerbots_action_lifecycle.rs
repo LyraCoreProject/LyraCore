@@ -959,6 +959,38 @@ fn playerbots_quest_move_targets_record_verified_blocked_routes() {
     });
 }
 
+fn assert_expired_quest_recovery(
+    runner: &Value,
+    position: &str,
+    retained_identity: u64,
+    current_identity: u64,
+) {
+    let recovery = runner["recovery"].as_str().unwrap();
+    let chosen = runner["chosen"].as_str().unwrap();
+    if current_identity == retained_identity {
+        assert!(
+            recovery.contains(&format!("fight = {}", QUEST_ROOTS[5].target))
+                && recovery.contains(&format!("objective = {retained_identity}"))
+                && chosen.contains(&format!("recoveryPosition = {position}"))
+                && chosen.contains("reason = (quest = ())")
+                && chosen.contains(&format!("objective = {retained_identity}")),
+            "{runner}"
+        );
+    } else {
+        let alternative_target = CREATURE_PREFIX | (823u64 << 24) | 1;
+        assert!(
+            recovery.contains(&format!(
+                "work = (quest = (step = (target = {alternative_target}, quest = 5261), operation = (accept = ())))"
+            )) && recovery.contains(&format!("objective = {current_identity},"))
+                && !recovery.contains(&format!("fight = {}", QUEST_ROOTS[5].target))
+                && chosen.contains(&format!("move = (entity = {alternative_target})"))
+                && chosen.contains("reason = (quest = ())")
+                && chosen.contains(&format!("objective = {current_identity}")),
+            "{runner}"
+        );
+    }
+}
+
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_recovery_position_expires_with_its_retained_quest() {
@@ -1068,12 +1100,7 @@ fn playerbots_recovery_position_expires_with_its_retained_quest() {
             && history.contains(&format!("{expired_position}(refused = (deadline = ()))")),
         "{expired}"
     );
-    let recovery = runner["recovery"].as_str().unwrap();
-    assert!(
-        recovery.contains(&format!("fight = {}", QUEST_ROOTS[5].target))
-            && recovery.contains(&format!("objective = {retained_identity}")),
-        "{expired}"
-    );
+    assert_expired_quest_recovery(runner, &position, retained_identity, current_identity);
     let deferral = runner["deferred_destinations"].as_str().unwrap();
     assert_eq!(
         pending["runner"][0]["deferred_destinations"], "",
@@ -1550,7 +1577,15 @@ fn assert_return_home_transfer_expired(
 ) {
     if direct_transfer {
         fixture.node.assert_call(
+            "playerbots_select_controller",
+            &[&fixture.companion, "{\"frozen\":[]}"],
+        );
+        fixture.node.assert_call(
             "playerbots_fixture_runner_expire_objective",
+            &[&fixture.companion],
+        );
+        fixture.node.assert_call(
+            "playerbots_fixture_runner_select_cohort",
             &[&fixture.companion],
         );
         fixture
@@ -1635,12 +1670,6 @@ fn run_return_home_transfer_expiry(direct_transfer: bool) {
         "playerbots-action-return-home-transfer-position-expiry"
     };
     let (fixture, pending) = return_home_transfer_pending(label, direct_transfer);
-    if direct_transfer {
-        fixture.node.assert_call(
-            "playerbots_fixture_runner_select_cohort",
-            &[&fixture.companion],
-        );
-    }
     let expected_action = if direct_transfer {
         format!("transfer = (trigger = {EXIT_TRIGGER}")
     } else {
@@ -1699,7 +1728,49 @@ fn playerbots_transfer_records_core_refusal_before_intent() {
     fixture
         .node
         .assert_call("playerbots_fixture_runner_pass_once", &[&fixture.companion]);
-    let refused = snapshot(&fixture.node);
+    let first = snapshot(&fixture.node);
+    save(&fixture.node, "quest-transfer-first", &first);
+    let action_refused = |evidence: &Value| {
+        evidence["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|action| {
+                action["character_guid"] == fixture.companion
+                    && action["kind"].as_str().unwrap().contains("transfer")
+                    && action["outcome"]
+                        .as_str()
+                        .unwrap()
+                        .contains("refused = (kind = (cannotAct = ())")
+            })
+    };
+    let refused = if action_refused(&first) {
+        first
+    } else {
+        assert_transfer_root(&first, &fixture.companion, "areaTrigger = 78");
+        assert!(first["transfers"].as_array().unwrap().is_empty(), "{first}");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut passed_after_approach = false;
+        loop {
+            let current = snapshot(&fixture.node);
+            if action_refused(&current) || Instant::now() >= deadline {
+                break current;
+            }
+            let approach_complete = !current["movement"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|movement| movement["guid"].as_str() == Some(fixture.companion.as_str()));
+            if approach_complete && !passed_after_approach {
+                fixture
+                    .node
+                    .assert_call("playerbots_fixture_runner_pass_once", &[&fixture.companion]);
+                passed_after_approach = true;
+            } else {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+    };
     save(&fixture.node, "quest-transfer-refused", &refused);
     let runner = refused["runner"]
         .as_array()

@@ -60,6 +60,14 @@ pub(crate) struct DeathEntitlement {
     pub recipients: Vec<u64>,
 }
 
+/// Whether a live creature's Loot Tag can still reward one Character.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LiveLootTagEligibility {
+    Available,
+    Foreign,
+    ReadLimit,
+}
+
 /// Resolve a threat source to its controlling Character. A Character controls itself and its
 /// owned creature. Dead or missing Characters cannot create a Loot Tag.
 pub(crate) fn controlling_character(ctx: &ReducerContext, source_guid: u64) -> Option<u64> {
@@ -203,6 +211,47 @@ fn membership_is_current(
         Some(group_id) => crate::group::group_of(ctx, member_guid)
             .is_some_and(|membership| membership.group_id == group_id),
         None => member_guid == tagger_guid,
+    }
+}
+
+/// Read one live Loot Tag without applying the death-site reward distance.
+pub(crate) fn live_loot_tag_eligibility(
+    ctx: &ReducerContext,
+    creature_guid: u64,
+    character_guid: u64,
+) -> LiveLootTagEligibility {
+    let Some(tag) = ctx
+        .db
+        .game_creature_quest_tap()
+        .creature_guid()
+        .find(creature_guid)
+    else {
+        return LiveLootTagEligibility::Available;
+    };
+    let members: Vec<_> = ctx
+        .db
+        .game_creature_quest_tap_member()
+        .by_creature()
+        .filter(&creature_guid)
+        .take(crate::group::GROUP_MAX_MEMBERS + 1)
+        .collect();
+    if members.len() > crate::group::GROUP_MAX_MEMBERS {
+        return LiveLootTagEligibility::ReadLimit;
+    }
+    let group_id = ctx
+        .db
+        .game_creature_loot_tag_group()
+        .creature_guid()
+        .find(creature_guid)
+        .map(|group| group.group_id);
+    if members
+        .iter()
+        .any(|member| member.character_guid == character_guid)
+        && membership_is_current(ctx, group_id, tag.character_guid, character_guid)
+    {
+        LiveLootTagEligibility::Available
+    } else {
+        LiveLootTagEligibility::Foreign
     }
 }
 
@@ -473,12 +522,24 @@ pub fn debug_verify_loot_tag_fixture(ctx: &ReducerContext) -> Result<(), String>
     let grouped = fixture_creature_guid(6);
     insert_fixture_entity(ctx, &origin, grouped, base_x, false, 0);
     crate::threat::add_threat(ctx, grouped, LOOT_TAG_FIXTURE_CHARACTER_A, 10);
+    expect_live_loot_tag_eligibility(
+        ctx,
+        grouped,
+        LOOT_TAG_FIXTURE_CHARACTER_C,
+        LiveLootTagEligibility::Available,
+    )?;
     members.insert(crate::GroupMember {
         id: 0,
         group_id: group.group_id,
         character_guid: LOOT_TAG_FIXTURE_CHARACTER_E,
         owner_identity: spacetimedb::Identity::ZERO,
     });
+    expect_live_loot_tag_eligibility(
+        ctx,
+        grouped,
+        LOOT_TAG_FIXTURE_CHARACTER_E,
+        LiveLootTagEligibility::Foreign,
+    )?;
     crate::group::remove_member(ctx, LOOT_TAG_FIXTURE_CHARACTER_C);
     members.insert(crate::GroupMember {
         id: 0,
@@ -486,7 +547,19 @@ pub fn debug_verify_loot_tag_fixture(ctx: &ReducerContext) -> Result<(), String>
         character_guid: LOOT_TAG_FIXTURE_CHARACTER_C,
         owner_identity: spacetimedb::Identity::ZERO,
     });
+    expect_live_loot_tag_eligibility(
+        ctx,
+        grouped,
+        LOOT_TAG_FIXTURE_CHARACTER_C,
+        LiveLootTagEligibility::Foreign,
+    )?;
     move_fixture_entity(ctx, LOOT_TAG_FIXTURE_CHARACTER_D, base_x + 100.0)?;
+    expect_live_loot_tag_eligibility(
+        ctx,
+        grouped,
+        LOOT_TAG_FIXTURE_CHARACTER_D,
+        LiveLootTagEligibility::Available,
+    )?;
     let tagger_xp = entity_xp(ctx, LOOT_TAG_FIXTURE_CHARACTER_A)?;
     let foreign_xp = entity_xp(ctx, LOOT_TAG_FIXTURE_CHARACTER_B)?;
     if !crate::combat::kill_creature(ctx, grouped, Some(LOOT_TAG_FIXTURE_CHARACTER_B)) {
@@ -501,6 +574,26 @@ pub fn debug_verify_loot_tag_fixture(ctx: &ReducerContext) -> Result<(), String>
                 .to_string(),
         );
     }
+
+    let departed_tagger = fixture_creature_guid(14);
+    insert_fixture_entity(ctx, &origin, departed_tagger, base_x, false, 0);
+    crate::threat::add_threat(ctx, departed_tagger, LOOT_TAG_FIXTURE_CHARACTER_A, 10);
+    crate::group::remove_member(ctx, LOOT_TAG_FIXTURE_CHARACTER_A);
+    expect_live_loot_tag_eligibility(
+        ctx,
+        departed_tagger,
+        LOOT_TAG_FIXTURE_CHARACTER_E,
+        LiveLootTagEligibility::Available,
+    )?;
+    crate::group::remove_member(ctx, LOOT_TAG_FIXTURE_CHARACTER_C);
+    crate::group::remove_member(ctx, LOOT_TAG_FIXTURE_CHARACTER_D);
+    revoke_group_member(ctx, LOOT_TAG_FIXTURE_GROUP, LOOT_TAG_FIXTURE_CHARACTER_E);
+    expect_live_loot_tag_eligibility(
+        ctx,
+        departed_tagger,
+        LOOT_TAG_FIXTURE_CHARACTER_E,
+        LiveLootTagEligibility::Foreign,
+    )?;
 
     let retained = fixture_creature_guid(7);
     insert_fixture_entity(ctx, &origin, retained, base_x, false, 0);
@@ -739,6 +832,23 @@ fn expect_loot_tag_refusal(result: Result<(), String>) -> Result<(), String> {
         Err(reason) if reason == LootRefusal::LootTagIneligible.as_tag() => Ok(()),
         Ok(()) => Err("foreign Actor passed the Loot Tag Gate".to_string()),
         Err(reason) => Err(format!("unexpected Loot Tag Refusal: {reason}")),
+    }
+}
+
+#[cfg(feature = "debug_reducers")]
+fn expect_live_loot_tag_eligibility(
+    ctx: &ReducerContext,
+    creature_guid: u64,
+    character_guid: u64,
+    expected: LiveLootTagEligibility,
+) -> Result<(), String> {
+    let actual = live_loot_tag_eligibility(ctx, creature_guid, character_guid);
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(format!(
+            "live Loot Tag eligibility for {character_guid} on {creature_guid} was {actual:?}, expected {expected:?}"
+        ))
     }
 }
 

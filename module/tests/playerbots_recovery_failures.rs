@@ -14,6 +14,7 @@ const QUEST_ITEM: u32 = 750;
 const LOOT_SOURCE: u64 = (0xF130u64 << 48) | (69u64 << 24) | 1;
 const RESPAWNING_GAMEOBJECT: u64 = (0xF110u64 << 48) | 5_090_970u64;
 const UNREACHABLE_ENDER: u64 = (0xF130u64 << 48) | (197u64 << 24) | 1;
+const ALTERNATIVE_GIVER: u64 = (0xF130u64 << 48) | (241u64 << 24) | 1;
 
 fn git(path: &std::path::Path, args: &[&str]) -> String {
     let output = std::process::Command::new("git")
@@ -121,7 +122,7 @@ fn actions(node: &Standalone, guid: &str) -> Vec<BTreeMap<String, String>> {
 
 fn runner(node: &Standalone, guid: &str) -> Vec<BTreeMap<String, String>> {
     node.query_rows(&format!(
-        "SELECT character_guid, objective_sequence, objective, foreground, chosen, failures, recovery, deferred_destinations, retry_count, observed_micros, next_eligible_micros FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+        "SELECT character_guid, objective_sequence, objective, foreground, chosen, last_outcome, failures, recovery, deferred_destinations, retry_count, observed_micros, next_eligible_micros, cast_progress FROM pkg_playerbots_runner WHERE character_guid = {guid}"
     ))
 }
 
@@ -177,6 +178,169 @@ fn save(node: &Standalone, phase: &str, evidence: serde_json::Value) {
     let path = support::log_dir().join(format!("{}-{phase}.json", node.shard_name()));
     std::fs::write(&path, serde_json::to_vec_pretty(&evidence).unwrap()).unwrap();
     eprintln!("fixture evidence: {}", path.display());
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_recovery_capacity_is_recorded_once_while_heal_and_expiry_remain_live() {
+    let mut node = Standalone::start("playerbots-recovery-capacity-reporting");
+    node.publish_module();
+    record_inputs(&node);
+    remove_builtin_weather_import_stamp(&node);
+    node.assert_call("claim_operator", &[]);
+    node.assert_call("install_guid_range", &["1000000"]);
+    node.assert_call("debug_set_nav_enabled", &["true"]);
+    node.assert_call(
+        "playerbots_spawn_class_role",
+        &["1", "1200", "1200", "50", "5", "1"],
+    );
+    let guid = node.query_rows("SELECT character_guid FROM pkg_playerbots_bot")[0]
+        ["character_guid"]
+        .clone();
+    node.assert_call("playerbots_fixture_runner_stage", &[&guid, "false"]);
+    node.assert_call("playerbots_fixture_runner_select_cohort", &[&guid]);
+    node.assert_call("playerbots_fixture_provision_steps", &[&guid, "64"]);
+    node.assert_call("playerbots_select_controller", &[&guid, "{\"frozen\":[]}"]);
+    node.assert_call(
+        "playerbots_fixture_runner_stage_recovery_capacity",
+        &[&guid],
+    );
+    node.assert_call("playerbots_fixture_runner_select_cohort", &[&guid]);
+
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    let first = runner(&node, &guid).remove(0);
+    save(
+        &node,
+        "capacity-reporting-first",
+        serde_json::json!({ "first": first.clone() }),
+    );
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    let repeated = runner(&node, &guid).remove(0);
+    save(
+        &node,
+        "capacity-reporting-repeated",
+        serde_json::json!({ "repeated": repeated.clone() }),
+    );
+    assert!(first["chosen"].contains("hold = ()"), "{first:?}");
+    assert!(first["chosen"].contains("returnHome = ()"), "{first:?}");
+    assert_eq!(first["failures"].matches("recoveryCapacity").count(), 1);
+    assert!(first["last_outcome"].contains("waiting"), "{first:?}");
+    assert_eq!(first["retry_count"], "1");
+    assert_eq!(
+        first["next_eligible_micros"].parse::<i64>().unwrap()
+            - first["observed_micros"].parse::<i64>().unwrap(),
+        1_000_000
+    );
+    assert_eq!(repeated["failures"], first["failures"]);
+    assert!(repeated["last_outcome"].contains("waiting"), "{repeated:?}");
+    assert_eq!(repeated["retry_count"], first["retry_count"]);
+    assert_eq!(
+        repeated["next_eligible_micros"].parse::<i64>().unwrap()
+            - repeated["observed_micros"].parse::<i64>().unwrap(),
+        1_000_000
+    );
+
+    node.assert_call("playerbots_fixture_roles_priest_mana", &[&guid]);
+    node.assert_call("playerbots_fixture_companion_health", &[&guid, "25"]);
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    let healing = runner(&node, &guid).remove(0);
+    let cast_actions = node.query_rows(&format!(
+        "SELECT character_guid, kind, target_guid, spell_id, cast_id, outcome FROM pkg_playerbots_action WHERE character_guid = {guid} AND spell_id = 2050"
+    ));
+    save(
+        &node,
+        "capacity-healing-bound-cast",
+        serde_json::json!({"healing": &healing, "cast_actions": &cast_actions}),
+    );
+    assert!(healing["chosen"].contains("cast = ("), "{healing:?}");
+    assert!(healing["chosen"].contains("recovery = ()"), "{healing:?}");
+    assert!(healing["chosen"].contains(&format!("target = {guid}")));
+    assert_eq!(healing["failures"], first["failures"]);
+    assert_eq!(cast_actions.len(), 1, "{cast_actions:?}");
+    assert_eq!(cast_actions[0]["kind"], "(cast = ())", "{cast_actions:?}");
+    assert_eq!(cast_actions[0]["spell_id"], "2050", "{cast_actions:?}");
+    assert_eq!(cast_actions[0]["target_guid"], guid, "{cast_actions:?}");
+    let cast_id = cast_actions[0]["cast_id"].clone();
+    assert_ne!(cast_id, "0", "{cast_actions:?}");
+    let completed = poll_until(Duration::from_secs(8), || {
+        let state = runner(&node, &guid).remove(0);
+        node.query_rows(&format!(
+            "SELECT scheduled_id FROM game_pending_cast WHERE caster_guid = {guid}"
+        ))
+        .is_empty()
+            && !state["foreground"].contains("cast = (")
+            && state["cast_progress"].contains(&format!("scheduled_id = {cast_id}"))
+            && state["cast_progress"].contains("spell = 2050")
+            && state["cast_progress"].contains(&format!("target = {guid}"))
+            && node
+                .query_rows(&format!(
+                    "SELECT cast_id, outcome FROM pkg_playerbots_action WHERE character_guid = {guid} AND spell_id = 2050"
+                ))
+                .iter()
+                .any(|action| {
+                    action["cast_id"] == cast_id && action["outcome"] == "(castResolved = ())"
+                })
+    });
+    let cast_completed = runner(&node, &guid).remove(0);
+    let completed_pending = node.query_rows(&format!(
+        "SELECT scheduled_id, spell_id, target_guid FROM game_pending_cast WHERE caster_guid = {guid}"
+    ));
+    let completed_actions = node.query_rows(&format!(
+        "SELECT character_guid, kind, target_guid, spell_id, cast_id, outcome FROM pkg_playerbots_action WHERE character_guid = {guid} AND spell_id = 2050"
+    ));
+    save(
+        &node,
+        "capacity-cast-completed",
+        serde_json::json!({
+            "runner": &cast_completed,
+            "pending_cast": &completed_pending,
+            "cast_actions": &completed_actions,
+        }),
+    );
+    assert!(
+        completed,
+        "cast {cast_id} did not finish: {cast_completed:?} {completed_pending:?} {completed_actions:?}"
+    );
+    assert_eq!(cast_completed["failures"], first["failures"]);
+    assert_eq!(cast_completed["retry_count"], first["retry_count"]);
+    assert_eq!(cast_completed["recovery"], healing["recovery"]);
+    let wait_micros = cast_completed["next_eligible_micros"]
+        .parse::<i64>()
+        .unwrap()
+        .saturating_sub(cast_completed["observed_micros"].parse::<i64>().unwrap());
+    assert!(wait_micros > 0, "{cast_completed:?}");
+    let wait = Duration::from_micros(u64::try_from(wait_micros).unwrap());
+    assert!(wait <= PASS_INTERVAL, "{cast_completed:?}");
+    std::thread::sleep(wait);
+
+    node.assert_call("playerbots_fixture_companion_health", &[&guid, "100"]);
+    node.assert_call(
+        "playerbots_fixture_runner_expire_recovery_capacity",
+        &[&guid],
+    );
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    let released = runner(&node, &guid).remove(0);
+    save(
+        &node,
+        "capacity-reporting",
+        serde_json::json!({
+            "first": first,
+            "repeated": repeated,
+            "healing": healing,
+            "cast": cast_actions,
+            "cast_completed": cast_completed,
+            "completed_pending_cast": completed_pending,
+            "completed_cast_actions": completed_actions,
+            "released": released,
+        }),
+    );
+    assert!(
+        released["chosen"].contains("move = (home = ())"),
+        "{released:?}"
+    );
+    assert!(released["recovery"].contains("destination"), "{released:?}");
+    assert_eq!(released["failures"], first["failures"]);
+    assert_eq!(released["retry_count"], first["retry_count"]);
 }
 
 #[test]
@@ -718,6 +882,14 @@ fn playerbots_recovery_unreachable_quest_ender_defers_and_preserves_the_quest() 
                     .as_str()
                     .unwrap()
                     .contains(&movement_destination)
+                && action["outcome"]
+                    .as_str()
+                    .unwrap()
+                    .contains("status = (blocked = ())")
+                && action["outcome"]
+                    .as_str()
+                    .unwrap()
+                    .contains("coverage = (unknown = ())")
         }),
         "{initial}"
     );
@@ -765,26 +937,37 @@ fn playerbots_recovery_unreachable_quest_ender_defers_and_preserves_the_quest() 
         "{deferred}"
     );
     let recovery = runner["recovery"].as_str().unwrap();
+    let current_identity = runner["objective_sequence"].as_str().unwrap();
     assert!(
         recovery.contains(&format!(
+            "work = (quest = (step = (target = {ALTERNATIVE_GIVER}, quest = 40), operation = (accept = ())))"
+        )) && recovery.contains(&format!("objective = {current_identity},")),
+        "{deferred}"
+    );
+    assert!(
+        !recovery.contains(&format!(
             "target = {UNREACHABLE_ENDER}, quest = {UNREACHABLE_ENDER_QUEST}"
-        )) && recovery.contains("operation = (turnIn = ())")
-            && recovery.contains(&format!("objective = {initial_identity}"))
-            && recovery.contains("status = (blocked = ())")
-            && recovery.contains("coverage = (unknown = ())"),
+        )),
+        "{deferred}"
+    );
+    assert!(
+        runner["chosen"].as_str().unwrap().contains(&format!(
+            "acceptQuest = (target = {ALTERNATIVE_GIVER}, quest = 40)"
+        )) && runner["chosen"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("objective = {current_identity}")),
         "{deferred}"
     );
     let deferred_until = integer_after(
         runner["deferred_destinations"].as_str().unwrap(),
         "until_micros = ",
     );
-    let recovery_until = integer_after(recovery, "deferred_until_micros = (some = ");
     let observed_micros = runner["observed_micros"]
         .as_str()
         .unwrap()
         .parse::<i64>()
         .unwrap();
-    assert_eq!(deferred_until, recovery_until, "{deferred}");
     let remaining_micros = deferred_until.saturating_sub(observed_micros);
     assert!(
         remaining_micros > 0 && remaining_micros <= 30_000_000,

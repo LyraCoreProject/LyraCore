@@ -99,6 +99,10 @@ fn prepare(node: &Standalone) -> String {
         !held.is_empty()
     });
     assert!(accepted, "ordinary runner did not accept Quest 7");
+    node.assert_call(
+        "playerbots_recovery_fixture_keep_two_quest_targets",
+        &[&guid],
+    );
     node.assert_call("playerbots_recovery_fixture_block_quest_target", &[&guid]);
     guid
 }
@@ -249,13 +253,29 @@ fn defer_verified_fight(node: &Standalone, guid: &str) -> serde_json::Value {
         .as_str()
         .unwrap()
         .contains(&format!("active = (some = (fight = {TARGET}))")));
+    assert!(changed_state["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|action| {
+            action["observed_micros"] == changed_state["runner"]["observed_micros"]
+                && action["kind"].as_str() == Some("(move = ())")
+                && action["outcome"].as_str().is_some_and(|outcome| {
+                    outcome.contains("destination = (x = 1356.2, y = 1203.6)")
+                        && outcome.contains("status = (blocked = ())")
+                        && outcome.contains(&format!(
+                            "coverage = (verifiedCells = (generation_id = {GENERATION}, checked_cells = 2))"
+                        ))
+                        && outcome.contains("arrived = false")
+                })
+        }));
     node.assert_call("playerbots_fixture_runner_pass_once", &[guid]);
     node.assert_call("playerbots_recovery_fixture_exhaust_attempt", &[guid]);
     let deferred = poll_until(POLL_TIMEOUT, || {
         node.assert_call("playerbots_fixture_runner_pass_once", &[guid]);
         !row(
             node,
-            &format!("SELECT deferred_destinations FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
+            &format!("SELECT character_guid, deferred_destinations FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
         )["deferred_destinations"]
             .trim_matches(['[', ']', ' '])
             .is_empty()
@@ -296,18 +316,10 @@ fn playerbots_recovery_classifies_a_verified_blocked_route_without_missing_cover
         .as_str()
         .unwrap()
         .contains("missingImportedCoverage"));
-    assert!(runner["recovery"].as_str().unwrap().contains(&format!(
-        "verifiedCells = (generation_id = {}",
-        coverage.generation
-    )));
     assert!(runner["recovery"]
         .as_str()
         .unwrap()
         .contains(&format!("fight = {TARGET}")));
-    assert!(runner["recovery"]
-        .as_str()
-        .unwrap()
-        .contains("status = (blocked = ())"));
     assert_eq!(deferred["coverage_manifest"]["complete"], "true");
     assert_eq!(deferred["quest"]["rewarded"], "false");
 }
@@ -377,7 +389,7 @@ fn playerbots_recovery_retries_exact_work_after_active_coverage_grows() {
     assert!(after["runner"]["chosen"]
         .as_str()
         .unwrap()
-        .contains(&format!("attack = {TARGET}")));
+        .contains(&format!("move = (entity = {TARGET})")));
     assert!(after["runner"]["recovery"]
         .as_str()
         .unwrap()

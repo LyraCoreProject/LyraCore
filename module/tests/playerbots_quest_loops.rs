@@ -2,13 +2,14 @@
 
 mod support;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 use support::Standalone;
 
 const PASS_INTERVAL: Duration = Duration::from_millis(1_250);
 const LOOP_TIMEOUT: Duration = Duration::from_secs(180);
 const CREATURE_6: u64 = (0xF130u64 << 48) | (6u64 << 24) | 1;
+const GRIND_CREATURE_ENTRY: u32 = 51_000;
 const SIMPLE_QUEST: u32 = 50_970;
 const SIMPLE_GAMEOBJECT: u64 = (0xF110u64 << 48) | 5_090_970u64;
 const SIMPLE_GAMEOBJECT_ALTERNATIVE: u64 = SIMPLE_GAMEOBJECT + 1;
@@ -77,11 +78,97 @@ fn fixture(name: &str, class: u8, role: u8, named: bool) -> (Standalone, String)
     (node, guid)
 }
 
+fn spawn_frozen_foreign_bot(node: &Standalone, subject: &str, x: &str, y: &str) -> String {
+    node.assert_call("playerbots_spawn_class_role", &["1", x, y, "50", "1", "0"]);
+    let foreign = node
+        .query_rows("SELECT character_guid FROM pkg_playerbots_bot")
+        .into_iter()
+        .map(|row| row["character_guid"].clone())
+        .find(|guid| guid != subject)
+        .expect("foreign bot is absent");
+    node.assert_call("playerbots_fixture_freeze", &[&foreign]);
+    foreign
+}
+
+fn assert_solo_loot_tag(node: &Standalone, creature_guid: u64, character_guid: &str) {
+    let tag = query_one(
+        node,
+        &format!(
+            "SELECT creature_guid, character_guid FROM game_creature_quest_tap WHERE creature_guid = {creature_guid}"
+        ),
+    );
+    assert_eq!(tag["character_guid"], character_guid);
+    let members = node.query_rows(&format!(
+        "SELECT character_guid FROM game_creature_quest_tap_member WHERE creature_guid = {creature_guid}"
+    ));
+    assert_eq!(members.len(), 1, "{members:?}");
+    assert_eq!(members[0]["character_guid"], character_guid);
+    assert!(node
+        .query_rows(&format!(
+            "SELECT group_id FROM game_creature_loot_tag_group WHERE creature_guid = {creature_guid}"
+        ))
+        .is_empty());
+}
+
+fn assert_no_loot_tag(node: &Standalone, creature_guid: u64) {
+    for table in [
+        "game_creature_quest_tap",
+        "game_creature_quest_tap_member",
+        "game_creature_loot_tag_group",
+    ] {
+        assert!(node
+            .query_rows(&format!(
+                "SELECT creature_guid FROM {table} WHERE creature_guid = {creature_guid}"
+            ))
+            .is_empty());
+    }
+}
+
+fn runner_target(
+    node: &Standalone,
+    guid: &str,
+    reason: &str,
+    targets: &[u64],
+) -> BTreeMap<String, String> {
+    drive_until(node, guid, Duration::from_secs(45), |node| {
+        let runner = query_one(
+            node,
+            &format!(
+                "SELECT character_guid, chosen, recovery FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+            ),
+        );
+        runner["chosen"].contains(reason)
+            && targets
+                .iter()
+                .any(|target| runner["chosen"].contains(&target.to_string()))
+    });
+    query_one(
+        node,
+        &format!(
+            "SELECT character_guid, chosen, recovery, objective_sequence FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+        ),
+    )
+}
+
 fn query_one(node: &Standalone, sql: &str) -> BTreeMap<String, String> {
     node.query_rows(sql)
         .into_iter()
         .next()
         .unwrap_or_else(|| panic!("query returned no row: {sql}"))
+}
+
+fn quest_read_limit_micros(failures: &str) -> Vec<i64> {
+    const MARKER: &str = "questReadLimit = ()), at_micros = ";
+    failures
+        .match_indices(MARKER)
+        .map(|(index, _)| {
+            let value = &failures[index + MARKER.len()..];
+            let end = value
+                .find(|character: char| !character.is_ascii_digit())
+                .unwrap_or(value.len());
+            value[..end].parse().unwrap()
+        })
+        .collect()
 }
 
 fn quest(node: &Standalone, guid: &str, entry: u32) -> Option<BTreeMap<String, String>> {
@@ -153,7 +240,7 @@ fn drive_until(
 
 fn actions(node: &Standalone, guid: &str) -> Vec<BTreeMap<String, String>> {
     node.query_rows(&format!(
-        "SELECT kind, target_guid, spell_id, quest_entry, outcome FROM pkg_playerbots_action WHERE character_guid = {guid}"
+        "SELECT kind, target_guid, spell_id, quest_entry, outcome, observed_micros FROM pkg_playerbots_action WHERE character_guid = {guid}"
     ))
 }
 
@@ -349,7 +436,7 @@ fn record(node: &Standalone, suffix: &str) {
     let evidence = serde_json::json!({
         "fixture_scope": "private-loopback-seeded-content",
         "tested_core": git(core, &["rev-parse", "HEAD"]),
-        "tested_collection": git(&package, &["rev-parse", "HEAD"]),
+        "tested_collection": null,
         "core_dirty": false,
         "collection_dirty": false,
         "package_content_identity": package_digest.finalize().to_hex().to_string(),
@@ -382,10 +469,13 @@ fn record(node: &Standalone, suffix: &str) {
         "loot_receipts": node.query_rows("SELECT * FROM pkg_playerbots_quest_loot_receipt_fixture"),
         "quests": node.query_rows("SELECT * FROM game_character_quest"),
         "quest_objectives": node.query_rows("SELECT * FROM game_quest_objective"),
-        "entities": node.query_rows("SELECT * FROM game_world_entity WHERE entry = 6 OR entry = 69 OR entry = 299"),
+        "entities": node.query_rows(&format!("SELECT * FROM game_world_entity WHERE entry = 6 OR entry = 69 OR entry = 299 OR entry = {GRIND_CREATURE_ENTRY}")),
         "items": node.query_rows("SELECT * FROM game_item_instance"),
         "loot": node.query_rows("SELECT * FROM game_corpse_loot"),
         "loot_entitlement": node.query_rows("SELECT * FROM game_corpse_loot_eligible"),
+        "loot_tags": node.query_rows("SELECT * FROM game_creature_quest_tap"),
+        "loot_tag_members": node.query_rows("SELECT * FROM game_creature_quest_tap_member"),
+        "loot_tag_groups": node.query_rows("SELECT * FROM game_creature_loot_tag_group"),
         "gameobjects": node.query_rows(&format!("SELECT * FROM game_gameobject WHERE template_entry = 5090970 OR template_entry = {CHEST_ENTRY}")),
         "smite_header": smite_header,
         "smite_effect": smite_effect,
@@ -393,6 +483,30 @@ fn record(node: &Standalone, suffix: &str) {
         "navigation_config": node.query_rows("SELECT nav_enabled, nav_coverage_enabled FROM game_config WHERE id = 0"),
         "coverage_manifests": node.query_rows("SELECT * FROM game_vmap_nav_coverage_manifest"),
         "import_catalogue": node.query_rows("SELECT * FROM game_import_meta"),
+    });
+    std::fs::write(
+        support::log_dir().join(format!("{}-{suffix}.json", node.shard_name())),
+        serde_json::to_vec_pretty(&evidence).unwrap(),
+    )
+    .unwrap();
+}
+
+fn record_declared_targets(node: &Standalone, suffix: &str, targets: &[u64]) {
+    let entities: Vec<_> = targets
+        .iter()
+        .flat_map(|target| {
+            node.query_rows(&format!(
+                "SELECT * FROM game_world_entity WHERE guid = {target}"
+            ))
+        })
+        .collect();
+    let evidence = serde_json::json!({
+        "declared_target_guids": targets,
+        "entities": entities,
+        "runner": node.query_rows("SELECT * FROM pkg_playerbots_runner"),
+        "loot_tags": node.query_rows("SELECT * FROM game_creature_quest_tap"),
+        "loot_tag_members": node.query_rows("SELECT * FROM game_creature_quest_tap_member"),
+        "loot_tag_groups": node.query_rows("SELECT * FROM game_creature_loot_tag_group"),
     });
     std::fs::write(
         support::log_dir().join(format!("{}-{suffix}.json", node.shard_name())),
@@ -926,7 +1040,7 @@ fn playerbots_quest_purpose_survives_recovery_and_provisioning() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn playerbots_raw_entity_read_limit_holds_the_retained_quest() {
+fn playerbots_raw_entity_read_limit_keeps_travelling_to_retained_quest_work() {
     let (node, guid) = fixture("playerbots-quest-loop-target-change", 1, 0, true);
     drive_until(&node, &guid, LOOP_TIMEOUT, |node| {
         rewarded(node, &guid, 783)
@@ -934,27 +1048,580 @@ fn playerbots_raw_entity_read_limit_holds_the_retained_quest() {
     drive_until(&node, &guid, LOOP_TIMEOUT, |node| {
         quest(node, &guid, 7).is_some()
     });
+    drive_until(&node, &guid, LOOP_TIMEOUT, |node| {
+        let objective = query_one(
+            node,
+            &format!(
+                "SELECT quest_entry, destination, target FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"
+            ),
+        );
+        let character = query_one(
+            node,
+            &format!("SELECT x, y, z FROM game_world_entity WHERE guid = {guid}"),
+        );
+        let target = query_one(
+            node,
+            &format!("SELECT x, y, z FROM game_world_entity WHERE guid = {CREATURE_6}"),
+        );
+        let distance_sq = ["x", "y", "z"].into_iter().fold(0.0, |sum, field| {
+            let difference =
+                character[field].parse::<f32>().unwrap() - target[field].parse::<f32>().unwrap();
+            sum + difference * difference
+        });
+        objective["quest_entry"] == "7"
+            && objective["destination"].contains(&format!("guid = {CREATURE_6}"))
+            && objective["target"].contains("target_entry = 6")
+            && objective["target"].contains(&format!("guid = {CREATURE_6}"))
+            && distance_sq > 100.0 * 100.0
+            && first_quest_count(&quest(node, &guid, 7).unwrap()) == 0
+    });
+    let retained = query_one(
+        &node,
+        &format!("SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"),
+    );
+    let attacks_before = node.query_rows(&format!(
+        "SELECT * FROM game_melee_attack WHERE attacker_guid = {guid}"
+    ));
     node.assert_call("playerbots_quest_loop_fixture_stage_search_limit", &[&guid]);
     drive_until(&node, &guid, Duration::from_secs(10), |node| {
         query_one(
             node,
-            &format!("SELECT failures FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
+            &format!("SELECT character_guid, failures FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
         )["failures"]
             .contains("questReadLimit")
     });
     let limited = query_one(
         &node,
         &format!(
-            "SELECT failures, chosen FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+            "SELECT failures, chosen, objective_sequence FROM pkg_playerbots_runner WHERE character_guid = {guid}"
         ),
     );
     assert!(
         limited["failures"].contains("questReadLimit"),
         "{limited:?}"
     );
-    assert!(limited["chosen"].contains("hold"), "{limited:?}");
+    assert!(
+        limited["chosen"].contains("move = (home = ())"),
+        "{limited:?}"
+    );
+    assert!(
+        limited["chosen"].contains("reason = (returnHome = ())"),
+        "{limited:?}"
+    );
+    assert!(limited["chosen"].contains(&format!("objective = {}", limited["objective_sequence"])));
+    assert_eq!(
+        query_one(
+            &node,
+            &format!("SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"),
+        ),
+        retained
+    );
+    assert_eq!(
+        node.query_rows(&format!(
+            "SELECT * FROM game_melee_attack WHERE attacker_guid = {guid}"
+        )),
+        attacks_before
+    );
     assert_eq!(first_quest_count(&quest(&node, &guid, 7).unwrap()), 0);
+    let working = drive_until(&node, &guid, LOOP_TIMEOUT, |node| {
+        let working = query_one(
+            node,
+            &format!(
+                "SELECT failures, objective_sequence, chosen FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+            ),
+        );
+        working["objective_sequence"] == limited["objective_sequence"]
+            && working["chosen"].contains(&format!("attack = {CREATURE_6}"))
+            && working["chosen"].contains("reason = (quest = ())")
+            && working["chosen"].contains(&format!("objective = {}", limited["objective_sequence"]))
+    });
+    assert!(
+        working >= 1_250.0,
+        "retained destination travel did not advance: {working}"
+    );
+    let working_runner = query_one(
+        &node,
+        &format!(
+            "SELECT character_guid, failures FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+        ),
+    );
+    let read_limits = quest_read_limit_micros(&working_runner["failures"]);
+    assert!(!read_limits.is_empty(), "{working_runner:?}");
+    assert!(
+        read_limits
+            .windows(2)
+            .all(|pair| pair[1].saturating_sub(pair[0]) >= 30_000_000),
+        "{working_runner:?}"
+    );
+    let mut working_objective = query_one(
+        &node,
+        &format!("SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"),
+    );
+    let mut retained_purpose = retained.clone();
+    working_objective.remove("safe_position");
+    retained_purpose.remove("safe_position");
+    assert_eq!(working_objective, retained_purpose);
+    let resumed = drive_until(&node, &guid, LOOP_TIMEOUT, |node| {
+        first_quest_count(&quest(node, &guid, 7).unwrap()) > 0
+    });
+    assert!(
+        resumed >= 1_350.0,
+        "retained destination was not reached: {resumed}"
+    );
     record(&node, "read-limit");
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_in_progress_quest_target_survives_an_unrelated_raw_read_limit() {
+    let (node, guid) = fixture("playerbots-quest-loop-active-target-read-limit", 1, 0, true);
+    drive_until(&node, &guid, LOOP_TIMEOUT, |node| {
+        rewarded(node, &guid, 783)
+    });
+    node.assert_call(
+        "playerbots_select_controller",
+        &[&guid, "{\"recordOnly\":[]}"],
+    );
+    node.assert_call("playerbots_quest_fixture_admit_accept", &[&guid, "7"]);
+    let alternative = CREATURE_6 + 1;
+    node.assert_call("playerbots_fixture_runner_select_cohort", &[&guid]);
+    drive_until(&node, &guid, Duration::from_secs(30), |node| {
+        let runner = query_one(
+            node,
+            &format!(
+                "SELECT character_guid, chosen FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+            ),
+        );
+        let x = query_one(
+            node,
+            &format!("SELECT x FROM game_world_entity WHERE guid = {guid}"),
+        )["x"]
+            .parse::<f32>()
+            .unwrap();
+        runner["chosen"].contains(&format!("move = (entity = {CREATURE_6})")) && x > 1_210.0
+    });
+    node.assert_call(
+        "playerbots_quest_loop_fixture_make_target_friendly",
+        &[&guid, &CREATURE_6.to_string()],
+    );
+    drive_until(&node, &guid, Duration::from_secs(30), |node| {
+        let runner = query_one(
+            node,
+            &format!(
+                "SELECT chosen, objective_sequence, recovery FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+            ),
+        );
+        let x = query_one(
+            node,
+            &format!("SELECT x FROM game_world_entity WHERE guid = {guid}"),
+        )["x"]
+            .parse::<f32>()
+            .unwrap();
+        runner["chosen"].contains(&format!("move = (entity = {alternative})"))
+            && runner["recovery"].contains(&format!("active = (some = (fight = {alternative}))"))
+            && x > 1_210.0
+    });
+    let retained = query_one(
+        &node,
+        &format!(
+            "SELECT quest_entry, runner_objective_identity, target FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"
+        ),
+    );
+    let before = query_one(
+        &node,
+        &format!(
+            "SELECT objective_sequence, chosen, failures, recovery FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+        ),
+    );
+    assert_eq!(retained["quest_entry"], "7");
+    assert!(retained["target"].contains(&format!("guid = {CREATURE_6}")));
+    assert_eq!(
+        retained["runner_objective_identity"],
+        before["objective_sequence"]
+    );
+    assert!(before["chosen"].contains(&alternative.to_string()));
+    assert!(
+        before["recovery"].contains(&format!("active = (some = (fight = {alternative}))")),
+        "{before:?}"
+    );
+    assert_eq!(first_quest_count(&quest(&node, &guid, 7).unwrap()), 0);
+
+    node.assert_call("playerbots_quest_loop_fixture_stage_search_limit", &[&guid]);
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    let continued = query_one(
+        &node,
+        &format!(
+            "SELECT objective_sequence, chosen, failures FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+        ),
+    );
+    record(&node, "active-target-read-limit-boundary");
+    assert_eq!(
+        continued["objective_sequence"],
+        before["objective_sequence"]
+    );
+    assert!(
+        continued["chosen"].contains(&alternative.to_string()),
+        "{continued:?}"
+    );
+    assert!(continued["chosen"].contains("reason = (quest = ())"));
+    assert!(!continued["chosen"].contains("returnHome"));
+    assert_eq!(continued["failures"], before["failures"]);
+
+    drive_until(&node, &guid, LOOP_TIMEOUT, |node| {
+        first_quest_count(&quest(node, &guid, 7).unwrap()) > 0
+    });
+    assert!(actions(&node, &guid).iter().any(|action| {
+        action["target_guid"] == alternative.to_string()
+            && (action["kind"].contains("attack") || action["kind"].contains("cast"))
+    }));
+    assert_eq!(first_quest_count(&quest(&node, &guid, 7).unwrap()), 1);
+    record(&node, "active-target-read-limit");
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_quest_uses_a_reward_eligible_target_and_retains_productive_work() {
+    let (node, guid) = fixture("playerbots-quest-loop-productive-target", 1, 0, true);
+    let foreign = spawn_frozen_foreign_bot(&node, &guid, "1360", "1200");
+    drive_until(&node, &guid, LOOP_TIMEOUT, |node| {
+        rewarded(node, &guid, 783)
+    });
+    node.assert_call(
+        "playerbots_select_controller",
+        &[&guid, "{\"recordOnly\":[]}"],
+    );
+    node.assert_call(
+        "debug_add_threat",
+        &[&CREATURE_6.to_string(), &foreign, "1"],
+    );
+    assert_solo_loot_tag(&node, CREATURE_6, &foreign);
+    node.assert_call("playerbots_quest_fixture_admit_accept", &[&guid, "7"]);
+    node.assert_call("playerbots_fixture_runner_select_cohort", &[&guid]);
+
+    let alternative = CREATURE_6 + 1;
+    let selected = runner_target(
+        &node,
+        &guid,
+        "reason = (quest = ())",
+        &[CREATURE_6, alternative],
+    );
+    assert_solo_loot_tag(&node, CREATURE_6, &foreign);
+    node.assert_call(
+        "playerbots_select_controller",
+        &[&guid, "{\"recordOnly\":[]}"],
+    );
+    record(&node, "productive-target-selected");
+    assert!(
+        selected["chosen"].contains(&alternative.to_string()),
+        "{selected:?}"
+    );
+    assert!(selected["recovery"].contains(&format!("active = (some = (fight = {alternative}))")));
+    let retained = retained_quest_purpose(&node, &guid);
+    assert_eq!(retained["quest_entry"], "7");
+    assert_eq!(first_quest_count(&quest(&node, &guid, 7).unwrap()), 0);
+
+    node.assert_call(
+        "playerbots_quest_loop_fixture_respawn_target",
+        &[&guid, &CREATURE_6.to_string()],
+    );
+    assert_no_loot_tag(&node, CREATURE_6);
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    let respawned = query_one(
+        &node,
+        &format!(
+            "SELECT chosen, recovery FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+        ),
+    );
+    record(&node, "productive-target-respawned-primary");
+    assert!(
+        respawned["chosen"].contains(&alternative.to_string()),
+        "{respawned:?}"
+    );
+    assert!(respawned["recovery"].contains(&format!("active = (some = (fight = {alternative}))")));
+
+    node.assert_call(
+        "debug_add_threat",
+        &[&alternative.to_string(), &foreign, "1"],
+    );
+    assert_solo_loot_tag(&node, alternative, &foreign);
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    let switched = query_one(
+        &node,
+        &format!(
+            "SELECT chosen, recovery FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+        ),
+    );
+    record(&node, "productive-target-retagged");
+    assert!(
+        switched["chosen"].contains(&CREATURE_6.to_string()),
+        "{switched:?}"
+    );
+    assert!(!switched["chosen"].contains(&alternative.to_string()));
+    assert_eq!(retained_quest_purpose(&node, &guid), retained);
+
+    node.assert_call("playerbots_fixture_runner_select_cohort", &[&guid]);
+    let credit_updates = node.capture_updates(
+        &format!("SELECT * FROM game_corpse_loot_eligible WHERE corpse_guid = {CREATURE_6}"),
+        1,
+        || {
+            drive_until(&node, &guid, Duration::from_secs(40), |node| {
+                actions(node, &guid).iter().any(|action| {
+                    action["target_guid"] == CREATURE_6.to_string()
+                        && (action["kind"].contains("attack") || action["kind"].contains("cast"))
+                })
+            });
+        },
+    );
+    node.assert_call(
+        "playerbots_select_controller",
+        &[&guid, "{\"recordOnly\":[]}"],
+    );
+    record(&node, "productive-target-credit");
+    let inserted = credit_updates[0]["game_corpse_loot_eligible"]["inserts"]
+        .as_array()
+        .expect("corpse entitlement inserts");
+    assert_eq!(inserted.len(), 1, "{credit_updates:?}");
+    assert_eq!(inserted[0]["corpse_guid"], CREATURE_6);
+    assert_eq!(inserted[0]["eligible_guid"], guid.parse::<u64>().unwrap());
+    let completed = quest(&node, &guid, 7).unwrap();
+    assert_eq!(first_quest_count(&completed), 1);
+    assert_eq!(completed["rewarded"], "false");
+    assert_eq!(turnin_count(&node, &guid, 7), 0);
+    assert!(actions(&node, &guid).iter().any(|action| {
+        action["target_guid"] == CREATURE_6.to_string()
+            && (action["kind"].contains("attack") || action["kind"].contains("cast"))
+    }));
+    assert_no_loot_tag(&node, CREATURE_6);
+    let entitlement = node.query_rows(&format!(
+        "SELECT eligible_guid FROM game_corpse_loot_eligible WHERE corpse_guid = {CREATURE_6}"
+    ));
+    assert_eq!(entitlement.len(), 1, "{entitlement:?}");
+    assert_eq!(entitlement[0]["eligible_guid"], guid);
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_quest_fallback_distributes_an_ungrouped_population() {
+    let mut node = Standalone::start("playerbots-quest-loop-fallback-dispersion");
+    node.publish_module();
+    remove_builtin_weather_import_stamp(&node);
+    node.assert_call("claim_operator", &[]);
+    node.assert_call("install_guid_range", &["1000000"]);
+    stage_quest_geometry(&node);
+    node.assert_call(
+        "playerbots_spawn_class_role",
+        &["25", "1200", "1200", "50", "1", "0"],
+    );
+    let mut subjects: Vec<_> = node
+        .query_rows("SELECT character_guid FROM pkg_playerbots_bot")
+        .into_iter()
+        .map(|row| row["character_guid"].clone())
+        .collect();
+    subjects.sort();
+    assert_eq!(subjects.len(), 25, "{subjects:?}");
+    node.assert_call("playerbots_quest_loop_fixture_stage_named", &[&subjects[0]]);
+    node.assert_call(
+        "playerbots_spawn_class_role",
+        &["1", "1360", "1200", "50", "1", "0"],
+    );
+    let foreign = node
+        .query_rows("SELECT character_guid FROM pkg_playerbots_bot")
+        .into_iter()
+        .map(|row| row["character_guid"].clone())
+        .find(|guid| !subjects.contains(guid))
+        .expect("foreign tag owner is absent");
+    node.assert_call(
+        "playerbots_quest_loop_fixture_prepare_dispersion",
+        &[&foreign],
+    );
+    node.assert_call(
+        "debug_add_threat",
+        &[&CREATURE_6.to_string(), &foreign, "1"],
+    );
+    assert_solo_loot_tag(&node, CREATURE_6, &foreign);
+    assert!(node
+        .query_rows("SELECT * FROM game_group_member")
+        .is_empty());
+    let positions: BTreeSet<_> = subjects
+        .iter()
+        .map(|guid| {
+            let entity = query_one(
+                &node,
+                &format!(
+                    "SELECT map_id, instance_id, x, y, z FROM game_world_entity WHERE guid = {guid}"
+                ),
+            );
+            (
+                entity["map_id"].clone(),
+                entity["instance_id"].clone(),
+                entity["x"].clone(),
+                entity["y"].clone(),
+                entity["z"].clone(),
+            )
+        })
+        .collect();
+    assert_eq!(positions.len(), 1, "{positions:?}");
+    node.assert_call("playerbots_quest_loop_fixture_pass_dispersion", &[&foreign]);
+    record(&node, "quest-fallback-dispersion");
+
+    let allowed: BTreeSet<_> = (1..=3).map(|offset| CREATURE_6 + offset).collect();
+    let mut selected = BTreeSet::new();
+    let mut observed = BTreeSet::new();
+    let first_purpose = retained_quest_purpose(&node, &subjects[0]);
+    for guid in &subjects {
+        assert_eq!(retained_quest_purpose(&node, guid), first_purpose);
+        assert_eq!(first_quest_count(&quest(&node, guid, 7).unwrap()), 0);
+        let runner = query_one(
+            &node,
+            &format!(
+                "SELECT chosen, recovery, observed_micros FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+            ),
+        );
+        observed.insert(runner["observed_micros"].clone());
+        assert!(
+            runner["chosen"].contains("reason = (quest = ())"),
+            "{runner:?}"
+        );
+        let target = allowed
+            .iter()
+            .copied()
+            .find(|target| runner["chosen"].contains(&target.to_string()))
+            .unwrap_or_else(|| {
+                panic!("Quest fallback did not choose a nearest target: {runner:?}")
+            });
+        assert!(
+            runner["recovery"].contains(&format!("active = (some = (fight = {target}))")),
+            "{runner:?}"
+        );
+        assert!(actions(&node, guid).iter().any(|action| {
+            action["kind"].contains("move")
+                && action["observed_micros"] == runner["observed_micros"]
+                && action["outcome"].contains("destination")
+                && action["outcome"].contains("arrived = false")
+        }));
+        selected.insert(target);
+    }
+    assert_eq!(observed.len(), 1, "{observed:?}");
+    assert!(
+        selected.len() > 1,
+        "synchronized fallback target: {selected:?}"
+    );
+    assert_solo_loot_tag(&node, CREATURE_6, &foreign);
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_grind_reuses_only_a_reward_eligible_target() {
+    let mut node = Standalone::start("playerbots-grind-productive-target");
+    node.publish_module();
+    remove_builtin_weather_import_stamp(&node);
+    node.assert_call("claim_operator", &[]);
+    node.assert_call("install_guid_range", &["1000000"]);
+    stage_quest_geometry(&node);
+    node.assert_call(
+        "playerbots_spawn_class_role",
+        &["1", "1200", "1200", "50", "1", "0"],
+    );
+    let guid = node.query_rows("SELECT character_guid FROM pkg_playerbots_bot")[0]
+        ["character_guid"]
+        .clone();
+    node.assert_call(
+        "playerbots_select_controller",
+        &[&guid, "{\"recordOnly\":[]}"],
+    );
+    let subject = query_one(
+        &node,
+        &format!("SELECT x, y, orientation FROM game_world_entity WHERE guid = {guid}"),
+    );
+    let subject_x = subject["x"].parse::<f32>().unwrap();
+    let subject_y = subject["y"].parse::<f32>().unwrap();
+    assert_eq!(subject["orientation"].parse::<f32>().unwrap(), 0.0);
+    let foreign_x = (subject_x + 50.0).to_string();
+    let foreign_y = subject_y.to_string();
+    let foreign = spawn_frozen_foreign_bot(&node, &guid, &foreign_x, &foreign_y);
+    node.assert_call(
+        "debug_spawn_at_feet",
+        &[&guid, &GRIND_CREATURE_ENTRY.to_string(), "50"],
+    );
+    node.assert_call(
+        "debug_spawn_at_feet",
+        &[&guid, &GRIND_CREATURE_ENTRY.to_string(), "55"],
+    );
+    let targets: Vec<u64> = node
+        .query_rows(&format!(
+            "SELECT guid, x, y FROM game_world_entity WHERE entry = {GRIND_CREATURE_ENTRY} AND x >= {} AND x <= {} AND y >= {} AND y <= {}",
+            subject_x + 49.0,
+            subject_x + 56.0,
+            subject_y - 1.0,
+            subject_y + 1.0,
+        ))
+        .into_iter()
+        .map(|row| row["guid"].parse().unwrap())
+        .collect();
+    assert_eq!(targets.len(), 2, "{targets:?}");
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    let selected = runner_target(&node, &guid, "reason = (grind = ())", &targets);
+    let target = *targets
+        .iter()
+        .find(|target| selected["chosen"].contains(&target.to_string()))
+        .expect("Grind target is absent from the candidate");
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    let retained = query_one(
+        &node,
+        &format!("SELECT chosen FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
+    );
+    assert!(
+        retained["chosen"].contains(&target.to_string()),
+        "{retained:?}"
+    );
+
+    node.assert_call("playerbots_fixture_runner_select_cohort", &[&guid]);
+    drive_until(&node, &guid, Duration::from_secs(10), |node| {
+        let runner = query_one(
+            node,
+            &format!(
+                "SELECT chosen, foreground FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+            ),
+        );
+        runner["chosen"].contains(&target.to_string())
+            && runner["chosen"].contains("reason = (grind = ())")
+            && runner["foreground"].contains(&target.to_string())
+            && runner["foreground"].contains("reason = (grind = ())")
+    });
+    record_declared_targets(&node, "grind-productive-target-active", &targets);
+    node.assert_call("debug_add_threat", &[&target.to_string(), &foreign, "1"]);
+    assert_solo_loot_tag(&node, target, &foreign);
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    let switched = query_one(
+        &node,
+        &format!(
+            "SELECT chosen, foreground FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+        ),
+    );
+    let alternative = *targets
+        .iter()
+        .find(|candidate| **candidate != target)
+        .unwrap();
+    record_declared_targets(&node, "grind-productive-target-retagged", &targets);
+    node.assert_call(
+        "playerbots_select_controller",
+        &[&guid, "{\"recordOnly\":[]}"],
+    );
+    record(&node, "grind-productive-target");
+    assert!(
+        switched["chosen"].contains("reason = (grind = ())"),
+        "{switched:?}"
+    );
+    assert!(
+        switched["chosen"].contains(&alternative.to_string()),
+        "{switched:?}"
+    );
+    assert!(!switched["chosen"].contains(&target.to_string()));
+    assert!(
+        switched["foreground"].contains(&alternative.to_string()),
+        "{switched:?}"
+    );
+    assert!(!switched["foreground"].contains(&target.to_string()));
 }
 
 #[test]
@@ -1036,19 +1703,48 @@ fn playerbots_disappeared_target_reselects_without_changing_quest_purpose() {
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_ninth_inaccessible_corpse_reports_an_inconclusive_read() {
     let (node, guid) = fixture("playerbots-quest-loop-corpse-limit", 8, 2, true);
+    node.assert_call(
+        "playerbots_select_controller",
+        &[&guid, "{\"recordOnly\":[]}"],
+    );
     node.assert_call("playerbots_quest_fixture_admit_accept", &[&guid, "33"]);
     drive_until(&node, &guid, Duration::from_secs(10), |node| {
-        query_one(
+        let retained = query_one(
             node,
-            &format!("SELECT quest_entry FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"),
-        )["quest_entry"]
-            == "33"
+            &format!("SELECT quest_entry, target FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"),
+        );
+        let runner = query_one(
+            node,
+            &format!("SELECT character_guid, chosen FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
+        );
+        let source = structured_number(&retained["target"], "guid");
+        retained["quest_entry"] == "33"
+            && runner["chosen"].contains(&source)
+            && runner["chosen"].contains("reason = (quest = ())")
     });
+    let retained = retained_quest_purpose(&node, &guid);
+    let source = structured_number(&retained["target"], "guid");
+    assert!(!rewarded(&node, &guid, 33));
+    assert_eq!(first_quest_count(&quest(&node, &guid, 33).unwrap()), 0);
+    assert!(loot_receipt(&node, &guid).is_none());
+    assert_eq!(item_count(&node, &guid, 750), 0);
+    assert_eq!(turnin_count(&node, &guid, 33), 0);
     node.assert_call("playerbots_quest_loop_fixture_stage_corpse_limit", &[&guid]);
+    node.assert_call("playerbots_quest_fixture_hide_live_target", &["69"]);
+    let inaccessible = node
+        .query_rows("SELECT guid, dead FROM game_world_entity WHERE entry = 69 AND dead = true");
+    assert_eq!(inaccessible.len(), 9, "{inaccessible:?}");
+    assert!(inaccessible.iter().all(|corpse| corpse["guid"] != source));
+    assert!(node
+        .query_rows(&format!(
+            "SELECT guid FROM game_world_entity WHERE guid = {source}"
+        ))
+        .is_empty());
+    node.assert_call("playerbots_fixture_runner_select_cohort", &[&guid]);
     drive_until(&node, &guid, Duration::from_secs(10), |node| {
         query_one(
             node,
-            &format!("SELECT failures FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
+            &format!("SELECT character_guid, failures FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
         )["failures"]
             .contains("questReadLimit")
     });
@@ -1062,33 +1758,196 @@ fn playerbots_ninth_inaccessible_corpse_reports_an_inconclusive_read() {
         limited["failures"].contains("questReadLimit"),
         "{limited:?}"
     );
-    assert!(limited["chosen"].contains("hold"), "{limited:?}");
+    assert!(
+        limited["chosen"].contains("move = (home = ())"),
+        "{limited:?}"
+    );
+    assert!(limited["chosen"].contains("reason = (returnHome = ())"));
+    drive_until(&node, &guid, Duration::from_secs(10), |node| {
+        let waiting = query_one(
+            node,
+            &format!("SELECT chosen FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
+        );
+        waiting["chosen"].contains("hold") && waiting["chosen"].contains("reason = (quest = ())")
+    });
+    let first_wait = query_one(
+        &node,
+        &format!(
+            "SELECT character_guid, failures, observed_micros, next_eligible_micros, objective FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+        ),
+    );
+    let first_failures = quest_read_limit_micros(&first_wait["failures"]);
+    assert!(!first_failures.is_empty(), "{first_wait:?}");
+    let retry_at = first_wait["next_eligible_micros"].parse::<i64>().unwrap();
+    let observed = first_wait["observed_micros"].parse::<i64>().unwrap();
+    assert!(retry_at > observed, "{first_wait:?}");
+    assert_eq!(
+        retry_at,
+        first_failures.last().unwrap().saturating_add(30_000_000),
+        "{first_wait:?}"
+    );
+    let actions_before_retries = actions(&node, &guid);
+    for _ in 0..8 {
+        node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    }
+    let repeated_wait = query_one(
+        &node,
+        &format!(
+            "SELECT character_guid, failures, next_eligible_micros, last_outcome, objective FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+        ),
+    );
+    record(&node, "corpse-limit-repeated-wait");
+    assert_eq!(
+        quest_read_limit_micros(&repeated_wait["failures"]),
+        first_failures,
+        "{repeated_wait:?}"
+    );
+    assert_eq!(
+        repeated_wait["next_eligible_micros"]
+            .parse::<i64>()
+            .unwrap(),
+        retry_at,
+        "{repeated_wait:?}"
+    );
+    assert!(repeated_wait["last_outcome"].contains("waiting"));
+    assert_eq!(repeated_wait["objective"], first_wait["objective"]);
+    assert_eq!(actions(&node, &guid), actions_before_retries);
+    let attempted = actions(&node, &guid);
+    for corpse in &inaccessible {
+        assert!(attempted.iter().all(|action| {
+            action["target_guid"] != corpse["guid"]
+                || !["attack", "cast", "openLoot", "takeLoot"]
+                    .iter()
+                    .any(|kind| action["kind"].contains(kind))
+        }));
+    }
     assert_eq!(first_quest_count(&quest(&node, &guid, 33).unwrap()), 0);
+    assert!(!rewarded(&node, &guid, 33));
+    assert!(loot_receipt(&node, &guid).is_none());
+    assert_eq!(item_count(&node, &guid, 750), 0);
+    assert_eq!(turnin_count(&node, &guid, 33), 0);
     record(&node, "corpse-limit");
 }
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn playerbots_exhausted_raw_corpse_search_reports_an_inconclusive_read() {
+fn playerbots_retained_creature_source_survives_a_raw_read_limit_through_loot() {
     let (node, guid) = fixture("playerbots-quest-loop-corpse-raw-limit", 8, 2, true);
     node.assert_call("playerbots_quest_fixture_admit_accept", &[&guid, "33"]);
+    node.assert_call(
+        "playerbots_select_controller",
+        &[&guid, "{\"recordOnly\":[]}"],
+    );
     drive_until(&node, &guid, Duration::from_secs(10), |node| {
-        query_one(
+        let retained = query_one(
             node,
-            &format!("SELECT quest_entry FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"),
-        )["quest_entry"]
-            == "33"
+            &format!("SELECT quest_entry, target FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"),
+        );
+        let runner = query_one(
+            node,
+            &format!("SELECT chosen FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
+        );
+        let source = structured_number(&retained["target"], "guid");
+        retained["quest_entry"] == "33"
+            && runner["chosen"].contains(&source)
+            && (runner["chosen"].contains("attack") || runner["chosen"].contains("cast"))
+            && runner["chosen"].contains("reason = (quest = ())")
+            && first_quest_count(&quest(node, &guid, 33).unwrap()) == 0
     });
+    let retained = query_one(
+        &node,
+        &format!("SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"),
+    );
+    let source = structured_number(&retained["target"], "guid");
+    let runner = query_one(
+        &node,
+        &format!(
+            "SELECT chosen, failures, objective_sequence FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+        ),
+    );
+    assert!(runner["chosen"].contains(&source), "{runner:?}");
+    assert_eq!(
+        retained["runner_objective_identity"],
+        runner["objective_sequence"]
+    );
+    assert!(runner["chosen"].contains(&format!("objective = {}", runner["objective_sequence"])));
+    let read_limits = quest_read_limit_micros(&runner["failures"]);
+    assert!(!rewarded(&node, &guid, 33));
+    assert!(loot_receipt(&node, &guid).is_none());
+    assert_eq!(item_count(&node, &guid, 750), 0);
+    assert_eq!(turnin_count(&node, &guid, 33), 0);
+    let live_source = query_one(
+        &node,
+        &format!("SELECT health, dead FROM game_world_entity WHERE guid = {source}"),
+    );
+    assert_eq!(live_source["health"], "1");
+    assert_eq!(live_source["dead"], "false");
+    assert!(actions(&node, &guid)
+        .iter()
+        .all(|action| action["target_guid"] != source));
+
     node.assert_call("playerbots_quest_loop_fixture_stage_search_limit", &[&guid]);
-    drive_until(&node, &guid, Duration::from_secs(10), |node| {
-        query_one(
-            node,
-            &format!("SELECT failures FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
-        )["failures"]
-            .contains("questReadLimit")
+    node.assert_call("playerbots_select_controller", &[&guid, "{\"cohort\":[]}"]);
+    drive_until(&node, &guid, LOOP_TIMEOUT, |node| {
+        let source_actions: Vec<_> = actions(node, &guid)
+            .into_iter()
+            .filter(|action| action["target_guid"] == source)
+            .collect();
+        let resolved = source_actions.iter().any(|action| {
+            (action["kind"].contains("attack") && action["outcome"].contains("attackAccepted"))
+                || (action["kind"].contains("cast") && action["outcome"].contains("castResolved"))
+        });
+        let looted = ["openLoot", "takeLoot"].into_iter().all(|kind| {
+            source_actions.iter().any(|action| {
+                action["kind"].contains(kind) && action["outcome"].contains("completed")
+            })
+        });
+        let terminal = item_count(node, &guid, 750) == 8
+            || (rewarded(node, &guid, 33) && turnin_count(node, &guid, 33) == 1);
+        loot_receipt(node, &guid).is_some_and(|receipt| {
+            receipt["last_source_guid"] == source
+                && receipt["item_entry"] == "750"
+                && receipt["received_count"] == "8"
+                && receipt["peak_carried_count"] == "8"
+                && resolved
+                && looted
+                && terminal
+        })
     });
+    let receipt = loot_receipt(&node, &guid).expect("loot receipt is absent");
+    let source_actions: Vec<_> = actions(&node, &guid)
+        .into_iter()
+        .filter(|action| action["target_guid"] == source)
+        .collect();
+    assert!(source_actions.iter().any(|action| {
+        (action["kind"].contains("attack") && action["outcome"].contains("attackAccepted"))
+            || (action["kind"].contains("cast") && action["outcome"].contains("castResolved"))
+    }));
+    for kind in ["openLoot", "takeLoot"] {
+        assert!(source_actions.iter().any(|action| {
+            action["kind"].contains(kind) && action["outcome"].contains("completed")
+        }));
+    }
+    assert_eq!(receipt["last_source_guid"], source);
+    assert_eq!(receipt["item_entry"], "750");
+    assert_eq!(receipt["received_count"], "8");
+    assert_eq!(receipt["peak_carried_count"], "8");
+    assert!(
+        item_count(&node, &guid, 750) == 8
+            || (rewarded(&node, &guid, 33) && turnin_count(&node, &guid, 33) == 1)
+    );
     assert_eq!(first_quest_count(&quest(&node, &guid, 33).unwrap()), 0);
-    record(&node, "corpse-raw-limit");
+    let final_runner = query_one(
+        &node,
+        &format!(
+            "SELECT character_guid, failures FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+        ),
+    );
+    assert_eq!(
+        quest_read_limit_micros(&final_runner["failures"]),
+        read_limits
+    );
+    record(&node, "retained-source-loot");
 }
 
 #[test]

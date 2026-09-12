@@ -786,6 +786,7 @@ fn assert_talent_refused_unchanged(node: &Standalone, guid: &str, talent: &str) 
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_talent_gates_are_atomic_and_use_global_tab_identity() {
     let (node, mage) = fixture("playerbots-provisioning-talents", "8", "2");
+    select(&node, &mage, "frozen");
     node.assert_call("debug_set_level", &[&mage, "20"]);
     assert_talent_refused_unchanged(&node, &mage, "1");
 
@@ -799,6 +800,7 @@ fn playerbots_talent_gates_are_atomic_and_use_global_tab_identity() {
         .map(|row| row["character_guid"].clone())
         .find(|guid| guid != &mage)
         .unwrap();
+    select(&node, &warrior, "frozen");
     node.assert_call("debug_set_level", &[&warrior, "20"]);
     for (tab, class_mask, race_mask) in [(9001, 128, 0), (9002, 1, 0), (9003, 1, 0), (9004, 1, 2)] {
         node.assert_sql(&format!(

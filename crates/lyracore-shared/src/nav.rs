@@ -333,6 +333,38 @@ fn line_walkable(
     true
 }
 
+/// Retain the longest tested half-prefix of an attempted movement whose exact stored endpoint
+/// crosses only walkable cells. The caller may derive `attempted` from a farther, walkable
+/// waypoint; f32 rounding can put that shorter endpoint on the other side of a grid corner.
+pub fn walkable_prefix(
+    fetch: &mut impl FnMut(u16, u16) -> Option<NavCellData>,
+    from: (f32, f32),
+    attempted: (f32, f32),
+) -> (f32, f32) {
+    if ![from.0, from.1, attempted.0, attempted.1]
+        .iter()
+        .all(|value| value.is_finite())
+    {
+        return from;
+    }
+    let mut cache = Cache::new(fetch);
+    let mut candidate = attempted;
+    for _ in 0..=f32::MANTISSA_DIGITS {
+        if line_walkable(&mut cache, from, candidate) {
+            return candidate;
+        }
+        let next = (
+            from.0 + (candidate.0 - from.0) * 0.5,
+            from.1 + (candidate.1 - from.1) * 0.5,
+        );
+        if next == from || next == candidate {
+            return from;
+        }
+        candidate = next;
+    }
+    from
+}
+
 /// Short-leg grid A* with string-pulling. Returns world waypoints from AFTER `from` up to and
 /// including `to`, or None when unreachable within `max_expansions`. The straight-line fast
 /// path returns `[to]` with ZERO expansions — an open-field chase costs one line test.
@@ -484,7 +516,11 @@ fn search_leg(
     let mut expanded = 0u32;
     let mut found = false;
     let mut best = ((sx, sy), h(sx, sy)); // nearest-approach node for the partial fallback
-    while let Some(Reverse((_, x, y))) = open.pop() {
+    while let Some(Reverse((score, x, y))) = open.pop() {
+        let g0 = g_cost[&(x, y)];
+        if score != g0 + remaining(x, y) {
+            continue;
+        }
         if ((x, y) == (tx, ty) && target_walkable)
             || (stop_dist > 0.0
                 && (grid_to_world(x) - to.0).hypot(grid_to_world(y) - to.1) <= stop_dist
@@ -502,7 +538,6 @@ fn search_leg(
         if hxy < best.1 {
             best = ((x, y), hxy);
         }
-        let g0 = g_cost[&(x, y)];
         for (dx, dy) in [
             (1i64, 0i64),
             (-1, 0),
@@ -601,6 +636,30 @@ fn search_leg(
 mod runtime_tests {
     use super::*;
     use crate::terrain::cell_index;
+
+    #[test]
+    fn rounded_prefix_retains_a_walkable_movement_step() {
+        let from = (-8_772.485, -86.496_69);
+        let farther_waypoint = (-8_779.947, -78.384_766);
+        let attempted = (-8_777.225, -81.344_84);
+        let mut cell = NavCellData {
+            base_z: 0.0,
+            walk: vec![0xff; WALK_BYTES],
+            obs: Vec::new(),
+        };
+        walk_set(&mut cell.walk, 14, 35, false);
+        let mut fetch = |cx, cy| (cx == 775 && cy == 514).then(|| cell.clone());
+
+        assert!(line_walkable(
+            &mut Cache::new(&mut fetch),
+            from,
+            farther_waypoint
+        ));
+        assert!(!line_walkable(&mut Cache::new(&mut fetch), from, attempted));
+        let endpoint = walkable_prefix(&mut fetch, from, attempted);
+        assert_eq!(endpoint, (-8_773.67, -85.208_725));
+        assert!(line_walkable(&mut Cache::new(&mut fetch), from, endpoint));
+    }
 
     /// One synthetic chunk at the Northshire cell: a full-height wall along nx=32 (obs ox=16)
     /// with a 4-sub-cell doorway at ny 30..34 (obs oy 15..17), plus a sealed 4-wall pocket in
@@ -866,6 +925,54 @@ mod runtime_tests {
     }
 
     #[test]
+    fn stale_queue_entries_do_not_consume_the_detour_budget() {
+        const WIDTH: usize = 192;
+        const HEIGHT: usize = 192;
+        const WALL_X: usize = WIDTH / 2;
+        const GAP: std::ops::Range<usize> = 8..12;
+        const BASE_CELL: u16 = 400;
+        const BUDGET: u32 = 16_384;
+
+        let point = |x: usize, y: usize| {
+            (
+                sub_center(BASE_CELL + (x / WALK_DIM) as u16, x % WALK_DIM, WALK_DIM),
+                sub_center(BASE_CELL + (y / WALK_DIM) as u16, y % WALK_DIM, WALK_DIM),
+            )
+        };
+        let mut fetch = |cell_x: u16, cell_y: u16| {
+            let mut cell = NavCellData {
+                base_z: 0.0,
+                walk: vec![0; WALK_BYTES],
+                obs: vec![OBS_NONE; OBS_BYTES],
+            };
+            let offset_x = (i32::from(cell_x) - i32::from(BASE_CELL)) * WALK_DIM as i32;
+            let offset_y = (i32::from(cell_y) - i32::from(BASE_CELL)) * WALK_DIM as i32;
+            for local_y in 0..WALK_DIM {
+                for local_x in 0..WALK_DIM {
+                    let x = offset_x + local_x as i32;
+                    let y = offset_y + local_y as i32;
+                    let walkable = x > 0
+                        && y > 0
+                        && x < WIDTH as i32 - 1
+                        && y < HEIGHT as i32 - 1
+                        && (x != WALL_X as i32 || GAP.contains(&(y as usize)));
+                    walk_set(&mut cell.walk, local_x, local_y, walkable);
+                }
+            }
+            Some(cell)
+        };
+        let from = point(WIDTH / 4, HEIGHT / 2);
+        let to = point(WIDTH * 3 / 4, HEIGHT / 2);
+
+        let search = find_leg_in_range_ex(&mut fetch, from, to, 0.0, BUDGET);
+        let LegOutcome::Complete(path) = search.outcome else {
+            panic!("stale queue entries consumed the detour budget");
+        };
+        assert!(search.expansions < BUDGET);
+        assert_eq!(path.last(), Some(&to));
+    }
+
+    #[test]
     fn blocked_search_retains_expansions_without_a_straight_fallback() {
         let ((cx, cy), mut cell) = walled_cell();
         cell.walk.fill(0);
@@ -908,6 +1015,7 @@ mod runtime_tests {
         assert_eq!(expanded, 0, "own-cell exemption keeps the fast path");
         assert_eq!(path.len(), 1);
         assert!(complete);
+        assert_eq!(walkable_prefix(&mut fetch, from, to), to);
     }
 
     #[test]

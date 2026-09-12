@@ -877,8 +877,21 @@ fn playerbots_quest_retries_after_deferral_without_replacing_its_purpose() {
             .is_empty(),
         "{deferred:?}"
     );
-    assert!(deferred["recovery"].contains("work = (fight"));
-    assert!(deferred["recovery"].contains("deferred_until_micros = (some"));
+    let deferred_identity = deferred["objective_sequence"].as_str();
+    assert!(
+        deferred["recovery"].contains(&format!(
+            "work = (quest = (step = (target = {CREATURE_823}, quest = 5261), operation = (accept = ())))"
+        )),
+        "{deferred:?}"
+    );
+    assert!(
+        deferred["recovery"].contains(&format!("objective = {deferred_identity},")),
+        "{deferred:?}"
+    );
+    assert!(
+        !deferred["recovery"].contains(&format!("work = (fight = {CREATURE_6})")),
+        "{deferred:?}"
+    );
     let original_destination = "destination = (map_id = 0, instance_id = 0, x = 1202, y = 1200.4, z = 50, geometry_revision = (none = ()))";
     let original_deferral_prefix = format!("{original_destination}, until_micros = ");
     let original_deferral_deadline = deferred["deferred_destinations"]
@@ -892,6 +905,10 @@ fn playerbots_quest_retries_after_deferral_without_replacing_its_purpose() {
         .unwrap();
     assert!(deferred["chosen"].contains("acceptQuest"), "{deferred:?}");
     assert!(deferred["chosen"].contains("quest = 5261"), "{deferred:?}");
+    assert!(
+        deferred["chosen"].contains(&format!("objective = {deferred_identity}")),
+        "{deferred:?}"
+    );
     assert_eq!(deferred["last_outcome"], "(accepted = ())");
     let useful_actions = node.query_rows(&format!(
         "SELECT kind, outcome, target_guid, quest_entry FROM pkg_playerbots_action WHERE character_guid = {bot} AND quest_entry = 5261"
@@ -1121,7 +1138,10 @@ fn playerbots_active_quest_overflow_preserves_the_retained_purpose() {
     let bot = bot_for_class(&bots, "1");
     node.assert_call("playerbots_quest_fixture_admit_accept", &[bot, "7"]);
     node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
-    node.assert_call("playerbots_fixture_runner_select_cohort", &[bot]);
+    node.assert_call(
+        "playerbots_select_controller",
+        &[bot, "{\"recordOnly\":[]}"],
+    );
     node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
     let retained = node.query_rows(&format!(
         "SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {bot}"
@@ -1131,6 +1151,7 @@ fn playerbots_active_quest_overflow_preserves_the_retained_purpose() {
         "SELECT * FROM pkg_playerbots_action WHERE character_guid = {bot}"
     ));
 
+    node.assert_call("playerbots_fixture_runner_select_cohort", &[bot]);
     node.assert_call("playerbots_quest_fixture_active_log_overflow", &[bot]);
     node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
     let limited = runner(&node, bot);
@@ -1174,6 +1195,40 @@ fn playerbots_active_quest_overflow_preserves_the_retained_purpose() {
         .parse::<u32>()
         .unwrap();
     node.assert_call("playerbots_fixture_runner_damage", &[bot, CREATURE_6, "1"]);
+    node.assert_call(
+        "playerbots_fixture_runner_stage_defense_retry",
+        &[bot, CREATURE_6],
+    );
+    let staged_retry = runner(&node, bot);
+    let retry_candidate = staged_retry["retry_candidate"].clone();
+    assert!(retry_candidate.contains("defense"), "{staged_retry:?}");
+    assert!(retry_candidate.contains(CREATURE_6), "{staged_retry:?}");
+    let retry_at = staged_retry["next_eligible_micros"].parse::<i64>().unwrap() + 60_000_000;
+    node.assert_sql(&format!(
+        "UPDATE pkg_playerbots_runner SET retry_count = 1, next_eligible_micros = {retry_at} WHERE character_guid = {bot}"
+    ));
+    let mut waiting = Vec::new();
+    for _ in 0..2 {
+        node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
+        waiting.push(runner(&node, bot));
+    }
+    record(&node, "active-overflow-defense-wait");
+    for waiting in &waiting {
+        assert!(waiting["chosen"].contains("hold"), "{waiting:?}");
+        assert!(waiting["chosen"].contains("quest"), "{waiting:?}");
+        assert!(waiting["last_outcome"].contains("waiting"), "{waiting:?}");
+        assert_eq!(waiting["retry_candidate"], retry_candidate, "{waiting:?}");
+        assert_eq!(waiting["retry_count"], "1");
+        assert_eq!(waiting["failures"], limited["failures"], "{waiting:?}");
+        assert_eq!(
+            waiting["next_eligible_micros"].parse::<i64>().unwrap(),
+            retry_at
+        );
+        assert!(
+            waiting["observed_micros"].parse::<i64>().unwrap() < retry_at,
+            "{waiting:?}"
+        );
+    }
     node.assert_call(
         "playerbots_fixture_runner_stage_defense_retry",
         &[bot, CREATURE_6],
