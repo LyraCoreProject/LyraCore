@@ -1138,7 +1138,10 @@ fn playerbots_active_quest_overflow_preserves_the_retained_purpose() {
     let bot = bot_for_class(&bots, "1");
     node.assert_call("playerbots_quest_fixture_admit_accept", &[bot, "7"]);
     node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
-    node.assert_call("playerbots_fixture_runner_select_cohort", &[bot]);
+    node.assert_call(
+        "playerbots_select_controller",
+        &[bot, "{\"recordOnly\":[]}"],
+    );
     node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
     let retained = node.query_rows(&format!(
         "SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {bot}"
@@ -1148,6 +1151,7 @@ fn playerbots_active_quest_overflow_preserves_the_retained_purpose() {
         "SELECT * FROM pkg_playerbots_action WHERE character_guid = {bot}"
     ));
 
+    node.assert_call("playerbots_fixture_runner_select_cohort", &[bot]);
     node.assert_call("playerbots_quest_fixture_active_log_overflow", &[bot]);
     node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
     let limited = runner(&node, bot);
