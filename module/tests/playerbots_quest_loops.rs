@@ -1073,6 +1073,100 @@ fn playerbots_raw_entity_read_limit_keeps_travelling_to_retained_quest_work() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_in_progress_quest_target_survives_an_unrelated_raw_read_limit() {
+    let (node, guid) = fixture("playerbots-quest-loop-active-target-read-limit", 1, 0, true);
+    drive_until(&node, &guid, LOOP_TIMEOUT, |node| {
+        rewarded(node, &guid, 783)
+    });
+    node.assert_call(
+        "playerbots_select_controller",
+        &[&guid, "{\"recordOnly\":[]}"],
+    );
+    node.assert_call("playerbots_quest_fixture_admit_accept", &[&guid, "7"]);
+    node.assert_call("playerbots_quest_fixture_hide_live_target", &["6"]);
+    let alternative = CREATURE_6 + 1;
+    drive_until(&node, &guid, Duration::from_secs(10), |node| {
+        query_one(
+            node,
+            &format!("SELECT chosen FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
+        )["chosen"]
+            .contains(&format!("move = (entity = {alternative})"))
+    });
+    node.assert_call("playerbots_fixture_runner_select_cohort", &[&guid]);
+    drive_until(&node, &guid, Duration::from_secs(30), |node| {
+        let runner = query_one(
+            node,
+            &format!(
+                "SELECT chosen, objective_sequence FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+            ),
+        );
+        let x = query_one(
+            node,
+            &format!("SELECT x FROM game_world_entity WHERE guid = {guid}"),
+        )["x"]
+            .parse::<f32>()
+            .unwrap();
+        runner["chosen"].contains(&format!("move = (entity = {alternative})")) && x > 1_210.0
+    });
+    let retained = query_one(
+        &node,
+        &format!(
+            "SELECT quest_entry, runner_objective_identity, target FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"
+        ),
+    );
+    let before = query_one(
+        &node,
+        &format!(
+            "SELECT objective_sequence, chosen, failures, recovery FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+        ),
+    );
+    assert_eq!(retained["quest_entry"], "7");
+    assert!(retained["target"].contains(&format!("guid = {CREATURE_6}")));
+    assert_eq!(
+        retained["runner_objective_identity"],
+        before["objective_sequence"]
+    );
+    assert!(before["chosen"].contains(&alternative.to_string()));
+    assert!(
+        before["recovery"].contains(&format!("active = (some = (fight = {alternative}))")),
+        "{before:?}"
+    );
+    assert_eq!(first_quest_count(&quest(&node, &guid, 7).unwrap()), 0);
+
+    node.assert_call("playerbots_quest_loop_fixture_stage_search_limit", &[&guid]);
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    let continued = query_one(
+        &node,
+        &format!(
+            "SELECT objective_sequence, chosen, failures FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+        ),
+    );
+    record(&node, "active-target-read-limit-boundary");
+    assert_eq!(
+        continued["objective_sequence"],
+        before["objective_sequence"]
+    );
+    assert!(
+        continued["chosen"].contains(&alternative.to_string()),
+        "{continued:?}"
+    );
+    assert!(continued["chosen"].contains("reason = (quest = ())"));
+    assert!(!continued["chosen"].contains("returnHome"));
+    assert_eq!(continued["failures"], before["failures"]);
+
+    drive_until(&node, &guid, LOOP_TIMEOUT, |node| {
+        first_quest_count(&quest(node, &guid, 7).unwrap()) > 0
+    });
+    assert!(actions(&node, &guid).iter().any(|action| {
+        action["target_guid"] == alternative.to_string()
+            && (action["kind"].contains("attack") || action["kind"].contains("cast"))
+    }));
+    assert_eq!(first_quest_count(&quest(&node, &guid, 7).unwrap()), 1);
+    record(&node, "active-target-read-limit");
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_ineligible_target_reselects_without_changing_quest_purpose() {
     let (node, guid) = fixture("playerbots-quest-loop-ineligible-target", 1, 0, true);
     drive_until(&node, &guid, LOOP_TIMEOUT, |node| {
@@ -1210,6 +1304,54 @@ fn playerbots_ninth_inaccessible_corpse_reports_an_inconclusive_read() {
         "{limited:?}"
     );
     assert!(limited["chosen"].contains("reason = (returnHome = ())"));
+    drive_until(&node, &guid, Duration::from_secs(10), |node| {
+        let waiting = query_one(
+            node,
+            &format!("SELECT chosen FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
+        );
+        waiting["chosen"].contains("hold") && waiting["chosen"].contains("reason = (quest = ())")
+    });
+    let first_wait = query_one(
+        &node,
+        &format!(
+            "SELECT character_guid, failures, observed_micros, next_eligible_micros, last_outcome FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+        ),
+    );
+    let first_failures = quest_read_limit_micros(&first_wait["failures"]);
+    assert!(!first_failures.is_empty(), "{first_wait:?}");
+    let retry_at = first_wait["next_eligible_micros"].parse::<i64>().unwrap();
+    let observed = first_wait["observed_micros"].parse::<i64>().unwrap();
+    assert!(retry_at > observed, "{first_wait:?}");
+    assert_eq!(
+        retry_at,
+        first_failures.last().unwrap().saturating_add(30_000_000),
+        "{first_wait:?}"
+    );
+    assert!(first_wait["last_outcome"].contains("questReadLimit"));
+    let actions_before_retries = actions(&node, &guid);
+    for _ in 0..8 {
+        node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    }
+    let repeated_wait = query_one(
+        &node,
+        &format!(
+            "SELECT character_guid, failures, next_eligible_micros, last_outcome FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+        ),
+    );
+    record(&node, "corpse-limit-repeated-wait");
+    assert_eq!(
+        quest_read_limit_micros(&repeated_wait["failures"]),
+        first_failures,
+        "{repeated_wait:?}"
+    );
+    assert_eq!(
+        repeated_wait["next_eligible_micros"]
+            .parse::<i64>()
+            .unwrap(),
+        retry_at,
+        "{repeated_wait:?}"
+    );
+    assert_eq!(actions(&node, &guid), actions_before_retries);
     let attempted = actions(&node, &guid);
     for corpse in &inaccessible {
         assert!(attempted.iter().all(|action| {
