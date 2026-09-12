@@ -20,8 +20,8 @@
   "candidate": {
     "core_commit": "2e078e60db80213e3654895a14ebbde4a85b3e05",
     "core_tree": "211f8fd67e231f30ff1e6762dd48bf16ed43b54e",
-    "package_commit": "1c0f7afde2ad5b1aea2a7d1cf2578fe429c89f94",
-    "package_tree": "b16c5a8e26a301a6c137a45256054aea315dcd1f",
+    "package_commit": "c4960b5be7b187cb016084c65ebd92cac59ee14a",
+    "package_tree": "207fa3aa9a6c167888411c4f437d58828c36ec6c",
     "playerbots_tree": "b6b4ae0cb35c94394280cd5d95acb72e8ab9229c",
     "dungeons_tree": "8969ccc9475d1f8b28687b7cd818d85165f7e05f",
     "module_wasm_sha256": "2281bde157d055226057f1370f978c374faeb589d77992fadcb672659219a6dc",
@@ -36,7 +36,7 @@
       "package_commit": "be599eb05e1d2bfa84773550f2af2af0d334c244",
       "package_tree": "04adfdeec137b3281f4880f1e5728b166386b870"
     },
-    "status": "focused_checks_passed_imported_run_and_final_ci_pending"
+    "status": "focused_checks_passed_imported_behavior_failed"
   },
   "importer": {
     "merged_core_commit": "375b38c3004b61500ce480a72a681d7999a5c9ca",
