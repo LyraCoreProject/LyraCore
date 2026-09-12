@@ -1954,11 +1954,12 @@
         "The corrected imported hour at Core 8692be3d and Collection c46e9e3e completed all 3,600 measured seconds with 25 bots at 12:16:47 UTC on 12 September. Owned-node shutdown and private-directory removal passed. It processed 90,444 decisions over 7,181 scheduler passes with maximum scheduling lag 508,838 microseconds, zero lost due bots and zero reducer rollbacks. Peak Standalone RSS was 878,276,608 bytes; minimum free storage was 9,549,811,712 bytes. Compared with the prior full hour, bots at level 3 or higher increased from 9 to 20, Quest 33 rewards increased from 8 to 14, and unfinished advancement intervals fell from 14 to six. This run still fails acceptance. Behavior analysis identifies three RecoveryCapacity Refusal bursts and six unfinished advancement intervals. Static movement has zero blocked or incomplete segments, but two ghost relocations are real defects: a retained zero-duration stop spline returns the released ghost from its graveyard to the death position on the next tick. The original geometry result remains incomplete. Run SHA-256 2996e03e22bd47df40bfb3f7438b074b88888f9648ceb0cfa8ca4a69c4ec7e11; behavior d6635be9d88cb5a5d79da548f8761062c692008efc0c4e72a1a184668086b80b; geometry c195f098f886110d40517c6b46c151eb603c1a60453697f9756384747f2888da.",
         "The final 25-bot observation completed 3,600 seconds with 7,180 passes and 90,466 decisions. Every bot was processed. Maximum scheduler lag was 505,859 microseconds; all 27 deferred observations were accounted for. Peak process memory was 885,452,800 bytes. The run still fails imported behavior acceptance, so these measurements do not yet close the deployment-capacity criterion. Original run SHA-256 c53438ee525ccb3d879e1b5d92189d4763505d633ca46dc8a383585b379482f4.",
         "The next capacity observation is running with the combined corrections at Core 916bac3a and Collection 4e8d98e3. It retains 25 level-one bots, 3,600 measured seconds, automatic provisioning, ordinary XP and Quest credit, and the same imported content and geometry. Final Package CI runs alongside it. Capacity acceptance remains open until capture and independent behavior assessment pass.",
-        "The latest imported hour at Core 916bac3a and Collection 4e8d98e3 closed successfully at 22:00:25 UTC on 12 September. It recorded 7,176 measured passes, 90,601 decisions, maximum scheduler lag 507,060 microseconds and no lost due bots. Eighteen bots ended at level 4 and seven at level 5. Peak RSS was 869,617,664 bytes; process CPU was 896.13 seconds. Private cleanup passed. Run SHA-256 8e8814d01896161826735d155abad3967bf786460733c00110c88fbd37a5a49c. Three confirmed Recovery self-heal Refusal bursts keep behavior and capacity acceptance open."
+        "The latest imported hour at Core 916bac3a and Collection 4e8d98e3 closed successfully at 22:00:25 UTC on 12 September. It recorded 7,176 measured passes, 90,601 decisions, maximum scheduler lag 507,060 microseconds and no lost due bots. Eighteen bots ended at level 4 and seven at level 5. Peak RSS was 869,617,664 bytes; process CPU was 896.13 seconds. Private cleanup passed. Run SHA-256 8e8814d01896161826735d155abad3967bf786460733c00110c88fbd37a5a49c. Three confirmed Recovery self-heal Refusal bursts keep behavior and capacity acceptance open.",
+        "The corrected capacity observation began preparation at 23:35 UTC on 12 September, using the recorded Core 27d6f533 and Collection 54a7d39d build. It retains 25 level-one bots, 3,600 measured seconds, ordinary progression and the same resource and behavior criteria. Input manifest SHA-256 4e4361e29ed53ba6486bbd0f550177810199fd7d15c25907d7bcba36948c6c0b. Capture and independent assessment remain pending."
       ],
       "notes": [
-        "Eight of nine acceptance criteria are accepted. The latest hour completed 3,600 seconds with all 25 bots at level 4 or 5, no lost scheduling work and clear static geometry. Three Priest self-heal Refusal bursts fail behavior acceptance. Capacity acceptance remains open until the correction and final behavior assessment pass.",
-        "Focused overflow and Transfer regressions retain their passing results. Core #519 passes all required checks. Collection #36 passes the exact-head 46-case composition suite; final durable and class jobs continue.",
+        "Eight of nine acceptance criteria are accepted. The Recovery correction passes its focused regression. A fresh 25-bot observation is underway on the corrected build. Capacity acceptance remains open until its full hour and behavior assessment pass.",
+        "The preceding Collection delivery passed all nine CI jobs. Final Core 27d6f533 and Collection 0622ca5e checks are underway with the Recovery regression included. The actual imported build uses Collection 54a7d39d; the later delivery changes only one unexercised fixture error message.",
         "The ordinary progression model permits automatic training, equipment and supplies. Bots must still earn XP and Quest credit through gameplay. Four later imported quests require level 7; fixture levels or imported requirements must not bypass that gap.",
         "The imported capacity observation is coordinated with PB-012 at the final composed sources. It uses 25 level-one bots for 3,600 measured seconds on private persistent storage, with navigation and collision enabled. Behavior and geometry analysis follow the capture; client-visible motion remains a separate acceptance requirement.",
         "SpacetimeDB duration, queue, row and writer-time metrics describe reducer and storage behavior. They are not operating-system CPU measurements. The observer retains the declared source, runtime, storage and evidence bounds."
@@ -2066,9 +2067,9 @@
         },
         {
           "url": "https://github.com/LyraCoreProject/packages/pull/36",
-          "label": "Collection #36, final CI and recovery correction",
+          "label": "Collection #36, final CI and imported observation",
           "status": "review",
-          "head_commit": "6efe7aa7d7aa952b319de826231f1fd5fdbb2f47"
+          "head_commit": "0622ca5eacfde95916e3e4eb1765fab1e1842090"
         },
         {
           "url": "https://github.com/LyraCoreProject/LyraCore/pull/514",
@@ -2121,9 +2122,9 @@
         },
         {
           "url": "https://github.com/LyraCoreProject/LyraCore/pull/519",
-          "label": "Core gameplay callers #519, checks pass; merge held",
+          "label": "Core gameplay callers #519, final checks",
           "status": "review",
-          "head_commit": "916bac3a0649e9abc6030e7f3cd56816b83fc72c"
+          "head_commit": "27d6f5337276dc461cdb376927ada8f4e5c9017b"
         }
       ],
       "evidence": [
@@ -2271,14 +2272,19 @@
         "The completed 25-bot imported hour retains Core 916bac3a, Collection 4e8d98e3 and Wasm 64914c8d. Its 3,600 measured seconds and private cleanup closed at 22:00:25 UTC. All bots reached level 4 or 5. Behavior analysis flagged 238 intervals, down from 558 in the preceding failed run. Ownership assessment covers all 238, including one unfinished interval; full causal review remains open. Run SHA-256 8e8814d01896161826735d155abad3967bf786460733c00110c88fbd37a5a49c; behavior b17be9d83ab3717a7f5517c0ceeea1ed6cc48c538637ba470e44376eed6dab3d. This hour is not accepted.",
         "Static geometry assessment checked 153,370 movement segments with zero blocked segments, incomplete paths or unexplained discontinuities. It retained 507 NPCs and accounted for 91 Release Spirit relocations. Geometry report SHA-256 b23ccd3d1672cc4ebaeb6e7be6ba5af45dd9d6baed8c406786bb3543948facc9. Rendered movement and dynamic client behavior remain separate human observations.",
         "Root confirmed all three Priest burst candidates as a Recovery selection defect. Bots 1000009, 1000061 and 1000165 record 10, 8 and 8 Refusals within 30 seconds. Every event is a Recovery self-cast of Lesser Heal 2050 receiving InsufficientPower or Cooldown. The candidate can cancel useful Defense movement or a pending Smite before Core refuses the heal. Current Core readiness must be checked before selection, while preserving a matching pending heal. Diagnosis SHA-256 6414c46b73ed9acca4fc8b918f9f4f1817ce304604ebc458ff50bedf1b07a570; raw window extraction 809fc4de0d1bd5f98a5986229a92a738a38704552e11a489f870f0a22ffa3c25. The correction is underway; the original failed hour remains unchanged.",
-        "Delivery Collection 6efe7aa7d7aa952b319de826231f1fd5fdbb2f47 changes only three test reducers since observed 4e8d98e3. Two use indexed partition reads. One asserts current movement evidence instead of expecting navigation to advance a Quest effect clock. Root equivalence receipt SHA-256 f0dd584e289710640229594387607bd54419d2cf3d0f1b896c74a030570df403. Canonical push run 34720181322 composition passes all 46 unique executions, including the corrected movement expiry case; every command and cleanup status is zero. Artifact audit SHA-256 dce1ce06fc4492f40ae457118d46ae5d39eb5f0097879db47a934c3b8e3dcd2a. Durable and class closure remain pending."
+        "Delivery Collection 6efe7aa7d7aa952b319de826231f1fd5fdbb2f47 changes only three test reducers since observed 4e8d98e3. Two use indexed partition reads. One asserts current movement evidence instead of expecting navigation to advance a Quest effect clock. Root equivalence receipt SHA-256 f0dd584e289710640229594387607bd54419d2cf3d0f1b896c74a030570df403. Canonical push run 34720181322 composition passes all 46 unique executions, including the corrected movement expiry case; every command and cleanup status is zero. Artifact audit SHA-256 dce1ce06fc4492f40ae457118d46ae5d39eb5f0097879db47a934c3b8e3dcd2a. Durable and class closure remain pending.",
+        "Independent review accounts for all 238 flagged intervals without timeline gaps or overlap. No additional source defect is established beyond Recovery readiness. The one unfinished advancement span contains active Grind travel and casts toward targets that begin eligible; no closing progress is claimed. All stationary no-effect spans are below 114 seconds. Independent report SHA-256 b710a687d58afccc1fa435da7dddf5cae173dfeaae239fd5944c705c9bf212bb; per-index ledger dcd522d1055fc70aa8e132f1753925d7fcbfef8016fc651d2043bc4c71165c3e; root review 4c63f605f7ef96f214fb91660ff890325153269819aebf4ffa71d27fb54b7c16. Final retained rows confirm that all 25 bots earned rewards for Quests 783, 7, 5261, 33, 18 and 3903. Progress receipt SHA-256 b5b9fd7fcf92703321be1a4bf2d8349227c64d5f60d62db269db39dedc3f6f36. This measured result is not an added release requirement and does not accept the failed hour.",
+        "Canonical Collection run 34720181322 and its PR run pass all nine jobs at Core 916bac3a and Collection 6efe7aa7. The durable job passes 169 cases, comprising six Gateway and 163 Module cases. All five corrected existing observations and all five new defect cases pass. Composition passes 46 cases, class journeys pass 30 cases plus the Warrior level-gap case, and Transfer passes 27 cases. Root independently checked the durable log, result groups, required case names and distinct movement observation files. Final CI audit SHA-256 7b4a4db3b9f2545961d3a146f0a1036085be0bac86e8cf087bd83d4b62dcf36d; root durable review 53b389652e5938f6d8faac7216a93301c45ccb4a31d23866d493798bd1c9c4e0. This closes the preceding delivery checks only; the new Recovery production change remains under focused test.",
+        "Recovery diagnosis revision 2 corrects the scope description of the retained data. World Entity records do include power and max_power; the 26 flagged Refusals have 0 to 29 mana. Dedicated cooldown rows were not subscribed, so the recorded Core Refusal establishes Cooldown. The event counts and causal finding are unchanged. Revised diagnosis SHA-256 5e60926a18b6bbe81cd94906ed81599b06369830811c6841704788a937430307. Original diagnosis and failed-hour evidence remain preserved.",
+        "The focused Recovery test first reproduces the defect on unchanged production: at 25 mana, old selection cancels Defense casting-position movement for Lesser Heal 2050, then records InsufficientPower, have 25 and need 30. Causal RED result SHA-256 6db62a73994c172f25aa0ad707f6c55d0b4f8588b5f1b6816737871b23cbf0a1. Corrected Core 262d6b7b and Collection e0ed910e pass the exact case in 22.64 seconds. The three scenarios preserve casting-position movement during insufficient mana, preserve melee movement during a real global cooldown, and retain pending Smite before a ready heal takes priority. Every scenario completes Lesser Heal with 50 actual healing. All eight retained files match their hashes. The original wrapper result remains preserved because its same-line parser missed the passing output; separate strict assessment 284ecd95ec8e4636f57a18de09b6cb0d04d3a962434f5fa62a51d6307800cdb5 accepts the actual one-case pass. Root review SHA-256 1f729e54415202a379ceb691fab822fb2661db9a3bf388b888cf0bb0b564e491. Independent Standards and Spec review is clear. No repeated runtime was needed for the parser discrepancy.",
+        "The final combined build at Core 27d6f533 and Collection 54a7d39d passes source, build and cleanup checks. Wasm SHA-256 cfdf2aa51ebcce07e85607d4ec6dcf820c32255d76833cc6859366dce4495faa, 9,792,774 bytes; build manifest 43dea32545c7d06d7e790d3faba07a9cfb36e1cc3ae743901baf4439ab9f2363; build result df63a65133c259c10d2a157cef7c80ab3c58181642082a40a47a76acf21f530c. All 39 retained Package input files match the manifest. Delivery 0622ca5e changes only one unexercised debug fixture error message; exact diff SHA-256 ee77baa70f00aa06573362744ffad7bdaa5b67a42d1ad5ffcb9ef1f456f14575. This source equivalence does not relabel the recorded Wasm. The new 25-bot hour began preparation at 23:35 UTC with input manifest 4e4361e29ed53ba6486bbd0f550177810199fd7d15c25907d7bcba36948c6c0b. Driver, observer, content, geometry, timing and behavior criteria are unchanged. Final CI runs alongside the observation; no new imported acceptance is claimed."
       ],
       "notes": [
-        "The latest completed hour fails behavior acceptance. All 25 bots reached level 4 or 5. Static geometry is clear. The scan flagged 238 intervals and three Priest Refusal bursts. Root confirmed that Recovery can interrupt useful work to attempt an unavailable self-heal. The full interval review remains open.",
-        "The four defects from the preceding hour pass their focused checks. They were observed together at Collection 4e8d98e3 and Core 916bac3a. The new recovery-readiness correction is separate and still requires focused proof.",
-        "Core #519 at 916bac3a passes every required check. Collection #36 at 6efe7aa7 passes static checks, Transfer and all 46 composition cases on the exact delivery head. Durable and class jobs continue. The delivery changes since the observed build affect three unexercised test reducers only; the recorded Wasm retains its actual 4e8d98e3 source identity. Merges remain held for behavior acceptance.",
+        "The corrected imported hour began preparation at 23:35 UTC. Its measured interval must run for 3,600 seconds after setup. Recovery now passes all three focused scenarios, with actual completed healing. Imported behavior acceptance remains open.",
+        "All four defects from the earlier hour and the later Recovery readiness defect pass their focused checks. The new hour observes them together at Core 27d6f533 and Collection 54a7d39d with unchanged content and criteria.",
+        "Core #519 at 27d6f533 and Collection #36 at 0622ca5e are in final CI. Independent source and focused behavior reviews are clear. Delivery differs from the recorded 54a7d39d build only in a debug fixture error message that the imported run never uses. Merges remain held for behavior acceptance.",
         "The attended guide and session template are prepared. Their command codec, nine-step route, capture format and diagnostic SQL remain unchanged. Argus access is deferred; no configured Realm update or attended-client sign-off has occurred.",
-        "Retirement source is composed on the final behavior candidate at Core 24f53d31 and Collection 621b9f47. Source review is clear. Prior native checks retain their original source identities; final delivery and checks follow automated, imported-world and attended-client acceptance. Stored Legacy meanings and old-table lifecycle handling remain preserved.",
+        "Retirement source remains prepared at Core 24f53d31 and Collection 621b9f47. It will be composed on the accepted final behavior sources before delivery. Its previous native checks keep their actual source identities. Final retirement follows automated, imported-world and attended-client acceptance; stored Legacy meanings and old-table lifecycle handling remain preserved.",
         "Earlier failed observations and their original evidence remain preserved. The latest successful private cleanup did not need the preceding run's cleanup repair."
       ],
       "acceptance_evidence": [
@@ -2314,7 +2320,7 @@
           "criterion": "If the implementation environment cannot run the real client, the exact observation script, fixture revisions, capture format, and diagnostic reads are ready, and this acceptance item remains explicitly pending human evidence.",
           "reviewer": "Orchestrator, source and procedure review",
           "evidence": [
-            "The attended guide and session template bind current Core 916bac3a and Collection 6efe7aa7 separately from the actual recorded 4e8d98e3 build. Only unexercised test reducers differ; production source is identical. The completed hour fails behavior acceptance because of unavailable Recovery self-heal attempts. The correction and full interval review are open. The command codec, nine attended steps, capture format and diagnostic SQL retain their accepted procedure. Guide SHA-256 d2d16634300a3f2858be1d8d3565d01aeb834468193713414e59f7bc0609da03; template 6b42cdfba06c40c2480d08e9de73b641152e15ee47e085a6c01bb55e34934847. Argus access, deployed Gateway, verified client and human observations remain pending. This accepts handoff preparation only."
+            "The attended guide and session template bind current Core 27d6f533 and Collection 0622ca5e separately from the actual recorded 54a7d39d build. Only one unexercised fixture error message differs; production source is identical. Recovery passes its focused regression, and a fresh imported hour is running. The command codec, nine attended steps, capture format and diagnostic SQL retain their accepted procedure. Guide SHA-256 cde876fbb0346933efcc6515d745d45622bcee298a5ccc315f5024f63e3d5f32; template 2e115b3b4434e377898c0952f2d36a7eada8e1ffe656cd0f90d79a61711afc10. Argus access, deployed Gateway, verified client and human observations remain pending. This accepts handoff preparation only."
           ]
         }
       ],
@@ -2399,8 +2405,8 @@
       ]
     }
   ],
-  "updated_at": "2026-09-12T22:16:09Z",
-  "summary": "Eleven of thirteen tickets are complete. The latest imported hour finished with all 25 bots at level 4 or 5 and clear static geometry. It fails behavior acceptance because three Priests interrupt useful work to attempt unavailable self-heals. That correction and the full interval review are underway. The final attended client session and retirement delivery remain open.",
+  "updated_at": "2026-09-12T23:39:13Z",
+  "summary": "Eleven of thirteen tickets are complete. The Recovery correction passes all three focused scenarios. A fresh 25-bot imported hour and final delivery CI are running. The preceding failed hour still retains its original evidence. Imported behavior acceptance, the attended client session and retirement delivery remain open.",
   "assignments": [
     {
       "agent": "/root",
@@ -2408,28 +2414,28 @@
         "PB-011",
         "PB-012"
       ],
-      "work": "Own Refusal diagnosis, independent acceptance, the report and final delivery."
+      "work": "Own the imported hour, independent acceptance, the report and final delivery."
     },
     {
       "agent": "pb004_roles",
       "tickets": [
         "PB-012"
       ],
-      "work": "Own recovery regression caller, independent source review and Core PR delivery."
+      "work": "Own Core PR checks and independent final source review."
     },
     {
       "agent": "pb005_provisioning",
       "tickets": [
         "PB-012"
       ],
-      "work": "Own recovery readiness correction, its fixture and final Collection CI."
+      "work": "Own final Collection CI and delivery evidence."
     },
     {
       "agent": "pb007_quests",
       "tickets": [
         "PB-012"
       ],
-      "work": "Review all 238 flagged intervals from the completed imported hour."
+      "work": "Assess the next imported hour after capture and preserve complete interval evidence."
     }
   ]
 }
