@@ -38,6 +38,104 @@ fn outcomes(node: &Standalone) {
     std::fs::write(path, serde_json::to_vec_pretty(&record).unwrap()).unwrap();
 }
 
+fn moving_relocation_fixture(name: &str) -> (Standalone, String) {
+    let (node, bots) = fixture(name, "1");
+    let bot = bots[0].clone();
+    node.assert_sql("DELETE FROM game_creature_move_schedule");
+    node.assert_call("playerbots_fixture_runner_stage", &[&bot, "false"]);
+    select(&node, &bot, "cohort");
+    node.assert_call("playerbots_fixture_move", &[&bot, "1230"]);
+    let legs = node.query_rows(&format!(
+        "SELECT dur_ms FROM game_creature_spline WHERE guid = {bot}"
+    ));
+    assert_eq!(legs.len(), 1, "{legs:?}");
+    assert!(legs[0]["dur_ms"].parse::<u32>().unwrap() > 0);
+    (node, bot)
+}
+
+fn relocation_state(node: &Standalone, bot: &str, label: &str) -> BTreeMap<String, String> {
+    let entities = node.query_rows(&format!(
+        "SELECT guid, map_id, instance_id, x, y, z, dead, player_flags FROM game_world_entity WHERE guid = {bot}"
+    ));
+    let record = serde_json::json!({
+        "entities": entities,
+        "splines": node.query_rows(&format!(
+            "SELECT * FROM game_creature_spline WHERE guid = {bot}"
+        )),
+    });
+    let path = support::log_dir().join(format!("{}-{label}.json", node.shard_name()));
+    std::fs::write(path, serde_json::to_vec_pretty(&record).unwrap()).unwrap();
+    assert_eq!(entities.len(), 1, "{entities:?}");
+    entities.into_iter().next().unwrap()
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_teleport_cancels_the_previous_movement_destination() {
+    let (node, bot) = moving_relocation_fixture("playerbots-teleport-moving");
+    relocation_state(&node, &bot, "before-teleport");
+    node.assert_call("debug_teleport", &[&bot, "0", "1300", "1250", "50", "0"]);
+    let landed = relocation_state(&node, &bot, "teleported");
+    assert_eq!(landed["x"].parse::<f32>().unwrap(), 1300.0);
+    assert_eq!(landed["y"].parse::<f32>().unwrap(), 1250.0);
+
+    // Tick ordinary movement in this partition while the fixture owns explicit bot decisions.
+    node.assert_call("debug_arm_instance_tick", &["0", "500"]);
+    assert!(poll_until(POLL_TIMEOUT, || node
+        .query_rows(&format!(
+            "SELECT guid FROM game_creature_spline WHERE guid = {bot}"
+        ))
+        .is_empty()));
+    let settled = relocation_state(&node, &bot, "after-movement-tick");
+    for field in ["map_id", "instance_id", "x", "y", "z"] {
+        assert_eq!(settled[field], landed[field], "{field}: {settled:?}");
+    }
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_teleport_to_the_graveyard_keeps_a_stopped_ghost_there() {
+    let (node, bot) = moving_relocation_fixture("playerbots-teleport-ghost");
+    select(&node, &bot, "frozen");
+    let stopped = node.query_rows(&format!(
+        "SELECT dur_ms FROM game_creature_spline WHERE guid = {bot}"
+    ));
+    assert_eq!(stopped.len(), 1, "{stopped:?}");
+    assert_eq!(stopped[0]["dur_ms"], "0");
+    node.assert_call(
+        "playerbots_fixture_runner_damage_and_park",
+        &[&bot, "0", "1000000"],
+    );
+    let dead = relocation_state(&node, &bot, "before-release");
+    assert_eq!(dead["dead"], "true");
+    node.assert_call("debug_repop", &[&bot]);
+    let released = relocation_state(&node, &bot, "released");
+    assert_eq!(released["dead"], "true");
+    assert_ne!(
+        released["player_flags"].parse::<u32>().unwrap()
+            & lyracore_shared::constants::player_flags::GHOST,
+        0
+    );
+    assert_ne!(released["x"], dead["x"]);
+
+    node.assert_call("debug_arm_instance_tick", &["0", "500"]);
+    assert!(poll_until(POLL_TIMEOUT, || node
+        .query_rows(&format!(
+            "SELECT guid FROM game_creature_spline WHERE guid = {bot}"
+        ))
+        .is_empty()));
+    let settled = relocation_state(&node, &bot, "after-movement-tick");
+    for field in ["map_id", "instance_id", "x", "y", "z", "dead", "player_flags"] {
+        assert_eq!(settled[field], released[field], "{field}: {settled:?}");
+    }
+    node.assert_call("debug_spirit_healer_res", &[&bot]);
+    let resurrected = relocation_state(&node, &bot, "resurrected");
+    assert_eq!(resurrected["dead"], "false");
+    for field in ["map_id", "instance_id", "x", "y", "z"] {
+        assert_eq!(resurrected[field], released[field], "{field}: {resurrected:?}");
+    }
+}
+
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_runner_returns_home_with_observed_arrival_and_one_objective() {
