@@ -20,9 +20,9 @@
   "candidate": {
     "core_commit": "916bac3a0649e9abc6030e7f3cd56816b83fc72c",
     "core_tree": "5496a3f533b6050a42757708cb1ad25f283c74f3",
-    "package_commit": "4e8d98e3d29c8327b55ca679672a8386604620b2",
-    "package_tree": "d16b13959a2da85b3740ae69c929e2f342cbbeb4",
-    "playerbots_tree": "eb0866c86334d9919d431c8ed0bd6adb9c6c7412",
+    "package_commit": "6efe7aa7d7aa952b319de826231f1fd5fdbb2f47",
+    "package_tree": "8f70e211a89f238ce4a2f2690a480966f3f8820e",
+    "playerbots_tree": "4c653bf09fa212bc93357e624d7d4de25045d09e",
     "dungeons_tree": "8969ccc9475d1f8b28687b7cd818d85165f7e05f",
     "module_wasm_sha256": "64914c8d36ad1f7f251a580a2cc6515903e605bfb048688333661830bca61b0a",
     "module_wasm_bytes": 9690011,
@@ -36,7 +36,7 @@
       "package_commit": "4e8d98e3d29c8327b55ca679672a8386604620b2",
       "package_tree": "d16b13959a2da85b3740ae69c929e2f342cbbeb4"
     },
-    "status": "combined_candidate_ci_and_imported_hour_running"
+    "status": "imported_hour_failed_recovery_readiness_correction_underway"
   },
   "importer": {
     "merged_core_commit": "375b38c3004b61500ce480a72a681d7999a5c9ca",

@@ -1,6 +1,6 @@
 # PB012 attended client handoff
 
-Status: prepared handoff. All four defects from the failed imported hour pass their focused checks. The reviewed combined candidate builds successfully. Final Package CI and a fresh 25-bot imported hour are running. Imported behavior acceptance, Argus access, deployment approval and human attendance remain pending. No attended client observation or configured Realm operation has occurred.
+Status: prepared handoff. The latest imported hour completed with all 25 bots at level 4 or 5 and clear static geometry. It fails behavior acceptance because Recovery can interrupt useful work to attempt an unavailable self-heal. That correction and the full interval review are underway. Argus access, deployment approval and human attendance remain pending. No attended client observation or configured Realm operation has occurred.
 
 The venue is the Argus development Realm at `/home/lyracore/LyraCore`, operated as service user `lyracore`. Root login is still unavailable. The user will attend with a real 1.12.1 client. Venue selection does not authorize deployment.
 
@@ -9,16 +9,16 @@ The venue is the Argus development Realm at `/home/lyracore/LyraCore`, operated 
 The combined candidate retains useful Quest targets and avoids foreign Loot Tags during autonomous Quest and Grind work. It also lets collection work consider an eligible live target when the bounded corpse search is inconclusive. Defense retains a valid attacker and uses the learned class combat strategy. Completed Quest waits defer after two minutes without a verified effect; movement and foreign damage cannot reset that clock. Timed casts move inside nominal spell range before starting.
 
 - Core PR #519 head `916bac3a0649e9abc6030e7f3cd56816b83fc72c`, tree `5496a3f533b6050a42757708cb1ad25f283c74f3`.
-- Package Collection PR #36 head `4e8d98e3d29c8327b55ca679672a8386604620b2`, tree `d16b13959a2da85b3740ae69c929e2f342cbbeb4`.
-- `playerbots` tree `eb0866c86334d9919d431c8ed0bd6adb9c6c7412`.
+- Package Collection PR #36 head `6efe7aa7d7aa952b319de826231f1fd5fdbb2f47`, tree `8f70e211a89f238ce4a2f2690a480966f3f8820e`.
+- `playerbots` tree `4c653bf09fa212bc93357e624d7d4de25045d09e`.
 - `dungeons` tree `8969ccc9475d1f8b28687b7cd818d85165f7e05f`.
 - Package content identity: `e6b8155c219329122dec3bf4a660c536d051b86e7505c8577365b45c130c3714`.
 - Recorded Module Wasm: `/home/t3agent/.cache/playerbots-rewrite/evidence/pb012-final-composed-build-916bac3a-4e8d98e3-v2/lyracore_module.wasm`, SHA-256 `64914c8d36ad1f7f251a580a2cc6515903e605bfb048688333661830bca61b0a`, 9,690,011 bytes.
 - Build manifest: `/home/t3agent/.cache/playerbots-rewrite/evidence/pb012-final-composed-build-916bac3a-4e8d98e3-v2/build-manifest.json`, SHA-256 `ebdc8b1a9a80162cdcc20604ee3ed1c787bf30c03247acc7070556a4c3e95036`.
 
-These source identities match the actual recorded build. All 39 retained Package inputs match its manifest. The build, source and private cleanup checks pass. Build result SHA-256 `19431313a311db324dc8528b1404036833bb5f1d0e8df96462700719e803ffcd`. Independent Standards and Spec reviews are clear. The full Package durable suite includes the new regressions and all five corrected existing gameplay observations.
+The actual recorded build uses Core `916bac3a` and Collection `4e8d98e3`, tree `d16b13959a2da85b3740ae69c929e2f342cbbeb4`. The later delivery commit `6efe7aa7` changes only three test reducers. Two use indexed partition reads. One checks current movement evidence instead of expecting navigation to advance the Quest effect clock. The imported hour calls none of these reducers, and production sources are byte-identical. Its original Wasm and build identities remain unchanged. All 39 retained Package inputs match its manifest. The build, source and private cleanup checks pass. Build result SHA-256 `19431313a311db324dc8528b1404036833bb5f1d0e8df96462700719e803ffcd`. Independent Standards and Spec reviews are clear. The full Package durable suite includes the new regressions and all five corrected existing gameplay observations.
 
-The fresh imported run began preparation at 20:47 UTC on 12 September. It uses 25 level-one bots for 3,600 measured seconds with ordinary provisioning, XP and Quest credit, navigation and collision enabled, and the unchanged imported content. Input manifest SHA-256 `7c75f189abf34a23f8f9130cef31e25771969aaeb215f9af3162865a0caa4ac0`. Capture and independent analysis are still pending.
+The fresh imported run began preparation at 20:47 UTC on 12 September. Its measured hour started at 20:59 UTC after all setup checks passed. It uses 25 level-one bots for 3,600 measured seconds with ordinary provisioning, XP and Quest credit, navigation and collision enabled, and the unchanged imported content. Input manifest SHA-256 `7c75f189abf34a23f8f9130cef31e25771969aaeb215f9af3162865a0caa4ac0`. The hour and private cleanup closed at 22:00:25 UTC. Eighteen bots reached level 4 and seven reached level 5. Static geometry is clear across 153,370 segments. Behavior analysis flagged 238 intervals and three confirmed Priest self-heal Refusal bursts. The full interval review and recovery correction remain open. Run SHA-256 `8e8814d01896161826735d155abad3967bf786460733c00110c88fbd37a5a49c`. The hour fails behavior acceptance.
 
 The preceding completed hour remains a failed behavior observation. It completed all 3,600 seconds and private cleanup successfully. Static geometry, Refusal stability and its four injured-healer intervals were clear, but Quest progress gaps exposed the four corrected defects. Original run SHA-256 `c53438ee525ccb3d879e1b5d92189d4763505d633ca46dc8a383585b379482f4`. Its detailed findings and focused correction evidence remain in the execution report. No earlier failed result has been replaced by the new candidate.
 
@@ -28,7 +28,7 @@ The Map 36 importer merged as Core commit `375b38c3004b61500ce480a72a681d7999a5c
 
 The private Gateway and Headless Client route passed at Core `ccbe3ffb731e47a85bc4dfaca98a093a0c41d05e` and Package `590c2b1ff3731cbee0ed96f7ff52c3312fc89202`. It proved server-side import, Follow movement, AreaTrigger 78 entry, AreaTrigger 119 exit and five-member Transfer settlement. Rendered geometry and visible clipping still require the real client. Result SHA-256 `a432681423bb0775872adb6ac717eb4431f3d3988a3c999448ac694ad2edec77`; independent review `83ff94b948cae2fa5d907690f58ea353a85dbd8642208367dc3006f4220981d1`.
 
-Use `docs/research/playerbots-client-session-template.json` for the attended record. Candidate source, recorded Module Wasm, build manifest and Package content fields identify the current combined build. Deployed Gateway, client, staging, observer, time, attended evidence and signoff fields remain pending.
+Use `docs/research/playerbots-client-session-template.json` for the attended record. Candidate source identifies the current delivery revision. The separate Module source, recorded Wasm, build manifest and Package content fields identify the actual observed build. Deployed Gateway, client, staging, observer, time, attended evidence and signoff fields remain pending.
 
 ## Client and staged identities
 
