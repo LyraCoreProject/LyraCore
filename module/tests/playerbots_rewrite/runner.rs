@@ -659,8 +659,7 @@ fn playerbots_runner_mage_defense_retains_a_valid_target_and_replaces_invalid_ta
     let dead = runner(&node, bot);
     assert!(dead["defense_target"].contains(&first), "{dead:?}");
     assert!(
-        dead["chosen"].contains(&first)
-            && dead["chosen"].contains("reason = (defense = ())"),
+        dead["chosen"].contains(&first) && dead["chosen"].contains("reason = (defense = ())"),
         "{dead:?}"
     );
     assert_eq!(dead["objective_sequence"], objective);
