@@ -18,25 +18,25 @@
     "token_context_record": null
   },
   "candidate": {
-    "core_commit": "2e078e60db80213e3654895a14ebbde4a85b3e05",
-    "core_tree": "211f8fd67e231f30ff1e6762dd48bf16ed43b54e",
-    "package_commit": "c4960b5be7b187cb016084c65ebd92cac59ee14a",
-    "package_tree": "207fa3aa9a6c167888411c4f437d58828c36ec6c",
-    "playerbots_tree": "b6b4ae0cb35c94394280cd5d95acb72e8ab9229c",
+    "core_commit": "24ab2c718f9451be993922ac948ddeff02a29b5e",
+    "core_tree": "2dda9d6d293cd5e19e94f0838af1ac3b8ab31277",
+    "package_commit": "6fb2689111a14624b394a65431b40d2aab632ff2",
+    "package_tree": "791a735c99fc58942ffb89f953a24234235f7dba",
+    "playerbots_tree": "d22e89801ff2e333994cefba09cb3284b00785dd",
     "dungeons_tree": "8969ccc9475d1f8b28687b7cd818d85165f7e05f",
-    "module_wasm_sha256": "2281bde157d055226057f1370f978c374faeb589d77992fadcb672659219a6dc",
-    "module_wasm_bytes": 9668912,
-    "build_manifest_sha256": "e3943558996904c78b266b7d5f976154cbaa7ed1e60f5ee3b9fd2e913fb5a17d",
+    "module_wasm_sha256": "07b74b12851aa15f05d75905d6b66f7cbbafe0bc5b977630b628154c10488ab7",
+    "module_wasm_bytes": 9665319,
+    "build_manifest_sha256": "6b0d303eebba4d7f109bbfdeb718b7ca02ba05461b52e06e4736488d38a4677f",
     "gateway_sha256": null,
-    "package_content_blake3": "3040d572f55a283e873071cb3c6e43be032b87e2aad793ff9a112b4e2557009d",
-    "build_manifest": "/home/t3agent/.cache/playerbots-rewrite/evidence/pb012-relocation-capacity-607ca975-be599eb0-green-v1/build-manifest.json",
+    "package_content_blake3": "1e849fdc1d99e92495dcc9ed0c6ced3038344cc9a266535a230841052c80bf51",
+    "build_manifest": "/home/t3agent/.cache/playerbots-rewrite/evidence/pb012-quest-dispersion-24ab2c71-2fdc43d0-green-v1/build-manifest.json",
     "module_wasm_source": {
-      "core_commit": "607ca975a0b6aef95998a3569cae09454e205df3",
-      "core_tree": "ca47ef22e72a1dc81737c82deb6a09d7e30f5453",
-      "package_commit": "be599eb05e1d2bfa84773550f2af2af0d334c244",
-      "package_tree": "04adfdeec137b3281f4880f1e5728b166386b870"
+      "core_commit": "24ab2c718f9451be993922ac948ddeff02a29b5e",
+      "core_tree": "2dda9d6d293cd5e19e94f0838af1ac3b8ab31277",
+      "package_commit": "2fdc43d0f85cad25296a877578917af74aeac54e",
+      "package_tree": "34394159414ff5ee1a06bed0fcc06f0e027c73bb"
     },
-    "status": "focused_checks_passed_imported_behavior_failed"
+    "status": "dispersion_checks_passed_imported_hour_running"
   },
   "importer": {
     "merged_core_commit": "375b38c3004b61500ce480a72a681d7999a5c9ca",

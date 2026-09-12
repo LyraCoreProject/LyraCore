@@ -1,30 +1,30 @@
 # PB012 attended client handoff
 
-Status: prepared handoff. The recorded gameplay build passes all six focused relocation, recovery and Transfer checks, but its completed 25-bot hour fails imported behavior on synchronized Quest fallback selection. A target-dispersion correction is in progress. Argus access, deployment approval, the deployed Gateway and human attendance remain pending. No attended client observation or configured Realm operation has occurred.
+Status: prepared handoff. The Quest fallback correction passes the 25-bot dispersion test and the unchanged productive-target test. Its fresh imported hour is running. Core CI passes and final Package CI continues. Argus access, deployment approval, the deployed Gateway and human attendance remain pending. No attended client observation or configured Realm operation has occurred.
 
 The venue is the Argus development Realm at `/home/lyracore/LyraCore`, operated as service user `lyracore`. Root login is still unavailable. The user will attend with a real 1.12.1 client. Venue selection does not authorize deployment.
 
 ## Candidate and evidence
 
-The candidate retains useful Quest targets and avoids foreign Loot Tags during autonomous Quest and Grind work. Teleport now replaces a stale movement leg with a stop at the destination, so a released ghost stays at its graveyard. Recovery records one capacity Refusal while preserving reevaluation, healing and ordinary expiry. Defense and explicit companion assistance retain their existing rules.
+The candidate retains useful Quest targets and avoids foreign Loot Tags during autonomous Quest and Grind work. Teleport now replaces a stale movement leg with a stop at the destination, so a released ghost stays at its graveyard. Recovery records one capacity Refusal while preserving reevaluation, healing and ordinary expiry. Defense and explicit companion assistance retain their existing rules. Quest fallback now varies its choice among three nearby eligible targets using the existing Character salt.
 
-- Core PR #516 head `2e078e60db80213e3654895a14ebbde4a85b3e05`, tree `211f8fd67e231f30ff1e6762dd48bf16ed43b54e`.
-- Package Collection PR #36 head `c4960b5be7b187cb016084c65ebd92cac59ee14a`, tree `207fa3aa9a6c167888411c4f437d58828c36ec6c`.
-- `playerbots` tree `b6b4ae0cb35c94394280cd5d95acb72e8ab9229c`.
+- Core PR #516 head `24ab2c718f9451be993922ac948ddeff02a29b5e`, tree `2dda9d6d293cd5e19e94f0838af1ac3b8ab31277`.
+- Package Collection PR #36 head `6fb2689111a14624b394a65431b40d2aab632ff2`, tree `791a735c99fc58942ffb89f953a24234235f7dba`.
+- `playerbots` tree `d22e89801ff2e333994cefba09cb3284b00785dd`.
 - `dungeons` tree `8969ccc9475d1f8b28687b7cd818d85165f7e05f`.
-- Package content identity: `3040d572f55a283e873071cb3c6e43be032b87e2aad793ff9a112b4e2557009d`.
-- Recorded Module Wasm: `/home/t3agent/.cache/playerbots-rewrite/evidence/pb012-relocation-capacity-607ca975-be599eb0-green-v1/lyracore_module.wasm`, SHA-256 `2281bde157d055226057f1370f978c374faeb589d77992fadcb672659219a6dc`, 9,668,912 bytes.
-- Build manifest: `/home/t3agent/.cache/playerbots-rewrite/evidence/pb012-relocation-capacity-607ca975-be599eb0-green-v1/build-manifest.json`, SHA-256 `e3943558996904c78b266b7d5f976154cbaa7ed1e60f5ee3b9fd2e913fb5a17d`.
+- Package content identity: `1e849fdc1d99e92495dcc9ed0c6ced3038344cc9a266535a230841052c80bf51`.
+- Recorded Module Wasm: `/home/t3agent/.cache/playerbots-rewrite/evidence/pb012-quest-dispersion-24ab2c71-2fdc43d0-green-v1/lyracore_module.wasm`, SHA-256 `07b74b12851aa15f05d75905d6b66f7cbbafe0bc5b977630b628154c10488ab7`, 9,665,319 bytes.
+- Build manifest: `/home/t3agent/.cache/playerbots-rewrite/evidence/pb012-quest-dispersion-24ab2c71-2fdc43d0-green-v1/build-manifest.json`, SHA-256 `6b0d303eebba4d7f109bbfdeb718b7ca02ba05461b52e06e4736488d38a4677f`.
 
-The recorded build uses Core `607ca975a0b6aef95998a3569cae09454e205df3` and Collection `be599eb05e1d2bfa84773550f2af2af0d334c244`, tree `04adfdeec137b3281f4880f1e5728b166386b870`. Later Core changes affect test callers and evidence. Later Collection changes affect CI references and its pinned comparison checkout. Package gameplay content is identical. The session template records the current PR source and actual Wasm source separately.
+The recorded build uses Core `24ab2c718f9451be993922ac948ddeff02a29b5e` and Collection `2fdc43d0f85cad25296a877578917af74aeac54e`, tree `34394159414ff5ee1a06bed0fcc06f0e027c73bb`. The final Collection changes only four Core CI references. Its playerbots and dungeons trees match the build exactly. The session template records the current PR source and actual Wasm source separately.
 
-All three relocation cases and both Transfer cases pass on this build. The recovery case proves one Refusal across repeated waits, a completed self Heal 2050, unchanged Recovery state through completion, and ReturnHome after the ordinary decision deadline and oldest-attempt expiry. The capacity caller is Core `6933cbb5bdd20379feac4ab301840cb9bf0ca01b`. Its source differs from the recorded build only in that test. Combined independent assessment SHA-256 `98edbdca374f0f17286b97dfc7a87383bc699db2072e9f98be5411ac97c0f7bf`; final capacity snapshot `b12a084557b320f1a0314e78708c7887eb6412d20622517616843d64fad2a2fa`.
+The recorded build passes both focused Quest cases. At one timestamp, 25 ungrouped bots choose the three eligible alternatives in a distribution of 8, 10 and 7, excluding the foreign-tagged primary. The unchanged productive-target case retains useful work through primary respawn, switches after foreign retagging and earns ordinary Quest 7 credit with sole corpse entitlement. Independent Standards and Spec review is clear. Result SHA-256 `b446d6fc2687181cedfe3f5ca098becc1bbeb1e98ac046ffda1458d96b40c746`; review `578140feaa3e6f5acefe812ae52585cfd8a2fed447c38ab7cdaaa63a1c433a15`.
 
-The completed imported run used the recorded Wasm and 39 immutable Package files. It retained the same imported content, geometry, starting positions, 25-bot roster and 3,600-second measurement. Run inputs SHA-256 `e24d5e28a269b9e0ceac49c26b593c9da14ba5e4d366886a9a5fffab0253c5b2`. Static geometry is clear and there are zero Refusal-spam candidates. Imported behavior fails because bots repeatedly choose the same Quest fallback target and lose its Loot Tag race. Seven advancement gaps remain open at capture end. One Grind interval lacks target evidence. Independent assessment SHA-256 `47a8a266458a86944ee09c0e1e8e30899d5116e98ba4c4ae064aa40dff8b6107`. A focused correction and a fresh hour remain required.
+The preceding imported hour used Core `607ca975` and Collection `be599eb0`. It completed all 3,600 seconds with 25 bots, clear static geometry and zero Refusal-spam candidates. Imported behavior failed because bots repeatedly chose the same Quest fallback and lost its Loot Tag race. Seven advancement gaps remained open, and one Grind interval lacked target evidence. Independent assessment SHA-256 `47a8a266458a86944ee09c0e1e8e30899d5116e98ba4c4ae064aa40dff8b6107`. The new focused correction passes. Its full hour is running with the complete eight-entry Grind capture scope.
 
 The original driver exited 1 during private-directory cleanup after capture. Its original run and traceback remain preserved. Separate reviewed receipts record the stopped owned process and completed private cleanup. This repair does not change the failed behavior result.
 
-Earlier productive-target, relocation, recovery and Transfer evidence remains at its actual source identities. Current Core CI passes. All seven Package gameplay and firewall jobs pass in [canonical run 34700753123](https://github.com/LyraCoreProject/packages/actions/runs/34700753123). General module and datascripts checks still depend on the Core API merge. Both source PRs remain unmerged, and the next correction needs its own checks.
+Earlier productive-target, relocation, recovery and Transfer evidence remains at its actual source identities. Core `24ab2c71` passes its current CI. Final CI continues at Collection `6fb26891`. All seven gameplay and firewall jobs passed at preceding Collection `c4960b5b` in [canonical run 34700753123](https://github.com/LyraCoreProject/packages/actions/runs/34700753123). General module and datascripts checks still depend on the Core API merge. Both source PRs remain unmerged.
 
 The deployed Gateway executable remains pending the Argus candidate build. Record and rehash that exact file before login.
 
