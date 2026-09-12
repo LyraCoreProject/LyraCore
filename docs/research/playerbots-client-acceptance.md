@@ -1,6 +1,6 @@
 # PB012 attended client handoff
 
-Status: prepared handoff. The corrected gameplay build passes all six focused relocation, recovery and Transfer checks. Final CI and a fresh 25-bot imported-world run are active. Argus access, deployment approval, the deployed Gateway and human attendance remain pending. No attended client observation has occurred. No configured Realm read or write was made while preparing this handoff.
+Status: prepared handoff. The recorded gameplay build passes all six focused relocation, recovery and Transfer checks, but its completed 25-bot hour fails imported behavior on synchronized Quest fallback selection. A target-dispersion correction is in progress. Argus access, deployment approval, the deployed Gateway and human attendance remain pending. No attended client observation or configured Realm operation has occurred.
 
 The venue is the Argus development Realm at `/home/lyracore/LyraCore`, operated as service user `lyracore`. Root login is still unavailable. The user will attend with a real 1.12.1 client. Venue selection does not authorize deployment.
 
@@ -9,7 +9,7 @@ The venue is the Argus development Realm at `/home/lyracore/LyraCore`, operated 
 The candidate retains useful Quest targets and avoids foreign Loot Tags during autonomous Quest and Grind work. Teleport now replaces a stale movement leg with a stop at the destination, so a released ghost stays at its graveyard. Recovery records one capacity Refusal while preserving reevaluation, healing and ordinary expiry. Defense and explicit companion assistance retain their existing rules.
 
 - Core PR #516 head `2e078e60db80213e3654895a14ebbde4a85b3e05`, tree `211f8fd67e231f30ff1e6762dd48bf16ed43b54e`.
-- Package Collection PR #36 head `1c0f7afde2ad5b1aea2a7d1cf2578fe429c89f94`, tree `b16c5a8e26a301a6c137a45256054aea315dcd1f`.
+- Package Collection PR #36 head `c4960b5be7b187cb016084c65ebd92cac59ee14a`, tree `207fa3aa9a6c167888411c4f437d58828c36ec6c`.
 - `playerbots` tree `b6b4ae0cb35c94394280cd5d95acb72e8ab9229c`.
 - `dungeons` tree `8969ccc9475d1f8b28687b7cd818d85165f7e05f`.
 - Package content identity: `3040d572f55a283e873071cb3c6e43be032b87e2aad793ff9a112b4e2557009d`.
@@ -20,11 +20,11 @@ The recorded build uses Core `607ca975a0b6aef95998a3569cae09454e205df3` and Coll
 
 All three relocation cases and both Transfer cases pass on this build. The recovery case proves one Refusal across repeated waits, a completed self Heal 2050, unchanged Recovery state through completion, and ReturnHome after the ordinary decision deadline and oldest-attempt expiry. The capacity caller is Core `6933cbb5bdd20379feac4ab301840cb9bf0ca01b`. Its source differs from the recorded build only in that test. Combined independent assessment SHA-256 `98edbdca374f0f17286b97dfc7a87383bc699db2072e9f98be5411ac97c0f7bf`; final capacity snapshot `b12a084557b320f1a0314e78708c7887eb6412d20622517616843d64fad2a2fa`.
 
-The fresh imported run uses the recorded Wasm and 39 immutable Package files. It retains the same imported content, geometry, starting positions, 25-bot roster and 3,600-second measurement. Run inputs SHA-256 `e24d5e28a269b9e0ceac49c26b593c9da14ba5e4d366886a9a5fffab0253c5b2`. The observer now captures creature ownership. Its 34 tests and CI pass, and [observer PR #18](https://github.com/LyraCoreProject/wire-harness/pull/18) is merged. No new imported acceptance is claimed while the run is active.
+The completed imported run used the recorded Wasm and 39 immutable Package files. It retained the same imported content, geometry, starting positions, 25-bot roster and 3,600-second measurement. Run inputs SHA-256 `e24d5e28a269b9e0ceac49c26b593c9da14ba5e4d366886a9a5fffab0253c5b2`. Static geometry is clear and there are zero Refusal-spam candidates. Imported behavior fails because bots repeatedly choose the same Quest fallback target and lose its Loot Tag race. Seven advancement gaps remain open at capture end. One Grind interval lacks target evidence. Independent assessment SHA-256 `47a8a266458a86944ee09c0e1e8e30899d5116e98ba4c4ae064aa40dff8b6107`. A focused correction and a fresh hour remain required.
 
-The preceding full hour at Core `8692be3d15cb0eda70ddd9d1cbd73486f7f3ea8c` and Collection `c46e9e3ec62434cca60eb8d69984d11bc918542e` remains failed evidence. Leveling improved, but two ghost relocations, three capacity Refusal bursts and six unfinished advancement intervals prevented acceptance. The first two defects now pass focused correction checks. The new hour must explain any remaining intervals and pass geometry assessment.
+The original driver exited 1 during private-directory cleanup after capture. Its original run and traceback remain preserved. Separate reviewed receipts record the stopped owned process and completed private cleanup. This repair does not change the failed behavior result.
 
-Earlier productive-target, overflow and Transfer evidence remains retained at its actual source identities. Current Core and Package CI remain required. [Canonical run 34698996905](https://github.com/LyraCoreProject/packages/actions/runs/34698996905) uses the final candidate. General Package module checks depend on the Core API merge and must pass after it. Both source PRs remain unmerged.
+Earlier productive-target, relocation, recovery and Transfer evidence remains at its actual source identities. Current Core CI passes. All seven Package gameplay and firewall jobs pass in [canonical run 34700753123](https://github.com/LyraCoreProject/packages/actions/runs/34700753123). General module and datascripts checks still depend on the Core API merge. Both source PRs remain unmerged, and the next correction needs its own checks.
 
 The deployed Gateway executable remains pending the Argus candidate build. Record and rehash that exact file before login.
 
