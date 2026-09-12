@@ -18,10 +18,10 @@
     "token_context_record": null
   },
   "candidate": {
-    "core_commit": "24ab2c718f9451be993922ac948ddeff02a29b5e",
-    "core_tree": "2dda9d6d293cd5e19e94f0838af1ac3b8ab31277",
-    "package_commit": "6fb2689111a14624b394a65431b40d2aab632ff2",
-    "package_tree": "791a735c99fc58942ffb89f953a24234235f7dba",
+    "core_commit": "fd2687f3056f2964d75bbd483bde68a463499434",
+    "core_tree": "c780a9bfd53823b6e2d88102cfc6da698657f137",
+    "package_commit": "a88e828a7704a4b78e45511f956855a164a69931",
+    "package_tree": "448bc7f29f0d96b37495ebf7b02a382d8aa497f1",
     "playerbots_tree": "d22e89801ff2e333994cefba09cb3284b00785dd",
     "dungeons_tree": "8969ccc9475d1f8b28687b7cd818d85165f7e05f",
     "module_wasm_sha256": "07b74b12851aa15f05d75905d6b66f7cbbafe0bc5b977630b628154c10488ab7",
@@ -36,7 +36,7 @@
       "package_commit": "2fdc43d0f85cad25296a877578917af74aeac54e",
       "package_tree": "34394159414ff5ee1a06bed0fcc06f0e027c73bb"
     },
-    "status": "dispersion_checks_passed_imported_hour_running"
+    "status": "imported_hour_failed_defense_and_quest_gaps"
   },
   "importer": {
     "merged_core_commit": "375b38c3004b61500ce480a72a681d7999a5c9ca",
