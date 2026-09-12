@@ -1361,16 +1361,13 @@ fn playerbots_quest_uses_a_reward_eligible_target_and_retains_productive_work() 
 
     node.assert_call("playerbots_fixture_runner_select_cohort", &[&guid]);
     let credit_updates = node.capture_updates(
-        &format!(
-            "SELECT corpse_guid, eligible_guid FROM game_corpse_loot_eligible WHERE corpse_guid = {CREATURE_6}"
-        ),
+        &format!("SELECT * FROM game_corpse_loot_eligible WHERE corpse_guid = {CREATURE_6}"),
         1,
         || {
             drive_until(&node, &guid, Duration::from_secs(40), |node| {
                 actions(node, &guid).iter().any(|action| {
                     action["target_guid"] == CREATURE_6.to_string()
-                        && (action["kind"].contains("attack")
-                            || action["kind"].contains("cast"))
+                        && (action["kind"].contains("attack") || action["kind"].contains("cast"))
                 })
             });
         },
