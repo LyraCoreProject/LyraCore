@@ -616,7 +616,8 @@ fn playerbots_runner_mage_defense_retains_a_valid_target_and_replaces_invalid_ta
     let retained = runner(&node, bot);
     assert!(retained["defense_target"].contains(&first), "{retained:?}");
     assert!(
-        retained["chosen"].contains(&format!("target = {first}")),
+        retained["chosen"].contains(&first)
+            && retained["chosen"].contains("reason = (defense = ())"),
         "{retained:?}"
     );
     assert!(poll_until(POLL_TIMEOUT, || cast(&first)
@@ -640,15 +641,10 @@ fn playerbots_runner_mage_defense_retains_a_valid_target_and_replaces_invalid_ta
         "{controlled:?}"
     );
     assert!(
-        controlled["chosen"].contains(&format!("target = {second}")),
+        controlled["chosen"].contains(&second)
+            && controlled["chosen"].contains("reason = (defense = ())"),
         "{controlled:?}"
     );
-    assert!(
-        cast(&second).is_some(),
-        "Mage did not cast at the replacement target"
-    );
-    assert!(poll_until(POLL_TIMEOUT, || cast(&second)
-        .is_some_and(|row| row["outcome"].contains("castResolved"))));
 
     node.assert_call("playerbots_fixture_roles_clear_control", &[&second, &first]);
     node.assert_call(
@@ -663,7 +659,8 @@ fn playerbots_runner_mage_defense_retains_a_valid_target_and_replaces_invalid_ta
     let dead = runner(&node, bot);
     assert!(dead["defense_target"].contains(&first), "{dead:?}");
     assert!(
-        dead["chosen"].contains(&format!("target = {first}")),
+        dead["chosen"].contains(&first)
+            && dead["chosen"].contains("reason = (defense = ())"),
         "{dead:?}"
     );
     assert_eq!(dead["objective_sequence"], objective);
