@@ -599,7 +599,7 @@ fn playerbots_runner_mage_defense_retains_a_valid_target_and_replaces_invalid_ta
             && first_selected["chosen"].contains("spell = 133")
             && first_selected["chosen"].contains(&format!("target = {first}"))
             && first_selected["chosen"].contains("reason = (defense = ())"),
-        "{first_selected:?}"
+        "Mage did not select defensive Fireball: {first_selected:?}"
     );
     assert!(
         cast(&first).is_some(),
