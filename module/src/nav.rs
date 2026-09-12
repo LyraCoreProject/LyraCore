@@ -363,7 +363,8 @@ pub struct RouteClip {
     pub hit: RoutePoint,
 }
 
-/// `endpoint == from` means no movement. Complete means a route was planned, not arrival.
+/// `endpoint == from` means no movement. Complete means a route was planned, not arrival. Static
+/// collision and exact walk-mask validation may shorten the committed endpoint.
 #[derive(spacetimedb::SpacetimeType, Clone, Debug, PartialEq)]
 pub struct RouteStep {
     pub from: RoutePoint,
@@ -447,7 +448,12 @@ pub fn route_step(
     };
     let (endpoint, clipping) =
         step_gate_with_fetch(ctx, map_id, instance_id, cur, attempted, z, &mut fetch);
-    result.endpoint = endpoint.into();
+    result.endpoint = if enabled {
+        nav::walkable_prefix(&mut fetch, cur, endpoint)
+    } else {
+        endpoint
+    }
+    .into();
     result.clipping = clipping;
     if all_covered && !checked.is_empty() {
         if let Some(generation_id) = generation {

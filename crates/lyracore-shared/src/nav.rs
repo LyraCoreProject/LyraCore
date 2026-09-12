@@ -333,6 +333,38 @@ fn line_walkable(
     true
 }
 
+/// Retain the longest tested half-prefix of an attempted movement whose exact stored endpoint
+/// crosses only walkable cells. The caller may derive `attempted` from a farther, walkable
+/// waypoint; f32 rounding can put that shorter endpoint on the other side of a grid corner.
+pub fn walkable_prefix(
+    fetch: &mut impl FnMut(u16, u16) -> Option<NavCellData>,
+    from: (f32, f32),
+    attempted: (f32, f32),
+) -> (f32, f32) {
+    if ![from.0, from.1, attempted.0, attempted.1]
+        .iter()
+        .all(|value| value.is_finite())
+    {
+        return from;
+    }
+    let mut cache = Cache::new(fetch);
+    let mut candidate = attempted;
+    for _ in 0..=f32::MANTISSA_DIGITS {
+        if line_walkable(&mut cache, from, candidate) {
+            return candidate;
+        }
+        let next = (
+            from.0 + (candidate.0 - from.0) * 0.5,
+            from.1 + (candidate.1 - from.1) * 0.5,
+        );
+        if next == from || next == candidate {
+            return from;
+        }
+        candidate = next;
+    }
+    from
+}
+
 /// Short-leg grid A* with string-pulling. Returns world waypoints from AFTER `from` up to and
 /// including `to`, or None when unreachable within `max_expansions`. The straight-line fast
 /// path returns `[to]` with ZERO expansions — an open-field chase costs one line test.
@@ -604,6 +636,30 @@ fn search_leg(
 mod runtime_tests {
     use super::*;
     use crate::terrain::cell_index;
+
+    #[test]
+    fn rounded_prefix_retains_a_walkable_movement_step() {
+        let from = (-8772.485_4, -86.496_69);
+        let farther_waypoint = (-8779.947_3, -78.384_766);
+        let attempted = (-8777.224_6, -81.344_84);
+        let mut cell = NavCellData {
+            base_z: 0.0,
+            walk: vec![0xff; WALK_BYTES],
+            obs: Vec::new(),
+        };
+        walk_set(&mut cell.walk, 14, 35, false);
+        let mut fetch = |cx, cy| (cx == 775 && cy == 514).then(|| cell.clone());
+
+        assert!(line_walkable(
+            &mut Cache::new(&mut fetch),
+            from,
+            farther_waypoint
+        ));
+        assert!(!line_walkable(&mut Cache::new(&mut fetch), from, attempted));
+        let endpoint = walkable_prefix(&mut fetch, from, attempted);
+        assert_eq!(endpoint, (-8773.669_9, -85.208_725));
+        assert!(line_walkable(&mut Cache::new(&mut fetch), from, endpoint));
+    }
 
     /// One synthetic chunk at the Northshire cell: a full-height wall along nx=32 (obs ox=16)
     /// with a 4-sub-cell doorway at ny 30..34 (obs oy 15..17), plus a sealed 4-wall pocket in
@@ -959,6 +1015,7 @@ mod runtime_tests {
         assert_eq!(expanded, 0, "own-cell exemption keeps the fast path");
         assert_eq!(path.len(), 1);
         assert!(complete);
+        assert_eq!(walkable_prefix(&mut fetch, from, to), to);
     }
 
     #[test]
