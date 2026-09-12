@@ -122,7 +122,7 @@ fn actions(node: &Standalone, guid: &str) -> Vec<BTreeMap<String, String>> {
 
 fn runner(node: &Standalone, guid: &str) -> Vec<BTreeMap<String, String>> {
     node.query_rows(&format!(
-        "SELECT character_guid, objective_sequence, objective, foreground, chosen, failures, recovery, deferred_destinations, retry_count, observed_micros, next_eligible_micros FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+        "SELECT character_guid, objective_sequence, objective, foreground, chosen, last_outcome, failures, recovery, deferred_destinations, retry_count, observed_micros, next_eligible_micros FROM pkg_playerbots_runner WHERE character_guid = {guid}"
     ))
 }
 
@@ -178,6 +178,88 @@ fn save(node: &Standalone, phase: &str, evidence: serde_json::Value) {
     let path = support::log_dir().join(format!("{}-{phase}.json", node.shard_name()));
     std::fs::write(&path, serde_json::to_vec_pretty(&evidence).unwrap()).unwrap();
     eprintln!("fixture evidence: {}", path.display());
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_recovery_capacity_is_recorded_once_while_heal_and_expiry_remain_live() {
+    let mut node = Standalone::start("playerbots-recovery-capacity-reporting");
+    node.publish_module();
+    record_inputs(&node);
+    remove_builtin_weather_import_stamp(&node);
+    node.assert_call("claim_operator", &[]);
+    node.assert_call("install_guid_range", &["1000000"]);
+    node.assert_call("debug_set_nav_enabled", &["true"]);
+    node.assert_call(
+        "playerbots_spawn_class_role",
+        &["1", "1200", "1200", "50", "5", "1"],
+    );
+    let guid = node.query_rows("SELECT character_guid FROM pkg_playerbots_bot")[0]
+        ["character_guid"]
+        .clone();
+    node.assert_call("playerbots_fixture_runner_stage", &[&guid, "false"]);
+    node.assert_call("playerbots_fixture_runner_select_cohort", &[&guid]);
+    node.assert_call("playerbots_fixture_provision_steps", &[&guid, "64"]);
+    node.assert_call(
+        "playerbots_fixture_runner_stage_recovery_capacity",
+        &[&guid],
+    );
+
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    let first = runner(&node, &guid).remove(0);
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    let repeated = runner(&node, &guid).remove(0);
+    assert!(first["chosen"].contains("hold = ()"), "{first:?}");
+    assert!(first["chosen"].contains("returnHome = ()"), "{first:?}");
+    assert_eq!(first["failures"].matches("recoveryCapacity").count(), 1);
+    assert!(first["last_outcome"].contains("waiting"), "{first:?}");
+    assert_eq!(first["retry_count"], "1");
+    assert_eq!(
+        first["next_eligible_micros"].parse::<i64>().unwrap()
+            - first["observed_micros"].parse::<i64>().unwrap(),
+        1_000_000
+    );
+    assert_eq!(repeated["failures"], first["failures"]);
+    assert!(repeated["last_outcome"].contains("waiting"), "{repeated:?}");
+    assert_eq!(repeated["retry_count"], first["retry_count"]);
+    assert_eq!(
+        repeated["next_eligible_micros"].parse::<i64>().unwrap()
+            - repeated["observed_micros"].parse::<i64>().unwrap(),
+        1_000_000
+    );
+
+    node.assert_call("playerbots_fixture_companion_health", &[&guid, "25"]);
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    let healing = runner(&node, &guid).remove(0);
+    assert!(healing["chosen"].contains("cast = ("), "{healing:?}");
+    assert!(healing["chosen"].contains("recovery = ()"), "{healing:?}");
+    assert!(healing["chosen"].contains(&format!("target = {guid}")));
+    assert_eq!(healing["failures"], first["failures"]);
+
+    node.assert_call("playerbots_fixture_companion_health", &[&guid, "100"]);
+    node.assert_call(
+        "playerbots_fixture_runner_expire_recovery_capacity",
+        &[&guid],
+    );
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    let released = runner(&node, &guid).remove(0);
+    assert!(
+        released["chosen"].contains("move = (home = ())"),
+        "{released:?}"
+    );
+    assert!(released["recovery"].contains("destination"), "{released:?}");
+    assert_eq!(released["failures"], first["failures"]);
+
+    save(
+        &node,
+        "capacity-reporting",
+        serde_json::json!({
+            "first": first,
+            "repeated": repeated,
+            "healing": healing,
+            "released": released,
+        }),
+    );
 }
 
 #[test]
