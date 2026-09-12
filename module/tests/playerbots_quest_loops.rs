@@ -1083,8 +1083,11 @@ fn playerbots_in_progress_quest_target_survives_an_unrelated_raw_read_limit() {
         &[&guid, "{\"recordOnly\":[]}"],
     );
     node.assert_call("playerbots_quest_fixture_admit_accept", &[&guid, "7"]);
-    node.assert_call("playerbots_quest_fixture_hide_live_target", &["6"]);
     let alternative = CREATURE_6 + 1;
+    node.assert_call(
+        "playerbots_quest_loop_fixture_make_target_friendly",
+        &[&guid, &CREATURE_6.to_string()],
+    );
     drive_until(&node, &guid, Duration::from_secs(10), |node| {
         query_one(
             node,
