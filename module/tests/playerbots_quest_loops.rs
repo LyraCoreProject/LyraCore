@@ -1521,6 +1521,7 @@ fn playerbots_timed_quest_cast_approaches_before_a_target_moves_beyond_completio
     assert!(target_started_moving, "{target_movement:?}");
 
     let mut started = None;
+    let mut retained = None;
     let mut started_pending = Vec::new();
     let mut out_of_range_observed = false;
     let cast_updates = node.capture_updates(
@@ -1536,7 +1537,13 @@ fn playerbots_timed_quest_cast_approaches_before_a_target_moves_beyond_completio
             started = Some(query_one(
                 &node,
                 &format!(
-                    "SELECT chosen, foreground, recovery, observed_micros FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+                    "SELECT chosen, foreground, recovery, objective_sequence, observed_micros FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+                ),
+            ));
+            retained = Some(query_one(
+                &node,
+                &format!(
+                    "SELECT quest_entry, runner_objective_identity, target FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"
                 ),
             ));
             started_pending = node.query_rows(&format!(
@@ -1567,6 +1574,7 @@ fn playerbots_timed_quest_cast_approaches_before_a_target_moves_beyond_completio
     record(&node, "moving-cast-range");
 
     let started = started.expect("moving-cast fixture did not retain a Runner state");
+    let retained = retained.expect("moving-cast fixture did not retain a Quest Objective");
     let target = query_one(
         &node,
         &format!("SELECT x, y, z FROM game_world_entity WHERE guid = {CREATURE_6}"),
@@ -1579,6 +1587,7 @@ fn playerbots_timed_quest_cast_approaches_before_a_target_moves_beyond_completio
         support::log_dir().join(format!("{}-moving-cast-range.json", node.shard_name())),
         serde_json::to_vec_pretty(&serde_json::json!({
             "spell": &spell,
+            "retained": &retained,
             "started_runner": &started,
             "started_entities": &started_entities,
             "started_spawn": &started_spawn,
@@ -1595,9 +1604,18 @@ fn playerbots_timed_quest_cast_approaches_before_a_target_moves_beyond_completio
     let cast_updates = serde_json::to_string(&cast_updates).unwrap();
     assert_eq!(spell["range_yd"], "35");
     assert_eq!(spell["cast_time_ms"], "1500");
+    assert_eq!(retained["quest_entry"], "7");
+    assert_eq!(
+        retained["runner_objective_identity"],
+        started["objective_sequence"]
+    );
+    assert!(retained["target"].contains("target_entry = 6"));
     assert_eq!(started_entities.len(), 2, "{started_entities:?}");
     assert_eq!(started_spawn.len(), 1, "{started_spawn:?}");
     if !started_pending.is_empty() {
+        assert_eq!(started_pending.len(), 1, "{started_pending:?}");
+        assert_eq!(started_pending[0]["spell_id"], "133");
+        assert_eq!(started_pending[0]["target_guid"], CREATURE_6.to_string());
         assert!(out_of_range_observed, "{cast_updates}");
     }
     assert!(started_pending.is_empty(), "{started_pending:?}");
