@@ -1084,23 +1084,12 @@ fn playerbots_in_progress_quest_target_survives_an_unrelated_raw_read_limit() {
     );
     node.assert_call("playerbots_quest_fixture_admit_accept", &[&guid, "7"]);
     let alternative = CREATURE_6 + 1;
-    node.assert_call(
-        "playerbots_quest_loop_fixture_make_target_friendly",
-        &[&guid, &CREATURE_6.to_string()],
-    );
-    drive_until(&node, &guid, Duration::from_secs(10), |node| {
-        query_one(
-            node,
-            &format!("SELECT chosen FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
-        )["chosen"]
-            .contains(&format!("move = (entity = {alternative})"))
-    });
     node.assert_call("playerbots_fixture_runner_select_cohort", &[&guid]);
     drive_until(&node, &guid, Duration::from_secs(30), |node| {
         let runner = query_one(
             node,
             &format!(
-                "SELECT chosen, objective_sequence FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+                "SELECT character_guid, chosen FROM pkg_playerbots_runner WHERE character_guid = {guid}"
             ),
         );
         let x = query_one(
@@ -1109,7 +1098,28 @@ fn playerbots_in_progress_quest_target_survives_an_unrelated_raw_read_limit() {
         )["x"]
             .parse::<f32>()
             .unwrap();
-        runner["chosen"].contains(&format!("move = (entity = {alternative})")) && x > 1_210.0
+        runner["chosen"].contains(&format!("move = (entity = {CREATURE_6})")) && x > 1_210.0
+    });
+    node.assert_call(
+        "playerbots_quest_loop_fixture_make_target_friendly",
+        &[&guid, &CREATURE_6.to_string()],
+    );
+    drive_until(&node, &guid, Duration::from_secs(30), |node| {
+        let runner = query_one(
+            node,
+            &format!(
+                "SELECT chosen, objective_sequence, recovery FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+            ),
+        );
+        let x = query_one(
+            node,
+            &format!("SELECT x FROM game_world_entity WHERE guid = {guid}"),
+        )["x"]
+            .parse::<f32>()
+            .unwrap();
+        runner["chosen"].contains(&format!("move = (entity = {alternative})"))
+            && runner["recovery"].contains(&format!("active = (some = (fight = {alternative}))"))
+            && x > 1_210.0
     });
     let retained = query_one(
         &node,
