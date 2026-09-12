@@ -557,6 +557,121 @@ fn playerbots_runner_defense_preserves_home_and_accepted_attack_is_not_progress(
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_runner_mage_defense_retains_a_valid_target_and_replaces_invalid_targets() {
+    let (node, bots) = fixture_role("playerbots-runner-mage-defense", "1", "2");
+    let bot = &bots[0];
+    let first = ((0xF130u64 << 48) | (5_090_101u64 << 24) | 1).to_string();
+    let second = ((0xF130u64 << 48) | (5_090_101u64 << 24) | 2).to_string();
+    node.assert_call("playerbots_fixture_blocked_quest", &[bot]);
+    node.assert_call("playerbots_fixture_runner_second_attacker", &[bot]);
+    node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
+    node.assert_sql("DELETE FROM game_melee_schedule");
+    select(&node, bot, "frozen");
+    select(&node, bot, "cohort");
+    assert!(poll_until(POLL_TIMEOUT, || runner(&node, bot)["chosen"]
+        .contains("returnHome")));
+    let initial = runner(&node, bot);
+    let objective = initial["objective_sequence"].clone();
+
+    let cast = |target: &str| {
+        node.query_rows(&format!(
+            "SELECT target_guid, spell_id, outcome FROM pkg_playerbots_action WHERE character_guid = {bot}"
+        ))
+        .into_iter()
+        .find(|row| row["target_guid"] == target && row["spell_id"] == "133")
+    };
+    let health = |target: &str| {
+        node.query_rows(&format!(
+            "SELECT health FROM game_world_entity WHERE guid = {target}"
+        ))[0]["health"]
+            .parse::<u32>()
+            .unwrap()
+    };
+
+    node.assert_call(
+        "playerbots_fixture_runner_damage_and_park",
+        &[bot, &first, "1"],
+    );
+    node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
+    let first_selected = runner(&node, bot);
+    assert!(
+        first_selected["chosen"].contains("cast")
+            && first_selected["chosen"].contains("spell = 133")
+            && first_selected["chosen"].contains(&format!("target = {first}"))
+            && first_selected["chosen"].contains("reason = (defense = ())"),
+        "{first_selected:?}"
+    );
+    assert!(
+        cast(&first).is_some(),
+        "Mage did not start a defensive Fireball"
+    );
+
+    node.assert_call(
+        "playerbots_fixture_runner_damage_and_park",
+        &[bot, &second, "1"],
+    );
+    node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
+    let retained = runner(&node, bot);
+    assert!(retained["defense_target"].contains(&first), "{retained:?}");
+    assert!(
+        retained["chosen"].contains(&format!("target = {first}")),
+        "{retained:?}"
+    );
+    assert!(poll_until(POLL_TIMEOUT, || cast(&first)
+        .is_some_and(|row| row["outcome"].contains("castResolved"))));
+    assert!(health(&first) < 1_000);
+    assert_eq!(runner(&node, bot)["objective_sequence"], objective);
+    assert!(runner(&node, bot)["combat_progress"].contains("none"));
+
+    node.assert_call(
+        "playerbots_fixture_roles_control",
+        &[&second, &first, "50020"],
+    );
+    node.assert_call(
+        "playerbots_fixture_runner_damage_and_park",
+        &[bot, &second, "1"],
+    );
+    node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
+    let controlled = runner(&node, bot);
+    assert!(
+        controlled["defense_target"].contains(&second),
+        "{controlled:?}"
+    );
+    assert!(
+        controlled["chosen"].contains(&format!("target = {second}")),
+        "{controlled:?}"
+    );
+    assert!(
+        cast(&second).is_some(),
+        "Mage did not cast at the replacement target"
+    );
+    assert!(poll_until(POLL_TIMEOUT, || cast(&second)
+        .is_some_and(|row| row["outcome"].contains("castResolved"))));
+
+    node.assert_call("playerbots_fixture_roles_clear_control", &[&second, &first]);
+    node.assert_call(
+        "playerbots_fixture_runner_kill_creature",
+        &[&first, &second],
+    );
+    node.assert_call(
+        "playerbots_fixture_runner_damage_and_park",
+        &[bot, &first, "1"],
+    );
+    node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
+    let dead = runner(&node, bot);
+    assert!(dead["defense_target"].contains(&first), "{dead:?}");
+    assert!(
+        dead["chosen"].contains(&format!("target = {first}")),
+        "{dead:?}"
+    );
+    assert_eq!(dead["objective_sequence"], objective);
+    assert!(dead["objective"].contains("last_verified_progress_micros = (none"));
+    assert!(dead["quest_progress"].contains("credit = 0"));
+    outcomes(&node);
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_runner_resurrection_clears_defense_and_resumes_retained_home() {
     let (node, bots) = fixture("playerbots-runner-death-defense", "1");
     let bot = &bots[0];
