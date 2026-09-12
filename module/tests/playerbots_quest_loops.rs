@@ -1483,13 +1483,7 @@ fn playerbots_timed_quest_cast_approaches_before_a_target_moves_beyond_completio
         &[&guid, "{\"recordOnly\":[]}"],
     );
     node.assert_call("playerbots_quest_fixture_admit_accept", &[&guid, "7"]);
-    let spell = query_one(
-        &node,
-        "SELECT spell_id, range_yd, cast_time_ms FROM game_spell WHERE spell_id = 133",
-    );
-    assert_eq!(spell["range_yd"], "35");
-    assert_eq!(spell["cast_time_ms"], "1500");
-
+    let mut spell = None;
     let mut started = None;
     let mut started_entities = Vec::new();
     let mut started_spawn = Vec::new();
@@ -1505,6 +1499,10 @@ fn playerbots_timed_quest_cast_approaches_before_a_target_moves_beyond_completio
                 "playerbots_quest_loop_fixture_start_moving_cast",
                 &[&guid],
             );
+            spell = Some(query_one(
+                &node,
+                "SELECT spell_id, range_yd, cast_time_ms FROM game_spell WHERE spell_id = 133",
+            ));
             started = Some(query_one(
                 &node,
                 &format!(
@@ -1550,6 +1548,7 @@ fn playerbots_timed_quest_cast_approaches_before_a_target_moves_beyond_completio
     );
     record(&node, "moving-cast-range");
 
+    let spell = spell.expect("moving-cast fixture did not retain its spell facts");
     let started = started.expect("moving-cast fixture did not retain a Runner state");
     let target = query_one(
         &node,
@@ -1576,6 +1575,8 @@ fn playerbots_timed_quest_cast_approaches_before_a_target_moves_beyond_completio
     )
     .unwrap();
     let cast_updates = serde_json::to_string(&cast_updates).unwrap();
+    assert_eq!(spell["range_yd"], "35");
+    assert_eq!(spell["cast_time_ms"], "1500");
     assert_eq!(started_entities.len(), 2, "{started_entities:?}");
     assert_eq!(started_spawn.len(), 1, "{started_spawn:?}");
     assert!(started_pending.is_empty(), "{started_pending:?}");
