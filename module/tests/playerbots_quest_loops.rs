@@ -1633,7 +1633,7 @@ fn playerbots_timed_quest_cast_approaches_before_a_target_moves_beyond_completio
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn playerbots_completed_quest_wait_yields_to_available_grind_work() {
+fn playerbots_completed_quest_wait_yields_to_other_available_work() {
     let (node, guid) = fixture("playerbots-completed-quest-wait", 1, 0, true);
     drive_until(&node, &guid, LOOP_TIMEOUT, |node| {
         rewarded(node, &guid, 783)
@@ -1808,13 +1808,17 @@ fn playerbots_completed_quest_wait_yields_to_available_grind_work() {
     let alternate = query_one(
         &node,
         &format!(
-            "SELECT chosen, recovery FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+            "SELECT objective, chosen, recovery FROM pkg_playerbots_runner WHERE character_guid = {guid}"
         ),
     );
     record(&node, "completed-quest-wait");
-    assert!(alternate["chosen"].contains("reason = (grind = ())"));
-    assert!(alternate["chosen"].contains(&grind_target.to_string()));
-    assert!(alternate["recovery"].contains(&format!("fight = {grind_target}")));
+    assert!(alternate["chosen"].contains("reason = (quest = ())"));
+    assert!(alternate["chosen"].contains("move = (entity ="));
+    let alternate_target = structured_number(&alternate["chosen"], "entity");
+    assert!(alternate["objective"].contains("identity = 4"));
+    assert!(alternate["objective"].contains("stage = (travelling = ())"));
+    assert!(alternate["recovery"].contains(&format!("target = {alternate_target}, quest = 5261")));
+    assert_eq!(retained_quest_purpose(&node, &guid)["quest_entry"], "5261");
     assert_eq!(quest(&node, &guid, 7).unwrap(), quest_before);
     assert_eq!(first_quest_count(&quest_before), 0);
 }
