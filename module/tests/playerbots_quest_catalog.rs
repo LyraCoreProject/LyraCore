@@ -1195,6 +1195,40 @@ fn playerbots_active_quest_overflow_preserves_the_retained_purpose() {
         "playerbots_fixture_runner_stage_defense_retry",
         &[bot, CREATURE_6],
     );
+    let staged_retry = runner(&node, bot);
+    let retry_candidate = staged_retry["retry_candidate"].clone();
+    assert!(retry_candidate.contains("defense"), "{staged_retry:?}");
+    assert!(retry_candidate.contains(CREATURE_6), "{staged_retry:?}");
+    let retry_at = staged_retry["next_eligible_micros"].parse::<i64>().unwrap() + 60_000_000;
+    node.assert_sql(&format!(
+        "UPDATE pkg_playerbots_runner SET retry_count = 1, next_eligible_micros = {retry_at} WHERE character_guid = {bot}"
+    ));
+    let mut waiting = Vec::new();
+    for _ in 0..2 {
+        node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
+        waiting.push(runner(&node, bot));
+    }
+    record(&node, "active-overflow-defense-wait");
+    for waiting in &waiting {
+        assert!(waiting["chosen"].contains("hold"), "{waiting:?}");
+        assert!(waiting["chosen"].contains("quest"), "{waiting:?}");
+        assert!(waiting["last_outcome"].contains("waiting"), "{waiting:?}");
+        assert_eq!(waiting["retry_candidate"], retry_candidate, "{waiting:?}");
+        assert_eq!(waiting["retry_count"], "1");
+        assert_eq!(waiting["failures"], limited["failures"], "{waiting:?}");
+        assert_eq!(
+            waiting["next_eligible_micros"].parse::<i64>().unwrap(),
+            retry_at
+        );
+        assert!(
+            waiting["observed_micros"].parse::<i64>().unwrap() < retry_at,
+            "{waiting:?}"
+        );
+    }
+    node.assert_call(
+        "playerbots_fixture_runner_stage_defense_retry",
+        &[bot, CREATURE_6],
+    );
     node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
     let defense = runner(&node, bot);
     let health_after = node.query_rows(&format!(
