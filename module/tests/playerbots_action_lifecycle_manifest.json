@@ -693,6 +693,11 @@
       "target": "playerbots_action_lifecycle",
       "name": "playerbots_admitted_transfer_ignores_an_unrelated_expired_objective",
       "source": "module/tests/playerbots_action_lifecycle.rs"
+    },
+    {
+      "target": "playerbots_rewrite",
+      "name": "runner::playerbots_recovery_waits_for_self_heal_readiness_without_interrupting_useful_work",
+      "source": "module/tests/playerbots_rewrite/runner.rs"
     }
   ]
 }
