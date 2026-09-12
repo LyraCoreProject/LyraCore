@@ -959,6 +959,38 @@ fn playerbots_quest_move_targets_record_verified_blocked_routes() {
     });
 }
 
+fn assert_expired_quest_recovery(
+    runner: &Value,
+    position: &str,
+    retained_identity: u64,
+    current_identity: u64,
+) {
+    let recovery = runner["recovery"].as_str().unwrap();
+    let chosen = runner["chosen"].as_str().unwrap();
+    if current_identity == retained_identity {
+        assert!(
+            recovery.contains(&format!("fight = {}", QUEST_ROOTS[5].target))
+                && recovery.contains(&format!("objective = {retained_identity}"))
+                && chosen.contains(&format!("recoveryPosition = {position}"))
+                && chosen.contains("reason = (quest = ())")
+                && chosen.contains(&format!("objective = {retained_identity}")),
+            "{runner}"
+        );
+    } else {
+        let alternative_target = CREATURE_PREFIX | (823u64 << 24) | 1;
+        assert!(
+            recovery.contains(&format!(
+                "work = (quest = (step = (target = {alternative_target}, quest = 5261), operation = (accept = ())))"
+            )) && recovery.contains(&format!("objective = {current_identity},"))
+                && !recovery.contains(&format!("fight = {}", QUEST_ROOTS[5].target))
+                && chosen.contains(&format!("move = (entity = {alternative_target})"))
+                && chosen.contains("reason = (quest = ())")
+                && chosen.contains(&format!("objective = {current_identity}")),
+            "{runner}"
+        );
+    }
+}
+
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_recovery_position_expires_with_its_retained_quest() {
@@ -1068,22 +1100,7 @@ fn playerbots_recovery_position_expires_with_its_retained_quest() {
             && history.contains(&format!("{expired_position}(refused = (deadline = ()))")),
         "{expired}"
     );
-    let recovery = runner["recovery"].as_str().unwrap();
-    let alternative_target = CREATURE_PREFIX | (823u64 << 24) | 1;
-    assert!(
-        recovery.contains(&format!(
-            "work = (quest = (step = (target = {alternative_target}, quest = 5261), operation = (accept = ())))"
-        )) && recovery.contains(&format!("objective = {current_identity},"))
-            && !recovery.contains(&format!("fight = {}", QUEST_ROOTS[5].target)),
-        "{expired}"
-    );
-    let current_chosen = runner["chosen"].as_str().unwrap();
-    assert!(
-        current_chosen.contains(&format!("move = (entity = {alternative_target})"))
-            && current_chosen.contains("reason = (quest = ())")
-            && current_chosen.contains(&format!("objective = {current_identity}")),
-        "{expired}"
-    );
+    assert_expired_quest_recovery(runner, &position, retained_identity, current_identity);
     let deferral = runner["deferred_destinations"].as_str().unwrap();
     assert_eq!(
         pending["runner"][0]["deferred_destinations"], "",
