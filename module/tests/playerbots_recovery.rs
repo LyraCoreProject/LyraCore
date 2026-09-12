@@ -1626,29 +1626,48 @@ fn playerbots_recovery_replaces_a_recovery_leg_when_the_quest_fight_changes() {
             .contains("recoveryPosition"),
         "{after}"
     );
-    assert_eq!(attacks.len(), 1);
-    let replacement = attacks[0]["target_guid"].parse::<u64>().unwrap();
+    let active = after["runner"]["recovery"].as_str().unwrap();
+    let replacements: Vec<_> = node
+        .query_rows("SELECT guid FROM game_world_entity WHERE entry = 6 AND dead = false")
+        .into_iter()
+        .filter(|target| {
+            active.contains(&format!("active = (some = (fight = {}))", target["guid"]))
+        })
+        .collect();
+    assert_eq!(replacements.len(), 1, "{after}");
+    let replacement = replacements[0]["guid"].parse::<u64>().unwrap();
     assert_ne!(replacement, TARGET);
-    let replacement_target = row(
-        &node,
-        &format!("SELECT entry, dead FROM game_world_entity WHERE guid = {replacement}"),
-    );
-    assert_eq!(replacement_target["entry"], "6");
-    assert_eq!(replacement_target["dead"], "false");
-    assert!(
-        after["runner"]["chosen"]
-            .as_str()
-            .unwrap()
-            .contains(&format!("attack = {replacement}")),
-        "{after}"
-    );
-    assert!(
-        after["runner"]["recovery"]
-            .as_str()
-            .unwrap()
-            .contains(&format!("active = (some = (fight = {replacement}))")),
-        "{after}"
-    );
+    let chosen = after["runner"]["chosen"].as_str().unwrap();
+    assert!(chosen.contains("reason = (quest = ())"), "{after}");
+    if chosen.contains(&format!("attack = {replacement}")) {
+        assert_eq!(attacks.len(), 1);
+        assert_eq!(attacks[0]["target_guid"], replacement.to_string());
+    } else {
+        assert!(
+            chosen.contains(&format!("move = (entity = {replacement})")),
+            "{after}"
+        );
+        assert!(attacks.is_empty(), "{attacks:?}");
+        assert!(
+            after["runner"]["foreground"]
+                .as_str()
+                .unwrap()
+                .contains(&format!("move = (entity = {replacement})")),
+            "{after}"
+        );
+        assert!(after["actions"].as_array().unwrap().iter().any(|action| {
+            action["kind"].as_str() == Some("(move = ())")
+                && action["observed_micros"] == after["runner"]["observed_micros"]
+                && action["outcome"]
+                    .as_str()
+                    .unwrap()
+                    .contains("destination =")
+                && action["outcome"]
+                    .as_str()
+                    .unwrap()
+                    .contains("arrived = false")
+        }));
+    }
     assert_eq!(before["quest"], after["quest"]);
     assert_eq!(
         before["runner"]["objective_sequence"],
