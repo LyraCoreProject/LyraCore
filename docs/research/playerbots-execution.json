@@ -1951,7 +1951,8 @@
         "A focused Quest case reproduces the productive-target defect at Core 45f6469156185d84e160eb7db0023ba0552df6c3 and Collection d16f7e0192205004ef8375b47653e80da95984ad. Production behavior is unchanged from the current PR sources. A second ungrouped Character creates the live Loot Tag through real positive threat. The subject selects that foreign-tagged target while an eligible alternative exists. Root accepts the saved state as causal failing evidence. Snapshot SHA-256 4ce20028c864a6271ca1ca36cd93c34abfdda9047423751b9ea8eded7af16e96; log 13084f0be7ef69a5032203425d7c4c7044a6110f82eedb7c121d1023196e2c43. The paired Grind case failed setup because normal spawn scatter invalidated an exact position assumption. Its original failure remains recorded. A reviewed caller correction derives target positions from the actual frozen subject and records the exact new target identities; only Grind is being repeated with the same Wasm.",
         "The productive-target correction passes all three focused cases at Core 8692be3d15cb0eda70ddd9d1cbd73486f7f3ea8c and Collection c46e9e3ec62434cca60eb8d69984d11bc918542e. Quest passes in 50.038 seconds: it avoids a foreign solo tag, retains an eligible alternative through primary respawn, switches when that alternative becomes foreign, and earns ordinary Quest 7 credit with sole corpse entitlement. Active Grind passes in 9.016 seconds and cancels its old foreground approach before switching. The Core Loot Tag fixture passes in 4.266 seconds, including party departure and revocation. Root and independent Standards and Spec review are clear. Result SHA-256 181f0b5d4059507c5799eb43402979c436f04fde1f88ca3cce893f4adca6c916; snapshot receipt f619b1c04ed9284fd840386b66530fc4d2c4b3ba138c330f857c9dbb8fdca431. Build, exact Wasm, source, inventory and private process cleanup passed. Both earlier causal failures remain preserved.",
         "A fresh imported-world run has started on the recorded corrected Wasm, SHA-256 3f49786c9c86591e8cef75a7d6e06dd13074b39b3b3eb45744ce5cb34564389e, 9,662,921 bytes. Build manifest SHA-256 256f4550a177f424693cd2d9228a3a4e38f7f62af2a7e93e4563559cf8c8b6ec. The 39 immutable Package input files match that manifest exactly. Reviewed run inputs SHA-256 3c9993dfd2198580edd9c779de108525c82f7a6ff944715163ee824c1336a563. The imported content, geometry, starting positions, 25-bot roster, 3,600-second measurement and behavior criteria are unchanged. The accepted geometry v3 checker remains in use. This is a run in progress, with no new imported acceptance result yet.",
-        "The corrected imported hour at Core 8692be3d and Collection c46e9e3e completed all 3,600 measured seconds with 25 bots at 12:16:47 UTC on 12 September. Owned-node shutdown and private-directory removal passed. It processed 90,444 decisions over 7,181 scheduler passes with maximum scheduling lag 508,838 microseconds, zero lost due bots and zero reducer rollbacks. Peak Standalone RSS was 878,276,608 bytes; minimum free storage was 9,549,811,712 bytes. Compared with the prior full hour, bots at level 3 or higher increased from 9 to 20, Quest 33 rewards increased from 8 to 14, and unfinished advancement intervals fell from 14 to six. This run still fails acceptance. Behavior analysis identifies three RecoveryCapacity Refusal bursts and six unfinished advancement intervals. Static movement has zero blocked or incomplete segments, but two ghost relocations are real defects: a retained zero-duration stop spline returns the released ghost from its graveyard to the death position on the next tick. The original geometry result remains incomplete. Run SHA-256 2996e03e22bd47df40bfb3f7438b074b88888f9648ceb0cfa8ca4a69c4ec7e11; behavior d6635be9d88cb5a5d79da548f8761062c692008efc0c4e72a1a184668086b80b; geometry c195f098f886110d40517c6b46c151eb603c1a60453697f9756384747f2888da."
+        "The corrected imported hour at Core 8692be3d and Collection c46e9e3e completed all 3,600 measured seconds with 25 bots at 12:16:47 UTC on 12 September. Owned-node shutdown and private-directory removal passed. It processed 90,444 decisions over 7,181 scheduler passes with maximum scheduling lag 508,838 microseconds, zero lost due bots and zero reducer rollbacks. Peak Standalone RSS was 878,276,608 bytes; minimum free storage was 9,549,811,712 bytes. Compared with the prior full hour, bots at level 3 or higher increased from 9 to 20, Quest 33 rewards increased from 8 to 14, and unfinished advancement intervals fell from 14 to six. This run still fails acceptance. Behavior analysis identifies three RecoveryCapacity Refusal bursts and six unfinished advancement intervals. Static movement has zero blocked or incomplete segments, but two ghost relocations are real defects: a retained zero-duration stop spline returns the released ghost from its graveyard to the death position on the next tick. The original geometry result remains incomplete. Run SHA-256 2996e03e22bd47df40bfb3f7438b074b88888f9648ceb0cfa8ca4a69c4ec7e11; behavior d6635be9d88cb5a5d79da548f8761062c692008efc0c4e72a1a184668086b80b; geometry c195f098f886110d40517c6b46c151eb603c1a60453697f9756384747f2888da.",
+        "The final 25-bot observation completed 3,600 seconds with 7,180 passes and 90,466 decisions. Every bot was processed. Maximum scheduler lag was 505,859 microseconds; all 27 deferred observations were accounted for. Peak process memory was 885,452,800 bytes. The run still fails imported behavior acceptance, so these measurements do not yet close the deployment-capacity criterion. Original run SHA-256 c53438ee525ccb3d879e1b5d92189d4763505d633ca46dc8a383585b379482f4."
       ],
       "notes": [
         "Eight of nine acceptance criteria are accepted. The latest imported hour has clear static geometry and zero Refusal spam, but fails behavior on synchronized Quest fallback selection. One Grind interval lacks target evidence. A focused correction and fresh imported hour remain required.",
@@ -2063,9 +2064,9 @@
         },
         {
           "url": "https://github.com/LyraCoreProject/packages/pull/36",
-          "label": "Collection #36, final CI running",
+          "label": "Collection #36, gameplay CI running",
           "status": "review",
-          "head_commit": "6fb2689111a14624b394a65431b40d2aab632ff2"
+          "head_commit": "a88e828a7704a4b78e45511f956855a164a69931"
         },
         {
           "url": "https://github.com/LyraCoreProject/LyraCore/pull/514",
@@ -2083,9 +2084,10 @@
         },
         {
           "url": "https://github.com/LyraCoreProject/LyraCore/pull/516",
-          "label": "Core #516, CI passed; hour running",
-          "status": "review",
-          "head_commit": "24ab2c718f9451be993922ac948ddeff02a29b5e"
+          "label": "Core #516 merged",
+          "status": "merged",
+          "head_commit": "4a86b099275c97d153ec2fa357b35084a3da2cba",
+          "merge_commit": "ba6f1ba57b672c7c468a6a9786d02f4fdef84cdb"
         },
         {
           "url": "https://github.com/LyraCoreProject/wire-harness/pull/18",
@@ -2107,6 +2109,13 @@
           "status": "merged",
           "head_commit": "c8c44b71b06d43319e170d357b667dbebf5721c8",
           "merge_commit": "23913d118fc7e653886be1c2ed6c87e623a4ef18"
+        },
+        {
+          "url": "https://github.com/LyraCoreProject/LyraCore/pull/518",
+          "label": "Core recovery caller #518 merged",
+          "status": "merged",
+          "head_commit": "d57a9415abc056e3de3378042484abd315a7619b",
+          "merge_commit": "fd2687f3056f2964d75bbd483bde68a463499434"
         }
       ],
       "evidence": [
@@ -2231,20 +2240,23 @@
         "The source audit covers idle spawns, six-yard random movement and waypoint segments against all 25 home leashes. The complete autonomous Grind entry set is 6, 38, 69, 257, 299, 721, 883 and 890. Observer #20 captures their health, life sequence and ownership through 21 fixed queries. Source review, 34 native tests, Clippy, release build and all remote checks pass. Merge 23913d118fc7e653886be1c2ed6c87e623a4ef18 has exactly the tested source tree. Binary SHA-256 c42f315861d93fdbc061a39cbe6cd5558ecc89cc5499cea4ef6746a303b7474d. Scope review c74014b5733832e2423b1b7f9b7cdb3ab08fe67cfca7d3db10218b545e9a3933; tool review 0efaa3ccb750c2b72b6ee9e37deb8795c1b90c320aa8d44314a7434bc3ccb24c. Behavior, geometry and archive limits remain unchanged.",
         "The fresh private imported run started at 16:53:51 UTC on 12 September. Reviewed inputs SHA-256 ded35f398f18497086e438e8dbb4034378f2a4d891b49b2beb19fae6196ae3d2 bind the accepted Core 24ab2c71 and Collection 2fdc43d0 build, its 39 immutable Package files and the new observer. Independent input review c1629c73caf95e50de432b7917c22c0e7187953e00af6e62318eacf52f6f0fa1 passes. The World Shard import is in progress; the 3,600-second measurement and independent behavior assessment remain pending.",
         "The approved dispersion correction also composes onto the held retirement previews as Core ce2e096b and Collection bd636f05. The caller and fixture patches match their accepted originals. Only the moved local pick_salt path and four CI refs adapt to retirement. Independent Standards and Spec review 0acc9223676e0bce771dd3161dbf8c7ca3add7646701ac22d33927a906971a75 is clear. This is source composition only; its native checks, retirement delivery and attended acceptance remain pending.",
-        "Import, navigation, collision and staged-roster checks passed. The observer started at 17:05:43 UTC and the full 3,600-second measurement is running with 25 bots. A live capture prefix shows all 25 opening Quest rewards and initial Quest 7 kill credit. This is progress information only; no final behavior or capacity result is available. Core 24ab2c71 now passes all current checks, including durable run 34705922518, Rust run 34705922519 and scripts run 34705922524."
+        "Import, navigation, collision and staged-roster checks passed. The observer started at 17:05:43 UTC and the full 3,600-second measurement is running with 25 bots. A live capture prefix shows all 25 opening Quest rewards and initial Quest 7 kill credit. This is progress information only; no final behavior or capacity result is available. Core 24ab2c71 now passes all current checks, including durable run 34705922518, Rust run 34705922519 and scripts run 34705922524.",
+        "The fresh imported hour completed at 18:05:44 UTC on 12 September; geometry capture and private cleanup closed successfully at 18:06:27. It used the recorded Core 24ab2c71 and Collection 2fdc43d0 Wasm with the complete eight-entry observer. All 25 bots reached level 2 or higher; 16 reached level 3 or higher. The behavior verifier records 558 intervals for assessment and zero Refusal-spam candidates. Eight progress intervals remain open at the end. Imported behavior therefore fails acceptance; later progress does not explain the preceding gaps. Behavior report SHA-256 d77b09a6873fcc4ccf562b4c9b8d27404d1140457dc1a895d0c6f916f92cdf8f; ownership report 72948545820c69c3bbf4352695074b8b91f0dd4f632e974b5c2574705291fe94.",
+        "The completed geometry assessment is clear across 108,175 segments and 113 terrain cells, with zero blocked segments, missing geometry or unexplained discontinuities. It accounts for 38 Release Spirit relocations. Geometry report SHA-256 12dbeecd8508520845af5c9e05465daaabb49b7d40b990b070722a2cb2b1b9bb. The four injured-healer intervals contain active work and five resolved self-heals, with no idle selected action. Focused healer assessment 4d265f7af17af6cbac08e0917bdb03dab90a58be638a62c696014a1117a854ca. These findings do not establish rendered-client acceptance.",
+        "The first offline behavior invocation stopped before archive analysis because it expected the preceding failed driver cleanup receipts. The corrected verifier accepts the actual successful driver cleanup and rejects partial, false or mixed evidence. Nine behavior and eight ownership checks pass; independent Standards and Spec review is clear. Raw input, original run and capture bytes remain unchanged. The hour was not repeated. Analysis transition receipt SHA-256 2479be41cd80b0997b073e64725ca7f45048ea5e40ed31ffbed84bb9b4a2cb34; review ed7a9cf4c4a62dbda424ad060700380d4f3cc9ef3457848b376c6cd01f4bbaf8.",
+        "Source review finds that an inconclusive bounded corpse search stops CreatureLoot before a separately valid live alternative can be considered. The proposed correction accepts only a fully validated live target and retains ReadLimit for every other outcome. Search bounds, corpse entitlement, active Fight retention and combat checks stay intact. Source assessment SHA-256 27c53375e5805766afdbd843b1a591ede394d8ddef8485cb29896e2e4e6dbc4e. A focused real-gameplay regression is running in isolated worktrees. The complete mapping of the hour to its causes remains under review.",
+        "Core #516 merged normally as ba6f1ba57b672c7c468a6a9786d02f4fdef84cdb. Core #518 then merged as fd2687f3056f2964d75bbd483bde68a463499434. Every required check passed, and both merge trees equal their reviewed heads. Their additional changes over the recorded Core build affect only the recovery test caller. The current Collection a88e828a changes only four CI references from the recorded Package build. At 18:22 UTC, its module, datascripts and firewall checks pass in both current runs; gameplay jobs continue. Collection delivery remains held.",
+        "The held retirement composition at Core ce2e096b and Collection bd636f05 passes all four Architecture Tests and debug-reducer library compilation. Strict Clippy retains exactly the accepted seventeen findings, with no new diagnostics. All source, Package union, process and temporary-directory cleanup checks pass. The orchestrator independently verified all fifty evidence files and the test executable. Result SHA-256 9a31ff37fdff0f31b528f4ac650088c804995f86a75c0d1afd1e51526c1ce3b8; evidence manifest 447763715f8f94bb438596e8be568f679fa990fb30f248877b58270c37c6c1d4. Retirement delivery and activation remain pending acceptance.",
+        "The collection-search regression fails on the old production path at the intended combat-start assertion, then passes with the bounded live-target fallback. Real spell 133 kills the alternative; completed OpenLoot and TakeLoot produce an exact eight-item receipt and one Quest 33 turn-in. The unchanged ninth-inaccessible-corpse case also passes and retains ReadLimit without an invented target. Core caller 2819939d and Collection 97f29a23 are clean. Focused report SHA-256 6849cecb6eac1e2c25368708d4d153726270deeeb9e8e871a719dfd55c303ad8. Root independently verified the logs, snapshots, 35 Package files and actual Wasm identity. Earlier caller and control failures remain preserved; no full-hour acceptance is claimed.",
+        "Independent assessment accounts for every microsecond of interval 373, a 231.727452-second Quest 18 gap for Mage 1000070. Defense consumes 119.772839 seconds, with melee attacks and repeated changes to the latest attacker. The Character dies three times. Source review finds that Defense bypasses the existing class combat strategy. Four nested cast-finish OutOfRange Refusals are retained as a separate observation. This is a failed Quest defense cycle, not an unexplained Grind interval. Assessment SHA-256 fb5011732a38c45bd1a1af8dabcd34f6e51bd4ae15c4fcac4f1c3e64117e1dd8; machine account a77cab53c73d0ee197ce5b30c7bcb0ed1d864600c03b45763ce4db0de3235e6b. Defensive rotation, target retention and the remaining open intervals require correction or causal assessment before another hour."
       ],
       "notes": [
-        "The user confirmed Argus as the attended-client venue and will connect with a real client. Root access remains deferred. No configured Realm update or attended-client sign-off has occurred.",
-        "The Core 8692be3d and Collection c46e9e3e build passes focused Quest, active Grind and Loot Tag checks. Its completed imported hour improves progression but fails release acceptance on recovery Refusal bursts and two ghost relocation defects. Both previous and current failed hours remain recorded.",
-        "The additive migration and sole controller selector are accepted. The final candidate retains failed Quest targets until their Objective changes, preserves the owning destination deferral, and refreshes a completed RecordOnly Objective when the Character leaves its destination. The final comparison, freeze and resume checks pass.",
-        "User-authorized cleanup freed about 10 GB without removing active T3 installations or test evidence. The imported observation then completed all 3,600 measured seconds with 25 level-one bots. Private node shutdown and directory removal passed. No configured Realm operation occurred.",
-        "The preceding full imported hour fails synchronized Quest fallback selection. The causal 25-bot correction and unchanged productive-target case now pass. Final CI and the fresh imported hour remain required. Expanded creature evidence will cover reachable Grind targets.",
-        "The stale Defense recovery, ordinary level gap, provisioning timing and bounded starting-position corrections retain their accepted focused results below. They do not establish imported-world or attended-client acceptance.",
-        "The imported hour finished at 14:01:52 UTC on 11 September and cleanup passed. All 25 bots earned 40 XP from Quest 783, then stopped advancing. Each had about 123 seconds of QuestReadLimit refusals and spent the remaining time cycling between an unreachable Quest 5261 turn-in and a recovery position. Fair scheduling and clear emitted movement do not satisfy the progression requirement. Independent assessment SHA-256 76535e9e6613e038d2a4c93c53f62312325722e8dda037f84af75f2efe5a7b7a records all 50 flagged intervals. This run fails acceptance.",
-        "The full private Deadmines route passed in 41.77 seconds. All 11 geometry chunks were accepted. One human-controlled Character and four companions entered through AreaTrigger 78, completed Follow movement on the imported floor and returned through AreaTrigger 119. All five settled on Map 0, roles and orders remained, and the old instance was empty. Independent source and evidence reviews pass. Real-client rendering still needs human observation.",
-        "The imported run stopped as failed at 20:05 UTC on 11 September after 630.684 seconds of recorded gameplay. All 25 bots accepted Quest 7 but remained at zero Quest 7 credit and 40 XP, with no attack or spell impact. In the final five minutes they walked 249.727 to 327.356 yards but displaced only 5.438 to 16.355 yards. The same Objective survived repeated recovery. Owned-node shutdown and private-directory cleanup passed. This is a failed partial observation, not a completed hour.",
-        "The attended guide and session template are prepared and reviewed. Their exact command codec, nine-step route, capture format and diagnostic SQL are ready. This accepts preparation only. Deployed Gateway, verified client, future Argus staging identities and human sign-off remain pending.",
-        "Old-controller retirement follows automated, imported-world and attended-client acceptance. Isolated Core and Package removal previews are reviewed. Architecture Tests pass 4/4 and debug-reducer compilation passes. Removal-related lint findings are fixed; final composition and delivery remain. Stored Legacy meanings and old table lifecycle handling remain preserved; no Realm cutover has occurred."
+        "The completed hour fails imported behavior acceptance. Geometry, scheduler accounting, Refusal-spam checks and the four injured-healer intervals are clear. The remaining behavior includes a Mage defensive death cycle and eight open Quest progress gaps.",
+        "The collection-search correction passes both focused cases. Its source and test delivery are being prepared. Defensive combat, target retention and moving-target range failures are being diagnosed before another full hour.",
+        "Core #516 and #518 are merged. Both current Collection a88e828a runs pass firewall, module, datascripts, Transfer and all 46 composition cases. Remaining gameplay CI and reviewed correction delivery are open.",
+        "The attended guide and session template are prepared. Their command codec, nine-step route, capture format and diagnostic SQL remain unchanged. Argus access is deferred; no configured Realm update or attended-client sign-off has occurred.",
+        "Retirement source and native checks are prepared. Delivery follows automated, imported-world and attended-client acceptance. Stored Legacy meanings and old-table lifecycle handling remain preserved.",
+        "Earlier failed observations and their original evidence remain preserved. The latest successful private cleanup did not need the preceding run's cleanup repair."
       ],
       "acceptance_evidence": [
         {
@@ -2364,8 +2376,8 @@
       ]
     }
   ],
-  "updated_at": "2026-09-12T17:09:58Z",
-  "summary": "Eleven of thirteen tickets are complete. The fresh 25-bot hour is running after imported content, navigation, collision and staging checks passed. The observer started at 17:05:43 UTC. The Quest fallback correction passes both focused checks and review. Core CI is fully green; Package suites continue. Attended client evidence and retirement delivery remain open.",
+  "updated_at": "2026-09-12T18:56:04Z",
+  "summary": "Eleven of thirteen tickets are complete. The 25-bot hour fails behavior acceptance. The collection-search correction passes its new gameplay regression and the unchanged no-live-target boundary. A separate Quest gap exposes forced melee defense and repeated target changes in a Mage, followed by three deaths. Defensive combat and the eight open Quest gaps are under investigation. Client acceptance and retirement delivery remain open.",
   "assignments": [
     {
       "agent": "/root",
@@ -2373,28 +2385,28 @@
         "PB-011",
         "PB-012"
       ],
-      "work": "Own final acceptance, tracker, report PR and immutable next-hour inputs. Bind the reviewed correction and complete creature evidence to the unchanged acceptance criteria."
+      "work": "Own final acceptance, the report and delivery. Preserve the failed hour and resolve its remaining behavior findings before another release observation."
     },
     {
       "agent": "pb004_roles",
       "tickets": [
         "PB-012"
       ],
-      "work": "Observer PR #20 is merged. Its complete eight-entry capture scope, 34 tests, Clippy, release build and remote checks pass."
+      "work": "Collection-search focused checks pass. Correct defensive combat so bots use their class rotation and retain useful defensive targets."
     },
     {
       "agent": "pb005_provisioning",
       "tickets": [
         "PB-012"
       ],
-      "work": "The 25-bot dispersion and productive-target checks pass. Own final Core #516 and Collection #36 CI and source delivery after imported acceptance."
+      "work": "Own Collection #36 CI and rebased delivery of the reviewed collection correction. Diagnose repeated moving-target cast range failures."
     },
     {
       "agent": "pb007_quests",
       "tickets": [
         "PB-012"
       ],
-      "work": "The correction, complete creature scope and final run inputs pass review. Independently assess the fresh imported run and keep acceptance tied to captured behavior."
+      "work": "Account for every flagged interval in the completed hour, with priority on the eight Quest progress gaps still open at the end."
     }
   ]
 }
