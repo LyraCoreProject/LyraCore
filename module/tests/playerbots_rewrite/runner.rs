@@ -572,6 +572,7 @@ fn playerbots_runner_mage_defense_retains_a_valid_target_and_replaces_invalid_ta
         .contains("returnHome")));
     let initial = runner(&node, bot);
     let objective = initial["objective_sequence"].clone();
+    node.assert_call("playerbots_fixture_runner_clear_navigation", &[bot]);
 
     let cast = |target: &str| {
         node.query_rows(&format!(
