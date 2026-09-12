@@ -4,7 +4,7 @@ mod support;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
-use support::Standalone;
+use support::{poll_until, Standalone};
 
 const PASS_INTERVAL: Duration = Duration::from_millis(1_250);
 const LOOP_TIMEOUT: Duration = Duration::from_secs(180);
@@ -1456,6 +1456,144 @@ fn playerbots_quest_uses_a_reward_eligible_target_and_retains_productive_work() 
     ));
     assert_eq!(entitlement.len(), 1, "{entitlement:?}");
     assert_eq!(entitlement[0]["eligible_guid"], guid);
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_timed_quest_cast_approaches_before_a_target_moves_beyond_completion_range() {
+    let (node, guid) = fixture("playerbots-quest-loop-moving-cast-range", 8, 2, true);
+    drive_until(&node, &guid, LOOP_TIMEOUT, |node| {
+        rewarded(node, &guid, 783)
+    });
+    node.assert_call(
+        "playerbots_select_controller",
+        &[&guid, "{\"recordOnly\":[]}"],
+    );
+    node.assert_call("playerbots_quest_fixture_admit_accept", &[&guid, "7"]);
+    let spell = query_one(
+        &node,
+        "SELECT spell_id, range_yd, cast_time_ms FROM game_spell WHERE spell_id = 133",
+    );
+    assert_eq!(spell["range_yd"], "35");
+    assert_eq!(spell["cast_time_ms"], "1500");
+
+    let mut started = None;
+    let mut started_entities = Vec::new();
+    let mut started_spawn = Vec::new();
+    let mut started_pending = Vec::new();
+    let mut target_movement = Vec::new();
+    let cast_updates = node.capture_updates(
+        &format!(
+            "SELECT * FROM pkg_playerbots_action WHERE character_guid = {guid} AND spell_id = 133"
+        ),
+        2,
+        || {
+            node.assert_call(
+                "playerbots_quest_loop_fixture_start_moving_cast",
+                &[&guid],
+            );
+            started = Some(query_one(
+                &node,
+                &format!(
+                    "SELECT chosen, foreground, recovery, observed_micros FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+                ),
+            ));
+            started_entities = node.query_rows(&format!(
+                "SELECT guid, map_id, instance_id, x, y, z FROM game_world_entity WHERE guid = {guid} OR guid = {CREATURE_6}"
+            ));
+            started_spawn = node.query_rows(&format!(
+                "SELECT guid, map_id, x, y, z FROM game_creature_spawn WHERE guid = {CREATURE_6}"
+            ));
+            started_pending = node.query_rows(&format!(
+                "SELECT scheduled_id, spell_id, target_guid FROM game_pending_cast WHERE caster_guid = {guid}"
+            ));
+
+            assert!(poll_until(Duration::from_secs(3), || {
+                target_movement = node.query_rows(&format!(
+                    "SELECT guid, sx, sy, dx, dy, start_micros, dur_ms FROM game_creature_spline WHERE guid = {CREATURE_6}"
+                ));
+                !target_movement.is_empty()
+            }));
+            if !started_pending.is_empty() {
+                assert!(poll_until(Duration::from_secs(5), || {
+                    query_one(
+                        &node,
+                        &format!(
+                            "SELECT history FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+                        ),
+                    )["history"]
+                        .contains("outOfRange")
+                }));
+                return;
+            }
+            drive_until(&node, &guid, Duration::from_secs(20), |node| {
+                quest(node, &guid, 7).is_some_and(|quest| first_quest_count(&quest) > 0)
+            });
+        },
+    );
+    node.assert_call(
+        "playerbots_select_controller",
+        &[&guid, "{\"recordOnly\":[]}"],
+    );
+    record(&node, "moving-cast-range");
+
+    let started = started.expect("moving-cast fixture did not retain a Runner state");
+    let target = query_one(
+        &node,
+        &format!("SELECT x, y, z FROM game_world_entity WHERE guid = {CREATURE_6}"),
+    );
+    let spawn = query_one(
+        &node,
+        &format!("SELECT x, y, z FROM game_creature_spawn WHERE guid = {CREATURE_6}"),
+    );
+    std::fs::write(
+        support::log_dir().join(format!("{}-moving-cast-range.json", node.shard_name())),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "spell": &spell,
+            "started_runner": &started,
+            "started_entities": &started_entities,
+            "started_spawn": &started_spawn,
+            "started_pending_cast": &started_pending,
+            "target_movement": &target_movement,
+            "cast_updates": &cast_updates,
+            "target": &target,
+            "spawn": &spawn,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let cast_updates = serde_json::to_string(&cast_updates).unwrap();
+    assert_eq!(started_entities.len(), 2, "{started_entities:?}");
+    assert_eq!(started_spawn.len(), 1, "{started_spawn:?}");
+    assert!(started_pending.is_empty(), "{started_pending:?}");
+    assert!(started["chosen"].contains("castingPosition"), "{started:?}");
+    assert!(started["chosen"].contains(&CREATURE_6.to_string()));
+    assert!(started["foreground"].contains("castingPosition"));
+    assert!(started["recovery"].contains(&format!("fight = {CREATURE_6}")));
+    assert_eq!(target_movement.len(), 1, "{target_movement:?}");
+    assert!(
+        (started_spawn[0]["x"].parse::<f32>().unwrap()
+            - target_movement[0]["sx"].parse::<f32>().unwrap()
+            - 40.0)
+            .abs()
+            < 0.01,
+        "{started_spawn:?} {target_movement:?}"
+    );
+    assert!(
+        target_movement[0]["dx"].parse::<f32>().unwrap()
+            > target_movement[0]["sx"].parse::<f32>().unwrap(),
+        "{target_movement:?}"
+    );
+    assert!(spawn["x"].parse::<f32>().unwrap() > target["x"].parse::<f32>().unwrap());
+    assert!(!cast_updates.contains("outOfRange"), "{cast_updates}");
+    assert!(cast_updates.contains("castResolved"), "{cast_updates}");
+    assert!(actions(&node, &guid).iter().any(|action| {
+        action["kind"].contains("cast")
+            && action["spell_id"] == "133"
+            && action["target_guid"] == CREATURE_6.to_string()
+            && action["outcome"].contains("castResolved")
+    }));
+    assert!(first_quest_count(&quest(&node, &guid, 7).unwrap()) > 0);
 }
 
 #[test]
