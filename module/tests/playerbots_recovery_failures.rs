@@ -122,7 +122,7 @@ fn actions(node: &Standalone, guid: &str) -> Vec<BTreeMap<String, String>> {
 
 fn runner(node: &Standalone, guid: &str) -> Vec<BTreeMap<String, String>> {
     node.query_rows(&format!(
-        "SELECT character_guid, objective_sequence, objective, foreground, chosen, last_outcome, failures, recovery, deferred_destinations, retry_count, observed_micros, next_eligible_micros FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+        "SELECT character_guid, objective_sequence, objective, foreground, chosen, last_outcome, failures, recovery, deferred_destinations, retry_count, observed_micros, next_eligible_micros, cast_progress FROM pkg_playerbots_runner WHERE character_guid = {guid}"
     ))
 }
 
@@ -246,10 +246,66 @@ fn playerbots_recovery_capacity_is_recorded_once_while_heal_and_expiry_remain_li
     node.assert_call("playerbots_fixture_companion_health", &[&guid, "25"]);
     node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
     let healing = runner(&node, &guid).remove(0);
+    let cast_actions = node.query_rows(&format!(
+        "SELECT character_guid, kind, target_guid, spell_id, cast_id, outcome FROM pkg_playerbots_action WHERE character_guid = {guid} AND spell_id = 2050"
+    ));
+    save(
+        &node,
+        "capacity-healing-bound-cast",
+        serde_json::json!({"healing": &healing, "cast_actions": &cast_actions}),
+    );
     assert!(healing["chosen"].contains("cast = ("), "{healing:?}");
     assert!(healing["chosen"].contains("recovery = ()"), "{healing:?}");
     assert!(healing["chosen"].contains(&format!("target = {guid}")));
     assert_eq!(healing["failures"], first["failures"]);
+    assert_eq!(cast_actions.len(), 1, "{cast_actions:?}");
+    assert_eq!(cast_actions[0]["kind"], "(cast = ())", "{cast_actions:?}");
+    assert_eq!(cast_actions[0]["spell_id"], "2050", "{cast_actions:?}");
+    assert_eq!(cast_actions[0]["target_guid"], guid, "{cast_actions:?}");
+    let cast_id = cast_actions[0]["cast_id"].clone();
+    assert_ne!(cast_id, "0", "{cast_actions:?}");
+    let completed = poll_until(Duration::from_secs(8), || {
+        let state = runner(&node, &guid).remove(0);
+        node.query_rows(&format!(
+            "SELECT scheduled_id FROM game_pending_cast WHERE caster_guid = {guid}"
+        ))
+        .is_empty()
+            && !state["foreground"].contains("cast = (")
+            && state["cast_progress"].contains(&format!("scheduled_id = {cast_id}"))
+            && state["cast_progress"].contains("spell = 2050")
+            && state["cast_progress"].contains(&format!("target = {guid}"))
+            && node
+                .query_rows(&format!(
+                    "SELECT cast_id, outcome FROM pkg_playerbots_action WHERE character_guid = {guid} AND spell_id = 2050"
+                ))
+                .iter()
+                .any(|action| {
+                    action["cast_id"] == cast_id && action["outcome"] == "(castResolved = ())"
+                })
+    });
+    let cast_completed = runner(&node, &guid).remove(0);
+    let completed_pending = node.query_rows(&format!(
+        "SELECT scheduled_id, spell_id, target_guid FROM game_pending_cast WHERE caster_guid = {guid}"
+    ));
+    let completed_actions = node.query_rows(&format!(
+        "SELECT character_guid, kind, target_guid, spell_id, cast_id, outcome FROM pkg_playerbots_action WHERE character_guid = {guid} AND spell_id = 2050"
+    ));
+    save(
+        &node,
+        "capacity-cast-completed",
+        serde_json::json!({
+            "runner": &cast_completed,
+            "pending_cast": &completed_pending,
+            "cast_actions": &completed_actions,
+        }),
+    );
+    assert!(
+        completed,
+        "cast {cast_id} did not finish: {cast_completed:?} {completed_pending:?} {completed_actions:?}"
+    );
+    assert_eq!(cast_completed["failures"], first["failures"]);
+    assert_eq!(cast_completed["retry_count"], first["retry_count"]);
+    assert_eq!(cast_completed["recovery"], healing["recovery"]);
 
     node.assert_call("playerbots_fixture_companion_health", &[&guid, "100"]);
     node.assert_call(
@@ -264,6 +320,7 @@ fn playerbots_recovery_capacity_is_recorded_once_while_heal_and_expiry_remain_li
     );
     assert!(released["recovery"].contains("destination"), "{released:?}");
     assert_eq!(released["failures"], first["failures"]);
+    assert_eq!(released["retry_count"], first["retry_count"]);
 
     save(
         &node,
@@ -272,6 +329,10 @@ fn playerbots_recovery_capacity_is_recorded_once_while_heal_and_expiry_remain_li
             "first": first,
             "repeated": repeated,
             "healing": healing,
+            "cast": cast_actions,
+            "cast_completed": cast_completed,
+            "completed_pending_cast": completed_pending,
+            "completed_cast_actions": completed_actions,
             "released": released,
         }),
     );
