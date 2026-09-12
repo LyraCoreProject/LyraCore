@@ -594,6 +594,7 @@ fn playerbots_runner_mage_defense_retains_a_valid_target_and_replaces_invalid_ta
     );
     node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
     let first_selected = runner(&node, bot);
+    outcomes(&node);
     assert!(
         first_selected["chosen"].contains("cast")
             && first_selected["chosen"].contains("spell = 133")
