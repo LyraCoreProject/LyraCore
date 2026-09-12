@@ -509,7 +509,7 @@ fn playerbots_runner_survival_cancels_cast_before_movement_and_keeps_the_objecti
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn playerbots_runner_defense_preserves_home_and_accepted_attack_is_not_progress() {
+fn playerbots_runner_defense_preserves_home_and_accepted_combat_is_not_progress() {
     let (node, bots) = fixture("playerbots-runner-defense", "1");
     let bot = &bots[0];
     node.assert_call("playerbots_fixture_blocked_quest", &[bot]);
@@ -528,7 +528,7 @@ fn playerbots_runner_defense_preserves_home_and_accepted_attack_is_not_progress(
     let target = ((0xF130u64 << 48) | (5_090_101u64 << 24) | 1).to_string();
     node.assert_call("playerbots_fixture_runner_damage", &[bot, &target, "1"]);
     assert!(poll_until(POLL_TIMEOUT, || runner(&node, bot)["chosen"]
-        .contains("attack")));
+        .contains("defense")));
     let defended = runner(&node, bot);
     assert_eq!(defended["objective_sequence"], objective_id);
     assert!(defended["last_outcome"].contains("accepted"));
