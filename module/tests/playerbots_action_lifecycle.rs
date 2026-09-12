@@ -1728,7 +1728,49 @@ fn playerbots_transfer_records_core_refusal_before_intent() {
     fixture
         .node
         .assert_call("playerbots_fixture_runner_pass_once", &[&fixture.companion]);
-    let refused = snapshot(&fixture.node);
+    let first = snapshot(&fixture.node);
+    save(&fixture.node, "quest-transfer-first", &first);
+    let action_refused = |evidence: &Value| {
+        evidence["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|action| {
+                action["character_guid"] == fixture.companion
+                    && action["kind"].as_str().unwrap().contains("transfer")
+                    && action["outcome"]
+                        .as_str()
+                        .unwrap()
+                        .contains("refused = (kind = (cannotAct = ())")
+            })
+    };
+    let refused = if action_refused(&first) {
+        first
+    } else {
+        assert_transfer_root(&first, &fixture.companion, "areaTrigger = 78");
+        assert!(first["transfers"].as_array().unwrap().is_empty(), "{first}");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut passed_after_approach = false;
+        loop {
+            let current = snapshot(&fixture.node);
+            if action_refused(&current) || Instant::now() >= deadline {
+                break current;
+            }
+            let approach_complete = !current["movement"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|movement| movement["guid"].as_str() == Some(fixture.companion.as_str()));
+            if approach_complete && !passed_after_approach {
+                fixture
+                    .node
+                    .assert_call("playerbots_fixture_runner_pass_once", &[&fixture.companion]);
+                passed_after_approach = true;
+            } else {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+    };
     save(&fixture.node, "quest-transfer-refused", &refused);
     let runner = refused["runner"]
         .as_array()
