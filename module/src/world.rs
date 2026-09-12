@@ -13,7 +13,9 @@ use crate::faction::game_faction_template;
 use crate::graveyard;
 use crate::helpers::entity_by_owner;
 use crate::spell::game_resurrect_request;
-use crate::{game_character, game_character_buyback, game_corpse, game_instance};
+use crate::{
+    game_character, game_character_buyback, game_corpse, game_creature_spline, game_instance,
+};
 
 /// Named source world-state variables admitted by authored runtime instructions. Module only.
 #[table(accessor = game_world_state_name)]
@@ -757,23 +759,16 @@ pub(crate) fn apply_zone_transition(
 
 // The teleport primitive's full destination (map/instance/x/y/z/o) plus the actor; the shape mirrors `game_teleport_event`'s columns.
 #[allow(clippy::too_many_arguments)]
-/// The reusable teleport core: move `player_guid` to `(map_id, instance_id, x, y, z, o)` authoritatively
-/// AND emit a `game_teleport_event` so the gateway sends the client the teleport handshake (without it the
-/// entity moves but the player's camera stays put). `instance_id` stamps `Character.pending_instance_id`
-/// (190's dungeon-instancing substrate) — every current caller passes 0 (open world), so behavior is
-/// unchanged until 190 slice 2 lands instanced destinations.
+/// Relocate a Character and emit the Gateway teleport handshake.
 ///
-/// SAME map (`is_cross_map_teleport` false): byte-identical to before — updates the live entity in place
-/// (position + grid cell + instance_id) and the durable `game_character` row so a relog resumes there.
+/// Same-map relocation updates the live entity and durable Character destination. Cross-map
+/// relocation persists progression, clears combat, stealth and public motion, then removes the
+/// live entity. The Gateway rebuilds it from the durable destination after WORLDPORT_ACK.
 ///
-/// CROSS map: the client needs a full reload (`SMSG_TRANSFER_PENDING`/`SMSG_NEW_WORLD`, gateway-side), so
-/// the live entity is DESPAWNED here rather than moved — `build_player_entity` rebuilds it fresh on the
-/// far side once the gateway drives `MSG_MOVE_WORLDPORT_ACK`. Progression is persisted before the
-/// despawn so nothing earned on the old map is lost. Combat, stealth, and public motion state are
-/// cleared before the entity is deleted, so none survives on the source map. The durable `Character`
-/// row is updated in both branches because the WORLDPORT_ACK rebuild reads it.
+/// Both paths discard pending motion. Any retained spline becomes a stop at the destination,
+/// preserving the peer movement signal until the normal movement tick reaps it.
 ///
-/// No-op if the player isn't in world.
+/// No-op when the Character has no live entity or taxi movement owns its position.
 pub(crate) fn teleport_player(
     ctx: &ReducerContext,
     player_guid: u64,
@@ -859,6 +854,24 @@ pub(crate) fn teleport_player(
             c.zone_id = zone;
         }
         chars.guid().update(c);
+    }
+
+    // A motion tick also applies zero-duration legs. Replace the old destination so a retained
+    // leg cannot undo this teleport, and peers receive a stop at the new position.
+    if let Some(previous) = ctx.db.game_creature_spline().guid().find(player_guid) {
+        let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u32;
+        crate::creatures::tick::emit_move_spline(
+            ctx,
+            player_guid,
+            (x, y, z),
+            (x, y, z),
+            0,
+            false,
+            now_ms.max(previous.spline_id.wrapping_add(1)),
+            map_id,
+            instance_id,
+            spatial::grid_cell(x, y),
+        );
     }
 
     // Relay the client handshake — the gateway's `on_teleport` branches same-map (MSG_MOVE_TELEPORT_ACK)
