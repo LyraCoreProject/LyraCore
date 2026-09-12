@@ -1650,6 +1650,7 @@ fn playerbots_completed_quest_wait_yields_to_available_grind_work() {
             "SELECT objective, chosen, recovery FROM pkg_playerbots_runner WHERE character_guid = {guid}"
         ),
     );
+    record(&node, "completed-quest-movement");
     assert!(movement_after["objective"].contains("last_verified_progress_micros = (none = ())"));
     assert!(
         structured_number(&movement_after["objective"], "deadline_micros")
@@ -1767,6 +1768,7 @@ fn playerbots_completed_quest_wait_yields_to_available_grind_work() {
             "SELECT objective, chosen, failures, retry_candidate, retry_count, next_eligible_micros, last_outcome FROM pkg_playerbots_runner WHERE character_guid = {guid}"
         ),
     );
+    record(&node, "completed-quest-deferred");
     assert!(deferred["objective"].contains("stage = (deferred = ())"));
     assert!(deferred["chosen"].contains("hold"));
     assert!(deferred["chosen"].contains("reason = (quest = ())"));
