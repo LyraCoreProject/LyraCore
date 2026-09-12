@@ -639,9 +639,9 @@ mod runtime_tests {
 
     #[test]
     fn rounded_prefix_retains_a_walkable_movement_step() {
-        let from = (-8772.485_4, -86.496_69);
-        let farther_waypoint = (-8779.947_3, -78.384_766);
-        let attempted = (-8777.224_6, -81.344_84);
+        let from = (-8_772.485, -86.496_69);
+        let farther_waypoint = (-8_779.947, -78.384_766);
+        let attempted = (-8_777.225, -81.344_84);
         let mut cell = NavCellData {
             base_z: 0.0,
             walk: vec![0xff; WALK_BYTES],
@@ -657,7 +657,7 @@ mod runtime_tests {
         ));
         assert!(!line_walkable(&mut Cache::new(&mut fetch), from, attempted));
         let endpoint = walkable_prefix(&mut fetch, from, attempted);
-        assert_eq!(endpoint, (-8773.669_9, -85.208_725));
+        assert_eq!(endpoint, (-8_773.67, -85.208_725));
         assert!(line_walkable(&mut Cache::new(&mut fetch), from, endpoint));
     }
 
