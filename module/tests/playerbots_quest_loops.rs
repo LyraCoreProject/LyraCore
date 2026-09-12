@@ -1571,7 +1571,7 @@ fn playerbots_timed_quest_cast_approaches_before_a_target_moves_beyond_completio
         "playerbots_select_controller",
         &[&guid, "{\"recordOnly\":[]}"],
     );
-    record(&node, "moving-cast-range");
+    record(&node, "moving-cast-range-state");
 
     let started = started.expect("moving-cast fixture did not retain a Runner state");
     let retained = retained.expect("moving-cast fixture did not retain a Quest Objective");
