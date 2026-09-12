@@ -1613,21 +1613,42 @@ fn playerbots_recovery_replaces_a_recovery_leg_when_the_quest_fight_changes() {
     )
     .unwrap();
     assert!(
+        before["runner"]["recovery"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("active = (some = (fight = {TARGET}))")),
+        "{before}"
+    );
+    assert!(
         !after["runner"]["foreground"]
             .as_str()
             .unwrap()
             .contains("recoveryPosition"),
         "{after}"
     );
+    assert_eq!(attacks.len(), 1);
+    let replacement = attacks[0]["target_guid"].parse::<u64>().unwrap();
+    assert_ne!(replacement, TARGET);
+    let replacement_target = row(
+        &node,
+        &format!("SELECT entry, dead FROM game_world_entity WHERE guid = {replacement}"),
+    );
+    assert_eq!(replacement_target["entry"], "6");
+    assert_eq!(replacement_target["dead"], "false");
     assert!(
         after["runner"]["chosen"]
             .as_str()
             .unwrap()
-            .contains(&format!("attack = {}", TARGET + 1)),
+            .contains(&format!("attack = {replacement}")),
         "{after}"
     );
-    assert_eq!(attacks.len(), 1);
-    assert_eq!(attacks[0]["target_guid"], (TARGET + 1).to_string());
+    assert!(
+        after["runner"]["recovery"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("active = (some = (fight = {replacement}))")),
+        "{after}"
+    );
     assert_eq!(before["quest"], after["quest"]);
     assert_eq!(
         before["runner"]["objective_sequence"],
