@@ -1442,19 +1442,39 @@ fn playerbots_grind_reuses_only_a_reward_eligible_target() {
         "{retained:?}"
     );
 
+    node.assert_call("playerbots_fixture_runner_select_cohort", &[&guid]);
+    drive_until(&node, &guid, Duration::from_secs(10), |node| {
+        let runner = query_one(
+            node,
+            &format!(
+                "SELECT chosen, foreground FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+            ),
+        );
+        runner["chosen"].contains(&target.to_string())
+            && runner["chosen"].contains("reason = (grind = ())")
+            && runner["foreground"].contains(&target.to_string())
+            && runner["foreground"].contains("reason = (grind = ())")
+    });
+    record_declared_targets(&node, "grind-productive-target-active", &targets);
     node.assert_call("debug_add_threat", &[&target.to_string(), &foreign, "1"]);
     assert_solo_loot_tag(&node, target, &foreign);
     node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
     let switched = query_one(
         &node,
-        &format!("SELECT chosen FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
+        &format!(
+            "SELECT chosen, foreground FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+        ),
     );
     let alternative = *targets
         .iter()
         .find(|candidate| **candidate != target)
         .unwrap();
+    record_declared_targets(&node, "grind-productive-target-retagged", &targets);
+    node.assert_call(
+        "playerbots_select_controller",
+        &[&guid, "{\"recordOnly\":[]}"],
+    );
     record(&node, "grind-productive-target");
-    record_declared_targets(&node, "grind-productive-target-declared", &targets);
     assert!(
         switched["chosen"].contains("reason = (grind = ())"),
         "{switched:?}"
@@ -1464,6 +1484,11 @@ fn playerbots_grind_reuses_only_a_reward_eligible_target() {
         "{switched:?}"
     );
     assert!(!switched["chosen"].contains(&target.to_string()));
+    assert!(
+        switched["foreground"].contains(&alternative.to_string()),
+        "{switched:?}"
+    );
+    assert!(!switched["foreground"].contains(&target.to_string()));
 }
 
 #[test]
