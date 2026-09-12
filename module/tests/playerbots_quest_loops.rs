@@ -1327,7 +1327,7 @@ fn playerbots_ninth_inaccessible_corpse_reports_an_inconclusive_read() {
     let first_wait = query_one(
         &node,
         &format!(
-            "SELECT character_guid, failures, observed_micros, next_eligible_micros, last_outcome FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+            "SELECT character_guid, failures, observed_micros, next_eligible_micros, objective FROM pkg_playerbots_runner WHERE character_guid = {guid}"
         ),
     );
     let first_failures = quest_read_limit_micros(&first_wait["failures"]);
@@ -1340,7 +1340,6 @@ fn playerbots_ninth_inaccessible_corpse_reports_an_inconclusive_read() {
         first_failures.last().unwrap().saturating_add(30_000_000),
         "{first_wait:?}"
     );
-    assert!(first_wait["last_outcome"].contains("questReadLimit"));
     let actions_before_retries = actions(&node, &guid);
     for _ in 0..8 {
         node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
@@ -1348,7 +1347,7 @@ fn playerbots_ninth_inaccessible_corpse_reports_an_inconclusive_read() {
     let repeated_wait = query_one(
         &node,
         &format!(
-            "SELECT character_guid, failures, next_eligible_micros, last_outcome FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+            "SELECT character_guid, failures, next_eligible_micros, last_outcome, objective FROM pkg_playerbots_runner WHERE character_guid = {guid}"
         ),
     );
     record(&node, "corpse-limit-repeated-wait");
@@ -1364,6 +1363,8 @@ fn playerbots_ninth_inaccessible_corpse_reports_an_inconclusive_read() {
         retry_at,
         "{repeated_wait:?}"
     );
+    assert!(repeated_wait["last_outcome"].contains("waiting"));
+    assert_eq!(repeated_wait["objective"], first_wait["objective"]);
     assert_eq!(actions(&node, &guid), actions_before_retries);
     let attempted = actions(&node, &guid);
     for corpse in &inaccessible {
