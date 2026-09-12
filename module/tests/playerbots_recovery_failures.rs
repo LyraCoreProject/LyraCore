@@ -200,6 +200,7 @@ fn playerbots_recovery_capacity_is_recorded_once_while_heal_and_expiry_remain_li
     node.assert_call("playerbots_fixture_runner_stage", &[&guid, "false"]);
     node.assert_call("playerbots_fixture_runner_select_cohort", &[&guid]);
     node.assert_call("playerbots_fixture_provision_steps", &[&guid, "64"]);
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
     node.assert_call(
         "playerbots_fixture_runner_stage_recovery_capacity",
         &[&guid],
