@@ -1,0 +1,234 @@
+{
+  "schema": "pb012-attended-client-v1",
+  "status": "pending_human",
+  "observer": null,
+  "venue": {
+    "host": "Argus",
+    "checkout": "/home/lyracore/LyraCore",
+    "service_user": "lyracore"
+  },
+  "operator_read_binding": {
+    "status": "pending_argus_access",
+    "spacetime_binary": null,
+    "spacetime_binary_sha256": null,
+    "spacetime_server": null,
+    "realm_database": null,
+    "open_world_database": null,
+    "instance_pool_database": null,
+    "token_context_record": null
+  },
+  "candidate": {
+    "core_commit": "fd2687f3056f2964d75bbd483bde68a463499434",
+    "core_tree": "c780a9bfd53823b6e2d88102cfc6da698657f137",
+    "package_commit": "a88e828a7704a4b78e45511f956855a164a69931",
+    "package_tree": "448bc7f29f0d96b37495ebf7b02a382d8aa497f1",
+    "playerbots_tree": "d22e89801ff2e333994cefba09cb3284b00785dd",
+    "dungeons_tree": "8969ccc9475d1f8b28687b7cd818d85165f7e05f",
+    "module_wasm_sha256": "07b74b12851aa15f05d75905d6b66f7cbbafe0bc5b977630b628154c10488ab7",
+    "module_wasm_bytes": 9665319,
+    "build_manifest_sha256": "6b0d303eebba4d7f109bbfdeb718b7ca02ba05461b52e06e4736488d38a4677f",
+    "gateway_sha256": null,
+    "package_content_blake3": "1e849fdc1d99e92495dcc9ed0c6ced3038344cc9a266535a230841052c80bf51",
+    "build_manifest": "/home/t3agent/.cache/playerbots-rewrite/evidence/pb012-quest-dispersion-24ab2c71-2fdc43d0-green-v1/build-manifest.json",
+    "module_wasm_source": {
+      "core_commit": "24ab2c718f9451be993922ac948ddeff02a29b5e",
+      "core_tree": "2dda9d6d293cd5e19e94f0838af1ac3b8ab31277",
+      "package_commit": "2fdc43d0f85cad25296a877578917af74aeac54e",
+      "package_tree": "34394159414ff5ee1a06bed0fcc06f0e027c73bb"
+    },
+    "status": "imported_hour_failed_defense_and_quest_gaps"
+  },
+  "importer": {
+    "merged_core_commit": "375b38c3004b61500ce480a72a681d7999a5c9ca",
+    "source_tree": "22fbc76a174a6f60abe2bea3d8148c047afff149",
+    "binary_sha256": "0a3270f84023745ef563a5ed7772e056f6db95098bd3229ee5ab720562e51abd",
+    "client_archive_manifest_sha256": "9320f727dcfbfc94a9a0f626ca1f0eaffc30546cc2a39deea01627506f17d078"
+  },
+  "client": {
+    "version": "1.12.1.5875",
+    "executable_sha256": null,
+    "installation_manifest_sha256": null,
+    "unmodified_verified": false
+  },
+  "staging": {
+    "run_id": null,
+    "guid_origin": "future_argus_staging",
+    "leader": {
+      "guid": null,
+      "name": null
+    },
+    "companions": {
+      "warrior_tank": {
+        "guid": null,
+        "name": null
+      },
+      "priest_healer": {
+        "guid": null,
+        "name": null
+      },
+      "mage_damage_one": {
+        "guid": null,
+        "name": null
+      },
+      "mage_damage_two": {
+        "guid": null,
+        "name": null
+      }
+    },
+    "declared_hostiles": [],
+    "control_spell": {
+      "spell_id": null,
+      "name": null
+    }
+  },
+  "partitions": {
+    "group_id": null,
+    "open_world_map_id": null,
+    "open_world_instance_id": null,
+    "map36_instance_id": null,
+    "map36_generation_id": null,
+    "database_by_character": {
+      "leader": null,
+      "warrior_tank": null,
+      "priest_healer": null,
+      "mage_damage_one": null,
+      "mage_damage_two": null
+    }
+  },
+  "diagnostic_reads": {
+    "status": "not_run",
+    "command_shape": "\"$SPACETIME_BIN\" sql --server \"$SPACETIME_SERVER\" \"$DATABASE\" \"$SQL\"",
+    "appendix": "docs/research/playerbots-client-acceptance.md#read-only-diagnostic-command-appendix",
+    "boundaries": {
+      "after_staging": null,
+      "before_each_action": [],
+      "after_each_action": [],
+      "before_map36_entry": null,
+      "after_map36_entry": null,
+      "before_map36_exit": null,
+      "after_map36_return": null,
+      "after_party_release": null,
+      "after_regroup": null
+    }
+  },
+  "private_run_reference_only": {
+    "leader_guid": "1000006",
+    "warrior_guid": "1000001",
+    "priest_guid": "1000011",
+    "mage_one_guid": "1000016",
+    "mage_two_guid": "1000021",
+    "instruction": "Never copy these private fixture GUIDs into attended commands."
+  },
+  "route": {
+    "entry_trigger": 78,
+    "entry_landing": [
+      -14.5732,
+      -385.475,
+      62.4561
+    ],
+    "exit_trigger": 119,
+    "exit_approach": [
+      -14.4154,
+      -391.4037,
+      63.7006
+    ],
+    "exit_radius_yards": 6.0,
+    "exit_landing": [
+      -11208.7,
+      1675.9,
+      24.5733
+    ]
+  },
+  "started_utc": null,
+  "finished_utc": null,
+  "commands": [],
+  "steps": [
+    {
+      "id": "follow",
+      "status": "not_observed",
+      "started_utc": null,
+      "finished_utc": null,
+      "notes": null,
+      "media": []
+    },
+    {
+      "id": "stay_and_rejoin",
+      "status": "not_observed",
+      "started_utc": null,
+      "finished_utc": null,
+      "notes": null,
+      "media": []
+    },
+    {
+      "id": "target_and_roles",
+      "status": "not_observed",
+      "started_utc": null,
+      "finished_utc": null,
+      "notes": null,
+      "media": []
+    },
+    {
+      "id": "assist",
+      "status": "not_observed",
+      "started_utc": null,
+      "finished_utc": null,
+      "notes": null,
+      "media": []
+    },
+    {
+      "id": "casts_and_recovery",
+      "status": "not_observed",
+      "started_utc": null,
+      "finished_utc": null,
+      "notes": null,
+      "media": []
+    },
+    {
+      "id": "control",
+      "status": "not_observed",
+      "started_utc": null,
+      "finished_utc": null,
+      "notes": null,
+      "media": []
+    },
+    {
+      "id": "death_and_regroup",
+      "status": "not_observed",
+      "started_utc": null,
+      "finished_utc": null,
+      "notes": null,
+      "media": []
+    },
+    {
+      "id": "deadmines_entry_exit",
+      "status": "not_observed",
+      "started_utc": null,
+      "finished_utc": null,
+      "notes": null,
+      "media": []
+    },
+    {
+      "id": "party_release_and_regroup",
+      "status": "not_observed",
+      "started_utc": null,
+      "finished_utc": null,
+      "notes": null,
+      "media": []
+    }
+  ],
+  "findings": {
+    "unexplained_stalls": [],
+    "visible_clipping": [],
+    "unrequested_pulls": [],
+    "repeated_cast_starts": [],
+    "idle_injured_healer": []
+  },
+  "capture": {
+    "root": null,
+    "manifest_sha256": null,
+    "gateway_log": null,
+    "module_log": null,
+    "client_media": []
+  },
+  "signoff": null
+}
