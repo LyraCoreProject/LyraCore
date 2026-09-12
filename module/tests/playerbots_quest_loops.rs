@@ -78,11 +78,8 @@ fn fixture(name: &str, class: u8, role: u8, named: bool) -> (Standalone, String)
     (node, guid)
 }
 
-fn spawn_frozen_foreign_bot(node: &Standalone, subject: &str, x: &str) -> String {
-    node.assert_call(
-        "playerbots_spawn_class_role",
-        &["1", x, "1200", "50", "1", "0"],
-    );
+fn spawn_frozen_foreign_bot(node: &Standalone, subject: &str, x: &str, y: &str) -> String {
+    node.assert_call("playerbots_spawn_class_role", &["1", x, y, "50", "1", "0"]);
     let foreign = node
         .query_rows("SELECT character_guid FROM pkg_playerbots_bot")
         .into_iter()
@@ -486,6 +483,30 @@ fn record(node: &Standalone, suffix: &str) {
         "navigation_config": node.query_rows("SELECT nav_enabled, nav_coverage_enabled FROM game_config WHERE id = 0"),
         "coverage_manifests": node.query_rows("SELECT * FROM game_vmap_nav_coverage_manifest"),
         "import_catalogue": node.query_rows("SELECT * FROM game_import_meta"),
+    });
+    std::fs::write(
+        support::log_dir().join(format!("{}-{suffix}.json", node.shard_name())),
+        serde_json::to_vec_pretty(&evidence).unwrap(),
+    )
+    .unwrap();
+}
+
+fn record_declared_targets(node: &Standalone, suffix: &str, targets: &[u64]) {
+    let entities: Vec<_> = targets
+        .iter()
+        .flat_map(|target| {
+            node.query_rows(&format!(
+                "SELECT * FROM game_world_entity WHERE guid = {target}"
+            ))
+        })
+        .collect();
+    let evidence = serde_json::json!({
+        "declared_target_guids": targets,
+        "entities": entities,
+        "runner": node.query_rows("SELECT * FROM pkg_playerbots_runner"),
+        "loot_tags": node.query_rows("SELECT * FROM game_creature_quest_tap"),
+        "loot_tag_members": node.query_rows("SELECT * FROM game_creature_quest_tap_member"),
+        "loot_tag_groups": node.query_rows("SELECT * FROM game_creature_loot_tag_group"),
     });
     std::fs::write(
         support::log_dir().join(format!("{}-{suffix}.json", node.shard_name())),
@@ -1261,7 +1282,7 @@ fn playerbots_in_progress_quest_target_survives_an_unrelated_raw_read_limit() {
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_quest_uses_a_reward_eligible_target_and_retains_productive_work() {
     let (node, guid) = fixture("playerbots-quest-loop-productive-target", 1, 0, true);
-    let foreign = spawn_frozen_foreign_bot(&node, &guid, "1360");
+    let foreign = spawn_frozen_foreign_bot(&node, &guid, "1360", "1200");
     drive_until(&node, &guid, LOOP_TIMEOUT, |node| {
         rewarded(node, &guid, 783)
     });
@@ -1379,10 +1400,12 @@ fn playerbots_grind_reuses_only_a_reward_eligible_target() {
         &node,
         &format!("SELECT x, y, orientation FROM game_world_entity WHERE guid = {guid}"),
     );
-    assert_eq!(subject["x"].parse::<f32>().unwrap(), 1_200.0);
-    assert_eq!(subject["y"].parse::<f32>().unwrap(), 1_200.0);
+    let subject_x = subject["x"].parse::<f32>().unwrap();
+    let subject_y = subject["y"].parse::<f32>().unwrap();
     assert_eq!(subject["orientation"].parse::<f32>().unwrap(), 0.0);
-    let foreign = spawn_frozen_foreign_bot(&node, &guid, "1250");
+    let foreign_x = (subject_x + 50.0).to_string();
+    let foreign_y = subject_y.to_string();
+    let foreign = spawn_frozen_foreign_bot(&node, &guid, &foreign_x, &foreign_y);
     node.assert_call(
         "debug_spawn_at_feet",
         &[&guid, &GRIND_CREATURE_ENTRY.to_string(), "50"],
@@ -1392,11 +1415,13 @@ fn playerbots_grind_reuses_only_a_reward_eligible_target() {
         &[&guid, &GRIND_CREATURE_ENTRY.to_string(), "55"],
     );
     let targets: Vec<u64> = node
-        .query_rows(
-            &format!(
-                "SELECT guid, x FROM game_world_entity WHERE entry = {GRIND_CREATURE_ENTRY} AND x >= 1249 AND x <= 1256"
-            ),
-        )
+        .query_rows(&format!(
+            "SELECT guid, x, y FROM game_world_entity WHERE entry = {GRIND_CREATURE_ENTRY} AND x >= {} AND x <= {} AND y >= {} AND y <= {}",
+            subject_x + 49.0,
+            subject_x + 56.0,
+            subject_y - 1.0,
+            subject_y + 1.0,
+        ))
         .into_iter()
         .map(|row| row["guid"].parse().unwrap())
         .collect();
@@ -1429,6 +1454,7 @@ fn playerbots_grind_reuses_only_a_reward_eligible_target() {
         .find(|candidate| **candidate != target)
         .unwrap();
     record(&node, "grind-productive-target");
+    record_declared_targets(&node, "grind-productive-target-declared", &targets);
     assert!(
         switched["chosen"].contains("reason = (grind = ())"),
         "{switched:?}"
