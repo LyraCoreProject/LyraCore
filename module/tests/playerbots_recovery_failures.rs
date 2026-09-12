@@ -207,8 +207,18 @@ fn playerbots_recovery_capacity_is_recorded_once_while_heal_and_expiry_remain_li
 
     node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
     let first = runner(&node, &guid).remove(0);
+    save(
+        &node,
+        "capacity-reporting-first",
+        serde_json::json!({ "first": first.clone() }),
+    );
     node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
     let repeated = runner(&node, &guid).remove(0);
+    save(
+        &node,
+        "capacity-reporting-repeated",
+        serde_json::json!({ "repeated": repeated.clone() }),
+    );
     assert!(first["chosen"].contains("hold = ()"), "{first:?}");
     assert!(first["chosen"].contains("returnHome = ()"), "{first:?}");
     assert_eq!(first["failures"].matches("recoveryCapacity").count(), 1);
