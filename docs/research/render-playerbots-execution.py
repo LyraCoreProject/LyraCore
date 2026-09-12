@@ -51,7 +51,8 @@ def validate(plan):
         if identifier in visited:
             return
         visiting.add(identifier)
-        for blocker in tickets[identifier]["blocked_by"]:
+        ticket = tickets[identifier]
+        for blocker in [*ticket["blocked_by"], *ticket.get("merge_after", [])]:
             if blocker not in tickets:
                 raise ValueError(f"Unknown blocker {blocker}")
             visit(blocker)
@@ -94,6 +95,18 @@ def validate(plan):
         if row["status"] in {"implementing", "review", "approved", *FINISHED}:
             if any(tickets[key]["status"] not in FINISHED for key in row["blocked_by"]):
                 raise ValueError(f"Ticket {row['id']} started before its blockers completed")
+        if row["status"] in FINISHED:
+            if any(tickets[key]["status"] not in FINISHED for key in row.get("merge_after", [])):
+                raise ValueError(f"Ticket {row['id']} completed before its merge dependencies")
+    agents = set()
+    for assignment in plan.get("assignments", []):
+        if not assignment["agent"].strip() or assignment["agent"] in agents:
+            raise ValueError("Current agent assignments need unique names")
+        agents.add(assignment["agent"])
+        if not assignment["tickets"] or not assignment["work"].strip():
+            raise ValueError("Current agent assignments need a ticket and work description")
+        if any(key not in tickets or tickets[key]["status"] in FINISHED for key in assignment["tickets"]):
+            raise ValueError("Current work cannot be assigned to a completed or unknown ticket")
     return by_id, tickets
 
 
@@ -153,7 +166,9 @@ def render(plan):
     def descendants(identifier):
         found = []
         for child in children[identifier]:
-            found.extend([child] if child in tickets else descendants(child))
+            if child in tickets:
+                found.append(child)
+            found.extend(descendants(child))
         return found
 
     def table_rows(identifier, depth=0):
@@ -168,7 +183,9 @@ def render(plan):
             progress = f"{complete}/{len(all_tickets)} complete"
             status = "complete" if all_tickets and complete == len(all_tickets) else "planned"
         blockers = row.get("blocked_by", [])
-        blocked_text = ", ".join(f'<a href="#work-{escape(key)}">{escape(key)}</a>' for key in blockers) or "None"
+        dependency_links = [f'<a href="#work-{escape(key)}">{escape(key)}</a>' for key in blockers]
+        dependency_links.extend(f'<a href="#work-{escape(key)}">{escape(key)}</a> before merge' for key in row.get("merge_after", []))
+        blocked_text = ", ".join(dependency_links) or "None"
         links = "<br>".join(f'<a href="{escape(pr["url"])}" rel="noopener noreferrer">{escape(pr.get("label", "PR"))}</a>' for pr in row.get("prs", [])) or "Pending"
         detail = row_detail(row, kind)
         classes = "ticket-row" if kind == "Ticket" else "parent-row"
@@ -183,11 +200,22 @@ def render(plan):
         return "".join(output)
 
     ready = [row["id"] for row in tickets.values() if state(row, tickets) == "ready"]
+    assignment_rows = []
+    for assignment in plan.get("assignments", []):
+        links = ", ".join(f'<a href="#work-{escape(key)}">{escape(key)}</a>' for key in assignment["tickets"])
+        assignment_rows.append(
+            f'<tr><td><code>{escape(assignment["agent"])}</code></td>'
+            f'<td>{links}</td><td>{escape(assignment["work"])}</td></tr>'
+        )
+    assignments = "".join(assignment_rows)
     content = f'''{START}
 <section id="execution">
 <h2>Execution tracker</h2>
 <p>The spec and tickets below drive implementation. Expand a title for the behavior, acceptance criteria, and recorded evidence. Parent totals include every child. Completion requires reviewed evidence for every criterion and merged PRs. The final ticket also requires imported-world and attended-client observation records.</p>
 <p><strong>Updated {escape(plan['updated_at'])}.</strong> {escape(plan.get('summary', 'Implementation is starting.'))}</p>
+<h3>Current agent assignments</h3>
+<p>Agent names stay the same when workers change tasks. Their numbers identify earlier assignments. PB-004, PB-005 and PB-007 are complete; their workers now own the work below.</p>
+<div class="table-scroll"><table><thead><tr><th>Agent name shown in chat</th><th>Current ticket</th><th>Current work</th></tr></thead><tbody>{assignments}</tbody></table></div>
 <p>Ready to start: <span id="execution-ready">{escape(', '.join(ready) or 'No unassigned work is ready.')}</span>. The orchestrator republishes progress to this URL. Filters operate on this published snapshot.</p>
 <div class="execution-controls">
 <label for="execution-search">Find work <input id="execution-search" type="search" placeholder="Ticket, behavior, owner, evidence"></label>
@@ -204,7 +232,7 @@ def render(plan):
 <script>
 (() => {{
   const section = document.querySelector('#execution');
-  const rows = Array.from(section.querySelectorAll('tbody tr'));
+  const rows = Array.from(section.querySelectorAll('.execution-table tbody tr'));
   const byId = new Map(rows.map(row => [row.id.slice(5), row]));
   const search = section.querySelector('#execution-search');
   const status = section.querySelector('#execution-status');
