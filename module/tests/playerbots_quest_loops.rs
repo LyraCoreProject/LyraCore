@@ -1483,12 +1483,46 @@ fn playerbots_timed_quest_cast_approaches_before_a_target_moves_beyond_completio
         &[&guid, "{\"recordOnly\":[]}"],
     );
     node.assert_call("playerbots_quest_fixture_admit_accept", &[&guid, "7"]);
-    let mut spell = None;
-    let mut started = None;
-    let mut started_entities = Vec::new();
-    let mut started_spawn = Vec::new();
-    let mut started_pending = Vec::new();
+    node.assert_call(
+        "playerbots_quest_loop_fixture_prepare_moving_cast",
+        &[&guid],
+    );
+    let spell = query_one(
+        &node,
+        "SELECT spell_id, range_yd, cast_time_ms FROM game_spell WHERE spell_id = 133",
+    );
+    let started_entities = node.query_rows(&format!(
+        "SELECT guid, map_id, instance_id, x, y, z FROM game_world_entity WHERE guid = {guid} OR guid = {CREATURE_6}"
+    ));
+    let started_spawn = node.query_rows(&format!(
+        "SELECT guid, map_id, x, y, z FROM game_creature_spawn WHERE guid = {CREATURE_6}"
+    ));
     let mut target_movement = Vec::new();
+    let target_started_moving = poll_until(Duration::from_secs(3), || {
+        target_movement = node.query_rows(&format!(
+            "SELECT guid, sx, sy, dx, dy, start_micros, dur_ms FROM game_creature_spline WHERE guid = {CREATURE_6}"
+        ));
+        !target_movement.is_empty()
+    });
+    std::fs::write(
+        support::log_dir().join(format!(
+            "{}-moving-cast-range-staged.json",
+            node.shard_name()
+        )),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "spell": &spell,
+            "started_entities": &started_entities,
+            "started_spawn": &started_spawn,
+            "target_movement": &target_movement,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(target_started_moving, "{target_movement:?}");
+
+    let mut started = None;
+    let mut started_pending = Vec::new();
+    let mut out_of_range_observed = false;
     let cast_updates = node.capture_updates(
         &format!(
             "SELECT * FROM pkg_playerbots_action WHERE character_guid = {guid} AND spell_id = 133"
@@ -1499,34 +1533,18 @@ fn playerbots_timed_quest_cast_approaches_before_a_target_moves_beyond_completio
                 "playerbots_quest_loop_fixture_start_moving_cast",
                 &[&guid],
             );
-            spell = Some(query_one(
-                &node,
-                "SELECT spell_id, range_yd, cast_time_ms FROM game_spell WHERE spell_id = 133",
-            ));
             started = Some(query_one(
                 &node,
                 &format!(
                     "SELECT chosen, foreground, recovery, observed_micros FROM pkg_playerbots_runner WHERE character_guid = {guid}"
                 ),
             ));
-            started_entities = node.query_rows(&format!(
-                "SELECT guid, map_id, instance_id, x, y, z FROM game_world_entity WHERE guid = {guid} OR guid = {CREATURE_6}"
-            ));
-            started_spawn = node.query_rows(&format!(
-                "SELECT guid, map_id, x, y, z FROM game_creature_spawn WHERE guid = {CREATURE_6}"
-            ));
             started_pending = node.query_rows(&format!(
                 "SELECT scheduled_id, spell_id, target_guid FROM game_pending_cast WHERE caster_guid = {guid}"
             ));
 
-            assert!(poll_until(Duration::from_secs(3), || {
-                target_movement = node.query_rows(&format!(
-                    "SELECT guid, sx, sy, dx, dy, start_micros, dur_ms FROM game_creature_spline WHERE guid = {CREATURE_6}"
-                ));
-                !target_movement.is_empty()
-            }));
             if !started_pending.is_empty() {
-                assert!(poll_until(Duration::from_secs(5), || {
+                out_of_range_observed = poll_until(Duration::from_secs(5), || {
                     query_one(
                         &node,
                         &format!(
@@ -1534,7 +1552,7 @@ fn playerbots_timed_quest_cast_approaches_before_a_target_moves_beyond_completio
                         ),
                     )["history"]
                         .contains("outOfRange")
-                }));
+                });
                 return;
             }
             drive_until(&node, &guid, Duration::from_secs(20), |node| {
@@ -1548,7 +1566,6 @@ fn playerbots_timed_quest_cast_approaches_before_a_target_moves_beyond_completio
     );
     record(&node, "moving-cast-range");
 
-    let spell = spell.expect("moving-cast fixture did not retain its spell facts");
     let started = started.expect("moving-cast fixture did not retain a Runner state");
     let target = query_one(
         &node,
@@ -1567,6 +1584,7 @@ fn playerbots_timed_quest_cast_approaches_before_a_target_moves_beyond_completio
             "started_spawn": &started_spawn,
             "started_pending_cast": &started_pending,
             "target_movement": &target_movement,
+            "out_of_range_observed": out_of_range_observed,
             "cast_updates": &cast_updates,
             "target": &target,
             "spawn": &spawn,
@@ -1579,6 +1597,9 @@ fn playerbots_timed_quest_cast_approaches_before_a_target_moves_beyond_completio
     assert_eq!(spell["cast_time_ms"], "1500");
     assert_eq!(started_entities.len(), 2, "{started_entities:?}");
     assert_eq!(started_spawn.len(), 1, "{started_spawn:?}");
+    if !started_pending.is_empty() {
+        assert!(out_of_range_observed, "{cast_updates}");
+    }
     assert!(started_pending.is_empty(), "{started_pending:?}");
     assert!(started["chosen"].contains("castingPosition"), "{started:?}");
     assert!(started["chosen"].contains(&CREATURE_6.to_string()));
