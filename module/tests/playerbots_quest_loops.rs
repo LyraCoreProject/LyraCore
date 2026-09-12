@@ -1831,6 +1831,147 @@ fn playerbots_ninth_inaccessible_corpse_reports_an_inconclusive_read() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_inconclusive_corpse_search_uses_a_valid_live_source() {
+    let (node, guid) = fixture("playerbots-quest-loop-corpse-live-fallback", 8, 2, true);
+    node.assert_call(
+        "playerbots_select_controller",
+        &[&guid, "{\"recordOnly\":[]}"],
+    );
+    node.assert_call("playerbots_quest_fixture_admit_accept", &[&guid, "33"]);
+    drive_until(&node, &guid, Duration::from_secs(10), |node| {
+        let retained = query_one(
+            node,
+            &format!(
+                "SELECT quest_entry, target FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"
+            ),
+        );
+        retained["quest_entry"] == "33"
+            && retained["target"].contains("executor = (creatureLoot = ())")
+    });
+    let retained = retained_quest_purpose(&node, &guid);
+    let source = structured_number(&retained["target"], "guid");
+    let source_entry = query_one(
+        &node,
+        &format!("SELECT entry FROM game_world_entity WHERE guid = {source}"),
+    )["entry"]
+        .clone();
+    node.assert_call(
+        "playerbots_quest_loop_fixture_stage_corpse_limit_with_live_alternative",
+        &[&guid],
+    );
+    assert!(node
+        .query_rows(&format!(
+            "SELECT guid FROM game_world_entity WHERE guid = {source}"
+        ))
+        .is_empty());
+    let live = node.query_rows(&format!(
+        "SELECT guid, dead FROM game_world_entity WHERE entry = {source_entry} AND dead = false"
+    ));
+    assert_eq!(live.len(), 1, "{live:?}");
+    let alternative = live[0]["guid"].parse::<u64>().unwrap();
+    let inaccessible = node.query_rows(&format!(
+        "SELECT guid, dead FROM game_world_entity WHERE entry = {source_entry} AND dead = true"
+    ));
+    assert_eq!(inaccessible.len(), 9, "{inaccessible:?}");
+    assert!(actions(&node, &guid)
+        .iter()
+        .all(|action| action["target_guid"] != alternative.to_string()));
+    record(&node, "corpse-limit-live-fallback-staged");
+
+    node.assert_call("playerbots_fixture_runner_select_cohort", &[&guid]);
+    drive_until(&node, &guid, Duration::from_secs(10), |node| {
+        actions(node, &guid).iter().any(|action| {
+            action["target_guid"] == alternative.to_string()
+                && (action["kind"].contains("attack") || action["kind"].contains("cast"))
+        }) || node
+            .query_rows(&format!(
+                "SELECT failures FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+            ))
+            .first()
+            .is_some_and(|runner| runner["failures"].contains("questReadLimit"))
+    });
+    record(&node, "corpse-limit-live-fallback-first-decision");
+    assert!(
+        actions(&node, &guid).iter().any(|action| {
+            action["target_guid"] == alternative.to_string()
+                && (action["kind"].contains("attack") || action["kind"].contains("cast"))
+        }),
+        "valid live CreatureLoot source did not start combat"
+    );
+    drive_until(&node, &guid, LOOP_TIMEOUT, |node| {
+        let alternative_actions: Vec<_> = actions(node, &guid)
+            .into_iter()
+            .filter(|action| action["target_guid"] == alternative.to_string())
+            .collect();
+        let resolved = alternative_actions.iter().any(|action| {
+            (action["kind"].contains("attack") && action["outcome"].contains("attackAccepted"))
+                || (action["kind"].contains("cast") && action["outcome"].contains("castResolved"))
+        });
+        let looted = ["openLoot", "takeLoot"].into_iter().all(|kind| {
+            alternative_actions.iter().any(|action| {
+                action["kind"].contains(kind) && action["outcome"].contains("completed")
+            })
+        });
+        let terminal = item_count(node, &guid, 750) == 8
+            || (rewarded(node, &guid, 33) && turnin_count(node, &guid, 33) == 1);
+        loot_receipt(node, &guid).is_some_and(|receipt| {
+            receipt["last_source_guid"] == alternative.to_string()
+                && receipt["item_entry"] == "750"
+                && receipt["received_count"] == "8"
+                && receipt["peak_carried_count"] == "8"
+                && resolved
+                && looted
+                && terminal
+        })
+    });
+
+    let alternative_actions: Vec<_> = actions(&node, &guid)
+        .into_iter()
+        .filter(|action| action["target_guid"] == alternative.to_string())
+        .collect();
+    assert!(alternative_actions.iter().any(|action| {
+        (action["kind"].contains("attack") && action["outcome"].contains("attackAccepted"))
+            || (action["kind"].contains("cast") && action["outcome"].contains("castResolved"))
+    }));
+    for kind in ["openLoot", "takeLoot"] {
+        assert!(alternative_actions.iter().any(|action| {
+            action["kind"].contains(kind) && action["outcome"].contains("completed")
+        }));
+    }
+    let entitlement = node.query_rows(&format!(
+        "SELECT eligible_guid FROM game_corpse_loot_eligible WHERE corpse_guid = {alternative}"
+    ));
+    assert_eq!(entitlement.len(), 1, "{entitlement:?}");
+    assert_eq!(entitlement[0]["eligible_guid"], guid);
+    let receipt = loot_receipt(&node, &guid).expect("loot receipt is absent");
+    assert_eq!(receipt["last_source_guid"], alternative.to_string());
+    assert_eq!(receipt["item_entry"], "750");
+    assert_eq!(receipt["received_count"], "8");
+    assert_eq!(receipt["peak_carried_count"], "8");
+    let attempted = actions(&node, &guid);
+    for corpse in inaccessible {
+        assert!(attempted.iter().all(|action| {
+            action["target_guid"] != corpse["guid"]
+                || !["attack", "cast", "openLoot", "takeLoot"]
+                    .iter()
+                    .any(|kind| action["kind"].contains(kind))
+        }));
+        assert!(node
+            .query_rows(&format!(
+                "SELECT eligible_guid FROM game_corpse_loot_eligible WHERE corpse_guid = {}",
+                corpse["guid"]
+            ))
+            .is_empty());
+    }
+    assert!(
+        item_count(&node, &guid, 750) == 8
+            || (rewarded(&node, &guid, 33) && turnin_count(&node, &guid, 33) == 1)
+    );
+    record(&node, "corpse-limit-live-fallback");
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_retained_creature_source_survives_a_raw_read_limit_through_loot() {
     let (node, guid) = fixture("playerbots-quest-loop-corpse-raw-limit", 8, 2, true);
     node.assert_call("playerbots_quest_fixture_admit_accept", &[&guid, "33"]);
