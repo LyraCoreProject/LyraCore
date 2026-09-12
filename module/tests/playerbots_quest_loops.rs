@@ -1360,9 +1360,36 @@ fn playerbots_quest_uses_a_reward_eligible_target_and_retains_productive_work() 
     assert_eq!(retained_quest_purpose(&node, &guid), retained);
 
     node.assert_call("playerbots_fixture_runner_select_cohort", &[&guid]);
-    drive_until(&node, &guid, LOOP_TIMEOUT, |node| {
-        first_quest_count(&quest(node, &guid, 7).unwrap()) == 1
-    });
+    let credit_updates = node.capture_updates(
+        &format!(
+            "SELECT corpse_guid, eligible_guid FROM game_corpse_loot_eligible WHERE corpse_guid = {CREATURE_6}"
+        ),
+        1,
+        || {
+            drive_until(&node, &guid, Duration::from_secs(40), |node| {
+                actions(node, &guid).iter().any(|action| {
+                    action["target_guid"] == CREATURE_6.to_string()
+                        && (action["kind"].contains("attack")
+                            || action["kind"].contains("cast"))
+                })
+            });
+        },
+    );
+    node.assert_call(
+        "playerbots_select_controller",
+        &[&guid, "{\"recordOnly\":[]}"],
+    );
+    record(&node, "productive-target-credit");
+    let inserted = credit_updates[0]["game_corpse_loot_eligible"]["inserts"]
+        .as_array()
+        .expect("corpse entitlement inserts");
+    assert_eq!(inserted.len(), 1, "{credit_updates:?}");
+    assert_eq!(inserted[0]["corpse_guid"], CREATURE_6);
+    assert_eq!(inserted[0]["eligible_guid"], guid.parse::<u64>().unwrap());
+    let completed = quest(&node, &guid, 7).unwrap();
+    assert_eq!(first_quest_count(&completed), 1);
+    assert_eq!(completed["rewarded"], "false");
+    assert_eq!(turnin_count(&node, &guid, 7), 0);
     assert!(actions(&node, &guid).iter().any(|action| {
         action["target_guid"] == CREATURE_6.to_string()
             && (action["kind"].contains("attack") || action["kind"].contains("cast"))
@@ -1373,7 +1400,6 @@ fn playerbots_quest_uses_a_reward_eligible_target_and_retains_productive_work() 
     ));
     assert_eq!(entitlement.len(), 1, "{entitlement:?}");
     assert_eq!(entitlement[0]["eligible_guid"], guid);
-    record(&node, "productive-target-credit");
 }
 
 #[test]
