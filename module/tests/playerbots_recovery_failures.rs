@@ -304,6 +304,14 @@ fn playerbots_recovery_capacity_is_recorded_once_while_heal_and_expiry_remain_li
     assert_eq!(cast_completed["failures"], first["failures"]);
     assert_eq!(cast_completed["retry_count"], first["retry_count"]);
     assert_eq!(cast_completed["recovery"], healing["recovery"]);
+    let wait_micros = cast_completed["next_eligible_micros"]
+        .parse::<i64>()
+        .unwrap()
+        .saturating_sub(cast_completed["observed_micros"].parse::<i64>().unwrap());
+    assert!(wait_micros > 0, "{cast_completed:?}");
+    let wait = Duration::from_micros(u64::try_from(wait_micros).unwrap());
+    assert!(wait <= PASS_INTERVAL, "{cast_completed:?}");
+    std::thread::sleep(wait);
 
     node.assert_call("playerbots_fixture_companion_health", &[&guid, "100"]);
     node.assert_call(
@@ -312,14 +320,6 @@ fn playerbots_recovery_capacity_is_recorded_once_while_heal_and_expiry_remain_li
     );
     node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
     let released = runner(&node, &guid).remove(0);
-    assert!(
-        released["chosen"].contains("move = (home = ())"),
-        "{released:?}"
-    );
-    assert!(released["recovery"].contains("destination"), "{released:?}");
-    assert_eq!(released["failures"], first["failures"]);
-    assert_eq!(released["retry_count"], first["retry_count"]);
-
     save(
         &node,
         "capacity-reporting",
@@ -334,6 +334,13 @@ fn playerbots_recovery_capacity_is_recorded_once_while_heal_and_expiry_remain_li
             "released": released,
         }),
     );
+    assert!(
+        released["chosen"].contains("move = (home = ())"),
+        "{released:?}"
+    );
+    assert!(released["recovery"].contains("destination"), "{released:?}");
+    assert_eq!(released["failures"], first["failures"]);
+    assert_eq!(released["retry_count"], first["retry_count"]);
 }
 
 #[test]
