@@ -509,7 +509,7 @@ fn playerbots_runner_survival_cancels_cast_before_movement_and_keeps_the_objecti
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn playerbots_runner_defense_preserves_home_and_accepted_attack_is_not_progress() {
+fn playerbots_runner_defense_preserves_home_and_accepted_combat_is_not_progress() {
     let (node, bots) = fixture("playerbots-runner-defense", "1");
     let bot = &bots[0];
     node.assert_call("playerbots_fixture_blocked_quest", &[bot]);
@@ -528,7 +528,7 @@ fn playerbots_runner_defense_preserves_home_and_accepted_attack_is_not_progress(
     let target = ((0xF130u64 << 48) | (5_090_101u64 << 24) | 1).to_string();
     node.assert_call("playerbots_fixture_runner_damage", &[bot, &target, "1"]);
     assert!(poll_until(POLL_TIMEOUT, || runner(&node, bot)["chosen"]
-        .contains("attack")));
+        .contains("defense")));
     let defended = runner(&node, bot);
     assert_eq!(defended["objective_sequence"], objective_id);
     assert!(defended["last_outcome"].contains("accepted"));
@@ -553,6 +553,261 @@ fn playerbots_runner_defense_preserves_home_and_accepted_attack_is_not_progress(
     assert_eq!(resumed["objective_sequence"], objective_id);
     assert!(!resumed["combat_progress"].contains("none"));
     outcomes(&node);
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_runner_mage_defense_retains_a_valid_target_and_replaces_invalid_targets() {
+    let (node, bots) = fixture_role("playerbots-runner-mage-defense", "1", "2");
+    let bot = &bots[0];
+    let first = ((0xF130u64 << 48) | (5_090_101u64 << 24) | 1).to_string();
+    let second = ((0xF130u64 << 48) | (5_090_101u64 << 24) | 2).to_string();
+    node.assert_call("playerbots_fixture_blocked_quest", &[bot]);
+    node.assert_call("playerbots_fixture_runner_second_attacker", &[bot]);
+    node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
+    node.assert_sql("DELETE FROM game_melee_schedule");
+    select(&node, bot, "frozen");
+    select(&node, bot, "cohort");
+    assert!(poll_until(POLL_TIMEOUT, || runner(&node, bot)["chosen"]
+        .contains("returnHome")));
+    let initial = runner(&node, bot);
+    let objective = initial["objective_sequence"].clone();
+    node.assert_call("playerbots_fixture_runner_clear_navigation", &[bot]);
+
+    let cast = |target: &str| {
+        node.query_rows(&format!(
+            "SELECT target_guid, spell_id, outcome FROM pkg_playerbots_action WHERE character_guid = {bot}"
+        ))
+        .into_iter()
+        .find(|row| row["target_guid"] == target && row["spell_id"] == "133")
+    };
+    let health = |target: &str| {
+        node.query_rows(&format!(
+            "SELECT health FROM game_world_entity WHERE guid = {target}"
+        ))[0]["health"]
+            .parse::<u32>()
+            .unwrap()
+    };
+
+    node.assert_call(
+        "playerbots_fixture_runner_damage_and_park",
+        &[bot, &first, "1"],
+    );
+    node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
+    let first_selected = runner(&node, bot);
+    outcomes(&node);
+    assert!(
+        first_selected["chosen"].contains("cast")
+            && first_selected["chosen"].contains("spell = 133")
+            && first_selected["chosen"].contains(&format!("target = {first}"))
+            && first_selected["chosen"].contains("reason = (defense = ())"),
+        "Mage did not select defensive Fireball: {first_selected:?}"
+    );
+    assert!(
+        cast(&first).is_some(),
+        "Mage did not start a defensive Fireball"
+    );
+
+    node.assert_call(
+        "playerbots_fixture_runner_damage_and_park",
+        &[bot, &second, "1"],
+    );
+    node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
+    let retained = runner(&node, bot);
+    assert!(retained["defense_target"].contains(&first), "{retained:?}");
+    assert!(
+        retained["chosen"].contains(&first)
+            && retained["chosen"].contains("reason = (defense = ())"),
+        "{retained:?}"
+    );
+    assert!(poll_until(POLL_TIMEOUT, || cast(&first)
+        .is_some_and(|row| row["outcome"].contains("castResolved"))));
+    assert!(health(&first) < 1_000);
+    assert_eq!(runner(&node, bot)["objective_sequence"], objective);
+    assert!(runner(&node, bot)["combat_progress"].contains("none"));
+
+    node.assert_call(
+        "playerbots_fixture_roles_control",
+        &[&second, &first, "50020"],
+    );
+    node.assert_call(
+        "playerbots_fixture_runner_damage_and_park",
+        &[bot, &second, "1"],
+    );
+    node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
+    let controlled = runner(&node, bot);
+    assert!(
+        controlled["defense_target"].contains(&second),
+        "{controlled:?}"
+    );
+    assert!(
+        controlled["chosen"].contains(&second)
+            && controlled["chosen"].contains("reason = (defense = ())"),
+        "{controlled:?}"
+    );
+
+    node.assert_call("playerbots_fixture_roles_clear_control", &[&second, &first]);
+    node.assert_call(
+        "playerbots_fixture_runner_kill_creature",
+        &[&first, &second],
+    );
+    node.assert_call(
+        "playerbots_fixture_runner_damage_and_park",
+        &[bot, &first, "1"],
+    );
+    node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
+    let dead = runner(&node, bot);
+    assert!(dead["defense_target"].contains(&first), "{dead:?}");
+    assert!(
+        dead["chosen"].contains(&first) && dead["chosen"].contains("reason = (defense = ())"),
+        "{dead:?}"
+    );
+    assert_eq!(dead["objective_sequence"], objective);
+    assert!(dead["objective"].contains("last_verified_progress_micros = (none"));
+    assert!(dead["quest_progress"].contains("credit = 0"));
+    outcomes(&node);
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_recovery_waits_for_self_heal_readiness_without_interrupting_useful_work() {
+    let target = ((0xF130u64 << 48) | (5_090_101u64 << 24) | 1).to_string();
+    let setup = |label: &str| {
+        let (node, bots) = fixture_role(label, "1", "1");
+        let bot = bots[0].clone();
+        select(&node, &bot, "frozen");
+        node.assert_call("playerbots_fixture_runner_prepare_smite", &[]);
+        node.assert_call("playerbots_fixture_blocked_quest", &[&bot]);
+        node.assert_call("playerbots_fixture_runner_stage", &[&bot, "false"]);
+        node.assert_sql("DELETE FROM game_melee_schedule");
+        node.assert_call("playerbots_fixture_roles_priest_mana", &[&bot]);
+        node.assert_call("playerbots_fixture_runner_clear_navigation", &[&bot]);
+        node.assert_call("playerbots_fixture_runner_select_cohort", &[&bot]);
+        (node, bot)
+    };
+    let recovery_actions = |node: &Standalone, bot: &str| {
+        node.query_rows(&format!(
+            "SELECT kind, target_guid, spell_id, cast_id, outcome FROM pkg_playerbots_action WHERE character_guid = {bot} AND spell_id = 2050"
+        ))
+    };
+    let pending = |node: &Standalone, bot: &str, spell: u32| {
+        node.query_rows(&format!(
+            "SELECT scheduled_id, caster_guid, spell_id, target_guid FROM game_pending_cast WHERE caster_guid = {bot} AND spell_id = {spell}"
+        ))
+    };
+    let recovery_effect = |node: &Standalone, bot: &str| {
+        node.query_rows(&format!(
+            "SELECT caster_guid, spell_id, target_guid, kind, is_completion, healed FROM game_spell_cast_event WHERE caster_guid = {bot} AND spell_id = 2050 AND target_guid = {bot}"
+        ))
+        .iter()
+        .any(|event| {
+            event["kind"] == "2"
+                && event["is_completion"] == "true"
+                && event["healed"].parse::<u32>().unwrap() > 0
+        })
+    };
+    let save_readiness = |node: &Standalone, phase: &str, bot: &str| {
+        let evidence = serde_json::json!({
+            "runner": runner(node, bot),
+            "actions": node.query_rows(&format!(
+                "SELECT kind, target_guid, spell_id, cast_id, outcome, started_micros, observed_micros FROM pkg_playerbots_action WHERE character_guid = {bot}"
+            )),
+            "pending_cast": node.query_rows(&format!(
+                "SELECT scheduled_id, caster_guid, spell_id, target_guid FROM game_pending_cast WHERE caster_guid = {bot}"
+            )),
+            "cast_events": node.query_rows(&format!(
+                "SELECT caster_guid, spell_id, target_guid, kind, is_completion, healed FROM game_spell_cast_event WHERE caster_guid = {bot}"
+            )),
+            "cooldown": node.query_rows(&format!(
+                "SELECT caster_guid, ready_at FROM game_spell_cooldown WHERE caster_guid = {bot}"
+            )),
+            "entity": node.query_rows(&format!(
+                "SELECT guid, health, max_health, power, max_power, x, y, z FROM game_world_entity WHERE guid = {bot} OR guid = {target}"
+            )),
+            "splines": node.query_rows(&format!(
+                "SELECT guid, spline_id, start_micros, dur_ms, sx, sy, sz, dx, dy, dz FROM game_creature_spline WHERE guid = {bot}"
+            )),
+        });
+        let path = support::log_dir().join(format!("{}-{phase}.json", node.shard_name()));
+        std::fs::write(path, serde_json::to_vec_pretty(&evidence).unwrap()).unwrap();
+        evidence
+    };
+    let recovery_completed = |node: &Standalone, bot: &str| {
+        assert!(poll_until(POLL_TIMEOUT, || {
+            pending(node, bot, 2050).is_empty()
+                && recovery_actions(node, bot).iter().any(|action| {
+                    action["cast_id"] != "0" && action["outcome"] == "(castResolved = ())"
+                })
+                && recovery_effect(node, bot)
+        }));
+    };
+    let complete_recovery = |node: &Standalone, bot: &str, phase: &str| {
+        node.assert_call(
+            "playerbots_fixture_runner_start_and_retain_recovery",
+            &[bot],
+        );
+        recovery_completed(node, bot);
+        save_readiness(node, phase, bot)
+    };
+
+    let (mana_node, mana_bot) = setup("playerbots-recovery-readiness-mana");
+    mana_node.assert_call(
+        "playerbots_fixture_companion_move",
+        &[&target, "1375", "1200"],
+    );
+    mana_node.assert_call(
+        "playerbots_fixture_runner_damage_and_park",
+        &[&mana_bot, &target, "1"],
+    );
+    mana_node.assert_call(
+        "playerbots_fixture_runner_insufficient_recovery_power_and_pass_once",
+        &[&mana_bot],
+    );
+    let mana_wait = save_readiness(&mana_node, "mana-recovery-waits", &mana_bot);
+    assert!(
+        recovery_actions(&mana_node, &mana_bot).is_empty(),
+        "{mana_wait}"
+    );
+    mana_node.assert_call("playerbots_fixture_roles_priest_mana", &[&mana_bot]);
+    complete_recovery(&mana_node, &mana_bot, "mana-recovery-completed");
+
+    let (cooldown_node, cooldown_bot) = setup("playerbots-recovery-readiness-cooldown");
+    cooldown_node.assert_call(
+        "playerbots_fixture_companion_move",
+        &[&target, "1375", "1200"],
+    );
+    cooldown_node.assert_call(
+        "playerbots_fixture_runner_damage_and_park",
+        &[&cooldown_bot, &target, "1"],
+    );
+    cooldown_node.assert_call(
+        "playerbots_fixture_runner_cooldown_and_pass_once",
+        &[&cooldown_bot],
+    );
+    let cooldown_wait = save_readiness(&cooldown_node, "cooldown-recovery-waits", &cooldown_bot);
+    assert_eq!(
+        cooldown_wait["cooldown"].as_array().unwrap().len(),
+        1,
+        "{cooldown_wait}"
+    );
+    assert!(
+        recovery_actions(&cooldown_node, &cooldown_bot).is_empty(),
+        "{cooldown_wait}"
+    );
+    std::thread::sleep(Duration::from_secs(2));
+    complete_recovery(&cooldown_node, &cooldown_bot, "cooldown-recovery-completed");
+
+    let (cast_node, cast_bot) = setup("playerbots-recovery-readiness-pending-defense");
+    cast_node.assert_call(
+        "playerbots_fixture_runner_damage_and_park",
+        &[&cast_bot, &target, "1"],
+    );
+    cast_node.assert_call(
+        "playerbots_fixture_runner_pending_defense_then_recovery",
+        &[&cast_bot],
+    );
+    recovery_completed(&cast_node, &cast_bot);
+    save_readiness(&cast_node, "ready-recovery-preempts-defense", &cast_bot);
 }
 
 #[test]
