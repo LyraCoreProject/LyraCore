@@ -18,9 +18,9 @@
     "token_context_record": null
   },
   "candidate": {
-    "core_commit": "27d6f5337276dc461cdb376927ada8f4e5c9017b",
+    "core_commit": "35495170d1226f0d97d9a173c4b348606fd08934",
     "core_tree": "efc53fa0574d0427525f344325e8b13b711067b7",
-    "package_commit": "0622ca5eacfde95916e3e4eb1765fab1e1842090",
+    "package_commit": "63f82468760aaa7eab6dec0077ae430163983ecb",
     "package_tree": "0cae1cbfe32d5210d8e264365ba74c74736543b0",
     "playerbots_tree": "3d5ddc591116a865485ecb0a4625d253ef802f81",
     "dungeons_tree": "8969ccc9475d1f8b28687b7cd818d85165f7e05f",
@@ -36,7 +36,7 @@
       "package_commit": "54a7d39dd869e0aaf81c707e4b30728bf008d536",
       "package_tree": "541d681b4a7007fe076e4bf942a8d3e6284e7b2f"
     },
-    "status": "ci_passed_imported_timing_capture_failed"
+    "status": "merged_ci_and_imported_observation_accepted"
   },
   "importer": {
     "merged_core_commit": "375b38c3004b61500ce480a72a681d7999a5c9ca",

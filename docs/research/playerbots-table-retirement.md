@@ -1,9 +1,26 @@
 # PB012 physical retired-goal table plan
 
 Status: offline plan only. It authorizes no Realm read, data cleanup, schema removal, publish, or
-deployment. The running v18 observation cannot satisfy attended-client acceptance.
+deployment. The accepted v19 imported observation does not replace attended-client acceptance.
 
-## Source inventory
+## Prepared source after imported acceptance
+
+- Held Core `ec578c40e1b4ca6136dee78624136cca5e5de747`, tree
+  `e0fb880a207c9328791038b59e342f709abfef9c`.
+- Held Package Collection `5ae9170775415e05e43d41269f42d473d4f5c3fe`, tree
+  `b8c91b6a6b4a801393f63bddfd2d9a21ed1204b6`.
+
+These preparations preserve the accepted Recovery readiness behavior and callers. The Core base
+has the same tree as merge `35495170`; the Collection base is merge `63f82468`. All four Core
+commits and seven of eight Collection commits replay identically. The remaining Collection
+commit changes only four CI pins to the prepared Core. The inventory below still applies.
+Core preparation review SHA-256
+`a5ec9d4f8d10551997b0ef018cc9e10eefca8491e34ecd3d70cb52460b9fec75`;
+Collection review `3c8127ec7089682fc36311fd84eb45db46c5ad85deba2a6b971e92157cf00c90`.
+These exact preparations have not been built or run. Their final checks and delivery follow
+attended acceptance. Earlier native checks retain their original source identities.
+
+## Original source inventory
 
 - Core `24f53d3168e813a94ffcfef785e875d1276e24c0`, tree
   `8e20dd29af2dd8618eb4bf3f7bea75d8a194fd5b`.

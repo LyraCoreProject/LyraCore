@@ -214,7 +214,7 @@ def render(plan):
 <p>The spec and tickets below drive implementation. Expand a title for the behavior, acceptance criteria, and recorded evidence. Parent totals include every child. Completion requires reviewed evidence for every criterion and merged PRs. The final ticket also requires imported-world and attended-client observation records.</p>
 <p><strong>Updated {escape(plan['updated_at'])}.</strong> {escape(plan.get('summary', 'Implementation is starting.'))}</p>
 <h3>Current agent assignments</h3>
-<p>Agent names stay the same when workers change tasks. Their numbers identify earlier assignments. PB-004, PB-005 and PB-007 are complete; their workers now own the work below.</p>
+<p>Agent names stay the same when workers change tasks. Their numbers identify earlier assignments. PB-004, PB-005 and PB-007 are complete. Current work is listed below.</p>
 <div class="table-scroll"><table><thead><tr><th>Agent name shown in chat</th><th>Current ticket</th><th>Current work</th></tr></thead><tbody>{assignments}</tbody></table></div>
 <p>Ready to start: <span id="execution-ready">{escape(', '.join(ready) or 'No unassigned work is ready.')}</span>. The orchestrator republishes progress to this URL. Filters operate on this published snapshot.</p>
 <div class="execution-controls">

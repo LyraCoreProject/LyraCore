@@ -1,6 +1,6 @@
 # PB012 attended client handoff
 
-Status: prepared handoff. The Recovery readiness correction passes its focused regression. Final Core and Collection CI pass. The latest imported run failed its timing-evidence check, so imported acceptance remains open. Argus access, deployment approval and human attendance remain pending. No attended client observation or configured Realm operation has occurred.
+Status: automated and imported-world acceptance complete. Core and Collection changes are merged. The attended handoff is ready. Argus access, deployment approval and human attendance remain pending. No attended client observation or configured Realm operation has occurred.
 
 The venue is the Argus development Realm at `/home/lyracore/LyraCore`, operated as service user `lyracore`. Root login is still unavailable. The user will attend with a real 1.12.1 client. Venue selection does not authorize deployment.
 
@@ -8,8 +8,8 @@ The venue is the Argus development Realm at `/home/lyracore/LyraCore`, operated 
 
 The candidate retains useful Quest targets and avoids foreign Loot Tags during autonomous Quest and Grind work. Collection work can consider an eligible live target when the bounded corpse search is inconclusive. Defense retains a valid attacker and uses the learned class combat strategy. Completed Quest waits defer after two minutes without a verified effect; movement and foreign damage cannot reset that clock. Timed casts move inside nominal spell range before starting. Recovery checks whether a self-heal can start before interrupting other work and preserves a matching pending heal.
 
-- Core PR #519 head `27d6f5337276dc461cdb376927ada8f4e5c9017b`, tree `efc53fa0574d0427525f344325e8b13b711067b7`.
-- Package Collection PR #36 head `0622ca5eacfde95916e3e4eb1765fab1e1842090`, tree `0cae1cbfe32d5210d8e264365ba74c74736543b0`.
+- Core PR #519 merged as `35495170d1226f0d97d9a173c4b348606fd08934`, tree `efc53fa0574d0427525f344325e8b13b711067b7`, equal to tested head `27d6f5337276dc461cdb376927ada8f4e5c9017b`.
+- Package Collection PR #36 merged as `63f82468760aaa7eab6dec0077ae430163983ecb`, tree `0cae1cbfe32d5210d8e264365ba74c74736543b0`, equal to tested head `0622ca5eacfde95916e3e4eb1765fab1e1842090`.
 - `playerbots` tree `3d5ddc591116a865485ecb0a4625d253ef802f81`.
 - `dungeons` tree `8969ccc9475d1f8b28687b7cd818d85165f7e05f`.
 - Package content identity: `7e2e5ca12108505cbce8863a9d0d2d592ba3c52b8f53c0cadb0a5767b8f9450b`.
@@ -20,9 +20,11 @@ The recorded build uses Core `27d6f5337276dc461cdb376927ada8f4e5c9017b` and Coll
 
 The focused Recovery regression passes at Core `262d6b7b` and Collection `e0ed910e`. Insufficient mana preserves useful casting-position movement; a real cooldown preserves melee movement. An affordable pending Smite remains retained while the heal is unavailable. Once ready, Lesser Heal can preempt that cast and remains retained through completion. All three scenarios end with a resolved self-heal and 50 actual healing. Strict execution assessment SHA-256 `284ecd95ec8e4636f57a18de09b6cb0d04d3a962434f5fa62a51d6307800cdb5`; root review `1f729e54415202a379ceb691fab822fb2661db9a3bf388b888cf0bb0b564e491`. Independent Standards and Spec reviews are clear.
 
-The latest imported run observed 25 bots for the full hour and stopped cleanly at 00:47:42 UTC on 13 September. Final aggregation failed because it retained timings for 72,113 of 90,577 measured decisions. All 18,464 missing timings precede UTC midnight; none are missing afterward. Both raw archives finalized within their bounds. The failure skipped the final geometry reads, so this run cannot satisfy imported acceptance. The recorder and preserved gameplay trace are under review. Input manifest SHA-256 `4e4361e29ed53ba6486bbd0f550177810199fd7d15c25907d7bcba36948c6c0b`; failed run `a6b8b51de2840c212d884f380ba303a070366f30e19bd30f65c6490b4c55994d`; timing census `7b7743d7de0b4e1e5f25d5a2094d9b2cd318d784c994a3a2a49b31b751677c5a`.
+The accepted v19 observation ran 25 bots for 3,600 seconds and closed at 02:30:51 UTC on 13 September. All bots started at level 1, earned six starter Quest rewards, and ended at level 4 or 5. All 90,583 measured decisions have matching timing evidence. Both raw archives finalized within their bounds, and private cleanup passed. Input manifest SHA-256 `a18ed06c22bd744e5ec2707702d8d5cb624f92f795d016baae53711c08f8f997`; run `5fde8f19391b154f66e43135cbfae75aed5eea79a3f2a4c0e29e295beaf8d463`; root acceptance `e681419b347641418f4194c55f756ded100449405aa3c6a2d41a5d0b856deaa9`.
 
-The preceding hour remains failed. All 25 bots earned six starter Quest rewards and reached level 4 or 5, and static geometry was clear across 153,370 segments. Review of all 238 flagged intervals established the Recovery readiness defect. That defect now passes its focused regression; the new hour must verify the combined behavior. Original failed run SHA-256 `8e8814d01896161826735d155abad3967bf786460733c00110c88fbd37a5a49c`. Its raw evidence and earlier failed observations remain preserved in the execution report.
+Independent reviews account for all 269 flagged intervals. There is no unexplained stall, repeated Refusal burst or idle injured healer. Three active Grind intervals remain right-censored, with target contention and short reassignments accounted for. Static Core geometry is clear across 146,375 assessed segments. Rendered-client clipping remains pending. The measured setup supports these 25 bots, with zero rolled-back transactions, maximum scheduler lag of 0.507 seconds and a 16.8% writer-time estimate. This is not a configured Realm capacity claim or an operating-system CPU measurement.
+
+The earlier v18 hour remains failed. UTC log rotation left 18,464 measured decisions without timings and prevented final geometry capture. Recorder PR #21 now retains the live timing stream and exact measurement window; v19 uses that merged correction. Original failed run SHA-256 `a6b8b51de2840c212d884f380ba303a070366f30e19bd30f65c6490b4c55994d`. The preceding v17 hour remains failed for the Recovery readiness defect, now corrected and covered by focused regression and v19. Original v17 run `8e8814d01896161826735d155abad3967bf786460733c00110c88fbd37a5a49c`. Earlier evidence remains preserved.
 
 The deployed Gateway executable remains pending the Argus candidate build. Record and rehash that exact file before login.
 
