@@ -36,7 +36,7 @@
       "package_commit": "54a7d39dd869e0aaf81c707e4b30728bf008d536",
       "package_tree": "541d681b4a7007fe076e4bf942a8d3e6284e7b2f"
     },
-    "status": "recovery_regression_passed_imported_hour_running"
+    "status": "ci_passed_imported_timing_capture_failed"
   },
   "importer": {
     "merged_core_commit": "375b38c3004b61500ce480a72a681d7999a5c9ca",
