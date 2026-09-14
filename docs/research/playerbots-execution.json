@@ -2155,6 +2155,13 @@
           "status": "merged",
           "head_commit": "3cf6a2ac5053633b8235c3a9195bd4a90913d24f",
           "merge_commit": "4043a3c0decab88b50bd9e38d80630fe47c11eaf"
+        },
+        {
+          "url": "https://github.com/LyraCoreProject/lyracore-cli/pull/59",
+          "label": "CLI table-row preflight #59 merged",
+          "status": "merged",
+          "head_commit": "c556eb990b7d71671fdd1babad6e309f34400cc9",
+          "merge_commit": "c1cc373db1a77e850367ef3ec0a2fe612cbccfdf"
         }
       ],
       "evidence": [
@@ -2313,13 +2320,15 @@
         "Recorder correction #21 merges as 4043a3c0 with the exact reviewed and tested tree be546b078377a792fa974d18a1371e2d5dd60c4f. Native result SHA-256 54dba47fba3ae5b5cbc2e2322f51af964eb3143b984cf8ee609583e41a5a8fc9 records 36 passing tests, format, strict Clippy, release and cleanup. Binary 5c6377ecd5a15ddef7e07cca0be9d831b65465feb29b9867cae1c34b9c5bd28c is 1,628,160 bytes. Independent source and artifact review 48388a61c67e3d3ace825916c7f542aea3853f0af0200261dc104fc4e9a3ec3a verifies all 44 retained files. New v19 input a18ed06c22bd744e5ec2707702d8d5cb624f92f795d016baae53711c08f8f997 differs from v18 only in the recorder identity. Both reviews pass; import preflight passed and measurement began on 13 September at 01:30:00 UTC. The exact window is retained and the live timing stream is recording. Expected closure is about 02:30 UTC. No result is claimed.",
         "The failed v18 trace receives a diagnostic review at both admissible measurement boundaries. All 280 flagged spans have complete clipped accounting: 205 no-effect spans, 68 advancement gaps and seven injured-healer spans. There are zero repeated-Refusal burst candidates and no additional gameplay source defect established. Two active Grind intervals remain right-censored open observations. Review SHA-256 d79fee2017c8159dabc19b0fac931d23865d82b78f028bc7747fa0aeb619daa3; causal ledger 2031098529d851be046bd5f487848c1e2d8adc6dc61cf4ad805c263d58496551. Diagnostic recovery cannot replace missing timing, final geometry or exact window evidence; v18 stays failed.",
         "V19 closes captured at 02:30:51 UTC on 13 September using the same frozen Core 27d6f533, recorded Collection 54a7d39d and Wasm cfdf2aa5. Its 7,179 measured passes contain 90,583 exact timing samples. Both archives finalize within their limits and private cleanup passes. All 25 level-one bots end at level 4 or 5. Run SHA-256 5fde8f19391b154f66e43135cbfae75aed5eea79a3f2a4c0e29e295beaf8d463; capture e63903056e87c7c531f864919b2cf246a5b396e59c894286873e4f3f289c385b. Behavior, geometry and ownership analyses all close successfully. There are 269 flagged intervals and zero Refusal-spam candidates. Static geometry is clear across 146,375 assessed segments. All imported and measured-capacity reviews pass; root acceptance SHA-256 e681419b347641418f4194c55f756ded100449405aa3c6a2d41a5d0b856deaa9.",
-        "Final retirement preparation is held at Core ec578c40/tree e0fb880a and Collection 5ae91707/tree b8c91b6a. The replay preserves accepted Recovery behavior and callers. Core review a5ec9d4f8d10551997b0ef018cc9e10eefca8491e34ecd3d70cb52460b9fec75 and Collection review 3c8127ec7089682fc36311fd84eb45db46c5ad85deba2a6b971e92157cf00c90 are clear. These exact preparations have not been built or run. Their final checks and delivery follow attended acceptance."
+        "Final retirement preparation is held at Core ec578c40/tree e0fb880a and Collection 5ae91707/tree b8c91b6a. The replay preserves accepted Recovery behavior and callers. Core review a5ec9d4f8d10551997b0ef018cc9e10eefca8491e34ecd3d70cb52460b9fec75 and Collection review 3c8127ec7089682fc36311fd84eb45db46c5ad85deba2a6b971e92157cf00c90 are clear. These exact preparations have not been built or run. Their final checks and delivery follow attended acceptance.",
+        "The user-supplied Operator handoff on 14 September reports installed Core 3d152a3c and both Official Packages at 63f82468. Preflight failed because the CLI mistook imported enums for table rows. The previous live artifacts remain running. Deployment checks, publish, replay, repair, restart and staging were skipped. Map 36 also lacks its required active vmap generation.",
+        "CLI #59 merges as c1cc373db1a77e850367ef3ec0a2fe612cbccfdf. Core pins reviewed source c556eb990b7d71671fdd1babad6e309f34400cc9. The regression failed before the fix; 724 CLI tests and Rust 1.85 check pass. Offline generation from the accepted Wasm now yields 299 parsed tables and zero errors, instead of 290 and nine errors. Shim installation and safe argument validation pass. This proves the parser correction, not Argus deployment or client acceptance."
       ],
       "notes": [
         "The corrected v19 hour is accepted. All 90,583 decisions have timings, static geometry is clear, and all 269 flagged intervals have complete causal accounting. Three active Grind intervals remain explicitly right-censored; target contention explains their changes. Independent capacity review accepts 25 bots for the measured setup.",
         "Recorder PR #21 is merged after independent source review, 36 tests, strict Clippy, release build and all remote checks passed. It retains logs throughout measurement and saves the exact time window before aggregation. The failed v18 observation remains preserved. Its diagnostic trace established no additional gameplay source defect.",
         "Core #519 merged as 35495170 and Collection #36 as 63f82468. Both merge trees equal their tested heads. The observed Module retains its actual Core 27d6f533 and Collection 54a7d39d build identities; final delivery differs only in one unexercised fixture error message.",
-        "The attended guide and session template are prepared. Their command codec, nine-step route, capture format and diagnostic SQL remain unchanged. Argus access is deferred; no configured Realm update or attended-client sign-off has occurred.",
+        "The 14 September Operator handoff reports working access and installed Core 3d152a3c / Collection 63f82468. CLI preflight stopped deployment before publish, replay, restart or staging. CLI #59 corrects the parser and the Core pin now selects it. Argus still needs the deployment checks, Map 36 vmap import and attended session.",
         "Retirement source is prepared and reviewed at Core ec578c40 and Collection 5ae91707. It preserves accepted Recovery readiness and all current callers. The earlier native checks retain their actual source identities. Final checks and retirement delivery follow attended acceptance; stored Legacy meanings and old-table lifecycle handling remain preserved.",
         "Earlier failed observations and their original evidence remain preserved. The latest successful private cleanup did not need the preceding run's cleanup repair."
       ],
@@ -2356,7 +2365,7 @@
           "criterion": "If the implementation environment cannot run the real client, the exact observation script, fixture revisions, capture format, and diagnostic reads are ready, and this acceptance item remains explicitly pending human evidence.",
           "reviewer": "Orchestrator, source and procedure review",
           "evidence": [
-            "The attended guide and session template bind merged Core 35495170 and Collection 63f82468 separately from the actual recorded Core 27d6f533 and Collection 54a7d39d build. Final CI and v19 imported acceptance pass. The command codec, nine attended steps, capture format and diagnostic SQL retain their accepted procedure. Guide SHA-256 e328b9e7fd29e3a47a58642dcc7aef92f0c7ddb88fc7a0dc7efe99dc84792d10; template fdc48d10514c5e649ee0a7d886699c6d07f94bcb0ceedddd9dc8666daedbf499. Argus access, deployed Gateway, verified client and human observations remain pending. This accepts handoff preparation only."
+            "The attended guide and template retain the accepted gameplay and actual recorded Module identities. Their command blocks, nine attended steps and human observations are unchanged. Operator access and deployment are authorized, but deployment stopped at preflight. The released CLI correction must be followed by deployment checks, Map 36 vmap import and staging. Guide SHA-256 501b01cf39ae0cc78f1d3bda0532db278b879557f5122b75c98b0ceda4c54371; template 24852e8fa736cbcef51bbf0e96888bbe964a18600d8b6df1f3db080901ff992b. This accepts handoff preparation only; deployed artifacts, session identities and human observations remain pending."
           ]
         },
         {
@@ -2475,15 +2484,15 @@
       ]
     }
   ],
-  "updated_at": "2026-09-13T02:57:41.795038Z",
-  "summary": "Twelve of thirteen tickets are complete. Core and Collection changes are merged. The full 25-bot imported hour and measured capacity are accepted, including every decision timing, flagged interval and assessed movement segment. The real-client session and source retirement remain pending in PB012.",
+  "updated_at": "2026-09-14T08:15:31.226408Z",
+  "summary": "Twelve of thirteen tickets are complete. Automated and imported-world acceptance passed. Argus deployment stopped at CLI preflight; the parser correction is released. Deployment checks, Map 36 vmap import, staging, real-client acceptance and source retirement remain pending in PB012.",
   "assignments": [
     {
       "agent": "Orchestrator",
       "tickets": [
         "PB-012"
       ],
-      "work": "Automated work complete. Resume with attended client evidence, then validate and deliver the prepared retirement source."
+      "work": "CLI correction released. Operator must resume deployment and Map 36 import before the attended client session."
     }
   ]
 }
