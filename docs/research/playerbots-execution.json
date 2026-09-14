@@ -2162,6 +2162,20 @@
           "status": "merged",
           "head_commit": "c556eb990b7d71671fdd1babad6e309f34400cc9",
           "merge_commit": "c1cc373db1a77e850367ef3ec0a2fe612cbccfdf"
+        },
+        {
+          "url": "https://github.com/LyraCoreProject/LyraCore/pull/520",
+          "label": "Core RLS pin #520 merged",
+          "status": "merged",
+          "head_commit": "6f85d6352f06cd8a513fe17155ad49bbf48d652a",
+          "merge_commit": "b2531b18d50782ded3a5c0622ecf49a97a615ee0"
+        },
+        {
+          "url": "https://github.com/LyraCoreProject/lyracore-cli/pull/60",
+          "label": "CLI stderr verification #60 merged",
+          "status": "merged",
+          "head_commit": "d738373bf36f25598e148d1dbdeef75ed6c244d8",
+          "merge_commit": "6cda0918296ada5910f2b078058836cf27882247"
         }
       ],
       "evidence": [
@@ -2322,13 +2336,15 @@
         "V19 closes captured at 02:30:51 UTC on 13 September using the same frozen Core 27d6f533, recorded Collection 54a7d39d and Wasm cfdf2aa5. Its 7,179 measured passes contain 90,583 exact timing samples. Both archives finalize within their limits and private cleanup passes. All 25 level-one bots end at level 4 or 5. Run SHA-256 5fde8f19391b154f66e43135cbfae75aed5eea79a3f2a4c0e29e295beaf8d463; capture e63903056e87c7c531f864919b2cf246a5b396e59c894286873e4f3f289c385b. Behavior, geometry and ownership analyses all close successfully. There are 269 flagged intervals and zero Refusal-spam candidates. Static geometry is clear across 146,375 assessed segments. All imported and measured-capacity reviews pass; root acceptance SHA-256 e681419b347641418f4194c55f756ded100449405aa3c6a2d41a5d0b856deaa9.",
         "Final retirement preparation is held at Core ec578c40/tree e0fb880a and Collection 5ae91707/tree b8c91b6a. The replay preserves accepted Recovery behavior and callers. Core review a5ec9d4f8d10551997b0ef018cc9e10eefca8491e34ecd3d70cb52460b9fec75 and Collection review 3c8127ec7089682fc36311fd84eb45db46c5ad85deba2a6b971e92157cf00c90 are clear. These exact preparations have not been built or run. Their final checks and delivery follow attended acceptance.",
         "The user-supplied Operator handoff on 14 September reports installed Core 3d152a3c and both Official Packages at 63f82468. Preflight failed because the CLI mistook imported enums for table rows. The previous live artifacts remain running. Deployment checks, publish, replay, repair, restart and staging were skipped. Map 36 also lacks its required active vmap generation.",
-        "CLI #59 merges as c1cc373db1a77e850367ef3ec0a2fe612cbccfdf. Core pins reviewed source c556eb990b7d71671fdd1babad6e309f34400cc9. The regression failed before the fix; 724 CLI tests and Rust 1.85 check pass. Offline generation from the accepted Wasm now yields 299 parsed tables and zero errors, instead of 290 and nine errors. Shim installation and safe argument validation pass. This proves the parser correction, not Argus deployment or client acceptance."
+        "CLI #59 merges as c1cc373db1a77e850367ef3ec0a2fe612cbccfdf. Core pins reviewed source c556eb990b7d71671fdd1babad6e309f34400cc9. The regression failed before the fix; 724 CLI tests and Rust 1.85 check pass. Offline generation from the accepted Wasm now yields 299 parsed tables and zero errors, instead of 290 and nine errors. Shim installation and safe argument validation pass. This proves the parser correction, not Argus deployment or client acceptance.",
+        "The later 14 September Operator handoff reports successful deployment checks, four published Shards, Package replay and post-publish repairs at Core b2531b18 / Collection 63f82468. Service Reconciliation failed after Standalone restart on stderr mode normalization. The old Gateway remains running with schema mismatches. Its replacement, Map 36 import and staging remain pending. This records the supplied Operator result, not a new live acceptance run.",
+        "CLI #60 merged as 6cda0918296ada5910f2b078058836cf27882247. Core pins reviewed d738373bf36f25598e148d1dbdeef75ed6c244d8. The verifier checks append mode and the running stderr file. The regression failed before the fix; 728 CLI tests, Rust 1.85 check, independent review, pinned shim installation and safe argument checks pass. Live reconciliation and Gateway replacement remain pending."
       ],
       "notes": [
         "The corrected v19 hour is accepted. All 90,583 decisions have timings, static geometry is clear, and all 269 flagged intervals have complete causal accounting. Three active Grind intervals remain explicitly right-censored; target contention explains their changes. Independent capacity review accepts 25 bots for the measured setup.",
         "Recorder PR #21 is merged after independent source review, 36 tests, strict Clippy, release build and all remote checks passed. It retains logs throughout measurement and saves the exact time window before aggregation. The failed v18 observation remains preserved. Its diagnostic trace established no additional gameplay source defect.",
         "Core #519 merged as 35495170 and Collection #36 as 63f82468. Both merge trees equal their tested heads. The observed Module retains its actual Core 27d6f533 and Collection 54a7d39d build identities; final delivery differs only in one unexercised fixture error message.",
-        "The 14 September Operator handoff reports working access and installed Core 3d152a3c / Collection 63f82468. CLI preflight stopped deployment before publish, replay, restart or staging. CLI #59 corrects the parser and the Core pin now selects it. Argus still needs the deployment checks, Map 36 vmap import and attended session.",
+        "The latest 14 September Operator handoff reports Core b2531b18 / Collection 63f82468, all six deployment checks passed with 3,739 tests passed and 30 ignored, four Shards published, and replay and repairs complete. Standalone restarted. Service Reconciliation stopped because the CLI expected append:/path but systemd reports append. The old Gateway still reports schema mismatches; its replacement is built but has not started. Argus is not ready for client acceptance.",
         "Retirement source is prepared and reviewed at Core ec578c40 and Collection 5ae91707. It preserves accepted Recovery readiness and all current callers. The earlier native checks retain their actual source identities. Final checks and retirement delivery follow attended acceptance; stored Legacy meanings and old-table lifecycle handling remain preserved.",
         "Earlier failed observations and their original evidence remain preserved. The latest successful private cleanup did not need the preceding run's cleanup repair."
       ],
@@ -2365,7 +2381,7 @@
           "criterion": "If the implementation environment cannot run the real client, the exact observation script, fixture revisions, capture format, and diagnostic reads are ready, and this acceptance item remains explicitly pending human evidence.",
           "reviewer": "Orchestrator, source and procedure review",
           "evidence": [
-            "The attended guide and template retain the accepted gameplay and actual recorded Module identities. Their command blocks, nine attended steps and human observations are unchanged. Operator access and deployment are authorized, but deployment stopped at preflight. The released CLI correction must be followed by deployment checks, Map 36 vmap import and staging. Guide SHA-256 501b01cf39ae0cc78f1d3bda0532db278b879557f5122b75c98b0ceda4c54371; template 24852e8fa736cbcef51bbf0e96888bbe964a18600d8b6df1f3db080901ff992b. This accepts handoff preparation only; deployed artifacts, session identities and human observations remain pending."
+            "The guide retains all command blocks, nine attended steps and actual gameplay evidence identities. It now records the supplied Operator result and resumes at Service Reconciliation, then Gateway replacement, Map 36 vmap import and staging. Guide SHA-256 7e141feeb7c6a056831dfb9b66b52a9a687e8f3045d1d0bec5f0de2f8b6e5f97; unchanged template 24852e8fa736cbcef51bbf0e96888bbe964a18600d8b6df1f3db080901ff992b. This accepts handoff preparation only. Running candidate bindings, session GUIDs and human observations remain pending."
           ]
         },
         {
@@ -2484,15 +2500,15 @@
       ]
     }
   ],
-  "updated_at": "2026-09-14T08:15:31.226408Z",
-  "summary": "Twelve of thirteen tickets are complete. Automated and imported-world acceptance passed. Argus deployment stopped at CLI preflight; the parser correction is released. Deployment checks, Map 36 vmap import, staging, real-client acceptance and source retirement remain pending in PB012.",
+  "updated_at": "2026-09-14T12:43:09.925035Z",
+  "summary": "Twelve of thirteen tickets are complete. Argus passed all six deployment checks and published all four Shards. The CLI stderr correction is released; Argus must resume Service Reconciliation and replace its old Gateway, which reports schema mismatches. Gateway replacement, Map 36 vmap import, staging, attended client acceptance and source retirement remain pending in PB012.",
   "assignments": [
     {
       "agent": "Orchestrator",
       "tickets": [
         "PB-012"
       ],
-      "work": "CLI correction released. Operator must resume deployment and Map 36 import before the attended client session."
+      "work": "CLI correction released. Operator must resume Service Reconciliation and verify the replacement Gateway before imports, staging and the attended client session."
     }
   ]
 }
