@@ -1,10 +1,12 @@
 # PB012 attended client handoff
 
-Status: automated and imported-world acceptance complete. Core and Collection changes are merged. The attended handoff is ready. Argus access, deployment approval and human attendance remain pending. No attended client observation or configured Realm operation has occurred.
+Status: automated and imported-world acceptance complete. Argus deployment stopped at CLI preflight before publish or restart. The CLI correction is released; deployment checks, Map 36 vmap import, staging and human attendance remain pending. No attended client observation has occurred.
 
-The venue is the Argus development Realm at `/home/lyracore/LyraCore`, operated as service user `lyracore`. Root login is still unavailable. The user will attend with a real 1.12.1 client. Venue selection does not authorize deployment.
+The venue is the Argus test Realm at `/home/lyracore/LyraCore`, operated as service user `lyracore`. The user authorized deployment, and the Operator reports working root access. The user will attend with a real 1.12.1 client.
 
 ## Candidate and evidence
+
+The 14 September Operator handoff reports Core `3d152a3c` and Collection `63f82468` installed, with the preceding Gateway and Module artifacts still running. Deployment must resume with CLI `c556eb990b7d71671fdd1babad6e309f34400cc9`, the reviewed correction from CLI PR #59. It resolves generated table rows by their declared type. The six deployment checks and Map 36 vmap generation remain required. The identities below describe accepted gameplay evidence; record and rehash the actual deployed candidate before login.
 
 The candidate retains useful Quest targets and avoids foreign Loot Tags during autonomous Quest and Grind work. Collection work can consider an eligible live target when the bounded corpse search is inconclusive. Defense retains a valid attacker and uses the learned class combat strategy. Completed Quest waits defer after two minutes without a verified effect; movement and foreign damage cannot reset that clock. Timed casts move inside nominal spell range before starting. Recovery checks whether a self-heal can start before interrupting other work and preserves a matching pending heal.
 
@@ -82,7 +84,7 @@ The Operator should use the repository's guarded Realm procedure after the user 
 6. Confirm the client is 1.12.1.5875 and unmodified. Save its executable hash and installation inventory.
 7. Create one evidence directory named with the UTC start time. Copy the filled pre-run manifest there before login.
 
-Deployment approval and user attendance should be the final two decisions. Root access to Argus is the remaining access dependency.
+Deployment is authorized. Resume at the failed preflight gate and complete the deployment checks before staging the attended session.
 
 ## Attended steps
 
@@ -117,7 +119,7 @@ Copy raw command output without editing it. Record each capture command, exit st
 
 ## Read-only diagnostic command appendix
 
-This appendix prepares the diagnostic reads. It does not authorize or perform an Argus read. The guarded Operator must supply the installed `spacetime` path, server binding, database names, and token context after Argus access is restored. Do not substitute a direct database connection. Record those values in `operator_read_binding` in the session manifest and save the exact command, exit status, stdout, and stderr for every invocation.
+This appendix prepares the diagnostic reads. The guarded Operator must supply the installed `spacetime` path, server binding, database names, and token context from the authorized Argus session. Do not substitute a direct database connection. Record those values in `operator_read_binding` in the session manifest and save the exact command, exit status, stdout, and stderr for every invocation.
 
 Use this read-only command shape. `SPACETIME_BIN`, `SPACETIME_SERVER`, and each database value are unavailable until the Operator binds the deployed Realm:
 

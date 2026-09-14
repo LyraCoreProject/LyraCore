@@ -8,7 +8,7 @@
     "service_user": "lyracore"
   },
   "operator_read_binding": {
-    "status": "pending_argus_access",
+    "status": "pending_operator_binding",
     "spacetime_binary": null,
     "spacetime_binary_sha256": null,
     "spacetime_server": null,
