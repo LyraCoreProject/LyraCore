@@ -1,12 +1,14 @@
 # PB012 attended client handoff
 
-Status: automated and imported-world acceptance complete. Argus deployment stopped at CLI preflight before publish or restart. The CLI correction is released; deployment checks, Map 36 vmap import, staging and human attendance remain pending. No attended client observation has occurred.
+Status: automated and imported-world acceptance complete. Argus is partially updated and not ready for client acceptance. All four Shards are published, but Service Reconciliation stopped on a CLI stderr check. The old Gateway remains running with schema mismatches. Map 36 vmap import, staging and human attendance remain pending.
 
 The venue is the Argus test Realm at `/home/lyracore/LyraCore`, operated as service user `lyracore`. The user authorized deployment, and the Operator reports working root access. The user will attend with a real 1.12.1 client.
 
 ## Candidate and evidence
 
-The 14 September Operator handoff reports Core `3d152a3c` and Collection `63f82468` installed, with the preceding Gateway and Module artifacts still running. Deployment must resume with CLI `c556eb990b7d71671fdd1babad6e309f34400cc9`, the reviewed correction from CLI PR #59. It resolves generated table rows by their declared type. The six deployment checks and Map 36 vmap generation remain required. The identities below describe accepted gameplay evidence; record and rehash the actual deployed candidate before login.
+The latest 14 September Operator handoff reports Core `b2531b18` and Collection `63f82468` installed. All six deployment checks passed, with 3,739 tests passed and 30 ignored. All four Shards published; Package replay and post-publish repairs passed. Standalone restarted, but the CLI compared systemd stderr mode `append` with the full tracked `append:/path` setting and stopped. The replacement Gateway is built but has not started. The backup service remains failed.
+
+Resume Service Reconciliation with CLI `d738373bf36f25598e148d1dbdeef75ed6c244d8`, released through [CLI PR #60](https://github.com/LyraCoreProject/lyracore-cli/pull/60) and selected by the updated Core pin. The correction verifies append mode and the running process's stderr file. Then start and verify the replacement Gateway before imports and staging. Preserve the successful deployment evidence; these CLI-only changes do not require another publish of the accepted Module. If gameplay or schema inputs change, apply the deployment checks required for that new candidate. The identities below describe accepted gameplay evidence. Record and rehash the actual deployed candidate before login.
 
 The candidate retains useful Quest targets and avoids foreign Loot Tags during autonomous Quest and Grind work. Collection work can consider an eligible live target when the bounded corpse search is inconclusive. Defense retains a valid attacker and uses the learned class combat strategy. Completed Quest waits defer after two minutes without a verified effect; movement and foreign damage cannot reset that clock. Timed casts move inside nominal spell range before starting. Recovery checks whether a self-heal can start before interrupting other work and preserves a matching pending heal.
 
@@ -28,7 +30,7 @@ Independent reviews account for all 269 flagged intervals. There is no unexplain
 
 The earlier v18 hour remains failed. UTC log rotation left 18,464 measured decisions without timings and prevented final geometry capture. Recorder PR #21 now retains the live timing stream and exact measurement window; v19 uses that merged correction. Original failed run SHA-256 `a6b8b51de2840c212d884f380ba303a070366f30e19bd30f65c6490b4c55994d`. The preceding v17 hour remains failed for the Recovery readiness defect, now corrected and covered by focused regression and v19. Original v17 run `8e8814d01896161826735d155abad3967bf786460733c00110c88fbd37a5a49c`. Earlier evidence remains preserved.
 
-The deployed Gateway executable remains pending the Argus candidate build. Record and rehash that exact file before login.
+The Operator reports a built replacement Gateway. Its running identity remains pending Service Reconciliation and startup. Record and rehash that exact executable before login.
 
 The Map 36 importer merged as Core commit `375b38c3004b61500ce480a72a681d7999a5c9ca`, tree `22fbc76a174a6f60abe2bea3d8148c047afff149`, equal to the reviewed PR #515 source. The accepted importer binary SHA-256 is `0a3270f84023745ef563a5ed7772e056f6db95098bd3229ee5ab720562e51abd`. Its client archive manifest is `/tmp/playerbots-rewrite/client-baseline/source-manifest.json`, SHA-256 `9320f727dcfbfc94a9a0f626ca1f0eaffc30546cc2a39deea01627506f17d078`.
 
@@ -74,7 +76,7 @@ The envelope sequence orders transport. The Module creates the durable intent id
 
 ## Before the user connects
 
-The Operator should use the repository's guarded Realm procedure after the user approves deployment. Do not improvise direct database or service commands.
+The user has authorized deployment on Argus. Use the repository's guarded Realm procedure for the remaining service, import and staging work.
 
 1. Confirm the Core and Package source identities above are merged or approved for the attended candidate. Require clean checkouts.
 2. Bind the final Wasm, build manifest, Gateway executable, importer, archive inventory, and route revision in the session manifest. Rehash each deployed artifact on Argus.
@@ -84,7 +86,7 @@ The Operator should use the repository's guarded Realm procedure after the user 
 6. Confirm the client is 1.12.1.5875 and unmodified. Save its executable hash and installation inventory.
 7. Create one evidence directory named with the UTC start time. Copy the filled pre-run manifest there before login.
 
-Deployment is authorized. Resume at the failed preflight gate and complete the deployment checks before staging the attended session.
+Resume at the failed Service Reconciliation gate. The Operator must prove the replacement Gateway is running and healthy against all four published Shards before proceeding to imports, staging and login.
 
 ## Attended steps
 
