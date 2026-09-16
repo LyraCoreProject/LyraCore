@@ -141,13 +141,17 @@ jobs:
               cargo test --locked -p lyracore-module --lib --features=debug_reducers \
                 2>&1 | tee "$RUNNER_TEMP/companion-module-library.log"
               cargo test --locked -p lyracore-module --test playerbots_rewrite \
-                playerbots_runner_batches_due_bots_in_stable_fair_order \
+                runner::playerbots_runner_batches_due_bots_in_stable_fair_order \
                 -- --ignored --exact --nocapture \
                 2>&1 | tee "$RUNNER_TEMP/companion-default-fairness.log"
+              grep -F "test runner::playerbots_runner_batches_due_bots_in_stable_fair_order ... ok" \
+                "$RUNNER_TEMP/companion-default-fairness.log"
               cargo test --locked -p lyracore-module --test playerbots_orders \
                 -- --ignored --test-threads=1 \
                 --skip playerbots_populated_pb008_state_adds_empty_order_state_without_changing_current_work \
                 2>&1 | tee "$RUNNER_TEMP/companion-orders.log"
+              grep -F "test playerbots_companions_receive_turns_without_starving_older_background_work ... ok" \
+                "$RUNNER_TEMP/companion-orders.log"
             '
       # The historical PB-008 upgrade needs a preceding Wasm and remains in Collection CI.
       # This job exercises current companion behavior, including scheduled Follow under load.
