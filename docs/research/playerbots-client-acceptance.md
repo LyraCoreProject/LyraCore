@@ -57,19 +57,25 @@ Choose declared hostile creatures before combat and record their GUIDs. The huma
 
 ## 1.12.1 command codec
 
-Send addon traffic on the `PARTY` channel with prefix `STC`. Do not use addon `WHISPER`, which this client version does not support. Each command is one `1/1` envelope:
+Send addon traffic on the `PARTY` channel with prefix `STC`. Do not use addon `WHISPER`, which this client version does not support. Build 5875 rejects unescaped pipes in `SendAddonMessage`. Double every pipe in the outgoing message, including those in the payload. The client retains those escapes on the wire, and the Gateway decodes them once. Each command is one `1/1` envelope:
 
 ```lua
-/run SendAddonMessage("STC","v1|playerbots.order|SEQUENCE|1/1|follow|BOT_GUID","PARTY")
-/run SendAddonMessage("STC","v1|playerbots.order|SEQUENCE|1/1|stay|BOT_GUID","PARTY")
-/run SendAddonMessage("STC","v1|playerbots.order|SEQUENCE|1/1|assist|BOT_GUID|MEMBER_GUID","PARTY")
-/run SendAddonMessage("STC","v1|playerbots.order|SEQUENCE|1/1|target|BOT_GUID|HOSTILE_GUID","PARTY")
+/run SendAddonMessage("STC","v1||playerbots.order||SEQUENCE||1/1||follow||BOT_GUID","PARTY")
+/run SendAddonMessage("STC","v1||playerbots.order||SEQUENCE||1/1||stay||BOT_GUID","PARTY")
+/run SendAddonMessage("STC","v1||playerbots.order||SEQUENCE||1/1||assist||BOT_GUID||MEMBER_GUID","PARTY")
+/run SendAddonMessage("STC","v1||playerbots.order||SEQUENCE||1/1||target||BOT_GUID||HOSTILE_GUID","PARTY")
 ```
 
 Replace every placeholder from the new session manifest. Increment `SEQUENCE` for each envelope. Record the exact outbound text and the returned payload:
 
 ```text
 STC\tv1|playerbots.order.result|0|1/1|INTENT_ID|OUTCOME
+```
+
+Display addon replies with a handler that replaces pipe characters before calling the chat frame renderer:
+
+```lua
+/run PB=CreateFrame("Frame");PB:RegisterEvent("CHAT_MSG_ADDON");PB:SetScript("OnEvent",function()if arg1=="STC" then DEFAULT_CHAT_FRAME:AddMessage((string.gsub(arg2,string.char(124),":")))end end)
 ```
 
 The envelope sequence orders transport. The Module creates the durable intent id and issuance sequence. Record both. An unexpected Refusal, absent reply, or reply for another intent stops that step.

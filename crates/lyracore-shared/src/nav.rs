@@ -1225,7 +1225,7 @@ fn clamp_axis(lo_c: f32, hi_c: f32, cell_i: u16, dim: usize) -> Option<(usize, u
     Some((index(lo_local), index(hi_local)))
 }
 
-/// Sample the single standing surface supported by terrain or a nearby WMO floor.
+/// Sample terrain and nearby WMO floors, then extend those floors along connected steps or ramps.
 /// Floors use their exact footprint so their edges cannot create support in empty space.
 fn standing_heights(
     cell_x: u16,
@@ -1277,7 +1277,7 @@ fn standing_heights(
                 let Some((z, _)) = t.z_at(x, y, 0.0) else {
                     continue;
                 };
-                if (ground[index]..=ground[index] + WALK_HEIGHT).contains(&z) {
+                if z >= ground[index] {
                     floor[index] = floor[index].min(z);
                 }
             }
@@ -1285,9 +1285,34 @@ fn standing_heights(
     }
     // Keep the lowest model surface above terrain. Choosing a higher surface can promote a
     // low ceiling to the floor and erase the room's headroom obstruction.
-    for (ground, floor) in ground.iter_mut().zip(floor) {
-        if floor.is_finite() {
-            *ground = floor;
+    let mut pending = Vec::new();
+    for index in 0..ground.len() {
+        if floor[index].is_finite() && floor[index] <= ground[index] + WALK_HEIGHT {
+            ground[index] = floor[index];
+            floor[index] = f32::INFINITY;
+            pending.push(index);
+        }
+    }
+    // The terrain-relative selection band must not cut a continuous ramp in two. Consume each
+    // selected floor once; disconnected surfaces above that band remain overhead geometry.
+    while let Some(index) = pending.pop() {
+        let x = index % side;
+        let y = index / side;
+        for (dx, dy) in [(1isize, 0isize), (-1, 0), (0, 1), (0, -1)] {
+            let Some(nx) = x.checked_add_signed(dx).filter(|x| *x < side) else {
+                continue;
+            };
+            let Some(ny) = y.checked_add_signed(dy).filter(|y| *y < side) else {
+                continue;
+            };
+            let neighbor = ny * side + nx;
+            if floor[neighbor].is_finite()
+                && (floor[neighbor] - ground[index]).abs() <= WALK_STEP_UP
+            {
+                ground[neighbor] = floor[neighbor];
+                floor[neighbor] = f32::INFINITY;
+                pending.push(neighbor);
+            }
         }
     }
     ground
@@ -1297,8 +1322,8 @@ fn standing_heights(
 /// touches the cell, inflated by `WALK_MARGIN`. Anything outside the cell is clamped away here.
 ///
 /// `heights` is the cell's 145-value MCNK height grid when a terrain chunk exists. The standing
-/// band follows terrain or a walkable WMO floor within `WALK_HEIGHT` above it. This single-layer
-/// grid supports ground-floor interiors; stacked floors still need separate navigation layers.
+/// band follows terrain, nearby walkable WMO floors, and their connected steps or ramps. This
+/// single-layer grid supports ground-floor interiors; stacked floors still need navigation layers.
 /// Without terrain, `base_z` is the lowest triangle vertex.
 ///
 /// Returns None when nothing in the cell blocks. A fully-clear cell emits no row, and both readers
@@ -1764,6 +1789,50 @@ mod derive_tests {
                 .expect("the floor supports the route");
         assert!(complete);
         assert!(path.len() > 1, "the wall still requires a detour");
+    }
+
+    fn raised_ramp(offset: f32) -> [VmapTri; 2] {
+        let (x0, y0) = at(10, 10);
+        let (x1, y1) = at(55, 55);
+        let low = GROUND_Z + 0.5 + offset;
+        let high = GROUND_Z + 4.5 + offset;
+        [
+            VmapTri {
+                verts: [[x0, y0, low], [x1, y0, high], [x1, y1, high]],
+                class: wmo(),
+            },
+            VmapTri {
+                verts: [[x0, y0, low], [x1, y1, high], [x0, y1, low]],
+                class: wmo(),
+            },
+        ]
+    }
+
+    #[test]
+    fn a_connected_ramp_continues_above_the_terrain_selection_band() {
+        let (cx, cy) = test_cell();
+        let mut tris = raised_ramp(0.0);
+        for _ in 0..2 {
+            let cell = derive_cell(cx, cy, Some(&flat_heights()), &tris);
+            assert_eq!(
+                find_leg(&mut cell_fetcher(cell), at(14, 32), at(51, 32), 4096),
+                Some(vec![at(51, 32)])
+            );
+            tris.reverse();
+            for triangle in &mut tris {
+                triangle.verts.swap(0, 1);
+            }
+        }
+    }
+
+    #[test]
+    fn a_connected_ramp_keeps_its_low_ceiling_blocked_above_terrain() {
+        let (cx, cy) = test_cell();
+        let mut tris = raised_ramp(0.0).to_vec();
+        tris.extend(raised_ramp(1.5));
+        let cell = derive_cell(cx, cy, Some(&flat_heights()), &tris).unwrap();
+        assert!(!walk_get(&cell.walk, 51, 32));
+        assert!(find_leg(&mut cell_fetcher(Some(cell)), at(14, 32), at(51, 32), 4096).is_none());
     }
 
     #[test]
