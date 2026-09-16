@@ -44,15 +44,17 @@ pub fn parse_addon_client_chat(body: &[u8]) -> Option<String> {
     Some(String::from_utf8_lossy(&rest[..nul]).into_owned())
 }
 
-/// Split `"<prefix>\t<message>"` and accept only [`BRIDGE_PREFIX`]; parse the v1 envelope
-/// `v1|<cmd>|<seq>|<part>/<parts>|<payload>` → `(cmd, payload)`. Multi-part → `None` (logged by
-/// the caller); foreign prefixes → `None` silently (other addons own their own airwaves).
+/// Parse the v1 envelope for [`BRIDGE_PREFIX`]. Build 5875 requires escaped `||` separators in
+/// `SendAddonMessage` and retains them on the wire. Unescaped envelopes remain valid for existing
+/// Headless Clients. Multipart and foreign-prefix messages are declined.
 pub fn parse_bridge_envelope(text: &str) -> Option<(String, String)> {
     let (prefix, envelope) = text.split_once('\t')?;
     if prefix != BRIDGE_PREFIX {
         return None;
     }
-    let mut it = envelope.splitn(5, '|');
+    let escaped = envelope.starts_with("v1||");
+    let separator = if escaped { "||" } else { "|" };
+    let mut it = envelope.splitn(5, separator);
     let (v, cmd, _seq, parts, payload) = (
         it.next()?,
         it.next()?,
@@ -63,7 +65,12 @@ pub fn parse_bridge_envelope(text: &str) -> Option<(String, String)> {
     if v != "v1" || parts != "1/1" || cmd.is_empty() {
         return None;
     }
-    Some((cmd.to_string(), payload.to_string()))
+    let payload = if escaped {
+        payload.replace("||", "|")
+    } else {
+        payload.to_string()
+    };
+    Some((cmd.to_string(), payload))
 }
 
 /// Build the v1 single-part envelope text for a server→client message.
@@ -126,6 +133,33 @@ mod tests {
         b.extend_from_slice(text.as_bytes());
         b.push(0);
         assert_eq!(parse_addon_client_chat(&b).as_deref(), Some(text));
+    }
+
+    #[test]
+    fn escaped_party_message_from_build_5875_reaches_the_bridge() {
+        let mut body = vec![1, 0, 0, 0, 255, 255, 255, 255];
+        body.extend_from_slice(b"STC\tv1||ping||22||1/1||PB\0");
+        let text = parse_addon_client_chat(&body).unwrap();
+        assert_eq!(
+            parse_bridge_envelope(&text),
+            Some(("ping".into(), "PB".into()))
+        );
+    }
+
+    #[test]
+    fn escaped_envelope_decodes_payload_pipes_once() {
+        assert_eq!(
+            parse_bridge_envelope("STC\tv1||playerbots.order||21||1/1||follow||2126"),
+            Some(("playerbots.order".into(), "follow|2126".into()))
+        );
+        assert_eq!(
+            parse_bridge_envelope("STC\tv1||ping||22||1/1||a||||b"),
+            Some(("ping".into(), "a||b".into()))
+        );
+        assert_eq!(
+            parse_bridge_envelope("STC\tv1|ping|22|1/1|a||b"),
+            Some(("ping".into(), "a||b".into()))
+        );
     }
 
     #[test]

@@ -425,13 +425,14 @@ fn an_authenticated_stc_order_uses_the_logged_in_actor_and_keeps_the_session_liv
     });
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
 
-    for sequence in ["same", "changed"] {
+    for text in [
+        "STC\tv1|playerbots.order|same|1/1|follow|77\0",
+        "STC\tv1||playerbots.order||changed||1/1||follow||77\0",
+    ] {
         let mut body = Vec::new();
-        body.extend_from_slice(&0u32.to_le_bytes());
+        body.extend_from_slice(&1u32.to_le_bytes());
         body.extend_from_slice(&codec::addon::LANG_ADDON.to_le_bytes());
-        body.extend_from_slice(
-            format!("STC\tv1|playerbots.order|{sequence}|1/1|follow|77\0").as_bytes(),
-        );
+        body.extend_from_slice(text.as_bytes());
         c_enc
             .write_encrypted_client_header(
                 &mut client,
