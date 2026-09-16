@@ -1,14 +1,14 @@
 # PB012 attended client handoff
 
-Status: automated and imported-world acceptance complete. Argus is partially updated and not ready for client acceptance. All four Shards are published, but Service Reconciliation stopped on a CLI stderr check. The old Gateway remains running with schema mismatches. Map 36 vmap import, staging and human attendance remain pending.
+Status, 16 September: Argus is running Core `c7306184994148570a25a5aad67ae2c3bd18f3d0` and Collection `63f82468760aaa7eab6dec0077ae430163983ecb`. All four Shards, the managed Gateway, Package replay, navigation imports, and post-publish repair passed deployment verification. The attended Follow step failed because companions took about 3.5 seconds between decisions alongside 100 existing bots. The four companions are paused while the scheduler correction is validated. PB012 and old-code retirement remain pending.
 
 The venue is the Argus test Realm at `/home/lyracore/LyraCore`, operated as service user `lyracore`. The user authorized deployment, and the Operator reports working root access. The user will attend with a real 1.12.1 client.
 
 ## Candidate and evidence
 
-The latest 14 September Operator handoff reports Core `b2531b18` and Collection `63f82468` installed. All six deployment checks passed, with 3,739 tests passed and 30 ignored. All four Shards published; Package replay and post-publish repairs passed. Standalone restarted, but the CLI compared systemd stderr mode `append` with the full tracked `append:/path` setting and stopped. The replacement Gateway is built but has not started. The backup service remains failed.
+The 16 September deployment passed all six gates, with 3,743 tests passed and 30 ignored. The managed Gateway and Standalone were replaced and verified. The backup service still reports its 4 September failure, and its timer is disabled. The failed attended attempt is sealed at `/home/lyracore/deploy-logs/argus-playerbots-retest-20260916T0926Z`; its manifest SHA-256 is `be205030743c03b8231f284185897d4acca2a2ee55671c2055eb8308e4706915`.
 
-Resume Service Reconciliation with CLI `d738373bf36f25598e148d1dbdeef75ed6c244d8`, released through [CLI PR #60](https://github.com/LyraCoreProject/lyracore-cli/pull/60) and selected by the updated Core pin. The correction verifies append mode and the running process's stderr file. Then start and verify the replacement Gateway before imports and staging. Preserve the successful deployment evidence; these CLI-only changes do not require another publish of the accepted Module. If gameplay or schema inputs change, apply the deployment checks required for that new candidate. The identities below describe accepted gameplay evidence. Record and rehash the actual deployed candidate before login.
+The earlier Service Reconciliation failure was corrected by CLI PRs #60 and #61. The deployed Core pins CLI `f5faff4da0a73906dcbe102615b53929f0eab547`. The next scheduler candidate changes gameplay, so run the complete guarded deployment procedure for every configured Shard. Preserve all earlier evidence and bind the new deployed artifacts before another client attempt. The identities below describe historical automated gameplay evidence, not the next attended candidate.
 
 The candidate retains useful Quest targets and avoids foreign Loot Tags during autonomous Quest and Grind work. Collection work can consider an eligible live target when the bounded corpse search is inconclusive. Defense retains a valid attacker and uses the learned class combat strategy. Completed Quest waits defer after two minutes without a verified effect; movement and foreign damage cannot reset that clock. Timed casts move inside nominal spell range before starting. Recovery checks whether a self-heal can start before interrupting other work and preserves a matching pending heal.
 
@@ -30,7 +30,7 @@ Independent reviews account for all 269 flagged intervals. There is no unexplain
 
 The earlier v18 hour remains failed. UTC log rotation left 18,464 measured decisions without timings and prevented final geometry capture. Recorder PR #21 now retains the live timing stream and exact measurement window; v19 uses that merged correction. Original failed run SHA-256 `a6b8b51de2840c212d884f380ba303a070366f30e19bd30f65c6490b4c55994d`. The preceding v17 hour remains failed for the Recovery readiness defect, now corrected and covered by focused regression and v19. Original v17 run `8e8814d01896161826735d155abad3967bf786460733c00110c88fbd37a5a49c`. Earlier evidence remains preserved.
 
-The Operator reports a built replacement Gateway. Its running identity remains pending Service Reconciliation and startup. Record and rehash that exact executable before login.
+The 16 September running Gateway SHA-256 is `5b36a5f846e1fb80095f09273e0037a1a8627dad65a3ce73bf95331b2650bd63`. Record and rehash the actual replacement before the next login.
 
 The Map 36 importer merged as Core commit `375b38c3004b61500ce480a72a681d7999a5c9ca`, tree `22fbc76a174a6f60abe2bea3d8148c047afff149`, equal to the reviewed PR #515 source. The accepted importer binary SHA-256 is `0a3270f84023745ef563a5ed7772e056f6db95098bd3229ee5ab720562e51abd`. Its client archive manifest is `/tmp/playerbots-rewrite/client-baseline/source-manifest.json`, SHA-256 `9320f727dcfbfc94a9a0f626ca1f0eaffc30546cc2a39deea01627506f17d078`.
 
@@ -49,7 +49,7 @@ Stage one authenticated human leader and four companions:
 - Mage Damage
 - Mage Damage
 
-The future Argus staging run generates the Character and hostile GUIDs used for this session. Record them as exact decimal strings in the session manifest before sending any addon command. Lua 5.0 numbers cannot safely carry every 64-bit GUID, so keep each GUID as text.
+The paused Argus party is Pbguide `2117`, Tankbot1 `2126`, Healbot1 `2134`, Dpsbot1 `2143`, and Dpsbot2 `2152`, in group `12374`. Verify those rows and their current ownership and partitions after deployment. Record Character and hostile GUIDs as exact decimal strings in the new session manifest before sending any addon command. Lua 5.0 numbers cannot safely carry every 64-bit GUID, so keep each GUID as text.
 
 The accepted private run used leader `1000006`, Warrior `1000001`, Priest `1000011`, and Mages `1000016` and `1000021`. Those values identify private fixture evidence only. Never paste them into an attended command unless the new Argus staging record independently produces the same exact value.
 
@@ -57,13 +57,13 @@ Choose declared hostile creatures before combat and record their GUIDs. The huma
 
 ## 1.12.1 command codec
 
-Send addon traffic on the `PARTY` channel with prefix `STC`. Do not use addon `WHISPER`, which this client version does not support. Build 5875 rejects unescaped pipes in `SendAddonMessage`. Double every pipe in the outgoing message, including those in the payload. The client retains those escapes on the wire, and the Gateway decodes them once. Each command is one `1/1` envelope:
+Send addon traffic on the `PARTY` channel with prefix `STC`. Build the two pipe characters inside Lua with `string.char(124,124)`. Pasting literal pipes through the native chat editor can add another escape layer. The attended Argus capture showed four pipes on the wire from a pasted `||` command. Runtime construction produced two pipes, a Module reply, and a visible client reply. The Gateway decodes this escape layer once. Each command is one `1/1` envelope:
 
 ```lua
-/run SendAddonMessage("STC","v1||playerbots.order||SEQUENCE||1/1||follow||BOT_GUID","PARTY")
-/run SendAddonMessage("STC","v1||playerbots.order||SEQUENCE||1/1||stay||BOT_GUID","PARTY")
-/run SendAddonMessage("STC","v1||playerbots.order||SEQUENCE||1/1||assist||BOT_GUID||MEMBER_GUID","PARTY")
-/run SendAddonMessage("STC","v1||playerbots.order||SEQUENCE||1/1||target||BOT_GUID||HOSTILE_GUID","PARTY")
+/run SendAddonMessage("STC",table.concat({"v1","playerbots.order","SEQUENCE","1/1","follow","BOT_GUID"},string.char(124,124)),"PARTY")
+/run SendAddonMessage("STC",table.concat({"v1","playerbots.order","SEQUENCE","1/1","stay","BOT_GUID"},string.char(124,124)),"PARTY")
+/run SendAddonMessage("STC",table.concat({"v1","playerbots.order","SEQUENCE","1/1","assist","BOT_GUID","MEMBER_GUID"},string.char(124,124)),"PARTY")
+/run SendAddonMessage("STC",table.concat({"v1","playerbots.order","SEQUENCE","1/1","target","BOT_GUID","HOSTILE_GUID"},string.char(124,124)),"PARTY")
 ```
 
 Replace every placeholder from the new session manifest. Increment `SEQUENCE` for each envelope. Record the exact outbound text and the returned payload:
@@ -88,7 +88,7 @@ The user has authorized deployment on Argus. Use the repository's guarded Realm 
 2. Bind the final Wasm, build manifest, Gateway executable, importer, archive inventory, and route revision in the session manifest. Rehash each deployed artifact on Argus.
 3. Reconcile the tracked Standalone Supervisor and Gateway, then verify their exact running artifact identities. Save the reconciliation and service status outputs.
 4. Apply the approved World Import Profiles to their owned World Shards and Instance Pool. Require one complete active Map 36 vmap generation and matching receipts on the Instance Pool. Keep Map 36 terrain, navigation, and Navigation Coverage absent.
-5. Stage the human, four companions, party, roles, Companion Orders, declared hostiles, and the control spell. Save the resulting decimal GUIDs in the session manifest.
+5. Stage the human, four companions, party, roles, Companion Orders, declared hostiles, and the control spell. Save the resulting decimal GUIDs in the session manifest. Inventory the existing bot population and controllers, then measure scheduler lag with that population present. The 16 September Argus run had 100 Legacy bots plus four companions sharing 16 decision slots per 500 ms pass. Decisions arrived about 3.5 seconds apart while movement legs covered only one second. Slow Follow failed attended acceptance. A new session requires measured decision intervals and movement under the retained population.
 6. Confirm the client is 1.12.1.5875 and unmodified. Save its executable hash and installation inventory.
 7. Create one evidence directory named with the UTC start time. Copy the filled pre-run manifest there before login.
 
