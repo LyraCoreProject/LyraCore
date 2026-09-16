@@ -57,13 +57,13 @@ Choose declared hostile creatures before combat and record their GUIDs. The huma
 
 ## 1.12.1 command codec
 
-Send addon traffic on the `PARTY` channel with prefix `STC`. Do not use addon `WHISPER`, which this client version does not support. Build 5875 rejects unescaped pipes in `SendAddonMessage`. Double every pipe in the outgoing message, including those in the payload. The client retains those escapes on the wire, and the Gateway decodes them once. Each command is one `1/1` envelope:
+Send addon traffic on the `PARTY` channel with prefix `STC`. Build the two pipe characters inside Lua with `string.char(124,124)`. Pasting literal pipes through the native chat editor can add another escape layer. The attended Argus capture showed four pipes on the wire from a pasted `||` command. Runtime construction produced two pipes, a Module reply, and a visible client reply. The Gateway decodes this escape layer once. Each command is one `1/1` envelope:
 
 ```lua
-/run SendAddonMessage("STC","v1||playerbots.order||SEQUENCE||1/1||follow||BOT_GUID","PARTY")
-/run SendAddonMessage("STC","v1||playerbots.order||SEQUENCE||1/1||stay||BOT_GUID","PARTY")
-/run SendAddonMessage("STC","v1||playerbots.order||SEQUENCE||1/1||assist||BOT_GUID||MEMBER_GUID","PARTY")
-/run SendAddonMessage("STC","v1||playerbots.order||SEQUENCE||1/1||target||BOT_GUID||HOSTILE_GUID","PARTY")
+/run SendAddonMessage("STC",table.concat({"v1","playerbots.order","SEQUENCE","1/1","follow","BOT_GUID"},string.char(124,124)),"PARTY")
+/run SendAddonMessage("STC",table.concat({"v1","playerbots.order","SEQUENCE","1/1","stay","BOT_GUID"},string.char(124,124)),"PARTY")
+/run SendAddonMessage("STC",table.concat({"v1","playerbots.order","SEQUENCE","1/1","assist","BOT_GUID","MEMBER_GUID"},string.char(124,124)),"PARTY")
+/run SendAddonMessage("STC",table.concat({"v1","playerbots.order","SEQUENCE","1/1","target","BOT_GUID","HOSTILE_GUID"},string.char(124,124)),"PARTY")
 ```
 
 Replace every placeholder from the new session manifest. Increment `SEQUENCE` for each envelope. Record the exact outbound text and the returned payload:
@@ -88,7 +88,7 @@ The user has authorized deployment on Argus. Use the repository's guarded Realm 
 2. Bind the final Wasm, build manifest, Gateway executable, importer, archive inventory, and route revision in the session manifest. Rehash each deployed artifact on Argus.
 3. Reconcile the tracked Standalone Supervisor and Gateway, then verify their exact running artifact identities. Save the reconciliation and service status outputs.
 4. Apply the approved World Import Profiles to their owned World Shards and Instance Pool. Require one complete active Map 36 vmap generation and matching receipts on the Instance Pool. Keep Map 36 terrain, navigation, and Navigation Coverage absent.
-5. Stage the human, four companions, party, roles, Companion Orders, declared hostiles, and the control spell. Save the resulting decimal GUIDs in the session manifest.
+5. Stage the human, four companions, party, roles, Companion Orders, declared hostiles, and the control spell. Save the resulting decimal GUIDs in the session manifest. Inventory the existing bot population and controllers, then measure scheduler lag with that population present. The 16 September Argus run had 100 Legacy bots plus four companions sharing 16 decision slots per 500 ms pass. Decisions arrived about 3.5 seconds apart while movement legs covered only one second. Slow Follow failed attended acceptance. A new session requires measured decision intervals and movement under the retained population.
 6. Confirm the client is 1.12.1.5875 and unmodified. Save its executable hash and installation inventory.
 7. Create one evidence directory named with the UTC start time. Copy the filled pre-run manifest there before login.
 

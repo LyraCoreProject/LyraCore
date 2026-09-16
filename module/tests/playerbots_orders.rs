@@ -401,6 +401,101 @@ fn finish_movement(node: &Standalone, guid: &str, leg: &BTreeMap<String, String>
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_companions_receive_turns_without_starving_older_background_work() {
+    let fixture = fixture("playerbots-orders-scheduler");
+    let node = &fixture.node;
+    node.assert_sql("DELETE FROM game_creature_move_schedule");
+    let companions = [&fixture.warrior, &fixture.priest, &fixture.mage];
+    for guid in companions {
+        issue(&fixture, &format!("follow|{guid}"), guid, false);
+    }
+    node.assert_call("playerbots_spawn_role", &["101", "1200", "1200", "50", "1"]);
+    let roster = node.query_rows("SELECT character_guid FROM pkg_playerbots_bot");
+    assert_eq!(roster.len(), 104);
+    for bot in &roster {
+        let guid = &bot["character_guid"];
+        if !companions.contains(&guid) {
+            node.assert_call(
+                "playerbots_select_controller",
+                &[guid, r#"{"recordOnly":[]}"#],
+            );
+        }
+    }
+    node.assert_sql("UPDATE pkg_playerbots_bot SET next_think_micros = 1");
+    for turn in 0..8 {
+        for guid in companions {
+            node.assert_sql(&format!(
+                "UPDATE pkg_playerbots_bot SET next_think_micros = 2 WHERE character_guid = {guid}"
+            ));
+        }
+        node.assert_call("playerbots_fixture_runner_pass", &[]);
+        for guid in companions {
+            let bot = node.query_rows(&format!(
+                "SELECT next_think_micros FROM pkg_playerbots_bot WHERE character_guid = {guid}"
+            ));
+            assert!(
+                bot[0]["next_think_micros"].parse::<i64>().unwrap() > 2,
+                "companion {guid} missed turn {turn} behind older background work"
+            );
+        }
+        let scheduler = node.query_rows("SELECT processed FROM pkg_playerbots_scheduler");
+        assert!(scheduler[0]["processed"].parse::<usize>().unwrap() <= 16);
+        let remaining = node.query_rows(
+            "SELECT character_guid FROM pkg_playerbots_bot WHERE next_think_micros = 1",
+        );
+        assert_eq!(remaining.len(), 101usize.saturating_sub(13 * (turn + 1)));
+    }
+    evidence(&fixture, "scheduler-fairness");
+    node.assert_call(
+        "playerbots_fixture_roles_move",
+        &[&fixture.leader, "1280", "1200"],
+    );
+    let started_micros = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_micros() as i64;
+    node.assert_sql(&format!(
+        "UPDATE pkg_playerbots_bot SET next_think_micros = {started_micros}"
+    ));
+    node.assert_call("debug_repair_after_publish", &[]);
+    let started = std::time::Instant::now();
+    let mut observations: BTreeMap<String, Vec<i64>> = BTreeMap::new();
+    while started.elapsed() < std::time::Duration::from_secs(10) {
+        for guid in companions {
+            let observed = runner(node, guid)["observed_micros"]
+                .parse::<i64>()
+                .unwrap();
+            let times = observations.entry(guid.clone()).or_default();
+            if observed >= started_micros && times.last() != Some(&observed) {
+                times.push(observed);
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    let path = support::log_dir().join(format!("{}-cadence.json", node.shard_name()));
+    std::fs::write(path, serde_json::to_vec_pretty(&observations).unwrap()).unwrap();
+    for guid in companions {
+        let times = &observations[guid];
+        assert!(
+            times.len() >= 6,
+            "too few scheduled turns for {guid}: {times:?}"
+        );
+        for pair in times.windows(2) {
+            assert!(
+                pair[1] - pair[0] < 1_750_000,
+                "late companion turn for {guid}: {pair:?}"
+            );
+        }
+        assert!(
+            entity(node, guid)["x"].parse::<f32>().unwrap() > 1240.0,
+            "companion {guid} did not follow the moving leader"
+        );
+    }
+    evidence(&fixture, "scheduled-follow");
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_orders_authenticate_follow_and_do_not_restart_a_retained_cast() {
     let fixture = fixture("playerbots-orders-follow");
     let node = &fixture.node;
