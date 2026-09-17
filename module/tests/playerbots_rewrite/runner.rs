@@ -245,12 +245,43 @@ fn playerbots_movement_continues_between_decisions() {
     let selected = runner(&node, bot);
 
     // The decision queue is parked. Ordinary movement ticks must still execute the selected route.
-    let advanced = poll_until(Duration::from_secs(5), || position(&node, bot) >= 1221.0);
+    let mut legs = BTreeMap::<u64, u64>::new();
+    let advanced = poll_until(Duration::from_secs(5), || {
+        for leg in node.query_rows(&format!(
+            "SELECT start_micros, dur_ms FROM game_creature_spline WHERE guid = {bot}"
+        )) {
+            legs.insert(
+                leg["start_micros"].parse().unwrap(),
+                leg["dur_ms"].parse().unwrap(),
+            );
+        }
+        position(&node, bot) >= 1221.0
+    });
+    let gaps: Vec<_> = legs
+        .iter()
+        .collect::<Vec<_>>()
+        .windows(2)
+        .map(|pair| {
+            pair[1]
+                .0
+                .saturating_sub(pair[0].0.saturating_add(pair[0].1 * 1000))
+        })
+        .collect();
+    std::fs::write(
+        support::log_dir().join(format!("{}-movement-continuity.json", node.shard_name())),
+        serde_json::to_vec_pretty(&serde_json::json!({"legs": legs, "idle_micros": gaps})).unwrap(),
+    )
+    .unwrap();
     outcomes(&node);
     assert!(
         advanced,
         "movement stopped at {} before its destination",
         position(&node, bot)
+    );
+    assert!(legs.len() >= 3, "too few movement legs: {legs:?}");
+    assert!(
+        gaps.iter().all(|gap| *gap < 250_000),
+        "movement paused between legs: {gaps:?}"
     );
     let continued = runner(&node, bot);
     assert_eq!(continued["observed_micros"], selected["observed_micros"]);
@@ -318,6 +349,13 @@ fn playerbots_movement_respects_revoked_consent_before_another_decision() {
     std::thread::sleep(Duration::from_secs(2));
     assert_eq!(position(&node, &bot), stopped);
     assert_eq!(runner(&node, &bot)["observed_micros"], decision);
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&bot]);
+    std::thread::sleep(Duration::from_secs(1));
+    assert_eq!(
+        position(&node, &bot),
+        stopped,
+        "a later decision ignored revoked consent"
+    );
     outcomes(&node);
 }
 

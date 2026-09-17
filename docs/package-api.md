@@ -290,7 +290,7 @@ or arrival; the proposed endpoint cannot establish either.
 
 `actor::sessionless_movement_gate(ctx, character_guid)` adds current controller consent and a live,
 living body to that authority check. A pending cast or movement-suppressing crowd control refuses
-continuation. Call it before continuing selected movement between decision turns. The Gate reads
+movement. Call it before issuing a movement leg, including continuation between decision turns. The Gate reads
 current state and does not cancel casts or change position.
 
 `actor::area_trigger_route(ctx, trigger_id)` reads one exact imported AreaTrigger source volume and
