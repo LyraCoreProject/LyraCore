@@ -288,6 +288,11 @@ or arrival; the proposed endpoint cannot establish either.
 
 `actor::sessionless_action_gate(ctx, character_guid)` checks current Account Claim and Fence ownership, Character availability, and World Session status before Package gameplay. It permits a missing live entity so Legacy can restore a body. Group admission also requires a live entity and current controller consent.
 
+`actor::sessionless_movement_gate(ctx, character_guid)` adds current controller consent and a live,
+living body to that authority check. A pending cast or movement-suppressing crowd control refuses
+continuation. Call it before continuing selected movement between decision turns. The Gate reads
+current state and does not cancel casts or change position.
+
 `actor::area_trigger_route(ctx, trigger_id)` reads one exact imported AreaTrigger source volume and
 target map. It exposes the source center and containment rule for Candidate movement while keeping
 the landing coordinates private. `actor::enter_sessionless_areatrigger` rechecks the current body,

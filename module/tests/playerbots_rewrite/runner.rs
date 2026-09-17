@@ -268,16 +268,19 @@ fn playerbots_movement_continues_between_decisions() {
 fn parked_movement(name: &str) -> (Standalone, String) {
     let (node, bots) = fixture(name, "1");
     let bot = &bots[0];
+    park_movement(&node, bot);
+    (node, bot.clone())
+}
+
+fn park_movement(node: &Standalone, bot: &str) {
     node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
-    select(&node, bot, "frozen");
-    select(&node, bot, "cohort");
-    assert!(poll_until(POLL_TIMEOUT, || runner(&node, bot)
-        ["foreground"]
+    select(node, bot, "frozen");
+    select(node, bot, "cohort");
+    assert!(poll_until(POLL_TIMEOUT, || runner(node, bot)["foreground"]
         .contains("movement")));
     node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
-    let selected = runner(&node, bot);
+    let selected = runner(node, bot);
     assert!(selected["foreground"].contains("movement"), "{selected:?}");
-    (node, bot.clone())
 }
 
 #[test]

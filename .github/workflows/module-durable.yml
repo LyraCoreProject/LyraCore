@@ -115,6 +115,13 @@ jobs:
           ref: b5dd9e14c6059e41234010ed67a10b75169f8134
           path: collection
           persist-credentials: false
+      - name: Check out the preceding movement Package revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: LyraCoreProject/packages
+          ref: 859f296b942e714cc934db89e7d0be06fa049e18
+          path: preceding-collection
+          persist-credentials: false
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: lyracore
@@ -131,6 +138,16 @@ jobs:
           tar --extract --gzip --file "$archive_path" --directory "$cli_dir"
           ln -s spacetimedb-cli "$cli_dir/spacetime"
           echo "$cli_dir" >> "$GITHUB_PATH"
+      - name: Build the preceding movement schema for populated migration
+        working-directory: lyracore
+        run: |
+          "$GITHUB_WORKSPACE/preceding-collection/.github/check-core-tip.sh" "$GITHUB_WORKSPACE/lyracore" \
+            cargo build --locked --release --target wasm32-unknown-unknown \
+            -p lyracore-module --features=debug_reducers
+          cp target/wasm32-unknown-unknown/release/lyracore_module.wasm "$RUNNER_TEMP/companion-preceding.wasm"
+          sha256sum "$RUNNER_TEMP/companion-preceding.wasm" > "$RUNNER_TEMP/companion-preceding-wasm.log"
+          echo "PLAYERBOTS_MOVEMENT_PRECEDING_WASM=$RUNNER_TEMP/companion-preceding.wasm" >> "$GITHUB_ENV"
+          cargo clean -p lyracore-module
       - name: Run companion orders with the pinned Package Collection
         working-directory: lyracore
         run: |
@@ -151,6 +168,11 @@ jobs:
                 2>&1 | tee "$RUNNER_TEMP/companion-continuous-movement.log"
               grep -F "test runner::playerbots_movement_continues_between_decisions ... ok" \
                 "$RUNNER_TEMP/companion-continuous-movement.log"
+              cargo test --locked -p lyracore-module --test playerbots_movement_upgrade \
+                -- --ignored --nocapture \
+                2>&1 | tee "$RUNNER_TEMP/companion-movement-upgrade.log"
+              grep -F "test playerbots_movement_upgrade_preserves_the_retained_destination ... ok" \
+                "$RUNNER_TEMP/companion-movement-upgrade.log"
               cargo test --locked -p lyracore-module --test playerbots_orders \
                 -- --ignored --test-threads=1 \
                 --skip playerbots_populated_pb008_state_adds_empty_order_state_without_changing_current_work \
