@@ -239,6 +239,27 @@ fn playerbots_runner_returns_home_with_observed_arrival_and_one_objective() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_movement_continues_between_decisions() {
+    let (node, bots) = fixture("playerbots-continuous-movement", "1");
+    let bot = &bots[0];
+    node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
+    select(&node, bot, "cohort");
+    node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
+    let selected = runner(&node, bot);
+    assert!(selected["foreground"].contains("movement"), "{selected:?}");
+
+    // The decision queue is parked. Ordinary movement ticks must still execute the selected route.
+    let advanced = poll_until(Duration::from_secs(5), || position(&node, bot) >= 1221.0);
+    outcomes(&node);
+    assert!(advanced, "movement stopped at {} before its destination", position(&node, bot));
+    let continued = runner(&node, bot);
+    assert_eq!(continued["observed_micros"], selected["observed_micros"]);
+    assert_eq!(continued["objective_sequence"], selected["objective_sequence"]);
+    assert!(poll_until(Duration::from_secs(4), || (position(&node, bot) - 1238.0).abs() < 0.1));
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_runner_record_only_observes_without_gameplay_and_freeze_holds_position() {
     let (node, bots) = fixture("playerbots-runner-record", "1");
     let bot = &bots[0];

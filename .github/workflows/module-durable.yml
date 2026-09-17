@@ -146,6 +146,11 @@ jobs:
                 2>&1 | tee "$RUNNER_TEMP/companion-default-fairness.log"
               grep -F "test runner::playerbots_runner_batches_due_bots_in_stable_fair_order ... ok" \
                 "$RUNNER_TEMP/companion-default-fairness.log"
+              cargo test --locked -p lyracore-module --test playerbots_rewrite \
+                runner::playerbots_movement_ -- --ignored --nocapture --test-threads=1 \
+                2>&1 | tee "$RUNNER_TEMP/companion-continuous-movement.log"
+              grep -F "test runner::playerbots_movement_continues_between_decisions ... ok" \
+                "$RUNNER_TEMP/companion-continuous-movement.log"
               cargo test --locked -p lyracore-module --test playerbots_orders \
                 -- --ignored --test-threads=1 \
                 --skip playerbots_populated_pb008_state_adds_empty_order_state_without_changing_current_work \
