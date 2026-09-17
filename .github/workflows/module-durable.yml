@@ -112,7 +112,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: LyraCoreProject/packages
-          ref: d2cdc3e8698ca75cdae7f5b5a7259a4bce824db6
+          ref: 0a579c94095fe6bfb330be1aee5e3efcb063a602
           path: collection
           persist-credentials: false
       - name: Check out the preceding movement Package revision
