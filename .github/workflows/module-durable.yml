@@ -108,11 +108,11 @@ jobs:
         with:
           path: lyracore
           persist-credentials: false
-      - name: Check out the companion scheduler Package revision
+      - name: Check out the continuous movement Package revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: LyraCoreProject/packages
-          ref: b5dd9e14c6059e41234010ed67a10b75169f8134
+          ref: 3fa5d04d7e7d7ab4cd29d42966c779c065ab5bc0
           path: collection
           persist-credentials: false
       - name: Check out the preceding movement Package revision

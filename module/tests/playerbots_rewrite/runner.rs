@@ -291,7 +291,7 @@ fn playerbots_movement_freeze_cancels_continuation() {
     let stopped = position(&node, &bot);
     std::thread::sleep(Duration::from_secs(2));
     assert_eq!(position(&node, &bot), stopped);
-    assert!(runner(&node, &bot)["foreground"].contains("none"));
+    assert!(runner(&node, &bot)["foreground"] == "(none = ())");
     outcomes(&node);
 }
 
@@ -313,7 +313,7 @@ fn playerbots_movement_respects_revoked_consent_before_another_decision() {
     node.assert_call("debug_set_sessionless_action_consent", &[&bot, "false"]);
     assert!(poll_until(Duration::from_secs(2), || runner(&node, &bot)
         ["foreground"]
-        .contains("none")));
+        == "(none = ())"));
     let stopped = position(&node, &bot);
     std::thread::sleep(Duration::from_secs(2));
     assert_eq!(position(&node, &bot), stopped);
@@ -330,7 +330,7 @@ fn playerbots_movement_cast_keeps_its_identity_and_holds_position() {
     assert_eq!(pending.len(), 1);
     assert!(poll_until(Duration::from_secs(2), || runner(&node, &bot)
         ["foreground"]
-        .contains("none")));
+        == "(none = ())"));
     let stopped = position(&node, &bot);
     std::thread::sleep(Duration::from_secs(1));
     assert_eq!(position(&node, &bot), stopped);
@@ -384,7 +384,7 @@ fn playerbots_movement_root_cancels_continuation() {
         .is_empty());
     assert!(poll_until(Duration::from_secs(2), || runner(&node, &bot)
         ["foreground"]
-        .contains("none")));
+        == "(none = ())"));
     let stopped = position(&node, &bot);
     std::thread::sleep(Duration::from_secs(2));
     assert_eq!(position(&node, &bot), stopped);
@@ -401,7 +401,7 @@ fn playerbots_movement_death_cancels_continuation() {
     );
     assert!(poll_until(Duration::from_secs(2), || runner(&node, &bot)
         ["foreground"]
-        .contains("none")));
+        == "(none = ())"));
     let stopped = position(&node, &bot);
     std::thread::sleep(Duration::from_secs(2));
     assert_eq!(position(&node, &bot), stopped);
