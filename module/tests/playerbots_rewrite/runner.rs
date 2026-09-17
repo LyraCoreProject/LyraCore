@@ -338,6 +338,34 @@ fn playerbots_movement_teleport_cannot_resume_the_old_destination() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_movement_teleport_to_a_leg_endpoint_cancels_the_route() {
+    let (node, bot) = parked_movement("playerbots-movement-teleport-endpoint");
+    let legs = node.query_rows(&format!(
+        "SELECT dx, dy, dz FROM game_creature_spline WHERE guid = {bot}"
+    ));
+    let endpoint = &legs[0];
+    node.assert_call(
+        "debug_teleport",
+        &[
+            &bot,
+            "0",
+            &endpoint["dx"],
+            &endpoint["dy"],
+            &endpoint["dz"],
+            "0",
+        ],
+    );
+    assert_eq!(runner(&node, &bot)["foreground"], "(none = ())");
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(
+        position(&node, &bot),
+        endpoint["dx"].parse::<f32>().unwrap()
+    );
+    outcomes(&node);
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_movement_respects_revoked_consent_before_another_decision() {
     let (node, bot) = parked_movement("playerbots-movement-consent");
     let decision = runner(&node, &bot)["observed_micros"].clone();

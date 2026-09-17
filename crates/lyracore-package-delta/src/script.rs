@@ -102,6 +102,7 @@ pub const HOOK_EVENT_NAMES: &[&str] = &[
     "on_quest_accept",
     "on_quest_turnin",
     "on_login",
+    "on_character_relocated",
     "on_logout",
     "on_gossip_select",
     "on_creature_death",

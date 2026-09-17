@@ -67,6 +67,7 @@ authoritative; this list is the set of event names and their payload types.
 | `on_quest_accept` | `crate::hooks::QuestAcceptPayload` |
 | `on_quest_turnin` | `crate::hooks::QuestTurninPayload` |
 | `on_login` | `crate::hooks::LoginPayload` |
+| `on_character_relocated` | `crate::hooks::CharacterRelocatedPayload` |
 | `on_logout` | `crate::hooks::LogoutPayload` |
 | `on_gossip_select` | `crate::hooks::GossipSelectPayload` |
 | `on_creature_death` | `crate::hooks::CreatureDeathPayload` |

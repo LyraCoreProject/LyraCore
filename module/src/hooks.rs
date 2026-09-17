@@ -24,6 +24,7 @@
 //! | `on_quest_accept`   | `quest::apply_accept_quest` AND `quest::grant_quest_unchecked` (the debug/harness grant) | [`QuestAcceptPayload`] |
 //! | `on_quest_turnin`   | `quest::apply_turn_in_quest` success (the rep/XP site)  | [`QuestTurninPayload`] |
 //! | `on_login`          | `world::player_login` success exit                      | [`LoginPayload`] |
+//! | `on_character_relocated` | `world::teleport_player`, after placement and motion cleanup | [`CharacterRelocatedPayload`] |
 //! | `on_logout`         | `world::remove_from_world` — covers explicit logout AND abrupt disconnect | [`LogoutPayload`] |
 //! | `on_gossip_select`  | `world::gossip_select` — the notify reducer the gateway calls on CMSG_GOSSIP_SELECT_OPTION | [`GossipSelectPayload`] |
 //! | `on_creature_death` | `combat::kill_creature`, non-pet branch — the encounter-grade twin of `on_death` (entry + instance snapshot; work-item 228) | [`CreatureDeathPayload`] |
@@ -163,6 +164,12 @@ pub struct QuestTurninPayload {
 /// the character row is updated (online, rested XP accrued). Server-side bots do NOT fire this —
 /// they enter the world via their own spawn path, not `player_login`.
 pub struct LoginPayload {
+    pub character_guid: u64,
+}
+
+/// A Character's teleport destination and motion cleanup are committed. Cross-map relocation
+/// removes the live body before this notification. Retained Package movement must be discarded.
+pub struct CharacterRelocatedPayload {
     pub character_guid: u64,
 }
 

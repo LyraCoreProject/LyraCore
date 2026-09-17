@@ -214,6 +214,12 @@ const HOOK_EVENTS: &[HookEvent] = &[
         "payload.character_guid",
         "0",
     ),
+    hook(
+        "on_character_relocated",
+        "crate::hooks::CharacterRelocatedPayload",
+        "payload.character_guid",
+        "0",
+    ),
     // Fired BEFORE the live entity row is deleted, so the actor still reads.
     hook(
         "on_logout",
