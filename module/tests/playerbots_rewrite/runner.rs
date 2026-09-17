@@ -240,16 +240,9 @@ fn playerbots_runner_returns_home_with_observed_arrival_and_one_objective() {
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_movement_continues_between_decisions() {
-    let (node, bots) = fixture("playerbots-continuous-movement", "1");
-    let bot = &bots[0];
-    node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
-    select(&node, bot, "cohort");
-    assert!(poll_until(POLL_TIMEOUT, || runner(&node, bot)
-        ["foreground"]
-        .contains("movement")));
-    node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
+    let (node, bot) = parked_movement("playerbots-continuous-movement");
+    let bot = &bot;
     let selected = runner(&node, bot);
-    assert!(selected["foreground"].contains("movement"), "{selected:?}");
 
     // The decision queue is parked. Ordinary movement ticks must still execute the selected route.
     let advanced = poll_until(Duration::from_secs(5), || position(&node, bot) >= 1221.0);
@@ -270,6 +263,146 @@ fn playerbots_movement_continues_between_decisions() {
     ) - 1238.0)
         .abs()
         < 0.1));
+}
+
+fn parked_movement(name: &str) -> (Standalone, String) {
+    let (node, bots) = fixture(name, "1");
+    let bot = &bots[0];
+    node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
+    select(&node, bot, "frozen");
+    select(&node, bot, "cohort");
+    assert!(poll_until(POLL_TIMEOUT, || runner(&node, bot)
+        ["foreground"]
+        .contains("movement")));
+    node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
+    let selected = runner(&node, bot);
+    assert!(selected["foreground"].contains("movement"), "{selected:?}");
+    (node, bot.clone())
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_movement_freeze_cancels_continuation() {
+    let (node, bot) = parked_movement("playerbots-movement-freeze");
+    select(&node, &bot, "frozen");
+    let stopped = position(&node, &bot);
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(position(&node, &bot), stopped);
+    assert!(runner(&node, &bot)["foreground"].contains("none"));
+    outcomes(&node);
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_movement_teleport_cannot_resume_the_old_destination() {
+    let (node, bot) = parked_movement("playerbots-movement-teleport");
+    node.assert_call("debug_teleport", &[&bot, "0", "1300", "1250", "50", "0"]);
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(position(&node, &bot), 1300.0);
+    outcomes(&node);
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_movement_respects_revoked_consent_before_another_decision() {
+    let (node, bot) = parked_movement("playerbots-movement-consent");
+    let decision = runner(&node, &bot)["observed_micros"].clone();
+    node.assert_call("debug_set_sessionless_action_consent", &[&bot, "false"]);
+    assert!(poll_until(Duration::from_secs(2), || runner(&node, &bot)
+        ["foreground"]
+        .contains("none")));
+    let stopped = position(&node, &bot);
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(position(&node, &bot), stopped);
+    assert_eq!(runner(&node, &bot)["observed_micros"], decision);
+    outcomes(&node);
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_movement_cast_keeps_its_identity_and_holds_position() {
+    let (node, bot) = parked_movement("playerbots-movement-cast");
+    node.assert_call("playerbots_fixture_cast", &[&bot, &bot]);
+    let pending = node.query_rows("SELECT scheduled_id FROM game_pending_cast");
+    assert_eq!(pending.len(), 1);
+    assert!(poll_until(Duration::from_secs(2), || runner(&node, &bot)
+        ["foreground"]
+        .contains("none")));
+    let stopped = position(&node, &bot);
+    std::thread::sleep(Duration::from_secs(1));
+    assert_eq!(position(&node, &bot), stopped);
+    assert_eq!(
+        node.query_rows("SELECT scheduled_id FROM game_pending_cast"),
+        pending
+    );
+    outcomes(&node);
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_movement_continues_behind_a_busy_decision_queue() {
+    let (node, bot) = parked_movement("playerbots-movement-busy");
+    node.assert_sql("DELETE FROM game_creature_move_schedule");
+    node.assert_call("playerbots_spawn_role", &["100", "1200", "1200", "50", "1"]);
+    for row in node.query_rows("SELECT character_guid FROM pkg_playerbots_bot") {
+        if row["character_guid"] != bot {
+            select(&node, &row["character_guid"], "recordOnly");
+        }
+    }
+    node.assert_sql("UPDATE pkg_playerbots_bot SET next_think_micros = 1");
+    node.assert_sql(&format!(
+        "UPDATE pkg_playerbots_bot SET next_think_micros = 2 WHERE character_guid = {bot}"
+    ));
+    node.assert_call("debug_repair_after_publish", &[]);
+    let advanced = poll_until(Duration::from_secs(6), || position(&node, &bot) >= 1230.0);
+    outcomes(&node);
+    assert!(
+        advanced,
+        "movement waited for decisions at {}",
+        position(&node, &bot)
+    );
+    assert!(
+        node.query_rows("SELECT processed FROM pkg_playerbots_scheduler")[0]["processed"]
+            .parse::<usize>()
+            .unwrap()
+            <= 16
+    );
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_movement_root_cancels_continuation() {
+    let (node, bot) = parked_movement("playerbots-movement-root");
+    node.assert_call("playerbots_fixture_roles_control", &[&bot, &bot, "50021"]);
+    assert!(!node
+        .query_rows(&format!(
+            "SELECT id FROM game_aura WHERE target_guid = {bot} AND spell_id = 50021"
+        ))
+        .is_empty());
+    assert!(poll_until(Duration::from_secs(2), || runner(&node, &bot)
+        ["foreground"]
+        .contains("none")));
+    let stopped = position(&node, &bot);
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(position(&node, &bot), stopped);
+    outcomes(&node);
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_movement_death_cancels_continuation() {
+    let (node, bot) = parked_movement("playerbots-movement-death");
+    node.assert_call(
+        "playerbots_fixture_runner_damage_and_park",
+        &[&bot, "0", "1000000"],
+    );
+    assert!(poll_until(Duration::from_secs(2), || runner(&node, &bot)
+        ["foreground"]
+        .contains("none")));
+    let stopped = position(&node, &bot);
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(position(&node, &bot), stopped);
+    outcomes(&node);
 }
 
 #[test]
