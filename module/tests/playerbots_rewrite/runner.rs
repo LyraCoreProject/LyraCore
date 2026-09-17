@@ -244,18 +244,32 @@ fn playerbots_movement_continues_between_decisions() {
     let bot = &bots[0];
     node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
     select(&node, bot, "cohort");
-    node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
+    assert!(poll_until(POLL_TIMEOUT, || runner(&node, bot)
+        ["foreground"]
+        .contains("movement")));
+    node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
     let selected = runner(&node, bot);
     assert!(selected["foreground"].contains("movement"), "{selected:?}");
 
     // The decision queue is parked. Ordinary movement ticks must still execute the selected route.
     let advanced = poll_until(Duration::from_secs(5), || position(&node, bot) >= 1221.0);
     outcomes(&node);
-    assert!(advanced, "movement stopped at {} before its destination", position(&node, bot));
+    assert!(
+        advanced,
+        "movement stopped at {} before its destination",
+        position(&node, bot)
+    );
     let continued = runner(&node, bot);
     assert_eq!(continued["observed_micros"], selected["observed_micros"]);
-    assert_eq!(continued["objective_sequence"], selected["objective_sequence"]);
-    assert!(poll_until(Duration::from_secs(4), || (position(&node, bot) - 1238.0).abs() < 0.1));
+    assert_eq!(
+        continued["objective_sequence"],
+        selected["objective_sequence"]
+    );
+    assert!(poll_until(Duration::from_secs(4), || (position(
+        &node, bot
+    ) - 1238.0)
+        .abs()
+        < 0.1));
 }
 
 #[test]
