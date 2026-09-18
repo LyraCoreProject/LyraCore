@@ -179,6 +179,7 @@ jobs:
                 2>&1 | tee "$RUNNER_TEMP/companion-movement-recovery.log" || regression_status=1
               cargo test --locked -p lyracore-module --test playerbots_quest_loops \
                 -- --ignored --nocapture --test-threads=1 \
+                --skip playerbots_populated_pb004_quest_objective_and_runner_upgrade_in_place \
                 2>&1 | tee "$RUNNER_TEMP/companion-movement-quests.log" || regression_status=1
               cargo test --locked -p lyracore-module --test playerbots_transfer_lifecycle \
                 playerbots_process_restart_resumes_one_owned_movement_leg \
@@ -197,7 +198,7 @@ jobs:
                 "$RUNNER_TEMP/companion-orders.log"
               exit "$regression_status"
             '
-      # Historical PB-007 and PB-008 upgrades need preceding Wasm and remain in Collection CI.
+      # Historical PB-004, PB-007 and PB-008 upgrades need preceding Wasm and remain in Collection CI.
       # This job exercises current companion behavior, including scheduled Follow under load.
       - name: Upload companion test evidence
         if: always()

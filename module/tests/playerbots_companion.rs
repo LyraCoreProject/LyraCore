@@ -828,7 +828,7 @@ fn playerbots_casting_position_retains_one_injured_ally_across_movement_legs() {
     node.assert_call("playerbots_fixture_runner_select_cohort", &[priest]);
     let mut movement_legs = 0;
     let mut observed_splines = Vec::new();
-    let mut previous_endpoint: Option<(f32, f32)> = None;
+    let mut previous_leg: Option<(f32, f32, f32)> = None;
     let mut previous_spline_id: Option<String> = None;
     let pending = loop {
         pass_once(&node, priest);
@@ -852,14 +852,16 @@ fn playerbots_casting_position_retains_one_injured_ally_across_movement_legs() {
         if let Some(previous) = &previous_spline_id {
             assert_ne!(&leg["spline_id"], previous);
         }
-        if let Some((x, y)) = previous_endpoint {
-            assert!(leg["sx"].parse::<f32>().unwrap() >= x - 0.01);
-            assert!((leg["sy"].parse::<f32>().unwrap() - y).abs() < 0.01);
+        let from_x = leg["sx"].parse::<f32>().unwrap();
+        let end_x = leg["dx"].parse::<f32>().unwrap();
+        let y = leg["sy"].parse::<f32>().unwrap();
+        if let Some((previous_from_x, previous_end_x, previous_y)) = previous_leg {
+            // Renewal can start before the preceding leg ends, but travel must advance.
+            assert!(from_x > previous_from_x, "{leg:?} {observed_splines:?}");
+            assert!(end_x > previous_end_x, "{leg:?} {observed_splines:?}");
+            assert!((y - previous_y).abs() < 0.01);
         }
-        previous_endpoint = Some((
-            leg["dx"].parse::<f32>().unwrap(),
-            leg["dy"].parse::<f32>().unwrap(),
-        ));
+        previous_leg = Some((from_x, end_x, y));
         previous_spline_id = Some(leg["spline_id"].clone());
         observed_splines.push(leg.clone());
         evidence(
