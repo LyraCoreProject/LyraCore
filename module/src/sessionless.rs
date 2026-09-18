@@ -85,6 +85,41 @@ pub(crate) fn action_gate(
     Ok(())
 }
 
+/// Recheck authority and movement restrictions before continuing a Package-owned route.
+#[cfg_attr(not(has_packages), allow(dead_code))]
+pub(crate) fn movement_gate(
+    ctx: &ReducerContext,
+    character_guid: u64,
+) -> Result<(), crate::actor::ActionRefusal> {
+    use crate::actor::{ActionRefusal, ActionRefusalKind};
+    action_gate(ctx, character_guid)?;
+    if ctx
+        .db
+        .game_sessionless_action_consent()
+        .character_guid()
+        .find(character_guid)
+        .is_some_and(|consent| !consent.allowed)
+    {
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::CannotAct,
+            "session-less movement is disabled for this Character",
+        ));
+    }
+    let me = crate::helpers::live_entity(ctx, character_guid)
+        .map_err(|detail| ActionRefusal::new(ActionRefusalKind::MissingActor, detail))?;
+    if me.dead
+        || me.health == 0
+        || crate::spell::pending_cast(ctx, character_guid).is_some()
+        || crate::spell::is_self_movement_suppressed(ctx, character_guid)
+    {
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::CannotAct,
+            "Character cannot continue self-directed movement",
+        ));
+    }
+    Ok(())
+}
+
 /// Check the authority that may create or replay a session-less Transfer. A matching pending
 /// Transfer Intent is allowed through here so its exact destination and controller generation can
 /// answer the replay; [`action_gate`] remains the stricter Gate for every new action.

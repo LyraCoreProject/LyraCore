@@ -242,6 +242,7 @@ can finish the source response without applying the Companion Order twice.
 
 **Foreground Action**:
 The single movement or cast retained by one Bot Controller generation.
+Selected movement continues between decision turns while its authority and destination remain valid.
 
 **Candidate**:
 A proposed action identified by its action, target, spell, reason, and Bot Objective identity.

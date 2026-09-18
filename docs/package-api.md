@@ -67,6 +67,7 @@ authoritative; this list is the set of event names and their payload types.
 | `on_quest_accept` | `crate::hooks::QuestAcceptPayload` |
 | `on_quest_turnin` | `crate::hooks::QuestTurninPayload` |
 | `on_login` | `crate::hooks::LoginPayload` |
+| `on_character_relocated` | `crate::hooks::CharacterRelocatedPayload` |
 | `on_logout` | `crate::hooks::LogoutPayload` |
 | `on_gossip_select` | `crate::hooks::GossipSelectPayload` |
 | `on_creature_death` | `crate::hooks::CreatureDeathPayload` |
@@ -287,6 +288,11 @@ geometry. A Package must measure actual position on later observations to establ
 or arrival; the proposed endpoint cannot establish either.
 
 `actor::sessionless_action_gate(ctx, character_guid)` checks current Account Claim and Fence ownership, Character availability, and World Session status before Package gameplay. It permits a missing live entity so Legacy can restore a body. Group admission also requires a live entity and current controller consent.
+
+`actor::sessionless_movement_gate(ctx, character_guid)` adds current controller consent and a live,
+living body to that authority check. A pending cast or movement-suppressing crowd control refuses
+movement. Call it before issuing a movement leg, including continuation between decision turns. The Gate reads
+current state and does not cancel casts or change position.
 
 `actor::area_trigger_route(ctx, trigger_id)` reads one exact imported AreaTrigger source volume and
 target map. It exposes the source center and containment rule for Candidate movement while keeping

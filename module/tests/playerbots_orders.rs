@@ -380,22 +380,13 @@ where
         .unwrap()
 }
 
-fn finish_movement(node: &Standalone, guid: &str, leg: &BTreeMap<String, String>) {
-    let spline_id = leg["spline_id"].clone();
-    let destination_x: f32 = leg["dx"].parse().unwrap();
-    let destination_y: f32 = leg["dy"].parse().unwrap();
+fn wait_for_melee_range(node: &Standalone, guid: &str, target: &str) {
     assert!(poll_until(POLL_TIMEOUT, || {
         let position = entity(node, guid);
-        let arrived = (position["x"].parse::<f32>().unwrap() - destination_x).abs() < 0.01
-            && (position["y"].parse::<f32>().unwrap() - destination_y).abs() < 0.01;
-        let leg_finished = node
-            .query_rows(&format!(
-                "SELECT spline_id FROM game_creature_spline WHERE guid = {guid}"
-            ))
-            .into_iter()
-            .next()
-            .is_none_or(|current| current["spline_id"] != spline_id);
-        arrived && leg_finished
+        let target = entity(node, target);
+        let dx = position["x"].parse::<f32>().unwrap() - target["x"].parse::<f32>().unwrap();
+        let dy = position["y"].parse::<f32>().unwrap() - target["y"].parse::<f32>().unwrap();
+        dx.hypot(dy) <= 4.0
     }));
 }
 
@@ -818,8 +809,8 @@ fn playerbots_assist_uses_only_the_named_members_actual_fight() {
     evidence(&fixture, "assist-named-fight-approach");
     assert!(approach["chosen"].contains("move"));
     assert!(approach["chosen"].contains(chosen.as_str()));
-    let initial_leg = initial_leg.expect("expected a real movement leg");
-    finish_movement(node, &fixture.warrior, &initial_leg);
+    assert!(initial_leg.is_some(), "expected a real movement leg");
+    wait_for_melee_range(node, &fixture.warrior, chosen);
     pass(node, &fixture.warrior);
     let melee = node.query_rows(&format!(
         "SELECT target_guid FROM game_melee_attack WHERE attacker_guid = {}",
@@ -926,8 +917,8 @@ fn playerbots_assist_uses_only_the_named_members_actual_fight() {
     let recovered_approach = runner(node, &fixture.warrior);
     assert!(recovered_approach["chosen"].contains("move"));
     assert!(recovered_approach["chosen"].contains(chosen.as_str()));
-    let recovered_leg = recovered_leg.expect("expected a real movement leg");
-    finish_movement(node, &fixture.warrior, &recovered_leg);
+    assert!(recovered_leg.is_some(), "expected a real movement leg");
+    wait_for_melee_range(node, &fixture.warrior, chosen);
     pass(node, &fixture.warrior);
     evidence(&fixture, "assist-target-recovered-melee");
     assert_eq!(
@@ -1250,8 +1241,8 @@ fn playerbots_target_pulls_only_the_exact_eligible_creature_and_releases_control
     evidence(&fixture, "target-exact-approach");
     assert!(approach["chosen"].contains(exact));
     assert!(approach["chosen"].contains("move"));
-    let leg = leg.expect("exact Target did not start an approach");
-    finish_movement(node, &fixture.warrior, &leg);
+    assert!(leg.is_some(), "exact Target did not start an approach");
+    wait_for_melee_range(node, &fixture.warrior, exact);
     let mut melee = Vec::new();
     let pulled = poll_until(POLL_TIMEOUT, || {
         pass(node, &fixture.warrior);

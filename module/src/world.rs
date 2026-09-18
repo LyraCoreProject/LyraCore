@@ -879,6 +879,13 @@ pub(crate) fn teleport_player(
         );
     }
 
+    crate::hooks::fire_on_character_relocated(
+        ctx,
+        &crate::hooks::CharacterRelocatedPayload {
+            character_guid: player_guid,
+        },
+    );
+
     // Relay the client handshake — the gateway's `on_teleport` branches same-map (MSG_MOVE_TELEPORT_ACK)
     // vs cross-map (SMSG_TRANSFER_PENDING + SMSG_NEW_WORLD) on the `cross_map` flag stamped here (NOT on
     // live-entity presence — that proxy breaks under AOI for a far same-map teleport, see the field doc).
