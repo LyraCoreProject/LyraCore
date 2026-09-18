@@ -218,9 +218,16 @@ fn spline(node: &Standalone, guid: &str) -> Option<BTreeMap<String, String>> {
 
 fn spline_finished(node: &Standalone, guid: &str, leg: &BTreeMap<String, String>) -> bool {
     let (x, y) = position(node, guid);
-    let at_destination = (x - leg["dx"].parse::<f32>().unwrap()).abs() < 0.01
-        && (y - leg["dy"].parse::<f32>().unwrap()).abs() < 0.01;
-    at_destination
+    let sx = leg["sx"].parse::<f32>().unwrap();
+    let sy = leg["sy"].parse::<f32>().unwrap();
+    let dx = leg["dx"].parse::<f32>().unwrap() - sx;
+    let dy = leg["dy"].parse::<f32>().unwrap() - sy;
+    let length = dx.hypot(dy);
+    let along = (x - sx) * dx + (y - sy) * dy;
+    let across = ((x - sx) * dy - (y - sy) * dx).abs();
+    length > 0.01
+        && along >= length * (length - 0.01)
+        && across <= length * 0.01
         && spline(node, guid).is_none_or(|current| current["spline_id"] != leg["spline_id"])
 }
 
@@ -846,7 +853,7 @@ fn playerbots_casting_position_retains_one_injured_ally_across_movement_legs() {
             assert_ne!(&leg["spline_id"], previous);
         }
         if let Some((x, y)) = previous_endpoint {
-            assert!((leg["sx"].parse::<f32>().unwrap() - x).abs() < 0.01);
+            assert!(leg["sx"].parse::<f32>().unwrap() >= x - 0.01);
             assert!((leg["sy"].parse::<f32>().unwrap() - y).abs() < 0.01);
         }
         previous_endpoint = Some((

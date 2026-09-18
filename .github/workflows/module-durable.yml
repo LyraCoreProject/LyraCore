@@ -168,20 +168,21 @@ jobs:
                 2>&1 | tee "$RUNNER_TEMP/companion-continuous-movement.log"
               grep -F "test result: ok. 9 passed; 0 failed; 0 ignored;" \
                 "$RUNNER_TEMP/companion-continuous-movement.log"
+              regression_status=0
               cargo test --locked -p lyracore-module --test playerbots_companion \
                 playerbots_casting_position_retains_one_injured_ally_across_movement_legs \
                 -- --ignored --exact --nocapture \
-                2>&1 | tee "$RUNNER_TEMP/companion-movement-handoff.log"
+                2>&1 | tee "$RUNNER_TEMP/companion-movement-handoff.log" || regression_status=1
               cargo test --locked -p lyracore-module --test playerbots_recovery \
                 --test playerbots_recovery_casting -- --ignored --nocapture --test-threads=1 \
-                2>&1 | tee "$RUNNER_TEMP/companion-movement-recovery.log"
+                2>&1 | tee "$RUNNER_TEMP/companion-movement-recovery.log" || regression_status=1
               cargo test --locked -p lyracore-module --test playerbots_quest_loops \
                 -- --ignored --nocapture --test-threads=1 \
-                2>&1 | tee "$RUNNER_TEMP/companion-movement-quests.log"
+                2>&1 | tee "$RUNNER_TEMP/companion-movement-quests.log" || regression_status=1
               cargo test --locked -p lyracore-module --test playerbots_transfer_lifecycle \
                 playerbots_process_restart_resumes_one_owned_movement_leg \
                 -- --ignored --exact --nocapture \
-                2>&1 | tee "$RUNNER_TEMP/companion-movement-restart.log"
+                2>&1 | tee "$RUNNER_TEMP/companion-movement-restart.log" || regression_status=1
               cargo test --locked -p lyracore-module --test playerbots_movement_upgrade \
                 -- --ignored --nocapture \
                 2>&1 | tee "$RUNNER_TEMP/companion-movement-upgrade.log"
@@ -193,6 +194,7 @@ jobs:
                 2>&1 | tee "$RUNNER_TEMP/companion-orders.log"
               grep -F "test playerbots_companions_receive_turns_without_starving_older_background_work ... ok" \
                 "$RUNNER_TEMP/companion-orders.log"
+              exit "$regression_status"
             '
       # The historical PB-008 upgrade needs a preceding Wasm and remains in Collection CI.
       # This job exercises current companion behavior, including scheduled Follow under load.
