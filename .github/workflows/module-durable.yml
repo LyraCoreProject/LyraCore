@@ -96,7 +96,7 @@ jobs:
 
   playerbots-companion-orders:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     env:
       CARGO_BUILD_JOBS: 2
       CARGO_INCREMENTAL: 0
@@ -112,7 +112,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: LyraCoreProject/packages
-          ref: 0a579c94095fe6bfb330be1aee5e3efcb063a602
+          ref: 7bf14e1df385dfc2d52207dff383b23d478bc768
           path: collection
           persist-credentials: false
       - name: Check out the preceding movement Package revision
@@ -168,6 +168,23 @@ jobs:
                 2>&1 | tee "$RUNNER_TEMP/companion-continuous-movement.log"
               grep -F "test result: ok. 9 passed; 0 failed; 0 ignored;" \
                 "$RUNNER_TEMP/companion-continuous-movement.log"
+              regression_status=0
+              cargo test --locked -p lyracore-module --test playerbots_companion \
+                playerbots_casting_position_retains_one_injured_ally_across_movement_legs \
+                -- --ignored --exact --nocapture \
+                2>&1 | tee "$RUNNER_TEMP/companion-movement-handoff.log" || regression_status=1
+              cargo test --locked -p lyracore-module --test playerbots_recovery \
+                --test playerbots_recovery_casting -- --ignored --nocapture --test-threads=1 \
+                --skip playerbots_recovery_upgrades_a_retained_quest_and_owned_cast_without_resetting_them \
+                2>&1 | tee "$RUNNER_TEMP/companion-movement-recovery.log" || regression_status=1
+              cargo test --locked -p lyracore-module --test playerbots_quest_loops \
+                -- --ignored --nocapture --test-threads=1 \
+                --skip playerbots_populated_pb004_quest_objective_and_runner_upgrade_in_place \
+                2>&1 | tee "$RUNNER_TEMP/companion-movement-quests.log" || regression_status=1
+              cargo test --locked -p lyracore-module --test playerbots_transfer_lifecycle \
+                playerbots_process_restart_resumes_one_owned_movement_leg \
+                -- --ignored --exact --nocapture \
+                2>&1 | tee "$RUNNER_TEMP/companion-movement-restart.log" || regression_status=1
               cargo test --locked -p lyracore-module --test playerbots_movement_upgrade \
                 -- --ignored --nocapture \
                 2>&1 | tee "$RUNNER_TEMP/companion-movement-upgrade.log"
@@ -179,8 +196,9 @@ jobs:
                 2>&1 | tee "$RUNNER_TEMP/companion-orders.log"
               grep -F "test playerbots_companions_receive_turns_without_starving_older_background_work ... ok" \
                 "$RUNNER_TEMP/companion-orders.log"
+              exit "$regression_status"
             '
-      # The historical PB-008 upgrade needs a preceding Wasm and remains in Collection CI.
+      # Historical PB-004, PB-007 and PB-008 upgrades need preceding Wasm and remain in Collection CI.
       # This job exercises current companion behavior, including scheduled Follow under load.
       - name: Upload companion test evidence
         if: always()

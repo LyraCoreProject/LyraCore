@@ -354,7 +354,8 @@ fn playerbots_recovery_changes_a_stalled_attack_then_defers_without_false_progre
                 && chosen.contains("reason = (quest = ())")
                 && runner["last_outcome"].as_str() == Some("(waiting = ())")
                 && sample["actions"].as_array().unwrap().iter().any(|action| {
-                    action["observed_micros"] == runner["observed_micros"]
+                    action["observed_micros"].as_str().unwrap().parse::<i64>().unwrap()
+                        >= runner["observed_micros"].as_str().unwrap().parse::<i64>().unwrap()
                         && action["kind"].as_str() == Some("(move = ())")
                         && {
                             let outcome = action["outcome"].as_str().unwrap();
@@ -500,7 +501,7 @@ fn playerbots_recovery_exhausts_quest_targets_then_earns_alternative_quest_credi
                 &node,
                 &format!("SELECT character_guid, recovery FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
             );
-            if runner["recovery"].contains(&format!("fight = {target}")) {
+            if runner["recovery"].contains(&format!("active = (some = (fight = {target}))")) {
                 true
             } else {
                 std::thread::sleep(Duration::from_millis(1_100));

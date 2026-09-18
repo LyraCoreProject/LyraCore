@@ -2122,9 +2122,37 @@ fn assert_exit_completed(
         embedded_u64(foreground, "started_micros").expect("retained Follow has no start timestamp");
     assert_u64_field(moves[0], "started_micros", started);
     assert_u64_field(moves[0], "observed_micros", started);
+    let current_runner = row(evidence, &["state", "source", "runner"]);
+    let current_foreground = text_field(current_runner, "foreground");
+    assert_eq!(
+        embedded_u64(current_foreground, "started_micros"),
+        Some(started),
+        "Follow lost ownership while continuing movement: {evidence}"
+    );
+    assert_eq!(
+        embedded_u64(current_foreground, "objective"),
+        Some(bot.objective_identity),
+        "Follow changed its objective while continuing movement: {evidence}"
+    );
     assert!(
-        rows(evidence, &["state", "source", "actions"]).contains(moves[0]),
-        "another movement replaced the Follow leg before body progress: {evidence}"
+        current_foreground.contains(&format!("action = (move = (entity = {}))", bot.leader_guid)),
+        "Follow changed its retained target: {evidence}"
+    );
+    let current_moves: Vec<_> = rows(evidence, &["state", "source", "actions"])
+        .iter()
+        .filter(|action| action["kind"] == "(move = ())")
+        .collect();
+    assert_eq!(
+        current_moves.len(),
+        1,
+        "duplicate movement observations: {evidence}"
+    );
+    assert!(
+        text_field(current_moves[0], "observed_micros")
+            .parse::<u64>()
+            .unwrap()
+            >= started,
+        "Follow reused an observation from before its retained action: {evidence}"
     );
     assert_follow_order(evidence, "source", &follow.order);
     assert_retained_objective(
