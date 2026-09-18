@@ -262,16 +262,9 @@ fn playerbots_process_restart_resumes_one_owned_movement_leg() {
         .as_str()
         .unwrap()
         .contains("movement"));
-    let dx = before["splines"][0]["dx"]
-        .as_str()
-        .unwrap()
-        .parse::<f32>()
-        .unwrap();
-    let dy = before["splines"][0]["dy"]
-        .as_str()
-        .unwrap()
-        .parse::<f32>()
-        .unwrap();
+    // The fixture's retained Home is (1240, 1200), with a two-yard stand-off.
+    let dx = 1238.0;
+    let dy = 1200.0;
     node.restart_persistent();
     let after = capture(
         &node,

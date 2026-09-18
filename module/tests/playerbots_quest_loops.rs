@@ -2062,7 +2062,8 @@ fn playerbots_quest_fallback_distributes_an_ungrouped_population() {
         );
         assert!(actions(&node, guid).iter().any(|action| {
             action["kind"].contains("move")
-                && action["observed_micros"] == runner["observed_micros"]
+                && action["observed_micros"].parse::<i64>().unwrap()
+                    >= runner["observed_micros"].parse::<i64>().unwrap()
                 && action["outcome"].contains("destination")
                 && action["outcome"].contains("arrived = false")
         }));

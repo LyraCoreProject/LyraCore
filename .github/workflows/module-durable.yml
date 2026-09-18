@@ -96,7 +96,7 @@ jobs:
 
   playerbots-companion-orders:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     env:
       CARGO_BUILD_JOBS: 2
       CARGO_INCREMENTAL: 0
@@ -112,7 +112,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: LyraCoreProject/packages
-          ref: 0a579c94095fe6bfb330be1aee5e3efcb063a602
+          ref: ece69d5a1bed0684887053fa0c245e922726b82f
           path: collection
           persist-credentials: false
       - name: Check out the preceding movement Package revision
@@ -168,6 +168,20 @@ jobs:
                 2>&1 | tee "$RUNNER_TEMP/companion-continuous-movement.log"
               grep -F "test result: ok. 9 passed; 0 failed; 0 ignored;" \
                 "$RUNNER_TEMP/companion-continuous-movement.log"
+              cargo test --locked -p lyracore-module --test playerbots_companion \
+                playerbots_casting_position_retains_one_injured_ally_across_movement_legs \
+                -- --ignored --exact --nocapture \
+                2>&1 | tee "$RUNNER_TEMP/companion-movement-handoff.log"
+              cargo test --locked -p lyracore-module --test playerbots_recovery \
+                --test playerbots_recovery_casting -- --ignored --nocapture --test-threads=1 \
+                2>&1 | tee "$RUNNER_TEMP/companion-movement-recovery.log"
+              cargo test --locked -p lyracore-module --test playerbots_quest_loops \
+                -- --ignored --nocapture --test-threads=1 \
+                2>&1 | tee "$RUNNER_TEMP/companion-movement-quests.log"
+              cargo test --locked -p lyracore-module --test playerbots_transfer_lifecycle \
+                playerbots_process_restart_resumes_one_owned_movement_leg \
+                -- --ignored --exact --nocapture \
+                2>&1 | tee "$RUNNER_TEMP/companion-movement-restart.log"
               cargo test --locked -p lyracore-module --test playerbots_movement_upgrade \
                 -- --ignored --nocapture \
                 2>&1 | tee "$RUNNER_TEMP/companion-movement-upgrade.log"
