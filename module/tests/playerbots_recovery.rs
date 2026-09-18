@@ -501,7 +501,7 @@ fn playerbots_recovery_exhausts_quest_targets_then_earns_alternative_quest_credi
                 &node,
                 &format!("SELECT character_guid, recovery FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
             );
-            if runner["recovery"].contains(&format!("fight = {target}")) {
+            if runner["recovery"].contains(&format!("active = (some = (fight = {target}))")) {
                 true
             } else {
                 std::thread::sleep(Duration::from_millis(1_100));

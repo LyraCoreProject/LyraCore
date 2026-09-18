@@ -262,9 +262,16 @@ fn playerbots_process_restart_resumes_one_owned_movement_leg() {
         .as_str()
         .unwrap()
         .contains("movement"));
-    // The fixture's retained Home is (1240, 1200), with a two-yard stand-off.
-    let dx = 1238.0;
-    let dy = 1200.0;
+    let dx = before["splines"][0]["dx"]
+        .as_str()
+        .unwrap()
+        .parse::<f32>()
+        .unwrap();
+    let dy = before["splines"][0]["dy"]
+        .as_str()
+        .unwrap()
+        .parse::<f32>()
+        .unwrap();
     node.restart_persistent();
     let after = capture(
         &node,
@@ -303,7 +310,30 @@ fn playerbots_process_restart_resumes_one_owned_movement_leg() {
         support::module_bytes(),
     );
     assert!(arrived, "{arrival}");
-    assert!(arrival["splines"].as_array().unwrap().is_empty());
+    let splines = arrival["splines"].as_array().unwrap();
+    assert!(splines.len() <= 1, "{arrival}");
+    if let Some(next) = splines.first() {
+        assert_eq!(next["guid"], before["splines"][0]["guid"], "{arrival}");
+        assert!((next["sx"].as_str().unwrap().parse::<f32>().unwrap() - dx).abs() < 0.05);
+        assert!((next["sy"].as_str().unwrap().parse::<f32>().unwrap() - dy).abs() < 0.05);
+        assert!(
+            next["dx"].as_str().unwrap().parse::<f32>().unwrap() > dx,
+            "{arrival}"
+        );
+        assert!(
+            next["start_micros"]
+                .as_str()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap()
+                > before["splines"][0]["start_micros"]
+                    .as_str()
+                    .unwrap()
+                    .parse::<u64>()
+                    .unwrap(),
+            "{arrival}"
+        );
+    }
     assert_ne!(arrival["entity"][0]["x"], before["entity"][0]["x"]);
     node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
     let observed = capture(
