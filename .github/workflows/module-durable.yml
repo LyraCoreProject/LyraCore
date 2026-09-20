@@ -112,8 +112,15 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: LyraCoreProject/packages
-          ref: 7bf14e1df385dfc2d52207dff383b23d478bc768
+          ref: c81bf1069fe63cdc99d63b037d8e5e9f83800b4e
           path: collection
+          persist-credentials: false
+      - name: Check out Core before retained waypoint paths
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: LyraCoreProject/LyraCore
+          ref: 286e8404d3399b2849ae4a34a253f190e2fd7c05
+          path: preceding-core
           persist-credentials: false
       - name: Check out the preceding movement Package revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -139,9 +146,9 @@ jobs:
           ln -s spacetimedb-cli "$cli_dir/spacetime"
           echo "$cli_dir" >> "$GITHUB_PATH"
       - name: Build the preceding movement schema for populated migration
-        working-directory: lyracore
+        working-directory: preceding-core
         run: |
-          "$GITHUB_WORKSPACE/preceding-collection/.github/check-core-tip.sh" "$GITHUB_WORKSPACE/lyracore" \
+          "$GITHUB_WORKSPACE/preceding-collection/.github/check-core-tip.sh" "$GITHUB_WORKSPACE/preceding-core" \
             cargo build --locked --release --target wasm32-unknown-unknown \
             -p lyracore-module --features=debug_reducers
           cp target/wasm32-unknown-unknown/release/lyracore_module.wasm "$RUNNER_TEMP/companion-preceding.wasm"
@@ -166,7 +173,7 @@ jobs:
               cargo test --locked -p lyracore-module --test playerbots_rewrite \
                 runner::playerbots_movement_ -- --ignored --nocapture --test-threads=1 \
                 2>&1 | tee "$RUNNER_TEMP/companion-continuous-movement.log"
-              grep -F "test result: ok. 9 passed; 0 failed; 0 ignored;" \
+              grep -F "test result: ok. 15 passed; 0 failed; 0 ignored;" \
                 "$RUNNER_TEMP/companion-continuous-movement.log"
               regression_status=0
               cargo test --locked -p lyracore-module --test playerbots_companion \
@@ -188,7 +195,7 @@ jobs:
               cargo test --locked -p lyracore-module --test playerbots_movement_upgrade \
                 -- --ignored --nocapture \
                 2>&1 | tee "$RUNNER_TEMP/companion-movement-upgrade.log"
-              grep -F "test result: ok. 1 passed; 0 failed; 0 ignored;" \
+              grep -F "test result: ok. 2 passed; 0 failed; 0 ignored;" \
                 "$RUNNER_TEMP/companion-movement-upgrade.log"
               cargo test --locked -p lyracore-module --test playerbots_orders \
                 -- --ignored --test-threads=1 \

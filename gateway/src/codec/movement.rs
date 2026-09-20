@@ -295,6 +295,48 @@ pub fn build_monster_move(
     }
 }
 
+/// Vanilla linear paths put the absolute destination first, then signed destination-relative
+/// intermediate points. The typed writer uses a different multi-point representation.
+pub fn build_ground_path_raw(
+    mover_guid: u64,
+    start: Vector3d,
+    points: &[(f32, f32, f32)],
+    duration_ms: u32,
+    spline_id: u32,
+    run: bool,
+) -> Option<(u16, Vec<u8>)> {
+    use lyracore_shared::movement_path;
+    let &destination = points.last()?;
+    if points.len() > movement_path::MAX_POINTS
+        || [start.x, start.y, start.z].iter().any(|v| !v.is_finite())
+        || points
+            .iter()
+            .any(|p| !p.0.is_finite() || !p.1.is_finite() || !p.2.is_finite())
+    {
+        return None;
+    }
+    let mut body = Vec::with_capacity(46 + points.len() * 4);
+    super::values::write_packed_guid_u64(&mut body, mover_guid);
+    for value in [start.x, start.y, start.z] {
+        body.extend_from_slice(&value.to_le_bytes());
+    }
+    body.extend_from_slice(&spline_id.to_le_bytes());
+    body.push(0);
+    body.extend_from_slice(&(if run { 0x100u32 } else { 0 }).to_le_bytes());
+    body.extend_from_slice(&duration_ms.to_le_bytes());
+    body.extend_from_slice(&(points.len() as u32).to_le_bytes());
+    for value in [destination.0, destination.1, destination.2] {
+        body.extend_from_slice(&value.to_le_bytes());
+    }
+    for &point in &points[..points.len() - 1] {
+        if movement_path::distance(destination, point).powi(2) < 0.5 {
+            return None;
+        }
+        body.extend_from_slice(&movement_path::packed_offset(destination, point)?.to_le_bytes());
+    }
+    Some((0x00DD, body))
+}
+
 /// Build the dedicated multi-point passenger spline in the build-5875 Catmull-Rom form. The
 /// vendored typed writer always applies linear-path PackXYZ after the destination, even when the
 /// FLYING/Catmull-Rom flag is set. Taxi paths require full absolute points (and commonly have
@@ -395,5 +437,52 @@ pub fn bytes_to_movement_info(body: &[u8]) -> Result<MovementInfo> {
         Ok(ClientOpcodeMessage::MSG_MOVE_HEARTBEAT(c)) => Ok(c.info),
         Ok(other) => Err(anyhow!("movement carrier decoded to unexpected {other}")),
         Err(e) => Err(anyhow!("movement carrier decode failed: {e}")),
+    }
+}
+
+#[cfg(test)]
+mod ground_path_tests {
+    use super::*;
+
+    #[test]
+    fn vanilla_ground_path_carries_destination_relative_signed_offsets() {
+        let (opcode, body) = build_ground_path_raw(
+            1,
+            Vector3d {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            &[(9.0, 21.0, 29.5), (10.0, 20.0, 30.0)],
+            2_000,
+            7,
+            true,
+        )
+        .unwrap();
+        assert_eq!(opcode, 0xdd);
+        // Packed GUID, start, id, normal, RUN_MODE, duration, count, destination, packed point.
+        assert_eq!(
+            body,
+            vec![
+                1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 0, 0, 0, 0, 0, 1, 0, 0, 0xd0, 7, 0, 0,
+                2, 0, 0, 0, 0, 0, 0x20, 0x41, 0, 0, 0xa0, 0x41, 0, 0, 0xf0, 0x41, 4, 0xe0, 0xbf, 0,
+            ]
+        );
+    }
+
+    #[test]
+    fn ground_path_refuses_unrepresentable_intermediate_points() {
+        let start = Vector3d {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+        };
+        for points in [
+            [(300.0, 0.0, 0.0), (0.0, 0.0, 0.0)],
+            [(0.25, 0.0, 0.0), (0.0, 0.0, 0.0)],
+            [(f32::NAN, 0.0, 0.0), (0.0, 0.0, 0.0)],
+        ] {
+            assert!(build_ground_path_raw(1, start, &points, 1000, 1, true).is_none());
+        }
     }
 }

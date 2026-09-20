@@ -72,3 +72,46 @@ fn playerbots_movement_upgrade_preserves_the_retained_destination() {
     )
     .unwrap();
 }
+
+#[test]
+#[ignore = "requires preceding movement Wasm, SpacetimeDB, and the playerbots Package"]
+fn playerbots_waypoint_upgrade_preserves_an_existing_single_leg() {
+    let previous = std::env::var_os("PLAYERBOTS_MOVEMENT_PRECEDING_WASM")
+        .expect("PLAYERBOTS_MOVEMENT_PRECEDING_WASM must name the preceding Module");
+    let mut node = Standalone::start("playerbots-waypoint-upgrade");
+    node.publish_module_bytes(&std::fs::read(previous).unwrap());
+    node.assert_call("claim_operator", &[]);
+    node.assert_call("install_guid_range", &["1000000"]);
+    node.assert_call("playerbots_spawn_role", &["1", "1200", "1200", "50", "1"]);
+    node.assert_call("playerbots_fixture_prepare", &[]);
+    let bot = node.query_rows("SELECT character_guid FROM pkg_playerbots_bot")[0]["character_guid"]
+        .clone();
+    node.assert_sql("DELETE FROM game_creature_move_schedule");
+    node.assert_call("playerbots_fixture_runner_stage", &[&bot, "false"]);
+    node.assert_call("playerbots_fixture_move", &[&bot, "1240"]);
+    let before = node.query_rows(&format!(
+        "SELECT * FROM game_creature_spline WHERE guid = {bot}"
+    ));
+    assert_eq!(before.len(), 1);
+    assert!(!before[0].contains_key("path"));
+    let characters = node.query_rows("SELECT guid, name FROM game_character");
+    node.publish_module();
+    let migrated = node.query_rows(&format!(
+        "SELECT * FROM game_creature_spline WHERE guid = {bot}"
+    ));
+    assert_eq!(migrated.len(), 1);
+    for (field, value) in &before[0] {
+        assert_eq!(migrated[0][field], *value, "migration changed {field}");
+    }
+    assert!(migrated[0]["path"].contains("none"));
+    assert_eq!(
+        node.query_rows("SELECT guid, name FROM game_character"),
+        characters
+    );
+    std::fs::write(
+        support::log_dir().join(format!("{}-migration.json", node.shard_name())),
+        serde_json::to_vec_pretty(&serde_json::json!({"before": before, "migrated": migrated}))
+            .unwrap(),
+    )
+    .unwrap();
+}

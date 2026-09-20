@@ -711,6 +711,7 @@ fn an_old_shard_cannot_move_or_change_skills_on_a_destination_viewer() {
             cell: 0,
             facing: false,
             facing_angle: 0.0,
+            path: None,
         },
     );
     skill_changed(

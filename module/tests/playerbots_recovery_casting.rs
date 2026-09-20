@@ -4,7 +4,7 @@ mod support;
 
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
-use support::{poll_until, Standalone, POLL_TIMEOUT};
+use support::Standalone;
 
 const HEAL: u32 = 5_090_100;
 const ROOT: u32 = 50_021;
@@ -87,21 +87,6 @@ fn spline(node: &Standalone, guid: &str) -> Option<BTreeMap<String, String>> {
     ))
     .into_iter()
     .next()
-}
-
-fn spline_finished(node: &Standalone, guid: &str, leg: &BTreeMap<String, String>) -> bool {
-    let (x, y) = position(node, guid);
-    let sx = leg["sx"].parse::<f32>().unwrap();
-    let sy = leg["sy"].parse::<f32>().unwrap();
-    let dx = leg["dx"].parse::<f32>().unwrap() - sx;
-    let dy = leg["dy"].parse::<f32>().unwrap() - sy;
-    let length = dx.hypot(dy);
-    let along = (x - sx) * dx + (y - sy) * dy;
-    let across = ((x - sx) * dy - (y - sy) * dx).abs();
-    length > 0.01
-        && along >= length * (length - 0.01)
-        && across <= length * 0.01
-        && spline(node, guid).is_none_or(|current| current["spline_id"] != leg["spline_id"])
 }
 
 fn snapshot(
@@ -308,23 +293,22 @@ fn playerbots_recovery_counts_owned_casting_position_progress_for_the_same_heal(
     );
     let started = Instant::now();
     let mut samples = Vec::new();
-    let mut completed_legs = 0usize;
+    let mut retained_samples = 0usize;
     let mut movement_failed = false;
     node.assert_call("playerbots_fixture_runner_pass_once", &[priest]);
+    let initial_path = spline(&node, priest).expect("casting-position path missing");
     loop {
         samples.push(snapshot(&node, priest, ally, &blocker, started.elapsed()));
         if started.elapsed() >= Duration::from_secs(12) {
             break;
         }
-        let Some(leg) = spline(&node, priest) else {
+        let Some(path) = spline(&node, priest) else {
             movement_failed = true;
             break;
         };
-        if !poll_until(POLL_TIMEOUT, || spline_finished(&node, priest, &leg)) {
-            movement_failed = true;
-            break;
-        }
-        completed_legs += 1;
+        assert_eq!(path["spline_id"], initial_path["spline_id"], "{path:?}");
+        retained_samples += 1;
+        std::thread::sleep(Duration::from_millis(1000));
         node.assert_call("playerbots_fixture_runner_pass_once", &[priest]);
     }
     let final_position = position(&node, priest);
@@ -342,7 +326,7 @@ fn playerbots_recovery_counts_owned_casting_position_progress_for_the_same_heal(
         "ally_start_health": ally_start_health,
         "initial_engagement": initial_engagement,
         "final_position": final_position,
-        "completed_legs": completed_legs,
+        "retained_path_samples": retained_samples,
         "movement_failed": movement_failed,
         "samples": samples,
     });
@@ -380,7 +364,7 @@ fn playerbots_recovery_counts_owned_casting_position_progress_for_the_same_heal(
         initial_distance > spell["range_yd"].parse::<f32>().unwrap(),
         "{evidence}"
     );
-    assert!(completed_legs >= 2, "{evidence}");
+    assert!(retained_samples >= 2, "{evidence}");
     assert!(final_position.0 > start_position.0 + 20.0, "{evidence}");
     assert!(blocker_distance >= 8.0, "{evidence}");
     assert!(

@@ -216,21 +216,6 @@ fn spline(node: &Standalone, guid: &str) -> Option<BTreeMap<String, String>> {
     .next()
 }
 
-fn spline_finished(node: &Standalone, guid: &str, leg: &BTreeMap<String, String>) -> bool {
-    let (x, y) = position(node, guid);
-    let sx = leg["sx"].parse::<f32>().unwrap();
-    let sy = leg["sy"].parse::<f32>().unwrap();
-    let dx = leg["dx"].parse::<f32>().unwrap() - sx;
-    let dy = leg["dy"].parse::<f32>().unwrap() - sy;
-    let length = dx.hypot(dy);
-    let along = (x - sx) * dx + (y - sy) * dy;
-    let across = ((x - sx) * dy - (y - sy) * dx).abs();
-    length > 0.01
-        && along >= length * (length - 0.01)
-        && across <= length * 0.01
-        && spline(node, guid).is_none_or(|current| current["spline_id"] != leg["spline_id"])
-}
-
 fn fixture(name: &str) -> (Standalone, Vec<String>) {
     fixture_role(name, "1")
 }
@@ -826,11 +811,21 @@ fn playerbots_casting_position_retains_one_injured_ally_across_movement_legs() {
     node.assert_call("playerbots_fixture_companion_move", &[ally, "1400", "1200"]);
     node.assert_call("playerbots_fixture_companion_health", &[ally, "30"]);
     node.assert_call("playerbots_fixture_runner_select_cohort", &[priest]);
-    let mut movement_legs = 0;
+    pass_once(&node, priest);
+    let initial_path = spline(&node, priest).expect("casting-position pass did not start a path");
+    let destination_x = initial_path["dx"].parse::<f32>().unwrap();
+    let initial_x = position(&node, priest).0;
+    assert!(initial_path["dur_ms"].parse::<u32>().unwrap() > 3000);
+    assert!(poll_until(POLL_TIMEOUT, || position(&node, priest).0 > initial_x + 3.0));
+    node.assert_call("playerbots_fixture_companion_health", &[leader, "10"]);
+
+    let started = std::time::Instant::now();
     let mut observed_splines = Vec::new();
-    let mut previous_leg: Option<(f32, f32, f32)> = None;
-    let mut previous_spline_id: Option<String> = None;
     let pending = loop {
+        assert!(
+            started.elapsed() < POLL_TIMEOUT,
+            "heal did not interrupt the path"
+        );
         pass_once(&node, priest);
         let retained = runner(&node, priest);
         assert!(retained["chosen"].contains(ally), "{retained:?}");
@@ -839,51 +834,32 @@ fn playerbots_casting_position_retains_one_injured_ally_across_movement_legs() {
             "SELECT scheduled_id, target_guid FROM game_pending_cast WHERE caster_guid = {priest}"
         ));
         if let Some(pending) = pending.first() {
-            assert!(spline(&node, priest).is_none());
+            if let Some(stop) = spline(&node, priest) {
+                assert_eq!(stop["dur_ms"], "0", "{stop:?}");
+                assert_eq!(stop["sx"], stop["dx"], "{stop:?}");
+                assert_eq!(stop["sy"], stop["dy"], "{stop:?}");
+            }
             assert_eq!(pending["target_guid"], *ally);
+            assert!(position(&node, priest).0 < destination_x - 1.0);
             break pending.clone();
         }
         assert!(
             retained["chosen"].contains("castingPosition"),
             "{retained:?}"
         );
-        let leg = spline(&node, priest).expect("casting-position pass did not start a spline");
-        assert_ne!(leg["dur_ms"], "0");
-        if let Some(previous) = &previous_spline_id {
-            assert_ne!(&leg["spline_id"], previous);
-        }
-        let from_x = leg["sx"].parse::<f32>().unwrap();
-        let end_x = leg["dx"].parse::<f32>().unwrap();
-        let y = leg["sy"].parse::<f32>().unwrap();
-        if let Some((previous_from_x, previous_end_x, previous_y)) = previous_leg {
-            // Renewal can start before the preceding leg ends, but travel must advance.
-            assert!(from_x > previous_from_x, "{leg:?} {observed_splines:?}");
-            assert!(end_x > previous_end_x, "{leg:?} {observed_splines:?}");
-            assert!((y - previous_y).abs() < 0.01);
-        }
-        previous_leg = Some((from_x, end_x, y));
-        previous_spline_id = Some(leg["spline_id"].clone());
-        observed_splines.push(leg.clone());
-        evidence(
-            &node,
-            &format!("target-retention-leg-{}", movement_legs + 1),
-        );
-        assert!(movement_legs < 6, "{retained:?}");
-        assert!(poll_until(POLL_TIMEOUT, || spline_finished(
-            &node, priest, &leg
-        )));
-        movement_legs += 1;
-        if movement_legs == 1 {
-            node.assert_call("playerbots_fixture_companion_health", &[leader, "10"]);
-        }
+        let path = spline(&node, priest).expect("casting-position path disappeared");
+        assert_eq!(path["spline_id"], initial_path["spline_id"], "{path:?}");
+        observed_splines.push(path);
+        std::thread::sleep(std::time::Duration::from_millis(500));
     };
-    assert!((2..=6).contains(&movement_legs));
-    let path = support::log_dir().join(format!("{}-target-retention-legs.json", node.shard_name()));
+    assert!(observed_splines.len() >= 2, "{observed_splines:?}");
+    let path = support::log_dir().join(format!("{}-target-retention-path.json", node.shard_name()));
     std::fs::write(
         path,
         serde_json::to_vec_pretty(&serde_json::json!({
-            "completed_legs": movement_legs,
-            "splines": &observed_splines,
+            "initial_path": &initial_path,
+            "retained_path_samples": &observed_splines,
+            "cast_position": position(&node, priest),
             "pending_cast": &pending,
         }))
         .unwrap(),

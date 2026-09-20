@@ -376,6 +376,281 @@ pub struct RouteStep {
     pub coverage: CoverageEvidence,
 }
 
+pub struct RoutePath {
+    pub step: RouteStep,
+    pub points: Vec<(f32, f32, f32)>,
+}
+
+/// Retain a bounded part of one route, including its turns, after checking every segment.
+pub fn route_path(
+    ctx: &ReducerContext,
+    map_id: u32,
+    instance_id: u64,
+    start: (f32, f32, f32),
+    destination: (f32, f32, f32),
+    stop_dist: f32,
+) -> RoutePath {
+    use lyracore_shared::movement_path::{self, MAX_DISTANCE, MAX_POINTS};
+    let cur = (start.0, start.1);
+    let dest = (destination.0, destination.1);
+    let mut result = RoutePath {
+        step: RouteStep {
+            from: cur.into(),
+            endpoint: cur.into(),
+            first_waypoint: None,
+            status: RouteStatus::Blocked,
+            expansions: 0,
+            clipping: None,
+            coverage: CoverageEvidence::Unknown,
+        },
+        points: Vec::new(),
+    };
+    if ![
+        start.0,
+        start.1,
+        start.2,
+        destination.0,
+        destination.1,
+        destination.2,
+        stop_dist,
+    ]
+    .iter()
+    .all(|v| v.is_finite())
+        || stop_dist < 0.0
+        || [cur.0, cur.1, dest.0, dest.1]
+            .iter()
+            .any(|&v| cell_index(v).is_none())
+    {
+        return result;
+    }
+    let enabled = nav_enabled(ctx);
+    let generation = enabled.then(|| coverage_generation(ctx, map_id)).flatten();
+    let mut checked = std::collections::BTreeSet::new();
+    let mut all_covered = generation.is_some();
+    let mut fetch = |cx, cy| {
+        let (cell, covered) = fetch_cell(ctx, map_id, generation, cx, cy);
+        checked.insert((cx, cy));
+        all_covered &= covered;
+        cell
+    };
+    let planned = if enabled {
+        if let (Some(cx), Some(cy)) = (cell_index(cur.0), cell_index(cur.1)) {
+            fetch(cx, cy);
+        }
+        let search =
+            nav::find_leg_in_range_ex(&mut fetch, cur, dest, stop_dist, LEG_MAX_EXPANSIONS);
+        result.step.expansions = search.expansions;
+        match search.outcome {
+            nav::LegOutcome::Complete(points) => {
+                result.step.status = RouteStatus::Complete;
+                points
+            }
+            nav::LegOutcome::Partial(points) => {
+                result.step.status = RouteStatus::Partial;
+                points
+            }
+            nav::LegOutcome::Blocked => Vec::new(),
+        }
+    } else {
+        result.step.status = RouteStatus::Direct;
+        vec![crate::creatures::chase_step(
+            cur.0,
+            cur.1,
+            dest.0,
+            dest.1,
+            MAX_DISTANCE,
+            stop_dist,
+        )]
+    };
+    result.step.first_waypoint = planned.first().copied().map(RoutePoint::from);
+    let mut from = start;
+    let mut remaining = MAX_DISTANCE;
+    'route: for point in planned {
+        while (point.0 - from.0).hypot(point.1 - from.1) >= 0.01 {
+            if result.points.len() == MAX_POINTS || remaining < 0.01 {
+                break 'route;
+            }
+            // Sample height at least once per terrain quad, including otherwise straight routes.
+            let reach = remaining.min(lyracore_shared::terrain::QUAD);
+            let stepped = if (point.0 - from.0).hypot(point.1 - from.1) <= reach {
+                point
+            } else {
+                crate::creatures::chase_step(from.0, from.1, point.0, point.1, reach, 0.0)
+            };
+            let (endpoint, clipping) = step_gate_with_fetch(
+                ctx,
+                map_id,
+                instance_id,
+                (from.0, from.1),
+                stepped,
+                from.2,
+                &mut fetch,
+            );
+            let endpoint = if enabled {
+                nav::walkable_prefix(&mut fetch, (from.0, from.1), endpoint)
+            } else {
+                endpoint
+            };
+            if (endpoint.0 - from.0).hypot(endpoint.1 - from.1) < 0.01 {
+                break 'route;
+            }
+            let fraction = ((endpoint.0 - start.0).hypot(endpoint.1 - start.1)
+                / (dest.0 - cur.0).hypot(dest.1 - cur.1).max(0.01))
+            .min(1.0);
+            let z = crate::terrain::snap_z(
+                ctx,
+                map_id,
+                instance_id,
+                endpoint.0,
+                endpoint.1,
+                start.2 + (destination.2 - start.2) * fraction,
+            );
+            let next = (endpoint.0, endpoint.1, z);
+            let travelled = movement_path::distance(from, next);
+            if !travelled.is_finite() || travelled > remaining + 0.01 {
+                break 'route;
+            }
+            remaining -= travelled;
+            result.points.push(next);
+            from = next;
+            let shortened = endpoint != stepped || clipping.is_some();
+            result.step.clipping = clipping;
+            if shortened {
+                break 'route;
+            }
+        }
+    }
+    if let Some(points) = fit_wire_path(start, &result.points, |from, to| {
+        segment_clear_with_fetch(ctx, map_id, instance_id, from, to, enabled, &mut fetch)
+    }) {
+        result.points = points;
+    } else {
+        result.points.truncate(1);
+    }
+    if let Some(last) = result.points.last() {
+        result.step.endpoint = (last.0, last.1).into();
+    }
+    if all_covered && !checked.is_empty() {
+        if let Some(generation_id) = generation {
+            result.step.coverage = CoverageEvidence::VerifiedCells(VerifiedRouteCells {
+                generation_id,
+                checked_cells: checked.len() as u32,
+            });
+        }
+    }
+    result
+}
+
+/// Fit vanilla's quarter-yard points without cutting corners. A small bounded search permits
+/// neighboring points to move together; every accepted segment still passes the normal Gates.
+fn fit_wire_path(
+    start: (f32, f32, f32),
+    points: &[(f32, f32, f32)],
+    mut clear: impl FnMut((f32, f32, f32), (f32, f32, f32)) -> bool,
+) -> Option<Vec<(f32, f32, f32)>> {
+    use lyracore_shared::movement_path;
+    let points = movement_path::wire_points(points)?;
+    let destination = *points.last()?;
+    let mut checks = 0;
+    let mut gate = |from, to| {
+        checks += 1;
+        checks <= 512 && clear(from, to)
+    };
+    let mut from = start;
+    if points.iter().all(|&to| {
+        let accepted = gate(from, to);
+        from = to;
+        accepted
+    }) {
+        return Some(points);
+    }
+    let offsets = [
+        (0.0, 0.0),
+        (0.25, 0.0),
+        (-0.25, 0.0),
+        (0.0, 0.25),
+        (0.0, -0.25),
+        (0.25, 0.25),
+        (0.25, -0.25),
+        (-0.25, 0.25),
+        (-0.25, -0.25),
+    ];
+    let mut routes = vec![(vec![start], 0.0f32)];
+    for point in &points[..points.len() - 1] {
+        let mut next_routes = Vec::new();
+        for (x, y) in offsets {
+            let candidate = (point.0 + x, point.1 + y, point.2);
+            if movement_path::distance(candidate, destination).powi(2) < 0.5
+                || movement_path::packed_offset(destination, candidate).is_none()
+            {
+                continue;
+            }
+            // Routes are ordered by total displacement, so the first valid predecessor is best.
+            if let Some((route, cost)) = routes.iter().find(|(route, _)| {
+                gate(
+                    *route.last().expect("a fitted route includes its start"),
+                    candidate,
+                )
+            }) {
+                let mut route = route.clone();
+                route.push(candidate);
+                next_routes.push((route, cost + x * x + y * y));
+            }
+        }
+        if next_routes.is_empty() {
+            return None;
+        }
+        next_routes.sort_by(|a, b| a.1.total_cmp(&b.1));
+        routes = next_routes;
+    }
+    let (mut route, _) = routes.into_iter().find(|(route, _)| {
+        gate(
+            *route.last().expect("a fitted route includes its start"),
+            destination,
+        )
+    })?;
+    route.remove(0);
+    route.push(destination);
+    Some(route)
+}
+
+fn segment_clear_with_fetch(
+    ctx: &ReducerContext,
+    map_id: u32,
+    instance_id: u64,
+    from: (f32, f32, f32),
+    to: (f32, f32, f32),
+    enabled: bool,
+    fetch: &mut impl FnMut(u16, u16) -> Option<NavCellData>,
+) -> bool {
+    let end = (to.0, to.1);
+    let start = (from.0, from.1);
+    let (stepped, clipping) =
+        step_gate_with_fetch(ctx, map_id, instance_id, start, end, from.2, fetch);
+    clipping.is_none()
+        && stepped == end
+        && (!enabled || nav::walkable_prefix(fetch, start, end) == end)
+}
+
+/// Recheck a retained segment against current collision and walk coverage without another search.
+pub(crate) fn route_segment_clear(
+    ctx: &ReducerContext,
+    map_id: u32,
+    instance_id: u64,
+    from: (f32, f32, f32),
+    to: (f32, f32, f32),
+) -> bool {
+    segment_clear_with_fetch(
+        ctx,
+        map_id,
+        instance_id,
+        from,
+        to,
+        nav_enabled(ctx),
+        &mut fetcher(ctx, map_id),
+    )
+}
+
 /// Plan one bot movement step. A failed search holds position; sparse missing rows retain
 /// unknown coverage. Collision can shorten complete, partial, and direct steps independently.
 #[allow(clippy::too_many_arguments)] // A movement step carries its partition, endpoints and distances.
@@ -740,4 +1015,38 @@ mod tests {
         // Neither source covering the cell keeps the missing-chunk contract: no obstacles known.
         assert!(merged_cell(None, None).is_none());
     }
+}
+
+#[test]
+fn wire_rounding_keeps_clearance_at_a_tight_corner() {
+    let clear = |from: (f32, f32, f32), to: (f32, f32, f32)| {
+        let t = (1.125 - from.0) / (to.0 - from.0);
+        !(0.0..=1.0).contains(&t) || from.1 + (to.1 - from.1) * t > 1.05
+    };
+    let points =
+        fit_wire_path((0.0, 0.0, 0.0), &[(1.1, 1.1, 0.0), (3.0, 0.0, 0.0)], clear).unwrap();
+    assert_eq!(points, vec![(1.0, 1.25, 0.0), (3.0, 0.0, 0.0)]);
+    assert_eq!(
+        lyracore_shared::movement_path::wire_points(&points),
+        Some(points)
+    );
+}
+
+#[test]
+fn wire_fitting_can_move_a_later_point_before_checking_its_predecessor() {
+    let clear = |from: (f32, f32, f32), to: (f32, f32, f32)| {
+        let (dx, dy) = (to.0 - from.0, to.1 - from.1);
+        let t = (((2.0 - from.0) * dx - from.1 * dy) / (dx * dx + dy * dy)).clamp(0.0, 1.0);
+        (from.0 + dx * t - 2.0).hypot(from.1 + dy * t) > 0.03
+    };
+    let points = fit_wire_path(
+        (0.0, 0.0, 0.0),
+        &[(1.0, 0.0, 0.0), (2.1, 0.1, 0.0), (4.0, 0.0, 0.0)],
+        clear,
+    )
+    .unwrap();
+    assert_eq!(
+        points,
+        vec![(1.0, 0.0, 0.0), (2.0, 0.25, 0.0), (4.0, 0.0, 0.0)]
+    );
 }

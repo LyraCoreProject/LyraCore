@@ -2640,6 +2640,38 @@ pub(crate) fn creature_leg_outbound(
             )),
         ))];
     }
+    if let Some(path) = &row.path {
+        let points = &path.points;
+        let points: Vec<_> = points.iter().map(|p| (p.x, p.y, p.z)).collect();
+        if let Some((opcode, body)) = codec::build_ground_path_raw(
+            row.guid,
+            start,
+            &points,
+            row.dur_ms,
+            row.spline_id,
+            row.run,
+        ) {
+            return vec![Outbound::Raw { opcode, body }];
+        }
+        log::warn!(
+            "refused malformed creature path for guid {} spline {}",
+            row.guid,
+            row.spline_id
+        );
+        if [start.x, start.y, start.z].iter().all(|v| v.is_finite()) {
+            return vec![Outbound::One(ServerOpcodeMessage::SMSG_MONSTER_MOVE(
+                Box::new(codec::build_monster_move(
+                    row.guid,
+                    start,
+                    start,
+                    0,
+                    row.spline_id,
+                    false,
+                )),
+            ))];
+        }
+        return Vec::new();
+    }
     let dest = Vector3d {
         x: row.dx,
         y: row.dy,
@@ -2692,6 +2724,19 @@ fn append_resident_creature_after_create(
     remaining.sx = current(row.sx, row.dx);
     remaining.sy = current(row.sy, row.dy);
     remaining.sz = current(row.sz, row.dz);
+    if let Some(path) = &row.path {
+        let points = &path.points;
+        let points: Vec<_> = points.iter().map(|p| (p.x, p.y, p.z)).collect();
+        let (at, next) = lyracore_shared::movement_path::sample(
+            (row.sx, row.sy, row.sz),
+            &points,
+            elapsed_fraction as f32,
+        );
+        (remaining.sx, remaining.sy, remaining.sz) = at;
+        if let Some(path) = &mut remaining.path {
+            path.points = path.points[next..].to_vec();
+        }
+    }
     remaining.dur_ms = (duration_micros - elapsed_micros).div_ceil(1_000) as u32;
     created_outbound.extend(creature_leg_outbound(created, &remaining));
 }
@@ -6601,6 +6646,7 @@ mod tests {
             cell: lyracore_shared::spatial::grid_cell_id(0, 0),
             facing: false,
             facing_angle: 0.0,
+            path: None,
         }
     }
 
@@ -6640,6 +6686,75 @@ mod tests {
 
         assert!(matches!(outbound.first(), Some(Outbound::One(_))));
         assert!(matches!(outbound.get(1), Some(Outbound::Raw { opcode, .. }) if *opcode == 0x00DD));
+    }
+
+    #[test]
+    fn an_empty_retained_path_stops_the_client_instead_of_sending_invalid_geometry() {
+        let created = Mutex::new(HashSet::from([99]));
+        let mut row = creature_spline(99, 1_000_000, 1_000);
+        row.path = Some(crate::stdb::bindings::CreaturePath {
+            navigation: crate::stdb::bindings::NavigationInputs {
+                imported_revision: None,
+                navigation_enabled: false,
+                collision_enabled: false,
+                coverage_enabled: false,
+                static_generation: None,
+                coverage_generation: None,
+            },
+            points: Vec::new(),
+        });
+        let outbound = creature_leg_outbound(&created, &row);
+        let [Outbound::One(ServerOpcodeMessage::SMSG_MONSTER_MOVE(stop))] = outbound.as_slice()
+        else {
+            panic!("malformed paths need a stop");
+        };
+        assert_eq!(stop.duration, 0);
+        assert_eq!(stop.splines[0], stop.spline_point);
+    }
+
+    #[test]
+    fn resident_waypoint_path_resumes_after_the_turn() {
+        let guid = 99;
+        let created = Mutex::new(HashSet::from([guid]));
+        let mut row = creature_spline(guid, 1_000_000, 7_000);
+        (row.sx, row.sy, row.sz) = (0.0, 0.0, 0.0);
+        (row.dx, row.dy, row.dz) = (3.0, 4.0, 0.0);
+        row.path = Some(crate::stdb::bindings::CreaturePath {
+            navigation: crate::stdb::bindings::NavigationInputs {
+                imported_revision: None,
+                navigation_enabled: false,
+                collision_enabled: false,
+                coverage_enabled: false,
+                static_generation: None,
+                coverage_generation: None,
+            },
+            points: vec![
+                crate::stdb::bindings::CreaturePathPoint {
+                    x: 3.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+                crate::stdb::bindings::CreaturePathPoint {
+                    x: 3.0,
+                    y: 4.0,
+                    z: 0.0,
+                },
+            ],
+        });
+        let mut outbound = Vec::new();
+        append_resident_creature_after_create(&mut outbound, &created, 0, Some(&row), 4_500_000);
+        let [Outbound::Raw { opcode, body }] = outbound.as_slice() else {
+            panic!("expected a retained path");
+        };
+        assert_eq!(*opcode, 0xdd);
+        assert_eq!(&body[..2], &[1, 99]);
+        let f32_at = |offset| f32::from_le_bytes(body[offset..offset + 4].try_into().unwrap());
+        let u32_at = |offset| u32::from_le_bytes(body[offset..offset + 4].try_into().unwrap());
+        assert_eq!((f32_at(2), f32_at(6), f32_at(10)), (3.0, 0.5, 0.0));
+        assert_eq!(u32_at(23), 3_500);
+        assert_eq!(u32_at(27), 1);
+        assert_eq!((f32_at(31), f32_at(35), f32_at(39)), (3.0, 4.0, 0.0));
+        assert_eq!(body.len(), 43);
     }
 
     #[test]
@@ -6934,6 +7049,7 @@ mod tests {
                 cell: lyracore_shared::spatial::grid_cell_id(0, 0),
                 facing: false,
                 facing_angle: 0.0,
+                path: None,
             },
         );
         assert_eq!(
@@ -6968,6 +7084,7 @@ mod tests {
             cell: lyracore_shared::spatial::grid_cell_id(0, 0),
             facing: true,
             facing_angle: 2.1,
+            path: None,
         };
         let out = creature_leg_outbound(&created, &row);
         assert_eq!(out.len(), 1);
@@ -7275,6 +7392,7 @@ mod tests {
             cell: lyracore_shared::spatial::grid_cell_id(0, 0),
             facing: false,
             facing_angle: 0.0,
+            path: None,
         };
 
         // A session AT the threshold still receives its packet (this half is what stops the test from

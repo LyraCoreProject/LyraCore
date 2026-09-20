@@ -52,6 +52,7 @@ pub(crate) struct LegInFlight {
     pub map_id: u32,
     pub instance_id: u64,
     pub mover_gone: bool,
+    pub waypoints: Vec<(f32, f32, f32)>,
 }
 
 impl LegInFlight {
@@ -59,6 +60,21 @@ impl LegInFlight {
     /// has landed. Computed absolutely from the leg start, so skipped firings never drift it.
     fn rendered_at(&self, now_micros: u64) -> (Point, bool) {
         let t = spline_t(now_micros, self.started_micros, self.dur_ms);
+        if !self.waypoints.is_empty() {
+            let (at, _) = lyracore_shared::movement_path::sample(
+                (self.start.x, self.start.y, self.start.z),
+                &self.waypoints,
+                t,
+            );
+            return (
+                Point {
+                    x: at.0,
+                    y: at.1,
+                    z: at.2,
+                },
+                t >= 1.0,
+            );
+        }
         let at = Point {
             x: self.start.x + (self.dest.x - self.start.x) * t,
             y: self.start.y + (self.dest.y - self.start.y) * t,
@@ -94,6 +110,8 @@ pub(crate) struct CycleOutcome {
 /// Spline advance's surface: read every leg in flight, then move, halt or forget it.
 pub(crate) trait MotionSink {
     fn legs_in_flight(&self) -> Vec<LegInFlight>;
+    /// A retained path blocked by current geometry stops at its last authoritative position.
+    fn path_obstruction(&self, leg: &LegInFlight, now_micros: u64) -> Option<Point>;
     /// Is this creature rooted, stunned, polymorphed or fear-frozen — unable to move itself?
     fn movement_suppressed(&self, guid: u64) -> bool;
     /// Move the creature to `at` — position, grid address and packed cell in one write — and stamp
@@ -778,6 +796,10 @@ fn advance_legs<W: MotionSink>(w: &mut W, tick: &TickContext) -> usize {
             continue;
         }
         let (at, arrived) = leg.rendered_at(tick.now_micros);
+        if let Some(stopped) = w.path_obstruction(&leg, tick.now_micros) {
+            w.halt(&leg, stopped, tick.now_ms);
+            continue;
+        }
         // A leg whose endpoints went bad would write the corruption onto the creature every firing,
         // and a creature at an infinite grid cell is in no active cell ever again — unkillable while
         // its melee row keeps swinging. Refuse it and leave the creature where it was.
@@ -1976,6 +1998,7 @@ mod chase_leg_tests {
             map_id: 0,
             instance_id: 0,
             mover_gone: false,
+            waypoints: Vec::new(),
         }
     }
 
