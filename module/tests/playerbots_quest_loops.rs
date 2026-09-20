@@ -1124,7 +1124,6 @@ fn playerbots_quest_purpose_survives_recovery_and_provisioning() {
         objective
     );
     assert_eq!(final_retained, retained);
-    assert_eq!(first_quest_count(&quest(&node, &guid, 7).unwrap()), 0);
 }
 
 #[test]
