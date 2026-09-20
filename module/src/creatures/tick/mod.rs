@@ -650,6 +650,7 @@ pub struct CreaturePathPoint {
 }
 
 /// Publish the already checked path as one movement, shared by server advance and client relay.
+#[allow(dead_code)] // Called by installed Packages; absent from Core-only builds.
 pub(crate) fn emit_creature_path(
     ctx: &ReducerContext,
     mut mover: WorldEntity,
