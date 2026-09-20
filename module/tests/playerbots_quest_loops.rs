@@ -1832,10 +1832,24 @@ fn playerbots_completed_quest_wait_yields_to_other_available_work() {
     assert!(alternate["chosen"].contains("reason = (quest = ())"));
     assert!(alternate["chosen"].contains("move = (entity ="));
     let alternate_target = structured_number(&alternate["chosen"], "entity");
-    assert!(alternate["objective"].contains("identity = 4"));
+    let alternate_identity = structured_number(&alternate["objective"], "identity");
+    assert_ne!(
+        alternate_identity,
+        structured_number(&deferred["objective"], "identity")
+    );
     assert!(alternate["objective"].contains("stage = (travelling = ())"));
     assert!(alternate["recovery"].contains(&format!("target = {alternate_target}, quest = 5261")));
-    assert_eq!(retained_quest_purpose(&node, &guid)["quest_entry"], "5261");
+    let retained_alternate = query_one(
+        &node,
+        &format!(
+            "SELECT quest_entry, runner_objective_identity FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"
+        ),
+    );
+    assert_eq!(retained_alternate["quest_entry"], "5261");
+    assert_eq!(
+        retained_alternate["runner_objective_identity"],
+        alternate_identity
+    );
     assert_eq!(quest(&node, &guid, 7).unwrap(), quest_before);
     assert_eq!(first_quest_count(&quest_before), 0);
 }
