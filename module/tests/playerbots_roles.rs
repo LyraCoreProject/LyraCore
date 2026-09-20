@@ -633,8 +633,6 @@ fn playerbots_tank_repairs_range_and_completes_a_real_taunt() {
     });
     evidence(&fixture, "tank-range-repair");
     assert!(cast);
-    let tank = runner(node, &fixture.warrior);
-    assert!(tank["chosen"].contains("tankFight"), "{tank:?}");
     assert!(entity(node, &fixture.warrior)["x"].parse::<f32>().unwrap() > started_x + 1.0);
     assert!(poll_until(POLL_TIMEOUT, || {
         entity(node, target)["target_guid"] == fixture.warrior

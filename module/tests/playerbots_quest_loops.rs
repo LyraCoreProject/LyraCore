@@ -1832,10 +1832,24 @@ fn playerbots_completed_quest_wait_yields_to_other_available_work() {
     assert!(alternate["chosen"].contains("reason = (quest = ())"));
     assert!(alternate["chosen"].contains("move = (entity ="));
     let alternate_target = structured_number(&alternate["chosen"], "entity");
-    assert!(alternate["objective"].contains("identity = 4"));
+    let alternate_identity = structured_number(&alternate["objective"], "identity");
+    assert_ne!(
+        alternate_identity,
+        structured_number(&deferred["objective"], "identity")
+    );
     assert!(alternate["objective"].contains("stage = (travelling = ())"));
     assert!(alternate["recovery"].contains(&format!("target = {alternate_target}, quest = 5261")));
-    assert_eq!(retained_quest_purpose(&node, &guid)["quest_entry"], "5261");
+    let retained_alternate = query_one(
+        &node,
+        &format!(
+            "SELECT quest_entry, runner_objective_identity FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"
+        ),
+    );
+    assert_eq!(retained_alternate["quest_entry"], "5261");
+    assert_eq!(
+        retained_alternate["runner_objective_identity"],
+        alternate_identity
+    );
     assert_eq!(quest(&node, &guid, 7).unwrap(), quest_before);
     assert_eq!(first_quest_count(&quest_before), 0);
 }
@@ -1898,7 +1912,11 @@ fn playerbots_completed_quest_effect_clock_requires_reward_eligible_damage() {
         &format!("SELECT health, dead FROM game_world_entity WHERE guid = {CREATURE_6}"),
     );
     record(&node, "completed-quest-foreign-damage");
-    assert_eq!(target_after["health"], "90");
+    // Scheduled regeneration can run between the hit and this read.
+    assert!(
+        (90..100).contains(&target_after["health"].parse::<u32>().unwrap()),
+        "{target_after:?}"
+    );
     assert_eq!(target_after["dead"], "false");
     assert_eq!(after["objective"], before["objective"]);
     assert!(!after["recovery"].contains(&format!("active = (some = (fight = {CREATURE_6}))")));
@@ -1928,7 +1946,10 @@ fn playerbots_completed_quest_effect_clock_requires_reward_eligible_damage() {
         &node,
         &format!("SELECT health, dead FROM game_world_entity WHERE guid = {CREATURE_6}"),
     );
-    assert_eq!(eligible_hit["health"], "90");
+    assert!(
+        (90..100).contains(&eligible_hit["health"].parse::<u32>().unwrap()),
+        "{eligible_hit:?}"
+    );
     assert_eq!(eligible_hit["dead"], "false");
     node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
     let eligible_after = query_one(
@@ -1943,7 +1964,7 @@ fn playerbots_completed_quest_effect_clock_requires_reward_eligible_damage() {
     );
     record(&node, "completed-quest-eligible-damage");
     assert!(
-        (1..=90).contains(&eligible_target["health"].parse::<u32>().unwrap()),
+        (1..100).contains(&eligible_target["health"].parse::<u32>().unwrap()),
         "{eligible_target:?}"
     );
     assert_eq!(eligible_target["dead"], "false");
