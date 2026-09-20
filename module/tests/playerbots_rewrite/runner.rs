@@ -278,7 +278,10 @@ fn playerbots_movement_continues_between_decisions() {
         "movement stopped at {} before its destination",
         position(&node, bot)
     );
-    assert!(legs.len() >= 3, "too few movement legs: {legs:?}");
+    assert!(
+        !legs.is_empty(),
+        "movement must have a client path: {legs:?}"
+    );
     assert!(
         gaps.iter().all(|gap| *gap < 250_000),
         "movement paused between legs: {gaps:?}"
@@ -294,6 +297,231 @@ fn playerbots_movement_continues_between_decisions() {
     ) - 1238.0)
         .abs()
         < 0.1));
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_movement_retains_a_route_between_decisions() {
+    let (node, bot) = parked_movement("playerbots-retained-route");
+    let selected = runner(&node, &bot);
+    let first = node.query_rows(&format!(
+        "SELECT start_micros, dur_ms FROM game_creature_spline WHERE guid = {bot}"
+    ));
+    assert_eq!(first.len(), 1);
+    assert!(
+        first[0]["dur_ms"].parse::<u32>().unwrap() > 3_000,
+        "a forty-yard journey must retain more than one decision interval: {first:?}"
+    );
+    let beginning = position(&node, &bot);
+    std::thread::sleep(Duration::from_secs(2));
+    let current = node.query_rows(&format!(
+        "SELECT start_micros FROM game_creature_spline WHERE guid = {bot}"
+    ));
+    assert_eq!(current[0]["start_micros"], first[0]["start_micros"]);
+    assert!(position(&node, &bot) > beginning + 10.0);
+    assert_eq!(
+        runner(&node, &bot)["observed_micros"],
+        selected["observed_micros"]
+    );
+    outcomes(&node);
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_movement_retains_its_path_across_decision_turns() {
+    let (node, bot) = parked_movement("playerbots-waypoint-decisions");
+    let first = node.query_rows(&format!(
+        "SELECT start_micros FROM game_creature_spline WHERE guid = {bot}"
+    ));
+    assert_eq!(first.len(), 1);
+    let initial = position(&node, &bot);
+    for _ in 0..3 {
+        std::thread::sleep(Duration::from_millis(500));
+        node.assert_call("playerbots_fixture_runner_pass_once", &[&bot]);
+        let current = node.query_rows(&format!(
+            "SELECT start_micros FROM game_creature_spline WHERE guid = {bot}"
+        ));
+        assert_eq!(current[0]["start_micros"], first[0]["start_micros"]);
+    }
+    assert!(position(&node, &bot) > initial + 7.0);
+    outcomes(&node);
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_movement_follows_retained_waypoints_around_an_obstacle() {
+    use lyracore_shared::{nav, terrain};
+    let (node, bots) = fixture("playerbots-waypoint-obstacle", "1");
+    let bot = &bots[0];
+    select(&node, bot, "frozen");
+    let mut chunks = Vec::new();
+    for cx in terrain::cell_index(1250.0).unwrap()..=terrain::cell_index(1190.0).unwrap() {
+        for cy in terrain::cell_index(1210.0).unwrap()..=terrain::cell_index(1190.0).unwrap() {
+            let mut walk = vec![0xff; nav::WALK_BYTES];
+            for nx in 0..nav::WALK_DIM {
+                for ny in 0..nav::WALK_DIM {
+                    let x = nav::sub_center(cx, nx, nav::WALK_DIM);
+                    let y = nav::sub_center(cy, ny, nav::WALK_DIM);
+                    if (1202.0..=1204.0).contains(&x) && (1197.0..=1203.0).contains(&y) {
+                        nav::walk_set(&mut walk, nx, ny, false);
+                    }
+                }
+            }
+            let hex: String = walk.iter().map(|byte| format!("{byte:02x}")).collect();
+            chunks.push(format!("0,{cx},{cy},50,{hex},"));
+        }
+    }
+    node.assert_call("import_nav_chunks", &[&chunks.join(";")]);
+    node.assert_call("debug_set_nav_enabled", &["true"]);
+    park_movement(&node, bot);
+    let initial = node.query_rows(&format!(
+        "SELECT * FROM game_creature_spline WHERE guid = {bot}"
+    ));
+    assert_eq!(initial.len(), 1);
+    assert!(
+        initial[0]["dur_ms"].parse::<u32>().unwrap() > 3_000,
+        "{initial:?}"
+    );
+    let selected = runner(&node, bot);
+    let mut turned = false;
+    let mut samples = Vec::new();
+    assert!(
+        poll_until(Duration::from_secs(10), || {
+            let at = node.query_rows(&format!(
+                "SELECT x, y FROM game_world_entity WHERE guid = {bot}"
+            ));
+            let x = at[0]["x"].parse::<f32>().unwrap();
+            let y = at[0]["y"].parse::<f32>().unwrap();
+            turned |= (y - 1200.0).abs() > 2.5;
+            assert!(
+                !(1202.0..=1204.0).contains(&x) || (y - 1200.0).abs() > 2.5,
+                "crossed the obstacle: {at:?}"
+            );
+            for row in node.query_rows(&format!(
+                "SELECT start_micros FROM game_creature_spline WHERE guid = {bot}"
+            )) {
+                assert_eq!(
+                    row["start_micros"], initial[0]["start_micros"],
+                    "the path must survive every waypoint"
+                );
+            }
+            samples.push(at);
+            x >= 1237.0
+        }),
+        "path stopped before arrival: {samples:?}"
+    );
+    assert!(turned, "the bot must walk around the obstacle");
+    assert_eq!(
+        runner(&node, bot)["observed_micros"],
+        selected["observed_micros"]
+    );
+    std::fs::write(
+        support::log_dir().join(format!("{}-waypoints.json", node.shard_name())),
+        serde_json::to_vec_pretty(&serde_json::json!({"path": initial, "positions": samples}))
+            .unwrap(),
+    )
+    .unwrap();
+    outcomes(&node);
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_movement_replaces_a_bounded_path_before_it_expires() {
+    let (node, bots) = fixture("playerbots-waypoint-boundary", "1");
+    let bot = &bots[0];
+    select(&node, bot, "frozen");
+    node.assert_call("debug_teleport", &[bot, "0", "1100", "1200", "50", "0"]);
+    park_movement(&node, bot);
+    let first = node.query_rows(&format!(
+        "SELECT start_micros, dur_ms, dx FROM game_creature_spline WHERE guid = {bot}"
+    ));
+    let first_start = first[0]["start_micros"].parse::<u64>().unwrap();
+    let first_end = first_start + first[0]["dur_ms"].parse::<u64>().unwrap() * 1000;
+    assert!(
+        first[0]["dx"].parse::<f32>().unwrap() < 1230.0,
+        "fixture must span more than one path"
+    );
+    let mut next = Vec::new();
+    assert!(poll_until(Duration::from_secs(20), || {
+        next = node.query_rows(&format!(
+            "SELECT start_micros, sx FROM game_creature_spline WHERE guid = {bot}"
+        ));
+        next.first()
+            .is_some_and(|row| row["start_micros"].parse::<u64>().unwrap() != first_start)
+    }));
+    assert!(
+        next[0]["start_micros"].parse::<u64>().unwrap() < first_end,
+        "client path expired before replacement: {first:?} {next:?}"
+    );
+    assert!(next[0]["sx"].parse::<f32>().unwrap() < first[0]["dx"].parse::<f32>().unwrap());
+    outcomes(&node);
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_movement_cancels_a_path_after_navigation_inputs_change() {
+    let (node, bot) = parked_movement("playerbots-waypoint-geometry");
+    let before = position(&node, &bot);
+    node.assert_call("import_nav_chunks", &["0,400,400,0,,"]);
+    assert!(poll_until(Duration::from_secs(2), || node
+        .query_rows(&format!(
+            "SELECT dur_ms FROM game_creature_spline WHERE guid = {bot}"
+        ))
+        .iter()
+        .all(|row| row["dur_ms"] == "0")));
+    assert!(position(&node, &bot) < before + 4.0);
+    assert!(runner(&node, &bot)["foreground"].contains("none"));
+    outcomes(&node);
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_movement_samples_terrain_between_straight_path_endpoints() {
+    use lyracore_shared::{spatial::MAP_COORD_MAX, terrain};
+    let (node, bots) = fixture("playerbots-waypoint-terrain", "1");
+    let bot = &bots[0];
+    select(&node, bot, "frozen");
+    let mut chunks = Vec::new();
+    for cx in terrain::cell_index(1250.0).unwrap()..=terrain::cell_index(1190.0).unwrap() {
+        for cy in terrain::cell_index(1210.0).unwrap()..=terrain::cell_index(1190.0).unwrap() {
+            let mut heights = vec![50.0f32; 145];
+            for x in 0..9 {
+                let wx =
+                    MAP_COORD_MAX - f32::from(cx) * terrain::CELL_SIZE - x as f32 * terrain::QUAD;
+                let z = 50.0 + 10.0 * (1.0 - (wx - 1220.0).abs() / 20.0).max(0.0);
+                for y in 0..9 {
+                    heights[x * 17 + y] = z;
+                }
+            }
+            if terrain::cell_index(1210.0) == Some(cx) && terrain::cell_index(1200.0) == Some(cy) {
+                let ground = terrain::interpolate(&heights, cx, cy, 1210.0, 1200.0).unwrap();
+                assert!(
+                    (ground - 55.0).abs() < 0.01,
+                    "fixture hill has the wrong orientation"
+                );
+            }
+            let heights = heights
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(":");
+            chunks.push(format!("0,{cx},{cy},0,0,0,0,{heights}"));
+        }
+    }
+    node.assert_call("import_terrain_chunks", &[&chunks.join(";")]);
+    park_movement(&node, bot);
+    let mut observed = Vec::new();
+    assert!(poll_until(Duration::from_secs(6), || {
+        observed = node.query_rows(&format!(
+            "SELECT x, z FROM game_world_entity WHERE guid = {bot}"
+        ));
+        observed[0]["x"].parse::<f32>().unwrap() > 1208.0
+    }));
+    let x = observed[0]["x"].parse::<f32>().unwrap();
+    let z = observed[0]["z"].parse::<f32>().unwrap();
+    let ground = 50.0 + 10.0 * (1.0 - (x - 1220.0).abs() / 20.0);
+    assert!((z - ground).abs() < 1.0 && z > 53.0, "{observed:?}");
+    outcomes(&node);
 }
 
 fn parked_movement(name: &str) -> (Standalone, String) {

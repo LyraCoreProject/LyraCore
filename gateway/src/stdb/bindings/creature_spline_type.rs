@@ -4,6 +4,8 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::creature_path_type::CreaturePath;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub struct CreatureSpline {
@@ -27,6 +29,7 @@ pub struct CreatureSpline {
     // move (`sx/sy/sz == dx/dy/dz`, `dur_ms == 0`). The angle is ignored unless `facing` is true.
     pub facing: bool,
     pub facing_angle: f32,
+    pub path: Option<CreaturePath>,
 }
 
 impl __sdk::InModule for CreatureSpline {
@@ -55,6 +58,7 @@ pub struct CreatureSplineCols {
     pub cell: __sdk::__query_builder::Col<CreatureSpline, i64>,
     pub facing: __sdk::__query_builder::Col<CreatureSpline, bool>,
     pub facing_angle: __sdk::__query_builder::Col<CreatureSpline, f32>,
+    pub path: __sdk::__query_builder::Col<CreatureSpline, Option<CreaturePath>>,
 }
 
 impl __sdk::__query_builder::HasCols for CreatureSpline {
@@ -79,6 +83,7 @@ impl __sdk::__query_builder::HasCols for CreatureSpline {
             cell: __sdk::__query_builder::Col::new(table_name, "cell"),
             facing: __sdk::__query_builder::Col::new(table_name, "facing"),
             facing_angle: __sdk::__query_builder::Col::new(table_name, "facing_angle"),
+            path: __sdk::__query_builder::Col::new(table_name, "path"),
         }
     }
 }

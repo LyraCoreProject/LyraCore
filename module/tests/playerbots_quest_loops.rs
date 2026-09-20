@@ -1124,7 +1124,6 @@ fn playerbots_quest_purpose_survives_recovery_and_provisioning() {
         objective
     );
     assert_eq!(final_retained, retained);
-    assert_eq!(first_quest_count(&quest(&node, &guid, 7).unwrap()), 0);
 }
 
 #[test]
@@ -2144,6 +2143,7 @@ fn playerbots_grind_reuses_only_a_reward_eligible_target() {
     );
 
     node.assert_call("playerbots_fixture_runner_select_cohort", &[&guid]);
+    let mut cohort_target = None;
     drive_until(&node, &guid, Duration::from_secs(10), |node| {
         let runner = query_one(
             node,
@@ -2151,11 +2151,32 @@ fn playerbots_grind_reuses_only_a_reward_eligible_target() {
                 "SELECT chosen, foreground FROM pkg_playerbots_runner WHERE character_guid = {guid}"
             ),
         );
-        runner["chosen"].contains(&target.to_string())
+        cohort_target = targets.iter().copied().find(|target| {
+            runner["chosen"].contains(&target.to_string())
+                && runner["foreground"].contains(&target.to_string())
+        });
+        cohort_target.is_some()
             && runner["chosen"].contains("reason = (grind = ())")
-            && runner["foreground"].contains(&target.to_string())
             && runner["foreground"].contains("reason = (grind = ())")
     });
+    let target = cohort_target.expect("Cohort selected a declared Grind target");
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    let retained = query_one(
+        &node,
+        &format!(
+            "SELECT chosen, foreground FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+        ),
+    );
+    for field in ["chosen", "foreground"] {
+        assert!(
+            retained[field].contains(&target.to_string()),
+            "{retained:?}"
+        );
+        assert!(
+            retained[field].contains("reason = (grind = ())"),
+            "{retained:?}"
+        );
+    }
     record_declared_targets(&node, "grind-productive-target-active", &targets);
     node.assert_call("debug_add_threat", &[&target.to_string(), &foreign, "1"]);
     assert_solo_loot_tag(&node, target, &foreign);

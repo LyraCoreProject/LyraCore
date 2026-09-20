@@ -1,7 +1,7 @@
 //! Binding schema-parity test.
 //!
-//! `gateway/src/stdb/bindings/*_type.rs` is HAND-MAINTAINED (see `docs/danger-zones.md` §2): a
-//! module column add/reorder/retype on a
+//! `gateway/src/stdb/bindings/*_type.rs` is generated under `docs/danger-zones.md`. A
+//! Module column add/reorder/retype on a
 //! gateway-SUBSCRIBED table that isn't mirrored in the binding breaks live BSATN row decode
 //! SILENTLY — mock-store tests cannot catch it (a real `respec_count` binding drifted silently and
 //! was only found by accident, during unrelated work). This test makes that drift a RED TEST instead.
@@ -147,8 +147,7 @@ impl Sentinel for spacetimedb_lib::ScheduleAt {
     }
 }
 
-/// Covers `Option<Identity>` and `Vec<u8>`/`Vec<u32>` (the only generic-container field types
-/// among the subscribed tables) without needing a type-specific entry each.
+/// Containers can construct an empty sentinel without constructing their contents.
 impl<T: Sentinel> Sentinel for Option<T> {
     fn sentinel() -> Self {
         None
@@ -195,17 +194,47 @@ binding_field_shape_via_spacetime_type!(
     spacetimedb_lib::ScheduleAt,
 );
 
-impl<T: SpacetimeType> BindingFieldShape for Option<T> {
+impl<T: BindingFieldShape + Sentinel> BindingFieldShape for Option<T> {
     fn binding_field_shape(&self, ts: &mut RawModuleDefV9Builder) -> AlgebraicType {
-        <Self as SpacetimeType>::make_type(ts)
+        AlgebraicType::option(T::sentinel().binding_field_shape(ts))
     }
 }
 
-impl<T: SpacetimeType> BindingFieldShape for Vec<T> {
+impl<T: BindingFieldShape + Sentinel> BindingFieldShape for Vec<T> {
     fn binding_field_shape(&self, ts: &mut RawModuleDefV9Builder) -> AlgebraicType {
-        <Self as SpacetimeType>::make_type(ts)
+        AlgebraicType::array(T::sentinel().binding_field_shape(ts))
     }
 }
+
+macro_rules! binding_product {
+    ($ty:ty { $($field:ident),+ $(,)? }) => {
+        impl Sentinel for $ty {
+            fn sentinel() -> Self {
+                Self { $($field: Sentinel::sentinel()),+ }
+            }
+        }
+        impl BindingFieldShape for $ty {
+            fn binding_field_shape(&self, ts: &mut RawModuleDefV9Builder) -> AlgebraicType {
+                let fields = [$(stringify!($field)),+];
+                assert_eq!(top_level_debug_fields(&format!("{self:?}")), fields);
+                AlgebraicType::Product(
+                    [$( (stringify!($field), field_shape(&self.$field, ts)) ),+].into()
+                )
+            }
+        }
+    };
+}
+
+binding_product!(bindings::CreaturePathPoint { x, y, z });
+binding_product!(bindings::NavigationInputs {
+    imported_revision,
+    navigation_enabled,
+    collision_enabled,
+    coverage_enabled,
+    static_generation,
+    coverage_generation,
+});
+binding_product!(bindings::CreaturePath { points, navigation });
 
 impl Sentinel for bindings::parsed_client_command_type::ParsedClientCommand {
     fn sentinel() -> Self {
@@ -941,7 +970,7 @@ parity_test!(parity_game_entity_motion, "game_entity_motion", lyracore_module::E
 });
 parity_test!(parity_game_creature_spline, "game_creature_spline", lyracore_module::CreatureSpline, bindings::creature_spline_type::CreatureSpline, {
     guid, start_micros, dur_ms, sx, sy, sz, dx, dy, dz, map_id, instance_id, grid_x, grid_y,
-    spline_id, run, cell, facing, facing_angle,
+    spline_id, run, cell, facing, facing_angle, path,
 });
 parity_test!(parity_game_character_buyback, "game_character_buyback", lyracore_module::BuybackEntry, bindings::buyback_entry_type::BuybackEntry, {
     id, player_guid, item_entry, stack_count, price, soulbound,

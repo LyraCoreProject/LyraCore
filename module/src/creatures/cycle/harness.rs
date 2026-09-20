@@ -149,6 +149,7 @@ enum ScenarioFacing {
 struct Scenario {
     creatures: RefCell<HashMap<u64, XCreature>>,
     legs: RefCell<Vec<LegInFlight>>,
+    obstructed_paths: RefCell<HashSet<u64>>,
     /// FROZEN by crowd control — a stun, root or polymorph. Fear is the other axis, below.
     frozen: RefCell<HashSet<u64>>,
     /// Live fear auras, `(feared unit, caster)`, in the order the world reads them: one row each, so
@@ -1052,6 +1053,7 @@ impl Scenario {
             map_id: MAP,
             instance_id: INSTANCE,
             mover_gone: !self.creatures.borrow().contains_key(&guid),
+            waypoints: Vec::new(),
         });
         self
     }
@@ -1111,6 +1113,12 @@ impl Scenario {
 }
 
 impl MotionSink for Scenario {
+    fn path_obstruction(&self, leg: &LegInFlight, _now_micros: u64) -> Option<Point> {
+        self.obstructed_paths
+            .borrow()
+            .contains(&leg.guid)
+            .then(|| self.at(leg.guid).at)
+    }
     fn legs_in_flight(&self) -> Vec<LegInFlight> {
         self.legs.borrow().clone()
     }
@@ -1231,6 +1239,7 @@ impl Scenario {
             map_id,
             instance_id,
             mover_gone: false,
+            waypoints: Vec::new(),
         });
     }
 
@@ -2537,6 +2546,7 @@ impl IdleSink for Scenario {
             map_id: MAP,
             instance_id: INSTANCE,
             mover_gone: false,
+            waypoints: Vec::new(),
         });
         let mut creatures = self.creatures.borrow_mut();
         let c = creatures.get_mut(&guid).unwrap();
@@ -3610,6 +3620,56 @@ fn an_arrived_creature_stops_on_its_destination_and_the_leg_is_forgotten() {
 }
 
 #[test]
+fn retained_waypoints_cross_a_short_segment_and_turn_in_one_firing() {
+    let mut w = Scenario::new(1_000_000)
+        .creature(WOLF, p(0.0, 0.0, 10.0))
+        .flying(WOLF, p(0.0, 0.0, 10.0), p(0.5, 7.0, 10.0), 0, 7_500);
+    w.legs.borrow_mut()[0].waypoints = vec![(0.5, 0.0, 10.0), (0.5, 7.0, 10.0)];
+    let tick = w.tick(false, catch_all());
+    advance_legs(&mut w, &tick);
+    assert_eq!(w.at(WOLF).at, p(0.5, 0.5, 10.0));
+    assert!(w.has_leg(WOLF));
+    assert!(
+        w.effects().is_empty(),
+        "crossing a waypoint must not replace the client path"
+    );
+    w.advance_clock(6_500_000);
+    let tick = w.tick(false, catch_all());
+    advance_legs(&mut w, &tick);
+    assert_eq!(w.at(WOLF).at, p(0.5, 7.0, 10.0));
+    assert!(!w.has_leg(WOLF));
+}
+
+#[test]
+fn a_new_obstruction_stops_a_retained_path_before_committing_the_next_position() {
+    let mut w = Scenario::new(1_000_000)
+        .creature(WOLF, p(0.0, 0.0, 10.0))
+        .flying(WOLF, p(0.0, 0.0, 10.0), p(0.5, 7.0, 10.0), 0, 7_500);
+    w.legs.borrow_mut()[0].waypoints = vec![(0.5, 0.0, 10.0), (0.5, 7.0, 10.0)];
+    w.obstructed_paths.borrow_mut().insert(WOLF);
+    let tick = w.tick(false, catch_all());
+    advance_legs(&mut w, &tick);
+    assert_eq!(w.at(WOLF).at, p(0.0, 0.0, 10.0));
+    assert_eq!(w.effects()[0].dest, p(0.0, 0.0, 10.0));
+    assert_eq!(w.effects()[0].dur_ms, 0);
+}
+
+#[test]
+fn crowd_control_interrupts_a_retained_path_at_its_current_turn() {
+    let mut w = Scenario::new(1_000_000)
+        .creature(WOLF, p(0.0, 0.0, 10.0))
+        .flying(WOLF, p(0.0, 0.0, 10.0), p(0.5, 7.0, 10.0), 0, 7_500)
+        .rooted(WOLF);
+    w.legs.borrow_mut()[0].waypoints = vec![(0.5, 0.0, 10.0), (0.5, 7.0, 10.0)];
+    let tick = w.tick(false, catch_all());
+    advance_legs(&mut w, &tick);
+    assert_eq!(w.at(WOLF).at, p(0.5, 0.5, 10.0));
+    assert_eq!(w.effects().len(), 1);
+    assert_eq!(w.effects()[0].dur_ms, 0);
+    assert_eq!(w.effects()[0].dest, p(0.5, 0.5, 10.0));
+}
+
+#[test]
 fn a_movement_suppressed_creature_freezes_where_it_renders() {
     let mut w = wolf_mid_flight(HALF_WAY).rooted(WOLF);
     let tick = w.tick(true, catch_all());
@@ -4379,6 +4439,7 @@ fn the_fake_refuses_a_second_carrier_row_for_one_creature_in_one_firing() {
         map_id: MAP,
         instance_id: INSTANCE,
         mover_gone: false,
+        waypoints: Vec::new(),
     };
     let at = p(5.0, 0.0, 10.0);
     let spline_id = (SETTLED / 1000) as u32;
@@ -5839,10 +5900,10 @@ fn the_production_adapter_is_the_pass_through_the_harness_assumes() {
         (
             "fn as_leg(s: CreatureSpline, mover_gone: bool) -> LegInFlight {",
             concat!(
-                "{ LegInFlight { guid: s.guid, start: Point { x: s.sx, y: s.sy, z: s.sz, }, ",
-                "dest: Point { x: s.dx, y: s.dy, z: s.dz, }, started_micros: s.start_micros, ",
-                "dur_ms: s.dur_ms, map_id: s.map_id, instance_id: s.instance_id, mover_gone, } ",
-                "}",
+                "{ LegInFlight { guid: s.guid, start: Point { x: s.sx, y: s.sy, z: s.sz, }, dest: Point { ",
+                "x: s.dx, y: s.dy, z: s.dz, }, started_micros: s.start_micros, dur_ms: s.dur_ms, map_id: ",
+                "s.map_id, instance_id: s.instance_id, mover_gone, waypoints: s .path .map(|path| ",
+                "path.points) .unwrap_or_default() .iter() .map(|p| (p.x, p.y, p.z)) .collect(), } }",
             ),
         ),
         (
@@ -5868,21 +5929,38 @@ fn the_production_adapter_is_the_pass_through_the_harness_assumes() {
         (
             "impl MotionSink for CtxWorld<'_> {",
             concat!(
-                "{ fn legs_in_flight(&self) -> Vec<LegInFlight> { let entities = ",
-                "self.ctx.db.game_world_entity(); self.ctx .db .game_creature_spline() .iter() ",
-                ".map(|s| { let gone = entities.guid().find(s.guid).is_none(); as_leg(s, gone) ",
-                "}) .collect() } fn movement_suppressed(&self, guid: u64) -> bool { ",
+                "{ fn path_obstruction(&self, leg: &LegInFlight, now_micros: u64) -> Option<Point> { if ",
+                "leg.waypoints.is_empty() { return None; } let mover = ",
+                "self.ctx.db.game_world_entity().guid().find(leg.guid)?; let current = ",
+                "self.ctx.db.game_creature_spline().guid().find(leg.guid)?; if current .path ",
+                ".is_some_and(|path| path.navigation != crate::nav::inputs(self.ctx, leg.map_id)) { return ",
+                "Some(Point { x: mover.x, y: mover.y, z: mover.z, }); } let now_ms = (now_micros / 1000) as ",
+                "u32; let elapsed = u64::from(now_ms.wrapping_sub(mover.last_move_ms)) * 1000; let ",
+                "previous_micros = now_micros.saturating_sub(elapsed); let start = (leg.start.x, ",
+                "leg.start.y, leg.start.z); let (_, first) = lyracore_shared::movement_path::sample( start, ",
+                "&leg.waypoints, super::spline_t(previous_micros, leg.started_micros, leg.dur_ms), ); let ",
+                "(at, last) = lyracore_shared::movement_path::sample( start, &leg.waypoints, ",
+                "super::spline_t(now_micros, leg.started_micros, leg.dur_ms), ); let mut from = (mover.x, ",
+                "mover.y, mover.z); for to in leg.waypoints[first.min(last)..last] .iter() .copied() ",
+                ".chain([at]) { if !crate::nav::route_segment_clear(self.ctx, leg.map_id, leg.instance_id, ",
+                "from, to) { return Some(Point { x: mover.x, y: mover.y, z: mover.z, }); } from = to; } ",
+                "None } fn legs_in_flight(&self) -> Vec<LegInFlight> { let entities = ",
+                "self.ctx.db.game_world_entity(); self.ctx .db .game_creature_spline() .iter() .map(|s| { ",
+                "let gone = entities.guid().find(s.guid).is_none(); as_leg(s, gone) }) .collect() } fn ",
+                "movement_suppressed(&self, guid: u64) -> bool { ",
                 "crate::spell::is_self_movement_suppressed(self.ctx, guid) || ",
-                "eventai::movement::intent(self.ctx, guid).is_some_and(|intent| ",
-                "intent.immobilized) } fn ",
-                "commit_position(&mut self, guid: u64, at: Point, moved_ms: u32) { ",
-                "self.place(guid, at, Some(moved_ms), None); } fn halt(&mut self, leg: ",
-                "&LegInFlight, at: Point, spline_id: u32) { if let Some(e) = ",
-                "self.place(leg.guid, at, None, None) { tick::emit_move_spline( self.ctx, ",
-                "leg.guid, (at.x, at.y, at.z), (at.x, at.y, at.z), 0, false, spline_id, ",
-                "leg.map_id, leg.instance_id, (e.grid_x, e.grid_y), ); } } fn ",
-                "drop_leg(&mut self, guid: u64) { ",
-                "self.ctx.db.game_creature_spline().guid().delete(guid); } }",
+                "eventai::movement::intent(self.ctx, guid).is_some_and(|intent| intent.immobilized) } fn ",
+                "commit_position(&mut self, guid: u64, at: Point, moved_ms: u32) { let heading = self .ctx ",
+                ".db .game_creature_spline() .guid() .find(guid) .and_then(|s| { let points: Vec<_> = s ",
+                ".path .as_ref()? .points .iter() .map(|p| (p.x, p.y, p.z)) .collect(); let (_, next) = ",
+                "lyracore_shared::movement_path::sample( (s.sx, s.sy, s.sz), &points, super::spline_t( ",
+                "self.ctx.timestamp.to_micros_since_unix_epoch() as u64, s.start_micros, s.dur_ms, ), ); ",
+                "points.get(next).map(|p| (p.1 - at.y).atan2(p.0 - at.x)) }); self.place(guid, at, ",
+                "Some(moved_ms), heading); } fn halt(&mut self, leg: &LegInFlight, at: Point, spline_id: ",
+                "u32) { if let Some(e) = self.place(leg.guid, at, None, None) { tick::emit_move_spline( ",
+                "self.ctx, leg.guid, (at.x, at.y, at.z), (at.x, at.y, at.z), 0, false, spline_id, ",
+                "leg.map_id, leg.instance_id, (e.grid_x, e.grid_y), ); } } fn drop_leg(&mut self, guid: ",
+                "u64) { self.ctx.db.game_creature_spline().guid().delete(guid); } }",
             ),
         ),
         (

@@ -95,6 +95,13 @@ fn as_leg(s: CreatureSpline, mover_gone: bool) -> LegInFlight {
         map_id: s.map_id,
         instance_id: s.instance_id,
         mover_gone,
+        waypoints: s
+            .path
+            .map(|path| path.points)
+            .unwrap_or_default()
+            .iter()
+            .map(|p| (p.x, p.y, p.z))
+            .collect(),
     }
 }
 
@@ -134,6 +141,54 @@ fn caster_hold_range_yd(ctx: &ReducerContext, entry: u32) -> f32 {
 }
 
 impl MotionSink for CtxWorld<'_> {
+    fn path_obstruction(&self, leg: &LegInFlight, now_micros: u64) -> Option<Point> {
+        if leg.waypoints.is_empty() {
+            return None;
+        }
+        let mover = self.ctx.db.game_world_entity().guid().find(leg.guid)?;
+        let current = self.ctx.db.game_creature_spline().guid().find(leg.guid)?;
+        if current
+            .path
+            .is_some_and(|path| path.navigation != crate::nav::inputs(self.ctx, leg.map_id))
+        {
+            return Some(Point {
+                x: mover.x,
+                y: mover.y,
+                z: mover.z,
+            });
+        }
+
+        let now_ms = (now_micros / 1000) as u32;
+        let elapsed = u64::from(now_ms.wrapping_sub(mover.last_move_ms)) * 1000;
+        let previous_micros = now_micros.saturating_sub(elapsed);
+        let start = (leg.start.x, leg.start.y, leg.start.z);
+        let (_, first) = lyracore_shared::movement_path::sample(
+            start,
+            &leg.waypoints,
+            super::spline_t(previous_micros, leg.started_micros, leg.dur_ms),
+        );
+        let (at, last) = lyracore_shared::movement_path::sample(
+            start,
+            &leg.waypoints,
+            super::spline_t(now_micros, leg.started_micros, leg.dur_ms),
+        );
+        let mut from = (mover.x, mover.y, mover.z);
+        for to in leg.waypoints[first.min(last)..last]
+            .iter()
+            .copied()
+            .chain([at])
+        {
+            if !crate::nav::route_segment_clear(self.ctx, leg.map_id, leg.instance_id, from, to) {
+                return Some(Point {
+                    x: mover.x,
+                    y: mover.y,
+                    z: mover.z,
+                });
+            }
+            from = to;
+        }
+        None
+    }
     fn legs_in_flight(&self) -> Vec<LegInFlight> {
         let entities = self.ctx.db.game_world_entity();
         self.ctx
@@ -151,7 +206,32 @@ impl MotionSink for CtxWorld<'_> {
             || eventai::movement::intent(self.ctx, guid).is_some_and(|intent| intent.immobilized)
     }
     fn commit_position(&mut self, guid: u64, at: Point, moved_ms: u32) {
-        self.place(guid, at, Some(moved_ms), None);
+        let heading = self
+            .ctx
+            .db
+            .game_creature_spline()
+            .guid()
+            .find(guid)
+            .and_then(|s| {
+                let points: Vec<_> = s
+                    .path
+                    .as_ref()?
+                    .points
+                    .iter()
+                    .map(|p| (p.x, p.y, p.z))
+                    .collect();
+                let (_, next) = lyracore_shared::movement_path::sample(
+                    (s.sx, s.sy, s.sz),
+                    &points,
+                    super::spline_t(
+                        self.ctx.timestamp.to_micros_since_unix_epoch() as u64,
+                        s.start_micros,
+                        s.dur_ms,
+                    ),
+                );
+                points.get(next).map(|p| (p.1 - at.y).atan2(p.0 - at.x))
+            });
+        self.place(guid, at, Some(moved_ms), heading);
     }
     fn halt(&mut self, leg: &LegInFlight, at: Point, spline_id: u32) {
         if let Some(e) = self.place(leg.guid, at, None, None) {

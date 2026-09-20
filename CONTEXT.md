@@ -399,6 +399,11 @@ with success or Refusal. A timed cast also retains waiting and terminal outcomes
 A planned movement leg with its route status, first waypoint, collision clipping, and coverage
 evidence. Its endpoint is proposed movement, not proof of advancement or arrival.
 
+**Route Path**:
+A bounded sequence of waypoints retained for one movement. The Module advances along the same
+geometry and duration that the Gateway sends to the client. Crossing a waypoint does not require
+another decision. A changed destination or a failed movement Gate can replace or stop the path.
+
 **Cast Handle**:
 The scheduled identity, spell, target, and current due time of one timed cast. Repeated bot requests
 retain this identity until the cast finishes or an explicit cancellation removes it.

@@ -20,6 +20,7 @@ pub mod item;
 pub mod loot;
 pub mod loot_roll;
 pub mod mail;
+pub mod movement_path;
 pub mod nav;
 pub mod opcodes;
 pub mod packing;

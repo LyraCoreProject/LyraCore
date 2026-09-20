@@ -153,6 +153,9 @@ pub struct CreatureSpline {
     pub facing: bool,
     #[default(0.0f32)]
     pub facing_angle: f32,
+    /// Intermediate points and destination for one linear ground path. None retains one-leg behavior.
+    #[default(None::<CreaturePath>)]
+    pub path: Option<CreaturePath>,
 }
 
 // ===========================================================================================
@@ -578,6 +581,7 @@ pub(crate) fn emit_move_spline(
         run,
         facing: false,
         facing_angle: 0.0,
+        path: None,
     };
     if ctx.db.game_creature_spline().guid().find(guid).is_some() {
         ctx.db.game_creature_spline().guid().update(row);
@@ -623,12 +627,73 @@ pub(crate) fn emit_facing_spline(
         run: false,
         facing: true,
         facing_angle: angle_rad,
+        path: None,
     };
     if ctx.db.game_creature_spline().guid().find(guid).is_some() {
         ctx.db.game_creature_spline().guid().update(row);
     } else {
         ctx.db.game_creature_spline().insert(row);
     }
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone)]
+pub struct CreaturePath {
+    pub points: Vec<CreaturePathPoint>,
+    pub navigation: crate::nav::NavigationInputs,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone)]
+pub struct CreaturePathPoint {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+}
+
+/// Publish the already checked path as one movement, shared by server advance and client relay.
+#[cfg_attr(not(has_packages), allow(dead_code))]
+pub(crate) fn emit_creature_path(
+    ctx: &ReducerContext,
+    mut mover: WorldEntity,
+    points: Vec<(f32, f32, f32)>,
+    run: bool,
+) {
+    use lyracore_shared::{constants::speeds, movement_path};
+    let Some(&destination) = points.last() else {
+        return;
+    };
+    let start = (mover.x, mover.y, mover.z);
+    let length = movement_path::length(start, &points);
+    if !length.is_finite() || length <= 0.0 {
+        return;
+    }
+    let speed = if run { speeds::RUN } else { speeds::WALK };
+    let duration = (length / speed * 1000.0).ceil().max(1.0) as u32;
+    let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u32;
+    emit_move_spline(
+        ctx,
+        mover.guid,
+        start,
+        destination,
+        duration,
+        run,
+        now_ms,
+        mover.map_id,
+        mover.instance_id,
+        (mover.grid_x, mover.grid_y),
+    );
+    if let Some(mut spline) = ctx.db.game_creature_spline().guid().find(mover.guid) {
+        spline.path = Some(CreaturePath {
+            navigation: crate::nav::inputs(ctx, mover.map_id),
+            points: points
+                .iter()
+                .map(|&(x, y, z)| CreaturePathPoint { x, y, z })
+                .collect(),
+        });
+        ctx.db.game_creature_spline().guid().update(spline);
+    }
+    mover.orientation = (points[0].1 - mover.y).atan2(points[0].0 - mover.x);
+    mover.last_move_ms = now_ms;
+    ctx.db.game_world_entity().guid().update(mover);
 }
 
 // A movement leg's full geometry (from/to/speed/timing); a struct built at the one call site and destructured here would be write-only.
