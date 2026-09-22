@@ -1377,7 +1377,10 @@ fn playerbots_populated_pb006_state_upgrades_roles_without_replacing_operator_ca
             .any(|row| { row["spell_id"] == spell_id && row["spell_level"] == spell_level }));
     }
 
-    assert_eq!(catalogue_values(upgraded_rotations.clone()), current_rotations);
+    assert_eq!(
+        catalogue_values(upgraded_rotations.clone()),
+        current_rotations
+    );
     assert_eq!(catalogue_values(upgraded_kit.clone()), current_kit);
     assert!(preceding_rotations
         .iter()
