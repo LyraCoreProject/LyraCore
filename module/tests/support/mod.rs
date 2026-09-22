@@ -22,7 +22,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(50);
 pub const POLL_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Stage an active class buff before a test starts a movement, quest, or lifecycle decision.
-/// Buff selection and cooldown behavior have separate durable role tests.
+/// Keep it active for the scenario. Buff selection and cooldown behavior have separate role tests.
 #[allow(dead_code)]
 pub fn stage_playerbot_buff(node: &Standalone, guid: &str) {
     let bot = node.query_rows(&format!(
@@ -34,6 +34,9 @@ pub fn stage_playerbot_buff(node: &Standalone, guid: &str) {
         "8" => "168",
         _ => return,
     };
+    node.assert_sql(&format!(
+        "UPDATE game_spell SET duration_ms = 3600000 WHERE spell_id = {spell}"
+    ));
     node.assert_sql(&format!(
         "DELETE FROM game_spell_cooldown WHERE caster_guid = {guid}"
     ));

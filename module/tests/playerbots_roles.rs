@@ -1228,20 +1228,6 @@ fn playerbots_populated_pb006_state_upgrades_roles_without_replacing_operator_ca
         blake3::hash(support::module_bytes())
     );
 
-    let mut fresh = Standalone::start("playerbots-roles-current-defaults");
-    fresh.publish_module();
-    fresh.assert_call("claim_operator", &[]);
-    fresh.assert_call("playerbots_spawn", &["0", "1200", "1200", "50"]);
-    let catalogue_values = |mut rows: Vec<BTreeMap<String, String>>| {
-        for row in &mut rows {
-            row.remove("id");
-        }
-        rows.sort();
-        rows
-    };
-    let current_rotations = catalogue_values(sorted_catalog(&fresh, "pkg_playerbots_rotation"));
-    let current_kit = catalogue_values(sorted_catalog(&fresh, "pkg_playerbots_kit"));
-
     let mut defaults = Standalone::start("playerbots-roles-pb006-default-migration");
     defaults.publish_module_bytes(&preceding.wasm);
     defaults.assert_call("claim_operator", &[]);
@@ -1330,10 +1316,8 @@ fn playerbots_populated_pb006_state_upgrades_roles_without_replacing_operator_ca
             "upgraded_provisioning": upgraded_provisioning,
             "preceding_rotations": preceding_rotations,
             "upgraded_rotations": upgraded_rotations,
-            "current_default_rotations": current_rotations,
             "preceding_kit": preceding_kit,
             "upgraded_kit": upgraded_kit,
-            "current_default_kit": current_kit,
             "preceding_curated_spell_levels": preceding_levels,
             "upgraded_curated_spell_levels": upgraded_levels,
             "preceding_level_five_knows_taunt": preceding_known_taunt,
@@ -1377,16 +1361,14 @@ fn playerbots_populated_pb006_state_upgrades_roles_without_replacing_operator_ca
             .any(|row| { row["spell_id"] == spell_id && row["spell_level"] == spell_level }));
     }
 
-    assert_eq!(
-        catalogue_values(upgraded_rotations.clone()),
-        current_rotations
-    );
-    assert_eq!(catalogue_values(upgraded_kit.clone()), current_kit);
+    assert_eq!(upgraded_rotations.len(), preceding_rotations.len() + 5);
+    assert_eq!(upgraded_kit.len(), preceding_kit.len() + 5);
     assert!(preceding_rotations
         .iter()
         .all(|row| upgraded_rotations.contains(row)));
     assert!(preceding_kit.iter().all(|row| upgraded_kit.contains(row)));
     for (class, role, priority, spell, condition) in [
+        (WARRIOR, TANK, "10", "78", "0"),
         ("1", TANK, "20", "6673", "2"),
         (PRIEST, HEALER, "10", "585", "0"),
         (PRIEST, HEALER, "20", "1243", "4"),

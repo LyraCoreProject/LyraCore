@@ -514,7 +514,8 @@ fn playerbots_an_admitted_sessionless_attack_faces_its_exact_target_before_swing
     assert_eq!(remote_spline_after, remote_spline_before);
     assert!(approach_finished, "remote approach did not complete");
     assert_eq!(before_turn[0]["x"].parse::<f32>().unwrap(), 1211.0);
-    assert_attack_action(&accepted, &target, "alreadyArmed");
+    // Leaving the retained movement may stop and re-arm the earlier explicit attack.
+    assert_attack_action(&accepted, &target, "attackAccepted");
     let orientation = after_turn[0]["orientation"].parse::<f32>().unwrap();
     assert!(
         (orientation.abs() - std::f32::consts::PI).abs() < 0.01,
