@@ -59,6 +59,7 @@ fn fixture(name: &str) -> (Standalone, Vec<BTreeMap<String, String>>) {
         "playerbots_quest_fixture_stage",
         &[&bots[0]["character_guid"]],
     );
+    support::stage_playerbot_buff(&node, &bots[0]["character_guid"]);
     record(&node, "inputs");
     (node, bots)
 }

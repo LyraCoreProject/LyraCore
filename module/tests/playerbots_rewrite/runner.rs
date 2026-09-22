@@ -1030,6 +1030,7 @@ fn playerbots_runner_mage_defense_retains_a_valid_target_and_replaces_invalid_ta
     node.assert_call("playerbots_fixture_blocked_quest", &[bot]);
     node.assert_call("playerbots_fixture_runner_second_attacker", &[bot]);
     node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
+    support::stage_playerbot_buff(&node, bot);
     node.assert_sql("DELETE FROM game_melee_schedule");
     select(&node, bot, "frozen");
     select(&node, bot, "cohort");

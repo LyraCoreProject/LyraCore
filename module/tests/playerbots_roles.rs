@@ -1361,13 +1361,14 @@ fn playerbots_populated_pb006_state_upgrades_roles_without_replacing_operator_ca
             .any(|row| { row["spell_id"] == spell_id && row["spell_level"] == spell_level }));
     }
 
-    assert_eq!(upgraded_rotations.len(), preceding_rotations.len() + 4);
-    assert_eq!(upgraded_kit.len(), preceding_kit.len() + 4);
+    assert_eq!(upgraded_rotations.len(), preceding_rotations.len() + 5);
+    assert_eq!(upgraded_kit.len(), preceding_kit.len() + 5);
     assert!(preceding_rotations
         .iter()
         .all(|row| upgraded_rotations.contains(row)));
     assert!(preceding_kit.iter().all(|row| upgraded_kit.contains(row)));
     for (class, role, priority, spell, condition) in [
+        (WARRIOR, TANK, "10", "78", "0"),
         ("1", TANK, "20", "6673", "2"),
         (PRIEST, HEALER, "10", "585", "0"),
         (PRIEST, HEALER, "20", "1243", "4"),

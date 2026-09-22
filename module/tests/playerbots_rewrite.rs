@@ -514,7 +514,8 @@ fn playerbots_an_admitted_sessionless_attack_faces_its_exact_target_before_swing
     assert_eq!(remote_spline_after, remote_spline_before);
     assert!(approach_finished, "remote approach did not complete");
     assert_eq!(before_turn[0]["x"].parse::<f32>().unwrap(), 1211.0);
-    assert_attack_action(&accepted, &target, "alreadyArmed");
+    // Leaving the retained movement may stop and re-arm the earlier explicit attack.
+    assert_attack_action(&accepted, &target, "attackAccepted");
     let orientation = after_turn[0]["orientation"].parse::<f32>().unwrap();
     assert!(
         (orientation.abs() - std::f32::consts::PI).abs() < 0.01,
@@ -1017,6 +1018,7 @@ fn playerbots_return_home_progress_survives_an_optional_grind_read_limit() {
     let bot = &bots[0]["character_guid"];
     node.assert_call("playerbots_fixture_runner_select_cohort", &[bot]);
     node.assert_call("playerbots_fixture_provision_steps", &[bot, "64"]);
+    support::stage_playerbot_buff(&node, bot);
     std::thread::sleep(std::time::Duration::from_millis(1100));
     node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
 
