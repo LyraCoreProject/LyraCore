@@ -21,6 +21,33 @@ const POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// up early is a flake, and a condition that is already true costs one poll either way.
 pub const POLL_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Stage an active class buff before a test starts a movement, quest, or lifecycle decision.
+/// Buff selection and cooldown behavior have separate durable role tests.
+#[allow(dead_code)]
+pub fn stage_playerbot_buff(node: &Standalone, guid: &str) {
+    let bot = node.query_rows(&format!(
+        "SELECT class FROM pkg_playerbots_bot WHERE character_guid = {guid}"
+    ));
+    let spell = match bot[0]["class"].as_str() {
+        "1" => "6673",
+        "5" => "1243",
+        "8" => "168",
+        _ => return,
+    };
+    node.assert_sql(&format!(
+        "DELETE FROM game_spell_cooldown WHERE caster_guid = {guid}"
+    ));
+    node.assert_call("debug_force_cast", &[guid, spell]);
+    node.assert_sql(&format!(
+        "DELETE FROM game_spell_cooldown WHERE caster_guid = {guid}"
+    ));
+    assert!(!node
+        .query_rows(&format!(
+            "SELECT spell_id FROM game_aura WHERE target_guid = {guid} AND spell_id = {spell}"
+        ))
+        .is_empty());
+}
+
 /// How many times a publish may be retried past a node that died launching the module.
 const PUBLISH_ATTEMPTS: usize = 3;
 

@@ -201,6 +201,7 @@ fn quest_fixture(root: QuestRoot, lifecycle: &str, blocked: bool) -> (Standalone
     if blocked {
         node.assert_call("playerbots_recovery_fixture_block_companion", &[&guid]);
     }
+    support::stage_playerbot_buff(&node, &guid);
     std::thread::sleep(Duration::from_millis(1_100));
     node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
     (node, guid)
@@ -1304,6 +1305,7 @@ fn quest_transfer_fixture(name: &str, mode: u8) -> (TransferFixture, Value) {
         "playerbots_fixture_runner_select_cohort",
         &[&fixture.companion],
     );
+    support::stage_playerbot_buff(&fixture.node, &fixture.companion);
     fixture
         .node
         .assert_call("playerbots_fixture_runner_pass_once", &[&fixture.companion]);

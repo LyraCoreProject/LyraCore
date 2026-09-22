@@ -75,6 +75,7 @@ fn fixture(name: &str, class: u8, role: u8, named: bool) -> (Standalone, String)
         &[&guid],
     );
     node.assert_call("playerbots_fixture_runner_select_cohort", &[&guid]);
+    support::stage_playerbot_buff(&node, &guid);
     (node, guid)
 }
 

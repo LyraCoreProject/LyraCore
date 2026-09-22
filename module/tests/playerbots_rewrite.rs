@@ -1017,6 +1017,7 @@ fn playerbots_return_home_progress_survives_an_optional_grind_read_limit() {
     let bot = &bots[0]["character_guid"];
     node.assert_call("playerbots_fixture_runner_select_cohort", &[bot]);
     node.assert_call("playerbots_fixture_provision_steps", &[bot, "64"]);
+    support::stage_playerbot_buff(&node, bot);
     std::thread::sleep(std::time::Duration::from_millis(1100));
     node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
 

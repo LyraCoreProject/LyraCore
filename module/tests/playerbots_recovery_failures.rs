@@ -103,6 +103,7 @@ fn fixture(name: &str, stage: &str) -> (Standalone, String) {
     node.assert_call(stage, &[&guid]);
     node.assert_call("playerbots_fixture_runner_select_cohort", &[&guid]);
     node.assert_call("playerbots_fixture_provision_steps", &[&guid, "64"]);
+    support::stage_playerbot_buff(&node, &guid);
     (node, guid)
 }
 

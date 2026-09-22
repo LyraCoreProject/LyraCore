@@ -241,6 +241,7 @@ fn fixture(name: &str) -> OrdersFixture {
     for guid in [&warrior, &priest, &mage] {
         node.assert_call("playerbots_fixture_provision_steps", &[guid, "32"]);
     }
+    support::stage_playerbot_buff(&node, &warrior);
     node.assert_call("provision_account", &[r#""PB009HUMAN""#, "[]", "[]"]);
     let account = node.query_rows("SELECT id FROM game_account WHERE username = 'PB009HUMAN'")[0]
         ["id"]
