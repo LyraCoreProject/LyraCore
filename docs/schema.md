@@ -73,7 +73,7 @@ grep -rn '^#\[table(' module/src --include='*.rs' | wc -l   # 238 on 2026-09-03
 | Spell / aura | 20 | 10 | `spell/tables.rs`, `spell/stacking.rs` |
 | Quest | 12 | 8 | `quest.rs` |
 | Item / vendor / trade / mail | 14 | 5 | `items/tables.rs`, `trade.rs`, `mail.rs`, `mail_catalogue.rs`, `mail_escrow.rs` |
-| Auction house | 7 | 2 | `auction.rs` |
+| Auction house | 8 | 2 | `auction.rs` |
 | Creature (template, spawn, AI, pet, trainer) | 42 | 17 | `creatures/*`, `trainer.rs` |
 | GameObject | 9 | 6 | `gameobject.rs`, `go_model.rs` |
 | Loot | 12 | 6 | `loot/*` |
@@ -351,6 +351,8 @@ settlement/refund-mail receipt.
 callbacks return an unbid item or settle a winning bid with exact item and proceeds mail, then no-op
 when replayed. These tables are additive and are deliberately excluded from character transfer
 manifests; deletion is refused while a character owns Auction value.
+
+Every mail a bid, buyout, expiry or refused listing sends is an Auction Mail: `MailSender::AuctionHouse(house)`, `checked = COPIED`, and a machine subject (`{item_entry}:{random_property_id}:{action}`) the client turns into its own text. Private `game_auction_notice` is the matching live packet: one row per outbid, won, sold, expired or new-bid notice, inserted in the same transaction as its mail and reaped ~1 s later by the shared event GC (`docs/architecture.md` §5.3 names its relay).
 
 ### Guild state (`module/src/guild/mod.rs`)
 
