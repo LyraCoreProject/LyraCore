@@ -700,6 +700,18 @@ impl WorldStore for Coordinator {
         self.mail_item_room(payee_guid)
     }
 
+    fn mail_copy_text(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
+        self.mail_copy_text(recipient_guid, mail_id)
+    }
+
+    fn mail_grant_letter(&self, payee_guid: u64, item_text_id: u32) -> Result<()> {
+        self.mail_grant_letter(payee_guid, item_text_id)
+    }
+
+    fn item_text(&self, item_text_id: u32) -> Result<Option<String>> {
+        self.item_text(item_text_id)
+    }
+
     fn mail_fence(
         &self,
         escrow_id: u64,

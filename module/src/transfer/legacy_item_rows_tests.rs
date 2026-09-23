@@ -55,7 +55,36 @@ fn legacy_item_rows_keep_every_value_and_arrive_plain() {
         assert_eq!(row.enchant_id, 7745);
         assert_eq!(row.soulbound, id == 1);
         assert_eq!(row.random_property_id, 0);
+        assert_eq!(row.item_text_id, 0);
     }
+}
+
+#[test]
+fn an_item_escrowed_before_item_text_arrives_with_no_text_id() {
+    let rows = vec![RandomPropertyItemInstance {
+        guid: 1,
+        entry: 509_0001,
+        owner_identity: Identity::ZERO,
+        owner_guid: 73,
+        slot: 23,
+        stack_count: 1,
+        durability: 51,
+        created_at: Timestamp::from_micros_since_unix_epoch(1234),
+        enchant_id: 7745,
+        soulbound: true,
+        random_property_id: 1182,
+    }];
+    let arrived: Vec<ItemInstance> = arrive(entry("game_item_instance@random-property-1", rows));
+    let row = &arrived[0];
+    assert_eq!(row.guid, 1);
+    assert_eq!(
+        row.random_property_id, 1182,
+        "Random Property must still arrive"
+    );
+    assert_eq!(
+        row.item_text_id, 0,
+        "a row escrowed before item text has none to carry"
+    );
 }
 
 #[test]
@@ -269,6 +298,46 @@ fn game_mail_has_the_shape_its_transfer_tag_names() {
     assert_eq!(
         previous[..],
         field_names::<Mail>()[..previous.len()],
+        "the previous shape must be a prefix of the current one, since columns are END-appended"
+    );
+}
+
+/// [`game_mail_has_the_shape_its_transfer_tag_names`]'s twin for `game_item_instance`.
+#[test]
+fn game_item_instance_has_the_shape_its_transfer_tag_names() {
+    let tag = FORMATS
+        .iter()
+        .find(|(table, _)| *table == "game_item_instance")
+        .map(|(_, tag)| *tag);
+    assert_eq!(
+        (tag, field_names::<ItemInstance>()),
+        (
+            Some("game_item_instance@item-text-1"),
+            [
+                "guid",
+                "entry",
+                "owner_identity",
+                "owner_guid",
+                "slot",
+                "stack_count",
+                "durability",
+                "created_at",
+                "enchant_id",
+                "soulbound",
+                "random_property_id",
+                "item_text_id",
+            ]
+            .map(String::from)
+            .to_vec()
+        ),
+        "game_item_instance changed shape. Escrowed rows in the old shape would no longer decode: \
+         add a new tag to FORMATS, decode the old tag with a struct of the old shape, then update \
+         this pin"
+    );
+    let previous = field_names::<RandomPropertyItemInstance>();
+    assert_eq!(
+        previous[..],
+        field_names::<ItemInstance>()[..previous.len()],
         "the previous shape must be a prefix of the current one, since columns are END-appended"
     );
 }

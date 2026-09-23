@@ -576,3 +576,72 @@ fn at_mailbox<St: WorldStore + ?Sized>(
     }
     Ok(self_guid)
 }
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum CopyLetterRefusal {
+    NoMailbox(String),
+    BagsFull(String),
+    Other(String),
+}
+
+impl std::fmt::Display for CopyLetterRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoMailbox(e) | Self::BagsFull(e) | Self::Other(e) => f.write_str(e),
+        }
+    }
+}
+
+fn copy_letter_refusal(e: anyhow::Error) -> CopyLetterRefusal {
+    let text = format!("{e:#}");
+    if text.contains(mail_rules::INVENTORY_FULL) {
+        CopyLetterRefusal::BagsFull(text)
+    } else {
+        CopyLetterRefusal::Other(text)
+    }
+}
+/// `CMSG_MAIL_CREATE_TEXT_ITEM`: turn a delivered letter's body into a Plain Letter in the bags.
+/// Gates in order — the mailbox, bag room, the Realm-core copy, the Home Shard grant — so a full
+/// bag never touches the mail row, matching `take_item`'s ordering. Not an escrow: the Plain Letter
+/// sells for 0, so a grant lost to bags filling between the room check and the grant costs nothing
+/// (README Decision 14).
+pub(crate) fn copy_letter<St: WorldStore + ?Sized>(
+    store: &St,
+    self_guid: Option<u64>,
+    mailbox_guid: u64,
+    mail_id: u64,
+) -> std::result::Result<(), CopyLetterRefusal> {
+    let self_guid = at_mailbox(store, self_guid, mailbox_guid)
+        .map_err(|e| CopyLetterRefusal::NoMailbox(e.to_string()))?;
+    store
+        .mail_item_room(self_guid)
+        .map_err(copy_letter_refusal)?;
+    match store.realm_store() {
+        Some(realm) => realm.mail_copy_text(self_guid, mail_id),
+        None => store.mail_copy_text(self_guid, mail_id),
+    }
+    .map_err(copy_letter_refusal)?;
+    // The text id is the mail id narrowed to u32 (`lyracore_shared::mail::item_text_id_for`'s
+    // non-empty-body case) — the copy above just proved the body is non-empty.
+    let item_text_id = u32::try_from(mail_id).unwrap_or(0);
+    store
+        .mail_grant_letter(self_guid, item_text_id)
+        .map_err(copy_letter_refusal)
+}
+/// `CMSG_ITEM_TEXT_QUERY`: the text behind `item_text_id`. A copied letter's text lives in
+/// `game_item_text` on the mail plane and outlives the mail that held it; anything else falls back
+/// to the caller's own mail body under the same id, which is what a letter still sitting in the
+/// mailbox resolves through today.
+pub(crate) fn item_text<St: WorldStore + ?Sized>(
+    store: &St,
+    self_guid: Option<u64>,
+    item_text_id: u32,
+) -> Result<Option<String>> {
+    let copied = match store.realm_store() {
+        Some(realm) => realm.item_text(item_text_id),
+        None => store.item_text(item_text_id),
+    }?;
+    if copied.is_some() {
+        return Ok(copied);
+    }
+    letter_body(store, self_guid, u64::from(item_text_id))
+}

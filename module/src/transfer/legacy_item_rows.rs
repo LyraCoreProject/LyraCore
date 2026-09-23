@@ -1,5 +1,5 @@
 //! Preserve rows in Transfer Escrow written before a transported table grew columns: plain items
-//! from before Random Property fields, and mail from before the mail header.
+//! from before Random Property fields or before Item Text, and mail from before the mail header.
 
 use std::collections::BTreeSet;
 
@@ -10,13 +10,16 @@ use crate::items::{BuybackEntry, ItemInstance};
 use crate::mail::Mail;
 
 const FORMATS: &[(&str, &str)] = &[
-    ("game_item_instance", "game_item_instance@random-property-1"),
+    ("game_item_instance", "game_item_instance@item-text-1"),
     (
         "game_character_buyback",
         "game_character_buyback@random-property-1",
     ),
     ("game_mail", "game_mail@mail-header-1"),
 ];
+/// The tag the previous Module wrote on `game_item_instance` rows, which carry Random Property but
+/// not `item_text_id`.
+const RANDOM_PROPERTY_ITEM_INSTANCE: &str = "game_item_instance@random-property-1";
 /// The tag the previous Module wrote on `game_mail` rows, which lack the mail header columns.
 const RANDOM_PROPERTY_MAIL: &str = "game_mail@random-property-1";
 
@@ -42,6 +45,10 @@ pub(super) fn prepare(payload: &[TableRows]) -> Result<Vec<TableRows>, String> {
             entry.rows = upgrade::<RandomPropertyMail, Mail>(&entry.rows)
                 .map_err(|error| format!("table {}: {error}", entry.table))?;
             entry.table = "game_mail".to_owned();
+        } else if entry.table == RANDOM_PROPERTY_ITEM_INSTANCE {
+            entry.rows = upgrade::<RandomPropertyItemInstance, ItemInstance>(&entry.rows)
+                .map_err(|error| format!("table {}: {error}", entry.table))?;
+            entry.table = "game_item_instance".to_owned();
         } else {
             entry.rows = match entry.table.as_str() {
                 "game_item_instance" => upgrade::<LegacyItemInstance, ItemInstance>(&entry.rows),
@@ -109,6 +116,42 @@ impl From<LegacyItemInstance> for ItemInstance {
             enchant_id: row.enchant_id,
             soulbound: row.soulbound,
             random_property_id: 0,
+            item_text_id: 0,
+        }
+    }
+}
+
+/// `game_item_instance` after Random Property but before `item_text_id`.
+#[derive(SpacetimeType)]
+struct RandomPropertyItemInstance {
+    guid: u64,
+    entry: u32,
+    owner_identity: Identity,
+    owner_guid: u64,
+    slot: u8,
+    stack_count: u32,
+    durability: u32,
+    created_at: Timestamp,
+    enchant_id: u32,
+    soulbound: bool,
+    random_property_id: u32,
+}
+
+impl From<RandomPropertyItemInstance> for ItemInstance {
+    fn from(row: RandomPropertyItemInstance) -> Self {
+        Self {
+            guid: row.guid,
+            entry: row.entry,
+            owner_identity: row.owner_identity,
+            owner_guid: row.owner_guid,
+            slot: row.slot,
+            stack_count: row.stack_count,
+            durability: row.durability,
+            created_at: row.created_at,
+            enchant_id: row.enchant_id,
+            soulbound: row.soulbound,
+            random_property_id: row.random_property_id,
+            item_text_id: 0,
         }
     }
 }

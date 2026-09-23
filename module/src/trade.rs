@@ -1049,6 +1049,7 @@ mod tests {
             enchant_id: 2564,
             soulbound: false,
             random_property_id: 117,
+            item_text_id: 0,
         };
         assert_eq!(
             offer_slot_view(6, &inst, &tmpl),

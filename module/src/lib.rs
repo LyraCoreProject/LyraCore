@@ -343,6 +343,10 @@ mod mail_catalogue;
 /// caller-chosen id, and the reaper. The mechanism for moving value into a mail row across a
 /// database boundary no transaction spans; the single-database plane deliberately bypasses it.
 mod mail_escrow;
+/// Letter Copy (`CMSG_MAIL_CREATE_TEXT_ITEM`): the durable `game_item_text` row a made-permanent
+/// mail's body becomes, and the reducers that set COPIED on the mail plane and grant the Plain
+/// Letter on the Home Shard.
+mod mail_text;
 /// The Mail Timer, Mail Expiry and the Mail Arrival event.
 mod mail_timer;
 /// Batched movement republish: the PRIVATE `game_entity_motion_pending` staging table that
@@ -447,6 +451,7 @@ pub use load::*;
 pub use loot::*;
 pub use mail::Mail; // re-exported for the gateway schema-parity test
 pub use mail_escrow::MailEscrow; // re-exported for the gateway schema-parity test
+pub use mail_text::ItemText; // re-exported for the gateway schema-parity test
 pub use mail_timer::{MailArrival, MailTimer}; // re-exported for the gateway schema-parity test
 pub use motion::*;
 pub use quest::*;

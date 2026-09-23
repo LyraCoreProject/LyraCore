@@ -191,6 +191,33 @@ pub enum MailTakeItemError {
     NotEnoughMoney,
     Other,
 }
+/// `CMSG_MAIL_CREATE_TEXT_ITEM`'s ack: the Plain Letter was made, a full bag, or anything else.
+pub fn build_mail_made_permanent_result(
+    mail_id: u32,
+    made: Result<(), MailMadePermanentError>,
+) -> SMSG_SEND_MAIL_RESULT {
+    SMSG_SEND_MAIL_RESULT {
+        mail_id,
+        action: SMSG_SEND_MAIL_RESULT_MailAction::MadePermanent {
+            result2: match made {
+                Ok(()) => SMSG_SEND_MAIL_RESULT_MailResultTwo::Ok,
+                Err(MailMadePermanentError::BagsFull) => {
+                    SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrEquipError {
+                        equip_error2: u32::from(InventoryResult::InventoryFull.as_int()),
+                    }
+                }
+                Err(MailMadePermanentError::Other) => {
+                    SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrInternalError
+                }
+            },
+        },
+    }
+}
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MailMadePermanentError {
+    BagsFull,
+    Other,
+}
 pub fn build_mail_send_result(
     result2: SMSG_SEND_MAIL_RESULT_MailResultTwo,
 ) -> SMSG_SEND_MAIL_RESULT {
@@ -521,6 +548,35 @@ mod tests {
                 }
             ),
             other => panic!("expected the ItemTaken action, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_made_permanent_result_answers_ok_full_bag_or_the_generic_error() {
+        match build_mail_made_permanent_result(7, Ok(())).action {
+            SMSG_SEND_MAIL_RESULT_MailAction::MadePermanent { result2 } => {
+                assert_eq!(result2, SMSG_SEND_MAIL_RESULT_MailResultTwo::Ok)
+            }
+            other => panic!("expected the MadePermanent action, got {other:?}"),
+        }
+        match build_mail_made_permanent_result(7, Err(MailMadePermanentError::BagsFull)).action {
+            SMSG_SEND_MAIL_RESULT_MailAction::MadePermanent { result2 } => assert_eq!(
+                result2,
+                SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrEquipError {
+                    equip_error2: u32::from(InventoryResult::InventoryFull.as_int())
+                },
+                "the client is told to make room, not handed a generic error"
+            ),
+            other => panic!("expected the MadePermanent action, got {other:?}"),
+        }
+        match build_mail_made_permanent_result(7, Err(MailMadePermanentError::Other)).action {
+            SMSG_SEND_MAIL_RESULT_MailAction::MadePermanent { result2 } => {
+                assert_eq!(
+                    result2,
+                    SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrInternalError
+                )
+            }
+            other => panic!("expected the MadePermanent action, got {other:?}"),
         }
     }
 

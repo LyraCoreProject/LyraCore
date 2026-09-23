@@ -18,6 +18,7 @@ pub struct ItemInstance {
     pub enchant_id: u32,
     pub soulbound: bool,
     pub random_property_id: u32,
+    pub item_text_id: u32,
 }
 
 impl __sdk::InModule for ItemInstance {
@@ -39,6 +40,7 @@ pub struct ItemInstanceCols {
     pub enchant_id: __sdk::__query_builder::Col<ItemInstance, u32>,
     pub soulbound: __sdk::__query_builder::Col<ItemInstance, bool>,
     pub random_property_id: __sdk::__query_builder::Col<ItemInstance, u32>,
+    pub item_text_id: __sdk::__query_builder::Col<ItemInstance, u32>,
 }
 
 impl __sdk::__query_builder::HasCols for ItemInstance {
@@ -56,6 +58,7 @@ impl __sdk::__query_builder::HasCols for ItemInstance {
             enchant_id: __sdk::__query_builder::Col::new(table_name, "enchant_id"),
             soulbound: __sdk::__query_builder::Col::new(table_name, "soulbound"),
             random_property_id: __sdk::__query_builder::Col::new(table_name, "random_property_id"),
+            item_text_id: __sdk::__query_builder::Col::new(table_name, "item_text_id"),
         }
     }
 }

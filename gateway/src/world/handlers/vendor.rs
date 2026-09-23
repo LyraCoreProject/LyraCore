@@ -409,6 +409,7 @@ fn render_buyback_view(self_guid: u64, ring: &[(u32, u32, u32, u32)]) -> Vec<Out
                     max_durability: 0,
                     container_slots: 0,
                     random_property_id,
+                    item_text_id: 0,
                 };
                 outbound.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
                     Box::new(codec::build_item_create_object(&view)),
@@ -1011,6 +1012,7 @@ mod tests {
                 max_durability: 0,
                 container_slots: 0,
                 random_property_id,
+                item_text_id: 0,
             },
         )))
     }

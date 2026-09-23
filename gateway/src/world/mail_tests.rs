@@ -3003,212 +3003,249 @@ fn deleting_a_priced_mail_answers_the_internal_error_and_keeps_the_mail() {
     );
 }
 
-/// Every row `recipient` holds on `plane`, delivered or not.
-fn held_for(plane: &InMemoryStore, recipient: u64) -> Vec<codec::MailView> {
-    plane
-        .mails
-        .lock()
-        .unwrap()
-        .iter()
-        .filter(|(to, _)| *to == recipient)
-        .map(|(_, m)| m.clone())
-        .collect()
-}
-/// The `same_account` answer each mail send, fence and return on `store` carried.
-fn same_account_seen(store: &InMemoryStore) -> Vec<(&'static str, bool)> {
-    store.same_account_seen.lock().unwrap().clone()
+// -------------------------------------------------------------------------------------
+// Letter Copy (`CMSG_MAIL_CREATE_TEXT_ITEM`)
+// -------------------------------------------------------------------------------------
+
+/// GINGER's seeded mail (id 1, body "left it at the inn") is the copy fixture throughout: a
+/// delivered Character mail with a body, so its text id is its own id (`item_text_id_for`).
+const GINGERS_LETTER_TEXT_ID: u32 = 1;
+
+#[test]
+fn copying_a_letter_sets_copied_and_grants_one_plain_letter() {
+    let (realm, world, _calls) = sharded_mailbox();
+
+    mail::copy_letter(world.as_ref(), Some(GINGER), MAILBOX, 1).expect("the copy completes");
+
+    assert_eq!(
+        realm.mails.lock().unwrap()[0].1.check_flags & lyracore_shared::mail::CHECK_MASK_COPIED,
+        lyracore_shared::mail::CHECK_MASK_COPIED,
+        "the mail plane must carry COPIED"
+    );
+    assert_eq!(
+        *world.granted_letters.lock().unwrap(),
+        vec![(GINGER, GINGERS_LETTER_TEXT_ID)],
+        "exactly one Plain Letter, on the Home Shard, carrying the mail's own id as its text id"
+    );
+    assert_eq!(
+        realm
+            .item_texts
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(id, _)| *id == GINGERS_LETTER_TEXT_ID)
+            .map(|(_, text)| text.clone()),
+        Some("left it at the inn".to_string()),
+        "the mail plane keeps the body as durable item text"
+    );
 }
 
 #[test]
-fn an_item_to_another_account_is_hidden_for_its_delivery_delay() {
-    let (realm, world, instances, _calls) = sharded_send();
-    give_item(&world, GINGER, SWORD_GUID, sword());
+fn a_sharded_letter_copy_checks_room_before_it_touches_the_mail_plane() {
+    let (_realm, world, calls) = sharded_mailbox();
 
-    post_item(world.as_ref(), "Vim").expect("posted");
+    mail::copy_letter(world.as_ref(), Some(GINGER), MAILBOX, 1).expect("the copy completes");
 
-    assert_eq!(same_account_seen(&world), [("mail_fence", false)]);
+    assert_eq!(
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, what)| what == "mail_item_room"
+                || what == "mail_copy_text"
+                || what == "mail_grant_letter")
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec![
+            ("world".into(), "mail_item_room".into()),
+            ("lyracore-realm".into(), "mail_copy_text".into()),
+            ("world".into(), "mail_grant_letter".into()),
+        ],
+        "room is checked on the Home Shard before the Realm-core copy, which runs before the grant"
+    );
+}
+
+#[test]
+fn a_letter_copy_on_one_database_grants_the_same_way() {
+    let single = unsharded_mailbox();
+
+    mail::copy_letter(single.as_ref(), Some(GINGER), MAILBOX, 1).expect("the copy completes");
+
+    assert_eq!(
+        *single.granted_letters.lock().unwrap(),
+        vec![(GINGER, GINGERS_LETTER_TEXT_ID)]
+    );
+    assert_eq!(
+        single.mails.lock().unwrap()[0].1.check_flags & lyracore_shared::mail::CHECK_MASK_COPIED,
+        lyracore_shared::mail::CHECK_MASK_COPIED
+    );
+}
+
+#[test]
+fn copying_into_a_full_bag_is_refused_and_leaves_the_mail_uncopied() {
+    let (realm, world, _calls) = sharded_mailbox();
+    world
+        .bags_full
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+
+    let refusal = mail::copy_letter(world.as_ref(), Some(GINGER), MAILBOX, 1)
+        .expect_err("there is nowhere to put the letter");
+
     assert!(
-        mail::open_mailbox(instances.as_ref(), Some(VIM), MAILBOX)
-            .unwrap()
-            .is_empty(),
-        "Vim sees nothing for the hour"
+        matches!(refusal, mail::CopyLetterRefusal::BagsFull(_)),
+        "the client is told to make room, not handed a generic error: {refusal}"
     );
-    let held = held_for(&realm, VIM);
-    assert!(held[0].deliver_secs > mail::now_secs(), "{held:?}");
-    mail::take_item(instances.as_ref(), Some(VIM), MAILBOX, held[0].id)
-        .expect_err("nothing to take yet");
-}
-
-#[test]
-fn copper_to_another_account_arrives_at_once() {
-    let (_realm, world, instances, _calls) = sharded_send();
-
-    post_money(world.as_ref(), "Vim", ATTACHED).expect("posted");
-
-    assert_eq!(same_account_seen(&world), [("mail_fence", false)]);
     assert_eq!(
-        mail::open_mailbox(instances.as_ref(), Some(VIM), MAILBOX)
-            .unwrap()
-            .len(),
-        1
+        realm.mails.lock().unwrap()[0].1.check_flags & lyracore_shared::mail::CHECK_MASK_COPIED,
+        0,
+        "a refused copy must not touch the mail plane at all"
     );
+    assert!(world.granted_letters.lock().unwrap().is_empty());
+    assert!(realm.item_texts.lock().unwrap().is_empty());
 }
 
 #[test]
-fn an_item_to_an_alt_on_another_shard_arrives_at_once() {
-    let (_realm, world, instances, _calls) = sharded_send();
-    // Vim is Ginger's alt. Only the instances Shard, where Vim lives, names his Realm Account.
-    *instances.realm_accounts.lock().unwrap() = alts(&[VIM]);
-    give_item(&world, GINGER, SWORD_GUID, sword());
+fn a_second_copy_of_the_same_letter_is_refused_and_grants_no_second_letter() {
+    let (_realm, world, _calls) = sharded_mailbox();
 
-    post_item(world.as_ref(), "Vim").expect("posted");
+    mail::copy_letter(world.as_ref(), Some(GINGER), MAILBOX, 1).expect("the first copy completes");
+    mail::copy_letter(world.as_ref(), Some(GINGER), MAILBOX, 1)
+        .expect_err("already made permanent");
 
-    assert_eq!(same_account_seen(&world), [("mail_fence", true)]);
     assert_eq!(
-        mail::open_mailbox(instances.as_ref(), Some(VIM), MAILBOX)
-            .unwrap()
-            .len(),
-        1
+        *world.granted_letters.lock().unwrap(),
+        vec![(GINGER, GINGERS_LETTER_TEXT_ID)],
+        "one letter, not two"
     );
 }
 
 #[test]
-fn a_shard_that_holds_a_character_on_a_shadow_account_defers_to_another_shard() {
-    let (_realm, world, instances, _calls) = sharded_send();
-    // Ginger came over from the instances Shard. The world Shard holds her on a shadow Account and
-    // cannot name her Realm Account, and the instances Shard kept her Account Character Owner.
-    *world.realm_accounts.lock().unwrap() = alts(&[TRIN]);
-    *instances.realm_accounts.lock().unwrap() = alts(&[GINGER]);
-    give_item(&world, GINGER, SWORD_GUID, sword());
+fn the_copied_letters_text_is_readable_after_the_mail_is_deleted() {
+    let (realm, world, _calls) = sharded_mailbox();
 
-    post_item(world.as_ref(), "Trin").expect("posted");
+    mail::copy_letter(world.as_ref(), Some(GINGER), MAILBOX, 1).expect("the copy completes");
+    realm.mails.lock().unwrap().retain(|(_, m)| m.id != 1);
 
-    assert_eq!(same_account_seen(&world), [("mail_fence", true)]);
     assert_eq!(
-        mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX)
-            .unwrap()
-            .len(),
-        1
+        mail::item_text(world.as_ref(), Some(GINGER), GINGERS_LETTER_TEXT_ID).unwrap(),
+        Some("left it at the inn".to_string()),
+        "a copied letter's text outlives the mail row that created it"
     );
 }
 
 #[test]
-fn a_character_no_shard_can_name_counts_as_another_account() {
-    let (_realm, world, _instances, _calls) = sharded_send();
-    *world.realm_accounts.lock().unwrap() = alts(&[GINGER]);
-    give_item(&world, GINGER, SWORD_GUID, sword());
+fn a_letter_copy_over_the_wire_acks_made_permanent_ok() {
+    let store = seated_store();
 
-    post_item(world.as_ref(), "Trin").expect("posted");
-
-    assert_eq!(same_account_seen(&world), [("mail_fence", false)]);
-    assert!(mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX)
-        .unwrap()
-        .is_empty());
-}
-
-#[test]
-fn the_single_database_send_carries_the_same_account_answer() {
-    for (accounts, same_account, listed) in [
-        (alts(&[GINGER, TRIN]), true, 1),
-        (vec![(GINGER, ALTS.to_string())], false, 0),
-    ] {
-        let single = unsharded_send();
-        *single.realm_accounts.lock().unwrap() = accounts;
-        give_item(&single, GINGER, SWORD_GUID, sword());
-
-        post_item(single.as_ref(), "Trin").expect("posted");
-
-        assert_eq!(same_account_seen(&single), [("mail_send", same_account)]);
-        assert_eq!(
-            mail::open_mailbox(single.as_ref(), Some(TRIN), MAILBOX)
-                .unwrap()
-                .len(),
-            listed
-        );
+    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let server_store = store.clone();
+    let server = std::thread::spawn(move || {
+        run_world_session(server_end, server_store.as_ref()).unwrap();
+    });
+    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
+    CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    for _ in 0..WORLD_ENTRY_PACKETS {
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
-}
 
-#[test]
-fn an_item_returned_to_another_account_waits_and_to_an_alt_does_not() {
-    for (vims_account, same_account, listed) in [(VIMS_ACCOUNT, false, 0), (ALTS, true, 1)] {
-        let (realm, world, instances, _calls) = sharded_send();
-        *instances.realm_accounts.lock().unwrap() = vec![(VIM, vims_account.to_string())];
-        *realm.mails.lock().unwrap() = vec![(
-            GINGER,
-            codec::MailView {
-                item_entry: sword().entry,
-                item_stack_count: 1,
-                ..mail(1, VIM, "A gift", "enjoy")
-            },
-        )];
-
-        mail::return_to_sender(world.as_ref(), Some(GINGER), MAILBOX, 1).expect("returned");
-
-        assert_eq!(same_account_seen(&realm), [("mail_return", same_account)]);
-        assert_eq!(
-            mail::open_mailbox(instances.as_ref(), Some(VIM), MAILBOX)
-                .unwrap()
-                .len(),
-            listed,
-            "Vim on {vims_account}"
-        );
-        assert_eq!(
-            held_for(&realm, VIM).len(),
-            1,
-            "the sword is on its way back"
-        );
+    wow_world_messages::vanilla::CMSG_MAIL_CREATE_TEXT_ITEM {
+        mailbox: Guid::new(MAILBOX),
+        mail_id: 1,
+        mail_template_id: 0,
     }
-}
-
-#[test]
-fn an_item_send_re_driven_after_a_restart_keeps_its_delivery_delay() {
-    let (realm, world, instances, _calls) = sharded_send();
-    give_item(&world, GINGER, SWORD_GUID, sword());
-    *realm.mail_kill_at.lock().unwrap() = Some("mail_commit".into());
-
-    post_item(world.as_ref(), "Vim").expect_err("realm-core never answered the commit");
-    assert_eq!(
-        world.mail_escrows.lock().unwrap()[0].1.delivery_delay_secs,
-        3_600,
-        "the fence holds the hour"
-    );
-
-    *realm.mail_kill_at.lock().unwrap() = None;
-    mail::open_mailbox(world.as_ref(), Some(GINGER), MAILBOX).expect("the gate opens");
-
-    assert!(world.mail_escrows.lock().unwrap().is_empty(), "settled");
-    assert_eq!(held_for(&realm, VIM).len(), 1, "committed once");
-    assert!(
-        mail::open_mailbox(instances.as_ref(), Some(VIM), MAILBOX)
-            .unwrap()
-            .is_empty(),
-        "the re-driven letter still waits its hour"
-    );
-}
-
-#[test]
-fn a_cod_letter_to_another_account_waits_and_its_payment_arrives_at_once() {
-    let (realm, world, instances, _calls) = sharded_send();
-    *instances.purses.lock().unwrap() = vec![(VIM, PURSE)];
-    give_item(&world, GINGER, SWORD_GUID, sword());
-
-    post_cod(world.as_ref(), "Vim", COD).expect("posted");
-
-    let id = held_for(&realm, VIM)[0].id;
-    mail::take_item(instances.as_ref(), Some(VIM), MAILBOX, id).expect_err("nothing to buy yet");
-    assert_eq!(purse_of(&instances, VIM), PURSE, "and nothing is charged");
-
-    // An hour later.
-    for (_, m) in realm.mails.lock().unwrap().iter_mut() {
-        m.deliver_secs = mail::now_secs();
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_SEND_MAIL_RESULT(m) => {
+            assert_eq!(m.mail_id, 1);
+            match m.action {
+                wow_world_messages::vanilla::SMSG_SEND_MAIL_RESULT_MailAction::MadePermanent {
+                    result2,
+                } => assert_eq!(
+                    result2,
+                    wow_world_messages::vanilla::SMSG_SEND_MAIL_RESULT_MailResultTwo::Ok
+                ),
+                other => panic!("expected the MadePermanent action, got {other:?}"),
+            }
+        }
+        other => panic!("expected SMSG_SEND_MAIL_RESULT, got {other}"),
     }
-    mail::take_item(instances.as_ref(), Some(VIM), MAILBOX, id).expect("bought");
 
-    assert_eq!(purse_of(&instances, VIM), PURSE - COD);
-    let gingers = mail::open_mailbox(world.as_ref(), Some(GINGER), MAILBOX).unwrap();
+    drop(client);
+    server.join().unwrap();
+    assert_eq!(store.granted_letters.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn a_letter_copy_into_a_full_bag_over_the_wire_answers_equip_error() {
+    let store = seated_store();
+    store
+        .bags_full
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+
+    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let server_store = store.clone();
+    let server = std::thread::spawn(move || {
+        run_world_session(server_end, server_store.as_ref()).unwrap();
+    });
+    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
+    CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    for _ in 0..WORLD_ENTRY_PACKETS {
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
+    }
+
+    wow_world_messages::vanilla::CMSG_MAIL_CREATE_TEXT_ITEM {
+        mailbox: Guid::new(MAILBOX),
+        mail_id: 1,
+        mail_template_id: 0,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_SEND_MAIL_RESULT(m) => match m.action {
+            wow_world_messages::vanilla::SMSG_SEND_MAIL_RESULT_MailAction::MadePermanent {
+                result2,
+            } => assert_eq!(
+                result2,
+                wow_world_messages::vanilla::SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrEquipError {
+                    equip_error2: u32::from(
+                        wow_world_messages::vanilla::InventoryResult::InventoryFull.as_int()
+                    )
+                }
+            ),
+            other => panic!("expected the MadePermanent action, got {other:?}"),
+        },
+        other => panic!("expected SMSG_SEND_MAIL_RESULT, got {other}"),
+    }
+
+    drop(client);
+    server.join().unwrap();
+    assert!(store.granted_letters.lock().unwrap().is_empty());
     assert_eq!(
-        (gingers.len(), gingers[0].money),
-        (1, COD),
-        "the payment arrives at once (cmangos MailHandler.cpp:475-477)"
+        store.mails.lock().unwrap()[0].1.check_flags & lyracore_shared::mail::CHECK_MASK_COPIED,
+        0,
+        "a refused copy leaves the mail uncopied"
+    );
+}
+
+#[test]
+fn item_text_query_falls_back_to_the_callers_own_undeleted_mail() {
+    let (_realm, world, _calls) = sharded_mailbox();
+
+    // No copy has happened, so `game_item_text` holds nothing — the query still resolves through
+    // the caller's own delivered mail under the same id, matching what a letter still sitting in
+    // the mailbox has always done.
+    assert_eq!(
+        mail::item_text(world.as_ref(), Some(GINGER), GINGERS_LETTER_TEXT_ID).unwrap(),
+        Some("left it at the inn".to_string())
+    );
+    assert_eq!(
+        mail::item_text(world.as_ref(), Some(TRIN), GINGERS_LETTER_TEXT_ID).unwrap(),
+        None,
+        "and it stays scoped to the caller's own mail — not a crafted read of Ginger's"
     );
 }

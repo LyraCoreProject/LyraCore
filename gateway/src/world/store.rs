@@ -1085,6 +1085,28 @@ pub trait WorldStore:
         Ok(())
     }
 
+    /// `CMSG_MAIL_CREATE_TEXT_ITEM` step 1 (Letter Copy) — set COPIED on `mail_id` and file its
+    /// body as durable item text, on the database that OWNS THE MAIL ROW (realm-core when sharded,
+    /// this shard's own database otherwise — the same two-plane routing `mail_take_item_fence`
+    /// takes). `Err` for a mail that is not the caller's, is not delivered, has no body, or is
+    /// already copied.
+    fn mail_copy_text(&self, recipient_guid: u64, mail_id: u64) -> Result<()>;
+
+    /// `CMSG_MAIL_CREATE_TEXT_ITEM` step 2 — store one Plain Letter carrying `item_text_id`, on the
+    /// PAYEE's own handle. [`mail_item_room`](Self::mail_item_room)'s real Gate: a full bag found
+    /// here refuses and leaves the mail COPIED with no letter granted. The Plain Letter sells for 0
+    /// (README Decision 14), so a grant lost to that race costs nothing — this is deliberately not
+    /// an escrow.
+    fn mail_grant_letter(&self, payee_guid: u64, item_text_id: u32) -> Result<()>;
+
+    /// The durable text behind `item_text_id`, read from `game_item_text` on the database that
+    /// OWNS THE MAIL PLANE (same two-plane routing as [`mail_copy_text`](Self::mail_copy_text)). A
+    /// copied letter's text outlives the mail row that created it, so this answers even after that
+    /// mail is deleted. `None` by default, so a store with no opinion on item text has none.
+    fn item_text(&self, _item_text_id: u32) -> Result<Option<String>> {
+        Ok(None)
+    }
+
     /// **Escrow step 1 (send)** — take the postage plus the attached coin out of `sender_guid`'s
     /// purse into a fence keyed by the caller-chosen `escrow_id`, on the database THIS handle names.
     ///

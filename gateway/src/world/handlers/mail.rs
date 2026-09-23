@@ -56,11 +56,14 @@ pub(crate) fn handle_mail<St: WorldStore + ?Sized>(
             )?;
         }
         // The letter body. It does not ride the list packet: the list advertises the mail's own id
-        // as an `item_text_id` and the client fetches the text here. A body it cannot have (another
-        // player's mail, a deleted one) answers with EMPTY text rather than silence — the client has
-        // already opened the letter and is waiting on this packet.
+        // as an `item_text_id` and the client fetches the text here — by `item_text_id` alone (the
+        // second field can be a bag item guid or a mail id, so the server never reads it). A copied
+        // letter's text lives in `game_item_text` and outlives the mail; anything else falls back to
+        // the caller's own mail body under the same id. A body it cannot have (another player's
+        // mail, a deleted one) answers with EMPTY text rather than silence — the client has already
+        // opened the letter and is waiting on this packet.
         ClientOpcodeMessage::CMSG_ITEM_TEXT_QUERY(c) => {
-            let body = mail::letter_body(store, social::self_guid(conn), u64::from(c.mail_id))
+            let body = mail::item_text(store, social::self_guid(conn), c.item_text_id)
                 .unwrap_or_else(|e| {
                     log::debug!(
                         "world: item text query refused (account {}): {e}",
@@ -265,6 +268,41 @@ pub(crate) fn handle_mail<St: WorldStore + ?Sized>(
                     tx,
                     Outbound::One(ServerOpcodeMessage::SMSG_SEND_MAIL_RESULT(Box::new(
                         codec::build_mail_send_result(result2),
+                    ))),
+                )?;
+            }
+        }
+        // Turn a delivered letter's text into a Plain Letter in the bags (the client's letter
+        // button, offered on a takeable mail that is not yet COPIED). Bags-full and every other
+        // refusal are the two outcomes the player can act on, so both ack through
+        // `SMSG_SEND_MAIL_RESULT`/MadePermanent; the mailbox gate alone stays silent, matching the
+        // other arms.
+        ClientOpcodeMessage::CMSG_MAIL_CREATE_TEXT_ITEM(c) => {
+            let self_guid = social::self_guid(conn);
+            let made =
+                match mail::copy_letter(store, self_guid, c.mailbox.guid(), u64::from(c.mail_id)) {
+                    Ok(()) => Some(Ok(())),
+                    Err(e) => {
+                        log::debug!(
+                            "world: letter copy refused (account {}): {e}",
+                            conn.account_id
+                        );
+                        match e {
+                            mail::CopyLetterRefusal::NoMailbox(_) => None,
+                            mail::CopyLetterRefusal::BagsFull(_) => {
+                                Some(Err(codec::MailMadePermanentError::BagsFull))
+                            }
+                            mail::CopyLetterRefusal::Other(_) => {
+                                Some(Err(codec::MailMadePermanentError::Other))
+                            }
+                        }
+                    }
+                };
+            if let Some(made) = made {
+                send(
+                    tx,
+                    Outbound::One(ServerOpcodeMessage::SMSG_SEND_MAIL_RESULT(Box::new(
+                        codec::build_mail_made_permanent_result(c.mail_id, made),
                     ))),
                 )?;
             }

@@ -50,6 +50,7 @@ impl Coordinator {
                     max_durability: tmpl.max_durability,
                     container_slots: tmpl.container_slots,
                     random_property_id: i.random_property_id,
+                    item_text_id: i.item_text_id,
                 })
             })
             .collect();

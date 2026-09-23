@@ -1376,6 +1376,7 @@ fn equip_into(
             enchant_id: 0, // debug-granted item — unenchanted
             soulbound,
             random_property_id,
+            item_text_id: 0,
         });
     }
     Ok(())

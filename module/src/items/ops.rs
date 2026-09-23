@@ -74,6 +74,7 @@ pub(crate) fn grant_starter_item(
             // grant source like any other.
             soulbound: binds_on_grant(tmpl.bonding),
             random_property_id,
+            item_text_id: 0, // no starter item carries readable text
         });
         Ok(())
     };
@@ -374,6 +375,47 @@ pub(crate) fn store_instance_state(
         // expression exactly, so an arriving item cannot end up less bound than a granted one.
         soulbound: snapshot.soulbound || binds_on_grant(tmpl.bonding),
         random_property_id: snapshot.random_property_id,
+        // A snapshot carries no text id: mail attachments, traded items and restored loot are
+        // ordinary items, never a Letter Copy's Plain Letter. `grant_letter_item` mints those
+        // directly.
+        item_text_id: 0,
+    });
+    Ok(())
+}
+
+/// Store one letter granted by a Letter Copy: a fresh `item_entry` instance carrying
+/// `item_text_id` in `ITEM_FIELD_ITEM_TEXT_ID`. `free_slot` is both the capacity Gate and the slot
+/// choice — the same one every other item grant uses, so a letter and a mail take can never
+/// disagree about whether there is room. `Err(INVENTORY_FULL)` on a full bag, unchanged.
+pub(crate) fn grant_letter_item(
+    ctx: &ReducerContext,
+    player_guid: u64,
+    item_entry: u32,
+    item_text_id: u32,
+) -> Result<(), String> {
+    let player = crate::helpers::acting_entity_by_guid(ctx, player_guid)
+        .ok_or_else(|| lyracore_shared::mail::NOT_IN_WORLD.to_string())?;
+    let tmpl = ctx
+        .db
+        .game_item_template()
+        .entry()
+        .find(item_entry)
+        .ok_or_else(|| format!("mail: no template for letter item {item_entry}"))?;
+    let slot = free_slot(ctx, player_guid)?;
+    let guid = next_item_guid(ctx)?;
+    ctx.db.game_item_instance().insert(ItemInstance {
+        guid,
+        entry: tmpl.entry,
+        owner_identity: player.owner_identity,
+        owner_guid: player_guid,
+        slot,
+        stack_count: 1,
+        durability: tmpl.max_durability,
+        created_at: ctx.timestamp,
+        enchant_id: 0, // a freshly minted letter — unenchanted
+        soulbound: binds_on_grant(tmpl.bonding),
+        random_property_id: 0,
+        item_text_id,
     });
     Ok(())
 }

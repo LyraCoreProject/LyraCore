@@ -98,6 +98,9 @@ pub struct ItemInstanceView {
     /// opens the bag window. Non-bags use `ObjectType::Item` as before (baseline-safe).
     pub container_slots: u8,
     pub random_property_id: u32,
+    /// `ITEM_FIELD_ITEM_TEXT_ID` — nonzero on a Letter Copy's Plain Letter
+    /// (`CMSG_MAIL_CREATE_TEXT_ITEM`). Zero means the item carries no readable text.
+    pub item_text_id: u32,
 }
 
 /// Build `SMSG_ITEM_QUERY_SINGLE_RESPONSE` so the client caches the item's name/tooltip/icon (the
@@ -407,7 +410,7 @@ pub fn build_item_create_object(inst: &ItemInstanceView) -> SMSG_UPDATE_OBJECT {
     let guid3 = Guid::new(inst.guid);
     if inst.container_slots > 0 {
         // This item is a bag — send a CONTAINER CREATE so the client shows the bag window.
-        let container = UpdateContainer::builder()
+        let mut container = UpdateContainer::builder()
             .set_object_guid(guid3)
             .set_object_entry(inst.entry as i32)
             .set_object_scale_x(1.0)
@@ -419,6 +422,9 @@ pub fn build_item_create_object(inst: &ItemInstanceView) -> SMSG_UPDATE_OBJECT {
             .set_item_maxdurability(inst.max_durability as i32)
             .set_container_num_slots(inst.container_slots as i32)
             .finalize();
+        if inst.item_text_id != 0 {
+            container.set_item_item_text_id(inst.item_text_id as i32);
+        }
         SMSG_UPDATE_OBJECT {
             has_transport: 0,
             objects: vec![Object::CreateObject2 {
@@ -430,7 +436,7 @@ pub fn build_item_create_object(inst: &ItemInstanceView) -> SMSG_UPDATE_OBJECT {
         }
     } else {
         // Regular item — `ObjectType::Item`, byte-identical to the pre-bag path.
-        let item = UpdateItem::builder()
+        let mut item = UpdateItem::builder()
             .set_object_guid(guid3)
             .set_object_entry(inst.entry as i32)
             .set_object_scale_x(1.0)
@@ -441,6 +447,11 @@ pub fn build_item_create_object(inst: &ItemInstanceView) -> SMSG_UPDATE_OBJECT {
             .set_item_durability(inst.durability as i32)
             .set_item_maxdurability(inst.max_durability as i32)
             .finalize();
+        // A copied letter's item text — the field a plain item leaves unset (byte-identical to the
+        // pre-Letter-Copy wire shape).
+        if inst.item_text_id != 0 {
+            item.set_item_item_text_id(inst.item_text_id as i32);
+        }
         SMSG_UPDATE_OBJECT {
             has_transport: 0,
             objects: vec![Object::CreateObject2 {

@@ -1798,6 +1798,7 @@ fn item_create_object_is_item_typed_and_serializes() {
         max_durability: 20,
         container_slots: 0,
         random_property_id: 509_0101,
+        item_text_id: 0,
     };
     let msg = build_item_create_object(&inst);
     let mut buf = Vec::new();
@@ -1816,6 +1817,44 @@ fn item_create_object_is_item_typed_and_serializes() {
             assert_eq!(it.item_maxdurability(), Some(20));
             assert_eq!(it.item_random_properties_id(), Some(509_0101));
         }
+        other => panic!("expected an Item CreateObject2, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_copied_letters_create_block_carries_its_item_text_id() {
+    let inst = ItemInstanceView {
+        guid: (0x4000u64 << 48) | (1 << 8) | 23,
+        entry: 8383,
+        owner_guid: 1,
+        slot: 23,
+        stack_count: 1,
+        durability: 0,
+        max_durability: 0,
+        container_slots: 0,
+        random_property_id: 0,
+        item_text_id: 7,
+    };
+    match &build_item_create_object(&inst).objects[0] {
+        Object::CreateObject2 {
+            mask2: UpdateMask::Item(it),
+            ..
+        } => assert_eq!(it.item_item_text_id(), Some(7)),
+        other => panic!("expected an Item CreateObject2, got {other:?}"),
+    }
+    let plain = ItemInstanceView {
+        item_text_id: 0,
+        ..inst
+    };
+    match &build_item_create_object(&plain).objects[0] {
+        Object::CreateObject2 {
+            mask2: UpdateMask::Item(it),
+            ..
+        } => assert_eq!(
+            it.item_item_text_id(),
+            None,
+            "a plain item must leave ITEM_FIELD_ITEM_TEXT_ID unset, byte-identical to before Letter Copy"
+        ),
         other => panic!("expected an Item CreateObject2, got {other:?}"),
     }
 }
@@ -3586,6 +3625,7 @@ fn item_create_object_bag_slots_build_a_container_with_num_slots() {
         max_durability: 0,
         container_slots: 8, // an 8-slot bag
         random_property_id: 509_0101,
+        item_text_id: 0,
     };
     let msg = build_item_create_object(&inst);
     let mut buf = Vec::new();

@@ -583,6 +583,12 @@ home shard reads only the escrow row and still completes. A COD payment is fence
 shard before realm-core commits it. If the priced Mail expired, went back or was paid in between,
 the commit sends the payment back to the payer as a Returned Mail, so the fence still settles.
 
+A Letter Copy (`module/src/mail_text.rs`) crosses the same boundary without the escrow shape above.
+`realm_mail_copy_text` sets COPIED and files the item text on the mail plane; `gw_mail_grant_letter`
+then grants the Plain Letter on the Home Shard. Nothing fences the value in between: the Plain Letter
+sells for 0, so a grant lost to a race with the Gateway's own bag-room check costs nothing, and a
+two-step write is simpler than an escrow that protects value nobody can lose.
+
 ### 6.4 Cross-shard visibility
 
 Since #468 this is not a feature but a consequence of the shared AOI index: every shard's
