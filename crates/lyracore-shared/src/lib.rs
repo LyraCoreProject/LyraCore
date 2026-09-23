@@ -26,6 +26,7 @@ pub mod movement_path;
 pub mod nav;
 pub mod opcodes;
 pub mod packing;
+pub mod pet;
 pub mod quest;
 pub mod region;
 pub mod social;

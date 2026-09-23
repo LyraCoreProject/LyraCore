@@ -65,7 +65,7 @@ fn hunter_pet() -> codec::MemberPetEntity {
         max_health: 60,
         power: 40,
         max_power: 100,
-        unit_bytes_0: 0x0300_0000,
+        unit_bytes_0: 0x0200_0000, // power type 2, focus
         auras: vec![codec::MemberAuraSlot {
             slot: 2,
             spell_id: 400,
@@ -103,8 +103,8 @@ fn caster_base_bytes() -> Vec<u8> {
     ]
 }
 
-/// [`hunter_pet`]'s pet block: guid, name, display, health, power and its one positive aura, no
-/// negative aura.
+/// [`hunter_pet`]'s scalar pet fields: guid, name, display, health and power. Its aura blocks are
+/// a separate concern; a caller appends them (occupied or empty) after this.
 fn hunter_pet_bytes() -> Vec<u8> {
     #[rustfmt::skip]
     let bytes = vec![
@@ -113,24 +113,78 @@ fn hunter_pet_bytes() -> Vec<u8> {
         0x6A, 0x02,             // PET_MODEL_ID 618
         0x32, 0x00,             // PET_CUR_HP 50
         0x3C, 0x00,             // PET_MAX_HP 60
-        0x03,                   // PET_POWER_TYPE 3 (focus)
+        0x02,                   // PET_POWER_TYPE 2 (focus)
         0x28, 0x00,             // PET_CUR_POWER 40
         0x64, 0x00,             // PET_MAX_POWER 100
-        0x04, 0x00, 0x00, 0x00, // PET_AURAS mask: slot 2
-        0x90, 0x01,             // spell 400
-        0x00, 0x00,             // PET_AURAS_NEGATIVE: no occupied slots
     ];
     bytes
 }
 
-/// The pet-less caster's full body for guid `g`: every base field, plus the two empty aura
-/// blocks a first send or a FULL answer always carries — mask 0x7FF (cm:GroupHandler.cpp:781-786:
-/// only the pet bits are conditional on a live charm).
+/// The wire bytes for an empty `AURAS`/`PET_AURAS` block where every slot rides the packet (a
+/// `None` previous, cm:Group.cpp:306-307, 746-747): mask `0xFFFFFFFF`, then 32 zero values.
+fn empty_positive_aura_bytes() -> Vec<u8> {
+    let mut bytes = vec![0xFF, 0xFF, 0xFF, 0xFF];
+    bytes.extend(std::iter::repeat_n(0u8, 32 * 2));
+    bytes
+}
+
+/// [`empty_positive_aura_bytes`] for the negative block: mask `0xFFFF`, then 16 zero values.
+fn empty_negative_aura_bytes() -> Vec<u8> {
+    let mut bytes = vec![0xFF, 0xFF];
+    bytes.extend(std::iter::repeat_n(0u8, 16 * 2));
+    bytes
+}
+
+/// [`empty_positive_aura_bytes`] with `slot` overlaid to `spell_id`, for a first send where one
+/// slot is occupied: mask `0xFFFFFFFF`, then a spell id per slot, `slot`'s the only nonzero one.
+fn full_positive_aura_bytes(slot: usize, spell_id: u16) -> Vec<u8> {
+    let mut bytes = vec![0xFF, 0xFF, 0xFF, 0xFF];
+    for i in 0..32u16 {
+        let value = if i as usize == slot { spell_id } else { 0 };
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    bytes
+}
+
+/// A zeroed pet block, PET_GUID through PET_AURAS_NEGATIVE: what a first send writes for a
+/// pet-less member, and what a delta writes once for a member whose pet just vanished
+/// (cm:GroupHandler.cpp:660-755's own "write zero when there is no charm" branches).
+fn zeroed_pet_bytes() -> Vec<u8> {
+    let mut bytes = vec![0u8; 8]; // PET_GUID
+    bytes.push(0); // PET_NAME: an empty CString
+    bytes.extend([0u8; 2]); // PET_MODEL_ID
+    bytes.extend([0u8; 2]); // PET_CUR_HP
+    bytes.extend([0u8; 2]); // PET_MAX_HP
+    bytes.push(0); // PET_POWER_TYPE
+    bytes.extend([0u8; 2]); // PET_CUR_POWER
+    bytes.extend([0u8; 2]); // PET_MAX_POWER
+    bytes.extend(empty_positive_aura_bytes()); // PET_AURAS
+    bytes.extend(empty_negative_aura_bytes()); // PET_AURAS_NEGATIVE
+    bytes
+}
+
+/// The pet-less caster's body for guid `g` answering `CMSG_REQUEST_PARTY_MEMBER_STATS`: every
+/// base field, plus the two empty aura blocks. Mask 0x7FF, no pet bits: only the explicit FULL
+/// answer strips `GROUP_UPDATE_PET` whole for a pet-less member (cm:GroupHandler.cpp:781-786).
 fn caster_full_body(guid: u8) -> Vec<u8> {
     let mut body = vec![0x01, guid, 0xFF, 0x07, 0x00, 0x00]; // mask 0x7FF
     body.extend(caster_base_bytes());
-    body.extend([0x00, 0x00, 0x00, 0x00]); // AURAS: no occupied slots
-    body.extend([0x00, 0x00]); // AURAS_NEGATIVE: no occupied slots
+    body.extend(empty_positive_aura_bytes());
+    body.extend(empty_negative_aura_bytes());
+    body
+}
+
+/// The pet-less caster's body for guid `g` on a Relay first send (opcode `0x007E`): every base
+/// field, both aura blocks written in full, and every pet field zeroed. `None` marks
+/// `GROUP_UPDATE_FULL` dirty unconditionally, pet fields included even with no pet
+/// (cm:Group.cpp:306-307, 746-747), so a relogged member without their old pet still clears the
+/// viewer's stale pet frame.
+fn caster_first_send_body(guid: u8) -> Vec<u8> {
+    let mut body = vec![0x01, guid, 0xFF, 0xFF, 0x1F, 0x00]; // mask 0x1FFFFF (GROUP_UPDATE_FULL)
+    body.extend(caster_base_bytes());
+    body.extend(empty_positive_aura_bytes());
+    body.extend(empty_negative_aura_bytes());
+    body.extend(zeroed_pet_bytes());
     body
 }
 
@@ -183,7 +237,7 @@ fn tick(store: &InMemoryStore, created: &[u64], snapshots: &mut Snapshots) -> Ve
 fn a_live_mate_on_the_same_shard_gets_every_field_on_the_first_tick() {
     let (_realm, world, _instances) = ginger_and_trin();
     let packets = tick(&world, &[GINGER], &mut Snapshots::new());
-    assert_eq!(packets, vec![(0x007E, caster_full_body(TRIN as u8))]);
+    assert_eq!(packets, vec![(0x007E, caster_first_send_body(TRIN as u8))]);
 }
 
 #[test]
@@ -201,18 +255,18 @@ fn a_live_mate_on_another_shard_is_read_from_that_shards_cache() {
 
     let packets = tick(&world, &[GINGER], &mut Snapshots::new());
 
+    let mut expected = vec![0x01, 0x02, 0xFF, 0xFF, 0x1F, 0x00]; // mask 0x1FFFFF (GROUP_UPDATE_FULL)
     #[rustfmt::skip]
-    let expected = vec![
-        0x01, 0x02,             // packed guid 2
-        0xFF, 0x07, 0x00, 0x00, // mask 0x7FF (MEMBER | AURAS | AURAS_NEGATIVE)
+    expected.extend([
         0x05,                   // status ONLINE | DEAD
         0xD2, 0x04, 0xDC, 0x05, 0x00, 0x20, 0x03, 0xE8, 0x03, 0x14, 0x00,
         0x2D, 0x06,             // zone 1581
         0xF0, 0xFF,             // x -16
         0x81, 0xFE,             // y -383
-        0x00, 0x00, 0x00, 0x00, // AURAS: no occupied slots
-        0x00, 0x00,             // AURAS_NEGATIVE: no occupied slots
-    ];
+    ]);
+    expected.extend(empty_positive_aura_bytes());
+    expected.extend(empty_negative_aura_bytes());
+    expected.extend(zeroed_pet_bytes());
     assert_eq!(packets, vec![(0x007E, expected)]);
 }
 
@@ -281,7 +335,7 @@ fn a_mate_that_leaves_the_viewers_aoi_gets_every_field_again() {
 
     let packets = tick(&world, &[GINGER], &mut snapshots);
 
-    assert_eq!(packets, vec![(0x007E, caster_full_body(TRIN as u8))]);
+    assert_eq!(packets, vec![(0x007E, caster_first_send_body(TRIN as u8))]);
 }
 
 #[test]
@@ -297,7 +351,7 @@ fn an_offline_mate_gets_one_status_zero_packet_then_nothing_until_it_changes() {
 
     place(&world, TRIN, caster());
     let packets = tick(&world, &[GINGER], &mut snapshots);
-    assert_eq!(packets, vec![(0x007E, caster_full_body(TRIN as u8))]);
+    assert_eq!(packets, vec![(0x007E, caster_first_send_body(TRIN as u8))]);
 }
 
 #[test]
@@ -453,7 +507,7 @@ fn after_a_full_answer_the_next_tick_sends_every_field() {
     place(&world, VIM, caster());
 
     let packets = tick(&world, &[GINGER], &mut record.lock());
-    assert_eq!(packets, vec![(0x007E, caster_full_body(VIM as u8))]);
+    assert_eq!(packets, vec![(0x007E, caster_first_send_body(VIM as u8))]);
 }
 
 #[test]
@@ -626,7 +680,7 @@ fn world_entry_forgets_member_stats_sent_before_the_party_frame() {
         .member_stats
         .clone();
     let packets = tick(&session_shard, &[GINGER], &mut record.lock());
-    assert_eq!(packets, vec![(0x007E, caster_full_body(VIM as u8))]);
+    assert_eq!(packets, vec![(0x007E, caster_first_send_body(VIM as u8))]);
     drop(client);
     let _ = server.join();
 }
@@ -687,9 +741,11 @@ fn a_live_pet_sends_its_block_then_dismissing_it_zeroes_the_bits_once() {
 
     let mut first_send = vec![0x01, TRIN as u8, 0xFF, 0xFF, 0x1F, 0x00]; // mask FULL, live pet
     first_send.extend(caster_base_bytes());
-    first_send.extend([0x00, 0x00, 0x00, 0x00]); // AURAS: none
-    first_send.extend([0x00, 0x00]); // AURAS_NEGATIVE: none
+    first_send.extend(empty_positive_aura_bytes()); // AURAS: the member has none
+    first_send.extend(empty_negative_aura_bytes()); // AURAS_NEGATIVE: the member has none
     first_send.extend(hunter_pet_bytes());
+    first_send.extend(full_positive_aura_bytes(2, 400)); // PET_AURAS: slot 2
+    first_send.extend(empty_negative_aura_bytes()); // PET_AURAS_NEGATIVE: the pet has none
     assert_eq!(
         tick(&world, &[GINGER], &mut snapshots),
         vec![(0x007E, first_send)]

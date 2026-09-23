@@ -290,7 +290,7 @@ impl Coordinator {
     ///
     /// Each connected shard is paired with its position in `all_shards()` before the scan, the
     /// same `enumerate()` order `arm_shared_world_view` assigned when it built `WorldView`'s
-    /// `AuraIndex` — that position is the `ShardId` the index keys its rows by, so a live match
+    /// `AuraIndex`, that position is the `ShardId` the index keys its rows by, so a live match
     /// can read the right shard's auras and pet.
     pub(crate) fn member_presence(&self, guid: u64) -> Result<crate::world::MemberPresence> {
         let connected: Vec<MemberShard> = self
@@ -320,16 +320,23 @@ impl Coordinator {
         )
     }
 
-    /// The member's live `game_world_entity` row, its occupied aura slots, and its live pet —
+    /// The member's live `game_world_entity` row, its occupied aura slots, and its live pet:
     /// everything [`crate::world::MemberShardCache::member_entity`] needs, read from this one
     /// shard. `shard` is this connection's `ShardId` in `WorldView`'s `AuraIndex`.
+    ///
+    /// The entity read releases its `coord()` guard before the aura and pet reads take their own.
+    /// `std::sync::RwLock` favors a waiting writer, so holding this guard across a second `coord()`
+    /// call on the same thread can deadlock: the nested call blocks behind a writer that is itself
+    /// waiting on the still-held outer guard. A watchdog reconnect takes that writer lock.
     fn member_entity(
         &self,
         shard: crate::stdb::world_index::ShardId,
         guid: u64,
     ) -> Option<crate::codec::MemberEntity> {
-        let live = self.0.coord();
-        let entity = live.conn.db.game_world_entity().guid().find(&guid)?;
+        let entity = {
+            let live = self.0.coord();
+            live.conn.db.game_world_entity().guid().find(&guid)?
+        };
         Some(crate::codec::MemberEntity {
             health: entity.health,
             max_health: entity.max_health,
@@ -383,6 +390,12 @@ impl Coordinator {
     /// `owner_guid`'s live pet, resolved the way the pet bar resolves it: a Hunter's name comes
     /// from `game_hunter_pet_protocol`, a summoned pet's from its creature template, and every
     /// other field from the pet's own `game_world_entity` row (`pet_name`, `stdb/reads/pet.rs`).
+    ///
+    /// The pet guid is deterministic (`lyracore_shared::pet::pet_guid_for`, the same derivation
+    /// the Module's `pet_of` uses), so this is one keyed lookup plus an owner check, never a scan.
+    /// `game_world_entity().iter()` clones every cached row while holding the client cache's own
+    /// lock, and this read runs for every live group mate on every Relay tick; a scan here would
+    /// contend with the shard's coordinator pump, the busiest callback in the process.
     fn member_pet(
         &self,
         shard: crate::stdb::world_index::ShardId,
@@ -390,10 +403,12 @@ impl Coordinator {
     ) -> Option<crate::codec::MemberPetEntity> {
         let live = self.0.coord();
         let db = &live.conn.db;
+        let pet_guid = lyracore_shared::pet::pet_guid_for(owner_guid);
         let pet = db
             .game_world_entity()
-            .iter()
-            .find(|entity| entity.owner_guid == owner_guid)?;
+            .guid()
+            .find(&pet_guid)
+            .filter(|pet| pet.owner_guid == owner_guid)?;
         let name = db
             .game_hunter_pet_protocol()
             .iter()
@@ -466,8 +481,15 @@ mod member_stats_adapter_tests {
     }
 
     /// `member_entity` and `member_pet` must read auras from the SAME `ShardId` the live match
-    /// came from, not a fixed or default one — a cross-shard aura read would silently show
-    /// nothing outside the Gateway process that owns that shard's connection.
+    /// came from, not a fixed or default one. A cross-shard aura read would silently show nothing
+    /// outside the Gateway process that owns that shard's connection.
+    ///
+    /// A source scan, not a behavior test through a real `Coordinator`: `Coordinator` wraps the
+    /// spacetimedb-sdk `DbConnection`, which only a live SpacetimeDB node can populate, so this
+    /// method's actual database reads are outside what a unit test can drive. `crate::test_scan`'s
+    /// own module doc names that as the same untestable-by-mock shape `ReducerContext` is on the
+    /// Module side. This scan stays narrow: one substring per call it must make, not a copy of the
+    /// method body.
     #[test]
     fn member_entity_and_pet_read_auras_from_the_matched_shard() {
         let entity = flat("fn member_entity(");
@@ -476,5 +498,20 @@ mod member_stats_adapter_tests {
 
         let pet = flat("fn member_pet(");
         assert!(pet.contains("self.member_aura_slots(shard,pet.guid)"));
+    }
+
+    /// The pet read must stay a keyed lookup by the deterministic pet guid, never a table scan:
+    /// `game_world_entity().iter()` clones every cached row while holding the client cache's own
+    /// lock, and `member_pet` runs for every live group mate on every Relay tick, which can stall
+    /// the shard pump that lock also guards. Also a source scan; see the test above for why.
+    #[test]
+    fn member_pet_looks_up_the_deterministic_guid_instead_of_scanning() {
+        let pet = flat("fn member_pet(");
+        assert!(pet.contains("lyracore_shared::pet::pet_guid_for(owner_guid)"));
+        assert!(pet.contains(".guid().find(&pet_guid)"));
+        assert!(
+            !pet.contains("game_world_entity().iter()"),
+            "member_pet must not scan every live entity to find one pet"
+        );
     }
 }

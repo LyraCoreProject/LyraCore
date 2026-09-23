@@ -28,7 +28,7 @@ pub mod member_status {
 }
 
 /// `UNIT_FIELD_AURA` slots 0-31 are positive; the client reads a `u32` mask over them
-/// (cm:GroupHandler.cpp:637, cm:GroupHandler.cpp:825). `Aura.slot` is this same index — confirmed
+/// (cm:GroupHandler.cpp:637, cm:GroupHandler.cpp:825). `Aura.slot` is this same index, confirmed
 /// against `codec/update_mask.rs`'s `idx::UNIT_AURA` layout, which writes a slot's spell id at
 /// `UNIT_AURA + slot`.
 pub const MAX_POSITIVE_AURAS: u8 = 32;
@@ -70,9 +70,12 @@ impl GroupUpdateMask {
     /// Every base field a live member always carries: status through position (cm:Group.h:69-77).
     pub const MEMBER: Self = Self(0x0000_01FF);
     /// Every pet field (cm:Group.h:91, `GROUP_UPDATE_PET`). [`full_update_mask`] ORs this in for a
-    /// live pet; `MEMBER | AURAS | AURAS_NEGATIVE | PET` is cm:Group.h:92's `GROUP_UPDATE_FULL`
-    /// (0x1FFFFF), pinned by `field_bits_are_the_cmangos_group_update_flags` below.
+    /// live pet only; [`FULL`](Self::FULL) carries it unconditionally.
     pub const PET: Self = Self(0x001F_F800);
+    /// Every known field (cm:Group.h:92, `GROUP_UPDATE_FULL`). A join or an online transition
+    /// marks this whole set dirty (cm:Group.cpp:306-307, 746-747), pet fields included even with
+    /// no pet, so [`stats_delta`]'s first send uses it as-is.
+    pub const FULL: Self = Self(0x001F_FFFF);
 
     pub const fn bits(self) -> u32 {
         self.0
@@ -267,13 +270,15 @@ impl MemberStats {
 }
 
 /// The fields that differ between what a viewer last received and `current`. `None` means the
-/// viewer holds nothing, so every base and aura field goes, and every pet field goes when the
-/// member has a live pet — the same set [`full_update_mask`] carries. A power-type change also
-/// resends both power values, on the member and on its pet alike
+/// viewer holds nothing, so every field goes, unconditionally, pet fields included even with no
+/// pet: cmangos marks a joining or newly-online member's whole update flag set with
+/// `GROUP_UPDATE_FULL` (cm:Group.cpp:306-307, 746-747), and the next heartbeat's delta packet
+/// carries that mask as-is, not the pet-omitting mask the explicit FULL answer builds. A
+/// power-type change also resends both power values, on the member and on its pet alike
 /// (cm:GroupHandler.cpp:589-593).
 pub fn stats_delta(previous: Option<&MemberStats>, current: &MemberStats) -> GroupUpdateMask {
     let Some(previous) = previous else {
-        return full_update_mask(current);
+        return GroupUpdateMask::FULL;
     };
     let mut mask = GroupUpdateMask::NONE;
     if previous.status != current.status {
@@ -352,11 +357,18 @@ fn pet_delta(previous: &PetStats, current: &PetStats) -> GroupUpdateMask {
     mask
 }
 
-/// The mask a first send or a FULL answer carries: every base and aura field, plus every pet
-/// field when the member has a live pet. No pet strips `GROUP_UPDATE_PET` whole
-/// (cm:GroupHandler.cpp:781-786), the same way `HandleRequestPartyMemberStatsOpcode` builds
-/// `mask1`. Which slots inside the aura and pet-aura blocks actually carry a value is a separate,
-/// encode-time question — see [`build_member_stats`].
+/// The mask the explicit `SMSG_PARTY_MEMBER_STATS_FULL` answer carries: every base and aura
+/// field, plus every pet field when the member has a live pet. No pet strips `GROUP_UPDATE_PET`
+/// whole (cm:GroupHandler.cpp:781-786), the way `HandleRequestPartyMemberStatsOpcode` builds
+/// `mask1`. Unlike this, a first send through the Relay's `SMSG_PARTY_MEMBER_STATS` carries every
+/// pet field unconditionally; see [`stats_delta`]'s `None` case. Which slots inside the aura and
+/// pet-aura blocks actually carry a value is a separate, encode-time question; see
+/// [`build_member_stats`].
+///
+/// cmangos's own no-pet branch there still appends a phantom `uint8(0)` and `uint32(0)`
+/// afterwards (cm:GroupHandler.cpp:885-889), 5 bytes past every field its own mask claims. A
+/// reader parses strictly from the mask, gtker's included, so those bytes go unread on a real
+/// client; this encoder skips writing them.
 pub fn full_update_mask(stats: &MemberStats) -> GroupUpdateMask {
     let mask = GroupUpdateMask::MEMBER | GroupUpdateMask::AURAS | GroupUpdateMask::AURAS_NEGATIVE;
     if stats.pet.guid == 0 {
@@ -388,49 +400,71 @@ fn push_cstr(body: &mut Vec<u8>, s: &str) {
     body.push(0);
 }
 
-/// `AURAS`/`PET_AURAS`: a `u32` mask over the slots that differ from `previous`, then their
-/// current spell id (0 for a cleared slot) in slot order (cm:GroupHandler.cpp:632-644, 720-737).
-/// `previous` is the all-zero array for a first send or a FULL answer, which turns "differs from
-/// previous" into "is occupied", matching how `HandleRequestPartyMemberStatsOpcode` scans it
-/// (cm:GroupHandler.cpp:825-833). A pet's own block covers only its positive slots: cmangos loops
-/// the pet block to `MAX_AURAS` there (cm:GroupHandler.cpp:863), which overflows the `u32` mask it
-/// just wrote. This encoder does not copy that bug.
-fn write_positive_aura_block(
-    body: &mut Vec<u8>,
-    previous: &[u16; POSITIVE_AURA_SLOTS],
+/// The positive-slot dirty mask: every slot for a first send (`previous` is `None`, cmangos marks
+/// the whole update flag set on join or online, cm:Group.cpp:306-307, 746-747, so every aura slot
+/// rides the next packet), or the slots that changed since `previous` for a delta
+/// (cm:GroupHandler.cpp:632-644).
+fn positive_dirty_mask(
+    previous: Option<&[u16; POSITIVE_AURA_SLOTS]>,
     current: &[u16; POSITIVE_AURA_SLOTS],
-) {
-    let mut wire_mask: u32 = 0;
-    for (i, (&before, &after)) in previous.iter().zip(current).enumerate() {
-        if before != after {
-            wire_mask |= 1 << i;
-        }
-    }
-    body.extend_from_slice(&wire_mask.to_le_bytes());
-    for (&before, &after) in previous.iter().zip(current) {
-        if before != after {
-            body.extend_from_slice(&after.to_le_bytes());
+) -> u32 {
+    match previous {
+        None => u32::MAX,
+        Some(previous) => {
+            let mut dirty = 0u32;
+            for (i, (&before, &after)) in previous.iter().zip(current).enumerate() {
+                if before != after {
+                    dirty |= 1 << i;
+                }
+            }
+            dirty
         }
     }
 }
 
-/// `AURAS_NEGATIVE`/`PET_AURAS_NEGATIVE`: a `u16` mask, bit `n` meaning slot `32 + n`, over the
-/// same differs-from-`previous` rule (cm:GroupHandler.cpp:646-658, 739-754).
-fn write_negative_aura_block(
-    body: &mut Vec<u8>,
-    previous: &[u16; NEGATIVE_AURA_SLOTS],
+/// [`positive_dirty_mask`] for the negative slots.
+fn negative_dirty_mask(
+    previous: Option<&[u16; NEGATIVE_AURA_SLOTS]>,
     current: &[u16; NEGATIVE_AURA_SLOTS],
-) {
-    let mut wire_mask: u16 = 0;
-    for (i, (&before, &after)) in previous.iter().zip(current).enumerate() {
-        if before != after {
-            wire_mask |= 1 << i;
+) -> u16 {
+    match previous {
+        None => u16::MAX,
+        Some(previous) => {
+            let mut dirty = 0u16;
+            for (i, (&before, &after)) in previous.iter().zip(current).enumerate() {
+                if before != after {
+                    dirty |= 1 << i;
+                }
+            }
+            dirty
         }
     }
-    body.extend_from_slice(&wire_mask.to_le_bytes());
-    for (&before, &after) in previous.iter().zip(current) {
-        if before != after {
-            body.extend_from_slice(&after.to_le_bytes());
+}
+
+/// `AURAS`/`PET_AURAS`: a `u32` mask of `dirty` slots, then each dirty slot's current spell id (0
+/// for an empty one) in slot order (cm:GroupHandler.cpp:632-644, 720-737). Every slot rides a
+/// `None`-`previous` packet (`dirty = u32::MAX`, [`positive_dirty_mask`]), so an empty slot is
+/// written explicitly rather than skipped: cmangos's own FULL scan skips an empty slot instead
+/// (cm:GroupHandler.cpp:822-833), which cannot clear a slot the requester's client already shows
+/// from before a mate's offline round-trip. A pet's own block covers only its positive slots:
+/// cmangos loops the pet block to `MAX_AURAS` there (cm:GroupHandler.cpp:863), which overflows the
+/// `u32` mask it just wrote. This encoder does not copy that bug.
+fn write_positive_aura_block(body: &mut Vec<u8>, dirty: u32, current: &[u16; POSITIVE_AURA_SLOTS]) {
+    body.extend_from_slice(&dirty.to_le_bytes());
+    for (i, &value) in current.iter().enumerate() {
+        if dirty & (1 << i) != 0 {
+            body.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+}
+
+/// `AURAS_NEGATIVE`/`PET_AURAS_NEGATIVE`: a `u16` mask of `dirty` slots, bit `n` meaning slot
+/// `32 + n` (cm:GroupHandler.cpp:646-658, 739-754).
+fn write_negative_aura_block(body: &mut Vec<u8>, dirty: u16, current: &[u16; NEGATIVE_AURA_SLOTS]) {
+    body.extend_from_slice(&dirty.to_le_bytes());
+    for (i, &value) in current.iter().enumerate() {
+        if dirty & (1 << i) != 0 {
+            body.extend_from_slice(&value.to_le_bytes());
         }
     }
 }
@@ -439,8 +473,9 @@ fn write_negative_aura_block(
 /// with the widths cmangos writes (cm:Group.h:66-89, cm:GroupHandler.cpp:585-756).
 ///
 /// `previous` is the snapshot the aura and pet-aura blocks diff against to decide which of their
-/// slots carry a value — the all-zero snapshot for a first send or a FULL answer. It plays no part
-/// in `mask`, which the caller already decided ([`stats_delta`] or [`full_update_mask`]).
+/// slots carry a value: `None` for a first send, which marks every slot dirty (the FULL answer's
+/// own aura scan behaves the same way, since it has no snapshot either). It plays no part in
+/// `mask`, which the caller already decided ([`stats_delta`] or [`full_update_mask`]).
 /// Returns `(opcode, body)` for [`Outbound::Raw`](crate::world::Outbound::Raw).
 pub fn build_member_stats(
     packet: MemberStatsPacket,
@@ -482,12 +517,12 @@ pub fn build_member_stats(
         body.extend_from_slice(&stats.position_y.to_le_bytes());
     }
     if mask.contains(GroupUpdateMask::AURAS) {
-        let previous = previous.map_or([0u16; POSITIVE_AURA_SLOTS], |p| p.auras);
-        write_positive_aura_block(&mut body, &previous, &stats.auras);
+        let dirty = positive_dirty_mask(previous.map(|p| &p.auras), &stats.auras);
+        write_positive_aura_block(&mut body, dirty, &stats.auras);
     }
     if mask.contains(GroupUpdateMask::AURAS_NEGATIVE) {
-        let previous = previous.map_or([0u16; NEGATIVE_AURA_SLOTS], |p| p.auras_negative);
-        write_negative_aura_block(&mut body, &previous, &stats.auras_negative);
+        let dirty = negative_dirty_mask(previous.map(|p| &p.auras_negative), &stats.auras_negative);
+        write_negative_aura_block(&mut body, dirty, &stats.auras_negative);
     }
     if mask.contains(GroupUpdateMask::PET_GUID) {
         body.extend_from_slice(&stats.pet.guid.to_le_bytes());
@@ -514,12 +549,15 @@ pub fn build_member_stats(
         body.extend_from_slice(&stats.pet.max_power.to_le_bytes());
     }
     if mask.contains(GroupUpdateMask::PET_AURAS) {
-        let previous = previous.map_or([0u16; POSITIVE_AURA_SLOTS], |p| p.pet.auras);
-        write_positive_aura_block(&mut body, &previous, &stats.pet.auras);
+        let dirty = positive_dirty_mask(previous.map(|p| &p.pet.auras), &stats.pet.auras);
+        write_positive_aura_block(&mut body, dirty, &stats.pet.auras);
     }
     if mask.contains(GroupUpdateMask::PET_AURAS_NEGATIVE) {
-        let previous = previous.map_or([0u16; NEGATIVE_AURA_SLOTS], |p| p.pet.auras_negative);
-        write_negative_aura_block(&mut body, &previous, &stats.pet.auras_negative);
+        let dirty = negative_dirty_mask(
+            previous.map(|p| &p.pet.auras_negative),
+            &stats.pet.auras_negative,
+        );
+        write_negative_aura_block(&mut body, dirty, &stats.pet.auras_negative);
     }
     (packet.opcode(), body)
 }
@@ -587,7 +625,7 @@ mod tests {
             model_id: 618,
             current_health: 50,
             max_health: 60,
-            power_type: 3,
+            power_type: 2, // focus, a Hunter pet's power (0 mana, 1 rage, 2 focus, 3 energy)
             current_power: 40,
             max_power: 100,
             ..PetStats::default()
@@ -595,6 +633,35 @@ mod tests {
         pet.auras[2] = 400;
         pet.auras_negative[8] = 500;
         pet
+    }
+
+    /// The wire bytes for a positive `AURAS`/`PET_AURAS` block where every slot rides the packet
+    /// (a `None` previous, the sent-once-since-offline shape): mask `0xFFFFFFFF`, then a spell id
+    /// per slot in order, `occupied` overlaying the `(slot, spell_id)` pairs that are not empty.
+    fn full_positive_aura_bytes(occupied: &[(usize, u16)]) -> Vec<u8> {
+        let mut slots = [0u16; POSITIVE_AURA_SLOTS];
+        for &(slot, spell_id) in occupied {
+            slots[slot] = spell_id;
+        }
+        let mut bytes = vec![0xFF, 0xFF, 0xFF, 0xFF];
+        for spell_id in slots {
+            bytes.extend_from_slice(&spell_id.to_le_bytes());
+        }
+        bytes
+    }
+
+    /// [`full_positive_aura_bytes`] for the negative block: mask `0xFFFF`, then a spell id per
+    /// slot, `occupied` indexed the same way as [`PetStats::auras_negative`] (slot `32 + n`).
+    fn full_negative_aura_bytes(occupied: &[(usize, u16)]) -> Vec<u8> {
+        let mut slots = [0u16; NEGATIVE_AURA_SLOTS];
+        for &(slot, spell_id) in occupied {
+            slots[slot] = spell_id;
+        }
+        let mut bytes = vec![0xFF, 0xFF];
+        for spell_id in slots {
+            bytes.extend_from_slice(&spell_id.to_le_bytes());
+        }
+        bytes
     }
 
     /// Frame a body the way `Outbound::Raw` does, then decode it with gtker.
@@ -705,7 +772,7 @@ mod tests {
 
     #[test]
     fn each_pet_scalar_field_has_the_cmangos_width() {
-        // The same `GroupUpdateLength` table, entries 11 and 13-18 — the pet fields with a fixed
+        // The same `GroupUpdateLength` table, entries 11 and 13-18, the pet fields with a fixed
         // width. 12 (PET_NAME), 19 and 20 (the pet aura blocks) are variable and excluded.
         let stats = MemberStats {
             pet: pet(),
@@ -757,7 +824,8 @@ mod tests {
     }
 
     /// A FULL packet with positive auras, negative auras and a pet, built by hand from
-    /// cm:GroupHandler.cpp:585-756.
+    /// cm:GroupHandler.cpp:585-756. `None` marks every aura slot dirty (cm:Group.cpp:306-307,
+    /// 746-747), so both blocks carry all 32 or 16 slots, zero for an empty one.
     #[test]
     fn a_full_body_with_auras_and_a_pet_matches_hand_derived_bytes() {
         let stats = MemberStats {
@@ -768,38 +836,35 @@ mod tests {
         assert_eq!(mask, full_group_update_mask());
         let (opcode, body) = build_member_stats(MemberStatsPacket::Full, GUID, mask, None, &stats);
         assert_eq!(opcode, 0x02F2);
-        #[rustfmt::skip]
-        let expected = [
-            0x03, 0x02, 0x01,       // packed guid 0x0102
+
+        let mut expected = vec![
+            0x03, 0x02, 0x01, // packed guid 0x0102
             0xFF, 0xFF, 0x1F, 0x00, // mask 0x1FFFFF (GROUP_UPDATE_FULL)
-            0x01,                   // status ONLINE
-            0xD2, 0x04,             // current health 1234
-            0xDC, 0x05,             // max health 1500
-            0x00,                   // power type mana
-            0x20, 0x03,             // current power 800
-            0xE8, 0x03,             // max power 1000
-            0x14, 0x00,             // level 20
-            0x0C, 0x00,             // zone 12
-            0x0B, 0xDD,             // x -8949
-            0x7C, 0xFF,             // y -132
-            0x21, 0x00, 0x00, 0x00, // AURAS mask: bits 0 and 5
-            0x64, 0x00,             // slot 0: spell 100
-            0xC8, 0x00,             // slot 5: spell 200
-            0x08, 0x00,             // AURAS_NEGATIVE mask: bit 3 (slot 35)
-            0x2C, 0x01,             // slot 35: spell 300
+            0x01, // status ONLINE
+            0xD2, 0x04, // current health 1234
+            0xDC, 0x05, // max health 1500
+            0x00, // power type mana
+            0x20, 0x03, // current power 800
+            0xE8, 0x03, // max power 1000
+            0x14, 0x00, // level 20
+            0x0C, 0x00, // zone 12
+            0x0B, 0xDD, // x -8949
+            0x7C, 0xFF, // y -132
+        ];
+        expected.extend(full_positive_aura_bytes(&[(0, 100), (5, 200)]));
+        expected.extend(full_negative_aura_bytes(&[(3, 300)]));
+        expected.extend([
             0x55, 0, 0, 0, 0, 0, 0, 0, // PET_GUID 85
             b'F', b'l', b'u', b'f', b'f', b'y', 0x00, // PET_NAME "Fluffy"
-            0x6A, 0x02,             // PET_MODEL_ID 618
-            0x32, 0x00,             // PET_CUR_HP 50
-            0x3C, 0x00,             // PET_MAX_HP 60
-            0x03,                   // PET_POWER_TYPE 3
-            0x28, 0x00,             // PET_CUR_POWER 40
-            0x64, 0x00,             // PET_MAX_POWER 100
-            0x04, 0x00, 0x00, 0x00, // PET_AURAS mask: bit 2 (slot 2)
-            0x90, 0x01,             // pet slot 2: spell 400
-            0x00, 0x01,             // PET_AURAS_NEGATIVE mask: bit 8 (slot 40)
-            0xF4, 0x01,             // pet slot 40: spell 500
-        ];
+            0x6A, 0x02, // PET_MODEL_ID 618
+            0x32, 0x00, // PET_CUR_HP 50
+            0x3C, 0x00, // PET_MAX_HP 60
+            0x02, // PET_POWER_TYPE 2 (focus)
+            0x28, 0x00, // PET_CUR_POWER 40
+            0x64, 0x00, // PET_MAX_POWER 100
+        ]);
+        expected.extend(full_positive_aura_bytes(&[(2, 400)]));
+        expected.extend(full_negative_aura_bytes(&[(8, 500)]));
         assert_eq!(body, expected);
     }
 
@@ -819,11 +884,26 @@ mod tests {
         assert_eq!(body, [0x03, 0x02, 0x01, 0x02, 0x00, 0x00, 0x00, 0xE8, 0x03]);
     }
 
+    /// AC1: two buffs and one debuff appearing on top of a previously aura-less snapshot send
+    /// `AURAS` with two ids and `AURAS_NEGATIVE` with one id, at the right bit. The body length
+    /// matches the mask (2 masks + 3 ids = 12 bytes, no padding for the 29 untouched slots).
     #[test]
     fn positive_and_negative_auras_send_their_ids_at_the_right_bits() {
-        let stats = caster_with_auras();
-        let mask = GroupUpdateMask::AURAS | GroupUpdateMask::AURAS_NEGATIVE;
-        let (_, body) = build_member_stats(MemberStatsPacket::Changed, GUID, mask, None, &stats);
+        let before = caster();
+        let after = caster_with_auras();
+        let mask = stats_delta(Some(&before), &after);
+        assert_eq!(
+            mask,
+            GroupUpdateMask::AURAS | GroupUpdateMask::AURAS_NEGATIVE
+        );
+
+        let (_, body) = build_member_stats(
+            MemberStatsPacket::Changed,
+            GUID,
+            mask,
+            Some(&before),
+            &after,
+        );
         let header = 3 + 4;
         #[rustfmt::skip]
         let expected = [
@@ -854,6 +934,95 @@ mod tests {
         );
         let header = 3 + 4;
         assert_eq!(&body[header..], [0x01, 0x00, 0x00, 0x00, 0x00, 0x00]);
+    }
+
+    /// Replacing a buff in an already-occupied slot still sends only that one bit, now carrying
+    /// the new id.
+    #[test]
+    fn replacing_an_aura_in_one_slot_sends_only_that_bit_with_the_new_id() {
+        let before = caster_with_auras(); // slot 0 carries spell 100
+        let mut after = before.clone();
+        after.auras[0] = 150; // a different buff lands in the same slot
+
+        let mask = stats_delta(Some(&before), &after);
+        assert_eq!(mask, GroupUpdateMask::AURAS);
+
+        let (_, body) = build_member_stats(
+            MemberStatsPacket::Changed,
+            GUID,
+            mask,
+            Some(&before),
+            &after,
+        );
+        let header = 3 + 4;
+        assert_eq!(&body[header..], [0x01, 0x00, 0x00, 0x00, 0x96, 0x00]);
+    }
+
+    /// A new debuff sends only the negative bit, at slot `32 + 10` (bit 10 of the negative mask).
+    #[test]
+    fn adding_a_debuff_sends_only_the_negative_bit() {
+        let before = caster();
+        let mut after = before.clone();
+        after.auras_negative[10] = 700;
+
+        let mask = stats_delta(Some(&before), &after);
+        assert_eq!(mask, GroupUpdateMask::AURAS_NEGATIVE);
+
+        let (_, body) = build_member_stats(
+            MemberStatsPacket::Changed,
+            GUID,
+            mask,
+            Some(&before),
+            &after,
+        );
+        let header = 3 + 4;
+        assert_eq!(&body[header..], [0x00, 0x04, 0xBC, 0x02]);
+    }
+
+    /// A cleared debuff sends only its bit, with id 0, the negative twin of
+    /// `removing_a_buff_sends_only_its_bit_with_id_zero`.
+    #[test]
+    fn removing_a_debuff_sends_only_its_bit_with_id_zero() {
+        let before = caster_with_auras(); // negative slot 3 carries spell 300
+        let mut after = before.clone();
+        after.auras_negative[3] = 0;
+
+        let mask = stats_delta(Some(&before), &after);
+        assert_eq!(mask, GroupUpdateMask::AURAS_NEGATIVE);
+
+        let (_, body) = build_member_stats(
+            MemberStatsPacket::Changed,
+            GUID,
+            mask,
+            Some(&before),
+            &after,
+        );
+        let header = 3 + 4;
+        assert_eq!(&body[header..], [0x08, 0x00, 0x00, 0x00]);
+    }
+
+    /// A pet's own aura changing sends only its bit, never the member's own `AURAS` bit.
+    #[test]
+    fn a_pet_aura_delta_sends_only_the_pet_bit() {
+        let before = MemberStats {
+            pet: pet(), // pet's slot 2 carries spell 400
+            ..caster()
+        };
+        let mut after = before.clone();
+        after.pet.auras[2] = 450;
+
+        let mask = stats_delta(Some(&before), &after);
+        assert_eq!(mask, GroupUpdateMask::PET_AURAS);
+
+        let (_, body) = build_member_stats(
+            MemberStatsPacket::Changed,
+            GUID,
+            mask,
+            Some(&before),
+            &after,
+        );
+        let header = 3 + 4;
+        assert_eq!(&body[header..], [0x04, 0x00, 0x00, 0x00, 0xC2, 0x01]);
     }
 
     #[test]
@@ -953,8 +1122,11 @@ mod tests {
         assert!(!mask.contains(GroupUpdateMask::PET));
 
         let (_, body) = build_member_stats(MemberStatsPacket::Full, GUID, mask, None, &stats);
-        // Header + 9 base fields + an empty AURAS block (4) + an empty AURAS_NEGATIVE block (2).
-        assert_eq!(body.len(), (3 + 4) + 18 + 4 + 2);
+        // Header + 9 base fields + AURAS (mask + 32 zeroed slots) + AURAS_NEGATIVE (mask + 16).
+        assert_eq!(
+            body.len(),
+            (3 + 4) + 18 + (4 + POSITIVE_AURA_SLOTS * 2) + (2 + NEGATIVE_AURA_SLOTS * 2)
+        );
     }
 
     #[test]
@@ -1007,13 +1179,14 @@ mod tests {
         use std::io::Cursor;
         use wow_world_messages::vanilla::AuraMask;
 
-        let stats = caster_with_auras();
+        let before = caster();
+        let after = caster_with_auras();
         let (_, body) = build_member_stats(
             MemberStatsPacket::Changed,
             GUID,
             GroupUpdateMask::AURAS_NEGATIVE,
-            None,
-            &stats,
+            Some(&before),
+            &after,
         );
         let header = 3 + 4;
         let negative_block = &body[header..];
@@ -1081,7 +1254,7 @@ mod tests {
                 max_health: 60,
                 power: 40,
                 max_power: 100,
-                unit_bytes_0: 0x0300_0000, // power type 3, focus
+                unit_bytes_0: 0x0200_0000, // power type 2, focus
                 auras: vec![
                     MemberAuraSlot {
                         slot: 2,
@@ -1164,11 +1337,9 @@ mod tests {
     }
 
     #[test]
-    fn a_viewer_holding_nothing_gets_every_occupied_field() {
-        assert_eq!(
-            stats_delta(None, &caster()),
-            GroupUpdateMask::MEMBER | GroupUpdateMask::AURAS | GroupUpdateMask::AURAS_NEGATIVE
-        );
+    fn a_viewer_holding_nothing_gets_every_field_pet_included() {
+        // No pet, no auras: still every field, unconditionally (cm:Group.cpp:306-307, 746-747).
+        assert_eq!(stats_delta(None, &caster()), full_group_update_mask());
         let stats = MemberStats {
             pet: pet(),
             ..caster_with_auras()

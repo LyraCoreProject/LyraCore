@@ -15,9 +15,9 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 /// Where one group member is, as the Gateway's Coordinator caches see it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum MemberPresence {
-    /// A live `game_world_entity` row on some World Shard. Boxed: `MemberStats` carries two
-    /// 48-slot aura arrays plus its pet's own copies, so an unboxed variant would triple the size
-    /// of every `MemberPresence`, most of which are `InTransit` or `Offline`.
+    /// A live `game_world_entity` row on some World Shard. Boxed: `MemberStats` carries a 32-slot
+    /// and a 16-slot aura array plus its pet's own copies, so an unboxed variant would triple the
+    /// size of every `MemberPresence`, most of which are `InTransit` or `Offline`.
     Live(Box<MemberStats>),
     /// No live entity, but the member is between two places: a pending Transfer, or the loading
     /// screen of a map change. Reporting it offline would make the frame flicker.
