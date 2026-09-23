@@ -71,6 +71,19 @@ impl RaidSlot {
         }))
     }
 
+    /// The slot a member joining a Raid takes: the first Subgroup with fewer than
+    /// [`SUBGROUP_SIZE`] members, without the Assistant flag (cm:Group.cpp:817-838). `current` is
+    /// every current member's slot. `None` when every Subgroup is full.
+    pub fn for_raid_joiner(current: impl IntoIterator<Item = Self>) -> Option<Self> {
+        let mut sizes = [0usize; RAID_SUBGROUPS as usize];
+        for slot in current {
+            sizes[usize::from(slot.subgroup())] += 1;
+        }
+        (0..RAID_SUBGROUPS)
+            .find(|&subgroup| sizes[usize::from(subgroup)] < SUBGROUP_SIZE)
+            .and_then(|subgroup| Self::new(subgroup, false))
+    }
+
     /// `None` for a byte with a bit set outside the Subgroup and the Assistant flag.
     pub const fn from_wire(byte: u8) -> Option<Self> {
         Self::new(byte & !Self::ASSISTANT, byte & Self::ASSISTANT != 0)
@@ -422,6 +435,35 @@ mod tests {
         assert_eq!(slot.subgroup(), 3);
         assert!(slot.is_assistant());
         assert!(!RaidSlot::from_wire(0x03).unwrap().is_assistant());
+    }
+
+    /// The slots of a Raid whose Subgroup `n` holds `sizes[n]` members, the first of each an
+    /// Assistant.
+    fn raid_of(sizes: [u8; 8]) -> Vec<RaidSlot> {
+        (0u8..8)
+            .flat_map(|subgroup| {
+                (0..sizes[usize::from(subgroup)])
+                    .map(move |index| RaidSlot::new(subgroup, index == 0).unwrap())
+            })
+            .collect()
+    }
+
+    /// cm:Group.cpp:817-838: the first Subgroup below 5 members, else no room. An Assistant
+    /// counts like any member, and the joiner is never an Assistant.
+    #[test]
+    fn a_raid_joiner_takes_the_first_subgroup_with_room() {
+        let joiner = |sizes| RaidSlot::for_raid_joiner(raid_of(sizes));
+        let slot = |subgroup| RaidSlot::new(subgroup, false);
+        assert_eq!(joiner([5, 5, 3, 0, 0, 0, 0, 0]), slot(2));
+        assert_eq!(joiner([0; 8]), slot(0));
+        assert_eq!(joiner([5, 4, 0, 0, 0, 0, 0, 0]), slot(1));
+        assert_eq!(joiner([5, 5, 5, 5, 5, 5, 5, 4]), slot(7));
+        assert_eq!(
+            joiner([5, 0, 5, 0, 0, 0, 0, 0]),
+            slot(1),
+            "a gap is filled first"
+        );
+        assert_eq!(joiner([5; 8]), None);
     }
 
     #[test]

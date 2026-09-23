@@ -10397,18 +10397,16 @@ impl FakeParty {
             .collect()
     }
 
-    /// The module's placement: a Raid joiner takes the first Subgroup below five members.
+    /// The Module's own placement rule, `RaidSlot::for_raid_joiner`, over this Fake's slots.
     fn joining_slot(&self, group_id: u64) -> RaidSlot {
         if self.kind_of(group_id) == GroupKind::Party {
             return RaidSlot::default();
         }
-        let mut counts = [0usize; 8];
-        for guid in self.member_guids(group_id) {
-            let slot = self.slots.get(&guid).copied().unwrap_or_default();
-            counts[usize::from(slot.subgroup())] += 1;
-        }
-        let subgroup = counts.iter().position(|count| *count < 5).expect("room");
-        RaidSlot::new(subgroup as u8, false).unwrap()
+        let current = self
+            .member_guids(group_id)
+            .into_iter()
+            .map(|guid| self.slots.get(&guid).copied().unwrap_or_default());
+        RaidSlot::for_raid_joiner(current).expect("the cap check leaves room")
     }
 
     fn roster(&self, group_id: u64) -> Option<super::party::GroupRoster> {

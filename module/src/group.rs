@@ -37,10 +37,7 @@ use spacetimedb::{reducer, table, Identity, ReducerContext, Table, Timestamp};
 use crate::{game_character, game_melee_attack, game_pending_cast, game_threat, game_world_entity};
 
 pub use lyracore_shared::group::GROUP_MAX_MEMBERS;
-use lyracore_shared::group::{
-    GroupKind, RaidSlot, RosterMember, RosterPayload, RAID_MAX_MEMBERS, RAID_SUBGROUPS,
-    SUBGROUP_SIZE,
-};
+use lyracore_shared::group::{GroupKind, RaidSlot, RosterMember, RosterPayload, RAID_MAX_MEMBERS};
 
 /// Group kill-reward radius² — members farther than this from the slain creature get neither XP
 /// nor quest credit. Vanilla's `sWorld.getConfig(CONFIG_FLOAT_GROUP_XP_DISTANCE)` = 74.0 yd.
@@ -604,20 +601,6 @@ pub(crate) fn group_broadcast(
             );
         }
     }
-}
-
-/// The Subgroup a member joining a Raid takes: the first with fewer than [`SUBGROUP_SIZE`] members
-/// (cm:Group.cpp:817-838). `None` when every Subgroup is full. `counts[n]` is Subgroup `n`'s size.
-pub(crate) fn first_open_subgroup(counts: &[usize; RAID_SUBGROUPS as usize]) -> Option<u8> {
-    (0..RAID_SUBGROUPS).find(|&subgroup| counts[usize::from(subgroup)] < SUBGROUP_SIZE)
-}
-
-fn subgroup_counts(members: &[GroupMember]) -> [usize; RAID_SUBGROUPS as usize] {
-    let mut counts = [0; RAID_SUBGROUPS as usize];
-    for member in members {
-        counts[usize::from(raid_slot_of(member).subgroup())] += 1;
-    }
-    counts
 }
 
 /// Whether a Group of `kind` with `member_count` members can take one more.
@@ -1366,8 +1349,7 @@ fn accept_invite_on(
             }
             let slot = match kind {
                 GroupKind::Party => RaidSlot::default(),
-                GroupKind::Raid => first_open_subgroup(&subgroup_counts(&current))
-                    .and_then(|subgroup| RaidSlot::new(subgroup, false))
+                GroupKind::Raid => RaidSlot::for_raid_joiner(current.iter().map(raid_slot_of))
                     .ok_or(GroupRefusal::GroupFull)?,
             };
             (m.group_id, slot)
@@ -2426,27 +2408,6 @@ mod tests {
             owner_identity: Identity::ZERO,
             raid_slot: RaidSlot::new(subgroup, assistant).unwrap().wire(),
         }
-    }
-
-    /// cm:Group.cpp:817-838: the first Subgroup below 5 members, else no room.
-    #[test]
-    fn a_raid_joiner_takes_the_first_subgroup_with_room() {
-        assert_eq!(first_open_subgroup(&[5, 5, 3, 0, 0, 0, 0, 0]), Some(2));
-        assert_eq!(first_open_subgroup(&[0; 8]), Some(0));
-        assert_eq!(first_open_subgroup(&[5, 4, 0, 0, 0, 0, 0, 0]), Some(1));
-        assert_eq!(first_open_subgroup(&[5, 5, 5, 5, 5, 5, 5, 4]), Some(7));
-        assert_eq!(first_open_subgroup(&[5; 8]), None);
-    }
-
-    #[test]
-    fn subgroup_counts_read_each_members_raid_slot() {
-        let members = [
-            raid_member(1, 0, false),
-            raid_member(2, 0, true),
-            raid_member(3, 1, false),
-            raid_member(4, 7, false),
-        ];
-        assert_eq!(subgroup_counts(&members), [2, 1, 0, 0, 0, 0, 0, 1]);
     }
 
     #[test]
