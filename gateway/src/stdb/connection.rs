@@ -1347,10 +1347,8 @@ fn spawn_coordinator_watchdog(inner: Arc<CoordinatorInner>) -> std::thread::Join
 }
 
 /// How often the loot-roll relay promotes staging rolls and settles resolved winners. Short
-/// relative to the 60s roll window: promotion latency is the ONLY thing it bounds (a vote cast in the
-/// gap between a roll's kill-time creation and its promotion is rejected as "no roll open on that
-/// item" and must be retried — the vote is per-action, so the client's own retry-on-click covers it),
-/// and a real client cannot render the roll popup and react to it within one tick anyway.
+/// relative to the 60s roll window: it bounds promotion and settlement latency only. A vote cast
+/// before the next tick flushes the pending promotion itself (`world::loot::run_vote`).
 const LOOT_ROLL_RELAY_POLL: Duration = Duration::from_millis(200);
 
 /// Background loop driving `world::loot::relay_tick`: promotes each world shard's freshly
