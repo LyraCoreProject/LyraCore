@@ -1,6 +1,7 @@
 //! Durable mail rows and single-database mailbox operations.
 //! Attachments are item snapshots; cross-database moves live in `mail_escrow`.
 
+use lyracore_shared::mail::{MailSender, CHECK_MASK_RETURNED};
 use spacetimedb::{reducer, table, ReducerContext, Table, Timestamp};
 
 use crate::game_item_instance;
@@ -27,6 +28,20 @@ pub struct Mail {
     pub created_at: Timestamp,
     #[default(0)]
     pub random_property_id: u32,
+    /// The vanilla `MailMessageType` code of the [`MailSender`]. 0 is a Character.
+    #[default(0u8)]
+    pub sender_kind: u8,
+    /// The auction house id, or the creature or gameobject entry. 0 for a Character.
+    #[default(0u32)]
+    pub sender_entry: u32,
+    /// `CHECK_MASK_*` bits other than READ, which is `was_read`.
+    #[default(0u32)]
+    pub check_flags: u32,
+    #[default(0u32)]
+    pub mail_template_id: u32,
+    /// When the recipient can first see the mail. 0 means from creation.
+    #[default(0i64)]
+    pub deliver_micros: i64,
 }
 crate::character_owned!(delete, fn sweep_delete_game_mail(ctx, character_guid) {
     let mails = ctx.db.game_mail();
@@ -40,6 +55,12 @@ crate::character_owned!(transfer, fn sweep_transfer_game_mail(ctx, character_gui
     remint = id,
 });
 impl Mail {
+    pub(crate) fn sender(&self) -> MailSender {
+        MailSender::from_columns(self.sender_kind, self.sender_guid, self.sender_entry)
+    }
+    pub(crate) fn is_delivered(&self, now: Timestamp) -> bool {
+        self.deliver_micros <= now.to_micros_since_unix_epoch()
+    }
     pub(crate) fn snapshot(&self) -> ItemSnapshot {
         ItemSnapshot {
             entry: self.item_entry,
@@ -109,37 +130,99 @@ pub(crate) fn grant_snapshot(
         .ok_or_else(|| format!("mail: no template for attached item {}", snapshot.entry))?;
     crate::items::store_instance_state(ctx, payee_guid, payee.owner_identity, &tmpl, None, snapshot)
 }
-#[allow(clippy::too_many_arguments)] // a row's columns, not a call's parameters
-pub(crate) fn insert_mail(
-    ctx: &ReducerContext,
-    recipient_guid: u64,
-    sender_guid: u64,
-    subject: String,
-    body: String,
-    money: u32,
-    cod: u32,
-    item: &ItemSnapshot,
-) -> u64 {
+/// Everything a mail row is created from.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) struct Letter {
+    pub recipient_guid: u64,
+    pub sender: MailSender,
+    pub subject: String,
+    pub body: String,
+    pub money: u32,
+    pub cod: u32,
+    pub item: ItemSnapshot,
+    pub mail_template_id: u32,
+    /// `CHECK_MASK_*` bits other than READ.
+    pub check_flags: u32,
+    /// When the recipient can first see the mail. 0 means from creation.
+    pub deliver_micros: i64,
+}
+
+impl Letter {
+    /// A letter from a character. It has HAS_BODY when it has a body and COPIED when it has none,
+    /// so the client offers no copy of an empty letter (cmangos `MailHandler.cpp:264`).
+    pub(crate) fn from_character(
+        sender_guid: u64,
+        recipient_guid: u64,
+        subject: String,
+        body: String,
+        money: u32,
+        cod: u32,
+        item: ItemSnapshot,
+    ) -> Self {
+        let check_flags = if body.is_empty() {
+            lyracore_shared::mail::CHECK_MASK_COPIED
+        } else {
+            lyracore_shared::mail::CHECK_MASK_HAS_BODY
+        };
+        Self {
+            recipient_guid,
+            sender: MailSender::Character(sender_guid),
+            subject,
+            body,
+            money,
+            cod,
+            item,
+            mail_template_id: 0,
+            check_flags,
+            deliver_micros: 0,
+        }
+    }
+    /// The same letter as the payment for a cash on delivery take. It keeps the priced letter's
+    /// subject, and the client shows "COD Payment: <subject>" (cmangos `MailHandler.cpp:475-477`).
+    pub(crate) fn into_cod_payment(self) -> Self {
+        Self {
+            check_flags: lyracore_shared::mail::CHECK_MASK_COD_PAYMENT,
+            ..self
+        }
+    }
+}
+/// The one way a mail row is created.
+pub(crate) fn insert_letter(ctx: &ReducerContext, letter: Letter) -> u64 {
+    let (sender_kind, sender_guid, sender_entry) = letter.sender.columns();
     ctx.db
         .game_mail()
         .insert(Mail {
             id: 0,
-            recipient_guid,
+            recipient_guid: letter.recipient_guid,
             sender_guid,
-            subject,
-            body,
-            item_entry: item.entry,
-            item_stack_count: item.stack_count,
-            item_durability: item.durability,
-            item_enchant_id: item.enchant_id,
-            item_soulbound: item.soulbound,
-            random_property_id: item.random_property_id,
-            money,
-            cod,
+            subject: letter.subject,
+            body: letter.body,
+            item_entry: letter.item.entry,
+            item_stack_count: letter.item.stack_count,
+            item_durability: letter.item.durability,
+            item_enchant_id: letter.item.enchant_id,
+            item_soulbound: letter.item.soulbound,
+            random_property_id: letter.item.random_property_id,
+            money: letter.money,
+            cod: letter.cod,
             was_read: false,
             created_at: ctx.timestamp,
+            sender_kind,
+            sender_entry,
+            check_flags: letter.check_flags,
+            mail_template_id: letter.mail_template_id,
+            deliver_micros: letter.deliver_micros,
         })
         .id
+}
+/// The mail as its recipient can act on it. Before its delivery instant it does not exist for
+/// them yet (cmangos `MailHandler.cpp:359,417,516`).
+pub(crate) fn delivered_mail(ctx: &ReducerContext, mail_id: u64) -> Option<Mail> {
+    ctx.db
+        .game_mail()
+        .id()
+        .find(mail_id)
+        .filter(|m| m.is_delivered(ctx.timestamp))
 }
 #[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
 pub(crate) fn has_unread(ctx: &ReducerContext, recipient_guid: u64) -> bool {
@@ -147,7 +230,7 @@ pub(crate) fn has_unread(ctx: &ReducerContext, recipient_guid: u64) -> bool {
         .game_mail()
         .by_recipient()
         .filter(&recipient_guid)
-        .any(|m| !m.was_read)
+        .any(|m| !m.was_read && m.is_delivered(ctx.timestamp))
 }
 #[cfg(feature = "debug_reducers")]
 #[spacetimedb::reducer]
@@ -160,15 +243,17 @@ pub fn debug_seed_mail(
     money: u32,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
-    let id = insert_mail(
+    let id = insert_letter(
         ctx,
-        recipient_guid,
-        sender_guid,
-        subject,
-        body,
-        money,
-        0,
-        &ItemSnapshot::default(),
+        Letter::from_character(
+            sender_guid,
+            recipient_guid,
+            subject,
+            body,
+            money,
+            0,
+            ItemSnapshot::default(),
+        ),
     );
     spacetimedb::log::info!(
         "debug_seed_mail: mail {id} to {recipient_guid} from {sender_guid} (unread now: {})",
@@ -209,15 +294,9 @@ pub(crate) fn apply_send(
         lyracore_shared::mail::total_cost(money),
         lyracore_shared::mail::NOT_ENOUGH_MONEY,
     )?;
-    insert_mail(
+    insert_letter(
         ctx,
-        recipient_guid,
-        sender_guid,
-        subject,
-        body,
-        money,
-        cod,
-        &item,
+        Letter::from_character(sender_guid, recipient_guid, subject, body, money, cod, item),
     );
     Ok(())
 }
@@ -236,11 +315,7 @@ pub(crate) fn plan_take_money(row: Option<(u64, u32)>, caller_guid: u64) -> Take
     }
 }
 pub(crate) fn mail_money(ctx: &ReducerContext, mail_id: u64) -> Option<(u64, u32)> {
-    ctx.db
-        .game_mail()
-        .id()
-        .find(mail_id)
-        .map(|m| (m.recipient_guid, m.money))
+    delivered_mail(ctx, mail_id).map(|m| (m.recipient_guid, m.money))
 }
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum TakeItem {
@@ -257,11 +332,7 @@ pub(crate) fn plan_take_item(row: Option<(u64, u32)>, caller_guid: u64) -> TakeI
     }
 }
 pub(crate) fn mail_item(ctx: &ReducerContext, mail_id: u64) -> Option<(u64, ItemSnapshot)> {
-    ctx.db
-        .game_mail()
-        .id()
-        .find(mail_id)
-        .map(|m| (m.recipient_guid, m.snapshot()))
+    delivered_mail(ctx, mail_id).map(|m| (m.recipient_guid, m.snapshot()))
 }
 pub(crate) fn clear_mail_item(ctx: &ReducerContext, mail_id: u64) {
     let mails = ctx.db.game_mail();
@@ -316,7 +387,7 @@ pub(crate) fn apply_take_item(
     recipient_guid: u64,
     mail_id: u64,
 ) -> Result<(), String> {
-    let row = ctx.db.game_mail().id().find(mail_id);
+    let row = delivered_mail(ctx, mail_id);
     match plan_take_item(
         row.as_ref().map(|m| (m.recipient_guid, m.item_entry)),
         recipient_guid,
@@ -344,15 +415,18 @@ pub(crate) fn apply_take_item(
     clear_mail_item(ctx, mail_id);
     if let Some(s) = settlement {
         clear_mail_cod(ctx, mail_id);
-        insert_mail(
+        insert_letter(
             ctx,
-            s.payee_guid,
-            s.payer_guid,
-            s.subject,
-            String::new(),
-            s.copper,
-            0,
-            &ItemSnapshot::default(),
+            Letter::from_character(
+                s.payer_guid,
+                s.payee_guid,
+                s.subject,
+                String::new(),
+                s.copper,
+                0,
+                ItemSnapshot::default(),
+            )
+            .into_cod_payment(),
         );
     }
     Ok(())
@@ -375,48 +449,84 @@ pub(crate) fn apply_mark_read(
     }
     Ok(())
 }
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum DeletePlan {
+    NotYours,
+    CodPriced,
+    Delete,
+}
+/// The client offers no Delete on a priced mail, so the Gate refuses a crafted one
+/// (cmangos `MailHandler.cpp:327-331`).
+pub(crate) fn plan_delete(row: Option<&Mail>, caller_guid: u64) -> DeletePlan {
+    match row {
+        Some(m) if m.recipient_guid != caller_guid => DeletePlan::NotYours,
+        Some(m) if m.cod > 0 => DeletePlan::CodPriced,
+        Some(_) => DeletePlan::Delete,
+        None => DeletePlan::NotYours,
+    }
+}
 pub(crate) fn apply_delete(
     ctx: &ReducerContext,
     recipient_guid: u64,
     mail_id: u64,
 ) -> Result<(), String> {
     let mails = ctx.db.game_mail();
-    let row = mails
-        .id()
-        .find(mail_id)
-        .filter(|m| m.recipient_guid == recipient_guid)
-        .ok_or_else(|| lyracore_shared::mail::NOT_YOUR_MAIL.to_string())?;
-    mails.id().delete(row.id);
-    Ok(())
+    match plan_delete(mails.id().find(mail_id).as_ref(), recipient_guid) {
+        DeletePlan::NotYours => Err(lyracore_shared::mail::NOT_YOUR_MAIL.to_string()),
+        DeletePlan::CodPriced => Err(lyracore_shared::mail::COD_MAIL_UNDELETABLE.to_string()),
+        DeletePlan::Delete => {
+            mails.id().delete(mail_id);
+            Ok(())
+        }
+    }
 }
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum ReturnPlan {
     NotYours,
+    NoCharacterSender,
+    AlreadyReturned,
     Return,
 }
-pub(crate) fn plan_return(recipient_guid: Option<u64>, caller_guid: u64) -> ReturnPlan {
-    match recipient_guid {
-        Some(r) if r == caller_guid => ReturnPlan::Return,
-        _ => ReturnPlan::NotYours,
+/// Only a Character's mail goes back, and only once (cmangos `MailHandler.cpp:375`). The client
+/// hides Return on every other mail, so a refusal here answers a crafted packet.
+pub(crate) fn plan_return(row: Option<&Mail>, caller_guid: u64) -> ReturnPlan {
+    let Some(row) = row.filter(|m| m.recipient_guid == caller_guid) else {
+        return ReturnPlan::NotYours;
+    };
+    if !matches!(row.sender(), MailSender::Character(guid) if guid != 0) {
+        return ReturnPlan::NoCharacterSender;
     }
+    if row.check_flags & CHECK_MASK_RETURNED != 0 {
+        return ReturnPlan::AlreadyReturned;
+    }
+    ReturnPlan::Return
 }
 pub(crate) fn apply_return(
     ctx: &ReducerContext,
     recipient_guid: u64,
     mail_id: u64,
 ) -> Result<(), String> {
-    let mails = ctx.db.game_mail();
-    let row = mails.id().find(mail_id);
-    match plan_return(row.as_ref().map(|m| m.recipient_guid), recipient_guid) {
+    let row = delivered_mail(ctx, mail_id);
+    match plan_return(row.as_ref(), recipient_guid) {
         ReturnPlan::NotYours => return Err(lyracore_shared::mail::NOT_YOUR_MAIL.to_string()),
+        ReturnPlan::NoCharacterSender => {
+            return Err(lyracore_shared::mail::NO_SENDER_TO_RETURN_TO.to_string())
+        }
+        ReturnPlan::AlreadyReturned => {
+            return Err(lyracore_shared::mail::ALREADY_RETURNED.to_string())
+        }
         ReturnPlan::Return => {}
     }
     let row = row.expect("Return is only reachable with a row");
-    mails.id().update(Mail {
+    // A returned mail carries only RETURNED and arrives now, which restarts its expiry clock
+    // (cmangos `Mail.cpp:264,299-313`).
+    ctx.db.game_mail().id().update(Mail {
         recipient_guid: row.sender_guid,
         sender_guid: recipient_guid,
         was_read: false,
         cod: 0,
+        check_flags: CHECK_MASK_RETURNED,
+        deliver_micros: ctx.timestamp.to_micros_since_unix_epoch(),
         ..row
     });
     Ok(())
@@ -566,11 +676,201 @@ mod tests {
         .is_empty());
     }
 
+    fn row(recipient_guid: u64, sender: MailSender) -> Mail {
+        let (sender_kind, sender_guid, sender_entry) = sender.columns();
+        Mail {
+            id: 1,
+            recipient_guid,
+            sender_guid,
+            subject: "Your sword".into(),
+            body: String::new(),
+            item_entry: 0,
+            item_stack_count: 0,
+            item_durability: 0,
+            item_enchant_id: 0,
+            item_soulbound: false,
+            money: 0,
+            cod: 0,
+            was_read: false,
+            created_at: Timestamp::from_micros_since_unix_epoch(1_000_000),
+            random_property_id: 0,
+            sender_kind,
+            sender_entry,
+            check_flags: 0,
+            mail_template_id: 0,
+            deliver_micros: 0,
+        }
+    }
+
     #[test]
     fn returning_a_mail_is_refused_for_a_caller_who_is_not_the_recipient() {
-        assert_eq!(plan_return(Some(7), 7), ReturnPlan::Return);
-        assert_eq!(plan_return(Some(7), 8), ReturnPlan::NotYours);
+        let mail = row(7, MailSender::Character(9));
+        assert_eq!(plan_return(Some(&mail), 7), ReturnPlan::Return);
+        assert_eq!(plan_return(Some(&mail), 8), ReturnPlan::NotYours);
         assert_eq!(plan_return(None, 7), ReturnPlan::NotYours);
+    }
+
+    #[test]
+    fn only_a_mail_from_a_character_with_a_guid_can_be_returned() {
+        for sender in [
+            MailSender::Character(0),
+            MailSender::AuctionHouse(7),
+            MailSender::Creature(11_811),
+            MailSender::Gameobject(176_582),
+        ] {
+            assert_eq!(
+                plan_return(Some(&row(7, sender)), 7),
+                ReturnPlan::NoCharacterSender,
+                "{sender:?} has nobody to take the mail back"
+            );
+        }
+    }
+
+    #[test]
+    fn a_returned_mail_cannot_be_returned_again() {
+        let returned = Mail {
+            check_flags: lyracore_shared::mail::CHECK_MASK_RETURNED,
+            ..row(7, MailSender::Character(9))
+        };
+        assert_eq!(plan_return(Some(&returned), 7), ReturnPlan::AlreadyReturned);
+        let with_body = Mail {
+            check_flags: lyracore_shared::mail::CHECK_MASK_HAS_BODY,
+            ..row(7, MailSender::Character(9))
+        };
+        assert_eq!(plan_return(Some(&with_body), 7), ReturnPlan::Return);
+    }
+
+    #[test]
+    fn a_mail_with_a_cash_on_delivery_price_cannot_be_deleted() {
+        let priced = Mail {
+            cod: 250,
+            ..row(7, MailSender::Character(9))
+        };
+        assert_eq!(plan_delete(Some(&priced), 7), DeletePlan::CodPriced);
+        let paid = row(7, MailSender::Character(9));
+        assert_eq!(plan_delete(Some(&paid), 7), DeletePlan::Delete);
+        assert_eq!(plan_delete(Some(&paid), 8), DeletePlan::NotYours);
+        assert_eq!(plan_delete(None, 7), DeletePlan::NotYours);
+    }
+
+    #[test]
+    fn a_mail_is_hidden_from_its_recipient_until_its_delivery_instant() {
+        let now = Timestamp::from_micros_since_unix_epoch(5_000_000);
+        let at = |deliver_micros| Mail {
+            deliver_micros,
+            ..row(7, MailSender::Character(9))
+        };
+        assert!(at(0).is_delivered(now), "0 means delivered at creation");
+        assert!(at(5_000_000).is_delivered(now));
+        assert!(!at(5_000_001).is_delivered(now));
+    }
+
+    #[test]
+    fn a_row_written_before_the_sender_columns_is_a_character_mail() {
+        assert_eq!(
+            row(7, MailSender::Character(9)).sender(),
+            MailSender::Character(9)
+        );
+    }
+
+    #[test]
+    fn a_character_letter_is_marked_as_having_a_body_or_as_already_copied() {
+        let letter = |body: &str| {
+            Letter::from_character(
+                9,
+                7,
+                "Hi".into(),
+                body.into(),
+                0,
+                0,
+                ItemSnapshot::default(),
+            )
+        };
+        assert_eq!(letter("meet me at the gate").check_flags, 0x10);
+        assert_eq!(letter("").check_flags, 0x04);
+        assert_eq!(letter("").sender, MailSender::Character(9));
+        assert_eq!(
+            letter("").deliver_micros,
+            0,
+            "a character letter arrives at once"
+        );
+    }
+
+    #[test]
+    fn a_cod_payment_keeps_the_letters_subject_and_carries_only_the_payment_bit() {
+        let payment = Letter::from_character(
+            22,
+            11,
+            "Your sword".into(),
+            String::new(),
+            250,
+            0,
+            ItemSnapshot::default(),
+        )
+        .into_cod_payment();
+        assert_eq!(payment.subject, "Your sword");
+        assert_eq!(payment.check_flags, 0x08);
+        assert_eq!(payment.money, 250);
+    }
+
+    /// `game_mail` inserts in `src`: the table call or a handle bound from it, followed by
+    /// `.insert(` across any whitespace, so an insert split over lines still counts.
+    fn game_mail_inserts(src: &str) -> usize {
+        crate::test_scan::raw_table_reads(src, &["game_mail"], |code, at| {
+            code[at..].trim_start().starts_with(".insert(")
+        })
+        .len()
+    }
+
+    #[test]
+    fn the_mail_insert_scan_sees_split_and_handle_inserts_and_skips_comments() {
+        assert_eq!(
+            game_mail_inserts(
+                "fn f() {\n    ctx.db\n        .game_mail()\n        .insert(row);\n}"
+            ),
+            1
+        );
+        assert_eq!(
+            game_mail_inserts("let mails = ctx.db.game_mail();\nmails.insert(row);"),
+            1
+        );
+        assert_eq!(game_mail_inserts("// ctx.db.game_mail().insert(row);"), 0);
+        assert_eq!(game_mail_inserts("ctx.db.game_mail().id().update(row);"), 0);
+        assert_eq!(
+            game_mail_inserts("ctx.db.game_mail_escrow().insert(row);"),
+            0
+        );
+    }
+
+    /// Every mail row goes through `insert_letter`, so no letter skips the header it stamps. The
+    /// one other writer is `character_owned!`'s Transfer remint, which inserts through
+    /// `ctx.db.$table()` and so never spells the table name.
+    #[test]
+    fn every_mail_row_is_created_by_insert_letter() {
+        let mut elsewhere = Vec::new();
+        let mut total = 0;
+        for file in crate::tripwires::character_owned_tripwire::scanned_files() {
+            let src = std::fs::read_to_string(&file).expect("a scanned file is readable");
+            let found = game_mail_inserts(&src);
+            total += found;
+            if found > 0 && !file.ends_with("module/src/mail.rs") {
+                elsewhere.push(file.display().to_string());
+            }
+        }
+        assert!(
+            elsewhere.is_empty(),
+            "these files insert game_mail rows directly: {elsewhere:?}. Build a `Letter` and call \
+             `mail::insert_letter` instead"
+        );
+        let own = game_mail_inserts(&code_of(
+            include_str!("mail.rs"),
+            "pub(crate) fn insert_letter(",
+        ));
+        assert_eq!(
+            (own, total),
+            (1, 1),
+            "`insert_letter` must hold the only game_mail insert"
+        );
     }
 
     #[test]
@@ -582,7 +882,7 @@ mod tests {
     #[test]
     fn both_planes_charge_the_same_total_for_the_same_letter() {
         for money in [0, 1, 100, u32::MAX - 1, u32::MAX] {
-            let letter = crate::mail_escrow::Letter {
+            let draft = crate::mail_escrow::Draft {
                 recipient_guid: 1,
                 subject: String::new(),
                 body: String::new(),
@@ -592,7 +892,7 @@ mod tests {
             };
             assert_eq!(
                 lyracore_shared::mail::total_cost(money),
-                letter.fenced_copper(),
+                draft.fenced_copper(),
                 "the two planes must charge the same for {money} copper attached"
             );
         }

@@ -11,13 +11,13 @@ use super::super::bindings::*;
 use super::super::connection::Coordinator;
 
 impl Coordinator {
-    /// Every mail addressed to `recipient_guid`, oldest first — the order the mailbox window lists
-    /// them in. The SDK exposes only the PK index, so this iterates and filters like every other
-    /// per-owner read here (`player_items`, `player_skills`).
+    /// Every mail addressed to `recipient_guid`, delivered or not, in no set order.
+    /// `codec::build_mail_list` orders the inbox. The SDK exposes only the PK index, so this
+    /// iterates and filters like every other per-owner read here (`player_items`, `player_skills`).
     pub fn mail_list(&self, recipient_guid: u64) -> Result<Vec<crate::codec::MailView>> {
         let guard = self.0.coord();
         let db = &guard.conn.db;
-        let mut mails: Vec<crate::codec::MailView> = db
+        Ok(db
             .game_mail()
             .iter()
             .filter(|m| m.recipient_guid == recipient_guid)
@@ -45,10 +45,18 @@ impl Coordinator {
                 cod: m.cod,
                 was_read: m.was_read,
                 created_at_secs: m.created_at.to_micros_since_unix_epoch() / 1_000_000,
+                sender_kind: m.sender_kind,
+                sender_entry: m.sender_entry,
+                check_flags: m.check_flags,
+                mail_template_id: m.mail_template_id,
+                // Rounded up, so the Gateway never shows a mail the Module still refuses to hand
+                // over.
+                deliver_secs: m
+                    .deliver_micros
+                    .saturating_add(999_999)
+                    .div_euclid(1_000_000),
             })
-            .collect();
-        mails.sort_by_key(|m| m.id);
-        Ok(mails)
+            .collect())
     }
 
     /// Every mail escrow this database is holding for `sender_guid` — the fences a drive filed and

@@ -1,6 +1,6 @@
 //! Vanilla mailbox packet mapping.
 
-use lyracore_shared::mail as mail_rules;
+use lyracore_shared::mail::{self as mail_rules, MailSender};
 use wow_world_messages::vanilla::{
     Gold, InventoryResult, MSG_QUERY_NEXT_MAIL_TIME_Server, Mail, Mail_MailType,
     SMSG_SEND_MAIL_RESULT_MailAction, SMSG_SEND_MAIL_RESULT_MailResult,
@@ -24,20 +24,45 @@ pub struct MailView {
     pub was_read: bool,
     pub created_at_secs: i64,
     pub random_property_id: u32,
+    pub sender_kind: u8,
+    pub sender_entry: u32,
+    /// `CHECK_MASK_*` bits other than READ, which is `was_read`.
+    pub check_flags: u32,
+    pub mail_template_id: u32,
+    /// When the recipient can first see the mail, rounded up to the second. 0 means from creation.
+    pub deliver_secs: i64,
 }
+
+impl MailView {
+    pub fn sender(&self) -> MailSender {
+        MailSender::from_columns(self.sender_kind, self.sender_guid, self.sender_entry)
+    }
+    pub fn is_delivered(&self, now_secs: i64) -> bool {
+        self.deliver_secs <= now_secs
+    }
+}
+/// The inbox the client shows: newest first, at most [`mail_rules::INBOX_CAPACITY`] mails
+/// (cmangos `Player.cpp:15062`, `MailHandler.cpp:557`). A returned or delayed mail counts as new
+/// from the moment it arrives.
 pub fn build_mail_list(mails: &[MailView], now_secs: i64) -> SMSG_MAIL_LIST_RESULT {
+    let mut newest_first: Vec<&MailView> = mails.iter().collect();
+    newest_first.sort_by_key(|m| {
+        std::cmp::Reverse((
+            mail_rules::arrived_at_secs(m.created_at_secs, m.deliver_secs),
+            m.id,
+        ))
+    });
     SMSG_MAIL_LIST_RESULT {
-        mails: mails
-            .iter()
+        mails: newest_first
+            .into_iter()
+            .take(mail_rules::INBOX_CAPACITY)
             .map(|m| Mail {
                 message_id: m.id as u32,
-                message_type: Mail_MailType::Normal {
-                    sender: m.sender_guid.into(),
-                },
+                message_type: message_type(m.sender()),
                 subject: m.subject.clone(),
                 item_text_id: mail_rules::item_text_id_for(m.id, &m.body),
                 unknown1: 0,
-                stationery: 41,
+                stationery: m.sender().stationery(),
                 item: m.item_entry,
                 item_enchant_id: m.item_enchant_id,
                 item_random_property_id: m.random_property_id,
@@ -48,12 +73,39 @@ pub fn build_mail_list(mails: &[MailView], now_secs: i64) -> SMSG_MAIL_LIST_RESU
                 durability: m.item_durability,
                 money: Gold::new(m.money),
                 cash_on_delivery_amount: m.cod,
-                checked_timestamp: 0,
-                expiration_time: mail_rules::expiration_days(m.created_at_secs, now_secs),
-                mail_template_id: 0,
+                checked_timestamp: check_mask(m),
+                expiration_time: mail_rules::expiration_days(
+                    m.created_at_secs,
+                    m.deliver_secs,
+                    m.cod,
+                    now_secs,
+                ),
+                mail_template_id: m.mail_template_id,
             })
             .collect(),
     }
+}
+/// cmangos writes the sender guid for a Character and the entry or house id for the rest
+/// (`MailHandler.cpp:574-586`).
+fn message_type(sender: MailSender) -> Mail_MailType {
+    match sender {
+        MailSender::Character(guid) => Mail_MailType::Normal {
+            sender: guid.into(),
+        },
+        MailSender::AuctionHouse(house) => Mail_MailType::Auction { auction_id: house },
+        MailSender::Creature(entry) => Mail_MailType::Creature { sender_id: entry },
+        MailSender::Gameobject(entry) => Mail_MailType::Gameobject { sender_id: entry },
+    }
+}
+/// The `checked` field the client reads read, returned, copied, COD-payment and has-body state
+/// from (cmangos `MailHandler.cpp:610`).
+fn check_mask(m: &MailView) -> u32 {
+    let read = if m.was_read {
+        mail_rules::CHECK_MASK_READ
+    } else {
+        0
+    };
+    m.check_flags | read
 }
 pub fn build_next_mail_time(has_unread: bool) -> MSG_QUERY_NEXT_MAIL_TIME_Server {
     MSG_QUERY_NEXT_MAIL_TIME_Server {
@@ -161,18 +213,155 @@ mod tests {
 
     #[test]
     fn a_mail_row_maps_onto_the_wire_with_its_own_id_as_the_text_id() {
-        let list = build_mail_list(&[view(7, "meet me at the gate"), view(8, "")], 1_000);
-        assert_eq!(list.mails[0].message_id, 7);
+        let with_body = &build_mail_list(&[view(7, "meet me at the gate")], 1_000).mails[0];
+        assert_eq!(with_body.message_id, 7);
         assert_eq!(
-            list.mails[0].message_type,
+            with_body.message_type,
             Mail_MailType::Normal {
                 sender: 42u64.into()
             }
         );
-        assert_eq!(list.mails[0].item_text_id, 7);
+        assert_eq!(with_body.item_text_id, 7);
         assert_eq!(
-            list.mails[1].item_text_id, 0,
+            build_mail_list(&[view(8, "")], 1_000).mails[0].item_text_id,
+            0,
             "an empty body must advertise text id 0 — the client then never queries it"
+        );
+    }
+
+    fn from(sender: MailSender) -> MailView {
+        let (sender_kind, sender_guid, sender_entry) = sender.columns();
+        MailView {
+            sender_kind,
+            sender_guid,
+            sender_entry,
+            ..view(1, "")
+        }
+    }
+
+    #[test]
+    fn each_sender_lists_under_its_vanilla_message_type_and_stationery() {
+        let wire = |sender| {
+            let m = &build_mail_list(&[from(sender)], 1_000).mails[0];
+            (m.message_type, m.stationery)
+        };
+        assert_eq!(
+            wire(MailSender::Character(42)),
+            (
+                Mail_MailType::Normal {
+                    sender: 42u64.into()
+                },
+                41
+            )
+        );
+        assert_eq!(
+            wire(MailSender::AuctionHouse(7)),
+            (Mail_MailType::Auction { auction_id: 7 }, 62)
+        );
+        assert_eq!(
+            wire(MailSender::Creature(11_811)),
+            (Mail_MailType::Creature { sender_id: 11_811 }, 41)
+        );
+        assert_eq!(
+            wire(MailSender::Gameobject(176_582)),
+            (Mail_MailType::Gameobject { sender_id: 176_582 }, 41)
+        );
+    }
+
+    #[test]
+    fn the_check_mask_is_the_stored_bits_plus_read() {
+        let checked = |check_flags, was_read| {
+            build_mail_list(
+                &[MailView {
+                    check_flags,
+                    was_read,
+                    ..view(1, "")
+                }],
+                1_000,
+            )
+            .mails[0]
+                .checked_timestamp
+        };
+        assert_eq!(checked(0, false), 0, "a legacy unread row");
+        assert_eq!(checked(0, true), 0x01, "a legacy read row now shows READ");
+        assert_eq!(checked(0x10, true), 0x11, "HAS_BODY and READ");
+        assert_eq!(checked(0x02, false), 0x02, "RETURNED");
+        assert_eq!(checked(0x08, false), 0x08, "COD_PAYMENT");
+    }
+
+    #[test]
+    fn the_template_id_rides_the_list() {
+        let m = MailView {
+            mail_template_id: 150,
+            ..view(1, "")
+        };
+        assert_eq!(build_mail_list(&[m], 1_000).mails[0].mail_template_id, 150);
+    }
+
+    fn ids(list: &SMSG_MAIL_LIST_RESULT) -> Vec<u32> {
+        list.mails.iter().map(|m| m.message_id).collect()
+    }
+
+    #[test]
+    fn the_list_is_newest_first() {
+        let at = |id, created_at_secs| MailView {
+            created_at_secs,
+            ..view(id, "")
+        };
+        assert_eq!(
+            ids(&build_mail_list(
+                &[at(1, 1_000), at(2, 3_000), at(3, 2_000)],
+                5_000
+            )),
+            vec![2, 3, 1]
+        );
+        assert_eq!(
+            ids(&build_mail_list(&[at(1, 1_000), at(2, 1_000)], 5_000)),
+            vec![2, 1],
+            "two mails from the same second list by id, newest first"
+        );
+    }
+
+    #[test]
+    fn a_mail_that_arrived_after_it_was_written_lists_from_its_arrival() {
+        let returned = MailView {
+            created_at_secs: 1_000,
+            deliver_secs: 4_000,
+            ..view(1, "")
+        };
+        let newer = MailView {
+            created_at_secs: 3_000,
+            ..view(2, "")
+        };
+        assert_eq!(ids(&build_mail_list(&[newer, returned], 5_000)), vec![1, 2]);
+    }
+
+    #[test]
+    fn the_list_holds_the_fifty_newest_mails() {
+        let mails: Vec<MailView> = (1..=60)
+            .map(|id| MailView {
+                created_at_secs: 1_000 + id as i64,
+                ..view(id, "")
+            })
+            .collect();
+        let listed = ids(&build_mail_list(&mails, 5_000));
+        assert_eq!(listed.len(), 50);
+        assert_eq!(listed.first(), Some(&60));
+        assert_eq!(listed.last(), Some(&11));
+    }
+
+    #[test]
+    fn a_priced_mail_counts_down_three_days_from_its_arrival() {
+        let priced = MailView {
+            cod: 250,
+            item_entry: 5_090_001,
+            created_at_secs: 1_000,
+            deliver_secs: 1_000 + 86_400,
+            ..view(1, "")
+        };
+        assert_eq!(
+            build_mail_list(&[priced], 1_000 + 86_400).mails[0].expiration_time,
+            3.0
         );
     }
 
@@ -184,10 +373,7 @@ mod tests {
     #[test]
     fn the_expiry_stamp_counts_days_down_from_the_rows_age() {
         let list = build_mail_list(&[view(1, "x")], 1_000 + 86_400);
-        assert_eq!(
-            list.mails[0].expiration_time,
-            lyracore_shared::mail::EXPIRY_DAYS - 1.0
-        );
+        assert_eq!(list.mails[0].expiration_time, 29.0);
     }
 
     #[test]

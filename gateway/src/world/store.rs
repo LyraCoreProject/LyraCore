@@ -1033,14 +1033,16 @@ pub trait WorldStore:
 
     /// Delete `mail_id` for `recipient_guid`, on the database THIS handle names — same two-plane
     /// routing as [`mail_mark_read`](Self::mail_mark_read). Destroys any attachment the row still
-    /// carries, as vanilla does after its (client-side) confirmation prompt.
+    /// carries, as vanilla does after its (client-side) confirmation prompt. `Err` for a mail with
+    /// a cash on delivery price.
     fn mail_delete(&self, recipient_guid: u64, mail_id: u64) -> Result<()>;
 
     /// Return `mail_id` to whoever sent it, on the database THIS handle names — same two-plane
     /// routing as [`mail_delete`](Self::mail_delete). The row is re-addressed IN PLACE: it never
     /// leaves the plane that already holds it, so there is no sharded variant and no escrow, unlike
-    /// [`mail_send`](Self::mail_send) and the takes below. `Err` when `mail_id` does not exist or
-    /// is not `recipient_guid`'s.
+    /// [`mail_send`](Self::mail_send) and the takes below. `Err` when `mail_id` does not exist, is
+    /// not `recipient_guid`'s, is not delivered yet, has no Character sender, or was returned
+    /// already.
     fn mail_return(&self, recipient_guid: u64, mail_id: u64) -> Result<()>;
 
     /// Write one sent letter on the database THIS handle names, charging the sender the postage
@@ -1069,12 +1071,13 @@ pub trait WorldStore:
 
     /// Credit `mail_id`'s copper to `recipient_guid` and empty the row, in one transaction. The
     /// single-database twin of [`mail_send`](Self::mail_send), and refused for a mail that is not
-    /// the caller's or has nothing left in it.
+    /// the caller's, is not delivered yet, or has nothing left in it.
     fn mail_take_money(&self, recipient_guid: u64, mail_id: u64) -> Result<()>;
 
     /// Re-create `mail_id`'s attached item in `recipient_guid`'s bags and empty the row's
     /// attachment columns, in one transaction. [`mail_take_money`](Self::mail_take_money)'s twin,
-    /// and refused for a mail that is not the caller's, one with no attachment, or a full bag —
+    /// and refused for a mail that is not the caller's or not delivered yet, one with no
+    /// attachment, or a full bag —
     /// where the refusal rolls the clear back, so the item stays in the letter.
     fn mail_take_item(&self, recipient_guid: u64, mail_id: u64) -> Result<()>;
 

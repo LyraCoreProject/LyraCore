@@ -27,7 +27,7 @@ pub(crate) fn handle_mail<St: WorldStore + ?Sized>(
                 Ok(mails) => send(
                     tx,
                     Outbound::One(ServerOpcodeMessage::SMSG_MAIL_LIST_RESULT(Box::new(
-                        codec::build_mail_list(&mails, now_secs()),
+                        codec::build_mail_list(&mails, mail::now_secs()),
                     ))),
                 )?,
                 Err(e) => log::debug!(
@@ -272,13 +272,4 @@ pub(crate) fn handle_mail<St: WorldStore + ?Sized>(
         other => return Ok(Some(other)),
     }
     Ok(None)
-}
-
-/// Wall-clock seconds, the base of the expiry countdown the list packet stamps. Read here rather
-/// than in the codec so the packet builder stays a pure function of its inputs.
-fn now_secs() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
 }

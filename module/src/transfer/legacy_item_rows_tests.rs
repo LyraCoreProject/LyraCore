@@ -154,6 +154,54 @@ fn legacy_mail_decodes_multiple_variable_length_rows_without_guessing() {
 }
 
 #[test]
+fn mail_escrowed_before_the_mail_header_arrives_as_a_delivered_character_mail() {
+    let rows = vec![RandomPropertyMail {
+        id: 1,
+        recipient_guid: 73,
+        sender_guid: 91,
+        subject: "Your sword".to_owned(),
+        body: "left it at the inn".to_owned(),
+        item_entry: 509_0001,
+        item_stack_count: 1,
+        item_durability: 51,
+        item_enchant_id: 7748,
+        item_soulbound: false,
+        money: 173,
+        cod: 12,
+        was_read: true,
+        created_at: Timestamp::from_micros_since_unix_epoch(1234),
+        random_property_id: 1182,
+    }];
+    let arrived: Vec<Mail> = arrive(entry("game_mail@random-property-1", rows));
+    let row = &arrived[0];
+    assert_eq!(
+        (
+            row.recipient_guid,
+            row.sender_guid,
+            &*row.subject,
+            &*row.body
+        ),
+        (73, 91, "Your sword", "left it at the inn")
+    );
+    assert_eq!(
+        (row.item_entry, row.random_property_id, row.money, row.cod),
+        (509_0001, 1182, 173, 12)
+    );
+    assert!(row.was_read);
+    assert_eq!(
+        (
+            row.sender_kind,
+            row.sender_entry,
+            row.check_flags,
+            row.mail_template_id,
+            row.deliver_micros
+        ),
+        (0, 0, 0, 0, 0),
+        "a Character mail with no stored flags, visible since creation"
+    );
+}
+
+#[test]
 fn current_item_formats_preserve_the_exact_encoded_values() {
     for (table, _) in FORMATS {
         let mut payload = vec![TableRows {

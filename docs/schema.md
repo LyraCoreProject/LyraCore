@@ -318,6 +318,19 @@ controller generation, and creation time onto its fence. Its release reducer lea
 differently identified newer fence untouched when an old source intent retries after the Character
 has crossed onward.
 
+### Mail (`module/src/mail.rs`)
+
+`game_mail` is the public row for one Mail, on Realm-core or on a single-database realm's one
+database. `mail::insert_letter` is its only writer, and a source scan in `mail.rs` fails on any other
+insert. The END-appended header columns carry what the 1.12 inbox reads: `sender_kind` (the vanilla
+`MailMessageType` code, 0 Character, 2 Auction, 3 Creature, 4 Gameobject), `sender_entry` (the
+auction house id or the creature or gameobject entry), `check_flags` (the `MailCheckMask` bits except
+READ, which stays `was_read`), `mail_template_id`, and `deliver_micros` (when the recipient can first
+see the Mail). Every default is a real value: a legacy row is a Character mail with no stored flags,
+visible since creation. Expiry is not a column. `lyracore_shared::mail::expires_at_secs` derives it
+from creation, delivery and the cash on delivery price. Private `game_mail_escrow` and
+`game_mail_delivery` carry value across the Shard Boundary; see `architecture.md` §6.3b.
+
 ### Auction listing state (`module/src/auction.rs`)
 
 `game_auction_house` is the public `AuctionHouse.dbc` catalogue used to resolve an auctioneer's

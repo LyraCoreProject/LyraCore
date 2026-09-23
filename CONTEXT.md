@@ -527,6 +527,23 @@ creature-leg writer remains the only position writer.
 The durable pause on an active patrol. It keeps the current waypoint cursor so resuming continues
 the same route.
 
+### Mail
+
+**Mail**:
+One letter on Realm-core for one recipient. It carries a subject, an optional body, copper, one
+item and a cash on delivery price. Its recipient cannot see it, take from it or return it before its
+delivery instant.
+_Avoid_: message
+
+**Mail Sender**:
+Who a Mail is from, as the client names it in the inbox: a Character, an Auction House, a Creature
+or a Gameobject.
+
+**Returned Mail**:
+A Character's Mail sent back to that Character once. It arrives unread, without its cash on delivery
+price, and cannot be returned again. A Mail from any other Mail Sender, or from guid 0, cannot be
+returned.
+
 ### Auctions
 
 **Settlement**:
