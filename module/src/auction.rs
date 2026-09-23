@@ -2816,7 +2816,7 @@ pub fn debug_stage_auction_buyout_fixture(ctx: &ReducerContext) -> Result<(), St
             .map(|mail| mail.id)
             .collect();
         for id in stale_mail {
-            mails.id().delete(id);
+            crate::mail::delete_mail(ctx, id);
         }
         let stale_notices: Vec<u64> = notices
             .by_recipient()
@@ -3233,7 +3233,7 @@ pub fn debug_stage_auction_expiry_fixture(ctx: &ReducerContext) -> Result<(), St
             .map(|mail| mail.id)
             .collect();
         for id in stale_mail {
-            mails.id().delete(id);
+            crate::mail::delete_mail(ctx, id);
         }
         let stale_notices: Vec<u64> = notices
             .by_recipient()
@@ -3619,7 +3619,7 @@ pub fn debug_stage_legacy_auction_mail_fixture(ctx: &ReducerContext) -> Result<(
         .map(|mail| mail.id)
         .collect();
     for id in stale {
-        mails.id().delete(id);
+        crate::mail::delete_mail(ctx, id);
     }
     let receipts = ctx.db.game_auction_operation_receipt();
     receipts

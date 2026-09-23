@@ -406,15 +406,15 @@ Every relay hangs off a coordinator connection. Row-driven relays take one of tw
 - **Shared per-shard dispatch** (`world_view::arm_shard`, armed once per shard connection and
   re-armed through `CoordinatorInner::on_reconnect` after a watchdog swap): the broadcast-shaped
   families (entities, motion, combat, chat, auras, corpses, casts), the recipient-keyed PRIVATE
-  tier (whisper/group/resurrect/auction notice), and owner-addressed XP, level-up, exploration,
-  quest, item, teleport, addon, and reputation rows. GUID and bound-identity indexes select one
+  tier (whisper/group/resurrect/auction notice/Mail Arrival), and owner-addressed XP, level-up,
+  exploration, quest, item, teleport, addon, and reputation rows. GUID and bound-identity indexes select one
   viewer directly; the callback enqueues packet work on that session's FIFO writer. Combat, cast,
   impact, and emote rows carry the actor's cell. Melee stance uses the attacker's indexed cell, chat
   uses the sender's, and auras use the target's. The shared cell index selects nearby viewers and
   named owners on the source Shard, and the job's per-viewer gate stays the final filter. Only
   rolls, corpses, dynamic objects, channel lines and weather still fan out per shard. The
-  cross-shard whisper/group/auction-notice twins ride the same dispatchers on the realm-core
-  connection (`arm_realm_private`), armed only when realm-core is a distinct database. The guild
+  cross-shard whisper/group/auction-notice/Mail Arrival twins ride the same dispatchers on the
+  realm-core connection (`arm_realm_private`), armed only when realm-core is a distinct database. The guild
   relays register in both places too: `game_guild_event` rows go to their addressed recipient or to
   every online member of the Guild on this Gateway, and `game_guild_member` changes drive the Guild
   Projection below.
@@ -566,6 +566,10 @@ the escrow row carries the whole letter, so a stalled fence is re-driven rather 
 `reap_mail_escrows` has no rollback arm at all — a source-side read that finds no attestation has
 learned "not yet attested", never "not delivered". And a **single-database** gateway does not come
 here: purse and mail row share one transaction there, so `mail::apply_send` writes both directly.
+
+Mail Expiry can delete a mail row while a take is in flight. The take fence already moved that
+copper or item out of the row into the escrow row, so expiry cannot delete it. The payout on the
+home shard reads only the escrow row and still completes.
 
 ### 6.4 Cross-shard visibility
 

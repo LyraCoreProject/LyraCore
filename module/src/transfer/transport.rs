@@ -117,6 +117,8 @@ pub(crate) const NOT_TRANSPORTED: &[&str] = &[
     "game_pet_command",
     "game_mail_escrow",
     "game_mail_delivery",
+    // `game_mail_timer` names a Mail, not a Character, and `game_mail_arrival` is a Relay event, so
+    // neither has an arm. A Mail a Transfer imports gets its timer from `debug_repair_after_publish`.
     "game_character_shard",
     "game_active_taxi_flight",
     "game_taxi_flight_schedule",

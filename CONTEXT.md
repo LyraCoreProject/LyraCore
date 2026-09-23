@@ -625,6 +625,22 @@ returned.
 An imported letter body from `MailTemplate.dbc`. The client shows it for a mail that names the
 template id.
 
+**Mail Timer**:
+The one-shot schedule each Mail holds. It fires at the delivery instant of a Mail that is not
+delivered yet, and at the end of the Mail's life for every Mail.
+_Avoid_: mail reaper, expiry sweep
+
+**Mail Expiry**:
+What happens to a Mail at the end of its life: 3 days after it arrives with a cash on delivery
+price, else 30 days. A Character's Mail that still carries an item goes back to its sender as a
+Returned Mail. Every other Mail is deleted with its item and copper.
+
+**Mail Arrival**:
+The event that tells a recipient a Mail is now visible to them: on delivery, and when a Mail comes
+back as a Returned Mail. The Gateway relays it as `SMSG_RECEIVED_MAIL` to a recipient in the world
+on any Shard. An offline recipient learns of the Mail from the unread poll at the next login.
+_Avoid_: new mail notification, mail push
+
 ### Auctions
 
 **Settlement**:

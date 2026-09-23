@@ -3,9 +3,15 @@
 
 use spacetimedb::{reducer, table, ReducerContext, ScheduleAt, Table};
 
+// `breath_relay`, `guild`, `mail_timer`, `realm_chat` and `rest` are not glob re-exported at crate
+// scope, so their accessors need their own imports. Every other event table's accessor trait rides
+// a glob.
 use crate::breath_relay::game_breath_relay_event;
 use crate::guild::game_guild_event;
 use crate::guild::membership::game_guild_invite;
+use crate::mail_timer::game_mail_arrival;
+use crate::realm_chat::game_realm_chat_event;
+use crate::rest::game_rest_state_event;
 use crate::{
     game_addon_message, game_auction_notice, game_bot_invite_intent, game_channel_event,
     game_chat_event, game_combat_event, game_duel_event, game_emote_event, game_group_event,
@@ -15,12 +21,6 @@ use crate::{
     INVITE_TTL_MICROS,
 };
 use crate::{game_party_command_intent, game_party_command_receipt};
-// `rest` isn't re-exported at crate scope (`mod rest;`, no `pub use rest::*;` in lib.rs) — every
-// other event table's accessor trait rides that glob, so this is the one accessor here needing its
-// own import.
-use crate::rest::game_rest_state_event;
-// Imported by path for the same reason: `realm_chat` exports its row type by name only.
-use crate::realm_chat::game_realm_chat_event;
 // `game_movement_event` / `game_creature_move_event` are deliberately NOT imported: nothing writes
 // either table any more, so the reaper no longer touches them (see the notes in `reap_events`).
 
@@ -104,6 +104,7 @@ pub fn reap_movement_events(ctx: &ReducerContext, _schedule: EventReaperSchedule
     reap!(game_rest_state_event);
     reap!(game_breath_relay_event); // breath timer edges + drowning damage relay
     reap!(game_guild_event); // Guild Events (sign-on, MOTD, membership)
+    reap!(game_mail_arrival); // Mail Arrivals, relayed on insert
 
     // Never-answered pending invites. Same id+created_at shape as the event tables, but on
     // the longer INVITE_TTL (a human is looking at the invite dialog). After that the row is dead

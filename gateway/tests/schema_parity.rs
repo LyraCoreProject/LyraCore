@@ -1087,6 +1087,9 @@ parity_test!(parity_game_mail_escrow, "game_mail_escrow", lyracore_module::MailE
     item_soulbound, cod,
     random_property_id,
 });
+parity_test!(parity_game_mail_arrival, "game_mail_arrival", lyracore_module::MailArrival, bindings::mail_arrival_type::MailArrival, {
+    id, recipient_guid, created_at,
+});
 parity_test!(parity_game_auction, "game_auction", lyracore_module::Auction, bindings::auction_type::Auction, {
     id, listing_operation_id, house, owner_guid, item_guid, item_entry, item_stack_count,
     item_durability, item_enchant_id, item_soulbound, start_bid, buyout, highest_bidder_guid,
@@ -1270,6 +1273,7 @@ const MANIFEST_TABLES: &[&str] = &[
     "game_character_contact",
     "game_mail",
     "game_mail_escrow",
+    "game_mail_arrival",
     "game_auction",
     "game_auction_bid_decision",
     "game_auction_bid_hold",

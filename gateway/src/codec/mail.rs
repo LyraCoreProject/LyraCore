@@ -5,7 +5,7 @@ use wow_world_messages::vanilla::{
     Gold, InventoryResult, MSG_QUERY_NEXT_MAIL_TIME_Server, Mail, Mail_MailType,
     SMSG_SEND_MAIL_RESULT_MailAction, SMSG_SEND_MAIL_RESULT_MailResult,
     SMSG_SEND_MAIL_RESULT_MailResultTwo, SMSG_ITEM_TEXT_QUERY_RESPONSE, SMSG_MAIL_LIST_RESULT,
-    SMSG_SEND_MAIL_RESULT,
+    SMSG_RECEIVED_MAIL, SMSG_SEND_MAIL_RESULT,
 };
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MailView {
@@ -111,6 +111,10 @@ pub fn build_next_mail_time(has_unread: bool) -> MSG_QUERY_NEXT_MAIL_TIME_Server
     MSG_QUERY_NEXT_MAIL_TIME_Server {
         unread_mails: mail_rules::unread_mail_signal(has_unread),
     }
+}
+/// A Mail Arrival. The packet carries one `u32` 0 (cmangos `Player.cpp:3071-3077`).
+pub fn build_received_mail() -> SMSG_RECEIVED_MAIL {
+    SMSG_RECEIVED_MAIL { unknown1: 0 }
 }
 pub fn build_item_text_response(item_text_id: u32, text: String) -> SMSG_ITEM_TEXT_QUERY_RESPONSE {
     SMSG_ITEM_TEXT_QUERY_RESPONSE { item_text_id, text }
@@ -556,5 +560,16 @@ mod tests {
             ),
             other => panic!("expected the Deleted action, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_mail_arrival_is_opcode_0x0285_with_one_zero_u32() {
+        use wow_world_messages::Message;
+        let mut body = Vec::new();
+        build_received_mail()
+            .write_into_vec(&mut body)
+            .expect("a four-byte body writes");
+        assert_eq!(SMSG_RECEIVED_MAIL::OPCODE, 0x0285);
+        assert_eq!(body, [0, 0, 0, 0], "cmangos Player.cpp:3074-3075");
     }
 }

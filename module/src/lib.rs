@@ -341,6 +341,8 @@ mod mail_catalogue;
 /// caller-chosen id, and the reaper. The mechanism for moving value into a mail row across a
 /// database boundary no transaction spans; the single-database plane deliberately bypasses it.
 mod mail_escrow;
+/// The Mail Timer, Mail Expiry and the Mail Arrival event.
+mod mail_timer;
 /// Batched movement republish: the PRIVATE `game_entity_motion_pending` staging table that
 /// `movement_update` writes, and the 20 Hz `publish_motion` tick that drains it into the public
 /// `game_entity_motion` relay in one transaction.
@@ -441,6 +443,7 @@ pub use load::*;
 pub use loot::*;
 pub use mail::Mail; // re-exported for the gateway schema-parity test
 pub use mail_escrow::MailEscrow; // re-exported for the gateway schema-parity test
+pub use mail_timer::{MailArrival, MailTimer}; // re-exported for the gateway schema-parity test
 pub use motion::*;
 pub use quest::*;
 // Named, not globbed: the `realm_chat` reducer's generated type would shadow the module name.
