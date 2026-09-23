@@ -320,7 +320,6 @@ impl Coordinator {
             .unwrap_or_default())
     }
 
-
     /// Find `guid` for Member Stats from its Realm Presence — the same live-entity / in-transit /
     /// absence-gated-offline decision every other realm-wide read now shares, so there is no
     /// second discovery left to disagree with it.
