@@ -919,8 +919,10 @@ impl InMemoryStore {
             .collect()
     }
 
-    /// The module's `insert_mail`: the row both write paths reach, so a letter written by the
-    /// single-database send and one written by the escrow's commit cannot differ.
+    /// The module's `insert_letter` for a Character's letter: the row both write paths reach, so a
+    /// letter written by the single-database send and one written by the escrow's commit cannot
+    /// differ. It has HAS_BODY with a body and COPIED without one, like `Letter::from_character`,
+    /// and only COD_PAYMENT when it pays a price.
     #[allow(clippy::too_many_arguments)]
     fn write_mail(
         &self,
@@ -931,7 +933,15 @@ impl InMemoryStore {
         money: u32,
         cod: u32,
         item: &mail::AttachedItem,
+        cod_payment: bool,
     ) {
+        let check_flags = if cod_payment {
+            lyracore_shared::mail::CHECK_MASK_COD_PAYMENT
+        } else if body.is_empty() {
+            lyracore_shared::mail::CHECK_MASK_COPIED
+        } else {
+            lyracore_shared::mail::CHECK_MASK_HAS_BODY
+        };
         let mut mails = self.mails.lock().unwrap();
         let id = mails.iter().map(|(_, m)| m.id).max().unwrap_or(0) + 1;
         mails.push((
@@ -950,6 +960,7 @@ impl InMemoryStore {
                 item_soulbound: item.soulbound,
                 random_property_id: item.random_property_id,
                 created_at_secs: 1_000,
+                check_flags,
                 ..Default::default()
             },
         ));
@@ -1923,37 +1934,50 @@ impl WorldStore for InMemoryStore {
             None => Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL)),
         }
     }
-    /// Models the module's `apply_delete`: same merged not-found/not-yours refusal as mark-read.
+    /// Models the module's `apply_delete`: same merged not-found/not-yours refusal as mark-read,
+    /// and a priced mail is refused.
     fn mail_delete(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
         self.rec("mail_delete");
         let mut mails = self.mails.lock().unwrap();
-        let before = mails.len();
-        mails.retain(|(to, m)| !(*to == recipient_guid && m.id == mail_id));
-        if mails.len() == before {
+        let Some(at) = mails
+            .iter()
+            .position(|(to, m)| *to == recipient_guid && m.id == mail_id)
+        else {
             return Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL));
+        };
+        if mails[at].1.cod > 0 {
+            return Err(anyhow!(lyracore_shared::mail::COD_MAIL_UNDELETABLE));
         }
+        mails.remove(at);
         Ok(())
     }
     /// Models the module's `apply_return`: the SAME row, re-addressed to whoever sent it, with
     /// whatever it still carries (or nothing) travelling unchanged — except the cash-on-delivery
-    /// price, which is dropped, because the row is going back to whoever set it.
+    /// price, which is dropped, because the row is going back to whoever set it. Only a delivered
+    /// Character mail with a sender goes back, and only once.
     fn mail_return(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
         self.rec("mail_return");
         let mut mails = self.mails.lock().unwrap();
-        match mails
+        let now = mail::now_secs();
+        let Some((to, m)) = mails
             .iter_mut()
-            .find(|(to, m)| *to == recipient_guid && m.id == mail_id)
-        {
-            Some((to, m)) => {
-                let sender = m.sender_guid;
-                m.sender_guid = recipient_guid;
-                m.was_read = false;
-                m.cod = 0;
-                *to = sender;
-                Ok(())
-            }
-            None => Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL)),
+            .find(|(to, m)| *to == recipient_guid && m.id == mail_id && m.is_delivered(now))
+        else {
+            return Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL));
+        };
+        let lyracore_shared::mail::MailSender::Character(sender @ 1..) = m.sender() else {
+            return Err(anyhow!(lyracore_shared::mail::NO_SENDER_TO_RETURN_TO));
+        };
+        if m.check_flags & lyracore_shared::mail::CHECK_MASK_RETURNED != 0 {
+            return Err(anyhow!(lyracore_shared::mail::ALREADY_RETURNED));
         }
+        m.sender_guid = recipient_guid;
+        m.was_read = false;
+        m.cod = 0;
+        m.check_flags = lyracore_shared::mail::CHECK_MASK_RETURNED;
+        m.deliver_secs = now;
+        *to = sender;
+        Ok(())
     }
     /// Models the module's `apply_send`: the postage plus the attached coin leave the purse and the
     /// row is written, in ONE call — the single-database plane's one transaction. The id is
@@ -1987,6 +2011,7 @@ impl WorldStore for InMemoryStore {
             money,
             cod,
             &item,
+            false,
         );
         Ok(())
     }
@@ -1997,9 +2022,10 @@ impl WorldStore for InMemoryStore {
     fn mail_take_item(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
         let (item, settlement) = {
             let mails = self.mails.lock().unwrap();
+            let now = mail::now_secs();
             let Some((_, m)) = mails
                 .iter()
-                .find(|(to, m)| *to == recipient_guid && m.id == mail_id)
+                .find(|(to, m)| *to == recipient_guid && m.id == mail_id && m.is_delivered(now))
             else {
                 return Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL));
             };
@@ -2058,6 +2084,7 @@ impl WorldStore for InMemoryStore {
                 s.copper,
                 0,
                 &mail::AttachedItem::default(),
+                true,
             );
         }
         Ok(())
@@ -2076,9 +2103,10 @@ impl WorldStore for InMemoryStore {
         self.rec("mail_take_money");
         let money = {
             let mut mails = self.mails.lock().unwrap();
+            let now = mail::now_secs();
             let Some((_, m)) = mails
                 .iter_mut()
-                .find(|(to, m)| *to == recipient_guid && m.id == mail_id)
+                .find(|(to, m)| *to == recipient_guid && m.id == mail_id && m.is_delivered(now))
             else {
                 return Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL));
             };
@@ -2152,6 +2180,18 @@ impl WorldStore for InMemoryStore {
         if receipts.iter().any(|(id, _)| *id == escrow_id) {
             return Ok(());
         }
+        // A COD payment pays only a price its payer still owes on a delivered mail.
+        if cod_source_mail_id != 0 {
+            let now = mail::now_secs();
+            let owed = self.mails.lock().unwrap().iter().any(|(to, m)| {
+                m.id == cod_source_mail_id && *to == sender_guid && m.cod > 0 && m.is_delivered(now)
+            });
+            if !owed {
+                return Err(anyhow!(
+                    "mail {cod_source_mail_id} owes {sender_guid} no delivered price"
+                ));
+            }
+        }
         receipts.push((escrow_id, recipient_guid));
         drop(receipts);
         self.sent_mail.lock().unwrap().push((
@@ -2169,6 +2209,7 @@ impl WorldStore for InMemoryStore {
             money,
             cod,
             &item,
+            cod_source_mail_id != 0,
         );
         // The price stops being owed in the SAME call that delivers the payment for it — the
         // module clears it inside the commit's transaction, which is what makes a COD take charge
@@ -2207,9 +2248,10 @@ impl WorldStore for InMemoryStore {
         }
         let money = {
             let mut mails = self.mails.lock().unwrap();
+            let now = mail::now_secs();
             let Some((_, m)) = mails
                 .iter_mut()
-                .find(|(to, m)| *to == payee_guid && m.id == mail_id)
+                .find(|(to, m)| *to == payee_guid && m.id == mail_id && m.is_delivered(now))
             else {
                 return Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL));
             };
@@ -2262,9 +2304,10 @@ impl WorldStore for InMemoryStore {
         }
         let item = {
             let mut mails = self.mails.lock().unwrap();
+            let now = mail::now_secs();
             let Some((_, m)) = mails
                 .iter_mut()
-                .find(|(to, m)| *to == payee_guid && m.id == mail_id)
+                .find(|(to, m)| *to == payee_guid && m.id == mail_id && m.is_delivered(now))
             else {
                 return Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL));
             };

@@ -1,4 +1,5 @@
-//! Preserve plain items in Escrow created before Random Property fields existed.
+//! Preserve rows in Transfer Escrow written before a transported table grew columns: plain items
+//! from before Random Property fields, and mail from before the mail header.
 
 use std::collections::BTreeSet;
 
@@ -14,8 +15,10 @@ const FORMATS: &[(&str, &str)] = &[
         "game_character_buyback",
         "game_character_buyback@random-property-1",
     ),
-    ("game_mail", "game_mail@random-property-1"),
+    ("game_mail", "game_mail@mail-header-1"),
 ];
+/// The tag the previous Module wrote on `game_mail` rows, which lack the mail header columns.
+const RANDOM_PROPERTY_MAIL: &str = "game_mail@random-property-1";
 
 /// Older Modules require canonical payload names and refuse these tags before applying rows.
 pub(super) fn mark_current(payload: &mut [TableRows]) {
@@ -35,6 +38,10 @@ pub(super) fn prepare(payload: &[TableRows]) -> Result<Vec<TableRows>, String> {
         let mut entry = entry.clone();
         if let Some((table, _)) = FORMATS.iter().find(|(_, tagged)| *tagged == entry.table) {
             entry.table = (*table).to_owned();
+        } else if entry.table == RANDOM_PROPERTY_MAIL {
+            entry.rows = upgrade::<RandomPropertyMail, Mail>(&entry.rows)
+                .map_err(|error| format!("table {}: {error}", entry.table))?;
+            entry.table = "game_mail".to_owned();
         } else {
             entry.rows = match entry.table.as_str() {
                 "game_item_instance" => upgrade::<LegacyItemInstance, ItemInstance>(&entry.rows),
@@ -150,7 +157,7 @@ struct LegacyMail {
 
 impl From<LegacyMail> for Mail {
     fn from(row: LegacyMail) -> Self {
-        Self {
+        RandomPropertyMail {
             id: row.id,
             recipient_guid: row.recipient_guid,
             sender_guid: row.sender_guid,
@@ -166,6 +173,54 @@ impl From<LegacyMail> for Mail {
             was_read: row.was_read,
             created_at: row.created_at,
             random_property_id: 0,
+        }
+        .into()
+    }
+}
+
+/// `game_mail` before the mail header columns: a Character mail, visible since creation.
+#[derive(SpacetimeType)]
+struct RandomPropertyMail {
+    id: u64,
+    recipient_guid: u64,
+    sender_guid: u64,
+    subject: String,
+    body: String,
+    item_entry: u32,
+    item_stack_count: u32,
+    item_durability: u32,
+    item_enchant_id: u32,
+    item_soulbound: bool,
+    money: u32,
+    cod: u32,
+    was_read: bool,
+    created_at: Timestamp,
+    random_property_id: u32,
+}
+
+impl From<RandomPropertyMail> for Mail {
+    fn from(row: RandomPropertyMail) -> Self {
+        Self {
+            id: row.id,
+            recipient_guid: row.recipient_guid,
+            sender_guid: row.sender_guid,
+            subject: row.subject,
+            body: row.body,
+            item_entry: row.item_entry,
+            item_stack_count: row.item_stack_count,
+            item_durability: row.item_durability,
+            item_enchant_id: row.item_enchant_id,
+            item_soulbound: row.item_soulbound,
+            money: row.money,
+            cod: row.cod,
+            was_read: row.was_read,
+            created_at: row.created_at,
+            random_property_id: row.random_property_id,
+            sender_kind: 0,
+            sender_entry: 0,
+            check_flags: 0,
+            mail_template_id: 0,
+            deliver_micros: 0,
         }
     }
 }

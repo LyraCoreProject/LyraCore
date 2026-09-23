@@ -230,8 +230,12 @@ fn a_mail_with_no_body_advertises_text_id_zero() {
 
     let mails = mail::open_mailbox(world.as_ref(), Some(GINGER), MAILBOX).expect("the gate opens");
     let packet = codec::build_mail_list(&mails, 1_000);
-    let ids: Vec<u32> = packet.mails.iter().map(|m| m.item_text_id).collect();
-    assert_eq!(ids, vec![1, 0]);
+    let text_ids: Vec<(u32, u32)> = packet
+        .mails
+        .iter()
+        .map(|m| (m.message_id, m.item_text_id))
+        .collect();
+    assert_eq!(text_ids, vec![(3, 0), (1, 1)]);
 }
 fn seated_store() -> std::sync::Arc<InMemoryStore> {
     let store = std::sync::Arc::new(InMemoryStore {
@@ -2658,4 +2662,327 @@ fn a_refused_priced_take_reaches_the_client_as_not_enough_money() {
     server.join().unwrap();
     assert_eq!(store.purses.lock().unwrap()[0].1, PURSE, "charged nothing");
     assert_eq!(store.mails.lock().unwrap()[0].1.item_entry, sword().entry);
+}
+
+/// The same mail rows on both planes, as `(the session's store, the store that holds the rows)`:
+/// a sharded world handle whose rows live on realm-core, and a single-database store.
+fn both_planes(
+    mails: Vec<(u64, codec::MailView)>,
+) -> [(std::sync::Arc<InMemoryStore>, std::sync::Arc<InMemoryStore>); 2] {
+    let (realm, world, _calls) = sharded_mailbox();
+    *realm.mails.lock().unwrap() = mails.clone();
+    let single = unsharded_mailbox();
+    *single.mails.lock().unwrap() = mails;
+    [(world, realm), (single.clone(), single)]
+}
+fn listed(store: &InMemoryStore, guid: u64) -> Vec<wow_world_messages::vanilla::Mail> {
+    let mails = mail::open_mailbox(store, Some(guid), MAILBOX).expect("the gate opens");
+    codec::build_mail_list(&mails, mail::now_secs()).mails
+}
+fn listed_ids(store: &InMemoryStore, guid: u64) -> Vec<u32> {
+    listed(store, guid).iter().map(|m| m.message_id).collect()
+}
+
+#[test]
+fn a_read_mail_lists_with_the_read_bit_on_both_planes() {
+    for (store, _) in both_planes(seeded_mail()) {
+        assert_eq!(
+            listed(&store, GINGER)[0].checked_timestamp,
+            0,
+            "a legacy unread row lists as before"
+        );
+
+        mail::mark_read(store.as_ref(), Some(GINGER), MAILBOX, 1).expect("Ginger owns mail 1");
+
+        assert_eq!(listed(&store, GINGER)[0].checked_timestamp, 0x01);
+    }
+}
+
+#[test]
+fn a_posted_letter_lists_with_its_body_bit_and_an_empty_one_as_already_copied() {
+    let (_realm, world, _instances, _calls) = sharded_send();
+    for store in [world, unsharded_send()] {
+        post(store.as_ref(), "Trin").expect("a letter with a body");
+        mail::send(
+            store.as_ref(),
+            Some(GINGER),
+            MAILBOX,
+            "Trin",
+            "No letter".into(),
+            String::new(),
+            0,
+            NO_COD,
+            NO_ITEM,
+        )
+        .expect("a letter without one");
+
+        let checked: Vec<(String, u32)> = listed(&store, TRIN)
+            .into_iter()
+            .map(|m| (m.subject, m.checked_timestamp))
+            .collect();
+        assert_eq!(
+            checked,
+            vec![("No letter".into(), 0x04), ("Your sword".into(), 0x10)],
+            "COPIED without a body, HAS_BODY with one"
+        );
+    }
+}
+
+#[test]
+fn a_cod_payment_lists_under_the_letters_own_subject_with_the_payment_bit_on_both_planes() {
+    let (_realm, world, _calls, sharded_id) = delivered_cod();
+    let (single, single_id) = delivered_cod_unsharded();
+    for (store, mail_id) in [(world, sharded_id), (single, single_id)] {
+        mail::take_item(store.as_ref(), Some(TRIN), MAILBOX, mail_id).expect("Trin buys it");
+
+        let payment = &listed(&store, GINGER)[0];
+        assert_eq!(
+            payment.subject, "Your sword",
+            "the client adds \"COD Payment: \" itself"
+        );
+        assert_eq!(
+            payment.checked_timestamp, 0x08,
+            "COD_PAYMENT and nothing else"
+        );
+        assert_eq!(payment.money.as_int(), COD);
+    }
+}
+
+#[test]
+fn the_mailbox_lists_newest_first_on_both_planes() {
+    let at = |id, created_at_secs| {
+        (
+            GINGER,
+            codec::MailView {
+                created_at_secs,
+                ..mail(id, VIM, "Hello", "")
+            },
+        )
+    };
+    for (store, _) in both_planes(vec![at(1, 1_000), at(3, 3_000), at(4, 2_000)]) {
+        assert_eq!(listed_ids(&store, GINGER), vec![3, 4, 1]);
+    }
+}
+
+#[test]
+fn the_mailbox_lists_the_fifty_newest_mails_and_the_poll_still_sees_the_rest() {
+    let mails = (1..=60)
+        .map(|id| {
+            (
+                GINGER,
+                codec::MailView {
+                    created_at_secs: 1_000 + id as i64,
+                    was_read: id > 10,
+                    ..mail(id, VIM, "Hello", "")
+                },
+            )
+        })
+        .collect();
+    for (store, _) in both_planes(mails) {
+        let ids = listed_ids(&store, GINGER);
+        assert_eq!(ids.len(), 50);
+        assert_eq!((ids[0], ids[49]), (60, 11));
+        assert!(
+            mail::has_unread(store.as_ref(), Some(GINGER)).unwrap(),
+            "the ten oldest mails are unread and past the cap, and they still light the envelope"
+        );
+    }
+}
+
+fn arriving_in(secs: i64, id: u64) -> (u64, codec::MailView) {
+    (
+        GINGER,
+        codec::MailView {
+            deliver_secs: mail::now_secs() + secs,
+            money: 100,
+            item_entry: sword().entry,
+            item_stack_count: 1,
+            ..mail(id, VIM, "On its way", "see you soon")
+        },
+    )
+}
+
+#[test]
+fn a_mail_not_yet_delivered_is_absent_from_the_list_the_poll_and_the_body_read() {
+    for (store, _) in both_planes(vec![arriving_in(3_600, 1), arriving_in(-1, 5)]) {
+        assert_eq!(
+            listed_ids(&store, GINGER),
+            vec![5],
+            "only the mail whose delivery instant has passed"
+        );
+        assert_eq!(
+            mail::letter_body(store.as_ref(), Some(GINGER), 1).unwrap(),
+            None
+        );
+
+        mail::mark_read(store.as_ref(), Some(GINGER), MAILBOX, 5).unwrap();
+        assert!(
+            !mail::has_unread(store.as_ref(), Some(GINGER)).unwrap(),
+            "an unread mail still on its way does not light the envelope"
+        );
+    }
+}
+
+#[test]
+fn a_mail_not_yet_delivered_cannot_be_taken_from_or_returned() {
+    let rows = vec![arriving_in(3_600, 1)];
+    for (store, holder) in both_planes(rows.clone()) {
+        mail::take_money(store.as_ref(), Some(GINGER), MAILBOX, 1).expect_err("no copper yet");
+        mail::take_item(store.as_ref(), Some(GINGER), MAILBOX, 1).expect_err("no item yet");
+        mail::return_to_sender(store.as_ref(), Some(GINGER), MAILBOX, 1)
+            .expect_err("nothing to return yet");
+
+        assert_eq!(
+            *holder.mails.lock().unwrap(),
+            rows,
+            "every refusal left the mail as it was"
+        );
+        assert!(store.bags_of(GINGER).is_empty());
+    }
+}
+
+#[test]
+fn a_mail_with_nobody_to_take_it_back_cannot_be_returned_on_either_plane() {
+    use lyracore_shared::mail::MailSender;
+    let from = |id, sender: MailSender| {
+        let (sender_kind, sender_guid, sender_entry) = sender.columns();
+        (
+            GINGER,
+            codec::MailView {
+                sender_kind,
+                sender_guid,
+                sender_entry,
+                money: 100,
+                ..mail(id, 0, "Auction outbid", "")
+            },
+        )
+    };
+    let rows = vec![
+        from(1, MailSender::Character(0)),
+        from(3, MailSender::AuctionHouse(7)),
+        from(4, MailSender::Creature(11_811)),
+    ];
+    for (store, holder) in both_planes(rows.clone()) {
+        for id in [1, 3, 4] {
+            let err = mail::return_to_sender(store.as_ref(), Some(GINGER), MAILBOX, id)
+                .expect_err("nobody to return it to");
+            assert!(
+                err.to_string()
+                    .contains(lyracore_shared::mail::NO_SENDER_TO_RETURN_TO),
+                "mail {id}: {err}"
+            );
+        }
+        assert_eq!(
+            *holder.mails.lock().unwrap(),
+            rows,
+            "the copper stays with Ginger"
+        );
+    }
+}
+
+#[test]
+fn a_returned_mail_cannot_be_returned_again() {
+    for (store, _) in both_planes(seeded_mail()) {
+        mail::return_to_sender(store.as_ref(), Some(GINGER), MAILBOX, 1).expect("back to Vim");
+
+        let err = mail::return_to_sender(store.as_ref(), Some(VIM), MAILBOX, 1)
+            .expect_err("a mail goes back once");
+
+        assert!(
+            err.to_string()
+                .contains(lyracore_shared::mail::ALREADY_RETURNED),
+            "{err}"
+        );
+        assert_eq!(mail::mail_of(store.as_ref(), VIM).unwrap().len(), 1);
+    }
+}
+
+#[test]
+fn a_returned_mail_lists_as_returned_and_unread_with_no_price_and_a_fresh_countdown() {
+    let priced = (
+        GINGER,
+        codec::MailView {
+            was_read: true,
+            cod: COD,
+            item_entry: sword().entry,
+            item_stack_count: 1,
+            check_flags: lyracore_shared::mail::CHECK_MASK_HAS_BODY,
+            ..mail(1, VIM, "Your sword", "250 and it is yours")
+        },
+    );
+    for (store, _) in both_planes(vec![priced]) {
+        mail::return_to_sender(store.as_ref(), Some(GINGER), MAILBOX, 1).expect("declined");
+
+        let back = &listed(&store, VIM)[0];
+        assert_eq!(back.checked_timestamp, 0x02, "RETURNED, and unread");
+        assert_eq!(back.cash_on_delivery_amount, 0);
+        assert!(
+            back.expiration_time > 29.99,
+            "the 30-day clock restarts at the return, got {}",
+            back.expiration_time
+        );
+    }
+}
+
+#[test]
+fn a_priced_mail_cannot_be_deleted_on_either_plane() {
+    let (_realm, world, _calls, sharded_id) = delivered_cod();
+    let (single, single_id) = delivered_cod_unsharded();
+    for (store, mail_id) in [(world, sharded_id), (single, single_id)] {
+        let err = mail::delete(store.as_ref(), Some(TRIN), MAILBOX, mail_id)
+            .expect_err("a price is owed");
+
+        assert!(
+            err.to_string()
+                .contains(lyracore_shared::mail::COD_MAIL_UNDELETABLE),
+            "{err}"
+        );
+        assert_eq!(listed(&store, TRIN)[0].cash_on_delivery_amount, COD);
+    }
+}
+
+#[test]
+fn deleting_a_priced_mail_answers_the_internal_error_and_keeps_the_mail() {
+    let store = seated_store();
+    store.mails.lock().unwrap()[0].1.cod = COD;
+
+    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let server_store = store.clone();
+    let server = std::thread::spawn(move || {
+        run_world_session(server_end, server_store.as_ref()).unwrap();
+    });
+    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
+    CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    for _ in 0..WORLD_ENTRY_PACKETS {
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
+    }
+
+    wow_world_messages::vanilla::CMSG_MAIL_DELETE {
+        mailbox_id: Guid::new(MAILBOX),
+        mail_id: 1,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_SEND_MAIL_RESULT(m) => match m.action {
+            wow_world_messages::vanilla::SMSG_SEND_MAIL_RESULT_MailAction::Deleted { result2 } => {
+                assert_eq!(
+                    result2,
+                    wow_world_messages::vanilla::SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrInternalError
+                );
+            }
+            other => panic!("expected the Deleted action, got {other:?}"),
+        },
+        other => panic!("expected SMSG_SEND_MAIL_RESULT, got {other}"),
+    }
+
+    drop(client);
+    server.join().unwrap();
+    assert_eq!(
+        store.mails.lock().unwrap().len(),
+        1,
+        "the priced mail stays"
+    );
 }

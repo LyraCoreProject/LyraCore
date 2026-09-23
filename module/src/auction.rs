@@ -494,15 +494,17 @@ fn buyout_settlement_mail(
 }
 
 fn insert_auction_mail(ctx: &ReducerContext, mail: AuctionMail) {
-    crate::mail::insert_mail(
+    crate::mail::insert_letter(
         ctx,
-        mail.recipient_guid,
-        mail.sender_guid,
-        mail.subject.to_string(),
-        String::new(),
-        mail.money,
-        0,
-        &mail.item,
+        crate::mail::Letter::from_character(
+            mail.sender_guid,
+            mail.recipient_guid,
+            mail.subject.to_string(),
+            String::new(),
+            mail.money,
+            0,
+            mail.item,
+        ),
     );
 }
 
@@ -1739,15 +1741,17 @@ impl BidRefundSink for CtxBidMarket<'_> {
         {
             return Err(AuctionRefusal::Database);
         }
-        crate::mail::insert_mail(
+        crate::mail::insert_letter(
             self.ctx,
-            request.bidder_guid,
-            0,
-            "Auction bid refund".to_string(),
-            String::new(),
-            amount,
-            0,
-            &crate::items::ItemSnapshot::default(),
+            crate::mail::Letter::from_character(
+                0,
+                request.bidder_guid,
+                "Auction bid refund".to_string(),
+                String::new(),
+                amount,
+                0,
+                crate::items::ItemSnapshot::default(),
+            ),
         );
         row.deferred_refund = amount;
         self.ctx

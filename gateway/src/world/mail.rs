@@ -41,14 +41,26 @@ impl std::fmt::Display for SendRefusal {
         }
     }
 }
+/// The mailbox as its owner sees it, on whichever plane holds it. A mail whose delivery instant is
+/// still ahead is absent, so the list, the unread poll, the body read and every take skip it
+/// (cmangos `MailHandler.cpp:561`, `Player.cpp:3079-3096`).
 pub(crate) fn mail_of<St: WorldStore + ?Sized>(
     store: &St,
     self_guid: u64,
 ) -> Result<Vec<MailView>> {
-    match store.realm_store() {
-        Some(realm) => realm.mail_list(self_guid),
-        None => store.mail_list(self_guid),
-    }
+    let mails = match store.realm_store() {
+        Some(realm) => realm.mail_list(self_guid)?,
+        None => store.mail_list(self_guid)?,
+    };
+    let now = now_secs();
+    Ok(mails.into_iter().filter(|m| m.is_delivered(now)).collect())
+}
+/// Wall-clock seconds: the delivery filter's clock and the base of the list's expiry countdown.
+pub(crate) fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 pub(crate) fn open_mailbox<St: WorldStore + ?Sized>(
     store: &St,

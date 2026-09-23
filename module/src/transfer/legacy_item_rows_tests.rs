@@ -154,6 +154,126 @@ fn legacy_mail_decodes_multiple_variable_length_rows_without_guessing() {
 }
 
 #[test]
+fn mail_escrowed_before_the_mail_header_arrives_as_a_delivered_character_mail() {
+    let rows = vec![RandomPropertyMail {
+        id: 1,
+        recipient_guid: 73,
+        sender_guid: 91,
+        subject: "Your sword".to_owned(),
+        body: "left it at the inn".to_owned(),
+        item_entry: 509_0001,
+        item_stack_count: 1,
+        item_durability: 51,
+        item_enchant_id: 7748,
+        item_soulbound: false,
+        money: 173,
+        cod: 12,
+        was_read: true,
+        created_at: Timestamp::from_micros_since_unix_epoch(1234),
+        random_property_id: 1182,
+    }];
+    let arrived: Vec<Mail> = arrive(entry("game_mail@random-property-1", rows));
+    let row = &arrived[0];
+    assert_eq!(
+        (
+            row.recipient_guid,
+            row.sender_guid,
+            &*row.subject,
+            &*row.body
+        ),
+        (73, 91, "Your sword", "left it at the inn")
+    );
+    assert_eq!(
+        (row.item_entry, row.random_property_id, row.money, row.cod),
+        (509_0001, 1182, 173, 12)
+    );
+    assert!(row.was_read);
+    assert_eq!(
+        (
+            row.sender_kind,
+            row.sender_entry,
+            row.check_flags,
+            row.mail_template_id,
+            row.deliver_micros
+        ),
+        (0, 0, 0, 0, 0),
+        "a Character mail with no stored flags, visible since creation"
+    );
+}
+
+/// The encoded field names of `T`, in order.
+fn field_names<T: SpacetimeType>() -> Vec<String> {
+    use spacetimedb::sats::{typespace::TypespaceBuilder, AlgebraicType};
+    struct Inline;
+    impl TypespaceBuilder for Inline {
+        fn add(
+            &mut self,
+            _: std::any::TypeId,
+            _: Option<&'static str>,
+            make_ty: impl FnOnce(&mut Self) -> AlgebraicType,
+        ) -> AlgebraicType {
+            make_ty(self)
+        }
+    }
+    match T::make_type(&mut Inline) {
+        AlgebraicType::Product(row) => row
+            .elements
+            .iter()
+            .map(|e| e.name().map(|n| n.to_string()).unwrap_or_default())
+            .collect(),
+        other => panic!("a table row encodes as a product, got {other:?}"),
+    }
+}
+
+/// Transfer Escrow keeps `game_mail` rows as bytes, so a new column must come with a new tag in
+/// `FORMATS` and a struct for the shape before it. This pins the shape the current tag names.
+#[test]
+fn game_mail_has_the_shape_its_transfer_tag_names() {
+    let tag = FORMATS
+        .iter()
+        .find(|(table, _)| *table == "game_mail")
+        .map(|(_, tag)| *tag);
+    assert_eq!(
+        (tag, field_names::<Mail>()),
+        (
+            Some("game_mail@mail-header-1"),
+            [
+                "id",
+                "recipient_guid",
+                "sender_guid",
+                "subject",
+                "body",
+                "item_entry",
+                "item_stack_count",
+                "item_durability",
+                "item_enchant_id",
+                "item_soulbound",
+                "money",
+                "cod",
+                "was_read",
+                "created_at",
+                "random_property_id",
+                "sender_kind",
+                "sender_entry",
+                "check_flags",
+                "mail_template_id",
+                "deliver_micros",
+            ]
+            .map(String::from)
+            .to_vec()
+        ),
+        "game_mail changed shape. Escrowed rows in the old shape would no longer decode: add a new \
+         tag to FORMATS, decode the old tag with a struct of the old shape, then update this pin"
+    );
+    let previous = field_names::<RandomPropertyMail>();
+    assert_eq!(
+        previous[..],
+        field_names::<Mail>()[..previous.len()],
+        "the previous shape must be a prefix of the current one, since columns are END-appended"
+    );
+}
+
+#[test]
 fn current_item_formats_preserve_the_exact_encoded_values() {
     for (table, _) in FORMATS {
         let mut payload = vec![TableRows {

@@ -89,8 +89,10 @@ crate::character_owned!(delete, fn sweep_delete_game_mail_delivery(ctx, characte
     }
 });
 crate::character_owned!(not_transported, fn sweep_transfer_game_mail_delivery());
+/// A letter as its sender wrote it, with the postage paid for it. The commit turns it into a
+/// [`crate::mail::Letter`], which adds the header.
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub(crate) struct Letter {
+pub(crate) struct Draft {
     pub recipient_guid: u64,
     pub subject: String,
     pub body: String,
@@ -99,7 +101,7 @@ pub(crate) struct Letter {
     pub cod: u32,
 }
 
-impl Letter {
+impl Draft {
     pub(crate) fn fenced_copper(&self) -> u32 {
         self.money.saturating_add(self.postage)
     }
@@ -144,6 +146,11 @@ pub(crate) enum CommitPlan {
     Deliver,
 }
 
+const LEGACY_COD_PAYMENT_PREFIX: &str = "COD Payment: ";
+/// `priced` is the recipient and price of a delivered Mail.
+pub(crate) fn owes_price(priced: Option<(u64, u32)>, payer_guid: u64) -> bool {
+    matches!(priced, Some((recipient_guid, cod)) if recipient_guid == payer_guid && cod > 0)
+}
 pub(crate) fn plan_commit(receipted_for: Option<u64>, recipient_guid: u64) -> CommitPlan {
     match receipted_for {
         None => CommitPlan::Deliver,
@@ -230,12 +237,9 @@ pub(crate) trait ReapSink: EscrowLedger {
 }
 pub(crate) trait DeliverySink {
     fn receipt(&self, escrow_id: u64) -> Option<MailDelivery>;
-    fn deliver(
-        &mut self,
-        sender_guid: u64,
-        letter: &Letter,
-        item: &crate::items::ItemSnapshot,
-    ) -> u64;
+    fn deliver(&mut self, letter: crate::mail::Letter) -> u64;
+    /// The recipient and price of `mail_id`, if it is delivered.
+    fn priced_mail(&self, mail_id: u64) -> Option<(u64, u32)>;
     fn settle_cod(&mut self, mail_id: u64);
     fn file_receipt(&mut self, row: MailDelivery);
     fn now_micros(&self) -> i64;
@@ -375,22 +379,11 @@ impl DeliverySink for CtxDb<'_> {
     fn receipt(&self, escrow_id: u64) -> Option<MailDelivery> {
         self.ctx.db.game_mail_delivery().escrow_id().find(escrow_id)
     }
-    fn deliver(
-        &mut self,
-        sender_guid: u64,
-        letter: &Letter,
-        item: &crate::items::ItemSnapshot,
-    ) -> u64 {
-        crate::mail::insert_mail(
-            self.ctx,
-            letter.recipient_guid,
-            sender_guid,
-            letter.subject.clone(),
-            letter.body.clone(),
-            letter.money,
-            letter.cod,
-            item,
-        )
+    fn deliver(&mut self, letter: crate::mail::Letter) -> u64 {
+        crate::mail::insert_letter(self.ctx, letter)
+    }
+    fn priced_mail(&self, mail_id: u64) -> Option<(u64, u32)> {
+        crate::mail::delivered_mail(self.ctx, mail_id).map(|m| (m.recipient_guid, m.cod))
     }
     fn settle_cod(&mut self, mail_id: u64) {
         crate::mail::clear_mail_cod(self.ctx, mail_id);
@@ -406,14 +399,14 @@ pub(crate) fn apply_fence<S: FenceSink>(
     sink: &mut S,
     escrow_id: u64,
     sender_guid: u64,
-    letter: Letter,
+    draft: Draft,
     item_guid: u64,
     mail_id: u64,
 ) -> Result<(), String> {
     if escrow_id == 0 {
         return Err("escrow_id 0 is reserved (it is the \"no escrow\" sentinel)".to_string());
     }
-    let cost = letter.fenced_copper();
+    let cost = draft.fenced_copper();
     match plan_fence(
         sink.escrow(escrow_id)
             .map(|e| (e.sender_guid, e.money.saturating_add(e.postage))),
@@ -446,11 +439,11 @@ pub(crate) fn apply_fence<S: FenceSink>(
     sink.file_escrow(MailEscrow {
         escrow_id,
         sender_guid,
-        recipient_guid: letter.recipient_guid,
-        subject: letter.subject,
-        body: letter.body,
-        money: letter.money,
-        postage: letter.postage,
+        recipient_guid: draft.recipient_guid,
+        subject: draft.subject,
+        body: draft.body,
+        money: draft.money,
+        postage: draft.postage,
         created_micros,
         delivered: false,
         payout: false,
@@ -461,7 +454,7 @@ pub(crate) fn apply_fence<S: FenceSink>(
         item_enchant_id: item.enchant_id,
         item_soulbound: item.soulbound,
         random_property_id: item.random_property_id,
-        cod: letter.cod,
+        cod: draft.cod,
     });
     sink.arm_reaper();
     log::info!(
@@ -474,7 +467,7 @@ pub(crate) fn apply_commit<S: DeliverySink>(
     sink: &mut S,
     escrow_id: u64,
     sender_guid: u64,
-    letter: &Letter,
+    draft: &Draft,
     item: &crate::items::ItemSnapshot,
     cod_mail_id: u64,
 ) -> Result<(), String> {
@@ -483,7 +476,7 @@ pub(crate) fn apply_commit<S: DeliverySink>(
     }
     match plan_commit(
         sink.receipt(escrow_id).map(|r| r.recipient_guid),
-        letter.recipient_guid,
+        draft.recipient_guid,
     ) {
         CommitPlan::Replay => return Ok(()),
         CommitPlan::IdCollision => {
@@ -494,7 +487,43 @@ pub(crate) fn apply_commit<S: DeliverySink>(
         }
         CommitPlan::Deliver => {}
     }
-    let mail_id = sink.deliver(sender_guid, letter, item);
+    // A commit that settles another mail's price is that price's payment. It pays only a price the
+    // payer still owes on a Mail delivered on this plane's clock. Otherwise the payment stays in
+    // its fence, and the Gateway, whose clock can run ahead, cannot pay for an item the take
+    // fence will then refuse.
+    let pays_cod = cod_mail_id != 0;
+    if pays_cod && !owes_price(sink.priced_mail(cod_mail_id), sender_guid) {
+        return Err(format!(
+            "mail escrow {escrow_id}: mail {cod_mail_id} owes {sender_guid} no delivered price — \
+             holding the payment"
+        ));
+    }
+    let subject = if pays_cod {
+        // A payment fenced by the previous Gateway stored this prefix. The client adds it again
+        // for a COD_PAYMENT letter.
+        draft
+            .subject
+            .strip_prefix(LEGACY_COD_PAYMENT_PREFIX)
+            .unwrap_or(&draft.subject)
+            .to_string()
+    } else {
+        draft.subject.clone()
+    };
+    let letter = crate::mail::Letter::from_character(
+        sender_guid,
+        draft.recipient_guid,
+        subject,
+        draft.body.clone(),
+        draft.money,
+        draft.cod,
+        *item,
+    );
+    let letter = if pays_cod {
+        letter.into_cod_payment()
+    } else {
+        letter
+    };
+    let mail_id = sink.deliver(letter);
     if cod_mail_id != 0 {
         sink.settle_cod(cod_mail_id);
     }
@@ -502,12 +531,12 @@ pub(crate) fn apply_commit<S: DeliverySink>(
     sink.file_receipt(MailDelivery {
         escrow_id,
         mail_id,
-        recipient_guid: letter.recipient_guid,
+        recipient_guid: draft.recipient_guid,
         created_micros,
     });
     log::info!(
         "mail escrow {escrow_id}: committed as mail {mail_id} for recipient {}",
-        letter.recipient_guid
+        draft.recipient_guid
     );
     Ok(())
 }
@@ -800,7 +829,7 @@ pub fn realm_mail_fence(
         &mut CtxDb { ctx },
         escrow_id,
         sender_guid,
-        Letter {
+        Draft {
             recipient_guid,
             subject,
             body,
@@ -837,7 +866,7 @@ pub fn realm_mail_commit(
         &mut CtxDb { ctx },
         escrow_id,
         sender_guid,
-        &Letter {
+        &Draft {
             recipient_guid,
             subject,
             body,
@@ -1006,7 +1035,7 @@ mod tests {
     }
     #[test]
     fn the_fenced_total_is_the_coin_plus_the_postage_and_saturates() {
-        let letter = |money, postage| Letter {
+        let draft = |money, postage| Draft {
             recipient_guid: 1,
             subject: String::new(),
             body: String::new(),
@@ -1014,9 +1043,9 @@ mod tests {
             postage,
             cod: 0,
         };
-        assert_eq!(letter(0, 30).fenced_copper(), 30);
-        assert_eq!(letter(100, 30).fenced_copper(), 130);
-        assert_eq!(letter(u32::MAX, 30).fenced_copper(), u32::MAX);
+        assert_eq!(draft(0, 30).fenced_copper(), 30);
+        assert_eq!(draft(100, 30).fenced_copper(), 130);
+        assert_eq!(draft(u32::MAX, 30).fenced_copper(), u32::MAX);
     }
     #[test]
     fn a_commit_with_a_receipt_already_filed_writes_no_second_mail() {
@@ -1134,11 +1163,11 @@ mod tests {
             (
                 "impl DeliverySink for CtxDb<'_> {",
                 "{ fn receipt(&self, escrow_id: u64) -> Option<MailDelivery> { \
-                  self.ctx.db.game_mail_delivery().escrow_id().find(escrow_id) } fn deliver( \
-                  &mut self, sender_guid: u64, letter: &Letter, item: \
-                  &crate::items::ItemSnapshot, ) -> u64 { crate::mail::insert_mail( self.ctx, \
-                  letter.recipient_guid, sender_guid, letter.subject.clone(), \
-                  letter.body.clone(), letter.money, letter.cod, item, ) } fn settle_cod(&mut \
+                  self.ctx.db.game_mail_delivery().escrow_id().find(escrow_id) } fn \
+                  deliver(&mut self, letter: crate::mail::Letter) -> u64 { \
+                  crate::mail::insert_letter(self.ctx, letter) } fn priced_mail(&self, mail_id: \
+                  u64) -> Option<(u64, u32)> { crate::mail::delivered_mail(self.ctx, \
+                  mail_id).map(|m| (m.recipient_guid, m.cod)) } fn settle_cod(&mut \
                   self, mail_id: u64) { crate::mail::clear_mail_cod(self.ctx, mail_id); } fn \
                   file_receipt(&mut self, row: MailDelivery) { \
                   self.ctx.db.game_mail_delivery().insert(row); } fn now_micros(&self) -> i64 { \
@@ -1147,13 +1176,13 @@ mod tests {
             (
                 "pub fn realm_mail_fence(",
                 "{ require_operator(ctx)?; let sender_guid = crate::account_ownership::require_actor(ctx, request_actor)?; apply_fence( &mut CtxDb { ctx }, escrow_id, \
-                  sender_guid, Letter { recipient_guid, subject, body, money, postage, cod, }, \
+                  sender_guid, Draft { recipient_guid, subject, body, money, postage, cod, }, \
                   item_guid, mail_id, ) }",
             ),
             (
                 "pub fn realm_mail_commit(",
                 "{ require_operator(ctx)?; let sender_guid = crate::account_ownership::require_actor(ctx, request_actor)?; apply_commit( &mut CtxDb { ctx }, escrow_id, \
-                  sender_guid, &Letter { recipient_guid, subject, body, money, postage: 0, cod, \
+                  sender_guid, &Draft { recipient_guid, subject, body, money, postage: 0, cod, \
                   }, &crate::items::ItemSnapshot { entry: item_entry, stack_count: \
                   item_stack_count, durability: item_durability, enchant_id: item_enchant_id, \
                   soulbound: item_soulbound, random_property_id, }, cod_mail_id, ) }",

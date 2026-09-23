@@ -22,6 +22,11 @@ pub struct Mail {
     pub was_read: bool,
     pub created_at: __sdk::Timestamp,
     pub random_property_id: u32,
+    pub sender_kind: u8,
+    pub sender_entry: u32,
+    pub check_flags: u32,
+    pub mail_template_id: u32,
+    pub deliver_micros: i64,
 }
 
 impl __sdk::InModule for Mail {
@@ -47,6 +52,11 @@ pub struct MailCols {
     pub was_read: __sdk::__query_builder::Col<Mail, bool>,
     pub created_at: __sdk::__query_builder::Col<Mail, __sdk::Timestamp>,
     pub random_property_id: __sdk::__query_builder::Col<Mail, u32>,
+    pub sender_kind: __sdk::__query_builder::Col<Mail, u8>,
+    pub sender_entry: __sdk::__query_builder::Col<Mail, u32>,
+    pub check_flags: __sdk::__query_builder::Col<Mail, u32>,
+    pub mail_template_id: __sdk::__query_builder::Col<Mail, u32>,
+    pub deliver_micros: __sdk::__query_builder::Col<Mail, i64>,
 }
 
 impl __sdk::__query_builder::HasCols for Mail {
@@ -68,6 +78,11 @@ impl __sdk::__query_builder::HasCols for Mail {
             was_read: __sdk::__query_builder::Col::new(table_name, "was_read"),
             created_at: __sdk::__query_builder::Col::new(table_name, "created_at"),
             random_property_id: __sdk::__query_builder::Col::new(table_name, "random_property_id"),
+            sender_kind: __sdk::__query_builder::Col::new(table_name, "sender_kind"),
+            sender_entry: __sdk::__query_builder::Col::new(table_name, "sender_entry"),
+            check_flags: __sdk::__query_builder::Col::new(table_name, "check_flags"),
+            mail_template_id: __sdk::__query_builder::Col::new(table_name, "mail_template_id"),
+            deliver_micros: __sdk::__query_builder::Col::new(table_name, "deliver_micros"),
         }
     }
 }

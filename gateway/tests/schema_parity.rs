@@ -1050,7 +1050,7 @@ parity_test!(parity_game_character_contact, "game_character_contact", lyracore_m
 parity_test!(parity_game_mail, "game_mail", lyracore_module::Mail, bindings::mail_type::Mail, {
     id, recipient_guid, sender_guid, subject, body, item_entry, item_stack_count, item_durability,
     item_enchant_id, item_soulbound, money, cod, was_read, created_at,
-    random_property_id,
+    random_property_id, sender_kind, sender_entry, check_flags, mail_template_id, deliver_micros,
 });
 parity_test!(parity_game_mail_escrow, "game_mail_escrow", lyracore_module::MailEscrow, bindings::mail_escrow_type::MailEscrow, {
     escrow_id, sender_guid, recipient_guid, subject, body, money, postage, created_micros,
