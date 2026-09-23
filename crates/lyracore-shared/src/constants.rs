@@ -48,6 +48,10 @@ pub mod unit_dynamic_flags {
 
 /// `PLAYER_FLAGS` bits (vanilla 1.12, descriptor idx 190). Stored in `game_world_entity.player_flags`.
 pub mod player_flags {
+    /// `PLAYER_FLAGS_AFK` (0x02), cm:Player.h:370.
+    pub const AFK: u32 = 0x0002;
+    /// `PLAYER_FLAGS_DND` (0x04), cm:Player.h:371.
+    pub const DND: u32 = 0x0004;
     /// `PLAYER_FLAGS_GHOST` (0x10). The gameplay GHOST state set on Release Spirit: the
     /// player is dead-but-walking (can move/run to the corpse, can't act). Distinct from the ghost
     /// *render* — that's `unit_vis_flags::GHOST` in `UNIT_FIELD_BYTES_1`.
