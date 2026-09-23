@@ -542,6 +542,7 @@ pub mod game_quest_template_table;
 pub mod game_quest_text_table;
 pub mod game_race_info_table;
 pub mod game_ranged_impact_schedule_table;
+pub mod game_realm_chat_event_table;
 pub mod game_realm_table;
 pub mod game_region_assignment_table;
 pub mod game_region_load_table;
@@ -703,7 +704,6 @@ pub mod gw_movement_batch_reducer;
 pub mod gw_movement_update_reducer;
 pub mod gw_open_creature_loot_reducer;
 pub mod gw_open_taxi_reducer;
-pub mod gw_party_chat_reducer;
 pub mod gw_pet_command_reducer;
 pub mod gw_pick_lock_reducer;
 pub mod gw_player_login_reducer;
@@ -864,6 +864,9 @@ pub mod realm_auction_decide_bid_reducer;
 pub mod realm_auction_refund_bid_reducer;
 pub mod realm_auction_refund_listing_reducer;
 pub mod realm_auction_settle_listing_reducer;
+pub mod realm_chat_event_type;
+pub mod realm_chat_reducer;
+pub mod realm_chat_request_type;
 pub mod realm_group_op_reducer;
 pub mod realm_loot_op_reducer;
 pub mod realm_mail_commit_reducer;
@@ -984,6 +987,7 @@ pub mod spawn_condition_type;
 pub mod spawn_map_condition_type;
 pub mod spawn_zone_or_area_condition_type;
 pub mod speak_instruction_type;
+pub mod speaker_facts_type;
 pub mod speech_mode_type;
 pub mod spell_cast_event_type;
 pub mod spell_caster_role_type;
@@ -1592,6 +1596,7 @@ pub use game_quest_template_table::*;
 pub use game_quest_text_table::*;
 pub use game_race_info_table::*;
 pub use game_ranged_impact_schedule_table::*;
+pub use game_realm_chat_event_table::*;
 pub use game_realm_table::*;
 pub use game_region_assignment_table::*;
 pub use game_region_load_table::*;
@@ -1753,7 +1758,6 @@ pub use gw_movement_batch_reducer::gw_movement_batch;
 pub use gw_movement_update_reducer::gw_movement_update;
 pub use gw_open_creature_loot_reducer::gw_open_creature_loot;
 pub use gw_open_taxi_reducer::gw_open_taxi;
-pub use gw_party_chat_reducer::gw_party_chat;
 pub use gw_pet_command_reducer::gw_pet_command;
 pub use gw_pick_lock_reducer::gw_pick_lock;
 pub use gw_player_login_reducer::gw_player_login;
@@ -1914,6 +1918,9 @@ pub use realm_auction_decide_bid_reducer::realm_auction_decide_bid;
 pub use realm_auction_refund_bid_reducer::realm_auction_refund_bid;
 pub use realm_auction_refund_listing_reducer::realm_auction_refund_listing;
 pub use realm_auction_settle_listing_reducer::realm_auction_settle_listing;
+pub use realm_chat_event_type::RealmChatEvent;
+pub use realm_chat_reducer::realm_chat;
+pub use realm_chat_request_type::RealmChatRequest;
 pub use realm_group_op_reducer::realm_group_op;
 pub use realm_loot_op_reducer::realm_loot_op;
 pub use realm_mail_commit_reducer::realm_mail_commit;
@@ -2034,6 +2041,7 @@ pub use spawn_condition_type::SpawnCondition;
 pub use spawn_map_condition_type::SpawnMapCondition;
 pub use spawn_zone_or_area_condition_type::SpawnZoneOrAreaCondition;
 pub use speak_instruction_type::SpeakInstruction;
+pub use speaker_facts_type::SpeakerFacts;
 pub use speech_mode_type::SpeechMode;
 pub use spell_cast_event_type::SpellCastEvent;
 pub use spell_caster_role_type::SpellCasterRole;
@@ -3330,10 +3338,6 @@ pub enum Reducer {
         npc_guid: u64,
         request_id: u64,
     },
-    GwPartyChat {
-        request_actor: SessionActor,
-        text: String,
-    },
     GwPetCommand {
         request_actor: SessionActor,
         data: u32,
@@ -3672,6 +3676,10 @@ pub enum Reducer {
     RealmAuctionSettleListing {
         operation_id: u64,
         request_actor: SessionActor,
+    },
+    RealmChat {
+        request_actor: SessionActor,
+        request: RealmChatRequest,
     },
     RealmGroupOp {
         op: u8,
@@ -4279,7 +4287,6 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwMovementUpdate { .. } => "gw_movement_update",
             Reducer::GwOpenCreatureLoot { .. } => "gw_open_creature_loot",
             Reducer::GwOpenTaxi { .. } => "gw_open_taxi",
-            Reducer::GwPartyChat { .. } => "gw_party_chat",
             Reducer::GwPetCommand { .. } => "gw_pet_command",
             Reducer::GwPickLock { .. } => "gw_pick_lock",
             Reducer::GwPlayerLogin { .. } => "gw_player_login",
@@ -4363,6 +4370,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::RealmAuctionRefundBid { .. } => "realm_auction_refund_bid",
             Reducer::RealmAuctionRefundListing { .. } => "realm_auction_refund_listing",
             Reducer::RealmAuctionSettleListing { .. } => "realm_auction_settle_listing",
+            Reducer::RealmChat { .. } => "realm_chat",
             Reducer::RealmGroupOp { .. } => "realm_group_op",
             Reducer::RealmLootOp { .. } => "realm_loot_op",
             Reducer::RealmMailCommit { .. } => "realm_mail_commit",
@@ -6613,13 +6621,6 @@ Reducer::GwIgnoreTrade{
                 npc_guid: npc_guid.clone(),
                 request_id: request_id.clone(),
 }),
-            Reducer::GwPartyChat{
-                request_actor,
-                text,
-}             => __sats::bsatn::to_vec(&gw_party_chat_reducer::GwPartyChatArgs {
-                request_actor: request_actor.clone(),
-                text: text.clone(),
-}),
             Reducer::GwPetCommand{
                 request_actor,
                 data,
@@ -7225,6 +7226,13 @@ Reducer::PlayerbotsFixtureCommandApply{
 }             => __sats::bsatn::to_vec(&realm_auction_settle_listing_reducer::RealmAuctionSettleListingArgs {
                 operation_id: operation_id.clone(),
                 request_actor: request_actor.clone(),
+}),
+            Reducer::RealmChat{
+                request_actor,
+                request,
+}             => __sats::bsatn::to_vec(&realm_chat_reducer::RealmChatArgs {
+                request_actor: request_actor.clone(),
+                request: request.clone(),
 }),
             Reducer::RealmGroupOp{
                 op,
@@ -7944,6 +7952,7 @@ pub struct DbUpdate {
     game_race_info: __sdk::TableUpdate<RaceInfo>,
     game_ranged_impact_schedule: __sdk::TableUpdate<RangedImpactSchedule>,
     game_realm: __sdk::TableUpdate<Realm>,
+    game_realm_chat_event: __sdk::TableUpdate<RealmChatEvent>,
     game_region_assignment: __sdk::TableUpdate<RegionAssignment>,
     game_region_load: __sdk::TableUpdate<RegionLoad>,
     game_rest_state_event: __sdk::TableUpdate<RestStateEvent>,
@@ -8649,6 +8658,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_realm" => db_update
                     .game_realm
                     .append(game_realm_table::parse_table_update(table_update)?),
+                "game_realm_chat_event" => db_update.game_realm_chat_event.append(
+                    game_realm_chat_event_table::parse_table_update(table_update)?,
+                ),
                 "game_region_assignment" => db_update.game_region_assignment.append(
                     game_region_assignment_table::parse_table_update(table_update)?,
                 ),
@@ -9768,6 +9780,12 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.game_realm = cache
             .apply_diff_to_table::<Realm>("game_realm", &self.game_realm)
             .with_updates_by_pk(|row| &row.id);
+        diff.game_realm_chat_event = cache
+            .apply_diff_to_table::<RealmChatEvent>(
+                "game_realm_chat_event",
+                &self.game_realm_chat_event,
+            )
+            .with_updates_by_pk(|row| &row.id);
         diff.game_region_assignment = cache
             .apply_diff_to_table::<RegionAssignment>(
                 "game_region_assignment",
@@ -10621,6 +10639,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_realm" => db_update
                     .game_realm
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_realm_chat_event" => db_update
+                    .game_realm_chat_event
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_region_assignment" => db_update
                     .game_region_assignment
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -11405,6 +11426,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_realm" => db_update
                     .game_realm
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_realm_chat_event" => db_update
+                    .game_realm_chat_event
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_region_assignment" => db_update
                     .game_region_assignment
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -11812,6 +11836,7 @@ pub struct AppliedDiff<'r> {
     game_race_info: __sdk::TableAppliedDiff<'r, RaceInfo>,
     game_ranged_impact_schedule: __sdk::TableAppliedDiff<'r, RangedImpactSchedule>,
     game_realm: __sdk::TableAppliedDiff<'r, Realm>,
+    game_realm_chat_event: __sdk::TableAppliedDiff<'r, RealmChatEvent>,
     game_region_assignment: __sdk::TableAppliedDiff<'r, RegionAssignment>,
     game_region_load: __sdk::TableAppliedDiff<'r, RegionLoad>,
     game_rest_state_event: __sdk::TableAppliedDiff<'r, RestStateEvent>,
@@ -12802,6 +12827,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
             event,
         );
         callbacks.invoke_table_row_callbacks::<Realm>("game_realm", &self.game_realm, event);
+        callbacks.invoke_table_row_callbacks::<RealmChatEvent>(
+            "game_realm_chat_event",
+            &self.game_realm_chat_event,
+            event,
+        );
         callbacks.invoke_table_row_callbacks::<RegionAssignment>(
             "game_region_assignment",
             &self.game_region_assignment,
@@ -13967,6 +13997,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_race_info_table::register_table(client_cache);
         game_ranged_impact_schedule_table::register_table(client_cache);
         game_realm_table::register_table(client_cache);
+        game_realm_chat_event_table::register_table(client_cache);
         game_region_assignment_table::register_table(client_cache);
         game_region_load_table::register_table(client_cache);
         game_rest_state_event_table::register_table(client_cache);
@@ -14226,6 +14257,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_race_info",
         "game_ranged_impact_schedule",
         "game_realm",
+        "game_realm_chat_event",
         "game_region_assignment",
         "game_region_load",
         "game_rest_state_event",

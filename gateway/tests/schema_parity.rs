@@ -731,6 +731,12 @@ parity_test!(parity_game_whisper_event, "game_whisper_event", lyracore_module::W
 parity_test!(parity_game_system_message_event, "game_system_message_event", lyracore_module::SystemMessageEvent, bindings::system_message_event_type::SystemMessageEvent, {
     id, recipient_identity, recipient_guid, message, created_at,
 });
+// Realm Chat Lines, written on Realm-core with their whole audience. A drifted column here
+// mis-decodes every party line on every Gateway.
+parity_test!(parity_game_realm_chat_event, "game_realm_chat_event", lyracore_module::RealmChatEvent, bindings::realm_chat_event_type::RealmChatEvent, {
+    id, kind, speaker_guid, language, chat_tag, channel_name, message, recipients, ignorable,
+    created_at,
+});
 // Private (no per-player subscriber to decode these — every wire-visible roll transition still
 // rides `game_group_event`, unchanged). Subscribed so the gateway's loot-roll relay
 // (`world::loot::relay_tick`) can promote a world shard's staging roll onto realm-core and read
@@ -1154,6 +1160,7 @@ const MANIFEST_TABLES: &[&str] = &[
     "game_duel_event",
     "game_whisper_event",
     "game_system_message_event",
+    "game_realm_chat_event",
     "game_loot_roll",
     "game_loot_roll_vote",
     "game_guid_allocator",

@@ -16,6 +16,8 @@ use crate::{game_party_command_intent, game_party_command_receipt};
 // other event table's accessor trait rides that glob, so this is the one accessor here needing its
 // own import.
 use crate::rest::game_rest_state_event;
+// Imported by path for the same reason: `realm_chat` exports its row type by name only.
+use crate::realm_chat::game_realm_chat_event;
 // `game_movement_event` / `game_creature_move_event` are deliberately NOT imported: nothing writes
 // either table any more, so the reaper no longer touches them (see the notes in `reap_events`).
 
@@ -81,6 +83,7 @@ pub fn reap_movement_events(ctx: &ReducerContext, _schedule: EventReaperSchedule
     reap!(game_channel_event); // channel lines (065)
     reap!(game_emote_event); // emote broadcast (text + animation)
     reap!(game_whisper_event); // private whisper lines (RLS-scoped)
+    reap!(game_realm_chat_event); // Realm Chat Lines
     reap!(game_system_message_event); // private Package-originated System Messages
     reap!(game_addon_message); // addon-bridge UI messages (184, RLS-scoped)
     reap!(game_roll_event); // /roll broadcast results

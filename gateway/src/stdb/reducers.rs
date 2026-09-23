@@ -13,9 +13,11 @@ use super::connection::{call_reducer, recv_reducer_on, reducer_refusal_reason, C
 use super::views::entity_view;
 use crate::world::party::{AdmittedCompanionCommand, CompanionCommandOutcome, PartyOutcome};
 use crate::world::{
-    ContactOutcome, ItemActionResult, LootActionStatus, LootWindowRefusal, LootWindowRequestStatus,
+    ChatOutcome, ContactOutcome, ItemActionResult, LootActionStatus, LootWindowRefusal,
+    LootWindowRequestStatus,
 };
 use lyracore_shared::auction::AuctionRefusal;
+use lyracore_shared::chat::ChatRefusal;
 use lyracore_shared::group::GroupRefusal;
 use lyracore_shared::item::ItemRefusal;
 use lyracore_shared::loot::{LootBoundaryFailure, LootRefusal};
@@ -1783,22 +1785,29 @@ impl Coordinator {
         )
     }
 
-    /// `CMSG_MESSAGECHAT` Party (`/p`) — over the coordinator connection so the module
-    /// attributes the line (and its group-membership check) to the caller.
-    pub fn party_chat(
+    /// `realm_chat`: commit one Realm Chat Line on Realm-core, or on the one database of an
+    /// unsharded Realm. The Module applies every chat Gate. The speaker's name stays here.
+    pub fn realm_chat(
         &self,
-        _account_id: u64,
-        actor_guid: u64,
-        message: String,
-    ) -> Result<PartyOutcome> {
-        if actor_guid == 0 {
-            return Err(anyhow!("party_chat: actor_guid unresolved"));
-        }
-        let coord = self.0.call_pipe();
-        party_outcome(call_reducer!(
-            coord.conn.reducers,
-            "gw_party_chat",
-            gw_party_chat_then(self.session_actor(actor_guid), message)
+        speaker_guid: u64,
+        request: crate::world::RealmChatRequest,
+    ) -> Result<ChatOutcome> {
+        let realm = self.realm_core()?;
+        let request = RealmChatRequest {
+            kind: request.kind,
+            language: request.language,
+            channel_name: request.channel_name,
+            target_guid: request.target_guid,
+            message: request.message,
+            speaker: SpeakerFacts {
+                race: request.speaker.race,
+                chat_tag: request.speaker.chat_tag,
+            },
+        };
+        chat_outcome(call_reducer!(
+            realm.0.call_pipe().conn.reducers,
+            "realm_chat",
+            realm_chat_then(realm.session_actor(speaker_guid), request)
         ))
     }
 
@@ -1811,10 +1820,10 @@ impl Coordinator {
     /// Send one classified command request to this Home Shard. The Module combines the conveyed
     /// Account authority with its own Character GM level and remains the final Gate.
     /// Deliberately does NOT use the `call_reducer!` macro: that macro wraps a module `Err` as
-    /// `"{what} reducer failed: {e}"` (fine when a caller only substring-matches it, like `party_chat`'s
-    /// `NOT_IN_GROUP` check), but the Say handler relays this `Err`'s text VERBATIM to the sender as a
-    /// system chat line — a raw `"permission denied"` / `"unknown command: .foo"` must reach the client
-    /// with no wrapper prefix.
+    /// `"{what} reducer failed: {e}"` (fine when a caller only reads its Refusal tag), but the Say
+    /// handler relays this `Err`'s text VERBATIM to the sender as a system chat line — a raw
+    /// `"permission denied"` / `"unknown command: .foo"` must reach the client with no wrapper
+    /// prefix.
     pub(crate) fn request_gm_command(
         &self,
         actor_guid: u64,
@@ -3540,6 +3549,29 @@ mod visibility_receipt_tests {
 }
 
 #[cfg(test)]
+mod realm_chat_routing_tests {
+    /// Party membership, and every later chat audience, is authoritative on Realm-core. A line sent
+    /// to the session's own Home Shard reads that Shard's mirror and is delivered by no Relay on a
+    /// sharded Realm. No Fake reaches the Coordinator, so the routing is pinned in source.
+    #[test]
+    fn realm_chat_runs_on_the_realm_core_handle() {
+        let body = crate::test_scan::code_of(include_str!("reducers.rs"), "pub fn realm_chat(");
+        let body: String = body.split_whitespace().collect();
+        assert!(
+            body.contains("letrealm=self.realm_core()?;")
+                && body.contains("realm.0.call_pipe().conn.reducers,\"realm_chat\",")
+                && body.contains("realm_chat_then(realm.session_actor(speaker_guid),request)"),
+            "`Coordinator::realm_chat` no longer calls the reducer on the Realm-core handle. \
+             Body was:\n{body}"
+        );
+        assert!(
+            !body.contains("self.0.call_pipe()"),
+            "`Coordinator::realm_chat` must not call the session's own Home Shard"
+        );
+    }
+}
+
+#[cfg(test)]
 mod taxi_reply_tests {
     use super::*;
 
@@ -3804,6 +3836,18 @@ fn resolved_item_actor(operation: &str, actor_guid: u64) -> Option<u64> {
         return None;
     }
     Some(actor_guid)
+}
+
+/// The Module's typed chat Refusal. Only a reducer the Module rejected carries a tag; a timeout,
+/// transport, or SDK failure stays an error with an unknown outcome.
+fn chat_outcome(result: Result<()>) -> Result<ChatOutcome> {
+    match result {
+        Ok(()) => Ok(ChatOutcome::Delivered),
+        Err(error) => match reducer_refusal_reason(&error).and_then(ChatRefusal::parse_tag) {
+            Some(refusal) => Ok(ChatOutcome::Refused(refusal)),
+            None => Err(error),
+        },
+    }
 }
 
 /// The Module's typed party Refusal. Only a reducer the Module rejected carries a tag; a timeout,

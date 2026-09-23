@@ -1,8 +1,9 @@
 use super::handlers::{
-    AuctionActionStore, AuctionInteraction, CastStore, DuelActionStore, ItemActionStore,
-    LootWindowRefusal, LootWindowRequestStatus, LootWindowStore, MeleeActionStore, MemberPresence,
-    MemberShardCache, MemberSnapshot, MemberStatsStore, QuestActionStore, TaxiActionStore,
-    VendorActionStore, WeatherStore,
+    AuctionActionStore, AuctionInteraction, CastStore, ChatActionStore, ChatOutcome,
+    DuelActionStore, ItemActionStore, LootWindowRefusal, LootWindowRequestStatus, LootWindowStore,
+    MeleeActionStore, MemberPresence, MemberShardCache, MemberSnapshot, MemberStatsStore,
+    QuestActionStore, RealmChatRequest, SpeakerFacts, TaxiActionStore, VendorActionStore,
+    WeatherStore,
 };
 use super::party::PartyOutcome;
 use super::*;
@@ -360,13 +361,12 @@ struct InMemoryStore {
     /// NAME as the pre-realm-core path passes it (the module resolves it). The single-database plane's
     /// byte-identity is asserted against this.
     whispers: std::sync::Mutex<Vec<(String, String)>>,
-    /// When set, `party_chat` answers this reducer error — a `GroupRefusal` tag becomes a Refusal,
-    /// anything else stays a failure. `NotInGroup`'s tag drives the
-    /// `SMSG_PARTY_COMMAND_RESULT(NotInGroup)` mapping.
-    party_chat_error: Option<String>,
-    /// Recorded `party_chat` messages — the dispatch test asserts the RIGHT text
-    /// reached the reducer call.
-    party_chats: std::sync::Mutex<Vec<String>>,
+    /// What `speaker_facts` answers for every speaker. `None` models a speaker with no live entity.
+    speaker_facts: Option<SpeakerFacts>,
+    /// What `realm_chat` answers. `None` delivers.
+    realm_chat_outcome: Option<ChatOutcome>,
+    /// Recorded `realm_chat` requests, with the speaker guid the session authenticated.
+    realm_chats: std::sync::Mutex<Vec<(u64, RealmChatRequest)>>,
     /// When set, `gm_command` returns this error — e.g. `"permission denied"` to
     /// drive the Say-handler's `Err` → self-only `SMSG_MESSAGECHAT` System relay.
     gm_command_error: Option<String>,
@@ -2701,20 +2701,6 @@ impl WorldStore for InMemoryStore {
             None => Ok(()),
         }
     }
-    fn party_chat(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        message: String,
-    ) -> Result<PartyOutcome> {
-        match &self.party_chat_error {
-            Some(e) => faked_party(e),
-            None => {
-                self.party_chats.lock().unwrap().push(message);
-                Ok(PartyOutcome::Ran)
-            }
-        }
-    }
     fn gm_command(&self, account_name: &str, _self_guid: u64, text: String) -> Result<()> {
         if let Some(alpha_test_tools) = &self.gm_alpha_test_tools {
             let authorized = alpha_test_tools.load(std::sync::atomic::Ordering::SeqCst);
@@ -3845,6 +3831,20 @@ impl MeleeActionStore for InMemoryStore {
     fn stop_attack(&self, _account_id: u64, self_guid: u64) -> Result<()> {
         self.stop_attacks.lock().unwrap().push(self_guid);
         Ok(())
+    }
+}
+
+impl ChatActionStore for InMemoryStore {
+    fn speaker_facts(&self, _speaker_guid: u64) -> Result<Option<SpeakerFacts>> {
+        Ok(self.speaker_facts.clone())
+    }
+
+    fn realm_chat(&self, speaker_guid: u64, request: RealmChatRequest) -> Result<ChatOutcome> {
+        self.realm_chats
+            .lock()
+            .unwrap()
+            .push((speaker_guid, request));
+        Ok(self.realm_chat_outcome.unwrap_or(ChatOutcome::Delivered))
     }
 }
 
@@ -6542,6 +6542,7 @@ fn every_group_refusal_reaches_the_client_as_one_party_result() {
             GroupRefusal::NotLeader => PartyResult::NotLeader,
             GroupRefusal::NotInGroup => PartyResult::NotInGroup,
             GroupRefusal::TargetNotInGroup => PartyResult::TargetNotInGroup,
+            GroupRefusal::WrongFaction => PartyResult::PlayerWrongFaction,
             _ => PartyResult::BadPlayerName,
         };
         let mut s = quest_store();
@@ -10193,16 +10194,25 @@ fn messagechat_guild_is_dropped() {
     );
 }
 
+fn human_speaker() -> SpeakerFacts {
+    SpeakerFacts {
+        race: 1,
+        chat_tag: 0,
+        name: String::new(),
+    }
+}
+
 #[test]
-fn messagechat_party_from_a_grouped_caller_routes_to_party_chat() {
-    // A grouped caller's `/p` reaches the module's `party_chat` reducer with the
-    // typed text; no reply on success (the caller sees their own line via the SAME per-recipient
-    // relay a real member would get — the echo the module pushes, not a gateway-built reply).
-    let store = std::sync::Arc::new(quest_store());
+fn messagechat_party_becomes_one_realm_chat_request_from_the_sessions_character() {
+    // The session's `/p` reaches the Realm Chat path with the guid it entered the world with. No
+    // reply on success: the speaker hears the line through the Relay like every other member.
+    let mut s = quest_store();
+    s.speaker_facts = Some(human_speaker());
+    let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
     CMSG_MESSAGECHAT {
         chat_type: CMSG_MESSAGECHAT_ChatType::Party,
-        language: Language::Universal,
+        language: Language::Common,
         message: "form up".into(),
     }
     .write_encrypted_client(&mut client, &mut c_enc)
@@ -10218,18 +10228,26 @@ fn messagechat_party_from_a_grouped_caller_routes_to_party_chat() {
     }
     drop(client);
     server.join().unwrap();
-    assert_eq!(
-        store.party_chats.lock().unwrap().as_slice(),
-        &["form up".to_string()]
+    let requests = store.realm_chats.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    let (speaker_guid, request) = &requests[0];
+    assert_eq!(*speaker_guid, 1);
+    assert_eq!(request.kind, lyracore_shared::chat::chat_kind::PARTY);
+    assert_eq!(request.language, 7);
+    assert_eq!(request.message, "form up");
+    assert!(
+        store.chats.lock().unwrap().is_empty(),
+        "a party line never becomes a say line"
     );
 }
 
 #[test]
 fn messagechat_party_from_an_ungrouped_caller_replies_not_in_group() {
-    // The module's NotInGroup Refusal maps to the SAME SMSG_PARTY_COMMAND_RESULT(NotInGroup) line
-    // `group_leave`/`group_uninvite` already use for this exact condition.
     let mut s = quest_store();
-    s.party_chat_error = Some(GroupRefusal::NotInGroup.as_tag().to_string());
+    s.speaker_facts = Some(human_speaker());
+    s.realm_chat_outcome = Some(ChatOutcome::Refused(
+        lyracore_shared::chat::ChatRefusal::NotInGroup,
+    ));
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
     CMSG_MESSAGECHAT {
@@ -10247,38 +10265,6 @@ fn messagechat_party_from_an_ungrouped_caller_replies_not_in_group() {
             );
         }
         other => panic!("expected SMSG_PARTY_COMMAND_RESULT(NotInGroup), got {other}"),
-    }
-    drop(client);
-    server.join().unwrap();
-    assert!(
-        store.party_chats.lock().unwrap().is_empty(),
-        "a rejected /p never records a message"
-    );
-}
-
-#[test]
-fn messagechat_party_other_rejections_are_silently_dropped() {
-    // Not-in-world / empty-message rejections (the send_chat-style failures) get NO reply, matching
-    // say/yell — only "not in a group" gets a packet back.
-    let mut s = quest_store();
-    s.party_chat_error = Some("speaker not in world".to_string());
-    let store = std::sync::Arc::new(s);
-    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_MESSAGECHAT {
-        chat_type: CMSG_MESSAGECHAT_ChatType::Party,
-        language: Language::Universal,
-        message: "x".into(),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    CMSG_QUESTGIVER_STATUS_QUERY {
-        guid: Guid::new(50),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
-        ServerOpcodeMessage::SMSG_QUESTGIVER_STATUS(_) => {} // nothing was sent for the rejection
-        other => panic!("expected the sentinel (silently dropped), got {other}"),
     }
     drop(client);
     server.join().unwrap();

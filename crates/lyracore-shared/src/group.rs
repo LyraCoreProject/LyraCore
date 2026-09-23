@@ -27,38 +27,10 @@ pub mod event_kind {
     // kind-byte range so a future group-event kind can never collide with a loot-roll kind sharing
     // the same table.
     /// Reserved range start for `crate::loot_roll::event_kind` — kinds `4..=8` are loot-roll/money-
-    /// share kinds relayed through `game_group_event`, not group-membership kinds. Any FUTURE
-    /// group-membership kind must start at 10+ (9 is taken — see `PARTY_CHAT` below).
+    /// share kinds relayed through `game_group_event`, not group-membership kinds. Kinds 10 and 11
+    /// are quest share (`crate::quest::share_event_kind`), so a new kind on this table starts at 12.
     pub const LOOT_ROLL_RESERVED_START: u8 = 4;
-    /// Work-item 199: a party (`/p`) chat line, one row per recipient (every OTHER group member
-    /// plus an echo to the sender) → `SMSG_MESSAGECHAT` with `ChatType::Party`. `other_guid`/
-    /// `other_name` (auto-resolved by `push_event`) = the SPEAKER; `payload` = the message text
-    /// via `encode_party_chat`. Reuses this SAME per-recipient relay for the identical reason the
-    /// roll/master-loot/money-share kinds do (one recipient, a kind byte, a small payload) — the
-    /// PRODUCER is `chat.rs` (a social-tier concern), not `group.rs`, but the byte still lives here
-    /// since it shares this table's one kind-byte space with membership + loot-roll. Next free slot
-    /// after `crate::loot_roll::event_kind::MONEY_SHARE` (8); any FUTURE new kind on this table
-    /// (membership, loot-roll, or otherwise) must start at 10+.
-    pub const PARTY_CHAT: u8 = 9;
-}
-
-/// Encode a `PARTY_CHAT` payload: just the raw message text. Unlike `encode_roster`'s multi-field
-/// grammar, there is nothing else to combine — the speaker's guid/name already ride
-/// `GroupEvent.other_guid`/`other_name` (resolved by `push_event`) — so this is a pass-through, kept
-/// as a named function (rather than writing `row.payload` directly) for symmetry with the other
-/// per-kind payload helpers (`encode_money_share` etc.) and so a future second field has one call
-/// site to touch. Deliberately does NOT strip delimiter characters the way `encode_roster` strips
-/// `|`/`;`/`,` from names — those are reserved for THAT kind's multi-field grammar; a party chat
-/// payload is the sole field, so a message containing them must survive verbatim.
-pub fn encode_party_chat(message: &str) -> String {
-    message.to_string()
-}
-
-/// Decode a `PARTY_CHAT` payload back to the message text. Never fails (any string is a valid
-/// message) — `Option` only for call-site symmetry with the other decoders, all of which DO fail
-/// closed on malformed input.
-pub fn decode_party_chat(payload: &str) -> Option<String> {
-    Some(payload.to_string())
+    // Kind 9 was party chat, now a Realm Chat Line. It is retired and never reused.
 }
 
 /// The REALM-CORE party ops (issue #22, group slice): the `op` byte of the single operator-gated
@@ -151,10 +123,13 @@ pub enum GroupRefusal {
     IntentAlreadyClaimed,
     /// The Package has suppressed session-less actions for this Character.
     ActionSuppressed,
+    /// The invited Character belongs to the other team. Vanilla's default refuses a party across
+    /// factions (cm:GroupHandler.cpp:80). The Gateway applies this Gate realm-wide.
+    WrongFaction,
 }
 
 impl GroupRefusal {
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 16] = [
         Self::ActorUnavailable,
         Self::InviteSelf,
         Self::NoSuchPlayer,
@@ -170,6 +145,7 @@ impl GroupRefusal {
         Self::InvalidLootRules,
         Self::IntentAlreadyClaimed,
         Self::ActionSuppressed,
+        Self::WrongFaction,
     ];
 
     pub fn as_tag(self) -> &'static str {
@@ -189,6 +165,7 @@ impl GroupRefusal {
             Self::InvalidLootRules => "group:invalid_loot_rules",
             Self::IntentAlreadyClaimed => "group:intent_already_claimed",
             Self::ActionSuppressed => "group:action_suppressed",
+            Self::WrongFaction => "group:wrong_faction",
         }
     }
 
@@ -320,44 +297,6 @@ mod tests {
                                                        // the grammar treats it as a bool flag, not an enum, so garbage there silently means "offline".
         let (.., members) = decode_roster("2,3,2,0|5,Bob,maybe").unwrap();
         assert_eq!(members[0], (5, "Bob".to_string(), false));
-    }
-
-    // ---- Party chat (work-item 199) ----
-
-    /// Unlike `encode_roster`'s multi-field grammar, a party-chat payload has exactly one field —
-    /// so, unlike a hostile roster NAME, delimiter characters in the MESSAGE survive verbatim rather
-    /// than being stripped (there is no frame to protect: nothing else shares the payload string).
-    #[test]
-    fn party_chat_round_trips_without_stripping_delimiter_characters() {
-        let message = "df|s;d,fsd — hi!".to_string();
-        let wire = encode_party_chat(&message);
-        assert_eq!(
-            wire, message,
-            "no escaping should be applied — it's the sole payload field"
-        );
-        assert_eq!(decode_party_chat(&wire), Some(message));
-    }
-
-    #[test]
-    fn party_chat_decode_never_fails_closed() {
-        // Unlike every other decoder on this table, an empty/arbitrary string is a VALID message —
-        // there is no grammar to violate.
-        assert_eq!(decode_party_chat(""), Some(String::new()));
-        assert_eq!(
-            decode_party_chat("anything at all"),
-            Some("anything at all".to_string())
-        );
-    }
-
-    /// Work-item 199: `PARTY_CHAT` (9) is the next free slot after the loot-roll reserved range and
-    /// must not collide with any group-membership kind (0-3) or loot-roll/money-share kind (4-8).
-    #[test]
-    fn party_chat_kind_is_the_next_free_slot_after_the_loot_roll_range() {
-        assert_eq!(
-            event_kind::PARTY_CHAT,
-            event_kind::LOOT_ROLL_RESERVED_START + 5
-        );
-        assert_eq!(event_kind::PARTY_CHAT, 9);
     }
 
     // ---- Realm-core party ops (issue #22, group slice) ----

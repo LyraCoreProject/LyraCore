@@ -90,6 +90,7 @@ pub(crate) mod character_owned_tripwire {
                 "game_combat_event",
                 "game_emote_event",
                 "game_group_event",
+                "game_realm_chat_event",
                 "game_roll_event",
                 "game_spell_cast_event",
                 "game_spell_impact_event",

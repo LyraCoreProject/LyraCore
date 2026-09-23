@@ -285,6 +285,7 @@ fn party_result_for(refusal: GroupRefusal) -> PartyResult {
         GroupRefusal::NotLeader => PartyResult::NotLeader,
         GroupRefusal::NotInGroup => PartyResult::NotInGroup,
         GroupRefusal::TargetNotInGroup => PartyResult::TargetNotInGroup,
+        GroupRefusal::WrongFaction => PartyResult::PlayerWrongFaction,
         GroupRefusal::ActorUnavailable
         | GroupRefusal::InviteSelf
         | GroupRefusal::NoSuchPlayer
@@ -380,7 +381,7 @@ fn resolve_del_contact<St: WorldStore + ?Sized>(
 mod tests {
     use super::*;
 
-    /// The five conditions vanilla has a code for keep their own code; the rest share the one
+    /// The six conditions vanilla has a code for keep their own code; the rest share the one
     /// visible fallback line rather than being swallowed.
     #[test]
     fn each_group_refusal_renders_its_own_party_result() {
@@ -391,6 +392,7 @@ mod tests {
                 GroupRefusal::NotLeader => PartyResult::NotLeader,
                 GroupRefusal::NotInGroup => PartyResult::NotInGroup,
                 GroupRefusal::TargetNotInGroup => PartyResult::TargetNotInGroup,
+                GroupRefusal::WrongFaction => PartyResult::PlayerWrongFaction,
                 _ => PartyResult::BadPlayerName,
             };
             assert_eq!(party_result_for(refusal), expected, "{refusal:?}");

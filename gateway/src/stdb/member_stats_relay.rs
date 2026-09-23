@@ -115,6 +115,7 @@ mod tests {
             explored: Mutex::new(ExplorationReplay::default()),
             motion_pending: Arc::new(MotionPending::default()),
             member_stats: Default::default(),
+            ignored: Mutex::default(),
         })
     }
 

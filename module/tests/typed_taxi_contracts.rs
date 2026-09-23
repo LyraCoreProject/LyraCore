@@ -172,11 +172,6 @@ fn taxi_cases() -> Vec<(&'static str, &'static [&'static str], &'static str)> {
             "group:actor_unavailable",
         ),
         (
-            "gw_party_chat",
-            &[SESSION_ACTOR, "\"taxi\""],
-            "group:actor_unavailable",
-        ),
-        (
             "gw_group_invite",
             &[SESSION_ACTOR, "2"],
             "group:actor_unavailable",

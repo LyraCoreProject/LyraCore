@@ -756,19 +756,6 @@ pub fn gw_send_whisper(
     crate::chat::apply_send_whisper(ctx, sender, target_name, message)
 }
 
-/// [`crate::chat::apply_party_chat`] with the speaker named by guid — `/p`.
-#[reducer]
-pub fn gw_party_chat(
-    ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
-    text: String,
-) -> Result<(), String> {
-    require_operator(ctx)?;
-    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
-    let sender = group_actor(ctx, actor_guid)?;
-    crate::chat::apply_party_chat(ctx, sender, text)
-}
-
 /// [`crate::chat::apply_join_channel`] with the joiner named by guid.
 #[reducer]
 pub fn gw_join_channel(

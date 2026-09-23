@@ -82,6 +82,7 @@ impl PlayerSubscriptions {
             explored: Mutex::new(world_view::ExplorationReplay::default()),
             motion_pending: Arc::new(world_view::MotionPending::default()),
             member_stats: Default::default(),
+            ignored: Mutex::default(),
         });
         view.add_viewer_on_shard(
             viewer.clone(),
@@ -2155,24 +2156,6 @@ pub(crate) fn group_event_outbound(
             codec::build_group_decline(row.other_name.clone()),
         ))),
         group_kind::DESTROYED => Some(ServerOpcodeMessage::SMSG_GROUP_DESTROYED),
-        // A party (`/p`) chat line, one row per recipient (every OTHER member
-        // + an echo to the sender — both pushed by `module/src/chat.rs::party_chat`).
-        // `row.other_guid` is the SPEAKER (resolved/pushed by `group::push_event`, same
-        // convention the roll kinds below use); `row.payload` is the raw message text
-        // (`encode_party_chat` is a pass-through — nothing else to decode).
-        group_kind::PARTY_CHAT => match lyracore_shared::group::decode_party_chat(&row.payload) {
-            Some(message) => Some(ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(
-                codec::build_party_chat(row.other_guid, message),
-            ))),
-            None => {
-                log::warn!(
-                    "party PARTY_CHAT relay: unparseable payload {:?} (event {})",
-                    row.payload,
-                    row.id
-                );
-                None
-            }
-        },
         roll_kind::ROLL_START => match lyracore_shared::loot_roll::decode_start(&row.payload) {
             Some((corpse_guid, slot, item_entry, countdown_ms, random_property_id)) => Some(
                 ServerOpcodeMessage::SMSG_LOOT_START_ROLL(Box::new(codec::build_loot_start_roll(
@@ -2338,6 +2321,22 @@ pub(crate) fn private_recipient_audience(row_recipient_guid: u64, viewer_guid: u
     // 0 is "unaddressed"/"uninitialized", never a real character — an equality alone would let an
     // unaddressed row match a half-initialized viewer (0 == 0), so zero denies on either side.
     row_recipient_guid != 0 && row_recipient_guid == viewer_guid
+}
+
+/// A Realm Chat Line: one `SMSG_MESSAGECHAT` for one recipient. The Relay already chose the
+/// audience; an unknown Chat Kind sends nothing.
+pub(crate) fn realm_chat_outbound(row: &RealmChatEvent) -> Vec<Outbound> {
+    codec::build_realm_chat_line(
+        row.kind,
+        row.speaker_guid,
+        row.language,
+        row.chat_tag,
+        row.channel_name.clone(),
+        row.message.clone(),
+    )
+    .map(|message| Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(message))))
+    .into_iter()
+    .collect()
 }
 
 /// Whisper: the packet body both legs run. Audience resolved by the
@@ -3615,6 +3614,9 @@ impl Coordinator {
                 .is_ghost
                 .store(is_ghost, std::sync::atomic::Ordering::Relaxed);
         }
+        // The Realm Chat Relay's per-listener filter: this Character's own ignore list, from its
+        // contact rows on this Home Shard. The contact Relay keeps it current from here on.
+        let ignored: HashSet<u64> = self.contact_lists(self_guid)?.1.into_iter().collect();
         let viewer = Arc::new(Viewer {
             active: std::sync::atomic::AtomicBool::new(true),
             session,
@@ -3630,6 +3632,7 @@ impl Coordinator {
             explored: Mutex::new(explored),
             motion_pending: Arc::new(world_view::MotionPending::default()),
             member_stats: Default::default(),
+            ignored: Mutex::new(ignored),
         });
         view.add_viewer(
             self,
@@ -4259,6 +4262,7 @@ mod tests {
             explored: Mutex::new(world_view::ExplorationReplay::default()),
             motion_pending: Arc::new(world_view::MotionPending::default()),
             member_stats: Default::default(),
+            ignored: Mutex::default(),
         }
     }
 
@@ -6442,6 +6446,34 @@ mod tests {
         assert!(scanned.contains("\"/* quoted label */\""));
     }
 
+    /// World entry seeds the viewer's ignore set from its own contact rows on this Home Shard. No
+    /// Fake reaches this Coordinator method, so the seed is pinned in source. Without it the set
+    /// stays empty until the first live contact change, and ignorable Realm Chat Lines reach the
+    /// Characters who ignore their speaker.
+    #[test]
+    fn the_viewer_is_seeded_with_its_own_ignore_list() {
+        let body = crate::test_scan::code_of(
+            include_str!("subscriptions.rs"),
+            "pub fn subscribe_player_events(",
+        );
+        let body: String = body.split_whitespace().collect();
+        assert!(
+            body.contains(
+                "letignored:HashSet<u64>=self.contact_lists(self_guid)?.1.into_iter().collect();"
+            ),
+            "world entry no longer reads the viewer's own ignore list"
+        );
+        assert!(
+            body.contains("ignored:Mutex::new(ignored),"),
+            "the viewer is no longer constructed with the ignore list world entry read"
+        );
+        assert_eq!(
+            body.matches("letignored").count(),
+            1,
+            "a second `ignored` binding can shadow the seed"
+        );
+    }
+
     /// The call-site tripwire for the shared-view `Viewer`'s construction.
     ///
     /// The session's `Viewer` must hold the same dedup/gate state prepared during world entry.
@@ -6528,6 +6560,31 @@ mod tests {
             "arm_realm_private no longer relays realm-core group events through \
              `group_event_appeared` (which also carries the QUEST_SHARE detail JOIN through a \
              WORLD handle — realm-core's cache has no quest catalogue)"
+        );
+        // Realm Chat Lines need BOTH registrations: realm-core's for a sharded Realm, the shard's
+        // own for a Realm whose Realm-core is that database. Only Realm-core writes the table, so
+        // no line is delivered twice.
+        assert!(
+            compact.contains("wire_insert_live(db.game_realm_chat_event(),\"realm.game_realm_chat_event.insert\",&view,|v,row|realm_chat_appeared(v,row));"),
+            "arm_realm_private no longer relays Realm Chat Lines, so every party line on a \
+             sharded Realm is written and heard by nobody"
+        );
+        let shard = decommented(top_level_fn_body_of(
+            "world_view.rs",
+            "register_shard_callbacks",
+        ));
+        let shard: String = shard.chars().filter(|c| !c.is_whitespace()).collect();
+        assert!(
+            shard.contains("wire_insert_live(db.game_realm_chat_event(),\"game_realm_chat_event.insert\",&view,|v,row|realm_chat_appeared(v,row));"),
+            "arm_shard no longer relays Realm Chat Lines, so every party line on an unsharded \
+             Realm is written and heard by nobody"
+        );
+        let relay = decommented(top_level_fn_body_of("world_view.rs", "realm_chat_appeared"));
+        assert!(
+            relay.contains("session_of_owner(recipient)")
+                && relay.contains("private_recipient_audience(recipient, viewer.self_guid)"),
+            "realm_chat_appeared is no longer recipient-keyed. On an owner-token read every \
+             session would receive every party's chat"
         );
         // The dispatchers themselves stay recipient-keyed: the whisper body must resolve the
         // recipient's session FIRST and re-assert the audience predicate.

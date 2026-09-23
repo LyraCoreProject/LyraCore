@@ -95,6 +95,10 @@ pub(crate) struct Viewer {
     /// What the Member Stats Relay last sent about each group mate. A new viewer starts empty, so
     /// world entry and a group join both get every field on the next tick.
     pub(crate) member_stats: crate::world::MemberStatsRecord,
+    /// The Characters on this viewer's own ignore list. Seeded at world entry from its contact
+    /// rows on the Home Shard, kept current by that Shard's contact Relay, and rebuilt when the
+    /// Shard reconciles after a resubscribe. The Realm Chat Relay reads it for ignorable lines only.
+    pub(crate) ignored: Mutex<HashSet<u64>>,
 }
 
 impl Viewer {
@@ -106,6 +110,23 @@ impl Viewer {
     /// destination would send fine weather over a real storm.
     fn enter_zone(&self, zone_id: u32) -> bool {
         zone_id != 0 && self.zone_id.swap(zone_id, Ordering::Relaxed) != zone_id
+    }
+
+    /// Whether this viewer ignores `guid`.
+    pub(crate) fn ignores(&self, guid: u64) -> bool {
+        self.ignored
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .contains(&guid)
+    }
+
+    fn set_ignored(&self, guid: u64, ignored: bool) {
+        let mut set = self.ignored.lock().unwrap_or_else(|p| p.into_inner());
+        if ignored {
+            set.insert(guid);
+        } else {
+            set.remove(&guid);
+        }
     }
 }
 
@@ -887,6 +908,27 @@ fn register_shard_callbacks(
         &view,
         |v, row| system_message_appeared(v, row),
     );
+    // Only Realm-core writes Realm Chat Lines. This registration hears them on a Realm whose
+    // Realm-core is this database; `arm_realm_private` hears them everywhere else.
+    wire_insert_live(
+        db.game_realm_chat_event(),
+        "game_realm_chat_event.insert",
+        &view,
+        |v, row| realm_chat_appeared(v, row),
+    );
+    // Each viewer's ignore set follows its own contact rows. Replayed inserts are idempotent.
+    wire_insert(
+        db.game_character_contact(),
+        "game_character_contact.insert",
+        &view,
+        move |v, row| contact_changed(v, shard, row, true),
+    );
+    wire_delete(
+        db.game_character_contact(),
+        "game_character_contact.delete",
+        &view,
+        move |v, row| contact_changed(v, shard, row, false),
+    );
     {
         let coord = coord.clone();
         wire_insert_live(
@@ -1051,9 +1093,10 @@ fn register_shard_callbacks(
 }
 
 /// Register the cross-shard PRIVATE-tier twins (#22 → #483) on the REALM-CORE connection: whisper
-/// and group events written realm-side for a recipient whose home shard is elsewhere. Same
-/// recipient-keyed dispatchers as `arm_shard`'s private tier, armed ONCE per realm-core
-/// connection instead of once per session — the last per-session registrations are gone (#483).
+/// and group events and Realm Chat Lines written realm-side for recipients whose home shard is
+/// elsewhere. Same recipient-keyed dispatchers as `arm_shard`'s private tier, armed ONCE per
+/// realm-core connection instead of once per session — the last per-session registrations are gone
+/// (#483).
 ///
 /// Only called when realm-core is a DISTINCT database (`Coordinator::connect` gates it): on a
 /// single-database gateway the world shard's own `arm_shard` registration already watches these
@@ -1078,6 +1121,12 @@ pub(crate) fn arm_realm_private(view: Arc<WorldView>, realm: Coordinator, coord:
         "realm.game_group_event.insert",
         &view,
         move |v, row| group_event_appeared(v, &coord, row),
+    );
+    wire_insert_live(
+        db.game_realm_chat_event(),
+        "realm.game_realm_chat_event.insert",
+        &view,
+        |v, row| realm_chat_appeared(v, row),
     );
 }
 
@@ -1973,6 +2022,59 @@ fn whisper_appeared(view: &WorldView, row: &WhisperEvent) {
     });
 }
 
+/// A Realm Chat Line landed → one `SMSG_MESSAGECHAT` per recipient with a World Session on this
+/// Gateway, whatever Shard it plays on. The Module chose the audience. The only per-listener
+/// filter here is the listener's own ignore list, and only for lines the Module marked ignorable.
+fn realm_chat_appeared(view: &WorldView, row: &RealmChatEvent) {
+    let row = Arc::new(row.clone());
+    for &recipient in &row.recipients {
+        let Some(viewer) = view
+            .session_of_owner(recipient)
+            .and_then(|session| view.viewer(session))
+        else {
+            continue;
+        };
+        if !super::subscriptions::private_recipient_audience(recipient, viewer.self_guid) {
+            continue;
+        }
+        if row.ignorable && viewer.ignores(row.speaker_guid) {
+            continue;
+        }
+        let row = row.clone();
+        enqueue(viewer.clone(), move |_| {
+            super::subscriptions::realm_chat_outbound(&row)
+        });
+    }
+}
+
+/// An ignore row changed on `shard` → the owner's ignore set, if the owner plays on that Shard.
+/// Friend rows leave it alone.
+fn contact_changed(view: &WorldView, shard: ShardId, row: &ContactEntry, present: bool) {
+    if !row.is_ignore {
+        return;
+    }
+    if let Some(viewer) = view.viewer_of_owner_on_shard(shard, OwnerGuid(row.owner_guid)) {
+        viewer.set_ignored(row.target_guid, present);
+    }
+}
+
+/// Rebuild the ignore set of every viewer on `shard` from that Shard's contact rows. A resubscribe
+/// replays inserts but never the deletes it missed, so the live callbacks alone could keep a removed
+/// ignore in force until relog. Runs on the Shard's pump, like its contact callbacks.
+fn replace_ignore_sets(view: &WorldView, shard: ShardId, contacts: &[ContactEntry]) {
+    let mut ignored: HashMap<u64, HashSet<u64>> = HashMap::new();
+    for row in contacts.iter().filter(|row| row.is_ignore) {
+        ignored
+            .entry(row.owner_guid)
+            .or_default()
+            .insert(row.target_guid);
+    }
+    for viewer in view.viewers_on_shard(shard) {
+        *viewer.ignored.lock().unwrap_or_else(|p| p.into_inner()) =
+            ignored.get(&viewer.self_guid).cloned().unwrap_or_default();
+    }
+}
+
 /// Queue a Package System Message for its addressed World Session.
 fn system_message_appeared(view: &WorldView, row: &SystemMessageEvent) {
     let Some(session) = view.session_of_owner(row.recipient_guid) else {
@@ -2458,6 +2560,7 @@ mod family_audience_tests {
             explored: Mutex::new(ExplorationReplay::default()),
             motion_pending: Arc::new(MotionPending::default()),
             member_stats: Default::default(),
+            ignored: Mutex::default(),
         })
     }
 
@@ -2893,6 +2996,7 @@ mod family_audience_tests {
             explored: Mutex::new(ExplorationReplay::default()),
             motion_pending: old.motion_pending.clone(),
             member_stats: Default::default(),
+            ignored: Mutex::default(),
         });
         view.add_viewer_on_shard(old.clone(), CellKey::at(0, 0, 0, 0), 3);
         view.add_viewer_on_shard(replacement.clone(), CellKey::at(1, 2, 0, 0), 4);
@@ -3507,6 +3611,213 @@ mod family_audience_tests {
     }
 }
 
+#[cfg(test)]
+mod realm_chat_relay_tests {
+    use super::{
+        contact_changed, realm_chat_appeared, ExplorationReplay, MotionPending, Viewer, WorldView,
+    };
+    use crate::stdb::aoi::ViewerGates;
+    use crate::stdb::bindings::{ContactEntry, RealmChatEvent};
+    use crate::stdb::world_index::CellKey;
+    use crate::world::{Outbound, SessionTx};
+    use std::collections::{HashMap, HashSet};
+    use std::sync::mpsc::Receiver;
+    use std::sync::{Arc, Mutex};
+
+    const SPEAKER: u64 = 10;
+
+    /// A registered viewer for `self_guid` on `shard`, with the receiving end of its writer queue.
+    fn listener(
+        view: &WorldView,
+        shard: usize,
+        self_guid: u64,
+    ) -> (Arc<Viewer>, Receiver<Outbound>) {
+        let (tx, rx) = SessionTx::with_depth(0);
+        let viewer = Arc::new(Viewer {
+            active: std::sync::atomic::AtomicBool::new(true),
+            session: view.next_session_id(),
+            self_guid,
+            bound_identity: spacetimedb_sdk::Identity::from_byte_array([self_guid as u8; 32]),
+            map_id: 0,
+            instance_id: 0,
+            zone_id: 0.into(),
+            tx,
+            created: Arc::new(Mutex::new(HashSet::new())),
+            gates: Arc::new(ViewerGates::default()),
+            skill_slots: Arc::new(Mutex::new((HashMap::new(), 0))),
+            explored: Mutex::new(ExplorationReplay::default()),
+            motion_pending: Arc::new(MotionPending::default()),
+            member_stats: Default::default(),
+            ignored: Mutex::default(),
+        });
+        view.add_viewer_on_shard(viewer.clone(), CellKey::at(0, 0, 0, 0), shard);
+        (viewer, rx)
+    }
+
+    fn party_line(recipients: &[u64], ignorable: bool) -> RealmChatEvent {
+        RealmChatEvent {
+            id: 1,
+            kind: 1,
+            speaker_guid: SPEAKER,
+            language: 7,
+            chat_tag: 0,
+            channel_name: String::new(),
+            message: "form up".to_string(),
+            recipients: recipients.to_vec(),
+            ignorable,
+            created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
+        }
+    }
+
+    fn ignore_row(owner_guid: u64, target_guid: u64, is_ignore: bool) -> ContactEntry {
+        ContactEntry {
+            id: 1,
+            owner_guid,
+            owner_identity: spacetimedb_sdk::Identity::ZERO,
+            target_guid,
+            is_ignore,
+        }
+    }
+
+    /// Every queued packet for one viewer, jobs run in order.
+    /// The body of every packet queued for one viewer, jobs run in order. Each packet must be one
+    /// framed `SMSG_MESSAGECHAT`: size u16 big-endian, then opcode 0x0096 little-endian.
+    fn received(rx: &Receiver<Outbound>) -> Vec<Vec<u8>> {
+        let mut bodies = Vec::new();
+        while let Ok(outbound) = rx.try_recv() {
+            let Outbound::Job(job) = outbound else {
+                panic!("the Relay must enqueue packet work as a writer job");
+            };
+            for packet in job() {
+                let Outbound::One(message) = packet else {
+                    panic!("a Realm Chat Line is one packet");
+                };
+                let mut frame = Vec::new();
+                message.write_unencrypted_server(&mut frame).unwrap();
+                let body = frame.split_off(4);
+                assert_eq!(frame[..2], ((body.len() + 2) as u16).to_be_bytes());
+                assert_eq!(frame[2..], [0x96, 0x00], "SMSG_MESSAGECHAT");
+                bodies.push(body);
+            }
+        }
+        bodies
+    }
+
+    /// A PARTY line in Common from `SPEAKER` saying "form up", written out from cm:Chat.cpp:3637-3641
+    /// rather than built with the codec the Relay calls: type, language, the sender guid twice, the
+    /// sized message with its terminator, then the chat tag.
+    fn expected_line() -> Vec<u8> {
+        let mut body = vec![0x01]; // CHAT_MSG_PARTY
+        body.extend(7u32.to_le_bytes()); // LANG_COMMON
+        body.extend(SPEAKER.to_le_bytes());
+        body.extend(SPEAKER.to_le_bytes());
+        body.extend(8u32.to_le_bytes()); // "form up" and its terminator
+        body.extend(b"form up\0");
+        body.push(0); // CHAT_TAG_NONE
+        body
+    }
+
+    #[test]
+    fn a_line_reaches_each_recipient_once_on_any_shard_and_nobody_else() {
+        let view = WorldView::new(true);
+        let (_, speaker_rx) = listener(&view, 0, SPEAKER);
+        let (_, member_rx) = listener(&view, 1, 20);
+        let (_, bystander_rx) = listener(&view, 0, 30);
+
+        realm_chat_appeared(&view, &party_line(&[SPEAKER, 20, 99], false));
+
+        assert_eq!(received(&speaker_rx), [expected_line()]);
+        assert_eq!(received(&member_rx), [expected_line()]);
+        assert!(
+            received(&bystander_rx).is_empty(),
+            "a Character the Module did not name hears nothing"
+        );
+    }
+
+    #[test]
+    fn an_ignorable_line_skips_only_the_listener_who_ignores_the_speaker() {
+        let view = WorldView::new(true);
+        let (_, ignorer_rx) = listener(&view, 0, 20);
+        let (_, other_rx) = listener(&view, 1, 30);
+        contact_changed(&view, 0, &ignore_row(20, SPEAKER, true), true);
+
+        realm_chat_appeared(&view, &party_line(&[20, 30], true));
+        assert!(received(&ignorer_rx).is_empty());
+        assert_eq!(received(&other_rx), [expected_line()]);
+
+        realm_chat_appeared(&view, &party_line(&[20, 30], false));
+        assert_eq!(
+            received(&ignorer_rx),
+            [expected_line()],
+            "a line the Module marked not ignorable reaches an ignorer too"
+        );
+        assert_eq!(received(&other_rx), [expected_line()]);
+    }
+
+    /// A resubscribe replays inserts but not the deletes it missed. Reconciling the Shard must
+    /// rebuild each of its viewers' ignore sets from the rows that are there now.
+    #[test]
+    fn reconciling_a_shard_rebuilds_its_viewers_ignore_sets_from_the_contact_rows() {
+        let view = Arc::new(WorldView::new(true));
+        let (stale, _stale_rx) = listener(&view, 0, 20);
+        let (kept, _kept_rx) = listener(&view, 0, 30);
+        let (elsewhere, _elsewhere_rx) = listener(&view, 1, 40);
+        for (viewer, shard) in [(&stale, 0), (&kept, 0), (&elsewhere, 1)] {
+            contact_changed(
+                &view,
+                shard,
+                &ignore_row(viewer.self_guid, SPEAKER, true),
+                true,
+            );
+        }
+
+        super::reconcile_shard(
+            &view,
+            0,
+            vec![],
+            vec![],
+            vec![],
+            vec![
+                ignore_row(30, SPEAKER, true),
+                ignore_row(30, 77, true),
+                ignore_row(20, 77, false),
+            ],
+        );
+
+        assert!(
+            !stale.ignores(SPEAKER),
+            "an ignore deleted while disconnected must not survive the resubscribe"
+        );
+        assert!(kept.ignores(SPEAKER) && kept.ignores(77));
+        assert!(!stale.ignores(77), "a friend row is not an ignore");
+        assert!(
+            elsewhere.ignores(SPEAKER),
+            "another Shard's viewers keep the set their own Shard maintains"
+        );
+    }
+
+    #[test]
+    fn the_ignore_set_follows_its_owners_ignore_rows_on_the_owners_shard() {
+        let view = WorldView::new(true);
+        let (viewer, _rx) = listener(&view, 0, 20);
+
+        contact_changed(&view, 0, &ignore_row(20, SPEAKER, false), true);
+        assert!(!viewer.ignores(SPEAKER), "a friend row is not an ignore");
+
+        contact_changed(&view, 1, &ignore_row(20, SPEAKER, true), true);
+        assert!(
+            !viewer.ignores(SPEAKER),
+            "another Shard's copy of the owner's rows does not address this viewer"
+        );
+
+        contact_changed(&view, 0, &ignore_row(20, SPEAKER, true), true);
+        assert!(viewer.ignores(SPEAKER));
+
+        contact_changed(&view, 0, &ignore_row(20, SPEAKER, true), false);
+        assert!(!viewer.ignores(SPEAKER));
+    }
+}
+
 // ===============================================================================================
 //  The pump→writer hand-off
 // ===============================================================================================
@@ -3672,6 +3983,7 @@ fn seed_shard_from_cache(view: &Arc<WorldView>, shard: ShardId, db: &RemoteTable
         db.game_world_entity().iter().collect(),
         db.game_gameobject().iter().collect(),
         db.game_aura().iter().collect(),
+        db.game_character_contact().iter().collect(),
     );
 }
 
@@ -3681,7 +3993,9 @@ fn reconcile_shard(
     entities: Vec<WorldEntity>,
     objects: Vec<GameObject>,
     auras: Vec<Aura>,
+    contacts: Vec<ContactEntry>,
 ) {
+    replace_ignore_sets(view, shard, &contacts);
     let aura_targets = view.auras.replace_shard(shard, auras);
     let removed_entities = view.spatial.replace_shard(
         EntityLayer::WorldEntity,
