@@ -153,9 +153,35 @@ fn arrive(ctx: &ReducerContext, recipient_guid: u64) {
     });
 }
 
+/// The gap between two past-due timers that one repair pass arms. Each firing is its own
+/// transaction and may write one Mail Arrival. Arming a backlog at the same past instant would
+/// run every firing back to back after the pass commits. At 10 ms the backlog fires at 100
+/// transactions a second, and 100,000 legacy Mail drain in under 17 minutes. Staggering keeps the
+/// work in the one pass the Operator already runs, where a cap would leave Mail untimed until the
+/// next publish.
+const BACKLOG_SPACING_MICROS: i64 = 10_000;
+
+/// When the timers a repair pass arms fire, in the order of `dues`. A future instant stays. The
+/// `n`th past-due instant, counted from 1, moves to `now + n × 10 ms`.
+fn spaced(dues: &[Timestamp], now: Timestamp) -> Vec<Timestamp> {
+    let mut past_due = 0;
+    dues.iter()
+        .map(|&due| {
+            if due > now {
+                return due;
+            }
+            past_due += 1;
+            Timestamp::from_micros_since_unix_epoch(
+                now.to_micros_since_unix_epoch() + past_due * BACKLOG_SPACING_MICROS,
+            )
+        })
+        .collect()
+}
+
 /// Arm a timer for every Mail that has none: Mail written before the timer existed, or Mail a
-/// Transfer imported. A Mail past its life expires as soon as this transaction commits. Returns
-/// how many timers it armed. Its caller, `debug_repair_after_publish`, is a debug reducer.
+/// Transfer imported. Mail past its life expires shortly after this transaction commits, spaced
+/// by [`BACKLOG_SPACING_MICROS`]. Returns how many timers it armed. Its caller,
+/// `debug_repair_after_publish`, is a debug reducer.
 #[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
 pub(crate) fn arm_missing(ctx: &ReducerContext) -> u64 {
     let timers = ctx.db.game_mail_timer();
@@ -165,8 +191,12 @@ pub(crate) fn arm_missing(ctx: &ReducerContext) -> u64 {
         .iter()
         .filter(|mail| timers.mail_id().find(mail.id).is_none())
         .collect();
-    for mail in &untimed {
-        arm_next(ctx, mail);
+    let dues: Vec<Timestamp> = untimed
+        .iter()
+        .map(|mail| next_due(mail, ctx.timestamp))
+        .collect();
+    for (mail, at) in untimed.iter().zip(spaced(&dues, ctx.timestamp)) {
+        arm(ctx, mail.id, at);
     }
     untimed.len() as u64
 }
@@ -422,6 +452,24 @@ mod tests {
             ..with_item(MailSender::Character(9))
         };
         assert_eq!(next_due(&delayed, now), at(SENT + 3_600 * MICROS_PER_SEC));
+    }
+
+    #[test]
+    fn a_repair_pass_spaces_past_due_timers_10_ms_apart_and_keeps_future_ones() {
+        let now_micros = SENT + 40 * DAY;
+        let now = at(now_micros);
+        assert_eq!(
+            spaced(
+                &[at(SENT + 30 * DAY), at(SENT + 50 * DAY), now, at(SENT)],
+                now
+            ),
+            [
+                at(now_micros + 10_000),
+                at(SENT + 50 * DAY),
+                at(now_micros + 20_000),
+                at(now_micros + 30_000),
+            ]
+        );
     }
 
     #[test]

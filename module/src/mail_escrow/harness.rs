@@ -403,13 +403,17 @@ impl DeliverySink for FakeMailPlane {
         });
         id
     }
-    fn priced_mail(&self, mail_id: u64) -> Option<(u64, u32)> {
+    fn priced_mail(&self, mail_id: u64) -> Option<PricedMail> {
         let now = self.ledger.now.get();
         self.mails
             .borrow()
             .iter()
-            .find(|m| m.id == mail_id && m.deliver_micros <= now)
-            .map(|m| (m.recipient_guid, m.cod))
+            .find(|m| m.id == mail_id)
+            .map(|m| PricedMail {
+                recipient_guid: m.recipient_guid,
+                cod: m.cod,
+                delivered: m.deliver_micros <= now,
+            })
     }
     fn settle_cod(&mut self, mail_id: u64) {
         if let Some(m) = self.mails.borrow_mut().iter_mut().find(|m| m.id == mail_id) {
@@ -1663,28 +1667,81 @@ fn a_cod_payment_for_a_mail_not_yet_delivered_is_held_and_pays_nobody() {
         "the buyer's copper stays in the fence"
     );
 }
+/// The payer's copper is already out of their purse and in the fence. A commit that can pay nobody
+/// must still land it somewhere, or the fence is held forever.
+fn assert_the_payment_came_back(plane: &FakeMailPlane, payer: u64, what: &str) {
+    let refund = plane
+        .mailbox_of(payer)
+        .into_iter()
+        .find(|m| m.money == COD)
+        .unwrap_or_else(|| panic!("{what}: the payment must come back to the payer"));
+    assert_eq!(
+        refund.check_flags,
+        lyracore_shared::mail::CHECK_MASK_RETURNED,
+        "{what}: as a Returned Mail"
+    );
+    assert_eq!(refund.sender, MailSender::Character(SENDER), "{what}");
+    assert!(
+        refund.item.is_empty() && refund.cod == 0,
+        "{what}: copper only"
+    );
+    assert_eq!(
+        plane.receipt(PAYMENT).map(|r| r.mail_id),
+        Some(refund.id),
+        "{what}: the receipt lets the Gateway confirm and settle the fence"
+    );
+}
 #[test]
-fn a_cod_payment_is_refused_for_a_price_the_payer_does_not_owe() {
-    let (_shard, mut plane, mail_id) = priced_mail_fixture();
-    let pay = |plane: &mut FakeMailPlane, payer| {
+fn a_cod_payment_for_a_price_the_payer_does_not_owe_comes_back_to_the_payer() {
+    for (what, payer, unowed) in [
+        (
+            "the seller paying their own letter",
+            SENDER,
+            (|_: &mut XMail| {}) as fn(&mut XMail),
+        ),
+        ("a price already paid", RECIPIENT, |m: &mut XMail| m.cod = 0),
+        (
+            "a letter returned to the seller at expiry",
+            RECIPIENT,
+            |m: &mut XMail| {
+                m.recipient_guid = SENDER;
+                m.cod = 0;
+            },
+        ),
+    ] {
+        let (_shard, mut plane, mail_id) = priced_mail_fixture();
+        unowed(&mut plane.mails.borrow_mut()[0]);
+
         apply_commit(
-            plane,
+            &mut plane,
             PAYMENT,
             payer,
             &cod_payment_draft(),
             &ItemSnapshot::default(),
             mail_id,
         )
-    };
+        .unwrap_or_else(|e| panic!("{what}: the commit lands the payment: {e}"));
 
-    pay(&mut plane, SENDER).expect_err("the seller owes nothing on their own letter");
-    plane.mails.borrow_mut()[0].cod = 0;
-    pay(&mut plane, RECIPIENT).expect_err("the price is already settled");
+        assert_the_payment_came_back(&plane, payer, what);
+        assert_eq!(
+            plane.money_in_mailbox(if payer == SENDER { RECIPIENT } else { SENDER }),
+            0,
+            "{what}: nobody else is paid"
+        );
+    }
+}
+#[test]
+fn a_cod_payment_for_a_letter_deleted_before_the_commit_comes_back_to_the_payer() {
+    let (mut shard, mut plane, mail_id) = priced_mail_fixture();
+    drive_payment(&mut shard, &mut plane, mail_id, Killed::AfterFence).expect("the fence lands");
+    plane.mails.borrow_mut().retain(|m| m.id != mail_id);
 
-    assert!(
-        plane.mailbox_of(SENDER).is_empty(),
-        "no payment was written"
-    );
+    drive_payment(&mut shard, &mut plane, mail_id, Killed::Never)
+        .expect("the re-drive lands the payment");
+
+    assert_the_payment_came_back(&plane, RECIPIENT, "a deleted letter");
+    assert!(!shard.has_fence(PAYMENT), "the fence settles");
+    assert_eq!(shard.purse_of(RECIPIENT), PURSE - COD, "charged once");
 }
 #[test]
 fn a_payment_fenced_with_the_old_subject_prefix_arrives_without_it() {

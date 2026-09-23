@@ -569,7 +569,9 @@ here: purse and mail row share one transaction there, so `mail::apply_send` writ
 
 Mail Expiry can delete a mail row while a take is in flight. The take fence already moved that
 copper or item out of the row into the escrow row, so expiry cannot delete it. The payout on the
-home shard reads only the escrow row and still completes.
+home shard reads only the escrow row and still completes. A COD payment is fenced on the payer's
+shard before realm-core commits it. If the priced Mail expired, went back or was paid in between,
+the commit sends the payment back to the payer as a Returned Mail, so the fence still settles.
 
 ### 6.4 Cross-shard visibility
 

@@ -185,6 +185,18 @@ impl Letter {
             ..self
         }
     }
+    /// The same Character letter sent back to its writer before its recipient got it, as a
+    /// Returned Mail. A COD payment whose price nobody owes any more goes back this way.
+    pub(crate) fn into_returned(self) -> Self {
+        let (_, writer_guid, _) = self.sender.columns();
+        Self {
+            recipient_guid: writer_guid,
+            sender: MailSender::Character(self.recipient_guid),
+            cod: 0,
+            check_flags: CHECK_MASK_RETURNED,
+            ..self
+        }
+    }
 }
 /// The one way a mail row is created. It starts the Mail's timer, and sends a Mail Arrival when
 /// the recipient can see the Mail now.

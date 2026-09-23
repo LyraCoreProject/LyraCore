@@ -1,5 +1,7 @@
 //! Mail Timer fixtures for `module/tests/mail_expiry.rs`. Each stage reducer writes its letters
 //! through `mail::insert_letter` and then backdates them, so the timers they arm fire at once.
+//! The checks compare armed instants with the vanilla lifetimes written out below, not with the
+//! Module's own expiry function.
 
 use lyracore_shared::mail::{
     MailSender, CHECK_MASK_COD_PAYMENT, CHECK_MASK_COPIED, CHECK_MASK_RETURNED,
@@ -14,7 +16,7 @@ const SENDER: u64 = 509_0070;
 const RECIPIENT: u64 = 509_0071;
 const DELAYED_RECIPIENT: u64 = 509_0072;
 const LEGACY_RECIPIENT: u64 = 509_0073;
-/// The seeded Tester. The take fixture pays out into its live purse.
+/// The seeded Tester. The take and COD fixtures pay out into its live purse and bags.
 const TAKER: u64 = 1;
 const ITEM: ItemSnapshot = ItemSnapshot {
     entry: 509_0070,
@@ -24,10 +26,24 @@ const ITEM: ItemSnapshot = ItemSnapshot {
     soulbound: false,
     random_property_id: 0,
 };
-const DAY_MICROS: i64 = 86_400_000_000;
-const MINUTE_MICROS: i64 = 60_000_000;
+/// A real template, so a payout can grant it.
+const BLADE: ItemSnapshot = ItemSnapshot {
+    entry: crate::seed::FIXTURE_BLADE,
+    stack_count: 1,
+    durability: 17,
+    enchant_id: 0,
+    soulbound: false,
+    random_property_id: 0,
+};
+const SECOND_MICROS: i64 = 1_000_000;
+const MINUTE_MICROS: i64 = 60 * SECOND_MICROS;
+const DAY_MICROS: i64 = 86_400 * SECOND_MICROS;
+/// A Mail lives 30 days after it arrives, 3 with a COD price (cmangos `Mail.cpp:309-313`), and a
+/// Mail returned at expiry lives 30 days from the return (cmangos `ObjectMgr.cpp:6214-6215`).
+const LIFE_MICROS: i64 = 30 * DAY_MICROS;
+const COD_LIFE_MICROS: i64 = 3 * DAY_MICROS;
 /// The delayed letter arrives this long after staging.
-const DELAY_MICROS: i64 = 2_000_000;
+const DELAY_MICROS: i64 = 2 * SECOND_MICROS;
 
 const RETURNS: &str = "timer: returns";
 const COD_RETURNS: &str = "timer: cod returns";
@@ -36,10 +52,13 @@ const AUCTION: &str = "timer: auction";
 const COD_PAYMENT: &str = "timer: cod payment";
 const MONEY_ONLY: &str = "timer: money only";
 const FRESH: &str = "timer: fresh";
+const COD_FRESH: &str = "timer: cod fresh";
 const DELAYED: &str = "timer: delayed";
 const LEGACY_EXPIRED: &str = "timer: legacy expired";
 const LEGACY_LIVE: &str = "timer: legacy live";
-const TAKE: &str = "timer: take";
+const TAKE_MONEY: &str = "timer: take money";
+const TAKE_ITEM: &str = "timer: take item";
+const COD_RACE: &str = "timer: cod race";
 
 /// One fixture letter and how old it is when staged.
 struct Staged {
@@ -86,12 +105,22 @@ fn stage(ctx: &ReducerContext, staged: Staged, deliver_micros: i64) -> Mail {
             deliver_micros,
         },
     );
-    let mails = ctx.db.game_mail();
-    let row = mails.id().find(id).expect("insert_letter wrote the row");
-    let created_micros = row.created_at.to_micros_since_unix_epoch() - staged.age_micros;
-    let aged = mails.id().update(Mail {
-        created_at: Timestamp::from_micros_since_unix_epoch(created_micros),
-        ..row
+    let row = ctx
+        .db
+        .game_mail()
+        .id()
+        .find(id)
+        .expect("insert_letter wrote the row");
+    age(ctx, row, staged.age_micros)
+}
+
+/// Make `mail` `age_micros` old and arm its timer again.
+fn age(ctx: &ReducerContext, mail: Mail, age_micros: i64) -> Mail {
+    let aged = ctx.db.game_mail().id().update(Mail {
+        created_at: Timestamp::from_micros_since_unix_epoch(
+            ctx.timestamp.to_micros_since_unix_epoch() - age_micros,
+        ),
+        ..mail
     });
     crate::mail_timer::arm_next(ctx, &aged);
     aged
@@ -128,15 +157,38 @@ fn arrivals(ctx: &ReducerContext, recipient_guid: u64) -> usize {
         .count()
 }
 
-fn armed_at(ctx: &ReducerContext, mail_id: u64) -> Option<ScheduleAt> {
-    ctx.db
+fn armed_micros(ctx: &ReducerContext, mail_id: u64) -> Option<i64> {
+    match ctx
+        .db
         .game_mail_timer()
         .mail_id()
-        .find(mail_id)
-        .map(|timer| timer.scheduled_at)
+        .find(mail_id)?
+        .scheduled_at
+    {
+        ScheduleAt::Time(at) => Some(at.to_micros_since_unix_epoch()),
+        ScheduleAt::Interval(_) => None,
+    }
 }
 
-/// `subject` came back to SENDER as a Returned Mail with its item, no price and a fresh 30 days.
+/// `mail`'s timer fires `life_micros` after `arrived_micros`, to the second.
+fn check_armed(
+    ctx: &ReducerContext,
+    mail: &Mail,
+    arrived_micros: i64,
+    life_micros: i64,
+) -> Result<(), String> {
+    let expected = arrived_micros + life_micros;
+    match armed_micros(ctx, mail.id) {
+        Some(armed) if (armed - expected).abs() <= SECOND_MICROS => Ok(()),
+        armed => Err(format!(
+            "{} is armed at {armed:?}, not {life_micros} µs after {arrived_micros}",
+            mail.subject
+        )),
+    }
+}
+
+/// `subject` came back to SENDER as a Returned Mail with its item, no price and 30 days from the
+/// return.
 fn check_returned(ctx: &ReducerContext, subject: &str) -> Result<(), String> {
     let back = find(ctx, SENDER, subject).ok_or_else(|| format!("{subject} did not return"))?;
     if back.sender() != MailSender::Character(RECIPIENT)
@@ -144,30 +196,14 @@ fn check_returned(ctx: &ReducerContext, subject: &str) -> Result<(), String> {
         || back.cod != 0
         || back.was_read
         || back.snapshot() != ITEM
+        || !back.is_delivered(ctx.timestamp)
     {
         return Err(format!("{subject} returned in the wrong shape"));
     }
-    let expires = crate::mail_timer::expires_at(&back);
-    if expires.to_micros_since_unix_epoch()
-        < ctx.timestamp.to_micros_since_unix_epoch() + 29 * DAY_MICROS
-        || armed_at(ctx, back.id) != Some(ScheduleAt::Time(expires))
-    {
-        return Err(format!("{subject} has no fresh 30-day timer"));
-    }
-    Ok(())
+    check_armed(ctx, &back, back.deliver_micros, LIFE_MICROS)
 }
 
-/// `mail` is visible and waits for the end of its life.
-fn check_waits_for_expiry(ctx: &ReducerContext, mail: &Mail) -> Result<(), String> {
-    if !mail.is_delivered(ctx.timestamp)
-        || armed_at(ctx, mail.id) != Some(ScheduleAt::Time(crate::mail_timer::expires_at(mail)))
-    {
-        return Err(format!("{} is not waiting for its expiry", mail.subject));
-    }
-    Ok(())
-}
-
-/// Stage one letter for each Mail Expiry outcome, one letter that is not due yet, and one letter
+/// Stage one letter for each Mail Expiry outcome, two letters inside their life, and one letter
 /// delivered in about 2 s. Refuses unless every visible letter sent exactly one Mail Arrival and
 /// the delayed one sent none.
 #[reducer]
@@ -181,6 +217,7 @@ pub fn debug_stage_mail_expiry_fixture(ctx: &ReducerContext) -> Result<(), Strin
         COD_PAYMENT,
         MONEY_ONLY,
         FRESH,
+        COD_FRESH,
         DELAYED,
     ];
     for guid in [SENDER, RECIPIENT, DELAYED_RECIPIENT] {
@@ -188,12 +225,12 @@ pub fn debug_stage_mail_expiry_fixture(ctx: &ReducerContext) -> Result<(), Strin
     }
     let (before, delayed_before) = (arrivals(ctx, RECIPIENT), arrivals(ctx, DELAYED_RECIPIENT));
 
-    let expired = 30 * DAY_MICROS + MINUTE_MICROS;
+    let expired = LIFE_MICROS + MINUTE_MICROS;
     let visible = [
         Staged::from_sender(RETURNS, expired),
         Staged {
             cod: 250,
-            ..Staged::from_sender(COD_RETURNS, 3 * DAY_MICROS + MINUTE_MICROS)
+            ..Staged::from_sender(COD_RETURNS, COD_LIFE_MICROS + MINUTE_MICROS)
         },
         Staged {
             check_flags: CHECK_MASK_RETURNED,
@@ -214,7 +251,11 @@ pub fn debug_stage_mail_expiry_fixture(ctx: &ReducerContext) -> Result<(), Strin
             item: ItemSnapshot::default(),
             ..Staged::from_sender(MONEY_ONLY, expired)
         },
-        Staged::from_sender(FRESH, 29 * DAY_MICROS),
+        Staged::from_sender(FRESH, LIFE_MICROS - DAY_MICROS),
+        Staged {
+            cod: 250,
+            ..Staged::from_sender(COD_FRESH, COD_LIFE_MICROS - 60 * MINUTE_MICROS)
+        },
     ];
     let staged = visible.len();
     for letter in visible {
@@ -236,11 +277,7 @@ pub fn debug_stage_mail_expiry_fixture(ctx: &ReducerContext) -> Result<(), Strin
     if arrivals(ctx, DELAYED_RECIPIENT) != delayed_before {
         return Err("a letter delivered later sent a Mail Arrival early".to_string());
     }
-    if armed_at(ctx, delayed.id)
-        != Some(ScheduleAt::Time(Timestamp::from_micros_since_unix_epoch(
-            deliver_micros,
-        )))
-    {
+    if armed_micros(ctx, delayed.id) != Some(deliver_micros) {
         return Err("the delayed letter's timer is not armed at its delivery".to_string());
     }
     Ok(())
@@ -270,10 +307,25 @@ pub fn debug_verify_mail_expiry_fixture(ctx: &ReducerContext) -> Result<(), Stri
             return Err(format!("{subject} went back instead of being deleted"));
         }
     }
-    let fresh = find(ctx, RECIPIENT, FRESH).ok_or("a letter expired early")?;
-    check_waits_for_expiry(ctx, &fresh)?;
+    let fresh = find(ctx, RECIPIENT, FRESH).ok_or("a 29-day-old letter expired early")?;
+    check_armed(
+        ctx,
+        &fresh,
+        fresh.created_at.to_micros_since_unix_epoch(),
+        LIFE_MICROS,
+    )?;
+    let cod_fresh = find(ctx, RECIPIENT, COD_FRESH).ok_or("a priced letter expired early")?;
+    check_armed(
+        ctx,
+        &cod_fresh,
+        cod_fresh.created_at.to_micros_since_unix_epoch(),
+        COD_LIFE_MICROS,
+    )?;
     let delayed = find(ctx, DELAYED_RECIPIENT, DELAYED).ok_or("the delayed letter is gone")?;
-    check_waits_for_expiry(ctx, &delayed)?;
+    if !delayed.is_delivered(ctx.timestamp) {
+        return Err("the delayed letter is not delivered yet".to_string());
+    }
+    check_armed(ctx, &delayed, delayed.deliver_micros, LIFE_MICROS)?;
     let mails = ctx.db.game_mail();
     if ctx
         .db
@@ -334,7 +386,7 @@ pub fn debug_stage_mail_legacy_fixture(ctx: &ReducerContext) -> Result<(), Strin
         clear(ctx, guid, &[LEGACY_EXPIRED, LEGACY_LIVE]);
     }
     for (subject, age_micros) in [
-        (LEGACY_EXPIRED, 30 * DAY_MICROS + MINUTE_MICROS),
+        (LEGACY_EXPIRED, LIFE_MICROS + MINUTE_MICROS),
         (LEGACY_LIVE, DAY_MICROS),
     ] {
         let legacy = stage(
@@ -356,55 +408,87 @@ pub fn debug_verify_mail_legacy_fixture(ctx: &ReducerContext) -> Result<(), Stri
     crate::helpers::require_operator(ctx)?;
     let back =
         find(ctx, SENDER, LEGACY_EXPIRED).ok_or("the expired legacy letter did not return")?;
-    if back.sender() != MailSender::Character(LEGACY_RECIPIENT)
-        || armed_at(ctx, back.id) != Some(ScheduleAt::Time(crate::mail_timer::expires_at(&back)))
-    {
+    if back.sender() != MailSender::Character(LEGACY_RECIPIENT) {
         return Err("the expired legacy letter returned in the wrong shape".to_string());
     }
+    check_armed(ctx, &back, back.deliver_micros, LIFE_MICROS)?;
     let live = find(ctx, LEGACY_RECIPIENT, LEGACY_LIVE).ok_or("the live legacy letter is gone")?;
-    check_waits_for_expiry(ctx, &live)
+    check_armed(
+        ctx,
+        &live,
+        live.created_at.to_micros_since_unix_epoch(),
+        LIFE_MICROS,
+    )
 }
 
-/// Stage a 77-copper letter for the Tester. The test fences its copper, ages it past its life, and
-/// pays the fence out after Mail Expiry deletes the row.
+/// Stage three letters for the Tester: 77 copper, a blade, and a blade for a 250-copper COD price.
+/// The tests fence a take or a payment first and age the letter past its life after.
 #[reducer]
 pub fn debug_stage_mail_take_fixture(ctx: &ReducerContext) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
-    clear(ctx, TAKER, &[TAKE]);
-    stage(
-        ctx,
+    clear(ctx, TAKER, &[TAKE_MONEY, TAKE_ITEM, COD_RACE]);
+    clear(ctx, SENDER, &[COD_RACE]);
+    for letter in [
         Staged {
-            recipient_guid: TAKER,
             money: 77,
             item: ItemSnapshot::default(),
-            ..Staged::from_sender(TAKE, 0)
+            ..Staged::from_sender(TAKE_MONEY, 0)
         },
-        0,
-    );
+        Staged {
+            item: BLADE,
+            ..Staged::from_sender(TAKE_ITEM, 0)
+        },
+        Staged {
+            item: BLADE,
+            cod: 250,
+            ..Staged::from_sender(COD_RACE, 0)
+        },
+    ] {
+        stage(
+            ctx,
+            Staged {
+                recipient_guid: TAKER,
+                ..letter
+            },
+            0,
+        );
+    }
     Ok(())
 }
 
-/// Move the take letter past the end of its life, so its timer fires at once.
+/// Make the fixture letter `subject` for `recipient_guid` `age_secs` old, so a timer past its life
+/// fires at once.
 #[reducer]
-pub fn debug_age_mail_take_fixture(ctx: &ReducerContext) -> Result<(), String> {
+pub fn debug_age_mail_fixture(
+    ctx: &ReducerContext,
+    recipient_guid: u64,
+    subject: String,
+    age_secs: u64,
+) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
-    let mail = find(ctx, TAKER, TAKE).ok_or("stage the take fixture first")?;
-    let aged = ctx.db.game_mail().id().update(Mail {
-        created_at: Timestamp::from_micros_since_unix_epoch(
-            mail.created_at.to_micros_since_unix_epoch() - 30 * DAY_MICROS - MINUTE_MICROS,
-        ),
-        ..mail
-    });
-    crate::mail_timer::arm_next(ctx, &aged);
+    let mail = find(ctx, recipient_guid, &subject)
+        .filter(|mail| mail.subject.starts_with("timer: "))
+        .ok_or_else(|| format!("no fixture letter {subject} for {recipient_guid}"))?;
+    let age_micros = i64::try_from(age_secs)
+        .ok()
+        .and_then(|secs| secs.checked_mul(SECOND_MICROS))
+        .ok_or("age out of range")?;
+    age(ctx, mail, age_micros);
     Ok(())
 }
 
-/// Refuses while the take letter still exists.
+/// Refuses unless `recipient_guid` holds the fixture letter `subject` as `held` says.
 #[reducer]
-pub fn debug_verify_mail_take_fixture(ctx: &ReducerContext) -> Result<(), String> {
+pub fn debug_verify_mail_fixture_held(
+    ctx: &ReducerContext,
+    recipient_guid: u64,
+    subject: String,
+    held: bool,
+) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
-    match find(ctx, TAKER, TAKE) {
-        Some(_) => Err("the take letter has not expired".to_string()),
-        None => Ok(()),
+    if find(ctx, recipient_guid, &subject).is_some() == held {
+        Ok(())
+    } else {
+        Err(format!("{recipient_guid} holding {subject} is not {held}"))
     }
 }

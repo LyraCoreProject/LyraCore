@@ -129,7 +129,7 @@ pub mod death_condition_type;
 pub mod debug_accept_quest_reducer;
 pub mod debug_add_threat_reducer;
 pub mod debug_admit_sessionless_action_reducer;
-pub mod debug_age_mail_take_fixture_reducer;
+pub mod debug_age_mail_fixture_reducer;
 pub mod debug_apply_damage_reducer;
 pub mod debug_apply_lethal_damage_floor_fixture_reducer;
 pub mod debug_arm_instance_tick_reducer;
@@ -293,8 +293,8 @@ pub mod debug_verify_legacy_auction_mail_repaired_reducer;
 pub mod debug_verify_lethal_damage_floor_fixture_reducer;
 pub mod debug_verify_loot_tag_fixture_reducer;
 pub mod debug_verify_mail_expiry_fixture_reducer;
+pub mod debug_verify_mail_fixture_held_reducer;
 pub mod debug_verify_mail_legacy_fixture_reducer;
-pub mod debug_verify_mail_take_fixture_reducer;
 pub mod debug_verify_ranged_lethal_damage_floor_fixture_reducer;
 pub mod debug_vmap_area_info_reducer;
 pub mod debug_vmap_ray_instance_reducer;
@@ -1232,7 +1232,7 @@ pub use death_condition_type::DeathCondition;
 pub use debug_accept_quest_reducer::debug_accept_quest;
 pub use debug_add_threat_reducer::debug_add_threat;
 pub use debug_admit_sessionless_action_reducer::debug_admit_sessionless_action;
-pub use debug_age_mail_take_fixture_reducer::debug_age_mail_take_fixture;
+pub use debug_age_mail_fixture_reducer::debug_age_mail_fixture;
 pub use debug_apply_damage_reducer::debug_apply_damage;
 pub use debug_apply_lethal_damage_floor_fixture_reducer::debug_apply_lethal_damage_floor_fixture;
 pub use debug_arm_instance_tick_reducer::debug_arm_instance_tick;
@@ -1396,8 +1396,8 @@ pub use debug_verify_legacy_auction_mail_repaired_reducer::debug_verify_legacy_a
 pub use debug_verify_lethal_damage_floor_fixture_reducer::debug_verify_lethal_damage_floor_fixture;
 pub use debug_verify_loot_tag_fixture_reducer::debug_verify_loot_tag_fixture;
 pub use debug_verify_mail_expiry_fixture_reducer::debug_verify_mail_expiry_fixture;
+pub use debug_verify_mail_fixture_held_reducer::debug_verify_mail_fixture_held;
 pub use debug_verify_mail_legacy_fixture_reducer::debug_verify_mail_legacy_fixture;
-pub use debug_verify_mail_take_fixture_reducer::debug_verify_mail_take_fixture;
 pub use debug_verify_ranged_lethal_damage_floor_fixture_reducer::debug_verify_ranged_lethal_damage_floor_fixture;
 pub use debug_vmap_area_info_reducer::debug_vmap_area_info;
 pub use debug_vmap_ray_instance_reducer::debug_vmap_ray_instance;
@@ -2364,7 +2364,11 @@ pub enum Reducer {
     DebugAdmitSessionlessAction {
         character_guid: u64,
     },
-    DebugAgeMailTakeFixture,
+    DebugAgeMailFixture {
+        recipient_guid: u64,
+        subject: String,
+        age_secs: u64,
+    },
     DebugApplyDamage {
         target_guid: u64,
         amount: u32,
@@ -3016,8 +3020,12 @@ pub enum Reducer {
     },
     DebugVerifyLootTagFixture,
     DebugVerifyMailExpiryFixture,
+    DebugVerifyMailFixtureHeld {
+        recipient_guid: u64,
+        subject: String,
+        held: bool,
+    },
     DebugVerifyMailLegacyFixture,
-    DebugVerifyMailTakeFixture,
     DebugVerifyRangedLethalDamageFloorFixture {
         attacker_guid: u64,
         creature_guid: u64,
@@ -4136,7 +4144,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugAcceptQuest { .. } => "debug_accept_quest",
             Reducer::DebugAddThreat { .. } => "debug_add_threat",
             Reducer::DebugAdmitSessionlessAction { .. } => "debug_admit_sessionless_action",
-            Reducer::DebugAgeMailTakeFixture => "debug_age_mail_take_fixture",
+            Reducer::DebugAgeMailFixture { .. } => "debug_age_mail_fixture",
             Reducer::DebugApplyDamage { .. } => "debug_apply_damage",
             Reducer::DebugApplyLethalDamageFloorFixture { .. } => {
                 "debug_apply_lethal_damage_floor_fixture"
@@ -4341,8 +4349,8 @@ impl __sdk::Reducer for Reducer {
             }
             Reducer::DebugVerifyLootTagFixture => "debug_verify_loot_tag_fixture",
             Reducer::DebugVerifyMailExpiryFixture => "debug_verify_mail_expiry_fixture",
+            Reducer::DebugVerifyMailFixtureHeld { .. } => "debug_verify_mail_fixture_held",
             Reducer::DebugVerifyMailLegacyFixture => "debug_verify_mail_legacy_fixture",
-            Reducer::DebugVerifyMailTakeFixture => "debug_verify_mail_take_fixture",
             Reducer::DebugVerifyRangedLethalDamageFloorFixture { .. } => {
                 "debug_verify_ranged_lethal_damage_floor_fixture"
             }
@@ -4849,9 +4857,16 @@ Reducer::ClaimPartyCommandIntent{
 }             => __sats::bsatn::to_vec(&debug_admit_sessionless_action_reducer::DebugAdmitSessionlessActionArgs {
                 character_guid: character_guid.clone(),
 }),
-            Reducer::DebugAgeMailTakeFixture => __sats::bsatn::to_vec(&debug_age_mail_take_fixture_reducer::DebugAgeMailTakeFixtureArgs {
-                }),
-Reducer::DebugApplyDamage{
+            Reducer::DebugAgeMailFixture{
+                recipient_guid,
+                subject,
+                age_secs,
+}             => __sats::bsatn::to_vec(&debug_age_mail_fixture_reducer::DebugAgeMailFixtureArgs {
+                recipient_guid: recipient_guid.clone(),
+                subject: subject.clone(),
+                age_secs: age_secs.clone(),
+}),
+            Reducer::DebugApplyDamage{
                 target_guid,
                 amount,
                 attacker_guid,
@@ -6019,9 +6034,16 @@ Reducer::DebugVerifyLethalDamageFloorFixture{
                 }),
 Reducer::DebugVerifyMailExpiryFixture => __sats::bsatn::to_vec(&debug_verify_mail_expiry_fixture_reducer::DebugVerifyMailExpiryFixtureArgs {
                 }),
-Reducer::DebugVerifyMailLegacyFixture => __sats::bsatn::to_vec(&debug_verify_mail_legacy_fixture_reducer::DebugVerifyMailLegacyFixtureArgs {
-                }),
-Reducer::DebugVerifyMailTakeFixture => __sats::bsatn::to_vec(&debug_verify_mail_take_fixture_reducer::DebugVerifyMailTakeFixtureArgs {
+Reducer::DebugVerifyMailFixtureHeld{
+                recipient_guid,
+                subject,
+                held,
+}             => __sats::bsatn::to_vec(&debug_verify_mail_fixture_held_reducer::DebugVerifyMailFixtureHeldArgs {
+                recipient_guid: recipient_guid.clone(),
+                subject: subject.clone(),
+                held: held.clone(),
+}),
+            Reducer::DebugVerifyMailLegacyFixture => __sats::bsatn::to_vec(&debug_verify_mail_legacy_fixture_reducer::DebugVerifyMailLegacyFixtureArgs {
                 }),
 Reducer::DebugVerifyRangedLethalDamageFloorFixture{
                 attacker_guid,
