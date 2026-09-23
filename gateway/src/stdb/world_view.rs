@@ -3623,7 +3623,6 @@ mod realm_chat_relay_tests {
     use std::collections::{HashMap, HashSet};
     use std::sync::mpsc::Receiver;
     use std::sync::{Arc, Mutex};
-    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 
     const SPEAKER: u64 = 10;
 
@@ -3681,27 +3680,41 @@ mod realm_chat_relay_tests {
     }
 
     /// Every queued packet for one viewer, jobs run in order.
-    fn received(rx: &Receiver<Outbound>) -> Vec<ServerOpcodeMessage> {
-        let mut packets = Vec::new();
+    /// The body of every packet queued for one viewer, jobs run in order. Each packet must be one
+    /// framed `SMSG_MESSAGECHAT`: size u16 big-endian, then opcode 0x0096 little-endian.
+    fn received(rx: &Receiver<Outbound>) -> Vec<Vec<u8>> {
+        let mut bodies = Vec::new();
         while let Ok(outbound) = rx.try_recv() {
             let Outbound::Job(job) = outbound else {
                 panic!("the Relay must enqueue packet work as a writer job");
             };
             for packet in job() {
-                match packet {
-                    Outbound::One(message) => packets.push(message),
-                    _ => panic!("a Realm Chat Line is one packet"),
-                }
+                let Outbound::One(message) = packet else {
+                    panic!("a Realm Chat Line is one packet");
+                };
+                let mut frame = Vec::new();
+                message.write_unencrypted_server(&mut frame).unwrap();
+                let body = frame.split_off(4);
+                assert_eq!(frame[..2], ((body.len() + 2) as u16).to_be_bytes());
+                assert_eq!(frame[2..], [0x96, 0x00], "SMSG_MESSAGECHAT");
+                bodies.push(body);
             }
         }
-        packets
+        bodies
     }
 
-    fn expected_line() -> ServerOpcodeMessage {
-        ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(
-            crate::codec::build_realm_chat_line(1, SPEAKER, 7, 0, String::new(), "form up".into())
-                .unwrap(),
-        ))
+    /// A PARTY line in Common from `SPEAKER` saying "form up", written out from cm:Chat.cpp:3637-3641
+    /// rather than built with the codec the Relay calls: type, language, the sender guid twice, the
+    /// sized message with its terminator, then the chat tag.
+    fn expected_line() -> Vec<u8> {
+        let mut body = vec![0x01]; // CHAT_MSG_PARTY
+        body.extend(7u32.to_le_bytes()); // LANG_COMMON
+        body.extend(SPEAKER.to_le_bytes());
+        body.extend(SPEAKER.to_le_bytes());
+        body.extend(8u32.to_le_bytes()); // "form up" and its terminator
+        body.extend(b"form up\0");
+        body.push(0); // CHAT_TAG_NONE
+        body
     }
 
     #[test]
