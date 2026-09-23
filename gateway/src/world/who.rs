@@ -6,7 +6,7 @@ use anyhow::Result;
 use super::{presence, WorldStore};
 use crate::codec;
 use lyracore_shared::faction;
-use wow_world_messages::vanilla::{CMSG_WHO, SMSG_WHO};
+use wow_world_messages::vanilla::CMSG_WHO;
 
 /// More than this many zones gets no answer (cm:MiscHandler.cpp:90-91).
 const MAX_ZONES: usize = 10;
@@ -50,6 +50,25 @@ fn name_matches(filter: &str, value: &str) -> bool {
             .contains(&filter.to_ascii_lowercase())
 }
 
+/// Does any NON-EMPTY search string match the guild name, the Character name, or the zone name?
+/// An empty list, or a list holding only empty strings, matches every row
+/// (cm:MiscHandler.cpp:228-243, vm:MiscHandler.cpp:187-202) — this is an ANY across the strings a
+/// client actually typed, not a rule that every string must itself find something.
+fn search_strings_match(strings: &[String], candidate: &WhoCandidate) -> bool {
+    let real_strings = strings.iter().filter(|s| !s.is_empty());
+    let mut any_real = false;
+    for s in real_strings {
+        any_real = true;
+        if name_matches(s, candidate.name)
+            || name_matches(s, candidate.guild_name)
+            || name_matches(s, candidate.zone_name)
+        {
+            return true;
+        }
+    }
+    !any_real
+}
+
 /// Does `candidate` pass every `/who` rule the requester sent? One clause per cited rule
 /// (cm:MiscHandler.cpp:156-244).
 pub(crate) fn matches(filter: &WhoFilter, candidate: &WhoCandidate) -> bool {
@@ -61,11 +80,7 @@ pub(crate) fn matches(filter: &WhoFilter, candidate: &WhoCandidate) -> bool {
         && (filter.zones.is_empty() || filter.zones.contains(&candidate.zone_id))
         && name_matches(filter.name, candidate.name)
         && name_matches(filter.guild_name, candidate.guild_name)
-        && filter.search_strings.iter().all(|s| {
-            name_matches(s, candidate.name)
-                || name_matches(s, candidate.guild_name)
-                || name_matches(s, candidate.zone_name)
-        })
+        && search_strings_match(filter.search_strings, candidate)
 }
 
 /// More than 10 zones or more than 4 search strings gets no answer at all
@@ -74,26 +89,35 @@ fn is_oversized(request: &CMSG_WHO) -> bool {
     request.zones.len() > MAX_ZONES || request.search_strings.len() > MAX_SEARCH_STRINGS
 }
 
-/// Build the `SMSG_WHO` reply for `request`, or `None` when the request itself is oversized (see
+/// A wire maximum level at or above 100 means no upper bound (cm:MiscHandler.cpp:133-136).
+fn effective_max_level(wire_max_level: u8) -> u8 {
+    if wire_max_level >= NO_UPPER_BOUND_AT {
+        u8::MAX
+    } else {
+        wire_max_level
+    }
+}
+
+/// Build the RAW `SMSG_WHO` reply for `request` — `(opcode, body)` for
+/// [`Outbound::Raw`](super::Outbound::Raw) — or `None` when the request itself is oversized (see
 /// [`is_oversized`]). `requester_race` decides the team every listed Character must share. Source
 /// is [`presence::in_world_characters`], so bots stay listed, as today.
+///
+/// A zone name is looked up only when the request carries a search string, since it is the only
+/// rule that reads one — the common case (no search string) then costs no zone lookups at all.
 pub(crate) fn respond<St: WorldStore + ?Sized>(
     store: &St,
     requester_race: u8,
     request: &CMSG_WHO,
-) -> Result<Option<SMSG_WHO>> {
+) -> Result<Option<(u16, Vec<u8>)>> {
     if is_oversized(request) {
         return Ok(None);
     }
-    let max_level = request.maximum_level.as_int();
+    let has_search_strings = request.search_strings.iter().any(|s| !s.is_empty());
     let filter = WhoFilter {
         requester_team: faction::team_for_race(requester_race),
         min_level: request.minimum_level.as_int(),
-        max_level: if max_level >= NO_UPPER_BOUND_AT {
-            u8::MAX
-        } else {
-            max_level
-        },
+        max_level: effective_max_level(request.maximum_level.as_int()),
         name: &request.player_name,
         guild_name: &request.guild_name,
         race_mask: request.race_mask,
@@ -103,7 +127,11 @@ pub(crate) fn respond<St: WorldStore + ?Sized>(
     };
     let mut players = Vec::new();
     for row in presence::in_world_characters(store)? {
-        let zone_name = store.zone_name(row.zone_id);
+        let zone_name = if has_search_strings {
+            store.zone_name(row.zone_id)
+        } else {
+            String::new()
+        };
         let candidate = WhoCandidate {
             name: &row.name,
             guild_name: "",
@@ -123,7 +151,7 @@ pub(crate) fn respond<St: WorldStore + ?Sized>(
             });
         }
     }
-    Ok(Some(codec::build_who_response(&players)))
+    Ok(Some(codec::build_who_response_raw(&players)))
 }
 
 #[cfg(test)]
@@ -171,6 +199,17 @@ mod tests {
         candidate.race = 2; // Orc
         filter.requester_team = TEAM_ALLIANCE;
         assert!(!matches(&filter, &candidate));
+    }
+
+    /// The team rule is symmetric: a Horde requester matches a Horde row the same way an Alliance
+    /// one matches an Alliance row, not just "excludes the other side" as seen from Alliance.
+    #[test]
+    fn a_horde_requester_matches_a_horde_candidate() {
+        let (mut filter, mut candidate) = baseline();
+        filter.requester_team = TEAM_HORDE;
+        filter.race_mask = 1 << 2; // Orc
+        candidate.race = 2; // Orc
+        assert!(matches(&filter, &candidate));
     }
 
     #[test]
@@ -253,12 +292,42 @@ mod tests {
         assert!(matches(&filter, &candidate));
     }
 
+    /// Any ONE non-empty search string matching is enough — the rest may miss
+    /// (cm:MiscHandler.cpp:228-243, vm:MiscHandler.cpp:187-202). Not every string must match.
     #[test]
-    fn every_search_string_must_match_something() {
+    fn any_non_empty_search_string_matching_is_enough() {
         let (mut filter, candidate) = baseline();
         let strings = ["ging".to_string(), "nowhere".to_string()];
         filter.search_strings = &strings;
+        assert!(
+            matches(&filter, &candidate),
+            "\"ging\" matches the name even though \"nowhere\" matches nothing"
+        );
+    }
+
+    #[test]
+    fn a_search_string_that_matches_nothing_at_all_excludes_the_row() {
+        let (mut filter, candidate) = baseline();
+        let strings = ["nowhere".to_string()];
+        filter.search_strings = &strings;
         assert!(!matches(&filter, &candidate));
+    }
+
+    /// When every search string is empty, every row passes — the same "empty filter matches all"
+    /// rule as a blank name or guild filter.
+    #[test]
+    fn every_string_empty_matches_every_row() {
+        let (mut filter, candidate) = baseline();
+        let strings = [String::new(), String::new()];
+        filter.search_strings = &strings;
+        assert!(matches(&filter, &candidate));
+    }
+
+    #[test]
+    fn effective_max_level_removes_the_upper_bound_at_100_and_above() {
+        assert_eq!(effective_max_level(99), 99);
+        assert_eq!(effective_max_level(100), u8::MAX);
+        assert_eq!(effective_max_level(255), u8::MAX);
     }
 
     /// **AC 5 (zones): oversized zone or string lists get no answer.**

@@ -8050,7 +8050,20 @@ fn auction_house_round_trip_stays_typed_and_ordered_over_an_encrypted_session() 
 
 #[test]
 fn refused_auctioneer_interaction_keeps_the_encrypted_world_session_alive() {
-    let store = std::sync::Arc::new(quest_store());
+    // A resolvable requester with no seeded in-world Characters (`entity_in_world: false`
+    // overrides `quest_store`'s blanket flag), so the WHO answer this test cares about is the
+    // empty-but-present reply, not "no answer for an unknown requester" (a different rule, pinned
+    // in `social.rs`'s own WHO tests).
+    let store = std::sync::Arc::new(InMemoryStore {
+        characters: vec![codec::CharacterView {
+            guid: 1,
+            name: "Tester".into(),
+            race: 1,
+            ..Default::default()
+        }],
+        entity_in_world: false,
+        ..quest_store()
+    });
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
 
     MSG_AUCTION_HELLO_Client {
@@ -8062,10 +8075,15 @@ fn refused_auctioneer_interaction_keeps_the_encrypted_world_session_alive() {
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
 
-    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
-        ServerOpcodeMessage::SMSG_WHO(response) => assert!(response.players.is_empty()),
-        other => panic!("auction refusal must be silent and leave WHO next, got {other}"),
-    }
+    // RAW-encoded (codec::build_who_response_raw); the auction refusal must be silent and leave
+    // WHO's own empty-roster reply next.
+    let (opcode, body) = read_raw_frame(&mut client, &mut c_dec);
+    assert_eq!(opcode, codec::social::SMSG_WHO_OPCODE);
+    assert_eq!(
+        &body[0..8],
+        &[0u8; 8],
+        "no in-world Characters: listed and online both 0"
+    );
 
     drop(client);
     server.join().unwrap();
@@ -9018,17 +9036,24 @@ fn who_reply_lists_every_online_player_with_level_and_zone() {
     }
     .write_encrypted_client(&mut client, &mut c_enc)
     .unwrap();
-    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
-        ServerOpcodeMessage::SMSG_WHO(w) => {
-            assert_eq!(w.online_players, 2);
-            assert_eq!(w.players.len(), 2);
-            assert_eq!(w.players[0].name, "Alpha");
-            assert_eq!(w.players[0].level, Level::new(5));
-            assert_eq!(w.players[1].name, "Bravo");
-            assert_eq!(w.players[1].level, Level::new(60));
-        }
-        other => panic!("expected SMSG_WHO, got {other}"),
+    // RAW-encoded (codec::build_who_response_raw): gtker's typed reader assumes the wrong 5875
+    // layout (see that builder's doc comment), so this reads the cmangos body by hand.
+    let (opcode, body) = read_raw_frame(&mut client, &mut c_dec);
+    assert_eq!(opcode, codec::social::SMSG_WHO_OPCODE);
+    let online_players = u32::from_le_bytes(body[4..8].try_into().unwrap());
+    assert_eq!(online_players, 2);
+    let mut rest = &body[8..];
+    for (name, level) in [("Alpha", 5u32), ("Bravo", 60)] {
+        let name_end = rest.iter().position(|&b| b == 0).unwrap();
+        assert_eq!(std::str::from_utf8(&rest[..name_end]).unwrap(), name);
+        rest = &rest[name_end + 1..];
+        let guild_end = rest.iter().position(|&b| b == 0).unwrap();
+        assert_eq!(guild_end, 0, "no guild system yet");
+        rest = &rest[guild_end + 1..];
+        assert_eq!(u32::from_le_bytes(rest[0..4].try_into().unwrap()), level);
+        rest = &rest[16..]; // level, class, race, zone: u32 each
     }
+    assert!(rest.is_empty(), "exactly two listed rows");
     drop(client);
     server.join().unwrap();
 }

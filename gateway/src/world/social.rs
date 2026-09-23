@@ -38,16 +38,18 @@ pub(super) fn handle_social<St: WorldStore + ?Sized>(
 ) -> Result<Option<ClientOpcodeMessage>> {
     match msg {
         // /who panel: filtered realm-wide (`who::respond`), same team only, every filter the
-        // client sent applied. Silently dropped outside the world: there is no requester Character
-        // to read a team from.
+        // client sent applied. Silently dropped outside the world (no requester Character to read
+        // a team from), for an unresolvable requester (never guess a team), and while this
+        // session's `WHO_THROTTLE` cooldown is running (vm:MiscHandler.cpp:230).
         ClientOpcodeMessage::CMSG_WHO(request) => {
             if let Some(me) = self_guid(conn) {
-                let race = store.character_by_guid(me)?.map(|c| c.race).unwrap_or(0);
-                if let Some(resp) = who::respond(store, race, &request)? {
-                    send(
-                        tx,
-                        Outbound::One(ServerOpcodeMessage::SMSG_WHO(Box::new(resp))),
-                    )?;
+                if conn.admit_who() {
+                    if let Some(character) = store.character_by_guid(me)? {
+                        if let Some((opcode, body)) = who::respond(store, character.race, &request)?
+                        {
+                            send(tx, Outbound::Raw { opcode, body })?;
+                        }
+                    }
                 }
             }
         }
