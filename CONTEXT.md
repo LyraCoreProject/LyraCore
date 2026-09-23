@@ -659,6 +659,9 @@ An NPC with the tabard-designer flag. Its window saves a Guild Emblem.
 **Guild Emblem**:
 The five tabard design values of a Guild. Only the Guild Leader saves one, for 10 gold.
 
+**Guild Invite**:
+A pending offer for one Character to join one Guild; expires after two minutes.
+
 ### World clock and weather
 
 **Realm Clock**:

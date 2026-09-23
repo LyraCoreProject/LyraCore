@@ -4052,11 +4052,24 @@ impl GuildActionStore for InMemoryStore {
         0
     }
 
+    fn guild_ignored_by(&self, _owner_guid: u64, _other_guid: u64) -> Result<bool> {
+        Ok(false)
+    }
+
     fn guild_op(&self, _actor_guid: u64, request: GuildRequest) -> Result<GuildOutcome> {
         self.rec(match request {
             GuildRequest::GmCreate { .. } => "guild_op:GmCreate",
             GuildRequest::SignOn { .. } => "guild_op:SignOn",
             GuildRequest::SignOff => "guild_op:SignOff",
+            GuildRequest::Invite { .. } => "guild_op:Invite",
+            GuildRequest::Accept { .. } => "guild_op:Accept",
+            GuildRequest::Decline { .. } => "guild_op:Decline",
+            GuildRequest::Leave => "guild_op:Leave",
+            GuildRequest::Remove { .. } => "guild_op:Remove",
+            GuildRequest::Promote { .. } => "guild_op:Promote",
+            GuildRequest::Demote { .. } => "guild_op:Demote",
+            GuildRequest::SetLeader { .. } => "guild_op:SetLeader",
+            GuildRequest::Disband => "guild_op:Disband",
         });
         Ok(GuildOutcome::Ran)
     }

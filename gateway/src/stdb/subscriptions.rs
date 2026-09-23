@@ -905,10 +905,29 @@ pub(crate) fn guild_values_outbound(
     vec![Outbound::Raw { opcode, body }]
 }
 
-/// Render one Guild Event row as SMSG_GUILD_EVENT. The row carries its final strings.
+/// Render one Guild Event row. The row carries its final strings. Kinds 0x40 (INVITE) and 0x41
+/// (DECLINE) are membership offers with their own wire shape; every other kind rides the generic
+/// SMSG_GUILD_EVENT builder.
 pub(crate) fn guild_event_outbound(row: &GuildEvent) -> Vec<Outbound> {
-    let (opcode, body) = codec::build_guild_event_raw(row.kind, &row.strings, row.subject_guid);
-    vec![Outbound::Raw { opcode, body }]
+    match row.kind {
+        lyracore_shared::guild::event_kind::INVITE => {
+            let actor_name = row.strings.first().cloned().unwrap_or_default();
+            let guild_name = row.strings.get(1).cloned().unwrap_or_default();
+            vec![Outbound::One(ServerOpcodeMessage::SMSG_GUILD_INVITE(
+                Box::new(codec::build_guild_invite(actor_name, guild_name)),
+            ))]
+        }
+        lyracore_shared::guild::event_kind::DECLINE => {
+            let actor_name = row.strings.first().cloned().unwrap_or_default();
+            let (opcode, body) = codec::build_guild_decline_raw(&actor_name);
+            vec![Outbound::Raw { opcode, body }]
+        }
+        _ => {
+            let (opcode, body) =
+                codec::build_guild_event_raw(row.kind, &row.strings, row.subject_guid);
+            vec![Outbound::Raw { opcode, body }]
+        }
+    }
 }
 
 /// The Guild's SMSG_GUILD_QUERY_RESPONSE after TABARD_CHANGED, so every member draws the new

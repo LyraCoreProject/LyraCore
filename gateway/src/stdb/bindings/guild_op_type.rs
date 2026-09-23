@@ -4,7 +4,9 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::guild_accept_request_type::GuildAcceptRequest;
 use super::guild_gm_create_type::GuildGmCreate;
+use super::guild_invite_request_type::GuildInviteRequest;
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
@@ -14,6 +16,24 @@ pub enum GuildOp {
     SignOn(String),
 
     SignOff,
+
+    Invite(GuildInviteRequest),
+
+    Accept(GuildAcceptRequest),
+
+    Decline(String),
+
+    Leave,
+
+    Remove(u64),
+
+    Promote(u64),
+
+    Demote(u64),
+
+    SetLeader(u64),
+
+    Disband,
 }
 
 impl __sdk::InModule for GuildOp {

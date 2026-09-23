@@ -56,6 +56,7 @@ impl Coordinator {
             guild_id: guild.guild_id,
             name: guild.name,
             leader_guid: guild.leader_guid,
+            team: guild.team,
             motd: guild.motd,
             info: guild.info,
             emblem_style: guild.emblem_style,

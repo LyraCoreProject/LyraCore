@@ -4,7 +4,8 @@
 use super::*;
 use wow_world_messages::vanilla::{
     GuildCommand, GuildCommandResult, GuildMember, GuildMember_GuildMemberStatus,
-    SMSG_GUILD_COMMAND_RESULT, SMSG_GUILD_INFO, SMSG_GUILD_QUERY_RESPONSE, SMSG_GUILD_ROSTER,
+    SMSG_GUILD_COMMAND_RESULT, SMSG_GUILD_INFO, SMSG_GUILD_INVITE, SMSG_GUILD_QUERY_RESPONSE,
+    SMSG_GUILD_ROSTER,
 };
 
 /// SMSG_GUILD_EVENT. gtker's vanilla type has no trailing guid, so the event is encoded raw.
@@ -28,6 +29,8 @@ pub struct GuildView {
     pub guild_id: u32,
     pub name: String,
     pub leader_guid: u64,
+    /// `lyracore_shared::faction::TEAM_*`, fixed at founding.
+    pub team: u32,
     pub motd: String,
     pub info: String,
     pub emblem_style: u32,
@@ -177,6 +180,26 @@ fn roster_line_size(line: &GuildRosterLine) -> usize {
     FIXED + offline + strings.iter().map(|s| s.len() + 1).sum::<usize>()
 }
 
+/// SMSG_GUILD_INVITE (`gtker:shared/smsg_guild_invite_vanilla_tbc_wrath.rs`): the inviter's name and
+/// the Guild's name (`cm:GuildHandler.cpp:124-131`).
+pub fn build_guild_invite(player_name: String, guild_name: String) -> SMSG_GUILD_INVITE {
+    SMSG_GUILD_INVITE {
+        player_name,
+        guild_name,
+    }
+}
+
+/// SMSG_GUILD_DECLINE (opcode 0x086). No vanilla type in gtker (TBC and Wrath only), so encoded
+/// raw: one CString, the declining Character's name (`cm:GuildHandler.cpp:229-231`,
+/// `cm:Opcodes.cpp:162`).
+pub const SMSG_GUILD_DECLINE_OPCODE: u16 = 0x0086;
+
+pub fn build_guild_decline_raw(player_name: &str) -> (u16, Vec<u8>) {
+    let mut body = player_name.as_bytes().to_vec();
+    body.push(0);
+    (SMSG_GUILD_DECLINE_OPCODE, body)
+}
+
 /// SMSG_GUILD_EVENT as `(opcode, body)`: `u8 event`, `u8 count`, the strings, then the subject guid
 /// when nonzero (`cm:Guild.cpp:886-911`).
 pub fn build_guild_event_raw(kind: u8, strings: &[String], subject_guid: u64) -> (u16, Vec<u8>) {
@@ -235,6 +258,27 @@ mod tests {
         }
         assert_eq!(&wire[4..], expected.as_slice());
         assert_eq!(u16::from_le_bytes([wire[2], wire[3]]), 0x0055);
+    }
+
+    #[test]
+    fn guild_invite_writes_the_inviter_and_guild_name() {
+        let message = ServerOpcodeMessage::SMSG_GUILD_INVITE(Box::new(build_guild_invite(
+            "Alice".into(),
+            "Tracer Guild".into(),
+        )));
+        let mut wire = Vec::new();
+        message.write_unencrypted_server(&mut wire).unwrap();
+        let mut expected = b"Alice\0".to_vec();
+        expected.extend_from_slice(b"Tracer Guild\0");
+        assert_eq!(&wire[4..], expected.as_slice());
+        assert_eq!(u16::from_le_bytes([wire[2], wire[3]]), 0x0083);
+    }
+
+    #[test]
+    fn guild_decline_encodes_raw_as_one_cstring_at_its_own_opcode() {
+        let (opcode, body) = build_guild_decline_raw("Bob");
+        assert_eq!(opcode, 0x0086);
+        assert_eq!(body, b"Bob\0");
     }
 
     #[test]
