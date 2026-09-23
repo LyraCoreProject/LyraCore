@@ -17,6 +17,7 @@ mod char;
 mod chat;
 mod combat;
 mod duel;
+mod guild;
 mod item;
 mod loot;
 mod mail;
@@ -47,6 +48,11 @@ pub(crate) use chat::{
 };
 pub(crate) use combat::handle_combat;
 pub(crate) use duel::{dispatch_duel_action, DuelActionOutcome, DuelActionPlayer, DuelActionStore};
+pub(crate) use guild::{
+    dispatch_guild_action, guild_projection, guild_world_entry, guild_world_exit,
+    is_guild_dot_command, run_guild_dot_command, CharacterFacts, GuildActionOutcome,
+    GuildActionPlayer, GuildActionStore, GuildOutcome, GuildRequest,
+};
 pub(crate) use item::{
     dispatch_item_action, ItemActionOutcome, ItemActionPlayer, ItemActionResult, ItemActionStore,
 };

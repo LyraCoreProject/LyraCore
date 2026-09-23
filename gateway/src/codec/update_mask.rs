@@ -103,6 +103,10 @@ pub mod idx {
     /// `PLAYER_DUEL_ARBITER` — the duel flag gameobject guid, u64 at slots 188 and 189.
     pub const PLAYER_DUEL_ARBITER: u16 = 188;
     pub const PLAYER_FLAGS: u16 = 190;
+    /// `PLAYER_GUILDID` and `PLAYER_GUILDRANK` (`UNIT_END + 3`, `+ 4`; `cm:UpdateFields.h:180-181`,
+    /// gtker's vanilla `set_player_guildid` writes 191). The Guild Projection.
+    pub const PLAYER_GUILDID: u16 = 191;
+    pub const PLAYER_GUILDRANK: u16 = 192;
     /// `PLAYER_BYTES_2`: byte 0 = facial hair, byte 3 = rest state (RESTED 0x01 → zzz + blue XP
     /// bar / NORMAL 0x02). Vanilla 1.12 index 194 (gtker `set_player_bytes_2` → `set_bytes(194, …)`,
     /// cross-checked: `PLAYER_BYTES_3 = 195`, `PLAYER_FLAGS = 190`). Relayed live on an inn crossing.

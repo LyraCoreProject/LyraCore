@@ -121,6 +121,15 @@ pub fn build_values_update_raw(guid: u64, mask: &update_mask::UpdateMaskValues) 
     (SMSG_UPDATE_OBJECT_OPCODE, body)
 }
 
+/// The Guild Projection as a partial VALUES update: `PLAYER_GUILDID` and `PLAYER_GUILDRANK`. Both
+/// are 0 for a Character in no Guild. Raw, so it never carries `OBJECT_FIELD_TYPE`.
+pub fn build_guild_values(guid: u64, guild_id: u32, rank_id: u32) -> (u16, Vec<u8>) {
+    let mut mask = update_mask::UpdateMaskValues::new();
+    mask.set_u32(update_mask::idx::PLAYER_GUILDID, guild_id);
+    mask.set_u32(update_mask::idx::PLAYER_GUILDRANK, rank_id);
+    build_values_update_raw(guid, &mask)
+}
+
 /// Build a partial VALUES update that sets ONE `PLAYER_EXPLORED_ZONES` word — the map fog-clear.
 /// `word_idx` is 0..64 (= `area_bit / 32`); `word_value` is the FULL u32 for that word,
 /// i.e. the OR of EVERY explored area_bit in that 32-bucket (a partial VALUES overwrites the whole

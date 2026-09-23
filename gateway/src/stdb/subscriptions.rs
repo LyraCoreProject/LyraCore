@@ -296,6 +296,9 @@ fn build_peer_create(
         };
     let mut view = entity_view(row.clone(), 0);
     view.dynamic_flags = projected_dynamic_flags(&coord.0.coord().conn.db, viewer_guid, row);
+    if row.type_mask & lyracore_shared::constants::type_mask::PLAYER_BIT != 0 {
+        (view.guild_id, view.guild_rank) = guild_projection_of(coord, row.guid);
+    }
     let auras = world.auras.on_target(shard, row.guid);
     match peer_create_outbound(&view, &inv, &auras) {
         Ok(out) => Some(out),
@@ -864,6 +867,38 @@ pub(crate) fn offer_peer_create_for(
         append_resident_taxi_after_create(&mut out, &viewer.created, viewer.self_guid, &spline);
     }
     out
+}
+
+/// The Guild Projection of `character_guid`, read from the Realm-core cache. `(0, 0)` when
+/// Realm-core cannot answer: the next membership relay corrects it.
+fn guild_projection_of(coord: &Coordinator, character_guid: u64) -> (u32, u32) {
+    coord
+        .realm_core()
+        .map_or((0, 0), |realm| realm.guild_projection(character_guid))
+}
+
+/// Relay the current Guild Projection of `character_guid` to a viewer that holds its entity: the
+/// member itself or a viewer whose `created` set has the guid. `projection` is read when the job
+/// runs, so a delayed job never writes a value older than the cache.
+pub(crate) fn guild_values_outbound(
+    viewer: &Viewer,
+    character_guid: u64,
+    projection: (u32, u32),
+) -> Vec<Outbound> {
+    if viewer.self_guid != character_guid
+        && !viewer.created.lock().unwrap().contains(&character_guid)
+    {
+        return Vec::new();
+    }
+    let (guild_id, rank_id) = projection;
+    let (opcode, body) = codec::build_guild_values(character_guid, guild_id, rank_id);
+    vec![Outbound::Raw { opcode, body }]
+}
+
+/// Render one Guild Event row as SMSG_GUILD_EVENT. The row carries its final strings.
+pub(crate) fn guild_event_outbound(row: &GuildEvent) -> Vec<Outbound> {
+    let (opcode, body) = codec::build_guild_event_raw(row.kind, &row.strings, row.subject_guid);
+    vec![Outbound::Raw { opcode, body }]
 }
 
 /// Relay one durable creature virtual-item projection to a viewer that already holds the creature.

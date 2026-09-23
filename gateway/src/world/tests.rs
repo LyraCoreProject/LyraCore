@@ -1,9 +1,9 @@
 use super::handlers::{
     AuctionActionStore, AuctionInteraction, CastStore, ChatActionStore, ChatOutcome,
-    DuelActionStore, ItemActionStore, LootWindowRefusal, LootWindowRequestStatus, LootWindowStore,
-    MeleeActionStore, MemberPresence, MemberShardCache, MemberSnapshot, MemberStatsStore,
-    QuestActionStore, RealmChatRequest, SpeakerFacts, TaxiActionStore, VendorActionStore,
-    WeatherStore,
+    DuelActionStore, GuildActionStore, ItemActionStore, LootWindowRefusal, LootWindowRequestStatus,
+    LootWindowStore, MeleeActionStore, MemberPresence, MemberShardCache, MemberSnapshot,
+    MemberStatsStore, QuestActionStore, RealmChatRequest, SpeakerFacts, TaxiActionStore,
+    VendorActionStore, WeatherStore,
 };
 use super::party::PartyOutcome;
 use super::*;
@@ -273,6 +273,8 @@ type MoveRecord = (u32, f32, f32, f32, f32, u32);
 
 #[derive(Default)]
 struct InMemoryStore {
+    /// Realm-core Guilds the guild query answers from. No fixture Character is a member.
+    guilds: Vec<codec::GuildView>,
     /// WORLDPORT_ACK gate: true = entity present -> a spurious ack is ignored;
     /// false (derive-Default) = absent -> a genuine transfer is pending.
     entity_in_world: bool,
@@ -3858,6 +3860,40 @@ impl DuelActionStore for InMemoryStore {
     }
 }
 
+impl GuildActionStore for InMemoryStore {
+    fn guild_member(&self, _character_guid: u64) -> Result<Option<codec::GuildMemberView>> {
+        Ok(None)
+    }
+
+    fn guild(&self, guild_id: u32) -> Result<Option<codec::GuildView>> {
+        Ok(self
+            .guilds
+            .iter()
+            .find(|guild| guild.guild_id == guild_id)
+            .cloned())
+    }
+
+    fn guild_members(&self, _guild_id: u32) -> Result<Vec<codec::GuildMemberView>> {
+        Ok(Vec::new())
+    }
+
+    fn guild_character_facts(&self, _character_guid: u64) -> Result<Option<CharacterFacts>> {
+        Ok(None)
+    }
+
+    fn guild_characters_named(&self, _name: &str) -> Result<Vec<u64>> {
+        Ok(Vec::new())
+    }
+
+    fn guild_selected_target(&self, _actor_guid: u64) -> u64 {
+        0
+    }
+
+    fn guild_op(&self, _actor_guid: u64, _request: GuildRequest) -> Result<GuildOutcome> {
+        Ok(GuildOutcome::Ran)
+    }
+}
+
 impl AuctionActionStore for InMemoryStore {
     fn auction_interaction(
         &self,
@@ -4910,6 +4946,47 @@ fn char_enum_returns_the_seeded_character() {
 }
 
 #[test]
+fn guild_query_answers_at_character_select() {
+    let store = std::sync::Arc::new(InMemoryStore {
+        guilds: vec![codec::GuildView {
+            guild_id: 7,
+            name: "Tracer Guild".into(),
+            ranks: vec![codec::GuildRankView {
+                rank_id: 0,
+                name: "Guild Master".into(),
+                rights: lyracore_shared::guild::rights::ALL,
+            }],
+            ..Default::default()
+        }],
+        ..tester_store(7)
+    });
+
+    let (mut client, server_end) = world_session_socket_pair();
+    let server_store = store.clone();
+    let server = std::thread::spawn(move || {
+        run_world_session(server_end, server_store.as_ref()).unwrap();
+    });
+
+    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
+    wow_world_messages::vanilla::CMSG_GUILD_QUERY { guild_id: 7 }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_GUILD_QUERY_RESPONSE(response) => {
+            assert_eq!(response.id, 7);
+            assert_eq!(response.name, "Tracer Guild");
+            assert_eq!(response.rank_names[0], "Guild Master");
+            assert_eq!(response.rank_names[1], "");
+        }
+        other => panic!("expected SMSG_GUILD_QUERY_RESPONSE, got {other}"),
+    }
+
+    drop(client);
+    server.join().unwrap();
+}
+
+#[test]
 fn char_create_replies_success_then_name_in_use() {
     // The fake store reports a name already among its characters as in-use, else success.
     let tester = codec::CharacterView {
@@ -5107,6 +5184,8 @@ fn warrior_entity() -> codec::EntityView {
         home_x: 0.0,
         home_y: 0.0,
         home_z: 0.0,
+        guild_id: 0,
+        guild_rank: 0,
     }
 }
 

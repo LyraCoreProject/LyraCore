@@ -672,6 +672,21 @@ parity_test!(parity_game_group_member_partition, "game_group_member_partition", 
     character_guid, group_id, membership_revision, member_active, map_id, instance_id,
     locator_revision, state,
 });
+// Guild state, authoritative on Realm-core.
+parity_test!(parity_game_guild, "game_guild", lyracore_module::guild::Guild, bindings::guild_type::Guild, {
+    guild_id, name_key, name, leader_guid, team, motd, info, emblem_style, emblem_color,
+    border_style, border_color, background_color, created_micros,
+});
+parity_test!(parity_game_guild_rank, "game_guild_rank", lyracore_module::guild::GuildRank, bindings::guild_rank_type::GuildRank, {
+    id, guild_id, rank_id, name, rights,
+});
+parity_test!(parity_game_guild_member, "game_guild_member", lyracore_module::guild::GuildMember, bindings::guild_member_type::GuildMember, {
+    character_guid, guild_id, rank_id, name, public_note, officer_note, realm_account_id,
+    joined_micros,
+});
+parity_test!(parity_game_guild_event, "game_guild_event", lyracore_module::guild::GuildEvent, bindings::guild_event_type::GuildEvent, {
+    id, guild_id, recipient_guid, kind, subject_guid, other_guid, strings, created_at,
+});
 parity_test!(parity_game_creature_quest_tap, "game_creature_quest_tap", lyracore_module::CreatureQuestTap, bindings::creature_quest_tap_type::CreatureQuestTap, {
     creature_guid, character_guid,
 });
@@ -1151,6 +1166,10 @@ const MANIFEST_TABLES: &[&str] = &[
     "game_group_roster_revision",
     "game_group_member",
     "game_group_member_partition",
+    "game_guild",
+    "game_guild_rank",
+    "game_guild_member",
+    "game_guild_event",
     "game_creature_quest_tap",
     "game_creature_quest_tap_member",
     "game_creature_loot_tag_group",

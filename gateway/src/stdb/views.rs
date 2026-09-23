@@ -45,6 +45,7 @@ pub(crate) fn character_view(c: Character) -> crate::codec::CharacterView {
         equipment: Default::default(), // filled by Coordinator::characters from item tables
         played_total_secs: c.played_total_secs,
         session_start_micros: c.session_start_micros,
+        guild_id: 0, // filled by Coordinator::characters from Realm-core membership
     }
 }
 
@@ -182,6 +183,9 @@ pub(crate) fn entity_view(e: WorldEntity, durable_zone: u32) -> crate::codec::En
         home_x: 0.0,
         home_y: 0.0,
         home_z: 0.0,
+        // The Guild Projection is not on the entity row; the CREATE paths read it from Realm-core.
+        guild_id: 0,
+        guild_rank: 0,
     }
 }
 

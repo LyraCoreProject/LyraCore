@@ -413,18 +413,31 @@ impl WorldStore for Coordinator {
     /// interrupted transfer left a frozen copy on both sides (first hit wins, and the source is
     /// listed first because `all_shards` puts the default database first).
     ///
-    /// Single-shard → the `is_sharded` short-circuit, byte-identical to before.
+    /// Single-shard → one read of this handle's own rows.
+    ///
+    /// Each Character's guild id comes from Realm-core membership. When Realm-core cannot answer,
+    /// the list still loads, with no guild names.
     fn characters(&self, account_id: u64) -> Result<Vec<codec::CharacterView>> {
-        if !self.is_sharded() {
-            return self.characters(account_id);
-        }
-        let mut out: Vec<codec::CharacterView> = Vec::new();
-        for shard in self.all_shards() {
-            for c in shard.characters(account_id)? {
-                if !out.iter().any(|existing| existing.guid == c.guid) {
-                    out.push(c);
+        let mut out: Vec<codec::CharacterView> = if self.is_sharded() {
+            let mut out: Vec<codec::CharacterView> = Vec::new();
+            for shard in self.all_shards() {
+                for c in shard.characters(account_id)? {
+                    if !out.iter().any(|existing| existing.guid == c.guid) {
+                        out.push(c);
+                    }
                 }
             }
+            out
+        } else {
+            self.characters(account_id)?
+        };
+        match self.realm_core() {
+            Ok(realm) => {
+                for c in &mut out {
+                    c.guild_id = realm.guild_projection(c.guid).0;
+                }
+            }
+            Err(error) => log::warn!("world: character list without guild ids: {error:#}"),
         }
         Ok(out)
     }
