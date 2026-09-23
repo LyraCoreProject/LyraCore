@@ -1,7 +1,8 @@
 //! Guild family: the guild window reads, CMSG_GUILD_CREATE, the `.guild create` dot-command, and
 //! the guild steps of world entry and exit. Every guild fact lives on Realm-core, so every read and
 //! Durable Request here goes there. The Gateway adds only the Character facts Realm-core cannot
-//! read: name, team, Realm Account, GM level and whether the Character is live.
+//! read: name, team, Realm Account, whether the Character is live, and the actor's GM level from its
+//! Home Shard.
 
 use super::super::*;
 use lyracore_shared::guild::{event_kind, has_right, rights, GuildRefusal};
@@ -20,7 +21,6 @@ pub(crate) struct CharacterFacts {
     pub(crate) last_logout_micros: u64,
     /// A live entity on any World Shard, bots included.
     pub(crate) online: bool,
-    pub(crate) gm_level: u8,
     /// 0 when no World Shard retains the Character's Realm Account.
     pub(crate) realm_account_id: u64,
 }
@@ -63,6 +63,9 @@ pub(crate) trait GuildActionStore: Send + Sync {
     fn guild_character_facts(&self, character_guid: u64) -> Result<Option<CharacterFacts>>;
     /// Every Character guid that carries `name`, across every World Shard.
     fn guild_characters_named(&self, name: &str) -> Result<Vec<u64>>;
+    /// The actor's GM level, read from THIS handle: the actor's Home Shard. A copy an interrupted
+    /// Transfer left on another shard is not authority.
+    fn guild_gm_level(&self, actor_guid: u64) -> Result<u8>;
     /// The unit the actor has selected, 0 for none.
     fn guild_selected_target(&self, actor_guid: u64) -> u64;
     /// Run one guild op on Realm-core as `actor_guid`.
@@ -91,6 +94,10 @@ impl GuildActionStore for crate::stdb::Coordinator {
 
     fn guild_characters_named(&self, name: &str) -> Result<Vec<u64>> {
         party::resolve_all_by_name(self, name)
+    }
+
+    fn guild_gm_level(&self, actor_guid: u64) -> Result<u8> {
+        Ok(crate::stdb::Coordinator::home_gm_level(self, actor_guid))
     }
 
     fn guild_selected_target(&self, actor_guid: u64) -> u64 {
@@ -305,13 +312,14 @@ fn create_outbound<St: GuildActionStore + ?Sized>(
     let Some(actor_guid) = player.self_guid else {
         return Ok(Vec::new());
     };
+    let gm_level = store.guild_gm_level(actor_guid)?;
+    if gm_level == 0 {
+        return Ok(Vec::new());
+    }
     let Some(actor) = store.guild_character_facts(actor_guid)? else {
         return Ok(Vec::new());
     };
-    if actor.gm_level == 0 {
-        return Ok(Vec::new());
-    }
-    let outcome = store.guild_op(actor_guid, gm_create(&actor, actor.gm_level, name))?;
+    let outcome = store.guild_op(actor_guid, gm_create(&actor, gm_level, name))?;
     if let GuildOutcome::Refused(refusal) = outcome {
         log::debug!("world: CMSG_GUILD_CREATE from {actor_guid} refused: {refusal:?}");
     }
@@ -348,9 +356,7 @@ pub(crate) fn run_guild_dot_command<St: GuildActionStore + ?Sized>(
     let Some(actor_guid) = player.self_guid else {
         return Ok(None);
     };
-    let gm_level = store
-        .guild_character_facts(actor_guid)?
-        .map_or(0, |actor| actor.gm_level);
+    let gm_level = store.guild_gm_level(actor_guid)?;
     if gm_level == 0 {
         return Ok(Some("permission denied".into()));
     }
@@ -432,35 +438,54 @@ pub(crate) fn guild_projection<St: GuildActionStore + ?Sized>(
     }
 }
 
-/// The guild part of world entry, run after the viewer is registered. It re-sends the member's own
-/// Guild Projection: a membership change between the self CREATE and registration reached no
-/// viewer. A fresh login also gets the MOTD (`cm:CharacterHandler.cpp:775-785`) and signs on, which
-/// tells the other online members. A failed step logs and never fails the login.
+/// The guild packets of world entry, sent after the viewer is registered. The self CREATE
+/// carried `created`, the Guild Projection read before registration; a membership change that
+/// landed in between reached no viewer, so a different current value goes out as a VALUES update,
+/// `(0, 0)` after a removal. A fresh login of a member also gets the MOTD
+/// (`cm:CharacterHandler.cpp:775-785`). A failed read logs and never fails the entry.
 pub(crate) fn guild_world_entry<St: GuildActionStore + ?Sized>(
     store: &St,
     character_guid: u64,
     entry: codec::WorldEntry,
+    created: (u32, u32),
 ) -> Vec<Outbound> {
     let member = match store.guild_member(character_guid) {
-        Ok(Some(member)) => member,
-        Ok(None) => return Vec::new(),
+        Ok(member) => member,
         Err(error) => {
             log::warn!("world: guild entry for {character_guid} unreadable: {error:#}");
             return Vec::new();
         }
     };
-    let (opcode, body) = codec::build_guild_values(character_guid, member.guild_id, member.rank_id);
-    let mut outbound = vec![Outbound::Raw { opcode, body }];
-    if entry != codec::WorldEntry::FreshLogin {
+    let (guild_id, rank_id) = member
+        .as_ref()
+        .map_or((0, 0), |member| (member.guild_id, member.rank_id));
+    let mut outbound = Vec::new();
+    if (guild_id, rank_id) != created {
+        let (opcode, body) = codec::build_guild_values(character_guid, guild_id, rank_id);
+        outbound.push(Outbound::Raw { opcode, body });
+    }
+    if member.is_none() || entry != codec::WorldEntry::FreshLogin {
         return outbound;
     }
-    match store.guild(member.guild_id) {
+    match store.guild(guild_id) {
         Ok(Some(guild)) => {
             let (opcode, body) = codec::build_guild_event_raw(event_kind::MOTD, &[guild.motd], 0);
             outbound.push(Outbound::Raw { opcode, body });
         }
         Ok(None) => {}
         Err(error) => log::warn!("world: guild MOTD for {character_guid} unreadable: {error:#}"),
+    }
+    outbound
+}
+
+/// A member entering the world fresh signs on, which tells the other online members. Answers
+/// whether SIGNED_ON went out, so the World Session owes a sign-off whatever happens next.
+pub(crate) fn guild_sign_on<St: GuildActionStore + ?Sized>(
+    store: &St,
+    character_guid: u64,
+) -> bool {
+    if !matches!(store.guild_member(character_guid), Ok(Some(_))) {
+        return false;
     }
     let actor_name = store
         .guild_character_facts(character_guid)
@@ -473,30 +498,34 @@ pub(crate) fn guild_world_entry<St: GuildActionStore + ?Sized>(
         character_guid,
         GuildRequest::SignOn { actor_name },
         "sign-on",
-    );
-    outbound
+    )
 }
 
 /// The guild part of leaving the world: a member signs off. Runs before the Account Claim is
 /// released, while Realm-core still accepts the actor (`cm:WorldSession.cpp:714-724`).
 pub(crate) fn guild_world_exit<St: GuildActionStore + ?Sized>(store: &St, character_guid: u64) {
     if matches!(store.guild_member(character_guid), Ok(Some(_))) {
-        run_best_effort(store, character_guid, GuildRequest::SignOff, "sign-off");
+        let _ = run_best_effort(store, character_guid, GuildRequest::SignOff, "sign-off");
     }
 }
 
+/// Run one guild op whose failure must not fail the caller. Answers whether it ran.
 fn run_best_effort<St: GuildActionStore + ?Sized>(
     store: &St,
     character_guid: u64,
     request: GuildRequest,
     step: &str,
-) {
+) -> bool {
     match store.guild_op(character_guid, request) {
-        Ok(GuildOutcome::Ran) => {}
+        Ok(GuildOutcome::Ran) => true,
         Ok(GuildOutcome::Refused(refusal)) => {
-            log::debug!("world: guild {step} for {character_guid} refused: {refusal:?}")
+            log::debug!("world: guild {step} for {character_guid} refused: {refusal:?}");
+            false
         }
-        Err(error) => log::warn!("world: guild {step} for {character_guid} failed: {error:#}"),
+        Err(error) => {
+            log::warn!("world: guild {step} for {character_guid} failed: {error:#}");
+            false
+        }
     }
 }
 
@@ -532,7 +561,7 @@ fn now_micros() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lyracore_shared::guild::{name_key, validate_guild_name, DEFAULT_MOTD, DEFAULT_RANKS};
+    use lyracore_shared::guild::{founding_gate, name_key, DEFAULT_MOTD, DEFAULT_RANKS};
     use std::sync::Mutex;
     use wow_world_messages::vanilla::{
         GuildMember, GuildMember_GuildMemberStatus, CMSG_GUILD_CREATE, CMSG_GUILD_QUERY, CMSG_PING,
@@ -549,19 +578,14 @@ mod tests {
         guilds: Mutex<Vec<codec::GuildView>>,
         members: Mutex<Vec<codec::GuildMemberView>>,
         characters: Vec<CharacterFacts>,
+        /// GM levels as each actor's Home Shard holds them.
+        gm_levels: Vec<(u64, u8)>,
         selected: u64,
         ops: Mutex<Vec<(u64, GuildRequest)>>,
         op_error: Option<String>,
     }
 
     impl InMemoryGuildActions {
-        fn with_characters(characters: Vec<CharacterFacts>) -> Self {
-            Self {
-                characters,
-                ..Self::default()
-            }
-        }
-
         fn guild_named(&self, name: &str) -> Option<codec::GuildView> {
             self.guilds
                 .lock()
@@ -633,6 +657,14 @@ mod tests {
                 .collect())
         }
 
+        fn guild_gm_level(&self, actor_guid: u64) -> Result<u8> {
+            Ok(self
+                .gm_levels
+                .iter()
+                .find(|(guid, _)| *guid == actor_guid)
+                .map_or(0, |(_, level)| *level))
+        }
+
         fn guild_selected_target(&self, _actor_guid: u64) -> u64 {
             self.selected
         }
@@ -657,22 +689,12 @@ mod tests {
             if gm_level == 0 {
                 return refused(GuildRefusal::NotGameMaster);
             }
-            if let Err(refusal) = validate_guild_name(&name) {
+            let leader_in_guild = self.guild_member(leader_guid)?.is_some();
+            let mut guilds = self.guilds.lock().unwrap();
+            let taken = |key: &str| guilds.iter().any(|guild| name_key(&guild.name) == key);
+            if let Err(refusal) = founding_gate(&name, taken, leader_in_guild) {
                 return refused(refusal);
             }
-            if self
-                .guilds
-                .lock()
-                .unwrap()
-                .iter()
-                .any(|guild| name_key(&guild.name) == name_key(&name))
-            {
-                return refused(GuildRefusal::NameExists);
-            }
-            if self.guild_member(leader_guid)?.is_some() {
-                return refused(GuildRefusal::AlreadyInGuild);
-            }
-            let mut guilds = self.guilds.lock().unwrap();
             let guild_id = guilds.len() as u32 + 1;
             guilds.push(codec::GuildView {
                 guild_id,
@@ -696,7 +718,7 @@ mod tests {
         }
     }
 
-    fn facts(guid: u64, name: &str, gm_level: u8) -> CharacterFacts {
+    fn facts(guid: u64, name: &str) -> CharacterFacts {
         CharacterFacts {
             guid,
             name: name.into(),
@@ -706,17 +728,20 @@ mod tests {
             zone_id: 12,
             last_logout_micros: 0,
             online: true,
-            gm_level,
             realm_account_id: guid,
         }
     }
 
     fn realm() -> InMemoryGuildActions {
-        InMemoryGuildActions::with_characters(vec![
-            facts(GM, "Gamemaster", 1),
-            facts(BOB, "Bob", 0),
-            facts(CAROL, "Carol", 0),
-        ])
+        InMemoryGuildActions {
+            characters: vec![
+                facts(GM, "Gamemaster"),
+                facts(BOB, "Bob"),
+                facts(CAROL, "Carol"),
+            ],
+            gm_levels: vec![(GM, 1)],
+            ..InMemoryGuildActions::default()
+        }
     }
 
     fn in_world(guid: u64) -> GuildActionPlayer {
@@ -972,7 +997,8 @@ mod tests {
     fn founded_with_members() -> InMemoryGuildActions {
         let mut store = realm();
         store.characters[2].online = false;
-        store.characters[2].last_logout_micros = 1;
+        // A day and a half ago: 1.5 * 86_400_000_000 micros.
+        store.characters[2].last_logout_micros = now_micros() - 129_600_000_000;
         run_guild_dot_command(&store, in_world(GM), ".guild create \"Knights\"").unwrap();
         store.add_member(1, BOB, 3, "bob note");
         store.add_member(1, CAROL, 4, "carol note");
@@ -1003,7 +1029,10 @@ mod tests {
         let GuildMember_GuildMemberStatus::Offline { time_offline } = carol.status else {
             panic!("Carol is offline");
         };
-        assert!(time_offline > 20_000.0, "days since 1970: {time_offline}");
+        assert!(
+            (time_offline - 1.5).abs() < 0.001,
+            "days offline: {time_offline}"
+        );
     }
 
     #[test]
@@ -1108,22 +1137,53 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn fresh_login_sends_projection_and_motd_then_signs_on() {
-        let store = founded_with_members();
-        let outbound = guild_world_entry(&store, BOB, codec::WorldEntry::FreshLogin);
-        let raw: Vec<(u16, Vec<u8>)> = outbound
+    fn raw(outbound: Vec<Outbound>) -> Vec<(u16, Vec<u8>)> {
+        outbound
             .into_iter()
             .map(|out| match out {
                 Outbound::Raw { opcode, body } => (opcode, body),
                 _ => panic!("guild entry packets are raw"),
             })
-            .collect();
-        assert_eq!(raw[0], codec::build_guild_values(BOB, 1, 3));
+            .collect()
+    }
+
+    #[test]
+    fn a_fresh_login_whose_create_matched_gets_only_the_motd() {
+        let store = founded_with_members();
+        let outbound = guild_world_entry(&store, BOB, codec::WorldEntry::FreshLogin, (1, 3));
         assert_eq!(
-            raw[1],
-            codec::build_guild_event_raw(event_kind::MOTD, &["No message set.".into()], 0)
+            raw(outbound),
+            vec![codec::build_guild_event_raw(
+                event_kind::MOTD,
+                &["No message set.".into()],
+                0
+            )]
         );
+    }
+
+    #[test]
+    fn a_membership_change_after_the_create_read_is_re_sent() {
+        let store = founded_with_members();
+        let joined = guild_world_entry(&store, BOB, codec::WorldEntry::WorldPort, (0, 0));
+        assert_eq!(raw(joined), vec![codec::build_guild_values(BOB, 1, 3)]);
+        let removed = guild_world_entry(&store, 5_090_404, codec::WorldEntry::WorldPort, (1, 3));
+        assert_eq!(
+            raw(removed),
+            vec![codec::build_guild_values(5_090_404, 0, 0)]
+        );
+    }
+
+    #[test]
+    fn a_non_member_whose_create_matched_gets_nothing() {
+        let store = founded_with_members();
+        let outbound = guild_world_entry(&store, 5_090_404, codec::WorldEntry::FreshLogin, (0, 0));
+        assert!(outbound.is_empty());
+    }
+
+    #[test]
+    fn a_member_signs_on_and_reports_it() {
+        let store = founded_with_members();
+        assert!(guild_sign_on(&store, BOB));
         assert_eq!(
             store.ops.lock().unwrap().last().cloned(),
             Some((
@@ -1133,23 +1193,16 @@ mod tests {
                 }
             ))
         );
-    }
-
-    #[test]
-    fn a_world_port_re_sends_the_projection_without_events() {
-        let store = founded_with_members();
         let before = store.ops.lock().unwrap().len();
-        let outbound = guild_world_entry(&store, BOB, codec::WorldEntry::WorldPort);
-        assert_eq!(outbound.len(), 1);
+        assert!(!guild_sign_on(&store, 5_090_404));
         assert_eq!(store.ops.lock().unwrap().len(), before);
     }
 
     #[test]
-    fn a_failed_sign_on_never_fails_the_login() {
+    fn a_failed_sign_on_owes_no_sign_off() {
         let mut store = founded_with_members();
         store.op_error = Some("realm_guild_op reducer transport disconnected: gone".into());
-        let outbound = guild_world_entry(&store, BOB, codec::WorldEntry::FreshLogin);
-        assert_eq!(outbound.len(), 2);
+        assert!(!guild_sign_on(&store, BOB));
     }
 
     #[test]

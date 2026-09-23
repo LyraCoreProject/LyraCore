@@ -432,12 +432,14 @@ follows the absence rule: every configured World Shard must be healthy, or the t
 
 The Guild Projection is PLAYER_GUILDID and PLAYER_GUILDRANK. No Shard stores them. The Gateway
 reads Realm-core membership when it encodes a player CREATE (self in `enter_world`, peers in
-`build_peer_create`) and re-sends both fields as a raw VALUES update when a `game_guild_member` row
-is inserted, updated or deleted. That relay finds the member's live entity in the cell index and
-queues one job per nearby viewer and the owner. The job sends only to the owner and to viewers
-whose `created` set holds the guid, and it reads membership when it runs, so a late job never
-writes an older value. World entry re-sends the member's own values after viewer registration to
-cover a change that landed between the CREATE read and registration.
+`build_peer_create`) and writes both fields, 0 outside a Guild, so a re-CREATE clears a guild id
+the client kept from a missed removal. It re-sends both fields as a raw VALUES update when a
+`game_guild_member` row is inserted, updated or deleted. That relay queues one job for the member's
+own session and one per viewer near the member's live entity. The job sends only to the member and
+to viewers whose `created` set holds the guid, and it reads membership when it runs, so a late job
+never writes an older value. World entry re-sends the member's own values after viewer
+registration when membership changed between the CREATE read and registration. A World Session
+that signed on also signs off when it leaves, even after a failed world-port.
 
 `game_bot_invite_intent` carries a short-lived party decision and uses a connection callback.
 `game_bot_transfer_intent` is durable work. One bounded dispatcher per World Shard polls through the

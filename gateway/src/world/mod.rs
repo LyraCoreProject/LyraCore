@@ -375,6 +375,9 @@ pub struct WorldConn {
     /// is already keyed by, read from `game_session` moments earlier in `world_handshake`. `None`
     /// for sessions built by tests that never handshake.
     session_key: Option<[u8; 40]>,
+    /// The Character that signed on to its Guild in this World Session. `leave_world` signs it
+    /// off even when a failed world-port left the state at CharSelect.
+    guild_signed_on: Option<u64>,
     /// Consecutive movement packets dropped because the coordinator cache has no live entity.
     /// Reset by the first movement whose entity is present. See
     /// [`MOVE_DESYNC_TOLERANCE`] for why the tolerance is bounded rather than unconditional.
@@ -460,12 +463,15 @@ impl WorldConn {
     }
 
     /// Leave the world and release the matching durable Account claim, including failed entry.
-    /// A Guild member signs off first, while Realm-core still accepts the Account Claim.
+    /// A Guild member signs off first, while Realm-core still accepts the Account Claim. The
+    /// Character that signed on this session signs off even when a failed world-port left the
+    /// state at CharSelect.
     fn leave_world<St: WorldStore + ?Sized>(&mut self, store: &St) -> Result<()> {
         let previous = std::mem::replace(&mut self.state, WorldState::CharSelect);
+        let signed_on = self.guild_signed_on.take();
         let left = match &previous {
             WorldState::InWorld(iw) => Some(iw.self_guid),
-            WorldState::CharSelect => None,
+            WorldState::CharSelect => signed_on,
         };
         drop(previous);
         if let Some(character_guid) = left {
@@ -649,6 +655,7 @@ fn world_handshake_with_queue_and_deadline<
             gossip_menu: None,
             home: None,                     // resolved at CMSG_PLAYER_LOGIN
             session_key: Some(session_key), // for establish_session on a non-realm shard
+            guild_signed_on: None,
             move_desync_drops: 0,
         },
         encrypt,

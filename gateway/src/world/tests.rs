@@ -273,8 +273,10 @@ type MoveRecord = (u32, f32, f32, f32, f32, u32);
 
 #[derive(Default)]
 struct InMemoryStore {
-    /// Realm-core Guilds the guild query answers from. No fixture Character is a member.
+    /// Realm-core Guilds the guild query answers from.
     guilds: Vec<codec::GuildView>,
+    /// Realm-core member rows. Guild ops are recorded in `calls` as `guild_op:<request>`.
+    guild_memberships: Vec<codec::GuildMemberView>,
     /// WORLDPORT_ACK gate: true = entity present -> a spurious ack is ignored;
     /// false (derive-Default) = absent -> a genuine transfer is pending.
     entity_in_world: bool,
@@ -3861,8 +3863,12 @@ impl DuelActionStore for InMemoryStore {
 }
 
 impl GuildActionStore for InMemoryStore {
-    fn guild_member(&self, _character_guid: u64) -> Result<Option<codec::GuildMemberView>> {
-        Ok(None)
+    fn guild_member(&self, character_guid: u64) -> Result<Option<codec::GuildMemberView>> {
+        Ok(self
+            .guild_memberships
+            .iter()
+            .find(|member| member.character_guid == character_guid)
+            .cloned())
     }
 
     fn guild(&self, guild_id: u32) -> Result<Option<codec::GuildView>> {
@@ -3885,11 +3891,20 @@ impl GuildActionStore for InMemoryStore {
         Ok(Vec::new())
     }
 
+    fn guild_gm_level(&self, _actor_guid: u64) -> Result<u8> {
+        Ok(0)
+    }
+
     fn guild_selected_target(&self, _actor_guid: u64) -> u64 {
         0
     }
 
-    fn guild_op(&self, _actor_guid: u64, _request: GuildRequest) -> Result<GuildOutcome> {
+    fn guild_op(&self, _actor_guid: u64, request: GuildRequest) -> Result<GuildOutcome> {
+        self.rec(match request {
+            GuildRequest::GmCreate { .. } => "guild_op:GmCreate",
+            GuildRequest::SignOn { .. } => "guild_op:SignOn",
+            GuildRequest::SignOff => "guild_op:SignOff",
+        });
         Ok(GuildOutcome::Ran)
     }
 }
@@ -4984,6 +4999,125 @@ fn guild_query_answers_at_character_select() {
 
     drop(client);
     server.join().unwrap();
+}
+
+/// Character 1 as a member of Guild 7 at rank 3.
+fn guild_member_store() -> InMemoryStore {
+    InMemoryStore {
+        login_entity: Some(warrior_entity()),
+        guild_memberships: vec![codec::GuildMemberView {
+            character_guid: 1,
+            guild_id: 7,
+            rank_id: 3,
+            name: "Warrior".into(),
+            ..Default::default()
+        }],
+        ..tester_store(7)
+    }
+}
+
+/// The recorded operations, in call order, without their Shard.
+fn recorded(store: &InMemoryStore) -> Vec<String> {
+    store
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(_, what)| what.clone())
+        .collect()
+}
+
+fn position(calls: &[String], what: &str) -> usize {
+    calls
+        .iter()
+        .position(|call| call == what)
+        .unwrap_or_else(|| panic!("`{what}` never ran: {calls:?}"))
+}
+
+#[test]
+fn a_member_enters_the_world_with_its_guild_on_the_self_create_and_signs_on() {
+    let store = std::sync::Arc::new(guild_member_store());
+    let (mut client, server_end) = world_session_socket_pair();
+    let server_store = store.clone();
+    let server = std::thread::spawn(move || {
+        run_world_session(server_end, server_store.as_ref()).unwrap();
+    });
+    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
+    CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    let mut guild = None;
+    for _ in 0..WORLD_ENTRY_PACKETS {
+        if let ServerOpcodeMessage::SMSG_UPDATE_OBJECT(update) =
+            ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap()
+        {
+            if let [Object::CreateObject2 {
+                mask2: wow_world_messages::vanilla::UpdateMask::Player(player),
+                ..
+            }] = update.objects.as_slice()
+            {
+                guild = Some((player.player_guildid(), player.player_guildrank()));
+            }
+        }
+    }
+    assert_eq!(guild, Some((Some(7), Some(3))));
+    drop(client);
+    server.join().unwrap();
+    assert!(recorded(&store).contains(&"guild_op:SignOn".to_string()));
+}
+
+#[test]
+fn logout_signs_the_member_off_before_the_account_claim_is_released() {
+    let store = std::sync::Arc::new(guild_member_store());
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_LOGOUT_REQUEST {}
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    for _ in 0..2 {
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
+    }
+    drop(client);
+    server.join().unwrap();
+    let calls = recorded(&store);
+    assert!(
+        position(&calls, "guild_op:SignOff") < position(&calls, "logout"),
+        "Realm-core refuses a sign-off after the Account Claim closes: {calls:?}"
+    );
+}
+
+#[test]
+fn a_world_port_that_fails_after_sign_on_still_signs_off() {
+    let store = std::sync::Arc::new(InMemoryStore {
+        // The world-port ack is only actionable after teleport_player removed the old entity.
+        entity_in_world: false,
+        worldport_login_error: Some("character 1 is stranded on map 36".into()),
+        ..guild_member_store()
+    });
+    let (mut client, server_end) = world_session_socket_pair();
+    let server_store = store.clone();
+    let server = std::thread::spawn(move || run_world_session(server_end, server_store.as_ref()));
+    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
+    CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    for _ in 0..WORLD_ENTRY_PACKETS {
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
+    }
+    MSG_MOVE_WORLDPORT_ACK {}
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    while ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).is_ok() {}
+    drop(client);
+    assert!(
+        server.join().unwrap().is_err(),
+        "the failed entry ends the session"
+    );
+    let calls = recorded(&store);
+    assert!(
+        position(&calls, "guild_op:SignOn") < position(&calls, "guild_op:SignOff"),
+        "{calls:?}"
+    );
+    assert!(position(&calls, "guild_op:SignOff") < position(&calls, "logout"));
 }
 
 #[test]

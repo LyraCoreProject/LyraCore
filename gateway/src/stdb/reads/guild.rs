@@ -139,9 +139,21 @@ impl Coordinator {
             zone_id,
             last_logout_micros: character.last_logout_micros,
             online: live.is_some(),
-            gm_level: character.gm_level,
             realm_account_id,
         })
+    }
+
+    /// The GM level on THIS handle's own Character row, 0 when it holds none. The guild Gates call
+    /// it on the actor's Home Shard, so a copy an interrupted Transfer left elsewhere never counts.
+    pub(crate) fn home_gm_level(&self, character_guid: u64) -> u8 {
+        self.0
+            .coord()
+            .conn
+            .db
+            .game_character()
+            .guid()
+            .find(&character_guid)
+            .map_or(0, |character| character.gm_level)
     }
 
     /// The unit `actor_guid` has selected, from THIS handle's live entity. 0 for none.
@@ -154,5 +166,36 @@ impl Coordinator {
             .guid()
             .find(&actor_guid)
             .map_or(0, |entity| entity.target_guid)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// The GM Gate's read must stay on the handle it is called on, the Home Shard. A realm-wide
+    /// union takes the first shard that holds the Character, default shard first, and a frozen copy
+    /// there would pass the Gate.
+    #[test]
+    fn the_gm_level_is_read_from_the_home_shard_only() {
+        let body = crate::test_scan::code_of(include_str!("guild.rs"), "fn home_gm_level(");
+        let flat: String = body.split_whitespace().collect();
+        assert!(
+            flat.contains("self.0.coord().conn.db.game_character()"),
+            "{body}"
+        );
+        for union in ["all_shards", "world_shards", "realm_core", "world_stores"] {
+            assert!(
+                !flat.contains(union),
+                "`home_gm_level` reads `{union}`:\n{body}"
+            );
+        }
+        let forward = crate::test_scan::code_of(
+            include_str!("../../world/handlers/guild.rs"),
+            "fn guild_gm_level(&self, actor_guid: u64) -> Result<u8> {",
+        );
+        let forward: String = forward.split_whitespace().collect();
+        assert_eq!(
+            forward,
+            "{Ok(crate::stdb::Coordinator::home_gm_level(self,actor_guid))}"
+        );
     }
 }

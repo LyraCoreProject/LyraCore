@@ -260,6 +260,55 @@ mod tests {
         assert_eq!(motd, expected);
     }
 
+    fn self_create(guild_id: u32, guild_rank: u32) -> wow_world_messages::vanilla::UpdatePlayer {
+        let entity = EntityView {
+            guid: 1,
+            type_mask: lyracore_shared::constants::type_mask::PLAYER_BIT,
+            // Human Warrior: the CREATE encoder refuses race 0.
+            unit_bytes_0: 1 | (1 << 8) | (1 << 24),
+            guild_id,
+            guild_rank,
+            ..EntityView::default()
+        };
+        let create = build_create_object(&entity, CreateKind::SelfPlayer, &[], &[]).unwrap();
+        let [Object::CreateObject2 {
+            mask2: UpdateMask::Player(player),
+            ..
+        }] = create.objects.as_slice()
+        else {
+            panic!("the self CREATE must carry a player mask");
+        };
+        player.clone()
+    }
+
+    #[test]
+    fn the_self_create_carries_the_guild_projection() {
+        let player = self_create(7, 3);
+        assert_eq!(player.player_guildid(), Some(7));
+        assert_eq!(player.player_guildrank(), Some(3));
+    }
+
+    #[test]
+    fn the_self_create_writes_an_explicit_zero_outside_any_guild() {
+        let player = self_create(0, 0);
+        assert_eq!(player.player_guildid(), Some(0));
+        assert_eq!(player.player_guildrank(), Some(0));
+    }
+
+    #[test]
+    fn the_character_list_carries_each_guild_id() {
+        let characters = [CharacterView {
+            guid: 1,
+            name: "Leader".into(),
+            race: 1,
+            class: 1,
+            guild_id: 7,
+            ..CharacterView::default()
+        }];
+        let list = build_char_enum(&characters).unwrap();
+        assert_eq!(list.characters[0].guild_id, 7);
+    }
+
     #[test]
     fn guild_values_carry_only_the_guild_id_and_rank() {
         let (opcode, body) = build_guild_values(0x0102, 7, 3);

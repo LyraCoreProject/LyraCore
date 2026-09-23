@@ -2275,26 +2275,29 @@ fn group_member_mirror_changed(
 }
 
 /// A membership row changed: re-send the member's Guild Projection to the member and to every
-/// viewer that holds its entity. The job reads membership when it runs, so after a delete it sends
-/// 0 and 0.
+/// viewer that holds its entity. The member is always addressed, as `cell_audience` keeps its owner
+/// leg, so an entity the cell index has not seen yet cannot hide a removal from the member's own
+/// client. The job reads membership when it runs, so after a delete it sends 0 and 0.
 fn guild_membership_changed(
     view: &WorldView,
     membership: &GuildMembershipRead,
     character_guid: u64,
 ) {
-    let Some(shard) = view
+    let mut sessions = view
         .spatial
         .shard_of(EntityLayer::WorldEntity, character_guid)
-    else {
-        return;
-    };
-    let Some(key) =
-        view.spatial
-            .entity_cell_on_shard(EntityLayer::WorldEntity, character_guid, shard)
-    else {
-        return;
-    };
-    for session in view.world_entity_recipients(shard, character_guid, key) {
+        .and_then(|shard| {
+            view.spatial
+                .entity_cell_on_shard(EntityLayer::WorldEntity, character_guid, shard)
+                .map(|key| view.world_entity_recipients(shard, character_guid, key))
+        })
+        .unwrap_or_default();
+    if let Some(owner) = view.session_of_owner(character_guid) {
+        if !sessions.contains(&owner) {
+            sessions.push(owner);
+        }
+    }
+    for session in sessions {
         let Some(viewer) = view.viewer(session) else {
             continue;
         };
@@ -3055,16 +3058,20 @@ mod family_audience_tests {
     }
 
     #[test]
-    fn a_membership_change_for_a_character_with_no_live_entity_queues_nothing() {
+    fn a_removal_reaches_the_member_before_its_entity_is_indexed() {
         let view = WorldView::new(true);
+        let anchor = CellKey::at(0, 0, 0, 0);
         let (member_tx, member_rx) = SessionTx::with_depth(0);
-        view.add_viewer_on_shard(
-            viewer_with_tx(1, 9001, identity(1), member_tx),
-            CellKey::at(0, 0, 0, 0),
-            0,
+        let (other_tx, other_rx) = SessionTx::with_depth(0);
+        view.add_viewer_on_shard(viewer_with_tx(1, 9001, identity(1), member_tx), anchor, 0);
+        view.add_viewer_on_shard(viewer_with_tx(2, 9002, identity(2), other_tx), anchor, 0);
+
+        guild_membership_changed(&view, &membership(&[]), 9001);
+        assert_eq!(
+            raw_packets(queued_job(&member_rx)),
+            vec![crate::codec::build_guild_values(9001, 0, 0)]
         );
-        guild_membership_changed(&view, &membership(&[(9001, 7, 0)]), 9001);
-        assert!(member_rx.try_recv().is_err());
+        assert!(other_rx.try_recv().is_err());
     }
 
     fn guild_event(recipient_guid: u64, kind: u8, subject_guid: u64) -> GuildEvent {

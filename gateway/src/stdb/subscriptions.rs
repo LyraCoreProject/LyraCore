@@ -294,11 +294,11 @@ fn build_peer_create(
         } else {
             Vec::new()
         };
-    let mut view = entity_view(row.clone(), 0);
-    view.dynamic_flags = projected_dynamic_flags(&coord.0.coord().conn.db, viewer_guid, row);
-    if row.type_mask & lyracore_shared::constants::type_mask::PLAYER_BIT != 0 {
-        (view.guild_id, view.guild_rank) = guild_projection_of(coord, row.guid);
-    }
+    let view = peer_entity_view(
+        row,
+        projected_dynamic_flags(&coord.0.coord().conn.db, viewer_guid, row),
+        |guid| guild_projection_of(coord, guid),
+    );
     let auras = world.auras.on_target(shard, row.guid);
     match peer_create_outbound(&view, &inv, &auras) {
         Ok(out) => Some(out),
@@ -307,6 +307,21 @@ fn build_peer_create(
             None
         }
     }
+}
+
+/// The view a peer CREATE encodes: the stored row, the viewer-relative dynamic flags, and for a
+/// player the Guild Projection `guild_of` reads.
+fn peer_entity_view(
+    row: &WorldEntity,
+    dynamic_flags: u32,
+    guild_of: impl FnOnce(u64) -> (u32, u32),
+) -> codec::EntityView {
+    let mut view = entity_view(row.clone(), 0);
+    view.dynamic_flags = dynamic_flags;
+    if row.type_mask & lyracore_shared::constants::type_mask::PLAYER_BIT != 0 {
+        (view.guild_id, view.guild_rank) = guild_of(row.guid);
+    }
+    view
 }
 
 /// A peer's current auras follow its CREATE. Their rows may have arrived before the viewer
@@ -4985,6 +5000,58 @@ mod tests {
             &out[0],
             Outbound::One(ServerOpcodeMessage::SMSG_SPELL_FAILURE(_))
         ));
+    }
+
+    fn created_player(out: &[Outbound]) -> wow_world_messages::vanilla::UpdatePlayer {
+        use wow_world_messages::vanilla::{Object, UpdateMask};
+        let Some(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(create))) = out.first()
+        else {
+            panic!("a peer CREATE comes first");
+        };
+        let [Object::CreateObject2 {
+            mask2: UpdateMask::Player(player),
+            ..
+        }] = create.objects.as_slice()
+        else {
+            panic!("the CREATE must carry a player mask");
+        };
+        player.clone()
+    }
+
+    /// A Human Warrior: the CREATE encoder refuses race 0.
+    fn human_warrior() -> WorldEntity {
+        WorldEntity {
+            unit_bytes_0: 1 | (1 << 8) | (1 << 24),
+            ..player_entity()
+        }
+    }
+
+    #[test]
+    fn a_peer_player_create_carries_its_guild_projection() {
+        let row = human_warrior();
+        let view = peer_entity_view(&row, 0, |guid| {
+            assert_eq!(guid, row.guid);
+            (7, 3)
+        });
+        let player = created_player(&peer_create_outbound(&view, &[], &[]).unwrap());
+        assert_eq!(player.player_guildid(), Some(7));
+        assert_eq!(player.player_guildrank(), Some(3));
+    }
+
+    #[test]
+    fn a_peer_outside_any_guild_is_created_with_an_explicit_zero() {
+        let row = human_warrior();
+        let player = created_player(
+            &peer_create_outbound(&peer_entity_view(&row, 0, |_| (0, 0)), &[], &[]).unwrap(),
+        );
+        assert_eq!(player.player_guildid(), Some(0));
+        assert_eq!(player.player_guildrank(), Some(0));
+    }
+
+    #[test]
+    fn a_creature_create_reads_no_guild() {
+        let view = peer_entity_view(&creature_entity(), 0, |_| panic!("a creature has no Guild"));
+        assert_eq!((view.guild_id, view.guild_rank), (0, 0));
     }
 
     /// A live-entity row with no pending change; tests clone it and mutate one field at a time.

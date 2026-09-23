@@ -163,7 +163,12 @@ fn enter_world<St: WorldStore + ?Sized>(
     }
     // The guild step needs the registered viewer: its SIGNED_ON reaches the other members, and
     // its Guild Projection re-send covers a membership change that landed after the CREATE read.
-    for message in super::guild_world_entry(store, character_guid, entry) {
+    // A sign-on is owed a sign-off from here on, even if this entry or a later world-port fails.
+    if entry == codec::WorldEntry::FreshLogin && super::guild_sign_on(store, character_guid) {
+        conn.guild_signed_on = Some(character_guid);
+    }
+    let created_projection = (entity.guild_id, entity.guild_rank);
+    for message in super::guild_world_entry(store, character_guid, entry, created_projection) {
         send(tx, message)?;
     }
     // Put realm-core's party roster onto the shard this character just entered
