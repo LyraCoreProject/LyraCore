@@ -550,6 +550,10 @@ A Character's Mail sent back to that Character once. It arrives unread, without 
 price, and cannot be returned again. A Mail from any other Mail Sender, or from guid 0, cannot be
 returned.
 
+**Mail Template**:
+An imported letter body from `MailTemplate.dbc`. The client shows it for a mail that names the
+template id.
+
 ### Auctions
 
 **Settlement**:

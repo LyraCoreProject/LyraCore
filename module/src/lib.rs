@@ -332,6 +332,10 @@ mod loot;
 /// Mail: the durable `game_mail` row, its sweeps, and the shared insert core. Realm-core is
 /// authoritative; a single-database gateway reads and writes its own copy through the same rules.
 mod mail;
+/// Imported mail catalogue: letter bodies, the item a letter may carry, and which quests send one at
+/// turn-in. Not re-exported below, for the same reason `import_meta` is not: nothing outside the
+/// importer reads these tables yet.
+mod mail_catalogue;
 /// Mail attachment escrow: the source-side fence, the mail-plane commit keyed by the same
 /// caller-chosen id, and the reaper. The mechanism for moving value into a mail row across a
 /// database boundary no transaction spans; the single-database plane deliberately bypasses it.

@@ -72,7 +72,7 @@ grep -rn '^#\[table(' module/src --include='*.rs' | wc -l   # 238 on 2026-09-03
 | Combat / threat / duel | 10 | 4 | `combat/engage.rs`, `combat/death.rs`, `threat.rs`, `duel.rs` |
 | Spell / aura | 20 | 10 | `spell/tables.rs`, `spell/stacking.rs` |
 | Quest | 12 | 8 | `quest.rs` |
-| Item / vendor / trade / mail | 11 | 5 | `items/tables.rs`, `trade.rs`, `mail.rs`, `mail_escrow.rs` |
+| Item / vendor / trade / mail | 14 | 5 | `items/tables.rs`, `trade.rs`, `mail.rs`, `mail_catalogue.rs`, `mail_escrow.rs` |
 | Auction house | 7 | 2 | `auction.rs` |
 | Creature (template, spawn, AI, pet, trainer) | 42 | 17 | `creatures/*`, `trainer.rs` |
 | GameObject | 9 | 6 | `gameobject.rs`, `go_model.rs` |

@@ -494,6 +494,39 @@ mod qt {
     pub const REW_SPELL: usize = 100; // reward display, also the cast when RewSpellCast is zero
     pub const REW_SPELL_CAST: usize = 101; // overrides the reward cast
     pub const REW_MONEY_MAX_LEVEL: usize = 99; // cmangos RewMoneyMaxLevel (col 99, right after 98); /0.6 = authentic quest XP
+
+    // Reward-mail (T3): the letter a quest giver sends at turn-in. Column positions verified
+    // against the pinned dump's own `CREATE TABLE quest_template` — RewMailTemplateId sits at 102,
+    // RewMailDelaySecs at 103, immediately after RewSpellCast(101). 74 of 4,245 quest_template rows
+    // in the pinned dump carry a non-zero template.
+    pub const REW_MAIL_TEMPLATE_ID: usize = 102;
+    pub const REW_MAIL_DELAY_SECS: usize = 103;
+}
+mod dse {
+    // dbscripts_on_quest_end — verified against the pinned dump's own `CREATE TABLE`: id, delay,
+    // priority, command, datalong, datalong2, datalong3, buddy_entry, search_radius, data_flags,
+    // dataint, .... SCRIPT_COMMAND_SEND_MAIL (cm:ScriptMgr.cpp:2850-2866) is the only command this
+    // importer reads from this table.
+    pub const ID: usize = 0; // quest_template.entry the script fires on turn-in
+    pub const COMMAND: usize = 3;
+    pub const DATALONG: usize = 4; // mail template id
+    pub const DATALONG2: usize = 5; // alternative sender creature entry (0 = the turn-in giver)
+    pub const DATALONG3: usize = 6; // money, in copper
+    pub const DATAINT: usize = 10; // delay, in seconds
+    pub const SEND_MAIL: u32 = 38; // SCRIPT_COMMAND_SEND_MAIL
+}
+mod mlt {
+    // mail_loot_template — verified against the pinned dump's own `CREATE TABLE`: entry (the mail
+    // template id), item, ChanceOrQuestChance, groupid, mincountOrRef, maxcount, condition_id,
+    // comments. Every real row is chance 100, group 0, count 1, no condition (a mail carries at
+    // most one item, cm:Mail.h:49).
+    pub const ENTRY: usize = 0;
+    pub const ITEM: usize = 1;
+    pub const CHANCE: usize = 2;
+    pub const GROUP: usize = 3;
+    pub const MINCOUNT_OR_REF: usize = 4;
+    pub const MAXCOUNT: usize = 5;
+    pub const CONDITION_ID: usize = 6;
 }
 mod qr {
     // creature_questrelation (START) AND creature_involvedrelation (END) share this 2-col layout —
@@ -2489,6 +2522,12 @@ struct QuestEtl {
     // GAMEOBJECT giver relations (work-item 041: GO 68 "Wanted Poster" starts q176 Wanted: Hogger,
     // GO 55/56 "Lost Guards" corpses drive q37/q45/q71) — the `game_gameobject_quest` twin of `relations`.
     go_relations: Vec<String>,
+    // Reward mail (T3): one row per in-scope quest that sends a letter at turn-in, from either
+    // `quest_template.RewMailTemplateId` or a `dbscripts_on_quest_end` `SCRIPT_COMMAND_SEND_MAIL`
+    // row. `reward_mail_template_ids` is the union of named templates, which scopes the
+    // `mail_loot_template` import to only the templates this run's reward mail actually names.
+    reward_mail: Vec<String>,
+    reward_mail_template_ids: std::collections::HashSet<u64>,
     reward_item_entries: std::collections::HashSet<u64>,
     // Collect-objective ReqItemId entries — unioned into the item-template load so every collect-quest
     // item is guaranteed a template even if item_template ever returns to a referenced subset.
@@ -2778,7 +2817,7 @@ fn build_quests(
     local_gameobjects: &std::collections::HashSet<u64>,
     goobers: &std::collections::HashSet<u64>,
     obtainable_items: &std::collections::HashSet<u64>,
-) -> QuestEtl {
+) -> Result<QuestEtl> {
     use std::collections::HashSet;
 
     // 0) Local giver relations: (creature, quest) pairs where the creature is in the slice. START =
@@ -2837,6 +2876,12 @@ fn build_quests(
     let mut reward_item_entries: HashSet<u64> = HashSet::new();
     let mut req_item_entries: HashSet<u64> = HashSet::new();
     let mut valid_quests: HashSet<u64> = HashSet::new();
+    // Reward mail (T3): rows for `game_quest_reward_mail`, and the quest entries that already claimed
+    // one — a quest naming both a `quest_template` template AND a dbscripts send-mail row is a data
+    // shape the importer refuses (see the dbscripts pass below).
+    let mut reward_mail_rows: Vec<String> = Vec::new();
+    let mut reward_mail_template_ids: HashSet<u64> = HashSet::new();
+    let mut reward_mail_quests: HashSet<u64> = HashSet::new();
     let mut chained_count: usize = 0;
     let mut timed_count: usize = 0;
     let mut obj_id: u64 = 1;
@@ -2852,6 +2897,15 @@ fn build_quests(
             continue;
         }
         valid_quests.insert(entry);
+        // Reward mail (T3): RewMailTemplateId names the letter; the giver sends it (no alternative
+        // sender or money — those columns belong to the dbscripts source, handled after this loop).
+        let mail_template: u32 = field(&row, qt::REW_MAIL_TEMPLATE_ID).parse().unwrap_or(0);
+        if mail_template != 0 {
+            let mail_delay: u32 = field(&row, qt::REW_MAIL_DELAY_SECS).parse().unwrap_or(0);
+            reward_mail_rows.push(format!("({entry},{mail_template},{mail_delay},0,0)"));
+            reward_mail_template_ids.insert(mail_template as u64);
+            reward_mail_quests.insert(entry);
+        }
         let reward_cast: u32 = field(&row, qt::REW_SPELL_CAST).parse().unwrap_or(0);
         let reward_cast = if reward_cast != 0 {
             reward_cast
@@ -3053,6 +3107,35 @@ fn build_quests(
         }
     }
 
+    // 1.6) Reward mail from dbscripts_on_quest_end SCRIPT_COMMAND_SEND_MAIL (38) rows, for in-scope
+    //      quests (the pinned dump carries exactly three: 8728, 5237, 5238). A quest that ALSO
+    //      claimed a reward-mail row from quest_template above is refused — the two sources disagree
+    //      about which letter the quest sends, and picking one silently would hide that.
+    for row in parse_table(dump, "dbscripts_on_quest_end") {
+        let command: u32 = field(&row, dse::COMMAND).parse().unwrap_or(0);
+        if command != dse::SEND_MAIL {
+            continue;
+        }
+        let entry: u64 = field(&row, dse::ID).parse().unwrap_or(0);
+        if entry == 0 || !valid_quests.contains(&entry) {
+            continue;
+        }
+        if !reward_mail_quests.insert(entry) {
+            bail!(
+                "dbscripts_on_quest_end: quest {entry} sends reward mail from BOTH \
+                 quest_template.RewMailTemplateId and a SCRIPT_COMMAND_SEND_MAIL row"
+            );
+        }
+        let mail_template: u32 = field(&row, dse::DATALONG).parse().unwrap_or(0);
+        let sender: u32 = field(&row, dse::DATALONG2).parse().unwrap_or(0);
+        let money: u32 = field(&row, dse::DATALONG3).parse().unwrap_or(0);
+        let delay: u32 = field(&row, dse::DATAINT).parse().unwrap_or(0);
+        reward_mail_template_ids.insert(mail_template as u64);
+        reward_mail_rows.push(format!(
+            "({entry},{mail_template},{delay},{sender},{money})"
+        ));
+    }
+
     // 1.5) Explore-area objectives (kind 3) from areatrigger_involvedrelation: a quest completed by
     //      ENTERING a zone (Jasperlode/Fargodeep mines). For each imported quest, append an
     //      EXPLORE_AREATRIGGER objective with target_entry = the trigger id; the client's CMSG_AREATRIGGER
@@ -3110,7 +3193,7 @@ fn build_quests(
     emit_go_relations(&go_starts, 0);
     emit_go_relations(&go_ends, 1);
 
-    QuestEtl {
+    Ok(QuestEtl {
         templates: quest_rows,
         texts: quest_text_rows,
         objectives: objective_rows,
@@ -3120,11 +3203,13 @@ fn build_quests(
         reward_choices: reward_choice_rows,
         relations: creature_quest_rows,
         go_relations: go_quest_rows,
+        reward_mail: reward_mail_rows,
+        reward_mail_template_ids,
         reward_item_entries,
         req_item_entries,
         chained_count,
         timed_count,
-    }
+    })
 }
 
 /// First pass: DIRECT drops only — positive `ChanceOrQuestChance`, real item, `mincountOrRef >= 0`
@@ -3138,6 +3223,7 @@ fn build_items_and_loot(
     creature_loot_ids: &std::collections::HashMap<u64, u64>,
     vendor_entries: &std::collections::HashSet<u64>,
     extra_item_entries: &std::collections::HashSet<u64>,
+    mail_loot_item_entries: &std::collections::HashSet<u64>,
 ) -> Result<(Vec<String>, Vec<String>, Vec<String>)> {
     use std::collections::HashSet;
 
@@ -3153,6 +3239,7 @@ fn build_items_and_loot(
     // Quest reward items (and any other forced entries) need templates too — the turn-in grant joins
     // game_item_template, so a missing reward template would fail the turn-in.
     item_ids.extend(extra_item_entries.iter().copied());
+    item_ids.extend(mail_loot_item_entries.iter().copied());
     let mut loot_id: u64 = 1;
     let mut creatures: Vec<(&u64, &u64)> = creature_loot_ids.iter().collect();
     creatures.sort(); // deterministic loot-id assignment across re-imports
@@ -3407,6 +3494,19 @@ fn build_items_and_loot(
         startquest_nonzero_count
     );
 
+    // Mail loot (T3) is held to a stricter rule than the general dangling guard below: a letter that
+    // names an item with no template would grant nothing, silently — fail loud instead, naming the
+    // item.
+    let mut missing_mail_items: Vec<u64> = mail_loot_item_entries
+        .iter()
+        .copied()
+        .filter(|e| !emitted.contains(e))
+        .collect();
+    missing_mail_items.sort_unstable();
+    if let Some(&item) = missing_mail_items.first() {
+        bail!("item_template: mail_loot_template item {item} has no item_template row");
+    }
+
     // Dangling-reference guard: any loot/vendor/quest-reward item with no item_template row would break
     // that drop/turn-in. With the full set imported this should be empty; warn loudly if not.
     let mut dangling: Vec<u64> = item_ids
@@ -3424,6 +3524,63 @@ fn build_items_and_loot(
     }
 
     Ok((item_rows, loot_rows, vendor_rows))
+}
+
+/// `game_mail_loot` rows for every template `reward_mail_template_ids` names, from cmangos
+/// `mail_loot_template`. Every real row is a 100% single item with group 0, count 1 and no condition
+/// (a mail carries at most one item) — anything outside that shape is refused, naming the table and
+/// the offending mail template, rather than silently dropped or truncated to the first match. A
+/// named template with no row here sends a text- or money-only letter.
+fn build_mail_loot(
+    dump: &str,
+    reward_mail_template_ids: &std::collections::HashSet<u64>,
+) -> Result<(Vec<String>, std::collections::HashSet<u64>)> {
+    use std::collections::HashSet;
+
+    let mut rows: Vec<(u64, String)> = Vec::new();
+    let mut item_entries: HashSet<u64> = HashSet::new();
+    let mut seen_templates: HashSet<u64> = HashSet::new();
+    for row in parse_table(dump, "mail_loot_template") {
+        let entry: u64 = field(&row, mlt::ENTRY).parse().unwrap_or(0);
+        if !reward_mail_template_ids.contains(&entry) {
+            continue;
+        }
+        if !seen_templates.insert(entry) {
+            bail!("mail_loot_template: mail template {entry} carries more than one loot row");
+        }
+        let chance: f64 = field(&row, mlt::CHANCE).parse().unwrap_or(0.0);
+        if (chance - 100.0).abs() > f64::EPSILON {
+            bail!("mail_loot_template: mail template {entry} has a non-100% chance ({chance})");
+        }
+        let group: i64 = field(&row, mlt::GROUP).parse().unwrap_or(-1);
+        if group != 0 {
+            bail!("mail_loot_template: mail template {entry} has a non-zero group ({group})");
+        }
+        let mincount_or_ref: i64 = field(&row, mlt::MINCOUNT_OR_REF).parse().unwrap_or(-1);
+        if mincount_or_ref < 0 {
+            bail!(
+                "mail_loot_template: mail template {entry} references another loot group ({mincount_or_ref})"
+            );
+        }
+        let maxcount: i64 = field(&row, mlt::MAXCOUNT).parse().unwrap_or(-1);
+        if maxcount != 1 {
+            bail!(
+                "mail_loot_template: mail template {entry} has a count other than 1 ({maxcount})"
+            );
+        }
+        let condition: u64 = field(&row, mlt::CONDITION_ID).parse().unwrap_or(1);
+        if condition != 0 {
+            bail!("mail_loot_template: mail template {entry} carries a condition ({condition})");
+        }
+        let item: u64 = field(&row, mlt::ITEM).parse().unwrap_or(0);
+        if item == 0 {
+            bail!("mail_loot_template: mail template {entry} has no item");
+        }
+        item_entries.insert(item);
+        rows.push((entry, format!("({entry},{item},1)")));
+    }
+    rows.sort_unstable_by_key(|(entry, _)| *entry); // deterministic import order
+    Ok((rows.into_iter().map(|(_, sql)| sql).collect(), item_entries))
 }
 
 /// Append chunked `INSERT INTO {table} ({cols}) VALUES (...)` statements for `rows` — bounded BOTH by
@@ -3837,7 +3994,7 @@ fn build_dump_plan(
         &go_spawns.used_go,
         &go_spawns.goober_entries,
         &obtainable_items,
-    );
+    )?;
     eprintln!(
         "mapped: {} quests, {} text, {} objectives, {} cast objectives, {} reward items, {} choice rewards, \
          {} creature giver relations, {} gameobject giver relations, {} chained (next_quest_id>0) [V], \
@@ -3845,6 +4002,17 @@ fn build_dump_plan(
         quests.templates.len(), quests.texts.len(), quests.objectives.len(),
         quests.cast_objectives.len(), quests.reward_items.len(), quests.reward_choices.len(), quests.relations.len(),
         quests.go_relations.len(), quests.chained_count, quests.timed_count,
+    );
+    // Mail loot (T3): the single item each named reward-mail template attaches, scoped to the
+    // templates `quests.reward_mail` actually names — a template with no row here sends text/money
+    // only.
+    let (mail_loot_rows, mail_loot_item_entries) =
+        build_mail_loot(dump, &quests.reward_mail_template_ids)?;
+    eprintln!(
+        "mapped: {} reward-mail quests in scope, {} templates, {} loot rows",
+        quests.reward_mail.len(),
+        quests.reward_mail_template_ids.len(),
+        mail_loot_rows.len(),
     );
 
     // P4: real item templates + creature loot for the imported creatures (clear+reload, like above).
@@ -3857,8 +4025,13 @@ fn build_dump_plan(
         .chain(quests.req_item_entries.iter())
         .copied()
         .collect();
-    let (item_rows, loot_rows, vendor_rows) =
-        build_items_and_loot(dump, &creature_loot_ids, &entries, &extra_item_entries)?;
+    let (item_rows, loot_rows, vendor_rows) = build_items_and_loot(
+        dump,
+        &creature_loot_ids,
+        &entries,
+        &extra_item_entries,
+        &mail_loot_item_entries,
+    )?;
     eprintln!(
         "mapped: {} item_templates, {} creature_loot rows, {} npc_vendor rows ({} creatures with loot)",
         item_rows.len(), loot_rows.len(), vendor_rows.len(), creature_loot_ids.len()
@@ -3892,6 +4065,7 @@ fn build_dump_plan(
         fishing_rows: &fishing_rows,
         gossip: &gossip,
         quests: &quests,
+        mail_loot_rows: &mail_loot_rows,
         go_template_rows: &go_template_rows,
         go_trap_rows: &go_trap_rows,
         trainer_rows: &trainer_rows,
@@ -4034,6 +4208,7 @@ struct MappedContent<'a> {
     fishing_rows: &'a [String],
     gossip: &'a GossipEtl,
     quests: &'a QuestEtl,
+    mail_loot_rows: &'a [String],
     go_template_rows: &'a [String],
     go_trap_rows: &'a [String],
     trainer_rows: &'a [String],
@@ -5196,14 +5371,15 @@ fn push_quest_and_gameobject_statements(
 ) {
     let MappedContent {
         quests,
+        mail_loot_rows,
         go_template_rows,
         go_trap_rows,
         trainer_rows,
         ..
     } = content;
     // Quests: clear+reload the static quest tables (header / body text / objectives / cast objectives /
-    // reward items / creature giver relations / gameobject giver relations). game_character_quest
-    // (per-player progress) is born in the accept reducer, never here.
+    // reward items / creature giver relations / gameobject giver relations / reward mail / mail loot).
+    // game_character_quest (per-player progress) is born in the accept reducer, never here.
     if family_active(args, "quests") {
         stmts.push("DELETE FROM game_quest_template WHERE entry > 0".into());
         stmts.push("DELETE FROM game_quest_text WHERE quest_entry > 0".into());
@@ -5262,6 +5438,20 @@ fn push_quest_and_gameobject_statements(
             "game_gameobject_quest",
             "id,go_entry,quest_entry,role",
             &quests.go_relations,
+        );
+        stmts.push("DELETE FROM game_quest_reward_mail WHERE quest_entry > 0".into());
+        push_insert(
+            stmts,
+            "game_quest_reward_mail",
+            "quest_entry,mail_template_id,delay_secs,sender_creature_entry,money",
+            &quests.reward_mail,
+        );
+        stmts.push("DELETE FROM game_mail_loot WHERE mail_template_id > 0".into());
+        push_insert(
+            stmts,
+            "game_mail_loot",
+            "mail_template_id,item_entry,count",
+            mail_loot_rows,
         );
     }
 
@@ -6250,8 +6440,14 @@ mod tests {
             .replacen("__NAME__", "'Ring of Fire Resistance'", 1);
         let dump = format!("x INSERT INTO `item_template` VALUES ({tuple}); y");
 
-        let (item_rows, _loot, _vendor) =
-            build_items_and_loot(&dump, &HashMap::new(), &HashSet::new(), &HashSet::new()).unwrap();
+        let (item_rows, _loot, _vendor) = build_items_and_loot(
+            &dump,
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+        .unwrap();
         assert_eq!(item_rows.len(), 1);
         assert_eq!(
             item_rows[0],
@@ -6289,8 +6485,14 @@ mod tests {
         let tuple = cols.join(",").replacen("__NAME__", "'Worn Shortsword'", 1);
         let dump = format!("x INSERT INTO `item_template` VALUES ({tuple}); y");
 
-        let (item_rows, _loot, _vendor) =
-            build_items_and_loot(&dump, &HashMap::new(), &HashSet::new(), &HashSet::new()).unwrap();
+        let (item_rows, _loot, _vendor) = build_items_and_loot(
+            &dump,
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+        .unwrap();
         assert_eq!(item_rows.len(), 1);
         assert_eq!(
             item_rows[0],
@@ -6310,8 +6512,14 @@ mod tests {
 
         let tuple = cols.join(",").replacen("__NAME__", "'Opaque Mask Item'", 1);
         let dump = format!("x INSERT INTO `item_template` VALUES ({tuple}); y");
-        let (item_rows, _loot, _vendor) =
-            build_items_and_loot(&dump, &HashMap::new(), &HashSet::new(), &HashSet::new()).unwrap();
+        let (item_rows, _loot, _vendor) = build_items_and_loot(
+            &dump,
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+        .unwrap();
 
         assert_eq!(item_rows.len(), 1);
         assert!(
@@ -8154,7 +8362,8 @@ mod tests {
             &empty,
             &empty,
             &empty,
-        );
+        )
+        .unwrap();
         assert_eq!(quests.reward_spells, ["(5091041,50944)", "(5091042,50945)"]);
     }
 
@@ -8188,6 +8397,167 @@ mod tests {
         cols[qt::TITLE] = "'Event requirement'".to_string();
         cols[qt::SPECIAL_FLAGS] = QUEST_SPECIAL_FLAG_EXPLORATION_OR_EVENT.to_string();
         format!("({})", cols.join(","))
+    }
+
+    /// A `quest_template` row wide enough to reach `qt::REW_MAIL_DELAY_SECS` (col 103), with a reward
+    /// mail template + delay stamped. Mirrors `quest_template_row_chained_timed`'s pattern.
+    fn quest_template_row_with_reward_mail(
+        entry: u64,
+        title: &str,
+        mail_template: u32,
+        mail_delay: u32,
+    ) -> String {
+        let mut cols = vec!["0".to_string(); qt::REW_MAIL_DELAY_SECS + 1];
+        cols[qt::ENTRY] = entry.to_string();
+        cols[qt::TITLE] = format!("'{title}'");
+        cols[qt::REW_MAIL_TEMPLATE_ID] = mail_template.to_string();
+        cols[qt::REW_MAIL_DELAY_SECS] = mail_delay.to_string();
+        format!("({})", cols.join(","))
+    }
+
+    /// One `dbscripts_on_quest_end` row, `command`/column positions verified against the pinned
+    /// dump's own `CREATE TABLE` (see the `dse` module).
+    fn dbscripts_send_mail_row(
+        quest_entry: u64,
+        mail_template: u32,
+        sender: u32,
+        money: u32,
+        delay_secs: u32,
+    ) -> String {
+        format!(
+            "({quest_entry},0,0,38,{mail_template},{sender},{money},0,0,0,{delay_secs},0,0,0,0,0,0,0,0,0,0,'test')"
+        )
+    }
+
+    /// The pinned dump's own three reward-mail quests — 8728 sends 1,000,000 copper from creature
+    /// 11811 after 36 hours; 5237 and 5238 send text-only letters after 24 hours. Quest 3645 (a
+    /// `quest_template.RewMailTemplateId` quest, template 99, delay 86,400) provides the OTHER
+    /// source, and its template names loot item 11423 — both real values, confirmed against the
+    /// pinned `cd0c426a…` dump rather than re-derived from this importer.
+    #[test]
+    fn quest_reward_mail_imports_from_quest_template_and_from_dbscripts() {
+        let dump = format!(
+            "INSERT INTO `creature_questrelation` VALUES (100,3645),(200,8728); \
+             INSERT INTO `quest_template` VALUES {},{}; \
+             INSERT INTO `dbscripts_on_quest_end` VALUES {}; \
+             INSERT INTO `mail_loot_template` VALUES (99,11423,100,0,1,1,0,'');",
+            quest_template_row_with_reward_mail(3645, "Membership Card Renewal", 99, 86400),
+            quest_template_row(8728, "The Path to Ahn Qiraj"),
+            dbscripts_send_mail_row(8728, 123, 11811, 1_000_000, 129_600),
+        );
+        let entries = std::collections::HashSet::from([100u64, 200u64]);
+        let empty = std::collections::HashSet::new();
+        let quests = build_quests(&dump, &entries, &empty, &empty, &empty).unwrap();
+        assert_eq!(quests.reward_mail.len(), 2);
+        assert!(
+            quests
+                .reward_mail
+                .contains(&"(3645,99,86400,0,0)".to_string()),
+            "{:?}",
+            quests.reward_mail
+        );
+        assert!(
+            quests
+                .reward_mail
+                .contains(&"(8728,123,129600,11811,1000000)".to_string()),
+            "{:?}",
+            quests.reward_mail
+        );
+        assert_eq!(
+            quests.reward_mail_template_ids,
+            std::collections::HashSet::from([99, 123])
+        );
+
+        let (mail_loot_rows, mail_loot_items) =
+            build_mail_loot(&dump, &quests.reward_mail_template_ids).unwrap();
+        assert_eq!(mail_loot_rows, ["(99,11423,1)"]);
+        assert_eq!(mail_loot_items, std::collections::HashSet::from([11423u64]));
+    }
+
+    #[test]
+    fn quest_reward_mail_from_both_sources_is_refused() {
+        let dump = format!(
+            "INSERT INTO `creature_questrelation` VALUES (100,500); \
+             INSERT INTO `quest_template` VALUES {}; \
+             INSERT INTO `dbscripts_on_quest_end` VALUES {};",
+            quest_template_row_with_reward_mail(500, "Conflict", 7, 3600),
+            dbscripts_send_mail_row(500, 8, 0, 0, 3600),
+        );
+        let entries = std::collections::HashSet::from([100u64]);
+        let empty = std::collections::HashSet::new();
+        let err = build_quests(&dump, &entries, &empty, &empty, &empty)
+            .err()
+            .unwrap();
+        assert!(err.to_string().contains("500"), "{err}");
+    }
+
+    #[test]
+    fn dbscripts_reward_mail_is_scoped_to_in_scope_quests_like_every_other_quest_table() {
+        let dump = format!(
+            "INSERT INTO `dbscripts_on_quest_end` VALUES {};",
+            dbscripts_send_mail_row(9999, 7, 0, 0, 3600),
+        );
+        let empty = std::collections::HashSet::new();
+        let quests = build_quests(&dump, &empty, &empty, &empty, &empty).unwrap();
+        assert!(quests.reward_mail.is_empty(), "{:?}", quests.reward_mail);
+    }
+
+    #[test]
+    fn mail_loot_template_skips_a_row_whose_template_no_reward_mail_names() {
+        let dump = "INSERT INTO `mail_loot_template` VALUES (99,11423,100,0,1,1,0,'');";
+        let (rows, items) = build_mail_loot(dump, &std::collections::HashSet::new()).unwrap();
+        assert!(rows.is_empty());
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn mail_loot_template_fail_loud_shapes_name_the_table_and_the_row() {
+        let ids = std::collections::HashSet::from([99u64]);
+        for (dump, expect) in [
+            (
+                "INSERT INTO `mail_loot_template` VALUES (99,11423,50,0,1,1,0,'');",
+                "chance",
+            ),
+            (
+                "INSERT INTO `mail_loot_template` VALUES (99,11423,100,1,1,1,0,'');",
+                "group",
+            ),
+            (
+                "INSERT INTO `mail_loot_template` VALUES (99,11423,100,0,-5,1,0,'');",
+                "references another loot group",
+            ),
+            (
+                "INSERT INTO `mail_loot_template` VALUES (99,11423,100,0,1,2,0,'');",
+                "count other than 1",
+            ),
+            (
+                "INSERT INTO `mail_loot_template` VALUES (99,11423,100,0,1,1,7,'');",
+                "condition",
+            ),
+            (
+                "INSERT INTO `mail_loot_template` VALUES (99,11423,100,0,1,1,0,''),(99,17685,100,0,1,1,0,'');",
+                "more than one loot row",
+            ),
+        ] {
+            let err = build_mail_loot(dump, &ids).unwrap_err().to_string();
+            assert!(err.contains("mail_loot_template"), "{err}");
+            assert!(err.contains("99"), "{err}");
+            assert!(err.contains(expect), "{err}");
+        }
+    }
+
+    #[test]
+    fn build_items_and_loot_fails_loud_when_a_mail_loot_item_has_no_template() {
+        let mail_items = std::collections::HashSet::from([11423u64]);
+        let err = build_items_and_loot(
+            "",
+            &std::collections::HashMap::new(),
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+            &mail_items,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("11423"), "{err}");
     }
 
     #[test]
@@ -8992,6 +9362,37 @@ mod tests {
             insert.contains(",false,7,0,"),
             "quest 783 must retain its forward link to quest 7: {insert}"
         );
+    }
+
+    /// The leading fields plus `RewMailTemplateId`/`RewMailDelaySecs` of ClassicDB's real quest 3645
+    /// row (`Membership Card Renewal`, `cd0c426a…` pin). The pinned dump's own `quest_template` row
+    /// carries 130 columns; keeping 102/103 literal at that real width catches a column constant
+    /// that drifts off its real position, the same guard `classicdb_quest_783_row` gives
+    /// NextQuestInChain.
+    fn classicdb_quest_3645_row() -> String {
+        let mut cols = vec!["0".to_string(); 130];
+        for (index, value) in [
+            (0, "3645"),
+            (30, "'Membership Card Renewal'"),
+            (qt::REW_MAIL_TEMPLATE_ID, "99"),
+            (qt::REW_MAIL_DELAY_SECS, "86400"),
+        ] {
+            cols[index] = value.to_string();
+        }
+        format!("({})", cols.join(","))
+    }
+
+    #[test]
+    fn classicdb_quest_3645_reward_mail_lands_on_the_real_dump_columns() {
+        let dump = format!(
+            "INSERT INTO `creature_questrelation` VALUES (100,3645); \
+             INSERT INTO `quest_template` VALUES {};",
+            classicdb_quest_3645_row(),
+        );
+        let entries = std::collections::HashSet::from([100u64]);
+        let empty = std::collections::HashSet::new();
+        let quests = build_quests(&dump, &entries, &empty, &empty, &empty).unwrap();
+        assert_eq!(quests.reward_mail, ["(3645,99,86400,0,0)"]);
     }
 
     #[test]

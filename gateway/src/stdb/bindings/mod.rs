@@ -495,7 +495,9 @@ pub mod game_loot_roll_vote_table;
 pub mod game_mail_delivery_table;
 pub mod game_mail_escrow_reaper_schedule_table;
 pub mod game_mail_escrow_table;
+pub mod game_mail_loot_table;
 pub mod game_mail_table;
+pub mod game_mail_template_table;
 pub mod game_map_region_table;
 pub mod game_melee_attack_table;
 pub mod game_melee_schedule_table;
@@ -537,6 +539,7 @@ pub mod game_quest_event_requirement_table;
 pub mod game_quest_objective_table;
 pub mod game_quest_reward_choice_table;
 pub mod game_quest_reward_item_table;
+pub mod game_quest_reward_mail_table;
 pub mod game_quest_reward_spell_table;
 pub mod game_quest_template_table;
 pub mod game_quest_text_table;
@@ -784,6 +787,8 @@ pub mod loot_roll_vote_type;
 pub mod mail_delivery_type;
 pub mod mail_escrow_reaper_schedule_type;
 pub mod mail_escrow_type;
+pub mod mail_loot_type;
+pub mod mail_template_type;
 pub mod mail_type;
 pub mod map_region_type;
 pub mod mark_bot_transfer_arrival_ready_reducer;
@@ -844,6 +849,7 @@ pub mod quest_event_type;
 pub mod quest_objective_type;
 pub mod quest_reward_choice_type;
 pub mod quest_reward_item_type;
+pub mod quest_reward_mail_type;
 pub mod quest_reward_spell_type;
 pub mod quest_taken_predicate_type;
 pub mod quest_template_type;
@@ -1545,7 +1551,9 @@ pub use game_loot_roll_vote_table::*;
 pub use game_mail_delivery_table::*;
 pub use game_mail_escrow_reaper_schedule_table::*;
 pub use game_mail_escrow_table::*;
+pub use game_mail_loot_table::*;
 pub use game_mail_table::*;
+pub use game_mail_template_table::*;
 pub use game_map_region_table::*;
 pub use game_melee_attack_table::*;
 pub use game_melee_schedule_table::*;
@@ -1587,6 +1595,7 @@ pub use game_quest_event_requirement_table::*;
 pub use game_quest_objective_table::*;
 pub use game_quest_reward_choice_table::*;
 pub use game_quest_reward_item_table::*;
+pub use game_quest_reward_mail_table::*;
 pub use game_quest_reward_spell_table::*;
 pub use game_quest_template_table::*;
 pub use game_quest_text_table::*;
@@ -1834,6 +1843,8 @@ pub use loot_roll_vote_type::LootRollVote;
 pub use mail_delivery_type::MailDelivery;
 pub use mail_escrow_reaper_schedule_type::MailEscrowReaperSchedule;
 pub use mail_escrow_type::MailEscrow;
+pub use mail_loot_type::MailLoot;
+pub use mail_template_type::MailTemplate;
 pub use mail_type::Mail;
 pub use map_region_type::MapRegion;
 pub use mark_bot_transfer_arrival_ready_reducer::mark_bot_transfer_arrival_ready;
@@ -1894,6 +1905,7 @@ pub use quest_event_type::QuestEvent;
 pub use quest_objective_type::QuestObjective;
 pub use quest_reward_choice_type::QuestRewardChoice;
 pub use quest_reward_item_type::QuestRewardItem;
+pub use quest_reward_mail_type::QuestRewardMail;
 pub use quest_reward_spell_type::QuestRewardSpell;
 pub use quest_taken_predicate_type::QuestTakenPredicate;
 pub use quest_template_type::QuestTemplate;
@@ -7907,6 +7919,8 @@ pub struct DbUpdate {
     game_mail_delivery: __sdk::TableUpdate<MailDelivery>,
     game_mail_escrow: __sdk::TableUpdate<MailEscrow>,
     game_mail_escrow_reaper_schedule: __sdk::TableUpdate<MailEscrowReaperSchedule>,
+    game_mail_loot: __sdk::TableUpdate<MailLoot>,
+    game_mail_template: __sdk::TableUpdate<MailTemplate>,
     game_map_region: __sdk::TableUpdate<MapRegion>,
     game_melee_attack: __sdk::TableUpdate<MeleeAttack>,
     game_melee_schedule: __sdk::TableUpdate<MeleeSchedule>,
@@ -7938,6 +7952,7 @@ pub struct DbUpdate {
     game_quest_objective: __sdk::TableUpdate<QuestObjective>,
     game_quest_reward_choice: __sdk::TableUpdate<QuestRewardChoice>,
     game_quest_reward_item: __sdk::TableUpdate<QuestRewardItem>,
+    game_quest_reward_mail: __sdk::TableUpdate<QuestRewardMail>,
     game_quest_reward_spell: __sdk::TableUpdate<QuestRewardSpell>,
     game_quest_template: __sdk::TableUpdate<QuestTemplate>,
     game_quest_text: __sdk::TableUpdate<QuestText>,
@@ -8536,6 +8551,12 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                         game_mail_escrow_reaper_schedule_table::parse_table_update(table_update)?,
                     )
                 }
+                "game_mail_loot" => db_update
+                    .game_mail_loot
+                    .append(game_mail_loot_table::parse_table_update(table_update)?),
+                "game_mail_template" => db_update
+                    .game_mail_template
+                    .append(game_mail_template_table::parse_table_update(table_update)?),
                 "game_map_region" => db_update
                     .game_map_region
                     .append(game_map_region_table::parse_table_update(table_update)?),
@@ -8630,6 +8651,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 ),
                 "game_quest_reward_item" => db_update.game_quest_reward_item.append(
                     game_quest_reward_item_table::parse_table_update(table_update)?,
+                ),
+                "game_quest_reward_mail" => db_update.game_quest_reward_mail.append(
+                    game_quest_reward_mail_table::parse_table_update(table_update)?,
                 ),
                 "game_quest_reward_spell" => db_update.game_quest_reward_spell.append(
                     game_quest_reward_spell_table::parse_table_update(table_update)?,
@@ -9603,6 +9627,12 @@ impl __sdk::DbUpdate for DbUpdate {
                 &self.game_mail_escrow_reaper_schedule,
             )
             .with_updates_by_pk(|row| &row.scheduled_id);
+        diff.game_mail_loot = cache
+            .apply_diff_to_table::<MailLoot>("game_mail_loot", &self.game_mail_loot)
+            .with_updates_by_pk(|row| &row.mail_template_id);
+        diff.game_mail_template = cache
+            .apply_diff_to_table::<MailTemplate>("game_mail_template", &self.game_mail_template)
+            .with_updates_by_pk(|row| &row.id);
         diff.game_map_region = cache
             .apply_diff_to_table::<MapRegion>("game_map_region", &self.game_map_region)
             .with_updates_by_pk(|row| &row.key);
@@ -9744,6 +9774,12 @@ impl __sdk::DbUpdate for DbUpdate {
                 &self.game_quest_reward_item,
             )
             .with_updates_by_pk(|row| &row.id);
+        diff.game_quest_reward_mail = cache
+            .apply_diff_to_table::<QuestRewardMail>(
+                "game_quest_reward_mail",
+                &self.game_quest_reward_mail,
+            )
+            .with_updates_by_pk(|row| &row.quest_entry);
         diff.game_quest_reward_spell = cache
             .apply_diff_to_table::<QuestRewardSpell>(
                 "game_quest_reward_spell",
@@ -10510,6 +10546,12 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_mail_escrow_reaper_schedule" => db_update
                     .game_mail_escrow_reaper_schedule
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_mail_loot" => db_update
+                    .game_mail_loot
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_mail_template" => db_update
+                    .game_mail_template
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_map_region" => db_update
                     .game_map_region
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -10602,6 +10644,9 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_quest_reward_item" => db_update
                     .game_quest_reward_item
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_quest_reward_mail" => db_update
+                    .game_quest_reward_mail
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_quest_reward_spell" => db_update
                     .game_quest_reward_spell
@@ -11294,6 +11339,12 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_mail_escrow_reaper_schedule" => db_update
                     .game_mail_escrow_reaper_schedule
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_mail_loot" => db_update
+                    .game_mail_loot
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_mail_template" => db_update
+                    .game_mail_template
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_map_region" => db_update
                     .game_map_region
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -11386,6 +11437,9 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_quest_reward_item" => db_update
                     .game_quest_reward_item
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_quest_reward_mail" => db_update
+                    .game_quest_reward_mail
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_quest_reward_spell" => db_update
                     .game_quest_reward_spell
@@ -11775,6 +11829,8 @@ pub struct AppliedDiff<'r> {
     game_mail_delivery: __sdk::TableAppliedDiff<'r, MailDelivery>,
     game_mail_escrow: __sdk::TableAppliedDiff<'r, MailEscrow>,
     game_mail_escrow_reaper_schedule: __sdk::TableAppliedDiff<'r, MailEscrowReaperSchedule>,
+    game_mail_loot: __sdk::TableAppliedDiff<'r, MailLoot>,
+    game_mail_template: __sdk::TableAppliedDiff<'r, MailTemplate>,
     game_map_region: __sdk::TableAppliedDiff<'r, MapRegion>,
     game_melee_attack: __sdk::TableAppliedDiff<'r, MeleeAttack>,
     game_melee_schedule: __sdk::TableAppliedDiff<'r, MeleeSchedule>,
@@ -11806,6 +11862,7 @@ pub struct AppliedDiff<'r> {
     game_quest_objective: __sdk::TableAppliedDiff<'r, QuestObjective>,
     game_quest_reward_choice: __sdk::TableAppliedDiff<'r, QuestRewardChoice>,
     game_quest_reward_item: __sdk::TableAppliedDiff<'r, QuestRewardItem>,
+    game_quest_reward_mail: __sdk::TableAppliedDiff<'r, QuestRewardMail>,
     game_quest_reward_spell: __sdk::TableAppliedDiff<'r, QuestRewardSpell>,
     game_quest_template: __sdk::TableAppliedDiff<'r, QuestTemplate>,
     game_quest_text: __sdk::TableAppliedDiff<'r, QuestText>,
@@ -12621,6 +12678,16 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
             &self.game_mail_escrow_reaper_schedule,
             event,
         );
+        callbacks.invoke_table_row_callbacks::<MailLoot>(
+            "game_mail_loot",
+            &self.game_mail_loot,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<MailTemplate>(
+            "game_mail_template",
+            &self.game_mail_template,
+            event,
+        );
         callbacks.invoke_table_row_callbacks::<MapRegion>(
             "game_map_region",
             &self.game_map_region,
@@ -12774,6 +12841,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<QuestRewardItem>(
             "game_quest_reward_item",
             &self.game_quest_reward_item,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<QuestRewardMail>(
+            "game_quest_reward_mail",
+            &self.game_quest_reward_mail,
             event,
         );
         callbacks.invoke_table_row_callbacks::<QuestRewardSpell>(
@@ -13930,6 +14002,8 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_mail_delivery_table::register_table(client_cache);
         game_mail_escrow_table::register_table(client_cache);
         game_mail_escrow_reaper_schedule_table::register_table(client_cache);
+        game_mail_loot_table::register_table(client_cache);
+        game_mail_template_table::register_table(client_cache);
         game_map_region_table::register_table(client_cache);
         game_melee_attack_table::register_table(client_cache);
         game_melee_schedule_table::register_table(client_cache);
@@ -13961,6 +14035,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_quest_objective_table::register_table(client_cache);
         game_quest_reward_choice_table::register_table(client_cache);
         game_quest_reward_item_table::register_table(client_cache);
+        game_quest_reward_mail_table::register_table(client_cache);
         game_quest_reward_spell_table::register_table(client_cache);
         game_quest_template_table::register_table(client_cache);
         game_quest_text_table::register_table(client_cache);
@@ -14189,6 +14264,8 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_mail_delivery",
         "game_mail_escrow",
         "game_mail_escrow_reaper_schedule",
+        "game_mail_loot",
+        "game_mail_template",
         "game_map_region",
         "game_melee_attack",
         "game_melee_schedule",
@@ -14220,6 +14297,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_quest_objective",
         "game_quest_reward_choice",
         "game_quest_reward_item",
+        "game_quest_reward_mail",
         "game_quest_reward_spell",
         "game_quest_template",
         "game_quest_text",
