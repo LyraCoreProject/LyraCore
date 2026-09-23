@@ -298,32 +298,68 @@ impl Coordinator {
             .map(|c| (c.map_id, c.x, c.y, c.z)))
     }
 
-    /// This Shard's Realm Presence row for `guid`: Character facts, `in_world` (a live
-    /// `game_world_entity`, bots included), `session_online` (`game_character.online`, the session
-    /// flag) and Away Status from the live entity's `PLAYER_FLAGS`. `None` if this Shard holds no
-    /// `game_character` row for it.
-    pub fn presence_row(&self, guid: u64) -> Result<Option<crate::world::presence::RealmPresence>> {
+    /// This Shard's durable Character row for `guid`: identity plus the session flag. `None` if
+    /// this Shard holds no `game_character` row for it.
+    pub fn character_identity(
+        &self,
+        guid: u64,
+    ) -> Result<Option<crate::world::presence::CharacterIdentity>> {
+        Ok(self
+            .0
+            .coord()
+            .conn
+            .db
+            .game_character()
+            .guid()
+            .find(&guid)
+            .map(|ch| crate::world::presence::CharacterIdentity {
+                guid,
+                name: ch.name,
+                race: ch.race,
+                class: ch.class,
+                level: ch.level,
+                zone_id: ch.zone_id,
+                session_online: ch.online,
+            }))
+    }
+
+    /// This Shard's live `game_world_entity` row for `guid`, if any — the Member Stats columns
+    /// [`crate::codec::MemberEntity`] carries, joined with nothing else: level and zone come
+    /// straight off the entity, current unlike the durable row.
+    pub fn live_entity(&self, guid: u64) -> Option<crate::codec::MemberEntity> {
+        let guard = self.0.coord();
+        let entity = guard.conn.db.game_world_entity().guid().find(&guid)?;
+        Some(crate::codec::MemberEntity {
+            health: entity.health,
+            max_health: entity.max_health,
+            power: entity.power,
+            max_power: entity.max_power,
+            unit_bytes_0: entity.unit_bytes_0,
+            level: entity.level,
+            zone_id: entity.zone_id,
+            x: entity.x,
+            y: entity.y,
+            dead: entity.dead,
+            player_flags: entity.player_flags,
+        })
+    }
+
+    /// Does this Shard show `guid` between two places: its own Character row reading online with
+    /// no live entity here, or a Transfer Intent naming a session-less bot mid-crossing? The
+    /// Transfer Intent table is bounded by the Module's writer Gate, so the scan is short.
+    pub fn character_in_transit(&self, guid: u64) -> bool {
         let guard = self.0.coord();
         let db = &guard.conn.db;
-        let Some(ch) = db.game_character().guid().find(&guid) else {
-            return Ok(None);
-        };
-        let entity = db.game_world_entity().guid().find(&guid);
-        let away = entity
-            .as_ref()
-            .map(|e| crate::world::presence::away_from_player_flags(e.player_flags))
-            .unwrap_or(crate::world::presence::AwayStatus::None);
-        Ok(Some(crate::world::presence::RealmPresence {
-            guid,
-            name: ch.name,
-            race: ch.race,
-            class: ch.class,
-            level: ch.level,
-            zone_id: ch.zone_id,
-            in_world: entity.is_some(),
-            session_online: ch.online,
-            away,
-        }))
+        let session_online = db
+            .game_character()
+            .guid()
+            .find(&guid)
+            .is_some_and(|character| character.online);
+        session_online
+            || db
+                .game_bot_transfer_intent()
+                .iter()
+                .any(|intent| intent.bot_guid == guid)
     }
 
     /// Every in-world player Character on this Shard, for `CMSG_WHO → SMSG_WHO`
@@ -334,22 +370,40 @@ impl Coordinator {
     pub fn in_world_players(&self) -> Result<Vec<crate::world::presence::RealmPresence>> {
         let guard = self.0.coord();
         let db = &guard.conn.db;
+        let shard_name = self.shard_name().to_string();
         let rows = db
             .game_world_entity()
             .iter()
             .filter(|e| e.entry == 0) // players have entry == 0; creatures have a template entry
             .filter_map(|e| {
                 let ch = db.game_character().guid().find(&e.guid)?;
+                let away = crate::world::presence::away_from_player_flags(e.player_flags);
+                let entity = crate::codec::MemberEntity {
+                    health: e.health,
+                    max_health: e.max_health,
+                    power: e.power,
+                    max_power: e.max_power,
+                    unit_bytes_0: e.unit_bytes_0,
+                    level: e.level,
+                    zone_id: e.zone_id,
+                    x: e.x,
+                    y: e.y,
+                    dead: e.dead,
+                    player_flags: e.player_flags,
+                };
                 Some(crate::world::presence::RealmPresence {
                     guid: e.guid,
                     name: ch.name,
                     race: ch.race,
                     class: ch.class,
-                    level: ch.level,
-                    zone_id: ch.zone_id,
-                    in_world: true,
+                    level: u8::try_from(e.level).unwrap_or(u8::MAX),
+                    zone_id: e.zone_id,
                     session_online: ch.online,
-                    away: crate::world::presence::away_from_player_flags(e.player_flags),
+                    whereabouts: crate::world::presence::Whereabouts::InWorld {
+                        away,
+                        entity,
+                        shard_name: shard_name.clone(),
+                    },
                 })
             })
             .collect();

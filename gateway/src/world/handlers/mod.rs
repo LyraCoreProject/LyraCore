@@ -67,8 +67,8 @@ pub(crate) use melee::{
 #[cfg(test)]
 pub(crate) use member_stats::MemberSnapshot;
 pub(crate) use member_stats::{
-    dispatch_member_stats, locate_member, member_stats_tick, MemberPresence, MemberShardCache,
-    MemberStatsOutcome, MemberStatsPlayer, MemberStatsRecord, MemberStatsStore,
+    dispatch_member_stats, member_stats_tick, MemberPresence, MemberStatsOutcome,
+    MemberStatsPlayer, MemberStatsRecord, MemberStatsStore,
 };
 pub(crate) use query::handle_query;
 pub(crate) use quest::{

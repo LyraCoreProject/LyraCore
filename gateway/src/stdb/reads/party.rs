@@ -320,90 +320,54 @@ impl Coordinator {
             .unwrap_or_default())
     }
 
-    /// Find `guid` for Member Stats with the shared [`crate::world::locate_member`] decision. A
-    /// live entity may come from any connected World Shard. Offline follows the absence rule:
-    /// every configured World Shard must be healthy.
-    ///
-    /// Each connected shard is paired with its position in `all_shards()` before the scan, the
-    /// same `enumerate()` order `arm_shared_world_view` assigned when it built `WorldView`'s
-    /// `AuraIndex`, that position is the `ShardId` the index keys its rows by, so a live match
-    /// can read the right shard's auras and pet.
+
+    /// Find `guid` for Member Stats from its Realm Presence — the same live-entity / in-transit /
+    /// absence-gated-offline decision every other realm-wide read now shares, so there is no
+    /// second discovery left to disagree with it.
     pub(crate) fn member_presence(&self, guid: u64) -> Result<crate::world::MemberPresence> {
-        let connected: Vec<MemberShard> = self
-            .all_shards()
-            .into_iter()
-            .enumerate()
-            .map(|(id, coord)| MemberShard { id, coord })
-            .collect();
-        crate::world::locate_member(
-            guid,
-            &connected,
-            || {
-                if !self.is_sharded() {
-                    return Ok(false);
+        use crate::world::presence::Whereabouts;
+        Ok(
+            match crate::world::presence::of(self, guid)?.map(|presence| presence.whereabouts) {
+                Some(Whereabouts::InWorld {
+                    entity, shard_name, ..
+                }) => {
+                    let entity = self.with_member_shard_stats(&shard_name, guid, entity);
+                    crate::world::MemberPresence::Live(crate::codec::MemberStats::from_entity(
+                        &entity,
+                    ))
                 }
-                let locator = self.realm_core()?.realm_character_partition(guid)?;
-                Ok(locator.is_some_and(|partition| partition.transfer_pending))
-            },
-            || {
-                let shards = self.world_shards_for_absence()?;
-                Ok(shards
-                    .into_iter()
-                    .enumerate()
-                    .map(|(id, (_, coord))| MemberShard { id, coord })
-                    .collect())
+                Some(Whereabouts::InTransit) => crate::world::MemberPresence::InTransit,
+                Some(Whereabouts::Offline) | None => crate::world::MemberPresence::Offline,
             },
         )
     }
 
-    /// The member's live `game_world_entity` row, its occupied aura slots, and its live pet:
-    /// everything [`crate::world::MemberShardCache::member_entity`] needs, read from this one
-    /// shard. `shard` is this connection's `ShardId` in `WorldView`'s `AuraIndex`.
-    ///
-    /// The entity read releases its `coord()` guard before the aura and pet reads take their own.
-    /// `std::sync::RwLock` favors a waiting writer, so holding this guard across a second `coord()`
-    /// call on the same thread can deadlock: the nested call blocks behind a writer that is itself
-    /// waiting on the still-held outer guard. A watchdog reconnect takes that writer lock.
-    fn member_entity(
+    /// Overlay `guid`'s aura slots and live pet onto `entity` — the one piece of Member Stats a
+    /// generic Realm Presence read cannot supply, because it does not know about `ShardId` or
+    /// `WorldView`'s `AuraIndex`. Reads from the exact Shard named `shard_name`, the same one
+    /// `presence::of` already searched to find the live entity `entity` itself came from, keyed by
+    /// its position in `all_shards()` — the same `enumerate()` order `arm_shared_world_view`
+    /// assigned when it built the `AuraIndex`. A name this handle's own `all_shards()` no longer
+    /// lists (a Shard dropped between the two reads) leaves `entity` as `presence::of` built it,
+    /// pet-less and aura-less rather than wrong.
+    fn with_member_shard_stats(
         &self,
-        shard: crate::stdb::world_index::ShardId,
+        shard_name: &str,
         guid: u64,
-    ) -> Option<crate::codec::MemberEntity> {
-        let entity = {
-            let live = self.0.coord();
-            live.conn.db.game_world_entity().guid().find(&guid)?
+        entity: crate::codec::MemberEntity,
+    ) -> crate::codec::MemberEntity {
+        let Some(shard) = self
+            .all_shards()
+            .iter()
+            .position(|coord| coord.shard_name() == shard_name)
+        else {
+            return entity;
         };
-        Some(crate::codec::MemberEntity {
-            health: entity.health,
-            max_health: entity.max_health,
-            power: entity.power,
-            max_power: entity.max_power,
-            unit_bytes_0: entity.unit_bytes_0,
-            level: entity.level,
-            zone_id: entity.zone_id,
-            x: entity.x,
-            y: entity.y,
-            dead: entity.dead,
-            player_flags: entity.player_flags,
+        crate::codec::MemberEntity {
             auras: self.member_aura_slots(shard, guid),
             pet: self.member_pet(shard, guid),
-        })
-    }
-
-    /// The Transfer Intent table is bounded by the Module's writer Gate, so the scan is short.
-    fn member_between_places(&self, guid: u64) -> bool {
-        let live = self.0.coord();
-        let db = &live.conn.db;
-        let session_online = db
-            .game_character()
-            .guid()
-            .find(&guid)
-            .is_some_and(|character| character.online);
-        session_online
-            || db
-                .game_bot_transfer_intent()
-                .iter()
-                .any(|intent| intent.bot_guid == guid)
+            ..entity
+        }
     }
 
     /// `owner_guid`'s occupied `UNIT_FIELD_AURA` slots on `shard`, from `WorldView`'s `AuraIndex`.
@@ -471,24 +435,6 @@ impl Coordinator {
     }
 }
 
-/// One connected World Shard paired with its `ShardId`, so [`crate::world::MemberShardCache`] can
-/// read the right shard's `AuraIndex` rows without widening that trait with a storage-layer
-/// index every other implementor (the Store Fake, the pure unit tests) would have to carry too.
-struct MemberShard {
-    id: crate::stdb::world_index::ShardId,
-    coord: Coordinator,
-}
-
-impl crate::world::MemberShardCache for MemberShard {
-    fn member_entity(&self, guid: u64) -> Option<crate::codec::MemberEntity> {
-        self.coord.member_entity(self.id, guid)
-    }
-
-    fn member_between_places(&self, guid: u64) -> bool {
-        self.coord.member_between_places(guid)
-    }
-}
-
 #[cfg(test)]
 mod member_stats_adapter_tests {
     use crate::test_scan::code_of;
@@ -499,26 +445,26 @@ mod member_stats_adapter_tests {
             .collect()
     }
 
-    /// The Coordinator reads the caches and leaves every decision to `locate_member`, which the
-    /// Member Stats tests drive. Offline must come from the absence rule, and a bot's Transfer
-    /// Intent must count as a crossing, because a sessionless bot is never online.
+    /// Member Stats reads Realm Presence rather than running its own discovery — no second
+    /// live-entity/in-transit/absence decision left to duplicate `presence::of`'s.
     #[test]
-    fn the_coordinator_feeds_the_shared_decision_with_the_absence_rule() {
+    fn the_coordinator_converts_realm_presence_into_member_presence() {
         let presence = flat("pub(crate) fn member_presence(");
-        assert!(presence.contains("crate::world::locate_member(guid,&connected,"));
-        assert!(presence.contains("self.world_shards_for_absence()?"));
-        assert!(presence.contains(".realm_character_partition(guid)?"));
-
-        let between = flat("fn member_between_places(");
-        assert!(between.contains(".is_some_and(|character|character.online)"));
-        assert!(between.contains(
-            "session_online||db.game_bot_transfer_intent().iter().any(|intent|intent.bot_guid==guid)"
-        ));
+        assert!(presence.contains("crate::world::presence::of(self,guid)?"));
+        assert!(presence.contains("Whereabouts::InWorld{entity,shard_name,..}"));
+        assert!(presence.contains("self.with_member_shard_stats(&shard_name,guid,entity)"));
+        assert!(presence.contains("crate::world::MemberPresence::Live"));
+        assert!(
+            presence.contains("Whereabouts::InTransit)=>crate::world::MemberPresence::InTransit")
+        );
+        assert!(
+            presence.contains("Whereabouts::Offline)|None=>crate::world::MemberPresence::Offline")
+        );
     }
 
-    /// `member_entity` and `member_pet` must read auras from the SAME `ShardId` the live match
-    /// came from, not a fixed or default one. A cross-shard aura read would silently show nothing
-    /// outside the Gateway process that owns that shard's connection.
+    /// The aura and pet overlay must read from the SAME `ShardId` the live match came from, not a
+    /// fixed or default one — a cross-shard aura read would silently show nothing outside the
+    /// Gateway process that owns that shard's connection.
     ///
     /// A source scan, not a behavior test through a real `Coordinator`: `Coordinator` wraps the
     /// spacetimedb-sdk `DbConnection`, which only a live SpacetimeDB node can populate, so this
@@ -527,10 +473,10 @@ mod member_stats_adapter_tests {
     /// Module side. This scan stays narrow: one substring per call it must make, not a copy of the
     /// method body.
     #[test]
-    fn member_entity_and_pet_read_auras_from_the_matched_shard() {
-        let entity = flat("fn member_entity(");
-        assert!(entity.contains("self.member_aura_slots(shard,guid)"));
-        assert!(entity.contains("self.member_pet(shard,guid)"));
+    fn the_shard_overlay_reads_auras_and_pet_from_the_matched_shard() {
+        let overlay = flat("fn with_member_shard_stats(");
+        assert!(overlay.contains("self.member_aura_slots(shard,guid)"));
+        assert!(overlay.contains("self.member_pet(shard,guid)"));
 
         let pet = flat("fn member_pet(");
         assert!(pet.contains("self.member_aura_slots(shard,pet.guid)"));

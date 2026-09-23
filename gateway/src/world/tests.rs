@@ -1,9 +1,9 @@
 use super::handlers::{
     AuctionActionStore, AuctionInteraction, CastStore, ChatActionStore, ChatOutcome,
     DuelActionStore, GuildActionStore, ItemActionStore, LootWindowRefusal, LootWindowRequestStatus,
-    LootWindowStore, MeleeActionStore, MemberPresence, MemberShardCache, MemberSnapshot,
-    MemberStatsStore, QuestActionStore, RealmChatRequest, SpeakerFacts, TaxiActionStore,
-    VendorActionStore, WeatherStore,
+    LootWindowStore, MeleeActionStore, MemberPresence, MemberSnapshot, MemberStatsStore,
+    QuestActionStore, RealmChatRequest, SpeakerFacts, TaxiActionStore, VendorActionStore,
+    WeatherStore,
 };
 use super::party::PartyOutcome;
 use super::*;
@@ -1342,8 +1342,31 @@ impl WorldStore for InMemoryStore {
 
     fn realm_character_partition(
         &self,
-        _character_guid: u64,
+        character_guid: u64,
     ) -> Result<Option<super::party::RealmCharacterPartition>> {
+        // `members_in_transit` is Member Stats' own per-guid fixture (`presence::of`'s
+        // `realm_transfer_pending` reads this trait method on the realm handle, same as
+        // `Coordinator::member_presence` did before the two merged). Checked first so it can name
+        // one guid as pending without disturbing `realm_partition`, which every other test that
+        // exercises a real Transfer already drives.
+        if self
+            .members_in_transit
+            .lock()
+            .unwrap()
+            .contains(&character_guid)
+        {
+            return Ok(Some(super::party::RealmCharacterPartition {
+                map_id: 0,
+                instance_id: 0,
+                revision: 1,
+                transfer_pending: true,
+                pending_destination_map: 0,
+                pending_destination_instance: 0,
+                bot_source_identity: spacetimedb_sdk::Identity::ZERO,
+                bot_transfer_intent_id: 0,
+                bot_controller_generation: 0,
+            }));
+        }
         Ok(*self.realm_partition.lock().unwrap())
     }
 
@@ -2808,47 +2831,84 @@ impl WorldStore for InMemoryStore {
     fn player_combat_until_ms(&self, _player_guid: u64) -> u64 {
         self.combat_until_ms
     }
-    fn presence_row(&self, guid: u64) -> Result<Option<presence::RealmPresence>> {
-        let Some(c) = self.characters.iter().find(|c| c.guid == guid) else {
-            return Ok(None);
-        };
-        let in_world = self.entity_in_world(guid);
-        Ok(Some(presence::RealmPresence {
-            guid: c.guid,
-            name: c.name.clone(),
-            race: c.race,
-            class: c.class,
-            level: c.level,
-            zone_id: c.zone_id,
-            in_world,
-            // `offline_guids` drives the invite gate's "player not online" arm; a seeded character
-            // is session-online unless listed there, mirroring `character_presence` above.
-            session_online: !self.offline_guids.contains(&guid),
-            // `away_flags` models the live entity's PLAYER_FLAGS, so it means nothing without one.
-            away: if in_world {
-                self.away(guid)
-            } else {
-                presence::AwayStatus::None
-            },
-        }))
-    }
-    fn in_world_players(&self) -> Result<Vec<presence::RealmPresence>> {
-        // Test store: every seeded character the fake considers in-world (`entity_in_world`) is
-        // listed, so CMSG_WHO tests can assert a response without wiring `live_guids` by hand.
-        Ok(self
-            .characters
-            .iter()
-            .filter(|c| self.entity_in_world(c.guid))
-            .map(|c| presence::RealmPresence {
+    fn character_identity(&self, guid: u64) -> Result<Option<presence::CharacterIdentity>> {
+        Ok(self.characters.iter().find(|c| c.guid == guid).map(|c| {
+            presence::CharacterIdentity {
                 guid: c.guid,
                 name: c.name.clone(),
                 race: c.race,
                 class: c.class,
                 level: c.level,
                 zone_id: c.zone_id,
-                in_world: true,
-                session_online: !self.offline_guids.contains(&c.guid),
-                away: self.away(c.guid),
+                // `offline_guids` drives the invite gate's "player not online" arm; a seeded
+                // character is session-online unless listed there, mirroring `character_presence`.
+                session_online: !self.offline_guids.contains(&guid),
+            }
+        }))
+    }
+    fn live_entity(&self, guid: u64) -> Option<codec::MemberEntity> {
+        // `member_entities` alone: Member Stats' own tests despawn a guid here while it stays in
+        // `live_guids` (a party-eligibility signal, not a Member Stats one) to pin the case where a
+        // group mate's entity is gone but the party frame's own bookkeeping has not caught up —
+        // falling back to `live_guids` or the blanket `entity_in_world` flag would read that guid
+        // live again and silently defeat the pin. `in_world_players`'s bulk /who scan has its own,
+        // separate fallback for a guid this fixture never gave a precise entity to.
+        self.member_entities
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(g, _)| *g == guid)
+            .map(|(_, e)| *e)
+    }
+    fn character_in_transit(&self, guid: u64) -> bool {
+        self.members_between_places.lock().unwrap().contains(&guid)
+    }
+    fn every_shard_vouches_for_absence(&self) -> Result<()> {
+        // A Realm Presence "gone" claim spans every configured Shard, not just this handle — each
+        // Fake instance models one Shard's own connection, so the peer set is checked too, the
+        // same reach `Coordinator::world_shards_for_absence` has from any one of its own handles.
+        for peer in self.peers.lock().unwrap().iter() {
+            if let Some(error) = &peer.world_shard_set_error {
+                return Err(anyhow!(error.clone()));
+            }
+        }
+        if let Some(error) = &self.world_shard_set_error {
+            return Err(anyhow!(error.clone()));
+        }
+        Ok(())
+    }
+    fn in_world_players(&self) -> Result<Vec<presence::RealmPresence>> {
+        // Test store: every seeded character the fake considers in-world (`entity_in_world`,
+        // the BLANKET flag included) is listed, so CMSG_WHO tests can assert a response without
+        // wiring `live_guids` by hand — unlike `live_entity`, which `presence::of` uses for one
+        // guid at a time and which deliberately does not trust that blanket flag.
+        // `live_entity` supplies level/zone from `member_entities`/`live_guids` when a test seeded
+        // one for this guid, else the durable row stands in.
+        Ok(self
+            .characters
+            .iter()
+            .filter(|c| self.entity_in_world(c.guid))
+            .map(|c| {
+                let entity = self.live_entity(c.guid).unwrap_or(codec::MemberEntity {
+                    level: u32::from(c.level),
+                    zone_id: c.zone_id,
+                    player_flags: self.away_flags.get(&c.guid).copied().unwrap_or(0),
+                    ..Default::default()
+                });
+                presence::RealmPresence {
+                    guid: c.guid,
+                    name: c.name.clone(),
+                    race: c.race,
+                    class: c.class,
+                    level: u8::try_from(entity.level).unwrap_or(u8::MAX),
+                    zone_id: entity.zone_id,
+                    session_online: !self.offline_guids.contains(&c.guid),
+                    whereabouts: presence::Whereabouts::InWorld {
+                        away: self.away(c.guid),
+                        entity,
+                        shard_name: self.shard.clone(),
+                    },
+                }
             })
             .collect())
     }
@@ -4316,40 +4376,20 @@ impl MemberStatsStore for InMemoryStore {
     fn member_presence(&self, guid: u64) -> Result<MemberPresence> {
         self.member_presence_reads
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let peers = self.peers.lock().unwrap().clone();
-        let connected: Vec<&InMemoryStore> = if peers.is_empty() {
-            vec![self]
-        } else {
-            peers.iter().map(AsRef::as_ref).collect()
-        };
-        locate_member(
-            guid,
-            &connected,
-            || {
-                Ok(self
-                    .realm
-                    .as_ref()
-                    .is_some_and(|realm| realm.members_in_transit.lock().unwrap().contains(&guid)))
-            },
-            || match &self.world_shard_set_error {
-                Some(error) => Err(anyhow!(error.clone())),
-                None => Ok(connected.clone()),
+        // Aura slots and a live pet are Member Stats' own overlay in production
+        // (`Coordinator::with_member_shard_stats`, keyed by `ShardId`) — this Fake has no
+        // `AuraIndex` to key into, so `entity` carries whatever `member_entities`/`live_entity`'s
+        // fallback already gave it (empty auras, no pet, unless a test seeded `member_entities`
+        // with its own).
+        Ok(
+            match presence::of(self, guid)?.map(|presence| presence.whereabouts) {
+                Some(presence::Whereabouts::InWorld { entity, .. }) => {
+                    MemberPresence::Live(Box::new(codec::MemberStats::from_entity(&entity)))
+                }
+                Some(presence::Whereabouts::InTransit) => MemberPresence::InTransit,
+                Some(presence::Whereabouts::Offline) | None => MemberPresence::Offline,
             },
         )
-    }
-}
-
-impl MemberShardCache for &InMemoryStore {
-    fn member_entity(&self, guid: u64) -> Option<codec::MemberEntity> {
-        let entities = self.member_entities.lock().unwrap();
-        entities
-            .iter()
-            .find(|(g, _)| *g == guid)
-            .map(|(_, e)| e.clone())
-    }
-
-    fn member_between_places(&self, guid: u64) -> bool {
-        self.members_between_places.lock().unwrap().contains(&guid)
     }
 }
 

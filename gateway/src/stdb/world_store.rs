@@ -1044,8 +1044,24 @@ impl WorldStore for Coordinator {
         self.player_combat_until_ms(player_guid)
     }
 
-    fn presence_row(&self, guid: u64) -> Result<Option<crate::world::presence::RealmPresence>> {
-        self.presence_row(guid)
+    fn character_identity(
+        &self,
+        guid: u64,
+    ) -> Result<Option<crate::world::presence::CharacterIdentity>> {
+        self.character_identity(guid)
+    }
+
+    fn live_entity(&self, guid: u64) -> Option<codec::MemberEntity> {
+        self.live_entity(guid)
+    }
+
+    fn character_in_transit(&self, guid: u64) -> bool {
+        self.character_in_transit(guid)
+    }
+
+    fn every_shard_vouches_for_absence(&self) -> Result<()> {
+        self.world_shards_for_absence()?;
+        Ok(())
     }
 
     fn in_world_players(&self) -> Result<Vec<crate::world::presence::RealmPresence>> {

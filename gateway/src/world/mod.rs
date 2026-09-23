@@ -63,12 +63,11 @@ use handlers::{
     VendorActionOutcome, VendorActionPlayer, CMSG_AUCTION_LIST_ITEMS_OPCODE,
 };
 pub(crate) use handlers::{
-    locate_member, member_stats_tick, zone_weather_message, AuctionBrowseRequest, AuctionPage,
-    AuctionQuery, CharacterFacts, ChatOutcome, CreateAuctionOutcome, CreateAuctionRequest,
-    GuildOutcome, GuildRequest, ItemActionResult, LootActionStatus, LootWindowRefusal,
-    LootWindowRequestStatus, MemberPresence, MemberShardCache, MemberStatsRecord, MemberStatsStore,
-    PlaceBidOutcome, PlaceBidRequest, RealmChatRequest, SpeakerFacts, TrainerBuyOutcome,
-    WeatherStore,
+    member_stats_tick, zone_weather_message, AuctionBrowseRequest, AuctionPage, AuctionQuery,
+    CharacterFacts, ChatOutcome, CreateAuctionOutcome, CreateAuctionRequest, GuildOutcome,
+    GuildRequest, ItemActionResult, LootActionStatus, LootWindowRefusal, LootWindowRequestStatus,
+    MemberPresence, MemberStatsRecord, MemberStatsStore, PlaceBidOutcome, PlaceBidRequest,
+    RealmChatRequest, SpeakerFacts, TrainerBuyOutcome, WeatherStore,
 };
 use login_queue::{Admission, LoginQueue};
 use social::handle_social;

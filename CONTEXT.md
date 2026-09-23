@@ -371,9 +371,17 @@ The speaker's race and chat tag, read by the Gateway on the Home Shard and conve
 Request. Realm-core holds no Characters.
 
 **Realm Presence**:
-The Gateway's realm-wide read of one Character: in world, session online, race, class, level, zone
-and Away Status, from whichever World Shard holds it.
+The Gateway's realm-wide read of one Character: Whereabouts, session online, race, class, level and
+zone, from whichever World Shard holds it. Guild rosters, friends, `/who`, whisper and Member Stats
+all read it.
 _Avoid_: online status, presence cache
+
+**Whereabouts**:
+Realm Presence's own state for where a Character is: in world (with a live entity and an Away
+Status), in transit between two places (a pending Transfer, or a Shard's own row reading online
+with no entity there), or offline. A negative Whereabouts — offline, or no Character found at all —
+needs every configured World Shard to vouch that none of them is hiding the Character.
+_Avoid_: presence state, location status
 
 ### Loot
 

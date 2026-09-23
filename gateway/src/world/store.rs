@@ -1280,10 +1280,30 @@ pub trait WorldStore:
     /// found). Used by the logout handler to deny `CMSG_LOGOUT_REQUEST` while the player is in combat.
     fn player_combat_until_ms(&self, player_guid: u64) -> u64;
 
-    /// This Shard's Realm Presence row for `guid`: Character facts, `in_world`, `session_online`
-    /// and Away Status, in one read. `None` if this Shard holds no `game_character` row for it.
+    /// This Shard's durable Character row for `guid`: identity plus the session flag. `None` if
+    /// this Shard holds no `game_character` row for it.
     /// [`presence::of`](super::presence::of) unions it across every connected Shard.
-    fn presence_row(&self, guid: u64) -> Result<Option<presence::RealmPresence>>;
+    fn character_identity(&self, guid: u64) -> Result<Option<presence::CharacterIdentity>>;
+
+    /// This Shard's live `game_world_entity` row for `guid`, if any — the Member Stats columns,
+    /// plus level and zone, current unlike the durable row (`persist_entity` only refreshes it on
+    /// logout, cross-map teleport or Transfer). `None` if `guid` has no live entity here.
+    fn live_entity(&self, guid: u64) -> Option<codec::MemberEntity>;
+
+    /// Does this Shard show `guid` between two places: its own Character row reading online with
+    /// no live entity here (a map-change loading screen, or a human Transfer's frozen source
+    /// copy — `begin_transfer` persists with `set_offline: false`), or a Transfer Intent naming a
+    /// session-less bot mid-crossing.
+    fn character_in_transit(&self, guid: u64) -> bool;
+
+    /// Does every configured World Shard vouch that it is reachable and healthy enough to trust a
+    /// negative read from? [`presence::of`] asks this before answering `Whereabouts::Offline` or
+    /// `None` — an unreachable or stale-cached Shard could be hiding the Character, so the default
+    /// (`Ok(())`, every Store without a Shard topology to ask) must be overridden by any Store that
+    /// actually has one to check.
+    fn every_shard_vouches_for_absence(&self) -> Result<()> {
+        Ok(())
+    }
 
     /// Every in-world player Character on this Shard — the per-Shard input
     /// [`presence::in_world_characters`](super::presence::in_world_characters) unions, and `/who`'s
