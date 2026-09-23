@@ -1095,7 +1095,8 @@ parity_test!(parity_game_auction, "game_auction", lyracore_module::Auction, bind
 });
 parity_test!(parity_game_auction_bid_decision, "game_auction_bid_decision", lyracore_module::AuctionBidDecision, bindings::auction_bid_decision_type::AuctionBidDecision, {
     operation_id, bidder_guid, auction_id, offer, outcome, revision, result_bidder_guid,
-    result_bid, minimum_increment, deferred_refund, accepted_price, house,
+    result_bid, minimum_increment, deferred_refund, accepted_price, house, item_entry,
+    random_property_id,
 });
 parity_test!(parity_game_auction_bid_hold, "game_auction_bid_hold", lyracore_module::AuctionBidHold, bindings::auction_bid_hold_type::AuctionBidHold, {
     operation_id, bidder_guid, auction_id, offer, outcome, revision, result_bidder_guid,

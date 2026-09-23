@@ -93,13 +93,13 @@ pub fn reap_movement_events(ctx: &ReducerContext, _schedule: EventReaperSchedule
     reap!(game_trade_event); // trade-status relay rows (RLS-scoped)
     reap!(game_duel_event); // Duel lifecycle relay rows (RLS-scoped)
     reap!(game_bot_invite_intent); // bot-decided invites awaiting gateway pickup
-    reap!(game_movement_violation); // recent anti-cheat diagnostics
     reap!(game_auction_notice); // live outbid/won/sold/expired/new-bid notices to an online seller or bidder
-                                // Rest-area zzz/blue-bar relay rows (196). Caught missing by the gc_reap_tripwire: this
-                                // table carries the same `id: u64` + `created_at: Timestamp` TTL shape as every table above but
-                                // had no reap line — every inn threshold crossing for the lifetime of a character left one more
-                                // row behind. The durable rest state (`Character.resting`/`rested_xp`) lives elsewhere; this row
-                                // is only the one-shot PLAYER_BYTES_2 relay.
+    reap!(game_movement_violation); // recent anti-cheat diagnostics
+                                    // Rest-area zzz/blue-bar relay rows (196). Caught missing by the gc_reap_tripwire: this
+                                    // table carries the same `id: u64` + `created_at: Timestamp` TTL shape as every table above but
+                                    // had no reap line — every inn threshold crossing for the lifetime of a character left one more
+                                    // row behind. The durable rest state (`Character.resting`/`rested_xp`) lives elsewhere; this row
+                                    // is only the one-shot PLAYER_BYTES_2 relay.
     reap!(game_rest_state_event);
     reap!(game_breath_relay_event); // breath timer edges + drowning damage relay
     reap!(game_guild_event); // Guild Events (sign-on, MOTD, membership)

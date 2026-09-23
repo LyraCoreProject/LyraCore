@@ -120,7 +120,7 @@ pub mod auction_notice {
     pub const SOLD: u8 = 2;
     pub const EXPIRED: u8 = 3;
     pub const NEW_BID: u8 = 4;
-    /// No writer yet: T8's cancellation flow fires this kind and adds the
+    /// No writer yet: a future cancellation flow fires this kind and adds the
     /// `SMSG_AUCTION_REMOVED_NOTIFICATION` builder it needs.
     pub const REMOVED: u8 = 5;
 }

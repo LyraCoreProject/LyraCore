@@ -236,4 +236,46 @@ mod tests {
         let packet = build_auction_owner_notification(41, 107, 6, 9, 25, 117);
         assert_eq!(packet.bidder.guid(), 9);
     }
+
+    /// `cm:AuctionHouseHandler.cpp:93-107`: house, auction id, bidder guid (full 8 bytes, not
+    /// packed), won, out_bid, item entry, random property id — 32 bytes, written out by hand.
+    #[test]
+    fn the_bidder_notification_encodes_to_the_exact_cmangos_wire_layout() {
+        use wow_world_messages::Message;
+        let packet =
+            build_auction_bidder_notification(AuctionHouse::Stormwind, 41, 9, 201, 11, 25, 117);
+        let mut bytes = Vec::new();
+        packet.write_into_vec(&mut bytes).unwrap();
+
+        let mut expected = Vec::new();
+        expected.extend_from_slice(&1u32.to_le_bytes()); // AuctionHouse::Stormwind == 0x1
+        expected.extend_from_slice(&41u32.to_le_bytes());
+        expected.extend_from_slice(&9u64.to_le_bytes());
+        expected.extend_from_slice(&201u32.to_le_bytes());
+        expected.extend_from_slice(&11u32.to_le_bytes());
+        expected.extend_from_slice(&25u32.to_le_bytes());
+        expected.extend_from_slice(&117u32.to_le_bytes());
+        assert_eq!(bytes.len(), 32);
+        assert_eq!(bytes, expected);
+    }
+
+    /// `cm:AuctionHouseHandler.cpp:110-128`: auction id, bid, auction_out_bid, bidder guid (full 8
+    /// bytes), item entry, random property id — 28 bytes, written out by hand.
+    #[test]
+    fn the_owner_notification_encodes_to_the_exact_cmangos_wire_layout() {
+        use wow_world_messages::Message;
+        let packet = build_auction_owner_notification(41, 500, 25, 9, 25, 117);
+        let mut bytes = Vec::new();
+        packet.write_into_vec(&mut bytes).unwrap();
+
+        let mut expected = Vec::new();
+        expected.extend_from_slice(&41u32.to_le_bytes());
+        expected.extend_from_slice(&500u32.to_le_bytes());
+        expected.extend_from_slice(&25u32.to_le_bytes());
+        expected.extend_from_slice(&9u64.to_le_bytes());
+        expected.extend_from_slice(&25u32.to_le_bytes());
+        expected.extend_from_slice(&117u32.to_le_bytes());
+        assert_eq!(bytes.len(), 28);
+        assert_eq!(bytes, expected);
+    }
 }

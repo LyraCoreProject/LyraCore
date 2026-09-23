@@ -288,11 +288,12 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
     // only interval. Absent, weather silently stops advancing.
     crate::weather::rearm_weather_schedule(ctx);
 
-    // Re-tag pre-T5 auction mail (plain English subject, Character sender) to the vanilla
-    // AuctionHouse sender and machine subject — see `auction::repair_legacy_auction_mail`. This
-    // must run, and this PR must be live, before the Mail Timer's first backfill touches an
-    // existing realm: otherwise a legacy "Auction won" still reads as returnable Character mail
-    // and the Mail Timer sends an already-paid seller their own item back.
+    // Re-tag legacy auction mail (plain English subject, Character sender) to the vanilla
+    // AuctionHouse sender and machine subject — see `auction::repair_legacy_auction_mail`, which
+    // runs at most once per database on its own marker. MUST stay ordered before any Mail Timer
+    // expiry backfill added to this reducer: a legacy "Auction won" still reads as returnable
+    // Character mail until this re-tag runs, and a backfill that reaches it first would send an
+    // already-paid seller their own item back.
     let (legacy_auction_mail, _unmapped_auction_mail) =
         crate::auction::repair_legacy_auction_mail(ctx);
 

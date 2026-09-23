@@ -22,9 +22,10 @@ fn scheduled_bid_expiry_settles_once_and_a_callback_replay_is_a_no_op() {
         standalone.assert_call(reducer, &[]);
     }
 
-    // A pre-T5 realm's auction mail is plain Character mail. Stage one such row, then prove the
-    // post-publish repair re-tags it to the vanilla AuctionHouse sender, and does so exactly once
-    // across a repeated repair pass.
+    // Legacy auction mail (from before the vanilla Auction Mail format) is plain Character mail.
+    // Stage one such row plus a real player's look-alike, then prove the post-publish repair
+    // re-tags only the legacy row to the vanilla AuctionHouse sender, does so exactly once across
+    // a repeated repair pass, and never touches the player's own mail.
     standalone.assert_call("debug_stage_legacy_auction_mail_fixture", &[]);
 
     standalone.publish_module();
