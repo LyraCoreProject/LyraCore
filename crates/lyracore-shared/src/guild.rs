@@ -53,16 +53,85 @@ pub const DEFAULT_MOTD: &str = "No message set.";
 pub const MIN_GUILD_NAME: usize = 2;
 pub const MAX_GUILD_NAME: usize = 24;
 
-/// Guild name rule: 2 to 24 letters, digits and spaces. Charter names in mangos follow the same
-/// shape (`cm:ObjectMgr.cpp:8224-8240`).
+/// Guild name rule (`cm:ObjectMgr.cpp:8128-8139,8224-8240`): 2 to 24 Unicode scalars of digits,
+/// spaces and letters of ONE script, as mangos `isValidString` checks a Charter name, so a
+/// look-alike such as a Cyrillic "К" in a Latin name is refused. Spaces only separate words: no
+/// leading, trailing or repeated space, so "Knights" and "Knights " cannot both exist.
 pub fn validate_guild_name(name: &str) -> Result<(), GuildRefusal> {
     let length = name.chars().count();
-    let allowed = |c: char| c.is_alphabetic() || c.is_ascii_digit() || c == ' ';
-    if (MIN_GUILD_NAME..=MAX_GUILD_NAME).contains(&length) && name.chars().all(allowed) {
+    let spaced_once = !name.starts_with(' ') && !name.ends_with(' ') && !name.contains("  ");
+    let one_script = [Script::Latin, Script::Cyrillic, Script::EastAsian]
+        .into_iter()
+        .any(|script| {
+            name.chars()
+                .all(|c| c.is_ascii_digit() || c == ' ' || script.holds(c))
+        });
+    if (MIN_GUILD_NAME..=MAX_GUILD_NAME).contains(&length) && spaced_once && one_script {
         Ok(())
     } else {
         Err(GuildRefusal::NameInvalid)
     }
+}
+
+/// The letter sets mangos accepts in a name (`cm:Util.h:172-227`).
+#[derive(Clone, Copy)]
+enum Script {
+    /// Basic Latin plus the Latin-1 and Latin Extended-A letters mangos lists.
+    Latin,
+    Cyrillic,
+    /// Hangul, kana, CJK ideographs and the halfwidth and fullwidth forms.
+    EastAsian,
+}
+
+impl Script {
+    fn holds(self, c: char) -> bool {
+        let c = u32::from(c);
+        let ranges: &[(u32, u32)] = match self {
+            Self::Latin => &[
+                (0x41, 0x5A),
+                (0x61, 0x7A),
+                (0xC0, 0xD6),
+                (0xD8, 0xDF),
+                (0xE0, 0xF6),
+                (0xF8, 0xFE),
+                (0x100, 0x12F),
+                (0x1E9E, 0x1E9E),
+            ],
+            Self::Cyrillic => &[(0x401, 0x401), (0x410, 0x44F), (0x451, 0x451)],
+            Self::EastAsian => &[
+                (0x1100, 0x11F9),
+                (0x3041, 0x30FF),
+                (0x3131, 0x318E),
+                (0x31F0, 0x31FF),
+                (0x3400, 0x4DB5),
+                (0x4E00, 0x9FC3),
+                (0xAC00, 0xD7A3),
+                (0xFF01, 0xFFEE),
+            ],
+        };
+        ranges
+            .iter()
+            .any(|(first, last)| (*first..=*last).contains(&c))
+    }
+}
+
+/// The founding Gates, in the order `.guild create` reports them: a valid name, then a free name,
+/// then a leader outside every Guild. Answers the [`name_key`] to store. The Module runs this on
+/// Realm-core; a Gateway Fake runs the same function, so neither can drift from the other.
+pub fn founding_gate(
+    name: &str,
+    name_taken: impl FnOnce(&str) -> bool,
+    leader_in_guild: bool,
+) -> Result<String, GuildRefusal> {
+    validate_guild_name(name)?;
+    let key = name_key(name);
+    if name_taken(&key) {
+        return Err(GuildRefusal::NameExists);
+    }
+    if leader_in_guild {
+        return Err(GuildRefusal::AlreadyInGuild);
+    }
+    Ok(key)
 }
 
 /// The uniqueness key of a guild name. Two names that differ only by case collide, so "Knights"
@@ -155,13 +224,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn guild_names_accept_letters_digits_and_spaces_within_two_to_twenty_four_scalars() {
+    fn guild_names_accept_one_script_with_digits_and_single_spaces() {
         for accepted in [
             "Ab",
             "Knights of Silver Hand",
             "abcdefghijklmnopqrstuvwx",
             "Guild 7",
-            "Ordre du Cœur",
+            "Ordre du Cèdre",
+            "Рыцари Света",
+            "銀の騎士団",
         ] {
             assert_eq!(validate_guild_name(accepted), Ok(()), "{accepted:?}");
         }
@@ -173,6 +244,14 @@ mod tests {
             "Tracer-Guild",
             "The_Guild",
             "Guild\tName",
+            // A Cyrillic capital Ka in front of Latin letters.
+            "\u{41A}nights",
+            "Knights ",
+            " Knights",
+            "Knights  Two",
+            // The oe ligature is past the Latin letters mangos lists.
+            "Ordre du Cœur",
+            "Ιππότες",
         ] {
             assert_eq!(
                 validate_guild_name(refused),
@@ -191,6 +270,24 @@ mod tests {
             validate_guild_name(&"é".repeat(25)),
             Err(GuildRefusal::NameInvalid)
         );
+    }
+
+    #[test]
+    fn founding_gates_run_name_then_uniqueness_then_membership() {
+        let taken = |key: &str| key == "tracer guild";
+        assert_eq!(
+            founding_gate("Tracer Guild!", taken, true),
+            Err(GuildRefusal::NameInvalid)
+        );
+        assert_eq!(
+            founding_gate("TRACER GUILD", taken, true),
+            Err(GuildRefusal::NameExists)
+        );
+        assert_eq!(
+            founding_gate("Knights", taken, true),
+            Err(GuildRefusal::AlreadyInGuild)
+        );
+        assert_eq!(founding_gate("Knights", taken, false), Ok("knights".into()));
     }
 
     #[test]

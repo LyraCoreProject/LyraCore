@@ -9,8 +9,7 @@
 //! Projection). No World Shard stores them.
 
 use lyracore_shared::guild::{
-    event_kind, name_key, validate_guild_name, GuildRefusal, DEFAULT_MOTD, DEFAULT_RANKS,
-    LEADER_RANK,
+    event_kind, founding_gate, GuildRefusal, DEFAULT_MOTD, DEFAULT_RANKS, LEADER_RANK,
 };
 use spacetimedb::{reducer, table, ReducerContext, SpacetimeType, Table, Timestamp};
 
@@ -183,8 +182,7 @@ fn sign_off(ctx: &ReducerContext, actor_guid: u64) -> Result<(), GuildRefusal> {
 }
 
 /// Found a Guild with the five default Guild Ranks and `leader_guid` at rank 0
-/// (`cm:Guild.cpp:104-154`). Refuses an invalid or taken name first, then a leader who is already
-/// a member, so a repeated `.guild create` of a taken name reports the name.
+/// (`cm:Guild.cpp:104-154`). The Gates and their order are `founding_gate`'s.
 pub fn create_guild(
     ctx: &ReducerContext,
     leader_guid: u64,
@@ -193,14 +191,17 @@ pub fn create_guild(
     leader_realm_account: u64,
     name: &str,
 ) -> Result<u32, GuildRefusal> {
-    validate_guild_name(name)?;
-    let key = name_key(name);
-    if ctx.db.game_guild().name_key().find(&key).is_some() {
-        return Err(GuildRefusal::NameExists);
-    }
-    if member(ctx, leader_guid).is_some() {
-        return Err(GuildRefusal::AlreadyInGuild);
-    }
+    let key = founding_gate(
+        name,
+        |key| {
+            ctx.db
+                .game_guild()
+                .name_key()
+                .find(key.to_string())
+                .is_some()
+        },
+        member(ctx, leader_guid).is_some(),
+    )?;
     let guild = ctx.db.game_guild().insert(Guild {
         guild_id: 0,
         name_key: key,
