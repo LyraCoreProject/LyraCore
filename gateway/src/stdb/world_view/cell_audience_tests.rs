@@ -1020,7 +1020,7 @@ fn reconnect_removes_missing_rows_through_the_registered_viewers_writer() {
         }
     }
 
-    reconcile_shard(&view, 0, vec![], vec![], vec![]);
+    reconcile_shard(&view, 0, vec![], vec![], vec![], vec![]);
     let mut destroyed = HashSet::new();
     while let Ok(Outbound::Job(job)) = rx.try_recv() {
         for packet in job() {
@@ -1114,7 +1114,7 @@ fn reconnect_clears_the_action_bar_of_a_pet_missing_from_the_snapshot() {
         PLAYER_BASE,
     );
 
-    reconcile_shard(&view, 0, vec![], vec![], vec![]);
+    reconcile_shard(&view, 0, vec![], vec![], vec![], vec![]);
     let Outbound::Job(job) = rx.try_recv().unwrap() else {
         panic!("expected the missing pet's Relay job");
     };

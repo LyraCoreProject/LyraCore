@@ -96,8 +96,8 @@ pub(crate) struct Viewer {
     /// world entry and a group join both get every field on the next tick.
     pub(crate) member_stats: crate::world::MemberStatsRecord,
     /// The Characters on this viewer's own ignore list. Seeded at world entry from its contact
-    /// rows on the Home Shard and kept current by that Shard's contact Relay. The Realm Chat Relay
-    /// reads it for ignorable lines only.
+    /// rows on the Home Shard, kept current by that Shard's contact Relay, and rebuilt when the
+    /// Shard reconciles after a resubscribe. The Realm Chat Relay reads it for ignorable lines only.
     pub(crate) ignored: Mutex<HashSet<u64>>,
 }
 
@@ -2058,6 +2058,23 @@ fn contact_changed(view: &WorldView, shard: ShardId, row: &ContactEntry, present
     }
 }
 
+/// Rebuild the ignore set of every viewer on `shard` from that Shard's contact rows. A resubscribe
+/// replays inserts but never the deletes it missed, so the live callbacks alone could keep a removed
+/// ignore in force until relog. Runs on the Shard's pump, like its contact callbacks.
+fn replace_ignore_sets(view: &WorldView, shard: ShardId, contacts: &[ContactEntry]) {
+    let mut ignored: HashMap<u64, HashSet<u64>> = HashMap::new();
+    for row in contacts.iter().filter(|row| row.is_ignore) {
+        ignored
+            .entry(row.owner_guid)
+            .or_default()
+            .insert(row.target_guid);
+    }
+    for viewer in view.viewers_on_shard(shard) {
+        *viewer.ignored.lock().unwrap_or_else(|p| p.into_inner()) =
+            ignored.get(&viewer.self_guid).cloned().unwrap_or_default();
+    }
+}
+
 /// Queue a Package System Message for its addressed World Session.
 fn system_message_appeared(view: &WorldView, row: &SystemMessageEvent) {
     let Some(session) = view.session_of_owner(row.recipient_guid) else {
@@ -3724,6 +3741,48 @@ mod realm_chat_relay_tests {
         assert_eq!(received(&other_rx), [expected_line()]);
     }
 
+    /// A resubscribe replays inserts but not the deletes it missed. Reconciling the Shard must
+    /// rebuild each of its viewers' ignore sets from the rows that are there now.
+    #[test]
+    fn reconciling_a_shard_rebuilds_its_viewers_ignore_sets_from_the_contact_rows() {
+        let view = Arc::new(WorldView::new(true));
+        let (stale, _stale_rx) = listener(&view, 0, 20);
+        let (kept, _kept_rx) = listener(&view, 0, 30);
+        let (elsewhere, _elsewhere_rx) = listener(&view, 1, 40);
+        for (viewer, shard) in [(&stale, 0), (&kept, 0), (&elsewhere, 1)] {
+            contact_changed(
+                &view,
+                shard,
+                &ignore_row(viewer.self_guid, SPEAKER, true),
+                true,
+            );
+        }
+
+        super::reconcile_shard(
+            &view,
+            0,
+            vec![],
+            vec![],
+            vec![],
+            vec![
+                ignore_row(30, SPEAKER, true),
+                ignore_row(30, 77, true),
+                ignore_row(20, 77, false),
+            ],
+        );
+
+        assert!(
+            !stale.ignores(SPEAKER),
+            "an ignore deleted while disconnected must not survive the resubscribe"
+        );
+        assert!(kept.ignores(SPEAKER) && kept.ignores(77));
+        assert!(!stale.ignores(77), "a friend row is not an ignore");
+        assert!(
+            elsewhere.ignores(SPEAKER),
+            "another Shard's viewers keep the set their own Shard maintains"
+        );
+    }
+
     #[test]
     fn the_ignore_set_follows_its_owners_ignore_rows_on_the_owners_shard() {
         let view = WorldView::new(true);
@@ -3911,6 +3970,7 @@ fn seed_shard_from_cache(view: &Arc<WorldView>, shard: ShardId, db: &RemoteTable
         db.game_world_entity().iter().collect(),
         db.game_gameobject().iter().collect(),
         db.game_aura().iter().collect(),
+        db.game_character_contact().iter().collect(),
     );
 }
 
@@ -3920,7 +3980,9 @@ fn reconcile_shard(
     entities: Vec<WorldEntity>,
     objects: Vec<GameObject>,
     auras: Vec<Aura>,
+    contacts: Vec<ContactEntry>,
 ) {
+    replace_ignore_sets(view, shard, &contacts);
     let aura_targets = view.auras.replace_shard(shard, auras);
     let removed_entities = view.spatial.replace_shard(
         EntityLayer::WorldEntity,
