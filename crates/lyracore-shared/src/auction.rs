@@ -57,6 +57,48 @@ impl AuctionRefusal {
     }
 }
 
+/// `FactionTemplate.dbc` group bit for a template's own team (`cm:Server/DBCEnums.h:92-95`).
+const FACTION_MASK_ALLIANCE: u32 = 2;
+const FACTION_MASK_HORDE: u32 = 4;
+
+/// Vanilla's fixed auctioneer-template-to-house table (`cm:AuctionHouseMgr.cpp:461-518`). A
+/// template outside the table falls back to its faction group's own house, then to the neutral
+/// house (Booty Bay/Gadgetzan/Everlook, house 7).
+pub fn house_for_faction_template(template_id: u32, faction_group_mask: u32) -> u32 {
+    match template_id {
+        12 => 1,
+        55 | 534 => 2,
+        80 => 3,
+        68 => 4,
+        104 => 5,
+        29 => 6,
+        120 | 474 | 855 => 7,
+        _ if faction_group_mask & FACTION_MASK_ALLIANCE != 0 => 1,
+        _ if faction_group_mask & FACTION_MASK_HORDE != 0 => 6,
+        _ => 7,
+    }
+}
+
+/// The listing pool a house belongs to: Alliance houses 1-3 and Horde houses 4-6 each pool their
+/// listings, and house 7 stands alone as the neutral market
+/// (`cm:AuctionHouseMgr.cpp:51-63,444-459`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuctionMarket {
+    Alliance,
+    Horde,
+    Neutral,
+}
+
+/// The market a house's listings pool into. An id outside 1-7 is not an imported house; it pools
+/// as neutral rather than joining a team's listings.
+pub fn market_of(house_id: u32) -> AuctionMarket {
+    match house_id {
+        1..=3 => AuctionMarket::Alliance,
+        4..=6 => AuctionMarket::Horde,
+        _ => AuctionMarket::Neutral,
+    }
+}
+
 /// Stable terminal outcome codes shared by bid Hold and decision rows.
 pub mod bid_outcome {
     pub const PENDING: u8 = 0;
@@ -98,5 +140,85 @@ mod tests {
         assert_eq!(super::minimum_next_bid(100, 0), Some(100));
         assert_eq!(super::minimum_next_bid(100, 201), Some(212));
         assert_eq!(super::minimum_next_bid(100, u32::MAX), None);
+    }
+
+    // House ids and template rows: `cm:AuctionHouseMgr.cpp:461-518`. The DBC names each house
+    // Stormwind (1), Alliance (2), Darnassus (3), Undercity (4), Thunder Bluff (5), Horde (6) and
+    // Blackwater (7).
+    #[test]
+    fn house_for_faction_template_resolves_the_stormwind_row() {
+        assert_eq!(super::house_for_faction_template(12, 0), 1);
+    }
+
+    #[test]
+    fn house_for_faction_template_resolves_the_alliance_row_and_its_alternate() {
+        assert_eq!(super::house_for_faction_template(55, 0), 2);
+        assert_eq!(super::house_for_faction_template(534, 0), 2);
+    }
+
+    #[test]
+    fn house_for_faction_template_resolves_the_darnassus_row() {
+        assert_eq!(super::house_for_faction_template(80, 0), 3);
+    }
+
+    #[test]
+    fn house_for_faction_template_resolves_the_undercity_row() {
+        assert_eq!(super::house_for_faction_template(68, 0), 4);
+    }
+
+    #[test]
+    fn house_for_faction_template_resolves_the_thunder_bluff_row() {
+        assert_eq!(super::house_for_faction_template(104, 0), 5);
+    }
+
+    #[test]
+    fn house_for_faction_template_resolves_the_horde_row() {
+        assert_eq!(super::house_for_faction_template(29, 0), 6);
+    }
+
+    #[test]
+    fn house_for_faction_template_resolves_the_blackwater_row_and_its_alternates() {
+        assert_eq!(super::house_for_faction_template(120, 0), 7);
+        assert_eq!(super::house_for_faction_template(474, 0), 7);
+        assert_eq!(super::house_for_faction_template(855, 0), 7);
+    }
+
+    #[test]
+    fn house_for_faction_template_falls_back_to_stormwind_for_an_unlisted_alliance_template() {
+        assert_eq!(super::house_for_faction_template(999, 2), 1);
+    }
+
+    #[test]
+    fn house_for_faction_template_falls_back_to_the_horde_house_for_an_unlisted_horde_template() {
+        assert_eq!(super::house_for_faction_template(999, 4), 6);
+    }
+
+    #[test]
+    fn house_for_faction_template_falls_back_to_blackwater_for_an_unlisted_or_unknown_template() {
+        assert_eq!(super::house_for_faction_template(999, 0), 7);
+        // A Monster-only group belongs to neither team.
+        assert_eq!(super::house_for_faction_template(999, 8), 7);
+    }
+
+    // Market pooling: `cm:AuctionHouseMgr.cpp:51-63,444-459`.
+    #[test]
+    fn market_of_pools_stormwind_alliance_and_darnassus_together() {
+        for house in [1, 2, 3] {
+            assert_eq!(super::market_of(house), super::AuctionMarket::Alliance);
+        }
+    }
+
+    #[test]
+    fn market_of_pools_undercity_thunder_bluff_and_horde_together() {
+        for house in [4, 5, 6] {
+            assert_eq!(super::market_of(house), super::AuctionMarket::Horde);
+        }
+    }
+
+    #[test]
+    fn market_of_keeps_blackwater_and_any_unknown_house_neutral() {
+        assert_eq!(super::market_of(7), super::AuctionMarket::Neutral);
+        assert_eq!(super::market_of(0), super::AuctionMarket::Neutral);
+        assert_eq!(super::market_of(8), super::AuctionMarket::Neutral);
     }
 }

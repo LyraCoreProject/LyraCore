@@ -290,16 +290,20 @@ fn auction_house_for_interaction(
     {
         return None;
     }
-    let faction = ctx
+    let faction_group = ctx
         .db
         .game_faction_template()
         .id()
         .find(auctioneer.faction_template)?
-        .faction;
+        .faction_group;
+    let house_id = lyracore_shared::auction::house_for_faction_template(
+        auctioneer.faction_template,
+        faction_group,
+    );
     ctx.db
         .game_auction_house()
-        .iter()
-        .find(|house| house.faction == faction)
+        .id()
+        .find(house_id)
         .filter(|house| {
             house.id != 0 && valid_rate(house.deposit_rate) && valid_rate(house.consignment_rate)
         })
@@ -712,7 +716,8 @@ fn decide_bid(auction: Option<BidAuction>, request: BidRequest, now_micros: i64)
     }
     let Some(auction) = auction.filter(|auction| {
         auction.id == request.auction_id
-            && auction.house == request.house
+            && lyracore_shared::auction::market_of(auction.house)
+                == lyracore_shared::auction::market_of(request.house)
             && auction.expires_micros > now_micros
     }) else {
         return BidDecision::ItemNotFound;
@@ -3806,6 +3811,60 @@ mod tests {
             ),
             BidDecision::Database
         ));
+    }
+
+    /// The seven imported houses pool into three markets: a bid through any Alliance house
+    /// reaches a listing at any Alliance house, but never a Horde or neutral one.
+    #[test]
+    fn realm_bid_decision_accepts_a_bid_within_the_listings_market_and_refuses_outside_it() {
+        let active = active_bid_auction(); // lists in house 1 (Stormwind, Alliance).
+        let request = BidRequest {
+            operation_id: 900,
+            bidder_guid: 8,
+            auction_id: 41,
+            house: 2, // a different Alliance house.
+            offer: 100,
+        };
+
+        assert_eq!(
+            decide_bid(Some(active), request, 1_000),
+            accepted_active(100, 4, 0, 0)
+        );
+        assert_eq!(
+            decide_bid(
+                Some(active),
+                BidRequest {
+                    house: 3,
+                    ..request
+                },
+                1_000
+            ),
+            accepted_active(100, 4, 0, 0)
+        );
+        for horde_house in [4, 5, 6] {
+            assert_eq!(
+                decide_bid(
+                    Some(active),
+                    BidRequest {
+                        house: horde_house,
+                        ..request
+                    },
+                    1_000
+                ),
+                BidDecision::ItemNotFound
+            );
+        }
+        assert_eq!(
+            decide_bid(
+                Some(active),
+                BidRequest {
+                    house: 7,
+                    ..request
+                },
+                1_000
+            ),
+            BidDecision::ItemNotFound
+        );
     }
 
     #[test]

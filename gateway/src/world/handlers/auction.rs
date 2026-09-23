@@ -2,7 +2,6 @@
 
 use super::super::*;
 use lyracore_shared::auction::AuctionRefusal;
-use spacetimedb_sdk::Table;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct AuctionHousePolicy {
@@ -152,23 +151,27 @@ impl AuctionActionStore for crate::stdb::Coordinator {
             let Some(auctioneer) = db.game_world_entity().guid().find(&auctioneer_guid) else {
                 return Ok(None);
             };
-            let Some(faction) = db
+            let Some(faction_group) = db
                 .game_faction_template()
                 .id()
                 .find(&auctioneer.faction_template)
-                .map(|template| template.faction)
+                .map(|template| template.faction_group)
             else {
                 return Ok(None);
             };
-            let Some(house) = db
-                .game_auction_house()
-                .iter()
-                .find(|house| house.faction == faction)
-                .map(|house| AuctionHousePolicy {
-                    id: house.id,
-                    deposit_rate: house.deposit_rate,
-                    consignment_rate: house.consignment_rate,
-                })
+            let house_id = lyracore_shared::auction::house_for_faction_template(
+                auctioneer.faction_template,
+                faction_group,
+            );
+            let Some(house) =
+                db.game_auction_house()
+                    .id()
+                    .find(&house_id)
+                    .map(|house| AuctionHousePolicy {
+                        id: house.id,
+                        deposit_rate: house.deposit_rate,
+                        consignment_rate: house.consignment_rate,
+                    })
             else {
                 return Ok(None);
             };
