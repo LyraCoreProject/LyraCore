@@ -49,8 +49,9 @@ impl Coordinator {
                 sender_entry: m.sender_entry,
                 check_flags: m.check_flags,
                 mail_template_id: m.mail_template_id,
-                // Rounded up, so the Gateway never shows a mail the Module still refuses to hand
-                // over.
+                // Rounded up to the second. The Gateway compares it with its own clock, which can
+                // run ahead of the Module's, so the Module Gates the takes, the return and a COD
+                // payment against its own clock again.
                 deliver_secs: m
                     .deliver_micros
                     .saturating_add(999_999)

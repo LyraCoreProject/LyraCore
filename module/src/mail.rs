@@ -487,8 +487,10 @@ pub(crate) enum ReturnPlan {
     AlreadyReturned,
     Return,
 }
-/// Only a Character's mail goes back, and only once (cmangos `MailHandler.cpp:375`). The client
-/// hides Return on every other mail, so a refusal here answers a crafted packet.
+/// Only a Character's mail goes back, and only once. These are LyraCore Gates, not cmangos server
+/// behavior: cmangos accepts every return and silently drops a mail with no Character sender
+/// (`MailHandler.cpp:375`), and it relies on the client hiding Return on a returned mail. The
+/// client hides Return on each mail these Gates refuse, so a refusal answers a crafted packet.
 pub(crate) fn plan_return(row: Option<&Mail>, caller_guid: u64) -> ReturnPlan {
     let Some(row) = row.filter(|m| m.recipient_guid == caller_guid) else {
         return ReturnPlan::NotYours;
@@ -518,18 +520,21 @@ pub(crate) fn apply_return(
         ReturnPlan::Return => {}
     }
     let row = row.expect("Return is only reachable with a row");
-    // A returned mail carries only RETURNED and arrives now, which restarts its expiry clock
-    // (cmangos `Mail.cpp:264,299-313`).
-    ctx.db.game_mail().id().update(Mail {
+    ctx.db.game_mail().id().update(returned(row, ctx.timestamp));
+    Ok(())
+}
+/// `row` sent back to its sender at `now`. It carries only RETURNED, loses its price and read
+/// state, and arrives now, which restarts its expiry clock (cmangos `Mail.cpp:264,299-313`).
+pub(crate) fn returned(row: Mail, now: Timestamp) -> Mail {
+    Mail {
         recipient_guid: row.sender_guid,
-        sender_guid: recipient_guid,
+        sender_guid: row.recipient_guid,
         was_read: false,
         cod: 0,
         check_flags: CHECK_MASK_RETURNED,
-        deliver_micros: ctx.timestamp.to_micros_since_unix_epoch(),
+        deliver_micros: now.to_micros_since_unix_epoch(),
         ..row
-    });
-    Ok(())
+    }
 }
 #[reducer]
 pub fn realm_mail_mark_read(
@@ -941,15 +946,61 @@ mod tests {
     }
 
     #[test]
-    fn a_returned_mail_carries_no_cash_on_delivery_price() {
-        let body = code_of(include_str!("mail.rs"), "pub(crate) fn apply_return(");
-        let normalized: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
-        assert!(
-            normalized.contains("cod: 0,"),
-            "`apply_return` no longer zeroes the COD price. Returning a priced mail sends it back \
-             to whoever set the price, so a price that survives is charged to the seller and paid \
-             to the buyer who refused it. Body was:\n{body}"
+    fn a_returned_mail_goes_back_unread_unpriced_and_marked_returned_from_now() {
+        let priced = Mail {
+            money: 100,
+            cod: 250,
+            item_entry: 509_0001,
+            item_stack_count: 1,
+            was_read: true,
+            check_flags: lyracore_shared::mail::CHECK_MASK_HAS_BODY,
+            ..row(7, MailSender::Character(9))
+        };
+        let now = Timestamp::from_micros_since_unix_epoch(5_000_000);
+
+        let back = returned(priced, now);
+
+        assert_eq!((back.recipient_guid, back.sender_guid), (9, 7));
+        assert!(!back.was_read);
+        assert_eq!(
+            back.cod, 0,
+            "a surviving price would charge the seller for their own item"
         );
+        assert_eq!(
+            back.check_flags, 0x02,
+            "RETURNED only (cmangos Mail.cpp:264)"
+        );
+        assert_eq!(
+            (back.money, back.item_entry, back.item_stack_count),
+            (100, 509_0001, 1),
+            "the copper and the item travel back"
+        );
+        assert_eq!(
+            lyracore_shared::mail::expires_at_secs(
+                back.created_at.to_micros_since_unix_epoch() / 1_000_000,
+                back.deliver_micros / 1_000_000,
+                back.cod,
+            ),
+            5 + 30 * 86_400,
+            "30 days from the return (cmangos Mail.cpp:299-313)"
+        );
+    }
+
+    #[test]
+    fn every_action_a_recipient_takes_looks_the_mail_up_by_its_delivery() {
+        for signature in [
+            "pub(crate) fn mail_money(",
+            "pub(crate) fn mail_item(",
+            "pub(crate) fn apply_take_item(",
+            "pub(crate) fn apply_return(",
+        ] {
+            let body = crate::test_scan::shape_of(include_str!("mail.rs"), signature);
+            assert!(
+                body.contains("delivered_mail(ctx, mail_id)") && !body.contains(".find("),
+                "`{signature}` must find the mail through `delivered_mail`, so an undelivered mail \
+                 cannot be taken or returned. Body was:\n{body}"
+            );
+        }
     }
 
     use crate::test_scan::code_of;

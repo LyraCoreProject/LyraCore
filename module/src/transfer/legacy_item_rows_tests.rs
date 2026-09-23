@@ -201,6 +201,78 @@ fn mail_escrowed_before_the_mail_header_arrives_as_a_delivered_character_mail() 
     );
 }
 
+/// The encoded field names of `T`, in order.
+fn field_names<T: SpacetimeType>() -> Vec<String> {
+    use spacetimedb::sats::{typespace::TypespaceBuilder, AlgebraicType};
+    struct Inline;
+    impl TypespaceBuilder for Inline {
+        fn add(
+            &mut self,
+            _: std::any::TypeId,
+            _: Option<&'static str>,
+            make_ty: impl FnOnce(&mut Self) -> AlgebraicType,
+        ) -> AlgebraicType {
+            make_ty(self)
+        }
+    }
+    match T::make_type(&mut Inline) {
+        AlgebraicType::Product(row) => row
+            .elements
+            .iter()
+            .map(|e| e.name().map(|n| n.to_string()).unwrap_or_default())
+            .collect(),
+        other => panic!("a table row encodes as a product, got {other:?}"),
+    }
+}
+
+/// Transfer Escrow keeps `game_mail` rows as bytes, so a new column must come with a new tag in
+/// `FORMATS` and a struct for the shape before it. This pins the shape the current tag names.
+#[test]
+fn game_mail_has_the_shape_its_transfer_tag_names() {
+    let tag = FORMATS
+        .iter()
+        .find(|(table, _)| *table == "game_mail")
+        .map(|(_, tag)| *tag);
+    assert_eq!(
+        (tag, field_names::<Mail>()),
+        (
+            Some("game_mail@mail-header-1"),
+            [
+                "id",
+                "recipient_guid",
+                "sender_guid",
+                "subject",
+                "body",
+                "item_entry",
+                "item_stack_count",
+                "item_durability",
+                "item_enchant_id",
+                "item_soulbound",
+                "money",
+                "cod",
+                "was_read",
+                "created_at",
+                "random_property_id",
+                "sender_kind",
+                "sender_entry",
+                "check_flags",
+                "mail_template_id",
+                "deliver_micros",
+            ]
+            .map(String::from)
+            .to_vec()
+        ),
+        "game_mail changed shape. Escrowed rows in the old shape would no longer decode: add a new \
+         tag to FORMATS, decode the old tag with a struct of the old shape, then update this pin"
+    );
+    let previous = field_names::<RandomPropertyMail>();
+    assert_eq!(
+        previous[..],
+        field_names::<Mail>()[..previous.len()],
+        "the previous shape must be a prefix of the current one, since columns are END-appended"
+    );
+}
+
 #[test]
 fn current_item_formats_preserve_the_exact_encoded_values() {
     for (table, _) in FORMATS {

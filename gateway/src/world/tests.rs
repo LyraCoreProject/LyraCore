@@ -2159,6 +2159,18 @@ impl WorldStore for InMemoryStore {
         if receipts.iter().any(|(id, _)| *id == escrow_id) {
             return Ok(());
         }
+        // A COD payment pays only a price its payer still owes on a delivered mail.
+        if cod_source_mail_id != 0 {
+            let now = mail::now_secs();
+            let owed = self.mails.lock().unwrap().iter().any(|(to, m)| {
+                m.id == cod_source_mail_id && *to == sender_guid && m.cod > 0 && m.is_delivered(now)
+            });
+            if !owed {
+                return Err(anyhow!(
+                    "mail {cod_source_mail_id} owes {sender_guid} no delivered price"
+                ));
+            }
+        }
         receipts.push((escrow_id, recipient_guid));
         drop(receipts);
         self.sent_mail.lock().unwrap().push((

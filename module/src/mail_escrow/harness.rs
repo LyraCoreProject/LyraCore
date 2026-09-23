@@ -274,6 +274,7 @@ struct XMail {
     cod: u32,
     item: ItemSnapshot,
     check_flags: u32,
+    deliver_micros: i64,
 }
 #[derive(Default)]
 pub struct FakeMailPlane {
@@ -398,8 +399,17 @@ impl DeliverySink for FakeMailPlane {
             cod: letter.cod,
             item: letter.item,
             check_flags: letter.check_flags,
+            deliver_micros: letter.deliver_micros,
         });
         id
+    }
+    fn priced_mail(&self, mail_id: u64) -> Option<(u64, u32)> {
+        let now = self.ledger.now.get();
+        self.mails
+            .borrow()
+            .iter()
+            .find(|m| m.id == mail_id && m.deliver_micros <= now)
+            .map(|m| (m.recipient_guid, m.cod))
     }
     fn settle_cod(&mut self, mail_id: u64) {
         if let Some(m) = self.mails.borrow_mut().iter_mut().find(|m| m.id == mail_id) {
@@ -1531,20 +1541,23 @@ fn priced_mail_fixture() -> (FakeShard, FakeMailPlane, u64) {
     let mail_id = plane.mailbox_of(RECIPIENT)[0].id;
     (FakeShard::with_purse(RECIPIENT, PURSE), plane, mail_id)
 }
-fn drive_payment(
-    shard: &mut FakeShard,
-    plane: &mut FakeMailPlane,
-    mail_id: u64,
-    killed: Killed,
-) -> Result<(), String> {
-    let payment = Draft {
+fn cod_payment_draft() -> Draft {
+    Draft {
         recipient_guid: SENDER,
         subject: "Your sword".into(),
         body: String::new(),
         money: COD,
         postage: 0,
         cod: 0,
-    };
+    }
+}
+fn drive_payment(
+    shard: &mut FakeShard,
+    plane: &mut FakeMailPlane,
+    mail_id: u64,
+    killed: Killed,
+) -> Result<(), String> {
+    let payment = cod_payment_draft();
     if killed == Killed::BeforeFence {
         return Ok(());
     }
@@ -1625,6 +1638,86 @@ fn a_cod_payment_arrives_under_the_letters_own_subject_with_only_the_payment_bit
         "the client adds \"COD Payment: \" itself"
     );
     assert_eq!(seller[0].check_flags, 0x08, "COD_PAYMENT and nothing else");
+}
+#[test]
+fn a_cod_payment_for_a_mail_not_yet_delivered_is_held_and_pays_nobody() {
+    let (mut shard, mut plane, mail_id) = priced_mail_fixture();
+    plane.mails.borrow_mut()[0].deliver_micros = plane.ledger.now.get() + 1;
+
+    let err = drive_payment(&mut shard, &mut plane, mail_id, Killed::Never)
+        .expect_err("the priced mail has not arrived on the mail plane's clock");
+
+    assert!(err.contains("owes"), "{err}");
+    assert!(
+        plane.mailbox_of(SENDER).is_empty(),
+        "the seller is paid nothing"
+    );
+    assert_eq!(
+        plane.mailbox_of(RECIPIENT)[0].cod,
+        COD,
+        "the price is still owed"
+    );
+    assert_eq!(
+        shard.fenced_copper(),
+        COD,
+        "the buyer's copper stays in the fence"
+    );
+}
+#[test]
+fn a_cod_payment_is_refused_for_a_price_the_payer_does_not_owe() {
+    let (_shard, mut plane, mail_id) = priced_mail_fixture();
+    let pay = |plane: &mut FakeMailPlane, payer| {
+        apply_commit(
+            plane,
+            PAYMENT,
+            payer,
+            &cod_payment_draft(),
+            &ItemSnapshot::default(),
+            mail_id,
+        )
+    };
+
+    pay(&mut plane, SENDER).expect_err("the seller owes nothing on their own letter");
+    plane.mails.borrow_mut()[0].cod = 0;
+    pay(&mut plane, RECIPIENT).expect_err("the price is already settled");
+
+    assert!(
+        plane.mailbox_of(SENDER).is_empty(),
+        "no payment was written"
+    );
+}
+#[test]
+fn a_payment_fenced_with_the_old_subject_prefix_arrives_without_it() {
+    let (mut shard, mut plane, mail_id) = priced_mail_fixture();
+    let old = Draft {
+        subject: "COD Payment: Your sword".into(),
+        ..cod_payment_draft()
+    };
+    apply_fence(
+        &mut shard,
+        PAYMENT,
+        RECIPIENT,
+        old.clone(),
+        NO_ITEM,
+        mail_id,
+    )
+    .expect("fenced by the previous Gateway");
+
+    apply_commit(
+        &mut plane,
+        PAYMENT,
+        RECIPIENT,
+        &old,
+        &ItemSnapshot::default(),
+        mail_id,
+    )
+    .expect("re-driven after the publish");
+
+    assert_eq!(
+        plane.mailbox_of(SENDER)[0].subject,
+        "Your sword",
+        "the client adds \"COD Payment: \", so the stored subject must not carry it"
+    );
 }
 #[test]
 fn a_cod_payment_killed_at_any_step_re_drives_into_one_charge_and_one_payout() {
