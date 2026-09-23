@@ -634,6 +634,18 @@ in a Guild. The Gateway renders it.
 PLAYER_GUILDID and PLAYER_GUILDRANK as the Gateway derives them from Realm-core membership when it
 encodes a player, and re-sends when membership changes. No Shard stores them.
 
+**Fee Hold**:
+Copper taken from a Character's purse on its Home Shard and held while Realm-core decides the guild
+operation it pays for. The decision spends it or returns it, exactly once. A Character has at most
+one; it travels with the Character on Transfer and blocks Character deletion.
+_Avoid_: escrow (for a fee), reservation
+
+**Tabard Designer**:
+An NPC with the tabard-designer flag. Its window saves a Guild Emblem.
+
+**Guild Emblem**:
+The five tabard design values of a Guild. Only the Guild Leader saves one, for 10 gold.
+
 ### World clock and weather
 
 **Realm Clock**:

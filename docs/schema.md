@@ -78,7 +78,7 @@ grep -rn '^#\[table(' module/src --include='*.rs' | wc -l   # 238 on 2026-09-03
 | GameObject | 9 | 6 | `gameobject.rs`, `go_model.rs` |
 | Loot | 12 | 6 | `loot/*` |
 | Group / party | 5 | 3 | `group.rs` |
-| Guild | 4 | 0 | `guild/mod.rs` |
+| Guild | 6 | 0 | `guild/mod.rs`, `guild/fee.rs` |
 | Instance / encounter | 7 | 1 | `instance.rs`, `encounter.rs` |
 | Sharding: region, transfer, load | 9 | 0 | `region.rs`, `transfer/mod.rs`, `load.rs` |
 | Realm-core | 2 | 0 | `realm_core.rs` |
@@ -361,9 +361,18 @@ their Rank Rights. `game_guild_member` is keyed by Character guid, so a Characte
 Guild. Each member row keeps a name snapshot, so Guild Events and by-name ops need no Character row.
 `game_guild_event` is an `[event]` table: `recipient_guid == 0` goes to every online member,
 a nonzero value addresses one Character, and the row carries its final strings.
-`realm_guild_op` is the one operator-gated reducer; its typed `GuildOp` gets one variant per op.
+`realm_guild_op` runs every guild op; its typed `GuildOp` gets one variant per op.
 PLAYER_GUILDID and PLAYER_GUILDRANK are not stored anywhere. The Gateway projects them from
 `game_guild_member`.
+
+A guild operation that costs copper pays through a Fee Hold (`module/src/guild/fee.rs`).
+Private `game_guild_fee_hold` lives on the payer's Home Shard, keyed by the payer, so a Character
+has at most one. It holds the copper and every input of the decision, travels with its Character on
+Transfer, and makes `delete_character` refuse with `CHAR_HAS_GUILD_FEE_HOLD`. Private
+`game_guild_fee_decision` on Realm-core is the one decision per operation id, accepted or refused,
+and is never reaped. The Gateway drives `gw_guild_fee_hold`, `realm_guild_fee_decide` and
+`gw_guild_fee_finish` in that order; each is idempotent on the operation id, and the finish deletes
+the Hold last.
 
 ### Riding data (`module/src/skill.rs`, `module/src/skilldata.rs`, `module/src/trainer.rs`)
 
