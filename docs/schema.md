@@ -78,6 +78,7 @@ grep -rn '^#\[table(' module/src --include='*.rs' | wc -l   # 238 on 2026-09-03
 | GameObject | 9 | 6 | `gameobject.rs`, `go_model.rs` |
 | Loot | 12 | 6 | `loot/*` |
 | Group / party | 5 | 3 | `group.rs` |
+| Guild | 4 | 0 | `guild/mod.rs` |
 | Instance / encounter | 7 | 1 | `instance.rs`, `encounter.rs` |
 | Sharding: region, transfer, load | 9 | 0 | `region.rs`, `transfer/mod.rs`, `load.rs` |
 | Realm-core | 2 | 0 | `realm_core.rs` |
@@ -350,6 +351,19 @@ settlement/refund-mail receipt.
 callbacks return an unbid item or settle a winning bid with exact item and proceeds mail, then no-op
 when replayed. These tables are additive and are deliberately excluded from character transfer
 manifests; deletion is refused while a character owns Auction value.
+
+### Guild state (`module/src/guild/mod.rs`)
+
+Four private tables hold every guild fact on Realm-core. World Shards hold none. `game_guild` is one
+Guild: its name, a unique lower-case `name_key`, the leader, the team fixed at founding, the MOTD,
+the info text and the emblem. `game_guild_rank` holds the five to ten Guild Ranks of each Guild with
+their Rank Rights. `game_guild_member` is keyed by Character guid, so a Character is in at most one
+Guild. Each member row keeps a name snapshot, so Guild Events and by-name ops need no Character row.
+`game_guild_event` is an `[event]` table: `recipient_guid == 0` goes to every online member,
+a nonzero value addresses one Character, and the row carries its final strings.
+`realm_guild_op` is the one operator-gated reducer; its typed `GuildOp` gets one variant per op.
+PLAYER_GUILDID and PLAYER_GUILDRANK are not stored anywhere. The Gateway projects them from
+`game_guild_member`.
 
 ### Riding data (`module/src/skill.rs`, `module/src/skilldata.rs`, `module/src/trainer.rs`)
 

@@ -41,7 +41,7 @@ flowchart TB
         W0[("lyracore<br/>default world shard")]
         W1[("lyracore-world-1<br/>world shard (map rule)")]
         INST[("lyracore-instances<br/>instance pool")]
-        RC[("lyracore-realm — realm-core<br/>accounts · sessions · groups ·<br/>whispers · loot rolls ·<br/>load samples")]
+        RC[("lyracore-realm — realm-core<br/>accounts · sessions · groups ·<br/>guilds · whispers · loot rolls ·<br/>load samples")]
     end
 
     C1 -- "raw TCP · SRP6 · header-encrypted opcodes" --> LOGON
@@ -124,6 +124,16 @@ Request to the Character's Home Shard. The Module combines that value with the C
 and applies the final Gate. World-shard Account rows are not authority, and the Gateway keeps no
 Character authority projection.
 
+Guild Durable Requests take the same path in the other direction. Realm-core holds every guild row
+and no Character rows, so the Gateway reads the Character facts a guild Gate needs from the World
+Shards and conveys them in `realm_guild_op`: the name, the team from the race, the Realm Account, and
+the acting Character's GM level from its Home Shard. The Module applies every guild Gate on
+Realm-core (`module/src/guild/mod.rs`). `.guild create` and `CMSG_GUILD_CREATE` need a GM level
+above 0. The Gateway also answers a GM level of 0 early, before it resolves a leader name
+realm-wide, and the Module refuses the same request if one arrives. The realm-wide reads are
+`resolve_all_by_name` for the leader and a live entity on any shard for the roster's online column
+(`gateway/src/world/handlers/guild.rs`).
+
 Account ownership is durable. `stdb/account_sessions.rs` obtains an Account Claim from Realm-core,
 installs its Account Fence on every configured World Shard, and binds the resulting World Session
 Token to the Store. Claims last 60 seconds and renew every 15 seconds. A live claim refuses a second
@@ -165,7 +175,7 @@ The realm runs as **four SpacetimeDB databases** behind one gateway tier:
 | `lyracore` | default database + world shard |
 | `lyracore-world-1` | world shard (map 1, Kalimdor) |
 | `lyracore-instances` | instance pool (map 36 / Deadmines and friends) |
-| `lyracore-realm` | realm-core: accounts, sessions, groups, whispers, loot rolls, load samples |
+| `lyracore-realm` | realm-core: accounts, sessions, groups, guilds, whispers, loot rolls, load samples |
 
 The **local developer fixture has one database per tier above** (#108) — `lyracore`,
 `lyracore-kalimdor`, `lyracore-instances`, `lyracore-realm` — brought up by `./lyracore dev up`;
@@ -404,7 +414,9 @@ Every relay hangs off a coordinator connection. Row-driven relays take one of tw
   source Shard, and the job's per-viewer gate stays the final filter. Only rolls,
   corpses, dynamic objects, channel lines and weather still fan out per shard. The cross-shard whisper/group
   twins ride the same dispatchers on the realm-core connection (`arm_realm_private`), armed only
-  when realm-core is a distinct database.
+  when realm-core is a distinct database. The guild relays register in both places too:
+  `game_guild_event` rows go to their addressed recipient or to every online member of the Guild
+  on this Gateway, and `game_guild_member` changes drive the Guild Projection below.
 - **Viewer lifetime** (`subscribe_player_events`): world entry prepares relay state, registers one
   viewer, and performs resident-state sweeps. `PlayerSubscriptions` owns only that registration;
   dropping it removes the viewer. It owns no row callbacks. A world-port removes the source viewer
@@ -417,6 +429,15 @@ outside the viewer's AOI. No shard pump does this work. The viewer keeps the las
 sent, and only writer jobs change that record. A new viewer, an `SMSG_GROUP_LIST` and a
 `CMSG_REQUEST_PARTY_MEMBER_STATS` answer each reset it, so the next tick sends every field. Offline
 follows the absence rule: every configured World Shard must be healthy, or the tick is skipped.
+
+The Guild Projection is PLAYER_GUILDID and PLAYER_GUILDRANK. No Shard stores them. The Gateway
+reads Realm-core membership when it encodes a player CREATE (self in `enter_world`, peers in
+`build_peer_create`) and re-sends both fields as a raw VALUES update when a `game_guild_member` row
+is inserted, updated or deleted. That relay finds the member's live entity in the cell index and
+queues one job per nearby viewer and the owner. The job sends only to the owner and to viewers
+whose `created` set holds the guid, and it reads membership when it runs, so a late job never
+writes an older value. World entry re-sends the member's own values after viewer registration to
+cover a change that landed between the CREATE read and registration.
 
 `game_bot_invite_intent` carries a short-lived party decision and uses a connection callback.
 `game_bot_transfer_intent` is durable work. One bounded dispatcher per World Shard polls through the
