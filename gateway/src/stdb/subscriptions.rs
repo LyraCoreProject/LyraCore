@@ -81,6 +81,7 @@ impl PlayerSubscriptions {
             skill_slots: Arc::new(Mutex::new((std::collections::HashMap::new(), 0))),
             explored: Mutex::new(world_view::ExplorationReplay::default()),
             motion_pending: Arc::new(world_view::MotionPending::default()),
+            member_stats: Default::default(),
         });
         view.add_viewer_on_shard(
             viewer.clone(),
@@ -3622,6 +3623,7 @@ impl Coordinator {
             skill_slots: skill_slots.clone(),
             explored: Mutex::new(explored),
             motion_pending: Arc::new(world_view::MotionPending::default()),
+            member_stats: Default::default(),
         });
         view.add_viewer(
             self,
@@ -4250,6 +4252,7 @@ mod tests {
             skill_slots: Arc::new(Mutex::new((std::collections::HashMap::new(), 0))),
             explored: Mutex::new(world_view::ExplorationReplay::default()),
             motion_pending: Arc::new(world_view::MotionPending::default()),
+            member_stats: Default::default(),
         }
     }
 

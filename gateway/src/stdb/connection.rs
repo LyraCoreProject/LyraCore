@@ -2579,6 +2579,8 @@ impl Coordinator {
         // immediately when `realm_store()` is `None`), so this costs a single-database deployment
         // nothing but one idle thread.
         spawn_loot_roll_relay(coordinator.clone());
+        // Member Stats for every group mate outside a viewer's AOI, on its own 5 s thread.
+        super::party_stats_relay::spawn_member_stats_relay(coordinator.clone());
         // The load sampler: per-shard writer occupancy + session counts, sampled on a timer and recorded
         // onto realm-core so an operator can answer "which shard is hot" with `spacetime sql`
         // alone.

@@ -391,7 +391,7 @@ shared index — no subscription churn.
 
 ### 5.3 The coordinator-relay law
 
-Every relay hangs off a coordinator connection, in one of two shapes:
+Every relay hangs off a coordinator connection. Row-driven relays take one of two shapes:
 
 - **Shared per-shard dispatch** (`world_view::arm_shard`, armed once per shard connection and
   re-armed through `CoordinatorInner::on_reconnect` after a watchdog swap): the broadcast-shaped
@@ -409,6 +409,12 @@ Every relay hangs off a coordinator connection, in one of two shapes:
   viewer, and performs resident-state sweeps. `PlayerSubscriptions` owns only that registration;
   dropping it removes the viewer. It owns no row callbacks. A world-port removes the source viewer
   before cross-shard transfer cascade deletes, then destination entry registers a fresh viewer.
+
+Member Stats run on a timer, not a row callback (`stdb/party_stats_relay.rs`). Every 5 s one
+Gateway thread queues a job on each viewer's writer. The job reads the party authority's membership
+index and every World Shard's entity cache, then sends the fields that changed for each group mate
+outside the viewer's AOI. No shard pump does this work, and the viewer keeps the last values it was
+sent, so a new viewer gets every field on the first tick.
 
 `game_bot_invite_intent` carries a short-lived party decision and uses a connection callback.
 `game_bot_transfer_intent` is durable work. One bounded dispatcher per World Shard polls through the

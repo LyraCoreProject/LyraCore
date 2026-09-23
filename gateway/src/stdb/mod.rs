@@ -24,6 +24,7 @@ pub(crate) mod aoi; // `world/mod.rs`'s 10s task reads `aoi::AOI_RECENTERS` for 
 mod armor; // the gateway-side EFFECTIVE-armor fold for the character sheet (Approach B)
 mod connection;
 mod movement_batch;
+mod party_stats_relay; // Member Stats for group mates outside the viewer's AOI
 mod reads;
 mod reducers;
 pub(crate) mod subscriptions;

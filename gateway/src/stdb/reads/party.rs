@@ -259,3 +259,76 @@ impl Coordinator {
         Ok((watermark, wins))
     }
 }
+
+/// The raid cap (cm:Group.h:41). A longer member list is a damaged cache, not a group.
+const MEMBER_STATS_ROSTER_LIMIT: usize = 40;
+
+impl Coordinator {
+    /// Every other member of `self_guid`'s group, from the party authority's membership index:
+    /// Realm-core on a sharded Realm, this database otherwise.
+    pub(crate) fn group_mates(&self, self_guid: u64) -> Result<Vec<u64>> {
+        let authority = if self.is_sharded() {
+            self.realm_core()?
+        } else {
+            self.clone()
+        };
+        let roster = authority
+            .0
+            .coord()
+            .party_memberships
+            .read()
+            .unwrap()
+            .bounded_roster(self_guid, MEMBER_STATS_ROSTER_LIMIT)?;
+        Ok(roster
+            .map(|(_, members)| members.into_iter().filter(|m| *m != self_guid).collect())
+            .unwrap_or_default())
+    }
+
+    /// Find `guid` for Member Stats: a live entity on any World Shard, else a Character between two
+    /// places, else offline. Between two places means Realm-core reports a pending Transfer, or
+    /// the Home Shard still marks the Character online while its entity is gone for the loading
+    /// screen of a map change.
+    pub(crate) fn member_presence(&self, guid: u64) -> Result<crate::world::MemberPresence> {
+        use crate::codec::{MemberEntity, MemberStats};
+        use crate::world::MemberPresence;
+        let shards = self.all_shards();
+        for shard in &shards {
+            let live = shard.0.coord();
+            if let Some(entity) = live.conn.db.game_world_entity().guid().find(&guid) {
+                return Ok(MemberPresence::Live(MemberStats::from_entity(
+                    &MemberEntity {
+                        health: entity.health,
+                        max_health: entity.max_health,
+                        power: entity.power,
+                        max_power: entity.max_power,
+                        unit_bytes_0: entity.unit_bytes_0,
+                        level: entity.level,
+                        zone_id: entity.zone_id,
+                        x: entity.x,
+                        y: entity.y,
+                        dead: entity.dead,
+                        player_flags: entity.player_flags,
+                    },
+                )));
+            }
+        }
+        if self.is_sharded()
+            && self
+                .realm_core()?
+                .realm_character_partition(guid)?
+                .is_some_and(|partition| partition.transfer_pending)
+        {
+            return Ok(MemberPresence::InTransit);
+        }
+        let changing_map = shards.iter().any(|shard| {
+            let live = shard.0.coord();
+            let character = live.conn.db.game_character().guid().find(&guid);
+            character.is_some_and(|character| character.online)
+        });
+        Ok(if changing_map {
+            MemberPresence::InTransit
+        } else {
+            MemberPresence::Offline
+        })
+    }
+}

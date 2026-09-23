@@ -20,6 +20,7 @@ mod item;
 mod loot;
 mod mail;
 mod melee;
+mod party_stats;
 mod query;
 mod quest;
 mod taxi;
@@ -51,6 +52,10 @@ pub(crate) use loot::{
 pub(crate) use mail::handle_mail;
 pub(crate) use melee::{
     dispatch_melee_action, MeleeActionOutcome, MeleeActionPlayer, MeleeActionStore,
+};
+pub(crate) use party_stats::{
+    dispatch_member_stats, member_stats_tick, MemberPresence, MemberSnapshot, MemberStatsOutcome,
+    MemberStatsPlayer, MemberStatsStore,
 };
 pub(crate) use query::handle_query;
 pub(crate) use quest::{

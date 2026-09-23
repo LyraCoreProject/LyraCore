@@ -92,6 +92,9 @@ pub(crate) struct Viewer {
     /// This viewer's motion-coalescing buffer. Shared-dispatch-only state (no per-player
     /// twin), so it is constructed inline and pinned by no tripwire.
     pub(crate) motion_pending: Arc<MotionPending>,
+    /// What the Member Stats Relay last sent about each group mate. A new viewer starts empty, so
+    /// world entry and a group join both get every field on the next tick.
+    pub(crate) member_stats: Mutex<HashMap<u64, crate::world::MemberSnapshot>>,
 }
 
 impl Viewer {
@@ -391,6 +394,16 @@ impl WorldView {
                     .get(session)
                     .map(|registered| registered.viewer.clone())
             })
+            .collect()
+    }
+
+    /// Every registered viewer on every shard, for a Relay that visits each World Session.
+    pub(crate) fn all_viewers(&self) -> Vec<Arc<Viewer>> {
+        let registry = self.viewers.read().unwrap();
+        registry
+            .by_session
+            .values()
+            .map(|registered| registered.viewer.clone())
             .collect()
     }
 
@@ -2426,6 +2439,7 @@ mod family_audience_tests {
             skill_slots: Arc::new(Mutex::new((HashMap::new(), 0))),
             explored: Mutex::new(ExplorationReplay::default()),
             motion_pending: Arc::new(MotionPending::default()),
+            member_stats: Default::default(),
         })
     }
 
@@ -2860,6 +2874,7 @@ mod family_audience_tests {
             skill_slots: old.skill_slots.clone(),
             explored: Mutex::new(ExplorationReplay::default()),
             motion_pending: old.motion_pending.clone(),
+            member_stats: Default::default(),
         });
         view.add_viewer_on_shard(old.clone(), CellKey::at(0, 0, 0, 0), 3);
         view.add_viewer_on_shard(replacement.clone(), CellKey::at(1, 2, 0, 0), 4);

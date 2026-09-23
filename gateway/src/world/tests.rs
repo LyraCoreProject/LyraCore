@@ -1,7 +1,7 @@
 use super::handlers::{
     AuctionActionStore, AuctionInteraction, CastStore, DuelActionStore, ItemActionStore,
-    LootWindowRefusal, LootWindowRequestStatus, LootWindowStore, MeleeActionStore,
-    QuestActionStore, TaxiActionStore, VendorActionStore, WeatherStore,
+    LootWindowRefusal, LootWindowRequestStatus, LootWindowStore, MeleeActionStore, MemberPresence,
+    MemberStatsStore, QuestActionStore, TaxiActionStore, VendorActionStore, WeatherStore,
 };
 use super::party::PartyOutcome;
 use super::*;
@@ -99,6 +99,11 @@ fn world_session_socket_pair_times_out_when_the_server_writes_nothing() {
 /// file because this one is already the largest in the tree.
 #[path = "party_tests.rs"]
 mod party_tests;
+
+/// Member Stats: the Relay tick and the stats request against the party topology. A sibling of
+/// `party_tests` so it reaches `InMemoryStore` and that topology without widening anything.
+#[path = "party_stats_tests.rs"]
+mod party_stats_tests;
 
 /// The realm-wide whisper routing tests. A sibling of `party_tests` for the
 /// same reason — it reaches `InMemoryStore` (and `party_tests`' live topology) without widening
@@ -789,6 +794,12 @@ struct InMemoryStore {
     busy_trades: std::sync::Mutex<Vec<u64>>,
     /// Recorded `ignore_trade` self_guids — CMSG_IGNORE_TRADE (#123).
     ignore_trades: std::sync::Mutex<Vec<u64>>,
+    /// Live `game_world_entity` rows on THIS shard, as the columns Member Stats read.
+    member_entities: std::sync::Mutex<Vec<(u64, codec::MemberEntity)>>,
+    /// Characters Realm-core reports in a pending Transfer. Read on the realm handle only.
+    members_in_transit: std::sync::Mutex<Vec<u64>>,
+    /// How many `member_presence` reads reached this handle.
+    member_presence_reads: std::sync::atomic::AtomicUsize,
 }
 
 /// The Fake's reducer edge for a party op: the Module answers a Refusal as the bare tag, and
@@ -4076,6 +4087,59 @@ impl WeatherStore for InMemoryStore {
             .iter()
             .find(|(zone, _)| *zone == zone_id)
             .map(|(_, view)| *view))
+    }
+}
+
+/// Member Stats over the same party state the routing tests use: Realm-core's `party` when this
+/// handle has a realm, its own `mirror` on a single database. Presence reads this shard and its
+/// peers, every World Shard, like `Coordinator::member_presence`.
+impl MemberStatsStore for InMemoryStore {
+    fn group_mates(&self, self_guid: u64) -> Result<Vec<u64>> {
+        let roster = match &self.realm {
+            Some(realm) => {
+                let party = realm.party.lock().unwrap();
+                party
+                    .group_of(self_guid)
+                    .and_then(|group| party.roster(group))
+            }
+            None => self
+                .mirror
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|roster| roster.members.contains(&self_guid))
+                .cloned(),
+        };
+        Ok(roster
+            .map(|roster| roster.members)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|member| *member != self_guid)
+            .collect())
+    }
+
+    fn member_presence(&self, guid: u64) -> Result<MemberPresence> {
+        self.member_presence_reads
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let live_on = |shard: &InMemoryStore| {
+            let entities = shard.member_entities.lock().unwrap();
+            entities.iter().find(|(g, _)| *g == guid).map(|(_, e)| *e)
+        };
+        let peers = self.peers.lock().unwrap().clone();
+        if let Some(entity) = live_on(self).or_else(|| peers.iter().find_map(|p| live_on(p))) {
+            return Ok(MemberPresence::Live(codec::MemberStats::from_entity(
+                &entity,
+            )));
+        }
+        let in_transit = self
+            .realm
+            .as_ref()
+            .is_some_and(|realm| realm.members_in_transit.lock().unwrap().contains(&guid));
+        Ok(if in_transit {
+            MemberPresence::InTransit
+        } else {
+            MemberPresence::Offline
+        })
     }
 }
 
