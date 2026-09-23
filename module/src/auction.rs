@@ -6,9 +6,9 @@ use lyracore_shared::auction::bid_outcome::{
     ACCEPTED as BID_ACCEPTED, BID_INCREMENT, BID_OWN, DATABASE as BID_DATABASE,
     HIGHER_BID as BID_HIGHER, ITEM_NOT_FOUND as BID_ITEM_NOT_FOUND, PENDING as BID_PENDING,
 };
-use lyracore_shared::auction::AuctionRefusal;
+use lyracore_shared::auction::{auction_notice, bid_increment, AuctionRefusal};
+use lyracore_shared::mail::{MailSender, CHECK_MASK_COPIED};
 
-#[cfg(feature = "debug_reducers")]
 use crate::mail::game_mail;
 use crate::{game_faction_template, game_item_instance, game_item_template, game_world_entity};
 
@@ -180,6 +180,30 @@ pub struct AuctionExpiry {
     pub auction_id: u32,
 }
 
+/// Private Relay event: a live outbid/won/sold/expired notice for one online seller or bidder,
+/// inserted in the same transaction as the Auction Mail it accompanies. `kind` is one of
+/// `lyracore_shared::auction::auction_notice`. Reaped by the shared event GC, same as
+/// `game_whisper_event`.
+#[table(
+    accessor = game_auction_notice,
+    index(accessor = by_recipient, btree(columns = [recipient_guid]))
+)]
+pub struct AuctionNotice {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    pub recipient_guid: u64,
+    pub kind: u8,
+    pub house: u32,
+    pub auction_id: u32,
+    pub item_entry: u32,
+    pub random_property_id: u32,
+    pub bid: u32,
+    pub out_bid: u32,
+    pub bidder_guid: u64,
+    pub created_at: Timestamp,
+}
+
 // Auction durability belongs to the listing protocol, not character transport. Active Auction or
 // Hold value blocks character deletion, and every row stays on the database that owns its protocol
 // phase rather than entering the character movement manifest.
@@ -215,13 +239,20 @@ fn listing_deposit(
     u32::try_from(deposit.max(1)).ok()
 }
 
-fn seller_proceeds(winning_price: u32, deposit: u32, consignment_rate: u32) -> Option<u32> {
+/// The house's cut of a sale, truncated (`cm:AuctionHouseMgr.cpp:733-736`). Shared by
+/// `seller_proceeds` and the Successful Auction Mail's invoice body, so the two can never disagree
+/// on what the seller was charged.
+fn consignment_cut(winning_price: u32, consignment_rate: u32) -> Option<u32> {
     if !valid_rate(consignment_rate) {
         return None;
     }
-    let cut = u64::from(winning_price).checked_mul(u64::from(consignment_rate))? / 100;
-    let after_cut = u64::from(winning_price).checked_sub(cut)?;
-    u32::try_from(after_cut.checked_add(u64::from(deposit))?).ok()
+    u32::try_from(u64::from(winning_price).checked_mul(u64::from(consignment_rate))? / 100).ok()
+}
+
+fn seller_proceeds(winning_price: u32, deposit: u32, consignment_rate: u32) -> Option<u32> {
+    let cut = consignment_cut(winning_price, consignment_rate)?;
+    let after_cut = winning_price.checked_sub(cut)?;
+    after_cut.checked_add(deposit)
 }
 
 fn listing_proceeds_are_representable(
@@ -429,48 +460,105 @@ enum BidDecision {
     Database,
 }
 
+/// The vanilla `MailAuctionAnswers` action code embedded in an Auction Mail's subject
+/// (`cm:Mail.h:100-109`). `Cancelled` (4, to a displaced bidder) has no writer yet; T8's
+/// cancellation flow adds it. `5` is today's only Cancelled writer: a refused listing's return to
+/// its seller (README Decision 9 — no vanilla twin, closest client string).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AuctionMailAction {
+    Outbid = 0,
+    Won = 1,
+    Successful = 2,
+    Expired = 3,
+    Cancelled = 5,
+}
+
+/// An Auction Mail's own vanilla shape: `MAIL_AUCTION` from the house, `checked = COPIED`
+/// (`cm:Mail.cpp:81-84`), a machine subject the client turns into `AUCTION_*_MAIL_SUBJECT`
+/// (`fx:GlobalStrings.lua:83,87,88,89,99`), and — for Won/Successful — an invoice body the client
+/// turns into the auction details (`fx:MailFrame.lua:300-361`). `item_entry`/`random_property_id`
+/// name the AUCTIONED item, which the subject always carries even when nothing is attached.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct AuctionMail {
     recipient_guid: u64,
-    sender_guid: u64,
-    subject: &'static str,
+    house: u32,
+    action: AuctionMailAction,
+    item_entry: u32,
+    random_property_id: u32,
     money: u32,
-    item: crate::items::ItemSnapshot,
+    attached_item: crate::items::ItemSnapshot,
+    /// The invoice's other party: the seller on a Won mail, the winning bidder on a Successful
+    /// mail. Unused (0) on every other action.
+    counterparty_guid: u64,
+    bid: u32,
+    buyout: u32,
+    deposit: u32,
+    cut: u32,
 }
 
-fn displaced_bid_refund_mail(bidder_guid: u64, bid: u32) -> Option<AuctionMail> {
+fn displaced_bid_refund_mail(
+    house: u32,
+    item: crate::items::ItemSnapshot,
+    bidder_guid: u64,
+    bid: u32,
+) -> Option<AuctionMail> {
     (bidder_guid != 0).then_some(AuctionMail {
         recipient_guid: bidder_guid,
-        sender_guid: 0,
-        subject: "Auction outbid",
+        house,
+        action: AuctionMailAction::Outbid,
+        item_entry: item.entry,
+        random_property_id: item.random_property_id,
         money: bid,
-        item: crate::items::ItemSnapshot::default(),
+        attached_item: crate::items::ItemSnapshot::default(),
+        counterparty_guid: 0,
+        bid: 0,
+        buyout: 0,
+        deposit: 0,
+        cut: 0,
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn sale_settlement_mail(
+    house: u32,
     owner_guid: u64,
     item: crate::items::ItemSnapshot,
     winner_guid: u64,
     winning_price: u32,
+    buyout: u32,
     deposit: u32,
     consignment_rate: u32,
 ) -> Option<[AuctionMail; 2]> {
+    let cut = consignment_cut(winning_price, consignment_rate)?;
     let proceeds = seller_proceeds(winning_price, deposit, consignment_rate)?;
     Some([
         AuctionMail {
             recipient_guid: winner_guid,
-            sender_guid: owner_guid,
-            subject: "Auction won",
+            house,
+            action: AuctionMailAction::Won,
+            item_entry: item.entry,
+            random_property_id: item.random_property_id,
             money: 0,
-            item,
+            attached_item: item,
+            counterparty_guid: owner_guid,
+            bid: winning_price,
+            buyout,
+            deposit: 0,
+            cut: 0,
         },
         AuctionMail {
             recipient_guid: owner_guid,
-            sender_guid: winner_guid,
-            subject: "Auction sold",
+            house,
+            action: AuctionMailAction::Successful,
+            item_entry: item.entry,
+            random_property_id: item.random_property_id,
             money: proceeds,
-            item: crate::items::ItemSnapshot::default(),
+            attached_item: crate::items::ItemSnapshot::default(),
+            counterparty_guid: winner_guid,
+            bid: winning_price,
+            buyout,
+            deposit,
+            cut,
         },
     ])
 }
@@ -484,28 +572,219 @@ fn buyout_settlement_mail(
         return None;
     }
     sale_settlement_mail(
+        auction.house,
         auction.owner_guid,
         auction.item,
         winner_guid,
         price,
+        auction.buyout,
         auction.deposit,
         auction.consignment_rate,
     )
 }
 
+/// Mail that returns a refused listing's item and deposit to the seller. No vanilla auction
+/// refuses a listing after acceptance, so this renders as the closest client string, a Cancelled
+/// mail carrying the item and the deposit (README Decision 9), and hides Return the same way every
+/// other Auction Mail does.
+fn listing_release_mail(listing: &PreparedListing) -> AuctionMail {
+    AuctionMail {
+        recipient_guid: listing.request.seller_guid,
+        house: listing.request.house.id,
+        action: AuctionMailAction::Cancelled,
+        item_entry: listing.snapshot.entry,
+        random_property_id: listing.snapshot.random_property_id,
+        money: listing.deposit,
+        attached_item: listing.snapshot,
+        counterparty_guid: 0,
+        bid: 0,
+        buyout: 0,
+        deposit: 0,
+        cut: 0,
+    }
+}
+
+/// `"{item_entry}:{random_property_id}:{action}"` (`cm:AuctionHouseMgr.cpp:134,181,229`,
+/// `cm:AuctionHouseHandler.cpp:155,180,451`). The client builds the visible subject from this and
+/// the item's name (`fx:GlobalStrings.lua:83,87,88,89,99`).
+fn auction_mail_subject(
+    item_entry: u32,
+    random_property_id: u32,
+    action: AuctionMailAction,
+) -> String {
+    format!("{item_entry}:{random_property_id}:{}", action as u8)
+}
+
+/// The invoice the client renders from a Won or Successful mail's body
+/// (`fx:MailFrame.lua:300-361`). The guid is lowercase hex, right-aligned in a 16-character,
+/// space-filled field — cmangos prints the low guid, which a 1.12 character guid equals whole.
+/// Every other action carries no body.
+fn auction_mail_body(mail: &AuctionMail) -> String {
+    match mail.action {
+        AuctionMailAction::Won => format!(
+            "{:>16x}:{}:{}",
+            mail.counterparty_guid, mail.bid, mail.buyout
+        ),
+        AuctionMailAction::Successful => format!(
+            "{:>16x}:{}:{}:{}:{}",
+            mail.counterparty_guid, mail.bid, mail.buyout, mail.deposit, mail.cut
+        ),
+        AuctionMailAction::Outbid | AuctionMailAction::Expired | AuctionMailAction::Cancelled => {
+            String::new()
+        }
+    }
+}
+
 fn insert_auction_mail(ctx: &ReducerContext, mail: AuctionMail) {
     crate::mail::insert_letter(
         ctx,
-        crate::mail::Letter::from_character(
-            mail.sender_guid,
-            mail.recipient_guid,
-            mail.subject.to_string(),
-            String::new(),
-            mail.money,
-            0,
-            mail.item,
-        ),
+        crate::mail::Letter {
+            recipient_guid: mail.recipient_guid,
+            sender: MailSender::AuctionHouse(mail.house),
+            subject: auction_mail_subject(mail.item_entry, mail.random_property_id, mail.action),
+            body: auction_mail_body(&mail),
+            money: mail.money,
+            cod: 0,
+            item: mail.attached_item,
+            mail_template_id: 0,
+            check_flags: CHECK_MASK_COPIED,
+            deliver_micros: 0,
+        },
     );
+}
+
+/// One `game_auction_notice` row before its id and timestamp are stamped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct AuctionNoticeDraft {
+    recipient_guid: u64,
+    kind: u8,
+    house: u32,
+    auction_id: u32,
+    item_entry: u32,
+    random_property_id: u32,
+    bid: u32,
+    out_bid: u32,
+    bidder_guid: u64,
+}
+
+fn insert_auction_notice(ctx: &ReducerContext, draft: AuctionNoticeDraft) {
+    ctx.db.game_auction_notice().insert(AuctionNotice {
+        id: 0,
+        recipient_guid: draft.recipient_guid,
+        kind: draft.kind,
+        house: draft.house,
+        auction_id: draft.auction_id,
+        item_entry: draft.item_entry,
+        random_property_id: draft.random_property_id,
+        bid: draft.bid,
+        out_bid: draft.out_bid,
+        bidder_guid: draft.bidder_guid,
+        created_at: ctx.timestamp,
+    });
+}
+
+/// Won (to the buyer) and Sold (to the seller): the two notices every settled sale sends, whether
+/// it settled by buyout or by expiry with a bid (`cm:AuctionHouseMgr.cpp:146-147,195-199`).
+#[allow(clippy::too_many_arguments)]
+fn settlement_notices(
+    house: u32,
+    auction_id: u32,
+    item_entry: u32,
+    random_property_id: u32,
+    owner_guid: u64,
+    winner_guid: u64,
+    winning_price: u32,
+) -> [AuctionNoticeDraft; 2] {
+    let out_bid = bid_increment(winning_price);
+    [
+        AuctionNoticeDraft {
+            recipient_guid: winner_guid,
+            kind: auction_notice::WON,
+            house,
+            auction_id,
+            item_entry,
+            random_property_id,
+            bid: 0,
+            out_bid,
+            bidder_guid: winner_guid,
+        },
+        AuctionNoticeDraft {
+            recipient_guid: owner_guid,
+            kind: auction_notice::SOLD,
+            house,
+            auction_id,
+            item_entry,
+            random_property_id,
+            bid: winning_price,
+            out_bid,
+            bidder_guid: 0,
+        },
+    ]
+}
+
+/// Outbid, to the displaced bidder, sent before the bid changes (`cm:AuctionHouseHandler.cpp:93-107,157-158`).
+/// No displaced bidder (a fresh listing's first bid) sends nothing.
+fn outbid_notice(
+    house: u32,
+    auction_id: u32,
+    item: crate::items::ItemSnapshot,
+    displaced_bidder_guid: u64,
+    displaced_bid: u32,
+) -> Option<AuctionNoticeDraft> {
+    (displaced_bidder_guid != 0).then_some(AuctionNoticeDraft {
+        recipient_guid: displaced_bidder_guid,
+        kind: auction_notice::OUTBID,
+        house,
+        auction_id,
+        item_entry: item.entry,
+        random_property_id: item.random_property_id,
+        bid: displaced_bid,
+        out_bid: bid_increment(displaced_bid),
+        bidder_guid: displaced_bidder_guid,
+    })
+}
+
+/// New bid, to the owner: the client refreshes its list and prints nothing
+/// (`cm:AuctionHouseMgr.cpp:802-806`).
+fn new_bid_notice(
+    house: u32,
+    auction_id: u32,
+    item: crate::items::ItemSnapshot,
+    owner_guid: u64,
+    bidder_guid: u64,
+    price: u32,
+) -> AuctionNoticeDraft {
+    AuctionNoticeDraft {
+        recipient_guid: owner_guid,
+        kind: auction_notice::NEW_BID,
+        house,
+        auction_id,
+        item_entry: item.entry,
+        random_property_id: item.random_property_id,
+        bid: price,
+        out_bid: bid_increment(price),
+        bidder_guid,
+    }
+}
+
+/// Expired, to the owner: an unsold listing (`cm:AuctionHouseMgr.cpp:231-232`).
+fn expired_notice(
+    house: u32,
+    auction_id: u32,
+    item: crate::items::ItemSnapshot,
+    owner_guid: u64,
+) -> AuctionNoticeDraft {
+    AuctionNoticeDraft {
+        recipient_guid: owner_guid,
+        kind: auction_notice::EXPIRED,
+        house,
+        auction_id,
+        item_entry: item.entry,
+        random_property_id: item.random_property_id,
+        bid: 0,
+        out_bid: 0,
+        bidder_guid: 0,
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -1040,18 +1319,6 @@ fn settle_listing<S: HoldSink>(sink: &mut S, operation_id: u64) -> Result<(), Au
     }
 }
 
-/// Mail that returns a refused listing's item and deposit to the seller. Mail is the ordinary
-/// return path for listed value: it needs no bag slot and reaches an offline seller.
-fn listing_release_mail(listing: &PreparedListing) -> AuctionMail {
-    AuctionMail {
-        recipient_guid: listing.request.seller_guid,
-        sender_guid: 0,
-        subject: "Auction listing refused",
-        money: listing.deposit,
-        item: listing.snapshot,
-    }
-}
-
 fn listing_refund(listing: &PreparedListing) -> ListingRefund {
     ListingRefund {
         listing: listing.clone(),
@@ -1116,17 +1383,26 @@ fn expiry_completion(auction: &ActiveAuction) -> Result<ExpiryCompletion, String
     match (auction.highest_bidder_guid, auction.highest_bid) {
         (0, 0) => Ok(ExpiryCompletion::Unsold(AuctionMail {
             recipient_guid: auction.listing.request.seller_guid,
-            sender_guid: 0,
-            subject: "Auction expired",
+            house: auction.listing.request.house.id,
+            action: AuctionMailAction::Expired,
+            item_entry: auction.listing.snapshot.entry,
+            random_property_id: auction.listing.snapshot.random_property_id,
             money: 0,
-            item: auction.listing.snapshot,
+            attached_item: auction.listing.snapshot,
+            counterparty_guid: 0,
+            bid: 0,
+            buyout: 0,
+            deposit: 0,
+            cut: 0,
         })),
         (winner_guid, winning_price) if winner_guid != 0 && winning_price != 0 => {
             sale_settlement_mail(
+                auction.listing.request.house.id,
                 auction.listing.request.seller_guid,
                 auction.listing.snapshot,
                 winner_guid,
                 winning_price,
+                auction.listing.request.terms.buyout,
                 auction.listing.deposit,
                 auction.listing.request.house.consignment_rate,
             )
@@ -1652,8 +1928,21 @@ impl BidMarket for CtxBidMarket<'_> {
             {
                 return Err(AuctionRefusal::Database);
             }
-            let refund_mail =
-                displaced_bid_refund_mail(accepted.displaced_bidder_guid, accepted.displaced_bid);
+            let refund_mail = displaced_bid_refund_mail(
+                expected.house,
+                expected.item,
+                accepted.displaced_bidder_guid,
+                accepted.displaced_bid,
+            );
+            outbid_notice(
+                expected.house,
+                request.auction_id,
+                expected.item,
+                accepted.displaced_bidder_guid,
+                accepted.displaced_bid,
+            )
+            .into_iter()
+            .for_each(|notice| insert_auction_notice(self.ctx, notice));
             match accepted.effect {
                 AuctionBidEffect::SettleBuyout => {
                     let sale_mail =
@@ -1669,6 +1958,17 @@ impl BidMarket for CtxBidMarket<'_> {
                         .into_iter()
                         .chain(sale_mail)
                         .for_each(|mail| insert_auction_mail(self.ctx, mail));
+                    settlement_notices(
+                        expected.house,
+                        request.auction_id,
+                        expected.item.entry,
+                        expected.item.random_property_id,
+                        expected.owner_guid,
+                        request.bidder_guid,
+                        accepted.price,
+                    )
+                    .into_iter()
+                    .for_each(|notice| insert_auction_notice(self.ctx, notice));
                 }
                 AuctionBidEffect::RemainActive { revision } => {
                     row.highest_bidder_guid = request.bidder_guid;
@@ -1678,6 +1978,17 @@ impl BidMarket for CtxBidMarket<'_> {
                     refund_mail
                         .into_iter()
                         .for_each(|mail| insert_auction_mail(self.ctx, mail));
+                    insert_auction_notice(
+                        self.ctx,
+                        new_bid_notice(
+                            expected.house,
+                            request.auction_id,
+                            expected.item,
+                            expected.owner_guid,
+                            request.bidder_guid,
+                            accepted.price,
+                        ),
+                    );
                 }
             }
         }
@@ -1741,17 +2052,34 @@ impl BidRefundSink for CtxBidMarket<'_> {
         {
             return Err(AuctionRefusal::Database);
         }
-        crate::mail::insert_letter(
+        // The Auction this bid was on may already be settled and gone (this refund is the
+        // purse-overflow remainder of a bid that did not win). README Decision 9: with no vanilla
+        // twin, this mail renders as the closest client string, Outbid, carrying the refund.
+        let (item_entry, random_property_id) = self
+            .ctx
+            .db
+            .game_auction()
+            .id()
+            .find(request.auction_id)
+            .map_or((0, 0), |auction| {
+                (auction.item_entry, auction.random_property_id)
+            });
+        insert_auction_mail(
             self.ctx,
-            crate::mail::Letter::from_character(
-                0,
-                request.bidder_guid,
-                "Auction bid refund".to_string(),
-                String::new(),
-                amount,
-                0,
-                crate::items::ItemSnapshot::default(),
-            ),
+            AuctionMail {
+                recipient_guid: request.bidder_guid,
+                house: request.house,
+                action: AuctionMailAction::Outbid,
+                item_entry,
+                random_property_id,
+                money: amount,
+                attached_item: crate::items::ItemSnapshot::default(),
+                counterparty_guid: 0,
+                bid: 0,
+                buyout: 0,
+                deposit: 0,
+                cut: 0,
+            },
         );
         row.deferred_refund = amount;
         self.ctx
@@ -1856,11 +2184,32 @@ impl ExpirySink for CtxExpiry<'_> {
     }
 
     fn complete_expiry(&mut self, auction: ActiveAuction, completion: ExpiryCompletion) {
+        let house = auction.listing.request.house.id;
+        let item = auction.listing.snapshot;
+        let owner_guid = auction.listing.request.seller_guid;
         match completion {
-            ExpiryCompletion::Unsold(mail) => insert_auction_mail(self.ctx, mail),
-            ExpiryCompletion::Sold(mail) => mail
+            ExpiryCompletion::Unsold(mail) => {
+                insert_auction_mail(self.ctx, mail);
+                insert_auction_notice(
+                    self.ctx,
+                    expired_notice(house, auction.id, item, owner_guid),
+                );
+            }
+            ExpiryCompletion::Sold(mail) => {
+                mail.into_iter()
+                    .for_each(|mail| insert_auction_mail(self.ctx, mail));
+                settlement_notices(
+                    house,
+                    auction.id,
+                    item.entry,
+                    item.random_property_id,
+                    owner_guid,
+                    auction.highest_bidder_guid,
+                    auction.highest_bid,
+                )
                 .into_iter()
-                .for_each(|mail| insert_auction_mail(self.ctx, mail)),
+                .for_each(|notice| insert_auction_notice(self.ctx, notice));
+            }
         }
         self.ctx
             .db
@@ -2410,24 +2759,28 @@ pub fn debug_stage_auction_buyout_fixture(ctx: &ReducerContext) -> Result<(), St
         .delete(BUYOUT_FIXTURE_OPERATION_ID);
 
     let mails = ctx.db.game_mail();
+    let notices = ctx.db.game_auction_notice();
     for recipient_guid in [
         BUYOUT_FIXTURE_SELLER_GUID,
         BUYOUT_FIXTURE_WINNER_GUID,
         BUYOUT_FIXTURE_DISPLACED_GUID,
     ] {
-        let stale: Vec<u64> = mails
+        let stale_mail: Vec<u64> = mails
             .by_recipient()
             .filter(&recipient_guid)
-            .filter(|mail| {
-                matches!(
-                    mail.subject.as_str(),
-                    "Auction outbid" | "Auction won" | "Auction sold"
-                )
-            })
+            .filter(|mail| mail.sender_kind == lyracore_shared::mail::SENDER_KIND_AUCTION)
             .map(|mail| mail.id)
             .collect();
-        for id in stale {
+        for id in stale_mail {
             mails.id().delete(id);
+        }
+        let stale_notices: Vec<u64> = notices
+            .by_recipient()
+            .filter(&recipient_guid)
+            .map(|notice| notice.id)
+            .collect();
+        for id in stale_notices {
+            notices.id().delete(id);
         }
     }
 
@@ -2472,14 +2825,18 @@ pub fn debug_stage_auction_buyout_fixture(ctx: &ReducerContext) -> Result<(), St
 fn auction_fixture_mail(
     ctx: &ReducerContext,
     recipient_guid: u64,
-    subject: &str,
+    house: u32,
+    item_entry: u32,
+    random_property_id: u32,
+    action: AuctionMailAction,
 ) -> Result<crate::Mail, String> {
+    let subject = auction_mail_subject(item_entry, random_property_id, action);
     let mut matches: Vec<_> = ctx
         .db
         .game_mail()
         .by_recipient()
         .filter(&recipient_guid)
-        .filter(|mail| mail.subject == subject)
+        .filter(|mail| mail.subject == subject && mail.sender() == MailSender::AuctionHouse(house))
         .collect();
     if matches.len() != 1 {
         return Err(format!(
@@ -2488,6 +2845,49 @@ fn auction_fixture_mail(
         ));
     }
     Ok(matches.remove(0))
+}
+
+/// The exactly-one notice of `kind` for `recipient_guid`, verifying every wire field the
+/// gateway relays.
+#[cfg(feature = "debug_reducers")]
+#[allow(clippy::too_many_arguments)]
+fn auction_fixture_notice(
+    ctx: &ReducerContext,
+    recipient_guid: u64,
+    kind: u8,
+    house: u32,
+    auction_id: u32,
+    item_entry: u32,
+    random_property_id: u32,
+    bid: u32,
+    out_bid: u32,
+    bidder_guid: u64,
+) -> Result<(), String> {
+    let matches: Vec<_> = ctx
+        .db
+        .game_auction_notice()
+        .by_recipient()
+        .filter(&recipient_guid)
+        .filter(|notice| notice.kind == kind)
+        .collect();
+    if matches.len() != 1 {
+        return Err(format!(
+            "expected one kind {kind} notice for {recipient_guid}, found {}",
+            matches.len()
+        ));
+    }
+    let notice = &matches[0];
+    if notice.house != house
+        || notice.auction_id != auction_id
+        || notice.item_entry != item_entry
+        || notice.random_property_id != random_property_id
+        || notice.bid != bid
+        || notice.out_bid != out_bid
+        || notice.bidder_guid != bidder_guid
+    {
+        return Err(format!("kind {kind} notice for {recipient_guid} changed"));
+    }
+    Ok(())
 }
 
 /// Verify the real realm reducer committed exact settlement rows in a prior transaction.
@@ -2529,46 +2929,110 @@ pub fn debug_verify_auction_buyout_fixture(ctx: &ReducerContext) -> Result<(), S
         return Err("buyout decision payload changed".to_string());
     }
 
-    let refund = auction_fixture_mail(ctx, BUYOUT_FIXTURE_DISPLACED_GUID, "Auction outbid")?;
-    if refund.sender_guid != 0
-        || refund.money != 201
+    const HOUSE: u32 = 1;
+    let item = crate::items::ItemSnapshot {
+        entry: 509_0050,
+        stack_count: 2,
+        durability: 17,
+        enchant_id: 9,
+        soulbound: false,
+        random_property_id: 117,
+    };
+
+    let refund = auction_fixture_mail(
+        ctx,
+        BUYOUT_FIXTURE_DISPLACED_GUID,
+        HOUSE,
+        item.entry,
+        item.random_property_id,
+        AuctionMailAction::Outbid,
+    )?;
+    if refund.money != 201
         || refund.cod != 0
         || refund.was_read
+        || refund.check_flags != CHECK_MASK_COPIED
         || !refund.body.is_empty()
         || !refund.snapshot().is_empty()
     {
         return Err("displaced-bidder refund mail changed".to_string());
     }
 
-    let winner = auction_fixture_mail(ctx, BUYOUT_FIXTURE_WINNER_GUID, "Auction won")?;
-    if winner.sender_guid != BUYOUT_FIXTURE_SELLER_GUID
-        || winner.money != 0
+    let winner = auction_fixture_mail(
+        ctx,
+        BUYOUT_FIXTURE_WINNER_GUID,
+        HOUSE,
+        item.entry,
+        item.random_property_id,
+        AuctionMailAction::Won,
+    )?;
+    if winner.money != 0
         || winner.cod != 0
         || winner.was_read
-        || !winner.body.is_empty()
-        || winner.snapshot()
-            != (crate::items::ItemSnapshot {
-                entry: 509_0050,
-                stack_count: 2,
-                durability: 17,
-                enchant_id: 9,
-                soulbound: false,
-                random_property_id: 117,
-            })
+        || winner.check_flags != CHECK_MASK_COPIED
+        || winner.body != format!("{:>16x}:{}:{}", BUYOUT_FIXTURE_SELLER_GUID, 500, 500)
+        || winner.snapshot() != item
     {
         return Err("winner item mail changed".to_string());
     }
 
-    let seller = auction_fixture_mail(ctx, BUYOUT_FIXTURE_SELLER_GUID, "Auction sold")?;
-    if seller.sender_guid != BUYOUT_FIXTURE_WINNER_GUID
-        || seller.money != 485
+    let seller = auction_fixture_mail(
+        ctx,
+        BUYOUT_FIXTURE_SELLER_GUID,
+        HOUSE,
+        item.entry,
+        item.random_property_id,
+        AuctionMailAction::Successful,
+    )?;
+    if seller.money != 485
         || seller.cod != 0
         || seller.was_read
-        || !seller.body.is_empty()
+        || seller.check_flags != CHECK_MASK_COPIED
+        || seller.body
+            != format!(
+                "{:>16x}:{}:{}:{}:{}",
+                BUYOUT_FIXTURE_WINNER_GUID, 500, 500, 10, 25
+            )
         || !seller.snapshot().is_empty()
     {
         return Err("seller proceeds mail changed".to_string());
     }
+
+    auction_fixture_notice(
+        ctx,
+        BUYOUT_FIXTURE_DISPLACED_GUID,
+        auction_notice::OUTBID,
+        HOUSE,
+        BUYOUT_FIXTURE_AUCTION_ID,
+        item.entry,
+        item.random_property_id,
+        201,
+        bid_increment(201),
+        BUYOUT_FIXTURE_DISPLACED_GUID,
+    )?;
+    auction_fixture_notice(
+        ctx,
+        BUYOUT_FIXTURE_WINNER_GUID,
+        auction_notice::WON,
+        HOUSE,
+        BUYOUT_FIXTURE_AUCTION_ID,
+        item.entry,
+        item.random_property_id,
+        0,
+        bid_increment(500),
+        BUYOUT_FIXTURE_WINNER_GUID,
+    )?;
+    auction_fixture_notice(
+        ctx,
+        BUYOUT_FIXTURE_SELLER_GUID,
+        auction_notice::SOLD,
+        HOUSE,
+        BUYOUT_FIXTURE_AUCTION_ID,
+        item.entry,
+        item.random_property_id,
+        500,
+        bid_increment(500),
+        0,
+    )?;
     Ok(())
 }
 
@@ -2607,15 +3071,24 @@ pub fn debug_stage_auction_expiry_fixture(ctx: &ReducerContext) -> Result<(), St
         .delete(EXPIRY_FIXTURE_OPERATION_ID);
 
     let mails = ctx.db.game_mail();
+    let notices = ctx.db.game_auction_notice();
     for recipient_guid in [EXPIRY_FIXTURE_SELLER_GUID, EXPIRY_FIXTURE_WINNER_GUID] {
-        let stale: Vec<u64> = mails
+        let stale_mail: Vec<u64> = mails
             .by_recipient()
             .filter(&recipient_guid)
-            .filter(|mail| matches!(mail.subject.as_str(), "Auction won" | "Auction sold"))
+            .filter(|mail| mail.sender_kind == lyracore_shared::mail::SENDER_KIND_AUCTION)
             .map(|mail| mail.id)
             .collect();
-        for id in stale {
+        for id in stale_mail {
             mails.id().delete(id);
+        }
+        let stale_notices: Vec<u64> = notices
+            .by_recipient()
+            .filter(&recipient_guid)
+            .map(|notice| notice.id)
+            .collect();
+        for id in stale_notices {
+            notices.id().delete(id);
         }
     }
 
@@ -2721,26 +3194,153 @@ pub fn debug_verify_auction_expiry_fixture(ctx: &ReducerContext) -> Result<(), S
         return Err("expiry removed the durable listing receipt".to_string());
     }
 
-    let winner = auction_fixture_mail(ctx, EXPIRY_FIXTURE_WINNER_GUID, "Auction won")?;
-    if winner.sender_guid != EXPIRY_FIXTURE_SELLER_GUID
-        || winner.money != 0
+    const HOUSE: u32 = 1;
+    let winner = auction_fixture_mail(
+        ctx,
+        EXPIRY_FIXTURE_WINNER_GUID,
+        HOUSE,
+        EXPIRY_FIXTURE_ITEM.entry,
+        EXPIRY_FIXTURE_ITEM.random_property_id,
+        AuctionMailAction::Won,
+    )?;
+    if winner.money != 0
         || winner.cod != 0
         || winner.was_read
-        || !winner.body.is_empty()
+        || winner.check_flags != CHECK_MASK_COPIED
+        || winner.body != format!("{:>16x}:{}:{}", EXPIRY_FIXTURE_SELLER_GUID, 201, 500)
         || winner.snapshot() != EXPIRY_FIXTURE_ITEM
     {
         return Err("expiry winner item mail changed".to_string());
     }
 
-    let seller = auction_fixture_mail(ctx, EXPIRY_FIXTURE_SELLER_GUID, "Auction sold")?;
-    if seller.sender_guid != EXPIRY_FIXTURE_WINNER_GUID
-        || seller.money != 201
+    let seller = auction_fixture_mail(
+        ctx,
+        EXPIRY_FIXTURE_SELLER_GUID,
+        HOUSE,
+        EXPIRY_FIXTURE_ITEM.entry,
+        EXPIRY_FIXTURE_ITEM.random_property_id,
+        AuctionMailAction::Successful,
+    )?;
+    if seller.money != 201
         || seller.cod != 0
         || seller.was_read
-        || !seller.body.is_empty()
+        || seller.check_flags != CHECK_MASK_COPIED
+        || seller.body
+            != format!(
+                "{:>16x}:{}:{}:{}:{}",
+                EXPIRY_FIXTURE_WINNER_GUID, 201, 500, 10, 10
+            )
         || !seller.snapshot().is_empty()
     {
         return Err("expiry seller proceeds mail changed".to_string());
+    }
+
+    auction_fixture_notice(
+        ctx,
+        EXPIRY_FIXTURE_WINNER_GUID,
+        auction_notice::WON,
+        HOUSE,
+        EXPIRY_FIXTURE_AUCTION_ID,
+        EXPIRY_FIXTURE_ITEM.entry,
+        EXPIRY_FIXTURE_ITEM.random_property_id,
+        0,
+        bid_increment(201),
+        EXPIRY_FIXTURE_WINNER_GUID,
+    )?;
+    auction_fixture_notice(
+        ctx,
+        EXPIRY_FIXTURE_SELLER_GUID,
+        auction_notice::SOLD,
+        HOUSE,
+        EXPIRY_FIXTURE_AUCTION_ID,
+        EXPIRY_FIXTURE_ITEM.entry,
+        EXPIRY_FIXTURE_ITEM.random_property_id,
+        201,
+        bid_increment(201),
+        0,
+    )?;
+    Ok(())
+}
+
+#[cfg(feature = "debug_reducers")]
+const LEGACY_MAIL_FIXTURE_RECIPIENT_GUID: u64 = 509_0070;
+#[cfg(feature = "debug_reducers")]
+const LEGACY_MAIL_FIXTURE_ITEM_ENTRY: u32 = 509_0071;
+
+/// Stage one `Character`-sender mail row in the exact shape a pre-T5 realm left behind: the old
+/// English subject, the auctioned item attached, no body. Proves `repair_legacy_auction_mail`
+/// against a real row on a real database, not just the unit test's pure mapping.
+#[cfg(feature = "debug_reducers")]
+#[reducer]
+pub fn debug_stage_legacy_auction_mail_fixture(ctx: &ReducerContext) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    let mails = ctx.db.game_mail();
+    let stale: Vec<u64> = mails
+        .by_recipient()
+        .filter(&LEGACY_MAIL_FIXTURE_RECIPIENT_GUID)
+        .map(|mail| mail.id)
+        .collect();
+    for id in stale {
+        mails.id().delete(id);
+    }
+    // The pre-T5 shape: `Letter::from_character` from the counterparty, the old English subject,
+    // the auctioned item attached, no body — exactly what `sale_settlement_mail` sent before this
+    // change, and the one way any row may enter `game_mail` (`mail::insert_letter` is the sole
+    // writer; the `every_mail_row_is_created_by_insert_letter` tripwire enforces it).
+    crate::mail::insert_letter(
+        ctx,
+        crate::mail::Letter::from_character(
+            LEGACY_MAIL_FIXTURE_RECIPIENT_GUID + 1,
+            LEGACY_MAIL_FIXTURE_RECIPIENT_GUID,
+            "Auction won".to_string(),
+            String::new(),
+            0,
+            0,
+            crate::items::ItemSnapshot {
+                entry: LEGACY_MAIL_FIXTURE_ITEM_ENTRY,
+                stack_count: 1,
+                durability: 0,
+                enchant_id: 0,
+                soulbound: false,
+                random_property_id: 0,
+            },
+        ),
+    );
+    Ok(())
+}
+
+/// Verify `debug_repair_after_publish` re-tagged the legacy fixture mail: the vanilla
+/// `AuctionHouse` sender, the machine subject built from the row's own item, and COPIED. Run
+/// twice in a row in the durable test to prove the repair is idempotent.
+#[cfg(feature = "debug_reducers")]
+#[reducer]
+pub fn debug_verify_legacy_auction_mail_repaired(ctx: &ReducerContext) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    let mut matches: Vec<crate::Mail> = ctx
+        .db
+        .game_mail()
+        .by_recipient()
+        .filter(&LEGACY_MAIL_FIXTURE_RECIPIENT_GUID)
+        .collect();
+    if matches.len() != 1 {
+        return Err(format!(
+            "expected exactly one legacy auction mail fixture row, found {}",
+            matches.len()
+        ));
+    }
+    let mail = matches.remove(0);
+    let expected_subject =
+        auction_mail_subject(LEGACY_MAIL_FIXTURE_ITEM_ENTRY, 0, AuctionMailAction::Won);
+    if mail.sender() != MailSender::AuctionHouse(0)
+        || mail.subject != expected_subject
+        || mail.check_flags != CHECK_MASK_COPIED
+    {
+        return Err(format!(
+            "legacy auction mail was not repaired: sender={:?}, subject={:?}, check_flags={}",
+            mail.sender(),
+            mail.subject,
+            mail.check_flags
+        ));
     }
     Ok(())
 }
@@ -2773,6 +3373,81 @@ pub(crate) fn character_has_auction_value(ctx: &ReducerContext, character_guid: 
             .filter(character_guid)
             .next()
             .is_some()
+}
+
+/// The exact English subjects every pre-T5 LyraCore auction mail carried, each a `Character` mail
+/// with no vanilla twin. A real player's letter never starts with "Auction ", so that prefix is
+/// this repair's detection net; an exact match against this table is what it can actually re-tag.
+const LEGACY_AUCTION_SUBJECTS: &[(&str, AuctionMailAction)] = &[
+    ("Auction outbid", AuctionMailAction::Outbid),
+    ("Auction won", AuctionMailAction::Won),
+    ("Auction sold", AuctionMailAction::Successful),
+    ("Auction expired", AuctionMailAction::Expired),
+    ("Auction listing refused", AuctionMailAction::Cancelled),
+    // The deferred bid refund (README Decision 9) shares no subject with the ordinary Outbid
+    // mail, so it needs its own row here; it also renders as Outbid.
+    ("Auction bid refund", AuctionMailAction::Outbid),
+];
+
+/// The pure half of the repair: which `AuctionMailAction` a legacy row's exact English subject
+/// maps to, or `None` for a subject this repair does not recognize.
+fn legacy_auction_action(subject: &str) -> Option<AuctionMailAction> {
+    LEGACY_AUCTION_SUBJECTS
+        .iter()
+        .find(|(known, _)| *known == subject)
+        .map(|(_, action)| *action)
+}
+
+/// Re-tag pre-T5 auction mail to the vanilla `AuctionHouse` sender and machine subject, once, on
+/// every already-migrated database. A legacy row still reads as `Character` mail: once the Mail
+/// Timer is live, its expiry returns an already-settled "Auction won" to the seller, who was
+/// already paid — cmangos deletes a Character mail's item at expiry only when it is unreturned
+/// (`cm:ObjectMgr.cpp:6188-6232`), and a legacy Auction Mail was never meant to be returnable at
+/// all. Re-tagging moves it out from under that rule, the same way `mail::plan_return` already
+/// refuses Return on any current Auction Mail.
+///
+/// No legacy row stored which house it came from, so a converted row carries house 0 — outside
+/// the imported 1-7 range, so it never collides with a real house, and the Return Gate treats
+/// every non-Character sender identically regardless of the house id. Idempotent: a converted row
+/// no longer reads `SENDER_KIND_CHARACTER` and is skipped on the next pass. Returns
+/// `(converted, unmapped)`; a nonzero `unmapped` is a subject this table does not name, left
+/// untouched and worth a human look.
+pub(crate) fn repair_legacy_auction_mail(ctx: &ReducerContext) -> (u64, u64) {
+    let mails = ctx.db.game_mail();
+    let candidates: Vec<crate::Mail> = mails
+        .iter()
+        .filter(|m| {
+            m.sender_kind == lyracore_shared::mail::SENDER_KIND_CHARACTER
+                && m.subject.starts_with("Auction ")
+        })
+        .collect();
+    let mut converted = 0u64;
+    let mut unmapped = 0u64;
+    for mut mail in candidates {
+        let Some(action) = legacy_auction_action(&mail.subject) else {
+            unmapped += 1;
+            continue;
+        };
+        let (sender_kind, sender_guid, sender_entry) = MailSender::AuctionHouse(0).columns();
+        mail.sender_kind = sender_kind;
+        mail.sender_guid = sender_guid;
+        mail.sender_entry = sender_entry;
+        mail.subject = auction_mail_subject(mail.item_entry, mail.random_property_id, action);
+        mail.check_flags = CHECK_MASK_COPIED;
+        mails.id().update(mail);
+        converted += 1;
+    }
+    if unmapped > 0 {
+        spacetimedb::log::warn!(
+            "repair_legacy_auction_mail: {unmapped} auction-looking mail row(s) matched no known \
+             legacy subject and were left unchanged"
+        );
+    }
+    spacetimedb::log::info!(
+        "repair_legacy_auction_mail: re-tagged {converted} legacy auction mail row(s) to the \
+         AuctionHouse sender"
+    );
+    (converted, unmapped)
 }
 
 fn prepare_listing(
@@ -2833,6 +3508,237 @@ mod tests {
         assert_eq!(seller_proceeds(20, 1, 5), Some(20));
         assert_eq!(seller_proceeds(u32::MAX, u32::MAX, 5), None);
         assert_eq!(seller_proceeds(100, 10, 101), None);
+    }
+
+    #[test]
+    fn consignment_cut_is_the_rate_of_the_price_truncated() {
+        assert_eq!(consignment_cut(100, 5), Some(5));
+        assert_eq!(consignment_cut(19, 5), Some(0), "0.95 truncates to 0");
+        assert_eq!(consignment_cut(201, 5), Some(10), "10.05 truncates to 10");
+        assert_eq!(consignment_cut(100, 101), None, "not a percentage");
+    }
+
+    // The subject is "{item_entry}:{random_property_id}:{action}" (`cm:AuctionHouseMgr.cpp:134,
+    // 181,229`), and the action codes are `MailAuctionAnswers` (`cm:Mail.h:100-109`): every string
+    // below is written out by hand from that format, not produced by calling the function under
+    // test with different inputs.
+    #[test]
+    fn the_subject_is_the_item_the_random_property_and_the_mail_auction_answers_code() {
+        assert_eq!(
+            auction_mail_subject(1234, 56, AuctionMailAction::Outbid),
+            "1234:56:0"
+        );
+        assert_eq!(
+            auction_mail_subject(1234, 56, AuctionMailAction::Won),
+            "1234:56:1"
+        );
+        assert_eq!(
+            auction_mail_subject(1234, 56, AuctionMailAction::Successful),
+            "1234:56:2"
+        );
+        assert_eq!(
+            auction_mail_subject(1234, 56, AuctionMailAction::Expired),
+            "1234:56:3"
+        );
+        assert_eq!(
+            auction_mail_subject(1234, 0, AuctionMailAction::Cancelled),
+            "1234:0:5",
+            "a plain item's random property id is 0"
+        );
+    }
+
+    fn mail_for_body(action: AuctionMailAction) -> AuctionMail {
+        AuctionMail {
+            recipient_guid: 1,
+            house: 1,
+            action,
+            item_entry: 1234,
+            random_property_id: 56,
+            money: 0,
+            attached_item: crate::items::ItemSnapshot::default(),
+            counterparty_guid: 0,
+            bid: 0,
+            buyout: 0,
+            deposit: 0,
+            cut: 0,
+        }
+    }
+
+    /// The invoice body's guid is lowercase hex, right-aligned in a 16-character, space-filled
+    /// field (`fx:MailFrame.lua:300-361`): the padding widths below are counted by hand, not
+    /// produced by the `{:>16x}` specifier under test.
+    #[test]
+    fn the_won_and_successful_bodies_are_the_padded_invoice_cmangos_sends() {
+        let won = AuctionMail {
+            counterparty_guid: 9,
+            bid: 100,
+            buyout: 500,
+            ..mail_for_body(AuctionMailAction::Won)
+        };
+        assert_eq!(
+            auction_mail_body(&won),
+            format!("{}9:100:500", " ".repeat(15)),
+            "guid 9 is one hex digit, padded with 15 leading spaces to a 16-wide field"
+        );
+
+        let successful = AuctionMail {
+            counterparty_guid: 0x123,
+            bid: 250,
+            buyout: 0,
+            deposit: 12,
+            cut: 6,
+            ..mail_for_body(AuctionMailAction::Successful)
+        };
+        assert_eq!(
+            auction_mail_body(&successful),
+            format!("{}123:250:0:12:6", " ".repeat(13)),
+            "guid 0x123 is three hex digits, padded with 13 leading spaces"
+        );
+    }
+
+    #[test]
+    fn outbid_expired_and_cancelled_mail_carries_no_body() {
+        for action in [
+            AuctionMailAction::Outbid,
+            AuctionMailAction::Expired,
+            AuctionMailAction::Cancelled,
+        ] {
+            assert_eq!(auction_mail_body(&mail_for_body(action)), "");
+        }
+    }
+
+    #[test]
+    fn outbid_notice_fires_only_for_a_real_displaced_bidder() {
+        let item = crate::items::ItemSnapshot {
+            entry: 1234,
+            random_property_id: 56,
+            ..crate::items::ItemSnapshot::default()
+        };
+        assert_eq!(
+            outbid_notice(1, 41, item, 0, 0),
+            None,
+            "a fresh listing's first bid displaces nobody"
+        );
+        assert_eq!(
+            outbid_notice(1, 41, item, 9, 100),
+            Some(AuctionNoticeDraft {
+                recipient_guid: 9,
+                kind: auction_notice::OUTBID,
+                house: 1,
+                auction_id: 41,
+                item_entry: 1234,
+                random_property_id: 56,
+                bid: 100,
+                out_bid: bid_increment(100),
+                bidder_guid: 9,
+            })
+        );
+    }
+
+    #[test]
+    fn new_bid_and_expired_notices_address_the_owner() {
+        let item = crate::items::ItemSnapshot {
+            entry: 1234,
+            random_property_id: 56,
+            ..crate::items::ItemSnapshot::default()
+        };
+        assert_eq!(
+            new_bid_notice(1, 41, item, 7, 9, 107),
+            AuctionNoticeDraft {
+                recipient_guid: 7,
+                kind: auction_notice::NEW_BID,
+                house: 1,
+                auction_id: 41,
+                item_entry: 1234,
+                random_property_id: 56,
+                bid: 107,
+                out_bid: bid_increment(107),
+                bidder_guid: 9,
+            }
+        );
+        assert_eq!(
+            expired_notice(1, 41, item, 7),
+            AuctionNoticeDraft {
+                recipient_guid: 7,
+                kind: auction_notice::EXPIRED,
+                house: 1,
+                auction_id: 41,
+                item_entry: 1234,
+                random_property_id: 56,
+                bid: 0,
+                out_bid: 0,
+                bidder_guid: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn settlement_notices_are_won_to_the_buyer_and_sold_to_the_seller() {
+        let item = crate::items::ItemSnapshot {
+            entry: 1234,
+            random_property_id: 56,
+            ..crate::items::ItemSnapshot::default()
+        };
+        let [won, sold] = settlement_notices(1, 41, item.entry, item.random_property_id, 7, 9, 500);
+        assert_eq!(
+            won,
+            AuctionNoticeDraft {
+                recipient_guid: 9,
+                kind: auction_notice::WON,
+                house: 1,
+                auction_id: 41,
+                item_entry: 1234,
+                random_property_id: 56,
+                bid: 0,
+                out_bid: bid_increment(500),
+                bidder_guid: 9,
+            }
+        );
+        assert_eq!(
+            sold,
+            AuctionNoticeDraft {
+                recipient_guid: 7,
+                kind: auction_notice::SOLD,
+                house: 1,
+                auction_id: 41,
+                item_entry: 1234,
+                random_property_id: 56,
+                bid: 500,
+                out_bid: bid_increment(500),
+                bidder_guid: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn every_pre_t5_auction_subject_maps_to_its_action_and_an_unknown_one_does_not() {
+        assert_eq!(
+            legacy_auction_action("Auction outbid"),
+            Some(AuctionMailAction::Outbid)
+        );
+        assert_eq!(
+            legacy_auction_action("Auction won"),
+            Some(AuctionMailAction::Won)
+        );
+        assert_eq!(
+            legacy_auction_action("Auction sold"),
+            Some(AuctionMailAction::Successful)
+        );
+        assert_eq!(
+            legacy_auction_action("Auction expired"),
+            Some(AuctionMailAction::Expired)
+        );
+        assert_eq!(
+            legacy_auction_action("Auction listing refused"),
+            Some(AuctionMailAction::Cancelled)
+        );
+        assert_eq!(
+            legacy_auction_action("Auction bid refund"),
+            Some(AuctionMailAction::Outbid),
+            "the deferred bid refund has no vanilla twin and renders as Outbid (README Decision 9)"
+        );
+        assert_eq!(legacy_auction_action("Auction House of Cards"), None);
+        assert_eq!(legacy_auction_action("meet me at the gate"), None);
     }
 
     #[test]
@@ -3555,6 +4461,7 @@ mod tests {
         auction: Option<ActiveAuction>,
         schedule_count: usize,
         mail: Vec<AuctionMail>,
+        notices: Vec<AuctionNoticeDraft>,
         returned_items: Vec<crate::items::ItemSnapshot>,
         refunded_copper: u32,
     }
@@ -3568,13 +4475,29 @@ mod tests {
                 .cloned())
         }
 
-        fn complete_expiry(&mut self, _auction: ActiveAuction, completion: ExpiryCompletion) {
+        fn complete_expiry(&mut self, auction: ActiveAuction, completion: ExpiryCompletion) {
+            let house = auction.listing.request.house.id;
+            let item = auction.listing.snapshot;
+            let owner_guid = auction.listing.request.seller_guid;
             match completion {
                 ExpiryCompletion::Unsold(mail) => {
-                    self.returned_items.push(mail.item);
+                    self.returned_items.push(mail.attached_item);
+                    self.notices
+                        .push(expired_notice(house, auction.id, item, owner_guid));
                     self.mail.push(mail);
                 }
-                ExpiryCompletion::Sold(mail) => self.mail.extend(mail),
+                ExpiryCompletion::Sold(mail) => {
+                    self.notices.extend(settlement_notices(
+                        house,
+                        auction.id,
+                        item.entry,
+                        item.random_property_id,
+                        owner_guid,
+                        auction.highest_bidder_guid,
+                        auction.highest_bid,
+                    ));
+                    self.mail.extend(mail);
+                }
             }
             self.auction = None;
             self.schedule_count = 0;
@@ -3599,6 +4522,7 @@ mod tests {
             }),
             schedule_count: 1,
             mail: Vec::new(),
+            notices: Vec::new(),
             returned_items: Vec::new(),
             refunded_copper: 0,
         };
@@ -3634,6 +4558,7 @@ mod tests {
                 }),
                 schedule_count: 1,
                 mail: Vec::new(),
+                notices: Vec::new(),
                 returned_items: Vec::new(),
                 refunded_copper: 0,
             };
@@ -3668,6 +4593,7 @@ mod tests {
             }),
             schedule_count: 1,
             mail: Vec::new(),
+            notices: Vec::new(),
             returned_items: Vec::new(),
             refunded_copper: 0,
         };
@@ -3683,19 +4609,62 @@ mod tests {
             vec![
                 AuctionMail {
                     recipient_guid: 8,
-                    sender_guid: 7,
-                    subject: "Auction won",
+                    house: 1,
+                    action: AuctionMailAction::Won,
+                    item_entry: 25,
+                    random_property_id: 117,
                     money: 0,
-                    item: item(23).snapshot,
+                    attached_item: item(23).snapshot,
+                    counterparty_guid: 7,
+                    bid: 201,
+                    buyout: 20,
+                    deposit: 0,
+                    cut: 0,
                 },
                 AuctionMail {
                     recipient_guid: 7,
-                    sender_guid: 8,
-                    subject: "Auction sold",
+                    house: 1,
+                    action: AuctionMailAction::Successful,
+                    item_entry: 25,
+                    random_property_id: 117,
                     money: 201,
-                    item: crate::items::ItemSnapshot::default(),
+                    attached_item: crate::items::ItemSnapshot::default(),
+                    counterparty_guid: 8,
+                    bid: 201,
+                    buyout: 20,
+                    deposit: 10,
+                    cut: 10,
                 },
-            ]
+            ],
+            "one Sold mail settles at the LISTING's buyout term, not the expiring bid"
+        );
+        assert_eq!(
+            store.notices,
+            vec![
+                AuctionNoticeDraft {
+                    recipient_guid: 8,
+                    kind: auction_notice::WON,
+                    house: 1,
+                    auction_id: 41,
+                    item_entry: 25,
+                    random_property_id: 117,
+                    bid: 0,
+                    out_bid: bid_increment(201),
+                    bidder_guid: 8,
+                },
+                AuctionNoticeDraft {
+                    recipient_guid: 7,
+                    kind: auction_notice::SOLD,
+                    house: 1,
+                    auction_id: 41,
+                    item_entry: 25,
+                    random_property_id: 117,
+                    bid: 201,
+                    out_bid: bid_increment(201),
+                    bidder_guid: 0,
+                },
+            ],
+            "a replayed expiry callback must not write a second notice"
         );
     }
 
@@ -4132,6 +5101,7 @@ mod tests {
         auction: Option<BidAuction>,
         decisions: Vec<(BidRequest, BidDecision)>,
         mail: Vec<AuctionMail>,
+        notices: Vec<AuctionNoticeDraft>,
         expiry_armed: bool,
         now_micros: i64,
     }
@@ -4171,6 +5141,15 @@ mod tests {
             if let BidDecision::Accepted(accepted) = decision {
                 let mut auction = auction.expect("only an active Auction can accept a bid");
                 self.mail.extend(displaced_bid_refund_mail(
+                    auction.house,
+                    auction.item,
+                    accepted.displaced_bidder_guid,
+                    accepted.displaced_bid,
+                ));
+                self.notices.extend(outbid_notice(
+                    auction.house,
+                    request.auction_id,
+                    auction.item,
                     accepted.displaced_bidder_guid,
                     accepted.displaced_bid,
                 ));
@@ -4181,9 +5160,26 @@ mod tests {
                             buyout_settlement_mail(auction, request.bidder_guid, accepted.price)
                                 .expect("accepted buyout arithmetic was checked"),
                         );
+                        self.notices.extend(settlement_notices(
+                            auction.house,
+                            request.auction_id,
+                            auction.item.entry,
+                            auction.item.random_property_id,
+                            auction.owner_guid,
+                            request.bidder_guid,
+                            accepted.price,
+                        ));
                         self.auction = None;
                     }
                     AuctionBidEffect::RemainActive { revision } => {
+                        self.notices.push(new_bid_notice(
+                            auction.house,
+                            request.auction_id,
+                            auction.item,
+                            auction.owner_guid,
+                            request.bidder_guid,
+                            accepted.price,
+                        ));
                         auction.highest_bidder_guid = request.bidder_guid;
                         auction.highest_bid = accepted.price;
                         auction.revision = revision;
@@ -4215,10 +5211,29 @@ mod tests {
                 }))
         }
 
-        fn complete_expiry(&mut self, _auction: ActiveAuction, completion: ExpiryCompletion) {
+        fn complete_expiry(&mut self, auction: ActiveAuction, completion: ExpiryCompletion) {
+            let house = auction.listing.request.house.id;
+            let item = auction.listing.snapshot;
+            let owner_guid = auction.listing.request.seller_guid;
             match completion {
-                ExpiryCompletion::Unsold(mail) => self.market.mail.push(mail),
-                ExpiryCompletion::Sold(mail) => self.market.mail.extend(mail),
+                ExpiryCompletion::Unsold(mail) => {
+                    self.market
+                        .notices
+                        .push(expired_notice(house, auction.id, item, owner_guid));
+                    self.market.mail.push(mail);
+                }
+                ExpiryCompletion::Sold(mail) => {
+                    self.market.notices.extend(settlement_notices(
+                        house,
+                        auction.id,
+                        item.entry,
+                        item.random_property_id,
+                        owner_guid,
+                        auction.highest_bidder_guid,
+                        auction.highest_bid,
+                    ));
+                    self.market.mail.extend(mail);
+                }
             }
             self.market.auction = None;
             self.market.expiry_armed = false;
@@ -4323,6 +5338,7 @@ mod tests {
             }),
             decisions: Vec::new(),
             mail: Vec::new(),
+            notices: Vec::new(),
             expiry_armed: true,
             now_micros: 1_000,
         };
@@ -4332,7 +5348,15 @@ mod tests {
         assert_eq!(resolve_bid(&mut market, request), Ok(expected));
         assert_eq!(
             market.mail,
-            vec![displaced_bid_refund_mail(9, 101).unwrap()]
+            vec![displaced_bid_refund_mail(1, item(23).snapshot, 9, 101).unwrap()]
+        );
+        assert_eq!(
+            market.notices,
+            vec![
+                outbid_notice(1, 41, item(23).snapshot, 9, 101).unwrap(),
+                new_bid_notice(1, 41, item(23).snapshot, 7, 8, 107),
+            ],
+            "the replayed decision must not write a second Outbid or New bid notice"
         );
         assert_eq!(
             market.auction.map(|auction| (
@@ -4355,7 +5379,7 @@ mod tests {
         );
         assert_eq!(
             market.mail,
-            vec![displaced_bid_refund_mail(9, 101).unwrap()]
+            vec![displaced_bid_refund_mail(1, item(23).snapshot, 9, 101).unwrap()]
         );
     }
 
@@ -4379,6 +5403,7 @@ mod tests {
                 }),
                 decisions: Vec::new(),
                 mail: Vec::new(),
+                notices: Vec::new(),
                 expiry_armed: true,
                 now_micros: 1_000,
             };
@@ -4455,6 +5480,7 @@ mod tests {
             }),
             decisions: Vec::new(),
             mail: Vec::new(),
+            notices: Vec::new(),
             expiry_armed: true,
             now_micros: listing.created_micros,
         }
@@ -4506,10 +5532,10 @@ mod tests {
                     .collected_copper
                     .push((mail.recipient_guid, crate::mail::credited(0, mail.money)));
             }
-            if !mail.item.is_empty() {
+            if !mail.attached_item.is_empty() {
                 assert_eq!(
                     crate::mail::plan_take_item(
-                        Some((mail.recipient_guid, mail.item.entry)),
+                        Some((mail.recipient_guid, mail.attached_item.entry)),
                         mail.recipient_guid,
                     ),
                     crate::mail::TakeItem::Take,
@@ -4523,7 +5549,7 @@ mod tests {
                 );
                 outcome
                     .collected_items
-                    .push((mail.recipient_guid, mail.item));
+                    .push((mail.recipient_guid, mail.attached_item));
             }
             outcome.collected_mail.push(mail);
         }
@@ -4608,15 +5634,15 @@ mod tests {
             local
                 .collected_mail
                 .iter()
-                .map(|mail| (mail.recipient_guid, mail.subject, mail.money))
+                .map(|mail| (mail.recipient_guid, mail.action, mail.money))
                 .collect::<Vec<_>>(),
             vec![
-                (8, "Auction outbid", 10),
-                (9, "Auction won", 0),
-                (7, "Auction sold", 29),
-                (7, "Auction expired", 0),
-                (8, "Auction won", 0),
-                (7, "Auction sold", 20),
+                (8, AuctionMailAction::Outbid, 10),
+                (9, AuctionMailAction::Won, 0),
+                (7, AuctionMailAction::Successful, 29),
+                (7, AuctionMailAction::Expired, 0),
+                (8, AuctionMailAction::Won, 0),
+                (7, AuctionMailAction::Successful, 20),
             ]
         );
         assert_eq!(
@@ -4651,6 +5677,7 @@ mod tests {
             }),
             decisions: Vec::new(),
             mail: Vec::new(),
+            notices: Vec::new(),
             expiry_armed: true,
             now_micros: 1_000,
         };
@@ -4664,22 +5691,32 @@ mod tests {
         assert!(!market.expiry_armed);
         assert_eq!(
             market.mailbox(9),
-            vec![displaced_bid_refund_mail(9, 201).unwrap()]
+            vec![displaced_bid_refund_mail(1, item(23).snapshot, 9, 201).unwrap()]
         );
         let winner_mail = market.mailbox(8);
         assert_eq!(winner_mail.len(), 1, "winner mail is visible immediately");
-        assert_eq!(winner_mail[0].sender_guid, 7);
-        assert_eq!(winner_mail[0].subject, "Auction won");
+        assert_eq!(winner_mail[0].action, AuctionMailAction::Won);
+        assert_eq!(winner_mail[0].counterparty_guid, 7);
         assert_eq!(winner_mail[0].money, 0);
-        assert_eq!(winner_mail[0].item, item(23).snapshot);
+        assert_eq!(winner_mail[0].attached_item, item(23).snapshot);
         let seller_mail = market.mailbox(7);
         assert_eq!(seller_mail.len(), 1, "seller mail is visible immediately");
-        assert_eq!(seller_mail[0].sender_guid, 8);
-        assert_eq!(seller_mail[0].subject, "Auction sold");
+        assert_eq!(seller_mail[0].action, AuctionMailAction::Successful);
+        assert_eq!(seller_mail[0].counterparty_guid, 8);
         assert_eq!(seller_mail[0].money, 485);
-        assert!(seller_mail[0].item.is_empty());
+        assert!(seller_mail[0].attached_item.is_empty());
         assert_eq!(market.mail.len(), 3);
         assert_eq!(1_000_u64 + 201 + 10, 500_u64 + 201 + 485 + 25);
+        let [won_notice, sold_notice] = settlement_notices(1, 41, 25, 117, 7, 8, 500);
+        assert_eq!(
+            market.notices,
+            vec![
+                outbid_notice(1, 41, item(23).snapshot, 9, 201).unwrap(),
+                won_notice,
+                sold_notice,
+            ],
+            "SettleBuyout writes Outbid, then Won and Sold — never New bid"
+        );
 
         assert_eq!(
             drive_bid(&mut source, &mut market, request),
@@ -4687,6 +5724,11 @@ mod tests {
         );
         assert_eq!(source.money, 500);
         assert_eq!(market.mail.len(), 3);
+        assert_eq!(
+            market.notices.len(),
+            3,
+            "a replayed buyout writes no second notice"
+        );
     }
 
     #[test]
@@ -4714,6 +5756,7 @@ mod tests {
             }),
             decisions: Vec::new(),
             mail: Vec::new(),
+            notices: Vec::new(),
             expiry_armed: true,
             now_micros: 1_000,
         };
@@ -4775,6 +5818,7 @@ mod tests {
             auction: Some(bid_auction),
             decisions: Vec::new(),
             mail: Vec::new(),
+            notices: Vec::new(),
             expiry_armed: true,
             now_micros: 1_000,
         };
@@ -4801,7 +5845,7 @@ mod tests {
             buyout_market
                 .mail
                 .iter()
-                .filter(|mail| !mail.item.is_empty())
+                .filter(|mail| !mail.attached_item.is_empty())
                 .count(),
             1
         );
@@ -4810,6 +5854,7 @@ mod tests {
             auction: Some(bid_auction),
             decisions: Vec::new(),
             mail: Vec::new(),
+            notices: Vec::new(),
             expiry_armed: true,
             now_micros: 1_000,
         };
@@ -4843,7 +5888,7 @@ mod tests {
         assert_eq!(
             expiry_mail
                 .iter()
-                .filter(|mail| !mail.item.is_empty())
+                .filter(|mail| !mail.attached_item.is_empty())
                 .count(),
             1
         );
@@ -4868,6 +5913,7 @@ mod tests {
                 }),
                 schedule_count: 1,
                 mail: Vec::new(),
+                notices: Vec::new(),
                 returned_items: Vec::new(),
                 refunded_copper: 0,
             };
@@ -4888,6 +5934,7 @@ mod tests {
             }),
             schedule_count: 1,
             mail: Vec::new(),
+            notices: Vec::new(),
             returned_items: Vec::new(),
             refunded_copper: 0,
         };
@@ -4918,6 +5965,8 @@ mod tests {
             "pub fn debug_stage_auction_expiry_fixture(",
             "pub fn debug_replay_auction_expiry_fixture(",
             "pub fn debug_verify_auction_expiry_fixture(",
+            "pub fn debug_stage_legacy_auction_mail_fixture(",
+            "pub fn debug_verify_legacy_auction_mail_repaired(",
         ] {
             let body = code_of(include_str!("auction.rs"), signature);
             let normalized = body.split_whitespace().collect::<Vec<_>>().join(" ");

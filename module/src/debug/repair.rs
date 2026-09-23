@@ -288,6 +288,14 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
     // only interval. Absent, weather silently stops advancing.
     crate::weather::rearm_weather_schedule(ctx);
 
+    // Re-tag pre-T5 auction mail (plain English subject, Character sender) to the vanilla
+    // AuctionHouse sender and machine subject — see `auction::repair_legacy_auction_mail`. This
+    // must run, and this PR must be live, before the Mail Timer's first backfill touches an
+    // existing realm: otherwise a legacy "Auction won" still reads as returnable Character mail
+    // and the Mail Timer sends an already-paid seller their own item back.
+    let (legacy_auction_mail, _unmapped_auction_mail) =
+        crate::auction::repair_legacy_auction_mail(ctx);
+
     // One-shot Auction expiries are created with their Auctions, not seeded globally. A publish
     // must preserve them; if an older/broken publication left one absent, restore only that missing
     // row at the Auction's original deadline. Never re-arm an existing row or move its deadline.
@@ -373,6 +381,7 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
         + pet_care_schedule
         + auction_expiries
         + proc_profiles
+        + legacy_auction_mail
         + 3;
     crate::import_meta::stamp(ctx, "debug_repair_after_publish", "", "", total);
     log::info!("debug_repair_after_publish: repaired {total} fixture/schedule row(s), including missing Auction expiries");

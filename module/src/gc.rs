@@ -6,11 +6,12 @@ use spacetimedb::{reducer, table, ReducerContext, ScheduleAt, Table};
 use crate::breath_relay::game_breath_relay_event;
 use crate::guild::game_guild_event;
 use crate::{
-    game_addon_message, game_bot_invite_intent, game_channel_event, game_chat_event,
-    game_combat_event, game_duel_event, game_emote_event, game_group_event, game_group_invite,
-    game_levelup_event, game_movement_violation, game_roll_event, game_spell_cast_event,
-    game_spell_impact_event, game_system_message_event, game_teleport_event, game_trade_event,
-    game_trade_session, game_whisper_event, game_xp_event, EVENT_TTL_MICROS, INVITE_TTL_MICROS,
+    game_addon_message, game_auction_notice, game_bot_invite_intent, game_channel_event,
+    game_chat_event, game_combat_event, game_duel_event, game_emote_event, game_group_event,
+    game_group_invite, game_levelup_event, game_movement_violation, game_roll_event,
+    game_spell_cast_event, game_spell_impact_event, game_system_message_event, game_teleport_event,
+    game_trade_event, game_trade_session, game_whisper_event, game_xp_event, EVENT_TTL_MICROS,
+    INVITE_TTL_MICROS,
 };
 use crate::{game_party_command_intent, game_party_command_receipt};
 // `rest` isn't re-exported at crate scope (`mod rest;`, no `pub use rest::*;` in lib.rs) — every
@@ -93,11 +94,12 @@ pub fn reap_movement_events(ctx: &ReducerContext, _schedule: EventReaperSchedule
     reap!(game_duel_event); // Duel lifecycle relay rows (RLS-scoped)
     reap!(game_bot_invite_intent); // bot-decided invites awaiting gateway pickup
     reap!(game_movement_violation); // recent anti-cheat diagnostics
-                                    // Rest-area zzz/blue-bar relay rows (196). Caught missing by the gc_reap_tripwire: this
-                                    // table carries the same `id: u64` + `created_at: Timestamp` TTL shape as every table above but
-                                    // had no reap line — every inn threshold crossing for the lifetime of a character left one more
-                                    // row behind. The durable rest state (`Character.resting`/`rested_xp`) lives elsewhere; this row
-                                    // is only the one-shot PLAYER_BYTES_2 relay.
+    reap!(game_auction_notice); // live outbid/won/sold/expired/new-bid notices to an online seller or bidder
+                                // Rest-area zzz/blue-bar relay rows (196). Caught missing by the gc_reap_tripwire: this
+                                // table carries the same `id: u64` + `created_at: Timestamp` TTL shape as every table above but
+                                // had no reap line — every inn threshold crossing for the lifetime of a character left one more
+                                // row behind. The durable rest state (`Character.resting`/`rested_xp`) lives elsewhere; this row
+                                // is only the one-shot PLAYER_BYTES_2 relay.
     reap!(game_rest_state_event);
     reap!(game_breath_relay_event); // breath timer edges + drowning damage relay
     reap!(game_guild_event); // Guild Events (sign-on, MOTD, membership)

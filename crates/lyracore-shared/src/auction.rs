@@ -110,6 +110,21 @@ pub mod bid_outcome {
     pub const DATABASE: u8 = 6;
 }
 
+/// Stable `game_auction_notice.kind` codes, in the vanilla notice table's own order
+/// (`cm:AuctionHouseHandler.cpp`/`AuctionHouseMgr.cpp`). Distinct from an Auction Mail's
+/// `MailAuctionAnswers` subject code: a live notice has two kinds (New bid, Removed) with no mail
+/// twin, and a mail action (Successful) with no live notice.
+pub mod auction_notice {
+    pub const OUTBID: u8 = 0;
+    pub const WON: u8 = 1;
+    pub const SOLD: u8 = 2;
+    pub const EXPIRED: u8 = 3;
+    pub const NEW_BID: u8 = 4;
+    /// No writer yet: T8's cancellation flow fires this kind and adds the
+    /// `SMSG_AUCTION_REMOVED_NOTIFICATION` builder it needs.
+    pub const REMOVED: u8 = 5;
+}
+
 #[cfg(test)]
 mod tests {
     use super::AuctionRefusal;
@@ -220,5 +235,20 @@ mod tests {
         assert_eq!(super::market_of(7), super::AuctionMarket::Neutral);
         assert_eq!(super::market_of(0), super::AuctionMarket::Neutral);
         assert_eq!(super::market_of(8), super::AuctionMarket::Neutral);
+    }
+
+    #[test]
+    fn every_auction_notice_kind_has_a_distinct_code() {
+        use super::auction_notice::{EXPIRED, NEW_BID, OUTBID, REMOVED, SOLD, WON};
+        let codes = [OUTBID, WON, SOLD, EXPIRED, NEW_BID, REMOVED];
+        for (i, a) in codes.iter().enumerate() {
+            for b in &codes[i + 1..] {
+                assert_ne!(a, b, "auction_notice kind codes must be pairwise distinct");
+            }
+        }
+        assert_eq!(
+            [OUTBID, WON, SOLD, EXPIRED, NEW_BID, REMOVED],
+            [0, 1, 2, 3, 4, 5]
+        );
     }
 }

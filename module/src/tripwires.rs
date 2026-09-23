@@ -85,6 +85,7 @@ pub(crate) mod character_owned_tripwire {
         ),
         (
             &[
+                "game_auction_notice",
                 "game_channel_event",
                 "game_chat_event",
                 "game_combat_event",
