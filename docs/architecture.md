@@ -410,11 +410,13 @@ Every relay hangs off a coordinator connection. Row-driven relays take one of tw
   dropping it removes the viewer. It owns no row callbacks. A world-port removes the source viewer
   before cross-shard transfer cascade deletes, then destination entry registers a fresh viewer.
 
-Member Stats run on a timer, not a row callback (`stdb/party_stats_relay.rs`). Every 5 s one
+Member Stats run on a timer, not a row callback (`stdb/member_stats_relay.rs`). Every 5 s one
 Gateway thread queues a job on each viewer's writer. The job reads the party authority's membership
 index and every World Shard's entity cache, then sends the fields that changed for each group mate
-outside the viewer's AOI. No shard pump does this work, and the viewer keeps the last values it was
-sent, so a new viewer gets every field on the first tick.
+outside the viewer's AOI. No shard pump does this work. The viewer keeps the last values it was
+sent, and only writer jobs change that record. A new viewer, an `SMSG_GROUP_LIST` and a
+`CMSG_REQUEST_PARTY_MEMBER_STATS` answer each reset it, so the next tick sends every field. Offline
+follows the absence rule: every configured World Shard must be healthy, or the tick is skipped.
 
 `game_bot_invite_intent` carries a short-lived party decision and uses a connection callback.
 `game_bot_transfer_intent` is durable work. One bounded dispatcher per World Shard polls through the

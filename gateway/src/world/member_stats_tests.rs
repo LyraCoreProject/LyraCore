@@ -5,10 +5,11 @@
 //! Expected bodies are written out by hand from cm:GroupHandler.cpp:585-630: packed guid, `u32`
 //! mask, then the masked fields. Every guid here is one byte, so the packed guid is `01 <guid>`.
 
-use super::party_tests::{form_split_party, party_topology, BOT, GINGER, TRIN, VIM};
+use super::party_tests::{character, form_split_party, party_topology, BOT, GINGER, TRIN, VIM};
 use super::*;
 use crate::world::handlers::{
-    dispatch_member_stats, member_stats_tick, MemberSnapshot, MemberStatsOutcome, MemberStatsPlayer,
+    dispatch_member_stats, member_stats_tick, MemberSnapshot, MemberStatsOutcome,
+    MemberStatsPlayer, MemberStatsRecord,
 };
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
@@ -48,6 +49,11 @@ fn caster_full_body(guid: u8) -> Vec<u8> {
         0x0B, 0xDD, // x -8949
         0x7C, 0xFF, // y -132
     ]
+}
+
+/// The caster's wire values.
+fn stats() -> codec::MemberStats {
+    codec::MemberStats::from_entity(&caster())
 }
 
 fn place(shard: &InMemoryStore, guid: u64, entity: codec::MemberEntity) {
@@ -255,30 +261,47 @@ fn a_mate_who_leaves_the_group_is_forgotten() {
     assert!(!snapshots.contains_key(&TRIN));
 }
 
-fn request(store: &InMemoryStore, self_guid: Option<u64>, guid: u64) -> MemberStatsOutcome {
+fn request_with(
+    store: &InMemoryStore,
+    self_guid: Option<u64>,
+    record: Option<&MemberStatsRecord>,
+    guid: u64,
+) -> MemberStatsOutcome {
     dispatch_member_stats(
         store,
-        MemberStatsPlayer { self_guid },
+        MemberStatsPlayer { self_guid, record },
         ClientOpcodeMessage::CMSG_REQUEST_PARTY_MEMBER_STATS(
             wow_world_messages::vanilla::CMSG_REQUEST_PARTY_MEMBER_STATS {
                 guid: Guid::new(guid),
             },
         ),
     )
-    .expect("the request reads")
 }
 
+fn request(store: &InMemoryStore, self_guid: Option<u64>, guid: u64) -> MemberStatsOutcome {
+    request_with(store, self_guid, None, guid)
+}
+
+/// Run the answer the way the session writer does: every job, in order.
 fn answer(outcome: MemberStatsOutcome) -> Vec<(u16, Vec<u8>)> {
     let MemberStatsOutcome::Handled { outbound } = outcome else {
         panic!("an in-world stats request is handled");
     };
     outbound
         .into_iter()
+        .flat_map(|packet| match packet {
+            Outbound::Job(job) => job(),
+            packet => vec![packet],
+        })
         .map(|packet| match packet {
             Outbound::Raw { opcode, body } => (opcode, body),
             _ => panic!("Member Stats are raw packets"),
         })
         .collect()
+}
+
+fn full_offline(guid: u8) -> Vec<(u16, Vec<u8>)> {
+    vec![(0x02F2, vec![0x01, guid, 0x01, 0x00, 0x00, 0x00, 0x00])]
 }
 
 #[test]
@@ -294,26 +317,97 @@ fn a_request_for_a_group_mate_returns_one_full_packet() {
 
 #[test]
 fn a_request_for_anyone_else_returns_the_offline_full_packet() {
-    let (realm, world, instances, _) = party_topology();
+    let (_realm, world, instances, _) = party_topology();
     form_split_party(&world, &instances);
     // The bot is live on `world` but in nobody's group: its position must not leak.
     place(&world, BOT, caster());
-    let offline = |guid: u8| vec![(0x02F2, vec![0x01, guid, 0x01, 0x00, 0x00, 0x00, 0x00])];
 
     assert_eq!(
         answer(request(&world, Some(GINGER), BOT)),
-        offline(BOT as u8)
+        full_offline(BOT as u8)
     );
     // A mate with no entity anywhere.
     assert_eq!(
         answer(request(&world, Some(GINGER), VIM)),
-        offline(VIM as u8)
+        full_offline(VIM as u8)
     );
-    // A mate in Transfer.
+}
+
+/// cmangos answers a teleporting mate from the player object, flagged ZONE_OUT
+/// (cm:GroupHandler.cpp:764, cm:Group.cpp:54-55). The entity is gone here, so the status goes
+/// alone: online, zone out.
+#[test]
+fn a_request_for_a_mate_between_two_places_answers_online_and_zone_out() {
+    let (realm, world, instances, _) = party_topology();
+    form_split_party(&world, &instances);
+    let online_zone_out = vec![(0x02F2, vec![0x01, 0x02, 0x01, 0x00, 0x00, 0x00, 0x21])];
+
     realm.members_in_transit.lock().unwrap().push(VIM);
+    assert_eq!(answer(request(&world, Some(GINGER), VIM)), online_zone_out);
+
+    realm.members_in_transit.lock().unwrap().clear();
+    instances.members_between_places.lock().unwrap().push(VIM);
+    assert_eq!(answer(request(&world, Some(GINGER), VIM)), online_zone_out);
+}
+
+/// A FULL answer rewrites the frame behind the Relay's back. The mate crossed while the record
+/// said ONLINE, got the in-transit answer, then arrived with nothing else changed: the next tick
+/// must still send every field, the online status among them.
+#[test]
+fn after_a_full_answer_the_next_tick_sends_every_field() {
+    let (realm, world, instances, _) = party_topology();
+    form_split_party(&world, &instances);
+    place(&instances, VIM, caster());
+    let record = MemberStatsRecord::default();
+    tick(&world, &[GINGER], &mut record.lock());
+
+    despawn(&instances, VIM);
+    realm.members_in_transit.lock().unwrap().push(VIM);
+    answer(request_with(&world, Some(GINGER), Some(&record), VIM));
+    realm.members_in_transit.lock().unwrap().clear();
+    place(&world, VIM, caster());
+
+    let packets = tick(&world, &[GINGER], &mut record.lock());
+    assert_eq!(packets, vec![(0x007E, caster_full_body(VIM as u8))]);
+}
+
+#[test]
+fn a_failed_read_answers_nothing_and_is_never_offline() {
+    let (realm, world, instances, _) = party_topology();
+    form_split_party(&world, &instances);
+    // Vim has no entity, and one World Shard cannot prove the absence.
+    let unhealthy = InMemoryStore {
+        shard: "world".into(),
+        realm: Some(realm),
+        world_shard_set_error: Some("instances has no healthy Coordinator subscription".into()),
+        ..Default::default()
+    };
+    *unhealthy.peers.lock().unwrap() = vec![world.clone(), instances.clone()];
+
+    assert!(answer(request(&unhealthy, Some(GINGER), VIM)).is_empty());
+    let mut snapshots = Snapshots::new();
+    assert!(
+        member_stats_tick(&unhealthy, GINGER, |_| false, &mut snapshots).is_err(),
+        "an unproven absence is not Offline"
+    );
+}
+
+#[test]
+fn a_bot_crossing_between_shards_is_never_reported_offline() {
+    let (_realm, world, _instances, _) = party_topology();
+    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(BOT)).expect("invite the bot");
+    place(&world, BOT, caster());
+    let mut snapshots = Snapshots::new();
+    tick(&world, &[GINGER], &mut snapshots);
+
+    // The Package placed the bot and wrote its Transfer Intent; the Gateway has not claimed it.
+    despawn(&world, BOT);
+    world.members_between_places.lock().unwrap().push(BOT);
+
+    assert!(tick(&world, &[GINGER], &mut snapshots).is_empty());
     assert_eq!(
-        answer(request(&world, Some(GINGER), VIM)),
-        offline(VIM as u8)
+        snapshots.get(&BOT).copied(),
+        Some(MemberSnapshot::Live(stats()))
     );
 }
 
@@ -350,6 +444,104 @@ fn a_stats_request_is_answered_through_the_encrypted_session() {
         read_raw_frame(&mut client, &mut c_dec),
         (0x02F2, caster_full_body(2))
     );
+    drop(client);
+    let _ = server.join();
+}
+
+/// A read failure used to end the World Session. Now the first request goes unanswered and the
+/// second, for a stranger, still gets its reply on the same socket.
+#[test]
+fn a_stats_request_that_cannot_be_read_does_not_end_the_session() {
+    let store = InMemoryStore {
+        mirror: std::sync::Mutex::new(vec![party::GroupRoster {
+            group_id: 1,
+            leader_guid: 1,
+            members: vec![1, 2],
+            ..Default::default()
+        }]),
+        world_shard_set_error: Some("instances has no healthy Coordinator subscription".into()),
+        ..quest_store()
+    };
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(std::sync::Arc::new(store), 1);
+
+    for guid in [2, 99] {
+        wow_world_messages::vanilla::CMSG_REQUEST_PARTY_MEMBER_STATS {
+            guid: Guid::new(guid),
+        }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    }
+
+    assert_eq!(read_raw_frame(&mut client, &mut c_dec), full_offline(99)[0]);
+    drop(client);
+    let _ = server.join();
+}
+
+/// A Relay tick can reach the writer between viewer registration and the world-entry party frame.
+/// The client does not know the party yet, so world entry forgets that tick behind the frame.
+#[test]
+fn world_entry_forgets_member_stats_sent_before_the_party_frame() {
+    let view = std::sync::Arc::new(crate::stdb::world_view::WorldView::new(true));
+    let (realm, _world, _instances, calls) = party_topology();
+    let session_shard = std::sync::Arc::new(InMemoryStore {
+        shard: "world".into(),
+        calls,
+        username: "TESTER".into(),
+        session: Some(WorldSession {
+            account_id: 7,
+            session_key: K,
+        }),
+        login_entity: Some(warrior_entity()),
+        realm: Some(realm.clone()),
+        characters: vec![character(GINGER, "Ginger"), character(VIM, "Vim")],
+        live_guids: vec![GINGER, VIM],
+        relay_view: Some(view.clone()),
+        member_stats_before_party_frame: Some(VIM),
+        ..Default::default()
+    });
+    *session_shard.peers.lock().unwrap() = vec![session_shard.clone()];
+    place(&session_shard, VIM, caster());
+    {
+        let mut party = realm.party.lock().unwrap();
+        party.next_group_id = 5;
+        party.groups.push((5, GINGER, 3, 2, 0));
+        party.members.push((5, GINGER));
+        party.members.push((5, VIM));
+    }
+    let (mut client, server_end) = world_session_socket_pair();
+    let server_store = session_shard.clone();
+    let server = std::thread::spawn(move || {
+        let _ = run_world_session(server_end, server_store.as_ref());
+    });
+    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
+    CMSG_PLAYER_LOGIN {
+        guid: Guid::new(GINGER),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    // The answer for a stranger is the barrier: the writer runs its queue in order.
+    wow_world_messages::vanilla::CMSG_REQUEST_PARTY_MEMBER_STATS {
+        guid: Guid::new(99),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    let mut saw_party_frame = false;
+    loop {
+        let (opcode, _) = read_raw_frame(&mut client, &mut c_dec);
+        saw_party_frame |= opcode == 0x007D; // SMSG_GROUP_LIST
+        if opcode == 0x02F2 {
+            break;
+        }
+    }
+    assert!(saw_party_frame, "world entry renders the party frame");
+
+    let record = view
+        .viewer_of_owner(crate::stdb::world_view::OwnerGuid(GINGER))
+        .expect("world entry registers the viewer")
+        .member_stats
+        .clone();
+    let packets = tick(&session_shard, &[GINGER], &mut record.lock());
+    assert_eq!(packets, vec![(0x007E, caster_full_body(VIM as u8))]);
     drop(client);
     let _ = server.join();
 }

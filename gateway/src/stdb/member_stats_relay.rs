@@ -42,10 +42,7 @@ fn viewer_member_stats<St: MemberStatsStore + ?Sized>(
     store: &St,
     viewer: &Arc<Viewer>,
 ) -> Vec<Outbound> {
-    let mut snapshots = viewer
-        .member_stats
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut snapshots = viewer.member_stats.lock();
     let is_created = |guid| {
         viewer
             .created
@@ -135,7 +132,7 @@ mod tests {
         };
         assert!(rx.try_recv().is_err(), "one job per viewer per tick");
         assert!(
-            viewer.member_stats.lock().unwrap().is_empty(),
+            viewer.member_stats.lock().is_empty(),
             "the Relay thread does no per-viewer work itself"
         );
         let packets = job();
@@ -143,7 +140,7 @@ mod tests {
             packets.as_slice(),
             [Outbound::Raw { opcode: 0x007E, .. }]
         ));
-        assert!(viewer.member_stats.lock().unwrap().contains_key(&MATE));
+        assert!(viewer.member_stats.lock().contains_key(&MATE));
     }
 
     #[test]

@@ -108,6 +108,12 @@ impl PlayerSubscriptions {
         }
     }
 
+    /// What this session's client holds of its group mates' Member Stats. `None` for the in-memory
+    /// test store.
+    pub(crate) fn member_stats_record(&self) -> Option<&crate::world::MemberStatsRecord> {
+        self.viewer.as_ref().map(|viewer| &viewer.member_stats)
+    }
+
     /// Drive the shared AOI index from the player's movement: on a cell crossing, move the
     /// viewer's anchor and relay the CREATE/DESTROY delta the move implies.
     ///

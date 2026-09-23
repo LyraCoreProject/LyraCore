@@ -14,14 +14,15 @@ pub const SMSG_PARTY_MEMBER_STATS_OPCODE: u16 = 0x007E;
 /// `SMSG_PARTY_MEMBER_STATS_FULL`: the answer to `CMSG_REQUEST_PARTY_MEMBER_STATS`.
 pub const SMSG_PARTY_MEMBER_STATS_FULL_OPCODE: u16 = 0x02F2;
 
-/// The member status byte (cm:Group.h:45-56). Only the states the Module models are named. PvP,
-/// AFK and DND have no entity field yet, and a member in Transfer gets no packet, so `ZONE_OUT` is
-/// never needed.
+/// The member status byte (cm:Group.h:45-56). Only the states the Gateway can tell are named. PvP,
+/// AFK and DND have no entity field yet.
 pub mod member_status {
     pub const OFFLINE: u8 = 0x00;
     pub const ONLINE: u8 = 0x01;
     pub const DEAD: u8 = 0x04;
     pub const GHOST: u8 = 0x08;
+    /// Online but not in the world, as during a loading screen (cm:Group.cpp:54-55).
+    pub const ZONE_OUT: u8 = 0x20;
 }
 
 /// Which fields a Member Stats body carries, as `GROUP_UPDATE_FLAG_*` bits (cm:Group.h:66-77).
@@ -222,13 +223,14 @@ pub fn build_member_stats(
     (packet.opcode(), body)
 }
 
-/// The offline answer: mask `STATUS` and status 0 (cm:GroupHandler.cpp:764-771).
-pub fn build_member_offline(packet: MemberStatsPacket, guid: u64) -> (u16, Vec<u8>) {
-    let offline = MemberStats {
-        status: member_status::OFFLINE,
+/// A status-only body: mask `STATUS` and the one byte. With status 0 it is the offline answer
+/// (cm:GroupHandler.cpp:764-771).
+pub fn build_member_status(packet: MemberStatsPacket, guid: u64, status: u8) -> (u16, Vec<u8>) {
+    let stats = MemberStats {
+        status,
         ..MemberStats::default()
     };
-    build_member_stats(packet, guid, GroupUpdateMask::STATUS, &offline)
+    build_member_stats(packet, guid, GroupUpdateMask::STATUS, &stats)
 }
 
 #[cfg(test)]
@@ -302,12 +304,13 @@ mod tests {
     #[test]
     fn status_bits_are_the_cmangos_member_status() {
         use wow_world_messages::vanilla::GroupMemberOnlineStatus as Gtker;
-        // cm:Group.h:47-51, then gtker's constants.
+        // cm:Group.h:47-53, then gtker's constants.
         let pinned = [
             (member_status::OFFLINE, 0x00, Gtker::OFFLINE),
             (member_status::ONLINE, 0x01, Gtker::ONLINE),
             (member_status::DEAD, 0x04, Gtker::DEAD),
             (member_status::GHOST, 0x08, Gtker::GHOST),
+            (member_status::ZONE_OUT, 0x20, Gtker::ZONE_OUT),
         ];
         for (bit, cmangos, gtker) in pinned {
             assert_eq!((bit, bit), (cmangos, gtker));
@@ -370,7 +373,8 @@ mod tests {
 
     #[test]
     fn the_offline_answer_is_a_full_packet_with_status_zero() {
-        let (opcode, body) = build_member_offline(MemberStatsPacket::Full, GUID);
+        let (opcode, body) =
+            build_member_status(MemberStatsPacket::Full, GUID, member_status::OFFLINE);
         assert_eq!(opcode, 0x02F2);
         assert_eq!(body, [0x03, 0x02, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00]);
     }
@@ -396,7 +400,8 @@ mod tests {
         let position = fields.get_position().unwrap();
         assert_eq!((position.position_x, position.position_y), (0xDD0B, 0xFF7C));
 
-        let (opcode, body) = build_member_offline(MemberStatsPacket::Full, GUID);
+        let (opcode, body) =
+            build_member_status(MemberStatsPacket::Full, GUID, member_status::OFFLINE);
         let ServerOpcodeMessage::SMSG_PARTY_MEMBER_STATS_FULL(decoded) =
             gtker_decode(opcode, &body)
         else {

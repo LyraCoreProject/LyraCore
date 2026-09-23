@@ -60,10 +60,11 @@ use handlers::{
     VendorActionOutcome, VendorActionPlayer, CMSG_AUCTION_LIST_ITEMS_OPCODE,
 };
 pub(crate) use handlers::{
-    member_stats_tick, zone_weather_message, AuctionBrowseRequest, AuctionPage, AuctionQuery,
-    CreateAuctionOutcome, CreateAuctionRequest, ItemActionResult, LootActionStatus,
-    LootWindowRefusal, LootWindowRequestStatus, MemberPresence, MemberSnapshot, MemberStatsStore,
-    PlaceBidOutcome, PlaceBidRequest, TrainerBuyOutcome, WeatherStore,
+    locate_member, member_stats_tick, zone_weather_message, AuctionBrowseRequest, AuctionPage,
+    AuctionQuery, CreateAuctionOutcome, CreateAuctionRequest, ItemActionResult, LootActionStatus,
+    LootWindowRefusal, LootWindowRequestStatus, MemberPresence, MemberShardCache,
+    MemberStatsRecord, MemberStatsStore, PlaceBidOutcome, PlaceBidRequest, TrainerBuyOutcome,
+    WeatherStore,
 };
 use login_queue::{Admission, LoginQueue};
 use social::handle_social;
@@ -1381,13 +1382,14 @@ fn dispatch<St: WorldStore + ?Sized>(
         }
         TaxiActionOutcome::PassThrough(msg) => msg,
     };
-    let msg = match dispatch_member_stats(
-        store,
-        MemberStatsPlayer {
-            self_guid: social::self_guid(conn),
+    let member_stats_player = match &conn.state {
+        WorldState::InWorld(iw) => MemberStatsPlayer {
+            self_guid: Some(iw.self_guid),
+            record: iw.subs.member_stats_record(),
         },
-        msg,
-    )? {
+        WorldState::CharSelect => MemberStatsPlayer::default(),
+    };
+    let msg = match dispatch_member_stats(store, member_stats_player, msg) {
         MemberStatsOutcome::Handled { outbound } => {
             for message in outbound {
                 send(tx, message)?;

@@ -94,7 +94,7 @@ pub(crate) struct Viewer {
     pub(crate) motion_pending: Arc<MotionPending>,
     /// What the Member Stats Relay last sent about each group mate. A new viewer starts empty, so
     /// world entry and a group join both get every field on the next tick.
-    pub(crate) member_stats: Mutex<HashMap<u64, crate::world::MemberSnapshot>>,
+    pub(crate) member_stats: crate::world::MemberStatsRecord,
 }
 
 impl Viewer {
@@ -2060,8 +2060,13 @@ fn group_event_appeared(view: &WorldView, coord: &Coordinator, row: &GroupEvent)
     }
     let (row, coord) = (row.clone(), coord.clone());
     let self_guid = viewer.self_guid;
-    enqueue(viewer.clone(), move |_| {
-        super::subscriptions::group_event_outbound(&coord, self_guid, &row)
+    enqueue(viewer.clone(), move |viewer| {
+        let packets = super::subscriptions::group_event_outbound(&coord, self_guid, &row);
+        // A party frame sets every member's online flag, so Member Stats start over behind it.
+        if row.kind == lyracore_shared::group::event_kind::LIST {
+            viewer.member_stats.forget_all();
+        }
+        packets
     });
 }
 
@@ -2401,6 +2406,19 @@ mod family_audience_tests {
 
         let group_event = crate::test_scan::code_of(source, "fn group_event_appeared");
         assert!(!group_event.contains("loot_tag_flags_after_membership_change"));
+    }
+
+    /// A party frame sets every member's online flag behind the Member Stats Relay's back, so the
+    /// LIST job forgets the viewer's record and the next tick sends every field.
+    #[test]
+    fn a_party_frame_makes_member_stats_start_over() {
+        let source = include_str!("world_view.rs");
+        let group_event: String = crate::test_scan::code_of(source, "fn group_event_appeared")
+            .split_whitespace()
+            .collect();
+        assert!(group_event.contains(
+            "ifrow.kind==lyracore_shared::group::event_kind::LIST{viewer.member_stats.forget_all();}"
+        ));
     }
 
     fn viewer(session: u64, self_guid: u64) -> Arc<Viewer> {
