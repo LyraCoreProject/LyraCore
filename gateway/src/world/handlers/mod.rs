@@ -41,11 +41,9 @@ pub(crate) use auction::{AuctionHousePolicy, AuctionInteraction};
 pub(crate) use bank::handle_bank;
 pub(crate) use cast::{dispatch_cast, CastOutcome, CastPlayer, CastStore, CastTransition};
 pub(crate) use char::handle_char;
-#[cfg(test)]
-pub(crate) use chat::SpeakerFacts;
 pub(crate) use chat::{
     dispatch_chat_action, ChatActionOutcome, ChatActionPlayer, ChatActionStore, ChatOutcome,
-    RealmChatRequest,
+    RealmChatRequest, SpeakerFacts,
 };
 pub(crate) use combat::handle_combat;
 pub(crate) use duel::{dispatch_duel_action, DuelActionOutcome, DuelActionPlayer, DuelActionStore};

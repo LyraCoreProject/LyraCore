@@ -4,7 +4,7 @@
 //! this file does not own pass through.
 
 use super::super::*;
-use lyracore_shared::chat::{chat_kind, chat_tag_for, ChatRefusal};
+use lyracore_shared::chat::{chat_kind, ChatRefusal};
 use wow_world_messages::vanilla::SMSG_NOTIFICATION;
 
 /// What the speaker's Home Shard knows about them. The Coordinator conveys race and chat tag to
@@ -46,24 +46,7 @@ pub(crate) trait ChatActionStore: Send + Sync {
 
 impl ChatActionStore for crate::stdb::Coordinator {
     fn speaker_facts(&self, speaker_guid: u64) -> Result<Option<SpeakerFacts>> {
-        use crate::stdb::bindings::{GameCharacterTableAccess, GameWorldEntityTableAccess};
-        let guard = self.0.coord();
-        let db = &guard.conn.db;
-        let Some(entity) = db.game_world_entity().guid().find(&speaker_guid) else {
-            return Ok(None);
-        };
-        let name = db
-            .game_character()
-            .guid()
-            .find(&speaker_guid)
-            .map(|character| character.name)
-            .unwrap_or_default();
-        Ok(Some(SpeakerFacts {
-            // UNIT_FIELD_BYTES_0 byte 0 is the race.
-            race: (entity.unit_bytes_0 & 0xFF) as u8,
-            chat_tag: chat_tag_for(entity.player_flags),
-            name,
-        }))
+        crate::stdb::Coordinator::speaker_facts(self, speaker_guid)
     }
 
     fn realm_chat(&self, speaker_guid: u64, request: RealmChatRequest) -> Result<ChatOutcome> {
@@ -296,11 +279,29 @@ mod tests {
         );
     }
 
+    /// Every racial language reaches the Module as its wire value (gtker vanilla `language.rs`),
+    /// so the Module's language Gate judges what the client sent. Addon-language lines never get
+    /// here: the addon bridge in `world/mod.rs` takes them first.
     #[test]
-    fn the_full_language_word_reaches_the_module() {
-        let store = store(None);
-        handled(dispatch_chat_action(&store, player(), party(Language::Addon)).unwrap());
-        assert_eq!(store.requests.lock().unwrap()[0].1.language, 0xFFFF_FFFF);
+    fn each_racial_language_reaches_the_module_as_its_wire_value() {
+        for (language, wire) in [
+            (Language::Common, 7),
+            (Language::Orcish, 1),
+            (Language::Dwarvish, 6),
+            (Language::Darnassian, 2),
+            (Language::Gutterspeak, 33),
+            (Language::Taurahe, 3),
+            (Language::Gnomish, 13),
+            (Language::Troll, 14),
+        ] {
+            let store = store(None);
+            handled(dispatch_chat_action(&store, player(), party(language)).unwrap());
+            assert_eq!(
+                store.requests.lock().unwrap()[0].1.language,
+                wire,
+                "{language:?}"
+            );
+        }
     }
 
     #[test]
@@ -356,11 +357,7 @@ mod tests {
 
     #[test]
     fn every_other_refusal_is_silent() {
-        for refusal in [
-            ChatRefusal::NotInWorld,
-            ChatRefusal::UnsupportedKind,
-            ChatRefusal::EmptyMessage,
-        ] {
+        for refusal in [ChatRefusal::UnsupportedKind, ChatRefusal::EmptyMessage] {
             let store = store(Some(Ok(ChatOutcome::Refused(refusal))));
             let outbound =
                 handled(dispatch_chat_action(&store, player(), party(Language::Common)).unwrap());

@@ -56,16 +56,16 @@ use handlers::{
     AuctionActionOutcome, AuctionActionPlayer, CastOutcome, CastPlayer, CastTransition,
     ChatActionOutcome, ChatActionPlayer, DuelActionOutcome, DuelActionPlayer, ItemActionOutcome,
     ItemActionPlayer, LootWindowOutcome, LootWindowPlayer, MeleeActionOutcome, MeleeActionPlayer,
-    MemberStatsOutcome, MemberStatsPlayer, OpenLootState,
-    QuestActionOutcome, QuestActionPlayer, TaxiActionOutcome, TaxiActionPlayer,
-    VendorActionOutcome, VendorActionPlayer, CMSG_AUCTION_LIST_ITEMS_OPCODE,
+    MemberStatsOutcome, MemberStatsPlayer, OpenLootState, QuestActionOutcome, QuestActionPlayer,
+    TaxiActionOutcome, TaxiActionPlayer, VendorActionOutcome, VendorActionPlayer,
+    CMSG_AUCTION_LIST_ITEMS_OPCODE,
 };
 pub(crate) use handlers::{
     locate_member, member_stats_tick, zone_weather_message, AuctionBrowseRequest, AuctionPage,
     AuctionQuery, ChatOutcome, CreateAuctionOutcome, CreateAuctionRequest, ItemActionResult,
-    LootActionStatus, LootWindowRefusal, LootWindowRequestStatus, MemberPresence,
-    MemberShardCache, MemberStatsRecord, MemberStatsStore, PlaceBidOutcome, PlaceBidRequest,
-    RealmChatRequest, TrainerBuyOutcome, WeatherStore,
+    LootActionStatus, LootWindowRefusal, LootWindowRequestStatus, MemberPresence, MemberShardCache,
+    MemberStatsRecord, MemberStatsStore, PlaceBidOutcome, PlaceBidRequest, RealmChatRequest,
+    SpeakerFacts, TrainerBuyOutcome, WeatherStore,
 };
 use login_queue::{Admission, LoginQueue};
 use social::handle_social;

@@ -112,8 +112,6 @@ fn racial_languages(race: u8) -> &'static [u32] {
 /// tier matches on human prose. Vanilla answers most of these with silence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChatRefusal {
-    /// The speaker has no live entity.
-    NotInWorld,
     /// A party line from a Character in no party.
     NotInGroup,
     /// The speaker's race does not know the language.
@@ -125,8 +123,7 @@ pub enum ChatRefusal {
 }
 
 impl ChatRefusal {
-    pub const ALL: [Self; 5] = [
-        Self::NotInWorld,
+    pub const ALL: [Self; 4] = [
         Self::NotInGroup,
         Self::UnknownLanguage,
         Self::UnsupportedKind,
@@ -135,7 +132,6 @@ impl ChatRefusal {
 
     pub fn as_tag(self) -> &'static str {
         match self {
-            Self::NotInWorld => "chat:not_in_world",
             Self::NotInGroup => "chat:not_in_group",
             Self::UnknownLanguage => "chat:unknown_language",
             Self::UnsupportedKind => "chat:unsupported_kind",
