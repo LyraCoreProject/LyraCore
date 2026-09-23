@@ -1842,7 +1842,9 @@ impl WorldStore for InMemoryStore {
             subs.member_stats_record(),
         ) {
             let delivered = codec::MemberStats::default();
-            record.lock().insert(mate, MemberSnapshot::Live(delivered));
+            record
+                .lock()
+                .insert(mate, MemberSnapshot::Live(Box::new(delivered)));
         }
         Ok(subs)
     }
@@ -4251,7 +4253,10 @@ impl MemberStatsStore for InMemoryStore {
 impl MemberShardCache for &InMemoryStore {
     fn member_entity(&self, guid: u64) -> Option<codec::MemberEntity> {
         let entities = self.member_entities.lock().unwrap();
-        entities.iter().find(|(g, _)| *g == guid).map(|(_, e)| *e)
+        entities
+            .iter()
+            .find(|(g, _)| *g == guid)
+            .map(|(_, e)| e.clone())
     }
 
     fn member_between_places(&self, guid: u64) -> bool {

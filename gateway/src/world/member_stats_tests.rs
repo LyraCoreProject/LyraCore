@@ -30,14 +30,66 @@ fn caster() -> codec::MemberEntity {
         y: -132.49,
         dead: false,
         player_flags: 0,
+        ..codec::MemberEntity::default()
     }
 }
 
-/// The caster's full body for guid `g`: every field, mask 0x1FF.
-fn caster_full_body(guid: u8) -> Vec<u8> {
+/// The caster with two positive auras (slots 0 and 5) and one negative aura (slot 35).
+fn caster_with_auras() -> codec::MemberEntity {
+    codec::MemberEntity {
+        auras: vec![
+            codec::MemberAuraSlot {
+                slot: 0,
+                spell_id: 100,
+            },
+            codec::MemberAuraSlot {
+                slot: 5,
+                spell_id: 200,
+            },
+            codec::MemberAuraSlot {
+                slot: 35,
+                spell_id: 300,
+            },
+        ],
+        ..caster()
+    }
+}
+
+/// A Hunter's live pet: Fluffy, with one positive aura.
+fn hunter_pet() -> codec::MemberPetEntity {
+    codec::MemberPetEntity {
+        guid: 85,
+        name: "Fluffy".into(),
+        display_id: 618,
+        health: 50,
+        max_health: 60,
+        power: 40,
+        max_power: 100,
+        unit_bytes_0: 0x0300_0000,
+        auras: vec![codec::MemberAuraSlot {
+            slot: 2,
+            spell_id: 400,
+        }],
+    }
+}
+
+/// The caster's aura block for [`caster_with_auras`]: `AURAS` (bits 0, 5) then
+/// `AURAS_NEGATIVE` (bit 3, slot 35).
+fn caster_aura_bytes() -> Vec<u8> {
+    #[rustfmt::skip]
+    let bytes = vec![
+        0x21, 0x00, 0x00, 0x00, // AURAS mask: slots 0 and 5
+        0x64, 0x00,             // spell 100
+        0xC8, 0x00,             // spell 200
+        0x08, 0x00,             // AURAS_NEGATIVE mask: slot 35 (bit 3)
+        0x2C, 0x01,             // spell 300
+    ];
+    bytes
+}
+
+/// The caster's 9 base fields, header and aura blocks excluded.
+fn caster_base_bytes() -> Vec<u8> {
     vec![
-        0x01, guid, // packed guid
-        0xFF, 0x01, 0x00, 0x00, // mask 0x1FF
         0x01, // status ONLINE
         0xD2, 0x04, // current health 1234
         0xDC, 0x05, // max health 1500
@@ -49,6 +101,37 @@ fn caster_full_body(guid: u8) -> Vec<u8> {
         0x0B, 0xDD, // x -8949
         0x7C, 0xFF, // y -132
     ]
+}
+
+/// [`hunter_pet`]'s pet block: guid, name, display, health, power and its one positive aura, no
+/// negative aura.
+fn hunter_pet_bytes() -> Vec<u8> {
+    #[rustfmt::skip]
+    let bytes = vec![
+        0x55, 0, 0, 0, 0, 0, 0, 0,       // PET_GUID 85
+        b'F', b'l', b'u', b'f', b'f', b'y', 0x00, // PET_NAME "Fluffy"
+        0x6A, 0x02,             // PET_MODEL_ID 618
+        0x32, 0x00,             // PET_CUR_HP 50
+        0x3C, 0x00,             // PET_MAX_HP 60
+        0x03,                   // PET_POWER_TYPE 3 (focus)
+        0x28, 0x00,             // PET_CUR_POWER 40
+        0x64, 0x00,             // PET_MAX_POWER 100
+        0x04, 0x00, 0x00, 0x00, // PET_AURAS mask: slot 2
+        0x90, 0x01,             // spell 400
+        0x00, 0x00,             // PET_AURAS_NEGATIVE: no occupied slots
+    ];
+    bytes
+}
+
+/// The pet-less caster's full body for guid `g`: every base field, plus the two empty aura
+/// blocks a first send or a FULL answer always carries — mask 0x7FF (cm:GroupHandler.cpp:781-786:
+/// only the pet bits are conditional on a live charm).
+fn caster_full_body(guid: u8) -> Vec<u8> {
+    let mut body = vec![0x01, guid, 0xFF, 0x07, 0x00, 0x00]; // mask 0x7FF
+    body.extend(caster_base_bytes());
+    body.extend([0x00, 0x00, 0x00, 0x00]); // AURAS: no occupied slots
+    body.extend([0x00, 0x00]); // AURAS_NEGATIVE: no occupied slots
+    body
 }
 
 /// The caster's wire values.
@@ -121,12 +204,14 @@ fn a_live_mate_on_another_shard_is_read_from_that_shards_cache() {
     #[rustfmt::skip]
     let expected = vec![
         0x01, 0x02,             // packed guid 2
-        0xFF, 0x01, 0x00, 0x00, // mask 0x1FF
+        0xFF, 0x07, 0x00, 0x00, // mask 0x7FF (MEMBER | AURAS | AURAS_NEGATIVE)
         0x05,                   // status ONLINE | DEAD
         0xD2, 0x04, 0xDC, 0x05, 0x00, 0x20, 0x03, 0xE8, 0x03, 0x14, 0x00,
         0x2D, 0x06,             // zone 1581
         0xF0, 0xFF,             // x -16
         0x81, 0xFE,             // y -383
+        0x00, 0x00, 0x00, 0x00, // AURAS: no occupied slots
+        0x00, 0x00,             // AURAS_NEGATIVE: no occupied slots
     ];
     assert_eq!(packets, vec![(0x007E, expected)]);
 }
@@ -406,8 +491,8 @@ fn a_bot_crossing_between_shards_is_never_reported_offline() {
 
     assert!(tick(&world, &[GINGER], &mut snapshots).is_empty());
     assert_eq!(
-        snapshots.get(&BOT).copied(),
-        Some(MemberSnapshot::Live(stats()))
+        snapshots.get(&BOT).cloned(),
+        Some(MemberSnapshot::Live(Box::new(stats())))
     );
 }
 
@@ -544,4 +629,132 @@ fn world_entry_forgets_member_stats_sent_before_the_party_frame() {
     assert_eq!(packets, vec![(0x007E, caster_full_body(VIM as u8))]);
     drop(client);
     let _ = server.join();
+}
+
+/// AC1: a member with two buffs and one debuff sends `AURAS` with two ids and `AURAS_NEGATIVE`
+/// with one id, at the right bits. Driven as a delta so the body carries only the aura fields.
+#[test]
+fn a_member_with_two_buffs_and_one_debuff_sends_both_aura_blocks() {
+    let (_realm, world, _instances) = ginger_and_trin();
+    let mut snapshots = Snapshots::new();
+    tick(&world, &[GINGER], &mut snapshots); // seed: the plain, aura-less caster
+
+    place(&world, TRIN, caster_with_auras());
+    let packets = tick(&world, &[GINGER], &mut snapshots);
+
+    let mut expected = vec![0x01, TRIN as u8, 0x00, 0x06, 0x00, 0x00]; // mask 0x600
+    expected.extend(caster_aura_bytes());
+    assert_eq!(packets, vec![(0x007E, expected)]);
+}
+
+/// AC2: removing one buff, and only that one, sends only its bit, with id 0. The other buff and
+/// the debuff stay in place and stay silent.
+#[test]
+fn removing_one_buff_sends_only_its_bit_with_id_zero() {
+    let (_realm, world, _instances) = ginger_and_trin();
+    place(&world, TRIN, caster_with_auras());
+    let mut snapshots = Snapshots::new();
+    tick(&world, &[GINGER], &mut snapshots); // seed with both buffs and the debuff
+
+    let mut one_buff_left = caster_with_auras();
+    one_buff_left.auras.retain(|aura| aura.slot != 0);
+    place(&world, TRIN, one_buff_left);
+
+    let packets = tick(&world, &[GINGER], &mut snapshots);
+    let expected = vec![
+        0x01, TRIN as u8, // packed guid
+        0x00, 0x02, 0x00, 0x00, // mask 0x200 (AURAS only)
+        0x01, 0x00, 0x00, 0x00, // AURAS mask: bit 0, the removed buff, alone
+        0x00, 0x00, // spell id 0
+    ];
+    assert_eq!(packets, vec![(0x007E, expected)]);
+}
+
+/// AC3: a hunter with a live pet sends the pet block with guid, name, display, health, power and
+/// auras. Dismissing the pet sends the pet bits zeroed once, then nothing more.
+#[test]
+fn a_live_pet_sends_its_block_then_dismissing_it_zeroes_the_bits_once() {
+    let (_realm, world, _instances) = ginger_and_trin();
+    let mut snapshots = Snapshots::new();
+    place(
+        &world,
+        TRIN,
+        codec::MemberEntity {
+            pet: Some(hunter_pet()),
+            ..caster()
+        },
+    );
+
+    let mut first_send = vec![0x01, TRIN as u8, 0xFF, 0xFF, 0x1F, 0x00]; // mask FULL, live pet
+    first_send.extend(caster_base_bytes());
+    first_send.extend([0x00, 0x00, 0x00, 0x00]); // AURAS: none
+    first_send.extend([0x00, 0x00]); // AURAS_NEGATIVE: none
+    first_send.extend(hunter_pet_bytes());
+    assert_eq!(
+        tick(&world, &[GINGER], &mut snapshots),
+        vec![(0x007E, first_send)]
+    );
+
+    place(&world, TRIN, caster()); // the pet is dismissed
+    let dismissed = vec![
+        0x01, TRIN as u8, // packed guid
+        0x00, 0xF8, 0x0F, 0x00, // mask 0xFF800: every pet bit but PET_AURAS_NEGATIVE
+        0, 0, 0, 0, 0, 0, 0, 0,    // PET_GUID zeroed
+        0x00, // PET_NAME: an empty CString
+        0x00, 0x00, // PET_MODEL_ID zeroed
+        0x00, 0x00, // PET_CUR_HP zeroed
+        0x00, 0x00, // PET_MAX_HP zeroed
+        0x00, // PET_POWER_TYPE zeroed
+        0x00, 0x00, // PET_CUR_POWER zeroed
+        0x00, 0x00, // PET_MAX_POWER zeroed
+        0x04, 0x00, 0x00, 0x00, // PET_AURAS: slot 2 cleared, the one differing bit
+        0x00, 0x00, // spell id 0
+    ];
+    assert_eq!(
+        tick(&world, &[GINGER], &mut snapshots),
+        vec![(0x007E, dismissed)]
+    );
+
+    assert!(
+        tick(&world, &[GINGER], &mut snapshots).is_empty(),
+        "a pet-less member that stays pet-less sends nothing more about it"
+    );
+}
+
+/// AC4: a member without a pet gets a FULL packet with no pet bits (already the shape
+/// `caster_full_body` carries; this test names the mask directly, for AC traceability).
+#[test]
+fn a_member_without_a_pet_gets_a_full_answer_with_no_pet_bits() {
+    let (_realm, world, instances, _) = party_topology();
+    form_split_party(&world, &instances);
+    place(&instances, VIM, caster());
+
+    let packets = answer(request(&world, Some(GINGER), VIM));
+
+    assert_eq!(packets, vec![(0x02F2, caster_full_body(VIM as u8))]);
+    let mask = u32::from_le_bytes(packets[0].1[3..7].try_into().unwrap());
+    assert_eq!(
+        mask & codec::GroupUpdateMask::PET.bits(),
+        0,
+        "no pet bit set"
+    );
+}
+
+/// AC5: a member inside the viewer's AOI is already created on the client and gets nothing, auras
+/// and a pet included.
+#[test]
+fn a_created_mate_with_auras_and_a_pet_still_gets_nothing() {
+    let (_realm, world, _instances) = ginger_and_trin();
+    place(
+        &world,
+        TRIN,
+        codec::MemberEntity {
+            pet: Some(hunter_pet()),
+            ..caster_with_auras()
+        },
+    );
+    let mut snapshots = Snapshots::new();
+
+    assert!(tick(&world, &[GINGER, TRIN], &mut snapshots).is_empty());
+    assert!(snapshots.is_empty());
 }
