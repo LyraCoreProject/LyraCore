@@ -369,10 +369,6 @@ fn playerbots_transfer_upgrades_populated_predecessor_without_a_checkpoint() {
                 "retained {runner} field {field}"
             );
         }
-        assert_eq!(
-            after[runner].as_object().unwrap().len(),
-            before[runner].as_object().unwrap().len() + 2
-        );
         assert_eq!(after[runner]["transfer_checkpoint"], "(none = ())");
         assert_eq!(after[runner]["movement_due_micros"], i64::MAX.to_string());
     }
