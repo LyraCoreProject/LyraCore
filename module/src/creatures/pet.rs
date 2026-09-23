@@ -23,6 +23,7 @@
 //! is independent of the wand/ranged-auto-attack field). [entity]
 
 use lyracore_shared::constants;
+use lyracore_shared::pet::pet_guid_for;
 #[cfg(feature = "debug_reducers")]
 use spacetimedb::reducer;
 use spacetimedb::{table, ReducerContext, Table};
@@ -282,26 +283,6 @@ fn build_pet_entity(ctx: &ReducerContext, owner: &WorldEntity, entry: u32) -> Op
     Some(pet)
 }
 
-/// HIGHGUID_UNIT (0xF130) — the high 16 bits of every creature guid. The 5875 client classifies an object
-/// (Unit vs other) from its guid's HIGHGUID type, so a pet MUST carry it or the client can't treat it as a
-/// unit (broken nameplate/targeting/pet-bar), exactly like the importer `world_guid` / `seed` / `debug`.
-const HIGHGUID_UNIT: u64 = 0xF130;
-/// Vanilla's separate namespace for a pet owned by another server-authored unit.
-const HIGHGUID_PET: u64 = 0xF140;
-
-/// The deterministic pet guid for an owner. Player pets retain the established `HIGHGUID_UNIT`
-/// namespace. A creature-owned spell guardian uses vanilla's `HIGHGUID_PET`, otherwise copying the
-/// creature owner's low 48 bits would reproduce the owner's guid and collide on insert. Stable so
-/// the keyed `pet_of` read, despawn delete, and `on_delete` relay agree. Pure.
-pub(crate) fn pet_guid_for(owner_guid: u64) -> u64 {
-    let high = if owner_guid >> 48 == HIGHGUID_UNIT {
-        HIGHGUID_PET
-    } else {
-        HIGHGUID_UNIT
-    };
-    (high << 48) | (owner_guid & 0x0000_FFFF_FFFF_FFFF)
-}
-
 /// E_SUMMON_PET handler: summon a persistent pet `entry` owned by `caster_guid` (Summon Imp → an Imp).
 /// Despawn any existing pet FIRST (one pet per owner — a re-summon replaces it), then build + insert the
 /// new pet at the caster. No-op if the caster left the world or the creature template isn't loaded (logs).
@@ -395,34 +376,4 @@ pub(crate) fn despawn_pet(ctx: &ReducerContext, pet_guid: u64) {
     let owner_guid = pet.owner_guid;
     despawn_pet_entity(ctx, pet);
     ctx.db.game_pet_command().owner_guid().delete(owner_guid);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn pet_guid_is_highguid_unit_and_reversible() {
-        let owner = 0x0000_0000_0000_002A_u64; // a normal low-range player guid
-        let pet = pet_guid_for(owner);
-        assert_eq!(
-            pet >> 48,
-            HIGHGUID_UNIT,
-            "pet guid carries HIGHGUID_UNIT so the client treats it as a Unit"
-        );
-        assert_eq!(
-            pet & 0x0000_FFFF_FFFF_FFFF,
-            owner,
-            "the low 48 bits recover the owner"
-        );
-        assert_ne!(pet, owner, "pet guid is distinct from the owner");
-    }
-
-    #[test]
-    fn creature_owned_guardian_uses_the_pet_namespace_without_colliding() {
-        let owner = 0xF130_1234_5678_9ABC_u64;
-        let pet = pet_guid_for(owner);
-        assert_eq!(pet, (HIGHGUID_PET << 48) | 0x0000_1234_5678_9ABC);
-        assert_ne!(pet, owner);
-    }
 }

@@ -1,5 +1,6 @@
 //! Durable Hunter-pet identity and the wild-creature-to-live-pet transition.
 
+use lyracore_shared::pet::pet_guid_for;
 use spacetimedb::{table, ReducerContext, Table, TimeDuration, Timestamp};
 
 use crate::{
@@ -309,7 +310,7 @@ pub(crate) fn tame_creature(
     // spawn point that produced it. The live pet reaches the normal creature-create relay, including
     // summon fields and pet bar.
     let wild_guid = target.guid;
-    let pet_guid = super::pet_guid_for(caster.guid);
+    let pet_guid = pet_guid_for(caster.guid);
     let creature_entry = target.entry;
     let level = target.level;
     super::despawn_creature_entity(ctx, wild_guid);

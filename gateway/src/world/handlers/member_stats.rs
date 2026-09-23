@@ -6,17 +6,19 @@
 
 use super::super::*;
 use crate::codec::{
-    build_member_stats, build_member_status, member_status, stats_delta, GroupUpdateMask,
+    build_member_stats, build_member_status, full_update_mask, member_status, stats_delta,
     MemberEntity, MemberStats, MemberStatsPacket,
 };
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 /// Where one group member is, as the Gateway's Coordinator caches see it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum MemberPresence {
-    /// A live `game_world_entity` row on some World Shard.
-    Live(MemberStats),
+    /// A live `game_world_entity` row on some World Shard. Boxed: `MemberStats` carries a 32-slot
+    /// and a 16-slot aura array plus its pet's own copies, so an unboxed variant would triple the
+    /// size of every `MemberPresence`, most of which are `InTransit` or `Offline`.
+    Live(Box<MemberStats>),
     /// No live entity, but the member is between two places: a pending Transfer, or the loading
     /// screen of a map change. Reporting it offline would make the frame flicker.
     InTransit,
@@ -62,7 +64,9 @@ pub(crate) fn locate_member<S: MemberShardCache>(
     every_shard: impl FnOnce() -> Result<Vec<S>>,
 ) -> Result<MemberPresence> {
     if let Some(entity) = connected.iter().find_map(|shard| shard.member_entity(guid)) {
-        return Ok(MemberPresence::Live(MemberStats::from_entity(&entity)));
+        return Ok(MemberPresence::Live(Box::new(MemberStats::from_entity(
+            &entity,
+        ))));
     }
     if realm_transfer_pending()? {
         return Ok(MemberPresence::InTransit);
@@ -78,10 +82,11 @@ pub(crate) fn locate_member<S: MemberShardCache>(
 }
 
 /// What the Relay last sent one viewer about one group mate.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum MemberSnapshot {
     Offline,
-    Live(MemberStats),
+    /// Boxed for the same reason as [`MemberPresence::Live`].
+    Live(Box<MemberStats>),
 }
 
 /// What one World Session's client holds of each group mate's Member Stats.
@@ -147,15 +152,21 @@ pub(crate) fn member_stats_tick<St: MemberStatsStore + ?Sized>(
                 build_member_status(MemberStatsPacket::Changed, guid, member_status::OFFLINE)
             }
             Some(MemberPresence::Live(stats)) => {
-                let previous = match snapshots.insert(guid, MemberSnapshot::Live(stats)) {
+                let previous = match snapshots.insert(guid, MemberSnapshot::Live(stats.clone())) {
                     Some(MemberSnapshot::Live(previous)) => Some(previous),
                     Some(MemberSnapshot::Offline) | None => None,
                 };
-                let mask = stats_delta(previous.as_ref(), &stats);
+                let mask = stats_delta(previous.as_deref(), &stats);
                 if mask.is_empty() {
                     continue;
                 }
-                build_member_stats(MemberStatsPacket::Changed, guid, mask, &stats)
+                build_member_stats(
+                    MemberStatsPacket::Changed,
+                    guid,
+                    mask,
+                    previous.as_deref(),
+                    &stats,
+                )
             }
         };
         outbound.push(Outbound::Raw { opcode, body });
@@ -231,7 +242,8 @@ fn full_answer<St: MemberStatsStore + ?Sized>(
     }
     Ok(match store.member_presence(guid)? {
         MemberPresence::Live(stats) => {
-            build_member_stats(packet, guid, GroupUpdateMask::MEMBER, &stats)
+            let mask = full_update_mask(&stats);
+            build_member_stats(packet, guid, mask, None, &stats)
         }
         MemberPresence::InTransit => build_member_status(
             packet,
@@ -249,7 +261,7 @@ mod tests {
     const MATE: u64 = 9;
 
     /// One World Shard's cache: a live entity, a Character between two places, or neither.
-    #[derive(Clone, Copy, Default)]
+    #[derive(Clone, Default)]
     struct Shard {
         entity: Option<MemberEntity>,
         between_places: bool,
@@ -257,7 +269,7 @@ mod tests {
 
     impl MemberShardCache for Shard {
         fn member_entity(&self, guid: u64) -> Option<MemberEntity> {
-            self.entity.filter(|_| guid == MATE)
+            self.entity.clone().filter(|_| guid == MATE)
         }
 
         fn member_between_places(&self, guid: u64) -> bool {
@@ -278,6 +290,8 @@ mod tests {
             y: 0.0,
             dead: false,
             player_flags: 0,
+            auras: Vec::new(),
+            pet: None,
         }),
         between_places: false,
     };

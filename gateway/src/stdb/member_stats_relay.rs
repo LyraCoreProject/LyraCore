@@ -91,11 +91,11 @@ mod tests {
         }
 
         fn member_presence(&self, _guid: u64) -> Result<MemberPresence> {
-            Ok(MemberPresence::Live(MemberStats {
+            Ok(MemberPresence::Live(Box::new(MemberStats {
                 status: 1,
                 current_health: 100,
                 ..MemberStats::default()
-            }))
+            })))
         }
     }
 

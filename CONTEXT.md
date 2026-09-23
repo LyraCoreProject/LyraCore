@@ -305,9 +305,9 @@ and every Raid Slot. A World Shard keeps the last accepted value after disband. 
 cannot change its party mirror.
 
 **Member Stats**:
-The status, health, power, level, zone, map position and auras a group member's frame shows for
-another member. The Gateway projects them from the Home Shard's cache and sends them only while the
-member is outside the viewer's AOI.
+The status, health, power, level, zone, map position, auras, and live pet a group member's frame
+shows for another member. The Gateway projects them from the Home Shard's cache and sends them
+only while the member is outside the viewer's AOI.
 _Avoid_: party stats, unit frame data
 
 **Recovery Scan**:
