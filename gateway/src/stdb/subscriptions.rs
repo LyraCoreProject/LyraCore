@@ -6446,6 +6446,34 @@ mod tests {
         assert!(scanned.contains("\"/* quoted label */\""));
     }
 
+    /// World entry seeds the viewer's ignore set from its own contact rows on this Home Shard. No
+    /// Fake reaches this Coordinator method, so the seed is pinned in source. Without it the set
+    /// stays empty until the first live contact change, and ignorable Realm Chat Lines reach the
+    /// Characters who ignore their speaker.
+    #[test]
+    fn the_viewer_is_seeded_with_its_own_ignore_list() {
+        let body = crate::test_scan::code_of(
+            include_str!("subscriptions.rs"),
+            "pub fn subscribe_player_events(",
+        );
+        let body: String = body.split_whitespace().collect();
+        assert!(
+            body.contains(
+                "letignored:HashSet<u64>=self.contact_lists(self_guid)?.1.into_iter().collect();"
+            ),
+            "world entry no longer reads the viewer's own ignore list"
+        );
+        assert!(
+            body.contains("ignored:Mutex::new(ignored),"),
+            "the viewer is no longer constructed with the ignore list world entry read"
+        );
+        assert_eq!(
+            body.matches("letignored").count(),
+            1,
+            "a second `ignored` binding can shadow the seed"
+        );
+    }
+
     /// The call-site tripwire for the shared-view `Viewer`'s construction.
     ///
     /// The session's `Viewer` must hold the same dedup/gate state prepared during world entry.
