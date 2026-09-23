@@ -50,6 +50,7 @@ fn viewer(session: SessionId, self_guid: u64, tx: SessionTx) -> Arc<Viewer> {
         explored: Mutex::new(ExplorationReplay::default()),
         motion_pending: Arc::new(MotionPending::default()),
         member_stats: Default::default(),
+        ignored: Mutex::default(),
     })
 }
 

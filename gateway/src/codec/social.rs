@@ -220,22 +220,48 @@ pub fn build_whisper(other_guid: u64, is_inform: bool, message: String) -> SMSG_
     }
 }
 
-/// Build `SMSG_MESSAGECHAT` for a party (`/p`) line — `ChatType::Party` is
-/// byte-identical to `Say`'s shape (both `chat_credit`/`speech_bubble_credit` carry the SPEAKER),
-/// so every recipient (including the speaker's own echo row) gets the exact same packet. Always
-/// Universal + no tag: like whispers (`build_whisper`), party lines aren't proximity/language-
-/// filtered — the module's `party_chat` reducer takes no `language` argument at all.
-pub fn build_party_chat(sender_guid: u64, message: String) -> SMSG_MESSAGECHAT {
-    let sender = Guid::new(sender_guid);
-    SMSG_MESSAGECHAT {
-        chat_type: SMSG_MESSAGECHAT_ChatType::Party {
-            chat_credit: sender,
-            speech_bubble_credit: sender,
+/// Build the `SMSG_MESSAGECHAT` for one Realm Chat Line. Covers every Chat Kind in
+/// `lyracore_shared::chat::chat_kind`, so a new audience family never edits the codec. PARTY names
+/// the speaker in both credit fields, CHANNEL carries the channel name with rank 0, and the other
+/// kinds carry one guid. An unknown language goes out as Universal. `None` for an unknown kind.
+pub fn build_realm_chat_line(
+    kind: u8,
+    speaker_guid: u64,
+    language: u32,
+    chat_tag: u8,
+    channel_name: String,
+    message: String,
+) -> Option<SMSG_MESSAGECHAT> {
+    use lyracore_shared::chat::chat_kind;
+    let sender2 = Guid::new(speaker_guid);
+    let chat_type = match kind {
+        chat_kind::PARTY => SMSG_MESSAGECHAT_ChatType::Party {
+            chat_credit: sender2,
+            speech_bubble_credit: sender2,
         },
-        language: Language::Universal,
+        chat_kind::CHANNEL => SMSG_MESSAGECHAT_ChatType::Channel {
+            channel_name,
+            player: sender2,
+            player_rank: 0,
+        },
+        chat_kind::RAID => SMSG_MESSAGECHAT_ChatType::Raid { sender2 },
+        chat_kind::GUILD => SMSG_MESSAGECHAT_ChatType::Guild { sender2 },
+        chat_kind::OFFICER => SMSG_MESSAGECHAT_ChatType::Officer { sender2 },
+        chat_kind::WHISPER => SMSG_MESSAGECHAT_ChatType::Whisper { sender2 },
+        chat_kind::WHISPER_INFORM => SMSG_MESSAGECHAT_ChatType::WhisperInform { sender2 },
+        chat_kind::AFK => SMSG_MESSAGECHAT_ChatType::Afk { sender2 },
+        chat_kind::DND => SMSG_MESSAGECHAT_ChatType::Dnd { sender2 },
+        chat_kind::IGNORED => SMSG_MESSAGECHAT_ChatType::Ignored { sender2 },
+        chat_kind::RAID_LEADER => SMSG_MESSAGECHAT_ChatType::RaidLeader { sender2 },
+        chat_kind::RAID_WARNING => SMSG_MESSAGECHAT_ChatType::RaidWarning { sender2 },
+        _ => return None,
+    };
+    Some(SMSG_MESSAGECHAT {
+        chat_type,
+        language: Language::try_from(language).unwrap_or(Language::Universal),
         message,
-        tag: PlayerChatTag::None,
-    }
+        tag: PlayerChatTag::try_from(chat_tag).unwrap_or(PlayerChatTag::None),
+    })
 }
 
 /// Build `SMSG_MESSAGECHAT` System — a self-only server line (the GM dot-command
@@ -439,31 +465,107 @@ mod tests {
         }
     }
 
-    #[test]
-    fn party_chat_carries_sender_in_both_credit_fields_and_serializes() {
-        // `ChatType::Party` mirrors Say's shape exactly (chat_credit AND
-        // speech_bubble_credit both = the speaker) — pin it so a future gtker bump can't silently
-        // reorder/drop a field without this test catching it.
-        let m = build_party_chat(42, "form up".into());
-        match &m.chat_type {
-            SMSG_MESSAGECHAT_ChatType::Party {
-                chat_credit,
-                speech_bubble_credit,
-            } => {
-                assert_eq!(chat_credit.guid(), 42);
-                assert_eq!(speech_bubble_credit.guid(), 42);
-            }
-            other => panic!("expected Party, got {other:?}"),
+    fn read_back(message: &SMSG_MESSAGECHAT) -> SMSG_MESSAGECHAT {
+        use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+        let mut wire = Vec::new();
+        message.write_unencrypted_server(&mut wire).unwrap();
+        match ServerOpcodeMessage::read_unencrypted(&mut wire.as_slice()).unwrap() {
+            ServerOpcodeMessage::SMSG_MESSAGECHAT(read) => *read,
+            other => panic!("expected SMSG_MESSAGECHAT, got {other}"),
         }
-        assert_eq!(m.message, "form up");
+    }
+
+    /// Every Chat Kind, written out from the 1.12 `SMSG_MESSAGECHAT` layout
+    /// (cm:Chat.cpp:3616-3669): the wire value, then the variant the vanilla reader must decode.
+    #[test]
+    fn every_realm_chat_kind_round_trips_through_the_vanilla_reader() {
+        let speaker = Guid::new(42);
+        let cases = [
+            (
+                0x01,
+                SMSG_MESSAGECHAT_ChatType::Party {
+                    chat_credit: speaker,
+                    speech_bubble_credit: speaker,
+                },
+            ),
+            (0x02, SMSG_MESSAGECHAT_ChatType::Raid { sender2: speaker }),
+            (0x03, SMSG_MESSAGECHAT_ChatType::Guild { sender2: speaker }),
+            (
+                0x04,
+                SMSG_MESSAGECHAT_ChatType::Officer { sender2: speaker },
+            ),
+            (
+                0x06,
+                SMSG_MESSAGECHAT_ChatType::Whisper { sender2: speaker },
+            ),
+            (
+                0x07,
+                SMSG_MESSAGECHAT_ChatType::WhisperInform { sender2: speaker },
+            ),
+            (
+                0x0E,
+                SMSG_MESSAGECHAT_ChatType::Channel {
+                    channel_name: "Trade - City".to_string(),
+                    player: speaker,
+                    player_rank: 0,
+                },
+            ),
+            (0x14, SMSG_MESSAGECHAT_ChatType::Afk { sender2: speaker }),
+            (0x15, SMSG_MESSAGECHAT_ChatType::Dnd { sender2: speaker }),
+            (
+                0x16,
+                SMSG_MESSAGECHAT_ChatType::Ignored { sender2: speaker },
+            ),
+            (
+                0x57,
+                SMSG_MESSAGECHAT_ChatType::RaidLeader { sender2: speaker },
+            ),
+            (
+                0x58,
+                SMSG_MESSAGECHAT_ChatType::RaidWarning { sender2: speaker },
+            ),
+        ];
+        for (kind, chat_type) in cases {
+            let line = build_realm_chat_line(
+                kind,
+                42,
+                6,
+                2,
+                "Trade - City".to_string(),
+                "form up".to_string(),
+            )
+            .unwrap_or_else(|| panic!("kind {kind:#x} has no packet"));
+            let expected = SMSG_MESSAGECHAT {
+                chat_type,
+                language: Language::Dwarvish,
+                message: "form up".to_string(),
+                tag: PlayerChatTag::Dnd,
+            };
+            assert_eq!(line, expected, "kind {kind:#x}");
+            assert_eq!(read_back(&line), expected, "kind {kind:#x} on the wire");
+        }
+    }
+
+    #[test]
+    fn an_unknown_kind_has_no_packet_and_an_unknown_language_is_universal() {
         assert_eq!(
-            m.language,
-            Language::Universal,
-            "party lines are never language-filtered"
+            build_realm_chat_line(0x00, 42, 0, 0, String::new(), "x".into()),
+            None,
+            "say is proximity chat, never a Realm Chat Line"
         );
-        let mut buf = Vec::new();
-        m.write_unencrypted_server(&mut buf).unwrap();
-        assert!(!buf.is_empty());
+        assert_eq!(
+            build_realm_chat_line(0xFF, 42, 0, 0, String::new(), "x".into()),
+            None
+        );
+        let line = build_realm_chat_line(0x01, 42, 250, 9, String::new(), "x".into()).unwrap();
+        assert_eq!(line.language, Language::Universal);
+        assert_eq!(line.tag, PlayerChatTag::None);
+        assert_eq!(
+            build_realm_chat_line(0x01, 42, 0xFFFF_FFFF, 1, String::new(), "x".into())
+                .unwrap()
+                .language,
+            Language::Addon
+        );
     }
 
     #[test]

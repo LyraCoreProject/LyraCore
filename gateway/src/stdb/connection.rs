@@ -1077,6 +1077,9 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         "SELECT * FROM game_group_event",
         "SELECT * FROM game_trade_event",
         "SELECT * FROM game_duel_event",
+        // Realm Chat Lines carry their whole audience. Only Realm-core writes them; every
+        // database subscribes so an unsharded Realm hears them on its one connection.
+        "SELECT * FROM game_realm_chat_event",
         // Server-wide tunables. The gateway reads ONE column: `hosts_instances`, at
         // startup, to answer "when this realm creates a dungeon instance, will anything actually
         // spawn its population" (`ShardMap::check_instance_hosting`). Before this subscription the

@@ -360,6 +360,9 @@ mod professions;
 #[cfg(test)]
 mod publish_safety;
 mod quest;
+/// Realm Chat: party chat and every later non-proximity Chat Kind, one row per line with its whole
+/// audience, written on Realm-core.
+mod realm_chat;
 mod realm_core;
 mod region;
 mod reputation;
@@ -435,6 +438,8 @@ pub use mail::Mail; // re-exported for the gateway schema-parity test
 pub use mail_escrow::MailEscrow; // re-exported for the gateway schema-parity test
 pub use motion::*;
 pub use quest::*;
+// Named, not globbed: the `realm_chat` reducer's generated type would shadow the module name.
+pub use realm_chat::RealmChatEvent; // re-exported for the gateway schema-parity test
 pub use realm_core::*;
 pub use region::*;
 pub use reputation::*;

@@ -64,9 +64,9 @@ pub fn quest_xp(reward_money_max_level: u32) -> u32 {
 }
 
 /// Work-item 194 (sharing): kinds carried in `game_group_event.kind` for `push_quest_to_party`'s
-/// notifications. Reserved slots `10..=11` — the next free range after
-/// `crate::group::event_kind::PARTY_CHAT` (9); see that module's doc for the full reserved-range
-/// bookkeeping (loot-roll kinds `4..=8` live in the sibling `crate::loot_roll` file).
+/// notifications. Reserved slots `10..=11`; kind 9 is retired party chat and never reused. See
+/// `crate::group::event_kind` for the full reserved-range bookkeeping (loot-roll kinds `4..=8` live
+/// in the sibling `crate::loot_roll` file).
 pub mod share_event_kind {
     /// An eligible party member receives the shared quest → the gateway relay opens
     /// `SMSG_QUESTGIVER_QUEST_DETAILS` for it (the sharer as "giver" — see module `GiverKind::Party`).
@@ -197,11 +197,10 @@ mod tests {
 
     // ---- Sharing (work-item 194): share_event_kind distinctness + share_result priority ----
 
-    /// `QUEST_SHARE`/`QUEST_PUSH_RESULT` (10/11) are the next free slots after
-    /// `crate::group::event_kind::PARTY_CHAT` (9) and every loot-roll kind (4..=8) — widens the
-    /// all-group-event-kinds distinctness pin from `0..=9` (loot_roll.rs) to `0..=11`.
+    /// `QUEST_SHARE`/`QUEST_PUSH_RESULT` (10/11) follow every loot-roll kind (4..=8) and skip kind
+    /// 9, retired party chat, which nothing may reuse.
     #[test]
-    fn share_event_kinds_are_distinct_and_widen_the_range_to_11() {
+    fn share_event_kinds_are_distinct_and_skip_retired_kind_9() {
         use crate::group::event_kind as g;
         use crate::loot_roll::event_kind as roll;
         let mut kinds = vec![
@@ -214,14 +213,13 @@ mod tests {
             roll::ROLL_WON,
             roll::MASTER_LIST,
             roll::MONEY_SHARE,
-            g::PARTY_CHAT,
             share_event_kind::QUEST_SHARE,
             share_event_kind::QUEST_PUSH_RESULT,
         ];
         kinds.sort_unstable();
         kinds.dedup();
-        assert_eq!(kinds, (0u8..=11).collect::<Vec<u8>>());
-        assert_eq!(share_event_kind::QUEST_SHARE, g::PARTY_CHAT + 1);
+        assert_eq!(kinds, [0u8, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11]);
+        assert_eq!(share_event_kind::QUEST_SHARE, 10);
         assert_eq!(
             share_event_kind::QUEST_PUSH_RESULT,
             share_event_kind::QUEST_SHARE + 1

@@ -4,53 +4,58 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::realm_chat_request_type::RealmChatRequest;
 use super::session_actor_type::SessionActor;
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
-pub(super) struct GwPartyChatArgs {
+pub(super) struct RealmChatArgs {
     pub request_actor: SessionActor,
-    pub text: String,
+    pub request: RealmChatRequest,
 }
 
-impl From<GwPartyChatArgs> for super::Reducer {
-    fn from(args: GwPartyChatArgs) -> Self {
-        Self::GwPartyChat {
+impl From<RealmChatArgs> for super::Reducer {
+    fn from(args: RealmChatArgs) -> Self {
+        Self::RealmChat {
             request_actor: args.request_actor,
-            text: args.text,
+            request: args.request,
         }
     }
 }
 
-impl __sdk::InModule for GwPartyChatArgs {
+impl __sdk::InModule for RealmChatArgs {
     type Module = super::RemoteModule;
 }
 
 #[allow(non_camel_case_types)]
-/// Extension trait for access to the reducer `gw_party_chat`.
+/// Extension trait for access to the reducer `realm_chat`.
 ///
 /// Implemented for [`super::RemoteReducers`].
-pub trait gw_party_chat {
-    /// Request that the remote module invoke the reducer `gw_party_chat` to run as soon as possible.
+pub trait realm_chat {
+    /// Request that the remote module invoke the reducer `realm_chat` to run as soon as possible.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
-    /// /// Use [`gw_party_chat:gw_party_chat_then`] to run a callback after the reducer completes.
-    fn gw_party_chat(&self, request_actor: SessionActor, text: String) -> __sdk::Result<()> {
-        self.gw_party_chat_then(request_actor, text, |_, _| {})
+    /// /// Use [`realm_chat:realm_chat_then`] to run a callback after the reducer completes.
+    fn realm_chat(
+        &self,
+        request_actor: SessionActor,
+        request: RealmChatRequest,
+    ) -> __sdk::Result<()> {
+        self.realm_chat_then(request_actor, request, |_, _| {})
     }
 
-    /// Request that the remote module invoke the reducer `gw_party_chat` to run as soon as possible,
+    /// Request that the remote module invoke the reducer `realm_chat` to run as soon as possible,
     /// registering `callback` to run when we are notified that the reducer completed.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and its status can be observed with the `callback`.
-    fn gw_party_chat_then(
+    fn realm_chat_then(
         &self,
         request_actor: SessionActor,
-        text: String,
+        request: RealmChatRequest,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -58,20 +63,20 @@ pub trait gw_party_chat {
     ) -> __sdk::Result<()>;
 }
 
-impl gw_party_chat for super::RemoteReducers {
-    fn gw_party_chat_then(
+impl realm_chat for super::RemoteReducers {
+    fn realm_chat_then(
         &self,
         request_actor: SessionActor,
-        text: String,
+        request: RealmChatRequest,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
-            GwPartyChatArgs {
+            RealmChatArgs {
                 request_actor,
-                text,
+                request,
             },
             callback,
         )

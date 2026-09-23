@@ -317,11 +317,11 @@ mod tests {
         assert_eq!(event_kind::MONEY_SHARE, event_kind::MASTER_LIST + 1);
     }
 
-    /// Work-item 199: every group-membership kind (0-3), loot-roll/money-share kind (4-8), and the
-    /// party-chat kind (9) is pairwise distinct — a future renumber that silently collides two kinds
-    /// would corrupt the relay (the gateway match would resolve the wrong SMSG for a row).
+    /// Every group-membership kind (0-3) and loot-roll/money-share kind (4-8) is pairwise distinct.
+    /// A renumber that silently collides two kinds would corrupt the relay (the gateway match would
+    /// resolve the wrong SMSG for a row).
     #[test]
-    fn all_group_and_loot_event_kinds_are_distinct_0_through_9() {
+    fn all_group_and_loot_event_kinds_are_distinct_0_through_8() {
         use crate::group::event_kind as g;
         let mut kinds = vec![
             g::INVITE,
@@ -333,11 +333,10 @@ mod tests {
             event_kind::ROLL_WON,
             event_kind::MASTER_LIST,
             event_kind::MONEY_SHARE,
-            g::PARTY_CHAT,
         ];
         kinds.sort_unstable();
         kinds.dedup();
-        assert_eq!(kinds, (0u8..=9).collect::<Vec<u8>>());
+        assert_eq!(kinds, (0u8..=8).collect::<Vec<u8>>());
     }
 
     #[test]

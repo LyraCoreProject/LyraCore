@@ -23,7 +23,7 @@
 //!    across a shard boundary is not a special case — it is the only case.
 //! 2. **Each world shard** keeps a MIRROR of the roster, refreshed by [`sync_mirrors`] after every op
 //!    and by [`on_world_entry`] when a character arrives. It exists because ~fifty in-world reads
-//!    (kill-XP split, quest credit, loot rules, `/p` chat, the party's dungeon binding) resolve
+//!    (kill-XP split, quest credit, loot rules, the party's dungeon binding) resolve
 //!    membership locally on the hot path and must not become cross-database calls. Same relationship
 //!    `game_account`/`game_session` have had with realm-core from the start.
 //! 3. **A single-database gateway** has no realm-core to route to ([`WorldStore::realm_store`]
@@ -34,9 +34,9 @@
 //! # What did NOT move
 //!
 //! `/say`-range chat, `/yell` and targeted emotes stay on the world shards as AOI-scoped events:
-//! they ARE spatial, which is the same rule that moved membership off them. Party (`/p`) chat still
-//! rides the shard's own `game_group_event` relay against the local mirror — non-proximity chat is a
-//! later slice of realm-core's social & economy work, and this one deliberately does not touch it.
+//! they ARE spatial, which is the same rule that moved membership off them. Party (`/p`) chat is a
+//! Realm Chat Line: Realm-core reads its own membership in the transaction that writes the line, so
+//! the mirror plays no part in who hears it.
 
 use anyhow::Result;
 
@@ -1251,7 +1251,7 @@ pub(crate) fn sync_arrival_mirror<St: WorldStore + ?Sized>(
     // has them in is the ONE staleness "re-syncs on the next op or world entry" does not cover by
     // itself: with no roster to push there was nothing to overwrite it with, and the ops of the party
     // they left never name them again — so the stale membership row survived every arrival, forever.
-    // The shard then runs that character's kill-XP split, quest credit, loot rules, `/p` chat and
+    // The shard then runs that character's kill-XP split, quest credit, loot rules and
     // dungeon binding against a party they are not in. Re-push the AUTHORITY's version of the group
     // the mirror thinks they are in (a tombstone if it is gone) — the same repair `sync_mirrors`
     // applies to the group an actor was in BEFORE an op.

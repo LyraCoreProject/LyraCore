@@ -984,15 +984,6 @@ impl WorldStore for Coordinator {
         self.send_whisper(account_id, self_guid, target_player, message)
     }
 
-    fn party_chat(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        message: String,
-    ) -> Result<crate::world::party::PartyOutcome> {
-        self.party_chat(account_id, self_guid, message)
-    }
-
     fn gm_command(&self, account_name: &str, self_guid: u64, text: String) -> Result<()> {
         self.gm_command(account_name, self_guid, text)
     }

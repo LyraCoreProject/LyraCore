@@ -282,12 +282,10 @@ pub(crate) fn handle_query<St: WorldStore + ?Sized>(
         }
         // Social tier: say/yell -> send_chat (insert a broadcast game_chat_event the gateway fans back
         // as SMSG_MESSAGECHAT on every connection's subscription); whisper -> send_whisper (private,
-        // per-recipient); party -> party_chat (per-recipient, RLS-scoped to the
-        // caller's CURRENT group). Guild/channel still need systems that don't exist yet and are
-        // dropped. No reply on say/yell/party success (the speaker sees their own line via the
-        // relay — party echoes back through the SAME per-recipient event a real member would get); a
-        // rejected say/yell/whisper-target line is silently dropped, matching vanilla; a rejected
-        // party line replies only for "not in a group" (see the Party arm below).
+        // per-recipient). Party chat never reaches this arm: `dispatch_chat_action` consumes it as a
+        // Realm Chat Line. Guild still needs a system that doesn't exist yet and is dropped. No reply
+        // on say/yell success (the speaker sees their own line via the relay); a rejected
+        // say/yell/whisper-target line is silently dropped, matching vanilla.
         //
         // GM playtest dot-commands: a Say line starting with `.` diverts BEFORE
         // `send_chat` — never broadcast, never inserted as a `game_chat_event` row — straight to the
@@ -361,33 +359,6 @@ pub(crate) fn handle_query<St: WorldStore + ?Sized>(
                                 }),
                             )),
                         )?;
-                    }
-                }
-                // Party (`/p`): routes to the caller's CURRENT group members via
-                // `party_chat` (the module validates membership + bounds; the gateway never reads
-                // group state itself). Not in a group → the standard `SMSG_PARTY_COMMAND_RESULT`
-                // "You aren't in a party" line (the SAME mapping `group_leave`/`group_uninvite`
-                // already use for this exact reducer error — see `social::party_result_for`'s
-                // needle list). Any OTHER rejection (not in world / empty message) is silently
-                // dropped, matching say/yell — the client never sends an empty line anyway.
-                CMSG_MESSAGECHAT_ChatType::Party => {
-                    // Speaking from no party is the one refusal vanilla answers. Every other
-                    // refusal, and a failed call, drop like a rejected say or yell line.
-                    match store.party_chat(conn.account_id, self_guid, message) {
-                        Ok(crate::world::party::PartyOutcome::Refused(
-                            lyracore_shared::group::GroupRefusal::NotInGroup,
-                        )) => send(
-                            tx,
-                            Outbound::One(ServerOpcodeMessage::SMSG_PARTY_COMMAND_RESULT(
-                                Box::new(codec::build_party_command_result(
-                                    PartyOperation::Leave,
-                                    String::new(),
-                                    PartyResult::NotInGroup,
-                                )),
-                            )),
-                        )?,
-                        Ok(_) => {}
-                        Err(e) => log::debug!("world: party chat dropped: {e:#}"),
                     }
                 }
                 _ => {} // guild/channel/etc. need systems that don't exist yet

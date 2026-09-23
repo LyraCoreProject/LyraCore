@@ -49,22 +49,23 @@ pub mod whisper;
 use coalesce::CoalesceState;
 use handlers::{
     decode_auction_browse, dispatch_auction_action, dispatch_auction_browse_action, dispatch_cast,
-    dispatch_duel_action, dispatch_item_action, dispatch_loot_window, dispatch_melee_action,
-    dispatch_member_stats, dispatch_quest_action, dispatch_taxi_action, dispatch_vendor_action,
-    handle_bank, handle_char, handle_combat, handle_loot, handle_mail, handle_query, handle_trade,
-    handle_trainer, quest_giver_menu, queue_reply_then_arm, AuctionActionOutcome,
-    AuctionActionPlayer, CastOutcome, CastPlayer, CastTransition, DuelActionOutcome,
-    DuelActionPlayer, ItemActionOutcome, ItemActionPlayer, LootWindowOutcome, LootWindowPlayer,
-    MeleeActionOutcome, MeleeActionPlayer, MemberStatsOutcome, MemberStatsPlayer, OpenLootState,
+    dispatch_chat_action, dispatch_duel_action, dispatch_item_action, dispatch_loot_window,
+    dispatch_melee_action, dispatch_member_stats, dispatch_quest_action, dispatch_taxi_action,
+    dispatch_vendor_action, handle_bank, handle_char, handle_combat, handle_loot, handle_mail,
+    handle_query, handle_trade, handle_trainer, quest_giver_menu, queue_reply_then_arm,
+    AuctionActionOutcome, AuctionActionPlayer, CastOutcome, CastPlayer, CastTransition,
+    ChatActionOutcome, ChatActionPlayer, DuelActionOutcome, DuelActionPlayer, ItemActionOutcome,
+    ItemActionPlayer, LootWindowOutcome, LootWindowPlayer, MeleeActionOutcome, MeleeActionPlayer,
+    MemberStatsOutcome, MemberStatsPlayer, OpenLootState,
     QuestActionOutcome, QuestActionPlayer, TaxiActionOutcome, TaxiActionPlayer,
     VendorActionOutcome, VendorActionPlayer, CMSG_AUCTION_LIST_ITEMS_OPCODE,
 };
 pub(crate) use handlers::{
     locate_member, member_stats_tick, zone_weather_message, AuctionBrowseRequest, AuctionPage,
-    AuctionQuery, CreateAuctionOutcome, CreateAuctionRequest, ItemActionResult, LootActionStatus,
-    LootWindowRefusal, LootWindowRequestStatus, MemberPresence, MemberShardCache,
-    MemberStatsRecord, MemberStatsStore, PlaceBidOutcome, PlaceBidRequest, TrainerBuyOutcome,
-    WeatherStore,
+    AuctionQuery, ChatOutcome, CreateAuctionOutcome, CreateAuctionRequest, ItemActionResult,
+    LootActionStatus, LootWindowRefusal, LootWindowRequestStatus, MemberPresence,
+    MemberShardCache, MemberStatsRecord, MemberStatsStore, PlaceBidOutcome, PlaceBidRequest,
+    RealmChatRequest, TrainerBuyOutcome, WeatherStore,
 };
 use login_queue::{Admission, LoginQueue};
 use social::handle_social;
@@ -1419,6 +1420,22 @@ fn dispatch<St: WorldStore + ?Sized>(
             return Ok(());
         }
         DuelActionOutcome::PassThrough(msg) => msg,
+    };
+    let msg = match dispatch_chat_action(
+        store,
+        ChatActionPlayer {
+            account_id: conn.account_id,
+            self_guid: social::self_guid(conn),
+        },
+        msg,
+    )? {
+        ChatActionOutcome::Handled { outbound } => {
+            for message in outbound {
+                send(tx, message)?;
+            }
+            return Ok(());
+        }
+        ChatActionOutcome::PassThrough(msg) => msg,
     };
     let Some(msg) = handle_query(tx, store, conn, msg)? else {
         return Ok(());

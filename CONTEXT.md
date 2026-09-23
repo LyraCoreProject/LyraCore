@@ -325,6 +325,21 @@ _Avoid_: escrow swap
 The 7th trade-window slot. Its item is shown to the other party but never included in the Trade Commit.
 _Avoid_: enchant slot
 
+### Chat
+
+**Realm Chat Line**:
+One non-proximity chat message committed on Realm-core with its complete recipient list. One Relay
+delivers it to each recipient's World Session on any Shard.
+_Avoid_: chat event (unqualified), broadcast
+
+**Chat Kind**:
+The 1.12 `ChatMsg` wire value that names a Realm Chat Line's packet and its audience rule.
+_Avoid_: chat type (in new names)
+
+**Speaker Facts**:
+The speaker's race and chat tag, read by the Gateway on the Home Shard and conveyed in the Durable
+Request. Realm-core holds no Characters.
+
 ### Loot
 
 **Loot Tag**:

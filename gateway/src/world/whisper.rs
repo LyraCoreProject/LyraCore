@@ -60,7 +60,7 @@
 //!
 //! `/say`, `/yell` and targeted emotes stay shard-local and range-scoped: they are spatial by nature,
 //! which is the same partition rule that moved a whisper — which is not — off the shards. `/p` chat
-//! also stays, riding the shard's own `game_group_event` relay against the local mirror.
+//! moved to Realm-core as a Realm Chat Line (`handlers::chat`).
 
 use anyhow::Result;
 

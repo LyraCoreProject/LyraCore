@@ -1,16 +1,13 @@
-//! Social tier — world chat (Say/Yell) + emotes (`/dance`, `/wave`, …) + party chat (`/p`). A
-//! player's `CMSG_MESSAGECHAT` or `CMSG_TEXT_EMOTE` becomes a per-recipient or broadcast event row
-//! that the gateway fans to clients as `SMSG_MESSAGECHAT` / `SMSG_TEXT_EMOTE` (+ `SMSG_EMOTE`
-//! animation), mirroring the creature-move / combat broadcast relays. Purely additive: new tables +
-//! reducers, reaped by the shared event GC. Range filtering (say ~25yd, yell ~300yd) and targeted
-//! emotes ("waves at X") are later refinements — today say/yell broadcast like the other event
-//! relays (single starting zone). Party chat (work-item 199) is NOT proximity-based — it rides the
-//! group system's per-recipient `game_group_event` relay (`crate::group`), not a broadcast. [event]
+//! Social tier: say, yell, emotes (`/dance`, `/wave`, …), channels, whispers, contacts and
+//! `/roll`. A player's `CMSG_MESSAGECHAT` or `CMSG_TEXT_EMOTE` becomes a per-recipient or broadcast
+//! event row that the Gateway turns into `SMSG_MESSAGECHAT` / `SMSG_TEXT_EMOTE` (+ `SMSG_EMOTE`
+//! animation). Say and yell rows carry no range: the Gateway scopes them to the speaker's
+//! surroundings when it relays them. Party chat is not here. It is a Realm Chat Line
+//! (`crate::realm_chat`), committed on Realm-core with its whole audience. [event]
 
 use spacetimedb::{reducer, table, Identity, ReducerContext, Table, Timestamp};
 
 use crate::game_character;
-use lyracore_shared::group::{event_kind as group_event_kind, GroupRefusal};
 use lyracore_shared::social::ContactRefusal;
 
 // `game_character_contact` is defined further down in THIS module — its `#[table]` accessor
@@ -18,10 +15,8 @@ use lyracore_shared::social::ContactRefusal;
 // `use`. Re-exported implicitly like `game_whisper_event` above.
 
 /// `game_chat_event.chat_type` discriminants for the broadcast chat types this table carries.
-/// Whisper and party (work-item 199) are NOT `game_chat_event` rows at all — whisper rides
-/// `game_whisper_event`, party rides `game_group_event` (`party_chat` below) — each has its own
-/// per-recipient shape that doesn't fit this broadcast table's `chat_type` byte. Guild/channel still
-/// need systems that don't exist yet, so they're rejected.
+/// Whisper and party are not `game_chat_event` rows: whisper rides `game_whisper_event` and party
+/// rides `game_realm_chat_event`, each with a per-recipient shape this broadcast table cannot hold.
 pub const CHAT_SAY: u8 = 0;
 pub const CHAT_YELL: u8 = 1;
 /// Creature-authored text emote (`CHAT_TYPE_TEXT_EMOTE` on the source wire). It uses the same
@@ -558,81 +553,6 @@ fn push_whisper(
 }
 
 // ===========================================================================================
-//  Party chat [event] — work-item 199, RLS-scoped to CURRENT group members (the game_group_event
-//  pattern), NOT proximity-based
-// ===========================================================================================
-
-/// `/p` (`CMSG_MESSAGECHAT` Party): deliver `text` to every OTHER member of the caller's group, plus
-/// an echo to the caller — vanilla server-echoes the speaker's own party line back to them (unlike
-/// say/yell's broadcast, where the speaker hears their own line via the SAME row every observer
-/// gets; a per-recipient relay needs its own explicit echo row, exactly like `send_whisper` above).
-/// Rides the group system's existing per-recipient `game_group_event` relay
-/// (`kind = group_event_kind::PARTY_CHAT`) instead of a new gateway-subscribed table — identical
-/// shape (one recipient, RLS-scoped by identity, a small payload) to every other kind that table
-/// already carries (INVITE/LIST/DECLINE/DESTROYED, the work-item 187 roll/master-loot/money-share
-/// kinds). Bounds-checked identically to `send_chat` (trim + [`MAX_CHAT_LEN`]-cap, empty rejected).
-/// The caller must currently be in a group — `send_whisper`'s "no such/offline target" analog here
-/// is [`GroupRefusal::NotInGroup`], the SAME shared-contract Refusal `group_leave`/`group_uninvite`
-/// already return for this exact condition, which the gateway maps to
-/// `SMSG_PARTY_COMMAND_RESULT(NotInGroup)` — the standard "You aren't in a party" line.
-/// Unlike `send_chat`, this core takes no `language` argument: like whispers, party lines aren't
-/// language-filtered (always Universal on the wire), so there is nothing to thread through.
-///
-/// The party-chat core, actor-explicit — same split as [`apply_send_chat`].
-pub(crate) fn apply_party_chat(
-    ctx: &ReducerContext,
-    sender: crate::WorldEntity,
-    text: String,
-) -> Result<(), String> {
-    let message = normalized_message(&text).ok_or_else(|| "empty message".to_string())?;
-    let membership = crate::group::group_of(ctx, sender.guid).ok_or_else(|| {
-        crate::group::refused(
-            GroupRefusal::NotInGroup,
-            &format!("{} spoke on /p from no party", sender.guid),
-        )
-    })?;
-    let payload = lyracore_shared::group::encode_party_chat(&message);
-    let member_guids: Vec<u64> = crate::group::members_of(ctx, membership.group_id)
-        .into_iter()
-        .map(|m| m.character_guid)
-        .collect();
-    for other in party_chat_other_recipients(sender.guid, &member_guids) {
-        crate::group::push_event(
-            ctx,
-            other,
-            group_event_kind::PARTY_CHAT,
-            sender.guid,
-            payload.clone(),
-        );
-    }
-    // The echo to the sender (vanilla server-echoes party lines back to the speaker's own client) —
-    // deliberately a SEPARATE push outside the loop above (which excludes the sender by design), not
-    // folded into "every member incl. self", so the two audiences (others vs. the echo) stay
-    // independently readable/testable — the [`party_chat_other_recipients`] pure function only ever
-    // has to answer "who ELSE", never "who, including me".
-    crate::group::push_event(
-        ctx,
-        sender.guid,
-        group_event_kind::PARTY_CHAT,
-        sender.guid,
-        payload,
-    );
-    Ok(())
-}
-
-/// The OTHER group members who get `party_chat`'s per-recipient event row (every member of
-/// `members` except `sender_guid`) — the sender gets a SEPARATE explicit echo row (see
-/// `party_chat`), so this deliberately excludes them rather than the caller having to de-dupe a
-/// combined list. Pure — unit-tested without a `ReducerContext`.
-pub(crate) fn party_chat_other_recipients(sender_guid: u64, members: &[u64]) -> Vec<u64> {
-    members
-        .iter()
-        .copied()
-        .filter(|&g| g != sender_guid)
-        .collect()
-}
-
-// ===========================================================================================
 //  Friends / ignore list [entity] — durable contact rows
 // ===========================================================================================
 
@@ -961,29 +881,6 @@ mod tests {
         assert_eq!(normalized_roll_range(1, 10_000), (1, 10_000));
     }
 
-    // ---- Party chat (work-item 199) ----
-
-    #[test]
-    fn party_chat_routes_to_every_other_member_and_excludes_the_sender() {
-        // A 3-person party: the sender (20) is excluded from its own "other recipients" list — the
-        // reducer gives the sender a SEPARATE echo row instead (see `party_chat`'s doc).
-        let members = [10u64, 20, 30];
-        let mut others = party_chat_other_recipients(20, &members);
-        others.sort_unstable();
-        assert_eq!(
-            others,
-            vec![10, 30],
-            "the sender must never appear among the OTHER recipients"
-        );
-    }
-
-    #[test]
-    fn party_chat_other_recipients_is_empty_when_the_sender_is_the_only_member() {
-        // Degenerate case (shouldn't happen in practice — this codebase disbands below 2 members —
-        // but the pure filter must not panic or wrongly include the sender).
-        assert_eq!(party_chat_other_recipients(7, &[7]), Vec::<u64>::new());
-    }
-
     // ---- Whisper delivery (whisper slice) ----
 
     /// The delivery rule both planes share. A whisper is TWO lines, and which of them exists is the
@@ -1157,14 +1054,5 @@ mod tests {
                  conversation with nothing else in either suite able to see it. Body was:\n{body}"
             );
         }
-    }
-
-    #[test]
-    fn party_chat_other_recipients_is_order_preserving_and_sender_agnostic_to_position() {
-        // The sender can be anywhere in the roster (not just first/last) and is filtered regardless
-        // of position; everyone else's relative order survives untouched.
-        assert_eq!(party_chat_other_recipients(2, &[1, 2, 3, 4]), vec![1, 3, 4]);
-        assert_eq!(party_chat_other_recipients(1, &[1, 2, 3]), vec![2, 3]);
-        assert_eq!(party_chat_other_recipients(3, &[1, 2, 3]), vec![1, 2]);
     }
 }

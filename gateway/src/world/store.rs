@@ -1,15 +1,16 @@
 //! `WorldStore`: the broad storage/coordination seam used by the world session. Deep protocol
-//! families may add focused supertraits such as [`AuctionActionStore`], [`ItemActionStore`],
-//! [`MeleeActionStore`], [`QuestActionStore`], [`TaxiActionStore`] and [`VendorActionStore`] so their wire mapping and
-//! failure policy can be tested without implementing this entire interface — a migrated family's
-//! operations live only on its own trait, never here. Kept as one broad trait for the remaining
+//! families may add focused supertraits such as [`AuctionActionStore`], [`ChatActionStore`],
+//! [`ItemActionStore`], [`MeleeActionStore`], [`QuestActionStore`], [`TaxiActionStore`] and
+//! [`VendorActionStore`] so their wire mapping and failure policy can be tested without
+//! implementing this entire interface — a migrated family's operations live only on its own trait,
+//! never here. Kept as one broad trait for the remaining
 //! session operations (only two implementors); the section markers below are load-bearing
 //! navigation, not a split.
 
 use super::handlers::{
-    AuctionActionStore, CastStore, DuelActionStore, ItemActionStore, LootWindowStore,
-    MeleeActionStore, MemberStatsStore, QuestActionStore, TaxiActionStore, VendorActionStore,
-    WeatherStore,
+    AuctionActionStore, CastStore, ChatActionStore, DuelActionStore, ItemActionStore,
+    LootWindowStore, MeleeActionStore, MemberStatsStore, QuestActionStore, TaxiActionStore,
+    VendorActionStore, WeatherStore,
 };
 use super::*;
 
@@ -23,6 +24,7 @@ pub struct WorldSessionToken {
 pub trait WorldStore:
     AuctionActionStore
     + CastStore
+    + ChatActionStore
     + DuelActionStore
     + ItemActionStore
     + LootWindowStore
@@ -984,19 +986,6 @@ pub trait WorldStore:
         target_player: String,
         message: String,
     ) -> Result<()>;
-
-    /// Party chat (`CMSG_MESSAGECHAT` Party, `/p`): deliver `message` to every OTHER
-    /// current group member plus an echo to the caller, over the `game_group_event` relay (no
-    /// gateway-subscribed table — see `module/src/chat.rs::party_chat`'s doc). Speaking from no
-    /// party answers [`lyracore_shared::group::GroupRefusal::NotInGroup`], which the gateway renders
-    /// as `SMSG_PARTY_COMMAND_RESULT(NotInGroup)`, "You aren't in a party". Every other refusal and
-    /// every failure is dropped like a rejected say or yell line.
-    fn party_chat(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        message: String,
-    ) -> Result<party::PartyOutcome>;
 
     /// GM playtest dot-command for the proof-validated, realm-wide `account_name`: `text` is the
     /// raw Say line, STILL carrying its

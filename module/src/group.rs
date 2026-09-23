@@ -1031,6 +1031,25 @@ pub(crate) fn members_of(ctx: &ReducerContext, group_id: u64) -> Vec<GroupMember
         .collect()
 }
 
+/// Who hears a party line: every member of the speaker's party, the speaker included. Nobody's
+/// ignore list filters it (cm:Group.cpp:777-788). Read from this database's membership, which is
+/// the party authority wherever the Gateway sends Realm Chat.
+pub(crate) fn party_chat_audience(
+    ctx: &ReducerContext,
+    speaker_guid: u64,
+) -> Result<crate::realm_chat::ChatAudience, lyracore_shared::chat::ChatRefusal> {
+    let membership =
+        group_of(ctx, speaker_guid).ok_or(lyracore_shared::chat::ChatRefusal::NotInGroup)?;
+    Ok(crate::realm_chat::ChatAudience {
+        recipients: members_of(ctx, membership.group_id)
+            .into_iter()
+            .map(|member| member.character_guid)
+            .collect(),
+        ignorable: false,
+        channel_name: String::new(),
+    })
+}
+
 fn push_list_to_all(ctx: &ReducerContext, group_id: u64) {
     let Some(payload) = roster_payload(ctx, group_id) else {
         spacetimedb::log::warn!(
