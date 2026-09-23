@@ -745,11 +745,6 @@ fn peer_create_gate(
     true
 }
 
-/// `game_chat_event.chat_type` discriminant for YELL (mirrors `chat::CHAT_YELL` on the module side —
-/// duplicated here rather than depended on, same as the module's own doc comment on that constant
-/// expects of its callers). Module-level (not local to `on_chat`) so the range constants live
-/// beside the discriminant they gate.
-const CHAT_YELL: u8 = 1;
 /// SAY proximity range (vanilla ~25yd). See [`chat_in_range`].
 const SAY_RANGE_YD: f32 = 25.0;
 /// YELL proximity range (vanilla ~300yd). Same rationale as `SAY_RANGE_YD`.
@@ -760,14 +755,24 @@ const SAY_RANGE_SQ: f32 = SAY_RANGE_YD * SAY_RANGE_YD; // 625.0 yd²
 const YELL_RANGE_SQ: f32 = YELL_RANGE_YD * YELL_RANGE_YD; // 90_000.0 yd²
 
 /// How far a `game_chat_event` line of this kind carries. Every kind on that table is
-/// range-bound: SAY and text emotes at SAY range, YELL at its own; party, guild and whispers
-/// ride other tables.
+/// range-bound: SAY, `/e` and the creature text emote at SAY range, YELL at its own; party, guild
+/// and whispers ride other tables.
 pub(crate) fn chat_range_yd(chat_type: u8) -> f32 {
-    if chat_type == CHAT_YELL {
+    if chat_type == lyracore_shared::chat::broadcast_chat::YELL {
         YELL_RANGE_YD
     } else {
         SAY_RANGE_YD
     }
+}
+
+/// The EMOTE-only team gate: does a listener whose race byte is `listener_race` hear a speaker
+/// whose race byte is `speaker_race`? Say and yell have no such gate (cm:GridNotifiers.cpp:163-165);
+/// `/e` defaults to same-team only, matching the mangos `AllowTwoSide.Interaction.Chat = 0` default
+/// (cm:mangosd.conf.dist.in:924). Pure — the one tested source of truth for the gate, beside
+/// [`chat_in_range`].
+pub(crate) fn emote_reaches_team(speaker_race: u8, listener_race: u8) -> bool {
+    lyracore_shared::faction::team_for_race(speaker_race)
+        == lyracore_shared::faction::team_for_race(listener_race)
 }
 
 // ==================================================================================================
@@ -2437,10 +2442,11 @@ pub(crate) fn impact_event_outbound(row: &SpellImpactEvent) -> Vec<Outbound> {
 }
 
 /// Nearby chat: the one body both legs run. A player speaker always hears
-/// their own line; everyone else is `chat_in_range`-gated (say/text emote ~25yd, yell ~300yd, map +
-/// instance fenced), with both endpoints read from the COORDINATOR's global cache — the AOI-scoped
-/// per-player cache could not see a 100–300yd YELL speaker. Missing endpoint → drop (safer than
-/// flooding).
+/// their own line; everyone else is `chat_in_range`-gated (say/`/e`/text emote ~25yd, yell ~300yd,
+/// map + instance fenced), with both endpoints read from the COORDINATOR's global cache — the
+/// AOI-scoped per-player cache could not see a 100–300yd YELL speaker. Missing endpoint → drop
+/// (safer than flooding). `/e` (EMOTE) also gates on [`emote_reaches_team`] — the one Chat Kind
+/// here vanilla keeps same-team-only by default; say and yell still reach both teams.
 pub(crate) fn chat_event_outbound(
     coord: &Coordinator,
     self_guid: u64,
@@ -2475,6 +2481,14 @@ pub(crate) fn chat_event_outbound(
             listener.y,
             range_sq,
         ) {
+            return Vec::new();
+        }
+        if row.chat_type == lyracore_shared::chat::broadcast_chat::EMOTE
+            && !emote_reaches_team(
+                (speaker.unit_bytes_0 & 0xFF) as u8,
+                (listener.unit_bytes_0 & 0xFF) as u8,
+            )
+        {
             return Vec::new();
         }
     }
@@ -2549,10 +2563,48 @@ pub(crate) fn channel_event_outbound(
     ))]
 }
 
-/// Emotes: SMSG_TEXT_EMOTE + SMSG_EMOTE, broadcast (no range gate today
-/// — preserved as-is for A/B equality). The target name resolves through the coordinator cache
-/// (player, else creature template); unknown ids degrade gracefully so the rest still relays.
-pub(crate) fn emote_event_outbound(coord: &Coordinator, row: &EmoteEvent) -> Vec<Outbound> {
+/// Text emotes (`/wave`, `/dance`, …): SMSG_TEXT_EMOTE + SMSG_EMOTE, `chat_in_range`-gated at
+/// [`lyracore_shared::chat::broadcast_chat::TEXT_EMOTE_RANGE_YD`] like say (cm:ChatHandler.cpp:789-
+/// 794 sends to both teams, so there is no team gate here — contrast `chat_event_outbound`'s EMOTE
+/// arm). The performer always sees their own emote. The target name resolves through the
+/// coordinator cache (player, else creature template); unknown ids degrade gracefully so the rest
+/// still relays.
+pub(crate) fn emote_event_outbound(
+    coord: &Coordinator,
+    self_guid: u64,
+    row: &EmoteEvent,
+) -> Vec<Outbound> {
+    if row.sender_guid != self_guid {
+        let guard = coord.0.coord();
+        let speaker = match guard
+            .conn
+            .db
+            .game_world_entity()
+            .guid()
+            .find(&row.sender_guid)
+        {
+            Some(e) => e,
+            None => return Vec::new(),
+        };
+        let listener = match guard.conn.db.game_world_entity().guid().find(&self_guid) {
+            Some(e) => e,
+            None => return Vec::new(),
+        };
+        let range_yd = lyracore_shared::chat::broadcast_chat::TEXT_EMOTE_RANGE_YD;
+        if !chat_in_range(
+            speaker.map_id,
+            speaker.instance_id,
+            speaker.x,
+            speaker.y,
+            listener.map_id,
+            listener.instance_id,
+            listener.x,
+            listener.y,
+            range_yd * range_yd,
+        ) {
+            return Vec::new();
+        }
+    }
     // target_guid == 0 → untargeted emote (the client sends 0 when nothing is selected).
     let target_name = if row.target_guid != 0 {
         let guard = coord.0.coord();
@@ -4391,7 +4443,11 @@ mod tests {
             created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
             target_guid: 77,
         };
-        for chat_type in [0, CHAT_YELL, codec::social::CHAT_TEXT_EMOTE] {
+        for chat_type in [
+            lyracore_shared::chat::broadcast_chat::SAY,
+            lyracore_shared::chat::broadcast_chat::YELL,
+            lyracore_shared::chat::broadcast_chat::CREATURE_TEXT_EMOTE,
+        ] {
             let out = chat_event_message(
                 &ChatEvent {
                     chat_type,
@@ -5627,6 +5683,44 @@ mod tests {
             0.0,
             YELL_RANGE_SQ
         ));
+    }
+
+    /// The text-emote range shares SAY's 25yd radius (`ListenRange.TextEmote` = `ListenRange.Say`
+    /// = 25 in cm:mangosd.conf.dist.in:1092): the same boundary math, over the shared constant.
+    #[test]
+    fn chat_in_range_gates_a_text_emote_at_the_same_25yd_boundary_as_say() {
+        let range_sq = lyracore_shared::chat::broadcast_chat::TEXT_EMOTE_RANGE_YD
+            * lyracore_shared::chat::broadcast_chat::TEXT_EMOTE_RANGE_YD;
+        assert_eq!(range_sq, SAY_RANGE_SQ);
+        assert!(chat_in_range(0, 0, 0.0, 0.0, 0, 0, 25.0, 0.0, range_sq));
+        assert!(!chat_in_range(0, 0, 0.0, 0.0, 0, 0, 25.01, 0.0, range_sq));
+    }
+
+    /// `/e`'s team gate (T8): a same-team listener hears it, an opposite-team listener does not —
+    /// same-race and cross-faction pairs from [`lyracore_shared::faction`]'s own fixture.
+    /// Say and yell never call this predicate; only `chat_event_outbound`'s EMOTE arm does.
+    #[test]
+    fn emote_reaches_team_gates_by_faction_not_by_race() {
+        const HUMAN: u8 = 1; // Alliance
+        const DWARF: u8 = 3; // Alliance
+        const ORC: u8 = 2; // Horde
+        const TAUREN: u8 = 6; // Horde
+        assert!(
+            emote_reaches_team(HUMAN, DWARF),
+            "two Alliance races hear each other's /e"
+        );
+        assert!(
+            emote_reaches_team(ORC, TAUREN),
+            "two Horde races hear each other's /e"
+        );
+        assert!(
+            !emote_reaches_team(HUMAN, ORC),
+            "Alliance and Horde never hear each other's /e"
+        );
+        assert!(
+            emote_reaches_team(HUMAN, HUMAN),
+            "the same race always shares a team"
+        );
     }
 
     #[test]

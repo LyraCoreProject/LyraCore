@@ -2,6 +2,7 @@
 //! `SMSG_EMOTE` (emotes) + `SMSG_WHO` (/who panel). Split out of `codec` (a 1.7k-line module) so
 //! the say/yell/whisper/emote/who group lives in one focused place; re-exported from `codec`.
 
+use lyracore_shared::chat::broadcast_chat;
 use wow_world_base::shared::friend_result_vanilla_tbc::FriendResult;
 use wow_world_messages::vanilla::{
     Area, Class, Emote, Friend, Friend_FriendStatus, Language, Level, MSG_RANDOM_ROLL_Server,
@@ -10,9 +11,6 @@ use wow_world_messages::vanilla::{
     SMSG_WHO,
 };
 use wow_world_messages::Guid;
-
-/// Internal `game_chat_event` mode for a creature-authored text emote.
-pub(crate) const CHAT_TEXT_EMOTE: u8 = 2;
 
 // ─── /who panel ──────────────────────────────────────────────────────────────
 
@@ -128,7 +126,9 @@ fn build_chat_message(
     build_chat_message_to(sender_guid, sender_name, 0, chat_type, language, message)
 }
 
-/// Build creature speech while retaining the addressed target chosen by EventAI.
+/// Build creature speech while retaining the addressed target chosen by EventAI. A player EMOTE
+/// row (`chat_type` 3, never a creature — EventAI has no such source) has no name, so it always
+/// hits the `(EMOTE, None)` arm and names the speaker via `sender2`.
 pub fn build_chat_message_to(
     sender_guid: u64,
     sender_name: Option<String>,
@@ -152,18 +152,22 @@ pub fn build_chat_message_to(
         // `MonsterEmote` carries one guid and it names the SPEAKER, paired with the speaker's own
         // name. The variant has no addressee field on the wire, so an emote's addressed target is
         // not expressible here and is dropped rather than misfiled into the speaker slot.
-        (CHAT_TEXT_EMOTE, Some(monster_name)) => SMSG_MESSAGECHAT_ChatType::MonsterEmote {
-            monster: sender,
-            monster_name,
-        },
+        (broadcast_chat::CREATURE_TEXT_EMOTE, Some(monster_name)) => {
+            SMSG_MESSAGECHAT_ChatType::MonsterEmote {
+                monster: sender,
+                monster_name,
+            }
+        }
         (1, None) => SMSG_MESSAGECHAT_ChatType::Yell {
             chat_credit: sender,
             speech_bubble_credit: sender,
         },
-        (CHAT_TEXT_EMOTE, None) => SMSG_MESSAGECHAT_ChatType::MonsterEmote {
+        (broadcast_chat::CREATURE_TEXT_EMOTE, None) => SMSG_MESSAGECHAT_ChatType::MonsterEmote {
             monster: sender,
             monster_name: String::new(),
         },
+        // `/e` (cm:Chat.cpp:3660-3662): a Character-only broadcast type, always Universal below.
+        (broadcast_chat::EMOTE, None) => SMSG_MESSAGECHAT_ChatType::Emote { sender2: sender },
         _ => SMSG_MESSAGECHAT_ChatType::Say {
             chat_credit: sender,
             speech_bubble_credit: sender,
@@ -171,7 +175,10 @@ pub fn build_chat_message_to(
     };
     SMSG_MESSAGECHAT {
         chat_type: kind,
-        language: if chat_type == CHAT_TEXT_EMOTE {
+        language: if matches!(
+            chat_type,
+            broadcast_chat::CREATURE_TEXT_EMOTE | broadcast_chat::EMOTE
+        ) {
             Language::Universal
         } else {
             Language::try_from(language).unwrap_or(Language::Universal)
@@ -421,7 +428,7 @@ mod tests {
             0xF130_0000_0000_000B,
             Some("Defias Thug".into()),
             77,
-            CHAT_TEXT_EMOTE,
+            broadcast_chat::CREATURE_TEXT_EMOTE,
             0,
             "laughs.".into(),
         );
@@ -443,6 +450,28 @@ mod tests {
 
         let weird = build_chat_message(1, None, 0, 250, "x".into());
         assert_eq!(weird.language, Language::Universal);
+    }
+
+    /// A player `/e` row (no creature name — EventAI never emits EMOTE) builds `Emote { sender2 }`
+    /// naming the speaker, in Universal whatever language byte the row carries
+    /// (cm:Chat.cpp:3660-3662, cm:Player.cpp:16594).
+    #[test]
+    fn player_emote_row_builds_emote_in_universal_and_round_trips() {
+        let emote = build_chat_message_to(
+            7,
+            None,
+            0,
+            broadcast_chat::EMOTE,
+            1, // a non-Universal byte on the row must not leak onto the wire
+            "waves wildly.".into(),
+        );
+        match &emote.chat_type {
+            SMSG_MESSAGECHAT_ChatType::Emote { sender2 } => assert_eq!(sender2.guid(), 7),
+            other => panic!("expected Emote, got {other:?}"),
+        }
+        assert_eq!(emote.language, Language::Universal);
+        assert_eq!(emote.message, "waves wildly.");
+        assert_eq!(read_back(&emote), emote);
     }
 
     #[test]

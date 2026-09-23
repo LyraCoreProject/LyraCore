@@ -10,13 +10,16 @@ use crate::codec::property_tests::Rng;
 use crate::stdb::bindings::{
     Aura, ChatEvent, CombatEvent, EmoteEvent, MeleeAttack, SpellCastEvent, SpellImpactEvent,
 };
-use crate::stdb::subscriptions::{chat_in_range, chat_range_yd, A_STEALTH};
+use crate::stdb::subscriptions::{chat_in_range, chat_range_yd, emote_reaches_team, A_STEALTH};
 use crate::world::{Outbound, SessionTx};
 use std::sync::mpsc::Receiver;
 
 const PLAYER_BASE: u64 = 0x1000;
 const CREATURE_BASE: u64 = 0xF130_0000_0000_2000;
 const YELL: u8 = 1;
+const EMOTE: u8 = lyracore_shared::chat::broadcast_chat::EMOTE;
+const HUMAN_RACE: u8 = 1; // Alliance
+const ORC_RACE: u8 = 2; // Horde
 
 /// A randomised realm: players and creatures at random positions inside a `span_yd` square, one
 /// partition, every viewer's `created` set holding exactly what its box shows it plus itself.
@@ -575,6 +578,99 @@ fn chat_from_an_unindexed_speaker_reaches_the_speaker_only() {
     assert_eq!(
         sessions(chat_audience(&realm.view, 0, &chat(speaker, YELL))),
         HashSet::from([realm.viewers[0].session])
+    );
+}
+
+// ===============================================================================================
+//  EMOTE (`/e`) and text emote (`/wave`): T8's 25 yd range, EMOTE's same-team-only gate.
+// ===============================================================================================
+
+/// Register one viewer at `(x, y)` and return its session id — the candidate side of the same
+/// composed gate `chat_event_outbound`/`emote_event_outbound` run against a live coordinator cache.
+fn place(view: &WorldView, guid: u64, x: f32, y: f32) -> SessionId {
+    let key = CellKey::of_position(0, 0, x, y);
+    view.spatial
+        .upsert_entity(EntityLayer::WorldEntity, guid, key, 0, 0);
+    let (tx, _rx) = SessionTx::with_depth(0);
+    let v = viewer(view.next_session_id(), guid, tx);
+    view.add_viewer_on_shard(v.clone(), key, 0);
+    v.session
+}
+
+/// Criterion 2 (T8): a same-team `/e` listener 20 yd away hears it, one 30 yd away does not, and
+/// neither does an opposite-team listener at 5 yd — [`chat_audience`]'s candidate set combined with
+/// the exact `chat_in_range` + [`emote_reaches_team`] gate `chat_event_outbound` applies.
+#[test]
+fn emote_reaches_a_same_team_20_yd_listener_not_30_yd_nor_a_5_yd_enemy() {
+    let view = WorldView::new(true);
+    place(&view, PLAYER_BASE, 0.0, 0.0); // the speaker, Human
+    let near = place(&view, PLAYER_BASE + 1, 20.0, 0.0); // same team, 20 yd
+    let far = place(&view, PLAYER_BASE + 2, 30.0, 0.0); // same team, 30 yd
+    let enemy = place(&view, PLAYER_BASE + 3, 0.0, 5.0); // opposite team, 5 yd
+
+    let candidates = sessions(chat_audience(&view, 0, &chat(PLAYER_BASE, EMOTE)));
+    let range = chat_range_yd(EMOTE);
+    let reaches = |session: SessionId, lx: f32, ly: f32, listener_race: u8| {
+        candidates.contains(&session)
+            && chat_in_range(0, 0, 0.0, 0.0, 0, 0, lx, ly, range * range)
+            && emote_reaches_team(HUMAN_RACE, listener_race)
+    };
+
+    assert!(
+        reaches(near, 20.0, 0.0, HUMAN_RACE),
+        "a same-team listener 20 yd away hears /e"
+    );
+    assert!(
+        !reaches(far, 30.0, 0.0, HUMAN_RACE),
+        "a same-team listener 30 yd away hears nothing"
+    );
+    assert!(
+        !reaches(enemy, 0.0, 5.0, ORC_RACE),
+        "an opposite-team listener at 5 yd hears nothing, even well within range"
+    );
+}
+
+/// Criterion 5 (T8): `/wave` reaches a listener at 20 yd of either team; one at 30 yd gets neither
+/// packet — [`emote_audience`]'s widened span combined with the same `chat_in_range` gate
+/// `emote_event_outbound` applies, with no team check.
+#[test]
+fn text_emote_reaches_20_yd_of_either_team_not_30_yd() {
+    let view = WorldView::new(true);
+    place(&view, PLAYER_BASE, 0.0, 0.0); // the speaker
+    let near_same_team = place(&view, PLAYER_BASE + 1, 20.0, 0.0);
+    let near_other_team = place(&view, PLAYER_BASE + 2, 0.0, 20.0);
+    let far = place(&view, PLAYER_BASE + 3, 30.0, 0.0);
+
+    let (grid_x, grid_y) = lyracore_shared::spatial::grid_cell(0.0, 0.0);
+    let row = EmoteEvent {
+        id: 1,
+        sender_guid: PLAYER_BASE,
+        text_emote: 101,
+        emote_anim: 3,
+        created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
+        target_guid: 0,
+        map_id: 0,
+        instance_id: 0,
+        grid_x,
+        grid_y,
+    };
+    let candidates = sessions(emote_audience(&view, 0, &row));
+    let range = lyracore_shared::chat::broadcast_chat::TEXT_EMOTE_RANGE_YD;
+    let reaches = |session: SessionId, lx: f32, ly: f32| {
+        candidates.contains(&session) && chat_in_range(0, 0, 0.0, 0.0, 0, 0, lx, ly, range * range)
+    };
+
+    assert!(
+        reaches(near_same_team, 20.0, 0.0),
+        "a same-team listener 20 yd away hears /wave"
+    );
+    assert!(
+        reaches(near_other_team, 0.0, 20.0),
+        "an opposite-team listener 20 yd away hears it too — text emotes have no team gate"
+    );
+    assert!(
+        !reaches(far, 30.0, 0.0),
+        "a listener 30 yd away gets neither SMSG_TEXT_EMOTE nor SMSG_EMOTE"
     );
 }
 

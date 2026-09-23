@@ -49,7 +49,7 @@ fn filtered_gossip_options<St: WorldStore + ?Sized>(
 }
 
 /// Query / social family: name / creature / item lookups + the gossip / npc-text round-trips, plus
-/// the social tier (say / yell / whisper chat + text emotes) — grouped as the stateless
+/// the social tier (say / yell / `/e` / whisper chat + text emotes) — grouped as the stateless
 /// request→reply / broadcast opcodes.
 #[allow(clippy::too_many_lines)] // One arm per query and social opcode.
 pub(crate) fn handle_query<St: WorldStore + ?Sized>(
@@ -280,12 +280,13 @@ pub(crate) fn handle_query<St: WorldStore + ?Sized>(
                 Outbound::One(ServerOpcodeMessage::SMSG_ITEM_QUERY_SINGLE_RESPONSE(resp)),
             )?;
         }
-        // Social tier: say/yell -> send_chat (insert a broadcast game_chat_event the gateway fans back
-        // as SMSG_MESSAGECHAT on every connection's subscription); whisper -> send_whisper (private,
-        // per-recipient). Party chat never reaches this arm: `dispatch_chat_action` consumes it as a
-        // Realm Chat Line. Guild still needs a system that doesn't exist yet and is dropped. No reply
-        // on say/yell success (the speaker sees their own line via the relay); a rejected
-        // say/yell/whisper-target line is silently dropped, matching vanilla.
+        // Social tier: say/yell/`/e` -> send_chat (insert a broadcast game_chat_event the gateway
+        // fans back as SMSG_MESSAGECHAT on every connection's subscription); whisper ->
+        // send_whisper (private, per-recipient). Party chat never reaches this arm:
+        // `dispatch_chat_action` consumes it as a Realm Chat Line. Guild still needs a system that
+        // doesn't exist yet and is dropped. No reply on success (the speaker sees their own line via
+        // the relay); a rejected say/yell/emote/whisper-target line is silently dropped, matching
+        // vanilla.
         //
         // GM playtest dot-commands: a Say line starting with `.` diverts BEFORE
         // `send_chat` — never broadcast, never inserted as a `game_chat_event` row — straight to the
@@ -326,10 +327,34 @@ pub(crate) fn handle_query<St: WorldStore + ?Sized>(
                     }
                 }
                 CMSG_MESSAGECHAT_ChatType::Say => {
-                    let _ = store.send_chat(conn.account_id, self_guid, 0, lang, message);
+                    let _ = store.send_chat(
+                        conn.account_id,
+                        self_guid,
+                        lyracore_shared::chat::broadcast_chat::SAY,
+                        lang,
+                        message,
+                    );
                 }
                 CMSG_MESSAGECHAT_ChatType::Yell => {
-                    let _ = store.send_chat(conn.account_id, self_guid, 1, lang, message);
+                    let _ = store.send_chat(
+                        conn.account_id,
+                        self_guid,
+                        lyracore_shared::chat::broadcast_chat::YELL,
+                        lang,
+                        message,
+                    );
+                }
+                // `/e` custom emote: same broadcast path as Say/Yell, EMOTE type. A Refusal (dead
+                // speaker, or the creature-only text-emote type resubmitted) is dropped silently,
+                // matching Say and Yell.
+                CMSG_MESSAGECHAT_ChatType::Emote => {
+                    let _ = store.send_chat(
+                        conn.account_id,
+                        self_guid,
+                        lyracore_shared::chat::broadcast_chat::EMOTE,
+                        lang,
+                        message,
+                    );
                 }
                 // Channel: route to the membership-validated reducer; the relay fans it out
                 // to members. A rejection (not joined / dead) is per-action — log + drop, vanilla

@@ -1,8 +1,8 @@
-//! Social tier: say, yell, emotes (`/dance`, `/wave`, …), channels, whispers, contacts and
-//! `/roll`. A player's `CMSG_MESSAGECHAT` or `CMSG_TEXT_EMOTE` becomes a per-recipient or broadcast
-//! event row that the Gateway turns into `SMSG_MESSAGECHAT` / `SMSG_TEXT_EMOTE` (+ `SMSG_EMOTE`
-//! animation). Say and yell rows carry no range: the Gateway scopes them to the speaker's
-//! surroundings when it relays them. Party chat is not here. It is a Realm Chat Line
+//! Social tier: say, yell, `/e`, text emotes (`/dance`, `/wave`, …), channels, whispers, contacts
+//! and `/roll`. A player's `CMSG_MESSAGECHAT` or `CMSG_TEXT_EMOTE` becomes a per-recipient or
+//! broadcast event row that the Gateway turns into `SMSG_MESSAGECHAT` / `SMSG_TEXT_EMOTE` (+
+//! `SMSG_EMOTE` animation). Say, yell and `/e` rows carry no range: the Gateway scopes them to the
+//! speaker's surroundings when it relays them. Party chat is not here. It is a Realm Chat Line
 //! (`crate::realm_chat`), committed on Realm-core with its whole audience. [event]
 
 use spacetimedb::{reducer, table, Identity, ReducerContext, Table, Timestamp};
@@ -14,14 +14,21 @@ use lyracore_shared::social::ContactRefusal;
 // (`game_character_contact`) is generated there, so it's in scope for `add_friend`/etc. without a
 // `use`. Re-exported implicitly like `game_whisper_event` above.
 
-/// `game_chat_event.chat_type` discriminants for the broadcast chat types this table carries.
-/// Whisper and party are not `game_chat_event` rows: whisper rides `game_whisper_event` and party
-/// rides `game_realm_chat_event`, each with a per-recipient shape this broadcast table cannot hold.
-pub const CHAT_SAY: u8 = 0;
-pub const CHAT_YELL: u8 = 1;
+/// `game_chat_event.chat_type` discriminants for the broadcast chat types this table carries,
+/// re-exported from the shared source of truth both crates read
+/// ([`lyracore_shared::chat::broadcast_chat`]). Whisper and party are not `game_chat_event` rows:
+/// whisper rides `game_whisper_event` and party rides `game_realm_chat_event`, each with a
+/// per-recipient shape this broadcast table cannot hold.
+pub const CHAT_SAY: u8 = lyracore_shared::chat::broadcast_chat::SAY;
+pub const CHAT_YELL: u8 = lyracore_shared::chat::broadcast_chat::YELL;
 /// Creature-authored text emote (`CHAT_TYPE_TEXT_EMOTE` on the source wire). It uses the same
 /// broadcast row as Say and Yell; the gateway maps the discriminant to `CHAT_MSG_MONSTER_EMOTE`.
-pub const CHAT_TEXT_EMOTE: u8 = 2;
+/// EventAI is its only source — [`apply_send_chat`] refuses it from a Character.
+pub const CHAT_TEXT_EMOTE: u8 = lyracore_shared::chat::broadcast_chat::CREATURE_TEXT_EMOTE;
+/// A Character's `/e` custom emote. [`apply_send_chat`] is its only source and always stores it in
+/// [`lyracore_shared::chat::language::UNIVERSAL`], whatever language byte the client sent
+/// (cm:Player.cpp:16591-16599).
+pub const CHAT_EMOTE: u8 = lyracore_shared::chat::broadcast_chat::EMOTE;
 
 /// Max stored message length — vanilla caps client input around 255; we hard-cap to bound the row.
 const MAX_CHAT_LEN: usize = 255;
@@ -34,7 +41,7 @@ pub struct ChatEvent {
     #[auto_inc]
     pub id: u64,
     pub sender_guid: u64,
-    pub chat_type: u8, // CHAT_SAY / CHAT_YELL / CHAT_TEXT_EMOTE
+    pub chat_type: u8, // CHAT_SAY / CHAT_YELL / CHAT_TEXT_EMOTE / CHAT_EMOTE
     pub language: u8,  // vanilla Language discriminant, echoed back to clients
     pub message: String,
     pub created_at: Timestamp,
@@ -59,9 +66,9 @@ pub fn normalized_message(raw: &str) -> Option<String> {
     Some(trimmed.chars().take(MAX_CHAT_LEN).collect())
 }
 
-/// The say/yell core, actor-explicit (stage 4a): everything the old sender-path `send_chat`
-/// did after resolving WHO spoke. Trims + length-caps the message and rejects an empty one; an
-/// unsupported chat type is a clean `Err` (the gateway drops it). `gw::gw_send_chat` delegates here.
+/// The say/yell/`/e` core, actor-explicit (stage 4a): everything the old sender-path `send_chat`
+/// did after resolving WHO spoke, plus the player/EventAI boundary — a Character may say, yell or
+/// `/e`, never submit the creature-only text emote. `gw::gw_send_chat` delegates here.
 pub(crate) fn apply_send_chat(
     ctx: &ReducerContext,
     sender: crate::WorldEntity,
@@ -69,10 +76,17 @@ pub(crate) fn apply_send_chat(
     language: u8,
     message: String,
 ) -> Result<(), String> {
+    if !matches!(chat_type, CHAT_SAY | CHAT_YELL | CHAT_EMOTE) {
+        return Err(format!("unsupported chat type {chat_type}"));
+    }
     apply_send_chat_to(ctx, sender, 0, chat_type, language, message)
 }
 
-/// Creature-authored speech with its resolved addressed unit retained for the monster chat packet.
+/// Creature-authored speech with its resolved addressed unit retained for the monster chat packet
+/// — and, via [`apply_send_chat`], a Character's `/e`. The dead-guard covers every type this
+/// reaches, matching vmangos for `/e` (vm:ChatHandler.cpp:360-361; cmangos has no such check for
+/// `/e`, but the say/yell rule already followed vmangos, so one gate covers all three). `/e` always
+/// stores Universal, whatever language the client sent (cm:Player.cpp:16594).
 pub(crate) fn apply_send_chat_to(
     ctx: &ReducerContext,
     sender: crate::WorldEntity,
@@ -81,15 +95,20 @@ pub(crate) fn apply_send_chat_to(
     language: u8,
     message: String,
 ) -> Result<(), String> {
-    // Vanilla: a dead/ghost player can't be heard via Say/Yell (proximity chat). Whisper + party/guild
-    // are NOT gated by death (and aren't routed here anyway — this reducer only handles SAY/YELL).
+    // Vanilla: a dead/ghost player can't be heard via Say/Yell/`/e` (proximity chat). Whisper +
+    // party/guild are NOT gated by death (and aren't routed here anyway).
     if sender.dead {
         return Err("dead players cannot speak".to_string());
     }
-    if !is_supported_chat_type(chat_type) {
+    if !is_supported_chat_type(chat_type) && chat_type != CHAT_EMOTE {
         return Err(format!("unsupported chat type {chat_type}"));
     }
     let text = normalized_message(&message).ok_or_else(|| "empty message".to_string())?;
+    let language = if chat_type == CHAT_EMOTE {
+        lyracore_shared::chat::language::UNIVERSAL as u8
+    } else {
+        language
+    };
     ctx.db.game_chat_event().insert(ChatEvent {
         id: 0,
         sender_guid: sender.guid,
@@ -791,8 +810,10 @@ mod tests {
         assert!(is_supported_chat_type(CHAT_SAY));
         assert!(is_supported_chat_type(CHAT_YELL));
         assert!(is_supported_chat_type(CHAT_TEXT_EMOTE));
-        assert!(!is_supported_chat_type(3)); // party/guild/whisper/etc. rejected
-        assert!(!is_supported_chat_type(255));
+        // EMOTE is player-only (`apply_send_chat` accepts it directly); `is_supported_chat_type`
+        // serves EventAI, which never emits it.
+        assert!(!is_supported_chat_type(CHAT_EMOTE));
+        assert!(!is_supported_chat_type(255)); // party/guild/whisper/etc. rejected
     }
 
     #[test]

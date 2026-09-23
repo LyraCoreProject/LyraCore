@@ -2488,24 +2488,29 @@ fn impact_appeared(view: &WorldView, shard: ShardId, row: &SpellImpactEvent) {
     }
 }
 
+/// A text emote names no cell of its own; the row carries the actor's cell (stamped at insert
+/// time), widened to the 25 yd text-emote range rather than the AOI box — the job's `chat_in_range`
+/// gate is the exact filter, this only bounds the candidate set.
 fn emote_audience(view: &WorldView, shard: ShardId, row: &EmoteEvent) -> Vec<Arc<Viewer>> {
     let key = CellKey::at(row.map_id, row.instance_id, row.grid_x, row.grid_y);
     view.cell_audience(
         shard,
         Some(key),
-        BOX_HALF_SPAN,
+        cells_within(lyracore_shared::chat::broadcast_chat::TEXT_EMOTE_RANGE_YD),
         &[row.sender_guid, row.target_guid],
     )
 }
 
-/// An emote landed → SMSG_TEXT_EMOTE + SMSG_EMOTE per viewer that can see the sender. Name
-/// resolve runs in the job against `coord`'s cache.
+/// A text emote landed → SMSG_TEXT_EMOTE + SMSG_EMOTE per viewer within 25 yd of the sender
+/// (`emote_event_outbound`'s `chat_in_range` gate). Name resolve runs in the job against `coord`'s
+/// cache.
 fn emote_appeared(view: &WorldView, coord: &Coordinator, shard: ShardId, row: &EmoteEvent) {
     let row = Arc::new(row.clone());
     for viewer in emote_audience(view, shard, &row) {
         let (row, coord) = (row.clone(), coord.clone());
+        let self_guid = viewer.self_guid;
         enqueue(viewer.clone(), move |_| {
-            super::subscriptions::emote_event_outbound(&coord, &row)
+            super::subscriptions::emote_event_outbound(&coord, self_guid, &row)
         });
     }
 }
