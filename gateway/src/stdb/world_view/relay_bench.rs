@@ -52,6 +52,7 @@ fn viewer(session: SessionId, self_guid: u64, tx: SessionTx) -> Arc<Viewer> {
         skill_slots: Arc::new(Mutex::new((HashMap::new(), 0))),
         explored: Mutex::new(ExplorationReplay::default()),
         motion_pending: Arc::new(MotionPending::default()),
+        member_stats: Default::default(),
     })
 }
 

@@ -274,6 +274,12 @@ companion destination.
 Realm-core's monotonic order for one complete party member list, leader, and loot rules. A World
 Shard keeps the last accepted value after disband. Older snapshots cannot change its party mirror.
 
+**Member Stats**:
+The status, health, power, level, zone, map position and auras a group member's frame shows for
+another member. The Gateway projects them from the Home Shard's cache and sends them only while the
+member is outside the viewer's AOI.
+_Avoid_: party stats, unit frame data
+
 **Recovery Scan**:
 A bounded scan of healing rotations that retains its last completed result while reading the next
 batch. The scan can be pending or complete; its result distinguishes unread, missing, and a selected

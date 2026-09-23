@@ -8,7 +8,8 @@
 
 use super::handlers::{
     AuctionActionStore, CastStore, DuelActionStore, ItemActionStore, LootWindowStore,
-    MeleeActionStore, QuestActionStore, TaxiActionStore, VendorActionStore, WeatherStore,
+    MeleeActionStore, MemberStatsStore, QuestActionStore, TaxiActionStore, VendorActionStore,
+    WeatherStore,
 };
 use super::*;
 
@@ -26,6 +27,7 @@ pub trait WorldStore:
     + ItemActionStore
     + LootWindowStore
     + MeleeActionStore
+    + MemberStatsStore
     + QuestActionStore
     + TaxiActionStore
     + VendorActionStore

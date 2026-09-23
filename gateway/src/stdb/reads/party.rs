@@ -259,3 +259,113 @@ impl Coordinator {
         Ok((watermark, wins))
     }
 }
+
+/// The raid cap (cm:Group.h:41). A longer member list is a damaged cache, not a group.
+const MEMBER_STATS_ROSTER_LIMIT: usize = 40;
+
+impl Coordinator {
+    /// Every other member of `self_guid`'s group, from the party authority's membership index:
+    /// Realm-core on a sharded Realm, this database otherwise.
+    pub(crate) fn group_mates(&self, self_guid: u64) -> Result<Vec<u64>> {
+        let authority = if self.is_sharded() {
+            self.realm_core()?
+        } else {
+            self.clone()
+        };
+        let roster = authority
+            .0
+            .coord()
+            .party_memberships
+            .read()
+            .unwrap()
+            .bounded_roster(self_guid, MEMBER_STATS_ROSTER_LIMIT)?;
+        Ok(roster
+            .map(|(_, members)| members.into_iter().filter(|m| *m != self_guid).collect())
+            .unwrap_or_default())
+    }
+
+    /// Find `guid` for Member Stats with the shared [`crate::world::locate_member`] decision. A
+    /// live entity may come from any connected World Shard. Offline follows the absence rule:
+    /// every configured World Shard must be healthy.
+    pub(crate) fn member_presence(&self, guid: u64) -> Result<crate::world::MemberPresence> {
+        crate::world::locate_member(
+            guid,
+            &self.all_shards(),
+            || {
+                if !self.is_sharded() {
+                    return Ok(false);
+                }
+                let locator = self.realm_core()?.realm_character_partition(guid)?;
+                Ok(locator.is_some_and(|partition| partition.transfer_pending))
+            },
+            || {
+                let shards = self.world_shards_for_absence()?;
+                Ok(shards.into_iter().map(|(_, shard)| shard).collect())
+            },
+        )
+    }
+}
+
+impl crate::world::MemberShardCache for Coordinator {
+    fn member_entity(&self, guid: u64) -> Option<crate::codec::MemberEntity> {
+        let live = self.0.coord();
+        let entity = live.conn.db.game_world_entity().guid().find(&guid)?;
+        Some(crate::codec::MemberEntity {
+            health: entity.health,
+            max_health: entity.max_health,
+            power: entity.power,
+            max_power: entity.max_power,
+            unit_bytes_0: entity.unit_bytes_0,
+            level: entity.level,
+            zone_id: entity.zone_id,
+            x: entity.x,
+            y: entity.y,
+            dead: entity.dead,
+            player_flags: entity.player_flags,
+        })
+    }
+
+    /// The Transfer Intent table is bounded by the Module's writer Gate, so the scan is short.
+    fn member_between_places(&self, guid: u64) -> bool {
+        let live = self.0.coord();
+        let db = &live.conn.db;
+        let session_online = db
+            .game_character()
+            .guid()
+            .find(&guid)
+            .is_some_and(|character| character.online);
+        session_online
+            || db
+                .game_bot_transfer_intent()
+                .iter()
+                .any(|intent| intent.bot_guid == guid)
+    }
+}
+
+#[cfg(test)]
+mod member_stats_adapter_tests {
+    use crate::test_scan::code_of;
+
+    fn flat(signature: &str) -> String {
+        code_of(include_str!("party.rs"), signature)
+            .split_whitespace()
+            .collect()
+    }
+
+    /// The Coordinator reads the caches and leaves every decision to `locate_member`, which the
+    /// Member Stats tests drive. Offline must come from the absence rule, and a bot's Transfer
+    /// Intent must count as a crossing, because a sessionless bot is never online.
+    #[test]
+    fn the_coordinator_feeds_the_shared_decision_with_the_absence_rule() {
+        let presence = flat("pub(crate) fn member_presence(");
+        assert!(presence.contains("crate::world::locate_member(guid,&self.all_shards(),"));
+        assert!(presence.contains("self.world_shards_for_absence()?"));
+        assert!(presence.contains(".realm_character_partition(guid)?"));
+
+        let between = flat("fn member_between_places(");
+        assert!(between.contains(".is_some_and(|character|character.online)"));
+        assert!(between.contains(
+            "session_online||db.game_bot_transfer_intent().iter().any(|intent|intent.bot_guid==guid)"
+        ));
+    }
+}

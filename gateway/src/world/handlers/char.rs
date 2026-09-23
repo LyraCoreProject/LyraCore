@@ -170,6 +170,15 @@ fn enter_world<St: WorldStore + ?Sized>(
     if let Err(e) = party::on_world_entry(tx, store, character_guid) {
         log::warn!("world: party sync at world entry failed for guid {character_guid}: {e:#}");
     }
+    // A Member Stats tick can run between the registration above and that party frame, for a party
+    // the client does not know yet. Forget it behind the frame so the next tick sends every field.
+    if let Some(record) = subs.member_stats_record().cloned() {
+        let forget = move || {
+            record.forget_all();
+            Vec::new()
+        };
+        send(tx, Outbound::Job(Box::new(forget)))?;
+    }
     // Enter the world: CharSelect → InWorld (a reused connection has no open loot/attack — a world-port
     // re-entry likewise starts clean, since whatever the player was attacking/looting on the old map is
     // meaningless on the new one).

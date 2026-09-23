@@ -81,6 +81,7 @@ impl PlayerSubscriptions {
             skill_slots: Arc::new(Mutex::new((std::collections::HashMap::new(), 0))),
             explored: Mutex::new(world_view::ExplorationReplay::default()),
             motion_pending: Arc::new(world_view::MotionPending::default()),
+            member_stats: Default::default(),
         });
         view.add_viewer_on_shard(
             viewer.clone(),
@@ -105,6 +106,12 @@ impl PlayerSubscriptions {
                 .store(false, std::sync::atomic::Ordering::Release);
             view.remove_viewer(viewer.session);
         }
+    }
+
+    /// What this session's client holds of its group mates' Member Stats. `None` for the in-memory
+    /// test store.
+    pub(crate) fn member_stats_record(&self) -> Option<&crate::world::MemberStatsRecord> {
+        self.viewer.as_ref().map(|viewer| &viewer.member_stats)
     }
 
     /// Drive the shared AOI index from the player's movement: on a cell crossing, move the
@@ -3622,6 +3629,7 @@ impl Coordinator {
             skill_slots: skill_slots.clone(),
             explored: Mutex::new(explored),
             motion_pending: Arc::new(world_view::MotionPending::default()),
+            member_stats: Default::default(),
         });
         view.add_viewer(
             self,
@@ -4250,6 +4258,7 @@ mod tests {
             skill_slots: Arc::new(Mutex::new((std::collections::HashMap::new(), 0))),
             explored: Mutex::new(world_view::ExplorationReplay::default()),
             motion_pending: Arc::new(world_view::MotionPending::default()),
+            member_stats: Default::default(),
         }
     }
 

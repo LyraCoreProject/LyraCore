@@ -92,6 +92,9 @@ pub(crate) struct Viewer {
     /// This viewer's motion-coalescing buffer. Shared-dispatch-only state (no per-player
     /// twin), so it is constructed inline and pinned by no tripwire.
     pub(crate) motion_pending: Arc<MotionPending>,
+    /// What the Member Stats Relay last sent about each group mate. A new viewer starts empty, so
+    /// world entry and a group join both get every field on the next tick.
+    pub(crate) member_stats: crate::world::MemberStatsRecord,
 }
 
 impl Viewer {
@@ -391,6 +394,16 @@ impl WorldView {
                     .get(session)
                     .map(|registered| registered.viewer.clone())
             })
+            .collect()
+    }
+
+    /// Every registered viewer on every shard, for a Relay that visits each World Session.
+    pub(crate) fn all_viewers(&self) -> Vec<Arc<Viewer>> {
+        let registry = self.viewers.read().unwrap();
+        registry
+            .by_session
+            .values()
+            .map(|registered| registered.viewer.clone())
             .collect()
     }
 
@@ -2047,8 +2060,13 @@ fn group_event_appeared(view: &WorldView, coord: &Coordinator, row: &GroupEvent)
     }
     let (row, coord) = (row.clone(), coord.clone());
     let self_guid = viewer.self_guid;
-    enqueue(viewer.clone(), move |_| {
-        super::subscriptions::group_event_outbound(&coord, self_guid, &row)
+    enqueue(viewer.clone(), move |viewer| {
+        let packets = super::subscriptions::group_event_outbound(&coord, self_guid, &row);
+        // A party frame sets every member's online flag, so Member Stats start over behind it.
+        if row.kind == lyracore_shared::group::event_kind::LIST {
+            viewer.member_stats.forget_all();
+        }
+        packets
     });
 }
 
@@ -2390,6 +2408,19 @@ mod family_audience_tests {
         assert!(!group_event.contains("loot_tag_flags_after_membership_change"));
     }
 
+    /// A party frame sets every member's online flag behind the Member Stats Relay's back, so the
+    /// LIST job forgets the viewer's record and the next tick sends every field.
+    #[test]
+    fn a_party_frame_makes_member_stats_start_over() {
+        let source = include_str!("world_view.rs");
+        let group_event: String = crate::test_scan::code_of(source, "fn group_event_appeared")
+            .split_whitespace()
+            .collect();
+        assert!(group_event.contains(
+            "ifrow.kind==lyracore_shared::group::event_kind::LIST{viewer.member_stats.forget_all();}"
+        ));
+    }
+
     fn viewer(session: u64, self_guid: u64) -> Arc<Viewer> {
         let (tx, _rx) = SessionTx::with_depth(0);
         viewer_with_tx(session, self_guid, identity(session as u8), tx)
@@ -2426,6 +2457,7 @@ mod family_audience_tests {
             skill_slots: Arc::new(Mutex::new((HashMap::new(), 0))),
             explored: Mutex::new(ExplorationReplay::default()),
             motion_pending: Arc::new(MotionPending::default()),
+            member_stats: Default::default(),
         })
     }
 
@@ -2860,6 +2892,7 @@ mod family_audience_tests {
             skill_slots: old.skill_slots.clone(),
             explored: Mutex::new(ExplorationReplay::default()),
             motion_pending: old.motion_pending.clone(),
+            member_stats: Default::default(),
         });
         view.add_viewer_on_shard(old.clone(), CellKey::at(0, 0, 0, 0), 3);
         view.add_viewer_on_shard(replacement.clone(), CellKey::at(1, 2, 0, 0), 4);

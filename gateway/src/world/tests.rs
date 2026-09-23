@@ -1,7 +1,8 @@
 use super::handlers::{
     AuctionActionStore, AuctionInteraction, CastStore, DuelActionStore, ItemActionStore,
-    LootWindowRefusal, LootWindowRequestStatus, LootWindowStore, MeleeActionStore,
-    QuestActionStore, TaxiActionStore, VendorActionStore, WeatherStore,
+    LootWindowRefusal, LootWindowRequestStatus, LootWindowStore, MeleeActionStore, MemberPresence,
+    MemberShardCache, MemberSnapshot, MemberStatsStore, QuestActionStore, TaxiActionStore,
+    VendorActionStore, WeatherStore,
 };
 use super::party::PartyOutcome;
 use super::*;
@@ -99,6 +100,11 @@ fn world_session_socket_pair_times_out_when_the_server_writes_nothing() {
 /// file because this one is already the largest in the tree.
 #[path = "party_tests.rs"]
 mod party_tests;
+
+/// Member Stats: the Relay tick and the stats request against the party topology. A sibling of
+/// `party_tests` so it reaches `InMemoryStore` and that topology without widening anything.
+#[path = "member_stats_tests.rs"]
+mod member_stats_tests;
 
 /// The realm-wide whisper routing tests. A sibling of `party_tests` for the
 /// same reason — it reaches `InMemoryStore` (and `party_tests`' live topology) without widening
@@ -789,6 +795,18 @@ struct InMemoryStore {
     busy_trades: std::sync::Mutex<Vec<u64>>,
     /// Recorded `ignore_trade` self_guids — CMSG_IGNORE_TRADE (#123).
     ignore_trades: std::sync::Mutex<Vec<u64>>,
+    /// Live `game_world_entity` rows on THIS shard, as the columns Member Stats read.
+    member_entities: std::sync::Mutex<Vec<(u64, codec::MemberEntity)>>,
+    /// Characters Realm-core reports in a pending Transfer. Read on the realm handle only.
+    members_in_transit: std::sync::Mutex<Vec<u64>>,
+    /// Characters THIS shard shows between two places: an online Session with no entity, or a
+    /// bot named by a Transfer Intent.
+    members_between_places: std::sync::Mutex<Vec<u64>>,
+    /// With `relay_view`, the Member Stats a Relay tick delivered between viewer registration and
+    /// the world-entry party frame.
+    member_stats_before_party_frame: Option<u64>,
+    /// How many `member_presence` reads reached this handle.
+    member_presence_reads: std::sync::atomic::AtomicUsize,
 }
 
 /// The Fake's reducer edge for a party op: the Module answers a Refusal as the bare tag, and
@@ -1800,15 +1818,18 @@ impl WorldStore for InMemoryStore {
         if self.turn_in_reward_item.is_some() {
             *self.turn_in_tx.lock().unwrap() = Some(tx.clone());
         }
-        match &self.relay_view {
-            Some(view) => Ok(PlayerSubscriptions::registered_for_test(
-                view.clone(),
-                self_guid,
-                arrival,
-                tx,
-            )),
-            None => Ok(PlayerSubscriptions::empty()),
+        let Some(view) = &self.relay_view else {
+            return Ok(PlayerSubscriptions::empty());
+        };
+        let subs = PlayerSubscriptions::registered_for_test(view.clone(), self_guid, arrival, tx);
+        if let (Some(mate), Some(record)) = (
+            self.member_stats_before_party_frame,
+            subs.member_stats_record(),
+        ) {
+            let delivered = codec::MemberStats::default();
+            record.lock().insert(mate, MemberSnapshot::Live(delivered));
         }
+        Ok(subs)
     }
     fn character_by_guid(&self, guid: u64) -> Result<Option<codec::CharacterView>> {
         if let Some(error) = &self.character_read_error {
@@ -4076,6 +4097,71 @@ impl WeatherStore for InMemoryStore {
             .iter()
             .find(|(zone, _)| *zone == zone_id)
             .map(|(_, view)| *view))
+    }
+}
+
+/// Member Stats over the same party state the routing tests use: Realm-core's `party` when this
+/// handle has a realm, its own `mirror` on a single database. Presence reads this shard and its
+/// peers, every World Shard, like `Coordinator::member_presence`.
+impl MemberStatsStore for InMemoryStore {
+    fn group_mates(&self, self_guid: u64) -> Result<Vec<u64>> {
+        let roster = match &self.realm {
+            Some(realm) => {
+                let party = realm.party.lock().unwrap();
+                party
+                    .group_of(self_guid)
+                    .and_then(|group| party.roster(group))
+            }
+            None => self
+                .mirror
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|roster| roster.members.contains(&self_guid))
+                .cloned(),
+        };
+        Ok(roster
+            .map(|roster| roster.members)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|member| *member != self_guid)
+            .collect())
+    }
+
+    fn member_presence(&self, guid: u64) -> Result<MemberPresence> {
+        self.member_presence_reads
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let peers = self.peers.lock().unwrap().clone();
+        let connected: Vec<&InMemoryStore> = if peers.is_empty() {
+            vec![self]
+        } else {
+            peers.iter().map(AsRef::as_ref).collect()
+        };
+        locate_member(
+            guid,
+            &connected,
+            || {
+                Ok(self
+                    .realm
+                    .as_ref()
+                    .is_some_and(|realm| realm.members_in_transit.lock().unwrap().contains(&guid)))
+            },
+            || match &self.world_shard_set_error {
+                Some(error) => Err(anyhow!(error.clone())),
+                None => Ok(connected.clone()),
+            },
+        )
+    }
+}
+
+impl MemberShardCache for &InMemoryStore {
+    fn member_entity(&self, guid: u64) -> Option<codec::MemberEntity> {
+        let entities = self.member_entities.lock().unwrap();
+        entities.iter().find(|(g, _)| *g == guid).map(|(_, e)| *e)
+    }
+
+    fn member_between_places(&self, guid: u64) -> bool {
+        self.members_between_places.lock().unwrap().contains(&guid)
     }
 }
 
