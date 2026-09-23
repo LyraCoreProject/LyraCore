@@ -101,9 +101,9 @@ are answered by the gateway, which is the only component that can see the whole 
 
 | Gate | Why it cannot live in the module | Where |
 |---|---|---|
-| "does this character exist" / "is this character online" for party invites | realm-core holds no characters and no live entities; one world shard sees only its own | `gateway/src/world/party.rs` (`presence`, `live_anywhere`) |
-| whisper target resolution by name, realm-wide, plus the ignore verdict | same | `party.rs` (`resolve_by_name`), `gateway/src/world/whisper.rs` (`ignored_anywhere`) |
-| `CMSG_NAME_QUERY` resolution | same | `party.rs` (`character_anywhere`) |
+| "does this character exist" / "is this character online" for party invites, and "is the new leader online" when the lead passes | realm-core holds no characters and no live entities; one world shard sees only its own | `gateway/src/world/presence.rs` (`of`, `live_anywhere`) |
+| whisper target resolution by name, realm-wide, plus the ignore verdict | same | `presence.rs` (`resolve_by_name`), `gateway/src/world/whisper.rs` (`ignored_anywhere`) |
+| `CMSG_NAME_QUERY` resolution | same | `presence.rs` (`character_anywhere`) |
 | loot-roll promotion and settlement fan-out across shards | a kill's transaction cannot reach realm-core | `gateway/src/world/loot.rs` |
 
 Each of these re-implements *the read the module gate performed*, not a new rule, and each returns

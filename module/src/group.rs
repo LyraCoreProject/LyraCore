@@ -27,10 +27,12 @@
 //! decision to LEAVE its party, which meets the identical authority wall.
 //!
 //! Vanilla-parity notes: a Party caps at 5 members. Its leader may convert it to a Raid of up to 40
-//! in 8 Subgroups, and it never converts back. Kill XP splits EVENLY among in-range living members
-//! (each member's grey-clamp applies to their OWN level, so a too-high member naturally gets 0) —
-//! vanilla's sum-of-levels weighting, the 3/4/5-member bonus multipliers and the raid XP rate are a
-//! documented follow-up. Kill quest-credit goes to every in-range member (vanilla).
+//! in 8 Subgroups, and it never converts back. A Raid leader promotes Assistants, who may also
+//! invite and remove members, and the first Assistant leads when the leader leaves. Kill XP splits
+//! EVENLY among in-range living members (each member's grey-clamp applies to their OWN level, so
+//! a too-high member naturally gets 0) — vanilla's sum-of-levels weighting, the 3/4/5-member bonus
+//! multipliers and the raid XP rate are a documented follow-up. Kill quest-credit goes to every
+//! in-range member (vanilla).
 
 use spacetimedb::{reducer, table, Identity, ReducerContext, Table, Timestamp};
 
@@ -300,10 +302,11 @@ pub struct BotInviteIntent {
 }
 
 /// Record a bot's serendipity invite DECISION for the gateway to execute. No gating here
-/// beyond existence-of-nothing — every real gate (leader-only, party cap, already-grouped,
-/// pending-invite-replaces-older) lives in `invite_core_on`/`realm_group_op`, which the gateway calls
-/// against the correct authority; this is a pure write, mirroring how a player's own CMSG_GROUP_INVITE
-/// is a pure gateway-side resolve-then-call with no module-side pre-check either.
+/// beyond existence-of-nothing — every real gate (leader or Assistant only, party cap,
+/// already-grouped, pending-invite-replaces-older) lives in `invite_core_on`/`realm_group_op`,
+/// which the gateway calls against the correct authority; this is a pure write, mirroring how a
+/// player's own CMSG_GROUP_INVITE is a pure gateway-side resolve-then-call with no module-side
+/// pre-check either.
 ///
 /// Its ONLY caller is the playerbots drop-in (see the `package_only!` macro in `actor.rs`): a
 /// build with no REAL package installed — the common case, since only the inert reference Package,
@@ -538,14 +541,9 @@ pub(crate) fn in_raid(ctx: &ReducerContext, character_guid: u64) -> bool {
         .is_some_and(|group| group_kind_of(&group) == GroupKind::Raid)
 }
 
-/// Whether `member` may manage `group`'s Raid: its leader, or an Assistant.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "subgroup moves, leadership and Group Broadcasts are the first callers"
-    )
-)]
+/// Whether `member` may manage `group`'s Raid: its leader, or an Assistant. Only a Raid member
+/// holds the Assistant flag, so in a Party this is the leader alone. Invites, kicks and the check
+/// that a pending invite still stands all read it.
 pub(crate) fn manages_raid(group: &Group, member: &GroupMember) -> bool {
     group.leader_guid == member.character_guid || raid_slot_of(member).is_assistant()
 }
@@ -1108,12 +1106,10 @@ fn checked_group_membership(
     Ok(Some((member, group)))
 }
 
-/// The leader-authorization sequence shared by `invite_core_on` / `uninvite_on` /
-/// `set_loot_method_on`: resolve `guid`'s group membership, its `Group` row, and confirm
-/// `guid` actually IS that group's leader. [`GroupRefusal::NotInGroup`] if `guid` has no group at
-/// all; [`GroupRefusal::NotLeader`] if it does but isn't the leader. `invite_core_on` treats
-/// `NotInGroup` as an ALLOWED case rather than propagating it — starting a brand-new group (where
-/// the inviter becomes leader) is fine; see its call site.
+/// The leader-authorization sequence of the ops only the leader may run (loot rules, convert, set
+/// leader, set Assistant): resolve `guid`'s group membership, its `Group` row, and confirm `guid`
+/// actually IS that group's leader. [`GroupRefusal::NotInGroup`] if `guid` has no group at all;
+/// [`GroupRefusal::NotLeader`] if it does but isn't the leader.
 fn led_group_of(ctx: &ReducerContext, guid: u64) -> Result<(GroupMember, Group), GroupOpError> {
     let (m, group) = checked_group_membership(ctx, guid)?.ok_or(GroupRefusal::NotInGroup)?;
     if group.leader_guid != guid {
@@ -1229,17 +1225,16 @@ fn invite_core_on(
     if checked_group_membership(ctx, target_guid)?.is_some() {
         return Err(GroupRefusal::AlreadyInGroup.into());
     }
-    // The inviter having NO group yet is fine (they'll lead a brand-new one) — only propagate
-    // NotLeader (inviter is in a group but isn't its leader); a led group additionally enforces the
-    // member cap of its kind.
-    match led_group_of(ctx, inviter_guid) {
-        Ok((m, group)) => {
-            if !has_room(group_kind_of(&group), members_of(ctx, m.group_id).len()) {
-                return Err(GroupRefusal::GroupFull.into());
-            }
+    // An inviter with NO group yet leads the one the first accept forms. An inviter in a group must
+    // lead it or be an Assistant in it (cm:GroupHandler.cpp:128-139), and the group must have room
+    // for its kind.
+    if let Some((m, group)) = checked_group_membership(ctx, inviter_guid)? {
+        if !manages_raid(&group, &m) {
+            return Err(GroupRefusal::NotLeader.into());
         }
-        Err(GroupOpError::Refused(GroupRefusal::NotInGroup)) => {}
-        Err(error) => return Err(error),
+        if !has_room(group_kind_of(&group), members_of(ctx, m.group_id).len()) {
+            return Err(GroupRefusal::GroupFull.into());
+        }
     }
     let invites = ctx.db.game_group_invite();
     for stale in invites.by_target().filter(&target_guid).collect::<Vec<_>>() {
@@ -1335,11 +1330,11 @@ fn accept_invite_on(
     let members = ctx.db.game_group_member();
     let (group_id, slot) = match checked_group_membership(ctx, inviter_guid)? {
         Some((m, group)) => {
-            // Re-run the invite-time leadership gate: the invite was issued when the inviter was
-            // the leader (or ungrouped and about to lead). If they since joined a DIFFERENT group
-            // as a plain member, honoring the stale invite would smuggle the acceptor into a group
-            // whose leader never invited them.
-            if group.leader_guid != inviter_guid {
+            // Re-run the invite-time rights gate: the invite was issued when the inviter led the
+            // group or assisted in it (or was ungrouped and about to lead). An inviter who since
+            // lost those rights, a demoted Assistant or a plain member of another group, no longer
+            // speaks for the group, so the stale invite would smuggle the acceptor in.
+            if !manages_raid(&group, &m) {
                 return Err(GroupRefusal::InviterUnavailable.into());
             }
             let current = members_of(ctx, m.group_id);
@@ -1444,30 +1439,36 @@ fn leave_group_on(ctx: &ReducerContext, leaver_guid: u64) -> Result<(), GroupOpE
 /// The identity-free kick core — the body `group_uninvite` used to inline.
 pub(crate) fn uninvite_from_group(
     ctx: &ReducerContext,
-    leader_guid: u64,
+    actor_guid: u64,
     target_guid: u64,
 ) -> Result<(), String> {
-    uninvite_on(ctx, leader_guid, target_guid).map_err(|error| {
-        group_op_error(
-            error,
-            &format!("{leader_guid} could not kick {target_guid}"),
-        )
+    uninvite_on(ctx, actor_guid, target_guid).map_err(|error| {
+        group_op_error(error, &format!("{actor_guid} could not kick {target_guid}"))
     })
 }
 
+/// The leader or an Assistant removes another member (cm:Player.cpp:19051-19063). Nobody removes
+/// the leader: an Assistant who tries is refused with [`GroupRefusal::NotLeader`], the answer
+/// cmangos sends (cm:GroupHandler.cpp:274-276). An Assistant may remove another Assistant.
 fn uninvite_on(
     ctx: &ReducerContext,
-    leader_guid: u64,
+    actor_guid: u64,
     target_guid: u64,
 ) -> Result<(), GroupOpError> {
-    let (m, _group) = led_group_of(ctx, leader_guid)?;
+    let (m, group) = checked_group_membership(ctx, actor_guid)?.ok_or(GroupRefusal::NotInGroup)?;
+    if !manages_raid(&group, &m) {
+        return Err(GroupRefusal::NotLeader.into());
+    }
     let (target, _target_group) =
         checked_group_membership(ctx, target_guid)?.ok_or(GroupRefusal::TargetNotInGroup)?;
     if target.group_id != m.group_id {
         return Err(GroupRefusal::TargetNotInGroup.into());
     }
-    if target_guid == leader_guid {
+    if target_guid == actor_guid {
         return Err(GroupRefusal::KickSelf.into());
+    }
+    if target_guid == group.leader_guid {
+        return Err(GroupRefusal::NotLeader.into());
     }
     remove_member(ctx, target_guid);
     Ok(())
@@ -1553,6 +1554,63 @@ fn raid_convert_on(ctx: &ReducerContext, actor_guid: u64) -> Result<RosterChange
     Ok(RosterChange::Changed)
 }
 
+/// `CMSG_GROUP_SET_LEADER`: the leader passes the lead to another member (cm:GroupHandler.cpp:
+/// 344-362). Every member hears the new leader's name, then gets the list (cm:Group.cpp:490-502).
+/// The new leader keeps its Raid Slot. The target must be online in vanilla; Realm-core cannot see
+/// presence, so the Gateway refuses an offline target before it calls this.
+fn set_leader_on(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    target_guid: u64,
+) -> Result<RosterChange, GroupOpError> {
+    let (member, mut group) = led_group_of(ctx, actor_guid)?;
+    if target_guid == actor_guid {
+        return Err(GroupRefusal::TargetIsSelf.into());
+    }
+    let (target, _target_group) =
+        checked_group_membership(ctx, target_guid)?.ok_or(GroupRefusal::TargetNotInGroup)?;
+    if target.group_id != member.group_id {
+        return Err(GroupRefusal::TargetNotInGroup.into());
+    }
+    group.leader_guid = target_guid;
+    ctx.db.game_group().group_id().update(group);
+    announce_leader(ctx, member.group_id, target_guid);
+    push_list_to_all(ctx, member.group_id);
+    Ok(RosterChange::Changed)
+}
+
+/// `CMSG_GROUP_ASSISTANT_LEADER`: the Raid leader promotes a member to Assistant or demotes one
+/// (cm:GroupHandler.cpp:527-545, cm:Group.h:222-230). Promoting an Assistant again, or demoting a
+/// plain member, succeeds and changes nothing, so it writes no row and sends no list.
+fn set_assistant_on(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    target_guid: u64,
+    promote: bool,
+) -> Result<RosterChange, GroupOpError> {
+    let (member, group) = led_group_of(ctx, actor_guid)?;
+    if group_kind_of(&group) != GroupKind::Raid {
+        return Err(GroupRefusal::NotRaid.into());
+    }
+    if target_guid == actor_guid {
+        return Err(GroupRefusal::TargetIsSelf.into());
+    }
+    let (mut target, _target_group) =
+        checked_group_membership(ctx, target_guid)?.ok_or(GroupRefusal::TargetNotInGroup)?;
+    if target.group_id != member.group_id {
+        return Err(GroupRefusal::TargetNotInGroup.into());
+    }
+    let slot = raid_slot_of(&target);
+    let assigned = slot.with_assistant(promote);
+    if assigned == slot {
+        return Ok(RosterChange::Unchanged);
+    }
+    target.raid_slot = assigned.wire();
+    ctx.db.game_group_member().id().update(target);
+    push_list_to_all(ctx, member.group_id);
+    Ok(RosterChange::Changed)
+}
+
 /// Whether a successful op changed what the Roster Revision orders: the member list, leader, loot
 /// rules, Group kind or a Raid Slot. Only a change advances the revision.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1563,7 +1621,8 @@ enum RosterChange {
 
 /// The single membership-removal core (voluntary leave, kick, character delete): drops the member
 /// row, notifies the leaver, transfers leadership if the leader left, and DISBANDS below 2 members
-/// (vanilla: a party of one is no party). Idempotent for a guid not in any group.
+/// (vanilla: a party of one is no party). A new leader is announced to the remaining members before
+/// their list (cm:Group.cpp:464-470). Idempotent for a guid not in any group.
 pub(crate) fn remove_member(ctx: &ReducerContext, character_guid: u64) {
     let Some(m) = group_of(ctx, character_guid) else {
         return;
@@ -1580,12 +1639,12 @@ pub(crate) fn remove_member(ctx: &ReducerContext, character_guid: u64) {
     );
 
     let remaining = members_of(ctx, group_id);
-    let pairs: Vec<(u64, u64)> = remaining.iter().map(|r| (r.id, r.character_guid)).collect();
     let group = ctx.db.game_group().group_id().find(group_id);
     // The incumbent-leader arg only matters for the survive branch; a missing group row (shouldn't
     // happen while members exist) falls back to 0 — no update runs without a row to update anyway.
     match leader_after_removal(
-        &pairs,
+        group.as_ref().map_or(GroupKind::Party, group_kind_of),
+        &remaining,
         character_guid,
         group.as_ref().map_or(0, |g| g.leader_guid),
     ) {
@@ -1622,6 +1681,7 @@ pub(crate) fn remove_member(ctx: &ReducerContext, character_guid: u64) {
                 if group.leader_guid != new_leader {
                     group.leader_guid = new_leader;
                     ctx.db.game_group().group_id().update(group);
+                    announce_leader(ctx, group_id, new_leader);
                 }
             }
         }
@@ -1629,29 +1689,46 @@ pub(crate) fn remove_member(ctx: &ReducerContext, character_guid: u64) {
     push_list_to_all(ctx, group_id);
 }
 
+/// Tell every member who leads now. `SMSG_GROUP_SET_LEADER` carries only a name, which the Gateway
+/// resolves from `leader_guid`, because Realm-core holds no names.
+fn announce_leader(ctx: &ReducerContext, group_id: u64, leader_guid: u64) {
+    group_broadcast(
+        ctx,
+        group_id,
+        GroupAudience::Everyone,
+        group_event_kind::SET_LEADER,
+        leader_guid,
+        String::new(),
+    );
+}
+
 /// The post-removal survival/leadership decision for [`remove_member`]: `None` → the group DISBANDS
 /// (fewer than 2 members remain — vanilla: a party of one is no party); `Some(leader)` → the group
-/// survives under `leader`, the incumbent unless the leaver WAS the leader, in which case leadership
-/// passes to the longest-standing remaining member (lowest member-row id). `remaining` is the
-/// `(member_row_id, character_guid)` pairs left AFTER the leaver's row is deleted. Pure — unit-tested.
+/// survives under `leader`, the incumbent unless the leaver WAS the leader. Then the lead passes in
+/// join order (lowest member-row id): in a Raid to the first Assistant, else to the first member
+/// (cm:Group.cpp:954-997). cmangos also prefers online members; Realm-core cannot see presence, so
+/// that preference is not reproduced. `remaining` is the member rows left AFTER the leaver's row is
+/// deleted. Pure — unit-tested.
 pub(crate) fn leader_after_removal(
-    remaining: &[(u64, u64)],
+    kind: GroupKind,
+    remaining: &[GroupMember],
     leaving_guid: u64,
     leader_guid: u64,
 ) -> Option<u64> {
     if remaining.len() < 2 {
         return None;
     }
-    if leader_guid == leaving_guid {
-        // Leadership passes to the longest-standing remaining member (lowest row id).
-        let heir = remaining
-            .iter()
-            .min_by_key(|(id, _)| *id)
-            .expect("len >= 2");
-        Some(heir.1)
-    } else {
-        Some(leader_guid)
+    if leader_guid != leaving_guid {
+        return Some(leader_guid);
     }
+    let first_assistant = remaining
+        .iter()
+        .filter(|member| kind == GroupKind::Raid && raid_slot_of(member).is_assistant())
+        .min_by_key(|member| member.id);
+    let first_member = remaining.iter().min_by_key(|member| member.id);
+    first_assistant
+        .or(first_member)
+        .map(|heir| heir.character_guid)
 }
 
 // ===========================================================================================
@@ -1719,6 +1796,8 @@ pub fn realm_group_op(
             set_loot_method_on(ctx, actor_guid, arg_a, target_guid, arg_b).map(|()| Changed)
         }
         realm_op::RAID_CONVERT => raid_convert_on(ctx, actor_guid),
+        realm_op::SET_LEADER => set_leader_on(ctx, actor_guid, target_guid),
+        realm_op::SET_ASSISTANT => set_assistant_on(ctx, actor_guid, target_guid, arg_a != 0),
         other => return Err(format!("unknown realm group op {other}")),
     };
     let change = ran
@@ -2384,18 +2463,85 @@ mod tests {
         ));
     }
 
+    /// A remaining member row: `id` is its join order.
+    fn member_row(id: u64, character_guid: u64, assistant: bool) -> GroupMember {
+        GroupMember {
+            id,
+            group_id: 7,
+            character_guid,
+            owner_identity: Identity::ZERO,
+            raid_slot: RaidSlot::new(0, assistant).unwrap().wire(),
+        }
+    }
+
     #[test]
     fn leadership_passes_to_the_longest_standing_member_or_the_group_disbands() {
+        let party = GroupKind::Party;
+        let row = |id, guid| member_row(id, guid, false);
         // Fewer than 2 remaining → disband (None), whoever led and whoever left.
-        assert_eq!(leader_after_removal(&[], 7, 7), None);
-        assert_eq!(leader_after_removal(&[(3, 30)], 7, 7), None);
-        assert_eq!(leader_after_removal(&[(3, 30)], 7, 30), None); // even a surviving leader disbands alone
-                                                                   // A NON-leader leaving keeps the incumbent.
-        assert_eq!(leader_after_removal(&[(1, 10), (2, 20)], 99, 10), Some(10));
-        // The LEADER leaving passes to the lowest member-ROW id (longest-standing), not the lowest guid.
-        assert_eq!(leader_after_removal(&[(5, 90), (9, 20)], 10, 10), Some(90));
-        assert_eq!(leader_after_removal(&[(9, 20), (5, 90)], 10, 10), Some(90));
-        // order-independent
+        assert_eq!(leader_after_removal(party, &[], 7, 7), None);
+        assert_eq!(leader_after_removal(party, &[row(3, 30)], 7, 7), None);
+        assert_eq!(
+            leader_after_removal(party, &[row(3, 30)], 7, 30),
+            None,
+            "even a surviving leader disbands alone"
+        );
+        assert_eq!(
+            leader_after_removal(party, &[row(1, 10), row(2, 20)], 99, 10),
+            Some(10),
+            "a member who does not lead leaves the incumbent in place"
+        );
+        // The LEADER leaving passes to the lowest member-ROW id (longest-standing), not the lowest
+        // guid, whatever order the rows arrive in.
+        assert_eq!(
+            leader_after_removal(party, &[row(5, 90), row(9, 20)], 10, 10),
+            Some(90)
+        );
+        assert_eq!(
+            leader_after_removal(party, &[row(9, 20), row(5, 90)], 10, 10),
+            Some(90)
+        );
+    }
+
+    /// cm:Group.cpp:972-977, 993: a Raid passes the lead to its first Assistant in join order, and
+    /// to its first member when it has no Assistant.
+    #[test]
+    fn a_raid_leader_leaving_passes_the_lead_to_the_first_assistant_in_join_order() {
+        let raid = GroupKind::Raid;
+        let with_assistants = [
+            member_row(2, 20, false),
+            member_row(9, 90, true),
+            member_row(5, 50, true),
+        ];
+        assert_eq!(
+            leader_after_removal(raid, &with_assistants, 10, 10),
+            Some(50)
+        );
+        assert_eq!(
+            leader_after_removal(
+                raid,
+                &[member_row(3, 30, false), member_row(2, 20, false)],
+                10,
+                10
+            ),
+            Some(20),
+            "without an Assistant the first member leads"
+        );
+        assert_eq!(
+            leader_after_removal(raid, &with_assistants, 30, 10),
+            Some(10),
+            "a member who does not lead leaves the incumbent in place"
+        );
+    }
+
+    /// Only a Raid prefers an Assistant (cm:Group.cpp:972). A Party passes the lead in join order.
+    #[test]
+    fn a_party_passes_the_lead_in_join_order_whatever_a_slot_says() {
+        let remaining = [member_row(2, 20, false), member_row(5, 50, true)];
+        assert_eq!(
+            leader_after_removal(GroupKind::Party, &remaining, 10, 10),
+            Some(20)
+        );
     }
 
     // ---- Raids ----
@@ -2453,12 +2599,24 @@ mod tests {
         assert_eq!(selected(GroupAudience::Subgroup(1)), [3]);
     }
 
+    /// Invites, kicks and the accept-time check that an invite still stands all read this over the
+    /// inviter's current Group row and Raid Slot.
     #[test]
     fn the_leader_and_assistants_manage_a_raid() {
         let group = raid_led_by(1);
         assert!(manages_raid(&group, &raid_member(1, 0, false)));
         assert!(manages_raid(&group, &raid_member(2, 3, true)));
         assert!(!manages_raid(&group, &raid_member(3, 3, false)));
+        let demoted = GroupMember {
+            raid_slot: raid_slot_of(&raid_member(2, 3, true))
+                .with_assistant(false)
+                .wire(),
+            ..raid_member(2, 3, true)
+        };
+        assert!(
+            !manages_raid(&group, &demoted),
+            "a demoted Assistant's pending invite no longer stands"
+        );
     }
 
     #[test]
@@ -2722,6 +2880,14 @@ mod tests {
             (
                 "realm_op::RAID_CONVERT =>",
                 "raid_convert_on(ctx, actor_guid)",
+            ),
+            (
+                "realm_op::SET_LEADER =>",
+                "set_leader_on(ctx, actor_guid, target_guid)",
+            ),
+            (
+                "realm_op::SET_ASSISTANT =>",
+                "set_assistant_on(ctx, actor_guid, target_guid, arg_a != 0)",
             ),
         ] {
             let arm = body.split(op).nth(1).unwrap_or_else(|| {

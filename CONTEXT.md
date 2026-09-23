@@ -284,7 +284,11 @@ A member's Subgroup and Assistant flag, stored and sent as the vanilla group-lis
 `subgroup | 0x80 if assistant`. A Party member holds Subgroup 0 without the flag.
 
 **Assistant**:
-A Raid member the leader promoted. The Raid Slot carries the flag.
+A Raid member the leader promoted. The Raid Slot carries the flag. An Assistant may invite, remove
+any member but the leader, move members between Subgroups, set Target Icons, start a Ready Check
+and send raid warnings. Only the leader converts, changes loot rules, passes the lead or promotes.
+When the leader leaves a Raid, the first Assistant in join order leads.
+_Avoid_: officer, raid officer, promoted member
 
 **Group Audience**:
 Who receives one Group Broadcast: everyone, everyone but the actor, the leader, or one Subgroup.

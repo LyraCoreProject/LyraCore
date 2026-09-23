@@ -323,6 +323,10 @@ pub enum Op {
     },
     /// `CMSG_GROUP_RAID_CONVERT`.
     RaidConvert,
+    /// `CMSG_GROUP_SET_LEADER`: pass the lead to this member.
+    SetLeader(u64),
+    /// `CMSG_GROUP_ASSISTANT_LEADER`: promote this member to Assistant, or demote it.
+    SetAssistant { target: u64, promote: bool },
 }
 
 /// `realm_group_op`'s argument slots after the actor: `(op, target_guid, arg_a, arg_b, arg_c)`.
@@ -342,6 +346,10 @@ impl Op {
                 threshold,
             } => (realm_op::LOOT_METHOD, master, setting, threshold, 0),
             Op::RaidConvert => (realm_op::RAID_CONVERT, 0, 0, 0, 0),
+            Op::SetLeader(target) => (realm_op::SET_LEADER, target, 0, 0, 0),
+            Op::SetAssistant { target, promote } => {
+                (realm_op::SET_ASSISTANT, target, u8::from(promote), 0, 0)
+            }
         }
     }
 }
@@ -706,8 +714,8 @@ fn answer_for_session_less<St: WorldStore + ?Sized>(store: &St, realm: &dyn Worl
 /// Run one party op for the session that owns `self_guid`.
 ///
 /// Unsharded → the pre-realm-core path, verbatim: the player's own connection calls the player-facing
-/// reducer on the player's own shard, and nothing else happens. A raid op has no player-facing
-/// reducer, so it calls `realm_group_op` on that same shard.
+/// reducer on the player's own shard, and nothing else happens. A raid or leadership op has no
+/// player-facing reducer, so it calls `realm_group_op` on that same shard.
 ///
 /// Sharded → realm-core runs the op, then every connected world shard's mirror is refreshed. The
 /// mirror refresh is best-effort BY DESIGN (see [`sync_mirrors`]); the op's own result is not.
@@ -722,6 +730,13 @@ pub(crate) fn run<St: WorldStore + ?Sized>(
             return Ok(GroupRefusal::WrongFaction.into());
         }
     }
+    // Vanilla passes the lead only to an online member (cm:GroupHandler.cpp:352-356). The party
+    // authority runs its rules without presence on both planes, so the Gateway answers it here.
+    if let Op::SetLeader(target) = op {
+        if !live_anywhere(store, target) {
+            return Ok(GroupRefusal::TargetOffline.into());
+        }
+    }
     let Some(realm) = store.realm_store() else {
         return match op {
             Op::Invite(target) => store.group_invite(account_id, self_guid, target),
@@ -734,9 +749,11 @@ pub(crate) fn run<St: WorldStore + ?Sized>(
                 master,
                 threshold,
             } => store.group_loot_method(account_id, self_guid, setting, master, threshold),
-            // A raid op has no player-facing reducer. With one database, the home shard holds the
-            // party, so it runs the same `realm_group_op` Realm-core would.
-            Op::RaidConvert => run_on_authority(store, self_guid, op),
+            // A raid or leadership op has no player-facing reducer. With one database, the home
+            // shard holds the party, so it runs the same `realm_group_op` Realm-core would.
+            Op::RaidConvert | Op::SetLeader(_) | Op::SetAssistant { .. } => {
+                run_on_authority(store, self_guid, op)
+            }
         };
     };
     // The two gates realm-core cannot run for itself, because the directory database holds neither
@@ -778,19 +795,21 @@ pub(crate) fn run<St: WorldStore + ?Sized>(
     if let Op::Invite(target) = op {
         answer_for_session_less(store, realm.as_ref(), target);
     }
-    if op == Op::RaidConvert && raid_unchanged(realm.as_ref(), self_guid, before.as_ref()) {
+    if matches!(op, Op::RaidConvert | Op::SetAssistant { .. })
+        && roster_unchanged(realm.as_ref(), self_guid, before.as_ref())
+    {
         return Ok(PartyOutcome::Ran);
     }
     sync_mirrors(store, realm.as_ref(), self_guid, before);
     Ok(PartyOutcome::Ran)
 }
 
-/// Whether a successful convert left `self_guid`'s Raid as it was: the Group was a Raid before
-/// the op, and Realm-core still shows the same Group at the same Roster Revision. The Module
-/// changes nothing when it converts a Raid again, so no mirror needs a push. A failed read answers
-/// `false`, and the push runs as usual.
-fn raid_unchanged(realm: &dyn WorldStore, self_guid: u64, before: Option<&GroupRoster>) -> bool {
-    let Some(before) = before.filter(|roster| roster.kind == GroupKind::Raid) else {
+/// Whether a successful op left `self_guid`'s Group as it was: Realm-core still shows the same
+/// Group at the same Roster Revision as before the op. Converting a Raid again, or repeating a
+/// promotion or a demotion, succeeds and changes nothing, so no mirror needs a push. A failed read
+/// answers `false`, and the push runs as usual.
+fn roster_unchanged(realm: &dyn WorldStore, self_guid: u64, before: Option<&GroupRoster>) -> bool {
+    let Some(before) = before else {
         return false;
     };
     realm
