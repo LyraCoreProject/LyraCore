@@ -2005,7 +2005,7 @@ fn playerbots_quest_fallback_distributes_an_ungrouped_population() {
         .into_iter()
         .map(|row| row["character_guid"].clone())
         .collect();
-    subjects.sort();
+    subjects.sort_by_key(|guid| guid.parse::<u64>().unwrap());
     assert_eq!(subjects.len(), 25, "{subjects:?}");
     node.assert_call("playerbots_quest_loop_fixture_stage_named", &[&subjects[0]]);
     node.assert_call(
@@ -2052,9 +2052,11 @@ fn playerbots_quest_fallback_distributes_an_ungrouped_population() {
     node.assert_call("playerbots_quest_loop_fixture_pass_dispersion", &[&foreign]);
     record(&node, "quest-fallback-dispersion");
 
-    let allowed: BTreeSet<_> = (1..=3).map(|offset| CREATURE_6 + offset).collect();
+    let nearest: BTreeSet<_> = (1..=3).map(|offset| CREATURE_6 + offset).collect();
+    let allowed: BTreeSet<_> = (1..=9).map(|offset| CREATURE_6 + offset).collect();
     let mut selected = BTreeSet::new();
     let mut observed = BTreeSet::new();
+    let mut waiting = 0;
     let first_purpose = retained_quest_purpose(&node, &subjects[0]);
     for guid in &subjects {
         assert_eq!(retained_quest_purpose(&node, guid), first_purpose);
@@ -2070,18 +2072,39 @@ fn playerbots_quest_fallback_distributes_an_ungrouped_population() {
             runner["chosen"].contains("reason = (quest = ())"),
             "{runner:?}"
         );
+        let bot_actions = actions(&node, guid);
+        if runner["chosen"].contains("hold = ()") {
+            assert_eq!(selected, allowed, "waited before all targets were selected");
+            assert!(
+                !runner["recovery"].contains("active = (some = (fight ="),
+                "{runner:?}"
+            );
+            assert!(bot_actions.iter().all(|action| {
+                !action["kind"].contains("move")
+                    || action["observed_micros"].parse::<i64>().unwrap()
+                        < runner["observed_micros"].parse::<i64>().unwrap()
+            }));
+            waiting += 1;
+            continue;
+        }
         let target = allowed
             .iter()
             .copied()
             .find(|target| runner["chosen"].contains(&target.to_string()))
             .unwrap_or_else(|| {
-                panic!("Quest fallback did not choose a nearest target: {runner:?}")
+                panic!("Quest fallback did not choose an eligible target: {runner:?}")
             });
+        if selected.is_empty() {
+            assert!(
+                nearest.contains(&target),
+                "first choice was not among the nearest targets"
+            );
+        }
         assert!(
             runner["recovery"].contains(&format!("active = (some = (fight = {target}))")),
             "{runner:?}"
         );
-        assert!(actions(&node, guid).iter().any(|action| {
+        assert!(bot_actions.iter().any(|action| {
             action["kind"].contains("move")
                 && action["observed_micros"].parse::<i64>().unwrap()
                     >= runner["observed_micros"].parse::<i64>().unwrap()
@@ -2095,6 +2118,13 @@ fn playerbots_quest_fallback_distributes_an_ungrouped_population() {
         selected.len() > 1,
         "synchronized fallback target: {selected:?}"
     );
+    // The older pinned Package shares nearby targets. Claims consume all targets before waiting.
+    if waiting == 0 {
+        assert!(selected.is_subset(&nearest), "{selected:?}");
+    } else {
+        assert_eq!(waiting, subjects.len() - allowed.len());
+        assert_eq!(selected, allowed);
+    }
     assert_solo_loot_tag(&node, CREATURE_6, &foreign);
 }
 
