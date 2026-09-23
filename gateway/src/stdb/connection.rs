@@ -75,6 +75,9 @@ pub(crate) struct LiveConn {
     _sub: SubscriptionHandle,
 }
 
+/// A group id and its members as `(member_row_id, guid)`, in join order.
+pub(crate) type GroupMemberRows = (u64, Vec<(u64, u64)>);
+
 #[derive(Default)]
 pub(crate) struct PartyMembershipIndex {
     by_character: HashMap<u64, BTreeMap<u64, u64>>,
@@ -108,11 +111,14 @@ impl PartyMembershipIndex {
         }
     }
 
-    pub(crate) fn bounded_roster(
+    /// `character_guid`'s group and its members in join order as `(member_row_id, guid)`. The row
+    /// id lets a caller read the member row itself. More than `member_limit` members, or more than
+    /// one membership, is a damaged cache and fails.
+    pub(crate) fn bounded_member_rows(
         &self,
         character_guid: u64,
         member_limit: usize,
-    ) -> Result<Option<(u64, Vec<u64>)>> {
+    ) -> Result<Option<GroupMemberRows>> {
         let Some(memberships) = self.by_character.get(&character_guid) else {
             return Ok(None);
         };
@@ -123,11 +129,15 @@ impl PartyMembershipIndex {
         let Some(group) = self.by_group.get(&group_id) else {
             return Ok(None);
         };
-        let members: Vec<_> = group.values().take(member_limit + 1).copied().collect();
-        if members.len() > member_limit {
+        let rows: Vec<_> = group
+            .iter()
+            .take(member_limit + 1)
+            .map(|(row_id, guid)| (*row_id, *guid))
+            .collect();
+        if rows.len() > member_limit {
             anyhow::bail!("party command roster exceeds the member limit");
         }
-        Ok(Some((group_id, members)))
+        Ok(Some((group_id, rows)))
     }
 }
 
@@ -141,6 +151,7 @@ mod party_membership_index_tests {
             group_id,
             character_guid,
             owner_identity: spacetimedb_sdk::Identity::ZERO,
+            raid_slot: 0,
         }
     }
 
@@ -152,18 +163,18 @@ mod party_membership_index_tests {
         index.insert(&first);
         index.insert(&second);
         assert_eq!(
-            index.bounded_roster(102, 2).unwrap(),
-            Some((7, vec![101, 102]))
+            index.bounded_member_rows(102, 2).unwrap(),
+            Some((7, vec![(1, 101), (2, 102)]))
         );
-        assert!(index.bounded_roster(102, 1).is_err());
+        assert!(index.bounded_member_rows(102, 1).is_err());
 
         let duplicate = member(3, 8, 102);
         index.insert(&duplicate);
-        assert!(index.bounded_roster(102, 5).is_err());
+        assert!(index.bounded_member_rows(102, 5).is_err());
         index.remove(&duplicate);
         assert_eq!(
-            index.bounded_roster(102, 2).unwrap(),
-            Some((7, vec![101, 102]))
+            index.bounded_member_rows(102, 2).unwrap(),
+            Some((7, vec![(1, 101), (2, 102)]))
         );
     }
 }

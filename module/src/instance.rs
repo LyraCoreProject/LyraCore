@@ -347,9 +347,9 @@ pub(crate) fn route_instance(
     }
 }
 
-/// The 5-player dungeon cap, enforced at trigger time. `group::GROUP_MAX_MEMBERS` already caps
-/// parties at 5, so this is defense-in-depth — but the design says enforce it HERE too, so a
-/// future raid-group shape can't silently walk a 40-man through a 5-man portal. Pure.
+/// The 5-player dungeon cap, enforced at trigger time. A Party is capped at 5 already; a Raid of
+/// more than 5 is refused here on purpose. cmangos checks instance occupancy instead
+/// (cm:Player.cpp:20055-20062), which LyraCore does not reproduce. Pure.
 pub(crate) fn party_size_allows_entry(member_count: usize) -> bool {
     member_count <= crate::group::GROUP_MAX_MEMBERS
 }

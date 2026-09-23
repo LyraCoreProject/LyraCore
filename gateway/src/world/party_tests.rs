@@ -9,7 +9,7 @@
 //! A child module of `world::tests` so it can reach `InMemoryStore` without widening anything.
 
 use super::*;
-use lyracore_shared::group::{realm_op, GroupRefusal};
+use lyracore_shared::group::{realm_op, GroupRefusal, RosterMember, RosterPayload};
 
 pub(super) const GINGER: u64 = 1; // in the open world, on `world`
 pub(super) const VIM: u64 = 2; // inside the dungeon, on `instances`
@@ -66,6 +66,17 @@ fn two_member_topology_after_vim_is_deleted() -> (
     *deleted_from_instances.peers.lock().unwrap() =
         vec![world.clone(), deleted_from_instances.clone()];
     (realm, world, deleted_from_instances)
+}
+
+/// Party members in join order, every one in Subgroup 0.
+pub(super) fn party_members(guids: &[u64]) -> Vec<party::GroupRosterMember> {
+    guids
+        .iter()
+        .map(|&guid| party::GroupRosterMember {
+            guid,
+            slot: RaidSlot::default(),
+        })
+        .collect()
 }
 
 pub(super) fn character(guid: u64, name: &str) -> codec::CharacterView {
@@ -262,7 +273,7 @@ fn a_stale_target_mirror_cannot_grant_command_authority() {
         .lock()
         .unwrap()
         .iter_mut()
-        .for_each(|roster| roster.members.retain(|member| *member != BOT));
+        .for_each(|roster| roster.members.retain(|member| member.guid != BOT));
     let outcome = party::run_party_command_intent(world.as_ref(), &command_intent(BOT), 9).unwrap();
     assert_eq!(outcome, party::CompanionCommandOutcome::StalePartyMirror);
     assert!(world.admitted_party_commands.lock().unwrap().is_empty());
@@ -281,7 +292,7 @@ fn an_oversized_cached_roster_is_not_sent_for_command_authority() {
         mirror: std::sync::Mutex::new(vec![party::GroupRoster {
             group_id: 7,
             leader_guid: GINGER,
-            members,
+            members: party_members(&members),
             ..Default::default()
         }]),
         ..Default::default()
@@ -298,7 +309,7 @@ fn realm_admission_rejects_a_roster_changed_after_the_gateway_read() {
     let (realm, world, instances, _) = party_topology();
     party::run(world.as_ref(), 7, GINGER, party::Op::Invite(BOT)).unwrap();
     party::run(world.as_ref(), 8, GINGER, party::Op::Invite(FAR_BOT)).unwrap();
-    let mut changed = realm.group_roster(GINGER).unwrap().unwrap().members;
+    let mut changed = realm.group_roster(GINGER).unwrap().unwrap().member_guids();
     changed.retain(|guid| *guid != BOT);
     *realm.party_command_authority_members.lock().unwrap() = Some(changed);
 
@@ -402,7 +413,7 @@ fn an_unsharded_gateway_uses_the_owning_local_party_authority() {
     let roster = party::GroupRoster {
         group_id: 7,
         leader_guid: GINGER,
-        members: vec![GINGER, BOT],
+        members: party_members(&[GINGER, BOT]),
         ..Default::default()
     };
     let store = InMemoryStore {
@@ -436,7 +447,7 @@ fn a_target_receipt_finishes_a_crashed_attempt_without_reapplying() {
         issuer_sequence: intent.issuer_sequence,
         group_id: authority.group_id,
         leader_guid: authority.leader_guid,
-        members: authority.members,
+        members: authority.member_guids(),
         kind: intent.kind,
         bot_guid: intent.bot_guid,
         authority_member_guid: 0,
@@ -536,7 +547,7 @@ fn a_cross_shard_invite_and_accept_form_one_party_on_realm_core() {
         "both members are in the SAME party"
     );
     assert_eq!(
-        party_state.roster(group_id).unwrap().members,
+        party_state.roster(group_id).unwrap().member_guids(),
         vec![GINGER, VIM],
         "the inviter leads and joins first, the acceptor second (join order)"
     );
@@ -570,7 +581,7 @@ fn a_split_party_renders_both_members_from_either_side_of_the_boundary() {
         .unwrap()
         .expect("realm-core holds the roster");
 
-    let ginger_view = party::render_list(world.as_ref(), GINGER, &roster);
+    let ginger_view = party::render_list(world.as_ref(), GINGER, &roster.list_payload());
     let ServerOpcodeMessage::SMSG_GROUP_LIST(list) = ginger_view else {
         panic!("expected GROUP_LIST")
     };
@@ -587,7 +598,7 @@ fn a_split_party_renders_both_members_from_either_side_of_the_boundary() {
     );
     assert_eq!(list.leader.guid(), GINGER);
 
-    let vim_view = party::render_list(instances.as_ref(), VIM, &roster);
+    let vim_view = party::render_list(instances.as_ref(), VIM, &roster.list_payload());
     let ServerOpcodeMessage::SMSG_GROUP_LIST(list) = vim_view else {
         panic!("expected GROUP_LIST")
     };
@@ -666,7 +677,7 @@ fn leaving_a_party_re_pushes_the_roster_of_the_group_the_leaver_left() {
         .group_roster(GINGER)
         .unwrap()
         .expect("the party survives at 2 members");
-    assert_eq!(remaining.members, vec![GINGER, TRIN]);
+    assert_eq!(remaining.member_guids(), vec![GINGER, TRIN]);
     for (name, shard) in [("world", &world), ("instances", &instances)] {
         assert_eq!(
             shard.mirror.lock().unwrap().clone(),
@@ -709,7 +720,7 @@ fn a_deleted_member_leaves_realm_core_and_both_shards_receive_the_surviving_rost
     );
 
     let survivors = realm.group_roster(GINGER).unwrap().unwrap();
-    assert_eq!(survivors.members, vec![GINGER, TRIN]);
+    assert_eq!(survivors.member_guids(), vec![GINGER, TRIN]);
     for shard in [&world, &instances] {
         assert_eq!(
             shard.mirror.lock().unwrap().as_slice(),
@@ -783,7 +794,7 @@ fn repeated_deleted_character_cleanup_is_harmless() {
         party::DeletedCharacterPartyCleanup::AlreadyClean
     );
     assert_eq!(
-        realm.group_roster(GINGER).unwrap().unwrap().members,
+        realm.group_roster(GINGER).unwrap().unwrap().member_guids(),
         vec![GINGER, TRIN]
     );
 }
@@ -826,7 +837,7 @@ fn a_lost_realm_core_leave_reply_still_refreshes_the_surviving_party() {
     );
 
     let survivors = realm.group_roster(GINGER).unwrap().unwrap();
-    assert_eq!(survivors.members, vec![GINGER, TRIN]);
+    assert_eq!(survivors.member_guids(), vec![GINGER, TRIN]);
     for shard in [&world, &instances] {
         assert_eq!(
             shard.mirror.lock().unwrap().as_slice(),
@@ -881,7 +892,7 @@ fn reconciliation_repairs_a_mirror_left_stale_after_membership_cleanup() {
         .lock()
         .unwrap()
         .iter()
-        .any(|roster| roster.members.contains(&VIM)));
+        .any(|roster| roster.has_member(VIM)));
 
     party::reconcile_deleted_character_parties(world.as_ref())
         .expect_err("the first reconciliation exhausts its bounded mirror retries");
@@ -979,7 +990,7 @@ fn reconnect_reconciliation_removes_a_member_whose_delete_event_was_missed() {
     party::reconcile_deleted_character_parties(world.as_ref()).unwrap();
 
     let survivors = realm.group_roster(GINGER).unwrap().unwrap();
-    assert_eq!(survivors.members, vec![GINGER, TRIN]);
+    assert_eq!(survivors.member_guids(), vec![GINGER, TRIN]);
     assert_eq!(
         instances.mirror.lock().unwrap().as_slice(),
         std::slice::from_ref(&survivors)
@@ -1214,7 +1225,7 @@ fn world_entry_clears_a_mirror_that_still_lists_a_character_the_authority_droppe
         instances
             .group_roster_by_id(group_id)
             .unwrap()
-            .map(|r| r.members),
+            .map(|r| r.member_guids()),
         Some(vec![GINGER, TRIN]),
         "and the members who are STILL in that party must survive the repair — clearing the group \
          wholesale would be the opposite defect"
@@ -1353,7 +1364,14 @@ fn a_playerbot_is_invitable_because_the_online_gate_reads_the_entity_not_the_ses
         .expect("the invite gate must read the LIVE ENTITY, exactly as the module's own gate does");
     assert_eq!(
         realm.party.lock().unwrap().ops.first().copied(),
-        Some((lyracore_shared::group::realm_op::INVITE, GINGER, BOT, 0, 0)),
+        Some((
+            lyracore_shared::group::realm_op::INVITE,
+            GINGER,
+            BOT,
+            0,
+            0,
+            0
+        )),
         "the invite must reach the authority"
     );
 }
@@ -1385,7 +1403,7 @@ fn a_players_invite_to_a_session_less_bot_is_answered_by_the_bot_itself() {
         .group_of(GINGER)
         .expect("the invite formed Ginger's party");
     assert_eq!(
-        party_state.roster(group_id).unwrap().members,
+        party_state.roster(group_id).unwrap().member_guids(),
         vec![GINGER, BOT],
         "the bot must be IN the party after a single invite — nobody else is going to answer for it"
     );
@@ -1398,8 +1416,8 @@ fn a_players_invite_to_a_session_less_bot_is_answered_by_the_bot_itself() {
     assert_eq!(
         party_state.ops.clone(),
         vec![
-            (realm_op::INVITE, GINGER, BOT, 0, 0),
-            (realm_op::ACCEPT, BOT, 0, 0, 0)
+            (realm_op::INVITE, GINGER, BOT, 0, 0, 0),
+            (realm_op::ACCEPT, BOT, 0, 0, 0, 0)
         ],
         "the accept must run on realm-core with the BOT as the actor — never the inviter, and never 0"
     );
@@ -1453,7 +1471,14 @@ fn a_stale_character_row_on_another_shard_cannot_make_a_logged_in_player_look_se
     let state = realm.party.lock().unwrap();
     assert_eq!(
         state.ops.clone(),
-        vec![(lyracore_shared::group::realm_op::INVITE, VIM, SEEDED, 0, 0)],
+        vec![(
+            lyracore_shared::group::realm_op::INVITE,
+            VIM,
+            SEEDED,
+            0,
+            0,
+            0
+        )],
         "no ACCEPT may be forged for a character whose own client is logged in and can answer"
     );
     assert_eq!(
@@ -1484,7 +1509,7 @@ fn the_bots_new_membership_is_mirrored_onto_its_own_shard_by_the_same_op() {
         world
             .group_roster_by_id(group_id)
             .unwrap()
-            .map(|r| r.members),
+            .map(|r| r.member_guids()),
         Some(vec![GINGER, BOT]),
         "the bot's own shard must already hold the roster — it is what `group_leader_entity` reads"
     );
@@ -1501,7 +1526,7 @@ fn the_bots_new_membership_is_mirrored_onto_its_own_shard_by_the_same_op() {
         instances
             .group_roster_by_id(group_id)
             .unwrap()
-            .map(|r| r.members),
+            .map(|r| r.member_guids()),
         Some(vec![GINGER, BOT]),
         "every connected shard is mirrored, as for any other op"
     );
@@ -1520,7 +1545,7 @@ fn a_bot_standing_on_another_shard_answers_the_invite_too() {
     let state = realm.party.lock().unwrap();
     let group_id = state.group_of(GINGER).expect("Ginger's party formed");
     assert_eq!(
-        state.roster(group_id).unwrap().members,
+        state.roster(group_id).unwrap().member_guids(),
         vec![GINGER, FAR_BOT]
     );
 }
@@ -1538,7 +1563,7 @@ fn a_real_players_invite_dialog_is_left_for_their_own_client_to_answer() {
     let state = realm.party.lock().unwrap();
     assert_eq!(
         state.ops.clone(),
-        vec![(realm_op::INVITE, GINGER, TRIN, 0, 0)],
+        vec![(realm_op::INVITE, GINGER, TRIN, 0, 0, 0)],
         "the gateway must not answer for a character that has a session"
     );
     assert_eq!(
@@ -1572,10 +1597,10 @@ fn a_bot_that_cannot_join_declines_out_loud_instead_of_leaving_the_dialog_hangin
     assert_eq!(
         state.ops.clone(),
         vec![
-            (realm_op::INVITE, GINGER, BOT, 0, 0),
-            (realm_op::ACCEPT, BOT, 0, 0, 0),
+            (realm_op::INVITE, GINGER, BOT, 0, 0, 0),
+            (realm_op::ACCEPT, BOT, 0, 0, 0, 0),
             // …and the decline is the bot's own too, not the inviter's.
-            (realm_op::DECLINE, BOT, 0, 0, 0),
+            (realm_op::DECLINE, BOT, 0, 0, 0, 0),
         ],
         "a refused accept must be followed by an explicit decline"
     );
@@ -1616,7 +1641,7 @@ fn the_bot_answers_within_the_invite_op_itself_with_no_second_call() {
     );
 }
 
-/// `realm_group_op` packs six ops into five argument slots, and the packing is a WIRE contract with
+/// `realm_group_op` packs seven ops into six argument slots, and the packing is a WIRE contract with
 /// the module (`lyracore_shared::group::realm_op`). A slot swap is silent — a loot-method change would
 /// arrive as a kick of the master looter — so every op's packing is pinned as it is SENT.
 #[test]
@@ -1635,20 +1660,23 @@ fn every_party_op_reaches_realm_core_in_its_declared_argument_slots() {
         },
     )
     .expect("the leader sets master loot");
+    party::run(world.as_ref(), 7, GINGER, party::Op::RaidConvert).expect("convert");
     party::run(world.as_ref(), 7, GINGER, party::Op::Uninvite(VIM)).expect("kick");
 
     assert_eq!(
         realm.party.lock().unwrap().ops.clone(),
         vec![
             // INVITE: the target rides `target_guid`, nothing else is used.
-            (realm_op::INVITE, GINGER, VIM, 0, 0),
+            (realm_op::INVITE, GINGER, VIM, 0, 0, 0),
             // ACCEPT: the actor alone.
-            (realm_op::ACCEPT, VIM, 0, 0, 0),
+            (realm_op::ACCEPT, VIM, 0, 0, 0, 0),
             // LOOT_METHOD: setting in arg_a, MASTER in target_guid, threshold in arg_b —
             // CMSG_LOOT_METHOD's own field order.
-            (realm_op::LOOT_METHOD, GINGER, VIM, 2, 4),
+            (realm_op::LOOT_METHOD, GINGER, VIM, 2, 4, 0),
+            // RAID_CONVERT: the actor alone.
+            (realm_op::RAID_CONVERT, GINGER, 0, 0, 0, 0),
             // UNINVITE: the kicked member rides `target_guid`.
-            (realm_op::UNINVITE, GINGER, VIM, 0, 0),
+            (realm_op::UNINVITE, GINGER, VIM, 0, 0, 0),
         ]
     );
 }
@@ -1733,15 +1761,15 @@ fn a_real_session_syncs_its_party_at_login_and_routes_an_invite_to_realm_core() 
     // …and EVERY party op typed in-world goes to realm-core, not to this shard's own tables — each
     // one attributed to the character this socket authenticated as.
     //
-    // All SIX, not just the invite: `realm_group_op` takes the actor's guid as an ARGUMENT, so the
+    // All SEVEN, not just the invite: `realm_group_op` takes the actor's guid as an ARGUMENT, so the
     // dispatch's choice of guid IS the authorization for every one of them, and the survivor the
     // author found (`0` instead of the session's guid) is a mutation each arm admits independently.
-    // Pinning only the invite leaves the other five free to be attributed to anybody — verified by
+    // Pinning only the invite leaves the others free to be attributed to anybody — verified by
     // mutation: passing the KICKED player's guid as the actor of `CMSG_GROUP_UNINVITE` left all 408
     // tests green.
     use wow_world_messages::vanilla::{
         CMSG_GROUP_ACCEPT, CMSG_GROUP_DECLINE, CMSG_GROUP_DISBAND, CMSG_GROUP_INVITE,
-        CMSG_GROUP_UNINVITE, CMSG_LOOT_METHOD,
+        CMSG_GROUP_RAID_CONVERT, CMSG_GROUP_UNINVITE, CMSG_LOOT_METHOD,
     };
     CMSG_GROUP_INVITE { name: "vim".into() }
         .write_encrypted_client(&mut client, &mut c_enc)
@@ -1759,6 +1787,9 @@ fn a_real_session_syncs_its_party_at_login_and_routes_an_invite_to_realm_core() 
     }
     .write_encrypted_client(&mut client, &mut c_enc)
     .unwrap();
+    CMSG_GROUP_RAID_CONVERT {}
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
     CMSG_GROUP_DISBAND {}
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
@@ -1767,7 +1798,7 @@ fn a_real_session_syncs_its_party_at_login_and_routes_an_invite_to_realm_core() 
         .unwrap();
     // The BARRIER: an invite for a name no shard can resolve never reaches `party::run`, so it adds
     // no op — but it always answers `SMSG_PARTY_COMMAND_RESULT`, and the dispatch is sequential on
-    // one thread, so seeing ITS reply proves all six above have been dispatched. (No `join`: the
+    // one thread, so seeing ITS reply proves all seven above have been dispatched. (No `join`: the
     // session thread outlives the socket by design, and waiting on it would reintroduce the hang the
     // deadline above removes.)
     CMSG_GROUP_INVITE {
@@ -1811,14 +1842,15 @@ fn a_real_session_syncs_its_party_at_login_and_routes_an_invite_to_realm_core() 
     assert_eq!(
         realm.party.lock().unwrap().ops.clone(),
         vec![
-            (realm_op::INVITE, GINGER, VIM, 0, 0),
-            (realm_op::ACCEPT, GINGER, 0, 0, 0),
-            (realm_op::DECLINE, GINGER, 0, 0, 0),
+            (realm_op::INVITE, GINGER, VIM, 0, 0, 0),
+            (realm_op::ACCEPT, GINGER, 0, 0, 0, 0),
+            (realm_op::DECLINE, GINGER, 0, 0, 0, 0),
             // CMSG_LOOT_METHOD's own field order: setting in arg_a, MASTER in target_guid,
             // threshold in arg_b.
-            (realm_op::LOOT_METHOD, GINGER, VIM, 2, 4),
-            (realm_op::LEAVE, GINGER, 0, 0, 0),
-            (realm_op::UNINVITE, GINGER, VIM, 0, 0),
+            (realm_op::LOOT_METHOD, GINGER, VIM, 2, 4, 0),
+            (realm_op::RAID_CONVERT, GINGER, 0, 0, 0, 0),
+            (realm_op::LEAVE, GINGER, 0, 0, 0, 0),
+            (realm_op::UNINVITE, GINGER, VIM, 0, 0, 0),
         ],
         "every party op must reach realm-core attributed to the session's own character, in its \
          declared argument slots — the actor guid is the whole authorization on this plane"
@@ -1879,15 +1911,15 @@ fn a_bot_invite_forms_a_party_on_realm_core_across_a_shard_boundary() {
         .group_of(BOT)
         .expect("the bot's invite formed a party");
     assert_eq!(
-        party_state.roster(group_id).unwrap().members,
+        party_state.roster(group_id).unwrap().member_guids(),
         vec![BOT, FAR_BOT],
         "the inviting bot leads, the session-less target auto-accepts through `answer_for_session_less`"
     );
     assert_eq!(
         party_state.ops.clone(),
         vec![
-            (realm_op::INVITE, BOT, FAR_BOT, 0, 0),
-            (realm_op::ACCEPT, FAR_BOT, 0, 0, 0)
+            (realm_op::INVITE, BOT, FAR_BOT, 0, 0, 0),
+            (realm_op::ACCEPT, FAR_BOT, 0, 0, 0, 0)
         ],
         "both halves must run on realm-core, attributed to the right actor each time — the bot as \
          itself for both the invite and (through the session-less answer) the accept"
@@ -1963,7 +1995,10 @@ fn two_relay_consumers_execute_one_bot_invite() {
     let group_id = party
         .group_of(BOT)
         .expect("the winning consumer formed a party");
-    assert_eq!(party.roster(group_id).unwrap().members, vec![BOT, FAR_BOT]);
+    assert_eq!(
+        party.roster(group_id).unwrap().member_guids(),
+        vec![BOT, FAR_BOT]
+    );
     assert!(world.bot_invite_intents.lock().unwrap().is_empty());
 }
 
@@ -2000,9 +2035,9 @@ fn the_intent_op_byte_picks_the_party_op_that_runs() {
     assert_eq!(
         party_state.ops.clone(),
         vec![
-            (realm_op::INVITE, BOT, FAR_BOT, 0, 0),
-            (realm_op::ACCEPT, FAR_BOT, 0, 0, 0),
-            (realm_op::LEAVE, BOT, 0, 0, 0),
+            (realm_op::INVITE, BOT, FAR_BOT, 0, 0, 0),
+            (realm_op::ACCEPT, FAR_BOT, 0, 0, 0, 0),
+            (realm_op::LEAVE, BOT, 0, 0, 0, 0),
         ],
         "the invite runs INVITE (plus the session-less answer) and the leave runs LEAVE, each \
          attributed to the bot itself"
@@ -2100,7 +2135,7 @@ fn a_shard_local_only_group_realm_core_never_heard_of_is_wiped_by_the_next_push(
     let phantom = party::GroupRoster {
         group_id: phantom_group_id,
         leader_guid: BOT,
-        members: vec![BOT, TRIN],
+        members: party_members(&[BOT, TRIN]),
         ..Default::default()
     };
     world
@@ -2190,7 +2225,7 @@ fn an_unsharded_deployment_still_routes_a_bot_invite_through_realm_group_op() {
     );
     assert_eq!(
         store.party.lock().unwrap().ops.first().copied(),
-        Some((realm_op::INVITE, BOT, TRIN, 0, 0)),
+        Some((realm_op::INVITE, BOT, TRIN, 0, 0, 0)),
         "the invite must be recorded with the bot as inviter"
     );
 }
@@ -2211,7 +2246,10 @@ fn suppressed_automatic_answers_leave_human_invitations_pending_on_realm_core() 
 
     let state = realm.party.lock().unwrap();
     assert!(state.group_of(FAR_BOT).is_none());
-    assert_eq!(state.ops, vec![(realm_op::INVITE, GINGER, FAR_BOT, 0, 0)]);
+    assert_eq!(
+        state.ops,
+        vec![(realm_op::INVITE, GINGER, FAR_BOT, 0, 0, 0)]
+    );
 }
 
 #[test]
@@ -2230,7 +2268,7 @@ fn suppressed_automatic_answers_leave_bot_invitations_pending_on_realm_core() {
 
     let state = realm.party.lock().unwrap();
     assert!(state.group_of(FAR_BOT).is_none());
-    assert_eq!(state.ops, vec![(realm_op::INVITE, BOT, FAR_BOT, 0, 0)]);
+    assert_eq!(state.ops, vec![(realm_op::INVITE, BOT, FAR_BOT, 0, 0, 0)]);
 }
 
 #[test]
@@ -2246,7 +2284,10 @@ fn unavailable_admission_leaves_the_invitation_unanswered() {
 
     let state = realm.party.lock().unwrap();
     assert!(state.group_of(FAR_BOT).is_none());
-    assert_eq!(state.ops, vec![(realm_op::INVITE, GINGER, FAR_BOT, 0, 0)]);
+    assert_eq!(
+        state.ops,
+        vec![(realm_op::INVITE, GINGER, FAR_BOT, 0, 0, 0)]
+    );
 }
 
 #[test]
@@ -2262,7 +2303,10 @@ fn current_admission_refuses_a_stale_sessionless_presence_read() {
 
     let state = realm.party.lock().unwrap();
     assert!(state.group_of(FAR_BOT).is_none());
-    assert_eq!(state.ops, vec![(realm_op::INVITE, GINGER, FAR_BOT, 0, 0)]);
+    assert_eq!(
+        state.ops,
+        vec![(realm_op::INVITE, GINGER, FAR_BOT, 0, 0, 0)]
+    );
 }
 
 #[test]
@@ -2326,5 +2370,322 @@ fn unsharded_bot_invitations_leave_a_suppressed_target_unanswered() {
     let state = store.party.lock().unwrap();
     assert!(state.group_of(FAR_BOT).is_none());
     assert_eq!(state.invites, vec![(FAR_BOT, BOT)]);
-    assert_eq!(state.ops, vec![(realm_op::INVITE, BOT, FAR_BOT, 0, 0)]);
+    assert_eq!(state.ops, vec![(realm_op::INVITE, BOT, FAR_BOT, 0, 0, 0)]);
+}
+
+// ---- Raids ----
+
+fn group_list(message: ServerOpcodeMessage) -> wow_world_messages::vanilla::SMSG_GROUP_LIST {
+    let ServerOpcodeMessage::SMSG_GROUP_LIST(list) = message else {
+        panic!("expected SMSG_GROUP_LIST, got {message}")
+    };
+    *list
+}
+
+fn mirror_calls(calls: &ShardCallLog) -> usize {
+    calls
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(_, call)| call == "sync_group_mirror")
+        .count()
+}
+
+/// **AC: the leader converts; every member gets a raid list and every shard mirrors the Raid.**
+#[test]
+fn a_leader_converts_the_party_on_realm_core_and_every_shard_mirrors_the_raid() {
+    let (realm, world, instances, _calls) = party_topology();
+    form_split_party(&world, &instances);
+    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(TRIN)).unwrap();
+    party::run(world.as_ref(), 9, TRIN, party::Op::Accept).unwrap();
+    let events_before = realm.party.lock().unwrap().events.len();
+
+    let outcome = party::run(world.as_ref(), 7, GINGER, party::Op::RaidConvert).unwrap();
+
+    assert_eq!(outcome, PartyOutcome::Ran);
+    let state = realm.party.lock().unwrap();
+    assert_eq!(
+        state.ops.last().copied(),
+        Some((realm_op::RAID_CONVERT, GINGER, 0, 0, 0, 0))
+    );
+    let mut listed: Vec<_> = state.events[events_before..]
+        .iter()
+        .filter(|(_, kind)| *kind == lyracore_shared::group::event_kind::LIST)
+        .map(|(guid, _)| *guid)
+        .collect();
+    listed.sort_unstable();
+    assert_eq!(
+        listed,
+        [GINGER, VIM, TRIN],
+        "every member receives the list"
+    );
+    drop(state);
+    let authority = realm.group_roster(GINGER).unwrap().unwrap();
+    assert_eq!(authority.kind, GroupKind::Raid);
+    assert!(authority
+        .members
+        .iter()
+        .all(|member| member.slot == RaidSlot::default()));
+    for (name, shard) in [("world", &world), ("instances", &instances)] {
+        assert_eq!(
+            shard.mirror.lock().unwrap().clone(),
+            vec![authority.clone()],
+            "{name} must mirror the kind and every Raid Slot, or its local raid reads disagree \
+             with Realm-core"
+        );
+    }
+    let list = group_list(party::render_list(
+        instances.as_ref(),
+        VIM,
+        &authority.list_payload(),
+    ));
+    assert_eq!(
+        list.group_type,
+        wow_world_messages::vanilla::GroupType::Raid
+    );
+    assert_eq!(list.flags, 0);
+    assert!(list.members.iter().all(|member| member.flags == 0));
+}
+
+/// **AC: a non-leader's convert changes nothing and sends nothing.**
+#[test]
+fn a_member_who_does_not_lead_cannot_convert_and_no_mirror_is_pushed() {
+    let (realm, world, instances, calls) = party_topology();
+    form_split_party(&world, &instances);
+    let events_before = realm.party.lock().unwrap().events.len();
+    let mirrors_before = mirror_calls(&calls);
+
+    let outcome = party::run(instances.as_ref(), 8, VIM, party::Op::RaidConvert).unwrap();
+
+    assert_eq!(outcome, PartyOutcome::Refused(GroupRefusal::NotLeader));
+    assert_eq!(
+        realm.group_roster(GINGER).unwrap().unwrap().kind,
+        GroupKind::Party
+    );
+    assert_eq!(realm.party.lock().unwrap().events.len(), events_before);
+    assert_eq!(mirror_calls(&calls), mirrors_before);
+}
+
+/// **AC: a single-database Gateway converts through `realm_group_op` on its only shard.** A raid op
+/// has no player-facing reducer, so the home shard is the party authority there.
+#[test]
+fn an_unsharded_gateway_converts_through_realm_group_op_on_its_own_shard() {
+    let calls: ShardCallLog = Default::default();
+    let store = std::sync::Arc::new(InMemoryStore {
+        shard: "world".into(),
+        calls: calls.clone(),
+        ..Default::default()
+    });
+    {
+        let mut p = store.party.lock().unwrap();
+        p.groups.push((5, GINGER, 3, 2, 0));
+        p.members.push((5, GINGER));
+        p.members.push((5, VIM));
+    }
+
+    let outcome = party::run(store.as_ref(), 7, GINGER, party::Op::RaidConvert).unwrap();
+
+    assert_eq!(outcome, PartyOutcome::Ran);
+    assert_eq!(
+        calls.lock().unwrap().clone(),
+        vec![("world".to_string(), "realm_group_op".to_string())],
+        "one call, on the player's own shard, and no mirror push"
+    );
+    let state = store.party.lock().unwrap();
+    assert_eq!(
+        state.ops,
+        vec![(realm_op::RAID_CONVERT, GINGER, 0, 0, 0, 0)]
+    );
+    assert_eq!(state.kind_of(5), GroupKind::Raid);
+}
+
+/// **AC: with Subgroup 0 full, the next joiner lands in Subgroup 1, and every member's list shows
+/// its flags byte as 1.** The placement is the Module's rule; the Gateway must carry it to every
+/// mirror and every list.
+#[test]
+fn a_raid_joiner_past_a_full_first_subgroup_shows_subgroup_one_in_every_list() {
+    let (realm, world, instances, _calls) = party_topology();
+    {
+        let mut p = realm.party.lock().unwrap();
+        p.next_group_id = 9;
+        p.groups.push((9, GINGER, 3, 2, 0));
+        for guid in [GINGER, VIM, 101, 102, 103] {
+            p.members.push((9, guid));
+        }
+        p.raids.push(9);
+    }
+    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(TRIN)).expect("the leader invites");
+    party::run(world.as_ref(), 9, TRIN, party::Op::Accept).expect("the sixth member accepts");
+
+    let authority = realm.group_roster(GINGER).unwrap().unwrap();
+    let joiner = authority
+        .members
+        .iter()
+        .find(|member| member.guid == TRIN)
+        .unwrap();
+    assert_eq!(joiner.slot, RaidSlot::new(1, false).unwrap());
+    for shard in [&world, &instances] {
+        assert_eq!(
+            shard.mirror.lock().unwrap().clone(),
+            vec![authority.clone()]
+        );
+    }
+    for (viewer, shard) in [
+        (GINGER, world.as_ref()),
+        (VIM, instances.as_ref()),
+        (TRIN, world.as_ref()),
+    ] {
+        let list = group_list(party::render_list(shard, viewer, &authority.list_payload()));
+        assert_eq!(
+            list.group_type,
+            wow_world_messages::vanilla::GroupType::Raid
+        );
+        assert_eq!(list.flags, u8::from(viewer == TRIN), "{viewer}'s own flags");
+        for member in &list.members {
+            assert_eq!(
+                member.flags,
+                u8::from(member.guid.guid() == TRIN),
+                "{viewer} sees {}",
+                member.guid.guid()
+            );
+        }
+    }
+}
+
+/// **AC: a member on another shard renders online in a LIST pushed from Realm-core.**
+///
+/// Realm-core has no live entities. The roster payload used to carry an online flag the Module
+/// computed there anyway, which was 0 for every member, and the relay trusted it: on a sharded
+/// Realm every party op re-rendered every member offline until the next world entry. The payload
+/// now carries no presence, and the relay renders through [`party::render_list`], which reads
+/// presence from the World Shard caches.
+#[test]
+fn the_realm_core_list_relay_renders_a_member_on_another_shard_online() {
+    let (realm, world, instances, _calls) = party_topology();
+    form_split_party(&world, &instances);
+    // The production Realm-core Coordinator reads every World Shard.
+    *realm.peers.lock().unwrap() = vec![world.clone(), instances.clone()];
+    // What the Module writes on Realm-core: no names, no presence.
+    let payload = RosterPayload {
+        leader: GINGER,
+        loot_method: 3,
+        loot_threshold: 2,
+        master_looter_guid: 0,
+        kind: GroupKind::Party,
+        members: [GINGER, VIM]
+            .into_iter()
+            .map(|guid| RosterMember {
+                guid,
+                name: String::new(),
+                slot: RaidSlot::default(),
+            })
+            .collect(),
+    }
+    .encode();
+
+    let roster = RosterPayload::decode(&payload).expect("the relay decodes the payload");
+    let list = group_list(party::render_list(realm.as_ref(), GINGER, &roster));
+
+    assert_eq!(list.members.len(), 1);
+    assert_eq!(list.members[0].guid.guid(), VIM);
+    assert_eq!(list.members[0].name, "Vim");
+    assert!(
+        list.members[0].is_online,
+        "Vim is live on the instances shard, so the Realm-core list must show Vim online"
+    );
+}
+
+/// A name the payload carries is kept; a blank one is read from the shards; a member no shard can
+/// name stays in the list, blank and offline, because a missing row reads as "they left".
+#[test]
+fn a_list_keeps_payload_names_and_lists_a_member_no_shard_can_name() {
+    let (_realm, world, _instances, _calls) = party_topology();
+    let member = |guid, name: &str| RosterMember {
+        guid,
+        name: name.to_string(),
+        slot: RaidSlot::default(),
+    };
+    let roster = RosterPayload {
+        leader: GINGER,
+        loot_method: 3,
+        loot_threshold: 2,
+        master_looter_guid: 0,
+        kind: GroupKind::Party,
+        members: vec![
+            member(GINGER, ""),
+            member(TRIN, "Trinity"),
+            member(VIM, ""),
+            member(404, ""),
+        ],
+    };
+
+    let list = group_list(party::render_list(world.as_ref(), GINGER, &roster));
+
+    let named: Vec<_> = list
+        .members
+        .iter()
+        .map(|member| (member.guid.guid(), member.name.as_str(), member.is_online))
+        .collect();
+    assert_eq!(
+        named,
+        [
+            (TRIN, "Trinity", true),
+            (VIM, "Vim", true),
+            (404, "", false)
+        ]
+    );
+}
+
+/// **AC: `CMSG_GROUP_RAID_CONVERT` in, `SMSG_PARTY_COMMAND_RESULT(Invite, "", Success)` out**
+/// (cm:GroupHandler.cpp:488), and a refused convert sends nothing (cm:GroupHandler.cpp:483-484).
+#[test]
+fn raid_convert_answers_the_leader_with_success_and_a_refusal_with_silence() {
+    use wow_world_messages::vanilla::{
+        PartyOperation, PartyResult, CMSG_GROUP_INVITE, CMSG_GROUP_RAID_CONVERT,
+    };
+    let s = quest_store();
+    {
+        let mut p = s.party.lock().unwrap();
+        p.groups.push((5, 1, 3, 2, 0));
+        p.members.push((5, 1));
+        p.members.push((5, 2));
+    }
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+
+    CMSG_GROUP_RAID_CONVERT {}
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_PARTY_COMMAND_RESULT(r) => {
+            assert_eq!(r.operation, PartyOperation::Invite);
+            assert_eq!(r.member, "");
+            assert_eq!(r.result, PartyResult::Success);
+        }
+        other => panic!("expected SMSG_PARTY_COMMAND_RESULT, got {other}"),
+    }
+    assert_eq!(store.party.lock().unwrap().kind_of(5), GroupKind::Raid);
+
+    // Another member now leads, so the session's convert is refused. The barrier invite's reply
+    // must be the next packet: the refusal sent nothing.
+    store.party.lock().unwrap().groups[0].1 = 2;
+    CMSG_GROUP_RAID_CONVERT {}
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    CMSG_GROUP_INVITE {
+        name: "Nobodyatall".into(),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_PARTY_COMMAND_RESULT(r) => {
+            assert_eq!(
+                r.member, "Nobodyatall",
+                "the refused convert answered the client"
+            );
+        }
+        other => panic!("expected the barrier's SMSG_PARTY_COMMAND_RESULT, got {other}"),
+    }
+    drop(client);
+    let _ = server.join();
 }

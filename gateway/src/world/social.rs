@@ -244,9 +244,42 @@ pub(super) fn handle_social<St: WorldStore + ?Sized>(
                 }
             }
         }
+        ClientOpcodeMessage::CMSG_GROUP_RAID_CONVERT => raid_convert(tx, store, conn)?,
         other => return Ok(Some(other)),
     }
     Ok(None)
+}
+
+/// The leader's "Convert to Raid". cmangos answers success with
+/// `SMSG_PARTY_COMMAND_RESULT(Invite, "", Ok)` and every refusal with silence
+/// (cm:GroupHandler.cpp:473-490); the raid list reaches every member through the LIST relay.
+fn raid_convert<St: WorldStore + ?Sized>(
+    tx: &SessionTx,
+    store: &St,
+    conn: &WorldConn,
+) -> Result<()> {
+    let Some(me) = self_guid(conn) else {
+        return Ok(());
+    };
+    match party::run(store, conn.account_id, me, party::Op::RaidConvert)? {
+        PartyOutcome::Ran => send(
+            tx,
+            Outbound::One(ServerOpcodeMessage::SMSG_PARTY_COMMAND_RESULT(Box::new(
+                codec::build_party_command_result(
+                    PartyOperation::Invite,
+                    String::new(),
+                    PartyResult::Success,
+                ),
+            ))),
+        ),
+        PartyOutcome::Refused(refusal) => {
+            log::debug!(
+                "world: group_raid_convert refused (account {}): {refusal:?}",
+                conn.account_id
+            );
+            Ok(())
+        }
+    }
 }
 
 /// The session's in-world character guid, or `None` at character select. Party ops need it for two
@@ -275,9 +308,10 @@ fn party_result(outcome: PartyOutcome) -> PartyResult {
 }
 
 /// Map each [`GroupRefusal`] onto the vanilla `PartyResult` the client renders ("X is already in a
-/// group" etc.). Vanilla has no code for an offline or self-named target, a stale invite, or a
-/// temporarily unavailable actor, so those read as BadPlayerName — a visible, non-crashing line.
-/// The intent claim never reaches a client; it is listed so a new Refusal cannot be forgotten here.
+/// group" etc.). Vanilla has no code for an offline or self-named target, a stale invite, a raid op
+/// in a Party, or a temporarily unavailable actor, so those read as BadPlayerName — a visible,
+/// non-crashing line. The intent claim never reaches a client; it is listed so a new Refusal cannot
+/// be forgotten here.
 fn party_result_for(refusal: GroupRefusal) -> PartyResult {
     match refusal {
         GroupRefusal::AlreadyInGroup => PartyResult::AlreadyInGroup,
@@ -295,7 +329,8 @@ fn party_result_for(refusal: GroupRefusal) -> PartyResult {
         | GroupRefusal::KickSelf
         | GroupRefusal::InvalidLootRules
         | GroupRefusal::IntentAlreadyClaimed
-        | GroupRefusal::ActionSuppressed => PartyResult::BadPlayerName,
+        | GroupRefusal::ActionSuppressed
+        | GroupRefusal::NotRaid => PartyResult::BadPlayerName,
     }
 }
 

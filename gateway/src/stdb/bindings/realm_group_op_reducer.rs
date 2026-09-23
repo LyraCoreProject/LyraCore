@@ -14,6 +14,7 @@ pub(super) struct RealmGroupOpArgs {
     pub target_guid: u64,
     pub arg_a: u8,
     pub arg_b: u8,
+    pub arg_c: u64,
 }
 
 impl From<RealmGroupOpArgs> for super::Reducer {
@@ -24,6 +25,7 @@ impl From<RealmGroupOpArgs> for super::Reducer {
             target_guid: args.target_guid,
             arg_a: args.arg_a,
             arg_b: args.arg_b,
+            arg_c: args.arg_c,
         }
     }
 }
@@ -50,8 +52,17 @@ pub trait realm_group_op {
         target_guid: u64,
         arg_a: u8,
         arg_b: u8,
+        arg_c: u64,
     ) -> __sdk::Result<()> {
-        self.realm_group_op_then(op, request_actor, target_guid, arg_a, arg_b, |_, _| {})
+        self.realm_group_op_then(
+            op,
+            request_actor,
+            target_guid,
+            arg_a,
+            arg_b,
+            arg_c,
+            |_, _| {},
+        )
     }
 
     /// Request that the remote module invoke the reducer `realm_group_op` to run as soon as possible,
@@ -67,6 +78,7 @@ pub trait realm_group_op {
         target_guid: u64,
         arg_a: u8,
         arg_b: u8,
+        arg_c: u64,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -82,6 +94,7 @@ impl realm_group_op for super::RemoteReducers {
         target_guid: u64,
         arg_a: u8,
         arg_b: u8,
+        arg_c: u64,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -94,6 +107,7 @@ impl realm_group_op for super::RemoteReducers {
                 target_guid,
                 arg_a,
                 arg_b,
+                arg_c,
             },
             callback,
         )

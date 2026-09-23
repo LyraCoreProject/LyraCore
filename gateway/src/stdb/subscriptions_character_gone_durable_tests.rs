@@ -232,32 +232,32 @@ fn another_gateway_waits_for_the_transfer_then_cleans_the_deleted_character() {
     use lyracore_shared::group::realm_op;
     assert_eq!(
         realm
-            .realm_group_op(realm_op::INVITE, 1, INSTANCES_SURVIVOR, 0, 0)
+            .realm_group_op(realm_op::INVITE, 1, INSTANCES_SURVIVOR, 0, 0, 0)
             .unwrap(),
         PartyOutcome::Ran
     );
     assert_eq!(
         realm
-            .realm_group_op(realm_op::ACCEPT, INSTANCES_SURVIVOR, 0, 0, 0)
+            .realm_group_op(realm_op::ACCEPT, INSTANCES_SURVIVOR, 0, 0, 0, 0)
             .unwrap(),
         PartyOutcome::Ran
     );
     assert_eq!(
         realm
-            .realm_group_op(realm_op::INVITE, 1, OTHER_SURVIVOR, 0, 0)
+            .realm_group_op(realm_op::INVITE, 1, OTHER_SURVIVOR, 0, 0, 0)
             .unwrap(),
         PartyOutcome::Ran
     );
     assert_eq!(
         realm
-            .realm_group_op(realm_op::ACCEPT, OTHER_SURVIVOR, 0, 0, 0)
+            .realm_group_op(realm_op::ACCEPT, OTHER_SURVIVOR, 0, 0, 0, 0)
             .unwrap(),
         PartyOutcome::Ran
     );
     assert!(poll_until(POLL_TIMEOUT, || realm
         .group_roster(1)
         .is_some_and(
-            |roster| roster.members == [1, INSTANCES_SURVIVOR, OTHER_SURVIVOR]
+            |roster| roster.member_guids() == [1, INSTANCES_SURVIVOR, OTHER_SURVIVOR]
         )));
     let roster = realm.group_roster(1).unwrap();
     let group_id = roster.group_id;
@@ -269,7 +269,7 @@ fn another_gateway_waits_for_the_transfer_then_cleans_the_deleted_character() {
         .world_shards()
         .into_iter()
         .all(|(_, shard)| shard.group_roster(1).is_some_and(
-            |roster| roster.members == [1, INSTANCES_SURVIVOR, OTHER_SURVIVOR]
+            |roster| roster.member_guids() == [1, INSTANCES_SURVIVOR, OTHER_SURVIVOR]
         ))));
 
     let source_revision = observer
@@ -349,7 +349,10 @@ fn another_gateway_waits_for_the_transfer_then_cleans_the_deleted_character() {
             && realm.group_roster(1).is_none()
     }));
     let survivors = realm.group_roster(INSTANCES_SURVIVOR).unwrap();
-    assert_eq!(survivors.members, [INSTANCES_SURVIVOR, OTHER_SURVIVOR]);
+    assert_eq!(
+        survivors.member_guids(),
+        [INSTANCES_SURVIVOR, OTHER_SURVIVOR]
+    );
     assert!(survivors.roster_revision > initial_roster_revision);
     assert!(world.world_shards().into_iter().all(|(_, shard)| shard
         .group_roster(INSTANCES_SURVIVOR)

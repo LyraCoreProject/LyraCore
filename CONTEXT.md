@@ -264,6 +264,35 @@ absent revision means those inputs predate revision tracking. These inputs ident
 movement and failure evidence; only the route observation can state whether its consulted cells
 had verified coverage.
 
+**Group**:
+The members led by one leader, a Party or a Raid. Stored in `game_group`.
+
+**Party**:
+A Group of up to 5 members that its leader has not converted to a Raid.
+
+**Raid**:
+A Group its leader converted. Up to 40 members in 8 Subgroups. It never converts back.
+_Avoid_: raid group
+
+**Subgroup**:
+One of a Raid's 8 divisions of up to 5 members, numbered 0 to 7. A member joining a Raid takes the
+first Subgroup with room.
+_Avoid_: party (for a subgroup), raid group
+
+**Raid Slot**:
+A member's Subgroup and Assistant flag, stored and sent as the vanilla group-list flags byte
+`subgroup | 0x80 if assistant`. A Party member holds Subgroup 0 without the flag.
+
+**Assistant**:
+A Raid member the leader promoted. The Raid Slot carries the flag.
+
+**Group Audience**:
+Who receives one Group Broadcast: everyone, everyone but the actor, the leader, or one Subgroup.
+
+**Group Broadcast**:
+One Realm-core `game_group_event` row per recipient in a Group Audience. Every Gateway relays the
+rows addressed to its own sessions.
+
 **Party Partition**:
 A Realm-core-ordered map and instance for one party member, confirmed by the Gateway against the
 World Shard that holds the Character. It carries no position or Shard name. Pending Transfer,
@@ -271,8 +300,9 @@ transiently unknown location, and removed membership remain explicit states and 
 companion destination.
 
 **Roster Revision**:
-Realm-core's monotonic order for one complete party member list, leader, and loot rules. A World
-Shard keeps the last accepted value after disband. Older snapshots cannot change its party mirror.
+Realm-core's monotonic order for one complete Group member list, leader, loot rules, Group kind,
+and every Raid Slot. A World Shard keeps the last accepted value after disband. Older snapshots
+cannot change its party mirror.
 
 **Member Stats**:
 The status, health, power, level, zone, map position and auras a group member's frame shows for

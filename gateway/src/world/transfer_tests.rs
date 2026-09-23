@@ -1306,7 +1306,11 @@ fn the_source_instance_lease_survives_a_leave_and_rejoin_during_escrow() {
         loot_method: 0,
         loot_threshold: 2,
         master_looter_guid: 0,
-        members: vec![BOT_GUID],
+        kind: GroupKind::Party,
+        members: vec![super::party::GroupRosterMember {
+            guid: BOT_GUID,
+            slot: RaidSlot::default(),
+        }],
         partitions: Vec::new(),
     });
     let intent = bot_intent();
@@ -1974,7 +1978,7 @@ fn the_bots_arrival_fence_survives_a_party_mirror_failure_and_retry() {
         .expect("the mirror is readable")
         .expect("the shard the bot arrived on must know which party it is in");
     assert!(
-        roster.members.contains(&BOT_GUID) && roster.members.contains(&GINGER),
+        roster.has_member(BOT_GUID) && roster.has_member(GINGER),
         "and that party must still be the leader's: {roster:?}"
     );
     let calls = calls.lock().unwrap();

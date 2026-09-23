@@ -3699,6 +3699,7 @@ pub enum Reducer {
         target_guid: u64,
         arg_a: u8,
         arg_b: u8,
+        arg_c: u64,
     },
     RealmLootOp {
         op: u8,
@@ -3951,6 +3952,8 @@ pub enum Reducer {
         request_actor: SessionActor,
         partitions: Vec<GroupMemberPartition>,
         roster_revision: u64,
+        group_kind: u8,
+        raid_slots: Vec<u8>,
     },
     TickAuras {
         schedule: AuraSchedule,
@@ -7252,12 +7255,14 @@ Reducer::PlayerbotsFixtureCommandApply{
                 target_guid,
                 arg_a,
                 arg_b,
+                arg_c,
 }             => __sats::bsatn::to_vec(&realm_group_op_reducer::RealmGroupOpArgs {
                 op: op.clone(),
                 request_actor: request_actor.clone(),
                 target_guid: target_guid.clone(),
                 arg_a: arg_a.clone(),
                 arg_b: arg_b.clone(),
+                arg_c: arg_c.clone(),
 }),
             Reducer::RealmLootOp{
                 op,
@@ -7707,6 +7712,8 @@ Reducer::ResumeRelayArrival{
                 request_actor,
                 partitions,
                 roster_revision,
+                group_kind,
+                raid_slots,
 }             => __sats::bsatn::to_vec(&sync_group_mirror_reducer::SyncGroupMirrorArgs {
                 group_id: group_id.clone(),
                 leader_guid: leader_guid.clone(),
@@ -7717,6 +7724,8 @@ Reducer::ResumeRelayArrival{
                 request_actor: request_actor.clone(),
                 partitions: partitions.clone(),
                 roster_revision: roster_revision.clone(),
+                group_kind: group_kind.clone(),
+                raid_slots: raid_slots.clone(),
 }),
             Reducer::TickAuras{
                 schedule,

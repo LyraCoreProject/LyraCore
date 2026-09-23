@@ -48,35 +48,35 @@ fn gateway_taxi_gates_keep_refusals_typed_and_invariants_fatal() {
     standalone.assert_sql("DELETE FROM game_active_taxi_flight WHERE character_guid = 1");
     standalone.assert_call(
         "realm_group_op",
-        &["0", r#"{"guid":1,"ownership":null}"#, "2", "0", "0"],
+        &["0", r#"{"guid":1,"ownership":null}"#, "2", "0", "0", "0"],
     );
     standalone.assert_call(
         "realm_group_op",
-        &["1", r#"{"guid":2,"ownership":null}"#, "0", "0", "0"],
+        &["1", r#"{"guid":2,"ownership":null}"#, "0", "0", "0", "0"],
     );
     standalone.assert_call(
         "realm_group_op",
-        &["0", r#"{"guid":3,"ownership":null}"#, "4", "0", "0"],
+        &["0", r#"{"guid":3,"ownership":null}"#, "4", "0", "0", "0"],
     );
     standalone.assert_call(
         "realm_group_op",
-        &["1", r#"{"guid":4,"ownership":null}"#, "0", "0", "0"],
+        &["1", r#"{"guid":4,"ownership":null}"#, "0", "0", "0", "0"],
     );
     standalone.assert_call(
         "realm_group_op",
-        &["0", r#"{"guid":3,"ownership":null}"#, "5", "0", "0"],
+        &["0", r#"{"guid":3,"ownership":null}"#, "5", "0", "0", "0"],
     );
     standalone.assert_sql("DELETE FROM game_group WHERE leader_guid = 3");
 
     let valid_group_before =
         standalone.query_rows("SELECT * FROM game_group WHERE leader_guid = 1");
     for args in [
-        &["0", "1", "3", "0", "0"][..],
-        &["1", "5", "0", "0", "0"][..],
-        &["3", "3", "0", "0", "0"][..],
-        &["4", "1", "3", "0", "0"][..],
-        &["5", "1", "3", "2", "2"][..],
-        &["0", "3", "6", "0", "0"][..],
+        &["0", "1", "3", "0", "0", "0"][..],
+        &["1", "5", "0", "0", "0", "0"][..],
+        &["3", "3", "0", "0", "0", "0"][..],
+        &["4", "1", "3", "0", "0", "0"][..],
+        &["5", "1", "3", "2", "2", "0"][..],
+        &["0", "3", "6", "0", "0", "0"][..],
     ] {
         assert_group_invariant(&standalone, args);
     }

@@ -1675,6 +1675,7 @@ pub fn debug_verify_eventai_quest_credit_fixture(ctx: &ReducerContext) -> Result
         loot_threshold: 0,
         rr_cursor: 0,
         master_looter_guid: 0,
+        group_type: 0,
     });
     let group_members = ctx.db.game_group_member();
     for member in group_members
@@ -1694,6 +1695,7 @@ pub fn debug_verify_eventai_quest_credit_fixture(ctx: &ReducerContext) -> Result
             group_id: EVENTAI_CREDIT_FIXTURE_GROUP,
             character_guid,
             owner_identity: fixture_owner,
+            raid_slot: 0,
         });
     }
 

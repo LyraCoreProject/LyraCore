@@ -13,6 +13,7 @@ pub struct Group {
     pub loot_threshold: u8,
     pub rr_cursor: u32,
     pub master_looter_guid: u64,
+    pub group_type: u8,
 }
 
 impl __sdk::InModule for Group {
@@ -29,6 +30,7 @@ pub struct GroupCols {
     pub loot_threshold: __sdk::__query_builder::Col<Group, u8>,
     pub rr_cursor: __sdk::__query_builder::Col<Group, u32>,
     pub master_looter_guid: __sdk::__query_builder::Col<Group, u64>,
+    pub group_type: __sdk::__query_builder::Col<Group, u8>,
 }
 
 impl __sdk::__query_builder::HasCols for Group {
@@ -41,6 +43,7 @@ impl __sdk::__query_builder::HasCols for Group {
             loot_threshold: __sdk::__query_builder::Col::new(table_name, "loot_threshold"),
             rr_cursor: __sdk::__query_builder::Col::new(table_name, "rr_cursor"),
             master_looter_guid: __sdk::__query_builder::Col::new(table_name, "master_looter_guid"),
+            group_type: __sdk::__query_builder::Col::new(table_name, "group_type"),
         }
     }
 }

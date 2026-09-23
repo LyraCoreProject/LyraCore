@@ -385,6 +385,9 @@ fn install_authority(
         serde_json::json!({"guid": leader, "ownership": {"none": []}}).to_string(),
         serde_json::to_string(&partitions).unwrap(),
         revision.to_string(),
+        // A Party, every member in Subgroup 0.
+        "0".to_string(),
+        serde_json::to_string(&vec![0u8; members.len()]).unwrap(),
     ];
     let args: Vec<_> = args.iter().map(String::as_str).collect();
     for database in [realm, target] {
@@ -965,7 +968,7 @@ fn companion_command_receipts_recover_both_gateway_crash_boundaries() {
         issuer_sequence: target_intent.issuer_sequence,
         group_id: authority.group_id,
         leader_guid: authority.leader_guid,
-        members: authority.members,
+        members: authority.member_guids(),
         kind: target_intent.kind,
         bot_guid: target_intent.bot_guid,
         authority_member_guid: target_intent.authority_member_guid,
@@ -1565,7 +1568,7 @@ fn companion_command_lost_receipt_after_guarantee_reports_unknown_without_reappl
         issuer_sequence: intent.issuer_sequence,
         group_id: authority.group_id,
         leader_guid: authority.leader_guid,
-        members: authority.members,
+        members: authority.member_guids(),
         kind: intent.kind,
         bot_guid: intent.bot_guid,
         authority_member_guid: intent.authority_member_guid,
@@ -1671,7 +1674,7 @@ fn companion_command_realm_admission_rejects_a_changed_unrelated_member() {
             intent.issuer_guid,
             intent.bot_guid,
             intent.authority_member_guid,
-            authority.members,
+            authority.member_guids(),
         )
         .unwrap();
 

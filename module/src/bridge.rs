@@ -696,6 +696,7 @@ fn fixture_command_apply_after_authority(
         .group_id()
         .find(member.group_id)
         .ok_or_else(|| CommandOutcome::NotMember.tag().to_string())?;
+    // Companion Orders keep the Party cap, so a Raid above five members reads as a stale mirror.
     let members: Vec<_> = ctx
         .db
         .game_group_member()

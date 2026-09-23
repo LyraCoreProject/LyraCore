@@ -8,7 +8,7 @@ use super::handlers::{
 use super::party::PartyOutcome;
 use super::*;
 use crate::read_deadline::{DeadlineClock, PreAuthDeadline};
-use lyracore_shared::group::GroupRefusal;
+use lyracore_shared::group::{GroupKind, GroupRefusal, RaidSlot};
 use lyracore_shared::item::ItemRefusal;
 use lyracore_shared::loot::LootRefusal;
 use lyracore_shared::social::ContactRefusal;
@@ -3020,13 +3020,13 @@ impl WorldStore for InMemoryStore {
             .lock()
             .unwrap()
             .clone()
-            .unwrap_or_else(|| roster.members.clone());
+            .unwrap_or_else(|| roster.member_guids());
         current_members.sort_unstable();
         if expected_members != current_members {
             return Ok(super::party::CompanionCommandOutcome::StalePartyMirror);
         }
-        if !roster.members.contains(&bot_guid)
-            || (authority_member_guid != 0 && !roster.members.contains(&authority_member_guid))
+        if !roster.has_member(bot_guid)
+            || (authority_member_guid != 0 && !roster.has_member(authority_member_guid))
         {
             return Ok(super::party::CompanionCommandOutcome::NotMember);
         }
@@ -3196,15 +3196,25 @@ impl WorldStore for InMemoryStore {
         target_guid: u64,
         arg_a: u8,
         arg_b: u8,
+        arg_c: u64,
     ) -> Result<PartyOutcome> {
         use lyracore_shared::group::{event_kind as kind, realm_op, GroupRefusal};
         self.rec("realm_group_op");
         let mut p = self.party.lock().unwrap();
-        p.ops.push((op, actor_guid, target_guid, arg_a, arg_b));
+        p.ops
+            .push((op, actor_guid, target_guid, arg_a, arg_b, arg_c));
+        let full = |p: &FakeParty, group_id: u64| {
+            p.member_guids(group_id).len() >= p.kind_of(group_id).member_cap()
+        };
         match op {
             realm_op::INVITE => {
                 if p.group_of(target_guid).is_some() {
                     return Ok(GroupRefusal::AlreadyInGroup.into());
+                }
+                if p.group_of(actor_guid)
+                    .is_some_and(|group_id| full(&p, group_id))
+                {
+                    return Ok(GroupRefusal::GroupFull.into());
                 }
                 p.invites.retain(|(t, _)| *t != target_guid);
                 p.invites.push((target_guid, actor_guid));
@@ -3224,6 +3234,7 @@ impl WorldStore for InMemoryStore {
                 };
                 p.invites.retain(|(t, _)| *t != actor_guid);
                 let group_id = match p.group_of(inviter) {
+                    Some(g) if full(&p, g) => return Ok(GroupRefusal::GroupFull.into()),
                     Some(g) => g,
                     None => {
                         p.next_group_id += 1;
@@ -3234,8 +3245,24 @@ impl WorldStore for InMemoryStore {
                         g
                     }
                 };
+                let slot = p.joining_slot(group_id);
+                if slot != RaidSlot::default() {
+                    p.slots.insert(actor_guid, slot);
+                }
                 p.members.push((group_id, actor_guid));
                 p.push_list(group_id);
+            }
+            realm_op::RAID_CONVERT => {
+                let Some(group_id) = p.group_of(actor_guid) else {
+                    return Ok(GroupRefusal::NotInGroup.into());
+                };
+                if p.groups.iter().find(|(g, ..)| *g == group_id).map(|e| e.1) != Some(actor_guid) {
+                    return Ok(GroupRefusal::NotLeader.into());
+                }
+                if p.kind_of(group_id) == GroupKind::Party {
+                    p.raids.push(group_id);
+                    p.push_list(group_id);
+                }
             }
             realm_op::DECLINE => {
                 let Some(inviter) = p
@@ -3323,7 +3350,7 @@ impl WorldStore for InMemoryStore {
             .lock()
             .unwrap()
             .iter()
-            .find(|r| r.members.contains(&character_guid))
+            .find(|r| r.has_member(character_guid))
             .cloned())
     }
 
@@ -4160,11 +4187,11 @@ impl MemberStatsStore for InMemoryStore {
                 .lock()
                 .unwrap()
                 .iter()
-                .find(|roster| roster.members.contains(&self_guid))
+                .find(|roster| roster.has_member(self_guid))
                 .cloned(),
         };
         Ok(roster
-            .map(|roster| roster.members)
+            .map(|roster| roster.member_guids())
             .unwrap_or_default()
             .into_iter()
             .filter(|member| *member != self_guid)
@@ -10335,9 +10362,13 @@ struct FakeParty {
     members: Vec<(u64, u64)>,
     /// (target_guid, inviter_guid) — at most one pending per target, newest wins.
     invites: Vec<(u64, u64)>,
-    /// Every op that reached the AUTHORITY: `(op, actor, target, arg_a, arg_b)`. The assertion that
-    /// a party op ran on realm-core rather than on the player's shard.
-    ops: Vec<(u8, u64, u64, u8, u8)>,
+    /// Groups their leader converted to a Raid.
+    raids: Vec<u64>,
+    /// Each Raid member's Raid Slot; a member absent here holds the Party default.
+    slots: std::collections::HashMap<u64, RaidSlot>,
+    /// Every op that reached the AUTHORITY: `(op, actor, target, arg_a, arg_b, arg_c)`. The
+    /// assertion that a party op ran on realm-core rather than on the player's shard.
+    ops: Vec<(u8, u64, u64, u8, u8, u64)>,
     /// Every notification the authority pushed: `(recipient_guid, kind)` — the relay's input.
     events: Vec<(u64, u8)>,
 }
@@ -10350,6 +10381,36 @@ impl FakeParty {
             .map(|(gid, _)| *gid)
     }
 
+    fn kind_of(&self, group_id: u64) -> GroupKind {
+        if self.raids.contains(&group_id) {
+            GroupKind::Raid
+        } else {
+            GroupKind::Party
+        }
+    }
+
+    fn member_guids(&self, group_id: u64) -> Vec<u64> {
+        self.members
+            .iter()
+            .filter(|(g, _)| *g == group_id)
+            .map(|(_, guid)| *guid)
+            .collect()
+    }
+
+    /// The module's placement: a Raid joiner takes the first Subgroup below five members.
+    fn joining_slot(&self, group_id: u64) -> RaidSlot {
+        if self.kind_of(group_id) == GroupKind::Party {
+            return RaidSlot::default();
+        }
+        let mut counts = [0usize; 8];
+        for guid in self.member_guids(group_id) {
+            let slot = self.slots.get(&guid).copied().unwrap_or_default();
+            counts[usize::from(slot.subgroup())] += 1;
+        }
+        let subgroup = counts.iter().position(|count| *count < 5).expect("room");
+        RaidSlot::new(subgroup as u8, false).unwrap()
+    }
+
     fn roster(&self, group_id: u64) -> Option<super::party::GroupRoster> {
         let (gid, leader, method, threshold, master) =
             *self.groups.iter().find(|(g, ..)| *g == group_id)?;
@@ -10360,11 +10421,14 @@ impl FakeParty {
             loot_method: method,
             loot_threshold: threshold,
             master_looter_guid: master,
+            kind: self.kind_of(group_id),
             members: self
-                .members
-                .iter()
-                .filter(|(g, _)| *g == group_id)
-                .map(|(_, guid)| *guid)
+                .member_guids(group_id)
+                .into_iter()
+                .map(|guid| super::party::GroupRosterMember {
+                    guid,
+                    slot: self.slots.get(&guid).copied().unwrap_or_default(),
+                })
                 .collect(),
             partitions: Vec::new(),
         })
@@ -10392,6 +10456,7 @@ impl FakeParty {
         };
         self.members
             .retain(|(g, m)| !(*g == group_id && *m == guid));
+        self.slots.remove(&guid);
         self.events.push((guid, kind::DESTROYED));
         let remaining: Vec<u64> = self
             .members
@@ -10402,9 +10467,11 @@ impl FakeParty {
         if remaining.len() < 2 {
             for r in remaining {
                 self.events.push((r, kind::DESTROYED));
+                self.slots.remove(&r);
             }
             self.members.retain(|(g, _)| *g != group_id);
             self.groups.retain(|(g, ..)| *g != group_id);
+            self.raids.retain(|g| *g != group_id);
         } else {
             if let Some(entry) = self.groups.iter_mut().find(|(g, ..)| *g == group_id) {
                 if entry.1 == guid {

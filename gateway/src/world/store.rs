@@ -422,8 +422,9 @@ pub trait WorldStore:
     /// selection cannot undo admission or membership already committed on Realm-core.
     fn admit_sessionless_group_action(&self, character_guid: u64) -> Result<party::PartyOutcome>;
 
-    /// `realm_group_op` — run one party op against the database this handle names. Called on
-    /// the realm-core handle; the op byte and argument slots are `lyracore_shared::group::realm_op`.
+    /// `realm_group_op` — run one party op against the database this handle names: realm-core
+    /// when sharded, the only shard otherwise. The op byte and argument slots are
+    /// `lyracore_shared::group::realm_op`.
     fn realm_group_op(
         &self,
         _op: u8,
@@ -431,6 +432,7 @@ pub trait WorldStore:
         _target_guid: u64,
         _arg_a: u8,
         _arg_b: u8,
+        _arg_c: u64,
     ) -> Result<party::PartyOutcome> {
         Err(anyhow!("this store does not host realm-wide party state"))
     }
@@ -441,6 +443,7 @@ pub trait WorldStore:
         self.realm_group_op(
             lyracore_shared::group::realm_op::LEAVE,
             character_guid,
+            0,
             0,
             0,
             0,

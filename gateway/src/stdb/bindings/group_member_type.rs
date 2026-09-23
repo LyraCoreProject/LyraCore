@@ -11,6 +11,7 @@ pub struct GroupMember {
     pub group_id: u64,
     pub character_guid: u64,
     pub owner_identity: __sdk::Identity,
+    pub raid_slot: u8,
 }
 
 impl __sdk::InModule for GroupMember {
@@ -25,6 +26,7 @@ pub struct GroupMemberCols {
     pub group_id: __sdk::__query_builder::Col<GroupMember, u64>,
     pub character_guid: __sdk::__query_builder::Col<GroupMember, u64>,
     pub owner_identity: __sdk::__query_builder::Col<GroupMember, __sdk::Identity>,
+    pub raid_slot: __sdk::__query_builder::Col<GroupMember, u8>,
 }
 
 impl __sdk::__query_builder::HasCols for GroupMember {
@@ -35,6 +37,7 @@ impl __sdk::__query_builder::HasCols for GroupMember {
             group_id: __sdk::__query_builder::Col::new(table_name, "group_id"),
             character_guid: __sdk::__query_builder::Col::new(table_name, "character_guid"),
             owner_identity: __sdk::__query_builder::Col::new(table_name, "owner_identity"),
+            raid_slot: __sdk::__query_builder::Col::new(table_name, "raid_slot"),
         }
     }
 }

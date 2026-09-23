@@ -3055,6 +3055,7 @@ impl Coordinator {
         target_guid: u64,
         arg_a: u8,
         arg_b: u8,
+        arg_c: u64,
     ) -> Result<PartyOutcome> {
         party_outcome(call_reducer!(
             self.0.call_pipe().conn.reducers,
@@ -3064,7 +3065,8 @@ impl Coordinator {
                 self.session_actor(actor_guid),
                 target_guid,
                 arg_a,
-                arg_b
+                arg_b,
+                arg_c
             )
         ))
     }
@@ -3079,6 +3081,7 @@ impl Coordinator {
             realm_group_op_then(
                 lyracore_shared::group::realm_op::LEAVE,
                 self.session_actor(character_guid),
+                0,
                 0,
                 0,
                 0
@@ -3419,10 +3422,16 @@ impl Coordinator {
                 roster.loot_method,
                 roster.loot_threshold,
                 roster.master_looter_guid,
-                roster.members.clone(),
+                roster.member_guids(),
                 self.session_actor(0),
                 partitions,
-                roster.roster_revision
+                roster.roster_revision,
+                roster.kind.wire(),
+                roster
+                    .members
+                    .iter()
+                    .map(|member| member.slot.wire())
+                    .collect()
             )
         )
     }
