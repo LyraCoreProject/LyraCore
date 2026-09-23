@@ -28,6 +28,24 @@ pub mod chat_tag {
     pub const DND: u8 = 2;
 }
 
+/// `game_chat_event.chat_type` discriminants: the World Shard's own broadcast chat table (say,
+/// yell, a creature's text emote, and a Character's `/e` custom emote). Not [`chat_kind`] above —
+/// that module names the 1.12 wire values a Realm Chat Line carries; this table predates it and
+/// keeps its own numbering.
+pub mod broadcast_chat {
+    pub const SAY: u8 = 0;
+    pub const YELL: u8 = 1;
+    /// Creature-authored text emote (`CHAT_TYPE_TEXT_EMOTE` on the source wire). EventAI is its
+    /// only source.
+    pub const CREATURE_TEXT_EMOTE: u8 = 2;
+    /// A Character's `/e` custom emote (cm:ChatHandler.cpp:172-226, cm:Player.cpp:16591-16599).
+    pub const EMOTE: u8 = 3;
+
+    /// `/e` and text-emote (`/wave`, `/dance`, …) proximity range: `ListenRange.TextEmote`
+    /// (cm:mangosd.conf.dist.in:1092), same as `ListenRange.Say`.
+    pub const TEXT_EMOTE_RANGE_YD: f32 = 25.0;
+}
+
 /// 1.12 `Language` wire values (gtker vanilla `language.rs`).
 pub mod language {
     pub const UNIVERSAL: u32 = 0;
@@ -165,6 +183,18 @@ mod tests {
         assert_eq!(chat_kind::IGNORED, 22);
         assert_eq!(chat_kind::RAID_LEADER, 87);
         assert_eq!(chat_kind::RAID_WARNING, 88);
+    }
+
+    /// `game_chat_event.chat_type` discriminants + the shared text-emote range, pinned so a
+    /// later edit shows up as a failing assertion instead of a silent drift between the two crates
+    /// that both read them.
+    #[test]
+    fn broadcast_chat_discriminants_and_text_emote_range_are_pinned() {
+        assert_eq!(broadcast_chat::SAY, 0);
+        assert_eq!(broadcast_chat::YELL, 1);
+        assert_eq!(broadcast_chat::CREATURE_TEXT_EMOTE, 2);
+        assert_eq!(broadcast_chat::EMOTE, 3);
+        assert_eq!(broadcast_chat::TEXT_EMOTE_RANGE_YD, 25.0); // cm:mangosd.conf.dist.in:1092
     }
 
     /// Every player race against every language that a race can know, written out from the dbc

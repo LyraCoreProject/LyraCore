@@ -640,7 +640,7 @@ pub fn gw_set_target(
     crate::world::apply_set_target(ctx, player, target_guid)
 }
 
-/// [`crate::chat::send_chat`] with the speaker named by guid — SAY/YELL.
+/// [`crate::chat::apply_send_chat`] with the speaker named by guid — SAY/YELL/`/e`.
 #[reducer]
 pub fn gw_send_chat(
     ctx: &ReducerContext,

@@ -10249,6 +10249,26 @@ fn messagechat_say_and_yell_route_to_chat_types_0_and_1() {
 }
 
 #[test]
+fn messagechat_emote_routes_to_chat_type_3() {
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_MESSAGECHAT {
+        chat_type: CMSG_MESSAGECHAT_ChatType::Emote,
+        language: Language::Common,
+        message: "waves wildly.".into(),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    drop(client); // no reply on success — the speaker sees their line via the broadcast relay
+    server.join().unwrap();
+    assert_eq!(
+        store.chats.lock().unwrap().as_slice(),
+        &[(3, 7, "waves wildly.".to_string())],
+        "/e → type 3, language threaded to the Module (which stores it as Universal)"
+    );
+}
+
+#[test]
 fn messagechat_dot_say_diverts_to_gm_command_never_touching_chat() {
     // A Say line starting with '.' diverts to gm_command BEFORE send_chat — never a
     // broadcast, never a game_chat_event insert. No reply on success (the command's own effect is its
