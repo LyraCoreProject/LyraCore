@@ -68,7 +68,7 @@ for collision extraction. It owns only the selected vmap cells. It does not clai
 Navigation Coverage, or the rest of the instance.
 
 **Realm-core**:
-The shard that holds realm-wide state, including accounts, sessions, groups, whispers, loot rolls, the character-to-shard index, and shard load samples.
+The shard that holds realm-wide state, including accounts, sessions, groups, guilds, whispers, loot rolls, the character-to-shard index, and shard load samples.
 
 **Gateway**:
 The trusted protocol tier between clients and shards. Holds no durable state.
@@ -579,6 +579,30 @@ _Avoid_: resolve, close
 The listing pool shared by the houses of one team: Alliance (houses 1-3), Horde (houses 4-6) and
 neutral (house 7). A bid reaches every listing in its bidder's market, whatever house placed it.
 The house the seller stands at still sets that listing's deposit and cut.
+
+### Guilds
+
+**Guild**:
+A named, realm-wide set of Characters of one team with ranks, a leader, a message of the day and an
+emblem. Lives on Realm-core.
+
+**Guild Leader**:
+The one member at rank 0. The client's default rank name is "Guild Master".
+_Avoid_: guild master (it is also an NPC title), GM (means game master)
+
+**Guild Rank**:
+One of five to ten ordered ranks of a Guild; 0 is the highest. Each has a name and Rank Rights.
+
+**Rank Rights**:
+The permission bits a Guild Rank grants, such as invite, remove, promote, chat, notes and MOTD.
+
+**Guild Event**:
+A Realm-core row that tells every online member, or one addressed Character, that something happened
+in a Guild. The Gateway renders it.
+
+**Guild Projection**:
+PLAYER_GUILDID and PLAYER_GUILDRANK as the Gateway derives them from Realm-core membership when it
+encodes a player, and re-sends when membership changes. No Shard stores them.
 
 ### World clock and weather
 

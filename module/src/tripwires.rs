@@ -90,6 +90,7 @@ pub(crate) mod character_owned_tripwire {
                 "game_combat_event",
                 "game_emote_event",
                 "game_group_event",
+                "game_guild_event",
                 "game_realm_chat_event",
                 "game_roll_event",
                 "game_spell_cast_event",
@@ -145,6 +146,10 @@ pub(crate) mod character_owned_tripwire {
         (
             &["game_group"],
             "Realm-core Group authority shared by all members",
+        ),
+        (
+            &["game_guild", "game_guild_member"],
+            "realm-owned guild state; deleted Characters are forgotten by the Gateway's character-gone reconciliation",
         ),
         (
             &["game_loot_roll_vote"],

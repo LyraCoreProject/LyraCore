@@ -925,6 +925,12 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         "SELECT * FROM game_auction_hold",
         "SELECT * FROM game_auction_house",
         "SELECT * FROM game_auction_operation_receipt",
+        // Guilds. Realm-core holds every row; World Shards hold none. The Gateway reads membership
+        // for the Guild Projection and renders Guild Events from this cache.
+        "SELECT * FROM game_guild",
+        "SELECT * FROM game_guild_rank",
+        "SELECT * FROM game_guild_member",
+        "SELECT * FROM game_guild_event",
         // The four box-scoped tables now ride THIS one global subscription per shard instead
         // of ~600 per-player 5×5-box subscriptions, and the gateway's own cell index
         // (`stdb::world_index`) decides who sees each row. `game_world_entity` and

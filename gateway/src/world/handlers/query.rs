@@ -301,6 +301,20 @@ pub(crate) fn handle_query<St: WorldStore + ?Sized>(
             } = *c;
             let lang = language.as_int() as u8;
             match chat_type {
+                CMSG_MESSAGECHAT_ChatType::Say if super::is_guild_dot_command(&message) => {
+                    let player = super::GuildActionPlayer {
+                        account_id: conn.account_id,
+                        self_guid: social::self_guid(conn),
+                    };
+                    if let Some(line) = super::run_guild_dot_command(store, player, &message)? {
+                        send(
+                            tx,
+                            Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(
+                                codec::build_gm_system_message(line),
+                            ))),
+                        )?;
+                    }
+                }
                 CMSG_MESSAGECHAT_ChatType::Say if message.starts_with('.') => {
                     if let Err(e) = store.gm_command(&conn.account_name, self_guid, message) {
                         send(

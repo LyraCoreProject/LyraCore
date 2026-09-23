@@ -8,6 +8,7 @@
 mod account;
 mod auction;
 mod chat;
+mod guild;
 mod items;
 mod mail;
 mod npc_vendor;

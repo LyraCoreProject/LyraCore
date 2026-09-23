@@ -19,6 +19,7 @@ use crate::world::{
 use lyracore_shared::auction::AuctionRefusal;
 use lyracore_shared::chat::ChatRefusal;
 use lyracore_shared::group::GroupRefusal;
+use lyracore_shared::guild::GuildRefusal;
 use lyracore_shared::item::ItemRefusal;
 use lyracore_shared::loot::{LootBoundaryFailure, LootRefusal};
 use lyracore_shared::social::ContactRefusal;
@@ -3973,6 +3974,49 @@ fn bid_outcome(hold: &AuctionBidHold) -> Result<crate::world::PlaceBidOutcome> {
             ));
         }
     })
+}
+
+impl Coordinator {
+    /// `realm_guild_op`: one guild op against the database THIS handle points at. Callers hold the
+    /// Realm-core handle. The actor is the guid this World Session entered the world with.
+    pub fn realm_guild_op(
+        &self,
+        actor_guid: u64,
+        request: crate::world::GuildRequest,
+    ) -> Result<crate::world::GuildOutcome> {
+        use crate::world::GuildRequest;
+        let op = match request {
+            GuildRequest::GmCreate {
+                leader_guid,
+                leader_name,
+                leader_team,
+                leader_realm_account,
+                gm_level,
+                name,
+            } => GuildOp::GmCreate(GuildGmCreate {
+                leader_guid,
+                leader_name,
+                leader_team,
+                leader_realm_account,
+                gm_level,
+                name,
+            }),
+            GuildRequest::SignOn { actor_name } => GuildOp::SignOn(actor_name),
+            GuildRequest::SignOff => GuildOp::SignOff,
+        };
+        let result = call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "realm_guild_op",
+            realm_guild_op_then(self.session_actor(actor_guid), op)
+        );
+        match result {
+            Ok(()) => Ok(crate::world::GuildOutcome::Ran),
+            Err(error) => match reducer_refusal_reason(&error).and_then(GuildRefusal::parse_tag) {
+                Some(refusal) => Ok(crate::world::GuildOutcome::Refused(refusal)),
+                None => Err(error),
+            },
+        }
+    }
 }
 
 #[cfg(test)]

@@ -8,9 +8,9 @@
 //! navigation, not a split.
 
 use super::handlers::{
-    AuctionActionStore, CastStore, ChatActionStore, DuelActionStore, ItemActionStore,
-    LootWindowStore, MeleeActionStore, MemberStatsStore, QuestActionStore, TaxiActionStore,
-    VendorActionStore, WeatherStore,
+    AuctionActionStore, CastStore, ChatActionStore, DuelActionStore, GuildActionStore,
+    ItemActionStore, LootWindowStore, MeleeActionStore, MemberStatsStore, QuestActionStore,
+    TaxiActionStore, VendorActionStore, WeatherStore,
 };
 use super::*;
 
@@ -26,6 +26,7 @@ pub trait WorldStore:
     + CastStore
     + ChatActionStore
     + DuelActionStore
+    + GuildActionStore
     + ItemActionStore
     + LootWindowStore
     + MeleeActionStore

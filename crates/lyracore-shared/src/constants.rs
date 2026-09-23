@@ -87,6 +87,10 @@ pub mod npc_flags {
     /// `UNIT_NPC_FLAG_BANKER` (0x100, vanilla 1.12 / cmangos-classic) — opens the bank window and
     /// gates every move into or out of a bank slot.
     pub const BANKER: u32 = 0x0000_0100;
+    /// `UNIT_NPC_FLAG_PETITIONER` (0x200, `cm:Unit.h:519`) — sells Guild Charters.
+    pub const PETITIONER: u32 = 0x0000_0200;
+    /// `UNIT_NPC_FLAG_TABARDDESIGNER` (0x400, `cm:Unit.h:520`) — opens the tabard designer.
+    pub const TABARDDESIGNER: u32 = 0x0000_0400;
     /// `UNIT_NPC_FLAG_AUCTIONEER` (0x1000, vanilla 1.12) — opens an auction-house window.
     pub const AUCTIONEER: u32 = 0x0000_1000;
     /// `UNIT_NPC_FLAG_REPAIR` (0x4000, vanilla 1.12 / cmangos-classic) — repairs item durability
@@ -352,6 +356,8 @@ pub mod gossip_option {
     pub const TRAINER: u32 = 5; // opens SMSG_TRAINER_LIST
     pub const INNKEEPER: u32 = 8; // binds the caller's hearthstone home (bind_home)
     pub const BANKER: u32 = 9; // opens the bank window
+    pub const PETITIONER: u32 = 10; // opens the Guild Charter list (`cm:GossipDef.h:45`)
+    pub const TABARDDESIGNER: u32 = 11; // opens the tabard designer (`cm:GossipDef.h:46`)
     /// cmangos `GOSSIP_OPTION_UNLEARNTALENTS`. NOT what the raw dump carries — every "I wish to
     /// unlearn my talents." row imports with `action=GOSSIP` (cmangos gates it in C++ code at
     /// GossipHello, not via this column), so the importer reclassifies that specific row's text to

@@ -896,6 +896,19 @@ fn register_shard_callbacks(
         &view,
         move |v, row| resurrect_offered(v, shard, row),
     );
+    // Guild rows exist only on Realm-core. On a sharded realm this Shard holds none, and
+    // `arm_realm_private` relays them from the Realm-core connection instead.
+    wire_guild_relays(
+        db,
+        &view,
+        &coord,
+        [
+            "game_guild_event.insert",
+            "game_guild_member.insert",
+            "game_guild_member.update",
+            "game_guild_member.delete",
+        ],
+    );
     wire_insert_live(
         db.game_whisper_event(),
         "game_whisper_event.insert",
@@ -1127,6 +1140,78 @@ pub(crate) fn arm_realm_private(view: Arc<WorldView>, realm: Coordinator, coord:
         "realm.game_realm_chat_event.insert",
         &view,
         |v, row| realm_chat_appeared(v, row),
+    );
+    wire_guild_relays(
+        db,
+        &view,
+        &realm,
+        [
+            "realm.game_guild_event.insert",
+            "realm.game_guild_member.insert",
+            "realm.game_guild_member.update",
+            "realm.game_guild_member.delete",
+        ],
+    );
+}
+
+/// Reads one Character's `(guild_id, rank_id)` from the Realm-core cache. A closure so relay
+/// tests can supply membership without a connection.
+pub(crate) type GuildMembershipRead = Arc<dyn Fn(u64) -> Option<(u32, u32)> + Send + Sync>;
+
+fn guild_membership_read(realm: &Coordinator) -> GuildMembershipRead {
+    let realm = realm.clone();
+    Arc::new(move |character_guid| {
+        realm
+            .0
+            .coord()
+            .conn
+            .db
+            .game_guild_member()
+            .character_guid()
+            .find(&character_guid)
+            .map(|member| (member.guild_id, member.rank_id))
+    })
+}
+
+/// Register the Guild Event relay and the Guild Projection relay on the connection that holds the
+/// guild rows. `labels` name the event insert and the member insert, update and delete callbacks.
+fn wire_guild_relays(
+    db: &RemoteTables,
+    view: &Arc<WorldView>,
+    realm: &Coordinator,
+    labels: [&'static str; 4],
+) {
+    let [event_insert, member_insert, member_update, member_delete] = labels;
+    let membership = guild_membership_read(realm);
+    {
+        let membership = membership.clone();
+        wire_insert_live(db.game_guild_event(), event_insert, view, move |v, row| {
+            guild_event_appeared(v, &membership, row)
+        });
+    }
+    {
+        let membership = membership.clone();
+        wire_insert(
+            db.game_guild_member(),
+            member_insert,
+            view,
+            move |v, row| guild_membership_changed(v, &membership, row.character_guid),
+        );
+    }
+    {
+        let membership = membership.clone();
+        wire_update(
+            db.game_guild_member(),
+            member_update,
+            view,
+            move |v, _old, row| guild_membership_changed(v, &membership, row.character_guid),
+        );
+    }
+    wire_delete(
+        db.game_guild_member(),
+        member_delete,
+        view,
+        move |v, row| guild_membership_changed(v, &membership, row.character_guid),
     );
 }
 
@@ -2189,6 +2274,87 @@ fn group_member_mirror_changed(
     });
 }
 
+/// A membership row changed: re-send the member's Guild Projection to the member and to every
+/// viewer that holds its entity. The member is always addressed, as `cell_audience` keeps its owner
+/// leg, so an entity the cell index has not seen yet cannot hide a removal from the member's own
+/// client. The job reads membership when it runs, so after a delete it sends 0 and 0.
+fn guild_membership_changed(
+    view: &WorldView,
+    membership: &GuildMembershipRead,
+    character_guid: u64,
+) {
+    let mut sessions = view
+        .spatial
+        .shard_of(EntityLayer::WorldEntity, character_guid)
+        .and_then(|shard| {
+            view.spatial
+                .entity_cell_on_shard(EntityLayer::WorldEntity, character_guid, shard)
+                .map(|key| view.world_entity_recipients(shard, character_guid, key))
+        })
+        .unwrap_or_default();
+    if let Some(owner) = view.session_of_owner(character_guid) {
+        if !sessions.contains(&owner) {
+            sessions.push(owner);
+        }
+    }
+    for session in sessions {
+        let Some(viewer) = view.viewer(session) else {
+            continue;
+        };
+        let membership = membership.clone();
+        enqueue(viewer, move |viewer| {
+            let projection = membership(character_guid).unwrap_or((0, 0));
+            super::subscriptions::guild_values_outbound(&viewer, character_guid, projection)
+        });
+    }
+}
+
+/// A Guild Event landed. An addressed row reaches its recipient; a broadcast row reaches every
+/// online member on this Gateway. A member signing on does not hear its own SIGNED_ON: mangos
+/// broadcasts it before the Character is in the world (`cm:CharacterHandler.cpp:787`).
+fn guild_event_appeared(view: &WorldView, membership: &GuildMembershipRead, row: &GuildEvent) {
+    let audience: Vec<Arc<Viewer>> = if row.recipient_guid != 0 {
+        view.session_of_owner(row.recipient_guid)
+            .and_then(|session| view.viewer(session))
+            .filter(|viewer| {
+                super::subscriptions::private_recipient_audience(
+                    row.recipient_guid,
+                    viewer.self_guid,
+                )
+            })
+            .into_iter()
+            .collect()
+    } else {
+        online_audience(view, membership, row.guild_id)
+    };
+    let row = Arc::new(row.clone());
+    for viewer in audience {
+        if row.recipient_guid == 0
+            && row.kind == lyracore_shared::guild::event_kind::SIGNED_ON
+            && viewer.self_guid == row.subject_guid
+        {
+            continue;
+        }
+        let row = row.clone();
+        enqueue(viewer, move |_| {
+            super::subscriptions::guild_event_outbound(&row)
+        });
+    }
+}
+
+/// Every World Session on this Gateway whose Character is a member of `guild_id`. The one
+/// audience read for broadcast Guild Events.
+fn online_audience(
+    view: &WorldView,
+    membership: &GuildMembershipRead,
+    guild_id: u32,
+) -> Vec<Arc<Viewer>> {
+    view.all_viewers()
+        .into_iter()
+        .filter(|viewer| membership(viewer.self_guid).is_some_and(|(id, _)| id == guild_id))
+        .collect()
+}
+
 /// An aura names its target and nothing else; the target's indexed cell anchors it. A target
 /// with no row (a unit already gone) leaves the owner leg as the only recipient, and the owner
 /// is the only viewer whose gate could still pass.
@@ -2475,14 +2641,15 @@ mod relay_bench;
 mod family_audience_tests {
     use super::{
         addon_message_appeared, duel_winner_audience, exploration_outbound_for_word,
-        is_initial_apply, item_owner_job, levelup_appeared, reputation_appeared, sweep_into_view,
-        system_message_appeared, teleport_appeared, weather_changed, xp_appeared, zone_crossed,
-        BoundIdentity, ExplorationReplay, MotionPending, OwnerGuid, Viewer, WorldView,
+        guild_event_appeared, guild_membership_changed, is_initial_apply, item_owner_job,
+        levelup_appeared, reputation_appeared, sweep_into_view, system_message_appeared,
+        teleport_appeared, weather_changed, xp_appeared, zone_crossed, BoundIdentity,
+        ExplorationReplay, GuildMembershipRead, MotionPending, OwnerGuid, Viewer, WorldView,
     };
     use crate::stdb::aoi::ViewerGates;
     use crate::stdb::bindings::{
-        AddonMessage, CharacterExplored, CharacterQuest, LevelupEvent, PlayerReputation,
-        SystemMessageEvent, TeleportEvent, XpEvent, ZoneWeather,
+        AddonMessage, CharacterExplored, CharacterQuest, GuildEvent, LevelupEvent,
+        PlayerReputation, SystemMessageEvent, TeleportEvent, XpEvent, ZoneWeather,
     };
     use crate::stdb::subscriptions::{private_recipient_audience, quest_update_packets};
     use crate::stdb::world_index::{CellKey, EntityLayer};
@@ -2839,6 +3006,153 @@ mod family_audience_tests {
         system_message_appeared(&view, &missing);
         assert!(recipient_rx.try_recv().is_err());
         assert!(bystander_rx.try_recv().is_err());
+    }
+
+    fn raw_packets(outbound: Vec<Outbound>) -> Vec<(u16, Vec<u8>)> {
+        outbound
+            .into_iter()
+            .map(|out| match out {
+                Outbound::Raw { opcode, body } => (opcode, body),
+                _ => panic!("guild relays write raw packets"),
+            })
+            .collect()
+    }
+
+    fn membership(rows: &[(u64, u32, u32)]) -> GuildMembershipRead {
+        let rows = rows.to_vec();
+        Arc::new(move |guid| {
+            rows.iter()
+                .find(|(member, _, _)| *member == guid)
+                .map(|(_, guild_id, rank_id)| (*guild_id, *rank_id))
+        })
+    }
+
+    #[test]
+    fn a_membership_change_reaches_the_member_and_viewers_that_created_it() {
+        let view = WorldView::new(true);
+        let anchor = CellKey::at(0, 0, 0, 0);
+        let (member_tx, member_rx) = SessionTx::with_depth(0);
+        let member = viewer_with_tx(1, 9001, identity(1), member_tx);
+        let (observer_tx, observer_rx) = SessionTx::with_depth(0);
+        let observer = viewer_with_tx(2, 9002, identity(2), observer_tx);
+        observer.created.lock().unwrap().insert(9001);
+        let (stranger_tx, stranger_rx) = SessionTx::with_depth(0);
+        let stranger = viewer_with_tx(3, 9003, identity(3), stranger_tx);
+        for viewer in [&member, &observer, &stranger] {
+            view.add_viewer_on_shard(viewer.clone(), anchor, 0);
+        }
+        view.spatial
+            .upsert_entity(EntityLayer::WorldEntity, 9001, anchor, 0, 0);
+
+        guild_membership_changed(&view, &membership(&[(9001, 7, 0)]), 9001);
+        let founded = crate::codec::build_guild_values(9001, 7, 0);
+        assert_eq!(raw_packets(queued_job(&member_rx)), vec![founded.clone()]);
+        assert_eq!(raw_packets(queued_job(&observer_rx)), vec![founded]);
+        assert!(queued_job(&stranger_rx).is_empty());
+
+        guild_membership_changed(&view, &membership(&[]), 9001);
+        assert_eq!(
+            raw_packets(queued_job(&member_rx)),
+            vec![crate::codec::build_guild_values(9001, 0, 0)]
+        );
+    }
+
+    #[test]
+    fn a_removal_reaches_the_member_before_its_entity_is_indexed() {
+        let view = WorldView::new(true);
+        let anchor = CellKey::at(0, 0, 0, 0);
+        let (member_tx, member_rx) = SessionTx::with_depth(0);
+        let (other_tx, other_rx) = SessionTx::with_depth(0);
+        view.add_viewer_on_shard(viewer_with_tx(1, 9001, identity(1), member_tx), anchor, 0);
+        view.add_viewer_on_shard(viewer_with_tx(2, 9002, identity(2), other_tx), anchor, 0);
+
+        guild_membership_changed(&view, &membership(&[]), 9001);
+        assert_eq!(
+            raw_packets(queued_job(&member_rx)),
+            vec![crate::codec::build_guild_values(9001, 0, 0)]
+        );
+        assert!(other_rx.try_recv().is_err());
+    }
+
+    fn guild_event(recipient_guid: u64, kind: u8, subject_guid: u64) -> GuildEvent {
+        GuildEvent {
+            id: 1,
+            guild_id: 7,
+            recipient_guid,
+            kind,
+            subject_guid,
+            other_guid: 0,
+            strings: vec!["Alice".to_string()],
+            created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
+        }
+    }
+
+    #[test]
+    fn a_broadcast_guild_event_reaches_online_members_and_nobody_else() {
+        use lyracore_shared::guild::event_kind;
+        let view = WorldView::new(true);
+        let anchor = CellKey::at(0, 0, 0, 0);
+        let mut receivers = Vec::new();
+        for (session, guid) in [(1, 9001), (2, 9002), (3, 9003), (4, 9004)] {
+            let (tx, rx) = SessionTx::with_depth(0);
+            // Members stand on different Shards: the audience is the Guild, not the Shard.
+            view.add_viewer_on_shard(
+                viewer_with_tx(session, guid, identity(session as u8), tx),
+                anchor,
+                session as usize,
+            );
+            receivers.push(rx);
+        }
+        let [alice, bob, stranger, other_guild] = <[_; 4]>::try_from(receivers).unwrap();
+        let members = membership(&[(9001, 7, 0), (9002, 7, 4), (9004, 8, 0)]);
+
+        guild_event_appeared(
+            &view,
+            &members,
+            &guild_event(0, event_kind::SIGNED_OFF, 9001),
+        );
+        let signed_off = crate::codec::build_guild_event_raw(
+            event_kind::SIGNED_OFF,
+            &["Alice".to_string()],
+            9001,
+        );
+        assert_eq!(raw_packets(queued_job(&alice)), vec![signed_off.clone()]);
+        assert_eq!(raw_packets(queued_job(&bob)), vec![signed_off]);
+        assert!(stranger.try_recv().is_err());
+        assert!(other_guild.try_recv().is_err());
+
+        guild_event_appeared(
+            &view,
+            &members,
+            &guild_event(0, event_kind::SIGNED_ON, 9001),
+        );
+        assert!(
+            alice.try_recv().is_err(),
+            "a member does not hear its own sign-on"
+        );
+        assert_eq!(raw_packets(queued_job(&bob)).len(), 1);
+    }
+
+    #[test]
+    fn an_addressed_guild_event_reaches_only_its_recipient() {
+        let view = WorldView::new(true);
+        let anchor = CellKey::at(0, 0, 0, 0);
+        let (recipient_tx, recipient_rx) = SessionTx::with_depth(0);
+        let (member_tx, member_rx) = SessionTx::with_depth(0);
+        view.add_viewer_on_shard(
+            viewer_with_tx(1, 9003, identity(1), recipient_tx),
+            anchor,
+            0,
+        );
+        view.add_viewer_on_shard(viewer_with_tx(2, 9001, identity(2), member_tx), anchor, 0);
+
+        guild_event_appeared(
+            &view,
+            &membership(&[(9001, 7, 0)]),
+            &guild_event(9003, 0x40, 9001),
+        );
+        assert_eq!(raw_packets(queued_job(&recipient_rx)).len(), 1);
+        assert!(member_rx.try_recv().is_err());
     }
 
     #[test]

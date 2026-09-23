@@ -4,6 +4,7 @@
 use spacetimedb::{reducer, table, ReducerContext, ScheduleAt, Table};
 
 use crate::breath_relay::game_breath_relay_event;
+use crate::guild::game_guild_event;
 use crate::{
     game_addon_message, game_bot_invite_intent, game_channel_event, game_chat_event,
     game_combat_event, game_duel_event, game_emote_event, game_group_event, game_group_invite,
@@ -99,6 +100,7 @@ pub fn reap_movement_events(ctx: &ReducerContext, _schedule: EventReaperSchedule
                                     // is only the one-shot PLAYER_BYTES_2 relay.
     reap!(game_rest_state_event);
     reap!(game_breath_relay_event); // breath timer edges + drowning damage relay
+    reap!(game_guild_event); // Guild Events (sign-on, MOTD, membership)
 
     // Never-answered pending invites. Same id+created_at shape as the event tables, but on
     // the longer INVITE_TTL (a human is looking at the invite dialog). After that the row is dead

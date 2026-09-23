@@ -98,6 +98,10 @@ pub struct EntityView {
     pub home_x: f32,
     pub home_y: f32,
     pub home_z: f32,
+    /// The Guild Projection: PLAYER_GUILDID and PLAYER_GUILDRANK, read from Realm-core membership
+    /// when the Gateway encodes a player. 0 and 0 for a Character in no Guild and for a creature.
+    pub guild_id: u32,
+    pub guild_rank: u32,
 }
 
 /// Whether a create block is for the player's own character (SELF flag set) or a peer the
@@ -399,6 +403,11 @@ pub fn build_create_object(
             // *stat line* already read correctly from MINDAMAGE/MAXDAMAGE; this fixes the hover tooltip.)
             .set_player_field_mod_damage_done_pct(1.0_f32.to_bits() as i32);
 
+        // Always written, 0 included: a re-CREATE of a Character the client already holds must
+        // clear a guild id from a removal whose relay it missed.
+        builder = builder
+            .set_player_guildid(entity.guild_id as i32)
+            .set_player_guildrank(entity.guild_rank as i32);
         if entity.mount_display_id != 0 {
             builder = builder.set_unit_mountdisplayid(entity.mount_display_id as i32);
         }

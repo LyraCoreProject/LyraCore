@@ -35,6 +35,8 @@ pub struct CharacterView {
     pub played_total_secs: u32,
     /// Unix-epoch micros the current live session began (0 = offline / no live session).
     pub session_start_micros: u64,
+    /// The Character's Guild, read from Realm-core membership. 0 = no Guild.
+    pub guild_id: u32,
 }
 
 /// Build the `SMSG_CHAR_ENUM` reply for the character-select screen (Phase 3, gateway
@@ -121,7 +123,7 @@ pub fn build_char_enum(chars: &[CharacterView]) -> Result<SMSG_CHAR_ENUM> {
                 y: c.y,
                 z: c.z,
             },
-            guild_id: 0,
+            guild_id: c.guild_id,
             flags: CharacterFlags::empty(),
             first_login: c.first_login,
             pet_display_id: 0,

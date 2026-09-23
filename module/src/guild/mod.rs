@@ -1,0 +1,344 @@
+//! Guilds on Realm-core. Every guild fact lives here: the Guild, its Guild Ranks, its members and
+//! the Guild Events that tell members what happened. All four tables are private.
+//!
+//! Realm-core holds no Character rows, so the Gateway conveys the Character facts a Gate needs
+//! (name, team, Realm Account, GM level) inside the Durable Request, and this Module applies the
+//! rules. Every guild Durable Request enters through [`realm_guild_op`].
+//!
+//! PLAYER_GUILDID and PLAYER_GUILDRANK are a Gateway projection of `game_guild_member` (the Guild
+//! Projection). No World Shard stores them.
+
+use lyracore_shared::guild::{
+    event_kind, founding_gate, GuildRefusal, DEFAULT_MOTD, DEFAULT_RANKS, LEADER_RANK,
+};
+use spacetimedb::{reducer, table, ReducerContext, SpacetimeType, Table, Timestamp};
+
+/// One Guild. `name_key` makes names unique without regard to case.
+#[table(accessor = game_guild, index(accessor = by_leader, btree(columns = [leader_guid])))]
+pub struct Guild {
+    #[primary_key]
+    #[auto_inc]
+    pub guild_id: u32,
+    #[unique]
+    pub name_key: String,
+    pub name: String,
+    pub leader_guid: u64,
+    /// `lyracore_shared::faction::TEAM_*`, fixed at founding.
+    pub team: u32,
+    pub motd: String,
+    pub info: String,
+    pub emblem_style: u32,
+    pub emblem_color: u32,
+    pub border_style: u32,
+    pub border_color: u32,
+    pub background_color: u32,
+    pub created_micros: i64,
+}
+
+/// One Guild Rank. `rank_id` 0 is the highest; ids are dense from 0.
+#[table(accessor = game_guild_rank, index(accessor = by_guild, btree(columns = [guild_id])))]
+pub struct GuildRank {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    pub guild_id: u32,
+    pub rank_id: u32,
+    pub name: String,
+    pub rights: u32,
+}
+
+/// One Character's membership. A Character is in at most one Guild.
+#[table(accessor = game_guild_member, index(accessor = by_guild, btree(columns = [guild_id])))]
+pub struct GuildMember {
+    #[primary_key]
+    pub character_guid: u64,
+    pub guild_id: u32,
+    pub rank_id: u32,
+    /// Name snapshot, like mangos `MemberSlot::Name` (`cm:Guild.h:173`). Guild Events and by-name
+    /// member ops read it, so they need no Character row. Refreshed at sign-on.
+    pub name: String,
+    pub public_note: String,
+    pub officer_note: String,
+    /// The member's Realm Account. 0 when unknown; the guild info count treats it as its own
+    /// Account.
+    pub realm_account_id: u64,
+    pub joined_micros: i64,
+}
+
+/// One Guild Event. A row with `recipient_guid == 0` goes to every online member of `guild_id`;
+/// a nonzero `recipient_guid` addresses that one Character. The strings are final, so the Gateway
+/// renders without reads. Reaped on the shared event TTL.
+#[table(
+    accessor = game_guild_event,
+    index(accessor = by_guild, btree(columns = [guild_id])),
+    index(accessor = by_recipient, btree(columns = [recipient_guid]))
+)]
+pub struct GuildEvent {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    pub guild_id: u32,
+    pub recipient_guid: u64,
+    /// `lyracore_shared::guild::event_kind`.
+    pub kind: u8,
+    /// The Character the event is about. SMSG_GUILD_EVENT writes it after the strings when nonzero.
+    pub subject_guid: u64,
+    /// A second object the event names, such as a Guild Charter item.
+    pub other_guid: u64,
+    pub strings: Vec<String>,
+    pub created_at: Timestamp,
+}
+
+/// A GM founds a Guild led by `leader_guid`. The leader may be offline.
+#[derive(SpacetimeType, Clone, Debug, PartialEq, Eq)]
+pub struct GuildGmCreate {
+    pub leader_guid: u64,
+    pub leader_name: String,
+    pub leader_team: u32,
+    pub leader_realm_account: u64,
+    /// The acting Character's GM level, read from its Home Shard.
+    pub gm_level: u8,
+    pub name: String,
+}
+
+/// One guild Durable Request. Later ops append variants here.
+#[derive(SpacetimeType, Clone, Debug, PartialEq, Eq)]
+pub enum GuildOp {
+    GmCreate(GuildGmCreate),
+    /// The actor entered the world. `actor_name` refreshes the member's name snapshot.
+    SignOn {
+        actor_name: String,
+    },
+    SignOff,
+}
+
+/// Run one guild op for the acting Character.
+///
+/// Operator-gated because the actor's guid is an argument: Realm-core has no live entity to derive
+/// it from. A Refusal returns its [`GuildRefusal`] tag as the whole error text and commits nothing.
+#[reducer]
+pub fn realm_guild_op(
+    ctx: &ReducerContext,
+    request_actor: crate::SessionActor,
+    op: GuildOp,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
+    match op {
+        GuildOp::GmCreate(request) => gm_create(ctx, request).map(|_| ()),
+        GuildOp::SignOn { actor_name } => sign_on(ctx, actor_guid, &actor_name),
+        GuildOp::SignOff => sign_off(ctx, actor_guid),
+    }
+    .map_err(|refusal| refusal.as_tag().to_string())
+}
+
+fn gm_create(ctx: &ReducerContext, request: GuildGmCreate) -> Result<u32, GuildRefusal> {
+    if request.gm_level == 0 {
+        return Err(GuildRefusal::NotGameMaster);
+    }
+    if request.leader_guid == 0 {
+        return Err(GuildRefusal::NoSuchCharacter);
+    }
+    create_guild(
+        ctx,
+        request.leader_guid,
+        &request.leader_name,
+        request.leader_team,
+        request.leader_realm_account,
+        &request.name,
+    )
+}
+
+fn sign_on(ctx: &ReducerContext, actor_guid: u64, actor_name: &str) -> Result<(), GuildRefusal> {
+    let mut row = member(ctx, actor_guid).ok_or(GuildRefusal::NotInGuild)?;
+    if !actor_name.is_empty() && row.name != actor_name {
+        row.name = actor_name.to_string();
+        row = ctx.db.game_guild_member().character_guid().update(row);
+    }
+    push_event(
+        ctx,
+        row.guild_id,
+        0,
+        event_kind::SIGNED_ON,
+        actor_guid,
+        0,
+        vec![row.name],
+    );
+    Ok(())
+}
+
+fn sign_off(ctx: &ReducerContext, actor_guid: u64) -> Result<(), GuildRefusal> {
+    let row = member(ctx, actor_guid).ok_or(GuildRefusal::NotInGuild)?;
+    push_event(
+        ctx,
+        row.guild_id,
+        0,
+        event_kind::SIGNED_OFF,
+        actor_guid,
+        0,
+        vec![row.name],
+    );
+    Ok(())
+}
+
+/// Found a Guild with the five default Guild Ranks and `leader_guid` at rank 0
+/// (`cm:Guild.cpp:104-154`). The Gates and their order are `founding_gate`'s.
+pub fn create_guild(
+    ctx: &ReducerContext,
+    leader_guid: u64,
+    leader_name: &str,
+    team: u32,
+    leader_realm_account: u64,
+    name: &str,
+) -> Result<u32, GuildRefusal> {
+    let key = founding_gate(
+        name,
+        |key| {
+            ctx.db
+                .game_guild()
+                .name_key()
+                .find(key.to_string())
+                .is_some()
+        },
+        member(ctx, leader_guid).is_some(),
+    )?;
+    let guild = ctx.db.game_guild().insert(Guild {
+        guild_id: 0,
+        name_key: key,
+        name: name.to_string(),
+        leader_guid,
+        team,
+        motd: DEFAULT_MOTD.to_string(),
+        info: String::new(),
+        emblem_style: 0,
+        emblem_color: 0,
+        border_style: 0,
+        border_color: 0,
+        background_color: 0,
+        created_micros: ctx.timestamp.to_micros_since_unix_epoch(),
+    });
+    for (rank_id, (rank_name, rights)) in (0u32..).zip(DEFAULT_RANKS) {
+        ctx.db.game_guild_rank().insert(GuildRank {
+            id: 0,
+            guild_id: guild.guild_id,
+            rank_id,
+            name: rank_name.to_string(),
+            rights,
+        });
+    }
+    add_member(
+        ctx,
+        guild.guild_id,
+        leader_guid,
+        leader_name,
+        LEADER_RANK,
+        leader_realm_account,
+    )?;
+    Ok(guild.guild_id)
+}
+
+/// Insert one member row. This is the only place a member row is inserted. Refuses a Character
+/// that is already a member of any Guild (`cm:Guild.cpp:167-179`).
+pub fn add_member(
+    ctx: &ReducerContext,
+    guild_id: u32,
+    character_guid: u64,
+    name: &str,
+    rank_id: u32,
+    realm_account_id: u64,
+) -> Result<(), GuildRefusal> {
+    if member(ctx, character_guid).is_some() {
+        return Err(GuildRefusal::AlreadyInGuild);
+    }
+    ctx.db.game_guild_member().insert(GuildMember {
+        character_guid,
+        guild_id,
+        rank_id,
+        name: name.to_string(),
+        public_note: String::new(),
+        officer_note: String::new(),
+        realm_account_id,
+        joined_micros: ctx.timestamp.to_micros_since_unix_epoch(),
+    });
+    Ok(())
+}
+
+/// The membership row of `character_guid`, if it is in a Guild.
+pub fn member(ctx: &ReducerContext, character_guid: u64) -> Option<GuildMember> {
+    ctx.db
+        .game_guild_member()
+        .character_guid()
+        .find(character_guid)
+}
+
+/// The Guild Ranks of `guild_id`, highest first.
+pub fn ranks(ctx: &ReducerContext, guild_id: u32) -> Vec<GuildRank> {
+    let mut ranks: Vec<GuildRank> = ctx
+        .db
+        .game_guild_rank()
+        .by_guild()
+        .filter(guild_id)
+        .collect();
+    ranks.sort_by_key(|rank| rank.rank_id);
+    ranks
+}
+
+/// The lowest Guild Rank's id: where a new member starts.
+pub fn lowest_rank(ctx: &ReducerContext, guild_id: u32) -> u32 {
+    ctx.db
+        .game_guild_rank()
+        .by_guild()
+        .filter(guild_id)
+        .map(|rank| rank.rank_id)
+        .max()
+        .unwrap_or(LEADER_RANK)
+}
+
+/// The Rank Rights of one Guild Rank. An unknown rank reads 0 (`cm:Guild.cpp:660-666`).
+pub fn rank_rights(ctx: &ReducerContext, guild_id: u32, rank_id: u32) -> u32 {
+    ctx.db
+        .game_guild_rank()
+        .by_guild()
+        .filter(guild_id)
+        .find(|rank| rank.rank_id == rank_id)
+        .map_or(0, |rank| rank.rights)
+}
+
+/// Write one Guild Event. `recipient_guid == 0` broadcasts to the Guild's online members.
+pub fn push_event(
+    ctx: &ReducerContext,
+    guild_id: u32,
+    recipient_guid: u64,
+    kind: u8,
+    subject_guid: u64,
+    other_guid: u64,
+    strings: Vec<String>,
+) {
+    ctx.db.game_guild_event().insert(GuildEvent {
+        id: 0,
+        guild_id,
+        recipient_guid,
+        kind,
+        subject_guid,
+        other_guid,
+        strings,
+        created_at: ctx.timestamp,
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::test_scan::code_of;
+
+    /// The actor guid is an argument, so the operator gate is the whole authorization. A gate
+    /// that is present but neutralized (`if false`, `let _ =`, an early return) is no gate.
+    #[test]
+    fn the_realm_guild_op_reducer_opens_with_the_operator_gate() {
+        let body = code_of(include_str!("mod.rs"), "pub fn realm_guild_op(");
+        let normalized = body.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            normalized.starts_with("{ crate::helpers::require_operator(ctx)?;"),
+            "`realm_guild_op` no longer opens with the operator gate. Body was:\n{body}"
+        );
+    }
+}

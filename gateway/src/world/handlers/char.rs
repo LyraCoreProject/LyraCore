@@ -91,6 +91,7 @@ fn enter_world<St: WorldStore + ?Sized>(
     // own effective_armor on demand — this only feeds the display descriptor).
     entity.effective_armor = store.effective_armor(character_guid);
     entity.magic_resistances = store.effective_magic_resistances(character_guid);
+    (entity.guild_id, entity.guild_rank) = super::guild_projection(store, character_guid);
     log::info!(
         "world: entering world guid={character_guid} -> entity at map {} ({:.1},{:.1},{:.1}); subscribing + sending login sequence + self-spawn",
         entity.map_id, entity.x, entity.y, entity.z
@@ -159,6 +160,16 @@ fn enter_world<St: WorldStore + ?Sized>(
                 codec::build_gm_system_message(message),
             ))),
         )?;
+    }
+    // The guild step needs the registered viewer: its SIGNED_ON reaches the other members, and
+    // its Guild Projection re-send covers a membership change that landed after the CREATE read.
+    // A sign-on is owed a sign-off from here on, even if this entry or a later world-port fails.
+    if entry == codec::WorldEntry::FreshLogin && super::guild_sign_on(store, character_guid) {
+        conn.guild_signed_on = Some(character_guid);
+    }
+    let created_projection = (entity.guild_id, entity.guild_rank);
+    for message in super::guild_world_entry(store, character_guid, entry, created_projection) {
+        send(tx, message)?;
     }
     // Put realm-core's party roster onto the shard this character just entered
     // and re-render the party frame. THIS is what carries a party across a shard boundary now that
