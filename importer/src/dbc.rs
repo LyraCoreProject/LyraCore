@@ -37,6 +37,7 @@ use wow_dbc::vanilla_tables::creature_family::CreatureFamily as DbcCreatureFamil
 use wow_dbc::vanilla_tables::faction::Faction as DbcFaction;
 use wow_dbc::vanilla_tables::faction_template::FactionTemplate as DbcFactionTemplate;
 use wow_dbc::vanilla_tables::lock::Lock as DbcLock;
+use wow_dbc::vanilla_tables::mail_template::MailTemplate as DbcMailTemplate;
 use wow_dbc::vanilla_tables::skill_line::SkillLine as DbcSkillLine;
 use wow_dbc::vanilla_tables::skill_line_ability::SkillLineAbility as DbcSkillLineAbility;
 use wow_dbc::vanilla_tables::skill_race_class_info::SkillRaceClassInfo as DbcSkillRaceClassInfo;
@@ -201,6 +202,8 @@ pub fn run(data_dir: &str, args: &Args) -> Result<()> {
     let (gf_stmts, gf_count) = faction_sql(&mut chain)?;
     let auction_houses: DbcAuctionHouse = read_table(&mut chain)?;
     let (auction_house_stmts, auction_house_count) = auction_house_sql(&auction_houses)?;
+    let mail_templates: DbcMailTemplate = read_table(&mut chain)?;
+    let (mail_template_stmts, mail_template_count) = mail_template_sql(&mail_templates)?;
     let (cbi_stmts, cbi_count) = char_base_info_sql(&mut chain)?;
     let (race_stmts, race_count) = race_info_sql(&races);
     let (si_stmts, si_count) = start_item_sql(&mut chain)?;
@@ -277,6 +280,8 @@ pub fn run(data_dir: &str, args: &Args) -> Result<()> {
         eprintln!("dbc: loaded {gf_count} factions into game_faction.");
         crate::run_sql_statements(args, &auction_house_stmts, "auctionhouse")?;
         eprintln!("dbc: loaded {auction_house_count} auction houses into game_auction_house.");
+        crate::run_sql_statements(args, &mail_template_stmts, "mailtemplate")?;
+        eprintln!("dbc: loaded {mail_template_count} mail templates into game_mail_template.");
         crate::run_sql_statements(args, &cbi_stmts, "charbaseinfo")?;
         eprintln!("dbc: loaded {cbi_count} (race,class) combos into game_char_base_info.");
         crate::run_sql_statements(args, &race_stmts, "race")?;
@@ -326,6 +331,7 @@ pub fn run(data_dir: &str, args: &Args) -> Result<()> {
     println!("SkillLineAbility: {sa_count} abilities ({autolearn_count} autolearn)");
     println!("SkillRaceClassInfo: {sav_count} availability rows");
     println!("AuctionHouse: {auction_house_count} houses");
+    println!("MailTemplate: {mail_template_count} templates");
     // Work-item 209 coverage prints (always printed, like the skill lines above).
     println!("AreaTable: {area_count} areas");
     println!("AreaTrigger: {trigger_count} triggers");
@@ -415,6 +421,37 @@ fn auction_house_sql(table: &DbcAuctionHouse) -> Result<(Vec<String>, usize)> {
         "id,faction,deposit_rate,consignment_rate,name",
         &rows,
     );
+    Ok((stmts, count))
+}
+
+/// Clear+reload SQL for `game_mail_template` from `MailTemplate.dbc`. In 1.12 the DBC holds only the
+/// letter body (`wow_dbc`'s `vanilla_tables::mail_template::MailTemplateRow { id, body }`); cmangos
+/// sends the template id with an empty subject and lets the client render the stored text. Validate
+/// before returning the first DELETE, like `auction_house_sql`. Output is ordered by id rather than
+/// DBC record order to keep dry runs and imports reproducible.
+fn mail_template_sql(table: &DbcMailTemplate) -> Result<(Vec<String>, usize)> {
+    if table.rows().is_empty() {
+        bail!("MailTemplate.dbc contains no rows");
+    }
+
+    let mut seen_ids = HashSet::new();
+    let mut rows = Vec::with_capacity(table.rows().len());
+    for row in table.rows() {
+        let id = row.id.id;
+        if id == 0 {
+            bail!("MailTemplate.dbc contains invalid template id 0");
+        }
+        if !seen_ids.insert(id) {
+            bail!("MailTemplate.dbc contains duplicate template id {id}");
+        }
+        rows.push((id, format!("({id},{})", sql_text(&row.body.en_gb))));
+    }
+    rows.sort_unstable_by_key(|(id, _)| *id);
+
+    let count = rows.len();
+    let rows: Vec<String> = rows.into_iter().map(|(_, sql)| sql).collect();
+    let mut stmts = vec!["DELETE FROM game_mail_template WHERE id >= 0".to_string()];
+    push_insert(&mut stmts, "game_mail_template", "id,body", &rows);
     Ok((stmts, count))
 }
 
@@ -1340,6 +1377,7 @@ mod tests {
     use wow_dbc::vanilla_tables::light::LightKey;
     use wow_dbc::vanilla_tables::liquid_type::LiquidTypeKey;
     use wow_dbc::vanilla_tables::lock::{LockKey, LockRow};
+    use wow_dbc::vanilla_tables::mail_template::{MailTemplateKey, MailTemplateRow};
     use wow_dbc::vanilla_tables::map::MapKey;
     use wow_dbc::vanilla_tables::skill_costs_data::SkillCostsDataKey;
     use wow_dbc::vanilla_tables::skill_line::{SkillLineKey, SkillLineRow};
@@ -1484,6 +1522,54 @@ mod tests {
             },
         ] {
             assert!(auction_house_sql(&invalid).is_err());
+        }
+    }
+
+    fn mail_template_row(id: u32, body: &str) -> MailTemplateRow {
+        MailTemplateRow {
+            id: MailTemplateKey::new(id),
+            body: LocalizedString {
+                en_gb: body.to_string(),
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn mail_template_sql_is_validated_deterministic_and_escapes_body() {
+        let table = DbcMailTemplate {
+            rows: vec![
+                mail_template_row(99, "Here's your reward, $N."),
+                mail_template_row(1, "$B$BEnjoy."),
+            ],
+        };
+
+        let (first, count) = mail_template_sql(&table).unwrap();
+        assert_eq!(count, 2);
+        assert_eq!(first[0], "DELETE FROM game_mail_template WHERE id >= 0");
+        assert_eq!(
+            first[1],
+            "INSERT INTO game_mail_template (id,body) VALUES (1,'$B$BEnjoy.'),(99,'Here''s your reward, $N.')"
+        );
+
+        let reversed = DbcMailTemplate {
+            rows: table.rows.into_iter().rev().collect(),
+        };
+        assert_eq!(mail_template_sql(&reversed).unwrap().0, first);
+
+        for invalid in [
+            DbcMailTemplate { rows: vec![] },
+            DbcMailTemplate {
+                rows: vec![mail_template_row(0, "invalid id")],
+            },
+            DbcMailTemplate {
+                rows: vec![
+                    mail_template_row(1, "first"),
+                    mail_template_row(1, "duplicate"),
+                ],
+            },
+        ] {
+            assert!(mail_template_sql(&invalid).is_err());
         }
     }
 
