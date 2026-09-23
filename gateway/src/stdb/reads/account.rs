@@ -341,6 +341,9 @@ impl Coordinator {
             y: entity.y,
             dead: entity.dead,
             player_flags: entity.player_flags,
+            // Member Stats' own aura/pet overlay (`Coordinator::with_member_shard_stats`) fills
+            // these afterward, keyed by the `ShardId` this generic, guid-only read cannot carry.
+            ..Default::default()
         })
     }
 
@@ -390,6 +393,8 @@ impl Coordinator {
                     y: e.y,
                     dead: e.dead,
                     player_flags: e.player_flags,
+                    // `/who` does not read auras or a pet, so this bulk scan never fills them.
+                    ..Default::default()
                 };
                 Some(crate::world::presence::RealmPresence {
                     guid: e.guid,

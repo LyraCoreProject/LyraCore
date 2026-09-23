@@ -2858,7 +2858,7 @@ impl WorldStore for InMemoryStore {
             .unwrap()
             .iter()
             .find(|(g, _)| *g == guid)
-            .map(|(_, e)| *e)
+            .map(|(_, e)| e.clone())
     }
     fn character_in_transit(&self, guid: u64) -> bool {
         self.members_between_places.lock().unwrap().contains(&guid)

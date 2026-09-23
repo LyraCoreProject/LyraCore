@@ -332,8 +332,8 @@ impl Coordinator {
                     entity, shard_name, ..
                 }) => {
                     let entity = self.with_member_shard_stats(&shard_name, guid, entity);
-                    crate::world::MemberPresence::Live(crate::codec::MemberStats::from_entity(
-                        &entity,
+                    crate::world::MemberPresence::Live(Box::new(
+                        crate::codec::MemberStats::from_entity(&entity),
                     ))
                 }
                 Some(Whereabouts::InTransit) => crate::world::MemberPresence::InTransit,
