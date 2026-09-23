@@ -46,7 +46,6 @@ use lyracore_shared::group::{
     bot_op, realm_op, GroupKind, GroupRefusal, RaidSlot, RosterMember, RosterPayload,
     COMMAND_RESULT_WINDOW_MICROS, GROUP_MAX_MEMBERS,
 };
-use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 
 /// One group, as the database that holds it sees it. Read from realm-core it is the authority; read
 /// from a world shard it is that shard's mirror. Names and online flags are deliberately NOT in it —
@@ -1346,10 +1345,7 @@ pub(crate) fn on_world_entry<St: WorldStore + ?Sized>(
     let Some(roster) = sync_arrival_mirror(store, self_guid)? else {
         return Ok(());
     };
-    send(
-        tx,
-        Outbound::One(render_list(store, self_guid, &roster.list_payload())),
-    )
+    send(tx, render_list(store, self_guid, &roster.list_payload()))
 }
 
 /// The mirror half of [`on_world_entry`], without a client: put the party realm-core says
@@ -1442,6 +1438,7 @@ pub(crate) fn sync_transfer_arrival_mirror<St: WorldStore + ?Sized>(
 
 /// Build `SMSG_GROUP_LIST` for `self_guid`. This is the one renderer: the LIST relay passes the
 /// event's payload, and world entry passes the authoritative roster's [`GroupRoster::list_payload`].
+/// The packet is raw because it ends with a byte gtker cannot encode (`codec::build_group_list_raw`).
 ///
 /// Every member's ONLINE flag, and each blank NAME, comes from the shards. That is the price of
 /// realm-core owning membership: the directory database has no `game_character` or
@@ -1455,7 +1452,7 @@ pub(crate) fn render_list<St: WorldStore + ?Sized>(
     store: &St,
     self_guid: u64,
     roster: &RosterPayload,
-) -> ServerOpcodeMessage {
+) -> Outbound {
     let mut roster = roster.clone();
     for member in &mut roster.members {
         if member.name.is_empty() {
@@ -1466,11 +1463,9 @@ pub(crate) fn render_list<St: WorldStore + ?Sized>(
                 .unwrap_or_default();
         }
     }
-    ServerOpcodeMessage::SMSG_GROUP_LIST(Box::new(codec::build_group_list(
-        self_guid,
-        &roster,
-        |guid| live_anywhere(store, guid),
-    )))
+    let list = codec::build_group_list(self_guid, &roster, |guid| live_anywhere(store, guid));
+    let (opcode, body) = codec::build_group_list_raw(&list);
+    Outbound::Raw { opcode, body }
 }
 
 #[cfg(test)]

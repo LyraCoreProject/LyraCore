@@ -604,10 +604,11 @@ fn a_split_party_renders_both_members_from_either_side_of_the_boundary() {
         .unwrap()
         .expect("realm-core holds the roster");
 
-    let ginger_view = party::render_list(world.as_ref(), GINGER, &roster.list_payload());
-    let ServerOpcodeMessage::SMSG_GROUP_LIST(list) = ginger_view else {
-        panic!("expected GROUP_LIST")
-    };
+    let list = group_list(party::render_list(
+        world.as_ref(),
+        GINGER,
+        &roster.list_payload(),
+    ));
     assert_eq!(
         list.members.len(),
         1,
@@ -621,10 +622,11 @@ fn a_split_party_renders_both_members_from_either_side_of_the_boundary() {
     );
     assert_eq!(list.leader.guid(), GINGER);
 
-    let vim_view = party::render_list(instances.as_ref(), VIM, &roster.list_payload());
-    let ServerOpcodeMessage::SMSG_GROUP_LIST(list) = vim_view else {
-        panic!("expected GROUP_LIST")
-    };
+    let list = group_list(party::render_list(
+        instances.as_ref(),
+        VIM,
+        &roster.list_payload(),
+    ));
     assert_eq!(list.members.len(), 1);
     assert_eq!(
         list.members[0].name, "Ginger",
@@ -1166,11 +1168,7 @@ fn world_entry_pushes_the_authoritative_roster_onto_the_shard_the_player_arrives
         "the arriving shard must be given the party the character is ACTUALLY in — the blob no \
          longer carries membership, so this push is the only thing that makes it whole"
     );
-    let Outbound::One(ServerOpcodeMessage::SMSG_GROUP_LIST(list)) =
-        rx.try_recv().expect("a GROUP_LIST is sent")
-    else {
-        panic!("expected SMSG_GROUP_LIST")
-    };
+    let list = group_list(rx.try_recv().expect("a GROUP_LIST is sent"));
     assert_eq!(list.members.len(), 1);
     assert_eq!(list.members[0].name, "Ginger");
 }
@@ -2398,10 +2396,28 @@ fn unsharded_bot_invitations_leave_a_suppressed_target_unanswered() {
 
 // ---- Raids ----
 
-fn group_list(message: ServerOpcodeMessage) -> wow_world_messages::vanilla::SMSG_GROUP_LIST {
-    let ServerOpcodeMessage::SMSG_GROUP_LIST(list) = message else {
-        panic!("expected SMSG_GROUP_LIST, got {message}")
+/// Decode one sent `SMSG_GROUP_LIST`. With a loot block it must end with the extra byte 0 the 1.12
+/// servers send after the loot threshold.
+fn group_list(packet: Outbound) -> wow_world_messages::vanilla::SMSG_GROUP_LIST {
+    let Outbound::Raw { opcode, body } = packet else {
+        panic!("expected a raw SMSG_GROUP_LIST")
     };
+    assert_eq!(opcode, 0x007D);
+    let mut framed = u16::try_from(body.len() + 2)
+        .unwrap()
+        .to_be_bytes()
+        .to_vec();
+    framed.extend(opcode.to_le_bytes());
+    framed.extend(&body);
+    let ServerOpcodeMessage::SMSG_GROUP_LIST(list) =
+        ServerOpcodeMessage::read_unencrypted(framed.as_slice()).expect("a group list")
+    else {
+        panic!("expected SMSG_GROUP_LIST")
+    };
+    if list.group_not_empty.is_some() {
+        assert_eq!(body.last(), Some(&0), "the byte after the loot threshold");
+        assert_eq!(body.len(), codec::build_group_list_raw(&list).1.len());
+    }
     *list
 }
 
@@ -2634,10 +2650,10 @@ fn the_realm_core_list_relay_renders_a_member_on_another_shard_online() {
     let packets = crate::stdb::subscriptions::group_event_outbound(realm.as_ref(), GINGER, &row);
 
     let mut packets = packets.into_iter();
-    let (Some(Outbound::One(message)), None) = (packets.next(), packets.next()) else {
+    let (Some(packet), None) = (packets.next(), packets.next()) else {
         panic!("expected one SMSG_GROUP_LIST")
     };
-    let list = group_list(message);
+    let list = group_list(packet);
     assert_eq!(list.members.len(), 1);
     assert_eq!(list.members[0].guid.guid(), VIM);
     assert_eq!(list.members[0].name, "Vim");

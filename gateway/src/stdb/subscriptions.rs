@@ -2098,7 +2098,9 @@ pub(crate) fn group_event_outbound<St: crate::world::WorldStore + ?Sized>(
         // The same renderer world entry uses: presence and blank names come from the shard caches,
         // because a roster written on realm-core can know neither.
         group_kind::LIST => match lyracore_shared::group::RosterPayload::decode(&row.payload) {
-            Some(roster) => Some(crate::world::party::render_list(store, self_guid, &roster)),
+            Some(roster) => {
+                return vec![crate::world::party::render_list(store, self_guid, &roster)]
+            }
             None => {
                 log::warn!(
                     "group LIST relay: unparseable roster payload {:?} (event {})",

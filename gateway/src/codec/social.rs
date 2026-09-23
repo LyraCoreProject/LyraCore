@@ -777,6 +777,25 @@ pub fn build_group_list(
     }
 }
 
+/// `SMSG_GROUP_LIST` as the 1.12 servers send it: `(opcode, body)` for `Outbound::Raw`. The body
+/// is gtker's encoding of `list`, then, after the loot threshold, one more byte 0 that gtker has no
+/// field for. cmangos writes it as "Heroic Mod Group - unused in vanilla" (cm:Group.cpp:705), and
+/// vmangos as the dungeon difficulty for client builds after 1.10.2
+/// (vm:Server/Packets/Group.cpp:258-259). Both send it only with the loot block.
+pub fn build_group_list_raw(list: &SMSG_GROUP_LIST) -> (u16, Vec<u8>) {
+    use wow_world_messages::vanilla::ServerMessage;
+    let mut framed = Vec::new();
+    list.write_unencrypted_server(&mut framed)
+        .expect("writing to a Vec cannot fail");
+    // The frame is `[size:u16 BE][opcode:u16 LE]` and then the body.
+    let opcode = u16::from_le_bytes([framed[2], framed[3]]);
+    let mut body = framed.split_off(4);
+    if list.group_not_empty.is_some() {
+        body.push(0);
+    }
+    (opcode, body)
+}
+
 #[cfg(test)]
 mod party_tests {
     use super::*;
@@ -846,7 +865,6 @@ mod party_tests {
     }
 
     use lyracore_shared::group::{RaidSlot, RosterMember};
-    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 
     fn roster(
         kind: GroupKind,
@@ -888,10 +906,9 @@ mod party_tests {
         )
     }
 
-    /// The body bytes, pinned field by field against cm:Group.cpp:680-708 for a viewer in
-    /// Subgroup 1 with an online leader in Subgroup 0 and an offline Assistant in Subgroup 1.
-    /// cmangos appends one more byte, commented "Heroic Mod Group - unused in vanilla"; gtker does
-    /// not encode it and LyraCore has never sent it.
+    /// The sent body bytes, pinned field by field against cm:Group.cpp:680-708 and
+    /// vm:Server/Packets/Group.cpp:237-261 for a viewer in Subgroup 1 with an online leader in
+    /// Subgroup 0 and an offline Assistant in Subgroup 1.
     #[test]
     fn a_raid_group_list_carries_the_raid_type_and_every_members_raid_slot() {
         let raid = roster(
@@ -906,12 +923,8 @@ mod party_tests {
                 (12, "Cd", RaidSlot::new(1, true).unwrap()),
             ],
         );
-        let list = build_group_list(11, &raid, |guid| guid == 10);
-        let mut framed = Vec::new();
-        ServerOpcodeMessage::SMSG_GROUP_LIST(Box::new(list))
-            .write_unencrypted_server(&mut framed)
-            .unwrap();
-        assert_eq!(u16::from_le_bytes([framed[2], framed[3]]), 0x007D);
+        let (opcode, body) = build_group_list_raw(&build_group_list(11, &raid, |guid| guid == 10));
+        assert_eq!(opcode, 0x007D);
         let expected: Vec<u8> = [
             &[0x01][..],          // group type: GROUP_FLAG_RAID
             &[0x01],              // own flags: Subgroup 1, no Assistant
@@ -928,9 +941,25 @@ mod party_tests {
             &[0x03],              // loot method
             &0u64.to_le_bytes(),  // master looter
             &[0x02],              // loot threshold
+            &[0x00],              // unused in 1.x: cm "Heroic Mod Group", vm "dungeonDifficulty"
         ]
         .concat();
-        assert_eq!(&framed[4..], expected.as_slice());
+        assert_eq!(body, expected);
+    }
+
+    /// Without another member there is no loot block, and so no trailing byte either.
+    #[test]
+    fn a_sent_list_naming_only_the_viewer_ends_at_the_leader() {
+        let (_, body) =
+            build_group_list_raw(&build_group_list(1, &party(&[(1, "Self")]), |_| true));
+        let expected: Vec<u8> = [
+            &[0x00][..],         // group type: GROUP_FLAG_NORMAL
+            &[0x00],             // own flags
+            &0u32.to_le_bytes(), // no other member
+            &1u64.to_le_bytes(), // leader
+        ]
+        .concat();
+        assert_eq!(body, expected);
     }
 
     #[test]
