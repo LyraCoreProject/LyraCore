@@ -104,6 +104,11 @@ fn a_gm_founds_a_guild_on_realm_core_and_refusals_change_nothing() {
     );
     refused(
         &realm,
+        &[&gm, &gm_create(LEADER, "Leader", 1, "tracer guild")],
+        "guild:name_exists",
+    );
+    refused(
+        &realm,
         &[&gm, &gm_create(OTHER, "Other", 0, "Knights")],
         "guild:not_game_master",
     );

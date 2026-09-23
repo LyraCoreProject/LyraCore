@@ -657,19 +657,22 @@ mod tests {
             if gm_level == 0 {
                 return refused(GuildRefusal::NotGameMaster);
             }
-            if self.guild_member(leader_guid)?.is_some() {
-                return refused(GuildRefusal::AlreadyInGuild);
-            }
             if let Err(refusal) = validate_guild_name(&name) {
                 return refused(refusal);
             }
-            let mut guilds = self.guilds.lock().unwrap();
-            if guilds
+            if self
+                .guilds
+                .lock()
+                .unwrap()
                 .iter()
                 .any(|guild| name_key(&guild.name) == name_key(&name))
             {
                 return refused(GuildRefusal::NameExists);
             }
+            if self.guild_member(leader_guid)?.is_some() {
+                return refused(GuildRefusal::AlreadyInGuild);
+            }
+            let mut guilds = self.guilds.lock().unwrap();
             let guild_id = guilds.len() as u32 + 1;
             guilds.push(codec::GuildView {
                 guild_id,
@@ -767,6 +770,17 @@ mod tests {
                 .map(|m| (m.guild_id, m.rank_id)),
             Some((guild.guild_id, 0))
         );
+    }
+
+    #[test]
+    fn a_repeated_dot_create_of_the_same_name_answers_guild_not_created() {
+        let store = realm();
+        run_guild_dot_command(&store, in_world(GM), ".guild create \"Tracer Guild\"").unwrap();
+        let line =
+            run_guild_dot_command(&store, in_world(GM), ".guild create \"tracer guild\"").unwrap();
+        assert_eq!(line.as_deref(), Some("guild not created"));
+        assert_eq!(store.guilds.lock().unwrap().len(), 1);
+        assert_eq!(store.members.lock().unwrap().len(), 1);
     }
 
     #[test]

@@ -183,8 +183,8 @@ fn sign_off(ctx: &ReducerContext, actor_guid: u64) -> Result<(), GuildRefusal> {
 }
 
 /// Found a Guild with the five default Guild Ranks and `leader_guid` at rank 0
-/// (`cm:Guild.cpp:104-154`). Refuses a leader who is already a member, then an invalid or taken
-/// name, in the order `.guild create` reports them (`cm:Level3.cpp:2960-2973`).
+/// (`cm:Guild.cpp:104-154`). Refuses an invalid or taken name first, then a leader who is already
+/// a member, so a repeated `.guild create` of a taken name reports the name.
 pub fn create_guild(
     ctx: &ReducerContext,
     leader_guid: u64,
@@ -193,13 +193,13 @@ pub fn create_guild(
     leader_realm_account: u64,
     name: &str,
 ) -> Result<u32, GuildRefusal> {
-    if member(ctx, leader_guid).is_some() {
-        return Err(GuildRefusal::AlreadyInGuild);
-    }
     validate_guild_name(name)?;
     let key = name_key(name);
     if ctx.db.game_guild().name_key().find(&key).is_some() {
         return Err(GuildRefusal::NameExists);
+    }
+    if member(ctx, leader_guid).is_some() {
+        return Err(GuildRefusal::AlreadyInGuild);
     }
     let guild = ctx.db.game_guild().insert(Guild {
         guild_id: 0,
