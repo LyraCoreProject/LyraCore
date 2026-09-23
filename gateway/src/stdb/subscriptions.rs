@@ -2081,9 +2081,10 @@ fn trade_offer_extended(
 /// Group / loot-roll / quest-share: the ONE kind-decode body both legs
 /// run. PRIVATE data — the audience (the row's recipient, and nobody else) is resolved by the
 /// caller (RLS on the per-player leg; the owner-session lookup + `private_recipient_audience` on
-/// the shared leg). `coord` is the privileged handle the QUEST_SHARE detail JOIN needs.
-pub(crate) fn group_event_outbound(
-    coord: &Coordinator,
+/// the shared leg). `store` is the connection the row came from: Realm-core on a sharded Realm.
+/// The LIST render reads every World Shard through it, and QUEST_SHARE reads the quest detail.
+pub(crate) fn group_event_outbound<St: crate::world::WorldStore + ?Sized>(
+    store: &St,
     self_guid: u64,
     row: &GroupEvent,
 ) -> Vec<Outbound> {
@@ -2097,7 +2098,7 @@ pub(crate) fn group_event_outbound(
         // The same renderer world entry uses: presence and blank names come from the shard caches,
         // because a roster written on realm-core can know neither.
         group_kind::LIST => match lyracore_shared::group::RosterPayload::decode(&row.payload) {
-            Some(roster) => Some(crate::world::party::render_list(coord, self_guid, &roster)),
+            Some(roster) => Some(crate::world::party::render_list(store, self_guid, &roster)),
             None => {
                 log::warn!(
                     "group LIST relay: unparseable roster payload {:?} (event {})",
@@ -2212,7 +2213,7 @@ pub(crate) fn group_event_outbound(
         // recipient's own `CMSG_QUESTGIVER_ACCEPT_QUEST` then re-validates fresh via the
         // module's `GiverKind::Party` — this relay never authorizes anything by itself).
         quest_share_kind::QUEST_SHARE => match row.payload.parse::<u32>() {
-            Ok(quest_id) => match coord.quest_detail(quest_id) {
+            Ok(quest_id) => match store.quest_detail_view(quest_id) {
                 Ok(Some(detail)) => {
                     let (opcode, body) = codec::build_quest_details_raw(row.other_guid, &detail);
                     return vec![Outbound::Raw { opcode, body }];

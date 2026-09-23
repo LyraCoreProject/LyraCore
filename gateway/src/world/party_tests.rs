@@ -2595,8 +2595,8 @@ fn a_raid_joiner_past_a_full_first_subgroup_shows_subgroup_one_in_every_list() {
 /// Realm-core has no live entities. The roster payload used to carry an online flag the Module
 /// computed there anyway, which was 0 for every member, and the relay trusted it: on a sharded
 /// Realm every party op re-rendered every member offline until the next world entry. The payload
-/// now carries no presence, and the relay renders through [`party::render_list`], which reads
-/// presence from the World Shard caches.
+/// now carries no presence, and the relay reads presence from the World Shard caches. This drives
+/// the relay's own decode body, `group_event_outbound`, with the Realm-core handle.
 #[test]
 fn the_realm_core_list_relay_renders_a_member_on_another_shard_online() {
     let (realm, world, instances, _calls) = party_topology();
@@ -2620,10 +2620,24 @@ fn the_realm_core_list_relay_renders_a_member_on_another_shard_online() {
             .collect(),
     }
     .encode();
+    let row = crate::stdb::bindings::GroupEvent {
+        id: 1,
+        recipient_identity: spacetimedb_sdk::Identity::ZERO,
+        kind: lyracore_shared::group::event_kind::LIST,
+        other_guid: 0,
+        other_name: String::new(),
+        created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
+        payload,
+        recipient_guid: GINGER,
+    };
 
-    let roster = RosterPayload::decode(&payload).expect("the relay decodes the payload");
-    let list = group_list(party::render_list(realm.as_ref(), GINGER, &roster));
+    let packets = crate::stdb::subscriptions::group_event_outbound(realm.as_ref(), GINGER, &row);
 
+    let mut packets = packets.into_iter();
+    let (Some(Outbound::One(message)), None) = (packets.next(), packets.next()) else {
+        panic!("expected one SMSG_GROUP_LIST")
+    };
+    let list = group_list(message);
     assert_eq!(list.members.len(), 1);
     assert_eq!(list.members[0].guid.guid(), VIM);
     assert_eq!(list.members[0].name, "Vim");
