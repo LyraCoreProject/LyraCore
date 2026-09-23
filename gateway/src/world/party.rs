@@ -893,8 +893,28 @@ pub(crate) fn run<St: WorldStore + ?Sized>(
     if let Op::Invite(target) = op {
         answer_for_session_less(store, realm.as_ref(), target);
     }
+    if op == Op::RaidConvert && raid_unchanged(realm.as_ref(), self_guid, before.as_ref()) {
+        return Ok(PartyOutcome::Ran);
+    }
     sync_mirrors(store, realm.as_ref(), self_guid, before);
     Ok(PartyOutcome::Ran)
+}
+
+/// Whether a successful convert left `self_guid`'s Raid as it was: the Group was a Raid before
+/// the op, and Realm-core still shows the same Group at the same Roster Revision. The Module
+/// changes nothing when it converts a Raid again, so no mirror needs a push. A failed read answers
+/// `false`, and the push runs as usual.
+fn raid_unchanged(realm: &dyn WorldStore, self_guid: u64, before: Option<&GroupRoster>) -> bool {
+    let Some(before) = before.filter(|roster| roster.kind == GroupKind::Raid) else {
+        return false;
+    };
+    realm
+        .group_roster(self_guid)
+        .ok()
+        .flatten()
+        .is_some_and(|now| {
+            now.group_id == before.group_id && now.roster_revision == before.roster_revision
+        })
 }
 
 /// The invite gates realm-core cannot run for itself: does the target exist anywhere, and is it in

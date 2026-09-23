@@ -123,6 +123,23 @@ fn a_converted_raid_takes_members_past_five_into_the_next_subgroup() {
             .all(|member| member.slot == RaidSlot::default()));
     }
 
+    // Converting a Raid again writes nothing: the Roster Revision stays, and the first LIST after
+    // it comes from the next op that changes the Group, here the loot rules.
+    let revision_converted = roster_revision(&realm);
+    let lists = lists_pushed_by(&realm, || {
+        group_op(&realm, RAID_CONVERT, 1, 0);
+        realm.assert_call("realm_group_op", &["5", &actor("1"), "0", "0", "2", "0"]);
+    });
+    assert_eq!(
+        lists[0].1.loot_method, 0,
+        "a second convert pushed a LIST of its own"
+    );
+    assert_eq!(
+        roster_revision(&realm),
+        revision_converted + 1,
+        "only the loot change advanced the Roster Revision"
+    );
+
     for guid in 3..=5 {
         join(&realm, 1, guid);
     }

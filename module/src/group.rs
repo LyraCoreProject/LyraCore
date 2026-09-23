@@ -1558,17 +1558,25 @@ pub(crate) fn valid_loot_threshold(threshold: u8) -> bool {
 
 /// `CMSG_GROUP_RAID_CONVERT`: the leader converts its Party to a Raid (cm:GroupHandler.cpp:473-490).
 /// Every member keeps the Subgroup 0 slot a Party member holds (cm:Group.cpp:208-222), and every
-/// member receives the raid list. Converting a Raid again succeeds without writing the Group or
-/// sending a list; cmangos does not check it either.
-fn raid_convert_on(ctx: &ReducerContext, actor_guid: u64) -> Result<(), GroupOpError> {
+/// member receives the raid list. Converting a Raid again succeeds and changes nothing, so it
+/// writes no row and sends no list; cmangos does not check it either.
+fn raid_convert_on(ctx: &ReducerContext, actor_guid: u64) -> Result<RosterChange, GroupOpError> {
     let (member, mut group) = led_group_of(ctx, actor_guid)?;
     if group_kind_of(&group) == GroupKind::Raid {
-        return Ok(());
+        return Ok(RosterChange::Unchanged);
     }
     group.group_type = GroupKind::Raid.wire();
     ctx.db.game_group().group_id().update(group);
     push_list_to_all(ctx, member.group_id);
-    Ok(())
+    Ok(RosterChange::Changed)
+}
+
+/// Whether a successful op changed what the Roster Revision orders: the member list, leader, loot
+/// rules, Group kind or a Raid Slot. Only a change advances the revision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RosterChange {
+    Changed,
+    Unchanged,
 }
 
 /// The single membership-removal core (voluntary leave, kick, character delete): drops the member
@@ -1715,28 +1723,25 @@ pub fn realm_group_op(
     // An op byte this module does not know is a gateway newer than the module — a deployment fault,
     // not a party outcome, so it stays an untagged error the gateway treats as a failure.
     let before_groups = realm_op_groups(ctx, op, actor_guid, target_guid);
+    use RosterChange::{Changed, Unchanged};
     let ran = match op {
-        realm_op::INVITE => invite_core_on(ctx, Plane::RealmCore, actor_guid, target_guid),
-        realm_op::ACCEPT => accept_invite_on(ctx, Plane::RealmCore, actor_guid),
-        realm_op::DECLINE => decline_invite_on(ctx, actor_guid),
-        realm_op::LEAVE => leave_group_on(ctx, actor_guid),
-        realm_op::UNINVITE => uninvite_on(ctx, actor_guid, target_guid),
+        realm_op::INVITE => {
+            invite_core_on(ctx, Plane::RealmCore, actor_guid, target_guid).map(|()| Unchanged)
+        }
+        realm_op::ACCEPT => accept_invite_on(ctx, Plane::RealmCore, actor_guid).map(|()| Changed),
+        realm_op::DECLINE => decline_invite_on(ctx, actor_guid).map(|()| Unchanged),
+        realm_op::LEAVE => leave_group_on(ctx, actor_guid).map(|()| Changed),
+        realm_op::UNINVITE => uninvite_on(ctx, actor_guid, target_guid).map(|()| Changed),
         // `CMSG_LOOT_METHOD`'s own field order: setting, master, threshold.
-        realm_op::LOOT_METHOD => set_loot_method_on(ctx, actor_guid, arg_a, target_guid, arg_b),
+        realm_op::LOOT_METHOD => {
+            set_loot_method_on(ctx, actor_guid, arg_a, target_guid, arg_b).map(|()| Changed)
+        }
         realm_op::RAID_CONVERT => raid_convert_on(ctx, actor_guid),
         other => return Err(format!("unknown realm group op {other}")),
     };
-    ran.map_err(|error| group_op_error(error, &format!("realm group op {op} for {actor_guid}")))?;
-    // Every op that changes the member list, leader, loot rules, kind or a Raid Slot advances the
-    // Roster Revision.
-    if matches!(
-        op,
-        realm_op::ACCEPT
-            | realm_op::LEAVE
-            | realm_op::UNINVITE
-            | realm_op::LOOT_METHOD
-            | realm_op::RAID_CONVERT
-    ) {
+    let change = ran
+        .map_err(|error| group_op_error(error, &format!("realm group op {op} for {actor_guid}")))?;
+    if change == Changed {
         let after_groups = realm_op_groups(ctx, op, actor_guid, target_guid);
         let touched: std::collections::BTreeSet<_> = before_groups
             .iter()

@@ -2470,6 +2470,21 @@ fn a_leader_converts_the_party_on_realm_core_and_every_shard_mirrors_the_raid() 
     assert!(list.members.iter().all(|member| member.flags == 0));
 }
 
+/// Converting a Raid again changes nothing on Realm-core, so it must not cost a mirror push to
+/// every World Shard each time a client repeats the opcode.
+#[test]
+fn converting_a_raid_again_pushes_no_mirror() {
+    let (_realm, world, instances, calls) = party_topology();
+    form_split_party(&world, &instances);
+    party::run(world.as_ref(), 7, GINGER, party::Op::RaidConvert).unwrap();
+    let mirrors_before = mirror_calls(&calls);
+
+    let outcome = party::run(world.as_ref(), 7, GINGER, party::Op::RaidConvert).unwrap();
+
+    assert_eq!(outcome, PartyOutcome::Ran, "the client still hears success");
+    assert_eq!(mirror_calls(&calls), mirrors_before);
+}
+
 /// **AC: a non-leader's convert changes nothing and sends nothing.**
 #[test]
 fn a_member_who_does_not_lead_cannot_convert_and_no_mirror_is_pushed() {
