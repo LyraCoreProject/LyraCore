@@ -1119,6 +1119,10 @@ parity_test!(parity_game_auction_house, "game_auction_house", lyracore_module::A
 parity_test!(parity_game_auction_expiry, "game_auction_expiry", lyracore_module::AuctionExpiry, bindings::auction_expiry_type::AuctionExpiry, {
     scheduled_id, scheduled_at, auction_id,
 });
+parity_test!(parity_game_auction_notice, "game_auction_notice", lyracore_module::AuctionNotice, bindings::auction_notice_type::AuctionNotice, {
+    id, recipient_guid, kind, house, auction_id, item_entry, random_property_id, bid, out_bid,
+    bidder_guid, created_at,
+});
 parity_test!(parity_game_area, "game_area", lyracore_module::GameArea, bindings::game_area_type::GameArea, {
     id, map_id, parent_area_id, area_bit, flags, exploration_level, faction_group, name,
 });
@@ -1270,6 +1274,7 @@ const MANIFEST_TABLES: &[&str] = &[
     "game_auction_bid_hold",
     "game_auction_hold",
     "game_auction_house",
+    "game_auction_notice",
     "game_auction_operation_receipt",
     "game_faction",
     "game_faction_template",

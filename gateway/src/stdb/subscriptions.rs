@@ -23,7 +23,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
-use wow_world_messages::vanilla::{Vector3d, WeatherChangeType};
+use wow_world_messages::vanilla::{AuctionHouse, Vector3d, WeatherChangeType};
 
 use super::aoi::ViewerGates;
 use super::bindings::*;
@@ -2396,6 +2396,56 @@ pub(crate) fn whisper_event_outbound(row: &WhisperEvent) -> Vec<Outbound> {
     vec![Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(
         Box::new(m),
     ))]
+}
+
+/// Auction Notice: the packet body both legs run. Audience resolved by the caller, same as
+/// [`whisper_event_outbound`]. Outbid and Won go to the bidder on
+/// `SMSG_AUCTION_BIDDER_NOTIFICATION`; Sold, Expired and New bid go to the owner on
+/// `SMSG_AUCTION_OWNER_NOTIFICATION` (README T5, `cm:AuctionHouseHandler.cpp`/`AuctionHouseMgr.cpp`).
+/// `house` outside the imported 1-7 range and any other `kind` both drop the notice and log —
+/// the accompanying Auction Mail still reaches the recipient's inbox either way.
+pub(crate) fn auction_notice_outbound(row: &AuctionNotice) -> Vec<Outbound> {
+    use lyracore_shared::auction::auction_notice::{EXPIRED, NEW_BID, OUTBID, SOLD, WON};
+
+    let Ok(house) = AuctionHouse::try_from(row.house) else {
+        log::warn!(
+            "auction notice: house {} is not an imported auction house; dropping kind {}",
+            row.house,
+            row.kind
+        );
+        return Vec::new();
+    };
+    match row.kind {
+        OUTBID | WON => vec![Outbound::One(
+            ServerOpcodeMessage::SMSG_AUCTION_BIDDER_NOTIFICATION(Box::new(
+                codec::build_auction_bidder_notification(
+                    house,
+                    row.auction_id,
+                    row.bidder_guid,
+                    row.bid,
+                    row.out_bid,
+                    row.item_entry,
+                    row.random_property_id,
+                ),
+            )),
+        )],
+        SOLD | EXPIRED | NEW_BID => vec![Outbound::One(
+            ServerOpcodeMessage::SMSG_AUCTION_OWNER_NOTIFICATION(Box::new(
+                codec::build_auction_owner_notification(
+                    row.auction_id,
+                    row.bid,
+                    row.out_bid,
+                    row.bidder_guid,
+                    row.item_entry,
+                    row.random_property_id,
+                ),
+            )),
+        )],
+        other => {
+            log::warn!("auction notice: unknown kind {other}; dropping");
+            Vec::new()
+        }
+    }
 }
 
 /// Build a Package System Message after the caller validates the recipient.

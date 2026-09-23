@@ -2,8 +2,9 @@ use std::time::Duration;
 
 use wow_world_messages::{
     vanilla::{
-        AuctionListItem, SMSG_AUCTION_BIDDER_LIST_RESULT, SMSG_AUCTION_LIST_RESULT,
-        SMSG_AUCTION_OWNER_LIST_RESULT,
+        AuctionHouse, AuctionListItem, SMSG_AUCTION_BIDDER_LIST_RESULT,
+        SMSG_AUCTION_BIDDER_NOTIFICATION, SMSG_AUCTION_LIST_RESULT, SMSG_AUCTION_OWNER_LIST_RESULT,
+        SMSG_AUCTION_OWNER_NOTIFICATION,
     },
     Guid,
 };
@@ -88,6 +89,50 @@ pub fn build_auction_bidder_list_result(
     }
 }
 
+/// Outbid or Won, to the bidder (`cm:AuctionHouseHandler.cpp:93-107,157-158`,
+/// `cm:AuctionHouseMgr.cpp:146-147`). `won` is the displaced bid on Outbid, 0 on Won: the client
+/// reads a nonzero value as "you were outbid" and zero as "you won".
+pub fn build_auction_bidder_notification(
+    auction_house: AuctionHouse,
+    auction_id: u32,
+    bidder_guid: u64,
+    won: u32,
+    out_bid: u32,
+    item_entry: u32,
+    item_random_property_id: u32,
+) -> SMSG_AUCTION_BIDDER_NOTIFICATION {
+    SMSG_AUCTION_BIDDER_NOTIFICATION {
+        auction_house,
+        auction_id,
+        bidder: Guid::new(bidder_guid),
+        won,
+        out_bid,
+        item_template: item_entry,
+        item_random_property_id,
+    }
+}
+
+/// Sold, Expired or New bid, to the owner (`cm:AuctionHouseMgr.cpp:195-199,231-232,802-806`,
+/// `cm:AuctionHouseHandler.cpp:110-128`). `bidder` is 0 on Sold and Expired, and the new bidder on
+/// New bid, which the client answers only by refreshing its list.
+pub fn build_auction_owner_notification(
+    auction_id: u32,
+    bid: u32,
+    out_bid: u32,
+    bidder_guid: u64,
+    item_entry: u32,
+    item_random_property_id: u32,
+) -> SMSG_AUCTION_OWNER_NOTIFICATION {
+    SMSG_AUCTION_OWNER_NOTIFICATION {
+        auction_id,
+        bid,
+        auction_out_bid: out_bid,
+        bidder: Guid::new(bidder_guid),
+        item: item_entry,
+        item_random_property_id,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -153,5 +198,42 @@ mod tests {
         assert_eq!(browse.total_amount_of_auctions, 51);
         assert_eq!(owner.total_amount_of_auctions, 51);
         assert_eq!(bidder.total_amount_of_auctions, 51);
+    }
+
+    #[test]
+    fn the_bidder_notification_carries_every_field_at_its_own_wire_position() {
+        let packet =
+            build_auction_bidder_notification(AuctionHouse::Stormwind, 41, 9, 201, 11, 25, 117);
+        assert_eq!(packet.auction_house, AuctionHouse::Stormwind);
+        assert_eq!(packet.auction_id, 41);
+        assert_eq!(packet.bidder.guid(), 9);
+        assert_eq!(packet.won, 201, "nonzero won means outbid");
+        assert_eq!(packet.out_bid, 11);
+        assert_eq!(packet.item_template, 25);
+        assert_eq!(packet.item_random_property_id, 117);
+    }
+
+    #[test]
+    fn a_zero_won_field_reads_as_a_win_not_an_outbid() {
+        let packet =
+            build_auction_bidder_notification(AuctionHouse::Stormwind, 41, 8, 0, 10, 25, 117);
+        assert_eq!(packet.won, 0);
+    }
+
+    #[test]
+    fn the_owner_notification_carries_every_field_at_its_own_wire_position() {
+        let packet = build_auction_owner_notification(41, 201, 11, 0, 25, 117);
+        assert_eq!(packet.auction_id, 41);
+        assert_eq!(packet.bid, 201);
+        assert_eq!(packet.auction_out_bid, 11);
+        assert_eq!(packet.bidder.guid(), 0, "Sold and Expired carry no bidder");
+        assert_eq!(packet.item, 25);
+        assert_eq!(packet.item_random_property_id, 117);
+    }
+
+    #[test]
+    fn a_new_bid_owner_notification_names_the_new_bidder() {
+        let packet = build_auction_owner_notification(41, 107, 6, 9, 25, 117);
+        assert_eq!(packet.bidder.guid(), 9);
     }
 }
