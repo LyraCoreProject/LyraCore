@@ -81,6 +81,43 @@ fn a_sharded_store_routes_the_vote_to_realm_core_with_the_authenticated_guid() {
     );
 }
 
+/// A client can vote as soon as `SMSG_LOOT_START_ROLL` arrives, before the next relay tick. The
+/// vote must reach realm-core after the roll's promotion, or realm-core has no roll to count it on.
+#[test]
+fn a_vote_on_a_staged_roll_reaches_realm_core_after_its_promotion() {
+    let (realm, world, _instances, _calls) = party_topology();
+    *world.pending_rolls.lock().unwrap() = vec![loot::PendingLootRoll {
+        promotion_source: SOURCE,
+        roll_id: 77,
+        corpse_guid: 500,
+        slot: 2,
+        item_entry: 1234,
+        deadline_micros: 999_999,
+        recipients: vec![GINGER, TRIN],
+        random_property_id: 0,
+    }];
+
+    loot::run_vote(
+        world.as_ref(),
+        7,
+        GINGER,
+        500,
+        2,
+        lyracore_shared::loot_roll::vote_kind::GREED,
+    )
+    .unwrap();
+
+    let ops: Vec<(u8, u64, u8)> = realm
+        .realm_loot_ops
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|op| (op.0, op.1, op.2))
+        .collect();
+    assert_eq!(ops, vec![(loot_op::START, 500, 2), (loot_op::VOTE, 500, 2)]);
+    assert_eq!(*world.cleared_rolls.lock().unwrap(), vec![77]);
+}
+
 // ---- `relay_tick` (promotion + settlement) ----
 
 /// Unsharded → no-op, before even reading a shard's pending rolls: `realm_store()` answers `None`

@@ -83,9 +83,8 @@
 //! `relay_tick` is different because it coordinates writes between every world shard and realm-core,
 //! independent of whether any player is connected. A poll reads the current live connection on
 //! every tick and naturally carries the cross-database routing context it needs. The 200ms interval
-//! bounds ordinary promotion/settlement latency (a real client cannot render the roll popup and vote
-//! within one tick); it plays no role in disband correctness now that
-//! [`flush_pending_promotions`] handles that synchronously.
+//! bounds ordinary promotion/settlement latency. It plays no role in vote or disband correctness:
+//! [`run_vote`] and `party::run` call [`flush_pending_promotions`] synchronously.
 
 use anyhow::Result;
 
@@ -115,6 +114,9 @@ pub struct PendingLootRoll {
 /// realm-core, where the roll is authoritative once promoted; `actor_guid` is the guid the gateway
 /// authenticated for this socket, never the client's own claim (there isn't one — `CMSG_LOOT_ROLL`
 /// carries no actor field at all, only the roll's own `(corpse_guid, slot)` and the vote).
+///
+/// A client can vote as soon as `SMSG_LOOT_START_ROLL` arrives, before the next [`relay_tick`].
+/// Realm-core refuses a vote for a roll it does not hold, so pending promotions are flushed first.
 pub(crate) fn run_vote<St: WorldStore + ?Sized>(
     store: &St,
     account_id: u64,
@@ -126,6 +128,7 @@ pub(crate) fn run_vote<St: WorldStore + ?Sized>(
     let Some(realm) = store.realm_store() else {
         return store.loot_roll(account_id, self_guid, corpse_guid, slot, vote);
     };
+    flush_pending_promotions(store, realm.as_ref());
     realm.realm_loot_vote(corpse_guid, slot as u8, self_guid, vote)
 }
 
@@ -168,9 +171,10 @@ fn promote_one(shard: &dyn WorldStore, realm: &dyn WorldStore, roll: &PendingLoo
 
 /// Synchronously promote EVERY connected world shard's pending staging rolls onto realm-core.
 ///
-/// Called from `party::run`, immediately before dispatching a LEAVE/UNINVITE — the two ops that can
-/// shrink a group below 2 members and reach `remove_member`'s disband branch. This is what closes the
-/// disband race the periodic [`relay_tick`] alone cannot (see this module's doc): by the time
+/// [`run_vote`] calls it before each vote, so realm-core holds the roll the vote names. `party::run`
+/// calls it immediately before dispatching a LEAVE/UNINVITE — the two ops that can shrink a group
+/// below 2 members and reach `remove_member`'s disband branch. This is what closes the disband race
+/// the periodic [`relay_tick`] alone cannot (see this module's doc): by the time
 /// `realm_group_op(LEAVE/UNINVITE, ..)` runs right after this returns, every roll that existed
 /// anywhere in the realm at that moment is already on realm-core for `remove_member` to see.
 ///
@@ -181,8 +185,8 @@ fn promote_one(shard: &dyn WorldStore, realm: &dyn WorldStore, roll: &PendingLoo
 ///
 /// Best-effort per shard, the same posture `party::sync_mirrors` documents: a shard that cannot be
 /// reached leaves its own pending rolls unpromoted for THIS call, and the periodic relay retries them
-/// on its own cadence — a flush that failed must not turn a LEAVE/UNINVITE that would otherwise
-/// succeed into an error.
+/// on its own cadence — a flush that failed must not turn a vote or LEAVE/UNINVITE that would
+/// otherwise succeed into an error.
 pub(crate) fn flush_pending_promotions<St: WorldStore + ?Sized>(
     store: &St,
     realm: &dyn WorldStore,
