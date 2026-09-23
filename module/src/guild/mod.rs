@@ -1,5 +1,7 @@
 //! Guilds on Realm-core. Every guild fact lives here: the Guild, its Guild Ranks, its members and
-//! the Guild Events that tell members what happened. All four tables are private.
+//! the Guild Events that tell members what happened. All four tables are private. The copper a
+//! guild operation costs stays on the payer's Home Shard in a Fee Hold until Realm-core decides
+//! ([`fee`]).
 //!
 //! Realm-core holds no Character rows, so the Gateway conveys the Character facts a Gate needs
 //! (name, team, Realm Account, GM level) inside the Durable Request, and this Module applies the
@@ -12,6 +14,9 @@ use lyracore_shared::guild::{
     event_kind, founding_gate, GuildRefusal, DEFAULT_MOTD, DEFAULT_RANKS, LEADER_RANK,
 };
 use spacetimedb::{reducer, table, ReducerContext, SpacetimeType, Table, Timestamp};
+
+pub mod fee;
+pub(crate) use fee::{sweep_delete_game_guild_fee_hold, sweep_transfer_game_guild_fee_hold};
 
 /// One Guild. `name_key` makes names unique without regard to case.
 #[table(accessor = game_guild, index(accessor = by_leader, btree(columns = [leader_guid])))]

@@ -161,6 +161,14 @@ pub mod event_kind {
     pub const SIGNED_OFF: u8 = 13;
 }
 
+/// `game_guild_fee_hold.kind`: which guild operation a Fee Hold pays for.
+pub mod fee_kind {
+    pub const EMBLEM: u8 = 1;
+}
+
+/// A Guild Emblem costs 10 gold (`cm:GuildHandler.cpp:750-757`).
+pub const EMBLEM_COST_COPPER: u32 = 100_000;
+
 /// Why the Module refused a guild Durable Request. The tag is the whole reducer error text, so
 /// neither tier matches on human prose. A Refusal leaves every guild row unchanged.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -183,10 +191,14 @@ pub enum GuildRefusal {
     TargetNotInGuild,
     /// The op needs the Guild Leader.
     NotLeader,
+    /// The purse holds less than the guild fee.
+    NotEnoughMoney,
+    /// The named NPC does not serve this guild operation, or not to this Character here.
+    NpcRefused,
 }
 
 impl GuildRefusal {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 11] = [
         Self::NotGameMaster,
         Self::NameInvalid,
         Self::NameExists,
@@ -196,6 +208,8 @@ impl GuildRefusal {
         Self::NoPermission,
         Self::TargetNotInGuild,
         Self::NotLeader,
+        Self::NotEnoughMoney,
+        Self::NpcRefused,
     ];
 
     pub fn as_tag(self) -> &'static str {
@@ -209,6 +223,8 @@ impl GuildRefusal {
             Self::NoPermission => "guild:no_permission",
             Self::TargetNotInGuild => "guild:target_not_in_guild",
             Self::NotLeader => "guild:not_leader",
+            Self::NotEnoughMoney => "guild:not_enough_money",
+            Self::NpcRefused => "guild:npc_refused",
         }
     }
 

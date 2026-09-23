@@ -357,4 +357,84 @@ mod tests {
         assert_eq!(roster.members.len(), 333);
         assert_eq!(wire.len() - 4, 32_679);
     }
+
+    /// Frame a client body the way the 1.12 client sends it: u16 big-endian size, u32 opcode.
+    fn client_packet(opcode: u32, body: &[u8]) -> ClientOpcodeMessage {
+        let mut framed = ((body.len() + 4) as u16).to_be_bytes().to_vec();
+        framed.extend_from_slice(&opcode.to_le_bytes());
+        framed.extend_from_slice(body);
+        ClientOpcodeMessage::read_unencrypted(&mut framed.as_slice()).unwrap()
+    }
+
+    fn server_body(message: ServerOpcodeMessage) -> (u16, Vec<u8>) {
+        let mut wire = Vec::new();
+        message.write_unencrypted_server(&mut wire).unwrap();
+        (u16::from_le_bytes([wire[2], wire[3]]), wire[4..].to_vec())
+    }
+
+    /// `cm:GuildHandler.cpp:722-723`: the vendor guid, then five u32 design values.
+    #[test]
+    fn save_guild_emblem_reads_the_vendor_then_five_design_values() {
+        let mut body = 0xF130_0000_0000_0042u64.to_le_bytes().to_vec();
+        for value in [11u32, 12, 3, 14, 15] {
+            body.extend_from_slice(&value.to_le_bytes());
+        }
+        let ClientOpcodeMessage::MSG_SAVE_GUILD_EMBLEM(save) = client_packet(0x01F1, &body) else {
+            panic!("0x1F1 is MSG_SAVE_GUILD_EMBLEM");
+        };
+        assert_eq!(save.vendor.guid(), 0xF130_0000_0000_0042);
+        assert_eq!(
+            [
+                save.emblem_style,
+                save.emblem_color,
+                save.border_style,
+                save.border_color,
+                save.background_color
+            ],
+            [11, 12, 3, 14, 15]
+        );
+    }
+
+    /// `cm:GuildHandler.cpp:766-771` writes one u32; `cm:Guild.h:146-151` numbers the results.
+    #[test]
+    fn save_guild_emblem_answers_one_result_word() {
+        use wow_world_messages::vanilla::{GuildEmblemResult, MSG_SAVE_GUILD_EMBLEM_Server};
+        for (result, word) in [
+            (GuildEmblemResult::Success, 0u32),
+            (GuildEmblemResult::NoGuild, 2),
+            (GuildEmblemResult::NotGuildMaster, 3),
+            (GuildEmblemResult::NotEnoughMoney, 4),
+            (GuildEmblemResult::NoMessage, 5),
+        ] {
+            let message =
+                ServerOpcodeMessage::MSG_SAVE_GUILD_EMBLEM(MSG_SAVE_GUILD_EMBLEM_Server { result });
+            assert_eq!(server_body(message), (0x01F1, word.to_le_bytes().to_vec()));
+        }
+    }
+
+    /// `cm:NPCHandler.cpp:49-50,62-67`: the client sends the NPC's full guid and the server echoes
+    /// it unpacked.
+    #[test]
+    fn tabard_vendor_activate_carries_the_full_npc_guid_both_ways() {
+        use wow_world_messages::vanilla::MSG_TABARDVENDOR_ACTIVATE;
+        let guid = 0xF130_0000_0000_0042u64;
+        let ClientOpcodeMessage::MSG_TABARDVENDOR_ACTIVATE(activate) =
+            client_packet(0x01F2, &guid.to_le_bytes())
+        else {
+            panic!("0x1F2 is MSG_TABARDVENDOR_ACTIVATE");
+        };
+        assert_eq!(activate.guid.guid(), guid);
+        let window = ServerOpcodeMessage::MSG_TABARDVENDOR_ACTIVATE(MSG_TABARDVENDOR_ACTIVATE {
+            guid: Guid::new(guid),
+        });
+        assert_eq!(server_body(window), (0x01F2, guid.to_le_bytes().to_vec()));
+    }
+
+    /// GE_TABARDCHANGE is event 9 with no strings and no guid (`cm:Guild.h:111`).
+    #[test]
+    fn tabard_changed_is_event_nine_with_nothing_after_it() {
+        let (opcode, body) =
+            build_guild_event_raw(lyracore_shared::guild::event_kind::TABARD_CHANGED, &[], 0);
+        assert_eq!((opcode, body), (0x0092, vec![9, 0]));
+    }
 }

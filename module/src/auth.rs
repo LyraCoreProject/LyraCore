@@ -1232,6 +1232,9 @@ pub fn delete_character(
     if crate::auction::character_has_auction_value(ctx, character_guid) {
         return Err("CHAR_HAS_AUCTION_VALUE".to_string());
     }
+    if crate::guild::fee::character_has_fee_hold(ctx, character_guid) {
+        return Err("CHAR_HAS_GUILD_FEE_HOLD".to_string());
+    }
     if ctx
         .db
         .game_world_entity()

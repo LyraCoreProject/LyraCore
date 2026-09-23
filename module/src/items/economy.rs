@@ -40,7 +40,7 @@ const VENDOR_RANGE_SQ: f32 = 100.0;
 /// Every string this replaces is preserved byte-for-byte at each call site — `build_buy_failed`
 /// (gateway/src/codec/item.rs) substring-matches `"out of range"` / `"another map"` / `"not enough
 /// money"` on these paths, so the SHAPE of each message (not just its presence) must survive.
-fn npc_interaction_gate(
+pub(crate) fn npc_interaction_gate(
     ctx: &ReducerContext,
     player_guid: u64,
     npc_guid: u64,

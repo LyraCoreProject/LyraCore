@@ -152,6 +152,10 @@ pub(crate) mod character_owned_tripwire {
             "realm-owned guild state; deleted Characters are forgotten by the Gateway's character-gone reconciliation",
         ),
         (
+            &["game_guild_fee_decision"],
+            "Realm-core guild fee decision kept as the replay answer for its operation id",
+        ),
+        (
             &["game_loot_roll_vote"],
             "Loot Roll-owned vote snapshot resolved or removed with the roll",
         ),
