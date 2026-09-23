@@ -42,10 +42,12 @@ pub mod loot;
 pub mod mail;
 pub mod packet_lint;
 pub mod party;
+pub mod presence;
 mod social;
 mod store;
 pub mod transfer;
 pub mod whisper;
+mod who;
 use coalesce::CoalesceState;
 use handlers::{
     decode_auction_browse, dispatch_auction_action, dispatch_auction_browse_action, dispatch_cast,

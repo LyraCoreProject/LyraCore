@@ -136,7 +136,7 @@ fn an_offline_target_is_refused_with_the_modules_own_text() {
 fn a_playerbot_is_not_whisperable_because_the_online_gate_reads_the_session_flag() {
     let (realm, world, _instances, _calls) = party_topology();
     assert!(
-        party::live_anywhere(world.as_ref(), BOT),
+        presence::live_anywhere(world.as_ref(), BOT),
         "fixture: a playerbot's live entity is right there — this is what `/invite <bot>` reads"
     );
     assert!(
@@ -380,7 +380,7 @@ fn a_homonym_on_the_senders_own_shard_does_not_shadow_the_live_target() {
         *shard.peers.lock().unwrap() = vec![world.clone(), instances.clone()];
     }
     assert_eq!(
-        party::resolve_by_name(world.as_ref(), "Vim").unwrap(),
+        presence::resolve_by_name(world.as_ref(), "Vim").unwrap(),
         Some(HOMONYM),
         "fixture: first-hit-wins resolves the name to the sender's OWN shard's homonym"
     );
@@ -452,7 +452,7 @@ fn a_name_query_resolves_a_character_on_another_shard() {
     );
 
     assert_eq!(
-        party::character_anywhere(world.as_ref(), VIM)
+        presence::character_anywhere(world.as_ref(), VIM)
             .unwrap()
             .map(|c| c.name),
         Some("Vim".to_string()),
@@ -460,18 +460,18 @@ fn a_name_query_resolves_a_character_on_another_shard() {
     );
     // …and from the other side, and still on the asking shard itself.
     assert_eq!(
-        party::character_anywhere(instances.as_ref(), GINGER)
+        presence::character_anywhere(instances.as_ref(), GINGER)
             .unwrap()
             .map(|c| c.name),
         Some("Ginger".to_string())
     );
     assert_eq!(
-        party::character_anywhere(world.as_ref(), GINGER)
+        presence::character_anywhere(world.as_ref(), GINGER)
             .unwrap()
             .map(|c| c.name),
         Some("Ginger".to_string())
     );
-    assert!(party::character_anywhere(world.as_ref(), 4242)
+    assert!(presence::character_anywhere(world.as_ref(), 4242)
         .unwrap()
         .is_none());
 }

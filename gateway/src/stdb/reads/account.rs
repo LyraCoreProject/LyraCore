@@ -298,34 +298,81 @@ impl Coordinator {
             .map(|c| (c.map_id, c.x, c.y, c.z)))
     }
 
-    /// All currently-online player characters for `CMSG_WHO → SMSG_WHO`. Iterates
-    /// `game_world_entity` for entries with `entry == 0` (player entities; creatures have a
-    /// non-zero entry), then joins each against `game_character` for name/race/class/zone. The
-    /// coordinator bypasses RLS so it sees every player's entity regardless of the caller's scope.
-    pub fn online_players(&self) -> Result<Vec<crate::codec::WhoPlayerView>> {
+    /// This Shard's Realm Presence row for `guid`: Character facts, `in_world` (a live
+    /// `game_world_entity`, bots included), `session_online` (`game_character.online`, the session
+    /// flag) and Away Status from the live entity's `PLAYER_FLAGS`. `None` if this Shard holds no
+    /// `game_character` row for it.
+    pub fn presence_row(&self, guid: u64) -> Result<Option<crate::world::presence::RealmPresence>> {
         let guard = self.0.coord();
         let db = &guard.conn.db;
-        let views = db
+        let Some(ch) = db.game_character().guid().find(&guid) else {
+            return Ok(None);
+        };
+        let entity = db.game_world_entity().guid().find(&guid);
+        let away = entity
+            .as_ref()
+            .map(|e| crate::world::presence::away_from_player_flags(e.player_flags))
+            .unwrap_or(crate::world::presence::AwayStatus::None);
+        Ok(Some(crate::world::presence::RealmPresence {
+            guid,
+            name: ch.name,
+            race: ch.race,
+            class: ch.class,
+            level: ch.level,
+            zone_id: ch.zone_id,
+            in_world: entity.is_some(),
+            session_online: ch.online,
+            away,
+        }))
+    }
+
+    /// Every in-world player Character on this Shard, for `CMSG_WHO → SMSG_WHO`
+    /// (`presence::in_world_characters`'s per-Shard input, replacing the former `online_players`).
+    /// Iterates `game_world_entity` for entries with `entry == 0` (player entities; creatures have a
+    /// non-zero entry), then joins each against `game_character`. The coordinator bypasses RLS so it
+    /// sees every player's entity regardless of the caller's scope.
+    pub fn in_world_players(&self) -> Result<Vec<crate::world::presence::RealmPresence>> {
+        let guard = self.0.coord();
+        let db = &guard.conn.db;
+        let rows = db
             .game_world_entity()
             .iter()
             .filter(|e| e.entry == 0) // players have entry == 0; creatures have a template entry
             .filter_map(|e| {
                 let ch = db.game_character().guid().find(&e.guid)?;
-                Some(crate::codec::WhoPlayerView {
-                    name: ch.name.clone(),
-                    level: ch.level,
-                    class: ch.class,
+                Some(crate::world::presence::RealmPresence {
+                    guid: e.guid,
+                    name: ch.name,
                     race: ch.race,
+                    class: ch.class,
+                    level: ch.level,
                     zone_id: ch.zone_id,
+                    in_world: true,
+                    session_online: ch.online,
+                    away: crate::world::presence::away_from_player_flags(e.player_flags),
                 })
             })
             .collect();
-        Ok(views)
+        Ok(rows)
+    }
+
+    /// `game_area.name` for `zone_id`, `/who`'s search-string match against a zone name — a static
+    /// catalogue, subscribed unconditionally. Empty when the catalogue holds no row for it.
+    pub fn zone_name(&self, zone_id: u32) -> String {
+        self.0
+            .coord()
+            .conn
+            .db
+            .game_area()
+            .id()
+            .find(&zone_id)
+            .map(|a| a.name)
+            .unwrap_or_default()
     }
 
     /// Resolve a typed contact name to a character guid (case-insensitive, mirroring the module's own
-    /// `send_whisper` name match) via the privileged cache — the same RLS-bypass trick `online_players`
-    /// uses. `None` if no character has that name.
+    /// `send_whisper` name match) via the privileged cache — the same RLS-bypass trick
+    /// `in_world_players` uses. `None` if no character has that name.
     pub fn character_guid_by_name(&self, name: &str) -> Result<Option<u64>> {
         Ok(self
             .0
@@ -354,7 +401,7 @@ impl Coordinator {
 
     /// `owner_guid`'s friend list + ignore list for `CMSG_FRIEND_LIST → SMSG_FRIEND_LIST` +
     /// `SMSG_IGNORE_LIST`. Reads `game_character_contact` via the privileged cache
-    /// (RLS-bypassed, same trick `online_players` uses) so an online friend's presence resolves
+    /// (RLS-bypassed, same trick `in_world_players` uses) so an online friend's presence resolves
     /// regardless of whose connection is asking. A friend whose character has since been deleted
     /// (stale row, pre-sweep or a race) degrades to an offline/zero row rather than erroring.
     pub fn contact_lists(

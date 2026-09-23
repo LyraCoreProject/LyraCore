@@ -370,6 +370,11 @@ _Avoid_: chat type (in new names)
 The speaker's race and chat tag, read by the Gateway on the Home Shard and conveyed in the Durable
 Request. Realm-core holds no Characters.
 
+**Realm Presence**:
+The Gateway's realm-wide read of one Character: in world, session online, race, class, level, zone
+and Away Status, from whichever World Shard holds it.
+_Avoid_: online status, presence cache
+
 ### Loot
 
 **Loot Tag**:

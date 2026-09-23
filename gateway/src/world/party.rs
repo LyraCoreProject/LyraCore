@@ -40,7 +40,7 @@
 
 use anyhow::Result;
 
-use super::{send, Outbound, SessionTx, WorldStore};
+use super::{presence, send, Outbound, SessionTx, WorldStore};
 use crate::codec;
 use lyracore_shared::group::{
     bot_op, realm_op, GroupKind, GroupRefusal, RaidSlot, RosterMember, RosterPayload,
@@ -646,127 +646,12 @@ impl From<GroupRefusal> for PartyOutcome {
     }
 }
 
-/// Resolve a typed player name to a guid ACROSS every connected shard.
-///
-/// **This is the read that made a cross-shard invite impossible.** `/invite Bob` resolves the typed
-/// name against `game_character`, on ONE database — so a Bob who had walked into Deadmines simply
-/// did not exist to a player standing in Elwynn, and the invite failed as `BadPlayerName` before any
-/// party logic ran (observed live, 2026-07-25). Realm-core cannot answer it either: it owns
-/// membership, not characters. The union is the answer, and it is the same shape `characters()`
-/// already uses to build the character-select list across shards.
-///
-/// The session's OWN handle is asked first and `world_stores()` is empty on a single-database
-/// gateway, so an unsharded lookup is exactly the one call it always was.
-pub(crate) fn resolve_by_name<St: WorldStore + ?Sized>(
-    store: &St,
-    name: &str,
-) -> Result<Option<u64>> {
-    if let Some(guid) = store.character_guid_by_name(name)? {
-        return Ok(Some(guid));
-    }
-    for shard in store.world_stores() {
-        if let Some(guid) = shard.character_guid_by_name(name)? {
-            return Ok(Some(guid));
-        }
-    }
-    Ok(None)
-}
-
-/// [`resolve_by_name`] without the first-hit short-circuit: EVERY guid the name resolves to, across
-/// every connected shard (found during the whisper slice's own review).
-///
-/// **Character names are not realm-unique.** The uniqueness constraint `create_character` leans on is
-/// a per-database index, so the same name can exist on two shards at once — observed live on
-/// 2026-07-25, two characters called `dfsdfsd`, guid 5 on the instances shard and guid 8 on the world
-/// shard, after a suite re-created one the single-database gateway could not see. First-hit-wins then
-/// resolves a typed name to whichever homonym happens to sit on the SENDER's own shard: two players
-/// typing the same name reach two different people, and a private whisper goes to a stranger.
-///
-/// This cannot be fixed here — a realm-wide name constraint is the fix, and it belongs to the
-/// broader realm-core social & economy effort — but a caller that knows which candidate it wants
-/// can pick it. [`super::whisper`] wants the one that is ONLINE, which is what `/w` addresses in
-/// vanilla. Order is the union's: this handle first, then `ShardMap::shards()` order (default
-/// first), so the choice among several ONLINE homonyms is still arbitrary — just no longer
-/// silently wrong whenever exactly one of them is live.
-///
-/// Deduped, because `world_stores()` includes the asking shard (`Coordinator::all_shards` does).
-pub(crate) fn resolve_all_by_name<St: WorldStore + ?Sized>(
-    store: &St,
-    name: &str,
-) -> Result<Vec<u64>> {
-    let mut guids = Vec::new();
-    if let Some(guid) = store.character_guid_by_name(name)? {
-        guids.push(guid);
-    }
-    for shard in store.world_stores() {
-        if let Some(guid) = shard.character_guid_by_name(name)? {
-            if !guids.contains(&guid) {
-                guids.push(guid);
-            }
-        }
-    }
-    Ok(guids)
-}
-
-/// [`resolve_by_name`]'s existence twin: a character's `(online, level, class, zone)` from whichever
-/// shard holds it. Same first-hit-wins union, same unsharded short-circuit.
-///
-/// The `online` field here is `game_character.online` — the SESSION flag. That is NOT the module's
-/// notion of online (see [`live_anywhere`]), so this answers "does this character exist" and nothing
-/// else for the invite gate.
-pub(crate) fn presence<St: WorldStore + ?Sized>(
-    store: &St,
-    guid: u64,
-) -> Result<Option<(bool, u8, u8, u32)>> {
-    if let Some(p) = store.character_presence(guid)? {
-        return Ok(Some(p));
-    }
-    for shard in store.world_stores() {
-        if let Some(p) = shard.character_presence(guid)? {
-            return Ok(Some(p));
-        }
-    }
-    Ok(None)
-}
-
-/// [`resolve_by_name`] inverted: the character row for `guid` from whichever connected shard holds
-/// it. Same first-hit-wins union, same unsharded short-circuit — one cache read when
-/// `world_stores()` is empty.
-///
-/// Two callers, and the second is why this is not private to the party frame: [`render_list`] needs a
-/// party member's NAME (realm-core has no character rows to render one from), and `CMSG_NAME_QUERY`
-/// needs it for a guid the client has met across a boundary — the whisper slice's case. A whisper
-/// from another shard arrives carrying the sender's GUID (the client resolves names itself, via
-/// NAME_QUERY), so a shard-local answer there would deliver the line with nobody's name on it.
-pub(crate) fn character_anywhere<St: WorldStore + ?Sized>(
-    store: &St,
-    guid: u64,
-) -> Result<Option<codec::CharacterView>> {
-    if let Some(c) = store.character_by_guid(guid)? {
-        return Ok(Some(c));
-    }
-    for shard in store.world_stores() {
-        if let Some(c) = shard.character_by_guid(guid)? {
-            return Ok(Some(c));
-        }
-    }
-    Ok(None)
-}
-
-/// Does `guid` have a LIVE ENTITY on any connected shard — the module's own "is the target online"
-/// gate (`game_world_entity`), unioned across the boundary.
-///
-/// NOT `game_character.online`. The two disagree for exactly the case the module's own gate calls
-/// out: a **session-less playerbot** is inserted straight into `game_world_entity` by its spawn
-/// reducer and never runs `player_login`, so its character row keeps `online = false` for its whole
-/// life. Gating the realm-core invite on the session flag would refuse every bot invite on a
-/// multi-database gateway while the single-database plane still accepted it — a behaviour change
-/// wearing a refactor's clothes, in the one gate this slice moved out of the module.
-///
-/// Same shape [`render_list`] already uses for the roster's online column, for the same reason.
-pub(crate) fn live_anywhere<St: WorldStore + ?Sized>(store: &St, guid: u64) -> bool {
-    store.entity_in_world(guid) || store.world_stores().iter().any(|s| s.entity_in_world(guid))
-}
+// `resolve_by_name`, `resolve_all_by_name`, `character_anywhere` and `live_anywhere` moved to
+// `presence.rs`: every realm-wide Character read now lives in one place, which guild rosters,
+// friends, `/who` and whisper all share. `world::mail` (the mail workstream) still calls three of
+// them through `party::`; kept re-exported here until that workstream merges onto `presence::`
+// directly.
+pub(crate) use super::presence::{character_anywhere, live_anywhere, resolve_all_by_name};
 
 /// Route admission to the World Shard that reports the live entity. The acknowledged operation
 /// checks current Session ownership and consent there, even if that presence read was stale.
@@ -860,8 +745,9 @@ pub(crate) fn run<St: WorldStore + ?Sized>(
     // answers with the module's own Refusals, so the client-facing code is the same on both planes.
     //
     // Each gate is the module's own read, unioned across the shards — EXISTS is a `game_character`
-    // row ([`presence`]), ONLINE is a `game_world_entity` row ([`live_anywhere`]). Reading the
-    // session flag for the second would silently refuse every playerbot; see [`live_anywhere`].
+    // row ([`presence::of`]), ONLINE is a `game_world_entity` row ([`presence::live_anywhere`]).
+    // Reading the session flag for the second would silently refuse every playerbot; see
+    // [`presence::live_anywhere`].
     if let Op::Invite(target) = op {
         if let Some(refusal) = invite_gate(store, target)? {
             return Ok(refusal.into());
@@ -919,10 +805,10 @@ fn raid_unchanged(realm: &dyn WorldStore, self_guid: u64, before: Option<&GroupR
 /// The invite gates realm-core cannot run for itself: does the target exist anywhere, and is it in
 /// the world anywhere. `None` means the invite may proceed.
 fn invite_gate<St: WorldStore + ?Sized>(store: &St, target: u64) -> Result<Option<GroupRefusal>> {
-    if presence(store, target)?.is_none() {
+    if presence::of(store, target)?.is_none() {
         return Ok(Some(GroupRefusal::NoSuchPlayer));
     }
-    if !live_anywhere(store, target) {
+    if !presence::live_anywhere(store, target) {
         return Ok(Some(GroupRefusal::TargetOffline));
     }
     Ok(None)
@@ -938,12 +824,12 @@ fn cross_faction_invite<St: WorldStore + ?Sized>(
     inviter: u64,
     target: u64,
 ) -> Result<bool> {
-    if !live_anywhere(store, target) {
+    if !presence::live_anywhere(store, target) {
         return Ok(false);
     }
     let (Some(inviter), Some(target)) = (
-        character_anywhere(store, inviter)?,
-        character_anywhere(store, target)?,
+        presence::character_anywhere(store, inviter)?,
+        presence::character_anywhere(store, target)?,
     ) else {
         return Ok(false);
     };
@@ -1456,14 +1342,19 @@ pub(crate) fn render_list<St: WorldStore + ?Sized>(
     let mut roster = roster.clone();
     for member in &mut roster.members {
         if member.name.is_empty() {
-            member.name = character_anywhere(store, member.guid)
+            // This handle first (the viewer's own shard, where most of the party is), then every
+            // other connected one — the member standing inside an instance is on a database this
+            // handle never reads. Empty on a single-database gateway, so the union never leaves it.
+            member.name = presence::character_anywhere(store, member.guid)
                 .ok()
                 .flatten()
                 .map(|c| c.name)
                 .unwrap_or_default();
         }
     }
-    let list = codec::build_group_list(self_guid, &roster, |guid| live_anywhere(store, guid));
+    let list = codec::build_group_list(self_guid, &roster, |guid| {
+        presence::live_anywhere(store, guid)
+    });
     let (opcode, body) = codec::build_group_list_raw(&list);
     Outbound::Raw { opcode, body }
 }

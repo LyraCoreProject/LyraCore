@@ -113,6 +113,18 @@ mod member_stats_tests;
 #[path = "whisper_tests.rs"]
 mod whisper_tests;
 
+/// Realm Presence's multi-shard union (`presence::of`, `presence::in_world_characters`) — reads
+/// that moved out of `party.rs`. A sibling of `party_tests`/`whisper_tests` for the same reason: it
+/// reaches `InMemoryStore` and `party_tests`' fixture characters without widening anything.
+#[path = "presence_tests.rs"]
+mod presence_tests;
+
+/// `/who`'s Store-Fake tests: the multi-shard listing and the 49-cap/oversized-request rules that
+/// need real presence rows rather than the hand-written filter inputs `who.rs`'s own unit tests
+/// use. A sibling of `presence_tests` for the same reason.
+#[path = "who_tests.rs"]
+mod who_tests;
+
 /// The realm-wide loot-roll routing/relay tests. A sibling of `party_tests`/`whisper_tests` for
 /// the same reason — it reaches `InMemoryStore` without widening anything.
 #[path = "loot_tests.rs"]
@@ -585,6 +597,12 @@ struct InMemoryStore {
     /// Seeded characters that are nevertheless OFFLINE, so the invite gate's "player not
     /// online" arm can be driven. Empty = every seeded character is online, as before.
     offline_guids: Vec<u64>,
+    /// Raw `PLAYER_FLAGS` per guid, for `presence_row`'s Away Status. Empty = every guid reads
+    /// `AwayStatus::None`, as a Character with no live entity does in production.
+    away_flags: std::collections::HashMap<u64, u32>,
+    /// `game_area.name` per zone id, for `/who`'s search-string match. Empty = every zone name
+    /// reads "", the "unimported catalogue" case.
+    zone_names: std::collections::HashMap<u32, String>,
     /// When set, `sync_group_mirror` fails with this message — a world shard that cannot be
     /// mirrored (an unreachable database), which must not fail a party op realm-core already took.
     mirror_error: Option<String>,
@@ -849,6 +867,17 @@ impl InMemoryStore {
             .lock()
             .unwrap()
             .push((self.shard.clone(), what.to_string()));
+    }
+
+    /// `guid`'s Away Status from `away_flags` (raw `PLAYER_FLAGS`), `AwayStatus::None` when unset —
+    /// mirroring "a Character with no live entity has `AwayStatus::None`" for every guid a test
+    /// never seeds.
+    fn away(&self, guid: u64) -> presence::AwayStatus {
+        self.away_flags
+            .get(&guid)
+            .copied()
+            .map(presence::away_from_player_flags)
+            .unwrap_or(presence::AwayStatus::None)
     }
 
     /// One mail-escrow step boundary. `Err` is the gateway dying before this step committed: the
@@ -2779,19 +2808,52 @@ impl WorldStore for InMemoryStore {
     fn player_combat_until_ms(&self, _player_guid: u64) -> u64 {
         self.combat_until_ms
     }
-    fn online_players(&self) -> Result<Vec<codec::WhoPlayerView>> {
-        // Test store: return the seeded characters as "online" so CMSG_WHO tests can assert a response.
+    fn presence_row(&self, guid: u64) -> Result<Option<presence::RealmPresence>> {
+        let Some(c) = self.characters.iter().find(|c| c.guid == guid) else {
+            return Ok(None);
+        };
+        let in_world = self.entity_in_world(guid);
+        Ok(Some(presence::RealmPresence {
+            guid: c.guid,
+            name: c.name.clone(),
+            race: c.race,
+            class: c.class,
+            level: c.level,
+            zone_id: c.zone_id,
+            in_world,
+            // `offline_guids` drives the invite gate's "player not online" arm; a seeded character
+            // is session-online unless listed there, mirroring `character_presence` above.
+            session_online: !self.offline_guids.contains(&guid),
+            // `away_flags` models the live entity's PLAYER_FLAGS, so it means nothing without one.
+            away: if in_world {
+                self.away(guid)
+            } else {
+                presence::AwayStatus::None
+            },
+        }))
+    }
+    fn in_world_players(&self) -> Result<Vec<presence::RealmPresence>> {
+        // Test store: every seeded character the fake considers in-world (`entity_in_world`) is
+        // listed, so CMSG_WHO tests can assert a response without wiring `live_guids` by hand.
         Ok(self
             .characters
             .iter()
-            .map(|c| codec::WhoPlayerView {
+            .filter(|c| self.entity_in_world(c.guid))
+            .map(|c| presence::RealmPresence {
+                guid: c.guid,
                 name: c.name.clone(),
-                level: c.level,
-                class: c.class,
                 race: c.race,
+                class: c.class,
+                level: c.level,
                 zone_id: c.zone_id,
+                in_world: true,
+                session_online: !self.offline_guids.contains(&c.guid),
+                away: self.away(c.guid),
             })
             .collect())
+    }
+    fn zone_name(&self, zone_id: u32) -> String {
+        self.zone_names.get(&zone_id).cloned().unwrap_or_default()
     }
     fn contact_lists(&self, self_guid: u64) -> Result<(Vec<codec::FriendView>, Vec<u64>)> {
         if let Some(e) = &self.contact_lists_error {
@@ -8911,6 +8973,18 @@ fn attackswing_desync_error_is_session_fatal() {
 fn who_reply_lists_every_online_player_with_level_and_zone() {
     let mut s = quest_store();
     s.characters = vec![
+        // The requester. Human like Alpha/Bravo (so the team gate passes them), but a class
+        // outside the request's `class_mask` — the requester is not exempt from its own filters,
+        // so this keeps the assertions below at exactly the two matches.
+        codec::CharacterView {
+            guid: 1,
+            name: "Tester".into(),
+            race: 1,
+            class: 4,
+            level: 10,
+            zone_id: 12,
+            ..Default::default()
+        },
         codec::CharacterView {
             guid: 2,
             name: "Alpha".into(),
@@ -8937,8 +9011,8 @@ fn who_reply_lists_every_online_player_with_level_and_zone() {
         maximum_level: Level::new(60),
         player_name: String::new(),
         guild_name: String::new(),
-        race_mask: 0,
-        class_mask: 0,
+        race_mask: 1 << 1,  // Human
+        class_mask: 1 << 1, // Warrior
         zones: Vec::new(),
         search_strings: Vec::new(),
     }

@@ -1044,8 +1044,16 @@ impl WorldStore for Coordinator {
         self.player_combat_until_ms(player_guid)
     }
 
-    fn online_players(&self) -> Result<Vec<codec::WhoPlayerView>> {
-        self.online_players()
+    fn presence_row(&self, guid: u64) -> Result<Option<crate::world::presence::RealmPresence>> {
+        self.presence_row(guid)
+    }
+
+    fn in_world_players(&self) -> Result<Vec<crate::world::presence::RealmPresence>> {
+        self.in_world_players()
+    }
+
+    fn zone_name(&self, zone_id: u32) -> String {
+        self.zone_name(zone_id)
     }
 
     fn contact_lists(&self, self_guid: u64) -> Result<(Vec<codec::FriendView>, Vec<u64>)> {

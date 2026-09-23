@@ -75,7 +75,7 @@ pub(crate) fn handle_query<St: WorldStore + ?Sized>(
         // single-database gateway `world_stores()` is empty, so this is exactly the one read it was.
         ClientOpcodeMessage::CMSG_NAME_QUERY(q) => {
             let guid = q.guid.guid();
-            match party::character_anywhere(store, guid)? {
+            match presence::character_anywhere(store, guid)? {
                 Some(c) => send(
                     tx,
                     Outbound::One(ServerOpcodeMessage::SMSG_NAME_QUERY_RESPONSE(Box::new(

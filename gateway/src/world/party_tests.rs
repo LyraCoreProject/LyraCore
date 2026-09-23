@@ -542,16 +542,16 @@ fn an_invite_resolves_a_target_standing_on_another_shard() {
     );
     // The realm-core read, from the same handle: the union finds them.
     assert_eq!(
-        party::resolve_by_name(world.as_ref(), "Vim").unwrap(),
+        presence::resolve_by_name(world.as_ref(), "Vim").unwrap(),
         Some(VIM)
     );
     // …and it still resolves a name on the asking shard itself, from either side.
     assert_eq!(
-        party::resolve_by_name(instances.as_ref(), "Ginger").unwrap(),
+        presence::resolve_by_name(instances.as_ref(), "Ginger").unwrap(),
         Some(GINGER)
     );
     assert_eq!(
-        party::resolve_by_name(world.as_ref(), "Nobody").unwrap(),
+        presence::resolve_by_name(world.as_ref(), "Nobody").unwrap(),
         None
     );
 }

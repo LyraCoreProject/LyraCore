@@ -1280,10 +1280,24 @@ pub trait WorldStore:
     /// found). Used by the logout handler to deny `CMSG_LOGOUT_REQUEST` while the player is in combat.
     fn player_combat_until_ms(&self, player_guid: u64) -> u64;
 
-    /// All currently-online player characters for `CMSG_WHO → SMSG_WHO`. A player is "online" iff
-    /// their guid appears in `game_world_entity` with `entry == 0` (player entity). Joined with
-    /// `game_character` for name/race/class/zone; dead players are included (ghosts are online).
-    fn online_players(&self) -> Result<Vec<codec::WhoPlayerView>>;
+    /// This Shard's Realm Presence row for `guid`: Character facts, `in_world`, `session_online`
+    /// and Away Status, in one read. `None` if this Shard holds no `game_character` row for it.
+    /// [`presence::of`](super::presence::of) unions it across every connected Shard.
+    fn presence_row(&self, guid: u64) -> Result<Option<presence::RealmPresence>>;
+
+    /// Every in-world player Character on this Shard — the per-Shard input
+    /// [`presence::in_world_characters`](super::presence::in_world_characters) unions, and `/who`'s
+    /// ultimate source. A player is "in world" iff their guid appears in `game_world_entity` with
+    /// `entry == 0` (player entity); dead players are included (ghosts are in world). Bots are
+    /// included: they have no session, but they do have a live entity.
+    fn in_world_players(&self) -> Result<Vec<presence::RealmPresence>>;
+
+    /// `game_area.name` for `zone_id` — `/who`'s search-string match against a zone name. Empty
+    /// when the catalogue holds no row for it (unimported, or an id the client sends that the
+    /// imported DBC lacks).
+    fn zone_name(&self, _zone_id: u32) -> String {
+        String::new()
+    }
 
     /// `self_guid`'s friend list + ignore list (guids only) for `CMSG_FRIEND_LIST → SMSG_FRIEND_LIST`
     /// + `SMSG_IGNORE_LIST`. Online friends carry live presence (level/class/zone).
