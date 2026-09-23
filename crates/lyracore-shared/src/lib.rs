@@ -16,6 +16,7 @@ pub mod duel;
 pub mod env;
 pub mod faction;
 pub mod group;
+pub mod guild;
 pub mod instance;
 pub mod item;
 pub mod loot;

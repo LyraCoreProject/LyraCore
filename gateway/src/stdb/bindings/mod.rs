@@ -471,6 +471,10 @@ pub mod game_group_table;
 pub mod game_guid_allocator_table;
 pub mod game_guid_range_registry_table;
 pub mod game_guid_range_table;
+pub mod game_guild_event_table;
+pub mod game_guild_member_table;
+pub mod game_guild_rank_table;
+pub mod game_guild_table;
 pub mod game_hunter_pet_protocol_table;
 pub mod game_hunter_pet_table;
 pub mod game_import_meta_table;
@@ -641,6 +645,12 @@ pub mod group_type;
 pub mod guid_allocator_type;
 pub mod guid_range_assignment_type;
 pub mod guid_range_type;
+pub mod guild_event_type;
+pub mod guild_gm_create_type;
+pub mod guild_member_type;
+pub mod guild_op_type;
+pub mod guild_rank_type;
+pub mod guild_type;
 pub mod gw_abandon_quest_reducer;
 pub mod gw_accept_group_invite_reducer;
 pub mod gw_accept_quest_reducer;
@@ -874,6 +884,7 @@ pub mod realm_chat_event_type;
 pub mod realm_chat_reducer;
 pub mod realm_chat_request_type;
 pub mod realm_group_op_reducer;
+pub mod realm_guild_op_reducer;
 pub mod realm_loot_op_reducer;
 pub mod realm_mail_commit_reducer;
 pub mod realm_mail_confirm_delivery_reducer;
@@ -1531,6 +1542,10 @@ pub use game_group_table::*;
 pub use game_guid_allocator_table::*;
 pub use game_guid_range_registry_table::*;
 pub use game_guid_range_table::*;
+pub use game_guild_event_table::*;
+pub use game_guild_member_table::*;
+pub use game_guild_rank_table::*;
+pub use game_guild_table::*;
 pub use game_hunter_pet_protocol_table::*;
 pub use game_hunter_pet_table::*;
 pub use game_import_meta_table::*;
@@ -1701,6 +1716,12 @@ pub use group_type::Group;
 pub use guid_allocator_type::GuidAllocator;
 pub use guid_range_assignment_type::GuidRangeAssignment;
 pub use guid_range_type::GuidRange;
+pub use guild_event_type::GuildEvent;
+pub use guild_gm_create_type::GuildGmCreate;
+pub use guild_member_type::GuildMember;
+pub use guild_op_type::GuildOp;
+pub use guild_rank_type::GuildRank;
+pub use guild_type::Guild;
 pub use gw_abandon_quest_reducer::gw_abandon_quest;
 pub use gw_accept_group_invite_reducer::gw_accept_group_invite;
 pub use gw_accept_quest_reducer::gw_accept_quest;
@@ -1934,6 +1955,7 @@ pub use realm_chat_event_type::RealmChatEvent;
 pub use realm_chat_reducer::realm_chat;
 pub use realm_chat_request_type::RealmChatRequest;
 pub use realm_group_op_reducer::realm_group_op;
+pub use realm_guild_op_reducer::realm_guild_op;
 pub use realm_loot_op_reducer::realm_loot_op;
 pub use realm_mail_commit_reducer::realm_mail_commit;
 pub use realm_mail_confirm_delivery_reducer::realm_mail_confirm_delivery;
@@ -3700,6 +3722,10 @@ pub enum Reducer {
         arg_a: u8,
         arg_b: u8,
     },
+    RealmGuildOp {
+        request_actor: SessionActor,
+        op: GuildOp,
+    },
     RealmLootOp {
         op: u8,
         corpse_guid: u64,
@@ -4384,6 +4410,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::RealmAuctionSettleListing { .. } => "realm_auction_settle_listing",
             Reducer::RealmChat { .. } => "realm_chat",
             Reducer::RealmGroupOp { .. } => "realm_group_op",
+            Reducer::RealmGuildOp { .. } => "realm_guild_op",
             Reducer::RealmLootOp { .. } => "realm_loot_op",
             Reducer::RealmMailCommit { .. } => "realm_mail_commit",
             Reducer::RealmMailConfirmDelivery { .. } => "realm_mail_confirm_delivery",
@@ -7259,6 +7286,13 @@ Reducer::PlayerbotsFixtureCommandApply{
                 arg_a: arg_a.clone(),
                 arg_b: arg_b.clone(),
 }),
+            Reducer::RealmGuildOp{
+                request_actor,
+                op,
+}             => __sats::bsatn::to_vec(&realm_guild_op_reducer::RealmGuildOpArgs {
+                request_actor: request_actor.clone(),
+                op: op.clone(),
+}),
             Reducer::RealmLootOp{
                 op,
                 corpse_guid,
@@ -7905,6 +7939,10 @@ pub struct DbUpdate {
     game_guid_allocator: __sdk::TableUpdate<GuidAllocator>,
     game_guid_range: __sdk::TableUpdate<GuidRange>,
     game_guid_range_registry: __sdk::TableUpdate<GuidRangeAssignment>,
+    game_guild: __sdk::TableUpdate<Guild>,
+    game_guild_event: __sdk::TableUpdate<GuildEvent>,
+    game_guild_member: __sdk::TableUpdate<GuildMember>,
+    game_guild_rank: __sdk::TableUpdate<GuildRank>,
     game_hunter_pet: __sdk::TableUpdate<HunterPet>,
     game_hunter_pet_protocol: __sdk::TableUpdate<HunterPetProtocol>,
     game_import_meta: __sdk::TableUpdate<ImportMeta>,
@@ -8490,6 +8528,18 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_guid_range_registry" => db_update.game_guid_range_registry.append(
                     game_guid_range_registry_table::parse_table_update(table_update)?,
                 ),
+                "game_guild" => db_update
+                    .game_guild
+                    .append(game_guild_table::parse_table_update(table_update)?),
+                "game_guild_event" => db_update
+                    .game_guild_event
+                    .append(game_guild_event_table::parse_table_update(table_update)?),
+                "game_guild_member" => db_update
+                    .game_guild_member
+                    .append(game_guild_member_table::parse_table_update(table_update)?),
+                "game_guild_rank" => db_update
+                    .game_guild_rank
+                    .append(game_guild_rank_table::parse_table_update(table_update)?),
                 "game_hunter_pet" => db_update
                     .game_hunter_pet
                     .append(game_hunter_pet_table::parse_table_update(table_update)?),
@@ -9549,6 +9599,18 @@ impl __sdk::DbUpdate for DbUpdate {
                 &self.game_guid_range_registry,
             )
             .with_updates_by_pk(|row| &row.shard_name);
+        diff.game_guild = cache
+            .apply_diff_to_table::<Guild>("game_guild", &self.game_guild)
+            .with_updates_by_pk(|row| &row.guild_id);
+        diff.game_guild_event = cache
+            .apply_diff_to_table::<GuildEvent>("game_guild_event", &self.game_guild_event)
+            .with_updates_by_pk(|row| &row.id);
+        diff.game_guild_member = cache
+            .apply_diff_to_table::<GuildMember>("game_guild_member", &self.game_guild_member)
+            .with_updates_by_pk(|row| &row.character_guid);
+        diff.game_guild_rank = cache
+            .apply_diff_to_table::<GuildRank>("game_guild_rank", &self.game_guild_rank)
+            .with_updates_by_pk(|row| &row.id);
         diff.game_hunter_pet = cache
             .apply_diff_to_table::<HunterPet>("game_hunter_pet", &self.game_hunter_pet)
             .with_updates_by_pk(|row| &row.pet_id);
@@ -10498,6 +10560,18 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_guid_range_registry" => db_update
                     .game_guid_range_registry
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_guild" => db_update
+                    .game_guild
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_guild_event" => db_update
+                    .game_guild_event
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_guild_member" => db_update
+                    .game_guild_member
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_guild_rank" => db_update
+                    .game_guild_rank
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_hunter_pet" => db_update
                     .game_hunter_pet
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -11294,6 +11368,18 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_guid_range_registry" => db_update
                     .game_guid_range_registry
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_guild" => db_update
+                    .game_guild
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_guild_event" => db_update
+                    .game_guild_event
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_guild_member" => db_update
+                    .game_guild_member
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_guild_rank" => db_update
+                    .game_guild_rank
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_hunter_pet" => db_update
                     .game_hunter_pet
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -11831,6 +11917,10 @@ pub struct AppliedDiff<'r> {
     game_guid_allocator: __sdk::TableAppliedDiff<'r, GuidAllocator>,
     game_guid_range: __sdk::TableAppliedDiff<'r, GuidRange>,
     game_guid_range_registry: __sdk::TableAppliedDiff<'r, GuidRangeAssignment>,
+    game_guild: __sdk::TableAppliedDiff<'r, Guild>,
+    game_guild_event: __sdk::TableAppliedDiff<'r, GuildEvent>,
+    game_guild_member: __sdk::TableAppliedDiff<'r, GuildMember>,
+    game_guild_rank: __sdk::TableAppliedDiff<'r, GuildRank>,
     game_hunter_pet: __sdk::TableAppliedDiff<'r, HunterPet>,
     game_hunter_pet_protocol: __sdk::TableAppliedDiff<'r, HunterPetProtocol>,
     game_import_meta: __sdk::TableAppliedDiff<'r, ImportMeta>,
@@ -12599,6 +12689,22 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<GuidRangeAssignment>(
             "game_guid_range_registry",
             &self.game_guid_range_registry,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<Guild>("game_guild", &self.game_guild, event);
+        callbacks.invoke_table_row_callbacks::<GuildEvent>(
+            "game_guild_event",
+            &self.game_guild_event,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<GuildMember>(
+            "game_guild_member",
+            &self.game_guild_member,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<GuildRank>(
+            "game_guild_rank",
+            &self.game_guild_rank,
             event,
         );
         callbacks.invoke_table_row_callbacks::<HunterPet>(
@@ -14010,6 +14116,10 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_guid_allocator_table::register_table(client_cache);
         game_guid_range_table::register_table(client_cache);
         game_guid_range_registry_table::register_table(client_cache);
+        game_guild_table::register_table(client_cache);
+        game_guild_event_table::register_table(client_cache);
+        game_guild_member_table::register_table(client_cache);
+        game_guild_rank_table::register_table(client_cache);
         game_hunter_pet_table::register_table(client_cache);
         game_hunter_pet_protocol_table::register_table(client_cache);
         game_import_meta_table::register_table(client_cache);
@@ -14273,6 +14383,10 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_guid_allocator",
         "game_guid_range",
         "game_guid_range_registry",
+        "game_guild",
+        "game_guild_event",
+        "game_guild_member",
+        "game_guild_rank",
         "game_hunter_pet",
         "game_hunter_pet_protocol",
         "game_import_meta",

@@ -318,6 +318,7 @@ mod go_model;
 // pick where a ghost teleports. Extracted from `world.rs`.
 mod graveyard;
 mod group;
+pub mod guild;
 mod gw;
 mod helpers;
 pub mod hooks;
