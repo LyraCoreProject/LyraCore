@@ -61,7 +61,7 @@ fn paginate(mut rows: Vec<Auction>, offset: u32) -> (Vec<Auction>, u32) {
 
 fn select_active_page(
     rows: impl IntoIterator<Item = Auction>,
-    house_id: u32,
+    market: lyracore_shared::auction::AuctionMarket,
     now_micros: i64,
     offset: u32,
     mut matches: impl FnMut(&Auction) -> bool,
@@ -69,7 +69,7 @@ fn select_active_page(
     paginate(
         rows.into_iter()
             .filter(|row| {
-                row.house == house_id
+                lyracore_shared::auction::market_of(row.house) == market
                     && row.expires_at.to_micros_since_unix_epoch() > now_micros
                     && matches(row)
             })
@@ -151,7 +151,7 @@ impl Coordinator {
         };
         let (rows, total) = select_active_page(
             db.game_auction().iter(),
-            house_id,
+            lyracore_shared::auction::market_of(house_id),
             now_micros,
             offset,
             |row| match &query {
@@ -366,25 +366,44 @@ mod tests {
     }
 
     #[test]
-    fn active_selection_excludes_expired_other_house_and_non_owner_rows_before_totals() {
+    fn active_selection_excludes_expired_other_market_and_non_owner_rows_before_totals() {
+        use lyracore_shared::auction::AuctionMarket;
+
         let mut expired = auction(1);
         expired.expires_at = spacetimedb_sdk::Timestamp::from_micros_since_unix_epoch(10);
         let mut at_deadline = auction(2);
         at_deadline.expires_at = spacetimedb_sdk::Timestamp::from_micros_since_unix_epoch(20);
-        let mut other_house = auction(3);
-        other_house.house = 7;
-        let mut other_owner = auction(4);
+        let mut other_market = auction(3);
+        other_market.house = 7; // Blackwater is neutral, outside the queried Horde market.
+        let mut same_market_other_house = auction(4);
+        same_market_other_house.house = 5; // Thunder Bluff pools into the same Horde market.
+        let mut other_owner = auction(5);
+        other_owner.house = 4;
         other_owner.owner_guid = 2;
-        let owned = auction(5);
+        let mut owned = auction(6);
+        owned.house = 4;
 
-        let rows = vec![expired, at_deadline, other_house, other_owner, owned];
-        let (page, total) = select_active_page(rows, 4, 20, 0, |row| row.owner_guid == 1);
-        assert_eq!(total, 1);
-        assert_eq!(page.iter().map(|row| row.id).collect::<Vec<_>>(), vec![5]);
+        let rows = vec![
+            expired,
+            at_deadline,
+            other_market,
+            same_market_other_house,
+            other_owner,
+            owned,
+        ];
+        let (page, total) =
+            select_active_page(rows, AuctionMarket::Horde, 20, 0, |row| row.owner_guid == 1);
+        assert_eq!(total, 2);
+        assert_eq!(
+            page.iter().map(|row| row.id).collect::<Vec<_>>(),
+            vec![4, 6]
+        );
     }
 
     #[test]
     fn bidder_selection_never_reintroduces_requested_outbid_auctions() {
+        use lyracore_shared::auction::AuctionMarket;
+
         let mut highest = auction(5);
         highest.highest_bidder_guid = 8;
         highest.highest_bid = 107;
@@ -393,9 +412,13 @@ mod tests {
         displaced.highest_bid = 113;
 
         let requested_outbid_ids = [19, 88];
-        let (page, total) = select_active_page(vec![displaced, highest], 4, 20, 0, |row| {
-            bidder_matches(row, 8, &requested_outbid_ids)
-        });
+        let (page, total) = select_active_page(
+            vec![displaced, highest],
+            AuctionMarket::Horde,
+            20,
+            0,
+            |row| bidder_matches(row, 8, &requested_outbid_ids),
+        );
         assert_eq!(total, 1);
         assert_eq!(page.iter().map(|row| row.id).collect::<Vec<_>>(), vec![5]);
     }

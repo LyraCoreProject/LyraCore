@@ -533,6 +533,11 @@ the same route.
 Resolving an auction at buyout or expiry: item and gold to their final owners, displaced bids refunded.
 _Avoid_: resolve, close
 
+**Auction Market**:
+The listing pool shared by the houses of one team: Alliance (houses 1-3), Horde (houses 4-6) and
+neutral (house 7). A bid reaches every listing in its bidder's market, whatever house placed it.
+The house the seller stands at still sets that listing's deposit and cut.
+
 ### World clock and weather
 
 **Realm Clock**:
