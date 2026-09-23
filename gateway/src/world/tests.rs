@@ -6542,6 +6542,7 @@ fn every_group_refusal_reaches_the_client_as_one_party_result() {
             GroupRefusal::NotLeader => PartyResult::NotLeader,
             GroupRefusal::NotInGroup => PartyResult::NotInGroup,
             GroupRefusal::TargetNotInGroup => PartyResult::TargetNotInGroup,
+            GroupRefusal::WrongFaction => PartyResult::PlayerWrongFaction,
             _ => PartyResult::BadPlayerName,
         };
         let mut s = quest_store();

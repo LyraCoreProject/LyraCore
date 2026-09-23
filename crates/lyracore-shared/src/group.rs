@@ -123,10 +123,13 @@ pub enum GroupRefusal {
     IntentAlreadyClaimed,
     /// The Package has suppressed session-less actions for this Character.
     ActionSuppressed,
+    /// The invited Character belongs to the other team. Vanilla's default refuses a party across
+    /// factions (cm:GroupHandler.cpp:80). The Gateway applies this Gate realm-wide.
+    WrongFaction,
 }
 
 impl GroupRefusal {
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 16] = [
         Self::ActorUnavailable,
         Self::InviteSelf,
         Self::NoSuchPlayer,
@@ -142,6 +145,7 @@ impl GroupRefusal {
         Self::InvalidLootRules,
         Self::IntentAlreadyClaimed,
         Self::ActionSuppressed,
+        Self::WrongFaction,
     ];
 
     pub fn as_tag(self) -> &'static str {
@@ -161,6 +165,7 @@ impl GroupRefusal {
             Self::InvalidLootRules => "group:invalid_loot_rules",
             Self::IntentAlreadyClaimed => "group:intent_already_claimed",
             Self::ActionSuppressed => "group:action_suppressed",
+            Self::WrongFaction => "group:wrong_faction",
         }
     }
 

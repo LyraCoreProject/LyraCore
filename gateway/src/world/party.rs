@@ -753,6 +753,11 @@ pub(crate) fn run<St: WorldStore + ?Sized>(
     self_guid: u64,
     op: Op,
 ) -> Result<PartyOutcome> {
+    if let Op::Invite(target) = op {
+        if cross_faction_invite(store, self_guid, target)? {
+            return Ok(GroupRefusal::WrongFaction.into());
+        }
+    }
     let Some(realm) = store.realm_store() else {
         return match op {
             Op::Invite(target) => store.group_invite(account_id, self_guid, target),
@@ -833,6 +838,31 @@ fn invite_gate<St: WorldStore + ?Sized>(store: &St, target: u64) -> Result<Optio
         return Ok(Some(GroupRefusal::TargetOffline));
     }
     Ok(None)
+}
+
+/// Vanilla's default refuses a party across factions (cm:GroupHandler.cpp:80,
+/// `AllowTwoSide.Interaction.Group = 0`). Neither the Module nor Realm-core can read both races, so
+/// the Gateway answers it on both planes, the way mail applies `same_team`. It runs only for a live
+/// target: vanilla looks the target up among online players first, so a missing or offline target
+/// keeps its own Refusal.
+fn cross_faction_invite<St: WorldStore + ?Sized>(
+    store: &St,
+    inviter: u64,
+    target: u64,
+) -> Result<bool> {
+    if !live_anywhere(store, target) {
+        return Ok(false);
+    }
+    let (Some(inviter), Some(target)) = (
+        character_anywhere(store, inviter)?,
+        character_anywhere(store, target)?,
+    ) else {
+        return Ok(false);
+    };
+    Ok(!lyracore_shared::faction::same_team(
+        inviter.race,
+        target.race,
+    ))
 }
 
 /// Claim one subscribed intent on its World Shard, then execute it only for the winning Gateway.

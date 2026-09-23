@@ -1244,6 +1244,87 @@ fn an_invite_to_a_missing_or_offline_target_never_reaches_realm_core() {
     );
 }
 
+/// An Orc, for the faction Gate. Race 2 is Horde; every other fixture Character is a Human.
+const GRUNT: u64 = 8;
+/// An Orc with a character row but no live entity.
+const SLEEPING_GRUNT: u64 = 9;
+
+fn orc(guid: u64, name: &str) -> codec::CharacterView {
+    codec::CharacterView {
+        race: 2,
+        ..character(guid, name)
+    }
+}
+
+/// Vanilla's default refuses a party across factions (cm:GroupHandler.cpp:80,
+/// `AllowTwoSide.Interaction.Group = 0`), after the target lookup and before anything else. The
+/// Gateway reads both races realm-wide, so an Orc standing on another Shard is refused before the
+/// authority is touched.
+#[test]
+fn a_cross_faction_invite_is_refused_before_realm_core() {
+    let calls: ShardCallLog = Default::default();
+    let realm = std::sync::Arc::new(InMemoryStore {
+        shard: "lyracore-realm".into(),
+        calls: calls.clone(),
+        is_realm: true,
+        ..Default::default()
+    });
+    let world = std::sync::Arc::new(InMemoryStore {
+        shard: "world".into(),
+        calls: calls.clone(),
+        realm: Some(realm.clone()),
+        characters: vec![character(GINGER, "Ginger")],
+        live_guids: vec![GINGER],
+        ..Default::default()
+    });
+    let horde = std::sync::Arc::new(InMemoryStore {
+        shard: "horde".into(),
+        calls: calls.clone(),
+        realm: Some(realm.clone()),
+        characters: vec![orc(GRUNT, "Grunt"), orc(SLEEPING_GRUNT, "Sleeper")],
+        live_guids: vec![GRUNT],
+        ..Default::default()
+    });
+    for shard in [&world, &horde] {
+        *shard.peers.lock().unwrap() = vec![world.clone(), horde.clone()];
+    }
+
+    assert_eq!(
+        party::run(world.as_ref(), 7, GINGER, party::Op::Invite(GRUNT)).unwrap(),
+        PartyOutcome::Refused(GroupRefusal::WrongFaction)
+    );
+    assert_eq!(
+        party::run(world.as_ref(), 7, GINGER, party::Op::Invite(SLEEPING_GRUNT)).unwrap(),
+        PartyOutcome::Refused(GroupRefusal::TargetOffline),
+        "an offline target is refused as offline first, as vanilla's online lookup does"
+    );
+    assert!(
+        realm.party.lock().unwrap().ops.is_empty(),
+        "a cross-faction invite must not reach the authority"
+    );
+}
+
+/// The unsharded plane refuses the same invite before the player-facing reducer runs.
+#[test]
+fn an_unsharded_gateway_refuses_a_cross_faction_invite_too() {
+    let calls: ShardCallLog = Default::default();
+    let store = std::sync::Arc::new(InMemoryStore {
+        shard: "world".into(),
+        calls: calls.clone(),
+        characters: vec![character(GINGER, "Ginger"), orc(GRUNT, "Grunt")],
+        live_guids: vec![GINGER, GRUNT],
+        ..Default::default()
+    });
+    assert_eq!(
+        party::run(store.as_ref(), 7, GINGER, party::Op::Invite(GRUNT)).unwrap(),
+        PartyOutcome::Refused(GroupRefusal::WrongFaction)
+    );
+    assert!(
+        store.group_invites.lock().unwrap().is_empty(),
+        "the player-facing invite reducer must not run"
+    );
+}
+
 /// The moved ONLINE gate has to be the module's gate, not a lookalike.
 ///
 /// The module refuses an invite when the target has no `game_world_entity` row, and says so in its
