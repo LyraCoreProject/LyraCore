@@ -660,13 +660,13 @@ parity_test!(parity_game_region_assignment, "game_region_assignment", lyracore_m
 // `game_group_event` earns its entry twice over — it is the one table this slice CHANGED (the
 // END-appended `recipient_guid`), and the gateway decodes it on two different connections.
 parity_test!(parity_game_group, "game_group", lyracore_module::Group, bindings::group_type::Group, {
-    group_id, leader_guid, loot_method, loot_threshold, rr_cursor, master_looter_guid,
+    group_id, leader_guid, loot_method, loot_threshold, rr_cursor, master_looter_guid, group_type,
 });
 parity_test!(parity_game_group_roster_revision, "game_group_roster_revision", lyracore_module::GroupRosterRevision, bindings::group_roster_revision_type::GroupRosterRevision, {
     group_id, revision, active,
 });
 parity_test!(parity_game_group_member, "game_group_member", lyracore_module::GroupMember, bindings::group_member_type::GroupMember, {
-    id, group_id, character_guid, owner_identity,
+    id, group_id, character_guid, owner_identity, raid_slot,
 });
 parity_test!(parity_game_group_member_partition, "game_group_member_partition", lyracore_module::GroupMemberPartition, bindings::group_member_partition_type::GroupMemberPartition, {
     character_guid, group_id, membership_revision, member_active, map_id, instance_id,

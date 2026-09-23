@@ -320,7 +320,7 @@ fn realm_core_party_requests_use_the_account_claim_without_a_world_shard_fence()
     realm.assert_call("install_guid_range", &["0"]);
     claim(&realm, "401");
     let first = actor(&token(1, 401));
-    realm.assert_call("realm_group_op", &["0", &first, "2", "0", "0"]);
+    realm.assert_call("realm_group_op", &["0", &first, "2", "0", "0", "0"]);
     let invites = realm.query_rows("SELECT * FROM game_group_invite");
     assert_eq!(invites.len(), 1);
     realm.assert_sql("UPDATE game_account_claim SET expires_micros = 0");
@@ -328,12 +328,12 @@ fn realm_core_party_requests_use_the_account_claim_without_a_world_shard_fence()
     refused(
         &realm,
         "realm_group_op",
-        &["0", &first, "3", "0", "0"],
+        &["0", &first, "3", "0", "0", "0"],
         "STALE_WORLD_SESSION",
     );
     assert_eq!(realm.query_rows("SELECT * FROM game_group_invite"), invites);
     let current = actor(&token(2, 402));
-    realm.assert_call("realm_group_op", &["0", &current, "3", "0", "0"]);
+    realm.assert_call("realm_group_op", &["0", &current, "3", "0", "0", "0"]);
     assert_eq!(realm.query_rows("SELECT * FROM game_group_invite").len(), 2);
     assert!(realm
         .query_rows("SELECT * FROM game_account_fence")

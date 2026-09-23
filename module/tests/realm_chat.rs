@@ -47,8 +47,8 @@ fn a_party_line_is_one_row_naming_every_member_of_the_realm_core_party() {
     realm.assert_call("claim_operator", &[]);
     realm.assert_call("install_guid_range", &["0"]);
     // Characters 1 and 2 form a party on Realm-core, which holds no Character rows at all.
-    realm.assert_call("realm_group_op", &["0", &actor("1"), "2", "0", "0"]);
-    realm.assert_call("realm_group_op", &["1", &actor("2"), "0", "0", "0"]);
+    realm.assert_call("realm_group_op", &["0", &actor("1"), "2", "0", "0", "0"]);
+    realm.assert_call("realm_group_op", &["1", &actor("2"), "0", "0", "0", "0"]);
 
     let common = party_request(7, "  form up  ");
     let updates = realm.capture_updates(REALM_CHAT_ROWS, 1, || {

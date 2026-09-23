@@ -26,17 +26,18 @@
 //! picked up by `gateway/src/world/party.rs`'s `run_bot_invite`. The same row carries a bot's
 //! decision to LEAVE its party, which meets the identical authority wall.
 //!
-//! Vanilla-parity notes for this slice: party cap 5; kill XP splits EVENLY among in-range living
-//! members (each member's grey-clamp applies to their OWN level, so a too-high member naturally
-//! gets 0) — vanilla's sum-of-levels weighting + 3/4/5-member bonus multipliers are a documented
-//! follow-up, not this slice. Kill quest-credit goes to every in-range member (vanilla). Group
-//! LOOT methods, round-robin, and raid groups are out of scope.
+//! Vanilla-parity notes: a Party caps at 5 members. Its leader may convert it to a Raid of up to 40
+//! in 8 Subgroups, and it never converts back. Kill XP splits EVENLY among in-range living members
+//! (each member's grey-clamp applies to their OWN level, so a too-high member naturally gets 0) —
+//! vanilla's sum-of-levels weighting, the 3/4/5-member bonus multipliers and the raid XP rate are a
+//! documented follow-up. Kill quest-credit goes to every in-range member (vanilla).
 
 use spacetimedb::{reducer, table, Identity, ReducerContext, Table, Timestamp};
 
 use crate::{game_character, game_melee_attack, game_pending_cast, game_threat, game_world_entity};
 
 pub use lyracore_shared::group::GROUP_MAX_MEMBERS;
+use lyracore_shared::group::{GroupKind, RaidSlot, RosterMember, RosterPayload, RAID_MAX_MEMBERS};
 
 /// Group kill-reward radius² — members farther than this from the slain creature get neither XP
 /// nor quest credit. Vanilla's `sWorld.getConfig(CONFIG_FLOAT_GROUP_XP_DISTANCE)` = 74.0 yd.
@@ -57,14 +58,11 @@ pub mod loot_method {
     pub const NEED_BEFORE_GREED: u8 = 4;
 }
 
-/// A party. `leader_guid` is a member's character guid; leadership transfers on leader-leave and
-/// the group disbands below 2 members. Public + no RLS (membership is world-visible state, like
-/// `game_world_entity`). NOT gateway-subscribed (verified vs connection.rs, 187 slice 0):
-/// SMSG_GROUP_LIST is driven by the module's group event rows, not a direct read of this table —
-/// the loot-method columns below ride the SAME roster-payload relay (`roster_payload`), so adding
-/// them does NOT require subscribing this table or hand-syncing a gateway binding (verified: no
-/// `game_group`/`game_group_member` read anywhere under `gateway/src/` outside the dead,
-/// never-subscribed generated binding scaffolding itself).
+/// A Group: a Party, or a Raid its leader converted. `leader_guid` is a member's character guid;
+/// leadership transfers on leader-leave and the group disbands below 2 members. Public + no RLS
+/// (membership is world-visible state, like `game_world_entity`). `SMSG_GROUP_LIST` is driven by
+/// the module's LIST event rows (`roster_payload`), not by a read of this table. The Gateway
+/// coordinator caches it to read Realm-core's roster and push each World Shard's mirror.
 /// [entity]
 #[table(accessor = game_group, public)]
 pub struct Group {
@@ -87,6 +85,9 @@ pub struct Group {
     pub rr_cursor: u32,
     #[default(0u64)]
     pub master_looter_guid: u64,
+    /// [`GroupKind`] as its wire byte. END-appended, so every earlier row reads as a Party.
+    #[default(0u8)]
+    pub group_type: u8,
 }
 
 /// One member row per character in a group. `character_guid` is unique across the table — a
@@ -104,6 +105,10 @@ pub struct GroupMember {
     pub group_id: u64,
     pub character_guid: u64,
     pub owner_identity: Identity,
+    /// [`RaidSlot`] as its wire byte. END-appended, so every earlier member reads as Subgroup 0
+    /// without the Assistant flag, which every Party member is.
+    #[default(0u8)]
+    pub raid_slot: u8,
 }
 
 /// Realm-core's order for one complete party roster and each World Shard mirror's last accepted
@@ -401,7 +406,7 @@ use lyracore_shared::group::{bot_op, event_kind as group_event_kind, GroupRefusa
 /// A per-recipient group notification (the `game_whisper_event` pattern): public + RLS-scoped so
 /// only the recipient's connection sees it; reaped by the shared event GC. `other_name` is
 /// resolved at write time so the gateway never needs a name lookup for INVITE/DECLINE. LIST events
-/// carry the FULL roster snapshot in `payload` ("leader|guid,name,online;...") — built in the SAME
+/// carry the FULL roster snapshot in `payload` ([`RosterPayload`]) — built in the SAME
 /// transaction as the membership change, so the gateway relay never races a cross-connection
 /// coordinator read (the module is the one place the roster is guaranteed consistent). [event]
 #[table(accessor = game_group_event, public, index(accessor = by_recipient, btree(columns = [recipient_identity])))]
@@ -414,7 +419,7 @@ pub struct GroupEvent {
     pub other_guid: u64,
     pub other_name: String,
     pub created_at: Timestamp,
-    // LIST roster snapshot ("leader|guid,name,online;..."); empty for the other kinds. A plain
+    // LIST roster snapshot (`RosterPayload::encode`); empty for the other kinds. A plain
     // column (String cannot be #[default]-ed — the macro's typecheck is const): fine because this
     // whole table has no pre-payload row to migrate anywhere real.
     pub payload: String,
@@ -472,44 +477,135 @@ pub(crate) fn push_event(
     });
 }
 
-/// The LIST payload rows, encoded by the SHARED grammar (`lyracore_shared::group::encode_roster` —
-/// delimiter defense included). "online" = a live world entity exists (a session-less playerbot
-/// counts). Carries the group's CURRENT loot method/threshold/master (work-item 187) alongside the
-/// roster, so a `CMSG_LOOT_METHOD` change re-renders the party frame's loot block through this same
-/// relay — no separate gateway round trip needed.
+/// The LIST payload, encoded by the SHARED grammar ([`RosterPayload`], delimiter defense
+/// included). Carries the group's CURRENT loot rules, kind and every Raid Slot alongside the
+/// roster, so any of those changing re-renders the party frame through this same relay. Presence is
+/// the Gateway's to add: this database may be Realm-core, which has no live entities.
+///
 /// `None` means the `game_group` row is MISSING — every caller treats that as a hard invariant
 /// violation (they've either just inserted the row or already `.ok_or("group row missing")?`'d
-/// their own read of it), so there is no plausible roster to fabricate here. Previously this
-/// synthesized a fake one (leader 0, GROUP method, threshold 2, no master) that looked like a
-/// real, empty party.
+/// their own read of it), so there is no plausible roster to fabricate here.
 fn roster_payload(ctx: &ReducerContext, group_id: u64) -> Option<String> {
     let group = ctx.db.game_group().group_id().find(group_id)?;
-    let members: Vec<(u64, String, bool)> = members_of(ctx, group_id)
+    let members = members_of(ctx, group_id)
         .into_iter()
-        .map(|m| {
-            let name = ctx
+        .map(|m| RosterMember {
+            guid: m.character_guid,
+            name: ctx
                 .db
                 .game_character()
                 .guid()
                 .find(m.character_guid)
                 .map(|c| c.name)
-                .unwrap_or_default();
-            let online = ctx
-                .db
-                .game_world_entity()
-                .guid()
-                .find(m.character_guid)
-                .is_some();
-            (m.character_guid, name, online)
+                .unwrap_or_default(),
+            slot: raid_slot_of(&m),
         })
         .collect();
-    Some(lyracore_shared::group::encode_roster(
-        group.leader_guid,
-        group.loot_method,
-        group.loot_threshold,
-        group.master_looter_guid,
-        &members,
-    ))
+    Some(
+        RosterPayload {
+            leader: group.leader_guid,
+            loot_method: group.loot_method,
+            loot_threshold: group.loot_threshold,
+            master_looter_guid: group.master_looter_guid,
+            kind: group_kind_of(&group),
+            members,
+        }
+        .encode(),
+    )
+}
+
+/// A stored `group_type`. Only [`GroupKind::wire`] ever writes the column, so the Party fallback
+/// is unreachable; it is the safe reading because it keeps the smaller member cap.
+pub(crate) fn group_kind_of(group: &Group) -> GroupKind {
+    GroupKind::from_wire(group.group_type).unwrap_or_default()
+}
+
+/// A stored `raid_slot`. Only [`RaidSlot::wire`] ever writes the column, so the fallback to
+/// Subgroup 0 without the Assistant flag is unreachable.
+pub(crate) fn raid_slot_of(member: &GroupMember) -> RaidSlot {
+    RaidSlot::from_wire(member.raid_slot).unwrap_or_default()
+}
+
+/// Whether `character_guid` is in a Raid, read from this database's own rows: the authority on
+/// Realm-core, the mirror on a World Shard.
+#[expect(
+    dead_code,
+    reason = "raid quest credit on World Shards is the first caller"
+)]
+pub(crate) fn in_raid(ctx: &ReducerContext, character_guid: u64) -> bool {
+    group_of(ctx, character_guid)
+        .and_then(|member| ctx.db.game_group().group_id().find(member.group_id))
+        .is_some_and(|group| group_kind_of(&group) == GroupKind::Raid)
+}
+
+/// Whether `member` may manage `group`'s Raid: its leader, or an Assistant.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "subgroup moves, leadership and Group Broadcasts are the first callers"
+    )
+)]
+pub(crate) fn manages_raid(group: &Group, member: &GroupMember) -> bool {
+    group.leader_guid == member.character_guid || raid_slot_of(member).is_assistant()
+}
+
+/// Who receives one Group Broadcast.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "leadership, Group Broadcasts and raid chat construct the narrower audiences"
+    )
+)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GroupAudience {
+    Everyone,
+    AllExcept(u64),
+    Leader,
+    Subgroup(u8),
+}
+
+impl GroupAudience {
+    fn includes(self, group: &Group, member: &GroupMember) -> bool {
+        match self {
+            Self::Everyone => true,
+            Self::AllExcept(excluded) => member.character_guid != excluded,
+            Self::Leader => member.character_guid == group.leader_guid,
+            Self::Subgroup(subgroup) => raid_slot_of(member).subgroup() == subgroup,
+        }
+    }
+}
+
+/// Push one `game_group_event` row per member of `group_id` in `audience`. Every Gateway relays
+/// the rows addressed to its own sessions. A missing group reaches nobody.
+pub(crate) fn group_broadcast(
+    ctx: &ReducerContext,
+    group_id: u64,
+    audience: GroupAudience,
+    kind: u8,
+    other_guid: u64,
+    payload: String,
+) {
+    let Some(group) = ctx.db.game_group().group_id().find(group_id) else {
+        return;
+    };
+    for member in members_of(ctx, group_id) {
+        if audience.includes(&group, &member) {
+            push_event(
+                ctx,
+                member.character_guid,
+                kind,
+                other_guid,
+                payload.clone(),
+            );
+        }
+    }
+}
+
+/// Whether a Group of `kind` with `member_count` members can take one more.
+fn has_room(kind: GroupKind, member_count: usize) -> bool {
+    member_count < kind.member_cap()
 }
 
 /// The group a character belongs to, if any.
@@ -638,7 +734,8 @@ pub fn companion_target_facts(
 }
 
 /// Recheck the Gateway-certified authority projection and the bot Gate in the target transaction.
-/// `None` means Package application may proceed; `Some` is a terminal typed Refusal.
+/// `None` means Package application may proceed; `Some` is a terminal typed Refusal. Companion
+/// Orders keep the Party cap, so a Raid above five members reads as a stale mirror.
 pub(crate) fn admit_party_command(
     ctx: &ReducerContext,
     admitted: &crate::bridge::AdmittedClientCommand,
@@ -709,6 +806,8 @@ pub struct PartyFactsUnavailable {
 
 /// Whether another current party member is certified in `partition`. This portal Gate reads only
 /// the bounded roster and exact member projections; combat facts cannot make location unavailable.
+/// The bound stays at the Party cap on purpose: a Raid above five reads as unavailable, as the
+/// 5-player dungeon cap in `instance.rs` also refuses it.
 pub(crate) fn has_known_party_member_in_partition(
     ctx: &ReducerContext,
     character_guid: u64,
@@ -786,6 +885,8 @@ fn known_party_partition(
 /// member, one pending cast for one member, or 24 aggregate enemy GUIDs. Each retained enemy permits
 /// 16 threat sources, 64 control auras, and three effects on a pending spell. A missing parent Group
 /// stops with `MissingGroup`; neither failure returns facts selected from an arbitrary prefix.
+/// The five-member bound is deliberate for Raids too: bots keep the Party cap, so a Raid above
+/// five has no party facts.
 #[cfg_attr(not(has_packages), allow(dead_code))]
 pub fn party_facts(
     ctx: &ReducerContext,
@@ -1057,15 +1158,14 @@ fn push_list_to_all(ctx: &ReducerContext, group_id: u64) {
         );
         return;
     };
-    for m in members_of(ctx, group_id) {
-        push_event(
-            ctx,
-            m.character_guid,
-            group_event_kind::LIST,
-            0,
-            payload.clone(),
-        );
-    }
+    group_broadcast(
+        ctx,
+        group_id,
+        GroupAudience::Everyone,
+        group_event_kind::LIST,
+        0,
+        payload,
+    );
 }
 
 // ===========================================================================================
@@ -1131,10 +1231,10 @@ fn invite_core_on(
     }
     // The inviter having NO group yet is fine (they'll lead a brand-new one) — only propagate
     // NotLeader (inviter is in a group but isn't its leader); a led group additionally enforces the
-    // member cap.
+    // member cap of its kind.
     match led_group_of(ctx, inviter_guid) {
-        Ok((m, _group)) => {
-            if members_of(ctx, m.group_id).len() >= GROUP_MAX_MEMBERS {
+        Ok((m, group)) => {
+            if !has_room(group_kind_of(&group), members_of(ctx, m.group_id).len()) {
                 return Err(GroupRefusal::GroupFull.into());
             }
         }
@@ -1233,7 +1333,7 @@ fn accept_invite_on(
         Plane::RealmCore => None,
     };
     let members = ctx.db.game_group_member();
-    let group_id = match checked_group_membership(ctx, inviter_guid)? {
+    let (group_id, slot) = match checked_group_membership(ctx, inviter_guid)? {
         Some((m, group)) => {
             // Re-run the invite-time leadership gate: the invite was issued when the inviter was
             // the leader (or ungrouped and about to lead). If they since joined a DIFFERENT group
@@ -1242,10 +1342,17 @@ fn accept_invite_on(
             if group.leader_guid != inviter_guid {
                 return Err(GroupRefusal::InviterUnavailable.into());
             }
-            if members_of(ctx, m.group_id).len() >= GROUP_MAX_MEMBERS {
+            let current = members_of(ctx, m.group_id);
+            let kind = group_kind_of(&group);
+            if !has_room(kind, current.len()) {
                 return Err(GroupRefusal::GroupFull.into());
             }
-            m.group_id
+            let slot = match kind {
+                GroupKind::Party => RaidSlot::default(),
+                GroupKind::Raid => RaidSlot::for_raid_joiner(current.iter().map(raid_slot_of))
+                    .ok_or(GroupRefusal::GroupFull)?,
+            };
+            (m.group_id, slot)
         }
         None => {
             // First acceptance forms the group: the inviter leads and joins it here.
@@ -1258,14 +1365,16 @@ fn accept_invite_on(
                 loot_threshold: 2,
                 rr_cursor: 0,
                 master_looter_guid: 0,
+                group_type: GroupKind::Party.wire(),
             });
             members.insert(GroupMember {
                 id: 0,
                 group_id: group.group_id,
                 character_guid: inviter_guid,
                 owner_identity: crate::helpers::event_recipient_identity(inviter_identity),
+                raid_slot: RaidSlot::default().wire(),
             });
-            group.group_id
+            (group.group_id, RaidSlot::default())
         }
     };
     let acceptor_identity = match plane {
@@ -1283,6 +1392,7 @@ fn accept_invite_on(
         group_id,
         character_guid: acceptor_guid,
         owner_identity: acceptor_identity,
+        raid_slot: slot.wire(),
     });
     push_list_to_all(ctx, group_id);
     Ok(())
@@ -1428,6 +1538,29 @@ pub(crate) fn valid_loot_threshold(threshold: u8) -> bool {
     threshold <= 6
 }
 
+/// `CMSG_GROUP_RAID_CONVERT`: the leader converts its Party to a Raid (cm:GroupHandler.cpp:473-490).
+/// Every member keeps the Subgroup 0 slot a Party member holds (cm:Group.cpp:208-222), and every
+/// member receives the raid list. Converting a Raid again succeeds and changes nothing, so it
+/// writes no row and sends no list; cmangos does not check it either.
+fn raid_convert_on(ctx: &ReducerContext, actor_guid: u64) -> Result<RosterChange, GroupOpError> {
+    let (member, mut group) = led_group_of(ctx, actor_guid)?;
+    if group_kind_of(&group) == GroupKind::Raid {
+        return Ok(RosterChange::Unchanged);
+    }
+    group.group_type = GroupKind::Raid.wire();
+    ctx.db.game_group().group_id().update(group);
+    push_list_to_all(ctx, member.group_id);
+    Ok(RosterChange::Changed)
+}
+
+/// Whether a successful op changed what the Roster Revision orders: the member list, leader, loot
+/// rules, Group kind or a Raid Slot. Only a change advances the revision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RosterChange {
+    Changed,
+    Unchanged,
+}
+
 /// The single membership-removal core (voluntary leave, kick, character delete): drops the member
 /// row, notifies the leaver, transfers leadership if the leader left, and DISBANDS below 2 members
 /// (vanilla: a party of one is no party). Idempotent for a guid not in any group.
@@ -1552,8 +1685,8 @@ pub(crate) enum Plane {
 /// and it passes the guid it already authenticated for that socket (`InWorld::self_guid`) — the same
 /// trust boundary `set_character_shard` and `establish_session` sit on.
 ///
-/// One reducer rather than six: see [`lyracore_shared::group::realm_op`] for that trade and for the
-/// argument slots each op reads.
+/// One reducer rather than one per op: see [`lyracore_shared::group::realm_op`] for that trade and
+/// for the argument slots each op reads.
 #[reducer]
 pub fn realm_group_op(
     ctx: &ReducerContext,
@@ -1562,28 +1695,35 @@ pub fn realm_group_op(
     target_guid: u64,
     arg_a: u8,
     arg_b: u8,
+    arg_c: u64,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     use lyracore_shared::group::realm_op;
+    // No op reads `arg_c` yet; `realm_op` names the ops it is reserved for.
+    let _ = arg_c;
     // An op byte this module does not know is a gateway newer than the module — a deployment fault,
     // not a party outcome, so it stays an untagged error the gateway treats as a failure.
     let before_groups = realm_op_groups(ctx, op, actor_guid, target_guid);
+    use RosterChange::{Changed, Unchanged};
     let ran = match op {
-        realm_op::INVITE => invite_core_on(ctx, Plane::RealmCore, actor_guid, target_guid),
-        realm_op::ACCEPT => accept_invite_on(ctx, Plane::RealmCore, actor_guid),
-        realm_op::DECLINE => decline_invite_on(ctx, actor_guid),
-        realm_op::LEAVE => leave_group_on(ctx, actor_guid),
-        realm_op::UNINVITE => uninvite_on(ctx, actor_guid, target_guid),
+        realm_op::INVITE => {
+            invite_core_on(ctx, Plane::RealmCore, actor_guid, target_guid).map(|()| Unchanged)
+        }
+        realm_op::ACCEPT => accept_invite_on(ctx, Plane::RealmCore, actor_guid).map(|()| Changed),
+        realm_op::DECLINE => decline_invite_on(ctx, actor_guid).map(|()| Unchanged),
+        realm_op::LEAVE => leave_group_on(ctx, actor_guid).map(|()| Changed),
+        realm_op::UNINVITE => uninvite_on(ctx, actor_guid, target_guid).map(|()| Changed),
         // `CMSG_LOOT_METHOD`'s own field order: setting, master, threshold.
-        realm_op::LOOT_METHOD => set_loot_method_on(ctx, actor_guid, arg_a, target_guid, arg_b),
+        realm_op::LOOT_METHOD => {
+            set_loot_method_on(ctx, actor_guid, arg_a, target_guid, arg_b).map(|()| Changed)
+        }
+        realm_op::RAID_CONVERT => raid_convert_on(ctx, actor_guid),
         other => return Err(format!("unknown realm group op {other}")),
     };
-    ran.map_err(|error| group_op_error(error, &format!("realm group op {op} for {actor_guid}")))?;
-    if matches!(
-        op,
-        realm_op::ACCEPT | realm_op::LEAVE | realm_op::UNINVITE | realm_op::LOOT_METHOD
-    ) {
+    let change = ran
+        .map_err(|error| group_op_error(error, &format!("realm group op {op} for {actor_guid}")))?;
+    if change == Changed {
         let after_groups = realm_op_groups(ctx, op, actor_guid, target_guid);
         let touched: std::collections::BTreeSet<_> = before_groups
             .iter()
@@ -1682,6 +1822,9 @@ fn next_group_revision(current: Option<u64>, was_active: bool) -> u64 {
 /// Mechanical by design — no leadership arbitration, no disband rule, no roll resolution. Those are
 /// decisions, and decisions belong to the authority. An empty `members` is the disband/last-member
 /// case and deletes the group row.
+///
+/// `group_kind` is the [`GroupKind`] byte and `raid_slots[n]` is `members[n]`'s [`RaidSlot`] byte.
+/// A length mismatch, an unknown kind or an invalid slot refuses the whole push.
 #[reducer]
 #[allow(clippy::too_many_arguments)] // The roster and initiating Actor are the reducer wire contract.
 pub fn sync_group_mirror(
@@ -1695,6 +1838,8 @@ pub fn sync_group_mirror(
     request_actor: crate::SessionActor,
     partitions: Vec<GroupMemberPartition>,
     roster_revision: u64,
+    group_kind: u8,
+    raid_slots: Vec<u8>,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     crate::account_ownership::require_actor(ctx, request_actor)?;
@@ -1704,11 +1849,12 @@ pub fn sync_group_mirror(
     if roster_revision == 0 {
         return Err("group mirror has no Realm roster revision".to_string());
     }
-    if members.len() > GROUP_MAX_MEMBERS || partitions.len() > GROUP_MAX_MEMBERS * 2 {
+    if members.len() > RAID_MAX_MEMBERS || partitions.len() > RAID_MAX_MEMBERS * 2 {
         return Err(
-            "group mirror exceeds the bounded current and departed party-member limit".to_string(),
+            "group mirror exceeds the bounded current and departed group-member limit".to_string(),
         );
     }
+    let (kind, slots) = mirror_kind_and_slots(&members, group_kind, &raid_slots)?;
     let mut partition_guids = std::collections::BTreeSet::new();
     for partition in &partitions {
         if partition.group_id != group_id
@@ -1752,7 +1898,9 @@ pub fn sync_group_mirror(
                 && (group.leader_guid != leader_guid
                     || group.loot_method != loot_method_setting
                     || group.loot_threshold != loot_threshold
-                    || group.master_looter_guid != master_looter_guid)
+                    || group.master_looter_guid != master_looter_guid
+                    || group_kind_of(&group) != kind
+                    || mirror_slots_differ(ctx, group_id, &slots))
             {
                 return Err("group mirror conflicts with the accepted party rules".to_string());
             }
@@ -1856,6 +2004,7 @@ pub fn sync_group_mirror(
             g.loot_method = loot_method_setting;
             g.loot_threshold = loot_threshold;
             g.master_looter_guid = master_looter_guid;
+            g.group_type = kind.wire();
             groups.group_id().update(g);
         }
         None => {
@@ -1868,9 +2017,13 @@ pub fn sync_group_mirror(
                 // this shard's kills and means nothing on another. A fresh mirror starts it at 0.
                 rr_cursor: 0,
                 master_looter_guid,
+                group_type: kind.wire(),
             });
         }
     }
+    write_mirror_slots(ctx, group_id, &slots);
+    // `slots` is keyed by `members`, which equals the effective roster here, so every arriving
+    // member has an entry and the default below is unreachable.
     for guid in arriving {
         // The identity binding is this shard's, re-derived here the same way `player_login` restamps
         // every other character-owned row. A member who has never logged in HERE — or who is mid-hop,
@@ -1884,6 +2037,7 @@ pub fn sync_group_mirror(
             group_id,
             character_guid: guid,
             owner_identity,
+            raid_slot: slots.get(&guid).copied().unwrap_or_default().wire(),
         });
     }
     let row = GroupRosterRevision {
@@ -1899,7 +2053,69 @@ pub fn sync_group_mirror(
     Ok(())
 }
 
-/// Acknowledged Realm-core party authority read for one companion command attempt.
+/// Check the kind byte and one Raid Slot byte per member, and key the slots by member guid. Pure.
+fn mirror_kind_and_slots(
+    members: &[u64],
+    group_kind: u8,
+    raid_slots: &[u8],
+) -> Result<(GroupKind, std::collections::BTreeMap<u64, RaidSlot>), String> {
+    let kind = GroupKind::from_wire(group_kind)
+        .ok_or_else(|| format!("group mirror has unknown group kind {group_kind}"))?;
+    if raid_slots.len() != members.len() {
+        return Err(format!(
+            "group mirror has {} Raid Slots for {} members",
+            raid_slots.len(),
+            members.len()
+        ));
+    }
+    let slots = members
+        .iter()
+        .zip(raid_slots)
+        .map(|(&guid, &byte)| {
+            RaidSlot::from_wire(byte)
+                .map(|slot| (guid, slot))
+                .ok_or_else(|| format!("group mirror has invalid Raid Slot {byte} for {guid}"))
+        })
+        .collect::<Result<_, _>>()?;
+    Ok((kind, slots))
+}
+
+/// Give every mirrored member of `group_id` the Raid Slot `slots` names. `sync_group_mirror` keys
+/// `slots` by the effective roster, so every remaining row has an entry.
+fn write_mirror_slots(
+    ctx: &ReducerContext,
+    group_id: u64,
+    slots: &std::collections::BTreeMap<u64, RaidSlot>,
+) {
+    let member_tbl = ctx.db.game_group_member();
+    for mut row in member_tbl.by_group().filter(&group_id).collect::<Vec<_>>() {
+        let slot = slots.get(&row.character_guid).copied().unwrap_or_default();
+        if row.raid_slot != slot.wire() {
+            row.raid_slot = slot.wire();
+            member_tbl.id().update(row);
+        }
+    }
+}
+
+/// Whether a mirrored member of `group_id` holds another Raid Slot than `slots` gives it.
+fn mirror_slots_differ(
+    ctx: &ReducerContext,
+    group_id: u64,
+    slots: &std::collections::BTreeMap<u64, RaidSlot>,
+) -> bool {
+    ctx.db
+        .game_group_member()
+        .by_group()
+        .filter(&group_id)
+        .any(|row| {
+            slots
+                .get(&row.character_guid)
+                .is_some_and(|slot| slot.wire() != row.raid_slot)
+        })
+}
+
+/// Acknowledged Realm-core party authority read for one companion command attempt. Companion
+/// Orders keep the Party cap, so a Raid above five members reads as a stale mirror.
 #[reducer]
 pub fn admit_party_command_authority(
     ctx: &ReducerContext,
@@ -2182,6 +2398,85 @@ mod tests {
         // order-independent
     }
 
+    // ---- Raids ----
+
+    fn raid_member(character_guid: u64, subgroup: u8, assistant: bool) -> GroupMember {
+        GroupMember {
+            id: character_guid,
+            group_id: 7,
+            character_guid,
+            owner_identity: Identity::ZERO,
+            raid_slot: RaidSlot::new(subgroup, assistant).unwrap().wire(),
+        }
+    }
+
+    #[test]
+    fn the_member_cap_follows_the_group_kind() {
+        assert!(has_room(GroupKind::Party, 4));
+        assert!(!has_room(GroupKind::Party, 5));
+        assert!(has_room(GroupKind::Raid, 5));
+        assert!(has_room(GroupKind::Raid, 39));
+        assert!(!has_room(GroupKind::Raid, 40));
+    }
+
+    fn raid_led_by(leader_guid: u64) -> Group {
+        Group {
+            group_id: 7,
+            leader_guid,
+            loot_method: loot_method::GROUP,
+            loot_threshold: 2,
+            rr_cursor: 0,
+            master_looter_guid: 0,
+            group_type: GroupKind::Raid.wire(),
+        }
+    }
+
+    #[test]
+    fn each_group_audience_selects_its_members() {
+        let group = raid_led_by(1);
+        let members = [
+            raid_member(1, 0, false),
+            raid_member(2, 0, true),
+            raid_member(3, 1, false),
+        ];
+        let selected = |audience: GroupAudience| -> Vec<u64> {
+            members
+                .iter()
+                .filter(|member| audience.includes(&group, member))
+                .map(|member| member.character_guid)
+                .collect()
+        };
+        assert_eq!(selected(GroupAudience::Everyone), [1, 2, 3]);
+        assert_eq!(selected(GroupAudience::AllExcept(2)), [1, 3]);
+        assert_eq!(selected(GroupAudience::Leader), [1]);
+        assert_eq!(selected(GroupAudience::Subgroup(0)), [1, 2]);
+        assert_eq!(selected(GroupAudience::Subgroup(1)), [3]);
+    }
+
+    #[test]
+    fn the_leader_and_assistants_manage_a_raid() {
+        let group = raid_led_by(1);
+        assert!(manages_raid(&group, &raid_member(1, 0, false)));
+        assert!(manages_raid(&group, &raid_member(2, 3, true)));
+        assert!(!manages_raid(&group, &raid_member(3, 3, false)));
+    }
+
+    #[test]
+    fn a_mirror_push_needs_a_known_kind_and_one_valid_slot_per_member() {
+        let (kind, slots) = mirror_kind_and_slots(&[10, 11], 1, &[0, 0x81]).unwrap();
+        assert_eq!(kind, GroupKind::Raid);
+        assert_eq!(slots[&11], RaidSlot::new(1, true).unwrap());
+        assert!(mirror_kind_and_slots(&[10, 11], 2, &[0, 0]).is_err());
+        assert!(mirror_kind_and_slots(&[10, 11], 1, &[0]).is_err());
+        assert!(mirror_kind_and_slots(&[10], 1, &[0, 0]).is_err());
+        assert!(mirror_kind_and_slots(&[10, 11], 1, &[0, 8]).is_err());
+        assert_eq!(
+            mirror_kind_and_slots(&[], 0, &[]).map(|(kind, slots)| (kind, slots.len())),
+            Ok((GroupKind::Party, 0)),
+            "the disband tombstone carries no members and no slots"
+        );
+    }
+
     // ---- Group loot methods (work-item 187 slice 1) ----
 
     #[test]
@@ -2423,6 +2718,10 @@ mod tests {
             (
                 "realm_op::LOOT_METHOD =>",
                 "set_loot_method_on(ctx, actor_guid, arg_a, target_guid, arg_b)",
+            ),
+            (
+                "realm_op::RAID_CONVERT =>",
+                "raid_convert_on(ctx, actor_guid)",
             ),
         ] {
             let arm = body.split(op).nth(1).unwrap_or_else(|| {

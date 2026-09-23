@@ -505,6 +505,7 @@ pub fn debug_verify_loot_tag_fixture(ctx: &ReducerContext) -> Result<(), String>
         loot_threshold: 2,
         rr_cursor: 0,
         master_looter_guid: 0,
+        group_type: 0,
     });
     let members = ctx.db.game_group_member();
     for character_guid in [
@@ -517,6 +518,7 @@ pub fn debug_verify_loot_tag_fixture(ctx: &ReducerContext) -> Result<(), String>
             group_id: group.group_id,
             character_guid,
             owner_identity: spacetimedb::Identity::ZERO,
+            raid_slot: 0,
         });
     }
     let grouped = fixture_creature_guid(6);
@@ -533,6 +535,7 @@ pub fn debug_verify_loot_tag_fixture(ctx: &ReducerContext) -> Result<(), String>
         group_id: group.group_id,
         character_guid: LOOT_TAG_FIXTURE_CHARACTER_E,
         owner_identity: spacetimedb::Identity::ZERO,
+        raid_slot: 0,
     });
     expect_live_loot_tag_eligibility(
         ctx,
@@ -546,6 +549,7 @@ pub fn debug_verify_loot_tag_fixture(ctx: &ReducerContext) -> Result<(), String>
         group_id: group.group_id,
         character_guid: LOOT_TAG_FIXTURE_CHARACTER_C,
         owner_identity: spacetimedb::Identity::ZERO,
+        raid_slot: 0,
     });
     expect_live_loot_tag_eligibility(
         ctx,

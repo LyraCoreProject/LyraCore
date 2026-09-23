@@ -597,7 +597,7 @@ fn unsharded_actor_acceptance_obeys_consent_without_restricting_sessionful_chara
         .clone();
     let actor = format!(r#"{{"guid":{inviter},"ownership":null}}"#);
     shard.assert_call("debug_set_sessionless_action_consent", &["1", "false"]);
-    shard.assert_call("realm_group_op", &["0", &actor, "1", "0", "0"]);
+    shard.assert_call("realm_group_op", &["0", &actor, "1", "0", "0", "0"]);
     let invitation = shard.query_rows("SELECT * FROM game_group_invite WHERE target_guid = 1");
     assert_eq!(invitation.len(), 1);
     assert_refusal(

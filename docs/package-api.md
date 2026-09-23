@@ -158,14 +158,15 @@ unknown location, and departed-member fences expose no partition. Enemy facts co
 creatures with current party melee, cast, threat, or control evidence. Hostile Characters are
 excluded because PvP party assistance is outside this contract. An absent membership returns
 `Ok(None)`.
-A Realm-owned roster revision orders the complete member list, leader, and loot rules. World Shards
-retain its disband state, so delayed Gateway fanout cannot remove a newer member, restore older
-party rules, or recreate a disbanded party.
+A Realm-owned Roster Revision orders the complete member list, leader, loot rules, Group kind, and
+every Raid Slot. World Shards retain its disband state, so delayed Gateway fanout cannot remove a
+newer member, restore older party rules, or recreate a disbanded party.
 A membership whose Group row is missing returns `MissingGroup`. `FightLimit` reports more than five
-members, 24 incoming melee or threat rows for one member, one pending cast for one member, or 24
-aggregate enemy GUIDs. For each retained enemy, the read permits 16 threat sources, 64 control auras,
-and three effects on a pending spell. Either failure returns `PartyFactsUnavailable`, so a Package can
-hold party control instead of acting from an arbitrary prefix.
+members, so a Raid above five has no party facts. It also reports 24 incoming melee or threat rows
+for one member, one pending cast for one member, or 24 aggregate enemy GUIDs. For each retained
+enemy, the read permits 16 threat sources, 64 control auras, and three effects on a pending spell.
+Either failure returns `PartyFactsUnavailable`, so a Package can hold party control instead of
+acting from an arbitrary prefix.
 
 ### Package Config
 

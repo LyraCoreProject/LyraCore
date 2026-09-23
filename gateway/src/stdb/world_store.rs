@@ -1374,8 +1374,9 @@ impl WorldStore for Coordinator {
         target_guid: u64,
         arg_a: u8,
         arg_b: u8,
+        arg_c: u64,
     ) -> Result<crate::world::party::PartyOutcome> {
-        self.realm_group_op(op, actor_guid, target_guid, arg_a, arg_b)
+        self.realm_group_op(op, actor_guid, target_guid, arg_a, arg_b, arg_c)
     }
 
     fn deleted_character_party_leave(

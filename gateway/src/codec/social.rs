@@ -694,6 +694,7 @@ mod tests {
 //  Party/group
 // ===========================================================================================
 
+use lyracore_shared::group::{GroupKind, RosterPayload};
 use wow_world_messages::vanilla::{
     GroupListMember, GroupLootSetting, GroupType, ItemQuality, PartyOperation, PartyResult,
     SMSG_GROUP_LIST_group_not_empty, SMSG_GROUP_DECLINE, SMSG_GROUP_INVITE, SMSG_GROUP_LIST,
@@ -725,45 +726,74 @@ pub fn build_party_command_result(
     }
 }
 
-/// `SMSG_GROUP_LIST` for `self_guid`: vanilla lists the OTHER members (the recipient is implied),
-/// plus the leader and the loot block — NOW the group's REAL current loot method/threshold/master
-/// (was fixed FreeForAll/Uncommon). `loot_method`/`loot_threshold` are the module's
-/// wire-matching `group::loot_method::*`/`ItemQuality` byte values — a direct `try_from`, never a
-/// hand-written match table (see `module/src/group.rs`'s doc on why the module adopted the wire
-/// ordering verbatim). An out-of-range byte (shouldn't happen — the module validates both before
-/// storing) falls back to FreeForAll/Uncommon rather than failing the whole packet. `members` is the
-/// FULL roster `(guid, name, online)` from the coordinator read; the recipient is filtered out here
-/// so every member can share one roster snapshot.
+/// `SMSG_GROUP_LIST` for `self_guid` (cm:Group.cpp:680-708): the group type, the viewer's own Raid
+/// Slot as `flags`, then the OTHER members (the recipient is implied) with their own Raid Slots, the
+/// leader, and the loot block. `roster` is the FULL roster with names already resolved; the
+/// recipient is filtered out here so every member can share one roster snapshot. `online` answers
+/// presence per member guid.
+///
+/// `loot_method`/`loot_threshold` are the module's wire-matching `group::loot_method::*`/
+/// `ItemQuality` byte values — a direct `try_from`, never a hand-written match table. An
+/// out-of-range byte (shouldn't happen — the module validates both before storing) falls back to
+/// FreeForAll/Uncommon rather than failing the whole packet. As in cmangos, the loot block goes out
+/// only when the list names another member.
 pub fn build_group_list(
     self_guid: u64,
-    leader_guid: u64,
-    loot_method: u8,
-    loot_threshold: u8,
-    master_looter_guid: u64,
-    members: &[(u64, String, bool)],
+    roster: &RosterPayload,
+    online: impl Fn(u64) -> bool,
 ) -> SMSG_GROUP_LIST {
-    let others: Vec<GroupListMember> = members
+    let own_flags = roster
+        .members
         .iter()
-        .filter(|(guid, _, _)| *guid != self_guid)
-        .map(|(guid, name, online)| GroupListMember {
-            name: name.clone(),
-            guid: Guid::new(*guid),
-            is_online: *online,
-            flags: 0, // sub-group 0 (no raids in this slice)
+        .find(|member| member.guid == self_guid)
+        .map_or(0, |member| member.slot.wire());
+    let others: Vec<GroupListMember> = roster
+        .members
+        .iter()
+        .filter(|member| member.guid != self_guid)
+        .map(|member| GroupListMember {
+            name: member.name.clone(),
+            guid: Guid::new(member.guid),
+            is_online: online(member.guid),
+            flags: member.slot.wire(),
         })
         .collect();
+    let group_not_empty = (!others.is_empty()).then(|| SMSG_GROUP_LIST_group_not_empty {
+        loot_setting: GroupLootSetting::try_from(roster.loot_method)
+            .unwrap_or(GroupLootSetting::FreeForAll),
+        master_loot: Guid::new(roster.master_looter_guid),
+        loot_threshold: ItemQuality::try_from(roster.loot_threshold)
+            .unwrap_or(ItemQuality::Uncommon),
+    });
     SMSG_GROUP_LIST {
-        group_type: GroupType::Normal,
-        flags: 0,
+        group_type: match roster.kind {
+            GroupKind::Party => GroupType::Normal,
+            GroupKind::Raid => GroupType::Raid,
+        },
+        flags: own_flags,
         members: others,
-        leader: Guid::new(leader_guid),
-        group_not_empty: Some(SMSG_GROUP_LIST_group_not_empty {
-            loot_setting: GroupLootSetting::try_from(loot_method)
-                .unwrap_or(GroupLootSetting::FreeForAll),
-            master_loot: Guid::new(master_looter_guid),
-            loot_threshold: ItemQuality::try_from(loot_threshold).unwrap_or(ItemQuality::Uncommon),
-        }),
+        leader: Guid::new(roster.leader),
+        group_not_empty,
     }
+}
+
+/// `SMSG_GROUP_LIST` as the 1.12 servers send it: `(opcode, body)` for `Outbound::Raw`. The body
+/// is gtker's encoding of `list`, then, after the loot threshold, one more byte 0 that gtker has no
+/// field for. cmangos writes it as "Heroic Mod Group - unused in vanilla" (cm:Group.cpp:705), and
+/// vmangos as the dungeon difficulty for client builds after 1.10.2
+/// (vm:Server/Packets/Group.cpp:258-259). Both send it only with the loot block.
+pub fn build_group_list_raw(list: &SMSG_GROUP_LIST) -> (u16, Vec<u8>) {
+    use wow_world_messages::vanilla::ServerMessage;
+    let mut framed = Vec::new();
+    list.write_unencrypted_server(&mut framed)
+        .expect("writing to a Vec cannot fail");
+    // The frame is `[size:u16 BE][opcode:u16 LE]` and then the body.
+    let opcode = u16::from_le_bytes([framed[2], framed[3]]);
+    let mut body = framed.split_off(4);
+    if list.group_not_empty.is_some() {
+        body.push(0);
+    }
+    (opcode, body)
 }
 
 #[cfg(test)]
@@ -834,14 +864,124 @@ mod party_tests {
         );
     }
 
+    use lyracore_shared::group::{RaidSlot, RosterMember};
+
+    fn roster(
+        kind: GroupKind,
+        leader: u64,
+        loot_method: u8,
+        loot_threshold: u8,
+        master_looter_guid: u64,
+        members: &[(u64, &str, RaidSlot)],
+    ) -> RosterPayload {
+        RosterPayload {
+            leader,
+            loot_method,
+            loot_threshold,
+            master_looter_guid,
+            kind,
+            members: members
+                .iter()
+                .map(|(guid, name, slot)| RosterMember {
+                    guid: *guid,
+                    name: name.to_string(),
+                    slot: *slot,
+                })
+                .collect(),
+        }
+    }
+
+    fn party(members: &[(u64, &str)]) -> RosterPayload {
+        let members: Vec<_> = members
+            .iter()
+            .map(|(guid, name)| (*guid, *name, RaidSlot::default()))
+            .collect();
+        roster(
+            GroupKind::Party,
+            1,
+            3, /* GROUP */
+            2, /* Uncommon */
+            0,
+            &members,
+        )
+    }
+
+    /// The sent body bytes, pinned field by field against cm:Group.cpp:680-708 and
+    /// vm:Server/Packets/Group.cpp:237-261 for a viewer in Subgroup 1 with an online leader in
+    /// Subgroup 0 and an offline Assistant in Subgroup 1.
+    #[test]
+    fn a_raid_group_list_carries_the_raid_type_and_every_members_raid_slot() {
+        let raid = roster(
+            GroupKind::Raid,
+            10,
+            3, // GROUP_LOOT
+            2, // Uncommon
+            0,
+            &[
+                (10, "Ab", RaidSlot::new(0, false).unwrap()),
+                (11, "Me", RaidSlot::new(1, false).unwrap()),
+                (12, "Cd", RaidSlot::new(1, true).unwrap()),
+            ],
+        );
+        let (opcode, body) = build_group_list_raw(&build_group_list(11, &raid, |guid| guid == 10));
+        assert_eq!(opcode, 0x007D);
+        let expected: Vec<u8> = [
+            &[0x01][..],          // group type: GROUP_FLAG_RAID
+            &[0x01],              // own flags: Subgroup 1, no Assistant
+            &2u32.to_le_bytes(),  // members other than the viewer
+            b"Ab\0",              // name
+            &10u64.to_le_bytes(), // guid
+            &[0x01],              // status: online
+            &[0x00],              // flags: Subgroup 0
+            b"Cd\0",              // name
+            &12u64.to_le_bytes(), // guid
+            &[0x00],              // status: offline
+            &[0x81],              // flags: Subgroup 1 | 0x80 Assistant
+            &10u64.to_le_bytes(), // leader
+            &[0x03],              // loot method
+            &0u64.to_le_bytes(),  // master looter
+            &[0x02],              // loot threshold
+            &[0x00],              // unused in 1.x: cm "Heroic Mod Group", vm "dungeonDifficulty"
+        ]
+        .concat();
+        assert_eq!(body, expected);
+    }
+
+    /// Without another member there is no loot block, and so no trailing byte either.
+    #[test]
+    fn a_sent_list_naming_only_the_viewer_ends_at_the_leader() {
+        let (_, body) =
+            build_group_list_raw(&build_group_list(1, &party(&[(1, "Self")]), |_| true));
+        let expected: Vec<u8> = [
+            &[0x00][..],         // group type: GROUP_FLAG_NORMAL
+            &[0x00],             // own flags
+            &0u32.to_le_bytes(), // no other member
+            &1u64.to_le_bytes(), // leader
+        ]
+        .concat();
+        assert_eq!(body, expected);
+    }
+
+    #[test]
+    fn a_party_group_list_stays_normal_with_every_flags_byte_zero() {
+        let list = build_group_list(1, &party(&[(1, "Self"), (2, "Bob")]), |_| true);
+        assert_eq!(list.group_type, GroupType::Normal);
+        assert_eq!(list.flags, 0);
+        assert!(list.members.iter().all(|member| member.flags == 0));
+    }
+
+    /// cm:Group.cpp:700: the loot block follows the leader only when another member is listed.
+    #[test]
+    fn a_list_naming_only_the_viewer_carries_no_loot_block() {
+        let list = build_group_list(1, &party(&[(1, "Self")]), |_| true);
+        assert!(list.members.is_empty());
+        assert_eq!(list.group_not_empty, None);
+    }
+
     #[test]
     fn group_list_excludes_self_but_keeps_the_leader_field() {
-        let members = [
-            (1u64, "Self".to_string(), true),
-            (2u64, "Bob".to_string(), true),
-            (3u64, "Carol".to_string(), false),
-        ];
-        let resp = build_group_list(1, 1, 3 /* GROUP */, 2 /* Uncommon */, 0, &members);
+        let members = party(&[(1, "Self"), (2, "Bob"), (3, "Carol")]);
+        let resp = build_group_list(1, &members, |guid| guid != 3);
         assert_eq!(
             resp.members.len(),
             2,
@@ -876,11 +1016,17 @@ mod party_tests {
     /// values, with a safe fallback for an (unreachable, module-validated) out-of-range byte.
     #[test]
     fn group_list_loot_block_carries_the_real_method_threshold_and_master() {
-        let members = [
-            (1u64, "Self".to_string(), true),
-            (2u64, "Bob".to_string(), true),
-        ];
-        let resp = build_group_list(1, 1, 2 /* MASTER */, 4 /* Epic */, 2, &members);
+        let slot = RaidSlot::default();
+        let members = [(1, "Self", slot), (2, "Bob", slot)];
+        let master = roster(
+            GroupKind::Party,
+            1,
+            2, /* MASTER */
+            4, /* Epic */
+            2,
+            &members,
+        );
+        let resp = build_group_list(1, &master, |_| true);
         let block = resp
             .group_not_empty
             .expect("group_not_empty must be Some for a real party");
@@ -889,7 +1035,11 @@ mod party_tests {
         assert_eq!(block.master_loot.guid(), 2);
         // An out-of-range byte (shouldn't happen post module-validation) degrades safely rather than
         // failing the whole packet.
-        let fallback = build_group_list(1, 1, 255, 255, 0, &members);
+        let fallback = build_group_list(
+            1,
+            &roster(GroupKind::Party, 1, 255, 255, 0, &members),
+            |_| true,
+        );
         let fallback_block = fallback.group_not_empty.expect("still Some");
         assert_eq!(fallback_block.loot_setting, GroupLootSetting::FreeForAll);
         assert_eq!(fallback_block.loot_threshold, ItemQuality::Uncommon);

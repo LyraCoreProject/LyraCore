@@ -78,7 +78,8 @@ pub struct OfferSlot {
 
 /// Encode one side's whole offer for an `OFFER_*` event payload:
 /// `gold|slot,entry,display,stack,enchant,dur,maxdur;slot,...` — occupied slots only, `gold` in
-/// copper. All-numeric fields, so no delimiter stripping is needed (unlike `group::encode_roster`).
+/// copper. All-numeric fields, so no delimiter stripping is needed (unlike
+/// `group::RosterPayload::encode`).
 pub fn encode_offer(gold: u32, slots: &[OfferSlot]) -> String {
     let body: Vec<String> = slots
         .iter()

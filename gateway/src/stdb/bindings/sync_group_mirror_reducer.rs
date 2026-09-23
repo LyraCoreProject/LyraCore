@@ -19,6 +19,8 @@ pub(super) struct SyncGroupMirrorArgs {
     pub request_actor: SessionActor,
     pub partitions: Vec<GroupMemberPartition>,
     pub roster_revision: u64,
+    pub group_kind: u8,
+    pub raid_slots: Vec<u8>,
 }
 
 impl From<SyncGroupMirrorArgs> for super::Reducer {
@@ -33,6 +35,8 @@ impl From<SyncGroupMirrorArgs> for super::Reducer {
             request_actor: args.request_actor,
             partitions: args.partitions,
             roster_revision: args.roster_revision,
+            group_kind: args.group_kind,
+            raid_slots: args.raid_slots,
         }
     }
 }
@@ -63,6 +67,8 @@ pub trait sync_group_mirror {
         request_actor: SessionActor,
         partitions: Vec<GroupMemberPartition>,
         roster_revision: u64,
+        group_kind: u8,
+        raid_slots: Vec<u8>,
     ) -> __sdk::Result<()> {
         self.sync_group_mirror_then(
             group_id,
@@ -74,6 +80,8 @@ pub trait sync_group_mirror {
             request_actor,
             partitions,
             roster_revision,
+            group_kind,
+            raid_slots,
             |_, _| {},
         )
     }
@@ -95,6 +103,8 @@ pub trait sync_group_mirror {
         request_actor: SessionActor,
         partitions: Vec<GroupMemberPartition>,
         roster_revision: u64,
+        group_kind: u8,
+        raid_slots: Vec<u8>,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -114,6 +124,8 @@ impl sync_group_mirror for super::RemoteReducers {
         request_actor: SessionActor,
         partitions: Vec<GroupMemberPartition>,
         roster_revision: u64,
+        group_kind: u8,
+        raid_slots: Vec<u8>,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -130,6 +142,8 @@ impl sync_group_mirror for super::RemoteReducers {
                 request_actor,
                 partitions,
                 roster_revision,
+                group_kind,
+                raid_slots,
             },
             callback,
         )

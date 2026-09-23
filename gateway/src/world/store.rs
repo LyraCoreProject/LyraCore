@@ -423,8 +423,9 @@ pub trait WorldStore:
     /// selection cannot undo admission or membership already committed on Realm-core.
     fn admit_sessionless_group_action(&self, character_guid: u64) -> Result<party::PartyOutcome>;
 
-    /// `realm_group_op` — run one party op against the database this handle names. Called on
-    /// the realm-core handle; the op byte and argument slots are `lyracore_shared::group::realm_op`.
+    /// `realm_group_op` — run one party op against the database this handle names: realm-core
+    /// when sharded, the only shard otherwise. The op byte and argument slots are
+    /// `lyracore_shared::group::realm_op`.
     fn realm_group_op(
         &self,
         _op: u8,
@@ -432,6 +433,7 @@ pub trait WorldStore:
         _target_guid: u64,
         _arg_a: u8,
         _arg_b: u8,
+        _arg_c: u64,
     ) -> Result<party::PartyOutcome> {
         Err(anyhow!("this store does not host realm-wide party state"))
     }
@@ -445,6 +447,7 @@ pub trait WorldStore:
             0,
             0,
             0,
+            0,
         )
     }
 
@@ -454,8 +457,9 @@ pub trait WorldStore:
         Ok(None)
     }
 
-    /// Bounded party projection used by companion-command authority. An oversized or otherwise
-    /// unreadable projection is an infrastructure failure, never proof of membership.
+    /// Bounded party projection used by companion-command authority. A roster longer than a Raid,
+    /// or an otherwise unreadable projection, is an infrastructure failure, never proof of
+    /// membership. A Raid above five is a real answer the caller refuses as a stale mirror.
     fn party_command_group_roster(
         &self,
         character_guid: u64,
@@ -463,7 +467,7 @@ pub trait WorldStore:
         let roster = self.group_roster(character_guid)?;
         if roster
             .as_ref()
-            .is_some_and(|roster| roster.members.len() > lyracore_shared::group::GROUP_MAX_MEMBERS)
+            .is_some_and(|roster| roster.members.len() > lyracore_shared::group::RAID_MAX_MEMBERS)
         {
             anyhow::bail!("party command roster exceeds the member limit");
         }

@@ -6,6 +6,19 @@ use spacetimedb_sdk::Table;
 
 use super::super::bindings::*;
 use super::super::connection::Coordinator;
+use lyracore_shared::group::{GroupKind, RaidSlot};
+
+/// A cached `game_group.group_type`. The Module writes only valid bytes, so the Party fallback is
+/// unreachable.
+fn group_kind_of(byte: u8) -> GroupKind {
+    GroupKind::from_wire(byte).unwrap_or_default()
+}
+
+/// A cached `game_group_member.raid_slot`. The Module writes only valid bytes, so the fallback to
+/// Subgroup 0 without the Assistant flag is unreachable.
+fn raid_slot_of(byte: u8) -> RaidSlot {
+    RaidSlot::from_wire(byte).unwrap_or_default()
+}
 
 impl Coordinator {
     pub(crate) fn stable_party_holder_observation(
@@ -88,24 +101,36 @@ impl Coordinator {
         self.group_roster_by_id(group_id)
     }
 
-    /// Read only the bounded roster projection accepted by companion-command authority.
+    /// Read only the bounded roster projection accepted by companion-command authority. The bound
+    /// is the Raid cap: a longer list is a damaged cache, and the caller refuses a Raid above five.
     pub fn party_command_group_roster(
         &self,
         character_guid: u64,
     ) -> anyhow::Result<Option<crate::world::party::GroupRoster>> {
         let guard = self.0.coord();
         let db = &guard.conn.db;
-        let Some((group_id, members)) = guard
+        let Some((group_id, rows)) = guard
             .party_memberships
             .read()
             .unwrap()
-            .bounded_roster(character_guid, lyracore_shared::group::GROUP_MAX_MEMBERS)?
+            .bounded_member_rows(character_guid, lyracore_shared::group::RAID_MAX_MEMBERS)?
         else {
             return Ok(None);
         };
         let Some(group) = db.game_group().group_id().find(&group_id) else {
             return Ok(None);
         };
+        let members = rows
+            .into_iter()
+            .map(|(row_id, guid)| crate::world::party::GroupRosterMember {
+                guid,
+                slot: db
+                    .game_group_member()
+                    .id()
+                    .find(&row_id)
+                    .map_or_else(Default::default, |row| raid_slot_of(row.raid_slot)),
+            })
+            .collect();
         Ok(Some(crate::world::party::GroupRoster {
             group_id,
             roster_revision: db
@@ -117,6 +142,7 @@ impl Coordinator {
             loot_method: group.loot_method,
             loot_threshold: group.loot_threshold,
             master_looter_guid: group.master_looter_guid,
+            kind: group_kind_of(group.group_type),
             members,
             partitions: Vec::new(),
         }))
@@ -132,7 +158,7 @@ impl Coordinator {
         let guard = self.0.coord();
         let db = &guard.conn.db;
         let group = db.game_group().iter().find(|g| g.group_id == group_id)?;
-        let mut rows: Vec<(u64, u64)> = db
+        let mut rows: Vec<(u64, u64, u8)> = db
             .game_group_member()
             .iter()
             .filter(|m| m.group_id == group_id)
@@ -143,13 +169,13 @@ impl Coordinator {
                     .find(&m.character_guid)
                     .filter(|partition| partition.group_id == group_id && partition.member_active)
                     .map_or(m.id, |partition| partition.membership_revision);
-                (membership_revision, m.character_guid)
+                (membership_revision, m.character_guid, m.raid_slot)
             })
             .collect();
         rows.sort_unstable();
         let partitions = rows
             .iter()
-            .map(|(membership_revision, character_guid)| {
+            .map(|(membership_revision, character_guid, _)| {
                 crate::world::party::GroupMemberPartition {
                     character_guid: *character_guid,
                     group_id,
@@ -173,7 +199,14 @@ impl Coordinator {
             loot_method: group.loot_method,
             loot_threshold: group.loot_threshold,
             master_looter_guid: group.master_looter_guid,
-            members: rows.into_iter().map(|(_, guid)| guid).collect(),
+            kind: group_kind_of(group.group_type),
+            members: rows
+                .into_iter()
+                .map(|(_, guid, slot)| crate::world::party::GroupRosterMember {
+                    guid,
+                    slot: raid_slot_of(slot),
+                })
+                .collect(),
             partitions,
         })
     }
@@ -260,12 +293,10 @@ impl Coordinator {
     }
 }
 
-/// The raid cap (cm:Group.h:41). A longer member list is a damaged cache, not a group.
-const MEMBER_STATS_ROSTER_LIMIT: usize = 40;
-
 impl Coordinator {
     /// Every other member of `self_guid`'s group, from the party authority's membership index:
-    /// Realm-core on a sharded Realm, this database otherwise.
+    /// Realm-core on a sharded Realm, this database otherwise. A list longer than a Raid is a
+    /// damaged cache, not a group.
     pub(crate) fn group_mates(&self, self_guid: u64) -> Result<Vec<u64>> {
         let authority = if self.is_sharded() {
             self.realm_core()?
@@ -278,9 +309,14 @@ impl Coordinator {
             .party_memberships
             .read()
             .unwrap()
-            .bounded_roster(self_guid, MEMBER_STATS_ROSTER_LIMIT)?;
+            .bounded_member_rows(self_guid, lyracore_shared::group::RAID_MAX_MEMBERS)?;
         Ok(roster
-            .map(|(_, members)| members.into_iter().filter(|m| *m != self_guid).collect())
+            .map(|(_, rows)| {
+                rows.into_iter()
+                    .map(|(_, guid)| guid)
+                    .filter(|guid| *guid != self_guid)
+                    .collect()
+            })
             .unwrap_or_default())
     }
 

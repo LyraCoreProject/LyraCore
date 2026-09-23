@@ -5,7 +5,9 @@
 //! Expected bodies are written out by hand from cm:GroupHandler.cpp:585-630: packed guid, `u32`
 //! mask, then the masked fields. Every guid here is one byte, so the packed guid is `01 <guid>`.
 
-use super::party_tests::{character, form_split_party, party_topology, BOT, GINGER, TRIN, VIM};
+use super::party_tests::{
+    character, form_split_party, party_members, party_topology, BOT, GINGER, TRIN, VIM,
+};
 use super::*;
 use crate::world::handlers::{
     dispatch_member_stats, member_stats_tick, MemberSnapshot, MemberStatsOutcome,
@@ -428,7 +430,7 @@ fn a_stats_request_is_answered_through_the_encrypted_session() {
         mirror: std::sync::Mutex::new(vec![party::GroupRoster {
             group_id: 1,
             leader_guid: 1,
-            members: vec![1, 2],
+            members: party_members(&[1, 2]),
             ..Default::default()
         }]),
         ..quest_store()
@@ -456,7 +458,7 @@ fn a_stats_request_that_cannot_be_read_does_not_end_the_session() {
         mirror: std::sync::Mutex::new(vec![party::GroupRoster {
             group_id: 1,
             leader_guid: 1,
-            members: vec![1, 2],
+            members: party_members(&[1, 2]),
             ..Default::default()
         }]),
         world_shard_set_error: Some("instances has no healthy Coordinator subscription".into()),

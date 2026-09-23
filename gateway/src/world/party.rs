@@ -42,10 +42,12 @@ use anyhow::Result;
 
 use super::{send, Outbound, SessionTx, WorldStore};
 use crate::codec;
-use lyracore_shared::group::{bot_op, realm_op, GroupRefusal, COMMAND_RESULT_WINDOW_MICROS};
-use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+use lyracore_shared::group::{
+    bot_op, realm_op, GroupKind, GroupRefusal, RaidSlot, RosterMember, RosterPayload,
+    COMMAND_RESULT_WINDOW_MICROS, GROUP_MAX_MEMBERS,
+};
 
-/// One party, as the database that holds it sees it. Read from realm-core it is the authority; read
+/// One group, as the database that holds it sees it. Read from realm-core it is the authority; read
 /// from a world shard it is that shard's mirror. Names and online flags are deliberately NOT in it —
 /// realm-core has no character rows to resolve either from, so they are filled at render time from
 /// the shards ([`render_list`]).
@@ -58,11 +60,19 @@ pub struct GroupRoster {
     pub loot_method: u8,
     pub loot_threshold: u8,
     pub master_looter_guid: u64,
-    /// Member guids in join order (member-row id), which is the order leadership succeeds in.
-    pub members: Vec<u64>,
+    pub kind: GroupKind,
+    /// Members in join order (member-row id), which is the order leadership succeeds in, each with
+    /// its Raid Slot.
+    pub members: Vec<GroupRosterMember>,
     /// One ordered partition projection per member. Realm-core supplies both revisions; the
     /// Gateway confirms the location against the World Shard that currently holds the Character.
     pub partitions: Vec<GroupMemberPartition>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GroupRosterMember {
+    pub guid: u64,
+    pub slot: RaidSlot,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -227,12 +237,13 @@ fn append_departed_partitions(roster: &mut GroupRoster, previous: Option<&GroupR
     let Some(previous) = previous.filter(|row| row.group_id == roster.group_id) else {
         return;
     };
-    for mut departed in previous
+    let departed: Vec<_> = previous
         .partitions
         .iter()
         .copied()
-        .filter(|row| !roster.members.contains(&row.character_guid))
-    {
+        .filter(|row| !roster.has_member(row.character_guid))
+        .collect();
+    for mut departed in departed {
         departed.member_active = false;
         departed.state = PartyPartitionState::Unknown;
         roster.partitions.push(departed);
@@ -250,6 +261,36 @@ impl GroupRoster {
             ..Default::default()
         }
     }
+
+    /// Member guids in join order.
+    pub fn member_guids(&self) -> Vec<u64> {
+        self.members.iter().map(|member| member.guid).collect()
+    }
+
+    pub fn has_member(&self, guid: u64) -> bool {
+        self.members.iter().any(|member| member.guid == guid)
+    }
+
+    /// The list this roster renders as. Names are blank: [`render_list`] reads them from the
+    /// shards, since realm-core holds none.
+    pub fn list_payload(&self) -> RosterPayload {
+        RosterPayload {
+            leader: self.leader_guid,
+            loot_method: self.loot_method,
+            loot_threshold: self.loot_threshold,
+            master_looter_guid: self.master_looter_guid,
+            kind: self.kind,
+            members: self
+                .members
+                .iter()
+                .map(|member| RosterMember {
+                    guid: member.guid,
+                    name: String::new(),
+                    slot: member.slot,
+                })
+                .collect(),
+        }
+    }
 }
 
 fn roster_or_disbanded(realm: &dyn WorldStore, group_id: u64) -> Result<GroupRoster> {
@@ -259,8 +300,8 @@ fn roster_or_disbanded(realm: &dyn WorldStore, group_id: u64) -> Result<GroupRos
     })
 }
 
-/// One party op, in the client's own vocabulary. The `u8`/`u64` argument packing into
-/// `realm_group_op`'s five slots happens once, in [`run`], against the shared
+/// One party op, in the client's own vocabulary. The argument packing into `realm_group_op`'s slots
+/// happens once, in [`Op::realm_args`], against the shared
 /// [`lyracore_shared::group::realm_op`] contract.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Op {
@@ -280,6 +321,40 @@ pub enum Op {
         master: u64,
         threshold: u8,
     },
+    /// `CMSG_GROUP_RAID_CONVERT`.
+    RaidConvert,
+}
+
+/// `realm_group_op`'s argument slots after the actor: `(op, target_guid, arg_a, arg_b, arg_c)`.
+type RealmOpArgs = (u8, u64, u8, u8, u64);
+
+impl Op {
+    fn realm_args(self) -> RealmOpArgs {
+        match self {
+            Op::Invite(target) => (realm_op::INVITE, target, 0, 0, 0),
+            Op::Accept => (realm_op::ACCEPT, 0, 0, 0, 0),
+            Op::Decline => (realm_op::DECLINE, 0, 0, 0, 0),
+            Op::Leave => (realm_op::LEAVE, 0, 0, 0, 0),
+            Op::Uninvite(target) => (realm_op::UNINVITE, target, 0, 0, 0),
+            Op::LootMethod {
+                setting,
+                master,
+                threshold,
+            } => (realm_op::LOOT_METHOD, master, setting, threshold, 0),
+            Op::RaidConvert => (realm_op::RAID_CONVERT, 0, 0, 0, 0),
+        }
+    }
+}
+
+/// Run `op` as `self_guid` through `realm_group_op` on `authority`, the database that holds the
+/// party: Realm-core when sharded, the home shard otherwise.
+fn run_on_authority<A: WorldStore + ?Sized>(
+    authority: &A,
+    self_guid: u64,
+    op: Op,
+) -> Result<PartyOutcome> {
+    let (code, target, arg_a, arg_b, arg_c) = op.realm_args();
+    authority.realm_group_op(code, self_guid, target, arg_a, arg_b, arg_c)
 }
 
 /// What one party op answered. A [`GroupRefusal`] is a gameplay answer the client renders, so it
@@ -394,8 +469,8 @@ pub(crate) fn finish_expired_party_command_intent<St: WorldStore + ?Sized>(
 }
 
 fn same_authority(left: &GroupRoster, right: &GroupRoster) -> bool {
-    let mut left_members = left.members.clone();
-    let mut right_members = right.members.clone();
+    let mut left_members = left.member_guids();
+    let mut right_members = right.member_guids();
     left_members.sort_unstable();
     right_members.sort_unstable();
     left.group_id == right.group_id
@@ -478,9 +553,12 @@ pub(crate) fn run_party_command_intent<St: WorldStore>(
     };
     let outcome = if authority.leader_guid != intent.issuer_guid {
         Some(CompanionCommandOutcome::NotLeader)
-    } else if !authority.members.contains(&intent.bot_guid)
+    } else if authority.members.len() > GROUP_MAX_MEMBERS {
+        // Companion Orders keep the Party cap. The Module answers a Raid above five the same way.
+        Some(CompanionCommandOutcome::StalePartyMirror)
+    } else if !authority.has_member(intent.bot_guid)
         || (intent.authority_member_guid != 0
-            && !authority.members.contains(&intent.authority_member_guid))
+            && !authority.has_member(intent.authority_member_guid))
     {
         Some(CompanionCommandOutcome::NotMember)
     } else {
@@ -495,7 +573,7 @@ pub(crate) fn run_party_command_intent<St: WorldStore>(
         intent.issuer_guid,
         intent.bot_guid,
         intent.authority_member_guid,
-        authority.members.clone(),
+        authority.member_guids(),
     )?;
     if authority_outcome != CompanionCommandOutcome::Applied {
         let outcome = authority_outcome;
@@ -544,7 +622,7 @@ pub(crate) fn run_party_command_intent<St: WorldStore>(
         issuer_sequence: intent.issuer_sequence,
         group_id: authority.group_id,
         leader_guid: authority.leader_guid,
-        members: authority.members,
+        members: authority.member_guids(),
         kind: intent.kind,
         bot_guid: intent.bot_guid,
         authority_member_guid: intent.authority_member_guid,
@@ -722,7 +800,7 @@ fn answer_for_session_less<St: WorldStore + ?Sized>(store: &St, realm: &dyn Worl
             return;
         }
     }
-    let joined = match realm.realm_group_op(realm_op::ACCEPT, guid, 0, 0, 0) {
+    let joined = match run_on_authority(realm, guid, Op::Accept) {
         Ok(PartyOutcome::Ran) => {
             log::info!("party: session-less {guid} accepted its group invite");
             return;
@@ -731,7 +809,7 @@ fn answer_for_session_less<St: WorldStore + ?Sized>(store: &St, realm: &dyn Worl
         Err(e) => format!("{e:#}"),
     };
     log::info!("party: session-less {guid} cannot join ({joined}), declining explicitly");
-    match realm.realm_group_op(realm_op::DECLINE, guid, 0, 0, 0) {
+    match run_on_authority(realm, guid, Op::Decline) {
         Ok(PartyOutcome::Ran) => {}
         outcome => log::warn!(
             "party: session-less {guid} could neither join nor decline ({outcome:?}). The \
@@ -743,7 +821,8 @@ fn answer_for_session_less<St: WorldStore + ?Sized>(store: &St, realm: &dyn Worl
 /// Run one party op for the session that owns `self_guid`.
 ///
 /// Unsharded → the pre-realm-core path, verbatim: the player's own connection calls the player-facing
-/// reducer on the player's own shard, and nothing else happens.
+/// reducer on the player's own shard, and nothing else happens. A raid op has no player-facing
+/// reducer, so it calls `realm_group_op` on that same shard.
 ///
 /// Sharded → realm-core runs the op, then every connected world shard's mirror is refreshed. The
 /// mirror refresh is best-effort BY DESIGN (see [`sync_mirrors`]); the op's own result is not.
@@ -770,6 +849,9 @@ pub(crate) fn run<St: WorldStore + ?Sized>(
                 master,
                 threshold,
             } => store.group_loot_method(account_id, self_guid, setting, master, threshold),
+            // A raid op has no player-facing reducer. With one database, the home shard holds the
+            // party, so it runs the same `realm_group_op` Realm-core would.
+            Op::RaidConvert => run_on_authority(store, self_guid, op),
         };
     };
     // The two gates realm-core cannot run for itself, because the directory database holds neither
@@ -801,21 +883,7 @@ pub(crate) fn run<St: WorldStore + ?Sized>(
     if matches!(op, Op::Leave | Op::Uninvite(_)) {
         crate::world::loot::flush_pending_promotions(store, realm.as_ref());
     }
-    let (code, target, arg_a, arg_b) = match op {
-        Op::Invite(target) => (realm_op::INVITE, target, 0, 0),
-        Op::Accept => (realm_op::ACCEPT, 0, 0, 0),
-        Op::Decline => (realm_op::DECLINE, 0, 0, 0),
-        Op::Leave => (realm_op::LEAVE, 0, 0, 0),
-        Op::Uninvite(target) => (realm_op::UNINVITE, target, 0, 0),
-        Op::LootMethod {
-            setting,
-            master,
-            threshold,
-        } => (realm_op::LOOT_METHOD, master, setting, threshold),
-    };
-    if let PartyOutcome::Refused(refusal) =
-        realm.realm_group_op(code, self_guid, target, arg_a, arg_b)?
-    {
+    if let PartyOutcome::Refused(refusal) = run_on_authority(realm.as_ref(), self_guid, op)? {
         return Ok(PartyOutcome::Refused(refusal));
     }
     // Nobody is at the keyboard of a playerbot, so nobody answers its dialog. Done
@@ -824,8 +892,28 @@ pub(crate) fn run<St: WorldStore + ?Sized>(
     if let Op::Invite(target) = op {
         answer_for_session_less(store, realm.as_ref(), target);
     }
+    if op == Op::RaidConvert && raid_unchanged(realm.as_ref(), self_guid, before.as_ref()) {
+        return Ok(PartyOutcome::Ran);
+    }
     sync_mirrors(store, realm.as_ref(), self_guid, before);
     Ok(PartyOutcome::Ran)
+}
+
+/// Whether a successful convert left `self_guid`'s Raid as it was: the Group was a Raid before
+/// the op, and Realm-core still shows the same Group at the same Roster Revision. The Module
+/// changes nothing when it converts a Raid again, so no mirror needs a push. A failed read answers
+/// `false`, and the push runs as usual.
+fn raid_unchanged(realm: &dyn WorldStore, self_guid: u64, before: Option<&GroupRoster>) -> bool {
+    let Some(before) = before.filter(|roster| roster.kind == GroupKind::Raid) else {
+        return false;
+    };
+    realm
+        .group_roster(self_guid)
+        .ok()
+        .flatten()
+        .is_some_and(|now| {
+            now.group_id == before.group_id && now.roster_revision == before.roster_revision
+        })
 }
 
 /// The invite gates realm-core cannot run for itself: does the target exist anywhere, and is it in
@@ -924,7 +1012,7 @@ pub(crate) fn run_bot_invite<St: WorldStore>(
     }
     let before = realm.group_roster(inviter_guid)?;
     if let PartyOutcome::Refused(refusal) =
-        realm.realm_group_op(realm_op::INVITE, inviter_guid, target_guid, 0, 0)?
+        run_on_authority(realm, inviter_guid, Op::Invite(target_guid))?
     {
         return Ok(PartyOutcome::Refused(refusal));
     }
@@ -957,7 +1045,7 @@ pub(crate) fn run_bot_leave<St: WorldStore>(store: &St, leaver_guid: u64) -> Res
         None => store,
     };
     let leave = run_server_leave(store, realm, leaver_guid, 1, |realm, character_guid| {
-        realm.realm_group_op(realm_op::LEAVE, character_guid, 0, 0, 0)
+        run_on_authority(realm, character_guid, Op::Leave)
     })?;
     if leave.outcome == PartyOutcome::Ran {
         sync_mirrors(store, realm, leaver_guid, leave.previous_roster);
@@ -1257,7 +1345,7 @@ pub(crate) fn on_world_entry<St: WorldStore + ?Sized>(
     let Some(roster) = sync_arrival_mirror(store, self_guid)? else {
         return Ok(());
     };
-    send(tx, Outbound::One(render_list(store, self_guid, &roster)))
+    send(tx, render_list(store, self_guid, &roster.list_payload()))
 }
 
 /// The mirror half of [`on_world_entry`], without a client: put the party realm-core says
@@ -1348,45 +1436,36 @@ pub(crate) fn sync_transfer_arrival_mirror<St: WorldStore + ?Sized>(
     Ok(())
 }
 
-/// Build `SMSG_GROUP_LIST` for `self_guid` from an authoritative roster, filling each member's NAME
-/// and ONLINE flag from the shards.
+/// Build `SMSG_GROUP_LIST` for `self_guid`. This is the one renderer: the LIST relay passes the
+/// event's payload, and world entry passes the authoritative roster's [`GroupRoster::list_payload`].
+/// The packet is raw because it ends with a byte gtker cannot encode (`codec::build_group_list_raw`).
 ///
-/// The fill is the price of realm-core owning membership: the directory database has no
-/// `game_character` rows, so it cannot know what its members are called. The gateway can — it reads
-/// every connected shard's cache — and it is the only party that can answer for a member standing on
-/// a different database than the viewer. A member whose name will not resolve (a shard that is down)
-/// renders with an empty name rather than being dropped from the frame: a missing row in the party
-/// UI reads as "they left", which is a worse lie than a blank one.
+/// Every member's ONLINE flag, and each blank NAME, comes from the shards. That is the price of
+/// realm-core owning membership: the directory database has no `game_character` or
+/// `game_world_entity` rows, so it cannot know what its members are called or whether they are in
+/// the world. The gateway can — it reads every connected shard's cache — and it is the only party
+/// that can answer for a member standing on a different database than the viewer. A name the
+/// payload already carries is kept; the Module wrote it with the change. A member whose name will
+/// not resolve (a shard that is down) renders with an empty name rather than being dropped from the
+/// frame: a missing row in the party UI reads as "they left", which is a worse lie than a blank one.
 pub(crate) fn render_list<St: WorldStore + ?Sized>(
     store: &St,
     self_guid: u64,
-    roster: &GroupRoster,
-) -> ServerOpcodeMessage {
-    let shards = store.world_stores();
-    let members: Vec<(u64, String, bool)> = roster
-        .members
-        .iter()
-        .map(|&guid| {
-            // This handle first (the viewer's own shard, where most of the party is), then every
-            // other connected one — the member standing inside an instance is on a database this
-            // handle never reads. Empty on a single-database gateway, so the union never leaves it.
-            let name = character_anywhere(store, guid)
+    roster: &RosterPayload,
+) -> Outbound {
+    let mut roster = roster.clone();
+    for member in &mut roster.members {
+        if member.name.is_empty() {
+            member.name = character_anywhere(store, member.guid)
                 .ok()
                 .flatten()
-                .map(|c| c.name);
-            let online =
-                store.entity_in_world(guid) || shards.iter().any(|s| s.entity_in_world(guid));
-            (guid, name.unwrap_or_default(), online)
-        })
-        .collect();
-    ServerOpcodeMessage::SMSG_GROUP_LIST(Box::new(codec::build_group_list(
-        self_guid,
-        roster.leader_guid,
-        roster.loot_method,
-        roster.loot_threshold,
-        roster.master_looter_guid,
-        &members,
-    )))
+                .map(|c| c.name)
+                .unwrap_or_default();
+        }
+    }
+    let list = codec::build_group_list(self_guid, &roster, |guid| live_anywhere(store, guid));
+    let (opcode, body) = codec::build_group_list_raw(&list);
+    Outbound::Raw { opcode, body }
 }
 
 #[cfg(test)]
@@ -1456,7 +1535,10 @@ mod partition_tests {
         };
         let previous = GroupRoster {
             group_id: 7,
-            members: vec![100],
+            members: vec![GroupRosterMember {
+                guid: 100,
+                slot: RaidSlot::default(),
+            }],
             partitions: vec![departed],
             ..Default::default()
         };
