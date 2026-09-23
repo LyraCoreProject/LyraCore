@@ -44,7 +44,7 @@ use super::{send, Outbound, SessionTx, WorldStore};
 use crate::codec;
 use lyracore_shared::group::{
     bot_op, realm_op, GroupKind, GroupRefusal, RaidSlot, RosterMember, RosterPayload,
-    COMMAND_RESULT_WINDOW_MICROS,
+    COMMAND_RESULT_WINDOW_MICROS, GROUP_MAX_MEMBERS,
 };
 use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 
@@ -554,6 +554,9 @@ pub(crate) fn run_party_command_intent<St: WorldStore>(
     };
     let outcome = if authority.leader_guid != intent.issuer_guid {
         Some(CompanionCommandOutcome::NotLeader)
+    } else if authority.members.len() > GROUP_MAX_MEMBERS {
+        // Companion Orders keep the Party cap. The Module answers a Raid above five the same way.
+        Some(CompanionCommandOutcome::StalePartyMirror)
     } else if !authority.has_member(intent.bot_guid)
         || (intent.authority_member_guid != 0
             && !authority.has_member(intent.authority_member_guid))

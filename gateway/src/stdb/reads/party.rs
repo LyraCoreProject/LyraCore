@@ -101,7 +101,8 @@ impl Coordinator {
         self.group_roster_by_id(group_id)
     }
 
-    /// Read only the bounded roster projection accepted by companion-command authority.
+    /// Read only the bounded roster projection accepted by companion-command authority. The bound
+    /// is the Raid cap: a longer list is a damaged cache, and the caller refuses a Raid above five.
     pub fn party_command_group_roster(
         &self,
         character_guid: u64,
@@ -112,7 +113,7 @@ impl Coordinator {
             .party_memberships
             .read()
             .unwrap()
-            .bounded_member_rows(character_guid, lyracore_shared::group::GROUP_MAX_MEMBERS)?
+            .bounded_member_rows(character_guid, lyracore_shared::group::RAID_MAX_MEMBERS)?
         else {
             return Ok(None);
         };

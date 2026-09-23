@@ -456,8 +456,9 @@ pub trait WorldStore:
         Ok(None)
     }
 
-    /// Bounded party projection used by companion-command authority. An oversized or otherwise
-    /// unreadable projection is an infrastructure failure, never proof of membership.
+    /// Bounded party projection used by companion-command authority. A roster longer than a Raid,
+    /// or an otherwise unreadable projection, is an infrastructure failure, never proof of
+    /// membership. A Raid above five is a real answer the caller refuses as a stale mirror.
     fn party_command_group_roster(
         &self,
         character_guid: u64,
@@ -465,7 +466,7 @@ pub trait WorldStore:
         let roster = self.group_roster(character_guid)?;
         if roster
             .as_ref()
-            .is_some_and(|roster| roster.members.len() > lyracore_shared::group::GROUP_MAX_MEMBERS)
+            .is_some_and(|roster| roster.members.len() > lyracore_shared::group::RAID_MAX_MEMBERS)
         {
             anyhow::bail!("party command roster exceeds the member limit");
         }

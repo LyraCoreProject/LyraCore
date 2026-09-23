@@ -279,28 +279,51 @@ fn a_stale_target_mirror_cannot_grant_command_authority() {
     assert!(world.admitted_party_commands.lock().unwrap().is_empty());
 }
 
-#[test]
-fn an_oversized_cached_roster_is_not_sent_for_command_authority() {
+/// A local roster of `extra + 2` members: Ginger leads, and the bot takes Companion Orders.
+fn store_with_roster_of(extra: usize) -> InMemoryStore {
     let mut members = vec![GINGER, BOT];
-    members.extend(
-        (0..lyracore_shared::group::GROUP_MAX_MEMBERS).map(|offset| 80_000 + offset as u64),
-    );
-    let store = InMemoryStore {
+    members.extend((0..extra).map(|offset| 80_000 + offset as u64));
+    InMemoryStore {
         entity_in_world: true,
         characters: vec![character(GINGER, "Ginger"), character(BOT, "Bot")],
         entity_partitions: std::sync::Mutex::new(vec![(GINGER, 0, 0), (BOT, 0, 0)]),
         mirror: std::sync::Mutex::new(vec![party::GroupRoster {
             group_id: 7,
             leader_guid: GINGER,
+            kind: GroupKind::Raid,
             members: party_members(&members),
             ..Default::default()
         }]),
         ..Default::default()
-    };
+    }
+}
+
+/// Companion Orders keep the Party cap. A Raid above five is a gameplay answer, so the order
+/// finishes at once with the documented terminal outcome instead of retrying until it expires.
+#[test]
+fn a_companion_order_in_a_raid_above_five_finishes_as_a_stale_party_mirror() {
+    let store = store_with_roster_of(lyracore_shared::group::GROUP_MAX_MEMBERS);
+
+    let outcome = party::run_party_command_intent(&store, &command_intent(BOT), 9).unwrap();
+
+    assert_eq!(outcome, party::CompanionCommandOutcome::StalePartyMirror);
+    assert_eq!(
+        store.party_command_finishes.lock().unwrap().clone(),
+        vec![(41, 9, party::CompanionCommandOutcome::StalePartyMirror)]
+    );
+    assert!(store.admitted_party_commands.lock().unwrap().is_empty());
+}
+
+/// A roster longer than any Raid is a damaged cache, not a gameplay answer: the intent stays
+/// pending.
+#[test]
+fn a_roster_longer_than_a_raid_is_not_sent_for_command_authority() {
+    let store = store_with_roster_of(lyracore_shared::group::RAID_MAX_MEMBERS);
 
     let error = party::run_party_command_intent(&store, &command_intent(BOT), 9).unwrap_err();
 
     assert!(error.to_string().contains("member limit"));
+    assert!(store.party_command_finishes.lock().unwrap().is_empty());
     assert!(store.admitted_party_commands.lock().unwrap().is_empty());
 }
 
