@@ -68,7 +68,12 @@ pub fn normalized_message(raw: &str) -> Option<String> {
 
 /// The say/yell/`/e` core, actor-explicit (stage 4a): everything the old sender-path `send_chat`
 /// did after resolving WHO spoke, plus the player/EventAI boundary — a Character may say, yell or
-/// `/e`, never submit the creature-only text emote. `gw::gw_send_chat` delegates here.
+/// `/e`, never submit the creature-only text emote. EMOTE is admitted ONLY here, never in
+/// [`apply_send_chat_to`]: that function is EventAI's own entry, and its `chat_type` comes straight
+/// off an imported `game_creature_ai_broadcast_text` row that Package import never range-checks —
+/// widening ITS gate to admit EMOTE would let a malformed broadcast line masquerade as a
+/// Character's `/e`, and the codec has no packet for a creature EMOTE row anyway. `gw::gw_send_chat`
+/// delegates here.
 pub(crate) fn apply_send_chat(
     ctx: &ReducerContext,
     sender: crate::WorldEntity,
@@ -79,15 +84,32 @@ pub(crate) fn apply_send_chat(
     if !matches!(chat_type, CHAT_SAY | CHAT_YELL | CHAT_EMOTE) {
         return Err(format!("unsupported chat type {chat_type}"));
     }
-    apply_send_chat_to(ctx, sender, 0, chat_type, language, message)
+    write_chat_event(ctx, sender, 0, chat_type, language, message)
 }
 
-/// Creature-authored speech with its resolved addressed unit retained for the monster chat packet
-/// — and, via [`apply_send_chat`], a Character's `/e`. The dead-guard covers every type this
-/// reaches, matching vmangos for `/e` (vm:ChatHandler.cpp:360-361; cmangos has no such check for
-/// `/e`, but the say/yell rule already followed vmangos, so one gate covers all three). `/e` always
-/// stores Universal, whatever language the client sent (cm:Player.cpp:16594).
+/// Creature-authored speech with its resolved addressed unit retained for the monster chat packet.
+/// EventAI's only entry (`crate::creatures::eventai::relay`'s `RelayInstruction::Talk`, `engine`'s
+/// `eventai_deliver_line`). The gate is `is_supported_chat_type` alone — see [`apply_send_chat`]'s
+/// doc for why EMOTE must never widen it.
 pub(crate) fn apply_send_chat_to(
+    ctx: &ReducerContext,
+    sender: crate::WorldEntity,
+    target_guid: u64,
+    chat_type: u8,
+    language: u8,
+    message: String,
+) -> Result<(), String> {
+    if !is_supported_chat_type(chat_type) {
+        return Err(format!("unsupported chat type {chat_type}"));
+    }
+    write_chat_event(ctx, sender, target_guid, chat_type, language, message)
+}
+
+/// The row-write both entries above share once their own type gate has passed: the dead-guard
+/// (matching vmangos for `/e`, vm:ChatHandler.cpp:360-361; cmangos has no such check for `/e`, but
+/// the say/yell rule already followed vmangos, so one gate covers all three types either entry can
+/// reach), message normalization, and the EMOTE-always-Universal rule (cm:Player.cpp:16594).
+fn write_chat_event(
     ctx: &ReducerContext,
     sender: crate::WorldEntity,
     target_guid: u64,
@@ -99,9 +121,6 @@ pub(crate) fn apply_send_chat_to(
     // party/guild are NOT gated by death (and aren't routed here anyway).
     if sender.dead {
         return Err("dead players cannot speak".to_string());
-    }
-    if !is_supported_chat_type(chat_type) && chat_type != CHAT_EMOTE {
-        return Err(format!("unsupported chat type {chat_type}"));
     }
     let text = normalized_message(&message).ok_or_else(|| "empty message".to_string())?;
     let language = if chat_type == CHAT_EMOTE {
@@ -814,6 +833,43 @@ mod tests {
         // serves EventAI, which never emits it.
         assert!(!is_supported_chat_type(CHAT_EMOTE));
         assert!(!is_supported_chat_type(255)); // party/guild/whisper/etc. rejected
+    }
+
+    // ---- `apply_send_chat_to`'s type gate (EventAI's only entry into `game_chat_event`) ----
+    //
+    // `apply_send_chat_to` runs inside a reducer and takes no `ReducerContext` mock in this crate,
+    // so its gate is scanned rather than executed — same technique as `realm_whisper`'s operator
+    // gate below.
+
+    use crate::test_scan::shape_of;
+
+    /// **EventAI's only entry must never admit EMOTE.**
+    ///
+    /// `apply_send_chat_to`'s `chat_type` comes straight off an imported
+    /// `game_creature_ai_broadcast_text` row (`relay.rs`'s `RelayInstruction::Talk`, `engine.rs`'s
+    /// `eventai_deliver_line`), and Package import never range-checks that column. Before this fix
+    /// the gate read `!is_supported_chat_type(chat_type) && chat_type != CHAT_EMOTE`, so a broadcast
+    /// line stamped `chat_type: 3` passed straight through: a `game_chat_event` row with a creature
+    /// `sender_guid` and no packet the codec can build for it (`build_chat_message_to` has no
+    /// `(EMOTE, Some(name))` arm), silently rendering as Say. EMOTE is a Character's alone, gated by
+    /// [`apply_send_chat`]'s own pre-check before this function ever runs.
+    ///
+    /// Whole-body equality, not a `contains` scan: a second admitting clause appended anywhere in
+    /// the function would defeat a substring check but still changes the body this test compares.
+    #[test]
+    fn apply_send_chat_to_gates_on_is_supported_chat_type_alone() {
+        let body = shape_of(include_str!("chat.rs"), "pub(crate) fn apply_send_chat_to(");
+        let expected =
+            "{ if !is_supported_chat_type(chat_type) { return Err(format!(\"unsupported \
+             chat type {chat_type}\")); } write_chat_event(ctx, sender, target_guid, chat_type, \
+             language, message) }";
+        assert_eq!(
+            body, expected,
+            "`apply_send_chat_to` no longer gates on `is_supported_chat_type` alone — EventAI's \
+             only entry must never admit EMOTE (a Character-only type, gated by `apply_send_chat`), \
+             or a Package broadcast line with chat_type 3 renders as Say with no packet the codec \
+             knows how to build for a creature."
+        );
     }
 
     #[test]

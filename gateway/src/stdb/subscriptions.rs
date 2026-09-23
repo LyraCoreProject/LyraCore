@@ -765,16 +765,6 @@ pub(crate) fn chat_range_yd(chat_type: u8) -> f32 {
     }
 }
 
-/// The EMOTE-only team gate: does a listener whose race byte is `listener_race` hear a speaker
-/// whose race byte is `speaker_race`? Say and yell have no such gate (cm:GridNotifiers.cpp:163-165);
-/// `/e` defaults to same-team only, matching the mangos `AllowTwoSide.Interaction.Chat = 0` default
-/// (cm:mangosd.conf.dist.in:924). Pure — the one tested source of truth for the gate, beside
-/// [`chat_in_range`].
-pub(crate) fn emote_reaches_team(speaker_race: u8, listener_race: u8) -> bool {
-    lyracore_shared::faction::team_for_race(speaker_race)
-        == lyracore_shared::faction::team_for_race(listener_race)
-}
-
 // ==================================================================================================
 //  The SHARED-dispatch relay bodies.
 //
@@ -2445,8 +2435,8 @@ pub(crate) fn impact_event_outbound(row: &SpellImpactEvent) -> Vec<Outbound> {
 /// their own line; everyone else is `chat_in_range`-gated (say/`/e`/text emote ~25yd, yell ~300yd,
 /// map + instance fenced), with both endpoints read from the COORDINATOR's global cache — the
 /// AOI-scoped per-player cache could not see a 100–300yd YELL speaker. Missing endpoint → drop
-/// (safer than flooding). `/e` (EMOTE) also gates on [`emote_reaches_team`] — the one Chat Kind
-/// here vanilla keeps same-team-only by default; say and yell still reach both teams.
+/// (safer than flooding). `/e` (EMOTE) also gates on [`lyracore_shared::faction::same_team`] — the
+/// one Chat Kind here vanilla keeps same-team-only by default; say and yell still reach both teams.
 pub(crate) fn chat_event_outbound(
     coord: &Coordinator,
     self_guid: u64,
@@ -2484,7 +2474,7 @@ pub(crate) fn chat_event_outbound(
             return Vec::new();
         }
         if row.chat_type == lyracore_shared::chat::broadcast_chat::EMOTE
-            && !emote_reaches_team(
+            && !lyracore_shared::faction::same_team(
                 (speaker.unit_bytes_0 & 0xFF) as u8,
                 (listener.unit_bytes_0 & 0xFF) as u8,
             )
@@ -5694,33 +5684,6 @@ mod tests {
         assert_eq!(range_sq, SAY_RANGE_SQ);
         assert!(chat_in_range(0, 0, 0.0, 0.0, 0, 0, 25.0, 0.0, range_sq));
         assert!(!chat_in_range(0, 0, 0.0, 0.0, 0, 0, 25.01, 0.0, range_sq));
-    }
-
-    /// `/e`'s team gate (T8): a same-team listener hears it, an opposite-team listener does not —
-    /// same-race and cross-faction pairs from [`lyracore_shared::faction`]'s own fixture.
-    /// Say and yell never call this predicate; only `chat_event_outbound`'s EMOTE arm does.
-    #[test]
-    fn emote_reaches_team_gates_by_faction_not_by_race() {
-        const HUMAN: u8 = 1; // Alliance
-        const DWARF: u8 = 3; // Alliance
-        const ORC: u8 = 2; // Horde
-        const TAUREN: u8 = 6; // Horde
-        assert!(
-            emote_reaches_team(HUMAN, DWARF),
-            "two Alliance races hear each other's /e"
-        );
-        assert!(
-            emote_reaches_team(ORC, TAUREN),
-            "two Horde races hear each other's /e"
-        );
-        assert!(
-            !emote_reaches_team(HUMAN, ORC),
-            "Alliance and Horde never hear each other's /e"
-        );
-        assert!(
-            emote_reaches_team(HUMAN, HUMAN),
-            "the same race always shares a team"
-        );
     }
 
     #[test]

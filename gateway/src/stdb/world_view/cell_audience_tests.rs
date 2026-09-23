@@ -10,7 +10,7 @@ use crate::codec::property_tests::Rng;
 use crate::stdb::bindings::{
     Aura, ChatEvent, CombatEvent, EmoteEvent, MeleeAttack, SpellCastEvent, SpellImpactEvent,
 };
-use crate::stdb::subscriptions::{chat_in_range, chat_range_yd, emote_reaches_team, A_STEALTH};
+use crate::stdb::subscriptions::{chat_in_range, chat_range_yd, A_STEALTH};
 use crate::world::{Outbound, SessionTx};
 use std::sync::mpsc::Receiver;
 
@@ -599,7 +599,8 @@ fn place(view: &WorldView, guid: u64, x: f32, y: f32) -> SessionId {
 
 /// Criterion 2 (T8): a same-team `/e` listener 20 yd away hears it, one 30 yd away does not, and
 /// neither does an opposite-team listener at 5 yd — [`chat_audience`]'s candidate set combined with
-/// the exact `chat_in_range` + [`emote_reaches_team`] gate `chat_event_outbound` applies.
+/// the exact `chat_in_range` + [`lyracore_shared::faction::same_team`] gate `chat_event_outbound`
+/// applies.
 #[test]
 fn emote_reaches_a_same_team_20_yd_listener_not_30_yd_nor_a_5_yd_enemy() {
     let view = WorldView::new(true);
@@ -613,7 +614,7 @@ fn emote_reaches_a_same_team_20_yd_listener_not_30_yd_nor_a_5_yd_enemy() {
     let reaches = |session: SessionId, lx: f32, ly: f32, listener_race: u8| {
         candidates.contains(&session)
             && chat_in_range(0, 0, 0.0, 0.0, 0, 0, lx, ly, range * range)
-            && emote_reaches_team(HUMAN_RACE, listener_race)
+            && lyracore_shared::faction::same_team(HUMAN_RACE, listener_race)
     };
 
     assert!(
