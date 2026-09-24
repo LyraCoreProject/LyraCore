@@ -736,7 +736,9 @@ A named, realm-wide set of Characters of one team with ranks, a leader, a messag
 emblem. Lives on Realm-core.
 
 **Guild Leader**:
-The one member at rank 0. The client's default rank name is "Guild Master".
+The one member at rank 0. The client's default rank name is "Guild Master". Its Character cannot be
+deleted. When a Guild Leader's Character is gone anyway, leadership passes to the member with the
+highest Guild Rank, earliest join first; a Guild with nobody left disbands.
 _Avoid_: guild master (it is also an NPC title), GM (means game master)
 
 **Guild Rank**:
