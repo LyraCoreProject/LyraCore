@@ -1191,6 +1191,27 @@ pub fn debug_stage_instance_removal_fixture(
     Ok(())
 }
 
+/// Push every running Instance Removal a day ahead, so a test fires one only through
+/// [`debug_expire_instance_removal`] and never races the real 60 s.
+#[reducer]
+pub fn debug_hold_instance_removals(ctx: &ReducerContext) -> Result<(), String> {
+    use crate::game_instance_removal;
+    crate::helpers::require_operator(ctx)?;
+    const DAY_MICROS: i64 = 24 * 60 * 60 * 1_000_000;
+    let due = spacetimedb::Timestamp::from_micros_since_unix_epoch(
+        ctx.timestamp.to_micros_since_unix_epoch() + DAY_MICROS,
+    );
+    let removals = ctx.db.game_instance_removal();
+    // Delete and insert, as the Mail Timer re-arms, so the scheduler takes the new due time.
+    for mut removal in removals.iter().collect::<Vec<_>>() {
+        removals.scheduled_id().delete(removal.scheduled_id);
+        removal.scheduled_id = 0;
+        removal.scheduled_at = spacetimedb::ScheduleAt::Time(due);
+        removals.insert(removal);
+    }
+    Ok(())
+}
+
 /// Run `character_guid`'s Instance Removal expiry now, as if its countdown had run out.
 #[reducer]
 pub fn debug_expire_instance_removal(

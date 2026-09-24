@@ -1228,15 +1228,25 @@ pub(crate) fn apply_reset_instances(
 //  Instance Removal
 // ===========================================================================================
 
+/// Where the Instance Removal rule holds for one Character on this Shard.
+#[derive(Clone, Copy)]
+struct RemovalStanding {
+    instance_id: u64,
+    group_id: u64,
+    /// The Character has a live entity. Only then does a countdown start.
+    in_world: bool,
+}
+
 /// The instance `character_guid` stands in and the Group that owns it, when the Instance Removal
 /// rule holds on this Shard. A Character with a live entity stands where the entity is. A
 /// Character with no live entity stands where its durable row says, because its next login builds
 /// it there. A session-less Character with a live entity reads as exempt: only a World Session
 /// turns the cross-map teleport home into a Transfer, so a bot stays where it is. An in-transit
 /// Character reads as absent, because it is leaving this Shard.
-fn instance_removal_standing(ctx: &ReducerContext, character_guid: u64) -> Option<(u64, u64)> {
+fn instance_removal_standing(ctx: &ReducerContext, character_guid: u64) -> Option<RemovalStanding> {
     let character = crate::helpers::character_by_guid(ctx, character_guid)?;
-    let (map_id, instance_id) = match ctx.db.game_world_entity().guid().find(character_guid) {
+    let entity = ctx.db.game_world_entity().guid().find(character_guid);
+    let (map_id, instance_id) = match &entity {
         Some(_) if !character.online => return None,
         Some(entity) => (entity.map_id, entity.instance_id),
         None => (character.map_id, character.pending_instance_id),
@@ -1255,32 +1265,39 @@ fn instance_removal_standing(ctx: &ReducerContext, character_guid: u64) -> Optio
         own_group,
         character.gm_level,
     )
-    .then_some((instance_id, instance_party))
+    .then_some(RemovalStanding {
+        instance_id,
+        group_id: instance_party,
+        in_world: entity.is_some(),
+    })
 }
 
-/// Make `character_guid`'s Instance Removal match the rule: arm the countdown when the rule holds
-/// and no countdown runs for that instance, and cancel it when the rule no longer holds.
+/// Make `character_guid`'s Instance Removal match the rule: start the countdown when the rule holds
+/// for a Character in the world and no countdown runs for that instance, and cancel it when the
+/// rule no longer holds. cmangos marks only a Character in the world (cm:Group.cpp:1470-1484), so a
+/// Character removed while logged out starts its countdown at its next login. A countdown that is
+/// already running survives a logout, and its expiry moves the logged-out Character home.
 /// Idempotent. Realm-core holds no Characters, so there it does nothing.
 pub(crate) fn reconcile_instance_removal(ctx: &ReducerContext, character_guid: u64) {
     let removals = ctx.db.game_instance_removal();
     let running = removals.character_guid().find(character_guid);
     let standing = instance_removal_standing(ctx, character_guid);
-    if let (Some(row), Some((instance_id, _))) = (&running, standing) {
-        if row.instance_id == instance_id {
+    if let (Some(row), Some(standing)) = (&running, standing) {
+        if row.instance_id == standing.instance_id {
             return;
         }
     }
     if let Some(row) = running {
         removals.scheduled_id().delete(row.scheduled_id);
     }
-    if let Some((instance_id, group_id)) = standing {
+    if let Some(standing) = standing.filter(|standing| standing.in_world) {
         let due = ctx.timestamp.to_micros_since_unix_epoch() + INSTANCE_REMOVAL_MICROS;
         removals.insert(InstanceRemoval {
             scheduled_id: 0,
             scheduled_at: ScheduleAt::Time(Timestamp::from_micros_since_unix_epoch(due)),
             character_guid,
-            instance_id,
-            group_id,
+            instance_id: standing.instance_id,
+            group_id: standing.group_id,
         });
     }
 }
@@ -1313,7 +1330,7 @@ pub(crate) fn fire_instance_removal(ctx: &ReducerContext, removal: &InstanceRemo
     }
     removals.scheduled_id().delete(removal.scheduled_id);
     match instance_removal_standing(ctx, removal.character_guid) {
-        Some((instance_id, _)) if instance_id == removal.instance_id => {
+        Some(standing) if standing.instance_id == removal.instance_id => {
             crate::world::recall_to_home(ctx, removal.character_guid);
         }
         _ => reconcile_instance_removal(ctx, removal.character_guid),

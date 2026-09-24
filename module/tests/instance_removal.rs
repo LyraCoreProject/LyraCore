@@ -34,8 +34,10 @@ fn start(name: &str) -> Standalone {
     node
 }
 
-/// `(character_guid, instance_id, group_id)` of every running countdown, by guid.
+/// `(character_guid, instance_id, group_id)` of every running countdown, by guid. Each countdown
+/// is first pushed a day ahead, so only `debug_expire_instance_removal` ever fires one.
 fn countdowns(node: &Standalone) -> Vec<(u64, String, String)> {
+    node.assert_call("debug_hold_instance_removals", &[]);
     let mut rows: Vec<_> = node
         .query_rows("SELECT character_guid, instance_id, group_id FROM game_instance_removal")
         .into_iter()
@@ -151,11 +153,13 @@ fn the_group_mirror_arms_and_cancels_the_countdown_in_roster_revision_order() {
     mirror(&node, 5, 1, &charlie_left, &[0x80, 1, 0]);
     assert_eq!(countdowns(&node), counting(&[CHARLIE], "900"));
 
+    // BRAVO logs out first: a Character removed while logged out gets no countdown.
+    node.assert_call("debug_logout_character", &[&BRAVO.to_string()]);
     mirror(&node, 6, 1, &[], &[]);
     assert_eq!(
         countdowns(&node),
-        counting(&[ALPHA, BRAVO, CHARLIE], "900"),
-        "a disband counts down for every former member but the session-less one"
+        counting(&[ALPHA, CHARLIE], "900"),
+        "a disband counts down for every former member in the world but the session-less one"
     );
 
     let updates = node.capture_updates("SELECT * FROM game_teleport_event", 1, || {
@@ -183,7 +187,7 @@ fn the_group_mirror_arms_and_cancels_the_countdown_in_roster_revision_order() {
         "the live Character's client is sent home"
     );
     assert_at_home(&node, ALPHA);
-    assert_eq!(countdowns(&node), counting(&[BRAVO, CHARLIE], "900"));
+    assert_eq!(countdowns(&node), counting(&[CHARLIE], "900"));
 }
 
 fn group_op(node: &Standalone, op: &str, actor_guid: u64, target_guid: u64, arg_a: u8) {

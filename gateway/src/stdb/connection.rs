@@ -722,7 +722,9 @@ impl CoordinatorInner {
     /// runs its row callbacks before the reducer callback. Waiting for that callback is therefore a
     /// deterministic visibility receipt: relays for the transaction are queued before the caller
     /// can enqueue success presentation. Reducer-only call pipes cannot provide that ordering
-    /// because they do not subscribe the relayed tables.
+    /// because they do not subscribe the relayed tables. A World Session's Realm-core party op
+    /// rides this pipe, so the Group mirror push after it reads the committed roster. It blocks on
+    /// the pump, so a pump callback must never call it.
     pub(crate) fn visibility_pipe(&self) -> std::sync::RwLockReadGuard<'_, LiveConn> {
         self.coord()
     }

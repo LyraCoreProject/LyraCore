@@ -1093,6 +1093,25 @@ fn deleted_character_leave_returns_with_the_committed_roster_visible() {
         "bot callbacks can invoke the ordinary party operation on their Coordinator pump, so it \
          must retain the independent call pipe. Body was:\n{ordinary}"
     );
+
+    let visible = crate::test_scan::code_of(src, "pub fn realm_group_op_visible(");
+    assert!(
+        visible.contains("let coordinator = self.0.visibility_pipe()")
+            && visible.contains("coordinator.conn.reducers"),
+        "a World Session's party op pushes the mirror from a read right after it, so it must \
+         return a Coordinator visibility receipt. Body was:\n{visible}"
+    );
+}
+
+/// The production pipes cannot run in a Gateway test, so the choice of op in `party::run` is pinned
+/// here and the lagging Fake above proves what it buys.
+#[test]
+fn a_world_session_runs_its_realm_party_op_on_the_visibility_pipe() {
+    let run = crate::test_scan::code_of(include_str!("party.rs"), "pub(crate) fn run<");
+    assert!(run.contains("run_on_authority_visible(realm.as_ref(), self_guid, op)"));
+    let visible =
+        crate::test_scan::code_of(include_str!("party.rs"), "fn run_on_authority_visible<");
+    assert!(visible.contains("authority.realm_group_op_visible("));
 }
 
 /// **The invariant this batch has broken five times: unset config changes NOTHING.**
@@ -4062,4 +4081,69 @@ fn a_group_broadcast_lost_in_transport_keeps_the_session() {
     assert_nothing_sent_before_the_barrier(&mut client, &mut c_enc, &mut c_dec);
     drop(client);
     let _ = server.join();
+}
+
+/// Whether `shard`'s mirror of Group `group_id` lists `member`.
+fn mirror_lists(shard: &InMemoryStore, group_id: u64, member: u64) -> bool {
+    shard
+        .mirror
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|roster| roster.group_id == group_id)
+        .is_some_and(|roster| roster.has_member(member))
+}
+
+/// A three-member party with Vim inside the dungeon on `instances`. From here on Realm-core's
+/// Coordinator cache lags every call-pipe commit.
+fn lagging_three_member_party() -> (
+    std::sync::Arc<InMemoryStore>,
+    std::sync::Arc<InMemoryStore>,
+    u64,
+) {
+    let (realm, world, instances, _) = party_topology();
+    form_split_party(&world, &instances);
+    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(TRIN)).unwrap();
+    party::run(world.as_ref(), 9, TRIN, party::Op::Accept).unwrap();
+    let group_id = realm.group_roster(VIM).unwrap().unwrap().group_id;
+    realm
+        .cache_lags
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    (world, instances, group_id)
+}
+
+/// The Instance Pool starts and cancels an Instance Removal from its mirror. A World Session's
+/// party op returns only after the Coordinator cache holds the commit, so a cache that lags the
+/// commit still pushes the leave and the rejoin, and the Pool never sends home a Character whom
+/// Realm-core shows back in its Group.
+#[test]
+fn a_leave_and_a_rejoin_reach_the_instance_pool_while_the_realm_cache_lags() {
+    let (world, instances, group_id) = lagging_three_member_party();
+
+    party::run(instances.as_ref(), 8, VIM, party::Op::Leave).unwrap();
+    assert!(
+        !mirror_lists(&instances, group_id, VIM),
+        "the Pool learns that Vim left"
+    );
+
+    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(VIM)).unwrap();
+    party::run(instances.as_ref(), 8, VIM, party::Op::Accept).unwrap();
+    assert!(
+        mirror_lists(&instances, group_id, VIM),
+        "the Pool learns that Vim is back"
+    );
+}
+
+/// A membership op retries a failed mirror push, so one dropped push cannot strand a rejoin.
+#[test]
+fn a_rejoin_retries_a_failed_mirror_push() {
+    let (world, instances, group_id) = lagging_three_member_party();
+    party::run(instances.as_ref(), 8, VIM, party::Op::Leave).unwrap();
+    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(VIM)).unwrap();
+
+    instances
+        .mirror_failures
+        .store(2, std::sync::atomic::Ordering::SeqCst);
+    party::run(instances.as_ref(), 8, VIM, party::Op::Accept).unwrap();
+    assert!(mirror_lists(&instances, group_id, VIM));
 }

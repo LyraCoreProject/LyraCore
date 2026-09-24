@@ -325,6 +325,10 @@ pub(crate) struct WorldView {
     /// dispatch; the order fixes the ids, so it must never be reordered after arming.
     shards: RwLock<Vec<Coordinator>>,
     next_session: AtomicU64,
+    /// Characters whose client was last sent a running Instance Removal countdown. It outlives the
+    /// viewer: a world-port drops the source viewer before the source Shard deletes the row, so
+    /// the next world entry must hide the countdown itself.
+    countdowns_shown: Mutex<HashSet<u64>>,
 }
 
 impl WorldView {
@@ -335,7 +339,25 @@ impl WorldView {
             viewers: RwLock::new(ViewerRegistry::default()),
             shards: RwLock::new(Vec::new()),
             next_session: AtomicU64::new(1),
+            countdowns_shown: Mutex::new(HashSet::new()),
         }
+    }
+
+    /// Record whether `character_guid`'s client now shows an Instance Removal countdown.
+    fn note_countdown(&self, character_guid: u64, shown: bool) {
+        let mut countdowns = self.countdowns_shown.lock().unwrap();
+        if shown {
+            countdowns.insert(character_guid);
+        } else {
+            countdowns.remove(&character_guid);
+        }
+    }
+
+    fn countdown_shown(&self, character_guid: u64) -> bool {
+        self.countdowns_shown
+            .lock()
+            .unwrap()
+            .contains(&character_guid)
     }
 
     fn viewer(&self, session: SessionId) -> Option<Arc<Viewer>> {
@@ -2030,39 +2052,54 @@ fn breath_relay_appeared(view: &WorldView, shard: ShardId, row: &BreathRelayEven
 }
 
 /// Show an Instance Removal countdown to its owner on the callback's Shard.
-fn instance_removal_started(view: &WorldView, shard: ShardId, row: &InstanceRemoval) {
+fn instance_removal_started(view: &Arc<WorldView>, shard: ShardId, row: &InstanceRemoval) {
     let Some(viewer) = view.viewer_of_owner_on_shard(shard, OwnerGuid(row.character_guid)) else {
         return;
     };
-    let due = row.scheduled_at;
-    enqueue(viewer, move |_| {
-        instance_removal_countdown(&due, super::subscriptions::unix_now_micros())
+    let (view, due) = (view.clone(), row.scheduled_at);
+    enqueue(viewer, move |viewer| {
+        let now = super::subscriptions::unix_now_micros();
+        instance_removal_time_left_ms(&due, now)
+            .map(|left| show_countdown(&view, viewer.self_guid, left))
+            .into_iter()
+            .collect()
     });
 }
 
 /// Hide an ended Instance Removal countdown, canceled or expired, from its owner on the callback's
 /// Shard.
-fn instance_removal_ended(view: &WorldView, shard: ShardId, row: &InstanceRemoval) {
+fn instance_removal_ended(view: &Arc<WorldView>, shard: ShardId, row: &InstanceRemoval) {
     let Some(viewer) = view.viewer_of_owner_on_shard(shard, OwnerGuid(row.character_guid)) else {
         return;
     };
-    enqueue(viewer, |_| {
-        vec![Outbound::One(ServerOpcodeMessage::SMSG_RAID_GROUP_ONLY(
-            crate::codec::build_raid_group_only(0),
-        ))]
+    let view = view.clone();
+    enqueue(viewer, move |viewer| {
+        vec![show_countdown(&view, viewer.self_guid, 0)]
     });
 }
 
-/// The countdown packet for an Instance Removal due at `due`, with the time left at `now_micros`.
-/// Nothing once the due time has passed: a zero timer would hide the countdown instead.
-fn instance_removal_countdown(due: &spacetimedb_sdk::ScheduleAt, now_micros: u64) -> Vec<Outbound> {
-    instance_removal_time_left_ms(due, now_micros)
-        .map(|left| {
-            vec![Outbound::One(ServerOpcodeMessage::SMSG_RAID_GROUP_ONLY(
-                crate::codec::build_raid_group_only(left),
-            ))]
-        })
-        .unwrap_or_default()
+/// `SMSG_RAID_GROUP_ONLY` with `timer_ms` left, 0 to hide the countdown, noting what the client
+/// now shows.
+fn show_countdown(view: &WorldView, character_guid: u64, timer_ms: u32) -> Outbound {
+    view.note_countdown(character_guid, timer_ms > 0);
+    Outbound::One(ServerOpcodeMessage::SMSG_RAID_GROUP_ONLY(
+        crate::codec::build_raid_group_only(timer_ms),
+    ))
+}
+
+/// The timer a world entry sends: the time left of the countdown `due` on the Home Shard, or 0 to
+/// hide a countdown the client was last shown when the Home Shard holds none. A Character that
+/// left the Instance Pool through the portal reaches its new Home Shard this way (vmangos hides
+/// with the same zero timer, vm:Player.cpp:18561-18569). `None` sends nothing. Pure.
+fn resident_countdown_ms(
+    due: Option<&spacetimedb_sdk::ScheduleAt>,
+    shown: bool,
+    now_micros: u64,
+) -> Option<u32> {
+    match due {
+        Some(due) => instance_removal_time_left_ms(due, now_micros),
+        None => shown.then_some(0),
+    }
 }
 
 /// Milliseconds left before `due` at `now_micros`, rounded up and never more than the full
@@ -2086,9 +2123,14 @@ fn instance_removal_time_left_ms(
     )
 }
 
-/// The world-entry replay of `character_guid`'s running Instance Removal on `coord`'s Shard, so a
-/// reconnect inside the countdown shows the time left.
-fn resident_instance_removal_outbound(coord: &Coordinator, character_guid: u64) -> Vec<Outbound> {
+/// The world-entry Instance Removal packet for `character_guid`, read from its Home Shard `coord`:
+/// a reconnect inside the countdown shows the time left, and an arrival without one hides a
+/// countdown still on screen. See [`resident_countdown_ms`].
+fn resident_instance_removal_outbound(
+    view: &WorldView,
+    coord: &Coordinator,
+    character_guid: u64,
+) -> Vec<Outbound> {
     let due = coord
         .0
         .coord()
@@ -2098,8 +2140,11 @@ fn resident_instance_removal_outbound(coord: &Coordinator, character_guid: u64) 
         .character_guid()
         .find(&character_guid)
         .map(|row| row.scheduled_at);
-    due.map(|due| instance_removal_countdown(&due, super::subscriptions::unix_now_micros()))
-        .unwrap_or_default()
+    let now = super::subscriptions::unix_now_micros();
+    resident_countdown_ms(due.as_ref(), view.countdown_shown(character_guid), now)
+        .map(|timer_ms| show_countdown(view, character_guid, timer_ms))
+        .into_iter()
+        .collect()
 }
 
 /// A skill row changed (line learned / skill-up). Self-only family, same owner-session-lookup
@@ -2951,16 +2996,16 @@ mod family_audience_tests {
         exploration_outbound_for_word, guild_event_appeared, guild_membership_changed,
         instance_removal_ended, instance_removal_started, instance_removal_time_left_ms,
         is_initial_apply, item_owner_job, levelup_appeared, mail_arrived, petition_event_appeared,
-        reputation_appeared, sweep_into_view, system_message_appeared, teleport_appeared,
-        weather_changed, xp_appeared, zone_crossed, BoundIdentity, ExplorationReplay,
-        GuildMembershipRead, GuildRosterSnapshotRead, MotionPending, OwnerGuid, PetitionRead,
-        Viewer, WorldView,
+        reputation_appeared, resident_countdown_ms, sweep_into_view, system_message_appeared,
+        teleport_appeared, weather_changed, xp_appeared, zone_crossed, BoundIdentity,
+        ExplorationReplay, GuildMembershipRead, GuildRosterSnapshotRead, MotionPending, OwnerGuid,
+        PetitionRead, Viewer, WorldView,
     };
     use crate::stdb::aoi::ViewerGates;
     use crate::stdb::bindings::{
         AddonMessage, CharacterExplored, CharacterQuest, GuildEvent, GuildPetition,
-        InstanceRemoval, LevelupEvent,
-        MailArrival, PlayerReputation, SystemMessageEvent, TeleportEvent, XpEvent, ZoneWeather,
+        InstanceRemoval, LevelupEvent, MailArrival, PlayerReputation, SystemMessageEvent,
+        TeleportEvent, XpEvent, ZoneWeather,
     };
     use crate::stdb::subscriptions::{private_recipient_audience, quest_update_packets};
     use crate::stdb::world_index::{CellKey, EntityLayer};
@@ -4351,7 +4396,7 @@ mod family_audience_tests {
 
     #[test]
     fn an_instance_removal_shows_and_hides_the_countdown_for_its_owner_only() {
-        let view = WorldView::new(true);
+        let view = Arc::new(WorldView::new(true));
         let (owner_tx, owner_rx) = SessionTx::with_depth(0);
         let (other_tx, other_rx) = SessionTx::with_depth(0);
         let owner = viewer_with_tx(1, 9001, identity(1), owner_tx);
@@ -4372,12 +4417,47 @@ mod family_audience_tests {
         assert!(owner_rx.try_recv().is_err(), "another Shard's row");
         instance_removal_started(&view, 1, &row);
         assert_eq!(raid_group_only_timer(&queued_job(&owner_rx)), 60_000);
+        assert!(view.countdown_shown(owner.self_guid));
         instance_removal_ended(&view, 1, &row);
         assert_eq!(raid_group_only_timer(&queued_job(&owner_rx)), 0);
+        assert!(!view.countdown_shown(owner.self_guid));
         assert!(owner_rx.try_recv().is_err(), "one job per row change");
         assert!(
             other_rx.try_recv().is_err(),
             "an unrelated viewer receives nothing"
+        );
+    }
+
+    /// A world-port drops the source viewer before the source Shard deletes the row, so the delete
+    /// reaches nobody. The countdown the client still shows is hidden at the next world entry.
+    #[test]
+    fn a_world_entry_hides_a_countdown_whose_row_is_gone() {
+        let view = Arc::new(WorldView::new(true));
+        let (tx, rx) = SessionTx::with_depth(0);
+        let source = viewer_with_tx(1, 9001, identity(1), tx);
+        view.add_viewer_on_shard(source.clone(), CellKey::at(36, 7, 0, 0), 1);
+        let row = InstanceRemoval {
+            scheduled_id: 3,
+            scheduled_at: at_micros(4_102_444_800_000_000),
+            character_guid: source.self_guid,
+            instance_id: 7,
+            group_id: 42,
+        };
+        instance_removal_started(&view, 1, &row);
+        queued_job(&rx);
+        view.remove_viewer(source.session);
+        instance_removal_ended(&view, 1, &row);
+
+        let shown = view.countdown_shown(9001);
+        assert_eq!(resident_countdown_ms(None, shown, 0), Some(0));
+        assert_eq!(resident_countdown_ms(None, false, 0), None);
+        assert_eq!(
+            resident_countdown_ms(
+                Some(&at_micros(1_900_000_000_000_000)),
+                false,
+                1_899_999_955_000_000
+            ),
+            Some(45_000)
         );
     }
 
@@ -5383,7 +5463,11 @@ pub(crate) fn sweep_into_view(view: &Arc<WorldView>, viewer: &Arc<Viewer>) {
             .shard_of_viewer(viewer.session)
             .and_then(|shard| view.shard(shard))
         {
-            out.extend(resident_instance_removal_outbound(&coord, viewer.self_guid));
+            out.extend(resident_instance_removal_outbound(
+                &view,
+                &coord,
+                viewer.self_guid,
+            ));
         }
         out
     });

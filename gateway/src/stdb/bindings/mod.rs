@@ -203,6 +203,7 @@ pub mod debug_grant_default_actions_reducer;
 pub mod debug_grant_item_reducer;
 pub mod debug_grant_quest_reducer;
 pub mod debug_grant_reputation_reducer;
+pub mod debug_hold_instance_removals_reducer;
 pub mod debug_kill_creature_reducer;
 pub mod debug_kill_nearest_reducer;
 pub mod debug_learn_profession_from_trainer_reducer;
@@ -1344,6 +1345,7 @@ pub use debug_grant_default_actions_reducer::debug_grant_default_actions;
 pub use debug_grant_item_reducer::debug_grant_item;
 pub use debug_grant_quest_reducer::debug_grant_quest;
 pub use debug_grant_reputation_reducer::debug_grant_reputation;
+pub use debug_hold_instance_removals_reducer::debug_hold_instance_removals;
 pub use debug_kill_creature_reducer::debug_kill_creature;
 pub use debug_kill_nearest_reducer::debug_kill_nearest;
 pub use debug_learn_profession_from_trainer_reducer::debug_learn_profession_from_trainer;
@@ -2743,6 +2745,7 @@ pub enum Reducer {
         faction_id: u32,
         amount: i32,
     },
+    DebugHoldInstanceRemovals,
     DebugKillCreature {
         killer_guid: u64,
         target_guid: u64,
@@ -4352,6 +4355,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugGrantItem { .. } => "debug_grant_item",
             Reducer::DebugGrantQuest { .. } => "debug_grant_quest",
             Reducer::DebugGrantReputation { .. } => "debug_grant_reputation",
+            Reducer::DebugHoldInstanceRemovals => "debug_hold_instance_removals",
             Reducer::DebugKillCreature { .. } => "debug_kill_creature",
             Reducer::DebugKillNearest { .. } => "debug_kill_nearest",
             Reducer::DebugLearnProfession { .. } => "debug_learn_profession",
@@ -5545,7 +5549,9 @@ Reducer::DebugCheckRestAt{
                 faction_id: faction_id.clone(),
                 amount: amount.clone(),
 }),
-            Reducer::DebugKillCreature{
+            Reducer::DebugHoldInstanceRemovals => __sats::bsatn::to_vec(&debug_hold_instance_removals_reducer::DebugHoldInstanceRemovalsArgs {
+                }),
+Reducer::DebugKillCreature{
                 killer_guid,
                 target_guid,
 }             => __sats::bsatn::to_vec(&debug_kill_creature_reducer::DebugKillCreatureArgs {

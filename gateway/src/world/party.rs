@@ -414,6 +414,18 @@ fn run_on_authority<A: WorldStore + ?Sized>(
     authority.realm_group_op(code, self_guid, target, arg_a, arg_b, arg_c)
 }
 
+/// [`run_on_authority`] that returns only after the Coordinator cache holds the commit, so the
+/// mirror push after it reads the op's own roster. For a World Session only: it waits on the
+/// Coordinator pump, which a bot callback runs on.
+fn run_on_authority_visible<A: WorldStore + ?Sized>(
+    authority: &A,
+    self_guid: u64,
+    op: Op,
+) -> Result<PartyOutcome> {
+    let (code, target, arg_a, arg_b, arg_c) = op.realm_args();
+    authority.realm_group_op_visible(code, self_guid, target, arg_a, arg_b, arg_c)
+}
+
 /// What one party op answered. A [`GroupRefusal`] is a gameplay answer the client renders, so it
 /// arrives as `Ok`; a timeout, transport failure, or untagged reducer error stays `Err` and ends the
 /// session, because the durable outcome is then unknown.
@@ -834,8 +846,10 @@ fn answer_for_session_less<St: WorldStore + ?Sized>(store: &St, realm: &dyn Worl
 /// Group Broadcast has no player-facing reducer, so it calls `realm_group_op` on that same shard.
 ///
 /// Sharded → realm-core runs the op, then every connected world shard's mirror is refreshed. The
-/// mirror refresh is best-effort BY DESIGN (see [`sync_mirrors`]); the op's own result is not. A
-/// Group Broadcast runs on Realm-core and nothing else happens.
+/// op returns only after the Coordinator cache holds its commit, so the refresh reads the op's own
+/// roster. The refresh never fails the op (see [`sync_mirrors`]); an op that changes membership
+/// retries it first ([`sync_membership_mirrors`]). A Group Broadcast runs on Realm-core and nothing
+/// else happens.
 pub(crate) fn run<St: WorldStore + ?Sized>(
     store: &St,
     account_id: u64,
@@ -914,7 +928,8 @@ pub(crate) fn run<St: WorldStore + ?Sized>(
     if matches!(op, Op::Leave | Op::Uninvite(_)) {
         crate::world::loot::flush_pending_promotions(store, realm.as_ref());
     }
-    if let PartyOutcome::Refused(refusal) = run_on_authority(realm.as_ref(), self_guid, op)? {
+    if let PartyOutcome::Refused(refusal) = run_on_authority_visible(realm.as_ref(), self_guid, op)?
+    {
         return Ok(PartyOutcome::Refused(refusal));
     }
     // Nobody is at the keyboard of a playerbot, so nobody answers its dialog. Done
@@ -926,17 +941,49 @@ pub(crate) fn run<St: WorldStore + ?Sized>(
     if op_changed_nothing(op, before.as_ref()) {
         return Ok(PartyOutcome::Ran);
     }
-    sync_mirrors(store, realm.as_ref(), self_guid, before);
+    if matches!(op, Op::Accept | Op::Leave | Op::Uninvite(_)) {
+        sync_membership_mirrors(store, realm.as_ref(), self_guid, before);
+    } else {
+        sync_mirrors(store, realm.as_ref(), self_guid, before);
+    }
     Ok(PartyOutcome::Ran)
+}
+
+/// The mirror push after an op that changes who is in a Group. The Instance Pool starts and cancels
+/// Instance Removals from this push, so a lost push would send home a Character whom Realm-core
+/// shows back in its Group. Each touched Group gets [`sync_group_mirrors_required`]'s retries. The
+/// op has already committed, so a push that still fails is logged, not returned: the next op or
+/// world entry repairs it, as [`sync_mirrors`] documents.
+fn sync_membership_mirrors<St: WorldStore + ?Sized>(
+    store: &St,
+    realm: &dyn WorldStore,
+    self_guid: u64,
+    before: Option<GroupRoster>,
+) {
+    let mut touched: Vec<u64> = before.iter().map(|roster| roster.group_id).collect();
+    match realm.group_roster(self_guid) {
+        Ok(Some(now)) if !touched.contains(&now.group_id) => touched.push(now.group_id),
+        Ok(_) => {}
+        Err(error) => log::warn!(
+            "party: could not read the realm-core roster for {self_guid} ({error:#}); only its \
+             previous Group is mirrored"
+        ),
+    }
+    for group_id in touched {
+        if let Err(error) = sync_group_mirrors_required(store, realm, group_id, before.as_ref()) {
+            log::warn!(
+                "party: group {group_id} mirrors stay stale until the next op or world entry \
+                 ({error:#})"
+            );
+        }
+    }
 }
 
 /// Whether a successful op changed nothing, so no mirror needs a push: converting a Raid again,
 /// repeating a promotion or a demotion, a Change Subgroup into the Subgroup a member already
 /// holds, or a Swap Subgroup between two members of one Subgroup. The answer comes from the roster
-/// read before the op, not after it. The op returns on a call pipe before the Coordinator cache
-/// holds its rows, so a read after it can still show the old roster and hide a real change. A
-/// stale `before` costs at most a missed push, which the next op or world entry repairs, as
-/// [`sync_mirrors`] documents.
+/// read before the op, not after it: a stale `before` costs at most a missed push, which the next
+/// op or world entry repairs, as [`sync_mirrors`] documents.
 fn op_changed_nothing(op: Op, before: Option<&GroupRoster>) -> bool {
     let Some(before) = before else {
         return false;
