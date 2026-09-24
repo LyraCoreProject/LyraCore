@@ -309,7 +309,8 @@ Who receives one Group Broadcast: everyone, everyone but the actor, the leader, 
 
 **Group Broadcast**:
 One Realm-core `game_group_event` row per recipient in a Group Audience. Every Gateway relays the
-rows addressed to its own sessions.
+rows addressed to its own sessions. A World Session may start a Ready Check, ping the minimap or
+`/roll` once a second for each of the three. The Gateway drops a repeat inside that second.
 
 **Target Icon**:
 One of 8 marks a leader or Assistant puts on a unit, held per Group on the party authority. A unit
