@@ -1410,6 +1410,18 @@ fn dispatch<St: WorldStore + ?Sized>(
             }
             return Ok(());
         }
+        QuestActionOutcome::TurnedIn { outbound } => {
+            for message in outbound {
+                send(tx, message)?;
+            }
+            // The turn-in used the visibility pipe, so a Reward Letter it filed is in the cache
+            // and the escrow index now. A failed drive leaves the letter held for world entry or
+            // the next mailbox visit.
+            if let Some(self_guid) = social::self_guid(conn) {
+                mail::redrive(store, self_guid);
+            }
+            return Ok(());
+        }
         QuestActionOutcome::PassThrough(msg) => msg,
     };
     let msg = match dispatch_taxi_action(

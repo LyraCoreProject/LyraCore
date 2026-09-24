@@ -67,6 +67,67 @@ impl MailSender {
         }
     }
 }
+/// The quest giver a Reward Letter is from. Only a creature or a gameobject ends a quest.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum QuestGiver {
+    /// The creature template entry.
+    Creature(u32),
+    /// The gameobject template entry.
+    Gameobject(u32),
+}
+
+impl QuestGiver {
+    pub fn sender(self) -> MailSender {
+        match self {
+            Self::Creature(entry) => MailSender::Creature(entry),
+            Self::Gameobject(entry) => MailSender::Gameobject(entry),
+        }
+    }
+}
+/// What makes a letter a Reward Letter: the quest giver it is from and the Mail Template it names.
+/// A Character's letter has none.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct RewardHeader {
+    pub giver: QuestGiver,
+    pub mail_template_id: u32,
+}
+
+impl RewardHeader {
+    /// The `(sender_kind, sender_entry, mail_template_id)` a mail escrow row and
+    /// `realm_mail_commit` carry. A Character's letter is all zeros.
+    pub fn columns(header: Option<Self>) -> (u8, u32, u32) {
+        match header {
+            None => (SENDER_KIND_CHARACTER, 0, 0),
+            Some(header) => {
+                let (kind, _, entry) = header.giver.sender().columns();
+                (kind, entry, header.mail_template_id)
+            }
+        }
+    }
+    /// The inverse of [`Self::columns`]. Any other value is refused, so a damaged row never
+    /// commits as a Character's letter from its recipient to itself.
+    pub fn from_columns(
+        sender_kind: u8,
+        sender_entry: u32,
+        mail_template_id: u32,
+    ) -> Result<Option<Self>, String> {
+        let giver = match sender_kind {
+            SENDER_KIND_CHARACTER if (sender_entry, mail_template_id) == (0, 0) => return Ok(None),
+            SENDER_KIND_CREATURE => QuestGiver::Creature(sender_entry),
+            SENDER_KIND_GAMEOBJECT => QuestGiver::Gameobject(sender_entry),
+            _ => {
+                return Err(format!(
+                    "no letter has sender kind {sender_kind}, entry {sender_entry} and mail \
+                     template {mail_template_id}"
+                ))
+            }
+        };
+        Ok(Some(Self {
+            giver,
+            mail_template_id,
+        }))
+    }
+}
 const DAY_SECS: i64 = 86_400;
 /// When a mail became visible to its recipient. A delivery instant of 0 means "when it was
 /// created", which is true for every mail that was never delayed.
@@ -186,6 +247,41 @@ pub const COD_MAIL_UNDELETABLE: &str =
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_reward_header_is_read_back_from_its_columns() {
+        let card = RewardHeader {
+            giver: QuestGiver::Creature(7_802),
+            mail_template_id: 99,
+        };
+        assert_eq!(RewardHeader::columns(Some(card)), (3, 7_802, 99));
+        assert_eq!(RewardHeader::from_columns(3, 7_802, 99), Ok(Some(card)));
+        assert_eq!(
+            RewardHeader::from_columns(4, 176_582, 99),
+            Ok(Some(RewardHeader {
+                giver: QuestGiver::Gameobject(176_582),
+                mail_template_id: 99,
+            }))
+        );
+        assert_eq!(RewardHeader::columns(None), (0, 0, 0));
+        assert_eq!(RewardHeader::from_columns(0, 0, 0), Ok(None));
+    }
+
+    #[test]
+    fn a_sender_kind_no_letter_uses_is_refused() {
+        for (kind, entry, template) in [
+            (2, 7, 0),
+            (1, 620, 99),
+            (5, 620, 99),
+            (0, 0, 99),
+            (0, 620, 0),
+        ] {
+            assert!(
+                RewardHeader::from_columns(kind, entry, template).is_err(),
+                "kind {kind}, entry {entry}, template {template}"
+            );
+        }
+    }
+
     use super::*;
 
     #[test]

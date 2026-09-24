@@ -341,7 +341,7 @@ mod mail;
 mod mail_catalogue;
 /// Mail attachment escrow: the source-side fence, the mail-plane commit keyed by the same
 /// caller-chosen id, and the reaper. The mechanism for moving value into a mail row across a
-/// database boundary no transaction spans. A single-database player send bypasses it; a Reward
+/// database boundary no transaction spans. A single-database send by a Character bypasses it; a Reward
 /// Letter uses it on every plane.
 mod mail_escrow;
 /// Reward Letters: the letter a quest giver sends at turn-in, filed as Mail Escrow in the turn-in's

@@ -766,7 +766,7 @@ impl WorldStore for Coordinator {
         cod: u32,
         cod_source_mail_id: u64,
         delivery_delay_secs: u32,
-        header: crate::world::mail::LetterHeader,
+        reward: Option<lyracore_shared::mail::RewardHeader>,
     ) -> Result<()> {
         self.mail_commit(
             escrow_id,
@@ -779,7 +779,7 @@ impl WorldStore for Coordinator {
             cod,
             cod_source_mail_id,
             delivery_delay_secs,
-            header,
+            reward,
         )
     }
 

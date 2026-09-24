@@ -1665,11 +1665,9 @@ fn ensure_mail_escrow_range(
     gateway_id: &str,
 ) {
     let Some(rc_name) = map.realm_core_db() else {
-        // The single-database plane never uses escrow; install a harmless local range for tests and
-        // for future same-plane callers without introducing a realm dependency.
-        if let Err(e) = crate::world::mail::install_escrow_id_range(1, u64::MAX) {
-            log::error!("could not install local mail escrow range: {e:#}");
-        }
+        // The Gateway must not mint escrow ids on the single-database plane. There a Reward
+        // Letter's id comes from the database's own GUID Range, and any local Gateway range would
+        // overlap it. No range is installed, so a mint here refuses.
         return;
     };
     let Some(rc) = conns.get(rc_name) else { return };

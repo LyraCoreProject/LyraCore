@@ -367,7 +367,7 @@ _Avoid_: seam (see Working method)
 
 **Escrow**:
 Value or state held so it exists in exactly one shard while it moves. Used by Transfer and Mail; never by Trading.
-Mail Escrow carries a player's letter, a take from a Mail, and a Reward Letter.
+Mail Escrow carries a Character's letter, a take from a Mail, and a Reward Letter.
 
 ### Trading
 

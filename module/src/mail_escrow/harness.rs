@@ -2165,10 +2165,13 @@ fn a_cod_payment_arrives_at_once_whatever_delay_its_commit_carries() {
 /// 99 attaches item 11423, count 1, after 86,400 s (`cdb:` quest_template, mail_loot_template).
 const REWARD: u64 = 0x5EED_0004;
 const DAY_MICROS: i64 = 86_400 * 1_000_000;
+const CARD_HEADER: RewardHeader = RewardHeader {
+    giver: lyracore_shared::mail::QuestGiver::Creature(7_802),
+    mail_template_id: 99,
+};
 fn card_renewal() -> crate::mail_reward::RewardLetter {
     crate::mail_reward::RewardLetter {
-        sender: MailSender::Creature(7_802),
-        mail_template_id: 99,
+        header: CARD_HEADER,
         body: "Your card, $n.".into(),
         money: 0,
         item: ItemSnapshot {
@@ -2264,31 +2267,8 @@ fn a_reward_letter_is_never_filed_over_another_fence() {
     assert!(apply_file_reward(&mut shard, 0, RECIPIENT, &card_renewal()).is_err());
 }
 #[test]
-fn a_commit_reads_only_a_creature_or_gameobject_sender_as_a_reward_letter() {
-    assert_eq!(RewardHeader::from_columns(0, 0, 0), Ok(None));
-    assert_eq!(
-        RewardHeader::from_columns(3, 11_811, 123),
-        Ok(Some(RewardHeader {
-            sender: MailSender::Creature(11_811),
-            mail_template_id: 123,
-        }))
-    );
-    assert_eq!(
-        RewardHeader::from_columns(4, 176_582, 99),
-        Ok(Some(RewardHeader {
-            sender: MailSender::Gameobject(176_582),
-            mail_template_id: 99,
-        }))
-    );
-    assert!(RewardHeader::from_columns(2, 7, 0).is_err());
-}
-#[test]
 fn a_reward_letter_never_pays_a_cash_on_delivery_price() {
     let (_shard, mut plane, mail_id) = priced_mail_fixture();
-    let header = RewardHeader {
-        sender: MailSender::Creature(7_802),
-        mail_template_id: 99,
-    };
     assert!(apply_commit(
         &mut plane,
         REWARD,
@@ -2297,7 +2277,7 @@ fn a_reward_letter_never_pays_a_cash_on_delivery_price() {
         &ItemSnapshot::default(),
         mail_id,
         NO_DELAY,
-        Some(header),
+        Some(CARD_HEADER),
     )
     .is_err());
     assert!(plane.mailbox_of(SENDER).is_empty());

@@ -5,7 +5,7 @@
 //! that escrow to the mail plane as it drives a stalled send. The letter then commits with the
 //! turn-in or not at all, and the escrow id makes the commit happen once.
 
-use lyracore_shared::mail::MailSender;
+use lyracore_shared::mail::{QuestGiver, RewardHeader};
 use spacetimedb::{log, ReducerContext};
 
 use crate::game_item_template;
@@ -16,8 +16,7 @@ use crate::mail_catalogue::{MailLoot, QuestRewardMail};
 /// A Reward Letter as the catalogue describes it, ready to file.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) struct RewardLetter {
-    pub sender: MailSender,
-    pub mail_template_id: u32,
+    pub header: RewardHeader,
     /// The Mail Template's text.
     pub body: String,
     pub money: u32,
@@ -33,14 +32,14 @@ pub(crate) struct RewardLetter {
 /// catalogue row that is missing.
 pub(crate) fn plan_reward_letter(
     reward: &QuestRewardMail,
-    quest_ender: Option<MailSender>,
+    quest_ender: Option<QuestGiver>,
     body: Option<String>,
     loot: Option<&MailLoot>,
     max_durability: Option<u32>,
 ) -> Result<RewardLetter, String> {
-    let sender = match reward.sender_creature_entry {
+    let giver = match reward.sender_creature_entry {
         0 => quest_ender.ok_or("the quest ender is neither a creature nor a gameobject")?,
-        entry => MailSender::Creature(entry),
+        entry => QuestGiver::Creature(entry),
     };
     let body = body.ok_or_else(|| format!("no mail template {}", reward.mail_template_id))?;
     let item = match loot {
@@ -54,8 +53,10 @@ pub(crate) fn plan_reward_letter(
         },
     };
     Ok(RewardLetter {
-        sender,
-        mail_template_id: reward.mail_template_id,
+        header: RewardHeader {
+            giver,
+            mail_template_id: reward.mail_template_id,
+        },
         body,
         money: reward.money,
         item,
@@ -66,8 +67,8 @@ pub(crate) fn plan_reward_letter(
 /// File the Reward Letter `quest_entry` sends, if it sends one, for `character_guid`, who just
 /// turned the quest in at `giver_guid`. Call it in the turn-in's transaction. A quest with no
 /// reward mail files nothing. A letter whose catalogue rows are missing logs an error and files
-/// nothing, and the turn-in still succeeds: the importer refuses that data, so it is not the
-/// player's fault.
+/// nothing, and the turn-in still succeeds: the importer refuses that data, so the Character is
+/// not at fault.
 /// `Err` when the Shard can mint no escrow id; the turn-in then fails too, so no letter is lost.
 pub(crate) fn file_reward_letter(
     ctx: &ReducerContext,
@@ -101,7 +102,7 @@ pub(crate) fn file_reward_letter(
             .find(loot.item_entry)
             .map(|t| t.max_durability)
     });
-    let quest_ender = crate::quest::quest_ender_mail_sender(ctx, giver_guid);
+    let quest_ender = crate::quest::quest_ender(ctx, giver_guid);
     let letter = match plan_reward_letter(&reward, quest_ender, body, loot.as_ref(), max_durability)
     {
         Ok(letter) => letter,
@@ -131,8 +132,8 @@ mod fixture {
         CreatureQuest, QuestTemplate,
     };
 
-    const PLAYER: u64 = 1;
-    /// The seed chicken. The fixture clones it into a giver next to the player.
+    const CHARACTER: u64 = 1;
+    /// The seed chicken. The fixture clones it into a giver next to the Character.
     const GIVER_SOURCE: u64 = (0xF130_u64 << 48) | ((620_u64) << 24) | 1;
     const GIVER: u64 = (0xF130_u64 << 48) | ((620_u64) << 24) | 0x00FF_FF01;
     const GIVER_ENTRY: u32 = 620;
@@ -148,28 +149,28 @@ mod fixture {
     /// A quest with no reward mail.
     const PLAIN_QUEST: u32 = 509_093;
 
-    /// Stage three completed quests for the seeded player 1 at a giver creature next to it: a
+    /// Stage three completed quests for the seeded Character 1 at a giver creature next to it: a
     /// card-renewal-shaped letter with an item, an 8728-shaped letter with copper from another
     /// creature, and a quest that sends nothing.
     #[spacetimedb::reducer]
     pub fn debug_stage_reward_letter_fixture(ctx: &ReducerContext) -> Result<(), String> {
         crate::helpers::require_operator(ctx)?;
         let entities = ctx.db.game_world_entity();
-        let player = entities
+        let character = entities
             .guid()
-            .find(PLAYER)
-            .ok_or_else(|| "reward letter fixture player is not live".to_string())?;
+            .find(CHARACTER)
+            .ok_or_else(|| "reward letter fixture Character is not live".to_string())?;
         let mut giver = entities
             .guid()
             .find(GIVER_SOURCE)
             .ok_or_else(|| "reward letter fixture giver source is not live".to_string())?;
         entities.guid().delete(GIVER);
         giver.guid = GIVER;
-        giver.x = player.x + 1.0;
-        giver.y = player.y;
-        giver.z = player.z;
-        giver.map_id = player.map_id;
-        giver.instance_id = player.instance_id;
+        giver.x = character.x + 1.0;
+        giver.y = character.y;
+        giver.z = character.z;
+        giver.map_id = character.map_id;
+        giver.instance_id = character.instance_id;
         let (grid_x, grid_y) = lyracore_shared::spatial::grid_cell(giver.x, giver.y);
         giver.grid_x = grid_x;
         giver.grid_y = grid_y;
@@ -255,7 +256,7 @@ mod fixture {
             let log = ctx.db.game_character_quest();
             for row in log
                 .by_character()
-                .filter(&PLAYER)
+                .filter(&CHARACTER)
                 .filter(|row| row.quest_entry == quest)
                 .collect::<Vec<_>>()
             {
@@ -263,8 +264,8 @@ mod fixture {
             }
             log.insert(CharacterQuest {
                 id: 0,
-                character_guid: PLAYER,
-                owner_identity: player.owner_identity,
+                character_guid: CHARACTER,
+                owner_identity: character.owner_identity,
                 quest_entry: quest,
                 counts: Vec::new(),
                 rewarded: false,
@@ -290,28 +291,35 @@ mod tests {
         }
     }
 
+    fn card_loot() -> MailLoot {
+        MailLoot {
+            mail_template_id: 99,
+            item_entry: 11_423,
+            count: 1,
+        }
+    }
+
+    const CARD_ENDER: Option<QuestGiver> = Some(QuestGiver::Creature(7_802));
+
     /// Quest 3645, Membership Card Renewal: template 99 attaches item 11423, count 1, and the quest
     /// ender sends it after 86,400 s (`cdb:` quest_template, mail_loot_template).
     #[test]
     fn the_quest_ender_sends_the_template_text_and_its_one_item() {
-        let loot = MailLoot {
-            mail_template_id: 99,
-            item_entry: 11_423,
-            count: 1,
-        };
         let letter = plan_reward_letter(
             &reward(99, 0, 0),
-            Some(MailSender::Creature(7_802)),
+            CARD_ENDER,
             Some("Your card, $n.".into()),
-            Some(&loot),
+            Some(&card_loot()),
             Some(0),
         )
         .expect("every row is present");
         assert_eq!(
             letter,
             RewardLetter {
-                sender: MailSender::Creature(7_802),
-                mail_template_id: 99,
+                header: RewardHeader {
+                    giver: QuestGiver::Creature(7_802),
+                    mail_template_id: 99,
+                },
                 body: "Your card, $n.".into(),
                 money: 0,
                 item: ItemSnapshot {
@@ -330,13 +338,13 @@ mod tests {
     fn a_script_sender_replaces_the_quest_ender_and_brings_its_copper() {
         let letter = plan_reward_letter(
             &reward(123, 11_811, 1_000_000),
-            Some(MailSender::Creature(15_192)),
+            Some(QuestGiver::Creature(15_192)),
             Some("From the front.".into()),
             None,
             None,
         )
         .expect("every row is present");
-        assert_eq!(letter.sender, MailSender::Creature(11_811));
+        assert_eq!(letter.header.giver, QuestGiver::Creature(11_811));
         assert_eq!(letter.money, 1_000_000);
         assert!(letter.item.is_empty());
     }
@@ -345,37 +353,39 @@ mod tests {
     fn a_gameobject_quest_ender_sends_as_a_gameobject() {
         let letter = plan_reward_letter(
             &reward(99, 0, 0),
-            Some(MailSender::Gameobject(176_582)),
+            Some(QuestGiver::Gameobject(176_582)),
             Some("A note.".into()),
             None,
             None,
         )
         .expect("every row is present");
-        assert_eq!(letter.sender, MailSender::Gameobject(176_582));
+        assert_eq!(letter.header.giver, QuestGiver::Gameobject(176_582));
     }
 
     #[test]
-    fn a_letter_with_a_missing_catalogue_row_is_not_filed() {
-        let loot = MailLoot {
-            mail_template_id: 99,
-            item_entry: 11_423,
-            count: 1,
-        };
-        let ender = Some(MailSender::Creature(7_802));
+    fn a_letter_whose_mail_template_is_missing_is_not_filed() {
         assert_eq!(
-            plan_reward_letter(&reward(99, 0, 0), ender, None, None, None),
+            plan_reward_letter(&reward(99, 0, 0), CARD_ENDER, None, None, None),
             Err("no mail template 99".to_string())
         );
+    }
+
+    #[test]
+    fn a_letter_whose_item_template_is_missing_is_not_filed() {
         assert_eq!(
             plan_reward_letter(
                 &reward(99, 0, 0),
-                ender,
+                CARD_ENDER,
                 Some("Your card.".into()),
-                Some(&loot),
+                Some(&card_loot()),
                 None
             ),
             Err("no item template 11423".to_string())
         );
+    }
+
+    #[test]
+    fn a_letter_with_no_quest_ender_and_no_script_sender_is_not_filed() {
         assert!(plan_reward_letter(
             &reward(99, 0, 0),
             None,

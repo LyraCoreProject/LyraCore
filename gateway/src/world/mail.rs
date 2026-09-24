@@ -270,7 +270,7 @@ pub(crate) fn send<St: WorldStore + ?Sized>(
                     cod,
                     NO_COD_SOURCE,
                     held.delivery_delay_secs,
-                    held.header,
+                    held.reward,
                 )
             })
             .map_err(|e| SendRefusal::Internal(format!("{e:#}")))
@@ -319,20 +319,6 @@ fn held_fence<St: WorldStore + ?Sized>(
             )
         })
 }
-/// A Reward Letter's quest giver and Mail Template, as its escrow row stores them and
-/// `realm_mail_commit` takes them. The default is a Character's letter.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct LetterHeader {
-    pub sender_kind: u8,
-    pub sender_entry: u32,
-    pub mail_template_id: u32,
-}
-
-impl LetterHeader {
-    pub fn is_reward_letter(&self) -> bool {
-        self.sender_kind != mail_rules::SENDER_KIND_CHARACTER
-    }
-}
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct HeldEscrow {
     pub escrow_id: u64,
@@ -347,12 +333,13 @@ pub struct HeldEscrow {
     pub cod: u32,
     /// The Delivery Delay the fence resolved, so a re-driven commit keeps it.
     pub delivery_delay_secs: u32,
-    pub header: LetterHeader,
+    /// A Reward Letter's quest giver and Mail Template. `None` for a Character's letter.
+    pub reward: Option<mail_rules::RewardHeader>,
 }
 /// Drive every letter `self_guid` holds as Escrow on its Home Shard to the mail plane, and every
 /// take Realm-core holds for them into their purse or bags. That rescues a send a Gateway
 /// abandoned, and it is the only thing that delivers a Reward Letter, which the Module files at
-/// turn-in. On a single-database realm the mail plane is the same database: a player's send files
+/// turn-in. On a single-database realm the mail plane is the same database: a Character's send files
 /// no Escrow there, but a Reward Letter does.
 pub(crate) fn redrive<St: WorldStore + ?Sized>(store: &St, self_guid: u64) {
     let realm = store.realm_store();
@@ -364,7 +351,7 @@ pub(crate) fn redrive<St: WorldStore + ?Sized>(store: &St, self_guid: u64) {
             Some(realm) => commit_held(realm.as_ref(), self_guid, &held),
             None => commit_held(store, self_guid, &held),
         });
-        let kind = if held.header.is_reward_letter() {
+        let kind = if held.reward.is_some() {
             "Reward Letter"
         } else {
             "send"
@@ -406,7 +393,7 @@ fn commit_held<P: WorldStore + ?Sized>(
         held.cod,
         held.mail_id,
         held.delivery_delay_secs,
-        held.header,
+        held.reward,
     )
 }
 
@@ -558,7 +545,7 @@ fn pay_cod<St: WorldStore + ?Sized>(
             0,
             row.id,
             NO_DELIVERY_DELAY,
-            LetterHeader::default(),
+            None,
         )
     })
 }

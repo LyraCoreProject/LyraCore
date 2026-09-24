@@ -574,8 +574,8 @@ attestation), `realm_mail_settle` (**delete last** — it refuses without the at
 Two things differ from a character transfer and both are deliberate. Recovery is **forward only**:
 the escrow row carries the whole letter, so a stalled fence is re-driven rather than refunded, and
 `reap_mail_escrows` has no rollback arm at all — a source-side read that finds no attestation has
-learned "not yet attested", never "not delivered". And a **single-database** player send does not
-come here: purse and mail row share one transaction there, so `mail::apply_send` writes both
+learned "not yet attested", never "not delivered". And a **single-database** send by a Character does
+not come here: purse and mail row share one transaction there, so `mail::apply_send` writes both
 directly.
 
 A Reward Letter (`module/src/mail_reward.rs`) uses the escrow on every plane. `gw_turn_in_quest`

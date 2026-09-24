@@ -135,7 +135,7 @@ impl Coordinator {
     ///
     /// The one module→gateway data flow the escrow adds, and it exists for the same reason
     /// `escrowed_transfer` does: the gateway is the only component that can see both databases, so
-    /// re-driving a stalled fence means re-deriving the whole letter from its row. A player's fresh
+    /// re-driving a stalled fence means re-deriving the whole letter from its row. A Character's fresh
     /// send reads nothing more than its own fence; a Reward Letter, which the Module files at
     /// turn-in, is always driven from its row. Private table, read through the owner token.
     ///
@@ -148,7 +148,21 @@ impl Coordinator {
         Ok(ids
             .into_iter()
             .filter_map(|id| escrows.escrow_id().find(&id))
-            .map(|e| crate::world::mail::HeldEscrow {
+            .filter_map(|e| {
+                // A row no letter could have written stays held rather than commit as the wrong
+                // letter.
+                let reward = lyracore_shared::mail::RewardHeader::from_columns(
+                    e.sender_kind,
+                    e.sender_entry,
+                    e.mail_template_id,
+                )
+                .map_err(|refusal| {
+                    log::error!("mail escrow {}: not driven: {refusal}", e.escrow_id)
+                })
+                .ok()?;
+                Some((e, reward))
+            })
+            .map(|(e, reward)| crate::world::mail::HeldEscrow {
                 escrow_id: e.escrow_id,
                 recipient_guid: e.recipient_guid,
                 subject: e.subject,
@@ -167,11 +181,7 @@ impl Coordinator {
                 },
                 cod: e.cod,
                 delivery_delay_secs: e.delivery_delay_secs,
-                header: crate::world::mail::LetterHeader {
-                    sender_kind: e.sender_kind,
-                    sender_entry: e.sender_entry,
-                    mail_template_id: e.mail_template_id,
-                },
+                reward,
             })
             .collect())
     }

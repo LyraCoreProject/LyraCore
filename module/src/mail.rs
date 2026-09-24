@@ -194,22 +194,21 @@ impl Letter {
     /// Mail Template (`Player.cpp:12672-12673`). vmangos also stores the template text as the body
     /// (`Mail/Mail.cpp:113-116`), so the letter has HAS_BODY.
     pub(crate) fn reward(
-        sender: MailSender,
+        header: lyracore_shared::mail::RewardHeader,
         recipient_guid: u64,
         body: String,
         money: u32,
         item: ItemSnapshot,
-        mail_template_id: u32,
     ) -> Self {
         Self {
             recipient_guid,
-            sender,
+            sender: header.giver.sender(),
             subject: String::new(),
             body,
             money,
             cod: 0,
             item,
-            mail_template_id,
+            mail_template_id: header.mail_template_id,
             check_flags: lyracore_shared::mail::CHECK_MASK_HAS_BODY,
             deliver_micros: 0,
         }

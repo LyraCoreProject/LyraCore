@@ -3541,11 +3541,10 @@ fn card_renewal_letter(recipient: u64, delivery_delay_secs: u32) -> mail::HeldEs
         },
         cod: 0,
         delivery_delay_secs,
-        header: mail::LetterHeader {
-            sender_kind: lyracore_shared::mail::SENDER_KIND_CREATURE,
-            sender_entry: 7_802,
+        reward: Some(lyracore_shared::mail::RewardHeader {
+            giver: lyracore_shared::mail::QuestGiver::Creature(7_802),
             mail_template_id: 99,
-        },
+        }),
     }
 }
 /// File `letter` on `shard` for `owner`, as the turn-in's transaction leaves it: unattested.
@@ -3563,7 +3562,9 @@ fn reward_letters(plane: &InMemoryStore, recipient: u64) -> Vec<codec::MailView>
         .lock()
         .unwrap()
         .iter()
-        .filter(|(to, m)| *to == recipient && m.sender_kind == 3)
+        .filter(|(to, m)| {
+            *to == recipient && m.sender_kind == lyracore_shared::mail::SENDER_KIND_CREATURE
+        })
         .map(|(_, m)| m.clone())
         .collect()
 }
@@ -3572,13 +3573,17 @@ fn reward_letters(plane: &InMemoryStore, recipient: u64) -> Vec<codec::MailView>
 fn assert_card_renewal(letter: &codec::MailView) {
     assert_eq!(
         (
-            letter.sender_kind,
-            letter.sender_entry,
+            letter.sender(),
             letter.sender_guid,
             letter.mail_template_id,
             letter.check_flags,
         ),
-        (3, 7_802, 0, 99, 0x10),
+        (
+            lyracore_shared::mail::MailSender::Creature(7_802),
+            0,
+            99,
+            0x10
+        ),
         "{letter:?}"
     );
     assert_eq!(letter.subject, "");
@@ -3630,7 +3635,10 @@ fn a_reward_letter_whose_drive_died_after_the_commit_is_delivered_once() {
 
     assert_eq!(reward_letters(&realm, GINGER).len(), 1, "one letter");
     assert_eq!(
-        visible.iter().filter(|m| m.sender_kind == 3).count(),
+        visible
+            .iter()
+            .filter(|m| m.sender_kind == lyracore_shared::mail::SENDER_KIND_CREATURE)
+            .count(),
         1,
         "a Reward Letter with no delay is in the list at once"
     );
@@ -3684,6 +3692,46 @@ fn a_reward_letter_held_at_world_entry_is_delivered_on_either_plane() {
         hold_reward_letter(&home, 1, card_renewal_letter(1, 86_400));
 
         let (client, _c_enc, _c_dec, server) = enter_world(home.clone(), 1);
+        drop(client);
+        server.join().unwrap();
+
+        let plane = if sharded { &realm } else { &home };
+        let letters = reward_letters(plane, 1);
+        assert_eq!(letters.len(), 1, "sharded {sharded}: {letters:?}");
+        assert_card_renewal(&letters[0]);
+        assert!(
+            home.mail_escrows.lock().unwrap().is_empty(),
+            "sharded {sharded}: settled"
+        );
+    }
+}
+
+#[test]
+fn a_reward_letter_a_turn_in_files_is_delivered_on_either_plane() {
+    for sharded in [false, true] {
+        let realm = std::sync::Arc::new(InMemoryStore {
+            shard: "lyracore-realm".into(),
+            is_realm: true,
+            ..Default::default()
+        });
+        let mut home = quest_store();
+        home.realm = sharded.then(|| realm.clone());
+        home.quest_details = vec![detail_view(3645, "Membership Card Renewal")];
+        home.turn_in_reward_letter = Some(card_renewal_letter(1, 86_400));
+        let home = std::sync::Arc::new(home);
+
+        let (mut client, mut c_enc, mut c_dec, server) = enter_world(home.clone(), 1);
+        CMSG_QUESTGIVER_CHOOSE_REWARD {
+            guid: Guid::new(50),
+            quest_id: 3645,
+            reward: 0,
+        }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+        assert!(matches!(
+            ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap(),
+            ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_COMPLETE(_)
+        ));
         drop(client);
         server.join().unwrap();
 

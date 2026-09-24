@@ -2,7 +2,7 @@
 
 use spacetimedb::{log, reducer, table, ReducerContext, ScheduleAt, Table, TimeDuration};
 
-use lyracore_shared::mail::MailSender;
+use lyracore_shared::mail::RewardHeader;
 
 use crate::game_world_entity;
 use crate::helpers::require_operator;
@@ -129,34 +129,6 @@ pub(crate) struct Draft {
 impl Draft {
     pub(crate) fn fenced_copper(&self) -> u32 {
         self.money.saturating_add(self.postage)
-    }
-}
-/// What makes a committed letter a Reward Letter: the quest giver it is from and the Mail Template
-/// it names. A Character's letter has no header.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) struct RewardHeader {
-    pub sender: MailSender,
-    pub mail_template_id: u32,
-}
-
-impl RewardHeader {
-    /// The header the escrow columns or the commit arguments carry. Sender kind 0 is a Character's
-    /// letter, which has none.
-    pub(crate) fn from_columns(
-        sender_kind: u8,
-        sender_entry: u32,
-        mail_template_id: u32,
-    ) -> Result<Option<Self>, String> {
-        match MailSender::from_columns(sender_kind, 0, sender_entry) {
-            MailSender::Character(_) => Ok(None),
-            MailSender::AuctionHouse(house) => Err(format!(
-                "a mail escrow never carries Auction Mail (house {house})"
-            )),
-            sender => Ok(Some(Self {
-                sender,
-                mail_template_id,
-            })),
-        }
     }
 }
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -569,7 +541,7 @@ pub(crate) fn apply_file_reward<S: EscrowLedger>(
             "mail escrow {escrow_id} is already fenced, refusing to file a Reward Letter under it"
         ));
     }
-    let (sender_kind, _, sender_entry) = letter.sender.columns();
+    let (sender_kind, sender_entry, mail_template_id) = RewardHeader::columns(Some(letter.header));
     let created_micros = sink.now_micros();
     sink.file_escrow(MailEscrow {
         escrow_id,
@@ -593,12 +565,12 @@ pub(crate) fn apply_file_reward<S: EscrowLedger>(
         delivery_delay_secs: letter.delay_secs,
         sender_kind,
         sender_entry,
-        mail_template_id: letter.mail_template_id,
+        mail_template_id,
     });
     sink.arm_reaper();
     log::info!(
         "mail escrow {escrow_id}: filed a Reward Letter from {:?} for {recipient_guid}",
-        letter.sender
+        letter.header.giver
     );
     Ok(())
 }
@@ -675,12 +647,11 @@ pub(crate) fn apply_commit<S: DeliverySink>(
             *item,
         ),
         Some(header) => crate::mail::Letter::reward(
-            header.sender,
+            header,
             draft.recipient_guid,
             draft.body.clone(),
             draft.money,
             *item,
-            header.mail_template_id,
         ),
     };
     // The Delivery Delay counts from this commit. A COD payment and its refund carry copper only
