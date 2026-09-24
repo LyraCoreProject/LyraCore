@@ -1383,6 +1383,7 @@ pub(crate) fn seed_scenario_fixtures(ctx: &ReducerContext) {
             next_quest_id: 0,
             limit_time: 0,
             reward_money_max_level: 0, // fixture sets reward_xp explicitly, so this is unused here
+            quest_type: 0,
         });
         ctx.db.game_quest_text().insert(crate::QuestText {
             quest_entry: QUEST,

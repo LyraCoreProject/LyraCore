@@ -283,6 +283,11 @@ A Group of up to 5 members that its leader has not converted to a Raid.
 A Group its leader converted. Up to 40 members in 8 Subgroups. It never converts back.
 _Avoid_: raid group
 
+**Raid Quest**:
+A quest whose template type is 62. In a Raid, only Raid Quests take kill credit, quest-item drops
+and quest-object use.
+_Avoid_: raid-only quest
+
 **Subgroup**:
 One of a Raid's 8 divisions of up to 5 members, numbered 0 to 7. A member joining a Raid takes the
 first Subgroup with room.

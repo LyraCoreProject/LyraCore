@@ -9,6 +9,7 @@ use std::collections::BTreeSet;
 
 use spacetimedb::{table, ReducerContext, Table};
 
+use lyracore_shared::group::RAID_MAX_MEMBERS;
 use lyracore_shared::loot::LootRefusal;
 
 use crate::game_world_entity;
@@ -233,9 +234,9 @@ pub(crate) fn live_loot_tag_eligibility(
         .game_creature_quest_tap_member()
         .by_creature()
         .filter(&creature_guid)
-        .take(crate::group::GROUP_MAX_MEMBERS + 1)
+        .take(RAID_MAX_MEMBERS + 1)
         .collect();
-    if members.len() > crate::group::GROUP_MAX_MEMBERS {
+    if members.len() > RAID_MAX_MEMBERS {
         return LiveLootTagEligibility::ReadLimit;
     }
     let group_id = ctx

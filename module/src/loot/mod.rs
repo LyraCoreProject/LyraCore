@@ -371,7 +371,9 @@ pub(crate) fn needs_item_pure(
 /// Does `killer` currently need `item` for an ACTIVE (unrewarded) quest's `COLLECT_ITEM` objective?
 /// `killer = None` (a debug/environmental kill with no credited player) never needs anything — a
 /// quest-only row is simply invisible there, matching vanilla (no quest, no drop). Fetches the killer's
-/// live quest log + objectives, then defers the actual decision to the pure `needs_item_pure`.
+/// live quest log + objectives, drops a Raid member's non-Raid quests first
+/// ([`crate::quest::quest_progresses`], cm:Player.cpp:13796-13799: a normal quest item does not
+/// drop for a Raid member), then defers the actual decision to the pure `needs_item_pure`.
 pub(crate) fn killer_needs_item(ctx: &ReducerContext, killer: Option<u64>, item: u32) -> bool {
     let Some(killer_guid) = killer else {
         return false;
@@ -383,6 +385,7 @@ pub(crate) fn killer_needs_item(ctx: &ReducerContext, killer: Option<u64>, item:
         .filter(&killer_guid)
         .filter(|cq| !cq.rewarded)
         .map(|cq| cq.quest_entry)
+        .filter(|&quest_entry| crate::quest::quest_progresses(ctx, killer_guid, quest_entry))
         .collect();
     if active.is_empty() {
         return false;
@@ -654,8 +657,8 @@ pub(crate) fn roll_pickpocket_loot(ctx: &ReducerContext, creature_entry: u32, ta
 /// a fellow member loots theirs. A solo `taker_guid` (`group_of` returns `None`) touches nothing —
 /// solo behavior is unchanged (design requirement #4). Clones land at FRESH slots past whatever is
 /// already on the corpse (`next_free_slots`), never colliding with the just-deleted original's slot or
-/// any sibling drop. Naturally bounded by [`crate::group::GROUP_MAX_MEMBERS`] (a group can't exceed 5,
-/// so at most 4 clones per take). [server]
+/// any sibling drop. Reads `by_group`, an indexed group-scoped lookup, so it costs one clone per
+/// OTHER member whatever the group's size, up to 39 in a full Raid. [server]
 pub(crate) fn clone_quest_loot_for_group(
     ctx: &ReducerContext,
     taker_guid: u64,

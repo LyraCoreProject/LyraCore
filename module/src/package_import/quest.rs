@@ -474,6 +474,7 @@ fn blank_quest(entry: u32) -> QuestTemplate {
         next_quest_id: 0,
         limit_time: 0,
         reward_money_max_level: 0,
+        quest_type: 0,
     }
 }
 

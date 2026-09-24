@@ -927,7 +927,7 @@ parity_test!(parity_game_quest_template, "game_quest_template", lyracore_module:
     entry, min_level, quest_level, title, reward_money, reward_xp, prev_quest_id,
     required_races, required_classes, zone_or_sort, rew_rep_faction_1, rew_rep_value_1,
     rew_rep_faction_2, rew_rep_value_2, src_item, src_item_count, repeatable,
-    next_quest_id, limit_time, reward_money_max_level,
+    next_quest_id, limit_time, reward_money_max_level, quest_type,
 });
 parity_test!(parity_game_quest_text, "game_quest_text", lyracore_module::QuestText, bindings::quest_text_type::QuestText, {
     quest_entry, details, objectives, offer_reward_text, request_items_text,
