@@ -788,7 +788,8 @@ pub(crate) fn teleport_player(
     };
     let recipient_identity = e.owner_identity;
     let cross_map = is_cross_map_teleport(e.map_id, map_id);
-    if e.map_id != map_id || e.instance_id != instance_id {
+    let changes_partition = e.map_id != map_id || e.instance_id != instance_id;
+    if changes_partition {
         crate::duel::interrupt_duel_for(ctx, player_guid);
     }
     // A movement packet staged before the teleport describes the OLD position. Left queued, the
@@ -901,6 +902,12 @@ pub(crate) fn teleport_player(
         created_micros: ctx.timestamp.to_micros_since_unix_epoch() as u64,
         cross_map,
     });
+
+    // Leaving an instance by hearthstone, GM teleport or summon ends its Instance Removal at once,
+    // so the countdown hides now rather than at the next login (cm:MovementHandler.cpp:133-135).
+    if changes_partition {
+        crate::instance::reconcile_instance_removal(ctx, player_guid);
+    }
 }
 
 /// Bind a character's hearthstone home to its live entity's CURRENT position — the slice's "make this inn

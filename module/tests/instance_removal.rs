@@ -84,9 +84,9 @@ fn assert_at_home(node: &Standalone, guid: u64) {
     );
 }
 
-fn partition(guid: u64, membership_revision: u64) -> serde_json::Value {
+fn partition(group_id: u64, guid: u64, membership_revision: u64) -> serde_json::Value {
     serde_json::json!({
-        "character_guid": guid, "group_id": 900,
+        "character_guid": guid, "group_id": group_id,
         "membership_revision": membership_revision, "member_active": true,
         "map_id": 0, "instance_id": 0, "locator_revision": 0,
         "state": {"unknown": []},
@@ -96,10 +96,25 @@ fn partition(guid: u64, membership_revision: u64) -> serde_json::Value {
 /// Push Group 900's roster at `revision`. `members` pairs each guid with its membership revision,
 /// in that order.
 fn mirror(node: &Standalone, revision: u64, kind: u8, members: &[(u64, u64)], slots: &[u8]) {
+    mirror_group(node, 900, revision, kind, members, slots);
+}
+
+/// Push `group_id`'s roster at `revision`, as [`mirror`] does for Group 900.
+fn mirror_group(
+    node: &Standalone,
+    group_id: u64,
+    revision: u64,
+    kind: u8,
+    members: &[(u64, u64)],
+    slots: &[u8],
+) {
     let guids: Vec<u64> = members.iter().map(|(guid, _)| *guid).collect();
-    let partitions: Vec<_> = members.iter().map(|&(g, r)| partition(g, r)).collect();
+    let partitions: Vec<_> = members
+        .iter()
+        .map(|&(g, r)| partition(group_id, g, r))
+        .collect();
     let args = [
-        "900".to_string(),
+        group_id.to_string(),
         guids.first().copied().unwrap_or(ALPHA).to_string(),
         "3".to_string(),
         "2".to_string(),
@@ -188,6 +203,20 @@ fn the_group_mirror_arms_and_cancels_the_countdown_in_roster_revision_order() {
     );
     assert_at_home(&node, ALPHA);
     assert_eq!(countdowns(&node), counting(&[CHARLIE], "900"));
+
+    // A GM teleport out of the instance ends the countdown at once, not at the next login.
+    node.assert_call(
+        "debug_teleport",
+        &[
+            &CHARLIE.to_string(),
+            "0",
+            "-8949.95",
+            "-132.493",
+            "83.5312",
+            "0",
+        ],
+    );
+    assert_eq!(countdowns(&node), []);
 }
 
 fn group_op(node: &Standalone, op: &str, actor_guid: u64, target_guid: u64, arg_a: u8) {
@@ -274,4 +303,65 @@ fn the_membership_cores_arm_and_cancel_the_countdown_on_one_database() {
     node.assert_call("debug_expire_instance_removal", &[&ALPHA.to_string()]);
     assert_at_home(&node, ALPHA);
     assert_eq!(countdowns(&node), counting(&[BRAVO], &group));
+}
+
+/// The Group that owns the fixture instance now.
+fn instance_owner(node: &Standalone) -> String {
+    node.query_rows(&format!(
+        "SELECT party_id FROM game_instance WHERE instance_id = {INSTANCE}"
+    ))[0]["party_id"]
+        .clone()
+}
+
+/// Assert `guid` still stands in the fixture instance.
+fn assert_in_instance(node: &Standalone, guid: u64) {
+    let rows = node.query_rows(&format!(
+        "SELECT instance_id FROM game_world_entity WHERE guid = {guid}"
+    ));
+    assert_eq!(
+        rows[0]["instance_id"], INSTANCE,
+        "{guid} stays in the instance"
+    );
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+fn a_party_of_two_that_forms_again_inside_the_instance_cancels_both_countdowns() {
+    let node = start("instance-removal-regroup-cores");
+    join(&node, ALPHA, CHARLIE);
+    let first = node.query_rows("SELECT group_id FROM game_group")[0]["group_id"].clone();
+    node.assert_call("debug_stage_instance_removal_fixture", &[&first]);
+
+    group_op(&node, LEAVE, CHARLIE, 0, 0);
+    assert_eq!(countdowns(&node), counting(&[ALPHA, CHARLIE], &first));
+
+    join(&node, CHARLIE, ALPHA);
+    let second = node.query_rows("SELECT group_id FROM game_group")[0]["group_id"].clone();
+    assert_ne!(second, first, "the Group formed again is a new Group");
+    assert_eq!(countdowns(&node), [], "nobody is sent home");
+    assert_eq!(
+        instance_owner(&node),
+        second,
+        "the new Group owns the instance"
+    );
+    for guid in [ALPHA, CHARLIE] {
+        assert_in_instance(&node, guid);
+    }
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+fn a_party_of_two_that_forms_again_reaches_the_instance_pool_mirror_and_cancels() {
+    let node = start("instance-removal-regroup-mirror");
+    node.assert_call("debug_stage_instance_removal_fixture", &["900"]);
+    mirror(&node, 1, 0, &[(ALPHA, 1), (CHARLIE, 2)], &[0, 0]);
+    mirror(&node, 2, 0, &[], &[]);
+    assert_eq!(countdowns(&node), counting(&[ALPHA, CHARLIE], "900"));
+
+    mirror_group(&node, 901, 1, 0, &[(CHARLIE, 20), (ALPHA, 21)], &[0, 0]);
+    assert_eq!(countdowns(&node), [], "nobody is sent home");
+    assert_eq!(instance_owner(&node), "901");
+    for guid in [ALPHA, CHARLIE] {
+        assert_in_instance(&node, guid);
+    }
 }

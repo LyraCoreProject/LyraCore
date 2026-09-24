@@ -320,7 +320,8 @@ _Avoid_: raid mark, marker, raid target (for the icon)
 The 60-second countdown that moves a Character to its hearthstone home when it stands in a Group's
 dungeon instance without being a member of that Group. Rejoining the Group or leaving the instance
 cancels it. It starts only for a Character in the world; one removed while logged out starts it at
-its next login. A GM and a session-less Character with a live entity are exempt.
+its next login. When the owning Group disbands, a Group that forms again inside the instance takes
+it over, which also cancels it. A GM and a session-less Character with a live entity are exempt.
 _Avoid_: homebind timer, instance kick, raid timer
 
 **Ready Check**:

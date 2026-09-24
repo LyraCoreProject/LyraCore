@@ -472,7 +472,9 @@ pub(crate) fn reset_eligible(party_id: u64, caller_is_leader: bool, occupied: bo
 /// The Instance Removal rule: a Character standing in a dungeon instance that a Group owns, while
 /// it is not a member of that Group, gets the countdown. `instance_party` is 0 for a solo instance.
 /// `own_group` is the Character's Group on this Shard's rows. A GM is exempt
-/// (cm:Group.cpp:1470-1484). Pure.
+/// (cm:Group.cpp:1470-1484). cmangos asks `IsGameMaster()`, which is GM mode switched on. LyraCore
+/// has no GM mode toggle, so a nonzero `gm_level` stands in for it: every GM is exempt, all the
+/// time. Pure.
 pub(crate) fn instance_removal_due(
     map_id: u32,
     instance_id: u64,
@@ -582,9 +584,9 @@ pub(crate) fn resolve_or_create_instance(
             // and `by_party` cannot see a `party_id = 0` instance — so without this the members
             // behind them would mint a second dungeon and the party would play in two of them.
             // Re-stamping the owner makes the instance they are walking into the party's, which is
-            // also the cheap outcome: nobody re-spawns a population that already exists. Only an
-            // UNOWNED (solo) instance is adopted — an instance still owned by some other party is
-            // never stolen.
+            // also the cheap outcome: nobody re-spawns a population that already exists. Only a
+            // solo instance or one whose Group disbanded is adopted. An instance a living Group
+            // owns is never stolen.
             adopt_instance_for_party(ctx, id, party_id);
             Ok(id)
         }
@@ -632,27 +634,36 @@ pub(crate) fn admit_existing_party_instance(
         .find(expected_instance)
         .filter(|instance| instance.map_id == target_map && !instance.reset_requested)
         .ok_or("expected party instance is unavailable")?;
-    if instance.party_id != 0 && instance.party_id != group.group_id {
+    if instance.party_id != group.group_id && !instance_is_ownerless(ctx, instance.party_id) {
         return Err("expected instance belongs to another party".to_string());
     }
 
-    if instance.party_id == 0 {
+    if instance.party_id != group.group_id {
         adopt_instance_for_party(ctx, expected_instance, group.group_id);
     }
     bind_character(ctx, character_guid, expected_instance, target_map);
     Ok(expected_instance)
 }
 
-/// Re-stamp an UNOWNED (`party_id == 0`, i.e. solo-created) instance as `party_id`'s, so the rest
-/// of that party resolves into it through `by_party` instead of creating a second one. No-op when
-/// the caller has no party, when the instance is already owned, or when the row is gone.
+/// Whether an instance has no living owner on this Shard: it was created solo (`party_id == 0`),
+/// or the Group that owned it disbanded here. A Group that enters or forms in it may adopt it.
+/// cmangos gives a new Group its leader's binds (`Player::ConvertInstancesToGroup`), and a disband
+/// leaves the binds with the players. The Group mirror deletes a Group's row only on disband, so a
+/// missing row is a disbanded Group, never one this Shard has not heard of yet.
+fn instance_is_ownerless(ctx: &ReducerContext, party_id: u64) -> bool {
+    party_id == 0 || ctx.db.game_group().group_id().find(party_id).is_none()
+}
+
+/// Re-stamp an ownerless instance (see [`instance_is_ownerless`]) as `party_id`'s, so the rest of
+/// that party resolves into it through `by_party` instead of creating a second one. No-op when
+/// the caller has no party, when a living Group owns the instance, or when the row is gone.
 fn adopt_instance_for_party(ctx: &ReducerContext, instance_id: u64, party_id: u64) {
     if party_id == 0 {
         return;
     }
     let instances = ctx.db.game_instance();
     if let Some(mut inst) = instances.instance_id().find(instance_id) {
-        if inst.party_id == 0 {
+        if instance_is_ownerless(ctx, inst.party_id) {
             inst.party_id = party_id;
             instances.instance_id().update(inst);
             log::info!("instance {instance_id} adopted by party {party_id}");
@@ -874,8 +885,8 @@ pub(crate) fn create_instance_with_id(
 
 /// **Destination side.** Mirror instance `instance_id` of `map_id` onto THIS database, spawning its
 /// population if it isn't here yet. Idempotent: the second party member through the portal finds
-/// the instance already live and joins it. A previously solo lease may adopt the admitted party;
-/// a different nonzero party is refused instead of sharing the same instance id.
+/// the instance already live and joins it. A solo lease, or one whose Group disbanded here, adopts
+/// the admitted party; a living different party is refused instead of sharing the same instance id.
 ///
 /// The id is supplied, not allocated, because it was allocated on the SOURCE shard — the
 /// areatrigger hook runs where the player was standing, and the module deliberately knows nothing
@@ -909,7 +920,7 @@ pub fn ensure_instance(
         if existing.party_id == party_id {
             return Ok(());
         }
-        if existing.party_id == 0 && party_id != 0 {
+        if party_id != 0 && instance_is_ownerless(ctx, existing.party_id) {
             existing.party_id = party_id;
             ctx.db.game_instance().instance_id().update(existing);
             return Ok(());
@@ -1272,6 +1283,20 @@ fn instance_removal_standing(ctx: &ReducerContext, character_guid: u64) -> Optio
     })
 }
 
+/// A Group formed again inside the instance of a Group that disbanded takes the instance over, so
+/// its members stand in their own Group's instance and no countdown runs. cmangos gets the same
+/// outcome: the new Group takes its leader's binds, and `Group::AddMember` cancels the countdown
+/// of a member whose bind matches its instance (cm:Group.cpp:880-885). Returns the adopting Group.
+fn adopt_for_regrouped_member(ctx: &ReducerContext, character_guid: u64) -> Option<u64> {
+    let standing = instance_removal_standing(ctx, character_guid)?;
+    let own_group = crate::group::group_of(ctx, character_guid)?.group_id;
+    if !instance_is_ownerless(ctx, standing.group_id) {
+        return None;
+    }
+    adopt_instance_for_party(ctx, standing.instance_id, own_group);
+    Some(own_group)
+}
+
 /// Make `character_guid`'s Instance Removal match the rule: start the countdown when the rule holds
 /// for a Character in the world and no countdown runs for that instance, and cancel it when the
 /// rule no longer holds. cmangos marks only a Character in the world (cm:Group.cpp:1470-1484), so a
@@ -1279,6 +1304,10 @@ fn instance_removal_standing(ctx: &ReducerContext, character_guid: u64) -> Optio
 /// already running survives a logout, and its expiry moves the logged-out Character home.
 /// Idempotent. Realm-core holds no Characters, so there it does nothing.
 pub(crate) fn reconcile_instance_removal(ctx: &ReducerContext, character_guid: u64) {
+    if let Some(group_id) = adopt_for_regrouped_member(ctx, character_guid) {
+        reconcile_group_members(ctx, group_id);
+        return;
+    }
     let removals = ctx.db.game_instance_removal();
     let running = removals.character_guid().find(character_guid);
     let standing = instance_removal_standing(ctx, character_guid);
@@ -1299,6 +1328,13 @@ pub(crate) fn reconcile_instance_removal(ctx: &ReducerContext, character_guid: u
             instance_id: standing.instance_id,
             group_id: standing.group_id,
         });
+    }
+}
+
+/// Reconcile every member of `group_id` on this Shard, after the Group adopted an instance.
+fn reconcile_group_members(ctx: &ReducerContext, group_id: u64) {
+    for member in crate::group::members_of(ctx, group_id) {
+        reconcile_instance_removal(ctx, member.character_guid);
     }
 }
 
@@ -1329,6 +1365,10 @@ pub(crate) fn fire_instance_removal(ctx: &ReducerContext, removal: &InstanceRemo
         return;
     }
     removals.scheduled_id().delete(removal.scheduled_id);
+    if let Some(group_id) = adopt_for_regrouped_member(ctx, removal.character_guid) {
+        reconcile_group_members(ctx, group_id);
+        return;
+    }
     match instance_removal_standing(ctx, removal.character_guid) {
         Some(standing) if standing.instance_id == removal.instance_id => {
             crate::world::recall_to_home(ctx, removal.character_guid);
@@ -1435,10 +1475,14 @@ mod tests {
         );
         // ...and adoption must never STEAL an instance another party already owns.
         let adopt = code_of(include_str!("instance.rs"), "fn adopt_instance_for_party(");
+        let ownerless = code_of(include_str!("instance.rs"), "fn instance_is_ownerless(");
         assert!(
-            adopt.contains("inst.party_id == 0"),
-            "adopt_instance_for_party no longer restricts itself to UNOWNED (solo) instances — it \
-             would re-stamp another party's dungeon as this caller's"
+            adopt.contains("if instance_is_ownerless(ctx, inst.party_id) {")
+                && ownerless.contains(
+                    "party_id == 0 || ctx.db.game_group().group_id().find(party_id).is_none()"
+                ),
+            "adopt_instance_for_party no longer restricts itself to ownerless instances (solo, or \
+             whose Group disbanded). It would re-stamp a living party's dungeon as this caller's"
         );
         // Adversarial review: a call site plus a guard TEXT is not adoption. Inverting the caller's
         // own no-party guard (`party_id == 0` → `!= 0`) leaves every string above present and every
@@ -1824,6 +1868,21 @@ mod tests {
         let insert = login.find("entities.insert(entity)").unwrap();
         let update = login.find("chars.guid().update(character)").unwrap();
         assert!(insert < reconcile && update < reconcile);
+    }
+
+    /// A hearthstone, GM teleport or summon out of the instance ends the countdown in the same
+    /// transaction, so its hide reaches the client before the teleport does.
+    #[test]
+    fn a_teleport_that_changes_partition_reconciles_the_instance_removal() {
+        let teleport: String = code_of(include_str!("world.rs"), "pub(crate) fn teleport_player(")
+            .split_whitespace()
+            .collect();
+        assert!(
+            teleport.contains("letchanges_partition=e.map_id!=map_id||e.instance_id!=instance_id;")
+        );
+        assert!(teleport.contains(
+            "ifchanges_partition{crate::instance::reconcile_instance_removal(ctx,player_guid);}"
+        ));
     }
 
     #[test]
