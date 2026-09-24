@@ -2481,7 +2481,7 @@ pub fn debug_verify_raid_quest_credit_fixture(ctx: &ReducerContext) -> Result<()
     }
     crate::loot::tag::record_corpse_eligibility(ctx, RQC_WOLF_GUID, &entitlement.recipients);
     crate::loot::tag::corpse_access_gate(ctx, RQC_RAID_FILLER_START, RQC_WOLF_GUID)?;
-    // The fixture probe of a live Loot Tag reads up to the Raid cap too.
+    // The live Loot Tag read is bounded at the Raid cap too.
     if crate::loot::tag::live_loot_tag_eligibility(ctx, RQC_WOLF_GUID, RQC_RAID_FILLER_START)
         != crate::loot::tag::LiveLootTagEligibility::Available
     {
