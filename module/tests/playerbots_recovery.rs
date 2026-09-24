@@ -1165,6 +1165,11 @@ fn playerbots_recovery_defers_a_partial_endpoint_revisited_after_an_approach() {
     let first_outcome = first_move["outcome"].as_str().unwrap();
     assert!(first_outcome.contains("status = (partial = ())"), "{first}");
     assert!(first_outcome.contains("expansions = 16384"), "{first}");
+    // The Module advances a Route Path only on its 500 ms creature tick. A decision that runs after
+    // the leg ends but before that tick stops the bot short of the endpoint, so the first stop
+    // point depends on timing. The planned partial endpoint does not.
+    let partial_endpoint =
+        route_endpoint(first_outcome).expect("the Quest approach recorded no partial endpoint");
     let destination = tuple_field(
         first["runner"]["recovery"].as_str().unwrap(),
         "destination = ",
@@ -1196,12 +1201,15 @@ fn playerbots_recovery_defers_a_partial_endpoint_revisited_after_an_approach() {
                 .contains("recoveryPosition")
         })
         .expect("the stalled Quest route did not select a Recovery Position");
-    let stalled_endpoint = route_endpoint(
-        samples[approach_index]["runner"]["recovery"]
-            .as_str()
-            .unwrap(),
-    )
-    .expect("the Recovery Position did not retain the stalled Quest endpoint");
+    assert!(
+        route_endpoint(
+            samples[approach_index]["runner"]["recovery"]
+                .as_str()
+                .unwrap()
+        )
+        .is_some(),
+        "the Recovery Position did not retain the stalled Quest route"
+    );
     let character_position = |sample: &serde_json::Value| {
         (
             sample["character"]["x"]
@@ -1222,10 +1230,10 @@ fn playerbots_recovery_defers_a_partial_endpoint_revisited_after_an_approach() {
         .skip(approach_index)
         .find(|(_, sample)| {
             let position = character_position(sample);
-            (position.0 - stalled_endpoint.0).hypot(position.1 - stalled_endpoint.1) > 1.0
+            (position.0 - partial_endpoint.0).hypot(position.1 - partial_endpoint.1) > 1.0
         })
         .map(|(index, _)| index)
-        .expect("the Recovery Position did not move away from the stalled Quest endpoint");
+        .expect("the Recovery Position did not move away from the partial Quest endpoint");
     let revisited_index = samples
         .iter()
         .enumerate()
@@ -1234,20 +1242,20 @@ fn playerbots_recovery_defers_a_partial_endpoint_revisited_after_an_approach() {
             let position = character_position(sample);
             let recovery = sample["runner"]["recovery"].as_str().unwrap();
             let returned_from = retained_route_from(recovery);
-            (position.0 - stalled_endpoint.0).abs() < 0.05
-                && (position.1 - stalled_endpoint.1).abs() < 0.05
+            (position.0 - partial_endpoint.0).abs() < 0.05
+                && (position.1 - partial_endpoint.1).abs() < 0.05
                 && recovery.contains(&format!("work = (fight = {TARGET})"))
                 && recovery.contains("status = (partial = ())")
                 && route_endpoint(recovery).is_some_and(|endpoint| {
-                    (endpoint.0 - stalled_endpoint.0).abs() < 0.05
-                        && (endpoint.1 - stalled_endpoint.1).abs() < 0.05
+                    (endpoint.0 - partial_endpoint.0).abs() < 0.05
+                        && (endpoint.1 - partial_endpoint.1).abs() < 0.05
                 })
                 && returned_from.is_some_and(|from| {
-                    (from.0 - stalled_endpoint.0).hypot(from.1 - stalled_endpoint.1) > 1.0
+                    (from.0 - partial_endpoint.0).hypot(from.1 - partial_endpoint.1) > 1.0
                 })
         })
         .map(|(index, _)| index)
-        .unwrap_or_else(|| panic!("the Quest route did not revisit {stalled_endpoint:?}"));
+        .unwrap_or_else(|| panic!("the Quest route did not revisit {partial_endpoint:?}"));
     let (deferred_index, deferred) = samples
         .iter()
         .enumerate()
