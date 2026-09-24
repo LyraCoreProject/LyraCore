@@ -87,6 +87,7 @@ fn drive(
         "3",
         sender_entry,
         template,
+        "0",
     ];
     let from = now_micros();
     standalone.assert_call("realm_mail_commit", &commit);
@@ -254,6 +255,7 @@ fn commit_card(mail_plane: &Standalone, escrow_id: &str) {
             "3",
             "620",
             "509091",
+            "0",
         ],
     );
 }

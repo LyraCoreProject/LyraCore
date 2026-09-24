@@ -188,6 +188,7 @@ fn a_take_fenced_before_expiry_still_pays_out_after_the_letter_is_deleted() {
             "0",
             "false",
             "0",
+            "0",
         ],
     );
     assert_eq!(purse(&standalone), purse_before + 77);
@@ -225,7 +226,7 @@ fn a_cod_payment_fenced_before_the_letter_expires_comes_back_to_the_payer() {
         "realm_mail_commit",
         &[
             COD_ESCROW, &taker, SENDER, &subject, "\"\"", COD, "0", "0", "0", "0", "false", "0",
-            "0", &priced, "0", "0", "0", "0",
+            "0", &priced, "0", "0", "0", "0", "0",
         ],
     );
     standalone.assert_call("realm_mail_confirm_delivery", &[COD_ESCROW, &taker]);

@@ -42,11 +42,18 @@ pub struct Mail {
     /// When the recipient can first see the mail. 0 means from creation.
     #[default(0i64)]
     pub deliver_micros: i64,
+    /// The attached Plain Letter's `ITEM_FIELD_ITEM_TEXT_ID`. 0 when the attachment is not a
+    /// Letter Copy's letter.
+    #[default(0u32)]
+    pub item_text_id: u32,
 }
+// A Transfer runs this sweep on the source after the rows travel, so it destroys no letter. The
+// Character deletion that does destroy them drops their text first
+// (`mail_text::drop_character_letters`).
 crate::character_owned!(delete, fn sweep_delete_game_mail(ctx, character_guid) {
     let mails = ctx.db.game_mail();
     for r in mails.by_recipient().filter(&character_guid).collect::<Vec<_>>() {
-        delete_mail(ctx, r.id);
+        remove_mail(ctx, r.id);
     }
 });
 crate::character_owned!(transfer, fn sweep_transfer_game_mail(ctx, character_guid, io) {
@@ -69,6 +76,7 @@ impl Mail {
             enchant_id: self.item_enchant_id,
             soulbound: self.item_soulbound,
             random_property_id: self.random_property_id,
+            item_text_id: self.item_text_id,
         }
     }
 }
@@ -77,26 +85,17 @@ pub(crate) enum Attach {
     Nothing,
     NotYours,
     Soulbound,
-    /// A Letter Copy's Plain Letter (`item_text_id != 0`). `ItemSnapshot` carries no text id yet,
-    /// so an attached one would arrive unreadable — a stopgap until a later change carries the id
-    /// through a mail attachment.
-    HasText,
     Detach,
 }
-/// `owned` is `(owner_guid, soulbound, item_text_id)` off the live row, when one exists.
-pub(crate) fn plan_attach(
-    item_guid: u64,
-    owned: Option<(u64, bool, u32)>,
-    sender_guid: u64,
-) -> Attach {
+/// `owned` is `(owner_guid, soulbound)` off the live row, when one exists.
+pub(crate) fn plan_attach(item_guid: u64, owned: Option<(u64, bool)>, sender_guid: u64) -> Attach {
     if item_guid == 0 {
         return Attach::Nothing;
     }
     match owned {
         None => Attach::NotYours,
-        Some((owner_guid, ..)) if owner_guid != sender_guid => Attach::NotYours,
-        Some((_, true, _)) => Attach::Soulbound,
-        Some((_, _, item_text_id)) if item_text_id != 0 => Attach::HasText,
+        Some((owner_guid, _)) if owner_guid != sender_guid => Attach::NotYours,
+        Some((_, true)) => Attach::Soulbound,
         Some(_) => Attach::Detach,
     }
 }
@@ -109,15 +108,12 @@ pub(crate) fn detach_item(
     let owned = items.guid().find(item_guid);
     match plan_attach(
         item_guid,
-        owned
-            .as_ref()
-            .map(|i| (i.owner_guid, i.soulbound, i.item_text_id)),
+        owned.as_ref().map(|i| (i.owner_guid, i.soulbound)),
         sender_guid,
     ) {
         Attach::Nothing => return Ok(ItemSnapshot::default()),
         Attach::NotYours => return Err(lyracore_shared::mail::NOT_YOUR_ITEM.to_string()),
         Attach::Soulbound => return Err(lyracore_shared::mail::ITEM_IS_SOULBOUND.to_string()),
-        Attach::HasText => return Err(lyracore_shared::mail::ITEM_HAS_TEXT.to_string()),
         Attach::Detach => {}
     }
     let inst = owned.expect("Detach is only reachable with a row");
@@ -278,6 +274,7 @@ pub(crate) fn insert_letter(ctx: &ReducerContext, letter: Letter) -> u64 {
         item_enchant_id: letter.item.enchant_id,
         item_soulbound: letter.item.soulbound,
         random_property_id: letter.item.random_property_id,
+        item_text_id: letter.item.item_text_id,
         money: letter.money,
         cod: letter.cod,
         was_read: false,
@@ -423,6 +420,7 @@ pub(crate) fn clear_mail_item(ctx: &ReducerContext, mail_id: u64) {
             item_enchant_id: 0,
             item_soulbound: false,
             random_property_id: 0,
+            item_text_id: 0,
             ..row
         });
     }
@@ -620,8 +618,16 @@ pub(crate) fn send_back(ctx: &ReducerContext, row: Mail, delay_secs: u32) {
     let back = ctx.db.game_mail().id().update(returned(row, arrives));
     crate::mail_timer::start(ctx, &back);
 }
-/// Delete a Mail with its item snapshot, its copper and its timer.
+/// Delete a Mail with its item snapshot, its copper and its timer. An attached Plain Letter is
+/// destroyed with it.
 pub(crate) fn delete_mail(ctx: &ReducerContext, mail_id: u64) {
+    if let Some(row) = ctx.db.game_mail().id().find(mail_id) {
+        crate::mail_text::drop_letter_text(ctx, row.item_text_id);
+    }
+    remove_mail(ctx, mail_id);
+}
+/// Remove a Mail row and its timer, and leave any attached letter's text alone.
+fn remove_mail(ctx: &ReducerContext, mail_id: u64) {
     ctx.db.game_mail().id().delete(mail_id);
     crate::mail_timer::stop(ctx, mail_id);
 }
@@ -755,34 +761,21 @@ mod tests {
 
     #[test]
     fn attaching_an_item_the_sender_does_not_own_is_refused() {
-        assert_eq!(plan_attach(4, Some((7, false, 0)), 7), Attach::Detach);
-        assert_eq!(plan_attach(4, Some((8, false, 0)), 7), Attach::NotYours);
+        assert_eq!(plan_attach(4, Some((7, false)), 7), Attach::Detach);
+        assert_eq!(plan_attach(4, Some((8, false)), 7), Attach::NotYours);
         assert_eq!(plan_attach(4, None, 7), Attach::NotYours);
     }
 
     #[test]
     fn a_soulbound_instance_is_refused_and_an_unworn_bind_on_equip_item_is_mailable() {
-        assert_eq!(plan_attach(4, Some((7, true, 0)), 7), Attach::Soulbound);
-        assert_eq!(plan_attach(4, Some((7, false, 0)), 7), Attach::Detach);
-    }
-
-    #[test]
-    fn a_letter_copys_plain_letter_is_refused_to_attach() {
-        // The mail attachment snapshot carries no text id yet, so a Plain Letter would arrive
-        // unreadable — refused the same way a soulbound item is, until a later change carries
-        // the id through.
-        assert_eq!(plan_attach(4, Some((7, false, 1)), 7), Attach::HasText);
-        assert_eq!(
-            plan_attach(4, Some((7, true, 1)), 7),
-            Attach::Soulbound,
-            "soulbound is checked first — either reason refuses, but the message should be exact"
-        );
+        assert_eq!(plan_attach(4, Some((7, true)), 7), Attach::Soulbound);
+        assert_eq!(plan_attach(4, Some((7, false)), 7), Attach::Detach);
     }
 
     #[test]
     fn item_guid_zero_means_no_attachment_rather_than_a_missing_item() {
         assert_eq!(plan_attach(0, None, 7), Attach::Nothing);
-        assert_eq!(plan_attach(0, Some((8, true, 0)), 7), Attach::Nothing);
+        assert_eq!(plan_attach(0, Some((8, true)), 7), Attach::Nothing);
     }
 
     #[test]
@@ -826,6 +819,7 @@ mod tests {
             check_flags: 0,
             mail_template_id: 0,
             deliver_micros: 0,
+            item_text_id: 0,
         }
     }
 

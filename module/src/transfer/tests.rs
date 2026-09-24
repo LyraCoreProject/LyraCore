@@ -1966,7 +1966,7 @@ fn import_character_blob_still_proves_the_destination_copy_is_durable() {
     // undecodable one, and swallowing that error commits a PARTIAL character and then files the
     // in-row that licenses destroying the whole source copy.
     assert!(
-        body.contains("sink.import_rows(guid, &decoded.payload)?"),
+        body.contains("sink.import_rows(guid, &payload)?"),
         "import_character_blob no longer propagates `import_rows`' error. A partial import is \
              the one outcome worse than none: the in-row filed immediately below it licenses \
              finish_transfer to cascade-delete the source copy the missing rows came from. Body \
@@ -2060,8 +2060,8 @@ fn the_production_adapter_is_the_pass_through_the_harness_assumes() {
                  self.ctx.db.game_world_entity().guid().find(guid).is_some() } fn \
                  detach_for_transfer(&mut self, guid: u64) { crate::group::detach_for_transfer(self.ctx, \
                  guid); crate::bridge::detach_command_receipts_for_transfer(self.ctx, guid); } fn \
-                 cascade_delete_character(&mut self, guid: u64) { \
-                 crate::world::cascade_delete_character(self.ctx, guid); } fn insert_character(&mut self, c: \
+                 cascade_delete_character(&mut self, guid: u64, listing_holds: ListingHolds) { \
+                 cascade_for_transfer(self.ctx, guid, listing_holds); } fn insert_character(&mut self, c: \
                  crate::character::Character) { self.ctx.db.game_character().insert(c); } fn import_rows(&mut \
                  self, guid: u64, payload: &[TableRows]) -> Result<(), String> { import_rows(self.ctx, guid, \
                  payload) } fn ensure_shadow_account(&mut self, account_id: u64) { \
@@ -2074,8 +2074,8 @@ fn the_production_adapter_is_the_pass_through_the_harness_assumes() {
                 "impl FinishSink for CtxShard<'_> {",
                 "{ fn detach_for_transfer(&mut self, guid: u64) { crate::group::detach_for_transfer(self.ctx, \
                  guid); crate::bridge::detach_command_receipts_for_transfer(self.ctx, guid); } fn \
-                 cascade_delete_character(&mut self, guid: u64) { \
-                 crate::world::cascade_delete_character(self.ctx, guid); } fn record_shard(&mut self, guid: \
+                 cascade_delete_character(&mut self, guid: u64, listing_holds: ListingHolds) { \
+                 cascade_for_transfer(self.ctx, guid, listing_holds); } fn record_shard(&mut self, guid: \
                  u64, map_id: u32, instance_id: u64) { crate::realm_core::record_shard(self.ctx, guid, \
                  map_id, instance_id); } }",
             ),
@@ -2270,4 +2270,97 @@ fn the_instance_removal_dies_with_the_source_copy_and_is_not_carried() {
         body.contains(".character_guid().delete(character_guid)"),
         "the delete sweep must remove the departing Character's own row. Body was:\n{body}"
     );
+}
+
+/// A blob exported by the build before this one names every manifest table except the listing
+/// Hold. It must import, so a Transfer in flight across the publish finishes. Any other difference
+/// is still drift.
+#[test]
+fn the_previous_builds_manifest_imports_with_the_listing_hold_empty() {
+    let previous: Vec<ManifestEntry> = manifest()
+        .into_iter()
+        .filter(|entry| entry.table != "game_auction_hold")
+        .collect();
+    assert_eq!(previous.len() + 1, manifest().len());
+    assert_eq!(check_manifest(7, &previous), Ok(()));
+    assert_eq!(check_manifest(7, &manifest()), Ok(()));
+
+    let mut drifted = previous.clone();
+    drifted.pop();
+    assert!(check_manifest(7, &drifted)
+        .unwrap_err()
+        .contains("manifest mismatch"));
+
+    let carried = TableRows {
+        table: "game_item_instance".to_owned(),
+        rows: vec![1, 2, 3],
+    };
+    assert_eq!(
+        payload_for_this_build(&previous, std::slice::from_ref(&carried)),
+        vec![
+            carried.clone(),
+            TableRows {
+                table: "game_auction_hold".to_owned(),
+                rows: Vec::new(),
+            },
+        ],
+        "the missing table arrives with no rows"
+    );
+    assert_eq!(
+        payload_for_this_build(&manifest(), std::slice::from_ref(&carried)),
+        vec![carried],
+        "a current blob is imported as it came, so the coverage check still sees any gap"
+    );
+}
+
+/// The filled payload passes the coverage check that refuses a partial import.
+#[test]
+fn a_filled_previous_payload_covers_every_transport_arm() {
+    fn count(applied: &std::cell::Cell<usize>, _: u64, _: &mut RowIo<'_>) {
+        applied.set(applied.get() + 1);
+    }
+    let applied = std::cell::Cell::new(0);
+    let arms: &[TransportArm<'_, std::cell::Cell<usize>>] =
+        &[("game_item_instance", count), ("game_auction_hold", count)];
+    let previous: Vec<ManifestEntry> = manifest()
+        .into_iter()
+        .filter(|entry| entry.table != "game_auction_hold")
+        .collect();
+    let carried = [TableRows {
+        table: "game_item_instance".to_owned(),
+        rows: Vec::new(),
+    }];
+    assert!(import_rows_via(&applied, 73, &carried, arms).is_err());
+    assert_eq!(applied.get(), 0);
+    import_rows_via(
+        &applied,
+        73,
+        &payload_for_this_build(&previous, &carried),
+        arms,
+    )
+    .expect("the filled payload imports");
+    assert_eq!(applied.get(), 2);
+}
+
+/// Pins the Core manifest by count. A Core table added to or removed from the manifest fails here.
+/// The build before the next one is then this one: empty `ADDED_SINCE_PREVIOUS_BUILD`, delete
+/// `previous_manifest`, and only then change these numbers. A linked Package adds its own tables,
+/// so the count holds only for a build without one. The difference holds for every build.
+#[test]
+fn the_previous_manifest_is_pinned_until_the_next_manifest_change() {
+    assert_eq!(ADDED_SINCE_PREVIOUS_BUILD, ["game_auction_hold"]);
+    let current = manifest();
+    let previous = previous_manifest();
+    let added: Vec<&str> = current
+        .iter()
+        .filter(|entry| !previous.contains(entry))
+        .map(|entry| entry.table.as_str())
+        .collect();
+    assert_eq!(added, ["game_auction_hold"]);
+    assert_eq!(previous.len() + 1, current.len());
+    #[cfg(not(has_packages))]
+    {
+        assert_eq!(current.len(), 43);
+        assert_eq!(previous.len(), 42);
+    }
 }

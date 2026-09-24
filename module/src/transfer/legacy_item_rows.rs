@@ -1,5 +1,6 @@
 //! Preserve rows in Transfer Escrow written before a transported table grew columns: plain items
-//! from before Random Property fields or before Item Text, and mail from before the mail header.
+//! from before Random Property fields or before Item Text, mail from before the mail header or the
+//! attached letter's text id, and mail Escrow from before that text id.
 
 use std::collections::BTreeSet;
 
@@ -8,6 +9,7 @@ use spacetimedb::{Identity, SpacetimeType, Timestamp};
 use super::TableRows;
 use crate::items::{BuybackEntry, ItemInstance};
 use crate::mail::Mail;
+use crate::mail_escrow::MailEscrow;
 
 const FORMATS: &[(&str, &str)] = &[
     ("game_item_instance", "game_item_instance@item-text-1"),
@@ -15,13 +17,18 @@ const FORMATS: &[(&str, &str)] = &[
         "game_character_buyback",
         "game_character_buyback@random-property-1",
     ),
-    ("game_mail", "game_mail@mail-header-1"),
+    ("game_mail", "game_mail@letter-text-1"),
+    ("game_mail_escrow", "game_mail_escrow@letter-text-1"),
+    ("game_auction_hold", "game_auction_hold@letter-text-1"),
 ];
 /// The tag the previous Module wrote on `game_item_instance` rows, which carry Random Property but
 /// not `item_text_id`.
 const RANDOM_PROPERTY_ITEM_INSTANCE: &str = "game_item_instance@random-property-1";
 /// The tag the previous Module wrote on `game_mail` rows, which lack the mail header columns.
 const RANDOM_PROPERTY_MAIL: &str = "game_mail@random-property-1";
+/// The tag the previous Module wrote on `game_mail` rows, which have the mail header but not the
+/// attached letter's `item_text_id`.
+const MAIL_HEADER_MAIL: &str = "game_mail@mail-header-1";
 
 /// Older Modules require canonical payload names and refuse these tags before applying rows.
 pub(super) fn mark_current(payload: &mut [TableRows]) {
@@ -45,6 +52,10 @@ pub(super) fn prepare(payload: &[TableRows]) -> Result<Vec<TableRows>, String> {
             entry.rows = upgrade::<RandomPropertyMail, Mail>(&entry.rows)
                 .map_err(|error| format!("table {}: {error}", entry.table))?;
             entry.table = "game_mail".to_owned();
+        } else if entry.table == MAIL_HEADER_MAIL {
+            entry.rows = upgrade::<MailHeaderMail, Mail>(&entry.rows)
+                .map_err(|error| format!("table {}: {error}", entry.table))?;
+            entry.table = "game_mail".to_owned();
         } else if entry.table == RANDOM_PROPERTY_ITEM_INSTANCE {
             entry.rows = upgrade::<RandomPropertyItemInstance, ItemInstance>(&entry.rows)
                 .map_err(|error| format!("table {}: {error}", entry.table))?;
@@ -56,6 +67,7 @@ pub(super) fn prepare(payload: &[TableRows]) -> Result<Vec<TableRows>, String> {
                     upgrade::<LegacyBuybackEntry, BuybackEntry>(&entry.rows)
                 }
                 "game_mail" => upgrade::<LegacyMail, Mail>(&entry.rows),
+                "game_mail_escrow" => upgrade::<RewardHeaderMailEscrow, MailEscrow>(&entry.rows),
                 _ => Ok(entry.rows),
             }
             .map_err(|error| format!("table {}: {error}", entry.table))?;
@@ -243,7 +255,7 @@ struct RandomPropertyMail {
 
 impl From<RandomPropertyMail> for Mail {
     fn from(row: RandomPropertyMail) -> Self {
-        Self {
+        MailHeaderMail {
             id: row.id,
             recipient_guid: row.recipient_guid,
             sender_guid: row.sender_guid,
@@ -264,6 +276,118 @@ impl From<RandomPropertyMail> for Mail {
             check_flags: 0,
             mail_template_id: 0,
             deliver_micros: 0,
+        }
+        .into()
+    }
+}
+
+/// `game_mail` with the mail header, before the attached letter's `item_text_id`.
+#[derive(SpacetimeType)]
+struct MailHeaderMail {
+    id: u64,
+    recipient_guid: u64,
+    sender_guid: u64,
+    subject: String,
+    body: String,
+    item_entry: u32,
+    item_stack_count: u32,
+    item_durability: u32,
+    item_enchant_id: u32,
+    item_soulbound: bool,
+    money: u32,
+    cod: u32,
+    was_read: bool,
+    created_at: Timestamp,
+    random_property_id: u32,
+    sender_kind: u8,
+    sender_entry: u32,
+    check_flags: u32,
+    mail_template_id: u32,
+    deliver_micros: i64,
+}
+
+impl From<MailHeaderMail> for Mail {
+    fn from(row: MailHeaderMail) -> Self {
+        Self {
+            id: row.id,
+            recipient_guid: row.recipient_guid,
+            sender_guid: row.sender_guid,
+            subject: row.subject,
+            body: row.body,
+            item_entry: row.item_entry,
+            item_stack_count: row.item_stack_count,
+            item_durability: row.item_durability,
+            item_enchant_id: row.item_enchant_id,
+            item_soulbound: row.item_soulbound,
+            money: row.money,
+            cod: row.cod,
+            was_read: row.was_read,
+            created_at: row.created_at,
+            random_property_id: row.random_property_id,
+            sender_kind: row.sender_kind,
+            sender_entry: row.sender_entry,
+            check_flags: row.check_flags,
+            mail_template_id: row.mail_template_id,
+            deliver_micros: row.deliver_micros,
+            item_text_id: 0,
+        }
+    }
+}
+
+/// `game_mail_escrow` as it first travelled, with the Reward Letter header and before the attached
+/// letter's `item_text_id`. Those rows were written untagged.
+#[derive(SpacetimeType)]
+struct RewardHeaderMailEscrow {
+    escrow_id: u64,
+    sender_guid: u64,
+    recipient_guid: u64,
+    subject: String,
+    body: String,
+    money: u32,
+    postage: u32,
+    created_micros: i64,
+    delivered: bool,
+    payout: bool,
+    mail_id: u64,
+    item_entry: u32,
+    item_stack_count: u32,
+    item_durability: u32,
+    item_enchant_id: u32,
+    item_soulbound: bool,
+    cod: u32,
+    random_property_id: u32,
+    delivery_delay_secs: u32,
+    sender_kind: u8,
+    sender_entry: u32,
+    mail_template_id: u32,
+}
+
+impl From<RewardHeaderMailEscrow> for MailEscrow {
+    fn from(row: RewardHeaderMailEscrow) -> Self {
+        Self {
+            escrow_id: row.escrow_id,
+            sender_guid: row.sender_guid,
+            recipient_guid: row.recipient_guid,
+            subject: row.subject,
+            body: row.body,
+            money: row.money,
+            postage: row.postage,
+            created_micros: row.created_micros,
+            delivered: row.delivered,
+            payout: row.payout,
+            mail_id: row.mail_id,
+            item_entry: row.item_entry,
+            item_stack_count: row.item_stack_count,
+            item_durability: row.item_durability,
+            item_enchant_id: row.item_enchant_id,
+            item_soulbound: row.item_soulbound,
+            cod: row.cod,
+            random_property_id: row.random_property_id,
+            delivery_delay_secs: row.delivery_delay_secs,
+            sender_kind: row.sender_kind,
+            sender_entry: row.sender_entry,
+            mail_template_id: row.mail_template_id,
+            item_text_id: 0,
         }
     }
 }

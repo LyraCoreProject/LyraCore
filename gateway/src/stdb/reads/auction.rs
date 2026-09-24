@@ -344,6 +344,7 @@ mod tests {
             revision: 0,
             deposit_rate: 5,
             consignment_rate: 5,
+            item_text_id: 0,
         }
     }
 

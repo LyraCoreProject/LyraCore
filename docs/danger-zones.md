@@ -443,8 +443,10 @@ sleep 4
 # instance-reaper schedules and re-seeds every fixture family `init` seeds but an auto-migrating
 # republish does not re-run. Skipping it presents as a mid-session hang, not an error.
 # Folding it into `lyracore publish` is issue 41 in the lyracore-cli repository.
-# It also arms a Mail Timer for each Mail that has none. The first run after the Mail Timer ships
-# applies the vanilla 30-day rule (3 days with a cash on delivery price) to EXISTING mail: every
+# It also restores a missing Auction expiry, re-tags legacy auction mail as Auction Mail once per
+# database (before the Mail Timer pass, so a legacy "Auction won" is deleted, not returned), and arms
+# a Mail Timer for each Mail that has none. The first run after the Mail Timer ships applies the
+# vanilla 30-day rule (3 days with a cash on delivery price) to EXISTING mail: every
 # Mail already past its life returns to its sender or is deleted, with its copper, after the call
 # commits, at 100 Mail a second. That is a deliberate maintainer decision, not a fault. Later runs
 # arm nothing new.

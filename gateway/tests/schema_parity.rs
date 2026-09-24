@@ -917,7 +917,7 @@ parity_test!(parity_game_item_instance, "game_item_instance", lyracore_module::I
     item_text_id,
 });
 parity_test!(parity_game_item_text, "game_item_text", lyracore_module::ItemText, bindings::item_text_type::ItemText, {
-    id, text,
+    id, text, letters,
 });
 parity_test!(parity_game_corpse_loot, "game_corpse_loot", lyracore_module::CorpseLoot, bindings::corpse_loot_type::CorpseLoot, {
     id, corpse_guid, slot, item_entry, count, quest_only, reserved_for, designated_looter_guid,
@@ -1098,12 +1098,14 @@ parity_test!(parity_game_mail, "game_mail", lyracore_module::Mail, bindings::mai
     id, recipient_guid, sender_guid, subject, body, item_entry, item_stack_count, item_durability,
     item_enchant_id, item_soulbound, money, cod, was_read, created_at,
     random_property_id, sender_kind, sender_entry, check_flags, mail_template_id, deliver_micros,
+    item_text_id,
 });
 parity_test!(parity_game_mail_escrow, "game_mail_escrow", lyracore_module::MailEscrow, bindings::mail_escrow_type::MailEscrow, {
     escrow_id, sender_guid, recipient_guid, subject, body, money, postage, created_micros,
     delivered, payout, mail_id, item_entry, item_stack_count, item_durability, item_enchant_id,
     item_soulbound, cod,
     random_property_id, delivery_delay_secs, sender_kind, sender_entry, mail_template_id,
+    item_text_id,
 });
 parity_test!(parity_game_mail_arrival, "game_mail_arrival", lyracore_module::MailArrival, bindings::mail_arrival_type::MailArrival, {
     id, recipient_guid, created_at,
@@ -1112,7 +1114,7 @@ parity_test!(parity_game_auction, "game_auction", lyracore_module::Auction, bind
     id, listing_operation_id, house, owner_guid, item_guid, item_entry, item_stack_count,
     item_durability, item_enchant_id, item_soulbound, start_bid, buyout, highest_bidder_guid,
     highest_bid, deposit, created_at, expires_at, revision, deposit_rate, consignment_rate,
-    random_property_id,
+    random_property_id, item_text_id,
 });
 parity_test!(parity_game_auction_bid_decision, "game_auction_bid_decision", lyracore_module::AuctionBidDecision, bindings::auction_bid_decision_type::AuctionBidDecision, {
     operation_id, bidder_guid, auction_id, offer, outcome, revision, result_bidder_guid,
@@ -1127,13 +1129,13 @@ parity_test!(parity_game_auction_hold, "game_auction_hold", lyracore_module::Auc
     operation_id, seller_guid, item_guid, item_entry, item_stack_count, item_durability,
     item_enchant_id, item_soulbound, start_bid, buyout, duration_minutes, deposit, created_micros,
     expires_micros, house, deposit_rate, consignment_rate,
-    random_property_id,
+    random_property_id, item_text_id,
 });
 parity_test!(parity_game_auction_operation_receipt, "game_auction_operation_receipt", lyracore_module::AuctionOperationReceipt, bindings::auction_operation_receipt_type::AuctionOperationReceipt, {
     operation_id, auction_id, actor_guid, item_guid, item_entry, item_stack_count, item_durability,
     item_enchant_id, item_soulbound, start_bid, buyout, duration_minutes, deposit, created_micros,
     expires_micros, house, deposit_rate, consignment_rate,
-    random_property_id,
+    random_property_id, item_text_id,
 });
 parity_test!(parity_game_auction_house, "game_auction_house", lyracore_module::AuctionHouseDefinition, bindings::auction_house_definition_type::AuctionHouseDefinition, {
     id, faction, deposit_rate, consignment_rate, name,

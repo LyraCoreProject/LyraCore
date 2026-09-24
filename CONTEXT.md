@@ -695,10 +695,11 @@ _Avoid_: new mail notification, mail push
 **Letter Copy**:
 A Plain Letter in the bags that carries a Mail's text. Made by `CMSG_MAIL_CREATE_TEXT_ITEM` from a
 delivered Mail with a body, once. The Plain Letter sells for 0, so making one is not a value flow.
+It keeps its text through a Mail, a Trade Commit, an auction and a Transfer.
 
 **Item Text**:
 Text readable from an item or a Mail, keyed by text id. A Letter Copy's text outlives the Mail that
-made it.
+made it, and is deleted with the last Letter Copy that carries it.
 
 ### Auctions
 
@@ -725,8 +726,8 @@ gets the Auction Mail only.
 Value taken from a Character on its Home Shard for one auction operation, and held while Realm-core
 decides. A listing Hold keeps the item and the deposit. A bid Hold keeps the full offer, and a
 Cancellation's bid Hold keeps the Auction Cut. The decision spends the Hold or gives it back,
-exactly once. Unlike Escrow, a Refusal refunds it. A bid Hold travels with its Character on
-Transfer.
+exactly once. Unlike Escrow, a Refusal refunds it. A bid Hold and a listing Hold both travel with
+their Character on Transfer.
 
 **Cancellation**:
 The seller withdraws an active listing. The item goes back by Auction Mail, a displaced bidder gets

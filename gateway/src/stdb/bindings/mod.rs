@@ -3868,6 +3868,7 @@ pub enum Reducer {
         deposit: u32,
         created_micros: i64,
         expires_micros: i64,
+        item_text_id: u32,
     },
     RealmAuctionConfirmListing {
         operation_id: u64,
@@ -3915,6 +3916,7 @@ pub enum Reducer {
         deposit: u32,
         created_micros: i64,
         expires_micros: i64,
+        item_text_id: u32,
     },
     RealmAuctionSettleListing {
         operation_id: u64,
@@ -3978,6 +3980,7 @@ pub enum Reducer {
         sender_kind: u8,
         sender_entry: u32,
         mail_template_id: u32,
+        item_text_id: u32,
     },
     RealmMailConfirmDelivery {
         escrow_id: u64,
@@ -4014,6 +4017,7 @@ pub enum Reducer {
         item_enchant_id: u32,
         item_soulbound: bool,
         random_property_id: u32,
+        item_text_id: u32,
     },
     RealmMailItemRoom {
         request_actor: SessionActor,
@@ -7542,6 +7546,7 @@ Reducer::PlayerbotsFixtureCommandApply{
                 deposit,
                 created_micros,
                 expires_micros,
+                item_text_id,
 }             => __sats::bsatn::to_vec(&realm_auction_commit_listing_reducer::RealmAuctionCommitListingArgs {
                 operation_id: operation_id.clone(),
                 request_actor: request_actor.clone(),
@@ -7561,6 +7566,7 @@ Reducer::PlayerbotsFixtureCommandApply{
                 deposit: deposit.clone(),
                 created_micros: created_micros.clone(),
                 expires_micros: expires_micros.clone(),
+                item_text_id: item_text_id.clone(),
 }),
             Reducer::RealmAuctionConfirmListing{
                 operation_id,
@@ -7631,6 +7637,7 @@ Reducer::PlayerbotsFixtureCommandApply{
                 deposit,
                 created_micros,
                 expires_micros,
+                item_text_id,
 }             => __sats::bsatn::to_vec(&realm_auction_refund_listing_reducer::RealmAuctionRefundListingArgs {
                 operation_id: operation_id.clone(),
                 request_actor: request_actor.clone(),
@@ -7650,6 +7657,7 @@ Reducer::PlayerbotsFixtureCommandApply{
                 deposit: deposit.clone(),
                 created_micros: created_micros.clone(),
                 expires_micros: expires_micros.clone(),
+                item_text_id: item_text_id.clone(),
 }),
             Reducer::RealmAuctionSettleListing{
                 operation_id,
@@ -7749,6 +7757,7 @@ Reducer::PlayerbotsFixtureCommandApply{
                 sender_kind,
                 sender_entry,
                 mail_template_id,
+                item_text_id,
 }             => __sats::bsatn::to_vec(&realm_mail_commit_reducer::RealmMailCommitArgs {
                 escrow_id: escrow_id.clone(),
                 request_actor: request_actor.clone(),
@@ -7768,6 +7777,7 @@ Reducer::PlayerbotsFixtureCommandApply{
                 sender_kind: sender_kind.clone(),
                 sender_entry: sender_entry.clone(),
                 mail_template_id: mail_template_id.clone(),
+                item_text_id: item_text_id.clone(),
 }),
             Reducer::RealmMailConfirmDelivery{
                 escrow_id,
@@ -7825,6 +7835,7 @@ Reducer::PlayerbotsFixtureCommandApply{
                 item_enchant_id,
                 item_soulbound,
                 random_property_id,
+                item_text_id,
 }             => __sats::bsatn::to_vec(&realm_mail_item_payout_reducer::RealmMailItemPayoutArgs {
                 escrow_id: escrow_id.clone(),
                 request_actor: request_actor.clone(),
@@ -7835,6 +7846,7 @@ Reducer::PlayerbotsFixtureCommandApply{
                 item_enchant_id: item_enchant_id.clone(),
                 item_soulbound: item_soulbound.clone(),
                 random_property_id: random_property_id.clone(),
+                item_text_id: item_text_id.clone(),
 }),
             Reducer::RealmMailItemRoom{
                 request_actor,

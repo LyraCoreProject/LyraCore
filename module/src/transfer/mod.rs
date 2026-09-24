@@ -1027,7 +1027,7 @@ pub(crate) trait ImportSink: ShardLedger {
     /// Drop transfer-owned mirror rows before the ordinary Character cascade can apply local
     /// membership semantics to a Realm-owned party.
     fn detach_for_transfer(&mut self, guid: u64);
-    fn cascade_delete_character(&mut self, guid: u64);
+    fn cascade_delete_character(&mut self, guid: u64, listing_holds: ListingHolds);
     fn insert_character(&mut self, c: crate::character::Character);
     /// The payload half — [`import_rows`] against this database's transport registry.
     fn import_rows(&mut self, guid: u64, payload: &[TableRows]) -> Result<(), String>;
@@ -1057,7 +1057,7 @@ pub(crate) trait ImportSink: ShardLedger {
 pub(crate) trait FinishSink: ShardLedger {
     /// `group::detach_for_transfer` — raw membership removal: no leader transfer, no disband.
     fn detach_for_transfer(&mut self, guid: u64);
-    fn cascade_delete_character(&mut self, guid: u64);
+    fn cascade_delete_character(&mut self, guid: u64, listing_holds: ListingHolds);
     /// `realm_core::record_shard` — this database's forwarding receipt for the character.
     fn record_shard(&mut self, guid: u64, map_id: u32, instance_id: u64);
 }
@@ -1193,8 +1193,8 @@ impl ImportSink for CtxShard<'_> {
         crate::group::detach_for_transfer(self.ctx, guid);
         crate::bridge::detach_command_receipts_for_transfer(self.ctx, guid);
     }
-    fn cascade_delete_character(&mut self, guid: u64) {
-        crate::world::cascade_delete_character(self.ctx, guid);
+    fn cascade_delete_character(&mut self, guid: u64, listing_holds: ListingHolds) {
+        cascade_for_transfer(self.ctx, guid, listing_holds);
     }
     fn insert_character(&mut self, c: crate::character::Character) {
         self.ctx.db.game_character().insert(c);
@@ -1223,8 +1223,8 @@ impl FinishSink for CtxShard<'_> {
         crate::group::detach_for_transfer(self.ctx, guid);
         crate::bridge::detach_command_receipts_for_transfer(self.ctx, guid);
     }
-    fn cascade_delete_character(&mut self, guid: u64) {
-        crate::world::cascade_delete_character(self.ctx, guid);
+    fn cascade_delete_character(&mut self, guid: u64, listing_holds: ListingHolds) {
+        cascade_for_transfer(self.ctx, guid, listing_holds);
     }
     fn record_shard(&mut self, guid: u64, map_id: u32, instance_id: u64) {
         crate::realm_core::record_shard(self.ctx, guid, map_id, instance_id);
@@ -1712,8 +1712,10 @@ pub(crate) fn apply_import_blob<S: ImportSink>(
     // already hold its Realm-owned party mirror, so detach that cache row before the ordinary
     // Character cascade can interpret cleanup as a party departure. Item import separately checks
     // foreign GUID collisions because legacy packing could overlap.
+    // A listing Hold already here was left by a Transfer from before Holds travelled. The payload
+    // does not carry it, so it stays, and the Character's next MSG_AUCTION_HELLO here finishes it.
     sink.detach_for_transfer(guid);
-    sink.cascade_delete_character(guid);
+    sink.cascade_delete_character(guid, ListingHolds::Keep);
     sink.insert_character(c);
     // AC#3: ratchet this database's guid allocator past `guid` NOW, in the same
     // transaction as the materialisation — so a `create_character` racing this import (or run any
@@ -1729,7 +1731,8 @@ pub(crate) fn apply_import_blob<S: ImportSink>(
     if crate::auth::in_guid_range(sink.own_guid_range(), guid) {
         sink.bump_guid_high_water(guid);
     }
-    sink.import_rows(guid, &decoded.payload)?;
+    let payload = payload_for_this_build(&decoded.manifest, &decoded.payload);
+    sink.import_rows(guid, &payload)?;
 
     // The destination has no `game_account` row (accounts are realm-scoped and live on the default
     // database until realm-core). `gw::gw_player_login` resolves the account by id, so
@@ -2038,6 +2041,49 @@ pub(crate) fn apply_finish_step<S: FinishSink>(
     }
 }
 
+/// What a Transfer's cascade does with the Character's listing Holds on this database.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ListingHolds {
+    /// The payload carried them to the destination, so this copy goes.
+    Delete,
+    /// The payload does not carry them, so they stay and finish on this Shard.
+    Keep,
+}
+
+/// The listing Holds a finished Transfer leaves on its source. A blob from the build before Holds
+/// travelled names no `game_auction_hold`, so its Holds never left.
+pub(crate) fn listing_holds_after(blob: &[u8]) -> ListingHolds {
+    let carried = decode_blob(0, blob).is_ok_and(|blob| {
+        blob.manifest
+            .iter()
+            .any(|entry| entry.table == "game_auction_hold")
+    });
+    if carried {
+        ListingHolds::Delete
+    } else {
+        ListingHolds::Keep
+    }
+}
+
+/// `world::cascade_delete_character` for a Transfer. [`ListingHolds::Keep`] puts the Character's
+/// listing Holds back in the same transaction, so the cascade cannot destroy their item or deposit.
+fn cascade_for_transfer(ctx: &ReducerContext, guid: u64, listing_holds: ListingHolds) {
+    use crate::auction::game_auction_hold;
+    let kept: Vec<_> = match listing_holds {
+        ListingHolds::Delete => Vec::new(),
+        ListingHolds::Keep => ctx
+            .db
+            .game_auction_hold()
+            .by_seller()
+            .filter(&guid)
+            .collect(),
+    };
+    crate::world::cascade_delete_character(ctx, guid);
+    for hold in kept {
+        ctx.db.game_auction_hold().insert(hold);
+    }
+}
+
 /// The delete-last body, shared by [`finish_transfer`] and the reaper's roll-forward. Executed for
 /// real — order and all — by `harness`.
 pub(crate) fn apply_finish<S: FinishSink>(sink: &mut S, transfer_id: u64) {
@@ -2057,7 +2103,7 @@ pub(crate) fn apply_finish<S: FinishSink>(sink: &mut S, transfer_id: u64) {
             // removal because a shard hop is not a party departure. Command Receipts leave the old
             // Shard here because their transported copies now guard retry at the destination.
             sink.detach_for_transfer(out.character_guid);
-            sink.cascade_delete_character(out.character_guid);
+            sink.cascade_delete_character(out.character_guid, listing_holds_after(&out.blob));
         }
         // AC#3: the character→shard index entry is written HERE, inside the same transaction that
         // releases the escrow, from the out-row's own destination fields — so "the escrow settled" and

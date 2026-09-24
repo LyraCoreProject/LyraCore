@@ -9,6 +9,7 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 pub struct ItemText {
     pub id: u32,
     pub text: String,
+    pub letters: u32,
 }
 
 impl __sdk::InModule for ItemText {
@@ -21,6 +22,7 @@ impl __sdk::InModule for ItemText {
 pub struct ItemTextCols {
     pub id: __sdk::__query_builder::Col<ItemText, u32>,
     pub text: __sdk::__query_builder::Col<ItemText, String>,
+    pub letters: __sdk::__query_builder::Col<ItemText, u32>,
 }
 
 impl __sdk::__query_builder::HasCols for ItemText {
@@ -29,6 +31,7 @@ impl __sdk::__query_builder::HasCols for ItemText {
         ItemTextCols {
             id: __sdk::__query_builder::Col::new(table_name, "id"),
             text: __sdk::__query_builder::Col::new(table_name, "text"),
+            letters: __sdk::__query_builder::Col::new(table_name, "letters"),
         }
     }
 }

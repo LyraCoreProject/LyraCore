@@ -27,6 +27,7 @@ pub struct Mail {
     pub check_flags: u32,
     pub mail_template_id: u32,
     pub deliver_micros: i64,
+    pub item_text_id: u32,
 }
 
 impl __sdk::InModule for Mail {
@@ -57,6 +58,7 @@ pub struct MailCols {
     pub check_flags: __sdk::__query_builder::Col<Mail, u32>,
     pub mail_template_id: __sdk::__query_builder::Col<Mail, u32>,
     pub deliver_micros: __sdk::__query_builder::Col<Mail, i64>,
+    pub item_text_id: __sdk::__query_builder::Col<Mail, u32>,
 }
 
 impl __sdk::__query_builder::HasCols for Mail {
@@ -83,6 +85,7 @@ impl __sdk::__query_builder::HasCols for Mail {
             check_flags: __sdk::__query_builder::Col::new(table_name, "check_flags"),
             mail_template_id: __sdk::__query_builder::Col::new(table_name, "mail_template_id"),
             deliver_micros: __sdk::__query_builder::Col::new(table_name, "deliver_micros"),
+            item_text_id: __sdk::__query_builder::Col::new(table_name, "item_text_id"),
         }
     }
 }

@@ -79,6 +79,7 @@ impl EscrowLedger for FakeLedger {
             sender_kind: e.sender_kind,
             sender_entry: e.sender_entry,
             mail_template_id: e.mail_template_id,
+            item_text_id: e.item.item_text_id,
         })
     }
     fn file_escrow(&mut self, row: MailEscrow) {
@@ -208,14 +209,11 @@ impl FenceSink for FakeShard {
         }
     }
     fn detach_item(&mut self, sender_guid: u64, item_guid: u64) -> Result<ItemSnapshot, String> {
-        // `ItemSnapshot` carries no text id (this harness drives the cross-database Transfer path,
-        // where that gap is the whole bug T10 fixes), so every item here is a `0`, never a Letter
-        // Copy's Plain Letter.
         let owned = self
             .items
             .borrow()
             .get(&item_guid)
-            .map(|(o, i)| (*o, i.soulbound, 0));
+            .map(|(o, i)| (*o, i.soulbound));
         match crate::mail::plan_attach(item_guid, owned, sender_guid) {
             crate::mail::Attach::Nothing => return Ok(ItemSnapshot::default()),
             crate::mail::Attach::NotYours => {
@@ -223,9 +221,6 @@ impl FenceSink for FakeShard {
             }
             crate::mail::Attach::Soulbound => {
                 return Err(lyracore_shared::mail::ITEM_IS_SOULBOUND.to_string())
-            }
-            crate::mail::Attach::HasText => {
-                unreachable!("this harness always passes a literal 0 text id, above")
             }
             crate::mail::Attach::Detach => {}
         }
@@ -479,6 +474,7 @@ fn sword() -> ItemSnapshot {
         enchant_id: 7,
         soulbound: false,
         random_property_id: 117,
+        item_text_id: 0,
     }
 }
 
@@ -1551,6 +1547,39 @@ fn the_take_moves_a_mails_item_into_the_bags_on_another_database() {
         "a mail emptied of its item is still a letter"
     );
     assert!(!plane.has_fence(TAKE));
+}
+/// A Letter Copy's Plain Letter (item 8383) whose text is Item Text 41.
+fn plain_letter() -> ItemSnapshot {
+    ItemSnapshot {
+        entry: 8383,
+        stack_count: 1,
+        durability: 0,
+        enchant_id: 0,
+        soulbound: false,
+        random_property_id: 0,
+        item_text_id: 41,
+    }
+}
+#[test]
+fn a_mailed_plain_letter_keeps_its_text_across_both_databases() {
+    let (mut shard, mut plane) = fixture();
+    shard.give_item(SENDER, ITEM_GUID, plain_letter());
+    drive(&mut shard, &mut plane, ESCROW, ITEM_GUID, Killed::Never).expect("the send completes");
+    assert_eq!(plane.items_in_mailbox(RECIPIENT), vec![plain_letter()]);
+    plane.advance(HOUR_MICROS);
+    shard.purses.borrow_mut().insert(RECIPIENT, 0);
+    let mail_id = plane.mailbox_of(RECIPIENT)[0].id;
+
+    apply_take_item_fence(&mut plane, TAKE, RECIPIENT, mail_id, 8383).expect("fenced");
+    let item = plane
+        .escrow(TAKE)
+        .map(|e| e.item())
+        .expect("the take fence");
+    apply_item_payout(&mut shard, TAKE, RECIPIENT, mail_id, &item).expect("granted");
+    apply_confirm(&mut plane, TAKE).expect("attested");
+    apply_settle(&mut plane, TAKE).expect("settled");
+
+    assert_eq!(shard.bags_of(RECIPIENT), vec![plain_letter()]);
 }
 #[test]
 fn a_take_into_a_full_bag_is_refused_and_the_item_is_never_destroyed() {

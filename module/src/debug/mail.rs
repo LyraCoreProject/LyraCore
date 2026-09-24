@@ -26,6 +26,7 @@ const ITEM: ItemSnapshot = ItemSnapshot {
     enchant_id: 0,
     soulbound: false,
     random_property_id: 0,
+    item_text_id: 0,
 };
 /// A real template, so a payout can grant it.
 const BLADE: ItemSnapshot = ItemSnapshot {
@@ -35,6 +36,7 @@ const BLADE: ItemSnapshot = ItemSnapshot {
     enchant_id: 0,
     soulbound: false,
     random_property_id: 0,
+    item_text_id: 0,
 };
 const SECOND_MICROS: i64 = 1_000_000;
 const MINUTE_MICROS: i64 = 60 * SECOND_MICROS;

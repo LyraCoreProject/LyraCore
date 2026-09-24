@@ -70,11 +70,6 @@ pub(crate) mod character_owned_tripwire {
             "realm-owned Auction value and protocol state",
         ),
         (
-            &["game_auction_hold"],
-            "listing Hold on the seller's source Shard; it does not travel with the Character, so \
-             a listing replay must run on that Shard",
-        ),
-        (
             &["game_bot_invite_intent"],
             "short-lived Group Intent consumed by the Gateway or event GC",
         ),

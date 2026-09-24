@@ -13,11 +13,17 @@ pub const CHECK_MASK_RETURNED: u32 = 0x02;
 pub const CHECK_MASK_COPIED: u32 = 0x04;
 pub const CHECK_MASK_COD_PAYMENT: u32 = 0x08;
 pub const CHECK_MASK_HAS_BODY: u32 = 0x10;
-/// Server-internal, riding a spare bit of the same `check_flags` column: a Letter Copy's Plain
-/// Letter was granted. Vanilla defines no such bit, so it must never reach the wire — the codec
-/// masks it out of `checked_timestamp`. Distinct from COPIED, which only tells the client to hide
-/// the letter button: a copy stays refused after the granted item is destroyed, mailed away, or
-/// traded, because this bit — not the item's presence — is the record that the grant happened.
+/// Every bit the client reads. Bits above it in `check_flags` are the server's own and never reach
+/// the wire. A new server-only bit takes the lowest free one: 0x20 is taken, so the next is 0x40.
+pub const CLIENT_CHECK_MASK: u32 = CHECK_MASK_READ
+    | CHECK_MASK_RETURNED
+    | CHECK_MASK_COPIED
+    | CHECK_MASK_COD_PAYMENT
+    | CHECK_MASK_HAS_BODY;
+/// Server-only: a Letter Copy's Plain Letter was granted. Distinct from COPIED, which only tells the
+/// client to hide the letter button: a copy stays refused after the granted item is destroyed,
+/// mailed away, or traded, because this bit, not the item's presence, records that the grant
+/// happened.
 pub const CHECK_FLAG_LETTER_GRANTED: u32 = 0x20;
 /// `MailMessageType` codes (cmangos `Mails/Mail.h:54-61`), stored as `game_mail.sender_kind`.
 pub const SENDER_KIND_CHARACTER: u8 = 0;
@@ -235,9 +241,6 @@ pub fn not_at_mailbox(mailbox_guid: u64) -> String {
 pub const NOTHING_TO_TAKE: &str = "mail: nothing to take from that mail";
 pub const NOT_YOUR_ITEM: &str = "mail: that item is not yours to send";
 pub const ITEM_IS_SOULBOUND: &str = "mail: soulbound items cannot be mailed";
-/// A Letter Copy's Plain Letter cannot be attached: the mail attachment snapshot carries no text
-/// id yet, so it would arrive unreadable. Stopgap until a later change carries the id through.
-pub const ITEM_HAS_TEXT: &str = "mail: readable items cannot be mailed yet";
 pub const INVENTORY_FULL: &str = "inventory full";
 pub const NOT_YOUR_MAIL: &str = "mail: not addressed to you";
 pub const NO_SENDER_TO_RETURN_TO: &str = "mail: only a character's mail can be returned";
