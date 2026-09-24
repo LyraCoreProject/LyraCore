@@ -698,12 +698,26 @@ The house the seller stands at still sets that listing's deposit and cut.
 **Auction Mail**:
 A Mail from an Auction House whose subject and invoice body the client renders: item name, price,
 and the counterparty's name where the invoice names one. Sent for an outbid refund, a won item, a
-successful sale, an expired listing, or a cancelled one.
+successful sale, an expired listing, a cancelled listing's item, and the bid a Cancellation refunds.
 
 **Auction Notice**:
 The live message an online seller or bidder gets the instant an auction is outbid, won, sold,
 expired or cancelled. Rides the same private per-recipient Relay as a whisper; an offline recipient
 gets the Auction Mail only.
+
+**Hold**:
+Copper taken from a Character's purse on its Home Shard for one bid or Cancellation, and held while
+Realm-core decides. The decision spends it or gives it back, exactly once. Unlike Escrow, a Refusal
+refunds it.
+
+**Cancellation**:
+The seller withdraws an active listing. The item goes back by Auction Mail, a displaced bidder gets
+the bid back by Auction Mail, and the house keeps the deposit. A seller who cannot pay the Auction
+Cut gets no answer.
+
+**Auction Cut**:
+The house's consignment share of a bid, truncated. The seller pays it out of the proceeds at
+Settlement, or out of the purse at a Cancellation of a listing with a bid.
 
 ### Guilds
 

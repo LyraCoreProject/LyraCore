@@ -364,13 +364,19 @@ released.
 Private `game_auction_bid_hold` fences a bidder's complete offer and retains the terminal source
 outcome, normalized accepted price, and any purse-overflow refund awaiting relay; private
 `game_auction_bid_decision` is realm-core's serialized, replay-safe decision and exact-once
-settlement/refund-mail receipt.
+settlement/refund-mail receipt. Both carry an END-appended `operation` column
+(`lyracore_shared::auction::hold_operation`): 0 is a bid, and every row from before the column
+reads as one; 1 is a Cancellation, whose Hold fences the seller's Auction Cut in `offer`. A
+Cancelled decision (outcome 7) deletes the Auction and its expiry, mails the item back to the
+seller, and mails the displaced bid back to its bidder, in one transaction. The Gateway finds a
+Character's unfinished Holds through an in-memory index kept from the cache's row callbacks, and
+finishes them when the Character next opens the auction house.
 `game_auction_expiry` is a private one-shot schedule at the listing's original deadline. These
 callbacks return an unbid item or settle a winning bid with exact item and proceeds mail, then no-op
 when replayed. These tables are additive and are deliberately excluded from character transfer
 manifests; deletion is refused while a character owns Auction value.
 
-Every mail a bid, buyout, expiry or refused listing sends is an Auction Mail: `MailSender::AuctionHouse(house)`, `checked = COPIED`, and a machine subject (`{item_entry}:{random_property_id}:{action}`) the client turns into its own text. Private `game_auction_notice` is the matching live packet: one row per outbid, won, sold, expired or new-bid notice, inserted in the same transaction as its mail and reaped ~1 s later by the shared event GC (`docs/architecture.md` §5.3 names its relay).
+Every mail a bid, buyout, expiry, Cancellation or refused listing sends is an Auction Mail: `MailSender::AuctionHouse(house)`, `checked = COPIED`, and a machine subject (`{item_entry}:{random_property_id}:{action}`) the client turns into its own text. Private `game_auction_notice` is the matching live packet: one row per outbid, won, sold, expired, new-bid or removed notice, inserted in the same transaction as its mail and reaped ~1 s later by the shared event GC (`docs/architecture.md` §5.3 names its relay).
 
 ### Guild state (`module/src/guild/mod.rs`)
 
