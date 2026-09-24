@@ -3353,7 +3353,12 @@ mod family_audience_tests {
 
         // Only 9001 remains a member of guild 7; 9002 was just removed.
         let members = membership(&[(9001, 7, 0)]);
-        guild_event_appeared(&view, &members, &no_guild(), &guild_event(0, event_kind::REMOVED, 0));
+        guild_event_appeared(
+            &view,
+            &members,
+            &no_guild(),
+            &guild_event(0, event_kind::REMOVED, 0),
+        );
 
         assert_eq!(queued_job(&remaining_rx).len(), 1);
         assert!(removed_rx.try_recv().is_err());
