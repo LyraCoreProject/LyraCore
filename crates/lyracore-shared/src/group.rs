@@ -125,7 +125,7 @@ impl RaidSlot {
     /// The result of moving this Raid Slot's member to `destination` Subgroup
     /// (cm:GroupHandler.cpp:492-525, cm:Group.cpp:1203-1251), shared by the Module and the Gateway
     /// Fake so cmangos's capacity-and-destination rule lives in exactly one place. `destination_size`
-    /// counts the OTHER members already in `destination` — the mover excluded, since moving into the
+    /// counts the OTHER members already in `destination`, not the mover, since moving into the
     /// Subgroup you already hold can never be blocked by your own presence there.
     ///
     /// `Err(InvalidSubgroup)` for a Subgroup of 8 or more. `Ok(None)` is the same-Subgroup no-op
@@ -152,7 +152,7 @@ impl RaidSlot {
     }
 
     /// This Raid Slot and `other` after a Swap Subgroup between them (cm:GroupHandler.cpp:901-944).
-    /// `None` when both already sit in the same Subgroup — cmangos still answers that as success
+    /// `None` when both already sit in the same Subgroup. cmangos still answers that as success
     /// (cm:GroupHandler.cpp:939), it just has nothing to swap. One atomic swap can never overfill a
     /// Subgroup, so unlike [`moved_to_subgroup`](Self::moved_to_subgroup) this needs no capacity
     /// argument.
@@ -235,64 +235,64 @@ pub mod event_kind {
 /// on both sides rather than a silent mis-dispatch.
 ///
 /// Argument slots (`realm_group_op(op, actor_guid, target_guid, arg_a, arg_b, arg_c)`), per op:
-/// - [`INVITE`] / [`UNINVITE`] — `target_guid` is the invitee/kicked member; the rest unused.
-/// - [`ACCEPT`] / [`DECLINE`] — `actor_guid` alone; every other slot unused. `ACCEPT` keeps
+/// - [`INVITE`] / [`UNINVITE`]: `target_guid` is the invitee/kicked member; the rest unused.
+/// - [`ACCEPT`] / [`DECLINE`]: `actor_guid` alone; every other slot unused. `ACCEPT` keeps
 ///   `arg_a`/`arg_b` free for meeting stones, which will send class and race there.
-/// - [`LEAVE`] — `actor_guid` leaves; `arg_a` = a [`super::leave_cause`] value.
-/// - [`LOOT_METHOD`] — `arg_a` = loot setting, `target_guid` = the master looter, `arg_b` = the
+/// - [`LEAVE`]: `actor_guid` leaves; `arg_a` = a [`super::leave_cause`] value.
+/// - [`LOOT_METHOD`]: `arg_a` = loot setting, `target_guid` = the master looter, `arg_b` = the
 ///   quality threshold. (That is `CMSG_LOOT_METHOD`'s own field order, kept so the gateway hands the
 ///   three values straight through.)
-/// - [`RAID_CONVERT`] — `actor_guid` alone.
-/// - [`SET_LEADER`] — `target_guid` is the new leader.
-/// - [`SET_ASSISTANT`] — `target_guid` is the member, `arg_a` is 1 to promote and 0 to demote.
-/// - [`CHANGE_SUBGROUP`] — `target_guid` is the member to move, `arg_a` is the destination Subgroup.
-/// - [`SWAP_SUBGROUP`] — `target_guid` is one member, `arg_c` the other.
-/// - [`READY_CHECK_START`] — `actor_guid` alone.
-/// - [`READY_CHECK_ANSWER`] — `arg_a` = the client's answer state.
-/// - [`TARGET_ICON`] — `arg_a` = the Target Icon, or [`super::TARGET_ICON_LIST_REQUEST`];
+/// - [`RAID_CONVERT`]: `actor_guid` alone.
+/// - [`SET_LEADER`]: `target_guid` is the new leader.
+/// - [`SET_ASSISTANT`]: `target_guid` is the member, `arg_a` is 1 to promote and 0 to demote.
+/// - [`CHANGE_SUBGROUP`]: `target_guid` is the member to move, `arg_a` is the destination Subgroup.
+/// - [`SWAP_SUBGROUP`]: `target_guid` is one member, `arg_c` the other.
+/// - [`READY_CHECK_START`]: `actor_guid` alone.
+/// - [`READY_CHECK_ANSWER`]: `arg_a` = the client's answer state.
+/// - [`TARGET_ICON`]: `arg_a` = the Target Icon, or [`super::TARGET_ICON_LIST_REQUEST`];
 ///   `target_guid` = the marked unit, 0 to clear the icon.
-/// - [`MINIMAP_PING`] — `target_guid` = `x.to_bits()`, `arg_c` = `y.to_bits()`, so the floats
+/// - [`MINIMAP_PING`]: `target_guid` = `x.to_bits()`, `arg_c` = `y.to_bits()`, so the floats
 ///   cross unchanged.
-/// - [`RANDOM_ROLL`] — `target_guid` = the minimum, `arg_c` = the maximum.
+/// - [`RANDOM_ROLL`]: `target_guid` = the minimum, `arg_c` = the maximum.
 ///
 /// `arg_c` is a `u64` for an op that needs a second guid or a wide value: the subgroup swap's
 /// second member, the minimap ping's `y` and the roll's maximum. Every other op sends 0 there.
 pub mod realm_op {
-    /// `CMSG_GROUP_INVITE` — `actor_guid`, ungrouped, the leader or an Assistant, invites
+    /// `CMSG_GROUP_INVITE`: `actor_guid`, ungrouped, the leader or an Assistant, invites
     /// `target_guid`.
     pub const INVITE: u8 = 0;
-    /// `CMSG_GROUP_ACCEPT` — `actor_guid` accepts its pending invite.
+    /// `CMSG_GROUP_ACCEPT`: `actor_guid` accepts its pending invite.
     pub const ACCEPT: u8 = 1;
-    /// `CMSG_GROUP_DECLINE` — `actor_guid` declines its pending invite.
+    /// `CMSG_GROUP_DECLINE`: `actor_guid` declines its pending invite.
     pub const DECLINE: u8 = 2;
-    /// `CMSG_GROUP_DISBAND` (the client's "Leave Party") — `actor_guid` leaves its group.
+    /// `CMSG_GROUP_DISBAND` (the client's "Leave Party"): `actor_guid` leaves its group.
     pub const LEAVE: u8 = 3;
-    /// `CMSG_GROUP_UNINVITE` and `CMSG_GROUP_UNINVITE_GUID` — the leader or an Assistant,
+    /// `CMSG_GROUP_UNINVITE` and `CMSG_GROUP_UNINVITE_GUID`: the leader or an Assistant,
     /// `actor_guid`, kicks `target_guid`.
     pub const UNINVITE: u8 = 4;
-    /// `CMSG_LOOT_METHOD` — leader `actor_guid` sets the party's loot rules.
+    /// `CMSG_LOOT_METHOD`: leader `actor_guid` sets the party's loot rules.
     pub const LOOT_METHOD: u8 = 5;
-    /// `CMSG_GROUP_RAID_CONVERT` — leader `actor_guid` converts its Party to a Raid.
+    /// `CMSG_GROUP_RAID_CONVERT`: leader `actor_guid` converts its Party to a Raid.
     pub const RAID_CONVERT: u8 = 6;
-    /// `CMSG_GROUP_SET_LEADER` — leader `actor_guid` passes the lead to `target_guid`.
+    /// `CMSG_GROUP_SET_LEADER`: leader `actor_guid` passes the lead to `target_guid`.
     pub const SET_LEADER: u8 = 7;
-    /// `CMSG_GROUP_ASSISTANT_LEADER` — Raid leader `actor_guid` promotes or demotes an Assistant.
+    /// `CMSG_GROUP_ASSISTANT_LEADER`: Raid leader `actor_guid` promotes or demotes an Assistant.
     pub const SET_ASSISTANT: u8 = 8;
-    /// `CMSG_GROUP_CHANGE_SUB_GROUP` — the leader or an Assistant moves `target_guid` to Subgroup
+    /// `CMSG_GROUP_CHANGE_SUB_GROUP`: the leader or an Assistant moves `target_guid` to Subgroup
     /// `arg_a`.
     pub const CHANGE_SUBGROUP: u8 = 9;
-    /// `CMSG_GROUP_SWAP_SUB_GROUP` — the leader or an Assistant swaps the Subgroups of `target_guid`
+    /// `CMSG_GROUP_SWAP_SUB_GROUP`: the leader or an Assistant swaps the Subgroups of `target_guid`
     /// and `arg_c`.
     pub const SWAP_SUBGROUP: u8 = 10;
-    /// `MSG_RAID_READY_CHECK` without a body — the leader or an Assistant starts a Ready Check.
+    /// `MSG_RAID_READY_CHECK` without a body: the leader or an Assistant starts a Ready Check.
     pub const READY_CHECK_START: u8 = 11;
-    /// `MSG_RAID_READY_CHECK` with a body — `actor_guid` answers the Ready Check.
+    /// `MSG_RAID_READY_CHECK` with a body: `actor_guid` answers the Ready Check.
     pub const READY_CHECK_ANSWER: u8 = 12;
-    /// `MSG_RAID_TARGET_UPDATE` — `actor_guid` sets a Target Icon or asks for the full list.
+    /// `MSG_RAID_TARGET_UPDATE`: `actor_guid` sets a Target Icon or asks for the full list.
     pub const TARGET_ICON: u8 = 13;
-    /// `MSG_MINIMAP_PING` — `actor_guid` pings a point on the minimap.
+    /// `MSG_MINIMAP_PING`: `actor_guid` pings a point on the minimap.
     pub const MINIMAP_PING: u8 = 14;
-    /// `MSG_RANDOM_ROLL` — `actor_guid` rolls a random number.
+    /// `MSG_RANDOM_ROLL`: `actor_guid` rolls a random number.
     pub const RANDOM_ROLL: u8 = 15;
 }
 
@@ -766,14 +766,14 @@ mod tests {
     }
 
     /// cm:Group.cpp:1234: moving to your own Subgroup succeeds and changes nothing, even when that
-    /// Subgroup is already full — the mover is presumably one of the five already counted there.
+    /// Subgroup is already full. The mover is presumably one of the five already counted there.
     #[test]
     fn a_subgroup_move_to_the_same_subgroup_is_a_no_op() {
         let mover = RaidSlot::new(3, false).unwrap();
         assert_eq!(mover.moved_to_subgroup(3, 5), Ok(None));
     }
 
-    /// AC 6: a swap between two full Subgroups needs no capacity Gate — the pair trade places
+    /// AC 6: a swap between two full Subgroups needs no capacity Gate: the pair trade places
     /// atomically, so neither Subgroup ever holds six members mid-swap.
     #[test]
     fn a_subgroup_swap_needs_no_capacity_gate() {
@@ -789,7 +789,7 @@ mod tests {
         );
     }
 
-    /// AC 7: cm:GroupHandler.cpp:939 — two members already in one Subgroup swap to a no-op.
+    /// AC 7: cm:GroupHandler.cpp:939: two members already in one Subgroup swap to a no-op.
     #[test]
     fn a_subgroup_swap_within_one_subgroup_is_a_no_op() {
         let first = RaidSlot::new(4, true).unwrap();

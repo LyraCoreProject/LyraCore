@@ -795,7 +795,7 @@ fn resolve_in_roster<St: WorldStore + ?Sized>(
 /// cmangos's Swap Subgroup matches a typed name against the group's own member list this way
 /// (cm:GroupHandler.cpp:919-936); its Change Subgroup instead resolves the name realm-wide and
 /// refuses afterward when the result is not a member. LyraCore applies the member-list rule to
-/// both opcodes, so neither can reach a namesake standing outside the Raid — unlike
+/// both opcodes, so neither can reach a namesake standing outside the Raid, unlike
 /// [`presence::resolve_by_name`]. `None` for no Group, or a name matching no member.
 pub(crate) fn resolve_roster_member_by_name<St: WorldStore + ?Sized>(
     store: &St,
@@ -1611,7 +1611,7 @@ pub(crate) fn sync_transfer_arrival_mirror<St: WorldStore + ?Sized>(
 /// Every member's ONLINE flag, and each blank NAME, comes from the shards. That is the price of
 /// realm-core owning membership: the directory database has no `game_character` or
 /// `game_world_entity` rows, so it cannot know what its members are called or whether they are in
-/// the world. The gateway can — it reads every connected shard's cache — and it is the only party
+/// the world. The gateway can, because it reads every connected shard's cache, and it is the only party
 /// that can answer for a member standing on a different database than the viewer. A name the
 /// payload already carries is kept; the Module wrote it with the change. A member whose name will
 /// not resolve (a shard that is down) renders with an empty name rather than being dropped from the

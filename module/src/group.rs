@@ -30,7 +30,7 @@
 //! in 8 Subgroups, and it never converts back. A Raid leader promotes Assistants, who may also
 //! invite and remove members, and the first Assistant leads when the leader leaves. Kill XP splits
 //! EVENLY among in-range living members (each member's grey-clamp applies to their OWN level, so
-//! a too-high member naturally gets 0) — vanilla's sum-of-levels weighting, the 3/4/5-member bonus
+//! a too-high member naturally gets 0). Vanilla's sum-of-levels weighting, the 3/4/5-member bonus
 //! multipliers and the raid XP rate are a documented follow-up. Kill quest-credit goes to every
 //! in-range member (vanilla).
 
@@ -310,7 +310,7 @@ pub struct BotInviteIntent {
 }
 
 /// Record a bot's serendipity invite DECISION for the gateway to execute. No gating here
-/// beyond existence-of-nothing — every real gate (leader or Assistant only, party cap,
+/// beyond existence-of-nothing: every real gate (leader or Assistant only, party cap,
 /// already-grouped, pending-invite-replaces-older) lives in `invite_core_on`/`realm_group_op`,
 /// which the gateway calls against the correct authority; this is a pure write, mirroring how a
 /// player's own CMSG_GROUP_INVITE is a pure gateway-side resolve-then-call with no module-side
@@ -417,7 +417,7 @@ use lyracore_shared::group::{bot_op, event_kind as group_event_kind, leave_cause
 /// A per-recipient group notification (the `game_whisper_event` pattern): public + RLS-scoped so
 /// only the recipient's connection sees it; reaped by the shared event GC. `other_name` is
 /// resolved at write time so the gateway never needs a name lookup for INVITE/DECLINE. LIST events
-/// carry the FULL roster snapshot in `payload` ([`RosterPayload`]) — built in the SAME
+/// carry the FULL roster snapshot in `payload` ([`RosterPayload`]), built in the SAME
 /// transaction as the membership change, so the gateway relay never races a cross-connection
 /// coordinator read (the module is the one place the roster is guaranteed consistent). [event]
 #[table(accessor = game_group_event, public, index(accessor = by_recipient, btree(columns = [recipient_identity])))]
@@ -1207,7 +1207,7 @@ pub(crate) fn raid_chat_audience(
 
 /// The audience Refusal for one raid Chat Kind against an already-resolved Group kind and the
 /// speaker's own privilege, or `None` when it may speak. `manages` is [`manages_raid`]'s answer:
-/// the speaker leads the Raid or assists. Pure — no `ReducerContext` — so cm:ChatHandler.cpp:
+/// the speaker leads the Raid or assists. Pure, with no `ReducerContext`, so cm:ChatHandler.cpp:
 /// 413-446, 461-490 and 506-534 are each a unit test over this one table instead of a durable
 /// fixture. Assumes the speaker is already in a Group; a groupless speaker never reaches this far
 /// (`raid_chat_audience` answers `NotInGroup` first).
@@ -1908,7 +1908,7 @@ fn announce_leader(ctx: &ReducerContext, group_id: u64, leader_guid: u64) {
 /// join order (lowest member-row id): in a Raid to the first Assistant, else to the first member
 /// (cm:Group.cpp:954-997). cmangos also prefers online members; Realm-core cannot see presence, so
 /// that preference is not reproduced. `remaining` is the member rows left AFTER the leaver's row is
-/// deleted. Pure — unit-tested.
+/// deleted. Pure and unit-tested.
 pub(crate) fn leader_after_removal(
     kind: GroupKind,
     remaining: &[GroupMember],
