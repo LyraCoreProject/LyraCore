@@ -238,17 +238,17 @@ pub(super) fn handle_social<St: WorldStore + ?Sized>(
                 None => party::Op::ReadyCheckStart,
                 Some(answer) => party::Op::ReadyCheckAnswer(answer.state),
             };
-            run_group_broadcast(store, conn, op)?;
+            run_group_broadcast(store, conn, op);
         }
         ClientOpcodeMessage::MSG_RAID_TARGET_UPDATE(c) => {
-            run_group_broadcast(store, conn, target_icon_op(&c))?;
+            run_group_broadcast(store, conn, target_icon_op(&c));
         }
         ClientOpcodeMessage::MSG_MINIMAP_PING(c) => {
             let op = party::Op::MinimapPing {
                 x: c.position_x,
                 y: c.position_y,
             };
-            run_group_broadcast(store, conn, op)?;
+            run_group_broadcast(store, conn, op);
         }
         other => return Ok(Some(other)),
     }
@@ -389,22 +389,27 @@ fn swap_subgroup<St: WorldStore + ?Sized>(
 }
 
 /// Run one Group Broadcast for the session's Character. cmangos answers every refusal of these
-/// opcodes with silence, so a Refusal only logs. Transport loss still ends the session.
+/// opcodes with silence, so a Refusal only logs. A transport failure only logs too: a broadcast
+/// changes no roster and nothing waits on it, so a lost ping or roll must not end the session.
 pub(super) fn run_group_broadcast<St: WorldStore + ?Sized>(
     store: &St,
     conn: &WorldConn,
     op: party::Op,
-) -> Result<()> {
+) {
     let Some(me) = self_guid(conn) else {
-        return Ok(());
+        return;
     };
-    if let PartyOutcome::Refused(refusal) = party::run(store, conn.account_id, me, op)? {
-        log::debug!(
+    match party::run(store, conn.account_id, me, op) {
+        Ok(PartyOutcome::Ran) => {}
+        Ok(PartyOutcome::Refused(refusal)) => log::debug!(
             "world: group broadcast {op:?} refused (account {}): {refusal:?}",
             conn.account_id
-        );
+        ),
+        Err(error) => log::warn!(
+            "world: group broadcast {op:?} lost (account {}): {error:#}",
+            conn.account_id
+        ),
     }
-    Ok(())
 }
 
 /// `MSG_RAID_TARGET_UPDATE` as a Target Icon op. `RequestIcons` is the list request, and

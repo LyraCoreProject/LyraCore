@@ -671,6 +671,8 @@ struct InMemoryStore {
     party_accept_error: Option<String>,
     /// How many Realm-core LEAVE calls fail before one reaches the party state.
     party_leave_failures: std::sync::atomic::AtomicUsize,
+    /// When set, every Group Broadcast op fails as a lost connection would.
+    group_broadcast_error: bool,
     /// Return a connection failure after the next Realm-core LEAVE commits.
     party_leave_commit_then_error: std::sync::atomic::AtomicBool,
     /// Fail one `group_roster` read by its one-based call number.
@@ -3507,6 +3509,9 @@ impl WorldStore for InMemoryStore {
             realm_op::SWAP_SUBGROUP => return Ok(p.swap_subgroup(actor_guid, target_guid, arg_c)),
             // Group Broadcasts. Who hears each one is the Module's rule; the routing needs only
             // the op on the authority, and a Refusal for a member of no group.
+            realm_op::READY_CHECK_START..=realm_op::RANDOM_ROLL if self.group_broadcast_error => {
+                return Err(anyhow!("Realm-core call pipe timed out"));
+            }
             realm_op::READY_CHECK_START
             | realm_op::READY_CHECK_ANSWER
             | realm_op::TARGET_ICON

@@ -3067,7 +3067,7 @@ impl Coordinator {
                 lyracore_shared::group::realm_op::LEAVE,
                 self.session_actor(character_guid),
                 0,
-                0,
+                lyracore_shared::group::leave_cause::CHARACTER_DELETED,
                 0,
                 0
             )

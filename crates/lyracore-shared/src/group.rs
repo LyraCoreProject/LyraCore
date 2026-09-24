@@ -224,8 +224,9 @@ pub mod event_kind {
 ///
 /// Argument slots (`realm_group_op(op, actor_guid, target_guid, arg_a, arg_b, arg_c)`), per op:
 /// - [`INVITE`] / [`UNINVITE`] — `target_guid` is the invitee/kicked member; the rest unused.
-/// - [`ACCEPT`] / [`DECLINE`] / [`LEAVE`] — `actor_guid` alone; every other slot unused. `ACCEPT`
-///   keeps `arg_a`/`arg_b` free for meeting stones, which will send class and race there.
+/// - [`ACCEPT`] / [`DECLINE`] — `actor_guid` alone; every other slot unused. `ACCEPT` keeps
+///   `arg_a`/`arg_b` free for meeting stones, which will send class and race there.
+/// - [`LEAVE`] — `actor_guid` leaves; `arg_a` = a [`super::leave_cause`] value.
 /// - [`LOOT_METHOD`] — `arg_a` = loot setting, `target_guid` = the master looter, `arg_b` = the
 ///   quality threshold. (That is `CMSG_LOOT_METHOD`'s own field order, kept so the gateway hands the
 ///   three values straight through.)
@@ -281,6 +282,15 @@ pub mod realm_op {
     pub const MINIMAP_PING: u8 = 14;
     /// `MSG_RANDOM_ROLL` — `actor_guid` rolls a random number.
     pub const RANDOM_ROLL: u8 = 15;
+}
+
+/// Why a [`realm_op::LEAVE`] runs, sent in `arg_a`.
+pub mod leave_cause {
+    /// The Character leaves, or the Gateway leaves for a session-less Character.
+    pub const LEFT: u8 = 0;
+    /// The Character was deleted. The party authority also drops every Target Icon on it, because
+    /// the delete sweep on the Character's World Shard cannot reach Realm-core's icon rows.
+    pub const CHARACTER_DELETED: u8 = 1;
 }
 
 /// The group op one `game_bot_invite_intent` row asks the Gateway to run.
@@ -1003,6 +1013,13 @@ mod tests {
             !all.contains(&9),
             "kind 9 was party chat and is never reused"
         );
+    }
+
+    /// `arg_a` defaults to 0 in every older LEAVE caller, so 0 must stay a plain leave.
+    #[test]
+    fn a_plain_leave_is_cause_zero_and_a_deleted_character_is_one() {
+        assert_eq!(leave_cause::LEFT, 0);
+        assert_eq!(leave_cause::CHARACTER_DELETED, 1);
     }
 
     #[test]

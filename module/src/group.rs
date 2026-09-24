@@ -407,7 +407,7 @@ fn group_op_error(error: GroupOpError, detail: &str) -> String {
 // Event kinds, roster grammar, and classified error strings are the SHARED wire contract:
 // lyracore_shared::group is the one definition both crates import — a renumber,
 // reword, or delimiter change is a cross-crate compile-visible edit, never a runtime drift.
-use lyracore_shared::group::{bot_op, event_kind as group_event_kind, GroupRefusal};
+use lyracore_shared::group::{bot_op, event_kind as group_event_kind, leave_cause, GroupRefusal};
 
 /// A per-recipient group notification (the `game_whisper_event` pattern): public + RLS-scoped so
 /// only the recipient's connection sees it; reaped by the shared event GC. `other_name` is
@@ -1434,13 +1434,18 @@ fn decline_invite_on(ctx: &ReducerContext, decliner_guid: u64) -> Result<(), Gro
 
 /// The identity-free leave core — the body `group_leave` used to inline.
 pub(crate) fn leave_group_for(ctx: &ReducerContext, leaver_guid: u64) -> Result<(), String> {
-    leave_group_on(ctx, leaver_guid)
+    leave_group_on(ctx, leaver_guid, leave_cause::LEFT)
         .map_err(|error| group_op_error(error, &format!("{leaver_guid} could not leave its party")))
 }
 
-fn leave_group_on(ctx: &ReducerContext, leaver_guid: u64) -> Result<(), GroupOpError> {
+/// A deleted Character also loses every Target Icon on it. Its World Shard's delete sweep cannot
+/// reach the icon rows when the party authority is Realm-core.
+fn leave_group_on(ctx: &ReducerContext, leaver_guid: u64, cause: u8) -> Result<(), GroupOpError> {
     if checked_group_membership(ctx, leaver_guid)?.is_none() {
         return Err(GroupRefusal::NotInGroup.into());
+    }
+    if cause == leave_cause::CHARACTER_DELETED {
+        delete_target_icons_on(ctx, leaver_guid);
     }
     remove_member(ctx, leaver_guid);
     Ok(())
@@ -1889,7 +1894,7 @@ pub fn realm_group_op(
         }
         realm_op::ACCEPT => accept_invite_on(ctx, Plane::RealmCore, actor_guid).map(|()| Changed),
         realm_op::DECLINE => decline_invite_on(ctx, actor_guid).map(|()| Unchanged),
-        realm_op::LEAVE => leave_group_on(ctx, actor_guid).map(|()| Changed),
+        realm_op::LEAVE => leave_group_on(ctx, actor_guid, arg_a).map(|()| Changed),
         realm_op::UNINVITE => uninvite_on(ctx, actor_guid, target_guid).map(|()| Changed),
         // `CMSG_LOOT_METHOD`'s own field order: setting, master, threshold.
         realm_op::LOOT_METHOD => {
@@ -2552,11 +2557,16 @@ pub struct GroupTargetIcon {
 
 // A deleted Character loses the icon it carries. No client needs an update: the unit is gone.
 crate::character_owned!(delete, fn sweep_delete_game_group_target_icon(ctx, character_guid) {
+    delete_target_icons_on(ctx, character_guid);
+});
+
+/// Drop every Target Icon on `target_guid`, in every Group, without an update: the unit is gone.
+fn delete_target_icons_on(ctx: &ReducerContext, target_guid: u64) {
     let icons = ctx.db.game_group_target_icon();
-    for row in icons.by_target().filter(&character_guid).collect::<Vec<_>>() {
+    for row in icons.by_target().filter(&target_guid).collect::<Vec<_>>() {
         icons.id().delete(row.id);
     }
-});
+}
 // Group state on the party authority. The icon stays on its unit across a Transfer.
 crate::character_owned!(not_transported, fn sweep_transfer_game_group_target_icon());
 
@@ -3302,7 +3312,10 @@ mod tests {
                 "accept_invite_on(ctx, Plane::RealmCore, actor_guid)",
             ),
             ("realm_op::DECLINE =>", "decline_invite_on(ctx, actor_guid)"),
-            ("realm_op::LEAVE =>", "leave_group_on(ctx, actor_guid)"),
+            (
+                "realm_op::LEAVE =>",
+                "leave_group_on(ctx, actor_guid, arg_a)",
+            ),
             (
                 "realm_op::UNINVITE =>",
                 "uninvite_on(ctx, actor_guid, target_guid)",

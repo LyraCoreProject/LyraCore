@@ -389,3 +389,23 @@ fn a_ping_skips_the_sender_and_a_roll_reaches_the_whole_group() {
         "a ping or a roll changes no roster"
     );
 }
+
+/// A deleted Character's World Shard sweep cannot reach Realm-core's icon rows, so the Gateway's
+/// deleted-Character LEAVE (`arg_a` = `leave_cause::CHARACTER_DELETED`) drops them. A plain leave
+/// keeps the icon on the unit.
+#[test]
+#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+fn a_deleted_characters_leave_drops_the_target_icons_on_it() {
+    let realm = party("raid-broadcasts-deleted-icons", &[2, 3, 4]);
+    group_op(&realm, TARGET_ICON, 1, 2, 7, 0);
+    group_op(&realm, TARGET_ICON, 1, 3, 0, 0);
+
+    group_op(&realm, LEAVE, 2, 0, 0, 0);
+    group_op(&realm, LEAVE, 3, 0, 1, 0);
+
+    assert_eq!(
+        target_icons(&realm),
+        [icon(7, 2)],
+        "2 left and keeps its skull; 3 was deleted and its star is gone"
+    );
+}

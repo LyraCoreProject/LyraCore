@@ -223,7 +223,8 @@ scan on a sharded realm silently returns a subset rather than erroring, and ever
 
 Six sibling tables carry the **identical** `(map_id, instance_id, grid_x, grid_y)` key so they can
 ride the same AOI box: `game_entity_motion`, `game_creature_spline`, `game_combat_event`,
-`game_spell_cast_event`, `game_spell_impact_event`, `game_emote_event`, `game_roll_event`.
+`game_spell_cast_event`, `game_spell_impact_event`, `game_emote_event`. `game_roll_event` keeps the
+same key, but nothing writes it: `/roll` is a Group Broadcast.
 `game_gameobject`'s grid key is only three columns (no `instance_id`).
 
 ### `game_character` — the durable character (`module/src/character.rs:7`)

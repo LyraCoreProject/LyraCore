@@ -2164,9 +2164,8 @@ pub(crate) fn group_event_outbound<St: crate::world::WorldStore + ?Sized>(
             Some(roster) => {
                 let mut packets = vec![crate::world::party::render_list(store, self_guid, &roster)];
                 if !roster.target_icons.is_empty() {
-                    packets.push(Outbound::One(ServerOpcodeMessage::MSG_RAID_TARGET_UPDATE(
-                        Box::new(codec::build_target_icon_list(&roster.target_icons)),
-                    )));
+                    let (opcode, body) = codec::build_target_icon_list_raw(&roster.target_icons);
+                    packets.push(Outbound::Raw { opcode, body });
                 }
                 return packets;
             }
@@ -2352,15 +2351,18 @@ pub(crate) fn group_event_outbound<St: crate::world::WorldStore + ?Sized>(
                 .and_then(codec::build_target_icon_update),
             |update| ServerOpcodeMessage::MSG_RAID_TARGET_UPDATE(Box::new(update)),
         ),
-        group_kind::TARGET_ICON_LIST => broadcast_packet(
-            row,
-            lyracore_shared::group::decode_target_icons(&row.payload),
-            |icons| {
-                ServerOpcodeMessage::MSG_RAID_TARGET_UPDATE(Box::new(
-                    codec::build_target_icon_list(&icons),
-                ))
-            },
-        ),
+        group_kind::TARGET_ICON_LIST => {
+            match lyracore_shared::group::decode_target_icons(&row.payload) {
+                Some(icons) => {
+                    let (opcode, body) = codec::build_target_icon_list_raw(&icons);
+                    return vec![Outbound::Raw { opcode, body }];
+                }
+                None => {
+                    log_unparseable_broadcast(row);
+                    None
+                }
+            }
+        }
         group_kind::MINIMAP_PING => broadcast_packet(
             row,
             lyracore_shared::group::decode_minimap_ping(&row.payload),
@@ -2431,14 +2433,18 @@ fn broadcast_packet<T>(
     packet: impl FnOnce(T) -> ServerOpcodeMessage,
 ) -> Option<ServerOpcodeMessage> {
     if decoded.is_none() {
-        log::warn!(
-            "group broadcast relay: unparseable kind {} payload {:?} (event {})",
-            row.kind,
-            row.payload,
-            row.id
-        );
+        log_unparseable_broadcast(row);
     }
     decoded.map(packet)
+}
+
+fn log_unparseable_broadcast(row: &GroupEvent) {
+    log::warn!(
+        "group broadcast relay: unparseable kind {} payload {:?} (event {})",
+        row.kind,
+        row.payload,
+        row.id
+    );
 }
 
 /// The shared-dispatch "who may see this row" predicate for the PRIVATE recipient-addressed families

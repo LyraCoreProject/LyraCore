@@ -89,7 +89,7 @@ pub fn reap_movement_events(ctx: &ReducerContext, _schedule: EventReaperSchedule
     reap!(game_realm_chat_event); // Realm Chat Lines
     reap!(game_system_message_event); // private Package-originated System Messages
     reap!(game_addon_message); // addon-bridge UI messages (184, RLS-scoped)
-    reap!(game_roll_event); // /roll broadcast results
+    reap!(game_roll_event); // unwritten since /roll became a Group Broadcast
     reap!(game_group_event); // group invite/roster notifications (RLS-scoped)
     reap!(game_trade_event); // trade-status relay rows (RLS-scoped)
     reap!(game_duel_event); // Duel lifecycle relay rows (RLS-scoped)

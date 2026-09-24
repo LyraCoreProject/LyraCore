@@ -427,7 +427,7 @@ pub(crate) fn handle_query<St: WorldStore + ?Sized>(
                 min: r.minimum,
                 max: r.maximum,
             };
-            social::run_group_broadcast(store, conn, op)?;
+            social::run_group_broadcast(store, conn, op);
         }
         other => return Ok(Some(other)),
     }

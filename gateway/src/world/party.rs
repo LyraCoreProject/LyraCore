@@ -1376,6 +1376,7 @@ pub(crate) fn sync_mirrors<St: WorldStore + ?Sized>(
 
 /// World entry (login, and every cross-shard arrival): put the party the player is actually in onto
 /// the shard they just entered, and re-render their party frame.
+/// A Party member also gets its Target Icons again, after the frame.
 ///
 /// **This is what carries a party across a shard boundary now that the escrowed transfer's blob
 /// mirror is gone.** The
@@ -1393,7 +1394,31 @@ pub(crate) fn on_world_entry<St: WorldStore + ?Sized>(
     let Some(roster) = sync_arrival_mirror(store, self_guid)? else {
         return Ok(());
     };
-    send(tx, render_list(store, self_guid, &roster.list_payload()))
+    send(tx, render_list(store, self_guid, &roster.list_payload()))?;
+    if roster.kind == GroupKind::Party {
+        request_target_icons(store, self_guid);
+    }
+    Ok(())
+}
+
+/// A Party client clears its marks on every `SMSG_GROUP_LIST` (vm:Group.cpp:1343-1360). The list
+/// above carries no Target Icons, so ask the party authority for the full list, as the client's
+/// own `0xFF` request does. The answer rides the group event relay onto the same session writer
+/// and so lands after the list. A failure costs only the marks, so it logs.
+fn request_target_icons<St: WorldStore + ?Sized>(store: &St, self_guid: u64) {
+    let Some(realm) = store.realm_store() else {
+        return;
+    };
+    let op = Op::TargetIcon {
+        icon: lyracore_shared::group::TARGET_ICON_LIST_REQUEST,
+        target: 0,
+    };
+    match run_on_authority(realm.as_ref(), self_guid, op) {
+        Ok(PartyOutcome::Ran) => {}
+        outcome => log::warn!(
+            "party: Target Icon list for {self_guid} at world entry not requested: {outcome:?}"
+        ),
+    }
 }
 
 /// The mirror half of [`on_world_entry`], without a client: put the party realm-core says

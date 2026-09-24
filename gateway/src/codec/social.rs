@@ -879,23 +879,21 @@ pub fn build_target_icon_update(icon: TargetIcon) -> Option<MSG_RAID_TARGET_UPDA
     })
 }
 
-/// The full `MSG_RAID_TARGET_UPDATE`: update type 1, then all 8 icons in order. cmangos writes only
-/// the held icons (cm:Group.cpp:648-666). gtker's `Full` always carries 8, so an icon no unit holds
-/// goes out with guid 0.
-pub fn build_target_icon_list(icons: &[TargetIcon]) -> MSG_RAID_TARGET_UPDATE_Server {
-    let raid_targets = std::array::from_fn(|index| {
-        let index = u8::try_from(index).expect("8 entries");
-        RaidTargetUpdate {
-            index: target_icon_index(index).expect("0 to 7 is an icon"),
-            guid: Guid::new(
-                icons
-                    .iter()
-                    .find(|icon| icon.icon == index)
-                    .map_or(0, |icon| icon.target_guid),
-            ),
-        }
-    });
-    MSG_RAID_TARGET_UPDATE_Server::Full { raid_targets }
+/// The full `MSG_RAID_TARGET_UPDATE` as cmangos and vmangos write it: update type 1, then each
+/// held icon as `icon, guid`, in icon order (cm:Group.cpp:648-666). gtker's `Full` always carries 8
+/// entries, so this is `(opcode, body)` for `Outbound::Raw`.
+pub fn build_target_icon_list_raw(icons: &[TargetIcon]) -> (u16, Vec<u8>) {
+    use wow_world_messages::Message;
+    let opcode = u16::try_from(MSG_RAID_TARGET_UPDATE_Server::OPCODE)
+        .expect("a vanilla opcode fits 16 bits");
+    let mut held: Vec<&TargetIcon> = icons.iter().filter(|icon| icon.target_guid != 0).collect();
+    held.sort_unstable_by_key(|icon| icon.icon);
+    let mut body = vec![1];
+    for icon in held {
+        body.push(icon.icon);
+        body.extend(icon.target_guid.to_le_bytes());
+    }
+    (opcode, body)
 }
 
 /// gtker names the 8 icons `Unknown0` to `Unknown7`. Its `Unknown8` is not an icon.

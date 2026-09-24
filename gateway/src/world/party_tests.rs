@@ -824,6 +824,22 @@ fn repeated_deleted_character_cleanup_is_harmless() {
     );
 }
 
+/// The deleted Character's LEAVE names its cause, so the party authority also drops the Target
+/// Icons on it: the World Shard's delete sweep cannot reach Realm-core's icon rows.
+#[test]
+fn a_deleted_characters_leave_tells_the_authority_it_was_deleted() {
+    let (realm, world, _instances, _calls) = topology_after_vim_is_deleted();
+
+    party::cleanup_deleted_character(world.as_ref(), VIM).unwrap();
+
+    assert_eq!(
+        realm.party.lock().unwrap().ops.last().copied(),
+        Some((realm_op::LEAVE, VIM, 0, 1, 0, 0)),
+        "LEAVE with arg_a = CHARACTER_DELETED"
+    );
+    assert_eq!(lyracore_shared::group::leave_cause::CHARACTER_DELETED, 1);
+}
+
 #[test]
 fn deleted_character_cleanup_retries_a_transient_realm_core_leave_failure() {
     let (realm, world, _instances, _calls) = topology_after_vim_is_deleted();
@@ -1863,6 +1879,8 @@ fn a_real_session_syncs_its_party_at_login_and_routes_an_invite_to_realm_core() 
     assert_eq!(
         realm.party.lock().unwrap().ops.clone(),
         vec![
+            // World entry asks for the Party's Target Icons after the list.
+            (realm_op::TARGET_ICON, GINGER, 0, 0xFF, 0, 0),
             (realm_op::INVITE, GINGER, VIM, 0, 0, 0),
             (realm_op::ACCEPT, GINGER, 0, 0, 0, 0),
             (realm_op::DECLINE, GINGER, 0, 0, 0, 0),
@@ -3864,8 +3882,8 @@ fn group_event(kind: u8, other_guid: u64, payload: &str) -> crate::stdb::binding
 
 /// **Each Group Broadcast kind renders its vanilla packet**, pinned byte for byte against the
 /// cmangos writers: ready check (GroupHandler.cpp:562-563, 576-579), the partial icon update
-/// (Group.cpp:595-600), the ping (GroupHandler.cpp:410-413) and the roll (GroupHandler.cpp:434-438).
-/// The full icon list is gtker's 8-entry `Full`, unset icons as guid 0.
+/// (Group.cpp:595-600), the full icon list (Group.cpp:648-666), the ping (GroupHandler.cpp:410-413)
+/// and the roll (GroupHandler.cpp:434-438).
 #[test]
 fn the_relay_renders_each_group_broadcast_kind() {
     use lyracore_shared::group::event_kind;
@@ -3874,23 +3892,12 @@ fn the_relay_renders_each_group_broadcast_kind() {
     let star = 901u64.to_le_bytes();
     let none = 0u64.to_le_bytes();
     let vim = VIM.to_le_bytes();
+    // cm:Group.cpp:648-666: the update type, then only the held icons, in icon order.
     let full_list: Vec<u8> = [
         &[0x01][..], // update type: full
-        &[0x00],
+        &[0x00],     // star
         &star,
-        &[0x01],
-        &none,
-        &[0x02],
-        &none,
-        &[0x03],
-        &none,
-        &[0x04],
-        &none,
-        &[0x05],
-        &none,
-        &[0x06],
-        &none,
-        &[0x07],
+        &[0x07], // skull
         &skull,
     ]
     .concat();
@@ -3990,11 +3997,10 @@ fn a_party_list_with_target_icons_sends_the_list_then_the_icons() {
     assert_eq!(group_list(list).members[0].guid.guid(), VIM);
     let (opcode, body) = wire(&icons);
     assert_eq!(opcode, 0x0321);
-    assert_eq!(body[0], 0x01, "the full list");
     assert_eq!(
-        &body[64..73],
-        &[&[0x07][..], &900u64.to_le_bytes()].concat()[..],
-        "skull is the eighth entry"
+        body,
+        [&[0x01, 0x07][..], &900u64.to_le_bytes()].concat(),
+        "the full list with skull on 900"
     );
 
     roster.target_icons.clear();
@@ -4003,4 +4009,57 @@ fn a_party_list_with_target_icons_sends_the_list_then_the_icons() {
         crate::stdb::subscriptions::group_event_outbound(realm.as_ref(), GINGER, &row).len(),
         1
     );
+}
+
+/// **A Party member who zones in gets its Target Icons again.** World entry sends a list, and the
+/// Party client clears its marks on every list, so the Gateway asks the party authority for the full
+/// icon list after the list. A Raid keeps its marks and asks for nothing.
+#[test]
+fn world_entry_asks_for_a_partys_target_icons_after_the_list() {
+    let (realm, world, instances, _calls) = party_topology();
+    form_split_party(&world, &instances);
+    let (tx, rx) = crate::world::SessionTx::with_depth(0);
+
+    party::on_world_entry(&tx, instances.as_ref(), VIM).expect("world entry");
+
+    group_list(rx.try_recv().expect("the list goes out first"));
+    assert_eq!(
+        realm.party.lock().unwrap().ops.last().copied(),
+        Some((realm_op::TARGET_ICON, VIM, 0, 0xFF, 0, 0)),
+        "then the list request, whose answer rides the relay behind the list"
+    );
+
+    party::run(world.as_ref(), 7, GINGER, party::Op::RaidConvert).unwrap();
+    let ops_before = realm.party.lock().unwrap().ops.len();
+    let (tx, _rx) = crate::world::SessionTx::with_depth(0);
+    party::on_world_entry(&tx, instances.as_ref(), VIM).expect("world entry");
+    assert_eq!(
+        realm.party.lock().unwrap().ops.len(),
+        ops_before,
+        "a Raid keeps its marks through a list"
+    );
+}
+
+/// A lost broadcast must not end the session: nothing waits on a ping, and the roster is unchanged.
+#[test]
+fn a_group_broadcast_lost_in_transport_keeps_the_session() {
+    let s = InMemoryStore {
+        group_broadcast_error: true,
+        ..quest_store()
+    };
+    {
+        let mut p = s.party.lock().unwrap();
+        p.groups.push((5, 1, 3, 2, 0));
+        p.members.push((5, 1));
+        p.members.push((5, 2));
+    }
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+    send_client_frame(&mut client, &mut c_enc, 0x0322, &[]);
+    send_client_frame(&mut client, &mut c_enc, 0x01D5, &[0; 8]);
+    send_client_frame(&mut client, &mut c_enc, 0x01FB, &[1, 0, 0, 0, 100, 0, 0, 0]);
+
+    assert_nothing_sent_before_the_barrier(&mut client, &mut c_enc, &mut c_dec);
+    drop(client);
+    let _ = server.join();
 }
