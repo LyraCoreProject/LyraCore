@@ -286,11 +286,10 @@ pub(crate) fn handle_query<St: WorldStore + ?Sized>(
         }
         // Social tier: say/yell/`/e` -> send_chat (insert a broadcast game_chat_event the gateway
         // fans back as SMSG_MESSAGECHAT on every connection's subscription); whisper ->
-        // send_whisper (private, per-recipient). Party chat never reaches this arm:
-        // `dispatch_chat_action` consumes it as a Realm Chat Line. Guild still needs a system that
-        // doesn't exist yet and is dropped. No reply on success (the speaker sees their own line via
-        // the relay); a rejected say/yell/emote/whisper-target line is silently dropped, matching
-        // vanilla.
+        // send_whisper (private, per-recipient). Party, raid, guild and officer chat never reach
+        // this arm: `dispatch_chat_action` consumes them as Realm Chat Lines. No reply on success
+        // (the speaker sees their own line via the relay); a rejected say/yell/emote/whisper-target
+        // line is silently dropped, matching vanilla.
         //
         // GM playtest dot-commands: a Say line starting with `.` diverts BEFORE
         // `send_chat` — never broadcast, never inserted as a `game_chat_event` row — straight to the
@@ -391,7 +390,8 @@ pub(crate) fn handle_query<St: WorldStore + ?Sized>(
                         )?;
                     }
                 }
-                // Party and channel lines never get here: `dispatch_chat_action` consumes them.
+                // Party, raid, channel, guild and officer lines never get here:
+                // `dispatch_chat_action` consumes them as Realm Chat Lines.
                 _ => {}
             }
         }

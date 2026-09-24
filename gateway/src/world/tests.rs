@@ -11231,14 +11231,17 @@ fn messagechat_whisper_to_an_unknown_player_replies_player_not_found() {
 }
 
 #[test]
-fn messagechat_guild_is_dropped() {
-    // Chat types that need a guild system that doesn't exist yet are dropped — no store call, no reply.
-    let store = std::sync::Arc::new(quest_store());
+fn messagechat_guild_becomes_one_realm_chat_request_from_the_sessions_character() {
+    // `/g` reaches the Realm Chat path with the guid it entered the world with, the same shape as
+    // `/p`. No reply on success: the speaker hears the line through the Relay like every member.
+    let mut s = quest_store();
+    s.speaker_facts = Some(human_speaker());
+    let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
     CMSG_MESSAGECHAT {
         chat_type: CMSG_MESSAGECHAT_ChatType::Guild,
-        language: Language::Universal,
-        message: "g".into(),
+        language: Language::Common,
+        message: "hello guild".into(),
     }
     .write_encrypted_client(&mut client, &mut c_enc)
     .unwrap();
@@ -11248,15 +11251,54 @@ fn messagechat_guild_is_dropped() {
     .write_encrypted_client(&mut client, &mut c_enc)
     .unwrap();
     match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
-        ServerOpcodeMessage::SMSG_QUESTGIVER_STATUS(_) => {} // nothing was sent for guild
-        other => panic!("expected the sentinel (guild dropped), got {other}"),
+        ServerOpcodeMessage::SMSG_QUESTGIVER_STATUS(_) => {} // nothing was sent for a successful /g
+        other => panic!("expected the sentinel (no reply on /g success), got {other}"),
     }
     drop(client);
     server.join().unwrap();
+    let requests = store.realm_chats.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    let (speaker_guid, request) = &requests[0];
+    assert_eq!(*speaker_guid, 1);
+    assert_eq!(request.kind, lyracore_shared::chat::chat_kind::GUILD);
+    assert_eq!(request.message, "hello guild");
     assert!(
         store.chats.lock().unwrap().is_empty(),
-        "guild lines never reach send_chat"
+        "a guild line never becomes a say line"
     );
+}
+
+#[test]
+fn messagechat_officer_becomes_one_realm_chat_request_from_the_sessions_character() {
+    // `/o` follows the same path as `/g` with its own Chat Kind.
+    let mut s = quest_store();
+    s.speaker_facts = Some(human_speaker());
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_MESSAGECHAT {
+        chat_type: CMSG_MESSAGECHAT_ChatType::Officer,
+        language: Language::Common,
+        message: "officers only".into(),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    CMSG_QUESTGIVER_STATUS_QUERY {
+        guid: Guid::new(50),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_QUESTGIVER_STATUS(_) => {} // nothing was sent for a successful /o
+        other => panic!("expected the sentinel (no reply on /o success), got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+    let requests = store.realm_chats.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    let (speaker_guid, request) = &requests[0];
+    assert_eq!(*speaker_guid, 1);
+    assert_eq!(request.kind, lyracore_shared::chat::chat_kind::OFFICER);
+    assert_eq!(request.message, "officers only");
 }
 
 fn human_speaker() -> SpeakerFacts {
