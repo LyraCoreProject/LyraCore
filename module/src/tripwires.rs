@@ -92,6 +92,7 @@ pub(crate) mod character_owned_tripwire {
                 "game_emote_event",
                 "game_group_event",
                 "game_guild_event",
+                "game_mail_arrival",
                 "game_realm_chat_event",
                 "game_roll_event",
                 "game_spell_cast_event",
@@ -1391,9 +1392,8 @@ mod gc_reap_tripwire {
     ///   creature legs onto the in-place `game_creature_spline` row, updated rather than
     ///   inserted/reaped); the table stays in the schema, empty, rather than as a separate
     ///   destructive migration to drop it. See the comment atop `reap_movement_events` in `gc.rs`.
-    /// - `game_mail`: DURABLE state that merely carries a `created_at` for the client's expiry
-    ///   countdown. Reaping it would destroy mail, and the design declines an expiry reaper,
-    ///   because nothing should silently delete an attachment a player can still collect.
+    /// - `game_mail`: DURABLE state whose `created_at` starts its life. Each Mail's own Mail Timer
+    ///   ends that life (`mail_timer.rs`). A TTL reap would delete Mail that Mail Expiry returns.
     const EXEMPT_ACCESSORS: &[&str] = &[
         "game_creature_move_event",
         "game_mail",

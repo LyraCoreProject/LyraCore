@@ -72,7 +72,7 @@ grep -rn '^#\[table(' module/src --include='*.rs' | wc -l   # 238 on 2026-09-03
 | Combat / threat / duel | 10 | 4 | `combat/engage.rs`, `combat/death.rs`, `threat.rs`, `duel.rs` |
 | Spell / aura | 20 | 10 | `spell/tables.rs`, `spell/stacking.rs` |
 | Quest | 12 | 8 | `quest.rs` |
-| Item / vendor / trade / mail | 14 | 5 | `items/tables.rs`, `trade.rs`, `mail.rs`, `mail_catalogue.rs`, `mail_escrow.rs` |
+| Item / vendor / trade / mail | 16 | 5 | `items/tables.rs`, `trade.rs`, `mail.rs`, `mail_catalogue.rs`, `mail_escrow.rs`, `mail_timer.rs` |
 | Auction house | 8 | 2 | `auction.rs` |
 | Creature (template, spawn, AI, pet, trainer) | 42 | 17 | `creatures/*`, `trainer.rs` |
 | GameObject | 9 | 6 | `gameobject.rs`, `go_model.rs` |
@@ -332,6 +332,13 @@ visible since creation. Expiry is not a column. `lyracore_shared::mail::expires_
 from creation, delivery and the cash on delivery price. Private `game_mail_escrow` and
 `game_mail_delivery` carry value across the Shard Boundary; see `architecture.md` §6.3b.
 
+Private `game_mail_timer` (`module/src/mail_timer.rs`) holds each Mail's one Mail Timer, unique by
+`mail_id`. `insert_letter` arms it at the delivery instant of a Mail that is not delivered yet, and
+at the expiry of every other Mail. At expiry the timer runs Mail Expiry: it returns a Character's
+Mail that still carries an item, in place, and deletes every other Mail with its copper. Private
+`game_mail_arrival` is the Mail Arrival event: one row each time a Mail becomes visible to its
+recipient, reaped by the event GC.
+
 ### Auction listing state (`module/src/auction.rs`)
 
 `game_auction_house` is the public `AuctionHouse.dbc` catalogue used to resolve an auctioneer's
@@ -485,11 +492,11 @@ Two constraints survive the removal and bind any filter added later.
 
 ## 6. Scheduled tables
 
-**24 scheduled tables** drive every periodic and deferred effect in the game. Nothing on a gateway
+**25 scheduled tables** drive every periodic and deferred effect in the game. Nothing on a gateway
 timer decides gameplay. Recount and re-list them with:
 
 ```bash
-grep -rn 'scheduled(' module/src --include='*.rs'   # 24 tables plus 4 comment lines, 2026-09-03
+grep -rn 'scheduled(' module/src --include='*.rs'   # 25 tables plus 4 comment lines, 2026-09-23
 ```
 
 | Scheduled table | Reducer | Cadence | Where |
@@ -514,6 +521,7 @@ grep -rn 'scheduled(' module/src --include='*.rs'   # 24 tables plus 4 comment l
 | `game_pending_spell_impact` | `fire_spell_impact` | one-shot at projectile landing | `spell/tables.rs:689` |
 | `game_ranged_impact_schedule` | `ranged_impact` | one-shot at shot landing | `combat/engage.rs:474` |
 | `game_auction_expiry` | `expire_auction` | one-shot at listing expiry | `auction.rs:162` |
+| `game_mail_timer` | `fire_mail_timer` | one-shot at a Mail's delivery, then at its expiry | `mail_timer.rs:13` |
 | `game_creature_ai_summon_expiry` | `expire_eventai_summon` | one-shot at summon lifetime end | `creatures/eventai/mobility.rs:17` |
 | `game_creature_ai_forced_despawn` | `fire_eventai_forced_despawn` | one-shot at the authored despawn time | `creatures/eventai/mobility.rs:51` |
 | `game_creature_ai_relay_continuation` | `resume_relay_run` | one-shot at the authored relay delay | `creatures/eventai/relay.rs:295` |
@@ -527,7 +535,8 @@ externally.
 ⚠ Re-arming after a schema change is a real operational step: a republish can leave a schedule row
 stale, because `init` does not re-run on an auto-migrating publish. `debug_repair_after_publish`
 re-arms the motion, creature-tick, aura, ground-area, weather, gateway-lease and instance-reaper
-schedules, and re-seeds every fixture family `init` seeds. It does not repair every scheduled table:
+schedules, restores a missing Auction expiry, arms a Mail Timer for each Mail that has none, and
+re-seeds every fixture family `init` seeds. It does not repair every scheduled table:
 the event reaper and melee schedules are outside this reducer. **Nothing runs it for you.** The
 operator calls it by hand on every shard after every publish:
 

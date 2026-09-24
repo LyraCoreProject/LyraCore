@@ -4,6 +4,7 @@ use spacetimedb::{log, reducer, table, ReducerContext, ScheduleAt, Table, TimeDu
 
 use crate::game_world_entity;
 use crate::helpers::require_operator;
+use crate::mail::game_mail;
 
 #[cfg(test)]
 mod harness;
@@ -147,9 +148,32 @@ pub(crate) enum CommitPlan {
 }
 
 const LEGACY_COD_PAYMENT_PREFIX: &str = "COD Payment: ";
-/// `priced` is the recipient and price of a delivered Mail.
-pub(crate) fn owes_price(priced: Option<(u64, u32)>, payer_guid: u64) -> bool {
-    matches!(priced, Some((recipient_guid, cod)) if recipient_guid == payer_guid && cod > 0)
+/// The Mail a COD payment is for, as the mail plane sees it now.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct PricedMail {
+    pub recipient_guid: u64,
+    pub cod: u32,
+    pub delivered: bool,
+}
+/// What a commit does with a COD payment. The payer's copper is already in the fence, so every
+/// outcome except `Hold` must land it in a Mail.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum CodPayment {
+    /// The payer owes a delivered price: pay the seller and settle the price.
+    Pay,
+    /// The payer owes the price, but the Mail is not delivered on this plane's clock yet, which
+    /// runs behind the Gateway's. The payment waits in its fence for a later commit.
+    Hold,
+    /// Nobody owes the price any more: Mail Expiry or a return sent the Mail back, it was deleted,
+    /// or the price was paid. The payment goes back to the payer as a Returned Mail.
+    Refund,
+}
+pub(crate) fn plan_cod_payment(priced: Option<PricedMail>, payer_guid: u64) -> CodPayment {
+    match priced {
+        Some(m) if m.recipient_guid == payer_guid && m.cod > 0 && m.delivered => CodPayment::Pay,
+        Some(m) if m.recipient_guid == payer_guid && m.cod > 0 => CodPayment::Hold,
+        _ => CodPayment::Refund,
+    }
 }
 pub(crate) fn plan_commit(receipted_for: Option<u64>, recipient_guid: u64) -> CommitPlan {
     match receipted_for {
@@ -238,8 +262,7 @@ pub(crate) trait ReapSink: EscrowLedger {
 pub(crate) trait DeliverySink {
     fn receipt(&self, escrow_id: u64) -> Option<MailDelivery>;
     fn deliver(&mut self, letter: crate::mail::Letter) -> u64;
-    /// The recipient and price of `mail_id`, if it is delivered.
-    fn priced_mail(&self, mail_id: u64) -> Option<(u64, u32)>;
+    fn priced_mail(&self, mail_id: u64) -> Option<PricedMail>;
     fn settle_cod(&mut self, mail_id: u64);
     fn file_receipt(&mut self, row: MailDelivery);
     fn now_micros(&self) -> i64;
@@ -382,8 +405,17 @@ impl DeliverySink for CtxDb<'_> {
     fn deliver(&mut self, letter: crate::mail::Letter) -> u64 {
         crate::mail::insert_letter(self.ctx, letter)
     }
-    fn priced_mail(&self, mail_id: u64) -> Option<(u64, u32)> {
-        crate::mail::delivered_mail(self.ctx, mail_id).map(|m| (m.recipient_guid, m.cod))
+    fn priced_mail(&self, mail_id: u64) -> Option<PricedMail> {
+        self.ctx
+            .db
+            .game_mail()
+            .id()
+            .find(mail_id)
+            .map(|m| PricedMail {
+                recipient_guid: m.recipient_guid,
+                cod: m.cod,
+                delivered: m.is_delivered(self.ctx.timestamp),
+            })
     }
     fn settle_cod(&mut self, mail_id: u64) {
         crate::mail::clear_mail_cod(self.ctx, mail_id);
@@ -487,15 +519,14 @@ pub(crate) fn apply_commit<S: DeliverySink>(
         }
         CommitPlan::Deliver => {}
     }
-    // A commit that settles another mail's price is that price's payment. It pays only a price the
-    // payer still owes on a Mail delivered on this plane's clock. Otherwise the payment stays in
-    // its fence, and the Gateway, whose clock can run ahead, cannot pay for an item the take
-    // fence will then refuse.
+    // A commit that settles another mail's price is that price's payment. The take fence that
+    // follows refuses a Mail the payment did not pay for, so the payment cannot buy an item.
     let pays_cod = cod_mail_id != 0;
-    if pays_cod && !owes_price(sink.priced_mail(cod_mail_id), sender_guid) {
+    let payment = pays_cod.then(|| plan_cod_payment(sink.priced_mail(cod_mail_id), sender_guid));
+    if payment == Some(CodPayment::Hold) {
         return Err(format!(
-            "mail escrow {escrow_id}: mail {cod_mail_id} owes {sender_guid} no delivered price — \
-             holding the payment"
+            "mail escrow {escrow_id}: mail {cod_mail_id} owes {sender_guid} no delivered price yet \
+             — holding the payment"
         ));
     }
     let subject = if pays_cod {
@@ -518,16 +549,19 @@ pub(crate) fn apply_commit<S: DeliverySink>(
         draft.cod,
         *item,
     );
-    let letter = if pays_cod {
-        letter.into_cod_payment()
-    } else {
-        letter
+    let letter = match payment {
+        None => letter,
+        Some(CodPayment::Pay) => letter.into_cod_payment(),
+        // A refund. `Hold` returned above.
+        Some(_) => letter.into_returned(),
     };
+    let delivered_to = letter.recipient_guid;
     let mail_id = sink.deliver(letter);
-    if cod_mail_id != 0 {
+    if payment == Some(CodPayment::Pay) {
         sink.settle_cod(cod_mail_id);
     }
     let created_micros = sink.now_micros();
+    // The receipt names the Draft's recipient even for a refund, so a replayed commit finds it.
     sink.file_receipt(MailDelivery {
         escrow_id,
         mail_id,
@@ -535,8 +569,12 @@ pub(crate) fn apply_commit<S: DeliverySink>(
         created_micros,
     });
     log::info!(
-        "mail escrow {escrow_id}: committed as mail {mail_id} for recipient {}",
-        draft.recipient_guid
+        "mail escrow {escrow_id}: committed as mail {mail_id} for recipient {delivered_to}{}",
+        if payment == Some(CodPayment::Refund) {
+            format!(", the payment back because mail {cod_mail_id} owes no price")
+        } else {
+            String::new()
+        }
     );
     Ok(())
 }
@@ -1166,8 +1204,9 @@ mod tests {
                   self.ctx.db.game_mail_delivery().escrow_id().find(escrow_id) } fn \
                   deliver(&mut self, letter: crate::mail::Letter) -> u64 { \
                   crate::mail::insert_letter(self.ctx, letter) } fn priced_mail(&self, mail_id: \
-                  u64) -> Option<(u64, u32)> { crate::mail::delivered_mail(self.ctx, \
-                  mail_id).map(|m| (m.recipient_guid, m.cod)) } fn settle_cod(&mut \
+                  u64) -> Option<PricedMail> { self.ctx .db .game_mail() .id() .find(mail_id) \
+                  .map(|m| PricedMail { recipient_guid: m.recipient_guid, cod: m.cod, \
+                  delivered: m.is_delivered(self.ctx.timestamp), }) } fn settle_cod(&mut \
                   self, mail_id: u64) { crate::mail::clear_mail_cod(self.ctx, mail_id); } fn \
                   file_receipt(&mut self, row: MailDelivery) { \
                   self.ctx.db.game_mail_delivery().insert(row); } fn now_micros(&self) -> i64 { \

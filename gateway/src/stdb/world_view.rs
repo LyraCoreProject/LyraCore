@@ -948,6 +948,12 @@ fn register_shard_callbacks(
         &view,
         move |v, row| contact_changed(v, shard, row, false),
     );
+    wire_insert_live(
+        db.game_mail_arrival(),
+        "game_mail_arrival.insert",
+        &view,
+        |v, row| mail_arrived(v, row),
+    );
     {
         let coord = coord.clone();
         wire_insert_live(
@@ -1112,10 +1118,10 @@ fn register_shard_callbacks(
 }
 
 /// Register the cross-shard PRIVATE-tier twins (#22 → #483) on the REALM-CORE connection: whisper
-/// and group events and Realm Chat Lines written realm-side for recipients whose home shard is
-/// elsewhere. Same recipient-keyed dispatchers as `arm_shard`'s private tier, armed ONCE per
-/// realm-core connection instead of once per session — the last per-session registrations are gone
-/// (#483).
+/// and group events, Realm Chat Lines and Mail Arrivals written realm-side for recipients whose
+/// home shard is elsewhere. Same recipient-keyed dispatchers as `arm_shard`'s private tier, armed
+/// ONCE per realm-core connection instead of once per session — the last per-session registrations
+/// are gone (#483).
 ///
 /// Only called when realm-core is a DISTINCT database (`Coordinator::connect` gates it): on a
 /// single-database gateway the world shard's own `arm_shard` registration already watches these
@@ -1152,6 +1158,12 @@ pub(crate) fn arm_realm_private(view: Arc<WorldView>, realm: Coordinator, coord:
         "realm.game_realm_chat_event.insert",
         &view,
         |v, row| realm_chat_appeared(v, row),
+    );
+    wire_insert_live(
+        db.game_mail_arrival(),
+        "realm.game_mail_arrival.insert",
+        &view,
+        |v, row| mail_arrived(v, row),
     );
     wire_guild_relays(
         db,
@@ -2218,6 +2230,24 @@ fn system_message_appeared(view: &WorldView, row: &SystemMessageEvent) {
     });
 }
 
+/// A Mail became visible to its recipient → SMSG_RECEIVED_MAIL to that recipient's World Session on
+/// any Shard. An offline recipient gets nothing and learns of the Mail from the unread poll at the
+/// next login (cmangos `Player.cpp:3098-3110`, `MailHandler.cpp:712-720`).
+fn mail_arrived(view: &WorldView, row: &MailArrival) {
+    let Some(session) = view.session_of_owner(row.recipient_guid) else {
+        return;
+    };
+    let Some(viewer) = view.viewer(session) else {
+        return;
+    };
+    if !super::subscriptions::private_recipient_audience(row.recipient_guid, viewer.self_guid) {
+        return;
+    }
+    enqueue(viewer.clone(), |_| {
+        super::subscriptions::mail_arrival_outbound()
+    });
+}
+
 /// A trade status landed → the `SMSG_TRADE_STATUS` packet to the row's RECIPIENT and nobody
 /// else (same shape as [`whisper_appeared`]) (#120).
 fn trade_event_appeared(view: &WorldView, shard: ShardId, row: &TradeEvent) {
@@ -2701,14 +2731,14 @@ mod family_audience_tests {
     use super::{
         addon_message_appeared, duel_winner_audience, exploration_outbound_for_word,
         guild_event_appeared, guild_membership_changed, is_initial_apply, item_owner_job,
-        levelup_appeared, reputation_appeared, sweep_into_view, system_message_appeared,
-        teleport_appeared, weather_changed, xp_appeared, zone_crossed, BoundIdentity,
-        ExplorationReplay, GuildMembershipRead, GuildRead, MotionPending, OwnerGuid, Viewer,
-        WorldView,
+        levelup_appeared, mail_arrived, reputation_appeared, sweep_into_view,
+        system_message_appeared, teleport_appeared, weather_changed, xp_appeared, zone_crossed,
+        BoundIdentity, ExplorationReplay, GuildMembershipRead, GuildRead, MotionPending, OwnerGuid,
+        Viewer, WorldView,
     };
     use crate::stdb::aoi::ViewerGates;
     use crate::stdb::bindings::{
-        AddonMessage, CharacterExplored, CharacterQuest, GuildEvent, LevelupEvent,
+        AddonMessage, CharacterExplored, CharacterQuest, GuildEvent, LevelupEvent, MailArrival,
         PlayerReputation, SystemMessageEvent, TeleportEvent, XpEvent, ZoneWeather,
     };
     use crate::stdb::subscriptions::{private_recipient_audience, quest_update_packets};
@@ -3396,6 +3426,50 @@ mod family_audience_tests {
     }
 
     #[test]
+    fn a_mail_arrival_reaches_its_recipient_on_any_shard_and_an_unknown_guid_gets_nothing() {
+        let view = WorldView::new(true);
+        let (recipient_tx, recipient_rx) = SessionTx::with_depth(0);
+        let recipient = viewer_with_tx(1, 9001, identity(1), recipient_tx);
+        let (bystander_tx, bystander_rx) = SessionTx::with_depth(0);
+        let bystander = viewer_with_tx(2, 9002, identity(2), bystander_tx);
+        let anchor = CellKey::at(0, 0, 0, 0);
+        view.add_viewer_on_shard(recipient.clone(), anchor, 1);
+        view.add_viewer_on_shard(bystander, anchor, 0);
+
+        let row = MailArrival {
+            id: 1,
+            recipient_guid: recipient.self_guid,
+            created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
+        };
+        mail_arrived(&view, &row);
+
+        let outbound = queued_job(&recipient_rx);
+        let [Outbound::One(ServerOpcodeMessage::SMSG_RECEIVED_MAIL(packet))] = outbound.as_slice()
+        else {
+            panic!("the recipient must receive one SMSG_RECEIVED_MAIL");
+        };
+        assert_eq!(packet.unknown1, 0);
+        assert!(
+            recipient_rx.try_recv().is_err(),
+            "one arrival queues one job"
+        );
+        assert!(
+            bystander_rx.try_recv().is_err(),
+            "a second Character must receive no queued work"
+        );
+
+        mail_arrived(
+            &view,
+            &MailArrival {
+                recipient_guid: 9999,
+                ..row
+            },
+        );
+        assert!(recipient_rx.try_recv().is_err());
+        assert!(bystander_rx.try_recv().is_err());
+    }
+
+    #[test]
     fn duel_winner_aoi_fan_excludes_the_two_private_recipients() {
         assert!(!duel_winner_audience(10, 10, 20));
         assert!(!duel_winner_audience(20, 10, 20));
@@ -3863,6 +3937,7 @@ mod family_audience_tests {
             "game_character_explored",
             "game_player_reputation",
             "game_item_instance",
+            "game_mail_arrival",
         ] {
             assert_eq!(
                 arm.matches(&format!("db.{table}()")).count(),

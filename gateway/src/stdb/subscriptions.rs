@@ -2475,6 +2475,13 @@ pub(crate) fn system_message_event_outbound(row: &SystemMessageEvent) -> Vec<Out
     ))]
 }
 
+/// Build a Mail Arrival after the caller validates the recipient.
+pub(crate) fn mail_arrival_outbound() -> Vec<Outbound> {
+    vec![Outbound::One(ServerOpcodeMessage::SMSG_RECEIVED_MAIL(
+        codec::build_received_mail(),
+    ))]
+}
+
 /// Resurrect prompt: the packet body both legs run. Audience: the
 /// offer's target, resolved by the caller.
 pub(crate) fn resurrect_request_outbound(row: &ResurrectRequest) -> Vec<Outbound> {
@@ -6870,16 +6877,24 @@ mod tests {
             "realm_chat_appeared is no longer recipient-keyed. On an owner-token read every \
              session would receive every party's chat"
         );
-        // The dispatchers themselves stay recipient-keyed: the whisper body must resolve the
-        // recipient's session FIRST and re-assert the audience predicate.
-        let whisper = decommented(top_level_fn_body_of("world_view.rs", "whisper_appeared"));
         assert!(
-            whisper.contains("session_of_owner(row.recipient_guid)")
-                && whisper
-                    .contains("private_recipient_audience(row.recipient_guid, viewer.self_guid)"),
-            "whisper_appeared is no longer recipient-keyed — on an owner-token read that is a \
-             privacy leak: every session would receive every player's private whispers"
+            compact.contains("wire_insert_live(db.game_mail_arrival(),\"realm.game_mail_arrival.insert\",&view,|v,row|mail_arrived(v,row));"),
+            "arm_realm_private no longer relays Mail Arrivals through `mail_arrived`. Mail lives \
+             on realm-core, so no recipient on a World Shard would hear of a new Mail"
         );
+        // The dispatchers themselves stay recipient-keyed: each body must resolve the recipient's
+        // session FIRST and re-assert the audience predicate.
+        for dispatcher in ["whisper_appeared", "mail_arrived"] {
+            let body = decommented(top_level_fn_body_of("world_view.rs", dispatcher));
+            assert!(
+                body.contains("session_of_owner(row.recipient_guid)")
+                    && body.contains(
+                        "private_recipient_audience(row.recipient_guid, viewer.self_guid)"
+                    ),
+                "{dispatcher} is no longer recipient-keyed — on an owner-token read that is a \
+                 privacy leak: every session would receive every player's private rows"
+            );
+        }
     }
 
     /// `game_auction_notice` rides the same private tier: armed once on each shard connection

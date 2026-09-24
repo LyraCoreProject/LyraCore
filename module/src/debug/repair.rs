@@ -318,6 +318,12 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
         }
     }
 
+    // Mail Timers are created with their Mail. Arm one for each Mail that has none: Mail written
+    // before the timer existed, or Mail a Transfer imported. Mail older than its life expires after
+    // this pass commits, 100 a second. A Mail that has a timer keeps it, so a second pass arms
+    // nothing.
+    let mail_timers = crate::mail_timer::arm_missing(ctx);
+
     // PROC-PROFILE BACKFILL. The proc columns are END-appended and default to 0, and 0 in `proc_flags`
     // reads as "never procs" — so an aura row that was already on a unit when the proc columns landed
     // is a Proc that silently stopped firing. A permanent self-buff (Frost Armor) never refreshes on
@@ -381,11 +387,12 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
         + motion_schedule
         + pet_care_schedule
         + auction_expiries
+        + mail_timers
         + proc_profiles
         + legacy_auction_mail
         + 3;
     crate::import_meta::stamp(ctx, "debug_repair_after_publish", "", "", total);
-    log::info!("debug_repair_after_publish: repaired {total} fixture/schedule row(s), including missing Auction expiries");
+    log::info!("debug_repair_after_publish: repaired {total} fixture/schedule row(s), including missing Auction expiries and {mail_timers} Mail Timer(s)");
     Ok(())
 }
 

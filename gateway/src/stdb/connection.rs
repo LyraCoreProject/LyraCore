@@ -1128,6 +1128,7 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         "SELECT * FROM game_resurrect_request",
         "SELECT * FROM game_whisper_event",
         "SELECT * FROM game_system_message_event",
+        "SELECT * FROM game_mail_arrival",
         "SELECT * FROM game_group_event",
         "SELECT * FROM game_trade_event",
         "SELECT * FROM game_duel_event",
@@ -1242,8 +1243,8 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         "SELECT * FROM game_player_reputation",
         // Mail. Subscribed on EVERY connection in the set, because the mailbox has two planes:
         // realm-core is authoritative on a sharded realm, and a single-database gateway reads its
-        // own copy. The gateway answers `CMSG_GET_MAIL_LIST` from this cache — mail is a poll, so
-        // there is no relay and no per-player subscription to arm.
+        // own copy. The gateway answers `CMSG_GET_MAIL_LIST` from this cache. The list itself is a
+        // poll; only the Mail Arrival above is relayed.
         "SELECT * FROM game_mail",
         // The mail ESCROW ledger, and the `game_transfer_out` precedent verbatim: the gateway is
         // the only component that can see both databases, so a fence its predecessor abandoned is

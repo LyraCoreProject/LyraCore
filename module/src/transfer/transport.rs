@@ -93,6 +93,12 @@ pub(crate) const MANIFEST_EXCLUDE: &[&str] = &["game_transfer_out"];
 ///   character hops, the fence stays, and the reaper there still judges it.
 /// - `game_mail_delivery` — the mail plane's delivery receipts. They only exist where the
 ///   authoritative mail rows do, and no character transfers off realm-core.
+///
+///   `game_mail_timer` and `game_mail_arrival` stay with the mail rows too, but they are not in
+///   this list because they have no marker: the timer names a Mail, not a Character, and the
+///   arrival is a short-lived Relay event. A Mail a Transfer imports gets its timer from
+///   `debug_repair_after_publish`.
+///
 /// - `game_character_shard` — the realm-core character→shard directory. A routing HINT about
 ///   where the character is, and the blob exists to change that: the snapshot `begin_transfer` takes
 ///   still names the SOURCE, so carrying it would hand the destination a forwarding receipt pointing

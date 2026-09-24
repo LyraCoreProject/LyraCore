@@ -46,7 +46,7 @@ pub struct Mail {
 crate::character_owned!(delete, fn sweep_delete_game_mail(ctx, character_guid) {
     let mails = ctx.db.game_mail();
     for r in mails.by_recipient().filter(&character_guid).collect::<Vec<_>>() {
-        mails.id().delete(r.id);
+        delete_mail(ctx, r.id);
     }
 });
 crate::character_owned!(transfer, fn sweep_transfer_game_mail(ctx, character_guid, io) {
@@ -185,35 +185,47 @@ impl Letter {
             ..self
         }
     }
+    /// The same Character letter sent back to its writer before its recipient got it, as a
+    /// Returned Mail. A COD payment whose price nobody owes any more goes back this way.
+    pub(crate) fn into_returned(self) -> Self {
+        let (_, writer_guid, _) = self.sender.columns();
+        Self {
+            recipient_guid: writer_guid,
+            sender: MailSender::Character(self.recipient_guid),
+            cod: 0,
+            check_flags: CHECK_MASK_RETURNED,
+            ..self
+        }
+    }
 }
-/// The one way a mail row is created.
+/// The one way a mail row is created. It starts the Mail's timer, and sends a Mail Arrival when
+/// the recipient can see the Mail now.
 pub(crate) fn insert_letter(ctx: &ReducerContext, letter: Letter) -> u64 {
     let (sender_kind, sender_guid, sender_entry) = letter.sender.columns();
-    ctx.db
-        .game_mail()
-        .insert(Mail {
-            id: 0,
-            recipient_guid: letter.recipient_guid,
-            sender_guid,
-            subject: letter.subject,
-            body: letter.body,
-            item_entry: letter.item.entry,
-            item_stack_count: letter.item.stack_count,
-            item_durability: letter.item.durability,
-            item_enchant_id: letter.item.enchant_id,
-            item_soulbound: letter.item.soulbound,
-            random_property_id: letter.item.random_property_id,
-            money: letter.money,
-            cod: letter.cod,
-            was_read: false,
-            created_at: ctx.timestamp,
-            sender_kind,
-            sender_entry,
-            check_flags: letter.check_flags,
-            mail_template_id: letter.mail_template_id,
-            deliver_micros: letter.deliver_micros,
-        })
-        .id
+    let mail = ctx.db.game_mail().insert(Mail {
+        id: 0,
+        recipient_guid: letter.recipient_guid,
+        sender_guid,
+        subject: letter.subject,
+        body: letter.body,
+        item_entry: letter.item.entry,
+        item_stack_count: letter.item.stack_count,
+        item_durability: letter.item.durability,
+        item_enchant_id: letter.item.enchant_id,
+        item_soulbound: letter.item.soulbound,
+        random_property_id: letter.item.random_property_id,
+        money: letter.money,
+        cod: letter.cod,
+        was_read: false,
+        created_at: ctx.timestamp,
+        sender_kind,
+        sender_entry,
+        check_flags: letter.check_flags,
+        mail_template_id: letter.mail_template_id,
+        deliver_micros: letter.deliver_micros,
+    });
+    crate::mail_timer::start(ctx, &mail);
+    mail.id
 }
 /// The mail as its recipient can act on it. Before its delivery instant it does not exist for
 /// them yet (cmangos `MailHandler.cpp:359,417,516`).
@@ -475,7 +487,7 @@ pub(crate) fn apply_delete(
         DeletePlan::NotYours => Err(lyracore_shared::mail::NOT_YOUR_MAIL.to_string()),
         DeletePlan::CodPriced => Err(lyracore_shared::mail::COD_MAIL_UNDELETABLE.to_string()),
         DeletePlan::Delete => {
-            mails.id().delete(mail_id);
+            delete_mail(ctx, mail_id);
             Ok(())
         }
     }
@@ -520,8 +532,18 @@ pub(crate) fn apply_return(
         ReturnPlan::Return => {}
     }
     let row = row.expect("Return is only reachable with a row");
-    ctx.db.game_mail().id().update(returned(row, ctx.timestamp));
+    send_back(ctx, row);
     Ok(())
+}
+/// Send `row` back to its sender now. The Mail starts a new life with that sender.
+pub(crate) fn send_back(ctx: &ReducerContext, row: Mail) {
+    let back = ctx.db.game_mail().id().update(returned(row, ctx.timestamp));
+    crate::mail_timer::start(ctx, &back);
+}
+/// Delete a Mail with its item snapshot, its copper and its timer.
+pub(crate) fn delete_mail(ctx: &ReducerContext, mail_id: u64) {
+    ctx.db.game_mail().id().delete(mail_id);
+    crate::mail_timer::stop(ctx, mail_id);
 }
 /// `row` sent back to its sender at `now`. It carries only RETURNED, loses its price and read
 /// state, and arrives now, which restarts its expiry clock (cmangos `Mail.cpp:264,299-313`).
