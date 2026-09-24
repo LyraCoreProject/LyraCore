@@ -235,6 +235,15 @@ Realm-core certifies party authority before the bot's World Shard applies it. Th
 existing Bot Controller and does not form a second runner. Each authenticated issuer carries a
 monotonic order sequence across Shards, so a delayed older command cannot replace a newer one.
 
+**Solo Target Claim**:
+The retained fight work of an ungrouped Cohort bot reserves one nearby creature while the bot
+approaches or fights. Other ungrouped Cohort bots choose another eligible creature. The claim is
+derived from the Recovery Attempt and holds only while the Bot Controller is Cohort. It expires
+after thirty seconds without progress. It ends when the bot abandons the fight, fails its movement,
+dies, joins a Party, switches to Legacy, RecordOnly or Frozen, or leaves the partition. It does not
+grant loot rights. Party assistance and self-defense do not consult claims, but an owner that
+defends itself against its claimed creature keeps that claim.
+
 **Command Receipt**:
 The target World Shard's durable result for one source Module Identity and intent id. It survives
 the complete command retry window and travels with its Character through Escrow, so a Gateway retry

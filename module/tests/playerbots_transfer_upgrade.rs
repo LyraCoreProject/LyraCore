@@ -270,6 +270,9 @@ fn playerbots_transfer_upgrades_populated_predecessor_without_a_checkpoint() {
         ready
     });
     node.assert_call("playerbots_fixture_freeze", &[&guid]);
+    // A Runner pass on the World tick after publish would backfill the claim index before the
+    // read below, so the upgraded rows are observed exactly as the migration left them.
+    node.assert_sql("DELETE FROM game_creature_move_schedule");
     let before = state(&node, &guid, &companion);
     let before_pid = node.process_id();
     save(
@@ -369,10 +372,23 @@ fn playerbots_transfer_upgrades_populated_predecessor_without_a_checkpoint() {
                 "retained {runner} field {field}"
             );
         }
-        assert_eq!(
-            after[runner].as_object().unwrap().len(),
-            before[runner].as_object().unwrap().len() + 2
-        );
+        // The pinned Package may predate `solo_target_guid`; when present, the upgrade must mark
+        // the row for claim backfill instead of granting a claim.
+        let added = [
+            "transfer_checkpoint",
+            "movement_due_micros",
+            "solo_target_guid",
+        ];
+        let before_fields = before[runner].as_object().unwrap();
+        for field in after[runner].as_object().unwrap().keys() {
+            assert!(
+                before_fields.contains_key(field) || added.contains(&field.as_str()),
+                "unexpected added {runner} field {field}"
+            );
+        }
+        if let Some(solo_target) = after[runner].get("solo_target_guid") {
+            assert_eq!(solo_target, "18446744073709551615");
+        }
         assert_eq!(after[runner]["transfer_checkpoint"], "(none = ())");
         assert_eq!(after[runner]["movement_due_micros"], i64::MAX.to_string());
     }

@@ -190,6 +190,18 @@ fn tuple_field<'a>(value: &'a str, name: &str) -> Option<&'a str> {
     None
 }
 
+fn timestamp_field(value: &str, name: &str) -> i64 {
+    value
+        .split_once(name)
+        .expect("timestamp field missing")
+        .1
+        .split([',', ')'])
+        .next()
+        .unwrap()
+        .parse()
+        .expect("invalid timestamp")
+}
+
 fn point(value: &str) -> Option<(f32, f32)> {
     let (_, x) = value.split_once("x = ")?;
     let (x, y) = x.split_once(", y = ")?;
@@ -316,8 +328,18 @@ fn playerbots_recovery_changes_a_stalled_attack_then_defers_without_false_progre
                 .contains("move")
         })
         .expect("stalled attack never changed approach");
+    let armed_micros = samples[0]["runner"]["observed_micros"]
+        .as_str()
+        .unwrap()
+        .parse::<i64>()
+        .unwrap();
+    let changed_micros = timestamp_field(
+        changed["runner"]["foreground"].as_str().unwrap(),
+        "started_micros = ",
+    );
+    // Polling can observe an on-time transition after the deadline; use the durable event's clock.
     assert!(
-        changed["elapsed_seconds"].as_f64().unwrap() <= 12.0,
+        (0..=12_000_000).contains(&(changed_micros - armed_micros)),
         "{changed}"
     );
     let deferred = samples
@@ -330,15 +352,12 @@ fn playerbots_recovery_changes_a_stalled_attack_then_defers_without_false_progre
                 .is_empty()
         })
         .expect("blocked destination was never deferred");
-    assert!(
-        deferred["elapsed_seconds"].as_f64().unwrap() <= 32.0,
-        "{deferred}"
+    let deferred_micros = timestamp_field(
+        deferred["runner"]["failures"].as_str().unwrap(),
+        "(reason = (noMovement = ()), at_micros = ",
     );
     assert!(
-        deferred["runner"]["failures"]
-            .as_str()
-            .unwrap()
-            .contains("noMovement"),
+        (0..=32_000_000).contains(&(deferred_micros - armed_micros)),
         "{deferred}"
     );
     let alternative = samples
@@ -810,8 +829,13 @@ fn playerbots_recovery_defers_a_moving_leader_and_allows_a_real_self_heal() {
                 .contains("recoveryPosition")
         })
         .expect("Follow never changed approach");
+    let started_micros = initial["observed_micros"].parse::<i64>().unwrap();
+    let changed_micros = timestamp_field(
+        changed["runner"]["foreground"].as_str().unwrap(),
+        "started_micros = ",
+    );
     assert!(
-        changed["elapsed_seconds"].as_f64().unwrap() <= 12.0,
+        (0..=12_000_000).contains(&(changed_micros - started_micros)),
         "{changed}"
     );
     let deferred = samples
@@ -824,8 +848,12 @@ fn playerbots_recovery_defers_a_moving_leader_and_allows_a_real_self_heal() {
                 .is_empty()
         })
         .expect("moving leader erased the failed Follow attempt");
+    let deferred_micros = timestamp_field(
+        deferred["runner"]["failures"].as_str().unwrap(),
+        "(reason = (noMovement = ()), at_micros = ",
+    );
     assert!(
-        deferred["elapsed_seconds"].as_f64().unwrap() <= 32.0,
+        (0..=32_000_000).contains(&(deferred_micros - started_micros)),
         "{deferred}"
     );
     assert!(samples

@@ -689,12 +689,18 @@ fn playerbots_held_quest_refuses_retained_destinations_from_another_partition() 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_quest_objective_survives_combat_and_refreshes_changed_evidence() {
+    fn retained_fields(objective: &str) -> (&str, &str) {
+        let (purpose, progress) = objective.split_once(", deadline_micros = ").unwrap();
+        let (_, origin) = progress.split_once(", started_micros = ").unwrap();
+        (purpose, origin)
+    }
+
     let (node, bots) = fixture("playerbots-quest-retention");
     let bot = bot_for_class(&bots, "1");
     node.assert_call("playerbots_quest_fixture_admit_accept", &[bot, "7"]);
     node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
     select_cohort(&node, bot);
-    run_once(&node);
+    node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
     let before_runner = runner(&node, bot);
     assert!(before_runner["objective"].contains("quest"));
     let before_detail = node.query_rows(&format!(
@@ -706,12 +712,20 @@ fn playerbots_quest_objective_survives_combat_and_refreshes_changed_evidence() {
     assert_eq!(before_detail["catalog_revision"], "1");
     assert!(before_detail["destination_evidence_revision"].starts_with("observed-catalog-v1:"));
 
-    node.assert_call("playerbots_fixture_runner_damage", &[bot, CREATURE_6, "1"]);
-    run_once(&node);
+    node.assert_call("playerbots_fixture_runner_damage", &[CREATURE_6, bot, "1"]);
+    node.assert_call(
+        "playerbots_fixture_runner_damage_and_park",
+        &[bot, CREATURE_6, "1"],
+    );
+    node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
     let interrupted = runner(&node, bot);
     assert!(interrupted["chosen"].contains("defense"));
     assert!(interrupted["chosen"].contains(CREATURE_6));
-    assert_eq!(interrupted["objective"], before_runner["objective"]);
+    // Combat can advance verified progress and its deadline without replacing the retained purpose.
+    assert_eq!(
+        retained_fields(&interrupted["objective"]),
+        retained_fields(&before_runner["objective"])
+    );
     assert_eq!(
         node.query_rows(&format!(
             "SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {bot}"
@@ -724,7 +738,7 @@ fn playerbots_quest_objective_survives_combat_and_refreshes_changed_evidence() {
         &["6", "1230"],
     );
     node.assert_call("playerbots_quest_fixture_refresh", &[]);
-    run_once(&node);
+    node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
     let refreshed_runner = runner(&node, bot);
     let refreshed_detail = node.query_rows(&format!(
         "SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {bot}"
