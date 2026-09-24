@@ -9,6 +9,7 @@ use std::collections::BTreeSet;
 
 use spacetimedb::{table, ReducerContext, Table};
 
+#[cfg(feature = "debug_reducers")]
 use lyracore_shared::group::RAID_MAX_MEMBERS;
 use lyracore_shared::loot::LootRefusal;
 
@@ -62,6 +63,7 @@ pub(crate) struct DeathEntitlement {
 }
 
 /// Whether a live creature's Loot Tag can still reward one Character.
+#[cfg(feature = "debug_reducers")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LiveLootTagEligibility {
     Available,
@@ -215,13 +217,11 @@ fn membership_is_current(
     }
 }
 
-/// Read one live Loot Tag without applying the death-site reward distance: tap membership alone,
-/// with no range check. A real take goes through `corpse_access_gate`
-/// (`corpse_eligible_recipients`, populated by `record_corpse_eligibility` from
-/// `death_entitlement`'s resolved, range-checked recipients) instead; this reducer-facing read has
-/// no caller on that path today. It stays for a caller that wants tap membership on its own, such
-/// as a UI query for "who still has rights to this corpse" regardless of where they currently
-/// stand.
+/// The fixture's probe of one live Loot Tag: tap membership alone, with no reward-distance check,
+/// so the fixture can watch a leave, a rejoin and a late join before the creature dies. Production
+/// reads the same membership rule once, at death, through `death_entitlement`. The read is bounded
+/// at the Raid cap.
+#[cfg(feature = "debug_reducers")]
 pub(crate) fn live_loot_tag_eligibility(
     ctx: &ReducerContext,
     creature_guid: u64,
