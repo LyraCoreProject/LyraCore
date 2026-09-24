@@ -42,10 +42,17 @@ Record the server commit, the client build on the login screen, the character na
 - [ ] Member kicks that character. Expected: it leaves the Raid on every client.
 - [ ] Member tries to kick Leader. Expected: nothing changes.
 - [ ] Member invites a character, then Leader demotes Member before the invite is accepted. The
-      character accepts. Expected: the character does not join, and sees a player-not-found line.
+      character accepts. Expected: the character joins the Raid, as in cmangos.
 - [ ] Leader promotes Member again. Member invites a character, then leaves the Raid. The character
-      accepts. Expected: the character does not join, sees a player-not-found line, and no new
-      Party with Member forms.
+      accepts. Expected: the character joins the Raid, and no Party with Member forms.
+- [ ] Away from the Raid, one character forms a Party with a second, invites a third, and the
+      Party disbands before the third accepts. The third accepts. Expected: the character does not
+      join, no group forms, and no message appears.
+- [ ] An ungrouped character invites another, then accepts an invite into the Raid before its own
+      invite is answered. The other character accepts. Expected: the character does not join, no
+      group forms, and no message appears.
+- [ ] Leader invites an ungrouped character who has an unanswered invite out to someone else.
+      Expected: Leader sees "is already in a group" and no invite reaches the character.
 - [ ] Member rejoins. Leader passes the lead to Member. Expected: every client prints "Member is
       now the group leader" before the raid tab moves the leader crown.
 - [ ] Member passes the lead back to Leader. Leader passes the lead to a member who is offline.
@@ -151,8 +158,6 @@ because the dungeon entry cap stays at 5.
 - [ ] Leader kicks Member inside the Deadmines. Expected: the same countdown and removal.
 - [ ] Member leaves, then accepts a new invite to the same Party inside 60 s. Expected: the
       countdown popup hides and Member stays in the Deadmines.
-- [ ] Member leaves, and an Assistant's invite takes it back into the Group inside 60 s. Expected:
-      the countdown hides.
 - [ ] In a Party of two inside the Deadmines, Member leaves, which disbands the Party. Expected:
       both clients show the countdown. Leader forms a new Party with Member inside the dungeon
       before 60 s. Expected: both countdowns hide and both stay.
@@ -160,7 +165,10 @@ because the dungeon entry cap stays at 5.
       after the loading screen the countdown popup is gone, and Member is not teleported later.
 - [ ] In each hide above, watch the chat window and the error text area. Expected: the hide, sent
       with error code 1 and timer 0, shows no "raid group required" text or any other stray line.
-- [ ] Inside the Deadmines, Leader converts the Party to a Raid, then moves a member to another
-      Subgroup. Expected: no countdown appears.
+- [ ] Inside the Deadmines, Leader converts the Party of three to a Raid and promotes the third
+      member to Assistant. Expected: no countdown appears.
+- [ ] Leader moves a member to another Subgroup. Expected: no countdown appears.
+- [ ] Member leaves the Raid, and the Assistant's invite takes it back inside 60 s. Expected: the
+      countdown starts, then hides, and Member stays.
 
 Record for each step the result, the time, and any visible failure, error text or disconnect.
