@@ -3510,6 +3510,10 @@ impl WorldStore for InMemoryStore {
                     p.push_list(group_id);
                 }
             }
+            realm_op::CHANGE_SUBGROUP => {
+                return Ok(p.change_subgroup(actor_guid, target_guid, arg_a))
+            }
+            realm_op::SWAP_SUBGROUP => return Ok(p.swap_subgroup(actor_guid, target_guid, arg_c)),
             other => return Err(anyhow!("unknown realm group op {other}")),
         }
         Ok(PartyOutcome::Ran)
@@ -11072,6 +11076,11 @@ struct FakeParty {
     raids: Vec<u64>,
     /// Each Raid member's Raid Slot; a member absent here holds the Party default.
     slots: std::collections::HashMap<u64, RaidSlot>,
+    /// group_id → how many times [`Self::push_list`] fired for it — this Fake's stand-in for the
+    /// Roster Revision. A group absent here has never had a list pushed. Bumped exactly where a
+    /// real accepted change would advance the revision, so [`super::party::roster_unchanged`]'s
+    /// no-mirror-push optimization is exercised against a real signal rather than a constant.
+    revisions: std::collections::HashMap<u64, u64>,
     /// Every op that reached the AUTHORITY: `(op, actor, target, arg_a, arg_b, arg_c)`. The
     /// assertion that a party op ran on realm-core rather than on the player's shard.
     ops: Vec<(u8, u64, u64, u8, u8, u64)>,
@@ -11120,7 +11129,7 @@ impl FakeParty {
             *self.groups.iter().find(|(g, ..)| *g == group_id)?;
         Some(super::party::GroupRoster {
             group_id: gid,
-            roster_revision: 1,
+            roster_revision: self.revisions.get(&group_id).copied().unwrap_or(0),
             leader_guid: leader,
             loot_method: method,
             loot_threshold: threshold,
@@ -11154,6 +11163,81 @@ impl FakeParty {
                 .is_some_and(|slot| slot.is_assistant())
     }
 
+    /// The Module's `change_subgroup_on`, modelled: leader-or-Assistant, Raid-only, capacity
+    /// decided by the shared [`RaidSlot::moved_to_subgroup`] rule.
+    fn change_subgroup(&mut self, actor_guid: u64, target_guid: u64, subgroup: u8) -> PartyOutcome {
+        use lyracore_shared::group::GroupRefusal;
+        let Some(group_id) = self.group_of(actor_guid) else {
+            return GroupRefusal::NotInGroup.into();
+        };
+        if self.kind_of(group_id) != GroupKind::Raid {
+            return GroupRefusal::NotRaid.into();
+        }
+        if !self.manages(group_id, actor_guid) {
+            return GroupRefusal::NotLeader.into();
+        }
+        if self.group_of(target_guid) != Some(group_id) {
+            return GroupRefusal::TargetNotInGroup.into();
+        }
+        let current = self.slots.get(&target_guid).copied().unwrap_or_default();
+        let destination_size = self
+            .member_guids(group_id)
+            .into_iter()
+            .filter(|&guid| {
+                guid != target_guid
+                    && self
+                        .slots
+                        .get(&guid)
+                        .copied()
+                        .unwrap_or_default()
+                        .subgroup()
+                        == subgroup
+            })
+            .count();
+        match current.moved_to_subgroup(subgroup, destination_size) {
+            Err(refusal) => refusal.into(),
+            Ok(None) => PartyOutcome::Ran,
+            Ok(Some(new_slot)) => {
+                self.slots.insert(target_guid, new_slot);
+                self.push_list(group_id);
+                PartyOutcome::Ran
+            }
+        }
+    }
+
+    /// The Module's `swap_subgroup_on`, modelled: same gates as [`Self::change_subgroup`], the
+    /// shared [`RaidSlot::swapped_with`] rule, and no capacity Gate.
+    fn swap_subgroup(
+        &mut self,
+        actor_guid: u64,
+        first_guid: u64,
+        second_guid: u64,
+    ) -> PartyOutcome {
+        use lyracore_shared::group::GroupRefusal;
+        let Some(group_id) = self.group_of(actor_guid) else {
+            return GroupRefusal::NotInGroup.into();
+        };
+        if self.kind_of(group_id) != GroupKind::Raid {
+            return GroupRefusal::NotRaid.into();
+        }
+        if !self.manages(group_id, actor_guid) {
+            return GroupRefusal::NotLeader.into();
+        }
+        if self.group_of(first_guid) != Some(group_id)
+            || self.group_of(second_guid) != Some(group_id)
+        {
+            return GroupRefusal::TargetNotInGroup.into();
+        }
+        let first_slot = self.slots.get(&first_guid).copied().unwrap_or_default();
+        let second_slot = self.slots.get(&second_guid).copied().unwrap_or_default();
+        if let Some((new_first, new_second)) = first_slot.swapped_with(second_slot) {
+            self.slots.insert(first_guid, new_first);
+            self.slots.insert(second_guid, new_second);
+            self.push_list(group_id);
+        }
+        PartyOutcome::Ran
+    }
+
     /// Hand the lead to `leader` and announce it to every member, as the Module does, before the
     /// list.
     fn set_leader(&mut self, group_id: u64, leader: u64) {
@@ -11167,6 +11251,7 @@ impl FakeParty {
     }
 
     fn push_list(&mut self, group_id: u64) {
+        *self.revisions.entry(group_id).or_insert(0) += 1;
         let recipients: Vec<u64> = self
             .members
             .iter()

@@ -3250,3 +3250,367 @@ fn a_guid_kick_removes_a_member_no_shard_can_name() {
     drop(client);
     let _ = server.join();
 }
+/// The `realm_group_op` argument slots [`party::Op::ChangeSubgroup`] and [`party::Op::SwapSubgroup`]
+/// declare: the mover in `target_guid` and the destination Subgroup in `arg_a` for a move, one
+/// member in `target_guid` and the other in `arg_c` for a swap.
+#[test]
+fn subgroup_ops_reach_realm_core_in_their_declared_argument_slots() {
+    use lyracore_shared::group::realm_op;
+    let (realm, world, instances, _calls) = party_topology();
+    form_split_party(&world, &instances);
+    party::run(world.as_ref(), 7, GINGER, party::Op::RaidConvert).unwrap();
+
+    party::run(
+        world.as_ref(),
+        7,
+        GINGER,
+        party::Op::ChangeSubgroup {
+            target: VIM,
+            subgroup: 2,
+        },
+    )
+    .expect("the leader moves Vim");
+    party::run(
+        world.as_ref(),
+        7,
+        GINGER,
+        party::Op::SwapSubgroup {
+            first: GINGER,
+            second: VIM,
+        },
+    )
+    .expect("the leader swaps with Vim");
+
+    let ops = realm.party.lock().unwrap().ops.clone();
+    assert_eq!(
+        ops[ops.len() - 2..],
+        [
+            (realm_op::CHANGE_SUBGROUP, GINGER, VIM, 2, 0, 0),
+            (realm_op::SWAP_SUBGROUP, GINGER, GINGER, 0, 0, VIM),
+        ]
+    );
+}
+
+/// **AC 1, 9: the leader moves a member to another Subgroup; every shard mirrors the new slot with
+/// its Assistant bit kept, and the Roster Revision advances.**
+#[test]
+fn a_leader_moves_a_member_to_another_subgroup_and_every_shard_mirrors_the_slot() {
+    let (realm, world, instances, _calls) = party_topology();
+    form_split_party(&world, &instances);
+    party::run(world.as_ref(), 7, GINGER, party::Op::RaidConvert).unwrap();
+    realm
+        .party
+        .lock()
+        .unwrap()
+        .slots
+        .insert(VIM, RaidSlot::new(0, true).unwrap());
+    let revision_before = realm.group_roster(GINGER).unwrap().unwrap().roster_revision;
+
+    let outcome = party::run(
+        world.as_ref(),
+        7,
+        GINGER,
+        party::Op::ChangeSubgroup {
+            target: VIM,
+            subgroup: 2,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(outcome, PartyOutcome::Ran);
+    let authority = realm.group_roster(GINGER).unwrap().unwrap();
+    assert!(
+        authority.roster_revision > revision_before,
+        "a Subgroup move advances the Roster Revision"
+    );
+    let moved = authority.members.iter().find(|m| m.guid == VIM).unwrap();
+    assert_eq!(
+        moved.slot,
+        RaidSlot::new(2, true).unwrap(),
+        "the Assistant bit survives the move"
+    );
+    for (name, shard) in [("world", &world), ("instances", &instances)] {
+        assert_eq!(
+            shard.mirror.lock().unwrap().clone(),
+            vec![authority.clone()],
+            "{name} must mirror Vim's new Subgroup"
+        );
+    }
+}
+
+/// Moving into the Subgroup a member already holds pushes no mirror to either shard.
+#[test]
+fn changing_into_the_same_subgroup_pushes_no_mirror() {
+    let (_realm, world, instances, calls) = party_topology();
+    form_split_party(&world, &instances);
+    party::run(world.as_ref(), 7, GINGER, party::Op::RaidConvert).unwrap();
+    let mirrors_before = mirror_calls(&calls);
+
+    let outcome = party::run(
+        world.as_ref(),
+        7,
+        GINGER,
+        party::Op::ChangeSubgroup {
+            target: VIM,
+            subgroup: 0,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(outcome, PartyOutcome::Ran, "Vim already holds Subgroup 0");
+    assert_eq!(mirror_calls(&calls), mirrors_before);
+}
+
+/// **AC 2: an Assistant may move a member; a plain member may not, and nothing changes.**
+#[test]
+fn an_assistant_can_move_a_member_a_plain_member_cannot() {
+    let (realm, world, instances, _calls) = party_topology();
+    form_split_party(&world, &instances);
+    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(TRIN)).unwrap();
+    party::run(world.as_ref(), 9, TRIN, party::Op::Accept).unwrap();
+    party::run(world.as_ref(), 7, GINGER, party::Op::RaidConvert).unwrap();
+    realm
+        .party
+        .lock()
+        .unwrap()
+        .slots
+        .insert(VIM, RaidSlot::new(0, true).unwrap());
+
+    let outcome = party::run(
+        instances.as_ref(),
+        8,
+        VIM,
+        party::Op::ChangeSubgroup {
+            target: GINGER,
+            subgroup: 3,
+        },
+    )
+    .unwrap();
+    assert_eq!(outcome, PartyOutcome::Ran, "an Assistant may move a member");
+    assert_eq!(
+        realm
+            .group_roster(GINGER)
+            .unwrap()
+            .unwrap()
+            .members
+            .iter()
+            .find(|m| m.guid == GINGER)
+            .unwrap()
+            .slot,
+        RaidSlot::new(3, false).unwrap()
+    );
+
+    let before = realm.group_roster(GINGER).unwrap().unwrap();
+    let outcome = party::run(
+        world.as_ref(),
+        9,
+        TRIN,
+        party::Op::ChangeSubgroup {
+            target: GINGER,
+            subgroup: 4,
+        },
+    )
+    .unwrap();
+    assert_eq!(outcome, PartyOutcome::Refused(GroupRefusal::NotLeader));
+    assert_eq!(
+        realm.group_roster(GINGER).unwrap().unwrap(),
+        before,
+        "a plain member's attempt changes nothing"
+    );
+}
+
+/// **AC 4: a Raid has only 8 Subgroups, 0 to 7.**
+#[test]
+fn a_move_to_subgroup_eight_is_refused() {
+    let (realm, world, instances, _calls) = party_topology();
+    form_split_party(&world, &instances);
+    party::run(world.as_ref(), 7, GINGER, party::Op::RaidConvert).unwrap();
+    let before = realm.group_roster(GINGER).unwrap().unwrap();
+
+    let outcome = party::run(
+        world.as_ref(),
+        7,
+        GINGER,
+        party::Op::ChangeSubgroup {
+            target: VIM,
+            subgroup: 8,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        outcome,
+        PartyOutcome::Refused(GroupRefusal::InvalidSubgroup)
+    );
+    assert_eq!(realm.group_roster(GINGER).unwrap().unwrap(), before);
+}
+
+/// **AC 5: in a Party, both ops are refused and change nothing.**
+#[test]
+fn subgroup_ops_in_a_party_are_refused_and_change_nothing() {
+    let (realm, world, instances, _calls) = party_topology();
+    form_split_party(&world, &instances);
+    let before = realm.group_roster(GINGER).unwrap().unwrap();
+
+    let change = party::run(
+        world.as_ref(),
+        7,
+        GINGER,
+        party::Op::ChangeSubgroup {
+            target: VIM,
+            subgroup: 1,
+        },
+    )
+    .unwrap();
+    let swap = party::run(
+        world.as_ref(),
+        7,
+        GINGER,
+        party::Op::SwapSubgroup {
+            first: GINGER,
+            second: VIM,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(change, PartyOutcome::Refused(GroupRefusal::NotRaid));
+    assert_eq!(swap, PartyOutcome::Refused(GroupRefusal::NotRaid));
+    assert_eq!(realm.group_roster(GINGER).unwrap().unwrap(), before);
+}
+
+/// A Raid whose Subgroup 0 and Subgroup 1 each hold 5 members: `GINGER` leads Subgroup 0,
+/// `VIM` leads Subgroup 1. AC 3 and AC 6 need Subgroups already full, which is a different
+/// scenario from a member joining one with room.
+fn seed_raid_with_two_full_subgroups(realm: &InMemoryStore) {
+    let mut p = realm.party.lock().unwrap();
+    let group_id = 20;
+    p.next_group_id = group_id;
+    p.groups.push((group_id, GINGER, 3, 2, 0));
+    for guid in [GINGER, 101, 102, 103, 104] {
+        p.members.push((group_id, guid));
+    }
+    for guid in [VIM, 105, 106, 107, 108] {
+        p.members.push((group_id, guid));
+        p.slots.insert(guid, RaidSlot::new(1, false).unwrap());
+    }
+    p.raids.push(group_id);
+}
+
+/// **AC 3: a move into a full Subgroup is refused, changes nothing, and pushes no mirror.**
+#[test]
+fn a_move_into_a_full_subgroup_is_refused() {
+    let (realm, world, _instances, calls) = party_topology();
+    seed_raid_with_two_full_subgroups(&realm);
+    let before = realm.group_roster(GINGER).unwrap().unwrap();
+    let mirrors_before = mirror_calls(&calls);
+
+    let outcome = party::run(
+        world.as_ref(),
+        7,
+        GINGER,
+        party::Op::ChangeSubgroup {
+            target: GINGER,
+            subgroup: 1,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(outcome, PartyOutcome::Refused(GroupRefusal::SubgroupFull));
+    assert_eq!(realm.group_roster(GINGER).unwrap().unwrap(), before);
+    assert_eq!(mirror_calls(&calls), mirrors_before);
+}
+
+/// **AC 6: swapping two members of two full Subgroups needs no capacity Gate, and sends exactly
+/// one list per member.**
+#[test]
+fn swapping_members_of_two_full_subgroups_succeeds_and_sends_one_list_per_member() {
+    let (realm, world, instances, _calls) = party_topology();
+    seed_raid_with_two_full_subgroups(&realm);
+    let events_before = realm.party.lock().unwrap().events.len();
+
+    let outcome = party::run(
+        world.as_ref(),
+        7,
+        GINGER,
+        party::Op::SwapSubgroup {
+            first: GINGER,
+            second: VIM,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(outcome, PartyOutcome::Ran);
+    let authority = realm.group_roster(GINGER).unwrap().unwrap();
+    let subgroup_of = |guid| {
+        authority
+            .members
+            .iter()
+            .find(|m| m.guid == guid)
+            .unwrap()
+            .slot
+            .subgroup()
+    };
+    assert_eq!(subgroup_of(GINGER), 1);
+    assert_eq!(subgroup_of(VIM), 0);
+    let listed = realm.party.lock().unwrap().events[events_before..]
+        .iter()
+        .filter(|(_, kind)| *kind == lyracore_shared::group::event_kind::LIST)
+        .count();
+    assert_eq!(listed, 10, "one list per member, not two moves' worth");
+    for (name, shard) in [("world", &world), ("instances", &instances)] {
+        assert_eq!(
+            shard.mirror.lock().unwrap().clone(),
+            vec![authority.clone()],
+            "{name} must mirror both swapped Subgroups"
+        );
+    }
+}
+
+/// **AC 7: swapping two members of one Subgroup succeeds and pushes no mirror.**
+#[test]
+fn swapping_members_of_one_subgroup_pushes_no_mirror() {
+    let (_realm, world, instances, calls) = party_topology();
+    form_split_party(&world, &instances);
+    party::run(world.as_ref(), 7, GINGER, party::Op::RaidConvert).unwrap();
+    let mirrors_before = mirror_calls(&calls);
+
+    let outcome = party::run(
+        world.as_ref(),
+        7,
+        GINGER,
+        party::Op::SwapSubgroup {
+            first: GINGER,
+            second: VIM,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        outcome,
+        PartyOutcome::Ran,
+        "cmangos answers a same-Subgroup swap as success"
+    );
+    assert_eq!(mirror_calls(&calls), mirrors_before);
+}
+
+/// **AC 8: a name outside the actor's OWN roster resolves to nothing, even when a Character with
+/// that name exists elsewhere on the realm.** cmangos matches Change/Swap Subgroup names against
+/// the member list alone (cm:GroupHandler.cpp:919-936), never realm-wide.
+#[test]
+fn resolve_roster_member_by_name_ignores_a_namesake_outside_the_roster() {
+    let (_realm, world, instances, _calls) = party_topology();
+    form_split_party(&world, &instances);
+
+    let outside = party::resolve_roster_member_by_name(world.as_ref(), GINGER, "Dormant").unwrap();
+    assert_eq!(
+        outside, None,
+        "Dormant exists on `world` but never joined Ginger's party"
+    );
+
+    let inside = party::resolve_roster_member_by_name(world.as_ref(), GINGER, "vim").unwrap();
+    assert_eq!(
+        inside,
+        Some(VIM),
+        "a roster member resolves, case-insensitively"
+    );
+}

@@ -220,6 +220,16 @@ pub(super) fn handle_social<St: WorldStore + ?Sized>(
             run_answering_refusal(tx, store, conn, party::Op::Uninvite(c.guid.guid()))?
         }
         ClientOpcodeMessage::CMSG_GROUP_UNINVITE_GUID(_) => {}
+        // `CMSG_GROUP_CHANGE_SUB_GROUP` / `CMSG_GROUP_SWAP_SUB_GROUP`: the leader or an Assistant
+        // drags a raid member to another Subgroup, or swaps two. No ack packet: the
+        // `SMSG_GROUP_LIST` roster relay is the client-visible result, and cmangos is silent for
+        // every refusal here (cm:GroupHandler.cpp:492-525, cm:GroupHandler.cpp:901-944).
+        ClientOpcodeMessage::CMSG_GROUP_CHANGE_SUB_GROUP(c) => {
+            change_subgroup(store, conn, &c.name, c.group_number)?
+        }
+        ClientOpcodeMessage::CMSG_GROUP_SWAP_SUB_GROUP(c) => {
+            swap_subgroup(store, conn, &c.name, &c.swap_with_name)?
+        }
         other => return Ok(Some(other)),
     }
     Ok(None)
@@ -303,6 +313,61 @@ fn run_unanswered<St: WorldStore + ?Sized>(
     Ok(())
 }
 
+/// `CMSG_GROUP_CHANGE_SUB_GROUP`: the leader or an Assistant moves `name` to `subgroup`. The name
+/// resolves against the actor's OWN roster rather than realm-wide, so a namesake standing outside
+/// the Raid cannot be reached — the same avoided-homonym rule cmangos applies to Swap Subgroup
+/// alone (cm:GroupHandler.cpp:919-936), extended here to both opcodes.
+fn change_subgroup<St: WorldStore + ?Sized>(
+    store: &St,
+    conn: &WorldConn,
+    name: &str,
+    subgroup: u8,
+) -> Result<()> {
+    let Some(me) = self_guid(conn) else {
+        return Ok(());
+    };
+    match party::resolve_roster_member_by_name(store, me, name)? {
+        Some(target) => run_unanswered(store, conn, party::Op::ChangeSubgroup { target, subgroup }),
+        None => {
+            log::debug!(
+                "world: group_change_sub_group named a Character outside the caller's own \
+                 roster (account {})",
+                conn.account_id
+            );
+            Ok(())
+        }
+    }
+}
+
+/// `CMSG_GROUP_SWAP_SUB_GROUP`: the leader or an Assistant swaps `name` and `swap_with_name`. Same
+/// roster-only name resolution as [`change_subgroup`] (cm:GroupHandler.cpp:901-944,
+/// cm:GroupHandler.cpp:919-936), with both names resolved against the SAME roster read so the
+/// pair cannot straddle two different snapshots of it.
+fn swap_subgroup<St: WorldStore + ?Sized>(
+    store: &St,
+    conn: &WorldConn,
+    name: &str,
+    swap_with_name: &str,
+) -> Result<()> {
+    let Some(me) = self_guid(conn) else {
+        return Ok(());
+    };
+    let (first, second) = party::resolve_roster_members_by_name(store, me, name, swap_with_name)?;
+    match (first, second) {
+        (Some(first), Some(second)) => {
+            run_unanswered(store, conn, party::Op::SwapSubgroup { first, second })
+        }
+        _ => {
+            log::debug!(
+                "world: group_swap_sub_group named a Character outside the caller's own roster \
+                 (account {})",
+                conn.account_id
+            );
+            Ok(())
+        }
+    }
+}
+
 /// The session's in-world character guid, or `None` at character select. Party ops need it for two
 /// reasons that only coincide on a single-database gateway: it is the CHARACTER realm-core acts as
 /// (realm-core has no live entity to derive one from), and it is the character the module's
@@ -329,10 +394,11 @@ fn party_result(outcome: PartyOutcome) -> PartyResult {
 }
 
 /// Map each [`GroupRefusal`] onto the vanilla `PartyResult` the client renders ("X is already in a
-/// group" etc.). Vanilla has no code for an offline or self-named target, a stale invite, a raid op
-/// in a Party, or a temporarily unavailable actor, so those read as BadPlayerName — a visible,
-/// non-crashing line. The intent claim never reaches a client; it is listed so a new Refusal cannot
-/// be forgotten here.
+/// group" etc.). Vanilla has no code for an offline or self-named target, a stale invite, a raid
+/// op in a Party, a temporarily unavailable actor, or either Subgroup move Refusal, since cmangos
+/// answers a refused Change or Swap Subgroup with silence rather than a code, so all of those read
+/// as BadPlayerName, a visible line that does not crash the client. The intent claim never reaches
+/// a client; it is listed so a new Refusal cannot be forgotten here.
 fn party_result_for(refusal: GroupRefusal) -> PartyResult {
     match refusal {
         GroupRefusal::AlreadyInGroup => PartyResult::AlreadyInGroup,
@@ -352,7 +418,9 @@ fn party_result_for(refusal: GroupRefusal) -> PartyResult {
         | GroupRefusal::IntentAlreadyClaimed
         | GroupRefusal::ActionSuppressed
         | GroupRefusal::NotRaid
-        | GroupRefusal::TargetIsSelf => PartyResult::BadPlayerName,
+        | GroupRefusal::TargetIsSelf
+        | GroupRefusal::InvalidSubgroup
+        | GroupRefusal::SubgroupFull => PartyResult::BadPlayerName,
     }
 }
 

@@ -109,6 +109,52 @@ impl RaidSlot {
             self.0 & !Self::ASSISTANT
         })
     }
+
+    /// The result of moving this Raid Slot's member to `destination` Subgroup
+    /// (cm:GroupHandler.cpp:492-525, cm:Group.cpp:1203-1251), shared by the Module and the Gateway
+    /// Fake so cmangos's capacity-and-destination rule lives in exactly one place. `destination_size`
+    /// counts the OTHER members already in `destination` — the mover excluded, since moving into the
+    /// Subgroup you already hold can never be blocked by your own presence there.
+    ///
+    /// `Err(InvalidSubgroup)` for a Subgroup of 8 or more. `Ok(None)` is the same-Subgroup no-op
+    /// (cm:Group.cpp:1234), which succeeds regardless of `destination_size`. `Err(SubgroupFull)` when
+    /// `destination_size` already holds [`SUBGROUP_SIZE`] members. Otherwise `Ok(Some(slot))` is the
+    /// mover's new Raid Slot, its Assistant bit kept.
+    pub fn moved_to_subgroup(
+        self,
+        destination: u8,
+        destination_size: usize,
+    ) -> Result<Option<Self>, GroupRefusal> {
+        if destination >= RAID_SUBGROUPS {
+            return Err(GroupRefusal::InvalidSubgroup);
+        }
+        if self.subgroup() == destination {
+            return Ok(None);
+        }
+        if destination_size >= SUBGROUP_SIZE {
+            return Err(GroupRefusal::SubgroupFull);
+        }
+        Ok(Some(Self::new(destination, self.is_assistant()).expect(
+            "destination is below RAID_SUBGROUPS, checked above",
+        )))
+    }
+
+    /// This Raid Slot and `other` after a Swap Subgroup between them (cm:GroupHandler.cpp:901-944).
+    /// `None` when both already sit in the same Subgroup — cmangos still answers that as success
+    /// (cm:GroupHandler.cpp:939), it just has nothing to swap. One atomic swap can never overfill a
+    /// Subgroup, so unlike [`moved_to_subgroup`](Self::moved_to_subgroup) this needs no capacity
+    /// argument.
+    pub fn swapped_with(self, other: Self) -> Option<(Self, Self)> {
+        if self.subgroup() == other.subgroup() {
+            return None;
+        }
+        Some((
+            Self::new(other.subgroup(), self.is_assistant())
+                .expect("a stored Subgroup stays valid"),
+            Self::new(self.subgroup(), other.is_assistant())
+                .expect("a stored Subgroup stays valid"),
+        ))
+    }
 }
 
 /// Group-event kinds (`game_group_event.kind`), what SMSG the gateway relays. Every producer shares
@@ -169,10 +215,12 @@ pub mod event_kind {
 /// - [`RAID_CONVERT`] — `actor_guid` alone.
 /// - [`SET_LEADER`] — `target_guid` is the new leader.
 /// - [`SET_ASSISTANT`] — `target_guid` is the member, `arg_a` is 1 to promote and 0 to demote.
+/// - [`CHANGE_SUBGROUP`] — `target_guid` is the member to move, `arg_a` is the destination Subgroup.
+/// - [`SWAP_SUBGROUP`] — `target_guid` is one member, `arg_c` the other.
 ///
-/// `arg_c` is a `u64` for an op that needs a second guid or a wide value. It is reserved for the
-/// subgroup swap's second member, the minimap ping's `y` and the roll's maximum. Every op above
-/// sends 0 there.
+/// `arg_c` is a `u64` for an op that needs a second guid or a wide value. Beyond the subgroup swap's
+/// second member, it is reserved for the minimap ping's `y` and the roll's maximum. Every op above
+/// that does not name it sends 0 there.
 pub mod realm_op {
     /// `CMSG_GROUP_INVITE` — `actor_guid`, ungrouped, the leader or an Assistant, invites
     /// `target_guid`.
@@ -194,6 +242,12 @@ pub mod realm_op {
     pub const SET_LEADER: u8 = 7;
     /// `CMSG_GROUP_ASSISTANT_LEADER` — Raid leader `actor_guid` promotes or demotes an Assistant.
     pub const SET_ASSISTANT: u8 = 8;
+    /// `CMSG_GROUP_CHANGE_SUB_GROUP` — the leader or an Assistant moves `target_guid` to Subgroup
+    /// `arg_a`.
+    pub const CHANGE_SUBGROUP: u8 = 9;
+    /// `CMSG_GROUP_SWAP_SUB_GROUP` — the leader or an Assistant swaps the Subgroups of `target_guid`
+    /// and `arg_c`.
+    pub const SWAP_SUBGROUP: u8 = 10;
 }
 
 /// The group op one `game_bot_invite_intent` row asks the Gateway to run.
@@ -263,10 +317,14 @@ pub enum GroupRefusal {
     NotRaid,
     /// A leader named itself as the new leader or as an Assistant (vm:GroupHandler.cpp:311, 554).
     TargetIsSelf,
+    /// A Change Subgroup or Swap Subgroup destination named a Subgroup outside 0 to 7.
+    InvalidSubgroup,
+    /// A Change Subgroup destination already holds [`SUBGROUP_SIZE`] members.
+    SubgroupFull,
 }
 
 impl GroupRefusal {
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 20] = [
         Self::ActorUnavailable,
         Self::InviteSelf,
         Self::NoSuchPlayer,
@@ -285,6 +343,8 @@ impl GroupRefusal {
         Self::WrongFaction,
         Self::NotRaid,
         Self::TargetIsSelf,
+        Self::InvalidSubgroup,
+        Self::SubgroupFull,
     ];
 
     pub fn as_tag(self) -> &'static str {
@@ -307,6 +367,8 @@ impl GroupRefusal {
             Self::WrongFaction => "group:wrong_faction",
             Self::NotRaid => "group:not_raid",
             Self::TargetIsSelf => "group:target_is_self",
+            Self::InvalidSubgroup => "group:invalid_subgroup",
+            Self::SubgroupFull => "group:subgroup_full",
         }
     }
 
@@ -503,6 +565,60 @@ mod tests {
         }
     }
 
+    /// AC 3, 4: a full destination Subgroup refuses, an out-of-range one refuses, and the
+    /// Assistant bit survives an accepted move.
+    #[test]
+    fn a_subgroup_move_refuses_a_full_or_out_of_range_destination() {
+        let mover = RaidSlot::new(0, true).unwrap();
+        assert_eq!(
+            mover.moved_to_subgroup(2, 4),
+            Ok(Some(RaidSlot::new(2, true).unwrap())),
+            "room in the destination, the Assistant bit rides along"
+        );
+        assert_eq!(
+            mover.moved_to_subgroup(2, 5),
+            Err(GroupRefusal::SubgroupFull),
+            "AC 3: five members already fill the destination"
+        );
+        assert_eq!(
+            mover.moved_to_subgroup(8, 0),
+            Err(GroupRefusal::InvalidSubgroup),
+            "AC 4: a raid has only 8 Subgroups, 0 to 7"
+        );
+    }
+
+    /// cm:Group.cpp:1234: moving to your own Subgroup succeeds and changes nothing, even when that
+    /// Subgroup is already full — the mover is presumably one of the five already counted there.
+    #[test]
+    fn a_subgroup_move_to_the_same_subgroup_is_a_no_op() {
+        let mover = RaidSlot::new(3, false).unwrap();
+        assert_eq!(mover.moved_to_subgroup(3, 5), Ok(None));
+    }
+
+    /// AC 6: a swap between two full Subgroups needs no capacity Gate — the pair trade places
+    /// atomically, so neither Subgroup ever holds six members mid-swap.
+    #[test]
+    fn a_subgroup_swap_needs_no_capacity_gate() {
+        let first = RaidSlot::new(0, true).unwrap();
+        let second = RaidSlot::new(1, false).unwrap();
+        assert_eq!(
+            first.swapped_with(second),
+            Some((
+                RaidSlot::new(1, true).unwrap(),
+                RaidSlot::new(0, false).unwrap()
+            )),
+            "each Subgroup exchanges, each Assistant bit stays with its member"
+        );
+    }
+
+    /// AC 7: cm:GroupHandler.cpp:939 — two members already in one Subgroup swap to a no-op.
+    #[test]
+    fn a_subgroup_swap_within_one_subgroup_is_a_no_op() {
+        let first = RaidSlot::new(4, true).unwrap();
+        let second = RaidSlot::new(4, false).unwrap();
+        assert_eq!(first.swapped_with(second), None);
+    }
+
     /// Pinned against the grammar, not recomputed: kind `1` in the head, and each member's flags
     /// byte in decimal, `0x81` = 129 for an Assistant in Subgroup 1.
     #[test]
@@ -602,6 +718,8 @@ mod tests {
         assert_eq!(realm_op::RAID_CONVERT, 6);
         assert_eq!(realm_op::SET_LEADER, 7);
         assert_eq!(realm_op::SET_ASSISTANT, 8);
+        assert_eq!(realm_op::CHANGE_SUBGROUP, 9);
+        assert_eq!(realm_op::SWAP_SUBGROUP, 10);
         let all = [
             realm_op::INVITE,
             realm_op::ACCEPT,
@@ -612,6 +730,8 @@ mod tests {
             realm_op::RAID_CONVERT,
             realm_op::SET_LEADER,
             realm_op::SET_ASSISTANT,
+            realm_op::CHANGE_SUBGROUP,
+            realm_op::SWAP_SUBGROUP,
         ];
         let mut sorted = all.to_vec();
         sorted.sort_unstable();
