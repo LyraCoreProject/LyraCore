@@ -2967,11 +2967,11 @@ fn auction_fixture_notice(
     Ok(())
 }
 
-/// Verify the real realm reducer committed exact settlement rows in a prior transaction. Durable
-/// state only — no Auction Notice check. Auction Notices are a one-shot, TTL-reaped relay (see
-/// `gc.rs`), so [`debug_verify_auction_buyout_notices_fixture`] and
-/// [`debug_verify_auction_buyout_new_bid_notice_fixture`] check those, called right after the
-/// decide call that fires each, not from here.
+/// Verify the real realm reducer committed exact settlement rows in a prior transaction, including
+/// every Auction Notice. Auction Notices are a one-shot, TTL-reaped relay (see `gc.rs`); the
+/// durable test disarms the reaper schedule before staging this fixture, so nothing claims a
+/// notice row while this test runs and this check is safe to call whenever the test wants it,
+/// regardless of what ran before it.
 #[cfg(feature = "debug_reducers")]
 #[reducer]
 pub fn debug_verify_auction_buyout_fixture(ctx: &ReducerContext) -> Result<(), String> {
@@ -3078,8 +3078,46 @@ pub fn debug_verify_auction_buyout_fixture(ctx: &ReducerContext) -> Result<(), S
         return Err("seller proceeds mail changed".to_string());
     }
 
+    auction_fixture_notice(
+        ctx,
+        BUYOUT_FIXTURE_DISPLACED_GUID,
+        auction_notice::OUTBID,
+        HOUSE,
+        BUYOUT_FIXTURE_AUCTION_ID,
+        item.entry,
+        item.random_property_id,
+        201,
+        11, // vanilla minimum raise on a 201 bid: 5% rounded up
+        BUYOUT_FIXTURE_DISPLACED_GUID,
+    )?;
+    auction_fixture_notice(
+        ctx,
+        BUYOUT_FIXTURE_WINNER_GUID,
+        auction_notice::WON,
+        HOUSE,
+        BUYOUT_FIXTURE_AUCTION_ID,
+        item.entry,
+        item.random_property_id,
+        0,
+        25, // vanilla minimum raise on a 500 bid: 5% rounded up
+        BUYOUT_FIXTURE_WINNER_GUID,
+    )?;
+    auction_fixture_notice(
+        ctx,
+        BUYOUT_FIXTURE_SELLER_GUID,
+        auction_notice::SOLD,
+        HOUSE,
+        BUYOUT_FIXTURE_AUCTION_ID,
+        item.entry,
+        item.random_property_id,
+        500,
+        25, // vanilla minimum raise on a 500 bid: 5% rounded up
+        0,
+    )?;
+
     // RemainActive coverage: an ordinary raise on a fresh listing settles nothing and displaces
-    // nobody, so it must record the new bid and mail nobody.
+    // nobody, so it must record the new bid, mail nobody, and write exactly one New Bid notice to
+    // the owner.
     let new_bid_auction = ctx
         .db
         .game_auction()
@@ -3103,78 +3141,19 @@ pub fn debug_verify_auction_buyout_fixture(ctx: &ReducerContext) -> Result<(), S
             "a fresh bid with no displaced bidder must not mail its own bidder".to_string(),
         );
     }
-    Ok(())
-}
-
-/// Verify the Outbid, Won and Sold notices the buyout decide call fired. Call this immediately
-/// after that call, before the unrelated RemainActive decide call — see
-/// [`debug_verify_auction_buyout_fixture`] for why.
-#[cfg(feature = "debug_reducers")]
-#[reducer]
-pub fn debug_verify_auction_buyout_notices_fixture(ctx: &ReducerContext) -> Result<(), String> {
-    crate::helpers::require_operator(ctx)?;
-    const HOUSE: u32 = 1;
-    const ITEM_ENTRY: u32 = 509_0050;
-    const RANDOM_PROPERTY_ID: u32 = 117;
-    auction_fixture_notice(
-        ctx,
-        BUYOUT_FIXTURE_DISPLACED_GUID,
-        auction_notice::OUTBID,
-        HOUSE,
-        BUYOUT_FIXTURE_AUCTION_ID,
-        ITEM_ENTRY,
-        RANDOM_PROPERTY_ID,
-        201,
-        11, // vanilla minimum raise on a 201 bid: 5% rounded up
-        BUYOUT_FIXTURE_DISPLACED_GUID,
-    )?;
-    auction_fixture_notice(
-        ctx,
-        BUYOUT_FIXTURE_WINNER_GUID,
-        auction_notice::WON,
-        HOUSE,
-        BUYOUT_FIXTURE_AUCTION_ID,
-        ITEM_ENTRY,
-        RANDOM_PROPERTY_ID,
-        0,
-        25, // vanilla minimum raise on a 500 bid: 5% rounded up
-        BUYOUT_FIXTURE_WINNER_GUID,
-    )?;
-    auction_fixture_notice(
-        ctx,
-        BUYOUT_FIXTURE_SELLER_GUID,
-        auction_notice::SOLD,
-        HOUSE,
-        BUYOUT_FIXTURE_AUCTION_ID,
-        ITEM_ENTRY,
-        RANDOM_PROPERTY_ID,
-        500,
-        25, // vanilla minimum raise on a 500 bid: 5% rounded up
-        0,
-    )?;
-    Ok(())
-}
-
-/// Verify the New Bid notice the RemainActive decide call fired. Call this immediately after that
-/// call — see [`debug_verify_auction_buyout_fixture`] for why.
-#[cfg(feature = "debug_reducers")]
-#[reducer]
-pub fn debug_verify_auction_buyout_new_bid_notice_fixture(
-    ctx: &ReducerContext,
-) -> Result<(), String> {
-    crate::helpers::require_operator(ctx)?;
     auction_fixture_notice(
         ctx,
         BUYOUT_FIXTURE_NEW_BID_SELLER_GUID,
         auction_notice::NEW_BID,
-        1,
+        HOUSE,
         BUYOUT_FIXTURE_NEW_BID_AUCTION_ID,
         BUYOUT_FIXTURE_NEW_BID_AUCTION_ID,
         0,
         60,
         3, // vanilla minimum raise on a 60 bid: 5% rounded up
         BUYOUT_FIXTURE_NEW_BID_BIDDER_GUID,
-    )
+    )?;
+    Ok(())
 }
 
 #[cfg(feature = "debug_reducers")]
@@ -3394,7 +3373,11 @@ pub fn debug_replay_auction_expiry_fixture(ctx: &ReducerContext) -> Result<(), S
     expire_active(&mut CtxExpiry { ctx }, EXPIRY_FIXTURE_UNSOLD_AUCTION_ID)
 }
 
-/// Verify the scheduler committed the exact bid-expiry mail and removed only active state.
+/// Verify the scheduler committed the exact bid-expiry mail, removed only active state, and fired
+/// every Auction Notice. Auction Notices are a one-shot, TTL-reaped relay (see `gc.rs`); the
+/// durable test disarms the reaper schedule before staging this fixture, so nothing claims a
+/// notice row while this test runs and this check is safe to call whenever the test wants it,
+/// regardless of what ran before it.
 #[cfg(feature = "debug_reducers")]
 #[reducer]
 pub fn debug_verify_auction_expiry_fixture(ctx: &ReducerContext) -> Result<(), String> {
@@ -3501,19 +3484,7 @@ pub fn debug_verify_auction_expiry_fixture(ctx: &ReducerContext) -> Result<(), S
     {
         return Err("unsold expiry return mail changed".to_string());
     }
-    Ok(())
-}
 
-/// Verify the Auction Notice relay rows the expiry settlement fired: Won/Sold for the priced
-/// auction, Expired for the unsold one. Auction Notices are a one-shot live relay (the same TTL-reap
-/// shape as `game_whisper_event`), so call this once, immediately after the scheduled expiry
-/// settles — a slower step first (a republish, another wait) lets the reaper legitimately claim the
-/// row before this reads it, which fails the read without meaning the settlement was wrong.
-#[cfg(feature = "debug_reducers")]
-#[reducer]
-pub fn debug_verify_auction_expiry_notices_fixture(ctx: &ReducerContext) -> Result<(), String> {
-    crate::helpers::require_operator(ctx)?;
-    const HOUSE: u32 = 1;
     auction_fixture_notice(
         ctx,
         EXPIRY_FIXTURE_WINNER_GUID,
@@ -3597,13 +3568,31 @@ const LEGACY_MAIL_SOLD_RECEIPT_AUCTION_ID: u32 = 509_0080;
 const LEGACY_MAIL_SOLD_RECEIPT_ITEM_ENTRY: u32 = 509_0081;
 #[cfg(feature = "debug_reducers")]
 const LEGACY_MAIL_SOLD_RECEIPT_HOUSE: u32 = 1;
+// The same seller has two other receipts on file: a refused listing (the `auction_id == 0`
+// sentinel — excluded outright, whatever its proceeds) and a second real listing whose price range
+// could never have paid out the Sold mail's money (excluded by `receipt_could_pay_out`). Both use a
+// house the repair must never select, so picking either fails the test loudly instead of quietly.
+#[cfg(feature = "debug_reducers")]
+const LEGACY_MAIL_REFUSED_RECEIPT_OPERATION_ID: u64 = 509_0082;
+#[cfg(feature = "debug_reducers")]
+const LEGACY_MAIL_REFUSED_RECEIPT_ITEM_ENTRY: u32 = 509_0083;
+#[cfg(feature = "debug_reducers")]
+const LEGACY_MAIL_DECOY_RECEIPT_OPERATION_ID: u64 = 509_0084;
+#[cfg(feature = "debug_reducers")]
+const LEGACY_MAIL_DECOY_RECEIPT_AUCTION_ID: u32 = 509_0084;
+#[cfg(feature = "debug_reducers")]
+const LEGACY_MAIL_DECOY_RECEIPT_ITEM_ENTRY: u32 = 509_0085;
+#[cfg(feature = "debug_reducers")]
+const LEGACY_MAIL_WRONG_RECEIPT_HOUSE: u32 = 7;
 
 /// Stage `Character`-sender rows covering every outcome `repair_legacy_auction_mail` must tell
 /// apart: a legitimate "Auction won" row backed by a listing receipt, a legitimate "Auction sold"
-/// row likewise backed by a receipt, and two look-alikes a real player could send today — one with
-/// a cash-on-delivery price (the shape check alone rules this out), one without (only the missing
-/// receipt rules this out). Proves `repair_legacy_auction_mail` against real rows on a real
-/// database: it must convert the two legitimate rows and leave both look-alikes alone.
+/// row backed by one of three receipts on the same seller (a refused listing, a real listing that
+/// could not have paid this exact price, and the real listing that did), and two look-alikes a real
+/// player could send today — one with a cash-on-delivery price (the shape check alone rules this
+/// out), one without (only the missing receipt rules this out). Proves `repair_legacy_auction_mail`
+/// against real rows on a real database: it must convert the two legitimate rows, picking the one
+/// true receipt for Sold out of three candidates, and leave both look-alikes alone.
 #[cfg(feature = "debug_reducers")]
 #[reducer]
 pub fn debug_stage_legacy_auction_mail_fixture(ctx: &ReducerContext) -> Result<(), String> {
@@ -3639,6 +3628,12 @@ pub fn debug_stage_legacy_auction_mail_fixture(ctx: &ReducerContext) -> Result<(
     receipts
         .operation_id()
         .delete(LEGACY_MAIL_SOLD_RECEIPT_OPERATION_ID);
+    receipts
+        .operation_id()
+        .delete(LEGACY_MAIL_REFUSED_RECEIPT_OPERATION_ID);
+    receipts
+        .operation_id()
+        .delete(LEGACY_MAIL_DECOY_RECEIPT_OPERATION_ID);
 
     let now = ctx.timestamp.to_micros_since_unix_epoch();
     let receipt_template = AuctionOperationReceipt {
@@ -3677,6 +3672,27 @@ pub fn debug_stage_legacy_auction_mail_fixture(ctx: &ReducerContext) -> Result<(
         item_entry: LEGACY_MAIL_SOLD_RECEIPT_ITEM_ENTRY,
         random_property_id: 117,
         house: LEGACY_MAIL_SOLD_RECEIPT_HOUSE,
+        ..receipt_template
+    });
+    // A refused listing: the `auction_id == 0` sentinel, excluded outright regardless of price.
+    receipts.insert(AuctionOperationReceipt {
+        operation_id: LEGACY_MAIL_REFUSED_RECEIPT_OPERATION_ID,
+        auction_id: 0,
+        actor_guid: LEGACY_MAIL_SOLD_FIXTURE_RECIPIENT_GUID,
+        item_entry: LEGACY_MAIL_REFUSED_RECEIPT_ITEM_ENTRY,
+        house: LEGACY_MAIL_WRONG_RECEIPT_HOUSE,
+        ..receipt_template
+    });
+    // A second real listing: seller_proceeds(50, 10, 5) == 58 through seller_proceeds(200, 10, 5)
+    // == 200, a range that never reaches the Sold mail's money (485).
+    receipts.insert(AuctionOperationReceipt {
+        operation_id: LEGACY_MAIL_DECOY_RECEIPT_OPERATION_ID,
+        auction_id: LEGACY_MAIL_DECOY_RECEIPT_AUCTION_ID,
+        actor_guid: LEGACY_MAIL_SOLD_FIXTURE_RECIPIENT_GUID,
+        item_entry: LEGACY_MAIL_DECOY_RECEIPT_ITEM_ENTRY,
+        start_bid: 50,
+        buyout: 200,
+        house: LEGACY_MAIL_WRONG_RECEIPT_HOUSE,
         ..receipt_template
     });
 
@@ -3965,28 +3981,34 @@ struct LegacyRepairTarget {
 
 /// The second, and for Won/Sold the decisive, check: whether a durable listing receipt backs
 /// `mail`'s claim, and if so, the house and subject-item that receipt supplies. Every other legacy
-/// subject already cleared [`legacy_mail_matches_shape`]'s guid-0 tell, so it only needs a house;
-/// Won and Sold do not, because nothing in the mail row itself tells a real settlement apart from
-/// a same-titled player letter with an unrelated real sender:
+/// subject already cleared [`legacy_mail_matches_shape`]'s guid-0 tell, so a receipt only sharpens
+/// its house; Won and Sold do not have that tell, because nothing else in the mail row tells a
+/// real settlement apart from a same-titled player letter with an unrelated real sender:
 /// - Won: some receipt's actor is the mail's claimed sender (the seller who listed this exact
 ///   item) and its item entry and stack count match what the mail carries. A look-alike sent by an
 ///   uninvolved player never has a receipt naming them as that item's seller.
-/// - Sold: some receipt's actor is the mail's recipient (a seller who listed something, at some
-///   point) — proceeds mail carries no item of its own to cross-check, so this is the same
-///   assurance the vanilla format itself gives: a Sold letter's money is trusted, not re-derived.
-///   The subject also borrows the receipt's item, since the mail's own item fields are 0 (Sold
-///   never attaches the item); Outbid and the deferred bid refund carry no receipt to borrow from
-///   (a bidder is never a receipt's actor) and keep their subject's item at 0 — a known gap in what
-///   a legacy row can express, not a defect this repair can close.
+/// - Sold: some receipt's actor is the mail's recipient and its `auction_id` is not the
+///   refused-listing sentinel (0) — proceeds mail carries no item of its own to cross-check, so a
+///   refused listing's refund receipt is not a settlement at all. A seller can have more than one
+///   real receipt, so when more than one candidate remains, only the one whose listing terms could
+///   have produced this exact proceeds figure ([`receipt_could_pay_out`]) is trusted; if that still
+///   leaves more than one, or none, the row is left unmapped rather than guessed at. The subject
+///   also borrows the winning receipt's item, since the mail's own item fields are 0 (Sold never
+///   attaches the item).
+/// - Expired and Cancelled: some receipt's actor is the mail's recipient (the seller the item
+///   returned to) and its item entry and stack count match what the mail carries, the same
+///   assurance Won uses. A `Cancelled` (refused-listing) row's own receipt IS the `auction_id == 0`
+///   sentinel, so unlike Sold this does not exclude it.
 ///
-/// Won and Sold take their house from that same receipt rather than the recipient's own race
+/// Every subject above takes its house from that receipt rather than the recipient's own race
 /// (`house_for_faction_template`'s approach for a live sale,
 /// `crates/lyracore-shared/src/auction.rs`): Realm-core, the database this repair runs against,
 /// carries no Character rows at all, so a race lookup would always miss and fall back to the
 /// neutral house. A receipt's `house` is durable state recorded when the listing was created, so
-/// it needs no Character lookup and is correct on Realm-core too. The other four subjects have no
-/// receipt to draw from, so they keep the race lookup — correct wherever Character rows are
-/// present, falling back to the neutral house (7) only where they are not.
+/// it needs no Character lookup and is correct on Realm-core too. Expired and Cancelled fall back
+/// to the race lookup only if no receipt matches their item (a legacy row that predates receipts,
+/// say); Outbid and the deferred bid refund have no receipt to draw from at all — a bidder is never
+/// a receipt's actor — and always use the race lookup.
 #[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
 fn legacy_repair_authorization(
     ctx: &ReducerContext,
@@ -4011,16 +4033,51 @@ fn legacy_repair_authorization(
             })
         }
         AuctionMailAction::Successful => {
-            let receipt = ctx
+            let candidates: Vec<AuctionOperationReceipt> = ctx
                 .db
                 .game_auction_operation_receipt()
                 .by_actor()
                 .filter(&mail.recipient_guid)
-                .next()?;
+                .filter(|receipt| receipt.auction_id != 0)
+                .collect();
+            let receipt = match candidates.len() {
+                0 => return None,
+                1 => candidates.into_iter().next()?,
+                _ => {
+                    let mut paying = candidates
+                        .into_iter()
+                        .filter(|receipt| receipt_could_pay_out(receipt, mail.money));
+                    let only = paying.next()?;
+                    if paying.next().is_some() {
+                        return None; // still ambiguous — more than one listing could have paid this
+                    }
+                    only
+                }
+            };
             Some(LegacyRepairTarget {
                 house: receipt.house,
                 item_entry: receipt.item_entry,
                 random_property_id: receipt.random_property_id,
+            })
+        }
+        AuctionMailAction::Expired | AuctionMailAction::Cancelled => {
+            let house = ctx
+                .db
+                .game_auction_operation_receipt()
+                .by_actor()
+                .filter(&mail.recipient_guid)
+                .find(|receipt| {
+                    receipt.item_entry == mail.item_entry
+                        && receipt.item_stack_count == mail.item_stack_count
+                })
+                .map_or_else(
+                    || legacy_character_house(ctx, mail.recipient_guid),
+                    |r| r.house,
+                );
+            Some(LegacyRepairTarget {
+                house,
+                item_entry: mail.item_entry,
+                random_property_id: mail.random_property_id,
             })
         }
         _ => Some(LegacyRepairTarget {
@@ -4028,6 +4085,30 @@ fn legacy_repair_authorization(
             item_entry: mail.item_entry,
             random_property_id: mail.random_property_id,
         }),
+    }
+}
+
+/// Whether some winning price within `receipt`'s listed range (`start_bid..=buyout`, or
+/// `start_bid..` when `buyout` is 0 — an auction the vanilla protocol lets bidding pass without a
+/// cap) pays the seller exactly `money`. `seller_proceeds` is non-decreasing in price and never
+/// skips a whole copper as price climbs by one (its cut grows by at most one copper per copper of
+/// price), so every integer between its low and high ends is reachable — checking the two ends
+/// bounds every price in between too.
+#[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
+fn receipt_could_pay_out(receipt: &AuctionOperationReceipt, money: u32) -> bool {
+    let Some(low) = seller_proceeds(receipt.start_bid, receipt.deposit, receipt.consignment_rate)
+    else {
+        return false;
+    };
+    if money < low {
+        return false;
+    }
+    if receipt.buyout == 0 {
+        return true;
+    }
+    match seller_proceeds(receipt.buyout, receipt.deposit, receipt.consignment_rate) {
+        Some(high) => money <= high,
+        None => true, // the buyout's own proceeds overflow u32; some in-range price still might not
     }
 }
 
@@ -6663,12 +6744,9 @@ mod tests {
             "pub fn gw_auction_confirm_bid_refund(",
             "pub fn debug_stage_auction_buyout_fixture(",
             "pub fn debug_verify_auction_buyout_fixture(",
-            "pub fn debug_verify_auction_buyout_notices_fixture(",
-            "pub fn debug_verify_auction_buyout_new_bid_notice_fixture(",
             "pub fn debug_stage_auction_expiry_fixture(",
             "pub fn debug_replay_auction_expiry_fixture(",
             "pub fn debug_verify_auction_expiry_fixture(",
-            "pub fn debug_verify_auction_expiry_notices_fixture(",
             "pub fn debug_stage_legacy_auction_mail_fixture(",
             "pub fn debug_verify_legacy_auction_mail_repaired(",
         ] {
