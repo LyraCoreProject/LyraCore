@@ -129,6 +129,7 @@ pub mod death_condition_type;
 pub mod debug_accept_quest_reducer;
 pub mod debug_add_threat_reducer;
 pub mod debug_admit_sessionless_action_reducer;
+pub mod debug_age_mail_fixture_reducer;
 pub mod debug_apply_damage_reducer;
 pub mod debug_apply_lethal_damage_floor_fixture_reducer;
 pub mod debug_arm_instance_tick_reducer;
@@ -161,6 +162,7 @@ pub mod debug_compute_spell_reducer;
 pub mod debug_compute_swing_reducer;
 pub mod debug_create_fixture_instance_reducer;
 pub mod debug_delete_character_reducer;
+pub mod debug_deliver_mail_fixture_reducer;
 pub mod debug_disarm_instance_tick_reducer;
 pub mod debug_disenchant_reducer;
 pub mod debug_emit_sessionless_group_intent_reducer;
@@ -220,6 +222,7 @@ pub mod debug_repair_after_publish_reducer;
 pub mod debug_repair_item_reducer;
 pub mod debug_replace_definition_then_apply_damage_floor_fixture_reducer;
 pub mod debug_replay_auction_expiry_fixture_reducer;
+pub mod debug_replay_mail_timer_fixture_reducer;
 pub mod debug_replay_sessionless_areatrigger_reducer;
 pub mod debug_repop_reducer;
 pub mod debug_reseed_skills_reducer;
@@ -262,6 +265,9 @@ pub mod debug_stage_eventai_revision_fixture_reducer;
 pub mod debug_stage_legacy_auction_mail_fixture_reducer;
 pub mod debug_stage_lethal_damage_floor_fixture_reducer;
 pub mod debug_stage_loot_roll_fixture_reducer;
+pub mod debug_stage_mail_expiry_fixture_reducer;
+pub mod debug_stage_mail_legacy_fixture_reducer;
+pub mod debug_stage_mail_take_fixture_reducer;
 pub mod debug_stage_ranged_lethal_damage_floor_fixture_reducer;
 pub mod debug_stress_relay_reducer;
 pub mod debug_sweep_encounter_state_reducer;
@@ -287,6 +293,9 @@ pub mod debug_verify_eventai_summon_expiry_reducer;
 pub mod debug_verify_legacy_auction_mail_repaired_reducer;
 pub mod debug_verify_lethal_damage_floor_fixture_reducer;
 pub mod debug_verify_loot_tag_fixture_reducer;
+pub mod debug_verify_mail_expiry_fixture_reducer;
+pub mod debug_verify_mail_fixture_held_reducer;
+pub mod debug_verify_mail_legacy_fixture_reducer;
 pub mod debug_verify_raid_quest_credit_fixture_reducer;
 pub mod debug_verify_ranged_lethal_damage_floor_fixture_reducer;
 pub mod debug_vmap_area_info_reducer;
@@ -332,6 +341,7 @@ pub mod finish_party_command_intent_reducer;
 pub mod finish_pending_character_shard_transfer_reducer;
 pub mod finish_transfer_reducer;
 pub mod fire_eventai_forced_despawn_reducer;
+pub mod fire_mail_timer_reducer;
 pub mod fire_pending_cast_reducer;
 pub mod fire_spell_impact_reducer;
 pub mod flag_override_type;
@@ -473,6 +483,7 @@ pub mod game_group_member_partition_table;
 pub mod game_group_member_table;
 pub mod game_group_roster_revision_table;
 pub mod game_group_table;
+pub mod game_group_target_icon_table;
 pub mod game_guid_allocator_table;
 pub mod game_guid_range_registry_table;
 pub mod game_guid_range_table;
@@ -504,12 +515,14 @@ pub mod game_lock_type;
 pub mod game_loot_roll_promotion_receipt_table;
 pub mod game_loot_roll_table;
 pub mod game_loot_roll_vote_table;
+pub mod game_mail_arrival_table;
 pub mod game_mail_delivery_table;
 pub mod game_mail_escrow_reaper_schedule_table;
 pub mod game_mail_escrow_table;
 pub mod game_mail_loot_table;
 pub mod game_mail_table;
 pub mod game_mail_template_table;
+pub mod game_mail_timer_table;
 pub mod game_map_region_table;
 pub mod game_melee_attack_table;
 pub mod game_melee_schedule_table;
@@ -649,6 +662,7 @@ pub mod group_invite_type;
 pub mod group_member_partition_type;
 pub mod group_member_type;
 pub mod group_roster_revision_type;
+pub mod group_target_icon_type;
 pub mod group_type;
 pub mod guid_allocator_type;
 pub mod guid_range_assignment_type;
@@ -750,7 +764,6 @@ pub mod gw_sell_item_reducer;
 pub mod gw_send_channel_message_reducer;
 pub mod gw_send_chat_reducer;
 pub mod gw_send_emote_reducer;
-pub mod gw_send_roll_reducer;
 pub mod gw_send_whisper_reducer;
 pub mod gw_set_action_button_reducer;
 pub mod gw_set_faction_at_war_reducer;
@@ -813,11 +826,13 @@ pub mod live_pet_kind_type;
 pub mod loot_roll_promotion_receipt_type;
 pub mod loot_roll_type;
 pub mod loot_roll_vote_type;
+pub mod mail_arrival_type;
 pub mod mail_delivery_type;
 pub mod mail_escrow_reaper_schedule_type;
 pub mod mail_escrow_type;
 pub mod mail_loot_type;
 pub mod mail_template_type;
+pub mod mail_timer_type;
 pub mod mail_type;
 pub mod map_region_type;
 pub mod mark_bot_transfer_arrival_ready_reducer;
@@ -1220,6 +1235,7 @@ pub use death_condition_type::DeathCondition;
 pub use debug_accept_quest_reducer::debug_accept_quest;
 pub use debug_add_threat_reducer::debug_add_threat;
 pub use debug_admit_sessionless_action_reducer::debug_admit_sessionless_action;
+pub use debug_age_mail_fixture_reducer::debug_age_mail_fixture;
 pub use debug_apply_damage_reducer::debug_apply_damage;
 pub use debug_apply_lethal_damage_floor_fixture_reducer::debug_apply_lethal_damage_floor_fixture;
 pub use debug_arm_instance_tick_reducer::debug_arm_instance_tick;
@@ -1252,6 +1268,7 @@ pub use debug_compute_spell_reducer::debug_compute_spell;
 pub use debug_compute_swing_reducer::debug_compute_swing;
 pub use debug_create_fixture_instance_reducer::debug_create_fixture_instance;
 pub use debug_delete_character_reducer::debug_delete_character;
+pub use debug_deliver_mail_fixture_reducer::debug_deliver_mail_fixture;
 pub use debug_disarm_instance_tick_reducer::debug_disarm_instance_tick;
 pub use debug_disenchant_reducer::debug_disenchant;
 pub use debug_emit_sessionless_group_intent_reducer::debug_emit_sessionless_group_intent;
@@ -1311,6 +1328,7 @@ pub use debug_repair_after_publish_reducer::debug_repair_after_publish;
 pub use debug_repair_item_reducer::debug_repair_item;
 pub use debug_replace_definition_then_apply_damage_floor_fixture_reducer::debug_replace_definition_then_apply_damage_floor_fixture;
 pub use debug_replay_auction_expiry_fixture_reducer::debug_replay_auction_expiry_fixture;
+pub use debug_replay_mail_timer_fixture_reducer::debug_replay_mail_timer_fixture;
 pub use debug_replay_sessionless_areatrigger_reducer::debug_replay_sessionless_areatrigger;
 pub use debug_repop_reducer::debug_repop;
 pub use debug_reseed_skills_reducer::debug_reseed_skills;
@@ -1353,6 +1371,9 @@ pub use debug_stage_eventai_revision_fixture_reducer::debug_stage_eventai_revisi
 pub use debug_stage_legacy_auction_mail_fixture_reducer::debug_stage_legacy_auction_mail_fixture;
 pub use debug_stage_lethal_damage_floor_fixture_reducer::debug_stage_lethal_damage_floor_fixture;
 pub use debug_stage_loot_roll_fixture_reducer::debug_stage_loot_roll_fixture;
+pub use debug_stage_mail_expiry_fixture_reducer::debug_stage_mail_expiry_fixture;
+pub use debug_stage_mail_legacy_fixture_reducer::debug_stage_mail_legacy_fixture;
+pub use debug_stage_mail_take_fixture_reducer::debug_stage_mail_take_fixture;
 pub use debug_stage_ranged_lethal_damage_floor_fixture_reducer::debug_stage_ranged_lethal_damage_floor_fixture;
 pub use debug_stress_relay_reducer::debug_stress_relay;
 pub use debug_sweep_encounter_state_reducer::debug_sweep_encounter_state;
@@ -1378,6 +1399,9 @@ pub use debug_verify_eventai_summon_expiry_reducer::debug_verify_eventai_summon_
 pub use debug_verify_legacy_auction_mail_repaired_reducer::debug_verify_legacy_auction_mail_repaired;
 pub use debug_verify_lethal_damage_floor_fixture_reducer::debug_verify_lethal_damage_floor_fixture;
 pub use debug_verify_loot_tag_fixture_reducer::debug_verify_loot_tag_fixture;
+pub use debug_verify_mail_expiry_fixture_reducer::debug_verify_mail_expiry_fixture;
+pub use debug_verify_mail_fixture_held_reducer::debug_verify_mail_fixture_held;
+pub use debug_verify_mail_legacy_fixture_reducer::debug_verify_mail_legacy_fixture;
 pub use debug_verify_raid_quest_credit_fixture_reducer::debug_verify_raid_quest_credit_fixture;
 pub use debug_verify_ranged_lethal_damage_floor_fixture_reducer::debug_verify_ranged_lethal_damage_floor_fixture;
 pub use debug_vmap_area_info_reducer::debug_vmap_area_info;
@@ -1423,6 +1447,7 @@ pub use finish_party_command_intent_reducer::finish_party_command_intent;
 pub use finish_pending_character_shard_transfer_reducer::finish_pending_character_shard_transfer;
 pub use finish_transfer_reducer::finish_transfer;
 pub use fire_eventai_forced_despawn_reducer::fire_eventai_forced_despawn;
+pub use fire_mail_timer_reducer::fire_mail_timer;
 pub use fire_pending_cast_reducer::fire_pending_cast;
 pub use fire_spell_impact_reducer::fire_spell_impact;
 pub use flag_override_type::FlagOverride;
@@ -1564,6 +1589,7 @@ pub use game_group_member_partition_table::*;
 pub use game_group_member_table::*;
 pub use game_group_roster_revision_table::*;
 pub use game_group_table::*;
+pub use game_group_target_icon_table::*;
 pub use game_guid_allocator_table::*;
 pub use game_guid_range_registry_table::*;
 pub use game_guid_range_table::*;
@@ -1595,12 +1621,14 @@ pub use game_lock_type::GameLock;
 pub use game_loot_roll_promotion_receipt_table::*;
 pub use game_loot_roll_table::*;
 pub use game_loot_roll_vote_table::*;
+pub use game_mail_arrival_table::*;
 pub use game_mail_delivery_table::*;
 pub use game_mail_escrow_reaper_schedule_table::*;
 pub use game_mail_escrow_table::*;
 pub use game_mail_loot_table::*;
 pub use game_mail_table::*;
 pub use game_mail_template_table::*;
+pub use game_mail_timer_table::*;
 pub use game_map_region_table::*;
 pub use game_melee_attack_table::*;
 pub use game_melee_schedule_table::*;
@@ -1740,6 +1768,7 @@ pub use group_invite_type::GroupInvite;
 pub use group_member_partition_type::GroupMemberPartition;
 pub use group_member_type::GroupMember;
 pub use group_roster_revision_type::GroupRosterRevision;
+pub use group_target_icon_type::GroupTargetIcon;
 pub use group_type::Group;
 pub use guid_allocator_type::GuidAllocator;
 pub use guid_range_assignment_type::GuidRangeAssignment;
@@ -1841,7 +1870,6 @@ pub use gw_sell_item_reducer::gw_sell_item;
 pub use gw_send_channel_message_reducer::gw_send_channel_message;
 pub use gw_send_chat_reducer::gw_send_chat;
 pub use gw_send_emote_reducer::gw_send_emote;
-pub use gw_send_roll_reducer::gw_send_roll;
 pub use gw_send_whisper_reducer::gw_send_whisper;
 pub use gw_set_action_button_reducer::gw_set_action_button;
 pub use gw_set_faction_at_war_reducer::gw_set_faction_at_war;
@@ -1904,11 +1932,13 @@ pub use live_pet_kind_type::LivePetKind;
 pub use loot_roll_promotion_receipt_type::LootRollPromotionReceipt;
 pub use loot_roll_type::LootRoll;
 pub use loot_roll_vote_type::LootRollVote;
+pub use mail_arrival_type::MailArrival;
 pub use mail_delivery_type::MailDelivery;
 pub use mail_escrow_reaper_schedule_type::MailEscrowReaperSchedule;
 pub use mail_escrow_type::MailEscrow;
 pub use mail_loot_type::MailLoot;
 pub use mail_template_type::MailTemplate;
+pub use mail_timer_type::MailTimer;
 pub use mail_type::Mail;
 pub use map_region_type::MapRegion;
 pub use mark_bot_transfer_arrival_ready_reducer::mark_bot_transfer_arrival_ready;
@@ -2340,6 +2370,11 @@ pub enum Reducer {
     DebugAdmitSessionlessAction {
         character_guid: u64,
     },
+    DebugAgeMailFixture {
+        recipient_guid: u64,
+        subject: String,
+        age_secs: u64,
+    },
     DebugApplyDamage {
         target_guid: u64,
         amount: u32,
@@ -2473,6 +2508,10 @@ pub enum Reducer {
     },
     DebugDeleteCharacter {
         character_guid: u64,
+    },
+    DebugDeliverMailFixture {
+        recipient_guid: u64,
+        subject: String,
     },
     DebugDisarmInstanceTick {
         instance_id: u64,
@@ -2725,6 +2764,7 @@ pub enum Reducer {
         rolled: u32,
     },
     DebugReplayAuctionExpiryFixture,
+    DebugReplayMailTimerFixture,
     DebugReplaySessionlessAreatrigger {
         character_guid: u64,
         trigger_id: u32,
@@ -2900,6 +2940,9 @@ pub enum Reducer {
         creature_guid: u64,
     },
     DebugStageLootRollFixture,
+    DebugStageMailExpiryFixture,
+    DebugStageMailLegacyFixture,
+    DebugStageMailTakeFixture,
     DebugStageRangedLethalDamageFloorFixture {
         attacker_guid: u64,
         target_guid: u64,
@@ -2986,6 +3029,13 @@ pub enum Reducer {
         expected_absorb: i32,
     },
     DebugVerifyLootTagFixture,
+    DebugVerifyMailExpiryFixture,
+    DebugVerifyMailFixtureHeld {
+        recipient_guid: u64,
+        subject: String,
+        held: bool,
+    },
+    DebugVerifyMailLegacyFixture,
     DebugVerifyRaidQuestCreditFixture,
     DebugVerifyRangedLethalDamageFloorFixture {
         attacker_guid: u64,
@@ -3094,6 +3144,9 @@ pub enum Reducer {
     },
     FireEventaiForcedDespawn {
         row: CreatureAiForcedDespawn,
+    },
+    FireMailTimer {
+        timer: MailTimer,
     },
     FirePendingCast {
         sched: PendingCast,
@@ -3489,11 +3542,6 @@ pub enum Reducer {
         emote_anim: u32,
         target_guid: u64,
     },
-    GwSendRoll {
-        request_actor: SessionActor,
-        min_roll: u32,
-        max_roll: u32,
-    },
     GwSendWhisper {
         request_actor: SessionActor,
         target_name: String,
@@ -3813,6 +3861,7 @@ pub enum Reducer {
         random_property_id: u32,
         cod: u32,
         cod_mail_id: u64,
+        delivery_delay_secs: u32,
     },
     RealmMailConfirmDelivery {
         escrow_id: u64,
@@ -3833,6 +3882,7 @@ pub enum Reducer {
         item_guid: u64,
         cod: u32,
         mail_id: u64,
+        same_account: bool,
     },
     RealmMailItemPayout {
         escrow_id: u64,
@@ -3861,6 +3911,7 @@ pub enum Reducer {
     RealmMailReturn {
         request_actor: SessionActor,
         mail_id: u64,
+        same_account: bool,
     },
     RealmMailSend {
         request_actor: SessionActor,
@@ -3870,6 +3921,7 @@ pub enum Reducer {
         money: u32,
         cod: u32,
         item_guid: u64,
+        same_account: bool,
     },
     RealmMailSettle {
         escrow_id: u64,
@@ -4102,6 +4154,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugAcceptQuest { .. } => "debug_accept_quest",
             Reducer::DebugAddThreat { .. } => "debug_add_threat",
             Reducer::DebugAdmitSessionlessAction { .. } => "debug_admit_sessionless_action",
+            Reducer::DebugAgeMailFixture { .. } => "debug_age_mail_fixture",
             Reducer::DebugApplyDamage { .. } => "debug_apply_damage",
             Reducer::DebugApplyLethalDamageFloorFixture { .. } => {
                 "debug_apply_lethal_damage_floor_fixture"
@@ -4138,6 +4191,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugComputeSwing { .. } => "debug_compute_swing",
             Reducer::DebugCreateFixtureInstance { .. } => "debug_create_fixture_instance",
             Reducer::DebugDeleteCharacter { .. } => "debug_delete_character",
+            Reducer::DebugDeliverMailFixture { .. } => "debug_deliver_mail_fixture",
             Reducer::DebugDisarmInstanceTick { .. } => "debug_disarm_instance_tick",
             Reducer::DebugDisenchant { .. } => "debug_disenchant",
             Reducer::DebugEmitSessionlessGroupIntent { .. } => {
@@ -4204,6 +4258,7 @@ impl __sdk::Reducer for Reducer {
                 "debug_replace_definition_then_apply_damage_floor_fixture"
             }
             Reducer::DebugReplayAuctionExpiryFixture => "debug_replay_auction_expiry_fixture",
+            Reducer::DebugReplayMailTimerFixture => "debug_replay_mail_timer_fixture",
             Reducer::DebugReplaySessionlessAreatrigger { .. } => {
                 "debug_replay_sessionless_areatrigger"
             }
@@ -4262,6 +4317,9 @@ impl __sdk::Reducer for Reducer {
                 "debug_stage_lethal_damage_floor_fixture"
             }
             Reducer::DebugStageLootRollFixture => "debug_stage_loot_roll_fixture",
+            Reducer::DebugStageMailExpiryFixture => "debug_stage_mail_expiry_fixture",
+            Reducer::DebugStageMailLegacyFixture => "debug_stage_mail_legacy_fixture",
+            Reducer::DebugStageMailTakeFixture => "debug_stage_mail_take_fixture",
             Reducer::DebugStageRangedLethalDamageFloorFixture { .. } => {
                 "debug_stage_ranged_lethal_damage_floor_fixture"
             }
@@ -4301,6 +4359,9 @@ impl __sdk::Reducer for Reducer {
                 "debug_verify_lethal_damage_floor_fixture"
             }
             Reducer::DebugVerifyLootTagFixture => "debug_verify_loot_tag_fixture",
+            Reducer::DebugVerifyMailExpiryFixture => "debug_verify_mail_expiry_fixture",
+            Reducer::DebugVerifyMailFixtureHeld { .. } => "debug_verify_mail_fixture_held",
+            Reducer::DebugVerifyMailLegacyFixture => "debug_verify_mail_legacy_fixture",
             Reducer::DebugVerifyRaidQuestCreditFixture => "debug_verify_raid_quest_credit_fixture",
             Reducer::DebugVerifyRangedLethalDamageFloorFixture { .. } => {
                 "debug_verify_ranged_lethal_damage_floor_fixture"
@@ -4325,6 +4386,7 @@ impl __sdk::Reducer for Reducer {
             }
             Reducer::FinishTransfer { .. } => "finish_transfer",
             Reducer::FireEventaiForcedDespawn { .. } => "fire_eventai_forced_despawn",
+            Reducer::FireMailTimer { .. } => "fire_mail_timer",
             Reducer::FirePendingCast { .. } => "fire_pending_cast",
             Reducer::FireSpellImpact { .. } => "fire_spell_impact",
             Reducer::GrantAlphaTestTools { .. } => "grant_alpha_test_tools",
@@ -4409,7 +4471,6 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwSendChannelMessage { .. } => "gw_send_channel_message",
             Reducer::GwSendChat { .. } => "gw_send_chat",
             Reducer::GwSendEmote { .. } => "gw_send_emote",
-            Reducer::GwSendRoll { .. } => "gw_send_roll",
             Reducer::GwSendWhisper { .. } => "gw_send_whisper",
             Reducer::GwSetActionButton { .. } => "gw_set_action_button",
             Reducer::GwSetFactionAtWar { .. } => "gw_set_faction_at_war",
@@ -4807,6 +4868,15 @@ Reducer::ClaimPartyCommandIntent{
 }             => __sats::bsatn::to_vec(&debug_admit_sessionless_action_reducer::DebugAdmitSessionlessActionArgs {
                 character_guid: character_guid.clone(),
 }),
+            Reducer::DebugAgeMailFixture{
+                recipient_guid,
+                subject,
+                age_secs,
+}             => __sats::bsatn::to_vec(&debug_age_mail_fixture_reducer::DebugAgeMailFixtureArgs {
+                recipient_guid: recipient_guid.clone(),
+                subject: subject.clone(),
+                age_secs: age_secs.clone(),
+}),
             Reducer::DebugApplyDamage{
                 target_guid,
                 amount,
@@ -5048,6 +5118,13 @@ Reducer::DebugCheckRestAt{
                 character_guid,
 }             => __sats::bsatn::to_vec(&debug_delete_character_reducer::DebugDeleteCharacterArgs {
                 character_guid: character_guid.clone(),
+}),
+            Reducer::DebugDeliverMailFixture{
+                recipient_guid,
+                subject,
+}             => __sats::bsatn::to_vec(&debug_deliver_mail_fixture_reducer::DebugDeliverMailFixtureArgs {
+                recipient_guid: recipient_guid.clone(),
+                subject: subject.clone(),
 }),
             Reducer::DebugDisarmInstanceTick{
                 instance_id,
@@ -5496,6 +5573,8 @@ Reducer::DebugRepairItem{
 }),
             Reducer::DebugReplayAuctionExpiryFixture => __sats::bsatn::to_vec(&debug_replay_auction_expiry_fixture_reducer::DebugReplayAuctionExpiryFixtureArgs {
                 }),
+Reducer::DebugReplayMailTimerFixture => __sats::bsatn::to_vec(&debug_replay_mail_timer_fixture_reducer::DebugReplayMailTimerFixtureArgs {
+                }),
 Reducer::DebugReplaySessionlessAreatrigger{
                 character_guid,
                 trigger_id,
@@ -5810,6 +5889,12 @@ Reducer::DebugStageLethalDamageFloorFixture{
 }),
             Reducer::DebugStageLootRollFixture => __sats::bsatn::to_vec(&debug_stage_loot_roll_fixture_reducer::DebugStageLootRollFixtureArgs {
                 }),
+Reducer::DebugStageMailExpiryFixture => __sats::bsatn::to_vec(&debug_stage_mail_expiry_fixture_reducer::DebugStageMailExpiryFixtureArgs {
+                }),
+Reducer::DebugStageMailLegacyFixture => __sats::bsatn::to_vec(&debug_stage_mail_legacy_fixture_reducer::DebugStageMailLegacyFixtureArgs {
+                }),
+Reducer::DebugStageMailTakeFixture => __sats::bsatn::to_vec(&debug_stage_mail_take_fixture_reducer::DebugStageMailTakeFixtureArgs {
+                }),
 Reducer::DebugStageRangedLethalDamageFloorFixture{
                 attacker_guid,
                 target_guid,
@@ -5964,6 +6049,19 @@ Reducer::DebugVerifyLethalDamageFloorFixture{
                 expected_absorb: expected_absorb.clone(),
 }),
             Reducer::DebugVerifyLootTagFixture => __sats::bsatn::to_vec(&debug_verify_loot_tag_fixture_reducer::DebugVerifyLootTagFixtureArgs {
+                }),
+Reducer::DebugVerifyMailExpiryFixture => __sats::bsatn::to_vec(&debug_verify_mail_expiry_fixture_reducer::DebugVerifyMailExpiryFixtureArgs {
+                }),
+Reducer::DebugVerifyMailFixtureHeld{
+                recipient_guid,
+                subject,
+                held,
+}             => __sats::bsatn::to_vec(&debug_verify_mail_fixture_held_reducer::DebugVerifyMailFixtureHeldArgs {
+                recipient_guid: recipient_guid.clone(),
+                subject: subject.clone(),
+                held: held.clone(),
+}),
+            Reducer::DebugVerifyMailLegacyFixture => __sats::bsatn::to_vec(&debug_verify_mail_legacy_fixture_reducer::DebugVerifyMailLegacyFixtureArgs {
                 }),
 Reducer::DebugVerifyRaidQuestCreditFixture => __sats::bsatn::to_vec(&debug_verify_raid_quest_credit_fixture_reducer::DebugVerifyRaidQuestCreditFixtureArgs {
                 }),
@@ -6163,6 +6261,11 @@ Reducer::DebugVerifyRangedLethalDamageFloorFixture{
                 row,
 }             => __sats::bsatn::to_vec(&fire_eventai_forced_despawn_reducer::FireEventaiForcedDespawnArgs {
                 row: row.clone(),
+}),
+            Reducer::FireMailTimer{
+                timer,
+}             => __sats::bsatn::to_vec(&fire_mail_timer_reducer::FireMailTimerArgs {
+                timer: timer.clone(),
 }),
             Reducer::FirePendingCast{
                 sched,
@@ -6869,15 +6972,6 @@ Reducer::GwIgnoreTrade{
                 emote_anim: emote_anim.clone(),
                 target_guid: target_guid.clone(),
 }),
-            Reducer::GwSendRoll{
-                request_actor,
-                min_roll,
-                max_roll,
-}             => __sats::bsatn::to_vec(&gw_send_roll_reducer::GwSendRollArgs {
-                request_actor: request_actor.clone(),
-                min_roll: min_roll.clone(),
-                max_roll: max_roll.clone(),
-}),
             Reducer::GwSendWhisper{
                 request_actor,
                 target_name,
@@ -7439,6 +7533,7 @@ Reducer::PlayerbotsFixtureCommandApply{
                 random_property_id,
                 cod,
                 cod_mail_id,
+                delivery_delay_secs,
 }             => __sats::bsatn::to_vec(&realm_mail_commit_reducer::RealmMailCommitArgs {
                 escrow_id: escrow_id.clone(),
                 request_actor: request_actor.clone(),
@@ -7454,6 +7549,7 @@ Reducer::PlayerbotsFixtureCommandApply{
                 random_property_id: random_property_id.clone(),
                 cod: cod.clone(),
                 cod_mail_id: cod_mail_id.clone(),
+                delivery_delay_secs: delivery_delay_secs.clone(),
 }),
             Reducer::RealmMailConfirmDelivery{
                 escrow_id,
@@ -7480,6 +7576,7 @@ Reducer::PlayerbotsFixtureCommandApply{
                 item_guid,
                 cod,
                 mail_id,
+                same_account,
 }             => __sats::bsatn::to_vec(&realm_mail_fence_reducer::RealmMailFenceArgs {
                 escrow_id: escrow_id.clone(),
                 request_actor: request_actor.clone(),
@@ -7491,6 +7588,7 @@ Reducer::PlayerbotsFixtureCommandApply{
                 item_guid: item_guid.clone(),
                 cod: cod.clone(),
                 mail_id: mail_id.clone(),
+                same_account: same_account.clone(),
 }),
             Reducer::RealmMailItemPayout{
                 escrow_id,
@@ -7539,9 +7637,11 @@ Reducer::PlayerbotsFixtureCommandApply{
             Reducer::RealmMailReturn{
                 request_actor,
                 mail_id,
+                same_account,
 }             => __sats::bsatn::to_vec(&realm_mail_return_reducer::RealmMailReturnArgs {
                 request_actor: request_actor.clone(),
                 mail_id: mail_id.clone(),
+                same_account: same_account.clone(),
 }),
             Reducer::RealmMailSend{
                 request_actor,
@@ -7551,6 +7651,7 @@ Reducer::PlayerbotsFixtureCommandApply{
                 money,
                 cod,
                 item_guid,
+                same_account,
 }             => __sats::bsatn::to_vec(&realm_mail_send_reducer::RealmMailSendArgs {
                 request_actor: request_actor.clone(),
                 recipient_guid: recipient_guid.clone(),
@@ -7559,6 +7660,7 @@ Reducer::PlayerbotsFixtureCommandApply{
                 money: money.clone(),
                 cod: cod.clone(),
                 item_guid: item_guid.clone(),
+                same_account: same_account.clone(),
 }),
             Reducer::RealmMailSettle{
                 escrow_id,
@@ -8047,6 +8149,7 @@ pub struct DbUpdate {
     game_group_member: __sdk::TableUpdate<GroupMember>,
     game_group_member_partition: __sdk::TableUpdate<GroupMemberPartition>,
     game_group_roster_revision: __sdk::TableUpdate<GroupRosterRevision>,
+    game_group_target_icon: __sdk::TableUpdate<GroupTargetIcon>,
     game_guid_allocator: __sdk::TableUpdate<GuidAllocator>,
     game_guid_range: __sdk::TableUpdate<GuidRange>,
     game_guid_range_registry: __sdk::TableUpdate<GuidRangeAssignment>,
@@ -8076,11 +8179,13 @@ pub struct DbUpdate {
     game_loot_roll_promotion_receipt: __sdk::TableUpdate<LootRollPromotionReceipt>,
     game_loot_roll_vote: __sdk::TableUpdate<LootRollVote>,
     game_mail: __sdk::TableUpdate<Mail>,
+    game_mail_arrival: __sdk::TableUpdate<MailArrival>,
     game_mail_delivery: __sdk::TableUpdate<MailDelivery>,
     game_mail_escrow: __sdk::TableUpdate<MailEscrow>,
     game_mail_escrow_reaper_schedule: __sdk::TableUpdate<MailEscrowReaperSchedule>,
     game_mail_loot: __sdk::TableUpdate<MailLoot>,
     game_mail_template: __sdk::TableUpdate<MailTemplate>,
+    game_mail_timer: __sdk::TableUpdate<MailTimer>,
     game_map_region: __sdk::TableUpdate<MapRegion>,
     game_melee_attack: __sdk::TableUpdate<MeleeAttack>,
     game_melee_schedule: __sdk::TableUpdate<MeleeSchedule>,
@@ -8636,6 +8741,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_group_roster_revision" => db_update.game_group_roster_revision.append(
                     game_group_roster_revision_table::parse_table_update(table_update)?,
                 ),
+                "game_group_target_icon" => db_update.game_group_target_icon.append(
+                    game_group_target_icon_table::parse_table_update(table_update)?,
+                ),
                 "game_guid_allocator" => db_update
                     .game_guid_allocator
                     .append(game_guid_allocator_table::parse_table_update(table_update)?),
@@ -8725,6 +8833,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_mail" => db_update
                     .game_mail
                     .append(game_mail_table::parse_table_update(table_update)?),
+                "game_mail_arrival" => db_update
+                    .game_mail_arrival
+                    .append(game_mail_arrival_table::parse_table_update(table_update)?),
                 "game_mail_delivery" => db_update
                     .game_mail_delivery
                     .append(game_mail_delivery_table::parse_table_update(table_update)?),
@@ -8742,6 +8853,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_mail_template" => db_update
                     .game_mail_template
                     .append(game_mail_template_table::parse_table_update(table_update)?),
+                "game_mail_timer" => db_update
+                    .game_mail_timer
+                    .append(game_mail_timer_table::parse_table_update(table_update)?),
                 "game_map_region" => db_update
                     .game_map_region
                     .append(game_map_region_table::parse_table_update(table_update)?),
@@ -9716,6 +9830,12 @@ impl __sdk::DbUpdate for DbUpdate {
                 &self.game_group_roster_revision,
             )
             .with_updates_by_pk(|row| &row.group_id);
+        diff.game_group_target_icon = cache
+            .apply_diff_to_table::<GroupTargetIcon>(
+                "game_group_target_icon",
+                &self.game_group_target_icon,
+            )
+            .with_updates_by_pk(|row| &row.id);
         diff.game_guid_allocator = cache
             .apply_diff_to_table::<GuidAllocator>("game_guid_allocator", &self.game_guid_allocator)
             .with_updates_by_pk(|row| &row.id);
@@ -9830,6 +9950,9 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.game_mail = cache
             .apply_diff_to_table::<Mail>("game_mail", &self.game_mail)
             .with_updates_by_pk(|row| &row.id);
+        diff.game_mail_arrival = cache
+            .apply_diff_to_table::<MailArrival>("game_mail_arrival", &self.game_mail_arrival)
+            .with_updates_by_pk(|row| &row.id);
         diff.game_mail_delivery = cache
             .apply_diff_to_table::<MailDelivery>("game_mail_delivery", &self.game_mail_delivery)
             .with_updates_by_pk(|row| &row.escrow_id);
@@ -9848,6 +9971,9 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.game_mail_template = cache
             .apply_diff_to_table::<MailTemplate>("game_mail_template", &self.game_mail_template)
             .with_updates_by_pk(|row| &row.id);
+        diff.game_mail_timer = cache
+            .apply_diff_to_table::<MailTimer>("game_mail_timer", &self.game_mail_timer)
+            .with_updates_by_pk(|row| &row.scheduled_id);
         diff.game_map_region = cache
             .apply_diff_to_table::<MapRegion>("game_map_region", &self.game_map_region)
             .with_updates_by_pk(|row| &row.key);
@@ -10695,6 +10821,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_group_roster_revision" => db_update
                     .game_group_roster_revision
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_group_target_icon" => db_update
+                    .game_group_target_icon
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_guid_allocator" => db_update
                     .game_guid_allocator
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -10782,6 +10911,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_mail" => db_update
                     .game_mail
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_mail_arrival" => db_update
+                    .game_mail_arrival
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_mail_delivery" => db_update
                     .game_mail_delivery
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -10796,6 +10928,9 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_mail_template" => db_update
                     .game_mail_template
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_mail_timer" => db_update
+                    .game_mail_timer
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_map_region" => db_update
                     .game_map_region
@@ -11515,6 +11650,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_group_roster_revision" => db_update
                     .game_group_roster_revision
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_group_target_icon" => db_update
+                    .game_group_target_icon
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_guid_allocator" => db_update
                     .game_guid_allocator
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -11602,6 +11740,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_mail" => db_update
                     .game_mail
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_mail_arrival" => db_update
+                    .game_mail_arrival
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_mail_delivery" => db_update
                     .game_mail_delivery
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -11616,6 +11757,9 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_mail_template" => db_update
                     .game_mail_template
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_mail_timer" => db_update
+                    .game_mail_timer
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_map_region" => db_update
                     .game_map_region
@@ -12080,6 +12224,7 @@ pub struct AppliedDiff<'r> {
     game_group_member: __sdk::TableAppliedDiff<'r, GroupMember>,
     game_group_member_partition: __sdk::TableAppliedDiff<'r, GroupMemberPartition>,
     game_group_roster_revision: __sdk::TableAppliedDiff<'r, GroupRosterRevision>,
+    game_group_target_icon: __sdk::TableAppliedDiff<'r, GroupTargetIcon>,
     game_guid_allocator: __sdk::TableAppliedDiff<'r, GuidAllocator>,
     game_guid_range: __sdk::TableAppliedDiff<'r, GuidRange>,
     game_guid_range_registry: __sdk::TableAppliedDiff<'r, GuidRangeAssignment>,
@@ -12109,11 +12254,13 @@ pub struct AppliedDiff<'r> {
     game_loot_roll_promotion_receipt: __sdk::TableAppliedDiff<'r, LootRollPromotionReceipt>,
     game_loot_roll_vote: __sdk::TableAppliedDiff<'r, LootRollVote>,
     game_mail: __sdk::TableAppliedDiff<'r, Mail>,
+    game_mail_arrival: __sdk::TableAppliedDiff<'r, MailArrival>,
     game_mail_delivery: __sdk::TableAppliedDiff<'r, MailDelivery>,
     game_mail_escrow: __sdk::TableAppliedDiff<'r, MailEscrow>,
     game_mail_escrow_reaper_schedule: __sdk::TableAppliedDiff<'r, MailEscrowReaperSchedule>,
     game_mail_loot: __sdk::TableAppliedDiff<'r, MailLoot>,
     game_mail_template: __sdk::TableAppliedDiff<'r, MailTemplate>,
+    game_mail_timer: __sdk::TableAppliedDiff<'r, MailTimer>,
     game_map_region: __sdk::TableAppliedDiff<'r, MapRegion>,
     game_melee_attack: __sdk::TableAppliedDiff<'r, MeleeAttack>,
     game_melee_schedule: __sdk::TableAppliedDiff<'r, MeleeSchedule>,
@@ -12850,6 +12997,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
             &self.game_group_roster_revision,
             event,
         );
+        callbacks.invoke_table_row_callbacks::<GroupTargetIcon>(
+            "game_group_target_icon",
+            &self.game_group_target_icon,
+            event,
+        );
         callbacks.invoke_table_row_callbacks::<GuidAllocator>(
             "game_guid_allocator",
             &self.game_guid_allocator,
@@ -12983,6 +13135,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
             event,
         );
         callbacks.invoke_table_row_callbacks::<Mail>("game_mail", &self.game_mail, event);
+        callbacks.invoke_table_row_callbacks::<MailArrival>(
+            "game_mail_arrival",
+            &self.game_mail_arrival,
+            event,
+        );
         callbacks.invoke_table_row_callbacks::<MailDelivery>(
             "game_mail_delivery",
             &self.game_mail_delivery,
@@ -13006,6 +13163,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<MailTemplate>(
             "game_mail_template",
             &self.game_mail_template,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<MailTimer>(
+            "game_mail_timer",
+            &self.game_mail_timer,
             event,
         );
         callbacks.invoke_table_row_callbacks::<MapRegion>(
@@ -14303,6 +14465,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_group_member_table::register_table(client_cache);
         game_group_member_partition_table::register_table(client_cache);
         game_group_roster_revision_table::register_table(client_cache);
+        game_group_target_icon_table::register_table(client_cache);
         game_guid_allocator_table::register_table(client_cache);
         game_guid_range_table::register_table(client_cache);
         game_guid_range_registry_table::register_table(client_cache);
@@ -14332,11 +14495,13 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_loot_roll_promotion_receipt_table::register_table(client_cache);
         game_loot_roll_vote_table::register_table(client_cache);
         game_mail_table::register_table(client_cache);
+        game_mail_arrival_table::register_table(client_cache);
         game_mail_delivery_table::register_table(client_cache);
         game_mail_escrow_table::register_table(client_cache);
         game_mail_escrow_reaper_schedule_table::register_table(client_cache);
         game_mail_loot_table::register_table(client_cache);
         game_mail_template_table::register_table(client_cache);
+        game_mail_timer_table::register_table(client_cache);
         game_map_region_table::register_table(client_cache);
         game_melee_attack_table::register_table(client_cache);
         game_melee_schedule_table::register_table(client_cache);
@@ -14574,6 +14739,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_group_member",
         "game_group_member_partition",
         "game_group_roster_revision",
+        "game_group_target_icon",
         "game_guid_allocator",
         "game_guid_range",
         "game_guid_range_registry",
@@ -14603,11 +14769,13 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_loot_roll_promotion_receipt",
         "game_loot_roll_vote",
         "game_mail",
+        "game_mail_arrival",
         "game_mail_delivery",
         "game_mail_escrow",
         "game_mail_escrow_reaper_schedule",
         "game_mail_loot",
         "game_mail_template",
+        "game_mail_timer",
         "game_map_region",
         "game_melee_attack",
         "game_melee_schedule",
