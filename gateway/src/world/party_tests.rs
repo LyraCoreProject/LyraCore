@@ -3984,6 +3984,18 @@ fn a_repeated_fan_out_broadcast_inside_its_cooldown_is_dropped() {
     let _ = server.join();
 }
 
+/// The cooldown admits an op at its start, drops the same kind 999 ms later, and admits it again
+/// one full second after the start.
+#[test]
+fn a_group_broadcast_cooldown_lasts_exactly_one_second() {
+    let mut cooldowns = party::GroupBroadcastCooldowns::default();
+    let roll = party::Op::RandomRoll { min: 1, max: 100 };
+    let t0 = std::time::Instant::now();
+    assert!(cooldowns.admit_at(roll, t0));
+    assert!(!cooldowns.admit_at(roll, t0 + std::time::Duration::from_millis(999)));
+    assert!(cooldowns.admit_at(roll, t0 + std::time::Duration::from_secs(1)));
+}
+
 /// One sent packet as `(opcode, body)`, the way the client receives it.
 fn wire(packet: &Outbound) -> Wire {
     match packet {

@@ -394,9 +394,8 @@ pub struct WorldConn {
     /// concurrent request in — `/who`'s realm-wide scan is the one social read costly enough to
     /// throttle per session.
     who_throttled_until: Option<Instant>,
-    /// When each [`party::ThrottledBroadcast`] kind may run again for this session. A second one
-    /// inside [`GROUP_BROADCAST_THROTTLE`] is dropped unsent.
-    group_broadcast_throttled_until: [Option<Instant>; party::ThrottledBroadcast::COUNT],
+    /// When each throttled Group Broadcast kind may run again for this session.
+    group_broadcast_cooldowns: party::GroupBroadcastCooldowns,
 }
 
 /// How many CONSECUTIVE desynced movement packets a session may drop before the desync is treated
@@ -418,11 +417,6 @@ const MOVE_DESYNC_TOLERANCE: u32 = 32;
 /// window is dropped, unanswered, matching vm:MiscHandler.cpp:230's concurrent-request drop for
 /// the one Gateway-side realm-wide scan `/who` runs.
 const WHO_THROTTLE: Duration = Duration::from_secs(1);
-
-/// The cooldown of one World Session's Ready Check starts, minimap pings and `/roll`s, each kind
-/// on its own. cmangos has no such limit, but here each one writes a row for every member of a
-/// Raid of up to 40 on the one realm-wide database.
-const GROUP_BROADCAST_THROTTLE: Duration = Duration::from_secs(1);
 
 /// Run `$body` against the session's HOME-shard store handle. `$store` is the handle the
 /// caller holds (the default/realm shard); `$conn.home` overrides it once the player is in the
@@ -526,20 +520,9 @@ impl WorldConn {
         true
     }
 
-    /// Admit one party op, or refuse it because the last op of the same throttled kind was inside
-    /// [`GROUP_BROADCAST_THROTTLE`]. An op with no throttle is always admitted. Advances the
-    /// cooldown on every admitted op, including one the party authority then refuses.
+    /// [`party::GroupBroadcastCooldowns::admit_at`] now.
     pub(super) fn admit_group_broadcast(&mut self, op: party::Op) -> bool {
-        let Some(kind) = op.broadcast_throttle() else {
-            return true;
-        };
-        let now = Instant::now();
-        let until = &mut self.group_broadcast_throttled_until[kind.index()];
-        if until.is_some_and(|until| now < until) {
-            return false;
-        }
-        *until = Some(now + GROUP_BROADCAST_THROTTLE);
-        true
+        self.group_broadcast_cooldowns.admit_at(op, Instant::now())
     }
 }
 
@@ -711,7 +694,7 @@ fn world_handshake_with_queue_and_deadline<
             guild_signed_on: None,
             move_desync_drops: 0,
             who_throttled_until: None,
-            group_broadcast_throttled_until: Default::default(),
+            group_broadcast_cooldowns: Default::default(),
         },
         encrypt,
     )))

@@ -38,6 +38,8 @@
 //! Realm Chat Line: Realm-core reads its own membership in the transaction that writes the line, so
 //! the mirror plays no part in who hears it.
 
+use std::time::{Duration, Instant};
+
 use anyhow::Result;
 
 use super::{presence, send, Outbound, SessionTx, WorldStore};
@@ -357,14 +359,40 @@ pub(crate) enum ThrottledBroadcast {
 }
 
 impl ThrottledBroadcast {
-    pub(crate) const COUNT: usize = 3;
+    const COUNT: usize = 3;
 
-    pub(crate) fn index(self) -> usize {
+    fn index(self) -> usize {
         match self {
             Self::ReadyCheck => 0,
             Self::MinimapPing => 1,
             Self::RandomRoll => 2,
         }
+    }
+}
+
+/// The cooldown of one World Session's Ready Check starts, minimap pings and `/roll`s, each kind
+/// on its own. cmangos has no such limit, but here each one writes a row for every member of a
+/// Raid of up to 40 on the one realm-wide database.
+pub(crate) const GROUP_BROADCAST_THROTTLE: Duration = Duration::from_secs(1);
+
+/// When each [`ThrottledBroadcast`] kind may run again for one World Session.
+#[derive(Debug, Default)]
+pub(crate) struct GroupBroadcastCooldowns([Option<Instant>; ThrottledBroadcast::COUNT]);
+
+impl GroupBroadcastCooldowns {
+    /// Admit one party op at `now`, or refuse it because the last op of the same throttled kind
+    /// was inside [`GROUP_BROADCAST_THROTTLE`]. An op with no throttle is always admitted. Every
+    /// admitted op starts its kind's cooldown, including one the party authority then refuses.
+    pub(crate) fn admit_at(&mut self, op: Op, now: Instant) -> bool {
+        let Some(kind) = op.broadcast_throttle() else {
+            return true;
+        };
+        let until = &mut self.0[kind.index()];
+        if until.is_some_and(|until| now < until) {
+            return false;
+        }
+        *until = Some(now + GROUP_BROADCAST_THROTTLE);
+        true
     }
 }
 
