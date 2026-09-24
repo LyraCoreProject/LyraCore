@@ -947,24 +947,6 @@ impl WorldStore for Coordinator {
         self.entity_max_health(guid)
     }
 
-    fn join_channel(&self, account_id: u64, self_guid: u64, channel: String) -> Result<()> {
-        self.join_channel(account_id, self_guid, channel)
-    }
-
-    fn leave_channel(&self, account_id: u64, self_guid: u64, channel: String) -> Result<()> {
-        self.leave_channel(account_id, self_guid, channel)
-    }
-
-    fn send_channel_message(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        channel: String,
-        message: String,
-    ) -> Result<()> {
-        self.send_channel_message(account_id, self_guid, channel, message)
-    }
-
     fn superseded_old_rank(&self, new_spell: u32, player_guid: u64) -> Option<u32> {
         self.superseded_old_rank(new_spell, player_guid)
     }

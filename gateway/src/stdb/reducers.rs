@@ -14,10 +14,11 @@ use super::views::entity_view;
 use crate::world::guild_fee;
 use crate::world::party::{AdmittedCompanionCommand, CompanionCommandOutcome, PartyOutcome};
 use crate::world::{
-    ChatOutcome, ContactOutcome, ItemActionResult, LootActionStatus, LootWindowRefusal,
-    LootWindowRequestStatus,
+    ChannelOutcome, ChatOutcome, ContactOutcome, ItemActionResult, LootActionStatus,
+    LootWindowRefusal, LootWindowRequestStatus,
 };
 use lyracore_shared::auction::AuctionRefusal;
+use lyracore_shared::channel::ChannelRefusal;
 use lyracore_shared::chat::ChatRefusal;
 use lyracore_shared::group::GroupRefusal;
 use lyracore_shared::guild::GuildRefusal;
@@ -1682,51 +1683,6 @@ impl Coordinator {
         )
     }
 
-    /// Join a chat channel (CMSG_JOIN_CHANNEL — the client auto-sends on zone-in).
-    pub fn join_channel(&self, _account_id: u64, actor_guid: u64, channel: String) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("join_channel: actor_guid unresolved"));
-        }
-        let coord = self.0.call_pipe();
-        call_reducer!(
-            coord.conn.reducers,
-            "gw_join_channel",
-            gw_join_channel_then(self.session_actor(actor_guid), channel)
-        )
-    }
-
-    /// Leave a chat channel (CMSG_LEAVE_CHANNEL).
-    pub fn leave_channel(&self, _account_id: u64, actor_guid: u64, channel: String) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("leave_channel: actor_guid unresolved"));
-        }
-        let coord = self.0.call_pipe();
-        call_reducer!(
-            coord.conn.reducers,
-            "gw_leave_channel",
-            gw_leave_channel_then(self.session_actor(actor_guid), channel)
-        )
-    }
-
-    /// Speak into a channel (the CMSG_MESSAGECHAT Channel arm).
-    pub fn send_channel_message(
-        &self,
-        _account_id: u64,
-        actor_guid: u64,
-        channel: String,
-        message: String,
-    ) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("send_channel_message: actor_guid unresolved"));
-        }
-        let coord = self.0.call_pipe();
-        call_reducer!(
-            coord.conn.reducers,
-            "gw_send_channel_message",
-            gw_send_channel_message_then(self.session_actor(actor_guid), channel, message)
-        )
-    }
-
     pub fn send_emote(
         &self,
         _account_id: u64,
@@ -1792,6 +1748,34 @@ impl Coordinator {
             realm.0.call_pipe().conn.reducers,
             "realm_chat",
             realm_chat_then(realm.session_actor(speaker_guid), request)
+        ))
+    }
+
+    /// `realm_channel_op`: run one Chat Channel op on Realm-core, or on the one database of an
+    /// unsharded Realm. The Module applies every channel rule. The actor's name stays here.
+    pub fn channel_op(
+        &self,
+        actor_guid: u64,
+        op: u8,
+        request: crate::world::ChannelRequest,
+    ) -> Result<ChannelOutcome> {
+        let realm = self.realm_core()?;
+        let request = ChannelRequest {
+            channel_name: request.channel_name,
+            password: request.password,
+            target_guid: request.target_guid,
+            target_name: request.target_name,
+            target_race: request.target_race,
+            target_ignores_actor: request.target_ignores_actor,
+            speaker: SpeakerFacts {
+                race: request.speaker.race,
+                chat_tag: request.speaker.chat_tag,
+            },
+        };
+        channel_outcome(call_reducer!(
+            realm.0.call_pipe().conn.reducers,
+            "realm_channel_op",
+            realm_channel_op_then(realm.session_actor(actor_guid), op, request)
         ))
     }
 
@@ -3554,6 +3538,24 @@ mod realm_chat_routing_tests {
     /// to the session's own Home Shard reads that Shard's mirror and is delivered by no Relay on a
     /// sharded Realm. No Fake reaches the Coordinator, so the routing is pinned in source.
     #[test]
+    fn channel_ops_run_on_the_realm_core_handle() {
+        let body = crate::test_scan::code_of(include_str!("reducers.rs"), "pub fn channel_op(");
+        let body: String = body.split_whitespace().collect();
+        assert!(
+            body.contains("letrealm=self.realm_core()?;")
+                && body.contains("realm.0.call_pipe().conn.reducers,\"realm_channel_op\",")
+                && body
+                    .contains("realm_channel_op_then(realm.session_actor(actor_guid),op,request)"),
+            "`Coordinator::channel_op` no longer calls the reducer on the Realm-core handle. \
+             Body was:\n{body}"
+        );
+        assert!(
+            !body.contains("self.0.call_pipe()"),
+            "`Coordinator::channel_op` must not call the session's own Home Shard"
+        );
+    }
+
+    #[test]
     fn realm_chat_runs_on_the_realm_core_handle() {
         let body = crate::test_scan::code_of(include_str!("reducers.rs"), "pub fn realm_chat(");
         let body: String = body.split_whitespace().collect();
@@ -3848,6 +3850,18 @@ fn chat_outcome(result: Result<()>) -> Result<ChatOutcome> {
         Ok(()) => Ok(ChatOutcome::Delivered),
         Err(error) => match reducer_refusal_reason(&error).and_then(ChatRefusal::parse_tag) {
             Some(refusal) => Ok(ChatOutcome::Refused(refusal)),
+            None => Err(error),
+        },
+    }
+}
+
+/// The Module's typed channel Refusal. Only a reducer the Module rejected carries a tag; a timeout,
+/// transport, or SDK failure stays an error with an unknown outcome.
+fn channel_outcome(result: Result<()>) -> Result<ChannelOutcome> {
+    match result {
+        Ok(()) => Ok(ChannelOutcome::Done),
+        Err(error) => match reducer_refusal_reason(&error).and_then(ChannelRefusal::parse_tag) {
+            Some(refusal) => Ok(ChannelOutcome::Refused(refusal)),
             None => Err(error),
         },
     }

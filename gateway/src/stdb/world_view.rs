@@ -918,13 +918,19 @@ fn register_shard_callbacks(
         &view,
         |v, row| system_message_appeared(v, row),
     );
-    // Only Realm-core writes Realm Chat Lines. This registration hears them on a Realm whose
-    // Realm-core is this database; `arm_realm_private` hears them everywhere else.
+    // Only Realm-core writes Realm Chat Lines and Channel Notices. These registrations hear them
+    // on a Realm whose Realm-core is this database; `arm_realm_private` hears them everywhere else.
     wire_insert_live(
         db.game_realm_chat_event(),
         "game_realm_chat_event.insert",
         &view,
         |v, row| realm_chat_appeared(v, row),
+    );
+    wire_insert_live(
+        db.game_chat_channel_notice_event(),
+        "game_chat_channel_notice_event.insert",
+        &view,
+        |v, row| channel_notice_appeared(v, row),
     );
     // Each viewer's ignore set follows its own contact rows. Replayed inserts are idempotent.
     wire_insert(
@@ -1042,10 +1048,9 @@ fn register_shard_callbacks(
         move |v, row| impact_appeared(v, shard, row),
     );
 
-    // ---- game_emote_event / game_chat_event / game_channel_event ------------------------------
+    // ---- game_emote_event / game_chat_event --------------------------------------------------
     // The social tier. Emotes and say/yell are range-bound, so both are anchored on the sender's
-    // cell (say/yell keep their yard-range gate inside the job); channel lines membership-gate
-    // per viewer inside the job.
+    // cell (say/yell keep their yard-range gate inside the job).
     {
         let coord = coord.clone();
         wire_insert(
@@ -1062,15 +1067,6 @@ fn register_shard_callbacks(
             "game_chat_event.insert",
             &view,
             move |v, row| chat_appeared(v, &coord, shard, row),
-        );
-    }
-    {
-        let coord = coord.clone();
-        wire_insert(
-            db.game_channel_event(),
-            "game_channel_event.insert",
-            &view,
-            move |v, row| channel_appeared(v, &coord, shard, row),
         );
     }
 
@@ -1109,10 +1105,10 @@ fn register_shard_callbacks(
 }
 
 /// Register the cross-shard PRIVATE-tier twins (#22 → #483) on the REALM-CORE connection: whisper
-/// and group events, Realm Chat Lines and Mail Arrivals written realm-side for recipients whose
-/// home shard is elsewhere. Same recipient-keyed dispatchers as `arm_shard`'s private tier, armed
-/// ONCE per realm-core connection instead of once per session — the last per-session registrations
-/// are gone (#483).
+/// and group events, Realm Chat Lines, Channel Notices and Mail Arrivals written realm-side for
+/// recipients whose home shard is elsewhere. Same recipient-keyed dispatchers as `arm_shard`'s
+/// private tier, armed ONCE per realm-core connection instead of once per session — the last
+/// per-session registrations are gone (#483).
 ///
 /// Only called when realm-core is a DISTINCT database (`Coordinator::connect` gates it): on a
 /// single-database gateway the world shard's own `arm_shard` registration already watches these
@@ -1155,6 +1151,12 @@ pub(crate) fn arm_realm_private(view: Arc<WorldView>, realm: Coordinator, coord:
         "realm.game_mail_arrival.insert",
         &view,
         |v, row| mail_arrived(v, row),
+    );
+    wire_insert_live(
+        db.game_chat_channel_notice_event(),
+        "realm.game_chat_channel_notice_event.insert",
+        &view,
+        |v, row| channel_notice_appeared(v, row),
     );
     wire_guild_relays(
         db,
@@ -2144,6 +2146,27 @@ fn realm_chat_appeared(view: &WorldView, row: &RealmChatEvent) {
     }
 }
 
+/// A Channel Notice landed → one `SMSG_CHANNEL_NOTIFY` per recipient with a World Session on this
+/// Gateway, whatever Shard it plays on. The Module chose the audience; no ignore list applies.
+fn channel_notice_appeared(view: &WorldView, row: &ChatChannelNoticeEvent) {
+    let row = Arc::new(row.clone());
+    for &recipient in &row.recipients {
+        let Some(viewer) = view
+            .session_of_owner(recipient)
+            .and_then(|session| view.viewer(session))
+        else {
+            continue;
+        };
+        if !super::subscriptions::private_recipient_audience(recipient, viewer.self_guid) {
+            continue;
+        }
+        let row = row.clone();
+        enqueue(viewer.clone(), move |_| {
+            super::subscriptions::channel_notice_outbound(&row)
+        });
+    }
+}
+
 /// An ignore row changed on `shard` → the owner's ignore set, if the owner plays on that Shard.
 /// Friend rows leave it alone.
 fn contact_changed(view: &WorldView, shard: ShardId, row: &ContactEntry, present: bool) {
@@ -2597,19 +2620,6 @@ fn chat_appeared(view: &WorldView, coord: &Coordinator, shard: ShardId, row: &Ch
         let self_guid = viewer.self_guid;
         enqueue(viewer.clone(), move |_| {
             super::subscriptions::chat_event_outbound(&coord, self_guid, &row)
-        });
-    }
-}
-
-/// A channel line landed → SMSG_MESSAGECHAT per MEMBER (membership checked in the job against the
-/// coordinator's `game_channel_member` cache — membership IS the audience, no proximity).
-fn channel_appeared(view: &WorldView, coord: &Coordinator, shard: ShardId, row: &ChannelEvent) {
-    let row = Arc::new(row.clone());
-    for viewer in viewers_on_shard(view, shard) {
-        let (row, coord) = (row.clone(), coord.clone());
-        let self_guid = viewer.self_guid;
-        enqueue(viewer.clone(), move |_| {
-            super::subscriptions::channel_event_outbound(&coord, self_guid, &row)
         });
     }
 }
@@ -4221,10 +4231,11 @@ mod family_audience_tests {
 #[cfg(test)]
 mod realm_chat_relay_tests {
     use super::{
-        contact_changed, realm_chat_appeared, ExplorationReplay, MotionPending, Viewer, WorldView,
+        channel_notice_appeared, contact_changed, realm_chat_appeared, ExplorationReplay,
+        MotionPending, Viewer, WorldView,
     };
     use crate::stdb::aoi::ViewerGates;
-    use crate::stdb::bindings::{ContactEntry, RealmChatEvent};
+    use crate::stdb::bindings::{ChatChannelNoticeEvent, ContactEntry, RealmChatEvent};
     use crate::stdb::world_index::CellKey;
     use crate::world::{Outbound, SessionTx};
     use std::collections::{HashMap, HashSet};
@@ -4359,6 +4370,60 @@ mod realm_chat_relay_tests {
             "a line the Module marked not ignorable reaches an ignorer too"
         );
         assert_eq!(received(&other_rx), [expected_line()]);
+    }
+
+    /// Every raw packet queued for one viewer, jobs run in order, as `(opcode, body)`.
+    fn received_raw(rx: &Receiver<Outbound>) -> Vec<(u16, Vec<u8>)> {
+        let mut packets = Vec::new();
+        while let Ok(outbound) = rx.try_recv() {
+            let Outbound::Job(job) = outbound else {
+                panic!("the Relay must enqueue packet work as a writer job");
+            };
+            for packet in job() {
+                let Outbound::Raw { opcode, body } = packet else {
+                    panic!("a Channel Notice is one raw packet");
+                };
+                packets.push((opcode, body));
+            }
+        }
+        packets
+    }
+
+    /// JOINED naming `SPEAKER` in "Tx": notice 0x00, the name, then the guid (cm:Channel.cpp:760-764).
+    #[test]
+    fn a_channel_notice_reaches_each_recipient_on_any_shard_and_nobody_else() {
+        let view = WorldView::new(true);
+        let (_, first_rx) = listener(&view, 0, 20);
+        let (_, second_rx) = listener(&view, 1, 30);
+        let (_, bystander_rx) = listener(&view, 0, 40);
+        contact_changed(&view, 0, &ignore_row(20, SPEAKER, true), true);
+
+        channel_notice_appeared(
+            &view,
+            &ChatChannelNoticeEvent {
+                id: 1,
+                notice: 0x00,
+                channel_name: "Tx".to_string(),
+                subject_guid: SPEAKER,
+                actor_guid: 0,
+                old_flags: 0,
+                new_flags: 0,
+                channel_flags: 0,
+                text: String::new(),
+                recipients: vec![20, 30, 99],
+                created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
+            },
+        );
+
+        let mut joined = vec![0x00, b'T', b'x', 0];
+        joined.extend(SPEAKER.to_le_bytes());
+        assert_eq!(
+            received_raw(&first_rx),
+            [(0x0099, joined.clone())],
+            "notices skip the ignore list"
+        );
+        assert_eq!(received_raw(&second_rx), [(0x0099, joined)]);
+        assert!(received_raw(&bystander_rx).is_empty());
     }
 
     /// A resubscribe replays inserts but not the deletes it missed. Reconciling the Shard must

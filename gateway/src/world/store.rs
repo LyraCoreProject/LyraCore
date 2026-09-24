@@ -1,5 +1,6 @@
 //! `WorldStore`: the broad storage/coordination seam used by the world session. Deep protocol
-//! families may add focused supertraits such as [`AuctionActionStore`], [`ChatActionStore`],
+//! families may add focused supertraits such as [`AuctionActionStore`], [`ChannelActionStore`],
+//! [`ChatActionStore`],
 //! [`ItemActionStore`], [`MeleeActionStore`], [`QuestActionStore`], [`TaxiActionStore`] and
 //! [`VendorActionStore`] so their wire mapping and failure policy can be tested without
 //! implementing this entire interface — a migrated family's operations live only on its own trait,
@@ -8,9 +9,9 @@
 //! navigation, not a split.
 
 use super::handlers::{
-    AuctionActionStore, CastStore, ChatActionStore, DuelActionStore, GuildActionStore,
-    ItemActionStore, LootWindowStore, MeleeActionStore, MemberStatsStore, QuestActionStore,
-    TaxiActionStore, VendorActionStore, WeatherStore,
+    AuctionActionStore, CastStore, ChannelActionStore, ChatActionStore, DuelActionStore,
+    GuildActionStore, ItemActionStore, LootWindowStore, MeleeActionStore, MemberStatsStore,
+    QuestActionStore, TaxiActionStore, VendorActionStore, WeatherStore,
 };
 use super::*;
 
@@ -24,6 +25,7 @@ pub struct WorldSessionToken {
 pub trait WorldStore:
     AuctionActionStore
     + CastStore
+    + ChannelActionStore
     + ChatActionStore
     + DuelActionStore
     + GuildActionStore
@@ -935,21 +937,6 @@ pub trait WorldStore:
     /// The live entity's max health (0 if not in world) — the fall-damage flavor line folds
     /// the shared curve against it.
     fn entity_max_health(&self, guid: u64) -> u32;
-
-    /// Join a chat channel — the client auto-sends CMSG_JOIN_CHANNEL on zone-in.
-    fn join_channel(&self, account_id: u64, self_guid: u64, channel: String) -> Result<()>;
-
-    /// Leave a chat channel (`CMSG_LEAVE_CHANNEL`).
-    fn leave_channel(&self, account_id: u64, self_guid: u64, channel: String) -> Result<()>;
-
-    /// Speak into a joined channel (the CMSG_MESSAGECHAT Channel arm).
-    fn send_channel_message(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        channel: String,
-        message: String,
-    ) -> Result<()>;
 
     /// Speak (`CMSG_MESSAGECHAT`, social tier): broadcast a say/yell line. `chat_type` 0 = say, 1 = yell.
     fn send_chat(

@@ -199,26 +199,6 @@ pub fn build_chat_message_to(
     }
 }
 
-/// Build `SMSG_MESSAGECHAT` for a CHANNEL line: ChatType::Channel carries the channel's
-/// display name (as the sender's client spelled it — the client matches it to the joined tab),
-/// the speaking player's guid (name via NAME_QUERY), and rank 0 (moderator ranks are out of scope).
-pub fn build_channel_message(
-    sender_guid: u64,
-    channel_display: String,
-    message: String,
-) -> SMSG_MESSAGECHAT {
-    SMSG_MESSAGECHAT {
-        chat_type: SMSG_MESSAGECHAT_ChatType::Channel {
-            channel_name: channel_display,
-            player: Guid::new(sender_guid),
-            player_rank: 0,
-        },
-        language: Language::try_from(0u8).unwrap_or(Language::Universal),
-        message,
-        tag: PlayerChatTag::None,
-    }
-}
-
 /// Build `SMSG_MESSAGECHAT` for a whisper. `is_inform` = the sender's echo ("To X:") via the
 /// `WhisperInform` type; otherwise the incoming line ("X whispers:") via `Whisper`. `other_guid` is
 /// the OTHER party (the client resolves their name via NAME_QUERY). Whispers are always understood

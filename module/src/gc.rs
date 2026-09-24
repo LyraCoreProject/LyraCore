@@ -3,22 +3,22 @@
 
 use spacetimedb::{reducer, table, ReducerContext, ScheduleAt, Table};
 
-// `breath_relay`, `guild`, `mail_timer`, `realm_chat` and `rest` are not glob re-exported at crate
-// scope, so their accessors need their own imports. Every other event table's accessor trait rides
-// a glob.
+// `breath_relay`, `channel`, `guild`, `mail_timer`, `realm_chat` and `rest` are not glob
+// re-exported at crate scope, so their accessors need their own imports. Every other event table's
+// accessor trait rides a glob.
 use crate::breath_relay::game_breath_relay_event;
+use crate::channel::game_chat_channel_notice_event;
 use crate::guild::game_guild_event;
 use crate::guild::membership::game_guild_invite;
 use crate::mail_timer::game_mail_arrival;
 use crate::realm_chat::game_realm_chat_event;
 use crate::rest::game_rest_state_event;
 use crate::{
-    game_addon_message, game_auction_notice, game_bot_invite_intent, game_channel_event,
-    game_chat_event, game_combat_event, game_duel_event, game_emote_event, game_group_event,
-    game_group_invite, game_levelup_event, game_movement_violation, game_roll_event,
-    game_spell_cast_event, game_spell_impact_event, game_system_message_event, game_teleport_event,
-    game_trade_event, game_trade_session, game_whisper_event, game_xp_event, EVENT_TTL_MICROS,
-    INVITE_TTL_MICROS,
+    game_addon_message, game_auction_notice, game_bot_invite_intent, game_chat_event,
+    game_combat_event, game_duel_event, game_emote_event, game_group_event, game_group_invite,
+    game_levelup_event, game_movement_violation, game_roll_event, game_spell_cast_event,
+    game_spell_impact_event, game_system_message_event, game_teleport_event, game_trade_event,
+    game_trade_session, game_whisper_event, game_xp_event, EVENT_TTL_MICROS, INVITE_TTL_MICROS,
 };
 use crate::{game_party_command_intent, game_party_command_receipt};
 // `game_movement_event` / `game_creature_move_event` are deliberately NOT imported: nothing writes
@@ -83,10 +83,10 @@ pub fn reap_movement_events(ctx: &ReducerContext, _schedule: EventReaperSchedule
     reap!(game_spell_cast_event); // spell-cast visuals (aura tracer)
     reap!(game_spell_impact_event); // deferred projectile-impact damage logs
     reap!(game_chat_event); // say/yell broadcast lines
-    reap!(game_channel_event); // channel lines (065)
     reap!(game_emote_event); // emote broadcast (text + animation)
     reap!(game_whisper_event); // private whisper lines (RLS-scoped)
     reap!(game_realm_chat_event); // Realm Chat Lines
+    reap!(game_chat_channel_notice_event); // Channel Notices
     reap!(game_system_message_event); // private Package-originated System Messages
     reap!(game_addon_message); // addon-bridge UI messages (184, RLS-scoped)
     reap!(game_roll_event); // unwritten since /roll became a Group Broadcast

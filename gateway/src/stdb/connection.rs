@@ -71,6 +71,7 @@ pub(crate) struct LiveConn {
     cache_generation: u64,
     character_revision: Arc<AtomicU64>,
     pub(crate) party_memberships: Arc<RwLock<PartyMembershipIndex>>,
+    pub(crate) chat_channels: Arc<RwLock<super::reads::ChannelIndex>>,
     /// Keeps this role's subscription active for the connection's lifetime.
     _sub: SubscriptionHandle,
 }
@@ -804,6 +805,7 @@ fn connect_subscribed(
             memberships.remove(old);
             memberships.insert(new);
         });
+    let chat_channels = watch_chat_channels(&conn);
     let (tx, rx) = std::sync::mpsc::channel::<std::result::Result<(), String>>();
     let tx_err = tx.clone();
     let applied_commands = pump_commands.clone();
@@ -852,8 +854,52 @@ fn connect_subscribed(
         cache_generation: LIVE_CONN_GENERATION.fetch_add(1, Ordering::Relaxed),
         character_revision: Arc::new(AtomicU64::new(0)),
         party_memberships,
+        chat_channels,
         _sub: sub,
     })
+}
+
+/// Keep a [`super::reads::ChannelIndex`] current from the channel and member callbacks. Initial
+/// subscription rows arrive as inserts.
+fn watch_chat_channels(conn: &DbConnection) -> Arc<RwLock<super::reads::ChannelIndex>> {
+    let index = Arc::new(RwLock::new(super::reads::ChannelIndex::default()));
+    let inserted = index.clone();
+    conn.db.game_chat_channel().on_insert(move |_ctx, row| {
+        inserted.write().unwrap().insert_channel(row);
+    });
+    let updated = index.clone();
+    conn.db
+        .game_chat_channel()
+        .on_update(move |_ctx, old, new| {
+            let mut channels = updated.write().unwrap();
+            channels.remove_channel(old);
+            channels.insert_channel(new);
+        });
+    let deleted = index.clone();
+    conn.db.game_chat_channel().on_delete(move |_ctx, row| {
+        deleted.write().unwrap().remove_channel(row);
+    });
+    let inserted = index.clone();
+    conn.db
+        .game_chat_channel_member()
+        .on_insert(move |_ctx, row| {
+            inserted.write().unwrap().insert_member(row);
+        });
+    let updated = index.clone();
+    conn.db
+        .game_chat_channel_member()
+        .on_update(move |_ctx, old, new| {
+            let mut channels = updated.write().unwrap();
+            channels.remove_member(old);
+            channels.insert_member(new);
+        });
+    let deleted = index.clone();
+    conn.db
+        .game_chat_channel_member()
+        .on_delete(move |_ctx, row| {
+            deleted.write().unwrap().remove_member(row);
+        });
+    index
 }
 
 /// Build one reducer-only pipe. Its one-row subscription is a liveness signal, not a cache.
@@ -1091,12 +1137,9 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // per-viewer bodies. Both TTL-reaped/ephemeral combat tables.
         "SELECT * FROM game_combat_event",
         "SELECT * FROM game_melee_attack",
-        // The social tier: emote broadcast, range-gated say/yell,
-        // membership-gated channel lines — `world_view::emote_appeared`/`chat_appeared`/
-        // `channel_appeared`. The member table is the audience source for channel lines.
+        // The social tier: emote broadcast and range-gated say/yell
+        // (`world_view::emote_appeared`/`chat_appeared`).
         "SELECT * FROM game_chat_event",
-        "SELECT * FROM game_channel_event",
-        "SELECT * FROM game_channel_member",
         "SELECT * FROM game_emote_event",
         // Creature virtual-item display projection. Durable rows are replayed after peer CREATE;
         // insert/update/delete also relay the three sparse UNIT fields live.
@@ -1130,6 +1173,13 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // Realm Chat Lines carry their whole audience. Only Realm-core writes them; every
         // database subscribes so an unsharded Realm hears them on its one connection.
         "SELECT * FROM game_realm_chat_event",
+        // Chat Channels and their Channel Notices. Only Realm-core writes them. The channel and
+        // member tables answer `/chatlist` and the owner query through `ChannelIndex`; the
+        // notices carry their whole audience like Realm Chat Lines.
+        "SELECT * FROM game_chat_channel",
+        "SELECT * FROM game_chat_channel_member",
+        "SELECT * FROM game_chat_channel_ban",
+        "SELECT * FROM game_chat_channel_notice_event",
         // Server-wide tunables. The gateway reads ONE column: `hosts_instances`, at
         // startup, to answer "when this realm creates a dungeon instance, will anything actually
         // spawn its population" (`ShardMap::check_instance_hosting`). Before this subscription the

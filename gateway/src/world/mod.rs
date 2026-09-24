@@ -52,23 +52,25 @@ mod who;
 use coalesce::CoalesceState;
 use handlers::{
     decode_auction_browse, dispatch_auction_action, dispatch_auction_browse_action, dispatch_cast,
-    dispatch_chat_action, dispatch_duel_action, dispatch_guild_action, dispatch_item_action,
-    dispatch_loot_window, dispatch_melee_action, dispatch_member_stats, dispatch_quest_action,
-    dispatch_taxi_action, dispatch_vendor_action, handle_bank, handle_char, handle_combat,
-    handle_loot, handle_mail, handle_query, handle_trade, handle_trainer, quest_giver_menu,
-    queue_reply_then_arm, AuctionActionOutcome, AuctionActionPlayer, CastOutcome, CastPlayer,
-    CastTransition, ChatActionOutcome, ChatActionPlayer, DuelActionOutcome, DuelActionPlayer,
-    GuildActionOutcome, GuildActionPlayer, ItemActionOutcome, ItemActionPlayer, LootWindowOutcome,
-    LootWindowPlayer, MeleeActionOutcome, MeleeActionPlayer, MemberStatsOutcome, MemberStatsPlayer,
-    OpenLootState, QuestActionOutcome, QuestActionPlayer, TaxiActionOutcome, TaxiActionPlayer,
-    VendorActionOutcome, VendorActionPlayer, CMSG_AUCTION_LIST_ITEMS_OPCODE,
+    dispatch_channel_action, dispatch_chat_action, dispatch_duel_action, dispatch_guild_action,
+    dispatch_item_action, dispatch_loot_window, dispatch_melee_action, dispatch_member_stats,
+    dispatch_quest_action, dispatch_taxi_action, dispatch_vendor_action, handle_bank, handle_char,
+    handle_combat, handle_loot, handle_mail, handle_query, handle_trade, handle_trainer,
+    quest_giver_menu, queue_reply_then_arm, AuctionActionOutcome, AuctionActionPlayer, CastOutcome,
+    CastPlayer, CastTransition, ChannelActionOutcome, ChatActionOutcome, ChatActionPlayer,
+    DuelActionOutcome, DuelActionPlayer, GuildActionOutcome, GuildActionPlayer, ItemActionOutcome,
+    ItemActionPlayer, LootWindowOutcome, LootWindowPlayer, MeleeActionOutcome, MeleeActionPlayer,
+    MemberStatsOutcome, MemberStatsPlayer, OpenLootState, QuestActionOutcome, QuestActionPlayer,
+    TaxiActionOutcome, TaxiActionPlayer, VendorActionOutcome, VendorActionPlayer,
+    CMSG_AUCTION_LIST_ITEMS_OPCODE,
 };
 pub(crate) use handlers::{
     member_stats_tick, zone_weather_message, AuctionBrowseRequest, AuctionPage, AuctionQuery,
-    CharacterFacts, ChatOutcome, CreateAuctionOutcome, CreateAuctionRequest, GuildOutcome,
-    GuildRequest, ItemActionResult, LootActionStatus, LootWindowRefusal, LootWindowRequestStatus,
-    MemberPresence, MemberStatsRecord, MemberStatsStore, PlaceBidOutcome, PlaceBidRequest,
-    RealmChatRequest, SpeakerFacts, TrainerBuyOutcome, WeatherStore,
+    ChannelOutcome, ChannelRequest, ChannelRoster, CharacterFacts, ChatOutcome,
+    CreateAuctionOutcome, CreateAuctionRequest, GuildOutcome, GuildRequest, ItemActionResult,
+    LootActionStatus, LootWindowRefusal, LootWindowRequestStatus, MemberPresence,
+    MemberStatsRecord, MemberStatsStore, PlaceBidOutcome, PlaceBidRequest, RealmChatRequest,
+    SpeakerFacts, TrainerBuyOutcome, WeatherStore,
 };
 use login_queue::{Admission, LoginQueue};
 use social::handle_social;
@@ -1278,7 +1280,7 @@ fn dispatch<St: WorldStore + ?Sized>(
         }
         CastOutcome::PassThrough(msg) => msg,
     };
-    let Some(msg) = handle_combat(tx, store, conn, msg)? else {
+    let Some(msg) = handle_combat(store, conn, msg)? else {
         return Ok(());
     };
     let dispatches_to_loot_window = if let ClientOpcodeMessage::CMSG_GAMEOBJ_USE(request) = &msg {
@@ -1480,6 +1482,22 @@ fn dispatch<St: WorldStore + ?Sized>(
             return Ok(());
         }
         ChatActionOutcome::PassThrough(msg) => msg,
+    };
+    let msg = match dispatch_channel_action(
+        store,
+        ChatActionPlayer {
+            account_id: conn.account_id,
+            self_guid: social::self_guid(conn),
+        },
+        msg,
+    )? {
+        ChannelActionOutcome::Handled { outbound } => {
+            for message in outbound {
+                send(tx, message)?;
+            }
+            return Ok(());
+        }
+        ChannelActionOutcome::PassThrough(msg) => msg,
     };
     let msg = match dispatch_guild_action(
         store,

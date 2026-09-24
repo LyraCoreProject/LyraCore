@@ -268,7 +268,8 @@ All three tables are private. The Account Claim and Account Fence are keyed by t
 id. The Account Claim stores its Character guid, generation, request nonce, expiration and closed
 state. The Account Fence also stores the Account name, since a World Shard's local Account id can
 differ from Realm-core's id. Closed rows remain so an old request cannot lower a generation or
-reopen a completed claim.
+reopen a completed claim. The Gateway lease schedule closes expired claims. Releasing, replacing or
+closing a claim ends its Character's Channel Memberships (`module/src/channel.rs`).
 The Account Character Owner table is keyed by Character guid and stores the exact Realm Account id
 and name. It permits a documented shadow Account to carry a transferred Character without making
 the shard-local Account id authoritative. Conflicting real Account names still refuse admission.

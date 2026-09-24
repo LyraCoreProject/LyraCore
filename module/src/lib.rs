@@ -285,6 +285,8 @@ mod auth;
 mod breath;
 mod breath_relay;
 mod bridge;
+/// Chat Channels: team-scoped channels on Realm-core and their Channel Notices.
+mod channel;
 mod character;
 mod chat;
 mod combat;
@@ -419,6 +421,8 @@ pub use auth::*;
 pub use breath::*;
 pub use breath_relay::BreathRelayEvent; // gateway schema-parity relay
 pub use bridge::*;
+// Named, like `realm_chat`: re-exported for the gateway schema-parity test.
+pub use channel::{ChatChannel, ChatChannelBan, ChatChannelMember, ChatChannelNoticeEvent};
 pub use character::*;
 pub use chat::*;
 pub use combat::*;

@@ -1,9 +1,10 @@
-//! Social tier: say, yell, `/e`, text emotes (`/dance`, `/wave`, …), channels, whispers, contacts
-//! and `/roll`. A player's `CMSG_MESSAGECHAT` or `CMSG_TEXT_EMOTE` becomes a per-recipient or
+//! Social tier: say, yell, `/e`, text emotes (`/dance`, `/wave`, …), whispers, contacts and
+//! `/roll`. A player's `CMSG_MESSAGECHAT` or `CMSG_TEXT_EMOTE` becomes a per-recipient or
 //! broadcast event row that the Gateway turns into `SMSG_MESSAGECHAT` / `SMSG_TEXT_EMOTE` (+
 //! `SMSG_EMOTE` animation). Say, yell and `/e` rows carry no range: the Gateway scopes them to the
-//! speaker's surroundings when it relays them. Party chat is not here. It is a Realm Chat Line
-//! (`crate::realm_chat`), committed on Realm-core with its whole audience. [event]
+//! speaker's surroundings when it relays them. Party and channel chat are not here. They are
+//! Realm Chat Lines (`crate::realm_chat`), committed on Realm-core with their whole audience.
+//! Chat Channels themselves live in `crate::channel`. [event]
 
 use spacetimedb::{reducer, table, Identity, ReducerContext, Table, Timestamp};
 
@@ -141,14 +142,12 @@ fn write_chat_event(
 }
 
 // ===========================================================================================
-//  Chat channels (065): General/Trade/LocalDefense — the client auto-joins on zone-in.
+//  Retired shard-local chat channels. Chat Channels live on Realm-core (`crate::channel`). These
+//  two tables stay in the schema, unwritten and unsubscribed, because dropping a table is a
+//  destructive migration.
 // ===========================================================================================
 
-/// One (channel, character) membership row (065). PUBLIC broadcast-shape: every player connection
-/// checks its OWN membership when relaying a `ChannelEvent` (small table, self-filter). `channel`
-/// is the NORMALIZED key (lowercased trimmed full client string, zone suffix included — "general -
-/// elwynn forest"), so casing can't split a room; the display form rides each event row. Rows
-/// persist across relogs (the client re-sends JOIN every zone-in; `join_channel` dedupes). [entity]
+/// Retired: nothing writes it. [entity]
 #[table(accessor = game_channel_member, public, index(accessor = by_channel, btree(columns = [channel])))]
 pub struct ChannelMember {
     #[primary_key]
@@ -159,114 +158,17 @@ pub struct ChannelMember {
     pub owner_identity: Identity,
 }
 
-/// A channel line to fan out (065) — its own table per the one-table-per-delivery-shape rule (say/
-/// yell broadcast vs whisper RLS vs party group-event): channel delivery = "every MEMBER anywhere",
-/// which fits neither. Public; reaped by the shared event GC (`id` + `created_at`). [event]
+/// Retired: nothing writes it. [event]
 #[table(accessor = game_channel_event, public)]
 pub struct ChannelEvent {
     #[primary_key]
     #[auto_inc]
     pub id: u64,
-    pub channel: String,         // normalized key (matches ChannelMember.channel)
-    pub channel_display: String, // as the sender's client spelled it (the wire echoes this)
+    pub channel: String,
+    pub channel_display: String,
     pub sender_guid: u64,
     pub message: String,
     pub created_at: Timestamp,
-}
-
-/// Lowercase+trim a client channel string into the membership key. [pure]
-pub fn normalize_channel(name: &str) -> String {
-    name.trim().to_ascii_lowercase()
-}
-
-/// Join `channel` (065, CMSG_JOIN_CHANNEL): dedupe on (key, character). The gateway acks with
-/// SMSG_CHANNEL_NOTIFY(YouJoined) unconditionally — vanilla treats a re-join as idempotent.
-///
-/// The channel-join core, actor-explicit — same split as [`apply_send_chat`].
-pub(crate) fn apply_join_channel(
-    ctx: &ReducerContext,
-    sender: crate::WorldEntity,
-    channel: String,
-) -> Result<(), String> {
-    let key = normalize_channel(&channel);
-    if key.is_empty() {
-        return Err("empty channel name".to_string());
-    }
-    let members = ctx.db.game_channel_member();
-    let present = members
-        .by_channel()
-        .filter(&key)
-        .any(|m| m.character_guid == sender.guid);
-    if !present {
-        members.insert(ChannelMember {
-            id: 0,
-            channel: key,
-            character_guid: sender.guid,
-            // The MEMBER's own binding, not `ctx.sender()` — identical on the sender path (the
-            // entity was resolved BY that identity) and correct on the gateway path, where
-            // `ctx.sender()` is the shared connection's operator identity.
-            owner_identity: sender.owner_identity,
-        });
-    }
-    Ok(())
-}
-
-/// Leave `channel` (065, CMSG_LEAVE_CHANNEL). Idempotent — leaving a channel you're not in is a no-op.
-///
-/// The channel-leave core, actor-explicit — same split as [`apply_send_chat`].
-pub(crate) fn apply_leave_channel(
-    ctx: &ReducerContext,
-    sender: crate::WorldEntity,
-    channel: String,
-) -> Result<(), String> {
-    let key = normalize_channel(&channel);
-    let members = ctx.db.game_channel_member();
-    let ids: Vec<u64> = members
-        .by_channel()
-        .filter(&key)
-        .filter(|m| m.character_guid == sender.guid)
-        .map(|m| m.id)
-        .collect();
-    for id in ids {
-        members.id().delete(id);
-    }
-    Ok(())
-}
-
-/// Speak into `channel` (065, the CMSG_MESSAGECHAT Channel arm): sender must be a member (the
-/// client can't normally send to an un-joined channel — a modified one gets an Err). Same
-/// dead-guard + length cap as say/yell.
-///
-/// The channel-speak core, actor-explicit — same split as [`apply_send_chat`].
-pub(crate) fn apply_send_channel_message(
-    ctx: &ReducerContext,
-    sender: crate::WorldEntity,
-    channel: String,
-    message: String,
-) -> Result<(), String> {
-    if sender.dead {
-        return Err("dead players cannot speak".to_string());
-    }
-    let key = normalize_channel(&channel);
-    let member = ctx
-        .db
-        .game_channel_member()
-        .by_channel()
-        .filter(&key)
-        .any(|m| m.character_guid == sender.guid);
-    if !member {
-        return Err(format!("not in channel {channel}"));
-    }
-    let text = normalized_message(&message).ok_or_else(|| "empty message".to_string())?;
-    ctx.db.game_channel_event().insert(ChannelEvent {
-        id: 0,
-        channel: key,
-        channel_display: channel.trim().to_string(),
-        sender_guid: sender.guid,
-        message: text,
-        created_at: ctx.timestamp,
-    });
-    Ok(())
 }
 
 /// A social emote to fan out — the "X dances." chat line (`SMSG_TEXT_EMOTE`) plus the animation

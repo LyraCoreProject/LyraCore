@@ -86,7 +86,7 @@ pub(crate) mod character_owned_tripwire {
         (
             &[
                 "game_auction_notice",
-                "game_channel_event",
+                "game_chat_channel_notice_event",
                 "game_chat_event",
                 "game_combat_event",
                 "game_emote_event",
@@ -162,8 +162,16 @@ pub(crate) mod character_owned_tripwire {
             "Loot Roll-owned vote snapshot resolved or removed with the roll",
         ),
         (
-            &["game_channel_member"],
-            "channel membership rebuilt by client join and leave requests",
+            &["game_channel_event", "game_channel_member"],
+            "retired shard-local channel tables that nothing writes",
+        ),
+        (
+            &[
+                "game_chat_channel",
+                "game_chat_channel_ban",
+                "game_chat_channel_member",
+            ],
+            "Realm-core Chat Channel state; membership ends with the Account Claim that admitted it",
         ),
         (&["game_gateway_session"], "live Session routing state"),
         (
@@ -1396,6 +1404,8 @@ mod gc_reap_tripwire {
     ///   ends that life (`mail_timer.rs`). A TTL reap would delete Mail that Mail Expiry returns.
     const EXEMPT_ACCESSORS: &[&str] = &[
         "game_creature_move_event",
+        // Retired with the shard-local channel path: nothing writes it.
+        "game_channel_event",
         "game_mail",
         // Durable source-side work. The exact Gateway completion deletes it; a transfer source
         // deletion retains it so process restart can finish the destination release.

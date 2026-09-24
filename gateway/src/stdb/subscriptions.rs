@@ -2473,6 +2473,22 @@ pub(crate) fn realm_chat_outbound(row: &RealmChatEvent) -> Vec<Outbound> {
     .collect()
 }
 
+/// A Channel Notice: one raw `SMSG_CHANNEL_NOTIFY` for one recipient. The Relay already chose the
+/// audience.
+pub(crate) fn channel_notice_outbound(row: &ChatChannelNoticeEvent) -> Vec<Outbound> {
+    let (opcode, body) = codec::channel::notify(&codec::channel::ChannelNoticeView {
+        notice: row.notice,
+        channel_name: row.channel_name.clone(),
+        subject_guid: row.subject_guid,
+        actor_guid: row.actor_guid,
+        old_flags: row.old_flags,
+        new_flags: row.new_flags,
+        channel_flags: row.channel_flags,
+        text: row.text.clone(),
+    });
+    vec![Outbound::Raw { opcode, body }]
+}
+
 /// Whisper: the packet body both legs run. Audience resolved by the
 /// caller — RLS per-player, the recipient owner-session lookup on the shared leg.
 pub(crate) fn whisper_event_outbound(row: &WhisperEvent) -> Vec<Outbound> {
@@ -2665,38 +2681,6 @@ fn chat_event_message(row: &ChatEvent, sender_name: Option<String>) -> Outbound 
         row.message.clone(),
     );
     Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(message)))
-}
-
-/// Chat channels: membership IS the audience (no proximity — General
-/// spans the zone), checked against the coordinator's `game_channel_member` cache per viewer. The
-/// sender hears their echo through the same path (they're a member too).
-pub(crate) fn channel_event_outbound(
-    coord: &Coordinator,
-    self_guid: u64,
-    row: &ChannelEvent,
-) -> Vec<Outbound> {
-    let member = {
-        // Edition-2021 MutexGuard temporary-scope trap (danger-zones): single statement, bound.
-        let guard = coord.0.coord();
-        let is_member = guard
-            .conn
-            .db
-            .game_channel_member()
-            .iter()
-            .any(|m| m.character_guid == self_guid && m.channel == row.channel);
-        is_member
-    };
-    if !member {
-        return Vec::new();
-    }
-    let m = codec::build_channel_message(
-        row.sender_guid,
-        row.channel_display.clone(),
-        row.message.clone(),
-    );
-    vec![Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(
-        Box::new(m),
-    ))]
 }
 
 /// Text emotes (`/wave`, `/dance`, …): SMSG_TEXT_EMOTE + SMSG_EMOTE, `chat_in_range`-gated at

@@ -24,7 +24,7 @@ pub struct SessionActor {
     pub ownership: Option<WorldSessionToken>,
 }
 
-#[table(accessor = game_account_claim, index(accessor = by_character, btree(columns = [character_guid])))]
+#[table(accessor = game_account_claim, index(accessor = by_character, btree(columns = [character_guid])), index(accessor = by_closed, btree(columns = [closed])))]
 pub struct AccountClaim {
     #[primary_key]
     pub account_id: u64,
@@ -183,6 +183,11 @@ pub fn claim_account(
             .ok_or("Account generation exhausted")?,
         None => 1,
     };
+    // The prior generation is dead: released, or expired before the reaper closed it. Its
+    // Character leaves every Chat Channel before the new generation exists. A no-op after release.
+    if let Some(row) = &prior {
+        crate::channel::leave_all(ctx, row.character_guid);
+    }
     let row = AccountClaim {
         account_id,
         generation,
@@ -224,9 +229,11 @@ pub fn release_account_claim(ctx: &ReducerContext, token: WorldSessionToken) -> 
         .account_id()
         .find(token.account_id)
     {
-        if same(token, row.generation, row.request_nonce) {
+        if same(token, row.generation, row.request_nonce) && !row.closed {
+            let character_guid = row.character_guid;
             row.closed = true;
             ctx.db.game_account_claim().account_id().update(row);
+            crate::channel::leave_all(ctx, character_guid);
         }
     }
     Ok(())
@@ -533,6 +540,28 @@ pub(crate) fn require_actor_for(
         },
     )
     .map(|_| ())
+}
+
+/// Close open Account Claims whose deadline has passed, at most [`REAP_LIMIT`] per call. Called
+/// from the Gateway lease schedule, so a crashed Gateway's Characters leave their Chat Channels.
+/// [`claim_account`] and [`require_actor`] already treat an expired claim as dead, so closing one
+/// changes no admission outcome.
+pub(crate) fn reap_account_claims(ctx: &ReducerContext) {
+    let cutoff = now(ctx);
+    let expired: Vec<AccountClaim> = ctx
+        .db
+        .game_account_claim()
+        .by_closed()
+        .filter(false)
+        .filter(|row| row.expires_micros <= cutoff)
+        .take(REAP_LIMIT)
+        .collect();
+    for mut row in expired {
+        let character_guid = row.character_guid;
+        row.closed = true;
+        ctx.db.game_account_claim().account_id().update(row);
+        crate::channel::leave_all(ctx, character_guid);
+    }
 }
 
 /// Called from the existing Gateway lease schedule; one surviving Gateway cannot renew another

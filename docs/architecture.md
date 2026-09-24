@@ -421,12 +421,13 @@ Every relay hangs off a coordinator connection. Row-driven relays take one of tw
   impact, and emote rows carry the actor's cell. Melee stance uses the attacker's indexed cell, chat
   uses the sender's, and auras use the target's. The shared cell index selects nearby viewers and
   named owners on the source Shard, and the job's per-viewer gate stays the final filter. Only
-  corpses, dynamic objects, channel lines and weather still fan out per shard. `/roll` is a Group
-  Broadcast on the group event relay. The cross-shard whisper/group/auction-notice/Mail Arrival
-  twins ride the same dispatchers on the realm-core connection (`arm_realm_private`), armed only
-  when realm-core is a distinct database. The guild relays register in both places too:
-  `game_guild_event` rows go to their addressed recipient or to every online member of the Guild
-  on this Gateway, and `game_guild_member` changes drive the Guild Projection below.
+  corpses, dynamic objects and weather still fan out per shard. `/roll` is a Group Broadcast on the
+  group event relay. The cross-shard whisper/group/auction-notice/Mail Arrival twins, Realm Chat
+  Lines and Channel Notices ride the same dispatchers on the realm-core connection
+  (`arm_realm_private`), armed only when realm-core is a distinct database. The guild relays
+  register in both places too: `game_guild_event` rows go to their addressed recipient or to every
+  online member of the Guild on this Gateway, and `game_guild_member` changes drive the Guild
+  Projection below.
 - **Viewer lifetime** (`subscribe_player_events`): world entry prepares relay state, registers one
   viewer, and performs resident-state sweeps. `PlayerSubscriptions` owns only that registration;
   dropping it removes the viewer. It owns no row callbacks. A world-port removes the source viewer
