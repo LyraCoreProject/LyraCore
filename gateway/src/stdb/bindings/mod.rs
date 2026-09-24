@@ -276,6 +276,8 @@ pub mod debug_use_gameobject_reducer;
 pub mod debug_use_hearthstone_reducer;
 pub mod debug_use_item_reducer;
 pub mod debug_verify_auction_buyout_fixture_reducer;
+pub mod debug_verify_auction_buyout_new_bid_notice_fixture_reducer;
+pub mod debug_verify_auction_buyout_notices_fixture_reducer;
 pub mod debug_verify_auction_expiry_fixture_reducer;
 pub mod debug_verify_auction_expiry_notices_fixture_reducer;
 pub mod debug_verify_choice_reward_fixture_reducer;
@@ -1363,6 +1365,8 @@ pub use debug_use_gameobject_reducer::debug_use_gameobject;
 pub use debug_use_hearthstone_reducer::debug_use_hearthstone;
 pub use debug_use_item_reducer::debug_use_item;
 pub use debug_verify_auction_buyout_fixture_reducer::debug_verify_auction_buyout_fixture;
+pub use debug_verify_auction_buyout_new_bid_notice_fixture_reducer::debug_verify_auction_buyout_new_bid_notice_fixture;
+pub use debug_verify_auction_buyout_notices_fixture_reducer::debug_verify_auction_buyout_notices_fixture;
 pub use debug_verify_auction_expiry_fixture_reducer::debug_verify_auction_expiry_fixture;
 pub use debug_verify_auction_expiry_notices_fixture_reducer::debug_verify_auction_expiry_notices_fixture;
 pub use debug_verify_choice_reward_fixture_reducer::debug_verify_choice_reward_fixture;
@@ -2950,6 +2954,8 @@ pub enum Reducer {
         slot: u8,
     },
     DebugVerifyAuctionBuyoutFixture,
+    DebugVerifyAuctionBuyoutNewBidNoticeFixture,
+    DebugVerifyAuctionBuyoutNoticesFixture,
     DebugVerifyAuctionExpiryFixture,
     DebugVerifyAuctionExpiryNoticesFixture,
     DebugVerifyChoiceRewardFixture {
@@ -4270,6 +4276,12 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugUseHearthstone { .. } => "debug_use_hearthstone",
             Reducer::DebugUseItem { .. } => "debug_use_item",
             Reducer::DebugVerifyAuctionBuyoutFixture => "debug_verify_auction_buyout_fixture",
+            Reducer::DebugVerifyAuctionBuyoutNewBidNoticeFixture => {
+                "debug_verify_auction_buyout_new_bid_notice_fixture"
+            }
+            Reducer::DebugVerifyAuctionBuyoutNoticesFixture => {
+                "debug_verify_auction_buyout_notices_fixture"
+            }
             Reducer::DebugVerifyAuctionExpiryFixture => "debug_verify_auction_expiry_fixture",
             Reducer::DebugVerifyAuctionExpiryNoticesFixture => {
                 "debug_verify_auction_expiry_notices_fixture"
@@ -5907,6 +5919,10 @@ Reducer::DebugTakeLoot{
                 slot: slot.clone(),
 }),
             Reducer::DebugVerifyAuctionBuyoutFixture => __sats::bsatn::to_vec(&debug_verify_auction_buyout_fixture_reducer::DebugVerifyAuctionBuyoutFixtureArgs {
+                }),
+Reducer::DebugVerifyAuctionBuyoutNewBidNoticeFixture => __sats::bsatn::to_vec(&debug_verify_auction_buyout_new_bid_notice_fixture_reducer::DebugVerifyAuctionBuyoutNewBidNoticeFixtureArgs {
+                }),
+Reducer::DebugVerifyAuctionBuyoutNoticesFixture => __sats::bsatn::to_vec(&debug_verify_auction_buyout_notices_fixture_reducer::DebugVerifyAuctionBuyoutNoticesFixtureArgs {
                 }),
 Reducer::DebugVerifyAuctionExpiryFixture => __sats::bsatn::to_vec(&debug_verify_auction_expiry_fixture_reducer::DebugVerifyAuctionExpiryFixtureArgs {
                 }),

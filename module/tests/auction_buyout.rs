@@ -23,20 +23,26 @@ fn real_realm_reducer_commits_exact_buyout_mail_before_the_next_transaction() {
                 "900",
             ][..],
         ),
-        (
-            "realm_auction_decide_bid",
-            // The RemainActive fixture: no buyout, no prior bidder, so this offer settles
-            // nothing and displaces nobody — exactly the New Bid notice path.
-            &[
-                "5090056",
-                r#"{"guid":5090058,"ownership":null}"#,
-                "5090056",
-                "1",
-                "60",
-            ][..],
-        ),
-        ("debug_verify_auction_buyout_fixture", &[][..]),
     ] {
         standalone.assert_call(reducer, args);
     }
+    // Auction Notices are a one-shot, TTL-reaped relay (see gc.rs), so check each leg's notices
+    // immediately after the decide call that fires them — not after the next decide call below,
+    // where the reaper could have already claimed the row on schedule.
+    standalone.assert_call("debug_verify_auction_buyout_notices_fixture", &[]);
+
+    standalone.assert_call(
+        "realm_auction_decide_bid",
+        // The RemainActive fixture: no buyout, no prior bidder, so this offer settles
+        // nothing and displaces nobody — exactly the New Bid notice path.
+        &[
+            "5090056",
+            r#"{"guid":5090058,"ownership":null}"#,
+            "5090056",
+            "1",
+            "60",
+        ],
+    );
+    standalone.assert_call("debug_verify_auction_buyout_new_bid_notice_fixture", &[]);
+    standalone.assert_call("debug_verify_auction_buyout_fixture", &[]);
 }
