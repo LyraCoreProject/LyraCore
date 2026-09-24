@@ -116,7 +116,7 @@ jobs:
         with:
           path: lyracore
           persist-credentials: false
-      # Packages main with the raid slot and quest type fixture columns.
+      # A packages main commit that carries the raid slot and quest type fixture columns.
       - name: Check out the continuous movement Package revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
