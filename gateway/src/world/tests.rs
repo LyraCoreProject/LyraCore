@@ -4269,6 +4269,21 @@ impl ChannelActionStore for InMemoryStore {
     fn channel_roster(&self, _team: u32, _channel_name: &str) -> Result<Option<ChannelRoster>> {
         Ok(None)
     }
+
+    fn online_character_by_name(&self, name: &str) -> Result<Option<(u64, u8, String)>> {
+        for guid in presence::resolve_all_by_name(self, name)? {
+            if let Some(character) = presence::of(self, guid)? {
+                if character.session_online {
+                    return Ok(Some((character.guid, character.race, character.name)));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    fn ignores(&self, owner_guid: u64, other_guid: u64) -> Result<bool> {
+        whisper::ignored_anywhere(self, owner_guid, other_guid)
+    }
 }
 
 impl DuelActionStore for InMemoryStore {

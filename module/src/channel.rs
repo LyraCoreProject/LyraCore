@@ -152,6 +152,35 @@ pub fn realm_channel_op(
         }
         channel_op::LEAVE => leave(ctx, team, actor_guid, &request.channel_name),
         channel_op::PASSWORD => set_password(ctx, team, actor_guid, &request),
+        channel_op::SET_OWNER => set_owner(ctx, team, actor_guid, &request),
+        channel_op::MODERATOR => set_mode_flag(
+            ctx,
+            team,
+            actor_guid,
+            &request,
+            member_flag::MODERATOR,
+            true,
+        ),
+        channel_op::UNMODERATOR => set_mode_flag(
+            ctx,
+            team,
+            actor_guid,
+            &request,
+            member_flag::MODERATOR,
+            false,
+        ),
+        channel_op::MUTE => {
+            set_mode_flag(ctx, team, actor_guid, &request, member_flag::MUTED, true)
+        }
+        channel_op::UNMUTE => {
+            set_mode_flag(ctx, team, actor_guid, &request, member_flag::MUTED, false)
+        }
+        channel_op::KICK => kick_or_ban(ctx, team, actor_guid, &request, false),
+        channel_op::BAN => kick_or_ban(ctx, team, actor_guid, &request, true),
+        channel_op::UNBAN => unban(ctx, team, actor_guid, &request),
+        channel_op::INVITE => invite(ctx, team, actor_guid, &request),
+        channel_op::ANNOUNCEMENTS => toggle(ctx, team, actor_guid, &request, Toggle::Announcements),
+        channel_op::MODERATE => toggle(ctx, team, actor_guid, &request, Toggle::Moderate),
         other => return Err(format!("unknown channel op {other}")),
     };
     outcome.map_err(|refusal| {
@@ -242,7 +271,8 @@ fn leave(
         Notice::about(notice::YOU_LEFT, 0),
         vec![leaver],
     );
-    depart(ctx, channel, member);
+    let announced = channel.announcements;
+    depart(ctx, channel, member, announced);
     Ok(())
 }
 
@@ -272,6 +302,250 @@ fn set_password(
     Ok(())
 }
 
+/// SET_OWNER (cm:Channel.cpp:393-444, cm:Channel.cpp:976-1017). A built-in channel has no owner
+/// and ignores the op (vm:Channel.cpp:473-474). Otherwise the actor must be the owner (`NotOwner`)
+/// and the target must be a member (`PlayerNotFound`).
+fn set_owner(
+    ctx: &ReducerContext,
+    team: u32,
+    actor: u64,
+    request: &ChannelRequest,
+) -> Result<(), ChannelRefusal> {
+    let (channel, _) = membership(ctx, team, &request.channel_name, actor)?;
+    if channel.builtin_id != 0 {
+        return Ok(());
+    }
+    if actor != channel.owner_guid {
+        return Err(ChannelRefusal::NotOwner);
+    }
+    if member_of(ctx, channel.channel_id, request.target_guid).is_none() {
+        return Err(ChannelRefusal::PlayerNotFound);
+    }
+    let exclaim = members_in_join_order(ctx, channel.channel_id).len() > 1;
+    hand_ownership(ctx, channel, request.target_guid, exclaim);
+    Ok(())
+}
+
+/// MODERATOR, UNMODERATOR, MUTE and UNMUTE (cm:Channel.cpp:319-391, cm:Channel.cpp:960-974). The
+/// actor must be a moderator (`NotModerator`) and the target must be a member (`PlayerNotFound`).
+/// Naming the owner refuses `NotOwner`, except that the owner's own MODERATOR bit never changes
+/// (cm:Channel.cpp:359-360): a silent no-op, not a mute exemption. `change_member_flags` already
+/// silently skips a flag that is already at the requested state.
+fn set_mode_flag(
+    ctx: &ReducerContext,
+    team: u32,
+    actor: u64,
+    request: &ChannelRequest,
+    flag: u8,
+    set: bool,
+) -> Result<(), ChannelRefusal> {
+    let (channel, actor_member) = membership(ctx, team, &request.channel_name, actor)?;
+    if actor_member.member_flags & member_flag::MODERATOR == 0 {
+        return Err(ChannelRefusal::NotModerator);
+    }
+    let target = request.target_guid;
+    if member_of(ctx, channel.channel_id, target).is_none() {
+        return Err(ChannelRefusal::PlayerNotFound);
+    }
+    if target == channel.owner_guid {
+        if actor != channel.owner_guid {
+            return Err(ChannelRefusal::NotOwner);
+        }
+        if flag == member_flag::MODERATOR {
+            return Ok(());
+        }
+    }
+    change_member_flags(ctx, &channel, target, |flags| {
+        if set {
+            flags | flag
+        } else {
+            flags & !flag
+        }
+    });
+    Ok(())
+}
+
+/// KICK and BAN (cm:Channel.cpp:169-237). The actor must be a moderator; only the owner may remove
+/// the owner. A BAN of a Character not yet banned records the ban and writes PLAYER_BANNED;
+/// otherwise, and for KICK, write PLAYER_KICKED. Either notice names target and actor and goes to
+/// every member, target included, before the target departs (cm:Channel.cpp:231-233) — `depart`
+/// sends no LEFT of its own here, because this notice already covers the departure.
+fn kick_or_ban(
+    ctx: &ReducerContext,
+    team: u32,
+    actor: u64,
+    request: &ChannelRequest,
+    ban: bool,
+) -> Result<(), ChannelRefusal> {
+    let (channel, actor_member) = membership(ctx, team, &request.channel_name, actor)?;
+    if actor_member.member_flags & member_flag::MODERATOR == 0 {
+        return Err(ChannelRefusal::NotModerator);
+    }
+    let target = request.target_guid;
+    let Some(target_member) = member_of(ctx, channel.channel_id, target) else {
+        return Err(ChannelRefusal::PlayerNotFound);
+    };
+    if channel.owner_guid == target && actor != channel.owner_guid {
+        return Err(ChannelRefusal::NotOwner);
+    }
+    let fresh_ban = ban && !is_banned(ctx, channel.channel_id, target);
+    if fresh_ban {
+        ctx.db.game_chat_channel_ban().insert(ChatChannelBan {
+            id: 0,
+            channel_id: channel.channel_id,
+            character_guid: target,
+        });
+    }
+    notify(
+        ctx,
+        &channel,
+        Notice {
+            notice: if fresh_ban {
+                notice::PLAYER_BANNED
+            } else {
+                notice::PLAYER_KICKED
+            },
+            subject_guid: target,
+            actor_guid: actor,
+            ..Notice::default()
+        },
+        guids(&members_in_join_order(ctx, channel.channel_id)),
+    );
+    depart(ctx, channel, target_member, false);
+    Ok(())
+}
+
+/// UNBAN (cm:Channel.cpp:239-286). The actor must be a moderator. A Character not banned refuses
+/// `PlayerNotBanned`. Otherwise remove the ban and write PLAYER_UNBANNED naming target and actor.
+fn unban(
+    ctx: &ReducerContext,
+    team: u32,
+    actor: u64,
+    request: &ChannelRequest,
+) -> Result<(), ChannelRefusal> {
+    let (channel, actor_member) = membership(ctx, team, &request.channel_name, actor)?;
+    if actor_member.member_flags & member_flag::MODERATOR == 0 {
+        return Err(ChannelRefusal::NotModerator);
+    }
+    let target = request.target_guid;
+    let ban_id = ctx
+        .db
+        .game_chat_channel_ban()
+        .by_channel()
+        .filter(channel.channel_id)
+        .find(|ban| ban.character_guid == target)
+        .map(|ban| ban.id);
+    let Some(ban_id) = ban_id else {
+        return Err(ChannelRefusal::PlayerNotBanned);
+    };
+    ctx.db.game_chat_channel_ban().id().delete(ban_id);
+    notify(
+        ctx,
+        &channel,
+        Notice {
+            notice: notice::PLAYER_UNBANNED,
+            subject_guid: target,
+            actor_guid: actor,
+            ..Notice::default()
+        },
+        guids(&members_in_join_order(ctx, channel.channel_id)),
+    );
+    Ok(())
+}
+
+/// INVITE (cm:Channel.cpp:666-726). Needs no moderator right. A target already a member refuses
+/// `PlayerAlreadyMember`; a banned target refuses `PlayerInviteBanned`; another team refuses
+/// `InviteWrongFaction`. Otherwise write INVITE naming the actor to the target, unless the target
+/// ignores the actor, and write PLAYER_INVITED with the target's name to the actor.
+fn invite(
+    ctx: &ReducerContext,
+    team: u32,
+    actor: u64,
+    request: &ChannelRequest,
+) -> Result<(), ChannelRefusal> {
+    let (channel, _) = membership(ctx, team, &request.channel_name, actor)?;
+    let target = request.target_guid;
+    if member_of(ctx, channel.channel_id, target).is_some() {
+        return Err(ChannelRefusal::PlayerAlreadyMember);
+    }
+    if is_banned(ctx, channel.channel_id, target) {
+        return Err(ChannelRefusal::PlayerInviteBanned);
+    }
+    if team_for_race(request.target_race) != team {
+        return Err(ChannelRefusal::InviteWrongFaction);
+    }
+    if !request.target_ignores_actor {
+        notify(
+            ctx,
+            &channel,
+            Notice::about(notice::INVITE, actor),
+            vec![target],
+        );
+    }
+    notify(
+        ctx,
+        &channel,
+        Notice {
+            notice: notice::PLAYER_INVITED,
+            text: request.target_name.clone(),
+            ..Notice::default()
+        },
+        vec![actor],
+    );
+    Ok(())
+}
+
+/// What [`toggle`] flips.
+enum Toggle {
+    Announcements,
+    Moderate,
+}
+
+/// ANNOUNCEMENTS and MODERATE (cm:Channel.cpp:523-591). The actor must be a moderator. Flip the
+/// flag and tell every member.
+fn toggle(
+    ctx: &ReducerContext,
+    team: u32,
+    actor: u64,
+    request: &ChannelRequest,
+    which: Toggle,
+) -> Result<(), ChannelRefusal> {
+    let (mut channel, member) = membership(ctx, team, &request.channel_name, actor)?;
+    if member.member_flags & member_flag::MODERATOR == 0 {
+        return Err(ChannelRefusal::NotModerator);
+    }
+    let (on, notice_on, notice_off) = match which {
+        Toggle::Announcements => {
+            channel.announcements = !channel.announcements;
+            (
+                channel.announcements,
+                notice::ANNOUNCEMENTS_ON,
+                notice::ANNOUNCEMENTS_OFF,
+            )
+        }
+        Toggle::Moderate => {
+            channel.moderated = !channel.moderated;
+            (
+                channel.moderated,
+                notice::MODERATION_ON,
+                notice::MODERATION_OFF,
+            )
+        }
+    };
+    let channel = ctx.db.game_chat_channel().channel_id().update(channel);
+    notify(
+        ctx,
+        &channel,
+        Notice {
+            notice: if on { notice_on } else { notice_off },
+            actor_guid: actor,
+            ..Notice::default()
+        },
+        guids(&members_in_join_order(ctx, channel.channel_id)),
+    );
+    Ok(())
+}
+
 /// Leave every channel without YOU_LEFT, as vanilla does at logout (cm:Player.cpp:4739-4750).
 /// The other members still see LEFT where announced, and ownership passes on.
 pub(crate) fn leave_all(ctx: &ReducerContext, character_guid: u64) {
@@ -288,16 +562,24 @@ pub(crate) fn leave_all(ctx: &ReducerContext, character_guid: u64) {
             .channel_id()
             .find(member.channel_id)
         {
-            depart(ctx, channel, member);
+            let announced = channel.announcements;
+            depart(ctx, channel, member, announced);
         }
     }
 }
 
-/// Remove one member: LEFT to the rest when announced, owner succession, and the empty channel
+/// Remove one member: LEFT to the rest when `notify_left`, owner succession, and the empty channel
 /// deleted with its password and bans (cm:ChannelMgr.cpp:85-103). Built-in channels keep no state
-/// worth an empty row either. The remaining members are read only when LEFT or a new owner needs
-/// them, so leaving a built-in channel never reads its member list.
-fn depart(ctx: &ReducerContext, channel: ChatChannel, member: ChatChannelMember) {
+/// worth an empty row either. `notify_left` is `channel.announcements` for a plain leave; KICK and
+/// BAN pass `false`, because their own PLAYER_KICKED or PLAYER_BANNED notice already covers the
+/// departure and vanilla does not double-announce it. The remaining members are read only when a
+/// notice or a new owner needs them, so leaving a built-in channel never reads its member list.
+fn depart(
+    ctx: &ReducerContext,
+    channel: ChatChannel,
+    member: ChatChannelMember,
+    notify_left: bool,
+) {
     ctx.db.game_chat_channel_member().id().delete(member.id);
     let empty = ctx
         .db
@@ -311,11 +593,11 @@ fn depart(ctx: &ReducerContext, channel: ChatChannel, member: ChatChannelMember)
         return;
     }
     let hands_over = channel.owner_guid == member.character_guid && channel.builtin_id == 0;
-    if !channel.announcements && !hands_over {
+    if !notify_left && !hands_over {
         return;
     }
     let rest = members_in_join_order(ctx, channel.channel_id);
-    if channel.announcements {
+    if notify_left {
         notify(
             ctx,
             &channel,

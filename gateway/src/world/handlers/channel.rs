@@ -56,6 +56,12 @@ pub(crate) trait ChannelActionStore: ChatActionStore {
     ) -> Result<ChannelOutcome>;
     /// Durable Read of the Realm-core cache. `None` when `team` has no channel by that name.
     fn channel_roster(&self, team: u32, channel_name: &str) -> Result<Option<ChannelRoster>>;
+    /// The first `session_online` Character named `name`, realm-wide, with its race and canonical
+    /// spelling. `None` when no online Character carries that name.
+    fn online_character_by_name(&self, name: &str) -> Result<Option<(u64, u8, String)>>;
+    /// Does `owner_guid` have `other_guid` on its ignore list, read from wherever the owner's
+    /// contact rows live?
+    fn ignores(&self, owner_guid: u64, other_guid: u64) -> Result<bool>;
 }
 
 impl ChannelActionStore for crate::stdb::Coordinator {
@@ -71,6 +77,31 @@ impl ChannelActionStore for crate::stdb::Coordinator {
     fn channel_roster(&self, team: u32, channel_name: &str) -> Result<Option<ChannelRoster>> {
         crate::stdb::Coordinator::channel_roster(self, team, channel_name)
     }
+
+    fn online_character_by_name(&self, name: &str) -> Result<Option<(u64, u8, String)>> {
+        resolve_online_character(self, name)
+    }
+
+    fn ignores(&self, owner_guid: u64, other_guid: u64) -> Result<bool> {
+        whisper::ignored_anywhere(self, owner_guid, other_guid)
+    }
+}
+
+/// The read [`ChannelActionStore::online_character_by_name`] and its Fakes share: every op that
+/// names a player resolves it realm-wide and requires it online, the same shape whisper's ONLINE
+/// gate uses (`whisper::run`) — a channel can only name a Character presently reachable to notify.
+pub(crate) fn resolve_online_character<St: WorldStore + ?Sized>(
+    store: &St,
+    name: &str,
+) -> Result<Option<(u64, u8, String)>> {
+    for guid in presence::resolve_all_by_name(store, name)? {
+        if let Some(character) = presence::of(store, guid)? {
+            if character.session_online {
+                return Ok(Some((character.guid, character.race, character.name)));
+            }
+        }
+    }
+    Ok(None)
 }
 
 pub(crate) enum ChannelActionOutcome {
@@ -115,6 +146,83 @@ pub(crate) fn dispatch_channel_action<St: ChannelActionStore + ?Sized>(
             channel_op::PASSWORD,
             password.channel_name,
             password.channel_password,
+        )?,
+        ClientOpcodeMessage::CMSG_CHANNEL_SET_OWNER(set_owner) => run_targeted_op(
+            store,
+            player,
+            channel_op::SET_OWNER,
+            set_owner.channel_name,
+            set_owner.new_owner,
+        )?,
+        ClientOpcodeMessage::CMSG_CHANNEL_MODERATOR(moderator) => run_targeted_op(
+            store,
+            player,
+            channel_op::MODERATOR,
+            moderator.channel_name,
+            moderator.player_name,
+        )?,
+        ClientOpcodeMessage::CMSG_CHANNEL_UNMODERATOR(unmoderator) => run_targeted_op(
+            store,
+            player,
+            channel_op::UNMODERATOR,
+            unmoderator.channel_name,
+            unmoderator.player_name,
+        )?,
+        ClientOpcodeMessage::CMSG_CHANNEL_MUTE(mute) => run_targeted_op(
+            store,
+            player,
+            channel_op::MUTE,
+            mute.channel_name,
+            mute.player_name,
+        )?,
+        ClientOpcodeMessage::CMSG_CHANNEL_UNMUTE(unmute) => run_targeted_op(
+            store,
+            player,
+            channel_op::UNMUTE,
+            unmute.channel_name,
+            unmute.player_name,
+        )?,
+        ClientOpcodeMessage::CMSG_CHANNEL_KICK(kick) => run_targeted_op(
+            store,
+            player,
+            channel_op::KICK,
+            kick.channel_name,
+            kick.player_name,
+        )?,
+        ClientOpcodeMessage::CMSG_CHANNEL_BAN(ban) => run_targeted_op(
+            store,
+            player,
+            channel_op::BAN,
+            ban.channel_name,
+            ban.player_name,
+        )?,
+        ClientOpcodeMessage::CMSG_CHANNEL_UNBAN(unban) => run_targeted_op(
+            store,
+            player,
+            channel_op::UNBAN,
+            unban.channel_name,
+            unban.player_name,
+        )?,
+        ClientOpcodeMessage::CMSG_CHANNEL_INVITE(invite) => run_targeted_op(
+            store,
+            player,
+            channel_op::INVITE,
+            invite.channel_name,
+            invite.player_name,
+        )?,
+        ClientOpcodeMessage::CMSG_CHANNEL_ANNOUNCEMENTS(announcements) => run_op(
+            store,
+            player,
+            channel_op::ANNOUNCEMENTS,
+            announcements.channel_name,
+            String::new(),
+        )?,
+        ClientOpcodeMessage::CMSG_CHANNEL_MODERATE(moderate) => run_op(
+            store,
+            player,
+            channel_op::MODERATE,
+            moderate.channel_name,
+            String::new(),
         )?,
         ClientOpcodeMessage::CMSG_CHANNEL_LIST(list) => {
             read_roster(store, player, list.channel_name, |roster| {
@@ -175,6 +283,70 @@ fn run_op<St: ChannelActionStore + ?Sized>(
             channel_name,
             actor_guid,
             String::new(),
+        )]),
+        Err(error) if is_transport_failure(&error) => Err(error),
+        Err(error) => {
+            log::debug!(
+                "world: channel op {op} dropped (account {}): {error:#}",
+                player.account_id
+            );
+            Ok(Vec::new())
+        }
+    }
+}
+
+/// Run one op that names another player: SET_OWNER, MODERATOR, UNMODERATOR, MUTE, UNMUTE, KICK,
+/// BAN, UNBAN and INVITE. The target is resolved realm-wide and must be online
+/// (cm:Channel.cpp:192-199, cm:Channel.cpp:262-269, cm:Channel.cpp:348-355, cm:Channel.cpp:416-423,
+/// cm:Channel.cpp:678-685); an unresolved name answers PLAYER_NOT_FOUND with the typed name and
+/// makes no Durable Request. INVITE alone also reads whether the target ignores the actor. Every
+/// Refusal this op can come back with names the resolved target, so the notice always carries
+/// `target_guid` and `target_name` — PLAYER_ALREADY_MEMBER reads the guid, the name notices read
+/// the text, and the rest ignore both.
+fn run_targeted_op<St: ChannelActionStore + ?Sized>(
+    store: &St,
+    player: ChatActionPlayer,
+    op: u8,
+    channel_name: String,
+    typed_name: String,
+) -> Result<Vec<Outbound>> {
+    let Some(actor_guid) = player.self_guid else {
+        return Ok(Vec::new());
+    };
+    let Some(speaker) = store.speaker_facts(actor_guid)? else {
+        return Ok(Vec::new());
+    };
+    let Some((target_guid, target_race, target_name)) =
+        store.online_character_by_name(&typed_name)?
+    else {
+        return Ok(vec![refusal_notice(
+            ChannelRefusal::PlayerNotFound,
+            channel_name,
+            0,
+            typed_name,
+        )]);
+    };
+    let target_ignores_actor = if op == channel_op::INVITE {
+        store.ignores(target_guid, actor_guid)?
+    } else {
+        false
+    };
+    let request = ChannelRequest {
+        channel_name: channel_name.clone(),
+        password: String::new(),
+        target_guid,
+        target_name: target_name.clone(),
+        target_race,
+        target_ignores_actor,
+        speaker,
+    };
+    match store.channel_op(actor_guid, op, request) {
+        Ok(ChannelOutcome::Done) => Ok(Vec::new()),
+        Ok(ChannelOutcome::Refused(refusal)) => Ok(vec![refusal_notice(
+            refusal,
+            channel_name,
+            target_guid,
+            target_name,
         )]),
         Err(error) if is_transport_failure(&error) => Err(error),
         Err(error) => {
@@ -252,8 +424,11 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
     use wow_world_messages::vanilla::{
-        CMSG_CHANNEL_LIST, CMSG_CHANNEL_OWNER, CMSG_CHANNEL_PASSWORD, CMSG_JOIN_CHANNEL,
-        CMSG_LEAVE_CHANNEL, CMSG_PING,
+        CMSG_CHANNEL_ANNOUNCEMENTS, CMSG_CHANNEL_BAN, CMSG_CHANNEL_INVITE, CMSG_CHANNEL_KICK,
+        CMSG_CHANNEL_LIST, CMSG_CHANNEL_MODERATE, CMSG_CHANNEL_MODERATOR, CMSG_CHANNEL_MUTE,
+        CMSG_CHANNEL_OWNER, CMSG_CHANNEL_PASSWORD, CMSG_CHANNEL_SET_OWNER, CMSG_CHANNEL_UNBAN,
+        CMSG_CHANNEL_UNMODERATOR, CMSG_CHANNEL_UNMUTE, CMSG_JOIN_CHANNEL, CMSG_LEAVE_CHANNEL,
+        CMSG_PING,
     };
 
     #[derive(Default)]
@@ -262,6 +437,11 @@ mod tests {
         outcome: Option<Result<ChannelOutcome, String>>,
         roster: Option<ChannelRoster>,
         roster_failure: bool,
+        /// What `online_character_by_name` resolves a typed name to. `None` answers
+        /// PLAYER_NOT_FOUND, as an unknown or offline Character does.
+        online: Option<(u64, u8, String)>,
+        /// What `ignores` answers for every pair.
+        ignored: bool,
         ops: Mutex<Vec<(u64, u8, ChannelRequest)>>,
         roster_reads: Mutex<Vec<(u32, String)>>,
     }
@@ -304,6 +484,14 @@ mod tests {
                 anyhow::bail!("realm-core database lyracore-realm is not connected");
             }
             Ok(self.roster.clone())
+        }
+
+        fn online_character_by_name(&self, _name: &str) -> Result<Option<(u64, u8, String)>> {
+            Ok(self.online.clone())
+        }
+
+        fn ignores(&self, _owner_guid: u64, _other_guid: u64) -> Result<bool> {
+            Ok(self.ignored)
         }
     }
 
@@ -353,6 +541,81 @@ mod tests {
 
     fn owner(name: &str) -> ClientOpcodeMessage {
         ClientOpcodeMessage::CMSG_CHANNEL_OWNER(Box::new(CMSG_CHANNEL_OWNER {
+            channel_name: name.to_string(),
+        }))
+    }
+
+    fn set_owner(name: &str, target: &str) -> ClientOpcodeMessage {
+        ClientOpcodeMessage::CMSG_CHANNEL_SET_OWNER(Box::new(CMSG_CHANNEL_SET_OWNER {
+            channel_name: name.to_string(),
+            new_owner: target.to_string(),
+        }))
+    }
+
+    fn moderator(name: &str, target: &str) -> ClientOpcodeMessage {
+        ClientOpcodeMessage::CMSG_CHANNEL_MODERATOR(Box::new(CMSG_CHANNEL_MODERATOR {
+            channel_name: name.to_string(),
+            player_name: target.to_string(),
+        }))
+    }
+
+    fn unmoderator(name: &str, target: &str) -> ClientOpcodeMessage {
+        ClientOpcodeMessage::CMSG_CHANNEL_UNMODERATOR(Box::new(CMSG_CHANNEL_UNMODERATOR {
+            channel_name: name.to_string(),
+            player_name: target.to_string(),
+        }))
+    }
+
+    fn mute(name: &str, target: &str) -> ClientOpcodeMessage {
+        ClientOpcodeMessage::CMSG_CHANNEL_MUTE(Box::new(CMSG_CHANNEL_MUTE {
+            channel_name: name.to_string(),
+            player_name: target.to_string(),
+        }))
+    }
+
+    fn unmute(name: &str, target: &str) -> ClientOpcodeMessage {
+        ClientOpcodeMessage::CMSG_CHANNEL_UNMUTE(Box::new(CMSG_CHANNEL_UNMUTE {
+            channel_name: name.to_string(),
+            player_name: target.to_string(),
+        }))
+    }
+
+    fn kick(name: &str, target: &str) -> ClientOpcodeMessage {
+        ClientOpcodeMessage::CMSG_CHANNEL_KICK(Box::new(CMSG_CHANNEL_KICK {
+            channel_name: name.to_string(),
+            player_name: target.to_string(),
+        }))
+    }
+
+    fn ban(name: &str, target: &str) -> ClientOpcodeMessage {
+        ClientOpcodeMessage::CMSG_CHANNEL_BAN(Box::new(CMSG_CHANNEL_BAN {
+            channel_name: name.to_string(),
+            player_name: target.to_string(),
+        }))
+    }
+
+    fn unban(name: &str, target: &str) -> ClientOpcodeMessage {
+        ClientOpcodeMessage::CMSG_CHANNEL_UNBAN(Box::new(CMSG_CHANNEL_UNBAN {
+            channel_name: name.to_string(),
+            player_name: target.to_string(),
+        }))
+    }
+
+    fn invite(name: &str, target: &str) -> ClientOpcodeMessage {
+        ClientOpcodeMessage::CMSG_CHANNEL_INVITE(Box::new(CMSG_CHANNEL_INVITE {
+            channel_name: name.to_string(),
+            player_name: target.to_string(),
+        }))
+    }
+
+    fn announcements(name: &str) -> ClientOpcodeMessage {
+        ClientOpcodeMessage::CMSG_CHANNEL_ANNOUNCEMENTS(Box::new(CMSG_CHANNEL_ANNOUNCEMENTS {
+            channel_name: name.to_string(),
+        }))
+    }
+
+    fn moderate(name: &str) -> ClientOpcodeMessage {
+        ClientOpcodeMessage::CMSG_CHANNEL_MODERATE(Box::new(CMSG_CHANNEL_MODERATE {
             channel_name: name.to_string(),
         }))
     }
@@ -628,5 +891,120 @@ mod tests {
             outcome,
             ChannelActionOutcome::PassThrough(ClientOpcodeMessage::CMSG_PING(_))
         ));
+    }
+
+    const TARGET: u64 = 9;
+    const TARGET_RACE: u8 = 6; // Tauren
+
+    fn resolved(ignored: bool) -> InMemoryChannelActions {
+        InMemoryChannelActions {
+            online: Some((TARGET, TARGET_RACE, "Thrall".to_string())),
+            ignored,
+            ..store(None)
+        }
+    }
+
+    /// Every op that names a player resolves it through `online_character_by_name` and conveys the
+    /// resolved guid, race and canonical name. Only INVITE also reads `ignores`
+    /// (cm:Channel.cpp:192-199 and the other target-lookup sites).
+    #[test]
+    fn every_targeted_op_resolves_the_target_and_conveys_its_op_code() {
+        let cases: [(ClientOpcodeMessage, u8); 9] = [
+            (set_owner("Raiders", "Thrall"), channel_op::SET_OWNER),
+            (moderator("Raiders", "Thrall"), channel_op::MODERATOR),
+            (unmoderator("Raiders", "Thrall"), channel_op::UNMODERATOR),
+            (mute("Raiders", "Thrall"), channel_op::MUTE),
+            (unmute("Raiders", "Thrall"), channel_op::UNMUTE),
+            (kick("Raiders", "Thrall"), channel_op::KICK),
+            (ban("Raiders", "Thrall"), channel_op::BAN),
+            (unban("Raiders", "Thrall"), channel_op::UNBAN),
+            (invite("Raiders", "Thrall"), channel_op::INVITE),
+        ];
+        for (msg, op) in cases {
+            let store = resolved(true);
+            let outbound = handled(dispatch_channel_action(&store, player(), msg).unwrap());
+            assert!(outbound.is_empty(), "op {op}");
+            let ops = store.ops.lock().unwrap();
+            assert_eq!(ops.len(), 1, "op {op}");
+            let (actor, got_op, request) = &ops[0];
+            assert_eq!(*actor, ACTOR, "op {op}");
+            assert_eq!(*got_op, op, "op {op}");
+            assert_eq!(request.channel_name, "Raiders", "op {op}");
+            assert_eq!(request.target_guid, TARGET, "op {op}");
+            assert_eq!(request.target_name, "Thrall", "op {op}");
+            assert_eq!(request.target_race, TARGET_RACE, "op {op}");
+            assert_eq!(request.speaker, orc(), "op {op}");
+            assert_eq!(
+                request.target_ignores_actor,
+                op == channel_op::INVITE,
+                "only INVITE reads the target's ignore list: op {op}"
+            );
+        }
+    }
+
+    /// ANNOUNCEMENTS and MODERATE name no player, so they run through the same untargeted path as
+    /// JOIN, LEAVE and PASSWORD.
+    #[test]
+    fn announcements_and_moderate_carry_no_target() {
+        let store = store(None);
+        handled(dispatch_channel_action(&store, player(), announcements("Raiders")).unwrap());
+        handled(dispatch_channel_action(&store, player(), moderate("Raiders")).unwrap());
+        let ops = store.ops.lock().unwrap();
+        assert_eq!(
+            ops.iter()
+                .map(|(_, op, request)| (*op, request.target_guid))
+                .collect::<Vec<_>>(),
+            [(channel_op::ANNOUNCEMENTS, 0), (channel_op::MODERATE, 0)]
+        );
+    }
+
+    /// An unresolved or offline target answers PLAYER_NOT_FOUND with the typed name and makes no
+    /// Durable Request.
+    #[test]
+    fn an_unresolved_target_answers_player_not_found_and_makes_no_request() {
+        let store = store(None); // `online` defaults to `None`.
+        let outbound =
+            handled(dispatch_channel_action(&store, player(), kick("Raiders", "Ghost")).unwrap());
+        assert_eq!(
+            only_raw(outbound),
+            (0x0099, [&[0x09][..], b"Raiders\0Ghost\0"].concat())
+        );
+        assert!(store.ops.lock().unwrap().is_empty());
+    }
+
+    /// PLAYER_ALREADY_MEMBER 0x17 names the resolved target, not the actor.
+    #[test]
+    fn player_already_member_names_the_resolved_target() {
+        let store = InMemoryChannelActions {
+            outcome: Some(Ok(ChannelOutcome::Refused(
+                ChannelRefusal::PlayerAlreadyMember,
+            ))),
+            ..resolved(false)
+        };
+        let outbound = handled(
+            dispatch_channel_action(&store, player(), invite("Raiders", "Thrall")).unwrap(),
+        );
+        assert_eq!(
+            only_raw(outbound),
+            (
+                0x0099,
+                [&[0x17][..], b"Raiders\0", &TARGET.to_le_bytes()].concat()
+            )
+        );
+    }
+
+    /// PLAYER_NOT_BANNED 0x16 carries the resolved target's canonical name.
+    #[test]
+    fn player_not_banned_names_the_resolved_target() {
+        let store = InMemoryChannelActions {
+            outcome: Some(Ok(ChannelOutcome::Refused(ChannelRefusal::PlayerNotBanned))),
+            ..resolved(false)
+        };
+        let outbound =
+            handled(dispatch_channel_action(&store, player(), unban("Raiders", "thrall")).unwrap());
+        assert_eq!(
+            only_raw(outbound),
+            (0x0099, [&[0x16][..], b"Raiders\0", b"Thrall\0"].concat())
+        );
     }
 }
