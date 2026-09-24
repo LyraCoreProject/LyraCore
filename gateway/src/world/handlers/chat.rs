@@ -68,6 +68,19 @@ pub(crate) enum ChatActionOutcome {
 /// cm mangos.sql:4044, sent by cm:ChatHandler.cpp:107-110.
 const UNKNOWN_LANGUAGE_NOTICE: &str = "You don't know that language";
 
+/// The wire `chat_kind` for a Raid, Raid Leader or Raid Warning line; `None` for every other
+/// `CMSG_MESSAGECHAT_ChatType`, Party included (Party keeps its own arm for its special
+/// `SMSG_PARTY_COMMAND_RESULT` Refusal). The three share one audience family on the Module side
+/// and answer with the same silent Refusal here, so one arm covers all three.
+fn raid_chat_kind(chat_type: &CMSG_MESSAGECHAT_ChatType) -> Option<u8> {
+    match chat_type {
+        CMSG_MESSAGECHAT_ChatType::Raid => Some(chat_kind::RAID),
+        CMSG_MESSAGECHAT_ChatType::RaidLeader => Some(chat_kind::RAID_LEADER),
+        CMSG_MESSAGECHAT_ChatType::RaidWarning => Some(chat_kind::RAID_WARNING),
+        _ => None,
+    }
+}
+
 /// Consume the `CMSG_MESSAGECHAT` kinds that are Realm Chat Lines and pass everything else on. A
 /// new Chat Kind adds one arm here and answers its own Refusals before the shared ones.
 pub(crate) fn dispatch_chat_action<St: ChatActionStore + ?Sized>(
@@ -126,13 +139,24 @@ pub(crate) fn dispatch_chat_action<St: ChatActionStore + ?Sized>(
             }
         }
         chat_type => {
-            return Ok(ChatActionOutcome::PassThrough(
-                ClientOpcodeMessage::CMSG_MESSAGECHAT(Box::new(CMSG_MESSAGECHAT {
-                    chat_type,
-                    language,
-                    message,
-                })),
-            ))
+            let Some(kind) = raid_chat_kind(&chat_type) else {
+                return Ok(ChatActionOutcome::PassThrough(
+                    ClientOpcodeMessage::CMSG_MESSAGECHAT(Box::new(CMSG_MESSAGECHAT {
+                        chat_type,
+                        language,
+                        message,
+                    })),
+                ));
+            };
+            let refusal = send_line(store, player, |speaker| RealmChatRequest {
+                kind,
+                language: language.as_int(),
+                channel_name: String::new(),
+                target_guid: 0,
+                message,
+                speaker,
+            })?;
+            refusal_outbound(player, refusal)
         }
     };
     Ok(ChatActionOutcome::Handled { outbound })
@@ -381,6 +405,56 @@ mod tests {
             let store = store(Some(Ok(ChatOutcome::Refused(refusal))));
             let outbound =
                 handled(dispatch_chat_action(&store, player(), party(Language::Common)).unwrap());
+            assert!(outbound.is_empty(), "{refusal:?}");
+        }
+    }
+
+    /// Raid, Raid Leader and Raid Warning each route to the seam with their own Chat Kind. The
+    /// Module decides the audience; the Gateway only conveys the request.
+    #[test]
+    fn raid_lines_carry_their_own_chat_kind() {
+        for (chat_type, kind) in [
+            (CMSG_MESSAGECHAT_ChatType::Raid, chat_kind::RAID),
+            (
+                CMSG_MESSAGECHAT_ChatType::RaidLeader,
+                chat_kind::RAID_LEADER,
+            ),
+            (
+                CMSG_MESSAGECHAT_ChatType::RaidWarning,
+                chat_kind::RAID_WARNING,
+            ),
+        ] {
+            let store = store(None);
+            let outbound = handled(
+                dispatch_chat_action(&store, player(), line(chat_type, Language::Common)).unwrap(),
+            );
+            assert!(outbound.is_empty(), "the line itself returns on the Relay");
+            assert_eq!(
+                store.requests.lock().unwrap()[0].1.kind,
+                kind,
+                "chat kind {kind:#x}"
+            );
+        }
+    }
+
+    /// cmangos answers a raid audience Refusal with silence, the same as every other Chat Kind
+    /// (AC 3-5).
+    #[test]
+    fn every_raid_chat_refusal_is_silent() {
+        for refusal in [
+            ChatRefusal::NotRaid,
+            ChatRefusal::NotRaidLeader,
+            ChatRefusal::NotRaidLeaderOrAssistant,
+        ] {
+            let store = store(Some(Ok(ChatOutcome::Refused(refusal))));
+            let outbound = handled(
+                dispatch_chat_action(
+                    &store,
+                    player(),
+                    line(CMSG_MESSAGECHAT_ChatType::Raid, Language::Common),
+                )
+                .unwrap(),
+            );
             assert!(outbound.is_empty(), "{refusal:?}");
         }
     }

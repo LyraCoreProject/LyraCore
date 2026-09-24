@@ -131,9 +131,17 @@ fn audience(
     speaker_guid: u64,
     request: &RealmChatRequest,
 ) -> Result<ChatAudience, ChatRefusal> {
+    use crate::group::RaidChatKind;
     match request.kind {
         chat_kind::PARTY => crate::group::party_chat_audience(ctx, speaker_guid),
         chat_kind::CHANNEL => crate::channel::chat_audience(ctx, speaker_guid, request),
+        chat_kind::RAID => crate::group::raid_chat_audience(ctx, speaker_guid, RaidChatKind::Raid),
+        chat_kind::RAID_LEADER => {
+            crate::group::raid_chat_audience(ctx, speaker_guid, RaidChatKind::RaidLeader)
+        }
+        chat_kind::RAID_WARNING => {
+            crate::group::raid_chat_audience(ctx, speaker_guid, RaidChatKind::RaidWarning)
+        }
         _ => Err(ChatRefusal::UnsupportedKind),
     }
 }
