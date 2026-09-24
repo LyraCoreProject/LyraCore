@@ -54,12 +54,12 @@ publish presents as an unrelated mid-session hang, not a loud "no such table".
 
 ## 2. Inventory
 
-**278 tables**, all of them in `module/src/**`: 128 public, 150 private. No table comes from a
+**279 tables**, all of them in `module/src/**`: 128 public, 151 private. No table comes from a
 package in this tree; `packages/example` is the only in-tree package and it declares none. Recount
 rather than trust the numbers below, which drift on every schema change:
 
 ```bash
-grep -rn '^#\[table(' module/src --include='*.rs' | wc -l   # 278 on 2026-09-24
+grep -rn '^#\[table(' module/src --include='*.rs' | wc -l   # 279 on 2026-09-24
 ```
 
 | Domain | Tables | Public | Where |
@@ -79,7 +79,7 @@ grep -rn '^#\[table(' module/src --include='*.rs' | wc -l   # 278 on 2026-09-24
 | Loot | 12 | 6 | `loot/*` |
 | Group / party | 8 | 5 | `group.rs` |
 | Guild | 9 | 0 | `guild/mod.rs`, `guild/fee.rs`, `guild/membership.rs`, `guild/petition.rs` |
-| Instance / encounter | 7 | 1 | `instance.rs`, `encounter.rs` |
+| Instance / encounter | 8 | 1 | `instance.rs`, `encounter.rs` |
 | Sharding: region, transfer, load | 9 | 0 | `region.rs`, `transfer/mod.rs`, `load.rs` |
 | Realm-core | 2 | 0 | `realm_core.rs` |
 | Gateway leases | 3 | 0 | `gw.rs` |
@@ -522,11 +522,11 @@ Two constraints survive the removal and bind any filter added later.
 
 ## 6. Scheduled tables
 
-**25 scheduled tables** drive every periodic and deferred effect in the game. Nothing on a gateway
+**26 scheduled tables** drive every periodic and deferred effect in the game. Nothing on a gateway
 timer decides gameplay. Recount and re-list them with:
 
 ```bash
-grep -rn 'scheduled(' module/src --include='*.rs'   # 25 tables plus 4 comment lines, 2026-09-23
+grep -rn 'scheduled(' module/src --include='*.rs'   # 26 tables plus 4 comment lines, 2026-09-24
 ```
 
 | Scheduled table | Reducer | Cadence | Where |
@@ -551,6 +551,7 @@ grep -rn 'scheduled(' module/src --include='*.rs'   # 25 tables plus 4 comment l
 | `game_pending_spell_impact` | `fire_spell_impact` | one-shot at projectile landing | `spell/tables.rs:689` |
 | `game_ranged_impact_schedule` | `ranged_impact` | one-shot at shot landing | `combat/engage.rs:474` |
 | `game_auction_expiry` | `expire_auction` | one-shot at listing expiry | `auction.rs:162` |
+| `game_instance_removal` | `expire_instance_removal` | one-shot 60 s after an Instance Removal starts | `instance.rs:334` |
 | `game_mail_timer` | `fire_mail_timer` | one-shot at a Mail's delivery, then at its expiry | `mail_timer.rs:13` |
 | `game_creature_ai_summon_expiry` | `expire_eventai_summon` | one-shot at summon lifetime end | `creatures/eventai/mobility.rs:17` |
 | `game_creature_ai_forced_despawn` | `fire_eventai_forced_despawn` | one-shot at the authored despawn time | `creatures/eventai/mobility.rs:51` |

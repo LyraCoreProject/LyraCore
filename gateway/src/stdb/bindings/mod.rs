@@ -186,6 +186,7 @@ pub mod debug_enter_instance_reducer;
 pub mod debug_equip_item_reducer;
 pub mod debug_equip_offhand_reducer;
 pub mod debug_equip_weapon_reducer;
+pub mod debug_expire_instance_removal_reducer;
 pub mod debug_expire_quest_reducer;
 pub mod debug_expire_session_reducer;
 pub mod debug_explore_at_reducer;
@@ -202,6 +203,7 @@ pub mod debug_grant_default_actions_reducer;
 pub mod debug_grant_item_reducer;
 pub mod debug_grant_quest_reducer;
 pub mod debug_grant_reputation_reducer;
+pub mod debug_hold_instance_removals_reducer;
 pub mod debug_kill_creature_reducer;
 pub mod debug_kill_nearest_reducer;
 pub mod debug_learn_profession_from_trainer_reducer;
@@ -212,6 +214,7 @@ pub mod debug_learn_spell_reducer;
 pub mod debug_learn_talent_reducer;
 pub mod debug_learn_weapon_from_trainer_reducer;
 pub mod debug_log_vendor_discount_reducer;
+pub mod debug_logout_character_reducer;
 pub mod debug_move_item_reducer;
 pub mod debug_nav_leg_reducer;
 pub mod debug_nav_probe_reducer;
@@ -268,6 +271,7 @@ pub mod debug_stage_auction_cancel_fixture_reducer;
 pub mod debug_stage_auction_expiry_fixture_reducer;
 pub mod debug_stage_choice_reward_fixture_reducer;
 pub mod debug_stage_eventai_revision_fixture_reducer;
+pub mod debug_stage_instance_removal_fixture_reducer;
 pub mod debug_stage_legacy_auction_mail_fixture_reducer;
 pub mod debug_stage_lethal_damage_floor_fixture_reducer;
 pub mod debug_stage_loot_roll_fixture_reducer;
@@ -337,6 +341,7 @@ pub mod evict_instance_population_reducer;
 pub mod execution_policy_type;
 pub mod expire_auction_reducer;
 pub mod expire_eventai_summon_reducer;
+pub mod expire_instance_removal_reducer;
 pub mod facing_condition_type;
 pub mod facing_instruction_type;
 pub mod faction_template_type;
@@ -513,6 +518,7 @@ pub mod game_import_meta_table;
 pub mod game_instance_binding_table;
 pub mod game_instance_binding_type;
 pub mod game_instance_reaper_schedule_table;
+pub mod game_instance_removal_table;
 pub mod game_instance_table;
 pub mod game_instance_type;
 pub mod game_item_enchantment_table;
@@ -835,6 +841,7 @@ pub mod import_vmap_chunks_reducer;
 pub mod increment_phase_instruction_type;
 pub mod install_guid_range_reducer;
 pub mod instance_reaper_schedule_type;
+pub mod instance_removal_type;
 pub mod instruction_selection_type;
 pub mod instruction_target_type;
 pub mod item_enchantment_type;
@@ -1321,6 +1328,7 @@ pub use debug_enter_instance_reducer::debug_enter_instance;
 pub use debug_equip_item_reducer::debug_equip_item;
 pub use debug_equip_offhand_reducer::debug_equip_offhand;
 pub use debug_equip_weapon_reducer::debug_equip_weapon;
+pub use debug_expire_instance_removal_reducer::debug_expire_instance_removal;
 pub use debug_expire_quest_reducer::debug_expire_quest;
 pub use debug_expire_session_reducer::debug_expire_session;
 pub use debug_explore_at_reducer::debug_explore_at;
@@ -1337,6 +1345,7 @@ pub use debug_grant_default_actions_reducer::debug_grant_default_actions;
 pub use debug_grant_item_reducer::debug_grant_item;
 pub use debug_grant_quest_reducer::debug_grant_quest;
 pub use debug_grant_reputation_reducer::debug_grant_reputation;
+pub use debug_hold_instance_removals_reducer::debug_hold_instance_removals;
 pub use debug_kill_creature_reducer::debug_kill_creature;
 pub use debug_kill_nearest_reducer::debug_kill_nearest;
 pub use debug_learn_profession_from_trainer_reducer::debug_learn_profession_from_trainer;
@@ -1347,6 +1356,7 @@ pub use debug_learn_spell_reducer::debug_learn_spell;
 pub use debug_learn_talent_reducer::debug_learn_talent;
 pub use debug_learn_weapon_from_trainer_reducer::debug_learn_weapon_from_trainer;
 pub use debug_log_vendor_discount_reducer::debug_log_vendor_discount;
+pub use debug_logout_character_reducer::debug_logout_character;
 pub use debug_move_item_reducer::debug_move_item;
 pub use debug_nav_leg_reducer::debug_nav_leg;
 pub use debug_nav_probe_reducer::debug_nav_probe;
@@ -1403,6 +1413,7 @@ pub use debug_stage_auction_cancel_fixture_reducer::debug_stage_auction_cancel_f
 pub use debug_stage_auction_expiry_fixture_reducer::debug_stage_auction_expiry_fixture;
 pub use debug_stage_choice_reward_fixture_reducer::debug_stage_choice_reward_fixture;
 pub use debug_stage_eventai_revision_fixture_reducer::debug_stage_eventai_revision_fixture;
+pub use debug_stage_instance_removal_fixture_reducer::debug_stage_instance_removal_fixture;
 pub use debug_stage_legacy_auction_mail_fixture_reducer::debug_stage_legacy_auction_mail_fixture;
 pub use debug_stage_lethal_damage_floor_fixture_reducer::debug_stage_lethal_damage_floor_fixture;
 pub use debug_stage_loot_roll_fixture_reducer::debug_stage_loot_roll_fixture;
@@ -1472,6 +1483,7 @@ pub use evict_instance_population_reducer::evict_instance_population;
 pub use execution_policy_type::ExecutionPolicy;
 pub use expire_auction_reducer::expire_auction;
 pub use expire_eventai_summon_reducer::expire_eventai_summon;
+pub use expire_instance_removal_reducer::expire_instance_removal;
 pub use facing_condition_type::FacingCondition;
 pub use facing_instruction_type::FacingInstruction;
 pub use faction_template_type::FactionTemplate;
@@ -1648,6 +1660,7 @@ pub use game_import_meta_table::*;
 pub use game_instance_binding_table::*;
 pub use game_instance_binding_type::GameInstanceBinding;
 pub use game_instance_reaper_schedule_table::*;
+pub use game_instance_removal_table::*;
 pub use game_instance_table::*;
 pub use game_instance_type::GameInstance;
 pub use game_item_enchantment_table::*;
@@ -1970,6 +1983,7 @@ pub use import_vmap_chunks_reducer::import_vmap_chunks;
 pub use increment_phase_instruction_type::IncrementPhaseInstruction;
 pub use install_guid_range_reducer::install_guid_range;
 pub use instance_reaper_schedule_type::InstanceReaperSchedule;
+pub use instance_removal_type::InstanceRemoval;
 pub use instruction_selection_type::InstructionSelection;
 pub use instruction_target_type::InstructionTarget;
 pub use item_enchantment_type::ItemEnchantment;
@@ -2658,6 +2672,9 @@ pub enum Reducer {
         character_guid: u64,
         item_entry: u32,
     },
+    DebugExpireInstanceRemoval {
+        character_guid: u64,
+    },
     DebugExpireQuest {
         character_guid: u64,
         quest_entry: u32,
@@ -2728,6 +2745,7 @@ pub enum Reducer {
         faction_id: u32,
         amount: i32,
     },
+    DebugHoldInstanceRemovals,
     DebugKillCreature {
         killer_guid: u64,
         target_guid: u64,
@@ -2768,6 +2786,9 @@ pub enum Reducer {
     DebugLogVendorDiscount {
         player_guid: u64,
         faction_template_id: u32,
+    },
+    DebugLogoutCharacter {
+        character_guid: u64,
     },
     DebugMoveItem {
         character_guid: u64,
@@ -2997,6 +3018,9 @@ pub enum Reducer {
         target_guid: u64,
         packed: String,
     },
+    DebugStageInstanceRemovalFixture {
+        party_id: u64,
+    },
     DebugStageLegacyAuctionMailFixture,
     DebugStageLethalDamageFloorFixture {
         creature_guid: u64,
@@ -3162,6 +3186,9 @@ pub enum Reducer {
     },
     ExpireEventaiSummon {
         expiry: CreatureAiSummonExpiry,
+    },
+    ExpireInstanceRemoval {
+        removal: InstanceRemoval,
     },
     FenceAccount {
         token: WorldSessionToken,
@@ -4309,6 +4336,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugEquipItem { .. } => "debug_equip_item",
             Reducer::DebugEquipOffhand { .. } => "debug_equip_offhand",
             Reducer::DebugEquipWeapon { .. } => "debug_equip_weapon",
+            Reducer::DebugExpireInstanceRemoval { .. } => "debug_expire_instance_removal",
             Reducer::DebugExpireQuest { .. } => "debug_expire_quest",
             Reducer::DebugExpireSession { .. } => "debug_expire_session",
             Reducer::DebugExploreAt { .. } => "debug_explore_at",
@@ -4327,6 +4355,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugGrantItem { .. } => "debug_grant_item",
             Reducer::DebugGrantQuest { .. } => "debug_grant_quest",
             Reducer::DebugGrantReputation { .. } => "debug_grant_reputation",
+            Reducer::DebugHoldInstanceRemovals => "debug_hold_instance_removals",
             Reducer::DebugKillCreature { .. } => "debug_kill_creature",
             Reducer::DebugKillNearest { .. } => "debug_kill_nearest",
             Reducer::DebugLearnProfession { .. } => "debug_learn_profession",
@@ -4339,6 +4368,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugLearnTalent { .. } => "debug_learn_talent",
             Reducer::DebugLearnWeaponFromTrainer { .. } => "debug_learn_weapon_from_trainer",
             Reducer::DebugLogVendorDiscount { .. } => "debug_log_vendor_discount",
+            Reducer::DebugLogoutCharacter { .. } => "debug_logout_character",
             Reducer::DebugMoveItem { .. } => "debug_move_item",
             Reducer::DebugNavLeg { .. } => "debug_nav_leg",
             Reducer::DebugNavProbe { .. } => "debug_nav_probe",
@@ -4408,6 +4438,9 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugStageEventaiRevisionFixture { .. } => {
                 "debug_stage_eventai_revision_fixture"
             }
+            Reducer::DebugStageInstanceRemovalFixture { .. } => {
+                "debug_stage_instance_removal_fixture"
+            }
             Reducer::DebugStageLegacyAuctionMailFixture => {
                 "debug_stage_legacy_auction_mail_fixture"
             }
@@ -4476,6 +4509,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::EvictInstancePopulation { .. } => "evict_instance_population",
             Reducer::ExpireAuction { .. } => "expire_auction",
             Reducer::ExpireEventaiSummon { .. } => "expire_eventai_summon",
+            Reducer::ExpireInstanceRemoval { .. } => "expire_instance_removal",
             Reducer::FenceAccount { .. } => "fence_account",
             Reducer::FinalizeVmapNavCoverage { .. } => "finalize_vmap_nav_coverage",
             Reducer::FinishCharacterShardTransfer { .. } => "finish_character_shard_transfer",
@@ -5386,6 +5420,11 @@ Reducer::DebugCheckRestAt{
                 character_guid: character_guid.clone(),
                 item_entry: item_entry.clone(),
 }),
+            Reducer::DebugExpireInstanceRemoval{
+                character_guid,
+}             => __sats::bsatn::to_vec(&debug_expire_instance_removal_reducer::DebugExpireInstanceRemovalArgs {
+                character_guid: character_guid.clone(),
+}),
             Reducer::DebugExpireQuest{
                 character_guid,
                 quest_entry,
@@ -5510,7 +5549,9 @@ Reducer::DebugCheckRestAt{
                 faction_id: faction_id.clone(),
                 amount: amount.clone(),
 }),
-            Reducer::DebugKillCreature{
+            Reducer::DebugHoldInstanceRemovals => __sats::bsatn::to_vec(&debug_hold_instance_removals_reducer::DebugHoldInstanceRemovalsArgs {
+                }),
+Reducer::DebugKillCreature{
                 killer_guid,
                 target_guid,
 }             => __sats::bsatn::to_vec(&debug_kill_creature_reducer::DebugKillCreatureArgs {
@@ -5581,6 +5622,11 @@ Reducer::DebugCheckRestAt{
 }             => __sats::bsatn::to_vec(&debug_log_vendor_discount_reducer::DebugLogVendorDiscountArgs {
                 player_guid: player_guid.clone(),
                 faction_template_id: faction_template_id.clone(),
+}),
+            Reducer::DebugLogoutCharacter{
+                character_guid,
+}             => __sats::bsatn::to_vec(&debug_logout_character_reducer::DebugLogoutCharacterArgs {
+                character_guid: character_guid.clone(),
 }),
             Reducer::DebugMoveItem{
                 character_guid,
@@ -5991,6 +6037,11 @@ Reducer::DebugStageChoiceRewardFixture{
                 target_guid: target_guid.clone(),
                 packed: packed.clone(),
 }),
+            Reducer::DebugStageInstanceRemovalFixture{
+                party_id,
+}             => __sats::bsatn::to_vec(&debug_stage_instance_removal_fixture_reducer::DebugStageInstanceRemovalFixtureArgs {
+                party_id: party_id.clone(),
+}),
             Reducer::DebugStageLegacyAuctionMailFixture => __sats::bsatn::to_vec(&debug_stage_legacy_auction_mail_fixture_reducer::DebugStageLegacyAuctionMailFixtureArgs {
                 }),
 Reducer::DebugStageLethalDamageFloorFixture{
@@ -6291,6 +6342,11 @@ Reducer::DebugVerifyRangedLethalDamageFloorFixture{
                 expiry,
 }             => __sats::bsatn::to_vec(&expire_eventai_summon_reducer::ExpireEventaiSummonArgs {
                 expiry: expiry.clone(),
+}),
+            Reducer::ExpireInstanceRemoval{
+                removal,
+}             => __sats::bsatn::to_vec(&expire_instance_removal_reducer::ExpireInstanceRemovalArgs {
+                removal: removal.clone(),
 }),
             Reducer::FenceAccount{
                 token,
@@ -8348,6 +8404,7 @@ pub struct DbUpdate {
     game_instance: __sdk::TableUpdate<GameInstance>,
     game_instance_binding: __sdk::TableUpdate<GameInstanceBinding>,
     game_instance_reaper_schedule: __sdk::TableUpdate<InstanceReaperSchedule>,
+    game_instance_removal: __sdk::TableUpdate<InstanceRemoval>,
     game_item_enchantment: __sdk::TableUpdate<ItemEnchantment>,
     game_item_instance: __sdk::TableUpdate<ItemInstance>,
     game_item_property_weight: __sdk::TableUpdate<ItemPropertyWeight>,
@@ -8994,6 +9051,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 ),
                 "game_instance_reaper_schedule" => db_update.game_instance_reaper_schedule.append(
                     game_instance_reaper_schedule_table::parse_table_update(table_update)?,
+                ),
+                "game_instance_removal" => db_update.game_instance_removal.append(
+                    game_instance_removal_table::parse_table_update(table_update)?,
                 ),
                 "game_item_enchantment" => db_update.game_item_enchantment.append(
                     game_item_enchantment_table::parse_table_update(table_update)?,
@@ -10135,6 +10195,12 @@ impl __sdk::DbUpdate for DbUpdate {
                 &self.game_instance_reaper_schedule,
             )
             .with_updates_by_pk(|row| &row.scheduled_id);
+        diff.game_instance_removal = cache
+            .apply_diff_to_table::<InstanceRemoval>(
+                "game_instance_removal",
+                &self.game_instance_removal,
+            )
+            .with_updates_by_pk(|row| &row.scheduled_id);
         diff.game_item_enchantment = cache
             .apply_diff_to_table::<ItemEnchantment>(
                 "game_item_enchantment",
@@ -11129,6 +11195,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_instance_reaper_schedule" => db_update
                     .game_instance_reaper_schedule
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_instance_removal" => db_update
+                    .game_instance_removal
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_item_enchantment" => db_update
                     .game_item_enchantment
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -11979,6 +12048,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_instance_reaper_schedule" => db_update
                     .game_instance_reaper_schedule
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_instance_removal" => db_update
+                    .game_instance_removal
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_item_enchantment" => db_update
                     .game_item_enchantment
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -12528,6 +12600,7 @@ pub struct AppliedDiff<'r> {
     game_instance: __sdk::TableAppliedDiff<'r, GameInstance>,
     game_instance_binding: __sdk::TableAppliedDiff<'r, GameInstanceBinding>,
     game_instance_reaper_schedule: __sdk::TableAppliedDiff<'r, InstanceReaperSchedule>,
+    game_instance_removal: __sdk::TableAppliedDiff<'r, InstanceRemoval>,
     game_item_enchantment: __sdk::TableAppliedDiff<'r, ItemEnchantment>,
     game_item_instance: __sdk::TableAppliedDiff<'r, ItemInstance>,
     game_item_property_weight: __sdk::TableAppliedDiff<'r, ItemPropertyWeight>,
@@ -13394,6 +13467,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<InstanceReaperSchedule>(
             "game_instance_reaper_schedule",
             &self.game_instance_reaper_schedule,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<InstanceRemoval>(
+            "game_instance_removal",
+            &self.game_instance_removal,
             event,
         );
         callbacks.invoke_table_row_callbacks::<ItemEnchantment>(
@@ -14811,6 +14889,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_instance_table::register_table(client_cache);
         game_instance_binding_table::register_table(client_cache);
         game_instance_reaper_schedule_table::register_table(client_cache);
+        game_instance_removal_table::register_table(client_cache);
         game_item_enchantment_table::register_table(client_cache);
         game_item_instance_table::register_table(client_cache);
         game_item_property_weight_table::register_table(client_cache);
@@ -15092,6 +15171,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_instance",
         "game_instance_binding",
         "game_instance_reaper_schedule",
+        "game_instance_removal",
         "game_item_enchantment",
         "game_item_instance",
         "game_item_property_weight",

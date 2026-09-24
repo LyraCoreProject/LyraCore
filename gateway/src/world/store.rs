@@ -440,6 +440,21 @@ pub trait WorldStore:
         Err(anyhow!("this store does not host realm-wide party state"))
     }
 
+    /// [`Self::realm_group_op`] that returns only after this handle's Coordinator cache holds the
+    /// commit, so a roster read right after it sees the op. It waits on the Coordinator pump, so its
+    /// caller must run on another thread. Fakes may reuse the ordinary op.
+    fn realm_group_op_visible(
+        &self,
+        op: u8,
+        actor_guid: u64,
+        target_guid: u64,
+        arg_a: u8,
+        arg_b: u8,
+        arg_c: u64,
+    ) -> Result<party::PartyOutcome> {
+        self.realm_group_op(op, actor_guid, target_guid, arg_a, arg_b, arg_c)
+    }
+
     /// Realm-core LEAVE for a deleted Character. Production returns after its Coordinator cache
     /// has the committed roster; Fakes may reuse the ordinary party operation.
     fn deleted_character_party_leave(&self, character_guid: u64) -> Result<party::PartyOutcome> {

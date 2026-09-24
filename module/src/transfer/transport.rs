@@ -89,6 +89,9 @@ pub(crate) const MANIFEST_EXCLUDE: &[&str] = &["game_transfer_out"];
 ///   gateway re-pushes the certified projection with the membership row.
 /// - `game_group_target_icon` — a Target Icon belongs to the Group on the party authority. It names
 ///   the marked unit, and the unit keeps it across a Transfer with no row to carry.
+/// - `game_instance_removal` - an Instance Removal counts down for one instance. A Character that
+///   leaves the Instance Pool has left that instance, which ends the countdown
+///   (cm:MovementHandler.cpp:133-135), so the source cascade deletes the row and nothing crosses.
 /// - `game_mail_delivery` — the mail plane's delivery receipts. They only exist where the
 ///   authoritative mail rows do, and no character transfers off realm-core.
 ///
@@ -119,6 +122,7 @@ pub(crate) const NOT_TRANSPORTED: &[&str] = &[
     "game_group_member",
     "game_group_member_partition",
     "game_group_target_icon",
+    "game_instance_removal",
     "game_pet_command",
     "game_mail_delivery",
     "game_character_shard",

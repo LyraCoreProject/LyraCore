@@ -1120,3 +1120,126 @@ pub fn debug_backfill_go_grid(ctx: &ReducerContext) {
     }
     log::info!("debug_backfill_go_grid: {n} rows stamped");
 }
+
+/// The Instance Removal fixture's Deadmines instance.
+const REMOVAL_FIXTURE_INSTANCE: u64 = 509_295_100;
+/// Inside Deadmines, at the entrance trigger's arrival point.
+const REMOVAL_FIXTURE_INSIDE: (u32, f32, f32, f32) = (36, -16.4, -383.07, 61.78);
+/// Every fixture Character's hearthstone home: Northshire Abbey, zone 12.
+const REMOVAL_FIXTURE_HOME: (u32, f32, f32, f32, u32) = (0, -8949.95, -132.493, 83.5312, 12);
+
+/// One fixture Character: guid, name, GM level, standing inside the instance, World Session.
+const REMOVAL_FIXTURE_CHARACTERS: [(u64, &str, u8, bool, bool); 6] = [
+    (509_295_001, "Removalalpha", 0, true, true),
+    (509_295_002, "Removalbravo", 0, true, true),
+    (509_295_003, "Removalcharlie", 0, true, true),
+    (509_295_004, "Removaldelta", 1, true, true),
+    (509_295_005, "Removalecho", 0, false, true),
+    (509_295_006, "Removalfoxtrot", 0, true, false),
+];
+
+/// Stage the Instance Removal fixture: a Deadmines instance owned by `party_id`, and six live
+/// Characters cloned from the seeded Tester. Four stand inside with a World Session, one of them a
+/// GM. One stands outside at home. One stands inside with no World Session, as a session-less bot
+/// does. Every home is Northshire. Membership is left to the caller. Reruns replace the rows.
+#[reducer]
+pub fn debug_stage_instance_removal_fixture(
+    ctx: &ReducerContext,
+    party_id: u64,
+) -> Result<(), String> {
+    use crate::{game_character, game_instance_removal};
+    crate::helpers::require_operator(ctx)?;
+    let instances = ctx.db.game_instance();
+    instances.instance_id().delete(REMOVAL_FIXTURE_INSTANCE);
+    instances.insert(crate::GameInstance {
+        instance_id: REMOVAL_FIXTURE_INSTANCE,
+        map_id: REMOVAL_FIXTURE_INSIDE.0,
+        party_id,
+        created_at: ctx.timestamp,
+        last_empty_at_micros: 0,
+        reset_requested: false,
+    });
+    let (home_map, home_x, home_y, home_z, home_zone) = REMOVAL_FIXTURE_HOME;
+    for (guid, name, gm_level, inside, online) in REMOVAL_FIXTURE_CHARACTERS {
+        ctx.db.game_instance_removal().character_guid().delete(guid);
+        ctx.db.game_world_entity().guid().delete(guid);
+        let mut character = crate::helpers::character_by_guid(ctx, 1)
+            .ok_or("the seeded Tester is the fixture template")?;
+        character.guid = guid;
+        character.name = name.to_string();
+        character.gm_level = gm_level;
+        character.online = online;
+        character.first_login = false;
+        (character.home_map, character.home_x, character.home_y) = (home_map, home_x, home_y);
+        (character.home_z, character.home_zone) = (home_z, home_zone);
+        if inside {
+            let (map_id, x, y, z) = REMOVAL_FIXTURE_INSIDE;
+            (character.map_id, character.x, character.y, character.z) = (map_id, x, y, z);
+            character.pending_instance_id = REMOVAL_FIXTURE_INSTANCE;
+        } else {
+            (character.map_id, character.x, character.y) = (home_map, home_x, home_y);
+            (character.z, character.zone_id) = (home_z, home_zone);
+            character.pending_instance_id = 0;
+        }
+        if crate::helpers::character_by_guid(ctx, guid).is_some() {
+            ctx.db.game_character().guid().update(character);
+        } else {
+            ctx.db.game_character().insert(character);
+        }
+        super::debug_spawn_player_entity(ctx, guid)?;
+    }
+    Ok(())
+}
+
+/// Push every running Instance Removal a day ahead, so a test fires one only through
+/// [`debug_expire_instance_removal`] and never races the real 60 s.
+#[reducer]
+pub fn debug_hold_instance_removals(ctx: &ReducerContext) -> Result<(), String> {
+    use crate::game_instance_removal;
+    crate::helpers::require_operator(ctx)?;
+    const DAY_MICROS: i64 = 24 * 60 * 60 * 1_000_000;
+    let due = spacetimedb::Timestamp::from_micros_since_unix_epoch(
+        ctx.timestamp.to_micros_since_unix_epoch() + DAY_MICROS,
+    );
+    let removals = ctx.db.game_instance_removal();
+    // Delete and insert, as the Mail Timer re-arms, so the scheduler takes the new due time.
+    for mut removal in removals.iter().collect::<Vec<_>>() {
+        removals.scheduled_id().delete(removal.scheduled_id);
+        removal.scheduled_id = 0;
+        removal.scheduled_at = spacetimedb::ScheduleAt::Time(due);
+        removals.insert(removal);
+    }
+    Ok(())
+}
+
+/// Run `character_guid`'s Instance Removal expiry now, as if its countdown had run out.
+#[reducer]
+pub fn debug_expire_instance_removal(
+    ctx: &ReducerContext,
+    character_guid: u64,
+) -> Result<(), String> {
+    use crate::game_instance_removal;
+    crate::helpers::require_operator(ctx)?;
+    let removal = ctx
+        .db
+        .game_instance_removal()
+        .character_guid()
+        .find(character_guid)
+        .ok_or_else(|| format!("{character_guid} has no running Instance Removal"))?;
+    crate::instance::fire_instance_removal(ctx, &removal);
+    Ok(())
+}
+
+/// Log `character_guid` out through the same core a disconnect takes.
+#[reducer]
+pub fn debug_logout_character(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    let entity = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(character_guid)
+        .ok_or_else(|| format!("{character_guid} is not in the world"))?;
+    crate::world::remove_live_character(ctx, entity);
+    Ok(())
+}

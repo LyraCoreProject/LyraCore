@@ -1473,6 +1473,10 @@ fn accept_invite_on(
         raid_slot: slot.wire(),
     });
     push_list_to_all(ctx, group_id);
+    // Rejoining the Group that owns the instance cancels the countdown (cm:Group.cpp:880-885).
+    // The inviter is new to a Group this accept forms.
+    crate::instance::reconcile_instance_removal(ctx, acceptor_guid);
+    crate::instance::reconcile_instance_removal(ctx, inviter_guid);
     Ok(())
 }
 
@@ -1800,8 +1804,9 @@ enum RosterChange {
 /// The single membership-removal core (voluntary leave, kick, character delete): drops the member
 /// row, notifies the leaver, transfers leadership if the leader left, and DISBANDS below 2 members
 /// (vanilla: a party of one is no party), which also deletes the Group's Target Icons. A new leader
-/// is announced to the remaining members before their list (cm:Group.cpp:464-470). Idempotent for a
-/// guid not in any group.
+/// is announced to the remaining members before their list (cm:Group.cpp:464-470). Every Character
+/// that lost its Group here gets its Instance Removal reconciled (cm:Group.cpp:461). Idempotent for
+/// a guid not in any group.
 pub(crate) fn remove_member(ctx: &ReducerContext, character_guid: u64) {
     let Some(m) = group_of(ctx, character_guid) else {
         return;
@@ -1854,6 +1859,11 @@ pub(crate) fn remove_member(ctx: &ReducerContext, character_guid: u64) {
             }
             clear_target_icons(ctx, group_id);
             ctx.db.game_group().group_id().delete(group_id);
+            // A disband starts the countdown for every former member in the instance, the last
+            // one included (cm:Group.cpp:554).
+            for guid in all_guids {
+                crate::instance::reconcile_instance_removal(ctx, guid);
+            }
             return;
         }
         Some(new_leader) => {
@@ -1867,6 +1877,7 @@ pub(crate) fn remove_member(ctx: &ReducerContext, character_guid: u64) {
         }
     }
     push_list_to_all(ctx, group_id);
+    crate::instance::reconcile_instance_removal(ctx, character_guid);
 }
 
 /// Tell every member who leads now. `SMSG_GROUP_SET_LEADER` carries only a name, which the Gateway
@@ -2094,7 +2105,8 @@ fn next_group_revision(current: Option<u64>, was_active: bool) -> u64 {
 ///
 /// Mechanical by design — no leadership arbitration, no disband rule, no roll resolution. Those are
 /// decisions, and decisions belong to the authority. An empty `members` is the disband/last-member
-/// case and deletes the group row.
+/// case and deletes the group row. The one local rule it runs is the Instance Removal rule, for
+/// each Character whose membership the push changes: the mirror is how this Shard learns of it.
 ///
 /// `group_kind` is the [`GroupKind`] byte and `raid_slots[n]` is `members[n]`'s [`RaidSlot`] byte.
 /// A length mismatch, an unknown kind or an invalid slot refuses the whole push.
@@ -2146,8 +2158,11 @@ pub fn sync_group_mirror(
     let groups = ctx.db.game_group();
     let member_tbl = ctx.db.game_group_member();
     let partition_tbl = ctx.db.game_group_member_partition();
-    let revisions = ctx.db.game_group_roster_revision();
-    let current_revision = revisions.group_id().find(group_id);
+    let current_revision = ctx
+        .db
+        .game_group_roster_revision()
+        .group_id()
+        .find(group_id);
     let incoming_active = !members.is_empty();
     match roster_update(
         current_revision
@@ -2235,23 +2250,21 @@ pub fn sync_group_mirror(
         .map(|m| (m.id, m.character_guid))
         .collect();
     let (stale_row_ids, arriving) = mirror_plan(&current, &effective_members);
+    // Every guid whose membership this push changes. Only these can start or end an Instance
+    // Removal, so a push that moves Raid Slots or the lead evaluates nothing.
+    let mut membership_changed = arriving.clone();
     for id in stale_row_ids {
         if let Some((_, guid)) = current.iter().find(|(row_id, _)| *row_id == id) {
             crate::loot::tag::revoke_group_member(ctx, group_id, *guid);
+            membership_changed.push(*guid);
         }
         member_tbl.id().delete(id);
     }
     if effective_members.is_empty() {
         groups.group_id().delete(group_id);
-        let row = GroupRosterRevision {
-            group_id,
-            revision: roster_revision,
-            active: false,
-        };
-        if current_revision.is_some() {
-            revisions.group_id().update(row);
-        } else {
-            revisions.insert(row);
+        store_group_revision(ctx, group_id, roster_revision, false);
+        for guid in membership_changed {
+            crate::instance::reconcile_instance_removal(ctx, guid);
         }
         return Ok(());
     }
@@ -2313,17 +2326,26 @@ pub fn sync_group_mirror(
             raid_slot: slots.get(&guid).copied().unwrap_or_default().wire(),
         });
     }
+    store_group_revision(ctx, group_id, roster_revision, true);
+    for guid in membership_changed {
+        crate::instance::reconcile_instance_removal(ctx, guid);
+    }
+    Ok(())
+}
+
+/// Record the Roster Revision a mirror push was accepted at.
+fn store_group_revision(ctx: &ReducerContext, group_id: u64, revision: u64, active: bool) {
+    let revisions = ctx.db.game_group_roster_revision();
     let row = GroupRosterRevision {
         group_id,
-        revision: roster_revision,
-        active: true,
+        revision,
+        active,
     };
-    if current_revision.is_some() {
+    if revisions.group_id().find(group_id).is_some() {
         revisions.group_id().update(row);
     } else {
         revisions.insert(row);
     }
-    Ok(())
 }
 
 /// Check the kind byte and one Raid Slot byte per member, and key the slots by member guid. Pure.

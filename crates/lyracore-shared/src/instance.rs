@@ -1,4 +1,5 @@
-//! Which maps are DUNGEONS — the one instancing fact both tiers have to agree on (issue #48).
+//! Which maps are DUNGEONS: the instancing fact both tiers have to agree on. The Instance Removal
+//! countdown length ([`INSTANCE_REMOVAL_MS`]) is a second, smaller one.
 //!
 //! The module needs it to decide whether a portal resolves-or-creates a `game_instance` instead of
 //! landing at instance 0 (`module::instance::is_dungeon_map`, work-item 190 / issue #39). The
@@ -33,6 +34,10 @@ pub const DUNGEON_MAPS: &[u32] = &[36];
 pub fn is_dungeon_map(map_id: u32) -> bool {
     DUNGEON_MAPS.contains(&map_id)
 }
+
+/// The Instance Removal countdown in milliseconds (cm:Player.cpp:17723). The Module schedules the
+/// expiry this far out, and the Gateway never shows the client more time than this.
+pub const INSTANCE_REMOVAL_MS: u32 = 60_000;
 
 #[cfg(test)]
 mod tests {

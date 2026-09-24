@@ -416,7 +416,7 @@ Every relay hangs off a coordinator connection. Row-driven relays take one of tw
   re-armed through `CoordinatorInner::on_reconnect` after a watchdog swap): the broadcast-shaped
   families (entities, motion, combat, chat, auras, corpses, casts), the recipient-keyed PRIVATE
   tier (whisper/group/resurrect/auction notice/Mail Arrival), and owner-addressed XP, level-up,
-  exploration, quest, item, teleport, addon, and reputation rows. GUID and bound-identity indexes select one
+  exploration, quest, item, teleport, addon, reputation, and Instance Removal rows. GUID and bound-identity indexes select one
   viewer directly; the callback enqueues packet work on that session's FIFO writer. Combat, cast,
   impact, and emote rows carry the actor's cell. Melee stance uses the attacker's indexed cell, chat
   uses the sender's, and auras use the target's. The shared cell index selects nearby viewers and

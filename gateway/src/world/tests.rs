@@ -623,6 +623,12 @@ struct InMemoryStore {
     /// The AUTHORITATIVE party state, when this handle is the realm-core one. Shared with
     /// nobody — a realm handle owns exactly one of these, and every shard reads its own `mirror`.
     party: std::sync::Arc<std::sync::Mutex<FakeParty>>,
+    /// Realm-core's Coordinator cache lags a call-pipe commit: after `realm_group_op`, roster reads
+    /// answer from `stale_party` until a `realm_group_op_visible` returns. The production shape of
+    /// a call pipe, which subscribes no group table.
+    cache_lags: std::sync::atomic::AtomicBool,
+    /// The party as the lagging cache still shows it.
+    stale_party: std::sync::Mutex<Option<FakeParty>>,
     /// True when this handle is realm-core, so `group_roster` answers from `party` (the
     /// authority) instead of `mirror` (this shard's cache of it).
     is_realm: bool,
@@ -911,6 +917,15 @@ impl InMemoryStore {
             return Ok(lyracore_shared::social::ContactRefusal::NotOnList.into());
         }
         Ok(ContactOutcome::Done)
+    }
+
+    /// Read realm-core's party the way its Coordinator cache shows it: stale after a lagging
+    /// call-pipe commit, current otherwise.
+    fn realm_cache<R>(&self, read: impl FnOnce(&FakeParty) -> R) -> R {
+        if let Some(stale) = &*self.stale_party.lock().unwrap() {
+            return read(stale);
+        }
+        read(&self.party.lock().unwrap())
     }
 
     /// Record one player-scoped call against THIS handle's shard.
@@ -3515,6 +3530,12 @@ impl WorldStore for InMemoryStore {
         use lyracore_shared::group::{event_kind as kind, realm_op, GroupRefusal};
         self.rec("realm_group_op");
         let mut p = self.party.lock().unwrap();
+        if self.cache_lags.load(std::sync::atomic::Ordering::SeqCst) {
+            let mut stale = self.stale_party.lock().unwrap();
+            if stale.is_none() {
+                *stale = Some(p.clone());
+            }
+        }
         p.ops
             .push((op, actor_guid, target_guid, arg_a, arg_b, arg_c));
         let full = |p: &FakeParty, group_id: u64| {
@@ -3708,6 +3729,21 @@ impl WorldStore for InMemoryStore {
         Ok(PartyOutcome::Ran)
     }
 
+    /// The visibility receipt: the op commits, then the Coordinator cache holds it.
+    fn realm_group_op_visible(
+        &self,
+        op: u8,
+        actor_guid: u64,
+        target_guid: u64,
+        arg_a: u8,
+        arg_b: u8,
+        arg_c: u64,
+    ) -> Result<PartyOutcome> {
+        let outcome = self.realm_group_op(op, actor_guid, target_guid, arg_a, arg_b, arg_c);
+        *self.stale_party.lock().unwrap() = None;
+        outcome
+    }
+
     fn group_roster(&self, character_guid: u64) -> Result<Option<super::party::GroupRoster>> {
         let read = self
             .group_roster_reads
@@ -3719,8 +3755,7 @@ impl WorldStore for InMemoryStore {
             }
         }
         if self.is_realm {
-            let p = self.party.lock().unwrap();
-            return Ok(p.group_of(character_guid).and_then(|g| p.roster(g)));
+            return Ok(self.realm_cache(|p| p.group_of(character_guid).and_then(|g| p.roster(g))));
         }
         Ok(self
             .mirror
@@ -3733,7 +3768,7 @@ impl WorldStore for InMemoryStore {
 
     fn group_roster_by_id(&self, group_id: u64) -> Result<Option<super::party::GroupRoster>> {
         if self.is_realm {
-            return Ok(self.party.lock().unwrap().roster(group_id));
+            return Ok(self.realm_cache(|p| p.roster(group_id)));
         }
         Ok(self
             .mirror
@@ -11573,7 +11608,7 @@ fn lk<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 /// in a gateway test (no `ReducerContext`), so what executes here is the gateway's production
 /// routing (`world::party`) against a faithful stand-in for the authority. The rules themselves are
 /// the module's to test.
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct FakeParty {
     next_group_id: u64,
     /// group_id → (leader, loot_method, loot_threshold, master_looter).

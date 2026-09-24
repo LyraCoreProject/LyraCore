@@ -3166,10 +3166,15 @@ impl Coordinator {
     /// `realm_group_op` — one party op against the database THIS handle points at. The gateway
     /// calls it on the **realm-core** handle, where membership is authoritative.
     ///
-    /// Through the COORDINATOR connection, not the player's: the reducer is operator-gated because
-    /// it takes the acting character's guid as an argument (realm-core has no live entity to derive
+    /// Through an operator connection, not the player's: the reducer is operator-gated because it
+    /// takes the acting character's guid as an argument (realm-core has no live entity to derive
     /// one from), so only the token that holds the operator identity may call it. The guid passed is
     /// the one this socket authenticated into the world with — see `world::party`.
+    ///
+    /// This form rides a call pipe, which subscribes no group table, so the Coordinator cache may
+    /// still hold the old roster when it returns. Only an op that pushes no Group mirror after it
+    /// uses it: a Group Broadcast or a Target Icon request. Every roster op uses
+    /// [`Self::realm_group_op_visible`].
     pub fn realm_group_op(
         &self,
         op: u8,
@@ -3181,6 +3186,33 @@ impl Coordinator {
     ) -> Result<PartyOutcome> {
         party_outcome(call_reducer!(
             self.0.call_pipe().conn.reducers,
+            "realm_group_op",
+            realm_group_op_then(
+                op,
+                self.session_actor(actor_guid),
+                target_guid,
+                arg_a,
+                arg_b,
+                arg_c
+            )
+        ))
+    }
+
+    /// [`Self::realm_group_op`] on the visibility pipe: it returns only after the Coordinator cache
+    /// holds the committed roster, so the mirror push that follows reads the op's own result. The
+    /// caller must not run on the Coordinator pump: World Sessions and the bot intent threads.
+    pub fn realm_group_op_visible(
+        &self,
+        op: u8,
+        actor_guid: u64,
+        target_guid: u64,
+        arg_a: u8,
+        arg_b: u8,
+        arg_c: u64,
+    ) -> Result<PartyOutcome> {
+        let coordinator = self.0.visibility_pipe();
+        party_outcome(call_reducer!(
+            coordinator.conn.reducers,
             "realm_group_op",
             realm_group_op_then(
                 op,

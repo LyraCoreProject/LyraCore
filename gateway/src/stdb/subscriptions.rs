@@ -3022,7 +3022,7 @@ fn append_resident_creature_after_create(
     created_outbound.extend(creature_leg_outbound(created, &remaining));
 }
 
-fn unix_now_micros() -> u64 {
+pub(crate) fn unix_now_micros() -> u64 {
     let micros = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()

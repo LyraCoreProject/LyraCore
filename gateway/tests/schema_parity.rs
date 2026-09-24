@@ -1141,6 +1141,9 @@ parity_test!(parity_game_auction_house, "game_auction_house", lyracore_module::A
 parity_test!(parity_game_auction_expiry, "game_auction_expiry", lyracore_module::AuctionExpiry, bindings::auction_expiry_type::AuctionExpiry, {
     scheduled_id, scheduled_at, auction_id,
 });
+parity_test!(parity_game_instance_removal, "game_instance_removal", lyracore_module::InstanceRemoval, bindings::instance_removal_type::InstanceRemoval, {
+    scheduled_id, scheduled_at, character_guid, instance_id, group_id,
+});
 parity_test!(parity_game_auction_notice, "game_auction_notice", lyracore_module::AuctionNotice, bindings::auction_notice_type::AuctionNotice, {
     id, recipient_guid, kind, house, auction_id, item_entry, random_property_id, bid, out_bid,
     bidder_guid, created_at,
@@ -1282,6 +1285,7 @@ const MANIFEST_TABLES: &[&str] = &[
     "game_character_talent",
     "game_rest_state_event",
     "game_breath_relay_event",
+    "game_instance_removal",
     "game_dynamic_object",
     "game_combat_event",
     "game_melee_attack",

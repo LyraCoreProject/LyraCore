@@ -722,7 +722,9 @@ impl CoordinatorInner {
     /// runs its row callbacks before the reducer callback. Waiting for that callback is therefore a
     /// deterministic visibility receipt: relays for the transaction are queued before the caller
     /// can enqueue success presentation. Reducer-only call pipes cannot provide that ordering
-    /// because they do not subscribe the relayed tables.
+    /// because they do not subscribe the relayed tables. Every Realm-core party op that changes a
+    /// roster rides this pipe, so the Group mirror push after it reads the committed roster. It
+    /// blocks on the pump, so a pump callback must never call it.
     pub(crate) fn visibility_pipe(&self) -> std::sync::RwLockReadGuard<'_, LiveConn> {
         self.coord()
     }
@@ -1157,6 +1159,10 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // Breath timer edges and server-resolved drowning hits: self-only relay, with the same
         // owner-session audience as rest state. The bar counts down client-side between edges.
         "SELECT * FROM game_breath_relay_event",
+        // Instance Removal countdowns: `world_view` relays each row to its owner, and the world
+        // entry sweep replays a running one with the time left. The row is durable Module state,
+        // so a Gateway restart loses no countdown.
+        "SELECT * FROM game_instance_removal",
         // Ground-area spell visuals: `world_view::dynobj_appeared`
         // relays instance-gated CREATE/DESTROY. Short-lived rows (the area's duration).
         "SELECT * FROM game_dynamic_object",
