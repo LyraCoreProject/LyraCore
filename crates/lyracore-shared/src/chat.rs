@@ -1,6 +1,7 @@
 //! The Realm Chat wire contract both crates import: Chat Kind codes, chat tags, language codes,
 //! the language Gate and the typed [`ChatRefusal`] the Gateway maps to client feedback.
 
+use crate::channel::ChannelRefusal;
 use crate::constants::player_flags;
 
 /// Chat Kinds: the 1.12 `ChatMsg` wire values (cm:SharedDefines.h:1545-1582). A Realm Chat Line
@@ -138,14 +139,29 @@ pub enum ChatRefusal {
     UnsupportedKind,
     /// Nothing is left after trimming.
     EmptyMessage,
+    /// A channel line the channel refused. Answered with the channel's notice.
+    Channel(ChannelRefusal),
 }
 
 impl ChatRefusal {
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 17] = [
         Self::NotInGroup,
         Self::UnknownLanguage,
         Self::UnsupportedKind,
         Self::EmptyMessage,
+        Self::Channel(ChannelRefusal::NotMember),
+        Self::Channel(ChannelRefusal::WrongPassword),
+        Self::Channel(ChannelRefusal::NotModerator),
+        Self::Channel(ChannelRefusal::NotOwner),
+        Self::Channel(ChannelRefusal::Muted),
+        Self::Channel(ChannelRefusal::Banned),
+        Self::Channel(ChannelRefusal::InvalidName),
+        Self::Channel(ChannelRefusal::PlayerNotFound),
+        Self::Channel(ChannelRefusal::PlayerNotBanned),
+        Self::Channel(ChannelRefusal::PlayerAlreadyMember),
+        Self::Channel(ChannelRefusal::InviteWrongFaction),
+        Self::Channel(ChannelRefusal::PlayerInviteBanned),
+        Self::Channel(ChannelRefusal::NotModerated),
     ];
 
     pub fn as_tag(self) -> &'static str {
@@ -154,6 +170,7 @@ impl ChatRefusal {
             Self::UnknownLanguage => "chat:unknown_language",
             Self::UnsupportedKind => "chat:unsupported_kind",
             Self::EmptyMessage => "chat:empty_message",
+            Self::Channel(refusal) => refusal.as_tag(),
         }
     }
 
@@ -361,11 +378,25 @@ mod tests {
     }
 
     #[test]
+    fn every_channel_refusal_is_a_chat_refusal() {
+        for refusal in ChannelRefusal::ALL {
+            assert!(
+                ChatRefusal::ALL.contains(&ChatRefusal::Channel(refusal)),
+                "{refusal:?}"
+            );
+        }
+    }
+
+    #[test]
     fn every_chat_refusal_tag_round_trips() {
         for refusal in ChatRefusal::ALL {
             assert_eq!(ChatRefusal::parse_tag(refusal.as_tag()), Some(refusal));
         }
         assert_eq!(ChatRefusal::parse_tag("chat:"), None);
+        assert_eq!(
+            ChatRefusal::parse_tag("chat:channel:muted"),
+            Some(ChatRefusal::Channel(ChannelRefusal::Muted))
+        );
         assert_eq!(
             ChatRefusal::parse_tag("realm_chat reducer timed out after 10s"),
             None
