@@ -77,7 +77,7 @@ grep -rn '^#\[table(' module/src --include='*.rs' | wc -l   # 238 on 2026-09-03
 | Creature (template, spawn, AI, pet, trainer) | 42 | 17 | `creatures/*`, `trainer.rs` |
 | GameObject | 9 | 6 | `gameobject.rs`, `go_model.rs` |
 | Loot | 12 | 6 | `loot/*` |
-| Group / party | 5 | 3 | `group.rs` |
+| Group / party | 8 | 5 | `group.rs` |
 | Guild | 7 | 0 | `guild/mod.rs`, `guild/fee.rs`, `guild/membership.rs` |
 | Instance / encounter | 7 | 1 | `instance.rs`, `encounter.rs` |
 | Sharding: region, transfer, load | 9 | 0 | `region.rs`, `transfer/mod.rs`, `load.rs` |
