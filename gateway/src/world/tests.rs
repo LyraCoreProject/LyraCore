@@ -5652,47 +5652,96 @@ fn the_settings_opcodes_reach_their_dispatch_entries_over_the_socket() {
             }],
             ..Default::default()
         }],
+        // The sentinel below is CMSG_PLAYED_TIME, which only replies once `character_by_guid`
+        // resolves the caller's row (`char.rs`'s own doc comment); without one here, the reply
+        // never comes and the sentinel read blocks until the test's socket timeout fires.
+        characters: vec![codec::CharacterView {
+            guid: 1,
+            name: "Warrior".into(),
+            ..Default::default()
+        }],
         ..guild_member_store()
     });
-    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
 
-    wow_world_messages::vanilla::CMSG_GUILD_MOTD {
-        message_of_the_day: "Assemble!".into(),
+    // A successful settings op answers its actor nothing, so each write below is followed by a
+    // sentinel request with a guaranteed reply, and a read that blocks for it. This is more than
+    // pacing: `enter_world` drains a FIXED packet count that knows nothing about the Guild MOTD
+    // event `guild_world_entry` sends a fresh-login Guild member (see its own doc comment), so one
+    // packet is still unread in the client's kernel buffer at this point. Reading for a sentinel
+    // discards it along the way; dropping the client with it still queued would instead close
+    // with unread bytes, which the kernel reports to the server as a reset, not a clean EOF
+    // (`enter_world`'s doc comment names this exact failure shape).
+    fn sync(
+        client: &mut UnixStream,
+        enc: &mut EncrypterHalf,
+        dec: &mut DecrypterHalf,
+        write: impl FnOnce(&mut UnixStream, &mut EncrypterHalf),
+    ) {
+        write(&mut *client, &mut *enc);
+        CMSG_PLAYED_TIME {}
+            .write_encrypted_client(&mut *client, &mut *enc)
+            .unwrap();
+        loop {
+            if let ServerOpcodeMessage::SMSG_PLAYED_TIME(_) =
+                ServerOpcodeMessage::read_encrypted(&mut *client, &mut *dec).unwrap()
+            {
+                break;
+            }
+        }
     }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    wow_world_messages::vanilla::CMSG_GUILD_INFO_TEXT {
-        guild_info: "About us".into(),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    wow_world_messages::vanilla::CMSG_GUILD_SET_PUBLIC_NOTE {
-        player_name: "Dave".into(),
-        note: "reliable".into(),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    wow_world_messages::vanilla::CMSG_GUILD_SET_OFFICER_NOTE {
-        player_name: "Dave".into(),
-        note: "watch closely".into(),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    wow_world_messages::vanilla::CMSG_GUILD_RANK {
-        rank_id: 2,
-        rights: 0x43,
-        rank_name: "Veteran+".into(),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    wow_world_messages::vanilla::CMSG_GUILD_ADD_RANK {
-        rank_name: "Recruit".into(),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    wow_world_messages::vanilla::CMSG_GUILD_DEL_RANK {}
-        .write_encrypted_client(&mut client, &mut c_enc)
+
+    sync(&mut client, &mut c_enc, &mut c_dec, |c, e| {
+        wow_world_messages::vanilla::CMSG_GUILD_MOTD {
+            message_of_the_day: "Assemble!".into(),
+        }
+        .write_encrypted_client(c, e)
         .unwrap();
+    });
+    sync(&mut client, &mut c_enc, &mut c_dec, |c, e| {
+        wow_world_messages::vanilla::CMSG_GUILD_INFO_TEXT {
+            guild_info: "About us".into(),
+        }
+        .write_encrypted_client(c, e)
+        .unwrap();
+    });
+    sync(&mut client, &mut c_enc, &mut c_dec, |c, e| {
+        wow_world_messages::vanilla::CMSG_GUILD_SET_PUBLIC_NOTE {
+            player_name: "Dave".into(),
+            note: "reliable".into(),
+        }
+        .write_encrypted_client(c, e)
+        .unwrap();
+    });
+    sync(&mut client, &mut c_enc, &mut c_dec, |c, e| {
+        wow_world_messages::vanilla::CMSG_GUILD_SET_OFFICER_NOTE {
+            player_name: "Dave".into(),
+            note: "watch closely".into(),
+        }
+        .write_encrypted_client(c, e)
+        .unwrap();
+    });
+    sync(&mut client, &mut c_enc, &mut c_dec, |c, e| {
+        wow_world_messages::vanilla::CMSG_GUILD_RANK {
+            rank_id: 2,
+            rights: 0x43,
+            rank_name: "Veteran+".into(),
+        }
+        .write_encrypted_client(c, e)
+        .unwrap();
+    });
+    sync(&mut client, &mut c_enc, &mut c_dec, |c, e| {
+        wow_world_messages::vanilla::CMSG_GUILD_ADD_RANK {
+            rank_name: "Recruit".into(),
+        }
+        .write_encrypted_client(c, e)
+        .unwrap();
+    });
+    sync(&mut client, &mut c_enc, &mut c_dec, |c, e| {
+        wow_world_messages::vanilla::CMSG_GUILD_DEL_RANK {}
+            .write_encrypted_client(c, e)
+            .unwrap();
+    });
 
     drop(client);
     server.join().unwrap();
