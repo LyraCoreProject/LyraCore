@@ -5320,49 +5320,83 @@ fn every_membership_opcode_reaches_its_durable_request() {
         ],
         ..tester_store(7)
     });
-    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
 
-    CMSG_GUILD_INVITE {
-        invited_player: "Target".into(),
+    // A successful membership op answers its actor nothing, so each write below is followed by a
+    // sentinel request with a guaranteed reply, and a read that blocks for it. This is more than
+    // pacing: `enter_world` drains a FIXED packet count that knows nothing about the Guild MOTD
+    // event `guild_world_entry` sends a fresh-login Guild member (see its own doc comment), so one
+    // packet is still unread in the client's kernel buffer at this point. Reading for a sentinel
+    // discards it along the way; dropping the client with it still queued would instead close
+    // with unread bytes, which the kernel reports to the server as a reset, not a clean EOF
+    // (`enter_world`'s doc comment names this exact failure shape).
+    fn sync(
+        client: &mut UnixStream,
+        enc: &mut EncrypterHalf,
+        dec: &mut DecrypterHalf,
+        write: impl FnOnce(&mut UnixStream, &mut EncrypterHalf),
+    ) {
+        write(&mut *client, &mut *enc);
+        CMSG_PLAYED_TIME {}
+            .write_encrypted_client(&mut *client, &mut *enc)
+            .unwrap();
+        loop {
+            if let ServerOpcodeMessage::SMSG_PLAYED_TIME(_) =
+                ServerOpcodeMessage::read_encrypted(&mut *client, &mut *dec).unwrap()
+            {
+                break;
+            }
+        }
     }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    CMSG_GUILD_ACCEPT {}
-        .write_encrypted_client(&mut client, &mut c_enc)
-        .unwrap();
-    CMSG_GUILD_DECLINE {}
-        .write_encrypted_client(&mut client, &mut c_enc)
-        .unwrap();
-    CMSG_GUILD_REMOVE {
-        player_name: "Target".into(),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    CMSG_GUILD_PROMOTE {
-        player_name: "Target".into(),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    CMSG_GUILD_DEMOTE {
-        player_name: "Target".into(),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    CMSG_GUILD_LEADER {
-        new_guild_leader_name: "Target".into(),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    CMSG_GUILD_LEAVE {}
-        .write_encrypted_client(&mut client, &mut c_enc)
-        .unwrap();
-    CMSG_GUILD_DISBAND {}
-        .write_encrypted_client(&mut client, &mut c_enc)
-        .unwrap();
 
-    // A successful membership op answers its actor nothing, so this reads back nothing: dropping
-    // the client sends EOF after the bytes already written, and `run_world_session` drains every
-    // queued opcode before it sees that EOF and returns.
+    sync(&mut client, &mut c_enc, &mut c_dec, |c, e| {
+        CMSG_GUILD_INVITE {
+            invited_player: "Target".into(),
+        }
+        .write_encrypted_client(c, e)
+        .unwrap();
+    });
+    sync(&mut client, &mut c_enc, &mut c_dec, |c, e| {
+        CMSG_GUILD_ACCEPT {}.write_encrypted_client(c, e).unwrap();
+    });
+    sync(&mut client, &mut c_enc, &mut c_dec, |c, e| {
+        CMSG_GUILD_DECLINE {}.write_encrypted_client(c, e).unwrap();
+    });
+    sync(&mut client, &mut c_enc, &mut c_dec, |c, e| {
+        CMSG_GUILD_REMOVE {
+            player_name: "Target".into(),
+        }
+        .write_encrypted_client(c, e)
+        .unwrap();
+    });
+    sync(&mut client, &mut c_enc, &mut c_dec, |c, e| {
+        CMSG_GUILD_PROMOTE {
+            player_name: "Target".into(),
+        }
+        .write_encrypted_client(c, e)
+        .unwrap();
+    });
+    sync(&mut client, &mut c_enc, &mut c_dec, |c, e| {
+        CMSG_GUILD_DEMOTE {
+            player_name: "Target".into(),
+        }
+        .write_encrypted_client(c, e)
+        .unwrap();
+    });
+    sync(&mut client, &mut c_enc, &mut c_dec, |c, e| {
+        CMSG_GUILD_LEADER {
+            new_guild_leader_name: "Target".into(),
+        }
+        .write_encrypted_client(c, e)
+        .unwrap();
+    });
+    sync(&mut client, &mut c_enc, &mut c_dec, |c, e| {
+        CMSG_GUILD_LEAVE {}.write_encrypted_client(c, e).unwrap();
+    });
+    sync(&mut client, &mut c_enc, &mut c_dec, |c, e| {
+        CMSG_GUILD_DISBAND {}.write_encrypted_client(c, e).unwrap();
+    });
+
     drop(client);
     server.join().unwrap();
     let calls = recorded(&store);
