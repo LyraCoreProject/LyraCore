@@ -13,6 +13,10 @@ fn scheduled_bid_expiry_settles_once_and_a_callback_replay_is_a_no_op() {
     standalone.assert_call("debug_stage_auction_expiry_fixture", &[]);
 
     standalone.wait_until_call_succeeds("debug_verify_auction_expiry_fixture", &[]);
+    // Auction Notices are a one-shot, TTL-reaped relay (see gc.rs), so check them once here, right
+    // after the scheduled expiry settles — not after the slower steps below, where the reaper would
+    // have already claimed the row on schedule.
+    standalone.assert_call("debug_verify_auction_expiry_notices_fixture", &[]);
 
     for reducer in [
         "debug_replay_auction_expiry_fixture",

@@ -3457,6 +3457,37 @@ pub fn debug_verify_auction_expiry_fixture(ctx: &ReducerContext) -> Result<(), S
         return Err("expiry seller proceeds mail changed".to_string());
     }
 
+    // Unsold coverage: no bidder means expiry returns the item, not a Won/Sold pair.
+    let returned = auction_fixture_mail(
+        ctx,
+        EXPIRY_FIXTURE_UNSOLD_SELLER_GUID,
+        HOUSE,
+        EXPIRY_FIXTURE_UNSOLD_ITEM.entry,
+        EXPIRY_FIXTURE_UNSOLD_ITEM.random_property_id,
+        AuctionMailAction::Expired,
+    )?;
+    if returned.money != 0
+        || returned.cod != 0
+        || returned.was_read
+        || returned.check_flags != CHECK_MASK_COPIED
+        || !returned.body.is_empty()
+        || returned.snapshot() != EXPIRY_FIXTURE_UNSOLD_ITEM
+    {
+        return Err("unsold expiry return mail changed".to_string());
+    }
+    Ok(())
+}
+
+/// Verify the Auction Notice relay rows the expiry settlement fired: Won/Sold for the priced
+/// auction, Expired for the unsold one. Auction Notices are a one-shot live relay (the same TTL-reap
+/// shape as `game_whisper_event`), so call this once, immediately after the scheduled expiry
+/// settles — a slower step first (a republish, another wait) lets the reaper legitimately claim the
+/// row before this reads it, which fails the read without meaning the settlement was wrong.
+#[cfg(feature = "debug_reducers")]
+#[reducer]
+pub fn debug_verify_auction_expiry_notices_fixture(ctx: &ReducerContext) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    const HOUSE: u32 = 1;
     auction_fixture_notice(
         ctx,
         EXPIRY_FIXTURE_WINNER_GUID,
@@ -3481,26 +3512,6 @@ pub fn debug_verify_auction_expiry_fixture(ctx: &ReducerContext) -> Result<(), S
         bid_increment(201),
         0,
     )?;
-
-    // Unsold coverage: no bidder means expiry returns the item and writes an Expired notice, not
-    // a Won/Sold pair.
-    let returned = auction_fixture_mail(
-        ctx,
-        EXPIRY_FIXTURE_UNSOLD_SELLER_GUID,
-        HOUSE,
-        EXPIRY_FIXTURE_UNSOLD_ITEM.entry,
-        EXPIRY_FIXTURE_UNSOLD_ITEM.random_property_id,
-        AuctionMailAction::Expired,
-    )?;
-    if returned.money != 0
-        || returned.cod != 0
-        || returned.was_read
-        || returned.check_flags != CHECK_MASK_COPIED
-        || !returned.body.is_empty()
-        || returned.snapshot() != EXPIRY_FIXTURE_UNSOLD_ITEM
-    {
-        return Err("unsold expiry return mail changed".to_string());
-    }
     auction_fixture_notice(
         ctx,
         EXPIRY_FIXTURE_UNSOLD_SELLER_GUID,
@@ -6360,6 +6371,7 @@ mod tests {
             "pub fn debug_stage_auction_expiry_fixture(",
             "pub fn debug_replay_auction_expiry_fixture(",
             "pub fn debug_verify_auction_expiry_fixture(",
+            "pub fn debug_verify_auction_expiry_notices_fixture(",
             "pub fn debug_stage_legacy_auction_mail_fixture(",
             "pub fn debug_verify_legacy_auction_mail_repaired(",
         ] {
