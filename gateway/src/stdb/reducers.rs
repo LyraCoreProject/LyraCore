@@ -791,10 +791,75 @@ impl Coordinator {
         request: crate::world::PlaceBidRequest,
     ) -> Result<AuctionBidHold> {
         self.auction_hold_bid(operation_id, request)?;
-        let mut hold = self.wait_for_auction_bid_hold(operation_id)?;
+        let hold = self.wait_for_auction_bid_hold(operation_id)?;
+        self.complete_auction_hold(hold)
+    }
+
+    /// Cancel one listing. The Gateway reads the listing from the Realm-core cache and fences the
+    /// Auction Cut it computes; Realm-core refuses the Cancellation if a later bid changed that cut.
+    /// A pending Cancellation of the same listing is driven again instead of fencing a second cut.
+    pub(crate) fn cancel_auction(
+        &self,
+        request: crate::world::CancelAuctionRequest,
+    ) -> Result<crate::world::CancelAuctionOutcome> {
+        use crate::world::CancelAuctionOutcome;
+        let pending = self
+            .unfinished_auction_holds(request.actor_guid)
+            .find(|hold| {
+                hold.operation == lyracore_shared::auction::hold_operation::CANCEL
+                    && hold.outcome == lyracore_shared::auction::bid_outcome::PENDING
+                    && hold.auction_id == request.auction_id
+                    && hold.house == request.house_id
+            });
+        let (operation_id, cut) = match pending {
+            Some(hold) => (hold.operation_id, hold.offer),
+            None => match self.realm_core()?.cancellation_cut(request) {
+                Some(cut) => (next_operation_id()?, cut),
+                None => return Ok(CancelAuctionOutcome::NotFound),
+            },
+        };
+        let result = if self.is_sharded() {
+            self.auction_hold_cancel(operation_id, request, cut)
+                .and_then(|()| self.wait_for_auction_bid_hold(operation_id))
+                .and_then(|hold| self.complete_auction_hold(hold))
+        } else {
+            self.auction_cancel_local(operation_id, request, cut)
+                .and_then(|()| self.wait_for_terminal_bid_hold(operation_id))
+        };
+        match result {
+            Ok(hold) => cancel_outcome(&hold),
+            Err(error) => match auction_refusal(&error) {
+                Some(refusal) => Ok(refusal.into()),
+                None => Err(error),
+            },
+        }
+    }
+
+    /// Finish every unfinished Hold of `actor_guid` on this Home Shard. A Refusal leaves that Hold
+    /// for a later attempt; a transport failure ends the request.
+    pub(crate) fn resume_auction_holds(&self, actor_guid: u64) -> Result<()> {
+        let holds: Vec<_> = self.unfinished_auction_holds(actor_guid).collect();
+        for hold in holds {
+            let operation_id = hold.operation_id;
+            if let Err(error) = self.complete_auction_hold(hold) {
+                match auction_refusal(&error) {
+                    Some(refusal) => log::warn!(
+                        "auction Hold {operation_id} of {actor_guid} did not resume: {refusal:?}"
+                    ),
+                    None => return Err(error),
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Realm-core's decision, the Home Shard's finish, and any refund phases of one Hold, from the
+    /// phase a stopped Gateway left it in. Every phase is idempotent, so a replay changes nothing.
+    fn complete_auction_hold(&self, mut hold: AuctionBidHold) -> Result<AuctionBidHold> {
+        let operation_id = hold.operation_id;
         let realm = self.realm_core()?;
         if hold.outcome == lyracore_shared::auction::bid_outcome::PENDING {
-            realm.auction_decide_bid(&hold)?;
+            realm.auction_decide(&hold)?;
             let decision = realm.wait_for_auction_bid_decision(operation_id)?;
             self.auction_finish_bid(&hold, &decision)?;
             hold = self.wait_for_terminal_bid_hold(operation_id)?;
@@ -846,18 +911,116 @@ impl Coordinator {
         )
     }
 
-    fn auction_decide_bid(&self, hold: &AuctionBidHold) -> Result<()> {
+    fn auction_hold_cancel(
+        &self,
+        operation_id: u64,
+        request: crate::world::CancelAuctionRequest,
+        cut: u32,
+    ) -> Result<()> {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
-            "realm_auction_decide_bid",
-            realm_auction_decide_bid_then(
-                hold.operation_id,
-                self.session_actor(hold.bidder_guid),
-                hold.auction_id,
-                hold.house,
-                hold.offer
+            "gw_auction_hold_cancel",
+            gw_auction_hold_cancel_then(
+                operation_id,
+                self.session_actor(request.actor_guid),
+                request.auctioneer_guid,
+                request.auction_id,
+                request.house_id,
+                cut
             )
         )
+    }
+
+    fn auction_cancel_local(
+        &self,
+        operation_id: u64,
+        request: crate::world::CancelAuctionRequest,
+        cut: u32,
+    ) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "gw_auction_cancel_local",
+            gw_auction_cancel_local_then(
+                operation_id,
+                self.session_actor(request.actor_guid),
+                request.auctioneer_guid,
+                request.auction_id,
+                request.house_id,
+                cut
+            )
+        )
+    }
+
+    /// Realm-core's decision for a Hold, by the operation the Hold pays for.
+    fn auction_decide(&self, hold: &AuctionBidHold) -> Result<()> {
+        use lyracore_shared::auction::hold_operation;
+        match hold.operation {
+            hold_operation::BID => call_reducer!(
+                self.0.call_pipe().conn.reducers,
+                "realm_auction_decide_bid",
+                realm_auction_decide_bid_then(
+                    hold.operation_id,
+                    self.session_actor(hold.bidder_guid),
+                    hold.auction_id,
+                    hold.house,
+                    hold.offer
+                )
+            ),
+            hold_operation::CANCEL => call_reducer!(
+                self.0.call_pipe().conn.reducers,
+                "realm_auction_decide_cancel",
+                realm_auction_decide_cancel_then(
+                    hold.operation_id,
+                    self.session_actor(hold.bidder_guid),
+                    hold.auction_id,
+                    hold.house,
+                    hold.offer
+                )
+            ),
+            operation => Err(anyhow!(
+                "auction Hold {} pays for unknown operation {operation}",
+                hold.operation_id
+            )),
+        }
+    }
+
+    /// The Auction Cut the seller pays to cancel the listing, read from THIS handle's cache.
+    /// `None` when the listing is gone, is not the seller's, or lists in another market.
+    fn cancellation_cut(&self, request: crate::world::CancelAuctionRequest) -> Option<u32> {
+        let guard = self.0.coord();
+        let auction = guard
+            .conn
+            .db
+            .game_auction()
+            .id()
+            .find(&request.auction_id)?;
+        listing_cut(&auction, request)
+    }
+
+    /// `actor_guid`'s unfinished Holds on THIS handle, found through the Hold index and read back
+    /// by primary key.
+    fn unfinished_auction_holds(&self, actor_guid: u64) -> impl Iterator<Item = AuctionBidHold> {
+        let guard = self.0.coord();
+        let operations = guard
+            .unfinished_auction_holds
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .operations_of(actor_guid);
+        let holds: Vec<_> = operations
+            .into_iter()
+            .filter_map(|operation_id| {
+                guard
+                    .conn
+                    .db
+                    .game_auction_bid_hold()
+                    .operation_id()
+                    .find(&operation_id)
+            })
+            .filter(|hold| {
+                hold.bidder_guid == actor_guid && super::auction_holds::hold_is_unfinished(hold)
+            })
+            .collect();
+        holds.into_iter()
     }
 
     fn auction_finish_bid(
@@ -923,16 +1086,9 @@ impl Coordinator {
         &self,
         request: crate::world::PlaceBidRequest,
     ) -> Option<AuctionBidHold> {
-        self.0
-            .coord()
-            .conn
-            .db
-            .game_auction_bid_hold()
-            .iter()
+        self.unfinished_auction_holds(request.actor_guid)
             .find(|hold| {
-                (hold.outcome == lyracore_shared::auction::bid_outcome::PENDING
-                    || hold.deferred_refund != 0)
-                    && hold.bidder_guid == request.actor_guid
+                hold.operation == lyracore_shared::auction::hold_operation::BID
                     && hold.auction_id == request.auction_id
                     && hold.house == request.house_id
                     && hold.offer == request.offer
@@ -3976,6 +4132,7 @@ fn contact_outcome(result: Result<()>) -> Result<ContactOutcome> {
 
 fn bid_payload_matches(hold: &AuctionBidHold, decision: &AuctionBidDecision) -> bool {
     hold.operation_id == decision.operation_id
+        && hold.operation == decision.operation
         && hold.bidder_guid == decision.bidder_guid
         && hold.auction_id == decision.auction_id
         && hold.house == decision.house
@@ -3989,9 +4146,41 @@ fn bid_refund_is_recorded(hold: &AuctionBidHold, decision: &AuctionBidDecision) 
 }
 
 fn bid_hold_has_value(hold: &AuctionBidHold, bidder_guid: u64) -> bool {
-    hold.bidder_guid == bidder_guid
-        && (hold.outcome == lyracore_shared::auction::bid_outcome::PENDING
-            || hold.deferred_refund != 0)
+    hold.bidder_guid == bidder_guid && super::auction_holds::hold_is_unfinished(hold)
+}
+
+/// The seller's Auction Cut for `request`'s listing, when the listing is the seller's and lists in
+/// the auctioneer's market.
+fn listing_cut(auction: &Auction, request: crate::world::CancelAuctionRequest) -> Option<u32> {
+    use lyracore_shared::auction::{auction_cut, market_of};
+    if auction.owner_guid != request.actor_guid
+        || market_of(auction.house) != market_of(request.house_id)
+    {
+        return None;
+    }
+    auction_cut(auction.highest_bid, auction.consignment_rate)
+}
+
+fn cancel_outcome(hold: &AuctionBidHold) -> Result<crate::world::CancelAuctionOutcome> {
+    use crate::world::CancelAuctionOutcome;
+    use lyracore_shared::auction::{bid_outcome, hold_operation};
+    if hold.operation != hold_operation::CANCEL {
+        return Err(anyhow!(
+            "auction Hold {} is not a Cancellation",
+            hold.operation_id
+        ));
+    }
+    Ok(match hold.outcome {
+        bid_outcome::CANCELLED => CancelAuctionOutcome::Cancelled,
+        bid_outcome::ITEM_NOT_FOUND => CancelAuctionOutcome::NotFound,
+        bid_outcome::PENDING => {
+            return Err(anyhow!(
+                "auction Cancellation Hold {} is still pending",
+                hold.operation_id
+            ));
+        }
+        _ => CancelAuctionOutcome::Stale,
+    })
 }
 
 fn bid_outcome(hold: &AuctionBidHold) -> Result<crate::world::PlaceBidOutcome> {
@@ -4510,6 +4699,7 @@ mod auction_reducer_tests {
             minimum_increment: 0,
             accepted_price: 0,
             deferred_refund: 3,
+            operation: lyracore_shared::auction::hold_operation::BID,
         };
         let decision = AuctionBidDecision {
             operation_id: hold.operation_id,
@@ -4526,6 +4716,7 @@ mod auction_reducer_tests {
             deferred_refund: hold.deferred_refund,
             item_entry: 0,
             random_property_id: 0,
+            operation: hold.operation,
         };
 
         assert!(bid_refund_is_recorded(&hold, &decision));
@@ -4595,6 +4786,129 @@ mod auction_reducer_tests {
         );
     }
 
+    fn cancel_request() -> crate::world::CancelAuctionRequest {
+        crate::world::CancelAuctionRequest {
+            actor_guid: 7,
+            auctioneer_guid: 42,
+            auction_id: 41,
+            house_id: 2,
+        }
+    }
+
+    fn listing(owner_guid: u64, house: u32, highest_bid: u32) -> Auction {
+        Auction {
+            id: 41,
+            listing_operation_id: 1,
+            house,
+            owner_guid,
+            item_guid: 70,
+            item_entry: 25,
+            item_stack_count: 1,
+            item_durability: 0,
+            item_enchant_id: 0,
+            item_soulbound: false,
+            start_bid: 100,
+            buyout: 0,
+            highest_bidder_guid: u64::from(highest_bid != 0) * 9,
+            highest_bid,
+            deposit: 10,
+            created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
+            expires_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
+            revision: 1,
+            deposit_rate: 5,
+            consignment_rate: 5,
+            random_property_id: 0,
+        }
+    }
+
+    /// 5% of a bid of 201 is 10.05, truncated to 10 (`cm:AuctionHouseMgr.cpp:733-736`).
+    #[test]
+    fn the_gateway_fences_the_cut_of_the_sellers_own_listing_in_its_market() {
+        assert_eq!(listing_cut(&listing(7, 1, 201), cancel_request()), Some(10));
+        assert_eq!(listing_cut(&listing(7, 3, 0), cancel_request()), Some(0));
+        assert_eq!(
+            listing_cut(&listing(8, 1, 201), cancel_request()),
+            None,
+            "another player's listing"
+        );
+        assert_eq!(
+            listing_cut(&listing(7, 4, 201), cancel_request()),
+            None,
+            "the Horde market"
+        );
+    }
+
+    #[test]
+    fn a_terminal_cancellation_hold_maps_to_one_client_outcome() {
+        use crate::world::CancelAuctionOutcome;
+        use lyracore_shared::auction::{bid_outcome, hold_operation};
+        let hold = |operation, outcome| AuctionBidHold {
+            operation_id: 7,
+            bidder_guid: 8,
+            auction_id: 41,
+            house: 1,
+            offer: 10,
+            outcome,
+            revision: 0,
+            result_bidder_guid: 0,
+            result_bid: 0,
+            minimum_increment: 0,
+            accepted_price: 10,
+            deferred_refund: 0,
+            operation,
+        };
+        for (outcome, expected) in [
+            (bid_outcome::CANCELLED, CancelAuctionOutcome::Cancelled),
+            (bid_outcome::ITEM_NOT_FOUND, CancelAuctionOutcome::NotFound),
+            (bid_outcome::DATABASE, CancelAuctionOutcome::Stale),
+        ] {
+            assert_eq!(
+                cancel_outcome(&hold(hold_operation::CANCEL, outcome)).unwrap(),
+                expected
+            );
+        }
+        assert!(cancel_outcome(&hold(hold_operation::CANCEL, bid_outcome::PENDING)).is_err());
+        assert!(
+            cancel_outcome(&hold(hold_operation::BID, bid_outcome::CANCELLED)).is_err(),
+            "a bid Hold never answers a Cancellation"
+        );
+        assert!(!bid_payload_matches(
+            &hold(hold_operation::CANCEL, bid_outcome::PENDING),
+            &AuctionBidDecision {
+                operation_id: 7,
+                bidder_guid: 8,
+                auction_id: 41,
+                offer: 10,
+                outcome: bid_outcome::CANCELLED,
+                revision: 0,
+                result_bidder_guid: 0,
+                result_bid: 0,
+                minimum_increment: 0,
+                deferred_refund: 0,
+                accepted_price: 10,
+                house: 1,
+                item_entry: 25,
+                random_property_id: 0,
+                operation: hold_operation::BID,
+            }
+        ));
+    }
+
+    /// Per-request paths find a Character's Holds through the Hold index, never by scanning the
+    /// cache table, which keeps every finished Hold.
+    #[test]
+    fn hold_lookups_never_scan_the_bid_hold_cache() {
+        for signature in [
+            "fn unfinished_auction_holds(",
+            "fn matching_unfinished_bid_hold(",
+            "pub(crate) fn cancel_auction(",
+            "pub(crate) fn resume_auction_holds(",
+        ] {
+            let body = crate::test_scan::code_of(include_str!("reducers.rs"), signature);
+            assert!(!body.contains(".iter()"), "{signature} scans a cache table");
+        }
+    }
+
     #[test]
     fn normalized_buyout_price_drives_the_exact_success_command_value() {
         let hold = AuctionBidHold {
@@ -4610,6 +4924,7 @@ mod auction_reducer_tests {
             minimum_increment: 0,
             accepted_price: 500,
             deferred_refund: 0,
+            operation: lyracore_shared::auction::hold_operation::BID,
         };
 
         assert_eq!(

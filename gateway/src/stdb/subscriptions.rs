@@ -2487,11 +2487,12 @@ pub(crate) fn whisper_event_outbound(row: &WhisperEvent) -> Vec<Outbound> {
 /// Auction Notice: the packet body both legs run. Audience resolved by the caller, same as
 /// [`whisper_event_outbound`]. Outbid and Won go to the bidder on
 /// `SMSG_AUCTION_BIDDER_NOTIFICATION`; Sold, Expired and New bid go to the owner on
-/// `SMSG_AUCTION_OWNER_NOTIFICATION` (`cm:AuctionHouseHandler.cpp`/`AuctionHouseMgr.cpp`).
+/// `SMSG_AUCTION_OWNER_NOTIFICATION`; Removed goes to the bidder a Cancellation displaced on
+/// `SMSG_AUCTION_REMOVED_NOTIFICATION` (`cm:AuctionHouseHandler.cpp`/`AuctionHouseMgr.cpp`).
 /// `house` outside the imported 1-7 range and any other `kind` both drop the notice and log —
 /// the accompanying Auction Mail still reaches the recipient's inbox either way.
 pub(crate) fn auction_notice_outbound(row: &AuctionNotice) -> Vec<Outbound> {
-    use lyracore_shared::auction::auction_notice::{EXPIRED, NEW_BID, OUTBID, SOLD, WON};
+    use lyracore_shared::auction::auction_notice::{EXPIRED, NEW_BID, OUTBID, REMOVED, SOLD, WON};
 
     let Ok(house) = AuctionHouse::try_from(row.house) else {
         log::warn!(
@@ -2522,6 +2523,15 @@ pub(crate) fn auction_notice_outbound(row: &AuctionNotice) -> Vec<Outbound> {
                     row.bid,
                     row.out_bid,
                     row.bidder_guid,
+                    row.item_entry,
+                    row.random_property_id,
+                ),
+            )),
+        )],
+        REMOVED => vec![Outbound::One(
+            ServerOpcodeMessage::SMSG_AUCTION_REMOVED_NOTIFICATION(Box::new(
+                codec::build_auction_removed_notification(
+                    row.auction_id,
                     row.item_entry,
                     row.random_property_id,
                 ),
@@ -4842,11 +4852,14 @@ mod tests {
 
     /// Auction Notice kind decoding (`cm:AuctionHouseHandler.cpp`/`AuctionHouseMgr.cpp`): Outbid
     /// and Won go out on `SMSG_AUCTION_BIDDER_NOTIFICATION`, Sold, Expired and New bid go out on
-    /// `SMSG_AUCTION_OWNER_NOTIFICATION`, and an unrecognized kind or an unimported house both
-    /// drop the packet — the Auction Mail the same transaction wrote still reaches the inbox.
+    /// `SMSG_AUCTION_OWNER_NOTIFICATION`, Removed goes out on `SMSG_AUCTION_REMOVED_NOTIFICATION`,
+    /// and an unrecognized kind or an unimported house both drop the packet. The Auction Mail the
+    /// same transaction wrote still reaches the inbox.
     #[test]
     fn auction_notice_kinds_decode_to_their_own_packet_and_an_unknown_one_drops() {
-        use lyracore_shared::auction::auction_notice::{EXPIRED, NEW_BID, OUTBID, SOLD, WON};
+        use lyracore_shared::auction::auction_notice::{
+            EXPIRED, NEW_BID, OUTBID, REMOVED, SOLD, WON,
+        };
         use wow_world_messages::vanilla::AuctionHouse;
 
         let notice = |kind: u8, house: u32| AuctionNotice {
@@ -4903,6 +4916,18 @@ mod tests {
                 }
             }
         }
+
+        let out = auction_notice_outbound(&notice(REMOVED, 1));
+        assert!(
+            matches!(
+                out.as_slice(),
+                [Outbound::One(ServerOpcodeMessage::SMSG_AUCTION_REMOVED_NOTIFICATION(packet))]
+                    if packet.item == 41
+                        && packet.item_template == 25
+                        && packet.random_property_id == 117
+            ),
+            "Removed goes out on SMSG_AUCTION_REMOVED_NOTIFICATION"
+        );
 
         assert!(
             auction_notice_outbound(&notice(200, 1)).is_empty(),

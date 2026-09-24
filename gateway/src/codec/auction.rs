@@ -4,7 +4,7 @@ use wow_world_messages::{
     vanilla::{
         AuctionHouse, AuctionListItem, SMSG_AUCTION_BIDDER_LIST_RESULT,
         SMSG_AUCTION_BIDDER_NOTIFICATION, SMSG_AUCTION_LIST_RESULT, SMSG_AUCTION_OWNER_LIST_RESULT,
-        SMSG_AUCTION_OWNER_NOTIFICATION,
+        SMSG_AUCTION_OWNER_NOTIFICATION, SMSG_AUCTION_REMOVED_NOTIFICATION,
     },
     Guid,
 };
@@ -133,9 +133,35 @@ pub fn build_auction_owner_notification(
     }
 }
 
+/// Removed, to the bidder a Cancellation displaced (`cm:AuctionHouseHandler.cpp:131-139`). The
+/// client prints `ERR_AUCTION_REMOVED_S` with the item's name. The wire's first field is the
+/// auction id, which `wow_world_messages` names `item`.
+pub fn build_auction_removed_notification(
+    auction_id: u32,
+    item_entry: u32,
+    item_random_property_id: u32,
+) -> SMSG_AUCTION_REMOVED_NOTIFICATION {
+    SMSG_AUCTION_REMOVED_NOTIFICATION {
+        item: auction_id,
+        item_template: item_entry,
+        random_property_id: item_random_property_id,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `cm:AuctionHouseHandler.cpp:131-139`: auction id, item entry, random property id, 12 bytes,
+    /// written out by hand.
+    #[test]
+    fn the_removed_notification_encodes_to_the_exact_cmangos_wire_layout() {
+        use wow_world_messages::Message;
+        let packet = build_auction_removed_notification(41, 25, 117);
+        let mut bytes = Vec::new();
+        packet.write_into_vec(&mut bytes).unwrap();
+        assert_eq!(bytes, [41, 0, 0, 0, 25, 0, 0, 0, 117, 0, 0, 0]);
+    }
 
     fn view() -> AuctionView {
         AuctionView {
