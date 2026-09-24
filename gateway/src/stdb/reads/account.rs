@@ -459,41 +459,53 @@ impl Coordinator {
     }
 
     /// `owner_guid`'s friend list + ignore list for `CMSG_FRIEND_LIST → SMSG_FRIEND_LIST` +
-    /// `SMSG_IGNORE_LIST`. Reads `game_character_contact` via the privileged cache
-    /// (RLS-bypassed, same trick `in_world_players` uses) so an online friend's presence resolves
-    /// regardless of whose connection is asking. A friend whose character has since been deleted
-    /// (stale row, pre-sweep or a race) degrades to an offline/zero row rather than erroring.
+    /// `SMSG_IGNORE_LIST`. The one caller, `CMSG_FRIEND_LIST`, only ever asks about the CONNECTED
+    /// session's own guid, so this reads the guids off its Gateway-side Viewer — the friend and
+    /// ignore sets `world_view`'s contact Relay already keeps current — instead of scanning
+    /// `game_character_contact`. Each friend's presence then comes from a realm-wide
+    /// [`crate::world::presence::of`] read, so a friend on another Shard resolves too, offline when
+    /// not `session_online` or on another team (cm:SocialMgr.cpp:108-139). A friend whose character
+    /// has since been deleted, or a request with no live Viewer registered (should not happen for
+    /// the one caller), degrades to empty/offline rather than erroring.
     pub fn contact_lists(
         &self,
         owner_guid: u64,
     ) -> Result<(Vec<crate::codec::FriendView>, Vec<u64>)> {
-        let guard = self.0.coord();
-        let db = &guard.conn.db;
+        let Some(viewer) = self
+            .world_view()
+            .viewer_of_owner(super::super::world_view::OwnerGuid(owner_guid))
+        else {
+            return Ok((Vec::new(), Vec::new()));
+        };
+        let team = viewer.team;
         let mut friends = Vec::new();
-        let mut ignored = Vec::new();
-        for c in db
-            .game_character_contact()
-            .iter()
-            .filter(|c| c.owner_guid == owner_guid)
-        {
-            if c.is_ignore {
-                ignored.push(c.target_guid);
-            } else {
-                let (online, level, class, zone_id) = db
-                    .game_character()
-                    .guid()
-                    .find(&c.target_guid)
-                    .map(|ch| (ch.online, ch.level, ch.class, ch.zone_id))
-                    .unwrap_or((false, 0, 0, 0));
-                friends.push(crate::codec::FriendView {
-                    guid: c.target_guid,
-                    online,
-                    level,
-                    class,
-                    zone_id,
-                });
-            }
+        for target_guid in viewer.friend_guids() {
+            let presence = crate::world::presence::of(self, target_guid)?;
+            let online = presence.as_ref().is_some_and(|p| {
+                p.session_online && lyracore_shared::faction::team_for_race(p.race) == team
+            });
+            let (away, level, class, zone_id) = match &presence {
+                Some(p) if online => {
+                    let away = match &p.whereabouts {
+                        crate::world::presence::Whereabouts::InWorld { away, .. } => *away,
+                        crate::world::presence::Whereabouts::InTransit
+                        | crate::world::presence::Whereabouts::Offline => {
+                            crate::world::presence::AwayStatus::None
+                        }
+                    };
+                    (away, p.level, p.class, p.zone_id)
+                }
+                _ => (crate::world::presence::AwayStatus::None, 0, 0, 0),
+            };
+            friends.push(crate::codec::FriendView {
+                guid: target_guid,
+                online,
+                away,
+                level,
+                class,
+                zone_id,
+            });
         }
-        Ok((friends, ignored))
+        Ok((friends, viewer.ignored_guids()))
     }
 }

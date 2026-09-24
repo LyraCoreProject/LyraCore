@@ -7,7 +7,7 @@ use wow_world_base::shared::friend_result_vanilla_tbc::FriendResult;
 use wow_world_messages::vanilla::{
     Area, Class, Emote, Friend, Friend_FriendStatus, Language, Level, MSG_RANDOM_ROLL_Server,
     PlayerChatTag, SMSG_MESSAGECHAT_ChatType, TextEmote, SMSG_EMOTE, SMSG_FRIEND_LIST,
-    SMSG_FRIEND_STATUS, SMSG_IGNORE_LIST, SMSG_MESSAGECHAT, SMSG_TEXT_EMOTE,
+    SMSG_IGNORE_LIST, SMSG_MESSAGECHAT, SMSG_TEXT_EMOTE,
 };
 use wow_world_messages::Guid;
 
@@ -67,10 +67,12 @@ pub fn build_who_response_raw(players: &[WhoPlayerView]) -> (u16, Vec<u8>) {
 
 /// One friend row as needed by `SMSG_FRIEND_LIST` — flat ints the codec converts. `online` false
 /// means the row degrades to `Friend_FriendStatus::Offline` (no area/level/class carried, matching
-/// the wire format — those fields are ONLY present for a non-offline status).
+/// the wire format — those fields are ONLY present for a non-offline status); `away` is read only
+/// when `online` is true.
 pub struct FriendView {
     pub guid: u64,
     pub online: bool,
+    pub away: crate::world::presence::AwayStatus,
     pub level: u8,
     pub class: u8,
     pub zone_id: u32,
@@ -78,21 +80,30 @@ pub struct FriendView {
 
 /// Build `SMSG_FRIEND_LIST` for `CMSG_FRIEND_LIST`. An online friend carries area/level/class (zone
 /// ids outside the gtker `Area` enum degrade to `Area::None`, an unknown class degrades the WHOLE
-/// row to `Offline` — better an inert row than a malformed one); an offline friend carries only the
-/// guid. Capped at 255 (the wire's `u8` count prefix).
+/// row to `Offline` — better an inert row than a malformed one) and its status splits Online/Afk/
+/// Dnd off `away`; an offline friend carries only the guid. Capped at 255 (the wire's `u8` count
+/// prefix).
 pub fn build_friend_list_response(friends: &[FriendView]) -> SMSG_FRIEND_LIST {
     let list = friends
         .iter()
         .take(255)
         .map(|f| {
             let status = if f.online {
-                Class::try_from(f.class)
-                    .ok()
-                    .map(|class| Friend_FriendStatus::Online {
-                        area: Area::try_from(f.zone_id).unwrap_or(Area::None),
-                        class,
-                        level: Level::new(f.level),
-                    })
+                Class::try_from(f.class).ok().map(|class| {
+                    let area = Area::try_from(f.zone_id).unwrap_or(Area::None);
+                    let level = Level::new(f.level);
+                    match f.away {
+                        crate::world::presence::AwayStatus::None => {
+                            Friend_FriendStatus::Online { area, class, level }
+                        }
+                        crate::world::presence::AwayStatus::Afk => {
+                            Friend_FriendStatus::Afk { area, class, level }
+                        }
+                        crate::world::presence::AwayStatus::Dnd => {
+                            Friend_FriendStatus::Dnd { area, class, level }
+                        }
+                    }
+                })
             } else {
                 None
             };
@@ -113,15 +124,55 @@ pub fn build_ignore_list_response(ignored: &[u64]) -> SMSG_IGNORE_LIST {
     }
 }
 
-/// Build `SMSG_FRIEND_STATUS` — the add/remove confirmation (or rejection) for one contact-list
-/// action. `result` is the vanilla `FriendResult` discriminant (`ADDED_ONLINE`/`ADDED_OFFLINE`/
-/// `REMOVED`/`IGNORE_ADDED`/`IGNORE_REMOVED`/`NOT_FOUND`/`ALREADY`/… — the client renders the right
-/// system message off it); `guid` is the OTHER party (0 when the action failed to resolve a name).
-pub fn build_friend_status(result: FriendResult, guid: u64) -> SMSG_FRIEND_STATUS {
-    SMSG_FRIEND_STATUS {
-        result,
-        guid: Guid::new(guid),
+/// `SMSG_FRIEND_STATUS` opcode (vanilla 5875).
+pub const SMSG_FRIEND_STATUS_OPCODE: u16 = 0x0068;
+
+/// The trailing fields `SMSG_FRIEND_STATUS` carries for `FriendResult::Online` and
+/// `FriendResult::AddedOnline` only (cm:SocialMgr.cpp:227-261, vm:SocialMgr.cpp:248-259).
+#[derive(Clone)]
+pub struct FriendOnline {
+    pub away: crate::world::presence::AwayStatus,
+    pub zone_id: u32,
+    pub level: u8,
+    pub class: u8,
+}
+
+impl FriendOnline {
+    /// The status byte: 1 online, 2 afk, 4 dnd (cm:SocialMgr.h:31-38).
+    fn status_byte(&self) -> u8 {
+        match self.away {
+            crate::world::presence::AwayStatus::None => 1,
+            crate::world::presence::AwayStatus::Afk => 2,
+            crate::world::presence::AwayStatus::Dnd => 4,
+        }
     }
+}
+
+/// Build the RAW `SMSG_FRIEND_STATUS` — the add/remove confirmation (or rejection) for one
+/// contact-list action. `result` is the vanilla `FriendResult` discriminant (`ADDED_ONLINE`/
+/// `ADDED_OFFLINE`/`REMOVED`/`IGNORE_ADDED`/`IGNORE_REMOVED`/`NOT_FOUND`/`ENEMY`/`ALREADY`/… — the
+/// client renders the right system message off it); `guid` is the OTHER party (0 when the action
+/// failed to resolve a name).
+///
+/// RAW because gtker 0.3's typed `SMSG_FRIEND_STATUS` writes only `result` and `guid`: cm's
+/// `ONLINE`/`ADDED_ONLINE` also append status u8, area u32, level u32, class u32
+/// (cm:SocialMgr.cpp:227-261), which gtker 0.3 cannot encode. `online` carries those trailing
+/// fields and must be `Some` for exactly `FriendResult::Online`/`FriendResult::AddedOnline`, `None`
+/// otherwise — the caller decides which, from the same Realm Presence read either way.
+pub fn build_friend_status_raw(
+    result: FriendResult,
+    guid: u64,
+    online: Option<FriendOnline>,
+) -> (u16, Vec<u8>) {
+    let mut body = vec![result.as_int()];
+    body.extend_from_slice(&guid.to_le_bytes());
+    if let Some(online) = online {
+        body.push(online.status_byte());
+        body.extend_from_slice(&online.zone_id.to_le_bytes());
+        body.extend_from_slice(&u32::from(online.level).to_le_bytes());
+        body.extend_from_slice(&u32::from(online.class).to_le_bytes());
+    }
+    (SMSG_FRIEND_STATUS_OPCODE, body)
 }
 
 /// Build `SMSG_MESSAGECHAT` for nearby player or creature speech.
@@ -613,19 +664,25 @@ mod tests {
         assert!(build_emote_anim(5, u32::MAX).is_none());
     }
 
+    fn online_friend(guid: u64, away: crate::world::presence::AwayStatus) -> FriendView {
+        FriendView {
+            guid,
+            online: true,
+            away,
+            level: 30,
+            class: 1,
+            zone_id: 12,
+        }
+    }
+
     #[test]
     fn friend_list_online_carries_presence_offline_is_bare() {
         let friends = [
-            FriendView {
-                guid: 11,
-                online: true,
-                level: 30,
-                class: 1,
-                zone_id: 12,
-            },
+            online_friend(11, crate::world::presence::AwayStatus::None),
             FriendView {
                 guid: 22,
                 online: false,
+                away: crate::world::presence::AwayStatus::None,
                 level: 0,
                 class: 0,
                 zone_id: 0,
@@ -651,6 +708,31 @@ mod tests {
         assert!(!buf.is_empty());
     }
 
+    /// Away Status splits the wire status code: Online 1, Afk 2, Dnd 4 (cm:SocialMgr.h:31-38).
+    #[test]
+    fn friend_list_online_status_follows_away_status() {
+        use crate::world::presence::AwayStatus;
+
+        let friends = [
+            online_friend(1, AwayStatus::None),
+            online_friend(2, AwayStatus::Afk),
+            online_friend(3, AwayStatus::Dnd),
+        ];
+        let resp = build_friend_list_response(&friends);
+        assert!(matches!(
+            resp.friends[0].status,
+            Friend_FriendStatus::Online { .. }
+        ));
+        assert!(matches!(
+            resp.friends[1].status,
+            Friend_FriendStatus::Afk { .. }
+        ));
+        assert!(matches!(
+            resp.friends[2].status,
+            Friend_FriendStatus::Dnd { .. }
+        ));
+    }
+
     #[test]
     fn friend_list_unknown_class_degrades_whole_row_to_offline() {
         // An online row with an unmapped class discriminant can't build a valid Online variant —
@@ -658,6 +740,7 @@ mod tests {
         let friends = [FriendView {
             guid: 5,
             online: true,
+            away: crate::world::presence::AwayStatus::None,
             level: 10,
             class: 250,
             zone_id: 1,
@@ -678,14 +761,62 @@ mod tests {
         assert!(!buf.is_empty());
     }
 
+    /// Bytes hand-written from the protocol table (README, cm:SocialMgr.cpp:227-261): result u8,
+    /// guid u64 LE, then for `ADDED_ONLINE` only status u8 (ONLINE=1), area u32, level u32, class
+    /// u32, all little-endian. Never recomputed with the builder's own field order.
     #[test]
-    fn friend_status_carries_result_and_guid() {
-        let resp = build_friend_status(FriendResult::AddedOnline, 77);
-        assert_eq!(resp.result, FriendResult::AddedOnline);
-        assert_eq!(resp.guid.guid(), 77);
-        let mut buf = Vec::new();
-        resp.write_unencrypted_server(&mut buf).unwrap();
-        assert!(!buf.is_empty());
+    fn friend_status_raw_is_byte_exact_for_added_online() {
+        let (opcode, body) = build_friend_status_raw(
+            FriendResult::AddedOnline,
+            77,
+            Some(FriendOnline {
+                away: crate::world::presence::AwayStatus::None,
+                zone_id: 12,
+                level: 30,
+                class: 1,
+            }),
+        );
+        assert_eq!(opcode, SMSG_FRIEND_STATUS_OPCODE);
+        let mut expected = vec![0x06]; // ADDED_ONLINE
+        expected.extend(77u64.to_le_bytes());
+        expected.push(1); // status ONLINE
+        expected.extend(12u32.to_le_bytes()); // area
+        expected.extend(30u32.to_le_bytes()); // level
+        expected.extend(1u32.to_le_bytes()); // class
+        assert_eq!(body, expected);
+    }
+
+    /// An Afk friend's `ADDED_ONLINE`/`ONLINE` status byte is 2, Dnd is 4 (cm:SocialMgr.h:31-38) —
+    /// distinct from the chat tag's own 1/2 numbering.
+    #[test]
+    fn friend_status_raw_status_byte_follows_away_status() {
+        for (away, status) in [
+            (crate::world::presence::AwayStatus::None, 1u8),
+            (crate::world::presence::AwayStatus::Afk, 2),
+            (crate::world::presence::AwayStatus::Dnd, 4),
+        ] {
+            let (_, body) = build_friend_status_raw(
+                FriendResult::Online,
+                1,
+                Some(FriendOnline {
+                    away,
+                    zone_id: 0,
+                    level: 0,
+                    class: 0,
+                }),
+            );
+            assert_eq!(body[9], status, "{away:?}");
+        }
+    }
+
+    /// A rejection or an offline add/remove carries no trailing fields: result u8 then guid u64 LE,
+    /// nothing after.
+    #[test]
+    fn friend_status_raw_carries_no_trailing_fields_without_online() {
+        let (_, body) = build_friend_status_raw(FriendResult::Enemy, 5, None);
+        let mut expected = vec![0x0a]; // ENEMY
+        expected.extend(5u64.to_le_bytes());
+        assert_eq!(body, expected);
     }
 
     #[test]
@@ -695,6 +826,7 @@ mod tests {
             .map(|i| FriendView {
                 guid: i as u64,
                 online: false,
+                away: crate::world::presence::AwayStatus::None,
                 level: 0,
                 class: 0,
                 zone_id: 0,

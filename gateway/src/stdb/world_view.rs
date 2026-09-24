@@ -100,6 +100,14 @@ pub(crate) struct Viewer {
     /// rows on the Home Shard, kept current by that Shard's contact Relay, and rebuilt when the
     /// Shard reconciles after a resubscribe. The Realm Chat Relay reads it for ignorable lines only.
     pub(crate) ignored: Mutex<HashSet<u64>>,
+    /// The Characters on this viewer's own friend list. Seeded and kept current exactly like
+    /// `ignored`, from the same contact rows and callbacks. The Account Claim Relay reads it to
+    /// decide who hears a login/logout notice; `CMSG_FRIEND_LIST` reads it for the friend guids.
+    pub(crate) friends: Mutex<HashSet<u64>>,
+    /// This viewer's own team (`lyracore_shared::faction::TEAM_ALLIANCE`/`TEAM_HORDE`), read once
+    /// at world entry from its race. A friend online/offline notice goes only to a same-team
+    /// viewer, the faction separation the friends pane has in vanilla.
+    pub(crate) team: u32,
 }
 
 impl Viewer {
@@ -128,6 +136,43 @@ impl Viewer {
         } else {
             set.remove(&guid);
         }
+    }
+
+    /// Whether this viewer lists `guid` as a friend.
+    pub(crate) fn is_friend(&self, guid: u64) -> bool {
+        self.friends
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .contains(&guid)
+    }
+
+    fn set_friend(&self, guid: u64, present: bool) {
+        let mut set = self.friends.lock().unwrap_or_else(|p| p.into_inner());
+        if present {
+            set.insert(guid);
+        } else {
+            set.remove(&guid);
+        }
+    }
+
+    /// A snapshot of this viewer's ignore guids, for `CMSG_FRIEND_LIST`'s `SMSG_IGNORE_LIST`.
+    pub(crate) fn ignored_guids(&self) -> Vec<u64> {
+        self.ignored
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+            .copied()
+            .collect()
+    }
+
+    /// A snapshot of this viewer's friend guids, for `CMSG_FRIEND_LIST`'s `SMSG_FRIEND_LIST`.
+    pub(crate) fn friend_guids(&self) -> Vec<u64> {
+        self.friends
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+            .copied()
+            .collect()
     }
 }
 
@@ -378,9 +423,11 @@ impl WorldView {
             .copied()
     }
 
-    /// Test probe: the owner's viewer regardless of shard. Production owner relays resolve
-    /// through [`Self::viewer_of_owner_on_shard`].
-    #[cfg(test)]
+    /// The owner's viewer regardless of shard — for a caller that only knows "my own session",
+    /// never a peer's (a shard-scoped row Relay resolves through
+    /// [`Self::viewer_of_owner_on_shard`] instead, so a transfer's source shard cannot address the
+    /// viewer after it re-registers on the destination shard). `CMSG_FRIEND_LIST`'s own contact
+    /// read is the production caller: it only ever asks for the CONNECTED session's own guid.
     pub(crate) fn viewer_of_owner(&self, owner: OwnerGuid) -> Option<Arc<Viewer>> {
         let registry = self.viewers.read().unwrap();
         let session = registry.session_of_owner.get(&owner.0)?;
@@ -994,6 +1041,27 @@ fn register_shard_callbacks(
         &view,
         move |v, row| contact_changed(v, shard, row, false),
     );
+    // The friend online/offline notice. Only Realm-core writes `game_account_claim`; this
+    // registration hears it on a Realm whose Realm-core is this database, `arm_realm_private`
+    // everywhere else — the same twin rule as the chat Relay above. Replayed inserts (a
+    // reconnect's resubscribe burst) are dropped; a genuine first-ever claim always arrives as a
+    // live insert, never inside that burst.
+    {
+        let insert_coord = coord.clone();
+        wire_insert_live(
+            db.game_account_claim(),
+            "game_account_claim.insert",
+            &view,
+            move |v, row| account_claim_changed(v, &insert_coord, None, row),
+        );
+        let update_coord = coord.clone();
+        wire_update(
+            db.game_account_claim(),
+            "game_account_claim.update",
+            &view,
+            move |v, old, new| account_claim_changed(v, &update_coord, Some(old), new),
+        );
+    }
     wire_insert_live(
         db.game_mail_arrival(),
         "game_mail_arrival.insert",
@@ -1183,12 +1251,15 @@ pub(crate) fn arm_realm_private(view: Arc<WorldView>, realm: Coordinator, coord:
         &view,
         |v, row| auction_notice_appeared(v, row),
     );
-    wire_insert_live(
-        db.game_group_event(),
-        "realm.game_group_event.insert",
-        &view,
-        move |v, row| group_event_appeared(v, &coord, row),
-    );
+    {
+        let coord = coord.clone();
+        wire_insert_live(
+            db.game_group_event(),
+            "realm.game_group_event.insert",
+            &view,
+            move |v, row| group_event_appeared(v, &coord, row),
+        );
+    }
     wire_insert_live(
         db.game_realm_chat_event(),
         "realm.game_realm_chat_event.insert",
@@ -1207,6 +1278,24 @@ pub(crate) fn arm_realm_private(view: Arc<WorldView>, realm: Coordinator, coord:
         &view,
         |v, row| channel_notice_appeared(v, row),
     );
+    // The friend online/offline notice's sharded-realm leg — see `arm_shard`'s twin registration
+    // and `account_claim_changed`'s doc comment.
+    {
+        let insert_coord = coord.clone();
+        wire_insert_live(
+            db.game_account_claim(),
+            "realm.game_account_claim.insert",
+            &view,
+            move |v, row| account_claim_changed(v, &insert_coord, None, row),
+        );
+        let update_coord = coord.clone();
+        wire_update(
+            db.game_account_claim(),
+            "realm.game_account_claim.update",
+            &view,
+            move |v, old, new| account_claim_changed(v, &update_coord, Some(old), new),
+        );
+    }
     wire_guild_relays(
         db,
         &view,
@@ -2355,24 +2444,33 @@ fn channel_notice_appeared(view: &WorldView, row: &ChatChannelNoticeEvent) {
     }
 }
 
-/// An ignore row changed on `shard` → the owner's ignore set, if the owner plays on that Shard.
-/// Friend rows leave it alone.
+/// A contact row changed on `shard` → the owner's ignore set or friend set, whichever list the row
+/// names, if the owner plays on that Shard.
 fn contact_changed(view: &WorldView, shard: ShardId, row: &ContactEntry, present: bool) {
-    if !row.is_ignore {
+    let Some(viewer) = view.viewer_of_owner_on_shard(shard, OwnerGuid(row.owner_guid)) else {
         return;
-    }
-    if let Some(viewer) = view.viewer_of_owner_on_shard(shard, OwnerGuid(row.owner_guid)) {
+    };
+    if row.is_ignore {
         viewer.set_ignored(row.target_guid, present);
+    } else {
+        viewer.set_friend(row.target_guid, present);
     }
 }
 
-/// Rebuild the ignore set of every viewer on `shard` from that Shard's contact rows. A resubscribe
-/// replays inserts but never the deletes it missed, so the live callbacks alone could keep a removed
-/// ignore in force until relog. Runs on the Shard's pump, like its contact callbacks.
-fn replace_ignore_sets(view: &WorldView, shard: ShardId, contacts: &[ContactEntry]) {
+/// Rebuild the ignore set AND the friend set of every viewer on `shard` from that Shard's contact
+/// rows. A resubscribe replays inserts but never the deletes it missed, so the live callbacks alone
+/// could keep a removed contact in force until relog. Runs on the Shard's pump, like its contact
+/// callbacks.
+fn replace_contact_sets(view: &WorldView, shard: ShardId, contacts: &[ContactEntry]) {
     let mut ignored: HashMap<u64, HashSet<u64>> = HashMap::new();
-    for row in contacts.iter().filter(|row| row.is_ignore) {
-        ignored
+    let mut friends: HashMap<u64, HashSet<u64>> = HashMap::new();
+    for row in contacts {
+        let by_owner = if row.is_ignore {
+            &mut ignored
+        } else {
+            &mut friends
+        };
+        by_owner
             .entry(row.owner_guid)
             .or_default()
             .insert(row.target_guid);
@@ -2380,6 +2478,112 @@ fn replace_ignore_sets(view: &WorldView, shard: ShardId, contacts: &[ContactEntr
     for viewer in view.viewers_on_shard(shard) {
         *viewer.ignored.lock().unwrap_or_else(|p| p.into_inner()) =
             ignored.get(&viewer.self_guid).cloned().unwrap_or_default();
+        *viewer.friends.lock().unwrap_or_else(|p| p.into_inner()) =
+            friends.get(&viewer.self_guid).cloned().unwrap_or_default();
+    }
+}
+
+/// One Account Claim row's live/dead edge — which Character becomes reachable, which stops being.
+enum ClaimEdge {
+    Online(u64),
+    Offline(u64),
+}
+
+/// The pure transition a `game_account_claim` row's old and new state implies (README Decision 25:
+/// claims change at login, logout, replacement and reaping, never at Transfer). `old` is `None` for
+/// the account's first-ever claim.
+///
+/// - Inserted open, or reopened after being closed: the new Character becomes live.
+/// - Closed, or replaced by a new generation or a different Character: the old Character stops
+///   being live; the replacement becomes live too if it is itself open.
+/// - A renewal that only moves `expires_micros` (same generation, same Character, still open):
+///   nothing.
+fn claim_transitions(old: Option<&AccountClaim>, new: &AccountClaim) -> Vec<ClaimEdge> {
+    let Some(old) = old else {
+        return if new.closed {
+            Vec::new()
+        } else {
+            vec![ClaimEdge::Online(new.character_guid)]
+        };
+    };
+    let replaced = old.generation != new.generation || old.character_guid != new.character_guid;
+    let (was_live, is_live) = (!old.closed, !new.closed);
+    let mut edges = Vec::new();
+    if replaced {
+        if was_live {
+            edges.push(ClaimEdge::Offline(old.character_guid));
+        }
+        if is_live {
+            edges.push(ClaimEdge::Online(new.character_guid));
+        }
+    } else if was_live && !is_live {
+        edges.push(ClaimEdge::Offline(old.character_guid));
+    }
+    edges
+}
+
+/// An Account Claim changed on Realm-core → `FRIEND_ONLINE`/`FRIEND_OFFLINE` to every same-team
+/// viewer, on any Shard, who lists the transition's Character as a friend
+/// (cm:CharacterHandler.cpp:856, cm:WorldSession.cpp:754, cm:SocialMgr.cpp:263-292). `coord` is the
+/// world handle `presence::of` reads through — never the Realm-core handle, which holds no live
+/// entities. One Realm Presence read per transition here, reused for every recipient below, never
+/// once per recipient.
+fn account_claim_changed(
+    view: &WorldView,
+    coord: &Coordinator,
+    old: Option<&AccountClaim>,
+    new: &AccountClaim,
+) {
+    for edge in claim_transitions(old, new) {
+        let (subject_guid, online) = match edge {
+            ClaimEdge::Online(guid) => (guid, true),
+            ClaimEdge::Offline(guid) => (guid, false),
+        };
+        let presence = match crate::world::presence::of(coord, subject_guid) {
+            Ok(Some(presence)) => presence,
+            Ok(None) => continue,
+            Err(error) => {
+                log::debug!(
+                    "world_view: account claim relay could not read Realm Presence for \
+                     {subject_guid}: {error:#}"
+                );
+                continue;
+            }
+        };
+        let team = lyracore_shared::faction::team_for_race(presence.race);
+        let online_fields = online.then(|| crate::world::social::friend_online_fields(&presence));
+        let result = if online {
+            wow_world_base::shared::friend_result_vanilla_tbc::FriendResult::Online
+        } else {
+            wow_world_base::shared::friend_result_vanilla_tbc::FriendResult::Offline
+        };
+        notify_claim_edge_audience(view, subject_guid, team, result, online_fields);
+    }
+}
+
+/// The audience half of [`account_claim_changed`], split out so it is testable without a Realm
+/// Presence read: every viewer, on any Shard, who lists `subject_guid` as a friend and shares its
+/// `team`, gets one `SMSG_FRIEND_STATUS` job — never `subject_guid`'s own viewer.
+fn notify_claim_edge_audience(
+    view: &WorldView,
+    subject_guid: u64,
+    team: u32,
+    result: wow_world_base::shared::friend_result_vanilla_tbc::FriendResult,
+    online_fields: Option<crate::codec::FriendOnline>,
+) {
+    for viewer in view.all_viewers() {
+        if viewer.self_guid == subject_guid
+            || viewer.team != team
+            || !viewer.is_friend(subject_guid)
+        {
+            continue;
+        }
+        let online_fields = online_fields.clone();
+        enqueue(viewer.clone(), move |_| {
+            let (opcode, body) =
+                crate::codec::build_friend_status_raw(result, subject_guid, online_fields);
+            vec![Outbound::Raw { opcode, body }]
+        });
     }
 }
 
@@ -3086,6 +3290,8 @@ mod family_audience_tests {
             motion_pending: Arc::new(MotionPending::default()),
             member_stats: Default::default(),
             ignored: Mutex::default(),
+            friends: Mutex::default(),
+            team: lyracore_shared::faction::TEAM_ALLIANCE,
         })
     }
 
@@ -4306,6 +4512,8 @@ mod family_audience_tests {
             motion_pending: old.motion_pending.clone(),
             member_stats: Default::default(),
             ignored: Mutex::default(),
+            friends: Mutex::default(),
+            team: lyracore_shared::faction::TEAM_ALLIANCE,
         });
         view.add_viewer_on_shard(old.clone(), CellKey::at(0, 0, 0, 0), 3);
         view.add_viewer_on_shard(replacement.clone(), CellKey::at(1, 2, 0, 0), 4);
@@ -5082,6 +5290,8 @@ mod realm_chat_relay_tests {
             motion_pending: Arc::new(MotionPending::default()),
             member_stats: Default::default(),
             ignored: Mutex::default(),
+            friends: Mutex::default(),
+            team: lyracore_shared::faction::TEAM_ALLIANCE,
         });
         view.add_viewer_on_shard(viewer.clone(), CellKey::at(0, 0, 0, 0), shard);
         (viewer, rx)
@@ -5303,6 +5513,213 @@ mod realm_chat_relay_tests {
         contact_changed(&view, 0, &ignore_row(20, SPEAKER, true), false);
         assert!(!viewer.ignores(SPEAKER));
     }
+
+    /// The friend set (T6) follows the same rule as the ignore set, off the SAME contact rows and
+    /// callbacks, filtered by `is_ignore` the other way.
+    #[test]
+    fn the_friend_set_follows_its_owners_friend_rows_on_the_owners_shard() {
+        let view = WorldView::new(true);
+        let (viewer, _rx) = listener(&view, 0, 20);
+
+        contact_changed(&view, 0, &ignore_row(20, SPEAKER, true), true);
+        assert!(!viewer.is_friend(SPEAKER), "an ignore row is not a friend");
+
+        contact_changed(&view, 1, &ignore_row(20, SPEAKER, false), true);
+        assert!(
+            !viewer.is_friend(SPEAKER),
+            "another Shard's copy of the owner's rows does not address this viewer"
+        );
+
+        contact_changed(&view, 0, &ignore_row(20, SPEAKER, false), true);
+        assert!(viewer.is_friend(SPEAKER));
+
+        contact_changed(&view, 0, &ignore_row(20, SPEAKER, false), false);
+        assert!(!viewer.is_friend(SPEAKER));
+    }
+
+    /// A resubscribe rebuilds the friend set the same way it rebuilds the ignore set.
+    #[test]
+    fn reconciling_a_shard_rebuilds_its_viewers_friend_sets_from_the_contact_rows() {
+        let view = Arc::new(WorldView::new(true));
+        let (kept, _kept_rx) = listener(&view, 0, 30);
+        contact_changed(&view, 0, &ignore_row(30, SPEAKER, false), true);
+
+        super::reconcile_shard(
+            &view,
+            0,
+            vec![],
+            vec![],
+            vec![],
+            vec![ignore_row(30, SPEAKER, false), ignore_row(30, 77, true)],
+        );
+
+        assert!(kept.is_friend(SPEAKER));
+        assert!(!kept.is_friend(77), "an ignore row is not a friend");
+    }
+}
+
+#[cfg(test)]
+mod account_claim_relay_tests {
+    use super::{
+        claim_transitions, notify_claim_edge_audience, AccountClaim, ClaimEdge, ExplorationReplay,
+        MotionPending, Viewer, WorldView,
+    };
+    use crate::codec::FriendOnline;
+    use crate::stdb::aoi::ViewerGates;
+    use crate::stdb::world_index::CellKey;
+    use crate::world::presence::AwayStatus;
+    use crate::world::{Outbound, SessionTx};
+    use std::collections::{HashMap, HashSet};
+    use std::sync::mpsc::Receiver;
+    use std::sync::{Arc, Mutex};
+    use wow_world_base::shared::friend_result_vanilla_tbc::FriendResult;
+
+    const ALLIANCE: u32 = lyracore_shared::faction::TEAM_ALLIANCE;
+    const HORDE: u32 = lyracore_shared::faction::TEAM_HORDE;
+    const FRIEND: u64 = 10;
+
+    /// A registered viewer for `self_guid` on `shard`, already listing [`FRIEND`].
+    fn listener(
+        view: &WorldView,
+        shard: usize,
+        self_guid: u64,
+        team: u32,
+    ) -> (Arc<Viewer>, Receiver<Outbound>) {
+        let (tx, rx) = SessionTx::with_depth(0);
+        let viewer = Arc::new(Viewer {
+            active: std::sync::atomic::AtomicBool::new(true),
+            session: view.next_session_id(),
+            self_guid,
+            bound_identity: spacetimedb_sdk::Identity::from_byte_array([self_guid as u8; 32]),
+            map_id: 0,
+            instance_id: 0,
+            zone_id: 0.into(),
+            tx,
+            created: Arc::new(Mutex::new(HashSet::new())),
+            gates: Arc::new(ViewerGates::default()),
+            skill_slots: Arc::new(Mutex::new((HashMap::new(), 0))),
+            explored: Mutex::new(ExplorationReplay::default()),
+            motion_pending: Arc::new(MotionPending::default()),
+            member_stats: Default::default(),
+            ignored: Mutex::default(),
+            friends: Mutex::new(HashSet::from([FRIEND])),
+            team,
+        });
+        view.add_viewer_on_shard(viewer.clone(), CellKey::at(0, 0, 0, 0), shard);
+        (viewer, rx)
+    }
+
+    fn claim(generation: u64, character_guid: u64, closed: bool) -> AccountClaim {
+        AccountClaim {
+            account_id: 1,
+            generation,
+            request_nonce: 1,
+            character_guid,
+            expires_micros: 1_000_000,
+            closed,
+        }
+    }
+
+    /// One case per bullet in `claim_transitions`'s doc comment, rows written by hand.
+    #[test]
+    fn claim_transitions_cover_every_bullet() {
+        // Inserted open (the account's first-ever claim): the new Character becomes live.
+        assert!(matches!(
+            claim_transitions(None, &claim(1, FRIEND, false)).as_slice(),
+            [ClaimEdge::Online(g)] if *g == FRIEND
+        ));
+
+        // A renewal — only `expires_micros` moves: nothing.
+        let old = claim(1, FRIEND, false);
+        let mut renewed = old.clone();
+        renewed.expires_micros += 1;
+        assert!(claim_transitions(Some(&old), &renewed).is_empty());
+
+        // Closed (logout): the Character stops being live.
+        let old = claim(1, FRIEND, false);
+        let closed = claim(1, FRIEND, true);
+        assert!(matches!(
+            claim_transitions(Some(&old), &closed).as_slice(),
+            [ClaimEdge::Offline(g)] if *g == FRIEND
+        ));
+
+        // Reopened after being closed (a fresh login, a new generation): the new Character becomes
+        // live.
+        let old = claim(1, FRIEND, true);
+        let reopened = claim(2, FRIEND, false);
+        assert!(matches!(
+            claim_transitions(Some(&old), &reopened).as_slice(),
+            [ClaimEdge::Online(g)] if *g == FRIEND
+        ));
+
+        // Replaced while live, by a DIFFERENT Character (a relogin as someone else on the same
+        // Account without an intervening close): the old Character goes offline, the new one on.
+        let old = claim(1, FRIEND, false);
+        let replaced = claim(2, 99, false);
+        assert!(matches!(
+            claim_transitions(Some(&old), &replaced).as_slice(),
+            [ClaimEdge::Offline(a), ClaimEdge::Online(b)] if *a == FRIEND && *b == 99
+        ));
+
+        // Reaped while already closed (the claim reaper closes an already-closed row, or closes it
+        // twice across a race): nothing.
+        let old = claim(1, FRIEND, true);
+        let still_closed = claim(1, FRIEND, true);
+        assert!(claim_transitions(Some(&old), &still_closed).is_empty());
+    }
+
+    fn online_fields() -> FriendOnline {
+        FriendOnline {
+            away: AwayStatus::None,
+            zone_id: 12,
+            level: 30,
+            class: 1,
+        }
+    }
+
+    /// **AC5/AC7 (T6):** only a same-team viewer who lists the guid as a friend, on any Shard,
+    /// hears the notice — never the subject's own viewer, whatever it lists.
+    #[test]
+    fn notify_claim_edge_audience_reaches_only_same_team_friends_on_any_shard() {
+        let view = WorldView::new(true);
+        let (_friend, friend_rx) = listener(&view, 0, 20, ALLIANCE);
+        let (_elsewhere, elsewhere_rx) = listener(&view, 1, 21, ALLIANCE);
+        let (_enemy, enemy_rx) = listener(&view, 0, 22, HORDE);
+        let (non_friend, non_friend_rx) = listener(&view, 0, 23, ALLIANCE);
+        non_friend.friends.lock().unwrap().clear();
+        let (subject, subject_rx) = listener(&view, 0, FRIEND, ALLIANCE);
+        subject.friends.lock().unwrap().insert(FRIEND); // hypothetically lists itself
+
+        notify_claim_edge_audience(
+            &view,
+            FRIEND,
+            ALLIANCE,
+            FriendResult::Online,
+            Some(online_fields()),
+        );
+
+        for (label, rx) in [("same shard", &friend_rx), ("another shard", &elsewhere_rx)] {
+            match rx
+                .try_recv()
+                .unwrap_or_else(|_| panic!("{label}: a same-team friend must hear it"))
+            {
+                Outbound::Job(job) => assert_eq!(job().len(), 1),
+                _ => panic!("expected a job"),
+            }
+        }
+        assert!(
+            enemy_rx.try_recv().is_err(),
+            "a viewer on the other team hears nothing, even listing the guid as a friend"
+        );
+        assert!(
+            non_friend_rx.try_recv().is_err(),
+            "a same-team viewer who does not list the guid as a friend hears nothing"
+        );
+        assert!(
+            subject_rx.try_recv().is_err(),
+            "the subject's own viewer never hears its own transition"
+        );
+    }
 }
 
 // ===============================================================================================
@@ -5494,7 +5911,7 @@ fn reconcile_shard(
     auras: Vec<Aura>,
     contacts: Vec<ContactEntry>,
 ) {
-    replace_ignore_sets(view, shard, &contacts);
+    replace_contact_sets(view, shard, &contacts);
     let aura_targets = view.auras.replace_shard(shard, auras);
     let removed_entities = view.spatial.replace_shard(
         EntityLayer::WorldEntity,

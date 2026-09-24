@@ -761,17 +761,19 @@ fn contact_actor(ctx: &ReducerContext, actor_guid: u64) -> Result<crate::WorldEn
     Ok(actor)
 }
 
-/// [`crate::chat::add_contact`] (friend arm) with the owner named by guid.
+/// [`crate::chat::add_contact`] (friend arm) with the owner named by guid. `target_race` is the
+/// target's Speaker Fact, read by the Gateway on the target's own Shard: friends refuse an enemy.
 #[reducer]
 pub fn gw_add_friend(
     ctx: &ReducerContext,
     request_actor: crate::SessionActor,
     target_guid: u64,
+    target_race: u8,
 ) -> Result<(), String> {
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let sender = contact_actor(ctx, actor_guid)?;
-    crate::chat::add_contact(ctx, sender, target_guid, false)
+    crate::chat::add_contact(ctx, sender, target_guid, false, Some(target_race))
 }
 
 /// [`crate::chat::remove_contact`] (friend arm) with the owner named by guid.
@@ -797,7 +799,7 @@ pub fn gw_add_ignore(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let sender = contact_actor(ctx, actor_guid)?;
-    crate::chat::add_contact(ctx, sender, target_guid, true)
+    crate::chat::add_contact(ctx, sender, target_guid, true, None)
 }
 
 /// [`crate::chat::remove_contact`] (ignore arm) with the owner named by guid.

@@ -75,38 +75,30 @@ pub(super) fn handle_social<St: WorldStore + ?Sized>(
                 )?;
             }
         }
-        // Add a friend/ignore by typed name: resolved the same way `/whisper`'s target is (case-
-        // insensitive), then the module re-validates self/duplicate/cap server-side. Either way the
+        // Add a friend/ignore by typed name: resolved realm-wide the same way `/whisper`'s target
+        // is, then the module re-validates self/duplicate/cap/team server-side. Either way the
         // client gets an SMSG_FRIEND_STATUS its system message reads the result code off.
         ClientOpcodeMessage::CMSG_ADD_FRIEND(c) => {
-            let (result, guid) = resolve_add_contact(
+            let (result, guid, online) = resolve_add_contact(
                 store,
                 conn.account_id,
                 self_guid(conn).unwrap_or(0),
                 &c.name,
                 false,
             )?;
-            send(
-                tx,
-                Outbound::One(ServerOpcodeMessage::SMSG_FRIEND_STATUS(Box::new(
-                    codec::build_friend_status(result, guid),
-                ))),
-            )?;
+            let (opcode, body) = codec::build_friend_status_raw(result, guid, online);
+            send(tx, Outbound::Raw { opcode, body })?;
         }
         ClientOpcodeMessage::CMSG_ADD_IGNORE(c) => {
-            let (result, guid) = resolve_add_contact(
+            let (result, guid, online) = resolve_add_contact(
                 store,
                 conn.account_id,
                 self_guid(conn).unwrap_or(0),
                 &c.name,
                 true,
             )?;
-            send(
-                tx,
-                Outbound::One(ServerOpcodeMessage::SMSG_FRIEND_STATUS(Box::new(
-                    codec::build_friend_status(result, guid),
-                ))),
-            )?;
+            let (opcode, body) = codec::build_friend_status_raw(result, guid, online);
+            send(tx, Outbound::Raw { opcode, body })?;
         }
         // Remove a friend/ignore by guid (the client already has it from the list row).
         ClientOpcodeMessage::CMSG_DEL_FRIEND(c) => {
@@ -117,12 +109,8 @@ pub(super) fn handle_social<St: WorldStore + ?Sized>(
                 c.guid.guid(),
                 false,
             )?;
-            send(
-                tx,
-                Outbound::One(ServerOpcodeMessage::SMSG_FRIEND_STATUS(Box::new(
-                    codec::build_friend_status(result, guid),
-                ))),
-            )?;
+            let (opcode, body) = codec::build_friend_status_raw(result, guid, None);
+            send(tx, Outbound::Raw { opcode, body })?;
         }
         ClientOpcodeMessage::CMSG_DEL_IGNORE(c) => {
             let (result, guid) = resolve_del_contact(
@@ -132,12 +120,8 @@ pub(super) fn handle_social<St: WorldStore + ?Sized>(
                 c.guid.guid(),
                 true,
             )?;
-            send(
-                tx,
-                Outbound::One(ServerOpcodeMessage::SMSG_FRIEND_STATUS(Box::new(
-                    codec::build_friend_status(result, guid),
-                ))),
-            )?;
+            let (opcode, body) = codec::build_friend_status_raw(result, guid, None);
+            send(tx, Outbound::Raw { opcode, body })?;
         }
         // Party/group. The invite/uninvite names resolve gateway-side (the add_friend
         // convention); outcomes echo as SMSG_PARTY_COMMAND_RESULT. The cross-player packets
@@ -507,48 +491,85 @@ fn friend_result_for(refusal: ContactRefusal, is_ignore: bool) -> FriendResult {
         (ContactRefusal::NotOnList, false)
         | (ContactRefusal::NoSuchPlayer, _)
         | (ContactRefusal::ActorUnavailable, _) => FriendResult::NotFound,
+        // Ignore has no faction rule (only `resolve_add_contact`'s friend arm can produce this),
+        // but the wire still has one code for it.
+        (ContactRefusal::Enemy, _) => FriendResult::Enemy,
     }
 }
 
-/// Resolve a typed contact name, call the module's add reducer (`add_friend`/`add_ignore`), and
-/// translate the outcome into the `(FriendResult, guid)` pair `SMSG_FRIEND_STATUS` needs. An unknown
-/// name never reaches the module (guid 0, `NotFound`); everything else (self/duplicate/cap) is the
-/// module's own typed Refusal.
+/// The `SMSG_FRIEND_STATUS` trailing fields for a Realm Presence that is online — the ONLINE/
+/// ADDED_ONLINE case. Away Status reads `None` off any Whereabouts but `InWorld` (a Character
+/// between places carries no live `PLAYER_FLAGS` to read one from). `pub(crate)` because the
+/// Account Claim Relay (`stdb::world_view`) shares it for the login/logout notice.
+pub(crate) fn friend_online_fields(presence: &presence::RealmPresence) -> codec::FriendOnline {
+    let away = match &presence.whereabouts {
+        presence::Whereabouts::InWorld { away, .. } => *away,
+        presence::Whereabouts::InTransit | presence::Whereabouts::Offline => {
+            presence::AwayStatus::None
+        }
+    };
+    codec::FriendOnline {
+        away,
+        zone_id: presence.zone_id,
+        level: presence.level,
+        class: presence.class,
+    }
+}
+
+/// Resolve a typed contact name realm-wide, call the module's add reducer (`add_friend`/
+/// `add_ignore`), and translate the outcome into what `SMSG_FRIEND_STATUS` needs: the result code,
+/// the OTHER party's guid, and — ONLINE/ADDED_ONLINE only — the trailing presence fields. An
+/// unknown name never reaches the module (guid 0, `NotFound`/`IgnoreNotFound`); everything else
+/// (self/duplicate/cap/team) is the module's own typed Refusal. `target_race` for the module's
+/// Enemy Gate, and whether the ADD answers Online or Offline, both come from one Realm Presence
+/// read of the target — Realm-core holds no Characters to read either from.
 fn resolve_add_contact<St: WorldStore + ?Sized>(
     store: &St,
     account_id: u64,
     actor_guid: u64,
     name: &str,
     is_ignore: bool,
-) -> Result<(FriendResult, u64)> {
-    let Some(target_guid) = store.character_guid_by_name(name)? else {
-        return Ok((FriendResult::NotFound, 0));
+) -> Result<(FriendResult, u64, Option<codec::FriendOnline>)> {
+    let Some(target_guid) = presence::resolve_by_name(store, name)? else {
+        let not_found = if is_ignore {
+            FriendResult::IgnoreNotFound
+        } else {
+            FriendResult::NotFound
+        };
+        return Ok((not_found, 0, None));
     };
+    let target = presence::of(store, target_guid)?;
     let outcome = if is_ignore {
         store.add_ignore(account_id, actor_guid, target_guid)?
     } else {
-        store.add_friend(account_id, actor_guid, target_guid)?
+        let target_race = target.as_ref().map_or(0, |presence| presence.race);
+        store.add_friend(account_id, actor_guid, target_guid, target_race)?
     };
-    let result = match outcome {
-        ContactOutcome::Done if is_ignore => FriendResult::IgnoreAdded,
+    let (result, online) = match outcome {
+        ContactOutcome::Done if is_ignore => (FriendResult::IgnoreAdded, None),
         ContactOutcome::Done => {
-            let online = store
-                .character_presence(target_guid)?
-                .map(|(online, ..)| online)
-                .unwrap_or(false);
-            if online {
-                FriendResult::AddedOnline
-            } else {
-                FriendResult::AddedOffline
+            let actor_race = store
+                .character_by_guid(actor_guid)?
+                .map_or(0, |character| character.race);
+            match target.as_ref().filter(|presence| {
+                presence.session_online
+                    && lyracore_shared::faction::same_team(actor_race, presence.race)
+            }) {
+                Some(presence) => (
+                    FriendResult::AddedOnline,
+                    Some(friend_online_fields(presence)),
+                ),
+                None => (FriendResult::AddedOffline, None),
             }
         }
-        ContactOutcome::Refused(refusal) => friend_result_for(refusal, is_ignore),
+        ContactOutcome::Refused(refusal) => (friend_result_for(refusal, is_ignore), None),
     };
-    Ok((result, target_guid))
+    Ok((result, target_guid, online))
 }
 
 /// Call the module's remove reducer (`del_friend`/`del_ignore`) for `target_guid` and translate the
-/// outcome into the `(FriendResult, guid)` pair `SMSG_FRIEND_STATUS` needs.
+/// outcome into the `(FriendResult, guid)` pair `SMSG_FRIEND_STATUS` needs. A remove carries no
+/// trailing presence fields, whatever the outcome.
 fn resolve_del_contact<St: WorldStore + ?Sized>(
     store: &St,
     account_id: u64,
@@ -607,6 +628,7 @@ mod tests {
                 ContactRefusal::NoSuchPlayer | ContactRefusal::ActorUnavailable => {
                     (FriendResult::NotFound, FriendResult::NotFound)
                 }
+                ContactRefusal::Enemy => (FriendResult::Enemy, FriendResult::Enemy),
             };
             assert_eq!(friend_result_for(refusal, false), friend, "{refusal:?}");
             assert_eq!(friend_result_for(refusal, true), ignore, "{refusal:?}");

@@ -17,16 +17,20 @@ pub enum ContactRefusal {
     ListFull,
     /// The remove named a target that is not on that list.
     NotOnList,
+    /// A friend add named a Character on the other team (cm:MiscHandler.cpp:467-468). Ignore has
+    /// no such rule.
+    Enemy,
 }
 
 impl ContactRefusal {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::ActorUnavailable,
         Self::AddSelf,
         Self::NoSuchPlayer,
         Self::AlreadyOnList,
         Self::ListFull,
         Self::NotOnList,
+        Self::Enemy,
     ];
 
     pub fn as_tag(self) -> &'static str {
@@ -37,6 +41,7 @@ impl ContactRefusal {
             Self::AlreadyOnList => "social:already_on_list",
             Self::ListFull => "social:list_full",
             Self::NotOnList => "social:not_on_list",
+            Self::Enemy => "social:enemy",
         }
     }
 

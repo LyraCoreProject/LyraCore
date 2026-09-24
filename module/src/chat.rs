@@ -562,9 +562,10 @@ pub(crate) fn add_contact(
     sender: crate::WorldEntity,
     target_guid: u64,
     is_ignore: bool,
+    target_race: Option<u8>,
 ) -> Result<(), String> {
     let owner_guid = sender.guid;
-    add_contact_core(ctx, sender, target_guid, is_ignore).map_err(|refusal| {
+    add_contact_core(ctx, sender, target_guid, is_ignore, target_race).map_err(|refusal| {
         refused_contact(
             refusal,
             &format!("{owner_guid} could not add {target_guid}"),
@@ -572,20 +573,28 @@ pub(crate) fn add_contact(
     })
 }
 
-/// `target_guid` is resolved by the GATEWAY (name → guid, same lookup `/who` uses) before the
-/// reducer is called, so this only re-validates server-side (never trusts the caller) — reject
-/// self, an unknown guid, a duplicate, or a full list.
+/// `target_guid` is resolved by the GATEWAY (name → guid, same realm-wide lookup whisper and
+/// group invite use) before the reducer is called — that resolution IS the existence Gate, so this
+/// never re-checks for a durable row locally (a target on another Shard has none here). It still
+/// re-validates everything server-side (never trusts the caller): self, a duplicate, a full list,
+/// and — friends only — the other team. `target_race` is the Gateway-conveyed Speaker Fact for the
+/// target; `None` for an ignore add, which has no faction rule.
 fn add_contact_core(
     ctx: &ReducerContext,
     sender: crate::WorldEntity,
     target_guid: u64,
     is_ignore: bool,
+    target_race: Option<u8>,
 ) -> Result<(), ContactRefusal> {
     if target_guid == sender.guid {
         return Err(ContactRefusal::AddSelf);
     }
-    if ctx.db.game_character().guid().find(target_guid).is_none() {
-        return Err(ContactRefusal::NoSuchPlayer);
+    if !is_ignore {
+        if let Some(target_race) = target_race {
+            if !lyracore_shared::faction::same_team(sender.race(), target_race) {
+                return Err(ContactRefusal::Enemy);
+            }
+        }
     }
     let contacts = ctx.db.game_character_contact();
     let existing: Vec<_> = contacts.by_owner().filter(&sender.guid).collect();

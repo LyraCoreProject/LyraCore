@@ -1619,8 +1619,9 @@ impl WorldStore for Coordinator {
         account_id: u64,
         self_guid: u64,
         target_guid: u64,
+        target_race: u8,
     ) -> Result<crate::world::ContactOutcome> {
-        self.add_friend(account_id, self_guid, target_guid)
+        self.add_friend(account_id, self_guid, target_guid, target_race)
     }
 
     fn del_friend(

@@ -44,7 +44,7 @@ pub mod mail;
 pub mod packet_lint;
 pub mod party;
 pub mod presence;
-mod social;
+pub(crate) mod social;
 mod store;
 pub mod transfer;
 pub mod whisper;

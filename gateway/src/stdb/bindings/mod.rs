@@ -3276,6 +3276,7 @@ pub enum Reducer {
     GwAddFriend {
         request_actor: SessionActor,
         target_guid: u64,
+        target_race: u8,
     },
     GwAddIgnore {
         request_actor: SessionActor,
@@ -6504,9 +6505,11 @@ Reducer::DebugVerifyRangedLethalDamageFloorFixture{
             Reducer::GwAddFriend{
                 request_actor,
                 target_guid,
+                target_race,
 }             => __sats::bsatn::to_vec(&gw_add_friend_reducer::GwAddFriendArgs {
                 request_actor: request_actor.clone(),
                 target_guid: target_guid.clone(),
+                target_race: target_race.clone(),
 }),
             Reducer::GwAddIgnore{
                 request_actor,
