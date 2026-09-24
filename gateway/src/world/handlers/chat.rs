@@ -1,7 +1,8 @@
 //! Realm Chat dispatcher: the `CMSG_MESSAGECHAT` kinds that become Realm Chat Lines. The Gateway
 //! reads the Speaker Facts on the Home Shard, the Module decides the audience on Realm-core, and
-//! the Relay (`stdb::world_view::realm_chat_appeared`) delivers the line. Party and channel lines
-//! are Realm Chat Lines. Say, yell and every kind this file does not own pass through.
+//! the Relay (`stdb::world_view::realm_chat_appeared`) delivers the line. Party, Raid, Raid
+//! Leader, Raid Warning, Channel, Guild and Officer lines are all Realm Chat Lines. Say, yell and
+//! every kind this file does not own pass through.
 
 use super::super::*;
 use lyracore_shared::chat::{chat_kind, ChatRefusal};
@@ -68,15 +69,19 @@ pub(crate) enum ChatActionOutcome {
 /// cm mangos.sql:4044, sent by cm:ChatHandler.cpp:107-110.
 const UNKNOWN_LANGUAGE_NOTICE: &str = "You don't know that language";
 
-/// The wire `chat_kind` for a Raid, Raid Leader or Raid Warning line; `None` for every other
-/// `CMSG_MESSAGECHAT_ChatType`, Party included (Party keeps its own arm for its special
-/// `SMSG_PARTY_COMMAND_RESULT` Refusal). The three share one audience family on the Module side
-/// and answer with the same silent Refusal here, so one arm covers all three.
-fn raid_chat_kind(chat_type: &CMSG_MESSAGECHAT_ChatType) -> Option<u8> {
+/// The wire `chat_kind` for a Chat Kind whose own audience Refusals are silent here: Raid, Raid
+/// Leader, Raid Warning, Guild and Officer. `None` for every other `CMSG_MESSAGECHAT_ChatType`,
+/// Party and Channel included (they keep their own arms for a Refusal that answers the client).
+/// The shared Refusals still answer through `refusal_outbound` below — `UnknownLanguage` gets its
+/// vanilla notice whichever of these five kinds sent the line. Each family owns its audience rule
+/// on the Module side; this only picks the wire kind so they can share this arm's dispatch.
+fn silent_refusal_chat_kind(chat_type: &CMSG_MESSAGECHAT_ChatType) -> Option<u8> {
     match chat_type {
         CMSG_MESSAGECHAT_ChatType::Raid => Some(chat_kind::RAID),
         CMSG_MESSAGECHAT_ChatType::RaidLeader => Some(chat_kind::RAID_LEADER),
         CMSG_MESSAGECHAT_ChatType::RaidWarning => Some(chat_kind::RAID_WARNING),
+        CMSG_MESSAGECHAT_ChatType::Guild => Some(chat_kind::GUILD),
+        CMSG_MESSAGECHAT_ChatType::Officer => Some(chat_kind::OFFICER),
         _ => None,
     }
 }
@@ -139,7 +144,7 @@ pub(crate) fn dispatch_chat_action<St: ChatActionStore + ?Sized>(
             }
         }
         chat_type => {
-            let Some(kind) = raid_chat_kind(&chat_type) else {
+            let Some(kind) = silent_refusal_chat_kind(&chat_type) else {
                 return Ok(ChatActionOutcome::PassThrough(
                     ClientOpcodeMessage::CMSG_MESSAGECHAT(Box::new(CMSG_MESSAGECHAT {
                         chat_type,
@@ -324,8 +329,10 @@ mod tests {
     }
 
     /// Every racial language reaches the Module as its wire value (gtker vanilla `language.rs`),
-    /// so the Module's language Gate judges what the client sent. Addon-language lines never get
-    /// here: the addon bridge in `world/mod.rs` takes them first.
+    /// so the Module's language Gate judges what the client sent. The addon bridge in
+    /// `world/mod.rs` only intercepts its own STC-prefixed frames; an addon-language line from any
+    /// other addon still reaches this dispatcher on Party, Raid, Guild or Officer
+    /// (`gateway/src/codec/addon.rs`).
     #[test]
     fn each_racial_language_reaches_the_module_as_its_wire_value() {
         for (language, wire) in [
@@ -409,10 +416,10 @@ mod tests {
         }
     }
 
-    /// Raid, Raid Leader and Raid Warning each route to the seam with their own Chat Kind. The
-    /// Module decides the audience; the Gateway only conveys the request.
+    /// Raid, Raid Leader, Raid Warning, Guild and Officer each route to the seam with their own
+    /// Chat Kind. The Module decides the audience; the Gateway only conveys the request.
     #[test]
-    fn raid_lines_carry_their_own_chat_kind() {
+    fn raid_and_guild_lines_carry_their_own_chat_kind() {
         for (chat_type, kind) in [
             (CMSG_MESSAGECHAT_ChatType::Raid, chat_kind::RAID),
             (
@@ -423,6 +430,8 @@ mod tests {
                 CMSG_MESSAGECHAT_ChatType::RaidWarning,
                 chat_kind::RAID_WARNING,
             ),
+            (CMSG_MESSAGECHAT_ChatType::Guild, chat_kind::GUILD),
+            (CMSG_MESSAGECHAT_ChatType::Officer, chat_kind::OFFICER),
         ] {
             let store = store(None);
             let outbound = handled(
@@ -437,10 +446,32 @@ mod tests {
         }
     }
 
-    /// cmangos answers a raid audience Refusal with silence, the same as every other Chat Kind
-    /// (AC 3-5).
+    /// `SendAddonMessage` shares the Guild and Officer channels with the addon bridge
+    /// (`gateway/src/codec/addon.rs`). The addon language forwards to the Module unchanged, which
+    /// keeps it rather than forcing Universal (`cm:ChatHandler.cpp:369,409`).
     #[test]
-    fn every_raid_chat_refusal_is_silent() {
+    fn guild_and_officer_lines_forward_the_addon_language() {
+        for (chat_type, label) in [
+            (CMSG_MESSAGECHAT_ChatType::Guild, "Guild"),
+            (CMSG_MESSAGECHAT_ChatType::Officer, "Officer"),
+        ] {
+            let store = store(None);
+            handled(
+                dispatch_chat_action(&store, player(), line(chat_type, Language::Addon)).unwrap(),
+            );
+            assert_eq!(
+                store.requests.lock().unwrap()[0].1.language,
+                0xFFFF_FFFF,
+                "{label}"
+            );
+        }
+    }
+
+    /// cmangos answers a raid or guild audience Refusal with silence, the same as every other
+    /// Chat Kind: a member who cannot speak on it hears nothing back, and neither does anyone else
+    /// (`cm:ChatHandler.cpp:367-369`, `cm:Guild.cpp:559-561`).
+    #[test]
+    fn every_raid_and_guild_chat_refusal_is_silent() {
         for refusal in [
             ChatRefusal::NotRaid,
             ChatRefusal::NotRaidLeader,
@@ -452,6 +483,18 @@ mod tests {
                     &store,
                     player(),
                     line(CMSG_MESSAGECHAT_ChatType::Raid, Language::Common),
+                )
+                .unwrap(),
+            );
+            assert!(outbound.is_empty(), "{refusal:?}");
+        }
+        for refusal in [ChatRefusal::NotInGuild, ChatRefusal::NoGuildChatRight] {
+            let store = store(Some(Ok(ChatOutcome::Refused(refusal))));
+            let outbound = handled(
+                dispatch_chat_action(
+                    &store,
+                    player(),
+                    line(CMSG_MESSAGECHAT_ChatType::Guild, Language::Common),
                 )
                 .unwrap(),
             );

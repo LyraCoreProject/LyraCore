@@ -15,6 +15,7 @@ use lyracore_shared::guild::{
 };
 use spacetimedb::{reducer, table, ReducerContext, SpacetimeType, Table, Timestamp};
 
+pub(crate) mod chat;
 pub mod fee;
 pub mod membership;
 pub(crate) use fee::{sweep_delete_game_guild_fee_hold, sweep_transfer_game_guild_fee_hold};

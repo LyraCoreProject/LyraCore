@@ -145,12 +145,17 @@ pub enum ChatRefusal {
     UnsupportedKind,
     /// Nothing is left after trimming.
     EmptyMessage,
+    /// A guild or officer line from a Character in no Guild (`cm:ChatHandler.cpp:367-369`).
+    NotInGuild,
+    /// A guild or officer line from a member whose Guild Rank lacks the speak right
+    /// (`cm:Guild.cpp:559-561,580-582`).
+    NoGuildChatRight,
     /// A channel line the channel refused. Answered with the channel's notice.
     Channel(ChannelRefusal),
 }
 
 impl ChatRefusal {
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 22] = [
         Self::NotInGroup,
         Self::NotRaid,
         Self::NotRaidLeader,
@@ -158,6 +163,8 @@ impl ChatRefusal {
         Self::UnknownLanguage,
         Self::UnsupportedKind,
         Self::EmptyMessage,
+        Self::NotInGuild,
+        Self::NoGuildChatRight,
         Self::Channel(ChannelRefusal::NotMember),
         Self::Channel(ChannelRefusal::WrongPassword),
         Self::Channel(ChannelRefusal::NotModerator),
@@ -182,6 +189,8 @@ impl ChatRefusal {
             Self::UnknownLanguage => "chat:unknown_language",
             Self::UnsupportedKind => "chat:unsupported_kind",
             Self::EmptyMessage => "chat:empty_message",
+            Self::NotInGuild => "chat:not_in_guild",
+            Self::NoGuildChatRight => "chat:no_guild_chat_right",
             Self::Channel(refusal) => refusal.as_tag(),
         }
     }
