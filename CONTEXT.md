@@ -405,6 +405,21 @@ with no entity there), or offline. A negative Whereabouts — offline, or no Cha
 needs every configured World Shard to vouch that none of them is hiding the Character.
 _Avoid_: presence state, location status
 
+**Chat Channel**:
+A named, team-scoped conversation on Realm-core. Built-in (General, Trade, LocalDefense,
+WorldDefense, LookingForGroup, GuildRecruitment) or custom. Its lowercase name and team are its
+identity; the wire uses its creator's spelling.
+_Avoid_: room, chat room
+
+**Channel Membership**:
+One Character's place in one Chat Channel. It lasts while the Account Claim generation that
+admitted it lasts.
+_Avoid_: channel subscription
+
+**Channel Notice**:
+One `SMSG_CHANNEL_NOTIFY`, committed on Realm-core with its explicit recipient list and delivered
+like a Realm Chat Line.
+
 ### Loot
 
 **Loot Tag**:

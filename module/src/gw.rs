@@ -111,8 +111,9 @@ pub fn gw_heartbeat(ctx: &ReducerContext) -> Result<(), String> {
     Ok(())
 }
 
-/// Remove the world entities of every lapsed lease, then the lease itself. Scheduled — the
-/// sender guard is the standard "only the scheduler may fire this" fence every scheduled
+/// Close expired Account Fences and Account Claims, then remove the world entities of every lapsed
+/// lease and the lease itself. Closing a claim ends its Character's Channel Memberships. Scheduled,
+/// so the sender guard is the standard "only the scheduler may fire this" fence every scheduled
 /// reducer here carries.
 #[reducer]
 pub fn reap_gateway_leases(
@@ -123,6 +124,7 @@ pub fn reap_gateway_leases(
         return Err("scheduler only".to_string());
     }
     crate::account_ownership::reap_account_fences(ctx);
+    crate::account_ownership::reap_account_claims(ctx);
     let now = ctx.timestamp.to_micros_since_unix_epoch();
     // Collect first: the loops delete from the tables they walk.
     let dead: Vec<GatewayLease> = ctx
@@ -740,46 +742,6 @@ pub fn gw_send_whisper(
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let sender = actor(ctx, actor_guid)?;
     crate::chat::apply_send_whisper(ctx, sender, target_name, message)
-}
-
-/// [`crate::chat::apply_join_channel`] with the joiner named by guid.
-#[reducer]
-pub fn gw_join_channel(
-    ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
-    channel: String,
-) -> Result<(), String> {
-    require_operator(ctx)?;
-    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
-    let sender = actor(ctx, actor_guid)?;
-    crate::chat::apply_join_channel(ctx, sender, channel)
-}
-
-/// [`crate::chat::apply_leave_channel`] with the leaver named by guid.
-#[reducer]
-pub fn gw_leave_channel(
-    ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
-    channel: String,
-) -> Result<(), String> {
-    require_operator(ctx)?;
-    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
-    let sender = actor(ctx, actor_guid)?;
-    crate::chat::apply_leave_channel(ctx, sender, channel)
-}
-
-/// [`crate::chat::apply_send_channel_message`] with the speaker named by guid.
-#[reducer]
-pub fn gw_send_channel_message(
-    ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
-    channel: String,
-    message: String,
-) -> Result<(), String> {
-    require_operator(ctx)?;
-    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
-    let sender = actor(ctx, actor_guid)?;
-    crate::chat::apply_send_channel_message(ctx, sender, channel, message)
 }
 
 /// Taxi flight is an expected contact Refusal. Missing actors still carry the generic actor error,

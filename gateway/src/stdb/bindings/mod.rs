@@ -51,6 +51,7 @@ pub mod cast_instruction_type;
 pub mod catalogue_fingerprint_type;
 pub mod channel_event_type;
 pub mod channel_member_type;
+pub mod channel_request_type;
 pub mod char_base_info_type;
 pub mod character_explored_type;
 pub mod character_quest_event_credit_type;
@@ -59,6 +60,10 @@ pub mod character_shard_type;
 pub mod character_talent_type;
 pub mod character_taxi_node_type;
 pub mod character_type;
+pub mod chat_channel_ban_type;
+pub mod chat_channel_member_type;
+pub mod chat_channel_notice_event_type;
+pub mod chat_channel_type;
 pub mod chat_event_type;
 pub mod claim_account_reducer;
 pub mod claim_bot_invite_intent_reducer;
@@ -389,6 +394,10 @@ pub mod game_character_shard_table;
 pub mod game_character_table;
 pub mod game_character_talent_table;
 pub mod game_character_taxi_node_table;
+pub mod game_chat_channel_ban_table;
+pub mod game_chat_channel_member_table;
+pub mod game_chat_channel_notice_event_table;
+pub mod game_chat_channel_table;
 pub mod game_chat_event_table;
 pub mod game_class_level_stats_table;
 pub mod game_combat_event_table;
@@ -737,9 +746,7 @@ pub mod gw_heartbeat_reducer;
 pub mod gw_ignore_trade_reducer;
 pub mod gw_initiate_trade_reducer;
 pub mod gw_inspect_reducer;
-pub mod gw_join_channel_reducer;
 pub mod gw_learn_talent_reducer;
-pub mod gw_leave_channel_reducer;
 pub mod gw_loot_master_give_reducer;
 pub mod gw_loot_money_reducer;
 pub mod gw_loot_roll_reducer;
@@ -760,7 +767,6 @@ pub mod gw_repop_reducer;
 pub mod gw_reset_talents_reducer;
 pub mod gw_respond_resurrect_reducer;
 pub mod gw_sell_item_reducer;
-pub mod gw_send_channel_message_reducer;
 pub mod gw_send_chat_reducer;
 pub mod gw_send_emote_reducer;
 pub mod gw_send_whisper_reducer;
@@ -913,6 +919,7 @@ pub mod realm_auction_decide_bid_reducer;
 pub mod realm_auction_refund_bid_reducer;
 pub mod realm_auction_refund_listing_reducer;
 pub mod realm_auction_settle_listing_reducer;
+pub mod realm_channel_op_reducer;
 pub mod realm_chat_event_type;
 pub mod realm_chat_reducer;
 pub mod realm_chat_request_type;
@@ -1156,6 +1163,7 @@ pub use cast_instruction_type::CastInstruction;
 pub use catalogue_fingerprint_type::CatalogueFingerprint;
 pub use channel_event_type::ChannelEvent;
 pub use channel_member_type::ChannelMember;
+pub use channel_request_type::ChannelRequest;
 pub use char_base_info_type::CharBaseInfo;
 pub use character_explored_type::CharacterExplored;
 pub use character_quest_event_credit_type::CharacterQuestEventCredit;
@@ -1164,6 +1172,10 @@ pub use character_shard_type::CharacterShard;
 pub use character_talent_type::CharacterTalent;
 pub use character_taxi_node_type::CharacterTaxiNode;
 pub use character_type::Character;
+pub use chat_channel_ban_type::ChatChannelBan;
+pub use chat_channel_member_type::ChatChannelMember;
+pub use chat_channel_notice_event_type::ChatChannelNoticeEvent;
+pub use chat_channel_type::ChatChannel;
 pub use chat_event_type::ChatEvent;
 pub use claim_account_reducer::claim_account;
 pub use claim_bot_invite_intent_reducer::claim_bot_invite_intent;
@@ -1494,6 +1506,10 @@ pub use game_character_shard_table::*;
 pub use game_character_table::*;
 pub use game_character_talent_table::*;
 pub use game_character_taxi_node_table::*;
+pub use game_chat_channel_ban_table::*;
+pub use game_chat_channel_member_table::*;
+pub use game_chat_channel_notice_event_table::*;
+pub use game_chat_channel_table::*;
 pub use game_chat_event_table::*;
 pub use game_class_level_stats_table::*;
 pub use game_combat_event_table::*;
@@ -1842,9 +1858,7 @@ pub use gw_heartbeat_reducer::gw_heartbeat;
 pub use gw_ignore_trade_reducer::gw_ignore_trade;
 pub use gw_initiate_trade_reducer::gw_initiate_trade;
 pub use gw_inspect_reducer::gw_inspect;
-pub use gw_join_channel_reducer::gw_join_channel;
 pub use gw_learn_talent_reducer::gw_learn_talent;
-pub use gw_leave_channel_reducer::gw_leave_channel;
 pub use gw_loot_master_give_reducer::gw_loot_master_give;
 pub use gw_loot_money_reducer::gw_loot_money;
 pub use gw_loot_roll_reducer::gw_loot_roll;
@@ -1865,7 +1879,6 @@ pub use gw_repop_reducer::gw_repop;
 pub use gw_reset_talents_reducer::gw_reset_talents;
 pub use gw_respond_resurrect_reducer::gw_respond_resurrect;
 pub use gw_sell_item_reducer::gw_sell_item;
-pub use gw_send_channel_message_reducer::gw_send_channel_message;
 pub use gw_send_chat_reducer::gw_send_chat;
 pub use gw_send_emote_reducer::gw_send_emote;
 pub use gw_send_whisper_reducer::gw_send_whisper;
@@ -2018,6 +2031,7 @@ pub use realm_auction_decide_bid_reducer::realm_auction_decide_bid;
 pub use realm_auction_refund_bid_reducer::realm_auction_refund_bid;
 pub use realm_auction_refund_listing_reducer::realm_auction_refund_listing;
 pub use realm_auction_settle_listing_reducer::realm_auction_settle_listing;
+pub use realm_channel_op_reducer::realm_channel_op;
 pub use realm_chat_event_type::RealmChatEvent;
 pub use realm_chat_reducer::realm_chat;
 pub use realm_chat_request_type::RealmChatRequest;
@@ -3420,17 +3434,9 @@ pub enum Reducer {
         request_actor: SessionActor,
         target_guid: u64,
     },
-    GwJoinChannel {
-        request_actor: SessionActor,
-        channel: String,
-    },
     GwLearnTalent {
         request_actor: SessionActor,
         talent_id: u32,
-    },
-    GwLeaveChannel {
-        request_actor: SessionActor,
-        channel: String,
     },
     GwLootMasterGive {
         request_actor: SessionActor,
@@ -3521,11 +3527,6 @@ pub enum Reducer {
         request_actor: SessionActor,
         vendor_guid: u64,
         slot: u8,
-    },
-    GwSendChannelMessage {
-        request_actor: SessionActor,
-        channel: String,
-        message: String,
     },
     GwSendChat {
         request_actor: SessionActor,
@@ -3808,6 +3809,11 @@ pub enum Reducer {
     RealmAuctionSettleListing {
         operation_id: u64,
         request_actor: SessionActor,
+    },
+    RealmChannelOp {
+        request_actor: SessionActor,
+        op: u8,
+        request: ChannelRequest,
     },
     RealmChat {
         request_actor: SessionActor,
@@ -4442,9 +4448,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwIgnoreTrade { .. } => "gw_ignore_trade",
             Reducer::GwInitiateTrade { .. } => "gw_initiate_trade",
             Reducer::GwInspect { .. } => "gw_inspect",
-            Reducer::GwJoinChannel { .. } => "gw_join_channel",
             Reducer::GwLearnTalent { .. } => "gw_learn_talent",
-            Reducer::GwLeaveChannel { .. } => "gw_leave_channel",
             Reducer::GwLootMasterGive { .. } => "gw_loot_master_give",
             Reducer::GwLootMoney { .. } => "gw_loot_money",
             Reducer::GwLootRoll { .. } => "gw_loot_roll",
@@ -4464,7 +4468,6 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwResetTalents { .. } => "gw_reset_talents",
             Reducer::GwRespondResurrect { .. } => "gw_respond_resurrect",
             Reducer::GwSellItem { .. } => "gw_sell_item",
-            Reducer::GwSendChannelMessage { .. } => "gw_send_channel_message",
             Reducer::GwSendChat { .. } => "gw_send_chat",
             Reducer::GwSendEmote { .. } => "gw_send_emote",
             Reducer::GwSendWhisper { .. } => "gw_send_whisper",
@@ -4535,6 +4538,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::RealmAuctionRefundBid { .. } => "realm_auction_refund_bid",
             Reducer::RealmAuctionRefundListing { .. } => "realm_auction_refund_listing",
             Reducer::RealmAuctionSettleListing { .. } => "realm_auction_settle_listing",
+            Reducer::RealmChannelOp { .. } => "realm_channel_op",
             Reducer::RealmChat { .. } => "realm_chat",
             Reducer::RealmGroupOp { .. } => "realm_group_op",
             Reducer::RealmGuildFeeDecide { .. } => "realm_guild_fee_decide",
@@ -6753,26 +6757,12 @@ Reducer::GwIgnoreTrade{
                 request_actor: request_actor.clone(),
                 target_guid: target_guid.clone(),
 }),
-            Reducer::GwJoinChannel{
-                request_actor,
-                channel,
-}             => __sats::bsatn::to_vec(&gw_join_channel_reducer::GwJoinChannelArgs {
-                request_actor: request_actor.clone(),
-                channel: channel.clone(),
-}),
             Reducer::GwLearnTalent{
                 request_actor,
                 talent_id,
 }             => __sats::bsatn::to_vec(&gw_learn_talent_reducer::GwLearnTalentArgs {
                 request_actor: request_actor.clone(),
                 talent_id: talent_id.clone(),
-}),
-            Reducer::GwLeaveChannel{
-                request_actor,
-                channel,
-}             => __sats::bsatn::to_vec(&gw_leave_channel_reducer::GwLeaveChannelArgs {
-                request_actor: request_actor.clone(),
-                channel: channel.clone(),
 }),
             Reducer::GwLootMasterGive{
                 request_actor,
@@ -6934,15 +6924,6 @@ Reducer::GwIgnoreTrade{
                 request_actor: request_actor.clone(),
                 vendor_guid: vendor_guid.clone(),
                 slot: slot.clone(),
-}),
-            Reducer::GwSendChannelMessage{
-                request_actor,
-                channel,
-                message,
-}             => __sats::bsatn::to_vec(&gw_send_channel_message_reducer::GwSendChannelMessageArgs {
-                request_actor: request_actor.clone(),
-                channel: channel.clone(),
-                message: message.clone(),
 }),
             Reducer::GwSendChat{
                 request_actor,
@@ -7448,6 +7429,15 @@ Reducer::PlayerbotsFixtureCommandApply{
 }             => __sats::bsatn::to_vec(&realm_auction_settle_listing_reducer::RealmAuctionSettleListingArgs {
                 operation_id: operation_id.clone(),
                 request_actor: request_actor.clone(),
+}),
+            Reducer::RealmChannelOp{
+                request_actor,
+                op,
+                request,
+}             => __sats::bsatn::to_vec(&realm_channel_op_reducer::RealmChannelOpArgs {
+                request_actor: request_actor.clone(),
+                op: op.clone(),
+                request: request.clone(),
 }),
             Reducer::RealmChat{
                 request_actor,
@@ -8050,6 +8040,10 @@ pub struct DbUpdate {
     game_character_shard: __sdk::TableUpdate<CharacterShard>,
     game_character_talent: __sdk::TableUpdate<CharacterTalent>,
     game_character_taxi_node: __sdk::TableUpdate<CharacterTaxiNode>,
+    game_chat_channel: __sdk::TableUpdate<ChatChannel>,
+    game_chat_channel_ban: __sdk::TableUpdate<ChatChannelBan>,
+    game_chat_channel_member: __sdk::TableUpdate<ChatChannelMember>,
+    game_chat_channel_notice_event: __sdk::TableUpdate<ChatChannelNoticeEvent>,
     game_chat_event: __sdk::TableUpdate<ChatEvent>,
     game_class_level_stats: __sdk::TableUpdate<ClassLevelStats>,
     game_combat_event: __sdk::TableUpdate<CombatEvent>,
@@ -8413,6 +8407,20 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_character_taxi_node" => db_update.game_character_taxi_node.append(
                     game_character_taxi_node_table::parse_table_update(table_update)?,
                 ),
+                "game_chat_channel" => db_update
+                    .game_chat_channel
+                    .append(game_chat_channel_table::parse_table_update(table_update)?),
+                "game_chat_channel_ban" => db_update.game_chat_channel_ban.append(
+                    game_chat_channel_ban_table::parse_table_update(table_update)?,
+                ),
+                "game_chat_channel_member" => db_update.game_chat_channel_member.append(
+                    game_chat_channel_member_table::parse_table_update(table_update)?,
+                ),
+                "game_chat_channel_notice_event" => {
+                    db_update.game_chat_channel_notice_event.append(
+                        game_chat_channel_notice_event_table::parse_table_update(table_update)?,
+                    )
+                }
                 "game_chat_event" => db_update
                     .game_chat_event
                     .append(game_chat_event_table::parse_table_update(table_update)?),
@@ -9372,6 +9380,27 @@ impl __sdk::DbUpdate for DbUpdate {
             .apply_diff_to_table::<CharacterTaxiNode>(
                 "game_character_taxi_node",
                 &self.game_character_taxi_node,
+            )
+            .with_updates_by_pk(|row| &row.id);
+        diff.game_chat_channel = cache
+            .apply_diff_to_table::<ChatChannel>("game_chat_channel", &self.game_chat_channel)
+            .with_updates_by_pk(|row| &row.channel_id);
+        diff.game_chat_channel_ban = cache
+            .apply_diff_to_table::<ChatChannelBan>(
+                "game_chat_channel_ban",
+                &self.game_chat_channel_ban,
+            )
+            .with_updates_by_pk(|row| &row.id);
+        diff.game_chat_channel_member = cache
+            .apply_diff_to_table::<ChatChannelMember>(
+                "game_chat_channel_member",
+                &self.game_chat_channel_member,
+            )
+            .with_updates_by_pk(|row| &row.id);
+        diff.game_chat_channel_notice_event = cache
+            .apply_diff_to_table::<ChatChannelNoticeEvent>(
+                "game_chat_channel_notice_event",
+                &self.game_chat_channel_notice_event,
             )
             .with_updates_by_pk(|row| &row.id);
         diff.game_chat_event = cache
@@ -10539,6 +10568,18 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_character_taxi_node" => db_update
                     .game_character_taxi_node
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_chat_channel" => db_update
+                    .game_chat_channel
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_chat_channel_ban" => db_update
+                    .game_chat_channel_ban
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_chat_channel_member" => db_update
+                    .game_chat_channel_member
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_chat_channel_notice_event" => db_update
+                    .game_chat_channel_notice_event
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_chat_event" => db_update
                     .game_chat_event
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -11368,6 +11409,18 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_character_taxi_node" => db_update
                     .game_character_taxi_node
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_chat_channel" => db_update
+                    .game_chat_channel
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_chat_channel_ban" => db_update
+                    .game_chat_channel_ban
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_chat_channel_member" => db_update
+                    .game_chat_channel_member
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_chat_channel_notice_event" => db_update
+                    .game_chat_channel_notice_event
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_chat_event" => db_update
                     .game_chat_event
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -12123,6 +12176,10 @@ pub struct AppliedDiff<'r> {
     game_character_shard: __sdk::TableAppliedDiff<'r, CharacterShard>,
     game_character_talent: __sdk::TableAppliedDiff<'r, CharacterTalent>,
     game_character_taxi_node: __sdk::TableAppliedDiff<'r, CharacterTaxiNode>,
+    game_chat_channel: __sdk::TableAppliedDiff<'r, ChatChannel>,
+    game_chat_channel_ban: __sdk::TableAppliedDiff<'r, ChatChannelBan>,
+    game_chat_channel_member: __sdk::TableAppliedDiff<'r, ChatChannelMember>,
+    game_chat_channel_notice_event: __sdk::TableAppliedDiff<'r, ChatChannelNoticeEvent>,
     game_chat_event: __sdk::TableAppliedDiff<'r, ChatEvent>,
     game_class_level_stats: __sdk::TableAppliedDiff<'r, ClassLevelStats>,
     game_combat_event: __sdk::TableAppliedDiff<'r, CombatEvent>,
@@ -12545,6 +12602,26 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<CharacterTaxiNode>(
             "game_character_taxi_node",
             &self.game_character_taxi_node,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<ChatChannel>(
+            "game_chat_channel",
+            &self.game_chat_channel,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<ChatChannelBan>(
+            "game_chat_channel_ban",
+            &self.game_chat_channel_ban,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<ChatChannelMember>(
+            "game_chat_channel_member",
+            &self.game_chat_channel_member,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<ChatChannelNoticeEvent>(
+            "game_chat_channel_notice_event",
+            &self.game_chat_channel_notice_event,
             event,
         );
         callbacks.invoke_table_row_callbacks::<ChatEvent>(
@@ -14367,6 +14444,10 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_character_shard_table::register_table(client_cache);
         game_character_talent_table::register_table(client_cache);
         game_character_taxi_node_table::register_table(client_cache);
+        game_chat_channel_table::register_table(client_cache);
+        game_chat_channel_ban_table::register_table(client_cache);
+        game_chat_channel_member_table::register_table(client_cache);
+        game_chat_channel_notice_event_table::register_table(client_cache);
         game_chat_event_table::register_table(client_cache);
         game_class_level_stats_table::register_table(client_cache);
         game_combat_event_table::register_table(client_cache);
@@ -14641,6 +14722,10 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_character_shard",
         "game_character_talent",
         "game_character_taxi_node",
+        "game_chat_channel",
+        "game_chat_channel_ban",
+        "game_chat_channel_member",
+        "game_chat_channel_notice_event",
         "game_chat_event",
         "game_class_level_stats",
         "game_combat_event",

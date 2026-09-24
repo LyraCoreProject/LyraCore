@@ -1,9 +1,9 @@
 use super::handlers::{
-    AuctionActionStore, AuctionInteraction, CastStore, ChatActionStore, ChatOutcome,
-    DuelActionStore, GuildActionStore, ItemActionStore, LootWindowRefusal, LootWindowRequestStatus,
-    LootWindowStore, MeleeActionStore, MemberPresence, MemberSnapshot, MemberStatsStore,
-    QuestActionStore, RealmChatRequest, SpeakerFacts, TaxiActionStore, VendorActionStore,
-    WeatherStore,
+    AuctionActionStore, AuctionInteraction, CastStore, ChannelActionStore, ChannelOutcome,
+    ChannelRequest, ChannelRoster, ChatActionStore, ChatOutcome, DuelActionStore, GuildActionStore,
+    ItemActionStore, LootWindowRefusal, LootWindowRequestStatus, LootWindowStore, MeleeActionStore,
+    MemberPresence, MemberSnapshot, MemberStatsStore, QuestActionStore, RealmChatRequest,
+    SpeakerFacts, TaxiActionStore, VendorActionStore, WeatherStore,
 };
 use super::party::PartyOutcome;
 use super::*;
@@ -441,8 +441,10 @@ struct InMemoryStore {
     item_slots: Vec<(u64, u8)>,
     /// Recorded `set_sheathed` dispatches: (self_guid, state) — the `CMSG_SETSHEATHED` route (#101).
     sheathed: std::sync::Mutex<Vec<(u64, u8)>>,
-    channel_joins: std::sync::Mutex<Vec<String>>,
-    channel_messages: std::sync::Mutex<Vec<(String, String)>>,
+    /// What `channel_op` answers. `None` succeeds.
+    channel_outcome: Option<ChannelOutcome>,
+    /// Recorded `channel_op` calls: `(actor_guid, op, request)`.
+    channel_ops: std::sync::Mutex<Vec<(u64, u8, ChannelRequest)>>,
     /// The lootable copper `loot_target_money` reports for any target (default 0).
     corpse_money: u32,
     /// Parked private System Messages world entry replays (a Package `on_login` hook's output).
@@ -2767,26 +2769,6 @@ impl WorldStore for InMemoryStore {
     fn entity_max_health(&self, _guid: u64) -> u32 {
         100
     }
-    fn join_channel(&self, _account_id: u64, _self_guid: u64, channel: String) -> Result<()> {
-        self.channel_joins.lock().unwrap().push(channel);
-        Ok(())
-    }
-    fn leave_channel(&self, _account_id: u64, _self_guid: u64, _channel: String) -> Result<()> {
-        Ok(())
-    }
-    fn send_channel_message(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        channel: String,
-        message: String,
-    ) -> Result<()> {
-        self.channel_messages
-            .lock()
-            .unwrap()
-            .push((channel, message));
-        Ok(())
-    }
     fn superseded_old_rank(&self, _new_spell: u32, _player_guid: u64) -> Option<u32> {
         self.trainer_superseded
     }
@@ -4139,6 +4121,25 @@ impl ChatActionStore for InMemoryStore {
             .unwrap()
             .push((speaker_guid, request));
         Ok(self.realm_chat_outcome.unwrap_or(ChatOutcome::Delivered))
+    }
+}
+
+impl ChannelActionStore for InMemoryStore {
+    fn channel_op(
+        &self,
+        actor_guid: u64,
+        op: u8,
+        request: ChannelRequest,
+    ) -> Result<ChannelOutcome> {
+        self.channel_ops
+            .lock()
+            .unwrap()
+            .push((actor_guid, op, request));
+        Ok(self.channel_outcome.unwrap_or(ChannelOutcome::Done))
+    }
+
+    fn channel_roster(&self, _team: u32, _channel_name: &str) -> Result<Option<ChannelRoster>> {
+        Ok(None)
     }
 }
 
@@ -11081,6 +11082,66 @@ fn messagechat_party_from_an_ungrouped_caller_replies_not_in_group() {
             );
         }
         other => panic!("expected SMSG_PARTY_COMMAND_RESULT(NotInGroup), got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+}
+
+#[test]
+fn join_channel_runs_the_channel_op_as_the_sessions_character() {
+    let mut s = quest_store();
+    s.speaker_facts = Some(human_speaker());
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+    wow_world_messages::vanilla::CMSG_JOIN_CHANNEL {
+        channel_name: "Trade - City".into(),
+        channel_password: String::new(),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    CMSG_QUESTGIVER_STATUS_QUERY {
+        guid: Guid::new(50),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_QUESTGIVER_STATUS(_) => {} // YOU_JOINED returns on the Relay
+        other => panic!("expected the sentinel (no reply on a successful join), got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+    let ops = store.channel_ops.lock().unwrap();
+    assert_eq!(ops.len(), 1);
+    let (actor_guid, op, request) = &ops[0];
+    assert_eq!((*actor_guid, *op), (1, 0));
+    assert_eq!(request.channel_name, "Trade - City");
+}
+
+/// A refused join answers WRONG_PASSWORD 0x04 on the session's own socket.
+#[test]
+fn a_refused_join_answers_the_notice_on_the_session() {
+    let mut s = quest_store();
+    s.speaker_facts = Some(human_speaker());
+    s.channel_outcome = Some(ChannelOutcome::Refused(
+        lyracore_shared::channel::ChannelRefusal::WrongPassword,
+    ));
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+    wow_world_messages::vanilla::CMSG_JOIN_CHANNEL {
+        channel_name: "Rx".into(),
+        channel_password: "guess".into(),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_CHANNEL_NOTIFY(notify) => {
+            assert_eq!(
+                notify.notify_type,
+                wow_world_messages::vanilla::ChatNotify::WrongPasswordNotice
+            );
+            assert_eq!(notify.channel_name, "Rx");
+        }
+        other => panic!("expected SMSG_CHANNEL_NOTIFY, got {other}"),
     }
     drop(client);
     server.join().unwrap();

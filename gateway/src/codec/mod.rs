@@ -16,6 +16,7 @@
 
 pub mod addon;
 pub mod auth_session;
+pub mod channel;
 pub mod social;
 pub mod update_mask;
 
@@ -44,13 +45,12 @@ mod values;
 mod weather;
 
 pub use social::{
-    build_channel_message, build_chat_message_to, build_emote_anim, build_friend_list_response,
-    build_friend_status, build_gm_system_message, build_group_decline, build_group_invite,
-    build_group_list, build_group_list_raw, build_group_set_leader, build_ignore_list_response,
-    build_minimap_ping, build_party_command_result, build_random_roll, build_ready_check,
-    build_ready_check_answer, build_realm_chat_line, build_target_icon_list_raw,
-    build_target_icon_update, build_text_emote, build_whisper, build_who_response_raw, FriendView,
-    WhoPlayerView,
+    build_chat_message_to, build_emote_anim, build_friend_list_response, build_friend_status,
+    build_gm_system_message, build_group_decline, build_group_invite, build_group_list,
+    build_group_list_raw, build_group_set_leader, build_ignore_list_response, build_minimap_ping,
+    build_party_command_result, build_random_roll, build_ready_check, build_ready_check_answer,
+    build_realm_chat_line, build_target_icon_list_raw, build_target_icon_update, build_text_emote,
+    build_whisper, build_who_response_raw, FriendView, WhoPlayerView,
 };
 
 // Re-export packet-family surfaces through `crate::codec::<sym>`.

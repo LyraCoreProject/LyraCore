@@ -1,14 +1,13 @@
-//! Combat family leftovers: selection, pet commands, the run-speed ack, sheathing and chat
-//! channels. Melee start and stop belong to the melee seam in `melee.rs`; every cast opcode, the
-//! `CMSG_CAST_SPELL` routes and both cancellations, belongs to the cast seam in `cast`.
+//! Combat family leftovers: selection, pet commands, the run-speed ack and sheathing. Melee start
+//! and stop belong to the melee seam in `melee.rs`; every cast opcode, the `CMSG_CAST_SPELL` routes
+//! and both cancellations, belongs to the cast seam in `cast`.
 
 use super::super::*;
 
-/// Combat family leftovers: selection, pet commands, the run-speed ack, sheathing and chat
-/// channels. Each arm is best-effort — the session-fatal desync exits went to the melee seam with
-/// the two melee opcodes that owned them.
+/// Combat family leftovers: selection, pet commands, the run-speed ack and sheathing. Each arm is
+/// best-effort. The session-fatal desync exits went to the melee seam with the two melee opcodes
+/// that owned them.
 pub(crate) fn handle_combat<St: WorldStore + ?Sized>(
-    tx: &SessionTx,
     store: &St,
     conn: &mut WorldConn,
     msg: ClientOpcodeMessage,
@@ -54,50 +53,6 @@ pub(crate) fn handle_combat<St: WorldStore + ?Sized>(
                     "world: set_sheathed({state}) ignored (account {}): {e}",
                     conn.account_id
                 );
-            }
-        }
-        // Chat channels: the client auto-sends JOIN for General/Trade/LocalDefense on
-        // zone-in; ack with SMSG_CHANNEL_NOTIFY(YouJoined) so the tab arms (the client won't
-        // accept channel lines for a channel it never got the join notice for). Re-joins are
-        // idempotent (the module dedupes; vanilla re-acks). Passwords are ignored (no private
-        // channels this slice).
-        ClientOpcodeMessage::CMSG_JOIN_CHANNEL(c) => {
-            if let Err(e) = store.join_channel(conn.account_id, self_guid, c.channel_name.clone()) {
-                log::debug!(
-                    "world: join_channel failed (account {}): {e}",
-                    conn.account_id
-                );
-            } else {
-                use wow_world_messages::vanilla::{ChatNotify, SMSG_CHANNEL_NOTIFY};
-                send(
-                    tx,
-                    Outbound::One(ServerOpcodeMessage::SMSG_CHANNEL_NOTIFY(Box::new(
-                        SMSG_CHANNEL_NOTIFY {
-                            notify_type: ChatNotify::YouJoinedNotice,
-                            channel_name: c.channel_name,
-                        },
-                    ))),
-                )?;
-            }
-        }
-        ClientOpcodeMessage::CMSG_LEAVE_CHANNEL(c) => {
-            if let Err(e) = store.leave_channel(conn.account_id, self_guid, c.channel_name.clone())
-            {
-                log::debug!(
-                    "world: leave_channel failed (account {}): {e}",
-                    conn.account_id
-                );
-            } else {
-                use wow_world_messages::vanilla::{ChatNotify, SMSG_CHANNEL_NOTIFY};
-                send(
-                    tx,
-                    Outbound::One(ServerOpcodeMessage::SMSG_CHANNEL_NOTIFY(Box::new(
-                        SMSG_CHANNEL_NOTIFY {
-                            notify_type: ChatNotify::YouLeftNotice,
-                            channel_name: c.channel_name,
-                        },
-                    ))),
-                )?;
             }
         }
         other => return Ok(Some(other)),

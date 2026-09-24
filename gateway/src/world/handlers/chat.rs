@@ -1,7 +1,7 @@
 //! Realm Chat dispatcher: the `CMSG_MESSAGECHAT` kinds that become Realm Chat Lines. The Gateway
 //! reads the Speaker Facts on the Home Shard, the Module decides the audience on Realm-core, and
-//! the Relay (`stdb::world_view::realm_chat_appeared`) delivers the line. Say, yell and every kind
-//! this file does not own pass through.
+//! the Relay (`stdb::world_view::realm_chat_appeared`) delivers the line. Party and channel lines
+//! are Realm Chat Lines. Say, yell and every kind this file does not own pass through.
 
 use super::super::*;
 use lyracore_shared::chat::{chat_kind, ChatRefusal};
@@ -106,6 +106,25 @@ pub(crate) fn dispatch_chat_action<St: ChatActionStore + ?Sized>(
                 refusal => refusal_outbound(player, refusal),
             }
         }
+        CMSG_MESSAGECHAT_ChatType::Channel { channel } => {
+            let typed = channel.clone();
+            match send_line(store, player, |speaker| RealmChatRequest {
+                kind: chat_kind::CHANNEL,
+                language: language.as_int(),
+                channel_name: channel,
+                target_guid: 0,
+                message,
+                speaker,
+            })? {
+                Some(ChatRefusal::Channel(refusal)) => vec![super::channel::refusal_notice(
+                    refusal,
+                    typed,
+                    player.self_guid.unwrap_or(0),
+                    String::new(),
+                )],
+                refusal => refusal_outbound(player, refusal),
+            }
+        }
         chat_type => {
             return Ok(ChatActionOutcome::PassThrough(
                 ClientOpcodeMessage::CMSG_MESSAGECHAT(Box::new(CMSG_MESSAGECHAT {
@@ -170,7 +189,7 @@ fn refusal_outbound(player: ChatActionPlayer, refusal: Option<ChatRefusal>) -> V
 }
 
 /// A dead reducer transport cannot serve any further request, so it ends the World Session.
-fn is_transport_failure(error: &anyhow::Error) -> bool {
+pub(super) fn is_transport_failure(error: &anyhow::Error) -> bool {
     error
         .chain()
         .any(|cause| cause.to_string().contains("reducer transport disconnected"))
@@ -179,6 +198,7 @@ fn is_transport_failure(error: &anyhow::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lyracore_shared::channel::ChannelRefusal;
     use std::sync::Mutex;
     use wow_world_messages::vanilla::{Language, CMSG_PING};
 
@@ -384,6 +404,71 @@ mod tests {
         let outbound =
             handled(dispatch_chat_action(&store, player(), party(Language::Common)).unwrap());
         assert!(outbound.is_empty());
+    }
+
+    fn channel_line(channel: &str) -> ClientOpcodeMessage {
+        line(
+            CMSG_MESSAGECHAT_ChatType::Channel {
+                channel: channel.to_string(),
+            },
+            Language::Dwarvish,
+        )
+    }
+
+    #[test]
+    fn a_channel_line_carries_the_typed_channel_and_the_clients_language() {
+        let store = store(None);
+        let outbound =
+            handled(dispatch_chat_action(&store, player(), channel_line("trade - City")).unwrap());
+        assert!(outbound.is_empty(), "the line itself returns on the Relay");
+        assert_eq!(
+            store.requests.lock().unwrap().as_slice(),
+            &[(
+                42,
+                RealmChatRequest {
+                    kind: 0x0E,
+                    language: 6,
+                    channel_name: "trade - City".to_string(),
+                    target_guid: 0,
+                    message: "form up".to_string(),
+                    speaker: speaker(),
+                }
+            )]
+        );
+    }
+
+    /// cm:Channel.cpp:593-664 answers each refused line with one notice to the speaker alone.
+    #[test]
+    fn a_refused_channel_line_answers_the_channels_notice() {
+        for (refusal, code) in [
+            (ChannelRefusal::NotMember, 0x05),
+            (ChannelRefusal::Muted, 0x11),
+            (ChannelRefusal::NotModerator, 0x06),
+        ] {
+            let store = store(Some(Ok(ChatOutcome::Refused(ChatRefusal::Channel(
+                refusal,
+            )))));
+            let outbound =
+                handled(dispatch_chat_action(&store, player(), channel_line("Rx")).unwrap());
+            let mut outbound = outbound.into_iter();
+            match (outbound.next(), outbound.next()) {
+                (Some(Outbound::Raw { opcode, body }), None) => {
+                    assert_eq!(opcode, 0x0099);
+                    assert_eq!(body, [code, b'R', b'x', 0], "{refusal:?}");
+                }
+                _ => panic!("expected one SMSG_CHANNEL_NOTIFY for {refusal:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn an_unknown_language_on_a_channel_answers_the_vanilla_notification() {
+        let store = store(Some(Ok(ChatOutcome::Refused(ChatRefusal::UnknownLanguage))));
+        let outbound = handled(dispatch_chat_action(&store, player(), channel_line("Rx")).unwrap());
+        assert!(matches!(
+            only(outbound),
+            ServerOpcodeMessage::SMSG_NOTIFICATION(_)
+        ));
     }
 
     #[test]

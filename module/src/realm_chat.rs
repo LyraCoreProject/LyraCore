@@ -133,6 +133,7 @@ fn audience(
 ) -> Result<ChatAudience, ChatRefusal> {
     match request.kind {
         chat_kind::PARTY => crate::group::party_chat_audience(ctx, speaker_guid),
+        chat_kind::CHANNEL => crate::channel::chat_audience(ctx, speaker_guid, request),
         _ => Err(ChatRefusal::UnsupportedKind),
     }
 }

@@ -7,6 +7,7 @@
 
 mod account;
 mod auction;
+mod channel;
 mod chat;
 mod guild;
 mod items;
@@ -27,6 +28,8 @@ use super::bindings::*;
 // Re-exported so `subscriptions.rs` keeps resolving `super::reads::build_quest_log_slots` at the
 // same path it used before the domain split.
 pub(crate) use quest::build_quest_log_slots;
+
+pub(crate) use channel::ChannelIndex;
 
 /// Sum a player's held quantity of item `entry` over `game_item_instance` (the coordinator reads any
 /// player's items — RLS-bypassed, like the quest log). The gateway twin of the module's

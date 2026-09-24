@@ -760,6 +760,22 @@ parity_test!(parity_game_realm_chat_event, "game_realm_chat_event", lyracore_mod
     id, kind, speaker_guid, language, chat_tag, channel_name, message, recipients, ignorable,
     created_at,
 });
+// Chat Channels on Realm-core. The index reads channels and members; a drifted notice column
+// mis-encodes every Channel Notice on every Gateway.
+parity_test!(parity_game_chat_channel, "game_chat_channel", lyracore_module::ChatChannel, bindings::chat_channel_type::ChatChannel, {
+    channel_id, team, name_key, name, builtin_id, flags, password, owner_guid, announcements,
+    moderated,
+});
+parity_test!(parity_game_chat_channel_member, "game_chat_channel_member", lyracore_module::ChatChannelMember, bindings::chat_channel_member_type::ChatChannelMember, {
+    id, channel_id, character_guid, member_flags, account_id, claim_generation,
+});
+parity_test!(parity_game_chat_channel_ban, "game_chat_channel_ban", lyracore_module::ChatChannelBan, bindings::chat_channel_ban_type::ChatChannelBan, {
+    id, channel_id, character_guid,
+});
+parity_test!(parity_game_chat_channel_notice_event, "game_chat_channel_notice_event", lyracore_module::ChatChannelNoticeEvent, bindings::chat_channel_notice_event_type::ChatChannelNoticeEvent, {
+    id, notice, channel_name, subject_guid, actor_guid, old_flags, new_flags, channel_flags, text,
+    recipients, created_at,
+});
 // Private (no per-player subscriber to decode these — every wire-visible roll transition still
 // rides `game_group_event`, unchanged). Subscribed so the gateway's loot-roll relay
 // (`world::loot::relay_tick`) can promote a world shard's staging roll onto realm-core and read
@@ -1054,12 +1070,6 @@ parity_test!(parity_game_creature_cast, "game_creature_cast", lyracore_module::C
 parity_test!(parity_game_resurrect_request, "game_resurrect_request", lyracore_module::ResurrectRequest, bindings::resurrect_request_type::ResurrectRequest, {
     target_guid, target_identity, caster_guid, caster_name, points, created_at,
 });
-parity_test!(parity_game_channel_event, "game_channel_event", lyracore_module::ChannelEvent, bindings::channel_event_type::ChannelEvent, {
-    id, channel, channel_display, sender_guid, message, created_at,
-});
-parity_test!(parity_game_channel_member, "game_channel_member", lyracore_module::ChannelMember, bindings::channel_member_type::ChannelMember, {
-    id, channel, character_guid, owner_identity,
-});
 parity_test!(parity_game_aura, "game_aura", lyracore_module::Aura, bindings::aura_type::Aura, {
     id, target_guid, caster_guid, spell_id, slot, level, flags, applied_at, expires_at, effect_id,
     eff_kind, amount, eff_p0, eff_p0_kind, eff_p1, period_ms, amount_remaining, stacks,
@@ -1198,6 +1208,10 @@ const MANIFEST_TABLES: &[&str] = &[
     "game_whisper_event",
     "game_system_message_event",
     "game_realm_chat_event",
+    "game_chat_channel",
+    "game_chat_channel_member",
+    "game_chat_channel_ban",
+    "game_chat_channel_notice_event",
     "game_loot_roll",
     "game_loot_roll_vote",
     "game_guid_allocator",
@@ -1258,8 +1272,6 @@ const MANIFEST_TABLES: &[&str] = &[
     "game_dynamic_object",
     "game_combat_event",
     "game_melee_attack",
-    "game_channel_event",
-    "game_channel_member",
     "game_spell_cast_event",
     "game_spell_impact_event",
     "game_creature_cast",

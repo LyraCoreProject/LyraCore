@@ -10,6 +10,7 @@
 pub mod auction;
 pub mod bank;
 pub mod calendar;
+pub mod channel;
 pub mod chat;
 pub mod constants;
 pub mod duel;

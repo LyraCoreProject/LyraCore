@@ -51,6 +51,7 @@ impl __sdk::__query_builder::HasCols for AccountClaim {
 pub struct AccountClaimIxCols {
     pub account_id: __sdk::__query_builder::IxCol<AccountClaim, u64>,
     pub character_guid: __sdk::__query_builder::IxCol<AccountClaim, u64>,
+    pub closed: __sdk::__query_builder::IxCol<AccountClaim, bool>,
 }
 
 impl __sdk::__query_builder::HasIxCols for AccountClaim {
@@ -59,6 +60,7 @@ impl __sdk::__query_builder::HasIxCols for AccountClaim {
         AccountClaimIxCols {
             account_id: __sdk::__query_builder::IxCol::new(table_name, "account_id"),
             character_guid: __sdk::__query_builder::IxCol::new(table_name, "character_guid"),
+            closed: __sdk::__query_builder::IxCol::new(table_name, "closed"),
         }
     }
 }

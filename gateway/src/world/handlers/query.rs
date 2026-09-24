@@ -360,19 +360,6 @@ pub(crate) fn handle_query<St: WorldStore + ?Sized>(
                         message,
                     );
                 }
-                // Channel: route to the membership-validated reducer; the relay fans it out
-                // to members. A rejection (not joined / dead) is per-action — log + drop, vanilla
-                // shows nothing for a failed channel line.
-                CMSG_MESSAGECHAT_ChatType::Channel { channel } => {
-                    if let Err(e) =
-                        store.send_channel_message(conn.account_id, self_guid, channel, message)
-                    {
-                        log::debug!(
-                            "world: channel message rejected (account {}): {e}",
-                            conn.account_id
-                        );
-                    }
-                }
                 // Whisper: private delivery to a named player (+ a "To X:" echo to the sender). The
                 // module resolves the name (case-insensitive) → recipient identity and RLS-scopes both
                 // rows. A rejected whisper (no such online player) → SMSG_CHAT_PLAYER_NOT_FOUND so the
@@ -404,7 +391,8 @@ pub(crate) fn handle_query<St: WorldStore + ?Sized>(
                         )?;
                     }
                 }
-                _ => {} // guild/channel/etc. need systems that don't exist yet
+                // Party and channel lines never get here: `dispatch_chat_action` consumes them.
+                _ => {}
             }
         }
         // Social tier: a text emote (/dance, /wave, …) → send_emote (insert a broadcast
