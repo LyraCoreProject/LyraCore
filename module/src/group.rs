@@ -532,20 +532,16 @@ fn roster_payload(ctx: &ReducerContext, group_id: u64) -> Option<String> {
     )
 }
 
-/// A stored `group_type`. Only [`GroupKind::wire`] ever writes the column, so the Party fallback
-/// is unreachable; it is the safe reading because it keeps the smaller member cap.
 pub(crate) fn group_kind_of(group: &Group) -> GroupKind {
-    GroupKind::from_wire(group.group_type).unwrap_or_default()
+    GroupKind::from_wire_or_default(group.group_type)
 }
 
-/// A stored `raid_slot`. Only [`RaidSlot::wire`] ever writes the column, so the fallback to
-/// Subgroup 0 without the Assistant flag is unreachable.
 pub(crate) fn raid_slot_of(member: &GroupMember) -> RaidSlot {
-    RaidSlot::from_wire(member.raid_slot).unwrap_or_default()
+    RaidSlot::from_wire_or_default(member.raid_slot)
 }
 
 /// Whether `character_guid` is in a Raid, read from this database's own rows: the authority on
-/// Realm-core, the mirror on a World Shard. The raid quest-credit rule is the first caller.
+/// Realm-core, the mirror on a World Shard.
 pub(crate) fn in_raid(ctx: &ReducerContext, character_guid: u64) -> bool {
     group_of(ctx, character_guid)
         .and_then(|member| ctx.db.game_group().group_id().find(member.group_id))

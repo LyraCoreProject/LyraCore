@@ -8,18 +8,6 @@ use super::super::bindings::*;
 use super::super::connection::Coordinator;
 use lyracore_shared::group::{GroupKind, RaidSlot};
 
-/// A cached `game_group.group_type`. The Module writes only valid bytes, so the Party fallback is
-/// unreachable.
-fn group_kind_of(byte: u8) -> GroupKind {
-    GroupKind::from_wire(byte).unwrap_or_default()
-}
-
-/// A cached `game_group_member.raid_slot`. The Module writes only valid bytes, so the fallback to
-/// Subgroup 0 without the Assistant flag is unreachable.
-fn raid_slot_of(byte: u8) -> RaidSlot {
-    RaidSlot::from_wire(byte).unwrap_or_default()
-}
-
 impl Coordinator {
     pub(crate) fn stable_party_holder_observation(
         &self,
@@ -126,7 +114,9 @@ impl Coordinator {
                     .game_group_member()
                     .id()
                     .find(&row_id)
-                    .map_or_else(Default::default, |row| raid_slot_of(row.raid_slot)),
+                    .map_or_else(Default::default, |row| {
+                        RaidSlot::from_wire_or_default(row.raid_slot)
+                    }),
             })
             .collect();
         Ok(Some(crate::world::party::GroupRoster {
@@ -140,7 +130,7 @@ impl Coordinator {
             loot_method: group.loot_method,
             loot_threshold: group.loot_threshold,
             master_looter_guid: group.master_looter_guid,
-            kind: group_kind_of(group.group_type),
+            kind: GroupKind::from_wire_or_default(group.group_type),
             members,
             partitions: Vec::new(),
         }))
@@ -201,12 +191,12 @@ impl Coordinator {
             loot_method: group.loot_method,
             loot_threshold: group.loot_threshold,
             master_looter_guid: group.master_looter_guid,
-            kind: group_kind_of(group.group_type),
+            kind: GroupKind::from_wire_or_default(group.group_type),
             members: rows
                 .into_iter()
                 .map(|(_, guid, slot)| crate::world::party::GroupRosterMember {
                     guid,
-                    slot: raid_slot_of(slot),
+                    slot: RaidSlot::from_wire_or_default(slot),
                 })
                 .collect(),
             partitions,

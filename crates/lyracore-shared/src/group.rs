@@ -42,6 +42,12 @@ impl GroupKind {
         }
     }
 
+    /// A stored `group_type`. Only [`Self::wire`] writes the column, so the Party fallback is
+    /// unreachable. It is the safe reading because it keeps the smaller member cap.
+    pub fn from_wire_or_default(byte: u8) -> Self {
+        Self::from_wire(byte).unwrap_or_default()
+    }
+
     pub const fn member_cap(self) -> usize {
         match self {
             Self::Party => GROUP_MAX_MEMBERS,
@@ -87,6 +93,12 @@ impl RaidSlot {
     /// `None` for a byte with a bit set outside the Subgroup and the Assistant flag.
     pub const fn from_wire(byte: u8) -> Option<Self> {
         Self::new(byte & !Self::ASSISTANT, byte & Self::ASSISTANT != 0)
+    }
+
+    /// A stored `raid_slot`. Only [`Self::wire`] writes the column, so the fallback to Subgroup 0
+    /// without the Assistant flag is unreachable.
+    pub fn from_wire_or_default(byte: u8) -> Self {
+        Self::from_wire(byte).unwrap_or_default()
     }
 
     pub const fn subgroup(self) -> u8 {
