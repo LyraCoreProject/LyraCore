@@ -126,7 +126,7 @@ impl GuildActionStore for crate::stdb::Coordinator {
     }
 
     fn guild_characters_named(&self, name: &str) -> Result<Vec<u64>> {
-        party::resolve_all_by_name(self, name)
+        presence::resolve_all_by_name(self, name)
     }
 
     fn guild_gm_level(&self, actor_guid: u64) -> Result<u8> {
