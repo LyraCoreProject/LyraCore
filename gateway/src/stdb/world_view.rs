@@ -2518,9 +2518,9 @@ fn friend_notice_candidates(view: &WorldView, subject_guid: u64) -> Vec<Arc<View
         .collect()
 }
 
-/// A Character's `online` flag flipped false → true on this Shard → `FRIEND_ONLINE` to every
-/// same-team viewer, on any Shard, who lists it as a friend (cm:CharacterHandler.cpp:856,
-/// cm:WorldSession.cpp:754, cm:SocialMgr.cpp:263-292).
+/// A Character logged in on this Shard → `FRIEND_ONLINE` to every same-team viewer, on any Shard,
+/// who lists it as a friend (cm:CharacterHandler.cpp:856, cm:WorldSession.cpp:754,
+/// cm:SocialMgr.cpp:263-292).
 ///
 /// Hooked to `game_character` (shard-local, inside `player_login`'s own transaction), never the
 /// realm-wide Account Claim: `CMSG_PLAYER_LOGIN`'s handler calls `claim_session` BEFORE
@@ -2528,13 +2528,22 @@ fn friend_notice_candidates(view: &WorldView, subject_guid: u64) -> Vec<Arc<View
 /// entered the world yet, or never will if `enter_world` then refuses — carrying its stale
 /// pre-login level and zone either way. This row IS the just-committed login state, so no further
 /// read is needed: race/class/level/zone come straight off it, and Away Status is always `None`
-/// (login clears it — nobody crosses a loading screen AFK). Marks the Character in this Gateway's
+/// (login clears it — nobody crosses a loading screen AFK).
+///
+/// The edge is landing on a fresh, nonzero `session_start_micros`, not `online` flipping false →
+/// true. `player_login` is the only writer that ever stamps `session_start_micros` to a real value;
+/// every `persist_entity` call — a real logout AND a same-database transfer's `freeze_live_entity`
+/// alike — zeroes it back out, but `freeze_live_entity` passes `set_offline: false` and so never
+/// touches `online`. An abandoned, rolled-back transfer therefore leaves a Character `online: true`
+/// with no live entity; a plain `old.online` check would never fire for that Character's real next
+/// login, because `online` reads true on both sides of it. Marks the Character in this Gateway's
 /// own `online_characters` set, the dedup [`account_claim_changed`] reads before it answers
 /// FRIEND_OFFLINE for the same Character's later claim close.
 fn character_online_changed(view: &WorldView, old: &Character, new: &Character) {
-    if old.online || !new.online {
+    if new.session_start_micros == 0 || old.session_start_micros == new.session_start_micros {
         return;
     }
+    debug_assert!(new.online, "player_login always sets online alongside session_start_micros");
     view.mark_character_online(new.guid);
     let team = lyracore_shared::faction::team_for_race(new.race);
     let online_fields = crate::codec::FriendOnline {
@@ -5663,7 +5672,8 @@ mod account_claim_relay_tests {
     }
 
     /// A `game_character` row with only the columns this relay reads set to something other than
-    /// zero, the rest at whatever a fresh row would have.
+    /// zero, the rest at whatever a fresh row would have. `session_start_micros` is `player_login`'s
+    /// own stamp — 0 outside a session, a real timestamp inside one.
     fn character_row(
         guid: u64,
         race: u8,
@@ -5671,6 +5681,7 @@ mod account_claim_relay_tests {
         level: u8,
         zone_id: u32,
         online: bool,
+        session_start_micros: u64,
     ) -> Character {
         Character {
             guid,
@@ -5705,7 +5716,7 @@ mod account_claim_relay_tests {
             home_y: 0.0,
             home_z: 0.0,
             played_total_secs: 0,
-            session_start_micros: 0,
+            session_start_micros,
             health: 0,
             power: 0,
             respec_count: 0,
@@ -5796,8 +5807,8 @@ mod account_claim_relay_tests {
 
         // Last logged out at level 21 in zone 12; this login already leveled up and landed the
         // Character in zone 33 — the row's OWN fields, not a stale earlier read.
-        let old = character_row(FRIEND, 1, 4, 21, 12, false);
-        let new = character_row(FRIEND, 1, 4, 22, 33, true);
+        let old = character_row(FRIEND, 1, 4, 21, 12, false, 0);
+        let new = character_row(FRIEND, 1, 4, 22, 33, true, 500_000);
 
         character_online_changed(&view, &old, &new);
 
@@ -5836,23 +5847,58 @@ mod account_claim_relay_tests {
         );
     }
 
-    /// An UPDATE that is not the false→true edge — an already-online Character's level-up or
-    /// logout — fires nothing and marks nothing.
+    /// An UPDATE that is not a login — an already-online Character's level-up, a logout, or a
+    /// same-database transfer's freeze/rebuild with no real login in between — fires nothing and
+    /// marks nothing.
     #[test]
-    fn character_online_changed_ignores_every_update_that_is_not_the_online_edge() {
+    fn character_online_changed_ignores_every_update_that_is_not_a_login() {
         let view = WorldView::new(true);
         let (_friend, friend_rx) = listener(&view, 0, 20, ALLIANCE);
 
-        let old = character_row(FRIEND, 1, 4, 21, 33, true);
-        let new = character_row(FRIEND, 1, 4, 22, 33, true); // a level-up, already online
+        let old = character_row(FRIEND, 1, 4, 21, 33, true, 500_000);
+        let new = character_row(FRIEND, 1, 4, 22, 33, true, 500_000); // a level-up, same session
         character_online_changed(&view, &old, &new);
         assert!(friend_rx.try_recv().is_err());
         assert!(!view.take_character_online(FRIEND));
 
-        let old = character_row(FRIEND, 1, 4, 22, 33, true);
-        let new = character_row(FRIEND, 1, 4, 22, 33, false); // true -> false is a LOGOUT
+        let old = character_row(FRIEND, 1, 4, 22, 33, true, 500_000);
+        let new = character_row(FRIEND, 1, 4, 22, 33, false, 0); // a real logout
         character_online_changed(&view, &old, &new);
         assert!(friend_rx.try_recv().is_err());
+
+        // A same-database transfer's freeze zeroes session_start_micros without touching `online`
+        // (`freeze_live_entity` calls `persist_entity` with `set_offline: false`) — no login
+        // happened, so this must not fire either, even though `online` reads true on both sides.
+        let old = character_row(FRIEND, 1, 4, 22, 33, true, 500_000);
+        let new = character_row(FRIEND, 1, 4, 22, 33, true, 0); // transfer freeze, still online
+        character_online_changed(&view, &old, &new);
+        assert!(friend_rx.try_recv().is_err());
+        assert!(!view.take_character_online(FRIEND));
+    }
+
+    /// **The abandoned-transfer case a review round flagged:** a rolled-back same-database
+    /// transfer leaves `online: true` with no live entity — `freeze_live_entity` never sets
+    /// `online` false, and the reaper's rollback only deletes the escrow, not the Character's
+    /// stuck row. A plain `old.online` check would read true on both sides of the Character's
+    /// real next login and never fire. The login's own `session_start_micros` stamp still
+    /// changes — 0 (zeroed by the freeze) to a real timestamp — so the edge fires anyway.
+    #[test]
+    fn character_online_changed_fires_for_a_real_login_even_when_online_was_stuck_true() {
+        let view = WorldView::new(true);
+        let (_friend, friend_rx) = listener(&view, 0, 20, ALLIANCE);
+
+        let old = character_row(FRIEND, 1, 4, 20, 12, true, 0);
+        let new = character_row(FRIEND, 1, 4, 20, 12, true, 700_000);
+        character_online_changed(&view, &old, &new);
+
+        assert!(
+            friend_rx.try_recv().is_ok(),
+            "the real login must be heard even though `online` never flipped"
+        );
+        assert!(
+            view.take_character_online(FRIEND),
+            "the login must be marked so the later claim close can find it"
+        );
     }
 
     /// **The other half of the fix:** the online mark is one-shot and starts unset, so a claim
