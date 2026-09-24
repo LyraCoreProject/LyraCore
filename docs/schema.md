@@ -54,12 +54,12 @@ publish presents as an unrelated mid-session hang, not a loud "no such table".
 
 ## 2. Inventory
 
-**270 tables**, all of them in `module/src/**`: 128 public, 142 private. No table comes from a
+**275 tables**, all of them in `module/src/**`: 128 public, 147 private. No table comes from a
 package in this tree; `packages/example` is the only in-tree package and it declares none. Recount
 rather than trust the numbers below, which drift on every schema change:
 
 ```bash
-grep -rn '^#\[table(' module/src --include='*.rs' | wc -l   # 270 on 2026-09-24
+grep -rn '^#\[table(' module/src --include='*.rs' | wc -l   # 275 on 2026-09-24
 ```
 
 | Domain | Tables | Public | Where |
