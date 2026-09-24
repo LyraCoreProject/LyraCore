@@ -73,6 +73,7 @@ pub(crate) struct LiveConn {
     pub(crate) party_memberships: Arc<RwLock<PartyMembershipIndex>>,
     pub(crate) chat_channels: Arc<RwLock<super::reads::ChannelIndex>>,
     pub(crate) unfinished_auction_holds: Arc<RwLock<super::auction_holds::UnfinishedHoldIndex>>,
+    pub(crate) mail_escrows: Arc<RwLock<super::reads::MailEscrowIndex>>,
     /// Keeps this role's subscription active for the connection's lifetime.
     _sub: SubscriptionHandle,
 }
@@ -826,6 +827,7 @@ fn connect_subscribed(
             holds.remove(old);
             holds.insert(new);
         });
+    let mail_escrows = super::reads::watch_mail_escrows(&conn);
     let (tx, rx) = std::sync::mpsc::channel::<std::result::Result<(), String>>();
     let tx_err = tx.clone();
     let applied_commands = pump_commands.clone();
@@ -876,6 +878,7 @@ fn connect_subscribed(
         party_memberships,
         chat_channels,
         unfinished_auction_holds,
+        mail_escrows,
         _sub: sub,
     })
 }
@@ -1316,7 +1319,8 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // the only component that can see both databases, so a fence its predecessor abandoned is
         // re-derived from this row and driven forward. Private, read through the owner token. Every
         // connection in the set, because a letter fences on the sender's shard and a take fences on
-        // realm-core, and a single-database gateway simply never has a row here.
+        // realm-core. A single-database gateway holds only Reward Letters here, which the turn-in
+        // files on its one database.
         "SELECT * FROM game_mail_escrow",
         // Letter Copy's readable item text (`CMSG_MAIL_CREATE_TEXT_ITEM`). Same two-plane shape as
         // game_mail: a copied letter's text lives wherever the mail plane does, and it outlives the
@@ -1661,11 +1665,9 @@ fn ensure_mail_escrow_range(
     gateway_id: &str,
 ) {
     let Some(rc_name) = map.realm_core_db() else {
-        // The single-database plane never uses escrow; install a harmless local range for tests and
-        // for future same-plane callers without introducing a realm dependency.
-        if let Err(e) = crate::world::mail::install_escrow_id_range(1, u64::MAX) {
-            log::error!("could not install local mail escrow range: {e:#}");
-        }
+        // The Gateway must not mint escrow ids on the single-database plane. There a Reward
+        // Letter's id comes from the database's own GUID Range, and any local Gateway range would
+        // overlap it. No range is installed, so a mint here refuses.
         return;
     };
     let Some(rc) = conns.get(rc_name) else { return };

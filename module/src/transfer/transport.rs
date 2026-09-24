@@ -89,10 +89,6 @@ pub(crate) const MANIFEST_EXCLUDE: &[&str] = &["game_transfer_out"];
 ///   gateway re-pushes the certified projection with the membership row.
 /// - `game_group_target_icon` — a Target Icon belongs to the Group on the party authority. It names
 ///   the marked unit, and the unit keeps it across a Transfer with no row to carry.
-/// - `game_mail_escrow` — a mail attachment in flight. The fence is a fact about the DATABASE that
-///   took the value out of a purse, and the drive that settles it addresses that database; carrying
-///   the claim to the destination would move it away from the ledger holding the value. The
-///   character hops, the fence stays, and the reaper there still judges it.
 /// - `game_mail_delivery` — the mail plane's delivery receipts. They only exist where the
 ///   authoritative mail rows do, and no character transfers off realm-core.
 ///
@@ -124,7 +120,6 @@ pub(crate) const NOT_TRANSPORTED: &[&str] = &[
     "game_group_member_partition",
     "game_group_target_icon",
     "game_pet_command",
-    "game_mail_escrow",
     "game_mail_delivery",
     "game_character_shard",
     "game_active_taxi_flight",

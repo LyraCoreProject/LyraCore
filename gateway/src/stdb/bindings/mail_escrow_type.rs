@@ -26,6 +26,9 @@ pub struct MailEscrow {
     pub cod: u32,
     pub random_property_id: u32,
     pub delivery_delay_secs: u32,
+    pub sender_kind: u8,
+    pub sender_entry: u32,
+    pub mail_template_id: u32,
 }
 
 impl __sdk::InModule for MailEscrow {
@@ -55,6 +58,9 @@ pub struct MailEscrowCols {
     pub cod: __sdk::__query_builder::Col<MailEscrow, u32>,
     pub random_property_id: __sdk::__query_builder::Col<MailEscrow, u32>,
     pub delivery_delay_secs: __sdk::__query_builder::Col<MailEscrow, u32>,
+    pub sender_kind: __sdk::__query_builder::Col<MailEscrow, u8>,
+    pub sender_entry: __sdk::__query_builder::Col<MailEscrow, u32>,
+    pub mail_template_id: __sdk::__query_builder::Col<MailEscrow, u32>,
 }
 
 impl __sdk::__query_builder::HasCols for MailEscrow {
@@ -83,6 +89,9 @@ impl __sdk::__query_builder::HasCols for MailEscrow {
                 table_name,
                 "delivery_delay_secs",
             ),
+            sender_kind: __sdk::__query_builder::Col::new(table_name, "sender_kind"),
+            sender_entry: __sdk::__query_builder::Col::new(table_name, "sender_entry"),
+            mail_template_id: __sdk::__query_builder::Col::new(table_name, "mail_template_id"),
         }
     }
 }

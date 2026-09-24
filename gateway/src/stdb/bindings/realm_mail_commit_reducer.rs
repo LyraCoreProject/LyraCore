@@ -24,6 +24,9 @@ pub(super) struct RealmMailCommitArgs {
     pub cod: u32,
     pub cod_mail_id: u64,
     pub delivery_delay_secs: u32,
+    pub sender_kind: u8,
+    pub sender_entry: u32,
+    pub mail_template_id: u32,
 }
 
 impl From<RealmMailCommitArgs> for super::Reducer {
@@ -44,6 +47,9 @@ impl From<RealmMailCommitArgs> for super::Reducer {
             cod: args.cod,
             cod_mail_id: args.cod_mail_id,
             delivery_delay_secs: args.delivery_delay_secs,
+            sender_kind: args.sender_kind,
+            sender_entry: args.sender_entry,
+            mail_template_id: args.mail_template_id,
         }
     }
 }
@@ -80,6 +86,9 @@ pub trait realm_mail_commit {
         cod: u32,
         cod_mail_id: u64,
         delivery_delay_secs: u32,
+        sender_kind: u8,
+        sender_entry: u32,
+        mail_template_id: u32,
     ) -> __sdk::Result<()> {
         self.realm_mail_commit_then(
             escrow_id,
@@ -97,6 +106,9 @@ pub trait realm_mail_commit {
             cod,
             cod_mail_id,
             delivery_delay_secs,
+            sender_kind,
+            sender_entry,
+            mail_template_id,
             |_, _| {},
         )
     }
@@ -124,6 +136,9 @@ pub trait realm_mail_commit {
         cod: u32,
         cod_mail_id: u64,
         delivery_delay_secs: u32,
+        sender_kind: u8,
+        sender_entry: u32,
+        mail_template_id: u32,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -149,6 +164,9 @@ impl realm_mail_commit for super::RemoteReducers {
         cod: u32,
         cod_mail_id: u64,
         delivery_delay_secs: u32,
+        sender_kind: u8,
+        sender_entry: u32,
+        mail_template_id: u32,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -171,6 +189,9 @@ impl realm_mail_commit for super::RemoteReducers {
                 cod,
                 cod_mail_id,
                 delivery_delay_secs,
+                sender_kind,
+                sender_entry,
+                mail_template_id,
             },
             callback,
         )

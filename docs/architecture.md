@@ -574,8 +574,21 @@ attestation), `realm_mail_settle` (**delete last** — it refuses without the at
 Two things differ from a character transfer and both are deliberate. Recovery is **forward only**:
 the escrow row carries the whole letter, so a stalled fence is re-driven rather than refunded, and
 `reap_mail_escrows` has no rollback arm at all — a source-side read that finds no attestation has
-learned "not yet attested", never "not delivered". And a **single-database** gateway does not come
-here: purse and mail row share one transaction there, so `mail::apply_send` writes both directly.
+learned "not yet attested", never "not delivered". And a **single-database** send by a Character does
+not come here: purse and mail row share one transaction there, so `mail::apply_send` writes both
+directly.
+
+A Reward Letter (`module/src/mail_reward.rs`) uses the escrow on every plane. `gw_turn_in_quest`
+files it as a `game_mail_escrow` row held for the recipient, in the turn-in's own transaction, with
+the quest giver in `sender_kind`/`sender_entry` and the Mail Template in `mail_template_id`. No
+purse pays for it. The escrow id comes from the Home Shard's GUID Range, a slot no Gateway mints
+from. The Gateway then drives commit, confirm and settle: at once after the turn-in, at world entry
+and at a mailbox visit (`world::mail::redrive`). On a single-database realm it commits on that
+database. A playerbot's turn-in files none, because no Gateway drives a playerbot's mail.
+
+A Home Shard escrow row, a send or a Reward Letter, travels with its Character across a Transfer,
+keeping its escrow id. The new Home Shard's drive finishes it, and the receipt on Realm-core keeps a
+drive that races the hop to one letter.
 
 Mail Expiry can delete a mail row while a take is in flight. The take fence already moved that
 copper or item out of the row into the escrow row, so expiry cannot delete it. The payout on the

@@ -44,7 +44,8 @@ pub(crate) trait QuestActionStore: Send + Sync {
 
     /// Hand a completed quest in to `giver_guid` for its rewards. The module validates completion
     /// and grants money/XP/items; `reward_index` is the player's pick-1-of-N choice reward slot,
-    /// ignored by quests with no choice rewards.
+    /// ignored by quests with no choice rewards. A quest that sends a Reward Letter files it as
+    /// Escrow in the same transaction.
     fn turn_in_quest(
         &self,
         account_id: u64,
@@ -148,7 +149,14 @@ pub(crate) struct QuestActionPlayer {
 }
 
 pub(crate) enum QuestActionOutcome {
-    Handled { outbound: Vec<Outbound> },
+    Handled {
+        outbound: Vec<Outbound>,
+    },
+    /// The quest was turned in. The turn-in filed any Reward Letter it sends as Escrow, so the
+    /// session drives the Character's held letters after it sends `outbound`.
+    TurnedIn {
+        outbound: Vec<Outbound>,
+    },
     PassThrough(ClientOpcodeMessage),
 }
 
@@ -427,7 +435,7 @@ pub(crate) fn dispatch_quest_action<St: QuestActionStore + ?Sized>(
             ) {
                 // The popup echoes the definition's XP/money/items, so what it shows matches what
                 // the module granted. Unreadable details drop it — the turn-in already happened.
-                Ok(()) => Ok(QuestActionOutcome::Handled {
+                Ok(()) => Ok(QuestActionOutcome::TurnedIn {
                     outbound: match store.quest_detail_view(c.quest_id)? {
                         Some(detail) => vec![Outbound::One(
                             ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_COMPLETE(Box::new(
@@ -799,7 +807,8 @@ mod tests {
 
     fn outbound(outcome: QuestActionOutcome) -> Vec<Outbound> {
         match outcome {
-            QuestActionOutcome::Handled { outbound } => outbound,
+            QuestActionOutcome::Handled { outbound }
+            | QuestActionOutcome::TurnedIn { outbound } => outbound,
             QuestActionOutcome::PassThrough(_) => {
                 panic!("expected the quest module to handle this")
             }
@@ -1457,6 +1466,20 @@ mod tests {
         ));
     }
 
+    /// Only a granted turn-in can have filed a Reward Letter, so only it asks the session to drive
+    /// the Character's held letters.
+    #[test]
+    fn only_a_granted_turn_in_asks_for_the_held_letters_to_be_driven() {
+        let granted = dispatch_quest_action(&rewarded_turn_in(), player(), choose_reward(0));
+        assert!(matches!(granted, Ok(QuestActionOutcome::TurnedIn { .. })));
+        let refused = InMemoryQuestActions {
+            turn_in_error: Some("quest objectives are not complete".into()),
+            ..rewarded_turn_in()
+        };
+        let refused = dispatch_quest_action(&refused, player(), choose_reward(0));
+        assert!(matches!(refused, Ok(QuestActionOutcome::Handled { .. })));
+    }
+
     #[test]
     fn a_refused_turn_in_reoffers_the_reward_without_claiming_completion() {
         let actions = InMemoryQuestActions {
@@ -1638,5 +1661,70 @@ mod tests {
             actions.status_requests.lock().unwrap().as_slice(),
             &[(SELF_GUID, QUEST)]
         );
+    }
+}
+
+#[cfg(test)]
+mod reward_letter_durable_tests {
+    use super::QuestActionStore;
+    use crate::accept::BlockingTaskCapacity;
+    use crate::config::GatewayConfig;
+    use crate::durable_test_support::Standalone;
+    use crate::stdb::Coordinator;
+
+    /// The Module's reward letter fixture: Character 1 holds completed quest 509091, shaped like 3645,
+    /// Membership Card Renewal, at a clone of creature 620. The quest ender sends one Tempered
+    /// Blade (5090050, max durability 70) after 86,400 s.
+    const TESTER: u64 = 1;
+    const GIVER: u64 = 17_379_390_972_441_394_945;
+    const CARD_QUEST: u32 = 509_091;
+
+    /// The turn-in answers on the visibility pipe, whose row callbacks run before its reducer
+    /// callback, so the escrow index already names the new letter when the session drives it. On a
+    /// single-database realm the drive delivers it on the same database.
+    #[test]
+    #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+    fn the_drive_right_after_a_turn_in_finds_and_delivers_its_reward_letter() {
+        for variable in [
+            "LYRACORE_SHARD_MAP",
+            "LYRACORE_SHARD_MAP_FILE",
+            "LYRACORE_REALM_CORE",
+        ] {
+            assert!(
+                std::env::var_os(variable).is_none(),
+                "unset {variable} for this private test"
+            );
+        }
+        let mut standalone = Standalone::start("reward-letter-gateway");
+        standalone.publish_module();
+        standalone.assert_call("claim_operator", &[]);
+        standalone.assert_call("install_guid_range", &["0"]);
+        standalone.assert_call("debug_spawn_player_entity", &["1"]);
+        standalone.assert_call("debug_stage_reward_letter_fixture", &[]);
+        let cfg = GatewayConfig {
+            logon_bind: "127.0.0.1:0".into(),
+            world_bind: "127.0.0.1:0".into(),
+            stdb_uri: standalone.server().into(),
+            module_name: standalone.shard_name().into(),
+            coordinator_token: Some(standalone.owner_token()),
+            gateway_id: "reward-letter-test".into(),
+            blocking_task_capacity: BlockingTaskCapacity::new(1),
+        };
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let coordinator = runtime.block_on(Coordinator::connect(&cfg)).unwrap();
+        assert!(!coordinator.is_sharded());
+
+        QuestActionStore::turn_in_quest(&coordinator, 0, TESTER, GIVER, CARD_QUEST, 0)
+            .expect("the fixture quest is complete");
+        crate::world::mail::redrive(&coordinator, TESTER);
+
+        assert!(
+            standalone
+                .query_rows("SELECT * FROM game_mail_escrow WHERE sender_guid = 1")
+                .is_empty(),
+            "the letter left Escrow"
+        );
+        let mails = standalone.query_rows("SELECT * FROM game_mail WHERE recipient_guid = 1");
+        assert_eq!(mails.len(), 1, "{mails:?}");
     }
 }

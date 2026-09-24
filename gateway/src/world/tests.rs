@@ -366,6 +366,9 @@ struct InMemoryStore {
     /// session writer alive during teardown.
     turn_in_reward_item: Option<codec::ItemInstanceView>,
     turn_in_tx: std::sync::Mutex<Option<SessionTx>>,
+    /// A Reward Letter a successful `turn_in_quest` files as Escrow for the Character, as
+    /// `gw_turn_in_quest` does in its own transaction.
+    turn_in_reward_letter: Option<mail::HeldEscrow>,
     /// Override for `player_combat_until_ms`: 0 = out of combat (default), non-zero = in combat until
     /// this ms-epoch deadline (use u64::MAX for "always in combat" in tests).
     combat_until_ms: u64,
@@ -2397,6 +2400,7 @@ impl WorldStore for InMemoryStore {
                 item,
                 cod,
                 delivery_delay_secs,
+                reward: None,
             },
         ));
         self.attested.lock().unwrap().push((escrow_id, false));
@@ -2415,6 +2419,7 @@ impl WorldStore for InMemoryStore {
         cod: u32,
         cod_source_mail_id: u64,
         delivery_delay_secs: u32,
+        reward: Option<lyracore_shared::mail::RewardHeader>,
     ) -> Result<()> {
         self.rec("mail_commit");
         self.mail_kill("mail_commit")?;
@@ -2459,6 +2464,18 @@ impl WorldStore for InMemoryStore {
                 delivery_delay_secs
             },
         );
+        if let Some(header) = reward {
+            // Models `mail::Letter::reward`: from the quest giver, naming its Mail Template.
+            let (sender_kind, sender_guid, sender_entry) = header.giver.sender().columns();
+            let mut mails = self.mails.lock().unwrap();
+            if let Some((_, m)) = mails.iter_mut().max_by_key(|(_, m)| m.id) {
+                m.sender_guid = sender_guid;
+                m.sender_kind = sender_kind;
+                m.sender_entry = sender_entry;
+                m.mail_template_id = header.mail_template_id;
+                m.check_flags = lyracore_shared::mail::CHECK_MASK_HAS_BODY;
+            }
+        }
         // The price stops being owed in the SAME call that delivers the payment for it — the
         // module clears it inside the commit's transaction, which is what makes a COD take charge
         // once however the drive is interrupted.
@@ -2527,6 +2544,7 @@ impl WorldStore for InMemoryStore {
                 item: mail::AttachedItem::default(),
                 cod: 0,
                 delivery_delay_secs: 0,
+                reward: None,
             },
         ));
         self.attested.lock().unwrap().push((escrow_id, false));
@@ -2597,6 +2615,7 @@ impl WorldStore for InMemoryStore {
                 item,
                 cod: 0,
                 delivery_delay_secs: 0,
+                reward: None,
             },
         ));
         self.attested.lock().unwrap().push((escrow_id, false));
@@ -4515,6 +4534,16 @@ impl QuestActionStore for InMemoryStore {
             .lock()
             .unwrap()
             .push((account_id, giver_guid, quest_id, reward_index));
+        if let Some(letter) = self.turn_in_reward_letter.clone() {
+            self.attested
+                .lock()
+                .unwrap()
+                .push((letter.escrow_id, false));
+            self.mail_escrows
+                .lock()
+                .unwrap()
+                .push((letter.recipient_guid, letter));
+        }
         if let (Some(item), Some(tx)) = (
             self.turn_in_reward_item.clone(),
             self.turn_in_tx.lock().unwrap().take(),

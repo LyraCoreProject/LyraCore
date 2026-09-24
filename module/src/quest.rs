@@ -684,6 +684,24 @@ fn validate_giver(
         .ok_or_else(|| ActionRefusal::new(ActionRefusalKind::MissingTarget, "no such quest giver"))
 }
 
+/// The quest giver a turn-in ended at. Only a creature or a gameobject ends a quest (an item or a
+/// party member only starts one), so after a turn-in this finds the giver [`validate_giver`] found,
+/// in the same order. `None` for a Character or an unknown guid.
+pub(crate) fn quest_ender(
+    ctx: &ReducerContext,
+    giver_guid: u64,
+) -> Option<lyracore_shared::mail::QuestGiver> {
+    use lyracore_shared::mail::QuestGiver;
+    if let Some(giver) = ctx.db.game_world_entity().guid().find(giver_guid) {
+        return (!giver.is_player()).then_some(QuestGiver::Creature(giver.entry));
+    }
+    ctx.db
+        .game_gameobject()
+        .guid()
+        .find(giver_guid)
+        .map(|go| QuestGiver::Gameobject(go.template_entry))
+}
+
 /// Work-item 194 (sharing): validates a live PLAYER `giver_guid` as a party-share giver for `player`
 /// — grouped with the accepting player (the SAME group id), on the same map/instance, within
 /// [`PARTY_SHARE_RANGE_SQ`]. Every field is re-read LIVE here — never trusts that

@@ -20,6 +20,9 @@ struct XEscrow {
     item: ItemSnapshot,
     cod: u32,
     delivery_delay_secs: u32,
+    sender_kind: u8,
+    sender_entry: u32,
+    mail_template_id: u32,
 }
 #[derive(Default)]
 struct FakeLedger {
@@ -73,6 +76,9 @@ impl EscrowLedger for FakeLedger {
             random_property_id: e.item.random_property_id,
             cod: e.cod,
             delivery_delay_secs: e.delivery_delay_secs,
+            sender_kind: e.sender_kind,
+            sender_entry: e.sender_entry,
+            mail_template_id: e.mail_template_id,
         })
     }
     fn file_escrow(&mut self, row: MailEscrow) {
@@ -93,6 +99,9 @@ impl EscrowLedger for FakeLedger {
                 item,
                 cod: row.cod,
                 delivery_delay_secs: row.delivery_delay_secs,
+                sender_kind: row.sender_kind,
+                sender_entry: row.sender_entry,
+                mail_template_id: row.mail_template_id,
             },
         );
     }
@@ -284,6 +293,7 @@ struct XMail {
     item: ItemSnapshot,
     check_flags: u32,
     deliver_micros: i64,
+    mail_template_id: u32,
 }
 #[derive(Default)]
 pub struct FakeMailPlane {
@@ -414,6 +424,7 @@ impl DeliverySink for FakeMailPlane {
             item: letter.item,
             check_flags: letter.check_flags,
             deliver_micros: letter.deliver_micros,
+            mail_template_id: letter.mail_template_id,
         });
         id
     }
@@ -458,6 +469,7 @@ const NO_COD_MAIL: u64 = 0;
 const OTHER_ACCOUNT: bool = false;
 const SAME_ACCOUNT: bool = true;
 const NO_DELAY: u32 = 0;
+const CHARACTER_LETTER: Option<RewardHeader> = None;
 const HOUR_MICROS: i64 = 3_600 * 1_000_000;
 fn sword() -> ItemSnapshot {
     ItemSnapshot {
@@ -530,6 +542,7 @@ fn drive(
         &item,
         NO_COD_MAIL,
         delay_secs,
+        CHARACTER_LETTER,
     )?;
     check(shard, plane);
     if killed == Killed::AfterCommit {
@@ -625,6 +638,7 @@ fn a_committed_letter_is_marked_as_having_a_body_or_as_already_copied() {
         &ItemSnapshot::default(),
         NO_COD_MAIL,
         NO_DELAY,
+        CHARACTER_LETTER,
     )
     .expect("a letter with a body");
     apply_commit(
@@ -638,6 +652,7 @@ fn a_committed_letter_is_marked_as_having_a_body_or_as_already_copied() {
         &ItemSnapshot::default(),
         NO_COD_MAIL,
         NO_DELAY,
+        CHARACTER_LETTER,
     )
     .expect("a letter without one");
 
@@ -817,6 +832,7 @@ fn a_replayed_commit_produces_one_mail_and_not_two() {
         &ItemSnapshot::default(),
         NO_COD_MAIL,
         NO_DELAY,
+        CHARACTER_LETTER,
     )
     .expect("first");
     apply_commit(
@@ -827,6 +843,7 @@ fn a_replayed_commit_produces_one_mail_and_not_two() {
         &ItemSnapshot::default(),
         NO_COD_MAIL,
         NO_DELAY,
+        CHARACTER_LETTER,
     )
     .expect("replay");
     apply_commit(
@@ -837,6 +854,7 @@ fn a_replayed_commit_produces_one_mail_and_not_two() {
         &ItemSnapshot::default(),
         NO_COD_MAIL,
         NO_DELAY,
+        CHARACTER_LETTER,
     )
     .expect("replay again");
 
@@ -885,6 +903,7 @@ fn an_escrow_id_that_already_delivered_to_another_recipient_is_refused() {
         &ItemSnapshot::default(),
         NO_COD_MAIL,
         NO_DELAY,
+        CHARACTER_LETTER,
     )
     .expect("first letter");
 
@@ -899,6 +918,7 @@ fn an_escrow_id_that_already_delivered_to_another_recipient_is_refused() {
         &ItemSnapshot::default(),
         NO_COD_MAIL,
         NO_DELAY,
+        CHARACTER_LETTER,
     )
     .expect_err("the id belongs to another letter");
 
@@ -927,6 +947,7 @@ fn escrow_id_zero_is_reserved_on_both_planes() {
         &ItemSnapshot::default(),
         NO_COD_MAIL,
         NO_DELAY,
+        CHARACTER_LETTER,
     )
     .expect_err("reserved");
 
@@ -1684,6 +1705,7 @@ fn priced_mail_fixture() -> (FakeShard, FakeMailPlane, u64) {
         &sword(),
         NO_COD_MAIL,
         NO_DELAY,
+        CHARACTER_LETTER,
     )
     .expect("the seller's letter is delivered");
     let mail_id = plane.mailbox_of(RECIPIENT)[0].id;
@@ -1729,6 +1751,7 @@ fn drive_payment(
         &ItemSnapshot::default(),
         mail_id,
         NO_DELAY,
+        CHARACTER_LETTER,
     )?;
     if killed == Killed::AfterCommit {
         return Ok(());
@@ -1873,6 +1896,7 @@ fn a_cod_payment_for_a_price_the_payer_does_not_owe_comes_back_to_the_payer() {
             &ItemSnapshot::default(),
             mail_id,
             NO_DELAY,
+            CHARACTER_LETTER,
         )
         .unwrap_or_else(|e| panic!("{what}: the commit lands the payment: {e}"));
 
@@ -1923,6 +1947,7 @@ fn a_payment_fenced_with_the_old_subject_prefix_arrives_without_it() {
         &ItemSnapshot::default(),
         mail_id,
         NO_DELAY,
+        CHARACTER_LETTER,
     )
     .expect("re-driven after the publish");
 
@@ -2059,6 +2084,7 @@ fn an_item_send_re_driven_after_a_restart_keeps_its_delivery_delay() {
         &held.item(),
         NO_COD_MAIL,
         held.delivery_delay_secs,
+        CHARACTER_LETTER,
     )
     .expect("re-driven");
 
@@ -2091,6 +2117,7 @@ fn a_cod_payment_for_a_delayed_mail_is_held_until_it_arrives_and_then_charged_on
         &sword(),
         NO_COD_MAIL,
         3_600,
+        CHARACTER_LETTER,
     )
     .expect("the seller's letter is committed");
     let mail_id = plane.mailbox_of(RECIPIENT)[0].id;
@@ -2124,6 +2151,7 @@ fn a_cod_payment_arrives_at_once_whatever_delay_its_commit_carries() {
         &ItemSnapshot::default(),
         mail_id,
         3_600,
+        CHARACTER_LETTER,
     )
     .expect("paid");
 
@@ -2132,4 +2160,125 @@ fn a_cod_payment_arrives_at_once_whatever_delay_its_commit_carries() {
         0,
         "cmangos MailHandler.cpp:475-477 sends the payment with no delay"
     );
+}
+/// Filed like `mail_reward::file_reward_letter` files quest 3645, Membership Card Renewal: template
+/// 99 attaches item 11423, count 1, after 86,400 s (`cdb:` quest_template, mail_loot_template).
+const REWARD: u64 = 0x5EED_0004;
+const DAY_MICROS: i64 = 86_400 * 1_000_000;
+const CARD_HEADER: RewardHeader = RewardHeader {
+    giver: lyracore_shared::mail::QuestGiver::Creature(7_802),
+    mail_template_id: 99,
+};
+fn card_renewal() -> crate::mail_reward::RewardLetter {
+    crate::mail_reward::RewardLetter {
+        header: CARD_HEADER,
+        body: "Your card, $n.".into(),
+        money: 0,
+        item: ItemSnapshot {
+            entry: 11_423,
+            stack_count: 1,
+            ..ItemSnapshot::default()
+        },
+        delay_secs: 86_400,
+    }
+}
+/// The Gateway's drive of a filed Reward Letter: every commit argument comes from the escrow row,
+/// as `world::mail::redrive` reads it.
+fn drive_reward(
+    shard: &mut FakeShard,
+    plane: &mut FakeMailPlane,
+    killed: Killed,
+) -> Result<(), String> {
+    let row = shard.escrow(REWARD).expect("the turn-in filed the letter");
+    apply_commit(
+        plane,
+        REWARD,
+        row.sender_guid,
+        &Draft {
+            recipient_guid: row.recipient_guid,
+            subject: row.subject.clone(),
+            body: row.body.clone(),
+            money: row.money,
+            postage: 0,
+            cod: row.cod,
+        },
+        &row.item(),
+        row.mail_id,
+        row.delivery_delay_secs,
+        RewardHeader::from_columns(row.sender_kind, row.sender_entry, row.mail_template_id)?,
+    )?;
+    if killed == Killed::AfterCommit {
+        return Ok(());
+    }
+    apply_confirm(shard, REWARD)?;
+    if killed == Killed::AfterConfirm {
+        return Ok(());
+    }
+    apply_settle(shard, REWARD)
+}
+#[test]
+fn a_reward_letter_arrives_from_its_quest_giver_with_its_template_after_its_delay() {
+    let mut shard = FakeShard::with_purse(RECIPIENT, PURSE);
+    let mut plane = FakeMailPlane::default();
+    apply_file_reward(&mut shard, REWARD, RECIPIENT, &card_renewal()).expect("filed");
+    assert_eq!(
+        shard.purse_of(RECIPIENT),
+        PURSE,
+        "no purse pays for a Reward Letter"
+    );
+
+    drive_reward(&mut shard, &mut plane, Killed::Never).expect("driven");
+
+    let inbox = plane.mailbox_of(RECIPIENT);
+    assert_eq!(inbox.len(), 1, "{inbox:?}");
+    let letter = &inbox[0];
+    assert_eq!(letter.sender, MailSender::Creature(7_802));
+    assert_eq!(letter.subject, "");
+    assert_eq!(letter.body, "Your card, $n.");
+    assert_eq!(letter.mail_template_id, 99);
+    assert_eq!(letter.check_flags, 0x10, "HAS_BODY only");
+    assert_eq!((letter.item.entry, letter.item.stack_count), (11_423, 1));
+    assert_eq!(
+        letter.deliver_micros, DAY_MICROS,
+        "86,400 s after the commit"
+    );
+    assert!(!shard.has_fence(REWARD), "settled");
+}
+#[test]
+fn a_reward_letter_killed_at_any_step_re_drives_into_one_letter() {
+    for killed in [Killed::AfterCommit, Killed::AfterConfirm] {
+        let mut shard = FakeShard::with_purse(RECIPIENT, PURSE);
+        let mut plane = FakeMailPlane::default();
+        apply_file_reward(&mut shard, REWARD, RECIPIENT, &card_renewal()).expect("filed");
+
+        drive_reward(&mut shard, &mut plane, killed).expect("the steps before the kill");
+        drive_reward(&mut shard, &mut plane, Killed::Never).expect("re-driven");
+
+        assert_eq!(plane.mailbox_of(RECIPIENT).len(), 1, "{killed:?}");
+        assert_eq!(plane.items_in_mailbox(RECIPIENT).len(), 1, "{killed:?}");
+        assert!(!shard.has_fence(REWARD), "{killed:?}");
+    }
+}
+#[test]
+fn a_reward_letter_is_never_filed_over_another_fence() {
+    let mut shard = FakeShard::with_purse(RECIPIENT, PURSE);
+    apply_file_reward(&mut shard, REWARD, RECIPIENT, &card_renewal()).expect("filed");
+    assert!(apply_file_reward(&mut shard, REWARD, RECIPIENT, &card_renewal()).is_err());
+    assert!(apply_file_reward(&mut shard, 0, RECIPIENT, &card_renewal()).is_err());
+}
+#[test]
+fn a_reward_letter_never_pays_a_cash_on_delivery_price() {
+    let (_shard, mut plane, mail_id) = priced_mail_fixture();
+    assert!(apply_commit(
+        &mut plane,
+        REWARD,
+        RECIPIENT,
+        &cod_payment_draft(),
+        &ItemSnapshot::default(),
+        mail_id,
+        NO_DELAY,
+        Some(CARD_HEADER),
+    )
+    .is_err());
+    assert!(plane.mailbox_of(SENDER).is_empty());
 }

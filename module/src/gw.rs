@@ -441,7 +441,10 @@ pub fn gw_turn_in_quest(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
-    crate::actor::turn_in_quest(ctx, actor_guid, giver_guid, quest_entry, reward_index)
+    crate::actor::turn_in_quest(ctx, actor_guid, giver_guid, quest_entry, reward_index)?;
+    // Only the World Session files a Reward Letter: no Gateway drives a playerbot's mail, so the
+    // Package turn-in path would leave the letter held.
+    crate::mail_reward::file_reward_letter(ctx, actor_guid, giver_guid, quest_entry)
 }
 
 /// Taxi flight is an expected item Refusal. Missing actors still carry the generic actor error,

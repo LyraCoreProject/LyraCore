@@ -1096,7 +1096,7 @@ parity_test!(parity_game_mail_escrow, "game_mail_escrow", lyracore_module::MailE
     escrow_id, sender_guid, recipient_guid, subject, body, money, postage, created_micros,
     delivered, payout, mail_id, item_entry, item_stack_count, item_durability, item_enchant_id,
     item_soulbound, cod,
-    random_property_id, delivery_delay_secs,
+    random_property_id, delivery_delay_secs, sender_kind, sender_entry, mail_template_id,
 });
 parity_test!(parity_game_mail_arrival, "game_mail_arrival", lyracore_module::MailArrival, bindings::mail_arrival_type::MailArrival, {
     id, recipient_guid, created_at,
