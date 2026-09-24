@@ -330,7 +330,10 @@ READ, which stays `was_read`), `mail_template_id`, and `deliver_micros` (when th
 see the Mail). Every default is a real value: a legacy row is a Character mail with no stored flags,
 visible since creation. Expiry is not a column. `lyracore_shared::mail::expires_at_secs` derives it
 from creation, delivery and the cash on delivery price. Private `game_mail_escrow` and
-`game_mail_delivery` carry value across the Shard Boundary; see `architecture.md` §6.3b.
+`game_mail_delivery` carry value across the Shard Boundary; see `architecture.md` §6.3b. The
+END-appended `game_mail_escrow.delivery_delay_secs` is the Delivery Delay a send fence resolved, so
+a re-driven commit keeps it. Its default 0 is a real value: a fence filed before the column existed,
+a take and a COD payment all arrive at once.
 
 Private `game_mail_timer` (`module/src/mail_timer.rs`) holds each Mail's one Mail Timer, unique by
 `mail_id`. `insert_letter` arms it at the delivery instant of a Mail that is not delivered yet, and

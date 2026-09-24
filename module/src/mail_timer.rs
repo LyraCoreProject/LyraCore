@@ -232,7 +232,8 @@ pub(crate) fn fire(ctx: &ReducerContext, timer: &MailTimer) {
             arrive(ctx, mail.recipient_guid);
             arm(ctx, mail.id, expires);
         }
-        Firing::Expire(Expiry::Return) => crate::mail::send_back(ctx, mail),
+        // Auto-return arrives at once (cmangos `ObjectMgr.cpp:6214-6215`).
+        Firing::Expire(Expiry::Return) => crate::mail::send_back(ctx, mail, 0),
         Firing::Expire(Expiry::Delete) => crate::mail::delete_mail(ctx, mail.id),
     }
 }

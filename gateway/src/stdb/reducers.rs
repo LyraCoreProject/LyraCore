@@ -3144,11 +3144,11 @@ impl Coordinator {
     /// `realm_mail_return` — [`mail_delete`](Self::mail_delete)'s twin for return-to-sender: the row
     /// is re-addressed in place, on the database THIS handle points at. No sharded variant — the row
     /// never leaves the plane that already holds it.
-    pub fn mail_return(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
+    pub fn mail_return(&self, recipient_guid: u64, mail_id: u64, same_account: bool) -> Result<()> {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "realm_mail_return",
-            realm_mail_return_then(self.session_actor(recipient_guid), mail_id)
+            realm_mail_return_then(self.session_actor(recipient_guid), mail_id, same_account)
         )
     }
 
@@ -3169,6 +3169,7 @@ impl Coordinator {
         money: u32,
         cod: u32,
         item_guid: u64,
+        same_account: bool,
     ) -> Result<()> {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
@@ -3180,7 +3181,8 @@ impl Coordinator {
                 body,
                 money,
                 cod,
-                item_guid
+                item_guid,
+                same_account
             )
         )
     }
@@ -3231,6 +3233,7 @@ impl Coordinator {
         item_guid: u64,
         cod: u32,
         cod_source_mail_id: u64,
+        same_account: bool,
     ) -> Result<()> {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
@@ -3245,7 +3248,8 @@ impl Coordinator {
                 postage,
                 item_guid,
                 cod,
-                cod_source_mail_id
+                cod_source_mail_id,
+                same_account
             )
         )
     }
@@ -3264,6 +3268,7 @@ impl Coordinator {
         item: crate::world::mail::AttachedItem,
         cod: u32,
         cod_source_mail_id: u64,
+        delivery_delay_secs: u32,
     ) -> Result<()> {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
@@ -3282,7 +3287,8 @@ impl Coordinator {
                 item.soulbound,
                 item.random_property_id,
                 cod,
-                cod_source_mail_id
+                cod_source_mail_id,
+                delivery_delay_secs
             )
         )
     }

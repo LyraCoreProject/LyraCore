@@ -608,9 +608,15 @@ the same route.
 
 **Mail**:
 One letter on Realm-core for one recipient. It carries a subject, an optional body, copper, one
-item and a cash on delivery price. Its recipient cannot see it, take from it or return it before its
-delivery instant.
+item and a cash on delivery price. Its recipient cannot see, read, delete, take from or return it
+before its delivery instant.
 _Avoid_: message
+
+**Delivery Delay**:
+The hour a Mail with an item waits before it reaches a Character on another Realm Account, when it
+is sent and when it is returned. A cash on delivery price needs an item, so a priced Mail waits too.
+Copper, text, a COD payment, Auction Mail and a return at Mail Expiry arrive at once. The Gateway
+reads both Realm Accounts, and the Module applies the rule.
 
 **Mail Sender**:
 Who a Mail is from, as the client names it in the inbox: a Character, an Auction House, a Creature

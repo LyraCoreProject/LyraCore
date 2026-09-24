@@ -1009,6 +1009,22 @@ pub trait WorldStore:
         Ok(Vec::new())
     }
 
+    /// The mail `mail_id`, delivered or not, on the database THIS handle names: the same two-plane
+    /// routing as [`mail_list`](Self::mail_list), as one primary key read. `None` by default, so a
+    /// store that models no mailbox finds no mail.
+    fn mail_by_id(&self, _mail_id: u64) -> Result<Option<codec::MailView>> {
+        Ok(None)
+    }
+
+    /// The name of the Realm Account that owns `character_guid`, read on THIS handle only. The
+    /// Account Character Owner names it when this Shard retains one. Otherwise the Character's
+    /// local Account names it, unless that Account is a shadow Account, whose name is not a Realm
+    /// Account's. `None` when this handle cannot name it. `world::mail` asks every World Shard,
+    /// because the Delivery Delay compares the Realm Accounts of two Characters on any Shards.
+    fn realm_account_name(&self, _character_guid: u64) -> Result<Option<String>> {
+        Ok(None)
+    }
+
     /// Is `player_guid` in range of the gameobject `mailbox_guid` names, and is it a mailbox at all?
     ///
     /// Always asked of the session's OWN handle: the mailbox is a gameobject on the shard the player
@@ -1023,14 +1039,15 @@ pub trait WorldStore:
     /// Called on the realm-core handle when there is one and on the session's own handle when there
     /// is not — the SAME two-plane routing [`mail_list`](Self::mail_list) takes, because the write
     /// and the read must never disagree about which database owns the rows. `Err` when `mail_id`
-    /// does not exist or is not `recipient_guid`'s — the gates ran in `world::mail` before this is
-    /// ever called, so a refusal here means a crafted id.
+    /// does not exist, is not `recipient_guid`'s or has not arrived yet — the gates ran in
+    /// `world::mail` before this is ever called, so a refusal here means a crafted id or a Gateway
+    /// clock that runs ahead of the Module's.
     fn mail_mark_read(&self, recipient_guid: u64, mail_id: u64) -> Result<()>;
 
     /// Delete `mail_id` for `recipient_guid`, on the database THIS handle names — same two-plane
     /// routing as [`mail_mark_read`](Self::mail_mark_read). Destroys any attachment the row still
     /// carries, as vanilla does after its (client-side) confirmation prompt. `Err` for a mail with
-    /// a cash on delivery price.
+    /// a cash on delivery price or one that has not arrived yet.
     fn mail_delete(&self, recipient_guid: u64, mail_id: u64) -> Result<()>;
 
     /// Return `mail_id` to whoever sent it, on the database THIS handle names — same two-plane
@@ -1038,8 +1055,9 @@ pub trait WorldStore:
     /// leaves the plane that already holds it, so there is no sharded variant and no escrow, unlike
     /// [`mail_send`](Self::mail_send) and the takes below. `Err` when `mail_id` does not exist, is
     /// not `recipient_guid`'s, is not delivered yet, has no Character sender, or was returned
-    /// already.
-    fn mail_return(&self, recipient_guid: u64, mail_id: u64) -> Result<()>;
+    /// already. `same_account` says whether `recipient_guid` and the mail's sender belong to one
+    /// Realm Account; the Module turns it into the return's Delivery Delay.
+    fn mail_return(&self, recipient_guid: u64, mail_id: u64, same_account: bool) -> Result<()>;
 
     /// Write one sent letter on the database THIS handle names, charging the sender the postage
     /// plus the attached `money` in the SAME transaction.
@@ -1053,6 +1071,8 @@ pub trait WorldStore:
     ///
     /// `cod` is the price the RECIPIENT will owe for the attachment. It costs the sender nothing
     /// and is not part of the debit; it only rides the row until somebody takes the item.
+    /// `same_account` says whether the sender and the recipient belong to one Realm Account; the
+    /// Module turns it into the letter's Delivery Delay.
     #[allow(clippy::too_many_arguments)]
     fn mail_send(
         &self,
@@ -1063,6 +1083,7 @@ pub trait WorldStore:
         money: u32,
         cod: u32,
         item_guid: u64,
+        same_account: bool,
     ) -> Result<()>;
 
     /// Credit `mail_id`'s copper to `recipient_guid` and empty the row, in one transaction. The
@@ -1096,6 +1117,9 @@ pub trait WorldStore:
     /// A COD PAYMENT is fenced through here too, because it is a letter out of a purse like any
     /// other: `cod_source_mail_id` names the mail whose price it pays (0 for an ordinary letter),
     /// and it rides the fence so a re-drive can settle that price without re-deriving anything.
+    ///
+    /// `same_account` says whether the sender and the recipient belong to one Realm Account. The
+    /// fence resolves the letter's Delivery Delay from it and stores it for the commit.
     #[allow(clippy::too_many_arguments)]
     fn mail_fence(
         &self,
@@ -1109,6 +1133,7 @@ pub trait WorldStore:
         _item_guid: u64,
         _cod: u32,
         _cod_source_mail_id: u64,
+        _same_account: bool,
     ) -> Result<()> {
         anyhow::bail!("mail_fence: this store models no escrow")
     }
@@ -1119,6 +1144,9 @@ pub trait WorldStore:
     /// `cod_source_mail_id` (0 for an ordinary letter) is the mail this one PAYS FOR: its price is
     /// settled in the same transaction as the payout row, which is what makes a COD take charge
     /// once however the drive is interrupted.
+    ///
+    /// `delivery_delay_secs` is the Delivery Delay the fence stored. The letter arrives that long
+    /// after this commit.
     #[allow(clippy::too_many_arguments)]
     fn mail_commit(
         &self,
@@ -1131,6 +1159,7 @@ pub trait WorldStore:
         _item: mail::AttachedItem,
         _cod: u32,
         _cod_source_mail_id: u64,
+        _delivery_delay_secs: u32,
     ) -> Result<()> {
         anyhow::bail!("mail_commit: this store models no escrow")
     }

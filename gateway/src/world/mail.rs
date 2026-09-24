@@ -15,6 +15,8 @@ struct EscrowIdRange {
 
 static ESCROW_ID_RANGE: std::sync::OnceLock<EscrowIdRange> = std::sync::OnceLock::new();
 const NO_COD_SOURCE: u64 = 0;
+/// A COD payment carries copper only, so it arrives at once (cmangos `MailHandler.cpp:475-477`).
+const NO_DELIVERY_DELAY: u32 = 0;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum SendRefusal {
     NoMailbox(String),
@@ -122,10 +124,52 @@ pub(crate) fn return_to_sender<St: WorldStore + ?Sized>(
     mail_id: u64,
 ) -> Result<()> {
     let self_guid = at_mailbox(store, self_guid, mailbox_guid)?;
-    match store.realm_store() {
-        Some(realm) => realm.mail_return(self_guid, mail_id),
-        None => store.mail_return(self_guid, mail_id),
+    let realm = store.realm_store();
+    let mail = match &realm {
+        Some(realm) => realm.mail_by_id(mail_id)?,
+        None => store.mail_by_id(mail_id)?,
+    };
+    // A mail that is not there is refused by the Module, so its Accounts do not matter.
+    let same_account = match mail {
+        Some(mail) => same_realm_account(store, self_guid, mail.sender_guid)?,
+        None => false,
+    };
+    match realm {
+        Some(realm) => realm.mail_return(self_guid, mail_id, same_account),
+        None => store.mail_return(self_guid, mail_id, same_account),
     }
+}
+/// Do two Characters belong to one Realm Account? The Module turns the answer into the Delivery
+/// Delay, but it cannot read a Character's Account on another Shard, so the Gateway reads both
+/// realm-wide (`docs/architecture.md` §2.3). An Account that no Shard can name counts as another
+/// Account, so an item waits.
+fn same_realm_account<St: WorldStore + ?Sized>(store: &St, a: u64, b: u64) -> Result<bool> {
+    Ok(
+        match (
+            realm_account_anywhere(store, a)?,
+            realm_account_anywhere(store, b)?,
+        ) {
+            (Some(a), Some(b)) => a == b,
+            _ => false,
+        },
+    )
+}
+/// The Realm Account name the first handle that can name one holds for `guid`: this handle, then
+/// every World Shard. Admission refuses two Shards that name different Accounts for one Character,
+/// so the first name is the name.
+fn realm_account_anywhere<St: WorldStore + ?Sized>(
+    store: &St,
+    guid: u64,
+) -> Result<Option<String>> {
+    if let Some(name) = store.realm_account_name(guid)? {
+        return Ok(Some(name));
+    }
+    for shard in store.world_stores() {
+        if let Some(name) = shard.realm_account_name(guid)? {
+            return Ok(Some(name));
+        }
+    }
+    Ok(None)
 }
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn send<St: WorldStore + ?Sized>(
@@ -178,6 +222,8 @@ pub(crate) fn send<St: WorldStore + ?Sized>(
         }
     };
     let cod = mail_rules::cod_at_send(cod, item_guid != 0);
+    let same_account =
+        same_realm_account(store, sender_guid, recipient_guid).map_err(refusal_from_module)?;
     match store.realm_store() {
         None => store
             .mail_send(
@@ -188,6 +234,7 @@ pub(crate) fn send<St: WorldStore + ?Sized>(
                 money,
                 cod,
                 item_guid,
+                same_account,
             )
             .map_err(refusal_from_module),
         Some(realm) => {
@@ -205,9 +252,10 @@ pub(crate) fn send<St: WorldStore + ?Sized>(
                     item_guid,
                     cod,
                     NO_COD_SOURCE,
+                    same_account,
                 )
                 .map_err(refusal_from_module)?;
-            let item = held_attachment(store, sender_guid, escrow_id)
+            let held = held_fence(store, sender_guid, escrow_id)
                 .map_err(|e| SendRefusal::Internal(format!("{e:#}")))?;
             drive(store, escrow_id, || {
                 realm.mail_commit(
@@ -217,9 +265,10 @@ pub(crate) fn send<St: WorldStore + ?Sized>(
                     subject,
                     body,
                     money,
-                    item.clone(),
+                    held.item.clone(),
                     cod,
                     NO_COD_SOURCE,
+                    held.delivery_delay_secs,
                 )
             })
             .map_err(|e| SendRefusal::Internal(format!("{e:#}")))
@@ -250,19 +299,21 @@ impl AttachedItem {
         self.entry == 0
     }
 }
-fn held_attachment<St: WorldStore + ?Sized>(
+/// The fence a send just filed. The commit takes the attachment and the Delivery Delay from it,
+/// exactly as a re-drive does.
+fn held_fence<St: WorldStore + ?Sized>(
     store: &St,
     sender_guid: u64,
     escrow_id: u64,
-) -> Result<AttachedItem> {
+) -> Result<HeldEscrow> {
     store
         .mail_escrows_of(sender_guid)?
         .into_iter()
         .find(|e| e.escrow_id == escrow_id)
-        .map(|e| e.item)
         .ok_or_else(|| {
             anyhow::anyhow!(
-                "mail escrow {escrow_id}: the fence reported success but no row is readable —                  refusing to commit a letter whose attachment cannot be confirmed"
+                "mail escrow {escrow_id}: the fence reported success but no row is readable, so \
+                 the letter's attachment and Delivery Delay cannot be confirmed"
             )
         })
 }
@@ -278,6 +329,8 @@ pub struct HeldEscrow {
     pub mail_id: u64,
     pub item: AttachedItem,
     pub cod: u32,
+    /// The Delivery Delay the fence resolved, so a re-driven commit keeps it.
+    pub delivery_delay_secs: u32,
 }
 pub(crate) fn redrive<St: WorldStore + ?Sized>(store: &St, self_guid: u64) {
     let Some(realm) = store.realm_store() else {
@@ -298,6 +351,7 @@ pub(crate) fn redrive<St: WorldStore + ?Sized>(store: &St, self_guid: u64) {
                 held.item.clone(),
                 held.cod,
                 held.mail_id,
+                held.delivery_delay_secs,
             )
         });
         log_redrive("send", held.escrow_id, outcome);
@@ -450,6 +504,8 @@ fn pay_cod<St: WorldStore + ?Sized>(
         0,
         0,
         row.id,
+        // Copper only: the fence resolves no Delivery Delay whatever the Accounts.
+        false,
     )?;
     drive(store, escrow_id, || {
         realm.mail_commit(
@@ -462,6 +518,7 @@ fn pay_cod<St: WorldStore + ?Sized>(
             AttachedItem::default(),
             0,
             row.id,
+            NO_DELIVERY_DELAY,
         )
     })
 }

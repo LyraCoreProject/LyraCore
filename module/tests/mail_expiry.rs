@@ -207,7 +207,7 @@ fn a_cod_payment_fenced_before_the_letter_expires_comes_back_to_the_payer() {
     standalone.assert_call(
         "realm_mail_fence",
         &[
-            COD_ESCROW, &taker, SENDER, &subject, "\"\"", COD, "0", "0", "0", &priced,
+            COD_ESCROW, &taker, SENDER, &subject, "\"\"", COD, "0", "0", "0", &priced, "false",
         ],
     );
     assert_eq!(purse(&standalone), PURSE - 250, "the fence took the price");
@@ -225,7 +225,7 @@ fn a_cod_payment_fenced_before_the_letter_expires_comes_back_to_the_payer() {
         "realm_mail_commit",
         &[
             COD_ESCROW, &taker, SENDER, &subject, "\"\"", COD, "0", "0", "0", "0", "false", "0",
-            "0", &priced,
+            "0", &priced, "0",
         ],
     );
     standalone.assert_call("realm_mail_confirm_delivery", &[COD_ESCROW, &taker]);

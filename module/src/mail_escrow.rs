@@ -43,6 +43,10 @@ pub struct MailEscrow {
     pub cod: u32,
     #[default(0)]
     pub random_property_id: u32,
+    /// The Delivery Delay the fence resolved for its letter, so a re-driven commit keeps it. 0 for
+    /// a take, a COD payment and every fence filed before the column existed.
+    #[default(0u32)]
+    pub delivery_delay_secs: u32,
 }
 
 impl MailEscrow {
@@ -434,6 +438,7 @@ pub(crate) fn apply_fence<S: FenceSink>(
     draft: Draft,
     item_guid: u64,
     mail_id: u64,
+    same_account: bool,
 ) -> Result<(), String> {
     if escrow_id == 0 {
         return Err("escrow_id 0 is reserved (it is the \"no escrow\" sentinel)".to_string());
@@ -487,6 +492,7 @@ pub(crate) fn apply_fence<S: FenceSink>(
         item_soulbound: item.soulbound,
         random_property_id: item.random_property_id,
         cod: draft.cod,
+        delivery_delay_secs: crate::mail::delivery_delay_secs(!item.is_empty(), same_account),
     });
     sink.arm_reaper();
     log::info!(
@@ -502,6 +508,7 @@ pub(crate) fn apply_commit<S: DeliverySink>(
     draft: &Draft,
     item: &crate::items::ItemSnapshot,
     cod_mail_id: u64,
+    delivery_delay_secs: u32,
 ) -> Result<(), String> {
     if escrow_id == 0 {
         return Err("escrow_id 0 is reserved (it is the \"no escrow\" sentinel)".to_string());
@@ -549,8 +556,10 @@ pub(crate) fn apply_commit<S: DeliverySink>(
         draft.cod,
         *item,
     );
+    // The Delivery Delay counts from this commit. A COD payment and its refund carry copper only
+    // and arrive at once (cmangos `MailHandler.cpp:475-477`).
     let letter = match payment {
-        None => letter,
+        None => letter.delayed(sink.now_micros(), delivery_delay_secs),
         Some(CodPayment::Pay) => letter.into_cod_payment(),
         // A refund. `Hold` returned above.
         Some(_) => letter.into_returned(),
@@ -638,6 +647,7 @@ pub(crate) fn apply_take_fence<S: TakeFenceSink>(
         item_soulbound: false,
         random_property_id: 0,
         cod: 0,
+        delivery_delay_secs: 0,
     });
     sink.arm_reaper();
     log::info!(
@@ -708,6 +718,7 @@ pub(crate) fn apply_take_item_fence<S: TakeFenceSink>(
         item_soulbound: item.soulbound,
         random_property_id: item.random_property_id,
         cod: 0,
+        delivery_delay_secs: 0,
     });
     sink.arm_reaper();
     log::info!(
@@ -846,6 +857,8 @@ pub(crate) fn apply_reap<S: ReapSink>(sink: &mut S) {
         }
     }
 }
+/// `same_account` says whether the sender and the recipient belong to one Realm Account. The fence
+/// knows whether it detached an item, so it resolves the Delivery Delay and stores it.
 #[reducer]
 #[allow(clippy::too_many_arguments)]
 pub fn realm_mail_fence(
@@ -860,6 +873,7 @@ pub fn realm_mail_fence(
     item_guid: u64,
     cod: u32,
     mail_id: u64,
+    same_account: bool,
 ) -> Result<(), String> {
     require_operator(ctx)?;
     let sender_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
@@ -877,8 +891,11 @@ pub fn realm_mail_fence(
         },
         item_guid,
         mail_id,
+        same_account,
     )
 }
+/// `delivery_delay_secs` is the Delivery Delay the fence stored. The letter arrives that long after
+/// this commit.
 #[reducer]
 #[allow(clippy::too_many_arguments)]
 pub fn realm_mail_commit(
@@ -897,6 +914,7 @@ pub fn realm_mail_commit(
     random_property_id: u32,
     cod: u32,
     cod_mail_id: u64,
+    delivery_delay_secs: u32,
 ) -> Result<(), String> {
     require_operator(ctx)?;
     let sender_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
@@ -921,6 +939,7 @@ pub fn realm_mail_commit(
             random_property_id,
         },
         cod_mail_id,
+        delivery_delay_secs,
     )
 }
 #[reducer]
@@ -1216,7 +1235,7 @@ mod tests {
                 "pub fn realm_mail_fence(",
                 "{ require_operator(ctx)?; let sender_guid = crate::account_ownership::require_actor(ctx, request_actor)?; apply_fence( &mut CtxDb { ctx }, escrow_id, \
                   sender_guid, Draft { recipient_guid, subject, body, money, postage, cod, }, \
-                  item_guid, mail_id, ) }",
+                  item_guid, mail_id, same_account, ) }",
             ),
             (
                 "pub fn realm_mail_commit(",
@@ -1224,7 +1243,8 @@ mod tests {
                   sender_guid, &Draft { recipient_guid, subject, body, money, postage: 0, cod, \
                   }, &crate::items::ItemSnapshot { entry: item_entry, stack_count: \
                   item_stack_count, durability: item_durability, enchant_id: item_enchant_id, \
-                  soulbound: item_soulbound, random_property_id, }, cod_mail_id, ) }",
+                  soulbound: item_soulbound, random_property_id, }, cod_mail_id, \
+                  delivery_delay_secs, ) }",
             ),
             (
                 "pub fn realm_mail_take_money_fence(",

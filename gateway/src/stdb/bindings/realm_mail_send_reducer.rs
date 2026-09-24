@@ -16,6 +16,7 @@ pub(super) struct RealmMailSendArgs {
     pub money: u32,
     pub cod: u32,
     pub item_guid: u64,
+    pub same_account: bool,
 }
 
 impl From<RealmMailSendArgs> for super::Reducer {
@@ -28,6 +29,7 @@ impl From<RealmMailSendArgs> for super::Reducer {
             money: args.money,
             cod: args.cod,
             item_guid: args.item_guid,
+            same_account: args.same_account,
         }
     }
 }
@@ -56,6 +58,7 @@ pub trait realm_mail_send {
         money: u32,
         cod: u32,
         item_guid: u64,
+        same_account: bool,
     ) -> __sdk::Result<()> {
         self.realm_mail_send_then(
             request_actor,
@@ -65,6 +68,7 @@ pub trait realm_mail_send {
             money,
             cod,
             item_guid,
+            same_account,
             |_, _| {},
         )
     }
@@ -84,6 +88,7 @@ pub trait realm_mail_send {
         money: u32,
         cod: u32,
         item_guid: u64,
+        same_account: bool,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -101,6 +106,7 @@ impl realm_mail_send for super::RemoteReducers {
         money: u32,
         cod: u32,
         item_guid: u64,
+        same_account: bool,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -115,6 +121,7 @@ impl realm_mail_send for super::RemoteReducers {
                 money,
                 cod,
                 item_guid,
+                same_account,
             },
             callback,
         )

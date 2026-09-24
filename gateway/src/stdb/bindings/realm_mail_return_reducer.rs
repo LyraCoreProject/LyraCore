@@ -11,6 +11,7 @@ use super::session_actor_type::SessionActor;
 pub(super) struct RealmMailReturnArgs {
     pub request_actor: SessionActor,
     pub mail_id: u64,
+    pub same_account: bool,
 }
 
 impl From<RealmMailReturnArgs> for super::Reducer {
@@ -18,6 +19,7 @@ impl From<RealmMailReturnArgs> for super::Reducer {
         Self::RealmMailReturn {
             request_actor: args.request_actor,
             mail_id: args.mail_id,
+            same_account: args.same_account,
         }
     }
 }
@@ -37,8 +39,13 @@ pub trait realm_mail_return {
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
     /// /// Use [`realm_mail_return:realm_mail_return_then`] to run a callback after the reducer completes.
-    fn realm_mail_return(&self, request_actor: SessionActor, mail_id: u64) -> __sdk::Result<()> {
-        self.realm_mail_return_then(request_actor, mail_id, |_, _| {})
+    fn realm_mail_return(
+        &self,
+        request_actor: SessionActor,
+        mail_id: u64,
+        same_account: bool,
+    ) -> __sdk::Result<()> {
+        self.realm_mail_return_then(request_actor, mail_id, same_account, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `realm_mail_return` to run as soon as possible,
@@ -51,6 +58,7 @@ pub trait realm_mail_return {
         &self,
         request_actor: SessionActor,
         mail_id: u64,
+        same_account: bool,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -63,6 +71,7 @@ impl realm_mail_return for super::RemoteReducers {
         &self,
         request_actor: SessionActor,
         mail_id: u64,
+        same_account: bool,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -72,6 +81,7 @@ impl realm_mail_return for super::RemoteReducers {
             RealmMailReturnArgs {
                 request_actor,
                 mail_id,
+                same_account,
             },
             callback,
         )

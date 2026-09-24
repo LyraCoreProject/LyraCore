@@ -638,6 +638,14 @@ impl WorldStore for Coordinator {
         self.mail_list(recipient_guid)
     }
 
+    fn mail_by_id(&self, mail_id: u64) -> Result<Option<codec::MailView>> {
+        Ok(self.mail_by_id(mail_id))
+    }
+
+    fn realm_account_name(&self, character_guid: u64) -> Result<Option<String>> {
+        Ok(self.realm_account_name(character_guid))
+    }
+
     fn mailbox_in_range(&self, mailbox_guid: u64, player_guid: u64) -> Result<bool> {
         self.mailbox_in_range(mailbox_guid, player_guid)
     }
@@ -653,8 +661,8 @@ impl WorldStore for Coordinator {
         self.trainer_serves(player_guid, trainer_guid)
     }
 
-    fn mail_return(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
-        self.mail_return(recipient_guid, mail_id)
+    fn mail_return(&self, recipient_guid: u64, mail_id: u64, same_account: bool) -> Result<()> {
+        self.mail_return(recipient_guid, mail_id, same_account)
     }
 
     fn mail_send(
@@ -666,6 +674,7 @@ impl WorldStore for Coordinator {
         money: u32,
         cod: u32,
         item_guid: u64,
+        same_account: bool,
     ) -> Result<()> {
         self.mail_send(
             sender_guid,
@@ -675,6 +684,7 @@ impl WorldStore for Coordinator {
             money,
             cod,
             item_guid,
+            same_account,
         )
     }
 
@@ -702,6 +712,7 @@ impl WorldStore for Coordinator {
         item_guid: u64,
         cod: u32,
         cod_source_mail_id: u64,
+        same_account: bool,
     ) -> Result<()> {
         self.mail_fence(
             escrow_id,
@@ -714,6 +725,7 @@ impl WorldStore for Coordinator {
             item_guid,
             cod,
             cod_source_mail_id,
+            same_account,
         )
     }
 
@@ -728,6 +740,7 @@ impl WorldStore for Coordinator {
         item: crate::world::mail::AttachedItem,
         cod: u32,
         cod_source_mail_id: u64,
+        delivery_delay_secs: u32,
     ) -> Result<()> {
         self.mail_commit(
             escrow_id,
@@ -739,6 +752,7 @@ impl WorldStore for Coordinator {
             item,
             cod,
             cod_source_mail_id,
+            delivery_delay_secs,
         )
     }
 
