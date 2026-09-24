@@ -2237,7 +2237,9 @@ impl WorldStore for InMemoryStore {
     }
     /// Models `mail_text::apply_copy_text`: sets COPIED and files the body as item text, on the
     /// database that owns the mail row. Refused for a mail that is not the caller's, is not
-    /// delivered, has no body, or is already COPIED — the same Gates the plan function pins.
+    /// delivered, or has no body — the same Gates the plan function pins. A replay on an
+    /// already-COPIED mail is `Ok`, and the text insert is skipped when the id already has a row
+    /// (a returned mail keeps its id, so a second recipient's copy can reuse it).
     fn mail_copy_text(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
         self.rec("mail_copy_text");
         let mut mails = self.mails.lock().unwrap();
@@ -2252,19 +2254,32 @@ impl WorldStore for InMemoryStore {
             return Err(anyhow!("mail: this mail has no text to copy"));
         }
         if m.check_flags & lyracore_shared::mail::CHECK_MASK_COPIED != 0 {
-            return Err(anyhow!("mail: this letter has already been made permanent"));
+            return Ok(());
         }
         m.check_flags |= lyracore_shared::mail::CHECK_MASK_COPIED;
         let text_id = lyracore_shared::mail::item_text_id_for(m.id, &m.body);
         let text = m.body.clone();
         drop(mails);
-        self.item_texts.lock().unwrap().push((text_id, text));
+        let mut texts = self.item_texts.lock().unwrap();
+        if !texts.iter().any(|(id, _)| *id == text_id) {
+            texts.push((text_id, text));
+        }
         Ok(())
     }
     /// Models `items::grant_letter_item`: one Plain Letter, refused by the same full-bag fixture
-    /// every other grant uses.
+    /// every other grant uses. Idempotent by text id, like the real reducer: a retry after an
+    /// earlier grant already landed is a no-op, not a second letter.
     fn mail_grant_letter(&self, payee_guid: u64, item_text_id: u32) -> Result<()> {
         self.rec("mail_grant_letter");
+        if self
+            .granted_letters
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|&(guid, id)| guid == payee_guid && id == item_text_id)
+        {
+            return Ok(());
+        }
         if self.bags_full.load(std::sync::atomic::Ordering::Relaxed) {
             return Err(anyhow!(lyracore_shared::mail::INVENTORY_FULL));
         }
@@ -2284,6 +2299,18 @@ impl WorldStore for InMemoryStore {
             .iter()
             .find(|(id, _)| *id == item_text_id)
             .map(|(_, text)| text.clone()))
+    }
+    /// Models the Coordinator's `owns_item_with_text`: does `owner_guid` hold a granted letter
+    /// carrying `item_text_id`?
+    fn owns_item_with_text(&self, owner_guid: u64, item_text_id: u32) -> Result<bool> {
+        self.rec("owns_item_with_text");
+        Ok(item_text_id != 0
+            && self
+                .granted_letters
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|&(guid, id)| guid == owner_guid && id == item_text_id))
     }
     /// Models the module's `apply_take_money`: the credit and the clear are one transaction, so a
     /// second take finds an empty row.

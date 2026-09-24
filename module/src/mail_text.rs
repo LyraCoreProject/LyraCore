@@ -3,7 +3,7 @@
 //! sharded, the single shard's own database otherwise); the Plain Letter itself is granted on the
 //! Home Shard. The item sells for 0, so this is not a value flow: it needs neither Escrow nor a
 //! Hold. Realm-core records the copy first, the Home Shard grants second, and a grant lost to a
-//! race with the Gateway's own bag-room check costs nothing (README Decision 14).
+//! race with the Gateway's own bag-room check costs nothing.
 
 use spacetimedb::{reducer, table, ReducerContext, Table};
 
@@ -14,7 +14,6 @@ use crate::mail::{game_mail, Mail};
 const MAIL_BODY_ITEM_TEMPLATE: u32 = 8383;
 
 const NOTHING_TO_COPY: &str = "mail: this mail has no text to copy";
-const ALREADY_COPIED: &str = "mail: this letter has already been made permanent";
 
 /// A copied letter's text, keyed by the mail id narrowed to u32
 /// (`lyracore_shared::mail::item_text_id_for`). Private: the Gateway reads it through the owner
@@ -39,7 +38,9 @@ pub(crate) enum CopyTextPlan {
 /// mail that is not the caller's the same way a missing one does (a mail id is client-supplied), an
 /// empty body the same way vmangos refuses an already-COPIED mail — the two read identically to a
 /// crafted click, since `Letter::from_character` already marks an empty-body letter COPIED at
-/// creation and a legacy row predates that convention.
+/// creation and a legacy row predates that convention. `AlreadyCopied` is not itself a refusal:
+/// `apply_copy_text` treats it as a replay, so a redundant click or a retry after an interrupted
+/// grant can still reach the Home Shard.
 pub(crate) fn plan_copy_text(row: Option<&Mail>, caller_guid: u64) -> CopyTextPlan {
     let Some(row) = row.filter(|m| m.recipient_guid == caller_guid) else {
         return CopyTextPlan::NotYours;
@@ -55,9 +56,17 @@ pub(crate) fn plan_copy_text(row: Option<&Mail>, caller_guid: u64) -> CopyTextPl
 
 /// Sets COPIED on the mail and files its body as durable item text, keyed by the mail's own id.
 /// This is the ONE-TRANSACTION half of a Letter Copy: `mail_text.rs` writes `game_mail` directly
-/// (rather than through a `mail.rs` helper) because `module/src/mail.rs` is shared ground with the
-/// Mail Timer and Auction Mail tickets landing in the same wave — a new function here keeps this
-/// change out of their way.
+/// (rather than through a `mail.rs` helper) because `module/src/mail.rs` is shared ground with
+/// other mail work landing in the same window — a new function here keeps this change out of its
+/// way.
+///
+/// Replay-safe on both Gates a retry can hit: `AlreadyCopied` is a no-op success rather than an
+/// error, so a Gateway that never learned its earlier grant succeeded (bags filled, logout,
+/// timeout, a crash) can drive the Home Shard grant again instead of stranding the mail COPIED
+/// with no letter. The text insert is skipped when the row already exists — `mail::returned` keeps
+/// a returned mail's id, so a letter a second Character copies after the first sender gets it back
+/// reuses the same text id; the body never changes for a given mail id, so the existing row is
+/// already correct.
 pub(crate) fn apply_copy_text(
     ctx: &ReducerContext,
     recipient_guid: u64,
@@ -67,15 +76,17 @@ pub(crate) fn apply_copy_text(
     match plan_copy_text(row.as_ref(), recipient_guid) {
         CopyTextPlan::NotYours => return Err(lyracore_shared::mail::NOT_YOUR_MAIL.to_string()),
         CopyTextPlan::NoText => return Err(NOTHING_TO_COPY.to_string()),
-        CopyTextPlan::AlreadyCopied => return Err(ALREADY_COPIED.to_string()),
+        CopyTextPlan::AlreadyCopied => return Ok(()),
         CopyTextPlan::Copy => {}
     }
     let row = row.expect("Copy is only reachable with a row");
     let text_id = lyracore_shared::mail::item_text_id_for(row.id, &row.body);
-    ctx.db.game_item_text().insert(ItemText {
-        id: text_id,
-        text: row.body.clone(),
-    });
+    if ctx.db.game_item_text().id().find(text_id).is_none() {
+        ctx.db.game_item_text().insert(ItemText {
+            id: text_id,
+            text: row.body.clone(),
+        });
+    }
     ctx.db.game_mail().id().update(Mail {
         check_flags: row.check_flags | lyracore_shared::mail::CHECK_MASK_COPIED,
         ..row

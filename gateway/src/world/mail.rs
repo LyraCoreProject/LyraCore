@@ -602,8 +602,9 @@ fn copy_letter_refusal(e: anyhow::Error) -> CopyLetterRefusal {
 /// `CMSG_MAIL_CREATE_TEXT_ITEM`: turn a delivered letter's body into a Plain Letter in the bags.
 /// Gates in order — the mailbox, bag room, the Realm-core copy, the Home Shard grant — so a full
 /// bag never touches the mail row, matching `take_item`'s ordering. Not an escrow: the Plain Letter
-/// sells for 0, so a grant lost to bags filling between the room check and the grant costs nothing
-/// (README Decision 14).
+/// sells for 0, so a grant lost to bags filling between the room check and the grant costs nothing.
+/// Both durable steps are replay-safe, so a retry after an interrupted grant reaches the Home Shard
+/// again instead of leaving the mail COPIED with nothing to show for it.
 pub(crate) fn copy_letter<St: WorldStore + ?Sized>(
     store: &St,
     self_guid: Option<u64>,
@@ -627,21 +628,31 @@ pub(crate) fn copy_letter<St: WorldStore + ?Sized>(
         .mail_grant_letter(self_guid, item_text_id)
         .map_err(copy_letter_refusal)
 }
-/// `CMSG_ITEM_TEXT_QUERY`: the text behind `item_text_id`. A copied letter's text lives in
-/// `game_item_text` on the mail plane and outlives the mail that held it; anything else falls back
-/// to the caller's own mail body under the same id, which is what a letter still sitting in the
-/// mailbox resolves through today.
+/// `CMSG_ITEM_TEXT_QUERY`: the text behind `item_text_id`, for a caller who has PROVEN they may see
+/// it — either they hold an item carrying that id, or they own the mail it names. `game_item_text`
+/// ids are the mail's own id, small and sequential, so answering it for anyone who merely asks
+/// would let a crafted query walk every copied letter on the realm. A caller who proves neither
+/// gets empty text, the same answer a stale or foreign id has always produced.
+///
+/// A copied letter's text lives in `game_item_text` on the mail plane and outlives the mail that
+/// held it; anything else falls back to the caller's own mail body under the same id, which is
+/// what a letter still sitting in the mailbox resolves through today.
 pub(crate) fn item_text<St: WorldStore + ?Sized>(
     store: &St,
     self_guid: Option<u64>,
     item_text_id: u32,
 ) -> Result<Option<String>> {
+    let own_mail_body = letter_body(store, self_guid, u64::from(item_text_id))?;
+    let owns_item = match self_guid {
+        Some(guid) => store.owns_item_with_text(guid, item_text_id)?,
+        None => false,
+    };
+    if !owns_item && own_mail_body.is_none() {
+        return Ok(None);
+    }
     let copied = match store.realm_store() {
         Some(realm) => realm.item_text(item_text_id),
         None => store.item_text(item_text_id),
     }?;
-    if copied.is_some() {
-        return Ok(copied);
-    }
-    letter_body(store, self_guid, u64::from(item_text_id))
+    Ok(copied.or(own_mail_body))
 }

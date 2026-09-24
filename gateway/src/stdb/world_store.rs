@@ -712,6 +712,10 @@ impl WorldStore for Coordinator {
         self.item_text(item_text_id)
     }
 
+    fn owns_item_with_text(&self, owner_guid: u64, item_text_id: u32) -> Result<bool> {
+        self.owns_item_with_text(owner_guid, item_text_id)
+    }
+
     fn mail_fence(
         &self,
         escrow_id: u64,

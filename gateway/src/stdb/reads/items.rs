@@ -57,6 +57,24 @@ impl Coordinator {
         Ok(items)
     }
 
+    /// Does `owner_guid` hold an item carrying `item_text_id`? Read from the privileged cache and
+    /// filtered by owner the same way `player_items` is — the SDK exposes only the PK index for
+    /// this table, so this walks the coordinator's own already-subscribed rows and never reaches
+    /// another player's. `CMSG_ITEM_TEXT_QUERY`'s ownership Gate: a client cannot use this to probe
+    /// what anyone else holds, since the answer is a bare bool.
+    pub fn owns_item_with_text(&self, owner_guid: u64, item_text_id: u32) -> Result<bool> {
+        if item_text_id == 0 {
+            return Ok(false);
+        }
+        let guard = self.0.coord();
+        let db = &guard.conn.db;
+        let owns = db
+            .game_item_instance()
+            .iter()
+            .any(|i| i.owner_guid == owner_guid && i.item_text_id == item_text_id);
+        Ok(owns)
+    }
+
     /// Bag slot of the item instance with `item_guid`. Reads from the coordinator's privileged cache
     /// (same source as `player_items`). Item GUIDs are globally unique so account_id isn't needed
     /// for the lookup — ownership is enforced by the module reducer on the call.

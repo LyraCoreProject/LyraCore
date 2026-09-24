@@ -1088,23 +1088,38 @@ pub trait WorldStore:
     /// `CMSG_MAIL_CREATE_TEXT_ITEM` step 1 (Letter Copy) — set COPIED on `mail_id` and file its
     /// body as durable item text, on the database that OWNS THE MAIL ROW (realm-core when sharded,
     /// this shard's own database otherwise — the same two-plane routing `mail_take_item_fence`
-    /// takes). `Err` for a mail that is not the caller's, is not delivered, has no body, or is
-    /// already copied.
+    /// takes). `Err` for a mail that is not the caller's, is not delivered, or has no body. A
+    /// replay on an already-copied mail is `Ok` (a no-op on the mail plane), so a retry can still
+    /// reach the Home Shard grant.
     fn mail_copy_text(&self, recipient_guid: u64, mail_id: u64) -> Result<()>;
 
     /// `CMSG_MAIL_CREATE_TEXT_ITEM` step 2 — store one Plain Letter carrying `item_text_id`, on the
     /// PAYEE's own handle. [`mail_item_room`](Self::mail_item_room)'s real Gate: a full bag found
-    /// here refuses and leaves the mail COPIED with no letter granted. The Plain Letter sells for 0
-    /// (README Decision 14), so a grant lost to that race costs nothing — this is deliberately not
-    /// an escrow.
+    /// here refuses and leaves the mail COPIED with no letter granted. The Plain Letter sells for
+    /// 0, so a grant lost to that race costs nothing — this is deliberately not an escrow. Also a
+    /// no-op `Ok` when the payee already holds an item carrying `item_text_id`, so a retry after an
+    /// interrupted grant cannot mint a second letter.
     fn mail_grant_letter(&self, payee_guid: u64, item_text_id: u32) -> Result<()>;
 
     /// The durable text behind `item_text_id`, read from `game_item_text` on the database that
     /// OWNS THE MAIL PLANE (same two-plane routing as [`mail_copy_text`](Self::mail_copy_text)). A
     /// copied letter's text outlives the mail row that created it, so this answers even after that
     /// mail is deleted. `None` by default, so a store with no opinion on item text has none.
+    ///
+    /// The mail plane holds every copied letter's text keyed by a small, sequential id, so this
+    /// must never be read for a caller who has not proven they may see it — see
+    /// [`owns_item_with_text`](Self::owns_item_with_text).
     fn item_text(&self, _item_text_id: u32) -> Result<Option<String>> {
         Ok(None)
+    }
+
+    /// Does `owner_guid` hold an item carrying `item_text_id` in their own bags, on THIS handle?
+    /// The ownership Gate `mail::item_text` checks before it answers from `game_item_text`: a
+    /// client walking `item_text_id` values must not read another player's Letter Copy that way.
+    /// Scoped to `owner_guid` — never a caller reading another player's rows. `false` by default,
+    /// so a store with no opinion on item ownership grants nothing.
+    fn owns_item_with_text(&self, _owner_guid: u64, _item_text_id: u32) -> Result<bool> {
+        Ok(false)
     }
 
     /// **Escrow step 1 (send)** — take the postage plus the attached coin out of `sender_guid`'s
