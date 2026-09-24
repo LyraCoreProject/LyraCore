@@ -21,6 +21,7 @@ pub struct AuctionBidDecision {
     pub house: u32,
     pub item_entry: u32,
     pub random_property_id: u32,
+    pub operation: u8,
 }
 
 impl __sdk::InModule for AuctionBidDecision {
@@ -45,6 +46,7 @@ pub struct AuctionBidDecisionCols {
     pub house: __sdk::__query_builder::Col<AuctionBidDecision, u32>,
     pub item_entry: __sdk::__query_builder::Col<AuctionBidDecision, u32>,
     pub random_property_id: __sdk::__query_builder::Col<AuctionBidDecision, u32>,
+    pub operation: __sdk::__query_builder::Col<AuctionBidDecision, u8>,
 }
 
 impl __sdk::__query_builder::HasCols for AuctionBidDecision {
@@ -65,6 +67,7 @@ impl __sdk::__query_builder::HasCols for AuctionBidDecision {
             house: __sdk::__query_builder::Col::new(table_name, "house"),
             item_entry: __sdk::__query_builder::Col::new(table_name, "item_entry"),
             random_property_id: __sdk::__query_builder::Col::new(table_name, "random_property_id"),
+            operation: __sdk::__query_builder::Col::new(table_name, "operation"),
         }
     }
 }

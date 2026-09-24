@@ -23,6 +23,16 @@ pub fn minimum_next_bid(start_bid: u32, current_bid: u32) -> Option<u32> {
     }
 }
 
+/// The Auction Cut: the house's share of a bid, truncated (`cm:AuctionHouseMgr.cpp:733-736`). The
+/// seller pays it out of the proceeds at Settlement and out of the purse at Cancellation. `None` when
+/// the rate is not a percentage.
+pub fn auction_cut(bid: u32, consignment_rate: u32) -> Option<u32> {
+    if consignment_rate > 100 {
+        return None;
+    }
+    u32::try_from(u64::from(bid) * u64::from(consignment_rate) / 100).ok()
+}
+
 /// Why the Module refused an auction Durable Request. The tag is the whole reducer error text,
 /// so neither tier matches on human prose.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -99,7 +109,8 @@ pub fn market_of(house_id: u32) -> AuctionMarket {
     }
 }
 
-/// Stable terminal outcome codes shared by bid Hold and decision rows.
+/// Stable terminal outcome codes shared by bid Hold and decision rows. `CANCELLED` is the one
+/// accepting outcome of a Cancellation Hold. `ITEM_NOT_FOUND` and `DATABASE` refuse either operation.
 pub mod bid_outcome {
     pub const PENDING: u8 = 0;
     pub const ACCEPTED: u8 = 1;
@@ -108,6 +119,14 @@ pub mod bid_outcome {
     pub const BID_INCREMENT: u8 = 4;
     pub const BID_OWN: u8 = 5;
     pub const DATABASE: u8 = 6;
+    pub const CANCELLED: u8 = 7;
+}
+
+/// Stable `operation` codes of the bid Hold and decision rows. Every row written before
+/// Cancellation existed reads as `BID`.
+pub mod hold_operation {
+    pub const BID: u8 = 0;
+    pub const CANCEL: u8 = 1;
 }
 
 /// Stable `game_auction_notice.kind` codes, in the vanilla notice table's own order
@@ -120,8 +139,7 @@ pub mod auction_notice {
     pub const SOLD: u8 = 2;
     pub const EXPIRED: u8 = 3;
     pub const NEW_BID: u8 = 4;
-    /// No writer yet: a future cancellation flow fires this kind and adds the
-    /// `SMSG_AUCTION_REMOVED_NOTIFICATION` builder it needs.
+    /// To the displaced bidder when the seller cancels (`cm:AuctionHouseHandler.cpp:167-189`).
     pub const REMOVED: u8 = 5;
 }
 
@@ -139,6 +157,24 @@ mod tests {
             AuctionRefusal::parse_tag("gw_auction_hold_bid reducer timed out after 10s"),
             None
         );
+    }
+
+    #[test]
+    fn auction_cut_is_the_rate_of_the_bid_truncated() {
+        assert_eq!(super::auction_cut(100, 5), Some(5));
+        assert_eq!(super::auction_cut(19, 5), Some(0), "0.95 truncates to 0");
+        assert_eq!(
+            super::auction_cut(201, 5),
+            Some(10),
+            "10.05 truncates to 10"
+        );
+        assert_eq!(
+            super::auction_cut(0, 15),
+            Some(0),
+            "an unbid listing costs nothing"
+        );
+        assert_eq!(super::auction_cut(u32::MAX, 100), Some(u32::MAX));
+        assert_eq!(super::auction_cut(100, 101), None, "not a percentage");
     }
 
     #[test]
