@@ -62,34 +62,27 @@ impl Coordinator {
     /// bool. Read from the privileged cache.
     ///
     /// `hint_item_guid` is the wire's own second field — a bag item guid when the client is
-    /// reading that item's tooltip, a mail id otherwise (`cm:MailHandler.cpp:630-646`). When it
-    /// names a real item, a PK lookup answers in O(1) and the scan below never runs; that covers
-    /// the common case (a player rereading a letter already in their bags). The scan is the
-    /// fallback for every other shape of the query, filtered by owner the same way `player_items`
-    /// is — the SDK exposes only the PK index for this table, so it walks the coordinator's own
-    /// already-subscribed rows and never reaches another player's.
+    /// reading that item's tooltip (`cm:MailHandler.cpp:630-646`), and vmangos always sends it for
+    /// this shape of the query. A PK lookup answers in O(1); a miss (item deleted, wrong id, or a
+    /// crafted query) answers `false` rather than falling back to a table-wide scan — this runs on
+    /// every such query, including ones for an id that names nothing, and the SDK exposes no
+    /// owner-keyed index to narrow it by.
     pub fn owns_item_with_text(
         &self,
         owner_guid: u64,
         item_text_id: u32,
         hint_item_guid: u64,
     ) -> Result<bool> {
-        if item_text_id == 0 {
+        if item_text_id == 0 || hint_item_guid == 0 {
             return Ok(false);
         }
         let guard = self.0.coord();
         let db = &guard.conn.db;
-        if hint_item_guid != 0 {
-            if let Some(item) = db.game_item_instance().guid().find(&hint_item_guid) {
-                if item.owner_guid == owner_guid && item.item_text_id == item_text_id {
-                    return Ok(true);
-                }
-            }
-        }
         let owns = db
             .game_item_instance()
-            .iter()
-            .any(|i| i.owner_guid == owner_guid && i.item_text_id == item_text_id);
+            .guid()
+            .find(&hint_item_guid)
+            .is_some_and(|item| item.owner_guid == owner_guid && item.item_text_id == item_text_id);
         Ok(owns)
     }
 
