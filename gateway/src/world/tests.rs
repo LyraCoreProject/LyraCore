@@ -8176,6 +8176,13 @@ fn friend_list_shows_a_friend_in_another_shards_instance_online_afk_or_dnd() {
         }
         other => panic!("expected SMSG_FRIEND_LIST, got {other}"),
     }
+    // CMSG_FRIEND_LIST always answers with BOTH lists; leaving the SMSG_IGNORE_LIST reply unread
+    // and dropping the client closes the socket with a queued write still in flight, which Linux
+    // reports to the server as a reset rather than a clean EOF.
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_IGNORE_LIST(l) => assert!(l.ignored.is_empty()),
+        other => panic!("expected SMSG_IGNORE_LIST, got {other}"),
+    }
     drop(client);
     server.join().unwrap();
 }
