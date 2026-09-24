@@ -54,12 +54,12 @@ publish presents as an unrelated mid-session hang, not a loud "no such table".
 
 ## 2. Inventory
 
-**238 tables**, all of them in `module/src/**`: 122 public, 116 private. No table comes from a
+**270 tables**, all of them in `module/src/**`: 128 public, 142 private. No table comes from a
 package in this tree; `packages/example` is the only in-tree package and it declares none. Recount
 rather than trust the numbers below, which drift on every schema change:
 
 ```bash
-grep -rn '^#\[table(' module/src --include='*.rs' | wc -l   # 238 on 2026-09-03
+grep -rn '^#\[table(' module/src --include='*.rs' | wc -l   # 270 on 2026-09-24
 ```
 
 | Domain | Tables | Public | Where |
@@ -68,7 +68,7 @@ grep -rn '^#\[table(' module/src --include='*.rs' | wc -l   # 238 on 2026-09-03
 | Character and per-character progression | 23 | 19 | `character.rs`, `skill.rs`, `reputation.rs`, `talent.rs`, `spell/spellbook.rs`, `action_bar.rs`, `combo.rs`, `rest.rs`, `corpse.rs`, `xp.rs`, `exploration.rs`, `breath.rs`, `breath_relay.rs`, `graveyard.rs` |
 | World entity and movement | 8 | 3 | `world.rs`, `motion.rs` |
 | Terrain / nav / exact vmap | 9 | 5 | `terrain.rs`, `nav.rs`, `vmap.rs` |
-| Chat / social / addon bridge | 9 | 9 | `chat.rs`, `bridge.rs` |
+| Chat / social / addon bridge | 13 | 9 | `chat.rs`, `channel.rs`, `bridge.rs` |
 | Combat / threat / duel | 10 | 4 | `combat/engage.rs`, `combat/death.rs`, `threat.rs`, `duel.rs` |
 | Spell / aura | 20 | 10 | `spell/tables.rs`, `spell/stacking.rs` |
 | Quest | 12 | 8 | `quest.rs` |

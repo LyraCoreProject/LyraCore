@@ -111,8 +111,9 @@ pub fn gw_heartbeat(ctx: &ReducerContext) -> Result<(), String> {
     Ok(())
 }
 
-/// Remove the world entities of every lapsed lease, then the lease itself. Scheduled — the
-/// sender guard is the standard "only the scheduler may fire this" fence every scheduled
+/// Close expired Account Fences and Account Claims, then remove the world entities of every lapsed
+/// lease and the lease itself. Closing a claim ends its Character's Channel Memberships. Scheduled,
+/// so the sender guard is the standard "only the scheduler may fire this" fence every scheduled
 /// reducer here carries.
 #[reducer]
 pub fn reap_gateway_leases(

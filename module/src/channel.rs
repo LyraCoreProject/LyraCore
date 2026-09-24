@@ -173,8 +173,7 @@ fn join(
     let name = channel_name(&request.channel_name)?;
     check_password(&request.password)?;
     let channel = find(ctx, team, &name.key).unwrap_or_else(|| create(ctx, team, name));
-    let members = members_in_join_order(ctx, channel.channel_id);
-    if members.iter().any(|member| member.character_guid == joiner) {
+    if member_of(ctx, channel.channel_id, joiner).is_some() {
         // Built-in channels answer a repeat join with nothing (cm:Channel.cpp:64-72).
         return if channel.builtin_id != 0 {
             Ok(())
@@ -188,12 +187,20 @@ fn join(
     if !channel.password.is_empty() && channel.password != request.password {
         return Err(ChannelRefusal::WrongPassword);
     }
+    // A built-in channel can hold every player of a team, so its member list is read only when an
+    // announcement or a first owner needs it. Built-in channels need neither.
+    let takes_ownership = channel.builtin_id == 0 && channel.owner_guid == 0;
+    let others = if channel.announcements || takes_ownership {
+        members_in_join_order(ctx, channel.channel_id)
+    } else {
+        Vec::new()
+    };
     if channel.announcements {
         notify(
             ctx,
             &channel,
             Notice::about(notice::JOINED, joiner),
-            guids(&members),
+            guids(&others),
         );
     }
     ctx.db.game_chat_channel_member().insert(ChatChannelMember {
@@ -214,8 +221,8 @@ fn join(
         },
         vec![joiner],
     );
-    if channel.builtin_id == 0 && channel.owner_guid == 0 {
-        let exclaim = !members.is_empty();
+    if takes_ownership {
+        let exclaim = !others.is_empty();
         hand_ownership(ctx, channel, joiner, exclaim);
     }
     Ok(())
@@ -288,14 +295,26 @@ pub(crate) fn leave_all(ctx: &ReducerContext, character_guid: u64) {
 
 /// Remove one member: LEFT to the rest when announced, owner succession, and the empty channel
 /// deleted with its password and bans (cm:ChannelMgr.cpp:85-103). Built-in channels keep no state
-/// worth an empty row either.
+/// worth an empty row either. The remaining members are read only when LEFT or a new owner needs
+/// them, so leaving a built-in channel never reads its member list.
 fn depart(ctx: &ReducerContext, channel: ChatChannel, member: ChatChannelMember) {
     ctx.db.game_chat_channel_member().id().delete(member.id);
-    let rest = members_in_join_order(ctx, channel.channel_id);
-    if rest.is_empty() {
+    let empty = ctx
+        .db
+        .game_chat_channel_member()
+        .by_channel()
+        .filter(channel.channel_id)
+        .next()
+        .is_none();
+    if empty {
         delete_channel(ctx, channel.channel_id);
         return;
     }
+    let hands_over = channel.owner_guid == member.character_guid && channel.builtin_id == 0;
+    if !channel.announcements && !hands_over {
+        return;
+    }
+    let rest = members_in_join_order(ctx, channel.channel_id);
     if channel.announcements {
         notify(
             ctx,
@@ -304,7 +323,7 @@ fn depart(ctx: &ReducerContext, channel: ChatChannel, member: ChatChannelMember)
             guids(&rest),
         );
     }
-    if channel.owner_guid == member.character_guid && channel.builtin_id == 0 {
+    if hands_over {
         let successor = successor(&rest);
         hand_ownership(ctx, channel, successor, rest.len() > 1);
     }
@@ -421,14 +440,23 @@ pub(crate) fn membership(
 ) -> Result<(ChatChannel, ChatChannelMember), ChannelRefusal> {
     let key = ChannelName::normalize(raw_name).key;
     let channel = find(ctx, team, &key).ok_or(ChannelRefusal::NotMember)?;
-    let member = ctx
-        .db
-        .game_chat_channel_member()
-        .by_channel()
-        .filter(channel.channel_id)
-        .find(|member| member.character_guid == character_guid)
-        .ok_or(ChannelRefusal::NotMember)?;
+    let member =
+        member_of(ctx, channel.channel_id, character_guid).ok_or(ChannelRefusal::NotMember)?;
     Ok((channel, member))
+}
+
+/// `character_guid`'s membership in one channel, read through the Character's own few
+/// memberships rather than the channel's member list.
+fn member_of(
+    ctx: &ReducerContext,
+    channel_id: u64,
+    character_guid: u64,
+) -> Option<ChatChannelMember> {
+    ctx.db
+        .game_chat_channel_member()
+        .by_character()
+        .filter(character_guid)
+        .find(|member| member.channel_id == channel_id)
 }
 
 fn find(ctx: &ReducerContext, team: u32, key: &str) -> Option<ChatChannel> {

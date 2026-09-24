@@ -3538,6 +3538,25 @@ mod realm_chat_routing_tests {
     /// to the session's own Home Shard reads that Shard's mirror and is delivered by no Relay on a
     /// sharded Realm. No Fake reaches the Coordinator, so the routing is pinned in source.
     #[test]
+    fn realm_chat_runs_on_the_realm_core_handle() {
+        let body = crate::test_scan::code_of(include_str!("reducers.rs"), "pub fn realm_chat(");
+        let body: String = body.split_whitespace().collect();
+        assert!(
+            body.contains("letrealm=self.realm_core()?;")
+                && body.contains("realm.0.call_pipe().conn.reducers,\"realm_chat\",")
+                && body.contains("realm_chat_then(realm.session_actor(speaker_guid),request)"),
+            "`Coordinator::realm_chat` no longer calls the reducer on the Realm-core handle. \
+             Body was:\n{body}"
+        );
+        assert!(
+            !body.contains("self.0.call_pipe()"),
+            "`Coordinator::realm_chat` must not call the session's own Home Shard"
+        );
+    }
+
+    /// Chat Channels live only on Realm-core. An op sent to the session's own Home Shard would
+    /// create a second, shard-local copy of the channel. Pinned in source for the same reason.
+    #[test]
     fn channel_ops_run_on_the_realm_core_handle() {
         let body = crate::test_scan::code_of(include_str!("reducers.rs"), "pub fn channel_op(");
         let body: String = body.split_whitespace().collect();
@@ -3552,23 +3571,6 @@ mod realm_chat_routing_tests {
         assert!(
             !body.contains("self.0.call_pipe()"),
             "`Coordinator::channel_op` must not call the session's own Home Shard"
-        );
-    }
-
-    #[test]
-    fn realm_chat_runs_on_the_realm_core_handle() {
-        let body = crate::test_scan::code_of(include_str!("reducers.rs"), "pub fn realm_chat(");
-        let body: String = body.split_whitespace().collect();
-        assert!(
-            body.contains("letrealm=self.realm_core()?;")
-                && body.contains("realm.0.call_pipe().conn.reducers,\"realm_chat\",")
-                && body.contains("realm_chat_then(realm.session_actor(speaker_guid),request)"),
-            "`Coordinator::realm_chat` no longer calls the reducer on the Realm-core handle. \
-             Body was:\n{body}"
-        );
-        assert!(
-            !body.contains("self.0.call_pipe()"),
-            "`Coordinator::realm_chat` must not call the session's own Home Shard"
         );
     }
 }
