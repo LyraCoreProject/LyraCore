@@ -84,6 +84,35 @@ impl From<AuctionRefusal> for PlaceBidOutcome {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CancelAuctionRequest {
+    pub(crate) actor_guid: u64,
+    pub(crate) auctioneer_guid: u64,
+    pub(crate) auction_id: u32,
+    pub(crate) house_id: u32,
+}
+
+/// What a Cancellation came to. `NotFound` covers a missing or expired listing, another player's,
+/// and another market's; `Stale` covers a cut that changed after the read and every other
+/// Refusal. A seller who `CannotAfford` the cut gets no answer at all, as in vanilla.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CancelAuctionOutcome {
+    Cancelled,
+    NotFound,
+    Stale,
+    CannotAfford,
+}
+
+impl From<AuctionRefusal> for CancelAuctionOutcome {
+    fn from(refusal: AuctionRefusal) -> Self {
+        match refusal {
+            AuctionRefusal::ItemNotFound => Self::NotFound,
+            AuctionRefusal::NotEnoughMoney => Self::CannotAfford,
+            AuctionRefusal::InvalidTerms | AuctionRefusal::Database => Self::Stale,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AuctionBrowseRequest {
     pub(crate) auctioneer_guid: u64,
@@ -127,6 +156,13 @@ pub(crate) trait AuctionActionStore: Send + Sync {
     fn create_auction(&self, request: CreateAuctionRequest) -> Result<CreateAuctionOutcome>;
 
     fn place_bid(&self, request: PlaceBidRequest) -> Result<PlaceBidOutcome>;
+
+    fn cancel_auction(&self, request: CancelAuctionRequest) -> Result<CancelAuctionOutcome>;
+
+    /// Drive every unfinished bid or Cancellation Hold of `actor_guid` to its end. A Gateway that
+    /// stopped between phases leaves them fenced, and a Cancellation has no natural retry because
+    /// the listing leaves the owner list.
+    fn resume_auction_holds(&self, actor_guid: u64) -> Result<()>;
 
     fn auction_query(
         &self,
@@ -190,6 +226,14 @@ impl AuctionActionStore for crate::stdb::Coordinator {
 
     fn place_bid(&self, request: PlaceBidRequest) -> Result<PlaceBidOutcome> {
         crate::stdb::Coordinator::place_bid(self, request)
+    }
+
+    fn cancel_auction(&self, request: CancelAuctionRequest) -> Result<CancelAuctionOutcome> {
+        crate::stdb::Coordinator::cancel_auction(self, request)
+    }
+
+    fn resume_auction_holds(&self, actor_guid: u64) -> Result<()> {
+        crate::stdb::Coordinator::resume_auction_holds(self, actor_guid)
     }
 
     fn auction_query(
@@ -384,6 +428,36 @@ fn bid_result(auction_id: u32, outcome: PlaceBidOutcome) -> AuctionActionOutcome
     }
 }
 
+/// `SMSG_AUCTION_COMMAND_RESULT` for a Cancellation (`cm:AuctionHouseHandler.cpp:423-428,441-442,
+/// 459`): the auction id with Removed and Ok, id 0 with Removed and ErrDatabase, or nothing for a
+/// seller who cannot pay the cut.
+fn cancel_result(auction_id: u32, outcome: CancelAuctionOutcome) -> AuctionActionOutcome {
+    use wow_world_messages::vanilla::{
+        SMSG_AUCTION_COMMAND_RESULT_AuctionCommandAction as Action,
+        SMSG_AUCTION_COMMAND_RESULT_AuctionCommandResultTwo as ResultTwo,
+        SMSG_AUCTION_COMMAND_RESULT,
+    };
+    let (auction_id, result2) = match outcome {
+        CancelAuctionOutcome::Cancelled => (auction_id, ResultTwo::Ok),
+        CancelAuctionOutcome::NotFound | CancelAuctionOutcome::Stale => (0, ResultTwo::ErrDatabase),
+        CancelAuctionOutcome::CannotAfford => {
+            return AuctionActionOutcome::Handled {
+                outbound: Vec::new(),
+            };
+        }
+    };
+    AuctionActionOutcome::Handled {
+        outbound: vec![Outbound::One(
+            ServerOpcodeMessage::SMSG_AUCTION_COMMAND_RESULT(Box::new(
+                SMSG_AUCTION_COMMAND_RESULT {
+                    auction_id,
+                    action: Action::Removed { result2 },
+                },
+            )),
+        )],
+    }
+}
+
 pub(crate) fn dispatch_auction_action<St: AuctionActionStore + ?Sized>(
     store: &St,
     player: AuctionActionPlayer,
@@ -462,8 +536,31 @@ pub(crate) fn dispatch_auction_action<St: AuctionActionStore + ?Sized>(
             })?;
             return Ok(create_result(outcome));
         }
+        ClientOpcodeMessage::CMSG_AUCTION_REMOVE_ITEM(message) => {
+            let auction_id = message.auction_id;
+            let auctioneer_guid = message.auctioneer.guid();
+            // Vanilla ignores a Cancellation away from an auctioneer
+            // (`cm:AuctionHouseHandler.cpp:413-415`).
+            let Some((player_guid, interaction)) =
+                auction_actor_interaction(store, player, auctioneer_guid)?
+            else {
+                return Ok(AuctionActionOutcome::Handled {
+                    outbound: Vec::new(),
+                });
+            };
+            let outcome = store.cancel_auction(CancelAuctionRequest {
+                actor_guid: player_guid,
+                auctioneer_guid,
+                auction_id,
+                house_id: interaction.house.id,
+            })?;
+            return Ok(cancel_result(auction_id, outcome));
+        }
         other => return Ok(AuctionActionOutcome::PassThrough(other)),
     };
+    if let (AuctionRequest::Hello(_), Some(player_guid)) = (&request, player.self_guid) {
+        store.resume_auction_holds(player_guid)?;
+    }
     let auctioneer_guid = auctioneer.guid();
     let Some((player_guid, interaction)) =
         auction_actor_interaction(store, player, auctioneer_guid)?
@@ -532,6 +629,10 @@ mod tests {
         create_result: Mutex<Result<CreateAuctionOutcome, String>>,
         bids: Mutex<Vec<PlaceBidRequest>>,
         bid_result: Mutex<Result<PlaceBidOutcome, String>>,
+        cancels: Mutex<Vec<CancelAuctionRequest>>,
+        cancel_result: Mutex<Result<CancelAuctionOutcome, String>>,
+        resumes: Mutex<Vec<u64>>,
+        resume_result: Mutex<Result<(), String>>,
         query_result: Mutex<Result<AuctionPage, String>>,
         queries: Mutex<Vec<(u64, u32, AuctionQuery)>>,
     }
@@ -574,6 +675,25 @@ mod tests {
                 .map_err(|error| anyhow::anyhow!(error.clone()))
         }
 
+        fn cancel_auction(&self, request: CancelAuctionRequest) -> Result<CancelAuctionOutcome> {
+            self.cancels.lock().unwrap().push(request);
+            self.cancel_result
+                .lock()
+                .unwrap()
+                .as_ref()
+                .copied()
+                .map_err(|error| anyhow::anyhow!(error.clone()))
+        }
+
+        fn resume_auction_holds(&self, actor_guid: u64) -> Result<()> {
+            self.resumes.lock().unwrap().push(actor_guid);
+            self.resume_result
+                .lock()
+                .unwrap()
+                .clone()
+                .map_err(|error| anyhow::anyhow!(error))
+        }
+
         fn auction_query(
             &self,
             player_guid: u64,
@@ -614,6 +734,10 @@ mod tests {
             bid_result: Mutex::new(Ok(PlaceBidOutcome::Accepted {
                 minimum_increment: 6,
             })),
+            cancels: Mutex::default(),
+            cancel_result: Mutex::new(Ok(CancelAuctionOutcome::Cancelled)),
+            resumes: Mutex::default(),
+            resume_result: Mutex::new(Ok(())),
             query_result: Mutex::new(Ok(AuctionPage {
                 rows: Vec::new(),
                 total: 0,
@@ -631,6 +755,10 @@ mod tests {
             create_result: Mutex::new(Ok(CreateAuctionOutcome::Database)),
             bids: Mutex::default(),
             bid_result: Mutex::new(Ok(PlaceBidOutcome::Database)),
+            cancels: Mutex::default(),
+            cancel_result: Mutex::new(Ok(CancelAuctionOutcome::Stale)),
+            resumes: Mutex::default(),
+            resume_result: Mutex::new(Ok(())),
             query_result: Mutex::new(Ok(AuctionPage {
                 rows: Vec::new(),
                 total: 0,
@@ -1329,6 +1457,120 @@ mod tests {
                         result: SMSG_AUCTION_COMMAND_RESULT_AuctionCommandResult::ErrDatabase,
                     }
         ));
+    }
+
+    fn cancel_outbound(store: &InMemoryAuctionActions) -> Result<Vec<Outbound>> {
+        match dispatch_auction_action(
+            store,
+            AuctionActionPlayer { self_guid: Some(7) },
+            wow_world_messages::vanilla::CMSG_AUCTION_REMOVE_ITEM {
+                auctioneer: Guid::new(42),
+                auction_id: 41,
+            }
+            .into(),
+        )? {
+            AuctionActionOutcome::Handled { outbound } => Ok(outbound),
+            AuctionActionOutcome::PassThrough(_) => {
+                panic!("auction cancel must never pass beyond its focused seam")
+            }
+        }
+    }
+
+    /// The encoded `SMSG_AUCTION_COMMAND_RESULT` body of the one packet in `outbound`.
+    fn command_result_bytes(outbound: &[Outbound]) -> Vec<u8> {
+        use wow_world_messages::Message;
+        let [Outbound::One(ServerOpcodeMessage::SMSG_AUCTION_COMMAND_RESULT(message))] = outbound
+        else {
+            panic!("expected one SMSG_AUCTION_COMMAND_RESULT");
+        };
+        let mut bytes = Vec::new();
+        message.write_into_vec(&mut bytes).unwrap();
+        bytes
+    }
+
+    /// `cm:AuctionHouseHandler.cpp:64-69,459`: auction id, AUCTION_REMOVED (1), AUCTION_OK (0).
+    #[test]
+    fn a_cancelled_listing_answers_removed_ok_with_its_auction_id() {
+        let store = store_with(Some(valid_interaction()));
+        let outbound = cancel_outbound(&store).unwrap();
+        assert_eq!(
+            command_result_bytes(&outbound),
+            [41, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]
+        );
+        assert_eq!(
+            store.cancels.lock().unwrap().as_slice(),
+            &[CancelAuctionRequest {
+                actor_guid: 7,
+                auctioneer_guid: 42,
+                auction_id: 41,
+                house_id: 4,
+            }]
+        );
+    }
+
+    /// `cm:AuctionHouseHandler.cpp:423-428`: auction id 0, AUCTION_REMOVED (1),
+    /// AUCTION_ERR_DATABASE (2).
+    #[test]
+    fn a_missing_foreign_or_stale_listing_answers_removed_database_error() {
+        for outcome in [CancelAuctionOutcome::NotFound, CancelAuctionOutcome::Stale] {
+            let store = store_with(Some(valid_interaction()));
+            *store.cancel_result.lock().unwrap() = Ok(outcome);
+            assert_eq!(
+                command_result_bytes(&cancel_outbound(&store).unwrap()),
+                [0, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0],
+                "{outcome:?}"
+            );
+        }
+    }
+
+    /// `cm:AuctionHouseHandler.cpp:441-442` and `:413-415`: no answer to a seller who cannot pay
+    /// the cut, or who is not at an auctioneer.
+    #[test]
+    fn an_unaffordable_cut_or_an_absent_auctioneer_is_answered_by_silence() {
+        let store = store_with(Some(valid_interaction()));
+        *store.cancel_result.lock().unwrap() = Ok(CancelAuctionOutcome::CannotAfford);
+        assert!(cancel_outbound(&store).unwrap().is_empty());
+
+        let store = store_with(None);
+        assert!(cancel_outbound(&store).unwrap().is_empty());
+        assert!(store.cancels.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_cancellation_with_an_unknown_durable_result_is_fatal() {
+        let store = store_with(Some(valid_interaction()));
+        *store.cancel_result.lock().unwrap() =
+            Err("gw_auction_hold_cancel reducer timed out after 10s".to_string());
+        let error = session_error(cancel_outbound(&store), "an unknown Cancellation outcome");
+        assert!(error.to_string().contains("timed out"));
+    }
+
+    #[test]
+    fn every_module_refusal_has_one_cancellation_answer() {
+        for (refusal, expected) in [
+            (AuctionRefusal::ItemNotFound, CancelAuctionOutcome::NotFound),
+            (
+                AuctionRefusal::NotEnoughMoney,
+                CancelAuctionOutcome::CannotAfford,
+            ),
+            (AuctionRefusal::InvalidTerms, CancelAuctionOutcome::Stale),
+            (AuctionRefusal::Database, CancelAuctionOutcome::Stale),
+        ] {
+            assert_eq!(CancelAuctionOutcome::from(refusal), expected);
+        }
+    }
+
+    #[test]
+    fn opening_the_auction_house_finishes_the_callers_unfinished_holds_first() {
+        let store = store_with(Some(valid_interaction()));
+        assert_eq!(hello_outbound(&store).unwrap().len(), 1);
+        assert_eq!(store.resumes.lock().unwrap().as_slice(), &[7]);
+
+        let store = store_with(Some(valid_interaction()));
+        *store.resume_result.lock().unwrap() =
+            Err("realm_auction_decide_cancel reducer timed out after 10s".to_string());
+        let error = session_error(hello_outbound(&store), "an unknown resume outcome");
+        assert!(error.to_string().contains("timed out"));
     }
 
     #[test]

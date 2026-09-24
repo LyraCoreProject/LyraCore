@@ -66,11 +66,11 @@ use handlers::{
 };
 pub(crate) use handlers::{
     member_stats_tick, zone_weather_message, AuctionBrowseRequest, AuctionPage, AuctionQuery,
-    ChannelOutcome, ChannelRequest, ChannelRoster, CharacterFacts, ChatOutcome,
-    CreateAuctionOutcome, CreateAuctionRequest, GuildEventSnapshot, GuildOutcome, GuildRequest,
-    ItemActionResult, LootActionStatus, LootWindowRefusal, LootWindowRequestStatus, MemberPresence,
-    MemberStatsRecord, MemberStatsStore, PlaceBidOutcome, PlaceBidRequest, RealmChatRequest,
-    SpeakerFacts, TrainerBuyOutcome, WeatherStore,
+    CancelAuctionOutcome, CancelAuctionRequest, ChannelOutcome, ChannelRequest, ChannelRoster,
+    CharacterFacts, ChatOutcome, CreateAuctionOutcome, CreateAuctionRequest, GuildEventSnapshot,
+    GuildOutcome, GuildRequest, ItemActionResult, LootActionStatus, LootWindowRefusal,
+    LootWindowRequestStatus, MemberPresence, MemberStatsRecord, MemberStatsStore, PlaceBidOutcome,
+    PlaceBidRequest, RealmChatRequest, SpeakerFacts, TrainerBuyOutcome, WeatherStore,
 };
 use login_queue::{Admission, LoginQueue};
 use social::handle_social;

@@ -4411,6 +4411,17 @@ impl AuctionActionStore for InMemoryStore {
         Ok(super::handlers::PlaceBidOutcome::Database)
     }
 
+    fn cancel_auction(
+        &self,
+        _request: super::handlers::CancelAuctionRequest,
+    ) -> Result<super::handlers::CancelAuctionOutcome> {
+        Ok(super::handlers::CancelAuctionOutcome::Stale)
+    }
+
+    fn resume_auction_holds(&self, _actor_guid: u64) -> Result<()> {
+        Ok(())
+    }
+
     fn auction_query(
         &self,
         _player_guid: u64,

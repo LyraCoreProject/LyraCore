@@ -1,12 +1,16 @@
-//! Durable imported auction houses, value-preserving bid transport, and atomic settlement.
+//! Durable imported auction houses, value-preserving bid and Cancellation transport, and atomic
+//! settlement.
 
 use spacetimedb::{reducer, table, ReducerContext, ScheduleAt, Table, Timestamp};
 
 use lyracore_shared::auction::bid_outcome::{
-    ACCEPTED as BID_ACCEPTED, BID_INCREMENT, BID_OWN, DATABASE as BID_DATABASE,
-    HIGHER_BID as BID_HIGHER, ITEM_NOT_FOUND as BID_ITEM_NOT_FOUND, PENDING as BID_PENDING,
+    ACCEPTED as BID_ACCEPTED, BID_INCREMENT, BID_OWN, CANCELLED as BID_CANCELLED,
+    DATABASE as BID_DATABASE, HIGHER_BID as BID_HIGHER, ITEM_NOT_FOUND as BID_ITEM_NOT_FOUND,
+    PENDING as BID_PENDING,
 };
-use lyracore_shared::auction::{auction_notice, bid_increment, AuctionRefusal};
+use lyracore_shared::auction::{
+    auction_cut, auction_notice, bid_increment, hold_operation, AuctionRefusal,
+};
 use lyracore_shared::mail::{MailSender, CHECK_MASK_COPIED};
 
 use crate::import_meta::game_import_meta;
@@ -121,9 +125,11 @@ pub struct AuctionOperationReceipt {
     pub random_property_id: u32,
 }
 
-/// Source-shard copper fence for one caller-identified bid. `outcome == 0` is pending; every
-/// nonzero outcome is terminal. `accepted_price` records realm-core's normalized charge, while
-/// `deferred_refund` retains any remainder that could not fit back in the bidder's purse.
+/// Source-shard copper Hold for one caller-identified bid or Cancellation. `outcome == 0` is
+/// pending; every nonzero outcome is terminal. `accepted_price` records realm-core's normalized
+/// charge, while `deferred_refund` retains any remainder that could not fit back in the purse. On a
+/// Cancellation (`operation == hold_operation::CANCEL`) `bidder_guid` is the seller and `offer` is
+/// the Auction Cut the seller agreed to pay.
 #[table(
     accessor = game_auction_bid_hold,
     index(accessor = by_bidder, btree(columns = [bidder_guid]))
@@ -144,10 +150,35 @@ pub struct AuctionBidHold {
     #[default(0)]
     pub accepted_price: u32,
     pub house: u32,
+    #[default(0u8)]
+    pub operation: u8,
 }
 
-/// Realm-core's terminal serialized decision for one bid payload. Auction changes, buyout mail,
-/// displaced mail, and any later source-refund mail are exact-once updates recorded on this row.
+// A Hold is copper on the Character's Home Shard, so it travels with the Character. A Hold left on
+// a Shard the Character has left could never be refunded there, because the refund credits the
+// purse on the Shard that holds the Hold. Deletion is refused while a Hold is unfinished, so the
+// delete sweep only removes finished rows.
+crate::character_owned!(delete, fn sweep_delete_game_auction_bid_hold(ctx, character_guid) {
+    let operations: Vec<u64> = ctx
+        .db
+        .game_auction_bid_hold()
+        .by_bidder()
+        .filter(&character_guid)
+        .map(|hold| hold.operation_id)
+        .collect();
+    for operation_id in operations {
+        ctx.db.game_auction_bid_hold().operation_id().delete(operation_id);
+    }
+});
+crate::character_owned!(transfer, fn sweep_transfer_game_auction_bid_hold(ctx, character_guid, io) {
+    table = game_auction_bid_hold,
+    by = by_bidder,
+    keep_key,
+});
+
+/// Realm-core's terminal serialized decision for one bid or Cancellation payload. Auction changes,
+/// buyout and Cancellation mail, displaced mail, and any later source-refund mail are exact-once
+/// updates recorded on this row.
 #[table(accessor = game_auction_bid_decision)]
 pub struct AuctionBidDecision {
     #[primary_key]
@@ -173,6 +204,8 @@ pub struct AuctionBidDecision {
     pub item_entry: u32,
     #[default(0u32)]
     pub random_property_id: u32,
+    #[default(0u8)]
+    pub operation: u8,
 }
 
 /// One one-shot scheduler row for each active Auction.
@@ -189,7 +222,8 @@ pub struct AuctionExpiry {
     pub auction_id: u32,
 }
 
-/// Private Relay event: a live outbid/won/sold/expired notice for one online seller or bidder,
+/// Private Relay event: a live outbid/won/sold/expired/new-bid/removed notice for one online seller
+/// or bidder,
 /// inserted in the same transaction as the Auction Mail it accompanies. `kind` is one of
 /// `lyracore_shared::auction::auction_notice`. Reaped by the shared event GC, same as
 /// `game_whisper_event`.
@@ -214,8 +248,8 @@ pub struct AuctionNotice {
 }
 
 // Auction durability belongs to the listing protocol, not character transport. Active Auction or
-// Hold value blocks character deletion, and every row stays on the database that owns its protocol
-// phase rather than entering the character movement manifest.
+// Hold value blocks character deletion, and every row except the bid Hold stays on the database
+// that owns its protocol phase rather than entering the character movement manifest.
 
 fn duration_multiplier(duration_minutes: u32) -> Option<u64> {
     match duration_minutes {
@@ -248,18 +282,8 @@ fn listing_deposit(
     u32::try_from(deposit.max(1)).ok()
 }
 
-/// The house's cut of a sale, truncated (`cm:AuctionHouseMgr.cpp:733-736`). Shared by
-/// `seller_proceeds` and the Successful Auction Mail's invoice body, so the two can never disagree
-/// on what the seller was charged.
-fn consignment_cut(winning_price: u32, consignment_rate: u32) -> Option<u32> {
-    if !valid_rate(consignment_rate) {
-        return None;
-    }
-    u32::try_from(u64::from(winning_price).checked_mul(u64::from(consignment_rate))? / 100).ok()
-}
-
 fn seller_proceeds(winning_price: u32, deposit: u32, consignment_rate: u32) -> Option<u32> {
-    let cut = consignment_cut(winning_price, consignment_rate)?;
+    let cut = auction_cut(winning_price, consignment_rate)?;
     let after_cut = winning_price.checked_sub(cut)?;
     after_cut.checked_add(deposit)
 }
@@ -420,8 +444,35 @@ enum OperationMatch {
     Fresh,
 }
 
+/// What a bid Hold row pays for. Stored as `hold_operation` codes by position, so only append.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct BidRequest {
+enum HoldOperation {
+    Bid,
+    Cancel,
+}
+
+impl HoldOperation {
+    fn code(self) -> u8 {
+        match self {
+            Self::Bid => hold_operation::BID,
+            Self::Cancel => hold_operation::CANCEL,
+        }
+    }
+
+    fn from_code(code: u8) -> Option<Self> {
+        match code {
+            hold_operation::BID => Some(Self::Bid),
+            hold_operation::CANCEL => Some(Self::Cancel),
+            _ => None,
+        }
+    }
+}
+
+/// One Hold's identity. On a Cancel, `bidder_guid` is the seller and `offer` is the Auction Cut
+/// the Gateway read, which Realm-core must still find current.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct HoldRequest {
+    operation: HoldOperation,
     operation_id: u64,
     bidder_guid: u64,
     auction_id: u32,
@@ -460,7 +511,7 @@ struct BidAcceptance {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum BidDecision {
+enum HoldDecision {
     Accepted(BidAcceptance),
     ItemNotFound,
     HigherBid {
@@ -471,18 +522,40 @@ enum BidDecision {
     BidIncrement,
     BidOwn,
     Database,
+    /// The seller withdrew the listing and pays `cut`. A displaced bidder gets `displaced_bid`
+    /// back by mail.
+    Cancelled {
+        cut: u32,
+        displaced_bidder_guid: u64,
+        displaced_bid: u32,
+    },
+}
+
+impl HoldDecision {
+    /// Whether Realm-core can reach this decision for `operation`. A decision for the other
+    /// operation is a forged or crossed payload.
+    fn belongs_to(self, operation: HoldOperation) -> bool {
+        match self {
+            Self::Accepted(_) | Self::HigherBid { .. } | Self::BidIncrement | Self::BidOwn => {
+                operation == HoldOperation::Bid
+            }
+            Self::Cancelled { .. } => operation == HoldOperation::Cancel,
+            Self::ItemNotFound | Self::Database => true,
+        }
+    }
 }
 
 /// The vanilla `MailAuctionAnswers` action code embedded in an Auction Mail's subject
-/// (`cm:Mail.h:100-109`). `Cancelled` (4, to a displaced bidder) has no writer yet; a future
-/// cancellation flow adds it. `5` is today's only Cancelled writer: a refused listing's return to
-/// its seller, which has no vanilla twin and uses the closest client string.
+/// (`cm:Mail.h:100-109`). `Cancelled` (5) returns a cancelled listing's item to its seller; a
+/// refused listing's return uses it too, as the closest client string for a return with no vanilla
+/// twin. `CancelledToBidder` (4) refunds the displaced bid of a cancelled listing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AuctionMailAction {
     Outbid = 0,
     Won = 1,
     Successful = 2,
     Expired = 3,
+    CancelledToBidder = 4,
     Cancelled = 5,
 }
 
@@ -542,7 +615,7 @@ fn sale_settlement_mail(
     deposit: u32,
     consignment_rate: u32,
 ) -> Option<[AuctionMail; 2]> {
-    let cut = consignment_cut(winning_price, consignment_rate)?;
+    let cut = auction_cut(winning_price, consignment_rate)?;
     let proceeds = seller_proceeds(winning_price, deposit, consignment_rate)?;
     Some([
         AuctionMail {
@@ -617,6 +690,47 @@ fn listing_release_mail(listing: &PreparedListing) -> AuctionMail {
     }
 }
 
+/// A Cancellation's mail (`cm:AuctionHouseHandler.cpp:167-189,440-456`): the item goes back to the
+/// seller in a Cancelled mail, and a displaced bidder gets the bid back in a Cancelled-to-bidder
+/// mail. No mail carries the deposit, because the house keeps it.
+fn cancellation_mail(
+    auction: BidAuction,
+    displaced_bidder_guid: u64,
+    displaced_bid: u32,
+) -> Vec<AuctionMail> {
+    let mail = |recipient_guid, action, money, attached_item| AuctionMail {
+        recipient_guid,
+        house: auction.house,
+        action,
+        item_entry: auction.item.entry,
+        random_property_id: auction.item.random_property_id,
+        money,
+        attached_item,
+        counterparty_guid: 0,
+        bid: 0,
+        buyout: 0,
+        deposit: 0,
+        cut: 0,
+    };
+    let refund = (displaced_bidder_guid != 0).then(|| {
+        mail(
+            displaced_bidder_guid,
+            AuctionMailAction::CancelledToBidder,
+            displaced_bid,
+            crate::items::ItemSnapshot::default(),
+        )
+    });
+    refund
+        .into_iter()
+        .chain([mail(
+            auction.owner_guid,
+            AuctionMailAction::Cancelled,
+            0,
+            auction.item,
+        )])
+        .collect()
+}
+
 /// `"{item_entry}:{random_property_id}:{action}"` (`cm:AuctionHouseMgr.cpp:134,181,229`,
 /// `cm:AuctionHouseHandler.cpp:155,180,451`). The client builds the visible subject from this and
 /// the item's name (`fx:GlobalStrings.lua:83,87,88,89,99`).
@@ -642,9 +756,10 @@ fn auction_mail_body(mail: &AuctionMail) -> String {
             "{:>16x}:{}:{}:{}:{}",
             mail.counterparty_guid, mail.bid, mail.buyout, mail.deposit, mail.cut
         ),
-        AuctionMailAction::Outbid | AuctionMailAction::Expired | AuctionMailAction::Cancelled => {
-            String::new()
-        }
+        AuctionMailAction::Outbid
+        | AuctionMailAction::Expired
+        | AuctionMailAction::CancelledToBidder
+        | AuctionMailAction::Cancelled => String::new(),
     }
 }
 
@@ -810,6 +925,28 @@ fn expired_notice(
     }
 }
 
+/// Removed, to the bidder a Cancellation displaces (`cm:AuctionHouseHandler.cpp:131-139,182-183`).
+/// The client prints `ERR_AUCTION_REMOVED_S` with the item's name.
+fn removed_notice(
+    house: u32,
+    auction_id: u32,
+    item: crate::items::ItemSnapshot,
+    displaced_bidder_guid: u64,
+    displaced_bid: u32,
+) -> Option<AuctionNoticeDraft> {
+    (displaced_bidder_guid != 0).then_some(AuctionNoticeDraft {
+        recipient_guid: displaced_bidder_guid,
+        kind: auction_notice::REMOVED,
+        house,
+        auction_id,
+        item_entry: item.entry,
+        random_property_id: item.random_property_id,
+        bid: displaced_bid,
+        out_bid: 0,
+        bidder_guid: displaced_bidder_guid,
+    })
+}
+
 #[derive(Clone, Copy)]
 struct BidDecisionFields {
     outcome: u8,
@@ -820,7 +957,7 @@ struct BidDecisionFields {
     accepted_price: u32,
 }
 
-fn bid_decision_fields(decision: BidDecision) -> BidDecisionFields {
+fn bid_decision_fields(decision: HoldDecision) -> BidDecisionFields {
     let mut fields = BidDecisionFields {
         outcome: BID_DATABASE,
         revision: 0,
@@ -830,7 +967,7 @@ fn bid_decision_fields(decision: BidDecision) -> BidDecisionFields {
         accepted_price: 0,
     };
     match decision {
-        BidDecision::Accepted(BidAcceptance {
+        HoldDecision::Accepted(BidAcceptance {
             price,
             effect,
             displaced_bidder_guid,
@@ -845,8 +982,8 @@ fn bid_decision_fields(decision: BidDecision) -> BidDecisionFields {
             fields.result_bid = displaced_bid;
             fields.accepted_price = price;
         }
-        BidDecision::ItemNotFound => fields.outcome = BID_ITEM_NOT_FOUND,
-        BidDecision::HigherBid {
+        HoldDecision::ItemNotFound => fields.outcome = BID_ITEM_NOT_FOUND,
+        HoldDecision::HigherBid {
             bidder_guid,
             current_bid,
             minimum_increment,
@@ -856,17 +993,27 @@ fn bid_decision_fields(decision: BidDecision) -> BidDecisionFields {
             fields.result_bid = current_bid;
             fields.minimum_increment = minimum_increment;
         }
-        BidDecision::BidIncrement => fields.outcome = BID_INCREMENT,
-        BidDecision::BidOwn => fields.outcome = BID_OWN,
-        BidDecision::Database => {}
+        HoldDecision::BidIncrement => fields.outcome = BID_INCREMENT,
+        HoldDecision::BidOwn => fields.outcome = BID_OWN,
+        HoldDecision::Database => {}
+        HoldDecision::Cancelled {
+            cut,
+            displaced_bidder_guid,
+            displaced_bid,
+        } => {
+            fields.outcome = BID_CANCELLED;
+            fields.result_bidder_guid = displaced_bidder_guid;
+            fields.result_bid = displaced_bid;
+            fields.accepted_price = cut;
+        }
     }
     fields
 }
 
-fn bid_decision_from_fields(fields: BidDecisionFields, legacy_offer: u32) -> Option<BidDecision> {
+fn bid_decision_from_fields(fields: BidDecisionFields, legacy_offer: u32) -> Option<HoldDecision> {
     match fields.outcome {
         BID_PENDING => None,
-        BID_ACCEPTED => Some(BidDecision::Accepted(BidAcceptance {
+        BID_ACCEPTED => Some(HoldDecision::Accepted(BidAcceptance {
             price: if fields.accepted_price == 0 {
                 legacy_offer
             } else {
@@ -882,19 +1029,25 @@ fn bid_decision_from_fields(fields: BidDecisionFields, legacy_offer: u32) -> Opt
             displaced_bidder_guid: fields.result_bidder_guid,
             displaced_bid: fields.result_bid,
         })),
-        BID_ITEM_NOT_FOUND => Some(BidDecision::ItemNotFound),
-        BID_HIGHER => Some(BidDecision::HigherBid {
+        BID_ITEM_NOT_FOUND => Some(HoldDecision::ItemNotFound),
+        BID_HIGHER => Some(HoldDecision::HigherBid {
             bidder_guid: fields.result_bidder_guid,
             current_bid: fields.result_bid,
             minimum_increment: fields.minimum_increment,
         }),
-        BID_INCREMENT => Some(BidDecision::BidIncrement),
-        BID_OWN => Some(BidDecision::BidOwn),
-        _ => Some(BidDecision::Database),
+        BID_INCREMENT => Some(HoldDecision::BidIncrement),
+        BID_OWN => Some(HoldDecision::BidOwn),
+        // No legacy fallback: a Cancellation's cut of 0 is a real charge of nothing.
+        BID_CANCELLED => Some(HoldDecision::Cancelled {
+            cut: fields.accepted_price,
+            displaced_bidder_guid: fields.result_bidder_guid,
+            displaced_bid: fields.result_bid,
+        }),
+        _ => Some(HoldDecision::Database),
     }
 }
 
-fn held_bid_decision(row: &AuctionBidHold) -> Option<BidDecision> {
+fn held_bid_decision(row: &AuctionBidHold) -> Option<HoldDecision> {
     bid_decision_from_fields(
         BidDecisionFields {
             outcome: row.outcome,
@@ -908,7 +1061,7 @@ fn held_bid_decision(row: &AuctionBidHold) -> Option<BidDecision> {
     )
 }
 
-fn realm_bid_decision(row: &AuctionBidDecision) -> Option<BidDecision> {
+fn realm_bid_decision(row: &AuctionBidDecision) -> Option<HoldDecision> {
     bid_decision_from_fields(
         BidDecisionFields {
             outcome: row.outcome,
@@ -924,29 +1077,32 @@ fn realm_bid_decision(row: &AuctionBidDecision) -> Option<BidDecision> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct HeldBid {
-    request: BidRequest,
-    decision: Option<BidDecision>,
+    request: HoldRequest,
+    decision: Option<HoldDecision>,
     deferred_refund: u32,
 }
 
 trait BidSource {
     fn money(&self, bidder_guid: u64) -> Option<u32>;
     fn hold(&self, operation_id: u64) -> Option<HeldBid>;
-    fn create_hold(&mut self, request: BidRequest) -> Result<(), AuctionRefusal>;
+    fn create_hold(&mut self, request: HoldRequest) -> Result<(), AuctionRefusal>;
     fn finish_hold(
         &mut self,
-        request: BidRequest,
-        decision: BidDecision,
+        request: HoldRequest,
+        decision: HoldDecision,
     ) -> Result<(), AuctionRefusal>;
-    fn confirm_refund(&mut self, request: BidRequest) -> Result<(), AuctionRefusal>;
+    fn confirm_refund(&mut self, request: HoldRequest) -> Result<(), AuctionRefusal>;
 }
 
-fn fence_bid<S: BidSource>(source: &mut S, request: BidRequest) -> Result<(), AuctionRefusal> {
+/// Move a Hold's value out of the purse. A bid holds its full offer. A Cancellation holds the Auction
+/// Cut, which is 0 for a listing nobody bid on, and still takes the Hold so the interaction Gate
+/// runs on the Home Shard.
+fn fence_bid<S: BidSource>(source: &mut S, request: HoldRequest) -> Result<(), AuctionRefusal> {
     if request.operation_id == 0
         || request.bidder_guid == 0
         || request.auction_id == 0
         || request.house == 0
-        || request.offer == 0
+        || (request.offer == 0 && request.operation == HoldOperation::Bid)
     {
         return Err(AuctionRefusal::Database);
     }
@@ -969,13 +1125,13 @@ fn fence_bid<S: BidSource>(source: &mut S, request: BidRequest) -> Result<(), Au
 
 fn finish_bid<S: BidSource>(
     source: &mut S,
-    request: BidRequest,
-    decision: BidDecision,
-) -> Result<BidDecision, AuctionRefusal> {
+    request: HoldRequest,
+    decision: HoldDecision,
+) -> Result<HoldDecision, AuctionRefusal> {
     let hold = source
         .hold(request.operation_id)
         .ok_or(AuctionRefusal::Database)?;
-    if hold.request != request {
+    if hold.request != request || !decision.belongs_to(request.operation) {
         return Err(AuctionRefusal::Database);
     }
     if let Some(existing) = hold.decision {
@@ -994,29 +1150,33 @@ fn split_bid_refund(purse: u32, refund: u32) -> (u32, u32) {
     (purse + purse_credit, refund - purse_credit)
 }
 
-fn refundable_bid_value(decision: BidDecision, offer: u32) -> Option<u32> {
+fn refundable_bid_value(decision: HoldDecision, offer: u32) -> Option<u32> {
     match decision {
-        BidDecision::Accepted(BidAcceptance { price, .. }) if price != 0 && price <= offer => {
+        HoldDecision::Accepted(BidAcceptance { price, .. }) if price != 0 && price <= offer => {
             offer.checked_sub(price)
         }
-        BidDecision::Accepted(_) => None,
+        HoldDecision::Accepted(_) => None,
+        // A Cancellation spends exactly the cut it held; a different cut was never agreed.
+        HoldDecision::Cancelled { cut, .. } if cut == offer => Some(0),
+        HoldDecision::Cancelled { .. } => None,
         _ => Some(offer),
     }
 }
 
-fn minimum_next_bid(auction: BidAuction) -> Result<u32, BidDecision> {
+fn minimum_next_bid(auction: BidAuction) -> Result<u32, HoldDecision> {
     lyracore_shared::auction::minimum_next_bid(auction.start_bid, auction.highest_bid)
-        .ok_or(BidDecision::Database)
+        .ok_or(HoldDecision::Database)
 }
 
-fn decide_bid(auction: Option<BidAuction>, request: BidRequest, now_micros: i64) -> BidDecision {
-    if request.operation_id == 0
+fn decide_bid(auction: Option<BidAuction>, request: HoldRequest, now_micros: i64) -> HoldDecision {
+    if request.operation != HoldOperation::Bid
+        || request.operation_id == 0
         || request.bidder_guid == 0
         || request.auction_id == 0
         || request.house == 0
         || request.offer == 0
     {
-        return BidDecision::Database;
+        return HoldDecision::Database;
     }
     let Some(auction) = auction.filter(|auction| {
         auction.id == request.auction_id
@@ -1024,10 +1184,10 @@ fn decide_bid(auction: Option<BidAuction>, request: BidRequest, now_micros: i64)
                 == lyracore_shared::auction::market_of(request.house)
             && auction.expires_micros > now_micros
     }) else {
-        return BidDecision::ItemNotFound;
+        return HoldDecision::ItemNotFound;
     };
     if auction.owner_guid == request.bidder_guid {
-        return BidDecision::BidOwn;
+        return HoldDecision::BidOwn;
     }
     let is_buyout = auction.buyout != 0 && request.offer >= auction.buyout;
     let minimum_increment = lyracore_shared::auction::bid_increment(auction.highest_bid);
@@ -1035,12 +1195,12 @@ fn decide_bid(auction: Option<BidAuction>, request: BidRequest, now_micros: i64)
         None
     } else {
         let Ok(minimum) = minimum_next_bid(auction) else {
-            return BidDecision::Database;
+            return HoldDecision::Database;
         };
         Some(minimum)
     };
     if auction.highest_bid != 0 && request.offer <= auction.highest_bid {
-        return BidDecision::HigherBid {
+        return HoldDecision::HigherBid {
             bidder_guid: auction.highest_bidder_guid,
             current_bid: auction.highest_bid,
             minimum_increment,
@@ -1048,9 +1208,9 @@ fn decide_bid(auction: Option<BidAuction>, request: BidRequest, now_micros: i64)
     }
     if is_buyout {
         if seller_proceeds(auction.buyout, auction.deposit, auction.consignment_rate).is_none() {
-            return BidDecision::Database;
+            return HoldDecision::Database;
         }
-        return BidDecision::Accepted(BidAcceptance {
+        return HoldDecision::Accepted(BidAcceptance {
             price: auction.buyout,
             effect: AuctionBidEffect::SettleBuyout,
             displaced_bidder_guid: auction.highest_bidder_guid,
@@ -1058,18 +1218,18 @@ fn decide_bid(auction: Option<BidAuction>, request: BidRequest, now_micros: i64)
         });
     }
     let Some(minimum) = minimum else {
-        return BidDecision::Database;
+        return HoldDecision::Database;
     };
     if request.offer < minimum {
-        return BidDecision::BidIncrement;
+        return HoldDecision::BidIncrement;
     }
     if seller_proceeds(request.offer, auction.deposit, auction.consignment_rate).is_none() {
-        return BidDecision::Database;
+        return HoldDecision::Database;
     }
     let Some(revision) = auction.revision.checked_add(1) else {
-        return BidDecision::Database;
+        return HoldDecision::Database;
     };
-    BidDecision::Accepted(BidAcceptance {
+    HoldDecision::Accepted(BidAcceptance {
         price: request.offer,
         effect: AuctionBidEffect::RemainActive { revision },
         displaced_bidder_guid: auction.highest_bidder_guid,
@@ -1077,26 +1237,67 @@ fn decide_bid(auction: Option<BidAuction>, request: BidRequest, now_micros: i64)
     })
 }
 
+/// Realm-core's Cancellation Gate (`cm:AuctionHouseHandler.cpp:403-468`). Only the seller cancels,
+/// only an active listing of the auctioneer's market, and only at the cut the seller's Hold paid
+/// for: a bid that landed after the Gateway read the listing changes the cut and refuses the
+/// Cancellation, so the Hold refunds and the seller can try again.
+fn decide_cancel(
+    auction: Option<BidAuction>,
+    request: HoldRequest,
+    now_micros: i64,
+) -> HoldDecision {
+    if request.operation != HoldOperation::Cancel
+        || request.operation_id == 0
+        || request.bidder_guid == 0
+        || request.auction_id == 0
+        || request.house == 0
+    {
+        return HoldDecision::Database;
+    }
+    let Some(auction) = auction.filter(|auction| {
+        auction.id == request.auction_id
+            && auction.owner_guid == request.bidder_guid
+            && lyracore_shared::auction::market_of(auction.house)
+                == lyracore_shared::auction::market_of(request.house)
+            && auction.expires_micros > now_micros
+    }) else {
+        return HoldDecision::ItemNotFound;
+    };
+    // A bid without a bidder, or a bidder without a bid, has no one to refund; expiry keeps the
+    // same state for repair.
+    if (auction.highest_bidder_guid == 0) != (auction.highest_bid == 0) {
+        return HoldDecision::Database;
+    }
+    match auction_cut(auction.highest_bid, auction.consignment_rate) {
+        Some(cut) if cut == request.offer => HoldDecision::Cancelled {
+            cut,
+            displaced_bidder_guid: auction.highest_bidder_guid,
+            displaced_bid: auction.highest_bid,
+        },
+        _ => HoldDecision::Database,
+    }
+}
+
 trait BidMarket {
-    fn decision(&self, operation_id: u64) -> Option<(BidRequest, BidDecision)>;
+    fn decision(&self, operation_id: u64) -> Option<(HoldRequest, HoldDecision)>;
     fn auction(&self, auction_id: u32) -> Option<BidAuction>;
     fn now_micros(&self) -> i64;
     fn commit_decision(
         &mut self,
-        request: BidRequest,
+        request: HoldRequest,
         auction: Option<BidAuction>,
-        decision: BidDecision,
+        decision: HoldDecision,
     ) -> Result<(), AuctionRefusal>;
 }
 
 trait BidRefundSink {
-    fn refund_decision(&self, operation_id: u64) -> Option<(BidRequest, BidDecision, u32)>;
-    fn commit_refund(&mut self, request: BidRequest, amount: u32) -> Result<(), AuctionRefusal>;
+    fn refund_decision(&self, operation_id: u64) -> Option<(HoldRequest, HoldDecision, u32)>;
+    fn commit_refund(&mut self, request: HoldRequest, amount: u32) -> Result<(), AuctionRefusal>;
 }
 
 fn relay_bid_refund<S: BidRefundSink>(
     sink: &mut S,
-    request: BidRequest,
+    request: HoldRequest,
     amount: u32,
 ) -> Result<(), AuctionRefusal> {
     if amount == 0 {
@@ -1122,7 +1323,7 @@ fn relay_bid_refund<S: BidRefundSink>(
 
 fn confirm_bid_refund<S: BidSource>(
     source: &mut S,
-    request: BidRequest,
+    request: HoldRequest,
     amount: u32,
 ) -> Result<(), AuctionRefusal> {
     if amount == 0 {
@@ -1148,8 +1349,8 @@ fn confirm_bid_refund<S: BidSource>(
 
 fn resolve_bid<S: BidMarket>(
     market: &mut S,
-    request: BidRequest,
-) -> Result<BidDecision, AuctionRefusal> {
+    request: HoldRequest,
+) -> Result<HoldDecision, AuctionRefusal> {
     if let Some((existing_request, decision)) = market.decision(request.operation_id) {
         return if existing_request == request {
             Ok(decision)
@@ -1158,7 +1359,10 @@ fn resolve_bid<S: BidMarket>(
         };
     }
     let auction = market.auction(request.auction_id);
-    let decision = decide_bid(auction, request, market.now_micros());
+    let decision = match request.operation {
+        HoldOperation::Bid => decide_bid(auction, request, market.now_micros()),
+        HoldOperation::Cancel => decide_cancel(auction, request, market.now_micros()),
+    };
     market.commit_decision(request, auction, decision)?;
     Ok(decision)
 }
@@ -1166,8 +1370,8 @@ fn resolve_bid<S: BidMarket>(
 fn drive_bid<S: BidSource, M: BidMarket>(
     source: &mut S,
     market: &mut M,
-    request: BidRequest,
-) -> Result<BidDecision, AuctionRefusal> {
+    request: HoldRequest,
+) -> Result<HoldDecision, AuctionRefusal> {
     fence_bid(source, request)?;
     if let Some(decision) = source
         .hold(request.operation_id)
@@ -1766,25 +1970,27 @@ impl BidSource for CtxBidSource<'_> {
     }
 
     fn hold(&self, operation_id: u64) -> Option<HeldBid> {
-        self.ctx
+        let row = self
+            .ctx
             .db
             .game_auction_bid_hold()
             .operation_id()
-            .find(operation_id)
-            .map(|row| HeldBid {
-                request: BidRequest {
-                    operation_id: row.operation_id,
-                    bidder_guid: row.bidder_guid,
-                    auction_id: row.auction_id,
-                    house: row.house,
-                    offer: row.offer,
-                },
-                decision: held_bid_decision(&row),
-                deferred_refund: row.deferred_refund,
-            })
+            .find(operation_id)?;
+        Some(HeldBid {
+            request: hold_request(
+                HoldOperation::from_code(row.operation)?,
+                row.operation_id,
+                row.bidder_guid,
+                row.auction_id,
+                row.house,
+                row.offer,
+            ),
+            decision: held_bid_decision(&row),
+            deferred_refund: row.deferred_refund,
+        })
     }
 
-    fn create_hold(&mut self, request: BidRequest) -> Result<(), AuctionRefusal> {
+    fn create_hold(&mut self, request: HoldRequest) -> Result<(), AuctionRefusal> {
         let mut bidder = crate::helpers::acting_entity_by_guid(self.ctx, request.bidder_guid)
             .ok_or(AuctionRefusal::NotEnoughMoney)?;
         bidder.money = bidder
@@ -1805,14 +2011,15 @@ impl BidSource for CtxBidSource<'_> {
             minimum_increment: 0,
             accepted_price: 0,
             deferred_refund: 0,
+            operation: request.operation.code(),
         });
         Ok(())
     }
 
     fn finish_hold(
         &mut self,
-        request: BidRequest,
-        decision: BidDecision,
+        request: HoldRequest,
+        decision: HoldDecision,
     ) -> Result<(), AuctionRefusal> {
         let refund =
             refundable_bid_value(decision, request.offer).ok_or(AuctionRefusal::Database)?;
@@ -1844,11 +2051,12 @@ impl BidSource for CtxBidSource<'_> {
                 minimum_increment: fields.minimum_increment,
                 accepted_price: fields.accepted_price,
                 deferred_refund,
+                operation: request.operation.code(),
             });
         Ok(())
     }
 
-    fn confirm_refund(&mut self, request: BidRequest) -> Result<(), AuctionRefusal> {
+    fn confirm_refund(&mut self, request: HoldRequest) -> Result<(), AuctionRefusal> {
         let mut row = self
             .ctx
             .db
@@ -1856,7 +2064,8 @@ impl BidSource for CtxBidSource<'_> {
             .operation_id()
             .find(request.operation_id)
             .ok_or(AuctionRefusal::Database)?;
-        if row.bidder_guid != request.bidder_guid
+        if row.operation != request.operation.code()
+            || row.bidder_guid != request.bidder_guid
             || row.auction_id != request.auction_id
             || row.house != request.house
             || row.offer != request.offer
@@ -1878,24 +2087,14 @@ struct CtxBidMarket<'a> {
 }
 
 impl BidMarket for CtxBidMarket<'_> {
-    fn decision(&self, operation_id: u64) -> Option<(BidRequest, BidDecision)> {
+    fn decision(&self, operation_id: u64) -> Option<(HoldRequest, HoldDecision)> {
         let row = self
             .ctx
             .db
             .game_auction_bid_decision()
             .operation_id()
             .find(operation_id)?;
-        let decision = realm_bid_decision(&row)?;
-        Some((
-            BidRequest {
-                operation_id: row.operation_id,
-                bidder_guid: row.bidder_guid,
-                auction_id: row.auction_id,
-                house: row.house,
-                offer: row.offer,
-            },
-            decision,
-        ))
+        Some((decided_request(&row)?, realm_bid_decision(&row)?))
     }
 
     fn auction(&self, auction_id: u32) -> Option<BidAuction> {
@@ -1933,11 +2132,11 @@ impl BidMarket for CtxBidMarket<'_> {
 
     fn commit_decision(
         &mut self,
-        request: BidRequest,
+        request: HoldRequest,
         auction: Option<BidAuction>,
-        decision: BidDecision,
+        decision: HoldDecision,
     ) -> Result<(), AuctionRefusal> {
-        if let BidDecision::Accepted(accepted) = decision {
+        if let HoldDecision::Accepted(accepted) = decision {
             let expected = auction.ok_or(AuctionRefusal::Database)?;
             let mut row = self
                 .ctx
@@ -2017,6 +2216,18 @@ impl BidMarket for CtxBidMarket<'_> {
                 }
             }
         }
+        if let HoldDecision::Cancelled {
+            displaced_bidder_guid,
+            displaced_bid,
+            ..
+        } = decision
+        {
+            self.commit_cancellation(
+                auction.ok_or(AuctionRefusal::Database)?,
+                displaced_bidder_guid,
+                displaced_bid,
+            )?;
+        }
         let fields = bid_decision_fields(decision);
         // The Auction row this decision is about may be deleted later (settled or expired) before
         // a purse-overflow refund on it fires. Keep the item the refund's subject needs here,
@@ -2041,34 +2252,72 @@ impl BidMarket for CtxBidMarket<'_> {
                 deferred_refund: 0,
                 item_entry,
                 random_property_id,
+                operation: request.operation.code(),
             });
         Ok(())
     }
 }
 
+impl CtxBidMarket<'_> {
+    /// Remove the listing the decision read, return its item to the seller, and refund the
+    /// displaced bidder, all in the decision's transaction.
+    fn commit_cancellation(
+        &mut self,
+        expected: BidAuction,
+        displaced_bidder_guid: u64,
+        displaced_bid: u32,
+    ) -> Result<(), AuctionRefusal> {
+        let row = self
+            .ctx
+            .db
+            .game_auction()
+            .id()
+            .find(expected.id)
+            .ok_or(AuctionRefusal::Database)?;
+        if row.revision != expected.revision
+            || row.highest_bidder_guid != displaced_bidder_guid
+            || row.highest_bid != displaced_bid
+        {
+            return Err(AuctionRefusal::Database);
+        }
+        self.ctx
+            .db
+            .game_auction_expiry()
+            .auction_id()
+            .delete(row.id);
+        self.ctx.db.game_auction().id().delete(row.id);
+        cancellation_mail(expected, displaced_bidder_guid, displaced_bid)
+            .into_iter()
+            .for_each(|mail| insert_auction_mail(self.ctx, mail));
+        removed_notice(
+            expected.house,
+            expected.id,
+            expected.item,
+            displaced_bidder_guid,
+            displaced_bid,
+        )
+        .into_iter()
+        .for_each(|notice| insert_auction_notice(self.ctx, notice));
+        Ok(())
+    }
+}
+
 impl BidRefundSink for CtxBidMarket<'_> {
-    fn refund_decision(&self, operation_id: u64) -> Option<(BidRequest, BidDecision, u32)> {
+    fn refund_decision(&self, operation_id: u64) -> Option<(HoldRequest, HoldDecision, u32)> {
         let row = self
             .ctx
             .db
             .game_auction_bid_decision()
             .operation_id()
             .find(operation_id)?;
-        let decision = realm_bid_decision(&row)?;
         Some((
-            bid_request(
-                row.operation_id,
-                row.bidder_guid,
-                row.auction_id,
-                row.house,
-                row.offer,
-            ),
-            decision,
+            decided_request(&row)?,
+            realm_bid_decision(&row)?,
             row.deferred_refund,
         ))
     }
 
-    fn commit_refund(&mut self, request: BidRequest, amount: u32) -> Result<(), AuctionRefusal> {
+    fn commit_refund(&mut self, request: HoldRequest, amount: u32) -> Result<(), AuctionRefusal> {
         let mut row = self
             .ctx
             .db
@@ -2076,19 +2325,15 @@ impl BidRefundSink for CtxBidMarket<'_> {
             .operation_id()
             .find(request.operation_id)
             .ok_or(AuctionRefusal::Database)?;
-        if row.bidder_guid != request.bidder_guid
-            || row.auction_id != request.auction_id
-            || row.house != request.house
-            || row.offer != request.offer
-            || row.deferred_refund != 0
-        {
+        if decided_request(&row) != Some(request) || row.deferred_refund != 0 {
             return Err(AuctionRefusal::Database);
         }
-        // The Auction this bid was on may already be settled and gone (this refund is the
-        // purse-overflow remainder of a bid that did not win). No vanilla auction sends this mail
-        // at all; it renders as the closest client string, Outbid, carrying the refund. The item
-        // comes from the decision row itself, not a fresh Auction lookup, because the row this
-        // refund is about can outlive the Auction it was decided against.
+        // The Auction this Hold was about may already be settled and gone (this refund is the
+        // purse-overflow remainder of a bid that did not win, or of a refused Cancellation's cut).
+        // No vanilla auction sends this mail at all; it renders as the closest client string,
+        // Outbid, carrying the refund. The item comes from the decision row itself, not a fresh
+        // Auction lookup, because the row this refund is about can outlive the Auction it was
+        // decided against.
         insert_auction_mail(
             self.ctx,
             AuctionMail {
@@ -2116,20 +2361,55 @@ impl BidRefundSink for CtxBidMarket<'_> {
     }
 }
 
-fn bid_request(
+fn hold_request(
+    operation: HoldOperation,
     operation_id: u64,
     bidder_guid: u64,
     auction_id: u32,
     house: u32,
     offer: u32,
-) -> BidRequest {
-    BidRequest {
+) -> HoldRequest {
+    HoldRequest {
+        operation,
         operation_id,
         bidder_guid,
         auction_id,
         house,
         offer,
     }
+}
+
+/// The request a Realm-core decision row records. An operation code this Module does not know
+/// reads as no request, so every comparison against it fails closed.
+fn decided_request(row: &AuctionBidDecision) -> Option<HoldRequest> {
+    Some(hold_request(
+        HoldOperation::from_code(row.operation)?,
+        row.operation_id,
+        row.bidder_guid,
+        row.auction_id,
+        row.house,
+        row.offer,
+    ))
+}
+
+/// The operation a stored Hold or decision row pays for. The later phases take their operation
+/// from the row, never from the caller, so one reducer finishes bids and Cancellations alike. A
+/// missing row reads as a bid; the phase then finds no matching Hold and refuses.
+fn stored_hold_operation(ctx: &ReducerContext, operation_id: u64) -> HoldOperation {
+    ctx.db
+        .game_auction_bid_hold()
+        .operation_id()
+        .find(operation_id)
+        .map(|row| row.operation)
+        .or_else(|| {
+            ctx.db
+                .game_auction_bid_decision()
+                .operation_id()
+                .find(operation_id)
+                .map(|row| row.operation)
+        })
+        .and_then(HoldOperation::from_code)
+        .unwrap_or(HoldOperation::Bid)
 }
 
 fn validate_market_listing(ctx: &ReducerContext, listing: &PreparedListing) -> Result<(), String> {
@@ -2561,6 +2841,59 @@ pub fn gw_auction_release_listing_hold(
         .map_err(|refusal| refused(refusal, "listing Hold is confirmed"))
 }
 
+/// The Home Shard half every Hold starts with: the interaction Gate on a fresh operation, then the
+/// fence. A replay skips the Gate, because the Hold already proves it passed.
+fn gate_and_fence(
+    ctx: &ReducerContext,
+    request: HoldRequest,
+    auctioneer_guid: u64,
+) -> Result<(), String> {
+    let replay = ctx
+        .db
+        .game_auction_bid_hold()
+        .operation_id()
+        .find(request.operation_id)
+        .is_some();
+    if !replay
+        && auction_house_for_interaction(ctx, request.bidder_guid, auctioneer_guid)
+            .is_none_or(|policy| policy.id != request.house)
+    {
+        return Err(refused(
+            AuctionRefusal::Database,
+            "auctioneer refused interaction",
+        ));
+    }
+    fence_bid(&mut CtxBidSource { ctx }, request)
+        .map_err(|refusal| refused(refusal, "Hold rejected"))
+}
+
+/// Single-database Hold: the fence, the realm decision, its Auction and mail effects, the terminal
+/// source outcome and any purse-overflow refund mail commit in one transaction.
+fn drive_local_hold(
+    ctx: &ReducerContext,
+    request: HoldRequest,
+    auctioneer_guid: u64,
+) -> Result<(), String> {
+    gate_and_fence(ctx, request, auctioneer_guid)?;
+    drive_bid(
+        &mut CtxBidSource { ctx },
+        &mut CtxBidMarket { ctx },
+        request,
+    )
+    .map_err(|refusal| refused(refusal, "local Hold rejected"))?;
+    let deferred_refund = CtxBidSource { ctx }
+        .hold(request.operation_id)
+        .ok_or_else(|| refused(AuctionRefusal::Database, "local Hold missing"))?
+        .deferred_refund;
+    if deferred_refund != 0 {
+        relay_bid_refund(&mut CtxBidMarket { ctx }, request, deferred_refund)
+            .map_err(|refusal| refused(refusal, "local Hold refund conflict"))?;
+        confirm_bid_refund(&mut CtxBidSource { ctx }, request, deferred_refund)
+            .map_err(|refusal| refused(refusal, "local Hold refund confirmation conflict"))?;
+    }
+    Ok(())
+}
+
 /// Single-database bid: full-offer Hold, realm decision, Auction update or buyout settlement,
 /// ordinary mail, and terminal source outcome commit atomically.
 #[reducer]
@@ -2575,39 +2908,40 @@ pub fn gw_auction_bid_local(
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let bidder_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
-    let replay = ctx
-        .db
-        .game_auction_bid_hold()
-        .operation_id()
-        .find(operation_id)
-        .is_some();
-    if !replay
-        && auction_house_for_interaction(ctx, bidder_guid, auctioneer_guid)
-            .is_none_or(|policy| policy.id != house)
-    {
-        return Err(refused(
-            AuctionRefusal::Database,
-            "auctioneer refused interaction",
-        ));
-    }
-    let request = bid_request(operation_id, bidder_guid, auction_id, house, offer);
-    drive_bid(
-        &mut CtxBidSource { ctx },
-        &mut CtxBidMarket { ctx },
-        request,
-    )
-    .map_err(|refusal| refused(refusal, "local bid rejected"))?;
-    let deferred_refund = CtxBidSource { ctx }
-        .hold(operation_id)
-        .ok_or_else(|| refused(AuctionRefusal::Database, "local bid Hold missing"))?
-        .deferred_refund;
-    if deferred_refund != 0 {
-        relay_bid_refund(&mut CtxBidMarket { ctx }, request, deferred_refund)
-            .map_err(|refusal| refused(refusal, "local bid refund conflict"))?;
-        confirm_bid_refund(&mut CtxBidSource { ctx }, request, deferred_refund)
-            .map_err(|refusal| refused(refusal, "local bid refund confirmation conflict"))?;
-    }
-    Ok(())
+    let request = hold_request(
+        HoldOperation::Bid,
+        operation_id,
+        bidder_guid,
+        auction_id,
+        house,
+        offer,
+    );
+    drive_local_hold(ctx, request, auctioneer_guid)
+}
+
+/// Single-database Cancellation: the cut's Hold, the realm decision, the listing's removal, its
+/// Cancelled and refund mail, and the terminal source outcome commit atomically.
+#[reducer]
+pub fn gw_auction_cancel_local(
+    ctx: &ReducerContext,
+    operation_id: u64,
+    request_actor: crate::SessionActor,
+    auctioneer_guid: u64,
+    auction_id: u32,
+    house: u32,
+    cut: u32,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    let seller_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
+    let request = hold_request(
+        HoldOperation::Cancel,
+        operation_id,
+        seller_guid,
+        auction_id,
+        house,
+        cut,
+    );
+    drive_local_hold(ctx, request, auctioneer_guid)
 }
 
 /// Sharded bid phase 1: move the complete offer into a source-shard Hold before realm-core decides.
@@ -2623,26 +2957,40 @@ pub fn gw_auction_hold_bid(
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let bidder_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
-    let replay = ctx
-        .db
-        .game_auction_bid_hold()
-        .operation_id()
-        .find(operation_id)
-        .is_some();
-    if !replay
-        && auction_house_for_interaction(ctx, bidder_guid, auctioneer_guid)
-            .is_none_or(|policy| policy.id != house)
-    {
-        return Err(refused(
-            AuctionRefusal::Database,
-            "auctioneer refused interaction",
-        ));
-    }
-    fence_bid(
-        &mut CtxBidSource { ctx },
-        bid_request(operation_id, bidder_guid, auction_id, house, offer),
-    )
-    .map_err(|refusal| refused(refusal, "bid Hold rejected"))
+    let request = hold_request(
+        HoldOperation::Bid,
+        operation_id,
+        bidder_guid,
+        auction_id,
+        house,
+        offer,
+    );
+    gate_and_fence(ctx, request, auctioneer_guid)
+}
+
+/// Sharded Cancellation phase 1: move the Auction Cut into a source-shard Hold before realm-core
+/// decides. A seller who cannot pay it is refused with nothing held.
+#[reducer]
+pub fn gw_auction_hold_cancel(
+    ctx: &ReducerContext,
+    operation_id: u64,
+    request_actor: crate::SessionActor,
+    auctioneer_guid: u64,
+    auction_id: u32,
+    house: u32,
+    cut: u32,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    let seller_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
+    let request = hold_request(
+        HoldOperation::Cancel,
+        operation_id,
+        seller_guid,
+        auction_id,
+        house,
+        cut,
+    );
+    gate_and_fence(ctx, request, auctioneer_guid)
 }
 
 /// Sharded bid phase 2: serialize against the realm Auction and persist one terminal decision.
@@ -2659,13 +3007,50 @@ pub fn realm_auction_decide_bid(
     let bidder_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     resolve_bid(
         &mut CtxBidMarket { ctx },
-        bid_request(operation_id, bidder_guid, auction_id, house, offer),
+        hold_request(
+            HoldOperation::Bid,
+            operation_id,
+            bidder_guid,
+            auction_id,
+            house,
+            offer,
+        ),
     )
     .map(|_| ())
     .map_err(|refusal| refused(refusal, "bid decision conflict"))
 }
 
-/// Sharded bid phase 3: consume the normalized accepted price or restore refused value exactly once.
+/// Sharded Cancellation phase 2: serialize against the realm Auction and persist one terminal
+/// decision. A Cancelled decision removes the listing and writes its mail and notice in the same
+/// transaction; a replay changes nothing.
+#[reducer]
+pub fn realm_auction_decide_cancel(
+    ctx: &ReducerContext,
+    operation_id: u64,
+    request_actor: crate::SessionActor,
+    auction_id: u32,
+    house: u32,
+    cut: u32,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    let seller_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
+    resolve_bid(
+        &mut CtxBidMarket { ctx },
+        hold_request(
+            HoldOperation::Cancel,
+            operation_id,
+            seller_guid,
+            auction_id,
+            house,
+            cut,
+        ),
+    )
+    .map(|_| ())
+    .map_err(|refusal| refused(refusal, "Cancellation decision conflict"))
+}
+
+/// Sharded phase 3 for a bid or a Cancellation: consume the accepted price or the cut, or restore
+/// refused value, exactly once. The operation comes from the stored Hold.
 #[reducer]
 #[allow(clippy::too_many_arguments)]
 pub fn gw_auction_finish_bid(
@@ -2695,17 +3080,25 @@ pub fn gw_auction_finish_bid(
         },
         offer,
     )
-    .ok_or_else(|| refused(AuctionRefusal::Database, "bid decision is pending"))?;
+    .ok_or_else(|| refused(AuctionRefusal::Database, "Hold decision is pending"))?;
     finish_bid(
         &mut CtxBidSource { ctx },
-        bid_request(operation_id, bidder_guid, auction_id, house, offer),
+        hold_request(
+            stored_hold_operation(ctx, operation_id),
+            operation_id,
+            bidder_guid,
+            auction_id,
+            house,
+            offer,
+        ),
         decision,
     )
     .map(|_| ())
-    .map_err(|refusal| refused(refusal, "bid outcome conflict"))
+    .map_err(|refusal| refused(refusal, "Hold outcome conflict"))
 }
 
-/// Sharded bid phase 4: place an unrepresentable purse refund in realm-core mail exactly once.
+/// Sharded phase 4 for a bid or a Cancellation: place an unrepresentable purse refund in
+/// realm-core mail exactly once. The operation comes from the stored decision.
 #[reducer]
 pub fn realm_auction_refund_bid(
     ctx: &ReducerContext,
@@ -2720,13 +3113,21 @@ pub fn realm_auction_refund_bid(
     let bidder_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     relay_bid_refund(
         &mut CtxBidMarket { ctx },
-        bid_request(operation_id, bidder_guid, auction_id, house, offer),
+        hold_request(
+            stored_hold_operation(ctx, operation_id),
+            operation_id,
+            bidder_guid,
+            auction_id,
+            house,
+            offer,
+        ),
         deferred_refund,
     )
-    .map_err(|refusal| refused(refusal, "bid refund conflict"))
+    .map_err(|refusal| refused(refusal, "Hold refund conflict"))
 }
 
-/// Sharded bid phase 5: record on the source that realm-core durably accepted the refund mail.
+/// Sharded phase 5 for a bid or a Cancellation: record on the source that realm-core durably
+/// accepted the refund mail. The operation comes from the stored Hold.
 #[reducer]
 pub fn gw_auction_confirm_bid_refund(
     ctx: &ReducerContext,
@@ -2741,10 +3142,17 @@ pub fn gw_auction_confirm_bid_refund(
     let bidder_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     confirm_bid_refund(
         &mut CtxBidSource { ctx },
-        bid_request(operation_id, bidder_guid, auction_id, house, offer),
+        hold_request(
+            stored_hold_operation(ctx, operation_id),
+            operation_id,
+            bidder_guid,
+            auction_id,
+            house,
+            offer,
+        ),
         deferred_refund,
     )
-    .map_err(|refusal| refused(refusal, "bid refund confirmation conflict"))
+    .map_err(|refusal| refused(refusal, "Hold refund confirmation conflict"))
 }
 
 /// Scheduler-only one-shot expiry. Replays see no active Auction and therefore create no mail.
@@ -3158,6 +3566,167 @@ pub fn debug_verify_auction_buyout_fixture(ctx: &ReducerContext) -> Result<(), S
         3, // vanilla minimum raise on a 60 bid: 5% rounded up
         BUYOUT_FIXTURE_NEW_BID_BIDDER_GUID,
     )?;
+    Ok(())
+}
+
+/// The listing with a bid, the unbid listing, and the listing whose cut the test offers wrong.
+#[cfg(feature = "debug_reducers")]
+const CANCEL_FIXTURE_AUCTION_IDS: [u32; 3] = [509_0086, 509_0088, 509_0089];
+#[cfg(feature = "debug_reducers")]
+const CANCEL_FIXTURE_BIDDER_GUID: u64 = 509_0087;
+/// Every operation id the Cancellation test may use, cleared before each staging.
+#[cfg(feature = "debug_reducers")]
+const CANCEL_FIXTURE_OPERATION_IDS: std::ops::RangeInclusive<u64> = 509_0086..=509_0095;
+/// Blackwater's faction template (`cm:AuctionHouseMgr.cpp:461-518`), so the auctioneer serves the
+/// neutral house 7.
+#[cfg(feature = "debug_reducers")]
+const CANCEL_FIXTURE_FACTION_TEMPLATE: u32 = 120;
+
+/// Stage three listings of `seller_guid` in house 7 at a consignment rate of 15, each with its
+/// expiry row: 509_0086 carries a bid of 1000 by 509_0087 (cut 150), 509_0088 has no bid (cut 0),
+/// and 509_0089 carries the same bid. A nonzero `auctioneer_guid` becomes an auctioneer of house 7,
+/// and the fixture imports house 7 and its faction template when the database has none.
+#[cfg(feature = "debug_reducers")]
+#[reducer]
+pub fn debug_stage_auction_cancel_fixture(
+    ctx: &ReducerContext,
+    seller_guid: u64,
+    auctioneer_guid: u64,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    const HOUSE: u32 = 7;
+
+    for auction_id in CANCEL_FIXTURE_AUCTION_IDS {
+        ctx.db.game_auction_expiry().auction_id().delete(auction_id);
+        ctx.db.game_auction().id().delete(auction_id);
+    }
+    for operation_id in CANCEL_FIXTURE_OPERATION_IDS {
+        ctx.db
+            .game_auction_bid_hold()
+            .operation_id()
+            .delete(operation_id);
+        ctx.db
+            .game_auction_bid_decision()
+            .operation_id()
+            .delete(operation_id);
+    }
+    let notices = ctx.db.game_auction_notice();
+    for recipient_guid in [seller_guid, CANCEL_FIXTURE_BIDDER_GUID] {
+        let stale_mail: Vec<u64> = ctx
+            .db
+            .game_mail()
+            .by_recipient()
+            .filter(&recipient_guid)
+            .filter(|mail| mail.sender_kind == lyracore_shared::mail::SENDER_KIND_AUCTION)
+            .map(|mail| mail.id)
+            .collect();
+        for id in stale_mail {
+            crate::mail::delete_mail(ctx, id);
+        }
+        let stale_notices: Vec<u64> = notices
+            .by_recipient()
+            .filter(&recipient_guid)
+            .map(|notice| notice.id)
+            .collect();
+        for id in stale_notices {
+            notices.id().delete(id);
+        }
+    }
+
+    if ctx.db.game_auction_house().id().find(HOUSE).is_none() {
+        ctx.db.game_auction_house().insert(AuctionHouseDefinition {
+            id: HOUSE,
+            faction: 0,
+            deposit_rate: 25,
+            consignment_rate: 15,
+            name: "Blackwater Auction House".to_string(),
+        });
+    }
+    if auctioneer_guid != 0 {
+        if ctx
+            .db
+            .game_faction_template()
+            .id()
+            .find(CANCEL_FIXTURE_FACTION_TEMPLATE)
+            .is_none()
+        {
+            ctx.db
+                .game_faction_template()
+                .insert(crate::faction::FactionTemplate {
+                    id: CANCEL_FIXTURE_FACTION_TEMPLATE,
+                    faction: 0,
+                    faction_group: 0,
+                    friend_group: 0,
+                    enemy_group: 0,
+                    enemy_0: 0,
+                    enemy_1: 0,
+                    enemy_2: 0,
+                    enemy_3: 0,
+                    friend_0: 0,
+                    friend_1: 0,
+                    friend_2: 0,
+                    friend_3: 0,
+                });
+        }
+        let mut auctioneer = ctx
+            .db
+            .game_world_entity()
+            .guid()
+            .find(auctioneer_guid)
+            .ok_or_else(|| format!("auctioneer {auctioneer_guid} is not in the world"))?;
+        auctioneer.faction_template = CANCEL_FIXTURE_FACTION_TEMPLATE;
+        auctioneer.npc_flags |= lyracore_shared::constants::npc_flags::AUCTIONEER;
+        ctx.db.game_world_entity().guid().update(auctioneer);
+    }
+
+    let expires_micros = ctx
+        .timestamp
+        .to_micros_since_unix_epoch()
+        .checked_add(3_600_000_000)
+        .ok_or_else(|| "auction Cancellation fixture expiry overflow".to_string())?;
+    let expires_at = Timestamp::from_micros_since_unix_epoch(expires_micros);
+    for (auction_id, highest_bidder_guid, highest_bid) in [
+        (
+            CANCEL_FIXTURE_AUCTION_IDS[0],
+            CANCEL_FIXTURE_BIDDER_GUID,
+            1_000,
+        ),
+        (CANCEL_FIXTURE_AUCTION_IDS[1], 0, 0),
+        (
+            CANCEL_FIXTURE_AUCTION_IDS[2],
+            CANCEL_FIXTURE_BIDDER_GUID,
+            1_000,
+        ),
+    ] {
+        ctx.db.game_auction().insert(Auction {
+            id: auction_id,
+            listing_operation_id: u64::from(auction_id),
+            house: HOUSE,
+            owner_guid: seller_guid,
+            item_guid: u64::from(auction_id),
+            item_entry: auction_id,
+            item_stack_count: 3,
+            item_durability: 17,
+            item_enchant_id: 9,
+            item_soulbound: false,
+            random_property_id: 117,
+            start_bid: 500,
+            buyout: 0,
+            highest_bidder_guid,
+            highest_bid,
+            deposit: 40,
+            created_at: ctx.timestamp,
+            expires_at,
+            revision: u64::from(highest_bid != 0),
+            deposit_rate: 25,
+            consignment_rate: 15,
+        });
+        ctx.db.game_auction_expiry().insert(AuctionExpiry {
+            scheduled_id: 0,
+            scheduled_at: ScheduleAt::Time(expires_at),
+            auction_id,
+        });
+    }
     Ok(())
 }
 
@@ -4279,14 +4848,6 @@ mod tests {
         assert_eq!(seller_proceeds(100, 10, 101), None);
     }
 
-    #[test]
-    fn consignment_cut_is_the_rate_of_the_price_truncated() {
-        assert_eq!(consignment_cut(100, 5), Some(5));
-        assert_eq!(consignment_cut(19, 5), Some(0), "0.95 truncates to 0");
-        assert_eq!(consignment_cut(201, 5), Some(10), "10.05 truncates to 10");
-        assert_eq!(consignment_cut(100, 101), None, "not a percentage");
-    }
-
     // The subject is "{item_entry}:{random_property_id}:{action}" (`cm:AuctionHouseMgr.cpp:134,
     // 181,229`), and the action codes are `MailAuctionAnswers` (`cm:Mail.h:100-109`): every string
     // below is written out by hand from that format, not produced by calling the function under
@@ -4308,6 +4869,10 @@ mod tests {
         assert_eq!(
             auction_mail_subject(1234, 56, AuctionMailAction::Expired),
             "1234:56:3"
+        );
+        assert_eq!(
+            auction_mail_subject(1234, 56, AuctionMailAction::CancelledToBidder),
+            "1234:56:4"
         );
         assert_eq!(
             auction_mail_subject(1234, 0, AuctionMailAction::Cancelled),
@@ -4370,6 +4935,7 @@ mod tests {
         for action in [
             AuctionMailAction::Outbid,
             AuctionMailAction::Expired,
+            AuctionMailAction::CancelledToBidder,
             AuctionMailAction::Cancelled,
         ] {
             assert_eq!(auction_mail_body(&mail_for_body(action)), "");
@@ -4582,8 +5148,8 @@ mod tests {
         revision: u64,
         displaced_bidder_guid: u64,
         displaced_bid: u32,
-    ) -> BidDecision {
-        BidDecision::Accepted(BidAcceptance {
+    ) -> HoldDecision {
+        HoldDecision::Accepted(BidAcceptance {
             price,
             effect: AuctionBidEffect::RemainActive { revision },
             displaced_bidder_guid,
@@ -4591,8 +5157,8 @@ mod tests {
         })
     }
 
-    fn accepted_buyout(price: u32, displaced_bidder_guid: u64, displaced_bid: u32) -> BidDecision {
-        BidDecision::Accepted(BidAcceptance {
+    fn accepted_buyout(price: u32, displaced_bidder_guid: u64, displaced_bid: u32) -> HoldDecision {
+        HoldDecision::Accepted(BidAcceptance {
             price,
             effect: AuctionBidEffect::SettleBuyout,
             displaced_bidder_guid,
@@ -5469,7 +6035,8 @@ mod tests {
     #[test]
     fn realm_bid_decision_enforces_the_vanilla_price_ladder_and_revision() {
         let active = active_bid_auction();
-        let request = BidRequest {
+        let request = HoldRequest {
+            operation: HoldOperation::Bid,
             operation_id: 900,
             bidder_guid: 8,
             auction_id: 41,
@@ -5491,13 +6058,13 @@ mod tests {
         assert_eq!(
             decide_bid(
                 Some(bid),
-                BidRequest {
+                HoldRequest {
                     offer: 101,
                     ..request
                 },
                 1_000
             ),
-            BidDecision::HigherBid {
+            HoldDecision::HigherBid {
                 bidder_guid: 9,
                 current_bid: 101,
                 minimum_increment: 6,
@@ -5506,24 +6073,24 @@ mod tests {
         assert_eq!(
             decide_bid(
                 Some(bid),
-                BidRequest {
+                HoldRequest {
                     offer: 106,
                     ..request
                 },
                 1_000
             ),
-            BidDecision::BidIncrement
+            HoldDecision::BidIncrement
         );
         assert_eq!(
             decide_bid(
                 Some(active),
-                BidRequest {
+                HoldRequest {
                     offer: 99,
                     ..request
                 },
                 1_000
             ),
-            BidDecision::BidIncrement
+            HoldDecision::BidIncrement
         );
         assert_eq!(
             decide_bid(
@@ -5534,19 +6101,19 @@ mod tests {
                 request,
                 1_000,
             ),
-            BidDecision::BidOwn
+            HoldDecision::BidOwn
         );
-        assert_eq!(decide_bid(None, request, 1_000), BidDecision::ItemNotFound);
+        assert_eq!(decide_bid(None, request, 1_000), HoldDecision::ItemNotFound);
         assert_eq!(
             decide_bid(
                 Some(active),
-                BidRequest {
+                HoldRequest {
                     house: 7,
                     ..request
                 },
                 1_000,
             ),
-            BidDecision::ItemNotFound
+            HoldDecision::ItemNotFound
         );
         assert_eq!(
             decide_bid(
@@ -5557,18 +6124,18 @@ mod tests {
                 request,
                 1_000,
             ),
-            BidDecision::ItemNotFound
+            HoldDecision::ItemNotFound
         );
         assert_eq!(
             decide_bid(
                 Some(active),
-                BidRequest {
+                HoldRequest {
                     operation_id: 0,
                     ..request
                 },
                 1_000
             ),
-            BidDecision::Database
+            HoldDecision::Database
         );
         assert!(matches!(
             decide_bid(
@@ -5580,7 +6147,7 @@ mod tests {
                 request,
                 1_000,
             ),
-            BidDecision::Database
+            HoldDecision::Database
         ));
     }
 
@@ -5589,7 +6156,8 @@ mod tests {
     #[test]
     fn realm_bid_decision_accepts_a_bid_within_the_listings_market_and_refuses_outside_it() {
         let active = active_bid_auction(); // lists in house 1 (Stormwind, Alliance).
-        let request = BidRequest {
+        let request = HoldRequest {
+            operation: HoldOperation::Bid,
             operation_id: 900,
             bidder_guid: 8,
             auction_id: 41,
@@ -5604,7 +6172,7 @@ mod tests {
         assert_eq!(
             decide_bid(
                 Some(active),
-                BidRequest {
+                HoldRequest {
                     house: 3,
                     ..request
                 },
@@ -5616,25 +6184,25 @@ mod tests {
             assert_eq!(
                 decide_bid(
                     Some(active),
-                    BidRequest {
+                    HoldRequest {
                         house: horde_house,
                         ..request
                     },
                     1_000
                 ),
-                BidDecision::ItemNotFound
+                HoldDecision::ItemNotFound
             );
         }
         assert_eq!(
             decide_bid(
                 Some(active),
-                BidRequest {
+                HoldRequest {
                     house: 7,
                     ..request
                 },
                 1_000
             ),
-            BidDecision::ItemNotFound
+            HoldDecision::ItemNotFound
         );
     }
 
@@ -5646,7 +6214,8 @@ mod tests {
             buyout: 500,
             ..active_bid_auction()
         };
-        let request = BidRequest {
+        let request = HoldRequest {
+            operation: HoldOperation::Bid,
             operation_id: 905,
             bidder_guid: 8,
             auction_id: 41,
@@ -5656,7 +6225,7 @@ mod tests {
 
         for offer in [500, 900] {
             assert_eq!(
-                decide_bid(Some(active), BidRequest { offer, ..request }, 1_000),
+                decide_bid(Some(active), HoldRequest { offer, ..request }, 1_000),
                 accepted_buyout(500, 9, 201)
             );
         }
@@ -5667,13 +6236,13 @@ mod tests {
                     buyout: u32::MAX,
                     ..active
                 }),
-                BidRequest {
+                HoldRequest {
                     offer: u32::MAX,
                     ..request
                 },
                 1_000,
             ),
-            BidDecision::Database
+            HoldDecision::Database
         );
         assert!(matches!(
             decide_bid(
@@ -5684,13 +6253,13 @@ mod tests {
                     deposit: 1,
                     ..active
                 }),
-                BidRequest {
+                HoldRequest {
                     offer: u32::MAX,
                     ..request
                 },
                 1_000,
             ),
-            BidDecision::Accepted(BidAcceptance {
+            HoldDecision::Accepted(BidAcceptance {
                 price: u32::MAX,
                 effect: AuctionBidEffect::SettleBuyout,
                 ..
@@ -5725,7 +6294,7 @@ mod tests {
                 .filter(|hold| hold.request.operation_id == operation_id)
         }
 
-        fn create_hold(&mut self, request: BidRequest) -> Result<(), AuctionRefusal> {
+        fn create_hold(&mut self, request: HoldRequest) -> Result<(), AuctionRefusal> {
             self.money -= request.offer;
             self.hold = Some(HeldBid {
                 request,
@@ -5737,8 +6306,8 @@ mod tests {
 
         fn finish_hold(
             &mut self,
-            request: BidRequest,
-            decision: BidDecision,
+            request: HoldRequest,
+            decision: HoldDecision,
         ) -> Result<(), AuctionRefusal> {
             let refund =
                 refundable_bid_value(decision, request.offer).ok_or(AuctionRefusal::Database)?;
@@ -5755,7 +6324,7 @@ mod tests {
             Ok(())
         }
 
-        fn confirm_refund(&mut self, request: BidRequest) -> Result<(), AuctionRefusal> {
+        fn confirm_refund(&mut self, request: HoldRequest) -> Result<(), AuctionRefusal> {
             self.deferred_refund = 0;
             self.hold = self.hold.map(|mut hold| {
                 assert_eq!(hold.request, request);
@@ -5768,14 +6337,15 @@ mod tests {
 
     #[test]
     fn bid_hold_decisions_are_terminal_replay_safe_and_conserve_copper() {
-        let request = BidRequest {
+        let request = HoldRequest {
+            operation: HoldOperation::Bid,
             operation_id: 901,
             bidder_guid: 8,
             auction_id: 41,
             house: 1,
             offer: 107,
         };
-        let rejected = BidDecision::BidIncrement;
+        let rejected = HoldDecision::BidIncrement;
         let accepted = accepted_active(107, 4, 9, 101);
 
         let mut rejection = FakeBidSource::new(200);
@@ -5849,7 +6419,7 @@ mod tests {
         assert_eq!(
             finish_bid(
                 &mut acceptance,
-                BidRequest {
+                HoldRequest {
                     offer: 108,
                     ..request
                 },
@@ -5860,19 +6430,19 @@ mod tests {
         );
 
         for malformed in [
-            BidRequest {
+            HoldRequest {
                 operation_id: 0,
                 ..request
             },
-            BidRequest {
+            HoldRequest {
                 bidder_guid: 0,
                 ..request
             },
-            BidRequest {
+            HoldRequest {
                 auction_id: 0,
                 ..request
             },
-            BidRequest {
+            HoldRequest {
                 offer: 0,
                 ..request
             },
@@ -5897,7 +6467,7 @@ mod tests {
     #[derive(Clone)]
     struct FakeBidMarket {
         auction: Option<BidAuction>,
-        decisions: Vec<(BidRequest, BidDecision)>,
+        decisions: Vec<(HoldRequest, HoldDecision)>,
         mail: Vec<AuctionMail>,
         notices: Vec<AuctionNoticeDraft>,
         expiry_armed: bool,
@@ -5915,7 +6485,7 @@ mod tests {
     }
 
     impl BidMarket for FakeBidMarket {
-        fn decision(&self, operation_id: u64) -> Option<(BidRequest, BidDecision)> {
+        fn decision(&self, operation_id: u64) -> Option<(HoldRequest, HoldDecision)> {
             self.decisions
                 .iter()
                 .copied()
@@ -5932,11 +6502,11 @@ mod tests {
 
         fn commit_decision(
             &mut self,
-            request: BidRequest,
+            request: HoldRequest,
             auction: Option<BidAuction>,
-            decision: BidDecision,
+            decision: HoldDecision,
         ) -> Result<(), AuctionRefusal> {
-            if let BidDecision::Accepted(accepted) = decision {
+            if let HoldDecision::Accepted(accepted) = decision {
                 let mut auction = auction.expect("only an active Auction can accept a bid");
                 self.mail.extend(displaced_bid_refund_mail(
                     auction.house,
@@ -5985,6 +6555,28 @@ mod tests {
                         self.auction = Some(auction);
                     }
                 }
+            }
+            if let HoldDecision::Cancelled {
+                displaced_bidder_guid,
+                displaced_bid,
+                ..
+            } = decision
+            {
+                let auction = auction.expect("only an active Auction can be cancelled");
+                self.mail.extend(cancellation_mail(
+                    auction,
+                    displaced_bidder_guid,
+                    displaced_bid,
+                ));
+                self.notices.extend(removed_notice(
+                    auction.house,
+                    auction.id,
+                    auction.item,
+                    displaced_bidder_guid,
+                    displaced_bid,
+                ));
+                self.auction = None;
+                self.expiry_armed = false;
             }
             self.decisions.push((request, decision));
             Ok(())
@@ -6048,14 +6640,14 @@ mod tests {
     }
 
     struct FakeBidRefundSink {
-        request: BidRequest,
-        decision: BidDecision,
+        request: HoldRequest,
+        decision: HoldDecision,
         recorded: u32,
         mails: Vec<(u64, u32)>,
     }
 
     impl BidRefundSink for FakeBidRefundSink {
-        fn refund_decision(&self, operation_id: u64) -> Option<(BidRequest, BidDecision, u32)> {
+        fn refund_decision(&self, operation_id: u64) -> Option<(HoldRequest, HoldDecision, u32)> {
             (self.request.operation_id == operation_id).then_some((
                 self.request,
                 self.decision,
@@ -6065,7 +6657,7 @@ mod tests {
 
         fn commit_refund(
             &mut self,
-            request: BidRequest,
+            request: HoldRequest,
             amount: u32,
         ) -> Result<(), AuctionRefusal> {
             self.recorded = amount;
@@ -6076,7 +6668,8 @@ mod tests {
 
     #[test]
     fn deferred_bid_refund_relay_is_terminal_and_payload_safe() {
-        let request = BidRequest {
+        let request = HoldRequest {
+            operation: HoldOperation::Bid,
             operation_id: 904,
             bidder_guid: 8,
             auction_id: 41,
@@ -6085,7 +6678,7 @@ mod tests {
         };
         let mut sink = FakeBidRefundSink {
             request,
-            decision: BidDecision::BidIncrement,
+            decision: HoldDecision::BidIncrement,
             recorded: 0,
             mails: Vec::new(),
         };
@@ -6096,7 +6689,7 @@ mod tests {
         assert_eq!(
             relay_bid_refund(
                 &mut sink,
-                BidRequest {
+                HoldRequest {
                     offer: 108,
                     ..request
                 },
@@ -6122,7 +6715,8 @@ mod tests {
 
     #[test]
     fn realm_bid_replay_updates_once_and_returns_the_displaced_bid_once() {
-        let request = BidRequest {
+        let request = HoldRequest {
+            operation: HoldOperation::Bid,
             operation_id: 902,
             bidder_guid: 8,
             auction_id: 41,
@@ -6169,7 +6763,7 @@ mod tests {
         assert_eq!(
             resolve_bid(
                 &mut market,
-                BidRequest {
+                HoldRequest {
                     offer: 108,
                     ..request
                 }
@@ -6185,7 +6779,8 @@ mod tests {
     #[test]
     fn local_and_interrupted_sharded_bids_and_buyouts_have_equivalent_state() {
         for (operation_id, offer) in [(903, 107), (904, 900)] {
-            let request = BidRequest {
+            let request = HoldRequest {
+                operation: HoldOperation::Bid,
                 operation_id,
                 bidder_guid: 8,
                 auction_id: 41,
@@ -6289,8 +6884,8 @@ mod tests {
         sharded: bool,
         source: &mut FakeBidSource,
         market: &mut FakeBidMarket,
-        request: BidRequest,
-    ) -> BidDecision {
+        request: HoldRequest,
+    ) -> HoldDecision {
         if sharded {
             fence_bid(source, request).unwrap();
             resolve_bid(market, request).unwrap();
@@ -6303,7 +6898,7 @@ mod tests {
     #[derive(Debug, PartialEq, Eq)]
     struct CompleteFlowOutcome {
         browse_search_rows: Vec<BidAuction>,
-        decisions: Vec<BidDecision>,
+        decisions: Vec<HoldDecision>,
         collected_mail: Vec<AuctionMail>,
         collected_copper: Vec<(u64, u32)>,
         collected_items: Vec<(u64, crate::items::ItemSnapshot)>,
@@ -6363,7 +6958,8 @@ mod tests {
             .into_iter()
             .filter(|auction| auction.item.entry == item(23).snapshot.entry)
             .collect();
-        let bid = BidRequest {
+        let bid = HoldRequest {
+            operation: HoldOperation::Bid,
             operation_id: 911,
             bidder_guid: 8,
             auction_id: 41,
@@ -6372,7 +6968,8 @@ mod tests {
         };
         let mut bidder = FakeBidSource::new(100);
         let bid_decision = bid_for_flow(sharded, &mut bidder, &mut buyout_market, bid);
-        let buyout = BidRequest {
+        let buyout = HoldRequest {
+            operation: HoldOperation::Bid,
             operation_id: 912,
             bidder_guid: 9,
             auction_id: 41,
@@ -6400,7 +6997,8 @@ mod tests {
 
         let bid_expiry_listing = listing_for_flow(sharded, 914);
         let mut bid_expiry_market = bid_market_for(&bid_expiry_listing);
-        let expiry_bid = BidRequest {
+        let expiry_bid = HoldRequest {
+            operation: HoldOperation::Bid,
             operation_id: 915,
             bidder_guid: 8,
             auction_id: 41,
@@ -6459,7 +7057,8 @@ mod tests {
 
     #[test]
     fn buyout_atomically_delivers_exact_mail_and_conserves_copper() {
-        let request = BidRequest {
+        let request = HoldRequest {
+            operation: HoldOperation::Bid,
             operation_id: 906,
             bidder_guid: 8,
             auction_id: 41,
@@ -6532,14 +7131,16 @@ mod tests {
 
     #[test]
     fn concurrent_buyouts_have_one_winner_and_restore_the_loser_once() {
-        let winner = BidRequest {
+        let winner = HoldRequest {
+            operation: HoldOperation::Bid,
             operation_id: 907,
             bidder_guid: 8,
             auction_id: 41,
             house: 1,
             offer: 900,
         };
-        let loser = BidRequest {
+        let loser = HoldRequest {
+            operation: HoldOperation::Bid,
             operation_id: 908,
             bidder_guid: 10,
             auction_id: 41,
@@ -6566,13 +7167,13 @@ mod tests {
         let loser_decision = resolve_bid(&mut market, loser).unwrap();
         assert!(matches!(
             winner_decision,
-            BidDecision::Accepted(BidAcceptance {
+            HoldDecision::Accepted(BidAcceptance {
                 price: 500,
                 effect: AuctionBidEffect::SettleBuyout,
                 ..
             })
         ));
-        assert_eq!(loser_decision, BidDecision::ItemNotFound);
+        assert_eq!(loser_decision, HoldDecision::ItemNotFound);
         finish_bid(&mut winner_source, winner, winner_decision).unwrap();
         finish_bid(&mut loser_source, loser, loser_decision).unwrap();
         assert_eq!(winner_source.money, 500);
@@ -6582,7 +7183,7 @@ mod tests {
 
         assert_eq!(
             drive_bid(&mut loser_source, &mut market, loser),
-            Ok(BidDecision::ItemNotFound)
+            Ok(HoldDecision::ItemNotFound)
         );
         assert_eq!(loser_source.money, 700);
         assert_eq!(market.mail.len(), 2);
@@ -6604,7 +7205,8 @@ mod tests {
             buyout: 500,
             ..active_bid_auction()
         };
-        let buyout = BidRequest {
+        let buyout = HoldRequest {
+            operation: HoldOperation::Bid,
             operation_id: 909,
             bidder_guid: 8,
             auction_id: 41,
@@ -6663,11 +7265,11 @@ mod tests {
         let mut late_buyout_source = FakeBidSource::new(700);
         assert_eq!(
             drive_bid(&mut late_buyout_source, &mut expiry_market, buyout),
-            Ok(BidDecision::ItemNotFound)
+            Ok(HoldDecision::ItemNotFound)
         );
         assert_eq!(
             drive_bid(&mut late_buyout_source, &mut expiry_market, buyout),
-            Ok(BidDecision::ItemNotFound)
+            Ok(HoldDecision::ItemNotFound)
         );
         assert_eq!(
             late_buyout_source.money, 700,
@@ -6743,6 +7345,445 @@ mod tests {
         assert!(store.mail.is_empty());
     }
 
+    /// Seller 7's listing 41 in house 1 at a 5% cut, with bidder 9's bid of 201. The cut is
+    /// 201 * 5 / 100 = 10.05, truncated to 10.
+    fn bid_listing() -> BidAuction {
+        BidAuction {
+            highest_bidder_guid: 9,
+            highest_bid: 201,
+            ..active_bid_auction()
+        }
+    }
+
+    fn cancel_request(operation_id: u64, cut: u32) -> HoldRequest {
+        HoldRequest {
+            operation: HoldOperation::Cancel,
+            operation_id,
+            bidder_guid: 7,
+            auction_id: 41,
+            house: 1,
+            offer: cut,
+        }
+    }
+
+    fn cancel_market(auction: BidAuction) -> FakeBidMarket {
+        FakeBidMarket {
+            auction: Some(auction),
+            decisions: Vec::new(),
+            mail: Vec::new(),
+            notices: Vec::new(),
+            expiry_armed: true,
+            now_micros: 1_000,
+        }
+    }
+
+    const CANCELLED_WITH_BID: HoldDecision = HoldDecision::Cancelled {
+        cut: 10,
+        displaced_bidder_guid: 9,
+        displaced_bid: 201,
+    };
+
+    #[test]
+    fn realm_cancellation_decision_checks_owner_market_expiry_and_the_held_cut() {
+        let listing = Some(bid_listing());
+        assert_eq!(
+            decide_cancel(listing, cancel_request(950, 10), 1_000),
+            CANCELLED_WITH_BID
+        );
+        assert_eq!(
+            decide_cancel(Some(active_bid_auction()), cancel_request(950, 0), 1_000),
+            HoldDecision::Cancelled {
+                cut: 0,
+                displaced_bidder_guid: 0,
+                displaced_bid: 0,
+            },
+            "an unbid listing costs nothing"
+        );
+        assert_eq!(
+            decide_cancel(
+                listing,
+                HoldRequest {
+                    house: 3,
+                    ..cancel_request(950, 10)
+                },
+                1_000
+            ),
+            CANCELLED_WITH_BID,
+            "Darnassus shares the Alliance market with Stormwind"
+        );
+
+        for (cut, why) in [
+            (11, "a bid raised the cut"),
+            (0, "the listing gained a bid"),
+        ] {
+            assert_eq!(
+                decide_cancel(listing, cancel_request(950, cut), 1_000),
+                HoldDecision::Database,
+                "{why}"
+            );
+        }
+        for (auction, request, now, why) in [
+            (None, cancel_request(950, 10), 1_000, "missing"),
+            (listing, cancel_request(950, 10), 2_000, "expired"),
+            (
+                listing,
+                HoldRequest {
+                    bidder_guid: 8,
+                    ..cancel_request(950, 10)
+                },
+                1_000,
+                "another player's listing",
+            ),
+            (
+                listing,
+                HoldRequest {
+                    house: 4,
+                    ..cancel_request(950, 10)
+                },
+                1_000,
+                "the Horde market",
+            ),
+        ] {
+            assert_eq!(
+                decide_cancel(auction, request, now),
+                HoldDecision::ItemNotFound,
+                "{why}"
+            );
+        }
+        for (bidder, bid) in [(9, 0), (0, 201)] {
+            let inconsistent = BidAuction {
+                highest_bidder_guid: bidder,
+                highest_bid: bid,
+                ..active_bid_auction()
+            };
+            assert_eq!(
+                decide_cancel(Some(inconsistent), cancel_request(950, 10), 1_000),
+                HoldDecision::Database
+            );
+        }
+        let as_bid = HoldRequest {
+            operation: HoldOperation::Bid,
+            ..cancel_request(950, 10)
+        };
+        assert_eq!(
+            decide_cancel(listing, as_bid, 1_000),
+            HoldDecision::Database
+        );
+        assert_eq!(
+            decide_bid(listing, cancel_request(950, 300), 1_000),
+            HoldDecision::Database,
+            "a Cancellation Hold never buys"
+        );
+    }
+
+    #[test]
+    fn a_cancellation_hold_spends_exactly_the_cut_and_a_refusal_restores_it() {
+        let request = cancel_request(951, 10);
+
+        let mut cancelled = FakeBidSource::new(100);
+        assert_eq!(fence_bid(&mut cancelled, request), Ok(()));
+        assert_eq!(cancelled.money, 90, "the cut is held first");
+        for _ in 0..2 {
+            assert_eq!(
+                finish_bid(&mut cancelled, request, CANCELLED_WITH_BID),
+                Ok(CANCELLED_WITH_BID)
+            );
+            assert_eq!(cancelled.money, 90, "the cut is spent once");
+        }
+
+        let mut refused = FakeBidSource::new(100);
+        fence_bid(&mut refused, request).unwrap();
+        for _ in 0..2 {
+            assert_eq!(
+                finish_bid(&mut refused, request, HoldDecision::Database),
+                Ok(HoldDecision::Database)
+            );
+            assert_eq!(refused.money, 100, "a refusal restores the cut once");
+        }
+
+        let unbid = cancel_request(952, 0);
+        let mut free = FakeBidSource::new(0);
+        assert_eq!(
+            fence_bid(&mut free, unbid),
+            Ok(()),
+            "a zero cut still Holds"
+        );
+        assert!(free.hold.is_some());
+        let no_cut = HoldDecision::Cancelled {
+            cut: 0,
+            displaced_bidder_guid: 0,
+            displaced_bid: 0,
+        };
+        assert_eq!(finish_bid(&mut free, unbid, no_cut), Ok(no_cut));
+        assert_eq!((free.money, free.deferred_refund), (0, 0));
+
+        let mut overflowed = FakeBidSource::new(100);
+        fence_bid(&mut overflowed, request).unwrap();
+        overflowed.money = u32::MAX;
+        assert_eq!(
+            finish_bid(&mut overflowed, request, HoldDecision::ItemNotFound),
+            Ok(HoldDecision::ItemNotFound)
+        );
+        assert_eq!(overflowed.money, u32::MAX);
+        assert_eq!(
+            overflowed.deferred_refund, 10,
+            "a full purse defers the cut"
+        );
+        assert_eq!(confirm_bid_refund(&mut overflowed, request, 10), Ok(()));
+        assert_eq!(overflowed.deferred_refund, 0);
+
+        let mut poor = FakeBidSource::new(9);
+        assert_eq!(
+            fence_bid(&mut poor, request),
+            Err(AuctionRefusal::NotEnoughMoney)
+        );
+        assert_eq!((poor.money, poor.hold), (9, None));
+
+        let mut crossed = FakeBidSource::new(100);
+        fence_bid(&mut crossed, request).unwrap();
+        for wrong in [
+            HoldDecision::Cancelled {
+                cut: 11,
+                displaced_bidder_guid: 9,
+                displaced_bid: 201,
+            },
+            accepted_active(10, 4, 9, 201),
+        ] {
+            assert_eq!(
+                finish_bid(&mut crossed, request, wrong),
+                Err(AuctionRefusal::Database)
+            );
+            assert_eq!(crossed.money, 90);
+        }
+        let mut free_bid = FakeBidSource::new(100);
+        assert_eq!(
+            fence_bid(
+                &mut free_bid,
+                HoldRequest {
+                    operation: HoldOperation::Bid,
+                    ..unbid
+                }
+            ),
+            Err(AuctionRefusal::Database),
+            "only a Cancellation may hold nothing"
+        );
+    }
+
+    #[test]
+    fn a_cancellation_removes_the_listing_and_mails_the_item_and_the_bid_back_once() {
+        let item = item(23).snapshot;
+        let mut market = cancel_market(bid_listing());
+        for _ in 0..2 {
+            assert_eq!(
+                resolve_bid(&mut market, cancel_request(953, 10)),
+                Ok(CANCELLED_WITH_BID)
+            );
+        }
+        assert_eq!(market.auction, None);
+        assert!(!market.expiry_armed);
+        let blank = AuctionMail {
+            recipient_guid: 0,
+            house: 1,
+            action: AuctionMailAction::Cancelled,
+            item_entry: 25,
+            random_property_id: 117,
+            money: 0,
+            attached_item: crate::items::ItemSnapshot::default(),
+            counterparty_guid: 0,
+            bid: 0,
+            buyout: 0,
+            deposit: 0,
+            cut: 0,
+        };
+        assert_eq!(
+            market.mail,
+            vec![
+                AuctionMail {
+                    recipient_guid: 9,
+                    action: AuctionMailAction::CancelledToBidder,
+                    money: 201,
+                    ..blank
+                },
+                AuctionMail {
+                    recipient_guid: 7,
+                    attached_item: item,
+                    ..blank
+                },
+            ],
+            "the bid goes back to the bidder, the item to the seller, the deposit to nobody"
+        );
+        assert_eq!(
+            market.notices,
+            vec![AuctionNoticeDraft {
+                recipient_guid: 9,
+                kind: 5,
+                house: 1,
+                auction_id: 41,
+                item_entry: 25,
+                random_property_id: 117,
+                bid: 201,
+                out_bid: 0,
+                bidder_guid: 9,
+            }]
+        );
+        assert_eq!(market.decisions.len(), 1, "a replay records nothing");
+
+        for crossed in [
+            HoldRequest {
+                operation: HoldOperation::Bid,
+                ..cancel_request(953, 10)
+            },
+            cancel_request(953, 11),
+        ] {
+            assert_eq!(
+                resolve_bid(&mut market, crossed),
+                Err(AuctionRefusal::Database)
+            );
+        }
+        assert_eq!(market.mail.len(), 2);
+
+        let mut unbid = cancel_market(active_bid_auction());
+        resolve_bid(&mut unbid, cancel_request(954, 0)).unwrap();
+        assert_eq!(
+            unbid.mail,
+            vec![AuctionMail {
+                recipient_guid: 7,
+                attached_item: item,
+                ..blank
+            }]
+        );
+        assert!(unbid.notices.is_empty(), "nobody was displaced");
+    }
+
+    #[test]
+    fn a_bid_or_a_settlement_after_the_read_refuses_the_cancellation_and_refunds_the_cut() {
+        let mut seller = FakeBidSource::new(100);
+        let mut market = cancel_market(bid_listing());
+        let cancel = cancel_request(955, 10);
+        fence_bid(&mut seller, cancel).unwrap();
+        assert_eq!(seller.money, 90);
+
+        let raise = HoldRequest {
+            operation: HoldOperation::Bid,
+            operation_id: 956,
+            bidder_guid: 8,
+            auction_id: 41,
+            house: 1,
+            offer: 300,
+        };
+        let mut bidder = FakeBidSource::new(1_000);
+        assert_eq!(
+            drive_bid(&mut bidder, &mut market, raise),
+            Ok(accepted_active(300, 4, 9, 201))
+        );
+
+        assert_eq!(
+            drive_bid(&mut seller, &mut market, cancel),
+            Ok(HoldDecision::Database)
+        );
+        assert_eq!(seller.money, 100, "the seller gets the whole cut back");
+        assert_eq!(
+            market
+                .auction
+                .map(|auction| (auction.highest_bidder_guid, auction.highest_bid)),
+            Some((8, 300)),
+            "the listing stays with the new bid"
+        );
+        assert!(market
+            .mail
+            .iter()
+            .all(|mail| mail.action == AuctionMailAction::Outbid));
+
+        // A settlement that wins the race removes the listing first.
+        let mut settled = cancel_market(bid_listing());
+        let mut late_seller = FakeBidSource::new(100);
+        let late = cancel_request(957, 10);
+        fence_bid(&mut late_seller, late).unwrap();
+        settled.auction = None;
+        assert_eq!(
+            drive_bid(&mut late_seller, &mut settled, late),
+            Ok(HoldDecision::ItemNotFound)
+        );
+        assert_eq!(late_seller.money, 100);
+        assert!(settled.mail.is_empty());
+    }
+
+    #[test]
+    fn local_and_interrupted_sharded_cancellations_have_equivalent_state() {
+        for (operation_id, auction, cut) in
+            [(958, bid_listing(), 10), (959, active_bid_auction(), 0)]
+        {
+            let request = cancel_request(operation_id, cut);
+            let source = FakeBidSource::new(100);
+            let market = cancel_market(auction);
+
+            let mut local_source = source;
+            let mut local_market = market.clone();
+            let expected = drive_bid(&mut local_source, &mut local_market, request).unwrap();
+            assert!(matches!(expected, HoldDecision::Cancelled { .. }));
+            assert_eq!(local_source.money, 100 - cut);
+
+            for killed_after in 0..=2 {
+                let mut sharded_source = source;
+                let mut sharded_market = market.clone();
+                if killed_after >= 1 {
+                    fence_bid(&mut sharded_source, request).unwrap();
+                }
+                if killed_after >= 2 {
+                    resolve_bid(&mut sharded_market, request).unwrap();
+                }
+                for _ in 0..2 {
+                    assert_eq!(
+                        drive_bid(&mut sharded_source, &mut sharded_market, request),
+                        Ok(expected)
+                    );
+                }
+                assert_eq!(sharded_source.money, local_source.money);
+                assert_eq!(sharded_source.hold, local_source.hold);
+                assert_eq!(sharded_market.auction, local_market.auction);
+                assert_eq!(sharded_market.decisions, local_market.decisions);
+                assert_eq!(sharded_market.mail, local_market.mail);
+                assert_eq!(sharded_market.notices, local_market.notices);
+                assert_eq!(sharded_market.expiry_armed, local_market.expiry_armed);
+            }
+        }
+    }
+
+    #[test]
+    fn rows_written_before_cancellation_existed_read_as_bids() {
+        assert_eq!(HoldOperation::from_code(0), Some(HoldOperation::Bid));
+        assert_eq!(HoldOperation::from_code(1), Some(HoldOperation::Cancel));
+        assert_eq!(HoldOperation::from_code(2), None);
+
+        let legacy_acceptance = BidDecisionFields {
+            outcome: 1,
+            revision: 4,
+            result_bidder_guid: 9,
+            result_bid: 201,
+            minimum_increment: 0,
+            accepted_price: 0,
+        };
+        assert_eq!(
+            bid_decision_from_fields(legacy_acceptance, 107),
+            Some(accepted_active(107, 4, 9, 201)),
+            "a bid row from before accepted_price existed still charges its offer"
+        );
+        let free_cancellation = BidDecisionFields {
+            outcome: 7,
+            accepted_price: 0,
+            ..legacy_acceptance
+        };
+        assert_eq!(
+            bid_decision_from_fields(free_cancellation, 107),
+            Some(HoldDecision::Cancelled {
+                cut: 0,
+                displaced_bidder_guid: 9,
+                displaced_bid: 201,
+            }),
+            "a zero cut is a real cut, never the offer"
+        );
+    }
+
     #[test]
     fn auction_write_reducers_gate_before_reading_caller_named_state() {
         use crate::test_scan::code_of;
@@ -6759,6 +7800,10 @@ mod tests {
             "pub fn gw_auction_finish_bid(",
             "pub fn realm_auction_refund_bid(",
             "pub fn gw_auction_confirm_bid_refund(",
+            "pub fn gw_auction_cancel_local(",
+            "pub fn gw_auction_hold_cancel(",
+            "pub fn realm_auction_decide_cancel(",
+            "pub fn debug_stage_auction_cancel_fixture(",
             "pub fn debug_stage_auction_buyout_fixture(",
             "pub fn debug_verify_auction_buyout_fixture(",
             "pub fn debug_stage_auction_expiry_fixture(",

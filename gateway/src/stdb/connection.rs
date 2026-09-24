@@ -72,6 +72,7 @@ pub(crate) struct LiveConn {
     character_revision: Arc<AtomicU64>,
     pub(crate) party_memberships: Arc<RwLock<PartyMembershipIndex>>,
     pub(crate) chat_channels: Arc<RwLock<super::reads::ChannelIndex>>,
+    pub(crate) unfinished_auction_holds: Arc<RwLock<super::auction_holds::UnfinishedHoldIndex>>,
     /// Keeps this role's subscription active for the connection's lifetime.
     _sub: SubscriptionHandle,
 }
@@ -806,6 +807,25 @@ fn connect_subscribed(
             memberships.insert(new);
         });
     let chat_channels = watch_chat_channels(&conn);
+    let unfinished_auction_holds = Arc::new(RwLock::new(
+        super::auction_holds::UnfinishedHoldIndex::default(),
+    ));
+    let inserted_holds = unfinished_auction_holds.clone();
+    conn.db.game_auction_bid_hold().on_insert(move |_ctx, row| {
+        inserted_holds.write().unwrap().insert(row);
+    });
+    let deleted_holds = unfinished_auction_holds.clone();
+    conn.db.game_auction_bid_hold().on_delete(move |_ctx, row| {
+        deleted_holds.write().unwrap().remove(row);
+    });
+    let updated_holds = unfinished_auction_holds.clone();
+    conn.db
+        .game_auction_bid_hold()
+        .on_update(move |_ctx, old, new| {
+            let mut holds = updated_holds.write().unwrap();
+            holds.remove(old);
+            holds.insert(new);
+        });
     let (tx, rx) = std::sync::mpsc::channel::<std::result::Result<(), String>>();
     let tx_err = tx.clone();
     let applied_commands = pump_commands.clone();
@@ -855,6 +875,7 @@ fn connect_subscribed(
         character_revision: Arc::new(AtomicU64::new(0)),
         party_memberships,
         chat_channels,
+        unfinished_auction_holds,
         _sub: sub,
     })
 }

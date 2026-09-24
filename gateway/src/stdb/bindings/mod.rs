@@ -264,6 +264,7 @@ pub mod debug_spawn_player_entity_reducer;
 pub mod debug_spirit_healer_res_reducer;
 pub mod debug_split_item_reducer;
 pub mod debug_stage_auction_buyout_fixture_reducer;
+pub mod debug_stage_auction_cancel_fixture_reducer;
 pub mod debug_stage_auction_expiry_fixture_reducer;
 pub mod debug_stage_choice_reward_fixture_reducer;
 pub mod debug_stage_eventai_revision_fixture_reducer;
@@ -705,9 +706,11 @@ pub mod gw_add_ignore_reducer;
 pub mod gw_arm_taxi_flight_reducer;
 pub mod gw_attack_reducer;
 pub mod gw_auction_bid_local_reducer;
+pub mod gw_auction_cancel_local_reducer;
 pub mod gw_auction_confirm_bid_refund_reducer;
 pub mod gw_auction_finish_bid_reducer;
 pub mod gw_auction_hold_bid_reducer;
+pub mod gw_auction_hold_cancel_reducer;
 pub mod gw_auction_hold_listing_reducer;
 pub mod gw_auction_list_local_reducer;
 pub mod gw_auction_release_listing_hold_reducer;
@@ -922,6 +925,7 @@ pub mod ranged_posture_instruction_type;
 pub mod realm_auction_commit_listing_reducer;
 pub mod realm_auction_confirm_listing_reducer;
 pub mod realm_auction_decide_bid_reducer;
+pub mod realm_auction_decide_cancel_reducer;
 pub mod realm_auction_refund_bid_reducer;
 pub mod realm_auction_refund_listing_reducer;
 pub mod realm_auction_settle_listing_reducer;
@@ -1384,6 +1388,7 @@ pub use debug_spawn_player_entity_reducer::debug_spawn_player_entity;
 pub use debug_spirit_healer_res_reducer::debug_spirit_healer_res;
 pub use debug_split_item_reducer::debug_split_item;
 pub use debug_stage_auction_buyout_fixture_reducer::debug_stage_auction_buyout_fixture;
+pub use debug_stage_auction_cancel_fixture_reducer::debug_stage_auction_cancel_fixture;
 pub use debug_stage_auction_expiry_fixture_reducer::debug_stage_auction_expiry_fixture;
 pub use debug_stage_choice_reward_fixture_reducer::debug_stage_choice_reward_fixture;
 pub use debug_stage_eventai_revision_fixture_reducer::debug_stage_eventai_revision_fixture;
@@ -1825,9 +1830,11 @@ pub use gw_add_ignore_reducer::gw_add_ignore;
 pub use gw_arm_taxi_flight_reducer::gw_arm_taxi_flight;
 pub use gw_attack_reducer::gw_attack;
 pub use gw_auction_bid_local_reducer::gw_auction_bid_local;
+pub use gw_auction_cancel_local_reducer::gw_auction_cancel_local;
 pub use gw_auction_confirm_bid_refund_reducer::gw_auction_confirm_bid_refund;
 pub use gw_auction_finish_bid_reducer::gw_auction_finish_bid;
 pub use gw_auction_hold_bid_reducer::gw_auction_hold_bid;
+pub use gw_auction_hold_cancel_reducer::gw_auction_hold_cancel;
 pub use gw_auction_hold_listing_reducer::gw_auction_hold_listing;
 pub use gw_auction_list_local_reducer::gw_auction_list_local;
 pub use gw_auction_release_listing_hold_reducer::gw_auction_release_listing_hold;
@@ -2042,6 +2049,7 @@ pub use ranged_posture_instruction_type::RangedPostureInstruction;
 pub use realm_auction_commit_listing_reducer::realm_auction_commit_listing;
 pub use realm_auction_confirm_listing_reducer::realm_auction_confirm_listing;
 pub use realm_auction_decide_bid_reducer::realm_auction_decide_bid;
+pub use realm_auction_decide_cancel_reducer::realm_auction_decide_cancel;
 pub use realm_auction_refund_bid_reducer::realm_auction_refund_bid;
 pub use realm_auction_refund_listing_reducer::realm_auction_refund_listing;
 pub use realm_auction_settle_listing_reducer::realm_auction_settle_listing;
@@ -2954,6 +2962,10 @@ pub enum Reducer {
         to_slot: u8,
     },
     DebugStageAuctionBuyoutFixture,
+    DebugStageAuctionCancelFixture {
+        seller_guid: u64,
+        auctioneer_guid: u64,
+    },
     DebugStageAuctionExpiryFixture,
     DebugStageChoiceRewardFixture {
         fill_inventory: bool,
@@ -3234,6 +3246,14 @@ pub enum Reducer {
         house: u32,
         offer: u32,
     },
+    GwAuctionCancelLocal {
+        operation_id: u64,
+        request_actor: SessionActor,
+        auctioneer_guid: u64,
+        auction_id: u32,
+        house: u32,
+        cut: u32,
+    },
     GwAuctionConfirmBidRefund {
         operation_id: u64,
         request_actor: SessionActor,
@@ -3262,6 +3282,14 @@ pub enum Reducer {
         auction_id: u32,
         house: u32,
         offer: u32,
+    },
+    GwAuctionHoldCancel {
+        operation_id: u64,
+        request_actor: SessionActor,
+        auctioneer_guid: u64,
+        auction_id: u32,
+        house: u32,
+        cut: u32,
     },
     GwAuctionHoldListing {
         operation_id: u64,
@@ -3798,6 +3826,13 @@ pub enum Reducer {
         auction_id: u32,
         house: u32,
         offer: u32,
+    },
+    RealmAuctionDecideCancel {
+        operation_id: u64,
+        request_actor: SessionActor,
+        auction_id: u32,
+        house: u32,
+        cut: u32,
     },
     RealmAuctionRefundBid {
         operation_id: u64,
@@ -4337,6 +4372,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugSpiritHealerRes { .. } => "debug_spirit_healer_res",
             Reducer::DebugSplitItem { .. } => "debug_split_item",
             Reducer::DebugStageAuctionBuyoutFixture => "debug_stage_auction_buyout_fixture",
+            Reducer::DebugStageAuctionCancelFixture { .. } => "debug_stage_auction_cancel_fixture",
             Reducer::DebugStageAuctionExpiryFixture => "debug_stage_auction_expiry_fixture",
             Reducer::DebugStageChoiceRewardFixture { .. } => "debug_stage_choice_reward_fixture",
             Reducer::DebugStageEventaiRevisionFixture { .. } => {
@@ -4433,9 +4469,11 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwArmTaxiFlight { .. } => "gw_arm_taxi_flight",
             Reducer::GwAttack { .. } => "gw_attack",
             Reducer::GwAuctionBidLocal { .. } => "gw_auction_bid_local",
+            Reducer::GwAuctionCancelLocal { .. } => "gw_auction_cancel_local",
             Reducer::GwAuctionConfirmBidRefund { .. } => "gw_auction_confirm_bid_refund",
             Reducer::GwAuctionFinishBid { .. } => "gw_auction_finish_bid",
             Reducer::GwAuctionHoldBid { .. } => "gw_auction_hold_bid",
+            Reducer::GwAuctionHoldCancel { .. } => "gw_auction_hold_cancel",
             Reducer::GwAuctionHoldListing { .. } => "gw_auction_hold_listing",
             Reducer::GwAuctionListLocal { .. } => "gw_auction_list_local",
             Reducer::GwAuctionReleaseListingHold { .. } => "gw_auction_release_listing_hold",
@@ -4566,6 +4604,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::RealmAuctionCommitListing { .. } => "realm_auction_commit_listing",
             Reducer::RealmAuctionConfirmListing { .. } => "realm_auction_confirm_listing",
             Reducer::RealmAuctionDecideBid { .. } => "realm_auction_decide_bid",
+            Reducer::RealmAuctionDecideCancel { .. } => "realm_auction_decide_cancel",
             Reducer::RealmAuctionRefundBid { .. } => "realm_auction_refund_bid",
             Reducer::RealmAuctionRefundListing { .. } => "realm_auction_refund_listing",
             Reducer::RealmAuctionSettleListing { .. } => "realm_auction_settle_listing",
@@ -5897,7 +5936,14 @@ Reducer::DebugSellItem{
 }),
             Reducer::DebugStageAuctionBuyoutFixture => __sats::bsatn::to_vec(&debug_stage_auction_buyout_fixture_reducer::DebugStageAuctionBuyoutFixtureArgs {
                 }),
-Reducer::DebugStageAuctionExpiryFixture => __sats::bsatn::to_vec(&debug_stage_auction_expiry_fixture_reducer::DebugStageAuctionExpiryFixtureArgs {
+Reducer::DebugStageAuctionCancelFixture{
+                seller_guid,
+                auctioneer_guid,
+}             => __sats::bsatn::to_vec(&debug_stage_auction_cancel_fixture_reducer::DebugStageAuctionCancelFixtureArgs {
+                seller_guid: seller_guid.clone(),
+                auctioneer_guid: auctioneer_guid.clone(),
+}),
+            Reducer::DebugStageAuctionExpiryFixture => __sats::bsatn::to_vec(&debug_stage_auction_expiry_fixture_reducer::DebugStageAuctionExpiryFixtureArgs {
                 }),
 Reducer::DebugStageChoiceRewardFixture{
                 fill_inventory,
@@ -6402,6 +6448,21 @@ Reducer::DebugVerifyRangedLethalDamageFloorFixture{
                 house: house.clone(),
                 offer: offer.clone(),
 }),
+            Reducer::GwAuctionCancelLocal{
+                operation_id,
+                request_actor,
+                auctioneer_guid,
+                auction_id,
+                house,
+                cut,
+}             => __sats::bsatn::to_vec(&gw_auction_cancel_local_reducer::GwAuctionCancelLocalArgs {
+                operation_id: operation_id.clone(),
+                request_actor: request_actor.clone(),
+                auctioneer_guid: auctioneer_guid.clone(),
+                auction_id: auction_id.clone(),
+                house: house.clone(),
+                cut: cut.clone(),
+}),
             Reducer::GwAuctionConfirmBidRefund{
                 operation_id,
                 request_actor,
@@ -6456,6 +6517,21 @@ Reducer::DebugVerifyRangedLethalDamageFloorFixture{
                 auction_id: auction_id.clone(),
                 house: house.clone(),
                 offer: offer.clone(),
+}),
+            Reducer::GwAuctionHoldCancel{
+                operation_id,
+                request_actor,
+                auctioneer_guid,
+                auction_id,
+                house,
+                cut,
+}             => __sats::bsatn::to_vec(&gw_auction_hold_cancel_reducer::GwAuctionHoldCancelArgs {
+                operation_id: operation_id.clone(),
+                request_actor: request_actor.clone(),
+                auctioneer_guid: auctioneer_guid.clone(),
+                auction_id: auction_id.clone(),
+                house: house.clone(),
+                cut: cut.clone(),
 }),
             Reducer::GwAuctionHoldListing{
                 operation_id,
@@ -7410,6 +7486,19 @@ Reducer::PlayerbotsFixtureCommandApply{
                 auction_id: auction_id.clone(),
                 house: house.clone(),
                 offer: offer.clone(),
+}),
+            Reducer::RealmAuctionDecideCancel{
+                operation_id,
+                request_actor,
+                auction_id,
+                house,
+                cut,
+}             => __sats::bsatn::to_vec(&realm_auction_decide_cancel_reducer::RealmAuctionDecideCancelArgs {
+                operation_id: operation_id.clone(),
+                request_actor: request_actor.clone(),
+                auction_id: auction_id.clone(),
+                house: house.clone(),
+                cut: cut.clone(),
 }),
             Reducer::RealmAuctionRefundBid{
                 operation_id,

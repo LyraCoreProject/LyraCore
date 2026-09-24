@@ -19,6 +19,7 @@ pub struct AuctionBidHold {
     pub deferred_refund: u32,
     pub accepted_price: u32,
     pub house: u32,
+    pub operation: u8,
 }
 
 impl __sdk::InModule for AuctionBidHold {
@@ -41,6 +42,7 @@ pub struct AuctionBidHoldCols {
     pub deferred_refund: __sdk::__query_builder::Col<AuctionBidHold, u32>,
     pub accepted_price: __sdk::__query_builder::Col<AuctionBidHold, u32>,
     pub house: __sdk::__query_builder::Col<AuctionBidHold, u32>,
+    pub operation: __sdk::__query_builder::Col<AuctionBidHold, u8>,
 }
 
 impl __sdk::__query_builder::HasCols for AuctionBidHold {
@@ -59,6 +61,7 @@ impl __sdk::__query_builder::HasCols for AuctionBidHold {
             deferred_refund: __sdk::__query_builder::Col::new(table_name, "deferred_refund"),
             accepted_price: __sdk::__query_builder::Col::new(table_name, "accepted_price"),
             house: __sdk::__query_builder::Col::new(table_name, "house"),
+            operation: __sdk::__query_builder::Col::new(table_name, "operation"),
         }
     }
 }
