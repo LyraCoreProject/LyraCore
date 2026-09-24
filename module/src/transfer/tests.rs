@@ -2342,12 +2342,25 @@ fn a_filled_previous_payload_covers_every_transport_arm() {
     assert_eq!(applied.get(), 2);
 }
 
-/// Pins the manifest by count. A table added to or removed from the manifest fails here. The build
-/// before the next one is then this one: empty `ADDED_SINCE_PREVIOUS_BUILD`, delete
-/// `previous_manifest`, and only then change these numbers.
+/// Pins the Core manifest by count. A Core table added to or removed from the manifest fails here.
+/// The build before the next one is then this one: empty `ADDED_SINCE_PREVIOUS_BUILD`, delete
+/// `previous_manifest`, and only then change these numbers. A linked Package adds its own tables,
+/// so the count holds only for a build without one. The difference holds for every build.
 #[test]
 fn the_previous_manifest_is_pinned_until_the_next_manifest_change() {
     assert_eq!(ADDED_SINCE_PREVIOUS_BUILD, ["game_auction_hold"]);
-    assert_eq!(manifest().len(), 43);
-    assert_eq!(previous_manifest().len(), 42);
+    let current = manifest();
+    let previous = previous_manifest();
+    let added: Vec<&str> = current
+        .iter()
+        .filter(|entry| !previous.contains(entry))
+        .map(|entry| entry.table.as_str())
+        .collect();
+    assert_eq!(added, ["game_auction_hold"]);
+    assert_eq!(previous.len() + 1, current.len());
+    #[cfg(not(has_packages))]
+    {
+        assert_eq!(current.len(), 43);
+        assert_eq!(previous.len(), 42);
+    }
 }
