@@ -675,6 +675,7 @@ const QUEST_COLUMNS: &[Column] = &[
     column("next_quest_id", FieldType::U32),
     column("limit_time", FieldType::U32),
     column("reward_money_max_level", FieldType::U32),
+    column("quest_type", FieldType::U32),
 ];
 
 /// `game_quest_text` minus its `quest_entry` primary key.

@@ -215,7 +215,13 @@ fn membership_is_current(
     }
 }
 
-/// Read one live Loot Tag without applying the death-site reward distance.
+/// Read one live Loot Tag without applying the death-site reward distance: tap membership alone,
+/// with no range check. A real take goes through `corpse_access_gate`
+/// (`corpse_eligible_recipients`, populated by `record_corpse_eligibility` from
+/// `death_entitlement`'s resolved, range-checked recipients) instead; this reducer-facing read has
+/// no caller on that path today. It stays for a caller that wants tap membership on its own, such
+/// as a UI query for "who still has rights to this corpse" regardless of where they currently
+/// stand.
 pub(crate) fn live_loot_tag_eligibility(
     ctx: &ReducerContext,
     creature_guid: u64,

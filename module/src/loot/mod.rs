@@ -372,12 +372,15 @@ pub(crate) fn needs_item_pure(
 /// `killer = None` (a debug/environmental kill with no credited player) never needs anything — a
 /// quest-only row is simply invisible there, matching vanilla (no quest, no drop). Fetches the killer's
 /// live quest log + objectives, drops a Raid member's non-Raid quests first
-/// ([`crate::quest::quest_progresses`], cm:Player.cpp:13796-13799: a normal quest item does not
-/// drop for a Raid member), then defers the actual decision to the pure `needs_item_pure`.
+/// ([`lyracore_shared::quest::quest_progresses_for_raid`], cm:Player.cpp:13796-13799: a normal
+/// quest item does not drop for a Raid member), then defers the actual decision to the pure
+/// `needs_item_pure`.
 pub(crate) fn killer_needs_item(ctx: &ReducerContext, killer: Option<u64>, item: u32) -> bool {
     let Some(killer_guid) = killer else {
         return false;
     };
+    // `in_raid` is an indexed lookup on `killer_guid` alone: computed once, not once per quest.
+    let in_raid = crate::group::in_raid(ctx, killer_guid);
     let active: Vec<u32> = ctx
         .db
         .game_character_quest()
@@ -385,7 +388,12 @@ pub(crate) fn killer_needs_item(ctx: &ReducerContext, killer: Option<u64>, item:
         .filter(&killer_guid)
         .filter(|cq| !cq.rewarded)
         .map(|cq| cq.quest_entry)
-        .filter(|&quest_entry| crate::quest::quest_progresses(ctx, killer_guid, quest_entry))
+        .filter(|&quest_entry| {
+            lyracore_shared::quest::quest_progresses_for_raid(
+                in_raid,
+                crate::quest::quest_type_of(ctx, quest_entry),
+            )
+        })
         .collect();
     if active.is_empty() {
         return false;

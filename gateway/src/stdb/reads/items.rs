@@ -5,8 +5,9 @@ use anyhow::Result;
 use spacetimedb_sdk::Table;
 
 use super::super::bindings::*;
-use super::super::connection::Coordinator;
+use super::super::connection::{Coordinator, LiveConn};
 use super::player_item_count;
+use lyracore_shared::group::GroupKind;
 
 impl Coordinator {
     /// Read every item a character owns (items slice-1), joined with its template for the CREATE
@@ -116,7 +117,7 @@ impl Coordinator {
             .filter(|l| l.corpse_guid == corpse_guid)
             .filter(|l| {
                 if l.quest_only {
-                    let needs = viewer_needs_quest_item(db, viewer_guid, l.item_entry);
+                    let needs = viewer_needs_quest_item(&guard, viewer_guid, l.item_entry);
                     quest_row_visible_to_viewer(l.quest_only, l.reserved_for, viewer_guid, needs)
                 } else {
                     group_loot_row_visible_to_viewer(
@@ -181,13 +182,40 @@ impl Coordinator {
     }
 }
 
+/// Whether `viewer_guid` is in a Raid, read from this handle's cache: the `PartyMembershipIndex`
+/// (an indexed lookup, never a table scan) names the group, and the cached `game_group.group_type`
+/// names its kind. The Gateway twin of the Module's `group::in_raid`.
+fn viewer_in_raid(guard: &LiveConn, viewer_guid: u64) -> bool {
+    let Some(group_id) = guard
+        .party_memberships
+        .read()
+        .unwrap()
+        .group_of(viewer_guid)
+    else {
+        return false;
+    };
+    guard
+        .conn
+        .db
+        .game_group()
+        .group_id()
+        .find(&group_id)
+        .is_some_and(|group| {
+            GroupKind::from_wire(group.group_type).unwrap_or_default() == GroupKind::Raid
+        })
+}
+
 /// Does `viewer_guid` currently need quest item `item_entry`? The gateway twin
 /// of the module's `loot::killer_needs_item`/`needs_item_pure` (an ACTIVE — un-rewarded — quest with a
 /// `COLLECT_ITEM` objective naming `item_entry`, held < required), applied to the VIEWER opening the
-/// loot window rather than the credited killer. RLS-bypassed read (coordinator), same shape as
+/// loot window rather than the credited killer, and gated by the same raid quest-credit rule
+/// (`lyracore_shared::quest::quest_progresses_for_raid`) so the loot window never promises an item
+/// a Raid member's `take_loot` would then refuse (that Gate is `loot::killer_needs_item`, gated
+/// identically). RLS-bypassed read (coordinator), same shape as
 /// `quest_objectives_complete`/`player_item_count` above.
-fn viewer_needs_quest_item(db: &RemoteTables, viewer_guid: u64, item_entry: u32) -> bool {
+fn viewer_needs_quest_item(guard: &LiveConn, viewer_guid: u64, item_entry: u32) -> bool {
     const COLLECT_ITEM: u8 = 1; // == module objective_kind::COLLECT_ITEM
+    let db = &guard.conn.db;
     let active: Vec<u32> = db
         .game_character_quest()
         .iter()
@@ -197,12 +225,45 @@ fn viewer_needs_quest_item(db: &RemoteTables, viewer_guid: u64, item_entry: u32)
     if active.is_empty() {
         return false;
     }
-    db.game_quest_objective().iter().any(|o| {
-        o.kind == COLLECT_ITEM
-            && o.target_entry == item_entry
-            && active.contains(&o.quest_entry)
-            && player_item_count(db, viewer_guid, item_entry) < o.required_count.max(1)
-    })
+    let in_raid = viewer_in_raid(guard, viewer_guid);
+    let objectives: Vec<(u32, u32, u32)> = db
+        .game_quest_objective()
+        .iter()
+        .filter(|o| o.kind == COLLECT_ITEM && active.contains(&o.quest_entry))
+        .map(|o| {
+            let quest_type = db
+                .game_quest_template()
+                .entry()
+                .find(&o.quest_entry)
+                .map_or(0, |t| t.quest_type);
+            (quest_type, o.target_entry, o.required_count)
+        })
+        .collect();
+    needs_quest_item_pure(
+        in_raid,
+        &objectives,
+        item_entry,
+        player_item_count(db, viewer_guid, item_entry),
+    )
+}
+
+/// Pure decision behind `viewer_needs_quest_item`: does any of `objectives` (flattened
+/// `(quest_type, target_entry, required_count)` for the viewer's active COLLECT_ITEM objectives)
+/// want `item`, given the viewer's Raid membership? Split out so the raid quest-credit rule's
+/// wiring is unit-testable without a live cache, mirroring the module's `needs_item_pure`.
+fn needs_quest_item_pure(
+    in_raid: bool,
+    objectives: &[(u32, u32, u32)],
+    item: u32,
+    held: u32,
+) -> bool {
+    objectives
+        .iter()
+        .any(|&(quest_type, target_entry, required_count)| {
+            target_entry == item
+                && held < required_count.max(1)
+                && lyracore_shared::quest::quest_progresses_for_raid(in_raid, quest_type)
+        })
 }
 
 /// The per-viewer loot-window visibility gate: is a `game_corpse_loot` row
@@ -261,13 +322,45 @@ pub(crate) fn group_loot_row_visible_to_viewer(
 
 #[cfg(test)]
 mod tests {
-    use super::{group_loot_row_visible_to_viewer, quest_row_visible_to_viewer};
+    use super::{
+        group_loot_row_visible_to_viewer, needs_quest_item_pure, quest_row_visible_to_viewer,
+    };
 
     // The per-viewer loot-window visibility gate. Every other read in this
     // file goes through the coordinator's live cache (`RemoteTables`) and has no fake-cache harness to
     // unit-test against (the module crate's "never mock the ctx, extract + test pure fns" rule applies
-    // here too) — `quest_row_visible_to_viewer` is the one decision worth pulling out pure so it's
-    // directly testable without a live SpacetimeDB connection.
+    // here too). `quest_row_visible_to_viewer` and `needs_quest_item_pure` are the decisions worth
+    // pulling out pure so they're directly testable without a live SpacetimeDB connection.
+
+    /// `needs_quest_item_pure` mirrors the Module's raid quest-credit rule: a Raid member's
+    /// non-Raid quest stops needing its item, a Raid Quest's need is unaffected, and a Party
+    /// member (in_raid = false) is unaffected either way. Hand-written values, not computed by
+    /// the code under test.
+    #[test]
+    fn needs_quest_item_pure_gates_a_raid_members_non_raid_quest() {
+        let normal_quest_wants_the_item = [(0, 55, 1)]; // (quest_type, target_entry, required_count)
+        let raid_quest_wants_the_item = [(62, 55, 1)];
+        assert!(
+            needs_quest_item_pure(false, &normal_quest_wants_the_item, 55, 0),
+            "outside a Raid, a normal quest's need applies"
+        );
+        assert!(
+            !needs_quest_item_pure(true, &normal_quest_wants_the_item, 55, 0),
+            "inside a Raid, a normal quest's item need is gated off"
+        );
+        assert!(
+            needs_quest_item_pure(true, &raid_quest_wants_the_item, 55, 0),
+            "inside a Raid, a Raid Quest's need still applies"
+        );
+        assert!(
+            !needs_quest_item_pure(false, &normal_quest_wants_the_item, 55, 1),
+            "held at or above the requirement never needs it"
+        );
+        assert!(
+            !needs_quest_item_pure(true, &raid_quest_wants_the_item, 999, 0),
+            "a different item entry is never needed"
+        );
+    }
 
     #[test]
     fn non_quest_rows_are_always_visible_regardless_of_viewer_state() {

@@ -57,42 +57,23 @@ pub mod objective_kind {
     pub const EXPLORE_AREATRIGGER: u8 = 3;
 }
 
-/// The vanilla Raid Quest type (`quest_template.Type`, cm:QuestDef.h:121). A Raid Quest is the only
-/// quest that keeps progressing kill credit, quest-item need and quest-object need for a Raid
-/// member (cm:Player.cpp:13544-13559, cm:Player.cpp:13796-13799, cm:Player.cpp:18510-18511).
-pub(crate) const QUEST_TYPE_RAID: u32 = 62;
+/// The raid quest-credit rule. Shared with the Gateway (`gateway/src/stdb/reads/items.rs`'s loot
+/// window must apply the identical rule, or it promises a Raid member an item their `take_loot`
+/// would then refuse).
+pub(crate) use lyracore_shared::quest::allowed_in_raid;
+/// Named separately from [`allowed_in_raid`]: every non-debug caller reaches the Raid Quest type
+/// only through `allowed_in_raid` itself, so only the debug fixture below names this constant.
+#[cfg(feature = "debug_reducers")]
+pub(crate) use lyracore_shared::quest::QUEST_TYPE_RAID;
 
-/// Whether a quest of `quest_type` is allowed to progress for a Raid member. cmangos also checks
-/// `Quests.IgnoreRaid`; LyraCore ships this at parity with the default (0, off), so the check is
-/// `quest_type` alone (cm:QuestDef.cpp:219-225, cm:mangosd.conf.dist.in:852).
-pub(crate) fn allowed_in_raid(quest_type: u32) -> bool {
-    quest_type == QUEST_TYPE_RAID
-}
-
-/// Whether a character's progress toward a quest of `quest_type` should apply right now, given
-/// whether that character is in a Raid. A Party member, and every quest outside a Raid, always
-/// progresses; a Raid member takes no further kill credit, quest-item drop or quest-object use for
-/// a quest that is not a Raid Quest (cm:Player.cpp:13544-13559). Pure so the rule is unit-testable
-/// without a live `ReducerContext`.
-pub(crate) fn quest_progresses_for_raid(in_raid: bool, quest_type: u32) -> bool {
-    !in_raid || allowed_in_raid(quest_type)
-}
-
-/// [`quest_progresses_for_raid`] resolved against durable rows: `character_guid`'s Raid membership
-/// (the Realm-core authority or the World Shard mirror, `group::in_raid`) and `quest_entry`'s
-/// stored type. A quest entry with no template row reads as type 0, an ordinary quest.
-pub(crate) fn quest_progresses(
-    ctx: &ReducerContext,
-    character_guid: u64,
-    quest_entry: u32,
-) -> bool {
-    let quest_type = ctx
-        .db
+/// `quest_entry`'s stored type, read from durable rows. A quest entry with no template row reads
+/// as type 0, an ordinary quest.
+pub(crate) fn quest_type_of(ctx: &ReducerContext, quest_entry: u32) -> u32 {
+    ctx.db
         .game_quest_template()
         .entry()
         .find(quest_entry)
-        .map_or(0, |quest| quest.quest_type);
-    quest_progresses_for_raid(crate::group::in_raid(ctx, character_guid), quest_type)
+        .map_or(0, |quest| quest.quest_type)
 }
 
 /// The intended Character set for one EventAI quest-credit instruction.
@@ -2054,6 +2035,11 @@ const RQC_PARTY_GROUP: u64 = 509_298;
 const RQC_NORMAL_QUEST: u32 = 5_092_970;
 #[cfg(feature = "debug_reducers")]
 const RQC_RAID_QUEST: u32 = 5_092_971;
+/// A normal quest with a single spell-gated kill objective, isolated from
+/// [`RQC_NORMAL_QUEST`]'s own ordinary (unspelled) kill objective so testing one credit path
+/// never disturbs the other's spell requirement.
+#[cfg(feature = "debug_reducers")]
+const RQC_CAST_QUEST: u32 = 5_092_972;
 #[cfg(feature = "debug_reducers")]
 const RQC_CREATURE_ENTRY: u32 = 509_297;
 #[cfg(feature = "debug_reducers")]
@@ -2064,6 +2050,10 @@ const RQC_TRIGGER_ID: u32 = 509_299;
 const RQC_ITEM_NORMAL: u32 = 509_300;
 #[cfg(feature = "debug_reducers")]
 const RQC_ITEM_RAID: u32 = 509_301;
+/// The spell an EventAI cast-credit request names on `RQC_CAST_QUEST`'s kill objective, proving
+/// cast credit (`spell_id != 0`) stays ungated even for a Raid member's non-Raid quest.
+#[cfg(feature = "debug_reducers")]
+const RQC_CAST_SPELL: u32 = 509_302;
 /// The seeded "Test Wolf" creature template (`seed::fixtures::TEST_WOLF_ENTRY`), reused so the
 /// live Loot Tag scale check spawns a real wild creature without a template fixture of its own.
 #[cfg(feature = "debug_reducers")]
@@ -2107,7 +2097,7 @@ pub fn debug_verify_raid_quest_credit_fixture(ctx: &ReducerContext) -> Result<()
         .copied()
         .chain([RQC_PARTY_KILLER])
         .collect();
-    let fixture_quests = [RQC_NORMAL_QUEST, RQC_RAID_QUEST];
+    let fixture_quests = [RQC_NORMAL_QUEST, RQC_RAID_QUEST, RQC_CAST_QUEST];
 
     // --- Reset: reruns against the same database must not accumulate stale rows. ---
     let logs = ctx.db.game_character_quest();
@@ -2126,9 +2116,10 @@ pub fn debug_verify_raid_quest_credit_fixture(ctx: &ReducerContext) -> Result<()
         templates.entry().delete(quest_entry);
     }
     let objectives = ctx.db.game_quest_objective();
-    for id in 509_297_100..509_297_108 {
+    for id in 509_297_100..509_297_110 {
         objectives.id().delete(id);
     }
+    ctx.db.game_quest_cast_objective().id().delete(509_297_108);
     let groups = ctx.db.game_group();
     groups.group_id().delete(RQC_RAID_GROUP);
     groups.group_id().delete(RQC_PARTY_GROUP);
@@ -2174,12 +2165,18 @@ pub fn debug_verify_raid_quest_credit_fixture(ctx: &ReducerContext) -> Result<()
         group_type: 1, // GroupKind::Raid wire value
     });
     for (offset, &character_guid) in raid_members.iter().enumerate() {
+        // Real Subgroups of at most `SUBGROUP_SIZE`, the shape a live Raid actually has, not one
+        // oversized Subgroup 0.
+        let subgroup = (offset / lyracore_shared::group::SUBGROUP_SIZE) as u8;
+        let raid_slot = lyracore_shared::group::RaidSlot::new(subgroup, false)
+            .expect("RQC_RAID_FILLER_COUNT keeps every Subgroup index below RAID_SUBGROUPS")
+            .wire();
         group_members.insert(crate::GroupMember {
             id: 509_297_200 + offset as u64,
             group_id: RQC_RAID_GROUP,
             character_guid,
             owner_identity: fixture_owner,
-            raid_slot: 0,
+            raid_slot,
         });
     }
     groups.insert(crate::Group {
@@ -2239,6 +2236,11 @@ pub fn debug_verify_raid_quest_credit_fixture(ctx: &ReducerContext) -> Result<()
         "Raid credit: raid quest",
         QUEST_TYPE_RAID,
     ));
+    templates.insert(quest_template(
+        RQC_CAST_QUEST,
+        "Raid credit: cast-gated kill",
+        0,
+    ));
     for (id, quest_entry, obj_index, kind, target_entry) in [
         (
             509_297_100,
@@ -2296,6 +2298,13 @@ pub fn debug_verify_raid_quest_credit_fixture(ctx: &ReducerContext) -> Result<()
             objective_kind::COLLECT_ITEM,
             RQC_ITEM_RAID,
         ),
+        (
+            509_297_109,
+            RQC_CAST_QUEST,
+            0u8,
+            objective_kind::KILL_CREATURE,
+            RQC_CREATURE_ENTRY,
+        ),
     ] {
         objectives.insert(QuestObjective {
             id,
@@ -2306,10 +2315,21 @@ pub fn debug_verify_raid_quest_credit_fixture(ctx: &ReducerContext) -> Result<()
             required_count: 1,
         });
     }
+    // A spell requirement on RQC_CAST_QUEST's kill objective, so an EventAI cast-credit request
+    // naming RQC_CAST_SPELL actually matches it, and an ordinary (unspelled) kill does not.
+    ctx.db
+        .game_quest_cast_objective()
+        .insert(QuestCastObjective {
+            id: 509_297_108,
+            quest_entry: RQC_CAST_QUEST,
+            obj_index: 0,
+            spell_id: RQC_CAST_SPELL,
+        });
     for (id, character_guid, quest_entry) in [
         (509_297_300, RQC_PLAYER, RQC_NORMAL_QUEST),
         (509_297_301, RQC_RAID_OTHER, RQC_RAID_QUEST),
         (509_297_302, RQC_PARTY_KILLER, RQC_NORMAL_QUEST),
+        (509_297_303, RQC_PLAYER, RQC_CAST_QUEST),
     ] {
         logs.id().delete(id);
         logs.insert(CharacterQuest {
@@ -2336,6 +2356,37 @@ pub fn debug_verify_raid_quest_credit_fixture(ctx: &ReducerContext) -> Result<()
     on_creature_killed(ctx, RQC_PARTY_KILLER, RQC_CREATURE_ENTRY);
     if rqc_progress(ctx, RQC_PARTY_KILLER, RQC_NORMAL_QUEST, 0)? != 1 {
         return Err("a Party member's kill credit changed behavior".to_string());
+    }
+
+    // --- Cast credit (spell_id != 0) stays ungated, even for the same Raid member and the same
+    // objective ordinary kill credit just refused above. ---
+    let cast_context = EventAiQuestCreditContext {
+        source_creature_guid: 0,
+        source_x: 0.0,
+        source_y: 0.0,
+        source_map_id: 0,
+        source_instance_id: 0,
+        selected_character: Some(RQC_PLAYER),
+        invoker_beneficiary: None,
+    };
+    let cast_request = EventAiQuestCredit::CastCredit(CastCredit {
+        creature_entry: RQC_CREATURE_ENTRY,
+        spell_id: RQC_CAST_SPELL,
+        recipient_policy: QuestCreditRecipientPolicy::SelectedCharacter,
+    });
+    if apply_eventai_credit(ctx, cast_request, &cast_context) != QuestCreditOutcome::Applied {
+        return Err("cast credit was refused".to_string());
+    }
+    if rqc_progress(ctx, RQC_PLAYER, RQC_CAST_QUEST, 0)? != 1 {
+        return Err("a Raid member's spell-gated cast credit was wrongly raid-gated".to_string());
+    }
+    // The ordinary (unspelled) kill earlier never touched RQC_CAST_QUEST's own spell-gated
+    // objective: `objective_matches_spell` only matches a spell_id of 0 against an UNREGISTERED
+    // cast requirement, and this objective's registered requirement is RQC_CAST_SPELL.
+    if rqc_progress(ctx, RQC_PLAYER, RQC_NORMAL_QUEST, 0)? != 0 {
+        return Err(
+            "cast credit's setup leaked into the unrelated normal-quest kill objective".to_string(),
+        );
     }
 
     // --- Quest-object use follows the same rule. ---
@@ -2365,7 +2416,9 @@ pub fn debug_verify_raid_quest_credit_fixture(ctx: &ReducerContext) -> Result<()
         return Err("a Party member's quest-item need changed behavior".to_string());
     }
 
-    // --- The Loot Tag read bound covers a full 12-member Raid. ---
+    // --- A full 12-member Raid loots its own kill, through the real access path a player's
+    // take actually goes through: tap, `death_entitlement`, `record_corpse_eligibility`, then
+    // `corpse_access_gate` for a filler member. ---
     let wolf_template = ctx
         .db
         .game_creature_template()
@@ -2386,16 +2439,39 @@ pub fn debug_verify_raid_quest_credit_fixture(ctx: &ReducerContext) -> Result<()
         respawn_secs: 0,
         life_seq: 0,
     };
-    let wolf_entity = crate::build_creature_entity(&spawn, &wolf_template, 0, 0);
+    let wolf_entity = crate::build_creature_entity(&spawn, &wolf_template, 0, player.instance_id);
     ctx.db.game_creature_spawn().insert(spawn);
     crate::insert_creature_entity(ctx, wolf_entity);
     if !crate::loot::tag::record_first_threat(ctx, RQC_WOLF_GUID, RQC_PLAYER) {
         return Err("the raid quest credit fixture kill was not tapped".to_string());
     }
+    let entitlement = crate::loot::tag::death_entitlement(
+        ctx,
+        RQC_WOLF_GUID,
+        player.x,
+        player.y,
+        player.map_id,
+        player.instance_id,
+    )
+    .ok_or_else(|| "the raid quest credit fixture kill has no death entitlement".to_string())?;
+    if entitlement.recipients.len() != raid_members.len() {
+        return Err(format!(
+            "expected {} death-entitlement recipients for the 12-member Raid, got {}",
+            raid_members.len(),
+            entitlement.recipients.len()
+        ));
+    }
+    crate::loot::tag::record_corpse_eligibility(ctx, RQC_WOLF_GUID, &entitlement.recipients);
+    crate::loot::tag::corpse_access_gate(ctx, RQC_RAID_FILLER_START, RQC_WOLF_GUID)?;
+    // `live_loot_tag_eligibility` is not on that path today (see its own doc), but its read bound
+    // moved from the Party cap to the Raid cap, so prove that fix too.
     if crate::loot::tag::live_loot_tag_eligibility(ctx, RQC_WOLF_GUID, RQC_RAID_FILLER_START)
         != crate::loot::tag::LiveLootTagEligibility::Available
     {
-        return Err("a 12-member Raid could not loot its own kill".to_string());
+        return Err(
+            "live_loot_tag_eligibility's raised read bound did not cover a 12-member Raid"
+                .to_string(),
+        );
     }
 
     crate::loot::tag::clear(ctx, RQC_WOLF_GUID);
@@ -2412,10 +2488,11 @@ pub fn debug_verify_raid_quest_credit_fixture(ctx: &ReducerContext) -> Result<()
 /// quest row whose counts actually changed. Additive — touches only quest-log rows. A fourth objective
 /// kind (SPEAK_TO, CAST_ON, …) costs a new call site into this fn, not a fourth pasted loop.
 ///
-/// KILL_CREATURE and USE_GAMEOBJECT also carry the raid quest-credit rule
-/// ([`quest_progresses_for_raid`]): a Raid member's non-Raid quest is skipped entirely, covering
-/// the killer and every EventAI-selected recipient the same way, since they all land here.
-/// EXPLORE_AREATRIGGER stays ungated, matching cmangos.
+/// An ordinary KILL_CREATURE or USE_GAMEOBJECT credit (`spell_id == 0`) also carries the raid
+/// quest-credit rule ([`quest_progresses_for_raid`]): a Raid member's non-Raid quest is skipped
+/// entirely, covering the killer and every EventAI-selected recipient the same way, since they all
+/// land here. EXPLORE_AREATRIGGER, and a spell-gated credit (`spell_id != 0`, EventAI cast credit,
+/// cmangos `CastedCreatureOrGO`), stay ungated, matching cmangos.
 fn credit_objective(
     ctx: &ReducerContext,
     character_guid: u64,
@@ -2423,10 +2500,14 @@ fn credit_objective(
     target_entry: u32,
     spell_id: u32,
 ) {
-    let kind_is_raid_gated = matches!(
-        kind,
-        objective_kind::KILL_CREATURE | objective_kind::USE_GAMEOBJECT
-    );
+    let kind_is_raid_gated = spell_id == 0
+        && matches!(
+            kind,
+            objective_kind::KILL_CREATURE | objective_kind::USE_GAMEOBJECT
+        );
+    // Computed once per call, not once per active quest: `group::in_raid` is an indexed lookup on
+    // `character_guid` alone, so its answer cannot change across this character's own quest log.
+    let in_raid = kind_is_raid_gated && crate::group::in_raid(ctx, character_guid);
     let log = ctx.db.game_character_quest();
     // Snapshot the actor's active quests first (we mutate rows in the loop).
     let active: Vec<CharacterQuest> = log
@@ -2435,7 +2516,7 @@ fn credit_objective(
         .filter(|q| !q.rewarded)
         .collect();
     for mut cq in active {
-        if kind_is_raid_gated && !quest_progresses(ctx, character_guid, cq.quest_entry) {
+        if in_raid && !allowed_in_raid(quest_type_of(ctx, cq.quest_entry)) {
             continue;
         }
         let mut changed = false;
@@ -3178,34 +3259,18 @@ pub(crate) fn apply_abandon_quest(
 }
 // The XP-reward formula + its test live in `lyracore_shared::quest::xp_reward` (shared with the gateway's
 // completion-popup display so the two can't drift). No module-local duplicate.
+//
+// The raid quest-credit rule (`allowed_in_raid`, `quest_progresses_for_raid`) + its tests live in
+// `lyracore_shared::quest` for the same reason: the Gateway's loot window applies the identical
+// rule. No module-local duplicate.
 
 #[cfg(test)]
 mod tests {
     use super::{
-        allowed_in_raid, eventai_credit_recipient_set, is_expired, pick_choice_reward,
-        quest_progresses_for_raid, AreaTriggerRoute, AreaTriggerVolume, EventAiQuestCreditContext,
-        QuestCreditRecipientPolicy, QUEST_MAX_LEVEL_PAYOUT, QUEST_TYPE_RAID,
+        eventai_credit_recipient_set, is_expired, pick_choice_reward, AreaTriggerRoute,
+        AreaTriggerVolume, EventAiQuestCreditContext, QuestCreditRecipientPolicy,
+        QUEST_MAX_LEVEL_PAYOUT,
     };
-
-    /// The vanilla raid quest-credit rule: only `QUEST_TYPE_RAID` (62, cm:QuestDef.h:121) is
-    /// allowed in a Raid. A normal quest (0) and an unrelated non-zero type (a dungeon quest,
-    /// cmangos type 1) are both refused.
-    #[test]
-    fn allowed_in_raid_only_accepts_the_raid_quest_type() {
-        assert!(!allowed_in_raid(0));
-        assert!(allowed_in_raid(QUEST_TYPE_RAID));
-        assert!(!allowed_in_raid(1));
-    }
-
-    /// [`quest_progresses_for_raid`] over its full (in raid, quest type) input: outside a Raid,
-    /// every quest type progresses; inside a Raid, only a Raid Quest does.
-    #[test]
-    fn quest_progresses_for_raid_gates_only_a_raid_members_non_raid_quest() {
-        assert!(quest_progresses_for_raid(false, 0));
-        assert!(quest_progresses_for_raid(false, QUEST_TYPE_RAID));
-        assert!(!quest_progresses_for_raid(true, 0));
-        assert!(quest_progresses_for_raid(true, QUEST_TYPE_RAID));
-    }
 
     fn quest_credit_context() -> EventAiQuestCreditContext {
         EventAiQuestCreditContext {
