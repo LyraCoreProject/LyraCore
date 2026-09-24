@@ -54,6 +54,12 @@ fn a_guild_member_never_joins_guild_recruitment() {
     );
 
     join(&realm, MEMBER, "GuildRecruitment - City");
+    assert!(
+        realm
+            .query_rows("SELECT * FROM game_chat_channel WHERE builtin_id = 25")
+            .is_empty(),
+        "a refused first join creates no channel"
+    );
     assert_eq!(
         memberships(&realm, MEMBER),
         0,

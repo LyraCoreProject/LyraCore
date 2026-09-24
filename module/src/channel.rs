@@ -172,6 +172,15 @@ fn join(
 ) -> Result<(), ChannelRefusal> {
     let name = channel_name(&request.channel_name)?;
     check_password(&request.password)?;
+    // A Guild member stays out of GuildRecruitment and hears nothing about it. mangos tests the
+    // channel's wire flags 0x38, which only GuildRecruitment carries (cm:Channel.cpp:94-95). The
+    // test runs before the channel is found or created, so the committed Ok leaves no empty
+    // channel behind. mangos runs it after the ban test; a banned Guild member hears silence here.
+    if classify(&name.display).is_some_and(|builtin| builtin.id == GUILD_RECRUITMENT_ID)
+        && crate::guild::member(ctx, joiner).is_some()
+    {
+        return Ok(());
+    }
     let channel = find(ctx, team, &name.key).unwrap_or_else(|| create(ctx, team, name));
     if member_of(ctx, channel.channel_id, joiner).is_some() {
         // Built-in channels answer a repeat join with nothing (cm:Channel.cpp:64-72).
@@ -186,11 +195,6 @@ fn join(
     }
     if !channel.password.is_empty() && channel.password != request.password {
         return Err(ChannelRefusal::WrongPassword);
-    }
-    // A Guild member stays out of GuildRecruitment and hears nothing about it. mangos tests the
-    // channel's wire flags 0x38, which only GuildRecruitment carries (cm:Channel.cpp:94-95).
-    if channel.builtin_id == GUILD_RECRUITMENT_ID && crate::guild::member(ctx, joiner).is_some() {
-        return Ok(());
     }
     // A built-in channel can hold every player of a team, so its member list is read only when an
     // announcement or a first owner needs it. Built-in channels need neither.

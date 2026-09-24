@@ -54,10 +54,11 @@ pub(crate) use chat::{
 pub(crate) use combat::handle_combat;
 pub(crate) use duel::{dispatch_duel_action, DuelActionOutcome, DuelActionPlayer, DuelActionStore};
 pub(crate) use guild::{
-    destroy_inert_charters, dispatch_guild_action, guild_projection, guild_sign_on,
-    guild_world_entry, guild_world_exit, is_guild_dot_command, leads_a_guild,
-    reconcile_deleted_guild_characters, run_guild_dot_command, CharacterFacts, GuildActionOutcome,
-    GuildActionPlayer, GuildActionStore, GuildEventSnapshot, GuildOutcome, GuildRequest,
+    character_facts, destroy_inert_charters, dispatch_guild_action, guild_projection,
+    guild_sign_on, guild_world_entry, guild_world_exit, is_guild_dot_command, leads_a_guild,
+    reconcile_deleted_guild_characters, run_guild_dot_command, CharacterFacts,
+    DurableCharacterFacts, GuildActionOutcome, GuildActionPlayer, GuildActionStore, GuildCleanup,
+    GuildEventSnapshot, GuildOutcome, GuildRequest,
 };
 pub(crate) use item::{
     dispatch_item_action, ItemActionOutcome, ItemActionPlayer, ItemActionResult, ItemActionStore,

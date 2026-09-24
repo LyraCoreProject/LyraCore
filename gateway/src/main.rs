@@ -524,18 +524,18 @@ mod character_gone_relay_tripwires {
         let src = include_str!("stdb/subscriptions.rs");
         let body = code_of(src, "fn arm_character_gone_relay(&self) {");
         assert!(
-            body.contains("store.request_deleted_character_reconciliation()")
+            body.contains("store.request_deleted_character_cleanup(row.guid)")
                 && !body.contains("party::cleanup_deleted_character(")
                 && !body.contains("forget_deleted_character("),
             "the row-delete callback must leave the Coordinator pump before cleanup sends Durable \
              Requests back to the deleting Shard. Body was:\n{body}"
         );
-        let worker = code_of(src, "fn request_deleted_character_reconciliation(&self) {");
+        let worker = code_of(src, "fn start_deleted_character_reconciliation(&self) {");
         assert!(
             worker.contains("std::thread::Builder::new()")
                 && worker.contains("deleted_character_reconciliation_running")
                 && worker.contains("party::reconcile_deleted_character_parties(&store)")
-                && worker.contains("reconcile_deleted_guild_characters(&store)"),
+                && worker.contains("reconcile_deleted_guild_characters(&store, &guild_work)"),
             "deleted Character cleanup of parties and guilds must use one coalescing worker \
              thread. Body was:\n{worker}"
         );
@@ -554,12 +554,12 @@ mod character_gone_relay_tripwires {
              both World Shard and Realm-core reconnects must schedule deferred cleanup off the \
              parked Coordinator pump. Body was:\n{body}"
         );
-        let worker = code_of(src, "fn request_deleted_character_reconciliation(&self) {");
+        let worker = code_of(src, "fn start_deleted_character_reconciliation(&self) {");
         assert!(
             worker.contains("std::thread::Builder::new()")
                 && worker.contains("Duration::from_secs(5)")
                 && worker.contains("party::reconcile_deleted_character_parties(&store)")
-                && worker.contains("reconcile_deleted_guild_characters(&store)"),
+                && worker.contains("reconcile_deleted_guild_characters(&store, &guild_work)"),
             "reconciliation must run on its worker thread. Body was:\n{worker}"
         );
     }

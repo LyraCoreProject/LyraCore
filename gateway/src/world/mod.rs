@@ -50,7 +50,9 @@ pub mod transfer;
 pub mod whisper;
 mod who;
 use coalesce::CoalesceState;
-pub(crate) use handlers::reconcile_deleted_guild_characters;
+pub(crate) use handlers::{
+    character_facts, reconcile_deleted_guild_characters, DurableCharacterFacts, GuildCleanup,
+};
 use handlers::{
     decode_auction_browse, dispatch_auction_action, dispatch_auction_browse_action, dispatch_cast,
     dispatch_channel_action, dispatch_chat_action, dispatch_duel_action, dispatch_guild_action,

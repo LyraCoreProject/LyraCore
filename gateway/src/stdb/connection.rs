@@ -52,6 +52,8 @@ pub(crate) struct ShardSet {
     /// Coalesce row-delete and reconnect requests behind one off-pump reconciliation worker.
     pub(crate) deleted_character_reconciliation_requested: AtomicBool,
     pub(crate) deleted_character_reconciliation_running: AtomicBool,
+    /// The guild cleanup the reconciliation worker still owes.
+    pub(crate) guild_cleanup: std::sync::Mutex<crate::world::GuildCleanup>,
 }
 
 /// One live SDK connection generation and the handles that keep its pump and subscription alive.
@@ -2706,6 +2708,7 @@ impl Coordinator {
                 world,
                 deleted_character_reconciliation_requested: AtomicBool::new(false),
                 deleted_character_reconciliation_running: AtomicBool::new(false),
+                guild_cleanup: Default::default(),
             }),
             None,
         );

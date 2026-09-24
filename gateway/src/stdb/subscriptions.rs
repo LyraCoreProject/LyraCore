@@ -4216,7 +4216,25 @@ impl Coordinator {
         self.request_deleted_character_reconciliation();
     }
 
+    /// A full pass: every party member and every Character guild state names. Startup and a
+    /// reconnect ask for it, since a delete may have gone unseen.
     fn request_deleted_character_reconciliation(&self) {
+        self.1.guild_cleanup.lock().unwrap().sweep = true;
+        self.start_deleted_character_reconciliation();
+    }
+
+    /// A `game_character` delete: the party pass, and guild cleanup for `character_guid` only.
+    fn request_deleted_character_cleanup(&self, character_guid: u64) {
+        self.1
+            .guild_cleanup
+            .lock()
+            .unwrap()
+            .deleted
+            .insert(character_guid);
+        self.start_deleted_character_reconciliation();
+    }
+
+    fn start_deleted_character_reconciliation(&self) {
         self.1
             .deleted_character_reconciliation_requested
             .store(true, Ordering::Release);
@@ -4238,8 +4256,13 @@ impl Coordinator {
                         .deleted_character_reconciliation_requested
                         .store(false, Ordering::Release);
                     // Both run on every pass: a party failure must not hold up guild cleanup.
+                    let guild_work = std::mem::take(&mut *store.1.guild_cleanup.lock().unwrap());
                     let parties = crate::world::party::reconcile_deleted_character_parties(&store);
-                    let guilds = crate::world::reconcile_deleted_guild_characters(&store);
+                    let guilds =
+                        crate::world::reconcile_deleted_guild_characters(&store, &guild_work);
+                    if guilds.is_err() {
+                        store.1.guild_cleanup.lock().unwrap().merge(guild_work);
+                    }
                     if let Err(error) = parties.and(guilds) {
                         log::warn!(
                             "deleted Character reconciliation deferred ({error:#}); retrying in \
@@ -4297,9 +4320,9 @@ impl Coordinator {
 
         let deleted_revision = live.character_revision();
         let store = self.clone();
-        live.conn.db.game_character().on_delete(move |_ctx, _row| {
+        live.conn.db.game_character().on_delete(move |_ctx, row| {
             deleted_revision.fetch_add(1, Ordering::Release);
-            store.request_deleted_character_reconciliation();
+            store.request_deleted_character_cleanup(row.guid);
         });
     }
 }

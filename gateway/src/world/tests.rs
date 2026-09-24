@@ -612,6 +612,8 @@ struct InMemoryStore {
     peers: std::sync::Mutex<Vec<std::sync::Arc<InMemoryStore>>>,
     /// When set, the configured World Shard set is incomplete or unhealthy.
     world_shard_set_error: Option<String>,
+    /// How many times a caller asked for the two-snapshot durable absence check.
+    durable_absence_checks: std::sync::atomic::AtomicUsize,
     /// Unclaimed bot invite intent ids on this World Shard. Two concurrent consumers share this
     /// collection, matching the Module table both Gateways call into.
     bot_invite_intents: std::sync::Mutex<Vec<u64>>,
@@ -1969,6 +1971,8 @@ impl WorldStore for InMemoryStore {
     }
 
     fn character_exists_on_any_world_shard(&self, guid: u64) -> Result<bool> {
+        self.durable_absence_checks
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         if let Some(error) = &self.world_shard_set_error {
             return Err(anyhow!(error.clone()));
         }
@@ -4431,6 +4435,10 @@ impl GuildActionStore for InMemoryStore {
         Ok(guids)
     }
 
+    fn guild_names_character(&self, character_guid: u64) -> Result<bool> {
+        Ok(self.guild_character_guids()?.contains(&character_guid))
+    }
+
     fn guild_name_of_member(&self, character_guid: u64) -> Result<Option<String>> {
         let Some(member) = self.guild_member(character_guid)? else {
             return Ok(None);
@@ -6172,10 +6180,30 @@ fn forgotten(store: &InMemoryStore) -> Vec<String> {
         .collect()
 }
 
+fn sweep() -> crate::world::GuildCleanup {
+    crate::world::GuildCleanup {
+        sweep: true,
+        ..Default::default()
+    }
+}
+
+fn deleted(guids: &[u64]) -> crate::world::GuildCleanup {
+    crate::world::GuildCleanup {
+        sweep: false,
+        deleted: guids.iter().copied().collect(),
+    }
+}
+
+fn durable_absence_checks(store: &InMemoryStore) -> usize {
+    store
+        .durable_absence_checks
+        .load(std::sync::atomic::Ordering::SeqCst)
+}
+
 #[test]
 fn only_characters_absent_from_every_world_shard_are_forgotten() {
     let world = guild_cleanup_topology();
-    crate::world::reconcile_deleted_guild_characters(world.as_ref()).unwrap();
+    crate::world::reconcile_deleted_guild_characters(world.as_ref(), &sweep()).unwrap();
     assert_eq!(
         forgotten(&world),
         [
@@ -6183,6 +6211,30 @@ fn only_characters_absent_from_every_world_shard_are_forgotten() {
             "guild_op:ForgetDeletedCharacter:8"
         ]
     );
+}
+
+/// A Character row in any Shard's cache proves the Character exists, so the pass takes no durable
+/// snapshot for it. Only 6 and 8, gone from every cache, pay for the absence check.
+#[test]
+fn a_character_still_in_a_shard_cache_takes_no_durable_snapshot() {
+    let world = guild_cleanup_topology();
+    crate::world::reconcile_deleted_guild_characters(world.as_ref(), &sweep()).unwrap();
+    assert_eq!(durable_absence_checks(&world), 2);
+
+    let kept = guild_cleanup_topology();
+    crate::world::reconcile_deleted_guild_characters(kept.as_ref(), &deleted(&[5, 7])).unwrap();
+    assert_eq!(durable_absence_checks(&kept), 0);
+    assert!(forgotten(&kept).is_empty());
+}
+
+/// A `game_character` delete owes cleanup for that Character only, and none at all for a
+/// Character that no Guild, Petition or Signature names.
+#[test]
+fn a_single_delete_checks_only_its_own_character() {
+    let world = guild_cleanup_topology();
+    crate::world::reconcile_deleted_guild_characters(world.as_ref(), &deleted(&[8, 40])).unwrap();
+    assert_eq!(forgotten(&world), ["guild_op:ForgetDeletedCharacter:8"]);
+    assert_eq!(durable_absence_checks(&world), 1);
 }
 
 #[test]
@@ -6196,7 +6248,7 @@ fn an_unavailable_world_shard_defers_every_guild_cleanup() {
         world_shard_set_error: Some("instances has no healthy Coordinator subscription".into()),
         ..Default::default()
     };
-    let error = crate::world::reconcile_deleted_guild_characters(&incomplete)
+    let error = crate::world::reconcile_deleted_guild_characters(&incomplete, &sweep())
         .expect_err("an incomplete Shard set cannot prove a deletion");
     assert!(error.to_string().contains("no healthy Coordinator"));
     assert!(forgotten(&incomplete).is_empty());

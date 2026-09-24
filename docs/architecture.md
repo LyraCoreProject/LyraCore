@@ -141,8 +141,9 @@ or in transit lists online (`gateway/src/world/handlers/guild.rs`).
 A Guild Leader is not deleted. The Gateway reads the membership from its Realm-core cache before it
 asks the Home Shard to delete, and answers `CHAR_DELETE_FAILED` (0x3A, FAILED_GUILD_LEADER in
 mangos). Any other deleted Character is forgotten on Realm-core by the character-gone worker, which
-already reconciles parties. After a `game_character` delete, at startup and after a reconnect, it
-checks every Character a Guild, a Petition or a Signature names. A Character absent from two
+already reconciles parties. At startup and after a reconnect it checks every Character a Guild, a
+Petition or a Signature names; after a `game_character` delete it checks only that Character. A
+Character row in any Shard's cache ends the check at once. Otherwise a Character absent from two
 durable snapshots of every configured World Shard is sent as `ForgetDeletedCharacter`, as itself,
 with no ownership token. The Module removes its invites, its membership and its Petitions and
 Signatures. A deleted Guild Leader passes leadership to the member with the highest Guild Rank,

@@ -35,6 +35,41 @@ pub(crate) struct CharacterFacts {
     pub(crate) realm_account_id: u64,
 }
 
+/// The Character facts only a durable `game_character` row holds.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct DurableCharacterFacts {
+    pub(crate) last_logout_micros: u64,
+    /// 0 when no World Shard retains the Character's Realm Account.
+    pub(crate) realm_account_id: u64,
+}
+
+/// A Character's facts from its durable row and its Realm Presence. Without a durable row there is
+/// no Character, only perhaps a live creature, so `read_presence` is not called.
+pub(crate) fn character_facts(
+    durable: Option<DurableCharacterFacts>,
+    read_presence: impl FnOnce() -> Result<Option<presence::RealmPresence>>,
+) -> Result<Option<CharacterFacts>> {
+    use presence::Whereabouts;
+    let Some(durable) = durable else {
+        return Ok(None);
+    };
+    let Some(presence) = read_presence()? else {
+        return Ok(None);
+    };
+    Ok(Some(CharacterFacts {
+        guid: presence.guid,
+        name: presence.name,
+        race: presence.race,
+        class: presence.class,
+        level: presence.level,
+        zone_id: presence.zone_id,
+        last_logout_micros: durable.last_logout_micros,
+        online: matches!(presence.whereabouts, Whereabouts::InWorld { .. }),
+        in_transit: presence.whereabouts == Whereabouts::InTransit,
+        realm_account_id: durable.realm_account_id,
+    }))
+}
+
 /// One guild Durable Request.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum GuildRequest {
@@ -170,6 +205,9 @@ pub(crate) trait GuildActionStore: GuildFeeStore + Send + Sync {
     /// Every Character a Guild, a Petition or a Signature names. Fails while Realm-core cannot
     /// answer, so the deleted-Character reconciliation retries instead of skipping anyone.
     fn guild_character_guids(&self) -> Result<Vec<u64>>;
+    /// Does a Guild, a Petition or a Signature name `character_guid`? Fails like
+    /// [`Self::guild_character_guids`].
+    fn guild_names_character(&self, character_guid: u64) -> Result<bool>;
     /// The name of the Guild `character_guid` belongs to, if any.
     fn guild_name_of_member(&self, character_guid: u64) -> Result<Option<String>>;
 }
@@ -242,6 +280,10 @@ impl GuildActionStore for crate::stdb::Coordinator {
 
     fn guild_character_guids(&self) -> Result<Vec<u64>> {
         self.realm_core()?.guild_character_guids()
+    }
+
+    fn guild_names_character(&self, character_guid: u64) -> Result<bool> {
+        self.realm_core()?.guild_names_character(character_guid)
     }
 
     fn guild_name_of_member(&self, character_guid: u64) -> Result<Option<String>> {
@@ -1080,25 +1122,14 @@ pub(crate) fn run_guild_dot_command<St: GuildActionStore + ?Sized>(
     let Some((leader_name, guild_name)) = parse_guild_create(text) else {
         return Ok(Some(GUILD_CREATE_USAGE.into()));
     };
-    let leader = match leader_name {
-        Some(typed) => match store.guild_characters_named(typed)?.as_slice() {
-            [] => return Ok(Some(format!("no player named {typed}"))),
-            [guid] => store.guild_character_facts(*guid)?,
-            _ => return Ok(Some(format!("more than one player named {typed}"))),
-        },
-        None => match store.guild_selected_target(actor_guid) {
-            0 => store.guild_character_facts(actor_guid)?,
-            target => match store.guild_character_facts(target)? {
-                Some(selected) => Some(selected),
-                None => store.guild_character_facts(actor_guid)?,
-            },
-        },
-    };
-    let Some(leader) = leader else {
-        return Ok(Some(format!(
-            "no player named {}",
-            leader_name.unwrap_or_default()
-        )));
+    let leader = match guild_create_leader(store, actor_guid, leader_name) {
+        Ok(Ok(leader)) => leader,
+        Ok(Err(line)) => return Ok(Some(line)),
+        Err(error) if is_fatal(&error) => return Err(error),
+        Err(error) => {
+            log::warn!("world: .guild create by {actor_guid} found no leader: {error:#}");
+            return Ok(Some("guild not created".into()));
+        }
     };
     let outcome = store.guild_op(
         actor_guid,
@@ -1117,6 +1148,30 @@ pub(crate) fn run_guild_dot_command<St: GuildActionStore + ?Sized>(
             Some("guild not created".into())
         }
     })
+}
+
+/// The leader `.guild create` names: the typed name, else the selected player, else the actor.
+/// `Ok(Err(line))` is the system line for a name that resolves to nobody or to more than one.
+fn guild_create_leader<St: GuildActionStore + ?Sized>(
+    store: &St,
+    actor_guid: u64,
+    leader_name: Option<&str>,
+) -> Result<Result<CharacterFacts, String>> {
+    let leader = match leader_name {
+        Some(typed) => match store.guild_characters_named(typed)?.as_slice() {
+            [] => return Ok(Err(format!("no player named {typed}"))),
+            [guid] => store.guild_character_facts(*guid)?,
+            _ => return Ok(Err(format!("more than one player named {typed}"))),
+        },
+        None => match store.guild_selected_target(actor_guid) {
+            0 => store.guild_character_facts(actor_guid)?,
+            target => match store.guild_character_facts(target)? {
+                Some(selected) => Some(selected),
+                None => store.guild_character_facts(actor_guid)?,
+            },
+        },
+    };
+    Ok(leader.ok_or_else(|| format!("no player named {}", leader_name.unwrap_or_default())))
 }
 
 /// Split `.guild create [<leader>] "<name>"` into the optional leader name and the quoted guild
@@ -1766,7 +1821,8 @@ pub(crate) fn destroy_inert_charters<St: GuildActionStore + ?Sized>(
 }
 
 /// Does `character_guid` lead a Guild? The Home Shard cannot read Realm-core, so the Gateway
-/// answers this before it asks the Home Shard to delete the Character (`cm:CharacterHandler.cpp:540-546`).
+/// answers this before it asks the Home Shard to delete the Character
+/// (`cm:CharacterHandler.cpp:540-546`).
 pub(crate) fn leads_a_guild<St: GuildActionStore + ?Sized>(
     store: &St,
     character_guid: u64,
@@ -1787,13 +1843,18 @@ pub(crate) enum DeletedCharacterGuildCleanup {
     Forgotten,
 }
 
-/// Forget `character_guid` on Realm-core once every World Shard proves it is gone. The absence
-/// check is the one the party cleanup uses: two durable snapshots of every configured World Shard.
+/// Forget `character_guid` on Realm-core once every World Shard proves it is gone. A Character
+/// row in any Shard's cache is a positive signal and needs no proof, so it costs no durable
+/// snapshot: a Transfer deletes the source row only after the destination holds one, and a row
+/// that is stale in a cache starts another pass when its delete arrives. Only then comes the
+/// party cleanup's absence check, two durable snapshots of every configured World Shard.
 pub(crate) fn forget_deleted_character<St: WorldStore + ?Sized>(
     store: &St,
     character_guid: u64,
 ) -> Result<DeletedCharacterGuildCleanup> {
-    if store.character_exists_on_any_world_shard(character_guid)? {
+    if presence::character_anywhere(store, character_guid)?.is_some()
+        || store.character_exists_on_any_world_shard(character_guid)?
+    {
         return Ok(DeletedCharacterGuildCleanup::Preserved);
     }
     match store.guild_op(character_guid, GuildRequest::ForgetDeletedCharacter)? {
@@ -1806,15 +1867,42 @@ pub(crate) fn forget_deleted_character<St: WorldStore + ?Sized>(
     }
 }
 
-/// Forget every Character that guild state names and no World Shard holds: members, Petition
-/// owners and signers. Runs after a Character row is deleted and at startup, so a deletion this
-/// Gateway missed while it was down is still reconciled. Every Character is tried; the first
-/// failure is returned so the worker retries the whole pass.
+/// The guild cleanup the deleted-Character worker owes. A full sweep checks every Character that
+/// guild state names: at startup and after a reconnect, when a delete may have gone unseen. A
+/// `game_character` delete owes only its own guid.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct GuildCleanup {
+    pub(crate) sweep: bool,
+    pub(crate) deleted: std::collections::BTreeSet<u64>,
+}
+
+impl GuildCleanup {
+    /// Add work that a failed pass still owes.
+    pub(crate) fn merge(&mut self, owed: GuildCleanup) {
+        self.sweep |= owed.sweep;
+        self.deleted.extend(owed.deleted);
+    }
+}
+
+/// Run the guild cleanup `work` asks for. Every Character is tried; the first failure is
+/// returned, so the worker keeps the work and retries it.
 pub(crate) fn reconcile_deleted_guild_characters<St: WorldStore + ?Sized>(
     store: &St,
+    work: &GuildCleanup,
 ) -> Result<()> {
-    let mut last_error = None;
-    for character_guid in store.guild_character_guids()? {
+    let candidates: Vec<u64> = if work.sweep {
+        store.guild_character_guids()?
+    } else {
+        let mut named = Vec::new();
+        for &character_guid in &work.deleted {
+            if store.guild_names_character(character_guid)? {
+                named.push(character_guid);
+            }
+        }
+        named
+    };
+    let mut first_error = None;
+    for character_guid in candidates {
         match forget_deleted_character(store, character_guid) {
             Ok(DeletedCharacterGuildCleanup::Forgotten) => {
                 log::info!("guild: forgot deleted Character {character_guid}");
@@ -1825,11 +1913,11 @@ pub(crate) fn reconcile_deleted_guild_characters<St: WorldStore + ?Sized>(
                     "guild: could not finish reconciling Character {character_guid} ({error:#}); \
                      retrying"
                 );
-                last_error = Some(error);
+                first_error.get_or_insert(error);
             }
         }
     }
-    last_error.map_or(Ok(()), Err)
+    first_error.map_or(Ok(()), Err)
 }
 
 /// Resolve a typed member name against a Guild's name snapshots, case-insensitively, as mangos
@@ -1976,6 +2064,8 @@ mod tests {
         fee_refusal: Option<GuildRefusal>,
         /// The decision's answer is lost, as when it commits but is late to the cache.
         fee_decide_error: Option<String>,
+        /// Realm Presence cannot answer, as when a World Shard's subscription is unhealthy.
+        facts_error: Option<String>,
         /// What the next non-`GmCreate` op answers; `None` runs it. The Gate arithmetic for every
         /// op lives on the Module, proved by its own unit and durable tests; this seam only proves
         /// the wire mapping from a given outcome, the same shape `GuildFeeStore` below uses for the
@@ -2087,6 +2177,9 @@ mod tests {
         }
 
         fn guild_character_facts(&self, character_guid: u64) -> Result<Option<CharacterFacts>> {
+            if let Some(error) = &self.facts_error {
+                return Err(anyhow!("{error}"));
+            }
             Ok(self
                 .characters
                 .iter()
@@ -2200,6 +2293,10 @@ mod tests {
                 .iter()
                 .map(|member| member.character_guid)
                 .collect())
+        }
+
+        fn guild_names_character(&self, character_guid: u64) -> Result<bool> {
+            Ok(self.guild_character_guids()?.contains(&character_guid))
         }
 
         fn guild_name_of_member(&self, character_guid: u64) -> Result<Option<String>> {
@@ -2430,6 +2527,65 @@ mod tests {
         assert_eq!(line.as_deref(), Some("permission denied"));
         assert!(store.ops.lock().unwrap().is_empty());
         assert!(store.guilds.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn dot_create_answers_guild_not_created_when_presence_cannot_answer() {
+        let store = InMemoryGuildActions {
+            facts_error: Some(
+                "World Shard instances has no healthy Coordinator subscription".into(),
+            ),
+            ..realm()
+        };
+        assert_eq!(
+            run_guild_dot_command(&store, in_world(GM), ".guild create \"Knights\"").unwrap(),
+            Some("guild not created".into())
+        );
+        assert!(store.ops.lock().unwrap().is_empty());
+    }
+
+    /// A creature has a live entity and no Character row. Without the row there are no facts, so
+    /// `.guild create` with a creature selected falls back to the actor.
+    #[test]
+    fn a_live_entity_without_a_character_row_has_no_facts() {
+        let facts = character_facts(None, || panic!("no row, so no presence read")).unwrap();
+        assert_eq!(facts, None);
+    }
+
+    #[test]
+    fn a_character_in_transit_has_facts_from_its_row_and_its_presence() {
+        let durable = DurableCharacterFacts {
+            last_logout_micros: 1_700_000_000_000_000,
+            realm_account_id: 76,
+        };
+        let presence = presence::RealmPresence {
+            guid: BOB,
+            name: "Bob".into(),
+            race: 1,
+            class: 1,
+            level: 20,
+            zone_id: 1581,
+            session_online: true,
+            whereabouts: presence::Whereabouts::InTransit,
+        };
+        let facts = character_facts(Some(durable), || Ok(Some(presence)))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            facts,
+            CharacterFacts {
+                guid: BOB,
+                name: "Bob".into(),
+                race: 1,
+                class: 1,
+                level: 20,
+                zone_id: 1581,
+                last_logout_micros: 1_700_000_000_000_000,
+                online: false,
+                in_transit: true,
+                realm_account_id: 76,
+            }
+        );
     }
 
     #[test]
