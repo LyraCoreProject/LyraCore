@@ -2489,9 +2489,9 @@ enum ClaimEdge {
     Offline(u64),
 }
 
-/// The pure transition a `game_account_claim` row's old and new state implies (README Decision 25:
-/// claims change at login, logout, replacement and reaping, never at Transfer). `old` is `None` for
-/// the account's first-ever claim.
+/// The pure transition a `game_account_claim` row's old and new state implies. Claims change at
+/// login, logout, replacement and reaping, never at Transfer. `old` is `None` for the account's
+/// first-ever claim.
 ///
 /// - Inserted open, or reopened after being closed: the new Character becomes live.
 /// - Closed, or replaced by a new generation or a different Character: the old Character stops
@@ -2522,12 +2522,56 @@ fn claim_transitions(old: Option<&AccountClaim>, new: &AccountClaim) -> Vec<Clai
     edges
 }
 
+/// The World Sessions that could possibly hear one Account Claim transition, on any Shard: every
+/// viewer that lists `subject_guid` as a friend, minus `subject_guid`'s own viewer. Collected
+/// BEFORE any Realm Presence read — this is a plain scan of Gateway-side `Viewer` state, and most
+/// transitions have no local candidate at all, so a transition with none never pays for a read.
+/// The team match still needs the read (a per-candidate job checks it once the read resolves).
+fn claim_edge_candidates(view: &WorldView, subject_guid: u64) -> Vec<Arc<Viewer>> {
+    view.all_viewers()
+        .into_iter()
+        .filter(|viewer| viewer.self_guid != subject_guid && viewer.is_friend(subject_guid))
+        .collect()
+}
+
+/// The team and, for an Online edge, the `SMSG_FRIEND_STATUS` trailing fields resolved for one
+/// Account Claim transition's Character — `None` when no connected Shard currently knows the
+/// Character at all.
+type ClaimEdgeOutcome = Option<(u32, Option<crate::codec::FriendOnline>)>;
+
+/// The subject Character's team and, for an Online edge, its `SMSG_FRIEND_STATUS` trailing fields
+/// — computed ONCE per transition by whichever candidate's job runs first (cached in the caller's
+/// `OnceLock` for every other candidate), on that job's own writer thread, NEVER the shared pump:
+/// a Realm Presence read can cross the network to another Shard, and the pump is the one thread
+/// every World Session on this Shard depends on. The Offline edge needs only the departing
+/// Character's team, read with the local-cache-only [`presence::character_identity_anywhere`]
+/// rather than the health-checked [`presence::of`] — the Character has just stopped being
+/// reachable, so a Whereabouts read has nothing left to prove. `None` when no connected Shard
+/// currently knows the Character at all: never guess a team, which could notify the wrong side.
+fn claim_edge_outcome(coord: &Coordinator, subject_guid: u64, online: bool) -> ClaimEdgeOutcome {
+    if online {
+        let presence = crate::world::presence::of(coord, subject_guid)
+            .ok()
+            .flatten()?;
+        let team = lyracore_shared::faction::team_for_race(presence.race);
+        Some((
+            team,
+            Some(crate::world::social::friend_online_fields(&presence)),
+        ))
+    } else {
+        let identity = crate::world::presence::character_identity_anywhere(coord, subject_guid)
+            .ok()
+            .flatten()?;
+        let team = lyracore_shared::faction::team_for_race(identity.race);
+        Some((team, None))
+    }
+}
+
 /// An Account Claim changed on Realm-core → `FRIEND_ONLINE`/`FRIEND_OFFLINE` to every same-team
 /// viewer, on any Shard, who lists the transition's Character as a friend
 /// (cm:CharacterHandler.cpp:856, cm:WorldSession.cpp:754, cm:SocialMgr.cpp:263-292). `coord` is the
-/// world handle `presence::of` reads through — never the Realm-core handle, which holds no live
-/// entities. One Realm Presence read per transition here, reused for every recipient below, never
-/// once per recipient.
+/// world handle the presence reads run through — never the Realm-core handle, which holds no live
+/// entities.
 fn account_claim_changed(
     view: &WorldView,
     coord: &Coordinator,
@@ -2539,51 +2583,36 @@ fn account_claim_changed(
             ClaimEdge::Online(guid) => (guid, true),
             ClaimEdge::Offline(guid) => (guid, false),
         };
-        let presence = match crate::world::presence::of(coord, subject_guid) {
-            Ok(Some(presence)) => presence,
-            Ok(None) => continue,
-            Err(error) => {
-                log::debug!(
-                    "world_view: account claim relay could not read Realm Presence for \
-                     {subject_guid}: {error:#}"
-                );
-                continue;
-            }
-        };
-        let team = lyracore_shared::faction::team_for_race(presence.race);
-        let online_fields = online.then(|| crate::world::social::friend_online_fields(&presence));
+        let candidates = claim_edge_candidates(view, subject_guid);
+        if candidates.is_empty() {
+            continue;
+        }
         let result = if online {
             wow_world_base::shared::friend_result_vanilla_tbc::FriendResult::Online
         } else {
             wow_world_base::shared::friend_result_vanilla_tbc::FriendResult::Offline
         };
-        notify_claim_edge_audience(view, subject_guid, team, result, online_fields);
-    }
-}
-
-/// The audience half of [`account_claim_changed`], split out so it is testable without a Realm
-/// Presence read: every viewer, on any Shard, who lists `subject_guid` as a friend and shares its
-/// `team`, gets one `SMSG_FRIEND_STATUS` job — never `subject_guid`'s own viewer.
-fn notify_claim_edge_audience(
-    view: &WorldView,
-    subject_guid: u64,
-    team: u32,
-    result: wow_world_base::shared::friend_result_vanilla_tbc::FriendResult,
-    online_fields: Option<crate::codec::FriendOnline>,
-) {
-    for viewer in view.all_viewers() {
-        if viewer.self_guid == subject_guid
-            || viewer.team != team
-            || !viewer.is_friend(subject_guid)
-        {
-            continue;
+        let outcome: Arc<OnceLock<ClaimEdgeOutcome>> = Arc::new(OnceLock::new());
+        for viewer in candidates {
+            let (coord, outcome) = (coord.clone(), outcome.clone());
+            let viewer_team = viewer.team;
+            enqueue(viewer, move |_| {
+                let Some((subject_team, online_fields)) =
+                    outcome.get_or_init(|| claim_edge_outcome(&coord, subject_guid, online))
+                else {
+                    return Vec::new();
+                };
+                if *subject_team != viewer_team {
+                    return Vec::new();
+                }
+                let (opcode, body) = crate::codec::build_friend_status_raw(
+                    result,
+                    subject_guid,
+                    online_fields.clone(),
+                );
+                vec![Outbound::Raw { opcode, body }]
+            });
         }
-        let online_fields = online_fields.clone();
-        enqueue(viewer.clone(), move |_| {
-            let (opcode, body) =
-                crate::codec::build_friend_status_raw(result, subject_guid, online_fields);
-            vec![Outbound::Raw { opcode, body }]
-        });
     }
 }
 
@@ -5514,7 +5543,7 @@ mod realm_chat_relay_tests {
         assert!(!viewer.ignores(SPEAKER));
     }
 
-    /// The friend set (T6) follows the same rule as the ignore set, off the SAME contact rows and
+    /// The friend set follows the same rule as the ignore set, off the SAME contact rows and
     /// callbacks, filtered by `is_ignore` the other way.
     #[test]
     fn the_friend_set_follows_its_owners_friend_rows_on_the_owners_shard() {
@@ -5561,18 +5590,15 @@ mod realm_chat_relay_tests {
 #[cfg(test)]
 mod account_claim_relay_tests {
     use super::{
-        claim_transitions, notify_claim_edge_audience, AccountClaim, ClaimEdge, ExplorationReplay,
+        claim_edge_candidates, claim_transitions, AccountClaim, ClaimEdge, ExplorationReplay,
         MotionPending, Viewer, WorldView,
     };
-    use crate::codec::FriendOnline;
     use crate::stdb::aoi::ViewerGates;
     use crate::stdb::world_index::CellKey;
-    use crate::world::presence::AwayStatus;
     use crate::world::{Outbound, SessionTx};
     use std::collections::{HashMap, HashSet};
     use std::sync::mpsc::Receiver;
     use std::sync::{Arc, Mutex};
-    use wow_world_base::shared::friend_result_vanilla_tbc::FriendResult;
 
     const ALLIANCE: u32 = lyracore_shared::faction::TEAM_ALLIANCE;
     const HORDE: u32 = lyracore_shared::faction::TEAM_HORDE;
@@ -5668,56 +5694,64 @@ mod account_claim_relay_tests {
         assert!(claim_transitions(Some(&old), &still_closed).is_empty());
     }
 
-    fn online_fields() -> FriendOnline {
-        FriendOnline {
-            away: AwayStatus::None,
-            zone_id: 12,
-            level: 30,
-            class: 1,
-        }
-    }
-
-    /// **AC5/AC7 (T6):** only a same-team viewer who lists the guid as a friend, on any Shard,
-    /// hears the notice — never the subject's own viewer, whatever it lists.
+    /// `claim_edge_candidates` runs BEFORE any team is known (the read that would answer it has
+    /// not happened yet), so it collects every friend-listing viewer on any Shard regardless of
+    /// team — the team match is each candidate's own job's problem, once the read resolves — and
+    /// never the subject's own viewer, whatever it lists.
     #[test]
-    fn notify_claim_edge_audience_reaches_only_same_team_friends_on_any_shard() {
+    fn claim_edge_candidates_lists_every_friend_listing_viewer_but_never_the_subject() {
         let view = WorldView::new(true);
-        let (_friend, friend_rx) = listener(&view, 0, 20, ALLIANCE);
-        let (_elsewhere, elsewhere_rx) = listener(&view, 1, 21, ALLIANCE);
-        let (_enemy, enemy_rx) = listener(&view, 0, 22, HORDE);
-        let (non_friend, non_friend_rx) = listener(&view, 0, 23, ALLIANCE);
+        let (friend, _friend_rx) = listener(&view, 0, 20, ALLIANCE);
+        let (elsewhere, _elsewhere_rx) = listener(&view, 1, 21, ALLIANCE);
+        let (other_team, _other_team_rx) = listener(&view, 0, 22, HORDE);
+        let (non_friend, _non_friend_rx) = listener(&view, 0, 23, ALLIANCE);
         non_friend.friends.lock().unwrap().clear();
-        let (subject, subject_rx) = listener(&view, 0, FRIEND, ALLIANCE);
+        let (subject, _subject_rx) = listener(&view, 0, FRIEND, ALLIANCE);
         subject.friends.lock().unwrap().insert(FRIEND); // hypothetically lists itself
 
-        notify_claim_edge_audience(
-            &view,
-            FRIEND,
-            ALLIANCE,
-            FriendResult::Online,
-            Some(online_fields()),
-        );
+        let mut candidates: Vec<u64> = claim_edge_candidates(&view, FRIEND)
+            .iter()
+            .map(|viewer| viewer.self_guid)
+            .collect();
+        candidates.sort_unstable();
 
-        for (label, rx) in [("same shard", &friend_rx), ("another shard", &elsewhere_rx)] {
-            match rx
-                .try_recv()
-                .unwrap_or_else(|_| panic!("{label}: a same-team friend must hear it"))
-            {
-                Outbound::Job(job) => assert_eq!(job().len(), 1),
-                _ => panic!("expected a job"),
-            }
-        }
+        assert_eq!(
+            candidates,
+            [friend.self_guid, elsewhere.self_guid, other_team.self_guid],
+            "every friend-listing viewer on any Shard is a candidate, team unchecked here, but \
+             never a non-friend and never the subject's own viewer"
+        );
+    }
+
+    /// Nothing is enqueued, and no Realm Presence read is attempted, for a transition no local
+    /// viewer lists as a friend — pinned in source because no Fake reaches a Coordinator-backed
+    /// `presence::of`/`character_identity_anywhere` read to prove it behaviorally.
+    #[test]
+    fn account_claim_changed_checks_candidates_before_any_read() {
+        let body =
+            crate::test_scan::code_of(include_str!("world_view.rs"), "fn account_claim_changed(");
+        let candidates_at = body
+            .find("claim_edge_candidates(view, subject_guid)")
+            .expect("account_claim_changed must collect candidates first");
+        let empty_check_at = body
+            .find("candidates.is_empty()")
+            .expect("account_claim_changed must return early when nobody local is listening");
+        let enqueue_at = body
+            .find("enqueue(viewer")
+            .expect("account_claim_changed must still enqueue one job per candidate");
+        let read_at = body
+            .find("claim_edge_outcome(&coord, subject_guid, online)")
+            .expect("account_claim_changed must still resolve the team and trailing fields");
         assert!(
-            enemy_rx.try_recv().is_err(),
-            "a viewer on the other team hears nothing, even listing the guid as a friend"
+            candidates_at < empty_check_at && empty_check_at < enqueue_at,
+            "the empty check must run between collecting candidates and enqueueing any job, so a \
+             transition with no local audience pays for neither a read nor a job"
         );
         assert!(
-            non_friend_rx.try_recv().is_err(),
-            "a same-team viewer who does not list the guid as a friend hears nothing"
-        );
-        assert!(
-            subject_rx.try_recv().is_err(),
-            "the subject's own viewer never hears its own transition"
+            enqueue_at < read_at,
+            "the Realm Presence / identity read (`claim_edge_outcome`) must happen INSIDE the \
+             enqueued job, never before it — the shared pump must not block on a read that can \
+             cross to another Shard"
         );
     }
 }

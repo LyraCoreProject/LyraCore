@@ -156,13 +156,13 @@ pub(crate) fn ignored_anywhere<St: WorldStore + ?Sized>(
     owner_guid: u64,
     other_guid: u64,
 ) -> Result<bool> {
-    if store.contact_lists(owner_guid)?.1.contains(&other_guid) {
+    if store.ignored_guids(owner_guid)?.contains(&other_guid) {
         return Ok(true);
     }
     Ok(store.world_stores().iter().any(|shard| {
         shard
-            .contact_lists(owner_guid)
-            .map(|(_, ignored)| ignored.contains(&other_guid))
+            .ignored_guids(owner_guid)
+            .map(|ignored| ignored.contains(&other_guid))
             .unwrap_or(false)
     }))
 }

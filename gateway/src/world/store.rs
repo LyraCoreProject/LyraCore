@@ -1393,10 +1393,20 @@ pub trait WorldStore:
         String::new()
     }
 
-    /// `self_guid`'s friend list + ignore list for `CMSG_FRIEND_LIST → SMSG_FRIEND_LIST` +
-    /// `SMSG_IGNORE_LIST`. A friend on any Shard resolves; online means `session_online` and same
-    /// team, and carries level/class/zone/Away Status.
-    fn contact_lists(&self, self_guid: u64) -> Result<(Vec<codec::FriendView>, Vec<u64>)>;
+    /// `self_guid`'s friend guids and ignore guids for `CMSG_FRIEND_LIST`. `self_guid` is always
+    /// the CALLING World Session's own guid, never a peer's, so a Store may answer this from
+    /// whatever cheap per-connection state it keeps for its own connected sessions (the Coordinator
+    /// reads its Gateway-side `Viewer`). A caller that needs a friend's PRESENCE composes it
+    /// separately with `world::social::friend_views`, over `presence::of`; a caller that needs to
+    /// know whether an ARBITRARY (possibly unconnected) Character ignores another uses
+    /// [`WorldStore::ignored_guids`] instead, never this method.
+    fn contact_lists(&self, self_guid: u64) -> Result<(Vec<u64>, Vec<u64>)>;
+
+    /// `owner_guid`'s ignore guids, read directly off this Shard's durable contact rows — realm-wide
+    /// safe for ANY owner, including one with no live World Session on this Gateway process at all
+    /// (a whisper sender or a guild-invite target usually is not). `whisper::ignored_anywhere` fans
+    /// this out across every connected Shard. Unlike `contact_lists`, this never reads a `Viewer`.
+    fn ignored_guids(&self, owner_guid: u64) -> Result<Vec<u64>>;
 
     /// Resolve a typed contact name to a character guid on THIS Shard (case-insensitive, like
     /// `send_whisper`'s target match) — `presence::resolve_by_name`'s per-Shard primitive. `None`

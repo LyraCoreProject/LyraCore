@@ -9,8 +9,6 @@ pub enum ContactRefusal {
     ActorUnavailable,
     /// A Character may not befriend or ignore itself.
     AddSelf,
-    /// No Character row holds the guid the Gateway resolved.
-    NoSuchPlayer,
     /// The target is already on that same list.
     AlreadyOnList,
     /// That list is at its cap.
@@ -23,10 +21,9 @@ pub enum ContactRefusal {
 }
 
 impl ContactRefusal {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 6] = [
         Self::ActorUnavailable,
         Self::AddSelf,
-        Self::NoSuchPlayer,
         Self::AlreadyOnList,
         Self::ListFull,
         Self::NotOnList,
@@ -37,7 +34,6 @@ impl ContactRefusal {
         match self {
             Self::ActorUnavailable => "social:actor_unavailable",
             Self::AddSelf => "social:add_self",
-            Self::NoSuchPlayer => "social:no_such_player",
             Self::AlreadyOnList => "social:already_on_list",
             Self::ListFull => "social:list_full",
             Self::NotOnList => "social:not_on_list",

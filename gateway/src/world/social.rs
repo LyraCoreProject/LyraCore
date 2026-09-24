@@ -60,7 +60,13 @@ pub(super) fn handle_social<St: WorldStore + ?Sized>(
         // Silently dropped outside the world (no character to scope the lists to).
         ClientOpcodeMessage::CMSG_FRIEND_LIST => {
             if let WorldState::InWorld(iw) = &conn.state {
-                let (friends, ignored) = store.contact_lists(iw.self_guid)?;
+                let (friend_guids, ignored) = store.contact_lists(iw.self_guid)?;
+                let own_team = store
+                    .character_by_guid(iw.self_guid)?
+                    .map_or(lyracore_shared::faction::TEAM_ALLIANCE, |character| {
+                        lyracore_shared::faction::team_for_race(character.race)
+                    });
+                let friends = friend_views(store, own_team, &friend_guids);
                 send(
                     tx,
                     Outbound::One(ServerOpcodeMessage::SMSG_FRIEND_LIST(Box::new(
@@ -486,11 +492,11 @@ fn friend_result_for(refusal: ContactRefusal, is_ignore: bool) -> FriendResult {
         (ContactRefusal::ListFull, false) => FriendResult::ListFull,
         (ContactRefusal::ListFull, true) => FriendResult::IgnoreFull,
         (ContactRefusal::NotOnList, true) => FriendResult::IgnoreNotFound,
-        // A guid the gateway resolved that the module cannot see, and the friend-list remove of a
-        // row that is not there, both read as the one "no such entry" line vanilla has.
-        (ContactRefusal::NotOnList, false)
-        | (ContactRefusal::NoSuchPlayer, _)
-        | (ContactRefusal::ActorUnavailable, _) => FriendResult::NotFound,
+        // The friend-list remove of a row that is not there, and an actor the module could not
+        // reach, both read as the one "no such entry" line vanilla has.
+        (ContactRefusal::NotOnList, false) | (ContactRefusal::ActorUnavailable, _) => {
+            FriendResult::NotFound
+        }
         // Ignore has no faction rule (only `resolve_add_contact`'s friend arm can produce this),
         // but the wire still has one code for it.
         (ContactRefusal::Enemy, _) => FriendResult::Enemy,
@@ -516,13 +522,53 @@ pub(crate) fn friend_online_fields(presence: &presence::RealmPresence) -> codec:
     }
 }
 
+/// Hydrate friend guids into `FriendView`s for `CMSG_FRIEND_LIST`: online means `session_online`
+/// and the same team as `own_team`, carrying level/class/zone/Away Status from Realm Presence
+/// (cm:SocialMgr.cpp:108-139). A friend whose Realm Presence read fails — an unreachable Shard —
+/// degrades that one row to offline rather than failing the whole list or ending the World
+/// Session. Lives over the `WorldStore` seam, not behind any one Store's own `contact_lists`, so a
+/// Store Fake exercises the exact composition a Coordinator serves.
+pub(crate) fn friend_views<St: WorldStore + ?Sized>(
+    store: &St,
+    own_team: u32,
+    friend_guids: &[u64],
+) -> Vec<codec::FriendView> {
+    friend_guids
+        .iter()
+        .map(|&guid| {
+            let presence = presence::of(store, guid).unwrap_or(None);
+            let online = presence.as_ref().is_some_and(|p| {
+                p.session_online && lyracore_shared::faction::team_for_race(p.race) == own_team
+            });
+            let (away, level, class, zone_id) = match &presence {
+                Some(p) if online => {
+                    let away = match &p.whereabouts {
+                        presence::Whereabouts::InWorld { away, .. } => *away,
+                        presence::Whereabouts::InTransit | presence::Whereabouts::Offline => {
+                            presence::AwayStatus::None
+                        }
+                    };
+                    (away, p.level, p.class, p.zone_id)
+                }
+                _ => (presence::AwayStatus::None, 0, 0, 0),
+            };
+            codec::FriendView {
+                guid,
+                online,
+                away,
+                level,
+                class,
+                zone_id,
+            }
+        })
+        .collect()
+}
+
 /// Resolve a typed contact name realm-wide, call the module's add reducer (`add_friend`/
 /// `add_ignore`), and translate the outcome into what `SMSG_FRIEND_STATUS` needs: the result code,
 /// the OTHER party's guid, and — ONLINE/ADDED_ONLINE only — the trailing presence fields. An
 /// unknown name never reaches the module (guid 0, `NotFound`/`IgnoreNotFound`); everything else
-/// (self/duplicate/cap/team) is the module's own typed Refusal. `target_race` for the module's
-/// Enemy Gate, and whether the ADD answers Online or Offline, both come from one Realm Presence
-/// read of the target — Realm-core holds no Characters to read either from.
+/// (self/duplicate/cap/team) is the module's own typed Refusal.
 fn resolve_add_contact<St: WorldStore + ?Sized>(
     store: &St,
     account_id: u64,
@@ -538,15 +584,38 @@ fn resolve_add_contact<St: WorldStore + ?Sized>(
         };
         return Ok((not_found, 0, None));
     };
-    let target = presence::of(store, target_guid)?;
-    let outcome = if is_ignore {
-        store.add_ignore(account_id, actor_guid, target_guid)?
-    } else {
-        let target_race = target.as_ref().map_or(0, |presence| presence.race);
-        store.add_friend(account_id, actor_guid, target_guid, target_race)?
+    if is_ignore {
+        let outcome = store.add_ignore(account_id, actor_guid, target_guid)?;
+        let result = match outcome {
+            ContactOutcome::Done => FriendResult::IgnoreAdded,
+            ContactOutcome::Refused(refusal) => friend_result_for(refusal, true),
+        };
+        return Ok((result, target_guid, None));
+    }
+
+    // Friends only: the module's Enemy Gate needs the target's race, and a successful add's
+    // answer (ADDED_ONLINE vs ADDED_OFFLINE) needs its presence. An unreachable Shard must not
+    // end the World Session over a friend add, so a Realm Presence read failure degrades to the
+    // best-effort identity read instead — a local cache lookup that cannot itself fail this way.
+    // NEVER guess a race: a wrong default (0 reads as Alliance) can refuse a real same-team
+    // friend as an enemy, or wave a real enemy through.
+    let target = presence::of(store, target_guid).unwrap_or_else(|error| {
+        log::debug!("resolve_add_contact: Realm Presence read failed for {target_guid}: {error:#}");
+        None
+    });
+    let target_race = match &target {
+        Some(presence) => Some(presence.race),
+        None => presence::character_identity_anywhere(store, target_guid)
+            .unwrap_or(None)
+            .map(|identity| identity.race),
     };
+    let Some(target_race) = target_race else {
+        // No connected Shard currently knows this Character at all, though the name resolved a
+        // moment ago — treat it the same as an unresolved name rather than guess.
+        return Ok((FriendResult::NotFound, 0, None));
+    };
+    let outcome = store.add_friend(account_id, actor_guid, target_guid, target_race)?;
     let (result, online) = match outcome {
-        ContactOutcome::Done if is_ignore => (FriendResult::IgnoreAdded, None),
         ContactOutcome::Done => {
             let actor_race = store
                 .character_by_guid(actor_guid)?
@@ -562,7 +631,7 @@ fn resolve_add_contact<St: WorldStore + ?Sized>(
                 None => (FriendResult::AddedOffline, None),
             }
         }
-        ContactOutcome::Refused(refusal) => (friend_result_for(refusal, is_ignore), None),
+        ContactOutcome::Refused(refusal) => (friend_result_for(refusal, false), None),
     };
     Ok((result, target_guid, online))
 }
@@ -625,7 +694,7 @@ mod tests {
                 }
                 ContactRefusal::ListFull => (FriendResult::ListFull, FriendResult::IgnoreFull),
                 ContactRefusal::NotOnList => (FriendResult::NotFound, FriendResult::IgnoreNotFound),
-                ContactRefusal::NoSuchPlayer | ContactRefusal::ActorUnavailable => {
+                ContactRefusal::ActorUnavailable => {
                     (FriendResult::NotFound, FriendResult::NotFound)
                 }
                 ContactRefusal::Enemy => (FriendResult::Enemy, FriendResult::Enemy),
