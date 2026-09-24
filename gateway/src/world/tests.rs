@@ -1,9 +1,10 @@
 use super::handlers::{
-    AuctionActionStore, AuctionInteraction, CastStore, ChannelActionStore, ChannelOutcome,
-    ChannelRequest, ChannelRoster, ChatActionStore, ChatOutcome, DuelActionStore, GuildActionStore,
-    ItemActionStore, LootWindowRefusal, LootWindowRequestStatus, LootWindowStore, MeleeActionStore,
-    MemberPresence, MemberSnapshot, MemberStatsStore, QuestActionStore, RealmChatRequest,
-    SpeakerFacts, TaxiActionStore, VendorActionStore, WeatherStore,
+    resolve_online_character, AuctionActionStore, AuctionInteraction, CastStore,
+    ChannelActionStore, ChannelOutcome, ChannelRequest, ChannelRoster, ChatActionStore,
+    ChatOutcome, DuelActionStore, GuildActionStore, ItemActionStore, LootWindowRefusal,
+    LootWindowRequestStatus, LootWindowStore, MeleeActionStore, MemberPresence, MemberSnapshot,
+    MemberStatsStore, QuestActionStore, RealmChatRequest, SpeakerFacts, TaxiActionStore,
+    VendorActionStore, WeatherStore,
 };
 use super::party::PartyOutcome;
 use super::*;
@@ -4271,14 +4272,7 @@ impl ChannelActionStore for InMemoryStore {
     }
 
     fn online_character_by_name(&self, name: &str) -> Result<Option<(u64, u8, String)>> {
-        for guid in presence::resolve_all_by_name(self, name)? {
-            if let Some(character) = presence::of(self, guid)? {
-                if character.session_online {
-                    return Ok(Some((character.guid, character.race, character.name)));
-                }
-            }
-        }
-        Ok(None)
+        resolve_online_character(self, name)
     }
 
     fn ignores(&self, owner_guid: u64, other_guid: u64) -> Result<bool> {

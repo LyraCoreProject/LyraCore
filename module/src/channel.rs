@@ -302,9 +302,9 @@ fn set_password(
     Ok(())
 }
 
-/// SET_OWNER (cm:Channel.cpp:393-444, cm:Channel.cpp:976-1017). A built-in channel has no owner
-/// and ignores the op (vm:Channel.cpp:473-474). Otherwise the actor must be the owner (`NotOwner`)
-/// and the target must be a member (`PlayerNotFound`).
+/// SET_OWNER (cm:Channel.cpp:393-444, cm:Channel.cpp:976-1017). The actor must be the owner
+/// (`NotOwner`) and the target must be a member (`PlayerNotFound`). A built-in channel has no
+/// owner, so its `owner_guid` is always 0 and every actor fails the owner check.
 fn set_owner(
     ctx: &ReducerContext,
     team: u32,
@@ -312,9 +312,6 @@ fn set_owner(
     request: &ChannelRequest,
 ) -> Result<(), ChannelRefusal> {
     let (channel, _) = membership(ctx, team, &request.channel_name, actor)?;
-    if channel.builtin_id != 0 {
-        return Ok(());
-    }
     if actor != channel.owner_guid {
         return Err(ChannelRefusal::NotOwner);
     }
@@ -415,7 +412,10 @@ fn kick_or_ban(
     Ok(())
 }
 
-/// UNBAN (cm:Channel.cpp:239-286). The actor must be a moderator. A Character not banned refuses
+/// UNBAN (cm:Channel.cpp:239-286). The actor must be a moderator. An unresolved target (guid 0,
+/// the Gateway's sentinel for a name that did not resolve to an online Character) refuses
+/// `PlayerNotFound`, the same as cmangos's own `GetPlayer` miss, checked before the ban table,
+/// never after: no real Character ever holds guid 0. A Character not banned refuses
 /// `PlayerNotBanned`. Otherwise remove the ban and write PLAYER_UNBANNED naming target and actor.
 fn unban(
     ctx: &ReducerContext,
@@ -428,6 +428,9 @@ fn unban(
         return Err(ChannelRefusal::NotModerator);
     }
     let target = request.target_guid;
+    if target == 0 {
+        return Err(ChannelRefusal::PlayerNotFound);
+    }
     let ban_id = ctx
         .db
         .game_chat_channel_ban()
@@ -453,7 +456,10 @@ fn unban(
     Ok(())
 }
 
-/// INVITE (cm:Channel.cpp:666-726). Needs no moderator right. A target already a member refuses
+/// INVITE (cm:Channel.cpp:666-726). Needs no moderator right. An unresolved target (guid 0, the
+/// Gateway's sentinel for a name that did not resolve to an online Character) refuses
+/// `PlayerNotFound`, cmangos's own `GetPlayer` miss, checked first: race 0 would otherwise pass
+/// the team check below as Alliance and falsely succeed. A target already a member refuses
 /// `PlayerAlreadyMember`; a banned target refuses `PlayerInviteBanned`; another team refuses
 /// `InviteWrongFaction`. Otherwise write INVITE naming the actor to the target, unless the target
 /// ignores the actor, and write PLAYER_INVITED with the target's name to the actor.
@@ -465,6 +471,9 @@ fn invite(
 ) -> Result<(), ChannelRefusal> {
     let (channel, _) = membership(ctx, team, &request.channel_name, actor)?;
     let target = request.target_guid;
+    if target == 0 {
+        return Err(ChannelRefusal::PlayerNotFound);
+    }
     if member_of(ctx, channel.channel_id, target).is_some() {
         return Err(ChannelRefusal::PlayerAlreadyMember);
     }

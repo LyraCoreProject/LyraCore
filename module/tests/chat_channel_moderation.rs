@@ -232,7 +232,7 @@ fn owner_guid(realm: &Standalone, name: &str) -> String {
 
 /// Criteria 1, 2, 3 and 7: promoting a moderator, a plain member refused, the owner protected from
 /// everyone but themselves, and SET_OWNER moving ownership while the old owner keeps MODERATOR. A
-/// built-in channel ignores SET_OWNER along the way.
+/// built-in channel refuses SET_OWNER with NOT_OWNER along the way, since it has no owner to be.
 #[test]
 #[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
 fn moderator_rights_gate_ownership_and_moderator_changes() {
@@ -318,15 +318,18 @@ fn moderator_rights_gate_ownership_and_moderator_changes() {
     );
     assert_eq!(member_flags(&realm, "Raiders", 1), "3");
 
-    // A built-in channel ignores SET_OWNER (vm:Channel.cpp:473-474).
+    // A built-in channel has no owner, so `owner_guid` is 0 and every actor fails the owner
+    // check, the same NOT_OWNER a custom channel answers a non-owner with.
     join(&realm, &actor("1"), "Trade - City", HUMAN);
-    op(
+    refused(
         &realm,
-        &actor("1"),
-        OP_SET_OWNER,
-        "Trade - City",
-        target(1, "One", HUMAN),
-        HUMAN,
+        "realm_channel_op",
+        &[
+            &actor("1"),
+            OP_SET_OWNER,
+            &request("Trade - City", target(1, "One", HUMAN), false, HUMAN),
+        ],
+        "chat:channel:not_owner",
     );
     assert_eq!(owner_guid(&realm, "Trade - City"), "0");
 
@@ -709,4 +712,56 @@ fn moderation_and_announcements_toggle_for_moderators_only() {
         )
     });
     assert_eq!(left, [(YOU_LEFT, 0, vec![3])]);
+}
+
+/// cmangos checks membership, then rights, then the target name. `target_guid` 0 is the
+/// Gateway's sentinel for a name that did not resolve to an online Character, so a non-member or
+/// a plain member naming an unknown Character sees NOT_MEMBER or NOT_MODERATOR, never
+/// PLAYER_NOT_FOUND first; only once membership and rights clear does an unresolved target answer
+/// PLAYER_NOT_FOUND.
+#[test]
+#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+fn an_unresolved_target_refuses_after_membership_and_rights_checks() {
+    let realm = start("chat-channel-moderation-order");
+    join(&realm, &actor("1"), "Raiders", HUMAN);
+    join(&realm, &actor("2"), "Raiders", HUMAN);
+
+    // A non-member naming an unknown Character gets NOT_MEMBER.
+    refused(
+        &realm,
+        "realm_channel_op",
+        &[
+            &actor("9"),
+            OP_KICK,
+            &request("Raiders", Target::NONE, false, HUMAN),
+        ],
+        "chat:channel:not_member",
+    );
+
+    // A plain member (2) naming an unknown Character gets NOT_MODERATOR.
+    refused(
+        &realm,
+        "realm_channel_op",
+        &[
+            &actor("2"),
+            OP_MUTE,
+            &request("Raiders", Target::NONE, false, HUMAN),
+        ],
+        "chat:channel:not_moderator",
+    );
+
+    // The owner (1) clears membership and rights for every op that needs them, so each of these
+    // falls through to PLAYER_NOT_FOUND on the unresolved target.
+    for op_code in [OP_SET_OWNER, OP_KICK, OP_UNBAN, OP_INVITE] {
+        refused(
+            &realm,
+            "realm_channel_op",
+            &[
+                &actor("1"),
+                op_code,
+                &request("Raiders", Target::NONE, false, HUMAN),
+            ],
+            "chat:channel:player_not_found",
+        );
+    }
 }
