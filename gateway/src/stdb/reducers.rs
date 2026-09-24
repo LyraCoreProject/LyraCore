@@ -1022,62 +1022,54 @@ impl Coordinator {
         pick(&index).keys_of(character_guid)
     }
 
-    /// `actor_guid`'s unfinished Holds on THIS handle, found through the auction index and read
-    /// back by primary key.
+    /// The rows `pick` names for `character_guid` in THIS handle's auction index, read back by
+    /// primary key through `find`. A row whose `owner` is no longer `character_guid` is dropped,
+    /// because the index can trail the cache.
+    fn indexed_rows<T>(
+        &self,
+        pick: impl Fn(&super::auction_holds::AuctionIndex) -> &super::auction_holds::KeysByCharacter,
+        character_guid: u64,
+        find: impl Fn(&RemoteTables, u64) -> Option<T>,
+        owner: impl Fn(&T) -> u64,
+    ) -> Vec<T> {
+        let keys = self.auction_keys(pick, character_guid);
+        let guard = self.0.coord();
+        keys.into_iter()
+            .filter_map(|key| find(&guard.conn.db, key))
+            .filter(|row| owner(row) == character_guid)
+            .collect()
+    }
+
+    /// `actor_guid`'s unfinished Holds on THIS handle.
     fn unfinished_auction_holds(&self, actor_guid: u64) -> impl Iterator<Item = AuctionBidHold> {
-        let operations = self.auction_keys(|index| &index.unfinished_bid_holds, actor_guid);
-        let guard = self.0.coord();
-        let holds: Vec<_> = operations
-            .into_iter()
-            .filter_map(|operation_id| {
-                guard
-                    .conn
-                    .db
-                    .game_auction_bid_hold()
-                    .operation_id()
-                    .find(&operation_id)
-            })
-            .filter(|hold| {
-                hold.bidder_guid == actor_guid && super::auction_holds::hold_is_unfinished(hold)
-            })
-            .collect();
-        holds.into_iter()
+        self.indexed_rows(
+            |index| &index.unfinished_bid_holds,
+            actor_guid,
+            |db, id| db.game_auction_bid_hold().operation_id().find(&id),
+            |hold| hold.bidder_guid,
+        )
+        .into_iter()
+        .filter(super::auction_holds::hold_is_unfinished)
     }
 
-    /// `seller_guid`'s listing Holds on THIS handle, found through the auction index.
+    /// `seller_guid`'s listing Holds on THIS handle.
     fn listing_holds(&self, seller_guid: u64) -> Vec<AuctionHold> {
-        let operations = self.auction_keys(|index| &index.listing_holds, seller_guid);
-        let guard = self.0.coord();
-        operations
-            .into_iter()
-            .filter_map(|operation_id| {
-                guard
-                    .conn
-                    .db
-                    .game_auction_hold()
-                    .operation_id()
-                    .find(&operation_id)
-            })
-            .filter(|hold| hold.seller_guid == seller_guid)
-            .collect()
+        self.indexed_rows(
+            |index| &index.listing_holds,
+            seller_guid,
+            |db, id| db.game_auction_hold().operation_id().find(&id),
+            |hold| hold.seller_guid,
+        )
     }
 
-    /// `seller_guid`'s listing receipts on THIS handle, found through the auction index.
+    /// `seller_guid`'s listing receipts on THIS handle.
     fn listing_receipts(&self, seller_guid: u64) -> Vec<AuctionOperationReceipt> {
-        let operations = self.auction_keys(|index| &index.listing_receipts, seller_guid);
-        let guard = self.0.coord();
-        operations
-            .into_iter()
-            .filter_map(|operation_id| {
-                guard
-                    .conn
-                    .db
-                    .game_auction_operation_receipt()
-                    .operation_id()
-                    .find(&operation_id)
-            })
-            .filter(|receipt| receipt.actor_guid == seller_guid)
-            .collect()
+        self.indexed_rows(
+            |index| &index.listing_receipts,
+            seller_guid,
+            |db, id| db.game_auction_operation_receipt().operation_id().find(&id),
+            |receipt| receipt.actor_guid,
+        )
     }
 
     /// Does `character_guid` sell, or lead the bidding on, an Auction on THIS handle?
@@ -5063,6 +5055,7 @@ mod auction_reducer_tests {
     #[test]
     fn auction_lookups_never_scan_a_cache_table() {
         for signature in [
+            "fn indexed_rows<T>(",
             "fn unfinished_auction_holds(",
             "fn listing_holds(",
             "fn listing_receipts(",
