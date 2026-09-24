@@ -1027,6 +1027,9 @@ pub(crate) trait ImportSink: ShardLedger {
     /// Drop transfer-owned mirror rows before the ordinary Character cascade can apply local
     /// membership semantics to a Realm-owned party.
     fn detach_for_transfer(&mut self, guid: u64);
+    /// Does this database hold an auction Hold for `guid` that has not finished? One can be left
+    /// behind by a Transfer from before Holds travelled.
+    fn has_auction_hold(&self, guid: u64) -> bool;
     fn cascade_delete_character(&mut self, guid: u64);
     fn insert_character(&mut self, c: crate::character::Character);
     /// The payload half — [`import_rows`] against this database's transport registry.
@@ -1192,6 +1195,9 @@ impl ImportSink for CtxShard<'_> {
     fn detach_for_transfer(&mut self, guid: u64) {
         crate::group::detach_for_transfer(self.ctx, guid);
         crate::bridge::detach_command_receipts_for_transfer(self.ctx, guid);
+    }
+    fn has_auction_hold(&self, guid: u64) -> bool {
+        crate::auction::character_has_auction_hold(self.ctx, guid)
     }
     fn cascade_delete_character(&mut self, guid: u64) {
         crate::world::cascade_delete_character(self.ctx, guid);
@@ -1712,6 +1718,14 @@ pub(crate) fn apply_import_blob<S: ImportSink>(
     // already hold its Realm-owned party mirror, so detach that cache row before the ordinary
     // Character cascade can interpret cleanup as a party departure. Item import separately checks
     // foreign GUID collisions because legacy packing could overlap.
+    // The cascade below deletes every Hold of this Character here. A Hold left behind is value the
+    // payload does not carry, so refuse rather than destroy it. It must finish or refund first.
+    if sink.has_auction_hold(guid) {
+        return Err(format!(
+            "transfer {transfer_id}: character {guid} still has an auction Hold on this shard — \
+             refusing the import, whose cascade would destroy that Hold's item or copper"
+        ));
+    }
     sink.detach_for_transfer(guid);
     sink.cascade_delete_character(guid);
     sink.insert_character(c);
@@ -1729,7 +1743,8 @@ pub(crate) fn apply_import_blob<S: ImportSink>(
     if crate::auth::in_guid_range(sink.own_guid_range(), guid) {
         sink.bump_guid_high_water(guid);
     }
-    sink.import_rows(guid, &decoded.payload)?;
+    let payload = payload_for_this_build(&decoded.manifest, &decoded.payload);
+    sink.import_rows(guid, &payload)?;
 
     // The destination has no `game_account` row (accounts are realm-scoped and live on the default
     // database until realm-core). `gw::gw_player_login` resolves the account by id, so

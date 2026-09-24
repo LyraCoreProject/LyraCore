@@ -1975,6 +1975,30 @@ fn taking_an_item_puts_it_in_the_takers_bags_with_its_state_unchanged() {
     assert!(realm.mail_escrows.lock().unwrap().is_empty(), "settled");
 }
 
+/// A Letter Copy mailed on and taken again keeps its text id, so the taker can still read it. The
+/// sharded take reads the item from its fence, not from the Mail row.
+#[test]
+fn a_taken_letter_keeps_its_text_id() {
+    let letter = mail::AttachedItem {
+        entry: 8383,
+        stack_count: 1,
+        durability: 0,
+        enchant_id: 0,
+        soulbound: false,
+        random_property_id: 0,
+        item_text_id: 4242,
+    };
+    let (realm, world, _instances, _calls) = sharded_send();
+    give_item(&world, GINGER, SWORD_GUID, letter.clone());
+    post_item(world.as_ref(), "Trin").expect("posted");
+    let mail_id = mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).unwrap()[0].id;
+
+    mail::take_item(world.as_ref(), Some(TRIN), MAILBOX, mail_id).expect("the take completes");
+
+    assert_eq!(world.bags_of(TRIN), vec![letter]);
+    assert!(realm.mail_escrows.lock().unwrap().is_empty(), "settled");
+}
+
 #[test]
 fn a_sharded_item_take_probes_for_room_before_it_fences_anything() {
     let (_realm, world, calls, mail_id) = delivered_item();

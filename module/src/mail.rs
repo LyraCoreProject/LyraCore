@@ -47,10 +47,13 @@ pub struct Mail {
     #[default(0u32)]
     pub item_text_id: u32,
 }
+// A Transfer runs this sweep on the source after the rows travel, so it destroys no letter. The
+// Character deletion that does destroy them drops their text first
+// (`mail_text::drop_character_letters`).
 crate::character_owned!(delete, fn sweep_delete_game_mail(ctx, character_guid) {
     let mails = ctx.db.game_mail();
     for r in mails.by_recipient().filter(&character_guid).collect::<Vec<_>>() {
-        delete_mail(ctx, r.id);
+        remove_mail(ctx, r.id);
     }
 });
 crate::character_owned!(transfer, fn sweep_transfer_game_mail(ctx, character_guid, io) {
@@ -619,9 +622,13 @@ pub(crate) fn send_back(ctx: &ReducerContext, row: Mail, delay_secs: u32) {
 /// destroyed with it.
 pub(crate) fn delete_mail(ctx: &ReducerContext, mail_id: u64) {
     if let Some(row) = ctx.db.game_mail().id().find(mail_id) {
-        ctx.db.game_mail().id().delete(mail_id);
-        crate::mail_text::release_letter_text(ctx, row.item_text_id);
+        crate::mail_text::drop_letter_text(ctx, row.item_text_id);
     }
+    remove_mail(ctx, mail_id);
+}
+/// Remove a Mail row and its timer, and leave any attached letter's text alone.
+fn remove_mail(ctx: &ReducerContext, mail_id: u64) {
+    ctx.db.game_mail().id().delete(mail_id);
     crate::mail_timer::stop(ctx, mail_id);
 }
 /// `row` sent back to its sender, arriving at `arrives`. It carries only RETURNED, loses its price

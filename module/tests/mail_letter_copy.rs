@@ -366,3 +366,88 @@ fn a_letter_not_yet_delivered_cannot_be_copied() {
         "and it must not file item text for a letter nobody has read yet"
     );
 }
+
+/// A Transfer runs the delete sweeps on its source after the rows travel. On a realm without a
+/// separate Realm-core, that source database also holds the text, and the travelling letter must
+/// keep it: here the letter rides a Mail whose recipient crosses to another database.
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn a_transfer_keeps_the_text_of_the_letters_it_carries() {
+    let source = fixture("mail-letter-copy-transfer-source");
+    seed_letter_item_template(&source);
+    source.assert_call("debug_spawn_player_entity", &["1"]);
+    let partner = spawn_partner(&source);
+    let mail_id = seed_mail(&source, 1, 2, "left it at the inn");
+    let letter = copy_into_bags(&source, mail_id);
+    let to_partner = mail_letter(&source, 1, partner, &letter);
+
+    source.assert_call(
+        "begin_transfer",
+        &[
+            "5090096",
+            &actor(partner),
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "true",
+        ],
+    );
+    let out = source.query_rows("SELECT blob FROM game_transfer_out WHERE transfer_id = 5090096");
+    let blob = serde_json::to_string(out[0]["blob"].strip_prefix("0x").unwrap()).unwrap();
+    let mut destination = Standalone::start("mail-letter-copy-transfer-destination");
+    destination.publish_module();
+    destination.assert_call("claim_operator", &[]);
+    destination.assert_call("install_guid_range", &["1000000000"]);
+    let system = actor(0);
+    destination.assert_call("import_character_blob", &["5090096", &blob, &system]);
+    source.assert_call("confirm_import", &["5090096", &system]);
+    source.assert_call("finish_transfer", &["5090096", &system]);
+
+    assert!(
+        source
+            .query_rows(&format!("SELECT id FROM game_mail WHERE id = {to_partner}"))
+            .is_empty(),
+        "the Mail left with its recipient"
+    );
+    assert_eq!(
+        destination.query_rows(&format!(
+            "SELECT item_text_id FROM game_mail WHERE recipient_guid = {partner}"
+        ))[0]["item_text_id"],
+        mail_id.to_string()
+    );
+    let text = source.query_rows(&format!(
+        "SELECT text, letters FROM game_item_text WHERE id = {mail_id}"
+    ));
+    assert_eq!(
+        [&text[0]["text"], &text[0]["letters"]],
+        ["left it at the inn", "1"],
+        "a letter that travels is not destroyed"
+    );
+}
+
+/// Deleting a Character destroys the letters in its bags, so their text goes.
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn deleting_a_character_destroys_its_letters_text() {
+    let shard = fixture("mail-letter-copy-character-deleted");
+    seed_letter_item_template(&shard);
+    shard.assert_call("debug_spawn_player_entity", &["1"]);
+    let mail_id = seed_mail(&shard, 1, 2, "left it at the inn");
+    copy_into_bags(&shard, mail_id);
+    let text_query = format!("SELECT letters FROM game_item_text WHERE id = {mail_id}");
+    assert_eq!(shard.query_rows(&text_query)[0]["letters"], "1");
+
+    shard.assert_sql("DELETE FROM game_world_entity WHERE guid = 1");
+    let account_id = shard.query_rows("SELECT account_id FROM game_character WHERE guid = 1")[0]
+        ["account_id"]
+        .clone();
+    shard.assert_call("delete_character", &[&account_id, &actor(1)]);
+
+    assert!(
+        shard.query_rows(&text_query).is_empty(),
+        "the text went with the deleted Character's letter"
+    );
+}

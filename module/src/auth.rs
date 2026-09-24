@@ -1244,6 +1244,7 @@ pub fn delete_character(
     {
         return Err("CHAR_IN_WORLD".into());
     }
+    crate::mail_text::drop_character_letters(ctx, character_guid);
     crate::world::cascade_delete_character(ctx, character_guid);
     Ok(())
 }

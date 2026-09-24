@@ -334,8 +334,9 @@ visible since creation. `check_flags` also holds server-only bits above the five
 (`lyracore_shared::mail::CLIENT_CHECK_MASK`), and the codec never sends them: 0x20 is
 `CHECK_FLAG_LETTER_GRANTED`, so the next server-only bit is 0x40. The END-appended `item_text_id`
 on `game_mail` and `game_mail_escrow` is the attached Plain Letter's text id, so a Letter Copy stays
-readable after it is mailed; its default 0 is a real value, an attachment with no text. Expiry is not a column. `lyracore_shared::mail::expires_at_secs` derives it
-from creation, delivery and the cash on delivery price. Private `game_mail_escrow` and
+readable after it is mailed. Its default 0 is a real value: an attachment with no text. Expiry is
+not a column. `lyracore_shared::mail::expires_at_secs` derives it from creation, delivery and the
+cash on delivery price. Private `game_mail_escrow` and
 `game_mail_delivery` carry value across the Shard Boundary; see `architecture.md` §6.3b. The
 END-appended `game_mail_escrow.delivery_delay_secs` is the Delivery Delay a send fence resolved, so
 a re-driven commit keeps it. Its default 0 is a real value: 0 for a take fence, a COD payment and a
@@ -355,23 +356,26 @@ Private `game_item_text` (`module/src/mail_text.rs`) is a Letter Copy's durable 
 mail id narrowed to u32. `mail_text::apply_copy_text` sets `game_mail.check_flags`' COPIED bit and
 files the row in the same reducer, so a made-permanent Mail and its item text always agree. The row
 outlives the Mail that made it. Its END-appended `letters` counts the Plain Letters that can carry
-it: each copy adds one before the Home Shard grants, and `mail_text::release_letter_text` takes one
-away when a letter is destroyed, a Mail deleted with the letter attached or a Character deleted on
-the database that holds the text. The row goes at 0. The default is `u32::MAX`, which marks a row
-filed before the count existed; such a row is never deleted. On a sharded realm a Character deletion
-destroys its letters on the Home Shard, away from the text on Realm-core, and releases nothing, so
-that text stays. `game_item_instance` carries the matching `item_text_id` END-appended column (0 for
-every item that is not a copied letter), and every item snapshot (mail, trade, auction) keeps it.
+it: each copy adds one before the Home Shard grants, and `mail_text::drop_letter_text` takes one
+away when a Mail is deleted with the letter attached, or when a Character is deleted on the database
+that holds the text. The row goes at 0. The default is `u32::MAX`, which marks a row filed before
+the count existed; such a row is never deleted. The count can be too high, never too low. A Transfer
+runs the Character's delete sweeps on its source, but its letters travel, so only the Character
+deletion reducers drop letter text (`mail_text::drop_character_letters`). A letter destroyed or sold
+from the bags drops nothing. On a sharded realm a Character deletion destroys its letters on the
+Home Shard, away from the text on Realm-core, and drops nothing either. That text stays.
+`game_item_instance` carries the matching `item_text_id` END-appended column (0 for every item that
+is not a copied letter), and every item snapshot (mail, trade, auction) keeps it.
 
 ### Auction listing state (`module/src/auction.rs`)
 
 `game_auction_house` is the public `AuctionHouse.dbc` catalogue used to resolve an auctioneer's
 house and economic policy through its imported faction. `game_auction` is the public active market;
 its item columns are the complete item-instance snapshot while no inventory row exists, and its
-house and rate columns preserve the listing-time policy. Private `game_auction_hold` is the source-shard value fence;
-`game_auction`, `game_auction_hold` and `game_auction_operation_receipt` END-append `item_text_id`,
-so a listed Plain Letter keeps its text;
-private `game_auction_operation_receipt` makes listing retries idempotent after that Hold is deleted.
+house and rate columns preserve the listing-time policy. Private `game_auction_hold` is the
+source-shard value fence, and private `game_auction_operation_receipt` makes listing retries
+idempotent after that Hold is deleted. `game_auction`, `game_auction_hold` and
+`game_auction_operation_receipt` END-append `item_text_id`, so a listed Plain Letter keeps its text.
 When realm-core refuses a held listing, it records a payload-matching `auction_id == 0` receipt and
 mails the held item and deposit back to the seller in one transaction. Only then does
 `gw_auction_release_listing_hold` delete the source Hold; a Hold with an active receipt is never
@@ -590,9 +594,9 @@ externally.
 stale, because `init` does not re-run on an auto-migrating publish. `debug_repair_after_publish`
 re-arms the motion, creature-tick, aura, ground-area, weather, gateway-lease and instance-reaper
 schedules, restores a missing Auction expiry, re-tags legacy auction mail as Auction Mail once, arms
-a Mail Timer for each Mail that has none, and re-seeds every fixture family `init` seeds. It does not repair every scheduled table:
-the event reaper and melee schedules are outside this reducer. **Nothing runs it for you.** The
-operator calls it by hand on every shard after every publish:
+a Mail Timer for each Mail that has none, and re-seeds every fixture family `init` seeds. It does not
+repair every scheduled table: the event reaper and melee schedules are outside this reducer.
+**Nothing runs it for you.** The operator calls it by hand on every shard after every publish:
 
 ```bash
 spacetime call -s <server> <database> debug_repair_after_publish

@@ -1316,6 +1316,7 @@ pub fn debug_delete_character(ctx: &ReducerContext, character_guid: u64) -> Resu
     {
         return Err("CHAR_IN_TRANSIT".to_string());
     }
+    crate::mail_text::drop_character_letters(ctx, character_guid);
     cascade_delete_character(ctx, character_guid);
     Ok(())
 }

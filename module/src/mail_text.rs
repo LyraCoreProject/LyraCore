@@ -7,6 +7,7 @@
 
 use spacetimedb::{reducer, table, ReducerContext, Table};
 
+use crate::game_item_instance;
 use crate::mail::{game_mail, Mail};
 
 /// cmangos `MAIL_BODY_ITEM_TEMPLATE` (`Mails/Mail.h:47`) — the "Plain Letter" a copied mail
@@ -59,7 +60,7 @@ fn letters_after_release(letters: u32) -> Option<u32> {
 /// One Plain Letter carrying `item_text_id` is destroyed. Its text goes with the last such letter.
 /// A database that does not hold the text row changes nothing: on a sharded realm a Home Shard
 /// holds letters, but their text is on Realm-core.
-pub(crate) fn release_letter_text(ctx: &ReducerContext, item_text_id: u32) {
+pub(crate) fn drop_letter_text(ctx: &ReducerContext, item_text_id: u32) {
     if item_text_id == 0 {
         return;
     }
@@ -167,6 +168,28 @@ pub(crate) fn apply_copy_text(
         ..row
     });
     Ok(())
+}
+
+/// A deleted Character's letters are destroyed: the ones in its bags and the ones attached to its
+/// Mail. Only the Character deletion reducers call this. A Transfer runs the same delete sweeps on
+/// its source, but there the letters travel, so their text must stay.
+pub(crate) fn drop_character_letters(ctx: &ReducerContext, character_guid: u64) {
+    let in_bags = ctx
+        .db
+        .game_item_instance()
+        .by_owner_guid()
+        .filter(&character_guid)
+        .map(|item| item.item_text_id);
+    let in_mail = ctx
+        .db
+        .game_mail()
+        .by_recipient()
+        .filter(&character_guid)
+        .map(|mail| mail.item_text_id);
+    let letters: Vec<u32> = in_bags.chain(in_mail).filter(|id| *id != 0).collect();
+    for item_text_id in letters {
+        drop_letter_text(ctx, item_text_id);
+    }
 }
 
 #[reducer]

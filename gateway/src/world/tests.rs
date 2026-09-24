@@ -708,6 +708,9 @@ struct InMemoryStore {
     /// Plain Letters `mail_grant_letter` granted on THIS database: `(payee_guid, item_text_id)`.
     /// Not `mail_items` — a Letter Copy mints a fresh item, it never moves one out of a mail row.
     granted_letters: std::sync::Mutex<Vec<(u64, u32)>>,
+    /// `game_mail.item_text_id` per mail id: the attached Plain Letter's text id. Kept beside
+    /// `mails` because `MailView` does not carry it.
+    mail_item_text_ids: std::sync::Mutex<Vec<(u64, u32)>>,
     /// The mail-escrow step to fail on THIS database — a gateway killed before that step's
     /// transaction committed. `transfer`'s `kill_at` for the mail drive, and a `Mutex` because a
     /// re-drive test has to bring the database back up before driving again.
@@ -1071,6 +1074,32 @@ impl InMemoryStore {
                 ..Default::default()
             },
         ));
+        drop(mails);
+        if item.item_text_id != 0 {
+            self.mail_item_text_ids
+                .lock()
+                .unwrap()
+                .push((id, item.item_text_id));
+        }
+    }
+
+    /// The text id of the letter attached to mail `mail_id`, 0 for any other attachment.
+    fn attached_text_id(&self, mail_id: u64) -> u32 {
+        self.mail_item_text_ids
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(id, _)| *id == mail_id)
+            .map_or(0, |(_, text_id)| *text_id)
+    }
+
+    /// Take the attached letter's text id off mail `mail_id`, as the take clears the attachment.
+    fn take_attached_text_id(&self, mail_id: u64) -> u32 {
+        let mut ids = self.mail_item_text_ids.lock().unwrap();
+        let Some(at) = ids.iter().position(|(id, _)| *id == mail_id) else {
+            return 0;
+        };
+        ids.remove(at).1
     }
 
     fn saw_same_account(&self, call: &'static str, same_account: bool) {
@@ -2206,7 +2235,7 @@ impl WorldStore for InMemoryStore {
                     enchant_id: m.item_enchant_id,
                     soulbound: m.item_soulbound,
                     random_property_id: m.random_property_id,
-                    item_text_id: 0,
+                    item_text_id: self.attached_text_id(mail_id),
                 },
                 lyracore_shared::mail::cod_settlement(
                     m.cod,
@@ -2242,6 +2271,7 @@ impl WorldStore for InMemoryStore {
             m.cod = 0;
         }
         drop(mails);
+        self.take_attached_text_id(mail_id);
         if let Some(s) = settlement {
             self.write_mail(
                 s.payer_guid,
@@ -2620,7 +2650,7 @@ impl WorldStore for InMemoryStore {
                 enchant_id: m.item_enchant_id,
                 soulbound: m.item_soulbound,
                 random_property_id: m.random_property_id,
-                item_text_id: 0,
+                item_text_id: self.take_attached_text_id(mail_id),
             };
             m.item_entry = 0;
             m.item_stack_count = 0;

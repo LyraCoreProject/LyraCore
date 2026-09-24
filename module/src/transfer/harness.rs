@@ -144,6 +144,8 @@ pub struct FakeDb {
     /// the FIRST escrow arms it — a live database that never gets one has a frozen player
     /// nobody ever recovers.
     reaper_armed: Cell<bool>,
+    /// Characters that still have an auction Hold on this database, left by an earlier Transfer.
+    auction_holds: RefCell<HashSet<u64>>,
     /// How many times `freeze_live_entity` ran. The live-entity delete is the fence covering
     /// every targeting/aggro/threat/AOI gate on a real shard, and `live` alone cannot tell
     /// "there was nothing to freeze" from "the freeze was skipped".
@@ -529,6 +531,9 @@ impl ImportSink for FakeDb {
     }
     fn detach_for_transfer(&mut self, guid: u64) {
         self.group_members.borrow_mut().remove(&guid);
+    }
+    fn has_auction_hold(&self, guid: u64) -> bool {
+        self.auction_holds.borrow().contains(&guid)
     }
     fn cascade_delete_character(&mut self, guid: u64) {
         self.cascade(guid);
@@ -1046,6 +1051,36 @@ fn an_undecodable_table_payload_aborts_the_import() {
         !dst.has_in_row(XFER),
         "no in-row may be filed for an aborted import"
     );
+}
+
+/// A Hold an earlier Transfer left on the destination is value the payload does not carry. The
+/// cascade before the insert would delete it, so the import is refused and nothing changes.
+#[test]
+fn an_import_is_refused_while_the_destination_still_holds_an_auction_hold() {
+    let src = FakeDb::populated(GUID);
+    let blob = export(&src, GUID, XFER, DEST);
+    let mut dst = FakeDb::new();
+    dst.gear.borrow_mut().push(GearRow {
+        owner: GUID,
+        slot: 9,
+        item: 7005,
+    });
+    dst.auction_holds.borrow_mut().insert(GUID);
+
+    let err = apply_import_blob(&mut dst, XFER, wire(&blob))
+        .expect_err("a stranded Hold must stop the import");
+    assert!(err.contains("auction Hold"), "{err}");
+    assert!(!dst.has_in_row(XFER));
+    assert!(!dst.has_character(GUID));
+    assert_eq!(
+        dst.gear.borrow().len(),
+        1,
+        "the cascade never ran, so the destination kept every row it had"
+    );
+
+    dst.auction_holds.borrow_mut().clear();
+    apply_import_blob(&mut dst, XFER, wire(&blob)).expect("the import goes once the Hold is gone");
+    assert!(dst.has_in_row(XFER));
 }
 
 #[test]

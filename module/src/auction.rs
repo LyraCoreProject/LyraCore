@@ -102,8 +102,10 @@ pub struct AuctionHold {
 
 // A listing Hold keeps the item and the deposit on the seller's Home Shard, and its refund mails
 // them back from that Shard. It travels with its Character like the bid Hold, so the next
-// MSG_AUCTION_HELLO on the new Home Shard finishes the listing. Deletion is refused while a Hold
-// exists, so the delete sweep finds none.
+// MSG_AUCTION_HELLO on the new Home Shard finishes the listing. The delete sweep removes a Hold
+// only where a copy has left: on a Transfer's source after the Hold travelled. Deletion is refused
+// while a Hold exists, and a Transfer import is refused while this Shard still holds one
+// (`character_has_auction_hold`), because its cascade would destroy a Hold the payload lacks.
 crate::character_owned!(delete, fn sweep_delete_game_auction_hold(ctx, character_guid) {
     let operations: Vec<u64> = ctx
         .db
@@ -4508,18 +4510,7 @@ pub fn debug_verify_legacy_auction_mail_repaired(ctx: &ReducerContext) -> Result
 
 /// Character deletion must not destroy value held by or listed for that character.
 pub(crate) fn character_has_auction_value(ctx: &ReducerContext, character_guid: u64) -> bool {
-    ctx.db
-        .game_auction_bid_hold()
-        .by_bidder()
-        .filter(character_guid)
-        .any(|hold| hold.outcome == BID_PENDING || hold.deferred_refund != 0)
-        || ctx
-            .db
-            .game_auction_hold()
-            .by_seller()
-            .filter(character_guid)
-            .next()
-            .is_some()
+    character_has_auction_hold(ctx, character_guid)
         || ctx
             .db
             .game_auction()
@@ -4531,6 +4522,24 @@ pub(crate) fn character_has_auction_value(ctx: &ReducerContext, character_guid: 
             .db
             .game_auction()
             .by_highest_bidder()
+            .filter(character_guid)
+            .next()
+            .is_some()
+}
+
+/// Does this database hold a listing Hold, or a bid Hold that still owes a phase, for
+/// `character_guid`? Such a Hold is value on this Shard that only its own finish or refund may
+/// spend.
+pub(crate) fn character_has_auction_hold(ctx: &ReducerContext, character_guid: u64) -> bool {
+    ctx.db
+        .game_auction_bid_hold()
+        .by_bidder()
+        .filter(character_guid)
+        .any(|hold| hold.outcome == BID_PENDING || hold.deferred_refund != 0)
+        || ctx
+            .db
+            .game_auction_hold()
+            .by_seller()
             .filter(character_guid)
             .next()
             .is_some()
