@@ -69,6 +69,24 @@ pub(crate) enum GuildRequest {
     SetLeader { target_guid: u64 },
     /// The Guild Leader dissolves its Guild.
     Disband,
+    /// CMSG_GUILD_MOTD.
+    SetMotd { text: String },
+    /// CMSG_GUILD_INFO_TEXT.
+    SetInfo { text: String },
+    /// CMSG_GUILD_SET_PUBLIC_NOTE, target already resolved by name.
+    SetPublicNote { target_guid: u64, text: String },
+    /// CMSG_GUILD_SET_OFFICER_NOTE, target already resolved by name.
+    SetOfficerNote { target_guid: u64, text: String },
+    /// CMSG_GUILD_RANK.
+    EditRank {
+        rank_id: u32,
+        rights: u32,
+        name: String,
+    },
+    /// CMSG_GUILD_ADD_RANK.
+    AddRank { name: String },
+    /// CMSG_GUILD_DEL_RANK.
+    DeleteRank,
 }
 
 /// What Realm-core did with a guild Durable Request.
@@ -222,6 +240,33 @@ pub(crate) fn dispatch_guild_action<St: GuildActionStore + ?Sized>(
             |target_guid| GuildRequest::SetLeader { target_guid },
         ),
         ClientOpcodeMessage::CMSG_GUILD_DISBAND => disband_outbound(store, player),
+        ClientOpcodeMessage::CMSG_GUILD_MOTD(motd) => {
+            motd_outbound(store, player, motd.message_of_the_day)
+        }
+        ClientOpcodeMessage::CMSG_GUILD_INFO_TEXT(info) => {
+            info_text_outbound(store, player, info.guild_info)
+        }
+        ClientOpcodeMessage::CMSG_GUILD_SET_PUBLIC_NOTE(note) => set_note_outbound(
+            store,
+            player,
+            note.player_name,
+            note.note,
+            |target_guid, text| GuildRequest::SetPublicNote { target_guid, text },
+        ),
+        ClientOpcodeMessage::CMSG_GUILD_SET_OFFICER_NOTE(note) => set_note_outbound(
+            store,
+            player,
+            note.player_name,
+            note.note,
+            |target_guid, text| GuildRequest::SetOfficerNote { target_guid, text },
+        ),
+        ClientOpcodeMessage::CMSG_GUILD_RANK(rank) => {
+            edit_rank_outbound(store, player, rank.rank_id, rank.rights, rank.rank_name)
+        }
+        ClientOpcodeMessage::CMSG_GUILD_ADD_RANK(add) => {
+            add_rank_outbound(store, player, add.rank_name)
+        }
+        ClientOpcodeMessage::CMSG_GUILD_DEL_RANK => delete_rank_outbound(store, player),
         other => return Ok(GuildActionOutcome::PassThrough(other)),
     };
     match outbound {
@@ -282,7 +327,9 @@ fn actor_guild<St: GuildActionStore + ?Sized>(
     Ok(store.guild(member.guild_id)?.map(|guild| (member, guild)))
 }
 
-/// Outside a Guild the client gets no reply (`cm:GuildHandler.cpp:265-266`).
+/// Outside a Guild the client gets no reply (`cm:GuildHandler.cpp:265-266`). One viewer, so lines
+/// are read lazily: `roster_packet` stops pulling once the roster body is full, and a member past
+/// the cap never pays for a `guild_character_facts` read that would be discarded.
 fn roster_outbound<St: GuildActionStore + ?Sized>(
     store: &St,
     player: GuildActionPlayer,
@@ -291,34 +338,45 @@ fn roster_outbound<St: GuildActionStore + ?Sized>(
         return Ok(Vec::new());
     };
     let members = store.guild_members(guild.guild_id)?;
-    let sees_officer_notes = has_right(guild.rank_rights(viewer.rank_id), rights::VIEWOFFNOTE);
     let now = now_micros();
-    // Lazy, so the size cap also stops the Character reads.
     let lines = members
         .into_iter()
-        .map(|member| roster_line(store, member, sees_officer_notes, now));
-    Ok(vec![Outbound::One(ServerOpcodeMessage::SMSG_GUILD_ROSTER(
-        Box::new(codec::build_guild_roster(&guild, lines)),
+        .map(move |member| roster_line(store, member, now));
+    let sees_officer_notes = has_right(guild.rank_rights(viewer.rank_id), rights::VIEWOFFNOTE);
+    Ok(vec![Outbound::One(roster_packet(
+        &guild,
+        lines,
+        sees_officer_notes,
     ))])
 }
 
-/// One roster line. A member whose World Shard cannot answer still lists, offline, under its name
-/// snapshot.
+/// Every roster line of `guild_id`, officer note included; `roster_packet` blanks it per viewer.
+/// Reading each member's Character facts is the expensive part of a roster, so a caller that
+/// serves more than one viewer of the same Guild (a settings-change relay) must call this once and
+/// pass the result to every `roster_packet` call, not call `roster_outbound` per viewer.
+pub(crate) fn roster_lines<St: GuildActionStore + ?Sized>(
+    store: &St,
+    guild_id: u32,
+) -> Result<Vec<codec::GuildRosterLine>> {
+    let members = store.guild_members(guild_id)?;
+    let now = now_micros();
+    Ok(members
+        .into_iter()
+        .map(|member| roster_line(store, member, now))
+        .collect())
+}
+
+/// One roster line, officer note included. A member whose World Shard cannot answer still lists,
+/// offline, under its name snapshot.
 fn roster_line<St: GuildActionStore + ?Sized>(
     store: &St,
     member: codec::GuildMemberView,
-    sees_officer_notes: bool,
     now_micros: u64,
 ) -> codec::GuildRosterLine {
     let facts = store
         .guild_character_facts(member.character_guid)
         .ok()
         .flatten();
-    let officer_note = if sees_officer_notes {
-        member.officer_note
-    } else {
-        String::new()
-    };
     let Some(facts) = facts else {
         return codec::GuildRosterLine {
             guid: member.character_guid,
@@ -326,7 +384,7 @@ fn roster_line<St: GuildActionStore + ?Sized>(
             rank_id: member.rank_id,
             days_offline: Some(0.0),
             public_note: member.public_note,
-            officer_note,
+            officer_note: member.officer_note,
             ..codec::GuildRosterLine::default()
         };
     };
@@ -346,8 +404,28 @@ fn roster_line<St: GuildActionStore + ?Sized>(
         zone_id: facts.zone_id,
         days_offline,
         public_note: member.public_note,
-        officer_note,
+        officer_note: member.officer_note,
     }
+}
+
+/// SMSG_GUILD_ROSTER from `lines`, blanking each line's officer note unless `sees_officer_notes`.
+/// The one place that encodes a roster, so CMSG_GUILD_ROSTER and a settings-change relay can never
+/// draw the wire body two different ways. `lines` stays generic over `IntoIterator` rather than a
+/// slice: the single-viewer client path feeds it a lazy iterator so a member past the roster's
+/// body cap is never read, while a settings-change relay, which renders both note visibilities
+/// from one shared read, feeds it `lines.iter().cloned()` over its already-collected Vec.
+pub(crate) fn roster_packet(
+    guild: &codec::GuildView,
+    lines: impl IntoIterator<Item = codec::GuildRosterLine>,
+    sees_officer_notes: bool,
+) -> ServerOpcodeMessage {
+    let lines = lines.into_iter().map(move |mut line| {
+        if !sees_officer_notes {
+            line.officer_note.clear();
+        }
+        line
+    });
+    ServerOpcodeMessage::SMSG_GUILD_ROSTER(Box::new(codec::build_guild_roster(guild, lines)))
 }
 
 fn info_outbound<St: GuildActionStore + ?Sized>(
@@ -718,6 +796,156 @@ fn membership_refusal_outbound(
     }
 }
 
+/// CMSG_GUILD_MOTD (`cm:GuildHandler.cpp:488-513`).
+fn motd_outbound<St: GuildActionStore + ?Sized>(
+    store: &St,
+    player: GuildActionPlayer,
+    text: String,
+) -> Result<Vec<Outbound>> {
+    let Some(actor_guid) = player.self_guid else {
+        return Ok(Vec::new());
+    };
+    let outcome = store.guild_op(actor_guid, GuildRequest::SetMotd { text })?;
+    Ok(match outcome {
+        GuildOutcome::Ran => Vec::new(),
+        GuildOutcome::Refused(GuildRefusal::NotInGuild) => vec![not_in_guild()],
+        GuildOutcome::Refused(GuildRefusal::NoPermission) => vec![command_result(
+            GuildCommand::Invite,
+            String::new(),
+            GuildCommandResult::GuildPermissionsOrLeader,
+        )],
+        GuildOutcome::Refused(_) => Vec::new(), // TooLong: the stock client cannot produce it.
+    })
+}
+
+/// CMSG_GUILD_INFO_TEXT (`cm:GuildHandler.cpp:693-713`).
+fn info_text_outbound<St: GuildActionStore + ?Sized>(
+    store: &St,
+    player: GuildActionPlayer,
+    text: String,
+) -> Result<Vec<Outbound>> {
+    let Some(actor_guid) = player.self_guid else {
+        return Ok(Vec::new());
+    };
+    let outcome = store.guild_op(actor_guid, GuildRequest::SetInfo { text })?;
+    Ok(match outcome {
+        GuildOutcome::Ran => Vec::new(),
+        GuildOutcome::Refused(GuildRefusal::NotInGuild) => vec![not_in_guild()],
+        GuildOutcome::Refused(GuildRefusal::NoPermission) => vec![command_result(
+            GuildCommand::Create,
+            String::new(),
+            GuildCommandResult::GuildPermissionsOrLeader,
+        )],
+        GuildOutcome::Refused(_) => Vec::new(),
+    })
+}
+
+/// CMSG_GUILD_SET_PUBLIC_NOTE / SET_OFFICER_NOTE, shared: resolve `target_name` against the
+/// actor's own Guild through its member name snapshots (`member_by_name`), same as mangos'
+/// `GetMemberSlot` (`cm:GuildHandler.cpp:526-545,564-582`), then run the edit.
+///
+/// No match sends guid 0 rather than answering locally: mangos checks the actor's Rank Right
+/// before it looks the target up, so an actor without the right hears `NoPermission` even for a
+/// name that matches nobody, and only the Module's own Gate order can reproduce that. The Module's
+/// membership lookup then refuses guid 0 as `TargetNotInGuild`, which maps to the same reply this
+/// used to send here.
+fn set_note_outbound<St: GuildActionStore + ?Sized>(
+    store: &St,
+    player: GuildActionPlayer,
+    target_name: String,
+    text: String,
+    request: impl FnOnce(u64, String) -> GuildRequest,
+) -> Result<Vec<Outbound>> {
+    let Some(actor_guid) = player.self_guid else {
+        return Ok(Vec::new());
+    };
+    let Some((_, guild)) = actor_guild(store, player)? else {
+        return Ok(vec![not_in_guild()]);
+    };
+    let members = store.guild_members(guild.guild_id)?;
+    let target_guid = match member_by_name(&members, &target_name) {
+        MemberMatch::Found(guid) => guid,
+        MemberMatch::NotInGuild => 0,
+    };
+    let outcome = store.guild_op(actor_guid, request(target_guid, text))?;
+    Ok(match outcome {
+        GuildOutcome::Refused(GuildRefusal::NoPermission) => vec![command_result(
+            GuildCommand::Invite,
+            String::new(),
+            GuildCommandResult::GuildPermissionsOrLeader,
+        )],
+        GuildOutcome::Refused(GuildRefusal::TargetNotInGuild) => vec![command_result(
+            GuildCommand::Invite,
+            target_name,
+            GuildCommandResult::GuildPlayerNotInGuildS,
+        )],
+        _ => Vec::new(), // TooLong is silent: the stock client cannot produce it.
+    })
+}
+
+/// The rank-management opcodes (RANK, ADD_RANK, DEL_RANK) share their refusal replies: `NotInGuild`
+/// answers the same as every other guild-less request, `NotLeader` answers PERMISSIONS, and every
+/// other refusal, including `RanksAtLimit`, is silent (`cm:GuildHandler.cpp:606-611,645-651,
+/// 671-673`).
+fn rank_refusal_outbound(outcome: GuildOutcome) -> Vec<Outbound> {
+    match outcome {
+        GuildOutcome::Refused(GuildRefusal::NotInGuild) => vec![not_in_guild()],
+        GuildOutcome::Refused(GuildRefusal::NotLeader) => vec![command_result(
+            GuildCommand::Invite,
+            String::new(),
+            GuildCommandResult::GuildPermissionsOrLeader,
+        )],
+        _ => Vec::new(),
+    }
+}
+
+/// CMSG_GUILD_RANK.
+fn edit_rank_outbound<St: GuildActionStore + ?Sized>(
+    store: &St,
+    player: GuildActionPlayer,
+    rank_id: u32,
+    rights: u32,
+    name: String,
+) -> Result<Vec<Outbound>> {
+    let Some(actor_guid) = player.self_guid else {
+        return Ok(Vec::new());
+    };
+    let outcome = store.guild_op(
+        actor_guid,
+        GuildRequest::EditRank {
+            rank_id,
+            rights,
+            name,
+        },
+    )?;
+    Ok(rank_refusal_outbound(outcome))
+}
+
+/// CMSG_GUILD_ADD_RANK.
+fn add_rank_outbound<St: GuildActionStore + ?Sized>(
+    store: &St,
+    player: GuildActionPlayer,
+    name: String,
+) -> Result<Vec<Outbound>> {
+    let Some(actor_guid) = player.self_guid else {
+        return Ok(Vec::new());
+    };
+    let outcome = store.guild_op(actor_guid, GuildRequest::AddRank { name })?;
+    Ok(rank_refusal_outbound(outcome))
+}
+
+/// CMSG_GUILD_DEL_RANK.
+fn delete_rank_outbound<St: GuildActionStore + ?Sized>(
+    store: &St,
+    player: GuildActionPlayer,
+) -> Result<Vec<Outbound>> {
+    let Some(actor_guid) = player.self_guid else {
+        return Ok(Vec::new());
+    };
+    let outcome = store.guild_op(actor_guid, GuildRequest::DeleteRank)?;
+    Ok(rank_refusal_outbound(outcome))
+}
+
 const GUILD_CREATE_USAGE: &str = "usage: .guild create [<leader>] \"<name>\"";
 
 /// Is this Say line a `.guild` dot-command?
@@ -1004,6 +1232,82 @@ pub(crate) enum MemberMatch {
     NotInGuild,
 }
 
+/// Guild data for one settings-changing Guild Event, read once and shared by every recipient's
+/// job: the query response, and, for a roster-carrying kind, both roster encodings, so a viewer's
+/// own job only has to pick which one its Guild Rank sees and never re-reads the Realm-core cache
+/// or the World Shards. A relay is not a reply to a client request, so a Guild that is gone renders
+/// nothing here rather than the `not_in_guild()` command result a live request would get.
+#[derive(Clone, Default)]
+pub(crate) struct GuildEventSnapshot {
+    pub(crate) query: Option<ServerOpcodeMessage>,
+    pub(crate) roster_hidden: Option<ServerOpcodeMessage>,
+    pub(crate) roster_shown: Option<ServerOpcodeMessage>,
+    pub(crate) rank_rights: Vec<(u32, u32)>,
+}
+
+impl GuildEventSnapshot {
+    /// Read the Guild, and its roster too unless `kind` only needs the query response.
+    pub(crate) fn build<St: GuildActionStore + ?Sized>(
+        store: &St,
+        guild_id: u32,
+        kind: u8,
+    ) -> Self {
+        let Ok(Some(guild)) = store.guild(guild_id) else {
+            return Self::default();
+        };
+        let needs_query = kind == event_kind::TABARD_CHANGED || kind == event_kind::ROSTER_REFRESH;
+        let needs_roster =
+            kind == event_kind::ROSTER_TO_ACTOR || kind == event_kind::ROSTER_REFRESH;
+        let query = needs_query.then(|| {
+            ServerOpcodeMessage::SMSG_GUILD_QUERY_RESPONSE(Box::new(
+                codec::build_guild_query_response(&guild),
+            ))
+        });
+        if !needs_roster {
+            return Self {
+                query,
+                ..Self::default()
+            };
+        }
+        let Ok(lines) = roster_lines(store, guild_id) else {
+            return Self {
+                query,
+                ..Self::default()
+            };
+        };
+        Self {
+            query,
+            roster_hidden: Some(roster_packet(&guild, lines.iter().cloned(), false)),
+            roster_shown: Some(roster_packet(&guild, lines.iter().cloned(), true)),
+            rank_rights: guild
+                .ranks
+                .iter()
+                .map(|rank| (rank.rank_id, rank.rights))
+                .collect(),
+        }
+    }
+
+    /// The query response, or nothing when the Guild is gone.
+    pub(crate) fn query_response(&self) -> Option<ServerOpcodeMessage> {
+        self.query.clone()
+    }
+
+    /// The roster `rank_id` sees: officer notes shown only with VIEWOFFNOTE, nothing when the
+    /// Guild is gone or this snapshot carries no roster.
+    pub(crate) fn roster_for_rank(&self, rank_id: u32) -> Option<ServerOpcodeMessage> {
+        let rank_rights = self
+            .rank_rights
+            .iter()
+            .find(|(id, _)| *id == rank_id)
+            .map_or(0, |(_, rank_rights)| *rank_rights);
+        if has_right(rank_rights, rights::VIEWOFFNOTE) {
+            self.roster_shown.clone()
+        } else {
+            self.roster_hidden.clone()
+        }
+    }
+}
+
 fn now_micros() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1017,7 +1321,9 @@ mod tests {
     use lyracore_shared::guild::{founding_gate, name_key, DEFAULT_MOTD, DEFAULT_RANKS};
     use std::sync::Mutex;
     use wow_world_messages::vanilla::{
-        GuildMember, GuildMember_GuildMemberStatus, CMSG_GUILD_CREATE, CMSG_GUILD_QUERY, CMSG_PING,
+        GuildMember, GuildMember_GuildMemberStatus, CMSG_GUILD_ADD_RANK, CMSG_GUILD_CREATE,
+        CMSG_GUILD_INFO_TEXT, CMSG_GUILD_MOTD, CMSG_GUILD_QUERY, CMSG_GUILD_RANK,
+        CMSG_GUILD_SET_OFFICER_NOTE, CMSG_GUILD_SET_PUBLIC_NOTE, CMSG_PING,
     };
 
     const GM: u64 = 5_090_001;
@@ -1046,11 +1352,11 @@ mod tests {
         hold_refusal: Option<GuildRefusal>,
         /// What Realm-core decides; `None` accepts.
         fee_refusal: Option<GuildRefusal>,
-        /// What the next membership op (invite through disband) answers; `None` runs it. The Gate
-        /// arithmetic lives on the Module, proved by its own unit and durable tests; this seam only
-        /// proves the wire mapping from a given outcome, the same shape `GuildFeeStore` below uses
-        /// for the Fee Hold protocol.
-        next_membership_outcome: Mutex<Option<GuildOutcome>>,
+        /// What the next non-`GmCreate` op answers; `None` runs it. The Gate arithmetic for every
+        /// op lives on the Module, proved by its own unit and durable tests; this seam only proves
+        /// the wire mapping from a given outcome, the same shape `GuildFeeStore` below uses for the
+        /// Fee Hold protocol.
+        refuse_next: Mutex<Option<GuildRefusal>>,
     }
 
     impl InMemoryGuildActions {
@@ -1111,9 +1417,10 @@ mod tests {
             Ok(GuildOutcome::Ran)
         }
 
-        /// Scripts the next membership op (invite through disband) to answer this Refusal.
-        fn refuse_membership(&self, refusal: GuildRefusal) {
-            *self.next_membership_outcome.lock().unwrap() = Some(GuildOutcome::Refused(refusal));
+        /// The next non-`GmCreate` `guild_op` call answers this refusal, so a test can pin the
+        /// Gateway's reply mapping without reproducing the Module's own Gate in this Fake.
+        fn refuse_next_op(&self, refusal: GuildRefusal) {
+            *self.refuse_next.lock().unwrap() = Some(refusal);
         }
     }
 
@@ -1190,33 +1497,25 @@ mod tests {
             if let Some(error) = &self.op_error {
                 return Err(anyhow!("{error}"));
             }
-            match request {
-                GuildRequest::GmCreate {
-                    leader_guid,
-                    gm_level,
-                    name,
-                    ..
-                } => self.gm_create(leader_guid, gm_level, name),
-                GuildRequest::SignOn { .. } | GuildRequest::SignOff => Ok(GuildOutcome::Ran),
-                // Invite through Disband: the Module's own Gates decide these (proved by
-                // `module/src/guild/membership.rs`'s unit and durable tests). This Fake only
-                // answers the outcome a test scripts through `refuse_membership`, defaulting to
-                // `Ran`, so a seam test proves the wire mapping and nothing else.
-                GuildRequest::Invite { .. }
-                | GuildRequest::Accept { .. }
-                | GuildRequest::Decline { .. }
-                | GuildRequest::Leave
-                | GuildRequest::Remove { .. }
-                | GuildRequest::Promote { .. }
-                | GuildRequest::Demote { .. }
-                | GuildRequest::SetLeader { .. }
-                | GuildRequest::Disband => Ok(self
-                    .next_membership_outcome
-                    .lock()
-                    .unwrap()
-                    .take()
-                    .unwrap_or(GuildOutcome::Ran)),
+            // Every op but GmCreate is a Module Gate this Fake does not reproduce (proved by the
+            // Module's own unit and durable tests instead): it answers the outcome a test scripts
+            // through `refuse_next_op`, defaulting to `Ran`, so a seam test proves only the wire
+            // mapping between a `GuildOutcome` and the client reply.
+            if !matches!(request, GuildRequest::GmCreate { .. }) {
+                if let Some(refusal) = self.refuse_next.lock().unwrap().take() {
+                    return Ok(GuildOutcome::Refused(refusal));
+                }
             }
+            let GuildRequest::GmCreate {
+                leader_guid,
+                gm_level,
+                name,
+                ..
+            } = request
+            else {
+                return Ok(GuildOutcome::Ran);
+            };
+            self.gm_create(leader_guid, gm_level, name)
         }
 
         fn guild_npc_refuses(&self, npc_guid: u64, _actor_guid: u64) -> Result<bool> {
@@ -1911,7 +2210,7 @@ mod tests {
 
     // Membership: invite, accept, decline, leave, remove, promote, demote, pass leadership,
     // disband. The Module's own unit and durable tests prove the Gate arithmetic; these seam
-    // tests script an outcome through `refuse_membership` and prove only the wire mapping.
+    // tests script an outcome through `refuse_next_op` and prove only the wire mapping.
 
     const DAVE: u64 = 5_090_004;
 
@@ -2002,7 +2301,7 @@ mod tests {
     fn invite_of_an_opposite_team_target_conveys_both_teams_and_maps_not_allied() {
         let mut store = founded_with_members();
         store.characters.push(horde_facts(DAVE, "Dave"));
-        store.refuse_membership(GuildRefusal::NotAllied);
+        store.refuse_next_op(GuildRefusal::NotAllied);
         let outbound = invite_outbound(&store, in_world(GM), "dave".into()).unwrap();
         assert_eq!(
             store.ops.lock().unwrap().last().cloned(),
@@ -2027,7 +2326,7 @@ mod tests {
     #[test]
     fn invite_of_a_guilded_target_maps_already_in_guild_to_its_resolved_name() {
         let store = founded_with_members();
-        store.refuse_membership(GuildRefusal::AlreadyInGuild);
+        store.refuse_next_op(GuildRefusal::AlreadyInGuild);
         let outbound = invite_outbound(&store, in_world(GM), "bob".into()).unwrap();
         let ServerOpcodeMessage::SMSG_GUILD_COMMAND_RESULT(result) = only_message(outbound) else {
             panic!("expected a command result");
@@ -2040,7 +2339,7 @@ mod tests {
     fn a_repeated_invite_maps_already_invited() {
         let mut store = founded_with_members();
         store.characters.push(facts(DAVE, "Dave"));
-        store.refuse_membership(GuildRefusal::AlreadyInvited);
+        store.refuse_next_op(GuildRefusal::AlreadyInvited);
         let outbound = invite_outbound(&store, in_world(GM), "Dave".into()).unwrap();
         assert_eq!(
             command_result_of(outbound),
@@ -2055,7 +2354,7 @@ mod tests {
     fn invite_without_the_invite_right_answers_no_permission() {
         let mut store = founded_with_members();
         store.characters.push(facts(DAVE, "Dave"));
-        store.refuse_membership(GuildRefusal::NoPermission);
+        store.refuse_next_op(GuildRefusal::NoPermission);
         let outbound = invite_outbound(&store, in_world(BOB), "Dave".into()).unwrap();
         assert_eq!(
             command_result_of(outbound),
@@ -2070,7 +2369,7 @@ mod tests {
     fn invite_from_outside_any_guild_answers_not_in_guild() {
         let mut store = founded_with_members();
         store.characters.push(facts(DAVE, "Dave"));
-        store.refuse_membership(GuildRefusal::NotInGuild);
+        store.refuse_next_op(GuildRefusal::NotInGuild);
         let outbound = invite_outbound(&store, in_world(DAVE), "Bob".into()).unwrap();
         assert_eq!(
             command_result_of(outbound),
@@ -2129,7 +2428,7 @@ mod tests {
     #[test]
     fn leave_of_the_leader_with_company_answers_leader_cannot_leave() {
         let store = founded_with_members();
-        store.refuse_membership(GuildRefusal::LeaderCannotLeave);
+        store.refuse_next_op(GuildRefusal::LeaderCannotLeave);
         let outbound = leave_outbound(&store, in_world(GM)).unwrap();
         assert_eq!(
             command_result_of(outbound),
@@ -2165,7 +2464,7 @@ mod tests {
     #[test]
     fn remove_of_an_unmatched_name_sends_guid_zero_and_maps_target_not_in_guild() {
         let store = founded_with_members();
-        store.refuse_membership(GuildRefusal::TargetNotInGuild);
+        store.refuse_next_op(GuildRefusal::TargetNotInGuild);
         let outbound = named_member_op(
             &store,
             in_world(GM),
@@ -2208,7 +2507,7 @@ mod tests {
     #[test]
     fn remove_without_the_remove_right_answers_no_permission() {
         let store = founded_with_members();
-        store.refuse_membership(GuildRefusal::NoPermission);
+        store.refuse_next_op(GuildRefusal::NoPermission);
         let outbound = named_member_op(
             &store,
             in_world(BOB),
@@ -2229,7 +2528,7 @@ mod tests {
     #[test]
     fn removing_the_leader_answers_leader_cannot_leave() {
         let store = founded_with_members();
-        store.refuse_membership(GuildRefusal::LeaderCannotLeave);
+        store.refuse_next_op(GuildRefusal::LeaderCannotLeave);
         let outbound = named_member_op(
             &store,
             in_world(GM),
@@ -2250,7 +2549,7 @@ mod tests {
     #[test]
     fn removing_a_target_at_or_above_the_actors_rank_answers_rank_too_high() {
         let store = founded_with_members();
-        store.refuse_membership(GuildRefusal::RankTooHigh);
+        store.refuse_next_op(GuildRefusal::RankTooHigh);
         let outbound = named_member_op(
             &store,
             in_world(BOB),
@@ -2286,7 +2585,7 @@ mod tests {
     #[test]
     fn promoting_past_the_actors_reach_answers_rank_too_high() {
         let store = founded_with_members();
-        store.refuse_membership(GuildRefusal::RankTooHigh);
+        store.refuse_next_op(GuildRefusal::RankTooHigh);
         let outbound = named_member_op(
             &store,
             in_world(BOB),
@@ -2304,7 +2603,7 @@ mod tests {
     #[test]
     fn promoting_oneself_answers_target_is_self() {
         let store = founded_with_members();
-        store.refuse_membership(GuildRefusal::TargetIsSelf);
+        store.refuse_next_op(GuildRefusal::TargetIsSelf);
         let outbound = named_member_op(
             &store,
             in_world(GM),
@@ -2340,7 +2639,7 @@ mod tests {
     #[test]
     fn demoting_the_guilds_lowest_rank_answers_rank_too_low() {
         let store = founded_with_members();
-        store.refuse_membership(GuildRefusal::RankTooLow);
+        store.refuse_next_op(GuildRefusal::RankTooLow);
         let outbound = named_member_op(
             &store,
             in_world(GM),
@@ -2376,7 +2675,7 @@ mod tests {
     #[test]
     fn leader_by_a_non_leader_answers_no_permission() {
         let store = founded_with_members();
-        store.refuse_membership(GuildRefusal::NotLeader);
+        store.refuse_next_op(GuildRefusal::NotLeader);
         let outbound = named_member_op(
             &store,
             in_world(BOB),
@@ -2411,7 +2710,7 @@ mod tests {
     #[test]
     fn leader_of_an_unmatched_name_sends_guid_zero_and_maps_target_not_in_guild() {
         let store = founded_with_members();
-        store.refuse_membership(GuildRefusal::TargetNotInGuild);
+        store.refuse_next_op(GuildRefusal::TargetNotInGuild);
         let outbound = named_member_op(
             &store,
             in_world(GM),
@@ -2443,7 +2742,7 @@ mod tests {
     #[test]
     fn disband_by_a_non_leader_answers_no_permission() {
         let store = founded_with_members();
-        store.refuse_membership(GuildRefusal::NotLeader);
+        store.refuse_next_op(GuildRefusal::NotLeader);
         let outbound = disband_outbound(&store, in_world(BOB)).unwrap();
         assert_eq!(
             command_result_of(outbound),
@@ -2457,7 +2756,7 @@ mod tests {
     #[test]
     fn disband_outside_a_guild_answers_not_in_guild() {
         let store = founded_with_members();
-        store.refuse_membership(GuildRefusal::NotInGuild);
+        store.refuse_next_op(GuildRefusal::NotInGuild);
         let outbound = disband_outbound(&store, in_world(DAVE)).unwrap();
         assert_eq!(
             command_result_of(outbound),
@@ -2494,5 +2793,377 @@ mod tests {
                 }
             ))
         );
+    }
+
+    #[test]
+    fn guild_motd_opcode_runs_the_op_and_replies_nothing_on_success() {
+        let store = founded_with_members();
+        let outbound = dispatch(
+            &store,
+            in_world(GM),
+            ClientOpcodeMessage::CMSG_GUILD_MOTD(Box::new(CMSG_GUILD_MOTD {
+                message_of_the_day: "Assemble!".into(),
+            })),
+        );
+        assert!(outbound.is_empty());
+        assert_eq!(
+            store.ops.lock().unwrap().last().cloned(),
+            Some((
+                GM,
+                GuildRequest::SetMotd {
+                    text: "Assemble!".into()
+                }
+            ))
+        );
+    }
+
+    #[test]
+    fn guild_motd_opcode_without_the_right_answers_permissions_from_invite() {
+        let store = founded_with_members();
+        store.refuse_next_op(GuildRefusal::NoPermission);
+        let outbound = dispatch(
+            &store,
+            in_world(BOB),
+            ClientOpcodeMessage::CMSG_GUILD_MOTD(Box::new(CMSG_GUILD_MOTD {
+                message_of_the_day: "Nope".into(),
+            })),
+        );
+        assert_eq!(
+            command_result_of(outbound),
+            (
+                GuildCommand::Invite,
+                GuildCommandResult::GuildPermissionsOrLeader
+            )
+        );
+    }
+
+    #[test]
+    fn guild_motd_opcode_outside_a_guild_answers_not_in_guild() {
+        let store = founded_with_members();
+        store.refuse_next_op(GuildRefusal::NotInGuild);
+        let outbound = dispatch(
+            &store,
+            in_world(GM),
+            ClientOpcodeMessage::CMSG_GUILD_MOTD(Box::new(CMSG_GUILD_MOTD {
+                message_of_the_day: "Nope".into(),
+            })),
+        );
+        assert_eq!(
+            command_result_of(outbound),
+            (
+                GuildCommand::Create,
+                GuildCommandResult::GuildPlayerNotInGuild
+            )
+        );
+    }
+
+    #[test]
+    fn guild_info_text_opcode_runs_the_op_and_replies_nothing_on_success() {
+        let store = founded_with_members();
+        let outbound = dispatch(
+            &store,
+            in_world(GM),
+            ClientOpcodeMessage::CMSG_GUILD_INFO_TEXT(Box::new(CMSG_GUILD_INFO_TEXT {
+                guild_info: "About us".into(),
+            })),
+        );
+        assert!(outbound.is_empty());
+        assert_eq!(
+            store.ops.lock().unwrap().last().cloned(),
+            Some((
+                GM,
+                GuildRequest::SetInfo {
+                    text: "About us".into()
+                }
+            ))
+        );
+    }
+
+    #[test]
+    fn guild_info_text_opcode_without_the_right_answers_permissions_from_create() {
+        let store = founded_with_members();
+        store.refuse_next_op(GuildRefusal::NoPermission);
+        let outbound = dispatch(
+            &store,
+            in_world(BOB),
+            ClientOpcodeMessage::CMSG_GUILD_INFO_TEXT(Box::new(CMSG_GUILD_INFO_TEXT {
+                guild_info: "Nope".into(),
+            })),
+        );
+        assert_eq!(
+            command_result_of(outbound),
+            (
+                GuildCommand::Create,
+                GuildCommandResult::GuildPermissionsOrLeader
+            )
+        );
+    }
+
+    #[test]
+    fn guild_set_public_note_opcode_resolves_the_target_by_name_and_runs_the_op() {
+        let store = founded_with_members();
+        let outbound = dispatch(
+            &store,
+            in_world(GM),
+            ClientOpcodeMessage::CMSG_GUILD_SET_PUBLIC_NOTE(Box::new(CMSG_GUILD_SET_PUBLIC_NOTE {
+                player_name: format!("Snapshot{BOB}"),
+                note: "reliable".into(),
+            })),
+        );
+        assert!(outbound.is_empty());
+        assert_eq!(
+            store.ops.lock().unwrap().last().cloned(),
+            Some((
+                GM,
+                GuildRequest::SetPublicNote {
+                    target_guid: BOB,
+                    text: "reliable".into()
+                }
+            ))
+        );
+    }
+
+    #[test]
+    fn guild_set_officer_note_opcode_resolves_the_target_by_name_and_runs_the_op() {
+        let store = founded_with_members();
+        let outbound = dispatch(
+            &store,
+            in_world(GM),
+            ClientOpcodeMessage::CMSG_GUILD_SET_OFFICER_NOTE(Box::new(
+                CMSG_GUILD_SET_OFFICER_NOTE {
+                    player_name: format!("Snapshot{BOB}"),
+                    note: "watch closely".into(),
+                },
+            )),
+        );
+        assert!(outbound.is_empty());
+        assert_eq!(
+            store.ops.lock().unwrap().last().cloned(),
+            Some((
+                GM,
+                GuildRequest::SetOfficerNote {
+                    target_guid: BOB,
+                    text: "watch closely".into()
+                }
+            ))
+        );
+    }
+
+    #[test]
+    fn a_note_opcode_for_an_unknown_name_sends_guid_zero_and_answers_by_the_typed_name() {
+        let store = founded_with_members();
+        store.refuse_next_op(GuildRefusal::TargetNotInGuild);
+        let outbound = dispatch(
+            &store,
+            in_world(GM),
+            ClientOpcodeMessage::CMSG_GUILD_SET_PUBLIC_NOTE(Box::new(CMSG_GUILD_SET_PUBLIC_NOTE {
+                player_name: "Dave".into(),
+                note: "x".into(),
+            })),
+        );
+        let ServerOpcodeMessage::SMSG_GUILD_COMMAND_RESULT(result) = only_message(outbound) else {
+            panic!("expected a command result");
+        };
+        assert_eq!(result.command, GuildCommand::Invite);
+        assert_eq!(result.string, "Dave");
+        assert_eq!(result.result, GuildCommandResult::GuildPlayerNotInGuildS);
+        assert_eq!(
+            store.ops.lock().unwrap().last().cloned(),
+            Some((
+                GM,
+                GuildRequest::SetPublicNote {
+                    target_guid: 0,
+                    text: "x".into()
+                }
+            )),
+            "an unresolved name still runs the op, at guid 0, so the Module's Gate order \
+             checks the actor's Rank Right before it answers not-in-guild"
+        );
+    }
+
+    #[test]
+    fn guild_rank_opcode_runs_the_op_with_its_fields() {
+        let store = founded_with_members();
+        let outbound = dispatch(
+            &store,
+            in_world(GM),
+            ClientOpcodeMessage::CMSG_GUILD_RANK(Box::new(CMSG_GUILD_RANK {
+                rank_id: 2,
+                rights: 0x43,
+                rank_name: "Veteran+".into(),
+            })),
+        );
+        assert!(outbound.is_empty());
+        assert_eq!(
+            store.ops.lock().unwrap().last().cloned(),
+            Some((
+                GM,
+                GuildRequest::EditRank {
+                    rank_id: 2,
+                    rights: 0x43,
+                    name: "Veteran+".into()
+                }
+            ))
+        );
+    }
+
+    #[test]
+    fn guild_rank_opcode_from_a_non_leader_answers_permissions() {
+        let store = founded_with_members();
+        store.refuse_next_op(GuildRefusal::NotLeader);
+        let outbound = dispatch(
+            &store,
+            in_world(BOB),
+            ClientOpcodeMessage::CMSG_GUILD_RANK(Box::new(CMSG_GUILD_RANK {
+                rank_id: 2,
+                rights: 0,
+                rank_name: "X".into(),
+            })),
+        );
+        assert_eq!(
+            command_result_of(outbound),
+            (
+                GuildCommand::Invite,
+                GuildCommandResult::GuildPermissionsOrLeader
+            )
+        );
+    }
+
+    #[test]
+    fn guild_add_rank_opcode_runs_the_op_and_is_silent_at_the_limit() {
+        let store = founded_with_members();
+        let outbound = dispatch(
+            &store,
+            in_world(GM),
+            ClientOpcodeMessage::CMSG_GUILD_ADD_RANK(Box::new(CMSG_GUILD_ADD_RANK {
+                rank_name: "Recruit".into(),
+            })),
+        );
+        assert!(outbound.is_empty());
+        assert_eq!(
+            store.ops.lock().unwrap().last().cloned(),
+            Some((
+                GM,
+                GuildRequest::AddRank {
+                    name: "Recruit".into()
+                }
+            ))
+        );
+
+        store.refuse_next_op(GuildRefusal::RanksAtLimit);
+        let outbound = dispatch(
+            &store,
+            in_world(GM),
+            ClientOpcodeMessage::CMSG_GUILD_ADD_RANK(Box::new(CMSG_GUILD_ADD_RANK {
+                rank_name: "Overflow".into(),
+            })),
+        );
+        assert!(outbound.is_empty(), "RanksAtLimit is silent");
+    }
+
+    #[test]
+    fn guild_del_rank_opcode_runs_the_op_and_answers_permissions_for_a_non_leader() {
+        let store = founded_with_members();
+        let outbound = dispatch(
+            &store,
+            in_world(GM),
+            ClientOpcodeMessage::CMSG_GUILD_DEL_RANK,
+        );
+        assert!(outbound.is_empty());
+        assert_eq!(
+            store.ops.lock().unwrap().last().cloned(),
+            Some((GM, GuildRequest::DeleteRank))
+        );
+
+        store.refuse_next_op(GuildRefusal::NotLeader);
+        let outbound = dispatch(
+            &store,
+            in_world(BOB),
+            ClientOpcodeMessage::CMSG_GUILD_DEL_RANK,
+        );
+        assert_eq!(
+            command_result_of(outbound),
+            (
+                GuildCommand::Invite,
+                GuildCommandResult::GuildPermissionsOrLeader
+            )
+        );
+    }
+
+    #[test]
+    fn roster_to_actor_snapshot_carries_the_viewers_own_roster() {
+        let store = founded_with_members();
+        let snapshot = GuildEventSnapshot::build(&store, 1, event_kind::ROSTER_TO_ACTOR);
+        let ServerOpcodeMessage::SMSG_GUILD_ROSTER(roster) =
+            snapshot.roster_for_rank(0).expect("a roster")
+        else {
+            panic!("expected a roster");
+        };
+        assert_eq!(roster.members.len(), 3);
+        assert!(roster
+            .members
+            .iter()
+            .any(|m| m.officer_note == "officer bob note"));
+        assert!(
+            snapshot.query_response().is_none(),
+            "ROSTER_TO_ACTOR carries no query response"
+        );
+    }
+
+    #[test]
+    fn roster_refresh_snapshot_gates_officer_notes_by_each_viewers_own_rank() {
+        let store = founded_with_members();
+        let snapshot = GuildEventSnapshot::build(&store, 1, event_kind::ROSTER_REFRESH);
+
+        let ServerOpcodeMessage::SMSG_GUILD_QUERY_RESPONSE(response) =
+            snapshot.query_response().expect("a query response")
+        else {
+            panic!("expected a query response");
+        };
+        assert_eq!(response.name, "Knights");
+
+        // Bob is rank 3 (Member), without VIEWOFFNOTE.
+        let ServerOpcodeMessage::SMSG_GUILD_ROSTER(bob_roster) =
+            snapshot.roster_for_rank(3).expect("a roster")
+        else {
+            panic!("expected a roster");
+        };
+        assert!(
+            bob_roster.members.iter().all(|m| m.officer_note.is_empty()),
+            "Bob's rank cannot view officer notes"
+        );
+
+        // The Guild Leader is rank 0, which holds every right.
+        let ServerOpcodeMessage::SMSG_GUILD_ROSTER(leader_roster) =
+            snapshot.roster_for_rank(0).expect("a roster")
+        else {
+            panic!("expected a roster");
+        };
+        assert!(
+            leader_roster
+                .members
+                .iter()
+                .any(|m| m.officer_note == "officer bob note"),
+            "the leader's rank can view officer notes"
+        );
+    }
+
+    #[test]
+    fn a_query_only_kind_skips_the_roster_reads() {
+        let store = founded_with_members();
+        let snapshot = GuildEventSnapshot::build(&store, 1, event_kind::TABARD_CHANGED);
+        assert!(snapshot.query_response().is_some());
+        assert!(snapshot.roster_for_rank(0).is_none());
+    }
+
+    #[test]
+    fn a_gone_guilds_snapshot_answers_nothing() {
+        let store = founded_with_members();
+        let snapshot = GuildEventSnapshot::build(&store, 404, event_kind::ROSTER_REFRESH);
+        assert!(
+            snapshot.query_response().is_none(),
+            "a relay is not a reply, so a disbanded Guild's roster refresh answers nothing"
+        );
+        assert!(snapshot.roster_for_rank(0).is_none());
     }
 }

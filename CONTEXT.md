@@ -736,6 +736,13 @@ The five tabard design values of a Guild. Only the Guild Leader saves one, for 1
 **Guild Invite**:
 A pending offer for one Character to join one Guild; expires after two minutes.
 
+**Public Note**:
+A short note a Guild Rank with EPNOTE sets on a member. Every member sees it on the roster.
+
+**Officer Note**:
+A short note a Guild Rank with EOFFNOTE sets on a member. It shows only to a viewer whose own Guild
+Rank holds VIEWOFFNOTE; every other viewer's roster carries it blank.
+
 ### World clock and weather
 
 **Realm Clock**:

@@ -4046,6 +4046,25 @@ impl Coordinator {
             GuildRequest::Demote { target_guid } => GuildOp::Demote(target_guid),
             GuildRequest::SetLeader { target_guid } => GuildOp::SetLeader(target_guid),
             GuildRequest::Disband => GuildOp::Disband,
+            GuildRequest::SetMotd { text } => GuildOp::SetMotd(text),
+            GuildRequest::SetInfo { text } => GuildOp::SetInfo(text),
+            GuildRequest::SetPublicNote { target_guid, text } => {
+                GuildOp::SetPublicNote(GuildNoteEdit { target_guid, text })
+            }
+            GuildRequest::SetOfficerNote { target_guid, text } => {
+                GuildOp::SetOfficerNote(GuildNoteEdit { target_guid, text })
+            }
+            GuildRequest::EditRank {
+                rank_id,
+                rights,
+                name,
+            } => GuildOp::EditRank(GuildRankEdit {
+                rank_id,
+                rights,
+                name,
+            }),
+            GuildRequest::AddRank { name } => GuildOp::AddRank(name),
+            GuildRequest::DeleteRank => GuildOp::DeleteRank,
         };
         let result = call_reducer!(
             self.0.call_pipe().conn.reducers,

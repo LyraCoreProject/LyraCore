@@ -18,6 +18,7 @@ use spacetimedb::{reducer, table, ReducerContext, SpacetimeType, Table, Timestam
 pub mod fee;
 pub mod membership;
 pub(crate) use fee::{sweep_delete_game_guild_fee_hold, sweep_transfer_game_guild_fee_hold};
+mod settings;
 
 /// One Guild. `name_key` makes names unique without regard to case.
 #[table(accessor = game_guild, index(accessor = by_leader, btree(columns = [leader_guid])))]
@@ -126,6 +127,21 @@ pub struct GuildAcceptRequest {
     pub actor_team: u32,
 }
 
+/// A Public or Officer Note edit: the same shape, gated by a different Rank Right and field.
+#[derive(SpacetimeType, Clone, Debug, PartialEq, Eq)]
+pub struct GuildNoteEdit {
+    pub target_guid: u64,
+    pub text: String,
+}
+
+/// A Guild Rank rename and rights change.
+#[derive(SpacetimeType, Clone, Debug, PartialEq, Eq)]
+pub struct GuildRankEdit {
+    pub rank_id: u32,
+    pub rights: u32,
+    pub name: String,
+}
+
 /// One guild Durable Request. Later ops append variants here.
 #[derive(SpacetimeType, Clone, Debug, PartialEq, Eq)]
 pub enum GuildOp {
@@ -156,6 +172,19 @@ pub enum GuildOp {
         target_guid: u64,
     },
     Disband,
+    SetMotd {
+        text: String,
+    },
+    SetInfo {
+        text: String,
+    },
+    SetPublicNote(GuildNoteEdit),
+    SetOfficerNote(GuildNoteEdit),
+    EditRank(GuildRankEdit),
+    AddRank {
+        name: String,
+    },
+    DeleteRank,
 }
 
 /// Run one guild op for the acting Character.
@@ -184,6 +213,13 @@ pub fn realm_guild_op(
         GuildOp::Demote { target_guid } => membership::demote(ctx, actor_guid, target_guid),
         GuildOp::SetLeader { target_guid } => membership::set_leader(ctx, actor_guid, target_guid),
         GuildOp::Disband => membership::disband(ctx, actor_guid),
+        GuildOp::SetMotd { text } => settings::set_motd(ctx, actor_guid, &text),
+        GuildOp::SetInfo { text } => settings::set_info(ctx, actor_guid, &text),
+        GuildOp::SetPublicNote(edit) => settings::set_public_note(ctx, actor_guid, edit),
+        GuildOp::SetOfficerNote(edit) => settings::set_officer_note(ctx, actor_guid, edit),
+        GuildOp::EditRank(edit) => settings::edit_rank(ctx, actor_guid, edit),
+        GuildOp::AddRank { name } => settings::add_rank(ctx, actor_guid, &name),
+        GuildOp::DeleteRank => settings::delete_rank(ctx, actor_guid),
     }
     .map_err(|refusal| refusal.as_tag().to_string())
 }
@@ -384,6 +420,7 @@ pub fn push_event(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::test_scan::code_of;
 
     /// The actor guid is an argument, so the operator gate is the whole authorization. A gate
@@ -396,5 +433,124 @@ mod tests {
             normalized.starts_with("{ crate::helpers::require_operator(ctx)?;"),
             "`realm_guild_op` no longer opens with the operator gate. Body was:\n{body}"
         );
+    }
+
+    /// BSATN encodes a `GuildOp` variant as its ordinal position, so appending a variant in the
+    /// wrong place silently renames every variant after it on the wire. This pins each variant's
+    /// tag byte to a hand-written value: reordering `GuildOp` fails this test instead of shipping
+    /// a schema a live client silently decodes as the wrong op.
+    #[test]
+    fn guild_op_variant_bsatn_tags_are_pinned_by_position() {
+        let cases: [(&str, GuildOp, u8); 19] = [
+            (
+                "GmCreate",
+                GuildOp::GmCreate(GuildGmCreate {
+                    leader_guid: 0,
+                    leader_name: String::new(),
+                    leader_team: 0,
+                    leader_realm_account: 0,
+                    gm_level: 0,
+                    name: String::new(),
+                }),
+                0,
+            ),
+            (
+                "SignOn",
+                GuildOp::SignOn {
+                    actor_name: String::new(),
+                },
+                1,
+            ),
+            ("SignOff", GuildOp::SignOff, 2),
+            (
+                "Invite",
+                GuildOp::Invite(GuildInviteRequest {
+                    target_guid: 0,
+                    actor_team: 0,
+                    target_team: 0,
+                    target_ignores_actor: false,
+                }),
+                3,
+            ),
+            (
+                "Accept",
+                GuildOp::Accept(GuildAcceptRequest {
+                    actor_name: String::new(),
+                    actor_team: 0,
+                }),
+                4,
+            ),
+            (
+                "Decline",
+                GuildOp::Decline {
+                    actor_name: String::new(),
+                },
+                5,
+            ),
+            ("Leave", GuildOp::Leave, 6),
+            ("Remove", GuildOp::Remove { target_guid: 0 }, 7),
+            ("Promote", GuildOp::Promote { target_guid: 0 }, 8),
+            ("Demote", GuildOp::Demote { target_guid: 0 }, 9),
+            ("SetLeader", GuildOp::SetLeader { target_guid: 0 }, 10),
+            ("Disband", GuildOp::Disband, 11),
+            (
+                "SetMotd",
+                GuildOp::SetMotd {
+                    text: String::new(),
+                },
+                12,
+            ),
+            (
+                "SetInfo",
+                GuildOp::SetInfo {
+                    text: String::new(),
+                },
+                13,
+            ),
+            (
+                "SetPublicNote",
+                GuildOp::SetPublicNote(GuildNoteEdit {
+                    target_guid: 0,
+                    text: String::new(),
+                }),
+                14,
+            ),
+            (
+                "SetOfficerNote",
+                GuildOp::SetOfficerNote(GuildNoteEdit {
+                    target_guid: 0,
+                    text: String::new(),
+                }),
+                15,
+            ),
+            (
+                "EditRank",
+                GuildOp::EditRank(GuildRankEdit {
+                    rank_id: 0,
+                    rights: 0,
+                    name: String::new(),
+                }),
+                16,
+            ),
+            (
+                "AddRank",
+                GuildOp::AddRank {
+                    name: String::new(),
+                },
+                17,
+            ),
+            ("DeleteRank", GuildOp::DeleteRank, 18),
+        ];
+
+        for (name, op, expected_tag) in cases {
+            let encoded = spacetimedb::spacetimedb_lib::bsatn::to_vec(&op)
+                .unwrap_or_else(|error| panic!("GuildOp::{name} failed to encode: {error:?}"));
+            assert_eq!(
+                encoded.first().copied(),
+                Some(expected_tag),
+                "GuildOp::{name} moved off BSATN tag {expected_tag}; a client still on the old \
+                 wire schema would silently decode a different variant after this ships"
+            );
+        }
     }
 }

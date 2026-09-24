@@ -4227,6 +4227,13 @@ impl GuildActionStore for InMemoryStore {
             GuildRequest::Demote { .. } => "guild_op:Demote",
             GuildRequest::SetLeader { .. } => "guild_op:SetLeader",
             GuildRequest::Disband => "guild_op:Disband",
+            GuildRequest::SetMotd { .. } => "guild_op:SetMotd",
+            GuildRequest::SetInfo { .. } => "guild_op:SetInfo",
+            GuildRequest::SetPublicNote { .. } => "guild_op:SetPublicNote",
+            GuildRequest::SetOfficerNote { .. } => "guild_op:SetOfficerNote",
+            GuildRequest::EditRank { .. } => "guild_op:EditRank",
+            GuildRequest::AddRank { .. } => "guild_op:AddRank",
+            GuildRequest::DeleteRank => "guild_op:DeleteRank",
         });
         Ok(GuildOutcome::Ran)
     }
@@ -5630,6 +5637,80 @@ fn a_member_who_is_not_the_leader_saves_no_emblem_over_the_socket() {
     drop(client);
     server.join().unwrap();
     assert!(!recorded(&store).contains(&"guild_fee_hold".to_string()));
+}
+
+#[test]
+fn the_settings_opcodes_reach_their_dispatch_entries_over_the_socket() {
+    let store = std::sync::Arc::new(InMemoryStore {
+        guilds: vec![codec::GuildView {
+            guild_id: 7,
+            name: "Tracer Guild".into(),
+            ranks: vec![codec::GuildRankView {
+                rank_id: 0,
+                name: "Guild Master".into(),
+                rights: lyracore_shared::guild::rights::ALL,
+            }],
+            ..Default::default()
+        }],
+        ..guild_member_store()
+    });
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
+
+    wow_world_messages::vanilla::CMSG_GUILD_MOTD {
+        message_of_the_day: "Assemble!".into(),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    wow_world_messages::vanilla::CMSG_GUILD_INFO_TEXT {
+        guild_info: "About us".into(),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    wow_world_messages::vanilla::CMSG_GUILD_SET_PUBLIC_NOTE {
+        player_name: "Dave".into(),
+        note: "reliable".into(),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    wow_world_messages::vanilla::CMSG_GUILD_SET_OFFICER_NOTE {
+        player_name: "Dave".into(),
+        note: "watch closely".into(),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    wow_world_messages::vanilla::CMSG_GUILD_RANK {
+        rank_id: 2,
+        rights: 0x43,
+        rank_name: "Veteran+".into(),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    wow_world_messages::vanilla::CMSG_GUILD_ADD_RANK {
+        rank_name: "Recruit".into(),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    wow_world_messages::vanilla::CMSG_GUILD_DEL_RANK {}
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+
+    drop(client);
+    server.join().unwrap();
+    let calls = recorded(&store);
+    for op in [
+        "guild_op:SetMotd",
+        "guild_op:SetInfo",
+        "guild_op:SetPublicNote",
+        "guild_op:SetOfficerNote",
+        "guild_op:EditRank",
+        "guild_op:AddRank",
+        "guild_op:DeleteRank",
+    ] {
+        assert!(
+            calls.contains(&op.to_string()),
+            "{op} never reached guild_op: {calls:?}"
+        );
+    }
 }
 
 #[test]

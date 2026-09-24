@@ -906,8 +906,8 @@ pub(crate) fn guild_values_outbound(
 }
 
 /// Render one Guild Event row. The row carries its final strings. Kinds 0x40 (INVITE) and 0x41
-/// (DECLINE) are membership offers with their own wire shape; every other kind rides the generic
-/// SMSG_GUILD_EVENT builder.
+/// (DECLINE) are membership offers with their own wire shape; every other kind not built from a
+/// shared snapshot (see `GuildEventSnapshot`) rides the generic SMSG_GUILD_EVENT builder.
 pub(crate) fn guild_event_outbound(row: &GuildEvent) -> Vec<Outbound> {
     match row.kind {
         lyracore_shared::guild::event_kind::INVITE => {
@@ -928,20 +928,6 @@ pub(crate) fn guild_event_outbound(row: &GuildEvent) -> Vec<Outbound> {
             vec![Outbound::Raw { opcode, body }]
         }
     }
-}
-
-/// The Guild's SMSG_GUILD_QUERY_RESPONSE after TABARD_CHANGED, so every member draws the new
-/// tabard. mangos sends it to the payer only (`cm:GuildHandler.cpp:763`). A Guild that is gone
-/// sends nothing.
-pub(crate) fn guild_query_outbound(guild: Option<&codec::GuildView>) -> Vec<Outbound> {
-    guild
-        .map(|guild| {
-            Outbound::One(ServerOpcodeMessage::SMSG_GUILD_QUERY_RESPONSE(Box::new(
-                codec::build_guild_query_response(guild),
-            )))
-        })
-        .into_iter()
-        .collect()
 }
 
 /// Relay one durable creature virtual-item projection to a viewer that already holds the creature.

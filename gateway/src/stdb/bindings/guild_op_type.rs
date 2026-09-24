@@ -7,6 +7,8 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 use super::guild_accept_request_type::GuildAcceptRequest;
 use super::guild_gm_create_type::GuildGmCreate;
 use super::guild_invite_request_type::GuildInviteRequest;
+use super::guild_note_edit_type::GuildNoteEdit;
+use super::guild_rank_edit_type::GuildRankEdit;
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
@@ -34,6 +36,20 @@ pub enum GuildOp {
     SetLeader(u64),
 
     Disband,
+
+    SetMotd(String),
+
+    SetInfo(String),
+
+    SetPublicNote(GuildNoteEdit),
+
+    SetOfficerNote(GuildNoteEdit),
+
+    EditRank(GuildRankEdit),
+
+    AddRank(String),
+
+    DeleteRank,
 }
 
 impl __sdk::InModule for GuildOp {
