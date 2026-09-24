@@ -347,6 +347,27 @@ pub enum Op {
     RandomRoll { min: u32, max: u32 },
 }
 
+/// A Group Broadcast kind that one World Session may send only once per cooldown. Each kind has
+/// its own cooldown, so a ping does not hold back a `/roll`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ThrottledBroadcast {
+    ReadyCheck,
+    MinimapPing,
+    RandomRoll,
+}
+
+impl ThrottledBroadcast {
+    pub(crate) const COUNT: usize = 3;
+
+    pub(crate) fn index(self) -> usize {
+        match self {
+            Self::ReadyCheck => 0,
+            Self::MinimapPing => 1,
+            Self::RandomRoll => 2,
+        }
+    }
+}
+
 /// `realm_group_op`'s argument slots after the actor: `(op, target_guid, arg_a, arg_b, arg_c)`.
 type RealmOpArgs = (u8, u64, u8, u8, u64);
 
@@ -386,6 +407,20 @@ impl Op {
             Op::RandomRoll { min, max } => {
                 (realm_op::RANDOM_ROLL, u64::from(min), 0, 0, u64::from(max))
             }
+        }
+    }
+
+    /// The cooldown this op shares with its own kind, or `None` when it runs unthrottled. A Ready
+    /// Check start, a minimap ping and a `/roll` each write one event row for every member on the
+    /// party authority, which on a sharded Realm is the one Realm-core database. A Ready Check
+    /// answer writes one row. A Target Icon is left alone because a leader marks several targets
+    /// in quick succession before a pull.
+    pub(crate) fn broadcast_throttle(self) -> Option<ThrottledBroadcast> {
+        match self {
+            Op::ReadyCheckStart => Some(ThrottledBroadcast::ReadyCheck),
+            Op::MinimapPing { .. } => Some(ThrottledBroadcast::MinimapPing),
+            Op::RandomRoll { .. } => Some(ThrottledBroadcast::RandomRoll),
+            _ => None,
         }
     }
 

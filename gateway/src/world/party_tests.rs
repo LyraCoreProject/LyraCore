@@ -3872,6 +3872,57 @@ fn a_refused_group_broadcast_sends_nothing() {
     let _ = server.join();
 }
 
+/// A second Ready Check start, minimap ping or `/roll` inside its one-second cooldown never
+/// reaches the party authority, and one kind does not hold back another. A Ready Check answer and
+/// a Target Icon have no cooldown.
+#[test]
+fn a_repeated_fan_out_broadcast_inside_its_cooldown_is_dropped() {
+    let s = quest_store();
+    {
+        let mut p = s.party.lock().unwrap();
+        p.groups.push((5, 1, 3, 2, 0));
+        p.members.push((5, 1));
+        p.members.push((5, 2));
+    }
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+    let skull_on: Vec<u8> = [&[0x07][..], &900u64.to_le_bytes()].concat();
+    let frames: [(u32, &[u8]); 10] = [
+        // MSG_MINIMAP_PING, twice.
+        (0x01D5, &[0; 8]),
+        (0x01D5, &[0; 8]),
+        // MSG_RANDOM_ROLL 1-100, twice.
+        (0x01FB, &[1, 0, 0, 0, 100, 0, 0, 0]),
+        (0x01FB, &[1, 0, 0, 0, 100, 0, 0, 0]),
+        // MSG_RAID_READY_CHECK start, twice.
+        (0x0322, &[]),
+        (0x0322, &[]),
+        // MSG_RAID_READY_CHECK answer "ready", twice.
+        (0x0322, &[0x01]),
+        (0x0322, &[0x01]),
+        // MSG_RAID_TARGET_UPDATE skull, twice.
+        (0x0321, &skull_on),
+        (0x0321, &skull_on),
+    ];
+    for (opcode, body) in frames {
+        send_client_frame(&mut client, &mut c_enc, opcode, body);
+    }
+
+    assert_nothing_sent_before_the_barrier(&mut client, &mut c_enc, &mut c_dec);
+
+    let ops: Vec<u8> = store
+        .party
+        .lock()
+        .unwrap()
+        .ops
+        .iter()
+        .map(|op| op.0)
+        .collect();
+    assert_eq!(ops, [14, 15, 11, 12, 12, 13, 13]);
+    drop(client);
+    let _ = server.join();
+}
+
 /// One sent packet as `(opcode, body)`, the way the client receives it.
 fn wire(packet: &Outbound) -> Wire {
     match packet {
