@@ -13,7 +13,7 @@ const REALM_CHAT_ROWS: &str = "SELECT * FROM game_realm_chat_event";
 const KIND_GUILD: u8 = 3;
 const KIND_OFFICER: u8 = 4;
 
-const GM: u64 = 5_092_001;
+const LEADER: u64 = 5_092_001;
 const OFFICER: u64 = 5_092_002;
 const VETERAN: u64 = 5_092_003;
 const MUTED: u64 = 5_092_004;
@@ -25,7 +25,7 @@ const RANK_MUTED: u32 = 4;
 
 fn gm_create(name: &str) -> String {
     format!(
-        r#"{{"gmCreate":{{"leader_guid":{GM},"leader_name":"Leader","leader_team":469,"leader_realm_account":{GM},"gm_level":1,"name":"{name}"}}}}"#
+        r#"{{"gmCreate":{{"leader_guid":{LEADER},"leader_name":"Leader","leader_team":469,"leader_realm_account":{LEADER},"gm_level":1,"name":"{name}"}}}}"#
     )
 }
 
@@ -39,14 +39,14 @@ fn insert_member(realm: &Standalone, guild_id: &str, guid: u64, rank_id: u32, na
     ));
 }
 
-/// Found one Guild led by `GM` (rank 0) and add `OFFICER` (rank 1) and `VETERAN` (rank 2) at their
+/// Found one Guild led by `LEADER` (rank 0) and add `OFFICER` (rank 1) and `VETERAN` (rank 2) at their
 /// default rights, plus `MUTED` at a rank edited down to nothing. `STRANGER` never joins. Every
 /// default rank keeps GCHATLISTEN|GCHATSPEAK; only rank 0 and 1 also keep OFFCHATLISTEN|OFFCHATSPEAK
 /// (`lyracore_shared::guild::DEFAULT_RANKS`).
 fn seeded_guild(realm: &Standalone) -> String {
     realm.assert_call(
         "realm_guild_op",
-        &[&actor(&GM.to_string()), &gm_create("Tracer Guild")],
+        &[&actor(&LEADER.to_string()), &gm_create("Tracer Guild")],
     );
     let guild_id = realm.query_rows("SELECT * FROM game_guild WHERE name = 'Tracer Guild'")[0]
         ["guild_id"]
@@ -56,7 +56,10 @@ fn seeded_guild(realm: &Standalone) -> String {
     insert_member(realm, &guild_id, MUTED, RANK_MUTED, "Muted");
     realm.assert_call(
         "realm_guild_op",
-        &[&actor(&GM.to_string()), &edit_rank(RANK_MUTED, 0, "Muted")],
+        &[
+            &actor(&LEADER.to_string()),
+            &edit_rank(RANK_MUTED, 0, "Muted"),
+        ],
     );
     guild_id
 }
@@ -136,7 +139,7 @@ fn guild_chat_reaches_every_member_with_gchatlisten() {
     seeded_guild(&realm);
 
     let (recipients, ignorable) = line_of(&realm, VETERAN, KIND_GUILD, "form up");
-    assert_eq!(recipients, [GM, OFFICER, VETERAN], "Muted is excluded");
+    assert_eq!(recipients, [LEADER, OFFICER, VETERAN], "Muted is excluded");
     assert!(ignorable);
 }
 
@@ -151,7 +154,7 @@ fn officer_chat_reaches_only_officer_ranked_members() {
     seeded_guild(&realm);
 
     let (recipients, ignorable) = line_of(&realm, OFFICER, KIND_OFFICER, "raid at 8");
-    assert_eq!(recipients, [GM, OFFICER]);
+    assert_eq!(recipients, [LEADER, OFFICER]);
     assert!(ignorable);
 }
 
@@ -183,13 +186,13 @@ fn a_rank_edit_changes_the_very_next_line() {
     seeded_guild(&realm);
 
     let (recipients, _) = line_of(&realm, VETERAN, KIND_GUILD, "before");
-    assert_eq!(recipients, [GM, OFFICER, VETERAN]);
+    assert_eq!(recipients, [LEADER, OFFICER, VETERAN]);
 
     // Strip GCHATSPEAK from the Veteran rank, keeping GCHATLISTEN.
     realm.assert_call(
         "realm_guild_op",
         &[
-            &actor(&GM.to_string()),
+            &actor(&LEADER.to_string()),
             &edit_rank(RANK_VETERAN, 0x41, "Veteran"),
         ],
     );
@@ -199,10 +202,10 @@ fn a_rank_edit_changes_the_very_next_line() {
     realm.assert_call(
         "realm_guild_op",
         &[
-            &actor(&GM.to_string()),
+            &actor(&LEADER.to_string()),
             &edit_rank(RANK_VETERAN, 0x43, "Veteran"),
         ],
     );
     let (recipients, _) = line_of(&realm, VETERAN, KIND_GUILD, "after");
-    assert_eq!(recipients, [GM, OFFICER, VETERAN]);
+    assert_eq!(recipients, [LEADER, OFFICER, VETERAN]);
 }
