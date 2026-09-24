@@ -16,6 +16,7 @@ use lyracore_shared::guild::{
 use spacetimedb::{reducer, table, ReducerContext, SpacetimeType, Table, Timestamp};
 
 pub mod fee;
+pub mod membership;
 pub(crate) use fee::{sweep_delete_game_guild_fee_hold, sweep_transfer_game_guild_fee_hold};
 
 /// One Guild. `name_key` makes names unique without regard to case.
@@ -106,6 +107,25 @@ pub struct GuildGmCreate {
     pub name: String,
 }
 
+/// A member invites a live Character on another World Shard to join its Guild. The Gateway
+/// resolves the target realm-wide and conveys the facts Realm-core cannot read itself: each side's
+/// team (from race) and whether the target ignores the actor.
+#[derive(SpacetimeType, Clone, Debug, PartialEq, Eq)]
+pub struct GuildInviteRequest {
+    pub target_guid: u64,
+    pub actor_team: u32,
+    pub target_team: u32,
+    pub target_ignores_actor: bool,
+}
+
+/// The actor accepts its pending Guild Invite. Realm-core holds no Character row for a non-member,
+/// so the Gateway conveys the name and team `add_member` needs.
+#[derive(SpacetimeType, Clone, Debug, PartialEq, Eq)]
+pub struct GuildAcceptRequest {
+    pub actor_name: String,
+    pub actor_team: u32,
+}
+
 /// One guild Durable Request. Later ops append variants here.
 #[derive(SpacetimeType, Clone, Debug, PartialEq, Eq)]
 pub enum GuildOp {
@@ -115,6 +135,27 @@ pub enum GuildOp {
         actor_name: String,
     },
     SignOff,
+    Invite(GuildInviteRequest),
+    Accept(GuildAcceptRequest),
+    /// The actor declines its pending Guild Invite. `actor_name` addresses the inviter's event,
+    /// since Realm-core holds no name snapshot for a non-member.
+    Decline {
+        actor_name: String,
+    },
+    Leave,
+    Remove {
+        target_guid: u64,
+    },
+    Promote {
+        target_guid: u64,
+    },
+    Demote {
+        target_guid: u64,
+    },
+    SetLeader {
+        target_guid: u64,
+    },
+    Disband,
 }
 
 /// Run one guild op for the acting Character.
@@ -128,11 +169,21 @@ pub fn realm_guild_op(
     op: GuildOp,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    let actor_account = request_actor.ownership.as_ref().map_or(0, |t| t.account_id);
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     match op {
         GuildOp::GmCreate(request) => gm_create(ctx, request).map(|_| ()),
         GuildOp::SignOn { actor_name } => sign_on(ctx, actor_guid, &actor_name),
         GuildOp::SignOff => sign_off(ctx, actor_guid),
+        GuildOp::Invite(request) => membership::invite(ctx, actor_guid, request),
+        GuildOp::Accept(request) => membership::accept(ctx, actor_guid, actor_account, request),
+        GuildOp::Decline { actor_name } => membership::decline(ctx, actor_guid, &actor_name),
+        GuildOp::Leave => membership::leave(ctx, actor_guid),
+        GuildOp::Remove { target_guid } => membership::remove(ctx, actor_guid, target_guid),
+        GuildOp::Promote { target_guid } => membership::promote(ctx, actor_guid, target_guid),
+        GuildOp::Demote { target_guid } => membership::demote(ctx, actor_guid, target_guid),
+        GuildOp::SetLeader { target_guid } => membership::set_leader(ctx, actor_guid, target_guid),
+        GuildOp::Disband => membership::disband(ctx, actor_guid),
     }
     .map_err(|refusal| refusal.as_tag().to_string())
 }

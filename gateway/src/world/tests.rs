@@ -226,6 +226,15 @@ use wow_world_messages::vanilla::{
     CMSG_GAMEOBJ_USE,
     CMSG_GOSSIP_HELLO,
     CMSG_GOSSIP_SELECT_OPTION,
+    CMSG_GUILD_ACCEPT,
+    CMSG_GUILD_DECLINE,
+    CMSG_GUILD_DEMOTE,
+    CMSG_GUILD_DISBAND,
+    CMSG_GUILD_INVITE,
+    CMSG_GUILD_LEADER,
+    CMSG_GUILD_LEAVE,
+    CMSG_GUILD_PROMOTE,
+    CMSG_GUILD_REMOVE,
     CMSG_INSPECT,
     CMSG_ITEM_QUERY_SINGLE,
     CMSG_LEARN_TALENT,
@@ -4081,12 +4090,31 @@ impl GuildActionStore for InMemoryStore {
         Ok(Vec::new())
     }
 
-    fn guild_character_facts(&self, _character_guid: u64) -> Result<Option<CharacterFacts>> {
-        Ok(None)
+    fn guild_character_facts(&self, character_guid: u64) -> Result<Option<CharacterFacts>> {
+        Ok(self
+            .characters
+            .iter()
+            .find(|c| c.guid == character_guid)
+            .map(|c| CharacterFacts {
+                guid: c.guid,
+                name: c.name.clone(),
+                race: c.race,
+                class: c.class,
+                level: c.level,
+                zone_id: c.zone_id,
+                last_logout_micros: 0,
+                online: !self.offline_guids.contains(&c.guid),
+                realm_account_id: 0,
+            }))
     }
 
-    fn guild_characters_named(&self, _name: &str) -> Result<Vec<u64>> {
-        Ok(Vec::new())
+    fn guild_characters_named(&self, name: &str) -> Result<Vec<u64>> {
+        Ok(self
+            .characters
+            .iter()
+            .filter(|c| c.name.eq_ignore_ascii_case(name))
+            .map(|c| c.guid)
+            .collect())
     }
 
     fn guild_gm_level(&self, _actor_guid: u64) -> Result<u8> {
@@ -4097,11 +4125,24 @@ impl GuildActionStore for InMemoryStore {
         0
     }
 
+    fn guild_ignored_by(&self, _owner_guid: u64, _other_guid: u64) -> Result<bool> {
+        Ok(false)
+    }
+
     fn guild_op(&self, _actor_guid: u64, request: GuildRequest) -> Result<GuildOutcome> {
         self.rec(match request {
             GuildRequest::GmCreate { .. } => "guild_op:GmCreate",
             GuildRequest::SignOn { .. } => "guild_op:SignOn",
             GuildRequest::SignOff => "guild_op:SignOff",
+            GuildRequest::Invite { .. } => "guild_op:Invite",
+            GuildRequest::Accept { .. } => "guild_op:Accept",
+            GuildRequest::Decline { .. } => "guild_op:Decline",
+            GuildRequest::Leave => "guild_op:Leave",
+            GuildRequest::Remove { .. } => "guild_op:Remove",
+            GuildRequest::Promote { .. } => "guild_op:Promote",
+            GuildRequest::Demote { .. } => "guild_op:Demote",
+            GuildRequest::SetLeader { .. } => "guild_op:SetLeader",
+            GuildRequest::Disband => "guild_op:Disband",
         });
         Ok(GuildOutcome::Ran)
     }
@@ -5288,6 +5329,138 @@ fn a_member_enters_the_world_with_its_guild_on_the_self_create_and_signs_on() {
     drop(client);
     server.join().unwrap();
     assert!(recorded(&store).contains(&"guild_op:SignOn".to_string()));
+}
+
+/// Every membership opcode this ticket adds reaches `realm_guild_op`, over a real encrypted
+/// socket. Character 1 leads Guild 7; Character 2 ("Target") is a live realm-wide candidate for
+/// CMSG_GUILD_INVITE.
+#[test]
+fn every_membership_opcode_reaches_its_durable_request() {
+    let store = std::sync::Arc::new(InMemoryStore {
+        login_entity: Some(warrior_entity()),
+        guild_memberships: vec![codec::GuildMemberView {
+            character_guid: 1,
+            guild_id: 7,
+            rank_id: 3,
+            name: "Warrior".into(),
+            ..Default::default()
+        }],
+        guilds: vec![codec::GuildView {
+            guild_id: 7,
+            name: "Tracer Guild".into(),
+            leader_guid: 1,
+            ..Default::default()
+        }],
+        characters: vec![
+            codec::CharacterView {
+                guid: 1,
+                name: "Warrior".into(),
+                ..Default::default()
+            },
+            codec::CharacterView {
+                guid: 2,
+                name: "Target".into(),
+                ..Default::default()
+            },
+        ],
+        ..tester_store(7)
+    });
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+
+    // A successful membership op answers its actor nothing, so each write below is followed by a
+    // sentinel request with a guaranteed reply, and a read that blocks for it. This is more than
+    // pacing: `enter_world` drains a FIXED packet count that knows nothing about the Guild MOTD
+    // event `guild_world_entry` sends a fresh-login Guild member (see its own doc comment), so one
+    // packet is still unread in the client's kernel buffer at this point. Reading for a sentinel
+    // discards it along the way; dropping the client with it still queued would instead close
+    // with unread bytes, which the kernel reports to the server as a reset, not a clean EOF
+    // (`enter_world`'s doc comment names this exact failure shape).
+    fn sync(
+        client: &mut UnixStream,
+        enc: &mut EncrypterHalf,
+        dec: &mut DecrypterHalf,
+        write: impl FnOnce(&mut UnixStream, &mut EncrypterHalf),
+    ) {
+        write(&mut *client, &mut *enc);
+        CMSG_PLAYED_TIME {}
+            .write_encrypted_client(&mut *client, &mut *enc)
+            .unwrap();
+        loop {
+            if let ServerOpcodeMessage::SMSG_PLAYED_TIME(_) =
+                ServerOpcodeMessage::read_encrypted(&mut *client, &mut *dec).unwrap()
+            {
+                break;
+            }
+        }
+    }
+
+    sync(&mut client, &mut c_enc, &mut c_dec, |c, e| {
+        CMSG_GUILD_INVITE {
+            invited_player: "Target".into(),
+        }
+        .write_encrypted_client(c, e)
+        .unwrap();
+    });
+    sync(&mut client, &mut c_enc, &mut c_dec, |c, e| {
+        CMSG_GUILD_ACCEPT {}.write_encrypted_client(c, e).unwrap();
+    });
+    sync(&mut client, &mut c_enc, &mut c_dec, |c, e| {
+        CMSG_GUILD_DECLINE {}.write_encrypted_client(c, e).unwrap();
+    });
+    sync(&mut client, &mut c_enc, &mut c_dec, |c, e| {
+        CMSG_GUILD_REMOVE {
+            player_name: "Target".into(),
+        }
+        .write_encrypted_client(c, e)
+        .unwrap();
+    });
+    sync(&mut client, &mut c_enc, &mut c_dec, |c, e| {
+        CMSG_GUILD_PROMOTE {
+            player_name: "Target".into(),
+        }
+        .write_encrypted_client(c, e)
+        .unwrap();
+    });
+    sync(&mut client, &mut c_enc, &mut c_dec, |c, e| {
+        CMSG_GUILD_DEMOTE {
+            player_name: "Target".into(),
+        }
+        .write_encrypted_client(c, e)
+        .unwrap();
+    });
+    sync(&mut client, &mut c_enc, &mut c_dec, |c, e| {
+        CMSG_GUILD_LEADER {
+            new_guild_leader_name: "Target".into(),
+        }
+        .write_encrypted_client(c, e)
+        .unwrap();
+    });
+    sync(&mut client, &mut c_enc, &mut c_dec, |c, e| {
+        CMSG_GUILD_LEAVE {}.write_encrypted_client(c, e).unwrap();
+    });
+    sync(&mut client, &mut c_enc, &mut c_dec, |c, e| {
+        CMSG_GUILD_DISBAND {}.write_encrypted_client(c, e).unwrap();
+    });
+
+    drop(client);
+    server.join().unwrap();
+    let calls = recorded(&store);
+    for op in [
+        "guild_op:Invite",
+        "guild_op:Accept",
+        "guild_op:Decline",
+        "guild_op:Remove",
+        "guild_op:Promote",
+        "guild_op:Demote",
+        "guild_op:SetLeader",
+        "guild_op:Leave",
+        "guild_op:Disband",
+    ] {
+        assert!(
+            calls.contains(&op.to_string()),
+            "{op} never reached the Durable Request: {calls:?}"
+        );
+    }
 }
 
 #[test]

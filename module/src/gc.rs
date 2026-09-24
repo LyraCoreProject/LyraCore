@@ -5,6 +5,7 @@ use spacetimedb::{reducer, table, ReducerContext, ScheduleAt, Table};
 
 use crate::breath_relay::game_breath_relay_event;
 use crate::guild::game_guild_event;
+use crate::guild::membership::game_guild_invite;
 use crate::{
     game_addon_message, game_auction_notice, game_bot_invite_intent, game_channel_event,
     game_chat_event, game_combat_event, game_duel_event, game_emote_event, game_group_event,
@@ -118,6 +119,22 @@ pub fn reap_movement_events(ctx: &ReducerContext, _schedule: EventReaperSchedule
             .collect();
         for id in stale {
             t.id().delete(id);
+        }
+    }
+
+    // Never-answered pending Guild Invites, same TTL and shape as `game_group_invite` above, but
+    // keyed on the target's own guid (`target_guid` is the primary key: at most one invite per
+    // target).
+    {
+        let t = ctx.db.game_guild_invite();
+        let invite_cutoff = ctx.timestamp.to_micros_since_unix_epoch() - INVITE_TTL_MICROS;
+        let stale: Vec<u64> = t
+            .iter()
+            .filter(|e| e.created_at.to_micros_since_unix_epoch() < invite_cutoff)
+            .map(|e| e.target_guid)
+            .collect();
+        for target_guid in stale {
+            t.target_guid().delete(target_guid);
         }
     }
 

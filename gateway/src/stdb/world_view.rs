@@ -3198,6 +3198,7 @@ mod family_audience_tests {
 
     #[test]
     fn an_addressed_guild_event_reaches_only_its_recipient() {
+        use lyracore_shared::guild::event_kind;
         let view = WorldView::new(true);
         let anchor = CellKey::at(0, 0, 0, 0);
         let (recipient_tx, recipient_rx) = SessionTx::with_depth(0);
@@ -3209,11 +3210,13 @@ mod family_audience_tests {
         );
         view.add_viewer_on_shard(viewer_with_tx(2, 9001, identity(2), member_tx), anchor, 0);
 
+        // DISBANDED (0x08) is addressed per former member, so it exercises the generic addressed
+        // path through the raw SMSG_GUILD_EVENT builder.
         guild_event_appeared(
             &view,
             &membership(&[(9001, 7, 0)]),
             &no_guild(),
-            &guild_event(9003, 0x40, 9001),
+            &guild_event(9003, event_kind::DISBANDED, 9001),
         );
         assert_eq!(raw_packets(queued_job(&recipient_rx)).len(), 1);
         assert!(member_rx.try_recv().is_err());
@@ -3281,6 +3284,115 @@ mod family_audience_tests {
             1,
             "one Realm-core read serves every recipient"
         );
+    }
+
+    #[test]
+    fn an_invite_event_reaches_its_target_as_smsg_guild_invite() {
+        use lyracore_shared::guild::event_kind;
+        use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+        let view = WorldView::new(true);
+        let anchor = CellKey::at(0, 0, 0, 0);
+        let (target_tx, target_rx) = SessionTx::with_depth(0);
+        view.add_viewer_on_shard(viewer_with_tx(1, 9003, identity(1), target_tx), anchor, 0);
+
+        let mut row = guild_event(9003, event_kind::INVITE, 0);
+        row.strings = vec!["Alice".to_string(), "Tracer Guild".to_string()];
+        guild_event_appeared(&view, &membership(&[]), &no_guild(), &row);
+
+        let outbound = queued_job(&target_rx);
+        let [Outbound::One(ServerOpcodeMessage::SMSG_GUILD_INVITE(invite))] = outbound.as_slice()
+        else {
+            panic!(
+                "expected exactly one SMSG_GUILD_INVITE, got {} packets",
+                outbound.len()
+            );
+        };
+        assert_eq!(invite.player_name, "Alice");
+        assert_eq!(invite.guild_name, "Tracer Guild");
+    }
+
+    #[test]
+    fn a_decline_event_reaches_the_inviter_as_raw_smsg_guild_decline() {
+        use lyracore_shared::guild::event_kind;
+        let view = WorldView::new(true);
+        let anchor = CellKey::at(0, 0, 0, 0);
+        let (inviter_tx, inviter_rx) = SessionTx::with_depth(0);
+        view.add_viewer_on_shard(viewer_with_tx(1, 9003, identity(1), inviter_tx), anchor, 0);
+
+        let row = guild_event(9003, event_kind::DECLINE, 0);
+        guild_event_appeared(&view, &membership(&[]), &no_guild(), &row);
+
+        assert_eq!(
+            raw_packets(queued_job(&inviter_rx)),
+            vec![(0x0086, b"Alice\0".to_vec())]
+        );
+    }
+
+    #[test]
+    fn a_disband_reaches_each_former_member_exactly_once() {
+        use lyracore_shared::guild::event_kind;
+        let view = WorldView::new(true);
+        let anchor = CellKey::at(0, 0, 0, 0);
+        let mut receivers = Vec::new();
+        for (session, guid) in [(1, 9001), (2, 9002)] {
+            let (tx, rx) = SessionTx::with_depth(0);
+            view.add_viewer_on_shard(
+                viewer_with_tx(session, guid, identity(session as u8), tx),
+                anchor,
+                0,
+            );
+            receivers.push(rx);
+        }
+        let [alice_rx, bob_rx] = <[_; 2]>::try_from(receivers).unwrap();
+        // A disbanded Guild's members are already gone by the time the relay job runs, so
+        // `membership` answers `None` for both. DISBANDED is addressed, not read from current
+        // membership.
+        let no_members = membership(&[]);
+
+        guild_event_appeared(
+            &view,
+            &no_members,
+            &no_guild(),
+            &guild_event(9001, event_kind::DISBANDED, 0),
+        );
+        guild_event_appeared(
+            &view,
+            &no_members,
+            &no_guild(),
+            &guild_event(9002, event_kind::DISBANDED, 0),
+        );
+
+        assert_eq!(queued_job(&alice_rx).len(), 1);
+        assert_eq!(queued_job(&bob_rx).len(), 1);
+    }
+
+    #[test]
+    fn a_removed_event_does_not_reach_the_removed_member() {
+        use lyracore_shared::guild::event_kind;
+        let view = WorldView::new(true);
+        let anchor = CellKey::at(0, 0, 0, 0);
+        let (remaining_tx, remaining_rx) = SessionTx::with_depth(0);
+        let (removed_tx, removed_rx) = SessionTx::with_depth(0);
+        view.add_viewer_on_shard(
+            viewer_with_tx(1, 9001, identity(1), remaining_tx),
+            anchor,
+            0,
+        );
+        // The removed Character's viewer is still on this Gateway (mid-logout, or simply still
+        // connected); its membership is already gone, so `online_audience` no longer includes it.
+        view.add_viewer_on_shard(viewer_with_tx(2, 9002, identity(2), removed_tx), anchor, 0);
+
+        // Only 9001 remains a member of guild 7; 9002 was just removed.
+        let members = membership(&[(9001, 7, 0)]);
+        guild_event_appeared(
+            &view,
+            &members,
+            &no_guild(),
+            &guild_event(0, event_kind::REMOVED, 0),
+        );
+
+        assert_eq!(queued_job(&remaining_rx).len(), 1);
+        assert!(removed_rx.try_recv().is_err());
     }
 
     #[test]

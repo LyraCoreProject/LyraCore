@@ -4017,6 +4017,31 @@ impl Coordinator {
             }),
             GuildRequest::SignOn { actor_name } => GuildOp::SignOn(actor_name),
             GuildRequest::SignOff => GuildOp::SignOff,
+            GuildRequest::Invite {
+                target_guid,
+                actor_team,
+                target_team,
+                target_ignores_actor,
+            } => GuildOp::Invite(GuildInviteRequest {
+                target_guid,
+                actor_team,
+                target_team,
+                target_ignores_actor,
+            }),
+            GuildRequest::Accept {
+                actor_name,
+                actor_team,
+            } => GuildOp::Accept(GuildAcceptRequest {
+                actor_name,
+                actor_team,
+            }),
+            GuildRequest::Decline { actor_name } => GuildOp::Decline(actor_name),
+            GuildRequest::Leave => GuildOp::Leave,
+            GuildRequest::Remove { target_guid } => GuildOp::Remove(target_guid),
+            GuildRequest::Promote { target_guid } => GuildOp::Promote(target_guid),
+            GuildRequest::Demote { target_guid } => GuildOp::Demote(target_guid),
+            GuildRequest::SetLeader { target_guid } => GuildOp::SetLeader(target_guid),
+            GuildRequest::Disband => GuildOp::Disband,
         };
         let result = call_reducer!(
             self.0.call_pipe().conn.reducers,

@@ -159,6 +159,10 @@ pub mod event_kind {
     pub const TABARD_CHANGED: u8 = 9;
     pub const SIGNED_ON: u8 = 12;
     pub const SIGNED_OFF: u8 = 13;
+    /// Addressed to an invite target: SMSG_GUILD_INVITE, not the generic SMSG_GUILD_EVENT builder.
+    pub const INVITE: u8 = 0x40;
+    /// Addressed to an inviter: raw SMSG_GUILD_DECLINE, not the generic SMSG_GUILD_EVENT builder.
+    pub const DECLINE: u8 = 0x41;
 }
 
 /// `game_guild_fee_hold.kind`: which guild operation a Fee Hold pays for.
@@ -195,10 +199,25 @@ pub enum GuildRefusal {
     NotEnoughMoney,
     /// The named NPC does not serve this guild operation, or not to this Character here.
     NpcRefused,
+    /// An Invite's team does not match the target's, or an Accept's team does not match the
+    /// Guild's.
+    NotAllied,
+    /// The target already holds a pending Guild Invite.
+    AlreadyInvited,
+    /// The actor holds no pending Guild Invite, or is already a member.
+    NoPendingInvite,
+    /// The Guild Leader must pass leadership before leaving, or cannot be removed.
+    LeaderCannotLeave,
+    /// The actor's Guild Rank cannot reach the target's.
+    RankTooHigh,
+    /// The target already holds the Guild's lowest Guild Rank.
+    RankTooLow,
+    /// The op named the actor as its own target.
+    TargetIsSelf,
 }
 
 impl GuildRefusal {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 18] = [
         Self::NotGameMaster,
         Self::NameInvalid,
         Self::NameExists,
@@ -210,6 +229,13 @@ impl GuildRefusal {
         Self::NotLeader,
         Self::NotEnoughMoney,
         Self::NpcRefused,
+        Self::NotAllied,
+        Self::AlreadyInvited,
+        Self::NoPendingInvite,
+        Self::LeaderCannotLeave,
+        Self::RankTooHigh,
+        Self::RankTooLow,
+        Self::TargetIsSelf,
     ];
 
     pub fn as_tag(self) -> &'static str {
@@ -225,6 +251,13 @@ impl GuildRefusal {
             Self::NotLeader => "guild:not_leader",
             Self::NotEnoughMoney => "guild:not_enough_money",
             Self::NpcRefused => "guild:npc_refused",
+            Self::NotAllied => "guild:not_allied",
+            Self::AlreadyInvited => "guild:already_invited",
+            Self::NoPendingInvite => "guild:no_pending_invite",
+            Self::LeaderCannotLeave => "guild:leader_cannot_leave",
+            Self::RankTooHigh => "guild:rank_too_high",
+            Self::RankTooLow => "guild:rank_too_low",
+            Self::TargetIsSelf => "guild:target_is_self",
         }
     }
 
