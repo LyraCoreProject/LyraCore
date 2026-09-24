@@ -292,9 +292,9 @@ fn the_raid_leader_promotes_and_demotes_an_assistant() {
     );
 }
 
-/// AC 5 to 8: an Assistant's invite joins the Raid, a demoted Assistant's pending invite no longer
-/// stands, and an Assistant removes plain members and Assistants but never the leader. The leader
-/// removes a member by guid. An Assistant's pending invite does not stand once it leaves the Raid.
+/// AC 5 to 8: an Assistant's invite joins the Raid, and an Assistant removes plain members and
+/// Assistants but never the leader. The leader removes a member by guid. As in cmangos, an invite
+/// joins its Group even after its sender is demoted or leaves, and ends once the Group is gone.
 #[test]
 #[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
 fn an_assistant_invites_and_removes_members_but_never_the_leader() {
@@ -316,41 +316,85 @@ fn an_assistant_invites_and_removes_members_but_never_the_leader() {
 
     group_op(&realm, INVITE, 3, 6, 0);
     promote(&realm, 1, 3, false);
-    assert_refused(&realm, ACCEPT, 6, 0, 0, "group:inviter_unavailable");
-    assert_eq!(members(&realm), [1, 2, 3, 4, 5]);
+    group_op(&realm, ACCEPT, 6, 0, 0);
+    assert_eq!(
+        members(&realm),
+        [1, 2, 3, 4, 5, 6],
+        "a demoted Assistant's pending invite still joins its Group"
+    );
 
     group_op(&realm, UNINVITE, 2, 4, 0);
     promote(&realm, 1, 5, true);
     group_op(&realm, UNINVITE, 2, 5, 0);
     assert_eq!(
         members(&realm),
-        [1, 2, 3],
+        [1, 2, 3, 6],
         "an Assistant removes a plain member and another Assistant"
     );
     let revision_before = roster_revision(&realm);
     assert_refused(&realm, UNINVITE, 2, 1, 0, "group:not_leader");
     assert_refused(&realm, UNINVITE, 3, 2, 0, "group:not_leader");
     assert_eq!(leader(&realm), 1);
-    assert_eq!(members(&realm), [1, 2, 3]);
+    assert_eq!(members(&realm), [1, 2, 3, 6]);
     assert_eq!(roster_revision(&realm), revision_before);
 
     group_op(&realm, UNINVITE, 1, 3, 0);
     assert_eq!(
         members(&realm),
-        [1, 2],
+        [1, 2, 6],
         "the leader removes a member by guid"
     );
 
-    join(&realm, 1, 4);
     group_op(&realm, INVITE, 2, 7, 0);
     group_op(&realm, LEAVE, 2, 0, 0);
-    assert_refused(&realm, ACCEPT, 7, 0, 0, "group:inviter_unavailable");
+    group_op(&realm, ACCEPT, 7, 0, 0);
     assert_eq!(
         members(&realm),
-        [1, 4],
-        "an invite sent for a Group the inviter has left forms no new Party"
+        [1, 6, 7],
+        "an Assistant's invite joins its Group after the Assistant left"
     );
     assert_eq!(realm.query_rows("SELECT group_id FROM game_group").len(), 1);
+
+    group_op(&realm, INVITE, 1, 8, 0);
+    group_op(&realm, LEAVE, 6, 0, 0);
+    group_op(&realm, LEAVE, 7, 0, 0);
+    assert!(members(&realm).is_empty(), "the Group disbanded");
+    assert_refused(&realm, ACCEPT, 8, 0, 0, "group:no_pending_invite");
+    assert!(
+        realm
+            .query_rows("SELECT group_id FROM game_group")
+            .is_empty(),
+        "an invite whose Group is gone forms no new Party"
+    );
+}
+
+/// A solo inviter's first accept forms its Group, and its other pending invites join that same
+/// Group. A solo inviter who joins another Group first speaks for nobody: its pending invite
+/// forms no Party and does not lead into the other Group. Nobody can invite a Character that has
+/// invited someone while it has no Group (cm:GroupHandler.cpp:105-114).
+#[test]
+#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+fn a_solo_inviters_pending_invites_follow_the_group_its_first_accept_forms() {
+    let realm = start("raid-leadership-solo-inviter");
+    group_op(&realm, INVITE, 1, 2, 0);
+    group_op(&realm, INVITE, 1, 3, 0);
+    group_op(&realm, ACCEPT, 2, 0, 0);
+    group_op(&realm, ACCEPT, 3, 0, 0);
+    assert_eq!(members(&realm), [1, 2, 3]);
+    assert_eq!(realm.query_rows("SELECT group_id FROM game_group").len(), 1);
+
+    group_op(&realm, INVITE, 4, 5, 0);
+    assert_refused(&realm, INVITE, 6, 4, 0, "group:already_in_group");
+
+    group_op(&realm, INVITE, 6, 7, 0);
+    group_op(&realm, INVITE, 7, 8, 0);
+    group_op(&realm, ACCEPT, 7, 0, 0);
+    assert_refused(&realm, ACCEPT, 8, 0, 0, "group:inviter_unavailable");
+    assert_eq!(
+        members(&realm),
+        [1, 2, 3, 6, 7],
+        "a solo inviter's invite does not lead into the Group it joined since"
+    );
 }
 
 /// Succession feeds the Group Broadcast gate too: once the sole Assistant inherits the lead, it

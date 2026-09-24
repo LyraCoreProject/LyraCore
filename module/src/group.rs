@@ -237,9 +237,10 @@ pub struct GroupInvite {
     pub target_guid: u64,
     pub inviter_guid: u64,
     pub created_at: Timestamp,
-    /// The Group the inviter spoke for when it sent the invite, or 0 when it had none. An invite
-    /// sent for a Group stands only while the inviter is still in that Group, as cmangos ties an
-    /// invite to its Group. A row from before this column reads 0.
+    /// The Group the invite joins, or 0 when the inviter had none. As in cmangos, an accept joins
+    /// this Group whatever the inviter did since, and fails once the Group is gone. The first
+    /// accept of a 0 invite forms the inviter's Group and stamps it onto the inviter's other
+    /// pending invites. A row from before this column reads 0.
     #[default(0u64)]
     pub group_id: u64,
 }
@@ -549,8 +550,7 @@ pub(crate) fn in_raid(ctx: &ReducerContext, character_guid: u64) -> bool {
 }
 
 /// Whether `member` may manage `group`'s Raid: its leader, or an Assistant. Only a Raid member
-/// holds the Assistant flag, so in a Party this is the leader alone. Invites, kicks and the check
-/// that a pending invite still stands all read it.
+/// holds the Assistant flag, so in a Party this is the leader alone. Invites and kicks read it.
 pub(crate) fn manages_raid(group: &Group, member: &GroupMember) -> bool {
     group.leader_guid == member.character_guid || raid_slot_of(member).is_assistant()
 }
@@ -1303,7 +1303,9 @@ fn invite_core_on(
             return Err(GroupRefusal::TargetOffline.into());
         }
     }
-    if checked_group_membership(ctx, target_guid)?.is_some() {
+    if checked_group_membership(ctx, target_guid)?.is_some()
+        || has_pending_leader_invite(ctx, target_guid)
+    {
         return Err(GroupRefusal::AlreadyInGroup.into());
     }
     // An inviter with NO group yet leads the one the first accept forms. An inviter in a group must
@@ -1380,6 +1382,16 @@ pub(crate) fn accept_invite_for(ctx: &ReducerContext, acceptor_guid: u64) -> Res
     })
 }
 
+/// Whether `character_guid` has invited someone while it has no Group, so the first accept will
+/// form its Group. cmangos refuses to invite such a Character, which already holds the leader
+/// invite of the Group it is forming (cm:GroupHandler.cpp:105-114).
+fn has_pending_leader_invite(ctx: &ReducerContext, character_guid: u64) -> bool {
+    ctx.db
+        .game_group_invite()
+        .iter()
+        .any(|invite| invite.inviter_guid == character_guid && invite.group_id == 0)
+}
+
 fn accept_invite_on(
     ctx: &ReducerContext,
     plane: Plane,
@@ -1396,73 +1408,82 @@ fn accept_invite_on(
         return Err(GroupRefusal::AlreadyInGroup.into());
     }
     let inviter_guid = invite.inviter_guid;
-    // The member row's `owner_identity` is the SHARD's binding for that character. On realm-core
-    // there is no such binding to read (identities are per-database), so the directory plane stores
-    // ZERO and each shard's mirror re-derives its own — which is the same thing `player_login`'s
-    // restamp does for every other character-owned row. The "inviter no longer exists" gate is
-    // therefore a SHARD-plane gate; on realm-core the inviter's continued existence is proven by the
-    // group/membership rows the branches below read, not by a character row that was never there.
-    let inviter_identity = match plane {
-        Plane::Shard => Some(
-            ctx.db
-                .game_character()
-                .guid()
-                .find(inviter_guid)
-                .ok_or(GroupRefusal::InviterUnavailable)?
-                .owner_identity,
-        ),
-        Plane::RealmCore => None,
-    };
     let members = ctx.db.game_group_member();
-    let inviter_membership = checked_group_membership(ctx, inviter_guid)?;
-    // An invite sent for a Group stands only while the inviter is still in that Group. Without
-    // this, an Assistant who invites and then leaves would take the acceptor into a new Party.
-    let inviter_group_id = inviter_membership.as_ref().map(|(m, _)| m.group_id);
-    if invite.group_id != 0 && inviter_group_id != Some(invite.group_id) {
-        return Err(GroupRefusal::InviterUnavailable.into());
-    }
-    let (group_id, slot) = match inviter_membership {
-        Some((m, group)) => {
-            // Re-run the invite-time rights gate: an inviter who is now a plain member or a
-            // demoted Assistant no longer speaks for its Group.
-            if !manages_raid(&group, &m) {
-                return Err(GroupRefusal::InviterUnavailable.into());
+    let (group_id, slot) = if invite.group_id != 0 {
+        // cmangos joins the invite's Group whatever the inviter did since: left, removed or
+        // demoted (cm:GroupHandler.cpp:185-227). A Group that is gone ends the invite. Member
+        // rows that still name a missing Group are broken state, not a lapsed invite.
+        let current = members_of(ctx, invite.group_id);
+        let Some(group) = ctx.db.game_group().group_id().find(invite.group_id) else {
+            if current.is_empty() {
+                return Err(GroupRefusal::NoPendingInvite.into());
             }
-            let current = members_of(ctx, m.group_id);
-            let kind = group_kind_of(&group);
-            if !has_room(kind, current.len()) {
-                return Err(GroupRefusal::GroupFull.into());
-            }
-            let slot = match kind {
-                GroupKind::Party => RaidSlot::default(),
-                GroupKind::Raid => RaidSlot::for_raid_joiner(current.iter().map(raid_slot_of))
-                    .ok_or(GroupRefusal::GroupFull)?,
-            };
-            (m.group_id, slot)
+            return Err(GroupOpError::Invariant(format!(
+                "members point to missing group {}",
+                invite.group_id
+            )));
+        };
+        let kind = group_kind_of(&group);
+        if !has_room(kind, current.len()) {
+            return Err(GroupRefusal::GroupFull.into());
         }
-        None => {
-            // First acceptance forms the group: the inviter leads and joins it here. The check
-            // above refused an invite sent for a Group the inviter has since left.
-            let group = ctx.db.game_group().insert(Group {
-                group_id: 0,
-                leader_guid: inviter_guid,
-                // Vanilla's real default for a freshly-formed party (work-item 187): GROUP LOOT at
-                // Uncommon threshold, no master, cursor at 0.
-                loot_method: loot_method::GROUP,
-                loot_threshold: 2,
-                rr_cursor: 0,
-                master_looter_guid: 0,
-                group_type: GroupKind::Party.wire(),
-            });
-            members.insert(GroupMember {
-                id: 0,
+        let slot = match kind {
+            GroupKind::Party => RaidSlot::default(),
+            GroupKind::Raid => RaidSlot::for_raid_joiner(current.iter().map(raid_slot_of))
+                .ok_or(GroupRefusal::GroupFull)?,
+        };
+        (group.group_id, slot)
+    } else {
+        // The inviter had no Group. If it has joined one since, this invite speaks for nobody.
+        if checked_group_membership(ctx, inviter_guid)?.is_some() {
+            return Err(GroupRefusal::InviterUnavailable.into());
+        }
+        // The member row's `owner_identity` is the SHARD's binding for that character. On
+        // realm-core there is no such binding to read (identities are per-database), so the
+        // directory plane stores ZERO and each shard's mirror re-derives its own, which is what
+        // `player_login`'s restamp does for every other character-owned row.
+        let inviter_identity = match plane {
+            Plane::Shard => Some(
+                ctx.db
+                    .game_character()
+                    .guid()
+                    .find(inviter_guid)
+                    .ok_or(GroupRefusal::InviterUnavailable)?
+                    .owner_identity,
+            ),
+            Plane::RealmCore => None,
+        };
+        // First acceptance forms the group: the inviter leads and joins it here.
+        let group = ctx.db.game_group().insert(Group {
+            group_id: 0,
+            leader_guid: inviter_guid,
+            // Vanilla's real default for a freshly-formed party (work-item 187): GROUP LOOT at
+            // Uncommon threshold, no master, cursor at 0.
+            loot_method: loot_method::GROUP,
+            loot_threshold: 2,
+            rr_cursor: 0,
+            master_looter_guid: 0,
+            group_type: GroupKind::Party.wire(),
+        });
+        members.insert(GroupMember {
+            id: 0,
+            group_id: group.group_id,
+            character_guid: inviter_guid,
+            owner_identity: crate::helpers::event_recipient_identity(inviter_identity),
+            raid_slot: RaidSlot::default().wire(),
+        });
+        // The inviter's other pending invites now join the Group this accept formed.
+        let pending: Vec<GroupInvite> = invites
+            .iter()
+            .filter(|other| other.inviter_guid == inviter_guid && other.group_id == 0)
+            .collect();
+        for other in pending {
+            invites.id().update(GroupInvite {
                 group_id: group.group_id,
-                character_guid: inviter_guid,
-                owner_identity: crate::helpers::event_recipient_identity(inviter_identity),
-                raid_slot: RaidSlot::default().wire(),
+                ..other
             });
-            (group.group_id, RaidSlot::default())
         }
+        (group.group_id, RaidSlot::default())
     };
     let acceptor_identity = match plane {
         Plane::Shard => ctx
@@ -2047,12 +2068,14 @@ fn realm_op_groups(
         guids.push(target_guid);
     }
     if op == realm_op::ACCEPT {
+        // An invite with a Group joins that Group, which the acceptor's own row names afterwards.
         if let Some(invite) = ctx
             .db
             .game_group_invite()
             .by_target()
             .filter(&actor_guid)
             .next()
+            .filter(|invite| invite.group_id == 0)
         {
             guids.push(invite.inviter_guid);
         }
@@ -3090,8 +3113,7 @@ mod tests {
         assert_eq!(selected(GroupAudience::Subgroup(1)), [3]);
     }
 
-    /// Invites, kicks and the accept-time check that an invite still stands all read this over the
-    /// inviter's current Group row and Raid Slot.
+    /// Invites and kicks read this over the actor's current Group row and Raid Slot.
     #[test]
     fn the_leader_and_assistants_manage_a_raid() {
         let group = raid_led_by(1);
@@ -3106,7 +3128,7 @@ mod tests {
         };
         assert!(
             !manages_raid(&group, &demoted),
-            "a demoted Assistant's pending invite no longer stands"
+            "a demoted Assistant no longer invites or kicks"
         );
     }
 
