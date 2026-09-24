@@ -39,7 +39,9 @@ use spacetimedb::{reducer, table, Identity, ReducerContext, Table, Timestamp};
 use crate::{game_character, game_melee_attack, game_pending_cast, game_threat, game_world_entity};
 
 pub use lyracore_shared::group::GROUP_MAX_MEMBERS;
-use lyracore_shared::group::{GroupKind, RaidSlot, RosterMember, RosterPayload, RAID_MAX_MEMBERS};
+use lyracore_shared::group::{
+    GroupKind, RaidSlot, RosterMember, RosterPayload, RAID_MAX_MEMBERS, RAID_SUBGROUPS,
+};
 
 /// Group kill-reward radius² — members farther than this from the slain creature get neither XP
 /// nor quest credit. Vanilla's `sWorld.getConfig(CONFIG_FLOAT_GROUP_XP_DISTANCE)` = 74.0 yd.
@@ -1614,6 +1616,96 @@ fn set_assistant_on(
     Ok(RosterChange::Changed)
 }
 
+/// `target_guid`'s membership in `group_id`, or [`GroupRefusal::TargetNotInGroup`] when it belongs
+/// to no Group or a different one. Shared by [`change_subgroup_on`] and [`swap_subgroup_on`], which
+/// both need it for every member they move.
+fn member_of_group(
+    ctx: &ReducerContext,
+    target_guid: u64,
+    group_id: u64,
+) -> Result<GroupMember, GroupOpError> {
+    group_of(ctx, target_guid)
+        .filter(|member| member.group_id == group_id)
+        .ok_or_else(|| GroupOpError::from(GroupRefusal::TargetNotInGroup))
+}
+
+/// `CMSG_GROUP_CHANGE_SUB_GROUP`: the leader or an Assistant moves `target_guid` to `subgroup`
+/// (cm:GroupHandler.cpp:492-525, cm:Group.cpp:1203-1251). The same Subgroup succeeds and changes
+/// nothing (cm:Group.cpp:1234); a full destination refuses, and the Assistant bit survives the
+/// move.
+fn change_subgroup_on(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    target_guid: u64,
+    subgroup: u8,
+) -> Result<RosterChange, GroupOpError> {
+    let (actor_member, group) =
+        checked_group_membership(ctx, actor_guid)?.ok_or(GroupRefusal::NotInGroup)?;
+    if group_kind_of(&group) != GroupKind::Raid {
+        return Err(GroupRefusal::NotRaid.into());
+    }
+    if !manages_raid(&group, &actor_member) {
+        return Err(GroupRefusal::NotLeader.into());
+    }
+    // Bounds-checked before the target is resolved, matching cmangos's own gate order: an
+    // out-of-range wire byte refuses before the server looks anybody up (cm:GroupHandler.cpp:500-501).
+    if subgroup >= RAID_SUBGROUPS {
+        return Err(GroupRefusal::InvalidSubgroup.into());
+    }
+    let target = member_of_group(ctx, target_guid, group.group_id)?;
+    let destination_size = members_of(ctx, group.group_id)
+        .iter()
+        .filter(|member| {
+            member.character_guid != target_guid && raid_slot_of(member).subgroup() == subgroup
+        })
+        .count();
+    let Some(new_slot) = raid_slot_of(&target).moved_to_subgroup(subgroup, destination_size)?
+    else {
+        return Ok(RosterChange::Unchanged);
+    };
+    let mut target = target;
+    target.raid_slot = new_slot.wire();
+    ctx.db.game_group_member().id().update(target);
+    push_list_to_all(ctx, group.group_id);
+    Ok(RosterChange::Changed)
+}
+
+/// `CMSG_GROUP_SWAP_SUB_GROUP`: the leader or an Assistant exchanges the Subgroups of `first_guid`
+/// and `second_guid` (cm:GroupHandler.cpp:901-944). Both members already in one Subgroup succeed
+/// and change nothing (cm:GroupHandler.cpp:939). cmangos applies two moves and sends two lists; one
+/// atomic swap can never overfill a Subgroup, so it needs no capacity Gate, and this writes both
+/// slots in one transaction and pushes one list.
+fn swap_subgroup_on(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    first_guid: u64,
+    second_guid: u64,
+) -> Result<RosterChange, GroupOpError> {
+    let (actor_member, group) =
+        checked_group_membership(ctx, actor_guid)?.ok_or(GroupRefusal::NotInGroup)?;
+    if group_kind_of(&group) != GroupKind::Raid {
+        return Err(GroupRefusal::NotRaid.into());
+    }
+    if !manages_raid(&group, &actor_member) {
+        return Err(GroupRefusal::NotLeader.into());
+    }
+    let first = member_of_group(ctx, first_guid, group.group_id)?;
+    let second = member_of_group(ctx, second_guid, group.group_id)?;
+    let Some((first_slot, second_slot)) = raid_slot_of(&first).swapped_with(raid_slot_of(&second))
+    else {
+        return Ok(RosterChange::Unchanged);
+    };
+    let members = ctx.db.game_group_member();
+    let mut first = first;
+    first.raid_slot = first_slot.wire();
+    members.id().update(first);
+    let mut second = second;
+    second.raid_slot = second_slot.wire();
+    members.id().update(second);
+    push_list_to_all(ctx, group.group_id);
+    Ok(RosterChange::Changed)
+}
+
 /// Whether a successful op changed what the Roster Revision orders: the member list, leader, loot
 /// rules, Group kind or a Raid Slot. Only a change advances the revision.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1780,8 +1872,6 @@ pub fn realm_group_op(
     crate::helpers::require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     use lyracore_shared::group::realm_op;
-    // No op reads `arg_c` yet; `realm_op` names the ops it is reserved for.
-    let _ = arg_c;
     // An op byte this module does not know is a gateway newer than the module — a deployment fault,
     // not a party outcome, so it stays an untagged error the gateway treats as a failure.
     let before_groups = realm_op_groups(ctx, op, actor_guid, target_guid);
@@ -1801,6 +1891,8 @@ pub fn realm_group_op(
         realm_op::RAID_CONVERT => raid_convert_on(ctx, actor_guid),
         realm_op::SET_LEADER => set_leader_on(ctx, actor_guid, target_guid),
         realm_op::SET_ASSISTANT => set_assistant_on(ctx, actor_guid, target_guid, arg_a != 0),
+        realm_op::CHANGE_SUBGROUP => change_subgroup_on(ctx, actor_guid, target_guid, arg_a),
+        realm_op::SWAP_SUBGROUP => swap_subgroup_on(ctx, actor_guid, target_guid, arg_c),
         other => return Err(format!("unknown realm group op {other}")),
     };
     let change = ran
@@ -2891,6 +2983,14 @@ mod tests {
             (
                 "realm_op::SET_ASSISTANT =>",
                 "set_assistant_on(ctx, actor_guid, target_guid, arg_a != 0)",
+            ),
+            (
+                "realm_op::CHANGE_SUBGROUP =>",
+                "change_subgroup_on(ctx, actor_guid, target_guid, arg_a)",
+            ),
+            (
+                "realm_op::SWAP_SUBGROUP =>",
+                "swap_subgroup_on(ctx, actor_guid, target_guid, arg_c)",
             ),
         ] {
             let arm = body.split(op).nth(1).unwrap_or_else(|| {

@@ -3501,6 +3501,61 @@ impl WorldStore for InMemoryStore {
                     p.push_list(group_id);
                 }
             }
+            realm_op::CHANGE_SUBGROUP => {
+                let Some(group_id) = p.group_of(actor_guid) else {
+                    return Ok(GroupRefusal::NotInGroup.into());
+                };
+                if p.kind_of(group_id) != GroupKind::Raid {
+                    return Ok(GroupRefusal::NotRaid.into());
+                }
+                if !p.manages(group_id, actor_guid) {
+                    return Ok(GroupRefusal::NotLeader.into());
+                }
+                if p.group_of(target_guid) != Some(group_id) {
+                    return Ok(GroupRefusal::TargetNotInGroup.into());
+                }
+                let current = p.slots.get(&target_guid).copied().unwrap_or_default();
+                let destination_size = p
+                    .member_guids(group_id)
+                    .into_iter()
+                    .filter(|&guid| {
+                        guid != target_guid
+                            && p.slots.get(&guid).copied().unwrap_or_default().subgroup() == arg_a
+                    })
+                    .count();
+                match current.moved_to_subgroup(arg_a, destination_size) {
+                    Err(refusal) => return Ok(refusal.into()),
+                    Ok(None) => {}
+                    Ok(Some(new_slot)) => {
+                        p.slots.insert(target_guid, new_slot);
+                        p.push_list(group_id);
+                    }
+                }
+            }
+            realm_op::SWAP_SUBGROUP => {
+                let Some(group_id) = p.group_of(actor_guid) else {
+                    return Ok(GroupRefusal::NotInGroup.into());
+                };
+                if p.kind_of(group_id) != GroupKind::Raid {
+                    return Ok(GroupRefusal::NotRaid.into());
+                }
+                if !p.manages(group_id, actor_guid) {
+                    return Ok(GroupRefusal::NotLeader.into());
+                }
+                let second_guid = arg_c;
+                if p.group_of(target_guid) != Some(group_id)
+                    || p.group_of(second_guid) != Some(group_id)
+                {
+                    return Ok(GroupRefusal::TargetNotInGroup.into());
+                }
+                let first_slot = p.slots.get(&target_guid).copied().unwrap_or_default();
+                let second_slot = p.slots.get(&second_guid).copied().unwrap_or_default();
+                if let Some((new_first, new_second)) = first_slot.swapped_with(second_slot) {
+                    p.slots.insert(target_guid, new_first);
+                    p.slots.insert(second_guid, new_second);
+                    p.push_list(group_id);
+                }
+            }
             other => return Err(anyhow!("unknown realm group op {other}")),
         }
         Ok(PartyOutcome::Ran)
@@ -10899,6 +10954,11 @@ struct FakeParty {
     raids: Vec<u64>,
     /// Each Raid member's Raid Slot; a member absent here holds the Party default.
     slots: std::collections::HashMap<u64, RaidSlot>,
+    /// group_id → how many times [`Self::push_list`] fired for it — this Fake's stand-in for the
+    /// Roster Revision. A group absent here has never had a list pushed. Bumped exactly where a
+    /// real accepted change would advance the revision, so [`super::party::roster_unchanged`]'s
+    /// no-mirror-push optimization is exercised against a real signal rather than a constant.
+    revisions: std::collections::HashMap<u64, u64>,
     /// Every op that reached the AUTHORITY: `(op, actor, target, arg_a, arg_b, arg_c)`. The
     /// assertion that a party op ran on realm-core rather than on the player's shard.
     ops: Vec<(u8, u64, u64, u8, u8, u64)>,
@@ -10947,7 +11007,7 @@ impl FakeParty {
             *self.groups.iter().find(|(g, ..)| *g == group_id)?;
         Some(super::party::GroupRoster {
             group_id: gid,
-            roster_revision: 1,
+            roster_revision: self.revisions.get(&group_id).copied().unwrap_or(0),
             leader_guid: leader,
             loot_method: method,
             loot_threshold: threshold,
@@ -10994,6 +11054,7 @@ impl FakeParty {
     }
 
     fn push_list(&mut self, group_id: u64) {
+        *self.revisions.entry(group_id).or_insert(0) += 1;
         let recipients: Vec<u64> = self
             .members
             .iter()
