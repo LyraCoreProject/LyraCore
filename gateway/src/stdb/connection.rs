@@ -945,7 +945,8 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // A Fee Hold lives on the payer's Home Shard, the fee decision on Realm-core.
         "SELECT * FROM game_guild_fee_hold",
         "SELECT * FROM game_guild_fee_decision",
-        "SELECT * FROM game_guild_invite",
+        // `game_guild_invite` is NOT subscribed here: every invite Gate and read runs inside
+        // `realm_guild_op`, so no Gateway code ever reads the row back from a cache.
         // The four box-scoped tables now ride THIS one global subscription per shard instead
         // of ~600 per-player 5×5-box subscriptions, and the gateway's own cell index
         // (`stdb::world_index`) decides who sees each row. `game_world_entity` and

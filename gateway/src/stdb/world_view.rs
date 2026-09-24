@@ -3179,8 +3179,8 @@ mod family_audience_tests {
         );
         view.add_viewer_on_shard(viewer_with_tx(2, 9001, identity(2), member_tx), anchor, 0);
 
-        // DISBANDED (0x08) is addressed per former member (README Decision 19), so it exercises
-        // the generic addressed path through the raw SMSG_GUILD_EVENT builder.
+        // DISBANDED (0x08) is addressed per former member, so it exercises the generic addressed
+        // path through the raw SMSG_GUILD_EVENT builder.
         guild_event_appeared(
             &view,
             &membership(&[(9001, 7, 0)]),
@@ -3293,7 +3293,7 @@ mod family_audience_tests {
 
         assert_eq!(
             raw_packets(queued_job(&inviter_rx)),
-            vec![crate::codec::build_guild_decline_raw("Alice")]
+            vec![(0x0086, b"Alice\0".to_vec())]
         );
     }
 
@@ -3314,7 +3314,7 @@ mod family_audience_tests {
         }
         let [alice_rx, bob_rx] = <[_; 2]>::try_from(receivers).unwrap();
         // A disbanded Guild's members are already gone by the time the relay job runs, so
-        // `membership` answers `None` for both — DISBANDED is addressed, not read from current
+        // `membership` answers `None` for both. DISBANDED is addressed, not read from current
         // membership.
         let no_members = membership(&[]);
 

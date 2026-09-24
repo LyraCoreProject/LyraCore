@@ -10,7 +10,7 @@ use super::{
     GuildAcceptRequest, GuildInviteRequest,
 };
 
-/// The client's default rank name for rank 1 (`cm:Guild.h:37`).
+/// The Guild Rank id `SetLeader` gives the old Guild Leader: the default Officer rank (`cm:Guild.h:37`).
 const OFFICER_RANK: u32 = 1;
 
 /// A pending offer for one Character to join one Guild. At most one per target: a repeated invite
@@ -351,7 +351,7 @@ pub fn demote(ctx: &ReducerContext, actor_guid: u64, target_guid: u64) -> Result
 }
 
 /// `SetLeader` (`cm:GuildHandler.cpp:441-486`): the Guild Leader passes leadership to `target_guid`.
-/// Naming itself is a no-op — mangos' own code demotes the leader to Officer here through a shared
+/// Naming itself is a no-op: mangos' own code demotes the leader to Officer here through a shared
 /// path (`cm:GuildHandler.cpp:482-483`), which this Gate declines to reproduce.
 pub fn set_leader(
     ctx: &ReducerContext,
@@ -416,9 +416,8 @@ pub fn disband(ctx: &ReducerContext, actor_guid: u64) -> Result<(), GuildRefusal
 }
 
 /// The mechanics both `Disband` and a lone Guild Leader's `Leave` share (`cm:Guild.cpp:695-711`).
-/// DISBANDED goes out addressed, one row per member, before any row is deleted (README Decision
-/// 19): the generic broadcast reads membership when its relay job runs, which is too late once the
-/// members are gone.
+/// DISBANDED goes out addressed, one row per member, before any row is deleted: the generic
+/// broadcast reads membership when its relay job runs, which is too late once the members are gone.
 fn disband_guild(ctx: &ReducerContext, guild_id: u32) {
     let member_guids: Vec<u64> = ctx
         .db

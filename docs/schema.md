@@ -78,7 +78,7 @@ grep -rn '^#\[table(' module/src --include='*.rs' | wc -l   # 238 on 2026-09-03
 | GameObject | 9 | 6 | `gameobject.rs`, `go_model.rs` |
 | Loot | 12 | 6 | `loot/*` |
 | Group / party | 5 | 3 | `group.rs` |
-| Guild | 6 | 0 | `guild/mod.rs`, `guild/fee.rs` |
+| Guild | 7 | 0 | `guild/mod.rs`, `guild/fee.rs`, `guild/membership.rs` |
 | Instance / encounter | 7 | 1 | `instance.rs`, `encounter.rs` |
 | Sharding: region, transfer, load | 9 | 0 | `region.rs`, `transfer/mod.rs`, `load.rs` |
 | Realm-core | 2 | 0 | `realm_core.rs` |
@@ -354,13 +354,15 @@ manifests; deletion is refused while a character owns Auction value.
 
 ### Guild state (`module/src/guild/mod.rs`)
 
-Four private tables hold every guild fact on Realm-core. World Shards hold none. `game_guild` is one
+Five private tables hold every guild fact on Realm-core. World Shards hold none. `game_guild` is one
 Guild: its name, a unique lower-case `name_key`, the leader, the team fixed at founding, the MOTD,
 the info text and the emblem. `game_guild_rank` holds the five to ten Guild Ranks of each Guild with
 their Rank Rights. `game_guild_member` is keyed by Character guid, so a Character is in at most one
 Guild. Each member row keeps a name snapshot, so Guild Events and by-name ops need no Character row.
 `game_guild_event` is an `[event]` table: `recipient_guid == 0` goes to every online member,
 a nonzero value addresses one Character, and the row carries its final strings.
+`game_guild_invite` (`module/src/guild/membership.rs`) is one pending offer per target Character,
+keyed by the target's guid; it is reaped on `INVITE_TTL_MICROS`, like `game_group_invite`.
 `realm_guild_op` runs every guild op; its typed `GuildOp` gets one variant per op.
 PLAYER_GUILDID and PLAYER_GUILDRANK are not stored anywhere. The Gateway projects them from
 `game_guild_member`.

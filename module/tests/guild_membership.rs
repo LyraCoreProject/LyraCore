@@ -228,16 +228,26 @@ fn membership_moves_through_every_op_as_tokenless_actors() {
         .iter()
         .any(|row| row["strings"].contains("Member")));
 
-    // Promoting past the actor's own reach is refused; Bob (rank 3) cannot reach rank 1.
+    // Promoting past the actor's own reach is refused. Only ranks 0 and 1 hold PROMOTE, so the
+    // Leader raises Bob to Officer (rank 1) first; Dave rises to rank 2, one step past Bob's
+    // reach (`actor_rank + 1 >= target_rank`).
+    realm.assert_call("realm_guild_op", &[&actor(LEADER), &promote(BOB)]); // 3 -> 2
+    realm.assert_call("realm_guild_op", &[&actor(LEADER), &promote(BOB)]); // 2 -> 1
+    realm.assert_call("realm_guild_op", &[&actor(LEADER), &promote(DAVE)]); // 4 -> 3
+    realm.assert_call("realm_guild_op", &[&actor(LEADER), &promote(DAVE)]); // 3 -> 2
     refused(
         &realm,
         &[&actor(BOB), &promote(DAVE)],
-        "guild:no_permission",
+        "guild:rank_too_high",
     );
 
-    // Demote: Bob returns to the lowest rank (3 -> 4).
-    realm.assert_call("realm_guild_op", &[&actor(LEADER), &demote(BOB)]);
+    // Demote: Bob and Dave return to the lowest rank.
+    realm.assert_call("realm_guild_op", &[&actor(LEADER), &demote(BOB)]); // 1 -> 2
+    realm.assert_call("realm_guild_op", &[&actor(LEADER), &demote(BOB)]); // 2 -> 3
+    realm.assert_call("realm_guild_op", &[&actor(LEADER), &demote(BOB)]); // 3 -> 4
     assert_eq!(member_row(&realm, BOB).unwrap()["rank_id"], "4");
+    realm.assert_call("realm_guild_op", &[&actor(LEADER), &demote(DAVE)]); // 2 -> 3
+    realm.assert_call("realm_guild_op", &[&actor(LEADER), &demote(DAVE)]); // 3 -> 4
 
     // Demoting the Guild's already-lowest rank is refused.
     refused(
@@ -274,7 +284,26 @@ fn membership_moves_through_every_op_as_tokenless_actors() {
     // A non-leader cannot disband.
     refused(&realm, &[&actor(LEADER), DISBAND], "guild:not_leader");
 
-    // Disband: Bob, the new leader, dissolves the Guild. Every table forgets it.
+    // A pending invite outstanding at disband time, so the assertions below prove disband
+    // actually clears it rather than merely finding no invite left over from an earlier step.
+    realm.assert_call(
+        "realm_guild_op",
+        &[
+            &actor(BOB),
+            &invite(GM, TEAM_ALLIANCE, TEAM_ALLIANCE, false),
+        ],
+    );
+    assert_eq!(
+        realm
+            .query_rows(&format!(
+                "SELECT * FROM game_guild_invite WHERE target_guid = {GM}"
+            ))
+            .len(),
+        1
+    );
+
+    // Disband: Bob, the new leader, dissolves the Guild. Every table forgets it, and every
+    // member still in the Guild gets one addressed DISBANDED row.
     realm.assert_call("realm_guild_op", &[&actor(BOB), DISBAND]);
     assert!(realm
         .query_rows(&format!(
@@ -291,6 +320,21 @@ fn membership_moves_through_every_op_as_tokenless_actors() {
             "SELECT * FROM game_guild_member WHERE guild_id = {guild_id}"
         ))
         .is_empty());
+    assert!(realm
+        .query_rows(&format!(
+            "SELECT * FROM game_guild_invite WHERE target_guid = {GM}"
+        ))
+        .is_empty());
+    for member in [LEADER, BOB] {
+        let disbanded = realm.query_rows(&format!(
+            "SELECT * FROM game_guild_event WHERE kind = 8 AND recipient_guid = {member}"
+        ));
+        assert_eq!(
+            disbanded.len(),
+            1,
+            "member {member} did not get a DISBANDED row"
+        );
+    }
 }
 
 /// A lone Guild Leader's Leave disbands the Guild; a Guild Leader with company must pass

@@ -524,9 +524,10 @@ fn decline_outbound<St: GuildActionStore + ?Sized>(
 }
 
 /// CMSG_GUILD_LEAVE (`cm:GuildHandler.cpp:383-404`): mangos answers QUIT/0x00 only for an ordinary
-/// member's leave, never for a lone Guild Leader's leave-and-disband. The Gateway reads the same
-/// facts the Module Gate does (a advisory read, like the Fee Hold's) to tell the two apart before
-/// the Durable Request runs.
+/// member's leave, never for a lone Guild Leader's leave-and-disband. The Module refuses a Guild
+/// Leader who still has company (`GuildRefusal::LeaderCannotLeave`), so a Guild Leader's Leave can
+/// only ever *succeed* by disbanding alone. No member count needs reading here to tell the two
+/// outcomes apart, only whether the actor already is the Guild Leader.
 fn leave_outbound<St: GuildActionStore + ?Sized>(
     store: &St,
     player: GuildActionPlayer,
@@ -537,11 +538,10 @@ fn leave_outbound<St: GuildActionStore + ?Sized>(
     let Some((_, guild)) = actor_guild(store, player)? else {
         return Ok(vec![not_in_guild()]);
     };
-    let member_count = store.guild_members(guild.guild_id)?.len();
-    let lone_leader = guild.leader_guid == actor_guid && member_count <= 1;
+    let is_leader = guild.leader_guid == actor_guid;
     let outcome = store.guild_op(actor_guid, GuildRequest::Leave)?;
     Ok(match outcome {
-        GuildOutcome::Ran if lone_leader => Vec::new(),
+        GuildOutcome::Ran if is_leader => Vec::new(),
         GuildOutcome::Ran => vec![command_result(
             GuildCommand::Quit,
             guild.name,
@@ -581,9 +581,14 @@ fn disband_outbound<St: GuildActionStore + ?Sized>(
 }
 
 /// The shape CMSG_GUILD_REMOVE, PROMOTE, DEMOTE and LEADER share: resolve `typed_name` against the
-/// actor's own Guild roster, answer PLAYER_NOT_IN_GUILD_S locally on no match
-/// (`cm:GuildHandler.cpp:146-152,290-296,343-349,467-473`), else run the Durable Request and map
-/// its outcome.
+/// actor's own Guild roster, then run the Durable Request and map its outcome
+/// (`cm:GuildHandler.cpp:146-152,290-296,343-349,467-473`).
+///
+/// No match, or two members sharing one name snapshot, sends guid 0 rather than answering locally.
+/// mangos checks the actor's Rank Right before it looks the target up, so an unprivileged actor
+/// hears its Refusal even when the typed name matches nobody; only the Module's Gate order can
+/// reproduce that, since it alone knows the actor's Rank Rights. The Module's own membership lookup
+/// then refuses guid 0 as `TargetNotInGuild`, which maps to the same reply this used to send here.
 fn named_member_op<St, F>(
     store: &St,
     player: GuildActionPlayer,
@@ -604,13 +609,7 @@ where
     let members = store.guild_members(guild.guild_id)?;
     let target_guid = match member_by_name(&members, &typed_name) {
         MemberMatch::Found(guid) => guid,
-        MemberMatch::NotInGuild => {
-            return Ok(vec![command_result(
-                GuildCommand::Invite,
-                typed_name,
-                GuildCommandResult::GuildPlayerNotInGuildS,
-            )]);
-        }
+        MemberMatch::NotInGuild => 0,
     };
     let outcome = store.guild_op(actor_guid, build_request(target_guid))?;
     Ok(match outcome {
@@ -626,7 +625,7 @@ where
     })
 }
 
-/// Which client opcode a Refusal reply is being built for — the same [`GuildRefusal`] wire-maps
+/// Which client opcode a Refusal reply is being built for: the same [`GuildRefusal`] wire-maps
 /// differently depending on which op produced it.
 #[derive(Clone, Copy, Debug)]
 enum GuildOpKind {
@@ -1031,8 +1030,6 @@ mod tests {
     struct InMemoryGuildActions {
         guilds: Mutex<Vec<codec::GuildView>>,
         members: Mutex<Vec<codec::GuildMemberView>>,
-        /// `(target_guid, guild_id, inviter_guid)`.
-        invites: Mutex<Vec<(u64, u32, u64)>>,
         characters: Vec<CharacterFacts>,
         /// GM levels as each actor's Home Shard holds them.
         gm_levels: Vec<(u64, u8)>,
@@ -1049,6 +1046,11 @@ mod tests {
         hold_refusal: Option<GuildRefusal>,
         /// What Realm-core decides; `None` accepts.
         fee_refusal: Option<GuildRefusal>,
+        /// What the next membership op (invite through disband) answers; `None` runs it. The Gate
+        /// arithmetic lives on the Module, proved by its own unit and durable tests; this seam only
+        /// proves the wire mapping from a given outcome, the same shape `GuildFeeStore` below uses
+        /// for the Fee Hold protocol.
+        next_membership_outcome: Mutex<Option<GuildOutcome>>,
     }
 
     impl InMemoryGuildActions {
@@ -1109,312 +1111,9 @@ mod tests {
             Ok(GuildOutcome::Ran)
         }
 
-        fn rank_rights(&self, guild_id: u32, rank_id: u32) -> u32 {
-            self.guilds
-                .lock()
-                .unwrap()
-                .iter()
-                .find(|guild| guild.guild_id == guild_id)
-                .map_or(0, |guild| guild.rank_rights(rank_id))
-        }
-
-        fn lowest_rank(&self, guild_id: u32) -> u32 {
-            self.guilds
-                .lock()
-                .unwrap()
-                .iter()
-                .find(|guild| guild.guild_id == guild_id)
-                .and_then(|guild| guild.ranks.iter().map(|rank| rank.rank_id).max())
-                .unwrap_or(0)
-        }
-
-        fn set_rank(&self, character_guid: u64, rank_id: u32) {
-            if let Some(member) = self
-                .members
-                .lock()
-                .unwrap()
-                .iter_mut()
-                .find(|member| member.character_guid == character_guid)
-            {
-                member.rank_id = rank_id;
-            }
-        }
-
-        /// Gate order after `cm:GuildHandler.cpp:66-120`.
-        fn invite(
-            &self,
-            actor_guid: u64,
-            target_guid: u64,
-            actor_team: u32,
-            target_team: u32,
-            target_ignores_actor: bool,
-        ) -> Result<GuildOutcome> {
-            let Some(actor) = self.guild_member(actor_guid)? else {
-                return Ok(GuildOutcome::Refused(GuildRefusal::NotInGuild));
-            };
-            if target_ignores_actor {
-                return Ok(GuildOutcome::Ran);
-            }
-            if actor_team != target_team {
-                return Ok(GuildOutcome::Refused(GuildRefusal::NotAllied));
-            }
-            if self.guild_member(target_guid)?.is_some() {
-                return Ok(GuildOutcome::Refused(GuildRefusal::AlreadyInGuild));
-            }
-            if self
-                .invites
-                .lock()
-                .unwrap()
-                .iter()
-                .any(|(target, ..)| *target == target_guid)
-            {
-                return Ok(GuildOutcome::Refused(GuildRefusal::AlreadyInvited));
-            }
-            if !has_right(
-                self.rank_rights(actor.guild_id, actor.rank_id),
-                rights::INVITE,
-            ) {
-                return Ok(GuildOutcome::Refused(GuildRefusal::NoPermission));
-            }
-            self.invites
-                .lock()
-                .unwrap()
-                .push((target_guid, actor.guild_id, actor_guid));
-            Ok(GuildOutcome::Ran)
-        }
-
-        /// Gate order after `cm:GuildHandler.cpp:192-207`.
-        fn accept(
-            &self,
-            actor_guid: u64,
-            actor_name: String,
-            actor_team: u32,
-        ) -> Result<GuildOutcome> {
-            if self.guild_member(actor_guid)?.is_some() {
-                return Ok(GuildOutcome::Refused(GuildRefusal::NoPendingInvite));
-            }
-            let Some((_, guild_id, _)) = self
-                .invites
-                .lock()
-                .unwrap()
-                .iter()
-                .find(|(target, ..)| *target == actor_guid)
-                .copied()
-            else {
-                return Ok(GuildOutcome::Refused(GuildRefusal::NoPendingInvite));
-            };
-            let Some(guild) = self.guild(guild_id)? else {
-                return Ok(GuildOutcome::Refused(GuildRefusal::NoPendingInvite));
-            };
-            if actor_team != guild.team {
-                return Ok(GuildOutcome::Refused(GuildRefusal::NotAllied));
-            }
-            let rank_id = self.lowest_rank(guild_id);
-            self.members.lock().unwrap().push(codec::GuildMemberView {
-                character_guid: actor_guid,
-                guild_id,
-                rank_id,
-                name: actor_name,
-                public_note: String::new(),
-                officer_note: String::new(),
-                realm_account_id: actor_guid,
-            });
-            self.invites
-                .lock()
-                .unwrap()
-                .retain(|(target, ..)| *target != actor_guid);
-            Ok(GuildOutcome::Ran)
-        }
-
-        /// Gate order after `cm:GuildHandler.cpp:214-238`.
-        fn decline(&self, actor_guid: u64) -> Result<GuildOutcome> {
-            if self.guild_member(actor_guid)?.is_some()
-                || !self
-                    .invites
-                    .lock()
-                    .unwrap()
-                    .iter()
-                    .any(|(target, ..)| *target == actor_guid)
-            {
-                return Ok(GuildOutcome::Refused(GuildRefusal::NoPendingInvite));
-            }
-            self.invites
-                .lock()
-                .unwrap()
-                .retain(|(target, ..)| *target != actor_guid);
-            Ok(GuildOutcome::Ran)
-        }
-
-        /// Gate order after `cm:GuildHandler.cpp:383-404`.
-        fn leave(&self, actor_guid: u64) -> Result<GuildOutcome> {
-            let Some(actor) = self.guild_member(actor_guid)? else {
-                return Ok(GuildOutcome::Refused(GuildRefusal::NotInGuild));
-            };
-            let Some(guild) = self.guild(actor.guild_id)? else {
-                return Ok(GuildOutcome::Refused(GuildRefusal::NotInGuild));
-            };
-            let is_leader = guild.leader_guid == actor_guid;
-            let member_count = self.guild_members(actor.guild_id)?.len();
-            if is_leader && member_count > 1 {
-                return Ok(GuildOutcome::Refused(GuildRefusal::LeaderCannotLeave));
-            }
-            if is_leader {
-                self.disband_guild(actor.guild_id);
-            } else {
-                self.members
-                    .lock()
-                    .unwrap()
-                    .retain(|member| member.character_guid != actor_guid);
-            }
-            Ok(GuildOutcome::Ran)
-        }
-
-        /// Gate order after `cm:GuildHandler.cpp:136-177`.
-        fn remove(&self, actor_guid: u64, target_guid: u64) -> Result<GuildOutcome> {
-            let Some(actor) = self.guild_member(actor_guid)? else {
-                return Ok(GuildOutcome::Refused(GuildRefusal::NotInGuild));
-            };
-            if !has_right(
-                self.rank_rights(actor.guild_id, actor.rank_id),
-                rights::REMOVE,
-            ) {
-                return Ok(GuildOutcome::Refused(GuildRefusal::NoPermission));
-            }
-            let Some(target) = self
-                .guild_member(target_guid)?
-                .filter(|member| member.guild_id == actor.guild_id)
-            else {
-                return Ok(GuildOutcome::Refused(GuildRefusal::TargetNotInGuild));
-            };
-            if target.rank_id == 0 {
-                return Ok(GuildOutcome::Refused(GuildRefusal::LeaderCannotLeave));
-            }
-            if actor.rank_id >= target.rank_id {
-                return Ok(GuildOutcome::Refused(GuildRefusal::RankTooHigh));
-            }
-            self.members
-                .lock()
-                .unwrap()
-                .retain(|member| member.character_guid != target_guid);
-            Ok(GuildOutcome::Ran)
-        }
-
-        /// Gate order after `cm:GuildHandler.cpp:279-311`.
-        fn promote(&self, actor_guid: u64, target_guid: u64) -> Result<GuildOutcome> {
-            let Some(actor) = self.guild_member(actor_guid)? else {
-                return Ok(GuildOutcome::Refused(GuildRefusal::NotInGuild));
-            };
-            if !has_right(
-                self.rank_rights(actor.guild_id, actor.rank_id),
-                rights::PROMOTE,
-            ) {
-                return Ok(GuildOutcome::Refused(GuildRefusal::NoPermission));
-            }
-            let Some(target) = self
-                .guild_member(target_guid)?
-                .filter(|member| member.guild_id == actor.guild_id)
-            else {
-                return Ok(GuildOutcome::Refused(GuildRefusal::TargetNotInGuild));
-            };
-            if target_guid == actor_guid {
-                return Ok(GuildOutcome::Refused(GuildRefusal::TargetIsSelf));
-            }
-            if actor.rank_id + 1 >= target.rank_id {
-                return Ok(GuildOutcome::Refused(GuildRefusal::RankTooHigh));
-            }
-            self.set_rank(target_guid, target.rank_id - 1);
-            Ok(GuildOutcome::Ran)
-        }
-
-        /// Gate order after `cm:GuildHandler.cpp:332-372`.
-        fn demote(&self, actor_guid: u64, target_guid: u64) -> Result<GuildOutcome> {
-            let Some(actor) = self.guild_member(actor_guid)? else {
-                return Ok(GuildOutcome::Refused(GuildRefusal::NotInGuild));
-            };
-            if !has_right(
-                self.rank_rights(actor.guild_id, actor.rank_id),
-                rights::DEMOTE,
-            ) {
-                return Ok(GuildOutcome::Refused(GuildRefusal::NoPermission));
-            }
-            let Some(target) = self
-                .guild_member(target_guid)?
-                .filter(|member| member.guild_id == actor.guild_id)
-            else {
-                return Ok(GuildOutcome::Refused(GuildRefusal::TargetNotInGuild));
-            };
-            if target_guid == actor_guid {
-                return Ok(GuildOutcome::Refused(GuildRefusal::TargetIsSelf));
-            }
-            if actor.rank_id >= target.rank_id {
-                return Ok(GuildOutcome::Refused(GuildRefusal::RankTooHigh));
-            }
-            if target.rank_id >= self.lowest_rank(actor.guild_id) {
-                return Ok(GuildOutcome::Refused(GuildRefusal::RankTooLow));
-            }
-            self.set_rank(target_guid, target.rank_id + 1);
-            Ok(GuildOutcome::Ran)
-        }
-
-        /// Gate order after `cm:GuildHandler.cpp:441-486`.
-        fn set_leader(&self, actor_guid: u64, target_guid: u64) -> Result<GuildOutcome> {
-            let Some(actor) = self.guild_member(actor_guid)? else {
-                return Ok(GuildOutcome::Refused(GuildRefusal::NotInGuild));
-            };
-            let Some(mut guild) = self.guild(actor.guild_id)? else {
-                return Ok(GuildOutcome::Refused(GuildRefusal::NotInGuild));
-            };
-            if guild.leader_guid != actor_guid {
-                return Ok(GuildOutcome::Refused(GuildRefusal::NotLeader));
-            }
-            if target_guid == actor_guid {
-                return Ok(GuildOutcome::Ran);
-            }
-            if self
-                .guild_member(target_guid)?
-                .filter(|member| member.guild_id == actor.guild_id)
-                .is_none()
-            {
-                return Ok(GuildOutcome::Refused(GuildRefusal::TargetNotInGuild));
-            }
-            self.set_rank(target_guid, 0);
-            self.set_rank(actor_guid, 1);
-            guild.leader_guid = target_guid;
-            let mut guilds = self.guilds.lock().unwrap();
-            if let Some(row) = guilds.iter_mut().find(|row| row.guild_id == guild.guild_id) {
-                row.leader_guid = target_guid;
-            }
-            Ok(GuildOutcome::Ran)
-        }
-
-        /// Gate order after `cm:GuildHandler.cpp:424-435`.
-        fn disband(&self, actor_guid: u64) -> Result<GuildOutcome> {
-            let Some(actor) = self.guild_member(actor_guid)? else {
-                return Ok(GuildOutcome::Refused(GuildRefusal::NotInGuild));
-            };
-            let Some(guild) = self.guild(actor.guild_id)? else {
-                return Ok(GuildOutcome::Refused(GuildRefusal::NotInGuild));
-            };
-            if guild.leader_guid != actor_guid {
-                return Ok(GuildOutcome::Refused(GuildRefusal::NotLeader));
-            }
-            self.disband_guild(actor.guild_id);
-            Ok(GuildOutcome::Ran)
-        }
-
-        fn disband_guild(&self, guild_id: u32) {
-            self.members
-                .lock()
-                .unwrap()
-                .retain(|member| member.guild_id != guild_id);
-            self.invites
-                .lock()
-                .unwrap()
-                .retain(|(_, invite_guild_id, _)| *invite_guild_id != guild_id);
-            self.guilds
-                .lock()
-                .unwrap()
-                .retain(|guild| guild.guild_id != guild_id);
+        /// Scripts the next membership op (invite through disband) to answer this Refusal.
+        fn refuse_membership(&self, refusal: GuildRefusal) {
+            *self.next_membership_outcome.lock().unwrap() = Some(GuildOutcome::Refused(refusal));
         }
     }
 
@@ -1499,29 +1198,24 @@ mod tests {
                     ..
                 } => self.gm_create(leader_guid, gm_level, name),
                 GuildRequest::SignOn { .. } | GuildRequest::SignOff => Ok(GuildOutcome::Ran),
-                GuildRequest::Invite {
-                    target_guid,
-                    actor_team,
-                    target_team,
-                    target_ignores_actor,
-                } => self.invite(
-                    actor_guid,
-                    target_guid,
-                    actor_team,
-                    target_team,
-                    target_ignores_actor,
-                ),
-                GuildRequest::Accept {
-                    actor_name,
-                    actor_team,
-                } => self.accept(actor_guid, actor_name, actor_team),
-                GuildRequest::Decline { .. } => self.decline(actor_guid),
-                GuildRequest::Leave => self.leave(actor_guid),
-                GuildRequest::Remove { target_guid } => self.remove(actor_guid, target_guid),
-                GuildRequest::Promote { target_guid } => self.promote(actor_guid, target_guid),
-                GuildRequest::Demote { target_guid } => self.demote(actor_guid, target_guid),
-                GuildRequest::SetLeader { target_guid } => self.set_leader(actor_guid, target_guid),
-                GuildRequest::Disband => self.disband(actor_guid),
+                // Invite through Disband: the Module's own Gates decide these (proved by
+                // `module/src/guild/membership.rs`'s unit and durable tests). This Fake only
+                // answers the outcome a test scripts through `refuse_membership`, defaulting to
+                // `Ran`, so a seam test proves the wire mapping and nothing else.
+                GuildRequest::Invite { .. }
+                | GuildRequest::Accept { .. }
+                | GuildRequest::Decline { .. }
+                | GuildRequest::Leave
+                | GuildRequest::Remove { .. }
+                | GuildRequest::Promote { .. }
+                | GuildRequest::Demote { .. }
+                | GuildRequest::SetLeader { .. }
+                | GuildRequest::Disband => Ok(self
+                    .next_membership_outcome
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .unwrap_or(GuildOutcome::Ran)),
             }
         }
 
@@ -2215,7 +1909,9 @@ mod tests {
         }
     }
 
-    // ---- T2: invite, accept, decline, leave, remove, promote, demote, leader, disband --------
+    // Membership: invite, accept, decline, leave, remove, promote, demote, pass leadership,
+    // disband. The Module's own unit and durable tests prove the Gate arithmetic; these seam
+    // tests script an outcome through `refuse_membership` and prove only the wire mapping.
 
     const DAVE: u64 = 5_090_004;
 
@@ -2250,14 +1946,6 @@ mod tests {
                 }
             ))
         );
-        assert!(store
-            .invites
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|(target, guild_id, inviter)| *target == DAVE
-                && *guild_id == 1
-                && *inviter == GM));
     }
 
     #[test]
@@ -2290,32 +1978,56 @@ mod tests {
     }
 
     #[test]
-    fn an_ignored_inviters_target_is_silent_and_writes_no_invite() {
+    fn an_ignored_invite_conveys_the_ignore_verdict_and_replies_nothing() {
         let mut store = founded_with_members();
         store.characters.push(facts(DAVE, "Dave"));
         store.ignored.push((DAVE, GM));
         let outbound = invite_outbound(&store, in_world(GM), "Dave".into()).unwrap();
         assert!(outbound.is_empty());
-        assert!(store.invites.lock().unwrap().is_empty());
+        assert_eq!(
+            store.ops.lock().unwrap().last().cloned(),
+            Some((
+                GM,
+                GuildRequest::Invite {
+                    target_guid: DAVE,
+                    actor_team: lyracore_shared::faction::TEAM_ALLIANCE,
+                    target_team: lyracore_shared::faction::TEAM_ALLIANCE,
+                    target_ignores_actor: true,
+                }
+            ))
+        );
     }
 
     #[test]
-    fn invite_of_an_opposite_team_target_answers_not_allied_with_the_typed_name() {
+    fn invite_of_an_opposite_team_target_conveys_both_teams_and_maps_not_allied() {
         let mut store = founded_with_members();
         store.characters.push(horde_facts(DAVE, "Dave"));
+        store.refuse_membership(GuildRefusal::NotAllied);
         let outbound = invite_outbound(&store, in_world(GM), "dave".into()).unwrap();
+        assert_eq!(
+            store.ops.lock().unwrap().last().cloned(),
+            Some((
+                GM,
+                GuildRequest::Invite {
+                    target_guid: DAVE,
+                    actor_team: lyracore_shared::faction::TEAM_ALLIANCE,
+                    target_team: lyracore_shared::faction::TEAM_HORDE,
+                    target_ignores_actor: false,
+                }
+            ))
+        );
         let ServerOpcodeMessage::SMSG_GUILD_COMMAND_RESULT(result) = only_message(outbound) else {
             panic!("expected a command result");
         };
         assert_eq!(result.command, GuildCommand::Invite);
         assert_eq!(result.string, "dave");
         assert_eq!(result.result, GuildCommandResult::GuildNotAllied);
-        assert!(store.invites.lock().unwrap().is_empty());
     }
 
     #[test]
-    fn invite_of_a_guilded_target_answers_already_in_guild_with_its_resolved_name() {
+    fn invite_of_a_guilded_target_maps_already_in_guild_to_its_resolved_name() {
         let store = founded_with_members();
+        store.refuse_membership(GuildRefusal::AlreadyInGuild);
         let outbound = invite_outbound(&store, in_world(GM), "bob".into()).unwrap();
         let ServerOpcodeMessage::SMSG_GUILD_COMMAND_RESULT(result) = only_message(outbound) else {
             panic!("expected a command result");
@@ -2325,10 +2037,10 @@ mod tests {
     }
 
     #[test]
-    fn a_repeated_invite_to_the_same_target_answers_already_invited() {
+    fn a_repeated_invite_maps_already_invited() {
         let mut store = founded_with_members();
         store.characters.push(facts(DAVE, "Dave"));
-        invite_outbound(&store, in_world(GM), "Dave".into()).unwrap();
+        store.refuse_membership(GuildRefusal::AlreadyInvited);
         let outbound = invite_outbound(&store, in_world(GM), "Dave".into()).unwrap();
         assert_eq!(
             command_result_of(outbound),
@@ -2343,6 +2055,7 @@ mod tests {
     fn invite_without_the_invite_right_answers_no_permission() {
         let mut store = founded_with_members();
         store.characters.push(facts(DAVE, "Dave"));
+        store.refuse_membership(GuildRefusal::NoPermission);
         let outbound = invite_outbound(&store, in_world(BOB), "Dave".into()).unwrap();
         assert_eq!(
             command_result_of(outbound),
@@ -2357,6 +2070,7 @@ mod tests {
     fn invite_from_outside_any_guild_answers_not_in_guild() {
         let mut store = founded_with_members();
         store.characters.push(facts(DAVE, "Dave"));
+        store.refuse_membership(GuildRefusal::NotInGuild);
         let outbound = invite_outbound(&store, in_world(DAVE), "Bob".into()).unwrap();
         assert_eq!(
             command_result_of(outbound),
@@ -2410,12 +2124,12 @@ mod tests {
             command_result_of(outbound),
             (GuildCommand::Quit, GuildCommandResult::PlayerNoMoreInGuild)
         );
-        assert!(store.guild_member(BOB).unwrap().is_none());
     }
 
     #[test]
     fn leave_of_the_leader_with_company_answers_leader_cannot_leave() {
         let store = founded_with_members();
+        store.refuse_membership(GuildRefusal::LeaderCannotLeave);
         let outbound = leave_outbound(&store, in_world(GM)).unwrap();
         assert_eq!(
             command_result_of(outbound),
@@ -2424,7 +2138,6 @@ mod tests {
                 GuildCommandResult::GuildPermissionsOrLeader
             )
         );
-        assert!(store.guild_member(GM).unwrap().is_some());
     }
 
     #[test]
@@ -2433,7 +2146,6 @@ mod tests {
         run_guild_dot_command(&store, in_world(GM), ".guild create \"Solo\"").unwrap();
         let outbound = leave_outbound(&store, in_world(GM)).unwrap();
         assert!(outbound.is_empty());
-        assert!(store.guild_named("Solo").is_none());
     }
 
     #[test]
@@ -2451,8 +2163,9 @@ mod tests {
     }
 
     #[test]
-    fn remove_of_an_unknown_name_answers_player_not_in_guild() {
+    fn remove_of_an_unmatched_name_sends_guid_zero_and_maps_target_not_in_guild() {
         let store = founded_with_members();
+        store.refuse_membership(GuildRefusal::TargetNotInGuild);
         let outbound = named_member_op(
             &store,
             in_world(GM),
@@ -2461,6 +2174,10 @@ mod tests {
             |target_guid| GuildRequest::Remove { target_guid },
         )
         .unwrap();
+        assert_eq!(
+            store.ops.lock().unwrap().last().cloned(),
+            Some((GM, GuildRequest::Remove { target_guid: 0 }))
+        );
         assert_eq!(
             command_result_of(outbound),
             (
@@ -2482,12 +2199,16 @@ mod tests {
         )
         .unwrap();
         assert!(outbound.is_empty());
-        assert!(store.guild_member(BOB).unwrap().is_none());
+        assert_eq!(
+            store.ops.lock().unwrap().last().cloned(),
+            Some((GM, GuildRequest::Remove { target_guid: BOB }))
+        );
     }
 
     #[test]
     fn remove_without_the_remove_right_answers_no_permission() {
         let store = founded_with_members();
+        store.refuse_membership(GuildRefusal::NoPermission);
         let outbound = named_member_op(
             &store,
             in_world(BOB),
@@ -2508,6 +2229,7 @@ mod tests {
     #[test]
     fn removing_the_leader_answers_leader_cannot_leave() {
         let store = founded_with_members();
+        store.refuse_membership(GuildRefusal::LeaderCannotLeave);
         let outbound = named_member_op(
             &store,
             in_world(GM),
@@ -2528,10 +2250,7 @@ mod tests {
     #[test]
     fn removing_a_target_at_or_above_the_actors_rank_answers_rank_too_high() {
         let store = founded_with_members();
-        // Both promoted to Officer (rank 1, full Rank Rights): Bob holds REMOVE, but cannot reach
-        // a target at its own rank.
-        store.set_rank(BOB, 1);
-        store.set_rank(CAROL, 1);
+        store.refuse_membership(GuildRefusal::RankTooHigh);
         let outbound = named_member_op(
             &store,
             in_world(BOB),
@@ -2547,7 +2266,7 @@ mod tests {
     }
 
     #[test]
-    fn promote_succeeds_and_raises_the_targets_rank() {
+    fn promote_succeeds_and_replies_nothing() {
         let store = founded_with_members();
         let outbound = named_member_op(
             &store,
@@ -2558,16 +2277,16 @@ mod tests {
         )
         .unwrap();
         assert!(outbound.is_empty());
-        assert_eq!(store.guild_member(BOB).unwrap().unwrap().rank_id, 2);
+        assert_eq!(
+            store.ops.lock().unwrap().last().cloned(),
+            Some((GM, GuildRequest::Promote { target_guid: BOB }))
+        );
     }
 
     #[test]
     fn promoting_past_the_actors_reach_answers_rank_too_high() {
         let store = founded_with_members();
-        // Bob promoted to Officer (rank 1, holds PROMOTE) cannot promote Carol into rank 2: that
-        // is only one step above Bob's own rank plus one.
-        store.set_rank(BOB, 1);
-        store.set_rank(CAROL, 2);
+        store.refuse_membership(GuildRefusal::RankTooHigh);
         let outbound = named_member_op(
             &store,
             in_world(BOB),
@@ -2585,6 +2304,7 @@ mod tests {
     #[test]
     fn promoting_oneself_answers_target_is_self() {
         let store = founded_with_members();
+        store.refuse_membership(GuildRefusal::TargetIsSelf);
         let outbound = named_member_op(
             &store,
             in_world(GM),
@@ -2600,7 +2320,7 @@ mod tests {
     }
 
     #[test]
-    fn demote_succeeds_and_lowers_the_targets_rank() {
+    fn demote_succeeds_and_replies_nothing() {
         let store = founded_with_members();
         let outbound = named_member_op(
             &store,
@@ -2611,12 +2331,16 @@ mod tests {
         )
         .unwrap();
         assert!(outbound.is_empty());
-        assert_eq!(store.guild_member(BOB).unwrap().unwrap().rank_id, 4);
+        assert_eq!(
+            store.ops.lock().unwrap().last().cloned(),
+            Some((GM, GuildRequest::Demote { target_guid: BOB }))
+        );
     }
 
     #[test]
     fn demoting_the_guilds_lowest_rank_answers_rank_too_low() {
         let store = founded_with_members();
+        store.refuse_membership(GuildRefusal::RankTooLow);
         let outbound = named_member_op(
             &store,
             in_world(GM),
@@ -2643,14 +2367,16 @@ mod tests {
         )
         .unwrap();
         assert!(outbound.is_empty());
-        assert_eq!(store.guild_member(BOB).unwrap().unwrap().rank_id, 0);
-        assert_eq!(store.guild_member(GM).unwrap().unwrap().rank_id, 1);
-        assert_eq!(store.guild_named("Knights").unwrap().leader_guid, BOB);
+        assert_eq!(
+            store.ops.lock().unwrap().last().cloned(),
+            Some((GM, GuildRequest::SetLeader { target_guid: BOB }))
+        );
     }
 
     #[test]
     fn leader_by_a_non_leader_answers_no_permission() {
         let store = founded_with_members();
+        store.refuse_membership(GuildRefusal::NotLeader);
         let outbound = named_member_op(
             &store,
             in_world(BOB),
@@ -2680,13 +2406,12 @@ mod tests {
         )
         .unwrap();
         assert!(outbound.is_empty());
-        assert_eq!(store.guild_member(GM).unwrap().unwrap().rank_id, 0);
-        assert_eq!(store.guild_named("Knights").unwrap().leader_guid, GM);
     }
 
     #[test]
-    fn leader_of_an_unknown_name_answers_player_not_in_guild() {
+    fn leader_of_an_unmatched_name_sends_guid_zero_and_maps_target_not_in_guild() {
         let store = founded_with_members();
+        store.refuse_membership(GuildRefusal::TargetNotInGuild);
         let outbound = named_member_op(
             &store,
             in_world(GM),
@@ -2695,6 +2420,10 @@ mod tests {
             |target_guid| GuildRequest::SetLeader { target_guid },
         )
         .unwrap();
+        assert_eq!(
+            store.ops.lock().unwrap().last().cloned(),
+            Some((GM, GuildRequest::SetLeader { target_guid: 0 }))
+        );
         assert_eq!(
             command_result_of(outbound),
             (
@@ -2709,12 +2438,12 @@ mod tests {
         let store = founded_with_members();
         let outbound = disband_outbound(&store, in_world(GM)).unwrap();
         assert!(outbound.is_empty());
-        assert!(store.guild_named("Knights").is_none());
     }
 
     #[test]
     fn disband_by_a_non_leader_answers_no_permission() {
         let store = founded_with_members();
+        store.refuse_membership(GuildRefusal::NotLeader);
         let outbound = disband_outbound(&store, in_world(BOB)).unwrap();
         assert_eq!(
             command_result_of(outbound),
@@ -2723,13 +2452,12 @@ mod tests {
                 GuildCommandResult::GuildPermissionsOrLeader
             )
         );
-        assert!(store.guild_named("Knights").is_some());
     }
 
     #[test]
     fn disband_outside_a_guild_answers_not_in_guild() {
-        let mut store = founded_with_members();
-        store.characters.push(facts(DAVE, "Dave"));
+        let store = founded_with_members();
+        store.refuse_membership(GuildRefusal::NotInGuild);
         let outbound = disband_outbound(&store, in_world(DAVE)).unwrap();
         assert_eq!(
             command_result_of(outbound),
@@ -2754,11 +2482,17 @@ mod tests {
             )),
         );
         assert!(outbound.is_empty());
-        assert!(store
-            .invites
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|(target, ..)| *target == DAVE));
+        assert_eq!(
+            store.ops.lock().unwrap().last().cloned(),
+            Some((
+                GM,
+                GuildRequest::Invite {
+                    target_guid: DAVE,
+                    actor_team: lyracore_shared::faction::TEAM_ALLIANCE,
+                    target_team: lyracore_shared::faction::TEAM_ALLIANCE,
+                    target_ignores_actor: false,
+                }
+            ))
+        );
     }
 }

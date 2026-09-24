@@ -304,6 +304,39 @@ mod tests {
         assert_eq!(motd, expected);
     }
 
+    #[test]
+    fn joined_writes_one_string_then_the_new_members_guid() {
+        let (opcode, joined) = build_guild_event_raw(
+            lyracore_shared::guild::event_kind::JOINED,
+            &["Bob".to_string()],
+            0x0102,
+        );
+        assert_eq!(opcode, 0x0092);
+        let mut expected = vec![3, 1];
+        expected.extend_from_slice(b"Bob\0");
+        expected.extend_from_slice(&0x0102u64.to_le_bytes());
+        assert_eq!(joined, expected);
+    }
+
+    #[test]
+    fn promotion_writes_the_actor_target_and_new_rank_name_with_no_trailing_guid() {
+        let (opcode, promotion) = build_guild_event_raw(
+            lyracore_shared::guild::event_kind::PROMOTION,
+            &[
+                "Leader".to_string(),
+                "Bob".to_string(),
+                "Member".to_string(),
+            ],
+            0,
+        );
+        assert_eq!(opcode, 0x0092);
+        let mut expected = vec![0, 3];
+        expected.extend_from_slice(b"Leader\0");
+        expected.extend_from_slice(b"Bob\0");
+        expected.extend_from_slice(b"Member\0");
+        assert_eq!(promotion, expected);
+    }
+
     fn self_create(guild_id: u32, guild_rank: u32) -> wow_world_messages::vanilla::UpdatePlayer {
         let entity = EntityView {
             guid: 1,
