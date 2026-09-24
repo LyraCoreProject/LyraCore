@@ -907,6 +907,10 @@ parity_test!(parity_game_item_instance, "game_item_instance", lyracore_module::I
     guid, entry, owner_identity, owner_guid, slot, stack_count, durability, created_at,
     enchant_id, soulbound,
     random_property_id,
+    item_text_id,
+});
+parity_test!(parity_game_item_text, "game_item_text", lyracore_module::ItemText, bindings::item_text_type::ItemText, {
+    id, text,
 });
 parity_test!(parity_game_corpse_loot, "game_corpse_loot", lyracore_module::CorpseLoot, bindings::corpse_loot_type::CorpseLoot, {
     id, corpse_guid, slot, item_entry, count, quest_only, reserved_for, designated_looter_guid,
@@ -1282,6 +1286,7 @@ const MANIFEST_TABLES: &[&str] = &[
     "game_mail",
     "game_mail_escrow",
     "game_mail_arrival",
+    "game_item_text",
     "game_auction",
     "game_auction_bid_decision",
     "game_auction_bid_hold",

@@ -50,10 +50,40 @@ impl Coordinator {
                     max_durability: tmpl.max_durability,
                     container_slots: tmpl.container_slots,
                     random_property_id: i.random_property_id,
+                    item_text_id: i.item_text_id,
                 })
             })
             .collect();
         Ok(items)
+    }
+
+    /// Does `owner_guid` hold an item carrying `item_text_id`? `CMSG_ITEM_TEXT_QUERY`'s ownership
+    /// Gate: a client cannot use this to probe what anyone else holds, since the answer is a bare
+    /// bool. Read from the privileged cache.
+    ///
+    /// `hint_item_guid` is the wire's own second field — a bag item guid when the client is
+    /// reading that item's tooltip (`cm:MailHandler.cpp:630-646`), and vmangos always sends it for
+    /// this shape of the query. A PK lookup answers in O(1); a miss (item deleted, wrong id, or a
+    /// crafted query) answers `false` rather than falling back to a table-wide scan — this runs on
+    /// every such query, including ones for an id that names nothing, and the SDK exposes no
+    /// owner-keyed index to narrow it by.
+    pub fn owns_item_with_text(
+        &self,
+        owner_guid: u64,
+        item_text_id: u32,
+        hint_item_guid: u64,
+    ) -> Result<bool> {
+        if item_text_id == 0 || hint_item_guid == 0 {
+            return Ok(false);
+        }
+        let guard = self.0.coord();
+        let db = &guard.conn.db;
+        let owns = db
+            .game_item_instance()
+            .guid()
+            .find(&hint_item_guid)
+            .is_some_and(|item| item.owner_guid == owner_guid && item.item_text_id == item_text_id);
+        Ok(owns)
     }
 
     /// Bag slot of the item instance with `item_guid`. Reads from the coordinator's privileged cache

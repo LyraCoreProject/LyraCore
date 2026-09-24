@@ -232,6 +232,7 @@ impl ItemStoragePlan {
                 enchant_id: 0,
                 soulbound,
                 random_property_id,
+                item_text_id: 0, // a plan-based grant is an ordinary item, never a Letter Copy
             });
             count -= take;
         }
@@ -282,6 +283,7 @@ mod tests {
             enchant_id: 0,
             soulbound: false,
             random_property_id: 0,
+            item_text_id: 0,
         }
     }
 

@@ -3184,6 +3184,36 @@ impl Coordinator {
         )
     }
 
+    /// `realm_mail_copy_text` — Letter Copy step 1, against the database THIS handle points at.
+    /// Same trust shape as `mail_mark_read`: operator-gated, `recipient_guid` passed explicitly.
+    pub fn mail_copy_text(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "realm_mail_copy_text",
+            realm_mail_copy_text_then(self.session_actor(recipient_guid), mail_id)
+        )
+    }
+
+    /// `gw_mail_grant_letter` — Letter Copy step 2, on the PAYEE's own handle: grants one Plain
+    /// Letter carrying `item_text_id`.
+    pub fn mail_grant_letter(&self, payee_guid: u64, item_text_id: u32) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "gw_mail_grant_letter",
+            gw_mail_grant_letter_then(self.session_actor(payee_guid), item_text_id)
+        )
+    }
+
+    /// `realm_mail_mark_letter_granted` — Letter Copy step 3, against the database THIS handle
+    /// points at: the durable record that the Home Shard grant landed.
+    pub fn mail_mark_letter_granted(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "realm_mail_mark_letter_granted",
+            realm_mail_mark_letter_granted_then(self.session_actor(recipient_guid), mail_id)
+        )
+    }
+
     /// `realm_mail_fence` — step 1 of a sharded SEND, on the SENDER's own handle: the postage plus
     /// the attached coin leave the purse into an escrow row keyed by the caller-chosen `escrow_id`.
     #[allow(clippy::too_many_arguments)]

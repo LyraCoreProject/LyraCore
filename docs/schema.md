@@ -72,7 +72,7 @@ grep -rn '^#\[table(' module/src --include='*.rs' | wc -l   # 275 on 2026-09-24
 | Combat / threat / duel | 10 | 4 | `combat/engage.rs`, `combat/death.rs`, `threat.rs`, `duel.rs` |
 | Spell / aura | 20 | 10 | `spell/tables.rs`, `spell/stacking.rs` |
 | Quest | 12 | 8 | `quest.rs` |
-| Item / vendor / trade / mail | 16 | 5 | `items/tables.rs`, `trade.rs`, `mail.rs`, `mail_catalogue.rs`, `mail_escrow.rs`, `mail_timer.rs` |
+| Item / vendor / trade / mail | 17 | 5 | `items/tables.rs`, `trade.rs`, `mail.rs`, `mail_catalogue.rs`, `mail_escrow.rs`, `mail_timer.rs`, `mail_text.rs` |
 | Auction house | 8 | 2 | `auction.rs` |
 | Creature (template, spawn, AI, pet, trainer) | 42 | 17 | `creatures/*`, `trainer.rs` |
 | GameObject | 9 | 6 | `gameobject.rs`, `go_model.rs` |
@@ -343,6 +343,12 @@ at the expiry of every other Mail. At expiry the timer runs Mail Expiry: it retu
 Mail that still carries an item, in place, and deletes every other Mail with its copper. Private
 `game_mail_arrival` is the Mail Arrival event: one row each time a Mail becomes visible to its
 recipient, reaped by the event GC.
+
+Private `game_item_text` (`module/src/mail_text.rs`) is a Letter Copy's durable text, keyed by its
+mail id narrowed to u32. `mail_text::apply_copy_text` sets `game_mail.check_flags`' COPIED bit and
+files the row in the same reducer, so a made-permanent Mail and its item text always agree. The row
+outlives the Mail that made it — nothing reaps `game_item_text`. `game_item_instance` carries the
+matching `item_text_id` END-appended column (0 for every item that is not a copied letter).
 
 ### Auction listing state (`module/src/auction.rs`)
 

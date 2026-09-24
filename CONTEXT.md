@@ -676,6 +676,14 @@ back as a Returned Mail. The Gateway relays it as `SMSG_RECEIVED_MAIL` to a reci
 on any Shard. An offline recipient learns of the Mail from the unread poll at the next login.
 _Avoid_: new mail notification, mail push
 
+**Letter Copy**:
+A Plain Letter in the bags that carries a Mail's text. Made by `CMSG_MAIL_CREATE_TEXT_ITEM` from a
+delivered Mail with a body, once. The Plain Letter sells for 0, so making one is not a value flow.
+
+**Item Text**:
+Text readable from an item or a Mail, keyed by text id. A Letter Copy's text outlives the Mail that
+made it.
+
 ### Auctions
 
 **Settlement**:

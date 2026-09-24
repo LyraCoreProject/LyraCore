@@ -225,6 +225,13 @@ pub struct ItemInstance {
     pub soulbound: bool,
     #[default(0)]
     pub random_property_id: u32,
+    /// `ITEM_FIELD_ITEM_TEXT_ID` — nonzero on a Letter Copy's Plain Letter (the mail id narrowed
+    /// to u32, `lyracore_shared::mail::item_text_id_for`). Zero means the item carries no readable
+    /// text, true of every item that is not a copied letter.
+    /// END-appended + `#[default(0u32)]` → additive auto-migration (every existing item reads no
+    /// text, baseline-safe).
+    #[default(0u32)]
+    pub item_text_id: u32,
 }
 
 // Character-owned sweeps: items are deleted on character delete, re-owned (identity re-stamp) on a

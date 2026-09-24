@@ -684,6 +684,12 @@ struct InMemoryStore {
     /// Delivery/payout receipts on THIS database, `(escrow_id, recipient or payee)` — the
     /// idempotency key that makes a replayed commit or payout a no-op.
     mail_receipts: std::sync::Mutex<Vec<(u64, u64)>>,
+    /// `game_item_text` on THIS database: `(item_text_id, text)`. Filed by `mail_copy_text`, read
+    /// back by `item_text` — the mail plane's half of a Letter Copy.
+    item_texts: std::sync::Mutex<Vec<(u32, String)>>,
+    /// Plain Letters `mail_grant_letter` granted on THIS database: `(payee_guid, item_text_id)`.
+    /// Not `mail_items` — a Letter Copy mints a fresh item, it never moves one out of a mail row.
+    granted_letters: std::sync::Mutex<Vec<(u64, u32)>>,
     /// The mail-escrow step to fail on THIS database — a gateway killed before that step's
     /// transaction committed. `transfer`'s `kill_at` for the mail drive, and a `Mutex` because a
     /// re-drive test has to bring the database back up before driving again.
@@ -2228,6 +2234,105 @@ impl WorldStore for InMemoryStore {
             return Err(anyhow!(lyracore_shared::mail::INVENTORY_FULL));
         }
         Ok(())
+    }
+    /// Models `mail_text::apply_copy_text`: sets COPIED and files the body as item text, on the
+    /// database that owns the mail row. Refused for a mail that is not the caller's, is not
+    /// delivered, has no body, or is already GRANTED — the same Gates the plan function pins. A
+    /// replay before GRANTED is set is `Ok`, and the text insert is skipped when the id already has
+    /// a row (a returned mail keeps its id, so a second recipient's copy can reuse it).
+    fn mail_copy_text(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
+        self.rec("mail_copy_text");
+        let mut mails = self.mails.lock().unwrap();
+        let now = mail::now_secs();
+        let Some((_, m)) = mails
+            .iter_mut()
+            .find(|(to, m)| *to == recipient_guid && m.id == mail_id && m.is_delivered(now))
+        else {
+            return Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL));
+        };
+        if m.body.is_empty() {
+            return Err(anyhow!("mail: this mail has no text to copy"));
+        }
+        if m.check_flags & lyracore_shared::mail::CHECK_FLAG_LETTER_GRANTED != 0 {
+            return Err(anyhow!("mail: this letter was already made permanent"));
+        }
+        m.check_flags |= lyracore_shared::mail::CHECK_MASK_COPIED;
+        let text_id = lyracore_shared::mail::item_text_id_for(m.id, &m.body);
+        let text = m.body.clone();
+        drop(mails);
+        let mut texts = self.item_texts.lock().unwrap();
+        if !texts.iter().any(|(id, _)| *id == text_id) {
+            texts.push((text_id, text));
+        }
+        Ok(())
+    }
+    /// Models `items::grant_letter_item`: one Plain Letter, refused by the same full-bag fixture
+    /// every other grant uses. A no-op when the payee already holds an item carrying `item_text_id`
+    /// — the crash-window guard for a retry between this call landing and `mail_mark_letter_granted`
+    /// recording that it did, not the durable "already got one" record (that is GRANTED, on the mail
+    /// row).
+    fn mail_grant_letter(&self, payee_guid: u64, item_text_id: u32) -> Result<()> {
+        self.rec("mail_grant_letter");
+        if self
+            .granted_letters
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|&(guid, id)| guid == payee_guid && id == item_text_id)
+        {
+            return Ok(());
+        }
+        if self.bags_full.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(anyhow!(lyracore_shared::mail::INVENTORY_FULL));
+        }
+        self.granted_letters
+            .lock()
+            .unwrap()
+            .push((payee_guid, item_text_id));
+        Ok(())
+    }
+    /// Models `mail_text::apply_mark_letter_granted`: sets GRANTED on the mail row. Once this lands,
+    /// `mail_copy_text` refuses for good, whether or not the granted item still exists.
+    fn mail_mark_letter_granted(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
+        self.rec("mail_mark_letter_granted");
+        let mut mails = self.mails.lock().unwrap();
+        let Some((_, m)) = mails
+            .iter_mut()
+            .find(|(to, m)| *to == recipient_guid && m.id == mail_id)
+        else {
+            return Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL));
+        };
+        m.check_flags |= lyracore_shared::mail::CHECK_FLAG_LETTER_GRANTED;
+        Ok(())
+    }
+    /// Models the Coordinator's `item_text`: a PK read of `game_item_text` on THIS database.
+    fn item_text(&self, item_text_id: u32) -> Result<Option<String>> {
+        self.rec("item_text");
+        Ok(self
+            .item_texts
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(id, _)| *id == item_text_id)
+            .map(|(_, text)| text.clone()))
+    }
+    /// Models the Coordinator's `owns_item_with_text`: does `owner_guid` hold a granted letter
+    /// carrying `item_text_id`? The fake has no item-guid fixture to answer `hint_item_guid`'s fast
+    /// path distinctly, so both routes resolve through the same `granted_letters` lookup.
+    fn owns_item_with_text(
+        &self,
+        owner_guid: u64,
+        item_text_id: u32,
+        _hint_item_guid: u64,
+    ) -> Result<bool> {
+        self.rec("owns_item_with_text");
+        Ok(item_text_id != 0
+            && self
+                .granted_letters
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|&(guid, id)| guid == owner_guid && id == item_text_id))
     }
     /// Models the module's `apply_take_money`: the credit and the clear are one transaction, so a
     /// second take finds an empty row.
@@ -6531,6 +6636,7 @@ fn login_with_resident_items_and_reputation_emits_no_gain_feedback() {
             max_durability: 20,
             container_slots: 0,
             random_property_id: 0,
+            item_text_id: 0,
         }],
         reputations: vec![(19, 3175, false)],
         ..tester_store(7)
@@ -7865,6 +7971,7 @@ fn quest_choose_reward_relays_inventory_before_completion_over_the_cipher() {
         max_durability: 20,
         container_slots: 0,
         random_property_id: 0,
+        item_text_id: 0,
     };
     s.turn_in_reward_item = Some(reward_item.clone());
     let store = std::sync::Arc::new(s);

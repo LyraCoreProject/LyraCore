@@ -56,18 +56,28 @@ pub(crate) fn handle_mail<St: WorldStore + ?Sized>(
             )?;
         }
         // The letter body. It does not ride the list packet: the list advertises the mail's own id
-        // as an `item_text_id` and the client fetches the text here. A body it cannot have (another
-        // player's mail, a deleted one) answers with EMPTY text rather than silence — the client has
+        // as an `item_text_id` and the client fetches the text here — resolved by `item_text_id`,
+        // never trusted on the second field alone (a bag item guid when reading an item, a mail id
+        // otherwise; cm:MailHandler.cpp:630-646). That field is only a HINT the ownership check may
+        // use for a cheap lookup. Answered only for a caller who holds an item carrying the id or
+        // owns the mail it names — ids are small and sequential, so answering a bare id would let a
+        // crafted query read anyone's copied letter. A body the caller cannot have (someone else's
+        // mail or item, a deleted mail) answers with EMPTY text rather than silence — the client has
         // already opened the letter and is waiting on this packet.
         ClientOpcodeMessage::CMSG_ITEM_TEXT_QUERY(c) => {
-            let body = mail::letter_body(store, social::self_guid(conn), u64::from(c.mail_id))
-                .unwrap_or_else(|e| {
-                    log::debug!(
-                        "world: item text query refused (account {}): {e}",
-                        conn.account_id
-                    );
-                    None
-                });
+            let body = mail::item_text(
+                store,
+                social::self_guid(conn),
+                c.item_text_id,
+                u64::from(c.mail_id),
+            )
+            .unwrap_or_else(|e| {
+                log::debug!(
+                    "world: item text query refused (account {}): {e}",
+                    conn.account_id
+                );
+                None
+            });
             send(
                 tx,
                 Outbound::One(ServerOpcodeMessage::SMSG_ITEM_TEXT_QUERY_RESPONSE(
@@ -265,6 +275,41 @@ pub(crate) fn handle_mail<St: WorldStore + ?Sized>(
                     tx,
                     Outbound::One(ServerOpcodeMessage::SMSG_SEND_MAIL_RESULT(Box::new(
                         codec::build_mail_send_result(result2),
+                    ))),
+                )?;
+            }
+        }
+        // Turn a delivered letter's text into a Plain Letter in the bags (the client's letter
+        // button, offered on a takeable mail that is not yet COPIED). Bags-full and every other
+        // refusal are the two outcomes the player can act on, so both ack through
+        // `SMSG_SEND_MAIL_RESULT`/MadePermanent; the mailbox gate alone stays silent, matching the
+        // other arms.
+        ClientOpcodeMessage::CMSG_MAIL_CREATE_TEXT_ITEM(c) => {
+            let self_guid = social::self_guid(conn);
+            let made =
+                match mail::copy_letter(store, self_guid, c.mailbox.guid(), u64::from(c.mail_id)) {
+                    Ok(()) => Some(Ok(())),
+                    Err(e) => {
+                        log::debug!(
+                            "world: letter copy refused (account {}): {e}",
+                            conn.account_id
+                        );
+                        match e {
+                            mail::CopyLetterRefusal::NoMailbox(_) => None,
+                            mail::CopyLetterRefusal::BagsFull(_) => {
+                                Some(Err(codec::MailMadePermanentError::BagsFull))
+                            }
+                            mail::CopyLetterRefusal::Other(_) => {
+                                Some(Err(codec::MailMadePermanentError::Other))
+                            }
+                        }
+                    }
+                };
+            if let Some(made) = made {
+                send(
+                    tx,
+                    Outbound::One(ServerOpcodeMessage::SMSG_SEND_MAIL_RESULT(Box::new(
+                        codec::build_mail_made_permanent_result(c.mail_id, made),
                     ))),
                 )?;
             }

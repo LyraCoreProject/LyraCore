@@ -77,16 +77,26 @@ pub(crate) enum Attach {
     Nothing,
     NotYours,
     Soulbound,
+    /// A Letter Copy's Plain Letter (`item_text_id != 0`). `ItemSnapshot` carries no text id yet,
+    /// so an attached one would arrive unreadable — a stopgap until a later change carries the id
+    /// through a mail attachment.
+    HasText,
     Detach,
 }
-pub(crate) fn plan_attach(item_guid: u64, owned: Option<(u64, bool)>, sender_guid: u64) -> Attach {
+/// `owned` is `(owner_guid, soulbound, item_text_id)` off the live row, when one exists.
+pub(crate) fn plan_attach(
+    item_guid: u64,
+    owned: Option<(u64, bool, u32)>,
+    sender_guid: u64,
+) -> Attach {
     if item_guid == 0 {
         return Attach::Nothing;
     }
     match owned {
         None => Attach::NotYours,
-        Some((owner_guid, _)) if owner_guid != sender_guid => Attach::NotYours,
-        Some((_, true)) => Attach::Soulbound,
+        Some((owner_guid, ..)) if owner_guid != sender_guid => Attach::NotYours,
+        Some((_, true, _)) => Attach::Soulbound,
+        Some((_, _, item_text_id)) if item_text_id != 0 => Attach::HasText,
         Some(_) => Attach::Detach,
     }
 }
@@ -99,12 +109,15 @@ pub(crate) fn detach_item(
     let owned = items.guid().find(item_guid);
     match plan_attach(
         item_guid,
-        owned.as_ref().map(|i| (i.owner_guid, i.soulbound)),
+        owned
+            .as_ref()
+            .map(|i| (i.owner_guid, i.soulbound, i.item_text_id)),
         sender_guid,
     ) {
         Attach::Nothing => return Ok(ItemSnapshot::default()),
         Attach::NotYours => return Err(lyracore_shared::mail::NOT_YOUR_ITEM.to_string()),
         Attach::Soulbound => return Err(lyracore_shared::mail::ITEM_IS_SOULBOUND.to_string()),
+        Attach::HasText => return Err(lyracore_shared::mail::ITEM_HAS_TEXT.to_string()),
         Attach::Detach => {}
     }
     let inst = owned.expect("Detach is only reachable with a row");
@@ -713,21 +726,34 @@ mod tests {
 
     #[test]
     fn attaching_an_item_the_sender_does_not_own_is_refused() {
-        assert_eq!(plan_attach(4, Some((7, false)), 7), Attach::Detach);
-        assert_eq!(plan_attach(4, Some((8, false)), 7), Attach::NotYours);
+        assert_eq!(plan_attach(4, Some((7, false, 0)), 7), Attach::Detach);
+        assert_eq!(plan_attach(4, Some((8, false, 0)), 7), Attach::NotYours);
         assert_eq!(plan_attach(4, None, 7), Attach::NotYours);
     }
 
     #[test]
     fn a_soulbound_instance_is_refused_and_an_unworn_bind_on_equip_item_is_mailable() {
-        assert_eq!(plan_attach(4, Some((7, true)), 7), Attach::Soulbound);
-        assert_eq!(plan_attach(4, Some((7, false)), 7), Attach::Detach);
+        assert_eq!(plan_attach(4, Some((7, true, 0)), 7), Attach::Soulbound);
+        assert_eq!(plan_attach(4, Some((7, false, 0)), 7), Attach::Detach);
+    }
+
+    #[test]
+    fn a_letter_copys_plain_letter_is_refused_to_attach() {
+        // The mail attachment snapshot carries no text id yet, so a Plain Letter would arrive
+        // unreadable — refused the same way a soulbound item is, until a later change carries
+        // the id through.
+        assert_eq!(plan_attach(4, Some((7, false, 1)), 7), Attach::HasText);
+        assert_eq!(
+            plan_attach(4, Some((7, true, 1)), 7),
+            Attach::Soulbound,
+            "soulbound is checked first — either reason refuses, but the message should be exact"
+        );
     }
 
     #[test]
     fn item_guid_zero_means_no_attachment_rather_than_a_missing_item() {
         assert_eq!(plan_attach(0, None, 7), Attach::Nothing);
-        assert_eq!(plan_attach(0, Some((8, true)), 7), Attach::Nothing);
+        assert_eq!(plan_attach(0, Some((8, true, 0)), 7), Attach::Nothing);
     }
 
     #[test]

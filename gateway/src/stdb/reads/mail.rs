@@ -112,6 +112,20 @@ impl Coordinator {
             .collect())
     }
 
+    /// A copied letter's text, read from `game_item_text` on THIS handle's database. Private table,
+    /// read through the owner token, by its PK — the same shape `mailbox_in_range` uses to resolve
+    /// a gameobject.
+    pub fn item_text(&self, item_text_id: u32) -> Result<Option<String>> {
+        let guard = self.0.coord();
+        Ok(guard
+            .conn
+            .db
+            .game_item_text()
+            .id()
+            .find(&item_text_id)
+            .map(|t| t.text))
+    }
+
     /// Is `player_guid` standing at the mailbox `mailbox_guid` names?
     ///
     /// A PK lookup on `game_gameobject`, then the same map/instance/range check

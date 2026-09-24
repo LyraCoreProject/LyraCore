@@ -362,6 +362,10 @@ struct ListingItem {
     mailable: bool,
     snapshot: crate::items::ItemSnapshot,
     sell_price: u32,
+    /// `ITEM_FIELD_ITEM_TEXT_ID` off the live row, not the snapshot — `ItemSnapshot` does not
+    /// carry it yet, so a listed-and-sold Plain Letter would arrive unreadable. Stopgap until a
+    /// later change carries the id through a listing: refuse it here instead.
+    item_text_id: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1583,6 +1587,7 @@ impl ListingSource for CtxSource<'_> {
                 .is_ok(),
             snapshot: crate::items::ItemSnapshot::from(&item),
             sell_price: template.sell_price,
+            item_text_id: item.item_text_id,
         })
     }
 
@@ -4229,6 +4234,7 @@ fn prepare_listing(
         || !item.mailable
         || item.snapshot.stack_count == 0
         || item.snapshot.soulbound
+        || item.item_text_id != 0
     {
         return Err(AuctionRefusal::ItemNotFound);
     }
@@ -4549,6 +4555,7 @@ mod tests {
                 random_property_id: 117,
             },
             sell_price: 100,
+            item_text_id: 0,
         }
     }
 
@@ -4638,6 +4645,16 @@ mod tests {
         not_mailable.mailable = false;
         assert_eq!(
             prepare_listing(Some(&not_mailable), 7, 10, terms(), policy()),
+            Err(AuctionRefusal::ItemNotFound)
+        );
+
+        // Stopgap: a Plain Letter's readable text does not survive a listing yet
+        // (`ItemSnapshot` carries no text id), so refuse it the same way a soulbound item is
+        // refused, rather than let it sell and arrive blank.
+        let mut readable = item(23);
+        readable.item_text_id = 1;
+        assert_eq!(
+            prepare_listing(Some(&readable), 7, 10, terms(), policy()),
             Err(AuctionRefusal::ItemNotFound)
         );
 

@@ -3442,6 +3442,7 @@ pub(crate) fn item_instance_insert_outbound(
         max_durability,
         container_slots,
         random_property_id: row.random_property_id,
+        item_text_id: row.item_text_id,
     };
     out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
         Box::new(codec::build_item_create_object(&view)),

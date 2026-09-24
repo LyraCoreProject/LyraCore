@@ -516,6 +516,7 @@ pub mod game_item_instance_table;
 pub mod game_item_property_weight_table;
 pub mod game_item_random_property_table;
 pub mod game_item_template_table;
+pub mod game_item_text_table;
 pub mod game_level_stats_table;
 pub mod game_levelup_event_table;
 pub mod game_live_pet_kind_table;
@@ -753,6 +754,7 @@ pub mod gw_learn_talent_reducer;
 pub mod gw_loot_master_give_reducer;
 pub mod gw_loot_money_reducer;
 pub mod gw_loot_roll_reducer;
+pub mod gw_mail_grant_letter_reducer;
 pub mod gw_move_item_reducer;
 pub mod gw_move_type;
 pub mod gw_movement_batch_reducer;
@@ -826,6 +828,7 @@ pub mod item_instance_type;
 pub mod item_property_weight_type;
 pub mod item_random_property_type;
 pub mod item_template_type;
+pub mod item_text_type;
 pub mod kill_condition_type;
 pub mod kill_credit_type;
 pub mod level_stats_type;
@@ -932,10 +935,12 @@ pub mod realm_guild_op_reducer;
 pub mod realm_loot_op_reducer;
 pub mod realm_mail_commit_reducer;
 pub mod realm_mail_confirm_delivery_reducer;
+pub mod realm_mail_copy_text_reducer;
 pub mod realm_mail_delete_reducer;
 pub mod realm_mail_fence_reducer;
 pub mod realm_mail_item_payout_reducer;
 pub mod realm_mail_item_room_reducer;
+pub mod realm_mail_mark_letter_granted_reducer;
 pub mod realm_mail_mark_read_reducer;
 pub mod realm_mail_payout_reducer;
 pub mod realm_mail_return_reducer;
@@ -1631,6 +1636,7 @@ pub use game_item_instance_table::*;
 pub use game_item_property_weight_table::*;
 pub use game_item_random_property_table::*;
 pub use game_item_template_table::*;
+pub use game_item_text_table::*;
 pub use game_level_stats_table::*;
 pub use game_levelup_event_table::*;
 pub use game_live_pet_kind_table::*;
@@ -1868,6 +1874,7 @@ pub use gw_learn_talent_reducer::gw_learn_talent;
 pub use gw_loot_master_give_reducer::gw_loot_master_give;
 pub use gw_loot_money_reducer::gw_loot_money;
 pub use gw_loot_roll_reducer::gw_loot_roll;
+pub use gw_mail_grant_letter_reducer::gw_mail_grant_letter;
 pub use gw_move_item_reducer::gw_move_item;
 pub use gw_move_type::GwMove;
 pub use gw_movement_batch_reducer::gw_movement_batch;
@@ -1941,6 +1948,7 @@ pub use item_instance_type::ItemInstance;
 pub use item_property_weight_type::ItemPropertyWeight;
 pub use item_random_property_type::ItemRandomProperty;
 pub use item_template_type::ItemTemplate;
+pub use item_text_type::ItemText;
 pub use kill_condition_type::KillCondition;
 pub use kill_credit_type::KillCredit;
 pub use level_stats_type::LevelStats;
@@ -2047,10 +2055,12 @@ pub use realm_guild_op_reducer::realm_guild_op;
 pub use realm_loot_op_reducer::realm_loot_op;
 pub use realm_mail_commit_reducer::realm_mail_commit;
 pub use realm_mail_confirm_delivery_reducer::realm_mail_confirm_delivery;
+pub use realm_mail_copy_text_reducer::realm_mail_copy_text;
 pub use realm_mail_delete_reducer::realm_mail_delete;
 pub use realm_mail_fence_reducer::realm_mail_fence;
 pub use realm_mail_item_payout_reducer::realm_mail_item_payout;
 pub use realm_mail_item_room_reducer::realm_mail_item_room;
+pub use realm_mail_mark_letter_granted_reducer::realm_mail_mark_letter_granted;
 pub use realm_mail_mark_read_reducer::realm_mail_mark_read;
 pub use realm_mail_payout_reducer::realm_mail_payout;
 pub use realm_mail_return_reducer::realm_mail_return;
@@ -3461,6 +3471,10 @@ pub enum Reducer {
         loot_slot: u32,
         vote: u8,
     },
+    GwMailGrantLetter {
+        request_actor: SessionActor,
+        item_text_id: u32,
+    },
     GwMoveItem {
         request_actor: SessionActor,
         from_slot: u8,
@@ -3877,6 +3891,10 @@ pub enum Reducer {
         escrow_id: u64,
         request_actor: SessionActor,
     },
+    RealmMailCopyText {
+        request_actor: SessionActor,
+        mail_id: u64,
+    },
     RealmMailDelete {
         request_actor: SessionActor,
         mail_id: u64,
@@ -3907,6 +3925,10 @@ pub enum Reducer {
     },
     RealmMailItemRoom {
         request_actor: SessionActor,
+    },
+    RealmMailMarkLetterGranted {
+        request_actor: SessionActor,
+        mail_id: u64,
     },
     RealmMailMarkRead {
         request_actor: SessionActor,
@@ -4460,6 +4482,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwLootMasterGive { .. } => "gw_loot_master_give",
             Reducer::GwLootMoney { .. } => "gw_loot_money",
             Reducer::GwLootRoll { .. } => "gw_loot_roll",
+            Reducer::GwMailGrantLetter { .. } => "gw_mail_grant_letter",
             Reducer::GwMoveItem { .. } => "gw_move_item",
             Reducer::GwMovementBatch { .. } => "gw_movement_batch",
             Reducer::GwMovementUpdate { .. } => "gw_movement_update",
@@ -4554,10 +4577,12 @@ impl __sdk::Reducer for Reducer {
             Reducer::RealmLootOp { .. } => "realm_loot_op",
             Reducer::RealmMailCommit { .. } => "realm_mail_commit",
             Reducer::RealmMailConfirmDelivery { .. } => "realm_mail_confirm_delivery",
+            Reducer::RealmMailCopyText { .. } => "realm_mail_copy_text",
             Reducer::RealmMailDelete { .. } => "realm_mail_delete",
             Reducer::RealmMailFence { .. } => "realm_mail_fence",
             Reducer::RealmMailItemPayout { .. } => "realm_mail_item_payout",
             Reducer::RealmMailItemRoom { .. } => "realm_mail_item_room",
+            Reducer::RealmMailMarkLetterGranted { .. } => "realm_mail_mark_letter_granted",
             Reducer::RealmMailMarkRead { .. } => "realm_mail_mark_read",
             Reducer::RealmMailPayout { .. } => "realm_mail_payout",
             Reducer::RealmMailReturn { .. } => "realm_mail_return",
@@ -6803,6 +6828,13 @@ Reducer::GwIgnoreTrade{
                 loot_slot: loot_slot.clone(),
                 vote: vote.clone(),
 }),
+            Reducer::GwMailGrantLetter{
+                request_actor,
+                item_text_id,
+}             => __sats::bsatn::to_vec(&gw_mail_grant_letter_reducer::GwMailGrantLetterArgs {
+                request_actor: request_actor.clone(),
+                item_text_id: item_text_id.clone(),
+}),
             Reducer::GwMoveItem{
                 request_actor,
                 from_slot,
@@ -7552,6 +7584,13 @@ Reducer::PlayerbotsFixtureCommandApply{
                 escrow_id: escrow_id.clone(),
                 request_actor: request_actor.clone(),
 }),
+            Reducer::RealmMailCopyText{
+                request_actor,
+                mail_id,
+}             => __sats::bsatn::to_vec(&realm_mail_copy_text_reducer::RealmMailCopyTextArgs {
+                request_actor: request_actor.clone(),
+                mail_id: mail_id.clone(),
+}),
             Reducer::RealmMailDelete{
                 request_actor,
                 mail_id,
@@ -7609,6 +7648,13 @@ Reducer::PlayerbotsFixtureCommandApply{
                 request_actor,
 }             => __sats::bsatn::to_vec(&realm_mail_item_room_reducer::RealmMailItemRoomArgs {
                 request_actor: request_actor.clone(),
+}),
+            Reducer::RealmMailMarkLetterGranted{
+                request_actor,
+                mail_id,
+}             => __sats::bsatn::to_vec(&realm_mail_mark_letter_granted_reducer::RealmMailMarkLetterGrantedArgs {
+                request_actor: request_actor.clone(),
+                mail_id: mail_id.clone(),
 }),
             Reducer::RealmMailMarkRead{
                 request_actor,
@@ -8169,6 +8215,7 @@ pub struct DbUpdate {
     game_item_property_weight: __sdk::TableUpdate<ItemPropertyWeight>,
     game_item_random_property: __sdk::TableUpdate<ItemRandomProperty>,
     game_item_template: __sdk::TableUpdate<ItemTemplate>,
+    game_item_text: __sdk::TableUpdate<ItemText>,
     game_level_stats: __sdk::TableUpdate<LevelStats>,
     game_levelup_event: __sdk::TableUpdate<LevelupEvent>,
     game_live_pet_kind: __sdk::TableUpdate<LivePetKind>,
@@ -8819,6 +8866,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_item_template" => db_update
                     .game_item_template
                     .append(game_item_template_table::parse_table_update(table_update)?),
+                "game_item_text" => db_update
+                    .game_item_text
+                    .append(game_item_text_table::parse_table_update(table_update)?),
                 "game_level_stats" => db_update
                     .game_level_stats
                     .append(game_level_stats_table::parse_table_update(table_update)?),
@@ -9956,6 +10006,9 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.game_item_template = cache
             .apply_diff_to_table::<ItemTemplate>("game_item_template", &self.game_item_template)
             .with_updates_by_pk(|row| &row.entry);
+        diff.game_item_text = cache
+            .apply_diff_to_table::<ItemText>("game_item_text", &self.game_item_text)
+            .with_updates_by_pk(|row| &row.id);
         diff.game_level_stats = cache
             .apply_diff_to_table::<LevelStats>("game_level_stats", &self.game_level_stats)
             .with_updates_by_pk(|row| &row.race_class_level);
@@ -10932,6 +10985,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_item_template" => db_update
                     .game_item_template
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_item_text" => db_update
+                    .game_item_text
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_level_stats" => db_update
                     .game_level_stats
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -11773,6 +11829,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_item_template" => db_update
                     .game_item_template
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_item_text" => db_update
+                    .game_item_text
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_level_stats" => db_update
                     .game_level_stats
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -12307,6 +12366,7 @@ pub struct AppliedDiff<'r> {
     game_item_property_weight: __sdk::TableAppliedDiff<'r, ItemPropertyWeight>,
     game_item_random_property: __sdk::TableAppliedDiff<'r, ItemRandomProperty>,
     game_item_template: __sdk::TableAppliedDiff<'r, ItemTemplate>,
+    game_item_text: __sdk::TableAppliedDiff<'r, ItemText>,
     game_level_stats: __sdk::TableAppliedDiff<'r, LevelStats>,
     game_levelup_event: __sdk::TableAppliedDiff<'r, LevelupEvent>,
     game_live_pet_kind: __sdk::TableAppliedDiff<'r, LivePetKind>,
@@ -13182,6 +13242,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<ItemTemplate>(
             "game_item_template",
             &self.game_item_template,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<ItemText>(
+            "game_item_text",
+            &self.game_item_text,
             event,
         );
         callbacks.invoke_table_row_callbacks::<LevelStats>(
@@ -14572,6 +14637,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_item_property_weight_table::register_table(client_cache);
         game_item_random_property_table::register_table(client_cache);
         game_item_template_table::register_table(client_cache);
+        game_item_text_table::register_table(client_cache);
         game_level_stats_table::register_table(client_cache);
         game_levelup_event_table::register_table(client_cache);
         game_live_pet_kind_table::register_table(client_cache);
@@ -14850,6 +14916,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_item_property_weight",
         "game_item_random_property",
         "game_item_template",
+        "game_item_text",
         "game_level_stats",
         "game_levelup_event",
         "game_live_pet_kind",

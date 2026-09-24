@@ -98,14 +98,15 @@ fn message_type(sender: MailSender) -> Mail_MailType {
     }
 }
 /// The `checked` field the client reads read, returned, copied, COD-payment and has-body state
-/// from (cmangos `MailHandler.cpp:610`).
+/// from (cmangos `MailHandler.cpp:610`). Masks out `CHECK_FLAG_LETTER_GRANTED`: that bit rides the
+/// same column for the server's own bookkeeping and names no vanilla state the client understands.
 fn check_mask(m: &MailView) -> u32 {
     let read = if m.was_read {
         mail_rules::CHECK_MASK_READ
     } else {
         0
     };
-    m.check_flags | read
+    (m.check_flags & !mail_rules::CHECK_FLAG_LETTER_GRANTED) | read
 }
 pub fn build_next_mail_time(has_unread: bool) -> MSG_QUERY_NEXT_MAIL_TIME_Server {
     MSG_QUERY_NEXT_MAIL_TIME_Server {
@@ -189,6 +190,33 @@ pub fn build_mail_take_item_result(
 pub enum MailTakeItemError {
     BagsFull,
     NotEnoughMoney,
+    Other,
+}
+/// `CMSG_MAIL_CREATE_TEXT_ITEM`'s ack: the Plain Letter was made, a full bag, or anything else.
+pub fn build_mail_made_permanent_result(
+    mail_id: u32,
+    made: Result<(), MailMadePermanentError>,
+) -> SMSG_SEND_MAIL_RESULT {
+    SMSG_SEND_MAIL_RESULT {
+        mail_id,
+        action: SMSG_SEND_MAIL_RESULT_MailAction::MadePermanent {
+            result2: match made {
+                Ok(()) => SMSG_SEND_MAIL_RESULT_MailResultTwo::Ok,
+                Err(MailMadePermanentError::BagsFull) => {
+                    SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrEquipError {
+                        equip_error2: u32::from(InventoryResult::InventoryFull.as_int()),
+                    }
+                }
+                Err(MailMadePermanentError::Other) => {
+                    SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrInternalError
+                }
+            },
+        },
+    }
+}
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MailMadePermanentError {
+    BagsFull,
     Other,
 }
 pub fn build_mail_send_result(
@@ -521,6 +549,35 @@ mod tests {
                 }
             ),
             other => panic!("expected the ItemTaken action, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_made_permanent_result_answers_ok_full_bag_or_the_generic_error() {
+        match build_mail_made_permanent_result(7, Ok(())).action {
+            SMSG_SEND_MAIL_RESULT_MailAction::MadePermanent { result2 } => {
+                assert_eq!(result2, SMSG_SEND_MAIL_RESULT_MailResultTwo::Ok)
+            }
+            other => panic!("expected the MadePermanent action, got {other:?}"),
+        }
+        match build_mail_made_permanent_result(7, Err(MailMadePermanentError::BagsFull)).action {
+            SMSG_SEND_MAIL_RESULT_MailAction::MadePermanent { result2 } => assert_eq!(
+                result2,
+                SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrEquipError {
+                    equip_error2: u32::from(InventoryResult::InventoryFull.as_int())
+                },
+                "the client is told to make room, not handed a generic error"
+            ),
+            other => panic!("expected the MadePermanent action, got {other:?}"),
+        }
+        match build_mail_made_permanent_result(7, Err(MailMadePermanentError::Other)).action {
+            SMSG_SEND_MAIL_RESULT_MailAction::MadePermanent { result2 } => {
+                assert_eq!(
+                    result2,
+                    SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrInternalError
+                )
+            }
+            other => panic!("expected the MadePermanent action, got {other:?}"),
         }
     }
 

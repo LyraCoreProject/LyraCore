@@ -77,6 +77,7 @@ pub(crate) fn apply_item_split(
     let durability = inst.durability;
     let random_property_id = inst.random_property_id;
     let soulbound = inst.soulbound; // the split half carries the SAME binding state as its source stack
+    let item_text_id = inst.item_text_id; // ditto — a split half stays as readable as its source
     instances.guid().update(inst);
     instances.insert(ItemInstance {
         guid: new_guid,
@@ -90,6 +91,7 @@ pub(crate) fn apply_item_split(
         enchant_id: 0, // a split is only ever on a stackable (non-equippable) item → never enchanted
         soulbound,
         random_property_id,
+        item_text_id,
     });
     Ok(())
 }

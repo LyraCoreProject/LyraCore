@@ -1297,6 +1297,11 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // connection in the set, because a letter fences on the sender's shard and a take fences on
         // realm-core, and a single-database gateway simply never has a row here.
         "SELECT * FROM game_mail_escrow",
+        // Letter Copy's readable item text (`CMSG_MAIL_CREATE_TEXT_ITEM`). Same two-plane shape as
+        // game_mail: a copied letter's text lives wherever the mail plane does, and it outlives the
+        // mail row that created it, so `CMSG_ITEM_TEXT_QUERY` must find it there even after the
+        // mail is gone. Private, read through the owner token.
+        "SELECT * FROM game_item_text",
         // Friends/ignore: every character's contact rows, so the coordinator can
         // build any player's SMSG_FRIEND_LIST/SMSG_IGNORE_LIST (RLS-bypassed, like game_character).
         "SELECT * FROM game_character_contact",

@@ -3212,3 +3212,310 @@ fn a_cod_letter_to_another_account_waits_and_its_payment_arrives_at_once() {
         "the payment arrives at once (cmangos MailHandler.cpp:475-477)"
     );
 }
+
+// -------------------------------------------------------------------------------------
+// Letter Copy (`CMSG_MAIL_CREATE_TEXT_ITEM`)
+// -------------------------------------------------------------------------------------
+
+/// GINGER's seeded mail (id 1, body "left it at the inn") is the copy fixture throughout: a
+/// delivered Character mail with a body, so its text id is its own id (`item_text_id_for`).
+const GINGERS_LETTER_TEXT_ID: u32 = 1;
+
+#[test]
+fn copying_a_letter_sets_copied_and_grants_one_plain_letter() {
+    let (realm, world, _calls) = sharded_mailbox();
+
+    mail::copy_letter(world.as_ref(), Some(GINGER), MAILBOX, 1).expect("the copy completes");
+
+    let flags = realm.mails.lock().unwrap()[0].1.check_flags;
+    assert_eq!(
+        flags & lyracore_shared::mail::CHECK_MASK_COPIED,
+        lyracore_shared::mail::CHECK_MASK_COPIED,
+        "the mail plane must carry COPIED"
+    );
+    assert_eq!(
+        flags & lyracore_shared::mail::CHECK_FLAG_LETTER_GRANTED,
+        lyracore_shared::mail::CHECK_FLAG_LETTER_GRANTED,
+        "and the durable GRANTED record, once the Home Shard grant is confirmed"
+    );
+    assert_eq!(
+        *world.granted_letters.lock().unwrap(),
+        vec![(GINGER, GINGERS_LETTER_TEXT_ID)],
+        "exactly one Plain Letter, on the Home Shard, carrying the mail's own id as its text id"
+    );
+    assert_eq!(
+        realm
+            .item_texts
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(id, _)| *id == GINGERS_LETTER_TEXT_ID)
+            .map(|(_, text)| text.clone()),
+        Some("left it at the inn".to_string()),
+        "the mail plane keeps the body as durable item text"
+    );
+}
+
+#[test]
+fn a_letter_copy_on_one_database_grants_the_same_way() {
+    let single = unsharded_mailbox();
+
+    mail::copy_letter(single.as_ref(), Some(GINGER), MAILBOX, 1).expect("the copy completes");
+
+    assert_eq!(
+        *single.granted_letters.lock().unwrap(),
+        vec![(GINGER, GINGERS_LETTER_TEXT_ID)]
+    );
+    let flags = single.mails.lock().unwrap()[0].1.check_flags;
+    assert_eq!(
+        flags & lyracore_shared::mail::CHECK_MASK_COPIED,
+        lyracore_shared::mail::CHECK_MASK_COPIED
+    );
+    assert_eq!(
+        flags & lyracore_shared::mail::CHECK_FLAG_LETTER_GRANTED,
+        lyracore_shared::mail::CHECK_FLAG_LETTER_GRANTED
+    );
+}
+
+#[test]
+fn copying_into_a_full_bag_is_refused_and_leaves_the_mail_uncopied() {
+    let (realm, world, _calls) = sharded_mailbox();
+    world
+        .bags_full
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+
+    let refusal = mail::copy_letter(world.as_ref(), Some(GINGER), MAILBOX, 1)
+        .expect_err("there is nowhere to put the letter");
+
+    assert!(
+        matches!(refusal, mail::CopyLetterRefusal::BagsFull(_)),
+        "the client is told to make room, not handed a generic error: {refusal}"
+    );
+    assert_eq!(
+        realm.mails.lock().unwrap()[0].1.check_flags & lyracore_shared::mail::CHECK_MASK_COPIED,
+        0,
+        "a refused copy must not touch the mail plane at all"
+    );
+    assert!(world.granted_letters.lock().unwrap().is_empty());
+    assert!(realm.item_texts.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_letter_already_granted_refuses_a_second_copy_and_grants_no_second_letter() {
+    let (_realm, world, _calls) = sharded_mailbox();
+
+    mail::copy_letter(world.as_ref(), Some(GINGER), MAILBOX, 1).expect("the first copy completes");
+    mail::copy_letter(world.as_ref(), Some(GINGER), MAILBOX, 1)
+        .expect_err("a completed grant refuses a second click for good");
+
+    assert_eq!(
+        *world.granted_letters.lock().unwrap(),
+        vec![(GINGER, GINGERS_LETTER_TEXT_ID)],
+        "one letter, not two"
+    );
+}
+
+/// The held-item check in `mail_grant_letter` only guards the crash window before GRANTED is
+/// recorded — it is not the durable answer. Once GRANTED lands, destroying, mailing away, or
+/// trading the letter must not reopen the grant: the record lives on the mail, not the item.
+#[test]
+fn destroying_the_granted_item_does_not_reopen_a_second_grant() {
+    let (_realm, world, _calls) = sharded_mailbox();
+    mail::copy_letter(world.as_ref(), Some(GINGER), MAILBOX, 1).expect("the first copy completes");
+    world.granted_letters.lock().unwrap().clear(); // the Plain Letter is gone from the bags
+
+    let refusal = mail::copy_letter(world.as_ref(), Some(GINGER), MAILBOX, 1)
+        .expect_err("GRANTED survives the item's destruction");
+
+    assert!(matches!(refusal, mail::CopyLetterRefusal::Other(_)));
+    assert!(
+        world.granted_letters.lock().unwrap().is_empty(),
+        "no letter is minted for a mail that already used its one grant"
+    );
+}
+
+/// A grant lost between the room check and the Home Shard call (bags filled, logout, timeout, a
+/// Gateway crash) leaves the mail COPIED with its text filed but no letter granted. Clicking again
+/// must reach the Home Shard, not bounce off "already copied".
+#[test]
+fn retrying_after_an_interrupted_grant_still_grants_the_letter() {
+    let (realm, world, _calls) = sharded_mailbox();
+    realm.mails.lock().unwrap()[0].1.check_flags |= lyracore_shared::mail::CHECK_MASK_COPIED;
+    realm
+        .item_texts
+        .lock()
+        .unwrap()
+        .push((GINGERS_LETTER_TEXT_ID, "left it at the inn".to_string()));
+    assert!(
+        world.granted_letters.lock().unwrap().is_empty(),
+        "the fixture models a grant that never landed"
+    );
+
+    mail::copy_letter(world.as_ref(), Some(GINGER), MAILBOX, 1).expect("the retry completes");
+
+    assert_eq!(
+        *world.granted_letters.lock().unwrap(),
+        vec![(GINGER, GINGERS_LETTER_TEXT_ID)],
+        "the retry must reach the Home Shard grant, not stop at the already-COPIED mail"
+    );
+}
+
+#[test]
+fn the_copied_letters_text_is_readable_after_the_mail_is_deleted() {
+    let (realm, world, _calls) = sharded_mailbox();
+
+    mail::copy_letter(world.as_ref(), Some(GINGER), MAILBOX, 1).expect("the copy completes");
+    realm.mails.lock().unwrap().retain(|(_, m)| m.id != 1);
+
+    assert_eq!(
+        mail::item_text(world.as_ref(), Some(GINGER), GINGERS_LETTER_TEXT_ID, 0).unwrap(),
+        Some("left it at the inn".to_string()),
+        "a copied letter's text outlives the mail row that created it"
+    );
+}
+
+#[test]
+fn a_letter_copy_over_the_wire_acks_made_permanent_ok() {
+    let store = seated_store();
+
+    let (mut client, server_end) = world_session_socket_pair();
+    let server_store = store.clone();
+    let server = std::thread::spawn(move || {
+        run_world_session(server_end, server_store.as_ref()).unwrap();
+    });
+    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
+    CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    for _ in 0..WORLD_ENTRY_PACKETS {
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
+    }
+
+    wow_world_messages::vanilla::CMSG_MAIL_CREATE_TEXT_ITEM {
+        mailbox: Guid::new(MAILBOX),
+        mail_id: 1,
+        mail_template_id: 0,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_SEND_MAIL_RESULT(m) => {
+            assert_eq!(m.mail_id, 1);
+            match m.action {
+                wow_world_messages::vanilla::SMSG_SEND_MAIL_RESULT_MailAction::MadePermanent {
+                    result2,
+                } => assert_eq!(
+                    result2,
+                    wow_world_messages::vanilla::SMSG_SEND_MAIL_RESULT_MailResultTwo::Ok
+                ),
+                other => panic!("expected the MadePermanent action, got {other:?}"),
+            }
+        }
+        other => panic!("expected SMSG_SEND_MAIL_RESULT, got {other}"),
+    }
+
+    drop(client);
+    server.join().unwrap();
+    assert_eq!(store.granted_letters.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn a_letter_copy_into_a_full_bag_over_the_wire_answers_equip_error() {
+    let store = seated_store();
+    store
+        .bags_full
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+
+    let (mut client, server_end) = world_session_socket_pair();
+    let server_store = store.clone();
+    let server = std::thread::spawn(move || {
+        run_world_session(server_end, server_store.as_ref()).unwrap();
+    });
+    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
+    CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    for _ in 0..WORLD_ENTRY_PACKETS {
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
+    }
+
+    wow_world_messages::vanilla::CMSG_MAIL_CREATE_TEXT_ITEM {
+        mailbox: Guid::new(MAILBOX),
+        mail_id: 1,
+        mail_template_id: 0,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_SEND_MAIL_RESULT(m) => match m.action {
+            wow_world_messages::vanilla::SMSG_SEND_MAIL_RESULT_MailAction::MadePermanent {
+                result2,
+            } => assert_eq!(
+                result2,
+                wow_world_messages::vanilla::SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrEquipError {
+                    equip_error2: u32::from(
+                        wow_world_messages::vanilla::InventoryResult::InventoryFull.as_int()
+                    )
+                }
+            ),
+            other => panic!("expected the MadePermanent action, got {other:?}"),
+        },
+        other => panic!("expected SMSG_SEND_MAIL_RESULT, got {other}"),
+    }
+
+    drop(client);
+    server.join().unwrap();
+    assert!(store.granted_letters.lock().unwrap().is_empty());
+    assert_eq!(
+        store.mails.lock().unwrap()[0].1.check_flags & lyracore_shared::mail::CHECK_MASK_COPIED,
+        0,
+        "a refused copy leaves the mail uncopied"
+    );
+}
+
+/// `game_item_text` ids are a mail's own id — small and sequential. A caller who neither holds the
+/// granted item nor owns the mail must not read it by guessing the id, even after the letter's
+/// mail row is long gone.
+#[test]
+fn item_text_query_refuses_a_caller_who_neither_owns_the_item_nor_the_mail() {
+    let (realm, world, _calls) = sharded_mailbox();
+    mail::copy_letter(world.as_ref(), Some(GINGER), MAILBOX, 1).expect("Ginger copies their own");
+    realm.mails.lock().unwrap().retain(|(_, m)| m.id != 1);
+
+    assert_eq!(
+        mail::item_text(world.as_ref(), Some(TRIN), GINGERS_LETTER_TEXT_ID, 0).unwrap(),
+        None,
+        "Trin holds no such item and never owned this mail — a walked id must read empty, not \
+         Ginger's letter"
+    );
+}
+
+#[test]
+fn item_text_query_answers_for_an_owner_who_still_holds_the_granted_item() {
+    let (_realm, world, _calls) = sharded_mailbox();
+    mail::copy_letter(world.as_ref(), Some(GINGER), MAILBOX, 1).expect("Ginger copies their own");
+
+    assert_eq!(
+        mail::item_text(world.as_ref(), Some(GINGER), GINGERS_LETTER_TEXT_ID, 0).unwrap(),
+        Some("left it at the inn".to_string()),
+        "the copy's own owner must still read it back"
+    );
+}
+
+#[test]
+fn item_text_query_falls_back_to_the_callers_own_undeleted_mail() {
+    let (_realm, world, _calls) = sharded_mailbox();
+
+    // No copy has happened, so `game_item_text` holds nothing — the query still resolves through
+    // the caller's own delivered mail under the same id, matching what a letter still sitting in
+    // the mailbox has always done.
+    assert_eq!(
+        mail::item_text(world.as_ref(), Some(GINGER), GINGERS_LETTER_TEXT_ID, 0).unwrap(),
+        Some("left it at the inn".to_string())
+    );
+    assert_eq!(
+        mail::item_text(world.as_ref(), Some(TRIN), GINGERS_LETTER_TEXT_ID, 0).unwrap(),
+        None,
+        "and it stays scoped to the caller's own mail — not a crafted read of Ginger's"
+    );
+}
