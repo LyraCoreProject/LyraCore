@@ -307,6 +307,7 @@ fn mail_escrow_and_replayed_payout_preserve_both_plain_and_random_items() {
                 property,
                 "0",
                 "0",
+                "0",
             ],
         );
         let mails = shard.query_rows("SELECT id,random_property_id FROM game_mail WHERE recipient_guid = 1 AND item_entry = 5090050");

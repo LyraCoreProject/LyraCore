@@ -105,6 +105,7 @@ are answered by the gateway, which is the only component that can see the whole 
 | whisper target resolution by name, realm-wide, plus the ignore verdict | same | `presence.rs` (`resolve_by_name`), `gateway/src/world/whisper.rs` (`ignored_anywhere`) |
 | `CMSG_NAME_QUERY` resolution | same | `presence.rs` (`character_anywhere`) |
 | loot-roll promotion and settlement fan-out across shards | a kill's transaction cannot reach realm-core | `gateway/src/world/loot.rs` |
+| recipient's Account for the mail Delivery Delay | the recipient may be on another shard | `gateway/src/world/mail.rs` (`same_realm_account`) |
 
 Each of these re-implements *the read the module gate performed*, not a new rule, and each returns
 the module's own error strings so the client sees identical behaviour on a single-database
@@ -133,6 +134,13 @@ above 0. The Gateway also answers a GM level of 0 early, before it resolves a le
 realm-wide, and the Module refuses the same request if one arrives. The realm-wide reads are
 `resolve_all_by_name` for the leader and a live entity on any shard for the roster's online column
 (`gateway/src/world/handlers/guild.rs`).
+
+The mail Delivery Delay is the same shape. The Gateway reads the Realm Account of the sender and of
+the recipient from the World Shards: the Account Character Owner name, else the name of a local
+Account that is not a shadow Account. It conveys one `same_account` flag in `realm_mail_send`,
+`realm_mail_fence` or `realm_mail_return`. An Account that no Shard can name counts as another
+Account. The Module turns the flag into the delay: the fence stores it in
+`game_mail_escrow.delivery_delay_secs`, and `realm_mail_commit` counts it from the commit.
 
 Account ownership is durable. `stdb/account_sessions.rs` obtains an Account Claim from Realm-core,
 installs its Account Fence on every configured World Shard, and binds the resulting World Session

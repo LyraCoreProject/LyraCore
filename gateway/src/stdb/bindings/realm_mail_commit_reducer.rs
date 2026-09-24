@@ -23,6 +23,7 @@ pub(super) struct RealmMailCommitArgs {
     pub random_property_id: u32,
     pub cod: u32,
     pub cod_mail_id: u64,
+    pub delivery_delay_secs: u32,
 }
 
 impl From<RealmMailCommitArgs> for super::Reducer {
@@ -42,6 +43,7 @@ impl From<RealmMailCommitArgs> for super::Reducer {
             random_property_id: args.random_property_id,
             cod: args.cod,
             cod_mail_id: args.cod_mail_id,
+            delivery_delay_secs: args.delivery_delay_secs,
         }
     }
 }
@@ -77,6 +79,7 @@ pub trait realm_mail_commit {
         random_property_id: u32,
         cod: u32,
         cod_mail_id: u64,
+        delivery_delay_secs: u32,
     ) -> __sdk::Result<()> {
         self.realm_mail_commit_then(
             escrow_id,
@@ -93,6 +96,7 @@ pub trait realm_mail_commit {
             random_property_id,
             cod,
             cod_mail_id,
+            delivery_delay_secs,
             |_, _| {},
         )
     }
@@ -119,6 +123,7 @@ pub trait realm_mail_commit {
         random_property_id: u32,
         cod: u32,
         cod_mail_id: u64,
+        delivery_delay_secs: u32,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -143,6 +148,7 @@ impl realm_mail_commit for super::RemoteReducers {
         random_property_id: u32,
         cod: u32,
         cod_mail_id: u64,
+        delivery_delay_secs: u32,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -164,6 +170,7 @@ impl realm_mail_commit for super::RemoteReducers {
                 random_property_id,
                 cod,
                 cod_mail_id,
+                delivery_delay_secs,
             },
             callback,
         )

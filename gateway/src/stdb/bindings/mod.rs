@@ -162,6 +162,7 @@ pub mod debug_compute_spell_reducer;
 pub mod debug_compute_swing_reducer;
 pub mod debug_create_fixture_instance_reducer;
 pub mod debug_delete_character_reducer;
+pub mod debug_deliver_mail_fixture_reducer;
 pub mod debug_disarm_instance_tick_reducer;
 pub mod debug_disenchant_reducer;
 pub mod debug_emit_sessionless_group_intent_reducer;
@@ -1265,6 +1266,7 @@ pub use debug_compute_spell_reducer::debug_compute_spell;
 pub use debug_compute_swing_reducer::debug_compute_swing;
 pub use debug_create_fixture_instance_reducer::debug_create_fixture_instance;
 pub use debug_delete_character_reducer::debug_delete_character;
+pub use debug_deliver_mail_fixture_reducer::debug_deliver_mail_fixture;
 pub use debug_disarm_instance_tick_reducer::debug_disarm_instance_tick;
 pub use debug_disenchant_reducer::debug_disenchant;
 pub use debug_emit_sessionless_group_intent_reducer::debug_emit_sessionless_group_intent;
@@ -2502,6 +2504,10 @@ pub enum Reducer {
     },
     DebugDeleteCharacter {
         character_guid: u64,
+    },
+    DebugDeliverMailFixture {
+        recipient_guid: u64,
+        subject: String,
     },
     DebugDisarmInstanceTick {
         instance_id: u64,
@@ -3855,6 +3861,7 @@ pub enum Reducer {
         random_property_id: u32,
         cod: u32,
         cod_mail_id: u64,
+        delivery_delay_secs: u32,
     },
     RealmMailConfirmDelivery {
         escrow_id: u64,
@@ -3875,6 +3882,7 @@ pub enum Reducer {
         item_guid: u64,
         cod: u32,
         mail_id: u64,
+        same_account: bool,
     },
     RealmMailItemPayout {
         escrow_id: u64,
@@ -3903,6 +3911,7 @@ pub enum Reducer {
     RealmMailReturn {
         request_actor: SessionActor,
         mail_id: u64,
+        same_account: bool,
     },
     RealmMailSend {
         request_actor: SessionActor,
@@ -3912,6 +3921,7 @@ pub enum Reducer {
         money: u32,
         cod: u32,
         item_guid: u64,
+        same_account: bool,
     },
     RealmMailSettle {
         escrow_id: u64,
@@ -4181,6 +4191,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugComputeSwing { .. } => "debug_compute_swing",
             Reducer::DebugCreateFixtureInstance { .. } => "debug_create_fixture_instance",
             Reducer::DebugDeleteCharacter { .. } => "debug_delete_character",
+            Reducer::DebugDeliverMailFixture { .. } => "debug_deliver_mail_fixture",
             Reducer::DebugDisarmInstanceTick { .. } => "debug_disarm_instance_tick",
             Reducer::DebugDisenchant { .. } => "debug_disenchant",
             Reducer::DebugEmitSessionlessGroupIntent { .. } => {
@@ -5107,6 +5118,13 @@ Reducer::DebugCheckRestAt{
                 character_guid,
 }             => __sats::bsatn::to_vec(&debug_delete_character_reducer::DebugDeleteCharacterArgs {
                 character_guid: character_guid.clone(),
+}),
+            Reducer::DebugDeliverMailFixture{
+                recipient_guid,
+                subject,
+}             => __sats::bsatn::to_vec(&debug_deliver_mail_fixture_reducer::DebugDeliverMailFixtureArgs {
+                recipient_guid: recipient_guid.clone(),
+                subject: subject.clone(),
 }),
             Reducer::DebugDisarmInstanceTick{
                 instance_id,
@@ -7522,6 +7540,7 @@ Reducer::PlayerbotsFixtureCommandApply{
                 random_property_id,
                 cod,
                 cod_mail_id,
+                delivery_delay_secs,
 }             => __sats::bsatn::to_vec(&realm_mail_commit_reducer::RealmMailCommitArgs {
                 escrow_id: escrow_id.clone(),
                 request_actor: request_actor.clone(),
@@ -7537,6 +7556,7 @@ Reducer::PlayerbotsFixtureCommandApply{
                 random_property_id: random_property_id.clone(),
                 cod: cod.clone(),
                 cod_mail_id: cod_mail_id.clone(),
+                delivery_delay_secs: delivery_delay_secs.clone(),
 }),
             Reducer::RealmMailConfirmDelivery{
                 escrow_id,
@@ -7563,6 +7583,7 @@ Reducer::PlayerbotsFixtureCommandApply{
                 item_guid,
                 cod,
                 mail_id,
+                same_account,
 }             => __sats::bsatn::to_vec(&realm_mail_fence_reducer::RealmMailFenceArgs {
                 escrow_id: escrow_id.clone(),
                 request_actor: request_actor.clone(),
@@ -7574,6 +7595,7 @@ Reducer::PlayerbotsFixtureCommandApply{
                 item_guid: item_guid.clone(),
                 cod: cod.clone(),
                 mail_id: mail_id.clone(),
+                same_account: same_account.clone(),
 }),
             Reducer::RealmMailItemPayout{
                 escrow_id,
@@ -7622,9 +7644,11 @@ Reducer::PlayerbotsFixtureCommandApply{
             Reducer::RealmMailReturn{
                 request_actor,
                 mail_id,
+                same_account,
 }             => __sats::bsatn::to_vec(&realm_mail_return_reducer::RealmMailReturnArgs {
                 request_actor: request_actor.clone(),
                 mail_id: mail_id.clone(),
+                same_account: same_account.clone(),
 }),
             Reducer::RealmMailSend{
                 request_actor,
@@ -7634,6 +7658,7 @@ Reducer::PlayerbotsFixtureCommandApply{
                 money,
                 cod,
                 item_guid,
+                same_account,
 }             => __sats::bsatn::to_vec(&realm_mail_send_reducer::RealmMailSendArgs {
                 request_actor: request_actor.clone(),
                 recipient_guid: recipient_guid.clone(),
@@ -7642,6 +7667,7 @@ Reducer::PlayerbotsFixtureCommandApply{
                 money: money.clone(),
                 cod: cod.clone(),
                 item_guid: item_guid.clone(),
+                same_account: same_account.clone(),
 }),
             Reducer::RealmMailSettle{
                 escrow_id,

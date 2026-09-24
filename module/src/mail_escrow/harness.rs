@@ -19,6 +19,7 @@ struct XEscrow {
     mail_id: u64,
     item: ItemSnapshot,
     cod: u32,
+    delivery_delay_secs: u32,
 }
 #[derive(Default)]
 struct FakeLedger {
@@ -71,6 +72,7 @@ impl EscrowLedger for FakeLedger {
             item_soulbound: e.item.soulbound,
             random_property_id: e.item.random_property_id,
             cod: e.cod,
+            delivery_delay_secs: e.delivery_delay_secs,
         })
     }
     fn file_escrow(&mut self, row: MailEscrow) {
@@ -90,6 +92,7 @@ impl EscrowLedger for FakeLedger {
                 mail_id: row.mail_id,
                 item,
                 cod: row.cod,
+                delivery_delay_secs: row.delivery_delay_secs,
             },
         );
     }
@@ -347,13 +350,22 @@ impl ReapSink for FakeMailPlane {
     }
 }
 
-impl TakeFenceSink for FakeMailPlane {
-    fn mail(&self, mail_id: u64) -> Option<(u64, u32)> {
+impl FakeMailPlane {
+    /// `crate::mail::delivered_mail`: a Mail before its delivery instant does not exist for its
+    /// recipient.
+    fn delivered(&self, mail_id: u64) -> Option<XMail> {
+        let now = self.ledger.now.get();
         self.mails
             .borrow()
             .iter()
-            .find(|m| m.id == mail_id)
-            .map(|m| (m.recipient_guid, m.money))
+            .find(|m| m.id == mail_id && m.deliver_micros <= now)
+            .cloned()
+    }
+}
+
+impl TakeFenceSink for FakeMailPlane {
+    fn mail(&self, mail_id: u64) -> Option<(u64, u32)> {
+        self.delivered(mail_id).map(|m| (m.recipient_guid, m.money))
     }
     fn clear_mail_money(&mut self, mail_id: u64) {
         if let Some(m) = self.mails.borrow_mut().iter_mut().find(|m| m.id == mail_id) {
@@ -361,11 +373,7 @@ impl TakeFenceSink for FakeMailPlane {
         }
     }
     fn mail_item(&self, mail_id: u64) -> Option<(u64, ItemSnapshot)> {
-        self.mails
-            .borrow()
-            .iter()
-            .find(|m| m.id == mail_id)
-            .map(|m| (m.recipient_guid, m.item))
+        self.delivered(mail_id).map(|m| (m.recipient_guid, m.item))
     }
     fn clear_mail_item(&mut self, mail_id: u64) {
         if let Some(m) = self.mails.borrow_mut().iter_mut().find(|m| m.id == mail_id) {
@@ -440,6 +448,11 @@ const COST: u32 = MONEY + POSTAGE;
 const ITEM_GUID: u64 = 0x4000_0000_0000_0011;
 const NO_ITEM: u64 = 0;
 const NO_COD_MAIL: u64 = 0;
+/// The sender and the recipient belong to different Realm Accounts, so an item waits an hour.
+const OTHER_ACCOUNT: bool = false;
+const SAME_ACCOUNT: bool = true;
+const NO_DELAY: u32 = 0;
+const HOUR_MICROS: i64 = 3_600 * 1_000_000;
 fn sword() -> ItemSnapshot {
     ItemSnapshot {
         entry: 5_090_001,
@@ -485,16 +498,33 @@ fn drive(
     if killed == Killed::BeforeFence {
         return Ok(());
     }
-    apply_fence(shard, escrow_id, SENDER, draft(), item_guid, NO_COD_MAIL)?;
+    apply_fence(
+        shard,
+        escrow_id,
+        SENDER,
+        draft(),
+        item_guid,
+        NO_COD_MAIL,
+        OTHER_ACCOUNT,
+    )?;
     check(shard, plane);
     if killed == Killed::AfterFence {
         return Ok(());
     }
-    let item = shard
+    // The Gateway re-derives the attachment and the Delivery Delay from the fence row.
+    let (item, delay_secs) = shard
         .escrow(escrow_id)
-        .map(|e| e.item())
+        .map(|e| (e.item(), e.delivery_delay_secs))
         .unwrap_or_default();
-    apply_commit(plane, escrow_id, SENDER, &draft(), &item, NO_COD_MAIL)?;
+    apply_commit(
+        plane,
+        escrow_id,
+        SENDER,
+        &draft(),
+        &item,
+        NO_COD_MAIL,
+        delay_secs,
+    )?;
     check(shard, plane);
     if killed == Killed::AfterCommit {
         return Ok(());
@@ -588,6 +618,7 @@ fn a_committed_letter_is_marked_as_having_a_body_or_as_already_copied() {
         &draft(),
         &ItemSnapshot::default(),
         NO_COD_MAIL,
+        NO_DELAY,
     )
     .expect("a letter with a body");
     apply_commit(
@@ -600,6 +631,7 @@ fn a_committed_letter_is_marked_as_having_a_body_or_as_already_copied() {
         },
         &ItemSnapshot::default(),
         NO_COD_MAIL,
+        NO_DELAY,
     )
     .expect("a letter without one");
 
@@ -615,7 +647,16 @@ fn the_first_fence_arms_the_reaper() {
     let (mut shard, _plane) = fixture();
     assert!(!shard.ledger.reaper_armed.get());
 
-    apply_fence(&mut shard, ESCROW, SENDER, draft(), NO_ITEM, NO_COD_MAIL).expect("fenced");
+    apply_fence(
+        &mut shard,
+        ESCROW,
+        SENDER,
+        draft(),
+        NO_ITEM,
+        NO_COD_MAIL,
+        OTHER_ACCOUNT,
+    )
+    .expect("fenced");
 
     assert!(shard.ledger.reaper_armed.get());
 }
@@ -705,9 +746,26 @@ fn a_driver_killed_before_the_fence_costs_the_sender_nothing() {
 fn a_replayed_fence_debits_the_purse_once() {
     let (mut shard, _plane) = fixture();
 
-    apply_fence(&mut shard, ESCROW, SENDER, draft(), NO_ITEM, NO_COD_MAIL).expect("first");
-    apply_fence(&mut shard, ESCROW, SENDER, draft(), NO_ITEM, NO_COD_MAIL)
-        .expect("replay is a no-op, not an error");
+    apply_fence(
+        &mut shard,
+        ESCROW,
+        SENDER,
+        draft(),
+        NO_ITEM,
+        NO_COD_MAIL,
+        OTHER_ACCOUNT,
+    )
+    .expect("first");
+    apply_fence(
+        &mut shard,
+        ESCROW,
+        SENDER,
+        draft(),
+        NO_ITEM,
+        NO_COD_MAIL,
+        OTHER_ACCOUNT,
+    )
+    .expect("replay is a no-op, not an error");
 
     assert_eq!(shard.purse_of(SENDER), PURSE - COST);
     assert_eq!(shard.fenced_copper(), COST);
@@ -716,10 +774,27 @@ fn a_replayed_fence_debits_the_purse_once() {
 fn an_escrow_id_reused_for_another_sender_is_refused() {
     let (mut shard, _plane) = fixture();
     shard.purses.borrow_mut().insert(99, PURSE);
-    apply_fence(&mut shard, ESCROW, SENDER, draft(), NO_ITEM, NO_COD_MAIL).expect("first");
+    apply_fence(
+        &mut shard,
+        ESCROW,
+        SENDER,
+        draft(),
+        NO_ITEM,
+        NO_COD_MAIL,
+        OTHER_ACCOUNT,
+    )
+    .expect("first");
 
-    let err = apply_fence(&mut shard, ESCROW, 99, draft(), NO_ITEM, NO_COD_MAIL)
-        .expect_err("the id is taken");
+    let err = apply_fence(
+        &mut shard,
+        ESCROW,
+        99,
+        draft(),
+        NO_ITEM,
+        NO_COD_MAIL,
+        OTHER_ACCOUNT,
+    )
+    .expect_err("the id is taken");
 
     assert!(err.contains("already fenced"), "{err}");
     assert_eq!(shard.purse_of(99), PURSE, "the second sender paid nothing");
@@ -735,6 +810,7 @@ fn a_replayed_commit_produces_one_mail_and_not_two() {
         &draft(),
         &ItemSnapshot::default(),
         NO_COD_MAIL,
+        NO_DELAY,
     )
     .expect("first");
     apply_commit(
@@ -744,6 +820,7 @@ fn a_replayed_commit_produces_one_mail_and_not_two() {
         &draft(),
         &ItemSnapshot::default(),
         NO_COD_MAIL,
+        NO_DELAY,
     )
     .expect("replay");
     apply_commit(
@@ -753,6 +830,7 @@ fn a_replayed_commit_produces_one_mail_and_not_two() {
         &draft(),
         &ItemSnapshot::default(),
         NO_COD_MAIL,
+        NO_DELAY,
     )
     .expect("replay again");
 
@@ -761,7 +839,16 @@ fn a_replayed_commit_produces_one_mail_and_not_two() {
 #[test]
 fn re_fencing_an_id_for_a_different_amount_is_refused() {
     let (mut shard, _plane) = fixture();
-    apply_fence(&mut shard, ESCROW, SENDER, draft(), NO_ITEM, NO_COD_MAIL).expect("first");
+    apply_fence(
+        &mut shard,
+        ESCROW,
+        SENDER,
+        draft(),
+        NO_ITEM,
+        NO_COD_MAIL,
+        OTHER_ACCOUNT,
+    )
+    .expect("first");
 
     let err = apply_fence(
         &mut shard,
@@ -773,6 +860,7 @@ fn re_fencing_an_id_for_a_different_amount_is_refused() {
         },
         NO_ITEM,
         NO_COD_MAIL,
+        OTHER_ACCOUNT,
     )
     .expect_err("a different letter under the same id");
 
@@ -790,6 +878,7 @@ fn an_escrow_id_that_already_delivered_to_another_recipient_is_refused() {
         &draft(),
         &ItemSnapshot::default(),
         NO_COD_MAIL,
+        NO_DELAY,
     )
     .expect("first letter");
 
@@ -803,6 +892,7 @@ fn an_escrow_id_that_already_delivered_to_another_recipient_is_refused() {
         },
         &ItemSnapshot::default(),
         NO_COD_MAIL,
+        NO_DELAY,
     )
     .expect_err("the id belongs to another letter");
 
@@ -813,7 +903,16 @@ fn an_escrow_id_that_already_delivered_to_another_recipient_is_refused() {
 fn escrow_id_zero_is_reserved_on_both_planes() {
     let (mut shard, mut plane) = fixture();
 
-    apply_fence(&mut shard, 0, SENDER, draft(), NO_ITEM, NO_COD_MAIL).expect_err("reserved");
+    apply_fence(
+        &mut shard,
+        0,
+        SENDER,
+        draft(),
+        NO_ITEM,
+        NO_COD_MAIL,
+        OTHER_ACCOUNT,
+    )
+    .expect_err("reserved");
     apply_commit(
         &mut plane,
         0,
@@ -821,6 +920,7 @@ fn escrow_id_zero_is_reserved_on_both_planes() {
         &draft(),
         &ItemSnapshot::default(),
         NO_COD_MAIL,
+        NO_DELAY,
     )
     .expect_err("reserved");
 
@@ -831,8 +931,16 @@ fn escrow_id_zero_is_reserved_on_both_planes() {
 fn an_unaffordable_letter_fences_nothing() {
     let mut shard = FakeShard::with_purse(SENDER, COST - 1);
 
-    let err = apply_fence(&mut shard, ESCROW, SENDER, draft(), NO_ITEM, NO_COD_MAIL)
-        .expect_err("cannot pay");
+    let err = apply_fence(
+        &mut shard,
+        ESCROW,
+        SENDER,
+        draft(),
+        NO_ITEM,
+        NO_COD_MAIL,
+        OTHER_ACCOUNT,
+    )
+    .expect_err("cannot pay");
 
     assert!(
         err.contains(lyracore_shared::mail::NOT_ENOUGH_MONEY),
@@ -906,6 +1014,7 @@ fn the_reaper_judges_each_fence_on_its_own_evidence() {
         },
         NO_ITEM,
         NO_COD_MAIL,
+        OTHER_ACCOUNT,
     )
     .expect("a second, unattested fence");
 
@@ -1202,8 +1311,16 @@ fn a_soulbound_item_is_refused_at_send_and_stays_in_the_senders_bags() {
         },
     );
 
-    let err = apply_fence(&mut shard, ESCROW, SENDER, draft(), ITEM_GUID, NO_COD_MAIL)
-        .expect_err("a bound item is not mailable");
+    let err = apply_fence(
+        &mut shard,
+        ESCROW,
+        SENDER,
+        draft(),
+        ITEM_GUID,
+        NO_COD_MAIL,
+        OTHER_ACCOUNT,
+    )
+    .expect_err("a bound item is not mailable");
 
     assert!(
         err.contains(lyracore_shared::mail::ITEM_IS_SOULBOUND),
@@ -1230,8 +1347,16 @@ fn attaching_an_item_the_sender_does_not_own_fences_nothing() {
     let (mut shard, _plane) = fixture();
     shard.give_item(RECIPIENT, ITEM_GUID, sword());
 
-    let err = apply_fence(&mut shard, ESCROW, SENDER, draft(), ITEM_GUID, NO_COD_MAIL)
-        .expect_err("it is not the sender's");
+    let err = apply_fence(
+        &mut shard,
+        ESCROW,
+        SENDER,
+        draft(),
+        ITEM_GUID,
+        NO_COD_MAIL,
+        OTHER_ACCOUNT,
+    )
+    .expect_err("it is not the sender's");
 
     assert!(err.contains(lyracore_shared::mail::NOT_YOUR_ITEM), "{err}");
     assert_eq!(shard.bags_of(RECIPIENT).len(), 1, "the owner still has it");
@@ -1241,7 +1366,16 @@ fn attaching_an_item_the_sender_does_not_own_fences_nothing() {
 #[test]
 fn a_fenced_item_cannot_be_attached_to_a_second_letter() {
     let (mut shard, _plane) = item_fixture();
-    apply_fence(&mut shard, ESCROW, SENDER, draft(), ITEM_GUID, NO_COD_MAIL).expect("fenced");
+    apply_fence(
+        &mut shard,
+        ESCROW,
+        SENDER,
+        draft(),
+        ITEM_GUID,
+        NO_COD_MAIL,
+        OTHER_ACCOUNT,
+    )
+    .expect("fenced");
 
     let err = apply_fence(
         &mut shard,
@@ -1250,6 +1384,7 @@ fn a_fenced_item_cannot_be_attached_to_a_second_letter() {
         draft(),
         ITEM_GUID,
         NO_COD_MAIL,
+        OTHER_ACCOUNT,
     )
     .expect_err("it is in flight, so it is nobody's");
 
@@ -1330,9 +1465,11 @@ enum ItemTakeKilled {
     AfterConfirm,
     Never,
 }
+/// An item letter to another Account, an hour later, when it has arrived.
 fn delivered_item_fixture() -> (FakeShard, FakeMailPlane, u64) {
     let (mut shard, mut plane) = item_fixture();
-    drive(&mut shard, &mut plane, ESCROW, ITEM_GUID, Killed::Never).expect("delivered");
+    drive(&mut shard, &mut plane, ESCROW, ITEM_GUID, Killed::Never).expect("committed");
+    plane.advance(HOUR_MICROS);
     shard.purses.borrow_mut().insert(RECIPIENT, 0);
     let mail_id = plane.mailbox_of(RECIPIENT)[0].id;
     (shard, plane, mail_id)
@@ -1540,6 +1677,7 @@ fn priced_mail_fixture() -> (FakeShard, FakeMailPlane, u64) {
         },
         &sword(),
         NO_COD_MAIL,
+        NO_DELAY,
     )
     .expect("the seller's letter is delivered");
     let mail_id = plane.mailbox_of(RECIPIENT)[0].id;
@@ -1565,7 +1703,15 @@ fn drive_payment(
     if killed == Killed::BeforeFence {
         return Ok(());
     }
-    apply_fence(shard, PAYMENT, RECIPIENT, payment.clone(), NO_ITEM, mail_id)?;
+    apply_fence(
+        shard,
+        PAYMENT,
+        RECIPIENT,
+        payment.clone(),
+        NO_ITEM,
+        mail_id,
+        OTHER_ACCOUNT,
+    )?;
     if killed == Killed::AfterFence {
         return Ok(());
     }
@@ -1576,6 +1722,7 @@ fn drive_payment(
         &payment,
         &ItemSnapshot::default(),
         mail_id,
+        NO_DELAY,
     )?;
     if killed == Killed::AfterCommit {
         return Ok(());
@@ -1719,6 +1866,7 @@ fn a_cod_payment_for_a_price_the_payer_does_not_owe_comes_back_to_the_payer() {
             &cod_payment_draft(),
             &ItemSnapshot::default(),
             mail_id,
+            NO_DELAY,
         )
         .unwrap_or_else(|e| panic!("{what}: the commit lands the payment: {e}"));
 
@@ -1757,6 +1905,7 @@ fn a_payment_fenced_with_the_old_subject_prefix_arrives_without_it() {
         old.clone(),
         NO_ITEM,
         mail_id,
+        OTHER_ACCOUNT,
     )
     .expect("fenced by the previous Gateway");
 
@@ -1767,6 +1916,7 @@ fn a_payment_fenced_with_the_old_subject_prefix_arrives_without_it() {
         &old,
         &ItemSnapshot::default(),
         mail_id,
+        NO_DELAY,
     )
     .expect("re-driven after the publish");
 
@@ -1846,4 +1996,134 @@ fn a_buyer_who_cannot_afford_the_price_is_refused_and_nothing_moves() {
     assert_eq!(shard.fenced_copper(), 0, "and nothing fenced");
     assert_eq!(plane.mailbox_of(RECIPIENT)[0].cod, COD, "still owed");
     assert_eq!(plane.items_in_mailbox(RECIPIENT), vec![sword()]);
+}
+#[test]
+fn a_fence_stores_an_hour_only_for_an_item_to_another_account() {
+    for (what, item_guid, same_account, want) in [
+        (
+            "an item to another Account",
+            ITEM_GUID,
+            OTHER_ACCOUNT,
+            3_600,
+        ),
+        ("an item to an alt", ITEM_GUID, SAME_ACCOUNT, 0),
+        ("copper to another Account", NO_ITEM, OTHER_ACCOUNT, 0),
+    ] {
+        let (mut shard, _plane) = item_fixture();
+
+        apply_fence(
+            &mut shard,
+            ESCROW,
+            SENDER,
+            draft(),
+            item_guid,
+            NO_COD_MAIL,
+            same_account,
+        )
+        .expect("fenced");
+
+        assert_eq!(
+            shard.escrow(ESCROW).map(|e| e.delivery_delay_secs),
+            Some(want),
+            "{what}"
+        );
+    }
+}
+#[test]
+fn an_item_send_re_driven_after_a_restart_keeps_its_delivery_delay() {
+    let (mut shard, mut plane) = item_fixture();
+    drive(
+        &mut shard,
+        &mut plane,
+        ESCROW,
+        ITEM_GUID,
+        Killed::AfterFence,
+    )
+    .expect("fenced");
+    let restarted_at = 10 * 60 * 1_000_000;
+    plane.advance(restarted_at);
+
+    // The Gateway's re-drive reads the whole letter back from the fence row.
+    let held = shard.escrow(ESCROW).expect("the fence is held");
+    apply_commit(
+        &mut plane,
+        ESCROW,
+        SENDER,
+        &draft(),
+        &held.item(),
+        NO_COD_MAIL,
+        held.delivery_delay_secs,
+    )
+    .expect("re-driven");
+
+    let inbox = plane.mailbox_of(RECIPIENT);
+    assert_eq!(
+        inbox[0].deliver_micros,
+        restarted_at + HOUR_MICROS,
+        "the hour counts from the commit"
+    );
+    assert_eq!(
+        plane.mail_item(inbox[0].id),
+        None,
+        "the recipient cannot take the item before then"
+    );
+    plane.advance(HOUR_MICROS);
+    assert_eq!(plane.mail_item(inbox[0].id), Some((RECIPIENT, sword())));
+}
+#[test]
+fn a_cod_payment_for_a_delayed_mail_is_held_until_it_arrives_and_then_charged_once() {
+    let mut plane = FakeMailPlane::default();
+    apply_commit(
+        &mut plane,
+        ESCROW,
+        SENDER,
+        &Draft {
+            money: 0,
+            cod: COD,
+            ..draft()
+        },
+        &sword(),
+        NO_COD_MAIL,
+        3_600,
+    )
+    .expect("the seller's letter is committed");
+    let mail_id = plane.mailbox_of(RECIPIENT)[0].id;
+    let mut shard = FakeShard::with_purse(RECIPIENT, PURSE);
+
+    let err = drive_payment(&mut shard, &mut plane, mail_id, Killed::Never)
+        .expect_err("a Gateway whose clock runs ahead drives the payment early");
+    assert!(err.contains("owes"), "{err}");
+    assert!(
+        plane.mailbox_of(SENDER).is_empty(),
+        "the seller is paid nothing"
+    );
+    assert_eq!(shard.fenced_copper(), COD, "the payment waits in its fence");
+
+    plane.advance(HOUR_MICROS);
+    drive_payment(&mut shard, &mut plane, mail_id, Killed::Never).expect("the mail has arrived");
+
+    assert_eq!(shard.purse_of(RECIPIENT), PURSE - COD, "charged once");
+    assert_eq!(plane.money_in_mailbox(SENDER), COD, "paid once");
+    assert_eq!(plane.mailbox_of(RECIPIENT)[0].cod, 0, "settled");
+}
+#[test]
+fn a_cod_payment_arrives_at_once_whatever_delay_its_commit_carries() {
+    let (_shard, mut plane, mail_id) = priced_mail_fixture();
+
+    apply_commit(
+        &mut plane,
+        PAYMENT,
+        RECIPIENT,
+        &cod_payment_draft(),
+        &ItemSnapshot::default(),
+        mail_id,
+        3_600,
+    )
+    .expect("paid");
+
+    assert_eq!(
+        plane.mailbox_of(SENDER)[0].deliver_micros,
+        0,
+        "cmangos MailHandler.cpp:475-477 sends the payment with no delay"
+    );
 }

@@ -292,6 +292,25 @@ pub(super) const WORLD_REENTRY_PACKETS: usize = WORLD_ENTRY_PACKETS - 1;
 /// One recorded `movement_update`: (opcode, x, y, z, orientation, timestamp).
 type MoveRecord = (u32, f32, f32, f32, f32, u32);
 
+/// The Module's Delivery Delay rule (`module/src/mail.rs::delivery_delay_secs`): an item sent to
+/// another Realm Account waits one hour, and everything else arrives at once.
+fn delivery_delay_secs(has_item: bool, same_account: bool) -> u32 {
+    if has_item && !same_account {
+        3_600
+    } else {
+        0
+    }
+}
+
+/// A mail's `deliver_secs` when it arrives `delay_secs` from now. 0 means from creation.
+fn delivered_after(delay_secs: u32) -> i64 {
+    if delay_secs == 0 {
+        0
+    } else {
+        mail::now_secs() + i64::from(delay_secs)
+    }
+}
+
 #[derive(Default)]
 struct InMemoryStore {
     /// Realm-core Guilds the guild query answers from.
@@ -652,6 +671,11 @@ struct InMemoryStore {
     /// the PAYEE and lives on the plane holding the mail row.
     #[allow(clippy::type_complexity)]
     mail_escrows: std::sync::Mutex<Vec<(u64, mail::HeldEscrow)>>,
+    /// The Realm Account name THIS Shard holds per Character guid. A Character missing here is
+    /// one this Shard cannot name: absent, or on a shadow Account.
+    realm_accounts: std::sync::Mutex<Vec<(u64, String)>>,
+    /// The `same_account` each mail send, fence and return carried, in call order.
+    same_account_seen: std::sync::Mutex<Vec<(&'static str, bool)>>,
     /// `game_mail_escrow.delivered` per escrow id: the attestation that licenses the settle. Kept
     /// beside the fence rather than in it so the fake cannot settle one it never attested.
     attested: std::sync::Mutex<Vec<(u64, bool)>>,
@@ -966,7 +990,7 @@ impl InMemoryStore {
     /// The module's `insert_letter` for a Character's letter: the row both write paths reach, so a
     /// letter written by the single-database send and one written by the escrow's commit cannot
     /// differ. It has HAS_BODY with a body and COPIED without one, like `Letter::from_character`,
-    /// and only COD_PAYMENT when it pays a price.
+    /// and only COD_PAYMENT when it pays a price. It arrives `delay_secs` from now.
     #[allow(clippy::too_many_arguments)]
     fn write_mail(
         &self,
@@ -978,6 +1002,7 @@ impl InMemoryStore {
         cod: u32,
         item: &mail::AttachedItem,
         cod_payment: bool,
+        delay_secs: u32,
     ) {
         let check_flags = if cod_payment {
             lyracore_shared::mail::CHECK_MASK_COD_PAYMENT
@@ -1005,9 +1030,17 @@ impl InMemoryStore {
                 random_property_id: item.random_property_id,
                 created_at_secs: 1_000,
                 check_flags,
+                deliver_secs: delivered_after(delay_secs),
                 ..Default::default()
             },
         ));
+    }
+
+    fn saw_same_account(&self, call: &'static str, same_account: bool) {
+        self.same_account_seen
+            .lock()
+            .unwrap()
+            .push((call, same_account));
     }
 
     /// Record a transfer step and honour an injected kill. `Err` means "the gateway died
@@ -1982,19 +2015,38 @@ impl WorldStore for InMemoryStore {
             .map(|(_, m)| m.clone())
             .collect())
     }
+    fn mail_by_id(&self, mail_id: u64) -> Result<Option<codec::MailView>> {
+        Ok(self
+            .mails
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(_, m)| m.id == mail_id)
+            .map(|(_, m)| m.clone()))
+    }
+    fn realm_account_name(&self, character_guid: u64) -> Result<Option<String>> {
+        Ok(self
+            .realm_accounts
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(guid, _)| *guid == character_guid)
+            .map(|(_, name)| name.clone()))
+    }
     fn mailbox_in_range(&self, mailbox_guid: u64, _player_guid: u64) -> Result<bool> {
         self.rec("mailbox_in_range");
         Ok(self.mailboxes.contains(&mailbox_guid))
     }
     /// Models the module's `apply_mark_read`: the row lookup scoped to `recipient_guid` IS the
-    /// authorization, so a mail that exists but belongs to someone else fails the same way a
-    /// nonexistent id does.
+    /// authorization, so a mail that exists but belongs to someone else, or has not arrived yet,
+    /// fails the same way a nonexistent id does.
     fn mail_mark_read(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
         self.rec("mail_mark_read");
         let mut mails = self.mails.lock().unwrap();
+        let now = mail::now_secs();
         match mails
             .iter_mut()
-            .find(|(to, m)| *to == recipient_guid && m.id == mail_id)
+            .find(|(to, m)| *to == recipient_guid && m.id == mail_id && m.is_delivered(now))
         {
             Some((_, m)) => {
                 m.was_read = true;
@@ -2003,14 +2055,15 @@ impl WorldStore for InMemoryStore {
             None => Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL)),
         }
     }
-    /// Models the module's `apply_delete`: same merged not-found/not-yours refusal as mark-read,
-    /// and a priced mail is refused.
+    /// Models the module's `apply_delete`: same merged not-found/not-yours/not-arrived refusal as
+    /// mark-read, and a priced mail is refused.
     fn mail_delete(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
         self.rec("mail_delete");
         let mut mails = self.mails.lock().unwrap();
+        let now = mail::now_secs();
         let Some(at) = mails
             .iter()
-            .position(|(to, m)| *to == recipient_guid && m.id == mail_id)
+            .position(|(to, m)| *to == recipient_guid && m.id == mail_id && m.is_delivered(now))
         else {
             return Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL));
         };
@@ -2023,9 +2076,11 @@ impl WorldStore for InMemoryStore {
     /// Models the module's `apply_return`: the SAME row, re-addressed to whoever sent it, with
     /// whatever it still carries (or nothing) travelling unchanged — except the cash-on-delivery
     /// price, which is dropped, because the row is going back to whoever set it. Only a delivered
-    /// Character mail with a sender goes back, and only once.
-    fn mail_return(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
+    /// Character mail with a sender goes back, and only once. An item going back to another
+    /// Account waits its Delivery Delay.
+    fn mail_return(&self, recipient_guid: u64, mail_id: u64, same_account: bool) -> Result<()> {
         self.rec("mail_return");
+        self.saw_same_account("mail_return", same_account);
         let mut mails = self.mails.lock().unwrap();
         let now = mail::now_secs();
         let Some((to, m)) = mails
@@ -2044,7 +2099,7 @@ impl WorldStore for InMemoryStore {
         m.was_read = false;
         m.cod = 0;
         m.check_flags = lyracore_shared::mail::CHECK_MASK_RETURNED;
-        m.deliver_secs = now;
+        m.deliver_secs = now + i64::from(delivery_delay_secs(m.item_entry != 0, same_account));
         *to = sender;
         Ok(())
     }
@@ -2061,8 +2116,10 @@ impl WorldStore for InMemoryStore {
         money: u32,
         cod: u32,
         item_guid: u64,
+        same_account: bool,
     ) -> Result<()> {
         self.rec("mail_send");
+        self.saw_same_account("mail_send", same_account);
         let item = self.detach(sender_guid, item_guid)?;
         self.debit(sender_guid, lyracore_shared::mail::total_cost(money))?;
         self.sent_mail.lock().unwrap().push((
@@ -2081,6 +2138,7 @@ impl WorldStore for InMemoryStore {
             cod,
             &item,
             false,
+            delivery_delay_secs(!item.is_empty(), same_account),
         );
         Ok(())
     }
@@ -2154,6 +2212,7 @@ impl WorldStore for InMemoryStore {
                 0,
                 &mail::AttachedItem::default(),
                 true,
+                0,
             );
         }
         Ok(())
@@ -2200,8 +2259,10 @@ impl WorldStore for InMemoryStore {
         item_guid: u64,
         cod: u32,
         cod_source_mail_id: u64,
+        same_account: bool,
     ) -> Result<()> {
         self.rec("mail_fence");
+        self.saw_same_account("mail_fence", same_account);
         self.mail_kill("mail_fence")?;
         let escrows = self.mail_escrows.lock().unwrap();
         if escrows.iter().any(|(_, e)| e.escrow_id == escrow_id) {
@@ -2212,6 +2273,7 @@ impl WorldStore for InMemoryStore {
         // been written when it does.
         let item = self.detach(sender_guid, item_guid)?;
         self.debit(sender_guid, money.saturating_add(postage))?;
+        let delivery_delay_secs = delivery_delay_secs(!item.is_empty(), same_account);
         self.mail_escrows.lock().unwrap().push((
             sender_guid,
             mail::HeldEscrow {
@@ -2225,6 +2287,7 @@ impl WorldStore for InMemoryStore {
                 mail_id: cod_source_mail_id,
                 item,
                 cod,
+                delivery_delay_secs,
             },
         ));
         self.attested.lock().unwrap().push((escrow_id, false));
@@ -2242,6 +2305,7 @@ impl WorldStore for InMemoryStore {
         item: mail::AttachedItem,
         cod: u32,
         cod_source_mail_id: u64,
+        delivery_delay_secs: u32,
     ) -> Result<()> {
         self.rec("mail_commit");
         self.mail_kill("mail_commit")?;
@@ -2279,6 +2343,12 @@ impl WorldStore for InMemoryStore {
             cod,
             &item,
             cod_source_mail_id != 0,
+            // A payment arrives at once whatever the commit carries.
+            if cod_source_mail_id != 0 {
+                0
+            } else {
+                delivery_delay_secs
+            },
         );
         // The price stops being owed in the SAME call that delivers the payment for it — the
         // module clears it inside the commit's transaction, which is what makes a COD take charge
@@ -2347,6 +2417,7 @@ impl WorldStore for InMemoryStore {
                 mail_id,
                 item: mail::AttachedItem::default(),
                 cod: 0,
+                delivery_delay_secs: 0,
             },
         ));
         self.attested.lock().unwrap().push((escrow_id, false));
@@ -2416,6 +2487,7 @@ impl WorldStore for InMemoryStore {
                 mail_id,
                 item,
                 cod: 0,
+                delivery_delay_secs: 0,
             },
         ));
         self.attested.lock().unwrap().push((escrow_id, false));

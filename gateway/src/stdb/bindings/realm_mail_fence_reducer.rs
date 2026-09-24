@@ -19,6 +19,7 @@ pub(super) struct RealmMailFenceArgs {
     pub item_guid: u64,
     pub cod: u32,
     pub mail_id: u64,
+    pub same_account: bool,
 }
 
 impl From<RealmMailFenceArgs> for super::Reducer {
@@ -34,6 +35,7 @@ impl From<RealmMailFenceArgs> for super::Reducer {
             item_guid: args.item_guid,
             cod: args.cod,
             mail_id: args.mail_id,
+            same_account: args.same_account,
         }
     }
 }
@@ -65,6 +67,7 @@ pub trait realm_mail_fence {
         item_guid: u64,
         cod: u32,
         mail_id: u64,
+        same_account: bool,
     ) -> __sdk::Result<()> {
         self.realm_mail_fence_then(
             escrow_id,
@@ -77,6 +80,7 @@ pub trait realm_mail_fence {
             item_guid,
             cod,
             mail_id,
+            same_account,
             |_, _| {},
         )
     }
@@ -99,6 +103,7 @@ pub trait realm_mail_fence {
         item_guid: u64,
         cod: u32,
         mail_id: u64,
+        same_account: bool,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -119,6 +124,7 @@ impl realm_mail_fence for super::RemoteReducers {
         item_guid: u64,
         cod: u32,
         mail_id: u64,
+        same_account: bool,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -136,6 +142,7 @@ impl realm_mail_fence for super::RemoteReducers {
                 item_guid,
                 cod,
                 mail_id,
+                same_account,
             },
             callback,
         )

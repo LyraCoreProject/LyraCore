@@ -197,6 +197,34 @@ impl Letter {
             ..self
         }
     }
+    /// The same letter, delivered `delay_secs` after `now_micros`. A delay of 0 leaves it visible
+    /// from creation.
+    pub(crate) fn delayed(self, now_micros: i64, delay_secs: u32) -> Self {
+        if delay_secs == 0 {
+            return self;
+        }
+        Self {
+            deliver_micros: after_delay(now_micros, delay_secs),
+            ..self
+        }
+    }
+}
+/// vanilla's `MailDeliveryDelay` default of one hour (cmangos `World.cpp:614`).
+pub(crate) const MAIL_DELIVERY_DELAY_SECS: u32 = 3_600;
+/// The Delivery Delay of a Character's letter: an item sent to a Character on another Account
+/// waits one hour, and everything else arrives at once (mangoszero `MailHandler.cpp:306-318` for a
+/// send, cmangos `Mail.cpp:241-261` for a return). A cash on delivery price needs an item, so a
+/// priced letter waits too. The caller decides `same_account` from Realm Accounts, and an Account
+/// it cannot name counts as another Account.
+pub(crate) fn delivery_delay_secs(has_item: bool, same_account: bool) -> u32 {
+    if has_item && !same_account {
+        MAIL_DELIVERY_DELAY_SECS
+    } else {
+        0
+    }
+}
+fn after_delay(now_micros: i64, delay_secs: u32) -> i64 {
+    now_micros.saturating_add(i64::from(delay_secs) * 1_000_000)
 }
 /// The one way a mail row is created. It starts the Mail's timer, and sends a Mail Arrival when
 /// the recipient can see the Mail now.
@@ -298,6 +326,7 @@ pub(crate) fn apply_send(
     money: u32,
     cod: u32,
     item_guid: u64,
+    same_account: bool,
 ) -> Result<(), String> {
     let item = detach_item(ctx, sender_guid, item_guid)?;
     debit_purse(
@@ -306,9 +335,11 @@ pub(crate) fn apply_send(
         lyracore_shared::mail::total_cost(money),
         lyracore_shared::mail::NOT_ENOUGH_MONEY,
     )?;
+    let delay_secs = delivery_delay_secs(!item.is_empty(), same_account);
     insert_letter(
         ctx,
-        Letter::from_character(sender_guid, recipient_guid, subject, body, money, cod, item),
+        Letter::from_character(sender_guid, recipient_guid, subject, body, money, cod, item)
+            .delayed(ctx.timestamp.to_micros_since_unix_epoch(), delay_secs),
     );
     Ok(())
 }
@@ -443,21 +474,22 @@ pub(crate) fn apply_take_item(
     }
     Ok(())
 }
+/// Mark-read and delete refuse a Mail before its delivery instant, as every take and the return do.
+/// cmangos needs no such Gate because its client never lists the Mail, but a Gateway whose clock
+/// runs ahead of this one can.
 pub(crate) fn apply_mark_read(
     ctx: &ReducerContext,
     recipient_guid: u64,
     mail_id: u64,
 ) -> Result<(), String> {
-    let mails = ctx.db.game_mail();
-    let row = mails
-        .id()
-        .find(mail_id)
+    let row = delivered_mail(ctx, mail_id)
         .filter(|m| m.recipient_guid == recipient_guid)
         .ok_or_else(|| lyracore_shared::mail::NOT_YOUR_MAIL.to_string())?;
     if !row.was_read {
-        let mut row = row;
-        row.was_read = true;
-        mails.id().update(row);
+        ctx.db.game_mail().id().update(Mail {
+            was_read: true,
+            ..row
+        });
     }
     Ok(())
 }
@@ -482,8 +514,7 @@ pub(crate) fn apply_delete(
     recipient_guid: u64,
     mail_id: u64,
 ) -> Result<(), String> {
-    let mails = ctx.db.game_mail();
-    match plan_delete(mails.id().find(mail_id).as_ref(), recipient_guid) {
+    match plan_delete(delivered_mail(ctx, mail_id).as_ref(), recipient_guid) {
         DeletePlan::NotYours => Err(lyracore_shared::mail::NOT_YOUR_MAIL.to_string()),
         DeletePlan::CodPriced => Err(lyracore_shared::mail::COD_MAIL_UNDELETABLE.to_string()),
         DeletePlan::Delete => {
@@ -519,6 +550,7 @@ pub(crate) fn apply_return(
     ctx: &ReducerContext,
     recipient_guid: u64,
     mail_id: u64,
+    same_account: bool,
 ) -> Result<(), String> {
     let row = delivered_mail(ctx, mail_id);
     match plan_return(row.as_ref(), recipient_guid) {
@@ -532,12 +564,18 @@ pub(crate) fn apply_return(
         ReturnPlan::Return => {}
     }
     let row = row.expect("Return is only reachable with a row");
-    send_back(ctx, row);
+    let delay_secs = delivery_delay_secs(!row.snapshot().is_empty(), same_account);
+    send_back(ctx, row, delay_secs);
     Ok(())
 }
-/// Send `row` back to its sender now. The Mail starts a new life with that sender.
-pub(crate) fn send_back(ctx: &ReducerContext, row: Mail) {
-    let back = ctx.db.game_mail().id().update(returned(row, ctx.timestamp));
+/// Send `row` back to its sender, to arrive `delay_secs` from now. The Mail starts a new life with
+/// that sender.
+pub(crate) fn send_back(ctx: &ReducerContext, row: Mail, delay_secs: u32) {
+    let arrives = Timestamp::from_micros_since_unix_epoch(after_delay(
+        ctx.timestamp.to_micros_since_unix_epoch(),
+        delay_secs,
+    ));
+    let back = ctx.db.game_mail().id().update(returned(row, arrives));
     crate::mail_timer::start(ctx, &back);
 }
 /// Delete a Mail with its item snapshot, its copper and its timer.
@@ -545,16 +583,16 @@ pub(crate) fn delete_mail(ctx: &ReducerContext, mail_id: u64) {
     ctx.db.game_mail().id().delete(mail_id);
     crate::mail_timer::stop(ctx, mail_id);
 }
-/// `row` sent back to its sender at `now`. It carries only RETURNED, loses its price and read
-/// state, and arrives now, which restarts its expiry clock (cmangos `Mail.cpp:264,299-313`).
-pub(crate) fn returned(row: Mail, now: Timestamp) -> Mail {
+/// `row` sent back to its sender, arriving at `arrives`. It carries only RETURNED, loses its price
+/// and read state, and its expiry clock restarts at the arrival (cmangos `Mail.cpp:264,299-313`).
+pub(crate) fn returned(row: Mail, arrives: Timestamp) -> Mail {
     Mail {
         recipient_guid: row.sender_guid,
         sender_guid: row.recipient_guid,
         was_read: false,
         cod: 0,
         check_flags: CHECK_MASK_RETURNED,
-        deliver_micros: now.to_micros_since_unix_epoch(),
+        deliver_micros: arrives.to_micros_since_unix_epoch(),
         ..row
     }
 }
@@ -568,6 +606,8 @@ pub fn realm_mail_mark_read(
     let recipient_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     apply_mark_read(ctx, recipient_guid, mail_id)
 }
+/// `same_account` says whether the sender and the recipient belong to one Realm Account. The
+/// Gateway reads it, because the recipient's Account may live on another Shard.
 #[reducer]
 #[allow(clippy::too_many_arguments)] // a reducer's arguments are the wire
 pub fn realm_mail_send(
@@ -579,6 +619,7 @@ pub fn realm_mail_send(
     money: u32,
     cod: u32,
     item_guid: u64,
+    same_account: bool,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let sender_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
@@ -591,6 +632,7 @@ pub fn realm_mail_send(
         money,
         cod,
         item_guid,
+        same_account,
     )
 }
 #[reducer]
@@ -638,15 +680,18 @@ pub fn realm_mail_delete(
     let recipient_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     apply_delete(ctx, recipient_guid, mail_id)
 }
+/// `same_account` says whether the returning recipient and the Mail's sender belong to one Realm
+/// Account, as in [`realm_mail_send`].
 #[reducer]
 pub fn realm_mail_return(
     ctx: &ReducerContext,
     request_actor: crate::SessionActor,
     mail_id: u64,
+    same_account: bool,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let recipient_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
-    apply_return(ctx, recipient_guid, mail_id)
+    apply_return(ctx, recipient_guid, mail_id, same_account)
 }
 
 #[cfg(test)]
@@ -1009,18 +1054,80 @@ mod tests {
     }
 
     #[test]
+    fn only_an_item_sent_to_another_account_waits_an_hour() {
+        assert_eq!(
+            delivery_delay_secs(true, false),
+            3_600,
+            "an item to another Account (mangoszero MailHandler.cpp:306-318)"
+        );
+        assert_eq!(delivery_delay_secs(true, true), 0, "an item to an alt");
+        assert_eq!(
+            delivery_delay_secs(false, false),
+            0,
+            "copper or text to another Account"
+        );
+        assert_eq!(
+            delivery_delay_secs(false, true),
+            0,
+            "copper or text to an alt"
+        );
+    }
+
+    #[test]
+    fn a_delayed_letter_arrives_after_its_delay_and_an_undelayed_one_from_creation() {
+        let letter = || {
+            Letter::from_character(
+                9,
+                7,
+                "Your sword".into(),
+                String::new(),
+                0,
+                250,
+                ItemSnapshot::default(),
+            )
+        };
+        assert_eq!(
+            letter().delayed(5_000_000, 3_600).deliver_micros,
+            3_605_000_000
+        );
+        assert_eq!(letter().delayed(5_000_000, 0).deliver_micros, 0);
+    }
+
+    #[test]
+    fn a_mail_returned_with_a_delay_arrives_after_it_and_lives_thirty_days_from_then() {
+        let with_item = Mail {
+            item_entry: 509_0001,
+            item_stack_count: 1,
+            ..row(7, MailSender::Character(9))
+        };
+        let arrives = Timestamp::from_micros_since_unix_epoch(5_000_000 + 3_600_000_000);
+
+        let back = returned(with_item, arrives);
+
+        assert_eq!(back.deliver_micros, 3_605_000_000);
+        assert!(!back.is_delivered(Timestamp::from_micros_since_unix_epoch(3_604_999_999)));
+        assert_eq!(
+            crate::mail_timer::expires_at(&back),
+            Timestamp::from_micros_since_unix_epoch((3_605 + 30 * 86_400) * 1_000_000),
+            "cmangos Mail.cpp:299-313 counts the 30 days from the delivery"
+        );
+    }
+
+    #[test]
     fn every_action_a_recipient_takes_looks_the_mail_up_by_its_delivery() {
         for signature in [
             "pub(crate) fn mail_money(",
             "pub(crate) fn mail_item(",
             "pub(crate) fn apply_take_item(",
             "pub(crate) fn apply_return(",
+            "pub(crate) fn apply_mark_read(",
+            "pub(crate) fn apply_delete(",
         ] {
             let body = crate::test_scan::shape_of(include_str!("mail.rs"), signature);
             assert!(
                 body.contains("delivered_mail(ctx, mail_id)") && !body.contains(".find("),
                 "`{signature}` must find the mail through `delivered_mail`, so an undelivered mail \
-                 cannot be taken or returned. Body was:\n{body}"
+                 cannot be read, deleted, taken or returned. Body was:\n{body}"
             );
         }
     }

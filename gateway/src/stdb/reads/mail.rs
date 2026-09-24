@@ -10,6 +10,45 @@ use spacetimedb_sdk::Table;
 use super::super::bindings::*;
 use super::super::connection::Coordinator;
 
+fn mail_view(db: &RemoteTables, m: Mail) -> crate::codec::MailView {
+    crate::codec::MailView {
+        id: m.id,
+        sender_guid: m.sender_guid,
+        subject: m.subject,
+        body: m.body,
+        item_entry: m.item_entry,
+        item_stack_count: m.item_stack_count,
+        item_durability: m.item_durability,
+        // The row only ever snapshots CURRENT durability (mail.rs's `ItemSnapshot`); the
+        // true max lives on the attachment's own template, the same read `player_items`
+        // joins for. 0 for no attachment — `entry().find(0)` finds nothing.
+        max_durability: db
+            .game_item_template()
+            .entry()
+            .find(&m.item_entry)
+            .map(|t| t.max_durability)
+            .unwrap_or(0),
+        item_enchant_id: m.item_enchant_id,
+        item_soulbound: m.item_soulbound,
+        random_property_id: m.random_property_id,
+        money: m.money,
+        cod: m.cod,
+        was_read: m.was_read,
+        created_at_secs: m.created_at.to_micros_since_unix_epoch() / 1_000_000,
+        sender_kind: m.sender_kind,
+        sender_entry: m.sender_entry,
+        check_flags: m.check_flags,
+        mail_template_id: m.mail_template_id,
+        // Rounded up to the second. The Gateway compares it with its own clock, which can run
+        // ahead of the Module's, so the Module Gates mark-read, delete, every take, the return
+        // and a COD payment against its own clock again.
+        deliver_secs: m
+            .deliver_micros
+            .saturating_add(999_999)
+            .div_euclid(1_000_000),
+    }
+}
+
 impl Coordinator {
     /// Every mail addressed to `recipient_guid`, delivered or not, in no set order.
     /// `codec::build_mail_list` orders the inbox. The SDK exposes only the PK index, so this
@@ -21,43 +60,15 @@ impl Coordinator {
             .game_mail()
             .iter()
             .filter(|m| m.recipient_guid == recipient_guid)
-            .map(|m| crate::codec::MailView {
-                id: m.id,
-                sender_guid: m.sender_guid,
-                subject: m.subject,
-                body: m.body,
-                item_entry: m.item_entry,
-                item_stack_count: m.item_stack_count,
-                item_durability: m.item_durability,
-                // The row only ever snapshots CURRENT durability (mail.rs's `ItemSnapshot`); the
-                // true max lives on the attachment's own template, the same read `player_items`
-                // joins for. 0 for no attachment — `entry().find(0)` finds nothing.
-                max_durability: db
-                    .game_item_template()
-                    .entry()
-                    .find(&m.item_entry)
-                    .map(|t| t.max_durability)
-                    .unwrap_or(0),
-                item_enchant_id: m.item_enchant_id,
-                item_soulbound: m.item_soulbound,
-                random_property_id: m.random_property_id,
-                money: m.money,
-                cod: m.cod,
-                was_read: m.was_read,
-                created_at_secs: m.created_at.to_micros_since_unix_epoch() / 1_000_000,
-                sender_kind: m.sender_kind,
-                sender_entry: m.sender_entry,
-                check_flags: m.check_flags,
-                mail_template_id: m.mail_template_id,
-                // Rounded up to the second. The Gateway compares it with its own clock, which can
-                // run ahead of the Module's, so the Module Gates the takes, the return and a COD
-                // payment against its own clock again.
-                deliver_secs: m
-                    .deliver_micros
-                    .saturating_add(999_999)
-                    .div_euclid(1_000_000),
-            })
+            .map(|m| mail_view(db, m))
             .collect())
+    }
+
+    /// The mail `mail_id`, delivered or not, by its primary key.
+    pub fn mail_by_id(&self, mail_id: u64) -> Option<crate::codec::MailView> {
+        let guard = self.0.coord();
+        let db = &guard.conn.db;
+        db.game_mail().id().find(&mail_id).map(|m| mail_view(db, m))
     }
 
     /// Every mail escrow this database is holding for `sender_guid` — the fences a drive filed and
@@ -96,6 +107,7 @@ impl Coordinator {
                     random_property_id: e.random_property_id,
                 },
                 cod: e.cod,
+                delivery_delay_secs: e.delivery_delay_secs,
             })
             .collect())
     }

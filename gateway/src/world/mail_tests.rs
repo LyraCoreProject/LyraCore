@@ -484,6 +484,8 @@ fn returning_a_mail_carries_its_attachment_and_copper_unchanged() {
             ..Default::default()
         },
     )];
+    // Vim is Ginger's alt here, so the item comes back at once.
+    *world.realm_accounts.lock().unwrap() = alts(&[GINGER, VIM]);
 
     mail::return_to_sender(world.as_ref(), Some(GINGER), MAILBOX, 1).expect("Ginger owns mail 1");
 
@@ -871,6 +873,13 @@ const GRUG: u64 = 20; // Horde, standing next to Ginger — the faction refusal
 const ECHO_WORLD: u64 = 30; // "Echo" on the open world …
 const ECHO_INSTANCES: u64 = 31; // … and "Echo" again on the instances shard: the homonym
 const PURSE: u32 = 500;
+/// Ginger, Trin and Dormant are one player's alts, so an item between them arrives at once, as the
+/// take and cash on delivery tests need. Vim plays on another Realm Account.
+const ALTS: &str = "GINGER";
+const VIMS_ACCOUNT: &str = "VIM";
+fn alts(guids: &[u64]) -> Vec<(u64, String)> {
+    guids.iter().map(|guid| (*guid, ALTS.to_string())).collect()
+}
 fn sharded_send() -> (
     std::sync::Arc<InMemoryStore>,
     std::sync::Arc<InMemoryStore>,
@@ -910,6 +919,8 @@ fn sharded_send() -> (
         ..Default::default()
     });
     *world.purses.lock().unwrap() = vec![(GINGER, PURSE)];
+    *world.realm_accounts.lock().unwrap() = alts(&[GINGER, TRIN, DORMANT]);
+    *instances.realm_accounts.lock().unwrap() = vec![(VIM, VIMS_ACCOUNT.to_string())];
     for shard in [&world, &instances] {
         *shard.peers.lock().unwrap() = vec![world.clone(), instances.clone()];
     }
@@ -924,6 +935,7 @@ fn unsharded_send() -> std::sync::Arc<InMemoryStore> {
         ..Default::default()
     });
     *store.purses.lock().unwrap() = vec![(GINGER, PURSE)];
+    *store.realm_accounts.lock().unwrap() = alts(&[GINGER, TRIN]);
     store
 }
 
@@ -2824,9 +2836,11 @@ fn a_mail_not_yet_delivered_is_absent_from_the_list_the_poll_and_the_body_read()
 }
 
 #[test]
-fn a_mail_not_yet_delivered_cannot_be_taken_from_or_returned() {
+fn a_mail_not_yet_delivered_cannot_be_read_deleted_taken_from_or_returned() {
     let rows = vec![arriving_in(3_600, 1)];
     for (store, holder) in both_planes(rows.clone()) {
+        mail::mark_read(store.as_ref(), Some(GINGER), MAILBOX, 1).expect_err("nothing to read yet");
+        mail::delete(store.as_ref(), Some(GINGER), MAILBOX, 1).expect_err("nothing to delete yet");
         mail::take_money(store.as_ref(), Some(GINGER), MAILBOX, 1).expect_err("no copper yet");
         mail::take_item(store.as_ref(), Some(GINGER), MAILBOX, 1).expect_err("no item yet");
         mail::return_to_sender(store.as_ref(), Some(GINGER), MAILBOX, 1)
@@ -2911,6 +2925,8 @@ fn a_returned_mail_lists_as_returned_and_unread_with_no_price_and_a_fresh_countd
         },
     );
     for (store, _) in both_planes(vec![priced]) {
+        // Vim is Ginger's alt here, so the item comes back at once.
+        *store.realm_accounts.lock().unwrap() = alts(&[GINGER, VIM]);
         mail::return_to_sender(store.as_ref(), Some(GINGER), MAILBOX, 1).expect("declined");
 
         let back = &listed(&store, VIM)[0];
@@ -2984,5 +3000,215 @@ fn deleting_a_priced_mail_answers_the_internal_error_and_keeps_the_mail() {
         store.mails.lock().unwrap().len(),
         1,
         "the priced mail stays"
+    );
+}
+
+/// Every row `recipient` holds on `plane`, delivered or not.
+fn held_for(plane: &InMemoryStore, recipient: u64) -> Vec<codec::MailView> {
+    plane
+        .mails
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(to, _)| *to == recipient)
+        .map(|(_, m)| m.clone())
+        .collect()
+}
+/// The `same_account` answer each mail send, fence and return on `store` carried.
+fn same_account_seen(store: &InMemoryStore) -> Vec<(&'static str, bool)> {
+    store.same_account_seen.lock().unwrap().clone()
+}
+
+#[test]
+fn an_item_to_another_account_is_hidden_for_its_delivery_delay() {
+    let (realm, world, instances, _calls) = sharded_send();
+    give_item(&world, GINGER, SWORD_GUID, sword());
+
+    post_item(world.as_ref(), "Vim").expect("posted");
+
+    assert_eq!(same_account_seen(&world), [("mail_fence", false)]);
+    assert!(
+        mail::open_mailbox(instances.as_ref(), Some(VIM), MAILBOX)
+            .unwrap()
+            .is_empty(),
+        "Vim sees nothing for the hour"
+    );
+    let held = held_for(&realm, VIM);
+    assert!(held[0].deliver_secs > mail::now_secs(), "{held:?}");
+    mail::take_item(instances.as_ref(), Some(VIM), MAILBOX, held[0].id)
+        .expect_err("nothing to take yet");
+}
+
+#[test]
+fn copper_to_another_account_arrives_at_once() {
+    let (_realm, world, instances, _calls) = sharded_send();
+
+    post_money(world.as_ref(), "Vim", ATTACHED).expect("posted");
+
+    assert_eq!(same_account_seen(&world), [("mail_fence", false)]);
+    assert_eq!(
+        mail::open_mailbox(instances.as_ref(), Some(VIM), MAILBOX)
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn an_item_to_an_alt_on_another_shard_arrives_at_once() {
+    let (_realm, world, instances, _calls) = sharded_send();
+    // Vim is Ginger's alt. Only the instances Shard, where Vim lives, names his Realm Account.
+    *instances.realm_accounts.lock().unwrap() = alts(&[VIM]);
+    give_item(&world, GINGER, SWORD_GUID, sword());
+
+    post_item(world.as_ref(), "Vim").expect("posted");
+
+    assert_eq!(same_account_seen(&world), [("mail_fence", true)]);
+    assert_eq!(
+        mail::open_mailbox(instances.as_ref(), Some(VIM), MAILBOX)
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn a_shard_that_holds_a_character_on_a_shadow_account_defers_to_another_shard() {
+    let (_realm, world, instances, _calls) = sharded_send();
+    // Ginger came over from the instances Shard. The world Shard holds her on a shadow Account and
+    // cannot name her Realm Account, and the instances Shard kept her Account Character Owner.
+    *world.realm_accounts.lock().unwrap() = alts(&[TRIN]);
+    *instances.realm_accounts.lock().unwrap() = alts(&[GINGER]);
+    give_item(&world, GINGER, SWORD_GUID, sword());
+
+    post_item(world.as_ref(), "Trin").expect("posted");
+
+    assert_eq!(same_account_seen(&world), [("mail_fence", true)]);
+    assert_eq!(
+        mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX)
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn a_character_no_shard_can_name_counts_as_another_account() {
+    let (_realm, world, _instances, _calls) = sharded_send();
+    *world.realm_accounts.lock().unwrap() = alts(&[GINGER]);
+    give_item(&world, GINGER, SWORD_GUID, sword());
+
+    post_item(world.as_ref(), "Trin").expect("posted");
+
+    assert_eq!(same_account_seen(&world), [("mail_fence", false)]);
+    assert!(mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX)
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn the_single_database_send_carries_the_same_account_answer() {
+    for (accounts, same_account, listed) in [
+        (alts(&[GINGER, TRIN]), true, 1),
+        (vec![(GINGER, ALTS.to_string())], false, 0),
+    ] {
+        let single = unsharded_send();
+        *single.realm_accounts.lock().unwrap() = accounts;
+        give_item(&single, GINGER, SWORD_GUID, sword());
+
+        post_item(single.as_ref(), "Trin").expect("posted");
+
+        assert_eq!(same_account_seen(&single), [("mail_send", same_account)]);
+        assert_eq!(
+            mail::open_mailbox(single.as_ref(), Some(TRIN), MAILBOX)
+                .unwrap()
+                .len(),
+            listed
+        );
+    }
+}
+
+#[test]
+fn an_item_returned_to_another_account_waits_and_to_an_alt_does_not() {
+    for (vims_account, same_account, listed) in [(VIMS_ACCOUNT, false, 0), (ALTS, true, 1)] {
+        let (realm, world, instances, _calls) = sharded_send();
+        *instances.realm_accounts.lock().unwrap() = vec![(VIM, vims_account.to_string())];
+        *realm.mails.lock().unwrap() = vec![(
+            GINGER,
+            codec::MailView {
+                item_entry: sword().entry,
+                item_stack_count: 1,
+                ..mail(1, VIM, "A gift", "enjoy")
+            },
+        )];
+
+        mail::return_to_sender(world.as_ref(), Some(GINGER), MAILBOX, 1).expect("returned");
+
+        assert_eq!(same_account_seen(&realm), [("mail_return", same_account)]);
+        assert_eq!(
+            mail::open_mailbox(instances.as_ref(), Some(VIM), MAILBOX)
+                .unwrap()
+                .len(),
+            listed,
+            "Vim on {vims_account}"
+        );
+        assert_eq!(
+            held_for(&realm, VIM).len(),
+            1,
+            "the sword is on its way back"
+        );
+    }
+}
+
+#[test]
+fn an_item_send_re_driven_after_a_restart_keeps_its_delivery_delay() {
+    let (realm, world, instances, _calls) = sharded_send();
+    give_item(&world, GINGER, SWORD_GUID, sword());
+    *realm.mail_kill_at.lock().unwrap() = Some("mail_commit".into());
+
+    post_item(world.as_ref(), "Vim").expect_err("realm-core never answered the commit");
+    assert_eq!(
+        world.mail_escrows.lock().unwrap()[0].1.delivery_delay_secs,
+        3_600,
+        "the fence holds the hour"
+    );
+
+    *realm.mail_kill_at.lock().unwrap() = None;
+    mail::open_mailbox(world.as_ref(), Some(GINGER), MAILBOX).expect("the gate opens");
+
+    assert!(world.mail_escrows.lock().unwrap().is_empty(), "settled");
+    assert_eq!(held_for(&realm, VIM).len(), 1, "committed once");
+    assert!(
+        mail::open_mailbox(instances.as_ref(), Some(VIM), MAILBOX)
+            .unwrap()
+            .is_empty(),
+        "the re-driven letter still waits its hour"
+    );
+}
+
+#[test]
+fn a_cod_letter_to_another_account_waits_and_its_payment_arrives_at_once() {
+    let (realm, world, instances, _calls) = sharded_send();
+    *instances.purses.lock().unwrap() = vec![(VIM, PURSE)];
+    give_item(&world, GINGER, SWORD_GUID, sword());
+
+    post_cod(world.as_ref(), "Vim", COD).expect("posted");
+
+    let id = held_for(&realm, VIM)[0].id;
+    mail::take_item(instances.as_ref(), Some(VIM), MAILBOX, id).expect_err("nothing to buy yet");
+    assert_eq!(purse_of(&instances, VIM), PURSE, "and nothing is charged");
+
+    // An hour later.
+    for (_, m) in realm.mails.lock().unwrap().iter_mut() {
+        m.deliver_secs = mail::now_secs();
+    }
+    mail::take_item(instances.as_ref(), Some(VIM), MAILBOX, id).expect("bought");
+
+    assert_eq!(purse_of(&instances, VIM), PURSE - COD);
+    let gingers = mail::open_mailbox(world.as_ref(), Some(GINGER), MAILBOX).unwrap();
+    assert_eq!(
+        (gingers.len(), gingers[0].money),
+        (1, COD),
+        "the payment arrives at once (cmangos MailHandler.cpp:475-477)"
     );
 }

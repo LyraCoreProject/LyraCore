@@ -38,6 +38,20 @@ fn shadow_account(account: &Account) -> bool {
         && account.verifier.is_empty()
 }
 
+/// The Realm Account name one World Shard holds for a Character. The Account Character Owner is
+/// exact. Without one, a real local Account carries the Realm Account's name, and a shadow
+/// Account names nobody.
+fn realm_account_of(
+    owner: Option<&AccountCharacterOwner>,
+    local_account: Option<&Account>,
+) -> Option<String> {
+    match (owner, local_account) {
+        (Some(owner), _) => Some(owner.account_name.clone()),
+        (None, Some(account)) if !shadow_account(account) => Some(account.username.clone()),
+        (None, _) => None,
+    }
+}
+
 fn owner_matches(
     owner: &AccountCharacterOwner,
     realm_account_id: u64,
@@ -86,6 +100,22 @@ impl SessionOwnership {
 }
 
 impl Coordinator {
+    /// The Realm Account name THIS handle holds for `character_guid`, by primary key reads only.
+    pub(crate) fn realm_account_name(&self, character_guid: u64) -> Option<String> {
+        let guard = self.0.coord();
+        let db = &guard.conn.db;
+        let owner = db
+            .game_account_character_owner()
+            .character_guid()
+            .find(&character_guid);
+        let local_account = db
+            .game_character()
+            .guid()
+            .find(&character_guid)
+            .and_then(|character| db.game_account().id().find(&character.account_id));
+        realm_account_of(owner.as_ref(), local_account.as_ref())
+    }
+
     pub(crate) fn session_actor(&self, guid: u64) -> SessionActor {
         SessionActor {
             guid: if guid == 0 {
@@ -363,6 +393,32 @@ mod tests {
             banned: false,
             alpha_test_tools: false,
         }
+    }
+
+    #[test]
+    fn a_shard_names_the_realm_account_from_the_owner_row_or_a_real_local_account() {
+        let owner = AccountCharacterOwner {
+            character_guid: 99,
+            account_id: 4,
+            account_name: "TEST".into(),
+        };
+        let shadow = account(17, "#17", &[], &[]);
+        assert_eq!(
+            realm_account_of(Some(&owner), Some(&shadow)).as_deref(),
+            Some("TEST"),
+            "a transferred Character on a shadow Account keeps its Realm Account"
+        );
+        assert_eq!(
+            realm_account_of(None, Some(&account(3, "TEST", &[1], &[2]))).as_deref(),
+            Some("TEST"),
+            "a local Account with a verifier carries the Realm Account's name"
+        );
+        assert_eq!(
+            realm_account_of(None, Some(&shadow)),
+            None,
+            "a shadow Account's name belongs to no Realm Account"
+        );
+        assert_eq!(realm_account_of(None, None), None);
     }
 
     #[test]

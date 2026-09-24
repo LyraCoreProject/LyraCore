@@ -4,61 +4,55 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
-use super::session_actor_type::SessionActor;
-
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
-pub(super) struct RealmMailReturnArgs {
-    pub request_actor: SessionActor,
-    pub mail_id: u64,
-    pub same_account: bool,
+pub(super) struct DebugDeliverMailFixtureArgs {
+    pub recipient_guid: u64,
+    pub subject: String,
 }
 
-impl From<RealmMailReturnArgs> for super::Reducer {
-    fn from(args: RealmMailReturnArgs) -> Self {
-        Self::RealmMailReturn {
-            request_actor: args.request_actor,
-            mail_id: args.mail_id,
-            same_account: args.same_account,
+impl From<DebugDeliverMailFixtureArgs> for super::Reducer {
+    fn from(args: DebugDeliverMailFixtureArgs) -> Self {
+        Self::DebugDeliverMailFixture {
+            recipient_guid: args.recipient_guid,
+            subject: args.subject,
         }
     }
 }
 
-impl __sdk::InModule for RealmMailReturnArgs {
+impl __sdk::InModule for DebugDeliverMailFixtureArgs {
     type Module = super::RemoteModule;
 }
 
 #[allow(non_camel_case_types)]
-/// Extension trait for access to the reducer `realm_mail_return`.
+/// Extension trait for access to the reducer `debug_deliver_mail_fixture`.
 ///
 /// Implemented for [`super::RemoteReducers`].
-pub trait realm_mail_return {
-    /// Request that the remote module invoke the reducer `realm_mail_return` to run as soon as possible.
+pub trait debug_deliver_mail_fixture {
+    /// Request that the remote module invoke the reducer `debug_deliver_mail_fixture` to run as soon as possible.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
-    /// /// Use [`realm_mail_return:realm_mail_return_then`] to run a callback after the reducer completes.
-    fn realm_mail_return(
+    /// /// Use [`debug_deliver_mail_fixture:debug_deliver_mail_fixture_then`] to run a callback after the reducer completes.
+    fn debug_deliver_mail_fixture(
         &self,
-        request_actor: SessionActor,
-        mail_id: u64,
-        same_account: bool,
+        recipient_guid: u64,
+        subject: String,
     ) -> __sdk::Result<()> {
-        self.realm_mail_return_then(request_actor, mail_id, same_account, |_, _| {})
+        self.debug_deliver_mail_fixture_then(recipient_guid, subject, |_, _| {})
     }
 
-    /// Request that the remote module invoke the reducer `realm_mail_return` to run as soon as possible,
+    /// Request that the remote module invoke the reducer `debug_deliver_mail_fixture` to run as soon as possible,
     /// registering `callback` to run when we are notified that the reducer completed.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and its status can be observed with the `callback`.
-    fn realm_mail_return_then(
+    fn debug_deliver_mail_fixture_then(
         &self,
-        request_actor: SessionActor,
-        mail_id: u64,
-        same_account: bool,
+        recipient_guid: u64,
+        subject: String,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -66,22 +60,20 @@ pub trait realm_mail_return {
     ) -> __sdk::Result<()>;
 }
 
-impl realm_mail_return for super::RemoteReducers {
-    fn realm_mail_return_then(
+impl debug_deliver_mail_fixture for super::RemoteReducers {
+    fn debug_deliver_mail_fixture_then(
         &self,
-        request_actor: SessionActor,
-        mail_id: u64,
-        same_account: bool,
+        recipient_guid: u64,
+        subject: String,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
-            RealmMailReturnArgs {
-                request_actor,
-                mail_id,
-                same_account,
+            DebugDeliverMailFixtureArgs {
+                recipient_guid,
+                subject,
             },
             callback,
         )
