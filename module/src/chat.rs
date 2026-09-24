@@ -589,12 +589,11 @@ fn add_contact_core(
     if target_guid == sender.guid {
         return Err(ContactRefusal::AddSelf);
     }
-    if !is_ignore {
-        if let Some(target_race) = target_race {
-            if !lyracore_shared::faction::same_team(sender.race(), target_race) {
-                return Err(ContactRefusal::Enemy);
-            }
-        }
+    let refuses_enemy = !is_ignore
+        && target_race
+            .is_some_and(|race| !lyracore_shared::faction::same_team(sender.race(), race));
+    if refuses_enemy {
+        return Err(ContactRefusal::Enemy);
     }
     let contacts = ctx.db.game_character_contact();
     let existing: Vec<_> = contacts.by_owner().filter(&sender.guid).collect();

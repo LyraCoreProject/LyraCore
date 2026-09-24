@@ -374,6 +374,17 @@ pub(crate) struct WorldView {
     /// viewer: a world-port drops the source viewer before the source Shard deletes the row, so
     /// the next world entry must hide the countdown itself.
     countdowns_shown: Mutex<HashSet<u64>>,
+    /// Characters this Gateway has itself watched the `game_character.online` false→true edge
+    /// for (`character_online_changed`), not yet paired with a later Account Claim close. The
+    /// friend-notice dedup state that lets a claim close (`account_claim_changed`) answer
+    /// FRIEND_OFFLINE only for a Character THIS Gateway confirmed came online — never for a claim
+    /// that opened and closed without `player_login` ever running, which happens whenever
+    /// `enter_world` refuses after `claim_session` already succeeded (`CMSG_PLAYER_LOGIN`'s
+    /// handler runs them in that order). A Gateway that starts, or reconnects a Shard, after a
+    /// Character already logged in has no mark for it and answers nothing for that Character's
+    /// NEXT close — a known gap, not a correctness hazard: the friends pane itself still reads
+    /// live Realm Presence, so it is never wrong, only occasionally a push notification behind.
+    online_characters: Mutex<HashSet<u64>>,
 }
 
 impl WorldView {
@@ -385,6 +396,7 @@ impl WorldView {
             shards: RwLock::new(Vec::new()),
             next_session: AtomicU64::new(1),
             countdowns_shown: Mutex::new(HashSet::new()),
+            online_characters: Mutex::new(HashSet::new()),
         }
     }
 
@@ -403,6 +415,24 @@ impl WorldView {
             .lock()
             .unwrap()
             .contains(&character_guid)
+    }
+
+    /// Record that `guid` reached the `game_character.online` transition — the one signal a
+    /// later Account Claim close checks before it answers FRIEND_OFFLINE.
+    fn mark_character_online(&self, guid: u64) {
+        self.online_characters
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(guid);
+    }
+
+    /// Consume `guid`'s online mark, if this Gateway ever recorded one. `true` only for a
+    /// Character this Gateway itself watched come online.
+    fn take_character_online(&self, guid: u64) -> bool {
+        self.online_characters
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&guid)
     }
 
     fn viewer(&self, session: SessionId) -> Option<Arc<Viewer>> {
@@ -1041,19 +1071,11 @@ fn register_shard_callbacks(
         &view,
         move |v, row| contact_changed(v, shard, row, false),
     );
-    // The friend online/offline notice. Only Realm-core writes `game_account_claim`; this
-    // registration hears it on a Realm whose Realm-core is this database, `arm_realm_private`
-    // everywhere else — the same twin rule as the chat Relay above. Replayed inserts (a
-    // reconnect's resubscribe burst) are dropped; a genuine first-ever claim always arrives as a
-    // live insert, never inside that burst.
+    // The friend offline notice — a claim CLOSE only, which is always an UPDATE (the account's
+    // first-ever claim is an insert, and an insert can never be a close). Only Realm-core writes
+    // `game_account_claim`; this registration hears it on a Realm whose Realm-core is this
+    // database, `arm_realm_private` everywhere else — the same twin rule as the chat Relay above.
     {
-        let insert_coord = coord.clone();
-        wire_insert_live(
-            db.game_account_claim(),
-            "game_account_claim.insert",
-            &view,
-            move |v, row| account_claim_changed(v, &insert_coord, None, row),
-        );
         let update_coord = coord.clone();
         wire_update(
             db.game_account_claim(),
@@ -1062,6 +1084,14 @@ fn register_shard_callbacks(
             move |v, old, new| account_claim_changed(v, &update_coord, Some(old), new),
         );
     }
+    // The friend ONLINE notice — see `character_online_changed`'s doc comment for why it reads
+    // `game_character`'s own `online` flag instead of the Account Claim that opens before it.
+    wire_update(
+        db.game_character(),
+        "game_character.update",
+        &view,
+        |v, old, new| character_online_changed(v, old, new),
+    );
     wire_insert_live(
         db.game_mail_arrival(),
         "game_mail_arrival.insert",
@@ -1278,16 +1308,10 @@ pub(crate) fn arm_realm_private(view: Arc<WorldView>, realm: Coordinator, coord:
         &view,
         |v, row| channel_notice_appeared(v, row),
     );
-    // The friend online/offline notice's sharded-realm leg — see `arm_shard`'s twin registration
-    // and `account_claim_changed`'s doc comment.
+    // The friend offline notice's sharded-realm leg — see `arm_shard`'s twin registration and
+    // `account_claim_changed`'s doc comment. `game_character` needs no such twin: Realm-core
+    // holds no Characters, so `character_online_changed` only ever registers in `arm_shard`.
     {
-        let insert_coord = coord.clone();
-        wire_insert_live(
-            db.game_account_claim(),
-            "realm.game_account_claim.insert",
-            &view,
-            move |v, row| account_claim_changed(v, &insert_coord, None, row),
-        );
         let update_coord = coord.clone();
         wire_update(
             db.game_account_claim(),
@@ -2483,136 +2507,128 @@ fn replace_contact_sets(view: &WorldView, shard: ShardId, contacts: &[ContactEnt
     }
 }
 
-/// One Account Claim row's live/dead edge — which Character becomes reachable, which stops being.
-enum ClaimEdge {
-    Online(u64),
-    Offline(u64),
-}
-
-/// The pure transition a `game_account_claim` row's old and new state implies. Claims change at
-/// login, logout, replacement and reaping, never at Transfer. `old` is `None` for the account's
-/// first-ever claim.
-///
-/// - Inserted open, or reopened after being closed: the new Character becomes live.
-/// - Closed, or replaced by a new generation or a different Character: the old Character stops
-///   being live; the replacement becomes live too if it is itself open.
-/// - A renewal that only moves `expires_micros` (same generation, same Character, still open):
-///   nothing.
-fn claim_transitions(old: Option<&AccountClaim>, new: &AccountClaim) -> Vec<ClaimEdge> {
-    let Some(old) = old else {
-        return if new.closed {
-            Vec::new()
-        } else {
-            vec![ClaimEdge::Online(new.character_guid)]
-        };
-    };
-    let replaced = old.generation != new.generation || old.character_guid != new.character_guid;
-    let (was_live, is_live) = (!old.closed, !new.closed);
-    let mut edges = Vec::new();
-    if replaced {
-        if was_live {
-            edges.push(ClaimEdge::Offline(old.character_guid));
-        }
-        if is_live {
-            edges.push(ClaimEdge::Online(new.character_guid));
-        }
-    } else if was_live && !is_live {
-        edges.push(ClaimEdge::Offline(old.character_guid));
-    }
-    edges
-}
-
-/// The World Sessions that could possibly hear one Account Claim transition, on any Shard: every
-/// viewer that lists `subject_guid` as a friend, minus `subject_guid`'s own viewer. Collected
-/// BEFORE any Realm Presence read — this is a plain scan of Gateway-side `Viewer` state, and most
-/// transitions have no local candidate at all, so a transition with none never pays for a read.
-/// The team match still needs the read (a per-candidate job checks it once the read resolves).
-fn claim_edge_candidates(view: &WorldView, subject_guid: u64) -> Vec<Arc<Viewer>> {
+/// The World Sessions that could possibly hear a friend online/offline notice about
+/// `subject_guid`, on any Shard: every viewer that lists it as a friend, minus its own viewer.
+/// Team is checked separately by each caller — one already knows it for free (the just-committed
+/// `game_character` row), the other only after a read.
+fn friend_notice_candidates(view: &WorldView, subject_guid: u64) -> Vec<Arc<Viewer>> {
     view.all_viewers()
         .into_iter()
         .filter(|viewer| viewer.self_guid != subject_guid && viewer.is_friend(subject_guid))
         .collect()
 }
 
-/// The team and, for an Online edge, the `SMSG_FRIEND_STATUS` trailing fields resolved for one
-/// Account Claim transition's Character — `None` when no connected Shard currently knows the
-/// Character at all.
-type ClaimEdgeOutcome = Option<(u32, Option<crate::codec::FriendOnline>)>;
-
-/// The subject Character's team and, for an Online edge, its `SMSG_FRIEND_STATUS` trailing fields
-/// — computed ONCE per transition by whichever candidate's job runs first (cached in the caller's
-/// `OnceLock` for every other candidate), on that job's own writer thread, NEVER the shared pump:
-/// a Realm Presence read can cross the network to another Shard, and the pump is the one thread
-/// every World Session on this Shard depends on. The Offline edge needs only the departing
-/// Character's team, read with the local-cache-only [`presence::character_identity_anywhere`]
-/// rather than the health-checked [`presence::of`] — the Character has just stopped being
-/// reachable, so a Whereabouts read has nothing left to prove. `None` when no connected Shard
-/// currently knows the Character at all: never guess a team, which could notify the wrong side.
-fn claim_edge_outcome(coord: &Coordinator, subject_guid: u64, online: bool) -> ClaimEdgeOutcome {
-    if online {
-        let presence = crate::world::presence::of(coord, subject_guid)
-            .ok()
-            .flatten()?;
-        let team = lyracore_shared::faction::team_for_race(presence.race);
-        Some((
-            team,
-            Some(crate::world::social::friend_online_fields(&presence)),
-        ))
-    } else {
-        let identity = crate::world::presence::character_identity_anywhere(coord, subject_guid)
-            .ok()
-            .flatten()?;
-        let team = lyracore_shared::faction::team_for_race(identity.race);
-        Some((team, None))
+/// A Character's `online` flag flipped false → true on this Shard → `FRIEND_ONLINE` to every
+/// same-team viewer, on any Shard, who lists it as a friend (cm:CharacterHandler.cpp:856,
+/// cm:WorldSession.cpp:754, cm:SocialMgr.cpp:263-292).
+///
+/// Hooked to `game_character` (shard-local, inside `player_login`'s own transaction), never the
+/// realm-wide Account Claim: `CMSG_PLAYER_LOGIN`'s handler calls `claim_session` BEFORE
+/// `enter_world`/`player_login`, so a Claim-driven edge could fire for a Character that has not
+/// entered the world yet, or never will if `enter_world` then refuses — carrying its stale
+/// pre-login level and zone either way. This row IS the just-committed login state, so no further
+/// read is needed: race/class/level/zone come straight off it, and Away Status is always `None`
+/// (login clears it — nobody crosses a loading screen AFK). Marks the Character in this Gateway's
+/// own `online_characters` set, the dedup [`account_claim_changed`] reads before it answers
+/// FRIEND_OFFLINE for the same Character's later claim close.
+fn character_online_changed(view: &WorldView, old: &Character, new: &Character) {
+    if old.online || !new.online {
+        return;
+    }
+    view.mark_character_online(new.guid);
+    let team = lyracore_shared::faction::team_for_race(new.race);
+    let online_fields = crate::codec::FriendOnline {
+        away: crate::world::presence::AwayStatus::None,
+        zone_id: new.zone_id,
+        level: new.level,
+        class: new.class,
+    };
+    let subject_guid = new.guid;
+    for viewer in friend_notice_candidates(view, subject_guid) {
+        if viewer.team != team {
+            continue;
+        }
+        let online_fields = online_fields.clone();
+        enqueue(viewer, move |_| {
+            let (opcode, body) = crate::codec::build_friend_status_raw(
+                wow_world_base::shared::friend_result_vanilla_tbc::FriendResult::Online,
+                subject_guid,
+                Some(online_fields),
+            );
+            vec![Outbound::Raw { opcode, body }]
+        });
     }
 }
 
-/// An Account Claim changed on Realm-core → `FRIEND_ONLINE`/`FRIEND_OFFLINE` to every same-team
-/// viewer, on any Shard, who lists the transition's Character as a friend
-/// (cm:CharacterHandler.cpp:856, cm:WorldSession.cpp:754, cm:SocialMgr.cpp:263-292). `coord` is the
-/// world handle the presence reads run through — never the Realm-core handle, which holds no live
-/// entities.
+/// Does an Account Claim row's old and new state close the OLD row's Character? `old` is `None`
+/// for the account's first-ever claim, never a close. Reopening after a close, and a fresh open,
+/// both answer `None` — that edge is [`character_online_changed`]'s, not this file's.
+fn claim_closed(old: Option<&AccountClaim>, new: &AccountClaim) -> Option<u64> {
+    let old = old?;
+    let replaced = old.generation != new.generation || old.character_guid != new.character_guid;
+    let was_live = !old.closed;
+    (was_live && (replaced || new.closed)).then_some(old.character_guid)
+}
+
+/// The departing Character's team for one Account Claim close — read with the local-cache-only
+/// [`presence::character_identity_anywhere`], not the health-checked [`presence::of`]: the
+/// Character has just stopped being reachable, so a Whereabouts read has nothing left to prove.
+/// Computed ONCE per transition, by whichever candidate's job runs first (cached in the caller's
+/// `OnceLock` for every other candidate), on that job's own writer thread, NEVER the shared pump:
+/// this read can cross the network to another Shard, and the pump is the one thread every World
+/// Session on this Shard depends on. `None` when no connected Shard currently knows the Character
+/// at all: never guess a team, which could notify the wrong side.
+fn claim_close_team(coord: &Coordinator, subject_guid: u64) -> Option<u32> {
+    let identity = crate::world::presence::character_identity_anywhere(coord, subject_guid)
+        .ok()
+        .flatten()?;
+    Some(lyracore_shared::faction::team_for_race(identity.race))
+}
+
+/// An Account Claim closed on Realm-core → `FRIEND_OFFLINE` to every same-team viewer, on any
+/// Shard, who lists the Character as a friend (cm:CharacterHandler.cpp:856,
+/// cm:WorldSession.cpp:754, cm:SocialMgr.cpp:263-292) — but ONLY for a Character this Gateway
+/// itself watched come online ([`WorldView::take_character_online`]). A claim can close without
+/// `player_login` ever having run for it: `CMSG_PLAYER_LOGIN`'s handler calls `claim_session`
+/// BEFORE `enter_world`, so a login that fails after the claim opens releases it on session
+/// teardown with no Character having ever entered the world, and this must answer nothing for it.
+/// `coord` is the world handle [`claim_close_team`] reads through — never the Realm-core handle,
+/// which holds no Characters.
 fn account_claim_changed(
     view: &WorldView,
     coord: &Coordinator,
     old: Option<&AccountClaim>,
     new: &AccountClaim,
 ) {
-    for edge in claim_transitions(old, new) {
-        let (subject_guid, online) = match edge {
-            ClaimEdge::Online(guid) => (guid, true),
-            ClaimEdge::Offline(guid) => (guid, false),
-        };
-        let candidates = claim_edge_candidates(view, subject_guid);
-        if candidates.is_empty() {
-            continue;
-        }
-        let result = if online {
-            wow_world_base::shared::friend_result_vanilla_tbc::FriendResult::Online
-        } else {
-            wow_world_base::shared::friend_result_vanilla_tbc::FriendResult::Offline
-        };
-        let outcome: Arc<OnceLock<ClaimEdgeOutcome>> = Arc::new(OnceLock::new());
-        for viewer in candidates {
-            let (coord, outcome) = (coord.clone(), outcome.clone());
-            let viewer_team = viewer.team;
-            enqueue(viewer, move |_| {
-                let Some((subject_team, online_fields)) =
-                    outcome.get_or_init(|| claim_edge_outcome(&coord, subject_guid, online))
-                else {
-                    return Vec::new();
-                };
-                if *subject_team != viewer_team {
-                    return Vec::new();
-                }
-                let (opcode, body) = crate::codec::build_friend_status_raw(
-                    result,
-                    subject_guid,
-                    online_fields.clone(),
-                );
-                vec![Outbound::Raw { opcode, body }]
-            });
-        }
+    let Some(subject_guid) = claim_closed(old, new) else {
+        return;
+    };
+    if !view.take_character_online(subject_guid) {
+        return;
+    }
+    let candidates = friend_notice_candidates(view, subject_guid);
+    if candidates.is_empty() {
+        return;
+    }
+    let team: Arc<OnceLock<Option<u32>>> = Arc::new(OnceLock::new());
+    for viewer in candidates {
+        let (coord, team) = (coord.clone(), team.clone());
+        let viewer_team = viewer.team;
+        enqueue(viewer, move |_| {
+            let Some(subject_team) = *team.get_or_init(|| claim_close_team(&coord, subject_guid))
+            else {
+                return Vec::new();
+            };
+            if subject_team != viewer_team {
+                return Vec::new();
+            }
+            let (opcode, body) = crate::codec::build_friend_status_raw(
+                wow_world_base::shared::friend_result_vanilla_tbc::FriendResult::Offline,
+                subject_guid,
+                None,
+            );
+            vec![Outbound::Raw { opcode, body }]
+        });
     }
 }
 
@@ -5590,8 +5606,8 @@ mod realm_chat_relay_tests {
 #[cfg(test)]
 mod account_claim_relay_tests {
     use super::{
-        claim_edge_candidates, claim_transitions, AccountClaim, ClaimEdge, ExplorationReplay,
-        MotionPending, Viewer, WorldView,
+        character_online_changed, claim_closed, friend_notice_candidates, AccountClaim, Character,
+        ExplorationReplay, MotionPending, Viewer, WorldView,
     };
     use crate::stdb::aoi::ViewerGates;
     use crate::stdb::world_index::CellKey;
@@ -5646,60 +5662,104 @@ mod account_claim_relay_tests {
         }
     }
 
-    /// One case per bullet in `claim_transitions`'s doc comment, rows written by hand.
-    #[test]
-    fn claim_transitions_cover_every_bullet() {
-        // Inserted open (the account's first-ever claim): the new Character becomes live.
-        assert!(matches!(
-            claim_transitions(None, &claim(1, FRIEND, false)).as_slice(),
-            [ClaimEdge::Online(g)] if *g == FRIEND
-        ));
+    /// A `game_character` row with only the columns this relay reads set to something other than
+    /// zero, the rest at whatever a fresh row would have.
+    fn character_row(
+        guid: u64,
+        race: u8,
+        class: u8,
+        level: u8,
+        zone_id: u32,
+        online: bool,
+    ) -> Character {
+        Character {
+            guid,
+            account_id: 0,
+            owner_identity: spacetimedb_sdk::Identity::ZERO,
+            name: String::new(),
+            race,
+            class,
+            gender: 0,
+            skin: 0,
+            face: 0,
+            hair_style: 0,
+            hair_color: 0,
+            facial_hair: 0,
+            level,
+            xp: 0,
+            next_level_xp: 0,
+            map_id: 0,
+            zone_id,
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+            orientation: 0.0,
+            first_login: false,
+            online,
+            money: 0,
+            rested_xp: 0,
+            last_logout_micros: 0,
+            home_map: 0,
+            home_zone: 0,
+            home_x: 0.0,
+            home_y: 0.0,
+            home_z: 0.0,
+            played_total_secs: 0,
+            session_start_micros: 0,
+            health: 0,
+            power: 0,
+            respec_count: 0,
+            death_expire_micros: 0,
+            pending_instance_id: 0,
+            gm_level: 0,
+            pending_ghost: false,
+            resting: false,
+            rested_since_micros: 0,
+            pending_godmode: false,
+            pending_run_speed_mult_bp: 0,
+            bank_bag_slots: 0,
+        }
+    }
 
-        // A renewal — only `expires_micros` moves: nothing.
+    /// One case per bullet in `claim_closed`'s doc comment, rows written by hand.
+    #[test]
+    fn claim_closed_covers_every_bullet() {
+        // Inserted open (the account's first-ever claim): not a close.
+        assert_eq!(claim_closed(None, &claim(1, FRIEND, false)), None);
+
+        // A renewal — only `expires_micros` moves: not a close.
         let old = claim(1, FRIEND, false);
         let mut renewed = old.clone();
         renewed.expires_micros += 1;
-        assert!(claim_transitions(Some(&old), &renewed).is_empty());
+        assert_eq!(claim_closed(Some(&old), &renewed), None);
 
         // Closed (logout): the Character stops being live.
         let old = claim(1, FRIEND, false);
         let closed = claim(1, FRIEND, true);
-        assert!(matches!(
-            claim_transitions(Some(&old), &closed).as_slice(),
-            [ClaimEdge::Offline(g)] if *g == FRIEND
-        ));
+        assert_eq!(claim_closed(Some(&old), &closed), Some(FRIEND));
 
-        // Reopened after being closed (a fresh login, a new generation): the new Character becomes
-        // live.
+        // Reopened after being closed (a fresh login, a new generation): not a close.
         let old = claim(1, FRIEND, true);
         let reopened = claim(2, FRIEND, false);
-        assert!(matches!(
-            claim_transitions(Some(&old), &reopened).as_slice(),
-            [ClaimEdge::Online(g)] if *g == FRIEND
-        ));
+        assert_eq!(claim_closed(Some(&old), &reopened), None);
 
         // Replaced while live, by a DIFFERENT Character (a relogin as someone else on the same
-        // Account without an intervening close): the old Character goes offline, the new one on.
+        // Account without an intervening close): the OLD Character stops being live.
         let old = claim(1, FRIEND, false);
         let replaced = claim(2, 99, false);
-        assert!(matches!(
-            claim_transitions(Some(&old), &replaced).as_slice(),
-            [ClaimEdge::Offline(a), ClaimEdge::Online(b)] if *a == FRIEND && *b == 99
-        ));
+        assert_eq!(claim_closed(Some(&old), &replaced), Some(FRIEND));
 
         // Reaped while already closed (the claim reaper closes an already-closed row, or closes it
-        // twice across a race): nothing.
+        // twice across a race): not a (new) close.
         let old = claim(1, FRIEND, true);
         let still_closed = claim(1, FRIEND, true);
-        assert!(claim_transitions(Some(&old), &still_closed).is_empty());
+        assert_eq!(claim_closed(Some(&old), &still_closed), None);
     }
 
-    /// `claim_edge_candidates` runs BEFORE any team is known (the read that would answer it has
-    /// not happened yet), so it collects every friend-listing viewer on any Shard regardless of
-    /// team — the team match is each candidate's own job's problem, once the read resolves — and
-    /// never the subject's own viewer, whatever it lists.
+    /// `friend_notice_candidates` collects every friend-listing viewer on any Shard, and never the
+    /// subject's own viewer, whatever it lists.
     #[test]
-    fn claim_edge_candidates_lists_every_friend_listing_viewer_but_never_the_subject() {
+    fn friend_notice_candidates_lists_every_friend_listing_viewer_but_never_the_subject() {
         let view = WorldView::new(true);
         let (friend, _friend_rx) = listener(&view, 0, 20, ALLIANCE);
         let (elsewhere, _elsewhere_rx) = listener(&view, 1, 21, ALLIANCE);
@@ -5709,7 +5769,7 @@ mod account_claim_relay_tests {
         let (subject, _subject_rx) = listener(&view, 0, FRIEND, ALLIANCE);
         subject.friends.lock().unwrap().insert(FRIEND); // hypothetically lists itself
 
-        let mut candidates: Vec<u64> = claim_edge_candidates(&view, FRIEND)
+        let mut candidates: Vec<u64> = friend_notice_candidates(&view, FRIEND)
             .iter()
             .map(|viewer| viewer.self_guid)
             .collect();
@@ -5718,40 +5778,136 @@ mod account_claim_relay_tests {
         assert_eq!(
             candidates,
             [friend.self_guid, elsewhere.self_guid, other_team.self_guid],
-            "every friend-listing viewer on any Shard is a candidate, team unchecked here, but \
-             never a non-friend and never the subject's own viewer"
+            "every friend-listing viewer on any Shard is a candidate, team included (each caller \
+             checks it its own way), but never a non-friend and never the subject's own viewer"
         );
     }
 
-    /// Nothing is enqueued, and no Realm Presence read is attempted, for a transition no local
-    /// viewer lists as a friend — pinned in source because no Fake reaches a Coordinator-backed
-    /// `presence::of`/`character_identity_anywhere` read to prove it behaviorally.
+    /// **The bug this file's review round fixed:** `character_online_changed` fires with the
+    /// JUST-COMMITTED row's own level/zone/class, never a stale pre-login value, and marks the
+    /// Character online for the later claim close to find.
     #[test]
-    fn account_claim_changed_checks_candidates_before_any_read() {
+    fn character_online_changed_reaches_a_same_team_friend_with_the_just_committed_row() {
+        let view = WorldView::new(true);
+        let (_friend, friend_rx) = listener(&view, 0, 20, ALLIANCE);
+        let (_other_team, other_team_rx) = listener(&view, 0, 21, HORDE);
+        let (non_friend, non_friend_rx) = listener(&view, 0, 22, ALLIANCE);
+        non_friend.friends.lock().unwrap().clear();
+
+        // Last logged out at level 21 in zone 12; this login already leveled up and landed the
+        // Character in zone 33 — the row's OWN fields, not a stale earlier read.
+        let old = character_row(FRIEND, 1, 4, 21, 12, false);
+        let new = character_row(FRIEND, 1, 4, 22, 33, true);
+
+        character_online_changed(&view, &old, &new);
+
+        match friend_rx
+            .try_recv()
+            .expect("a same-team friend must hear it")
+        {
+            Outbound::Job(job) => match job().as_slice() {
+                [Outbound::Raw { opcode, body }] => {
+                    assert_eq!(*opcode, crate::codec::social::SMSG_FRIEND_STATUS_OPCODE);
+                    assert_eq!(body[0], 0x02, "ONLINE");
+                    assert_eq!(body[1..9], FRIEND.to_le_bytes());
+                    assert_eq!(
+                        body[9], 1,
+                        "status ONLINE — Away Status always clears at login"
+                    );
+                    assert_eq!(body[10..14], 33u32.to_le_bytes(), "the POST-login zone");
+                    assert_eq!(body[14..18], 22u32.to_le_bytes(), "the POST-login level");
+                    assert_eq!(body[18..22], 4u32.to_le_bytes(), "class");
+                }
+                _ => panic!("expected one Raw packet"),
+            },
+            _ => panic!("expected a job"),
+        }
+        assert!(
+            other_team_rx.try_recv().is_err(),
+            "a viewer on the other team hears nothing"
+        );
+        assert!(
+            non_friend_rx.try_recv().is_err(),
+            "a same-team viewer who does not list the guid as a friend hears nothing"
+        );
+        assert!(
+            view.take_character_online(FRIEND),
+            "the login must be marked so the later claim close can find it"
+        );
+    }
+
+    /// An UPDATE that is not the false→true edge — an already-online Character's level-up or
+    /// logout — fires nothing and marks nothing.
+    #[test]
+    fn character_online_changed_ignores_every_update_that_is_not_the_online_edge() {
+        let view = WorldView::new(true);
+        let (_friend, friend_rx) = listener(&view, 0, 20, ALLIANCE);
+
+        let old = character_row(FRIEND, 1, 4, 21, 33, true);
+        let new = character_row(FRIEND, 1, 4, 22, 33, true); // a level-up, already online
+        character_online_changed(&view, &old, &new);
+        assert!(friend_rx.try_recv().is_err());
+        assert!(!view.take_character_online(FRIEND));
+
+        let old = character_row(FRIEND, 1, 4, 22, 33, true);
+        let new = character_row(FRIEND, 1, 4, 22, 33, false); // true -> false is a LOGOUT
+        character_online_changed(&view, &old, &new);
+        assert!(friend_rx.try_recv().is_err());
+    }
+
+    /// **The other half of the fix:** the online mark is one-shot and starts unset, so a claim
+    /// that closes for a Character this Gateway never watched come online — a login that fails
+    /// after `claim_session` succeeds, before `enter_world`/`player_login` ever runs — has nothing
+    /// to consume. Combined with the next test (the mark is checked before anything else runs),
+    /// this is the "no notice at all" guarantee for a failed login; no Fake reaches a
+    /// Coordinator-backed `account_claim_changed` call to prove the end-to-end path directly.
+    #[test]
+    fn take_character_online_answers_false_for_a_login_it_never_observed() {
+        let view = WorldView::new(true);
+        assert!(
+            !view.take_character_online(FRIEND),
+            "nothing marked this guid online, so there is nothing to consume"
+        );
+    }
+
+    /// Nothing is enqueued, and no team read is attempted, for a claim close whose Character this
+    /// Gateway never watched come online, or that no local viewer lists as a friend — pinned in
+    /// source because no Fake reaches a Coordinator-backed `claim_close_team` read to prove it
+    /// behaviorally.
+    #[test]
+    fn account_claim_changed_checks_the_online_mark_and_candidates_before_any_read() {
         let body =
             crate::test_scan::code_of(include_str!("world_view.rs"), "fn account_claim_changed(");
+        let closed_at = body
+            .find("claim_closed(old, new)")
+            .expect("must compute the close first");
+        let mark_at = body
+            .find("take_character_online(subject_guid)")
+            .expect("must check the online mark before doing anything else");
         let candidates_at = body
-            .find("claim_edge_candidates(view, subject_guid)")
-            .expect("account_claim_changed must collect candidates first");
+            .find("friend_notice_candidates(view, subject_guid)")
+            .expect("must collect candidates");
         let empty_check_at = body
             .find("candidates.is_empty()")
-            .expect("account_claim_changed must return early when nobody local is listening");
+            .expect("must return early when nobody local is listening");
         let enqueue_at = body
             .find("enqueue(viewer")
-            .expect("account_claim_changed must still enqueue one job per candidate");
+            .expect("must still enqueue one job per candidate");
         let read_at = body
-            .find("claim_edge_outcome(&coord, subject_guid, online)")
-            .expect("account_claim_changed must still resolve the team and trailing fields");
+            .find("claim_close_team(&coord, subject_guid)")
+            .expect("must still resolve the departing team");
         assert!(
-            candidates_at < empty_check_at && empty_check_at < enqueue_at,
-            "the empty check must run between collecting candidates and enqueueing any job, so a \
-             transition with no local audience pays for neither a read nor a job"
+            closed_at < mark_at
+                && mark_at < candidates_at
+                && candidates_at < empty_check_at
+                && empty_check_at < enqueue_at,
+            "the online mark must be checked before candidates are even collected, so a login \
+             that never reached player_login answers nothing, no matter who is listening"
         );
         assert!(
             enqueue_at < read_at,
-            "the Realm Presence / identity read (`claim_edge_outcome`) must happen INSIDE the \
-             enqueued job, never before it — the shared pump must not block on a read that can \
-             cross to another Shard"
+            "the team read (`claim_close_team`) must happen INSIDE the enqueued job, never before \
+             it — the shared pump must not block on a read that can cross to another Shard"
         );
     }
 }
