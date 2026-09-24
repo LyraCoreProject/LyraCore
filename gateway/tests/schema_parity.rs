@@ -1111,6 +1111,9 @@ parity_test!(parity_game_auction_house, "game_auction_house", lyracore_module::A
 parity_test!(parity_game_auction_expiry, "game_auction_expiry", lyracore_module::AuctionExpiry, bindings::auction_expiry_type::AuctionExpiry, {
     scheduled_id, scheduled_at, auction_id,
 });
+parity_test!(parity_game_area, "game_area", lyracore_module::GameArea, bindings::game_area_type::GameArea, {
+    id, map_id, parent_area_id, area_bit, flags, exploration_level, faction_group, name,
+});
 parity_test!(parity_game_faction, "game_faction", lyracore_module::Faction, bindings::faction_type::Faction, {
     faction_id, reputation_index, base_standing,
 });
@@ -1261,6 +1264,7 @@ const MANIFEST_TABLES: &[&str] = &[
     "game_faction",
     "game_faction_template",
     "game_encounter_equip",
+    "game_area",
 ];
 
 // ---------------------------------------------------------------------------------------------

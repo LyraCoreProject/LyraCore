@@ -1114,6 +1114,9 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // `gateway/tests/schema_parity.rs` now pins.
         "SELECT * FROM game_config",
         "SELECT * FROM game_creature_template",
+        // AreaTable catalogue: zone names for `/who`'s search-string match. Static and small
+        // enough for one coordinator cache, like every other imported catalogue on this list.
+        "SELECT * FROM game_area",
         // Taxi catalogue. Static and small enough for one coordinator cache; later discovery and
         // activation slices resolve nodes, directed routes, and ordered path points from here.
         "SELECT * FROM game_taxi_node",

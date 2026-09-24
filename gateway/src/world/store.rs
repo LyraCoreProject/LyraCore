@@ -1280,10 +1280,44 @@ pub trait WorldStore:
     /// found). Used by the logout handler to deny `CMSG_LOGOUT_REQUEST` while the player is in combat.
     fn player_combat_until_ms(&self, player_guid: u64) -> u64;
 
-    /// All currently-online player characters for `CMSG_WHO → SMSG_WHO`. A player is "online" iff
-    /// their guid appears in `game_world_entity` with `entry == 0` (player entity). Joined with
-    /// `game_character` for name/race/class/zone; dead players are included (ghosts are online).
-    fn online_players(&self) -> Result<Vec<codec::WhoPlayerView>>;
+    /// This Shard's durable Character row for `guid`: identity plus the session flag. `None` if
+    /// this Shard holds no `game_character` row for it.
+    /// [`presence::of`](super::presence::of) unions it across every connected Shard.
+    fn character_identity(&self, guid: u64) -> Result<Option<presence::CharacterIdentity>>;
+
+    /// This Shard's live `game_world_entity` row for `guid`, if any — the Member Stats columns,
+    /// plus level and zone, current unlike the durable row (`persist_entity` only refreshes it on
+    /// logout, cross-map teleport or Transfer). `None` if `guid` has no live entity here.
+    fn live_entity(&self, guid: u64) -> Option<codec::MemberEntity>;
+
+    /// Does this Shard show `guid` between two places: its own Character row reading online with
+    /// no live entity here (a map-change loading screen, or a human Transfer's frozen source
+    /// copy — `begin_transfer` persists with `set_offline: false`), or a Transfer Intent naming a
+    /// session-less bot mid-crossing.
+    fn character_in_transit(&self, guid: u64) -> bool;
+
+    /// Does every configured World Shard vouch that it is reachable and healthy enough to trust a
+    /// negative read from? [`presence::of`] asks this before answering `Whereabouts::Offline` or
+    /// `None` — an unreachable or stale-cached Shard could be hiding the Character, so the default
+    /// (`Ok(())`, every Store without a Shard topology to ask) must be overridden by any Store that
+    /// actually has one to check.
+    fn every_shard_vouches_for_absence(&self) -> Result<()> {
+        Ok(())
+    }
+
+    /// Every in-world player Character on this Shard — the per-Shard input
+    /// [`presence::in_world_characters`](super::presence::in_world_characters) unions, and `/who`'s
+    /// ultimate source. A player is "in world" iff their guid appears in `game_world_entity` with
+    /// `entry == 0` (player entity); dead players are included (ghosts are in world). Bots are
+    /// included: they have no session, but they do have a live entity.
+    fn in_world_players(&self) -> Result<Vec<presence::RealmPresence>>;
+
+    /// `game_area.name` for `zone_id` — `/who`'s search-string match against a zone name. Empty
+    /// when the catalogue holds no row for it (unimported, or an id the client sends that the
+    /// imported DBC lacks).
+    fn zone_name(&self, _zone_id: u32) -> String {
+        String::new()
+    }
 
     /// `self_guid`'s friend list + ignore list (guids only) for `CMSG_FRIEND_LIST → SMSG_FRIEND_LIST`
     /// + `SMSG_IGNORE_LIST`. Online friends carry live presence (level/class/zone).

@@ -7,7 +7,7 @@
 use super::super::*;
 use crate::codec::{
     build_member_stats, build_member_status, full_update_mask, member_status, stats_delta,
-    MemberEntity, MemberStats, MemberStatsPacket,
+    MemberStats, MemberStatsPacket,
 };
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -30,7 +30,9 @@ pub(crate) trait MemberStatsStore: Send + Sync {
     /// a sharded Realm, the only database otherwise. Empty when `self_guid` has no group.
     fn group_mates(&self, self_guid: u64) -> Result<Vec<u64>>;
 
-    /// The member's presence, decided by [`locate_member`].
+    /// The member's presence, projected from its Realm Presence
+    /// ([`crate::world::presence::of`]): a live entity is `Live`, `Whereabouts::InTransit` is
+    /// `InTransit`, and `Whereabouts::Offline` or no Realm Presence at all is `Offline`.
     fn member_presence(&self, guid: u64) -> Result<MemberPresence>;
 }
 
@@ -42,43 +44,6 @@ impl MemberStatsStore for crate::stdb::Coordinator {
     fn member_presence(&self, guid: u64) -> Result<MemberPresence> {
         crate::stdb::Coordinator::member_presence(self, guid)
     }
-}
-
-/// One World Shard's cached answers about one Character.
-pub(crate) trait MemberShardCache {
-    fn member_entity(&self, guid: u64) -> Option<MemberEntity>;
-
-    /// This shard shows the Character between two places. Either its Session is online while its
-    /// entity is gone for a map change, or a Transfer Intent names it. A sessionless bot never
-    /// has an online Session, so the Transfer Intent is the only sign that a bot is crossing.
-    fn member_between_places(&self, guid: u64) -> bool;
-}
-
-/// Decide where a group member is. A live entity on any connected World Shard wins. Offline claims
-/// absence, so it needs `every_shard`: every configured World Shard, each healthy. An unreadable
-/// shard or Realm-core is an `Err`, never Offline.
-pub(crate) fn locate_member<S: MemberShardCache>(
-    guid: u64,
-    connected: &[S],
-    realm_transfer_pending: impl FnOnce() -> Result<bool>,
-    every_shard: impl FnOnce() -> Result<Vec<S>>,
-) -> Result<MemberPresence> {
-    if let Some(entity) = connected.iter().find_map(|shard| shard.member_entity(guid)) {
-        return Ok(MemberPresence::Live(Box::new(MemberStats::from_entity(
-            &entity,
-        ))));
-    }
-    if realm_transfer_pending()? {
-        return Ok(MemberPresence::InTransit);
-    }
-    let between_places = every_shard()?
-        .iter()
-        .any(|shard| shard.member_between_places(guid));
-    Ok(if between_places {
-        MemberPresence::InTransit
-    } else {
-        MemberPresence::Offline
-    })
 }
 
 /// What the Relay last sent one viewer about one group mate.
@@ -258,89 +223,9 @@ fn full_answer<St: MemberStatsStore + ?Sized>(
 mod tests {
     use super::*;
 
-    const MATE: u64 = 9;
-
-    /// One World Shard's cache: a live entity, a Character between two places, or neither.
-    #[derive(Clone, Default)]
-    struct Shard {
-        entity: Option<MemberEntity>,
-        between_places: bool,
-    }
-
-    impl MemberShardCache for Shard {
-        fn member_entity(&self, guid: u64) -> Option<MemberEntity> {
-            self.entity.clone().filter(|_| guid == MATE)
-        }
-
-        fn member_between_places(&self, guid: u64) -> bool {
-            self.between_places && guid == MATE
-        }
-    }
-
-    const LIVE: Shard = Shard {
-        entity: Some(MemberEntity {
-            health: 100,
-            max_health: 100,
-            power: 0,
-            max_power: 0,
-            unit_bytes_0: 0,
-            level: 1,
-            zone_id: 12,
-            x: 0.0,
-            y: 0.0,
-            dead: false,
-            player_flags: 0,
-            auras: Vec::new(),
-            pet: None,
-        }),
-        between_places: false,
-    };
-    const EMPTY: Shard = Shard {
-        entity: None,
-        between_places: false,
-    };
-    const CROSSING: Shard = Shard {
-        entity: None,
-        between_places: true,
-    };
-
-    fn locate(
-        connected: &[Shard],
-        transfer_pending: Result<bool>,
-        every_shard: Result<Vec<Shard>>,
-    ) -> Result<MemberPresence> {
-        locate_member(MATE, connected, || transfer_pending, || every_shard)
-    }
-
-    fn unhealthy() -> Result<Vec<Shard>> {
-        Err(anyhow!("instances has no healthy Coordinator subscription"))
-    }
-
-    #[test]
-    fn a_live_entity_on_any_connected_shard_is_live_even_while_another_shard_is_down() {
-        let presence = locate(&[EMPTY, LIVE], Err(anyhow!("unread")), unhealthy()).unwrap();
-        assert!(matches!(presence, MemberPresence::Live(_)));
-    }
-
-    #[test]
-    fn a_pending_transfer_on_realm_core_is_in_transit() {
-        let presence = locate(&[EMPTY], Ok(true), unhealthy()).unwrap();
-        assert_eq!(presence, MemberPresence::InTransit);
-    }
-
-    #[test]
-    fn a_character_between_places_on_any_shard_is_in_transit() {
-        let presence = locate(&[EMPTY, EMPTY], Ok(false), Ok(vec![EMPTY, CROSSING])).unwrap();
-        assert_eq!(presence, MemberPresence::InTransit);
-    }
-
-    #[test]
-    fn offline_needs_every_configured_shard_healthy() {
-        assert!(locate(&[EMPTY], Ok(false), unhealthy()).is_err());
-        assert!(locate(&[EMPTY], Err(anyhow!("realm-core down")), Ok(vec![EMPTY])).is_err());
-        let presence = locate(&[EMPTY], Ok(false), Ok(vec![EMPTY, EMPTY])).unwrap();
-        assert_eq!(presence, MemberPresence::Offline);
-    }
+    // The live-entity/in-transit/absence-gated-offline decision itself is pinned in
+    // `world::presence_tests`, against `presence::of` — this file no longer runs its own
+    // discovery, so it no longer needs its own Store Fake for one.
 
     #[test]
     fn forgetting_one_member_keeps_the_others() {

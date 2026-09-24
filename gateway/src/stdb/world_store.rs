@@ -1044,8 +1044,32 @@ impl WorldStore for Coordinator {
         self.player_combat_until_ms(player_guid)
     }
 
-    fn online_players(&self) -> Result<Vec<codec::WhoPlayerView>> {
-        self.online_players()
+    fn character_identity(
+        &self,
+        guid: u64,
+    ) -> Result<Option<crate::world::presence::CharacterIdentity>> {
+        self.character_identity(guid)
+    }
+
+    fn live_entity(&self, guid: u64) -> Option<codec::MemberEntity> {
+        self.live_entity(guid)
+    }
+
+    fn character_in_transit(&self, guid: u64) -> bool {
+        self.character_in_transit(guid)
+    }
+
+    fn every_shard_vouches_for_absence(&self) -> Result<()> {
+        self.world_shards_for_absence()?;
+        Ok(())
+    }
+
+    fn in_world_players(&self) -> Result<Vec<crate::world::presence::RealmPresence>> {
+        self.in_world_players()
+    }
+
+    fn zone_name(&self, zone_id: u32) -> String {
+        self.zone_name(zone_id)
     }
 
     fn contact_lists(&self, self_guid: u64) -> Result<(Vec<codec::FriendView>, Vec<u64>)> {

@@ -47,8 +47,8 @@ pub use social::{
     build_channel_message, build_chat_message_to, build_emote_anim, build_friend_list_response,
     build_friend_status, build_gm_system_message, build_group_decline, build_group_invite,
     build_group_list, build_group_list_raw, build_ignore_list_response, build_party_command_result,
-    build_random_roll, build_realm_chat_line, build_text_emote, build_whisper, build_who_response,
-    FriendView, WhoPlayerView,
+    build_random_roll, build_realm_chat_line, build_text_emote, build_whisper,
+    build_who_response_raw, FriendView, WhoPlayerView,
 };
 
 // Re-export packet-family surfaces through `crate::codec::<sym>`.

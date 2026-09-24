@@ -3,7 +3,7 @@
 //! shape as the rest of the dispatch chain.
 
 use super::party::PartyOutcome;
-use super::{party, send, Outbound, SessionTx, WorldConn, WorldState, WorldStore};
+use super::{party, presence, send, who, Outbound, SessionTx, WorldConn, WorldState, WorldStore};
 use crate::codec;
 use anyhow::Result;
 use lyracore_shared::group::GroupRefusal;
@@ -37,17 +37,21 @@ pub(super) fn handle_social<St: WorldStore + ?Sized>(
     msg: ClientOpcodeMessage,
 ) -> Result<Option<ClientOpcodeMessage>> {
     match msg {
-        // /who panel: CMSG_WHO carries optional filters (level range, name, class/race masks, zones,
-        // strings) — ignored for the first pass. We read ALL online characters and return them in
-        // SMSG_WHO (capped at 49, the vanilla client's display limit). The client opens the social
-        // window and lists every online player, which covers the primary grouping/social use-case.
-        ClientOpcodeMessage::CMSG_WHO(_) => {
-            let players = store.online_players()?;
-            let resp = codec::build_who_response(&players);
-            send(
-                tx,
-                Outbound::One(ServerOpcodeMessage::SMSG_WHO(Box::new(resp))),
-            )?;
+        // /who panel: filtered realm-wide (`who::respond`), same team only, every filter the
+        // client sent applied. Silently dropped outside the world (no requester Character to read
+        // a team from), for an unresolvable requester (never guess a team), and while this
+        // session's `WHO_THROTTLE` cooldown is running (vm:MiscHandler.cpp:230).
+        ClientOpcodeMessage::CMSG_WHO(request) => {
+            if let Some(me) = self_guid(conn) {
+                if conn.admit_who() {
+                    if let Some(character) = store.character_by_guid(me)? {
+                        if let Some((opcode, body)) = who::respond(store, character.race, &request)?
+                        {
+                            send(tx, Outbound::Raw { opcode, body })?;
+                        }
+                    }
+                }
+            }
         }
         // Friends / ignore list: opening the social pane's friends tab requests BOTH
         // lists off the one opcode — vanilla answers with SMSG_FRIEND_LIST + SMSG_IGNORE_LIST.
@@ -143,7 +147,7 @@ pub(super) fn handle_social<St: WorldStore + ?Sized>(
         // Silently dropped outside the world: with no in-world character there is no `self_guid` to
         // act as, and none of these opcodes is reachable at character select.
         ClientOpcodeMessage::CMSG_GROUP_INVITE(c) => {
-            let result = match (self_guid(conn), party::resolve_by_name(store, &c.name)?) {
+            let result = match (self_guid(conn), presence::resolve_by_name(store, &c.name)?) {
                 (Some(me), Some(guid)) => party_result(party::run(
                     store,
                     conn.account_id,
@@ -202,7 +206,7 @@ pub(super) fn handle_social<St: WorldStore + ?Sized>(
             }
         }
         ClientOpcodeMessage::CMSG_GROUP_UNINVITE(c) => {
-            let result = match (self_guid(conn), party::resolve_by_name(store, &c.name)?) {
+            let result = match (self_guid(conn), presence::resolve_by_name(store, &c.name)?) {
                 (Some(me), Some(guid)) => party_result(party::run(
                     store,
                     conn.account_id,

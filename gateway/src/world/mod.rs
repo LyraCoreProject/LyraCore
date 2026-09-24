@@ -42,10 +42,12 @@ pub mod loot;
 pub mod mail;
 pub mod packet_lint;
 pub mod party;
+pub mod presence;
 mod social;
 mod store;
 pub mod transfer;
 pub mod whisper;
+mod who;
 use coalesce::CoalesceState;
 use handlers::{
     decode_auction_browse, dispatch_auction_action, dispatch_auction_browse_action, dispatch_cast,
@@ -61,12 +63,11 @@ use handlers::{
     VendorActionOutcome, VendorActionPlayer, CMSG_AUCTION_LIST_ITEMS_OPCODE,
 };
 pub(crate) use handlers::{
-    locate_member, member_stats_tick, zone_weather_message, AuctionBrowseRequest, AuctionPage,
-    AuctionQuery, CharacterFacts, ChatOutcome, CreateAuctionOutcome, CreateAuctionRequest,
-    GuildOutcome, GuildRequest, ItemActionResult, LootActionStatus, LootWindowRefusal,
-    LootWindowRequestStatus, MemberPresence, MemberShardCache, MemberStatsRecord, MemberStatsStore,
-    PlaceBidOutcome, PlaceBidRequest, RealmChatRequest, SpeakerFacts, TrainerBuyOutcome,
-    WeatherStore,
+    member_stats_tick, zone_weather_message, AuctionBrowseRequest, AuctionPage, AuctionQuery,
+    CharacterFacts, ChatOutcome, CreateAuctionOutcome, CreateAuctionRequest, GuildOutcome,
+    GuildRequest, ItemActionResult, LootActionStatus, LootWindowRefusal, LootWindowRequestStatus,
+    MemberPresence, MemberStatsRecord, MemberStatsStore, PlaceBidOutcome, PlaceBidRequest,
+    RealmChatRequest, SpeakerFacts, TrainerBuyOutcome, WeatherStore,
 };
 use login_queue::{Admission, LoginQueue};
 use social::handle_social;
@@ -382,6 +383,11 @@ pub struct WorldConn {
     /// Reset by the first movement whose entity is present. See
     /// [`MOVE_DESYNC_TOLERANCE`] for why the tolerance is bounded rather than unconditional.
     move_desync_drops: u32,
+    /// When the last `CMSG_WHO` this session's writer started answering was admitted. A second
+    /// request inside [`WHO_THROTTLE`] is dropped, the same shape vm:MiscHandler.cpp:230 drops a
+    /// concurrent request in — `/who`'s realm-wide scan is the one social read costly enough to
+    /// throttle per session.
+    who_throttled_until: Option<Instant>,
 }
 
 /// How many CONSECUTIVE desynced movement packets a session may drop before the desync is treated
@@ -398,6 +404,11 @@ pub struct WorldConn {
 /// no error and no recourse — which is exactly what `is_desync_error`'s session-fatal treatment
 /// exists to prevent. 32 is ~3 s of a moving client, an order of magnitude more than any port tail.
 const MOVE_DESYNC_TOLERANCE: u32 = 32;
+
+/// The cooldown one World Session's `CMSG_WHO` answers respect — a second request inside this
+/// window is dropped, unanswered, matching vm:MiscHandler.cpp:230's concurrent-request drop for
+/// the one Gateway-side realm-wide scan `/who` runs.
+const WHO_THROTTLE: Duration = Duration::from_secs(1);
 
 /// Run `$body` against the session's HOME-shard store handle. `$store` is the handle the
 /// caller holds (the default/realm shard); `$conn.home` overrides it once the player is in the
@@ -487,6 +498,18 @@ impl WorldConn {
         };
         self.home = None;
         outcome
+    }
+
+    /// Admit one `CMSG_WHO`, or refuse it because the last one this session sent was inside
+    /// [`WHO_THROTTLE`]. Advances the cooldown on every admitted request, including a malformed
+    /// one that answers nothing — the request itself is what cost the scan.
+    pub(super) fn admit_who(&mut self) -> bool {
+        let now = Instant::now();
+        if self.who_throttled_until.is_some_and(|until| now < until) {
+            return false;
+        }
+        self.who_throttled_until = Some(now + WHO_THROTTLE);
+        true
     }
 }
 
@@ -657,6 +680,7 @@ fn world_handshake_with_queue_and_deadline<
             session_key: Some(session_key), // for establish_session on a non-realm shard
             guild_signed_on: None,
             move_desync_drops: 0,
+            who_throttled_until: None,
         },
         encrypt,
     )))

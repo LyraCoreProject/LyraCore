@@ -6,15 +6,15 @@ use lyracore_shared::chat::broadcast_chat;
 use wow_world_base::shared::friend_result_vanilla_tbc::FriendResult;
 use wow_world_messages::vanilla::{
     Area, Class, Emote, Friend, Friend_FriendStatus, Language, Level, MSG_RANDOM_ROLL_Server,
-    PlayerChatTag, Race, SMSG_MESSAGECHAT_ChatType, TextEmote, WhoPlayer, SMSG_EMOTE,
-    SMSG_FRIEND_LIST, SMSG_FRIEND_STATUS, SMSG_IGNORE_LIST, SMSG_MESSAGECHAT, SMSG_TEXT_EMOTE,
-    SMSG_WHO,
+    PlayerChatTag, SMSG_MESSAGECHAT_ChatType, TextEmote, SMSG_EMOTE, SMSG_FRIEND_LIST,
+    SMSG_FRIEND_STATUS, SMSG_IGNORE_LIST, SMSG_MESSAGECHAT, SMSG_TEXT_EMOTE,
 };
 use wow_world_messages::Guid;
 
 // ─── /who panel ──────────────────────────────────────────────────────────────
 
-/// One online character row as needed by the WHO response — flat ints the codec converts.
+/// One matched character row as `/who`'s filter (`world::who`) produces it — flat ints the codec
+/// converts.
 pub struct WhoPlayerView {
     pub name: String,
     pub level: u8,
@@ -23,31 +23,42 @@ pub struct WhoPlayerView {
     pub zone_id: u32,
 }
 
-/// Build `SMSG_WHO` for `CMSG_WHO`. Filters are ignored for the first pass — every currently-online
-/// character is listed (up to 49, the vanilla client cap). `online_count` is the total roster size
-/// (before any cap). Zone ids that aren't in the gtker `Area` enum degrade to `Area::None`.
-pub fn build_who_response(players: &[WhoPlayerView]) -> SMSG_WHO {
-    let listed: Vec<WhoPlayer> = players
-        .iter()
-        .take(49) // vanilla client won't render more than 49 rows
-        .filter_map(|p| {
-            let class = Class::try_from(p.class).ok()?;
-            let race = Race::try_from(p.race).ok()?;
-            Some(WhoPlayer {
-                name: p.name.clone(),
-                guild: String::new(), // no guild system yet
-                level: Level::new(p.level),
-                class,
-                race,
-                area: Area::try_from(p.zone_id).unwrap_or(Area::None),
-                party_status: 0, // not in a party
-            })
-        })
-        .collect();
-    SMSG_WHO {
-        online_players: players.len() as u32,
-        players: listed,
+/// `SMSG_WHO` opcode (vanilla 5875). RAW-encoded — see [`build_who_response_raw`].
+pub const SMSG_WHO_OPCODE: u16 = 0x0063;
+
+/// Push a NUL-terminated CString.
+fn push_cstr(body: &mut Vec<u8>, s: &str) {
+    body.extend_from_slice(s.as_bytes());
+    body.push(0);
+}
+
+/// Build a RAW `SMSG_WHO` for `CMSG_WHO`. `players` is every match, already filtered to the
+/// requester's team (`world::who::respond`); listing caps at 49, the vanilla client's display
+/// limit, but `online_players` reports the full, uncapped match count.
+///
+/// RAW because gtker 0.3's typed `WhoPlayer` writes `class: u8`, `race: u8`, `area: u32`, then a
+/// trailing `party_status: u32` — cm:MiscHandler.cpp:252-257 writes class, race AND zone as `u32`
+/// each, with no `party_status` field. vm:MiscHandler.cpp:212 sends `party_status` only to clients
+/// at build 1.8.4 or older, which 5875 is not. The gtker shape is 2 bytes short per entry, so a
+/// real client reads every row after the first out of alignment. The body is (all little-endian):
+///   - `listed_players: u32` (`players.len()`, capped at 49)
+///   - `online_players: u32` (`players.len()`, the full match count, uncapped)
+///   - per listed player: `name` (CString), `guild` (CString, always empty — no guild system yet),
+///     `level: u32`, `class: u32`, `race: u32`, `zone: u32`
+pub fn build_who_response_raw(players: &[WhoPlayerView]) -> (u16, Vec<u8>) {
+    let listed = &players[..players.len().min(49)];
+    let mut body = Vec::with_capacity(8 + listed.len() * 20);
+    body.extend_from_slice(&(listed.len() as u32).to_le_bytes());
+    body.extend_from_slice(&(players.len() as u32).to_le_bytes());
+    for p in listed {
+        push_cstr(&mut body, &p.name);
+        push_cstr(&mut body, ""); // guild: no guild system yet
+        body.extend_from_slice(&u32::from(p.level).to_le_bytes());
+        body.extend_from_slice(&u32::from(p.class).to_le_bytes());
+        body.extend_from_slice(&u32::from(p.race).to_le_bytes());
+        body.extend_from_slice(&p.zone_id.to_le_bytes());
     }
+    (SMSG_WHO_OPCODE, body)
 }
 
 // ─── Friends / ignore list ─────────────────────────────────────────────────
@@ -830,9 +841,9 @@ mod party_tests {
     use super::*;
 
     #[test]
-    fn who_response_caps_listed_rows_at_49_but_reports_the_full_roster_count() {
-        // The 1.12 client won't render more than 49 rows, so `players` is capped there — but
-        // `online_players` must still report the FULL roster size (before any cap), matching a real
+    fn who_response_raw_caps_listed_rows_at_49_but_reports_the_full_match_count() {
+        // The 1.12 client won't render more than 49 rows, so the listing caps there — but
+        // `online_players` must still report the FULL match count (before any cap), matching a real
         // server's "N players online" count even when the panel itself only shows 49.
         let players: Vec<WhoPlayerView> = (0..51)
             .map(|i| WhoPlayerView {
@@ -843,54 +854,66 @@ mod party_tests {
                 zone_id: 12,
             })
             .collect();
-        let resp = build_who_response(&players);
+        let (opcode, body) = build_who_response_raw(&players);
+        assert_eq!(opcode, SMSG_WHO_OPCODE);
+        let listed_players = u32::from_le_bytes(body[0..4].try_into().unwrap());
+        let online_players = u32::from_le_bytes(body[4..8].try_into().unwrap());
         assert_eq!(
-            resp.online_players, 51,
-            "the online count must be the full 51-player roster"
-        );
-        assert_eq!(
-            resp.players.len(),
-            49,
+            listed_players, 49,
             "the listed rows must cap at the vanilla client's 49-row limit"
         );
+        assert_eq!(
+            online_players, 51,
+            "the online count must be the full 51-player match, uncapped"
+        );
+        // 8 header bytes, then one row per listed player: name CString, empty guild CString, 4
+        // u32 fields. Sums the actual (varying) name lengths rather than assuming one width.
+        let expected_len: usize = 8 + players[..49]
+            .iter()
+            .map(|p| p.name.len() + 1 + 1 + 16)
+            .sum::<usize>();
+        assert_eq!(body.len(), expected_len);
     }
 
     #[test]
-    fn who_response_skips_rows_with_an_unmapped_class_or_race_without_shrinking_the_count() {
+    fn who_response_raw_matches_the_cmangos_byte_layout() {
+        // Hand-written from cm:MiscHandler.cpp:252-257: name, guild, level/class/race/zone each a
+        // u32, no party_status. Two rows, so a real client reading past the first proves the
+        // layout, not just the first row's offsets.
         let players = [
             WhoPlayerView {
-                name: "Good".into(),
+                name: "Ginger".into(),
                 level: 10,
                 class: 1,
                 race: 1,
                 zone_id: 12,
             },
             WhoPlayerView {
-                name: "BadClass".into(),
-                level: 10,
-                class: 250,
-                race: 1,
-                zone_id: 12,
-            },
-            WhoPlayerView {
-                name: "BadRace".into(),
-                level: 10,
-                class: 1,
-                race: 250,
-                zone_id: 12,
+                name: "Vim".into(),
+                level: 60,
+                class: 8,
+                race: 2,
+                zone_id: 1,
             },
         ];
-        let resp = build_who_response(&players);
-        assert_eq!(
-            resp.players.len(),
-            1,
-            "rows with an unmapped class/race must be skipped"
-        );
-        assert_eq!(resp.players[0].name, "Good");
-        assert_eq!(
-            resp.online_players, 3,
-            "the count reflects the full roster, unaffected by the skip"
-        );
+        let (opcode, body) = build_who_response_raw(&players);
+        assert_eq!(opcode, SMSG_WHO_OPCODE);
+        let mut expected = Vec::new();
+        expected.extend_from_slice(&2u32.to_le_bytes()); // listed_players
+        expected.extend_from_slice(&2u32.to_le_bytes()); // online_players
+        expected.extend_from_slice(b"Ginger\0");
+        expected.extend_from_slice(b"\0"); // guild
+        expected.extend_from_slice(&10u32.to_le_bytes()); // level
+        expected.extend_from_slice(&1u32.to_le_bytes()); // class
+        expected.extend_from_slice(&1u32.to_le_bytes()); // race
+        expected.extend_from_slice(&12u32.to_le_bytes()); // zone
+        expected.extend_from_slice(b"Vim\0");
+        expected.extend_from_slice(b"\0"); // guild
+        expected.extend_from_slice(&60u32.to_le_bytes()); // level
+        expected.extend_from_slice(&8u32.to_le_bytes()); // class
+        expected.extend_from_slice(&2u32.to_le_bytes()); // race
+        expected.extend_from_slice(&1u32.to_le_bytes()); // zone
+        assert_eq!(body, expected);
     }
 
     use lyracore_shared::group::{RaidSlot, RosterMember};

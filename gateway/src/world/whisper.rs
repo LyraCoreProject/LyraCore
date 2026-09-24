@@ -34,10 +34,10 @@
 //! # The three gates that had to move, and the one that must NOT be copied from the group slice
 //!
 //! Realm-core holds no characters, no live entities and no contact rows, so the gateway answers
-//! - **does the target exist** — [`super::party::resolve_all_by_name`], the realm-wide name union
-//!   (this is the read that was broken). Every candidate, not the first: character names are unique
-//!   per DATABASE, not per realm, so the ONLINE gate below doubles as the disambiguator;
-//! - **is the SENDER in world** — [`super::party::live_anywhere`], the module's own
+//! - **does the target exist** — [`super::presence::resolve_all_by_name`], the realm-wide name
+//!   union (this is the read that was broken). Every candidate, not the first: character names are
+//!   unique per DATABASE, not per realm, so the ONLINE gate below doubles as the disambiguator;
+//! - **is the SENDER in world** — [`super::presence::live_anywhere`], the module's own
 //!   `entity_by_owner` miss, unioned across the shards;
 //! - **is the TARGET online** — and here the group slice's helper is the WRONG one. `send_whisper`
 //!   gates on `game_character.online`, the SESSION flag, not on a live `game_world_entity` row. The
@@ -64,7 +64,7 @@
 
 use anyhow::Result;
 
-use super::{party, WorldStore};
+use super::{presence, WorldStore};
 
 /// Send one whisper for the session that owns `self_guid`.
 ///
@@ -92,7 +92,7 @@ pub(crate) fn run<St: WorldStore + ?Sized>(
             message,
         );
     };
-    let Some(sender_guid) = self_guid.filter(|&g| party::live_anywhere(store, g)) else {
+    let Some(sender_guid) = self_guid.filter(|&g| presence::live_anywhere(store, g)) else {
         anyhow::bail!(lyracore_shared::whisper::NOT_IN_WORLD);
     };
     // EXISTS: the read that made a cross-shard whisper impossible. The union asks this handle first
@@ -101,8 +101,8 @@ pub(crate) fn run<St: WorldStore + ?Sized>(
     //
     // ALL the candidates, not the first: character names are NOT realm-unique (the constraint is a
     // per-database index), so a name can resolve on two shards at once — live, 2026-07-25. See
-    // [`party::resolve_all_by_name`].
-    let candidates = party::resolve_all_by_name(store, target_name)?;
+    // [`presence::resolve_all_by_name`].
+    let candidates = presence::resolve_all_by_name(store, target_name)?;
     if candidates.is_empty() {
         anyhow::bail!(lyracore_shared::whisper::no_player_named(target_name));
     }
@@ -115,8 +115,8 @@ pub(crate) fn run<St: WorldStore + ?Sized>(
     // deployment where names really are unique — this is the same one read it was.
     let mut online_target = None;
     for guid in candidates {
-        if party::presence(store, guid)?
-            .map(|(online, ..)| online)
+        if presence::of(store, guid)?
+            .map(|p| p.session_online)
             .unwrap_or(false)
         {
             online_target = Some(guid);
@@ -138,8 +138,8 @@ pub(crate) fn run<St: WorldStore + ?Sized>(
 /// `game_character_contact` is character-owned and travels with the character (`chat.rs`'s transfer
 /// sweep), so exactly one connected database has the rows — but which one is not knowable from here,
 /// and the answer must be the same either way. The union is the answer, in the same shape
-/// [`party::resolve_by_name`] and [`party::live_anywhere`] use, and `world_stores()` is empty on a
-/// single-database gateway so this is one cache read there.
+/// [`presence::resolve_by_name`] and [`presence::live_anywhere`] use, and `world_stores()` is empty
+/// on a single-database gateway so this is one cache read there.
 ///
 /// A PEER shard that cannot answer contributes `false`, never `true`. Reading an `Err` as "ignored"
 /// would be the invisible catastrophe: an ignored whisper is reported to its sender as a success (that

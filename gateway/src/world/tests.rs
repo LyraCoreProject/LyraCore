@@ -1,9 +1,9 @@
 use super::handlers::{
     AuctionActionStore, AuctionInteraction, CastStore, ChatActionStore, ChatOutcome,
     DuelActionStore, GuildActionStore, ItemActionStore, LootWindowRefusal, LootWindowRequestStatus,
-    LootWindowStore, MeleeActionStore, MemberPresence, MemberShardCache, MemberSnapshot,
-    MemberStatsStore, QuestActionStore, RealmChatRequest, SpeakerFacts, TaxiActionStore,
-    VendorActionStore, WeatherStore,
+    LootWindowStore, MeleeActionStore, MemberPresence, MemberSnapshot, MemberStatsStore,
+    QuestActionStore, RealmChatRequest, SpeakerFacts, TaxiActionStore, VendorActionStore,
+    WeatherStore,
 };
 use super::party::PartyOutcome;
 use super::*;
@@ -112,6 +112,18 @@ mod member_stats_tests;
 /// anything.
 #[path = "whisper_tests.rs"]
 mod whisper_tests;
+
+/// Realm Presence's multi-shard union (`presence::of`, `presence::in_world_characters`) — reads
+/// that moved out of `party.rs`. A sibling of `party_tests`/`whisper_tests` for the same reason: it
+/// reaches `InMemoryStore` and `party_tests`' fixture characters without widening anything.
+#[path = "presence_tests.rs"]
+mod presence_tests;
+
+/// `/who`'s Store-Fake tests: the multi-shard listing and the 49-cap/oversized-request rules that
+/// need real presence rows rather than the hand-written filter inputs `who.rs`'s own unit tests
+/// use. A sibling of `presence_tests` for the same reason.
+#[path = "who_tests.rs"]
+mod who_tests;
 
 /// The realm-wide loot-roll routing/relay tests. A sibling of `party_tests`/`whisper_tests` for
 /// the same reason — it reaches `InMemoryStore` without widening anything.
@@ -585,6 +597,12 @@ struct InMemoryStore {
     /// Seeded characters that are nevertheless OFFLINE, so the invite gate's "player not
     /// online" arm can be driven. Empty = every seeded character is online, as before.
     offline_guids: Vec<u64>,
+    /// Raw `PLAYER_FLAGS` per guid, for `presence_row`'s Away Status. Empty = every guid reads
+    /// `AwayStatus::None`, as a Character with no live entity does in production.
+    away_flags: std::collections::HashMap<u64, u32>,
+    /// `game_area.name` per zone id, for `/who`'s search-string match. Empty = every zone name
+    /// reads "", the "unimported catalogue" case.
+    zone_names: std::collections::HashMap<u32, String>,
     /// When set, `sync_group_mirror` fails with this message — a world shard that cannot be
     /// mirrored (an unreachable database), which must not fail a party op realm-core already took.
     mirror_error: Option<String>,
@@ -849,6 +867,17 @@ impl InMemoryStore {
             .lock()
             .unwrap()
             .push((self.shard.clone(), what.to_string()));
+    }
+
+    /// `guid`'s Away Status from `away_flags` (raw `PLAYER_FLAGS`), `AwayStatus::None` when unset —
+    /// mirroring "a Character with no live entity has `AwayStatus::None`" for every guid a test
+    /// never seeds.
+    fn away(&self, guid: u64) -> presence::AwayStatus {
+        self.away_flags
+            .get(&guid)
+            .copied()
+            .map(presence::away_from_player_flags)
+            .unwrap_or(presence::AwayStatus::None)
     }
 
     /// One mail-escrow step boundary. `Err` is the gateway dying before this step committed: the
@@ -1313,8 +1342,31 @@ impl WorldStore for InMemoryStore {
 
     fn realm_character_partition(
         &self,
-        _character_guid: u64,
+        character_guid: u64,
     ) -> Result<Option<super::party::RealmCharacterPartition>> {
+        // `members_in_transit` is Member Stats' own per-guid fixture (`presence::of`'s
+        // `realm_transfer_pending` reads this trait method on the realm handle, same as
+        // `Coordinator::member_presence` did before the two merged). Checked first so it can name
+        // one guid as pending without disturbing `realm_partition`, which every other test that
+        // exercises a real Transfer already drives.
+        if self
+            .members_in_transit
+            .lock()
+            .unwrap()
+            .contains(&character_guid)
+        {
+            return Ok(Some(super::party::RealmCharacterPartition {
+                map_id: 0,
+                instance_id: 0,
+                revision: 1,
+                transfer_pending: true,
+                pending_destination_map: 0,
+                pending_destination_instance: 0,
+                bot_source_identity: spacetimedb_sdk::Identity::ZERO,
+                bot_transfer_intent_id: 0,
+                bot_controller_generation: 0,
+            }));
+        }
         Ok(*self.realm_partition.lock().unwrap())
     }
 
@@ -2779,19 +2831,89 @@ impl WorldStore for InMemoryStore {
     fn player_combat_until_ms(&self, _player_guid: u64) -> u64 {
         self.combat_until_ms
     }
-    fn online_players(&self) -> Result<Vec<codec::WhoPlayerView>> {
-        // Test store: return the seeded characters as "online" so CMSG_WHO tests can assert a response.
+    fn character_identity(&self, guid: u64) -> Result<Option<presence::CharacterIdentity>> {
+        Ok(self.characters.iter().find(|c| c.guid == guid).map(|c| {
+            presence::CharacterIdentity {
+                guid: c.guid,
+                name: c.name.clone(),
+                race: c.race,
+                class: c.class,
+                level: c.level,
+                zone_id: c.zone_id,
+                // `offline_guids` drives the invite gate's "player not online" arm; a seeded
+                // character is session-online unless listed there, mirroring `character_presence`.
+                session_online: !self.offline_guids.contains(&guid),
+            }
+        }))
+    }
+    fn live_entity(&self, guid: u64) -> Option<codec::MemberEntity> {
+        // `member_entities` alone: Member Stats' own tests despawn a guid here while it stays in
+        // `live_guids` (a party-eligibility signal, not a Member Stats one) to pin the case where a
+        // group mate's entity is gone but the party frame's own bookkeeping has not caught up —
+        // falling back to `live_guids` or the blanket `entity_in_world` flag would read that guid
+        // live again and silently defeat the pin. `in_world_players`'s bulk /who scan has its own,
+        // separate fallback for a guid this fixture never gave a precise entity to.
+        self.member_entities
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(g, _)| *g == guid)
+            .map(|(_, e)| e.clone())
+    }
+    fn character_in_transit(&self, guid: u64) -> bool {
+        self.members_between_places.lock().unwrap().contains(&guid)
+    }
+    fn every_shard_vouches_for_absence(&self) -> Result<()> {
+        // A Realm Presence "gone" claim spans every configured Shard, not just this handle — each
+        // Fake instance models one Shard's own connection, so the peer set is checked too, the
+        // same reach `Coordinator::world_shards_for_absence` has from any one of its own handles.
+        for peer in self.peers.lock().unwrap().iter() {
+            if let Some(error) = &peer.world_shard_set_error {
+                return Err(anyhow!(error.clone()));
+            }
+        }
+        if let Some(error) = &self.world_shard_set_error {
+            return Err(anyhow!(error.clone()));
+        }
+        Ok(())
+    }
+    fn in_world_players(&self) -> Result<Vec<presence::RealmPresence>> {
+        // Test store: every seeded character the fake considers in-world (`entity_in_world`,
+        // the BLANKET flag included) is listed, so CMSG_WHO tests can assert a response without
+        // wiring `live_guids` by hand — unlike `live_entity`, which `presence::of` uses for one
+        // guid at a time and which deliberately does not trust that blanket flag.
+        // `live_entity` supplies level/zone from `member_entities`/`live_guids` when a test seeded
+        // one for this guid, else the durable row stands in.
         Ok(self
             .characters
             .iter()
-            .map(|c| codec::WhoPlayerView {
-                name: c.name.clone(),
-                level: c.level,
-                class: c.class,
-                race: c.race,
-                zone_id: c.zone_id,
+            .filter(|c| self.entity_in_world(c.guid))
+            .map(|c| {
+                let entity = self.live_entity(c.guid).unwrap_or(codec::MemberEntity {
+                    level: u32::from(c.level),
+                    zone_id: c.zone_id,
+                    player_flags: self.away_flags.get(&c.guid).copied().unwrap_or(0),
+                    ..Default::default()
+                });
+                presence::RealmPresence {
+                    guid: c.guid,
+                    name: c.name.clone(),
+                    race: c.race,
+                    class: c.class,
+                    level: u8::try_from(entity.level).unwrap_or(u8::MAX),
+                    zone_id: entity.zone_id,
+                    session_online: !self.offline_guids.contains(&c.guid),
+                    whereabouts: presence::Whereabouts::InWorld {
+                        away: self.away(c.guid),
+                        entity,
+                        shard_name: self.shard.clone(),
+                    },
+                }
             })
             .collect())
+    }
+    fn zone_name(&self, zone_id: u32) -> String {
+        self.zone_names.get(&zone_id).cloned().unwrap_or_default()
     }
     fn contact_lists(&self, self_guid: u64) -> Result<(Vec<codec::FriendView>, Vec<u64>)> {
         if let Some(e) = &self.contact_lists_error {
@@ -4254,40 +4376,20 @@ impl MemberStatsStore for InMemoryStore {
     fn member_presence(&self, guid: u64) -> Result<MemberPresence> {
         self.member_presence_reads
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let peers = self.peers.lock().unwrap().clone();
-        let connected: Vec<&InMemoryStore> = if peers.is_empty() {
-            vec![self]
-        } else {
-            peers.iter().map(AsRef::as_ref).collect()
-        };
-        locate_member(
-            guid,
-            &connected,
-            || {
-                Ok(self
-                    .realm
-                    .as_ref()
-                    .is_some_and(|realm| realm.members_in_transit.lock().unwrap().contains(&guid)))
-            },
-            || match &self.world_shard_set_error {
-                Some(error) => Err(anyhow!(error.clone())),
-                None => Ok(connected.clone()),
+        // Aura slots and a live pet are Member Stats' own overlay in production
+        // (`Coordinator::with_member_shard_stats`, keyed by `ShardId`) — this Fake has no
+        // `AuraIndex` to key into, so `entity` carries whatever `member_entities`/`live_entity`'s
+        // fallback already gave it (empty auras, no pet, unless a test seeded `member_entities`
+        // with its own).
+        Ok(
+            match presence::of(self, guid)?.map(|presence| presence.whereabouts) {
+                Some(presence::Whereabouts::InWorld { entity, .. }) => {
+                    MemberPresence::Live(Box::new(codec::MemberStats::from_entity(&entity)))
+                }
+                Some(presence::Whereabouts::InTransit) => MemberPresence::InTransit,
+                Some(presence::Whereabouts::Offline) | None => MemberPresence::Offline,
             },
         )
-    }
-}
-
-impl MemberShardCache for &InMemoryStore {
-    fn member_entity(&self, guid: u64) -> Option<codec::MemberEntity> {
-        let entities = self.member_entities.lock().unwrap();
-        entities
-            .iter()
-            .find(|(g, _)| *g == guid)
-            .map(|(_, e)| e.clone())
-    }
-
-    fn member_between_places(&self, guid: u64) -> bool {
-        self.members_between_places.lock().unwrap().contains(&guid)
     }
 }
 
@@ -7988,7 +8090,20 @@ fn auction_house_round_trip_stays_typed_and_ordered_over_an_encrypted_session() 
 
 #[test]
 fn refused_auctioneer_interaction_keeps_the_encrypted_world_session_alive() {
-    let store = std::sync::Arc::new(quest_store());
+    // A resolvable requester with no seeded in-world Characters (`entity_in_world: false`
+    // overrides `quest_store`'s blanket flag), so the WHO answer this test cares about is the
+    // empty-but-present reply, not "no answer for an unknown requester" (a different rule, pinned
+    // in `social.rs`'s own WHO tests).
+    let store = std::sync::Arc::new(InMemoryStore {
+        characters: vec![codec::CharacterView {
+            guid: 1,
+            name: "Tester".into(),
+            race: 1,
+            ..Default::default()
+        }],
+        entity_in_world: false,
+        ..quest_store()
+    });
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
 
     MSG_AUCTION_HELLO_Client {
@@ -8000,10 +8115,15 @@ fn refused_auctioneer_interaction_keeps_the_encrypted_world_session_alive() {
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
 
-    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
-        ServerOpcodeMessage::SMSG_WHO(response) => assert!(response.players.is_empty()),
-        other => panic!("auction refusal must be silent and leave WHO next, got {other}"),
-    }
+    // RAW-encoded (codec::build_who_response_raw); the auction refusal must be silent and leave
+    // WHO's own empty-roster reply next.
+    let (opcode, body) = read_raw_frame(&mut client, &mut c_dec);
+    assert_eq!(opcode, codec::social::SMSG_WHO_OPCODE);
+    assert_eq!(
+        &body[0..8],
+        &[0u8; 8],
+        "no in-world Characters: listed and online both 0"
+    );
 
     drop(client);
     server.join().unwrap();
@@ -8911,6 +9031,18 @@ fn attackswing_desync_error_is_session_fatal() {
 fn who_reply_lists_every_online_player_with_level_and_zone() {
     let mut s = quest_store();
     s.characters = vec![
+        // The requester. Human like Alpha/Bravo (so the team gate passes them), but a class
+        // outside the request's `class_mask` — the requester is not exempt from its own filters,
+        // so this keeps the assertions below at exactly the two matches.
+        codec::CharacterView {
+            guid: 1,
+            name: "Tester".into(),
+            race: 1,
+            class: 4,
+            level: 10,
+            zone_id: 12,
+            ..Default::default()
+        },
         codec::CharacterView {
             guid: 2,
             name: "Alpha".into(),
@@ -8937,24 +9069,31 @@ fn who_reply_lists_every_online_player_with_level_and_zone() {
         maximum_level: Level::new(60),
         player_name: String::new(),
         guild_name: String::new(),
-        race_mask: 0,
-        class_mask: 0,
+        race_mask: 1 << 1,  // Human
+        class_mask: 1 << 1, // Warrior
         zones: Vec::new(),
         search_strings: Vec::new(),
     }
     .write_encrypted_client(&mut client, &mut c_enc)
     .unwrap();
-    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
-        ServerOpcodeMessage::SMSG_WHO(w) => {
-            assert_eq!(w.online_players, 2);
-            assert_eq!(w.players.len(), 2);
-            assert_eq!(w.players[0].name, "Alpha");
-            assert_eq!(w.players[0].level, Level::new(5));
-            assert_eq!(w.players[1].name, "Bravo");
-            assert_eq!(w.players[1].level, Level::new(60));
-        }
-        other => panic!("expected SMSG_WHO, got {other}"),
+    // RAW-encoded (codec::build_who_response_raw): gtker's typed reader assumes the wrong 5875
+    // layout (see that builder's doc comment), so this reads the cmangos body by hand.
+    let (opcode, body) = read_raw_frame(&mut client, &mut c_dec);
+    assert_eq!(opcode, codec::social::SMSG_WHO_OPCODE);
+    let online_players = u32::from_le_bytes(body[4..8].try_into().unwrap());
+    assert_eq!(online_players, 2);
+    let mut rest = &body[8..];
+    for (name, level) in [("Alpha", 5u32), ("Bravo", 60)] {
+        let name_end = rest.iter().position(|&b| b == 0).unwrap();
+        assert_eq!(std::str::from_utf8(&rest[..name_end]).unwrap(), name);
+        rest = &rest[name_end + 1..];
+        let guild_end = rest.iter().position(|&b| b == 0).unwrap();
+        assert_eq!(guild_end, 0, "no guild system yet");
+        rest = &rest[guild_end + 1..];
+        assert_eq!(u32::from_le_bytes(rest[0..4].try_into().unwrap()), level);
+        rest = &rest[16..]; // level, class, race, zone: u32 each
     }
+    assert!(rest.is_empty(), "exactly two listed rows");
     drop(client);
     server.join().unwrap();
 }
