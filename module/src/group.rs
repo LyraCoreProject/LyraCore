@@ -237,6 +237,11 @@ pub struct GroupInvite {
     pub target_guid: u64,
     pub inviter_guid: u64,
     pub created_at: Timestamp,
+    /// The Group the inviter spoke for when it sent the invite, or 0 when it had none. An invite
+    /// sent for a Group stands only while the inviter is still in that Group, as cmangos ties an
+    /// invite to its Group. A row from before this column reads 0.
+    #[default(0u64)]
+    pub group_id: u64,
 }
 
 // Character-owned sweep: a deleted character's pending invites go with it — rows where it
@@ -1308,14 +1313,18 @@ fn invite_core_on(
     // An inviter with NO group yet leads the one the first accept forms. An inviter in a group must
     // lead it or be an Assistant in it (cm:GroupHandler.cpp:128-139), and the group must have room
     // for its kind.
-    if let Some((m, group)) = checked_group_membership(ctx, inviter_guid)? {
-        if !manages_raid(&group, &m) {
-            return Err(GroupRefusal::NotLeader.into());
+    let inviter_group_id = match checked_group_membership(ctx, inviter_guid)? {
+        Some((m, group)) => {
+            if !manages_raid(&group, &m) {
+                return Err(GroupRefusal::NotLeader.into());
+            }
+            if !has_room(group_kind_of(&group), members_of(ctx, m.group_id).len()) {
+                return Err(GroupRefusal::GroupFull.into());
+            }
+            m.group_id
         }
-        if !has_room(group_kind_of(&group), members_of(ctx, m.group_id).len()) {
-            return Err(GroupRefusal::GroupFull.into());
-        }
-    }
+        None => 0,
+    };
     let invites = ctx.db.game_group_invite();
     for stale in invites.by_target().filter(&target_guid).collect::<Vec<_>>() {
         invites.id().delete(stale.id);
@@ -1325,6 +1334,7 @@ fn invite_core_on(
         target_guid,
         inviter_guid,
         created_at: ctx.timestamp,
+        group_id: inviter_group_id,
     });
     push_event(
         ctx,
@@ -1408,12 +1418,17 @@ fn accept_invite_on(
         Plane::RealmCore => None,
     };
     let members = ctx.db.game_group_member();
-    let (group_id, slot) = match checked_group_membership(ctx, inviter_guid)? {
+    let inviter_membership = checked_group_membership(ctx, inviter_guid)?;
+    // An invite sent for a Group stands only while the inviter is still in that Group. Without
+    // this, an Assistant who invites and then leaves would take the acceptor into a new Party.
+    let inviter_group_id = inviter_membership.as_ref().map(|(m, _)| m.group_id);
+    if invite.group_id != 0 && inviter_group_id != Some(invite.group_id) {
+        return Err(GroupRefusal::InviterUnavailable.into());
+    }
+    let (group_id, slot) = match inviter_membership {
         Some((m, group)) => {
-            // Re-run the invite-time rights gate against the inviter's CURRENT group: an inviter
-            // who is now a plain member there, a demoted Assistant or a member of another group,
-            // no longer speaks for it. The invite does not record the group it was sent from, so
-            // this cannot tell that group apart from a later one the inviter leads or assists.
+            // Re-run the invite-time rights gate: an inviter who is now a plain member or a
+            // demoted Assistant no longer speaks for its Group.
             if !manages_raid(&group, &m) {
                 return Err(GroupRefusal::InviterUnavailable.into());
             }
@@ -1430,10 +1445,8 @@ fn accept_invite_on(
             (m.group_id, slot)
         }
         None => {
-            // First acceptance forms the group: the inviter leads and joins it here. An inviter
-            // who left or was removed after inviting also lands here, so an Assistant's pending
-            // invite can form a new Party with its sender. Telling the two apart needs the invite
-            // to record its group.
+            // First acceptance forms the group: the inviter leads and joins it here. The check
+            // above refused an invite sent for a Group the inviter has since left.
             let group = ctx.db.game_group().insert(Group {
                 group_id: 0,
                 leader_guid: inviter_guid,

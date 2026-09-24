@@ -291,7 +291,7 @@ fn the_raid_leader_promotes_and_demotes_an_assistant() {
 
 /// AC 5 to 8: an Assistant's invite joins the Raid, a demoted Assistant's pending invite no longer
 /// stands, and an Assistant removes plain members and Assistants but never the leader. The leader
-/// removes a member by guid.
+/// removes a member by guid. An Assistant's pending invite does not stand once it leaves the Raid.
 #[test]
 #[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
 fn an_assistant_invites_and_removes_members_but_never_the_leader() {
@@ -337,4 +337,15 @@ fn an_assistant_invites_and_removes_members_but_never_the_leader() {
         [1, 2],
         "the leader removes a member by guid"
     );
+
+    join(&realm, 1, 4);
+    group_op(&realm, INVITE, 2, 7, 0);
+    group_op(&realm, LEAVE, 2, 0, 0);
+    assert_refused(&realm, ACCEPT, 7, 0, 0, "group:inviter_unavailable");
+    assert_eq!(
+        members(&realm),
+        [1, 4],
+        "an invite sent for a Group the inviter has left forms no new Party"
+    );
+    assert_eq!(realm.query_rows("SELECT group_id FROM game_group").len(), 1);
 }
