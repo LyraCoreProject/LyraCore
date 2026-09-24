@@ -636,6 +636,16 @@ The listing pool shared by the houses of one team: Alliance (houses 1-3), Horde 
 neutral (house 7). A bid reaches every listing in its bidder's market, whatever house placed it.
 The house the seller stands at still sets that listing's deposit and cut.
 
+**Auction Mail**:
+A Mail from an Auction House whose subject and invoice body the client renders: item name, price,
+and the counterparty's name where the invoice names one. Sent for an outbid refund, a won item, a
+successful sale, an expired listing, or a cancelled one.
+
+**Auction Notice**:
+The live message an online seller or bidder gets the instant an auction is outbid, won, sold,
+expired or cancelled. Rides the same private per-recipient Relay as a whisper; an offline recipient
+gets the Auction Mail only.
+
 ### Guilds
 
 **Guild**:

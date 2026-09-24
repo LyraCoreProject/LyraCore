@@ -916,6 +916,12 @@ fn register_shard_callbacks(
         |v, row| whisper_appeared(v, row),
     );
     wire_insert_live(
+        db.game_auction_notice(),
+        "game_auction_notice.insert",
+        &view,
+        |v, row| auction_notice_appeared(v, row),
+    );
+    wire_insert_live(
         db.game_system_message_event(),
         "game_system_message_event.insert",
         &view,
@@ -1128,6 +1134,12 @@ pub(crate) fn arm_realm_private(view: Arc<WorldView>, realm: Coordinator, coord:
         "realm.game_whisper_event.insert",
         &view,
         |v, row| whisper_appeared(v, row),
+    );
+    wire_insert_live(
+        db.game_auction_notice(),
+        "realm.game_auction_notice.insert",
+        &view,
+        |v, row| auction_notice_appeared(v, row),
     );
     wire_insert_live(
         db.game_group_event(),
@@ -2168,6 +2180,25 @@ fn replace_ignore_sets(view: &WorldView, shard: ShardId, contacts: &[ContactEntr
         *viewer.ignored.lock().unwrap_or_else(|p| p.into_inner()) =
             ignored.get(&viewer.self_guid).cloned().unwrap_or_default();
     }
+}
+
+/// An Auction Notice landed → SMSG_AUCTION_BIDDER_NOTIFICATION or SMSG_AUCTION_OWNER_NOTIFICATION
+/// to the row's RECIPIENT and nobody else (same shape as [`whisper_appeared`]). An offline
+/// recipient gets the Auction Mail the same transaction wrote and no packet — the vanilla rule.
+fn auction_notice_appeared(view: &WorldView, row: &AuctionNotice) {
+    let Some(session) = view.session_of_owner(row.recipient_guid) else {
+        return;
+    };
+    let Some(viewer) = view.viewer(session) else {
+        return;
+    };
+    if !super::subscriptions::private_recipient_audience(row.recipient_guid, viewer.self_guid) {
+        return;
+    }
+    let row = row.clone();
+    enqueue(viewer.clone(), move |_| {
+        super::subscriptions::auction_notice_outbound(&row)
+    });
 }
 
 /// Queue a Package System Message for its addressed World Session.

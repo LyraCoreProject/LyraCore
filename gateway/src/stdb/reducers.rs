@@ -4446,6 +4446,8 @@ mod auction_reducer_tests {
             minimum_increment: hold.minimum_increment,
             accepted_price: hold.accepted_price,
             deferred_refund: hold.deferred_refund,
+            item_entry: 0,
+            random_property_id: 0,
         };
 
         assert!(bid_refund_is_recorded(&hold, &decision));

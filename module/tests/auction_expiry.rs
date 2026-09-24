@@ -10,6 +10,10 @@ fn scheduled_bid_expiry_settles_once_and_a_callback_replay_is_a_no_op() {
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
     standalone.assert_call("install_guid_range", &["0"]);
+    // Auction Notices are a one-shot, TTL-reaped relay (see gc.rs). Disarming the shared reaper
+    // schedule before staging keeps every notice this test writes around for as long as the test
+    // needs it, so verification never has to race the reaper or depend on call order.
+    standalone.assert_sql("DELETE FROM game_event_reaper_schedule");
     standalone.assert_call("debug_stage_auction_expiry_fixture", &[]);
 
     standalone.wait_until_call_succeeds("debug_verify_auction_expiry_fixture", &[]);
@@ -22,10 +26,19 @@ fn scheduled_bid_expiry_settles_once_and_a_callback_replay_is_a_no_op() {
         standalone.assert_call(reducer, &[]);
     }
 
+    // Legacy auction mail (from before the vanilla Auction Mail format) is plain Character mail.
+    // Stage one such row plus a real player's look-alike, then prove the post-publish repair
+    // re-tags only the legacy row to the vanilla AuctionHouse sender, does so exactly once across
+    // a repeated repair pass, and never touches the player's own mail.
+    standalone.assert_call("debug_stage_legacy_auction_mail_fixture", &[]);
+
     standalone.publish_module();
     for reducer in [
         "debug_repair_after_publish",
         "debug_verify_auction_expiry_fixture",
+        "debug_verify_legacy_auction_mail_repaired",
+        "debug_repair_after_publish",
+        "debug_verify_legacy_auction_mail_repaired",
     ] {
         standalone.assert_call(reducer, &[]);
     }

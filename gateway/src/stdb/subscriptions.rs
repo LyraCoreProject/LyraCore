@@ -23,7 +23,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
-use wow_world_messages::vanilla::{Vector3d, WeatherChangeType};
+use wow_world_messages::vanilla::{AuctionHouse, Vector3d, WeatherChangeType};
 
 use super::aoi::ViewerGates;
 use super::bindings::*;
@@ -2398,6 +2398,56 @@ pub(crate) fn whisper_event_outbound(row: &WhisperEvent) -> Vec<Outbound> {
     ))]
 }
 
+/// Auction Notice: the packet body both legs run. Audience resolved by the caller, same as
+/// [`whisper_event_outbound`]. Outbid and Won go to the bidder on
+/// `SMSG_AUCTION_BIDDER_NOTIFICATION`; Sold, Expired and New bid go to the owner on
+/// `SMSG_AUCTION_OWNER_NOTIFICATION` (`cm:AuctionHouseHandler.cpp`/`AuctionHouseMgr.cpp`).
+/// `house` outside the imported 1-7 range and any other `kind` both drop the notice and log —
+/// the accompanying Auction Mail still reaches the recipient's inbox either way.
+pub(crate) fn auction_notice_outbound(row: &AuctionNotice) -> Vec<Outbound> {
+    use lyracore_shared::auction::auction_notice::{EXPIRED, NEW_BID, OUTBID, SOLD, WON};
+
+    let Ok(house) = AuctionHouse::try_from(row.house) else {
+        log::warn!(
+            "auction notice: house {} is not an imported auction house; dropping kind {}",
+            row.house,
+            row.kind
+        );
+        return Vec::new();
+    };
+    match row.kind {
+        OUTBID | WON => vec![Outbound::One(
+            ServerOpcodeMessage::SMSG_AUCTION_BIDDER_NOTIFICATION(Box::new(
+                codec::build_auction_bidder_notification(
+                    house,
+                    row.auction_id,
+                    row.bidder_guid,
+                    row.bid,
+                    row.out_bid,
+                    row.item_entry,
+                    row.random_property_id,
+                ),
+            )),
+        )],
+        SOLD | EXPIRED | NEW_BID => vec![Outbound::One(
+            ServerOpcodeMessage::SMSG_AUCTION_OWNER_NOTIFICATION(Box::new(
+                codec::build_auction_owner_notification(
+                    row.auction_id,
+                    row.bid,
+                    row.out_bid,
+                    row.bidder_guid,
+                    row.item_entry,
+                    row.random_property_id,
+                ),
+            )),
+        )],
+        other => {
+            log::warn!("auction notice: unknown kind {other}; dropping");
+            Vec::new()
+        }
+    }
+}
+
 /// Build a Package System Message after the caller validates the recipient.
 pub(crate) fn system_message_event_outbound(row: &SystemMessageEvent) -> Vec<Outbound> {
     let message = codec::build_gm_system_message(row.message.clone());
@@ -4728,6 +4778,80 @@ mod tests {
         );
     }
 
+    /// Auction Notice kind decoding (`cm:AuctionHouseHandler.cpp`/`AuctionHouseMgr.cpp`): Outbid
+    /// and Won go out on `SMSG_AUCTION_BIDDER_NOTIFICATION`, Sold, Expired and New bid go out on
+    /// `SMSG_AUCTION_OWNER_NOTIFICATION`, and an unrecognized kind or an unimported house both
+    /// drop the packet — the Auction Mail the same transaction wrote still reaches the inbox.
+    #[test]
+    fn auction_notice_kinds_decode_to_their_own_packet_and_an_unknown_one_drops() {
+        use lyracore_shared::auction::auction_notice::{EXPIRED, NEW_BID, OUTBID, SOLD, WON};
+        use wow_world_messages::vanilla::AuctionHouse;
+
+        let notice = |kind: u8, house: u32| AuctionNotice {
+            id: 1,
+            recipient_guid: 7,
+            kind,
+            house,
+            auction_id: 41,
+            item_entry: 25,
+            random_property_id: 117,
+            bid: 500,
+            out_bid: 25,
+            bidder_guid: 9,
+            created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
+        };
+
+        for kind in [OUTBID, WON] {
+            let out = auction_notice_outbound(&notice(kind, 1));
+            assert_eq!(
+                out.len(),
+                1,
+                "kind {kind} must decode to exactly one packet"
+            );
+            match &out[0] {
+                Outbound::One(ServerOpcodeMessage::SMSG_AUCTION_BIDDER_NOTIFICATION(packet)) => {
+                    assert_eq!(packet.auction_house, AuctionHouse::Stormwind);
+                    assert_eq!(packet.bidder.guid(), 9);
+                }
+                Outbound::One(other) => {
+                    panic!("kind {kind}: expected SMSG_AUCTION_BIDDER_NOTIFICATION, got {other}")
+                }
+                _ => {
+                    panic!("kind {kind}: expected a single SMSG_AUCTION_BIDDER_NOTIFICATION packet")
+                }
+            }
+        }
+
+        for kind in [SOLD, EXPIRED, NEW_BID] {
+            let out = auction_notice_outbound(&notice(kind, 1));
+            assert_eq!(
+                out.len(),
+                1,
+                "kind {kind} must decode to exactly one packet"
+            );
+            match &out[0] {
+                Outbound::One(ServerOpcodeMessage::SMSG_AUCTION_OWNER_NOTIFICATION(packet)) => {
+                    assert_eq!(packet.auction_id, 41);
+                }
+                Outbound::One(other) => {
+                    panic!("kind {kind}: expected SMSG_AUCTION_OWNER_NOTIFICATION, got {other}")
+                }
+                _ => {
+                    panic!("kind {kind}: expected a single SMSG_AUCTION_OWNER_NOTIFICATION packet")
+                }
+            }
+        }
+
+        assert!(
+            auction_notice_outbound(&notice(200, 1)).is_empty(),
+            "an unknown kind must drop, not guess a packet"
+        );
+        assert!(
+            auction_notice_outbound(&notice(OUTBID, 99)).is_empty(),
+            "a house outside 1-7 must drop rather than send an unresolved house"
+        );
+    }
+
     /// The OFFER_* kinds decode to the fixed-444-byte extended status (#121): the polarity byte
     /// comes from the KIND (never inferred), the window-visible item fields survive the payload
     /// round-trip into the right wire slots, unused slots stay zeroed, and a malformed payload
@@ -6736,6 +6860,44 @@ mod tests {
                     .contains("private_recipient_audience(row.recipient_guid, viewer.self_guid)"),
             "whisper_appeared is no longer recipient-keyed — on an owner-token read that is a \
              privacy leak: every session would receive every player's private whispers"
+        );
+    }
+
+    /// `game_auction_notice` rides the same private tier: armed once on each shard connection
+    /// (`register_shard_callbacks`) and once more on the realm-core connection (`arm_realm_private`)
+    /// for a cross-shard bidder or seller, both through `auction_notice_appeared`, which is itself
+    /// recipient-keyed the same way `whisper_appeared` is above.
+    #[test]
+    fn the_auction_notice_relay_is_armed_on_both_connections_and_recipient_keyed() {
+        let shard = decommented(top_level_fn_body_of(
+            "world_view.rs",
+            "register_shard_callbacks",
+        ));
+        let shard: String = shard.chars().filter(|c| !c.is_whitespace()).collect();
+        assert!(
+            shard.contains("wire_insert_live(db.game_auction_notice(),\"game_auction_notice.insert\",&view,|v,row|auction_notice_appeared(v,row));"),
+            "register_shard_callbacks no longer relays Auction Notices through \
+             `auction_notice_appeared`"
+        );
+
+        let realm = decommented(top_level_fn_body_of("world_view.rs", "arm_realm_private"));
+        let realm: String = realm.chars().filter(|c| !c.is_whitespace()).collect();
+        assert!(
+            realm.contains("wire_insert_live(db.game_auction_notice(),\"realm.game_auction_notice.insert\",&view,|v,row|auction_notice_appeared(v,row));"),
+            "arm_realm_private no longer relays realm-core Auction Notices, so a cross-shard \
+             bidder or seller never hears their outbid, won, sold, expired or new-bid packet"
+        );
+
+        let relay = decommented(top_level_fn_body_of(
+            "world_view.rs",
+            "auction_notice_appeared",
+        ));
+        assert!(
+            relay.contains("session_of_owner(row.recipient_guid)")
+                && relay
+                    .contains("private_recipient_audience(row.recipient_guid, viewer.self_guid)"),
+            "auction_notice_appeared is no longer recipient-keyed — on an owner-token read that \
+             is a privacy leak: every session would receive every auction's notices"
         );
     }
 

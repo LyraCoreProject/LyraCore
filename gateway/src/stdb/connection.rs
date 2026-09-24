@@ -966,6 +966,7 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         "SELECT * FROM game_auction_bid_hold",
         "SELECT * FROM game_auction_hold",
         "SELECT * FROM game_auction_house",
+        "SELECT * FROM game_auction_notice",
         "SELECT * FROM game_auction_operation_receipt",
         // Guilds. Realm-core holds every row; World Shards hold none. The Gateway reads membership
         // for the Guild Projection and renders Guild Events from this cache.
