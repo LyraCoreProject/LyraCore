@@ -3017,10 +3017,16 @@ fn copying_a_letter_sets_copied_and_grants_one_plain_letter() {
 
     mail::copy_letter(world.as_ref(), Some(GINGER), MAILBOX, 1).expect("the copy completes");
 
+    let flags = realm.mails.lock().unwrap()[0].1.check_flags;
     assert_eq!(
-        realm.mails.lock().unwrap()[0].1.check_flags & lyracore_shared::mail::CHECK_MASK_COPIED,
+        flags & lyracore_shared::mail::CHECK_MASK_COPIED,
         lyracore_shared::mail::CHECK_MASK_COPIED,
         "the mail plane must carry COPIED"
+    );
+    assert_eq!(
+        flags & lyracore_shared::mail::CHECK_FLAG_LETTER_GRANTED,
+        lyracore_shared::mail::CHECK_FLAG_LETTER_GRANTED,
+        "and the durable GRANTED record, once the Home Shard grant is confirmed"
     );
     assert_eq!(
         *world.granted_letters.lock().unwrap(),
@@ -3050,9 +3056,14 @@ fn a_letter_copy_on_one_database_grants_the_same_way() {
         *single.granted_letters.lock().unwrap(),
         vec![(GINGER, GINGERS_LETTER_TEXT_ID)]
     );
+    let flags = single.mails.lock().unwrap()[0].1.check_flags;
     assert_eq!(
-        single.mails.lock().unwrap()[0].1.check_flags & lyracore_shared::mail::CHECK_MASK_COPIED,
+        flags & lyracore_shared::mail::CHECK_MASK_COPIED,
         lyracore_shared::mail::CHECK_MASK_COPIED
+    );
+    assert_eq!(
+        flags & lyracore_shared::mail::CHECK_FLAG_LETTER_GRANTED,
+        lyracore_shared::mail::CHECK_FLAG_LETTER_GRANTED
     );
 }
 
@@ -3080,17 +3091,36 @@ fn copying_into_a_full_bag_is_refused_and_leaves_the_mail_uncopied() {
 }
 
 #[test]
-fn a_second_copy_of_the_same_letter_replays_and_grants_no_second_letter() {
+fn a_letter_already_granted_refuses_a_second_copy_and_grants_no_second_letter() {
     let (_realm, world, _calls) = sharded_mailbox();
 
     mail::copy_letter(world.as_ref(), Some(GINGER), MAILBOX, 1).expect("the first copy completes");
     mail::copy_letter(world.as_ref(), Some(GINGER), MAILBOX, 1)
-        .expect("a redundant click replays rather than erroring");
+        .expect_err("a completed grant refuses a second click for good");
 
     assert_eq!(
         *world.granted_letters.lock().unwrap(),
         vec![(GINGER, GINGERS_LETTER_TEXT_ID)],
         "one letter, not two"
+    );
+}
+
+/// The held-item check in `mail_grant_letter` only guards the crash window before GRANTED is
+/// recorded — it is not the durable answer. Once GRANTED lands, destroying, mailing away, or
+/// trading the letter must not reopen the grant: the record lives on the mail, not the item.
+#[test]
+fn destroying_the_granted_item_does_not_reopen_a_second_grant() {
+    let (_realm, world, _calls) = sharded_mailbox();
+    mail::copy_letter(world.as_ref(), Some(GINGER), MAILBOX, 1).expect("the first copy completes");
+    world.granted_letters.lock().unwrap().clear(); // the Plain Letter is gone from the bags
+
+    let refusal = mail::copy_letter(world.as_ref(), Some(GINGER), MAILBOX, 1)
+        .expect_err("GRANTED survives the item's destruction");
+
+    assert!(matches!(refusal, mail::CopyLetterRefusal::Other(_)));
+    assert!(
+        world.granted_letters.lock().unwrap().is_empty(),
+        "no letter is minted for a mail that already used its one grant"
     );
 }
 
@@ -3128,7 +3158,7 @@ fn the_copied_letters_text_is_readable_after_the_mail_is_deleted() {
     realm.mails.lock().unwrap().retain(|(_, m)| m.id != 1);
 
     assert_eq!(
-        mail::item_text(world.as_ref(), Some(GINGER), GINGERS_LETTER_TEXT_ID).unwrap(),
+        mail::item_text(world.as_ref(), Some(GINGER), GINGERS_LETTER_TEXT_ID, 0).unwrap(),
         Some("left it at the inn".to_string()),
         "a copied letter's text outlives the mail row that created it"
     );
@@ -3243,7 +3273,7 @@ fn item_text_query_refuses_a_caller_who_neither_owns_the_item_nor_the_mail() {
     realm.mails.lock().unwrap().retain(|(_, m)| m.id != 1);
 
     assert_eq!(
-        mail::item_text(world.as_ref(), Some(TRIN), GINGERS_LETTER_TEXT_ID).unwrap(),
+        mail::item_text(world.as_ref(), Some(TRIN), GINGERS_LETTER_TEXT_ID, 0).unwrap(),
         None,
         "Trin holds no such item and never owned this mail — a walked id must read empty, not \
          Ginger's letter"
@@ -3256,7 +3286,7 @@ fn item_text_query_answers_for_an_owner_who_still_holds_the_granted_item() {
     mail::copy_letter(world.as_ref(), Some(GINGER), MAILBOX, 1).expect("Ginger copies their own");
 
     assert_eq!(
-        mail::item_text(world.as_ref(), Some(GINGER), GINGERS_LETTER_TEXT_ID).unwrap(),
+        mail::item_text(world.as_ref(), Some(GINGER), GINGERS_LETTER_TEXT_ID, 0).unwrap(),
         Some("left it at the inn".to_string()),
         "the copy's own owner must still read it back"
     );
@@ -3270,11 +3300,11 @@ fn item_text_query_falls_back_to_the_callers_own_undeleted_mail() {
     // the caller's own delivered mail under the same id, matching what a letter still sitting in
     // the mailbox has always done.
     assert_eq!(
-        mail::item_text(world.as_ref(), Some(GINGER), GINGERS_LETTER_TEXT_ID).unwrap(),
+        mail::item_text(world.as_ref(), Some(GINGER), GINGERS_LETTER_TEXT_ID, 0).unwrap(),
         Some("left it at the inn".to_string())
     );
     assert_eq!(
-        mail::item_text(world.as_ref(), Some(TRIN), GINGERS_LETTER_TEXT_ID).unwrap(),
+        mail::item_text(world.as_ref(), Some(TRIN), GINGERS_LETTER_TEXT_ID, 0).unwrap(),
         None,
         "and it stays scoped to the caller's own mail — not a crafted read of Ginger's"
     );

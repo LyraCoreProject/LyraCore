@@ -41,6 +41,26 @@ fn seed_mail(shard: &Standalone, recipient_guid: u64, sender_guid: u64, body: &s
         .unwrap()
 }
 
+/// Seeds the "Plain Letter" (item 8383) template a real ClassicDB import carries, since the fixture
+/// shards in these tests start with none. Every column bar `entry`/`name`/`max_stack`/`buy_count`/
+/// `allowed_class`/`allowed_race` is a placeholder value — `grant_letter_item` needs the row to
+/// exist, not any particular stat on it.
+fn seed_letter_item_template(shard: &Standalone) {
+    shard.assert_sql(
+        "INSERT INTO game_item_template (entry,class,subclass,name,display_id,quality,\
+         inventory_type,item_level,required_level,max_durability,buy_price,sell_price,max_stack,\
+         damage_min,damage_max,delay_ms,stat_strength,stat_agility,stat_stamina,stat_intellect,\
+         stat_spirit,stat_crit,stat_hit,stat_armor,block_value,restores_power,spellid_1,\
+         spelltrigger_1,spellid_2,spelltrigger_2,container_slots,sheath,bonding,holy_res,fire_res,\
+         nature_res,frost_res,shadow_res,arcane_res,spellid_3,spelltrigger_3,spellid_4,\
+         spelltrigger_4,spellid_5,spelltrigger_5,required_skill,required_skill_rank,\
+         required_reputation_faction,required_reputation_rank,max_count,item_flags,page_text,\
+         start_quest,bag_family,buy_count,food_type,allowed_class,allowed_race,random_property) \
+         VALUES (8383,0,0,'Plain Letter',0,0,0,0,0,0,0,0,1,0.0,0.0,0,0,0,0,0,0,0,0,0,0,false,0,0,\
+         0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,1503,255,0)",
+    );
+}
+
 /// `realm_mail_copy_text` (the reducer `apply_copy_text` answers through) against a real database:
 /// COPIED lands on the mail and its body becomes durable item text under the mail's own id.
 #[test]
@@ -123,19 +143,7 @@ fn a_returned_letters_reused_id_copies_again_without_panicking() {
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn granting_a_letter_a_second_time_does_not_duplicate_the_item() {
     let shard = fixture("mail-letter-grant-twice");
-    shard.assert_sql(
-        "INSERT INTO game_item_template (entry,class,subclass,name,display_id,quality,\
-         inventory_type,item_level,required_level,max_durability,buy_price,sell_price,max_stack,\
-         damage_min,damage_max,delay_ms,stat_strength,stat_agility,stat_stamina,stat_intellect,\
-         stat_spirit,stat_crit,stat_hit,stat_armor,block_value,restores_power,spellid_1,\
-         spelltrigger_1,spellid_2,spelltrigger_2,container_slots,sheath,bonding,holy_res,fire_res,\
-         nature_res,frost_res,shadow_res,arcane_res,spellid_3,spelltrigger_3,spellid_4,\
-         spelltrigger_4,spellid_5,spelltrigger_5,required_skill,required_skill_rank,\
-         required_reputation_faction,required_reputation_rank,max_count,item_flags,page_text,\
-         start_quest,bag_family,buy_count,food_type,allowed_class,allowed_race,random_property) \
-         VALUES (8383,0,0,'Plain Letter',0,0,0,0,0,0,0,0,1,0.0,0.0,0,0,0,0,0,0,0,0,0,0,false,0,0,\
-         0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,1503,255,0)",
-    );
+    seed_letter_item_template(&shard);
     shard.assert_call("debug_spawn_player_entity", &["1"]);
     let mail_id = seed_mail(&shard, 1, 2, "left it at the inn");
     shard.assert_call("realm_mail_copy_text", &[&actor(1), &mail_id.to_string()]);
@@ -147,4 +155,39 @@ fn granting_a_letter_a_second_time_does_not_duplicate_the_item() {
         "SELECT guid FROM game_item_instance WHERE owner_guid = 1 AND entry = 8383 AND item_text_id = {mail_id}"
     ));
     assert_eq!(granted.len(), 1, "one Plain Letter, not two");
+}
+
+/// The held-item check `grant_letter_item` runs is only the guard for the narrow window before
+/// GRANTED is recorded. Once the player has destroyed the granted letter, `realm_mail_copy_text`
+/// must refuse a second copy on GRANTED alone — copy, grant, destroy, copy again must not mint the
+/// letter over and over. The Gateway's own `copy_letter` never calls `gw_mail_grant_letter` unless
+/// the copy step just succeeded, so a refused copy is what keeps a second grant from happening.
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn copying_grant_and_destroying_the_letter_refuses_a_second_grant() {
+    let shard = fixture("mail-letter-copy-grant-destroy");
+    seed_letter_item_template(&shard);
+    shard.assert_call("debug_spawn_player_entity", &["1"]);
+    let mail_id = seed_mail(&shard, 1, 2, "left it at the inn");
+    shard.assert_call("realm_mail_copy_text", &[&actor(1), &mail_id.to_string()]);
+    shard.assert_call("gw_mail_grant_letter", &[&actor(1), &mail_id.to_string()]);
+    shard.assert_call(
+        "realm_mail_mark_letter_granted",
+        &[&actor(1), &mail_id.to_string()],
+    );
+    shard.assert_sql("DELETE FROM game_item_instance WHERE owner_guid = 1 AND entry = 8383");
+
+    let refused = shard.call("realm_mail_copy_text", &[&actor(1), &mail_id.to_string()]);
+    assert!(
+        !refused.status.success(),
+        "GRANTED must refuse a second copy even with the item gone"
+    );
+
+    let granted = shard.query_rows(&format!(
+        "SELECT guid FROM game_item_instance WHERE owner_guid = 1 AND entry = 8383 AND item_text_id = {mail_id}"
+    ));
+    assert!(
+        granted.is_empty(),
+        "the copy step refused, so the Gateway never reaches the grant — no letter is minted"
+    );
 }

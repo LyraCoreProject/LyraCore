@@ -26,11 +26,13 @@ pub struct ItemText {
     pub text: String,
 }
 
+const ALREADY_GRANTED: &str = "mail: this letter was already made permanent";
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum CopyTextPlan {
     NotYours,
     NoText,
-    AlreadyCopied,
+    AlreadyGranted,
     Copy,
 }
 
@@ -38,9 +40,13 @@ pub(crate) enum CopyTextPlan {
 /// mail that is not the caller's the same way a missing one does (a mail id is client-supplied), an
 /// empty body the same way vmangos refuses an already-COPIED mail — the two read identically to a
 /// crafted click, since `Letter::from_character` already marks an empty-body letter COPIED at
-/// creation and a legacy row predates that convention. `AlreadyCopied` is not itself a refusal:
-/// `apply_copy_text` treats it as a replay, so a redundant click or a retry after an interrupted
-/// grant can still reach the Home Shard.
+/// creation and a legacy row predates that convention.
+///
+/// The Gate checks GRANTED, not COPIED: COPIED alone only tells the vanilla client to hide the
+/// letter button, and `apply_copy_text` treats it as a replay so a redundant click or a retry after
+/// an interrupted grant can still reach the Home Shard. GRANTED is the durable record that the
+/// Plain Letter actually landed — it survives the player destroying, mailing away, or trading that
+/// item, which is what stops a copy-grant-destroy loop from minting the letter over and over.
 pub(crate) fn plan_copy_text(row: Option<&Mail>, caller_guid: u64) -> CopyTextPlan {
     let Some(row) = row.filter(|m| m.recipient_guid == caller_guid) else {
         return CopyTextPlan::NotYours;
@@ -48,8 +54,8 @@ pub(crate) fn plan_copy_text(row: Option<&Mail>, caller_guid: u64) -> CopyTextPl
     if row.body.is_empty() {
         return CopyTextPlan::NoText;
     }
-    if row.check_flags & lyracore_shared::mail::CHECK_MASK_COPIED != 0 {
-        return CopyTextPlan::AlreadyCopied;
+    if row.check_flags & lyracore_shared::mail::CHECK_FLAG_LETTER_GRANTED != 0 {
+        return CopyTextPlan::AlreadyGranted;
     }
     CopyTextPlan::Copy
 }
@@ -60,13 +66,12 @@ pub(crate) fn plan_copy_text(row: Option<&Mail>, caller_guid: u64) -> CopyTextPl
 /// other mail work landing in the same window — a new function here keeps this change out of its
 /// way.
 ///
-/// Replay-safe on both Gates a retry can hit: `AlreadyCopied` is a no-op success rather than an
-/// error, so a Gateway that never learned its earlier grant succeeded (bags filled, logout,
-/// timeout, a crash) can drive the Home Shard grant again instead of stranding the mail COPIED
-/// with no letter. The text insert is skipped when the row already exists — `mail::returned` keeps
-/// a returned mail's id, so a letter a second Character copies after the first sender gets it back
-/// reuses the same text id; the body never changes for a given mail id, so the existing row is
-/// already correct.
+/// Replay-safe: a retry that reaches here again before GRANTED is ever set (bags filled, logout,
+/// timeout, a crash between here and the Home Shard grant) re-runs harmlessly. The text insert is
+/// skipped when the row already exists — `mail::returned` keeps a returned mail's id, so a letter a
+/// second Character copies after the first sender gets it back reuses the same text id; the body
+/// never changes for a given mail id, so the existing row is already correct. Setting COPIED again
+/// is a no-op OR, so it costs nothing on a replay either.
 pub(crate) fn apply_copy_text(
     ctx: &ReducerContext,
     recipient_guid: u64,
@@ -76,7 +81,7 @@ pub(crate) fn apply_copy_text(
     match plan_copy_text(row.as_ref(), recipient_guid) {
         CopyTextPlan::NotYours => return Err(lyracore_shared::mail::NOT_YOUR_MAIL.to_string()),
         CopyTextPlan::NoText => return Err(NOTHING_TO_COPY.to_string()),
-        CopyTextPlan::AlreadyCopied => return Ok(()),
+        CopyTextPlan::AlreadyGranted => return Err(ALREADY_GRANTED.to_string()),
         CopyTextPlan::Copy => {}
     }
     let row = row.expect("Copy is only reachable with a row");
@@ -108,6 +113,9 @@ pub fn realm_mail_copy_text(
 /// The Home Shard half: grant one Plain Letter carrying `item_text_id`. Refuses on full bags with
 /// the existing `INVENTORY_FULL` text, which the Gateway's `mail_item_room` pre-check already tries
 /// to avoid — this Gate is the real one, since bags can still fill between that check and this call.
+/// `grant_letter_item`'s own "the owner already holds this text id" check is a second, narrower
+/// guard: it only covers the window between this call landing and `realm_mail_mark_letter_granted`
+/// recording GRANTED, not the whole lifetime of the item.
 #[reducer]
 pub fn gw_mail_grant_letter(
     ctx: &ReducerContext,
@@ -117,6 +125,38 @@ pub fn gw_mail_grant_letter(
     crate::helpers::require_operator(ctx)?;
     let payee_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     crate::items::grant_letter_item(ctx, payee_guid, MAIL_BODY_ITEM_TEMPLATE, item_text_id)
+}
+
+/// Sets GRANTED on the mail plane once the Gateway has confirmed `gw_mail_grant_letter` returned
+/// `Ok`. The durable record a Letter Copy landed: unlike the granted item itself, this bit cannot
+/// be destroyed, mailed away, or traded, so it is what `plan_copy_text` checks to refuse a second
+/// grant for good — not whether the player still happens to hold the item.
+pub(crate) fn apply_mark_letter_granted(
+    ctx: &ReducerContext,
+    recipient_guid: u64,
+    mail_id: u64,
+) -> Result<(), String> {
+    let row = crate::mail::delivered_mail(ctx, mail_id)
+        .filter(|m| m.recipient_guid == recipient_guid)
+        .ok_or_else(|| lyracore_shared::mail::NOT_YOUR_MAIL.to_string())?;
+    if row.check_flags & lyracore_shared::mail::CHECK_FLAG_LETTER_GRANTED == 0 {
+        ctx.db.game_mail().id().update(Mail {
+            check_flags: row.check_flags | lyracore_shared::mail::CHECK_FLAG_LETTER_GRANTED,
+            ..row
+        });
+    }
+    Ok(())
+}
+
+#[reducer]
+pub fn realm_mail_mark_letter_granted(
+    ctx: &ReducerContext,
+    request_actor: crate::SessionActor,
+    mail_id: u64,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    let recipient_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
+    apply_mark_letter_granted(ctx, recipient_guid, mail_id)
 }
 
 #[cfg(test)]
@@ -171,22 +211,33 @@ mod tests {
         assert_eq!(
             plan_copy_text(Some(&row(7, "", 0x04)), 7),
             CopyTextPlan::NoText,
-            "an empty body is refused before the already-copied check even looks at the flag"
+            "an empty body is refused before the GRANTED check even looks at the flags"
         );
     }
 
     #[test]
-    fn a_second_copy_of_the_same_letter_is_refused() {
-        let already = row(7, "meet me at the gate", 0x04);
+    fn a_copy_that_only_set_copied_replays_rather_than_refusing() {
+        // COPIED alone means an earlier attempt reached the mail plane but the Gateway never
+        // confirmed the Home Shard grant landed — the shape a crash or a lost reply leaves behind.
+        // The Gate must let a retry through so it can reach the grant.
+        let copied_only = row(7, "meet me at the gate", 0x04);
+        assert_eq!(plan_copy_text(Some(&copied_only), 7), CopyTextPlan::Copy);
+        let with_has_body = row(7, "meet me at the gate", 0x10 | 0x04);
+        assert_eq!(plan_copy_text(Some(&with_has_body), 7), CopyTextPlan::Copy);
+    }
+
+    #[test]
+    fn a_letter_already_granted_is_refused_to_copy_again() {
+        let granted = row(7, "meet me at the gate", 0x20);
         assert_eq!(
-            plan_copy_text(Some(&already), 7),
-            CopyTextPlan::AlreadyCopied
+            plan_copy_text(Some(&granted), 7),
+            CopyTextPlan::AlreadyGranted
         );
-        let both = row(7, "meet me at the gate", 0x10 | 0x04);
+        let granted_and_copied = row(7, "meet me at the gate", 0x04 | 0x20);
         assert_eq!(
-            plan_copy_text(Some(&both), 7),
-            CopyTextPlan::AlreadyCopied,
-            "COPIED refuses even alongside HAS_BODY, since the flags OR together"
+            plan_copy_text(Some(&granted_and_copied), 7),
+            CopyTextPlan::AlreadyGranted,
+            "GRANTED refuses regardless of which other bits ride alongside it"
         );
     }
 
@@ -209,6 +260,19 @@ mod tests {
         assert!(
             normalized.starts_with("{ crate::helpers::require_operator(ctx)?;"),
             "`gw_mail_grant_letter` no longer OPENS with the operator gate. Body was:\n{body}"
+        );
+    }
+
+    #[test]
+    fn the_realm_mail_mark_letter_granted_reducer_is_operator_gated() {
+        let body = crate::test_scan::code_of(
+            include_str!("mail_text.rs"),
+            "pub fn realm_mail_mark_letter_granted(",
+        );
+        let normalized: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            normalized.starts_with("{ crate::helpers::require_operator(ctx)?;"),
+            "`realm_mail_mark_letter_granted` no longer OPENS with the operator gate. Body was:\n{body}"
         );
     }
 }

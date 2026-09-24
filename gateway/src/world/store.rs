@@ -1088,18 +1088,25 @@ pub trait WorldStore:
     /// `CMSG_MAIL_CREATE_TEXT_ITEM` step 1 (Letter Copy) — set COPIED on `mail_id` and file its
     /// body as durable item text, on the database that OWNS THE MAIL ROW (realm-core when sharded,
     /// this shard's own database otherwise — the same two-plane routing `mail_take_item_fence`
-    /// takes). `Err` for a mail that is not the caller's, is not delivered, or has no body. A
-    /// replay on an already-copied mail is `Ok` (a no-op on the mail plane), so a retry can still
-    /// reach the Home Shard grant.
+    /// takes). `Err` for a mail that is not the caller's, is not delivered, has no body, or is
+    /// already GRANTED. A replay before GRANTED is set is `Ok` (a no-op on the mail plane), so a
+    /// retry can still reach the Home Shard grant.
     fn mail_copy_text(&self, recipient_guid: u64, mail_id: u64) -> Result<()>;
 
     /// `CMSG_MAIL_CREATE_TEXT_ITEM` step 2 — store one Plain Letter carrying `item_text_id`, on the
     /// PAYEE's own handle. [`mail_item_room`](Self::mail_item_room)'s real Gate: a full bag found
     /// here refuses and leaves the mail COPIED with no letter granted. The Plain Letter sells for
     /// 0, so a grant lost to that race costs nothing — this is deliberately not an escrow. Also a
-    /// no-op `Ok` when the payee already holds an item carrying `item_text_id`, so a retry after an
-    /// interrupted grant cannot mint a second letter.
+    /// no-op `Ok` when the payee already holds an item carrying `item_text_id`: the crash-window
+    /// guard between this call landing and [`mail_mark_letter_granted`](Self::mail_mark_letter_granted)
+    /// recording that it did.
     fn mail_grant_letter(&self, payee_guid: u64, item_text_id: u32) -> Result<()>;
+
+    /// `CMSG_MAIL_CREATE_TEXT_ITEM` step 3 — the durable record that the grant landed, on the same
+    /// database `mail_copy_text` wrote to. Called once [`mail_grant_letter`](Self::mail_grant_letter)
+    /// returns `Ok`. Unlike the item itself, this bit cannot be destroyed, mailed away, or traded,
+    /// so it is what refuses a second grant for good.
+    fn mail_mark_letter_granted(&self, recipient_guid: u64, mail_id: u64) -> Result<()>;
 
     /// The durable text behind `item_text_id`, read from `game_item_text` on the database that
     /// OWNS THE MAIL PLANE (same two-plane routing as [`mail_copy_text`](Self::mail_copy_text)). A
@@ -1116,9 +1123,16 @@ pub trait WorldStore:
     /// Does `owner_guid` hold an item carrying `item_text_id` in their own bags, on THIS handle?
     /// The ownership Gate `mail::item_text` checks before it answers from `game_item_text`: a
     /// client walking `item_text_id` values must not read another player's Letter Copy that way.
-    /// Scoped to `owner_guid` — never a caller reading another player's rows. `false` by default,
-    /// so a store with no opinion on item ownership grants nothing.
-    fn owns_item_with_text(&self, _owner_guid: u64, _item_text_id: u32) -> Result<bool> {
+    /// `hint_item_guid` is `CMSG_ITEM_TEXT_QUERY`'s overloaded second field — often the queried
+    /// item's own guid when it names an item rather than a mail — so an implementation can try a
+    /// cheap PK lookup before falling back to a scan of `owner_guid`'s rows. `false` by default, so
+    /// a store with no opinion on item ownership grants nothing.
+    fn owns_item_with_text(
+        &self,
+        _owner_guid: u64,
+        _item_text_id: u32,
+        _hint_item_guid: u64,
+    ) -> Result<bool> {
         Ok(false)
     }
 

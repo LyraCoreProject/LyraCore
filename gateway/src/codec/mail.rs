@@ -98,14 +98,15 @@ fn message_type(sender: MailSender) -> Mail_MailType {
     }
 }
 /// The `checked` field the client reads read, returned, copied, COD-payment and has-body state
-/// from (cmangos `MailHandler.cpp:610`).
+/// from (cmangos `MailHandler.cpp:610`). Masks out `CHECK_FLAG_LETTER_GRANTED`: that bit rides the
+/// same column for the server's own bookkeeping and names no vanilla state the client understands.
 fn check_mask(m: &MailView) -> u32 {
     let read = if m.was_read {
         mail_rules::CHECK_MASK_READ
     } else {
         0
     };
-    m.check_flags | read
+    (m.check_flags & !mail_rules::CHECK_FLAG_LETTER_GRANTED) | read
 }
 pub fn build_next_mail_time(has_unread: bool) -> MSG_QUERY_NEXT_MAIL_TIME_Server {
     MSG_QUERY_NEXT_MAIL_TIME_Server {

@@ -600,11 +600,14 @@ fn copy_letter_refusal(e: anyhow::Error) -> CopyLetterRefusal {
     }
 }
 /// `CMSG_MAIL_CREATE_TEXT_ITEM`: turn a delivered letter's body into a Plain Letter in the bags.
-/// Gates in order — the mailbox, bag room, the Realm-core copy, the Home Shard grant — so a full
-/// bag never touches the mail row, matching `take_item`'s ordering. Not an escrow: the Plain Letter
-/// sells for 0, so a grant lost to bags filling between the room check and the grant costs nothing.
-/// Both durable steps are replay-safe, so a retry after an interrupted grant reaches the Home Shard
-/// again instead of leaving the mail COPIED with nothing to show for it.
+/// Gates in order — the mailbox, bag room, the Realm-core copy, the Home Shard grant, the Realm-core
+/// mark — so a full bag never touches the mail row, matching `take_item`'s ordering. Not an escrow:
+/// the Plain Letter sells for 0, so a grant lost to bags filling between the room check and the
+/// grant costs nothing. Every durable step is replay-safe, so a retry after an interrupted grant
+/// reaches the Home Shard again instead of leaving the mail COPIED with nothing to show for it. The
+/// mark is what makes a completed grant refuse a second one for good, even after the player
+/// destroys, mails away, or trades the letter — `mail_grant_letter`'s own held-item check only
+/// covers the narrow window before this call lands.
 pub(crate) fn copy_letter<St: WorldStore + ?Sized>(
     store: &St,
     self_guid: Option<u64>,
@@ -626,13 +629,24 @@ pub(crate) fn copy_letter<St: WorldStore + ?Sized>(
     let item_text_id = u32::try_from(mail_id).unwrap_or(0);
     store
         .mail_grant_letter(self_guid, item_text_id)
-        .map_err(copy_letter_refusal)
+        .map_err(copy_letter_refusal)?;
+    match store.realm_store() {
+        Some(realm) => realm.mail_mark_letter_granted(self_guid, mail_id),
+        None => store.mail_mark_letter_granted(self_guid, mail_id),
+    }
+    .map_err(copy_letter_refusal)
 }
 /// `CMSG_ITEM_TEXT_QUERY`: the text behind `item_text_id`, for a caller who has PROVEN they may see
 /// it — either they hold an item carrying that id, or they own the mail it names. `game_item_text`
 /// ids are the mail's own id, small and sequential, so answering it for anyone who merely asks
 /// would let a crafted query walk every copied letter on the realm. A caller who proves neither
 /// gets empty text, the same answer a stale or foreign id has always produced.
+///
+/// `hint_item_guid` is the wire's own overloaded second field, forwarded to
+/// [`WorldStore::owns_item_with_text`] so it can try a cheap PK lookup before scanning. The
+/// ownership scan runs only when the mail check does not already answer the question — most
+/// queries are either "read my own undeleted mail" or "reread my own bagged letter," so one lookup
+/// usually settles it.
 ///
 /// A copied letter's text lives in `game_item_text` on the mail plane and outlives the mail that
 /// held it; anything else falls back to the caller's own mail body under the same id, which is
@@ -641,11 +655,16 @@ pub(crate) fn item_text<St: WorldStore + ?Sized>(
     store: &St,
     self_guid: Option<u64>,
     item_text_id: u32,
+    hint_item_guid: u64,
 ) -> Result<Option<String>> {
     let own_mail_body = letter_body(store, self_guid, u64::from(item_text_id))?;
-    let owns_item = match self_guid {
-        Some(guid) => store.owns_item_with_text(guid, item_text_id)?,
-        None => false,
+    let owns_item = if own_mail_body.is_some() {
+        false
+    } else {
+        match self_guid {
+            Some(guid) => store.owns_item_with_text(guid, item_text_id, hint_item_guid)?,
+            None => false,
+        }
     };
     if !owns_item && own_mail_body.is_none() {
         return Ok(None);

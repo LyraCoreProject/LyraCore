@@ -938,6 +938,7 @@ pub mod realm_mail_delete_reducer;
 pub mod realm_mail_fence_reducer;
 pub mod realm_mail_item_payout_reducer;
 pub mod realm_mail_item_room_reducer;
+pub mod realm_mail_mark_letter_granted_reducer;
 pub mod realm_mail_mark_read_reducer;
 pub mod realm_mail_payout_reducer;
 pub mod realm_mail_return_reducer;
@@ -2055,6 +2056,7 @@ pub use realm_mail_delete_reducer::realm_mail_delete;
 pub use realm_mail_fence_reducer::realm_mail_fence;
 pub use realm_mail_item_payout_reducer::realm_mail_item_payout;
 pub use realm_mail_item_room_reducer::realm_mail_item_room;
+pub use realm_mail_mark_letter_granted_reducer::realm_mail_mark_letter_granted;
 pub use realm_mail_mark_read_reducer::realm_mail_mark_read;
 pub use realm_mail_payout_reducer::realm_mail_payout;
 pub use realm_mail_return_reducer::realm_mail_return;
@@ -3920,6 +3922,10 @@ pub enum Reducer {
     RealmMailItemRoom {
         request_actor: SessionActor,
     },
+    RealmMailMarkLetterGranted {
+        request_actor: SessionActor,
+        mail_id: u64,
+    },
     RealmMailMarkRead {
         request_actor: SessionActor,
         mail_id: u64,
@@ -4572,6 +4578,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::RealmMailFence { .. } => "realm_mail_fence",
             Reducer::RealmMailItemPayout { .. } => "realm_mail_item_payout",
             Reducer::RealmMailItemRoom { .. } => "realm_mail_item_room",
+            Reducer::RealmMailMarkLetterGranted { .. } => "realm_mail_mark_letter_granted",
             Reducer::RealmMailMarkRead { .. } => "realm_mail_mark_read",
             Reducer::RealmMailPayout { .. } => "realm_mail_payout",
             Reducer::RealmMailReturn { .. } => "realm_mail_return",
@@ -7637,6 +7644,13 @@ Reducer::PlayerbotsFixtureCommandApply{
                 request_actor,
 }             => __sats::bsatn::to_vec(&realm_mail_item_room_reducer::RealmMailItemRoomArgs {
                 request_actor: request_actor.clone(),
+}),
+            Reducer::RealmMailMarkLetterGranted{
+                request_actor,
+                mail_id,
+}             => __sats::bsatn::to_vec(&realm_mail_mark_letter_granted_reducer::RealmMailMarkLetterGrantedArgs {
+                request_actor: request_actor.clone(),
+                mail_id: mail_id.clone(),
 }),
             Reducer::RealmMailMarkRead{
                 request_actor,

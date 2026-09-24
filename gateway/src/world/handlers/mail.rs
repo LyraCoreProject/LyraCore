@@ -56,22 +56,28 @@ pub(crate) fn handle_mail<St: WorldStore + ?Sized>(
             )?;
         }
         // The letter body. It does not ride the list packet: the list advertises the mail's own id
-        // as an `item_text_id` and the client fetches the text here — by `item_text_id` alone (the
-        // second field can be a bag item guid or a mail id, so the server never reads it). Answered
-        // only for a caller who holds an item carrying that id or owns the mail it names — ids are
-        // small and sequential, so answering a bare id would let a crafted query read anyone's
-        // copied letter. A body the caller cannot have (someone else's mail or item, a deleted mail)
-        // answers with EMPTY text rather than silence — the client has already opened the letter and
-        // is waiting on this packet.
+        // as an `item_text_id` and the client fetches the text here — resolved by `item_text_id`,
+        // never trusted on the second field alone (a bag item guid when reading an item, a mail id
+        // otherwise; cm:MailHandler.cpp:630-646). That field is only a HINT the ownership check may
+        // use for a cheap lookup. Answered only for a caller who holds an item carrying the id or
+        // owns the mail it names — ids are small and sequential, so answering a bare id would let a
+        // crafted query read anyone's copied letter. A body the caller cannot have (someone else's
+        // mail or item, a deleted mail) answers with EMPTY text rather than silence — the client has
+        // already opened the letter and is waiting on this packet.
         ClientOpcodeMessage::CMSG_ITEM_TEXT_QUERY(c) => {
-            let body = mail::item_text(store, social::self_guid(conn), c.item_text_id)
-                .unwrap_or_else(|e| {
-                    log::debug!(
-                        "world: item text query refused (account {}): {e}",
-                        conn.account_id
-                    );
-                    None
-                });
+            let body = mail::item_text(
+                store,
+                social::self_guid(conn),
+                c.item_text_id,
+                u64::from(c.mail_id),
+            )
+            .unwrap_or_else(|e| {
+                log::debug!(
+                    "world: item text query refused (account {}): {e}",
+                    conn.account_id
+                );
+                None
+            });
             send(
                 tx,
                 Outbound::One(ServerOpcodeMessage::SMSG_ITEM_TEXT_QUERY_RESPONSE(

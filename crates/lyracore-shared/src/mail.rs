@@ -13,6 +13,12 @@ pub const CHECK_MASK_RETURNED: u32 = 0x02;
 pub const CHECK_MASK_COPIED: u32 = 0x04;
 pub const CHECK_MASK_COD_PAYMENT: u32 = 0x08;
 pub const CHECK_MASK_HAS_BODY: u32 = 0x10;
+/// Server-internal, riding a spare bit of the same `check_flags` column: a Letter Copy's Plain
+/// Letter was granted. Vanilla defines no such bit, so it must never reach the wire — the codec
+/// masks it out of `checked_timestamp`. Distinct from COPIED, which only tells the client to hide
+/// the letter button: a copy stays refused after the granted item is destroyed, mailed away, or
+/// traded, because this bit — not the item's presence — is the record that the grant happened.
+pub const CHECK_FLAG_LETTER_GRANTED: u32 = 0x20;
 /// `MailMessageType` codes (cmangos `Mails/Mail.h:54-61`), stored as `game_mail.sender_kind`.
 pub const SENDER_KIND_CHARACTER: u8 = 0;
 pub const SENDER_KIND_AUCTION: u8 = 2;

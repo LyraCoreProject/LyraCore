@@ -2237,9 +2237,9 @@ impl WorldStore for InMemoryStore {
     }
     /// Models `mail_text::apply_copy_text`: sets COPIED and files the body as item text, on the
     /// database that owns the mail row. Refused for a mail that is not the caller's, is not
-    /// delivered, or has no body — the same Gates the plan function pins. A replay on an
-    /// already-COPIED mail is `Ok`, and the text insert is skipped when the id already has a row
-    /// (a returned mail keeps its id, so a second recipient's copy can reuse it).
+    /// delivered, has no body, or is already GRANTED — the same Gates the plan function pins. A
+    /// replay before GRANTED is set is `Ok`, and the text insert is skipped when the id already has
+    /// a row (a returned mail keeps its id, so a second recipient's copy can reuse it).
     fn mail_copy_text(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
         self.rec("mail_copy_text");
         let mut mails = self.mails.lock().unwrap();
@@ -2253,8 +2253,8 @@ impl WorldStore for InMemoryStore {
         if m.body.is_empty() {
             return Err(anyhow!("mail: this mail has no text to copy"));
         }
-        if m.check_flags & lyracore_shared::mail::CHECK_MASK_COPIED != 0 {
-            return Ok(());
+        if m.check_flags & lyracore_shared::mail::CHECK_FLAG_LETTER_GRANTED != 0 {
+            return Err(anyhow!("mail: this letter was already made permanent"));
         }
         m.check_flags |= lyracore_shared::mail::CHECK_MASK_COPIED;
         let text_id = lyracore_shared::mail::item_text_id_for(m.id, &m.body);
@@ -2267,8 +2267,10 @@ impl WorldStore for InMemoryStore {
         Ok(())
     }
     /// Models `items::grant_letter_item`: one Plain Letter, refused by the same full-bag fixture
-    /// every other grant uses. Idempotent by text id, like the real reducer: a retry after an
-    /// earlier grant already landed is a no-op, not a second letter.
+    /// every other grant uses. A no-op when the payee already holds an item carrying `item_text_id`
+    /// — the crash-window guard for a retry between this call landing and `mail_mark_letter_granted`
+    /// recording that it did, not the durable "already got one" record (that is GRANTED, on the mail
+    /// row).
     fn mail_grant_letter(&self, payee_guid: u64, item_text_id: u32) -> Result<()> {
         self.rec("mail_grant_letter");
         if self
@@ -2289,6 +2291,20 @@ impl WorldStore for InMemoryStore {
             .push((payee_guid, item_text_id));
         Ok(())
     }
+    /// Models `mail_text::apply_mark_letter_granted`: sets GRANTED on the mail row. Once this lands,
+    /// `mail_copy_text` refuses for good, whether or not the granted item still exists.
+    fn mail_mark_letter_granted(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
+        self.rec("mail_mark_letter_granted");
+        let mut mails = self.mails.lock().unwrap();
+        let Some((_, m)) = mails
+            .iter_mut()
+            .find(|(to, m)| *to == recipient_guid && m.id == mail_id)
+        else {
+            return Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL));
+        };
+        m.check_flags |= lyracore_shared::mail::CHECK_FLAG_LETTER_GRANTED;
+        Ok(())
+    }
     /// Models the Coordinator's `item_text`: a PK read of `game_item_text` on THIS database.
     fn item_text(&self, item_text_id: u32) -> Result<Option<String>> {
         self.rec("item_text");
@@ -2301,8 +2317,14 @@ impl WorldStore for InMemoryStore {
             .map(|(_, text)| text.clone()))
     }
     /// Models the Coordinator's `owns_item_with_text`: does `owner_guid` hold a granted letter
-    /// carrying `item_text_id`?
-    fn owns_item_with_text(&self, owner_guid: u64, item_text_id: u32) -> Result<bool> {
+    /// carrying `item_text_id`? The fake has no item-guid fixture to answer `hint_item_guid`'s fast
+    /// path distinctly, so both routes resolve through the same `granted_letters` lookup.
+    fn owns_item_with_text(
+        &self,
+        owner_guid: u64,
+        item_text_id: u32,
+        _hint_item_guid: u64,
+    ) -> Result<bool> {
         self.rec("owns_item_with_text");
         Ok(item_text_id != 0
             && self
