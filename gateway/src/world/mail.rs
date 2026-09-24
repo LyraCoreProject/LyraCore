@@ -349,7 +349,7 @@ pub struct HeldEscrow {
     pub delivery_delay_secs: u32,
     pub header: LetterHeader,
 }
-/// Drive every letter `self_guid` holds as Escrow on its own database to the mail plane, and every
+/// Drive every letter `self_guid` holds as Escrow on its Home Shard to the mail plane, and every
 /// take Realm-core holds for them into their purse or bags. That rescues a send a Gateway
 /// abandoned, and it is the only thing that delivers a Reward Letter, which the Module files at
 /// turn-in. On a single-database realm the mail plane is the same database: a player's send files

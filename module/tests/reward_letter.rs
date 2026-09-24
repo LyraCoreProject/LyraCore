@@ -53,8 +53,8 @@ fn turn_in(standalone: &Standalone, quest: &str) -> std::process::Output {
     standalone.call("gw_turn_in_quest", &[&actor(TESTER), GIVER, quest, "0"])
 }
 
-/// The Gateway's drive of a held Reward Letter, with every argument as the ticket's escrow row
-/// states it. Returns the commit's wall-clock window.
+/// The Gateway's drive of a held Reward Letter, with the arguments its escrow row holds. Returns
+/// the commit's wall-clock window.
 #[allow(clippy::too_many_arguments)]
 fn drive(
     standalone: &Standalone,
@@ -227,4 +227,101 @@ fn a_turn_in_files_one_reward_letter_that_arrives_from_its_quest_giver() {
         (from + delay..=by + delay).contains(&deliver),
         "the letter arrives 129,600 s after the commit: {mail:?}"
     );
+}
+
+/// Commit the card renewal letter held under `escrow_id` on `mail_plane`, with the arguments its
+/// escrow row holds.
+fn commit_card(mail_plane: &Standalone, escrow_id: &str) {
+    let body = quoted(CARD_BODY);
+    mail_plane.assert_call(
+        "realm_mail_commit",
+        &[
+            escrow_id,
+            &actor(TESTER),
+            TESTER,
+            "\"\"",
+            &body,
+            "0",
+            "5090050",
+            "1",
+            "70",
+            "0",
+            "false",
+            "0",
+            "0",
+            "0",
+            "86400",
+            "3",
+            "620",
+            "509091",
+        ],
+    );
+}
+
+/// A Reward Letter still held when its Character crosses a Shard Boundary travels with the
+/// Character, keeps its escrow id and is delivered from the new Home Shard once. The drive before
+/// the hop reached the commit, so the drive after it replays the commit and writes no second
+/// letter. The source standalone also plays Realm-core.
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn a_held_reward_letter_travels_with_its_character_and_arrives_once() {
+    let mut source = Standalone::start("reward-letter-source");
+    source.publish_module();
+    source.assert_call("claim_operator", &[]);
+    source.assert_call("install_guid_range", &["0"]);
+    source.assert_call("debug_spawn_player_entity", &[TESTER]);
+    source.assert_call("debug_stage_reward_letter_fixture", &[]);
+    assert!(turn_in(&source, CARD_QUEST).status.success());
+    let held = escrows(&source);
+    assert_eq!(held.len(), 1, "{held:?}");
+    let escrow_id = held[0]["escrow_id"].clone();
+
+    // The Gateway stopped after the commit, before the attestation.
+    commit_card(&source, &escrow_id);
+
+    let tester = actor(TESTER);
+    source.assert_call(
+        "begin_transfer",
+        &["5090095", &tester, "0", "0", "0", "0", "0", "0", "true"],
+    );
+    let out = source.query_rows("SELECT blob FROM game_transfer_out WHERE transfer_id = 5090095");
+    let blob = serde_json::to_string(out[0]["blob"].strip_prefix("0x").unwrap()).unwrap();
+    let mut destination = Standalone::start("reward-letter-destination");
+    destination.publish_module();
+    destination.assert_call("claim_operator", &[]);
+    destination.assert_call("install_guid_range", &["1000000000"]);
+    let system = actor("0");
+    destination.assert_call("import_character_blob", &["5090095", &blob, &system]);
+    source.assert_call("confirm_import", &["5090095", &system]);
+    source.assert_call("finish_transfer", &["5090095", &system]);
+    destination.assert_call("release_transfer", &["5090095", &system]);
+
+    assert!(
+        escrows(&source).is_empty(),
+        "the letter left with its Character"
+    );
+    let arrived = escrows(&destination);
+    assert_eq!(arrived.len(), 1, "{arrived:?}");
+    for (column, want) in [
+        ("escrow_id", escrow_id.as_str()),
+        ("delivered", "false"),
+        ("sender_kind", "3"),
+        ("sender_entry", "620"),
+        ("mail_template_id", "509091"),
+        ("item_entry", "5090050"),
+        ("delivery_delay_secs", "86400"),
+    ] {
+        assert_eq!(arrived[0][column], want, "{column}: {arrived:?}");
+    }
+
+    destination.assert_call("debug_spawn_player_entity", &[TESTER]);
+    commit_card(&source, &escrow_id);
+    destination.assert_call("realm_mail_confirm_delivery", &[&escrow_id, &tester]);
+    destination.assert_call("realm_mail_settle", &[&escrow_id, &tester]);
+    assert!(
+        escrows(&destination).is_empty(),
+        "settled on the new Home Shard"
+    );
+    let mail = letter_from(&source, "620");
+    assert_eq!(mail["mail_template_id"], "509091", "{mail:?}");
 }

@@ -12,7 +12,7 @@ use spacetimedb_sdk::{Table, TableWithPrimaryKey};
 use super::super::bindings::*;
 use super::super::connection::Coordinator;
 
-/// The mail escrow ids each Character holds on one database, kept from the `game_mail_escrow` row
+/// The mail escrow ids each Character holds on one Shard, kept from the `game_mail_escrow` row
 /// callbacks. A drive runs after every quest turn-in, at world entry and at every mailbox visit, so
 /// it reads a Character's fences by primary key instead of scanning the cache.
 #[derive(Default)]

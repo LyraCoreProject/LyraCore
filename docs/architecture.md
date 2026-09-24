@@ -586,6 +586,10 @@ from. The Gateway then drives commit, confirm and settle: at once after the turn
 and at a mailbox visit (`world::mail::redrive`). On a single-database realm it commits on that
 database. A playerbot's turn-in files none, because no Gateway drives a playerbot's mail.
 
+A Home Shard escrow row, a send or a Reward Letter, travels with its Character across a Transfer,
+keeping its escrow id. The new Home Shard's drive finishes it, and the receipt on Realm-core keeps a
+drive that races the hop to one letter.
+
 Mail Expiry can delete a mail row while a take is in flight. The take fence already moved that
 copper or item out of the row into the escrow row, so expiry cannot delete it. The payout on the
 home shard reads only the escrow row and still completes. A COD payment is fenced on the payer's

@@ -1319,7 +1319,8 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // the only component that can see both databases, so a fence its predecessor abandoned is
         // re-derived from this row and driven forward. Private, read through the owner token. Every
         // connection in the set, because a letter fences on the sender's shard and a take fences on
-        // realm-core, and a single-database gateway simply never has a row here.
+        // realm-core. A single-database gateway holds only Reward Letters here, which the turn-in
+        // files on its one database.
         "SELECT * FROM game_mail_escrow",
         // Letter Copy's readable item text (`CMSG_MAIL_CREATE_TEXT_ITEM`). Same two-plane shape as
         // game_mail: a copied letter's text lives wherever the mail plane does, and it outlives the

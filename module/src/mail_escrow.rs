@@ -96,7 +96,17 @@ crate::character_owned!(delete, fn sweep_delete_game_mail_escrow(ctx, character_
         escrows.escrow_id().delete(r.escrow_id);
     }
 });
-crate::character_owned!(not_transported, fn sweep_transfer_game_mail_escrow());
+// A Home Shard escrow row is a letter its Character still owes the mail plane: a send whose purse
+// was debited, or a Reward Letter. It travels with the Character, because the Gateway drives only
+// the escrows the Character's current Home Shard holds, and a row left on the old Shard would be
+// deleted with the Character there. The escrow id stays the receipt key on Realm-core, so a drive
+// that races the hop still writes one letter. A take fence lives on Realm-core, which no Character
+// leaves.
+crate::character_owned!(transfer, fn sweep_transfer_game_mail_escrow(ctx, character_guid, io) {
+    table = game_mail_escrow,
+    by = by_sender,
+    keep_key,
+});
 crate::character_owned!(delete, fn sweep_delete_game_mail_delivery(ctx, character_guid) {
     let receipts = ctx.db.game_mail_delivery();
     for r in receipts.by_recipient().filter(&character_guid).collect::<Vec<_>>() {

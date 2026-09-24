@@ -665,8 +665,8 @@ template id.
 A letter a quest giver sends when a Character turns a quest in. It is from the quest ender, or from
 the creature a quest script names, and it names a Mail Template, carries its text, and can carry
 copper and one item. The World Session turn-in files it as Escrow in the same transaction, and the
-Gateway delivers it, so it arrives once even when the Gateway stops between the two. A playerbot's
-turn-in sends none.
+Gateway delivers it, so it arrives once even when the Gateway stops between the two. A held letter
+travels with its Character across a Transfer. A playerbot's turn-in sends none.
 
 **Mail Timer**:
 The one-shot schedule each Mail holds. It fires at the delivery instant of a Mail that is not

@@ -63,14 +63,15 @@ pub(crate) fn plan_reward_letter(
     })
 }
 
-/// File the Reward Letter `quest_entry` sends, if it sends one, for `player_guid`, who just turned
-/// the quest in at `giver_guid`. Call it in the turn-in's transaction. A quest with no reward mail
-/// files nothing. A letter whose catalogue rows are missing logs an error and files nothing, and
-/// the turn-in still succeeds: the importer refuses that data, so it is not the player's fault.
+/// File the Reward Letter `quest_entry` sends, if it sends one, for `character_guid`, who just
+/// turned the quest in at `giver_guid`. Call it in the turn-in's transaction. A quest with no
+/// reward mail files nothing. A letter whose catalogue rows are missing logs an error and files
+/// nothing, and the turn-in still succeeds: the importer refuses that data, so it is not the
+/// player's fault.
 /// `Err` when the Shard can mint no escrow id; the turn-in then fails too, so no letter is lost.
 pub(crate) fn file_reward_letter(
     ctx: &ReducerContext,
-    player_guid: u64,
+    character_guid: u64,
     giver_guid: u64,
     quest_entry: u32,
 ) -> Result<(), String> {
@@ -106,7 +107,7 @@ pub(crate) fn file_reward_letter(
         Ok(letter) => letter,
         Err(missing) => {
             log::error!(
-                "quest {quest_entry}: no Reward Letter for {player_guid} ({missing}); the \
+                "quest {quest_entry}: no Reward Letter for {character_guid} ({missing}); the \
                  turn-in stands"
             );
             return Ok(());
@@ -115,7 +116,7 @@ pub(crate) fn file_reward_letter(
     // The Shard's GUID Range is its own slot in the Realm-core registry, and a Gateway mints its
     // escrow ids from a slot of its own there, so no other writer can issue this id.
     let escrow_id = *crate::auth::reserve_guids(ctx, 1, u64::MAX)?.start();
-    crate::mail_escrow::file_reward(ctx, escrow_id, player_guid, &letter)
+    crate::mail_escrow::file_reward(ctx, escrow_id, character_guid, &letter)
 }
 
 #[cfg(feature = "debug_reducers")]
@@ -385,16 +386,14 @@ mod tests {
         .is_err());
     }
 
-    /// A Shard mints from slot n, `[n * 1e9, (n + 1) * 1e9)`. A Gateway mints escrow ids from slot
-    /// 10,000 or higher, so the ids of a Shard below slot 10,000 lie under every Gateway's.
+    /// A Shard in slot n mints from `[n * 1e9, (n + 1) * 1e9)`, so a Shard in slot 9,999 or lower
+    /// mints no id above 9,999,999,999,999. A Gateway's escrow range starts at slot 10,000 or
+    /// higher. A Shard in a higher slot relies on the registry giving each slot one owner.
     #[test]
-    fn a_shard_escrow_id_lies_below_every_gateway_escrow_range() {
-        assert_eq!(
-            10_000 * crate::realm_core::GUID_RANGE_SIZE,
-            10_000_000_000_000
-        );
+    fn a_shard_below_slot_10000_mints_no_id_in_a_gateway_escrow_range() {
+        assert_eq!(crate::realm_core::GUID_RANGE_SIZE, 1_000_000_000);
         for gateway in ["mail-escrow:gateway-a:00", "mail-escrow:gateway-b:ff"] {
-            assert!(lyracore_shared::mail::escrow_range_mark(gateway) >= 10_000_000_000_000);
+            assert!(lyracore_shared::mail::escrow_range_mark(gateway) > 9_999_999_999_999);
         }
     }
 }
