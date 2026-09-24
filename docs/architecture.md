@@ -750,6 +750,7 @@ explains why two rungs of the ladder are written down instead of automated.
 | [`movement-batch-acceptance.md`](./movement-batch-acceptance.md) | The steady-heartbeat batching path under a load driver, on a `disposable:` realm only. Script in `scripts/`. |
 | [`auction-house-client-check.md`](./auction-house-client-check.md) | The auction house against a real 5875 client. Status: outstanding, needs a human. |
 | [`guild-client-check.md`](./guild-client-check.md) | Guilds between two real 5875 clients across a Shard Boundary: founding, invites, chat, ranks, Transfer, emblem, Charter and deletion. Status: outstanding, needs a human. |
+| [`mail-client-check.md`](./mail-client-check.md) | Mail against a real 5875 client. Status: outstanding, needs a human. |
 | [`duel-client-check.md`](./duel-client-check.md) | Duel visuals against a real 5875 client, which the automated tests cannot see. Status: outstanding. |
 | [`hunter-pet-live-check.md`](./hunter-pet-live-check.md) | Taming, pet bars and pet lifecycle against a live development realm and a real client. |
 
