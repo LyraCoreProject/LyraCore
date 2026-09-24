@@ -8,7 +8,9 @@
 //! the Charter's item guid. The Charter binds when picked up, so trade and mail refuse it, and a
 //! Transfer keeps its guid. A Petition loses its Charter only when the owner destroys the Charter;
 //! nobody can turn that Petition in, and the owner's next Charter purchase closes it first. A
-//! Charter loses its Petition when the owner joins a Guild; the Charter then does nothing.
+//! Charter loses its Petition when the owner joins a Guild; the Charter then does nothing, and the
+//! Gateway destroys it at the owner's next world entry. A deleted owner's Petition closes and a
+//! deleted signer's Signature is struck when the Gateway forgets that Character.
 
 use lyracore_shared::guild::{
     event_kind, name_key, petition_signature_key, validate_guild_name, GuildRefusal,
@@ -16,6 +18,7 @@ use lyracore_shared::guild::{
 };
 use spacetimedb::{reducer, table, ReducerContext, SpacetimeType, Table};
 
+use super::membership::game_guild_invite;
 use super::{add_member, create_guild, game_guild, lowest_rank, member, push_event};
 use crate::items::game_item_instance;
 
@@ -99,6 +102,40 @@ enum SignVerdict {
     AlreadySigned,
 }
 
+/// Where a would-be signer stands with the Guilds: a member, invited to one, or neither.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GuildStanding {
+    Member,
+    Invited,
+    Unaffiliated,
+}
+
+fn guild_standing(ctx: &ReducerContext, character_guid: u64) -> GuildStanding {
+    if member(ctx, character_guid).is_some() {
+        GuildStanding::Member
+    } else if ctx
+        .db
+        .game_guild_invite()
+        .target_guid()
+        .find(character_guid)
+        .is_some()
+    {
+        GuildStanding::Invited
+    } else {
+        GuildStanding::Unaffiliated
+    }
+}
+
+/// A Guild member, or a Character with a pending Guild Invite, can neither sign nor be offered a
+/// Petition (`cm:PetitionsHandler.cpp:359-369,474-484`).
+fn standing_gate(standing: GuildStanding) -> Result<(), GuildRefusal> {
+    match standing {
+        GuildStanding::Member => Err(GuildRefusal::AlreadyInGuild),
+        GuildStanding::Invited => Err(GuildRefusal::AlreadyInvited),
+        GuildStanding::Unaffiliated => Ok(()),
+    }
+}
+
 /// The signature Gates in mangos order (`cm:PetitionsHandler.cpp:338-396`). mangos stays silent
 /// when the owner signs; here the owner hears CANT_SIGN_OWN, as vmangos answers
 /// (`vm:src/game/Handlers/PetitionsHandler.cpp:232-240`). A signer whose Realm Account is unknown
@@ -109,7 +146,7 @@ fn sign_verdict(
     signatures: &[SignatureFacts],
     signer: &SignatureFacts,
     signer_team: u32,
-    signer_is_member: bool,
+    signer_standing: GuildStanding,
 ) -> Result<SignVerdict, GuildRefusal> {
     if signer.signer_guid == owner_guid {
         return Err(GuildRefusal::CantSignOwn);
@@ -117,9 +154,7 @@ fn sign_verdict(
     if signer_team != petition_team {
         return Err(GuildRefusal::NotAllied);
     }
-    if signer_is_member {
-        return Err(GuildRefusal::AlreadyInGuild);
-    }
+    standing_gate(signer_standing)?;
     if signatures.len() >= MAX_PETITION_SIGNATURES {
         return Err(GuildRefusal::PetitionFull);
     }
@@ -265,7 +300,7 @@ pub fn sign(
         &facts,
         &signer,
         request.actor_team,
-        member(ctx, actor_guid).is_some(),
+        guild_standing(ctx, actor_guid),
     )?;
     let kind = match verdict {
         SignVerdict::Sign => {
@@ -302,7 +337,7 @@ pub fn sign(
 }
 
 /// `OfferPetition` (`cm:PetitionsHandler.cpp:452-512`): the owner shows its Petition to a live
-/// Character of its team outside any Guild.
+/// Character of its team outside any Guild and without a pending Guild Invite.
 pub fn offer(
     ctx: &ReducerContext,
     actor_guid: u64,
@@ -316,9 +351,7 @@ pub fn offer(
     if request.target_team != petition.team {
         return Err(GuildRefusal::NotAllied);
     }
-    if member(ctx, request.target_guid).is_some() {
-        return Err(GuildRefusal::AlreadyInGuild);
-    }
+    standing_gate(guild_standing(ctx, request.target_guid))?;
     push_event(
         ctx,
         0,
@@ -440,10 +473,10 @@ pub fn close(ctx: &ReducerContext, actor_guid: u64, petition_id: u32) -> Result<
     Ok(())
 }
 
-/// A Character joined a Guild: its own Petition closes and every Signature it made is struck, and
-/// each owner who lost one gets a fresh petition query (`cm:Guild.cpp:181-183`,
-/// `cm:Player.cpp:16980-17007`).
-pub(super) fn forget_joiner(ctx: &ReducerContext, character_guid: u64) {
+/// A Character joined a Guild or was deleted: its own Petition closes and every Signature it made
+/// is struck, and each owner who lost one gets a fresh petition query (`cm:Guild.cpp:181-183`,
+/// `cm:Player.cpp:4061-4062,16980-17007`).
+pub(super) fn withdraw(ctx: &ReducerContext, character_guid: u64) {
     if let Some(own) = ctx
         .db
         .game_guild_petition()
@@ -483,9 +516,9 @@ pub(super) fn forget_joiner(ctx: &ReducerContext, character_guid: u64) {
 }
 
 /// Destroy a turned-in Guild Charter on the actor's Home Shard. A Charter that is already gone is
-/// Ok, so a repeated call changes nothing. Any other item is left alone. Nothing retries a failed
-/// call: that Charter stays in the bags with no Petition behind it, founds nothing, and waits for
-/// its owner to destroy it.
+/// Ok, so a repeated call changes nothing. Any other item is left alone. A Charter a failed call
+/// leaves behind has no Petition, founds nothing, and is destroyed through this reducer again at
+/// its owner's next world entry.
 #[reducer]
 pub fn gw_destroy_guild_charter(
     ctx: &ReducerContext,
@@ -528,7 +561,12 @@ mod tests {
         team: u32,
         is_member: bool,
     ) -> Result<SignVerdict, GuildRefusal> {
-        sign_verdict(OWNER, ALLIANCE, signatures, &signer, team, is_member)
+        let standing = if is_member {
+            GuildStanding::Member
+        } else {
+            GuildStanding::Unaffiliated
+        };
+        sign_verdict(OWNER, ALLIANCE, signatures, &signer, team, standing)
     }
 
     #[test]
@@ -559,6 +597,39 @@ mod tests {
             verdict(&full[..8], signature(5_090_530, 30), ALLIANCE, false),
             Ok(SignVerdict::Sign)
         );
+    }
+
+    #[test]
+    fn a_pending_guild_invite_refuses_after_membership_and_before_a_full_petition() {
+        let full: Vec<SignatureFacts> = (1..=9).map(|n| signature(5_090_510 + n, n)).collect();
+        let signer = signature(5_090_530, 30);
+        assert_eq!(
+            sign_verdict(
+                OWNER,
+                ALLIANCE,
+                &full,
+                &signer,
+                ALLIANCE,
+                GuildStanding::Invited
+            ),
+            Err(GuildRefusal::AlreadyInvited)
+        );
+        assert_eq!(
+            sign_verdict(
+                OWNER,
+                ALLIANCE,
+                &full,
+                &signer,
+                HORDE,
+                GuildStanding::Invited
+            ),
+            Err(GuildRefusal::NotAllied)
+        );
+        assert_eq!(
+            standing_gate(GuildStanding::Member),
+            Err(GuildRefusal::AlreadyInGuild)
+        );
+        assert_eq!(standing_gate(GuildStanding::Unaffiliated), Ok(()));
     }
 
     #[test]

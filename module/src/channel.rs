@@ -13,7 +13,7 @@ use spacetimedb::{reducer, table, ReducerContext, SpacetimeType, Table, Timestam
 
 use lyracore_shared::channel::{
     channel_flag, channel_name, channel_op, check_password, classify, member_flag, notice,
-    ChannelName, ChannelRefusal,
+    ChannelName, ChannelRefusal, GUILD_RECRUITMENT_ID,
 };
 use lyracore_shared::chat::ChatRefusal;
 use lyracore_shared::faction::team_for_race;
@@ -186,6 +186,11 @@ fn join(
     }
     if !channel.password.is_empty() && channel.password != request.password {
         return Err(ChannelRefusal::WrongPassword);
+    }
+    // A Guild member stays out of GuildRecruitment and hears nothing about it. mangos tests the
+    // channel's wire flags 0x38, which only GuildRecruitment carries (cm:Channel.cpp:94-95).
+    if channel.builtin_id == GUILD_RECRUITMENT_ID && crate::guild::member(ctx, joiner).is_some() {
+        return Ok(());
     }
     // A built-in channel can hold every player of a team, so its member list is read only when an
     // announcement or a first owner needs it. Built-in channels need neither.

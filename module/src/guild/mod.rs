@@ -16,6 +16,7 @@ use lyracore_shared::guild::{
 use spacetimedb::{reducer, table, ReducerContext, SpacetimeType, Table, Timestamp};
 
 pub(crate) mod chat;
+mod cleanup;
 pub mod fee;
 pub mod membership;
 pub mod petition;
@@ -200,6 +201,9 @@ pub enum GuildOp {
     ClosePetition {
         petition_id: u32,
     },
+    /// The actor, a Character that no World Shard holds any more, leaves every guild trace behind.
+    /// Only a tokenless actor may send it: the Gateway proves the deletion first.
+    ForgetDeletedCharacter,
 }
 
 /// Run one guild op for the acting Character.
@@ -214,6 +218,7 @@ pub fn realm_guild_op(
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let actor_account = request_actor.ownership.as_ref().map_or(0, |t| t.account_id);
+    let tokenless = request_actor.ownership.is_none();
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     match op {
         GuildOp::GmCreate(request) => gm_create(ctx, request).map(|_| ()),
@@ -245,6 +250,13 @@ pub fn realm_guild_op(
             petition::turn_in(ctx, actor_guid, actor_account, charter_item_guid)
         }
         GuildOp::ClosePetition { petition_id } => petition::close(ctx, actor_guid, petition_id),
+        // A World Session's token proves its Character is live, so it can never be forgotten.
+        GuildOp::ForgetDeletedCharacter if !tokenless => {
+            return Err(format!(
+                "Character {actor_guid} has a World Session and is not forgotten"
+            ))
+        }
+        GuildOp::ForgetDeletedCharacter => cleanup::forget_deleted_character(ctx, actor_guid),
     }
     .map_err(|refusal| refusal.as_tag().to_string())
 }
@@ -368,7 +380,7 @@ pub fn add_member(
     if member(ctx, character_guid).is_some() {
         return Err(GuildRefusal::AlreadyInGuild);
     }
-    petition::forget_joiner(ctx, character_guid);
+    petition::withdraw(ctx, character_guid);
     ctx.db.game_guild_member().insert(GuildMember {
         character_guid,
         guild_id,
@@ -468,7 +480,7 @@ mod tests {
     /// a schema a live client silently decodes as the wrong op.
     #[test]
     fn guild_op_variant_bsatn_tags_are_pinned_by_position() {
-        let cases: [(&str, GuildOp, u8); 25] = [
+        let cases: [(&str, GuildOp, u8); 26] = [
             (
                 "GmCreate",
                 GuildOp::GmCreate(GuildGmCreate {
@@ -611,6 +623,11 @@ mod tests {
                 "ClosePetition",
                 GuildOp::ClosePetition { petition_id: 0 },
                 24,
+            ),
+            (
+                "ForgetDeletedCharacter",
+                GuildOp::ForgetDeletedCharacter,
+                25,
             ),
         ];
 

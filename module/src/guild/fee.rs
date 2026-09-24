@@ -11,7 +11,9 @@
 //!    that row, so a retry gets the same answer.
 //! 3. [`gw_guild_fee_finish`] on the Home Shard spends the Hold on acceptance or puts the copper
 //!    back on refusal, and deletes the Hold last. A refused Guild Charter is destroyed and refunded
-//!    only while the payer still holds it, so a Charter the payer destroyed is never paid back.
+//!    only while the payer still holds it, so a Charter the payer destroyed is never paid back. A
+//!    refund that does not fit in the purse follows the auction rule: the purse takes what fits and
+//!    the rest goes out as Mail Escrow in the same transaction.
 //!
 //! What the fee pays for can vanish between the phases: the Guild disbands, leadership moves. The
 //! decision then refuses and the finish refunds, so copper never strands. A Hold that a crash left
@@ -65,6 +67,9 @@ crate::character_owned!(transfer, fn sweep_transfer_game_guild_fee_hold(ctx, cha
     table = game_guild_fee_hold,
     primary_key = payer_guid,
 });
+
+/// The text of the letter that carries the part of a guild fee refund the purse could not hold.
+const REFUND_LETTER_BODY: &str = "Your purse could not hold all of this guild fee refund.";
 
 /// Realm-core's one decision for one operation id. Kept after the Hold is finished: a guild pays
 /// a few fees in its lifetime, and the row is what makes a late retry harmless.
@@ -305,8 +310,9 @@ trait FeePurse {
     /// Destroy the Guild Charter `charter_item_guid` if the payer still holds it. Answers whether
     /// it did.
     fn take_back_charter(&mut self, payer_guid: u64, charter_item_guid: u64) -> bool;
-    /// Put `refund` back in the purse and delete the Hold.
-    fn release(&mut self, payer_guid: u64, refund: u32) -> Result<(), FeeError>;
+    /// Put `credit` back in the purse, send `mailed` by mail, and delete the Hold. `credit` fits
+    /// in the purse.
+    fn release(&mut self, hold: &HeldFee, credit: u32, mailed: u32) -> Result<(), FeeError>;
 }
 
 /// The Realm-core half: guild facts, Petitions and the decision ledger.
@@ -454,9 +460,9 @@ fn finish_fee<P: FeePurse>(
     else {
         return Ok(());
     };
-    if purse.purse(payer_guid).is_none() {
+    let Some(copper) = purse.purse(payer_guid) else {
         return Err(FeeError::Conflict("payer is not in the world here"));
-    }
+    };
     let refund = match &hold.terms {
         _ if accepted => 0,
         HeldTerms::Emblem(_) => hold.copper,
@@ -470,7 +476,8 @@ fn finish_fee<P: FeePurse>(
             }
         }
     };
-    purse.release(payer_guid, refund)
+    let (_, mailed) = crate::mail::split_refund(copper, refund);
+    purse.release(&hold, refund - mailed, mailed)
 }
 
 struct CtxPurse<'a> {
@@ -586,23 +593,57 @@ impl FeePurse for CtxPurse<'_> {
         held
     }
 
-    fn release(&mut self, payer_guid: u64, refund: u32) -> Result<(), FeeError> {
-        if refund != 0 {
-            let mut payer = crate::helpers::acting_entity_by_guid(self.ctx, payer_guid)
+    fn release(&mut self, hold: &HeldFee, credit: u32, mailed: u32) -> Result<(), FeeError> {
+        if credit != 0 {
+            let mut payer = crate::helpers::acting_entity_by_guid(self.ctx, hold.payer_guid)
                 .ok_or(FeeError::Conflict("payer is not in the world here"))?;
-            payer.money = crate::mail::credited(payer.money, refund);
+            payer.money = payer
+                .money
+                .checked_add(credit)
+                .ok_or(FeeError::Conflict("refund does not fit in the purse"))?;
             self.ctx.db.game_world_entity().guid().update(payer);
+        }
+        if mailed != 0 {
+            self.mail_refund(hold, mailed)?;
         }
         self.ctx
             .db
             .game_guild_fee_hold()
             .payer_guid()
-            .delete(payer_guid);
+            .delete(hold.payer_guid);
         Ok(())
     }
 }
 
 impl CtxPurse<'_> {
+    /// File the part of a refund the purse cannot hold as Mail Escrow from the NPC that took the
+    /// fee. The Gateway delivers it at the payer's next world entry or mailbox visit, like a Reward
+    /// Letter. An NPC no longer in the world here signs the letter with entry 0.
+    fn mail_refund(&self, hold: &HeldFee, mailed: u32) -> Result<(), FeeError> {
+        let npc_entry = self
+            .ctx
+            .db
+            .game_world_entity()
+            .guid()
+            .find(hold.npc_guid)
+            .map_or(0, |npc| npc.entry);
+        let escrow_id = *crate::auth::reserve_guids(self.ctx, 1, u64::MAX)
+            .map_err(|_| FeeError::Conflict("no mail escrow id left"))?
+            .start();
+        let letter = crate::mail_reward::RewardLetter {
+            header: lyracore_shared::mail::RewardHeader {
+                giver: lyracore_shared::mail::QuestGiver::Creature(npc_entry),
+                mail_template_id: 0,
+            },
+            body: REFUND_LETTER_BODY.to_string(),
+            money: mailed,
+            item: crate::items::ItemSnapshot::default(),
+            delay_secs: 0,
+        };
+        crate::mail_escrow::file_reward(self.ctx, escrow_id, hold.payer_guid, &letter)
+            .map_err(|_| FeeError::Conflict("refund letter not filed"))
+    }
+
     /// Mint one Guild Charter into the payer's bags. Answers its guid.
     fn create_charter(
         &self,
@@ -813,6 +854,8 @@ mod tests {
     #[derive(Default)]
     struct Shard {
         purses: BTreeMap<u64, u32>,
+        /// Refund copper sent by mail because the purse could not hold it, per payer.
+        mailed: BTreeMap<u64, u32>,
         serving_npcs: Vec<u64>,
         holds: BTreeMap<u64, HeldFee>,
         /// Guild Charter guid to its holder.
@@ -870,13 +913,16 @@ mod tests {
             false
         }
 
-        fn release(&mut self, payer_guid: u64, refund: u32) -> Result<(), FeeError> {
+        fn release(&mut self, hold: &HeldFee, credit: u32, mailed: u32) -> Result<(), FeeError> {
             let purse = self
                 .purses
-                .get_mut(&payer_guid)
+                .get_mut(&hold.payer_guid)
                 .ok_or(FeeError::Conflict("payer is not in the world here"))?;
-            *purse = purse.saturating_add(refund);
-            self.holds.remove(&payer_guid);
+            *purse = purse
+                .checked_add(credit)
+                .ok_or(FeeError::Conflict("refund does not fit in the purse"))?;
+            *self.mailed.entry(hold.payer_guid).or_default() += mailed;
+            self.holds.remove(&hold.payer_guid);
             Ok(())
         }
     }
@@ -1008,6 +1054,19 @@ mod tests {
         assert_eq!(shard.purses[&MEMBER], 150_000);
         assert!(shard.holds.is_empty());
         assert!(realm.emblems.is_empty());
+    }
+
+    #[test]
+    fn a_refund_the_purse_cannot_hold_sends_the_rest_by_mail() {
+        let (mut shard, mut realm) = (shard(150_000), realm());
+        hold(&mut shard, 1, MEMBER).unwrap();
+        // Loot fills the purse to 30,000 copper under the u32 cap while the Hold waits.
+        shard.purses.insert(MEMBER, 4_294_937_295);
+        decide(&mut realm, 1, MEMBER).unwrap();
+        finish_fee(&mut shard, 1, MEMBER, accepted(&realm, 1)).unwrap();
+        assert_eq!(shard.purses[&MEMBER], 4_294_967_295);
+        assert_eq!(shard.mailed[&MEMBER], 70_000);
+        assert!(shard.holds.is_empty());
     }
 
     #[test]

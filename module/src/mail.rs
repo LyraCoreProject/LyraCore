@@ -444,6 +444,12 @@ pub(crate) fn clear_mail_money(ctx: &ReducerContext, mail_id: u64) {
 pub(crate) fn credited(purse: u32, amount: u32) -> u32 {
     purse.saturating_add(amount)
 }
+/// Split a refund into the new purse and the remainder that does not fit in it. The caller sends
+/// the remainder by mail, so no copper is lost to a full purse.
+pub(crate) fn split_refund(purse: u32, refund: u32) -> (u32, u32) {
+    let purse_credit = refund.min(u32::MAX - purse);
+    (purse + purse_credit, refund - purse_credit)
+}
 pub(crate) fn apply_take_money(
     ctx: &ReducerContext,
     recipient_guid: u64,
