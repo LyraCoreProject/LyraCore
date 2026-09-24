@@ -14,6 +14,7 @@ const ACCEPT: u8 = 1;
 const LEAVE: u8 = 3;
 const LOOT_METHOD: u8 = 5;
 const RAID_CONVERT: u8 = 6;
+const SET_LEADER: u8 = 7;
 const READY_CHECK_START: u8 = 11;
 const READY_CHECK_ANSWER: u8 = 12;
 const TARGET_ICON: u8 = 13;
@@ -320,6 +321,32 @@ fn a_party_list_carries_its_target_icons_and_a_raid_list_carries_none() {
         [icon(7, DEFIAS)],
         "the Raid keeps them"
     );
+}
+
+/// A leader change pushes a list too, and a Party's list always carries its Target Icons: the
+/// marks survive a leader change the same way they survive any other list-pushing op.
+#[test]
+#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+fn a_leader_change_list_still_carries_the_partys_target_icons() {
+    let realm = party("raid-broadcasts-leader-change-icons", &[2]);
+    group_op(&realm, TARGET_ICON, 1, DEFIAS, 7, 0);
+
+    let events = events_of(&realm, || group_op(&realm, SET_LEADER, 1, 2, 0, 0));
+    let lists: Vec<_> = events
+        .iter()
+        .filter(|event| event.kind == event_kind::LIST)
+        .collect();
+    assert_eq!(lists.len(), 2, "each member gets the list");
+    for list in &lists {
+        let roster = RosterPayload::decode(&list.payload).unwrap();
+        assert_eq!(roster.leader, 2, "{}", list.recipient);
+        assert_eq!(
+            roster.target_icons,
+            [icon(7, DEFIAS)],
+            "the icon survives the leader change, {}",
+            list.recipient
+        );
+    }
 }
 
 /// **AC 8, 9 and 10.** The ping reaches everyone but the sender with the same floats

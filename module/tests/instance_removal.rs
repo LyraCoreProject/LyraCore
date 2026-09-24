@@ -365,3 +365,33 @@ fn a_party_of_two_that_forms_again_reaches_the_instance_pool_mirror_and_cancels(
         assert_in_instance(&node, guid);
     }
 }
+
+/// An Assistant's kick arms the countdown the same way the leader's does, and a rejoin through
+/// that same Assistant's invite cancels it. Both rights ride `manages_raid`, so this pins that the
+/// Instance Removal side does not quietly assume "the leader did it".
+#[test]
+#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+fn an_assistants_kick_arms_the_countdown_and_the_assistants_invite_cancels_it() {
+    let node = start("instance-removal-assistant-rights");
+    for guid in [BRAVO, CHARLIE] {
+        join(&node, ALPHA, guid);
+    }
+    let group = node.query_rows("SELECT group_id FROM game_group")[0]["group_id"].clone();
+    node.assert_call("debug_stage_instance_removal_fixture", &[&group]);
+    group_op(&node, RAID_CONVERT, ALPHA, 0, 0);
+    group_op(&node, SET_ASSISTANT, ALPHA, BRAVO, 1);
+
+    group_op(&node, UNINVITE, BRAVO, CHARLIE, 0);
+    assert_eq!(
+        countdowns(&node),
+        counting(&[CHARLIE], &group),
+        "an Assistant's kick arms the countdown"
+    );
+
+    join(&node, BRAVO, CHARLIE);
+    assert_eq!(
+        countdowns(&node),
+        [],
+        "rejoining through the Assistant's invite cancels it"
+    );
+}

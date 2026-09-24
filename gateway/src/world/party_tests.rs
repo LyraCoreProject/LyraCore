@@ -3458,6 +3458,67 @@ fn an_assistant_can_move_a_member_a_plain_member_cannot() {
     );
 }
 
+/// An Assistant's rights reach both a roster change and a Group Broadcast from the same session:
+/// the Subgroup move lands on the authoritative roster, and the Target Icon mark reaches the party
+/// authority as the Assistant's own action.
+#[test]
+fn an_assistant_moves_a_member_and_marks_a_target_icon() {
+    let (realm, world, instances, _calls) = party_topology();
+    form_split_party(&world, &instances);
+    party::run(world.as_ref(), 7, GINGER, party::Op::RaidConvert).unwrap();
+    realm
+        .party
+        .lock()
+        .unwrap()
+        .slots
+        .insert(VIM, RaidSlot::new(0, true).unwrap());
+
+    let moved = party::run(
+        instances.as_ref(),
+        8,
+        VIM,
+        party::Op::ChangeSubgroup {
+            target: GINGER,
+            subgroup: 3,
+        },
+    )
+    .unwrap();
+    assert_eq!(moved, PartyOutcome::Ran, "the Assistant may move a member");
+    assert_eq!(
+        realm
+            .group_roster(GINGER)
+            .unwrap()
+            .unwrap()
+            .members
+            .iter()
+            .find(|m| m.guid == GINGER)
+            .unwrap()
+            .slot,
+        RaidSlot::new(3, false).unwrap()
+    );
+
+    let marked = party::run(
+        instances.as_ref(),
+        8,
+        VIM,
+        party::Op::TargetIcon {
+            icon: 7,
+            target: 900,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        marked,
+        PartyOutcome::Ran,
+        "the same Assistant may mark a Target Icon"
+    );
+    assert_eq!(
+        realm.party.lock().unwrap().ops.last().copied(),
+        Some((realm_op::TARGET_ICON, VIM, 900, 7, 0, 0)),
+        "the mark reaches the party authority as Vim's own action"
+    );
+}
+
 /// **AC 4: a Raid has only 8 Subgroups, 0 to 7.**
 #[test]
 fn a_move_to_subgroup_eight_is_refused() {

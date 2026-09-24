@@ -14,6 +14,9 @@ const LOOT_METHOD: &str = "5";
 const RAID_CONVERT: &str = "6";
 const SET_LEADER: &str = "7";
 const SET_ASSISTANT: &str = "8";
+const CHANGE_SUBGROUP: &str = "9";
+const READY_CHECK_START: &str = "11";
+const TARGET_ICON: &str = "13";
 
 fn group_op_args(op: &str, actor_guid: u64, target_guid: u64, arg_a: u8) -> Vec<String> {
     vec![
@@ -348,4 +351,64 @@ fn an_assistant_invites_and_removes_members_but_never_the_leader() {
         "an invite sent for a Group the inviter has left forms no new Party"
     );
     assert_eq!(realm.query_rows("SELECT group_id FROM game_group").len(), 1);
+}
+
+/// Succession feeds the Group Broadcast gate too: once the sole Assistant inherits the lead, it
+/// may start a Ready Check that reaches every remaining member, and the departed leader, no
+/// longer in any Group, may not.
+#[test]
+#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+fn the_assistant_who_inherits_the_lead_can_start_a_ready_check() {
+    let realm = start("raid-leadership-succession-ready-check");
+    for guid in 2..=4 {
+        join(&realm, 1, guid);
+    }
+    group_op(&realm, RAID_CONVERT, 1, 0, 0);
+    promote(&realm, 1, 3, true);
+
+    group_op(&realm, LEAVE, 1, 0, 0);
+    assert_eq!(leader(&realm), 3, "the sole Assistant inherits the lead");
+
+    let events = events_pushed_by(&realm, || group_op(&realm, READY_CHECK_START, 3, 0, 0));
+    let mut recipients: Vec<_> = events.iter().map(|e| e.recipient).collect();
+    recipients.sort_unstable();
+    assert_eq!(
+        recipients,
+        [2, 3, 4],
+        "the new leader's Ready Check reaches every remaining member"
+    );
+    for event in &events {
+        assert_eq!(event.kind, event_kind::READY_CHECK);
+    }
+
+    assert_refused(&realm, READY_CHECK_START, 1, 0, 0, "group:not_in_group");
+}
+
+/// A demoted Assistant loses both rights the flag granted: it may no longer move a member to
+/// another Subgroup, nor mark a Target Icon.
+#[test]
+#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+fn a_demoted_assistant_can_no_longer_move_a_member_or_mark_a_target_icon() {
+    let realm = start("raid-leadership-demoted-assistant-rights");
+    for guid in 2..=3 {
+        join(&realm, 1, guid);
+    }
+    group_op(&realm, RAID_CONVERT, 1, 0, 0);
+    promote(&realm, 1, 2, true);
+    group_op(&realm, CHANGE_SUBGROUP, 2, 3, 1);
+    assert_eq!(
+        slot_of(&realm, 3).subgroup(),
+        1,
+        "the Assistant could still move a member"
+    );
+
+    promote(&realm, 1, 2, false);
+
+    assert_refused(&realm, CHANGE_SUBGROUP, 2, 3, 0, "group:not_leader");
+    assert_eq!(
+        slot_of(&realm, 3).subgroup(),
+        1,
+        "the demoted Assistant's move changed nothing"
+    );
+    assert_refused(&realm, TARGET_ICON, 2, 900, 7, "group:not_leader");
 }
