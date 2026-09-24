@@ -10904,8 +10904,6 @@ struct FakeParty {
     ops: Vec<(u8, u64, u64, u8, u8, u64)>,
     /// Every notification the authority pushed: `(recipient_guid, kind)` — the relay's input.
     events: Vec<(u64, u8)>,
-    /// Each Group's Roster Revision above the first. Every change pushes a LIST and advances it.
-    revisions: std::collections::HashMap<u64, u64>,
 }
 
 impl FakeParty {
@@ -10949,7 +10947,7 @@ impl FakeParty {
             *self.groups.iter().find(|(g, ..)| *g == group_id)?;
         Some(super::party::GroupRoster {
             group_id: gid,
-            roster_revision: 1 + self.revisions.get(&group_id).copied().unwrap_or_default(),
+            roster_revision: 1,
             leader_guid: leader,
             loot_method: method,
             loot_threshold: threshold,
@@ -10996,7 +10994,6 @@ impl FakeParty {
     }
 
     fn push_list(&mut self, group_id: u64) {
-        *self.revisions.entry(group_id).or_default() += 1;
         let recipients: Vec<u64> = self
             .members
             .iter()

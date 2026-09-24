@@ -1382,7 +1382,8 @@ pub trait WorldStore:
     fn group_decline(&self, account_id: u64, self_guid: u64) -> Result<party::PartyOutcome>;
     /// `CMSG_GROUP_DISBAND` (the client's "Leave Party").
     fn group_leave(&self, account_id: u64, self_guid: u64) -> Result<party::PartyOutcome>;
-    /// `CMSG_GROUP_UNINVITE` (name gateway-resolved) — the leader kicks a member.
+    /// `CMSG_GROUP_UNINVITE` (name gateway-resolved) or `CMSG_GROUP_UNINVITE_GUID` — the leader or
+    /// an Assistant kicks a member.
     fn group_uninvite(
         &self,
         account_id: u64,

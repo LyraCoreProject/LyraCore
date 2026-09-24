@@ -213,10 +213,13 @@ pub(super) fn handle_social<St: WorldStore + ?Sized>(
             },
         )?,
         // The raid frame's "Remove from group" names the member by guid, so no name lookup runs
-        // (cm:GroupHandler.cpp:250-296).
-        ClientOpcodeMessage::CMSG_GROUP_UNINVITE_GUID(c) => {
+        // (cm:GroupHandler.cpp:250-296). Naming yourself gets no answer (lines 255-260).
+        ClientOpcodeMessage::CMSG_GROUP_UNINVITE_GUID(c)
+            if self_guid(conn) != Some(c.guid.guid()) =>
+        {
             run_answering_refusal(tx, store, conn, party::Op::Uninvite(c.guid.guid()))?
         }
+        ClientOpcodeMessage::CMSG_GROUP_UNINVITE_GUID(_) => {}
         other => return Ok(Some(other)),
     }
     Ok(None)

@@ -111,6 +111,23 @@ impl PartyMembershipIndex {
         }
     }
 
+    /// The group of `character_guid`'s oldest membership row, if it has one.
+    pub(crate) fn group_of(&self, character_guid: u64) -> Option<u64> {
+        self.by_character
+            .get(&character_guid)?
+            .values()
+            .next()
+            .copied()
+    }
+
+    /// Every member row id of `group_id`, in join order.
+    pub(crate) fn member_row_ids(&self, group_id: u64) -> Vec<u64> {
+        self.by_group
+            .get(&group_id)
+            .map(|rows| rows.keys().copied().collect())
+            .unwrap_or_default()
+    }
+
     /// `character_guid`'s group and its members in join order as `(member_row_id, guid)`. The row
     /// id lets a caller read the member row itself. More than `member_limit` members, or more than
     /// one membership, is a damaged cache and fails.
@@ -176,6 +193,20 @@ mod party_membership_index_tests {
             index.bounded_member_rows(102, 2).unwrap(),
             Some((7, vec![(1, 101), (2, 102)]))
         );
+    }
+
+    /// The roster reads find a member's group and the group's rows without scanning the cache.
+    #[test]
+    fn a_members_group_and_the_groups_rows_are_indexed_in_join_order() {
+        let mut index = PartyMembershipIndex::default();
+        index.insert(&member(9, 7, 102));
+        index.insert(&member(4, 7, 101));
+        assert_eq!(index.group_of(102), Some(7));
+        assert_eq!(index.group_of(999), None);
+        assert_eq!(index.member_row_ids(7), [4, 9]);
+        index.remove(&member(4, 7, 101));
+        assert_eq!(index.member_row_ids(7), [9]);
+        assert!(index.member_row_ids(8).is_empty());
     }
 }
 

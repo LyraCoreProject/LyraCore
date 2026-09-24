@@ -1330,10 +1330,10 @@ fn accept_invite_on(
     let members = ctx.db.game_group_member();
     let (group_id, slot) = match checked_group_membership(ctx, inviter_guid)? {
         Some((m, group)) => {
-            // Re-run the invite-time rights gate: the invite was issued when the inviter led the
-            // group or assisted in it (or was ungrouped and about to lead). An inviter who since
-            // lost those rights, a demoted Assistant or a plain member of another group, no longer
-            // speaks for the group, so the stale invite would smuggle the acceptor in.
+            // Re-run the invite-time rights gate against the inviter's CURRENT group: an inviter
+            // who is now a plain member there, a demoted Assistant or a member of another group,
+            // no longer speaks for it. The invite does not record the group it was sent from, so
+            // this cannot tell that group apart from a later one the inviter leads or assists.
             if !manages_raid(&group, &m) {
                 return Err(GroupRefusal::InviterUnavailable.into());
             }
@@ -1350,7 +1350,10 @@ fn accept_invite_on(
             (m.group_id, slot)
         }
         None => {
-            // First acceptance forms the group: the inviter leads and joins it here.
+            // First acceptance forms the group: the inviter leads and joins it here. An inviter
+            // who left or was removed after inviting also lands here, so an Assistant's pending
+            // invite can form a new Party with its sender. Telling the two apart needs the invite
+            // to record its group.
             let group = ctx.db.game_group().insert(Group {
                 group_id: 0,
                 leader_guid: inviter_guid,

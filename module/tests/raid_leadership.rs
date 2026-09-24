@@ -149,7 +149,8 @@ fn start(name: &str) -> Standalone {
 
 /// AC 1 and 2: the leader passes the lead to a member. Every member hears the new leader's
 /// announcement before the list naming it. Passing the lead to yourself, as a member who does not
-/// lead, or to a Character outside the Group changes nothing.
+/// lead, or to a Character outside the Group changes nothing. In a Raid the new leader keeps its
+/// Raid Slot.
 #[test]
 #[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
 fn the_leader_passes_the_lead_and_every_member_hears_it_before_the_list() {
@@ -182,10 +183,22 @@ fn the_leader_passes_the_lead_and_every_member_hears_it_before_the_list() {
             _ => assert_eq!(event.list().leader, 2),
         }
     }
+
+    // In a Raid, the new leader keeps its Raid Slot: here an Assistant in Subgroup 1, 0x81.
+    join(&realm, 2, 4);
+    join(&realm, 2, 5);
+    group_op(&realm, RAID_CONVERT, 2, 0, 0);
+    join(&realm, 2, 6);
+    promote(&realm, 2, 6, true);
+    assert_eq!(slot_of(&realm, 6), RaidSlot::new(1, true).unwrap());
+
+    group_op(&realm, SET_LEADER, 2, 6, 0);
+
+    assert_eq!(leader(&realm), 6);
     assert_eq!(
-        slot_of(&realm, 2),
-        RaidSlot::default(),
-        "the Raid Slot stays"
+        slot_of(&realm, 6).wire(),
+        0x81,
+        "the new leader keeps its Raid Slot"
     );
 }
 

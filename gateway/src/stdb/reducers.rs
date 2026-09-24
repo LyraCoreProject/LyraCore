@@ -2124,7 +2124,8 @@ impl Coordinator {
         ))
     }
 
-    /// `CMSG_GROUP_UNINVITE` — the leader kicks `target_guid`.
+    /// `CMSG_GROUP_UNINVITE` or `CMSG_GROUP_UNINVITE_GUID` — the leader or an Assistant kicks
+    /// `target_guid`.
     pub fn group_uninvite(
         &self,
         _account_id: u64,

@@ -2966,13 +2966,13 @@ fn an_unsharded_gateway_runs_leadership_ops_on_its_own_shard() {
 }
 
 /// A `SET_LEADER` row as the relay decodes it.
-fn set_leader_row(leader: u64, name: &str) -> crate::stdb::bindings::GroupEvent {
+fn set_leader_row(leader: u64) -> crate::stdb::bindings::GroupEvent {
     crate::stdb::bindings::GroupEvent {
         id: 1,
         recipient_identity: spacetimedb_sdk::Identity::ZERO,
         kind: lyracore_shared::group::event_kind::SET_LEADER,
         other_guid: leader,
-        other_name: name.to_string(),
+        other_name: String::new(),
         created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
         payload: String::new(),
         recipient_guid: GINGER,
@@ -2997,24 +2997,19 @@ fn relayed_leader_name(
     }
 }
 
-/// **AC: every member gets `SMSG_GROUP_SET_LEADER` with the new leader's name.** Realm-core writes
-/// no names, so the relay reads the name from whichever shard holds the leader. A leader no shard
-/// can name sends nothing rather than a blank "is now the group leader" line.
+/// **AC: every member gets `SMSG_GROUP_SET_LEADER` with the new leader's name.** The relay reads
+/// the name from whichever shard holds the leader. A leader no shard can name sends nothing rather
+/// than a blank "is now the group leader" line.
 #[test]
 fn the_set_leader_relay_names_the_leader_from_the_far_shard() {
     let (realm, world, instances, _calls) = party_topology();
     *realm.peers.lock().unwrap() = vec![world.clone(), instances.clone()];
 
     assert_eq!(
-        relayed_leader_name(&realm, &set_leader_row(VIM, "")).as_deref(),
+        relayed_leader_name(&realm, &set_leader_row(VIM)).as_deref(),
         Some("Vim")
     );
-    assert_eq!(relayed_leader_name(&realm, &set_leader_row(404, "")), None);
-    assert_eq!(
-        relayed_leader_name(&realm, &set_leader_row(404, "Kept")).as_deref(),
-        Some("Kept"),
-        "a World Shard row carries its own name"
-    );
+    assert_eq!(relayed_leader_name(&realm, &set_leader_row(404)), None);
 }
 
 /// Decode one hand-written client frame: size (u16 BE, opcode plus body), opcode (u32 LE), body.
@@ -3190,6 +3185,33 @@ fn set_leader_and_set_assistant_run_as_the_session_and_answer_nothing() {
     );
     assert_eq!(state.leader_of(5), VIM);
     assert!(state.slots[&VIM].is_assistant());
+    drop(state);
+    drop(client);
+    let _ = server.join();
+}
+
+/// A guid kick naming the sender is dropped without an answer, as cmangos drops it
+/// (cm:GroupHandler.cpp:255-260). It never reaches the party authority.
+#[test]
+fn a_guid_kick_of_yourself_answers_nothing() {
+    let realm = std::sync::Arc::new(InMemoryStore {
+        is_realm: true,
+        ..Default::default()
+    });
+    {
+        let mut p = realm.party.lock().unwrap();
+        p.groups.push((5, GINGER, 3, 2, 0));
+        p.members.push((5, GINGER));
+        p.members.push((5, VIM));
+    }
+    let (mut client, mut c_enc, mut c_dec, server) = realm_session(&realm);
+
+    let first_answer = kick_by_guid(&mut client, &mut c_enc, &mut c_dec, GINGER);
+
+    assert_eq!(first_answer.member, "Nobodyatall", "the self kick answered");
+    let state = realm.party.lock().unwrap();
+    assert!(state.ops.iter().all(|op| op.0 != realm_op::UNINVITE));
+    assert_eq!(state.member_guids(5), [GINGER, VIM]);
     drop(state);
     drop(client);
     let _ = server.join();

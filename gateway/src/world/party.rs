@@ -313,7 +313,8 @@ pub enum Op {
     Decline,
     /// `CMSG_GROUP_DISBAND` — the client's "Leave Party".
     Leave,
-    /// `CMSG_GROUP_UNINVITE`, target already resolved to a guid.
+    /// `CMSG_GROUP_UNINVITE` (target name already resolved to a guid) or
+    /// `CMSG_GROUP_UNINVITE_GUID`: the leader or an Assistant kicks this member.
     Uninvite(u64),
     /// `CMSG_LOOT_METHOD`.
     LootMethod {
@@ -795,30 +796,31 @@ pub(crate) fn run<St: WorldStore + ?Sized>(
     if let Op::Invite(target) = op {
         answer_for_session_less(store, realm.as_ref(), target);
     }
-    if matches!(op, Op::RaidConvert | Op::SetAssistant { .. })
-        && roster_unchanged(realm.as_ref(), self_guid, before.as_ref())
-    {
+    if op_changed_nothing(op, before.as_ref()) {
         return Ok(PartyOutcome::Ran);
     }
     sync_mirrors(store, realm.as_ref(), self_guid, before);
     Ok(PartyOutcome::Ran)
 }
 
-/// Whether a successful op left `self_guid`'s Group as it was: Realm-core still shows the same
-/// Group at the same Roster Revision as before the op. Converting a Raid again, or repeating a
-/// promotion or a demotion, succeeds and changes nothing, so no mirror needs a push. A failed read
-/// answers `false`, and the push runs as usual.
-fn roster_unchanged(realm: &dyn WorldStore, self_guid: u64, before: Option<&GroupRoster>) -> bool {
+/// Whether a successful op changed nothing, so no mirror needs a push: converting a Raid again, or
+/// repeating a promotion or a demotion. The answer comes from the roster read before the op, not
+/// after it. The op returns on a call pipe before the Coordinator cache holds its rows, so a read
+/// after it can still show the old roster and hide a real change. A stale `before` costs at most a
+/// missed push, which the next op or world entry repairs, as [`sync_mirrors`] documents.
+fn op_changed_nothing(op: Op, before: Option<&GroupRoster>) -> bool {
     let Some(before) = before else {
         return false;
     };
-    realm
-        .group_roster(self_guid)
-        .ok()
-        .flatten()
-        .is_some_and(|now| {
-            now.group_id == before.group_id && now.roster_revision == before.roster_revision
-        })
+    match op {
+        // A Raid never converts back.
+        Op::RaidConvert => before.kind == GroupKind::Raid,
+        Op::SetAssistant { target, promote } => before
+            .members
+            .iter()
+            .any(|member| member.guid == target && member.slot.is_assistant() == promote),
+        _ => false,
+    }
 }
 
 /// The invite gates realm-core cannot run for itself: does the target exist anywhere, and is it in

@@ -2335,16 +2335,13 @@ pub(crate) fn group_event_outbound<St: crate::world::WorldStore + ?Sized>(
     }
 }
 
-/// The name a `SET_LEADER` row announces. A World Shard row carries it. A Realm-core row does not,
-/// because Realm-core holds no characters, so the Gateway reads it from the shards. `None` skips
-/// the packet: an empty name would print a broken "is now the group leader" line.
+/// The name a `SET_LEADER` row announces. The Gateway always looks it up from the shards by the
+/// row's leader guid, because Realm-core holds no characters. `None` skips the packet: an empty
+/// name would print a broken "is now the group leader" line.
 fn leader_name<St: crate::world::WorldStore + ?Sized>(
     store: &St,
     row: &GroupEvent,
 ) -> Option<String> {
-    if !row.other_name.is_empty() {
-        return Some(row.other_name.clone());
-    }
     match crate::world::party::character_anywhere(store, row.other_guid) {
         Ok(Some(leader)) => Some(leader.name),
         Ok(None) => {
