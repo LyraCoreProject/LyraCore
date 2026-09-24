@@ -666,7 +666,7 @@ pub(crate) fn decode_blob(transfer_id: u64, bytes: &[u8]) -> Result<ExportBlob, 
 pub(crate) const ADDED_SINCE_PREVIOUS_BUILD: &[&str] = &["game_auction_hold"];
 
 /// The manifest the build before this one exported.
-fn previous_manifest() -> Vec<ManifestEntry> {
+pub(crate) fn previous_manifest() -> Vec<ManifestEntry> {
     manifest()
         .into_iter()
         .filter(|entry| !ADDED_SINCE_PREVIOUS_BUILD.contains(&entry.table.as_str()))

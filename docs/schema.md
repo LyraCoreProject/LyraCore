@@ -396,6 +396,9 @@ callbacks return an unbid item or settle a winning bid with exact item and proce
 when replayed. These tables are additive. `game_auction_hold` and `game_auction_bid_hold` are in the
 character transfer manifest with their operation ids kept, because a refund gives the value back on
 the Shard that holds the Hold, so an unfinished Hold arrives with its Character and finishes there.
+A Transfer keeps every listing Hold its payload does not carry: the destination's own Hold on an
+import, and the source's Hold under a blob from the build before `game_auction_hold` travelled.
+Such a Hold finishes when its seller next opens the auction house on that Shard.
 The other auction tables stay out of the manifest.
 Deletion is refused while a character owns Auction value.
 

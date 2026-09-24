@@ -451,3 +451,42 @@ fn deleting_a_character_destroys_its_letters_text() {
         "the text went with the deleted Character's letter"
     );
 }
+
+/// Deleting a Character destroys the letter attached to its Mail once. A second letter with the
+/// same text stands elsewhere, so the count shows how many the deletion took: one, not two.
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn deleting_a_character_drops_the_text_of_the_letter_in_its_mail_once() {
+    let shard = fixture("mail-letter-copy-mail-owner-deleted");
+    seed_letter_item_template(&shard);
+    shard.assert_call("debug_spawn_player_entity", &["1"]);
+    let partner = spawn_partner(&shard);
+    let mail_id = seed_mail(&shard, 1, 2, "left it at the inn");
+    let letter = copy_into_bags(&shard, mail_id);
+    let to_partner = mail_letter(&shard, 1, partner, &letter);
+    shard.assert_sql(&format!(
+        "UPDATE game_item_text SET letters = 2 WHERE id = {mail_id}"
+    ));
+
+    shard.assert_sql(&format!(
+        "DELETE FROM game_world_entity WHERE guid = {partner}"
+    ));
+    let account_id = shard.query_rows(&format!(
+        "SELECT account_id FROM game_character WHERE guid = {partner}"
+    ))[0]["account_id"]
+        .clone();
+    shard.assert_call("delete_character", &[&account_id, &actor(partner)]);
+
+    assert!(
+        shard
+            .query_rows(&format!("SELECT id FROM game_mail WHERE id = {to_partner}"))
+            .is_empty(),
+        "the Mail went with its recipient"
+    );
+    assert_eq!(
+        shard.query_rows(&format!(
+            "SELECT letters FROM game_item_text WHERE id = {mail_id}"
+        ))[0]["letters"],
+        "1"
+    );
+}

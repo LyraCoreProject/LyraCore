@@ -2060,10 +2060,8 @@ fn the_production_adapter_is_the_pass_through_the_harness_assumes() {
                  self.ctx.db.game_world_entity().guid().find(guid).is_some() } fn \
                  detach_for_transfer(&mut self, guid: u64) { crate::group::detach_for_transfer(self.ctx, \
                  guid); crate::bridge::detach_command_receipts_for_transfer(self.ctx, guid); } fn \
-                 has_auction_hold(&self, guid: u64) -> bool { \
-                 crate::auction::character_has_auction_hold(self.ctx, guid) } fn \
-                 cascade_delete_character(&mut self, guid: u64) { \
-                 crate::world::cascade_delete_character(self.ctx, guid); } fn insert_character(&mut self, c: \
+                 cascade_delete_character(&mut self, guid: u64, listing_holds: ListingHolds) { \
+                 cascade_for_transfer(self.ctx, guid, listing_holds); } fn insert_character(&mut self, c: \
                  crate::character::Character) { self.ctx.db.game_character().insert(c); } fn import_rows(&mut \
                  self, guid: u64, payload: &[TableRows]) -> Result<(), String> { import_rows(self.ctx, guid, \
                  payload) } fn ensure_shadow_account(&mut self, account_id: u64) { \
@@ -2076,8 +2074,8 @@ fn the_production_adapter_is_the_pass_through_the_harness_assumes() {
                 "impl FinishSink for CtxShard<'_> {",
                 "{ fn detach_for_transfer(&mut self, guid: u64) { crate::group::detach_for_transfer(self.ctx, \
                  guid); crate::bridge::detach_command_receipts_for_transfer(self.ctx, guid); } fn \
-                 cascade_delete_character(&mut self, guid: u64) { \
-                 crate::world::cascade_delete_character(self.ctx, guid); } fn record_shard(&mut self, guid: \
+                 cascade_delete_character(&mut self, guid: u64, listing_holds: ListingHolds) { \
+                 cascade_for_transfer(self.ctx, guid, listing_holds); } fn record_shard(&mut self, guid: \
                  u64, map_id: u32, instance_id: u64) { crate::realm_core::record_shard(self.ctx, guid, \
                  map_id, instance_id); } }",
             ),
@@ -2342,4 +2340,14 @@ fn a_filled_previous_payload_covers_every_transport_arm() {
     )
     .expect("the filled payload imports");
     assert_eq!(applied.get(), 2);
+}
+
+/// Pins the manifest by count. A table added to or removed from the manifest fails here. The build
+/// before the next one is then this one: empty `ADDED_SINCE_PREVIOUS_BUILD`, delete
+/// `previous_manifest`, and only then change these numbers.
+#[test]
+fn the_previous_manifest_is_pinned_until_the_next_manifest_change() {
+    assert_eq!(ADDED_SINCE_PREVIOUS_BUILD, ["game_auction_hold"]);
+    assert_eq!(manifest().len(), 43);
+    assert_eq!(previous_manifest().len(), 42);
 }

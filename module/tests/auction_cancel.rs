@@ -451,47 +451,51 @@ fn an_unfinished_cancellation_hold_travels_with_its_seller_and_settles_on_the_ne
     );
 }
 
-/// A listing Hold crosses a Shard Boundary with its seller and lists from the new Home Shard, so a
-/// Gateway stop between the Hold and Realm-core's commit never strands the item or the deposit on
-/// the old one. The Hold carries a Letter Copy's text id with the item.
-#[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
-fn an_unfinished_listing_hold_travels_with_its_seller_and_lists_from_the_new_home_shard() {
-    let mut source = Standalone::start("auction-listing-source");
-    source.publish_module();
-    source.assert_call("claim_operator", &[]);
-    source.assert_call("install_guid_range", &["0"]);
-    source.assert_call("debug_seed_scenario_fixtures", &[]);
-    source.assert_call("debug_spawn_player_entity", &[LOCAL_SELLER]);
-    source.assert_call("debug_set_money", &[LOCAL_SELLER, "1000"]);
-    source.assert_call("debug_spawn_at_feet", &[LOCAL_SELLER, VENDOR_ENTRY, "1"]);
+const HOLD_QUERY: &str = "SELECT * FROM game_auction_hold WHERE operation_id = 5090094";
+
+/// A Shard where the seller holds a listing of five Tough Jerky, phase 1 only: the Gateway stopped
+/// before Realm-core committed it. Returns the Shard, the Hold row and the purse after the deposit.
+fn a_held_listing(name: &str) -> (Standalone, BTreeMap<String, String>, String) {
+    let mut shard = Standalone::start(name);
+    shard.publish_module();
+    shard.assert_call("claim_operator", &[]);
+    shard.assert_call("install_guid_range", &["0"]);
+    shard.assert_call("debug_seed_scenario_fixtures", &[]);
+    shard.assert_call("debug_spawn_player_entity", &[LOCAL_SELLER]);
+    shard.assert_call("debug_set_money", &[LOCAL_SELLER, "1000"]);
+    shard.assert_call("debug_spawn_at_feet", &[LOCAL_SELLER, VENDOR_ENTRY, "1"]);
     let vendor = rows(
-        &source,
+        &shard,
         &format!("SELECT guid FROM game_world_entity WHERE entry = {VENDOR_ENTRY}"),
     )[0]["guid"]
         .clone();
-    source.assert_call(
+    shard.assert_call(
         "debug_stage_auction_cancel_fixture",
         &[LOCAL_SELLER, &vendor],
     );
-    source.assert_sql("DELETE FROM game_item_instance WHERE owner_guid = 1");
+    shard.assert_sql("DELETE FROM game_item_instance WHERE owner_guid = 1");
     // Five Tough Jerky (sell price 2), marked as a Letter Copy's letter so the text id rides along.
-    source.assert_call("debug_grant_item", &[LOCAL_SELLER, "5090052", "5"]);
-    source.assert_sql("UPDATE game_item_instance SET item_text_id = 41 WHERE owner_guid = 1");
+    shard.assert_call("debug_grant_item", &[LOCAL_SELLER, "5090052", "5"]);
+    shard.assert_sql("UPDATE game_item_instance SET item_text_id = 41 WHERE owner_guid = 1");
     let item = rows(
-        &source,
+        &shard,
         "SELECT guid FROM game_item_instance WHERE owner_guid = 1",
     )[0]["guid"]
         .clone();
-    let seller = actor(LOCAL_SELLER);
-
-    // Phase 1 only: the Gateway stopped before Realm-core committed the listing.
-    source.assert_call(
+    shard.assert_call(
         "gw_auction_hold_listing",
-        &["5090094", &seller, &item, &vendor, HOUSE, "100", "0", "720"],
+        &[
+            "5090094",
+            &actor(LOCAL_SELLER),
+            &item,
+            &vendor,
+            HOUSE,
+            "100",
+            "0",
+            "720",
+        ],
     );
-    let hold_query = "SELECT * FROM game_auction_hold WHERE operation_id = 5090094";
-    let held = rows(&source, hold_query);
+    let mut held = rows(&shard, HOLD_QUERY);
     assert_eq!(held.len(), 1);
     assert_eq!(
         [
@@ -501,39 +505,54 @@ fn an_unfinished_listing_hold_travels_with_its_seller_and_lists_from_the_new_hom
         ],
         ["5090052", "5", "41"]
     );
-    let purse_after_deposit = purse(&source);
+    let purse_after_deposit = purse(&shard);
+    (shard, held.remove(0), purse_after_deposit)
+}
+
+/// An empty Shard with its own guid range.
+fn another_shard(name: &str) -> Standalone {
+    let mut shard = Standalone::start(name);
+    shard.publish_module();
+    shard.assert_call("claim_operator", &[]);
+    shard.assert_call("install_guid_range", &["1000000000"]);
+    shard
+}
+
+/// The seller crosses from `source` to `destination` through every Transfer step.
+fn transfer(source: &Standalone, destination: &Standalone, transfer_id: &str) {
     source.assert_call(
         "begin_transfer",
-        &["5090095", &seller, "0", "0", "0", "0", "0", "0", "true"],
+        &[
+            transfer_id,
+            &actor(LOCAL_SELLER),
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "true",
+        ],
     );
     let out = rows(
-        &source,
-        "SELECT blob FROM game_transfer_out WHERE transfer_id = 5090095",
+        source,
+        &format!("SELECT blob FROM game_transfer_out WHERE transfer_id = {transfer_id}"),
     );
     let blob = serde_json::to_string(out[0]["blob"].strip_prefix("0x").unwrap()).unwrap();
-
-    let mut destination = Standalone::start("auction-listing-destination");
-    destination.publish_module();
-    destination.assert_call("claim_operator", &[]);
-    destination.assert_call("install_guid_range", &["1000000000"]);
     let system = actor("0");
-    destination.assert_call("import_character_blob", &["5090095", &blob, &system]);
-    source.assert_call("confirm_import", &["5090095", &system]);
-    source.assert_call("finish_transfer", &["5090095", &system]);
-    destination.assert_call("release_transfer", &["5090095", &system]);
+    destination.assert_call("import_character_blob", &[transfer_id, &blob, &system]);
+    source.assert_call("confirm_import", &[transfer_id, &system]);
+    source.assert_call("finish_transfer", &[transfer_id, &system]);
+    destination.assert_call("release_transfer", &[transfer_id, &system]);
+}
 
-    assert!(
-        rows(&source, hold_query).is_empty(),
-        "the Hold left with its seller"
-    );
-    assert_eq!(
-        rows(&destination, hold_query),
-        held,
-        "the Hold arrives with every column"
-    );
-
-    // The source plays Realm-core and commits the held listing; the new Home Shard settles it.
-    let hold = &held[0];
+/// `realm_core` commits the held listing and `home` settles it. Returns the listed Auction.
+fn list_from(
+    realm_core: &Standalone,
+    home: &Standalone,
+    hold: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    let seller = actor(LOCAL_SELLER);
     let commit: Vec<&str> = [
         "operation_id",
         "",
@@ -564,26 +583,125 @@ fn an_unfinished_listing_hold_travels_with_its_seller_and_lists_from_the_new_hom
         }
     })
     .collect();
-    source.assert_call("realm_auction_commit_listing", &commit);
-    let listed = rows(
-        &source,
+    realm_core.assert_call("realm_auction_commit_listing", &commit);
+    let mut listed = rows(
+        realm_core,
         "SELECT id, item_entry, item_text_id FROM game_auction WHERE listing_operation_id = 5090094",
     );
-    assert_eq!(
-        [&listed[0]["item_entry"], &listed[0]["item_text_id"]],
-        ["5090052", "41"],
-        "the Auction carries the letter's text id"
-    );
-    destination.assert_call(
+    assert_eq!(listed.len(), 1, "one Auction for the Hold");
+    home.assert_call(
         "realm_auction_confirm_listing",
         &["5090094", &listed[0]["id"], &seller],
     );
-    destination.assert_call("realm_auction_settle_listing", &["5090094", &seller]);
-    assert!(rows(&destination, hold_query).is_empty(), "settled once");
+    home.assert_call("realm_auction_settle_listing", &["5090094", &seller]);
+    assert!(rows(home, HOLD_QUERY).is_empty(), "settled once");
+    listed.remove(0)
+}
+
+/// A listing Hold crosses a Shard Boundary with its seller and lists from the new Home Shard, so a
+/// Gateway stop between the Hold and Realm-core's commit never strands the item or the deposit on
+/// the old one. The Hold carries a Letter Copy's text id with the item.
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn an_unfinished_listing_hold_travels_with_its_seller_and_lists_from_the_new_home_shard() {
+    let (source, held, purse_after_deposit) = a_held_listing("auction-listing-source");
+    let destination = another_shard("auction-listing-destination");
+
+    transfer(&source, &destination, "5090095");
+
+    assert!(
+        rows(&source, HOLD_QUERY).is_empty(),
+        "the Hold left with its seller"
+    );
+    assert_eq!(
+        rows(&destination, HOLD_QUERY),
+        std::slice::from_ref(&held),
+        "the Hold arrives with every column"
+    );
+
+    // The source plays Realm-core and commits the held listing; the new Home Shard settles it.
+    let listed = list_from(&source, &destination, &held);
+    assert_eq!(
+        [&listed["item_entry"], &listed["item_text_id"]],
+        ["5090052", "41"],
+        "the Auction carries the letter's text id"
+    );
     destination.assert_call("debug_spawn_player_entity", &[LOCAL_SELLER]);
     assert_eq!(
         purse(&destination),
         purse_after_deposit,
         "the deposit was taken once, before the Transfer"
+    );
+}
+
+/// A Transfer from before Holds travelled left the listing Hold on the old Shard. When the seller
+/// comes back, the import keeps that Hold, and the listing finishes there once. Nothing stays
+/// frozen.
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn a_listing_hold_left_on_a_shard_finishes_once_when_its_seller_comes_back() {
+    let (home, held, purse_after_deposit) = a_held_listing("auction-stranded-home");
+    let away = another_shard("auction-stranded-away");
+    transfer(&home, &away, "5090095");
+    // Put the Hold back where the older build left it: on the Shard the seller left.
+    away.assert_sql("DELETE FROM game_auction_hold WHERE operation_id = 5090094");
+    // In declaration order: the SQL INSERT binds its values by the table's column order.
+    let columns = [
+        "operation_id",
+        "seller_guid",
+        "item_guid",
+        "item_entry",
+        "item_stack_count",
+        "item_durability",
+        "item_enchant_id",
+        "item_soulbound",
+        "start_bid",
+        "buyout",
+        "duration_minutes",
+        "deposit",
+        "created_micros",
+        "expires_micros",
+        "house",
+        "deposit_rate",
+        "consignment_rate",
+        "random_property_id",
+        "item_text_id",
+    ];
+    assert_eq!(columns.len(), held.len());
+    let values: Vec<&str> = columns
+        .iter()
+        .map(|column| held[*column].as_str())
+        .collect();
+    home.assert_sql(&format!(
+        "INSERT INTO game_auction_hold ({}) VALUES ({})",
+        columns.join(","),
+        values.join(",")
+    ));
+
+    away.assert_call("debug_spawn_player_entity", &[LOCAL_SELLER]);
+    transfer(&away, &home, "5090096");
+
+    assert_eq!(
+        rows(&home, HOLD_QUERY),
+        std::slice::from_ref(&held),
+        "the import kept the Hold the payload did not carry"
+    );
+    for shard in [&home, &away] {
+        assert!(
+            rows(shard, "SELECT transfer_id FROM game_transfer_out").is_empty()
+                && rows(shard, "SELECT transfer_id FROM game_transfer_in").is_empty(),
+            "no escrow is left, so the seller is not frozen"
+        );
+    }
+
+    // The other Shard plays Realm-core; the seller's own Shard settles the Hold it kept.
+    let listed = list_from(&away, &home, &held);
+    assert_eq!(listed["item_text_id"], "41");
+    assert!(rows(&away, HOLD_QUERY).is_empty());
+    home.assert_call("debug_spawn_player_entity", &[LOCAL_SELLER]);
+    assert_eq!(
+        purse(&home),
+        purse_after_deposit,
+        "the deposit was taken once and never refunded"
     );
 }

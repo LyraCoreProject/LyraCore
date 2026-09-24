@@ -144,7 +144,7 @@ pub struct FakeDb {
     /// the FIRST escrow arms it — a live database that never gets one has a frozen player
     /// nobody ever recovers.
     reaper_armed: Cell<bool>,
-    /// Characters that still have an auction Hold on this database, left by an earlier Transfer.
+    /// Sellers with a listing Hold on this database.
     auction_holds: RefCell<HashSet<u64>>,
     /// How many times `freeze_live_entity` ran. The live-entity delete is the fence covering
     /// every targeting/aggro/threat/AOI gate on a real shard, and `live` alone cannot tell
@@ -337,6 +337,12 @@ impl FakeDb {
         }
     }
 
+    fn cascade_for_transfer(&self, guid: u64, listing_holds: ListingHolds) {
+        self.cascade(guid);
+        if listing_holds == ListingHolds::Delete {
+            self.auction_holds.borrow_mut().remove(&guid);
+        }
+    }
     fn escrow(&self, transfer_id: u64, row: XOut) {
         self.out_rows.borrow_mut().insert(transfer_id, row);
     }
@@ -499,8 +505,8 @@ impl FinishSink for FakeDb {
         // The RAW removal: membership goes, the party does not.
         self.group_members.borrow_mut().remove(&guid);
     }
-    fn cascade_delete_character(&mut self, guid: u64) {
-        self.cascade(guid);
+    fn cascade_delete_character(&mut self, guid: u64, listing_holds: ListingHolds) {
+        self.cascade_for_transfer(guid, listing_holds);
     }
     fn record_shard(&mut self, guid: u64, map_id: u32, instance_id: u64) {
         self.shard_index
@@ -532,11 +538,8 @@ impl ImportSink for FakeDb {
     fn detach_for_transfer(&mut self, guid: u64) {
         self.group_members.borrow_mut().remove(&guid);
     }
-    fn has_auction_hold(&self, guid: u64) -> bool {
-        self.auction_holds.borrow().contains(&guid)
-    }
-    fn cascade_delete_character(&mut self, guid: u64) {
-        self.cascade(guid);
+    fn cascade_delete_character(&mut self, guid: u64, listing_holds: ListingHolds) {
+        self.cascade_for_transfer(guid, listing_holds);
     }
     fn insert_character(&mut self, c: crate::character::Character) {
         if self.swallow_inserts.get() {
@@ -1053,10 +1056,10 @@ fn an_undecodable_table_payload_aborts_the_import() {
     );
 }
 
-/// A Hold an earlier Transfer left on the destination is value the payload does not carry. The
-/// cascade before the insert would delete it, so the import is refused and nothing changes.
+/// A listing Hold an older Transfer left on the destination is value the payload does not carry.
+/// The import keeps it, so the seller's next MSG_AUCTION_HELLO there finishes it.
 #[test]
-fn an_import_is_refused_while_the_destination_still_holds_an_auction_hold() {
+fn an_import_keeps_the_listing_hold_already_on_the_destination() {
     let src = FakeDb::populated(GUID);
     let blob = export(&src, GUID, XFER, DEST);
     let mut dst = FakeDb::new();
@@ -1067,20 +1070,56 @@ fn an_import_is_refused_while_the_destination_still_holds_an_auction_hold() {
     });
     dst.auction_holds.borrow_mut().insert(GUID);
 
-    let err = apply_import_blob(&mut dst, XFER, wire(&blob))
-        .expect_err("a stranded Hold must stop the import");
-    assert!(err.contains("auction Hold"), "{err}");
-    assert!(!dst.has_in_row(XFER));
-    assert!(!dst.has_character(GUID));
-    assert_eq!(
-        dst.gear.borrow().len(),
-        1,
-        "the cascade never ran, so the destination kept every row it had"
-    );
+    apply_import_blob(&mut dst, XFER, wire(&blob)).expect("the import goes");
 
-    dst.auction_holds.borrow_mut().clear();
-    apply_import_blob(&mut dst, XFER, wire(&blob)).expect("the import goes once the Hold is gone");
     assert!(dst.has_in_row(XFER));
+    assert!(dst.auction_holds.borrow().contains(&GUID), "the Hold stays");
+    assert!(
+        !dst.gear_of(GUID).iter().any(|row| row.item == 7005),
+        "the cascade still removed the stale rows"
+    );
+}
+
+/// A source mid-Transfer with a listing Hold, whose out-row carries `blob`.
+fn finishing_with_a_listing_hold(blob: &ExportBlob) -> FakeDb {
+    let db = finishing(GUID, true);
+    db.auction_holds.borrow_mut().insert(GUID);
+    for out in db.out_rows.borrow_mut().values_mut() {
+        out.blob = wire(blob);
+    }
+    db
+}
+
+#[test]
+fn finish_deletes_the_listing_hold_the_blob_carried() {
+    let blob = export(&FakeDb::populated(GUID), GUID, XFER, DEST);
+    let mut db = finishing_with_a_listing_hold(&blob);
+
+    apply_finish(&mut db, XFER);
+
+    assert!(!db.has_character(GUID));
+    assert!(
+        db.auction_holds.borrow().is_empty(),
+        "the Hold travelled, so the source copy goes"
+    );
+}
+
+/// A blob the build before this one exported, still in flight at the publish, names no
+/// `game_auction_hold`. Its Hold never left the source, so the finish must not delete it.
+#[test]
+fn finish_keeps_the_listing_hold_a_previous_build_blob_left_behind() {
+    let mut blob = export(&FakeDb::populated(GUID), GUID, XFER, DEST);
+    blob.manifest
+        .retain(|entry| entry.table != "game_auction_hold");
+    blob.payload
+        .retain(|entry| entry.table != "game_auction_hold");
+    let mut db = finishing_with_a_listing_hold(&blob);
+
+    apply_finish(&mut db, XFER);
+
+    assert!(!db.has_character(GUID));
+    assert!(db.auction_holds.borrow().contains(&GUID), "the Hold stays");
+    assert!(db.settled(XFER));
 }
 
 #[test]
