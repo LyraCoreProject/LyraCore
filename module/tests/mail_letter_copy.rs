@@ -109,7 +109,10 @@ fn a_returned_letters_reused_id_copies_again_without_panicking() {
     let mail_id = seed_mail(&shard, bob, alice, "left it at the inn");
 
     shard.assert_call("realm_mail_copy_text", &[&actor(bob), &mail_id.to_string()]);
-    shard.assert_call("realm_mail_return", &[&actor(bob), &mail_id.to_string()]);
+    shard.assert_call(
+        "realm_mail_return",
+        &[&actor(bob), &mail_id.to_string(), "true"],
+    );
     let returned = shard.query_rows(&format!(
         "SELECT recipient_guid, check_flags FROM game_mail WHERE id = {mail_id}"
     ));
