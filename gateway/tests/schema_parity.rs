@@ -687,6 +687,14 @@ parity_test!(parity_game_guild_member, "game_guild_member", lyracore_module::gui
 parity_test!(parity_game_guild_event, "game_guild_event", lyracore_module::guild::GuildEvent, bindings::guild_event_type::GuildEvent, {
     id, guild_id, recipient_guid, kind, subject_guid, other_guid, strings, created_at,
 });
+// The Fee Hold on the payer's Home Shard and the fee decision on Realm-core.
+parity_test!(parity_game_guild_fee_hold, "game_guild_fee_hold", lyracore_module::guild::fee::GuildFeeHold, bindings::guild_fee_hold_type::GuildFeeHold, {
+    payer_guid, operation_id, kind, copper, npc_guid, emblem_style, emblem_color, border_style,
+    border_color, background_color, charter_item_guid, charter_name, created_micros,
+});
+parity_test!(parity_game_guild_fee_decision, "game_guild_fee_decision", lyracore_module::guild::fee::GuildFeeDecision, bindings::guild_fee_decision_type::GuildFeeDecision, {
+    operation_id, payer_guid, kind, accepted, refusal, petition_id, decided_micros,
+});
 parity_test!(parity_game_creature_quest_tap, "game_creature_quest_tap", lyracore_module::CreatureQuestTap, bindings::creature_quest_tap_type::CreatureQuestTap, {
     creature_guid, character_guid,
 });
@@ -1173,6 +1181,8 @@ const MANIFEST_TABLES: &[&str] = &[
     "game_guild_rank",
     "game_guild_member",
     "game_guild_event",
+    "game_guild_fee_hold",
+    "game_guild_fee_decision",
     "game_creature_quest_tap",
     "game_creature_quest_tap_member",
     "game_creature_loot_tag_group",

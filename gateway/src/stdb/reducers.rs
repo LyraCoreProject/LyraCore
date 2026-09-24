@@ -11,6 +11,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use super::bindings::*;
 use super::connection::{call_reducer, recv_reducer_on, reducer_refusal_reason, Coordinator};
 use super::views::entity_view;
+use crate::world::guild_fee;
 use crate::world::party::{AdmittedCompanionCommand, CompanionCommandOutcome, PartyOutcome};
 use crate::world::{
     ChatOutcome, ContactOutcome, ItemActionResult, LootActionStatus, LootWindowRefusal,
@@ -496,11 +497,11 @@ impl Coordinator {
         }
 
         let operation_id = if item_is_present {
-            next_auction_operation_id()?
+            next_operation_id()?
         } else {
             match self.matching_auction_hold(request) {
                 Some(hold) => hold.operation_id,
-                None => next_auction_operation_id()?,
+                None => next_operation_id()?,
             }
         };
 
@@ -735,7 +736,7 @@ impl Coordinator {
     }
 
     fn wait_for_auction_hold(&self, operation_id: u64) -> Result<AuctionHold> {
-        wait_for_auction_cache_row(operation_id, "Hold", || {
+        wait_for_cache_row(operation_id, "auction Hold", || {
             self.0
                 .coord()
                 .conn
@@ -747,7 +748,7 @@ impl Coordinator {
     }
 
     fn wait_for_auction_receipt(&self, operation_id: u64) -> Result<AuctionOperationReceipt> {
-        wait_for_auction_cache_row(operation_id, "receipt", || {
+        wait_for_cache_row(operation_id, "auction receipt", || {
             self.0
                 .coord()
                 .conn
@@ -767,7 +768,7 @@ impl Coordinator {
     ) -> Result<crate::world::PlaceBidOutcome> {
         let operation_id = self
             .matching_unfinished_bid_hold(request)
-            .map_or_else(next_auction_operation_id, |hold| Ok(hold.operation_id))?;
+            .map_or_else(next_operation_id, |hold| Ok(hold.operation_id))?;
         let result = if self.is_sharded() {
             self.drive_sharded_auction_bid(operation_id, request)
         } else {
@@ -938,7 +939,7 @@ impl Coordinator {
     }
 
     fn wait_for_auction_bid_hold(&self, operation_id: u64) -> Result<AuctionBidHold> {
-        wait_for_auction_cache_row(operation_id, "bid Hold", || {
+        wait_for_cache_row(operation_id, "auction bid Hold", || {
             self.0
                 .coord()
                 .conn
@@ -950,7 +951,7 @@ impl Coordinator {
     }
 
     fn wait_for_terminal_bid_hold(&self, operation_id: u64) -> Result<AuctionBidHold> {
-        wait_for_auction_cache_row(operation_id, "terminal bid Hold", || {
+        wait_for_cache_row(operation_id, "auction terminal bid Hold", || {
             self.0
                 .coord()
                 .conn
@@ -963,7 +964,7 @@ impl Coordinator {
     }
 
     fn wait_for_auction_bid_decision(&self, operation_id: u64) -> Result<AuctionBidDecision> {
-        wait_for_auction_cache_row(operation_id, "bid decision", || {
+        wait_for_cache_row(operation_id, "auction bid decision", || {
             self.0
                 .coord()
                 .conn
@@ -975,7 +976,7 @@ impl Coordinator {
     }
 
     fn wait_for_bid_refund(&self, hold: &AuctionBidHold) -> Result<AuctionBidDecision> {
-        wait_for_auction_cache_row(hold.operation_id, "bid refund", || {
+        wait_for_cache_row(hold.operation_id, "auction bid refund", || {
             self.0
                 .coord()
                 .conn
@@ -988,7 +989,7 @@ impl Coordinator {
     }
 
     fn wait_for_settled_bid_refund(&self, operation_id: u64) -> Result<AuctionBidHold> {
-        wait_for_auction_cache_row(operation_id, "settled bid refund", || {
+        wait_for_cache_row(operation_id, "auction settled bid refund", || {
             self.0
                 .coord()
                 .conn
@@ -3658,7 +3659,9 @@ mod taxi_reply_tests {
     }
 }
 
-fn wait_for_auction_cache_row<T>(
+/// Wait up to two seconds for a row a value-flow reducer just committed to reach this handle's
+/// cache.
+fn wait_for_cache_row<T>(
     operation_id: u64,
     row_name: &str,
     mut read: impl FnMut() -> Option<T>,
@@ -3670,7 +3673,7 @@ fn wait_for_auction_cache_row<T>(
         std::thread::sleep(Duration::from_millis(20));
     }
     Err(anyhow!(
-        "auction {row_name} {operation_id} committed but is not visible in the coordinator cache"
+        "{row_name} {operation_id} committed but is not visible in the coordinator cache"
     ))
 }
 
@@ -3737,7 +3740,8 @@ fn same_auction_request(
         && row.house_id() == request.house_id
 }
 
-fn next_auction_operation_id() -> Result<u64> {
+/// A random nonzero operation id for one auction or guild fee value flow.
+fn next_operation_id() -> Result<u64> {
     loop {
         let mut bytes = [0; 8];
         getrandom::fill(&mut bytes)
@@ -4025,6 +4029,138 @@ impl Coordinator {
                 None => Err(error),
             },
         }
+    }
+}
+
+impl Coordinator {
+    /// `gw_guild_fee_hold` on THIS handle, the actor's Home Shard, under a fresh operation id. A
+    /// tagged Refusal answers `Ok(Err(_))`.
+    pub(crate) fn hold_guild_fee(
+        &self,
+        actor_guid: u64,
+        request: guild_fee::FeeRequest,
+    ) -> Result<Result<guild_fee::FeeHold, GuildRefusal>> {
+        let operation_id = next_operation_id()?;
+        let guild_fee::FeeRequest::Emblem { npc_guid, emblem } = request;
+        let result = call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "gw_guild_fee_hold",
+            gw_guild_fee_hold_then(
+                operation_id,
+                self.session_actor(actor_guid),
+                GuildFeeRequest::Emblem(GuildEmblemPurchase {
+                    npc_guid,
+                    emblem: guild_emblem(emblem),
+                })
+            )
+        );
+        match result {
+            Ok(()) => Ok(Ok(guild_fee::FeeHold {
+                operation_id,
+                terms: guild_fee::FeeTerms::Emblem(emblem),
+            })),
+            Err(error) => match reducer_refusal_reason(&error).and_then(GuildRefusal::parse_tag) {
+                Some(refusal) => Ok(Err(refusal)),
+                None => Err(error),
+            },
+        }
+    }
+
+    /// `realm_guild_fee_decide` on THIS handle, Realm-core, then the decision once this handle's
+    /// cache shows it. The reducer is idempotent, so a re-drive calls it again.
+    pub(crate) fn decide_guild_fee(
+        &self,
+        actor_guid: u64,
+        hold: guild_fee::FeeHold,
+    ) -> Result<guild_fee::FeeOutcome> {
+        let guild_fee::FeeTerms::Emblem(emblem) = hold.terms;
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "realm_guild_fee_decide",
+            realm_guild_fee_decide_then(
+                hold.operation_id,
+                self.session_actor(actor_guid),
+                GuildFeeTerms::Emblem(guild_emblem(emblem))
+            )
+        )?;
+        let decision = wait_for_cache_row(hold.operation_id, "guild fee decision", || {
+            self.guild_fee_decision_row(hold.operation_id)
+        })?;
+        fee_outcome(&decision)
+    }
+
+    /// `gw_guild_fee_finish` on THIS handle, the actor's Home Shard.
+    pub(crate) fn finish_guild_fee(
+        &self,
+        actor_guid: u64,
+        operation_id: u64,
+        accepted: bool,
+    ) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "gw_guild_fee_finish",
+            gw_guild_fee_finish_then(operation_id, self.session_actor(actor_guid), accepted)
+        )
+    }
+}
+
+fn guild_emblem(emblem: guild_fee::Emblem) -> GuildEmblem {
+    GuildEmblem {
+        emblem_style: emblem.emblem_style,
+        emblem_color: emblem.emblem_color,
+        border_style: emblem.border_style,
+        border_color: emblem.border_color,
+        background_color: emblem.background_color,
+    }
+}
+
+/// Realm-core's decision row as a fee outcome. A refusal tag this Gateway does not know is an
+/// error, so the Hold stays for a Gateway that does.
+fn fee_outcome(decision: &GuildFeeDecision) -> Result<guild_fee::FeeOutcome> {
+    if decision.accepted {
+        return Ok(guild_fee::FeeOutcome::Accepted);
+    }
+    GuildRefusal::parse_tag(&decision.refusal)
+        .map(guild_fee::FeeOutcome::Refused)
+        .ok_or_else(|| {
+            anyhow!(
+                "guild fee decision {} carries an unknown refusal {:?}",
+                decision.operation_id,
+                decision.refusal
+            )
+        })
+}
+
+#[cfg(test)]
+mod guild_fee_reducer_tests {
+    use super::*;
+
+    fn decision(accepted: bool, refusal: &str) -> GuildFeeDecision {
+        GuildFeeDecision {
+            operation_id: 9,
+            payer_guid: 5_090_401,
+            kind: lyracore_shared::guild::fee_kind::EMBLEM,
+            accepted,
+            refusal: refusal.into(),
+            petition_id: 0,
+            decided_micros: 0,
+        }
+    }
+
+    #[test]
+    fn a_decision_row_maps_to_its_fee_outcome() {
+        assert_eq!(
+            fee_outcome(&decision(true, "")).unwrap(),
+            guild_fee::FeeOutcome::Accepted
+        );
+        assert_eq!(
+            fee_outcome(&decision(false, "guild:not_leader")).unwrap(),
+            guild_fee::FeeOutcome::Refused(GuildRefusal::NotLeader)
+        );
+        assert!(
+            fee_outcome(&decision(false, "guild:from_a_newer_module")).is_err(),
+            "an unknown refusal must not read as a spend or a refund"
+        );
     }
 }
 

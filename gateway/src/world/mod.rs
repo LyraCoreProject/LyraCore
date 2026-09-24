@@ -36,6 +36,7 @@ use wow_world_messages::vanilla::{
 };
 
 mod coalesce;
+pub(crate) mod guild_fee;
 mod handlers;
 pub mod login_queue;
 pub mod loot;

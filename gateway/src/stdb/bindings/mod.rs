@@ -472,6 +472,8 @@ pub mod game_guid_allocator_table;
 pub mod game_guid_range_registry_table;
 pub mod game_guid_range_table;
 pub mod game_guild_event_table;
+pub mod game_guild_fee_decision_table;
+pub mod game_guild_fee_hold_table;
 pub mod game_guild_member_table;
 pub mod game_guild_rank_table;
 pub mod game_guild_table;
@@ -645,7 +647,13 @@ pub mod group_type;
 pub mod guid_allocator_type;
 pub mod guid_range_assignment_type;
 pub mod guid_range_type;
+pub mod guild_emblem_purchase_type;
+pub mod guild_emblem_type;
 pub mod guild_event_type;
+pub mod guild_fee_decision_type;
+pub mod guild_fee_hold_type;
+pub mod guild_fee_request_type;
+pub mod guild_fee_terms_type;
 pub mod guild_gm_create_type;
 pub mod guild_member_type;
 pub mod guild_op_type;
@@ -701,6 +709,8 @@ pub mod gw_group_invite_reducer;
 pub mod gw_group_leave_reducer;
 pub mod gw_group_loot_method_reducer;
 pub mod gw_group_uninvite_reducer;
+pub mod gw_guild_fee_finish_reducer;
+pub mod gw_guild_fee_hold_reducer;
 pub mod gw_heartbeat_reducer;
 pub mod gw_ignore_trade_reducer;
 pub mod gw_initiate_trade_reducer;
@@ -884,6 +894,7 @@ pub mod realm_chat_event_type;
 pub mod realm_chat_reducer;
 pub mod realm_chat_request_type;
 pub mod realm_group_op_reducer;
+pub mod realm_guild_fee_decide_reducer;
 pub mod realm_guild_op_reducer;
 pub mod realm_loot_op_reducer;
 pub mod realm_mail_commit_reducer;
@@ -1543,6 +1554,8 @@ pub use game_guid_allocator_table::*;
 pub use game_guid_range_registry_table::*;
 pub use game_guid_range_table::*;
 pub use game_guild_event_table::*;
+pub use game_guild_fee_decision_table::*;
+pub use game_guild_fee_hold_table::*;
 pub use game_guild_member_table::*;
 pub use game_guild_rank_table::*;
 pub use game_guild_table::*;
@@ -1716,7 +1729,13 @@ pub use group_type::Group;
 pub use guid_allocator_type::GuidAllocator;
 pub use guid_range_assignment_type::GuidRangeAssignment;
 pub use guid_range_type::GuidRange;
+pub use guild_emblem_purchase_type::GuildEmblemPurchase;
+pub use guild_emblem_type::GuildEmblem;
 pub use guild_event_type::GuildEvent;
+pub use guild_fee_decision_type::GuildFeeDecision;
+pub use guild_fee_hold_type::GuildFeeHold;
+pub use guild_fee_request_type::GuildFeeRequest;
+pub use guild_fee_terms_type::GuildFeeTerms;
 pub use guild_gm_create_type::GuildGmCreate;
 pub use guild_member_type::GuildMember;
 pub use guild_op_type::GuildOp;
@@ -1772,6 +1791,8 @@ pub use gw_group_invite_reducer::gw_group_invite;
 pub use gw_group_leave_reducer::gw_group_leave;
 pub use gw_group_loot_method_reducer::gw_group_loot_method;
 pub use gw_group_uninvite_reducer::gw_group_uninvite;
+pub use gw_guild_fee_finish_reducer::gw_guild_fee_finish;
+pub use gw_guild_fee_hold_reducer::gw_guild_fee_hold;
 pub use gw_heartbeat_reducer::gw_heartbeat;
 pub use gw_ignore_trade_reducer::gw_ignore_trade;
 pub use gw_initiate_trade_reducer::gw_initiate_trade;
@@ -1955,6 +1976,7 @@ pub use realm_chat_event_type::RealmChatEvent;
 pub use realm_chat_reducer::realm_chat;
 pub use realm_chat_request_type::RealmChatRequest;
 pub use realm_group_op_reducer::realm_group_op;
+pub use realm_guild_fee_decide_reducer::realm_guild_fee_decide;
 pub use realm_guild_op_reducer::realm_guild_op;
 pub use realm_loot_op_reducer::realm_loot_op;
 pub use realm_mail_commit_reducer::realm_mail_commit;
@@ -3305,6 +3327,16 @@ pub enum Reducer {
         request_actor: SessionActor,
         target_guid: u64,
     },
+    GwGuildFeeFinish {
+        operation_id: u64,
+        request_actor: SessionActor,
+        accepted: bool,
+    },
+    GwGuildFeeHold {
+        operation_id: u64,
+        request_actor: SessionActor,
+        request: GuildFeeRequest,
+    },
     GwHeartbeat,
     GwIgnoreTrade {
         request_actor: SessionActor,
@@ -3722,6 +3754,11 @@ pub enum Reducer {
         arg_a: u8,
         arg_b: u8,
         arg_c: u64,
+    },
+    RealmGuildFeeDecide {
+        operation_id: u64,
+        request_actor: SessionActor,
+        terms: GuildFeeTerms,
     },
     RealmGuildOp {
         request_actor: SessionActor,
@@ -4313,6 +4350,8 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwGroupLeave { .. } => "gw_group_leave",
             Reducer::GwGroupLootMethod { .. } => "gw_group_loot_method",
             Reducer::GwGroupUninvite { .. } => "gw_group_uninvite",
+            Reducer::GwGuildFeeFinish { .. } => "gw_guild_fee_finish",
+            Reducer::GwGuildFeeHold { .. } => "gw_guild_fee_hold",
             Reducer::GwHeartbeat => "gw_heartbeat",
             Reducer::GwIgnoreTrade { .. } => "gw_ignore_trade",
             Reducer::GwInitiateTrade { .. } => "gw_initiate_trade",
@@ -4413,6 +4452,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::RealmAuctionSettleListing { .. } => "realm_auction_settle_listing",
             Reducer::RealmChat { .. } => "realm_chat",
             Reducer::RealmGroupOp { .. } => "realm_group_op",
+            Reducer::RealmGuildFeeDecide { .. } => "realm_guild_fee_decide",
             Reducer::RealmGuildOp { .. } => "realm_guild_op",
             Reducer::RealmLootOp { .. } => "realm_loot_op",
             Reducer::RealmMailCommit { .. } => "realm_mail_commit",
@@ -6543,6 +6583,24 @@ Reducer::DebugVerifyRangedLethalDamageFloorFixture{
                 request_actor: request_actor.clone(),
                 target_guid: target_guid.clone(),
 }),
+            Reducer::GwGuildFeeFinish{
+                operation_id,
+                request_actor,
+                accepted,
+}             => __sats::bsatn::to_vec(&gw_guild_fee_finish_reducer::GwGuildFeeFinishArgs {
+                operation_id: operation_id.clone(),
+                request_actor: request_actor.clone(),
+                accepted: accepted.clone(),
+}),
+            Reducer::GwGuildFeeHold{
+                operation_id,
+                request_actor,
+                request,
+}             => __sats::bsatn::to_vec(&gw_guild_fee_hold_reducer::GwGuildFeeHoldArgs {
+                operation_id: operation_id.clone(),
+                request_actor: request_actor.clone(),
+                request: request.clone(),
+}),
             Reducer::GwHeartbeat => __sats::bsatn::to_vec(&gw_heartbeat_reducer::GwHeartbeatArgs {
                 }),
 Reducer::GwIgnoreTrade{
@@ -7291,6 +7349,15 @@ Reducer::PlayerbotsFixtureCommandApply{
                 arg_b: arg_b.clone(),
                 arg_c: arg_c.clone(),
 }),
+            Reducer::RealmGuildFeeDecide{
+                operation_id,
+                request_actor,
+                terms,
+}             => __sats::bsatn::to_vec(&realm_guild_fee_decide_reducer::RealmGuildFeeDecideArgs {
+                operation_id: operation_id.clone(),
+                request_actor: request_actor.clone(),
+                terms: terms.clone(),
+}),
             Reducer::RealmGuildOp{
                 request_actor,
                 op,
@@ -7950,6 +8017,8 @@ pub struct DbUpdate {
     game_guid_range_registry: __sdk::TableUpdate<GuidRangeAssignment>,
     game_guild: __sdk::TableUpdate<Guild>,
     game_guild_event: __sdk::TableUpdate<GuildEvent>,
+    game_guild_fee_decision: __sdk::TableUpdate<GuildFeeDecision>,
+    game_guild_fee_hold: __sdk::TableUpdate<GuildFeeHold>,
     game_guild_member: __sdk::TableUpdate<GuildMember>,
     game_guild_rank: __sdk::TableUpdate<GuildRank>,
     game_hunter_pet: __sdk::TableUpdate<HunterPet>,
@@ -8543,6 +8612,12 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_guild_event" => db_update
                     .game_guild_event
                     .append(game_guild_event_table::parse_table_update(table_update)?),
+                "game_guild_fee_decision" => db_update.game_guild_fee_decision.append(
+                    game_guild_fee_decision_table::parse_table_update(table_update)?,
+                ),
+                "game_guild_fee_hold" => db_update
+                    .game_guild_fee_hold
+                    .append(game_guild_fee_hold_table::parse_table_update(table_update)?),
                 "game_guild_member" => db_update
                     .game_guild_member
                     .append(game_guild_member_table::parse_table_update(table_update)?),
@@ -9614,6 +9689,15 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.game_guild_event = cache
             .apply_diff_to_table::<GuildEvent>("game_guild_event", &self.game_guild_event)
             .with_updates_by_pk(|row| &row.id);
+        diff.game_guild_fee_decision = cache
+            .apply_diff_to_table::<GuildFeeDecision>(
+                "game_guild_fee_decision",
+                &self.game_guild_fee_decision,
+            )
+            .with_updates_by_pk(|row| &row.operation_id);
+        diff.game_guild_fee_hold = cache
+            .apply_diff_to_table::<GuildFeeHold>("game_guild_fee_hold", &self.game_guild_fee_hold)
+            .with_updates_by_pk(|row| &row.payer_guid);
         diff.game_guild_member = cache
             .apply_diff_to_table::<GuildMember>("game_guild_member", &self.game_guild_member)
             .with_updates_by_pk(|row| &row.character_guid);
@@ -10575,6 +10659,12 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_guild_event" => db_update
                     .game_guild_event
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_guild_fee_decision" => db_update
+                    .game_guild_fee_decision
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_guild_fee_hold" => db_update
+                    .game_guild_fee_hold
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_guild_member" => db_update
                     .game_guild_member
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -11383,6 +11473,12 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_guild_event" => db_update
                     .game_guild_event
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_guild_fee_decision" => db_update
+                    .game_guild_fee_decision
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_guild_fee_hold" => db_update
+                    .game_guild_fee_hold
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_guild_member" => db_update
                     .game_guild_member
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -11928,6 +12024,8 @@ pub struct AppliedDiff<'r> {
     game_guid_range_registry: __sdk::TableAppliedDiff<'r, GuidRangeAssignment>,
     game_guild: __sdk::TableAppliedDiff<'r, Guild>,
     game_guild_event: __sdk::TableAppliedDiff<'r, GuildEvent>,
+    game_guild_fee_decision: __sdk::TableAppliedDiff<'r, GuildFeeDecision>,
+    game_guild_fee_hold: __sdk::TableAppliedDiff<'r, GuildFeeHold>,
     game_guild_member: __sdk::TableAppliedDiff<'r, GuildMember>,
     game_guild_rank: __sdk::TableAppliedDiff<'r, GuildRank>,
     game_hunter_pet: __sdk::TableAppliedDiff<'r, HunterPet>,
@@ -12704,6 +12802,16 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<GuildEvent>(
             "game_guild_event",
             &self.game_guild_event,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<GuildFeeDecision>(
+            "game_guild_fee_decision",
+            &self.game_guild_fee_decision,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<GuildFeeHold>(
+            "game_guild_fee_hold",
+            &self.game_guild_fee_hold,
             event,
         );
         callbacks.invoke_table_row_callbacks::<GuildMember>(
@@ -14127,6 +14235,8 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_guid_range_registry_table::register_table(client_cache);
         game_guild_table::register_table(client_cache);
         game_guild_event_table::register_table(client_cache);
+        game_guild_fee_decision_table::register_table(client_cache);
+        game_guild_fee_hold_table::register_table(client_cache);
         game_guild_member_table::register_table(client_cache);
         game_guild_rank_table::register_table(client_cache);
         game_hunter_pet_table::register_table(client_cache);
@@ -14394,6 +14504,8 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_guid_range_registry",
         "game_guild",
         "game_guild_event",
+        "game_guild_fee_decision",
+        "game_guild_fee_hold",
         "game_guild_member",
         "game_guild_rank",
         "game_hunter_pet",

@@ -262,6 +262,10 @@ pub(crate) fn handle_query<St: WorldStore + ?Sized>(
                     }
                 }
                 Some(gossip_option::BANKER) => super::send_show_bank(tx, npc)?,
+                Some(gossip_option::TABARDDESIGNER) => {
+                    send(tx, Outbound::One(ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE))?;
+                    send(tx, super::guild::tabard_designer_window(npc))?;
+                }
                 // Plain-GOSSIP/submenu-link, the trailing Farewell, or a click with no live snapshot
                 // behind it — close the window.
                 _ => send(tx, Outbound::One(ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE))?,

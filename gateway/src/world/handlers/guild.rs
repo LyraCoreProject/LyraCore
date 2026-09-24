@@ -1,12 +1,17 @@
-//! Guild family: the guild window reads, CMSG_GUILD_CREATE, the `.guild create` dot-command, and
-//! the guild steps of world entry and exit. Every guild fact lives on Realm-core, so every read and
-//! Durable Request here goes there. The Gateway adds only the Character facts Realm-core cannot
-//! read: name, team, Realm Account, whether the Character is live, and the actor's GM level from its
-//! Home Shard.
+//! Guild family: the guild window reads, CMSG_GUILD_CREATE, the `.guild create` dot-command, the
+//! tabard designer, and the guild steps of world entry and exit. Every guild fact lives on
+//! Realm-core, so every read and Durable Request here goes there. The Gateway adds only the
+//! Character facts Realm-core cannot read: name, team, Realm Account, whether the Character is live,
+//! and the actor's GM level from its Home Shard. A guild fee moves through `guild_fee`.
 
+use super::super::guild_fee::{self, GuildFeeStore};
 use super::super::*;
-use lyracore_shared::guild::{event_kind, has_right, rights, GuildRefusal};
-use wow_world_messages::vanilla::{GuildCommand, GuildCommandResult};
+use lyracore_shared::guild::{event_kind, has_right, rights, GuildRefusal, LEADER_RANK};
+use wow_world_messages::vanilla::{
+    GuildCommand, GuildCommandResult, GuildEmblemResult, MSG_SAVE_GUILD_EMBLEM_Client,
+    MSG_SAVE_GUILD_EMBLEM_Server, MSG_TABARDVENDOR_ACTIVATE,
+};
+use wow_world_messages::Guid;
 
 /// Character facts a guild Gate or render needs, read from whichever World Shard holds the
 /// Character.
@@ -51,8 +56,9 @@ pub(crate) enum GuildOutcome {
 }
 
 /// Guild reads and requests, in the seam's own vocabulary. Guild reads and `guild_op` go to
-/// Realm-core; Character facts are realm-wide reads over the World Shards.
-pub(crate) trait GuildActionStore: Send + Sync {
+/// Realm-core; Character facts are realm-wide reads over the World Shards. Guild fees go through
+/// [`GuildFeeStore`].
+pub(crate) trait GuildActionStore: GuildFeeStore + Send + Sync {
     /// The membership row of `character_guid`, if it is in a Guild.
     fn guild_member(&self, character_guid: u64) -> Result<Option<codec::GuildMemberView>>;
     /// One Guild with its Guild Ranks.
@@ -70,6 +76,8 @@ pub(crate) trait GuildActionStore: Send + Sync {
     fn guild_selected_target(&self, actor_guid: u64) -> u64;
     /// Run one guild op on Realm-core as `actor_guid`.
     fn guild_op(&self, actor_guid: u64, request: GuildRequest) -> Result<GuildOutcome>;
+    /// Does the NPC refuse the actor by faction? The one Gate a read path answers here.
+    fn guild_npc_refuses(&self, npc_guid: u64, actor_guid: u64) -> Result<bool>;
 }
 
 impl GuildActionStore for crate::stdb::Coordinator {
@@ -107,6 +115,10 @@ impl GuildActionStore for crate::stdb::Coordinator {
     fn guild_op(&self, actor_guid: u64, request: GuildRequest) -> Result<GuildOutcome> {
         self.realm_core()?.realm_guild_op(actor_guid, request)
     }
+
+    fn guild_npc_refuses(&self, npc_guid: u64, actor_guid: u64) -> Result<bool> {
+        crate::stdb::Coordinator::npc_refuses_interaction(self, npc_guid, actor_guid)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -139,6 +151,12 @@ pub(crate) fn dispatch_guild_action<St: GuildActionStore + ?Sized>(
         ClientOpcodeMessage::CMSG_GUILD_INFO => info_outbound(store, player),
         ClientOpcodeMessage::CMSG_GUILD_CREATE(create) => {
             create_outbound(store, player, create.guild_name)
+        }
+        ClientOpcodeMessage::MSG_TABARDVENDOR_ACTIVATE(activate) => {
+            tabard_window_outbound(store, player, activate.guid.guid())
+        }
+        ClientOpcodeMessage::MSG_SAVE_GUILD_EMBLEM(save) => {
+            save_emblem_outbound(store, player, &save)
         }
         other => return Ok(GuildActionOutcome::PassThrough(other)),
     };
@@ -422,6 +440,81 @@ fn parse_guild_create(text: &str) -> Option<(Option<&str>, &str)> {
     (!name.is_empty() && !name.contains('"')).then_some((leader, name))
 }
 
+/// MSG_TABARDVENDOR_ACTIVATE opens the tabard designer (`cm:NPCHandler.cpp:47-67`). This is a read
+/// path, so only the faction refusal is answered here, silently. The NPC flag, reach and life Gates
+/// run in the Fee Hold when the emblem is saved.
+fn tabard_window_outbound<St: GuildActionStore + ?Sized>(
+    store: &St,
+    player: GuildActionPlayer,
+    npc_guid: u64,
+) -> Result<Vec<Outbound>> {
+    let Some(actor_guid) = player.self_guid else {
+        return Ok(Vec::new());
+    };
+    if store.guild_npc_refuses(npc_guid, actor_guid)? {
+        return Ok(Vec::new());
+    }
+    Ok(vec![tabard_designer_window(npc_guid)])
+}
+
+/// The tabard designer window for `npc_guid`. Gossip action 11 opens it too
+/// (`cm:Player.cpp:11877-11880`).
+pub(crate) fn tabard_designer_window(npc_guid: u64) -> Outbound {
+    Outbound::One(ServerOpcodeMessage::MSG_TABARDVENDOR_ACTIVATE(
+        MSG_TABARDVENDOR_ACTIVATE {
+            guid: Guid::new(npc_guid),
+        },
+    ))
+}
+
+/// MSG_SAVE_GUILD_EMBLEM (`cm:GuildHandler.cpp:716-771`). Advisory reads of the Realm-core cache
+/// answer NO_GUILD and NOT_GUILD_MASTER before any copper moves, and Realm-core decides again inside
+/// the fee. mangos checks the NPC first. Here the NPC Gate runs in the Fee Hold, so a non-member at
+/// the wrong NPC hears NO_GUILD. The new emblem reaches every online member, the payer included,
+/// through the TABARD_CHANGED Guild Event.
+fn save_emblem_outbound<St: GuildActionStore + ?Sized>(
+    store: &St,
+    player: GuildActionPlayer,
+    save: &MSG_SAVE_GUILD_EMBLEM_Client,
+) -> Result<Vec<Outbound>> {
+    let Some(actor_guid) = player.self_guid else {
+        return Ok(Vec::new());
+    };
+    let result = match store.guild_member(actor_guid)? {
+        None => GuildEmblemResult::NoGuild,
+        Some(member) if member.rank_id != LEADER_RANK => GuildEmblemResult::NotGuildMaster,
+        Some(_) => {
+            let request = guild_fee::FeeRequest::Emblem {
+                npc_guid: save.vendor.guid(),
+                emblem: guild_fee::Emblem {
+                    emblem_style: save.emblem_style,
+                    emblem_color: save.emblem_color,
+                    border_style: save.border_style,
+                    border_color: save.border_color,
+                    background_color: save.background_color,
+                },
+            };
+            emblem_result(guild_fee::pay(store, actor_guid, request)?)
+        }
+    };
+    Ok(vec![Outbound::One(
+        ServerOpcodeMessage::MSG_SAVE_GUILD_EMBLEM(MSG_SAVE_GUILD_EMBLEM_Server { result }),
+    )])
+}
+
+fn emblem_result(outcome: guild_fee::FeeOutcome) -> GuildEmblemResult {
+    use guild_fee::FeeOutcome::{Accepted, Refused};
+    match outcome {
+        Accepted => GuildEmblemResult::Success,
+        Refused(GuildRefusal::NotInGuild) => GuildEmblemResult::NoGuild,
+        Refused(GuildRefusal::NotLeader) => GuildEmblemResult::NotGuildMaster,
+        Refused(GuildRefusal::NotEnoughMoney) => GuildEmblemResult::NotEnoughMoney,
+        // The NPC Gate. mangos names the value INVALIDVENDOR; the client shows nothing for it
+        // (`vm:src/game/Handlers/GuildHandler.cpp:686-693`).
+        Refused(_) => GuildEmblemResult::NoMessage,
+    }
+}
+
 /// The Guild Projection for `character_guid`: `(guild_id, rank_id)`, or `(0, 0)` outside a Guild or
 /// when Realm-core cannot answer.
 pub(crate) fn guild_projection<St: GuildActionStore + ?Sized>(
@@ -583,6 +676,14 @@ mod tests {
         selected: u64,
         ops: Mutex<Vec<(u64, GuildRequest)>>,
         op_error: Option<String>,
+        /// NPCs that refuse every actor by faction.
+        refusing_npcs: Vec<u64>,
+        /// Every fee request that reached the Home Shard.
+        fee_requests: Mutex<Vec<guild_fee::FeeRequest>>,
+        /// What the Home Shard answers a hold; `None` holds.
+        hold_refusal: Option<GuildRefusal>,
+        /// What Realm-core decides; `None` accepts.
+        fee_refusal: Option<GuildRefusal>,
     }
 
     impl InMemoryGuildActions {
@@ -715,6 +816,53 @@ mod tests {
             drop(guilds);
             self.add_member(guild_id, leader_guid, 0, "");
             Ok(GuildOutcome::Ran)
+        }
+
+        fn guild_npc_refuses(&self, npc_guid: u64, _actor_guid: u64) -> Result<bool> {
+            Ok(self.refusing_npcs.contains(&npc_guid))
+        }
+    }
+
+    /// The fee answers the seam maps to result codes. `guild_fee`'s own tests drive the protocol.
+    impl GuildFeeStore for InMemoryGuildActions {
+        fn guild_fee_held(&self, _actor_guid: u64) -> Result<Option<guild_fee::FeeHold>> {
+            Ok(None)
+        }
+
+        fn guild_fee_hold(
+            &self,
+            _actor_guid: u64,
+            request: guild_fee::FeeRequest,
+        ) -> Result<Result<guild_fee::FeeHold, GuildRefusal>> {
+            self.fee_requests.lock().unwrap().push(request);
+            if let Some(refusal) = self.hold_refusal {
+                return Ok(Err(refusal));
+            }
+            let guild_fee::FeeRequest::Emblem { emblem, .. } = request;
+            Ok(Ok(guild_fee::FeeHold {
+                operation_id: 1,
+                terms: guild_fee::FeeTerms::Emblem(emblem),
+            }))
+        }
+
+        fn guild_fee_decide(
+            &self,
+            _actor_guid: u64,
+            _hold: guild_fee::FeeHold,
+        ) -> Result<guild_fee::FeeOutcome> {
+            Ok(self.fee_refusal.map_or(
+                guild_fee::FeeOutcome::Accepted,
+                guild_fee::FeeOutcome::Refused,
+            ))
+        }
+
+        fn guild_fee_finish(
+            &self,
+            _actor_guid: u64,
+            _operation_id: u64,
+            _accepted: bool,
+        ) -> Result<()> {
+            Ok(())
         }
     }
 
@@ -1226,5 +1374,137 @@ mod tests {
         assert_eq!(member_by_name(&members, "BOB"), MemberMatch::Found(1));
         assert_eq!(member_by_name(&members, "Alice"), MemberMatch::NotInGuild);
         assert_eq!(member_by_name(&members, "Carol"), MemberMatch::NotInGuild);
+    }
+
+    const DESIGNER: u64 = 5_090_010;
+
+    fn activate_tabard_vendor(
+        store: &InMemoryGuildActions,
+        player: GuildActionPlayer,
+    ) -> Vec<Outbound> {
+        dispatch(
+            store,
+            player,
+            ClientOpcodeMessage::MSG_TABARDVENDOR_ACTIVATE(MSG_TABARDVENDOR_ACTIVATE {
+                guid: Guid::new(DESIGNER),
+            }),
+        )
+    }
+
+    #[test]
+    fn the_tabard_designer_window_opens_for_its_npc() {
+        let store = realm();
+        let message = only_message(activate_tabard_vendor(&store, in_world(BOB)));
+        assert_eq!(
+            message,
+            ServerOpcodeMessage::MSG_TABARDVENDOR_ACTIVATE(MSG_TABARDVENDOR_ACTIVATE {
+                guid: Guid::new(DESIGNER),
+            })
+        );
+    }
+
+    #[test]
+    fn a_tabard_designer_that_refuses_by_faction_stays_silent() {
+        let store = InMemoryGuildActions {
+            refusing_npcs: vec![DESIGNER],
+            ..realm()
+        };
+        assert!(activate_tabard_vendor(&store, in_world(BOB)).is_empty());
+        let character_select = GuildActionPlayer {
+            account_id: 7,
+            self_guid: None,
+        };
+        assert!(activate_tabard_vendor(&realm(), character_select).is_empty());
+    }
+
+    const EMBLEM: guild_fee::Emblem = guild_fee::Emblem {
+        emblem_style: 11,
+        emblem_color: 12,
+        border_style: 3,
+        border_color: 14,
+        background_color: 15,
+    };
+
+    fn save_emblem(store: &InMemoryGuildActions, actor: u64) -> GuildEmblemResult {
+        let message = only_message(dispatch(
+            store,
+            in_world(actor),
+            ClientOpcodeMessage::MSG_SAVE_GUILD_EMBLEM(Box::new(MSG_SAVE_GUILD_EMBLEM_Client {
+                vendor: Guid::new(DESIGNER),
+                emblem_style: EMBLEM.emblem_style,
+                emblem_color: EMBLEM.emblem_color,
+                border_style: EMBLEM.border_style,
+                border_color: EMBLEM.border_color,
+                background_color: EMBLEM.background_color,
+            })),
+        ));
+        match message {
+            ServerOpcodeMessage::MSG_SAVE_GUILD_EMBLEM(saved) => saved.result,
+            other => panic!("expected an emblem result, got {other}"),
+        }
+    }
+
+    /// Bob leads Knights; Carol is a member at rank 3.
+    fn led_by_bob(
+        hold_refusal: Option<GuildRefusal>,
+        fee_refusal: Option<GuildRefusal>,
+    ) -> InMemoryGuildActions {
+        let store = InMemoryGuildActions {
+            hold_refusal,
+            fee_refusal,
+            ..realm()
+        };
+        run_guild_dot_command(&store, in_world(GM), ".guild create Bob \"Knights\"").unwrap();
+        store.add_member(1, CAROL, 3, "");
+        store
+    }
+
+    #[test]
+    fn the_guild_leader_pays_for_the_emblem_at_the_vendor_it_named() {
+        let store = led_by_bob(None, None);
+        assert_eq!(save_emblem(&store, BOB), GuildEmblemResult::Success);
+        assert_eq!(
+            *store.fee_requests.lock().unwrap(),
+            vec![guild_fee::FeeRequest::Emblem {
+                npc_guid: DESIGNER,
+                emblem: EMBLEM,
+            }]
+        );
+    }
+
+    #[test]
+    fn the_advisory_reads_answer_before_any_copper_moves() {
+        let store = led_by_bob(None, None);
+        assert_eq!(save_emblem(&store, GM), GuildEmblemResult::NoGuild);
+        assert_eq!(
+            save_emblem(&store, CAROL),
+            GuildEmblemResult::NotGuildMaster
+        );
+        assert!(store.fee_requests.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn hold_refusals_map_to_their_emblem_results() {
+        for (refusal, result) in [
+            (
+                GuildRefusal::NotEnoughMoney,
+                GuildEmblemResult::NotEnoughMoney,
+            ),
+            (GuildRefusal::NpcRefused, GuildEmblemResult::NoMessage),
+        ] {
+            let store = led_by_bob(Some(refusal), None);
+            assert_eq!(save_emblem(&store, BOB), result, "{refusal:?}");
+        }
+    }
+
+    #[test]
+    fn realm_core_refusals_map_to_their_emblem_results() {
+        for (refusal, result) in [
+            (GuildRefusal::NotLeader, GuildEmblemResult::NotGuildMaster),
+            (GuildRefusal::NotInGuild, GuildEmblemResult::NoGuild),
+        ] {
+            let store = led_by_bob(None, Some(refusal));
+            assert_eq!(save_emblem(&store, BOB), result, "{refusal:?}");
+        }
     }
 }

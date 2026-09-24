@@ -289,6 +289,8 @@ struct InMemoryStore {
     guilds: Vec<codec::GuildView>,
     /// Realm-core member rows. Guild ops are recorded in `calls` as `guild_op:<request>`.
     guild_memberships: Vec<codec::GuildMemberView>,
+    /// A Fee Hold left on this Home Shard. Fee steps are recorded in `calls` as `guild_fee_<step>`.
+    guild_fee_hold: std::sync::Mutex<Option<crate::world::guild_fee::FeeHold>>,
     /// WORLDPORT_ACK gate: true = entity present -> a spurious ack is ignored;
     /// false (derive-Default) = absent -> a genuine transfer is pending.
     entity_in_world: bool,
@@ -4058,6 +4060,49 @@ impl GuildActionStore for InMemoryStore {
         });
         Ok(GuildOutcome::Ran)
     }
+
+    fn guild_npc_refuses(&self, _npc_guid: u64, _actor_guid: u64) -> Result<bool> {
+        Ok(false)
+    }
+}
+
+/// Realm-core refuses every fee: the socket tests only watch the steps run.
+impl crate::world::guild_fee::GuildFeeStore for InMemoryStore {
+    fn guild_fee_held(&self, _actor_guid: u64) -> Result<Option<crate::world::guild_fee::FeeHold>> {
+        Ok(*self.guild_fee_hold.lock().unwrap())
+    }
+
+    fn guild_fee_hold(
+        &self,
+        _actor_guid: u64,
+        _request: crate::world::guild_fee::FeeRequest,
+    ) -> Result<Result<crate::world::guild_fee::FeeHold, lyracore_shared::guild::GuildRefusal>>
+    {
+        self.rec("guild_fee_hold");
+        Ok(Err(lyracore_shared::guild::GuildRefusal::NotEnoughMoney))
+    }
+
+    fn guild_fee_decide(
+        &self,
+        _actor_guid: u64,
+        _hold: crate::world::guild_fee::FeeHold,
+    ) -> Result<crate::world::guild_fee::FeeOutcome> {
+        self.rec("guild_fee_decide");
+        Ok(crate::world::guild_fee::FeeOutcome::Refused(
+            lyracore_shared::guild::GuildRefusal::NotLeader,
+        ))
+    }
+
+    fn guild_fee_finish(
+        &self,
+        _actor_guid: u64,
+        _operation_id: u64,
+        _accepted: bool,
+    ) -> Result<()> {
+        self.rec("guild_fee_finish");
+        *self.guild_fee_hold.lock().unwrap() = None;
+        Ok(())
+    }
 }
 
 impl AuctionActionStore for InMemoryStore {
@@ -5217,6 +5262,72 @@ fn logout_signs_the_member_off_before_the_account_claim_is_released() {
         position(&calls, "guild_op:SignOff") < position(&calls, "logout"),
         "Realm-core refuses a sign-off after the Account Claim closes: {calls:?}"
     );
+}
+
+#[test]
+fn world_entry_finishes_a_leftover_fee_hold_on_the_home_shard() {
+    let store = std::sync::Arc::new(InMemoryStore {
+        guild_fee_hold: std::sync::Mutex::new(Some(crate::world::guild_fee::FeeHold {
+            operation_id: 5_090_401,
+            terms: crate::world::guild_fee::FeeTerms::Emblem(Default::default()),
+        })),
+        ..guild_member_store()
+    });
+    let (client, _c_enc, _c_dec, server) = enter_world(store.clone(), 1);
+    drop(client);
+    server.join().unwrap();
+    let calls = recorded(&store);
+    assert!(
+        position(&calls, "player_login") < position(&calls, "guild_fee_decide")
+            && position(&calls, "guild_fee_decide") < position(&calls, "guild_fee_finish"),
+        "{calls:?}"
+    );
+    assert_eq!(*store.guild_fee_hold.lock().unwrap(), None);
+}
+
+#[test]
+fn the_tabard_designer_window_opens_over_the_socket() {
+    let store = std::sync::Arc::new(guild_member_store());
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+    wow_world_messages::vanilla::MSG_TABARDVENDOR_ACTIVATE {
+        guid: Guid::new(5_090_010),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::MSG_TABARDVENDOR_ACTIVATE(window) => {
+            assert_eq!(window.guid, Guid::new(5_090_010));
+        }
+        other => panic!("expected MSG_TABARDVENDOR_ACTIVATE, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+}
+
+#[test]
+fn a_member_who_is_not_the_leader_saves_no_emblem_over_the_socket() {
+    let store = std::sync::Arc::new(guild_member_store());
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+    wow_world_messages::vanilla::MSG_SAVE_GUILD_EMBLEM_Client {
+        vendor: Guid::new(5_090_010),
+        emblem_style: 1,
+        emblem_color: 2,
+        border_style: 3,
+        border_color: 4,
+        background_color: 5,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::MSG_SAVE_GUILD_EMBLEM(saved) => assert_eq!(
+            saved.result,
+            wow_world_messages::vanilla::GuildEmblemResult::NotGuildMaster
+        ),
+        other => panic!("expected MSG_SAVE_GUILD_EMBLEM, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+    assert!(!recorded(&store).contains(&"guild_fee_hold".to_string()));
 }
 
 #[test]

@@ -1,11 +1,11 @@
 //! Guild cache reads. The guild tables are read on the Realm-core handle; Character facts are read
-//! across every World Shard.
+//! across every World Shard. A Fee Hold is read on the payer's Home Shard.
 
 use spacetimedb_sdk::Table;
 
 use super::super::bindings::*;
 use super::super::connection::Coordinator;
-use crate::world::CharacterFacts;
+use crate::world::{guild_fee, CharacterFacts};
 
 fn member_view(row: GuildMember) -> crate::codec::GuildMemberView {
     crate::codec::GuildMemberView {
@@ -166,6 +166,47 @@ impl Coordinator {
             .guid()
             .find(&actor_guid)
             .map_or(0, |entity| entity.target_guid)
+    }
+
+    /// The Fee Hold of `payer_guid` in THIS handle's cache. Call it on the payer's Home Shard. A
+    /// kind this Gateway does not know reads as none.
+    pub(crate) fn guild_fee_hold_row(&self, payer_guid: u64) -> Option<guild_fee::FeeHold> {
+        let hold = self
+            .0
+            .coord()
+            .conn
+            .db
+            .game_guild_fee_hold()
+            .payer_guid()
+            .find(&payer_guid)?;
+        let terms = match hold.kind {
+            lyracore_shared::guild::fee_kind::EMBLEM => {
+                guild_fee::FeeTerms::Emblem(guild_fee::Emblem {
+                    emblem_style: hold.emblem_style,
+                    emblem_color: hold.emblem_color,
+                    border_style: hold.border_style,
+                    border_color: hold.border_color,
+                    background_color: hold.background_color,
+                })
+            }
+            _ => return None,
+        };
+        Some(guild_fee::FeeHold {
+            operation_id: hold.operation_id,
+            terms,
+        })
+    }
+
+    /// Realm-core's fee decision for `operation_id` in THIS handle's cache. Call it on the
+    /// Realm-core handle.
+    pub(crate) fn guild_fee_decision_row(&self, operation_id: u64) -> Option<GuildFeeDecision> {
+        self.0
+            .coord()
+            .conn
+            .db
+            .game_guild_fee_decision()
+            .operation_id()
+            .find(&operation_id)
     }
 }
 

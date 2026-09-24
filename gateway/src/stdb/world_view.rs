@@ -39,7 +39,7 @@
 use std::collections::{HashMap, HashSet};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use anyhow::{anyhow, Result};
 use lyracore_shared::spatial::{BOX_HALF_SPAN, GRID_CELL_SIZE};
@@ -1173,6 +1173,15 @@ fn guild_membership_read(realm: &Coordinator) -> GuildMembershipRead {
     })
 }
 
+/// Reads one Guild with its Guild Ranks from the Realm-core cache, for renders that need more
+/// than the event row.
+pub(crate) type GuildRead = Arc<dyn Fn(u32) -> Option<crate::codec::GuildView> + Send + Sync>;
+
+fn guild_read(realm: &Coordinator) -> GuildRead {
+    let realm = realm.clone();
+    Arc::new(move |guild_id| realm.guild_row(guild_id))
+}
+
 /// Register the Guild Event relay and the Guild Projection relay on the connection that holds the
 /// guild rows. `labels` name the event insert and the member insert, update and delete callbacks.
 fn wire_guild_relays(
@@ -1185,8 +1194,9 @@ fn wire_guild_relays(
     let membership = guild_membership_read(realm);
     {
         let membership = membership.clone();
+        let guild = guild_read(realm);
         wire_insert_live(db.game_guild_event(), event_insert, view, move |v, row| {
-            guild_event_appeared(v, &membership, row)
+            guild_event_appeared(v, &membership, &guild, row)
         });
     }
     {
@@ -2312,7 +2322,14 @@ fn guild_membership_changed(
 /// A Guild Event landed. An addressed row reaches its recipient; a broadcast row reaches every
 /// online member on this Gateway. A member signing on does not hear its own SIGNED_ON: mangos
 /// broadcasts it before the Character is in the world (`cm:CharacterHandler.cpp:787`).
-fn guild_event_appeared(view: &WorldView, membership: &GuildMembershipRead, row: &GuildEvent) {
+/// TABARD_CHANGED also carries the Guild's query response. The first job that runs reads the
+/// Guild once for every recipient of the event.
+fn guild_event_appeared(
+    view: &WorldView,
+    membership: &GuildMembershipRead,
+    guild: &GuildRead,
+    row: &GuildEvent,
+) {
     let audience: Vec<Arc<Viewer>> = if row.recipient_guid != 0 {
         view.session_of_owner(row.recipient_guid)
             .and_then(|session| view.viewer(session))
@@ -2328,6 +2345,7 @@ fn guild_event_appeared(view: &WorldView, membership: &GuildMembershipRead, row:
         online_audience(view, membership, row.guild_id)
     };
     let row = Arc::new(row.clone());
+    let shared_guild: Arc<OnceLock<Option<crate::codec::GuildView>>> = Arc::new(OnceLock::new());
     for viewer in audience {
         if row.recipient_guid == 0
             && row.kind == lyracore_shared::guild::event_kind::SIGNED_ON
@@ -2335,9 +2353,14 @@ fn guild_event_appeared(view: &WorldView, membership: &GuildMembershipRead, row:
         {
             continue;
         }
-        let row = row.clone();
+        let (row, guild, shared_guild) = (row.clone(), guild.clone(), shared_guild.clone());
         enqueue(viewer, move |_| {
-            super::subscriptions::guild_event_outbound(&row)
+            let mut out = super::subscriptions::guild_event_outbound(&row);
+            if row.kind == lyracore_shared::guild::event_kind::TABARD_CHANGED {
+                let view = shared_guild.get_or_init(|| guild(row.guild_id));
+                out.extend(super::subscriptions::guild_query_outbound(view.as_ref()));
+            }
+            out
         });
     }
 }
@@ -2649,7 +2672,8 @@ mod family_audience_tests {
         guild_event_appeared, guild_membership_changed, is_initial_apply, item_owner_job,
         levelup_appeared, reputation_appeared, sweep_into_view, system_message_appeared,
         teleport_appeared, weather_changed, xp_appeared, zone_crossed, BoundIdentity,
-        ExplorationReplay, GuildMembershipRead, MotionPending, OwnerGuid, Viewer, WorldView,
+        ExplorationReplay, GuildMembershipRead, GuildRead, MotionPending, OwnerGuid, Viewer,
+        WorldView,
     };
     use crate::stdb::aoi::ViewerGates;
     use crate::stdb::bindings::{
@@ -2660,6 +2684,7 @@ mod family_audience_tests {
     use crate::stdb::world_index::{CellKey, EntityLayer};
     use crate::world::{Outbound, SessionTx};
     use std::collections::{HashMap, HashSet};
+    use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::mpsc::Receiver;
     use std::sync::{Arc, Mutex};
     use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
@@ -3114,6 +3139,7 @@ mod family_audience_tests {
         guild_event_appeared(
             &view,
             &members,
+            &no_guild(),
             &guild_event(0, event_kind::SIGNED_OFF, 9001),
         );
         let signed_off = crate::codec::build_guild_event_raw(
@@ -3129,6 +3155,7 @@ mod family_audience_tests {
         guild_event_appeared(
             &view,
             &members,
+            &no_guild(),
             &guild_event(0, event_kind::SIGNED_ON, 9001),
         );
         assert!(
@@ -3154,10 +3181,75 @@ mod family_audience_tests {
         guild_event_appeared(
             &view,
             &membership(&[(9001, 7, 0)]),
+            &no_guild(),
             &guild_event(9003, 0x40, 9001),
         );
         assert_eq!(raw_packets(queued_job(&recipient_rx)).len(), 1);
         assert!(member_rx.try_recv().is_err());
+    }
+
+    fn no_guild() -> GuildRead {
+        Arc::new(|_| None)
+    }
+
+    #[test]
+    fn tabard_changed_reaches_every_online_member_with_the_new_emblem() {
+        use lyracore_shared::guild::event_kind;
+        let view = WorldView::new(true);
+        let anchor = CellKey::at(0, 0, 0, 0);
+        let (leader_tx, leader_rx) = SessionTx::with_depth(0);
+        let (member_tx, member_rx) = SessionTx::with_depth(0);
+        view.add_viewer_on_shard(viewer_with_tx(1, 9001, identity(1), leader_tx), anchor, 0);
+        view.add_viewer_on_shard(viewer_with_tx(2, 9002, identity(2), member_tx), anchor, 1);
+        let emblem = crate::codec::GuildView {
+            guild_id: 7,
+            name: "Tabard Guild".into(),
+            emblem_style: 11,
+            emblem_color: 12,
+            border_style: 3,
+            border_color: 14,
+            background_color: 15,
+            ..Default::default()
+        };
+        let reads = Arc::new(AtomicU32::new(0));
+        let guild: GuildRead = {
+            let (emblem, reads) = (emblem.clone(), reads.clone());
+            Arc::new(move |guild_id| {
+                reads.fetch_add(1, Ordering::Relaxed);
+                (guild_id == 7).then(|| emblem.clone())
+            })
+        };
+        let tabard_changed = GuildEvent {
+            strings: Vec::new(),
+            ..guild_event(0, event_kind::TABARD_CHANGED, 0)
+        };
+
+        guild_event_appeared(
+            &view,
+            &membership(&[(9001, 7, 0), (9002, 7, 4)]),
+            &guild,
+            &tabard_changed,
+        );
+
+        for rx in [&leader_rx, &member_rx] {
+            let [Outbound::Raw { opcode, body }, Outbound::One(query)] =
+                <[Outbound; 2]>::try_from(queued_job(rx)).ok().unwrap()
+            else {
+                panic!("TABARD_CHANGED renders the event, then the query response");
+            };
+            assert_eq!((opcode, body), (0x0092, vec![9, 0]));
+            assert_eq!(
+                query,
+                ServerOpcodeMessage::SMSG_GUILD_QUERY_RESPONSE(Box::new(
+                    crate::codec::build_guild_query_response(&emblem)
+                ))
+            );
+        }
+        assert_eq!(
+            reads.load(Ordering::Relaxed),
+            1,
+            "one Realm-core read serves every recipient"
+        );
     }
 
     #[test]
