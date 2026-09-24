@@ -174,6 +174,9 @@ pub fn not_at_mailbox(mailbox_guid: u64) -> String {
 pub const NOTHING_TO_TAKE: &str = "mail: nothing to take from that mail";
 pub const NOT_YOUR_ITEM: &str = "mail: that item is not yours to send";
 pub const ITEM_IS_SOULBOUND: &str = "mail: soulbound items cannot be mailed";
+/// A Letter Copy's Plain Letter cannot be attached: the mail attachment snapshot carries no text
+/// id yet, so it would arrive unreadable. Stopgap until a later change carries the id through.
+pub const ITEM_HAS_TEXT: &str = "mail: readable items cannot be mailed yet";
 pub const INVENTORY_FULL: &str = "inventory full";
 pub const NOT_YOUR_MAIL: &str = "mail: not addressed to you";
 pub const NO_SENDER_TO_RETURN_TO: &str = "mail: only a character's mail can be returned";

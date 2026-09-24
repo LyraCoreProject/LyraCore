@@ -191,3 +191,42 @@ fn copying_grant_and_destroying_the_letter_refuses_a_second_grant() {
         "the copy step refused, so the Gateway never reaches the grant — no letter is minted"
     );
 }
+
+/// `apply_set_trade_item`'s stopgap: a Trade Commit rebuilds the far side's item from a snapshot
+/// that carries no text id yet, so a Plain Letter offered into a trade window would arrive
+/// unreadable. Refused the same corrective-echo way a soulbound item already is — the window
+/// re-syncs to its unchanged state rather than the client seeing an `Err`.
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn a_plain_letter_cannot_be_offered_in_a_trade_window() {
+    let shard = fixture("trade-letter-copy-refused");
+    seed_letter_item_template(&shard);
+    shard.assert_call("debug_spawn_player_entity", &["1"]);
+    shard.assert_call(
+        "create_character",
+        &["1", "\"Partner\"", "1", "1", "0", "0", "0", "0", "0", "0"],
+    );
+    let partner: u64 = shard.query_rows("SELECT guid FROM game_character WHERE name = 'Partner'")
+        [0]["guid"]
+        .parse()
+        .unwrap();
+    shard.assert_call("debug_spawn_player_entity", &[&partner.to_string()]);
+
+    let mail_id = seed_mail(&shard, 1, 2, "left it at the inn");
+    shard.assert_call("realm_mail_copy_text", &[&actor(1), &mail_id.to_string()]);
+    shard.assert_call("gw_mail_grant_letter", &[&actor(1), &mail_id.to_string()]);
+    let letter_slot = shard.query_rows(&format!(
+        "SELECT slot FROM game_item_instance WHERE owner_guid = 1 AND entry = 8383 AND item_text_id = {mail_id}"
+    ))[0]["slot"]
+        .clone();
+
+    shard.assert_call("gw_initiate_trade", &[&actor(1), &partner.to_string()]);
+    shard.assert_call("gw_begin_trade", &[&actor(partner)]);
+    shard.assert_call("gw_set_trade_item", &[&actor(1), "0", &letter_slot]);
+
+    let offered = shard.query_rows("SELECT id FROM game_trade_slot");
+    assert!(
+        offered.is_empty(),
+        "a Plain Letter must never occupy a trade slot"
+    );
+}

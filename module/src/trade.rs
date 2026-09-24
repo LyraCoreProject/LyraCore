@@ -414,7 +414,11 @@ pub(crate) fn apply_set_trade_item(
     // Refused with a CORRECTIVE echo, not an `Err`: an `Err` rolls the transaction back, so no
     // packet could reach the client and a locally-placed phantom would sit in its own pane. The
     // unchanged snapshot re-syncs both windows instead.
-    if inst.soulbound {
+    //
+    // `item_text_id != 0` (a Letter Copy's Plain Letter) is refused the same way: a Trade Commit
+    // rebuilds the item on the far side from a snapshot that carries no text id yet, so it would
+    // arrive unreadable. Stopgap until a later change carries the id through a Trade Commit.
+    if inst.soulbound || inst.item_text_id != 0 {
         push_offer_events(ctx, &session, actor.guid);
         return Ok(());
     }

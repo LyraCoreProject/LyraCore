@@ -199,11 +199,14 @@ impl FenceSink for FakeShard {
         }
     }
     fn detach_item(&mut self, sender_guid: u64, item_guid: u64) -> Result<ItemSnapshot, String> {
+        // `ItemSnapshot` carries no text id (this harness drives the cross-database Transfer path,
+        // where that gap is the whole bug T10 fixes), so every item here is a `0`, never a Letter
+        // Copy's Plain Letter.
         let owned = self
             .items
             .borrow()
             .get(&item_guid)
-            .map(|(o, i)| (*o, i.soulbound));
+            .map(|(o, i)| (*o, i.soulbound, 0));
         match crate::mail::plan_attach(item_guid, owned, sender_guid) {
             crate::mail::Attach::Nothing => return Ok(ItemSnapshot::default()),
             crate::mail::Attach::NotYours => {
@@ -211,6 +214,9 @@ impl FenceSink for FakeShard {
             }
             crate::mail::Attach::Soulbound => {
                 return Err(lyracore_shared::mail::ITEM_IS_SOULBOUND.to_string())
+            }
+            crate::mail::Attach::HasText => {
+                unreachable!("this harness always passes a literal 0 text id, above")
             }
             crate::mail::Attach::Detach => {}
         }
