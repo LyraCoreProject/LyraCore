@@ -351,6 +351,17 @@ pub fn build_inventory_refusal(refusal: ItemRefusal) -> SMSG_INVENTORY_CHANGE_FA
     }
 }
 
+/// `SMSG_INVENTORY_CHANGE_FAILURE` CANT_CARRY_MORE_OF_THIS for an item whose unique count is
+/// reached, with no item guids, as mangos answers a second Guild Charter
+/// (`cm:PetitionsHandler.cpp:128-134`).
+pub fn build_cant_carry_more_of_this() -> SMSG_INVENTORY_CHANGE_FAILURE {
+    SMSG_INVENTORY_CHANGE_FAILURE::CantCarryMoreOfThis {
+        item1: Guid::new(0),
+        item2: Guid::new(0),
+        bag_type_subclass: 0,
+    }
+}
+
 /// Build `SMSG_BUY_FAILED` — the red on-screen error for a rejected vendor purchase.
 /// Maps the module's Err string to the closest `BuyResult` code (displayed as a toast by the
 /// 1.12 client). `vendor_guid` is the NPC, `item_entry` is the `c.item` from the client packet.
@@ -593,6 +604,22 @@ mod tests {
     #[test]
     fn an_item_without_an_enchantment_leaves_the_word_unwritten() {
         assert_eq!(item_mask(&charter(0)).item_enchantment(), None);
+    }
+
+    /// `cm:PetitionsHandler.cpp:128-134` sends `SendEquipError(msg, nullptr, nullptr, 5863)`: a u8
+    /// result, CANT_CARRY_MORE_OF_THIS (17), then two zero item guids and a zero bag subclass.
+    #[test]
+    fn a_second_charter_answers_cant_carry_more_of_this() {
+        let message = ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(Box::new(
+            build_cant_carry_more_of_this(),
+        ));
+        let mut wire = Vec::new();
+        message.write_unencrypted_server(&mut wire).unwrap();
+        let mut expected = vec![0x11];
+        expected.extend_from_slice(&[0; 16]);
+        expected.push(0);
+        assert_eq!(u16::from_le_bytes([wire[2], wire[3]]), 0x0112);
+        assert_eq!(&wire[4..], expected.as_slice());
     }
 
     #[test]

@@ -88,7 +88,8 @@ fn count(shard: &Standalone, table: &str) -> usize {
 }
 
 /// The imported world has the Guild Charter template; a bare test database does not. Copy the
-/// starter item 51 into entry 5863 only when it is absent.
+/// starter item 51 into entry 5863 only when it is absent, unique and binding on pickup like the
+/// real Charter.
 fn stage_charter_template(shard: &Standalone) {
     let existing = shard.query_rows(&format!(
         "SELECT entry FROM game_item_template WHERE entry = {GUILD_CHARTER}"
@@ -102,7 +103,8 @@ fn stage_charter_template(shard: &Standalone) {
     row.insert("entry".into(), GUILD_CHARTER.to_string());
     row.insert("name".into(), "Guild Charter".into());
     row.insert("max_stack".into(), "1".into());
-    row.insert("max_count".into(), "0".into());
+    row.insert("max_count".into(), "1".into());
+    row.insert("bonding".into(), "1".into());
     let columns = "entry,class,subclass,name,display_id,quality,inventory_type,item_level,required_level,max_durability,buy_price,sell_price,max_stack,damage_min,damage_max,delay_ms,stat_strength,stat_agility,stat_stamina,stat_intellect,stat_spirit,stat_crit,stat_hit,stat_armor,block_value,restores_power,spellid_1,spelltrigger_1,spellid_2,spelltrigger_2,container_slots,sheath,bonding,holy_res,fire_res,nature_res,frost_res,shadow_res,arcane_res,spellid_3,spelltrigger_3,spellid_4,spelltrigger_4,spellid_5,spelltrigger_5,required_skill,required_skill_rank,required_reputation_faction,required_reputation_rank,max_count,item_flags,page_text,start_quest,bag_family,buy_count,food_type,allowed_class,allowed_race,random_property";
     let values = columns
         .split(',')
@@ -355,6 +357,27 @@ fn a_refused_charter_is_refunded_and_a_joining_signer_loses_its_signature() {
     shard.assert_call("realm_guild_op", &[&owner, &close]);
     assert_eq!(count(&shard, "game_guild_petition"), 0);
     assert_eq!(count(&shard, "game_guild_petition_signature"), 0);
+
+    // The owner joins a Guild with a Charter in its bags: the Petition closes, the Charter stays.
+    // After it leaves, the unique Charter refuses a second one before any copper moves.
+    let sun_watch = charter_request(&npc, "Sun Watch");
+    shard.assert_call("gw_guild_fee_hold", &["5090535", &owner, &sun_watch]);
+    let [charter] = <[String; 1]>::try_from(charters(&shard)).expect("one Guild Charter");
+    let terms = charter_terms(&charter, "Sun Watch");
+    shard.assert_call("realm_guild_fee_decide", &["5090535", &owner, &terms]);
+    shard.assert_call("gw_guild_fee_finish", &["5090535", &owner, "true"]);
+    shard.assert_call("realm_guild_op", &[&owner, &gm_create(OWNER, "Star Watch")]);
+    assert_eq!(count(&shard, "game_guild_petition"), 0);
+    shard.assert_call("realm_guild_op", &[&owner, r#"{"leave":{}}"#]);
+    shard.assert_call("debug_set_money", &[&OWNER.to_string(), "1500"]);
+    refused(
+        &shard,
+        "gw_guild_fee_hold",
+        &["5090536", &owner, &charter_request(&npc, "Moon Watch")],
+        "guild:charter_limit",
+    );
+    assert_eq!((purse(&shard), charters(&shard).len()), (1_500, 1));
+    assert_eq!(count(&shard, "game_guild_fee_hold"), 0);
 }
 
 /// Buy "Night Watch" while a Petition is still open. Answers the decision's refusal.

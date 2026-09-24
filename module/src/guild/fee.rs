@@ -11,7 +11,7 @@
 //!    that row, so a retry gets the same answer.
 //! 3. [`gw_guild_fee_finish`] on the Home Shard spends the Hold on acceptance or puts the copper
 //!    back on refusal, and deletes the Hold last. A refused Guild Charter is destroyed and refunded
-//!    only while the payer still holds it, so a Charter that was traded away is never paid back.
+//!    only while the payer still holds it, so a Charter the payer destroyed is never paid back.
 //!
 //! What the fee pays for can vanish between the phases: the Guild disbands, leadership moves. The
 //! decision then refuses and the finish refunds, so copper never strands. A Hold that a crash left
@@ -296,8 +296,9 @@ trait FeePurse {
     fn npc_serves(&self, payer_guid: u64, npc_guid: u64, kind: u8) -> bool;
     /// Does this Shard know the Guild Charter item?
     fn charter_known(&self) -> bool;
-    /// Has the payer a free bag slot for a Guild Charter?
-    fn has_free_slot(&self, payer_guid: u64) -> bool;
+    /// Can the payer carry one more Guild Charter? The item's unique count comes before a free
+    /// bag slot, as `Player::CanStoreNewItem` checks them (`cm:PetitionsHandler.cpp:128-134`).
+    fn charter_room(&self, payer_guid: u64) -> Result<(), GuildRefusal>;
     /// Take `hold.copper` from the purse and insert the Hold. A Charter Hold also creates the
     /// Charter and records its guid.
     fn take(&mut self, hold: HeldFee) -> Result<(), FeeError>;
@@ -355,10 +356,17 @@ fn hold_fee<P: FeePurse>(purse: &mut P, hold: HeldFee) -> Result<(), FeeError> {
     {
         return Err(FeeError::Refused(GuildRefusal::NotEnoughMoney));
     }
-    if charter && !purse.has_free_slot(hold.payer_guid) {
-        return Err(FeeError::Refused(GuildRefusal::BagsFull));
+    if charter {
+        purse
+            .charter_room(hold.payer_guid)
+            .map_err(FeeError::Refused)?;
     }
     purse.take(hold)
+}
+
+/// Does one more Guild Charter fit under the item's unique count? `max_count` 0 means no limit.
+fn charter_fits(max_count: u32, held: usize) -> bool {
+    max_count == 0 || held < max_count as usize
 }
 
 /// Phase 2. Exactly one decision per operation id; a retry changes nothing.
@@ -517,8 +525,29 @@ impl FeePurse for CtxPurse<'_> {
             .is_some()
     }
 
-    fn has_free_slot(&self, payer_guid: u64) -> bool {
-        crate::items::has_free_slot(self.ctx, payer_guid)
+    fn charter_room(&self, payer_guid: u64) -> Result<(), GuildRefusal> {
+        let max_count = self
+            .ctx
+            .db
+            .game_item_template()
+            .entry()
+            .find(GUILD_CHARTER_ENTRY)
+            .map_or(0, |template| template.max_count);
+        let held = self
+            .ctx
+            .db
+            .game_item_instance()
+            .by_owner_guid()
+            .filter(&payer_guid)
+            .filter(|item| item.entry == GUILD_CHARTER_ENTRY)
+            .count();
+        if !charter_fits(max_count, held) {
+            return Err(GuildRefusal::CharterLimit);
+        }
+        if !crate::items::has_free_slot(self.ctx, payer_guid) {
+            return Err(GuildRefusal::BagsFull);
+        }
+        Ok(())
     }
 
     fn take(&mut self, mut hold: HeldFee) -> Result<(), FeeError> {
@@ -694,8 +723,10 @@ impl FeeLedger for CtxLedger<'_> {
     }
 }
 
-/// Fee phase 1 on the payer's Home Shard: move the fee from the purse into a Fee Hold. The same
-/// operation id with the same request is a replay and succeeds without a second debit.
+/// Fee phase 1 on the payer's Home Shard: move the fee from the purse into a Fee Hold. While that
+/// Hold exists, the same operation id with the same request is a replay and succeeds without a
+/// second debit. After the finish deletes the Hold, a replay would take the fee again, so the
+/// Gateway never replays a hold.
 #[reducer]
 pub fn gw_guild_fee_hold(
     ctx: &ReducerContext,
@@ -786,7 +817,8 @@ mod tests {
         /// Guild Charter guid to its holder.
         charters: BTreeMap<u64, u64>,
         charter_unknown: bool,
-        bags_full: bool,
+        /// What the payer's bags answer one more Guild Charter.
+        charter_room: Option<GuildRefusal>,
     }
 
     impl FeePurse for Shard {
@@ -806,8 +838,8 @@ mod tests {
             !self.charter_unknown
         }
 
-        fn has_free_slot(&self, _payer_guid: u64) -> bool {
-            !self.bags_full
+        fn charter_room(&self, _payer_guid: u64) -> Result<(), GuildRefusal> {
+            self.charter_room.map_or(Ok(()), Err)
         }
 
         fn take(&mut self, mut hold: HeldFee) -> Result<(), FeeError> {
@@ -1206,21 +1238,28 @@ mod tests {
             (
                 Shard {
                     charter_unknown: true,
-                    bags_full: true,
+                    charter_room: Some(GuildRefusal::BagsFull),
                     ..guild_master_shard(999)
                 },
                 GuildRefusal::CharterUnavailable,
             ),
             (
                 Shard {
-                    bags_full: true,
+                    charter_room: Some(GuildRefusal::CharterLimit),
                     ..guild_master_shard(999)
                 },
                 GuildRefusal::NotEnoughMoney,
             ),
             (
                 Shard {
-                    bags_full: true,
+                    charter_room: Some(GuildRefusal::CharterLimit),
+                    ..guild_master_shard(1_000)
+                },
+                GuildRefusal::CharterLimit,
+            ),
+            (
+                Shard {
+                    charter_room: Some(GuildRefusal::BagsFull),
                     ..guild_master_shard(1_000)
                 },
                 GuildRefusal::BagsFull,
@@ -1235,6 +1274,15 @@ mod tests {
             assert_eq!(shard.purses[&OUTSIDER], purse, "{refusal:?}");
             assert!(shard.holds.is_empty() && shard.charters.is_empty());
         }
+    }
+
+    /// Item 5863 is unique (`max_count` 1): a Character who kept its first Charter through a
+    /// Guild it has since left holds one and cannot carry a second.
+    #[test]
+    fn a_unique_charter_fits_only_under_its_max_count() {
+        assert!(charter_fits(1, 0));
+        assert!(!charter_fits(1, 1));
+        assert!(charter_fits(0, 7), "max_count 0 sets no limit");
     }
 
     #[test]

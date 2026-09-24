@@ -223,7 +223,7 @@ pub struct PetitionView {
     pub charter_item_guid: u64,
     pub owner_guid: u64,
     pub name: String,
-    /// The signers, in signing order.
+    /// The signers, in slot order. A lost Signature frees its slot for the next signer.
     pub signers: Vec<u64>,
 }
 

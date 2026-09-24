@@ -294,10 +294,12 @@ pub enum GuildRefusal {
     CharterUnavailable,
     /// No free bag slot for the Guild Charter.
     BagsFull,
+    /// The payer already holds as many Guild Charters as the item allows.
+    CharterLimit,
 }
 
 impl GuildRefusal {
-    pub const ALL: [Self; 28] = [
+    pub const ALL: [Self; 29] = [
         Self::NotGameMaster,
         Self::NameInvalid,
         Self::NameExists,
@@ -326,6 +328,7 @@ impl GuildRefusal {
         Self::NeedMoreSignatures,
         Self::CharterUnavailable,
         Self::BagsFull,
+        Self::CharterLimit,
     ];
 
     pub fn as_tag(self) -> &'static str {
@@ -358,6 +361,7 @@ impl GuildRefusal {
             Self::NeedMoreSignatures => "guild:need_more_signatures",
             Self::CharterUnavailable => "guild:charter_unavailable",
             Self::BagsFull => "guild:bags_full",
+            Self::CharterLimit => "guild:charter_limit",
         }
     }
 

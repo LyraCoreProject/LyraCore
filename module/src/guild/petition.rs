@@ -5,9 +5,10 @@
 //! [`super::realm_guild_op`] dispatches to.
 //!
 //! The Charter item lives on the owner's Home Shard and the Petition on Realm-core. They share only
-//! the Charter's item guid, so a Charter that is destroyed, traded or mailed (both re-mint the
-//! guid) leaves an inert item and a Petition nobody can turn in. The owner's next Charter purchase
-//! closes that Petition first.
+//! the Charter's item guid. The Charter binds when picked up, so trade and mail refuse it, and a
+//! Transfer keeps its guid. A Petition loses its Charter only when the owner destroys the Charter;
+//! nobody can turn that Petition in, and the owner's next Charter purchase closes it first. A
+//! Charter loses its Petition when the owner joins a Guild; the Charter then does nothing.
 
 use lyracore_shared::guild::{
     event_kind, name_key, petition_signature_key, validate_guild_name, GuildRefusal,
@@ -157,7 +158,7 @@ fn turn_in_gate(
     Ok(())
 }
 
-/// The signers that join the new Guild, in signing order. A signer who joined another Guild
+/// The signers that join the new Guild, in slot order. A signer who joined another Guild
 /// since it signed is skipped (`cm:Guild.cpp:167-179`).
 fn joining_signers(
     mut signatures: Vec<GuildPetitionSignature>,

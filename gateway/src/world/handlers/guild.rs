@@ -1308,6 +1308,11 @@ fn charter_purchase_reply(
                 codec::build_inventory_refusal(lyracore_shared::item::ItemRefusal::InventoryFull),
             )),
         )],
+        Refused(GuildRefusal::CharterLimit) => vec![Outbound::One(
+            ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(Box::new(
+                codec::build_cant_carry_more_of_this(),
+            )),
+        )],
         Refused(GuildRefusal::NameExists) => vec![guild_create_result(
             name,
             GuildCommandResult::GuildNameExistsS,
@@ -3846,6 +3851,17 @@ mod tests {
             ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(failure) => assert!(matches!(
                 *failure,
                 wow_world_messages::vanilla::SMSG_INVENTORY_CHANGE_FAILURE::InventoryFull { .. }
+            )),
+            other => panic!("expected SMSG_INVENTORY_CHANGE_FAILURE, got {other}"),
+        }
+        let second = InMemoryGuildActions {
+            hold_refusal: Some(GuildRefusal::CharterLimit),
+            ..realm()
+        };
+        match only_message(buy_charter(&second, BOB, "Night Watch")) {
+            ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(failure) => assert!(matches!(
+                *failure,
+                wow_world_messages::vanilla::SMSG_INVENTORY_CHANGE_FAILURE::CantCarryMoreOfThis { .. }
             )),
             other => panic!("expected SMSG_INVENTORY_CHANGE_FAILURE, got {other}"),
         }
