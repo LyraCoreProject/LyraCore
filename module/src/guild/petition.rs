@@ -53,7 +53,7 @@ pub struct GuildPetitionSignature {
     pub signer_guid: u64,
     /// The signer's name snapshot, for its member row at founding.
     pub signer_name: String,
-    /// 0 for a Character whose Realm Account is unknown; two zeros never match.
+    /// The signer's Realm Account, never 0: a signer without a known Account is refused.
     pub signer_realm_account: u64,
     pub signed_micros: i64,
 }
@@ -101,7 +101,8 @@ enum SignVerdict {
 
 /// The signature Gates in mangos order (`cm:PetitionsHandler.cpp:338-396`). mangos stays silent
 /// when the owner signs; here the owner hears CANT_SIGN_OWN, as vmangos answers
-/// (`vm:src/game/Handlers/PetitionsHandler.cpp:232-240`).
+/// (`vm:src/game/Handlers/PetitionsHandler.cpp:232-240`). A signer whose Realm Account is unknown
+/// is refused: without it, one Signature per Account cannot hold.
 fn sign_verdict(
     owner_guid: u64,
     petition_team: u32,
@@ -122,14 +123,13 @@ fn sign_verdict(
     if signatures.len() >= MAX_PETITION_SIGNATURES {
         return Err(GuildRefusal::PetitionFull);
     }
-    let same_account = |signature: &SignatureFacts| {
-        signature.signer_realm_account != 0
-            && signature.signer_realm_account == signer.signer_realm_account
-    };
-    if signatures
-        .iter()
-        .any(|signature| signature.signer_guid == signer.signer_guid || same_account(signature))
-    {
+    if signer.signer_realm_account == 0 {
+        return Err(GuildRefusal::UnknownRealmAccount);
+    }
+    if signatures.iter().any(|signature| {
+        signature.signer_guid == signer.signer_guid
+            || signature.signer_realm_account == signer.signer_realm_account
+    }) {
         return Ok(SignVerdict::AlreadySigned);
     }
     Ok(SignVerdict::Sign)
@@ -483,8 +483,9 @@ pub(super) fn forget_joiner(ctx: &ReducerContext, character_guid: u64) {
 }
 
 /// Destroy a turned-in Guild Charter on the actor's Home Shard. A Charter that is already gone is
-/// fine: this runs after the Guild is founded, and a retry must not fail. Any other item is left
-/// alone.
+/// Ok, so a repeated call changes nothing. Any other item is left alone. Nothing retries a failed
+/// call: that Charter stays in the bags with no Petition behind it, founds nothing, and waits for
+/// its owner to destroy it.
 #[reducer]
 pub fn gw_destroy_guild_charter(
     ctx: &ReducerContext,
@@ -561,21 +562,25 @@ mod tests {
     }
 
     #[test]
-    fn one_signature_per_realm_account_but_unknown_accounts_never_match() {
-        let signed = [signature(5_090_511, 0), signature(5_090_512, 77)];
+    fn one_signature_per_realm_account_and_an_unknown_account_signs_nothing() {
+        let signed = [signature(5_090_511, 76), signature(5_090_512, 77)];
         assert_eq!(
             verdict(&signed, signature(5_090_513, 0), ALLIANCE, false),
-            Ok(SignVerdict::Sign),
-            "two Characters whose Realm Accounts are unknown are two Accounts"
+            Err(GuildRefusal::UnknownRealmAccount),
+            "an Account the Gateway could not name could sign without limit"
         );
         assert_eq!(
             verdict(&signed, signature(5_090_513, 77), ALLIANCE, false),
             Ok(SignVerdict::AlreadySigned)
         );
         assert_eq!(
-            verdict(&signed, signature(5_090_511, 0), ALLIANCE, false),
+            verdict(&signed, signature(5_090_511, 78), ALLIANCE, false),
             Ok(SignVerdict::AlreadySigned),
             "the same Character never signs twice"
+        );
+        assert_eq!(
+            verdict(&signed, signature(5_090_513, 78), ALLIANCE, false),
+            Ok(SignVerdict::Sign)
         );
     }
 

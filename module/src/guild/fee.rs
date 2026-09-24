@@ -493,24 +493,25 @@ impl FeePurse for CtxPurse<'_> {
 
     fn npc_serves(&self, payer_guid: u64, npc_guid: u64, kind: u8) -> bool {
         // A Guild Charter needs a Petitioner that is also a Tabard Designer
-        // (`cm:PetitionsHandler.cpp:76-84`).
-        let (flag, also) = match kind {
-            fee_kind::EMBLEM => (npc_flags::TABARDDESIGNER, 0),
-            fee_kind::CHARTER => (npc_flags::PETITIONER, npc_flags::TABARDDESIGNER),
+        // (`cm:PetitionsHandler.cpp:76-84`). The interaction Gate accepts any one of the flags, so
+        // every one of them is checked after it.
+        let required_flags = match kind {
+            fee_kind::EMBLEM => npc_flags::TABARDDESIGNER,
+            fee_kind::CHARTER => npc_flags::PETITIONER | npc_flags::TABARDDESIGNER,
             _ => return false,
         };
         let Ok((payer, npc)) = crate::items::npc_interaction_gate(
             self.ctx,
             payer_guid,
             npc_guid,
-            flag,
+            required_flags,
             "guild NPC",
             "target does not serve guild fees",
             "pay a guild fee",
         ) else {
             return false;
         };
-        npc.npc_flags & also == also
+        npc.npc_flags & required_flags == required_flags
             && !npc.dead
             && npc.health != 0
             && !crate::reputation::npc_refuses_interaction(self.ctx, &npc, &payer)

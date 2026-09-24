@@ -7,7 +7,7 @@ const TEAM_HORDE: u32 = 67;
 
 /// The seeded Character, in the world: the Guild Charter's buyer and owner.
 const OWNER: u64 = 1;
-/// Nine tokenless signers. Their Realm Accounts are unknown (0), so none matches another.
+/// Nine signers, each on its own Realm Account (see [`signer_actors`]).
 const SIGNERS: [u64; 9] = [
     5_090_511, 5_090_512, 5_090_513, 5_090_514, 5_090_515, 5_090_516, 5_090_517, 5_090_518,
     5_090_519,
@@ -15,6 +15,8 @@ const SIGNERS: [u64; 9] = [
 const TENTH_SIGNER: u64 = 5_090_520;
 const HORDE_SIGNER: u64 = 5_090_521;
 const GUILDED_SIGNER: u64 = 5_090_522;
+/// A second Character on the first signer's Realm Account.
+const SAME_ACCOUNT_SIGNER: u64 = 5_090_523;
 
 /// Scenario vendor 51004, spawned at the owner's feet and made a Petitioner and a Tabard Designer.
 const VENDOR_ENTRY: &str = "51004";
@@ -24,6 +26,38 @@ const GUILD_CHARTER: u32 = 5863;
 /// A tokenless actor: Realm-core holds no Account Claim for these guids.
 fn actor(guid: u64) -> String {
     format!(r#"{{"guid":{guid},"ownership":null}}"#)
+}
+
+/// A signer's actor with an ownership token: one Signature per Realm Account needs a known
+/// Account, and a tokenless actor has none. Provisions one Account per signer and claims it.
+fn signer_actors(shard: &Standalone, signers: &[u64]) -> Vec<String> {
+    signers
+        .iter()
+        .map(|guid| {
+            let username = format!("SIGNER{guid}");
+            shard.assert_call(
+                "provision_account",
+                &[&format!("\"{username}\""), "[]", "[]"],
+            );
+            let account_id = shard.query_rows(&format!(
+                "SELECT id FROM game_account WHERE username = '{username}'"
+            ))[0]["id"]
+                .clone();
+            claimed_actor(shard, &account_id, *guid, &guid.to_string())
+        })
+        .collect()
+}
+
+/// Claim `account_id` for `guid` under `nonce` and answer the tokened actor.
+fn claimed_actor(shard: &Standalone, account_id: &str, guid: u64, nonce: &str) -> String {
+    shard.assert_call("claim_account", &[account_id, &guid.to_string(), nonce]);
+    let generation = shard.query_rows(&format!(
+        "SELECT generation FROM game_account_claim WHERE account_id = {account_id}"
+    ))[0]["generation"]
+        .clone();
+    format!(
+        r#"{{"guid":{guid},"ownership":{{"some":{{"account_id":{account_id},"generation":{generation},"request_nonce":{nonce}}}}}}}"#
+    )
 }
 
 fn charter_request(npc_guid: &str, name: &str) -> String {
@@ -218,12 +252,38 @@ fn a_charter_with_nine_signatures_founds_the_guild() {
         &[&actor(GUILDED_SIGNER), &guilded],
         "guild:already_in_guild",
     );
+    // A Character whose Realm Account is unknown could sign without limit.
+    let unknown = sign(&charter, "Unknown", TEAM_ALLIANCE);
+    refused(
+        &shard,
+        "realm_guild_op",
+        &[&actor(TENTH_SIGNER), &unknown],
+        "guild:unknown_realm_account",
+    );
     assert_eq!(count(&shard, "game_guild_petition_signature"), 0);
 
-    for (n, signer) in SIGNERS[..8].iter().enumerate() {
+    let signers = signer_actors(&shard, &SIGNERS);
+    for (n, signer) in signers[..8].iter().enumerate() {
         let request = sign(&charter, &format!("Signer{n}"), TEAM_ALLIANCE);
-        shard.assert_call("realm_guild_op", &[&actor(*signer), &request]);
+        shard.assert_call("realm_guild_op", &[signer, &request]);
     }
+    // A second Character of the first signer's Realm Account adds no Signature.
+    let first_account = shard.query_rows(&format!(
+        "SELECT account_id FROM game_account_claim WHERE character_guid = {}",
+        SIGNERS[0]
+    ))[0]["account_id"]
+        .clone();
+    shard.assert_sql(&format!(
+        "UPDATE game_account_claim SET expires_micros = 0 WHERE account_id = {first_account}"
+    ));
+    let alt = claimed_actor(&shard, &first_account, SAME_ACCOUNT_SIGNER, "5090599");
+    let request = sign(&charter, "Alt", TEAM_ALLIANCE);
+    shard.assert_call("realm_guild_op", &[&alt, &request]);
+    assert_eq!(count(&shard, "game_guild_petition_signature"), 8);
+    let already = shard.query_rows(&format!(
+        "SELECT * FROM game_guild_event WHERE kind = 114 AND recipient_guid = {OWNER}"
+    ));
+    assert_eq!(already.len(), 1, "the owner hears ALREADY_SIGNED");
     refused(
         &shard,
         "realm_guild_op",
@@ -231,7 +291,7 @@ fn a_charter_with_nine_signatures_founds_the_guild() {
         "guild:need_more_signatures",
     );
     let request = sign(&charter, "Signer8", TEAM_ALLIANCE);
-    shard.assert_call("realm_guild_op", &[&actor(SIGNERS[8]), &request]);
+    shard.assert_call("realm_guild_op", &[&signers[8], &request]);
     let tenth = sign(&charter, "Tenth", TEAM_ALLIANCE);
     refused(
         &shard,
@@ -248,7 +308,7 @@ fn a_charter_with_nine_signatures_founds_the_guild() {
     refused(
         &shard,
         "realm_guild_op",
-        &[&actor(SIGNERS[0]), &turn_in(&charter)],
+        &[&signers[1], &turn_in(&charter)],
         "guild:not_petition_owner",
     );
     shard.assert_call("realm_guild_op", &[&owner, &turn_in(&charter)]);
@@ -324,13 +384,14 @@ fn a_refused_charter_is_refunded_and_a_joining_signer_loses_its_signature() {
     shard.assert_call("realm_guild_fee_decide", &["5090533", &owner, &terms]);
     shard.assert_call("gw_guild_fee_finish", &["5090533", &owner, "true"]);
     assert_eq!(purse(&shard), 500);
-    for signer in &SIGNERS[..2] {
+    let signers = signer_actors(&shard, &SIGNERS[..2]);
+    for signer in &signers {
         let request = sign(&charter, "Signer", TEAM_ALLIANCE);
-        shard.assert_call("realm_guild_op", &[&actor(*signer), &request]);
+        shard.assert_call("realm_guild_op", &[signer, &request]);
     }
     shard.assert_call(
         "realm_guild_op",
-        &[&actor(SIGNERS[0]), &gm_create(SIGNERS[0], "Moon Watch")],
+        &[&signers[0], &gm_create(SIGNERS[0], "Moon Watch")],
     );
     let left = shard.query_rows("SELECT signer_guid FROM game_guild_petition_signature");
     assert_eq!(left.len(), 1);

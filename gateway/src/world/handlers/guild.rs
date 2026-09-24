@@ -1556,7 +1556,10 @@ fn turn_in_petition_outbound<St: GuildActionStore + ?Sized>(
                 }
                 log::warn!("world: turned-in Charter {charter_item_guid} left inert: {error:#}");
             }
-            // Result 0 is success; gtker names the zero value PLAYER_NO_MORE_IN_GUILD.
+            // mangos sends both: the founding result from the turn-in handler, since
+            // `Guild::Create` sends nothing (`cm:PetitionsHandler.cpp:596-597`,
+            // `cm:Guild.cpp:104-154`), then the turn-in result (`:631-633`). Result 0 is success;
+            // gtker names the zero value PLAYER_NO_MORE_IN_GUILD.
             vec![
                 guild_create_result(name, GuildCommandResult::PlayerNoMoreInGuild),
                 turn_in_result(PetitionResult::Ok),
