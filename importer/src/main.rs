@@ -454,6 +454,9 @@ mod qt {
     pub const ZONE_OR_SORT: usize = 2; // quest-log category: >0 AreaTable zone, <0 QuestSort id
     pub const MIN_LEVEL: usize = 3;
     pub const QUEST_LEVEL: usize = 5;
+    // Type (cm:ObjectMgr.cpp:4239, cm:QuestDef.cpp:31): 62 is QUEST_TYPE_RAID, everything else an
+    // ordinary quest. Anchored between the already-trusted QUEST_LEVEL and REQUIRED_CLASSES.
+    pub const TYPE: usize = 6;
     pub const REQUIRED_CLASSES: usize = 7; // bitmask, 0 = all classes
     pub const REQUIRED_RACES: usize = 8; // bitmask, 0 = all races
                                          // [V] LimitTime (seconds from accept, 0 = untimed) — unverified column index (no cmangos dump in
@@ -2537,6 +2540,9 @@ struct QuestEtl {
     // backing `FLOOR_QUESTS_CHAINED` in importer/scripts/import-manifest.sh.
     chained_count: usize,
     timed_count: usize,
+    // How many imported quests carry QUEST_TYPE_RAID (62). Reported, not floor-gated: today's
+    // world slices may hold none.
+    raid_quest_count: usize,
 }
 
 /// Build the RAW (unflattened) `reference_loot_template` map: pool entry → its own rows
@@ -2884,6 +2890,7 @@ fn build_quests(
     let mut reward_mail_quests: HashSet<u64> = HashSet::new();
     let mut chained_count: usize = 0;
     let mut timed_count: usize = 0;
+    let mut raid_quest_count: usize = 0;
     let mut obj_id: u64 = 1;
     let mut cast_obj_id: u64 = 1;
     let mut rew_id: u64 = 1;
@@ -2958,8 +2965,15 @@ fn build_quests(
         if limit_time_raw > 0 {
             timed_count += 1;
         }
+        // Raid quest-credit rule: QUEST_TYPE_RAID = 62 (cm:QuestDef.h:121). Every other value is
+        // an ordinary quest; the module gates kill credit, quest-item need and quest-object need
+        // on it in a Raid.
+        let quest_type: u32 = field(&row, qt::TYPE).parse().unwrap_or(0);
+        if quest_type == 62 {
+            raid_quest_count += 1;
+        }
         quest_rows.push(format!(
-            "({entry},{min_level},{ql},{title},{money},0,{prev},{req_races},{req_classes},{zone_or_sort},{rf1},{rv1},{rf2},{rv2},{src_item},{src_item_count},{repeatable},{next_quest},{limit_time},{rmm})",
+            "({entry},{min_level},{ql},{title},{money},0,{prev},{req_races},{req_classes},{zone_or_sort},{rf1},{rv1},{rf2},{rv2},{src_item},{src_item_count},{repeatable},{next_quest},{limit_time},{rmm},{quest_type})",
             ql = quest_level.max(0),
             title = sql_text(field(&row, qt::TITLE)),
             money = money.max(0),
@@ -3209,6 +3223,7 @@ fn build_quests(
         req_item_entries,
         chained_count,
         timed_count,
+        raid_quest_count,
     })
 }
 
@@ -3998,10 +4013,10 @@ fn build_dump_plan(
     eprintln!(
         "mapped: {} quests, {} text, {} objectives, {} cast objectives, {} reward items, {} choice rewards, \
          {} creature giver relations, {} gameobject giver relations, {} chained (next_quest_id>0) [V], \
-         {} timed (limit_time>0) [V]",
+         {} timed (limit_time>0) [V], {} raid quests (type=62)",
         quests.templates.len(), quests.texts.len(), quests.objectives.len(),
         quests.cast_objectives.len(), quests.reward_items.len(), quests.reward_choices.len(), quests.relations.len(),
-        quests.go_relations.len(), quests.chained_count, quests.timed_count,
+        quests.go_relations.len(), quests.chained_count, quests.timed_count, quests.raid_quest_count,
     );
     // Mail loot (T3): the single item each named reward-mail template attaches, scoped to the
     // templates `quests.reward_mail` actually names — a template with no row here sends text/money
@@ -5396,7 +5411,7 @@ fn push_quest_and_gameobject_statements(
         stmts.push("DELETE FROM game_quest_reward_choice WHERE id > 0".into());
         stmts.push("DELETE FROM game_creature_quest WHERE id > 0".into());
         stmts.push("DELETE FROM game_gameobject_quest WHERE id > 0".into());
-        push_insert(stmts, "game_quest_template", "entry,min_level,quest_level,title,reward_money,reward_xp,prev_quest_id,required_races,required_classes,zone_or_sort,rew_rep_faction_1,rew_rep_value_1,rew_rep_faction_2,rew_rep_value_2,src_item,src_item_count,repeatable,next_quest_id,limit_time,reward_money_max_level", &quests.templates);
+        push_insert(stmts, "game_quest_template", "entry,min_level,quest_level,title,reward_money,reward_xp,prev_quest_id,required_races,required_classes,zone_or_sort,rew_rep_faction_1,rew_rep_value_1,rew_rep_faction_2,rew_rep_value_2,src_item,src_item_count,repeatable,next_quest_id,limit_time,reward_money_max_level,quest_type", &quests.templates);
         push_insert(
             stmts,
             "game_quest_text",
@@ -9362,6 +9377,50 @@ mod tests {
             insert.contains(",false,7,0,"),
             "quest 783 must retain its forward link to quest 7: {insert}"
         );
+    }
+
+    /// `qt::TYPE` (column 6) reads into `QuestTemplate.quest_type`, the last END-appended field, and
+    /// a type-62 (`QUEST_TYPE_RAID`) fixture counts toward the coverage line's raid-quest total. A
+    /// normal quest (type 0, the default) does not.
+    #[test]
+    fn quest_type_column_reads_into_quest_type_and_counts_raid_quests() {
+        let normal_row = {
+            let mut row = vec!["0".to_string(); 102];
+            row[qt::ENTRY] = "500".to_string();
+            row[qt::TITLE] = "'Normal quest'".to_string();
+            format!("({})", row.join(","))
+        };
+        let raid_row = {
+            let mut row = vec!["0".to_string(); 102];
+            row[qt::ENTRY] = "501".to_string();
+            row[qt::TITLE] = "'Raid quest'".to_string();
+            row[qt::TYPE] = "62".to_string();
+            format!("({})", row.join(","))
+        };
+        let dump = format!(
+            "INSERT INTO `creature_questrelation` VALUES (51940,500),(51940,501); \
+             INSERT INTO `quest_template` VALUES {normal_row},{raid_row};"
+        );
+        let entries = std::collections::HashSet::from([51940u64]);
+        let empty = std::collections::HashSet::new();
+        let quests = build_quests(&dump, &entries, &empty, &empty, &empty).unwrap();
+        assert!(
+            quests
+                .templates
+                .iter()
+                .any(|row| row.starts_with("(500,") && row.ends_with(",0,0)")),
+            "normal quest must carry quest_type 0: {:?}",
+            quests.templates
+        );
+        assert!(
+            quests
+                .templates
+                .iter()
+                .any(|row| row.starts_with("(501,") && row.ends_with(",0,62)")),
+            "type-62 quest must import as quest_type 62: {:?}",
+            quests.templates
+        );
+        assert_eq!(quests.raid_quest_count, 1);
     }
 
     /// The leading fields plus `RewMailTemplateId`/`RewMailDelaySecs` of ClassicDB's real quest 3645

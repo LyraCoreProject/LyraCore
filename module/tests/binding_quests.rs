@@ -277,7 +277,7 @@ fn binding_items_require_the_circle_and_complete_both_quest_variants_without_rep
         insert_spell(&node, spell, creature, 0x24);
         insert_spell(&node, reward, PET, 0x15);
         node.assert_sql(&format!("INSERT INTO game_spell_learn (id,parent_spell,learn_spell) VALUES ({quest},{reward},50946)"));
-        node.assert_sql(&format!("INSERT INTO game_quest_template (entry,min_level,quest_level,title,reward_money,reward_xp,prev_quest_id,required_races,required_classes,zone_or_sort,rew_rep_faction_1,rew_rep_value_1,rew_rep_faction_2,rew_rep_value_2,src_item,src_item_count,repeatable,next_quest_id,limit_time,reward_money_max_level) VALUES ({quest},1,20,'Binding fixture',0,0,0,1,256,-61,0,0,0,0,{item},1,false,0,0,0)"));
+        node.assert_sql(&format!("INSERT INTO game_quest_template (entry,min_level,quest_level,title,reward_money,reward_xp,prev_quest_id,required_races,required_classes,zone_or_sort,rew_rep_faction_1,rew_rep_value_1,rew_rep_faction_2,rew_rep_value_2,src_item,src_item_count,repeatable,next_quest_id,limit_time,reward_money_max_level,quest_type) VALUES ({quest},1,20,'Binding fixture',0,0,0,1,256,-61,0,0,0,0,{item},1,false,0,0,0,0)"));
         node.assert_sql(&format!("INSERT INTO game_quest_objective (id,quest_entry,obj_index,kind,target_entry,required_count) VALUES ({quest},{quest},0,0,{creature},1)"));
         node.assert_sql(&format!("INSERT INTO game_creature_quest (id,creature_entry,quest_entry,role) VALUES ({},{GIVER},{quest},0),({},{GIVER},{quest},1)", quest * 2, quest * 2 + 1));
         node.assert_sql(&format!(

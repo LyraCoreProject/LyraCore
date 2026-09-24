@@ -301,6 +301,7 @@ pub mod debug_verify_loot_tag_fixture_reducer;
 pub mod debug_verify_mail_expiry_fixture_reducer;
 pub mod debug_verify_mail_fixture_held_reducer;
 pub mod debug_verify_mail_legacy_fixture_reducer;
+pub mod debug_verify_raid_quest_credit_fixture_reducer;
 pub mod debug_verify_ranged_lethal_damage_floor_fixture_reducer;
 pub mod debug_vmap_area_info_reducer;
 pub mod debug_vmap_ray_instance_reducer;
@@ -1413,6 +1414,7 @@ pub use debug_verify_loot_tag_fixture_reducer::debug_verify_loot_tag_fixture;
 pub use debug_verify_mail_expiry_fixture_reducer::debug_verify_mail_expiry_fixture;
 pub use debug_verify_mail_fixture_held_reducer::debug_verify_mail_fixture_held;
 pub use debug_verify_mail_legacy_fixture_reducer::debug_verify_mail_legacy_fixture;
+pub use debug_verify_raid_quest_credit_fixture_reducer::debug_verify_raid_quest_credit_fixture;
 pub use debug_verify_ranged_lethal_damage_floor_fixture_reducer::debug_verify_ranged_lethal_damage_floor_fixture;
 pub use debug_vmap_area_info_reducer::debug_vmap_area_info;
 pub use debug_vmap_ray_instance_reducer::debug_vmap_ray_instance;
@@ -3048,6 +3050,7 @@ pub enum Reducer {
         held: bool,
     },
     DebugVerifyMailLegacyFixture,
+    DebugVerifyRaidQuestCreditFixture,
     DebugVerifyRangedLethalDamageFloorFixture {
         attacker_guid: u64,
         creature_guid: u64,
@@ -4365,6 +4368,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugVerifyMailExpiryFixture => "debug_verify_mail_expiry_fixture",
             Reducer::DebugVerifyMailFixtureHeld { .. } => "debug_verify_mail_fixture_held",
             Reducer::DebugVerifyMailLegacyFixture => "debug_verify_mail_legacy_fixture",
+            Reducer::DebugVerifyRaidQuestCreditFixture => "debug_verify_raid_quest_credit_fixture",
             Reducer::DebugVerifyRangedLethalDamageFloorFixture { .. } => {
                 "debug_verify_ranged_lethal_damage_floor_fixture"
             }
@@ -6062,6 +6066,8 @@ Reducer::DebugVerifyMailFixtureHeld{
                 held: held.clone(),
 }),
             Reducer::DebugVerifyMailLegacyFixture => __sats::bsatn::to_vec(&debug_verify_mail_legacy_fixture_reducer::DebugVerifyMailLegacyFixtureArgs {
+                }),
+Reducer::DebugVerifyRaidQuestCreditFixture => __sats::bsatn::to_vec(&debug_verify_raid_quest_credit_fixture_reducer::DebugVerifyRaidQuestCreditFixtureArgs {
                 }),
 Reducer::DebugVerifyRangedLethalDamageFloorFixture{
                 attacker_guid,

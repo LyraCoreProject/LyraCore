@@ -474,6 +474,7 @@ fn blank_quest(entry: u32) -> QuestTemplate {
         next_quest_id: 0,
         limit_time: 0,
         reward_money_max_level: 0,
+        quest_type: 0,
     }
 }
 
@@ -502,6 +503,7 @@ fn apply_quest_field(
         "next_quest_id" => quest.next_quest_id = as_u32(field, value)?,
         "limit_time" => quest.limit_time = as_u32(field, value)?,
         "reward_money_max_level" => quest.reward_money_max_level = as_u32(field, value)?,
+        "quest_type" => quest.quest_type = as_u32(field, value)?,
         other => {
             return Err(format!(
                 "`game_quest_template` has no claimable column `{other}`"

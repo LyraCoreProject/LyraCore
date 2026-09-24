@@ -125,9 +125,53 @@ pub fn share_result(
     }
 }
 
+/// The vanilla Raid Quest type (`quest_template.Type`, cm:QuestDef.h:121). A Raid Quest is the
+/// only quest that keeps progressing kill credit, quest-item need and quest-object need for a
+/// Raid member (cm:Player.cpp:13544-13559, cm:Player.cpp:13796-13799, cm:Player.cpp:18510-18511).
+/// Shared between the Module (the credit and need authority) and the Gateway (the loot-window
+/// display, which must never promise an item a Raid member's `take_loot` would then refuse).
+pub const QUEST_TYPE_RAID: u32 = 62;
+
+/// Whether a quest of `quest_type` is allowed to progress for a Raid member. cmangos also checks
+/// `Quests.IgnoreRaid`; LyraCore ships this at parity with the default (0, off), so the check is
+/// `quest_type` alone (cm:QuestDef.cpp:219-225, cm:mangosd.conf.dist.in:852).
+pub fn allowed_in_raid(quest_type: u32) -> bool {
+    quest_type == QUEST_TYPE_RAID
+}
+
+/// Whether a character's progress toward a quest of `quest_type` should apply right now, given
+/// whether that character is in a Raid. A Party member, and every quest outside a Raid, always
+/// progresses; a Raid member takes no further kill credit, quest-item drop or quest-object use
+/// for a quest that is not a Raid Quest (cm:Player.cpp:13544-13559). Pure, so the rule is
+/// unit-testable without a live cache and identical on both sides. Cast credit and exploration
+/// credit are deliberately not routed through this rule; only kill credit and quest-object use
+/// are gated (cmangos leaves cast/exploration credit ungated).
+pub fn quest_progresses_for_raid(in_raid: bool, quest_type: u32) -> bool {
+    !in_raid || allowed_in_raid(quest_type)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Only `QUEST_TYPE_RAID` (62) is allowed in a Raid. A normal quest (0) and an unrelated
+    /// non-zero type (a dungeon quest, cmangos type 81) are both refused.
+    #[test]
+    fn allowed_in_raid_only_accepts_the_raid_quest_type() {
+        assert!(!allowed_in_raid(0));
+        assert!(allowed_in_raid(QUEST_TYPE_RAID));
+        assert!(!allowed_in_raid(81));
+    }
+
+    /// Over the full (in raid, quest type) input: outside a Raid, every quest type progresses;
+    /// inside a Raid, only a Raid Quest does.
+    #[test]
+    fn quest_progresses_for_raid_gates_only_a_raid_members_non_raid_quest() {
+        assert!(quest_progresses_for_raid(false, 0));
+        assert!(quest_progresses_for_raid(false, QUEST_TYPE_RAID));
+        assert!(!quest_progresses_for_raid(true, 0));
+        assert!(quest_progresses_for_raid(true, QUEST_TYPE_RAID));
+    }
 
     #[test]
     fn xp_reward_is_monotonic_and_nonzero() {

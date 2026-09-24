@@ -27,6 +27,7 @@ pub struct QuestTemplate {
     pub next_quest_id: u32,
     pub limit_time: u32,
     pub reward_money_max_level: u32,
+    pub quest_type: u32,
 }
 
 impl __sdk::InModule for QuestTemplate {
@@ -57,6 +58,7 @@ pub struct QuestTemplateCols {
     pub next_quest_id: __sdk::__query_builder::Col<QuestTemplate, u32>,
     pub limit_time: __sdk::__query_builder::Col<QuestTemplate, u32>,
     pub reward_money_max_level: __sdk::__query_builder::Col<QuestTemplate, u32>,
+    pub quest_type: __sdk::__query_builder::Col<QuestTemplate, u32>,
 }
 
 impl __sdk::__query_builder::HasCols for QuestTemplate {
@@ -86,6 +88,7 @@ impl __sdk::__query_builder::HasCols for QuestTemplate {
                 table_name,
                 "reward_money_max_level",
             ),
+            quest_type: __sdk::__query_builder::Col::new(table_name, "quest_type"),
         }
     }
 }

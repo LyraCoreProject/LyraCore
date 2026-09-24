@@ -9,6 +9,7 @@ use std::collections::BTreeSet;
 
 use spacetimedb::{table, ReducerContext, Table};
 
+use lyracore_shared::group::RAID_MAX_MEMBERS;
 use lyracore_shared::loot::LootRefusal;
 
 use crate::game_world_entity;
@@ -214,7 +215,13 @@ fn membership_is_current(
     }
 }
 
-/// Read one live Loot Tag without applying the death-site reward distance.
+/// Read one live Loot Tag without applying the death-site reward distance: tap membership alone,
+/// with no range check. A real take goes through `corpse_access_gate`
+/// (`corpse_eligible_recipients`, populated by `record_corpse_eligibility` from
+/// `death_entitlement`'s resolved, range-checked recipients) instead; this reducer-facing read has
+/// no caller on that path today. It stays for a caller that wants tap membership on its own, such
+/// as a UI query for "who still has rights to this corpse" regardless of where they currently
+/// stand.
 pub(crate) fn live_loot_tag_eligibility(
     ctx: &ReducerContext,
     creature_guid: u64,
@@ -233,9 +240,9 @@ pub(crate) fn live_loot_tag_eligibility(
         .game_creature_quest_tap_member()
         .by_creature()
         .filter(&creature_guid)
-        .take(crate::group::GROUP_MAX_MEMBERS + 1)
+        .take(RAID_MAX_MEMBERS + 1)
         .collect();
-    if members.len() > crate::group::GROUP_MAX_MEMBERS {
+    if members.len() > RAID_MAX_MEMBERS {
         return LiveLootTagEligibility::ReadLimit;
     }
     let group_id = ctx

@@ -540,11 +540,7 @@ pub(crate) fn raid_slot_of(member: &GroupMember) -> RaidSlot {
 }
 
 /// Whether `character_guid` is in a Raid, read from this database's own rows: the authority on
-/// Realm-core, the mirror on a World Shard.
-#[expect(
-    dead_code,
-    reason = "raid quest credit on World Shards is the first caller"
-)]
+/// Realm-core, the mirror on a World Shard. The raid quest-credit rule is the first caller.
 pub(crate) fn in_raid(ctx: &ReducerContext, character_guid: u64) -> bool {
     group_of(ctx, character_guid)
         .and_then(|member| ctx.db.game_group().group_id().find(member.group_id))
