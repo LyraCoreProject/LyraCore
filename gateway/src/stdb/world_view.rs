@@ -1190,13 +1190,16 @@ fn guild_membership_read(realm: &Coordinator) -> GuildMembershipRead {
     })
 }
 
-/// Reads one Guild with its Guild Ranks from the Realm-core cache, for renders that need more
-/// than the event row.
-pub(crate) type GuildRead = Arc<dyn Fn(u32) -> Option<crate::codec::GuildView> + Send + Sync>;
+/// Reads the Guild data one settings-changing Guild Event needs from the Realm-core cache:
+/// `TABARD_CHANGED` needs the query response, `ROSTER_TO_ACTOR` needs the roster, `ROSTER_REFRESH`
+/// needs both. `guild_event_appeared` calls this once per event and shares the result with every
+/// recipient's job. A closure so relay tests can supply a snapshot without a live connection.
+pub(crate) type GuildRosterSnapshotRead =
+    Arc<dyn Fn(u32, u8) -> crate::world::GuildEventSnapshot + Send + Sync>;
 
-fn guild_read(realm: &Coordinator) -> GuildRead {
+fn guild_roster_snapshot_read(realm: &Coordinator) -> GuildRosterSnapshotRead {
     let realm = realm.clone();
-    Arc::new(move |guild_id| realm.guild_row(guild_id))
+    Arc::new(move |guild_id, kind| crate::world::GuildEventSnapshot::build(&realm, guild_id, kind))
 }
 
 /// Register the Guild Event relay and the Guild Projection relay on the connection that holds the
@@ -1209,11 +1212,12 @@ fn wire_guild_relays(
 ) {
     let [event_insert, member_insert, member_update, member_delete] = labels;
     let membership = guild_membership_read(realm);
+    let snapshot_read = guild_roster_snapshot_read(realm);
     {
         let membership = membership.clone();
-        let guild = guild_read(realm);
+        let snapshot_read = snapshot_read.clone();
         wire_insert_live(db.game_guild_event(), event_insert, view, move |v, row| {
-            guild_event_appeared(v, &membership, &guild, row)
+            guild_event_appeared(v, &membership, &snapshot_read, row)
         });
     }
     {
@@ -2384,12 +2388,15 @@ fn guild_membership_changed(
 /// A Guild Event landed. An addressed row reaches its recipient; a broadcast row reaches every
 /// online member on this Gateway. A member signing on does not hear its own SIGNED_ON: mangos
 /// broadcasts it before the Character is in the world (`cm:CharacterHandler.cpp:787`).
-/// TABARD_CHANGED also carries the Guild's query response. The first job that runs reads the
-/// Guild once for every recipient of the event.
+///
+/// `TABARD_CHANGED`, `ROSTER_TO_ACTOR` and `ROSTER_REFRESH` also carry a query response, a roster,
+/// or both; the first recipient's job reads the Guild (and, for the two roster kinds, its roster)
+/// once through `snapshot_read` and every other recipient's job reuses that one snapshot, so a
+/// broadcast to a large Guild costs one Realm-core read, not one per online member.
 fn guild_event_appeared(
     view: &WorldView,
     membership: &GuildMembershipRead,
-    guild: &GuildRead,
+    snapshot_read: &GuildRosterSnapshotRead,
     row: &GuildEvent,
 ) {
     let audience: Vec<Arc<Viewer>> = if row.recipient_guid != 0 {
@@ -2407,7 +2414,8 @@ fn guild_event_appeared(
         online_audience(view, membership, row.guild_id)
     };
     let row = Arc::new(row.clone());
-    let shared_guild: Arc<OnceLock<Option<crate::codec::GuildView>>> = Arc::new(OnceLock::new());
+    let shared_snapshot: Arc<OnceLock<crate::world::GuildEventSnapshot>> =
+        Arc::new(OnceLock::new());
     for viewer in audience {
         if row.recipient_guid == 0
             && row.kind == lyracore_shared::guild::event_kind::SIGNED_ON
@@ -2415,14 +2423,54 @@ fn guild_event_appeared(
         {
             continue;
         }
-        let (row, guild, shared_guild) = (row.clone(), guild.clone(), shared_guild.clone());
-        enqueue(viewer, move |_| {
-            let mut out = super::subscriptions::guild_event_outbound(&row);
-            if row.kind == lyracore_shared::guild::event_kind::TABARD_CHANGED {
-                let view = shared_guild.get_or_init(|| guild(row.guild_id));
-                out.extend(super::subscriptions::guild_query_outbound(view.as_ref()));
+        let (row, membership, snapshot_read, shared_snapshot) = (
+            row.clone(),
+            membership.clone(),
+            snapshot_read.clone(),
+            shared_snapshot.clone(),
+        );
+        enqueue(viewer, move |viewer| {
+            use lyracore_shared::guild::event_kind;
+            match row.kind {
+                event_kind::TABARD_CHANGED => {
+                    let snapshot =
+                        shared_snapshot.get_or_init(|| snapshot_read(row.guild_id, row.kind));
+                    let mut out = super::subscriptions::guild_event_outbound(&row);
+                    out.extend(snapshot.query_response().map(Outbound::One));
+                    out
+                }
+                event_kind::ROSTER_TO_ACTOR => {
+                    let Some((_, rank_id)) =
+                        membership(viewer.self_guid).filter(|(id, _)| *id == row.guild_id)
+                    else {
+                        return Vec::new();
+                    };
+                    let snapshot =
+                        shared_snapshot.get_or_init(|| snapshot_read(row.guild_id, row.kind));
+                    snapshot
+                        .roster_for_rank(rank_id)
+                        .into_iter()
+                        .map(Outbound::One)
+                        .collect()
+                }
+                event_kind::ROSTER_REFRESH => {
+                    let Some((_, rank_id)) =
+                        membership(viewer.self_guid).filter(|(id, _)| *id == row.guild_id)
+                    else {
+                        return Vec::new();
+                    };
+                    let snapshot =
+                        shared_snapshot.get_or_init(|| snapshot_read(row.guild_id, row.kind));
+                    let mut out: Vec<Outbound> = snapshot
+                        .query_response()
+                        .map(Outbound::One)
+                        .into_iter()
+                        .collect();
+                    out.extend(snapshot.roster_for_rank(rank_id).map(Outbound::One));
+                    out
+                }
+                _ => super::subscriptions::guild_event_outbound(&row),
             }
-            out
         });
     }
 }
@@ -2721,8 +2769,8 @@ mod family_audience_tests {
         guild_event_appeared, guild_membership_changed, is_initial_apply, item_owner_job,
         levelup_appeared, mail_arrived, reputation_appeared, sweep_into_view,
         system_message_appeared, teleport_appeared, weather_changed, xp_appeared, zone_crossed,
-        BoundIdentity, ExplorationReplay, GuildMembershipRead, GuildRead, MotionPending, OwnerGuid,
-        Viewer, WorldView,
+        BoundIdentity, ExplorationReplay, GuildMembershipRead, GuildRosterSnapshotRead,
+        MotionPending, OwnerGuid, Viewer, WorldView,
     };
     use crate::stdb::aoi::ViewerGates;
     use crate::stdb::bindings::{
@@ -2731,6 +2779,7 @@ mod family_audience_tests {
     };
     use crate::stdb::subscriptions::{private_recipient_audience, quest_update_packets};
     use crate::stdb::world_index::{CellKey, EntityLayer};
+    use crate::world::GuildEventSnapshot;
     use crate::world::{Outbound, SessionTx};
     use std::collections::{HashMap, HashSet};
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -3106,6 +3155,47 @@ mod family_audience_tests {
         })
     }
 
+    /// The broadcast (`0..=13`) and addressed-membership (`0x40..`) kinds these audience tests use
+    /// never read a Guild snapshot, so a closure that panics if called proves it.
+    fn unreachable_snapshot_read() -> GuildRosterSnapshotRead {
+        Arc::new(|_guild_id, _kind| panic!("this Guild Event kind must not read a snapshot"))
+    }
+
+    /// A snapshot read that always answers `snapshot` and counts its own calls, so a test can
+    /// assert a settings-change event reads the Realm-core cache once and shares the result with
+    /// every recipient.
+    fn counting_snapshot_read(
+        snapshot: GuildEventSnapshot,
+    ) -> (GuildRosterSnapshotRead, Arc<AtomicU32>) {
+        let reads = Arc::new(AtomicU32::new(0));
+        let recorded = reads.clone();
+        let read: GuildRosterSnapshotRead = Arc::new(move |_guild_id, _kind| {
+            recorded.fetch_add(1, Ordering::Relaxed);
+            snapshot.clone()
+        });
+        (read, reads)
+    }
+
+    /// SMSG_GUILD_ROSTER for one member whose officer note is `officer_note`, so two calls with
+    /// different notes give two packets a test can tell apart by content.
+    fn roster_variant(officer_note: &str) -> ServerOpcodeMessage {
+        let guild = crate::codec::GuildView {
+            guild_id: 7,
+            name: "Knights".into(),
+            ..Default::default()
+        };
+        let line = crate::codec::GuildRosterLine {
+            guid: 9001,
+            name: "Alice".into(),
+            officer_note: officer_note.into(),
+            ..Default::default()
+        };
+        ServerOpcodeMessage::SMSG_GUILD_ROSTER(Box::new(crate::codec::build_guild_roster(
+            &guild,
+            [line],
+        )))
+    }
+
     #[test]
     fn a_membership_change_reaches_the_member_and_viewers_that_created_it() {
         let view = WorldView::new(true);
@@ -3184,11 +3274,12 @@ mod family_audience_tests {
         }
         let [alice, bob, stranger, other_guild] = <[_; 4]>::try_from(receivers).unwrap();
         let members = membership(&[(9001, 7, 0), (9002, 7, 4), (9004, 8, 0)]);
+        let snapshot_read = unreachable_snapshot_read();
 
         guild_event_appeared(
             &view,
             &members,
-            &no_guild(),
+            &snapshot_read,
             &guild_event(0, event_kind::SIGNED_OFF, 9001),
         );
         let signed_off = crate::codec::build_guild_event_raw(
@@ -3204,7 +3295,7 @@ mod family_audience_tests {
         guild_event_appeared(
             &view,
             &members,
-            &no_guild(),
+            &snapshot_read,
             &guild_event(0, event_kind::SIGNED_ON, 9001),
         );
         assert!(
@@ -3233,15 +3324,11 @@ mod family_audience_tests {
         guild_event_appeared(
             &view,
             &membership(&[(9001, 7, 0)]),
-            &no_guild(),
+            &unreachable_snapshot_read(),
             &guild_event(9003, event_kind::DISBANDED, 9001),
         );
         assert_eq!(raw_packets(queued_job(&recipient_rx)).len(), 1);
         assert!(member_rx.try_recv().is_err());
-    }
-
-    fn no_guild() -> GuildRead {
-        Arc::new(|_| None)
     }
 
     #[test]
@@ -3263,14 +3350,14 @@ mod family_audience_tests {
             background_color: 15,
             ..Default::default()
         };
-        let reads = Arc::new(AtomicU32::new(0));
-        let guild: GuildRead = {
-            let (emblem, reads) = (emblem.clone(), reads.clone());
-            Arc::new(move |guild_id| {
-                reads.fetch_add(1, Ordering::Relaxed);
-                (guild_id == 7).then(|| emblem.clone())
-            })
+        let query = ServerOpcodeMessage::SMSG_GUILD_QUERY_RESPONSE(Box::new(
+            crate::codec::build_guild_query_response(&emblem),
+        ));
+        let snapshot = GuildEventSnapshot {
+            query: Some(query.clone()),
+            ..GuildEventSnapshot::default()
         };
+        let (snapshot_read, reads) = counting_snapshot_read(snapshot);
         let tabard_changed = GuildEvent {
             strings: Vec::new(),
             ..guild_event(0, event_kind::TABARD_CHANGED, 0)
@@ -3279,28 +3366,173 @@ mod family_audience_tests {
         guild_event_appeared(
             &view,
             &membership(&[(9001, 7, 0), (9002, 7, 4)]),
-            &guild,
+            &snapshot_read,
             &tabard_changed,
         );
 
         for rx in [&leader_rx, &member_rx] {
-            let [Outbound::Raw { opcode, body }, Outbound::One(query)] =
+            let [Outbound::Raw { opcode, body }, Outbound::One(response)] =
                 <[Outbound; 2]>::try_from(queued_job(rx)).ok().unwrap()
             else {
                 panic!("TABARD_CHANGED renders the event, then the query response");
             };
             assert_eq!((opcode, body), (0x0092, vec![9, 0]));
-            assert_eq!(
-                query,
-                ServerOpcodeMessage::SMSG_GUILD_QUERY_RESPONSE(Box::new(
-                    crate::codec::build_guild_query_response(&emblem)
-                ))
-            );
+            assert_eq!(response, query);
         }
         assert_eq!(
             reads.load(Ordering::Relaxed),
             1,
-            "one Realm-core read serves every recipient"
+            "one snapshot read serves every recipient"
+        );
+    }
+
+    /// `0x50` (`event_kind::ROSTER_TO_ACTOR`) is addressed, so it takes the same recipient-only
+    /// path SIGNED_ON's twin above already proves. This test pins that the actor's job reads the
+    /// shared snapshot and picks the roster its own Guild Rank sees.
+    #[test]
+    fn roster_to_actor_reaches_only_the_actor_with_the_roster_its_rank_sees() {
+        use lyracore_shared::guild::event_kind;
+        let view = WorldView::new(true);
+        let anchor = CellKey::at(0, 0, 0, 0);
+        let (actor_tx, actor_rx) = SessionTx::with_depth(0);
+        let (other_tx, other_rx) = SessionTx::with_depth(0);
+        view.add_viewer_on_shard(viewer_with_tx(1, 9001, identity(1), actor_tx), anchor, 0);
+        view.add_viewer_on_shard(viewer_with_tx(2, 9002, identity(2), other_tx), anchor, 0);
+        let shown = roster_variant("secret");
+        let snapshot = GuildEventSnapshot {
+            roster_hidden: Some(roster_variant("")),
+            roster_shown: Some(shown.clone()),
+            rank_rights: vec![(0, 0xF_F1FF)],
+            ..GuildEventSnapshot::default()
+        };
+        let (snapshot_read, reads) = counting_snapshot_read(snapshot);
+
+        guild_event_appeared(
+            &view,
+            &membership(&[(9001, 7, 0), (9002, 7, 0)]),
+            &snapshot_read,
+            &guild_event(9001, event_kind::ROSTER_TO_ACTOR, 0),
+        );
+
+        let [Outbound::One(actual)] = <[Outbound; 1]>::try_from(queued_job(&actor_rx))
+            .ok()
+            .unwrap()
+        else {
+            panic!("expected one roster packet");
+        };
+        assert_eq!(actual, shown, "rank 0 holds VIEWOFFNOTE in this snapshot");
+        assert!(other_rx.try_recv().is_err());
+        assert_eq!(reads.load(Ordering::Relaxed), 1);
+    }
+
+    /// The addressed path finds the actor's session by guid alone, with no membership check, so
+    /// its job is the one place that must refuse a recipient whose membership row is already
+    /// gone by the time the job runs. `map_or(0, ...)` used to turn a miss into rank 0 — Guild
+    /// Master, holding every right including VIEWOFFNOTE — so a member who left or was kicked
+    /// while this job sat in the queue would receive the officer roster. `unreachable_snapshot_read`
+    /// also proves the guard runs before the snapshot read it would otherwise share.
+    #[test]
+    fn roster_to_actor_with_no_membership_row_sends_nothing() {
+        use lyracore_shared::guild::event_kind;
+        let view = WorldView::new(true);
+        let anchor = CellKey::at(0, 0, 0, 0);
+        let (actor_tx, actor_rx) = SessionTx::with_depth(0);
+        view.add_viewer_on_shard(viewer_with_tx(1, 9001, identity(1), actor_tx), anchor, 0);
+
+        guild_event_appeared(
+            &view,
+            &membership(&[]),
+            &unreachable_snapshot_read(),
+            &guild_event(9001, event_kind::ROSTER_TO_ACTOR, 0),
+        );
+
+        assert!(queued_job(&actor_rx).is_empty());
+    }
+
+    /// The same guard also has to check which Guild the membership row names: `map_or(0, ...)`
+    /// ignored the returned guild_id, so a member who moved to another Guild between this job's
+    /// enqueue and its run would still get a roster, rendered under its new Guild's own Rank
+    /// Rights.
+    #[test]
+    fn roster_to_actor_with_membership_in_another_guild_sends_nothing() {
+        use lyracore_shared::guild::event_kind;
+        let view = WorldView::new(true);
+        let anchor = CellKey::at(0, 0, 0, 0);
+        let (actor_tx, actor_rx) = SessionTx::with_depth(0);
+        view.add_viewer_on_shard(viewer_with_tx(1, 9001, identity(1), actor_tx), anchor, 0);
+
+        guild_event_appeared(
+            &view,
+            &membership(&[(9001, 8, 0)]),
+            &unreachable_snapshot_read(),
+            &guild_event(9001, event_kind::ROSTER_TO_ACTOR, 0),
+        );
+
+        assert!(queued_job(&actor_rx).is_empty());
+    }
+
+    /// `0x80` (`event_kind::ROSTER_REFRESH`) is a broadcast kind, so it takes the same audience
+    /// path the SIGNED_OFF broadcast test above already proves. This test pins that every online
+    /// member's own job reads one shared snapshot and picks the roster its own rank sees, so a
+    /// large Guild costs one Realm-core read for the whole broadcast, not one per member.
+    #[test]
+    fn roster_refresh_gives_each_online_member_the_roster_its_own_rank_sees() {
+        use lyracore_shared::guild::event_kind;
+        let view = WorldView::new(true);
+        let anchor = CellKey::at(0, 0, 0, 0);
+        let mut receivers = Vec::new();
+        for (session, guid) in [(1, 9001), (2, 9002), (3, 9003)] {
+            let (tx, rx) = SessionTx::with_depth(0);
+            view.add_viewer_on_shard(
+                viewer_with_tx(session, guid, identity(session as u8), tx),
+                anchor,
+                0,
+            );
+            receivers.push(rx);
+        }
+        let [leader, member, stranger] = <[_; 3]>::try_from(receivers).unwrap();
+        let hidden = roster_variant("");
+        let shown = roster_variant("secret");
+        let query = ServerOpcodeMessage::SMSG_GUILD_QUERY_RESPONSE(Box::new(
+            crate::codec::build_guild_query_response(&crate::codec::GuildView {
+                guild_id: 7,
+                ..Default::default()
+            }),
+        ));
+        let snapshot = GuildEventSnapshot {
+            query: Some(query),
+            roster_hidden: Some(hidden.clone()),
+            roster_shown: Some(shown.clone()),
+            rank_rights: vec![(0, 0xF_F1FF), (4, 0x43)],
+        };
+        let (snapshot_read, reads) = counting_snapshot_read(snapshot);
+
+        guild_event_appeared(
+            &view,
+            &membership(&[(9001, 7, 0), (9002, 7, 4)]),
+            &snapshot_read,
+            &guild_event(0, event_kind::ROSTER_REFRESH, 0),
+        );
+
+        let leader_out = queued_job(&leader);
+        let member_out = queued_job(&member);
+        assert!(stranger.try_recv().is_err());
+        let [Outbound::One(_), Outbound::One(leader_roster)] =
+            <[Outbound; 2]>::try_from(leader_out).ok().unwrap()
+        else {
+            panic!("expected a query response then a roster");
+        };
+        assert_eq!(leader_roster, shown, "rank 0 holds VIEWOFFNOTE");
+        let [Outbound::One(_), Outbound::One(member_roster)] =
+            <[Outbound; 2]>::try_from(member_out).ok().unwrap()
+        else {
+            panic!("expected a query response then a roster");
+        };
+        assert_eq!(member_roster, hidden, "rank 4 cannot view officer notes");
+        assert_eq!(
+            reads.load(Ordering::Relaxed),
+            1,
+            "one snapshot read serves every recipient"
         );
     }
 
@@ -3315,7 +3547,7 @@ mod family_audience_tests {
 
         let mut row = guild_event(9003, event_kind::INVITE, 0);
         row.strings = vec!["Alice".to_string(), "Tracer Guild".to_string()];
-        guild_event_appeared(&view, &membership(&[]), &no_guild(), &row);
+        guild_event_appeared(&view, &membership(&[]), &unreachable_snapshot_read(), &row);
 
         let outbound = queued_job(&target_rx);
         let [Outbound::One(ServerOpcodeMessage::SMSG_GUILD_INVITE(invite))] = outbound.as_slice()
@@ -3338,7 +3570,7 @@ mod family_audience_tests {
         view.add_viewer_on_shard(viewer_with_tx(1, 9003, identity(1), inviter_tx), anchor, 0);
 
         let row = guild_event(9003, event_kind::DECLINE, 0);
-        guild_event_appeared(&view, &membership(&[]), &no_guild(), &row);
+        guild_event_appeared(&view, &membership(&[]), &unreachable_snapshot_read(), &row);
 
         assert_eq!(
             raw_packets(queued_job(&inviter_rx)),
@@ -3370,13 +3602,13 @@ mod family_audience_tests {
         guild_event_appeared(
             &view,
             &no_members,
-            &no_guild(),
+            &unreachable_snapshot_read(),
             &guild_event(9001, event_kind::DISBANDED, 0),
         );
         guild_event_appeared(
             &view,
             &no_members,
-            &no_guild(),
+            &unreachable_snapshot_read(),
             &guild_event(9002, event_kind::DISBANDED, 0),
         );
 
@@ -3405,7 +3637,7 @@ mod family_audience_tests {
         guild_event_appeared(
             &view,
             &members,
-            &no_guild(),
+            &unreachable_snapshot_read(),
             &guild_event(0, event_kind::REMOVED, 0),
         );
 

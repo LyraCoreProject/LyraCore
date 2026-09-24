@@ -53,6 +53,18 @@ pub const DEFAULT_MOTD: &str = "No message set.";
 pub const MIN_GUILD_NAME: usize = 2;
 pub const MAX_GUILD_NAME: usize = 24;
 
+/// Length caps for the rest of a Guild's client-supplied text, in Unicode scalars
+/// (`vm:src/game/Guild/Guild.h:36-40`). Over-length input is a [`GuildRefusal::TooLong`].
+pub const MAX_RANK_NAME: usize = 15;
+pub const MAX_NOTE: usize = 31;
+pub const MAX_INFO: usize = 500;
+pub const MAX_MOTD: usize = 128;
+
+/// Does `text` fit within `max` Unicode scalars? Shared by every guild text field length gate.
+pub fn fits_length(text: &str, max: usize) -> bool {
+    text.chars().count() <= max
+}
+
 /// Guild name rule (`cm:ObjectMgr.cpp:8128-8139,8224-8240`): 2 to 24 Unicode scalars of digits,
 /// spaces and letters of ONE script, as mangos `isValidString` checks a Charter name, so a
 /// look-alike such as a Cyrillic "К" in a Latin name is refused. Spaces only separate words: no
@@ -163,6 +175,13 @@ pub mod event_kind {
     pub const INVITE: u8 = 0x40;
     /// Addressed to an inviter: raw SMSG_GUILD_DECLINE, not the generic SMSG_GUILD_EVENT builder.
     pub const DECLINE: u8 = 0x41;
+    /// Addressed to the editor after a note edit: a fresh SMSG_GUILD_ROSTER for that viewer alone.
+    pub const ROSTER_TO_ACTOR: u8 = 0x50;
+    /// Broadcast after a rank edit, add or delete: SMSG_GUILD_QUERY_RESPONSE then a per-viewer
+    /// SMSG_GUILD_ROSTER to every online member, each built for that viewer's own Guild Rank, so
+    /// officer notes keep following each viewer's VIEWOFFNOTE right instead of going blank for
+    /// everyone the way mangos' single shared broadcast roster does.
+    pub const ROSTER_REFRESH: u8 = 0x80;
 }
 
 /// `game_guild_fee_hold.kind`: which guild operation a Fee Hold pays for.
@@ -214,10 +233,14 @@ pub enum GuildRefusal {
     RankTooLow,
     /// The op named the actor as its own target.
     TargetIsSelf,
+    /// A text field (MOTD, info text, a note or a rank name) breaks its length cap.
+    TooLong,
+    /// Add Rank at [`MAX_RANKS`], or Delete Rank at [`MIN_RANKS`].
+    RanksAtLimit,
 }
 
 impl GuildRefusal {
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 20] = [
         Self::NotGameMaster,
         Self::NameInvalid,
         Self::NameExists,
@@ -236,6 +259,8 @@ impl GuildRefusal {
         Self::RankTooHigh,
         Self::RankTooLow,
         Self::TargetIsSelf,
+        Self::TooLong,
+        Self::RanksAtLimit,
     ];
 
     pub fn as_tag(self) -> &'static str {
@@ -258,6 +283,8 @@ impl GuildRefusal {
             Self::RankTooHigh => "guild:rank_too_high",
             Self::RankTooLow => "guild:rank_too_low",
             Self::TargetIsSelf => "guild:target_is_self",
+            Self::TooLong => "guild:too_long",
+            Self::RanksAtLimit => "guild:ranks_at_limit",
         }
     }
 
@@ -370,6 +397,13 @@ mod tests {
         for (_, initiate_rights) in &DEFAULT_RANKS[2..] {
             assert_eq!(*initiate_rights, 0x43);
         }
+    }
+
+    #[test]
+    fn fits_length_counts_unicode_scalars_not_bytes() {
+        assert!(fits_length(&"é".repeat(31), MAX_NOTE));
+        assert!(!fits_length(&"é".repeat(32), MAX_NOTE));
+        assert!(fits_length("", MAX_MOTD));
     }
 
     #[test]
