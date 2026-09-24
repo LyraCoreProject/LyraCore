@@ -178,6 +178,7 @@ impl Coordinator {
                     enchant_id: e.item_enchant_id,
                     soulbound: e.item_soulbound,
                     random_property_id: e.random_property_id,
+                    item_text_id: e.item_text_id,
                 },
                 cod: e.cod,
                 delivery_delay_secs: e.delivery_delay_secs,
@@ -260,6 +261,7 @@ mod tests {
             sender_kind: 0,
             sender_entry: 0,
             mail_template_id: 0,
+            item_text_id: 0,
         }
     }
 

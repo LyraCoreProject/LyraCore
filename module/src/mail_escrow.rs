@@ -57,6 +57,9 @@ pub struct MailEscrow {
     pub sender_entry: u32,
     #[default(0u32)]
     pub mail_template_id: u32,
+    /// The attached Plain Letter's `ITEM_FIELD_ITEM_TEXT_ID`, as `game_mail.item_text_id`.
+    #[default(0u32)]
+    pub item_text_id: u32,
 }
 
 impl MailEscrow {
@@ -69,6 +72,7 @@ impl MailEscrow {
             enchant_id: self.item_enchant_id,
             soulbound: self.item_soulbound,
             random_property_id: self.random_property_id,
+            item_text_id: self.item_text_id,
         }
     }
 }
@@ -511,6 +515,7 @@ pub(crate) fn apply_fence<S: FenceSink>(
         item_enchant_id: item.enchant_id,
         item_soulbound: item.soulbound,
         random_property_id: item.random_property_id,
+        item_text_id: item.item_text_id,
         cod: draft.cod,
         delivery_delay_secs: crate::mail::delivery_delay_secs(!item.is_empty(), same_account),
         sender_kind: 0,
@@ -561,6 +566,7 @@ pub(crate) fn apply_file_reward<S: EscrowLedger>(
         item_enchant_id: letter.item.enchant_id,
         item_soulbound: letter.item.soulbound,
         random_property_id: letter.item.random_property_id,
+        item_text_id: letter.item.item_text_id,
         cod: 0,
         delivery_delay_secs: letter.delay_secs,
         sender_kind,
@@ -744,6 +750,7 @@ pub(crate) fn apply_take_fence<S: TakeFenceSink>(
         item_enchant_id: 0,
         item_soulbound: false,
         random_property_id: 0,
+        item_text_id: 0,
         cod: 0,
         delivery_delay_secs: 0,
         sender_kind: 0,
@@ -818,6 +825,7 @@ pub(crate) fn apply_take_item_fence<S: TakeFenceSink>(
         item_enchant_id: item.enchant_id,
         item_soulbound: item.soulbound,
         random_property_id: item.random_property_id,
+        item_text_id: item.item_text_id,
         cod: 0,
         delivery_delay_secs: 0,
         sender_kind: 0,
@@ -1024,6 +1032,7 @@ pub fn realm_mail_commit(
     sender_kind: u8,
     sender_entry: u32,
     mail_template_id: u32,
+    item_text_id: u32,
 ) -> Result<(), String> {
     require_operator(ctx)?;
     let sender_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
@@ -1046,6 +1055,7 @@ pub fn realm_mail_commit(
             enchant_id: item_enchant_id,
             soulbound: item_soulbound,
             random_property_id,
+            item_text_id,
         },
         cod_mail_id,
         delivery_delay_secs,
@@ -1113,6 +1123,7 @@ pub fn realm_mail_item_payout(
     item_enchant_id: u32,
     item_soulbound: bool,
     random_property_id: u32,
+    item_text_id: u32,
 ) -> Result<(), String> {
     require_operator(ctx)?;
     let payee_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
@@ -1128,6 +1139,7 @@ pub fn realm_mail_item_payout(
             enchant_id: item_enchant_id,
             soulbound: item_soulbound,
             random_property_id,
+            item_text_id,
         },
     )
 }
@@ -1353,7 +1365,7 @@ mod tests {
                   sender_guid, &Draft { recipient_guid, subject, body, money, postage: 0, cod, \
                   }, &crate::items::ItemSnapshot { entry: item_entry, stack_count: \
                   item_stack_count, durability: item_durability, enchant_id: item_enchant_id, \
-                  soulbound: item_soulbound, random_property_id, }, cod_mail_id, \
+                  soulbound: item_soulbound, random_property_id, item_text_id, }, cod_mail_id, \
                   delivery_delay_secs, RewardHeader::from_columns(sender_kind, sender_entry, \
                   mail_template_id)?, ) }",
             ),
@@ -1377,7 +1389,7 @@ mod tests {
                 "{ require_operator(ctx)?; let payee_guid = crate::account_ownership::require_actor(ctx, request_actor)?; apply_item_payout( &mut CtxDb { ctx }, escrow_id, \
                   payee_guid, mail_id, &crate::items::ItemSnapshot { entry: item_entry, \
                   stack_count: item_stack_count, durability: item_durability, enchant_id: \
-                  item_enchant_id, soulbound: item_soulbound, random_property_id, }, ) }",
+                  item_enchant_id, soulbound: item_soulbound, random_property_id, item_text_id, }, ) }",
             ),
             (
                 "pub fn realm_mail_confirm_delivery(",

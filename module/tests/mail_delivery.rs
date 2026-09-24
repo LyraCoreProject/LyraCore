@@ -118,6 +118,7 @@ fn a_delayed_priced_letter_is_hidden_until_it_arrives_and_its_price_is_paid_afte
             "0",
             "0",
             "0",
+            "0",
         ],
     );
     let committed_by = now_micros();
@@ -174,6 +175,7 @@ fn a_delayed_priced_letter_is_hidden_until_it_arrives_and_its_price_is_paid_afte
         "0",
         "0",
         "0",
+        "0",
     ];
     assert!(
         refused(&standalone, "realm_mail_commit", &commit_payment),
@@ -226,6 +228,7 @@ fn a_delayed_priced_letter_is_hidden_until_it_arrives_and_its_price_is_paid_afte
             "17",
             "0",
             "false",
+            "0",
             "0",
         ],
     );

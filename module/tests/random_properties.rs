@@ -311,6 +311,7 @@ fn mail_escrow_and_replayed_payout_preserve_both_plain_and_random_items() {
                 "0",
                 "0",
                 "0",
+                "0",
             ],
         );
         let mails = shard.query_rows("SELECT id,random_property_id FROM game_mail WHERE recipient_guid = 1 AND item_entry = 5090050");
@@ -340,6 +341,7 @@ fn mail_escrow_and_replayed_payout_preserve_both_plain_and_random_items() {
             "7748",
             "false",
             property,
+            "0",
         ];
         shard.assert_call("realm_mail_item_payout", &args);
         shard.assert_call("realm_mail_item_payout", &args);
@@ -413,6 +415,7 @@ fn auction_refund_replay_compares_the_saved_property() {
         "10",
         "1",
         "7200000001",
+        "0",
     ];
     shard.assert_call("realm_auction_refund_listing", &args);
     shard.assert_call("realm_auction_refund_listing", &args);

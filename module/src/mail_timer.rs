@@ -273,6 +273,7 @@ mod tests {
             check_flags: CHECK_MASK_COPIED,
             mail_template_id: 0,
             deliver_micros: 0,
+            item_text_id: 0,
         }
     }
 

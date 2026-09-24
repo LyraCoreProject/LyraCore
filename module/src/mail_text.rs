@@ -23,13 +23,59 @@ const ID_TOO_LARGE_TO_COPY: &str = "mail: this letter's id is too large to becom
 
 /// A copied letter's text, keyed by the mail id narrowed to u32
 /// (`lyracore_shared::mail::item_text_id_for`). Private: the Gateway reads it through the owner
-/// token. Outlives the mail row that created it — vanilla lets a made-permanent letter keep its
-/// text after the mail itself is gone, so this is a fact recorded once, not an escrow.
+/// token. Outlives the mail row that created it, because vanilla lets a made-permanent letter keep
+/// its text after the mail itself is gone. It is deleted with the last Plain Letter that carries it.
 #[table(accessor = game_item_text)]
 pub struct ItemText {
     #[primary_key]
     pub id: u32,
     pub text: String,
+    /// How many Plain Letters can still carry this text. Each copy adds one before the Home Shard
+    /// grants, so the count is never below the letters that exist; a grant that never lands only
+    /// keeps the row longer. Each destroyed letter takes one away, and the row goes at 0. A row
+    /// filed before the count existed reads [`UNCOUNTED_LETTERS`].
+    #[default(UNCOUNTED_LETTERS)]
+    pub letters: u32,
+}
+
+/// `ItemText.letters` of a row whose letters nobody counted. It is never deleted, because a letter
+/// that still carries it would lose its text.
+pub(crate) const UNCOUNTED_LETTERS: u32 = u32::MAX;
+
+/// The count after one more copy of the text.
+fn letters_after_copy(letters: u32) -> u32 {
+    letters.saturating_add(1)
+}
+
+/// The count after one letter is destroyed, or `None` when the row goes.
+fn letters_after_release(letters: u32) -> Option<u32> {
+    match letters {
+        UNCOUNTED_LETTERS => Some(UNCOUNTED_LETTERS),
+        0 | 1 => None,
+        n => Some(n - 1),
+    }
+}
+
+/// One Plain Letter carrying `item_text_id` is destroyed. Its text goes with the last such letter.
+/// A database that does not hold the text row changes nothing: on a sharded realm a Home Shard
+/// holds letters, but their text is on Realm-core.
+pub(crate) fn release_letter_text(ctx: &ReducerContext, item_text_id: u32) {
+    if item_text_id == 0 {
+        return;
+    }
+    let texts = ctx.db.game_item_text();
+    let Some(row) = texts.id().find(item_text_id) else {
+        return;
+    };
+    match letters_after_release(row.letters) {
+        None => {
+            texts.id().delete(item_text_id);
+        }
+        Some(letters) if letters != row.letters => {
+            texts.id().update(ItemText { letters, ..row });
+        }
+        Some(_) => {}
+    }
 }
 
 const ALREADY_GRANTED: &str = "mail: this letter was already made permanent";
@@ -79,11 +125,12 @@ pub(crate) fn plan_copy_text(row: Option<&Mail>, caller_guid: u64) -> CopyTextPl
 /// way.
 ///
 /// Replay-safe: a retry that reaches here again before GRANTED is ever set (bags filled, logout,
-/// timeout, a crash between here and the Home Shard grant) re-runs harmlessly. The text insert is
-/// skipped when the row already exists — `mail::returned` keeps a returned mail's id, so a letter a
-/// second Character copies after the first sender gets it back reuses the same text id; the body
-/// never changes for a given mail id, so the existing row is already correct. Setting COPIED again
-/// is a no-op OR, so it costs nothing on a replay either.
+/// timeout, a crash between here and the Home Shard grant) re-runs harmlessly. The text row is
+/// reused when it already exists: `mail::returned` keeps a returned mail's id, so a letter a second
+/// Character copies after the first sender gets it back reuses the same text id, and the body never
+/// changes for a given mail id. Every call counts one more letter, because the Gateway grants only
+/// after this call succeeds; a replay that grants nothing keeps the text row longer and loses
+/// nothing. Setting COPIED again is a no-op OR.
 pub(crate) fn apply_copy_text(
     ctx: &ReducerContext,
     recipient_guid: u64,
@@ -99,11 +146,21 @@ pub(crate) fn apply_copy_text(
     }
     let row = row.expect("Copy is only reachable with a row");
     let text_id = lyracore_shared::mail::item_text_id_for(row.id, &row.body);
-    if ctx.db.game_item_text().id().find(text_id).is_none() {
-        ctx.db.game_item_text().insert(ItemText {
-            id: text_id,
-            text: row.body.clone(),
-        });
+    let texts = ctx.db.game_item_text();
+    match texts.id().find(text_id) {
+        Some(text) => {
+            texts.id().update(ItemText {
+                letters: letters_after_copy(text.letters),
+                ..text
+            });
+        }
+        None => {
+            texts.insert(ItemText {
+                id: text_id,
+                text: row.body.clone(),
+                letters: letters_after_copy(0),
+            });
+        }
     }
     ctx.db.game_mail().id().update(Mail {
         check_flags: row.check_flags | lyracore_shared::mail::CHECK_MASK_COPIED,
@@ -201,6 +258,7 @@ mod tests {
             check_flags,
             mail_template_id: 0,
             deliver_micros: 0,
+            item_text_id: 0,
         }
     }
 
@@ -266,6 +324,21 @@ mod tests {
             CopyTextPlan::AlreadyGranted,
             "GRANTED refuses regardless of which other bits ride alongside it"
         );
+    }
+
+    #[test]
+    fn a_text_row_goes_with_its_last_letter() {
+        assert_eq!(letters_after_copy(0), 1);
+        assert_eq!(letters_after_copy(1), 2);
+        assert_eq!(letters_after_release(2), Some(1));
+        assert_eq!(letters_after_release(1), None);
+        assert_eq!(letters_after_release(0), None);
+    }
+
+    #[test]
+    fn an_uncounted_text_row_is_never_deleted() {
+        assert_eq!(letters_after_release(u32::MAX), Some(u32::MAX));
+        assert_eq!(letters_after_copy(u32::MAX), u32::MAX);
     }
 
     #[test]

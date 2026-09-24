@@ -27,6 +27,7 @@ pub(super) struct RealmAuctionCommitListingArgs {
     pub deposit: u32,
     pub created_micros: i64,
     pub expires_micros: i64,
+    pub item_text_id: u32,
 }
 
 impl From<RealmAuctionCommitListingArgs> for super::Reducer {
@@ -50,6 +51,7 @@ impl From<RealmAuctionCommitListingArgs> for super::Reducer {
             deposit: args.deposit,
             created_micros: args.created_micros,
             expires_micros: args.expires_micros,
+            item_text_id: args.item_text_id,
         }
     }
 }
@@ -89,6 +91,7 @@ pub trait realm_auction_commit_listing {
         deposit: u32,
         created_micros: i64,
         expires_micros: i64,
+        item_text_id: u32,
     ) -> __sdk::Result<()> {
         self.realm_auction_commit_listing_then(
             operation_id,
@@ -109,6 +112,7 @@ pub trait realm_auction_commit_listing {
             deposit,
             created_micros,
             expires_micros,
+            item_text_id,
             |_, _| {},
         )
     }
@@ -139,6 +143,7 @@ pub trait realm_auction_commit_listing {
         deposit: u32,
         created_micros: i64,
         expires_micros: i64,
+        item_text_id: u32,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -167,6 +172,7 @@ impl realm_auction_commit_listing for super::RemoteReducers {
         deposit: u32,
         created_micros: i64,
         expires_micros: i64,
+        item_text_id: u32,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -192,6 +198,7 @@ impl realm_auction_commit_listing for super::RemoteReducers {
                 deposit,
                 created_micros,
                 expires_micros,
+                item_text_id,
             },
             callback,
         )

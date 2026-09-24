@@ -195,16 +195,8 @@ fn copying_grant_and_destroying_the_letter_refuses_a_second_grant() {
     );
 }
 
-/// `apply_set_trade_item`'s stopgap: a Trade Commit rebuilds the far side's item from a snapshot
-/// that carries no text id yet, so a Plain Letter offered into a trade window would arrive
-/// unreadable. Refused the same corrective-echo way a soulbound item already is — the window
-/// re-syncs to its unchanged state rather than the client seeing an `Err`.
-#[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
-fn a_plain_letter_cannot_be_offered_in_a_trade_window() {
-    let shard = fixture("trade-letter-copy-refused");
-    seed_letter_item_template(&shard);
-    shard.assert_call("debug_spawn_player_entity", &["1"]);
+/// Creates the second Character, "Partner", on Account 1 and spawns it next to Character 1.
+fn spawn_partner(shard: &Standalone) -> u64 {
     shard.assert_call(
         "create_character",
         &["1", "\"Partner\"", "1", "1", "0", "0", "0", "0", "0", "0"],
@@ -214,23 +206,129 @@ fn a_plain_letter_cannot_be_offered_in_a_trade_window() {
         .parse()
         .unwrap();
     shard.assert_call("debug_spawn_player_entity", &[&partner.to_string()]);
+    partner
+}
 
-    let mail_id = seed_mail(&shard, 1, 2, "left it at the inn");
+/// Copies `mail_id` into a Plain Letter in Character 1's bags and answers the letter's item guid.
+fn copy_into_bags(shard: &Standalone, mail_id: u64) -> String {
     shard.assert_call("realm_mail_copy_text", &[&actor(1), &mail_id.to_string()]);
     shard.assert_call("gw_mail_grant_letter", &[&actor(1), &mail_id.to_string()]);
+    shard.assert_call(
+        "realm_mail_mark_letter_granted",
+        &[&actor(1), &mail_id.to_string()],
+    );
+    shard.query_rows(&format!(
+        "SELECT guid FROM game_item_instance WHERE owner_guid = 1 AND item_text_id = {mail_id}"
+    ))[0]["guid"]
+        .clone()
+}
+
+/// Sends the Plain Letter `letter_guid` from `sender` to `recipient` on one Realm Account, so it
+/// arrives at once, and answers the new mail's id.
+fn mail_letter(shard: &Standalone, sender: u64, recipient: u64, letter_guid: &str) -> u64 {
+    shard.assert_call("debug_set_money", &[&sender.to_string(), "1000"]);
+    shard.assert_call(
+        "realm_mail_send",
+        &[
+            &actor(sender),
+            &recipient.to_string(),
+            "\"A letter\"",
+            "\"\"",
+            "0",
+            "0",
+            letter_guid,
+            "true",
+        ],
+    );
+    shard.query_rows(&format!(
+        "SELECT id FROM game_mail WHERE recipient_guid = {recipient} AND item_entry = 8383"
+    ))[0]["id"]
+        .parse()
+        .unwrap()
+}
+
+/// A Trade Commit rebuilds the letter on the far side from its snapshot. The snapshot carries the
+/// text id, so the letter stays readable.
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn a_traded_plain_letter_keeps_its_text() {
+    let shard = fixture("trade-letter-copy");
+    seed_letter_item_template(&shard);
+    shard.assert_call("debug_spawn_player_entity", &["1"]);
+    let partner = spawn_partner(&shard);
+    let mail_id = seed_mail(&shard, 1, 2, "left it at the inn");
+    copy_into_bags(&shard, mail_id);
     let letter_slot = shard.query_rows(&format!(
-        "SELECT slot FROM game_item_instance WHERE owner_guid = 1 AND entry = 8383 AND item_text_id = {mail_id}"
+        "SELECT slot FROM game_item_instance WHERE owner_guid = 1 AND item_text_id = {mail_id}"
     ))[0]["slot"]
         .clone();
 
     shard.assert_call("gw_initiate_trade", &[&actor(1), &partner.to_string()]);
     shard.assert_call("gw_begin_trade", &[&actor(partner)]);
     shard.assert_call("gw_set_trade_item", &[&actor(1), "0", &letter_slot]);
+    shard.assert_call("gw_accept_trade", &[&actor(1)]);
+    shard.assert_call("gw_accept_trade", &[&actor(partner)]);
 
-    let offered = shard.query_rows("SELECT id FROM game_trade_slot");
+    let received = shard.query_rows(&format!(
+        "SELECT item_text_id FROM game_item_instance WHERE owner_guid = {partner} AND entry = 8383"
+    ));
+    assert_eq!(received.len(), 1, "the letter changed hands once");
+    assert_eq!(received[0]["item_text_id"], mail_id.to_string());
+    assert!(shard
+        .query_rows("SELECT guid FROM game_item_instance WHERE owner_guid = 1 AND entry = 8383")
+        .is_empty());
+}
+
+/// A mailed Plain Letter arrives with its text id. The text row counts the one letter, and it goes
+/// when that letter is deleted with the mail that carries it, although the mail it was copied from
+/// is still in the mailbox.
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn a_mailed_plain_letter_keeps_its_text_until_it_is_destroyed() {
+    let shard = fixture("mail-letter-copy-mailed");
+    seed_letter_item_template(&shard);
+    shard.assert_call("debug_spawn_player_entity", &["1"]);
+    let partner = spawn_partner(&shard);
+    let mail_id = seed_mail(&shard, 1, 2, "left it at the inn");
+    let letter = copy_into_bags(&shard, mail_id);
+    let text_query = format!("SELECT text, letters FROM game_item_text WHERE id = {mail_id}");
+    assert_eq!(shard.query_rows(&text_query)[0]["letters"], "1");
+
+    let to_partner = mail_letter(&shard, 1, partner, &letter);
+    assert_eq!(
+        shard.query_rows(&format!(
+            "SELECT item_text_id FROM game_mail WHERE id = {to_partner}"
+        ))[0]["item_text_id"],
+        mail_id.to_string()
+    );
+    shard.assert_call(
+        "realm_mail_take_item",
+        &[&actor(partner), &to_partner.to_string()],
+    );
+    let held = shard.query_rows(&format!(
+        "SELECT guid, item_text_id FROM game_item_instance WHERE owner_guid = {partner} AND entry = 8383"
+    ));
+    assert_eq!(held[0]["item_text_id"], mail_id.to_string());
+    let text = shard.query_rows(&text_query);
+    assert_eq!(
+        [&text[0]["text"], &text[0]["letters"]],
+        ["left it at the inn", "1"],
+        "moving a letter neither copies nor destroys its text"
+    );
+
+    let back = mail_letter(&shard, partner, 1, &held[0]["guid"]);
+    shard.assert_call("realm_mail_delete", &[&actor(1), &back.to_string()]);
+
     assert!(
-        offered.is_empty(),
-        "a Plain Letter must never occupy a trade slot"
+        shard.query_rows(&text_query).is_empty(),
+        "the text went with its last letter"
+    );
+    assert_eq!(
+        shard
+            .query_rows(&format!("SELECT id FROM game_mail WHERE id = {mail_id}"))
+            .len(),
+        1,
+        "the mail the letter was copied from is untouched"
     );
 }
 

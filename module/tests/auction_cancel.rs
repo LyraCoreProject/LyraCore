@@ -450,3 +450,140 @@ fn an_unfinished_cancellation_hold_travels_with_its_seller_and_settles_on_the_ne
         ["7", "0"]
     );
 }
+
+/// A listing Hold crosses a Shard Boundary with its seller and lists from the new Home Shard, so a
+/// Gateway stop between the Hold and Realm-core's commit never strands the item or the deposit on
+/// the old one. The Hold carries a Letter Copy's text id with the item.
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn an_unfinished_listing_hold_travels_with_its_seller_and_lists_from_the_new_home_shard() {
+    let mut source = Standalone::start("auction-listing-source");
+    source.publish_module();
+    source.assert_call("claim_operator", &[]);
+    source.assert_call("install_guid_range", &["0"]);
+    source.assert_call("debug_seed_scenario_fixtures", &[]);
+    source.assert_call("debug_spawn_player_entity", &[LOCAL_SELLER]);
+    source.assert_call("debug_set_money", &[LOCAL_SELLER, "1000"]);
+    source.assert_call("debug_spawn_at_feet", &[LOCAL_SELLER, VENDOR_ENTRY, "1"]);
+    let vendor = rows(
+        &source,
+        &format!("SELECT guid FROM game_world_entity WHERE entry = {VENDOR_ENTRY}"),
+    )[0]["guid"]
+        .clone();
+    source.assert_call(
+        "debug_stage_auction_cancel_fixture",
+        &[LOCAL_SELLER, &vendor],
+    );
+    source.assert_sql("DELETE FROM game_item_instance WHERE owner_guid = 1");
+    // Five Tough Jerky (sell price 2), marked as a Letter Copy's letter so the text id rides along.
+    source.assert_call("debug_grant_item", &[LOCAL_SELLER, "5090052", "5"]);
+    source.assert_sql("UPDATE game_item_instance SET item_text_id = 41 WHERE owner_guid = 1");
+    let item = rows(
+        &source,
+        "SELECT guid FROM game_item_instance WHERE owner_guid = 1",
+    )[0]["guid"]
+        .clone();
+    let seller = actor(LOCAL_SELLER);
+
+    // Phase 1 only: the Gateway stopped before Realm-core committed the listing.
+    source.assert_call(
+        "gw_auction_hold_listing",
+        &["5090094", &seller, &item, &vendor, HOUSE, "100", "0", "720"],
+    );
+    let hold_query = "SELECT * FROM game_auction_hold WHERE operation_id = 5090094";
+    let held = rows(&source, hold_query);
+    assert_eq!(held.len(), 1);
+    assert_eq!(
+        [
+            &held[0]["item_entry"],
+            &held[0]["item_stack_count"],
+            &held[0]["item_text_id"],
+        ],
+        ["5090052", "5", "41"]
+    );
+    let purse_after_deposit = purse(&source);
+    source.assert_call(
+        "begin_transfer",
+        &["5090095", &seller, "0", "0", "0", "0", "0", "0", "true"],
+    );
+    let out = rows(
+        &source,
+        "SELECT blob FROM game_transfer_out WHERE transfer_id = 5090095",
+    );
+    let blob = serde_json::to_string(out[0]["blob"].strip_prefix("0x").unwrap()).unwrap();
+
+    let mut destination = Standalone::start("auction-listing-destination");
+    destination.publish_module();
+    destination.assert_call("claim_operator", &[]);
+    destination.assert_call("install_guid_range", &["1000000000"]);
+    let system = actor("0");
+    destination.assert_call("import_character_blob", &["5090095", &blob, &system]);
+    source.assert_call("confirm_import", &["5090095", &system]);
+    source.assert_call("finish_transfer", &["5090095", &system]);
+    destination.assert_call("release_transfer", &["5090095", &system]);
+
+    assert!(
+        rows(&source, hold_query).is_empty(),
+        "the Hold left with its seller"
+    );
+    assert_eq!(
+        rows(&destination, hold_query),
+        held,
+        "the Hold arrives with every column"
+    );
+
+    // The source plays Realm-core and commits the held listing; the new Home Shard settles it.
+    let hold = &held[0];
+    let commit: Vec<&str> = [
+        "operation_id",
+        "",
+        "item_guid",
+        "item_entry",
+        "item_stack_count",
+        "item_durability",
+        "item_enchant_id",
+        "item_soulbound",
+        "random_property_id",
+        "house",
+        "deposit_rate",
+        "consignment_rate",
+        "start_bid",
+        "buyout",
+        "duration_minutes",
+        "deposit",
+        "created_micros",
+        "expires_micros",
+        "item_text_id",
+    ]
+    .iter()
+    .map(|column| {
+        if column.is_empty() {
+            seller.as_str()
+        } else {
+            hold[*column].as_str()
+        }
+    })
+    .collect();
+    source.assert_call("realm_auction_commit_listing", &commit);
+    let listed = rows(
+        &source,
+        "SELECT id, item_entry, item_text_id FROM game_auction WHERE listing_operation_id = 5090094",
+    );
+    assert_eq!(
+        [&listed[0]["item_entry"], &listed[0]["item_text_id"]],
+        ["5090052", "41"],
+        "the Auction carries the letter's text id"
+    );
+    destination.assert_call(
+        "realm_auction_confirm_listing",
+        &["5090094", &listed[0]["id"], &seller],
+    );
+    destination.assert_call("realm_auction_settle_listing", &["5090094", &seller]);
+    assert!(rows(&destination, hold_query).is_empty(), "settled once");
+    destination.assert_call("debug_spawn_player_entity", &[LOCAL_SELLER]);
+    assert_eq!(
+        purse(&destination),
+        purse_after_deposit,
+        "the deposit was taken once, before the Transfer"
+    );
+}

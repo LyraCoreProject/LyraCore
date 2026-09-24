@@ -98,15 +98,15 @@ fn message_type(sender: MailSender) -> Mail_MailType {
     }
 }
 /// The `checked` field the client reads read, returned, copied, COD-payment and has-body state
-/// from (cmangos `MailHandler.cpp:610`). Masks out `CHECK_FLAG_LETTER_GRANTED`: that bit rides the
-/// same column for the server's own bookkeeping and names no vanilla state the client understands.
+/// from (cmangos `MailHandler.cpp:610`). Server-only bits such as `CHECK_FLAG_LETTER_GRANTED` ride
+/// the same column and name no vanilla state, so only `CLIENT_CHECK_MASK` reaches the client.
 fn check_mask(m: &MailView) -> u32 {
     let read = if m.was_read {
         mail_rules::CHECK_MASK_READ
     } else {
         0
     };
-    (m.check_flags & !mail_rules::CHECK_FLAG_LETTER_GRANTED) | read
+    (m.check_flags & mail_rules::CLIENT_CHECK_MASK) | read
 }
 pub fn build_next_mail_time(has_unread: bool) -> MSG_QUERY_NEXT_MAIL_TIME_Server {
     MSG_QUERY_NEXT_MAIL_TIME_Server {
@@ -319,6 +319,11 @@ mod tests {
         assert_eq!(checked(0x10, true), 0x11, "HAS_BODY and READ");
         assert_eq!(checked(0x02, false), 0x02, "RETURNED");
         assert_eq!(checked(0x08, false), 0x08, "COD_PAYMENT");
+        assert_eq!(
+            checked(0x14 | 0x20 | 0x40, false),
+            0x14,
+            "server-only bits never reach the client"
+        );
     }
 
     #[test]

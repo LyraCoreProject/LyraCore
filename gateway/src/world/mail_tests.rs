@@ -1788,6 +1788,7 @@ fn sword() -> mail::AttachedItem {
         enchant_id: 7,
         soulbound: false,
         random_property_id: 0,
+        item_text_id: 0,
     }
 }
 fn give_item(shard: &InMemoryStore, owner: u64, guid: u64, item: mail::AttachedItem) {

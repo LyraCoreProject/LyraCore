@@ -27,6 +27,7 @@ pub(super) struct RealmMailCommitArgs {
     pub sender_kind: u8,
     pub sender_entry: u32,
     pub mail_template_id: u32,
+    pub item_text_id: u32,
 }
 
 impl From<RealmMailCommitArgs> for super::Reducer {
@@ -50,6 +51,7 @@ impl From<RealmMailCommitArgs> for super::Reducer {
             sender_kind: args.sender_kind,
             sender_entry: args.sender_entry,
             mail_template_id: args.mail_template_id,
+            item_text_id: args.item_text_id,
         }
     }
 }
@@ -89,6 +91,7 @@ pub trait realm_mail_commit {
         sender_kind: u8,
         sender_entry: u32,
         mail_template_id: u32,
+        item_text_id: u32,
     ) -> __sdk::Result<()> {
         self.realm_mail_commit_then(
             escrow_id,
@@ -109,6 +112,7 @@ pub trait realm_mail_commit {
             sender_kind,
             sender_entry,
             mail_template_id,
+            item_text_id,
             |_, _| {},
         )
     }
@@ -139,6 +143,7 @@ pub trait realm_mail_commit {
         sender_kind: u8,
         sender_entry: u32,
         mail_template_id: u32,
+        item_text_id: u32,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -167,6 +172,7 @@ impl realm_mail_commit for super::RemoteReducers {
         sender_kind: u8,
         sender_entry: u32,
         mail_template_id: u32,
+        item_text_id: u32,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -192,6 +198,7 @@ impl realm_mail_commit for super::RemoteReducers {
                 sender_kind,
                 sender_entry,
                 mail_template_id,
+                item_text_id,
             },
             callback,
         )

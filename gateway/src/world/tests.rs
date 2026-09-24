@@ -2206,6 +2206,7 @@ impl WorldStore for InMemoryStore {
                     enchant_id: m.item_enchant_id,
                     soulbound: m.item_soulbound,
                     random_property_id: m.random_property_id,
+                    item_text_id: 0,
                 },
                 lyracore_shared::mail::cod_settlement(
                     m.cod,
@@ -2619,6 +2620,7 @@ impl WorldStore for InMemoryStore {
                 enchant_id: m.item_enchant_id,
                 soulbound: m.item_soulbound,
                 random_property_id: m.random_property_id,
+                item_text_id: 0,
             };
             m.item_entry = 0;
             m.item_stack_count = 0;

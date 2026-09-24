@@ -29,6 +29,7 @@ pub struct MailEscrow {
     pub sender_kind: u8,
     pub sender_entry: u32,
     pub mail_template_id: u32,
+    pub item_text_id: u32,
 }
 
 impl __sdk::InModule for MailEscrow {
@@ -61,6 +62,7 @@ pub struct MailEscrowCols {
     pub sender_kind: __sdk::__query_builder::Col<MailEscrow, u8>,
     pub sender_entry: __sdk::__query_builder::Col<MailEscrow, u32>,
     pub mail_template_id: __sdk::__query_builder::Col<MailEscrow, u32>,
+    pub item_text_id: __sdk::__query_builder::Col<MailEscrow, u32>,
 }
 
 impl __sdk::__query_builder::HasCols for MailEscrow {
@@ -92,6 +94,7 @@ impl __sdk::__query_builder::HasCols for MailEscrow {
             sender_kind: __sdk::__query_builder::Col::new(table_name, "sender_kind"),
             sender_entry: __sdk::__query_builder::Col::new(table_name, "sender_entry"),
             mail_template_id: __sdk::__query_builder::Col::new(table_name, "mail_template_id"),
+            item_text_id: __sdk::__query_builder::Col::new(table_name, "item_text_id"),
         }
     }
 }

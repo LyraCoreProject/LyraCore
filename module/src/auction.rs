@@ -61,6 +61,9 @@ pub struct Auction {
     pub consignment_rate: u32,
     #[default(0)]
     pub random_property_id: u32,
+    /// The listed Plain Letter's `ITEM_FIELD_ITEM_TEXT_ID`. 0 for every other item.
+    #[default(0u32)]
+    pub item_text_id: u32,
 }
 
 /// Source-shard value reserved by a sharded listing operation. An active operation receipt makes
@@ -92,7 +95,32 @@ pub struct AuctionHold {
     pub consignment_rate: u32,
     #[default(0)]
     pub random_property_id: u32,
+    /// The listed Plain Letter's `ITEM_FIELD_ITEM_TEXT_ID`. 0 for every other item.
+    #[default(0u32)]
+    pub item_text_id: u32,
 }
+
+// A listing Hold keeps the item and the deposit on the seller's Home Shard, and its refund mails
+// them back from that Shard. It travels with its Character like the bid Hold, so the next
+// MSG_AUCTION_HELLO on the new Home Shard finishes the listing. Deletion is refused while a Hold
+// exists, so the delete sweep finds none.
+crate::character_owned!(delete, fn sweep_delete_game_auction_hold(ctx, character_guid) {
+    let operations: Vec<u64> = ctx
+        .db
+        .game_auction_hold()
+        .by_seller()
+        .filter(&character_guid)
+        .map(|hold| hold.operation_id)
+        .collect();
+    for operation_id in operations {
+        ctx.db.game_auction_hold().operation_id().delete(operation_id);
+    }
+});
+crate::character_owned!(transfer, fn sweep_transfer_game_auction_hold(ctx, character_guid, io) {
+    table = game_auction_hold,
+    by = by_seller,
+    keep_key,
+});
 
 /// Durable idempotency receipt. The full listing payload makes identical replay distinguishable
 /// from conflicting reuse even after the source Hold has been deleted. Realm-core alone uses
@@ -123,6 +151,9 @@ pub struct AuctionOperationReceipt {
     pub consignment_rate: u32,
     #[default(0)]
     pub random_property_id: u32,
+    /// The listed Plain Letter's `ITEM_FIELD_ITEM_TEXT_ID`. 0 for every other item.
+    #[default(0u32)]
+    pub item_text_id: u32,
 }
 
 /// Source-shard copper Hold for one caller-identified bid or Cancellation. `outcome == 0` is
@@ -248,7 +279,7 @@ pub struct AuctionNotice {
 }
 
 // Auction durability belongs to the listing protocol, not character transport. Active Auction or
-// Hold value blocks character deletion, and every row except the bid Hold stays on the database
+// Hold value blocks character deletion, and every row except the two Holds stays on the database
 // that owns its protocol phase rather than entering the character movement manifest.
 
 fn duration_multiplier(duration_minutes: u32) -> Option<u64> {
@@ -386,10 +417,6 @@ struct ListingItem {
     mailable: bool,
     snapshot: crate::items::ItemSnapshot,
     sell_price: u32,
-    /// `ITEM_FIELD_ITEM_TEXT_ID` off the live row, not the snapshot — `ItemSnapshot` does not
-    /// carry it yet, so a listed-and-sold Plain Letter would arrive unreadable. Stopgap until a
-    /// later change carries the id through a listing: refuse it here instead.
-    item_text_id: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1094,16 +1121,35 @@ trait BidSource {
     fn confirm_refund(&mut self, request: HoldRequest) -> Result<(), AuctionRefusal>;
 }
 
+/// A request no Hold can carry: a zero operation, Character, listing or house, or a bid of 0. A
+/// Cancellation's cut is 0 for a listing nobody bid on.
+fn request_is_malformed(request: &HoldRequest) -> bool {
+    request.operation_id == 0
+        || request.bidder_guid == 0
+        || request.auction_id == 0
+        || request.house == 0
+        || (request.operation == HoldOperation::Bid && request.offer == 0)
+}
+
+/// The listing `request` names, while it is still active in the request's Auction Market.
+fn active_listing(
+    auction: Option<BidAuction>,
+    request: &HoldRequest,
+    now_micros: i64,
+) -> Option<BidAuction> {
+    auction.filter(|auction| {
+        auction.id == request.auction_id
+            && lyracore_shared::auction::market_of(auction.house)
+                == lyracore_shared::auction::market_of(request.house)
+            && auction.expires_micros > now_micros
+    })
+}
+
 /// Move a Hold's value out of the purse. A bid holds its full offer. A Cancellation holds the Auction
 /// Cut, which is 0 for a listing nobody bid on, and still takes the Hold so the interaction Gate
 /// runs on the Home Shard.
 fn fence_bid<S: BidSource>(source: &mut S, request: HoldRequest) -> Result<(), AuctionRefusal> {
-    if request.operation_id == 0
-        || request.bidder_guid == 0
-        || request.auction_id == 0
-        || request.house == 0
-        || (request.offer == 0 && request.operation == HoldOperation::Bid)
-    {
+    if request_is_malformed(&request) {
         return Err(AuctionRefusal::Database);
     }
     if let Some(hold) = source.hold(request.operation_id) {
@@ -1164,21 +1210,10 @@ fn minimum_next_bid(auction: BidAuction) -> Result<u32, HoldDecision> {
 }
 
 fn decide_bid(auction: Option<BidAuction>, request: HoldRequest, now_micros: i64) -> HoldDecision {
-    if request.operation != HoldOperation::Bid
-        || request.operation_id == 0
-        || request.bidder_guid == 0
-        || request.auction_id == 0
-        || request.house == 0
-        || request.offer == 0
-    {
+    if request.operation != HoldOperation::Bid || request_is_malformed(&request) {
         return HoldDecision::Database;
     }
-    let Some(auction) = auction.filter(|auction| {
-        auction.id == request.auction_id
-            && lyracore_shared::auction::market_of(auction.house)
-                == lyracore_shared::auction::market_of(request.house)
-            && auction.expires_micros > now_micros
-    }) else {
+    let Some(auction) = active_listing(auction, &request, now_micros) else {
         return HoldDecision::ItemNotFound;
     };
     if auction.owner_guid == request.bidder_guid {
@@ -1241,21 +1276,12 @@ fn decide_cancel(
     request: HoldRequest,
     now_micros: i64,
 ) -> HoldDecision {
-    if request.operation != HoldOperation::Cancel
-        || request.operation_id == 0
-        || request.bidder_guid == 0
-        || request.auction_id == 0
-        || request.house == 0
-    {
+    if request.operation != HoldOperation::Cancel || request_is_malformed(&request) {
         return HoldDecision::Database;
     }
-    let Some(auction) = auction.filter(|auction| {
-        auction.id == request.auction_id
-            && auction.owner_guid == request.bidder_guid
-            && lyracore_shared::auction::market_of(auction.house)
-                == lyracore_shared::auction::market_of(request.house)
-            && auction.expires_micros > now_micros
-    }) else {
+    let Some(auction) = active_listing(auction, &request, now_micros)
+        .filter(|auction| auction.owner_guid == request.bidder_guid)
+    else {
         return HoldDecision::ItemNotFound;
     };
     // A bid without a bidder, or a bidder without a bid, has no one to refund; expiry keeps the
@@ -1678,6 +1704,7 @@ fn listing_from_hold(row: AuctionHold) -> PreparedListing {
             enchant_id: row.item_enchant_id,
             soulbound: row.item_soulbound,
             random_property_id: row.random_property_id,
+            item_text_id: row.item_text_id,
         },
         deposit: row.deposit,
         created_micros: row.created_micros,
@@ -1696,6 +1723,7 @@ fn hold_from_listing(listing: PreparedListing) -> AuctionHold {
         item_enchant_id: listing.snapshot.enchant_id,
         item_soulbound: listing.snapshot.soulbound,
         random_property_id: listing.snapshot.random_property_id,
+        item_text_id: listing.snapshot.item_text_id,
         start_bid: listing.request.terms.start_bid,
         buyout: listing.request.terms.buyout,
         duration_minutes: listing.request.terms.duration_minutes,
@@ -1733,6 +1761,7 @@ fn listing_from_receipt(row: AuctionOperationReceipt) -> ListingReceipt {
                 enchant_id: row.item_enchant_id,
                 soulbound: row.item_soulbound,
                 random_property_id: row.random_property_id,
+                item_text_id: row.item_text_id,
             },
             deposit: row.deposit,
             created_micros: row.created_micros,
@@ -1754,6 +1783,7 @@ fn receipt_from_listing(listing: PreparedListing, auction_id: u32) -> AuctionOpe
         item_enchant_id: listing.snapshot.enchant_id,
         item_soulbound: listing.snapshot.soulbound,
         random_property_id: listing.snapshot.random_property_id,
+        item_text_id: listing.snapshot.item_text_id,
         start_bid: listing.request.terms.start_bid,
         buyout: listing.request.terms.buyout,
         duration_minutes: listing.request.terms.duration_minutes,
@@ -1786,7 +1816,6 @@ impl ListingSource for CtxSource<'_> {
                 .is_ok(),
             snapshot: crate::items::ItemSnapshot::from(&item),
             sell_price: template.sell_price,
-            item_text_id: item.item_text_id,
         })
     }
 
@@ -1810,6 +1839,7 @@ fn insert_active_auction(ctx: &ReducerContext, listing: &PreparedListing) -> u32
         item_enchant_id: listing.snapshot.enchant_id,
         item_soulbound: listing.snapshot.soulbound,
         random_property_id: listing.snapshot.random_property_id,
+        item_text_id: listing.snapshot.item_text_id,
         start_bid: listing.request.terms.start_bid,
         buyout: listing.request.terms.buyout,
         highest_bidder_guid: 0,
@@ -2109,6 +2139,7 @@ impl BidMarket for CtxBidMarket<'_> {
                     enchant_id: auction.item_enchant_id,
                     soulbound: auction.item_soulbound,
                     random_property_id: auction.random_property_id,
+                    item_text_id: auction.item_text_id,
                 },
                 highest_bidder_guid: auction.highest_bidder_guid,
                 highest_bid: auction.highest_bid,
@@ -2668,6 +2699,7 @@ pub fn realm_auction_commit_listing(
     deposit: u32,
     created_micros: i64,
     expires_micros: i64,
+    item_text_id: u32,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let seller_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
@@ -2694,6 +2726,7 @@ pub fn realm_auction_commit_listing(
             enchant_id: item_enchant_id,
             soulbound: item_soulbound,
             random_property_id,
+            item_text_id,
         },
         deposit,
         created_micros,
@@ -2792,6 +2825,7 @@ pub fn realm_auction_refund_listing(
     deposit: u32,
     created_micros: i64,
     expires_micros: i64,
+    item_text_id: u32,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let seller_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
@@ -2816,6 +2850,7 @@ pub fn realm_auction_refund_listing(
             deposit,
             created_micros,
             expires_micros,
+            item_text_id,
         })),
     )
     .map_err(|refusal| refused(refusal, "listing refund conflict"))
@@ -3264,6 +3299,7 @@ pub fn debug_stage_auction_buyout_fixture(ctx: &ReducerContext) -> Result<(), St
         revision: 3,
         deposit_rate: 5,
         consignment_rate: 5,
+        item_text_id: 0,
     });
     ctx.db.game_auction_expiry().insert(AuctionExpiry {
         scheduled_id: 0,
@@ -3297,6 +3333,7 @@ pub fn debug_stage_auction_buyout_fixture(ctx: &ReducerContext) -> Result<(), St
         revision: 0,
         deposit_rate: 5,
         consignment_rate: 5,
+        item_text_id: 0,
     });
     ctx.db.game_auction_expiry().insert(AuctionExpiry {
         scheduled_id: 0,
@@ -3426,6 +3463,7 @@ pub fn debug_verify_auction_buyout_fixture(ctx: &ReducerContext) -> Result<(), S
         enchant_id: 9,
         soulbound: false,
         random_property_id: 117,
+        item_text_id: 0,
     };
 
     let refund = auction_fixture_mail(
@@ -3715,6 +3753,7 @@ pub fn debug_stage_auction_cancel_fixture(
             revision: u64::from(highest_bid != 0),
             deposit_rate: 25,
             consignment_rate: 15,
+            item_text_id: 0,
         });
         ctx.db.game_auction_expiry().insert(AuctionExpiry {
             scheduled_id: 0,
@@ -3741,6 +3780,7 @@ const EXPIRY_FIXTURE_ITEM: crate::items::ItemSnapshot = crate::items::ItemSnapsh
     enchant_id: 9,
     soulbound: false,
     random_property_id: 117,
+    item_text_id: 0,
 };
 #[cfg(feature = "debug_reducers")]
 const EXPIRY_FIXTURE_UNSOLD_AUCTION_ID: u32 = 509_0065;
@@ -3756,6 +3796,7 @@ const EXPIRY_FIXTURE_UNSOLD_ITEM: crate::items::ItemSnapshot = crate::items::Ite
     enchant_id: 0,
     soulbound: false,
     random_property_id: 0,
+    item_text_id: 0,
 };
 
 /// Stage a valid winning-bid Auction whose one-shot schedule fires shortly after this
@@ -3846,6 +3887,7 @@ pub fn debug_stage_auction_expiry_fixture(ctx: &ReducerContext) -> Result<(), St
             house: 1,
             deposit_rate: 5,
             consignment_rate: 5,
+            item_text_id: 0,
         });
     ctx.db.game_auction().insert(Auction {
         id: EXPIRY_FIXTURE_AUCTION_ID,
@@ -3869,6 +3911,7 @@ pub fn debug_stage_auction_expiry_fixture(ctx: &ReducerContext) -> Result<(), St
         revision: 3,
         deposit_rate: 5,
         consignment_rate: 5,
+        item_text_id: 0,
     });
     ctx.db.game_auction_expiry().insert(AuctionExpiry {
         scheduled_id: 0,
@@ -3901,6 +3944,7 @@ pub fn debug_stage_auction_expiry_fixture(ctx: &ReducerContext) -> Result<(), St
             house: 1,
             deposit_rate: 5,
             consignment_rate: 5,
+            item_text_id: 0,
         });
     ctx.db.game_auction().insert(Auction {
         id: EXPIRY_FIXTURE_UNSOLD_AUCTION_ID,
@@ -3924,6 +3968,7 @@ pub fn debug_stage_auction_expiry_fixture(ctx: &ReducerContext) -> Result<(), St
         revision: 0,
         deposit_rate: 5,
         consignment_rate: 5,
+        item_text_id: 0,
     });
     ctx.db.game_auction_expiry().insert(AuctionExpiry {
         scheduled_id: 0,
@@ -4225,6 +4270,7 @@ pub fn debug_stage_legacy_auction_mail_fixture(ctx: &ReducerContext) -> Result<(
         deposit_rate: 5,
         consignment_rate: 5,
         random_property_id: 0,
+        item_text_id: 0,
     };
     receipts.insert(AuctionOperationReceipt {
         operation_id: LEGACY_MAIL_WON_RECEIPT_OPERATION_ID,
@@ -4284,6 +4330,7 @@ pub fn debug_stage_legacy_auction_mail_fixture(ctx: &ReducerContext) -> Result<(
                 enchant_id: 0,
                 soulbound: false,
                 random_property_id: 0,
+                item_text_id: 0,
             },
         ),
     );
@@ -4303,6 +4350,7 @@ pub fn debug_stage_legacy_auction_mail_fixture(ctx: &ReducerContext) -> Result<(
                 enchant_id: 0,
                 soulbound: false,
                 random_property_id: 0,
+                item_text_id: 0,
             },
         ),
     );
@@ -4322,6 +4370,7 @@ pub fn debug_stage_legacy_auction_mail_fixture(ctx: &ReducerContext) -> Result<(
                 enchant_id: 0,
                 soulbound: false,
                 random_property_id: 0,
+                item_text_id: 0,
             },
         ),
     );
@@ -4798,7 +4847,6 @@ fn prepare_listing(
         || !item.mailable
         || item.snapshot.stack_count == 0
         || item.snapshot.soulbound
-        || item.item_text_id != 0
     {
         return Err(AuctionRefusal::ItemNotFound);
     }
@@ -5114,9 +5162,9 @@ mod tests {
                 enchant_id: 9,
                 soulbound: false,
                 random_property_id: 117,
+                item_text_id: 0,
             },
             sell_price: 100,
-            item_text_id: 0,
         }
     }
 
@@ -5209,14 +5257,12 @@ mod tests {
             Err(AuctionRefusal::ItemNotFound)
         );
 
-        // Stopgap: a Plain Letter's readable text does not survive a listing yet
-        // (`ItemSnapshot` carries no text id), so refuse it the same way a soulbound item is
-        // refused, rather than let it sell and arrive blank.
-        let mut readable = item(23);
-        readable.item_text_id = 1;
+        let mut letter = item(23);
+        letter.snapshot.item_text_id = 8;
         assert_eq!(
-            prepare_listing(Some(&readable), 7, 10, terms(), policy()),
-            Err(AuctionRefusal::ItemNotFound)
+            prepare_listing(Some(&letter), 7, 10, terms(), policy()),
+            Ok(10),
+            "a Letter Copy's Plain Letter lists, and its text id travels in the snapshot"
         );
 
         assert_eq!(

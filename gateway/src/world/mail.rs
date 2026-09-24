@@ -294,6 +294,8 @@ pub struct AttachedItem {
     pub enchant_id: u32,
     pub soulbound: bool,
     pub random_property_id: u32,
+    /// A Plain Letter's `ITEM_FIELD_ITEM_TEXT_ID`. 0 for every other item.
+    pub item_text_id: u32,
 }
 
 impl AttachedItem {
@@ -301,8 +303,8 @@ impl AttachedItem {
         self.entry == 0
     }
 }
-/// The fence a send just filed. The commit takes the attachment and the Delivery Delay from it,
-/// exactly as a re-drive does.
+/// The fence a send or a take just filed. The next step takes the attachment, and a send's Delivery
+/// Delay, from it, exactly as a re-drive does.
 fn held_fence<St: WorldStore + ?Sized>(
     store: &St,
     sender_guid: u64,
@@ -468,20 +470,12 @@ pub(crate) fn take_item<St: WorldStore + ?Sized>(
         .into_iter()
         .find(|m| m.id == mail_id)
         .ok_or_else(|| TakeItemRefusal::Other(mail_rules::NOT_YOUR_MAIL.to_string()))?;
-    let item = AttachedItem {
-        entry: row.item_entry,
-        stack_count: row.item_stack_count,
-        durability: row.item_durability,
-        enchant_id: row.item_enchant_id,
-        soulbound: row.item_soulbound,
-        random_property_id: row.random_property_id,
-    };
-    if item.is_empty() {
+    if row.item_entry == 0 {
         return Err(TakeItemRefusal::Other(
             mail_rules::NOTHING_TO_TAKE.to_string(),
         ));
     }
-    let taken = (item.entry, item.stack_count);
+    let taken = (row.item_entry, row.item_stack_count);
     let Some(realm) = store.realm_store() else {
         store
             .mail_take_item(self_guid, mail_id)
@@ -492,10 +486,13 @@ pub(crate) fn take_item<St: WorldStore + ?Sized>(
     pay_cod(store, realm.as_ref(), self_guid, &row).map_err(take_item_refusal)?;
     let escrow_id = next_escrow_id().map_err(take_item_refusal)?;
     realm
-        .mail_take_item_fence(escrow_id, self_guid, mail_id, item.entry)
+        .mail_take_item_fence(escrow_id, self_guid, mail_id, row.item_entry)
         .map_err(take_item_refusal)?;
+    let item = held_fence(realm.as_ref(), self_guid, escrow_id)
+        .map_err(take_item_refusal)?
+        .item;
     drive(realm.as_ref(), escrow_id, || {
-        store.mail_item_payout(escrow_id, self_guid, mail_id, item.clone())
+        store.mail_item_payout(escrow_id, self_guid, mail_id, item)
     })
     .map_err(take_item_refusal)?;
     Ok(taken)
@@ -583,11 +580,7 @@ fn refusal_from_module(e: anyhow::Error) -> SendRefusal {
     let text = format!("{e:#}");
     if text.contains(mail_rules::NOT_ENOUGH_MONEY) {
         SendRefusal::NotEnoughMoney(text)
-    } else if text.contains(mail_rules::ITEM_IS_SOULBOUND)
-        || text.contains(mail_rules::ITEM_HAS_TEXT)
-    {
-        // A Plain Letter is refused the same way a soulbound item is: neither can move, so both
-        // answer with vanilla's nearest "attachment refused" line rather than a not-your-item one.
+    } else if text.contains(mail_rules::ITEM_IS_SOULBOUND) {
         SendRefusal::AttachmentSoulbound(text)
     } else if text.contains(mail_rules::NOT_YOUR_ITEM) {
         SendRefusal::AttachmentInvalid(text)

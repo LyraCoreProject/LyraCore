@@ -321,6 +321,8 @@ pub(crate) struct ItemSnapshot {
     pub enchant_id: u32,
     pub soulbound: bool,
     pub random_property_id: u32,
+    /// `ITEM_FIELD_ITEM_TEXT_ID` of a Plain Letter from a Letter Copy. 0 for every other item.
+    pub item_text_id: u32,
 }
 
 impl ItemSnapshot {
@@ -338,6 +340,7 @@ impl From<&ItemInstance> for ItemSnapshot {
             enchant_id: item.enchant_id,
             soulbound: item.soulbound,
             random_property_id: item.random_property_id,
+            item_text_id: item.item_text_id,
         }
     }
 }
@@ -375,11 +378,7 @@ pub(crate) fn store_instance_state(
         // expression exactly, so an arriving item cannot end up less bound than a granted one.
         soulbound: snapshot.soulbound || binds_on_grant(tmpl.bonding),
         random_property_id: snapshot.random_property_id,
-        // A snapshot carries no text id. A mailed, traded or auctioned Plain Letter therefore
-        // arrives blank if it passes through here — a known gap, not a guarantee that a snapshot
-        // is never a Letter Copy's item. `grant_letter_item` mints a fresh letter with its text id
-        // directly; nothing yet carries that id through a snapshot.
-        item_text_id: 0,
+        item_text_id: snapshot.item_text_id,
     });
     Ok(())
 }

@@ -228,6 +228,89 @@ fn mail_escrowed_before_the_mail_header_arrives_as_a_delivered_character_mail() 
         (0, 0, 0, 0, 0),
         "a Character mail with no stored flags, visible since creation"
     );
+    assert_eq!(row.item_text_id, 0);
+}
+
+#[test]
+fn mail_escrowed_with_the_mail_header_keeps_it_and_carries_no_letter_text() {
+    let rows = vec![MailHeaderMail {
+        id: 1,
+        recipient_guid: 73,
+        sender_guid: 0,
+        subject: "5090001:0:1".to_owned(),
+        body: String::new(),
+        item_entry: 509_0001,
+        item_stack_count: 1,
+        item_durability: 51,
+        item_enchant_id: 0,
+        item_soulbound: false,
+        money: 0,
+        cod: 0,
+        was_read: false,
+        created_at: Timestamp::from_micros_since_unix_epoch(1234),
+        random_property_id: 0,
+        sender_kind: 2,
+        sender_entry: 7,
+        check_flags: 0x04,
+        mail_template_id: 0,
+        deliver_micros: 5678,
+    }];
+    let arrived: Vec<Mail> = arrive(entry("game_mail@mail-header-1", rows));
+    let row = &arrived[0];
+    assert_eq!(
+        (
+            row.sender_kind,
+            row.sender_entry,
+            row.check_flags,
+            row.deliver_micros,
+            &*row.subject
+        ),
+        (2, 7, 0x04, 5678, "5090001:0:1")
+    );
+    assert_eq!(row.item_text_id, 0);
+}
+
+#[test]
+fn a_mail_escrow_that_travelled_untagged_arrives_with_no_letter_text() {
+    let rows = vec![RewardHeaderMailEscrow {
+        escrow_id: 41,
+        sender_guid: 73,
+        recipient_guid: 73,
+        subject: String::new(),
+        body: "Take this, $n.".to_owned(),
+        money: 1_000_000,
+        postage: 0,
+        created_micros: 1234,
+        delivered: false,
+        payout: false,
+        mail_id: 0,
+        item_entry: 509_0001,
+        item_stack_count: 1,
+        item_durability: 51,
+        item_enchant_id: 0,
+        item_soulbound: false,
+        cod: 0,
+        random_property_id: 0,
+        delivery_delay_secs: 129_600,
+        sender_kind: 3,
+        sender_entry: 11811,
+        mail_template_id: 88,
+    }];
+    let arrived: Vec<MailEscrow> = arrive(entry("game_mail_escrow", rows));
+    let row = &arrived[0];
+    assert_eq!(
+        (
+            row.escrow_id,
+            row.money,
+            row.delivery_delay_secs,
+            row.sender_kind,
+            row.sender_entry,
+            row.mail_template_id,
+            &*row.body
+        ),
+        (41, 1_000_000, 129_600, 3, 11811, 88, "Take this, $n.")
+    );
+    assert_eq!(row.item_text_id, 0);
 }
 
 /// The encoded field names of `T`, in order.
@@ -265,7 +348,7 @@ fn game_mail_has_the_shape_its_transfer_tag_names() {
     assert_eq!(
         (tag, field_names::<Mail>()),
         (
-            Some("game_mail@mail-header-1"),
+            Some("game_mail@letter-text-1"),
             [
                 "id",
                 "recipient_guid",
@@ -287,6 +370,7 @@ fn game_mail_has_the_shape_its_transfer_tag_names() {
                 "check_flags",
                 "mail_template_id",
                 "deliver_micros",
+                "item_text_id",
             ]
             .map(String::from)
             .to_vec()
@@ -294,11 +378,104 @@ fn game_mail_has_the_shape_its_transfer_tag_names() {
         "game_mail changed shape. Escrowed rows in the old shape would no longer decode: add a new \
          tag to FORMATS, decode the old tag with a struct of the old shape, then update this pin"
     );
-    let previous = field_names::<RandomPropertyMail>();
+    let previous = field_names::<MailHeaderMail>();
     assert_eq!(
         previous[..],
         field_names::<Mail>()[..previous.len()],
         "the previous shape must be a prefix of the current one, since columns are END-appended"
+    );
+}
+
+/// [`game_mail_has_the_shape_its_transfer_tag_names`]'s twin for `game_mail_escrow`.
+#[test]
+fn game_mail_escrow_has_the_shape_its_transfer_tag_names() {
+    let tag = FORMATS
+        .iter()
+        .find(|(table, _)| *table == "game_mail_escrow")
+        .map(|(_, tag)| *tag);
+    assert_eq!(
+        (tag, field_names::<MailEscrow>()),
+        (
+            Some("game_mail_escrow@letter-text-1"),
+            [
+                "escrow_id",
+                "sender_guid",
+                "recipient_guid",
+                "subject",
+                "body",
+                "money",
+                "postage",
+                "created_micros",
+                "delivered",
+                "payout",
+                "mail_id",
+                "item_entry",
+                "item_stack_count",
+                "item_durability",
+                "item_enchant_id",
+                "item_soulbound",
+                "cod",
+                "random_property_id",
+                "delivery_delay_secs",
+                "sender_kind",
+                "sender_entry",
+                "mail_template_id",
+                "item_text_id",
+            ]
+            .map(String::from)
+            .to_vec()
+        ),
+        "game_mail_escrow changed shape. Escrowed rows in the old shape would no longer decode: \
+         add a new tag to FORMATS, decode the old tag with a struct of the old shape, then update \
+         this pin"
+    );
+    let previous = field_names::<RewardHeaderMailEscrow>();
+    assert_eq!(
+        previous[..],
+        field_names::<MailEscrow>()[..previous.len()],
+        "the previous shape must be a prefix of the current one, since columns are END-appended"
+    );
+}
+
+/// [`game_mail_has_the_shape_its_transfer_tag_names`]'s twin for the listing Hold. It first
+/// travelled in this shape, so there is no older one to decode.
+#[test]
+fn game_auction_hold_has_the_shape_its_transfer_tag_names() {
+    let tag = FORMATS
+        .iter()
+        .find(|(table, _)| *table == "game_auction_hold")
+        .map(|(_, tag)| *tag);
+    assert_eq!(
+        (tag, field_names::<crate::auction::AuctionHold>()),
+        (
+            Some("game_auction_hold@letter-text-1"),
+            [
+                "operation_id",
+                "seller_guid",
+                "item_guid",
+                "item_entry",
+                "item_stack_count",
+                "item_durability",
+                "item_enchant_id",
+                "item_soulbound",
+                "start_bid",
+                "buyout",
+                "duration_minutes",
+                "deposit",
+                "created_micros",
+                "expires_micros",
+                "house",
+                "deposit_rate",
+                "consignment_rate",
+                "random_property_id",
+                "item_text_id",
+            ]
+            .map(String::from)
+            .to_vec()
+        ),
+        "game_auction_hold changed shape. Escrowed rows in the old shape would no longer decode: \
+         add a new tag to FORMATS, decode the old tag with a struct of the old shape, then update \
+         this pin"
     );
 }
 

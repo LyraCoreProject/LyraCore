@@ -240,6 +240,7 @@ crate::character_owned!(delete, fn sweep_delete_game_item_instance(ctx, characte
     let items = ctx.db.game_item_instance();
     for r in items.by_owner_guid().filter(&character_guid).collect::<Vec<_>>() {
         items.guid().delete(r.guid);
+        crate::mail_text::release_letter_text(ctx, r.item_text_id);
     }
 });
 // Transfer preserves the item identity the client already knows. New items consume the Shard's
