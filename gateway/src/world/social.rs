@@ -354,8 +354,7 @@ fn swap_subgroup<St: WorldStore + ?Sized>(
     let Some(me) = self_guid(conn) else {
         return Ok(());
     };
-    let (first, second) =
-        party::resolve_roster_members_by_name(store, me, name, swap_with_name)?;
+    let (first, second) = party::resolve_roster_members_by_name(store, me, name, swap_with_name)?;
     match (first, second) {
         (Some(first), Some(second)) => {
             run_unanswered(store, conn, party::Op::SwapSubgroup { first, second })

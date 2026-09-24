@@ -3348,8 +3348,8 @@ fn changing_into_the_same_subgroup_pushes_no_mirror() {
 
     let outcome = party::run(
         world.as_ref(),
-        8,
-        VIM,
+        7,
+        GINGER,
         party::Op::ChangeSubgroup {
             target: VIM,
             subgroup: 0,
@@ -3357,7 +3357,7 @@ fn changing_into_the_same_subgroup_pushes_no_mirror() {
     )
     .unwrap();
 
-    assert_eq!(outcome, PartyOutcome::Refused(GroupRefusal::NotLeader));
+    assert_eq!(outcome, PartyOutcome::Ran, "Vim already holds Subgroup 0");
     assert_eq!(mirror_calls(&calls), mirrors_before);
 }
 
@@ -3479,8 +3479,8 @@ fn subgroup_ops_in_a_party_are_refused_and_change_nothing() {
 }
 
 /// A Raid whose Subgroup 0 and Subgroup 1 each hold 5 members: `GINGER` leads Subgroup 0,
-/// `VIM` leads Subgroup 1. AC 3 and AC 6 need full Subgroups, distinct from the placement rule's
-/// own edge T3's joiner tests already cover.
+/// `VIM` leads Subgroup 1. AC 3 and AC 6 need Subgroups already full, which is a different
+/// scenario from a member joining one with room.
 fn seed_raid_with_two_full_subgroups(realm: &InMemoryStore) {
     let mut p = realm.party.lock().unwrap();
     let group_id = 20;

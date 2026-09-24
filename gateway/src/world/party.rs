@@ -670,24 +670,27 @@ impl From<GroupRefusal> for PartyOutcome {
 // directly.
 pub(crate) use super::presence::{character_anywhere, live_anywhere, resolve_all_by_name};
 
-/// Resolve a typed name against `self_guid`'s OWN roster, for `CMSG_GROUP_CHANGE_SUB_GROUP` and
-/// `CMSG_GROUP_SWAP_SUB_GROUP`. cmangos matches these against the member list alone
-/// (cm:GroupHandler.cpp:919-936), never realm-wide — unlike [`presence::resolve_by_name`], which a
-/// namesake standing outside the Raid must not reach. `None` for no Group, or a name matching no
-/// member.
-pub(crate) fn resolve_roster_member_by_name<St: WorldStore + ?Sized>(
+/// `self_guid`'s own Group roster, read from the authority: Realm-core when sharded, this handle's
+/// own tables otherwise. Shared by [`resolve_roster_member_by_name`] and
+/// [`resolve_roster_members_by_name`] so a caller resolving more than one name reads the roster
+/// once rather than once per name, which would let two names resolve against two different
+/// snapshots of a roster another op changed in between.
+fn own_group_roster<St: WorldStore + ?Sized>(
     store: &St,
     self_guid: u64,
+) -> Result<Option<GroupRoster>> {
+    match store.realm_store() {
+        Some(realm) => realm.group_roster(self_guid),
+        None => store.group_roster(self_guid),
+    }
+}
+
+/// Resolve a typed name against `roster`'s members: `None` for a name matching nobody there.
+fn resolve_in_roster<St: WorldStore + ?Sized>(
+    store: &St,
+    roster: &GroupRoster,
     name: &str,
 ) -> Result<Option<u64>> {
-    let authority = store.realm_store();
-    let roster = match &authority {
-        Some(realm) => realm.group_roster(self_guid)?,
-        None => store.group_roster(self_guid)?,
-    };
-    let Some(roster) = roster else {
-        return Ok(None);
-    };
     for member in &roster.members {
         if character_anywhere(store, member.guid)?
             .is_some_and(|character| character.name.eq_ignore_ascii_case(name))
@@ -696,6 +699,42 @@ pub(crate) fn resolve_roster_member_by_name<St: WorldStore + ?Sized>(
         }
     }
     Ok(None)
+}
+
+/// Resolve a typed name against `self_guid`'s OWN roster, for `CMSG_GROUP_CHANGE_SUB_GROUP`.
+/// cmangos's Swap Subgroup matches a typed name against the group's own member list this way
+/// (cm:GroupHandler.cpp:919-936); its Change Subgroup instead resolves the name realm-wide and
+/// refuses afterward when the result is not a member. LyraCore applies the member-list rule to
+/// both opcodes, so neither can reach a namesake standing outside the Raid — unlike
+/// [`presence::resolve_by_name`]. `None` for no Group, or a name matching no member.
+pub(crate) fn resolve_roster_member_by_name<St: WorldStore + ?Sized>(
+    store: &St,
+    self_guid: u64,
+    name: &str,
+) -> Result<Option<u64>> {
+    let Some(roster) = own_group_roster(store, self_guid)? else {
+        return Ok(None);
+    };
+    resolve_in_roster(store, &roster, name)
+}
+
+/// [`resolve_roster_member_by_name`] for `CMSG_GROUP_SWAP_SUB_GROUP`'s two names, resolved against
+/// ONE roster read rather than two: reading the roster separately per name could resolve the pair
+/// against two different snapshots if another op changed the roster in between, letting a swap
+/// name a member who had already left. `(None, None)` for no Group.
+pub(crate) fn resolve_roster_members_by_name<St: WorldStore + ?Sized>(
+    store: &St,
+    self_guid: u64,
+    first_name: &str,
+    second_name: &str,
+) -> Result<(Option<u64>, Option<u64>)> {
+    let Some(roster) = own_group_roster(store, self_guid)? else {
+        return Ok((None, None));
+    };
+    Ok((
+        resolve_in_roster(store, &roster, first_name)?,
+        resolve_in_roster(store, &roster, second_name)?,
+    ))
 }
 
 /// Route admission to the World Shard that reports the live entity. The acknowledged operation
