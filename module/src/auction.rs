@@ -154,6 +154,28 @@ pub struct AuctionBidHold {
     pub operation: u8,
 }
 
+// A Hold is copper on the Character's Home Shard, so it travels with the Character. A Hold left on
+// a Shard the Character has left could never be refunded there, because the refund credits the
+// purse on the Shard that holds the Hold. Deletion is refused while a Hold is unfinished, so the
+// delete sweep only removes finished rows.
+crate::character_owned!(delete, fn sweep_delete_game_auction_bid_hold(ctx, character_guid) {
+    let operations: Vec<u64> = ctx
+        .db
+        .game_auction_bid_hold()
+        .by_bidder()
+        .filter(&character_guid)
+        .map(|hold| hold.operation_id)
+        .collect();
+    for operation_id in operations {
+        ctx.db.game_auction_bid_hold().operation_id().delete(operation_id);
+    }
+});
+crate::character_owned!(transfer, fn sweep_transfer_game_auction_bid_hold(ctx, character_guid, io) {
+    table = game_auction_bid_hold,
+    by = by_bidder,
+    keep_key,
+});
+
 /// Realm-core's terminal serialized decision for one bid or Cancellation payload. Auction changes,
 /// buyout and Cancellation mail, displaced mail, and any later source-refund mail are exact-once
 /// updates recorded on this row.
@@ -226,8 +248,8 @@ pub struct AuctionNotice {
 }
 
 // Auction durability belongs to the listing protocol, not character transport. Active Auction or
-// Hold value blocks character deletion, and every row stays on the database that owns its protocol
-// phase rather than entering the character movement manifest.
+// Hold value blocks character deletion, and every row except the bid Hold stays on the database
+// that owns its protocol phase rather than entering the character movement manifest.
 
 fn duration_multiplier(duration_minutes: u32) -> Option<u64> {
     match duration_minutes {

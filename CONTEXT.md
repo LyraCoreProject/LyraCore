@@ -706,9 +706,11 @@ expired or cancelled. Rides the same private per-recipient Relay as a whisper; a
 gets the Auction Mail only.
 
 **Hold**:
-Copper taken from a Character's purse on its Home Shard for one bid or Cancellation, and held while
-Realm-core decides. The decision spends it or gives it back, exactly once. Unlike Escrow, a Refusal
-refunds it.
+Value taken from a Character on its Home Shard for one auction operation, and held while Realm-core
+decides. A listing Hold keeps the item and the deposit. A bid Hold keeps the full offer, and a
+Cancellation's bid Hold keeps the Auction Cut. The decision spends the Hold or gives it back,
+exactly once. Unlike Escrow, a Refusal refunds it. A bid Hold travels with its Character on
+Transfer.
 
 **Cancellation**:
 The seller withdraws an active listing. The item goes back by Auction Mail, a displaced bidder gets

@@ -373,8 +373,10 @@ Character's unfinished Holds through an in-memory index kept from the cache's ro
 finishes them when the Character next opens the auction house.
 `game_auction_expiry` is a private one-shot schedule at the listing's original deadline. These
 callbacks return an unbid item or settle a winning bid with exact item and proceeds mail, then no-op
-when replayed. These tables are additive and are deliberately excluded from character transfer
-manifests; deletion is refused while a character owns Auction value.
+when replayed. These tables are additive. `game_auction_bid_hold` is in the character transfer
+manifest, because its refund credits the purse on the Shard that holds it, so an unfinished Hold
+arrives with its Character and settles there. The other auction tables stay out of the manifest.
+Deletion is refused while a character owns Auction value.
 
 Every mail a bid, buyout, expiry, Cancellation or refused listing sends is an Auction Mail: `MailSender::AuctionHouse(house)`, `checked = COPIED`, and a machine subject (`{item_entry}:{random_property_id}:{action}`) the client turns into its own text. Private `game_auction_notice` is the matching live packet: one row per outbid, won, sold, expired, new-bid or removed notice, inserted in the same transaction as its mail and reaped ~1 s later by the shared event GC (`docs/architecture.md` §5.3 names its relay).
 

@@ -1349,23 +1349,20 @@ impl Coordinator {
 
     fn character_has_auction_value(&self, character_guid: u64) -> Result<bool> {
         for (_, shard) in self.world_shards() {
-            let guard = shard.0.coord();
-            let has_hold = guard
+            let has_hold = shard
+                .0
+                .coord()
                 .conn
                 .db
                 .game_auction_hold()
                 .iter()
                 .any(|hold| hold.seller_guid == character_guid);
-            if has_hold {
-                return Ok(true);
-            }
-            let has_bid_hold = guard
-                .conn
-                .db
-                .game_auction_bid_hold()
-                .iter()
-                .any(|hold| bid_hold_has_value(&hold, character_guid));
-            if has_bid_hold {
+            if has_hold
+                || shard
+                    .unfinished_auction_holds(character_guid)
+                    .next()
+                    .is_some()
+            {
                 return Ok(true);
             }
         }
@@ -4145,10 +4142,6 @@ fn bid_refund_is_recorded(hold: &AuctionBidHold, decision: &AuctionBidDecision) 
         && hold.deferred_refund == decision.deferred_refund
 }
 
-fn bid_hold_has_value(hold: &AuctionBidHold, bidder_guid: u64) -> bool {
-    hold.bidder_guid == bidder_guid && super::auction_holds::hold_is_unfinished(hold)
-}
-
 /// The seller's Auction Cut for `request`'s listing, when the listing is the seller's and lists in
 /// the auctioneer's market.
 fn listing_cut(auction: &Auction, request: crate::world::CancelAuctionRequest) -> Option<u32> {
@@ -4735,15 +4728,12 @@ mod auction_reducer_tests {
             }
         ));
 
-        let bidder_guid = hold.bidder_guid;
-        assert!(bid_hold_has_value(&hold, bidder_guid));
-        assert!(!bid_hold_has_value(&hold, bidder_guid + 1));
-        assert!(!bid_hold_has_value(
+        assert!(super::super::auction_holds::hold_is_unfinished(&hold));
+        assert!(!super::super::auction_holds::hold_is_unfinished(
             &AuctionBidHold {
                 deferred_refund: 0,
                 ..hold
-            },
-            bidder_guid
+            }
         ));
     }
 

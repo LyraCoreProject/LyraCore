@@ -352,3 +352,101 @@ fn a_cancellation_returns_the_item_refunds_the_bidder_and_charges_the_cut_once()
     )
     .is_empty());
 }
+
+/// A Cancellation Hold crosses a Shard Boundary with its Character and settles on the new Home
+/// Shard, so a Gateway stop before the decision never strands the cut on the old one.
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn an_unfinished_cancellation_hold_travels_with_its_seller_and_settles_on_the_new_home_shard() {
+    let mut source = Standalone::start("auction-cancel-source");
+    source.publish_module();
+    source.assert_call("claim_operator", &[]);
+    source.assert_call("install_guid_range", &["0"]);
+    source.assert_call("debug_seed_scenario_fixtures", &[]);
+    source.assert_call("debug_spawn_player_entity", &[LOCAL_SELLER]);
+    source.assert_call("debug_set_money", &[LOCAL_SELLER, "1000"]);
+    source.assert_call("debug_spawn_at_feet", &[LOCAL_SELLER, VENDOR_ENTRY, "1"]);
+    let vendor = rows(
+        &source,
+        &format!("SELECT guid FROM game_world_entity WHERE entry = {VENDOR_ENTRY}"),
+    )[0]["guid"]
+        .clone();
+    source.assert_call(
+        "debug_stage_auction_cancel_fixture",
+        &[LOCAL_SELLER, &vendor],
+    );
+    let seller = actor(LOCAL_SELLER);
+
+    // Phase 1 only: the Gateway stopped before Realm-core decided.
+    source.assert_call(
+        "gw_auction_hold_cancel",
+        &["5090092", &seller, &vendor, BID_LISTING, HOUSE, CUT],
+    );
+    assert_eq!(purse(&source), "850");
+    source.assert_call(
+        "begin_transfer",
+        &["5090093", &seller, "0", "0", "0", "0", "0", "0", "true"],
+    );
+    let out = rows(
+        &source,
+        "SELECT blob FROM game_transfer_out WHERE transfer_id = 5090093",
+    );
+    let blob = serde_json::to_string(out[0]["blob"].strip_prefix("0x").unwrap()).unwrap();
+
+    let mut destination = Standalone::start("auction-cancel-destination");
+    destination.publish_module();
+    destination.assert_call("claim_operator", &[]);
+    destination.assert_call("install_guid_range", &["1000000000"]);
+    let system = actor("0");
+    destination.assert_call("import_character_blob", &["5090093", &blob, &system]);
+    source.assert_call("confirm_import", &["5090093", &system]);
+    source.assert_call("finish_transfer", &["5090093", &system]);
+    destination.assert_call("release_transfer", &["5090093", &system]);
+
+    let hold_query =
+        "SELECT outcome, operation, offer, deferred_refund FROM game_auction_bid_hold \
+                      WHERE operation_id = 5090092";
+    assert!(
+        rows(&source, hold_query).is_empty(),
+        "the Hold left with its seller"
+    );
+    let arrived = rows(&destination, hold_query);
+    assert_eq!(arrived.len(), 1);
+    assert_eq!(
+        [
+            &arrived[0]["outcome"],
+            &arrived[0]["operation"],
+            &arrived[0]["offer"],
+        ],
+        ["0", "1", CUT]
+    );
+
+    // The source plays Realm-core and decides; the new Home Shard spends the Hold once.
+    source.assert_call(
+        "realm_auction_decide_cancel",
+        &["5090092", &seller, BID_LISTING, HOUSE, CUT],
+    );
+    assert_eq!(decision(&source, "5090092")["outcome"], "7");
+    destination.assert_call("debug_spawn_player_entity", &[LOCAL_SELLER]);
+    let finish: [&str; 11] = [
+        "5090092",
+        &seller,
+        BID_LISTING,
+        HOUSE,
+        CUT,
+        "7",
+        "0",
+        BIDDER,
+        "1000",
+        "0",
+        CUT,
+    ];
+    destination.assert_call("gw_auction_finish_bid", &finish);
+    destination.assert_call("gw_auction_finish_bid", &finish);
+    assert_eq!(purse(&destination), "850", "the cut is spent once");
+    let settled = rows(&destination, hold_query);
+    assert_eq!(
+        [&settled[0]["outcome"], &settled[0]["deferred_refund"]],
+        ["7", "0"]
+    );
+}

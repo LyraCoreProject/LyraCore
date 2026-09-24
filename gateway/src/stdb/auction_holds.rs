@@ -70,7 +70,7 @@ mod tests {
             deferred_refund,
             accepted_price: 0,
             house: 1,
-            operation: 1,
+            operation: lyracore_shared::auction::hold_operation::CANCEL,
         }
     }
 
