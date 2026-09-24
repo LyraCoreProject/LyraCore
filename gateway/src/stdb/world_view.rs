@@ -2543,7 +2543,10 @@ fn character_online_changed(view: &WorldView, old: &Character, new: &Character) 
     if new.session_start_micros == 0 || old.session_start_micros == new.session_start_micros {
         return;
     }
-    debug_assert!(new.online, "player_login always sets online alongside session_start_micros");
+    debug_assert!(
+        new.online,
+        "player_login always sets online alongside session_start_micros"
+    );
     view.mark_character_online(new.guid);
     let team = lyracore_shared::faction::team_for_race(new.race);
     let online_fields = crate::codec::FriendOnline {
