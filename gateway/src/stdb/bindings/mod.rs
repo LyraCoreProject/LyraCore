@@ -162,6 +162,7 @@ pub mod debug_compute_spell_reducer;
 pub mod debug_compute_swing_reducer;
 pub mod debug_create_fixture_instance_reducer;
 pub mod debug_delete_character_reducer;
+pub mod debug_deliver_mail_fixture_reducer;
 pub mod debug_disarm_instance_tick_reducer;
 pub mod debug_disenchant_reducer;
 pub mod debug_emit_sessionless_group_intent_reducer;
@@ -1265,6 +1266,7 @@ pub use debug_compute_spell_reducer::debug_compute_spell;
 pub use debug_compute_swing_reducer::debug_compute_swing;
 pub use debug_create_fixture_instance_reducer::debug_create_fixture_instance;
 pub use debug_delete_character_reducer::debug_delete_character;
+pub use debug_deliver_mail_fixture_reducer::debug_deliver_mail_fixture;
 pub use debug_disarm_instance_tick_reducer::debug_disarm_instance_tick;
 pub use debug_disenchant_reducer::debug_disenchant;
 pub use debug_emit_sessionless_group_intent_reducer::debug_emit_sessionless_group_intent;
@@ -2502,6 +2504,10 @@ pub enum Reducer {
     },
     DebugDeleteCharacter {
         character_guid: u64,
+    },
+    DebugDeliverMailFixture {
+        recipient_guid: u64,
+        subject: String,
     },
     DebugDisarmInstanceTick {
         instance_id: u64,
@@ -4185,6 +4191,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugComputeSwing { .. } => "debug_compute_swing",
             Reducer::DebugCreateFixtureInstance { .. } => "debug_create_fixture_instance",
             Reducer::DebugDeleteCharacter { .. } => "debug_delete_character",
+            Reducer::DebugDeliverMailFixture { .. } => "debug_deliver_mail_fixture",
             Reducer::DebugDisarmInstanceTick { .. } => "debug_disarm_instance_tick",
             Reducer::DebugDisenchant { .. } => "debug_disenchant",
             Reducer::DebugEmitSessionlessGroupIntent { .. } => {
@@ -5111,6 +5118,13 @@ Reducer::DebugCheckRestAt{
                 character_guid,
 }             => __sats::bsatn::to_vec(&debug_delete_character_reducer::DebugDeleteCharacterArgs {
                 character_guid: character_guid.clone(),
+}),
+            Reducer::DebugDeliverMailFixture{
+                recipient_guid,
+                subject,
+}             => __sats::bsatn::to_vec(&debug_deliver_mail_fixture_reducer::DebugDeliverMailFixtureArgs {
+                recipient_guid: recipient_guid.clone(),
+                subject: subject.clone(),
 }),
             Reducer::DebugDisarmInstanceTick{
                 instance_id,

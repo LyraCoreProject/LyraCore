@@ -19,8 +19,6 @@ const PAYMENT_ESCROW: &str = "5090081";
 const TAKE_ESCROW: &str = "5090082";
 /// vanilla's `MailDeliveryDelay` default (cmangos `World.cpp:614`).
 const HOUR_MICROS: i64 = 3_600 * 1_000_000;
-/// Long enough for the checks that run before the delivery to finish first.
-const SHORT_DELAY_SECS: i64 = 5;
 
 fn now_micros() -> i64 {
     SystemTime::now()
@@ -88,119 +86,58 @@ fn refused(standalone: &Standalone, reducer: &str, args: &[&str]) -> bool {
     !standalone.call(reducer, args).status.success()
 }
 
-/// A priced item letter committed with a Delivery Delay stays hidden from the Tester until its Mail
+/// A priced item letter committed with the hour stays hidden from the Tester until its Mail
 /// Arrival. Until then the Tester cannot read or take it, and a COD payment fenced early waits in
-/// its fence: the seller is paid only after the letter arrives, and only once.
+/// its fence: the seller is paid only after the letter arrives, and only once. A debug fixture
+/// brings the delivery forward, so no step waits on the wall clock.
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_delayed_priced_letter_is_hidden_until_it_arrives_and_its_price_is_paid_after() {
     let standalone = tester_with_purse("mail-delivery-cod");
     let tester = actor(TESTER);
     let subject = quoted("delivery: cod");
-    let delay = SHORT_DELAY_SECS.to_string();
-    let mut priced = BTreeMap::new();
-
-    let arrival = standalone.capture_updates(&arrivals_of(TESTER), 1, || {
-        let committed_from = now_micros();
-        standalone.assert_call(
-            "realm_mail_commit",
-            &[
-                SEND_ESCROW,
-                &actor(SELLER),
-                TESTER,
-                &subject,
-                "\"\"",
-                "0",
-                BLADE,
-                "1",
-                "17",
-                "0",
-                "false",
-                "0",
-                COD,
-                "0",
-                &delay,
-            ],
-        );
-        let committed_by = now_micros();
-        priced = letter(&standalone, TESTER, "delivery: cod");
-        let arrives = deliver_micros(&priced);
-        let hidden = SHORT_DELAY_SECS * 1_000_000;
-        assert!(
-            (committed_from + hidden..=committed_by + hidden).contains(&arrives),
-            "the letter arrives {SHORT_DELAY_SECS} s after the commit: {priced:?}"
-        );
-
-        let id = priced["id"].clone();
-        assert!(refused(
-            &standalone,
-            "realm_mail_take_item_fence",
-            &[TAKE_ESCROW, &tester, &id, BLADE]
-        ));
-        assert!(refused(
-            &standalone,
-            "realm_mail_mark_read",
-            &[&tester, &id]
-        ));
-        standalone.assert_call(
-            "realm_mail_fence",
-            &[
-                PAYMENT_ESCROW,
-                &tester,
-                SELLER,
-                &subject,
-                "\"\"",
-                COD,
-                "0",
-                "0",
-                "0",
-                &id,
-                "false",
-            ],
-        );
-        assert!(
-            refused(
-                &standalone,
-                "realm_mail_commit",
-                &[
-                    PAYMENT_ESCROW,
-                    &tester,
-                    SELLER,
-                    &subject,
-                    "\"\"",
-                    COD,
-                    "0",
-                    "0",
-                    "0",
-                    "0",
-                    "false",
-                    "0",
-                    "0",
-                    &id,
-                    "0",
-                ],
-            ),
-            "a payment for a letter that has not arrived pays nobody"
-        );
-        assert!(
-            now_micros() < arrives,
-            "the checks ran past the delivery, so they prove nothing; raise SHORT_DELAY_SECS"
-        );
-    });
-    let inserted = arrival[0]["game_mail_arrival"]["inserts"]
-        .as_array()
-        .map_or(0, Vec::len);
-    assert_eq!(inserted, 1, "one Mail Arrival, at delivery: {arrival:?}");
-    assert_eq!(
-        purse(&standalone),
-        PURSE - 250,
-        "the price waits in its fence"
-    );
-    assert_eq!(letter(&standalone, TESTER, "delivery: cod")["cod"], COD);
-
-    let id = priced["id"].clone();
+    let committed_from = now_micros();
     standalone.assert_call(
         "realm_mail_commit",
+        &[
+            SEND_ESCROW,
+            &actor(SELLER),
+            TESTER,
+            &subject,
+            "\"\"",
+            "0",
+            BLADE,
+            "1",
+            "17",
+            "0",
+            "false",
+            "0",
+            COD,
+            "0",
+            "3600",
+        ],
+    );
+    let committed_by = now_micros();
+    let priced = letter(&standalone, TESTER, "delivery: cod");
+    assert!(
+        (committed_from + HOUR_MICROS..=committed_by + HOUR_MICROS)
+            .contains(&deliver_micros(&priced)),
+        "the letter arrives an hour after the commit: {priced:?}"
+    );
+
+    let id = priced["id"].clone();
+    assert!(refused(
+        &standalone,
+        "realm_mail_take_item_fence",
+        &[TAKE_ESCROW, &tester, &id, BLADE]
+    ));
+    assert!(refused(
+        &standalone,
+        "realm_mail_mark_read",
+        &[&tester, &id]
+    ));
+    standalone.assert_call(
+        "realm_mail_fence",
         &[
             PAYMENT_ESCROW,
             &tester,
@@ -211,14 +148,47 @@ fn a_delayed_priced_letter_is_hidden_until_it_arrives_and_its_price_is_paid_afte
             "0",
             "0",
             "0",
-            "0",
-            "false",
-            "0",
-            "0",
             &id,
-            "0",
+            "false",
         ],
     );
+    let commit_payment = [
+        PAYMENT_ESCROW,
+        &tester,
+        SELLER,
+        &subject,
+        "\"\"",
+        COD,
+        "0",
+        "0",
+        "0",
+        "0",
+        "false",
+        "0",
+        "0",
+        &id,
+        "0",
+    ];
+    assert!(
+        refused(&standalone, "realm_mail_commit", &commit_payment),
+        "a payment for a letter that has not arrived pays nobody"
+    );
+    assert_eq!(
+        purse(&standalone),
+        PURSE - 250,
+        "the price waits in its fence"
+    );
+
+    let arrival = standalone.capture_updates(&arrivals_of(TESTER), 1, || {
+        standalone.assert_call("debug_deliver_mail_fixture", &[TESTER, &subject]);
+    });
+    let inserted = arrival[0]["game_mail_arrival"]["inserts"]
+        .as_array()
+        .map_or(0, Vec::len);
+    assert_eq!(inserted, 1, "one Mail Arrival, at delivery: {arrival:?}");
+    assert_eq!(letter(&standalone, TESTER, "delivery: cod")["cod"], COD);
+
+    standalone.assert_call("realm_mail_commit", &commit_payment);
     standalone.assert_call("realm_mail_confirm_delivery", &[PAYMENT_ESCROW, &tester]);
     standalone.assert_call("realm_mail_settle", &[PAYMENT_ESCROW, &tester]);
     let payment = letter(&standalone, SELLER, "delivery: cod");

@@ -1,4 +1,5 @@
-//! Mail Timer fixtures for `module/tests/mail_expiry.rs`. Each stage reducer writes its letters
+//! Mail Timer fixtures for `module/tests/mail_expiry.rs` and `module/tests/mail_delivery.rs`.
+//! Each stage reducer writes its letters
 //! through `mail::insert_letter` and then backdates them, so the timers they arm fire at once.
 //! The checks compare armed instants with the vanilla lifetimes written out below, not with the
 //! Module's own expiry function.
@@ -474,6 +475,30 @@ pub fn debug_age_mail_fixture(
         .and_then(|secs| secs.checked_mul(SECOND_MICROS))
         .ok_or("age out of range")?;
     age(ctx, mail, age_micros);
+    Ok(())
+}
+
+/// Bring the delayed letter `subject` for `recipient_guid` forward to arrive 1 µs from now, so its
+/// Mail Timer fires at once and sends the Mail Arrival. Only for a "delivery: " letter that
+/// `module/tests/mail_delivery.rs` committed with a Delivery Delay, and that has not arrived.
+#[reducer]
+pub fn debug_deliver_mail_fixture(
+    ctx: &ReducerContext,
+    recipient_guid: u64,
+    subject: String,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    let mail = find(ctx, recipient_guid, &subject)
+        .filter(|mail| mail.subject.starts_with("delivery: "))
+        .filter(|mail| !mail.is_delivered(ctx.timestamp))
+        .ok_or_else(|| format!("no delayed fixture letter {subject} for {recipient_guid}"))?;
+    // A timer delivers only when it fires at exactly `deliver_micros`, so the instant must stay
+    // ahead of this transaction.
+    let arrives = ctx.db.game_mail().id().update(Mail {
+        deliver_micros: ctx.timestamp.to_micros_since_unix_epoch() + 1,
+        ..mail
+    });
+    crate::mail_timer::arm_next(ctx, &arrives);
     Ok(())
 }
 
