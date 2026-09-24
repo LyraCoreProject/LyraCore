@@ -369,6 +369,23 @@ fn playerbots_transfer_upgrades_populated_predecessor_without_a_checkpoint() {
                 "retained {runner} field {field}"
             );
         }
+        // The pinned Package may predate `solo_target_guid`; when present, the upgrade must mark
+        // the row for claim backfill instead of granting a claim.
+        let added = [
+            "transfer_checkpoint",
+            "movement_due_micros",
+            "solo_target_guid",
+        ];
+        let before_fields = before[runner].as_object().unwrap();
+        for field in after[runner].as_object().unwrap().keys() {
+            assert!(
+                before_fields.contains_key(field) || added.contains(&field.as_str()),
+                "unexpected added {runner} field {field}"
+            );
+        }
+        if let Some(solo_target) = after[runner].get("solo_target_guid") {
+            assert_eq!(solo_target, "18446744073709551615");
+        }
         assert_eq!(after[runner]["transfer_checkpoint"], "(none = ())");
         assert_eq!(after[runner]["movement_due_micros"], i64::MAX.to_string());
     }
