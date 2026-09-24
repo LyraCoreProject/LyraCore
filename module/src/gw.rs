@@ -1074,7 +1074,7 @@ pub fn gw_group_leave(
     crate::group::leave_group_for(ctx, actor_guid)
 }
 
-/// [`crate::group::uninvite_from_group`] with the leader named by guid.
+/// [`crate::group::uninvite_from_group`] with the actor, the leader or an Assistant, named by guid.
 #[reducer]
 pub fn gw_group_uninvite(
     ctx: &ReducerContext,

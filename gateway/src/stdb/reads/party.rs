@@ -85,19 +85,17 @@ impl Coordinator {
     /// (`group::sync_group_mirror`). Nothing here knows or cares which — routing is the caller's job,
     /// exactly as it is for every other read in this file.
     ///
-    /// A cache read, so it is cheap enough to run inside an SDK callback (which the realm-core group
-    /// relay does): no reducer call, no round trip.
+    /// A cache read through the membership index, so it is cheap enough to run inside an SDK
+    /// callback (which the realm-core group relay does): no reducer call, no round trip, no table
+    /// scan.
     pub fn group_roster(&self, character_guid: u64) -> Option<crate::world::party::GroupRoster> {
-        let group_id = {
-            let guard = self.0.coord();
-            let found = guard
-                .conn
-                .db
-                .game_group_member()
-                .iter()
-                .find(|m| m.character_guid == character_guid);
-            found?.group_id
-        };
+        let group_id = self
+            .0
+            .coord()
+            .party_memberships
+            .read()
+            .unwrap()
+            .group_of(character_guid)?;
         self.group_roster_by_id(group_id)
     }
 
@@ -157,11 +155,15 @@ impl Coordinator {
     pub fn group_roster_by_id(&self, group_id: u64) -> Option<crate::world::party::GroupRoster> {
         let guard = self.0.coord();
         let db = &guard.conn.db;
-        let group = db.game_group().iter().find(|g| g.group_id == group_id)?;
-        let mut rows: Vec<(u64, u64, u8)> = db
-            .game_group_member()
-            .iter()
-            .filter(|m| m.group_id == group_id)
+        let group = db.game_group().group_id().find(&group_id)?;
+        let row_ids = guard
+            .party_memberships
+            .read()
+            .unwrap()
+            .member_row_ids(group_id);
+        let mut rows: Vec<(u64, u64, u8)> = row_ids
+            .into_iter()
+            .filter_map(|row_id| db.game_group_member().id().find(&row_id))
             .map(|m| {
                 let membership_revision = db
                     .game_group_member_partition()

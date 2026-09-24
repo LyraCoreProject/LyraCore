@@ -3434,11 +3434,17 @@ impl WorldStore for InMemoryStore {
                 let Some(group_id) = p.group_of(actor_guid) else {
                     return Ok(GroupRefusal::NotInGroup.into());
                 };
-                if p.groups.iter().find(|(g, ..)| *g == group_id).map(|e| e.1) != Some(actor_guid) {
+                if !p.manages(group_id, actor_guid) {
                     return Ok(GroupRefusal::NotLeader.into());
                 }
                 if p.group_of(target_guid) != Some(group_id) {
                     return Ok(GroupRefusal::TargetNotInGroup.into());
+                }
+                if target_guid == actor_guid {
+                    return Ok(GroupRefusal::KickSelf.into());
+                }
+                if target_guid == p.leader_of(group_id) {
+                    return Ok(GroupRefusal::NotLeader.into());
                 }
                 p.remove_member(target_guid);
             }
@@ -3455,6 +3461,45 @@ impl WorldStore for InMemoryStore {
                     entry.4 = target_guid;
                 }
                 p.push_list(group_id);
+            }
+            realm_op::SET_LEADER => {
+                let Some(group_id) = p.group_of(actor_guid) else {
+                    return Ok(GroupRefusal::NotInGroup.into());
+                };
+                if p.leader_of(group_id) != actor_guid {
+                    return Ok(GroupRefusal::NotLeader.into());
+                }
+                if target_guid == actor_guid {
+                    return Ok(GroupRefusal::TargetIsSelf.into());
+                }
+                if p.group_of(target_guid) != Some(group_id) {
+                    return Ok(GroupRefusal::TargetNotInGroup.into());
+                }
+                p.set_leader(group_id, target_guid);
+                p.push_list(group_id);
+            }
+            realm_op::SET_ASSISTANT => {
+                let Some(group_id) = p.group_of(actor_guid) else {
+                    return Ok(GroupRefusal::NotInGroup.into());
+                };
+                if p.leader_of(group_id) != actor_guid {
+                    return Ok(GroupRefusal::NotLeader.into());
+                }
+                if p.kind_of(group_id) != GroupKind::Raid {
+                    return Ok(GroupRefusal::NotRaid.into());
+                }
+                if target_guid == actor_guid {
+                    return Ok(GroupRefusal::TargetIsSelf.into());
+                }
+                if p.group_of(target_guid) != Some(group_id) {
+                    return Ok(GroupRefusal::TargetNotInGroup.into());
+                }
+                let slot = p.slots.get(&target_guid).copied().unwrap_or_default();
+                let assigned = slot.with_assistant(arg_a != 0);
+                if assigned != slot {
+                    p.slots.insert(target_guid, assigned);
+                    p.push_list(group_id);
+                }
             }
             other => return Err(anyhow!("unknown realm group op {other}")),
         }
@@ -10920,6 +10965,34 @@ impl FakeParty {
         })
     }
 
+    fn leader_of(&self, group_id: u64) -> u64 {
+        self.groups
+            .iter()
+            .find(|(g, ..)| *g == group_id)
+            .map_or(0, |group| group.1)
+    }
+
+    /// The leader, or an Assistant.
+    fn manages(&self, group_id: u64, guid: u64) -> bool {
+        self.leader_of(group_id) == guid
+            || self
+                .slots
+                .get(&guid)
+                .is_some_and(|slot| slot.is_assistant())
+    }
+
+    /// Hand the lead to `leader` and announce it to every member, as the Module does, before the
+    /// list.
+    fn set_leader(&mut self, group_id: u64, leader: u64) {
+        if let Some(entry) = self.groups.iter_mut().find(|(g, ..)| *g == group_id) {
+            entry.1 = leader;
+        }
+        for member in self.member_guids(group_id) {
+            self.events
+                .push((member, lyracore_shared::group::event_kind::SET_LEADER));
+        }
+    }
+
     fn push_list(&mut self, group_id: u64) {
         let recipients: Vec<u64> = self
             .members
@@ -10959,10 +11032,16 @@ impl FakeParty {
             self.groups.retain(|(g, ..)| *g != group_id);
             self.raids.retain(|g| *g != group_id);
         } else {
-            if let Some(entry) = self.groups.iter_mut().find(|(g, ..)| *g == group_id) {
-                if entry.1 == guid {
-                    entry.1 = remaining[0]; // longest-standing member inherits
-                }
+            if self.leader_of(group_id) == guid {
+                // The Module's succession: a Raid's first Assistant in join order, else the
+                // longest-standing member.
+                let raid = self.kind_of(group_id) == GroupKind::Raid;
+                let heir = remaining
+                    .iter()
+                    .copied()
+                    .find(|member| raid && self.manages(group_id, *member))
+                    .unwrap_or(remaining[0]);
+                self.set_leader(group_id, heir);
             }
             self.push_list(group_id);
         }

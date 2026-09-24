@@ -100,6 +100,15 @@ impl RaidSlot {
     pub const fn wire(self) -> u8 {
         self.0
     }
+
+    /// The same Subgroup with the Assistant flag set or cleared.
+    pub const fn with_assistant(self, assistant: bool) -> Self {
+        Self(if assistant {
+            self.0 | Self::ASSISTANT
+        } else {
+            self.0 & !Self::ASSISTANT
+        })
+    }
 }
 
 /// Group-event kinds (`game_group_event.kind`), what SMSG the gateway relays. Every producer shares
@@ -110,7 +119,8 @@ impl RaidSlot {
 /// - 9: retired. It was party chat, now a Realm Chat Line, and is never reused.
 /// - 10-11: quest sharing, `crate::quest::share_event_kind`.
 /// - 12-19: unassigned, left for the Realm-core chat seam.
-/// - 20-26: reserved for the raid leader announcement and Group Broadcasts.
+/// - 20: the leader announcement, below.
+/// - 21-26: reserved for Group Broadcasts.
 /// - 27-30: reserved for meeting stones.
 pub mod event_kind {
     /// You are invited (`other_*` = the inviter) → `SMSG_GROUP_INVITE`.
@@ -135,6 +145,10 @@ pub mod event_kind {
     /// above lists every range on this table.
     pub const LOOT_ROLL_RESERVED_START: u8 = 4;
     // Kind 9 was party chat, now a Realm Chat Line. It is retired and never reused.
+    /// The Group has a new leader (`other_guid`) → `SMSG_GROUP_SET_LEADER` with that leader's name.
+    /// Every member receives it before the LIST that names the new leader (cm:Group.cpp:464-470,
+    /// 498-501).
+    pub const SET_LEADER: u8 = 20;
 }
 
 /// The REALM-CORE party ops: the `op` byte of the single operator-gated `realm_group_op` reducer the
@@ -153,12 +167,15 @@ pub mod event_kind {
 ///   quality threshold. (That is `CMSG_LOOT_METHOD`'s own field order, kept so the gateway hands the
 ///   three values straight through.)
 /// - [`RAID_CONVERT`] — `actor_guid` alone.
+/// - [`SET_LEADER`] — `target_guid` is the new leader.
+/// - [`SET_ASSISTANT`] — `target_guid` is the member, `arg_a` is 1 to promote and 0 to demote.
 ///
 /// `arg_c` is a `u64` for an op that needs a second guid or a wide value. It is reserved for the
 /// subgroup swap's second member, the minimap ping's `y` and the roll's maximum. Every op above
 /// sends 0 there.
 pub mod realm_op {
-    /// `CMSG_GROUP_INVITE` — `actor_guid` invites `target_guid`.
+    /// `CMSG_GROUP_INVITE` — `actor_guid`, ungrouped, the leader or an Assistant, invites
+    /// `target_guid`.
     pub const INVITE: u8 = 0;
     /// `CMSG_GROUP_ACCEPT` — `actor_guid` accepts its pending invite.
     pub const ACCEPT: u8 = 1;
@@ -166,19 +183,24 @@ pub mod realm_op {
     pub const DECLINE: u8 = 2;
     /// `CMSG_GROUP_DISBAND` (the client's "Leave Party") — `actor_guid` leaves its group.
     pub const LEAVE: u8 = 3;
-    /// `CMSG_GROUP_UNINVITE` — leader `actor_guid` kicks `target_guid`.
+    /// `CMSG_GROUP_UNINVITE` and `CMSG_GROUP_UNINVITE_GUID` — the leader or an Assistant,
+    /// `actor_guid`, kicks `target_guid`.
     pub const UNINVITE: u8 = 4;
     /// `CMSG_LOOT_METHOD` — leader `actor_guid` sets the party's loot rules.
     pub const LOOT_METHOD: u8 = 5;
     /// `CMSG_GROUP_RAID_CONVERT` — leader `actor_guid` converts its Party to a Raid.
     pub const RAID_CONVERT: u8 = 6;
+    /// `CMSG_GROUP_SET_LEADER` — leader `actor_guid` passes the lead to `target_guid`.
+    pub const SET_LEADER: u8 = 7;
+    /// `CMSG_GROUP_ASSISTANT_LEADER` — Raid leader `actor_guid` promotes or demotes an Assistant.
+    pub const SET_ASSISTANT: u8 = 8;
 }
 
 /// The group op one `game_bot_invite_intent` row asks the Gateway to run.
 ///
 /// A Package writes that row for a Character with no Session, so there is no client behind it and no
 /// `ctx.sender()` to resolve; the Gateway turns the byte into the matching [`realm_op`] against the
-/// party authority. Two values rather than a reuse of [`realm_op`]: those six are what a CLIENT may
+/// party authority. Two values rather than a reuse of [`realm_op`]: those are what a CLIENT may
 /// ask for, and a Package may only ask for these two. [`INVITE`] is `0` because the column was
 /// END-appended to a table that had only ever carried invites, so a pre-existing row reads correctly
 /// under the migration's own default.
@@ -214,7 +236,9 @@ pub enum GroupRefusal {
     AlreadyInGroup,
     /// The party is at its member cap.
     GroupFull,
-    /// The actor is in a party but does not lead it.
+    /// The actor is in a Group but may not run the op there: it does not lead the Group, or is not
+    /// an Assistant where one may act. Also the answer when an Assistant names the leader for
+    /// removal (cm:GroupHandler.cpp:274-276).
     NotLeader,
     /// The actor is in no party.
     NotInGroup,
@@ -222,9 +246,9 @@ pub enum GroupRefusal {
     TargetNotInGroup,
     /// Accept or decline ran with no invite standing.
     NoPendingInvite,
-    /// The inviter is gone, or no longer leads the party the invite named.
+    /// The inviter is gone, or no longer leads its Group or assists in it.
     InviterUnavailable,
-    /// A leader tried to kick itself; leaving is the op for that.
+    /// The actor tried to kick itself; leaving is the op for that.
     KickSelf,
     /// The loot method, threshold, or master looter is not a legal setting.
     InvalidLootRules,
@@ -237,10 +261,12 @@ pub enum GroupRefusal {
     WrongFaction,
     /// The op needs a Raid, and the actor's Group is a Party.
     NotRaid,
+    /// A leader named itself as the new leader or as an Assistant (vm:GroupHandler.cpp:311, 554).
+    TargetIsSelf,
 }
 
 impl GroupRefusal {
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 18] = [
         Self::ActorUnavailable,
         Self::InviteSelf,
         Self::NoSuchPlayer,
@@ -258,6 +284,7 @@ impl GroupRefusal {
         Self::ActionSuppressed,
         Self::WrongFaction,
         Self::NotRaid,
+        Self::TargetIsSelf,
     ];
 
     pub fn as_tag(self) -> &'static str {
@@ -279,6 +306,7 @@ impl GroupRefusal {
             Self::ActionSuppressed => "group:action_suppressed",
             Self::WrongFaction => "group:wrong_faction",
             Self::NotRaid => "group:not_raid",
+            Self::TargetIsSelf => "group:target_is_self",
         }
     }
 
@@ -572,6 +600,8 @@ mod tests {
         assert_eq!(realm_op::UNINVITE, 4);
         assert_eq!(realm_op::LOOT_METHOD, 5);
         assert_eq!(realm_op::RAID_CONVERT, 6);
+        assert_eq!(realm_op::SET_LEADER, 7);
+        assert_eq!(realm_op::SET_ASSISTANT, 8);
         let all = [
             realm_op::INVITE,
             realm_op::ACCEPT,
@@ -580,6 +610,8 @@ mod tests {
             realm_op::UNINVITE,
             realm_op::LOOT_METHOD,
             realm_op::RAID_CONVERT,
+            realm_op::SET_LEADER,
+            realm_op::SET_ASSISTANT,
         ];
         let mut sorted = all.to_vec();
         sorted.sort_unstable();
@@ -589,5 +621,45 @@ mod tests {
             all.len(),
             "two realm group ops share an op byte"
         );
+    }
+
+    /// Promoting sets only the Assistant bit and demoting clears only it; the Subgroup stays.
+    #[test]
+    fn promoting_or_demoting_keeps_the_subgroup() {
+        let plain = RaidSlot::new(3, false).unwrap();
+        assert_eq!(plain.with_assistant(true).wire(), 0x83);
+        assert_eq!(plain.with_assistant(true).with_assistant(false), plain);
+        assert_eq!(plain.with_assistant(false), plain);
+    }
+
+    /// The leader announcement is kind 20 and collides with no kind another producer writes to
+    /// the same table.
+    #[test]
+    fn the_leader_announcement_kind_is_20_and_distinct() {
+        use crate::loot_roll::event_kind as roll;
+        use crate::quest::share_event_kind as share;
+        assert_eq!(event_kind::SET_LEADER, 20);
+        let mut kinds = vec![
+            event_kind::INVITE,
+            event_kind::LIST,
+            event_kind::DECLINE,
+            event_kind::DESTROYED,
+            roll::ROLL_START,
+            roll::ROLL_VOTE,
+            roll::ROLL_WON,
+            roll::MASTER_LIST,
+            roll::MONEY_SHARE,
+            share::QUEST_SHARE,
+            share::QUEST_PUSH_RESULT,
+            event_kind::SET_LEADER,
+        ];
+        kinds.sort_unstable();
+        kinds.dedup();
+        assert_eq!(kinds, [0u8, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 20]);
+    }
+
+    #[test]
+    fn the_target_is_self_refusal_has_its_own_tag() {
+        assert_eq!(GroupRefusal::TargetIsSelf.as_tag(), "group:target_is_self");
     }
 }

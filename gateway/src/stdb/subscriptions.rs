@@ -2173,6 +2173,11 @@ pub(crate) fn group_event_outbound<St: crate::world::WorldStore + ?Sized>(
             codec::build_group_decline(row.other_name.clone()),
         ))),
         group_kind::DESTROYED => Some(ServerOpcodeMessage::SMSG_GROUP_DESTROYED),
+        group_kind::SET_LEADER => leader_name(store, row).map(|name| {
+            ServerOpcodeMessage::SMSG_GROUP_SET_LEADER(Box::new(codec::build_group_set_leader(
+                name,
+            )))
+        }),
         roll_kind::ROLL_START => match lyracore_shared::loot_roll::decode_start(&row.payload) {
             Some((corpse_guid, slot, item_entry, countdown_ms, random_property_id)) => Some(
                 ServerOpcodeMessage::SMSG_LOOT_START_ROLL(Box::new(codec::build_loot_start_roll(
@@ -2327,6 +2332,34 @@ pub(crate) fn group_event_outbound<St: crate::world::WorldStore + ?Sized>(
     match msg {
         Some(m) => vec![Outbound::One(m)],
         None => Vec::new(),
+    }
+}
+
+/// The name a `SET_LEADER` row announces. The Gateway always looks it up from the shards by the
+/// row's leader guid, because Realm-core holds no characters. `None` skips the packet: an empty
+/// name would print a broken "is now the group leader" line.
+fn leader_name<St: crate::world::WorldStore + ?Sized>(
+    store: &St,
+    row: &GroupEvent,
+) -> Option<String> {
+    match crate::world::party::character_anywhere(store, row.other_guid) {
+        Ok(Some(leader)) => Some(leader.name),
+        Ok(None) => {
+            log::warn!(
+                "group SET_LEADER relay: no shard names leader {} (event {})",
+                row.other_guid,
+                row.id
+            );
+            None
+        }
+        Err(e) => {
+            log::warn!(
+                "group SET_LEADER relay: name lookup for leader {} failed (event {}): {e:#}",
+                row.other_guid,
+                row.id
+            );
+            None
+        }
     }
 }
 

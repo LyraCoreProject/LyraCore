@@ -163,47 +163,10 @@ pub(super) fn handle_social<St: WorldStore + ?Sized>(
                 ))),
             )?;
         }
-        ClientOpcodeMessage::CMSG_GROUP_ACCEPT => {
-            if let Some(me) = self_guid(conn) {
-                if let PartyOutcome::Refused(refusal) =
-                    party::run(store, conn.account_id, me, party::Op::Accept)?
-                {
-                    log::debug!(
-                        "world: group_accept refused (account {}): {refusal:?}",
-                        conn.account_id
-                    );
-                }
-            }
-        }
-        ClientOpcodeMessage::CMSG_GROUP_DECLINE => {
-            if let Some(me) = self_guid(conn) {
-                if let PartyOutcome::Refused(refusal) =
-                    party::run(store, conn.account_id, me, party::Op::Decline)?
-                {
-                    log::debug!(
-                        "world: group_decline refused (account {}): {refusal:?}",
-                        conn.account_id
-                    );
-                }
-            }
-        }
+        ClientOpcodeMessage::CMSG_GROUP_ACCEPT => run_unanswered(store, conn, party::Op::Accept)?,
+        ClientOpcodeMessage::CMSG_GROUP_DECLINE => run_unanswered(store, conn, party::Op::Decline)?,
         ClientOpcodeMessage::CMSG_GROUP_DISBAND => {
-            if let Some(me) = self_guid(conn) {
-                if let PartyOutcome::Refused(refusal) =
-                    party::run(store, conn.account_id, me, party::Op::Leave)?
-                {
-                    send(
-                        tx,
-                        Outbound::One(ServerOpcodeMessage::SMSG_PARTY_COMMAND_RESULT(Box::new(
-                            codec::build_party_command_result(
-                                PartyOperation::Leave,
-                                String::new(),
-                                party_result_for(refusal),
-                            ),
-                        ))),
-                    )?;
-                }
-            }
+            run_answering_refusal(tx, store, conn, party::Op::Leave)?
         }
         ClientOpcodeMessage::CMSG_GROUP_UNINVITE(c) => {
             let result = match (self_guid(conn), presence::resolve_by_name(store, &c.name)?) {
@@ -230,28 +193,62 @@ pub(super) fn handle_social<St: WorldStore + ?Sized>(
         // echoes via the EXISTING `SMSG_GROUP_LIST` roster relay. A rejection (not the leader, bad
         // method/threshold/master) is per-action — log + ignore, matching group_accept/decline.
         ClientOpcodeMessage::CMSG_LOOT_METHOD(c) => {
-            let setting = c.loot_setting.as_int();
-            let threshold = c.loot_threshold.as_int();
-            let master = c.loot_master.guid();
-            if let Some(me) = self_guid(conn) {
-                let op = party::Op::LootMethod {
-                    setting,
-                    master,
-                    threshold,
-                };
-                if let PartyOutcome::Refused(refusal) = party::run(store, conn.account_id, me, op)?
-                {
-                    log::debug!(
-                        "world: group_loot_method refused (account {}): {refusal:?}",
-                        conn.account_id
-                    );
-                }
-            }
+            let op = party::Op::LootMethod {
+                setting: c.loot_setting.as_int(),
+                master: c.loot_master.guid(),
+                threshold: c.loot_threshold.as_int(),
+            };
+            run_unanswered(store, conn, op)?;
         }
         ClientOpcodeMessage::CMSG_GROUP_RAID_CONVERT => raid_convert(tx, store, conn)?,
+        ClientOpcodeMessage::CMSG_GROUP_SET_LEADER(c) => {
+            run_unanswered(store, conn, party::Op::SetLeader(c.guid.guid()))?
+        }
+        ClientOpcodeMessage::CMSG_GROUP_ASSISTANT_LEADER(c) => run_unanswered(
+            store,
+            conn,
+            party::Op::SetAssistant {
+                target: c.guid.guid(),
+                promote: c.set_assistant,
+            },
+        )?,
+        // The raid frame's "Remove from group" names the member by guid, so no name lookup runs
+        // (cm:GroupHandler.cpp:250-296). Naming yourself gets no answer (lines 255-260).
+        ClientOpcodeMessage::CMSG_GROUP_UNINVITE_GUID(c)
+            if self_guid(conn) != Some(c.guid.guid()) =>
+        {
+            run_answering_refusal(tx, store, conn, party::Op::Uninvite(c.guid.guid()))?
+        }
+        ClientOpcodeMessage::CMSG_GROUP_UNINVITE_GUID(_) => {}
         other => return Ok(Some(other)),
     }
     Ok(None)
+}
+
+/// Run a leave or a kick by guid. Only a Refusal answers, as `SMSG_PARTY_COMMAND_RESULT(Leave, "",
+/// result)`; an op that ran is heard through the relay.
+fn run_answering_refusal<St: WorldStore + ?Sized>(
+    tx: &SessionTx,
+    store: &St,
+    conn: &WorldConn,
+    op: party::Op,
+) -> Result<()> {
+    let Some(me) = self_guid(conn) else {
+        return Ok(());
+    };
+    match party::run(store, conn.account_id, me, op)? {
+        PartyOutcome::Ran => Ok(()),
+        PartyOutcome::Refused(refusal) => send(
+            tx,
+            Outbound::One(ServerOpcodeMessage::SMSG_PARTY_COMMAND_RESULT(Box::new(
+                codec::build_party_command_result(
+                    PartyOperation::Leave,
+                    String::new(),
+                    party_result_for(refusal),
+                ),
+            ))),
+        ),
+    }
 }
 
 /// The leader's "Convert to Raid". cmangos answers success with
@@ -284,6 +281,26 @@ fn raid_convert<St: WorldStore + ?Sized>(
             Ok(())
         }
     }
+}
+
+/// Run a party op whose outcome the client hears only through the relay. A Refusal is logged at
+/// debug and sends nothing. cmangos sends nothing for set leader and set Assistant, whatever the
+/// outcome (cm:GroupHandler.cpp:344-362, 527-545).
+fn run_unanswered<St: WorldStore + ?Sized>(
+    store: &St,
+    conn: &WorldConn,
+    op: party::Op,
+) -> Result<()> {
+    let Some(me) = self_guid(conn) else {
+        return Ok(());
+    };
+    if let PartyOutcome::Refused(refusal) = party::run(store, conn.account_id, me, op)? {
+        log::debug!(
+            "world: {op:?} refused (account {}): {refusal:?}",
+            conn.account_id
+        );
+    }
+    Ok(())
 }
 
 /// The session's in-world character guid, or `None` at character select. Party ops need it for two
@@ -334,7 +351,8 @@ fn party_result_for(refusal: GroupRefusal) -> PartyResult {
         | GroupRefusal::InvalidLootRules
         | GroupRefusal::IntentAlreadyClaimed
         | GroupRefusal::ActionSuppressed
-        | GroupRefusal::NotRaid => PartyResult::BadPlayerName,
+        | GroupRefusal::NotRaid
+        | GroupRefusal::TargetIsSelf => PartyResult::BadPlayerName,
     }
 }
 

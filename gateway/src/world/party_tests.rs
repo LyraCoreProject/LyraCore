@@ -2757,3 +2757,496 @@ fn raid_convert_answers_the_leader_with_success_and_a_refusal_with_silence() {
     drop(client);
     let _ = server.join();
 }
+
+// ---- Leadership and Assistants ----
+
+/// Ginger leads a Party of Ginger (world), Vim (instances) and Trin (world).
+fn party_of_three() -> (
+    std::sync::Arc<InMemoryStore>,
+    std::sync::Arc<InMemoryStore>,
+    std::sync::Arc<InMemoryStore>,
+    ShardCallLog,
+) {
+    let (realm, world, instances, calls) = party_topology();
+    form_split_party(&world, &instances);
+    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(TRIN)).unwrap();
+    party::run(world.as_ref(), 9, TRIN, party::Op::Accept).unwrap();
+    (realm, world, instances, calls)
+}
+
+/// The kinds `guid` received since event `from`.
+fn events_for(realm: &InMemoryStore, from: usize, guid: u64) -> Vec<u8> {
+    realm.party.lock().unwrap().events[from..]
+        .iter()
+        .filter(|(recipient, _)| *recipient == guid)
+        .map(|(_, kind)| *kind)
+        .collect()
+}
+
+/// **AC: the leader passes the lead to an online member. Every member hears the new leader, then
+/// gets a list naming it, and every shard mirrors the new leader.** The target is live on the far
+/// shard, which only the Gateway can see from here.
+#[test]
+fn the_leader_passes_the_lead_to_a_member_live_on_the_far_shard() {
+    use lyracore_shared::group::event_kind::{LIST, SET_LEADER};
+    let (realm, world, instances, _calls) = party_of_three();
+    let events_before = realm.party.lock().unwrap().events.len();
+
+    let outcome = party::run(world.as_ref(), 7, GINGER, party::Op::SetLeader(VIM)).unwrap();
+
+    assert_eq!(outcome, PartyOutcome::Ran);
+    let authority = realm.group_roster(GINGER).unwrap().unwrap();
+    assert_eq!(authority.leader_guid, VIM);
+    for guid in [GINGER, VIM, TRIN] {
+        assert_eq!(
+            events_for(&realm, events_before, guid),
+            [SET_LEADER, LIST],
+            "{guid} hears the new leader before the list"
+        );
+    }
+    for shard in [&world, &instances] {
+        assert_eq!(
+            shard.mirror.lock().unwrap().clone(),
+            vec![authority.clone()]
+        );
+    }
+}
+
+/// **AC: passing the lead to an offline member changes nothing.** Realm-core cannot see presence,
+/// so the Gateway refuses before it calls the authority, and a live target on either shard passes.
+#[test]
+fn the_lead_passes_only_to_a_member_live_on_some_shard() {
+    let (realm, world, _instances, calls) = party_of_three();
+    realm.party.lock().unwrap().members.push((1, DORMANT));
+    let ops_before = realm.party.lock().unwrap().ops.len();
+    let mirrors_before = mirror_calls(&calls);
+
+    let outcome = party::run(world.as_ref(), 7, GINGER, party::Op::SetLeader(DORMANT)).unwrap();
+
+    assert_eq!(outcome, PartyOutcome::Refused(GroupRefusal::TargetOffline));
+    assert_eq!(realm.party.lock().unwrap().ops.len(), ops_before);
+    assert_eq!(mirror_calls(&calls), mirrors_before);
+    assert_eq!(
+        realm.group_roster(GINGER).unwrap().unwrap().leader_guid,
+        GINGER
+    );
+
+    for (leader, next) in [(GINGER, TRIN), (TRIN, VIM)] {
+        let outcome = party::run(world.as_ref(), 7, leader, party::Op::SetLeader(next)).unwrap();
+        assert_eq!(
+            outcome,
+            PartyOutcome::Ran,
+            "{next} is live, so the lead passes"
+        );
+    }
+    assert_eq!(
+        realm.group_roster(GINGER).unwrap().unwrap().leader_guid,
+        VIM
+    );
+}
+
+/// The two leadership ops pack their arguments into `realm_group_op`'s slots as the shared contract
+/// names them: the member in `target_guid`, and promote or demote in `arg_a`.
+#[test]
+fn leadership_ops_reach_realm_core_in_their_declared_argument_slots() {
+    let (realm, world, _instances, _calls) = party_of_three();
+    party::run(world.as_ref(), 7, GINGER, party::Op::RaidConvert).unwrap();
+    let ops_before = realm.party.lock().unwrap().ops.len();
+
+    for op in [
+        party::Op::SetAssistant {
+            target: TRIN,
+            promote: true,
+        },
+        party::Op::SetAssistant {
+            target: TRIN,
+            promote: false,
+        },
+        party::Op::SetLeader(VIM),
+    ] {
+        party::run(world.as_ref(), 7, GINGER, op).unwrap();
+    }
+
+    assert_eq!(
+        realm.party.lock().unwrap().ops[ops_before..],
+        [
+            (realm_op::SET_ASSISTANT, GINGER, TRIN, 1, 0, 0),
+            (realm_op::SET_ASSISTANT, GINGER, TRIN, 0, 0, 0),
+            (realm_op::SET_LEADER, GINGER, VIM, 0, 0, 0),
+        ]
+    );
+}
+
+/// **AC: the raid leader promotes a member, and every list shows its flags byte with `0x80`;
+/// demoting clears it.** Each change resyncs every mirror.
+#[test]
+fn a_promoted_assistant_shows_0x80_in_every_list_and_every_mirror() {
+    let (realm, world, instances, _calls) = party_of_three();
+    party::run(world.as_ref(), 7, GINGER, party::Op::RaidConvert).unwrap();
+    let assistant = |promote| party::Op::SetAssistant {
+        target: VIM,
+        promote,
+    };
+
+    for (promote, flags) in [(true, 0x80), (false, 0x00)] {
+        let outcome = party::run(world.as_ref(), 7, GINGER, assistant(promote)).unwrap();
+        assert_eq!(outcome, PartyOutcome::Ran);
+        let authority = realm.group_roster(GINGER).unwrap().unwrap();
+        for shard in [&world, &instances] {
+            assert_eq!(
+                shard.mirror.lock().unwrap().clone(),
+                vec![authority.clone()]
+            );
+        }
+        let payload = authority.list_payload();
+        let own = group_list(party::render_list(instances.as_ref(), VIM, &payload));
+        assert_eq!(own.flags, flags, "Vim's own flags byte");
+        for viewer in [GINGER, TRIN] {
+            let list = group_list(party::render_list(world.as_ref(), viewer, &payload));
+            let vim = list.members.iter().find(|m| m.guid.guid() == VIM).unwrap();
+            assert_eq!(vim.flags, flags, "{viewer} sees Vim");
+        }
+    }
+}
+
+/// Repeating a promotion changes nothing on Realm-core, so it costs no mirror push.
+#[test]
+fn repeating_a_promotion_pushes_no_mirror() {
+    let (_realm, world, _instances, calls) = party_of_three();
+    party::run(world.as_ref(), 7, GINGER, party::Op::RaidConvert).unwrap();
+    let promote = party::Op::SetAssistant {
+        target: VIM,
+        promote: true,
+    };
+    party::run(world.as_ref(), 7, GINGER, promote).unwrap();
+    let mirrors_before = mirror_calls(&calls);
+
+    let outcome = party::run(world.as_ref(), 7, GINGER, promote).unwrap();
+
+    assert_eq!(outcome, PartyOutcome::Ran);
+    assert_eq!(mirror_calls(&calls), mirrors_before);
+}
+
+/// **AC: a single-database Gateway runs both leadership ops through `realm_group_op` on its own
+/// shard**, after the same presence Gate.
+#[test]
+fn an_unsharded_gateway_runs_leadership_ops_on_its_own_shard() {
+    let calls: ShardCallLog = Default::default();
+    let store = std::sync::Arc::new(InMemoryStore {
+        shard: "world".into(),
+        calls: calls.clone(),
+        live_guids: vec![GINGER, VIM],
+        ..Default::default()
+    });
+    {
+        let mut p = store.party.lock().unwrap();
+        p.groups.push((5, GINGER, 3, 2, 0));
+        p.members.push((5, GINGER));
+        p.members.push((5, VIM));
+        p.raids.push(5);
+    }
+    let promote = party::Op::SetAssistant {
+        target: VIM,
+        promote: true,
+    };
+
+    party::run(store.as_ref(), 7, GINGER, promote).unwrap();
+    party::run(store.as_ref(), 7, GINGER, party::Op::SetLeader(VIM)).unwrap();
+
+    let ran: Vec<_> = calls
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(_, call)| call.clone())
+        .collect();
+    assert_eq!(ran, ["realm_group_op", "realm_group_op"]);
+    let state = store.party.lock().unwrap();
+    assert_eq!(state.leader_of(5), VIM);
+    assert!(state.slots[&VIM].is_assistant());
+}
+
+/// A `SET_LEADER` row as the relay decodes it.
+fn set_leader_row(leader: u64) -> crate::stdb::bindings::GroupEvent {
+    crate::stdb::bindings::GroupEvent {
+        id: 1,
+        recipient_identity: spacetimedb_sdk::Identity::ZERO,
+        kind: lyracore_shared::group::event_kind::SET_LEADER,
+        other_guid: leader,
+        other_name: String::new(),
+        created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
+        payload: String::new(),
+        recipient_guid: GINGER,
+    }
+}
+
+/// The one `SMSG_GROUP_SET_LEADER` name the relay sends for `row`, or `None` for no packet.
+fn relayed_leader_name(
+    realm: &InMemoryStore,
+    row: &crate::stdb::bindings::GroupEvent,
+) -> Option<String> {
+    let packets = crate::stdb::subscriptions::group_event_outbound(realm, GINGER, row);
+    match &packets[..] {
+        [] => None,
+        [Outbound::One(ServerOpcodeMessage::SMSG_GROUP_SET_LEADER(announced))] => {
+            Some(announced.name.clone())
+        }
+        other => panic!(
+            "expected at most one SMSG_GROUP_SET_LEADER, got {} packets",
+            other.len()
+        ),
+    }
+}
+
+/// **AC: every member gets `SMSG_GROUP_SET_LEADER` with the new leader's name.** The relay reads
+/// the name from whichever shard holds the leader. A leader no shard can name sends nothing rather
+/// than a blank "is now the group leader" line.
+#[test]
+fn the_set_leader_relay_names_the_leader_from_the_far_shard() {
+    let (realm, world, instances, _calls) = party_topology();
+    *realm.peers.lock().unwrap() = vec![world.clone(), instances.clone()];
+
+    assert_eq!(
+        relayed_leader_name(&realm, &set_leader_row(VIM)).as_deref(),
+        Some("Vim")
+    );
+    assert_eq!(relayed_leader_name(&realm, &set_leader_row(404)), None);
+}
+
+/// Decode one hand-written client frame: size (u16 BE, opcode plus body), opcode (u32 LE), body.
+fn client_frame(opcode: u32, body: &[u8]) -> ClientOpcodeMessage {
+    let mut framed = u16::try_from(body.len() + 4)
+        .unwrap()
+        .to_be_bytes()
+        .to_vec();
+    framed.extend(opcode.to_le_bytes());
+    framed.extend(body);
+    ClientOpcodeMessage::read_unencrypted(&mut framed.as_slice()).expect("a client frame")
+}
+
+/// The three bodies as cmangos reads them: a u64 member guid, and for the Assistant opcode one
+/// flag byte after it (cm:GroupHandler.cpp:252-253, 346-347, 529-532).
+#[test]
+fn leadership_opcodes_decode_from_the_vanilla_layout() {
+    let guid = 0x0102_0304_0506_0708u64;
+    let guid_bytes = [0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01];
+
+    let ClientOpcodeMessage::CMSG_GROUP_SET_LEADER(set_leader) = client_frame(0x0078, &guid_bytes)
+    else {
+        panic!("0x0078 is CMSG_GROUP_SET_LEADER")
+    };
+    assert_eq!(set_leader.guid.guid(), guid);
+    let ClientOpcodeMessage::CMSG_GROUP_UNINVITE_GUID(kick) = client_frame(0x0076, &guid_bytes)
+    else {
+        panic!("0x0076 is CMSG_GROUP_UNINVITE_GUID")
+    };
+    assert_eq!(kick.guid.guid(), guid);
+    for (flag, promote) in [(0x01, true), (0x00, false)] {
+        let body = [&guid_bytes[..], &[flag]].concat();
+        let ClientOpcodeMessage::CMSG_GROUP_ASSISTANT_LEADER(assistant) =
+            client_frame(0x028F, &body)
+        else {
+            panic!("0x028F is CMSG_GROUP_ASSISTANT_LEADER")
+        };
+        assert_eq!(assistant.guid.guid(), guid);
+        assert_eq!(assistant.set_assistant, promote);
+    }
+}
+
+/// A session on a shard that reaches `realm`, entered as Ginger.
+fn realm_session(
+    realm: &std::sync::Arc<InMemoryStore>,
+) -> (
+    UnixStream,
+    EncrypterHalf,
+    DecrypterHalf,
+    std::thread::JoinHandle<()>,
+) {
+    let store = std::sync::Arc::new(InMemoryStore {
+        realm: Some(realm.clone()),
+        ..quest_store()
+    });
+    enter_world(store, GINGER)
+}
+
+/// Send `CMSG_GROUP_UNINVITE_GUID`, then the barrier.
+fn kick_by_guid(
+    client: &mut UnixStream,
+    c_enc: &mut EncrypterHalf,
+    c_dec: &mut DecrypterHalf,
+    guid: u64,
+) -> wow_world_messages::vanilla::SMSG_PARTY_COMMAND_RESULT {
+    wow_world_messages::vanilla::CMSG_GROUP_UNINVITE_GUID {
+        guid: Guid::new(guid),
+    }
+    .write_encrypted_client(&mut *client, &mut *c_enc)
+    .unwrap();
+    barrier(client, c_enc, c_dec)
+}
+
+/// Send an invite for a name no shard knows, which is always answered. Returns the first
+/// `SMSG_PARTY_COMMAND_RESULT` the session sends back, past the party frame world entry sent. The
+/// dispatch is sequential, so a result naming the barrier proves that no op before it answered.
+fn barrier(
+    client: &mut UnixStream,
+    c_enc: &mut EncrypterHalf,
+    c_dec: &mut DecrypterHalf,
+) -> wow_world_messages::vanilla::SMSG_PARTY_COMMAND_RESULT {
+    wow_world_messages::vanilla::CMSG_GROUP_INVITE {
+        name: "Nobodyatall".into(),
+    }
+    .write_encrypted_client(&mut *client, &mut *c_enc)
+    .unwrap();
+    loop {
+        match ServerOpcodeMessage::read_encrypted(&mut *client, &mut *c_dec).unwrap() {
+            ServerOpcodeMessage::SMSG_PARTY_COMMAND_RESULT(result) => return *result,
+            ServerOpcodeMessage::SMSG_GROUP_LIST(_) => {}
+            other => panic!("expected SMSG_PARTY_COMMAND_RESULT, got {other}"),
+        }
+    }
+}
+
+/// **AC: an Assistant who names the leader in the raid frame's "Remove from group" gets
+/// `SMSG_PARTY_COMMAND_RESULT(Leave, "", NotLeader)`, and nothing changes**
+/// (cm:GroupHandler.cpp:274-276).
+#[test]
+fn a_guid_kick_of_the_leader_answers_not_leader() {
+    use wow_world_messages::vanilla::{PartyOperation, PartyResult};
+    let realm = std::sync::Arc::new(InMemoryStore {
+        is_realm: true,
+        ..Default::default()
+    });
+    {
+        let mut p = realm.party.lock().unwrap();
+        p.groups.push((5, VIM, 3, 2, 0));
+        p.members.push((5, VIM));
+        p.members.push((5, GINGER));
+        p.raids.push(5);
+        p.slots.insert(GINGER, RaidSlot::new(0, true).unwrap());
+    }
+    let (mut client, mut c_enc, mut c_dec, server) = realm_session(&realm);
+
+    let result = kick_by_guid(&mut client, &mut c_enc, &mut c_dec, VIM);
+
+    assert_eq!(result.operation, PartyOperation::Leave);
+    assert_eq!(result.member, "");
+    assert_eq!(result.result, PartyResult::NotLeader);
+    assert_eq!(realm.party.lock().unwrap().member_guids(5), [VIM, GINGER]);
+    drop(client);
+    let _ = server.join();
+}
+
+/// **AC: set leader and set Assistant reach the party authority as the session's own character,
+/// and neither answers the client, whatever the outcome** (cm:GroupHandler.cpp:344-362, 527-545).
+/// The last set leader is refused, because Ginger no longer leads; the barrier's answer is still
+/// the first packet.
+#[test]
+fn set_leader_and_set_assistant_run_as_the_session_and_answer_nothing() {
+    use wow_world_messages::vanilla::{CMSG_GROUP_ASSISTANT_LEADER, CMSG_GROUP_SET_LEADER};
+    let realm = std::sync::Arc::new(InMemoryStore {
+        is_realm: true,
+        ..Default::default()
+    });
+    {
+        let mut p = realm.party.lock().unwrap();
+        p.groups.push((5, GINGER, 3, 2, 0));
+        p.members.push((5, GINGER));
+        p.members.push((5, VIM));
+        p.raids.push(5);
+    }
+    let (mut client, mut c_enc, mut c_dec, server) = realm_session(&realm);
+
+    CMSG_GROUP_ASSISTANT_LEADER {
+        guid: Guid::new(VIM),
+        set_assistant: true,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    for _ in 0..2 {
+        CMSG_GROUP_SET_LEADER {
+            guid: Guid::new(VIM),
+        }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    }
+    let first_answer = barrier(&mut client, &mut c_enc, &mut c_dec);
+
+    assert_eq!(
+        first_answer.member, "Nobodyatall",
+        "a leadership op answered"
+    );
+    let state = realm.party.lock().unwrap();
+    assert_eq!(
+        state.ops[..3],
+        [
+            (realm_op::SET_ASSISTANT, GINGER, VIM, 1, 0, 0),
+            (realm_op::SET_LEADER, GINGER, VIM, 0, 0, 0),
+            (realm_op::SET_LEADER, GINGER, VIM, 0, 0, 0),
+        ]
+    );
+    assert_eq!(state.leader_of(5), VIM);
+    assert!(state.slots[&VIM].is_assistant());
+    drop(state);
+    drop(client);
+    let _ = server.join();
+}
+
+/// A guid kick naming the sender is dropped without an answer, as cmangos drops it
+/// (cm:GroupHandler.cpp:255-260). It never reaches the party authority.
+#[test]
+fn a_guid_kick_of_yourself_answers_nothing() {
+    let realm = std::sync::Arc::new(InMemoryStore {
+        is_realm: true,
+        ..Default::default()
+    });
+    {
+        let mut p = realm.party.lock().unwrap();
+        p.groups.push((5, GINGER, 3, 2, 0));
+        p.members.push((5, GINGER));
+        p.members.push((5, VIM));
+    }
+    let (mut client, mut c_enc, mut c_dec, server) = realm_session(&realm);
+
+    let first_answer = kick_by_guid(&mut client, &mut c_enc, &mut c_dec, GINGER);
+
+    assert_eq!(first_answer.member, "Nobodyatall", "the self kick answered");
+    let state = realm.party.lock().unwrap();
+    assert!(state.ops.iter().all(|op| op.0 != realm_op::UNINVITE));
+    assert_eq!(state.member_guids(5), [GINGER, VIM]);
+    drop(state);
+    drop(client);
+    let _ = server.join();
+}
+
+/// **AC: the leader removes a member by guid.** No name is looked up, so a member no shard can name
+/// is still removed, and a kick that ran answers nothing: the next packet is the barrier's.
+#[test]
+fn a_guid_kick_removes_a_member_no_shard_can_name() {
+    let realm = std::sync::Arc::new(InMemoryStore {
+        is_realm: true,
+        ..Default::default()
+    });
+    {
+        let mut p = realm.party.lock().unwrap();
+        p.groups.push((5, GINGER, 3, 2, 0));
+        for guid in [GINGER, 404, 405] {
+            p.members.push((5, guid));
+        }
+    }
+    let (mut client, mut c_enc, mut c_dec, server) = realm_session(&realm);
+
+    let first_answer = kick_by_guid(&mut client, &mut c_enc, &mut c_dec, 404);
+
+    assert_eq!(
+        first_answer.member, "Nobodyatall",
+        "the kick itself answered"
+    );
+    let state = realm.party.lock().unwrap();
+    assert_eq!(state.member_guids(5), [GINGER, 405]);
+    assert_eq!(
+        state.ops.last().copied(),
+        Some((realm_op::UNINVITE, GINGER, 404, 0, 0, 0))
+    );
+    drop(state);
+    drop(client);
+    let _ = server.join();
+}

@@ -738,7 +738,7 @@ use lyracore_shared::group::{GroupKind, RosterPayload};
 use wow_world_messages::vanilla::{
     GroupListMember, GroupLootSetting, GroupType, ItemQuality, PartyOperation, PartyResult,
     SMSG_GROUP_LIST_group_not_empty, SMSG_GROUP_DECLINE, SMSG_GROUP_INVITE, SMSG_GROUP_LIST,
-    SMSG_PARTY_COMMAND_RESULT,
+    SMSG_GROUP_SET_LEADER, SMSG_PARTY_COMMAND_RESULT,
 };
 
 /// `SMSG_GROUP_INVITE` — the target's "X invites you to a group" dialog.
@@ -751,6 +751,12 @@ pub fn build_group_decline(decliner_name: String) -> SMSG_GROUP_DECLINE {
     SMSG_GROUP_DECLINE {
         name: decliner_name,
     }
+}
+
+/// `SMSG_GROUP_SET_LEADER` — every member's "X is now the group leader" line
+/// (cm:Group.cpp:498-500).
+pub fn build_group_set_leader(leader_name: String) -> SMSG_GROUP_SET_LEADER {
+    SMSG_GROUP_SET_LEADER { name: leader_name }
 }
 
 /// `SMSG_PARTY_COMMAND_RESULT` — the invite/leave outcome line ("X is already in a group" etc.).
@@ -1095,6 +1101,25 @@ mod party_tests {
         let fallback_block = fallback.group_not_empty.expect("still Some");
         assert_eq!(fallback_block.loot_setting, GroupLootSetting::FreeForAll);
         assert_eq!(fallback_block.loot_threshold, ItemQuality::Uncommon);
+    }
+
+    /// cm:Group.cpp:498-499 writes the leader's name as one CString: opcode 0x0079, then the name
+    /// bytes and a 0.
+    #[test]
+    fn the_set_leader_packet_is_the_leader_name_as_one_cstring() {
+        use wow_world_messages::vanilla::ServerMessage;
+        let mut framed = Vec::new();
+        build_group_set_leader("Ginger".to_string())
+            .write_unencrypted_server(&mut framed)
+            .unwrap();
+        let body: &[u8] = b"Ginger\0";
+        let expected: Vec<u8> = [
+            &((body.len() + 2) as u16).to_be_bytes()[..], // size: opcode + body
+            &0x0079u16.to_le_bytes(),                     // SMSG_GROUP_SET_LEADER
+            body,
+        ]
+        .concat();
+        assert_eq!(framed, expected);
     }
 
     #[test]
