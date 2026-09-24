@@ -166,7 +166,7 @@ impl RaidSlot {
 /// - 10-11: quest sharing, `crate::quest::share_event_kind`.
 /// - 12-19: unassigned, left for the Realm-core chat seam.
 /// - 20: the leader announcement, below.
-/// - 21-26: reserved for Group Broadcasts.
+/// - 21-26: Group Broadcasts, below.
 /// - 27-30: reserved for meeting stones.
 pub mod event_kind {
     /// You are invited (`other_*` = the inviter) → `SMSG_GROUP_INVITE`.
@@ -195,6 +195,23 @@ pub mod event_kind {
     /// Every member receives it before the LIST that names the new leader (cm:Group.cpp:464-470,
     /// 498-501).
     pub const SET_LEADER: u8 = 20;
+    /// A Ready Check started (`other_guid` = the starter) → the empty `MSG_RAID_READY_CHECK`.
+    pub const READY_CHECK: u8 = 21;
+    /// A member answered the Ready Check (`other_guid` = the answerer, payload
+    /// [`super::encode_ready_check_answer`]) → `MSG_RAID_READY_CHECK` with the state, to the leader.
+    pub const READY_CHECK_ANSWER: u8 = 22;
+    /// One Target Icon changed (payload [`super::TargetIcon::encode`]) → the partial
+    /// `MSG_RAID_TARGET_UPDATE`.
+    pub const TARGET_ICON_UPDATE: u8 = 23;
+    /// Every Target Icon the Group holds (payload [`super::encode_target_icons`]) → the full
+    /// `MSG_RAID_TARGET_UPDATE`, to the member who asked.
+    pub const TARGET_ICON_LIST: u8 = 24;
+    /// A member pinged the minimap (`other_guid` = the pinger, payload
+    /// [`super::encode_minimap_ping`]) → `MSG_MINIMAP_PING`.
+    pub const MINIMAP_PING: u8 = 25;
+    /// A `/roll` result (`other_guid` = the roller, payload [`super::encode_random_roll`]) →
+    /// `MSG_RANDOM_ROLL`.
+    pub const RANDOM_ROLL: u8 = 26;
 }
 
 /// The REALM-CORE party ops: the `op` byte of the single operator-gated `realm_group_op` reducer the
@@ -217,10 +234,16 @@ pub mod event_kind {
 /// - [`SET_ASSISTANT`] — `target_guid` is the member, `arg_a` is 1 to promote and 0 to demote.
 /// - [`CHANGE_SUBGROUP`] — `target_guid` is the member to move, `arg_a` is the destination Subgroup.
 /// - [`SWAP_SUBGROUP`] — `target_guid` is one member, `arg_c` the other.
+/// - [`READY_CHECK_START`] — `actor_guid` alone.
+/// - [`READY_CHECK_ANSWER`] — `arg_a` = the client's answer state.
+/// - [`TARGET_ICON`] — `arg_a` = the Target Icon, or [`super::TARGET_ICON_LIST_REQUEST`];
+///   `target_guid` = the marked unit, 0 to clear the icon.
+/// - [`MINIMAP_PING`] — `target_guid` = `x.to_bits()`, `arg_c` = `y.to_bits()`, so the floats
+///   cross unchanged.
+/// - [`RANDOM_ROLL`] — `target_guid` = the minimum, `arg_c` = the maximum.
 ///
-/// `arg_c` is a `u64` for an op that needs a second guid or a wide value. Beyond the subgroup swap's
-/// second member, it is reserved for the minimap ping's `y` and the roll's maximum. Every op above
-/// that does not name it sends 0 there.
+/// `arg_c` is a `u64` for an op that needs a second guid or a wide value: the subgroup swap's
+/// second member, the minimap ping's `y` and the roll's maximum. Every other op sends 0 there.
 pub mod realm_op {
     /// `CMSG_GROUP_INVITE` — `actor_guid`, ungrouped, the leader or an Assistant, invites
     /// `target_guid`.
@@ -248,6 +271,16 @@ pub mod realm_op {
     /// `CMSG_GROUP_SWAP_SUB_GROUP` — the leader or an Assistant swaps the Subgroups of `target_guid`
     /// and `arg_c`.
     pub const SWAP_SUBGROUP: u8 = 10;
+    /// `MSG_RAID_READY_CHECK` without a body — the leader or an Assistant starts a Ready Check.
+    pub const READY_CHECK_START: u8 = 11;
+    /// `MSG_RAID_READY_CHECK` with a body — `actor_guid` answers the Ready Check.
+    pub const READY_CHECK_ANSWER: u8 = 12;
+    /// `MSG_RAID_TARGET_UPDATE` — `actor_guid` sets a Target Icon or asks for the full list.
+    pub const TARGET_ICON: u8 = 13;
+    /// `MSG_MINIMAP_PING` — `actor_guid` pings a point on the minimap.
+    pub const MINIMAP_PING: u8 = 14;
+    /// `MSG_RANDOM_ROLL` — `actor_guid` rolls a random number.
+    pub const RANDOM_ROLL: u8 = 15;
 }
 
 /// The group op one `game_bot_invite_intent` row asks the Gateway to run.
@@ -321,10 +354,12 @@ pub enum GroupRefusal {
     InvalidSubgroup,
     /// A Change Subgroup destination already holds [`SUBGROUP_SIZE`] members.
     SubgroupFull,
+    /// A Target Icon index outside 0 to 7 that is not the list request (cm:Group.cpp:585-586).
+    InvalidTargetIcon,
 }
 
 impl GroupRefusal {
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 21] = [
         Self::ActorUnavailable,
         Self::InviteSelf,
         Self::NoSuchPlayer,
@@ -345,6 +380,7 @@ impl GroupRefusal {
         Self::TargetIsSelf,
         Self::InvalidSubgroup,
         Self::SubgroupFull,
+        Self::InvalidTargetIcon,
     ];
 
     pub fn as_tag(self) -> &'static str {
@@ -369,6 +405,7 @@ impl GroupRefusal {
             Self::TargetIsSelf => "group:target_is_self",
             Self::InvalidSubgroup => "group:invalid_subgroup",
             Self::SubgroupFull => "group:subgroup_full",
+            Self::InvalidTargetIcon => "group:invalid_target_icon",
         }
     }
 
@@ -377,6 +414,104 @@ impl GroupRefusal {
             .into_iter()
             .find(|refusal| refusal.as_tag() == tag)
     }
+}
+
+/// A Group holds 8 Target Icons, numbered 0 to 7 (cm:Group.h:43).
+pub const TARGET_ICON_COUNT: u8 = 8;
+
+/// The `MSG_RAID_TARGET_UPDATE` index that asks for every Target Icon instead of setting one
+/// (cm:GroupHandler.cpp:457-459).
+pub const TARGET_ICON_LIST_REQUEST: u8 = 0xFF;
+
+/// One Target Icon on one unit. `target_guid` 0 means the icon is clear.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TargetIcon {
+    pub icon: u8,
+    pub target_guid: u64,
+}
+
+impl TargetIcon {
+    /// `icon,target_guid`, the `TARGET_ICON_UPDATE` payload.
+    pub fn encode(self) -> String {
+        format!("{},{}", self.icon, self.target_guid)
+    }
+
+    /// `None` for a malformed payload or an icon outside 0 to 7.
+    pub fn decode(payload: &str) -> Option<Self> {
+        let (icon, target_guid) = payload.split_once(',')?;
+        let icon = icon.parse().ok().filter(|&icon| icon < TARGET_ICON_COUNT)?;
+        Some(Self {
+            icon,
+            target_guid: target_guid.parse().ok()?,
+        })
+    }
+}
+
+/// `icon,target_guid;...`, the `TARGET_ICON_LIST` payload and a Party roster's icon segment. An
+/// empty list is an empty string.
+pub fn encode_target_icons(icons: &[TargetIcon]) -> String {
+    icons
+        .iter()
+        .map(|icon| icon.encode())
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
+/// `None` for a malformed entry, a clear icon, or two entries sharing an icon or a unit: a Group
+/// holds each icon once and a unit carries one icon at most.
+pub fn decode_target_icons(payload: &str) -> Option<Vec<TargetIcon>> {
+    let mut icons: Vec<TargetIcon> = Vec::new();
+    for entry in payload.split(';').filter(|entry| !entry.is_empty()) {
+        let icon = TargetIcon::decode(entry).filter(|icon| icon.target_guid != 0)?;
+        if icons
+            .iter()
+            .any(|held| held.icon == icon.icon || held.target_guid == icon.target_guid)
+        {
+            return None;
+        }
+        icons.push(icon);
+    }
+    Some(icons)
+}
+
+/// The `READY_CHECK_ANSWER` payload: the client's state byte in decimal.
+pub fn encode_ready_check_answer(state: u8) -> String {
+    state.to_string()
+}
+
+pub fn decode_ready_check_answer(payload: &str) -> Option<u8> {
+    payload.parse().ok()
+}
+
+/// `x,y` as `f32` bit patterns, the `MINIMAP_PING` payload. Bits rather than decimals, so every
+/// float the client sent reaches the other members unchanged.
+pub fn encode_minimap_ping(x: f32, y: f32) -> String {
+    format!("{},{}", x.to_bits(), y.to_bits())
+}
+
+pub fn decode_minimap_ping(payload: &str) -> Option<(f32, f32)> {
+    let (x, y) = payload.split_once(',')?;
+    Some((
+        f32::from_bits(x.parse().ok()?),
+        f32::from_bits(y.parse().ok()?),
+    ))
+}
+
+/// `min,max,result`, the `RANDOM_ROLL` payload.
+pub fn encode_random_roll(min: u32, max: u32, result: u32) -> String {
+    format!("{min},{max},{result}")
+}
+
+/// `None` for a malformed payload or a result outside its range.
+pub fn decode_random_roll(payload: &str) -> Option<(u32, u32, u32)> {
+    let mut parts = payload.split(',');
+    let min = parts.next()?.parse().ok()?;
+    let max = parts.next()?.parse().ok()?;
+    let result = parts.next()?.parse().ok()?;
+    if parts.next().is_some() || !(min..=max).contains(&result) {
+        return None;
+    }
+    Some((min, max, result))
 }
 
 /// One roster as a LIST event carries it: what `SMSG_GROUP_LIST` shows, except presence.
@@ -394,6 +529,10 @@ pub struct RosterPayload {
     pub kind: GroupKind,
     /// Every member in join order, the recipient included.
     pub members: Vec<RosterMember>,
+    /// A Party's Target Icons, sent again right after the list. In a Party the client clears its
+    /// marks on every `SMSG_GROUP_LIST`, and vmangos resends them after the list
+    /// (vm:Group.cpp:1343-1360). A Raid keeps its marks, so a Raid's roster carries none.
+    pub target_icons: Vec<TargetIcon>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -405,8 +544,9 @@ pub struct RosterMember {
 
 impl RosterPayload {
     /// `leader,loot_method,loot_threshold,master_looter_guid,kind|guid,name,slot;...`, with `kind`
-    /// and `slot` as wire bytes. The encoder owns the grammar, so it also strips the delimiters from
-    /// names. Character creation admits only letters today, but that rule lives elsewhere.
+    /// and `slot` as wire bytes, then `|` and [`encode_target_icons`] when there are Target Icons.
+    /// The encoder owns the grammar, so it also strips the delimiters from names. Character
+    /// creation admits only letters today, but that rule lives elsewhere.
     pub fn encode(&self) -> String {
         let members: Vec<String> = self
             .members
@@ -416,7 +556,7 @@ impl RosterPayload {
                 format!("{},{name},{}", member.guid, member.slot.wire())
             })
             .collect();
-        format!(
+        let mut payload = format!(
             "{},{},{},{},{}|{}",
             self.leader,
             self.loot_method,
@@ -424,13 +564,28 @@ impl RosterPayload {
             self.master_looter_guid,
             self.kind.wire(),
             members.join(";")
-        )
+        );
+        if !self.target_icons.is_empty() {
+            payload.push('|');
+            payload.push_str(&encode_target_icons(&self.target_icons));
+        }
+        payload
     }
 
-    /// `None` for a malformed or extra field, an unknown kind, an invalid Raid Slot, no members, or
-    /// more members than a Raid holds. The Gateway fails closed rather than render a corrupt roster.
+    /// `None` for a malformed or extra field, an unknown kind, an invalid Raid Slot, no members,
+    /// more members than a Raid holds, or a malformed icon segment. The Gateway fails closed rather
+    /// than render a corrupt roster.
     pub fn decode(payload: &str) -> Option<Self> {
-        let (head, rest) = payload.split_once('|')?;
+        let mut segments = payload.split('|');
+        let head = segments.next()?;
+        let rest = segments.next()?;
+        let target_icons = match segments.next() {
+            Some(icons) => decode_target_icons(icons)?,
+            None => Vec::new(),
+        };
+        if segments.next().is_some() {
+            return None;
+        }
         let mut head_parts = head.split(',');
         let leader = head_parts.next()?.parse().ok()?;
         let loot_method = head_parts.next()?.parse().ok()?;
@@ -461,6 +616,7 @@ impl RosterPayload {
             master_looter_guid,
             kind,
             members,
+            target_icons,
         })
     }
 }
@@ -633,6 +789,7 @@ mod tests {
                 member(2, "Ginger", 0, false),
                 member(3, "df|s;d,fsd", 1, true),
             ],
+            target_icons: Vec::new(),
         };
         let wire = roster.encode();
         assert_eq!(wire, "2,3,2,0,1|2,Ginger,0;3,df_s_d_fsd,129");
@@ -662,6 +819,7 @@ mod tests {
             members: (0..RAID_MAX_MEMBERS as u64)
                 .map(|index| member(index + 1, &format!("M{index}"), (index / 5) as u8, false))
                 .collect(),
+            target_icons: Vec::new(),
         };
         assert_eq!(
             RosterPayload::decode(&roster.encode()),
@@ -686,7 +844,13 @@ mod tests {
             "2,3,2,0,0|5",       // no name, no slot
             "2,3,2,0,0|5,Bob,8", // ninth Subgroup
             "2,3,2,0,0|5,Bob,maybe",
-            "2,3,2,0,0|5,Bob,0,1", // extra member field
+            "2,3,2,0,0|5,Bob,0,1",         // extra member field
+            "2,3,2,0,0|5,Bob,0|7",         // an icon with no unit
+            "2,3,2,0,0|5,Bob,0|8,99",      // a ninth icon
+            "2,3,2,0,0|5,Bob,0|7,99;7,98", // one icon twice
+            "2,3,2,0,0|5,Bob,0|7,99;6,99", // one unit with two icons
+            "2,3,2,0,0|5,Bob,0|7,0",       // a clear icon in a held list
+            "2,3,2,0,0|5,Bob,0|7,99|6,98", // a fourth segment
         ] {
             assert_eq!(RosterPayload::decode(payload), None, "{payload:?}");
         }
@@ -720,6 +884,11 @@ mod tests {
         assert_eq!(realm_op::SET_ASSISTANT, 8);
         assert_eq!(realm_op::CHANGE_SUBGROUP, 9);
         assert_eq!(realm_op::SWAP_SUBGROUP, 10);
+        assert_eq!(realm_op::READY_CHECK_START, 11);
+        assert_eq!(realm_op::READY_CHECK_ANSWER, 12);
+        assert_eq!(realm_op::TARGET_ICON, 13);
+        assert_eq!(realm_op::MINIMAP_PING, 14);
+        assert_eq!(realm_op::RANDOM_ROLL, 15);
         let all = [
             realm_op::INVITE,
             realm_op::ACCEPT,
@@ -732,6 +901,11 @@ mod tests {
             realm_op::SET_ASSISTANT,
             realm_op::CHANGE_SUBGROUP,
             realm_op::SWAP_SUBGROUP,
+            realm_op::READY_CHECK_START,
+            realm_op::READY_CHECK_ANSWER,
+            realm_op::TARGET_ICON,
+            realm_op::MINIMAP_PING,
+            realm_op::RANDOM_ROLL,
         ];
         let mut sorted = all.to_vec();
         sorted.sort_unstable();
@@ -781,5 +955,159 @@ mod tests {
     #[test]
     fn the_target_is_self_refusal_has_its_own_tag() {
         assert_eq!(GroupRefusal::TargetIsSelf.as_tag(), "group:target_is_self");
+    }
+
+    // ---- Group Broadcasts ----
+
+    /// Every producer of `game_group_event` shares one kind byte, so a Group Broadcast kind that
+    /// collided with a membership, loot or quest-share kind would render the wrong packet.
+    #[test]
+    fn group_broadcast_kinds_are_pinned_and_distinct_from_every_other_kind() {
+        use crate::loot_roll::event_kind as roll;
+        use crate::quest::share_event_kind as share;
+        assert_eq!(event_kind::READY_CHECK, 21);
+        assert_eq!(event_kind::READY_CHECK_ANSWER, 22);
+        assert_eq!(event_kind::TARGET_ICON_UPDATE, 23);
+        assert_eq!(event_kind::TARGET_ICON_LIST, 24);
+        assert_eq!(event_kind::MINIMAP_PING, 25);
+        assert_eq!(event_kind::RANDOM_ROLL, 26);
+        let all = [
+            event_kind::INVITE,
+            event_kind::LIST,
+            event_kind::DECLINE,
+            event_kind::DESTROYED,
+            roll::ROLL_START,
+            roll::ROLL_VOTE,
+            roll::ROLL_WON,
+            roll::MASTER_LIST,
+            roll::MONEY_SHARE,
+            share::QUEST_SHARE,
+            share::QUEST_PUSH_RESULT,
+            event_kind::SET_LEADER,
+            event_kind::READY_CHECK,
+            event_kind::READY_CHECK_ANSWER,
+            event_kind::TARGET_ICON_UPDATE,
+            event_kind::TARGET_ICON_LIST,
+            event_kind::MINIMAP_PING,
+            event_kind::RANDOM_ROLL,
+        ];
+        let mut sorted = all.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(
+            sorted.len(),
+            all.len(),
+            "two group event kinds share a byte"
+        );
+        assert!(
+            !all.contains(&9),
+            "kind 9 was party chat and is never reused"
+        );
+    }
+
+    #[test]
+    fn the_invalid_target_icon_refusal_has_its_own_tag() {
+        assert_eq!(
+            GroupRefusal::InvalidTargetIcon.as_tag(),
+            "group:invalid_target_icon"
+        );
+    }
+
+    fn icon(icon: u8, target_guid: u64) -> TargetIcon {
+        TargetIcon { icon, target_guid }
+    }
+
+    /// cm:Group.h:43 holds 8 icons; 0xFF asks for the list (cm:GroupHandler.cpp:457).
+    #[test]
+    fn a_group_holds_eight_target_icons_and_0xff_asks_for_the_list() {
+        assert_eq!(TARGET_ICON_COUNT, 8);
+        assert_eq!(TARGET_ICON_LIST_REQUEST, 0xFF);
+    }
+
+    /// Pinned against the grammar: the icon segment follows the members only when there is one.
+    #[test]
+    fn a_party_roster_carries_its_target_icons_after_the_members() {
+        let mut roster = RosterPayload {
+            leader: 2,
+            loot_method: 3,
+            loot_threshold: 2,
+            master_looter_guid: 0,
+            kind: GroupKind::Party,
+            members: vec![member(2, "Ginger", 0, false), member(3, "Vim", 0, false)],
+            target_icons: vec![icon(7, 900), icon(0, 901)],
+        };
+        let wire = roster.encode();
+        assert_eq!(wire, "2,3,2,0,0|2,Ginger,0;3,Vim,0|7,900;0,901");
+        assert_eq!(RosterPayload::decode(&wire), Some(roster.clone()));
+        roster.target_icons.clear();
+        assert_eq!(roster.encode(), "2,3,2,0,0|2,Ginger,0;3,Vim,0");
+    }
+
+    #[test]
+    fn a_target_icon_update_round_trips_a_set_and_a_clear() {
+        assert_eq!(
+            icon(7, 0xF130_0000_0000_0042).encode(),
+            "7,17379390962022744130"
+        );
+        for update in [icon(7, 0xF130_0000_0000_0042), icon(0, 0)] {
+            assert_eq!(TargetIcon::decode(&update.encode()), Some(update));
+        }
+        for payload in ["", "7", "8,1", "255,1", "x,1", "7,x", "7,-1", "7,1,2"] {
+            assert_eq!(TargetIcon::decode(payload), None, "{payload:?}");
+        }
+    }
+
+    #[test]
+    fn a_target_icon_list_round_trips_and_an_empty_list_is_empty() {
+        let icons = vec![icon(0, 11), icon(7, 12)];
+        assert_eq!(encode_target_icons(&icons), "0,11;7,12");
+        assert_eq!(decode_target_icons("0,11;7,12"), Some(icons));
+        assert_eq!(encode_target_icons(&[]), "");
+        assert_eq!(decode_target_icons(""), Some(Vec::new()));
+        for payload in ["0,11;0,12", "0,11;1,11", "0,0", "8,1", "0,11;x"] {
+            assert_eq!(decode_target_icons(payload), None, "{payload:?}");
+        }
+    }
+
+    #[test]
+    fn a_ready_check_answer_carries_the_state_byte() {
+        for state in [0u8, 1, 255] {
+            assert_eq!(
+                decode_ready_check_answer(&encode_ready_check_answer(state)),
+                Some(state)
+            );
+        }
+        assert_eq!(encode_ready_check_answer(1), "1");
+        for payload in ["", "256", "-1", "yes"] {
+            assert_eq!(decode_ready_check_answer(payload), None, "{payload:?}");
+        }
+    }
+
+    /// Decimal text would round a float; bit patterns carry every value the client sent.
+    #[test]
+    fn a_minimap_ping_carries_each_float_bit_for_bit() {
+        assert_eq!(encode_minimap_ping(0.5, -0.25), "1056964608,3196059648");
+        for (x, y) in [
+            (0.5f32, -0.25f32),
+            (-1234.567, 0.1),
+            (f32::MIN_POSITIVE, -0.0),
+            (f32::MAX, f32::MIN),
+        ] {
+            let (dx, dy) = decode_minimap_ping(&encode_minimap_ping(x, y)).unwrap();
+            assert_eq!((dx.to_bits(), dy.to_bits()), (x.to_bits(), y.to_bits()));
+        }
+        for payload in ["", "1", "1,x", "1,2,3", "4294967296,0"] {
+            assert_eq!(decode_minimap_ping(payload), None, "{payload:?}");
+        }
+    }
+
+    #[test]
+    fn a_random_roll_carries_its_range_and_result() {
+        assert_eq!(encode_random_roll(1, 100, 42), "1,100,42");
+        assert_eq!(decode_random_roll("1,100,42"), Some((1, 100, 42)));
+        assert_eq!(decode_random_roll("5,5,5"), Some((5, 5, 5)));
+        for payload in ["", "1,100", "1,100,101", "5,10,4", "1,100,42,0", "1,x,2"] {
+            assert_eq!(decode_random_roll(payload), None, "{payload:?}");
+        }
     }
 }

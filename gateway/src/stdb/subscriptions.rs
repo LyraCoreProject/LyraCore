@@ -1147,23 +1147,6 @@ pub(crate) fn relay_gameobject_destroy(_viewer: &Viewer, guid: u64) -> Vec<Outbo
     ))]
 }
 
-/// One mover's motion row → `MSG_MOVE_*` bytes for one session. The `created` guard is the same one
-/// the relay before the shared-connection model had: no MSG_MOVE for a guid this client never got a
-/// CREATE for.
-#[must_use = "these relay bodies RETURN the packets to send — the caller enqueues them; \
-              dropping the result is a silently invisible peer, which is the exact class the \
-              shared-dispatch path's differential test exists to prevent"]
-/// The shared-dispatch twin of the per-player `on_roll` relay (`/roll`) in
-/// `subscribe_player_events`. Same packet, byte for byte; the audience decision (shard identity)
-/// already happened in `world_view::roll_appeared`, and rolls are public, so there is no
-/// per-viewer state to consult here.
-pub(crate) fn relay_roll(row: &RollEvent) -> Vec<Outbound> {
-    let m = codec::build_random_roll(row.roller_guid, row.min_roll, row.max_roll, row.result);
-    vec![Outbound::One(ServerOpcodeMessage::MSG_RANDOM_ROLL(
-        Box::new(m),
-    ))]
-}
-
 /// Encode one zone's sky. The audience decision (the viewer's stored zone) already happened in
 /// `world_view::weather_changed`, and the changed row carried the whole packet, so nothing is read
 /// here.
@@ -2161,6 +2144,7 @@ fn trade_offer_extended(
 /// caller (RLS on the per-player leg; the owner-session lookup + `private_recipient_audience` on
 /// the shared leg). `store` is the connection the row came from: Realm-core on a sharded Realm.
 /// The LIST render reads every World Shard through it, and QUEST_SHARE reads the quest detail.
+#[allow(clippy::too_many_lines)] // One arm per group event kind.
 pub(crate) fn group_event_outbound<St: crate::world::WorldStore + ?Sized>(
     store: &St,
     self_guid: u64,
@@ -2174,10 +2158,17 @@ pub(crate) fn group_event_outbound<St: crate::world::WorldStore + ?Sized>(
             codec::build_group_invite(row.other_name.clone()),
         ))),
         // The same renderer world entry uses: presence and blank names come from the shard caches,
-        // because a roster written on realm-core can know neither.
+        // because a roster written on realm-core can know neither. A Party's Target Icons follow
+        // in the same job, because the Party client clears its marks on the list.
         group_kind::LIST => match lyracore_shared::group::RosterPayload::decode(&row.payload) {
             Some(roster) => {
-                return vec![crate::world::party::render_list(store, self_guid, &roster)]
+                let mut packets = vec![crate::world::party::render_list(store, self_guid, &roster)];
+                if !roster.target_icons.is_empty() {
+                    packets.push(Outbound::One(ServerOpcodeMessage::MSG_RAID_TARGET_UPDATE(
+                        Box::new(codec::build_target_icon_list(&roster.target_icons)),
+                    )));
+                }
+                return packets;
             }
             None => {
                 log::warn!(
@@ -2343,6 +2334,56 @@ pub(crate) fn group_event_outbound<St: crate::world::WorldStore + ?Sized>(
                 None
             }
         },
+        group_kind::READY_CHECK => Some(ServerOpcodeMessage::MSG_RAID_READY_CHECK(Box::new(
+            codec::build_ready_check(),
+        ))),
+        group_kind::READY_CHECK_ANSWER => broadcast_packet(
+            row,
+            lyracore_shared::group::decode_ready_check_answer(&row.payload),
+            |state| {
+                ServerOpcodeMessage::MSG_RAID_READY_CHECK(Box::new(
+                    codec::build_ready_check_answer(row.other_guid, state),
+                ))
+            },
+        ),
+        group_kind::TARGET_ICON_UPDATE => broadcast_packet(
+            row,
+            lyracore_shared::group::TargetIcon::decode(&row.payload)
+                .and_then(codec::build_target_icon_update),
+            |update| ServerOpcodeMessage::MSG_RAID_TARGET_UPDATE(Box::new(update)),
+        ),
+        group_kind::TARGET_ICON_LIST => broadcast_packet(
+            row,
+            lyracore_shared::group::decode_target_icons(&row.payload),
+            |icons| {
+                ServerOpcodeMessage::MSG_RAID_TARGET_UPDATE(Box::new(
+                    codec::build_target_icon_list(&icons),
+                ))
+            },
+        ),
+        group_kind::MINIMAP_PING => broadcast_packet(
+            row,
+            lyracore_shared::group::decode_minimap_ping(&row.payload),
+            |(x, y)| {
+                ServerOpcodeMessage::MSG_MINIMAP_PING(Box::new(codec::build_minimap_ping(
+                    row.other_guid,
+                    x,
+                    y,
+                )))
+            },
+        ),
+        group_kind::RANDOM_ROLL => broadcast_packet(
+            row,
+            lyracore_shared::group::decode_random_roll(&row.payload),
+            |(min, max, result)| {
+                ServerOpcodeMessage::MSG_RANDOM_ROLL(Box::new(codec::build_random_roll(
+                    row.other_guid,
+                    min,
+                    max,
+                    result,
+                )))
+            },
+        ),
         other => {
             log::warn!("group event relay: unknown kind {other} (id {})", row.id);
             None
@@ -2380,6 +2421,24 @@ fn leader_name<St: crate::world::WorldStore + ?Sized>(
             None
         }
     }
+}
+
+/// One Group Broadcast packet from its decoded payload. A payload that does not decode logs and
+/// sends nothing, so a corrupt row never reaches the client.
+fn broadcast_packet<T>(
+    row: &GroupEvent,
+    decoded: Option<T>,
+    packet: impl FnOnce(T) -> ServerOpcodeMessage,
+) -> Option<ServerOpcodeMessage> {
+    if decoded.is_none() {
+        log::warn!(
+            "group broadcast relay: unparseable kind {} payload {:?} (event {})",
+            row.kind,
+            row.payload,
+            row.id
+        );
+    }
+    decoded.map(packet)
 }
 
 /// The shared-dispatch "who may see this row" predicate for the PRIVATE recipient-addressed families

@@ -6,11 +6,12 @@ use super::party::PartyOutcome;
 use super::{party, presence, send, who, Outbound, SessionTx, WorldConn, WorldState, WorldStore};
 use crate::codec;
 use anyhow::Result;
-use lyracore_shared::group::GroupRefusal;
+use lyracore_shared::group::{GroupRefusal, TARGET_ICON_LIST_REQUEST};
 use lyracore_shared::social::ContactRefusal;
 use wow_world_base::shared::friend_result_vanilla_tbc::FriendResult;
 use wow_world_messages::vanilla::opcodes::{ClientOpcodeMessage, ServerOpcodeMessage};
-use wow_world_messages::vanilla::{PartyOperation, PartyResult};
+use wow_world_messages::vanilla::{MSG_RAID_TARGET_UPDATE_Client, PartyOperation, PartyResult};
+use wow_world_messages::Guid;
 
 /// What one contact-list op answered. A [`ContactRefusal`] is a gameplay answer `SMSG_FRIEND_STATUS`
 /// renders; a timeout, transport failure, or untagged reducer error stays `Err` and ends the
@@ -30,6 +31,7 @@ impl From<ContactRefusal> for ContactOutcome {
 /// Social family: /who, the friends/ignore lists, and party/group management — the social-pane
 /// opcodes. Each arm consumes its opcode (`Ok(None)`) or passes the message on (`Ok(Some(msg))`),
 /// like the other per-family handlers.
+#[allow(clippy::too_many_lines)] // One arm per social and party opcode.
 pub(super) fn handle_social<St: WorldStore + ?Sized>(
     tx: &SessionTx,
     store: &St,
@@ -230,6 +232,24 @@ pub(super) fn handle_social<St: WorldStore + ?Sized>(
         ClientOpcodeMessage::CMSG_GROUP_SWAP_SUB_GROUP(c) => {
             swap_subgroup(store, conn, &c.name, &c.swap_with_name)?
         }
+        // Group Broadcasts. Every member's packet rides the group event relay, the actor's too.
+        ClientOpcodeMessage::MSG_RAID_READY_CHECK(c) => {
+            let op = match c.answer {
+                None => party::Op::ReadyCheckStart,
+                Some(answer) => party::Op::ReadyCheckAnswer(answer.state),
+            };
+            run_group_broadcast(store, conn, op)?;
+        }
+        ClientOpcodeMessage::MSG_RAID_TARGET_UPDATE(c) => {
+            run_group_broadcast(store, conn, target_icon_op(&c))?;
+        }
+        ClientOpcodeMessage::MSG_MINIMAP_PING(c) => {
+            let op = party::Op::MinimapPing {
+                x: c.position_x,
+                y: c.position_y,
+            };
+            run_group_broadcast(store, conn, op)?;
+        }
         other => return Ok(Some(other)),
     }
     Ok(None)
@@ -368,6 +388,47 @@ fn swap_subgroup<St: WorldStore + ?Sized>(
     }
 }
 
+/// Run one Group Broadcast for the session's Character. cmangos answers every refusal of these
+/// opcodes with silence, so a Refusal only logs. Transport loss still ends the session.
+pub(super) fn run_group_broadcast<St: WorldStore + ?Sized>(
+    store: &St,
+    conn: &WorldConn,
+    op: party::Op,
+) -> Result<()> {
+    let Some(me) = self_guid(conn) else {
+        return Ok(());
+    };
+    if let PartyOutcome::Refused(refusal) = party::run(store, conn.account_id, me, op)? {
+        log::debug!(
+            "world: group broadcast {op:?} refused (account {}): {refusal:?}",
+            conn.account_id
+        );
+    }
+    Ok(())
+}
+
+/// `MSG_RAID_TARGET_UPDATE` as a Target Icon op. `RequestIcons` is the list request, and
+/// `Unknown0` to `Unknown8` are indexes 0 to 8. The Module refuses index 8.
+fn target_icon_op(update: &MSG_RAID_TARGET_UPDATE_Client) -> party::Op {
+    use MSG_RAID_TARGET_UPDATE_Client as Update;
+    let (icon, target) = match *update {
+        Update::RequestIcons => (TARGET_ICON_LIST_REQUEST, Guid::zero()),
+        Update::Unknown0 { target } => (0, target),
+        Update::Unknown1 { target } => (1, target),
+        Update::Unknown2 { target } => (2, target),
+        Update::Unknown3 { target } => (3, target),
+        Update::Unknown4 { target } => (4, target),
+        Update::Unknown5 { target } => (5, target),
+        Update::Unknown6 { target } => (6, target),
+        Update::Unknown7 { target } => (7, target),
+        Update::Unknown8 { target } => (8, target),
+    };
+    party::Op::TargetIcon {
+        icon,
+        target: target.guid(),
+    }
+}
+
 /// The session's in-world character guid, or `None` at character select. Party ops need it for two
 /// reasons that only coincide on a single-database gateway: it is the CHARACTER realm-core acts as
 /// (realm-core has no live entity to derive one from), and it is the character the module's
@@ -420,7 +481,8 @@ fn party_result_for(refusal: GroupRefusal) -> PartyResult {
         | GroupRefusal::NotRaid
         | GroupRefusal::TargetIsSelf
         | GroupRefusal::InvalidSubgroup
-        | GroupRefusal::SubgroupFull => PartyResult::BadPlayerName,
+        | GroupRefusal::SubgroupFull
+        | GroupRefusal::InvalidTargetIcon => PartyResult::BadPlayerName,
     }
 }
 

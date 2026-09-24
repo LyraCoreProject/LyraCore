@@ -2744,15 +2744,6 @@ impl WorldStore for InMemoryStore {
         self.rec("send_emote");
         Ok(())
     }
-    fn send_roll(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        _min_roll: u32,
-        _max_roll: u32,
-    ) -> Result<()> {
-        Ok(())
-    }
     fn send_whisper(
         &self,
         _account_id: u64,
@@ -3514,6 +3505,17 @@ impl WorldStore for InMemoryStore {
                 return Ok(p.change_subgroup(actor_guid, target_guid, arg_a))
             }
             realm_op::SWAP_SUBGROUP => return Ok(p.swap_subgroup(actor_guid, target_guid, arg_c)),
+            // Group Broadcasts. Who hears each one is the Module's rule; the routing needs only
+            // the op on the authority, and a Refusal for a member of no group.
+            realm_op::READY_CHECK_START
+            | realm_op::READY_CHECK_ANSWER
+            | realm_op::TARGET_ICON
+            | realm_op::MINIMAP_PING => {
+                if p.group_of(actor_guid).is_none() {
+                    return Ok(GroupRefusal::NotInGroup.into());
+                }
+            }
+            realm_op::RANDOM_ROLL => {}
             other => return Err(anyhow!("unknown realm group op {other}")),
         }
         Ok(PartyOutcome::Ran)

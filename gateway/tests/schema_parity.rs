@@ -1020,9 +1020,6 @@ parity_test!(parity_game_talent, "game_talent", lyracore_module::Talent, binding
 parity_test!(parity_game_character_talent, "game_character_talent", lyracore_module::CharacterTalent, bindings::character_talent_type::CharacterTalent, {
     id, character_guid, owner_identity, talent_id, rank,
 });
-parity_test!(parity_game_roll_event, "game_roll_event", lyracore_module::RollEvent, bindings::roll_event_type::RollEvent, {
-    id, roller_guid, min_roll, max_roll, result, created_at, map_id, instance_id, grid_x, grid_y,
-});
 parity_test!(parity_game_rest_state_event, "game_rest_state_event", lyracore_module::RestStateEvent, bindings::rest_state_event_type::RestStateEvent, {
     id, character_guid, player_bytes_2, created_at,
 });
@@ -1256,7 +1253,6 @@ const MANIFEST_TABLES: &[&str] = &[
     "game_spell_chain",
     "game_talent",
     "game_character_talent",
-    "game_roll_event",
     "game_rest_state_event",
     "game_breath_relay_event",
     "game_dynamic_object",

@@ -272,7 +272,8 @@ impl GroupRoster {
     }
 
     /// The list this roster renders as. Names are blank: [`render_list`] reads them from the
-    /// shards, since realm-core holds none.
+    /// shards, since realm-core holds none. It carries no Target Icons: the Gateway reads none,
+    /// and only a LIST event from the party authority carries them.
     pub fn list_payload(&self) -> RosterPayload {
         RosterPayload {
             leader: self.leader_guid,
@@ -289,6 +290,7 @@ impl GroupRoster {
                     slot: member.slot,
                 })
                 .collect(),
+            target_icons: Vec::new(),
         }
     }
 }
@@ -303,7 +305,7 @@ fn roster_or_disbanded(realm: &dyn WorldStore, group_id: u64) -> Result<GroupRos
 /// One party op, in the client's own vocabulary. The argument packing into `realm_group_op`'s slots
 /// happens once, in [`Op::realm_args`], against the shared
 /// [`lyracore_shared::group::realm_op`] contract.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Op {
     /// `CMSG_GROUP_INVITE`, target already resolved to a guid.
     Invite(u64),
@@ -332,6 +334,17 @@ pub enum Op {
     ChangeSubgroup { target: u64, subgroup: u8 },
     /// `CMSG_GROUP_SWAP_SUB_GROUP`, both targets already resolved to guids.
     SwapSubgroup { first: u64, second: u64 },
+    /// `MSG_RAID_READY_CHECK` without a body.
+    ReadyCheckStart,
+    /// `MSG_RAID_READY_CHECK` with the answer's state byte.
+    ReadyCheckAnswer(u8),
+    /// `MSG_RAID_TARGET_UPDATE`: a Target Icon 0 to 7 on `target` (0 clears it), or
+    /// [`lyracore_shared::group::TARGET_ICON_LIST_REQUEST`] for the full list.
+    TargetIcon { icon: u8, target: u64 },
+    /// `MSG_MINIMAP_PING`, the point on the minimap.
+    MinimapPing { x: f32, y: f32 },
+    /// `MSG_RANDOM_ROLL`, the bounds as the client sent them.
+    RandomRoll { min: u32, max: u32 },
 }
 
 /// `realm_group_op`'s argument slots after the actor: `(op, target_guid, arg_a, arg_b, arg_c)`.
@@ -359,7 +372,34 @@ impl Op {
                 (realm_op::CHANGE_SUBGROUP, target, subgroup, 0, 0)
             }
             Op::SwapSubgroup { first, second } => (realm_op::SWAP_SUBGROUP, first, 0, 0, second),
+            Op::ReadyCheckStart => (realm_op::READY_CHECK_START, 0, 0, 0, 0),
+            Op::ReadyCheckAnswer(state) => (realm_op::READY_CHECK_ANSWER, 0, state, 0, 0),
+            Op::TargetIcon { icon, target } => (realm_op::TARGET_ICON, target, icon, 0, 0),
+            // Bit patterns, so the floats reach the other members unchanged.
+            Op::MinimapPing { x, y } => (
+                realm_op::MINIMAP_PING,
+                u64::from(x.to_bits()),
+                0,
+                0,
+                u64::from(y.to_bits()),
+            ),
+            Op::RandomRoll { min, max } => {
+                (realm_op::RANDOM_ROLL, u64::from(min), 0, 0, u64::from(max))
+            }
         }
+    }
+
+    /// A Group Broadcast changes no roster, so it needs no roster read, no loot-roll flush and no
+    /// mirror push.
+    fn is_group_broadcast(self) -> bool {
+        matches!(
+            self,
+            Op::ReadyCheckStart
+                | Op::ReadyCheckAnswer(_)
+                | Op::TargetIcon { .. }
+                | Op::MinimapPing { .. }
+                | Op::RandomRoll { .. }
+        )
     }
 }
 
@@ -790,11 +830,12 @@ fn answer_for_session_less<St: WorldStore + ?Sized>(store: &St, realm: &dyn Worl
 /// Run one party op for the session that owns `self_guid`.
 ///
 /// Unsharded → the pre-realm-core path, verbatim: the player's own connection calls the player-facing
-/// reducer on the player's own shard, and nothing else happens. A raid or leadership op has no
-/// player-facing reducer, so it calls `realm_group_op` on that same shard.
+/// reducer on the player's own shard, and nothing else happens. A raid op, a leadership op or a
+/// Group Broadcast has no player-facing reducer, so it calls `realm_group_op` on that same shard.
 ///
 /// Sharded → realm-core runs the op, then every connected world shard's mirror is refreshed. The
-/// mirror refresh is best-effort BY DESIGN (see [`sync_mirrors`]); the op's own result is not.
+/// mirror refresh is best-effort BY DESIGN (see [`sync_mirrors`]); the op's own result is not. A
+/// Group Broadcast runs on Realm-core and nothing else happens.
 pub(crate) fn run<St: WorldStore + ?Sized>(
     store: &St,
     account_id: u64,
@@ -825,15 +866,24 @@ pub(crate) fn run<St: WorldStore + ?Sized>(
                 master,
                 threshold,
             } => store.group_loot_method(account_id, self_guid, setting, master, threshold),
-            // A raid or leadership op has no player-facing reducer. With one database, the home
-            // shard holds the party, so it runs the same `realm_group_op` Realm-core would.
+            // A raid op, a leadership op or a Group Broadcast has no player-facing reducer. With one
+            // database, the home shard holds the party, so it runs the same `realm_group_op`
+            // Realm-core would.
             Op::RaidConvert
             | Op::SetLeader(_)
             | Op::SetAssistant { .. }
             | Op::ChangeSubgroup { .. }
-            | Op::SwapSubgroup { .. } => run_on_authority(store, self_guid, op),
+            | Op::SwapSubgroup { .. }
+            | Op::ReadyCheckStart
+            | Op::ReadyCheckAnswer(_)
+            | Op::TargetIcon { .. }
+            | Op::MinimapPing { .. }
+            | Op::RandomRoll { .. } => run_on_authority(store, self_guid, op),
         };
     };
+    if op.is_group_broadcast() {
+        return run_on_authority(realm.as_ref(), self_guid, op);
+    }
     // The two gates realm-core cannot run for itself, because the directory database holds neither
     // characters nor live entities: does the target EXIST, and is it ONLINE. The gateway is the only
     // party that can answer them across a boundary — which is precisely the bug being fixed — and it

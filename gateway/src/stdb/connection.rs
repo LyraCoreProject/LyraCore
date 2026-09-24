@@ -1071,11 +1071,6 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // Explored areas (a live find, same rule): the fog-word relay's coordinator leg — a fresh
         // login's first-movement discovery lands exactly in the per-player AOI-churn window.
         "SELECT * FROM game_character_explored",
-        // /roll events: the shared dispatch
-        // (`world_view::roll_appeared`) relays these from this cache instead of ~N per-player
-        // subscriptions. Tiny TTL-reaped event table; subscribed unconditionally so the flag
-        // never changes what this connection holds.
-        "SELECT * FROM game_roll_event",
         // Rest-state flips: same shape — `world_view::
         // rest_state_appeared` relays each row to its owner's session only. TTL-reaped.
         "SELECT * FROM game_rest_state_event",

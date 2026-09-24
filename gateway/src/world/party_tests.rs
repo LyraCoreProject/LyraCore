@@ -2634,6 +2634,7 @@ fn the_realm_core_list_relay_renders_a_member_on_another_shard_online() {
                 slot: RaidSlot::default(),
             })
             .collect(),
+        target_icons: Vec::new(),
     }
     .encode();
     let row = crate::stdb::bindings::GroupEvent {
@@ -2685,6 +2686,7 @@ fn a_list_keeps_payload_names_and_lists_a_member_no_shard_can_name() {
             member(VIM, ""),
             member(404, ""),
         ],
+        target_icons: Vec::new(),
     };
 
     let list = group_list(party::render_list(world.as_ref(), GINGER, &roster));
@@ -3612,5 +3614,393 @@ fn resolve_roster_member_by_name_ignores_a_namesake_outside_the_roster() {
         inside,
         Some(VIM),
         "a roster member resolves, case-insensitively"
+    );
+}
+
+// ---- Group Broadcasts ----
+
+/// `realm_group_op`'s slots after the actor: `(op, target_guid, arg_a, arg_b, arg_c)`.
+type RealmArgs = (u8, u64, u8, u8, u64);
+
+/// One packet as the client receives it: `(opcode, body)`.
+type Wire = (u16, Vec<u8>);
+
+/// Every Group Broadcast op and the `realm_group_op` slots it must fill: the op byte, the target
+/// slot, `arg_a`, `arg_b` and `arg_c`. Pinned by hand against `realm_op`'s slot table. The ping's
+/// floats go as bit patterns: 0.5 is `0x3F00_0000` and -0.25 is `0xBE80_0000`.
+fn broadcast_ops() -> [(party::Op, RealmArgs); 6] {
+    [
+        (party::Op::ReadyCheckStart, (11, 0, 0, 0, 0)),
+        (party::Op::ReadyCheckAnswer(1), (12, 0, 1, 0, 0)),
+        (
+            party::Op::TargetIcon {
+                icon: 7,
+                target: 900,
+            },
+            (13, 900, 7, 0, 0),
+        ),
+        (
+            party::Op::TargetIcon {
+                icon: 0xFF,
+                target: 0,
+            },
+            (13, 0, 0xFF, 0, 0),
+        ),
+        (
+            party::Op::MinimapPing { x: 0.5, y: -0.25 },
+            (14, 0x3F00_0000, 0, 0, 0xBE80_0000),
+        ),
+        (
+            party::Op::RandomRoll { min: 1, max: 100 },
+            (15, 1, 0, 0, 100),
+        ),
+    ]
+}
+
+/// **AC: none of the broadcast ops advances the Roster Revision or pushes a mirror.** On a sharded
+/// Realm each one is one `realm_group_op` call on Realm-core and nothing else: no roster read, no
+/// loot-roll flush, no World Shard write.
+#[test]
+fn a_group_broadcast_runs_once_on_realm_core_and_pushes_no_mirror() {
+    let (realm, world, instances, calls) = party_topology();
+    form_split_party(&world, &instances);
+    for (op, (code, target, arg_a, arg_b, arg_c)) in broadcast_ops() {
+        let calls_before = calls.lock().unwrap().len();
+        let roster_reads_before = realm
+            .group_roster_reads
+            .load(std::sync::atomic::Ordering::SeqCst);
+
+        let outcome = party::run(world.as_ref(), 7, GINGER, op).unwrap();
+
+        assert_eq!(outcome, PartyOutcome::Ran, "{op:?}");
+        assert_eq!(
+            calls.lock().unwrap()[calls_before..],
+            [("lyracore-realm".to_string(), "realm_group_op".to_string())],
+            "{op:?} must be one call on the party authority and no mirror push"
+        );
+        assert_eq!(
+            realm
+                .group_roster_reads
+                .load(std::sync::atomic::Ordering::SeqCst),
+            roster_reads_before,
+            "{op:?} read a roster it does not need"
+        );
+        assert_eq!(
+            realm.party.lock().unwrap().ops.last().copied(),
+            Some((code, GINGER, target, arg_a, arg_b, arg_c)),
+            "{op:?}"
+        );
+    }
+}
+
+/// **AC: a single-database Gateway runs all five on its only shard.** No player-facing reducer
+/// exists for them, so the home shard's `realm_group_op` runs each one.
+#[test]
+fn an_unsharded_gateway_runs_every_group_broadcast_on_its_own_shard() {
+    let calls: ShardCallLog = Default::default();
+    let store = std::sync::Arc::new(InMemoryStore {
+        shard: "world".into(),
+        calls: calls.clone(),
+        ..Default::default()
+    });
+    {
+        let mut p = store.party.lock().unwrap();
+        p.groups.push((5, GINGER, 3, 2, 0));
+        p.members.push((5, GINGER));
+        p.members.push((5, VIM));
+    }
+    for (op, (code, target, arg_a, arg_b, arg_c)) in broadcast_ops() {
+        calls.lock().unwrap().clear();
+
+        let outcome = party::run(store.as_ref(), 7, GINGER, op).unwrap();
+
+        assert_eq!(outcome, PartyOutcome::Ran, "{op:?}");
+        assert_eq!(
+            calls.lock().unwrap().clone(),
+            vec![("world".to_string(), "realm_group_op".to_string())],
+            "{op:?}"
+        );
+        assert_eq!(
+            store.party.lock().unwrap().ops.last().copied(),
+            Some((code, GINGER, target, arg_a, arg_b, arg_c)),
+            "{op:?}"
+        );
+    }
+}
+
+/// Send one hand-written client frame over the encrypted session.
+fn send_client_frame(
+    client: &mut UnixStream,
+    encrypter: &mut EncrypterHalf,
+    opcode: u32,
+    body: &[u8],
+) {
+    use std::io::Write;
+    let size = u16::try_from(body.len() + 4).unwrap();
+    client
+        .write_all(&encrypter.encrypt_client_header(size, opcode))
+        .unwrap();
+    client.write_all(body).unwrap();
+}
+
+/// A barrier: the reply to an invite of an unknown name must be the next packet, so nothing the
+/// frames before it sent reached the client.
+fn assert_nothing_sent_before_the_barrier(
+    client: &mut UnixStream,
+    encrypter: &mut EncrypterHalf,
+    decrypter: &mut DecrypterHalf,
+) {
+    wow_world_messages::vanilla::CMSG_GROUP_INVITE {
+        name: "Nobodyatall".into(),
+    }
+    .write_encrypted_client(&mut *client, encrypter)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(client, decrypter).unwrap() {
+        ServerOpcodeMessage::SMSG_PARTY_COMMAND_RESULT(r) => assert_eq!(r.member, "Nobodyatall"),
+        other => panic!("a Group Broadcast answered the client directly: {other}"),
+    }
+}
+
+/// Client bytes in, `realm_group_op` slots out, for every opcode (cmangos: GroupHandler.cpp
+/// 395-415 ping, 417-442 roll, 444-471 icons, 547-583 ready check). The actor's own packets ride
+/// the group event relay, so the session answers none of them directly.
+#[test]
+fn every_group_broadcast_opcode_reaches_the_party_authority_with_its_client_values() {
+    let s = quest_store();
+    {
+        let mut p = s.party.lock().unwrap();
+        p.groups.push((5, 1, 3, 2, 0));
+        p.members.push((5, 1));
+        p.members.push((5, 2));
+    }
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+    let skull_on: Vec<u8> = [&[0x07][..], &0xF130_0000_0000_0042u64.to_le_bytes()].concat();
+    let frames: [(u32, Vec<u8>); 6] = [
+        // MSG_RAID_READY_CHECK, start.
+        (0x0322, vec![]),
+        // MSG_RAID_READY_CHECK, answer "ready".
+        (0x0322, vec![0x01]),
+        // MSG_RAID_TARGET_UPDATE, skull on a creature.
+        (0x0321, skull_on),
+        // MSG_RAID_TARGET_UPDATE, the list request.
+        (0x0321, vec![0xFF]),
+        // MSG_MINIMAP_PING at (0.5, -0.25).
+        (0x01D5, vec![0, 0, 0, 0x3F, 0, 0, 0x80, 0xBE]),
+        // MSG_RANDOM_ROLL with inverted bounds, min 100 and max 1.
+        (0x01FB, vec![100, 0, 0, 0, 1, 0, 0, 0]),
+    ];
+    for (opcode, body) in &frames {
+        send_client_frame(&mut client, &mut c_enc, *opcode, body);
+    }
+
+    assert_nothing_sent_before_the_barrier(&mut client, &mut c_enc, &mut c_dec);
+
+    assert_eq!(
+        store.party.lock().unwrap().ops,
+        vec![
+            (11, 1, 0, 0, 0, 0),
+            (12, 1, 0, 1, 0, 0),
+            (13, 1, 0xF130_0000_0000_0042, 7, 0, 0),
+            (13, 1, 0, 0xFF, 0, 0),
+            (14, 1, 0x3F00_0000, 0, 0, 0xBE80_0000),
+            // The Module normalizes the bounds; the Gateway passes what the client sent.
+            (15, 1, 100, 0, 0, 1),
+        ]
+    );
+    drop(client);
+    let _ = server.join();
+}
+
+/// cmangos answers a refused Ready Check, mark or ping with silence. A ninth icon index reaches
+/// the Module, which refuses it.
+#[test]
+fn a_refused_group_broadcast_sends_nothing() {
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+    let ninth_icon: Vec<u8> = [&[0x08][..], &900u64.to_le_bytes()].concat();
+    send_client_frame(&mut client, &mut c_enc, 0x0322, &[]);
+    send_client_frame(&mut client, &mut c_enc, 0x0321, &ninth_icon);
+    send_client_frame(&mut client, &mut c_enc, 0x01D5, &[0; 8]);
+
+    assert_nothing_sent_before_the_barrier(&mut client, &mut c_enc, &mut c_dec);
+
+    let ops: Vec<_> = store.party.lock().unwrap().ops.clone();
+    assert_eq!(
+        ops.iter().map(|op| (op.0, op.3)).collect::<Vec<_>>(),
+        [(11, 0), (13, 8), (14, 0)],
+        "each opcode reached the authority, which refused it"
+    );
+    drop(client);
+    let _ = server.join();
+}
+
+/// One sent packet as `(opcode, body)`, the way the client receives it.
+fn wire(packet: &Outbound) -> Wire {
+    match packet {
+        Outbound::One(message) => {
+            let mut framed = Vec::new();
+            message.write_unencrypted_server(&mut framed).unwrap();
+            let opcode = u16::from_le_bytes([framed[2], framed[3]]);
+            (opcode, framed.split_off(4))
+        }
+        Outbound::Raw { opcode, body } => (*opcode, body.clone()),
+        _ => panic!("expected one packet"),
+    }
+}
+
+fn group_event(kind: u8, other_guid: u64, payload: &str) -> crate::stdb::bindings::GroupEvent {
+    crate::stdb::bindings::GroupEvent {
+        id: 1,
+        recipient_identity: spacetimedb_sdk::Identity::ZERO,
+        kind,
+        other_guid,
+        other_name: String::new(),
+        created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
+        payload: payload.to_string(),
+        recipient_guid: GINGER,
+    }
+}
+
+/// **Each Group Broadcast kind renders its vanilla packet**, pinned byte for byte against the
+/// cmangos writers: ready check (GroupHandler.cpp:562-563, 576-579), the partial icon update
+/// (Group.cpp:595-600), the ping (GroupHandler.cpp:410-413) and the roll (GroupHandler.cpp:434-438).
+/// The full icon list is gtker's 8-entry `Full`, unset icons as guid 0.
+#[test]
+fn the_relay_renders_each_group_broadcast_kind() {
+    use lyracore_shared::group::event_kind;
+    let (realm, _world, _instances, _calls) = party_topology();
+    let skull = 900u64.to_le_bytes();
+    let star = 901u64.to_le_bytes();
+    let none = 0u64.to_le_bytes();
+    let vim = VIM.to_le_bytes();
+    let full_list: Vec<u8> = [
+        &[0x01][..], // update type: full
+        &[0x00],
+        &star,
+        &[0x01],
+        &none,
+        &[0x02],
+        &none,
+        &[0x03],
+        &none,
+        &[0x04],
+        &none,
+        &[0x05],
+        &none,
+        &[0x06],
+        &none,
+        &[0x07],
+        &skull,
+    ]
+    .concat();
+    let cases: [(u8, &str, Wire); 7] = [
+        (event_kind::READY_CHECK, "", (0x0322, vec![])),
+        (
+            event_kind::READY_CHECK_ANSWER,
+            "1",
+            (0x0322, [&vim[..], &[0x01]].concat()),
+        ),
+        (
+            event_kind::TARGET_ICON_UPDATE,
+            "7,900",
+            (0x0321, [&[0x00, 0x07][..], &skull].concat()),
+        ),
+        (
+            event_kind::TARGET_ICON_UPDATE,
+            "7,0",
+            (0x0321, [&[0x00, 0x07][..], &none].concat()),
+        ),
+        (
+            event_kind::TARGET_ICON_LIST,
+            "7,900;0,901",
+            (0x0321, full_list),
+        ),
+        (
+            event_kind::MINIMAP_PING,
+            "1056964608,3196059648",
+            (
+                0x01D5,
+                [&vim[..], &[0, 0, 0, 0x3F, 0, 0, 0x80, 0xBE]].concat(),
+            ),
+        ),
+        (
+            event_kind::RANDOM_ROLL,
+            "1,100,42",
+            (
+                0x01FB,
+                [&[1, 0, 0, 0, 100, 0, 0, 0, 42, 0, 0, 0][..], &vim].concat(),
+            ),
+        ),
+    ];
+    for (kind, payload, expected) in cases {
+        let row = group_event(kind, VIM, payload);
+
+        let packets =
+            crate::stdb::subscriptions::group_event_outbound(realm.as_ref(), GINGER, &row);
+
+        let sent: Vec<_> = packets.iter().map(wire).collect();
+        assert_eq!(sent, [expected], "kind {kind} payload {payload:?}");
+    }
+}
+
+/// A payload that does not decode reaches no client.
+#[test]
+fn the_relay_drops_a_group_broadcast_it_cannot_decode() {
+    use lyracore_shared::group::event_kind;
+    let (realm, _world, _instances, _calls) = party_topology();
+    for (kind, payload) in [
+        (event_kind::READY_CHECK_ANSWER, "ready"),
+        (event_kind::TARGET_ICON_UPDATE, "8,900"),
+        (event_kind::TARGET_ICON_LIST, "7,900;7,901"),
+        (event_kind::MINIMAP_PING, "1"),
+        (event_kind::RANDOM_ROLL, "1,100,101"),
+    ] {
+        let row = group_event(kind, VIM, payload);
+        assert!(
+            crate::stdb::subscriptions::group_event_outbound(realm.as_ref(), GINGER, &row)
+                .is_empty(),
+            "kind {kind} payload {payload:?}"
+        );
+    }
+}
+
+/// **AC: in a Party the icons survive a list.** The Party client clears its marks on every
+/// `SMSG_GROUP_LIST`, so the LIST job sends the list and then the icons, in that order
+/// (vm:Group.cpp:1343-1360, 1403-1408). A list without icons sends the list alone.
+#[test]
+fn a_party_list_with_target_icons_sends_the_list_then_the_icons() {
+    use lyracore_shared::group::{event_kind, TargetIcon};
+    let (realm, world, instances, _calls) = party_topology();
+    form_split_party(&world, &instances);
+    *realm.peers.lock().unwrap() = vec![world.clone(), instances.clone()];
+    let mut roster = realm.group_roster(GINGER).unwrap().unwrap().list_payload();
+    roster.target_icons = vec![TargetIcon {
+        icon: 7,
+        target_guid: 900,
+    }];
+    let row = group_event(event_kind::LIST, 0, &roster.encode());
+
+    let packets = crate::stdb::subscriptions::group_event_outbound(realm.as_ref(), GINGER, &row);
+
+    let mut packets = packets.into_iter();
+    let (Some(list), Some(icons), None) = (packets.next(), packets.next(), packets.next()) else {
+        panic!("expected the list and then the icons")
+    };
+    assert_eq!(group_list(list).members[0].guid.guid(), VIM);
+    let (opcode, body) = wire(&icons);
+    assert_eq!(opcode, 0x0321);
+    assert_eq!(body[0], 0x01, "the full list");
+    assert_eq!(
+        &body[64..73],
+        &[&[0x07][..], &900u64.to_le_bytes()].concat()[..],
+        "skull is the eighth entry"
+    );
+
+    roster.target_icons.clear();
+    let row = group_event(event_kind::LIST, 0, &roster.encode());
+    assert_eq!(
+        crate::stdb::subscriptions::group_event_outbound(realm.as_ref(), GINGER, &row).len(),
+        1
     );
 }

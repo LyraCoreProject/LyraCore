@@ -977,16 +977,6 @@ impl WorldStore for Coordinator {
         self.send_emote(account_id, self_guid, text_emote, emote_anim, target_guid)
     }
 
-    fn send_roll(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        min_roll: u32,
-        max_roll: u32,
-    ) -> Result<()> {
-        self.send_roll(account_id, self_guid, min_roll, max_roll)
-    }
-
     fn send_whisper(
         &self,
         account_id: u64,

@@ -306,6 +306,15 @@ Who receives one Group Broadcast: everyone, everyone but the actor, the leader, 
 One Realm-core `game_group_event` row per recipient in a Group Audience. Every Gateway relays the
 rows addressed to its own sessions.
 
+**Target Icon**:
+One of 8 marks a leader or Assistant puts on a unit, held per Group on the party authority. A unit
+carries at most one.
+_Avoid_: raid mark, marker, raid target (for the icon)
+
+**Ready Check**:
+A leader or Assistant poll. Every member is asked; answers reach the leader only. The party
+authority keeps no state for it.
+
 **Party Partition**:
 A Realm-core-ordered map and instance for one party member, confirmed by the Gateway against the
 World Shard that holds the Character. It carries no position or Shard name. Pending Transfer,

@@ -87,6 +87,8 @@ pub(crate) const MANIFEST_EXCLUDE: &[&str] = &["game_transfer_out"];
 /// - `game_group_member_partition` — the same realm-core roster mirror derives each member's
 ///   partition. Carrying a source snapshot would bypass its roster and locator revisions, so the
 ///   gateway re-pushes the certified projection with the membership row.
+/// - `game_group_target_icon` — a Target Icon belongs to the Group on the party authority. It names
+///   the marked unit, and the unit keeps it across a Transfer with no row to carry.
 /// - `game_mail_escrow` — a mail attachment in flight. The fence is a fact about the DATABASE that
 ///   took the value out of a purse, and the drive that settles it addresses that database; carrying
 ///   the claim to the destination would move it away from the ledger holding the value. The
@@ -120,6 +122,7 @@ pub(crate) const NOT_TRANSPORTED: &[&str] = &[
     "game_group_invite",
     "game_group_member",
     "game_group_member_partition",
+    "game_group_target_icon",
     "game_pet_command",
     "game_mail_escrow",
     "game_mail_delivery",

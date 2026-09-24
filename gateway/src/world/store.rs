@@ -973,16 +973,6 @@ pub trait WorldStore:
         target_guid: u64,
     ) -> Result<()>;
 
-    /// Broadcast a `/roll` result (`MSG_RANDOM_ROLL_Client`): pick a server-side random in
-    /// `[min_roll, max_roll]` and fan the result to all nearby players as `MSG_RANDOM_ROLL_Server`.
-    fn send_roll(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        min_roll: u32,
-        max_roll: u32,
-    ) -> Result<()>;
-
     /// Whisper `message` privately to the player named `target_player` (`CMSG_MESSAGECHAT` Whisper).
     fn send_whisper(
         &self,

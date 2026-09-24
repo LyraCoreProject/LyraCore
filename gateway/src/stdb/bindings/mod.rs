@@ -481,6 +481,7 @@ pub mod game_group_member_partition_table;
 pub mod game_group_member_table;
 pub mod game_group_roster_revision_table;
 pub mod game_group_table;
+pub mod game_group_target_icon_table;
 pub mod game_guid_allocator_table;
 pub mod game_guid_range_registry_table;
 pub mod game_guid_range_table;
@@ -659,6 +660,7 @@ pub mod group_invite_type;
 pub mod group_member_partition_type;
 pub mod group_member_type;
 pub mod group_roster_revision_type;
+pub mod group_target_icon_type;
 pub mod group_type;
 pub mod guid_allocator_type;
 pub mod guid_range_assignment_type;
@@ -760,7 +762,6 @@ pub mod gw_sell_item_reducer;
 pub mod gw_send_channel_message_reducer;
 pub mod gw_send_chat_reducer;
 pub mod gw_send_emote_reducer;
-pub mod gw_send_roll_reducer;
 pub mod gw_send_whisper_reducer;
 pub mod gw_set_action_button_reducer;
 pub mod gw_set_faction_at_war_reducer;
@@ -1584,6 +1585,7 @@ pub use game_group_member_partition_table::*;
 pub use game_group_member_table::*;
 pub use game_group_roster_revision_table::*;
 pub use game_group_table::*;
+pub use game_group_target_icon_table::*;
 pub use game_guid_allocator_table::*;
 pub use game_guid_range_registry_table::*;
 pub use game_guid_range_table::*;
@@ -1762,6 +1764,7 @@ pub use group_invite_type::GroupInvite;
 pub use group_member_partition_type::GroupMemberPartition;
 pub use group_member_type::GroupMember;
 pub use group_roster_revision_type::GroupRosterRevision;
+pub use group_target_icon_type::GroupTargetIcon;
 pub use group_type::Group;
 pub use guid_allocator_type::GuidAllocator;
 pub use guid_range_assignment_type::GuidRangeAssignment;
@@ -1863,7 +1866,6 @@ pub use gw_sell_item_reducer::gw_sell_item;
 pub use gw_send_channel_message_reducer::gw_send_channel_message;
 pub use gw_send_chat_reducer::gw_send_chat;
 pub use gw_send_emote_reducer::gw_send_emote;
-pub use gw_send_roll_reducer::gw_send_roll;
 pub use gw_send_whisper_reducer::gw_send_whisper;
 pub use gw_set_action_button_reducer::gw_set_action_button;
 pub use gw_set_faction_at_war_reducer::gw_set_faction_at_war;
@@ -3531,11 +3533,6 @@ pub enum Reducer {
         emote_anim: u32,
         target_guid: u64,
     },
-    GwSendRoll {
-        request_actor: SessionActor,
-        min_roll: u32,
-        max_roll: u32,
-    },
     GwSendWhisper {
         request_actor: SessionActor,
         target_name: String,
@@ -4459,7 +4456,6 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwSendChannelMessage { .. } => "gw_send_channel_message",
             Reducer::GwSendChat { .. } => "gw_send_chat",
             Reducer::GwSendEmote { .. } => "gw_send_emote",
-            Reducer::GwSendRoll { .. } => "gw_send_roll",
             Reducer::GwSendWhisper { .. } => "gw_send_whisper",
             Reducer::GwSetActionButton { .. } => "gw_set_action_button",
             Reducer::GwSetFactionAtWar { .. } => "gw_set_faction_at_war",
@@ -6952,15 +6948,6 @@ Reducer::GwIgnoreTrade{
                 emote_anim: emote_anim.clone(),
                 target_guid: target_guid.clone(),
 }),
-            Reducer::GwSendRoll{
-                request_actor,
-                min_roll,
-                max_roll,
-}             => __sats::bsatn::to_vec(&gw_send_roll_reducer::GwSendRollArgs {
-                request_actor: request_actor.clone(),
-                min_roll: min_roll.clone(),
-                max_roll: max_roll.clone(),
-}),
             Reducer::GwSendWhisper{
                 request_actor,
                 target_name,
@@ -8130,6 +8117,7 @@ pub struct DbUpdate {
     game_group_member: __sdk::TableUpdate<GroupMember>,
     game_group_member_partition: __sdk::TableUpdate<GroupMemberPartition>,
     game_group_roster_revision: __sdk::TableUpdate<GroupRosterRevision>,
+    game_group_target_icon: __sdk::TableUpdate<GroupTargetIcon>,
     game_guid_allocator: __sdk::TableUpdate<GuidAllocator>,
     game_guid_range: __sdk::TableUpdate<GuidRange>,
     game_guid_range_registry: __sdk::TableUpdate<GuidRangeAssignment>,
@@ -8720,6 +8708,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 ),
                 "game_group_roster_revision" => db_update.game_group_roster_revision.append(
                     game_group_roster_revision_table::parse_table_update(table_update)?,
+                ),
+                "game_group_target_icon" => db_update.game_group_target_icon.append(
+                    game_group_target_icon_table::parse_table_update(table_update)?,
                 ),
                 "game_guid_allocator" => db_update
                     .game_guid_allocator
@@ -9807,6 +9798,12 @@ impl __sdk::DbUpdate for DbUpdate {
                 &self.game_group_roster_revision,
             )
             .with_updates_by_pk(|row| &row.group_id);
+        diff.game_group_target_icon = cache
+            .apply_diff_to_table::<GroupTargetIcon>(
+                "game_group_target_icon",
+                &self.game_group_target_icon,
+            )
+            .with_updates_by_pk(|row| &row.id);
         diff.game_guid_allocator = cache
             .apply_diff_to_table::<GuidAllocator>("game_guid_allocator", &self.game_guid_allocator)
             .with_updates_by_pk(|row| &row.id);
@@ -10792,6 +10789,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_group_roster_revision" => db_update
                     .game_group_roster_revision
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_group_target_icon" => db_update
+                    .game_group_target_icon
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_guid_allocator" => db_update
                     .game_guid_allocator
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -11618,6 +11618,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_group_roster_revision" => db_update
                     .game_group_roster_revision
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_group_target_icon" => db_update
+                    .game_group_target_icon
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_guid_allocator" => db_update
                     .game_guid_allocator
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -12189,6 +12192,7 @@ pub struct AppliedDiff<'r> {
     game_group_member: __sdk::TableAppliedDiff<'r, GroupMember>,
     game_group_member_partition: __sdk::TableAppliedDiff<'r, GroupMemberPartition>,
     game_group_roster_revision: __sdk::TableAppliedDiff<'r, GroupRosterRevision>,
+    game_group_target_icon: __sdk::TableAppliedDiff<'r, GroupTargetIcon>,
     game_guid_allocator: __sdk::TableAppliedDiff<'r, GuidAllocator>,
     game_guid_range: __sdk::TableAppliedDiff<'r, GuidRange>,
     game_guid_range_registry: __sdk::TableAppliedDiff<'r, GuidRangeAssignment>,
@@ -12959,6 +12963,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<GroupRosterRevision>(
             "game_group_roster_revision",
             &self.game_group_roster_revision,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<GroupTargetIcon>(
+            "game_group_target_icon",
+            &self.game_group_target_icon,
             event,
         );
         callbacks.invoke_table_row_callbacks::<GuidAllocator>(
@@ -14424,6 +14433,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_group_member_table::register_table(client_cache);
         game_group_member_partition_table::register_table(client_cache);
         game_group_roster_revision_table::register_table(client_cache);
+        game_group_target_icon_table::register_table(client_cache);
         game_guid_allocator_table::register_table(client_cache);
         game_guid_range_table::register_table(client_cache);
         game_guid_range_registry_table::register_table(client_cache);
@@ -14697,6 +14707,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_group_member",
         "game_group_member_partition",
         "game_group_roster_revision",
+        "game_group_target_icon",
         "game_guid_allocator",
         "game_guid_range",
         "game_guid_range_registry",
