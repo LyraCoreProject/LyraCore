@@ -136,13 +136,14 @@ fn a_deleted_leaders_guild_passes_on_then_disbands_with_its_last_member() {
     assert_eq!(member_rank(&realm, EARLY_OFFICER).as_deref(), Some("0"));
     assert_eq!(member_rank(&realm, LATE_OFFICER).as_deref(), Some("1"));
     assert_eq!(member_rank(&realm, LEADER), None);
-    assert!(
+    assert_eq!(
         rows(
             &realm,
             &format!("SELECT * FROM game_guild_invite WHERE target_guid = {INVITEE}")
         )
-        .is_empty(),
-        "the deleted Leader's Guild Invite goes with it"
+        .len(),
+        1,
+        "the Guild Invite the deleted Leader sent still stands, as in mangos"
     );
 
     // A replay finds nothing and still succeeds.

@@ -9,9 +9,11 @@ use spacetimedb::ReducerContext;
 use super::membership::{disband_guild, game_guild_invite};
 use super::{game_guild, game_guild_member, member, petition, push_event, GuildMember};
 
-/// Remove every guild trace of `character_guid`: its Guild Invites, its membership (passing
-/// leadership or disbanding as `cm:Guild.cpp:493-552` does), its own Petition and the Signatures it
-/// made (`cm:Player.cpp:4061-4062`).
+/// Remove every guild trace of `character_guid`: the Guild Invite it holds, its membership
+/// (passing leadership or disbanding as `cm:Guild.cpp:493-552` does), its own Petition and the
+/// Signatures it made (`cm:Player.cpp:4061-4062`). A Guild Invite it sent stays: mangos keeps only
+/// the invited Guild on the target (`cm:GuildHandler.cpp:124`), so the target can still accept
+/// while that Guild exists.
 pub(super) fn forget_deleted_character(
     ctx: &ReducerContext,
     character_guid: u64,
@@ -21,17 +23,6 @@ pub(super) fn forget_deleted_character(
         .target_guid()
         .delete(character_guid);
     if let Some(departed) = member(ctx, character_guid) {
-        let sent: Vec<u64> = ctx
-            .db
-            .game_guild_invite()
-            .by_guild()
-            .filter(departed.guild_id)
-            .filter(|invite| invite.inviter_guid == character_guid)
-            .map(|invite| invite.target_guid)
-            .collect();
-        for target_guid in sent {
-            ctx.db.game_guild_invite().target_guid().delete(target_guid);
-        }
         leave_guild(ctx, departed);
     }
     petition::withdraw(ctx, character_guid);

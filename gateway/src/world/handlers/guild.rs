@@ -1890,18 +1890,22 @@ pub(crate) fn reconcile_deleted_guild_characters<St: WorldStore + ?Sized>(
     store: &St,
     work: &GuildCleanup,
 ) -> Result<()> {
+    let mut first_error = None;
     let candidates: Vec<u64> = if work.sweep {
         store.guild_character_guids()?
     } else {
         let mut named = Vec::new();
         for &character_guid in &work.deleted {
-            if store.guild_names_character(character_guid)? {
-                named.push(character_guid);
+            match store.guild_names_character(character_guid) {
+                Ok(true) => named.push(character_guid),
+                Ok(false) => {}
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
             }
         }
         named
     };
-    let mut first_error = None;
     for character_guid in candidates {
         match forget_deleted_character(store, character_guid) {
             Ok(DeletedCharacterGuildCleanup::Forgotten) => {

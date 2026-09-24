@@ -614,6 +614,8 @@ struct InMemoryStore {
     world_shard_set_error: Option<String>,
     /// How many times a caller asked for the two-snapshot durable absence check.
     durable_absence_checks: std::sync::atomic::AtomicUsize,
+    /// A Character whose guild lookup fails, as when one Realm-core read errors.
+    guild_lookup_error_for: Option<u64>,
     /// Unclaimed bot invite intent ids on this World Shard. Two concurrent consumers share this
     /// collection, matching the Module table both Gateways call into.
     bot_invite_intents: std::sync::Mutex<Vec<u64>>,
@@ -4436,6 +4438,9 @@ impl GuildActionStore for InMemoryStore {
     }
 
     fn guild_names_character(&self, character_guid: u64) -> Result<bool> {
+        if self.guild_lookup_error_for == Some(character_guid) {
+            return Err(anyhow!("guild lookup for {character_guid} failed"));
+        }
         Ok(self.guild_character_guids()?.contains(&character_guid))
     }
 
@@ -6133,6 +6138,12 @@ fn char_delete_failure_replies_failed_and_keeps_session_alive() {
 /// one Guild, and a Petition owned by 7 with a Signature by 8. Characters 5 and 7 still exist on
 /// the `instances` peer; 6 and 8 exist on no World Shard.
 fn guild_cleanup_topology() -> std::sync::Arc<InMemoryStore> {
+    guild_cleanup_topology_failing_lookup_for(None)
+}
+
+fn guild_cleanup_topology_failing_lookup_for(
+    guild_lookup_error_for: Option<u64>,
+) -> std::sync::Arc<InMemoryStore> {
     let instances = std::sync::Arc::new(InMemoryStore {
         shard: "instances".into(),
         characters: [5, 7]
@@ -6163,6 +6174,7 @@ fn guild_cleanup_topology() -> std::sync::Arc<InMemoryStore> {
             name: "Boundary Test".into(),
             signers: vec![8],
         }],
+        guild_lookup_error_for,
         ..Default::default()
     });
     *world.peers.lock().unwrap() = vec![world.clone(), instances];
@@ -6235,6 +6247,17 @@ fn a_single_delete_checks_only_its_own_character() {
     crate::world::reconcile_deleted_guild_characters(world.as_ref(), &deleted(&[8, 40])).unwrap();
     assert_eq!(forgotten(&world), ["guild_op:ForgetDeletedCharacter:8"]);
     assert_eq!(durable_absence_checks(&world), 1);
+}
+
+/// A lookup that fails for one deleted Character does not hold up the others. The pass still
+/// fails, so the worker keeps the work and retries it.
+#[test]
+fn a_failed_lookup_still_cleans_the_other_deleted_characters() {
+    let world = guild_cleanup_topology_failing_lookup_for(Some(6));
+    let error = crate::world::reconcile_deleted_guild_characters(world.as_ref(), &deleted(&[6, 8]))
+        .expect_err("the failed lookup is owed a retry");
+    assert!(error.to_string().contains("lookup for 6"));
+    assert_eq!(forgotten(&world), ["guild_op:ForgetDeletedCharacter:8"]);
 }
 
 #[test]

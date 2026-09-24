@@ -80,7 +80,7 @@ For each step, write what the client showed on the "Observed" line.
      followed by the guild query response: does Beta's tabard, and Alpha's tabard as Beta sees it,
      re-render without a relog? mangos never sends TABARD_CHANGED, so this behaviour is new.
      Observed:
-   - [ ] As Beta (not the Guild Master), try to save an emblem. Expected: the "only the guild master"
+   - [ ] As Beta (not the Guild Leader), try to save an emblem. Expected: the "only the guild master"
      error, and no copper leaves Beta's purse.
      Observed:
 
@@ -104,7 +104,7 @@ For each step, write what the client showed on the "Observed" line.
      Expected: "Character deletion failed", and Alpha is still listed on the character screen and in
      the guild.
      Observed:
-   - [ ] Deletion the Gateway did not see. Make Delta the Guild Master of a second guild with one
+   - [ ] Deletion the Gateway did not see. Make Delta the Guild Leader of a second guild with one
      other member, Echo, and log Delta out. Stop the Gateway. On the local stack only, delete Delta
      on its World Shard with
      `spacetime call -s local <shard> delete_character <account_id> '{"guid":<guid>,"ownership":null}'`.

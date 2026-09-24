@@ -145,8 +145,8 @@ already reconciles parties. At startup and after a reconnect it checks every Cha
 Petition or a Signature names; after a `game_character` delete it checks only that Character. A
 Character row in any Shard's cache ends the check at once. Otherwise a Character absent from two
 durable snapshots of every configured World Shard is sent as `ForgetDeletedCharacter`, as itself,
-with no ownership token. The Module removes its invites, its membership and its Petitions and
-Signatures. A deleted Guild Leader passes leadership to the member with the highest Guild Rank,
+with no ownership token. The Module removes the Guild Invite it holds, its membership and its
+Petitions and Signatures. A Guild Invite it sent stays, as in mangos. A deleted Guild Leader passes leadership to the member with the highest Guild Rank,
 earliest join first, and a Guild with nobody left disbands. The op finds nothing on a second call,
 so a pass that a restart interrupts is repeated whole.
 
