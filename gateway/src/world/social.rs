@@ -327,9 +327,7 @@ fn change_subgroup<St: WorldStore + ?Sized>(
         return Ok(());
     };
     match party::resolve_roster_member_by_name(store, me, name)? {
-        Some(target) => {
-            run_unanswered(store, conn, party::Op::ChangeSubgroup { target, subgroup })
-        }
+        Some(target) => run_unanswered(store, conn, party::Op::ChangeSubgroup { target, subgroup }),
         None => {
             log::debug!(
                 "world: group_change_sub_group named a Character outside the caller's own \

@@ -3502,60 +3502,9 @@ impl WorldStore for InMemoryStore {
                 }
             }
             realm_op::CHANGE_SUBGROUP => {
-                let Some(group_id) = p.group_of(actor_guid) else {
-                    return Ok(GroupRefusal::NotInGroup.into());
-                };
-                if p.kind_of(group_id) != GroupKind::Raid {
-                    return Ok(GroupRefusal::NotRaid.into());
-                }
-                if !p.manages(group_id, actor_guid) {
-                    return Ok(GroupRefusal::NotLeader.into());
-                }
-                if p.group_of(target_guid) != Some(group_id) {
-                    return Ok(GroupRefusal::TargetNotInGroup.into());
-                }
-                let current = p.slots.get(&target_guid).copied().unwrap_or_default();
-                let destination_size = p
-                    .member_guids(group_id)
-                    .into_iter()
-                    .filter(|&guid| {
-                        guid != target_guid
-                            && p.slots.get(&guid).copied().unwrap_or_default().subgroup() == arg_a
-                    })
-                    .count();
-                match current.moved_to_subgroup(arg_a, destination_size) {
-                    Err(refusal) => return Ok(refusal.into()),
-                    Ok(None) => {}
-                    Ok(Some(new_slot)) => {
-                        p.slots.insert(target_guid, new_slot);
-                        p.push_list(group_id);
-                    }
-                }
+                return Ok(p.change_subgroup(actor_guid, target_guid, arg_a))
             }
-            realm_op::SWAP_SUBGROUP => {
-                let Some(group_id) = p.group_of(actor_guid) else {
-                    return Ok(GroupRefusal::NotInGroup.into());
-                };
-                if p.kind_of(group_id) != GroupKind::Raid {
-                    return Ok(GroupRefusal::NotRaid.into());
-                }
-                if !p.manages(group_id, actor_guid) {
-                    return Ok(GroupRefusal::NotLeader.into());
-                }
-                let second_guid = arg_c;
-                if p.group_of(target_guid) != Some(group_id)
-                    || p.group_of(second_guid) != Some(group_id)
-                {
-                    return Ok(GroupRefusal::TargetNotInGroup.into());
-                }
-                let first_slot = p.slots.get(&target_guid).copied().unwrap_or_default();
-                let second_slot = p.slots.get(&second_guid).copied().unwrap_or_default();
-                if let Some((new_first, new_second)) = first_slot.swapped_with(second_slot) {
-                    p.slots.insert(target_guid, new_first);
-                    p.slots.insert(second_guid, new_second);
-                    p.push_list(group_id);
-                }
-            }
+            realm_op::SWAP_SUBGROUP => return Ok(p.swap_subgroup(actor_guid, target_guid, arg_c)),
             other => return Err(anyhow!("unknown realm group op {other}")),
         }
         Ok(PartyOutcome::Ran)
@@ -11039,6 +10988,81 @@ impl FakeParty {
                 .slots
                 .get(&guid)
                 .is_some_and(|slot| slot.is_assistant())
+    }
+
+    /// The Module's `change_subgroup_on`, modelled: leader-or-Assistant, Raid-only, capacity
+    /// decided by the shared [`RaidSlot::moved_to_subgroup`] rule.
+    fn change_subgroup(&mut self, actor_guid: u64, target_guid: u64, subgroup: u8) -> PartyOutcome {
+        use lyracore_shared::group::GroupRefusal;
+        let Some(group_id) = self.group_of(actor_guid) else {
+            return GroupRefusal::NotInGroup.into();
+        };
+        if self.kind_of(group_id) != GroupKind::Raid {
+            return GroupRefusal::NotRaid.into();
+        }
+        if !self.manages(group_id, actor_guid) {
+            return GroupRefusal::NotLeader.into();
+        }
+        if self.group_of(target_guid) != Some(group_id) {
+            return GroupRefusal::TargetNotInGroup.into();
+        }
+        let current = self.slots.get(&target_guid).copied().unwrap_or_default();
+        let destination_size = self
+            .member_guids(group_id)
+            .into_iter()
+            .filter(|&guid| {
+                guid != target_guid
+                    && self
+                        .slots
+                        .get(&guid)
+                        .copied()
+                        .unwrap_or_default()
+                        .subgroup()
+                        == subgroup
+            })
+            .count();
+        match current.moved_to_subgroup(subgroup, destination_size) {
+            Err(refusal) => refusal.into(),
+            Ok(None) => PartyOutcome::Ran,
+            Ok(Some(new_slot)) => {
+                self.slots.insert(target_guid, new_slot);
+                self.push_list(group_id);
+                PartyOutcome::Ran
+            }
+        }
+    }
+
+    /// The Module's `swap_subgroup_on`, modelled: same gates as [`Self::change_subgroup`], the
+    /// shared [`RaidSlot::swapped_with`] rule, and no capacity Gate.
+    fn swap_subgroup(
+        &mut self,
+        actor_guid: u64,
+        first_guid: u64,
+        second_guid: u64,
+    ) -> PartyOutcome {
+        use lyracore_shared::group::GroupRefusal;
+        let Some(group_id) = self.group_of(actor_guid) else {
+            return GroupRefusal::NotInGroup.into();
+        };
+        if self.kind_of(group_id) != GroupKind::Raid {
+            return GroupRefusal::NotRaid.into();
+        }
+        if !self.manages(group_id, actor_guid) {
+            return GroupRefusal::NotLeader.into();
+        }
+        if self.group_of(first_guid) != Some(group_id)
+            || self.group_of(second_guid) != Some(group_id)
+        {
+            return GroupRefusal::TargetNotInGroup.into();
+        }
+        let first_slot = self.slots.get(&first_guid).copied().unwrap_or_default();
+        let second_slot = self.slots.get(&second_guid).copied().unwrap_or_default();
+        if let Some((new_first, new_second)) = first_slot.swapped_with(second_slot) {
+            self.slots.insert(first_guid, new_first);
+            self.slots.insert(second_guid, new_second);
+            self.push_list(group_id);
+        }
+        PartyOutcome::Ran
     }
 
     /// Hand the lead to `leader` and announce it to every member, as the Module does, before the
