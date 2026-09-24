@@ -258,7 +258,9 @@ fn a_letter_not_yet_delivered_cannot_be_copied() {
     );
     assert!(
         shard
-            .query_rows(&format!("SELECT id FROM game_item_text WHERE id = {mail_id}"))
+            .query_rows(&format!(
+                "SELECT id FROM game_item_text WHERE id = {mail_id}"
+            ))
             .is_empty(),
         "and it must not file item text for a letter nobody has read yet"
     );

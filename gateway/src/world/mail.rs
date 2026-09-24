@@ -556,7 +556,9 @@ fn refusal_from_module(e: anyhow::Error) -> SendRefusal {
     let text = format!("{e:#}");
     if text.contains(mail_rules::NOT_ENOUGH_MONEY) {
         SendRefusal::NotEnoughMoney(text)
-    } else if text.contains(mail_rules::ITEM_IS_SOULBOUND) || text.contains(mail_rules::ITEM_HAS_TEXT) {
+    } else if text.contains(mail_rules::ITEM_IS_SOULBOUND)
+        || text.contains(mail_rules::ITEM_HAS_TEXT)
+    {
         // A Plain Letter is refused the same way a soulbound item is: neither can move, so both
         // answer with vanilla's nearest "attachment refused" line rather than a not-your-item one.
         SendRefusal::AttachmentSoulbound(text)

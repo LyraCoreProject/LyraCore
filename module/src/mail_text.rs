@@ -236,7 +236,10 @@ mod tests {
         // letter and no bit left to retry from.
         let mut too_large = row(7, "meet me at the gate", 0);
         too_large.id = u64::from(u32::MAX) + 1;
-        assert_eq!(plan_copy_text(Some(&too_large), 7), CopyTextPlan::IdTooLarge);
+        assert_eq!(
+            plan_copy_text(Some(&too_large), 7),
+            CopyTextPlan::IdTooLarge
+        );
     }
 
     #[test]
