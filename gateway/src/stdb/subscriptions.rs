@@ -4182,7 +4182,7 @@ impl Coordinator {
         next_after
     }
 
-    /// Reconcile party membership when a World Shard deletes a Character.
+    /// Reconcile party and guild membership when a World Shard deletes a Character.
     ///
     /// Fresh Character subscriptions on every Shard distinguish deletion from a Transfer whose
     /// destination update has not reached this Gateway yet.
@@ -4197,7 +4197,7 @@ impl Coordinator {
                 .unwrap()
                 .push(std::sync::Arc::new(move || {
                     hook_shard.arm_character_gone_relay();
-                    hook_shard.request_deleted_character_party_reconciliation();
+                    hook_shard.request_deleted_character_reconciliation();
                 }));
         }
         if self.is_sharded() {
@@ -4209,44 +4209,45 @@ impl Coordinator {
                     .lock()
                     .unwrap()
                     .push(std::sync::Arc::new(move || {
-                        reconciliation_store.request_deleted_character_party_reconciliation();
+                        reconciliation_store.request_deleted_character_reconciliation();
                     }));
             }
         }
-        self.request_deleted_character_party_reconciliation();
+        self.request_deleted_character_reconciliation();
     }
 
-    fn request_deleted_character_party_reconciliation(&self) {
+    fn request_deleted_character_reconciliation(&self) {
         self.1
-            .party_reconciliation_requested
+            .deleted_character_reconciliation_requested
             .store(true, Ordering::Release);
         if self
             .1
-            .party_reconciliation_running
+            .deleted_character_reconciliation_running
             .swap(true, Ordering::AcqRel)
         {
             return;
         }
         let store = self.clone();
         let spawned = std::thread::Builder::new()
-            .name("party-reconcile-deleted".into())
+            .name("reconcile-deleted-characters".into())
             .spawn(move || {
                 let mut retry_delay = Duration::from_millis(100);
                 loop {
                     store
                         .1
-                        .party_reconciliation_requested
+                        .deleted_character_reconciliation_requested
                         .store(false, Ordering::Release);
-                    if let Err(error) =
-                        crate::world::party::reconcile_deleted_character_parties(&store)
-                    {
+                    // Both run on every pass: a party failure must not hold up guild cleanup.
+                    let parties = crate::world::party::reconcile_deleted_character_parties(&store);
+                    let guilds = crate::world::reconcile_deleted_guild_characters(&store);
+                    if let Err(error) = parties.and(guilds) {
                         log::warn!(
-                        "party: deleted Character reconciliation deferred ({error:#}); retrying in \
-                         {retry_delay:?}"
-                    );
+                            "deleted Character reconciliation deferred ({error:#}); retrying in \
+                             {retry_delay:?}"
+                        );
                         store
                             .1
-                            .party_reconciliation_requested
+                            .deleted_character_reconciliation_requested
                             .store(true, Ordering::Release);
                         std::thread::sleep(retry_delay);
                         retry_delay = (retry_delay * 2).min(Duration::from_secs(5));
@@ -4257,22 +4258,22 @@ impl Coordinator {
 
                     if store
                         .1
-                        .party_reconciliation_requested
+                        .deleted_character_reconciliation_requested
                         .load(Ordering::Acquire)
                     {
                         continue;
                     }
                     store
                         .1
-                        .party_reconciliation_running
+                        .deleted_character_reconciliation_running
                         .store(false, Ordering::Release);
                     if !store
                         .1
-                        .party_reconciliation_requested
+                        .deleted_character_reconciliation_requested
                         .load(Ordering::Acquire)
                         || store
                             .1
-                            .party_reconciliation_running
+                            .deleted_character_reconciliation_running
                             .swap(true, Ordering::AcqRel)
                     {
                         break;
@@ -4281,7 +4282,7 @@ impl Coordinator {
             });
         if let Err(error) = spawned {
             self.1
-                .party_reconciliation_running
+                .deleted_character_reconciliation_running
                 .store(false, Ordering::Release);
             log::error!("party: could not start deleted Character reconciliation: {error}");
         }
@@ -4298,7 +4299,7 @@ impl Coordinator {
         let store = self.clone();
         live.conn.db.game_character().on_delete(move |_ctx, _row| {
             deleted_revision.fetch_add(1, Ordering::Release);
-            store.request_deleted_character_party_reconciliation();
+            store.request_deleted_character_reconciliation();
         });
     }
 }

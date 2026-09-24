@@ -17,6 +17,8 @@ use wow_world_messages::Guid;
 /// converts.
 pub struct WhoPlayerView {
     pub name: String,
+    /// The Guild name, empty outside a Guild.
+    pub guild: String,
     pub level: u8,
     pub class: u8,
     pub race: u8,
@@ -43,7 +45,7 @@ fn push_cstr(body: &mut Vec<u8>, s: &str) {
 /// real client reads every row after the first out of alignment. The body is (all little-endian):
 ///   - `listed_players: u32` (`players.len()`, capped at 49)
 ///   - `online_players: u32` (`players.len()`, the full match count, uncapped)
-///   - per listed player: `name` (CString), `guild` (CString, always empty — no guild system yet),
+///   - per listed player: `name` (CString), `guild` (CString, empty outside a Guild),
 ///     `level: u32`, `class: u32`, `race: u32`, `zone: u32`
 pub fn build_who_response_raw(players: &[WhoPlayerView]) -> (u16, Vec<u8>) {
     let listed = &players[..players.len().min(49)];
@@ -52,7 +54,7 @@ pub fn build_who_response_raw(players: &[WhoPlayerView]) -> (u16, Vec<u8>) {
     body.extend_from_slice(&(players.len() as u32).to_le_bytes());
     for p in listed {
         push_cstr(&mut body, &p.name);
-        push_cstr(&mut body, ""); // guild: no guild system yet
+        push_cstr(&mut body, &p.guild);
         body.extend_from_slice(&u32::from(p.level).to_le_bytes());
         body.extend_from_slice(&u32::from(p.class).to_le_bytes());
         body.extend_from_slice(&u32::from(p.race).to_le_bytes());
@@ -904,6 +906,7 @@ mod party_tests {
         let players: Vec<WhoPlayerView> = (0..51)
             .map(|i| WhoPlayerView {
                 name: format!("P{i}"),
+                guild: String::new(),
                 level: 10,
                 class: 1,
                 race: 1,
@@ -939,6 +942,7 @@ mod party_tests {
         let players = [
             WhoPlayerView {
                 name: "Ginger".into(),
+                guild: "Boundary Test".into(),
                 level: 10,
                 class: 1,
                 race: 1,
@@ -946,6 +950,7 @@ mod party_tests {
             },
             WhoPlayerView {
                 name: "Vim".into(),
+                guild: String::new(),
                 level: 60,
                 class: 8,
                 race: 2,
@@ -958,7 +963,7 @@ mod party_tests {
         expected.extend_from_slice(&2u32.to_le_bytes()); // listed_players
         expected.extend_from_slice(&2u32.to_le_bytes()); // online_players
         expected.extend_from_slice(b"Ginger\0");
-        expected.extend_from_slice(b"\0"); // guild
+        expected.extend_from_slice(b"Boundary Test\0"); // guild
         expected.extend_from_slice(&10u32.to_le_bytes()); // level
         expected.extend_from_slice(&1u32.to_le_bytes()); // class
         expected.extend_from_slice(&1u32.to_le_bytes()); // race

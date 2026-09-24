@@ -2,11 +2,114 @@
 //! across every World Shard. A Fee Hold and a Guild Charter item are read on the payer's Home
 //! Shard.
 
-use spacetimedb_sdk::Table;
+use std::collections::{BTreeSet, HashMap};
+use std::sync::{Arc, RwLock};
+
+use anyhow::Result;
+use spacetimedb_sdk::{Table, TableWithPrimaryKey};
 
 use super::super::bindings::*;
 use super::super::connection::Coordinator;
 use crate::world::{guild_fee, CharacterFacts};
+
+/// The Guild Ranks and members of each Guild, kept from the row callbacks. The SDK cache has no
+/// index on `guild_id`, so a guild read finds its rows here by key instead of scanning every
+/// Guild's ranks and members.
+#[derive(Default)]
+pub(crate) struct GuildIndex {
+    rank_ids: HashMap<u32, BTreeSet<u64>>,
+    member_guids: HashMap<u32, BTreeSet<u64>>,
+}
+
+impl GuildIndex {
+    fn insert_rank(&mut self, row: &GuildRank) {
+        self.rank_ids
+            .entry(row.guild_id)
+            .or_default()
+            .insert(row.id);
+    }
+
+    fn remove_rank(&mut self, row: &GuildRank) {
+        remove_key(&mut self.rank_ids, row.guild_id, row.id);
+    }
+
+    fn insert_member(&mut self, row: &GuildMember) {
+        self.member_guids
+            .entry(row.guild_id)
+            .or_default()
+            .insert(row.character_guid);
+    }
+
+    fn remove_member(&mut self, row: &GuildMember) {
+        remove_key(&mut self.member_guids, row.guild_id, row.character_guid);
+    }
+
+    fn rank_ids(&self, guild_id: u32) -> Vec<u64> {
+        self.rank_ids
+            .get(&guild_id)
+            .map(|ids| ids.iter().copied().collect())
+            .unwrap_or_default()
+    }
+
+    /// The members of `guild_id`, lowest guid first.
+    fn member_guids(&self, guild_id: u32) -> Vec<u64> {
+        self.member_guids
+            .get(&guild_id)
+            .map(|guids| guids.iter().copied().collect())
+            .unwrap_or_default()
+    }
+
+    /// Every member of every Guild.
+    fn all_member_guids(&self) -> Vec<u64> {
+        self.member_guids.values().flatten().copied().collect()
+    }
+}
+
+fn remove_key(index: &mut HashMap<u32, BTreeSet<u64>>, guild_id: u32, key: u64) {
+    if let Some(keys) = index.get_mut(&guild_id) {
+        keys.remove(&key);
+        if keys.is_empty() {
+            index.remove(&guild_id);
+        }
+    }
+}
+
+/// Keep a [`GuildIndex`] current from the Guild Rank and member row callbacks. Register it before
+/// the subscription applies: the initial rows arrive as inserts.
+pub(crate) fn watch_guilds(conn: &DbConnection) -> Arc<RwLock<GuildIndex>> {
+    let index = Arc::new(RwLock::new(GuildIndex::default()));
+    let inserted = index.clone();
+    conn.db.game_guild_rank().on_insert(move |_ctx, row| {
+        inserted.write().unwrap().insert_rank(row);
+    });
+    let updated = index.clone();
+    conn.db.game_guild_rank().on_update(move |_ctx, old, new| {
+        let mut guilds = updated.write().unwrap();
+        guilds.remove_rank(old);
+        guilds.insert_rank(new);
+    });
+    let deleted = index.clone();
+    conn.db.game_guild_rank().on_delete(move |_ctx, row| {
+        deleted.write().unwrap().remove_rank(row);
+    });
+    let inserted = index.clone();
+    conn.db.game_guild_member().on_insert(move |_ctx, row| {
+        inserted.write().unwrap().insert_member(row);
+    });
+    let updated = index.clone();
+    conn.db
+        .game_guild_member()
+        .on_update(move |_ctx, old, new| {
+            let mut guilds = updated.write().unwrap();
+            guilds.remove_member(old);
+            guilds.insert_member(new);
+        });
+    let deleted = index.clone();
+    conn.db.game_guild_member().on_delete(move |_ctx, row| {
+        deleted.write().unwrap().remove_member(row);
+    });
+    index
+}
 
 /// A Petition with its signers, found by key: the SDK cache has no index on the Petition column.
 fn petition_view(db: &RemoteTables, row: GuildPetition) -> crate::codec::PetitionView {
@@ -62,10 +165,11 @@ impl Coordinator {
         let guard = self.0.coord();
         let db = &guard.conn.db;
         let guild = db.game_guild().guild_id().find(&guild_id)?;
-        let mut ranks: Vec<crate::codec::GuildRankView> = db
-            .game_guild_rank()
-            .iter()
-            .filter(|rank| rank.guild_id == guild_id)
+        let rank_ids = guard.guilds.read().unwrap().rank_ids(guild_id);
+        let ranks_table = db.game_guild_rank();
+        let mut ranks: Vec<crate::codec::GuildRankView> = rank_ids
+            .into_iter()
+            .filter_map(|id| ranks_table.id().find(&id))
             .map(|rank| crate::codec::GuildRankView {
                 rank_id: rank.rank_id,
                 name: rank.name,
@@ -92,18 +196,60 @@ impl Coordinator {
 
     /// Every member row of one Guild in THIS handle's cache, ordered by guid.
     pub(crate) fn guild_member_rows(&self, guild_id: u32) -> Vec<crate::codec::GuildMemberView> {
-        let mut members: Vec<_> = self
-            .0
-            .coord()
-            .conn
-            .db
-            .game_guild_member()
-            .iter()
+        let guard = self.0.coord();
+        let guids = guard.guilds.read().unwrap().member_guids(guild_id);
+        let members = guard.conn.db.game_guild_member();
+        guids
+            .into_iter()
+            .filter_map(|guid| members.character_guid().find(&guid))
             .filter(|member| member.guild_id == guild_id)
             .map(member_view)
+            .collect()
+    }
+
+    /// Every Character that a Guild, a Petition or a Signature in THIS handle's cache names: the
+    /// Characters the deleted-Character reconciliation checks. Call it on the Realm-core handle,
+    /// from that background worker only: it reads every Petition and Signature, which no relay or
+    /// per-request path may do. It fails while the subscription is unhealthy, so a stale cache
+    /// never hides a Character.
+    pub(crate) fn guild_character_guids(&self) -> Result<Vec<u64>> {
+        let guard = self.0.coord();
+        if !guard.is_healthy() {
+            anyhow::bail!(
+                "{} has no healthy Coordinator subscription for guild cleanup",
+                self.shard_name()
+            );
+        }
+        let mut guids: BTreeSet<u64> = guard
+            .guilds
+            .read()
+            .unwrap()
+            .all_member_guids()
+            .into_iter()
             .collect();
-        members.sort_by_key(|member| member.character_guid);
-        members
+        let db = &guard.conn.db;
+        guids.extend(db.game_guild_petition().iter().map(|row| row.owner_guid));
+        guids.extend(
+            db.game_guild_petition_signature()
+                .iter()
+                .map(|row| row.signer_guid),
+        );
+        Ok(guids.into_iter().collect())
+    }
+
+    /// The name of the Guild `character_guid` belongs to in THIS handle's cache, if any. Two keyed
+    /// reads, cheap enough for every `/who` row.
+    pub(crate) fn guild_name_of_member(&self, character_guid: u64) -> Option<String> {
+        let guard = self.0.coord();
+        let db = &guard.conn.db;
+        let member = db
+            .game_guild_member()
+            .character_guid()
+            .find(&character_guid)?;
+        db.game_guild()
+            .guild_id()
+            .find(&member.guild_id)
+            .map(|guild| guild.name)
     }
 
     /// The Guild Projection `(guild_id, rank_id)` of `character_guid` in THIS handle's cache.
@@ -119,50 +265,44 @@ impl Coordinator {
             .map_or((0, 0), |member| (member.guild_id, member.rank_id))
     }
 
-    /// Facts for one Character from whichever World Shard holds its row. Level and zone come from
-    /// the live entity when there is one, on any World Shard, else from the durable row.
-    pub(crate) fn guild_character_facts(&self, character_guid: u64) -> Option<CharacterFacts> {
-        let shards = self.all_shards();
-        let (character, realm_account_id) = shards.iter().find_map(|shard| {
-            let guard = shard.0.coord();
-            let db = &guard.conn.db;
-            let character = db.game_character().guid().find(&character_guid)?;
-            let realm_account_id = db
-                .game_account_character_owner()
-                .character_guid()
-                .find(&character_guid)
-                .map_or(0, |owner| owner.account_id);
-            Some((character, realm_account_id))
-        })?;
-        let live = shards.iter().find_map(|shard| {
-            shard
-                .0
-                .coord()
-                .conn
-                .db
-                .game_world_entity()
-                .guid()
-                .find(&character_guid)
-        });
-        let (level, zone_id) =
-            live.as_ref()
-                .map_or((character.level, character.zone_id), |entity| {
-                    (
-                        u8::try_from(entity.level).unwrap_or(u8::MAX),
-                        entity.zone_id,
-                    )
-                });
-        Some(CharacterFacts {
-            guid: character.guid,
-            name: character.name,
-            race: character.race,
-            class: character.class,
-            level,
-            zone_id,
-            last_logout_micros: character.last_logout_micros,
-            online: live.is_some(),
+    /// Facts for one Character: its Realm Presence, plus the last logout and Realm Account from
+    /// whichever World Shard holds its row, which Realm Presence does not carry. `Err` when the
+    /// World Shards cannot vouch for an absence.
+    pub(crate) fn guild_character_facts(
+        &self,
+        character_guid: u64,
+    ) -> Result<Option<CharacterFacts>> {
+        use crate::world::presence::{self, Whereabouts};
+        let Some(presence) = presence::of(self, character_guid)? else {
+            return Ok(None);
+        };
+        let (last_logout_micros, realm_account_id) = self
+            .all_shards()
+            .iter()
+            .find_map(|shard| {
+                let guard = shard.0.coord();
+                let db = &guard.conn.db;
+                let character = db.game_character().guid().find(&character_guid)?;
+                let realm_account_id = db
+                    .game_account_character_owner()
+                    .character_guid()
+                    .find(&character_guid)
+                    .map_or(0, |owner| owner.account_id);
+                Some((character.last_logout_micros, realm_account_id))
+            })
+            .unwrap_or_default();
+        Ok(Some(CharacterFacts {
+            guid: presence.guid,
+            name: presence.name,
+            race: presence.race,
+            class: presence.class,
+            level: presence.level,
+            zone_id: presence.zone_id,
+            last_logout_micros,
+            online: matches!(presence.whereabouts, Whereabouts::InWorld { .. }),
+            in_transit: presence.whereabouts == Whereabouts::InTransit,
             realm_account_id,
-        })
+        }))
     }
 
     /// The GM level on THIS handle's own Character row, 0 when it holds none. The guild Gates call

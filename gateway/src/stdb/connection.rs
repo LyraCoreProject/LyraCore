@@ -50,8 +50,8 @@ pub(crate) struct ShardSet {
     /// all configured Shards; durable Account Claims own World Session authority.
     world: Arc<super::world_view::WorldView>,
     /// Coalesce row-delete and reconnect requests behind one off-pump reconciliation worker.
-    pub(crate) party_reconciliation_requested: AtomicBool,
-    pub(crate) party_reconciliation_running: AtomicBool,
+    pub(crate) deleted_character_reconciliation_requested: AtomicBool,
+    pub(crate) deleted_character_reconciliation_running: AtomicBool,
 }
 
 /// One live SDK connection generation and the handles that keep its pump and subscription alive.
@@ -74,6 +74,7 @@ pub(crate) struct LiveConn {
     pub(crate) chat_channels: Arc<RwLock<super::reads::ChannelIndex>>,
     pub(crate) unfinished_auction_holds: Arc<RwLock<super::auction_holds::UnfinishedHoldIndex>>,
     pub(crate) mail_escrows: Arc<RwLock<super::reads::MailEscrowIndex>>,
+    pub(crate) guilds: Arc<RwLock<super::reads::GuildIndex>>,
     /// Keeps this role's subscription active for the connection's lifetime.
     _sub: SubscriptionHandle,
 }
@@ -828,6 +829,7 @@ fn connect_subscribed(
             holds.insert(new);
         });
     let mail_escrows = super::reads::watch_mail_escrows(&conn);
+    let guilds = super::reads::watch_guilds(&conn);
     let (tx, rx) = std::sync::mpsc::channel::<std::result::Result<(), String>>();
     let tx_err = tx.clone();
     let applied_commands = pump_commands.clone();
@@ -879,6 +881,7 @@ fn connect_subscribed(
         chat_channels,
         unfinished_auction_holds,
         mail_escrows,
+        guilds,
         _sub: sub,
     })
 }
@@ -2701,8 +2704,8 @@ impl Coordinator {
                 map,
                 conns,
                 world,
-                party_reconciliation_requested: AtomicBool::new(false),
-                party_reconciliation_running: AtomicBool::new(false),
+                deleted_character_reconciliation_requested: AtomicBool::new(false),
+                deleted_character_reconciliation_running: AtomicBool::new(false),
             }),
             None,
         );

@@ -30,6 +30,7 @@ use super::bindings::*;
 pub(crate) use quest::build_quest_log_slots;
 
 pub(crate) use channel::ChannelIndex;
+pub(crate) use guild::{watch_guilds, GuildIndex};
 pub(crate) use mail::{watch_mail_escrows, MailEscrowIndex};
 
 /// Sum a player's held quantity of item `entry` over `game_item_instance` (the coordinator reads any
