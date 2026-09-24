@@ -44,6 +44,7 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use anyhow::{anyhow, Result};
 use lyracore_shared::spatial::{BOX_HALF_SPAN, GRID_CELL_SIZE};
 use spacetimedb_sdk::{Table, TableWithPrimaryKey};
+use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 use wow_world_messages::vanilla::WeatherChangeType;
 
 use super::aoi::{ViewerGates, AOI_RECENTERS};
@@ -432,6 +433,15 @@ impl WorldView {
         self.shards.read().unwrap().get(id).cloned()
     }
 
+    /// The Shard `session`'s viewer is registered on.
+    fn shard_of_viewer(&self, session: SessionId) -> Option<ShardId> {
+        let registry = self.viewers.read().unwrap();
+        registry
+            .by_session
+            .get(&session)
+            .map(|registered| registered.shard)
+    }
+
     /// Mint a session id. Monotonic and never reused, so a relogin can never inherit a previous
     /// session's interest set.
     pub(crate) fn next_session_id(&self) -> SessionId {
@@ -809,6 +819,22 @@ fn register_shard_callbacks(
         "game_breath_relay_event.insert",
         &view,
         move |v, row| breath_relay_appeared(v, shard, row),
+    );
+
+    // ---- game_instance_removal --------------------------------------------------------------
+    // The Instance Removal countdown. Self-only relay: an insert shows the owner the time left, a
+    // delete hides it. The row is state, so a replayed insert shows the time left again.
+    wire_insert(
+        db.game_instance_removal(),
+        "game_instance_removal.insert",
+        &view,
+        move |v, row| instance_removal_started(v, shard, row),
+    );
+    wire_delete(
+        db.game_instance_removal(),
+        "game_instance_removal.delete",
+        &view,
+        move |v, row| instance_removal_ended(v, shard, row),
     );
 
     // ---- game_dynamic_object -----------------------------------------------------------------
@@ -2003,6 +2029,79 @@ fn breath_relay_appeared(view: &WorldView, shard: ShardId, row: &BreathRelayEven
     });
 }
 
+/// Show an Instance Removal countdown to its owner on the callback's Shard.
+fn instance_removal_started(view: &WorldView, shard: ShardId, row: &InstanceRemoval) {
+    let Some(viewer) = view.viewer_of_owner_on_shard(shard, OwnerGuid(row.character_guid)) else {
+        return;
+    };
+    let due = row.scheduled_at;
+    enqueue(viewer, move |_| {
+        instance_removal_countdown(&due, super::subscriptions::unix_now_micros())
+    });
+}
+
+/// Hide an ended Instance Removal countdown, canceled or expired, from its owner on the callback's
+/// Shard.
+fn instance_removal_ended(view: &WorldView, shard: ShardId, row: &InstanceRemoval) {
+    let Some(viewer) = view.viewer_of_owner_on_shard(shard, OwnerGuid(row.character_guid)) else {
+        return;
+    };
+    enqueue(viewer, |_| {
+        vec![Outbound::One(ServerOpcodeMessage::SMSG_RAID_GROUP_ONLY(
+            crate::codec::build_raid_group_only(0),
+        ))]
+    });
+}
+
+/// The countdown packet for an Instance Removal due at `due`, with the time left at `now_micros`.
+/// Nothing once the due time has passed: a zero timer would hide the countdown instead.
+fn instance_removal_countdown(due: &spacetimedb_sdk::ScheduleAt, now_micros: u64) -> Vec<Outbound> {
+    instance_removal_time_left_ms(due, now_micros)
+        .map(|left| {
+            vec![Outbound::One(ServerOpcodeMessage::SMSG_RAID_GROUP_ONLY(
+                crate::codec::build_raid_group_only(left),
+            ))]
+        })
+        .unwrap_or_default()
+}
+
+/// Milliseconds left before `due` at `now_micros`, rounded up and never more than the full
+/// countdown, so a Gateway clock behind the Module's never shows extra time. `None` once due. Pure.
+fn instance_removal_time_left_ms(
+    due: &spacetimedb_sdk::ScheduleAt,
+    now_micros: u64,
+) -> Option<u32> {
+    let spacetimedb_sdk::ScheduleAt::Time(at) = due else {
+        return None;
+    };
+    let due_micros = u64::try_from(at.to_micros_since_unix_epoch()).ok()?;
+    let left_micros = due_micros
+        .checked_sub(now_micros)
+        .filter(|left| *left > 0)?;
+    let left_ms = left_micros.div_ceil(1_000);
+    Some(
+        u32::try_from(left_ms).map_or(lyracore_shared::instance::INSTANCE_REMOVAL_MS, |left| {
+            left.min(lyracore_shared::instance::INSTANCE_REMOVAL_MS)
+        }),
+    )
+}
+
+/// The world-entry replay of `character_guid`'s running Instance Removal on `coord`'s Shard, so a
+/// reconnect inside the countdown shows the time left.
+fn resident_instance_removal_outbound(coord: &Coordinator, character_guid: u64) -> Vec<Outbound> {
+    let due = coord
+        .0
+        .coord()
+        .conn
+        .db
+        .game_instance_removal()
+        .character_guid()
+        .find(&character_guid)
+        .map(|row| row.scheduled_at);
+    due.map(|due| instance_removal_countdown(&due, super::subscriptions::unix_now_micros()))
+        .unwrap_or_default()
+}
+
 /// A skill row changed (line learned / skill-up). Self-only family, same owner-session-lookup
 /// audience as [`rest_state_appeared`] — the slot allocation runs in the job on the owner's own
 /// writer thread, against the viewer's `skill_slots` (the same map the per-player leg uses).
@@ -2850,6 +2949,7 @@ mod family_audience_tests {
     use super::{
         addon_message_appeared, charter_petition_opened, duel_winner_audience,
         exploration_outbound_for_word, guild_event_appeared, guild_membership_changed,
+        instance_removal_ended, instance_removal_started, instance_removal_time_left_ms,
         is_initial_apply, item_owner_job, levelup_appeared, mail_arrived, petition_event_appeared,
         reputation_appeared, sweep_into_view, system_message_appeared, teleport_appeared,
         weather_changed, xp_appeared, zone_crossed, BoundIdentity, ExplorationReplay,
@@ -2858,7 +2958,8 @@ mod family_audience_tests {
     };
     use crate::stdb::aoi::ViewerGates;
     use crate::stdb::bindings::{
-        AddonMessage, CharacterExplored, CharacterQuest, GuildEvent, GuildPetition, LevelupEvent,
+        AddonMessage, CharacterExplored, CharacterQuest, GuildEvent, GuildPetition,
+        InstanceRemoval, LevelupEvent,
         MailArrival, PlayerReputation, SystemMessageEvent, TeleportEvent, XpEvent, ZoneWeather,
     };
     use crate::stdb::subscriptions::{private_recipient_audience, quest_update_packets};
@@ -4228,6 +4329,92 @@ mod family_audience_tests {
         );
     }
 
+    fn at_micros(micros: i64) -> spacetimedb_sdk::ScheduleAt {
+        spacetimedb_sdk::ScheduleAt::Time(spacetimedb_sdk::Timestamp::from_micros_since_unix_epoch(
+            micros,
+        ))
+    }
+
+    /// The one `SMSG_RAID_GROUP_ONLY` timer a writer job produced.
+    fn raid_group_only_timer(out: &[Outbound]) -> u32 {
+        match out {
+            [Outbound::One(ServerOpcodeMessage::SMSG_RAID_GROUP_ONLY(packet))] => {
+                assert_eq!(
+                    packet.error,
+                    wow_world_messages::vanilla::RaidGroupError::Required
+                );
+                packet.homebind_timer
+            }
+            _ => panic!("expected one SMSG_RAID_GROUP_ONLY"),
+        }
+    }
+
+    #[test]
+    fn an_instance_removal_shows_and_hides_the_countdown_for_its_owner_only() {
+        let view = WorldView::new(true);
+        let (owner_tx, owner_rx) = SessionTx::with_depth(0);
+        let (other_tx, other_rx) = SessionTx::with_depth(0);
+        let owner = viewer_with_tx(1, 9001, identity(1), owner_tx);
+        let other = viewer_with_tx(2, 9002, identity(2), other_tx);
+        let anchor = CellKey::at(36, 7, 0, 0);
+        view.add_viewer_on_shard(owner.clone(), anchor, 1);
+        view.add_viewer_on_shard(other, anchor, 1);
+        // Due in 2100: far enough ahead that the time left is always the full countdown.
+        let row = InstanceRemoval {
+            scheduled_id: 3,
+            scheduled_at: at_micros(4_102_444_800_000_000),
+            character_guid: owner.self_guid,
+            instance_id: 7,
+            group_id: 42,
+        };
+
+        instance_removal_started(&view, 0, &row);
+        assert!(owner_rx.try_recv().is_err(), "another Shard's row");
+        instance_removal_started(&view, 1, &row);
+        assert_eq!(raid_group_only_timer(&queued_job(&owner_rx)), 60_000);
+        instance_removal_ended(&view, 1, &row);
+        assert_eq!(raid_group_only_timer(&queued_job(&owner_rx)), 0);
+        assert!(owner_rx.try_recv().is_err(), "one job per row change");
+        assert!(
+            other_rx.try_recv().is_err(),
+            "an unrelated viewer receives nothing"
+        );
+    }
+
+    /// The world-entry sweep and a replayed insert both show the time left, not a fresh 60 s.
+    #[test]
+    fn the_countdown_shows_the_time_left_rounded_up_and_nothing_once_due() {
+        let due = 1_900_000_000_000_000;
+        assert_eq!(
+            instance_removal_time_left_ms(&at_micros(due), 1_899_999_955_000_000),
+            Some(45_000)
+        );
+        assert_eq!(
+            instance_removal_time_left_ms(&at_micros(due), 1_899_999_999_999_999),
+            Some(1)
+        );
+        assert_eq!(
+            instance_removal_time_left_ms(&at_micros(due), 1_899_999_900_000_000),
+            Some(60_000),
+            "a Gateway clock behind the Module's shows no more than the full countdown"
+        );
+        assert_eq!(
+            instance_removal_time_left_ms(&at_micros(due), 1_900_000_000_000_000),
+            None
+        );
+        assert_eq!(
+            instance_removal_time_left_ms(&at_micros(due), 1_900_000_000_000_005),
+            None
+        );
+        let interval = spacetimedb_sdk::ScheduleAt::Interval(
+            spacetimedb_sdk::TimeDuration::from_micros(1_000_000),
+        );
+        assert_eq!(
+            instance_removal_time_left_ms(&interval, 1_899_999_955_000_000),
+            None
+        );
+    }
+
     #[test]
     fn item_rows_route_only_to_the_owner_and_follow_transfer_replacement() {
         let view = WorldView::new(true);
@@ -4741,6 +4928,7 @@ mod family_audience_tests {
             "offer_peer_create_for(",
             "relay_gameobject_create(",
             "resident_taxi_spline_outbound(",
+            "resident_instance_removal_outbound(",
         ] {
             assert!(
                 job.contains(operation),
@@ -5188,6 +5376,14 @@ pub(crate) fn sweep_into_view(view: &Arc<WorldView>, viewer: &Arc<Viewer>) {
                 &viewer,
                 viewer.self_guid,
             ));
+        }
+        // Only the Home Shard can hold this Character's countdown. Another Shard's row would be a
+        // Transfer source's delete still on its way.
+        if let Some(coord) = view
+            .shard_of_viewer(viewer.session)
+            .and_then(|shard| view.shard(shard))
+        {
+            out.extend(resident_instance_removal_outbound(&coord, viewer.self_guid));
         }
         out
     });

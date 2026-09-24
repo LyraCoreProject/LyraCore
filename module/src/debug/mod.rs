@@ -601,7 +601,8 @@ pub fn debug_bind_home(ctx: &ReducerContext, character_guid: u64) -> Result<(), 
 }
 
 /// Recall `character_guid` to its hearthstone home — drives the hearthstone-use path by explicit guid
-/// for the harness (emits a game_teleport_event to home), via the shared `world::recall_to_home`.
+/// for the harness, via the shared `world::recall_to_home`. A live Character gets a
+/// game_teleport_event to home; an offline one has its durable row moved home.
 #[reducer]
 pub fn debug_use_hearthstone(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
     crate::world::recall_to_home(ctx, character_guid);

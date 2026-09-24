@@ -60,9 +60,17 @@
 //! spawn-row-less entities). Per-instance GO copies get `0xF110 | bit46 | seq`
 //! ([`GO_COPY_BAND`]) — below `gameobject::POOL_TAG` (bit 47), above every static/debug low.
 //!
-//! Both tables are private. The Coordinator subscribes to `game_instance` with the Owner Token
-//! so Transfer can read the source lease's admitted map and party. `game_instance_binding`
-//! remains unsubscribed. [server]
+//! ## Instance Removal
+//! A Character that stands in a Group's dungeon instance without being a member of that Group gets
+//! a 60-second countdown, then goes to its hearthstone home (cm:Player.cpp:17694-17731). The rule
+//! is state, not an edge: [`reconcile_instance_removal`] runs wherever membership or location
+//! changes on this Shard (the Group mirror, the membership cores, login), and the one-shot
+//! `game_instance_removal` row fires [`expire_instance_removal`], which reads the rule again
+//! before it moves anybody.
+//!
+//! Every table here is private. The Coordinator subscribes to `game_instance` with the Owner Token
+//! so Transfer can read the source lease's admitted map and party, and to `game_instance_removal`
+//! to relay the countdown. `game_instance_binding` remains unsubscribed. [server]
 
 use std::collections::{HashMap, HashSet};
 
@@ -315,6 +323,33 @@ pub struct InstanceReaperSchedule {
     pub scheduled_at: ScheduleAt,
 }
 
+/// How long an Instance Removal counts down before it moves the Character home.
+pub(crate) const INSTANCE_REMOVAL_MICROS: i64 =
+    lyracore_shared::instance::INSTANCE_REMOVAL_MS as i64 * 1_000;
+
+/// One Character's running Instance Removal: the one-shot schedule that fires
+/// [`INSTANCE_REMOVAL_MICROS`] after it is armed. `instance_id` is the instance the Character
+/// stood in when it was armed and `group_id` is the Group that owns that instance. The Gateway
+/// relays an insert as the client countdown and a delete as its end. [server]
+#[table(accessor = game_instance_removal, scheduled(expire_instance_removal))]
+pub struct InstanceRemoval {
+    #[primary_key]
+    #[auto_inc]
+    pub scheduled_id: u64,
+    pub scheduled_at: ScheduleAt,
+    #[unique]
+    pub character_guid: u64,
+    pub instance_id: u64,
+    pub group_id: u64,
+}
+
+crate::character_owned!(delete, fn sweep_delete_game_instance_removal(ctx, character_guid) {
+    ctx.db.game_instance_removal().character_guid().delete(character_guid);
+});
+// The countdown belongs to the instance. A Character that leaves the Instance Pool has left the
+// instance, and leaving the instance cancels the countdown (cm:MovementHandler.cpp:133-135).
+crate::character_owned!(not_transported, fn sweep_transfer_game_instance_removal());
+
 // ===========================================================================================
 //  Pure decisions (unit-tested below)
 // ===========================================================================================
@@ -432,6 +467,24 @@ pub(crate) fn stranding_fallback(
 /// which IS the bound-to proof). Pure.
 pub(crate) fn reset_eligible(party_id: u64, caller_is_leader: bool, occupied: bool) -> bool {
     !occupied && (party_id == 0 || caller_is_leader)
+}
+
+/// The Instance Removal rule: a Character standing in a dungeon instance that a Group owns, while
+/// it is not a member of that Group, gets the countdown. `instance_party` is 0 for a solo instance.
+/// `own_group` is the Character's Group on this Shard's rows. A GM is exempt
+/// (cm:Group.cpp:1470-1484). Pure.
+pub(crate) fn instance_removal_due(
+    map_id: u32,
+    instance_id: u64,
+    instance_party: u64,
+    own_group: Option<u64>,
+    gm_level: u8,
+) -> bool {
+    instance_id != 0
+        && is_dungeon_map(map_id)
+        && instance_party != 0
+        && own_group != Some(instance_party)
+        && gm_level == 0
 }
 
 // ===========================================================================================
@@ -1172,6 +1225,102 @@ pub(crate) fn apply_reset_instances(
 }
 
 // ===========================================================================================
+//  Instance Removal
+// ===========================================================================================
+
+/// The instance `character_guid` stands in and the Group that owns it, when the Instance Removal
+/// rule holds on this Shard. A Character with a live entity stands where the entity is. A
+/// Character with no live entity stands where its durable row says, because its next login builds
+/// it there. A session-less Character with a live entity reads as exempt: only a World Session
+/// turns the cross-map teleport home into a Transfer, so a bot stays where it is. An in-transit
+/// Character reads as absent, because it is leaving this Shard.
+fn instance_removal_standing(ctx: &ReducerContext, character_guid: u64) -> Option<(u64, u64)> {
+    let character = crate::helpers::character_by_guid(ctx, character_guid)?;
+    let (map_id, instance_id) = match ctx.db.game_world_entity().guid().find(character_guid) {
+        Some(_) if !character.online => return None,
+        Some(entity) => (entity.map_id, entity.instance_id),
+        None => (character.map_id, character.pending_instance_id),
+    };
+    let instance_party = ctx
+        .db
+        .game_instance()
+        .instance_id()
+        .find(instance_id)
+        .map_or(0, |instance| instance.party_id);
+    let own_group = crate::group::group_of(ctx, character_guid).map(|member| member.group_id);
+    instance_removal_due(
+        map_id,
+        instance_id,
+        instance_party,
+        own_group,
+        character.gm_level,
+    )
+    .then_some((instance_id, instance_party))
+}
+
+/// Make `character_guid`'s Instance Removal match the rule: arm the countdown when the rule holds
+/// and no countdown runs for that instance, and cancel it when the rule no longer holds.
+/// Idempotent. Realm-core holds no Characters, so there it does nothing.
+pub(crate) fn reconcile_instance_removal(ctx: &ReducerContext, character_guid: u64) {
+    let removals = ctx.db.game_instance_removal();
+    let running = removals.character_guid().find(character_guid);
+    let standing = instance_removal_standing(ctx, character_guid);
+    if let (Some(row), Some((instance_id, _))) = (&running, standing) {
+        if row.instance_id == instance_id {
+            return;
+        }
+    }
+    if let Some(row) = running {
+        removals.scheduled_id().delete(row.scheduled_id);
+    }
+    if let Some((instance_id, group_id)) = standing {
+        let due = ctx.timestamp.to_micros_since_unix_epoch() + INSTANCE_REMOVAL_MICROS;
+        removals.insert(InstanceRemoval {
+            scheduled_id: 0,
+            scheduled_at: ScheduleAt::Time(Timestamp::from_micros_since_unix_epoch(due)),
+            character_guid,
+            instance_id,
+            group_id,
+        });
+    }
+}
+
+/// Scheduler-only: an Instance Removal countdown ran out. See [`fire_instance_removal`].
+#[reducer]
+pub fn expire_instance_removal(
+    ctx: &ReducerContext,
+    removal: InstanceRemoval,
+) -> Result<(), String> {
+    if ctx.sender() != ctx.database_identity() {
+        return Err("scheduler only".to_string());
+    }
+    fire_instance_removal(ctx, &removal);
+    Ok(())
+}
+
+/// End one countdown. A firing that is not the Character's running countdown changes nothing, so
+/// a replay is a no-op. The rule is read again first: a Character that rejoined the Group, left
+/// the instance or left this Shard stays where it is. Otherwise the Character goes to its
+/// hearthstone home in the open world (cm:Player.cpp:17710-17716).
+pub(crate) fn fire_instance_removal(ctx: &ReducerContext, removal: &InstanceRemoval) {
+    let removals = ctx.db.game_instance_removal();
+    if removals
+        .character_guid()
+        .find(removal.character_guid)
+        .is_none_or(|running| running.scheduled_id != removal.scheduled_id)
+    {
+        return;
+    }
+    removals.scheduled_id().delete(removal.scheduled_id);
+    match instance_removal_standing(ctx, removal.character_guid) {
+        Some((instance_id, _)) if instance_id == removal.instance_id => {
+            crate::world::recall_to_home(ctx, removal.character_guid);
+        }
+        _ => reconcile_instance_removal(ctx, removal.character_guid),
+    }
+}
+
+// ===========================================================================================
 //  Tests — the pure decisions above (the module crate has no ReducerContext harness by design)
 // ===========================================================================================
 
@@ -1620,6 +1769,44 @@ mod tests {
             stranding_fallback(None, true),
             StrandingFallback::HearthstoneHome
         );
+    }
+
+    #[test]
+    fn instance_removal_is_due_only_for_a_non_member_in_a_group_instance() {
+        // Deadmines is map 36. Instance 7 belongs to Group 42.
+        assert!(instance_removal_due(36, 7, 42, None, 0), "left the Group");
+        assert!(
+            instance_removal_due(36, 7, 42, Some(43), 0),
+            "joining another Group does not cancel"
+        );
+        assert!(!instance_removal_due(36, 7, 42, Some(42), 0), "a member");
+        assert!(
+            !instance_removal_due(36, 7, 0, None, 0),
+            "a solo instance has no Group to leave"
+        );
+        assert!(!instance_removal_due(36, 0, 42, None, 0), "the open world");
+        assert!(
+            !instance_removal_due(0, 7, 42, None, 0),
+            "an instance of an open-world map is not a dungeon"
+        );
+        assert!(!instance_removal_due(36, 7, 42, None, 1), "a GM");
+    }
+
+    /// Login is where a Character re-enters a former Group's instance through its own binding,
+    /// and where a relog inside the countdown keeps it. The call must follow the entity insert and
+    /// the Character update, or it reads the location the login is about to replace.
+    #[test]
+    fn login_reconciles_the_instance_removal_after_the_character_is_in_world() {
+        let login = code_of(
+            include_str!("world.rs"),
+            "pub(crate) fn apply_player_login(",
+        );
+        let reconcile = login
+            .find("crate::instance::reconcile_instance_removal(ctx, character_guid)")
+            .expect("apply_player_login no longer reconciles the Instance Removal");
+        let insert = login.find("entities.insert(entity)").unwrap();
+        let update = login.find("chars.guid().update(character)").unwrap();
+        assert!(insert < reconcile && update < reconcile);
     }
 
     #[test]

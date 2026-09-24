@@ -316,6 +316,12 @@ One of 8 marks a leader or Assistant puts on a unit, held per Group on the party
 carries at most one.
 _Avoid_: raid mark, marker, raid target (for the icon)
 
+**Instance Removal**:
+The 60-second countdown that moves a Character to its hearthstone home when it stands in a Group's
+dungeon instance without being a member of that Group. Rejoining the Group or leaving the instance
+cancels it. A GM and a session-less Character with a live entity are exempt.
+_Avoid_: homebind timer, instance kick, raid timer
+
 **Ready Check**:
 A leader or Assistant poll. Every member is asked; answers reach the leader only. The party
 authority keeps no state for it.

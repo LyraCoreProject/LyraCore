@@ -1157,6 +1157,10 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // Breath timer edges and server-resolved drowning hits: self-only relay, with the same
         // owner-session audience as rest state. The bar counts down client-side between edges.
         "SELECT * FROM game_breath_relay_event",
+        // Instance Removal countdowns: `world_view` relays each row to its owner, and the world
+        // entry sweep replays a running one with the time left. The row is durable Module state,
+        // so a Gateway restart loses no countdown.
+        "SELECT * FROM game_instance_removal",
         // Ground-area spell visuals: `world_view::dynobj_appeared`
         // relays instance-gated CREATE/DESTROY. Short-lived rows (the area's duration).
         "SELECT * FROM game_dynamic_object",

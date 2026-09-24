@@ -1171,10 +1171,10 @@ fn every_refuse_verdict_call_site_still_routes_through_the_by_guid_chokepoint() 
             include_str!("../world.rs"),
             "pub(crate) fn recall_to_home(",
             "recall_to_home is the ONE teleport_player caller that needs no live entity (it \
-                 reads the home coords off the durable row), so by-guid — via \
-                 debug_use_hearthstone — it is the only route by which teleport_player's \
-                 unconditional durable-row write lands on an escrowed character, moving FIVE \
-                 ExportBlob fields plus the pending_instance_id that in_transit_instances reads",
+                 reads the home coords off the durable row), so by-guid (debug_use_hearthstone \
+                 and the Instance Removal expiry) it is the only route by which a home \
+                 durable-row write lands on an escrowed character, moving FIVE ExportBlob \
+                 fields plus the pending_instance_id that in_transit_instances reads",
         ),
         (
             "debug/mod.rs",
@@ -2243,5 +2243,31 @@ fn party_membership_does_not_ride_the_export_blob() {
     assert!(
         NOT_TRANSPORTED.contains(&"game_group_member"),
         "the decision must also be written on the allowlist, with its reason"
+    );
+}
+
+/// An Instance Removal belongs to the instance it counts down for. The source cascade deletes the
+/// row when the Character leaves, and the blob carries nothing, so a Character that walks out of
+/// the Instance Pool through the portal is never sent home later.
+#[test]
+fn the_instance_removal_dies_with_the_source_copy_and_is_not_carried() {
+    assert!(
+        crate::CHARACTER_OWNED_TABLES.contains(&"game_instance_removal"),
+        "game_instance_removal has no delete sweep, so the source cascade leaves the countdown \
+         running after the Character left the instance"
+    );
+    assert!(
+        crate::CHARACTER_OWNED_NOT_TRANSPORTED.contains(&"game_instance_removal"),
+        "game_instance_removal transports: the destination would count down for an instance the \
+         Character is no longer in"
+    );
+    assert!(NOT_TRANSPORTED.contains(&"game_instance_removal"));
+    let source = include_str!("../instance.rs");
+    let marker = "fn sweep_delete_game_instance_removal(ctx, character_guid) {";
+    let body = &source[source.find(marker).expect("the delete sweep") + marker.len()..];
+    let body = &body[..body.find("});").expect("the sweep body closes")];
+    assert!(
+        body.contains(".character_guid().delete(character_guid)"),
+        "the delete sweep must remove the departing Character's own row. Body was:\n{body}"
     );
 }

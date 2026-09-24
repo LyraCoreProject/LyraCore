@@ -923,18 +923,24 @@ pub(crate) fn set_home(ctx: &ReducerContext, guid: u64) {
 }
 
 /// Recall a character to its hearthstone home — an IMMEDIATE teleport via the shared core (the vanilla
-/// ~10s channel/cast is a follow-up). No-op if the character row is gone. [entity]
+/// ~10s channel/cast is a follow-up). Always to the open world (instance 0), even from inside a
+/// dungeon. No-op if the character row is gone. [entity]
+///
+/// A Character with a live entity takes the ordinary teleport. A Character with no live entity
+/// has only its durable row, so the row moves home and the next login builds the entity there;
+/// `teleport_player` alone would do nothing for it.
 ///
 /// REFUSE verdict. This is the ONE `teleport_player` caller that needs no live entity —
 /// it resolves the home coords straight off the durable row — so it is the only route by which
-/// `teleport_player`'s unconditional durable-row write (map_id/x/y/z/orientation/pending_instance_id,
-/// FIVE `ExportBlob` fields plus the id `in_transit_instances` reads) can land on an escrowed
-/// character. Its player path (`items::ops` hearthstone use) already resolves a live entity first, so
-/// the fence only bites the by-guid harness twin `debug_use_hearthstone`; fenced HERE rather than
-/// there so a future by-guid caller inherits it.
+/// a durable-row write (map_id/x/y/z/orientation/pending_instance_id, FIVE `ExportBlob` fields plus
+/// the id `in_transit_instances` reads) can land on an escrowed character. Its player path
+/// (`items::ops` hearthstone use) already resolves a live entity first, so the fence bites the
+/// by-guid callers: the harness twin `debug_use_hearthstone` and the Instance Removal expiry.
 pub(crate) fn recall_to_home(ctx: &ReducerContext, guid: u64) {
-    if let Some(c) = crate::helpers::character_by_guid(ctx, guid) {
-        // Hearthstone always returns to the open world (instance 0) — even from inside a dungeon.
+    let Some(mut c) = crate::helpers::character_by_guid(ctx, guid) else {
+        return;
+    };
+    if ctx.db.game_world_entity().guid().find(guid).is_some() {
         teleport_player(
             ctx,
             guid,
@@ -945,7 +951,19 @@ pub(crate) fn recall_to_home(ctx: &ReducerContext, guid: u64) {
             c.home_z,
             c.orientation,
         );
+        return;
     }
+    // A flight owns the position with or without a body: login resumes it from its own route.
+    if crate::taxi::movement_is_suppressed(ctx, guid) {
+        return;
+    }
+    c.map_id = c.home_map;
+    c.x = c.home_x;
+    c.y = c.home_y;
+    c.z = c.home_z;
+    c.zone_id = c.home_zone;
+    c.pending_instance_id = 0;
+    ctx.db.game_character().guid().update(c);
 }
 
 // ===========================================================================================
@@ -1168,6 +1186,7 @@ pub(crate) fn apply_player_login(
     character.online = true;
     character.first_login = false;
     chars.guid().update(character);
+    crate::instance::reconcile_instance_removal(ctx, character_guid);
     // Notify-hook: the login is fully committed (entity live, rows restamped, character row
     // updated). Server-side bots don't fire this — they enter via their own spawn path.
     crate::hooks::fire_on_login(ctx, &crate::hooks::LoginPayload { character_guid });

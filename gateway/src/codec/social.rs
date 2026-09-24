@@ -892,6 +892,18 @@ pub fn build_minimap_ping(pinger_guid: u64, x: f32, y: f32) -> MSG_MINIMAP_PING_
     }
 }
 
+use wow_world_messages::vanilla::{RaidGroupError, SMSG_RAID_GROUP_ONLY};
+
+/// `SMSG_RAID_GROUP_ONLY`: the Instance Removal countdown in milliseconds, or 0 to hide it
+/// (cm:Player.cpp:17697-17728). The error is `Required` (1) as vmangos sends
+/// (vm:Player.cpp:18561-18588). cmangos sends 0, which gtker's `RaidGroupError` cannot encode.
+pub fn build_raid_group_only(timer_ms: u32) -> SMSG_RAID_GROUP_ONLY {
+    SMSG_RAID_GROUP_ONLY {
+        homebind_timer: timer_ms,
+        error: RaidGroupError::Required,
+    }
+}
+
 #[cfg(test)]
 mod party_tests {
     use super::*;
@@ -1171,6 +1183,32 @@ mod party_tests {
         ]
         .concat();
         assert_eq!(framed, expected);
+    }
+
+    /// cm:Player.h:309-314 and gtker: opcode 0x0286, then `u32 homebind_timer` and `u32 error`.
+    #[test]
+    fn the_raid_group_only_packet_is_the_countdown_then_the_error() {
+        use wow_world_messages::vanilla::ServerMessage;
+        for (timer_ms, expected) in [
+            (
+                60_000,
+                [
+                    0x00, 0x0A, 0x86, 0x02, 0x60, 0xEA, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+                ],
+            ),
+            (
+                0,
+                [
+                    0x00, 0x0A, 0x86, 0x02, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+                ],
+            ),
+        ] {
+            let mut framed = Vec::new();
+            build_raid_group_only(timer_ms)
+                .write_unencrypted_server(&mut framed)
+                .unwrap();
+            assert_eq!(framed, expected, "timer {timer_ms}");
+        }
     }
 
     #[test]
