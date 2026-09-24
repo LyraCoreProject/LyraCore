@@ -1145,11 +1145,6 @@ fn finish_bid<S: BidSource>(
     Ok(decision)
 }
 
-fn split_bid_refund(purse: u32, refund: u32) -> (u32, u32) {
-    let purse_credit = refund.min(u32::MAX - purse);
-    (purse + purse_credit, refund - purse_credit)
-}
-
 fn refundable_bid_value(decision: HoldDecision, offer: u32) -> Option<u32> {
     match decision {
         HoldDecision::Accepted(BidAcceptance { price, .. }) if price != 0 && price <= offer => {
@@ -2026,7 +2021,7 @@ impl BidSource for CtxBidSource<'_> {
         let deferred_refund = if refund != 0 {
             let mut bidder = crate::helpers::acting_entity_by_guid(self.ctx, request.bidder_guid)
                 .ok_or(AuctionRefusal::Database)?;
-            let (money, deferred_refund) = split_bid_refund(bidder.money, refund);
+            let (money, deferred_refund) = crate::mail::split_refund(bidder.money, refund);
             bidder.money = money;
             self.ctx.db.game_world_entity().guid().update(bidder);
             deferred_refund
@@ -6312,7 +6307,7 @@ mod tests {
             let refund =
                 refundable_bid_value(decision, request.offer).ok_or(AuctionRefusal::Database)?;
             if refund != 0 {
-                let (money, deferred_refund) = split_bid_refund(self.money, refund);
+                let (money, deferred_refund) = crate::mail::split_refund(self.money, refund);
                 self.money = money;
                 self.deferred_refund += deferred_refund;
             }

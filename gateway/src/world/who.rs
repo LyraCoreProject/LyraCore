@@ -19,8 +19,7 @@ const NO_UPPER_BOUND_AT: u8 = 100;
 /// rows written by hand from the cited behavior, with no Store involved.
 pub(crate) struct WhoCandidate<'a> {
     pub name: &'a str,
-    /// Always empty until the guild workstream fills it; a non-empty guild filter then matches
-    /// nobody, which is the correct answer today.
+    /// Empty outside a Guild.
     pub guild_name: &'a str,
     pub race: u8,
     pub class: u8,
@@ -105,6 +104,8 @@ fn effective_max_level(wire_max_level: u8) -> u8 {
 ///
 /// A zone name is looked up only when the request carries a search string, since it is the only
 /// rule that reads one — the common case (no search string) then costs no zone lookups at all.
+/// The Guild name is two keyed reads of the Realm-core cache per row. When Realm-core cannot
+/// answer, every row lists with an empty Guild name rather than the reply failing.
 pub(crate) fn respond<St: WorldStore + ?Sized>(
     store: &St,
     requester_race: u8,
@@ -126,15 +127,28 @@ pub(crate) fn respond<St: WorldStore + ?Sized>(
         search_strings: &request.search_strings,
     };
     let mut players = Vec::new();
+    let mut guild_reads_failed = false;
     for row in presence::in_world_characters(store)? {
         let zone_name = if has_search_strings {
             store.zone_name(row.zone_id)
         } else {
             String::new()
         };
+        let guild_name = if guild_reads_failed {
+            String::new()
+        } else {
+            store
+                .guild_name_of_member(row.guid)
+                .unwrap_or_else(|error| {
+                    log::warn!("world: /who lists no Guild names: {error:#}");
+                    guild_reads_failed = true;
+                    None
+                })
+                .unwrap_or_default()
+        };
         let candidate = WhoCandidate {
             name: &row.name,
-            guild_name: "",
+            guild_name: &guild_name,
             race: row.race,
             class: row.class,
             level: row.level,
@@ -144,6 +158,7 @@ pub(crate) fn respond<St: WorldStore + ?Sized>(
         if matches(&filter, &candidate) {
             players.push(codec::WhoPlayerView {
                 name: row.name,
+                guild: guild_name,
                 level: row.level,
                 class: row.class,
                 race: row.race,

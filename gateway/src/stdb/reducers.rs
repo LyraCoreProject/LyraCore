@@ -1343,7 +1343,13 @@ impl Coordinator {
         );
         Ok(match result {
             Ok(()) => CharDeleteOutcome::Success,
-            Err(_) => CharDeleteOutcome::Failed,
+            // The 1.12 client has one reason for every refusal, so the reason goes to the log:
+            // CHAR_HAS_GUILD_FEE_HOLD clears when the Character next enters the world and the
+            // Gateway finishes its Fee Hold.
+            Err(error) => {
+                log::info!("delete_character: {character_guid} not deleted: {error:#}");
+                CharDeleteOutcome::Failed
+            }
         })
     }
 
@@ -4348,6 +4354,7 @@ impl Coordinator {
                 GuildOp::TurnInPetition(charter_item_guid)
             }
             GuildRequest::ClosePetition { petition_id } => GuildOp::ClosePetition(petition_id),
+            GuildRequest::ForgetDeletedCharacter => GuildOp::ForgetDeletedCharacter,
         };
         let result = call_reducer!(
             self.0.call_pipe().conn.reducers,

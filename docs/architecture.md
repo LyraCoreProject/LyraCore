@@ -106,6 +106,9 @@ are answered by the gateway, which is the only component that can see the whole 
 | `CMSG_NAME_QUERY` resolution | same | `presence.rs` (`character_anywhere`) |
 | loot-roll promotion and settlement fan-out across shards | a kill's transaction cannot reach realm-core | `gateway/src/world/loot.rs` |
 | recipient's Account for the mail Delivery Delay | the recipient may be on another shard | `gateway/src/world/mail.rs` (`same_realm_account`) |
+| the Character facts a guild Gate needs: name, team, Realm Account, GM level, online state for the roster | Realm-core holds the guild rows and no Characters | `gateway/src/world/handlers/guild.rs`, Realm Presence through `stdb/reads/guild.rs` (`guild_character_facts`) |
+| "is this Character a Guild Leader" before `CMSG_CHAR_DELETE` | the Home Shard deletes the Character and cannot read Realm-core | `gateway/src/world/handlers/char.rs` (`leads_a_guild`) |
+| "was this guild member, Petition owner or signer deleted" | Realm-core cannot see a World Shard delete a Character | `reconcile_deleted_guild_characters` in `handlers/guild.rs`, run by the character-gone worker in `stdb/subscriptions.rs` |
 
 Each of these re-implements *the read the module gate performed*, not a new rule, and each returns
 the module's own error strings so the client sees identical behaviour on a single-database
@@ -132,8 +135,20 @@ the acting Character's GM level from its Home Shard. The Module applies every gu
 Realm-core (`module/src/guild/mod.rs`). `.guild create` and `CMSG_GUILD_CREATE` need a GM level
 above 0. The Gateway also answers a GM level of 0 early, before it resolves a leader name
 realm-wide, and the Module refuses the same request if one arrives. The realm-wide reads are
-`resolve_all_by_name` for the leader and a live entity on any shard for the roster's online column
-(`gateway/src/world/handlers/guild.rs`).
+`resolve_all_by_name` for the leader and Realm Presence for each roster line: a member in the world
+or in transit lists online (`gateway/src/world/handlers/guild.rs`).
+
+A Guild Leader is not deleted. The Gateway reads the membership from its Realm-core cache before it
+asks the Home Shard to delete, and answers `CHAR_DELETE_FAILED` (0x3A, FAILED_GUILD_LEADER in
+mangos). Any other deleted Character is forgotten on Realm-core by the character-gone worker, which
+already reconciles parties. At startup and after a reconnect it checks every Character a Guild, a
+Petition or a Signature names; after a `game_character` delete it checks only that Character. A
+Character row in any Shard's cache ends the check at once. Otherwise a Character absent from two
+durable snapshots of every configured World Shard is sent as `ForgetDeletedCharacter`, as itself,
+with no ownership token. The Module removes the Guild Invite it holds, its membership and its
+Petitions and Signatures. A Guild Invite it sent stays, as in mangos. A deleted Guild Leader passes leadership to the member with the highest Guild Rank,
+earliest join first, and a Guild with nobody left disbands. The op finds nothing on a second call,
+so a pass that a restart interrupts is repeated whole.
 
 The mail Delivery Delay is the same shape. The Gateway reads the Realm Account of the sender and of
 the recipient from the World Shards: the Account Character Owner name, else the name of a local
@@ -336,11 +351,11 @@ connectivity.
 Full inventory and the load-bearing row shapes are covered in depth in the maintainers' internal
 docs. The summary:
 
-- **238 tables on 2026-09-03**, `game_`-prefixed for core and `pkg_<name>_`-prefixed for packages.
+- **278 tables on 2026-09-24**, `game_`-prefixed for core and `pkg_<name>_`-prefixed for packages.
   External gtker crates keep their `wow_` names and are never renamed. Recount with
   `grep -rn '^#\[table(' module/src --include='*.rs' | wc -l`; the per-domain breakdown is
   [`schema.md`](./schema.md) §2.
-- **122 public / 116 private.** `public` means "subscribable by a client connection". Private tables
+- **128 public / 150 private.** `public` means "subscribable by a client connection". Private tables
   (`game_account`, `game_session`, `game_operator`, every region/transfer/instance/realm-core table)
   are readable only over the owner token.
 - **No `#[client_visibility_filter]` RLS filters.** The sixteen owner-scoped filters this document
@@ -425,9 +440,13 @@ Every relay hangs off a coordinator connection. Row-driven relays take one of tw
   group event relay. The cross-shard whisper/group/auction-notice/Mail Arrival twins, Realm Chat
   Lines and Channel Notices ride the same dispatchers on the realm-core connection
   (`arm_realm_private`), armed only when realm-core is a distinct database. The guild relays
-  register in both places too: `game_guild_event` rows go to their addressed recipient or to every
-  online member of the Guild on this Gateway, and `game_guild_member` changes drive the Guild
-  Projection below.
+  register in both places too (`wire_guild_relays`): `game_guild_event` rows go to their addressed
+  recipient or to every online member of the Guild on this Gateway, a petition kind
+  (`0x70..=0x7F`) goes through `petition_event_appeared`, `game_guild_member` changes drive the
+  Guild Projection below, and a `game_guild_petition` insert sends the new Petition id to the
+  owner's Guild Charter as ITEM_FIELD_ENCHANTMENT. A relay reads the Realm-core cache once per
+  event through keyed finds and the Gateway-side `GuildIndex` (ranks and members by Guild), never
+  once per recipient.
 - **Viewer lifetime** (`subscribe_player_events`): world entry prepares relay state, registers one
   viewer, and performs resident-state sweeps. `PlayerSubscriptions` owns only that registration;
   dropping it removes the viewer. It owns no row callbacks. A world-port removes the source viewer
@@ -730,6 +749,7 @@ explains why two rungs of the ladder are written down instead of automated.
 | [`taxi-flight-verification.md`](./taxi-flight-verification.md) | The direct-route flight baseline, and the cancel path when catalogue geometry mutates mid-flight. |
 | [`movement-batch-acceptance.md`](./movement-batch-acceptance.md) | The steady-heartbeat batching path under a load driver, on a `disposable:` realm only. Script in `scripts/`. |
 | [`auction-house-client-check.md`](./auction-house-client-check.md) | The auction house against a real 5875 client. Status: outstanding, needs a human. |
+| [`guild-client-check.md`](./guild-client-check.md) | Guilds between two real 5875 clients across a Shard Boundary: founding, invites, chat, ranks, Transfer, emblem, Charter and deletion. Status: outstanding, needs a human. |
 | [`duel-client-check.md`](./duel-client-check.md) | Duel visuals against a real 5875 client, which the automated tests cannot see. Status: outstanding. |
 | [`hunter-pet-live-check.md`](./hunter-pet-live-check.md) | Taming, pet bars and pet lifecycle against a live development realm and a real client. |
 

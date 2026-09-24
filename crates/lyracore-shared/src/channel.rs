@@ -99,6 +99,8 @@ pub struct BuiltinChannel {
 }
 
 pub const WORLD_DEFENSE_ID: u32 = 23;
+/// A Guild member never joins GuildRecruitment (cm:Channel.cpp:94-95).
+pub const GUILD_RECRUITMENT_ID: u32 = 25;
 
 /// dbc:ChatChannels.dbc, every row of the local 1.12.1 client.
 pub const BUILTIN_CHANNELS: [BuiltinChannel; 6] = [
@@ -133,7 +135,7 @@ pub const BUILTIN_CHANNELS: [BuiltinChannel; 6] = [
         zoned: false,
     },
     BuiltinChannel {
-        id: 25,
+        id: GUILD_RECRUITMENT_ID,
         dbc_flags: 0x2_0032,
         prefix: "GuildRecruitment - ",
         zoned: true,

@@ -613,6 +613,10 @@ struct InMemoryStore {
     peers: std::sync::Mutex<Vec<std::sync::Arc<InMemoryStore>>>,
     /// When set, the configured World Shard set is incomplete or unhealthy.
     world_shard_set_error: Option<String>,
+    /// How many times a caller asked for the two-snapshot durable absence check.
+    durable_absence_checks: std::sync::atomic::AtomicUsize,
+    /// A Character whose guild lookup fails, as when one Realm-core read errors.
+    guild_lookup_error_for: Option<u64>,
     /// Unclaimed bot invite intent ids on this World Shard. Two concurrent consumers share this
     /// collection, matching the Module table both Gateways call into.
     bot_invite_intents: std::sync::Mutex<Vec<u64>>,
@@ -1985,6 +1989,8 @@ impl WorldStore for InMemoryStore {
     }
 
     fn character_exists_on_any_world_shard(&self, guid: u64) -> Result<bool> {
+        self.durable_absence_checks
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         if let Some(error) = &self.world_shard_set_error {
             return Err(anyhow!(error.clone()));
         }
@@ -4360,6 +4366,7 @@ impl GuildActionStore for InMemoryStore {
                 zone_id: c.zone_id,
                 last_logout_micros: 0,
                 online: !self.offline_guids.contains(&c.guid),
+                in_transit: false,
                 realm_account_id: 0,
             }))
     }
@@ -4385,7 +4392,11 @@ impl GuildActionStore for InMemoryStore {
         Ok(false)
     }
 
-    fn guild_op(&self, _actor_guid: u64, request: GuildRequest) -> Result<GuildOutcome> {
+    fn guild_op(&self, actor_guid: u64, request: GuildRequest) -> Result<GuildOutcome> {
+        if request == GuildRequest::ForgetDeletedCharacter {
+            self.rec(&format!("guild_op:ForgetDeletedCharacter:{actor_guid}"));
+            return Ok(GuildOutcome::Ran);
+        }
         self.rec(match request {
             GuildRequest::GmCreate { .. } => "guild_op:GmCreate",
             GuildRequest::SignOn { .. } => "guild_op:SignOn",
@@ -4412,6 +4423,7 @@ impl GuildActionStore for InMemoryStore {
             GuildRequest::RenamePetition { .. } => "guild_op:RenamePetition",
             GuildRequest::TurnInPetition { .. } => "guild_op:TurnInPetition",
             GuildRequest::ClosePetition { .. } => "guild_op:ClosePetition",
+            GuildRequest::ForgetDeletedCharacter => unreachable!("recorded with its actor above"),
         });
         Ok(GuildOutcome::Ran)
     }
@@ -4453,6 +4465,34 @@ impl GuildActionStore for InMemoryStore {
     fn guild_destroy_charter(&self, _actor_guid: u64, _charter_item_guid: u64) -> Result<()> {
         self.rec("guild_destroy_charter");
         Ok(())
+    }
+
+    fn guild_character_guids(&self) -> Result<Vec<u64>> {
+        let mut guids: Vec<u64> = self
+            .guild_memberships
+            .iter()
+            .map(|member| member.character_guid)
+            .chain(self.guild_petitions.iter().flat_map(|petition| {
+                std::iter::once(petition.owner_guid).chain(petition.signers.iter().copied())
+            }))
+            .collect();
+        guids.sort_unstable();
+        guids.dedup();
+        Ok(guids)
+    }
+
+    fn guild_names_character(&self, character_guid: u64) -> Result<bool> {
+        if self.guild_lookup_error_for == Some(character_guid) {
+            return Err(anyhow!("guild lookup for {character_guid} failed"));
+        }
+        Ok(self.guild_character_guids()?.contains(&character_guid))
+    }
+
+    fn guild_name_of_member(&self, character_guid: u64) -> Result<Option<String>> {
+        let Some(member) = self.guild_member(character_guid)? else {
+            return Ok(None);
+        };
+        Ok(self.guild(member.guild_id)?.map(|guild| guild.name))
     }
 }
 
@@ -6133,6 +6173,191 @@ fn char_delete_failure_replies_failed_and_keeps_session_alive() {
         ServerOpcodeMessage::SMSG_CHAR_ENUM(_) => {}
         other => panic!("expected SMSG_CHAR_ENUM, got {other}"),
     }
+
+    drop(client);
+    server.join().unwrap();
+}
+
+/// Guild state on Realm-core for the deleted-Character reconciliation: Leader 5 and member 6 in
+/// one Guild, and a Petition owned by 7 with a Signature by 8. Characters 5 and 7 still exist on
+/// the `instances` peer; 6 and 8 exist on no World Shard.
+fn guild_cleanup_topology() -> std::sync::Arc<InMemoryStore> {
+    guild_cleanup_topology_failing_lookup_for(None)
+}
+
+fn guild_cleanup_topology_failing_lookup_for(
+    guild_lookup_error_for: Option<u64>,
+) -> std::sync::Arc<InMemoryStore> {
+    let instances = std::sync::Arc::new(InMemoryStore {
+        shard: "instances".into(),
+        characters: [5, 7]
+            .into_iter()
+            .map(|guid| codec::CharacterView {
+                guid,
+                name: format!("Kept{guid}"),
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    });
+    let world = std::sync::Arc::new(InMemoryStore {
+        shard: "world".into(),
+        guild_memberships: [(5, 0), (6, 4)]
+            .into_iter()
+            .map(|(character_guid, rank_id)| codec::GuildMemberView {
+                character_guid,
+                guild_id: 7,
+                rank_id,
+                ..Default::default()
+            })
+            .collect(),
+        guild_petitions: vec![codec::PetitionView {
+            petition_id: 3,
+            charter_item_guid: 90,
+            owner_guid: 7,
+            name: "Boundary Test".into(),
+            signers: vec![8],
+        }],
+        guild_lookup_error_for,
+        ..Default::default()
+    });
+    *world.peers.lock().unwrap() = vec![world.clone(), instances];
+    world
+}
+
+fn forgotten(store: &InMemoryStore) -> Vec<String> {
+    store
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(_, call)| call.clone())
+        .filter(|call| call.starts_with("guild_op:ForgetDeletedCharacter"))
+        .collect()
+}
+
+fn sweep() -> crate::world::GuildCleanup {
+    crate::world::GuildCleanup {
+        sweep: true,
+        ..Default::default()
+    }
+}
+
+fn deleted(guids: &[u64]) -> crate::world::GuildCleanup {
+    crate::world::GuildCleanup {
+        sweep: false,
+        deleted: guids.iter().copied().collect(),
+    }
+}
+
+fn durable_absence_checks(store: &InMemoryStore) -> usize {
+    store
+        .durable_absence_checks
+        .load(std::sync::atomic::Ordering::SeqCst)
+}
+
+#[test]
+fn only_characters_absent_from_every_world_shard_are_forgotten() {
+    let world = guild_cleanup_topology();
+    crate::world::reconcile_deleted_guild_characters(world.as_ref(), &sweep()).unwrap();
+    assert_eq!(
+        forgotten(&world),
+        [
+            "guild_op:ForgetDeletedCharacter:6",
+            "guild_op:ForgetDeletedCharacter:8"
+        ]
+    );
+}
+
+/// A Character row in any Shard's cache proves the Character exists, so the pass takes no durable
+/// snapshot for it. Only 6 and 8, gone from every cache, pay for the absence check.
+#[test]
+fn a_character_still_in_a_shard_cache_takes_no_durable_snapshot() {
+    let world = guild_cleanup_topology();
+    crate::world::reconcile_deleted_guild_characters(world.as_ref(), &sweep()).unwrap();
+    assert_eq!(durable_absence_checks(&world), 2);
+
+    let kept = guild_cleanup_topology();
+    crate::world::reconcile_deleted_guild_characters(kept.as_ref(), &deleted(&[5, 7])).unwrap();
+    assert_eq!(durable_absence_checks(&kept), 0);
+    assert!(forgotten(&kept).is_empty());
+}
+
+/// A `game_character` delete owes cleanup for that Character only, and none at all for a
+/// Character that no Guild, Petition or Signature names.
+#[test]
+fn a_single_delete_checks_only_its_own_character() {
+    let world = guild_cleanup_topology();
+    crate::world::reconcile_deleted_guild_characters(world.as_ref(), &deleted(&[8, 40])).unwrap();
+    assert_eq!(forgotten(&world), ["guild_op:ForgetDeletedCharacter:8"]);
+    assert_eq!(durable_absence_checks(&world), 1);
+}
+
+/// A lookup that fails for one deleted Character does not hold up the others. The pass still
+/// fails, so the worker keeps the work and retries it.
+#[test]
+fn a_failed_lookup_still_cleans_the_other_deleted_characters() {
+    let world = guild_cleanup_topology_failing_lookup_for(Some(6));
+    let error = crate::world::reconcile_deleted_guild_characters(world.as_ref(), &deleted(&[6, 8]))
+        .expect_err("the failed lookup is owed a retry");
+    assert!(error.to_string().contains("lookup for 6"));
+    assert_eq!(forgotten(&world), ["guild_op:ForgetDeletedCharacter:8"]);
+}
+
+#[test]
+fn an_unavailable_world_shard_defers_every_guild_cleanup() {
+    let world = guild_cleanup_topology();
+    let incomplete = InMemoryStore {
+        shard: "world".into(),
+        calls: world.calls.clone(),
+        guild_memberships: world.guild_memberships.clone(),
+        guild_petitions: world.guild_petitions.clone(),
+        world_shard_set_error: Some("instances has no healthy Coordinator subscription".into()),
+        ..Default::default()
+    };
+    let error = crate::world::reconcile_deleted_guild_characters(&incomplete, &sweep())
+        .expect_err("an incomplete Shard set cannot prove a deletion");
+    assert!(error.to_string().contains("no healthy Coordinator"));
+    assert!(forgotten(&incomplete).is_empty());
+}
+
+/// A Guild Leader's delete answers 0x3A, FAILED_GUILD_LEADER in mangos, and never reaches the
+/// Home Shard (`cm:CharacterHandler.cpp:540-546`).
+#[test]
+fn char_delete_of_a_guild_leader_replies_failed_and_deletes_nothing() {
+    let store = std::sync::Arc::new(InMemoryStore {
+        guild_memberships: vec![codec::GuildMemberView {
+            character_guid: 5,
+            guild_id: 7,
+            rank_id: 0,
+            name: "Tester".into(),
+            ..Default::default()
+        }],
+        guilds: vec![codec::GuildView {
+            guild_id: 7,
+            name: "Boundary Test".into(),
+            leader_guid: 5,
+            ..Default::default()
+        }],
+        ..tester_store(7)
+    });
+    let (mut client, server_end) = world_session_socket_pair();
+    let server_store = store.clone();
+    let server = std::thread::spawn(move || {
+        run_world_session(server_end, server_store.as_ref()).unwrap();
+    });
+
+    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
+    CMSG_CHAR_DELETE { guid: Guid::new(5) }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_CHAR_DELETE(m) => {
+            assert_eq!(m.result.as_int(), 0x3A)
+        }
+        other => panic!("expected SMSG_CHAR_DELETE, got {other}"),
+    }
+    assert!(store.deleted.lock().unwrap().is_empty());
 
     drop(client);
     server.join().unwrap();
@@ -9813,8 +10038,19 @@ fn attackswing_desync_error_is_session_fatal() {
 // ── Smaller mappings: WHO, buyback slots, trainer buy, talents, gossip select, chat ─────
 
 #[test]
-fn who_reply_lists_every_online_player_with_level_and_zone() {
+fn who_reply_lists_every_online_player_with_guild_level_and_zone() {
     let mut s = quest_store();
+    s.guild_memberships = vec![codec::GuildMemberView {
+        character_guid: 2,
+        guild_id: 7,
+        name: "Alpha".into(),
+        ..Default::default()
+    }];
+    s.guilds = vec![codec::GuildView {
+        guild_id: 7,
+        name: "Boundary Test".into(),
+        ..Default::default()
+    }];
     s.characters = vec![
         // The requester. Human like Alpha/Bravo (so the team gate passes them), but a class
         // outside the request's `class_mask` — the requester is not exempt from its own filters,
@@ -9868,12 +10104,12 @@ fn who_reply_lists_every_online_player_with_level_and_zone() {
     let online_players = u32::from_le_bytes(body[4..8].try_into().unwrap());
     assert_eq!(online_players, 2);
     let mut rest = &body[8..];
-    for (name, level) in [("Alpha", 5u32), ("Bravo", 60)] {
+    for (name, guild, level) in [("Alpha", "Boundary Test", 5u32), ("Bravo", "", 60)] {
         let name_end = rest.iter().position(|&b| b == 0).unwrap();
         assert_eq!(std::str::from_utf8(&rest[..name_end]).unwrap(), name);
         rest = &rest[name_end + 1..];
         let guild_end = rest.iter().position(|&b| b == 0).unwrap();
-        assert_eq!(guild_end, 0, "no guild system yet");
+        assert_eq!(std::str::from_utf8(&rest[..guild_end]).unwrap(), guild);
         rest = &rest[guild_end + 1..];
         assert_eq!(u32::from_le_bytes(rest[0..4].try_into().unwrap()), level);
         rest = &rest[16..]; // level, class, race, zone: u32 each

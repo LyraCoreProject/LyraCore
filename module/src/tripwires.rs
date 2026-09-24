@@ -160,7 +160,7 @@ pub(crate) mod character_owned_tripwire {
                 "game_guild_petition",
                 "game_guild_petition_signature",
             ],
-            "realm-owned guild state on Realm-core, which holds no Character rows; Character deletion does not reach it yet",
+            "realm-owned guild state on Realm-core, which holds no Character rows; the Gateway's character-gone reconciliation forgets a deleted Character",
         ),
         (
             &["game_guild_fee_decision"],

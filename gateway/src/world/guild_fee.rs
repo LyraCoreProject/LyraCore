@@ -144,7 +144,7 @@ impl GuildFeeStore for crate::stdb::Coordinator {
         let owner = match hold.terms {
             FeeTerms::Emblem(_) => None,
             FeeTerms::Charter { .. } => {
-                let facts = crate::stdb::Coordinator::guild_character_facts(self, actor_guid)
+                let facts = crate::stdb::Coordinator::guild_character_facts(self, actor_guid)?
                     .ok_or_else(|| anyhow!("Guild Charter owner {actor_guid} is unreadable"))?;
                 Some(CharterOwner {
                     name: facts.name,

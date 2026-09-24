@@ -418,7 +418,7 @@ pub fn disband(ctx: &ReducerContext, actor_guid: u64) -> Result<(), GuildRefusal
 /// The mechanics both `Disband` and a lone Guild Leader's `Leave` share (`cm:Guild.cpp:695-711`).
 /// DISBANDED goes out addressed, one row per member, before any row is deleted: the generic
 /// broadcast reads membership when its relay job runs, which is too late once the members are gone.
-fn disband_guild(ctx: &ReducerContext, guild_id: u32) {
+pub(super) fn disband_guild(ctx: &ReducerContext, guild_id: u32) {
     let member_guids: Vec<u64> = ctx
         .db
         .game_guild_member()

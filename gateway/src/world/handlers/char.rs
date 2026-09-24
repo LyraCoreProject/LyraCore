@@ -184,6 +184,14 @@ fn enter_world<St: WorldStore + ?Sized>(
     // A Fee Hold that an earlier session or a Transfer left behind is finished here, on the Home
     // Shard that holds the Character now. The purse change reaches the client through its entity.
     crate::world::guild_fee::redrive(store, character_guid);
+    // A Guild Charter left in the bags after its Petition closed is destroyed once the Fee Hold is
+    // finished, so it no longer blocks the next Charter purchase.
+    let charters: Vec<u64> = items
+        .iter()
+        .filter(|item| item.entry == lyracore_shared::guild::GUILD_CHARTER_ENTRY)
+        .map(|item| item.guid)
+        .collect();
+    super::destroy_inert_charters(store, character_guid, &charters);
     // A Reward Letter or a send that an earlier session left as Escrow on this Home Shard is
     // delivered here, so a Gateway restart after a turn-in loses no letter.
     crate::world::mail::redrive(store, character_guid);
@@ -298,10 +306,29 @@ pub(crate) fn handle_char<St: WorldStore + ?Sized>(
         // Character deletion. Per the wire doc SMSG_CHAR_DELETE alone updates the
         // character-select screen — no re-sent CMSG_CHAR_ENUM needed. Ownership is enforced module-
         // side; a failure is NOT session-fatal, same treatment as CMSG_CHAR_CREATE above.
+        //
+        // A Guild Leader is not deleted: 1.12 answers CHAR_DELETE_FAILED, the same 0x3A mangos sends
+        // as FAILED_GUILD_LEADER (`cm:CharacterHandler.cpp:540-546`). Realm-core holds the Guild and
+        // the Home Shard cannot read it, so the Gateway asks first. An unreadable answer deletes
+        // nothing either.
         ClientOpcodeMessage::CMSG_CHAR_DELETE(d) => {
-            let outcome = store
-                .delete_character(conn.account_id, d.guid.guid())
-                .unwrap_or(codec::CharDeleteOutcome::Failed);
+            let character_guid = d.guid.guid();
+            let outcome = match super::leads_a_guild(store, character_guid) {
+                Ok(false) => store
+                    .delete_character(conn.account_id, character_guid)
+                    .unwrap_or(codec::CharDeleteOutcome::Failed),
+                Ok(true) => {
+                    log::info!("world: Guild Leader {character_guid} is not deleted");
+                    codec::CharDeleteOutcome::Failed
+                }
+                Err(error) => {
+                    log::warn!(
+                        "world: Guild Leader check for {character_guid} failed, not deleted: \
+                         {error:#}"
+                    );
+                    codec::CharDeleteOutcome::Failed
+                }
+            };
             send(
                 tx,
                 Outbound::One(ServerOpcodeMessage::SMSG_CHAR_DELETE(

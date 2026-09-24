@@ -101,18 +101,18 @@ impl Drop for TopologyEnv {
 fn reconciliation_is_idle(coordinator: &Coordinator) -> bool {
     !coordinator
         .1
-        .party_reconciliation_requested
+        .deleted_character_reconciliation_requested
         .load(Ordering::Acquire)
         && !coordinator
             .1
-            .party_reconciliation_running
+            .deleted_character_reconciliation_running
             .load(Ordering::Acquire)
 }
 
 fn reconciliation_is_running(coordinator: &Coordinator) -> bool {
     coordinator
         .1
-        .party_reconciliation_running
+        .deleted_character_reconciliation_running
         .load(Ordering::Acquire)
 }
 

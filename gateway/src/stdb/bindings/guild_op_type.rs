@@ -65,6 +65,8 @@ pub enum GuildOp {
     TurnInPetition(u64),
 
     ClosePetition(u32),
+
+    ForgetDeletedCharacter,
 }
 
 impl __sdk::InModule for GuildOp {

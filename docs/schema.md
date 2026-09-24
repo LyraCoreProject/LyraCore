@@ -385,7 +385,8 @@ Every mail a bid, buyout, expiry, Cancellation or refused listing sends is an Au
 
 ### Guild state (`module/src/guild/mod.rs`)
 
-Seven private tables hold every guild fact on Realm-core. World Shards hold none. `game_guild` is one
+Eight private tables on Realm-core hold every guild fact; the ninth, the Fee Hold below, holds
+copper on the payer's Home Shard. `game_guild` is one
 Guild: its name, a unique lower-case `name_key`, the leader, the team fixed at founding, the MOTD,
 the info text and the emblem. `game_guild_rank` holds the five to ten Guild Ranks of each Guild with
 their Rank Rights. `game_guild_member` is keyed by Character guid, so a Character is in at most one
@@ -399,7 +400,13 @@ name, its owner (at most one Petition each), the owner's team and the Guild Char
 stands for it. `game_guild_petition_signature` holds its Signatures, keyed by
 `petition_signature_key(petition_id, slot)` for slots 0 to 8, so the Gateway reads a Petition's
 Signatures by key. Turn-in deletes both and founds the Guild in the same transaction.
-`realm_guild_op` runs every guild op; its typed `GuildOp` gets one variant per op.
+`realm_guild_op` runs every guild op; its typed `GuildOp` gets one variant per op, appended at the
+end because BSATN encodes a variant by its position.
+Realm-core holds no Character rows, so no delete sweep reaches these tables. The Gateway's
+character-gone reconciliation sends `ForgetDeletedCharacter` for each member, Petition owner and
+signer that no World Shard holds, and the Module removes that Character's invites, membership,
+Petition and Signatures. A deleted Guild Leader's Guild passes to the highest Guild Rank, earliest
+join first, and disbands when nobody is left.
 PLAYER_GUILDID and PLAYER_GUILDRANK are not stored anywhere. The Gateway projects them from
 `game_guild_member`. The Gateway also projects a Guild Charter's Petition id into its
 ITEM_FIELD_ENCHANTMENT; no Shard stamps the item.
@@ -413,7 +420,9 @@ and is never reaped. The Gateway drives `gw_guild_fee_hold`, `realm_guild_fee_de
 `gw_guild_fee_finish` in that order. The decide and the finish are idempotent on the operation id;
 the Gateway mints a new id for each hold and never replays one, and the finish deletes the Hold
 last. A Guild Charter purchase creates the Charter in the hold, opens its Petition in the decision,
-and on a refusal destroys the Charter and refunds the copper only while the payer still holds it.
+and on a refusal destroys the Charter and refunds the copper only while the payer still holds it. A
+refund that does not fit in the purse follows the auction rule: the purse takes what fits and the
+rest goes out as Mail Escrow in the finish's own transaction.
 
 ### Riding data (`module/src/skill.rs`, `module/src/skilldata.rs`, `module/src/trainer.rs`)
 

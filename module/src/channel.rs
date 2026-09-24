@@ -13,7 +13,7 @@ use spacetimedb::{reducer, table, ReducerContext, SpacetimeType, Table, Timestam
 
 use lyracore_shared::channel::{
     channel_flag, channel_name, channel_op, check_password, classify, member_flag, notice,
-    ChannelName, ChannelRefusal,
+    ChannelName, ChannelRefusal, GUILD_RECRUITMENT_ID,
 };
 use lyracore_shared::chat::ChatRefusal;
 use lyracore_shared::faction::team_for_race;
@@ -201,6 +201,15 @@ fn join(
 ) -> Result<(), ChannelRefusal> {
     let name = channel_name(&request.channel_name)?;
     check_password(&request.password)?;
+    // A Guild member stays out of GuildRecruitment and hears nothing about it. mangos tests the
+    // channel's wire flags 0x38, which only GuildRecruitment carries (cm:Channel.cpp:94-95). The
+    // test runs before the channel is found or created, so the committed Ok leaves no empty
+    // channel behind. mangos runs it after the ban test; a banned Guild member hears silence here.
+    if classify(&name.display).is_some_and(|builtin| builtin.id == GUILD_RECRUITMENT_ID)
+        && crate::guild::member(ctx, joiner).is_some()
+    {
+        return Ok(());
+    }
     let channel = find(ctx, team, &name.key).unwrap_or_else(|| create(ctx, team, name));
     if member_of(ctx, channel.channel_id, joiner).is_some() {
         // Built-in channels answer a repeat join with nothing (cm:Channel.cpp:64-72).
