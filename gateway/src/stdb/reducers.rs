@@ -4284,6 +4284,38 @@ impl Coordinator {
             }),
             GuildRequest::AddRank { name } => GuildOp::AddRank(name),
             GuildRequest::DeleteRank => GuildOp::DeleteRank,
+            GuildRequest::SignPetition {
+                charter_item_guid,
+                actor_name,
+                actor_team,
+            } => GuildOp::SignPetition(GuildPetitionSign {
+                charter_item_guid,
+                actor_name,
+                actor_team,
+            }),
+            GuildRequest::OfferPetition {
+                charter_item_guid,
+                target_guid,
+                target_team,
+            } => GuildOp::OfferPetition(GuildPetitionOffer {
+                charter_item_guid,
+                target_guid,
+                target_team,
+            }),
+            GuildRequest::DeclinePetition { charter_item_guid } => {
+                GuildOp::DeclinePetition(charter_item_guid)
+            }
+            GuildRequest::RenamePetition {
+                charter_item_guid,
+                name,
+            } => GuildOp::RenamePetition(GuildPetitionRename {
+                charter_item_guid,
+                name,
+            }),
+            GuildRequest::TurnInPetition { charter_item_guid } => {
+                GuildOp::TurnInPetition(charter_item_guid)
+            }
+            GuildRequest::ClosePetition { petition_id } => GuildOp::ClosePetition(petition_id),
         };
         let result = call_reducer!(
             self.0.call_pipe().conn.reducers,
@@ -4301,32 +4333,37 @@ impl Coordinator {
 }
 
 impl Coordinator {
-    /// `gw_guild_fee_hold` on THIS handle, the actor's Home Shard, under a fresh operation id. A
-    /// tagged Refusal answers `Ok(Err(_))`.
+    /// `gw_guild_fee_hold` on THIS handle, the actor's Home Shard, under a fresh operation id, then
+    /// the Hold once this handle's cache shows it: the hold mints a Guild Charter's guid. A tagged
+    /// Refusal answers `Ok(Err(_))`. The call is made once per operation id and never retried.
     pub(crate) fn hold_guild_fee(
         &self,
         actor_guid: u64,
         request: guild_fee::FeeRequest,
     ) -> Result<Result<guild_fee::FeeHold, GuildRefusal>> {
         let operation_id = next_operation_id()?;
-        let guild_fee::FeeRequest::Emblem { npc_guid, emblem } = request;
-        let result = call_reducer!(
-            self.0.call_pipe().conn.reducers,
-            "gw_guild_fee_hold",
-            gw_guild_fee_hold_then(
-                operation_id,
-                self.session_actor(actor_guid),
+        let request = match request {
+            guild_fee::FeeRequest::Emblem { npc_guid, emblem } => {
                 GuildFeeRequest::Emblem(GuildEmblemPurchase {
                     npc_guid,
                     emblem: guild_emblem(emblem),
                 })
-            )
+            }
+            guild_fee::FeeRequest::Charter { npc_guid, name } => {
+                GuildFeeRequest::Charter(GuildCharterPurchase { npc_guid, name })
+            }
+        };
+        let result = call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "gw_guild_fee_hold",
+            gw_guild_fee_hold_then(operation_id, self.session_actor(actor_guid), request)
         );
         match result {
-            Ok(()) => Ok(Ok(guild_fee::FeeHold {
-                operation_id,
-                terms: guild_fee::FeeTerms::Emblem(emblem),
-            })),
+            Ok(()) => wait_for_cache_row(operation_id, "guild Fee Hold", || {
+                self.guild_fee_hold_row(actor_guid)
+                    .filter(|hold| hold.operation_id == operation_id)
+            })
+            .map(Ok),
             Err(error) => match reducer_refusal_reason(&error).and_then(GuildRefusal::parse_tag) {
                 Some(refusal) => Ok(Err(refusal)),
                 None => Err(error),
@@ -4335,26 +4372,58 @@ impl Coordinator {
     }
 
     /// `realm_guild_fee_decide` on THIS handle, Realm-core, then the decision once this handle's
-    /// cache shows it. The reducer is idempotent, so a re-drive calls it again.
+    /// cache shows it. The reducer is idempotent, so a re-drive calls it again. A Charter needs
+    /// `owner`, the facts Realm-core cannot read.
     pub(crate) fn decide_guild_fee(
         &self,
         actor_guid: u64,
         hold: guild_fee::FeeHold,
+        owner: Option<guild_fee::CharterOwner>,
     ) -> Result<guild_fee::FeeOutcome> {
-        let guild_fee::FeeTerms::Emblem(emblem) = hold.terms;
+        let terms = match (hold.terms, owner) {
+            (guild_fee::FeeTerms::Emblem(emblem), _) => GuildFeeTerms::Emblem(guild_emblem(emblem)),
+            (
+                guild_fee::FeeTerms::Charter {
+                    charter_item_guid,
+                    name,
+                },
+                Some(owner),
+            ) => GuildFeeTerms::Charter(GuildCharterTerms {
+                charter_item_guid,
+                name,
+                payer_name: owner.name,
+                payer_team: owner.team,
+            }),
+            (guild_fee::FeeTerms::Charter { .. }, None) => {
+                return Err(anyhow!(
+                    "Guild Charter decision {} has no owner facts",
+                    hold.operation_id
+                ));
+            }
+        };
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "realm_guild_fee_decide",
-            realm_guild_fee_decide_then(
-                hold.operation_id,
-                self.session_actor(actor_guid),
-                GuildFeeTerms::Emblem(guild_emblem(emblem))
-            )
+            realm_guild_fee_decide_then(hold.operation_id, self.session_actor(actor_guid), terms)
         )?;
         let decision = wait_for_cache_row(hold.operation_id, "guild fee decision", || {
             self.guild_fee_decision_row(hold.operation_id)
         })?;
         fee_outcome(&decision)
+    }
+
+    /// `gw_destroy_guild_charter` on THIS handle, the actor's Home Shard. A Charter already gone
+    /// is Ok.
+    pub(crate) fn destroy_guild_charter(
+        &self,
+        actor_guid: u64,
+        charter_item_guid: u64,
+    ) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "gw_destroy_guild_charter",
+            gw_destroy_guild_charter_then(self.session_actor(actor_guid), charter_item_guid)
+        )
     }
 
     /// `gw_guild_fee_finish` on THIS handle, the actor's Home Shard.

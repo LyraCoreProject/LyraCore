@@ -4,17 +4,15 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
-use super::guild_charter_purchase_type::GuildCharterPurchase;
-use super::guild_emblem_purchase_type::GuildEmblemPurchase;
-
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
-pub enum GuildFeeRequest {
-    Emblem(GuildEmblemPurchase),
-
-    Charter(GuildCharterPurchase),
+pub struct GuildCharterTerms {
+    pub charter_item_guid: u64,
+    pub name: String,
+    pub payer_name: String,
+    pub payer_team: u32,
 }
 
-impl __sdk::InModule for GuildFeeRequest {
+impl __sdk::InModule for GuildCharterTerms {
     type Module = super::RemoteModule;
 }

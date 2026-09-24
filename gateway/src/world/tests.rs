@@ -319,6 +319,10 @@ struct InMemoryStore {
     guild_memberships: Vec<codec::GuildMemberView>,
     /// A Fee Hold left on this Home Shard. Fee steps are recorded in `calls` as `guild_fee_<step>`.
     guild_fee_hold: std::sync::Mutex<Option<crate::world::guild_fee::FeeHold>>,
+    /// Realm-core Petitions.
+    guild_petitions: Vec<codec::PetitionView>,
+    /// Guild Charters the logged-in Character holds on this Home Shard.
+    held_charters: Vec<u64>,
     /// WORLDPORT_ACK gate: true = entity present -> a spurious ack is ignored;
     /// false (derive-Default) = absent -> a genuine transfer is pending.
     entity_in_world: bool,
@@ -4358,6 +4362,12 @@ impl GuildActionStore for InMemoryStore {
             GuildRequest::EditRank { .. } => "guild_op:EditRank",
             GuildRequest::AddRank { .. } => "guild_op:AddRank",
             GuildRequest::DeleteRank => "guild_op:DeleteRank",
+            GuildRequest::SignPetition { .. } => "guild_op:SignPetition",
+            GuildRequest::OfferPetition { .. } => "guild_op:OfferPetition",
+            GuildRequest::DeclinePetition { .. } => "guild_op:DeclinePetition",
+            GuildRequest::RenamePetition { .. } => "guild_op:RenamePetition",
+            GuildRequest::TurnInPetition { .. } => "guild_op:TurnInPetition",
+            GuildRequest::ClosePetition { .. } => "guild_op:ClosePetition",
         });
         Ok(GuildOutcome::Ran)
     }
@@ -4365,12 +4375,47 @@ impl GuildActionStore for InMemoryStore {
     fn guild_npc_refuses(&self, _npc_guid: u64, _actor_guid: u64) -> Result<bool> {
         Ok(false)
     }
+
+    fn guild_petition_of_charter(
+        &self,
+        charter_item_guid: u64,
+    ) -> Result<Option<codec::PetitionView>> {
+        Ok(self
+            .guild_petitions
+            .iter()
+            .find(|petition| petition.charter_item_guid == charter_item_guid)
+            .cloned())
+    }
+
+    fn guild_petition_of_owner(&self, owner_guid: u64) -> Result<Option<codec::PetitionView>> {
+        Ok(self
+            .guild_petitions
+            .iter()
+            .find(|petition| petition.owner_guid == owner_guid)
+            .cloned())
+    }
+
+    fn guild_name_taken(&self, name: &str) -> Result<bool> {
+        Ok(self
+            .guilds
+            .iter()
+            .any(|guild| guild.name.eq_ignore_ascii_case(name)))
+    }
+
+    fn guild_holds_charter(&self, _actor_guid: u64, charter_item_guid: u64) -> Result<bool> {
+        Ok(self.held_charters.contains(&charter_item_guid))
+    }
+
+    fn guild_destroy_charter(&self, _actor_guid: u64, _charter_item_guid: u64) -> Result<()> {
+        self.rec("guild_destroy_charter");
+        Ok(())
+    }
 }
 
 /// Realm-core refuses every fee: the socket tests only watch the steps run.
 impl crate::world::guild_fee::GuildFeeStore for InMemoryStore {
     fn guild_fee_held(&self, _actor_guid: u64) -> Result<Option<crate::world::guild_fee::FeeHold>> {
-        Ok(*self.guild_fee_hold.lock().unwrap())
+        Ok(self.guild_fee_hold.lock().unwrap().clone())
     }
 
     fn guild_fee_hold(
@@ -5502,6 +5547,33 @@ fn guild_query_answers_at_character_select() {
     server.join().unwrap();
 }
 
+/// Write one request that answers its actor nothing, then a sentinel request with a guaranteed
+/// reply, and block for that reply. This is more than pacing: `enter_world` drains a FIXED packet
+/// count that knows nothing about the Guild MOTD event `guild_world_entry` sends a fresh-login
+/// Guild member (see its own doc comment), so one packet can still be unread in the client's
+/// kernel buffer. Reading for a sentinel discards it along the way. Dropping the client with it
+/// still queued would close with unread bytes, which the kernel reports to the server as a reset,
+/// not a clean EOF (`enter_world`'s doc comment names this exact failure shape). The sentinel is
+/// CMSG_PLAYED_TIME, which replies only when the store has a Character row for the caller.
+fn sync(
+    client: &mut UnixStream,
+    enc: &mut EncrypterHalf,
+    dec: &mut DecrypterHalf,
+    write: impl FnOnce(&mut UnixStream, &mut EncrypterHalf),
+) {
+    write(&mut *client, &mut *enc);
+    CMSG_PLAYED_TIME {}
+        .write_encrypted_client(&mut *client, &mut *enc)
+        .unwrap();
+    loop {
+        if let ServerOpcodeMessage::SMSG_PLAYED_TIME(_) =
+            ServerOpcodeMessage::read_encrypted(&mut *client, &mut *dec).unwrap()
+        {
+            break;
+        }
+    }
+}
+
 /// Character 1 as a member of Guild 7 at rank 3.
 fn guild_member_store() -> InMemoryStore {
     InMemoryStore {
@@ -5602,33 +5674,6 @@ fn every_membership_opcode_reaches_its_durable_request() {
         ..tester_store(7)
     });
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
-
-    // A successful membership op answers its actor nothing, so each write below is followed by a
-    // sentinel request with a guaranteed reply, and a read that blocks for it. This is more than
-    // pacing: `enter_world` drains a FIXED packet count that knows nothing about the Guild MOTD
-    // event `guild_world_entry` sends a fresh-login Guild member (see its own doc comment), so one
-    // packet is still unread in the client's kernel buffer at this point. Reading for a sentinel
-    // discards it along the way; dropping the client with it still queued would instead close
-    // with unread bytes, which the kernel reports to the server as a reset, not a clean EOF
-    // (`enter_world`'s doc comment names this exact failure shape).
-    fn sync(
-        client: &mut UnixStream,
-        enc: &mut EncrypterHalf,
-        dec: &mut DecrypterHalf,
-        write: impl FnOnce(&mut UnixStream, &mut EncrypterHalf),
-    ) {
-        write(&mut *client, &mut *enc);
-        CMSG_PLAYED_TIME {}
-            .write_encrypted_client(&mut *client, &mut *enc)
-            .unwrap();
-        loop {
-            if let ServerOpcodeMessage::SMSG_PLAYED_TIME(_) =
-                ServerOpcodeMessage::read_encrypted(&mut *client, &mut *dec).unwrap()
-            {
-                break;
-            }
-        }
-    }
 
     sync(&mut client, &mut c_enc, &mut c_dec, |c, e| {
         CMSG_GUILD_INVITE {
@@ -5808,33 +5853,6 @@ fn the_settings_opcodes_reach_their_dispatch_entries_over_the_socket() {
         ..guild_member_store()
     });
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
-
-    // A successful settings op answers its actor nothing, so each write below is followed by a
-    // sentinel request with a guaranteed reply, and a read that blocks for it. This is more than
-    // pacing: `enter_world` drains a FIXED packet count that knows nothing about the Guild MOTD
-    // event `guild_world_entry` sends a fresh-login Guild member (see its own doc comment), so one
-    // packet is still unread in the client's kernel buffer at this point. Reading for a sentinel
-    // discards it along the way; dropping the client with it still queued would instead close
-    // with unread bytes, which the kernel reports to the server as a reset, not a clean EOF
-    // (`enter_world`'s doc comment names this exact failure shape).
-    fn sync(
-        client: &mut UnixStream,
-        enc: &mut EncrypterHalf,
-        dec: &mut DecrypterHalf,
-        write: impl FnOnce(&mut UnixStream, &mut EncrypterHalf),
-    ) {
-        write(&mut *client, &mut *enc);
-        CMSG_PLAYED_TIME {}
-            .write_encrypted_client(&mut *client, &mut *enc)
-            .unwrap();
-        loop {
-            if let ServerOpcodeMessage::SMSG_PLAYED_TIME(_) =
-                ServerOpcodeMessage::read_encrypted(&mut *client, &mut *dec).unwrap()
-            {
-                break;
-            }
-        }
-    }
 
     sync(&mut client, &mut c_enc, &mut c_dec, |c, e| {
         wow_world_messages::vanilla::CMSG_GUILD_MOTD {
@@ -6677,6 +6695,7 @@ fn login_with_resident_items_and_reputation_emits_no_gain_feedback() {
             container_slots: 0,
             random_property_id: 0,
             item_text_id: 0,
+            enchantment: 0,
         }],
         reputations: vec![(19, 3175, false)],
         ..tester_store(7)
@@ -8012,6 +8031,7 @@ fn quest_choose_reward_relays_inventory_before_completion_over_the_cipher() {
         container_slots: 0,
         random_property_id: 0,
         item_text_id: 0,
+        enchantment: 0,
     };
     s.turn_in_reward_item = Some(reward_item.clone());
     let store = std::sync::Arc::new(s);
@@ -8273,6 +8293,37 @@ fn gossip_select_on_an_imported_banker_option_opens_the_bank_window() {
     match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
         ServerOpcodeMessage::SMSG_SHOW_BANK(p) => assert_eq!(p.guid.guid(), 90),
         other => panic!("expected SMSG_SHOW_BANK, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+}
+
+#[test]
+fn gossip_select_on_a_petitioner_option_opens_the_charter_list() {
+    use lyracore_shared::constants::gossip_option;
+    let mut s = quest_store();
+    s.gossip_opts = vec![opt(0, "How do I form a guild?", gossip_option::PETITIONER)];
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+    gossip_hello(&mut client, &mut c_enc, &mut c_dec, 90);
+    CMSG_GOSSIP_SELECT_OPTION {
+        guid: Guid::new(90),
+        gossip_list_id: 0,
+        unknown: None,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE => {}
+        other => panic!("expected SMSG_GOSSIP_COMPLETE, got {other}"),
+    }
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_PETITION_SHOWLIST(list) => {
+            assert_eq!(list.npc.guid(), 90);
+            assert_eq!(list.petitions[0].charter_entry, 5863);
+            assert_eq!(list.petitions[0].guild_charter_cost, 1000);
+        }
+        other => panic!("expected SMSG_PETITION_SHOWLIST, got {other}"),
     }
     drop(client);
     server.join().unwrap();
@@ -12414,4 +12465,163 @@ fn closing_a_world_session_interrupts_a_full_socket_without_draining_its_queue()
         .is_err());
     assert!(matches!(queued.try_recv().unwrap(), Outbound::Raw { .. }));
     writer.join().unwrap();
+}
+
+/// Every petition opcode reaches its dispatch entry over a real encrypted socket. Character 1,
+/// outside any Guild, owns Petition 42 and holds its Guild Charter; Character 2 is live.
+#[test]
+fn every_petition_opcode_reaches_its_dispatch_entry_over_the_socket() {
+    use wow_world_messages::vanilla::{
+        CMSG_OFFER_PETITION, CMSG_PETITION_BUY, CMSG_PETITION_QUERY, CMSG_PETITION_SHOWLIST,
+        CMSG_PETITION_SHOW_SIGNATURES, CMSG_PETITION_SIGN, CMSG_TURN_IN_PETITION,
+        MSG_PETITION_DECLINE, MSG_PETITION_RENAME,
+    };
+    const CHARTER: u64 = 0x4000_0000_0000_0101;
+    let store = std::sync::Arc::new(InMemoryStore {
+        login_entity: Some(warrior_entity()),
+        characters: vec![
+            codec::CharacterView {
+                guid: 1,
+                name: "Warrior".into(),
+                ..Default::default()
+            },
+            codec::CharacterView {
+                guid: 2,
+                name: "Target".into(),
+                ..Default::default()
+            },
+        ],
+        guild_petitions: vec![codec::PetitionView {
+            petition_id: 42,
+            charter_item_guid: CHARTER,
+            owner_guid: 1,
+            name: "Night Watch".into(),
+            signers: vec![2],
+        }],
+        held_charters: vec![CHARTER],
+        ..tester_store(7)
+    });
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+    let mut next =
+        |client: &mut UnixStream| ServerOpcodeMessage::read_encrypted(client, &mut c_dec).unwrap();
+
+    CMSG_PETITION_SHOWLIST {
+        guid: Guid::new(90),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match next(&mut client) {
+        ServerOpcodeMessage::SMSG_PETITION_SHOWLIST(list) => assert_eq!(list.npc.guid(), 90),
+        other => panic!("expected SMSG_PETITION_SHOWLIST, got {other}"),
+    }
+    CMSG_PETITION_QUERY {
+        guild_id: 42,
+        petition: Guid::new(CHARTER),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match next(&mut client) {
+        ServerOpcodeMessage::SMSG_PETITION_QUERY_RESPONSE(query) => {
+            assert_eq!(
+                (query.petition_id, query.guild_name.as_str()),
+                (42, "Night Watch")
+            );
+        }
+        other => panic!("expected SMSG_PETITION_QUERY_RESPONSE, got {other}"),
+    }
+    CMSG_PETITION_SHOW_SIGNATURES {
+        item: Guid::new(CHARTER),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match next(&mut client) {
+        ServerOpcodeMessage::SMSG_PETITION_SHOW_SIGNATURES(window) => {
+            assert_eq!(window.signatures.len(), 1);
+            assert_eq!(window.signatures[0].signer, Guid::new(2));
+        }
+        other => panic!("expected SMSG_PETITION_SHOW_SIGNATURES, got {other}"),
+    }
+    MSG_PETITION_RENAME {
+        petition: Guid::new(CHARTER),
+        new_name: "Day Watch".into(),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match next(&mut client) {
+        ServerOpcodeMessage::MSG_PETITION_RENAME(rename) => {
+            assert_eq!(rename.new_name, "Day Watch")
+        }
+        other => panic!("expected MSG_PETITION_RENAME, got {other}"),
+    }
+
+    sync(&mut client, &mut c_enc, &mut c_dec, |c, e| {
+        CMSG_OFFER_PETITION {
+            petition: Guid::new(CHARTER),
+            target: Guid::new(2),
+        }
+        .write_encrypted_client(c, e)
+        .unwrap();
+    });
+    sync(&mut client, &mut c_enc, &mut c_dec, |c, e| {
+        CMSG_PETITION_SIGN {
+            petition: Guid::new(CHARTER),
+            unknown1: 0,
+        }
+        .write_encrypted_client(c, e)
+        .unwrap();
+    });
+    sync(&mut client, &mut c_enc, &mut c_dec, |c, e| {
+        MSG_PETITION_DECLINE {
+            petition: Guid::new(CHARTER),
+        }
+        .write_encrypted_client(c, e)
+        .unwrap();
+    });
+    // The buyer still holds the Charter of its open Petition. mangos is silent; no copper moves.
+    sync(&mut client, &mut c_enc, &mut c_dec, |c, e| {
+        CMSG_PETITION_BUY {
+            npc: Guid::new(90),
+            name: "Night Watch".into(),
+            ..Default::default()
+        }
+        .write_encrypted_client(c, e)
+        .unwrap();
+    });
+
+    CMSG_TURN_IN_PETITION {
+        petition: Guid::new(CHARTER),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_GUILD_COMMAND_RESULT(result) => {
+            assert_eq!(result.string, "Night Watch");
+        }
+        other => panic!("expected SMSG_GUILD_COMMAND_RESULT, got {other}"),
+    }
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_TURN_IN_PETITION_RESULTS(result) => assert_eq!(
+            result.result,
+            wow_world_messages::vanilla::PetitionResult::Ok
+        ),
+        other => panic!("expected SMSG_TURN_IN_PETITION_RESULTS, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+
+    let calls = recorded(&store);
+    for op in [
+        "guild_op:RenamePetition",
+        "guild_op:OfferPetition",
+        "guild_op:SignPetition",
+        "guild_op:DeclinePetition",
+        "guild_op:TurnInPetition",
+    ] {
+        assert!(calls.contains(&op.to_string()), "{op} never ran: {calls:?}");
+    }
+    assert!(
+        position(&calls, "guild_op:TurnInPetition") < position(&calls, "guild_destroy_charter"),
+        "the Guild is founded before the Charter is destroyed"
+    );
+    assert!(!calls.contains(&"guild_fee_hold".to_string()));
 }

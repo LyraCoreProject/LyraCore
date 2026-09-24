@@ -1,11 +1,12 @@
 //! Guild wire mapping: the query response, roster, guild info, command result, the raw
-//! SMSG_GUILD_EVENT and the Guild Projection values update.
+//! SMSG_GUILD_EVENT, the Guild Projection values update and the petition messages.
 
 use super::*;
 use wow_world_messages::vanilla::{
-    GuildCommand, GuildCommandResult, GuildMember, GuildMember_GuildMemberStatus,
-    SMSG_GUILD_COMMAND_RESULT, SMSG_GUILD_INFO, SMSG_GUILD_INVITE, SMSG_GUILD_QUERY_RESPONSE,
-    SMSG_GUILD_ROSTER,
+    GuildCommand, GuildCommandResult, GuildMember, GuildMember_GuildMemberStatus, PetitionResult,
+    PetitionShowlist, PetitionSignature, SMSG_GUILD_COMMAND_RESULT, SMSG_GUILD_INFO,
+    SMSG_GUILD_INVITE, SMSG_GUILD_QUERY_RESPONSE, SMSG_GUILD_ROSTER, SMSG_PETITION_QUERY_RESPONSE,
+    SMSG_PETITION_SHOWLIST, SMSG_PETITION_SHOW_SIGNATURES, SMSG_PETITION_SIGN_RESULTS,
 };
 
 /// SMSG_GUILD_EVENT. gtker's vanilla type has no trailing guid, so the event is encoded raw.
@@ -213,6 +214,80 @@ pub fn build_guild_event_raw(kind: u8, strings: &[String], subject_guid: u64) ->
         body.extend_from_slice(&subject_guid.to_le_bytes());
     }
     (SMSG_GUILD_EVENT_OPCODE, body)
+}
+
+/// One open Petition as the Gateway reads it from Realm-core.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PetitionView {
+    pub petition_id: u32,
+    pub charter_item_guid: u64,
+    pub owner_guid: u64,
+    pub name: String,
+    /// The signers, in slot order. A lost Signature frees its slot for the next signer.
+    pub signers: Vec<u64>,
+}
+
+/// SMSG_PETITION_SHOWLIST: the one Guild Charter a Petitioner sells. The entry flag is 1, which the
+/// client needs to show the entry (`vm:src/game/Handlers/PetitionsHandler.cpp:495-500`).
+pub fn build_petition_showlist(npc_guid: u64) -> SMSG_PETITION_SHOWLIST {
+    use lyracore_shared::guild::{CHARTER_COST_COPPER, CHARTER_DISPLAY_ID, GUILD_CHARTER_ENTRY};
+    SMSG_PETITION_SHOWLIST {
+        npc: Guid::new(npc_guid),
+        petitions: vec![PetitionShowlist {
+            index: 1,
+            charter_entry: GUILD_CHARTER_ENTRY,
+            charter_display_id: CHARTER_DISPLAY_ID,
+            guild_charter_cost: CHARTER_COST_COPPER,
+            unknown1: 1,
+        }],
+    }
+}
+
+/// SMSG_PETITION_SHOW_SIGNATURES: the Charter, its owner, the Petition id and each signer with a
+/// zero word (`cm:PetitionsHandler.cpp:201-217`).
+pub fn build_petition_show_signatures(petition: &PetitionView) -> SMSG_PETITION_SHOW_SIGNATURES {
+    SMSG_PETITION_SHOW_SIGNATURES {
+        item: Guid::new(petition.charter_item_guid),
+        owner: Guid::new(petition.owner_guid),
+        petition: petition.petition_id,
+        signatures: petition
+            .signers
+            .iter()
+            .map(|signer| PetitionSignature {
+                signer: Guid::new(*signer),
+                unknown1: 0,
+            })
+            .collect(),
+    }
+}
+
+/// SMSG_PETITION_QUERY_RESPONSE: the id, owner and name, an empty body, flags 1, nine signatures
+/// minimum and maximum, and zero for every restriction (`cm:PetitionsHandler.cpp:260-279`).
+pub fn build_petition_query_response(petition: &PetitionView) -> SMSG_PETITION_QUERY_RESPONSE {
+    use lyracore_shared::guild::{MAX_PETITION_SIGNATURES, MIN_PETITION_SIGNATURES};
+    SMSG_PETITION_QUERY_RESPONSE {
+        petition_id: petition.petition_id,
+        charter_owner: Guid::new(petition.owner_guid),
+        guild_name: petition.name.clone(),
+        unknown_flags: 1,
+        minimum_signatures: MIN_PETITION_SIGNATURES as u32,
+        maximum_signatures: MAX_PETITION_SIGNATURES as u32,
+        ..SMSG_PETITION_QUERY_RESPONSE::default()
+    }
+}
+
+/// SMSG_PETITION_SIGN_RESULTS: the Charter, the signer and the result
+/// (`cm:PetitionsHandler.cpp:384-387`). gtker names the signer field `owner`.
+pub fn build_petition_sign_results(
+    charter_item_guid: u64,
+    signer_guid: u64,
+    result: PetitionResult,
+) -> SMSG_PETITION_SIGN_RESULTS {
+    SMSG_PETITION_SIGN_RESULTS {
+        petition: Guid::new(charter_item_guid),
+        owner: Guid::new(signer_guid),
+        result,
+    }
 }
 
 #[cfg(test)]
@@ -513,5 +588,113 @@ mod tests {
         let (opcode, body) =
             build_guild_event_raw(lyracore_shared::guild::event_kind::TABARD_CHANGED, &[], 0);
         assert_eq!((opcode, body), (0x0092, vec![9, 0]));
+    }
+
+    fn night_watch() -> PetitionView {
+        PetitionView {
+            petition_id: 0x2A,
+            charter_item_guid: 0x4000_0000_0000_0101,
+            owner_guid: 0x0102,
+            name: "Night Watch".into(),
+            signers: vec![0x0201, 0x0202],
+        }
+    }
+
+    /// `vm:src/game/Server/Packets/Petition.cpp:175-187`: the NPC guid, a u8 count, then index 1,
+    /// entry 5863, display 16161, cost 1000 and entry flag 1.
+    #[test]
+    fn petition_showlist_lists_the_guild_charter_at_ten_silver() {
+        let mut expected = 0xF130_0000_0000_0042u64.to_le_bytes().to_vec();
+        expected.push(1);
+        for word in [1u32, 5863, 16161, 1000, 1] {
+            expected.extend_from_slice(&word.to_le_bytes());
+        }
+        let message = ServerOpcodeMessage::SMSG_PETITION_SHOWLIST(Box::new(
+            build_petition_showlist(0xF130_0000_0000_0042),
+        ));
+        assert_eq!(server_body(message), (0x01BC, expected));
+    }
+
+    /// `cm:PetitionsHandler.cpp:201-217`: Charter guid, owner guid, u32 petition id, u8 count,
+    /// then each signer guid with a zero word.
+    #[test]
+    fn petition_show_signatures_lists_each_signer_with_a_zero_word() {
+        let mut expected = vec![0x01, 0x01, 0, 0, 0, 0, 0, 0x40];
+        expected.extend_from_slice(&[0x02, 0x01, 0, 0, 0, 0, 0, 0]);
+        expected.extend_from_slice(&[0x2A, 0, 0, 0]);
+        expected.push(2);
+        expected.extend_from_slice(&[0x01, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        expected.extend_from_slice(&[0x02, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        let message = ServerOpcodeMessage::SMSG_PETITION_SHOW_SIGNATURES(Box::new(
+            build_petition_show_signatures(&night_watch()),
+        ));
+        assert_eq!(server_body(message), (0x01BF, expected));
+    }
+
+    /// `cm:PetitionsHandler.cpp:260-279`.
+    #[test]
+    fn petition_query_response_matches_the_mangos_layout() {
+        let mut expected = vec![0x2A, 0, 0, 0];
+        expected.extend_from_slice(&[0x02, 0x01, 0, 0, 0, 0, 0, 0]);
+        expected.extend_from_slice(b"Night Watch\0");
+        // Empty body text, then flags 1, minimum 9 and maximum 9 signatures.
+        expected.push(0);
+        for word in [1u32, 9, 9] {
+            expected.extend_from_slice(&word.to_le_bytes());
+        }
+        // Deadline, issue date, guild id, classes and races: five zero words.
+        expected.extend_from_slice(&[0; 20]);
+        // Genders, a u16.
+        expected.extend_from_slice(&[0; 2]);
+        // Minimum and maximum level, choice text, number of choices: four zero words.
+        expected.extend_from_slice(&[0; 16]);
+        let message = ServerOpcodeMessage::SMSG_PETITION_QUERY_RESPONSE(Box::new(
+            build_petition_query_response(&night_watch()),
+        ));
+        assert_eq!(server_body(message), (0x01C7, expected));
+    }
+
+    /// `cm:PetitionsHandler.cpp:384-387`: Charter guid, signer guid, u32 result. ALREADY_SIGNED
+    /// is 1 (`cm:Guild.h:118-132`).
+    #[test]
+    fn petition_sign_results_carry_the_charter_the_signer_and_the_result() {
+        let mut expected = vec![0x01, 0x01, 0, 0, 0, 0, 0, 0x40];
+        expected.extend_from_slice(&[0x01, 0x02, 0, 0, 0, 0, 0, 0]);
+        expected.extend_from_slice(&[1, 0, 0, 0]);
+        let message =
+            ServerOpcodeMessage::SMSG_PETITION_SIGN_RESULTS(Box::new(build_petition_sign_results(
+                0x4000_0000_0000_0101,
+                0x0201,
+                PetitionResult::AlreadySigned,
+            )));
+        assert_eq!(server_body(message), (0x01C1, expected));
+    }
+
+    /// `cm:PetitionsHandler.cpp:631-633`: one u32 result. NEED_MORE is 4 (`cm:Guild.h:118-132`).
+    #[test]
+    fn turn_in_petition_results_are_one_word() {
+        use wow_world_messages::vanilla::SMSG_TURN_IN_PETITION_RESULTS;
+        let message =
+            ServerOpcodeMessage::SMSG_TURN_IN_PETITION_RESULTS(SMSG_TURN_IN_PETITION_RESULTS {
+                result: PetitionResult::NeedMore,
+            });
+        assert_eq!(server_body(message), (0x01C5, vec![4, 0, 0, 0]));
+    }
+
+    /// `cm:PetitionsHandler.cpp:49-73`: CMSG_PETITION_BUY carries the NPC guid, skips a u32 and a
+    /// u64, then the name, ten u32, a u16, a u8, the index and a last u32.
+    #[test]
+    fn petition_buy_reads_the_npc_and_the_name() {
+        let mut body = 0xF130_0000_0000_0042u64.to_le_bytes().to_vec();
+        body.extend_from_slice(&[0; 12]);
+        body.extend_from_slice(b"Night Watch\0");
+        body.extend_from_slice(&[0; 40 + 2 + 1]);
+        body.extend_from_slice(&[1, 0, 0, 0]);
+        body.extend_from_slice(&[0; 4]);
+        let ClientOpcodeMessage::CMSG_PETITION_BUY(buy) = client_packet(0x01BD, &body) else {
+            panic!("0x1BD is CMSG_PETITION_BUY");
+        };
+        assert_eq!(buy.npc.guid(), 0xF130_0000_0000_0042);
+        assert_eq!(buy.name, "Night Watch");
     }
 }

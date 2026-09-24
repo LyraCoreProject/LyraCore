@@ -1,11 +1,32 @@
 //! Guild cache reads. The guild tables are read on the Realm-core handle; Character facts are read
-//! across every World Shard. A Fee Hold is read on the payer's Home Shard.
+//! across every World Shard. A Fee Hold and a Guild Charter item are read on the payer's Home
+//! Shard.
 
 use spacetimedb_sdk::Table;
 
 use super::super::bindings::*;
 use super::super::connection::Coordinator;
 use crate::world::{guild_fee, CharacterFacts};
+
+/// A Petition with its signers, found by key: the SDK cache has no index on the Petition column.
+fn petition_view(db: &RemoteTables, row: GuildPetition) -> crate::codec::PetitionView {
+    use lyracore_shared::guild::{petition_signature_key, MAX_PETITION_SIGNATURES};
+    let signers = (0..MAX_PETITION_SIGNATURES)
+        .filter_map(|slot| {
+            db.game_guild_petition_signature()
+                .signature_key()
+                .find(&petition_signature_key(row.petition_id, slot))
+        })
+        .map(|signature| signature.signer_guid)
+        .collect();
+    crate::codec::PetitionView {
+        petition_id: row.petition_id,
+        charter_item_guid: row.charter_item_guid,
+        owner_guid: row.owner_guid,
+        name: row.name,
+        signers,
+    }
+}
 
 fn member_view(row: GuildMember) -> crate::codec::GuildMemberView {
     crate::codec::GuildMemberView {
@@ -190,12 +211,104 @@ impl Coordinator {
                     background_color: hold.background_color,
                 })
             }
+            lyracore_shared::guild::fee_kind::CHARTER => guild_fee::FeeTerms::Charter {
+                charter_item_guid: hold.charter_item_guid,
+                name: hold.charter_name,
+            },
             _ => return None,
         };
         Some(guild_fee::FeeHold {
             operation_id: hold.operation_id,
             terms,
         })
+    }
+
+    /// The open Petition of the Guild Charter `charter_item_guid` in THIS handle's cache. Call it
+    /// on the Realm-core handle.
+    pub(crate) fn guild_petition_of_charter(
+        &self,
+        charter_item_guid: u64,
+    ) -> Option<crate::codec::PetitionView> {
+        let guard = self.0.coord();
+        let db = &guard.conn.db;
+        let row = db
+            .game_guild_petition()
+            .charter_item_guid()
+            .find(&charter_item_guid)?;
+        Some(petition_view(db, row))
+    }
+
+    /// The Petition id of the Guild Charter `charter_item_guid` in THIS handle's cache. Call it on
+    /// the Realm-core handle.
+    pub(crate) fn charter_petition_id(&self, charter_item_guid: u64) -> Option<u32> {
+        self.0
+            .coord()
+            .conn
+            .db
+            .game_guild_petition()
+            .charter_item_guid()
+            .find(&charter_item_guid)
+            .map(|petition| petition.petition_id)
+    }
+
+    /// Fill each Guild Charter's ITEM_FIELD_ENCHANTMENT with its Petition id from the Realm-core
+    /// cache. Call it on the owner's Home Shard, with no cache guard held. A Charter whose
+    /// Petition is unreadable shows 0; the client then asks about no Petition.
+    pub(crate) fn project_charter_petitions(&self, items: &mut [crate::codec::ItemInstanceView]) {
+        use lyracore_shared::guild::GUILD_CHARTER_ENTRY;
+        if !items.iter().any(|item| item.entry == GUILD_CHARTER_ENTRY) {
+            return;
+        }
+        let Ok(realm) = self.realm_core() else {
+            return;
+        };
+        for item in items
+            .iter_mut()
+            .filter(|item| item.entry == GUILD_CHARTER_ENTRY)
+        {
+            item.enchantment = realm.charter_petition_id(item.guid).unwrap_or(0);
+        }
+    }
+
+    /// The open Petition `owner_guid` owns in THIS handle's cache. Call it on the Realm-core
+    /// handle.
+    pub(crate) fn guild_petition_of_owner(
+        &self,
+        owner_guid: u64,
+    ) -> Option<crate::codec::PetitionView> {
+        let guard = self.0.coord();
+        let db = &guard.conn.db;
+        let row = db.game_guild_petition().owner_guid().find(&owner_guid)?;
+        Some(petition_view(db, row))
+    }
+
+    /// Does a Guild in THIS handle's cache hold `name`, without regard to case? Call it on the
+    /// Realm-core handle.
+    pub(crate) fn guild_name_taken(&self, name: &str) -> bool {
+        self.0
+            .coord()
+            .conn
+            .db
+            .game_guild()
+            .name_key()
+            .find(&lyracore_shared::guild::name_key(name))
+            .is_some()
+    }
+
+    /// Does `actor_guid` hold the Guild Charter `charter_item_guid` in THIS handle's cache? Call it
+    /// on the actor's Home Shard.
+    pub(crate) fn holds_guild_charter(&self, actor_guid: u64, charter_item_guid: u64) -> bool {
+        self.0
+            .coord()
+            .conn
+            .db
+            .game_item_instance()
+            .guid()
+            .find(&charter_item_guid)
+            .is_some_and(|item| {
+                item.owner_guid == actor_guid
+                    && item.entry == lyracore_shared::guild::GUILD_CHARTER_ENTRY
+            })
     }
 
     /// Realm-core's fee decision for `operation_id` in THIS handle's cache. Call it on the

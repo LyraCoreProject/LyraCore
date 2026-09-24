@@ -1799,6 +1799,7 @@ fn item_create_object_is_item_typed_and_serializes() {
         container_slots: 0,
         random_property_id: 509_0101,
         item_text_id: 0,
+        enchantment: 0,
     };
     let msg = build_item_create_object(&inst);
     let mut buf = Vec::new();
@@ -1834,6 +1835,7 @@ fn a_copied_letters_create_block_carries_its_item_text_id() {
         container_slots: 0,
         random_property_id: 0,
         item_text_id: 7,
+        enchantment: 0,
     };
     match &build_item_create_object(&inst).objects[0] {
         Object::CreateObject2 {
@@ -3626,6 +3628,7 @@ fn item_create_object_bag_slots_build_a_container_with_num_slots() {
         container_slots: 8, // an 8-slot bag
         random_property_id: 509_0101,
         item_text_id: 0,
+        enchantment: 0,
     };
     let msg = build_item_create_object(&inst);
     let mut buf = Vec::new();

@@ -54,12 +54,12 @@ publish presents as an unrelated mid-session hang, not a loud "no such table".
 
 ## 2. Inventory
 
-**275 tables**, all of them in `module/src/**`: 128 public, 147 private. No table comes from a
+**278 tables**, all of them in `module/src/**`: 128 public, 150 private. No table comes from a
 package in this tree; `packages/example` is the only in-tree package and it declares none. Recount
 rather than trust the numbers below, which drift on every schema change:
 
 ```bash
-grep -rn '^#\[table(' module/src --include='*.rs' | wc -l   # 275 on 2026-09-24
+grep -rn '^#\[table(' module/src --include='*.rs' | wc -l   # 278 on 2026-09-24
 ```
 
 | Domain | Tables | Public | Where |
@@ -78,7 +78,7 @@ grep -rn '^#\[table(' module/src --include='*.rs' | wc -l   # 275 on 2026-09-24
 | GameObject | 9 | 6 | `gameobject.rs`, `go_model.rs` |
 | Loot | 12 | 6 | `loot/*` |
 | Group / party | 8 | 5 | `group.rs` |
-| Guild | 7 | 0 | `guild/mod.rs`, `guild/fee.rs`, `guild/membership.rs` |
+| Guild | 9 | 0 | `guild/mod.rs`, `guild/fee.rs`, `guild/membership.rs`, `guild/petition.rs` |
 | Instance / encounter | 7 | 1 | `instance.rs`, `encounter.rs` |
 | Sharding: region, transfer, load | 9 | 0 | `region.rs`, `transfer/mod.rs`, `load.rs` |
 | Realm-core | 2 | 0 | `realm_core.rs` |
@@ -385,7 +385,7 @@ Every mail a bid, buyout, expiry, Cancellation or refused listing sends is an Au
 
 ### Guild state (`module/src/guild/mod.rs`)
 
-Five private tables hold every guild fact on Realm-core. World Shards hold none. `game_guild` is one
+Seven private tables hold every guild fact on Realm-core. World Shards hold none. `game_guild` is one
 Guild: its name, a unique lower-case `name_key`, the leader, the team fixed at founding, the MOTD,
 the info text and the emblem. `game_guild_rank` holds the five to ten Guild Ranks of each Guild with
 their Rank Rights. `game_guild_member` is keyed by Character guid, so a Character is in at most one
@@ -394,9 +394,15 @@ Guild. Each member row keeps a name snapshot, so Guild Events and by-name ops ne
 a nonzero value addresses one Character, and the row carries its final strings.
 `game_guild_invite` (`module/src/guild/membership.rs`) is one pending offer per target Character,
 keyed by the target's guid; it is reaped on `INVITE_TTL_MICROS`, like `game_group_invite`.
+`game_guild_petition` (`module/src/guild/petition.rs`) is one open Petition: the proposed Guild's
+name, its owner (at most one Petition each), the owner's team and the Guild Charter item guid that
+stands for it. `game_guild_petition_signature` holds its Signatures, keyed by
+`petition_signature_key(petition_id, slot)` for slots 0 to 8, so the Gateway reads a Petition's
+Signatures by key. Turn-in deletes both and founds the Guild in the same transaction.
 `realm_guild_op` runs every guild op; its typed `GuildOp` gets one variant per op.
 PLAYER_GUILDID and PLAYER_GUILDRANK are not stored anywhere. The Gateway projects them from
-`game_guild_member`.
+`game_guild_member`. The Gateway also projects a Guild Charter's Petition id into its
+ITEM_FIELD_ENCHANTMENT; no Shard stamps the item.
 
 A guild operation that costs copper pays through a Fee Hold (`module/src/guild/fee.rs`).
 Private `game_guild_fee_hold` lives on the payer's Home Shard, keyed by the payer, so a Character
@@ -404,8 +410,10 @@ has at most one. It holds the copper and every input of the decision, travels wi
 Transfer, and makes `delete_character` refuse with `CHAR_HAS_GUILD_FEE_HOLD`. Private
 `game_guild_fee_decision` on Realm-core is the one decision per operation id, accepted or refused,
 and is never reaped. The Gateway drives `gw_guild_fee_hold`, `realm_guild_fee_decide` and
-`gw_guild_fee_finish` in that order; each is idempotent on the operation id, and the finish deletes
-the Hold last.
+`gw_guild_fee_finish` in that order. The decide and the finish are idempotent on the operation id;
+the Gateway mints a new id for each hold and never replays one, and the finish deletes the Hold
+last. A Guild Charter purchase creates the Charter in the hold, opens its Petition in the decision,
+and on a refusal destroys the Charter and refunds the copper only while the payer still holds it.
 
 ### Riding data (`module/src/skill.rs`, `module/src/skilldata.rs`, `module/src/trainer.rs`)
 

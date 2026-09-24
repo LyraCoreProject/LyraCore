@@ -153,8 +153,14 @@ pub(crate) mod character_owned_tripwire {
             "Realm-core Group authority shared by all members",
         ),
         (
-            &["game_guild", "game_guild_member", "game_guild_invite"],
-            "realm-owned guild state; deleted Characters are forgotten by the Gateway's character-gone reconciliation",
+            &[
+                "game_guild",
+                "game_guild_member",
+                "game_guild_invite",
+                "game_guild_petition",
+                "game_guild_petition_signature",
+            ],
+            "realm-owned guild state on Realm-core, which holds no Character rows; Character deletion does not reach it yet",
         ),
         (
             &["game_guild_fee_decision"],

@@ -1,15 +1,17 @@
 //! Guild family: the guild window reads, CMSG_GUILD_CREATE, the `.guild create` dot-command, the
-//! tabard designer, and the guild steps of world entry and exit. Every guild fact lives on
-//! Realm-core, so every read and Durable Request here goes there. The Gateway adds only the
-//! Character facts Realm-core cannot read: name, team, Realm Account, whether the Character is live,
-//! and the actor's GM level from its Home Shard. A guild fee moves through `guild_fee`.
+//! tabard designer, Petitions and their Guild Charters, and the guild steps of world entry and
+//! exit. Every guild fact lives on Realm-core, so every read and Durable Request here goes there.
+//! The Gateway adds only the Character facts Realm-core cannot read: name, team, Realm Account,
+//! whether the Character is live, the actor's GM level and whether it holds a Guild Charter, both
+//! from its Home Shard. A guild fee moves through `guild_fee`.
 
 use super::super::guild_fee::{self, GuildFeeStore};
 use super::super::*;
 use lyracore_shared::guild::{event_kind, has_right, rights, GuildRefusal, LEADER_RANK};
 use wow_world_messages::vanilla::{
-    GuildCommand, GuildCommandResult, GuildEmblemResult, MSG_SAVE_GUILD_EMBLEM_Client,
-    MSG_SAVE_GUILD_EMBLEM_Server, MSG_TABARDVENDOR_ACTIVATE,
+    BuyResult, GuildCommand, GuildCommandResult, GuildEmblemResult, MSG_SAVE_GUILD_EMBLEM_Client,
+    MSG_SAVE_GUILD_EMBLEM_Server, PetitionResult, MSG_PETITION_RENAME, MSG_TABARDVENDOR_ACTIVATE,
+    SMSG_BUY_FAILED, SMSG_TURN_IN_PETITION_RESULTS,
 };
 use wow_world_messages::Guid;
 
@@ -87,6 +89,29 @@ pub(crate) enum GuildRequest {
     AddRank { name: String },
     /// CMSG_GUILD_DEL_RANK.
     DeleteRank,
+    /// The actor signs the Petition of `charter_item_guid`.
+    SignPetition {
+        charter_item_guid: u64,
+        actor_name: String,
+        actor_team: u32,
+    },
+    /// The owner shows its Petition to the live Character `target_guid`.
+    OfferPetition {
+        charter_item_guid: u64,
+        target_guid: u64,
+        target_team: u32,
+    },
+    /// The actor declines to sign the Petition of `charter_item_guid`.
+    DeclinePetition { charter_item_guid: u64 },
+    /// The owner renames its Petition.
+    RenamePetition {
+        charter_item_guid: u64,
+        name: String,
+    },
+    /// The owner founds the Guild its Petition proposes.
+    TurnInPetition { charter_item_guid: u64 },
+    /// The owner drops its Petition.
+    ClosePetition { petition_id: u32 },
 }
 
 /// What Realm-core did with a guild Durable Request.
@@ -121,6 +146,21 @@ pub(crate) trait GuildActionStore: GuildFeeStore + Send + Sync {
     fn guild_op(&self, actor_guid: u64, request: GuildRequest) -> Result<GuildOutcome>;
     /// Does the NPC refuse the actor by faction? The one Gate a read path answers here.
     fn guild_npc_refuses(&self, npc_guid: u64, actor_guid: u64) -> Result<bool>;
+    /// The open Petition of the Guild Charter `charter_item_guid`.
+    fn guild_petition_of_charter(
+        &self,
+        charter_item_guid: u64,
+    ) -> Result<Option<codec::PetitionView>>;
+    /// The open Petition `owner_guid` owns.
+    fn guild_petition_of_owner(&self, owner_guid: u64) -> Result<Option<codec::PetitionView>>;
+    /// Does a Guild hold `name`, without regard to case?
+    fn guild_name_taken(&self, name: &str) -> Result<bool>;
+    /// Does the actor hold the Guild Charter `charter_item_guid`, read from THIS handle, the
+    /// actor's Home Shard?
+    fn guild_holds_charter(&self, actor_guid: u64, charter_item_guid: u64) -> Result<bool>;
+    /// Destroy a turned-in Guild Charter on THIS handle, the actor's Home Shard. A Charter
+    /// already gone is Ok.
+    fn guild_destroy_charter(&self, actor_guid: u64, charter_item_guid: u64) -> Result<()>;
 }
 
 impl GuildActionStore for crate::stdb::Coordinator {
@@ -165,6 +205,31 @@ impl GuildActionStore for crate::stdb::Coordinator {
 
     fn guild_npc_refuses(&self, npc_guid: u64, actor_guid: u64) -> Result<bool> {
         crate::stdb::Coordinator::npc_refuses_interaction(self, npc_guid, actor_guid)
+    }
+
+    fn guild_petition_of_charter(
+        &self,
+        charter_item_guid: u64,
+    ) -> Result<Option<codec::PetitionView>> {
+        Ok(self
+            .realm_core()?
+            .guild_petition_of_charter(charter_item_guid))
+    }
+
+    fn guild_petition_of_owner(&self, owner_guid: u64) -> Result<Option<codec::PetitionView>> {
+        Ok(self.realm_core()?.guild_petition_of_owner(owner_guid))
+    }
+
+    fn guild_name_taken(&self, name: &str) -> Result<bool> {
+        Ok(self.realm_core()?.guild_name_taken(name))
+    }
+
+    fn guild_holds_charter(&self, actor_guid: u64, charter_item_guid: u64) -> Result<bool> {
+        Ok(self.holds_guild_charter(actor_guid, charter_item_guid))
+    }
+
+    fn guild_destroy_charter(&self, actor_guid: u64, charter_item_guid: u64) -> Result<()> {
+        self.destroy_guild_charter(actor_guid, charter_item_guid)
     }
 }
 
@@ -267,6 +332,33 @@ pub(crate) fn dispatch_guild_action<St: GuildActionStore + ?Sized>(
             add_rank_outbound(store, player, add.rank_name)
         }
         ClientOpcodeMessage::CMSG_GUILD_DEL_RANK => delete_rank_outbound(store, player),
+        ClientOpcodeMessage::CMSG_PETITION_SHOWLIST(list) => {
+            petition_showlist_outbound(store, player, list.guid.guid())
+        }
+        ClientOpcodeMessage::CMSG_PETITION_BUY(buy) => {
+            petition_buy_outbound(store, player, buy.npc.guid(), buy.name)
+        }
+        ClientOpcodeMessage::CMSG_PETITION_SHOW_SIGNATURES(show) => {
+            show_signatures_outbound(store, player, show.item.guid())
+        }
+        ClientOpcodeMessage::CMSG_PETITION_QUERY(query) => {
+            petition_query_outbound(store, query.petition.guid())
+        }
+        ClientOpcodeMessage::MSG_PETITION_RENAME(rename) => {
+            rename_petition_outbound(store, player, rename.petition.guid(), rename.new_name)
+        }
+        ClientOpcodeMessage::CMSG_OFFER_PETITION(offer) => {
+            offer_petition_outbound(store, player, offer.petition.guid(), offer.target.guid())
+        }
+        ClientOpcodeMessage::CMSG_PETITION_SIGN(sign) => {
+            sign_petition_outbound(store, player, sign.petition.guid())
+        }
+        ClientOpcodeMessage::MSG_PETITION_DECLINE(decline) => {
+            decline_petition_outbound(store, player, decline.petition.guid())
+        }
+        ClientOpcodeMessage::CMSG_TURN_IN_PETITION(turn_in) => {
+            turn_in_petition_outbound(store, player, turn_in.petition.guid())
+        }
         other => return Ok(GuildActionOutcome::PassThrough(other)),
     };
     match outbound {
@@ -1106,6 +1198,388 @@ fn emblem_result(outcome: guild_fee::FeeOutcome) -> GuildEmblemResult {
     }
 }
 
+/// CMSG_PETITION_SHOWLIST (`cm:PetitionsHandler.cpp:636-678`). A read path, so only the faction
+/// refusal is answered here, silently. The NPC Gates run in the Fee Hold when the Charter is
+/// bought.
+fn petition_showlist_outbound<St: GuildActionStore + ?Sized>(
+    store: &St,
+    player: GuildActionPlayer,
+    npc_guid: u64,
+) -> Result<Vec<Outbound>> {
+    let Some(actor_guid) = player.self_guid else {
+        return Ok(Vec::new());
+    };
+    if store.guild_npc_refuses(npc_guid, actor_guid)? {
+        return Ok(Vec::new());
+    }
+    Ok(vec![petition_showlist(npc_guid)])
+}
+
+/// The Guild Charter list of the Petitioner `npc_guid`. Gossip action 10 opens it too
+/// (`cm:Player.cpp:11873-11876`).
+pub(crate) fn petition_showlist(npc_guid: u64) -> Outbound {
+    Outbound::One(ServerOpcodeMessage::SMSG_PETITION_SHOWLIST(Box::new(
+        codec::build_petition_showlist(npc_guid),
+    )))
+}
+
+fn guild_create_result(name: String, result: GuildCommandResult) -> Outbound {
+    command_result(GuildCommand::Create, name, result)
+}
+
+/// CMSG_PETITION_BUY (`cm:PetitionsHandler.cpp:44-174`). Advisory reads of the Realm-core cache
+/// answer in mangos order before any copper moves: a member and an owner who still holds a Charter
+/// hear nothing, then a taken and an invalid name. An owner whose Charter is gone gets its old
+/// Petition closed first, so it is not stranded. Realm-core decides again inside the fee, and the
+/// Charter reaches the client through the item relay.
+fn petition_buy_outbound<St: GuildActionStore + ?Sized>(
+    store: &St,
+    player: GuildActionPlayer,
+    npc_guid: u64,
+    name: String,
+) -> Result<Vec<Outbound>> {
+    let Some(actor_guid) = player.self_guid else {
+        return Ok(Vec::new());
+    };
+    if store.guild_member(actor_guid)?.is_some() {
+        return Ok(Vec::new());
+    }
+    if let Some(petition) = store.guild_petition_of_owner(actor_guid)? {
+        if store.guild_holds_charter(actor_guid, petition.charter_item_guid)? {
+            return Ok(Vec::new());
+        }
+        let closed = store.guild_op(
+            actor_guid,
+            GuildRequest::ClosePetition {
+                petition_id: petition.petition_id,
+            },
+        )?;
+        if let GuildOutcome::Refused(refusal) = closed {
+            log::debug!("world: stranded Petition of {actor_guid} not closed: {refusal:?}");
+        }
+    }
+    if store.guild_name_taken(&name)? {
+        return Ok(vec![guild_create_result(
+            name,
+            GuildCommandResult::GuildNameExistsS,
+        )]);
+    }
+    if lyracore_shared::guild::validate_guild_name(&name).is_err() {
+        return Ok(vec![guild_create_result(
+            name,
+            GuildCommandResult::GuildNameInvalid,
+        )]);
+    }
+    let request = guild_fee::FeeRequest::Charter {
+        npc_guid,
+        name: name.clone(),
+    };
+    Ok(charter_purchase_reply(
+        guild_fee::pay(store, actor_guid, request)?,
+        npc_guid,
+        name,
+    ))
+}
+
+fn charter_purchase_reply(
+    outcome: guild_fee::FeeOutcome,
+    npc_guid: u64,
+    name: String,
+) -> Vec<Outbound> {
+    use guild_fee::FeeOutcome::{Accepted, Refused};
+    let buy_failed = |guid: u64, result: BuyResult| {
+        Outbound::One(ServerOpcodeMessage::SMSG_BUY_FAILED(Box::new(
+            SMSG_BUY_FAILED {
+                guid: Guid::new(guid),
+                item: lyracore_shared::guild::GUILD_CHARTER_ENTRY,
+                result,
+            },
+        )))
+    };
+    match outcome {
+        Accepted => Vec::new(),
+        Refused(GuildRefusal::NotEnoughMoney) => {
+            vec![buy_failed(npc_guid, BuyResult::NotEnoughMoney)]
+        }
+        // mangos names no vendor here (`cm:PetitionsHandler.cpp:114-118`).
+        Refused(GuildRefusal::CharterUnavailable) => vec![buy_failed(0, BuyResult::CantFindItem)],
+        Refused(GuildRefusal::BagsFull) => vec![Outbound::One(
+            ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(Box::new(
+                codec::build_inventory_refusal(lyracore_shared::item::ItemRefusal::InventoryFull),
+            )),
+        )],
+        Refused(GuildRefusal::CharterLimit) => vec![Outbound::One(
+            ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(Box::new(
+                codec::build_cant_carry_more_of_this(),
+            )),
+        )],
+        Refused(GuildRefusal::NameExists) => vec![guild_create_result(
+            name,
+            GuildCommandResult::GuildNameExistsS,
+        )],
+        Refused(GuildRefusal::NameInvalid) => vec![guild_create_result(
+            name,
+            GuildCommandResult::GuildNameInvalid,
+        )],
+        // A member, an owner of a Petition, or an NPC that does not serve: mangos is silent.
+        Refused(_) => Vec::new(),
+    }
+}
+
+/// CMSG_PETITION_SHOW_SIGNATURES (`cm:PetitionsHandler.cpp:176-218`). A member hears nothing.
+fn show_signatures_outbound<St: GuildActionStore + ?Sized>(
+    store: &St,
+    player: GuildActionPlayer,
+    charter_item_guid: u64,
+) -> Result<Vec<Outbound>> {
+    let Some(actor_guid) = player.self_guid else {
+        return Ok(Vec::new());
+    };
+    if store.guild_member(actor_guid)?.is_some() {
+        return Ok(Vec::new());
+    }
+    Ok(store
+        .guild_petition_of_charter(charter_item_guid)?
+        .map(|petition| petition_signatures(&petition))
+        .into_iter()
+        .collect())
+}
+
+/// The signature window of `petition`.
+fn petition_signatures(petition: &codec::PetitionView) -> Outbound {
+    Outbound::One(ServerOpcodeMessage::SMSG_PETITION_SHOW_SIGNATURES(
+        Box::new(codec::build_petition_show_signatures(petition)),
+    ))
+}
+
+/// CMSG_PETITION_QUERY (`cm:PetitionsHandler.cpp:220-282`). An unknown Charter is silent.
+fn petition_query_outbound<St: GuildActionStore + ?Sized>(
+    store: &St,
+    charter_item_guid: u64,
+) -> Result<Vec<Outbound>> {
+    Ok(store
+        .guild_petition_of_charter(charter_item_guid)?
+        .map(|petition| petition_query(&petition))
+        .into_iter()
+        .collect())
+}
+
+/// The petition query response for `petition`.
+fn petition_query(petition: &codec::PetitionView) -> Outbound {
+    Outbound::One(ServerOpcodeMessage::SMSG_PETITION_QUERY_RESPONSE(Box::new(
+        codec::build_petition_query_response(petition),
+    )))
+}
+
+/// MSG_PETITION_RENAME (`cm:PetitionsHandler.cpp:284-319`): only while the actor holds the
+/// Charter. The reply echoes the new name.
+fn rename_petition_outbound<St: GuildActionStore + ?Sized>(
+    store: &St,
+    player: GuildActionPlayer,
+    charter_item_guid: u64,
+    name: String,
+) -> Result<Vec<Outbound>> {
+    let Some(actor_guid) = player.self_guid else {
+        return Ok(Vec::new());
+    };
+    if !store.guild_holds_charter(actor_guid, charter_item_guid)? {
+        return Ok(Vec::new());
+    }
+    let outcome = store.guild_op(
+        actor_guid,
+        GuildRequest::RenamePetition {
+            charter_item_guid,
+            name: name.clone(),
+        },
+    )?;
+    Ok(match outcome {
+        GuildOutcome::Ran => vec![Outbound::One(ServerOpcodeMessage::MSG_PETITION_RENAME(
+            Box::new(MSG_PETITION_RENAME {
+                petition: Guid::new(charter_item_guid),
+                new_name: name,
+            }),
+        ))],
+        GuildOutcome::Refused(GuildRefusal::NameExists) => vec![guild_create_result(
+            name,
+            GuildCommandResult::GuildNameExistsS,
+        )],
+        GuildOutcome::Refused(GuildRefusal::NameInvalid) => vec![guild_create_result(
+            name,
+            GuildCommandResult::GuildNameInvalid,
+        )],
+        GuildOutcome::Refused(_) => Vec::new(),
+    })
+}
+
+/// CMSG_OFFER_PETITION (`cm:PetitionsHandler.cpp:452-512`): the owner shows its Petition to a live
+/// Character. The target sees the signature window through a Guild Event. ALREADY_IN_GUILD_S names
+/// the target, which is what the client line reads; mangos writes the offerer's name there.
+fn offer_petition_outbound<St: GuildActionStore + ?Sized>(
+    store: &St,
+    player: GuildActionPlayer,
+    charter_item_guid: u64,
+    target_guid: u64,
+) -> Result<Vec<Outbound>> {
+    let Some(actor_guid) = player.self_guid else {
+        return Ok(Vec::new());
+    };
+    let Some(target) = store
+        .guild_character_facts(target_guid)?
+        .filter(|facts| facts.online)
+    else {
+        return Ok(Vec::new());
+    };
+    if !store.guild_holds_charter(actor_guid, charter_item_guid)? {
+        return Ok(Vec::new());
+    }
+    let outcome = store.guild_op(
+        actor_guid,
+        GuildRequest::OfferPetition {
+            charter_item_guid,
+            target_guid,
+            target_team: lyracore_shared::faction::team_for_race(target.race),
+        },
+    )?;
+    Ok(match outcome {
+        GuildOutcome::Refused(GuildRefusal::NotAllied) => vec![guild_create_result(
+            String::new(),
+            GuildCommandResult::GuildNotAllied,
+        )],
+        GuildOutcome::Refused(GuildRefusal::AlreadyInGuild) => vec![command_result(
+            GuildCommand::Invite,
+            target.name,
+            GuildCommandResult::AlreadyInGuildS,
+        )],
+        _ => Vec::new(),
+    })
+}
+
+/// CMSG_PETITION_SIGN (`cm:PetitionsHandler.cpp:321-422`). A signature, and an attempt by a Realm
+/// Account that already signed, reach both the signer and the owner through Guild Events.
+fn sign_petition_outbound<St: GuildActionStore + ?Sized>(
+    store: &St,
+    player: GuildActionPlayer,
+    charter_item_guid: u64,
+) -> Result<Vec<Outbound>> {
+    let Some(actor_guid) = player.self_guid else {
+        return Ok(Vec::new());
+    };
+    let Some(actor) = store.guild_character_facts(actor_guid)? else {
+        return Ok(Vec::new());
+    };
+    let outcome = store.guild_op(
+        actor_guid,
+        GuildRequest::SignPetition {
+            charter_item_guid,
+            actor_name: actor.name.clone(),
+            actor_team: lyracore_shared::faction::team_for_race(actor.race),
+        },
+    )?;
+    Ok(match outcome {
+        GuildOutcome::Refused(GuildRefusal::CantSignOwn) => {
+            vec![Outbound::One(
+                ServerOpcodeMessage::SMSG_PETITION_SIGN_RESULTS(Box::new(
+                    codec::build_petition_sign_results(
+                        charter_item_guid,
+                        actor_guid,
+                        PetitionResult::CantSignOwn,
+                    ),
+                )),
+            )]
+        }
+        GuildOutcome::Refused(GuildRefusal::NotAllied) => vec![guild_create_result(
+            String::new(),
+            GuildCommandResult::GuildNotAllied,
+        )],
+        GuildOutcome::Refused(GuildRefusal::AlreadyInGuild) => vec![command_result(
+            GuildCommand::Invite,
+            actor.name,
+            GuildCommandResult::AlreadyInGuildS,
+        )],
+        // Signed or already signed: the Guild Events answer. A full or unknown Petition is silent.
+        _ => Vec::new(),
+    })
+}
+
+/// MSG_PETITION_DECLINE (`cm:PetitionsHandler.cpp:424-450`): the owner hears it through a Guild
+/// Event; the decliner hears nothing.
+fn decline_petition_outbound<St: GuildActionStore + ?Sized>(
+    store: &St,
+    player: GuildActionPlayer,
+    charter_item_guid: u64,
+) -> Result<Vec<Outbound>> {
+    let Some(actor_guid) = player.self_guid else {
+        return Ok(Vec::new());
+    };
+    let outcome = store.guild_op(
+        actor_guid,
+        GuildRequest::DeclinePetition { charter_item_guid },
+    )?;
+    if let GuildOutcome::Refused(refusal) = outcome {
+        log::debug!("world: MSG_PETITION_DECLINE from {actor_guid} refused: {refusal:?}");
+    }
+    Ok(Vec::new())
+}
+
+/// CMSG_TURN_IN_PETITION (`cm:PetitionsHandler.cpp:514-634`): only while the actor holds the
+/// Charter. Realm-core founds the Guild first; the Charter is destroyed on the Home Shard after.
+/// A crash between leaves an inert Charter whose Petition is gone, so it founds nothing twice.
+fn turn_in_petition_outbound<St: GuildActionStore + ?Sized>(
+    store: &St,
+    player: GuildActionPlayer,
+    charter_item_guid: u64,
+) -> Result<Vec<Outbound>> {
+    let Some(actor_guid) = player.self_guid else {
+        return Ok(Vec::new());
+    };
+    if !store.guild_holds_charter(actor_guid, charter_item_guid)? {
+        return Ok(Vec::new());
+    }
+    let name = store
+        .guild_petition_of_charter(charter_item_guid)?
+        .map(|petition| petition.name)
+        .unwrap_or_default();
+    let turn_in_result = |result: PetitionResult| {
+        Outbound::One(ServerOpcodeMessage::SMSG_TURN_IN_PETITION_RESULTS(
+            SMSG_TURN_IN_PETITION_RESULTS { result },
+        ))
+    };
+    let outcome = store.guild_op(
+        actor_guid,
+        GuildRequest::TurnInPetition { charter_item_guid },
+    )?;
+    Ok(match outcome {
+        GuildOutcome::Ran => {
+            if let Err(error) = store.guild_destroy_charter(actor_guid, charter_item_guid) {
+                if is_fatal(&error) {
+                    return Err(error);
+                }
+                log::warn!("world: turned-in Charter {charter_item_guid} left inert: {error:#}");
+            }
+            // mangos sends both: the founding result from the turn-in handler, since
+            // `Guild::Create` sends nothing (`cm:PetitionsHandler.cpp:596-597`,
+            // `cm:Guild.cpp:104-154`), then the turn-in result (`:631-633`). Result 0 is success;
+            // gtker names the zero value PLAYER_NO_MORE_IN_GUILD.
+            vec![
+                guild_create_result(name, GuildCommandResult::PlayerNoMoreInGuild),
+                turn_in_result(PetitionResult::Ok),
+            ]
+        }
+        GuildOutcome::Refused(GuildRefusal::AlreadyInGuild) => {
+            vec![turn_in_result(PetitionResult::AlreadyInGuild)]
+        }
+        GuildOutcome::Refused(GuildRefusal::NeedMoreSignatures) => {
+            vec![turn_in_result(PetitionResult::NeedMore)]
+        }
+        GuildOutcome::Refused(GuildRefusal::NameExists) => vec![guild_create_result(
+            name,
+            GuildCommandResult::GuildNameExistsS,
+        )],
+        // Not the owner, or no Petition: mangos is silent.
+        GuildOutcome::Refused(_) => Vec::new(),
+    })
+}
+
 /// The Guild Projection for `character_guid`: `(guild_id, rank_id)`, or `(0, 0)` outside a Guild or
 /// when Realm-core cannot answer.
 pub(crate) fn guild_projection<St: GuildActionStore + ?Sized>(
@@ -1323,7 +1797,10 @@ mod tests {
     use wow_world_messages::vanilla::{
         GuildMember, GuildMember_GuildMemberStatus, CMSG_GUILD_ADD_RANK, CMSG_GUILD_CREATE,
         CMSG_GUILD_INFO_TEXT, CMSG_GUILD_MOTD, CMSG_GUILD_QUERY, CMSG_GUILD_RANK,
-        CMSG_GUILD_SET_OFFICER_NOTE, CMSG_GUILD_SET_PUBLIC_NOTE, CMSG_PING,
+        CMSG_GUILD_SET_OFFICER_NOTE, CMSG_GUILD_SET_PUBLIC_NOTE, CMSG_OFFER_PETITION,
+        CMSG_PETITION_BUY, CMSG_PETITION_QUERY, CMSG_PETITION_SHOWLIST,
+        CMSG_PETITION_SHOW_SIGNATURES, CMSG_PETITION_SIGN, CMSG_PING, CMSG_TURN_IN_PETITION,
+        MSG_PETITION_DECLINE,
     };
 
     const GM: u64 = 5_090_001;
@@ -1357,6 +1834,12 @@ mod tests {
         /// the wire mapping from a given outcome, the same shape `GuildFeeStore` below uses for the
         /// Fee Hold protocol.
         refuse_next: Mutex<Option<GuildRefusal>>,
+        /// Realm-core Petitions.
+        petitions: Vec<codec::PetitionView>,
+        /// Guild Charters every actor holds on its Home Shard.
+        held_charters: Vec<u64>,
+        /// Every Guild Charter destroyed on a Home Shard.
+        destroyed_charters: Mutex<Vec<u64>>,
     }
 
     impl InMemoryGuildActions {
@@ -1521,6 +2004,46 @@ mod tests {
         fn guild_npc_refuses(&self, npc_guid: u64, _actor_guid: u64) -> Result<bool> {
             Ok(self.refusing_npcs.contains(&npc_guid))
         }
+
+        fn guild_petition_of_charter(
+            &self,
+            charter_item_guid: u64,
+        ) -> Result<Option<codec::PetitionView>> {
+            Ok(self
+                .petitions
+                .iter()
+                .find(|petition| petition.charter_item_guid == charter_item_guid)
+                .cloned())
+        }
+
+        fn guild_petition_of_owner(&self, owner_guid: u64) -> Result<Option<codec::PetitionView>> {
+            Ok(self
+                .petitions
+                .iter()
+                .find(|petition| petition.owner_guid == owner_guid)
+                .cloned())
+        }
+
+        fn guild_name_taken(&self, name: &str) -> Result<bool> {
+            Ok(self
+                .guilds
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|guild| name_key(&guild.name) == name_key(name)))
+        }
+
+        fn guild_holds_charter(&self, _actor_guid: u64, charter_item_guid: u64) -> Result<bool> {
+            Ok(self.held_charters.contains(&charter_item_guid))
+        }
+
+        fn guild_destroy_charter(&self, _actor_guid: u64, charter_item_guid: u64) -> Result<()> {
+            self.destroyed_charters
+                .lock()
+                .unwrap()
+                .push(charter_item_guid);
+            Ok(())
+        }
     }
 
     /// The fee answers the seam maps to result codes. `guild_fee`'s own tests drive the protocol.
@@ -1534,14 +2057,20 @@ mod tests {
             _actor_guid: u64,
             request: guild_fee::FeeRequest,
         ) -> Result<Result<guild_fee::FeeHold, GuildRefusal>> {
-            self.fee_requests.lock().unwrap().push(request);
+            self.fee_requests.lock().unwrap().push(request.clone());
             if let Some(refusal) = self.hold_refusal {
                 return Ok(Err(refusal));
             }
-            let guild_fee::FeeRequest::Emblem { emblem, .. } = request;
+            let terms = match request {
+                guild_fee::FeeRequest::Emblem { emblem, .. } => guild_fee::FeeTerms::Emblem(emblem),
+                guild_fee::FeeRequest::Charter { name, .. } => guild_fee::FeeTerms::Charter {
+                    charter_item_guid: CHARTER,
+                    name,
+                },
+            };
             Ok(Ok(guild_fee::FeeHold {
                 operation_id: 1,
-                terms: guild_fee::FeeTerms::Emblem(emblem),
+                terms,
             }))
         }
 
@@ -3165,5 +3694,564 @@ mod tests {
             "a relay is not a reply, so a disbanded Guild's roster refresh answers nothing"
         );
         assert!(snapshot.roster_for_rank(0).is_none());
+    }
+
+    // Petitions: the Guild Charter list, purchase, signature window, query, rename, offer, sign,
+    // decline and turn-in. The Module's own tests prove the Gates; these prove each reply.
+
+    const PETITIONER: u64 = 5_090_020;
+    const CHARTER: u64 = 0x4000_0000_0000_0101;
+    const HORDE_TEAM: u32 = 67;
+
+    fn night_watch(owner_guid: u64) -> codec::PetitionView {
+        codec::PetitionView {
+            petition_id: 42,
+            charter_item_guid: CHARTER,
+            owner_guid,
+            name: "Night Watch".into(),
+            signers: vec![CAROL],
+        }
+    }
+
+    /// Bob owns Petition 42 and holds its Guild Charter.
+    fn bobs_petition() -> InMemoryGuildActions {
+        InMemoryGuildActions {
+            petitions: vec![night_watch(BOB)],
+            held_charters: vec![CHARTER],
+            ..realm()
+        }
+    }
+
+    fn buy_charter(store: &InMemoryGuildActions, actor: u64, name: &str) -> Vec<Outbound> {
+        dispatch(
+            store,
+            in_world(actor),
+            ClientOpcodeMessage::CMSG_PETITION_BUY(Box::new(CMSG_PETITION_BUY {
+                npc: Guid::new(PETITIONER),
+                name: name.into(),
+                ..CMSG_PETITION_BUY::default()
+            })),
+        )
+    }
+
+    fn charter_requests(store: &InMemoryGuildActions) -> Vec<guild_fee::FeeRequest> {
+        store.fee_requests.lock().unwrap().clone()
+    }
+
+    fn recorded_ops(store: &InMemoryGuildActions) -> Vec<GuildRequest> {
+        store
+            .ops
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(_, request)| request.clone())
+            .collect()
+    }
+
+    fn buy_failed(outbound: Vec<Outbound>) -> (u64, u32, BuyResult) {
+        match only_message(outbound) {
+            ServerOpcodeMessage::SMSG_BUY_FAILED(failed) => {
+                (failed.guid.guid(), failed.item, failed.result)
+            }
+            other => panic!("expected SMSG_BUY_FAILED, got {other}"),
+        }
+    }
+
+    #[test]
+    fn the_charter_list_opens_for_its_petitioner_unless_it_refuses_by_faction() {
+        let showlist = ClientOpcodeMessage::CMSG_PETITION_SHOWLIST(CMSG_PETITION_SHOWLIST {
+            guid: Guid::new(PETITIONER),
+        });
+        match only_message(dispatch(&realm(), in_world(BOB), showlist.clone())) {
+            ServerOpcodeMessage::SMSG_PETITION_SHOWLIST(list) => {
+                assert_eq!(*list, codec::build_petition_showlist(PETITIONER));
+            }
+            other => panic!("expected SMSG_PETITION_SHOWLIST, got {other}"),
+        }
+        let refusing = InMemoryGuildActions {
+            refusing_npcs: vec![PETITIONER],
+            ..realm()
+        };
+        assert!(dispatch(&refusing, in_world(BOB), showlist).is_empty());
+    }
+
+    #[test]
+    fn a_charter_purchase_pays_through_the_fee_hold_and_answers_nothing() {
+        let store = realm();
+        assert!(buy_charter(&store, BOB, "Night Watch").is_empty());
+        assert_eq!(
+            charter_requests(&store),
+            vec![guild_fee::FeeRequest::Charter {
+                npc_guid: PETITIONER,
+                name: "Night Watch".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn a_member_or_an_owner_still_holding_its_charter_buys_nothing_and_hears_nothing() {
+        let member = led_by_bob(None, None);
+        assert!(buy_charter(&member, BOB, "Night Watch").is_empty());
+        assert!(charter_requests(&member).is_empty());
+
+        let owner = bobs_petition();
+        assert!(buy_charter(&owner, BOB, "Day Watch").is_empty());
+        assert!(charter_requests(&owner).is_empty());
+        assert!(recorded_ops(&owner).is_empty());
+    }
+
+    #[test]
+    fn an_owner_whose_charter_is_gone_closes_its_petition_before_buying() {
+        let store = InMemoryGuildActions {
+            held_charters: Vec::new(),
+            ..bobs_petition()
+        };
+        assert!(buy_charter(&store, BOB, "Day Watch").is_empty());
+        assert_eq!(
+            recorded_ops(&store),
+            vec![GuildRequest::ClosePetition { petition_id: 42 }]
+        );
+        assert_eq!(charter_requests(&store).len(), 1);
+    }
+
+    #[test]
+    fn a_taken_or_invalid_name_answers_before_any_copper_moves() {
+        let store = led_by_bob(None, None);
+        assert_eq!(
+            command_result_of(buy_charter(&store, GM, "knights")),
+            (GuildCommand::Create, GuildCommandResult::GuildNameExistsS)
+        );
+        assert_eq!(
+            command_result_of(buy_charter(&store, GM, "Night!Watch")),
+            (GuildCommand::Create, GuildCommandResult::GuildNameInvalid)
+        );
+        assert!(charter_requests(&store).is_empty());
+    }
+
+    #[test]
+    fn charter_hold_refusals_map_to_their_buy_replies() {
+        let broke = InMemoryGuildActions {
+            hold_refusal: Some(GuildRefusal::NotEnoughMoney),
+            ..realm()
+        };
+        assert_eq!(
+            buy_failed(buy_charter(&broke, BOB, "Night Watch")),
+            (PETITIONER, 5863, BuyResult::NotEnoughMoney)
+        );
+        let unknown = InMemoryGuildActions {
+            hold_refusal: Some(GuildRefusal::CharterUnavailable),
+            ..realm()
+        };
+        assert_eq!(
+            buy_failed(buy_charter(&unknown, BOB, "Night Watch")),
+            (0, 5863, BuyResult::CantFindItem)
+        );
+        let full = InMemoryGuildActions {
+            hold_refusal: Some(GuildRefusal::BagsFull),
+            ..realm()
+        };
+        match only_message(buy_charter(&full, BOB, "Night Watch")) {
+            ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(failure) => assert!(matches!(
+                *failure,
+                wow_world_messages::vanilla::SMSG_INVENTORY_CHANGE_FAILURE::InventoryFull { .. }
+            )),
+            other => panic!("expected SMSG_INVENTORY_CHANGE_FAILURE, got {other}"),
+        }
+        let second = InMemoryGuildActions {
+            hold_refusal: Some(GuildRefusal::CharterLimit),
+            ..realm()
+        };
+        match only_message(buy_charter(&second, BOB, "Night Watch")) {
+            ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(failure) => assert!(matches!(
+                *failure,
+                wow_world_messages::vanilla::SMSG_INVENTORY_CHANGE_FAILURE::CantCarryMoreOfThis { .. }
+            )),
+            other => panic!("expected SMSG_INVENTORY_CHANGE_FAILURE, got {other}"),
+        }
+    }
+
+    #[test]
+    fn charter_decision_refusals_map_like_the_advisory_reads() {
+        for (refusal, reply) in [
+            (
+                GuildRefusal::NameExists,
+                Some(GuildCommandResult::GuildNameExistsS),
+            ),
+            (
+                GuildRefusal::NameInvalid,
+                Some(GuildCommandResult::GuildNameInvalid),
+            ),
+            (GuildRefusal::AlreadyInGuild, None),
+            (GuildRefusal::AlreadyHasPetition, None),
+            (GuildRefusal::NpcRefused, None),
+        ] {
+            let store = InMemoryGuildActions {
+                fee_refusal: Some(refusal),
+                ..realm()
+            };
+            let outbound = buy_charter(&store, BOB, "Night Watch");
+            match reply {
+                Some(result) => assert_eq!(
+                    command_result_of(outbound),
+                    (GuildCommand::Create, result),
+                    "{refusal:?}"
+                ),
+                None => assert!(outbound.is_empty(), "{refusal:?}"),
+            }
+        }
+    }
+
+    fn show_signatures(store: &InMemoryGuildActions, actor: u64, charter: u64) -> Vec<Outbound> {
+        dispatch(
+            store,
+            in_world(actor),
+            ClientOpcodeMessage::CMSG_PETITION_SHOW_SIGNATURES(CMSG_PETITION_SHOW_SIGNATURES {
+                item: Guid::new(charter),
+            }),
+        )
+    }
+
+    #[test]
+    fn the_signature_window_lists_the_owner_and_signers_to_a_non_member() {
+        let store = bobs_petition();
+        match only_message(show_signatures(&store, GM, CHARTER)) {
+            ServerOpcodeMessage::SMSG_PETITION_SHOW_SIGNATURES(window) => {
+                assert_eq!(
+                    *window,
+                    codec::build_petition_show_signatures(&night_watch(BOB))
+                );
+            }
+            other => panic!("expected SMSG_PETITION_SHOW_SIGNATURES, got {other}"),
+        }
+        assert!(show_signatures(&store, GM, 0x4000_0000_0000_0999).is_empty());
+        store.add_member(1, GM, 0, "");
+        assert!(show_signatures(&store, GM, CHARTER).is_empty());
+    }
+
+    #[test]
+    fn the_petition_query_answers_a_known_charter_only() {
+        let store = bobs_petition();
+        let query = |charter: u64| {
+            dispatch(
+                &store,
+                GuildActionPlayer {
+                    account_id: 7,
+                    self_guid: None,
+                },
+                ClientOpcodeMessage::CMSG_PETITION_QUERY(Box::new(CMSG_PETITION_QUERY {
+                    guild_id: 42,
+                    petition: Guid::new(charter),
+                })),
+            )
+        };
+        match only_message(query(CHARTER)) {
+            ServerOpcodeMessage::SMSG_PETITION_QUERY_RESPONSE(response) => {
+                assert_eq!(
+                    *response,
+                    codec::build_petition_query_response(&night_watch(BOB))
+                );
+            }
+            other => panic!("expected SMSG_PETITION_QUERY_RESPONSE, got {other}"),
+        }
+        assert!(query(0x4000_0000_0000_0999).is_empty());
+    }
+
+    fn rename(store: &InMemoryGuildActions, name: &str) -> Vec<Outbound> {
+        dispatch(
+            store,
+            in_world(BOB),
+            ClientOpcodeMessage::MSG_PETITION_RENAME(Box::new(MSG_PETITION_RENAME {
+                petition: Guid::new(CHARTER),
+                new_name: name.into(),
+            })),
+        )
+    }
+
+    #[test]
+    fn a_rename_echoes_the_new_name() {
+        let store = bobs_petition();
+        match only_message(rename(&store, "Day Watch")) {
+            ServerOpcodeMessage::MSG_PETITION_RENAME(renamed) => {
+                assert_eq!(renamed.petition, Guid::new(CHARTER));
+                assert_eq!(renamed.new_name, "Day Watch");
+            }
+            other => panic!("expected MSG_PETITION_RENAME, got {other}"),
+        }
+        assert_eq!(
+            recorded_ops(&store),
+            vec![GuildRequest::RenamePetition {
+                charter_item_guid: CHARTER,
+                name: "Day Watch".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn rename_refusals_answer_the_name_results_and_a_missing_charter_is_silent() {
+        for (refusal, result) in [
+            (
+                GuildRefusal::NameExists,
+                GuildCommandResult::GuildNameExistsS,
+            ),
+            (
+                GuildRefusal::NameInvalid,
+                GuildCommandResult::GuildNameInvalid,
+            ),
+        ] {
+            let store = bobs_petition();
+            store.refuse_next_op(refusal);
+            assert_eq!(
+                command_result_of(rename(&store, "Day Watch")),
+                (GuildCommand::Create, result)
+            );
+        }
+        let store = InMemoryGuildActions {
+            held_charters: Vec::new(),
+            ..bobs_petition()
+        };
+        assert!(rename(&store, "Day Watch").is_empty());
+        assert!(recorded_ops(&store).is_empty());
+    }
+
+    fn offer(store: &InMemoryGuildActions, target: u64) -> Vec<Outbound> {
+        dispatch(
+            store,
+            in_world(BOB),
+            ClientOpcodeMessage::CMSG_OFFER_PETITION(Box::new(CMSG_OFFER_PETITION {
+                petition: Guid::new(CHARTER),
+                target: Guid::new(target),
+            })),
+        )
+    }
+
+    #[test]
+    fn an_offer_conveys_the_live_targets_team_and_answers_nothing() {
+        let store = InMemoryGuildActions {
+            characters: vec![facts(BOB, "Bob"), horde_facts(CAROL, "Carol")],
+            ..bobs_petition()
+        };
+        assert!(offer(&store, CAROL).is_empty());
+        assert_eq!(
+            recorded_ops(&store),
+            vec![GuildRequest::OfferPetition {
+                charter_item_guid: CHARTER,
+                target_guid: CAROL,
+                target_team: HORDE_TEAM,
+            }]
+        );
+    }
+
+    #[test]
+    fn offer_refusals_answer_not_allied_and_already_in_guild_with_the_targets_name() {
+        let store = bobs_petition();
+        store.refuse_next_op(GuildRefusal::NotAllied);
+        let outbound = offer(&store, CAROL);
+        let ServerOpcodeMessage::SMSG_GUILD_COMMAND_RESULT(result) = only_message(outbound) else {
+            panic!("expected a command result");
+        };
+        assert_eq!(
+            (result.command, result.string.as_str(), result.result),
+            (GuildCommand::Create, "", GuildCommandResult::GuildNotAllied)
+        );
+
+        store.refuse_next_op(GuildRefusal::AlreadyInGuild);
+        let ServerOpcodeMessage::SMSG_GUILD_COMMAND_RESULT(result) =
+            only_message(offer(&store, CAROL))
+        else {
+            panic!("expected a command result");
+        };
+        assert_eq!(
+            (result.command, result.string.as_str(), result.result),
+            (
+                GuildCommand::Invite,
+                "Carol",
+                GuildCommandResult::AlreadyInGuildS
+            )
+        );
+    }
+
+    #[test]
+    fn an_offer_to_an_offline_target_or_without_the_charter_is_silent() {
+        let offline = InMemoryGuildActions {
+            characters: vec![CharacterFacts {
+                online: false,
+                ..facts(CAROL, "Carol")
+            }],
+            ..bobs_petition()
+        };
+        assert!(offer(&offline, CAROL).is_empty());
+        let without = InMemoryGuildActions {
+            held_charters: Vec::new(),
+            ..bobs_petition()
+        };
+        assert!(offer(&without, CAROL).is_empty());
+        assert!(recorded_ops(&offline).is_empty() && recorded_ops(&without).is_empty());
+    }
+
+    fn sign(store: &InMemoryGuildActions, actor: u64) -> Vec<Outbound> {
+        dispatch(
+            store,
+            in_world(actor),
+            ClientOpcodeMessage::CMSG_PETITION_SIGN(Box::new(CMSG_PETITION_SIGN {
+                petition: Guid::new(CHARTER),
+                unknown1: 1,
+            })),
+        )
+    }
+
+    #[test]
+    fn a_signature_conveys_the_signers_name_and_team_and_the_events_answer() {
+        let store = bobs_petition();
+        assert!(sign(&store, CAROL).is_empty());
+        assert_eq!(
+            recorded_ops(&store),
+            vec![GuildRequest::SignPetition {
+                charter_item_guid: CHARTER,
+                actor_name: "Carol".into(),
+                actor_team: 469,
+            }]
+        );
+    }
+
+    #[test]
+    fn sign_refusals_map_to_their_replies() {
+        let store = bobs_petition();
+        store.refuse_next_op(GuildRefusal::CantSignOwn);
+        match only_message(sign(&store, BOB)) {
+            ServerOpcodeMessage::SMSG_PETITION_SIGN_RESULTS(results) => assert_eq!(
+                *results,
+                codec::build_petition_sign_results(CHARTER, BOB, PetitionResult::CantSignOwn)
+            ),
+            other => panic!("expected SMSG_PETITION_SIGN_RESULTS, got {other}"),
+        }
+        store.refuse_next_op(GuildRefusal::NotAllied);
+        assert_eq!(
+            command_result_of(sign(&store, CAROL)),
+            (GuildCommand::Create, GuildCommandResult::GuildNotAllied)
+        );
+        store.refuse_next_op(GuildRefusal::AlreadyInGuild);
+        let ServerOpcodeMessage::SMSG_GUILD_COMMAND_RESULT(result) =
+            only_message(sign(&store, CAROL))
+        else {
+            panic!("expected a command result");
+        };
+        assert_eq!(
+            (result.command, result.string.as_str(), result.result),
+            (
+                GuildCommand::Invite,
+                "Carol",
+                GuildCommandResult::AlreadyInGuildS
+            )
+        );
+        for silent in [GuildRefusal::PetitionFull, GuildRefusal::NoSuchPetition] {
+            store.refuse_next_op(silent);
+            assert!(sign(&store, CAROL).is_empty(), "{silent:?}");
+        }
+    }
+
+    #[test]
+    fn a_decline_runs_its_request_and_answers_nothing() {
+        let store = bobs_petition();
+        let outbound = dispatch(
+            &store,
+            in_world(CAROL),
+            ClientOpcodeMessage::MSG_PETITION_DECLINE(MSG_PETITION_DECLINE {
+                petition: Guid::new(CHARTER),
+            }),
+        );
+        assert!(outbound.is_empty());
+        assert_eq!(
+            recorded_ops(&store),
+            vec![GuildRequest::DeclinePetition {
+                charter_item_guid: CHARTER
+            }]
+        );
+    }
+
+    fn turn_in(store: &InMemoryGuildActions) -> Vec<Outbound> {
+        dispatch(
+            store,
+            in_world(BOB),
+            ClientOpcodeMessage::CMSG_TURN_IN_PETITION(CMSG_TURN_IN_PETITION {
+                petition: Guid::new(CHARTER),
+            }),
+        )
+    }
+
+    fn turn_in_result(outbound: Vec<Outbound>) -> PetitionResult {
+        match only_message(outbound) {
+            ServerOpcodeMessage::SMSG_TURN_IN_PETITION_RESULTS(results) => results.result,
+            other => panic!("expected SMSG_TURN_IN_PETITION_RESULTS, got {other}"),
+        }
+    }
+
+    #[test]
+    fn a_turn_in_founds_the_guild_then_destroys_the_charter() {
+        let store = bobs_petition();
+        let outbound = turn_in(&store);
+        let [Outbound::One(created), Outbound::One(results)] = outbound.as_slice() else {
+            panic!("expected the founding result then the turn-in result");
+        };
+        let (
+            ServerOpcodeMessage::SMSG_GUILD_COMMAND_RESULT(created),
+            ServerOpcodeMessage::SMSG_TURN_IN_PETITION_RESULTS(results),
+        ) = (created, results)
+        else {
+            panic!("expected the founding result then the turn-in result");
+        };
+        assert_eq!(
+            (created.command, created.string.as_str(), created.result),
+            (
+                GuildCommand::Create,
+                "Night Watch",
+                GuildCommandResult::PlayerNoMoreInGuild
+            )
+        );
+        assert_eq!(results.result, PetitionResult::Ok);
+        assert_eq!(
+            recorded_ops(&store),
+            vec![GuildRequest::TurnInPetition {
+                charter_item_guid: CHARTER
+            }]
+        );
+        assert_eq!(*store.destroyed_charters.lock().unwrap(), vec![CHARTER]);
+    }
+
+    #[test]
+    fn turn_in_refusals_map_to_their_replies_and_keep_the_charter() {
+        let store = bobs_petition();
+        store.refuse_next_op(GuildRefusal::AlreadyInGuild);
+        assert_eq!(
+            turn_in_result(turn_in(&store)),
+            PetitionResult::AlreadyInGuild
+        );
+        store.refuse_next_op(GuildRefusal::NeedMoreSignatures);
+        assert_eq!(turn_in_result(turn_in(&store)), PetitionResult::NeedMore);
+        store.refuse_next_op(GuildRefusal::NameExists);
+        let ServerOpcodeMessage::SMSG_GUILD_COMMAND_RESULT(result) = only_message(turn_in(&store))
+        else {
+            panic!("expected a command result");
+        };
+        assert_eq!(
+            (result.command, result.string.as_str(), result.result),
+            (
+                GuildCommand::Create,
+                "Night Watch",
+                GuildCommandResult::GuildNameExistsS
+            )
+        );
+        store.refuse_next_op(GuildRefusal::NotPetitionOwner);
+        assert!(turn_in(&store).is_empty());
+        assert!(store.destroyed_charters.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_turn_in_without_the_charter_is_silent() {
+        let store = InMemoryGuildActions {
+            held_charters: Vec::new(),
+            ..bobs_petition()
+        };
+        assert!(turn_in(&store).is_empty());
+        assert!(recorded_ops(&store).is_empty());
     }
 }

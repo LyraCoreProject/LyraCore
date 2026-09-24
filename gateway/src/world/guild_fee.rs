@@ -5,8 +5,11 @@
 //! Recovery is forward only. A Hold that a crash or a lost connection left behind is decided from
 //! its own terms and finished, at the next world entry and before the next fee. It is never
 //! dropped. A Character has one Fee Hold at a time, on whichever Shard holds the Character.
+//!
+//! A hold call mints its own operation id and is never retried, so no Hold is taken twice for one
+//! id. After a lost answer the Hold is found by its payer and re-driven, not held again.
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use lyracore_shared::guild::GuildRefusal;
 
 /// The five tabard design values of a Guild Emblem, in wire order.
@@ -20,20 +23,35 @@ pub(crate) struct Emblem {
 }
 
 /// What the actor asks to pay for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum FeeRequest {
     /// Save `emblem` at the Tabard Designer `npc_guid`.
     Emblem { npc_guid: u64, emblem: Emblem },
+    /// Buy a Guild Charter for a Guild named `name` at the Petitioner `npc_guid`.
+    Charter { npc_guid: u64, name: String },
 }
 
 /// What Realm-core decides on, as a Fee Hold records it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum FeeTerms {
     Emblem(Emblem),
+    /// The Guild Charter the Hold created.
+    Charter {
+        charter_item_guid: u64,
+        name: String,
+    },
+}
+
+/// The owner facts a Charter decision carries. Realm-core holds no Character rows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CharterOwner {
+    pub(crate) name: String,
+    /// `lyracore_shared::faction::TEAM_*`.
+    pub(crate) team: u32,
 }
 
 /// One Fee Hold on the actor's Home Shard.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct FeeHold {
     pub(crate) operation_id: u64,
     pub(crate) terms: FeeTerms,
@@ -92,11 +110,9 @@ fn finish_leftover<St: GuildFeeStore + ?Sized>(store: &St, actor_guid: u64) -> R
     let Some(hold) = store.guild_fee_held(actor_guid)? else {
         return Ok(());
     };
+    let operation_id = hold.operation_id;
     let outcome = settle(store, actor_guid, hold)?;
-    log::info!(
-        "world: finished leftover Fee Hold {} of {actor_guid}: {outcome:?}",
-        hold.operation_id
-    );
+    log::info!("world: finished leftover Fee Hold {operation_id} of {actor_guid}: {outcome:?}");
     Ok(())
 }
 
@@ -105,12 +121,9 @@ fn settle<St: GuildFeeStore + ?Sized>(
     actor_guid: u64,
     hold: FeeHold,
 ) -> Result<FeeOutcome> {
+    let operation_id = hold.operation_id;
     let outcome = store.guild_fee_decide(actor_guid, hold)?;
-    store.guild_fee_finish(
-        actor_guid,
-        hold.operation_id,
-        outcome == FeeOutcome::Accepted,
-    )?;
+    store.guild_fee_finish(actor_guid, operation_id, outcome == FeeOutcome::Accepted)?;
     Ok(outcome)
 }
 
@@ -128,7 +141,18 @@ impl GuildFeeStore for crate::stdb::Coordinator {
     }
 
     fn guild_fee_decide(&self, actor_guid: u64, hold: FeeHold) -> Result<FeeOutcome> {
-        self.realm_core()?.decide_guild_fee(actor_guid, hold)
+        let owner = match hold.terms {
+            FeeTerms::Emblem(_) => None,
+            FeeTerms::Charter { .. } => {
+                let facts = crate::stdb::Coordinator::guild_character_facts(self, actor_guid)
+                    .ok_or_else(|| anyhow!("Guild Charter owner {actor_guid} is unreadable"))?;
+                Some(CharterOwner {
+                    name: facts.name,
+                    team: lyracore_shared::faction::team_for_race(facts.race),
+                })
+            }
+        };
+        self.realm_core()?.decide_guild_fee(actor_guid, hold, owner)
     }
 
     fn guild_fee_finish(&self, actor_guid: u64, operation_id: u64, accepted: bool) -> Result<()> {
@@ -139,7 +163,6 @@ impl GuildFeeStore for crate::stdb::Coordinator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use anyhow::anyhow;
     use lyracore_shared::guild::EMBLEM_COST_COPPER;
     use std::sync::{Arc, Mutex};
 
@@ -251,7 +274,7 @@ mod tests {
                 .unwrap()
                 .iter()
                 .find(|(payer, _, _)| *payer == actor_guid)
-                .map(|(_, hold, _)| *hold))
+                .map(|(_, hold, _)| hold.clone()))
         }
 
         fn guild_fee_hold(
@@ -265,7 +288,9 @@ mod tests {
             if self.purse(actor_guid) < EMBLEM_COST_COPPER {
                 return Ok(Err(GuildRefusal::NotEnoughMoney));
             }
-            let FeeRequest::Emblem { emblem, .. } = request;
+            let FeeRequest::Emblem { emblem, .. } = request else {
+                panic!("these tests pay for emblems");
+            };
             let mut next = self.next_operation_id.lock().unwrap();
             let hold = FeeHold {
                 operation_id: *next,
@@ -276,7 +301,7 @@ mod tests {
             self.holds
                 .lock()
                 .unwrap()
-                .push((actor_guid, hold, EMBLEM_COST_COPPER));
+                .push((actor_guid, hold.clone(), EMBLEM_COST_COPPER));
             self.committed(Step::Hold)?;
             Ok(Ok(hold))
         }
@@ -292,7 +317,9 @@ mod tests {
                 Some(outcome) => outcome,
                 None => {
                     let outcome = if realm.leader == actor_guid {
-                        let FeeTerms::Emblem(emblem) = hold.terms;
+                        let FeeTerms::Emblem(emblem) = hold.terms else {
+                            panic!("these tests pay for emblems");
+                        };
                         realm.emblem = Some(emblem);
                         realm.emblems_saved += 1;
                         FeeOutcome::Accepted

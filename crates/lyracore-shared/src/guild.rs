@@ -157,7 +157,8 @@ pub fn name_key(name: &str) -> String {
 /// `0..=13` are broadcast kinds and equal the wire `GuildEvent` byte of SMSG_GUILD_EVENT
 /// (`cm:Guild.h:100-116`). Addressed kinds start at `0x40` and are reserved in blocks: `0x40..=0x4F`
 /// membership, `0x50..=0x5F` settings, `0x60..=0x6F` fees, `0x70..=0x7F` petitions. `0x80..=0x8F`
-/// are broadcast kinds that only the Gateway renders.
+/// are broadcast kinds that only the Gateway renders. A petition kind carries `guild_id` 0, except
+/// FOUNDER, which names the new Guild.
 pub mod event_kind {
     pub const PROMOTION: u8 = 0;
     pub const DEMOTION: u8 = 1;
@@ -182,15 +183,55 @@ pub mod event_kind {
     /// officer notes keep following each viewer's VIEWOFFNOTE right instead of going blank for
     /// everyone the way mangos' single shared broadcast roster does.
     pub const ROSTER_REFRESH: u8 = 0x80;
+    /// Addressed to the offer's target: SMSG_PETITION_SHOW_SIGNATURES for the Guild Charter in
+    /// `other_guid`, read when the job runs.
+    pub const PETITION_OFFERED: u8 = 0x70;
+    /// Addressed to the Petition owner and to the signer: SMSG_PETITION_SIGN_RESULTS OK for the
+    /// Guild Charter in `other_guid`, signed by `subject_guid`.
+    pub const PETITION_SIGNED: u8 = 0x71;
+    /// Addressed to the Petition owner and to the signer: SMSG_PETITION_SIGN_RESULTS
+    /// ALREADY_SIGNED, when the signer's Realm Account already signed.
+    pub const PETITION_ALREADY_SIGNED: u8 = 0x72;
+    /// Addressed to the Petition owner: MSG_PETITION_DECLINE naming the decliner, `subject_guid`.
+    pub const PETITION_DECLINED: u8 = 0x73;
+    /// Addressed to each signer that joined at founding: SMSG_GUILD_COMMAND_RESULT FOUNDER with the
+    /// Guild name.
+    pub const FOUNDER: u8 = 0x74;
+    /// Addressed to the Petition owner after a Signature is lost: SMSG_PETITION_QUERY_RESPONSE for
+    /// the Guild Charter in `other_guid`, read when the job runs.
+    pub const PETITION_CHANGED: u8 = 0x75;
+
+    /// Is `kind` in the petition block? Every petition kind is addressed.
+    pub fn is_petition(kind: u8) -> bool {
+        (0x70..=0x7F).contains(&kind)
+    }
 }
 
 /// `game_guild_fee_hold.kind`: which guild operation a Fee Hold pays for.
 pub mod fee_kind {
     pub const EMBLEM: u8 = 1;
+    pub const CHARTER: u8 = 2;
 }
 
 /// A Guild Emblem costs 10 gold (`cm:GuildHandler.cpp:750-757`).
 pub const EMBLEM_COST_COPPER: u32 = 100_000;
+
+/// The Guild Charter item, its display and its price (`cm:PetitionsHandler.cpp:39-42`).
+pub const GUILD_CHARTER_ENTRY: u32 = 5863;
+pub const CHARTER_DISPLAY_ID: u32 = 16161;
+pub const CHARTER_COST_COPPER: u32 = 1000;
+
+/// Signatures a Petition needs to found a Guild, and the most it takes. Vanilla asks for nine
+/// (`cm:World.cpp:589`); the client signs nine at most (`cm:PetitionsHandler.cpp:371`).
+pub const MIN_PETITION_SIGNATURES: usize = 9;
+pub const MAX_PETITION_SIGNATURES: usize = 9;
+
+/// The key of the Signature in `slot` (`0..MAX_PETITION_SIGNATURES`) of Petition `petition_id`.
+/// The Gateway's cache has no index on the Petition column, so it finds a Petition's Signatures by
+/// these keys: at most nine keyed lookups instead of a scan of every Signature in the realm.
+pub fn petition_signature_key(petition_id: u32, slot: usize) -> u64 {
+    (u64::from(petition_id) << 8) | (slot as u64 & 0xFF)
+}
 
 /// Why the Module refused a guild Durable Request. The tag is the whole reducer error text, so
 /// neither tier matches on human prose. A Refusal leaves every guild row unchanged.
@@ -237,10 +278,30 @@ pub enum GuildRefusal {
     TooLong,
     /// Add Rank at [`MAX_RANKS`], or Delete Rank at [`MIN_RANKS`].
     RanksAtLimit,
+    /// The Character already owns an open Petition.
+    AlreadyHasPetition,
+    /// No open Petition belongs to the named Guild Charter.
+    NoSuchPetition,
+    /// The actor does not own the Petition.
+    NotPetitionOwner,
+    /// A Petition owner cannot sign its own Petition.
+    CantSignOwn,
+    /// The Petition holds [`MAX_PETITION_SIGNATURES`] Signatures.
+    PetitionFull,
+    /// The Petition holds fewer than [`MIN_PETITION_SIGNATURES`] Signatures.
+    NeedMoreSignatures,
+    /// The Guild Charter item template is missing from this World Shard.
+    CharterUnavailable,
+    /// No free bag slot for the Guild Charter.
+    BagsFull,
+    /// The payer already holds as many Guild Charters as the item allows.
+    CharterLimit,
+    /// The signer's Realm Account is unknown, so one Signature per Account cannot hold.
+    UnknownRealmAccount,
 }
 
 impl GuildRefusal {
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 30] = [
         Self::NotGameMaster,
         Self::NameInvalid,
         Self::NameExists,
@@ -261,6 +322,16 @@ impl GuildRefusal {
         Self::TargetIsSelf,
         Self::TooLong,
         Self::RanksAtLimit,
+        Self::AlreadyHasPetition,
+        Self::NoSuchPetition,
+        Self::NotPetitionOwner,
+        Self::CantSignOwn,
+        Self::PetitionFull,
+        Self::NeedMoreSignatures,
+        Self::CharterUnavailable,
+        Self::BagsFull,
+        Self::CharterLimit,
+        Self::UnknownRealmAccount,
     ];
 
     pub fn as_tag(self) -> &'static str {
@@ -285,6 +356,16 @@ impl GuildRefusal {
             Self::TargetIsSelf => "guild:target_is_self",
             Self::TooLong => "guild:too_long",
             Self::RanksAtLimit => "guild:ranks_at_limit",
+            Self::AlreadyHasPetition => "guild:already_has_petition",
+            Self::NoSuchPetition => "guild:no_such_petition",
+            Self::NotPetitionOwner => "guild:not_petition_owner",
+            Self::CantSignOwn => "guild:cant_sign_own",
+            Self::PetitionFull => "guild:petition_full",
+            Self::NeedMoreSignatures => "guild:need_more_signatures",
+            Self::CharterUnavailable => "guild:charter_unavailable",
+            Self::BagsFull => "guild:bags_full",
+            Self::CharterLimit => "guild:charter_limit",
+            Self::UnknownRealmAccount => "guild:unknown_realm_account",
         }
     }
 
@@ -404,6 +485,14 @@ mod tests {
         assert!(fits_length(&"é".repeat(31), MAX_NOTE));
         assert!(!fits_length(&"é".repeat(32), MAX_NOTE));
         assert!(fits_length("", MAX_MOTD));
+    }
+
+    #[test]
+    fn each_petition_has_its_own_nine_signature_keys() {
+        assert_eq!(petition_signature_key(1, 0), 0x100);
+        assert_eq!(petition_signature_key(1, 8), 0x108);
+        assert_eq!(petition_signature_key(2, 0), 0x200);
+        assert_eq!(petition_signature_key(u32::MAX, 8), 0x00FF_FFFF_FF08);
     }
 
     #[test]
