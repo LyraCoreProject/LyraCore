@@ -8,6 +8,9 @@ use super::guild_accept_request_type::GuildAcceptRequest;
 use super::guild_gm_create_type::GuildGmCreate;
 use super::guild_invite_request_type::GuildInviteRequest;
 use super::guild_note_edit_type::GuildNoteEdit;
+use super::guild_petition_offer_type::GuildPetitionOffer;
+use super::guild_petition_rename_type::GuildPetitionRename;
+use super::guild_petition_sign_type::GuildPetitionSign;
 use super::guild_rank_edit_type::GuildRankEdit;
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
@@ -50,6 +53,18 @@ pub enum GuildOp {
     AddRank(String),
 
     DeleteRank,
+
+    SignPetition(GuildPetitionSign),
+
+    OfferPetition(GuildPetitionOffer),
+
+    DeclinePetition(u64),
+
+    RenamePetition(GuildPetitionRename),
+
+    TurnInPetition(u64),
+
+    ClosePetition(u32),
 }
 
 impl __sdk::InModule for GuildOp {

@@ -695,6 +695,13 @@ parity_test!(parity_game_guild_fee_hold, "game_guild_fee_hold", lyracore_module:
 parity_test!(parity_game_guild_fee_decision, "game_guild_fee_decision", lyracore_module::guild::fee::GuildFeeDecision, bindings::guild_fee_decision_type::GuildFeeDecision, {
     operation_id, payer_guid, kind, accepted, refusal, petition_id, decided_micros,
 });
+// Petitions and their Signatures on Realm-core.
+parity_test!(parity_game_guild_petition, "game_guild_petition", lyracore_module::guild::petition::GuildPetition, bindings::guild_petition_type::GuildPetition, {
+    petition_id, charter_item_guid, owner_guid, owner_name, team, name, created_micros,
+});
+parity_test!(parity_game_guild_petition_signature, "game_guild_petition_signature", lyracore_module::guild::petition::GuildPetitionSignature, bindings::guild_petition_signature_type::GuildPetitionSignature, {
+    signature_key, petition_id, signer_guid, signer_name, signer_realm_account, signed_micros,
+});
 parity_test!(parity_game_creature_quest_tap, "game_creature_quest_tap", lyracore_module::CreatureQuestTap, bindings::creature_quest_tap_type::CreatureQuestTap, {
     creature_guid, character_guid,
 });
@@ -1202,6 +1209,8 @@ const MANIFEST_TABLES: &[&str] = &[
     "game_guild_event",
     "game_guild_fee_hold",
     "game_guild_fee_decision",
+    "game_guild_petition",
+    "game_guild_petition_signature",
     "game_creature_quest_tap",
     "game_creature_quest_tap_member",
     "game_creature_loot_tag_group",

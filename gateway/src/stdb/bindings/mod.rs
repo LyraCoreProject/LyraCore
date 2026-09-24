@@ -502,6 +502,8 @@ pub mod game_guild_fee_decision_table;
 pub mod game_guild_fee_hold_table;
 pub mod game_guild_invite_table;
 pub mod game_guild_member_table;
+pub mod game_guild_petition_signature_table;
+pub mod game_guild_petition_table;
 pub mod game_guild_rank_table;
 pub mod game_guild_table;
 pub mod game_hunter_pet_protocol_table;
@@ -679,6 +681,8 @@ pub mod guid_allocator_type;
 pub mod guid_range_assignment_type;
 pub mod guid_range_type;
 pub mod guild_accept_request_type;
+pub mod guild_charter_purchase_type;
+pub mod guild_charter_terms_type;
 pub mod guild_emblem_purchase_type;
 pub mod guild_emblem_type;
 pub mod guild_event_type;
@@ -692,6 +696,11 @@ pub mod guild_invite_type;
 pub mod guild_member_type;
 pub mod guild_note_edit_type;
 pub mod guild_op_type;
+pub mod guild_petition_offer_type;
+pub mod guild_petition_rename_type;
+pub mod guild_petition_sign_type;
+pub mod guild_petition_signature_type;
+pub mod guild_petition_type;
 pub mod guild_rank_edit_type;
 pub mod guild_rank_type;
 pub mod guild_type;
@@ -732,6 +741,7 @@ pub mod gw_clear_trade_item_reducer;
 pub mod gw_client_command_reducer;
 pub mod gw_del_friend_reducer;
 pub mod gw_del_ignore_reducer;
+pub mod gw_destroy_guild_charter_reducer;
 pub mod gw_disenchant_reducer;
 pub mod gw_duel_accept_reducer;
 pub mod gw_duel_cancel_reducer;
@@ -1626,6 +1636,8 @@ pub use game_guild_fee_decision_table::*;
 pub use game_guild_fee_hold_table::*;
 pub use game_guild_invite_table::*;
 pub use game_guild_member_table::*;
+pub use game_guild_petition_signature_table::*;
+pub use game_guild_petition_table::*;
 pub use game_guild_rank_table::*;
 pub use game_guild_table::*;
 pub use game_hunter_pet_protocol_table::*;
@@ -1803,6 +1815,8 @@ pub use guid_allocator_type::GuidAllocator;
 pub use guid_range_assignment_type::GuidRangeAssignment;
 pub use guid_range_type::GuidRange;
 pub use guild_accept_request_type::GuildAcceptRequest;
+pub use guild_charter_purchase_type::GuildCharterPurchase;
+pub use guild_charter_terms_type::GuildCharterTerms;
 pub use guild_emblem_purchase_type::GuildEmblemPurchase;
 pub use guild_emblem_type::GuildEmblem;
 pub use guild_event_type::GuildEvent;
@@ -1816,6 +1830,11 @@ pub use guild_invite_type::GuildInvite;
 pub use guild_member_type::GuildMember;
 pub use guild_note_edit_type::GuildNoteEdit;
 pub use guild_op_type::GuildOp;
+pub use guild_petition_offer_type::GuildPetitionOffer;
+pub use guild_petition_rename_type::GuildPetitionRename;
+pub use guild_petition_sign_type::GuildPetitionSign;
+pub use guild_petition_signature_type::GuildPetitionSignature;
+pub use guild_petition_type::GuildPetition;
 pub use guild_rank_edit_type::GuildRankEdit;
 pub use guild_rank_type::GuildRank;
 pub use guild_type::Guild;
@@ -1856,6 +1875,7 @@ pub use gw_clear_trade_item_reducer::gw_clear_trade_item;
 pub use gw_client_command_reducer::gw_client_command;
 pub use gw_del_friend_reducer::gw_del_friend;
 pub use gw_del_ignore_reducer::gw_del_ignore;
+pub use gw_destroy_guild_charter_reducer::gw_destroy_guild_charter;
 pub use gw_disenchant_reducer::gw_disenchant;
 pub use gw_duel_accept_reducer::gw_duel_accept;
 pub use gw_duel_cancel_reducer::gw_duel_cancel;
@@ -3393,6 +3413,10 @@ pub enum Reducer {
         request_actor: SessionActor,
         target_guid: u64,
     },
+    GwDestroyGuildCharter {
+        request_actor: SessionActor,
+        charter_item_guid: u64,
+    },
     GwDisenchant {
         request_actor: SessionActor,
         slot: u8,
@@ -4495,6 +4519,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwClientCommand { .. } => "gw_client_command",
             Reducer::GwDelFriend { .. } => "gw_del_friend",
             Reducer::GwDelIgnore { .. } => "gw_del_ignore",
+            Reducer::GwDestroyGuildCharter { .. } => "gw_destroy_guild_charter",
             Reducer::GwDisenchant { .. } => "gw_disenchant",
             Reducer::GwDuelAccept { .. } => "gw_duel_accept",
             Reducer::GwDuelCancel { .. } => "gw_duel_cancel",
@@ -6716,6 +6741,13 @@ Reducer::DebugVerifyRangedLethalDamageFloorFixture{
                 request_actor: request_actor.clone(),
                 target_guid: target_guid.clone(),
 }),
+            Reducer::GwDestroyGuildCharter{
+                request_actor,
+                charter_item_guid,
+}             => __sats::bsatn::to_vec(&gw_destroy_guild_charter_reducer::GwDestroyGuildCharterArgs {
+                request_actor: request_actor.clone(),
+                charter_item_guid: charter_item_guid.clone(),
+}),
             Reducer::GwDisenchant{
                 request_actor,
                 slot,
@@ -8292,6 +8324,8 @@ pub struct DbUpdate {
     game_guild_fee_hold: __sdk::TableUpdate<GuildFeeHold>,
     game_guild_invite: __sdk::TableUpdate<GuildInvite>,
     game_guild_member: __sdk::TableUpdate<GuildMember>,
+    game_guild_petition: __sdk::TableUpdate<GuildPetition>,
+    game_guild_petition_signature: __sdk::TableUpdate<GuildPetitionSignature>,
     game_guild_rank: __sdk::TableUpdate<GuildRank>,
     game_hunter_pet: __sdk::TableUpdate<HunterPet>,
     game_hunter_pet_protocol: __sdk::TableUpdate<HunterPetProtocol>,
@@ -8919,6 +8953,12 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_guild_member" => db_update
                     .game_guild_member
                     .append(game_guild_member_table::parse_table_update(table_update)?),
+                "game_guild_petition" => db_update
+                    .game_guild_petition
+                    .append(game_guild_petition_table::parse_table_update(table_update)?),
+                "game_guild_petition_signature" => db_update.game_guild_petition_signature.append(
+                    game_guild_petition_signature_table::parse_table_update(table_update)?,
+                ),
                 "game_guild_rank" => db_update
                     .game_guild_rank
                     .append(game_guild_rank_table::parse_table_update(table_update)?),
@@ -10041,6 +10081,15 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.game_guild_member = cache
             .apply_diff_to_table::<GuildMember>("game_guild_member", &self.game_guild_member)
             .with_updates_by_pk(|row| &row.character_guid);
+        diff.game_guild_petition = cache
+            .apply_diff_to_table::<GuildPetition>("game_guild_petition", &self.game_guild_petition)
+            .with_updates_by_pk(|row| &row.petition_id);
+        diff.game_guild_petition_signature = cache
+            .apply_diff_to_table::<GuildPetitionSignature>(
+                "game_guild_petition_signature",
+                &self.game_guild_petition_signature,
+            )
+            .with_updates_by_pk(|row| &row.signature_key);
         diff.game_guild_rank = cache
             .apply_diff_to_table::<GuildRank>("game_guild_rank", &self.game_guild_rank)
             .with_updates_by_pk(|row| &row.id);
@@ -11038,6 +11087,12 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_guild_member" => db_update
                     .game_guild_member
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_guild_petition" => db_update
+                    .game_guild_petition
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_guild_petition_signature" => db_update
+                    .game_guild_petition_signature
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_guild_rank" => db_update
                     .game_guild_rank
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -11882,6 +11937,12 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_guild_member" => db_update
                     .game_guild_member
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_guild_petition" => db_update
+                    .game_guild_petition
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_guild_petition_signature" => db_update
+                    .game_guild_petition_signature
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_guild_rank" => db_update
                     .game_guild_rank
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -12443,6 +12504,8 @@ pub struct AppliedDiff<'r> {
     game_guild_fee_hold: __sdk::TableAppliedDiff<'r, GuildFeeHold>,
     game_guild_invite: __sdk::TableAppliedDiff<'r, GuildInvite>,
     game_guild_member: __sdk::TableAppliedDiff<'r, GuildMember>,
+    game_guild_petition: __sdk::TableAppliedDiff<'r, GuildPetition>,
+    game_guild_petition_signature: __sdk::TableAppliedDiff<'r, GuildPetitionSignature>,
     game_guild_rank: __sdk::TableAppliedDiff<'r, GuildRank>,
     game_hunter_pet: __sdk::TableAppliedDiff<'r, HunterPet>,
     game_hunter_pet_protocol: __sdk::TableAppliedDiff<'r, HunterPetProtocol>,
@@ -13271,6 +13334,16 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<GuildMember>(
             "game_guild_member",
             &self.game_guild_member,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<GuildPetition>(
+            "game_guild_petition",
+            &self.game_guild_petition,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<GuildPetitionSignature>(
+            "game_guild_petition_signature",
+            &self.game_guild_petition_signature,
             event,
         );
         callbacks.invoke_table_row_callbacks::<GuildRank>(
@@ -14714,6 +14787,8 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_guild_fee_hold_table::register_table(client_cache);
         game_guild_invite_table::register_table(client_cache);
         game_guild_member_table::register_table(client_cache);
+        game_guild_petition_table::register_table(client_cache);
+        game_guild_petition_signature_table::register_table(client_cache);
         game_guild_rank_table::register_table(client_cache);
         game_hunter_pet_table::register_table(client_cache);
         game_hunter_pet_protocol_table::register_table(client_cache);
@@ -14993,6 +15068,8 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_guild_fee_hold",
         "game_guild_invite",
         "game_guild_member",
+        "game_guild_petition",
+        "game_guild_petition_signature",
         "game_guild_rank",
         "game_hunter_pet",
         "game_hunter_pet_protocol",

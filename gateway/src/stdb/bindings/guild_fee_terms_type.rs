@@ -4,12 +4,15 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::guild_charter_terms_type::GuildCharterTerms;
 use super::guild_emblem_type::GuildEmblem;
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub enum GuildFeeTerms {
     Emblem(GuildEmblem),
+
+    Charter(GuildCharterTerms),
 }
 
 impl __sdk::InModule for GuildFeeTerms {

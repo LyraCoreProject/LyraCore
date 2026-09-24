@@ -101,6 +101,20 @@ pub struct ItemInstanceView {
     /// `ITEM_FIELD_ITEM_TEXT_ID` — nonzero on a Letter Copy's Plain Letter
     /// (`CMSG_MAIL_CREATE_TEXT_ITEM`). Zero means the item carries no readable text.
     pub item_text_id: u32,
+    /// ITEM_FIELD_ENCHANTMENT. A Guild Charter carries its Petition id here, projected from
+    /// Realm-core (`cm:PetitionsHandler.cpp:141`); every other item leaves it 0 and unwritten.
+    pub enchantment: u32,
+}
+
+/// ITEM_FIELD_ENCHANTMENT, the first enchantment word of an item (`cm:UpdateFields.h:48`).
+pub const ITEM_FIELD_ENCHANTMENT: u16 = 22;
+
+/// A Guild Charter's Petition id as a partial VALUES update of the Charter item. Raw, so it never
+/// carries `OBJECT_FIELD_TYPE`.
+pub fn build_charter_petition_values(charter_item_guid: u64, petition_id: u32) -> (u16, Vec<u8>) {
+    let mut mask = update_mask::UpdateMaskValues::new();
+    mask.set_u32(ITEM_FIELD_ENCHANTMENT, petition_id);
+    build_values_update_raw(charter_item_guid, &mask)
 }
 
 /// Build `SMSG_ITEM_QUERY_SINGLE_RESPONSE` so the client caches the item's name/tooltip/icon (the
@@ -403,6 +417,8 @@ pub fn build_buy_bank_slot_reply(outcome: Result<(), &str>) -> SMSG_BUY_BANK_SLO
 /// - Bags (> 0): `ObjectType::Container` + `UpdateMask::Container` with `CONTAINER_FIELD_NUM_SLOTS`
 ///   set so the client shows a bag window with the correct slot count. `ITEM_FIELD_OWNER` and
 ///   `ITEM_FIELD_CONTAINED` both point at the owning player. Sent before the player self-spawn.
+///
+/// `ITEM_FIELD_ENCHANTMENT` is written only when nonzero, so an item without one keeps its bytes.
 pub fn build_item_create_object(inst: &ItemInstanceView) -> SMSG_UPDATE_OBJECT {
     let owner = Guid::new(inst.owner_guid);
     let update_flag =
@@ -424,6 +440,9 @@ pub fn build_item_create_object(inst: &ItemInstanceView) -> SMSG_UPDATE_OBJECT {
             .finalize();
         if inst.item_text_id != 0 {
             container.set_item_item_text_id(inst.item_text_id as i32);
+        }
+        if inst.enchantment != 0 {
+            container.set_item_enchantment(inst.enchantment as i32);
         }
         SMSG_UPDATE_OBJECT {
             has_transport: 0,
@@ -451,6 +470,9 @@ pub fn build_item_create_object(inst: &ItemInstanceView) -> SMSG_UPDATE_OBJECT {
         // pre-Letter-Copy wire shape).
         if inst.item_text_id != 0 {
             item.set_item_item_text_id(inst.item_text_id as i32);
+        }
+        if inst.enchantment != 0 {
+            item.set_item_enchantment(inst.enchantment as i32);
         }
         SMSG_UPDATE_OBJECT {
             has_transport: 0,
@@ -535,4 +557,51 @@ fn weapon_subclass_mask(player_class: u8) -> u32 {
     (0..=weapon_subclass::FISHING_POLE)
         .filter(|&subclass| table.can_equip(item_class::WEAPON, subclass))
         .fold(0, |mask, subclass| mask | 1 << subclass)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn charter(enchantment: u32) -> ItemInstanceView {
+        ItemInstanceView {
+            guid: 0x4000_0000_0000_0101,
+            entry: lyracore_shared::guild::GUILD_CHARTER_ENTRY,
+            owner_guid: 1,
+            slot: 23,
+            stack_count: 1,
+            enchantment,
+            ..ItemInstanceView::default()
+        }
+    }
+
+    fn item_mask(inst: &ItemInstanceView) -> wow_world_messages::vanilla::UpdateItem {
+        match build_item_create_object(inst).objects.as_slice() {
+            [Object::CreateObject2 {
+                mask2: UpdateMask::Item(item),
+                ..
+            }] => item.clone(),
+            other => panic!("expected one Item CREATE, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_charter_create_carries_its_petition_id_in_the_first_enchantment_word() {
+        assert_eq!(item_mask(&charter(42)).item_enchantment(), Some(42));
+    }
+
+    #[test]
+    fn an_item_without_an_enchantment_leaves_the_word_unwritten() {
+        assert_eq!(item_mask(&charter(0)).item_enchantment(), None);
+    }
+
+    #[test]
+    fn the_petition_values_update_sets_only_word_twenty_two_of_the_charter() {
+        let (opcode, body) = build_charter_petition_values(0x4000_0000_0000_0101, 42);
+        assert_eq!(opcode, 0x00A9);
+        let updates = lyracore_shared::values_mask::parse_values_updates(&body);
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].guid, 0x4000_0000_0000_0101);
+        assert_eq!(updates[0].fields, vec![(22, 42)]);
+    }
 }

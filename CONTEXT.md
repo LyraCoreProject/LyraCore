@@ -767,6 +767,21 @@ A short note a Guild Rank with EPNOTE sets on a member. Every member sees it on 
 A short note a Guild Rank with EOFFNOTE sets on a member. It shows only to a viewer whose own Guild
 Rank holds VIEWOFFNOTE; every other viewer's roster carries it blank.
 
+**Guild Charter**:
+The item (entry 5863) that stands for one Petition. It costs 10 silver through a Fee Hold. Its owner
+offers it for Signatures and turns it in to found the Guild.
+
+**Petition**:
+Realm-core's record of a proposed Guild: its owner, its name, its Guild Charter and its Signatures.
+A Character owns at most one.
+
+**Signature**:
+One Character's endorsement of a Petition. One per Realm Account; nine found the Guild.
+
+**Petitioner**:
+An NPC with the petitioner flag. One that is also a Tabard Designer sells Guild Charters.
+_Avoid_: guild registrar
+
 ### World clock and weather
 
 **Realm Clock**:

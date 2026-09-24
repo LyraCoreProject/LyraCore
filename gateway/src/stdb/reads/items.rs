@@ -28,10 +28,15 @@ impl Coordinator {
     }
 
     pub fn player_items(&self, owner_guid: u64) -> Result<Vec<crate::codec::ItemInstanceView>> {
+        let mut items = self.player_item_rows(owner_guid);
+        self.project_charter_petitions(&mut items);
+        Ok(items)
+    }
+
+    fn player_item_rows(&self, owner_guid: u64) -> Vec<crate::codec::ItemInstanceView> {
         let guard = self.0.coord();
         let db = &guard.conn.db;
-        let items = db
-            .game_item_instance()
+        db.game_item_instance()
             .iter()
             .filter(|i| i.owner_guid == owner_guid)
             // Skip an instance whose template is absent: a delete-template migration can leave orphaned rows
@@ -51,10 +56,10 @@ impl Coordinator {
                     container_slots: tmpl.container_slots,
                     random_property_id: i.random_property_id,
                     item_text_id: i.item_text_id,
+                    enchantment: 0,
                 })
             })
-            .collect();
-        Ok(items)
+            .collect()
     }
 
     /// Does `owner_guid` hold an item carrying `item_text_id`? `CMSG_ITEM_TEXT_QUERY`'s ownership

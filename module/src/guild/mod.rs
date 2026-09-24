@@ -1,7 +1,7 @@
-//! Guilds on Realm-core. Every guild fact lives here: the Guild, its Guild Ranks, its members and
-//! the Guild Events that tell members what happened. All four tables are private. The copper a
-//! guild operation costs stays on the payer's Home Shard in a Fee Hold until Realm-core decides
-//! ([`fee`]).
+//! Guilds on Realm-core. Every guild fact lives here: the Guild, its Guild Ranks, its members, the
+//! Petitions that found new Guilds ([`petition`]) and the Guild Events that tell members what
+//! happened. Every table is private. The copper a guild operation costs stays on the payer's Home
+//! Shard in a Fee Hold until Realm-core decides ([`fee`]).
 //!
 //! Realm-core holds no Character rows, so the Gateway conveys the Character facts a Gate needs
 //! (name, team, Realm Account, GM level) inside the Durable Request, and this Module applies the
@@ -17,6 +17,7 @@ use spacetimedb::{reducer, table, ReducerContext, SpacetimeType, Table, Timestam
 
 pub mod fee;
 pub mod membership;
+pub mod petition;
 pub(crate) use fee::{sweep_delete_game_guild_fee_hold, sweep_transfer_game_guild_fee_hold};
 mod settings;
 
@@ -185,6 +186,19 @@ pub enum GuildOp {
         name: String,
     },
     DeleteRank,
+    SignPetition(petition::GuildPetitionSign),
+    OfferPetition(petition::GuildPetitionOffer),
+    /// The actor declines to sign the Petition of `charter_item_guid`.
+    DeclinePetition {
+        charter_item_guid: u64,
+    },
+    RenamePetition(petition::GuildPetitionRename),
+    TurnInPetition {
+        charter_item_guid: u64,
+    },
+    ClosePetition {
+        petition_id: u32,
+    },
 }
 
 /// Run one guild op for the acting Character.
@@ -220,6 +234,16 @@ pub fn realm_guild_op(
         GuildOp::EditRank(edit) => settings::edit_rank(ctx, actor_guid, edit),
         GuildOp::AddRank { name } => settings::add_rank(ctx, actor_guid, &name),
         GuildOp::DeleteRank => settings::delete_rank(ctx, actor_guid),
+        GuildOp::SignPetition(request) => petition::sign(ctx, actor_guid, actor_account, request),
+        GuildOp::OfferPetition(request) => petition::offer(ctx, actor_guid, request),
+        GuildOp::DeclinePetition { charter_item_guid } => {
+            petition::decline(ctx, actor_guid, charter_item_guid)
+        }
+        GuildOp::RenamePetition(request) => petition::rename(ctx, actor_guid, request),
+        GuildOp::TurnInPetition { charter_item_guid } => {
+            petition::turn_in(ctx, actor_guid, actor_account, charter_item_guid)
+        }
+        GuildOp::ClosePetition { petition_id } => petition::close(ctx, actor_guid, petition_id),
     }
     .map_err(|refusal| refusal.as_tag().to_string())
 }
@@ -330,7 +354,8 @@ pub fn create_guild(
 }
 
 /// Insert one member row. This is the only place a member row is inserted. Refuses a Character
-/// that is already a member of any Guild (`cm:Guild.cpp:167-179`).
+/// that is already a member of any Guild (`cm:Guild.cpp:167-179`). A joiner's own Petition closes
+/// and its Signatures are struck.
 pub fn add_member(
     ctx: &ReducerContext,
     guild_id: u32,
@@ -342,6 +367,7 @@ pub fn add_member(
     if member(ctx, character_guid).is_some() {
         return Err(GuildRefusal::AlreadyInGuild);
     }
+    petition::forget_joiner(ctx, character_guid);
     ctx.db.game_guild_member().insert(GuildMember {
         character_guid,
         guild_id,
@@ -441,7 +467,7 @@ mod tests {
     /// a schema a live client silently decodes as the wrong op.
     #[test]
     fn guild_op_variant_bsatn_tags_are_pinned_by_position() {
-        let cases: [(&str, GuildOp, u8); 19] = [
+        let cases: [(&str, GuildOp, u8); 25] = [
             (
                 "GmCreate",
                 GuildOp::GmCreate(GuildGmCreate {
@@ -540,6 +566,51 @@ mod tests {
                 17,
             ),
             ("DeleteRank", GuildOp::DeleteRank, 18),
+            (
+                "SignPetition",
+                GuildOp::SignPetition(petition::GuildPetitionSign {
+                    charter_item_guid: 0,
+                    actor_name: String::new(),
+                    actor_team: 0,
+                }),
+                19,
+            ),
+            (
+                "OfferPetition",
+                GuildOp::OfferPetition(petition::GuildPetitionOffer {
+                    charter_item_guid: 0,
+                    target_guid: 0,
+                    target_team: 0,
+                }),
+                20,
+            ),
+            (
+                "DeclinePetition",
+                GuildOp::DeclinePetition {
+                    charter_item_guid: 0,
+                },
+                21,
+            ),
+            (
+                "RenamePetition",
+                GuildOp::RenamePetition(petition::GuildPetitionRename {
+                    charter_item_guid: 0,
+                    name: String::new(),
+                }),
+                22,
+            ),
+            (
+                "TurnInPetition",
+                GuildOp::TurnInPetition {
+                    charter_item_guid: 0,
+                },
+                23,
+            ),
+            (
+                "ClosePetition",
+                GuildOp::ClosePetition { petition_id: 0 },
+                24,
+            ),
         ];
 
         for (name, op, expected_tag) in cases {

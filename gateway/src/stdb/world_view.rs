@@ -898,6 +898,7 @@ fn register_shard_callbacks(
             "game_guild_member.insert",
             "game_guild_member.update",
             "game_guild_member.delete",
+            "game_guild_petition.insert",
         ],
     );
     wire_insert_live(
@@ -1167,6 +1168,7 @@ pub(crate) fn arm_realm_private(view: Arc<WorldView>, realm: Coordinator, coord:
             "realm.game_guild_member.insert",
             "realm.game_guild_member.update",
             "realm.game_guild_member.delete",
+            "realm.game_guild_petition.insert",
         ],
     );
 }
@@ -1202,24 +1204,42 @@ fn guild_roster_snapshot_read(realm: &Coordinator) -> GuildRosterSnapshotRead {
     Arc::new(move |guild_id, kind| crate::world::GuildEventSnapshot::build(&realm, guild_id, kind))
 }
 
-/// Register the Guild Event relay and the Guild Projection relay on the connection that holds the
-/// guild rows. `labels` name the event insert and the member insert, update and delete callbacks.
+/// Reads the open Petition of one Guild Charter from the Realm-core cache. A closure so relay
+/// tests can supply a Petition without a connection.
+pub(crate) type PetitionRead = Arc<dyn Fn(u64) -> Option<crate::codec::PetitionView> + Send + Sync>;
+
+fn petition_read(realm: &Coordinator) -> PetitionRead {
+    let realm = realm.clone();
+    Arc::new(move |charter_item_guid| realm.guild_petition_of_charter(charter_item_guid))
+}
+
+/// Register the Guild Event relay, the Guild Projection relay and the Guild Charter's Petition id
+/// relay on the connection that holds the guild rows. `labels` name the event insert, the member
+/// insert, update and delete, and the Petition insert callbacks.
 fn wire_guild_relays(
     db: &RemoteTables,
     view: &Arc<WorldView>,
     realm: &Coordinator,
-    labels: [&'static str; 4],
+    labels: [&'static str; 5],
 ) {
-    let [event_insert, member_insert, member_update, member_delete] = labels;
+    let [event_insert, member_insert, member_update, member_delete, petition_insert] = labels;
     let membership = guild_membership_read(realm);
     let snapshot_read = guild_roster_snapshot_read(realm);
+    let petitions = petition_read(realm);
     {
         let membership = membership.clone();
         let snapshot_read = snapshot_read.clone();
         wire_insert_live(db.game_guild_event(), event_insert, view, move |v, row| {
-            guild_event_appeared(v, &membership, &snapshot_read, row)
+            if lyracore_shared::guild::event_kind::is_petition(row.kind) {
+                petition_event_appeared(v, &petitions, row);
+            } else {
+                guild_event_appeared(v, &membership, &snapshot_read, row);
+            }
         });
     }
+    wire_insert(db.game_guild_petition(), petition_insert, view, |v, row| {
+        charter_petition_opened(v, row)
+    });
     {
         let membership = membership.clone();
         wire_insert(
@@ -1903,9 +1923,29 @@ fn item_owner_job(
 fn item_inserted(view: &WorldView, coord: &Coordinator, shard: ShardId, row: &ItemInstance) {
     let (coord, row) = (coord.clone(), row.clone());
     item_owner_job(view, shard, row.owner_guid, move |viewer| {
+        let enchantment = charter_petition_id(&coord, &row);
         let guard = coord.0.coord();
-        super::subscriptions::item_instance_insert_outbound(&guard.conn.db, viewer.self_guid, &row)
+        super::subscriptions::item_instance_insert_outbound(
+            &guard.conn.db,
+            viewer.self_guid,
+            &row,
+            enchantment,
+        )
     });
+}
+
+/// The Petition id a Guild Charter shows, read from the Realm-core cache before the Home Shard's
+/// cache guard is taken. 0 for every other item, and for a Charter whose Petition is not open
+/// yet; the Petition insert relay sends it later.
+fn charter_petition_id(coord: &Coordinator, row: &ItemInstance) -> u32 {
+    if row.entry != lyracore_shared::guild::GUILD_CHARTER_ENTRY {
+        return 0;
+    }
+    coord
+        .realm_core()
+        .ok()
+        .and_then(|realm| realm.charter_petition_id(row.guid))
+        .unwrap_or(0)
 }
 
 fn item_updated(
@@ -2475,6 +2515,49 @@ fn guild_event_appeared(
     }
 }
 
+/// A petition Guild Event landed: it reaches its one addressed recipient. The two kinds that show
+/// a Petition read it when the job runs, once per event.
+fn petition_event_appeared(view: &WorldView, petitions: &PetitionRead, row: &GuildEvent) {
+    let Some(viewer) = view
+        .session_of_owner(row.recipient_guid)
+        .and_then(|session| view.viewer(session))
+        .filter(|viewer| {
+            super::subscriptions::private_recipient_audience(row.recipient_guid, viewer.self_guid)
+        })
+    else {
+        return;
+    };
+    let (row, petitions) = (row.clone(), petitions.clone());
+    enqueue(viewer, move |_viewer| {
+        use lyracore_shared::guild::event_kind;
+        let petition = match row.kind {
+            event_kind::PETITION_OFFERED | event_kind::PETITION_CHANGED => {
+                petitions(row.other_guid)
+            }
+            _ => None,
+        };
+        super::subscriptions::petition_event_outbound(&row, petition.as_ref())
+    });
+}
+
+/// A Petition opened: its owner's Guild Charter shows the Petition id in ITEM_FIELD_ENCHANTMENT,
+/// where the client reads it back for its petition queries (`cm:PetitionsHandler.cpp:141`).
+fn charter_petition_opened(view: &WorldView, row: &GuildPetition) {
+    let Some(viewer) = view
+        .session_of_owner(row.owner_guid)
+        .and_then(|session| view.viewer(session))
+        .filter(|viewer| viewer.self_guid == row.owner_guid)
+    else {
+        return;
+    };
+    let (charter_item_guid, petition_id) = (row.charter_item_guid, row.petition_id);
+    enqueue(viewer, move |_viewer| {
+        let (opcode, body) =
+            crate::codec::build_charter_petition_values(charter_item_guid, petition_id);
+        vec![Outbound::Raw { opcode, body }]
+    });
+}
+
 /// Every World Session on this Gateway whose Character is a member of `guild_id`. The one
 /// audience read for broadcast Guild Events.
 fn online_audience(
@@ -2765,17 +2848,18 @@ mod relay_bench;
 #[cfg(test)]
 mod family_audience_tests {
     use super::{
-        addon_message_appeared, duel_winner_audience, exploration_outbound_for_word,
-        guild_event_appeared, guild_membership_changed, is_initial_apply, item_owner_job,
-        levelup_appeared, mail_arrived, reputation_appeared, sweep_into_view,
-        system_message_appeared, teleport_appeared, weather_changed, xp_appeared, zone_crossed,
-        BoundIdentity, ExplorationReplay, GuildMembershipRead, GuildRosterSnapshotRead,
-        MotionPending, OwnerGuid, Viewer, WorldView,
+        addon_message_appeared, charter_petition_opened, duel_winner_audience,
+        exploration_outbound_for_word, guild_event_appeared, guild_membership_changed,
+        is_initial_apply, item_owner_job, levelup_appeared, mail_arrived, petition_event_appeared,
+        reputation_appeared, sweep_into_view, system_message_appeared, teleport_appeared,
+        weather_changed, xp_appeared, zone_crossed, BoundIdentity, ExplorationReplay,
+        GuildMembershipRead, GuildRosterSnapshotRead, MotionPending, OwnerGuid, PetitionRead,
+        Viewer, WorldView,
     };
     use crate::stdb::aoi::ViewerGates;
     use crate::stdb::bindings::{
-        AddonMessage, CharacterExplored, CharacterQuest, GuildEvent, LevelupEvent, MailArrival,
-        PlayerReputation, SystemMessageEvent, TeleportEvent, XpEvent, ZoneWeather,
+        AddonMessage, CharacterExplored, CharacterQuest, GuildEvent, GuildPetition, LevelupEvent,
+        MailArrival, PlayerReputation, SystemMessageEvent, TeleportEvent, XpEvent, ZoneWeather,
     };
     use crate::stdb::subscriptions::{private_recipient_audience, quest_update_packets};
     use crate::stdb::world_index::{CellKey, EntityLayer};
@@ -3576,6 +3660,237 @@ mod family_audience_tests {
             raw_packets(queued_job(&inviter_rx)),
             vec![(0x0086, b"Alice\0".to_vec())]
         );
+    }
+
+    const CHARTER: u64 = 0x4000_0000_0000_0101;
+
+    fn night_watch() -> crate::codec::PetitionView {
+        crate::codec::PetitionView {
+            petition_id: 42,
+            charter_item_guid: CHARTER,
+            owner_guid: 9001,
+            name: "Night Watch".into(),
+            signers: vec![9002],
+        }
+    }
+
+    /// A Petition read that answers `petition` for the Charter and counts its calls.
+    fn counting_petition_read(
+        petition: Option<crate::codec::PetitionView>,
+    ) -> (PetitionRead, Arc<AtomicU32>) {
+        let reads = Arc::new(AtomicU32::new(0));
+        let recorded = reads.clone();
+        let read: PetitionRead = Arc::new(move |charter_item_guid| {
+            recorded.fetch_add(1, Ordering::Relaxed);
+            petition
+                .clone()
+                .filter(|petition| petition.charter_item_guid == charter_item_guid)
+        });
+        (read, reads)
+    }
+
+    fn unreachable_petition_read() -> PetitionRead {
+        Arc::new(|_charter_item_guid| panic!("this petition kind must not read a Petition"))
+    }
+
+    fn petition_event(recipient_guid: u64, kind: u8, subject_guid: u64) -> GuildEvent {
+        GuildEvent {
+            guild_id: 0,
+            other_guid: CHARTER,
+            strings: Vec::new(),
+            ..guild_event(recipient_guid, kind, subject_guid)
+        }
+    }
+
+    /// Registers the recipient 9003 and a bystander 9004 on one shard.
+    fn recipient_and_bystander(view: &WorldView) -> (Receiver<Outbound>, Receiver<Outbound>) {
+        let anchor = CellKey::at(0, 0, 0, 0);
+        let (recipient_tx, recipient_rx) = SessionTx::with_depth(0);
+        let (bystander_tx, bystander_rx) = SessionTx::with_depth(0);
+        view.add_viewer_on_shard(
+            viewer_with_tx(1, 9003, identity(1), recipient_tx),
+            anchor,
+            0,
+        );
+        view.add_viewer_on_shard(
+            viewer_with_tx(2, 9004, identity(2), bystander_tx),
+            anchor,
+            0,
+        );
+        (recipient_rx, bystander_rx)
+    }
+
+    #[test]
+    fn an_offer_shows_its_target_the_signature_window_read_once() {
+        use lyracore_shared::guild::event_kind;
+        let view = WorldView::new(true);
+        let (target_rx, bystander_rx) = recipient_and_bystander(&view);
+        let (read, reads) = counting_petition_read(Some(night_watch()));
+
+        petition_event_appeared(
+            &view,
+            &read,
+            &petition_event(9003, event_kind::PETITION_OFFERED, 9001),
+        );
+
+        let outbound = queued_job(&target_rx);
+        let [Outbound::One(ServerOpcodeMessage::SMSG_PETITION_SHOW_SIGNATURES(window))] =
+            outbound.as_slice()
+        else {
+            panic!("expected one SMSG_PETITION_SHOW_SIGNATURES");
+        };
+        assert_eq!(
+            **window,
+            crate::codec::build_petition_show_signatures(&night_watch())
+        );
+        assert_eq!(reads.load(Ordering::Relaxed), 1);
+        assert!(bystander_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn signature_events_render_sign_results_for_the_charter_and_the_signer() {
+        use lyracore_shared::guild::event_kind;
+        use wow_world_messages::vanilla::PetitionResult;
+        let view = WorldView::new(true);
+        let (owner_rx, _bystander_rx) = recipient_and_bystander(&view);
+        for (kind, result) in [
+            (event_kind::PETITION_SIGNED, PetitionResult::Ok),
+            (
+                event_kind::PETITION_ALREADY_SIGNED,
+                PetitionResult::AlreadySigned,
+            ),
+        ] {
+            petition_event_appeared(
+                &view,
+                &unreachable_petition_read(),
+                &petition_event(9003, kind, 9002),
+            );
+            let outbound = queued_job(&owner_rx);
+            let [Outbound::One(ServerOpcodeMessage::SMSG_PETITION_SIGN_RESULTS(results))] =
+                outbound.as_slice()
+            else {
+                panic!("expected one SMSG_PETITION_SIGN_RESULTS");
+            };
+            assert_eq!(
+                (
+                    results.petition.guid(),
+                    results.owner.guid(),
+                    results.result
+                ),
+                (CHARTER, 9002, result)
+            );
+        }
+    }
+
+    #[test]
+    fn a_decline_event_names_the_decliner_to_the_owner() {
+        use lyracore_shared::guild::event_kind;
+        let view = WorldView::new(true);
+        let (owner_rx, _bystander_rx) = recipient_and_bystander(&view);
+        petition_event_appeared(
+            &view,
+            &unreachable_petition_read(),
+            &petition_event(9003, event_kind::PETITION_DECLINED, 9002),
+        );
+        let outbound = queued_job(&owner_rx);
+        let [Outbound::One(ServerOpcodeMessage::MSG_PETITION_DECLINE(declined))] =
+            outbound.as_slice()
+        else {
+            panic!("expected one MSG_PETITION_DECLINE");
+        };
+        assert_eq!(declined.petition.guid(), 9002);
+    }
+
+    #[test]
+    fn a_founder_event_names_the_new_guild() {
+        use lyracore_shared::guild::event_kind;
+        use wow_world_messages::vanilla::{GuildCommand, GuildCommandResult};
+        let view = WorldView::new(true);
+        let (signer_rx, _bystander_rx) = recipient_and_bystander(&view);
+        let row = GuildEvent {
+            guild_id: 12,
+            strings: vec!["Night Watch".into()],
+            ..petition_event(9003, event_kind::FOUNDER, 0)
+        };
+        petition_event_appeared(&view, &unreachable_petition_read(), &row);
+        let outbound = queued_job(&signer_rx);
+        let [Outbound::One(ServerOpcodeMessage::SMSG_GUILD_COMMAND_RESULT(result))] =
+            outbound.as_slice()
+        else {
+            panic!("expected one SMSG_GUILD_COMMAND_RESULT");
+        };
+        assert_eq!(
+            (result.command, result.string.as_str(), result.result),
+            (
+                GuildCommand::Founder,
+                "Night Watch",
+                GuildCommandResult::PlayerNoMoreInGuild
+            )
+        );
+    }
+
+    #[test]
+    fn a_lost_signature_sends_the_owner_a_fresh_petition_query() {
+        use lyracore_shared::guild::event_kind;
+        let view = WorldView::new(true);
+        let (owner_rx, _bystander_rx) = recipient_and_bystander(&view);
+        let (read, _) = counting_petition_read(Some(night_watch()));
+        petition_event_appeared(
+            &view,
+            &read,
+            &petition_event(9003, event_kind::PETITION_CHANGED, 9002),
+        );
+        let outbound = queued_job(&owner_rx);
+        let [Outbound::One(ServerOpcodeMessage::SMSG_PETITION_QUERY_RESPONSE(query))] =
+            outbound.as_slice()
+        else {
+            panic!("expected one SMSG_PETITION_QUERY_RESPONSE");
+        };
+        assert_eq!(
+            (
+                query.petition_id,
+                query.charter_owner.guid(),
+                query.guild_name.as_str()
+            ),
+            (42, 9001, "Night Watch")
+        );
+
+        let (gone, _) = counting_petition_read(None);
+        petition_event_appeared(
+            &view,
+            &gone,
+            &petition_event(9003, event_kind::PETITION_CHANGED, 9002),
+        );
+        assert!(
+            queued_job(&owner_rx).is_empty(),
+            "a Petition gone by the time the job runs renders nothing"
+        );
+    }
+
+    #[test]
+    fn a_new_petition_shows_its_id_on_the_owners_charter() {
+        let view = WorldView::new(true);
+        let (owner_rx, bystander_rx) = recipient_and_bystander(&view);
+        charter_petition_opened(
+            &view,
+            &GuildPetition {
+                petition_id: 42,
+                charter_item_guid: CHARTER,
+                owner_guid: 9003,
+                owner_name: "Owner".into(),
+                team: 469,
+                name: "Night Watch".into(),
+                created_micros: 0,
+            },
+        );
+        let packets = raw_packets(queued_job(&owner_rx));
+        assert_eq!(packets.len(), 1);
+        assert_eq!(packets[0].0, 0x00A9);
+        let updates = lyracore_shared::values_mask::parse_values_updates(&packets[0].1);
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].guid, CHARTER);
+        assert_eq!(updates[0].fields, vec![(22, 42)]);
+        assert!(bystander_rx.try_recv().is_err());
     }
 
     #[test]

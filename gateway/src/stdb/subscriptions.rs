@@ -930,6 +930,63 @@ pub(crate) fn guild_event_outbound(row: &GuildEvent) -> Vec<Outbound> {
     }
 }
 
+/// Render one petition Guild Event (`0x70..=0x7F`). The Charter is in `other_guid` and the
+/// signer or decliner in `subject_guid`. `petition` is the Petition of that Charter, read when the
+/// job runs; only PETITION_OFFERED and PETITION_CHANGED need it, and a Petition that is gone by
+/// then renders nothing.
+pub(crate) fn petition_event_outbound(
+    row: &GuildEvent,
+    petition: Option<&codec::PetitionView>,
+) -> Vec<Outbound> {
+    use lyracore_shared::guild::event_kind;
+    use wow_world_messages::vanilla::{
+        GuildCommand, GuildCommandResult, PetitionResult, MSG_PETITION_DECLINE,
+    };
+    let sign_results = |result| {
+        vec![Outbound::One(
+            ServerOpcodeMessage::SMSG_PETITION_SIGN_RESULTS(Box::new(
+                codec::build_petition_sign_results(row.other_guid, row.subject_guid, result),
+            )),
+        )]
+    };
+    match row.kind {
+        event_kind::PETITION_OFFERED => petition
+            .map(|petition| {
+                Outbound::One(ServerOpcodeMessage::SMSG_PETITION_SHOW_SIGNATURES(
+                    Box::new(codec::build_petition_show_signatures(petition)),
+                ))
+            })
+            .into_iter()
+            .collect(),
+        event_kind::PETITION_SIGNED => sign_results(PetitionResult::Ok),
+        event_kind::PETITION_ALREADY_SIGNED => sign_results(PetitionResult::AlreadySigned),
+        event_kind::PETITION_DECLINED => vec![Outbound::One(
+            ServerOpcodeMessage::MSG_PETITION_DECLINE(MSG_PETITION_DECLINE {
+                petition: wow_world_messages::Guid::new(row.subject_guid),
+            }),
+        )],
+        // Result 0 is success; gtker names the zero value PLAYER_NO_MORE_IN_GUILD.
+        event_kind::FOUNDER => vec![Outbound::One(
+            ServerOpcodeMessage::SMSG_GUILD_COMMAND_RESULT(Box::new(
+                codec::build_guild_command_result(
+                    GuildCommand::Founder,
+                    row.strings.first().cloned().unwrap_or_default(),
+                    GuildCommandResult::PlayerNoMoreInGuild,
+                ),
+            )),
+        )],
+        event_kind::PETITION_CHANGED => petition
+            .map(|petition| {
+                Outbound::One(ServerOpcodeMessage::SMSG_PETITION_QUERY_RESPONSE(Box::new(
+                    codec::build_petition_query_response(petition),
+                )))
+            })
+            .into_iter()
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// Relay one durable creature virtual-item projection to a viewer that already holds the creature.
 /// A delete clears all three display slots. The raw builder is the crash-safe sparse VALUES path.
 pub(crate) fn encounter_equip_outbound(
@@ -3434,6 +3491,7 @@ pub(crate) fn item_instance_insert_outbound(
     db: &RemoteTables,
     self_guid: u64,
     row: &ItemInstance,
+    enchantment: u32,
 ) -> Vec<Outbound> {
     let mut out = Vec::new();
     let (max_durability, container_slots) = db
@@ -3453,6 +3511,7 @@ pub(crate) fn item_instance_insert_outbound(
         container_slots,
         random_property_id: row.random_property_id,
         item_text_id: row.item_text_id,
+        enchantment,
     };
     out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
         Box::new(codec::build_item_create_object(&view)),

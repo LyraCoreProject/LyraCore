@@ -1046,6 +1046,10 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         "SELECT * FROM game_guild_fee_decision",
         // `game_guild_invite` is NOT subscribed here: every invite Gate and read runs inside
         // `realm_guild_op`, so no Gateway code ever reads the row back from a cache.
+        // Petitions and their Signatures live on Realm-core. The Gateway renders the signature
+        // window, the petition query and the Guild Charter's Petition id from them.
+        "SELECT * FROM game_guild_petition",
+        "SELECT * FROM game_guild_petition_signature",
         // The four box-scoped tables now ride THIS one global subscription per shard instead
         // of ~600 per-player 5×5-box subscriptions, and the gateway's own cell index
         // (`stdb::world_index`) decides who sees each row. `game_world_entity` and
