@@ -3172,8 +3172,9 @@ impl Coordinator {
     /// the one this socket authenticated into the world with — see `world::party`.
     ///
     /// This form rides a call pipe, which subscribes no group table, so the Coordinator cache may
-    /// still hold the old roster when it returns. Bot callbacks run on the Coordinator pump and must
-    /// use it. A World Session uses [`Self::realm_group_op_visible`].
+    /// still hold the old roster when it returns. Only an op that pushes no Group mirror after it
+    /// uses it: a Group Broadcast or a Target Icon request. Every roster op uses
+    /// [`Self::realm_group_op_visible`].
     pub fn realm_group_op(
         &self,
         op: u8,
@@ -3199,7 +3200,7 @@ impl Coordinator {
 
     /// [`Self::realm_group_op`] on the visibility pipe: it returns only after the Coordinator cache
     /// holds the committed roster, so the mirror push that follows reads the op's own result. The
-    /// caller runs off the Coordinator pump, on a World Session.
+    /// caller must not run on the Coordinator pump: World Sessions and the bot intent threads.
     pub fn realm_group_op_visible(
         &self,
         op: u8,

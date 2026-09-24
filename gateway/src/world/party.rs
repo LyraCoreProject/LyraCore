@@ -404,7 +404,9 @@ impl Op {
 }
 
 /// Run `op` as `self_guid` through `realm_group_op` on `authority`, the database that holds the
-/// party: Realm-core when sharded, the home shard otherwise.
+/// party: Realm-core when sharded, the home shard otherwise. It returns before the Coordinator
+/// cache holds the commit, so it is only for an op that pushes no Group mirror after it: a Group
+/// Broadcast, a Target Icon request, a declined invite, or an op on a single database.
 fn run_on_authority<A: WorldStore + ?Sized>(
     authority: &A,
     self_guid: u64,
@@ -415,8 +417,9 @@ fn run_on_authority<A: WorldStore + ?Sized>(
 }
 
 /// [`run_on_authority`] that returns only after the Coordinator cache holds the commit, so the
-/// mirror push after it reads the op's own roster. For a World Session only: it waits on the
-/// Coordinator pump, which a bot callback runs on.
+/// mirror push after it reads the op's own roster. Every op that changes a roster uses it, for a
+/// World Session and for a session-less Character alike. It waits on the Coordinator pump, so the
+/// caller must run on its own thread.
 fn run_on_authority_visible<A: WorldStore + ?Sized>(
     authority: &A,
     self_guid: u64,
@@ -821,7 +824,7 @@ fn answer_for_session_less<St: WorldStore + ?Sized>(store: &St, realm: &dyn Worl
             return;
         }
     }
-    let joined = match run_on_authority(realm, guid, Op::Accept) {
+    let joined = match run_on_authority_visible(realm, guid, Op::Accept) {
         Ok(PartyOutcome::Ran) => {
             log::info!("party: session-less {guid} accepted its group invite");
             return;
@@ -1107,7 +1110,7 @@ pub(crate) fn run_bot_invite<St: WorldStore>(
     }
     let before = realm.group_roster(inviter_guid)?;
     if let PartyOutcome::Refused(refusal) =
-        run_on_authority(realm, inviter_guid, Op::Invite(target_guid))?
+        run_on_authority_visible(realm, inviter_guid, Op::Invite(target_guid))?
     {
         return Ok(PartyOutcome::Refused(refusal));
     }
@@ -1140,10 +1143,10 @@ pub(crate) fn run_bot_leave<St: WorldStore>(store: &St, leaver_guid: u64) -> Res
         None => store,
     };
     let leave = run_server_leave(store, realm, leaver_guid, 1, |realm, character_guid| {
-        run_on_authority(realm, character_guid, Op::Leave)
+        run_on_authority_visible(realm, character_guid, Op::Leave)
     })?;
     if leave.outcome == PartyOutcome::Ran {
-        sync_mirrors(store, realm, leaver_guid, leave.previous_roster);
+        sync_membership_mirrors(store, realm, leaver_guid, leave.previous_roster);
     }
     Ok(leave.outcome)
 }
@@ -1310,7 +1313,13 @@ pub(crate) fn reconcile_deleted_character_parties<St: WorldStore>(store: &St) ->
     }
 }
 
-const DELETED_CHARACTER_MIRROR_ATTEMPTS: usize = 3;
+const MIRROR_PUSH_ATTEMPTS: usize = 3;
+
+/// How long after a mirror push starts a failed Shard may still get another attempt. Each attempt
+/// can wait out the reducer call timeout, so without this window a Shard that accepts calls and
+/// never answers would hold the session for every attempt on every Shard. Every Shard still gets
+/// its first attempt. A timed-out push may still commit, and a repeated push is idempotent.
+const MIRROR_RETRY_WINDOW: std::time::Duration = std::time::Duration::from_secs(5);
 
 fn sync_group_mirrors_required<St: WorldStore + ?Sized>(
     store: &St,
@@ -1326,9 +1335,13 @@ fn sync_group_mirrors_required<St: WorldStore + ?Sized>(
     append_departed_partitions(&mut roster, previous);
     let mut failures = 0usize;
     let mut last_error = None;
+    let retry_until = std::time::Instant::now() + MIRROR_RETRY_WINDOW;
     for shard in store.world_stores() {
         let mut synced = false;
-        for _ in 0..DELETED_CHARACTER_MIRROR_ATTEMPTS {
+        for attempt in 0..MIRROR_PUSH_ATTEMPTS {
+            if attempt > 0 && std::time::Instant::now() >= retry_until {
+                break;
+            }
             match shard.sync_group_mirror(&roster) {
                 Ok(()) => {
                     synced = true;
@@ -1343,8 +1356,8 @@ fn sync_group_mirrors_required<St: WorldStore + ?Sized>(
     }
     match last_error {
         Some(error) if failures > 0 => Err(error.context(format!(
-            "{failures} World Shard party mirror update(s) failed after \
-             {DELETED_CHARACTER_MIRROR_ATTEMPTS} attempts"
+            "{failures} World Shard party mirror update(s) failed within \
+             {MIRROR_PUSH_ATTEMPTS} attempts and the retry window"
         ))),
         _ => Ok(()),
     }

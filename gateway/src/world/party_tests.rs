@@ -1090,8 +1090,8 @@ fn deleted_character_leave_returns_with_the_committed_roster_visible() {
     let ordinary = crate::test_scan::code_of(src, "pub fn realm_group_op(");
     assert!(
         ordinary.contains("self.0.call_pipe().conn.reducers"),
-        "bot callbacks can invoke the ordinary party operation on their Coordinator pump, so it \
-         must retain the independent call pipe. Body was:\n{ordinary}"
+        "an op that pushes no Group mirror needs no visibility receipt, so it keeps the \
+         independent call pipe. Body was:\n{ordinary}"
     );
 
     let visible = crate::test_scan::code_of(src, "pub fn realm_group_op_visible(");
@@ -4131,6 +4131,35 @@ fn a_leave_and_a_rejoin_reach_the_instance_pool_while_the_realm_cache_lags() {
     assert!(
         mirror_lists(&instances, group_id, VIM),
         "the Pool learns that Vim is back"
+    );
+}
+
+/// A bot leader that leaves a two-member party disbands it. The player in the Group's dungeon must
+/// lose the Group on the Instance Pool, or its Instance Removal never starts. The bot intent runs
+/// on its own thread, so it takes the same visibility receipt a World Session does.
+#[test]
+fn a_bot_leave_that_disbands_reaches_the_instance_pool_while_the_realm_cache_lags() {
+    let (realm, world, instances, _) = party_topology();
+    party::run_bot_invite(world.as_ref(), BOT, VIM).unwrap();
+    party::run(instances.as_ref(), 8, VIM, party::Op::Accept).unwrap();
+    let group_id = realm.group_roster(VIM).unwrap().unwrap().group_id;
+    assert!(mirror_lists(&instances, group_id, VIM));
+    realm
+        .cache_lags
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+
+    assert_eq!(
+        party::run_bot_leave(world.as_ref(), BOT).unwrap(),
+        PartyOutcome::Ran
+    );
+    assert!(
+        !instances
+            .mirror
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|roster| roster.group_id == group_id),
+        "the Pool drops the disbanded Group"
     );
 }
 

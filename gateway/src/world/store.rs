@@ -441,8 +441,8 @@ pub trait WorldStore:
     }
 
     /// [`Self::realm_group_op`] that returns only after this handle's Coordinator cache holds the
-    /// commit, so a roster read right after it sees the op. It waits on the Coordinator pump, so a
-    /// pump callback must use [`Self::realm_group_op`] instead. Fakes may reuse the ordinary op.
+    /// commit, so a roster read right after it sees the op. It waits on the Coordinator pump, so its
+    /// caller must run on another thread. Fakes may reuse the ordinary op.
     fn realm_group_op_visible(
         &self,
         op: u8,
