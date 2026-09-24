@@ -738,11 +738,12 @@ pub(crate) fn remove_contact(
 // `gw_del_ignore` (the sender-path wrappers are gone).
 
 // ===========================================================================================
-//  Random roll [event] — `/roll` broadcast (MSG_RANDOM_ROLL)
+//  Random roll: the range rule and the retired roll table
 // ===========================================================================================
 
-/// A `/roll` result to fan out as `MSG_RANDOM_ROLL_Server`. Public broadcast (no RLS), like
-/// `game_chat_event`; the gateway relays each `on_insert`. Reaped by the shared event GC. [event]
+/// The former `/roll` result row. `/roll` is a Group Broadcast now (`group::random_roll_on`), so
+/// nothing writes this table. A live table cannot be dropped, so it stays, empty, and the event
+/// GC still reaps it. [event]
 #[table(
     accessor = game_roll_event,
     public,
@@ -759,8 +760,7 @@ pub struct RollEvent {
     pub result: u32,
     pub created_at: Timestamp,
     // --- AOI columns (perf catalog 2.3), END-appended + TYPED defaults (a bare `0` on a u64
-    // encodes as 4 bytes and fails the publish). Stamped from the actor via `helpers::grid_of`;
-    // (0,0,0,0) means "no live actor", which matches no box and is correctly never delivered.
+    // encodes as 4 bytes and fails the publish).
     #[default(0u32)]
     pub map_id: u32,
     #[default(0u64)]
@@ -771,47 +771,9 @@ pub struct RollEvent {
     pub grid_y: i32,
 }
 
-/// Handle `MSG_RANDOM_ROLL` (client → server): pick a server-side random value in
-/// `[min_roll, max_roll]` (inclusive) and broadcast the result. Clamps inverted ranges
-/// (`min > max`) by swapping and caps both ends at 10 000 (the vanilla client ceiling).
-/// Dead players can roll (vanilla allows it).
-///
-/// The `/roll` core, actor-explicit — same split as [`apply_send_chat`].
-pub(crate) fn apply_send_roll(
-    ctx: &ReducerContext,
-    roller: crate::WorldEntity,
-    min_roll: u32,
-    max_roll: u32,
-) -> Result<(), String> {
-    let (lo, hi) = normalized_roll_range(min_roll, max_roll);
-    // Server-side RNG via ctx.random (like combat::roll_money) — NOT a timestamp-seeded LCG:
-    // two rolls landing in the same microsecond used to be affinely related regardless of
-    // roller guid, which matters because /roll is the primitive players use to settle loot
-    // disputes.
-    let range = hi - lo + 1;
-    let result = lo + ctx.random::<u32>() % range;
-    // perf catalog 2.3: AOI address of the actor — `roller` is already the live entity in hand, so
-    // this stamps directly off it (`entity_addr`) instead of paying a redundant `grid_of` PK lookup.
-    let (map_id, instance_id, grid_x, grid_y) = crate::helpers::entity_addr(&roller);
-    ctx.db.game_roll_event().insert(RollEvent {
-        id: 0,
-        roller_guid: roller.guid,
-        min_roll: lo,
-        max_roll: hi,
-        result,
-        created_at: ctx.timestamp,
-        map_id,
-        instance_id,
-        grid_x,
-        grid_y,
-    });
-    Ok(())
-}
-
-/// Normalize a client `/roll` range to the broadcast `(lo, hi)`: swap an inverted pair
-/// (`min > max`) and cap BOTH ends at 10 000 — the vanilla client ceiling. The clamp
-/// `send_roll` applies before drawing the result, extracted so it's unit-testable without a
-/// `ReducerContext`. `lo <= hi` always holds on the way out. Pure.
+/// Normalize a client `/roll` range to the sent `(lo, hi)`: swap an inverted pair (`min > max`)
+/// and cap BOTH ends at 10 000, the vanilla client ceiling. `lo <= hi` always holds on the way
+/// out. Pure.
 pub(crate) fn normalized_roll_range(min_roll: u32, max_roll: u32) -> (u32, u32) {
     // Vanilla caps roll at 10 000; invert if client sends min > max.
     const ROLL_MAX: u32 = 10_000;

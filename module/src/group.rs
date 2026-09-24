@@ -40,7 +40,8 @@ use crate::{game_character, game_melee_attack, game_pending_cast, game_threat, g
 
 pub use lyracore_shared::group::GROUP_MAX_MEMBERS;
 use lyracore_shared::group::{
-    GroupKind, RaidSlot, RosterMember, RosterPayload, RAID_MAX_MEMBERS, RAID_SUBGROUPS,
+    GroupKind, RaidSlot, RosterMember, RosterPayload, TargetIcon, RAID_MAX_MEMBERS, RAID_SUBGROUPS,
+    TARGET_ICON_COUNT, TARGET_ICON_LIST_REQUEST,
 };
 
 /// Group kill-reward radius² — members farther than this from the slain creature get neither XP
@@ -406,7 +407,7 @@ fn group_op_error(error: GroupOpError, detail: &str) -> String {
 // Event kinds, roster grammar, and classified error strings are the SHARED wire contract:
 // lyracore_shared::group is the one definition both crates import — a renumber,
 // reword, or delimiter change is a cross-crate compile-visible edit, never a runtime drift.
-use lyracore_shared::group::{bot_op, event_kind as group_event_kind, GroupRefusal};
+use lyracore_shared::group::{bot_op, event_kind as group_event_kind, leave_cause, GroupRefusal};
 
 /// A per-recipient group notification (the `game_whisper_event` pattern): public + RLS-scoped so
 /// only the recipient's connection sees it; reaped by the shared event GC. `other_name` is
@@ -484,8 +485,9 @@ pub(crate) fn push_event(
 
 /// The LIST payload, encoded by the SHARED grammar ([`RosterPayload`], delimiter defense
 /// included). Carries the group's CURRENT loot rules, kind and every Raid Slot alongside the
-/// roster, so any of those changing re-renders the party frame through this same relay. Presence is
-/// the Gateway's to add: this database may be Realm-core, which has no live entities.
+/// roster, so any of those changing re-renders the party frame through this same relay. A Party's
+/// payload also carries its Target Icons. Presence is the Gateway's to add: this database may be
+/// Realm-core, which has no live entities.
 ///
 /// `None` means the `game_group` row is MISSING — every caller treats that as a hard invariant
 /// violation (they've either just inserted the row or already `.ok_or("group row missing")?`'d
@@ -506,14 +508,20 @@ fn roster_payload(ctx: &ReducerContext, group_id: u64) -> Option<String> {
             slot: raid_slot_of(&m),
         })
         .collect();
+    let kind = group_kind_of(&group);
     Some(
         RosterPayload {
             leader: group.leader_guid,
             loot_method: group.loot_method,
             loot_threshold: group.loot_threshold,
             master_looter_guid: group.master_looter_guid,
-            kind: group_kind_of(&group),
+            kind,
             members,
+            // The Party client clears its marks on every list, so the list carries them back.
+            target_icons: match kind {
+                GroupKind::Party => target_icons_of(ctx, group_id),
+                GroupKind::Raid => Vec::new(),
+            },
         }
         .encode(),
     )
@@ -553,10 +561,7 @@ pub(crate) fn manages_raid(group: &Group, member: &GroupMember) -> bool {
 /// Who receives one Group Broadcast.
 #[cfg_attr(
     not(test),
-    expect(
-        dead_code,
-        reason = "leadership, Group Broadcasts and raid chat construct the narrower audiences"
-    )
+    expect(dead_code, reason = "raid chat constructs the Subgroup audience")
 )]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum GroupAudience {
@@ -1429,13 +1434,18 @@ fn decline_invite_on(ctx: &ReducerContext, decliner_guid: u64) -> Result<(), Gro
 
 /// The identity-free leave core — the body `group_leave` used to inline.
 pub(crate) fn leave_group_for(ctx: &ReducerContext, leaver_guid: u64) -> Result<(), String> {
-    leave_group_on(ctx, leaver_guid)
+    leave_group_on(ctx, leaver_guid, leave_cause::LEFT)
         .map_err(|error| group_op_error(error, &format!("{leaver_guid} could not leave its party")))
 }
 
-fn leave_group_on(ctx: &ReducerContext, leaver_guid: u64) -> Result<(), GroupOpError> {
+/// A deleted Character also loses every Target Icon on it. Its World Shard's delete sweep cannot
+/// reach the icon rows when the party authority is Realm-core.
+fn leave_group_on(ctx: &ReducerContext, leaver_guid: u64, cause: u8) -> Result<(), GroupOpError> {
     if checked_group_membership(ctx, leaver_guid)?.is_none() {
         return Err(GroupRefusal::NotInGroup.into());
+    }
+    if cause == leave_cause::CHARACTER_DELETED {
+        delete_target_icons_on(ctx, leaver_guid);
     }
     remove_member(ctx, leaver_guid);
     Ok(())
@@ -1716,8 +1726,9 @@ enum RosterChange {
 
 /// The single membership-removal core (voluntary leave, kick, character delete): drops the member
 /// row, notifies the leaver, transfers leadership if the leader left, and DISBANDS below 2 members
-/// (vanilla: a party of one is no party). A new leader is announced to the remaining members before
-/// their list (cm:Group.cpp:464-470). Idempotent for a guid not in any group.
+/// (vanilla: a party of one is no party), which also deletes the Group's Target Icons. A new leader
+/// is announced to the remaining members before their list (cm:Group.cpp:464-470). Idempotent for a
+/// guid not in any group.
 pub(crate) fn remove_member(ctx: &ReducerContext, character_guid: u64) {
     let Some(m) = group_of(ctx, character_guid) else {
         return;
@@ -1768,6 +1779,7 @@ pub(crate) fn remove_member(ctx: &ReducerContext, character_guid: u64) {
                 );
                 ctx.db.game_group_member().id().delete(r.id);
             }
+            clear_target_icons(ctx, group_id);
             ctx.db.game_group().group_id().delete(group_id);
             return;
         }
@@ -1882,7 +1894,7 @@ pub fn realm_group_op(
         }
         realm_op::ACCEPT => accept_invite_on(ctx, Plane::RealmCore, actor_guid).map(|()| Changed),
         realm_op::DECLINE => decline_invite_on(ctx, actor_guid).map(|()| Unchanged),
-        realm_op::LEAVE => leave_group_on(ctx, actor_guid).map(|()| Changed),
+        realm_op::LEAVE => leave_group_on(ctx, actor_guid, arg_a).map(|()| Changed),
         realm_op::UNINVITE => uninvite_on(ctx, actor_guid, target_guid).map(|()| Changed),
         // `CMSG_LOOT_METHOD`'s own field order: setting, master, threshold.
         realm_op::LOOT_METHOD => {
@@ -1893,6 +1905,20 @@ pub fn realm_group_op(
         realm_op::SET_ASSISTANT => set_assistant_on(ctx, actor_guid, target_guid, arg_a != 0),
         realm_op::CHANGE_SUBGROUP => change_subgroup_on(ctx, actor_guid, target_guid, arg_a),
         realm_op::SWAP_SUBGROUP => swap_subgroup_on(ctx, actor_guid, target_guid, arg_c),
+        // Group Broadcasts change no roster.
+        realm_op::READY_CHECK_START => ready_check_start_on(ctx, actor_guid).map(|()| Unchanged),
+        realm_op::READY_CHECK_ANSWER => {
+            ready_check_answer_on(ctx, actor_guid, arg_a).map(|()| Unchanged)
+        }
+        realm_op::TARGET_ICON => {
+            target_icon_on(ctx, actor_guid, arg_a, target_guid).map(|()| Unchanged)
+        }
+        realm_op::MINIMAP_PING => {
+            minimap_ping_on(ctx, actor_guid, target_guid, arg_c).map(|()| Unchanged)
+        }
+        realm_op::RANDOM_ROLL => {
+            random_roll_on(ctx, actor_guid, target_guid, arg_c).map(|()| Unchanged)
+        }
         other => return Err(format!("unknown realm group op {other}")),
     };
     let change = ran
@@ -2505,6 +2531,272 @@ pub(crate) fn eligible_for_kill_reward(
     !dead && same_map && same_instance && dist_sq <= GROUP_XP_RANGE_SQ
 }
 
+// ===========================================================================================
+//  Group Broadcasts: Ready Check, Target Icons, minimap ping, /roll
+// ===========================================================================================
+//
+// Each op pushes one `game_group_event` row per recipient and changes no roster, so none of them
+// advances the Roster Revision or needs a mirror push.
+
+/// One Target Icon a Group holds. A Group holds each icon once and a unit carries one icon at
+/// most, so a Group has 8 rows at most. Private: LIST and TARGET_ICON_LIST events carry the icons
+/// to clients. The rows go when the Group disbands. [entity]
+#[table(
+    accessor = game_group_target_icon,
+    index(accessor = by_group, btree(columns = [group_id])),
+    index(accessor = by_target, btree(columns = [target_guid]))
+)]
+pub struct GroupTargetIcon {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    pub group_id: u64,
+    pub icon: u8,
+    pub target_guid: u64,
+}
+
+// A deleted Character loses the icon it carries. No client needs an update: the unit is gone.
+crate::character_owned!(delete, fn sweep_delete_game_group_target_icon(ctx, character_guid) {
+    delete_target_icons_on(ctx, character_guid);
+});
+
+/// Drop every Target Icon on `target_guid`, in every Group, without an update: the unit is gone.
+fn delete_target_icons_on(ctx: &ReducerContext, target_guid: u64) {
+    let icons = ctx.db.game_group_target_icon();
+    for row in icons.by_target().filter(&target_guid).collect::<Vec<_>>() {
+        icons.id().delete(row.id);
+    }
+}
+// Group state on the party authority. The icon stays on its unit across a Transfer.
+crate::character_owned!(not_transported, fn sweep_transfer_game_group_target_icon());
+
+/// Every Target Icon `group_id` holds, in icon order.
+fn target_icons_of(ctx: &ReducerContext, group_id: u64) -> Vec<TargetIcon> {
+    let mut icons: Vec<TargetIcon> = ctx
+        .db
+        .game_group_target_icon()
+        .by_group()
+        .filter(&group_id)
+        .map(|row| TargetIcon {
+            icon: row.icon,
+            target_guid: row.target_guid,
+        })
+        .collect();
+    icons.sort_unstable_by_key(|icon| icon.icon);
+    icons
+}
+
+/// The partial updates one Target Icon request makes, in send order (cm:Group.cpp:583-601). A
+/// unit that already holds an icon loses it first, with its own clearing update. Then `icon` goes
+/// to `target_guid`, and a unit that held `icon` before loses it through that same update. Target
+/// 0 clears `icon`. Pure.
+fn target_icon_updates(
+    held: &[TargetIcon],
+    icon: u8,
+    target_guid: u64,
+) -> Result<Vec<TargetIcon>, GroupRefusal> {
+    if icon >= TARGET_ICON_COUNT {
+        return Err(GroupRefusal::InvalidTargetIcon);
+    }
+    let mut updates: Vec<TargetIcon> = held
+        .iter()
+        .filter(|held| target_guid != 0 && held.target_guid == target_guid)
+        .map(|held| TargetIcon {
+            icon: held.icon,
+            target_guid: 0,
+        })
+        .collect();
+    updates.push(TargetIcon { icon, target_guid });
+    Ok(updates)
+}
+
+/// Store one partial update. Target 0 deletes the icon's row.
+fn write_target_icon(ctx: &ReducerContext, group_id: u64, update: TargetIcon) {
+    let icons = ctx.db.game_group_target_icon();
+    let row = icons
+        .by_group()
+        .filter(&group_id)
+        .find(|row| row.icon == update.icon);
+    match (row, update.target_guid) {
+        (Some(row), 0) => {
+            icons.id().delete(row.id);
+        }
+        (Some(mut row), target_guid) => {
+            row.target_guid = target_guid;
+            icons.id().update(row);
+        }
+        (None, 0) => {}
+        (None, target_guid) => {
+            icons.insert(GroupTargetIcon {
+                id: 0,
+                group_id,
+                icon: update.icon,
+                target_guid,
+            });
+        }
+    }
+}
+
+fn clear_target_icons(ctx: &ReducerContext, group_id: u64) {
+    let icons = ctx.db.game_group_target_icon();
+    for row in icons.by_group().filter(&group_id).collect::<Vec<_>>() {
+        icons.id().delete(row.id);
+    }
+}
+
+/// `actor_guid`'s membership and Group, when it leads the Group or is one of its Assistants
+/// (cm:GroupHandler.cpp:463-467, 556-558). In a Party only the leader qualifies.
+fn managed_group_of(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+) -> Result<(GroupMember, Group), GroupOpError> {
+    let (member, group) =
+        checked_group_membership(ctx, actor_guid)?.ok_or(GroupRefusal::NotInGroup)?;
+    if !manages_raid(&group, &member) {
+        return Err(GroupRefusal::NotLeader.into());
+    }
+    Ok((member, group))
+}
+
+/// A `realm_group_op` slot that carries a 32-bit value. A wider value means the Gateway broke the
+/// argument contract, which is not a gameplay answer.
+fn wire_u32(value: u64, slot: &str) -> Result<u32, GroupOpError> {
+    u32::try_from(value)
+        .map_err(|_| GroupOpError::Invariant(format!("{slot} {value} does not fit 32 bits")))
+}
+
+/// `MSG_RAID_READY_CHECK` without a body. The leader or an Assistant asks every member, the asker
+/// included (cm:GroupHandler.cpp:549-564). A Party may run one too. The Module keeps no Ready
+/// Check state and no timeout: the leader's client counts the answers.
+fn ready_check_start_on(ctx: &ReducerContext, actor_guid: u64) -> Result<(), GroupOpError> {
+    let (member, _group) = managed_group_of(ctx, actor_guid)?;
+    group_broadcast(
+        ctx,
+        member.group_id,
+        GroupAudience::Everyone,
+        group_event_kind::READY_CHECK,
+        actor_guid,
+        String::new(),
+    );
+    Ok(())
+}
+
+/// `MSG_RAID_READY_CHECK` with the answer's state byte. Only the leader receives it, with the
+/// answerer's guid (cm:GroupHandler.cpp:566-581).
+fn ready_check_answer_on(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    state: u8,
+) -> Result<(), GroupOpError> {
+    let (member, _group) =
+        checked_group_membership(ctx, actor_guid)?.ok_or(GroupRefusal::NotInGroup)?;
+    group_broadcast(
+        ctx,
+        member.group_id,
+        GroupAudience::Leader,
+        group_event_kind::READY_CHECK_ANSWER,
+        actor_guid,
+        lyracore_shared::group::encode_ready_check_answer(state),
+    );
+    Ok(())
+}
+
+/// `MSG_RAID_TARGET_UPDATE` (cm:GroupHandler.cpp:444-471). [`TARGET_ICON_LIST_REQUEST`] sends
+/// every icon to the actor alone, and any member may ask. Setting an icon needs the leader or an
+/// Assistant, and every member receives each partial update.
+fn target_icon_on(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    icon: u8,
+    target_guid: u64,
+) -> Result<(), GroupOpError> {
+    if icon == TARGET_ICON_LIST_REQUEST {
+        let (member, _group) =
+            checked_group_membership(ctx, actor_guid)?.ok_or(GroupRefusal::NotInGroup)?;
+        push_event(
+            ctx,
+            actor_guid,
+            group_event_kind::TARGET_ICON_LIST,
+            0,
+            lyracore_shared::group::encode_target_icons(&target_icons_of(ctx, member.group_id)),
+        );
+        return Ok(());
+    }
+    let (member, _group) = managed_group_of(ctx, actor_guid)?;
+    let held = target_icons_of(ctx, member.group_id);
+    for update in target_icon_updates(&held, icon, target_guid)? {
+        write_target_icon(ctx, member.group_id, update);
+        group_broadcast(
+            ctx,
+            member.group_id,
+            GroupAudience::Everyone,
+            group_event_kind::TARGET_ICON_UPDATE,
+            actor_guid,
+            update.encode(),
+        );
+    }
+    Ok(())
+}
+
+/// `MSG_MINIMAP_PING`: every member but the sender sees the ping (cm:GroupHandler.cpp:395-415).
+/// `x_bits` and `y_bits` are the client's `f32` bit patterns.
+fn minimap_ping_on(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    x_bits: u64,
+    y_bits: u64,
+) -> Result<(), GroupOpError> {
+    let (member, _group) =
+        checked_group_membership(ctx, actor_guid)?.ok_or(GroupRefusal::NotInGroup)?;
+    let x = f32::from_bits(wire_u32(x_bits, "minimap ping x")?);
+    let y = f32::from_bits(wire_u32(y_bits, "minimap ping y")?);
+    group_broadcast(
+        ctx,
+        member.group_id,
+        GroupAudience::AllExcept(actor_guid),
+        group_event_kind::MINIMAP_PING,
+        actor_guid,
+        lyracore_shared::group::encode_minimap_ping(x, y),
+    );
+    Ok(())
+}
+
+/// `MSG_RANDOM_ROLL`: every member sees a grouped roll, the roller included, wherever they are.
+/// An ungrouped roll reaches the roller alone (cm:GroupHandler.cpp:417-442; patch 1.7.0,
+/// vm:GroupHandler.cpp:419-431). The result comes from `ctx.random`, so two rolls in one
+/// microsecond are unrelated.
+fn random_roll_on(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    min_roll: u64,
+    max_roll: u64,
+) -> Result<(), GroupOpError> {
+    let (lo, hi) = crate::chat::normalized_roll_range(
+        wire_u32(min_roll, "roll minimum")?,
+        wire_u32(max_roll, "roll maximum")?,
+    );
+    let result = lo + ctx.random::<u32>() % (hi - lo + 1);
+    let payload = lyracore_shared::group::encode_random_roll(lo, hi, result);
+    match checked_group_membership(ctx, actor_guid)? {
+        Some((member, _group)) => group_broadcast(
+            ctx,
+            member.group_id,
+            GroupAudience::Everyone,
+            group_event_kind::RANDOM_ROLL,
+            actor_guid,
+            payload,
+        ),
+        None => push_event(
+            ctx,
+            actor_guid,
+            group_event_kind::RANDOM_ROLL,
+            actor_guid,
+            payload,
+        ),
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2728,6 +3020,63 @@ mod tests {
             Ok((GroupKind::Party, 0)),
             "the disband tombstone carries no members and no slots"
         );
+    }
+
+    // ---- Target Icons (cm:Group.cpp:583-601) ----
+
+    fn held(icon: u8, target_guid: u64) -> TargetIcon {
+        TargetIcon { icon, target_guid }
+    }
+
+    #[test]
+    fn marking_a_new_unit_sets_one_icon() {
+        assert_eq!(target_icon_updates(&[], 7, 100), Ok(vec![held(7, 100)]));
+    }
+
+    /// A unit carries one icon, so moving it sends the clear before the new icon.
+    #[test]
+    fn a_marked_unit_loses_its_old_icon_before_it_takes_the_new_one() {
+        assert_eq!(
+            target_icon_updates(&[held(7, 100)], 6, 100),
+            Ok(vec![held(7, 0), held(6, 100)])
+        );
+    }
+
+    /// The icon's previous unit loses it through the one update that gives it to the new unit.
+    #[test]
+    fn an_icon_given_to_another_unit_replaces_the_old_holder_in_one_update() {
+        assert_eq!(
+            target_icon_updates(&[held(7, 100), held(6, 200)], 7, 300),
+            Ok(vec![held(7, 300)])
+        );
+    }
+
+    /// cmangos clears and sets again when a unit takes the icon it already holds.
+    #[test]
+    fn marking_a_unit_with_its_own_icon_clears_it_and_sets_it_again() {
+        assert_eq!(
+            target_icon_updates(&[held(7, 100)], 7, 100),
+            Ok(vec![held(7, 0), held(7, 100)])
+        );
+    }
+
+    #[test]
+    fn target_zero_clears_the_icon_and_touches_no_other() {
+        assert_eq!(
+            target_icon_updates(&[held(7, 100), held(1, 200)], 7, 0),
+            Ok(vec![held(7, 0)])
+        );
+    }
+
+    /// cm:Group.cpp:585-586: an index of 8 or more is not an icon.
+    #[test]
+    fn an_icon_index_of_eight_or_more_is_refused() {
+        for icon in [8, 9, 0xFE] {
+            assert_eq!(
+                target_icon_updates(&[], icon, 100),
+                Err(GroupRefusal::InvalidTargetIcon)
+            );
+        }
     }
 
     // ---- Group loot methods (work-item 187 slice 1) ----
@@ -2963,7 +3312,10 @@ mod tests {
                 "accept_invite_on(ctx, Plane::RealmCore, actor_guid)",
             ),
             ("realm_op::DECLINE =>", "decline_invite_on(ctx, actor_guid)"),
-            ("realm_op::LEAVE =>", "leave_group_on(ctx, actor_guid)"),
+            (
+                "realm_op::LEAVE =>",
+                "leave_group_on(ctx, actor_guid, arg_a)",
+            ),
             (
                 "realm_op::UNINVITE =>",
                 "uninvite_on(ctx, actor_guid, target_guid)",
@@ -2991,6 +3343,26 @@ mod tests {
             (
                 "realm_op::SWAP_SUBGROUP =>",
                 "swap_subgroup_on(ctx, actor_guid, target_guid, arg_c)",
+            ),
+            (
+                "realm_op::READY_CHECK_START =>",
+                "ready_check_start_on(ctx, actor_guid)",
+            ),
+            (
+                "realm_op::READY_CHECK_ANSWER =>",
+                "ready_check_answer_on(ctx, actor_guid, arg_a)",
+            ),
+            (
+                "realm_op::TARGET_ICON =>",
+                "target_icon_on(ctx, actor_guid, arg_a, target_guid)",
+            ),
+            (
+                "realm_op::MINIMAP_PING =>",
+                "minimap_ping_on(ctx, actor_guid, target_guid, arg_c)",
+            ),
+            (
+                "realm_op::RANDOM_ROLL =>",
+                "random_roll_on(ctx, actor_guid, target_guid, arg_c)",
             ),
         ] {
             let arm = body.split(op).nth(1).unwrap_or_else(|| {

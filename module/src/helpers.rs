@@ -354,8 +354,8 @@ pub(crate) fn grid_of(ctx: &ReducerContext, guid: u64) -> (u32, u64, i32, i32) {
 
 /// The same `(map_id, instance_id, grid_x, grid_y)` shape [`grid_of`] returns, read straight off an
 /// already-fetched `WorldEntity` — zero `game_world_entity` lookup. The event-constructor `signal_at`
-/// variants (`SpellCastEvent`/`CombatEvent`, perf catalog 2.3) and the chat broadcast reducers whose
-/// sender/roller entity is fetched up front (`send_emote`/`send_roll`) all use this instead of
+/// variants (`SpellCastEvent`/`CombatEvent`, perf catalog 2.3) and the chat broadcast reducer whose
+/// sender entity is fetched up front (`send_emote`) all use this instead of
 /// `grid_of` when the entity is in hand — a landed swing with a seal proc + a queued strike used to
 /// pay the `grid_of` PK lookup up to twelve times over for what is, in every case, the SAME row.
 /// Pulled out pure (module crate convention — no `ReducerContext` test harness) so the field order

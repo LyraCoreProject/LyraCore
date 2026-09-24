@@ -1751,24 +1751,6 @@ impl Coordinator {
         )
     }
 
-    pub fn send_roll(
-        &self,
-        _account_id: u64,
-        actor_guid: u64,
-        min_roll: u32,
-        max_roll: u32,
-    ) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("send_roll: actor_guid unresolved"));
-        }
-        let coord = self.0.call_pipe();
-        call_reducer!(
-            coord.conn.reducers,
-            "gw_send_roll",
-            gw_send_roll_then(self.session_actor(actor_guid), min_roll, max_roll)
-        )
-    }
-
     pub fn send_whisper(
         &self,
         _account_id: u64,
@@ -3085,7 +3067,7 @@ impl Coordinator {
                 lyracore_shared::group::realm_op::LEAVE,
                 self.session_actor(character_guid),
                 0,
-                0,
+                lyracore_shared::group::leave_cause::CHARACTER_DELETED,
                 0,
                 0
             )

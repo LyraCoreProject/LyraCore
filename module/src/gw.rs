@@ -728,20 +728,6 @@ pub fn gw_player_login(
 //  Chat / social (batch B)
 // ===========================================================================================
 
-/// [`crate::chat::apply_send_roll`] with the roller named by guid — `MSG_RANDOM_ROLL`.
-#[reducer]
-pub fn gw_send_roll(
-    ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
-    min_roll: u32,
-    max_roll: u32,
-) -> Result<(), String> {
-    require_operator(ctx)?;
-    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
-    let roller = actor(ctx, actor_guid)?;
-    crate::chat::apply_send_roll(ctx, roller, min_roll, max_roll)
-}
-
 /// [`crate::chat::apply_send_whisper`] with the speaker named by guid — the SHARD whisper plane.
 #[reducer]
 pub fn gw_send_whisper(

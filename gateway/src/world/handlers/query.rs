@@ -420,11 +420,14 @@ pub(crate) fn handle_query<St: WorldStore + ?Sized>(
                 c.target.guid(),
             );
         }
-        // /roll: the client sends MSG_RANDOM_ROLL_Client (CMSG direction) with its min/max. We pick
-        // a server-side result and broadcast MSG_RANDOM_ROLL_Server to all nearby players via the
-        // game_roll_event broadcast table. Failure (not in world) is silently dropped.
+        // /roll is a Group Broadcast: the party authority draws the result and sends it to every
+        // group member on any shard, or to the roller alone when ungrouped.
         ClientOpcodeMessage::MSG_RANDOM_ROLL(r) => {
-            let _ = store.send_roll(conn.account_id, self_guid, r.minimum, r.maximum);
+            let op = party::Op::RandomRoll {
+                min: r.minimum,
+                max: r.maximum,
+            };
+            social::run_group_broadcast(store, conn, op);
         }
         other => return Ok(Some(other)),
     }

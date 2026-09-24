@@ -793,15 +793,6 @@ fn register_shard_callbacks(
         move |v, _old, row| taxi_spline(v, shard, row),
     );
 
-    // ---- game_roll_event -------------------------------------------------------------------
-    // /roll broadcast.
-    wire_insert(
-        db.game_roll_event(),
-        "game_roll_event.insert",
-        &view,
-        move |v, row| roll_appeared(v, shard, row),
-    );
-
     // ---- game_rest_state_event --------------------------------------------------------------
     // Rest-state flips (zzz + blue XP bar). Self-only relay.
     wire_insert(
@@ -1655,19 +1646,6 @@ fn maybe_queue_motion_flush(_view: &WorldView, viewer: &Arc<Viewer>) {
 /// direct shard membership; family-specific gates (instance, range) run per viewer at the call site.
 fn viewers_on_shard(view: &WorldView, shard: ShardId) -> Vec<Arc<Viewer>> {
     view.viewers_on_shard(shard)
-}
-
-/// A /roll landed on `shard`'s coordinator feed. Rolls are public (vanilla broadcasts every /roll,
-/// roller included), so the shard audience is the whole predicate. The packet build runs in the
-/// job, on each session's own writer thread, per this file's rule 1.
-fn roll_appeared(view: &WorldView, shard: ShardId, row: &RollEvent) {
-    let row = Arc::new(row.clone());
-    for viewer in viewers_on_shard(view, shard) {
-        let row = row.clone();
-        enqueue(viewer.clone(), move |_| {
-            super::subscriptions::relay_roll(&row)
-        });
-    }
 }
 
 /// A ground-area dynamic object appeared (Consecration's swirl etc.) → CREATE for every

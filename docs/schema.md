@@ -77,7 +77,7 @@ grep -rn '^#\[table(' module/src --include='*.rs' | wc -l   # 238 on 2026-09-03
 | Creature (template, spawn, AI, pet, trainer) | 42 | 17 | `creatures/*`, `trainer.rs` |
 | GameObject | 9 | 6 | `gameobject.rs`, `go_model.rs` |
 | Loot | 12 | 6 | `loot/*` |
-| Group / party | 5 | 3 | `group.rs` |
+| Group / party | 8 | 5 | `group.rs` |
 | Guild | 7 | 0 | `guild/mod.rs`, `guild/fee.rs`, `guild/membership.rs` |
 | Instance / encounter | 7 | 1 | `instance.rs`, `encounter.rs` |
 | Sharding: region, transfer, load | 9 | 0 | `region.rs`, `transfer/mod.rs`, `load.rs` |
@@ -223,7 +223,8 @@ scan on a sharded realm silently returns a subset rather than erroring, and ever
 
 Six sibling tables carry the **identical** `(map_id, instance_id, grid_x, grid_y)` key so they can
 ride the same AOI box: `game_entity_motion`, `game_creature_spline`, `game_combat_event`,
-`game_spell_cast_event`, `game_spell_impact_event`, `game_emote_event`, `game_roll_event`.
+`game_spell_cast_event`, `game_spell_impact_event`, `game_emote_event`. `game_roll_event` keeps the
+same key, but nothing writes it: `/roll` is a Group Broadcast.
 `game_gameobject`'s grid key is only three columns (no `instance_id`).
 
 ### `game_character` — the durable character (`module/src/character.rs:7`)

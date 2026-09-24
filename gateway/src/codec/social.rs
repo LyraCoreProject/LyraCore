@@ -318,9 +318,9 @@ pub fn build_text_emote(
     })
 }
 
-/// Build `MSG_RANDOM_ROLL_Server` — the `/roll` result broadcast to all nearby players.
-/// `minimum` / `maximum` are the clamped range from the roller's request; `actual_roll` is the
-/// server-computed result; `guid` is the roller. All values echo what the module committed.
+/// Build `MSG_RANDOM_ROLL_Server` — the `/roll` result for the roller's group, or for the roller
+/// alone. `minimum` / `maximum` are the clamped range from the roller's request; `actual_roll` is
+/// the server-computed result; `guid` is the roller. All values echo what the module committed.
 pub fn build_random_roll(
     roller_guid: u64,
     minimum: u32,
@@ -842,6 +842,76 @@ pub fn build_group_list_raw(list: &SMSG_GROUP_LIST) -> (u16, Vec<u8>) {
     (opcode, body)
 }
 
+// ===========================================================================================
+//  Group Broadcasts
+// ===========================================================================================
+
+use lyracore_shared::group::TargetIcon;
+use wow_world_messages::vanilla::{
+    MSG_MINIMAP_PING_Server, MSG_RAID_READY_CHECK_Server, MSG_RAID_READY_CHECK_Server_state_check,
+    MSG_RAID_TARGET_UPDATE_Server, RaidTargetIndex, RaidTargetUpdate,
+};
+
+/// `MSG_RAID_READY_CHECK` with no body: a Ready Check started (cm:GroupHandler.cpp:562-563).
+pub fn build_ready_check() -> MSG_RAID_READY_CHECK_Server {
+    MSG_RAID_READY_CHECK_Server { state_check: None }
+}
+
+/// `MSG_RAID_READY_CHECK` for the leader: one member's guid and answer state
+/// (cm:GroupHandler.cpp:576-579).
+pub fn build_ready_check_answer(member_guid: u64, state: u8) -> MSG_RAID_READY_CHECK_Server {
+    MSG_RAID_READY_CHECK_Server {
+        state_check: Some(MSG_RAID_READY_CHECK_Server_state_check {
+            guid: Guid::new(member_guid),
+            state,
+        }),
+    }
+}
+
+/// The partial `MSG_RAID_TARGET_UPDATE`: update type 0, the icon, the unit (cm:Group.cpp:595-600).
+/// Guid 0 clears the icon. `None` for an icon outside 0 to 7.
+pub fn build_target_icon_update(icon: TargetIcon) -> Option<MSG_RAID_TARGET_UPDATE_Server> {
+    Some(MSG_RAID_TARGET_UPDATE_Server::Partial {
+        raid_target: RaidTargetUpdate {
+            index: target_icon_index(icon.icon)?,
+            guid: Guid::new(icon.target_guid),
+        },
+    })
+}
+
+/// The full `MSG_RAID_TARGET_UPDATE` as cmangos and vmangos write it: update type 1, then each
+/// held icon as `icon, guid`, in icon order (cm:Group.cpp:648-666). gtker's `Full` always carries 8
+/// entries, so this is `(opcode, body)` for `Outbound::Raw`.
+pub fn build_target_icon_list_raw(icons: &[TargetIcon]) -> (u16, Vec<u8>) {
+    use wow_world_messages::Message;
+    let opcode = u16::try_from(MSG_RAID_TARGET_UPDATE_Server::OPCODE)
+        .expect("a vanilla opcode fits 16 bits");
+    let mut held: Vec<&TargetIcon> = icons.iter().filter(|icon| icon.target_guid != 0).collect();
+    held.sort_unstable_by_key(|icon| icon.icon);
+    let mut body = vec![1];
+    for icon in held {
+        body.push(icon.icon);
+        body.extend(icon.target_guid.to_le_bytes());
+    }
+    (opcode, body)
+}
+
+/// gtker names the 8 icons `Unknown0` to `Unknown7`. Its `Unknown8` is not an icon.
+fn target_icon_index(icon: u8) -> Option<RaidTargetIndex> {
+    (icon < lyracore_shared::group::TARGET_ICON_COUNT)
+        .then(|| RaidTargetIndex::try_from(icon).ok())
+        .flatten()
+}
+
+/// `MSG_MINIMAP_PING`: the pinger and the point on the minimap (cm:GroupHandler.cpp:410-413).
+pub fn build_minimap_ping(pinger_guid: u64, x: f32, y: f32) -> MSG_MINIMAP_PING_Server {
+    MSG_MINIMAP_PING_Server {
+        guid: Guid::new(pinger_guid),
+        position_x: x,
+        position_y: y,
+    }
+}
+
 #[cfg(test)]
 mod party_tests {
     use super::*;
@@ -946,6 +1016,7 @@ mod party_tests {
                     slot: *slot,
                 })
                 .collect(),
+            target_icons: Vec::new(),
         }
     }
 
