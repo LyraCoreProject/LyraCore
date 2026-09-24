@@ -1,9 +1,16 @@
-//! Addon-bridge codec: the LANG_ADDON escape hatch on both wire directions.
+//! Addon-bridge codec: the bridge's own private reply, and the raw routing that keeps addon
+//! traffic off players who never asked for it.
 //!
-//! gtker's vanilla `Language` enum has no `0xFFFFFFFF` variant, so a real `SendAddonMessage`
-//! frame FAILS typed decode (and would be session-fatal), and the reply can't ride the typed
-//! `SMSG_MESSAGECHAT` builder either. Both directions are therefore hand-parsed/hand-built here
-//! against the byte layouts pinned from gtker's own serializers (cmsg/smsg_messagechat.rs).
+//! `wow_world_base`'s `Language` enum carries `Addon` (0xFFFFFFFF), so a typed `CMSG_MESSAGECHAT`
+//! on the addon language decodes and dispatches exactly like any other chat line.
+//! `gateway/src/world/mod.rs` still peeks the raw frame before typed decode, only to route it: a
+//! bridge-prefixed frame goes to `handle_addon_message`; a PARTY, RAID, GUILD or OFFICER frame
+//! with any other prefix falls through to the ordinary chat path, since `SendAddonMessage`
+//! legitimately shares those four channels with other addons; every other chat type drops, since
+//! no addon traffic reaches it. The bridge's own reply has no `chat_kind` to ride — it is a
+//! private command channel between the server and one client's addon, not a broadcast chat line —
+//! so it is hand-built here against the byte layout pinned from gtker's own serializer
+//! (smsg_messagechat.rs).
 //!
 //! Envelope (the bridge's framing protocol, versioned): the chat TEXT is `"STC\t" + "v1|<cmd>|<seq>|
 //! <part>/<parts>|<payload>"`. v1 implements the single-part fast path only — a multi-part
@@ -18,14 +25,19 @@ pub const SMSG_MESSAGECHAT_OPCODE: u16 = 0x0096;
 pub const CMSG_MESSAGECHAT_OPCODE: u32 = 0x0095;
 
 /// Client `ChatType` discriminants (u32 on the CMSG wire) this parser understands.
+const CHAT_TYPE_PARTY: u32 = 1;
+const CHAT_TYPE_RAID: u32 = 2;
+const CHAT_TYPE_GUILD: u32 = 3;
+const CHAT_TYPE_OFFICER: u32 = 4;
 const CHAT_TYPE_WHISPER: u32 = 6;
 const CHAT_TYPE_CHANNEL: u32 = 14;
 
 /// Parse a raw `CMSG_MESSAGECHAT` body IF it is an addon-language message; `None` for every
 /// normal-language frame (the caller re-parses those through gtker as before). Returns the chat
-/// TEXT (`"<prefix>\t<message>"`). Layout (gtker cmsg_messagechat.rs): `chat_type: u32 LE`,
-/// `language: u32 LE`, `[Whisper: target CString | Channel: channel CString]`, `message CString`.
-pub fn parse_addon_client_chat(body: &[u8]) -> Option<String> {
+/// TYPE and the chat TEXT (`"<prefix>\t<message>"`). Layout (gtker cmsg_messagechat.rs):
+/// `chat_type: u32 LE`, `language: u32 LE`, `[Whisper: target CString | Channel: channel CString]`,
+/// `message CString`.
+pub fn parse_addon_client_chat(body: &[u8]) -> Option<(u32, String)> {
     if body.len() < 9 {
         return None;
     }
@@ -41,7 +53,28 @@ pub fn parse_addon_client_chat(body: &[u8]) -> Option<String> {
         rest = &rest[nul + 1..];
     }
     let nul = rest.iter().position(|b| *b == 0)?;
-    Some(String::from_utf8_lossy(&rest[..nul]).into_owned())
+    Some((
+        chat_type,
+        String::from_utf8_lossy(&rest[..nul]).into_owned(),
+    ))
+}
+
+/// Whether `SendAddonMessage` traffic on `chat_type` must still reach real players through the
+/// ordinary chat path instead of dropping. The client's own Lua API distributes AddonMessage over
+/// exactly these four channels; RAID_LEADER, RAID_WARNING, WHISPER and CHANNEL never carry it.
+pub const fn typed_addon_chat_type(chat_type: u32) -> bool {
+    matches!(
+        chat_type,
+        CHAT_TYPE_PARTY | CHAT_TYPE_RAID | CHAT_TYPE_GUILD | CHAT_TYPE_OFFICER
+    )
+}
+
+/// Whether `text` (the parsed `"<prefix>\t<message>"`) carries our own bridge prefix. A typed
+/// chat type can carry a FOREIGN addon's traffic sharing the same wire; only our own prefix takes
+/// the bridge.
+pub fn is_bridge_prefixed(text: &str) -> bool {
+    text.split_once('\t')
+        .is_some_and(|(prefix, _)| prefix == BRIDGE_PREFIX)
 }
 
 /// Parse the v1 envelope for [`BRIDGE_PREFIX`]. Build 5875 requires escaped `||` separators in
@@ -114,8 +147,8 @@ mod tests {
     fn addon_whisper_parses_and_normal_language_declines() {
         let text = "STC\tv1|ping|0|1/1|hello";
         assert_eq!(
-            parse_addon_client_chat(&addon_whisper_body(text)).as_deref(),
-            Some(text)
+            parse_addon_client_chat(&addon_whisper_body(text)),
+            Some((CHAT_TYPE_WHISPER, text.to_string()))
         );
         // Same frame with Universal language → not ours; the typed path handles it.
         let mut normal = addon_whisper_body(text);
@@ -132,17 +165,102 @@ mod tests {
         b.extend_from_slice(&LANG_ADDON.to_le_bytes());
         b.extend_from_slice(text.as_bytes());
         b.push(0);
-        assert_eq!(parse_addon_client_chat(&b).as_deref(), Some(text));
+        assert_eq!(
+            parse_addon_client_chat(&b),
+            Some((CHAT_TYPE_PARTY, text.to_string()))
+        );
     }
 
     #[test]
     fn escaped_party_message_from_build_5875_reaches_the_bridge() {
         let mut body = vec![1, 0, 0, 0, 255, 255, 255, 255];
         body.extend_from_slice(b"STC\tv1||ping||22||1/1||PB\0");
-        let text = parse_addon_client_chat(&body).unwrap();
+        let (chat_type, text) = parse_addon_client_chat(&body).unwrap();
+        assert_eq!(chat_type, CHAT_TYPE_PARTY);
+        assert!(is_bridge_prefixed(&text));
         assert_eq!(
             parse_bridge_envelope(&text),
             Some(("ping".into(), "PB".into()))
+        );
+    }
+
+    /// AC (fix #1): the client's `SendAddonMessage` API distributes over PARTY, RAID, GUILD and
+    /// OFFICER only. RAID_LEADER and RAID_WARNING chat lines cannot carry addon traffic at all,
+    /// and WHISPER/CHANNEL addon frames are this bridge's own private channels, not shared wire.
+    #[test]
+    fn typed_addon_chat_types_are_exactly_party_raid_guild_and_officer() {
+        for chat_type in [
+            CHAT_TYPE_PARTY,
+            CHAT_TYPE_RAID,
+            CHAT_TYPE_GUILD,
+            CHAT_TYPE_OFFICER,
+        ] {
+            assert!(typed_addon_chat_type(chat_type), "{chat_type}");
+        }
+        for chat_type in [0, CHAT_TYPE_WHISPER, CHAT_TYPE_CHANNEL, 20, 21, 22, 87, 88] {
+            assert!(!typed_addon_chat_type(chat_type), "{chat_type}");
+        }
+    }
+
+    #[test]
+    fn only_our_own_prefix_is_bridge_prefixed() {
+        assert!(is_bridge_prefixed("STC\tv1|ping|0|1/1|hi"));
+        assert!(!is_bridge_prefixed("BigWigs\thello"));
+        assert!(!is_bridge_prefixed("no tab at all"));
+    }
+
+    /// AC (fix #1): a RAID addon frame from another addon's prefix is not ours, but its chat type
+    /// still reaches real players — `gateway/src/world/mod.rs` lets it fall through to the typed
+    /// reader instead of dropping it. This proves the premise the module doc now states: a typed
+    /// `CMSG_MESSAGECHAT` on the addon language decodes cleanly, chat type and all.
+    #[test]
+    fn a_raid_addon_frame_from_another_prefix_decodes_through_the_typed_reader() {
+        use wow_world_messages::vanilla::opcodes::ClientOpcodeMessage;
+        use wow_world_messages::vanilla::{CMSG_MESSAGECHAT_ChatType, Language};
+
+        let mut body = Vec::new();
+        body.extend_from_slice(&CHAT_TYPE_RAID.to_le_bytes());
+        body.extend_from_slice(&LANG_ADDON.to_le_bytes());
+        body.extend_from_slice(b"BigWigs\thello");
+        body.push(0);
+        let (chat_type, text) = parse_addon_client_chat(&body).unwrap();
+        assert!(
+            !is_bridge_prefixed(&text),
+            "a foreign prefix is not our bridge"
+        );
+        assert!(typed_addon_chat_type(chat_type), "RAID carries addon mail");
+
+        // The same body, framed the way `gateway/src/world/mod.rs` frames it for the typed reader.
+        let mut framed = Vec::new();
+        framed.extend_from_slice(&((body.len() + 4) as u16).to_be_bytes());
+        framed.extend_from_slice(&CMSG_MESSAGECHAT_OPCODE.to_le_bytes());
+        framed.extend_from_slice(&body);
+        let msg = ClientOpcodeMessage::read_unencrypted(&mut std::io::Cursor::new(framed))
+            .expect("a typed CMSG_MESSAGECHAT on the addon language decodes cleanly");
+        match msg {
+            ClientOpcodeMessage::CMSG_MESSAGECHAT(chat) => {
+                assert_eq!(chat.chat_type, CMSG_MESSAGECHAT_ChatType::Raid);
+                assert_eq!(chat.language, Language::Addon);
+                assert_eq!(chat.message, "BigWigs\thello");
+            }
+            _ => panic!("expected CMSG_MESSAGECHAT"),
+        }
+    }
+
+    /// AC (fix #1): a SAY addon frame is not a typed chat type, so the caller keeps dropping it —
+    /// SAY has no chat-kind route to a real player, addon-language or not.
+    #[test]
+    fn a_say_addon_frame_is_still_dropped() {
+        let mut body = Vec::new();
+        body.extend_from_slice(&0u32.to_le_bytes()); // Say
+        body.extend_from_slice(&LANG_ADDON.to_le_bytes());
+        body.extend_from_slice(b"BigWigs\thello");
+        body.push(0);
+        let (chat_type, text) = parse_addon_client_chat(&body).unwrap();
+        assert!(!is_bridge_prefixed(&text));
+        assert!(
+            !typed_addon_chat_type(chat_type),
+            "SAY has no addon-chat route; the caller must drop it"
         );
     }
 

@@ -555,10 +555,6 @@ pub(crate) fn manages_raid(group: &Group, member: &GroupMember) -> bool {
 }
 
 /// Who receives one Group Broadcast.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "raid chat constructs the Subgroup audience")
-)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum GroupAudience {
     Everyone,
@@ -1131,23 +1127,104 @@ pub(crate) fn members_of(ctx: &ReducerContext, group_id: u64) -> Vec<GroupMember
         .collect()
 }
 
-/// Who hears a party line: every member of the speaker's party, the speaker included. Nobody's
-/// ignore list filters it (cm:Group.cpp:777-788). Read from this database's membership, which is
-/// the party authority wherever the Gateway sends Realm Chat.
+/// Who hears a party line: every member of the speaker's Group, the speaker included, in a Party.
+/// In a Raid it narrows to the speaker's own Subgroup (cm:ChatHandler.cpp:302-332,
+/// cm:Group.cpp:777-788). Nobody's ignore list filters it. Read from this database's membership,
+/// which is the party authority wherever the Gateway sends Realm Chat.
 pub(crate) fn party_chat_audience(
     ctx: &ReducerContext,
     speaker_guid: u64,
 ) -> Result<crate::realm_chat::ChatAudience, lyracore_shared::chat::ChatRefusal> {
-    let membership =
-        group_of(ctx, speaker_guid).ok_or(lyracore_shared::chat::ChatRefusal::NotInGroup)?;
+    let (member, group) = checked_group_membership(ctx, speaker_guid)
+        .map_err(|error| {
+            spacetimedb::log::error!(
+                "chat: {speaker_guid} group membership lookup broken: {error:?}"
+            );
+            lyracore_shared::chat::ChatRefusal::NotInGroup
+        })?
+        .ok_or(lyracore_shared::chat::ChatRefusal::NotInGroup)?;
+    let audience = if group_kind_of(&group) == GroupKind::Raid {
+        GroupAudience::Subgroup(raid_slot_of(&member).subgroup())
+    } else {
+        GroupAudience::Everyone
+    };
     Ok(crate::realm_chat::ChatAudience {
-        recipients: members_of(ctx, membership.group_id)
+        recipients: members_of(ctx, member.group_id)
             .into_iter()
-            .map(|member| member.character_guid)
+            .filter(|candidate| audience.includes(&group, candidate))
+            .map(|candidate| candidate.character_guid)
             .collect(),
         ignorable: false,
         channel_name: String::new(),
     })
+}
+
+/// The three raid Chat Kinds, typed so their audience rule is an exhaustive match instead of a
+/// wire byte with a caller-defect fallback arm.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RaidChatKind {
+    Raid,
+    RaidLeader,
+    RaidWarning,
+}
+
+/// Who hears one raid Chat Kind: every Raid member, the speaker included, gated by who may send
+/// it (cm:ChatHandler.cpp:413-446, 461-490, 506-534). Refused outside a Raid, whether ungrouped or
+/// in a Party. `RaidWarning` gates behind leader-or-Assistant, matching cmangos's
+/// `Chat.RestrictedRaidWarnings` default of 1 (cm:mangosd.conf.dist.in:1161); LyraCore ships that
+/// default with no config toggle.
+pub(crate) fn raid_chat_audience(
+    ctx: &ReducerContext,
+    speaker_guid: u64,
+    kind: RaidChatKind,
+) -> Result<crate::realm_chat::ChatAudience, lyracore_shared::chat::ChatRefusal> {
+    let (member, group) = checked_group_membership(ctx, speaker_guid)
+        .map_err(|error| {
+            spacetimedb::log::error!(
+                "chat: {speaker_guid} group membership lookup broken: {error:?}"
+            );
+            lyracore_shared::chat::ChatRefusal::NotInGroup
+        })?
+        .ok_or(lyracore_shared::chat::ChatRefusal::NotInGroup)?;
+    if let Some(refusal) = raid_chat_refusal(
+        kind,
+        group_kind_of(&group),
+        group.leader_guid == speaker_guid,
+        manages_raid(&group, &member),
+    ) {
+        return Err(refusal);
+    }
+    Ok(crate::realm_chat::ChatAudience {
+        recipients: members_of(ctx, group.group_id)
+            .into_iter()
+            .map(|candidate| candidate.character_guid)
+            .collect(),
+        ignorable: false,
+        channel_name: String::new(),
+    })
+}
+
+/// The audience Refusal for one raid Chat Kind against an already-resolved Group kind and the
+/// speaker's own privilege, or `None` when it may speak. `manages` is [`manages_raid`]'s answer:
+/// the speaker leads the Raid or assists. Pure — no `ReducerContext` — so cm:ChatHandler.cpp:
+/// 413-446, 461-490 and 506-534 are each a unit test over this one table instead of a durable
+/// fixture. Assumes the speaker is already in a Group; a groupless speaker never reaches this far
+/// (`raid_chat_audience` answers `NotInGroup` first).
+fn raid_chat_refusal(
+    kind: RaidChatKind,
+    group_kind: GroupKind,
+    is_leader: bool,
+    manages: bool,
+) -> Option<lyracore_shared::chat::ChatRefusal> {
+    use lyracore_shared::chat::ChatRefusal;
+    if group_kind != GroupKind::Raid {
+        return Some(ChatRefusal::NotRaid);
+    }
+    match kind {
+        RaidChatKind::Raid => None,
+        RaidChatKind::RaidLeader => (!is_leader).then_some(ChatRefusal::NotRaidLeader),
+        RaidChatKind::RaidWarning => (!manages).then_some(ChatRefusal::NotRaidLeaderOrAssistant),
+    }
 }
 
 fn push_list_to_all(ctx: &ReducerContext, group_id: u64) {
@@ -2999,6 +3076,72 @@ mod tests {
         assert!(
             !manages_raid(&group, &demoted),
             "a demoted Assistant's pending invite no longer stands"
+        );
+    }
+
+    /// The raid chat audience table (cm:ChatHandler.cpp:413-446, 461-490, 506-534), every row: a
+    /// Party refuses all three kinds regardless of privilege; a Raid answers each kind by its own
+    /// rule.
+    #[test]
+    fn the_raid_chat_gate_follows_the_audience_table() {
+        use lyracore_shared::chat::ChatRefusal;
+
+        for kind in [
+            RaidChatKind::Raid,
+            RaidChatKind::RaidLeader,
+            RaidChatKind::RaidWarning,
+        ] {
+            for (is_leader, manages) in [(false, false), (false, true), (true, true)] {
+                assert_eq!(
+                    raid_chat_refusal(kind, GroupKind::Party, is_leader, manages),
+                    Some(ChatRefusal::NotRaid),
+                    "kind {kind:?}, leader {is_leader}, manages {manages}: a Party has no Raid audience"
+                );
+            }
+        }
+
+        // Raid: any Raid member, leader or not.
+        assert_eq!(
+            raid_chat_refusal(RaidChatKind::Raid, GroupKind::Raid, false, false),
+            None
+        );
+        assert_eq!(
+            raid_chat_refusal(RaidChatKind::Raid, GroupKind::Raid, false, true),
+            None
+        );
+        assert_eq!(
+            raid_chat_refusal(RaidChatKind::Raid, GroupKind::Raid, true, true),
+            None
+        );
+
+        // RaidLeader: the leader alone. An Assistant who does not lead is still refused.
+        assert_eq!(
+            raid_chat_refusal(RaidChatKind::RaidLeader, GroupKind::Raid, true, true),
+            None
+        );
+        assert_eq!(
+            raid_chat_refusal(RaidChatKind::RaidLeader, GroupKind::Raid, false, true),
+            Some(ChatRefusal::NotRaidLeader),
+            "an Assistant is not the leader"
+        );
+        assert_eq!(
+            raid_chat_refusal(RaidChatKind::RaidLeader, GroupKind::Raid, false, false),
+            Some(ChatRefusal::NotRaidLeader)
+        );
+
+        // RaidWarning: the leader or an Assistant.
+        assert_eq!(
+            raid_chat_refusal(RaidChatKind::RaidWarning, GroupKind::Raid, true, true),
+            None
+        );
+        assert_eq!(
+            raid_chat_refusal(RaidChatKind::RaidWarning, GroupKind::Raid, false, true),
+            None,
+            "an Assistant may send a Raid Warning"
+        );
+        assert_eq!(
+            raid_chat_refusal(RaidChatKind::RaidWarning, GroupKind::Raid, false, false),
+            Some(ChatRefusal::NotRaidLeaderOrAssistant)
         );
     }
 

@@ -1097,25 +1097,33 @@ fn run_world_session_with_queue_and_deadline<
                 .read_exact(&mut body)
                 .map_err(|e| anyhow!("world read error (body): {e}"))?;
             if hdr.opcode == codec::addon::CMSG_MESSAGECHAT_OPCODE {
-                if let Some(text) = codec::addon::parse_addon_client_chat(&body) {
-                    let now = std::time::Instant::now();
-                    addon_tokens = (addon_tokens
-                        + now.duration_since(addon_refill_at).as_secs_f32() * 2.0)
-                        .min(20.0);
-                    addon_refill_at = now;
-                    if addon_tokens >= 1.0 {
-                        addon_tokens -= 1.0;
-                        handle_addon_message(store, &conn, &text);
-                    } else if addon_drop_logged_at
-                        .is_none_or(|t| now.duration_since(t).as_secs() >= 60)
-                    {
-                        addon_drop_logged_at = Some(now);
-                        log::warn!(
-                            "addon bridge: rate limit — dropping frames from account {}",
-                            conn.account_id
-                        );
+                if let Some((chat_type, text)) = codec::addon::parse_addon_client_chat(&body) {
+                    if codec::addon::is_bridge_prefixed(&text) {
+                        let now = std::time::Instant::now();
+                        addon_tokens = (addon_tokens
+                            + now.duration_since(addon_refill_at).as_secs_f32() * 2.0)
+                            .min(20.0);
+                        addon_refill_at = now;
+                        if addon_tokens >= 1.0 {
+                            addon_tokens -= 1.0;
+                            handle_addon_message(store, &conn, &text);
+                        } else if addon_drop_logged_at
+                            .is_none_or(|t| now.duration_since(t).as_secs() >= 60)
+                        {
+                            addon_drop_logged_at = Some(now);
+                            log::warn!(
+                                "addon bridge: rate limit — dropping frames from account {}",
+                                conn.account_id
+                            );
+                        }
+                        continue; // bridge frames never reach the normal chat path or other players
                     }
-                    continue; // addon frames NEVER reach the normal chat path or other players
+                    if !codec::addon::typed_addon_chat_type(chat_type) {
+                        continue; // no addon traffic reaches this chat type; drop, as before
+                    }
+                    // A PARTY, RAID, GUILD or OFFICER frame from another addon's prefix: fall
+                    // through below so the typed reader and the ordinary chat path deliver it to
+                    // real players, addon language and all.
                 }
             }
             if hdr.opcode == CMSG_AUCTION_LIST_ITEMS_OPCODE {
@@ -1169,10 +1177,10 @@ fn run_world_session_with_queue_and_deadline<
     result
 }
 
-/// Route one addon-language chat frame: parse the `STC` v1 envelope and forward to the
-/// module's `client_command` reducer as the player. Foreign prefixes and malformed envelopes
-/// drop silently-with-a-debug-line (other servers' addons share the airwaves by accident);
-/// reducer errors log and drop — an addon frame is NEVER session-fatal.
+/// Route one bridge-prefixed addon chat frame: parse the `STC` v1 envelope and forward to the
+/// module's `client_command` reducer as the player. The caller already checked the prefix; a
+/// malformed envelope past that point still drops silently-with-a-debug-line (a truncated or
+/// hand-edited frame is not session-fatal); reducer errors log and drop the same way.
 fn handle_addon_message<St: WorldStore + ?Sized>(store: &St, conn: &WorldConn, text: &str) {
     let Some((cmd, payload)) = codec::addon::parse_bridge_envelope(text) else {
         log::debug!("addon bridge: non-STC or malformed frame dropped: {text:?}");
