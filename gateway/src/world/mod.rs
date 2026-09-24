@@ -394,6 +394,8 @@ pub struct WorldConn {
     /// concurrent request in — `/who`'s realm-wide scan is the one social read costly enough to
     /// throttle per session.
     who_throttled_until: Option<Instant>,
+    /// When each throttled Group Broadcast kind may run again for this session.
+    group_broadcast_cooldowns: party::GroupBroadcastCooldowns,
 }
 
 /// How many CONSECUTIVE desynced movement packets a session may drop before the desync is treated
@@ -516,6 +518,11 @@ impl WorldConn {
         }
         self.who_throttled_until = Some(now + WHO_THROTTLE);
         true
+    }
+
+    /// [`party::GroupBroadcastCooldowns::admit_at`] now.
+    pub(super) fn admit_group_broadcast(&mut self, op: party::Op) -> bool {
+        self.group_broadcast_cooldowns.admit_at(op, Instant::now())
     }
 }
 
@@ -687,6 +694,7 @@ fn world_handshake_with_queue_and_deadline<
             guild_signed_on: None,
             move_desync_drops: 0,
             who_throttled_until: None,
+            group_broadcast_cooldowns: Default::default(),
         },
         encrypt,
     )))

@@ -300,7 +300,7 @@ pub fn build_text_emote(
     })
 }
 
-/// Build `MSG_RANDOM_ROLL_Server` — the `/roll` result for the roller's group, or for the roller
+/// Build `MSG_RANDOM_ROLL_Server`: the `/roll` result for the roller's group, or for the roller
 /// alone. `minimum` / `maximum` are the clamped range from the roller's request; `actual_roll` is
 /// the server-computed result; `guid` is the roller. All values echo what the module committed.
 pub fn build_random_roll(
@@ -735,7 +735,7 @@ pub fn build_group_decline(decliner_name: String) -> SMSG_GROUP_DECLINE {
     }
 }
 
-/// `SMSG_GROUP_SET_LEADER` — every member's "X is now the group leader" line
+/// `SMSG_GROUP_SET_LEADER`: every member's "X is now the group leader" line
 /// (cm:Group.cpp:498-500).
 pub fn build_group_set_leader(leader_name: String) -> SMSG_GROUP_SET_LEADER {
     SMSG_GROUP_SET_LEADER { name: leader_name }
@@ -761,8 +761,8 @@ pub fn build_party_command_result(
 /// presence per member guid.
 ///
 /// `loot_method`/`loot_threshold` are the module's wire-matching `group::loot_method::*`/
-/// `ItemQuality` byte values — a direct `try_from`, never a hand-written match table. An
-/// out-of-range byte (shouldn't happen — the module validates both before storing) falls back to
+/// `ItemQuality` byte values, read with a direct `try_from`, never a hand-written match table. An
+/// out-of-range byte (the module validates both before storing, so this should not happen) falls back to
 /// FreeForAll/Uncommon rather than failing the whole packet. As in cmangos, the loot block goes out
 /// only when the list names another member.
 pub fn build_group_list(

@@ -38,6 +38,8 @@
 //! Realm Chat Line: Realm-core reads its own membership in the transaction that writes the line, so
 //! the mirror plays no part in who hears it.
 
+use std::time::{Duration, Instant};
+
 use anyhow::Result;
 
 use super::{presence, send, Outbound, SessionTx, WorldStore};
@@ -347,6 +349,53 @@ pub enum Op {
     RandomRoll { min: u32, max: u32 },
 }
 
+/// A Group Broadcast kind that one World Session may send only once per cooldown. Each kind has
+/// its own cooldown, so a ping does not hold back a `/roll`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ThrottledBroadcast {
+    ReadyCheck,
+    MinimapPing,
+    RandomRoll,
+}
+
+impl ThrottledBroadcast {
+    const COUNT: usize = 3;
+
+    fn index(self) -> usize {
+        match self {
+            Self::ReadyCheck => 0,
+            Self::MinimapPing => 1,
+            Self::RandomRoll => 2,
+        }
+    }
+}
+
+/// The cooldown of one World Session's Ready Check starts, minimap pings and `/roll`s, each kind
+/// on its own. cmangos has no such limit, but here each one writes a row for every member of a
+/// Raid of up to 40 on the one realm-wide database.
+pub(crate) const GROUP_BROADCAST_THROTTLE: Duration = Duration::from_secs(1);
+
+/// When each [`ThrottledBroadcast`] kind may run again for one World Session.
+#[derive(Debug, Default)]
+pub(crate) struct GroupBroadcastCooldowns([Option<Instant>; ThrottledBroadcast::COUNT]);
+
+impl GroupBroadcastCooldowns {
+    /// Admit one party op at `now`, or refuse it because the last op of the same throttled kind
+    /// was inside [`GROUP_BROADCAST_THROTTLE`]. An op with no throttle is always admitted. Every
+    /// admitted op starts its kind's cooldown, including one the party authority then refuses.
+    pub(crate) fn admit_at(&mut self, op: Op, now: Instant) -> bool {
+        let Some(kind) = op.broadcast_throttle() else {
+            return true;
+        };
+        let until = &mut self.0[kind.index()];
+        if until.is_some_and(|until| now < until) {
+            return false;
+        }
+        *until = Some(now + GROUP_BROADCAST_THROTTLE);
+        true
+    }
+}
+
 /// `realm_group_op`'s argument slots after the actor: `(op, target_guid, arg_a, arg_b, arg_c)`.
 type RealmOpArgs = (u8, u64, u8, u8, u64);
 
@@ -386,6 +435,20 @@ impl Op {
             Op::RandomRoll { min, max } => {
                 (realm_op::RANDOM_ROLL, u64::from(min), 0, 0, u64::from(max))
             }
+        }
+    }
+
+    /// The cooldown this op shares with its own kind, or `None` when it runs unthrottled. A Ready
+    /// Check start, a minimap ping and a `/roll` each write one event row for every member on the
+    /// party authority, which on a sharded Realm is the one Realm-core database. A Ready Check
+    /// answer writes one row. A Target Icon is left alone because a leader marks several targets
+    /// in quick succession before a pull.
+    pub(crate) fn broadcast_throttle(self) -> Option<ThrottledBroadcast> {
+        match self {
+            Op::ReadyCheckStart => Some(ThrottledBroadcast::ReadyCheck),
+            Op::MinimapPing { .. } => Some(ThrottledBroadcast::MinimapPing),
+            Op::RandomRoll { .. } => Some(ThrottledBroadcast::RandomRoll),
+            _ => None,
         }
     }
 
@@ -760,7 +823,7 @@ fn resolve_in_roster<St: WorldStore + ?Sized>(
 /// cmangos's Swap Subgroup matches a typed name against the group's own member list this way
 /// (cm:GroupHandler.cpp:919-936); its Change Subgroup instead resolves the name realm-wide and
 /// refuses afterward when the result is not a member. LyraCore applies the member-list rule to
-/// both opcodes, so neither can reach a namesake standing outside the Raid — unlike
+/// both opcodes, so neither can reach a namesake standing outside the Raid, unlike
 /// [`presence::resolve_by_name`]. `None` for no Group, or a name matching no member.
 pub(crate) fn resolve_roster_member_by_name<St: WorldStore + ?Sized>(
     store: &St,
@@ -1576,7 +1639,7 @@ pub(crate) fn sync_transfer_arrival_mirror<St: WorldStore + ?Sized>(
 /// Every member's ONLINE flag, and each blank NAME, comes from the shards. That is the price of
 /// realm-core owning membership: the directory database has no `game_character` or
 /// `game_world_entity` rows, so it cannot know what its members are called or whether they are in
-/// the world. The gateway can — it reads every connected shard's cache — and it is the only party
+/// the world. The gateway can, because it reads every connected shard's cache, and it is the only party
 /// that can answer for a member standing on a different database than the viewer. A name the
 /// payload already carries is kept; the Module wrote it with the change. A member whose name will
 /// not resolve (a shard that is down) renders with an empty name rather than being dropped from the

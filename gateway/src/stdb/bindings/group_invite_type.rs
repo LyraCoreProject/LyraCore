@@ -11,6 +11,7 @@ pub struct GroupInvite {
     pub target_guid: u64,
     pub inviter_guid: u64,
     pub created_at: __sdk::Timestamp,
+    pub group_id: u64,
 }
 
 impl __sdk::InModule for GroupInvite {
@@ -25,6 +26,7 @@ pub struct GroupInviteCols {
     pub target_guid: __sdk::__query_builder::Col<GroupInvite, u64>,
     pub inviter_guid: __sdk::__query_builder::Col<GroupInvite, u64>,
     pub created_at: __sdk::__query_builder::Col<GroupInvite, __sdk::Timestamp>,
+    pub group_id: __sdk::__query_builder::Col<GroupInvite, u64>,
 }
 
 impl __sdk::__query_builder::HasCols for GroupInvite {
@@ -35,6 +37,7 @@ impl __sdk::__query_builder::HasCols for GroupInvite {
             target_guid: __sdk::__query_builder::Col::new(table_name, "target_guid"),
             inviter_guid: __sdk::__query_builder::Col::new(table_name, "inviter_guid"),
             created_at: __sdk::__query_builder::Col::new(table_name, "created_at"),
+            group_id: __sdk::__query_builder::Col::new(table_name, "group_id"),
         }
     }
 }

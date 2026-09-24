@@ -391,14 +391,22 @@ fn swap_subgroup<St: WorldStore + ?Sized>(
 /// Run one Group Broadcast for the session's Character. cmangos answers every refusal of these
 /// opcodes with silence, so a Refusal only logs. A transport failure only logs too: a broadcast
 /// changes no roster and nothing waits on it, so a lost ping or roll must not end the session.
+/// A throttled op sent again inside its cooldown is dropped the same way.
 pub(super) fn run_group_broadcast<St: WorldStore + ?Sized>(
     store: &St,
-    conn: &WorldConn,
+    conn: &mut WorldConn,
     op: party::Op,
 ) {
     let Some(me) = self_guid(conn) else {
         return;
     };
+    if !conn.admit_group_broadcast(op) {
+        log::debug!(
+            "world: group broadcast {op:?} dropped inside its cooldown (account {})",
+            conn.account_id
+        );
+        return;
+    }
     match party::run(store, conn.account_id, me, op) {
         Ok(PartyOutcome::Ran) => {}
         Ok(PartyOutcome::Refused(refusal)) => log::debug!(
