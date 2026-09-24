@@ -115,8 +115,8 @@ fn every_truncation_of_a_well_formed_addon_frame_decodes_or_declines_but_never_p
 
     // Sanity floor: the untruncated frame must actually parse, or this sweep is vacuous.
     assert_eq!(
-        addon::parse_addon_client_chat(&full).as_deref(),
-        Some("STC|1|1|PING|payload"),
+        addon::parse_addon_client_chat(&full),
+        Some((6, "STC|1|1|PING|payload".to_string())),
         "the fixture stopped being a valid addon whisper — the truncation sweep below would then \
          prove nothing"
     );
