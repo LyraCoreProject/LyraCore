@@ -2,9 +2,10 @@
 //! one at turn-in. Sourced by the importer from `MailTemplate.dbc`, cmangos `mail_loot_template`, and
 //! two `quest_template` columns plus the `SCRIPT_COMMAND_SEND_MAIL` `dbscripts_on_quest_end` rows.
 //!
-//! NOT public — same precedent as `game_import_meta` (`import_meta.rs`): nothing reads these tables
-//! yet (reward letters are a later ticket), so they need no gateway binding regen. Replicated to
-//! every shard like other imported catalogues, because a quest can turn in on any Home Shard.
+//! NOT public, the `game_import_meta` precedent (`import_meta.rs`): only the Module reads these
+//! tables (`mail_reward` files a Reward Letter from them at turn-in), so the Gateway subscribes to
+//! none. Replicated to every shard like other imported catalogues, because a quest can turn in on
+//! any Home Shard.
 
 use spacetimedb::table;
 

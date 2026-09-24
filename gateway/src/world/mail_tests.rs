@@ -3519,3 +3519,181 @@ fn item_text_query_falls_back_to_the_callers_own_undeleted_mail() {
         "and it stays scoped to the caller's own mail — not a crafted read of Ginger's"
     );
 }
+
+/// A Reward Letter as the Module files it at turn-in: quest 3645, Membership Card Renewal, from
+/// its quest ender with template 99 and item 11423 after 86,400 s (`cdb:` quest_template,
+/// mail_loot_template). The quest ender here is creature 7802.
+const REWARD_ESCROW: u64 = 0x5EED_0009;
+fn card_renewal_letter(recipient: u64, delivery_delay_secs: u32) -> mail::HeldEscrow {
+    mail::HeldEscrow {
+        escrow_id: REWARD_ESCROW,
+        recipient_guid: recipient,
+        subject: String::new(),
+        body: "Your card, $n.".into(),
+        money: 0,
+        postage: 0,
+        payout: false,
+        mail_id: 0,
+        item: mail::AttachedItem {
+            entry: 11_423,
+            stack_count: 1,
+            ..Default::default()
+        },
+        cod: 0,
+        delivery_delay_secs,
+        header: mail::LetterHeader {
+            sender_kind: lyracore_shared::mail::SENDER_KIND_CREATURE,
+            sender_entry: 7_802,
+            mail_template_id: 99,
+        },
+    }
+}
+/// File `letter` on `shard` for `owner`, as the turn-in's transaction leaves it: unattested.
+fn hold_reward_letter(shard: &InMemoryStore, owner: u64, letter: mail::HeldEscrow) {
+    shard
+        .attested
+        .lock()
+        .unwrap()
+        .push((letter.escrow_id, false));
+    shard.mail_escrows.lock().unwrap().push((owner, letter));
+}
+fn reward_letters(plane: &InMemoryStore, recipient: u64) -> Vec<codec::MailView> {
+    plane
+        .mails
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(to, m)| *to == recipient && m.sender_kind == 3)
+        .map(|(_, m)| m.clone())
+        .collect()
+}
+/// The mail row the Module writes for the card renewal letter: from creature 7802 and no guid,
+/// naming template 99, with HAS_BODY (0x10).
+fn assert_card_renewal(letter: &codec::MailView) {
+    assert_eq!(
+        (
+            letter.sender_kind,
+            letter.sender_entry,
+            letter.sender_guid,
+            letter.mail_template_id,
+            letter.check_flags,
+        ),
+        (3, 7_802, 0, 99, 0x10),
+        "{letter:?}"
+    );
+    assert_eq!(letter.subject, "");
+    assert_eq!(letter.body, "Your card, $n.");
+    assert_eq!((letter.item_entry, letter.item_stack_count), (11_423, 1));
+}
+
+#[test]
+fn a_reward_letter_held_on_the_home_shard_is_committed_on_realm_core_at_the_mailbox_visit() {
+    let (realm, world, _instances, calls) = sharded_send();
+    hold_reward_letter(&world, GINGER, card_renewal_letter(GINGER, 86_400));
+
+    let visible =
+        mail::open_mailbox(world.as_ref(), Some(GINGER), MAILBOX).expect("the gate opens");
+
+    let letters = reward_letters(&realm, GINGER);
+    assert_eq!(letters.len(), 1, "{letters:?}");
+    assert_card_renewal(&letters[0]);
+    assert!(
+        letters[0].deliver_secs >= mail::now_secs() + 86_000,
+        "it arrives a day after the commit: {letters:?}"
+    );
+    assert!(
+        visible.iter().all(|m| m.sender_kind != 3),
+        "and stays hidden until then"
+    );
+    assert!(world.mail_escrows.lock().unwrap().is_empty(), "settled");
+    assert_eq!(
+        escrow_steps(&calls),
+        vec![
+            ("lyracore-realm".into(), "mail_commit".into()),
+            ("world".into(), "mail_confirm_delivery".into()),
+            ("world".into(), "mail_settle".into()),
+        ]
+    );
+}
+
+#[test]
+fn a_reward_letter_whose_drive_died_after_the_commit_is_delivered_once() {
+    let (realm, world, _instances, _calls) = sharded_send();
+    hold_reward_letter(&world, GINGER, card_renewal_letter(GINGER, 0));
+    *world.mail_kill_at.lock().unwrap() = Some("mail_confirm_delivery".into());
+    mail::open_mailbox(world.as_ref(), Some(GINGER), MAILBOX).expect("the gate opens");
+    assert_eq!(world.mail_escrows.lock().unwrap().len(), 1, "still held");
+
+    *world.mail_kill_at.lock().unwrap() = None;
+    let visible =
+        mail::open_mailbox(world.as_ref(), Some(GINGER), MAILBOX).expect("the gate opens");
+
+    assert_eq!(reward_letters(&realm, GINGER).len(), 1, "one letter");
+    assert_eq!(
+        visible.iter().filter(|m| m.sender_kind == 3).count(),
+        1,
+        "a Reward Letter with no delay is in the list at once"
+    );
+    assert!(world.mail_escrows.lock().unwrap().is_empty(), "settled");
+}
+
+#[test]
+fn a_single_database_drives_a_reward_letter_on_its_own_database() {
+    let store = unsharded_send();
+    hold_reward_letter(&store, GINGER, card_renewal_letter(GINGER, 86_400));
+
+    mail::open_mailbox(store.as_ref(), Some(GINGER), MAILBOX).expect("the gate opens");
+
+    let letters = reward_letters(&store, GINGER);
+    assert_eq!(letters.len(), 1, "{letters:?}");
+    assert_card_renewal(&letters[0]);
+    assert!(store.mail_escrows.lock().unwrap().is_empty(), "settled");
+}
+
+#[test]
+fn both_planes_write_the_same_reward_letter() {
+    let (realm, world, _instances, _calls) = sharded_send();
+    let single = unsharded_send();
+    for shard in [&world, &single] {
+        hold_reward_letter(shard, GINGER, card_renewal_letter(GINGER, 0));
+    }
+
+    mail::open_mailbox(world.as_ref(), Some(GINGER), MAILBOX).expect("the gate opens");
+    mail::open_mailbox(single.as_ref(), Some(GINGER), MAILBOX).expect("the gate opens");
+
+    assert_eq!(
+        reward_letters(&realm, GINGER),
+        reward_letters(&single, GINGER)
+    );
+}
+
+#[test]
+fn a_reward_letter_held_at_world_entry_is_delivered_on_either_plane() {
+    for sharded in [false, true] {
+        let realm = std::sync::Arc::new(InMemoryStore {
+            shard: "lyracore-realm".into(),
+            is_realm: true,
+            ..Default::default()
+        });
+        let home = std::sync::Arc::new(InMemoryStore {
+            shard: "world".into(),
+            login_entity: Some(warrior_entity()),
+            realm: sharded.then(|| realm.clone()),
+            ..tester_store(7)
+        });
+        hold_reward_letter(&home, 1, card_renewal_letter(1, 86_400));
+
+        let (client, _c_enc, _c_dec, server) = enter_world(home.clone(), 1);
+        drop(client);
+        server.join().unwrap();
+
+        let plane = if sharded { &realm } else { &home };
+        let letters = reward_letters(plane, 1);
+        assert_eq!(letters.len(), 1, "sharded {sharded}: {letters:?}");
+        assert_card_renewal(&letters[0]);
+        assert!(
+            home.mail_escrows.lock().unwrap().is_empty(),
+            "sharded {sharded}: settled"
+        );
+    }
+}

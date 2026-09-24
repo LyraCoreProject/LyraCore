@@ -3404,7 +3404,8 @@ impl Coordinator {
     }
 
     /// `realm_mail_commit` — step 2 of a sharded send, on the REALM handle: the mail row plus a
-    /// receipt under the same `escrow_id`, so a replay writes one letter and not two.
+    /// receipt under the same `escrow_id`, so a replay writes one letter and not two. A Reward
+    /// Letter commits here on every plane, with its `header`.
     #[allow(clippy::too_many_arguments)]
     pub fn mail_commit(
         &self,
@@ -3418,6 +3419,7 @@ impl Coordinator {
         cod: u32,
         cod_source_mail_id: u64,
         delivery_delay_secs: u32,
+        header: crate::world::mail::LetterHeader,
     ) -> Result<()> {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
@@ -3437,7 +3439,10 @@ impl Coordinator {
                 item.random_property_id,
                 cod,
                 cod_source_mail_id,
-                delivery_delay_secs
+                delivery_delay_secs,
+                header.sender_kind,
+                header.sender_entry,
+                header.mail_template_id
             )
         )
     }

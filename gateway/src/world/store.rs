@@ -1174,7 +1174,8 @@ pub trait WorldStore:
     /// once however the drive is interrupted.
     ///
     /// `delivery_delay_secs` is the Delivery Delay the fence stored. The letter arrives that long
-    /// after this commit.
+    /// after this commit. `header` names a Reward Letter's quest giver and Mail Template; the
+    /// default is a Character's letter from `sender_guid`.
     #[allow(clippy::too_many_arguments)]
     fn mail_commit(
         &self,
@@ -1188,6 +1189,7 @@ pub trait WorldStore:
         _cod: u32,
         _cod_source_mail_id: u64,
         _delivery_delay_secs: u32,
+        _header: mail::LetterHeader,
     ) -> Result<()> {
         anyhow::bail!("mail_commit: this store models no escrow")
     }

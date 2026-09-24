@@ -2,6 +2,8 @@
 
 use spacetimedb::{log, reducer, table, ReducerContext, ScheduleAt, Table, TimeDuration};
 
+use lyracore_shared::mail::MailSender;
+
 use crate::game_world_entity;
 use crate::helpers::require_operator;
 use crate::mail::game_mail;
@@ -47,6 +49,14 @@ pub struct MailEscrow {
     /// a take, a COD payment and every fence filed before the column existed.
     #[default(0u32)]
     pub delivery_delay_secs: u32,
+    /// A Reward Letter's quest giver, as `game_mail.sender_kind` and `sender_entry` store it, and
+    /// the Mail Template it names. 0 for every other fence, which is a Character's letter.
+    #[default(0u8)]
+    pub sender_kind: u8,
+    #[default(0u32)]
+    pub sender_entry: u32,
+    #[default(0u32)]
+    pub mail_template_id: u32,
 }
 
 impl MailEscrow {
@@ -109,6 +119,34 @@ pub(crate) struct Draft {
 impl Draft {
     pub(crate) fn fenced_copper(&self) -> u32 {
         self.money.saturating_add(self.postage)
+    }
+}
+/// What makes a committed letter a Reward Letter: the quest giver it is from and the Mail Template
+/// it names. A Character's letter has no header.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct RewardHeader {
+    pub sender: MailSender,
+    pub mail_template_id: u32,
+}
+
+impl RewardHeader {
+    /// The header the escrow columns or the commit arguments carry. Sender kind 0 is a Character's
+    /// letter, which has none.
+    pub(crate) fn from_columns(
+        sender_kind: u8,
+        sender_entry: u32,
+        mail_template_id: u32,
+    ) -> Result<Option<Self>, String> {
+        match MailSender::from_columns(sender_kind, 0, sender_entry) {
+            MailSender::Character(_) => Ok(None),
+            MailSender::AuctionHouse(house) => Err(format!(
+                "a mail escrow never carries Auction Mail (house {house})"
+            )),
+            sender => Ok(Some(Self {
+                sender,
+                mail_template_id,
+            })),
+        }
     }
 }
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -493,6 +531,9 @@ pub(crate) fn apply_fence<S: FenceSink>(
         random_property_id: item.random_property_id,
         cod: draft.cod,
         delivery_delay_secs: crate::mail::delivery_delay_secs(!item.is_empty(), same_account),
+        sender_kind: 0,
+        sender_entry: 0,
+        mail_template_id: 0,
     });
     sink.arm_reaper();
     log::info!(
@@ -501,6 +542,66 @@ pub(crate) fn apply_fence<S: FenceSink>(
     );
     Ok(())
 }
+/// File a Reward Letter as Escrow for its recipient, in the turn-in's transaction. The recipient's
+/// session drives it to the mail plane as it drives a stalled send of its own. No purse pays: the
+/// quest creates the letter's copper and item, as it creates quest money and items.
+pub(crate) fn apply_file_reward<S: EscrowLedger>(
+    sink: &mut S,
+    escrow_id: u64,
+    recipient_guid: u64,
+    letter: &crate::mail_reward::RewardLetter,
+) -> Result<(), String> {
+    if escrow_id == 0 {
+        return Err("escrow_id 0 is reserved (it is the \"no escrow\" sentinel)".to_string());
+    }
+    if sink.escrow(escrow_id).is_some() {
+        return Err(format!(
+            "mail escrow {escrow_id} is already fenced, refusing to file a Reward Letter under it"
+        ));
+    }
+    let (sender_kind, _, sender_entry) = letter.sender.columns();
+    let created_micros = sink.now_micros();
+    sink.file_escrow(MailEscrow {
+        escrow_id,
+        sender_guid: recipient_guid,
+        recipient_guid,
+        subject: String::new(),
+        body: letter.body.clone(),
+        money: letter.money,
+        postage: 0,
+        created_micros,
+        delivered: false,
+        payout: false,
+        mail_id: 0,
+        item_entry: letter.item.entry,
+        item_stack_count: letter.item.stack_count,
+        item_durability: letter.item.durability,
+        item_enchant_id: letter.item.enchant_id,
+        item_soulbound: letter.item.soulbound,
+        random_property_id: letter.item.random_property_id,
+        cod: 0,
+        delivery_delay_secs: letter.delay_secs,
+        sender_kind,
+        sender_entry,
+        mail_template_id: letter.mail_template_id,
+    });
+    sink.arm_reaper();
+    log::info!(
+        "mail escrow {escrow_id}: filed a Reward Letter from {:?} for {recipient_guid}",
+        letter.sender
+    );
+    Ok(())
+}
+/// [`apply_file_reward`] on this database.
+pub(crate) fn file_reward(
+    ctx: &ReducerContext,
+    escrow_id: u64,
+    recipient_guid: u64,
+    letter: &crate::mail_reward::RewardLetter,
+) -> Result<(), String> {
+    apply_file_reward(&mut CtxDb { ctx }, escrow_id, recipient_guid, letter)
+}
+#[allow(clippy::too_many_arguments)] // it takes the reducer's wire arguments
 pub(crate) fn apply_commit<S: DeliverySink>(
     sink: &mut S,
     escrow_id: u64,
@@ -509,6 +610,7 @@ pub(crate) fn apply_commit<S: DeliverySink>(
     item: &crate::items::ItemSnapshot,
     cod_mail_id: u64,
     delivery_delay_secs: u32,
+    reward: Option<RewardHeader>,
 ) -> Result<(), String> {
     if escrow_id == 0 {
         return Err("escrow_id 0 is reserved (it is the \"no escrow\" sentinel)".to_string());
@@ -529,6 +631,11 @@ pub(crate) fn apply_commit<S: DeliverySink>(
     // A commit that settles another mail's price is that price's payment. The take fence that
     // follows refuses a Mail the payment did not pay for, so the payment cannot buy an item.
     let pays_cod = cod_mail_id != 0;
+    if pays_cod && reward.is_some() {
+        return Err(format!(
+            "mail escrow {escrow_id}: a Reward Letter pays no cash on delivery price"
+        ));
+    }
     let payment = pays_cod.then(|| plan_cod_payment(sink.priced_mail(cod_mail_id), sender_guid));
     if payment == Some(CodPayment::Hold) {
         return Err(format!(
@@ -547,15 +654,25 @@ pub(crate) fn apply_commit<S: DeliverySink>(
     } else {
         draft.subject.clone()
     };
-    let letter = crate::mail::Letter::from_character(
-        sender_guid,
-        draft.recipient_guid,
-        subject,
-        draft.body.clone(),
-        draft.money,
-        draft.cod,
-        *item,
-    );
+    let letter = match reward {
+        None => crate::mail::Letter::from_character(
+            sender_guid,
+            draft.recipient_guid,
+            subject,
+            draft.body.clone(),
+            draft.money,
+            draft.cod,
+            *item,
+        ),
+        Some(header) => crate::mail::Letter::reward(
+            header.sender,
+            draft.recipient_guid,
+            draft.body.clone(),
+            draft.money,
+            *item,
+            header.mail_template_id,
+        ),
+    };
     // The Delivery Delay counts from this commit. A COD payment and its refund carry copper only
     // and arrive at once (cmangos `MailHandler.cpp:475-477`).
     let letter = match payment {
@@ -648,6 +765,9 @@ pub(crate) fn apply_take_fence<S: TakeFenceSink>(
         random_property_id: 0,
         cod: 0,
         delivery_delay_secs: 0,
+        sender_kind: 0,
+        sender_entry: 0,
+        mail_template_id: 0,
     });
     sink.arm_reaper();
     log::info!(
@@ -719,6 +839,9 @@ pub(crate) fn apply_take_item_fence<S: TakeFenceSink>(
         random_property_id: item.random_property_id,
         cod: 0,
         delivery_delay_secs: 0,
+        sender_kind: 0,
+        sender_entry: 0,
+        mail_template_id: 0,
     });
     sink.arm_reaper();
     log::info!(
@@ -895,7 +1018,9 @@ pub fn realm_mail_fence(
     )
 }
 /// `delivery_delay_secs` is the Delivery Delay the fence stored. The letter arrives that long after
-/// this commit.
+/// this commit. A Reward Letter's escrow row also stores `sender_kind`, `sender_entry` and
+/// `mail_template_id`, and the commit writes the letter from its quest giver. They are 0 for a
+/// Character's letter.
 #[reducer]
 #[allow(clippy::too_many_arguments)]
 pub fn realm_mail_commit(
@@ -915,6 +1040,9 @@ pub fn realm_mail_commit(
     cod: u32,
     cod_mail_id: u64,
     delivery_delay_secs: u32,
+    sender_kind: u8,
+    sender_entry: u32,
+    mail_template_id: u32,
 ) -> Result<(), String> {
     require_operator(ctx)?;
     let sender_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
@@ -940,6 +1068,7 @@ pub fn realm_mail_commit(
         },
         cod_mail_id,
         delivery_delay_secs,
+        RewardHeader::from_columns(sender_kind, sender_entry, mail_template_id)?,
     )
 }
 #[reducer]
@@ -1244,7 +1373,8 @@ mod tests {
                   }, &crate::items::ItemSnapshot { entry: item_entry, stack_count: \
                   item_stack_count, durability: item_durability, enchant_id: item_enchant_id, \
                   soulbound: item_soulbound, random_property_id, }, cod_mail_id, \
-                  delivery_delay_secs, ) }",
+                  delivery_delay_secs, RewardHeader::from_columns(sender_kind, sender_entry, \
+                  mail_template_id)?, ) }",
             ),
             (
                 "pub fn realm_mail_take_money_fence(",

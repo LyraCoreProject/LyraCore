@@ -115,6 +115,9 @@ fn a_delayed_priced_letter_is_hidden_until_it_arrives_and_its_price_is_paid_afte
             COD,
             "0",
             "3600",
+            "0",
+            "0",
+            "0",
         ],
     );
     let committed_by = now_micros();
@@ -167,6 +170,9 @@ fn a_delayed_priced_letter_is_hidden_until_it_arrives_and_its_price_is_paid_afte
         "0",
         "0",
         &id,
+        "0",
+        "0",
+        "0",
         "0",
     ];
     assert!(

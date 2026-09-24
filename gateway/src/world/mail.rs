@@ -1,5 +1,6 @@
 //! Mail routing and cross-database escrow driving.
-//! Sharded moves are fence → commit → attest → settle; local moves stay one transaction.
+//! Sharded moves are fence → commit → attest → settle; local moves stay one transaction. The
+//! turn-in files a Reward Letter as Escrow on every plane, and it is driven the same way.
 
 use anyhow::Result;
 
@@ -269,6 +270,7 @@ pub(crate) fn send<St: WorldStore + ?Sized>(
                     cod,
                     NO_COD_SOURCE,
                     held.delivery_delay_secs,
+                    held.header,
                 )
             })
             .map_err(|e| SendRefusal::Internal(format!("{e:#}")))
@@ -317,6 +319,20 @@ fn held_fence<St: WorldStore + ?Sized>(
             )
         })
 }
+/// A Reward Letter's quest giver and Mail Template, as its escrow row stores them and
+/// `realm_mail_commit` takes them. The default is a Character's letter.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LetterHeader {
+    pub sender_kind: u8,
+    pub sender_entry: u32,
+    pub mail_template_id: u32,
+}
+
+impl LetterHeader {
+    pub fn is_reward_letter(&self) -> bool {
+        self.sender_kind != mail_rules::SENDER_KIND_CHARACTER
+    }
+}
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct HeldEscrow {
     pub escrow_id: u64,
@@ -331,31 +347,33 @@ pub struct HeldEscrow {
     pub cod: u32,
     /// The Delivery Delay the fence resolved, so a re-driven commit keeps it.
     pub delivery_delay_secs: u32,
+    pub header: LetterHeader,
 }
+/// Drive every letter `self_guid` holds as Escrow on its own database to the mail plane, and every
+/// take Realm-core holds for them into their purse or bags. That rescues a send a Gateway
+/// abandoned, and it is the only thing that delivers a Reward Letter, which the Module files at
+/// turn-in. On a single-database realm the mail plane is the same database: a player's send files
+/// no Escrow there, but a Reward Letter does.
 pub(crate) fn redrive<St: WorldStore + ?Sized>(store: &St, self_guid: u64) {
-    let Some(realm) = store.realm_store() else {
-        return; // One database, one transaction, no fences to rescue.
-    };
+    let realm = store.realm_store();
     for held in store.mail_escrows_of(self_guid).unwrap_or_default() {
         if held.payout {
             continue; // A payout fence never lives on a shard; ignore a stray rather than mis-drive it.
         }
-        let outcome = drive(store, held.escrow_id, || {
-            realm.mail_commit(
-                held.escrow_id,
-                self_guid,
-                held.recipient_guid,
-                held.subject.clone(),
-                held.body.clone(),
-                held.money,
-                held.item.clone(),
-                held.cod,
-                held.mail_id,
-                held.delivery_delay_secs,
-            )
+        let outcome = drive(store, held.escrow_id, || match &realm {
+            Some(realm) => commit_held(realm.as_ref(), self_guid, &held),
+            None => commit_held(store, self_guid, &held),
         });
-        log_redrive("send", held.escrow_id, outcome);
+        let kind = if held.header.is_reward_letter() {
+            "Reward Letter"
+        } else {
+            "send"
+        };
+        log_redrive(kind, held.escrow_id, outcome);
     }
+    let Some(realm) = realm else {
+        return; // One database: a take is one transaction and files no Escrow.
+    };
     for held in realm.mail_escrows_of(self_guid).unwrap_or_default() {
         if !held.payout {
             continue;
@@ -371,9 +389,30 @@ pub(crate) fn redrive<St: WorldStore + ?Sized>(store: &St, self_guid: u64) {
     }
 }
 
+/// Commit the letter `held` describes on the mail plane `plane`, fenced by `sender_guid`.
+fn commit_held<P: WorldStore + ?Sized>(
+    plane: &P,
+    sender_guid: u64,
+    held: &HeldEscrow,
+) -> Result<()> {
+    plane.mail_commit(
+        held.escrow_id,
+        sender_guid,
+        held.recipient_guid,
+        held.subject.clone(),
+        held.body.clone(),
+        held.money,
+        held.item.clone(),
+        held.cod,
+        held.mail_id,
+        held.delivery_delay_secs,
+        held.header,
+    )
+}
+
 fn log_redrive(kind: &str, escrow_id: u64, outcome: Result<()>) {
     match outcome {
-        Ok(()) => log::info!("mail escrow {escrow_id}: abandoned {kind} re-driven to completion"),
+        Ok(()) => log::info!("mail escrow {escrow_id}: held {kind} driven to completion"),
         Err(e) => log::warn!(
             "mail escrow {escrow_id}: {kind} re-drive failed, the fence is still HELD: {e:#}"
         ),
@@ -519,6 +558,7 @@ fn pay_cod<St: WorldStore + ?Sized>(
             0,
             row.id,
             NO_DELIVERY_DELAY,
+            LetterHeader::default(),
         )
     })
 }

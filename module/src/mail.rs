@@ -190,6 +190,30 @@ impl Letter {
             deliver_micros: 0,
         }
     }
+    /// A Reward Letter from a quest giver. cmangos sends it with an empty subject and names the
+    /// Mail Template (`Player.cpp:12672-12673`). vmangos also stores the template text as the body
+    /// (`Mail/Mail.cpp:113-116`), so the letter has HAS_BODY.
+    pub(crate) fn reward(
+        sender: MailSender,
+        recipient_guid: u64,
+        body: String,
+        money: u32,
+        item: ItemSnapshot,
+        mail_template_id: u32,
+    ) -> Self {
+        Self {
+            recipient_guid,
+            sender,
+            subject: String::new(),
+            body,
+            money,
+            cod: 0,
+            item,
+            mail_template_id,
+            check_flags: lyracore_shared::mail::CHECK_MASK_HAS_BODY,
+            deliver_micros: 0,
+        }
+    }
     /// The same letter as the payment for a cash on delivery take. It keeps the priced letter's
     /// subject, and the client shows "COD Payment: <subject>" (cmangos `MailHandler.cpp:475-477`).
     pub(crate) fn into_cod_payment(self) -> Self {

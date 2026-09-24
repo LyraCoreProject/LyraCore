@@ -2397,6 +2397,7 @@ impl WorldStore for InMemoryStore {
                 item,
                 cod,
                 delivery_delay_secs,
+                header: mail::LetterHeader::default(),
             },
         ));
         self.attested.lock().unwrap().push((escrow_id, false));
@@ -2415,6 +2416,7 @@ impl WorldStore for InMemoryStore {
         cod: u32,
         cod_source_mail_id: u64,
         delivery_delay_secs: u32,
+        header: mail::LetterHeader,
     ) -> Result<()> {
         self.rec("mail_commit");
         self.mail_kill("mail_commit")?;
@@ -2459,6 +2461,17 @@ impl WorldStore for InMemoryStore {
                 delivery_delay_secs
             },
         );
+        if header.is_reward_letter() {
+            // Models `mail::Letter::reward`: from the quest giver, naming its Mail Template.
+            let mut mails = self.mails.lock().unwrap();
+            if let Some((_, m)) = mails.iter_mut().max_by_key(|(_, m)| m.id) {
+                m.sender_guid = 0;
+                m.sender_kind = header.sender_kind;
+                m.sender_entry = header.sender_entry;
+                m.mail_template_id = header.mail_template_id;
+                m.check_flags = lyracore_shared::mail::CHECK_MASK_HAS_BODY;
+            }
+        }
         // The price stops being owed in the SAME call that delivers the payment for it — the
         // module clears it inside the commit's transaction, which is what makes a COD take charge
         // once however the drive is interrupted.
@@ -2527,6 +2540,7 @@ impl WorldStore for InMemoryStore {
                 item: mail::AttachedItem::default(),
                 cod: 0,
                 delivery_delay_secs: 0,
+                header: mail::LetterHeader::default(),
             },
         ));
         self.attested.lock().unwrap().push((escrow_id, false));
@@ -2597,6 +2611,7 @@ impl WorldStore for InMemoryStore {
                 item,
                 cod: 0,
                 delivery_delay_secs: 0,
+                header: mail::LetterHeader::default(),
             },
         ));
         self.attested.lock().unwrap().push((escrow_id, false));

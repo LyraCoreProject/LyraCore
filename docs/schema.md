@@ -335,7 +335,9 @@ from creation, delivery and the cash on delivery price. Private `game_mail_escro
 `game_mail_delivery` carry value across the Shard Boundary; see `architecture.md` §6.3b. The
 END-appended `game_mail_escrow.delivery_delay_secs` is the Delivery Delay a send fence resolved, so
 a re-driven commit keeps it. Its default 0 is a real value: 0 for a take fence, a COD payment and a
-fence filed before the column existed.
+fence filed before the column existed. A Reward Letter stores the quest's delay there too. The
+END-appended `sender_kind`, `sender_entry` and `mail_template_id` hold a Reward Letter's quest giver
+and Mail Template. Their default 0 is a real value: a Character's letter.
 
 Private `game_mail_timer` (`module/src/mail_timer.rs`) holds each Mail's one Mail Timer, unique by
 `mail_id`. `insert_letter` arms it at the delivery instant of a Mail that is not delivered yet, and

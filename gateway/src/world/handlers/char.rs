@@ -184,6 +184,9 @@ fn enter_world<St: WorldStore + ?Sized>(
     // A Fee Hold that an earlier session or a Transfer left behind is finished here, on the Home
     // Shard that holds the Character now. The purse change reaches the client through its entity.
     crate::world::guild_fee::redrive(store, character_guid);
+    // A Reward Letter or a send that an earlier session left as Escrow on this Home Shard is
+    // delivered here, so a Gateway restart after a turn-in loses no letter.
+    crate::world::mail::redrive(store, character_guid);
     // A Member Stats tick can run between the registration above and that party frame, for a party
     // the client does not know yet. Forget it behind the frame so the next tick sends every field.
     if let Some(record) = subs.member_stats_record().cloned() {

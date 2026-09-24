@@ -44,7 +44,8 @@ pub(crate) trait QuestActionStore: Send + Sync {
 
     /// Hand a completed quest in to `giver_guid` for its rewards. The module validates completion
     /// and grants money/XP/items; `reward_index` is the player's pick-1-of-N choice reward slot,
-    /// ignored by quests with no choice rewards.
+    /// ignored by quests with no choice rewards. A quest that sends a Reward Letter files it with
+    /// the turn-in, and the store delivers it before it returns.
     fn turn_in_quest(
         &self,
         account_id: u64,
@@ -119,7 +120,11 @@ impl QuestActionStore for crate::stdb::Coordinator {
             giver_guid,
             quest_id,
             reward_index,
-        )
+        )?;
+        // The turn-in used the visibility pipe, so a Reward Letter it filed is in the cache now. A
+        // failed drive leaves the letter held for world entry or the next mailbox visit.
+        crate::world::mail::redrive(self, self_guid);
+        Ok(())
     }
 
     fn player_quest_log(&self, player_guid: u64) -> Result<Vec<codec::update_mask::QuestLogSlot>> {
@@ -1638,5 +1643,79 @@ mod tests {
             actions.status_requests.lock().unwrap().as_slice(),
             &[(SELF_GUID, QUEST)]
         );
+    }
+}
+
+#[cfg(test)]
+mod reward_letter_durable_tests {
+    use super::QuestActionStore;
+    use crate::accept::BlockingTaskCapacity;
+    use crate::config::GatewayConfig;
+    use crate::durable_test_support::Standalone;
+    use crate::stdb::Coordinator;
+
+    /// The Module's reward letter fixture: player 1 holds completed quest 509091, shaped like 3645,
+    /// Membership Card Renewal, at a clone of creature 620. The quest ender sends one Tempered
+    /// Blade (5090050, max durability 70) after 86,400 s.
+    const TESTER: u64 = 1;
+    const GIVER: u64 = 17_379_390_972_441_394_945;
+    const CARD_QUEST: u32 = 509_091;
+
+    /// On a single-database realm the Coordinator's turn-in files the Reward Letter and delivers it
+    /// on the same database before it returns.
+    #[test]
+    #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+    fn a_turn_in_delivers_its_reward_letter_before_it_returns() {
+        for variable in [
+            "LYRACORE_SHARD_MAP",
+            "LYRACORE_SHARD_MAP_FILE",
+            "LYRACORE_REALM_CORE",
+        ] {
+            assert!(
+                std::env::var_os(variable).is_none(),
+                "unset {variable} for this private test"
+            );
+        }
+        let mut standalone = Standalone::start("reward-letter-gateway");
+        standalone.publish_module();
+        standalone.assert_call("claim_operator", &[]);
+        standalone.assert_call("install_guid_range", &["0"]);
+        standalone.assert_call("debug_spawn_player_entity", &["1"]);
+        standalone.assert_call("debug_stage_reward_letter_fixture", &[]);
+        let cfg = GatewayConfig {
+            logon_bind: "127.0.0.1:0".into(),
+            world_bind: "127.0.0.1:0".into(),
+            stdb_uri: standalone.server().into(),
+            module_name: standalone.shard_name().into(),
+            coordinator_token: Some(standalone.owner_token()),
+            gateway_id: "reward-letter-test".into(),
+            blocking_task_capacity: BlockingTaskCapacity::new(1),
+        };
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let coordinator = runtime.block_on(Coordinator::connect(&cfg)).unwrap();
+        assert!(!coordinator.is_sharded());
+
+        QuestActionStore::turn_in_quest(&coordinator, 0, TESTER, GIVER, CARD_QUEST, 0)
+            .expect("the fixture quest is complete");
+
+        assert!(
+            standalone
+                .query_rows("SELECT * FROM game_mail_escrow WHERE sender_guid = 1")
+                .is_empty(),
+            "the letter left Escrow"
+        );
+        let mails = standalone.query_rows("SELECT * FROM game_mail WHERE recipient_guid = 1");
+        assert_eq!(mails.len(), 1, "{mails:?}");
+        for (column, want) in [
+            ("sender_kind", "3"),
+            ("sender_entry", "620"),
+            ("sender_guid", "0"),
+            ("mail_template_id", "509091"),
+            ("check_flags", "16"),
+            ("item_entry", "5090050"),
+            ("item_durability", "70"),
+        ] {
+            assert_eq!(mails[0][column], want, "{column}: {mails:?}");
+        }
     }
 }

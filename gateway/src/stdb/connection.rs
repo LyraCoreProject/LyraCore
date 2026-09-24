@@ -73,6 +73,7 @@ pub(crate) struct LiveConn {
     pub(crate) party_memberships: Arc<RwLock<PartyMembershipIndex>>,
     pub(crate) chat_channels: Arc<RwLock<super::reads::ChannelIndex>>,
     pub(crate) unfinished_auction_holds: Arc<RwLock<super::auction_holds::UnfinishedHoldIndex>>,
+    pub(crate) mail_escrows: Arc<RwLock<super::reads::MailEscrowIndex>>,
     /// Keeps this role's subscription active for the connection's lifetime.
     _sub: SubscriptionHandle,
 }
@@ -826,6 +827,7 @@ fn connect_subscribed(
             holds.remove(old);
             holds.insert(new);
         });
+    let mail_escrows = super::reads::watch_mail_escrows(&conn);
     let (tx, rx) = std::sync::mpsc::channel::<std::result::Result<(), String>>();
     let tx_err = tx.clone();
     let applied_commands = pump_commands.clone();
@@ -876,6 +878,7 @@ fn connect_subscribed(
         party_memberships,
         chat_channels,
         unfinished_auction_holds,
+        mail_escrows,
         _sub: sub,
     })
 }

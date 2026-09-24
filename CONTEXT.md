@@ -367,6 +367,7 @@ _Avoid_: seam (see Working method)
 
 **Escrow**:
 Value or state held so it exists in exactly one shard while it moves. Used by Transfer and Mail; never by Trading.
+Mail Escrow carries a player's letter, a take from a Mail, and a Reward Letter.
 
 ### Trading
 
@@ -659,6 +660,13 @@ returned.
 **Mail Template**:
 An imported letter body from `MailTemplate.dbc`. The client shows it for a mail that names the
 template id.
+
+**Reward Letter**:
+A letter a quest giver sends when a Character turns a quest in. It is from the quest ender, or from
+the creature a quest script names, and it names a Mail Template, carries its text, and can carry
+copper and one item. The World Session turn-in files it as Escrow in the same transaction, and the
+Gateway delivers it, so it arrives once even when the Gateway stops between the two. A playerbot's
+turn-in sends none.
 
 **Mail Timer**:
 The one-shot schedule each Mail holds. It fires at the delivery instant of a Mail that is not

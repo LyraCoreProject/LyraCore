@@ -336,13 +336,17 @@ mod loot;
 /// authoritative; a single-database gateway reads and writes its own copy through the same rules.
 mod mail;
 /// Imported mail catalogue: letter bodies, the item a letter may carry, and which quests send one at
-/// turn-in. Not re-exported below, for the same reason `import_meta` is not: nothing outside the
-/// importer reads these tables yet.
+/// turn-in. Not re-exported below, for the same reason `import_meta` is not: only the importer and
+/// `mail_reward` read these tables, and the Gateway reads none.
 mod mail_catalogue;
 /// Mail attachment escrow: the source-side fence, the mail-plane commit keyed by the same
 /// caller-chosen id, and the reaper. The mechanism for moving value into a mail row across a
-/// database boundary no transaction spans; the single-database plane deliberately bypasses it.
+/// database boundary no transaction spans. A single-database player send bypasses it; a Reward
+/// Letter uses it on every plane.
 mod mail_escrow;
+/// Reward Letters: the letter a quest giver sends at turn-in, filed as Mail Escrow in the turn-in's
+/// transaction and driven to the mail plane by the Gateway.
+mod mail_reward;
 /// Letter Copy (`CMSG_MAIL_CREATE_TEXT_ITEM`): the durable `game_item_text` row a made-permanent
 /// mail's body becomes, and the reducers that set COPIED on the mail plane and grant the Plain
 /// Letter on the Home Shard.
