@@ -14,6 +14,12 @@ use crate::mail::{game_mail, Mail};
 const MAIL_BODY_ITEM_TEMPLATE: u32 = 8383;
 
 const NOTHING_TO_COPY: &str = "mail: this mail has no text to copy";
+/// `item_text_id_for` narrows a mail id to `u32` and answers `0` — its empty-body sentinel — for
+/// one it cannot narrow. A mail id this large will not occur under today's GUID ranges, but the
+/// Gate must still refuse outright rather than let a `0`-keyed `ItemText` masquerade as a real
+/// copy: that would mark the mail COPIED and (via a later grant) GRANTED over an unreadable
+/// letter, with no bit left to retry from.
+const ID_TOO_LARGE_TO_COPY: &str = "mail: this letter's id is too large to become a Plain Letter";
 
 /// A copied letter's text, keyed by the mail id narrowed to u32
 /// (`lyracore_shared::mail::item_text_id_for`). Private: the Gateway reads it through the owner
@@ -32,6 +38,7 @@ const ALREADY_GRANTED: &str = "mail: this letter was already made permanent";
 pub(crate) enum CopyTextPlan {
     NotYours,
     NoText,
+    IdTooLarge,
     AlreadyGranted,
     Copy,
 }
@@ -53,6 +60,11 @@ pub(crate) fn plan_copy_text(row: Option<&Mail>, caller_guid: u64) -> CopyTextPl
     };
     if row.body.is_empty() {
         return CopyTextPlan::NoText;
+    }
+    // Structural, ahead of GRANTED: whether this id can ever become a text id does not depend on
+    // whether a grant already landed.
+    if u32::try_from(row.id).is_err() {
+        return CopyTextPlan::IdTooLarge;
     }
     if row.check_flags & lyracore_shared::mail::CHECK_FLAG_LETTER_GRANTED != 0 {
         return CopyTextPlan::AlreadyGranted;
@@ -81,6 +93,7 @@ pub(crate) fn apply_copy_text(
     match plan_copy_text(row.as_ref(), recipient_guid) {
         CopyTextPlan::NotYours => return Err(lyracore_shared::mail::NOT_YOUR_MAIL.to_string()),
         CopyTextPlan::NoText => return Err(NOTHING_TO_COPY.to_string()),
+        CopyTextPlan::IdTooLarge => return Err(ID_TOO_LARGE_TO_COPY.to_string()),
         CopyTextPlan::AlreadyGranted => return Err(ALREADY_GRANTED.to_string()),
         CopyTextPlan::Copy => {}
     }
@@ -213,6 +226,17 @@ mod tests {
             CopyTextPlan::NoText,
             "an empty body is refused before the GRANTED check even looks at the flags"
         );
+    }
+
+    #[test]
+    fn a_mail_id_too_large_for_a_text_id_is_refused_rather_than_copied_unreadable() {
+        // `item_text_id_for` narrows a mail id to `u32` and answers `0` — its empty-body
+        // sentinel — for one that does not fit. Without this Gate, `apply_copy_text` would file a
+        // `0`-keyed `ItemText`, mark the mail COPIED, and leave the player with an unreadable
+        // letter and no bit left to retry from.
+        let mut too_large = row(7, "meet me at the gate", 0);
+        too_large.id = u64::from(u32::MAX) + 1;
+        assert_eq!(plan_copy_text(Some(&too_large), 7), CopyTextPlan::IdTooLarge);
     }
 
     #[test]
