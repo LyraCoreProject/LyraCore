@@ -230,3 +230,36 @@ fn a_plain_letter_cannot_be_offered_in_a_trade_window() {
         "a Plain Letter must never occupy a trade slot"
     );
 }
+
+/// `apply_copy_text` reads the mail through `mail::delivered_mail`, so a mail not yet at its
+/// delivery instant does not exist for `realm_mail_copy_text` either — the same rule that already
+/// keeps an undelivered mail from being read, deleted, taken from or returned.
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn a_letter_not_yet_delivered_cannot_be_copied() {
+    let shard = fixture("mail-letter-copy-not-delivered");
+    let mail_id = seed_mail(&shard, 1, 2, "left it at the inn");
+    shard.assert_sql(&format!(
+        "UPDATE game_mail SET deliver_micros = 9999999999999999 WHERE id = {mail_id}"
+    ));
+
+    let refused = shard.call("realm_mail_copy_text", &[&actor(1), &mail_id.to_string()]);
+    assert!(
+        !refused.status.success(),
+        "an undelivered letter has no text to copy yet"
+    );
+
+    let mail = shard.query_rows(&format!(
+        "SELECT check_flags FROM game_mail WHERE id = {mail_id}"
+    ));
+    assert!(
+        !has_copied(&mail[0]["check_flags"]),
+        "a refused copy must not touch the mail plane at all"
+    );
+    assert!(
+        shard
+            .query_rows(&format!("SELECT id FROM game_item_text WHERE id = {mail_id}"))
+            .is_empty(),
+        "and it must not file item text for a letter nobody has read yet"
+    );
+}
