@@ -365,7 +365,7 @@ fn set_mode_flag(
 /// KICK and BAN (cm:Channel.cpp:169-237). The actor must be a moderator; only the owner may remove
 /// the owner. A BAN of a Character not yet banned records the ban and writes PLAYER_BANNED;
 /// otherwise, and for KICK, write PLAYER_KICKED. Either notice names target and actor and goes to
-/// every member, target included, before the target departs (cm:Channel.cpp:231-233) — `depart`
+/// every member, target included, before the target departs (cm:Channel.cpp:231-233). `depart`
 /// sends no LEFT of its own here, because this notice already covers the departure.
 fn kick_or_ban(
     ctx: &ReducerContext,

@@ -42,12 +42,12 @@ pub(crate) use auction::{
 pub(crate) use auction::{AuctionHousePolicy, AuctionInteraction};
 pub(crate) use bank::handle_bank;
 pub(crate) use cast::{dispatch_cast, CastOutcome, CastPlayer, CastStore, CastTransition};
-#[cfg(test)]
-pub(crate) use channel::resolve_online_character;
 pub(crate) use channel::{
     dispatch_channel_action, ChannelActionOutcome, ChannelActionStore, ChannelOutcome,
     ChannelRequest, ChannelRoster,
 };
+#[cfg(test)]
+pub(crate) use channel::{resolve_online_character, ResolvedTarget};
 pub(crate) use char::handle_char;
 pub(crate) use chat::{
     dispatch_chat_action, ChatActionOutcome, ChatActionPlayer, ChatActionStore, ChatOutcome,

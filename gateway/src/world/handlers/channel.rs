@@ -46,6 +46,15 @@ pub(crate) struct ChannelRoster {
     pub(crate) members: Vec<(u64, u8)>,
 }
 
+/// A Character [`ChannelActionStore::online_character_by_name`] resolved: its guid, race and
+/// canonical spelling, the identity a targeted op conveys to the Module once found.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ResolvedTarget {
+    pub(crate) guid: u64,
+    pub(crate) race: u8,
+    pub(crate) name: String,
+}
+
 pub(crate) trait ChannelActionStore: ChatActionStore {
     /// Durable Request on Realm-core. The Coordinator picks the database; handlers never do.
     fn channel_op(
@@ -56,9 +65,9 @@ pub(crate) trait ChannelActionStore: ChatActionStore {
     ) -> Result<ChannelOutcome>;
     /// Durable Read of the Realm-core cache. `None` when `team` has no channel by that name.
     fn channel_roster(&self, team: u32, channel_name: &str) -> Result<Option<ChannelRoster>>;
-    /// The first `session_online` Character named `name`, realm-wide, with its race and canonical
-    /// spelling. `None` when no online Character carries that name.
-    fn online_character_by_name(&self, name: &str) -> Result<Option<(u64, u8, String)>>;
+    /// The first `session_online` Character named `name`, realm-wide. `None` when no online
+    /// Character carries that name.
+    fn online_character_by_name(&self, name: &str) -> Result<Option<ResolvedTarget>>;
     /// Does `owner_guid` have `other_guid` on its ignore list, read from wherever the owner's
     /// contact rows live?
     fn ignores(&self, owner_guid: u64, other_guid: u64) -> Result<bool>;
@@ -78,7 +87,7 @@ impl ChannelActionStore for crate::stdb::Coordinator {
         crate::stdb::Coordinator::channel_roster(self, team, channel_name)
     }
 
-    fn online_character_by_name(&self, name: &str) -> Result<Option<(u64, u8, String)>> {
+    fn online_character_by_name(&self, name: &str) -> Result<Option<ResolvedTarget>> {
         resolve_online_character(self, name)
     }
 
@@ -94,11 +103,15 @@ impl ChannelActionStore for crate::stdb::Coordinator {
 pub(crate) fn resolve_online_character<St: WorldStore + ?Sized>(
     store: &St,
     name: &str,
-) -> Result<Option<(u64, u8, String)>> {
+) -> Result<Option<ResolvedTarget>> {
     for guid in presence::resolve_all_by_name(store, name)? {
         if let Some(character) = presence::of(store, guid)? {
             if character.session_online {
-                return Ok(Some((character.guid, character.race, character.name)));
+                return Ok(Some(ResolvedTarget {
+                    guid: character.guid,
+                    race: character.race,
+                    name: character.name,
+                }));
             }
         }
     }
@@ -253,8 +266,60 @@ pub(crate) fn dispatch_channel_action<St: ChannelActionStore + ?Sized>(
     Ok(ChannelActionOutcome::Handled { outbound })
 }
 
-/// Run one op as the player. Success notices return on the Relay; a Refusal is answered here. Only
-/// a lost reducer transport is fatal.
+/// The actor and Speaker Facts every channel op needs. `None` when the caller has no live entity
+/// to act as (a session at Character Select, or between shards), the same silent drop every
+/// channel op takes for that case.
+fn actor_and_speaker<St: ChannelActionStore + ?Sized>(
+    store: &St,
+    player: ChatActionPlayer,
+) -> Result<Option<(u64, SpeakerFacts)>> {
+    let Some(actor_guid) = player.self_guid else {
+        return Ok(None);
+    };
+    let Some(speaker) = store.speaker_facts(actor_guid)? else {
+        return Ok(None);
+    };
+    Ok(Some((actor_guid, speaker)))
+}
+
+/// What a Refusal from [`submit_channel_op`] names in its notice: the channel as the client typed
+/// it, and who or what to name as `subject_guid`/`target_name`. The actor for an untargeted op;
+/// the resolved (or unresolved-sentinel) target for one that names a Character.
+struct RefusalContext {
+    channel_name: String,
+    subject_guid: u64,
+    target_name: String,
+}
+
+/// Submit one built `request` as `op` and translate the outcome. Success notices return on the
+/// Relay; a Refusal is answered here, from `refusal`. Only a lost reducer transport is fatal;
+/// every other failure is logged at debug and dropped, keeping the World Session up.
+fn submit_channel_op<St: ChannelActionStore + ?Sized>(
+    store: &St,
+    account_id: u64,
+    actor_guid: u64,
+    op: u8,
+    request: ChannelRequest,
+    refusal: RefusalContext,
+) -> Result<Vec<Outbound>> {
+    match store.channel_op(actor_guid, op, request) {
+        Ok(ChannelOutcome::Done) => Ok(Vec::new()),
+        Ok(ChannelOutcome::Refused(tag)) => Ok(vec![refusal_notice(
+            tag,
+            refusal.channel_name,
+            refusal.subject_guid,
+            refusal.target_name,
+        )]),
+        Err(error) if is_transport_failure(&error) => Err(error),
+        Err(error) => {
+            log::debug!("world: channel op {op} dropped (account {account_id}): {error:#}");
+            Ok(Vec::new())
+        }
+    }
+}
+
+/// Run one op as the player: JOIN, LEAVE, PASSWORD, ANNOUNCEMENTS and MODERATE. None of these
+/// name another Character.
 fn run_op<St: ChannelActionStore + ?Sized>(
     store: &St,
     player: ChatActionPlayer,
@@ -262,10 +327,7 @@ fn run_op<St: ChannelActionStore + ?Sized>(
     channel_name: String,
     password: String,
 ) -> Result<Vec<Outbound>> {
-    let Some(actor_guid) = player.self_guid else {
-        return Ok(Vec::new());
-    };
-    let Some(speaker) = store.speaker_facts(actor_guid)? else {
+    let Some((actor_guid, speaker)) = actor_and_speaker(store, player)? else {
         return Ok(Vec::new());
     };
     let request = ChannelRequest {
@@ -277,23 +339,18 @@ fn run_op<St: ChannelActionStore + ?Sized>(
         target_ignores_actor: false,
         speaker,
     };
-    match store.channel_op(actor_guid, op, request) {
-        Ok(ChannelOutcome::Done) => Ok(Vec::new()),
-        Ok(ChannelOutcome::Refused(refusal)) => Ok(vec![refusal_notice(
-            refusal,
+    submit_channel_op(
+        store,
+        player.account_id,
+        actor_guid,
+        op,
+        request,
+        RefusalContext {
             channel_name,
-            actor_guid,
-            String::new(),
-        )]),
-        Err(error) if is_transport_failure(&error) => Err(error),
-        Err(error) => {
-            log::debug!(
-                "world: channel op {op} dropped (account {}): {error:#}",
-                player.account_id
-            );
-            Ok(Vec::new())
-        }
-    }
+            subject_guid: actor_guid,
+            target_name: String::new(),
+        },
+    )
 }
 
 /// A Store read behind [`run_targeted_op`] that must not end the World Session unless it fails
@@ -327,10 +384,6 @@ fn recoverable<T>(op: u8, account_id: u64, result: Result<T>) -> Result<Option<T
 /// fall back on, so a failure there (again, anything short of a transport loss) answers
 /// PLAYER_NOT_FOUND directly and skips the Durable Request, since there is nothing further to
 /// learn from one.
-///
-/// Every Refusal this op can come back with names the resolved (or unresolved-sentinel) target,
-/// so the notice always carries `target_guid` and `target_name`. PLAYER_ALREADY_MEMBER reads the
-/// guid, the name notices read the text, and the rest ignore both.
 fn run_targeted_op<St: ChannelActionStore + ?Sized>(
     store: &St,
     player: ChatActionPlayer,
@@ -338,10 +391,7 @@ fn run_targeted_op<St: ChannelActionStore + ?Sized>(
     channel_name: String,
     typed_name: String,
 ) -> Result<Vec<Outbound>> {
-    let Some(actor_guid) = player.self_guid else {
-        return Ok(Vec::new());
-    };
-    let Some(speaker) = store.speaker_facts(actor_guid)? else {
+    let Some((actor_guid, speaker)) = actor_and_speaker(store, player)? else {
         return Ok(Vec::new());
     };
     let resolved = recoverable(
@@ -350,19 +400,23 @@ fn run_targeted_op<St: ChannelActionStore + ?Sized>(
         store.online_character_by_name(&typed_name),
     )?
     .flatten();
-    let (target_guid, target_race, target_name) = resolved.unwrap_or((0, 0, typed_name));
-    let target_ignores_actor = if target_guid != 0 && op == channel_op::INVITE {
+    let target = resolved.unwrap_or(ResolvedTarget {
+        guid: 0,
+        race: 0,
+        name: typed_name,
+    });
+    let target_ignores_actor = if target.guid != 0 && op == channel_op::INVITE {
         let Some(ignores) = recoverable(
             op,
             player.account_id,
-            store.ignores(target_guid, actor_guid),
+            store.ignores(target.guid, actor_guid),
         )?
         else {
             return Ok(vec![refusal_notice(
                 ChannelRefusal::PlayerNotFound,
                 channel_name,
-                target_guid,
-                target_name,
+                target.guid,
+                target.name,
             )]);
         };
         ignores
@@ -372,29 +426,24 @@ fn run_targeted_op<St: ChannelActionStore + ?Sized>(
     let request = ChannelRequest {
         channel_name: channel_name.clone(),
         password: String::new(),
-        target_guid,
-        target_name: target_name.clone(),
-        target_race,
+        target_guid: target.guid,
+        target_name: target.name.clone(),
+        target_race: target.race,
         target_ignores_actor,
         speaker,
     };
-    match store.channel_op(actor_guid, op, request) {
-        Ok(ChannelOutcome::Done) => Ok(Vec::new()),
-        Ok(ChannelOutcome::Refused(refusal)) => Ok(vec![refusal_notice(
-            refusal,
+    submit_channel_op(
+        store,
+        player.account_id,
+        actor_guid,
+        op,
+        request,
+        RefusalContext {
             channel_name,
-            target_guid,
-            target_name,
-        )]),
-        Err(error) if is_transport_failure(&error) => Err(error),
-        Err(error) => {
-            log::debug!(
-                "world: channel op {op} dropped (account {}): {error:#}",
-                player.account_id
-            );
-            Ok(Vec::new())
-        }
-    }
+            subject_guid: target.guid,
+            target_name: target.name,
+        },
+    )
 }
 
 /// Answer a read with `answer` when the player is a member of the named channel, else NOT_MEMBER
@@ -478,7 +527,7 @@ mod tests {
         roster_failure: bool,
         /// What `online_character_by_name` resolves a typed name to. `None` answers
         /// PLAYER_NOT_FOUND, as an unknown or offline Character does.
-        online: Option<(u64, u8, String)>,
+        online: Option<ResolvedTarget>,
         /// `online_character_by_name` fails with this non-transport message instead of resolving.
         lookup_failure: Option<String>,
         /// What `ignores` answers for every pair.
@@ -530,7 +579,7 @@ mod tests {
             Ok(self.roster.clone())
         }
 
-        fn online_character_by_name(&self, _name: &str) -> Result<Option<(u64, u8, String)>> {
+        fn online_character_by_name(&self, _name: &str) -> Result<Option<ResolvedTarget>> {
             if let Some(failure) = &self.lookup_failure {
                 anyhow::bail!("{failure}");
             }
@@ -949,7 +998,11 @@ mod tests {
 
     fn resolved(ignored: bool) -> InMemoryChannelActions {
         InMemoryChannelActions {
-            online: Some((TARGET, TARGET_RACE, "Thrall".to_string())),
+            online: Some(ResolvedTarget {
+                guid: TARGET,
+                race: TARGET_RACE,
+                name: "Thrall".to_string(),
+            }),
             ignored,
             ..store(None)
         }

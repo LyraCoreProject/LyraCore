@@ -538,6 +538,58 @@ fn mute_kick_and_ban_remove_or_silence_members() {
     assert_eq!(owner_guid(&realm, "Raiders"), "2");
 }
 
+/// cmangos measures `m_players.size()` after the erase for both a plain leave
+/// (cm:Channel.cpp:120,165-166) and a kick or ban (cm:Channel.cpp:210-236), and passes it as
+/// `SetOwner`'s `exclaim` argument, so OWNER_CHANGED is conditional on the remaining member count
+/// in both, never sent by default. A kick or ban of the owner that leaves exactly one member
+/// behind sends MODE_CHANGE alone; leaving two or more sends OWNER_CHANGED too.
+#[test]
+#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+fn kick_or_ban_of_the_owner_sends_owner_changed_only_past_one_remaining_member() {
+    let realm = start("chat-channel-moderation-owner-changed");
+    join(&realm, &actor("1"), "Pair", HUMAN);
+    join(&realm, &actor("2"), "Pair", HUMAN);
+
+    // One member remains: MODE_CHANGE alone.
+    let departed = notices_of(&realm, || {
+        op(
+            &realm,
+            &actor("1"),
+            OP_BAN,
+            "Pair",
+            target(1, "One", HUMAN),
+            HUMAN,
+        )
+    });
+    assert_eq!(
+        departed,
+        [(PLAYER_BANNED, 1, vec![1, 2]), (MODE_CHANGE, 2, vec![2])]
+    );
+    assert_eq!(owner_guid(&realm, "Pair"), "2");
+
+    // Two members remain: OWNER_CHANGED follows.
+    join(&realm, &actor("3"), "Pair", HUMAN);
+    join(&realm, &actor("4"), "Pair", HUMAN);
+    let departed = notices_of(&realm, || {
+        op(
+            &realm,
+            &actor("2"),
+            OP_KICK,
+            "Pair",
+            target(2, "Two", HUMAN),
+            HUMAN,
+        )
+    });
+    assert_eq!(
+        departed,
+        [
+            (PLAYER_KICKED, 2, vec![2, 3, 4]),
+            (MODE_CHANGE, 3, vec![3, 4]),
+            (OWNER_CHANGED, 3, vec![3, 4]),
+        ]
+    );
+}
+
 /// Criterion 8: invites reach their target unless ignored, a same-team-only Gate, and the already
 /// member and invite-banned Refusals.
 #[test]

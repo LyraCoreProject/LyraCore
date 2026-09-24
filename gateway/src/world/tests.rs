@@ -3,8 +3,8 @@ use super::handlers::{
     ChannelActionStore, ChannelOutcome, ChannelRequest, ChannelRoster, ChatActionStore,
     ChatOutcome, DuelActionStore, GuildActionStore, ItemActionStore, LootWindowRefusal,
     LootWindowRequestStatus, LootWindowStore, MeleeActionStore, MemberPresence, MemberSnapshot,
-    MemberStatsStore, QuestActionStore, RealmChatRequest, SpeakerFacts, TaxiActionStore,
-    VendorActionStore, WeatherStore,
+    MemberStatsStore, QuestActionStore, RealmChatRequest, ResolvedTarget, SpeakerFacts,
+    TaxiActionStore, VendorActionStore, WeatherStore,
 };
 use super::party::PartyOutcome;
 use super::*;
@@ -4271,7 +4271,7 @@ impl ChannelActionStore for InMemoryStore {
         Ok(None)
     }
 
-    fn online_character_by_name(&self, name: &str) -> Result<Option<(u64, u8, String)>> {
+    fn online_character_by_name(&self, name: &str) -> Result<Option<ResolvedTarget>> {
         resolve_online_character(self, name)
     }
 
