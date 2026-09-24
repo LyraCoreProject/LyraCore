@@ -116,14 +116,14 @@ jobs:
         with:
           path: lyracore
           persist-credentials: false
-      # The pinned movement revision plus the raid slot fixture columns (packages branch
-      # core-compat/raid-slot). Move this pin to packages main once that repository's fixture
-      # change is merged.
+      # The pinned movement revision plus the raid slot and quest type fixture columns (packages
+      # branch core-compat/quest-type). Move this pin to packages main once that repository's
+      # fixture changes are merged.
       - name: Check out the continuous movement Package revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: LyraCoreProject/packages
-          ref: 6547e42a1b553b705b0fc1574d6d5b31a9bd28c3
+          ref: 182e8dc5e90758ee4d4683cd49a7abab5a4fd02c
           path: collection
           persist-credentials: false
       - name: Check out Core before retained waypoint paths
