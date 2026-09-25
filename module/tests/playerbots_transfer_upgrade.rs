@@ -378,6 +378,7 @@ fn playerbots_transfer_upgrades_populated_predecessor_without_a_checkpoint() {
             "transfer_checkpoint",
             "movement_due_micros",
             "solo_target_guid",
+            "path_pending",
         ];
         let before_fields = before[runner].as_object().unwrap();
         for field in after[runner].as_object().unwrap().keys() {
@@ -391,6 +392,7 @@ fn playerbots_transfer_upgrades_populated_predecessor_without_a_checkpoint() {
         }
         assert_eq!(after[runner]["transfer_checkpoint"], "(none = ())");
         assert_eq!(after[runner]["movement_due_micros"], i64::MAX.to_string());
+        assert_eq!(after[runner]["path_pending"], "false");
     }
     for field in [
         "orders",
