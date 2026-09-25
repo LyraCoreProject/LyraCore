@@ -83,6 +83,8 @@ impl PlayerSubscriptions {
             motion_pending: Arc::new(world_view::MotionPending::default()),
             member_stats: Default::default(),
             ignored: Mutex::default(),
+            friends: Mutex::default(),
+            team: lyracore_shared::faction::TEAM_ALLIANCE,
         });
         view.add_viewer_on_shard(
             viewer.clone(),
@@ -3892,9 +3894,31 @@ impl Coordinator {
                 .is_ghost
                 .store(is_ghost, std::sync::atomic::Ordering::Relaxed);
         }
-        // The Realm Chat Relay's per-listener filter: this Character's own ignore list, from its
-        // contact rows on this Home Shard. The contact Relay keeps it current from here on.
-        let ignored: HashSet<u64> = self.contact_lists(self_guid)?.1.into_iter().collect();
+        // The Realm Chat Relay's per-listener filter, and the Account Claim Relay's per-listener
+        // audience: this Character's own ignore and friend guids, from its contact rows on this
+        // Home Shard. The contact Relay keeps both current from here on. A one-time read straight
+        // off the coordinator cache — like the `explored`/`resident_corpses` sweeps below — rather
+        // than `contact_lists`, which reads the registered Viewer this call is about to seed.
+        let (ignored, friends): (HashSet<u64>, HashSet<u64>) = {
+            let guard = self.0.coord();
+            let mut ignored = HashSet::new();
+            let mut friends = HashSet::new();
+            for row in guard
+                .conn
+                .db
+                .game_character_contact()
+                .iter()
+                .filter(|r| r.owner_guid == self_guid)
+            {
+                if row.is_ignore {
+                    ignored.insert(row.target_guid);
+                } else {
+                    friends.insert(row.target_guid);
+                }
+            }
+            (ignored, friends)
+        };
+        let team = lyracore_shared::faction::team_for_race((arrival.unit_bytes_0 & 0xFF) as u8);
         let viewer = Arc::new(Viewer {
             active: std::sync::atomic::AtomicBool::new(true),
             session,
@@ -3911,6 +3935,8 @@ impl Coordinator {
             motion_pending: Arc::new(world_view::MotionPending::default()),
             member_stats: Default::default(),
             ignored: Mutex::new(ignored),
+            friends: Mutex::new(friends),
+            team,
         });
         view.add_viewer(
             self,
@@ -4541,6 +4567,8 @@ mod tests {
             motion_pending: Arc::new(world_view::MotionPending::default()),
             member_stats: Default::default(),
             ignored: Mutex::default(),
+            friends: Mutex::default(),
+            team: lyracore_shared::faction::TEAM_ALLIANCE,
         }
     }
 
@@ -6881,31 +6909,30 @@ mod tests {
         assert!(scanned.contains("\"/* quoted label */\""));
     }
 
-    /// World entry seeds the viewer's ignore set from its own contact rows on this Home Shard. No
-    /// Fake reaches this Coordinator method, so the seed is pinned in source. Without it the set
-    /// stays empty until the first live contact change, and ignorable Realm Chat Lines reach the
-    /// Characters who ignore their speaker.
+    /// World entry seeds the viewer's ignore AND friend sets from its own contact rows on this
+    /// Home Shard, read directly off the coordinator cache — NOT through `contact_lists`, which
+    /// reads the registered Viewer this call is about to create, and would see nothing yet.
+    /// No Fake reaches this coordinator read, so the seed is pinned in source. Without it the sets
+    /// stay empty until the first live contact change: an ignorable Realm Chat Line reaches a
+    /// Character who ignores its speaker, and a friend's login/logout notice never reaches this
+    /// viewer.
     #[test]
-    fn the_viewer_is_seeded_with_its_own_ignore_list() {
+    fn the_viewer_is_seeded_with_its_own_ignore_and_friend_sets() {
         let body = crate::test_scan::code_of(
             include_str!("subscriptions.rs"),
             "pub fn subscribe_player_events(",
         );
-        let body: String = body.split_whitespace().collect();
+        let compact: String = decommented(&body)
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
         assert!(
-            body.contains(
-                "letignored:HashSet<u64>=self.contact_lists(self_guid)?.1.into_iter().collect();"
-            ),
-            "world entry no longer reads the viewer's own ignore list"
+            compact.contains(".game_character_contact().iter().filter(|r|r.owner_guid==self_guid)"),
+            "world entry no longer scans its own contact rows for the ignore/friend seed"
         );
         assert!(
-            body.contains("ignored:Mutex::new(ignored),"),
-            "the viewer is no longer constructed with the ignore list world entry read"
-        );
-        assert_eq!(
-            body.matches("letignored").count(),
-            1,
-            "a second `ignored` binding can shadow the seed"
+            compact.contains("ignored:Mutex::new(ignored),friends:Mutex::new(friends),team,"),
+            "the viewer is no longer constructed with the seeded ignore/friend sets and team"
         );
     }
 

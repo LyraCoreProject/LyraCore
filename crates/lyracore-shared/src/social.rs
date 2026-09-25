@@ -9,34 +9,35 @@ pub enum ContactRefusal {
     ActorUnavailable,
     /// A Character may not befriend or ignore itself.
     AddSelf,
-    /// No Character row holds the guid the Gateway resolved.
-    NoSuchPlayer,
     /// The target is already on that same list.
     AlreadyOnList,
     /// That list is at its cap.
     ListFull,
     /// The remove named a target that is not on that list.
     NotOnList,
+    /// A friend add named a Character on the other team (cm:MiscHandler.cpp:467-468). Ignore has
+    /// no such rule.
+    Enemy,
 }
 
 impl ContactRefusal {
     pub const ALL: [Self; 6] = [
         Self::ActorUnavailable,
         Self::AddSelf,
-        Self::NoSuchPlayer,
         Self::AlreadyOnList,
         Self::ListFull,
         Self::NotOnList,
+        Self::Enemy,
     ];
 
     pub fn as_tag(self) -> &'static str {
         match self {
             Self::ActorUnavailable => "social:actor_unavailable",
             Self::AddSelf => "social:add_self",
-            Self::NoSuchPlayer => "social:no_such_player",
             Self::AlreadyOnList => "social:already_on_list",
             Self::ListFull => "social:list_full",
             Self::NotOnList => "social:not_on_list",
+            Self::Enemy => "social:enemy",
         }
     }
 

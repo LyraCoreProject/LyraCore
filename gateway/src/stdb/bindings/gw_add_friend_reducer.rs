@@ -11,6 +11,7 @@ use super::session_actor_type::SessionActor;
 pub(super) struct GwAddFriendArgs {
     pub request_actor: SessionActor,
     pub target_guid: u64,
+    pub target_race: u8,
 }
 
 impl From<GwAddFriendArgs> for super::Reducer {
@@ -18,6 +19,7 @@ impl From<GwAddFriendArgs> for super::Reducer {
         Self::GwAddFriend {
             request_actor: args.request_actor,
             target_guid: args.target_guid,
+            target_race: args.target_race,
         }
     }
 }
@@ -37,8 +39,13 @@ pub trait gw_add_friend {
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
     /// /// Use [`gw_add_friend:gw_add_friend_then`] to run a callback after the reducer completes.
-    fn gw_add_friend(&self, request_actor: SessionActor, target_guid: u64) -> __sdk::Result<()> {
-        self.gw_add_friend_then(request_actor, target_guid, |_, _| {})
+    fn gw_add_friend(
+        &self,
+        request_actor: SessionActor,
+        target_guid: u64,
+        target_race: u8,
+    ) -> __sdk::Result<()> {
+        self.gw_add_friend_then(request_actor, target_guid, target_race, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `gw_add_friend` to run as soon as possible,
@@ -51,6 +58,7 @@ pub trait gw_add_friend {
         &self,
         request_actor: SessionActor,
         target_guid: u64,
+        target_race: u8,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -63,6 +71,7 @@ impl gw_add_friend for super::RemoteReducers {
         &self,
         request_actor: SessionActor,
         target_guid: u64,
+        target_race: u8,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -72,6 +81,7 @@ impl gw_add_friend for super::RemoteReducers {
             GwAddFriendArgs {
                 request_actor,
                 target_guid,
+                target_race,
             },
             callback,
         )

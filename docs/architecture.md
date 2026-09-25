@@ -104,6 +104,7 @@ are answered by the gateway, which is the only component that can see the whole 
 | "does this character exist" / "is this character online" for party invites, and "is the new leader online" when the lead passes | realm-core holds no characters and no live entities; one world shard sees only its own | `gateway/src/world/presence.rs` (`of`, `live_anywhere`) |
 | whisper target resolution by name, realm-wide, plus the ignore verdict | same | `presence.rs` (`resolve_by_name`), `gateway/src/world/whisper.rs` (`ignored_anywhere`) |
 | `CMSG_NAME_QUERY` resolution | same | `presence.rs` (`character_anywhere`) |
+| friend/ignore add target resolution by name, realm-wide — the existence check the Module no longer performs, since Realm-core holds no Character rows for it to check | same | `presence.rs` (`resolve_by_name`, `of`), `gateway/src/world/social.rs` (`resolve_add_contact`) |
 | loot-roll promotion and settlement fan-out across shards | a kill's transaction cannot reach realm-core | `gateway/src/world/loot.rs` |
 | recipient's Account for the mail Delivery Delay | the recipient may be on another shard | `gateway/src/world/mail.rs` (`same_realm_account`) |
 | the Character facts a guild Gate needs: name, team, Realm Account, GM level, online state for the roster | Realm-core holds the guild rows and no Characters | `gateway/src/world/handlers/guild.rs`, Realm Presence through `stdb/reads/guild.rs` (`guild_character_facts`) |
@@ -438,15 +439,15 @@ Every relay hangs off a coordinator connection. Row-driven relays take one of tw
   named owners on the source Shard, and the job's per-viewer gate stays the final filter. Only
   corpses, dynamic objects and weather still fan out per shard. `/roll` is a Group Broadcast on the
   group event relay. The cross-shard whisper/group/auction-notice/Mail Arrival twins, Realm Chat
-  Lines and Channel Notices ride the same dispatchers on the realm-core connection
-  (`arm_realm_private`), armed only when realm-core is a distinct database. The guild relays
-  register in both places too (`wire_guild_relays`): `game_guild_event` rows go to their addressed
-  recipient or to every online member of the Guild on this Gateway, a petition kind
-  (`0x70..=0x7F`) goes through `petition_event_appeared`, `game_guild_member` changes drive the
-  Guild Projection below, and a `game_guild_petition` insert sends the new Petition id to the
-  owner's Guild Charter as ITEM_FIELD_ENCHANTMENT. A relay reads the Realm-core cache once per
-  event through keyed finds and the Gateway-side `GuildIndex` (ranks and members by Guild), never
-  once per recipient.
+  Lines, Channel Notices and the Account Claim Relay (friend online/offline notices) ride the same
+  dispatchers on the realm-core connection (`arm_realm_private`), armed only when realm-core is a
+  distinct database. The guild relays register in both places too (`wire_guild_relays`):
+  `game_guild_event` rows go to their addressed recipient or to every online member of the Guild on
+  this Gateway, a petition kind (`0x70..=0x7F`) goes through `petition_event_appeared`,
+  `game_guild_member` changes drive the Guild Projection below, and a `game_guild_petition` insert
+  sends the new Petition id to the owner's Guild Charter as ITEM_FIELD_ENCHANTMENT. A relay reads
+  the Realm-core cache once per event through keyed finds and the Gateway-side `GuildIndex` (ranks
+  and members by Guild), never once per recipient.
 - **Viewer lifetime** (`subscribe_player_events`): world entry prepares relay state, registers one
   viewer, and performs resident-state sweeps. `PlayerSubscriptions` owns only that registration;
   dropping it removes the viewer. It owns no row callbacks. A world-port removes the source viewer

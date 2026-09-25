@@ -458,42 +458,64 @@ impl Coordinator {
             .map(|c| (c.online, c.level, c.class, c.zone_id)))
     }
 
-    /// `owner_guid`'s friend list + ignore list for `CMSG_FRIEND_LIST → SMSG_FRIEND_LIST` +
-    /// `SMSG_IGNORE_LIST`. Reads `game_character_contact` via the privileged cache
-    /// (RLS-bypassed, same trick `in_world_players` uses) so an online friend's presence resolves
-    /// regardless of whose connection is asking. A friend whose character has since been deleted
-    /// (stale row, pre-sweep or a race) degrades to an offline/zero row rather than erroring.
-    pub fn contact_lists(
-        &self,
-        owner_guid: u64,
-    ) -> Result<(Vec<crate::codec::FriendView>, Vec<u64>)> {
-        let guard = self.0.coord();
-        let db = &guard.conn.db;
-        let mut friends = Vec::new();
-        let mut ignored = Vec::new();
-        for c in db
+    /// `owner_guid`'s friend guids and ignore guids for `CMSG_FRIEND_LIST`, per
+    /// [`crate::world::store::WorldStore::contact_lists`]. `owner_guid` is always the CALLING
+    /// World Session's own guid, which is always live and registered right now, so this reads the
+    /// guids off its Gateway-side `Viewer` — the friend and ignore sets `world_view`'s contact
+    /// Relay already keeps current — instead of scanning `game_character_contact`. `None` Viewer
+    /// (should not happen for this caller) degrades to two empty lists rather than erroring.
+    /// Presence composition (online/team/Away Status) lives over the Store seam in
+    /// `world::social::friend_views`, not here, so a Store Fake exercises the same code a
+    /// Coordinator does.
+    pub fn contact_lists(&self, owner_guid: u64) -> Result<(Vec<u64>, Vec<u64>)> {
+        let Some(viewer) = self
+            .world_view()
+            .viewer_of_owner(super::super::world_view::OwnerGuid(owner_guid))
+        else {
+            return Ok((Vec::new(), Vec::new()));
+        };
+        Ok((viewer.friend_guids(), viewer.ignored_guids()))
+    }
+
+    /// `owner_guid`'s ignore guids, read directly off this Shard's `game_character_contact` rows —
+    /// realm-wide safe for ANY owner, per [`crate::world::store::WorldStore::ignored_guids`].
+    /// Unlike `contact_lists`, `owner_guid` here is a Character this Gateway process may never have
+    /// a `Viewer` for at all (a whisper sender or a guild-invite target is usually a PEER, not the
+    /// connected session), so this cannot route through one. A per-owner scan of one Shard's own
+    /// cache, called once per whisper or guild invite — not a per-tick Relay path — so the cost
+    /// this trades for correctness here is the one the perf catalog accepts.
+    pub fn ignored_guids(&self, owner_guid: u64) -> Result<Vec<u64>> {
+        Ok(self
+            .0
+            .coord()
+            .conn
+            .db
             .game_character_contact()
             .iter()
-            .filter(|c| c.owner_guid == owner_guid)
-        {
-            if c.is_ignore {
-                ignored.push(c.target_guid);
-            } else {
-                let (online, level, class, zone_id) = db
-                    .game_character()
-                    .guid()
-                    .find(&c.target_guid)
-                    .map(|ch| (ch.online, ch.level, ch.class, ch.zone_id))
-                    .unwrap_or((false, 0, 0, 0));
-                friends.push(crate::codec::FriendView {
-                    guid: c.target_guid,
-                    online,
-                    level,
-                    class,
-                    zone_id,
-                });
-            }
+            .filter(|c| c.owner_guid == owner_guid && c.is_ignore)
+            .map(|c| c.target_guid)
+            .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// `ignored_guids` answers for ANY owner, including one with no live World Session on this
+    /// Gateway process at all — a whisper sender's target or a guild-invite target usually is not
+    /// one. Pinned in source (no Fake reaches a real `Coordinator`): the body must never route
+    /// through the Gateway-side `Viewer` registry the way `contact_lists` does for the CONNECTED
+    /// session's own guid, or ignore checks silently go empty for every Character not currently
+    /// registered on THIS Gateway process — the live defect this method replaces.
+    #[test]
+    fn ignored_guids_never_reads_the_viewer_registry() {
+        let source = crate::test_scan::code_of(include_str!("account.rs"), "pub fn ignored_guids(");
+        for needle in ["world_view", "viewer_of_owner", "Viewer"] {
+            assert!(
+                !source.contains(needle),
+                "ignored_guids must answer for a Character with no live Viewer on this Gateway; \
+                 found `{needle}`, which means it is reading `contact_lists`'s Viewer-scoped path \
+                 again"
+            );
         }
-        Ok((friends, ignored))
     }
 }

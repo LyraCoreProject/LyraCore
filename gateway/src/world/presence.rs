@@ -179,7 +179,13 @@ pub(crate) fn of<St: WorldStore + ?Sized>(store: &St, guid: u64) -> Result<Optio
 
 /// [`CharacterIdentity`] from whichever connected Shard answers first: this handle, then every
 /// `world_stores()` peer. Best-effort — a hit is a positive signal that needs no health proof.
-fn character_identity_anywhere<St: WorldStore + ?Sized>(
+///
+/// `pub(crate)` because it is also the best-effort race read a caller reaches for when it must
+/// NEVER end a World Session or a Relay pump over an unreachable Shard, but a wrong guessed race
+/// would be worse than answering nothing: `world::social::resolve_add_contact` (a friend add's
+/// Enemy Gate) and `stdb::world_view::claim_edge_outcome` (the Account Claim Relay's OFFLINE
+/// edge) both read it in place of the full, health-checked [`of`].
+pub(crate) fn character_identity_anywhere<St: WorldStore + ?Sized>(
     store: &St,
     guid: u64,
 ) -> Result<Option<CharacterIdentity>> {

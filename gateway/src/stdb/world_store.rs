@@ -1085,8 +1085,12 @@ impl WorldStore for Coordinator {
         self.zone_name(zone_id)
     }
 
-    fn contact_lists(&self, self_guid: u64) -> Result<(Vec<codec::FriendView>, Vec<u64>)> {
+    fn contact_lists(&self, self_guid: u64) -> Result<(Vec<u64>, Vec<u64>)> {
         self.contact_lists(self_guid)
+    }
+
+    fn ignored_guids(&self, owner_guid: u64) -> Result<Vec<u64>> {
+        self.ignored_guids(owner_guid)
     }
 
     fn character_guid_by_name(&self, name: &str) -> Result<Option<u64>> {
@@ -1619,8 +1623,9 @@ impl WorldStore for Coordinator {
         account_id: u64,
         self_guid: u64,
         target_guid: u64,
+        target_race: u8,
     ) -> Result<crate::world::ContactOutcome> {
-        self.add_friend(account_id, self_guid, target_guid)
+        self.add_friend(account_id, self_guid, target_guid, target_race)
     }
 
     fn del_friend(

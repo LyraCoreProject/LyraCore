@@ -2372,12 +2372,14 @@ impl Coordinator {
         )
     }
 
-    /// `CMSG_ADD_FRIEND` — `target_guid` is already resolved by the gateway.
+    /// `CMSG_ADD_FRIEND` — `target_guid` is already resolved by the gateway. `target_race` is the
+    /// target's Speaker Fact, read realm-wide (`presence::of`): the Module's Enemy Gate needs it.
     pub fn add_friend(
         &self,
         _account_id: u64,
         actor_guid: u64,
         target_guid: u64,
+        target_race: u8,
     ) -> Result<ContactOutcome> {
         if actor_guid == 0 {
             return Err(anyhow!("add_friend: actor_guid unresolved"));
@@ -2386,7 +2388,7 @@ impl Coordinator {
         contact_outcome(call_reducer!(
             coord.conn.reducers,
             "gw_add_friend",
-            gw_add_friend_then(self.session_actor(actor_guid), target_guid)
+            gw_add_friend_then(self.session_actor(actor_guid), target_guid, target_race)
         ))
     }
 

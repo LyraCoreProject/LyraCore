@@ -1393,27 +1393,42 @@ pub trait WorldStore:
         String::new()
     }
 
-    /// `self_guid`'s friend list + ignore list (guids only) for `CMSG_FRIEND_LIST → SMSG_FRIEND_LIST`
-    /// + `SMSG_IGNORE_LIST`. Online friends carry live presence (level/class/zone).
-    fn contact_lists(&self, self_guid: u64) -> Result<(Vec<codec::FriendView>, Vec<u64>)>;
+    /// `self_guid`'s friend guids and ignore guids for `CMSG_FRIEND_LIST`. `self_guid` is always
+    /// the CALLING World Session's own guid, never a peer's, so a Store may answer this from
+    /// whatever cheap per-connection state it keeps for its own connected sessions (the Coordinator
+    /// reads its Gateway-side `Viewer`). A caller that needs a friend's PRESENCE composes it
+    /// separately with `world::social::friend_views`, over `presence::of`; a caller that needs to
+    /// know whether an ARBITRARY (possibly unconnected) Character ignores another uses
+    /// [`WorldStore::ignored_guids`] instead, never this method.
+    fn contact_lists(&self, self_guid: u64) -> Result<(Vec<u64>, Vec<u64>)>;
 
-    /// Resolve a typed contact name to a character guid (case-insensitive, like `send_whisper`'s
-    /// target match), for `CMSG_ADD_FRIEND`/`CMSG_ADD_IGNORE`. `None` if no character has that name.
+    /// `owner_guid`'s ignore guids, read directly off this Shard's durable contact rows — realm-wide
+    /// safe for ANY owner, including one with no live World Session on this Gateway process at all
+    /// (a whisper sender or a guild-invite target usually is not). `whisper::ignored_anywhere` fans
+    /// this out across every connected Shard. Unlike `contact_lists`, this never reads a `Viewer`.
+    fn ignored_guids(&self, owner_guid: u64) -> Result<Vec<u64>>;
+
+    /// Resolve a typed contact name to a character guid on THIS Shard (case-insensitive, like
+    /// `send_whisper`'s target match) — `presence::resolve_by_name`'s per-Shard primitive. `None`
+    /// if this Shard has no character with that name.
     fn character_guid_by_name(&self, name: &str) -> Result<Option<u64>>;
 
-    /// A character's live presence `(online, level, class, zone_id)` for `SMSG_FRIEND_STATUS`'s
-    /// Added-Online-vs-Offline split. `None` if the guid doesn't resolve to any character.
+    /// A character's live presence `(online, level, class, zone_id)` on THIS Shard only. `None` if
+    /// the guid doesn't resolve to any character here.
     fn character_presence(&self, guid: u64) -> Result<Option<(bool, u8, u8, u32)>>;
 
     // Contact ops answer a [`social::ContactOutcome`]: a typed Refusal is a gameplay answer the
     // client renders, and only a failure with an unknown durable result stays `Err`.
 
     /// `CMSG_ADD_FRIEND` (the name is already resolved to `target_guid` by the gateway).
+    /// `target_race` is the target's own Speaker Fact, read realm-wide by the gateway: the Module's
+    /// Enemy Gate needs it and holds no Characters of its own to read it from.
     fn add_friend(
         &self,
         account_id: u64,
         self_guid: u64,
         target_guid: u64,
+        target_race: u8,
     ) -> Result<social::ContactOutcome>;
     /// `CMSG_DEL_FRIEND`.
     fn del_friend(

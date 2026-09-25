@@ -35,7 +35,7 @@ fn gateway_taxi_gates_keep_refusals_typed_and_invariants_fatal() {
         ("gw_trainer_buy", &[SESSION_MISSING_ACTOR, "0", "0"][..]),
         ("gw_use_item", &[SESSION_MISSING_ACTOR, "0"][..]),
         ("gw_group_leave", &[SESSION_MISSING_ACTOR][..]),
-        ("gw_add_friend", &[SESSION_MISSING_ACTOR, "2"][..]),
+        ("gw_add_friend", &[SESSION_MISSING_ACTOR, "2", "1"][..]),
     ] {
         let output = standalone.call(reducer, args);
         let text = failed_text(reducer, output);
@@ -198,7 +198,7 @@ fn taxi_cases() -> Vec<(&'static str, &'static [&'static str], &'static str)> {
         ),
         (
             "gw_add_friend",
-            &[SESSION_ACTOR, "2"],
+            &[SESSION_ACTOR, "2", "1"],
             "social:actor_unavailable",
         ),
         (

@@ -116,6 +116,8 @@ mod tests {
             motion_pending: Arc::new(MotionPending::default()),
             member_stats: Default::default(),
             ignored: Mutex::default(),
+            friends: Mutex::default(),
+            team: lyracore_shared::faction::TEAM_ALLIANCE,
         })
     }
 
