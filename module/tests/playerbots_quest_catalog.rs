@@ -1059,6 +1059,8 @@ fn playerbots_quest_retries_after_deferral_without_replacing_its_purpose() {
 fn playerbots_held_unsupported_quest_selects_supported_work_without_reaccepting() {
     let (node, bots) = fixture("playerbots-quest-reconcile");
     let bot = bot_for_class(&bots, "1");
+    node.assert_call("playerbots_fixture_runner_select_cohort", &[bot]);
+    node.assert_call("playerbots_fixture_provision_steps", &[bot, "64"]);
     node.assert_call("playerbots_quest_fixture_admit_accept", &[bot, "7"]);
     node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
     node.assert_call(
@@ -1269,11 +1271,17 @@ fn playerbots_active_quest_overflow_preserves_the_retained_purpose() {
     node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
     let defense = runner(&node, bot);
     record(&node, "active-overflow-defense");
-    let attacks = node.query_rows(&format!(
-        "SELECT target_guid FROM game_melee_attack WHERE attacker_guid = {bot}"
-    ));
+    // Ordinary combat can remove the live melee row before this read.
+    let attacks: Vec<_> = node
+        .query_rows(&format!(
+            "SELECT kind, target_guid, outcome FROM pkg_playerbots_action WHERE character_guid = {bot}"
+        ))
+        .into_iter()
+        .filter(|action| action["kind"] == "(attack = ())")
+        .collect();
     assert_eq!(attacks.len(), 1);
     assert_eq!(attacks[0]["target_guid"], CREATURE_6);
+    assert_eq!(attacks[0]["outcome"], "(attackAccepted = (armed = ()))");
     assert!(defense["chosen"].contains("defense"), "{defense:?}");
     assert!(defense["chosen"].contains(CREATURE_6), "{defense:?}");
     assert_eq!(
