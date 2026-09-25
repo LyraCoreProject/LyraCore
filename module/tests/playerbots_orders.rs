@@ -401,7 +401,7 @@ fn playerbots_companions_receive_turns_without_starving_older_background_work() 
     for guid in companions {
         issue(&fixture, &format!("follow|{guid}"), guid, false);
     }
-    for (count, role) in [("333", "1"), ("332", "2"), ("332", "3")] {
+    for (count, role) in [("333", "0"), ("332", "1"), ("332", "2")] {
         node.assert_call(
             "playerbots_spawn_role",
             &[count, "1200", "1200", "50", role],
