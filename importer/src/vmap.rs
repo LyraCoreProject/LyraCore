@@ -773,6 +773,13 @@ fn build_plan(
             .count()
     );
     let conv = crate::nav::calibrate_from_placements(chain, &placements)?;
+    if restrict_to_scope {
+        placements.retain(|placement| {
+            ranges
+                .iter()
+                .any(|range| crate::nav::placement_overlaps_cells(placement, *range))
+        });
+    }
     let spool = VmapSpool::new(map_id)?;
     placements.sort_by(|a, b| {
         a.name.cmp(&b.name).then_with(|| {
