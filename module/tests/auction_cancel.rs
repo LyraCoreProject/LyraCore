@@ -492,7 +492,7 @@ fn a_held_listing(name: &str) -> (Standalone, BTreeMap<String, String>, String) 
             HOUSE,
             "100",
             "0",
-            "720",
+            "480",
         ],
     );
     let mut held = rows(&shard, HOLD_QUERY);
