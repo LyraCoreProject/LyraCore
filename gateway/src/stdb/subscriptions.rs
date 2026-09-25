@@ -2199,8 +2199,14 @@ pub(crate) fn group_event_outbound<St: crate::world::WorldStore + ?Sized>(
     use lyracore_shared::loot_roll::event_kind as roll_kind;
     use lyracore_shared::quest::share_event_kind as quest_share_kind;
     let msg = match row.kind {
+        // Sent even when no shard can name the inviter (falls back to an empty name, like
+        // `render_list` does for an unresolved roster member): the popup is the target's only way
+        // to learn of the invite, and the pending `game_group_invite` row already committed.
+        // Skipping the packet would strand it for the whole 2-minute invite GC.
         group_kind::INVITE => Some(ServerOpcodeMessage::SMSG_GROUP_INVITE(Box::new(
-            codec::build_group_invite(row.other_name.clone()),
+            codec::build_group_invite(
+                other_character_name(store, row, "INVITE").unwrap_or_default(),
+            ),
         ))),
         // The same renderer world entry uses: presence and blank names come from the shard caches,
         // because a roster written on realm-core can know neither. A Party's Target Icons follow
@@ -2223,11 +2229,15 @@ pub(crate) fn group_event_outbound<St: crate::world::WorldStore + ?Sized>(
                 None
             }
         },
+        // Same fallback as INVITE, for the same reason: consistent behavior for the two kinds
+        // that answer an invite dialog.
         group_kind::DECLINE => Some(ServerOpcodeMessage::SMSG_GROUP_DECLINE(Box::new(
-            codec::build_group_decline(row.other_name.clone()),
+            codec::build_group_decline(
+                other_character_name(store, row, "DECLINE").unwrap_or_default(),
+            ),
         ))),
         group_kind::DESTROYED => Some(ServerOpcodeMessage::SMSG_GROUP_DESTROYED),
-        group_kind::SET_LEADER => leader_name(store, row).map(|name| {
+        group_kind::SET_LEADER => other_character_name(store, row, "SET_LEADER").map(|name| {
             ServerOpcodeMessage::SMSG_GROUP_SET_LEADER(Box::new(codec::build_group_set_leader(
                 name,
             )))
@@ -2442,18 +2452,27 @@ pub(crate) fn group_event_outbound<St: crate::world::WorldStore + ?Sized>(
     }
 }
 
-/// The name a `SET_LEADER` row announces. The Gateway always looks it up from the shards by the
-/// row's leader guid, because Realm-core holds no characters. `None` skips the packet: an empty
-/// name would print a broken "is now the group leader" line.
-fn leader_name<St: crate::world::WorldStore + ?Sized>(
+/// The Character an INVITE, DECLINE or SET_LEADER row names by `other_guid`: the inviter, the
+/// decliner, or the new leader. The Gateway always looks it up from the World Shard caches,
+/// because Realm-core holds no `game_character` rows to resolve one from. `None` means no
+/// connected shard can name it, or the lookup itself failed.
+///
+/// INVITE and DECLINE fall back to an empty name and send the packet anyway, the way
+/// [`crate::world::party::render_list`] fills an unresolved roster member's name with
+/// `.unwrap_or_default()`: the popup is the target's only way to learn of an invite that already
+/// committed durably, so dropping the packet would strand it for the whole GC window. SET_LEADER
+/// skips the packet instead: the roster mirror the Gateway already pushed carries the new leader,
+/// so the line is redundant rather than load-bearing.
+fn other_character_name<St: crate::world::WorldStore + ?Sized>(
     store: &St,
     row: &GroupEvent,
+    relay: &str,
 ) -> Option<String> {
     match crate::world::presence::character_anywhere(store, row.other_guid) {
-        Ok(Some(leader)) => Some(leader.name),
+        Ok(Some(character)) => Some(character.name),
         Ok(None) => {
             log::warn!(
-                "group SET_LEADER relay: no shard names leader {} (event {})",
+                "group {relay} relay: no shard names {} (event {})",
                 row.other_guid,
                 row.id
             );
@@ -2461,7 +2480,7 @@ fn leader_name<St: crate::world::WorldStore + ?Sized>(
         }
         Err(e) => {
             log::warn!(
-                "group SET_LEADER relay: name lookup for leader {} failed (event {}): {e:#}",
+                "group {relay} relay: name lookup for {} failed (event {}): {e:#}",
                 row.other_guid,
                 row.id
             );
