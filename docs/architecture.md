@@ -41,7 +41,7 @@ flowchart TB
         W0[("lyracore<br/>default world shard")]
         W1[("lyracore-world-1<br/>world shard (map rule)")]
         INST[("lyracore-instances<br/>instance pool")]
-        RC[("lyracore-realm — realm-core<br/>accounts · sessions · groups ·<br/>guilds · whispers · loot rolls ·<br/>load samples")]
+        RC[("lyracore-realm — realm-core<br/>accounts · sessions · claims ·<br/>groups · guilds · chat channels ·<br/>Realm Chat Lines · mail ·<br/>auctions · loot rolls ·<br/>load samples")]
     end
 
     C1 -- "raw TCP · SRP6 · header-encrypted opcodes" --> LOGON
@@ -83,7 +83,9 @@ routing fact; module game logic never reads one, and an architecture test fails 
 
 - **Socket IO and protocol state only.** Per-connection: the SRP6 scratch, the header-cipher
   counters, the current character guid, the set of guids already `CREATE_OBJECT`'d to this client,
-  the issued server seed. All of it is reconstructable on reconnect; none of it is game state.
+  the issued server seed, and the Chat Flood Limiter's count and mute
+  (`gateway/src/world/chat_flood.rs`). All of it is reconstructable on reconnect; none of it is
+  game state. cmangos keeps the flood mute in memory too and never saves it.
 - **Encoding and decoding.** `wow_login_messages` (`version_3` for 5875) on the logon port,
   `wow_world_messages::vanilla` on the world port, plus one hand-rolled UpdateMask encoder where
   gtker 0.3's builder walls the descriptor setters.
@@ -104,7 +106,10 @@ are answered by the gateway, which is the only component that can see the whole 
 | "does this character exist" / "is this character online" for party invites, and "is the new leader online" when the lead passes | realm-core holds no characters and no live entities; one world shard sees only its own | `gateway/src/world/presence.rs` (`of`, `live_anywhere`) |
 | whisper target resolution by name, realm-wide, plus the ignore verdict and the Auto-Reply | same | `presence.rs` (`resolve_all_by_name`, `of`, `auto_reply`), `gateway/src/world/whisper.rs` (`target_facts`, `ignored_anywhere`) |
 | `CMSG_NAME_QUERY` resolution | same | `presence.rs` (`character_anywhere`) |
-| friend/ignore add target resolution by name, realm-wide — the existence check the Module no longer performs, since Realm-core holds no Character rows for it to check | same | `presence.rs` (`resolve_by_name`, `of`), `gateway/src/world/social.rs` (`resolve_add_contact`) |
+| friend/ignore add target resolution by name, realm-wide, plus the friend's race for the Enemy Gate. This is the existence check the Module no longer performs, since Realm-core holds no Character rows for it to check | same | `presence.rs` (`resolve_by_name`, `of`), `gateway/src/world/social.rs` (`resolve_add_contact`) |
+| Speaker Facts: the speaker's race and chat tag for every Realm Chat Line and Chat Channel op | Realm-core holds no Characters and no live entities | `gateway/src/world/handlers/chat.rs` (`speaker_facts`), `stdb/reads/chat.rs` |
+| channel moderation target names, realm-wide, plus whether the target ignores the actor for an invite | same | `gateway/src/world/handlers/channel.rs` (`resolve_online_character`, `ignores`) |
+| the per-listener ignore filter on an ignorable Realm Chat Line | the ignore list is on each listener's Home Shard; the line is on Realm-core | `gateway/src/stdb/world_view.rs` (`realm_chat_appeared`, `Viewer::ignores`) |
 | loot-roll promotion and settlement fan-out across shards | a kill's transaction cannot reach realm-core | `gateway/src/world/loot.rs` |
 | recipient's Account for the mail Delivery Delay | the recipient may be on another shard | `gateway/src/world/mail.rs` (`same_realm_account`) |
 | the Character facts a guild Gate needs: name, team, Realm Account, GM level, online state for the roster | Realm-core holds the guild rows and no Characters | `gateway/src/world/handlers/guild.rs`, Realm Presence through `stdb/reads/guild.rs` (`guild_character_facts`) |
@@ -199,7 +204,7 @@ The realm runs as **four SpacetimeDB databases** behind one gateway tier:
 | `lyracore` | default database + world shard |
 | `lyracore-world-1` | world shard (map 1, Kalimdor) |
 | `lyracore-instances` | instance pool (map 36 / Deadmines and friends) |
-| `lyracore-realm` | realm-core: accounts, sessions, groups, guilds, whispers, loot rolls, load samples |
+| `lyracore-realm` | realm-core: accounts, sessions, Account Claims, groups, guilds, Chat Channels, Realm Chat Lines, mail, auctions, loot rolls, load samples |
 
 The **local developer fixture has one database per tier above** (#108) — `lyracore`,
 `lyracore-kalimdor`, `lyracore-instances`, `lyracore-realm` — brought up by `./lyracore dev up`;
@@ -232,7 +237,7 @@ gateway's environment. Omit one and you get a **working-looking single-database 
 |---|---|---|---|
 | `LYRACORE_SHARD_MAP` | `(map, bucket) → database` routing rules | `""` → one database | **Silent.** No Kalimdor, no instance pool. |
 | `LYRACORE_SHARD_MAP_FILE` | file fallback for the above (the env var wins) | unset | unreadable file logs an error, then single shard |
-| `LYRACORE_REALM_CORE` | the auth / session / character-index database | `None` | **Silent.** Auth, parties and whispers fall back to the world database. |
+| `LYRACORE_REALM_CORE` | the auth / session / character-index database | `None` | **Silent.** Auth, parties and chat fall back to the world database. |
 | `LYRACORE_COORDINATOR_TOKEN` | the owner token the coordinator connects with | `None` → anonymous | warns, then cannot read `game_account` / `game_session` |
 | `LYRACORE_DATABASE` | default / home database name | `lyracore` | **Silent.** A wrong name connects cleanly to the wrong place. |
 | `LYRACORE_SPACETIMEDB_URL` | node URI, also the base for `/v1/metrics` | `http://127.0.0.1:3000` | loud (connect fails) |
@@ -352,13 +357,13 @@ connectivity.
 Full inventory and the load-bearing row shapes are covered in depth in the maintainers' internal
 docs. The summary:
 
-- **278 tables on 2026-09-24**, `game_`-prefixed for core and `pkg_<name>_`-prefixed for packages.
+- **280 tables on 2026-09-25**, `game_`-prefixed for core and `pkg_<name>_`-prefixed for packages.
   External gtker crates keep their `wow_` names and are never renamed. Recount with
   `grep -rn '^#\[table(' module/src --include='*.rs' | wc -l`; the per-domain breakdown is
   [`schema.md`](./schema.md) §2.
-- **128 public / 150 private.** `public` means "subscribable by a client connection". Private tables
-  (`game_account`, `game_session`, `game_operator`, every region/transfer/instance/realm-core table)
-  are readable only over the owner token.
+- **128 public / 152 private.** `public` means "subscribable by a client connection". Private tables
+  (`game_account`, `game_session`, `game_operator`, every region/transfer/instance/realm-core table,
+  every Chat Channel table and `game_realm_chat_event`) are readable only over the owner token.
 - **No `#[client_visibility_filter]` RLS filters.** The sixteen owner-scoped filters this document
   used to list went out in commit `7fda35a` (2026-08-11), with the per-player client connections
   they were the only thing that applied to. §5.4 and [`schema.md`](./schema.md) §4 give the
@@ -448,6 +453,16 @@ Every relay hangs off a coordinator connection. Row-driven relays take one of tw
   sends the new Petition id to the owner's Guild Charter as ITEM_FIELD_ENCHANTMENT. A relay reads
   the Realm-core cache once per event through keyed finds and the Gateway-side `GuildIndex` (ranks
   and members by Guild), never once per recipient.
+- **Realm Chat Lines** (`realm_chat_appeared`). The Module decides who hears a party, raid, guild,
+  officer, channel or whisper line in the transaction that validates it, and writes one
+  `game_realm_chat_event` row with the whole recipient list. Every Gateway gets the row once and
+  delivers it to its own recipients' World Sessions, on any Shard. The one per-listener filter is
+  the listener's own ignore set (`Viewer::ignores`), and only for a line the Module marked
+  ignorable. Channel lines no longer fan out per Shard. Channel Notices
+  (`game_chat_channel_notice_event`) take the same shape. The Account Claim Relay turns a Realm-core
+  claim that opens or closes into friend online and offline notices for same-team viewers who list
+  the Character. A recipient with no registered viewer misses the line, and that includes one on a
+  loading screen during a Transfer. Nothing buffers it.
 - **Viewer lifetime** (`subscribe_player_events`): world entry prepares relay state, registers one
   viewer, and performs resident-state sweeps. `PlayerSubscriptions` owns only that registration;
   dropping it removes the viewer. It owns no row callbacks. A world-port removes the source viewer
@@ -498,6 +513,14 @@ refuses a delayed older command before it can replace newer intent.
 The owner token bypasses recipient RLS, so delivery is gated gateway-side: recipient-keyed lookups
 plus the `private_recipient_audience` predicate for the private tier, per-viewer gates for the
 broadcast tier.
+
+The SDK cache has only unique-index finders, and a whole-table `iter()` copies every row under the
+lock the pump needs. So relays and per-request reads use Gateway-side indexes, each kept from its
+table's insert, update and delete callbacks and registered before the subscription applies:
+`PartyMembershipIndex`, `ChannelIndex`, `GuildIndex`, `MailEscrowIndex`, `AuctionIndex`,
+`ContactIndex` (owner to friends and ignores) and `CharacterNameIndex` (lowercase name to guid,
+per Shard). Each lives on its connection generation, so a reconnect rebuilds it from the fresh
+subscription.
 
 ### 5.4 RLS is not a universal backstop — state this plainly
 
@@ -753,6 +776,7 @@ explains why two rungs of the ladder are written down instead of automated.
 | [`guild-client-check.md`](./guild-client-check.md) | Guilds between two real 5875 clients across a Shard Boundary: founding, invites, chat, ranks, Transfer, emblem, Charter and deletion. Status: outstanding, needs a human. |
 | [`mail-client-check.md`](./mail-client-check.md) | Mail against a real 5875 client. Status: outstanding, needs a human. |
 | [`duel-client-check.md`](./duel-client-check.md) | Duel visuals against a real 5875 client, which the automated tests cannot see. Status: outstanding. |
+| [`chat-client-check.md`](./chat-client-check.md) | Realm-wide chat between two real 5875 clients across a Shard Boundary: party, channels and moderation, AFK and DND, whisper, friends, `/who`, ignore, say range, proximity emotes, the language Gate and the flood mute. Status: outstanding, needs a human. |
 | [`raid-client-check.md`](./raid-client-check.md) | Raids, Group Broadcasts, raid chat, member stats across Shards and the Instance Removal countdown against real 5875 clients. Status: outstanding, needs a human. |
 | [`hunter-pet-live-check.md`](./hunter-pet-live-check.md) | Taming, pet bars and pet lifecycle against a live development realm and a real client. |
 
