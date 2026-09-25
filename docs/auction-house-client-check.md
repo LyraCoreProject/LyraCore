@@ -10,8 +10,9 @@ used. If possible, repeat the checklist at a house with different imported rates
 
 - [ ] On Seller, stand within 10 yards of the auctioneer and open the auction house. Confirm the
       window stays usable.
-- [ ] List both exact stacks for 12 hours. Give one a buyout and leave the other below its buyout.
-      Confirm the owner tab shows both and Seller lost only the two deposits.
+- [ ] List both exact stacks for 8 hours (the client's three durations are 2, 8 and 24 hours; there
+      is no 12-hour option). Give one a buyout and leave the other below its buyout. Confirm the
+      owner tab shows both and Seller lost only the two deposits.
 - [ ] On Bidder, browse and search by item name. Confirm both rows, stack details, prices, owner, and
       remaining time.
 - [ ] Bid on the expiry listing. Confirm the bidder tab and the exact copper debit.
@@ -20,7 +21,7 @@ used. If possible, repeat the checklist at a house with different imported rates
 - [ ] At a mailbox, confirm Bidder receives the exact buyout item and Seller receives buyout
       proceeds: price minus the house's imported consignment percentage plus its imported-rate
       deposit. Collect both and recheck bags and copper.
-- [ ] After the 12-hour deadline, confirm the bid listing disappears from browse, owner, and bidder
+- [ ] After the 8-hour deadline, confirm the bid listing disappears from browse, owner, and bidder
       views. Confirm Bidder receives that exact item and Seller receives winning bid minus the
       imported consignment percentage plus its deposit.
 - [ ] Collect the expiry item and copper. Reopen the mailbox and auction house, then reconnect both

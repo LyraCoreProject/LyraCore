@@ -1026,7 +1026,7 @@ mod tests {
                 item: Guid::new(70),
                 starting_bid: 100,
                 buyout: 500,
-                auction_duration_in_minutes: 720,
+                auction_duration_in_minutes: 480,
             }
             .into(),
         )? {
@@ -1161,7 +1161,7 @@ mod tests {
                 item_guid: 70,
                 start_bid: 100,
                 buyout: 500,
-                duration_minutes: 720,
+                duration_minutes: 480,
                 house_id: 4,
             }]
         );

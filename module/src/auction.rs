@@ -286,11 +286,18 @@ pub struct AuctionNotice {
 // Hold value blocks character deletion, and every row except the two Holds stays on the database
 // that owns its protocol phase rather than entering the character movement manifest.
 
+// A build 5875 client offers only three listing durations, 2, 8 and 24 hours
+// (`AuctionsRadioButton_OnClick`, fx:Blizzard_AuctionUI.lua:991-1006; the default selection at
+// line 798 picks the 8-hour middle button). cmangos-classic accepts exactly the matching etime,
+// 1, 4 or 12 times its `MIN_AUCTION_TIME` of 2 hours (cm:AuctionHouseHandler.cpp:250-262,
+// cm:AuctionHouseMgr.h:30), and the deposit scales by that same multiplier:
+// `SellPrice * count * (etime / MIN_AUCTION_TIME) * depositPercent / 100`
+// (cm:AuctionHouseMgr.cpp:65-77, `GetAuctionDeposit`).
 fn duration_multiplier(duration_minutes: u32) -> Option<u64> {
     match duration_minutes {
-        720 => Some(1),
-        1_440 => Some(2),
-        2_880 => Some(4),
+        120 => Some(1),
+        480 => Some(4),
+        1_440 => Some(12),
         _ => None,
     }
 }
@@ -3865,7 +3872,7 @@ pub fn debug_stage_auction_expiry_fixture(ctx: &ReducerContext) -> Result<(), St
         .checked_add(500_000)
         .ok_or_else(|| "auction expiry fixture deadline overflow".to_string())?;
     let created_micros = expires_micros
-        .checked_sub(43_200_000_000)
+        .checked_sub(28_800_000_000)
         .ok_or_else(|| "auction expiry fixture creation time underflow".to_string())?;
     let expires_at = Timestamp::from_micros_since_unix_epoch(expires_micros);
     let created_at = Timestamp::from_micros_since_unix_epoch(created_micros);
@@ -3884,7 +3891,7 @@ pub fn debug_stage_auction_expiry_fixture(ctx: &ReducerContext) -> Result<(), St
             random_property_id: EXPIRY_FIXTURE_ITEM.random_property_id,
             start_bid: 100,
             buyout: 500,
-            duration_minutes: 720,
+            duration_minutes: 480,
             deposit: 10,
             created_micros,
             expires_micros,
@@ -3941,7 +3948,7 @@ pub fn debug_stage_auction_expiry_fixture(ctx: &ReducerContext) -> Result<(), St
             random_property_id: EXPIRY_FIXTURE_UNSOLD_ITEM.random_property_id,
             start_bid: 100,
             buyout: 500,
-            duration_minutes: 720,
+            duration_minutes: 480,
             deposit: 10,
             created_micros,
             expires_micros: expires_micros + 1,
@@ -4266,7 +4273,7 @@ pub fn debug_stage_legacy_auction_mail_fixture(ctx: &ReducerContext) -> Result<(
         item_soulbound: false,
         start_bid: 100,
         buyout: 500,
-        duration_minutes: 720,
+        duration_minutes: 480,
         deposit: 10,
         created_micros: now,
         expires_micros: now + 1,
@@ -5143,14 +5150,30 @@ mod tests {
 
     #[test]
     fn listing_deposit_uses_the_imported_rate_and_supported_duration_ladder() {
-        assert_eq!(listing_deposit(100, 2, 720, 5), Some(10));
-        assert_eq!(listing_deposit(100, 2, 720, 25), Some(50));
-        assert_eq!(listing_deposit(100, 2, 1_440, 5), Some(20));
-        assert_eq!(listing_deposit(100, 2, 2_880, 5), Some(40));
-        assert_eq!(listing_deposit(1, 1, 720, 5), Some(1));
-        assert_eq!(listing_deposit(100, 1, 60, 5), None);
-        assert_eq!(listing_deposit(u32::MAX, u32::MAX, 2_880, 5), None);
-        assert_eq!(listing_deposit(100, 1, 720, 101), None);
+        // Hand-derived from cm:AuctionHouseMgr.cpp:65-77's
+        // `SellPrice * count * (etime / MIN_AUCTION_TIME) * depositPercent / 100`.
+        assert_eq!(listing_deposit(100, 2, 120, 5), Some(10));
+        assert_eq!(listing_deposit(100, 2, 480, 5), Some(40));
+        assert_eq!(listing_deposit(100, 2, 1_440, 5), Some(120));
+        assert_eq!(listing_deposit(100, 2, 120, 25), Some(50));
+        assert_eq!(listing_deposit(1, 1, 120, 5), Some(1));
+        assert_eq!(
+            listing_deposit(100, 1, 60, 5),
+            None,
+            "no client offers a 1-hour listing"
+        );
+        assert_eq!(
+            listing_deposit(100, 1, 720, 5),
+            None,
+            "720 is the TBC 12-hour duration; no 1.12 client sends it"
+        );
+        assert_eq!(
+            listing_deposit(100, 1, 2_880, 5),
+            None,
+            "2_880 is the TBC 48-hour duration; no 1.12 client sends it"
+        );
+        assert_eq!(listing_deposit(u32::MAX, u32::MAX, 1_440, 5), None);
+        assert_eq!(listing_deposit(100, 1, 120, 101), None);
     }
 
     fn item(slot: u8) -> ListingItem {
@@ -5217,7 +5240,7 @@ mod tests {
         ListingTerms {
             start_bid: 10,
             buyout: 20,
-            duration_minutes: 720,
+            duration_minutes: 120,
         }
     }
 
@@ -5292,10 +5315,19 @@ mod tests {
                 duration_minutes: 60,
                 ..terms()
             },
+            ListingTerms {
+                duration_minutes: 720,
+                ..terms()
+            },
+            ListingTerms {
+                duration_minutes: 2_880,
+                ..terms()
+            },
         ] {
             assert_eq!(
                 prepare_listing(Some(&item(23)), 7, 10, invalid, policy()),
-                Err(AuctionRefusal::InvalidTerms)
+                Err(AuctionRefusal::InvalidTerms),
+                "{invalid:?} must not list: the 1.12 client never sends this duration"
             );
         }
     }
@@ -5377,7 +5409,7 @@ mod tests {
         assert_eq!(listing.snapshot, item(23).snapshot);
         assert_eq!(listing.deposit, 10);
         assert_eq!(listing.created_micros, 1_000);
-        assert_eq!(listing.expires_micros, 43_200_001_000);
+        assert_eq!(listing.expires_micros, 7_200_001_000);
 
         assert_eq!(create_local_listing(&mut store, request()), Ok(41));
         assert_eq!(store.money, Some(40), "replay must not charge again");
@@ -5537,12 +5569,12 @@ mod tests {
             ListingTerms {
                 start_bid: u32::MAX,
                 buyout: 0,
-                duration_minutes: 720,
+                duration_minutes: 120,
             },
             ListingTerms {
                 start_bid: 10,
                 buyout: u32::MAX,
-                duration_minutes: 720,
+                duration_minutes: 120,
             },
         ] {
             let mut local = local();
@@ -5920,7 +5952,7 @@ mod tests {
             snapshot: item(23).snapshot,
             deposit: 10,
             created_micros: 1_000,
-            expires_micros: 43_200_001_000,
+            expires_micros: 7_200_001_000,
         };
         let mut store = FakeExpiry {
             auction: Some(ActiveAuction {
@@ -5991,7 +6023,7 @@ mod tests {
             snapshot: item(23).snapshot,
             deposit: 10,
             created_micros: 1_000,
-            expires_micros: 43_200_001_000,
+            expires_micros: 7_200_001_000,
         };
         let mut store = FakeExpiry {
             auction: Some(ActiveAuction {
@@ -7242,7 +7274,7 @@ mod tests {
             snapshot: item(23).snapshot,
             deposit: 10,
             created_micros: 1_000,
-            expires_micros: 43_200_001_000,
+            expires_micros: 7_200_001_000,
         };
         let bid_auction = BidAuction {
             highest_bidder_guid: 9,
@@ -7347,7 +7379,7 @@ mod tests {
             snapshot: item(23).snapshot,
             deposit: 10,
             created_micros: 1_000,
-            expires_micros: 43_200_001_000,
+            expires_micros: 7_200_001_000,
         };
         for (highest_bidder_guid, highest_bid) in [(8, 0), (0, 201)] {
             let mut store = FakeExpiry {
