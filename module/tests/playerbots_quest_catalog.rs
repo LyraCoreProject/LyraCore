@@ -120,6 +120,8 @@ fn record(node: &Standalone, suffix: &str) {
         "admission": node.query_rows("SELECT * FROM pkg_playerbots_quest_admission"),
         "retained": node.query_rows("SELECT * FROM pkg_playerbots_quest_objective"),
         "provisioning": node.query_rows("SELECT * FROM pkg_playerbots_provisioning"),
+        "runners": node.query_rows("SELECT * FROM pkg_playerbots_runner"),
+        "attacks": node.query_rows("SELECT * FROM game_melee_attack"),
         "actions": node.query_rows("SELECT * FROM pkg_playerbots_action"),
         "character_quests": node.query_rows("SELECT * FROM game_character_quest"),
         "items": node.query_rows("SELECT * FROM game_item_instance"),
@@ -1059,7 +1061,10 @@ fn playerbots_held_unsupported_quest_selects_supported_work_without_reaccepting(
     let bot = bot_for_class(&bots, "1");
     node.assert_call("playerbots_quest_fixture_admit_accept", &[bot, "7"]);
     node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
-    node.assert_call("playerbots_fixture_runner_select_cohort", &[bot]);
+    node.assert_call(
+        "playerbots_select_controller",
+        &[bot, "{\"recordOnly\":[]}"],
+    );
     node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
     let objective_before = runner(&node, bot)["objective_sequence"].clone();
     let before = quest(&node, bot, 7);
@@ -1074,6 +1079,7 @@ fn playerbots_held_unsupported_quest_selects_supported_work_without_reaccepting(
     assert_eq!(admission[0]["selected_quest"], "(some = 5261)");
     assert!(admission[0]["state"].contains("unsupported"));
     assert!(admission[0]["missing_capability"].contains("escort"));
+    node.assert_call("playerbots_fixture_runner_select_cohort", &[bot]);
     node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
     let reconciled = runner(&node, bot);
     let selected = node.query_rows(&format!(
@@ -1083,7 +1089,7 @@ fn playerbots_held_unsupported_quest_selects_supported_work_without_reaccepting(
     assert_eq!(selected[0]["quest_entry"], "5261");
     assert_eq!(selected[0]["actual_ender_entry"], "196");
     assert_ne!(reconciled["objective_sequence"], objective_before);
-    assert!(reconciled["chosen"].contains("quest"));
+    assert!(reconciled["chosen"].contains("quest"), "{reconciled:?}");
     assert_eq!(quest(&node, bot, 7), before);
     let persistent = node.query_rows(&format!(
         "SELECT selected_quest, missing_capability FROM pkg_playerbots_quest_admission WHERE character_guid = {bot}"
@@ -1097,7 +1103,10 @@ fn playerbots_held_unsupported_quest_selects_supported_work_without_reaccepting(
         let bot = bot_for_class(&bots, class);
         node.assert_call("playerbots_quest_fixture_admit_accept", &[bot, "3905"]);
         node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
-        node.assert_call("playerbots_fixture_runner_select_cohort", &[bot]);
+        node.assert_call(
+            "playerbots_select_controller",
+            &[bot, "{\"recordOnly\":[]}"],
+        );
         node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
         record(&node, &format!("provided-item-selected-class-{class}"));
         assert_eq!(
@@ -1111,6 +1120,7 @@ fn playerbots_held_unsupported_quest_selects_supported_work_without_reaccepting(
             "playerbots_quest_fixture_lose_provided_item",
             &[bot, banked],
         );
+        node.assert_call("playerbots_fixture_runner_select_cohort", &[bot]);
         node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
         record(&node, &format!("provided-item-loss-class-{class}"));
         assert_eq!(quest(&node, bot, 3905), held_before);
@@ -1210,6 +1220,12 @@ fn playerbots_active_quest_overflow_preserves_the_retained_purpose() {
         .parse::<u32>()
         .unwrap();
     node.assert_call("playerbots_fixture_runner_damage", &[bot, CREATURE_6, "1"]);
+    let damaged_health = node.query_rows(&format!(
+        "SELECT health FROM game_world_entity WHERE guid = {bot}"
+    ))[0]["health"]
+        .parse::<u32>()
+        .unwrap();
+    assert!(damaged_health < health_before);
     node.assert_call(
         "playerbots_fixture_runner_stage_defense_retry",
         &[bot, CREATURE_6],
@@ -1250,13 +1266,12 @@ fn playerbots_active_quest_overflow_preserves_the_retained_purpose() {
     );
     node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
     let defense = runner(&node, bot);
-    let health_after = node.query_rows(&format!(
-        "SELECT health FROM game_world_entity WHERE guid = {bot}"
-    ))[0]["health"]
-        .parse::<u32>()
-        .unwrap();
     record(&node, "active-overflow-defense");
-    assert!(health_after < health_before);
+    let attacks = node.query_rows(&format!(
+        "SELECT target_guid FROM game_melee_attack WHERE attacker_guid = {bot}"
+    ));
+    assert_eq!(attacks.len(), 1);
+    assert_eq!(attacks[0]["target_guid"], CREATURE_6);
     assert!(defense["chosen"].contains("defense"), "{defense:?}");
     assert!(defense["chosen"].contains(CREATURE_6), "{defense:?}");
     assert_eq!(
