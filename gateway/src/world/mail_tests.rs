@@ -1326,6 +1326,55 @@ fn a_letter_sent_over_the_wire_is_acked_ok_and_lands_in_the_recipients_mailbox()
     assert_eq!(store.purses.lock().unwrap()[0].1, PURSE - 30);
 }
 
+/// `seated_sender`'s sharded twin: the sender's own handle plus a realm-core handle, so
+/// `CMSG_SEND_MAIL` drives the fence → commit → confirm → settle escrow instead of the
+/// single-database fallback.
+fn sharded_seated_sender() -> std::sync::Arc<InMemoryStore> {
+    let realm = std::sync::Arc::new(InMemoryStore {
+        shard: "lyracore-realm".into(),
+        is_realm: true,
+        ..Default::default()
+    });
+    let store = std::sync::Arc::new(InMemoryStore {
+        shard: "world".into(),
+        realm: Some(realm),
+        login_entity: Some(warrior_entity()),
+        mailboxes: vec![MAILBOX],
+        characters: vec![
+            character(1, "Tester"),
+            character(TRIN, "Trin"),
+            orc(GRUG, "Grug"),
+        ],
+        live_guids: vec![1, TRIN, GRUG],
+        ..tester_store(7)
+    });
+    *store.purses.lock().unwrap() = vec![(1, PURSE)];
+    store
+}
+
+/// The end-to-end pin for the bug this change fixes: a client sending mail on a sharded realm
+/// while the coordinator cache lagged behind `realm_mail_fence` used to get no usable
+/// `SMSG_SEND_MAIL_RESULT` at all. The escrow stayed HELD until the sender's next mailbox visit
+/// re-drove it. Driven over a real socket through `run_world_session`, not by calling
+/// `world::mail::send` directly, so it proves what the CLIENT sees.
+#[test]
+fn a_real_session_gets_the_send_mail_result_once_a_lagging_escrow_cache_catches_up() {
+    let store = sharded_seated_sender();
+    store
+        .mail_escrow_reads_before_visible
+        .store(3, std::sync::atomic::Ordering::SeqCst);
+
+    assert_eq!(
+        send_over_the_wire(&store, "Trin"),
+        wow_world_messages::vanilla::SMSG_SEND_MAIL_RESULT_MailResultTwo::Ok
+    );
+
+    let trins = mail::open_mailbox(store.as_ref(), Some(TRIN), MAILBOX).expect("the gate opens");
+    assert_eq!(trins.len(), 1);
+    assert_eq!(trins[0].body, "left it at the inn");
+    assert_eq!(store.purses.lock().unwrap()[0].1, PURSE - 30);
+}
+
 #[test]
 fn each_refused_send_reaches_the_client_as_its_own_wire_error() {
     use wow_world_messages::vanilla::SMSG_SEND_MAIL_RESULT_MailResultTwo as R;
@@ -1555,6 +1604,48 @@ fn a_sharded_send_drives_fence_then_commit_then_confirm_then_settle() {
             ("world".into(), "mail_confirm_delivery".into()),
             ("world".into(), "mail_settle".into()),
         ]
+    );
+}
+
+/// The coordinator's subscribed cache lags the call pipe that carries `mail_fence`: the fence can
+/// commit on the sender's own shard before its escrow row is readable back through that same
+/// shard's cache. Observed live on a sharded realm: `realm_mail_fence` logged a successful fence,
+/// but the read-back that follows it came up empty on 2 of 4 sends, and each stayed HELD until the
+/// sender's next mailbox visit re-drove it. `held_fence` must wait the lag out, not refuse a fence
+/// that already landed.
+#[test]
+fn a_sharded_send_waits_out_a_lagging_escrow_cache_and_still_settles() {
+    let (_realm, world, _instances, calls) = sharded_send();
+    world
+        .mail_escrow_reads_before_visible
+        .store(3, std::sync::atomic::Ordering::SeqCst);
+
+    post_money(world.as_ref(), "Trin", ATTACHED)
+        .expect("a late escrow row is lag, not a missing fence");
+
+    assert_eq!(
+        escrow_steps(&calls),
+        vec![
+            ("world".into(), "mail_fence".into()),
+            ("lyracore-realm".into(), "mail_commit".into()),
+            ("world".into(), "mail_confirm_delivery".into()),
+            ("world".into(), "mail_settle".into()),
+        ],
+        "the send must still commit, confirm and settle once the row catches up"
+    );
+    let trins = mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).expect("the gate opens");
+    assert_eq!(trins.len(), 1);
+    assert_eq!(trins[0].money, ATTACHED);
+    assert_eq!(
+        world.purses.lock().unwrap()[0].1,
+        PURSE - lyracore_shared::mail::total_cost(ATTACHED)
+    );
+    assert_eq!(
+        world
+            .mail_escrow_reads_before_visible
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "held_fence must have read past every lagging answer"
     );
 }
 
@@ -2024,6 +2115,24 @@ fn a_sharded_item_take_probes_for_room_before_it_fences_anything() {
             ("lyracore-realm".into(), "mail_settle".into()),
         ]
     );
+}
+
+/// The same coordinator cache lag as a send's fence, on the take side: `mail_take_item_fence`
+/// commits on realm-core (the plane that owns the mail row), and the read-back that follows it can
+/// still miss there before the subscription catches up.
+#[test]
+fn a_sharded_item_take_waits_out_a_lagging_escrow_cache_and_still_settles() {
+    let (realm, world, _calls, mail_id) = delivered_item();
+    realm
+        .mail_escrow_reads_before_visible
+        .store(3, std::sync::atomic::Ordering::SeqCst);
+
+    let taken = mail::take_item(world.as_ref(), Some(TRIN), MAILBOX, mail_id)
+        .expect("a late escrow row is lag, not a missing fence");
+
+    assert_eq!(taken, (sword().entry, sword().stack_count));
+    assert_eq!(world.bags_of(TRIN), vec![sword()]);
+    assert!(realm.mail_escrows.lock().unwrap().is_empty(), "settled");
 }
 
 #[test]

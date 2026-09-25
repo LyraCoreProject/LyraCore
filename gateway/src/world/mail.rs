@@ -303,23 +303,40 @@ impl AttachedItem {
         self.entry == 0
     }
 }
+/// How long a fence's escrow row may take to reach the coordinator cache after the fence reducer
+/// returned. The call pipe and the subscription travel different connections (`transfer.rs`'s
+/// `escrow_after_begin` carries the same lag for a Transfer), so an immediate read can lose that
+/// race even though the fence landed.
+const ESCROW_VISIBLE_WITHIN: std::time::Duration = std::time::Duration::from_secs(2);
+const ESCROW_POLL: std::time::Duration = std::time::Duration::from_millis(20);
+
 /// The fence a send or a take just filed. The next step takes the attachment, and a send's Delivery
-/// Delay, from it, exactly as a re-drive does.
+/// Delay, from it, exactly as a re-drive does. Waits out the coordinator cache's lag behind the
+/// fence's own call-pipe commit instead of refusing on the first miss. Each read re-acquires the
+/// store's own cache guard, so the wait holds none of it while it sleeps.
 fn held_fence<St: WorldStore + ?Sized>(
     store: &St,
     sender_guid: u64,
     escrow_id: u64,
 ) -> Result<HeldEscrow> {
-    store
-        .mail_escrows_of(sender_guid)?
-        .into_iter()
-        .find(|e| e.escrow_id == escrow_id)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "mail escrow {escrow_id}: the fence reported success but no row is readable, so \
-                 the letter's attachment and Delivery Delay cannot be confirmed"
-            )
-        })
+    let deadline = std::time::Instant::now() + ESCROW_VISIBLE_WITHIN;
+    loop {
+        if let Some(held) = store
+            .mail_escrows_of(sender_guid)?
+            .into_iter()
+            .find(|e| e.escrow_id == escrow_id)
+        {
+            return Ok(held);
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(anyhow::anyhow!(
+                "mail escrow {escrow_id}: the fence reported success but no row is readable within \
+                 {ESCROW_VISIBLE_WITHIN:?}, so the letter's attachment and Delivery Delay cannot be \
+                 confirmed"
+            ));
+        }
+        std::thread::sleep(ESCROW_POLL);
+    }
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct HeldEscrow {
