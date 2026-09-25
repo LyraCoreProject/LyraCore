@@ -131,6 +131,25 @@ fn member_flags(realm: &Standalone, guid: u64) -> String {
         .clone()
 }
 
+/// The stored spelling of every channel `guid` is a member of, sorted for a stable comparison.
+fn member_channel_names(realm: &Standalone, guid: u64) -> Vec<String> {
+    let mut names: Vec<String> = realm
+        .query_rows(&format!(
+            "SELECT channel_id FROM game_chat_channel_member WHERE character_guid = {guid}"
+        ))
+        .iter()
+        .map(|member| {
+            let channel_id = &member["channel_id"];
+            realm.query_rows(&format!(
+                "SELECT name FROM game_chat_channel WHERE channel_id = {channel_id}"
+            ))[0]["name"]
+                .clone()
+        })
+        .collect();
+    names.sort();
+    names
+}
+
 /// Criteria 1 to 3: one channel per team and name, lines in the speaker's language, and YOU_JOINED
 /// with the wire flags.
 #[test]
@@ -503,5 +522,88 @@ fn channel_speech_follows_the_members_flags_not_the_speakers_health() {
         "realm_chat",
         &[&actor("3"), &line("WorldDefense", HUMAN, 0, "inc")],
         "chat:channel:muted",
+    );
+}
+
+/// A zone walk across a border replays as a LEAVE of the old zone-named channel followed by a JOIN
+/// of the new one, wire order from benilla's `plan_walk` (`crates/benilla-app/src/ui_chat/channels.rs`):
+/// leave General's old name, join its new name, join Trade (already registered, no leave needed),
+/// leave LocalDefense's old name, join its new name, join GuildRecruitment (freshly registered, no
+/// leave needed). The Character must hold all four new memberships afterward, the same as a
+/// zone-named channel joined with no preceding leave.
+#[test]
+#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+fn a_zone_border_crossing_keeps_every_new_zone_channel_membership() {
+    let realm = start("chat-channels-zone-walk");
+
+    op(
+        &realm,
+        &actor("1"),
+        JOIN,
+        "General - Northshire Abbey",
+        "",
+        HUMAN,
+    );
+    op(
+        &realm,
+        &actor("1"),
+        JOIN,
+        "LocalDefense - Northshire Abbey",
+        "",
+        HUMAN,
+    );
+
+    op(
+        &realm,
+        &actor("1"),
+        LEAVE,
+        "General - Northshire Abbey",
+        "",
+        HUMAN,
+    );
+    op(
+        &realm,
+        &actor("1"),
+        JOIN,
+        "General - Stormwind City",
+        "",
+        HUMAN,
+    );
+    op(&realm, &actor("1"), JOIN, "Trade - City", "", HUMAN);
+    op(
+        &realm,
+        &actor("1"),
+        LEAVE,
+        "LocalDefense - Northshire Abbey",
+        "",
+        HUMAN,
+    );
+    op(
+        &realm,
+        &actor("1"),
+        JOIN,
+        "LocalDefense - Stormwind City",
+        "",
+        HUMAN,
+    );
+    op(
+        &realm,
+        &actor("1"),
+        JOIN,
+        "GuildRecruitment - City",
+        "",
+        HUMAN,
+    );
+
+    assert_eq!(
+        member_channel_names(&realm, 1),
+        [
+            "General - Stormwind City",
+            "GuildRecruitment - City",
+            "LocalDefense - Stormwind City",
+            "Trade - City",
+        ],
+        "every zone channel joined on the way into Stormwind must survive, whether or not its JOIN \
+         was preceded by a LEAVE of the old zone's channel"
     );
 }
