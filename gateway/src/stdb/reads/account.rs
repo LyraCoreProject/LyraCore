@@ -1,7 +1,7 @@
 //! Account / character / session cache-accessor methods (pure code-motion split of the
 //! former `reads.rs`). See `stdb::reads` for the domain split's overview.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, RwLock};
 
 use anyhow::{anyhow, Result};
@@ -432,19 +432,18 @@ impl Coordinator {
             .unwrap_or_default()
     }
 
-    /// Resolve a typed contact name to a character guid (case-insensitive, mirroring the module's own
-    /// `character_by_name` match) via the privileged cache, the same RLS-bypass trick
-    /// `in_world_players` uses. `None` if no character has that name.
+    /// Resolve a typed name to a Character guid on this Shard, ASCII case-insensitive like the
+    /// Module's own `helpers::character_by_name`, from the Shard's [`CharacterNameIndex`]. `None`
+    /// if no Character here has that name. Every realm-wide name lookup (whisper, party and guild
+    /// invites, contacts, channel moderation) reaches this through `presence::resolve_by_name` or
+    /// `presence::resolve_all_by_name`.
     pub fn character_guid_by_name(&self, name: &str) -> Result<Option<u64>> {
-        Ok(self
-            .0
-            .coord()
-            .conn
-            .db
-            .game_character()
-            .iter()
-            .find(|c| c.name.eq_ignore_ascii_case(name))
-            .map(|c| c.guid))
+        let guard = self.0.coord();
+        let names = guard
+            .character_names
+            .read()
+            .unwrap_or_else(|p| p.into_inner());
+        Ok(names.guid_named(name))
     }
 
     /// A character's live presence `(online, level, class, zone_id)` for `SMSG_FRIEND_STATUS`/
@@ -539,6 +538,65 @@ impl ContactIndex {
     }
 }
 
+/// The Gateway-side index from lowercase Character name to guid on one Shard, kept current by the
+/// `game_character` callbacks. The bindings' unique `name` finder is case-sensitive, and a typed
+/// name is not; a whole-table scan per whisper and per Shard copies every Character row under the
+/// lock the pump needs.
+#[derive(Default)]
+pub(crate) struct CharacterNameIndex {
+    by_name: HashMap<String, BTreeSet<u64>>,
+}
+
+impl CharacterNameIndex {
+    fn insert(&mut self, guid: u64, name: &str) {
+        self.by_name
+            .entry(name.to_ascii_lowercase())
+            .or_default()
+            .insert(guid);
+    }
+
+    fn remove(&mut self, guid: u64, name: &str) {
+        let key = name.to_ascii_lowercase();
+        if let Some(guids) = self.by_name.get_mut(&key) {
+            guids.remove(&guid);
+            if guids.is_empty() {
+                self.by_name.remove(&key);
+            }
+        }
+    }
+
+    /// The Character `name` names, ASCII case-insensitive. Names are unique per Shard only up to
+    /// case, so two rows that differ only in case answer the lower guid, the same one every time.
+    pub(crate) fn guid_named(&self, name: &str) -> Option<u64> {
+        self.by_name
+            .get(&name.to_ascii_lowercase())
+            .and_then(|guids| guids.first().copied())
+    }
+}
+
+/// Keep a [`CharacterNameIndex`] current from the Character callbacks. Initial subscription rows
+/// arrive as inserts.
+pub(crate) fn watch_character_names(conn: &DbConnection) -> Arc<RwLock<CharacterNameIndex>> {
+    let index = Arc::new(RwLock::new(CharacterNameIndex::default()));
+    let inserted = index.clone();
+    conn.db.game_character().on_insert(move |_ctx, row| {
+        let mut names = inserted.write().unwrap_or_else(|p| p.into_inner());
+        names.insert(row.guid, &row.name);
+    });
+    let updated = index.clone();
+    conn.db.game_character().on_update(move |_ctx, old, new| {
+        let mut names = updated.write().unwrap_or_else(|p| p.into_inner());
+        names.remove(old.guid, &old.name);
+        names.insert(new.guid, &new.name);
+    });
+    let deleted = index.clone();
+    conn.db.game_character().on_delete(move |_ctx, row| {
+        let mut names = deleted.write().unwrap_or_else(|p| p.into_inner());
+        names.remove(row.guid, &row.name);
+    });
+    index
+}
+
 /// Keep a [`ContactIndex`] current from the contact callbacks. Initial subscription rows arrive as
 /// inserts.
 pub(crate) fn watch_contacts(conn: &DbConnection) -> Arc<RwLock<ContactIndex>> {
@@ -597,6 +655,31 @@ mod tests {
         assert_eq!(index.ignored_by(11), vec![40]);
         assert!(index.friends_of(11).is_empty());
         assert!(index.ignored_by(12).is_empty());
+    }
+
+    #[test]
+    fn a_typed_name_finds_its_character_in_any_case() {
+        let mut index = CharacterNameIndex::default();
+        index.insert(7, "Thrall");
+        assert_eq!(index.guid_named("thrall"), Some(7));
+        assert_eq!(index.guid_named("THRALL"), Some(7));
+        assert_eq!(index.guid_named("Thral"), None);
+    }
+
+    #[test]
+    fn a_renamed_or_deleted_character_leaves_the_name_index() {
+        let mut index = CharacterNameIndex::default();
+        index.insert(7, "Thrall");
+        index.insert(8, "thrall");
+        assert_eq!(
+            index.guid_named("Thrall"),
+            Some(7),
+            "the lower guid, every time"
+        );
+        index.remove(7, "Thrall");
+        assert_eq!(index.guid_named("Thrall"), Some(8));
+        index.remove(8, "thrall");
+        assert!(index.by_name.is_empty());
     }
 
     #[test]

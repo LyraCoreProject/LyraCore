@@ -29,7 +29,7 @@ use super::bindings::*;
 // same path it used before the domain split.
 pub(crate) use quest::build_quest_log_slots;
 
-pub(crate) use account::{watch_contacts, ContactIndex};
+pub(crate) use account::{watch_character_names, watch_contacts, CharacterNameIndex, ContactIndex};
 pub(crate) use channel::ChannelIndex;
 pub(crate) use guild::{watch_guilds, GuildIndex};
 pub(crate) use mail::{watch_mail_escrows, MailEscrowIndex};
