@@ -7,12 +7,17 @@ use crate::constants::player_flags;
 /// Chat Kinds: the 1.12 `ChatMsg` wire values (cm:SharedDefines.h:1545-1582). A Realm Chat Line
 /// stores the wire value itself, so neither tier keeps a translation table.
 pub mod chat_kind {
+    /// Say, yell and `/e` are proximity chat and never Realm Chat Lines. They are here so the
+    /// language Gate judges every player line by its wire kind.
+    pub const SAY: u8 = 0x00;
     pub const PARTY: u8 = 0x01;
     pub const RAID: u8 = 0x02;
     pub const GUILD: u8 = 0x03;
     pub const OFFICER: u8 = 0x04;
+    pub const YELL: u8 = 0x05;
     pub const WHISPER: u8 = 0x06;
     pub const WHISPER_INFORM: u8 = 0x07;
+    pub const EMOTE: u8 = 0x08;
     pub const CHANNEL: u8 = 0x0E;
     pub const AFK: u8 = 0x14;
     pub const DND: u8 = 0x15;
@@ -214,12 +219,15 @@ mod tests {
     /// cm:SharedDefines.h:1545-1582, `enum ChatMsg`.
     #[test]
     fn chat_kinds_are_the_vanilla_chat_msg_values() {
+        assert_eq!(chat_kind::SAY, 0);
         assert_eq!(chat_kind::PARTY, 1);
         assert_eq!(chat_kind::RAID, 2);
         assert_eq!(chat_kind::GUILD, 3);
         assert_eq!(chat_kind::OFFICER, 4);
+        assert_eq!(chat_kind::YELL, 5);
         assert_eq!(chat_kind::WHISPER, 6);
         assert_eq!(chat_kind::WHISPER_INFORM, 7);
+        assert_eq!(chat_kind::EMOTE, 8);
         assert_eq!(chat_kind::CHANNEL, 14);
         assert_eq!(chat_kind::AFK, 20);
         assert_eq!(chat_kind::DND, 21);
@@ -379,11 +387,31 @@ mod tests {
 
     #[test]
     fn a_racial_language_passes_for_every_carrying_kind() {
-        for kind in [1, 2, 14, 87, 88] {
+        for kind in [0, 1, 2, 5, 8, 14, 87, 88] {
             assert_eq!(
                 speakable_language(kind, 3, 6),
                 Ok(6),
                 "Dwarvish on kind {kind}"
+            );
+        }
+    }
+
+    /// cm:ChatHandler.cpp:100-111 checks the language skill before it reads the kind, so say, yell
+    /// and `/e` refuse a language the race does not know, and never carry the addon language.
+    #[test]
+    fn proximity_kinds_refuse_a_language_the_race_does_not_know() {
+        for kind in [0, 5, 8] {
+            assert_eq!(
+                speakable_language(kind, 1, 1),
+                Err(ChatRefusal::UnknownLanguage),
+                "Human Orcish on kind {kind}"
+            );
+            assert_eq!(speakable_language(kind, 2, 1), Ok(1), "Orc Orcish");
+            assert_eq!(speakable_language(kind, 1, 0), Ok(0), "Universal");
+            assert_eq!(
+                speakable_language(kind, 1, 0xFFFF_FFFF),
+                Err(ChatRefusal::UnsupportedKind),
+                "addon on kind {kind}"
             );
         }
     }

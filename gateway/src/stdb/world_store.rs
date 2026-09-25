@@ -990,7 +990,7 @@ impl WorldStore for Coordinator {
         chat_type: u8,
         language: u8,
         message: String,
-    ) -> Result<()> {
+    ) -> Result<crate::world::ChatOutcome> {
         self.send_chat(account_id, self_guid, chat_type, language, message)
     }
 

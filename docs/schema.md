@@ -54,29 +54,32 @@ publish presents as an unrelated mid-session hang, not a loud "no such table".
 
 ## 2. Inventory
 
-**280 tables**, all of them in `module/src/**`: 128 public, 152 private. No table comes from a
+**281 tables**, all of them in `module/src/**`: 128 public, 153 private. No table comes from a
 package in this tree; `packages/example` is the only in-tree package and it declares none. Recount
-rather than trust the numbers below, which drift on every schema change:
+rather than trust the numbers below, which drift on every schema change. The pattern matches both
+`#[table(...)]` and the fully qualified `#[spacetimedb::table(...)]`; missing the second form
+undercounts. The second command lists the tables per file, which is what the rows below add up:
 
 ```bash
-grep -rn '^#\[table(' module/src --include='*.rs' | wc -l   # 280 on 2026-09-25
+grep -rEn '^#\[(spacetimedb::)?table\(' module/src --include='*.rs' | wc -l   # 281 on 2026-09-25
+grep -rEc '^#\[(spacetimedb::)?table\(' module/src --include='*.rs' | grep -v ':0$'  # tables per file
 ```
 
 | Domain | Tables | Public | Where |
 |---|---:|---:|---|
-| Auth / session / identity | 6 | 0 | `auth.rs` |
+| Auth / session / identity | 11 | 0 | `auth.rs`, `account_ownership.rs`, `sessionless.rs` |
 | Character and per-character progression | 23 | 19 | `character.rs`, `skill.rs`, `reputation.rs`, `talent.rs`, `spell/spellbook.rs`, `action_bar.rs`, `combo.rs`, `rest.rs`, `corpse.rs`, `xp.rs`, `exploration.rs`, `breath.rs`, `breath_relay.rs`, `graveyard.rs` |
 | World entity and movement | 8 | 3 | `world.rs`, `motion.rs` |
-| Terrain / nav / exact vmap | 9 | 5 | `terrain.rs`, `nav.rs`, `vmap.rs` |
-| Chat / social / addon bridge | 14 | 9 | `chat.rs`, `channel.rs`, `bridge.rs`, `away.rs` |
+| Terrain / nav / exact vmap | 10 | 6 | `terrain.rs`, `nav.rs`, `vmap.rs` |
+| Chat / social / addon bridge | 19 | 9 | `chat.rs`, `channel.rs`, `realm_chat.rs`, `away.rs`, `bridge.rs` |
 | Combat / threat / duel | 10 | 4 | `combat/engage.rs`, `combat/death.rs`, `threat.rs`, `duel.rs` |
-| Spell / aura | 20 | 10 | `spell/tables.rs`, `spell/stacking.rs` |
-| Quest | 12 | 8 | `quest.rs` |
-| Item / vendor / trade / mail | 17 | 5 | `items/tables.rs`, `trade.rs`, `mail.rs`, `mail_catalogue.rs`, `mail_escrow.rs`, `mail_timer.rs`, `mail_text.rs` |
+| Spell / aura | 21 | 10 | `spell/tables.rs`, `spell/stacking.rs`, `spell/cast/resolve.rs` |
+| Quest | 13 | 8 | `quest.rs` |
+| Item / vendor / trade / mail | 20 | 8 | `items/tables.rs`, `items/properties.rs`, `trade.rs`, `mail.rs`, `mail_catalogue.rs`, `mail_escrow.rs`, `mail_timer.rs`, `mail_text.rs` |
 | Auction house | 8 | 2 | `auction.rs` |
 | Creature (template, spawn, AI, pet, trainer) | 42 | 17 | `creatures/*`, `trainer.rs` |
-| GameObject | 9 | 6 | `gameobject.rs`, `go_model.rs` |
-| Loot | 12 | 6 | `loot/*` |
+| GameObject | 10 | 6 | `gameobject.rs`, `go_model.rs`, `go_collider.rs` |
+| Loot | 13 | 6 | `loot/*` |
 | Group / party | 8 | 5 | `group.rs` |
 | Guild | 9 | 0 | `guild/mod.rs`, `guild/fee.rs`, `guild/membership.rs`, `guild/petition.rs` |
 | Instance / encounter | 8 | 1 | `instance.rs`, `encounter.rs` |
@@ -301,6 +304,38 @@ fixture Character carries the intended World Session's token. Null ownership del
 an active owner. Stop or log out that World Session first, or retain its token for the cleanup; do
 not refresh a stale cleanup token to target a replacement owner. Operator requests for a Character
 whose ownership has closed or expired can use null ownership.
+
+### Chat (`module/src/chat.rs`, `module/src/realm_chat.rs`, `module/src/channel.rs`)
+
+`game_chat_event` is the public `[event]` row for one say, yell, `/e` or creature line on the
+speaker's own Shard. The Gateway scopes it to listeners in range when it relays it. Only
+`apply_send_chat` (a Character) and `apply_send_chat_to` (EventAI) write it. A Character's line
+passes the language Gate first.
+
+`game_realm_chat_event` (private, `[event]`) is one Realm Chat Line: a party, raid, raid leader,
+raid warning, guild, officer, channel or whisper line, committed on Realm-core with its whole
+recipient list, its Chat Kind, language, chat tag and an `ignorable` flag. A whisper writes several
+rows: the line, the sender's echo, and an Auto-Reply or "is ignoring you" line when one applies.
+`realm_chat::emit` is its only writer. An addon-language line keeps its payload untrimmed.
+
+`game_character_away` (private, `module/src/away.rs`) holds the Auto-Reply of a Character with an
+Away Status, keyed by Character guid on its Home Shard. The `PLAYER_FLAGS` bit on the live entity is
+what observers see; both change in one transaction. Login clears it, and it travels with Transfer.
+
+Four private tables on Realm-core hold the Chat Channels. `game_chat_channel` is one channel, keyed
+by team and lowercase name, with the creator's spelling, owner, password and flags.
+`game_chat_channel_member` is one Channel Membership; its `id` is join order. `game_chat_channel_ban`
+holds bans. `game_chat_channel_notice_event` (`[event]`) is one Channel Notice with its recipients.
+`realm_channel_op` is the one reducer for every channel op, with an op byte. The last member leaving
+deletes the channel with its password and bans.
+
+`game_character_contact` (public) holds friend and ignore rows on the owner's Home Shard and travels
+with Transfer. The Gateway reads it through its owner-keyed `ContactIndex`.
+
+Retired and kept only because dropping a table is a destructive migration: `game_channel_member` and
+`game_channel_event` held the old shard-local channels, and `game_whisper_event` held whispers
+before they became Realm Chat Lines. All three are in `module/src/chat.rs`. Nothing writes or
+subscribes them.
 
 ### `game_map_region` / `game_region_assignment` (`module/src/region.rs:44,:67`)
 
@@ -545,8 +580,9 @@ Two constraints survive the removal and bind any filter added later.
   database, with nothing left to duplicate it.
 - **The sharded-only tables are subscribed conditionally.** A subscription to a table the deployed
   module does not have **fails to apply**, which fails the whole gateway — so a gateway restarted
-  before its module was republished must not ask for `game_map_region`, `game_region_assignment`,
-  `game_character_shard`, or the realm-core group/loot tables. `connection.rs:207–216`.
+  before its module was republished must not ask for `game_character_shard`, the realm-core
+  group tables, the loot-roll tables or the guid-range registry (`coordinator_queries` in
+  `gateway/src/stdb/connection.rs`).
 
 ---
 

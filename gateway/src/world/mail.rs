@@ -4,7 +4,7 @@
 
 use anyhow::Result;
 
-use super::{party, WorldStore};
+use super::{presence, WorldStore};
 use crate::codec::MailView;
 use lyracore_shared::mail as mail_rules;
 
@@ -186,11 +186,11 @@ pub(crate) fn send<St: WorldStore + ?Sized>(
 ) -> std::result::Result<(), SendRefusal> {
     let sender_guid = at_mailbox(store, self_guid, mailbox_guid)
         .map_err(|e| SendRefusal::NoMailbox(e.to_string()))?;
-    if !party::live_anywhere(store, sender_guid) {
+    if !presence::live_anywhere(store, sender_guid) {
         return Err(SendRefusal::NoMailbox(mail_rules::NOT_IN_WORLD.to_string()));
     }
     let candidates =
-        party::resolve_all_by_name(store, recipient_name).map_err(refusal_from_module)?;
+        presence::resolve_all_by_name(store, recipient_name).map_err(refusal_from_module)?;
     if candidates.is_empty() {
         return Err(SendRefusal::RecipientNotFound(
             mail_rules::no_recipient_named(recipient_name),
@@ -199,13 +199,13 @@ pub(crate) fn send<St: WorldStore + ?Sized>(
     if candidates.contains(&sender_guid) {
         return Err(SendRefusal::CannotSendToSelf);
     }
-    let sender = party::character_anywhere(store, sender_guid)
+    let sender = presence::character_anywhere(store, sender_guid)
         .map_err(refusal_from_module)?
         .ok_or_else(|| SendRefusal::Internal(mail_rules::NOT_IN_WORLD.to_string()))?;
     let mut reachable = Vec::new();
     for guid in candidates {
         let Some(candidate) =
-            party::character_anywhere(store, guid).map_err(refusal_from_module)?
+            presence::character_anywhere(store, guid).map_err(refusal_from_module)?
         else {
             continue;
         };

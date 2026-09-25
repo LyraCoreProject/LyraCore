@@ -35,6 +35,7 @@ use wow_world_messages::vanilla::{
     SMSG_SPIRIT_HEALER_CONFIRM,
 };
 
+mod chat_flood;
 mod coalesce;
 pub(crate) mod guild_fee;
 mod handlers;
@@ -397,6 +398,9 @@ pub struct WorldConn {
     who_throttled_until: Option<Instant>,
     /// When each throttled Group Broadcast kind may run again for this session.
     group_broadcast_cooldowns: party::GroupBroadcastCooldowns,
+    /// The Chat Flood Limiter. It lives on the connection, as cmangos keeps the mute on its
+    /// session, so a relog does not clear it.
+    chat_flood: chat_flood::ChatFloodLimiter,
 }
 
 /// How many CONSECUTIVE desynced movement packets a session may drop before the desync is treated
@@ -696,6 +700,7 @@ fn world_handshake_with_queue_and_deadline<
             move_desync_drops: 0,
             who_throttled_until: None,
             group_broadcast_cooldowns: Default::default(),
+            chat_flood: Default::default(),
         },
         encrypt,
     )))
@@ -1084,13 +1089,11 @@ fn run_world_session_with_queue_and_deadline<
     let writer = spawn_writer(wsock, encrypt, rx, depth, conn.account_id)?;
 
     let result = (|| -> Result<()> {
-        // Frames are read RAW (header hand-decrypted) so an addon-language chat — which
-        // gtker's `Language` enum cannot decode and which was session-FATAL — can be peeked and
-        // routed to the bridge BEFORE typed parsing. Every other frame is re-framed unencrypted
-        // and handed to the same gtker parser as before (one memcpy per packet).
-        // (`std::io::Read` is already in scope from the file-level import — the raw reads below use
-        // it; a second local `use` is a duplicate, not a requirement.)
-        // Addon-bridge rate limit: token bucket per connection — 2 tokens/s, burst 20.
+        // Frames are read raw (header hand-decrypted) so an addon chat frame with the bridge's
+        // own prefix can go to the bridge before typed parsing. Every other frame, addon frames
+        // from other prefixes included, is re-framed unencrypted and handed to the gtker parser
+        // (one memcpy per packet).
+        // Addon-bridge rate limit: token bucket per connection, 2 tokens/s, burst 20.
         // Excess frames drop with one log line per offense window; module handlers stay
         // unthrottled (they trust this edge like every other opcode).
         let mut addon_tokens: f32 = 20.0;
@@ -1189,6 +1192,31 @@ fn run_world_session_with_queue_and_deadline<
     result
 }
 
+/// Does the Character hold a GM level on its Home Shard? A failed read counts as no: the only
+/// effect is that a flooding game master is muted like any other speaker.
+fn is_game_master<St: WorldStore + ?Sized>(store: &St, character_guid: u64) -> bool {
+    match store.speaker_gm_level(character_guid) {
+        Ok(gm_level) => gm_level > 0,
+        Err(error) => {
+            log::debug!("world: GM level read for {character_guid} failed: {error:#}");
+            false
+        }
+    }
+}
+
+/// The speaker's race, for the Chat Flood Limiter's language check. `None` when the read fails or
+/// the speaker has no live entity here: the line still counts as usual, and the Module's own
+/// language Gate stays the fallback authority.
+fn speaker_race<St: WorldStore + ?Sized>(store: &St, character_guid: u64) -> Option<u8> {
+    match store.speaker_facts(character_guid) {
+        Ok(facts) => facts.map(|facts| facts.race),
+        Err(error) => {
+            log::debug!("world: speaker facts read for {character_guid} failed: {error:#}");
+            None
+        }
+    }
+}
+
 /// Route one bridge-prefixed addon chat frame: parse the `STC` v1 envelope and forward to the
 /// module's `client_command` reducer as the player. The caller already checked the prefix; a
 /// malformed envelope past that point still drops silently-with-a-debug-line (a truncated or
@@ -1257,6 +1285,19 @@ fn dispatch<St: WorldStore + ?Sized>(
         if let Some((opcode, info)) = conn.move_coalesce.flush_now() {
             forward_movement(store, conn, opcode, &info)?;
         }
+    }
+
+    // The Chat Flood Limiter runs ahead of every chat, channel and emote handler, so a muted
+    // line costs no Durable Request.
+    let speaker = social::self_guid(conn);
+    let flood_answer = conn.chat_flood.judge(
+        &msg,
+        Instant::now(),
+        || speaker.is_some_and(|guid| is_game_master(store, guid)),
+        || speaker.and_then(|guid| speaker_race(store, guid)),
+    );
+    if let Some(answer) = flood_answer {
+        return send(tx, Outbound::One(answer));
     }
 
     let Some(msg) = handle_char(tx, store, conn, msg)? else {

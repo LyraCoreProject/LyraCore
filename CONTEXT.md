@@ -68,7 +68,7 @@ for collision extraction. It owns only the selected vmap cells. It does not clai
 Navigation Coverage, or the rest of the instance.
 
 **Realm-core**:
-The shard that holds realm-wide state, including accounts, sessions, groups, guilds, whispers, loot rolls, the character-to-shard index, and shard load samples.
+The shard that holds realm-wide state: accounts, sessions, Account Claims, groups, guilds, Chat Channels, Realm Chat Lines, mail, auctions, loot rolls, the character-to-shard index and shard load samples. It holds no Characters.
 
 **Gateway**:
 The trusted protocol tier between clients and shards. Holds no durable state.
@@ -400,7 +400,8 @@ delivers it to each recipient's World Session on any Shard.
 _Avoid_: chat event (unqualified), broadcast
 
 **Chat Kind**:
-The 1.12 `ChatMsg` wire value that names a Realm Chat Line's packet and its audience rule.
+The 1.12 `ChatMsg` wire value of a player chat line. It names a Realm Chat Line's packet and
+audience rule, and it picks the language rule for every player line, say and yell included.
 _Avoid_: chat type (in new names)
 
 **Speaker Facts**:
@@ -416,7 +417,7 @@ _Avoid_: online status, presence cache
 **Whereabouts**:
 Realm Presence's own state for where a Character is: in world (with a live entity and an Away
 Status), in transit between two places (a pending Transfer, or a Shard's own row reading online
-with no entity there), or offline. A negative Whereabouts — offline, or no Character found at all —
+with no entity there), or offline. A negative Whereabouts, offline or no Character found at all,
 needs every configured World Shard to vouch that none of them is hiding the Character.
 _Avoid_: presence state, location status
 
@@ -444,6 +445,12 @@ _Avoid_: channel subscription
 **Channel Notice**:
 One `SMSG_CHANNEL_NOTIFY`, committed on Realm-core with its explicit recipient list and delivered
 like a Realm Chat Line.
+
+**Chat Flood Limiter**:
+The Gateway's in-memory count of fast chat lines per World Session. Eleven lines, each within one
+second of the last, mute the session for ten seconds. `/afk`, `/dnd` and addon lines do not count,
+and a Character with a GM level is never muted. Forgotten on disconnect.
+_Avoid_: rate limiter, throttle, spam filter
 
 ### Loot
 
@@ -730,7 +737,7 @@ successful sale, an expired listing, a cancelled listing's item, and the bid a C
 
 **Auction Notice**:
 The live message an online seller or bidder gets the instant an auction is outbid, won, sold,
-expired or cancelled. Rides the same private per-recipient Relay as a whisper; an offline recipient
+expired or cancelled. Rides the private per-recipient Relay; an offline recipient
 gets the Auction Mail only.
 
 **Hold**:

@@ -1108,7 +1108,7 @@ fn the_faction_gate_refuses_in_both_directions() {
 fn a_homonym_recipient_is_refused_rather_than_guessed() {
     let (_realm, world, _instances, calls) = sharded_send();
     assert_eq!(
-        party::resolve_all_by_name(world.as_ref(), "Echo").unwrap(),
+        presence::resolve_all_by_name(world.as_ref(), "Echo").unwrap(),
         vec![ECHO_WORLD, ECHO_INSTANCES],
         "fixture: one name, two characters, on two databases"
     );

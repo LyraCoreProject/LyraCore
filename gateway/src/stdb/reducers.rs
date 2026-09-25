@@ -1883,6 +1883,8 @@ impl Coordinator {
         )
     }
 
+    /// Say, yell or `/e` on the speaker's Home Shard. The Module's language Gate answers a
+    /// `chat:*` Refusal.
     pub fn send_chat(
         &self,
         _account_id: u64,
@@ -1890,16 +1892,16 @@ impl Coordinator {
         chat_type: u8,
         language: u8,
         message: String,
-    ) -> Result<()> {
+    ) -> Result<ChatOutcome> {
         if actor_guid == 0 {
             return Err(anyhow!("send_chat: actor_guid unresolved"));
         }
         let coord = self.0.call_pipe();
-        call_reducer!(
+        chat_outcome(call_reducer!(
             coord.conn.reducers,
             "gw_send_chat",
             gw_send_chat_then(self.session_actor(actor_guid), chat_type, language, message)
-        )
+        ))
     }
 
     pub fn send_emote(

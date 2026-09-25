@@ -78,3 +78,38 @@ fn an_e_line_is_one_universal_row_and_a_dead_or_creature_only_type_is_refused() 
         "dead players cannot speak",
     );
 }
+
+/// cm:ChatHandler.cpp:100-111: a Human saying or yelling in Orcish is refused before anything is
+/// broadcast. Wire languages from gtker vanilla `language.rs`: Orcish 1, Common 7.
+#[test]
+#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+fn a_say_or_yell_line_needs_a_language_the_speakers_race_knows() {
+    let mut standalone = Standalone::start("say-language");
+    standalone.publish_module();
+    standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("install_guid_range", &["0"]);
+    standalone.assert_call("debug_spawn_player_entity", &[&CHARACTER.to_string()]);
+
+    // Refusals roll back: the only row the next transaction carries is the Common sentinel.
+    let updates = standalone.capture_updates(CHAT_ROWS, 1, || {
+        refused(
+            &standalone,
+            &[&actor(&CHARACTER.to_string()), "0", "1", "\"zug zug\""],
+            "chat:unknown_language",
+        );
+        refused(
+            &standalone,
+            &[&actor(&CHARACTER.to_string()), "1", "1", "\"ZUG ZUG\""],
+            "chat:unknown_language",
+        );
+        standalone.assert_call(
+            "gw_send_chat",
+            &[&actor(&CHARACTER.to_string()), "0", "7", "\"well met\""],
+        );
+    });
+    let rows = inserted_rows(&updates[0]);
+    assert_eq!(rows.len(), 1, "{updates:?}");
+    assert_eq!(rows[0]["chat_type"], 0);
+    assert_eq!(rows[0]["language"], 7, "a Human's Common stays Common");
+    assert_eq!(rows[0]["message"], "well met");
+}

@@ -571,6 +571,10 @@ mod tests {
         ) -> Result<ChatOutcome> {
             Ok(ChatOutcome::Delivered)
         }
+
+        fn speaker_gm_level(&self, _speaker_guid: u64) -> Result<u8> {
+            Ok(0)
+        }
     }
 
     impl ChannelActionStore for InMemoryChannelActions {

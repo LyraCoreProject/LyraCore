@@ -12,7 +12,7 @@
 
 use spacetimedb::{reducer, table, ReducerContext, SpacetimeType, Table, Timestamp};
 
-use lyracore_shared::chat::{chat_kind, chat_tag, speakable_language, ChatRefusal};
+use lyracore_shared::chat::{chat_kind, chat_tag, language, speakable_language, ChatRefusal};
 
 /// One Realm Chat Line. Private: the owner-token Coordinator is its only reader. Reaped by the
 /// shared event GC. [event]
@@ -110,8 +110,12 @@ fn compose(
     request: RealmChatRequest,
     audience: impl FnOnce(&RealmChatRequest) -> Result<ChatAudience, ChatRefusal>,
 ) -> Result<RealmChatLine, ChatRefusal> {
-    let message =
-        crate::chat::normalized_message(&request.message).ok_or(ChatRefusal::EmptyMessage)?;
+    let message = if request.language == language::ADDON {
+        crate::chat::addon_payload(&request.message)
+    } else {
+        crate::chat::normalized_message(&request.message)
+    }
+    .ok_or(ChatRefusal::EmptyMessage)?;
     let language = speakable_language(request.kind, request.speaker.race, request.language)?;
     let audience = audience(&request)?;
     // The IGNORED notice carries no tag (cm:ChatHandler.cpp:813).
@@ -325,7 +329,7 @@ fn refused_chat(refusal: ChatRefusal, speaker_guid: u64) -> String {
 mod tests {
     use super::*;
     use crate::test_scan::code_of;
-    use lyracore_shared::chat::{chat_tag, language};
+    use lyracore_shared::chat::chat_tag;
 
     fn request(kind: u8, race: u8, language: u32, message: &str) -> RealmChatRequest {
         RealmChatRequest {
@@ -370,6 +374,20 @@ mod tests {
                 ignorable: false,
             }
         );
+    }
+
+    /// cm:ChatHandler.cpp:306-318 reads an addon payload raw. A trim would change the frame another
+    /// addon parses.
+    #[test]
+    fn an_addon_line_keeps_its_payload_untrimmed() {
+        let line = compose(
+            10,
+            request(chat_kind::GUILD, 1, language::ADDON, "LCTEST\t ping "),
+            |_| party(&[10, 20]),
+        )
+        .unwrap();
+        assert_eq!(line.message, "LCTEST\t ping ");
+        assert_eq!(line.language, 0xFFFF_FFFF);
     }
 
     #[test]

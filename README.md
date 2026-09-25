@@ -69,7 +69,7 @@ walk. `dev up --single` brings up `lyracore` alone.
    │  SPACETIMEDB  (authority)              │  ALL state + ALL logic
    │  world shards · instance pool          │  transactional reducers
    │  realm-core: accounts · sessions ·     │  same wasm on every database
-   │    groups · whispers · loot rolls      │  scheduled work drives the world
+   │    groups · guilds · chat · loot rolls │  scheduled work drives the world
    └────────────────────────────────────────┘
 ```
 

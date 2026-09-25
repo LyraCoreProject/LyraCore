@@ -5,6 +5,7 @@ use super::super::*;
 use super::quest;
 use super::taxi::open_taxi_outbound;
 use super::vendor::{vendor_has_stock, vendor_open_outbound};
+use lyracore_shared::chat::broadcast_chat;
 
 /// The NPC's imported gossip options, condition-filtered against `player_guid`'s quest
 /// state — the SINGLE chokepoint both `CMSG_GOSSIP_HELLO` (render) and `CMSG_GOSSIP_SELECT_OPTION`
@@ -46,6 +47,39 @@ fn filtered_gossip_options<St: WorldStore + ?Sized>(
                 )
         })
         .collect())
+}
+
+/// Say, yell or `/e` (a `broadcast_chat` type) through the speaker's Home Shard. The line itself
+/// returns on the Relay; a Refusal gets the answer every chat line shares, and only a lost reducer
+/// transport ends the World Session.
+fn speak_nearby<St: WorldStore + ?Sized>(
+    tx: &SessionTx,
+    store: &St,
+    conn: &WorldConn,
+    chat_type: u8,
+    language: u8,
+    message: String,
+) -> Result<()> {
+    let player = super::ChatActionPlayer {
+        account_id: conn.account_id,
+        self_guid: social::self_guid(conn),
+    };
+    let sent = store.send_chat(
+        conn.account_id,
+        player.self_guid.unwrap_or(0),
+        chat_type,
+        language,
+        message,
+    );
+    let refusal = super::chat::settle(
+        player,
+        format_args!("broadcast chat type {chat_type}"),
+        sent,
+    )?;
+    for message in super::chat::refusal_outbound(player, refusal) {
+        send(tx, message)?;
+    }
+    Ok(())
 }
 
 /// Query / social family: name / creature / item lookups + the gossip / npc-text round-trips, plus
@@ -289,10 +323,11 @@ pub(crate) fn handle_query<St: WorldStore + ?Sized>(
             )?;
         }
         // Social tier: say/yell/`/e` -> send_chat (insert a broadcast game_chat_event the gateway
-        // fans back as SMSG_MESSAGECHAT on every connection's subscription). Whisper, party, raid,
-        // guild, officer chat and `/afk` `/dnd` never reach this arm: `dispatch_chat_action`
-        // consumes them. No reply on success (the speaker sees their own line via the relay); a
-        // rejected say/yell/emote line is silently dropped, matching vanilla.
+        // fans back as SMSG_MESSAGECHAT to listeners in range). Whisper, party, raid, guild,
+        // officer chat and `/afk` `/dnd` never reach this arm: `dispatch_chat_action` consumes
+        // them. No reply on success (the speaker sees their own line via the relay). A say, yell
+        // or `/e` line in a language the speaker's race does not know answers "You don't know that
+        // language"; every other Refusal is silent, matching vanilla.
         //
         // GM playtest dot-commands: a Say line starting with `.` diverts BEFORE
         // `send_chat` — never broadcast, never inserted as a `game_chat_event` row — straight to the
@@ -333,34 +368,14 @@ pub(crate) fn handle_query<St: WorldStore + ?Sized>(
                     }
                 }
                 CMSG_MESSAGECHAT_ChatType::Say => {
-                    let _ = store.send_chat(
-                        conn.account_id,
-                        self_guid,
-                        lyracore_shared::chat::broadcast_chat::SAY,
-                        lang,
-                        message,
-                    );
+                    speak_nearby(tx, store, conn, broadcast_chat::SAY, lang, message)?;
                 }
                 CMSG_MESSAGECHAT_ChatType::Yell => {
-                    let _ = store.send_chat(
-                        conn.account_id,
-                        self_guid,
-                        lyracore_shared::chat::broadcast_chat::YELL,
-                        lang,
-                        message,
-                    );
+                    speak_nearby(tx, store, conn, broadcast_chat::YELL, lang, message)?;
                 }
-                // `/e` custom emote: same broadcast path as Say/Yell, EMOTE type. A Refusal (dead
-                // speaker, or the creature-only text-emote type resubmitted) is dropped silently,
-                // matching Say and Yell.
+                // `/e` custom emote: same broadcast path as Say/Yell, EMOTE type.
                 CMSG_MESSAGECHAT_ChatType::Emote => {
-                    let _ = store.send_chat(
-                        conn.account_id,
-                        self_guid,
-                        lyracore_shared::chat::broadcast_chat::EMOTE,
-                        lang,
-                        message,
-                    );
+                    speak_nearby(tx, store, conn, broadcast_chat::EMOTE, lang, message)?;
                 }
                 // Whisper, party, raid, channel, guild and officer lines and `/afk` `/dnd` never
                 // get here: `dispatch_chat_action` consumes them.

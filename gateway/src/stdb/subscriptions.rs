@@ -2449,7 +2449,7 @@ fn leader_name<St: crate::world::WorldStore + ?Sized>(
     store: &St,
     row: &GroupEvent,
 ) -> Option<String> {
-    match crate::world::party::character_anywhere(store, row.other_guid) {
+    match crate::world::presence::character_anywhere(store, row.other_guid) {
         Ok(Some(leader)) => Some(leader.name),
         Ok(None) => {
             log::warn!(
@@ -3892,27 +3892,16 @@ impl Coordinator {
         }
         // The Realm Chat Relay's per-listener filter, and the Account Claim Relay's per-listener
         // audience: this Character's own ignore and friend guids, from its contact rows on this
-        // Home Shard. The contact Relay keeps both current from here on. A one-time read straight
-        // off the coordinator cache — like the `explored`/`resident_corpses` sweeps below — rather
-        // than `contact_lists`, which reads the registered Viewer this call is about to seed.
+        // Home Shard. The contact Relay keeps both current from here on. Read from the Shard's
+        // owner-keyed `ContactIndex` rather than `contact_lists`, which reads the registered Viewer
+        // this call is about to seed.
         let (ignored, friends): (HashSet<u64>, HashSet<u64>) = {
             let guard = self.0.coord();
-            let mut ignored = HashSet::new();
-            let mut friends = HashSet::new();
-            for row in guard
-                .conn
-                .db
-                .game_character_contact()
-                .iter()
-                .filter(|r| r.owner_guid == self_guid)
-            {
-                if row.is_ignore {
-                    ignored.insert(row.target_guid);
-                } else {
-                    friends.insert(row.target_guid);
-                }
-            }
-            (ignored, friends)
+            let contacts = guard.contacts.read().unwrap_or_else(|p| p.into_inner());
+            (
+                contacts.ignored_by(self_guid).into_iter().collect(),
+                contacts.friends_of(self_guid).into_iter().collect(),
+            )
         };
         let team = lyracore_shared::faction::team_for_race((arrival.unit_bytes_0 & 0xFF) as u8);
         let viewer = Arc::new(Viewer {
@@ -6961,7 +6950,7 @@ mod tests {
     }
 
     /// World entry seeds the viewer's ignore AND friend sets from its own contact rows on this
-    /// Home Shard, read directly off the coordinator cache — NOT through `contact_lists`, which
+    /// Home Shard, read from the Shard's `ContactIndex`, NOT through `contact_lists`, which
     /// reads the registered Viewer this call is about to create, and would see nothing yet.
     /// No Fake reaches this coordinator read, so the seed is pinned in source. Without it the sets
     /// stay empty until the first live contact change: an ignorable Realm Chat Line reaches a
@@ -6978,8 +6967,9 @@ mod tests {
             .filter(|c| !c.is_whitespace())
             .collect();
         assert!(
-            compact.contains(".game_character_contact().iter().filter(|r|r.owner_guid==self_guid)"),
-            "world entry no longer scans its own contact rows for the ignore/friend seed"
+            compact.contains("contacts.ignored_by(self_guid)")
+                && compact.contains("contacts.friends_of(self_guid)"),
+            "world entry no longer reads its own contact rows for the ignore/friend seed"
         );
         assert!(
             compact.contains("ignored:Mutex::new(ignored),friends:Mutex::new(friends),team,"),

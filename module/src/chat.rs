@@ -65,6 +65,13 @@ pub fn normalized_message(raw: &str) -> Option<String> {
     Some(trimmed.chars().take(MAX_CHAT_LEN).collect())
 }
 
+/// An addon-language payload exactly as the client sent it, length-capped like any line. Addons
+/// frame their own data, so a trim would change it in transit; cmangos reads it raw and drops only
+/// an empty one (cm:ChatHandler.cpp:306-312). [pure]
+pub fn addon_payload(raw: &str) -> Option<String> {
+    (!raw.is_empty()).then(|| raw.chars().take(MAX_CHAT_LEN).collect())
+}
+
 /// The say/yell/`/e` core, actor-explicit (stage 4a): everything the old sender-path `send_chat`
 /// did after resolving WHO spoke, plus the player/EventAI boundary — a Character may say, yell or
 /// `/e`, never submit the creature-only text emote. EMOTE is admitted ONLY here, never in
@@ -80,10 +87,25 @@ pub(crate) fn apply_send_chat(
     language: u8,
     message: String,
 ) -> Result<(), String> {
-    if !matches!(chat_type, CHAT_SAY | CHAT_YELL | CHAT_EMOTE) {
-        return Err(format!("unsupported chat type {chat_type}"));
-    }
+    admit_player_line(chat_type, sender.race(), language)?;
     write_chat_event(ctx, sender, 0, chat_type, language, message)
+}
+
+/// A Character may say, yell or `/e`, and only in a language its race knows. cmangos checks the
+/// language skill before it looks at the kind (cm:ChatHandler.cpp:100-111), so `/e` passes the
+/// same Gate even though it goes out in Universal. The Refusal is the `chat:*` tag the Gateway
+/// answers with "You don't know that language". [pure]
+fn admit_player_line(chat_type: u8, race: u8, language: u8) -> Result<(), String> {
+    use lyracore_shared::chat::chat_kind;
+    let kind = match chat_type {
+        CHAT_SAY => chat_kind::SAY,
+        CHAT_YELL => chat_kind::YELL,
+        CHAT_EMOTE => chat_kind::EMOTE,
+        _ => return Err(format!("unsupported chat type {chat_type}")),
+    };
+    lyracore_shared::chat::speakable_language(kind, race, u32::from(language))
+        .map(drop)
+        .map_err(|refusal| refusal.as_tag().to_string())
 }
 
 /// Creature-authored speech with its resolved addressed unit retained for the monster chat packet.
@@ -567,6 +589,46 @@ mod tests {
              only entry must never admit EMOTE (a Character-only type, gated by `apply_send_chat`), \
              or a Package broadcast line with chat_type 3 renders as Say with no packet the codec \
              knows how to build for a creature."
+        );
+    }
+
+    /// Wire language values from gtker vanilla `language.rs`: Universal 0, Orcish 1, Common 7.
+    #[test]
+    fn a_player_line_needs_a_language_the_speakers_race_knows() {
+        const HUMAN: u8 = 1;
+        const ORC: u8 = 2;
+        for chat_type in [CHAT_SAY, CHAT_YELL, CHAT_EMOTE] {
+            assert_eq!(
+                admit_player_line(chat_type, HUMAN, 1),
+                Err("chat:unknown_language".to_string()),
+                "a Human in Orcish, chat type {chat_type}"
+            );
+            assert_eq!(admit_player_line(chat_type, HUMAN, 7), Ok(()));
+            assert_eq!(admit_player_line(chat_type, ORC, 1), Ok(()));
+            assert_eq!(admit_player_line(chat_type, HUMAN, 0), Ok(()));
+        }
+    }
+
+    /// The creature-only text emote is EventAI's; a Character never submits it.
+    #[test]
+    fn a_player_cannot_submit_the_creature_text_emote() {
+        assert_eq!(
+            admit_player_line(CHAT_TEXT_EMOTE, 1, 0),
+            Err("unsupported chat type 2".to_string())
+        );
+    }
+
+    #[test]
+    fn an_addon_payload_keeps_its_whitespace() {
+        assert_eq!(
+            addon_payload("LCTEST\t ping ").as_deref(),
+            Some("LCTEST\t ping ")
+        );
+        assert_eq!(addon_payload(" "), Some(" ".to_string()));
+        assert_eq!(addon_payload(""), None);
+        assert_eq!(
+            addon_payload(&"a".repeat(1000)).unwrap().chars().count(),
+            MAX_CHAT_LEN
         );
     }
 
