@@ -1,8 +1,11 @@
 //! Account / character / session cache-accessor methods (pure code-motion split of the
 //! former `reads.rs`). See `stdb::reads` for the domain split's overview.
 
+use std::collections::{BTreeMap, HashMap};
+use std::sync::{Arc, RwLock};
+
 use anyhow::{anyhow, Result};
-use spacetimedb_sdk::Table;
+use spacetimedb_sdk::{Table, TableWithPrimaryKey};
 
 use super::super::bindings::*;
 use super::super::connection::Coordinator;
@@ -477,29 +480,139 @@ impl Coordinator {
         Ok((viewer.friend_guids(), viewer.ignored_guids()))
     }
 
-    /// `owner_guid`'s ignore guids, read directly off this Shard's `game_character_contact` rows —
-    /// realm-wide safe for ANY owner, per [`crate::world::store::WorldStore::ignored_guids`].
-    /// Unlike `contact_lists`, `owner_guid` here is a Character this Gateway process may never have
-    /// a `Viewer` for at all (a whisper sender or a guild-invite target is usually a PEER, not the
-    /// connected session), so this cannot route through one. A per-owner scan of one Shard's own
-    /// cache, called once per whisper or guild invite — not a per-tick Relay path — so the cost
-    /// this trades for correctness here is the one the perf catalog accepts.
+    /// `owner_guid`'s ignore guids from this Shard's [`ContactIndex`], realm-wide safe for ANY
+    /// owner, per [`crate::world::store::WorldStore::ignored_guids`]. Unlike `contact_lists`,
+    /// `owner_guid` here is a Character this Gateway process may never have a `Viewer` for at all (a
+    /// whisper sender or a guild-invite target is usually a PEER, not the connected session), so
+    /// this cannot route through one.
     pub fn ignored_guids(&self, owner_guid: u64) -> Result<Vec<u64>> {
-        Ok(self
-            .0
-            .coord()
-            .conn
-            .db
-            .game_character_contact()
-            .iter()
-            .filter(|c| c.owner_guid == owner_guid && c.is_ignore)
-            .map(|c| c.target_guid)
-            .collect())
+        let guard = self.0.coord();
+        let contacts = guard.contacts.read().unwrap_or_else(|p| p.into_inner());
+        Ok(contacts.ignored_by(owner_guid))
     }
+}
+
+/// The Gateway-side index over `game_character_contact`, keyed by owner and kept current by the
+/// cache's insert, update and delete callbacks. The SDK bindings expose no finder for the table's
+/// `by_owner` index, and a whole-table scan per whisper or guild invite copies every contact row on
+/// the Shard under the lock the pump needs.
+#[derive(Default)]
+pub(crate) struct ContactIndex {
+    /// Owner guid to its contact rows by row id: `(target guid, is_ignore)`.
+    by_owner: HashMap<u64, BTreeMap<u64, (u64, bool)>>,
+}
+
+impl ContactIndex {
+    fn insert(&mut self, row: &ContactEntry) {
+        self.by_owner
+            .entry(row.owner_guid)
+            .or_default()
+            .insert(row.id, (row.target_guid, row.is_ignore));
+    }
+
+    fn remove(&mut self, row: &ContactEntry) {
+        if let Some(rows) = self.by_owner.get_mut(&row.owner_guid) {
+            rows.remove(&row.id);
+            if rows.is_empty() {
+                self.by_owner.remove(&row.owner_guid);
+            }
+        }
+    }
+
+    fn targets(&self, owner_guid: u64, ignore: bool) -> impl Iterator<Item = u64> + '_ {
+        self.by_owner
+            .get(&owner_guid)
+            .into_iter()
+            .flat_map(|rows| rows.values())
+            .filter(move |(_, is_ignore)| *is_ignore == ignore)
+            .map(|(target_guid, _)| *target_guid)
+    }
+
+    /// The guids `owner_guid` ignores.
+    pub(crate) fn ignored_by(&self, owner_guid: u64) -> Vec<u64> {
+        self.targets(owner_guid, true).collect()
+    }
+
+    /// The guids `owner_guid` lists as friends.
+    pub(crate) fn friends_of(&self, owner_guid: u64) -> Vec<u64> {
+        self.targets(owner_guid, false).collect()
+    }
+}
+
+/// Keep a [`ContactIndex`] current from the contact callbacks. Initial subscription rows arrive as
+/// inserts.
+pub(crate) fn watch_contacts(conn: &DbConnection) -> Arc<RwLock<ContactIndex>> {
+    let index = Arc::new(RwLock::new(ContactIndex::default()));
+    let inserted = index.clone();
+    conn.db
+        .game_character_contact()
+        .on_insert(move |_ctx, row| {
+            inserted
+                .write()
+                .unwrap_or_else(|p| p.into_inner())
+                .insert(row);
+        });
+    let updated = index.clone();
+    conn.db
+        .game_character_contact()
+        .on_update(move |_ctx, old, new| {
+            let mut contacts = updated.write().unwrap_or_else(|p| p.into_inner());
+            contacts.remove(old);
+            contacts.insert(new);
+        });
+    let deleted = index.clone();
+    conn.db
+        .game_character_contact()
+        .on_delete(move |_ctx, row| {
+            deleted
+                .write()
+                .unwrap_or_else(|p| p.into_inner())
+                .remove(row);
+        });
+    index
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    fn contact(id: u64, owner_guid: u64, target_guid: u64, is_ignore: bool) -> ContactEntry {
+        ContactEntry {
+            id,
+            owner_guid,
+            owner_identity: spacetimedb_sdk::Identity::ZERO,
+            target_guid,
+            is_ignore,
+        }
+    }
+
+    #[test]
+    fn the_contact_index_answers_each_owners_own_lists() {
+        let mut index = ContactIndex::default();
+        index.insert(&contact(1, 10, 20, true));
+        index.insert(&contact(2, 10, 30, false));
+        index.insert(&contact(3, 11, 40, true));
+        assert_eq!(index.ignored_by(10), vec![20]);
+        assert_eq!(index.friends_of(10), vec![30]);
+        assert_eq!(index.ignored_by(11), vec![40]);
+        assert!(index.friends_of(11).is_empty());
+        assert!(index.ignored_by(12).is_empty());
+    }
+
+    #[test]
+    fn a_deleted_contact_row_leaves_the_index() {
+        let mut index = ContactIndex::default();
+        index.insert(&contact(1, 10, 20, true));
+        index.insert(&contact(2, 10, 21, true));
+        index.remove(&contact(1, 10, 20, true));
+        assert_eq!(index.ignored_by(10), vec![21]);
+        index.remove(&contact(2, 10, 21, true));
+        assert!(
+            index.by_owner.is_empty(),
+            "an owner with no rows is forgotten"
+        );
+    }
+
     /// `ignored_guids` answers for ANY owner, including one with no live World Session on this
     /// Gateway process at all — a whisper sender's target or a guild-invite target usually is not
     /// one. Pinned in source (no Fake reaches a real `Coordinator`): the body must never route

@@ -781,13 +781,6 @@ impl From<GroupRefusal> for PartyOutcome {
     }
 }
 
-// `resolve_by_name`, `resolve_all_by_name`, `character_anywhere` and `live_anywhere` moved to
-// `presence.rs`: every realm-wide Character read now lives in one place, which guild rosters,
-// friends, `/who` and whisper all share. `world::mail` (the mail workstream) still calls three of
-// them through `party::`; kept re-exported here until that workstream merges onto `presence::`
-// directly.
-pub(crate) use super::presence::{character_anywhere, live_anywhere, resolve_all_by_name};
-
 /// `self_guid`'s own Group roster, read from the authority: Realm-core when sharded, this handle's
 /// own tables otherwise. Shared by [`resolve_roster_member_by_name`] and
 /// [`resolve_roster_members_by_name`] so a caller resolving more than one name reads the roster
@@ -810,7 +803,7 @@ fn resolve_in_roster<St: WorldStore + ?Sized>(
     name: &str,
 ) -> Result<Option<u64>> {
     for member in &roster.members {
-        if character_anywhere(store, member.guid)?
+        if presence::character_anywhere(store, member.guid)?
             .is_some_and(|character| character.name.eq_ignore_ascii_case(name))
         {
             return Ok(Some(member.guid));
@@ -930,7 +923,7 @@ pub(crate) fn run<St: WorldStore + ?Sized>(
     // Vanilla passes the lead only to an online member (cm:GroupHandler.cpp:352-356). The party
     // authority runs its rules without presence on both planes, so the Gateway answers it here.
     if let Op::SetLeader(target) = op {
-        if !live_anywhere(store, target) {
+        if !presence::live_anywhere(store, target) {
             return Ok(GroupRefusal::TargetOffline.into());
         }
     }

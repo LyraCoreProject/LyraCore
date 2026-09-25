@@ -77,6 +77,7 @@ pub(crate) struct LiveConn {
     pub(crate) auctions: Arc<RwLock<super::auction_holds::AuctionIndex>>,
     pub(crate) mail_escrows: Arc<RwLock<super::reads::MailEscrowIndex>>,
     pub(crate) guilds: Arc<RwLock<super::reads::GuildIndex>>,
+    pub(crate) contacts: Arc<RwLock<super::reads::ContactIndex>>,
     /// Keeps this role's subscription active for the connection's lifetime.
     _sub: SubscriptionHandle,
 }
@@ -816,6 +817,7 @@ fn connect_subscribed(
     let auctions = super::auction_holds::watch_auctions(&conn);
     let mail_escrows = super::reads::watch_mail_escrows(&conn);
     let guilds = super::reads::watch_guilds(&conn);
+    let contacts = super::reads::watch_contacts(&conn);
     let (tx, rx) = std::sync::mpsc::channel::<std::result::Result<(), String>>();
     let tx_err = tx.clone();
     let applied_commands = pump_commands.clone();
@@ -868,6 +870,7 @@ fn connect_subscribed(
         auctions,
         mail_escrows,
         guilds,
+        contacts,
         _sub: sub,
     })
 }
