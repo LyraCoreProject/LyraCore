@@ -49,14 +49,14 @@ fn filtered_gossip_options<St: WorldStore + ?Sized>(
         .collect())
 }
 
-/// Say, yell or `/e` through the speaker's Home Shard. The line itself returns on the Relay; a
-/// Refusal gets the answer every chat line shares, and only a lost reducer transport ends the World
-/// Session.
+/// Say, yell or `/e` (a `broadcast_chat` type) through the speaker's Home Shard. The line itself
+/// returns on the Relay; a Refusal gets the answer every chat line shares, and only a lost reducer
+/// transport ends the World Session.
 fn speak_nearby<St: WorldStore + ?Sized>(
     tx: &SessionTx,
     store: &St,
     conn: &WorldConn,
-    kind: u8,
+    chat_type: u8,
     language: u8,
     message: String,
 ) -> Result<()> {
@@ -67,11 +67,15 @@ fn speak_nearby<St: WorldStore + ?Sized>(
     let sent = store.send_chat(
         conn.account_id,
         player.self_guid.unwrap_or(0),
-        kind,
+        chat_type,
         language,
         message,
     );
-    let refusal = super::chat::settle(player, format_args!("broadcast chat type {kind}"), sent)?;
+    let refusal = super::chat::settle(
+        player,
+        format_args!("broadcast chat type {chat_type}"),
+        sent,
+    )?;
     for message in super::chat::refusal_outbound(player, refusal) {
         send(tx, message)?;
     }
