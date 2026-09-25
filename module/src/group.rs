@@ -416,11 +416,10 @@ fn group_op_error(error: GroupOpError, detail: &str) -> String {
 use lyracore_shared::group::{bot_op, event_kind as group_event_kind, leave_cause, GroupRefusal};
 
 /// A per-recipient group notification (the `game_whisper_event` pattern): public + RLS-scoped so
-/// only the recipient's connection sees it; reaped by the shared event GC. `other_name` is
-/// resolved at write time so the gateway never needs a name lookup for INVITE/DECLINE. LIST events
-/// carry the FULL roster snapshot in `payload` ([`RosterPayload`]), built in the SAME
-/// transaction as the membership change, so the gateway relay never races a cross-connection
-/// coordinator read (the module is the one place the roster is guaranteed consistent). [event]
+/// only the recipient's connection sees it; reaped by the shared event GC. LIST events carry the
+/// FULL roster snapshot in `payload` ([`RosterPayload`]), built in the SAME transaction as the
+/// membership change, so the gateway relay never races a cross-connection coordinator read (the
+/// module is the one place the roster is guaranteed consistent). [event]
 #[table(accessor = game_group_event, public, index(accessor = by_recipient, btree(columns = [recipient_identity])))]
 pub struct GroupEvent {
     #[primary_key]
@@ -429,6 +428,17 @@ pub struct GroupEvent {
     pub recipient_identity: Identity,
     pub kind: u8, // group_event_kind::*
     pub other_guid: u64,
+    /// Unused by the gateway relay. Kept as an empty column rather than removed, because dropping
+    /// it is a schema change this fix does not need.
+    ///
+    /// A name written here would only be correct when [`push_event`] runs on the same database
+    /// that holds `other_guid`'s character row. That holds for `gw_group_invite`/`gw_group_decline`
+    /// on an unsharded Realm. It fails for `realm_group_op` on a sharded Realm, which is exactly
+    /// the case a cross-shard invite needs: `other_guid`'s Character lives on a different World
+    /// Shard than the write. This reducer cannot tell the two cases apart, so it leaves the column
+    /// blank and lets the gateway resolve the name from the World Shard caches at render time, the
+    /// same way it already resolves a blank LIST roster name
+    /// (`gateway/src/stdb/subscriptions.rs::other_character_name`).
     pub other_name: String,
     pub created_at: Timestamp,
     // LIST roster snapshot (`RosterPayload::encode`); empty for the other kinds. A plain
@@ -470,19 +480,14 @@ pub(crate) fn push_event(
         .guid()
         .find(recipient_guid)
         .map(|c| c.owner_identity);
-    let other_name = ctx
-        .db
-        .game_character()
-        .guid()
-        .find(other_guid)
-        .map(|c| c.name)
-        .unwrap_or_default();
     ctx.db.game_group_event().insert(GroupEvent {
         id: 0,
         recipient_identity: crate::helpers::event_recipient_identity(bound),
         kind,
         other_guid,
-        other_name,
+        // Left empty: see the field comment. This reducer cannot tell here whether `ctx.db` holds
+        // `other_guid`'s character row, so it does not guess.
+        other_name: String::new(),
         created_at: ctx.timestamp,
         payload,
         recipient_guid,

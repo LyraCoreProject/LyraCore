@@ -3051,6 +3051,104 @@ fn the_set_leader_relay_names_the_leader_from_the_far_shard() {
     assert_eq!(relayed_leader_name(&realm, &set_leader_row(404)), None);
 }
 
+/// An `INVITE` row as the relay decodes it: `other_guid` is the INVITER (`invite_core_on`'s
+/// `push_event` call in `module/src/group.rs`).
+fn invite_row(inviter: u64) -> crate::stdb::bindings::GroupEvent {
+    crate::stdb::bindings::GroupEvent {
+        id: 1,
+        recipient_identity: spacetimedb_sdk::Identity::ZERO,
+        kind: lyracore_shared::group::event_kind::INVITE,
+        other_guid: inviter,
+        other_name: String::new(),
+        created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
+        payload: String::new(),
+        recipient_guid: GINGER,
+    }
+}
+
+/// The one `SMSG_GROUP_INVITE` name the relay sends for `row`, or `None` for no packet.
+fn relayed_invite_name(
+    realm: &InMemoryStore,
+    row: &crate::stdb::bindings::GroupEvent,
+) -> Option<String> {
+    let packets = crate::stdb::subscriptions::group_event_outbound(realm, GINGER, row);
+    match &packets[..] {
+        [] => None,
+        [Outbound::One(ServerOpcodeMessage::SMSG_GROUP_INVITE(invite))] => {
+            Some(invite.name.clone())
+        }
+        other => panic!(
+            "expected at most one SMSG_GROUP_INVITE, got {} packets",
+            other.len()
+        ),
+    }
+}
+
+/// **AC: the invite dialog names the inviter, even across a shard boundary.** `push_event` writes
+/// `other_name` on whichever database the invite op runs on. On a sharded Realm that is Realm-core,
+/// which holds no `game_character` rows, so the relay reads the inviter's name from the World Shard
+/// caches instead, exactly as `SET_LEADER` does. An inviter no shard can name sends nothing rather
+/// than a popup reading "has invited you to join a group" with the name missing.
+#[test]
+fn the_invite_relay_names_the_inviter_from_the_far_shard() {
+    let (realm, world, instances, _calls) = party_topology();
+    *realm.peers.lock().unwrap() = vec![world.clone(), instances.clone()];
+
+    assert_eq!(
+        relayed_invite_name(&realm, &invite_row(VIM)).as_deref(),
+        Some("Vim")
+    );
+    assert_eq!(relayed_invite_name(&realm, &invite_row(404)), None);
+}
+
+/// A `DECLINE` row as the relay decodes it: `other_guid` is the DECLINER (`decline_invite_on`'s
+/// `push_event` call in `module/src/group.rs`).
+fn decline_row(decliner: u64) -> crate::stdb::bindings::GroupEvent {
+    crate::stdb::bindings::GroupEvent {
+        id: 1,
+        recipient_identity: spacetimedb_sdk::Identity::ZERO,
+        kind: lyracore_shared::group::event_kind::DECLINE,
+        other_guid: decliner,
+        other_name: String::new(),
+        created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
+        payload: String::new(),
+        recipient_guid: GINGER,
+    }
+}
+
+/// The one `SMSG_GROUP_DECLINE` name the relay sends for `row`, or `None` for no packet.
+fn relayed_decline_name(
+    realm: &InMemoryStore,
+    row: &crate::stdb::bindings::GroupEvent,
+) -> Option<String> {
+    let packets = crate::stdb::subscriptions::group_event_outbound(realm, GINGER, row);
+    match &packets[..] {
+        [] => None,
+        [Outbound::One(ServerOpcodeMessage::SMSG_GROUP_DECLINE(decline))] => {
+            Some(decline.name.clone())
+        }
+        other => panic!(
+            "expected at most one SMSG_GROUP_DECLINE, got {} packets",
+            other.len()
+        ),
+    }
+}
+
+/// **AC: the inviter's "declined" line names the decliner, even across a shard boundary.** Same
+/// defect as INVITE, same fix: the relay resolves the name from the World Shard caches rather than
+/// trusting `other_name`.
+#[test]
+fn the_decline_relay_names_the_decliner_from_the_far_shard() {
+    let (realm, world, instances, _calls) = party_topology();
+    *realm.peers.lock().unwrap() = vec![world.clone(), instances.clone()];
+
+    assert_eq!(
+        relayed_decline_name(&realm, &decline_row(VIM)).as_deref(),
+        Some("Vim")
+    );
+    assert_eq!(relayed_decline_name(&realm, &decline_row(404)), None);
+}
+
 /// Decode one hand-written client frame: size (u16 BE, opcode plus body), opcode (u32 LE), body.
 fn client_frame(opcode: u32, body: &[u8]) -> ClientOpcodeMessage {
     let mut framed = u16::try_from(body.len() + 4)

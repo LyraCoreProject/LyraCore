@@ -2199,9 +2199,9 @@ pub(crate) fn group_event_outbound<St: crate::world::WorldStore + ?Sized>(
     use lyracore_shared::loot_roll::event_kind as roll_kind;
     use lyracore_shared::quest::share_event_kind as quest_share_kind;
     let msg = match row.kind {
-        group_kind::INVITE => Some(ServerOpcodeMessage::SMSG_GROUP_INVITE(Box::new(
-            codec::build_group_invite(row.other_name.clone()),
-        ))),
+        group_kind::INVITE => other_character_name(store, row, "INVITE").map(|name| {
+            ServerOpcodeMessage::SMSG_GROUP_INVITE(Box::new(codec::build_group_invite(name)))
+        }),
         // The same renderer world entry uses: presence and blank names come from the shard caches,
         // because a roster written on realm-core can know neither. A Party's Target Icons follow
         // in the same job, because the Party client clears its marks on the list.
@@ -2223,11 +2223,11 @@ pub(crate) fn group_event_outbound<St: crate::world::WorldStore + ?Sized>(
                 None
             }
         },
-        group_kind::DECLINE => Some(ServerOpcodeMessage::SMSG_GROUP_DECLINE(Box::new(
-            codec::build_group_decline(row.other_name.clone()),
-        ))),
+        group_kind::DECLINE => other_character_name(store, row, "DECLINE").map(|name| {
+            ServerOpcodeMessage::SMSG_GROUP_DECLINE(Box::new(codec::build_group_decline(name)))
+        }),
         group_kind::DESTROYED => Some(ServerOpcodeMessage::SMSG_GROUP_DESTROYED),
-        group_kind::SET_LEADER => leader_name(store, row).map(|name| {
+        group_kind::SET_LEADER => other_character_name(store, row, "SET_LEADER").map(|name| {
             ServerOpcodeMessage::SMSG_GROUP_SET_LEADER(Box::new(codec::build_group_set_leader(
                 name,
             )))
@@ -2442,18 +2442,22 @@ pub(crate) fn group_event_outbound<St: crate::world::WorldStore + ?Sized>(
     }
 }
 
-/// The name a `SET_LEADER` row announces. The Gateway always looks it up from the shards by the
-/// row's leader guid, because Realm-core holds no characters. `None` skips the packet: an empty
-/// name would print a broken "is now the group leader" line.
-fn leader_name<St: crate::world::WorldStore + ?Sized>(
+/// The Character an INVITE, DECLINE or SET_LEADER row names by `other_guid`: the inviter, the
+/// decliner, or the new leader. The Gateway always looks it up from the World Shard caches, the
+/// same way [`crate::world::party::render_list`] fills a blank roster name, because Realm-core
+/// holds no `game_character` rows to resolve one from. `None` skips the packet: an empty name
+/// would print a broken client line ("has invited you to join a group", "is now the group
+/// leader") instead of no line at all.
+fn other_character_name<St: crate::world::WorldStore + ?Sized>(
     store: &St,
     row: &GroupEvent,
+    relay: &str,
 ) -> Option<String> {
     match crate::world::presence::character_anywhere(store, row.other_guid) {
-        Ok(Some(leader)) => Some(leader.name),
+        Ok(Some(character)) => Some(character.name),
         Ok(None) => {
             log::warn!(
-                "group SET_LEADER relay: no shard names leader {} (event {})",
+                "group {relay} relay: no shard names {} (event {})",
                 row.other_guid,
                 row.id
             );
@@ -2461,7 +2465,7 @@ fn leader_name<St: crate::world::WorldStore + ?Sized>(
         }
         Err(e) => {
             log::warn!(
-                "group SET_LEADER relay: name lookup for leader {} failed (event {}): {e:#}",
+                "group {relay} relay: name lookup for {} failed (event {}): {e:#}",
                 row.other_guid,
                 row.id
             );
