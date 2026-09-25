@@ -693,6 +693,10 @@ struct InMemoryStore {
     /// the PAYEE and lives on the plane holding the mail row.
     #[allow(clippy::type_complexity)]
     mail_escrows: std::sync::Mutex<Vec<(u64, mail::HeldEscrow)>>,
+    /// How many `mail_escrows_of` reads answer empty before a just-filed fence shows up. The same
+    /// cross-connection lag `escrow_reads_before_visible` dials in for `escrowed_transfer`, made
+    /// dialable for the mail escrow read `held_fence` polls.
+    mail_escrow_reads_before_visible: std::sync::atomic::AtomicUsize,
     /// The Realm Account name THIS Shard holds per Character guid. A Character missing here is
     /// one this Shard cannot name: absent, or on a shadow Account.
     realm_accounts: std::sync::Mutex<Vec<(u64, String)>>,
@@ -2781,6 +2785,17 @@ impl WorldStore for InMemoryStore {
     }
     fn mail_escrows_of(&self, sender_guid: u64) -> Result<Vec<mail::HeldEscrow>> {
         self.rec("mail_escrows_of");
+        if self
+            .mail_escrow_reads_before_visible
+            .fetch_update(
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+                |left| left.checked_sub(1),
+            )
+            .is_ok()
+        {
+            return Ok(Vec::new()); // the coordinator cache has not caught up yet
+        }
         Ok(self
             .mail_escrows
             .lock()
