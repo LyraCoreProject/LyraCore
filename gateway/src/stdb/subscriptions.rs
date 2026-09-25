@@ -6950,7 +6950,7 @@ mod tests {
     }
 
     /// World entry seeds the viewer's ignore AND friend sets from its own contact rows on this
-    /// Home Shard, read from the Shard's `ContactIndex` — NOT through `contact_lists`, which
+    /// Home Shard, read from the Shard's `ContactIndex`, NOT through `contact_lists`, which
     /// reads the registered Viewer this call is about to create, and would see nothing yet.
     /// No Fake reaches this coordinator read, so the seed is pinned in source. Without it the sets
     /// stay empty until the first live contact change: an ignorable Realm Chat Line reaches a
