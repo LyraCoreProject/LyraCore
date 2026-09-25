@@ -8120,13 +8120,42 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires LYRACORE_CLASSIC_DB_SQL pointing at the pinned decompressed SQL or gzip"]
+    #[ignore = "requires pinned LYRACORE_CLASSIC_DB_SQL and build 5875 LYRACORE_TEST_DBC"]
+    fn starting_profiles_are_apply_ready_with_owned_inputs() {
+        let path = std::env::var("LYRACORE_CLASSIC_DB_SQL").unwrap();
+        let dbc = std::env::var("LYRACORE_TEST_DBC").unwrap();
+        let dump = read_dump(&path).unwrap();
+        for profile in ["starting-eastern", "starting-kalimdor"] {
+            let args = parse_args_from([
+                "--dump",
+                path.as_str(),
+                "--dbc",
+                dbc.as_str(),
+                "--world-profile",
+                profile,
+            ])
+            .unwrap();
+            let plan = build_dump_plan(&dump, &args, &None, &None).unwrap();
+            let manifest: serde_json::Value =
+                serde_json::from_str(plan.eventai_manifest.as_deref().unwrap()).unwrap();
+            assert_eq!(manifest["apply_ready"], true, "{profile}: {manifest:#}");
+            assert_eq!(manifest["findings"], serde_json::json!([]));
+            assert_eq!(manifest["counts"]["unapproved_result_groups"], 0);
+            assert_eq!(manifest["counts"]["dropped_rules"], 0);
+        }
+    }
+
+    #[test]
+    #[ignore = "requires pinned LYRACORE_CLASSIC_DB_SQL and build 5875 LYRACORE_TEST_DBC"]
     fn pinned_alliance_single_plan_is_apply_ready_with_relay_static_dependencies() {
         let path = std::env::var("LYRACORE_CLASSIC_DB_SQL").unwrap();
+        let dbc = std::env::var("LYRACORE_TEST_DBC").unwrap();
         let dump = read_dump(&path).unwrap();
         let args = parse_args_from([
             "--dump",
             path.as_str(),
+            "--dbc",
+            dbc.as_str(),
             "--world-profile",
             "alliance-single",
             "--eventai-profile",
