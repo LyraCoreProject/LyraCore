@@ -440,6 +440,33 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires the Operator's LYRACORE_CLIENT_DATA"]
+    fn starting_profiles_terrain_dry_run_passes_every_slice_self_check() {
+        let data_dir = client_data_dir()
+            .expect("LYRACORE_CLIENT_DATA must name the owned client Data directory");
+        let mut chain = open_terrain_chain(&data_dir).expect("terrain patch chain");
+        for profile in [
+            WorldImportProfile::StartingEastern,
+            WorldImportProfile::StartingKalimdor,
+        ] {
+            let scope = WorldImportScope::canonical(profile).unwrap();
+            let (rows, tiles_read) =
+                collect_scope(&mut chain, &scope).expect("starting profile terrain self-checks");
+            assert!(tiles_read > 0);
+            for slice in &scope.bounded_slices {
+                let ground = interp_check(&rows, slice.sample.0 as f32, slice.sample.1 as f32)
+                    .expect("sample cell imported");
+                assert!(
+                    (ground - slice.sample.2 as f32).abs() <= SELF_CHECK_TOLERANCE,
+                    "{} ground {ground} differs from {}",
+                    slice.name,
+                    slice.sample.2
+                );
+            }
+        }
+    }
+
+    #[test]
     fn slice_cell_range_from_box_uses_corners_not_center_radius() {
         // work-item 206: the widened Westfall box. High world X/Y (x1/y1) map to the LOW cell index
         // (cell index counts DOWN as world coords grow) — the min/max pairing is corner-derived, not

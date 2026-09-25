@@ -233,34 +233,6 @@ pub(crate) fn aggro_override_cutoff(visibility_floor: f32) -> u32 {
     cutoff.floor() as u32 + 1
 }
 
-// Pure predicate over the tick's whole geometry input, kept argument-shaped (no `ReducerContext`) so it stays unit-testable.
-#[allow(clippy::too_many_arguments)]
-/// Is the grid cell `(map_id, instance_id, gx, gy)` inside `radius` yards of the player positioned at
-/// `(p_map_id, p_instance_id, px, py)`? Same map AND instance is required first — a coincidental cell
-/// match on a DIFFERENT map or instance is never active from this player (mirrors
-/// `helpers::in_same_partition`'s isolation rule, work-item 190 slice 1: two entities can share a grid
-/// cell across instances without being spatially near each other at all). The radius check reuses
-/// `spatial::covering_cell_box`, whose own tests prove it brackets every point within `radius` — so
-/// this fn is a thin, unit-tested restatement of "is this cell in that box" for the active-cell
-/// pipeline. Pure — unit-tested. [pure]
-pub(crate) fn cell_is_active(
-    map_id: u32,
-    instance_id: u64,
-    gx: i32,
-    gy: i32,
-    p_map_id: u32,
-    p_instance_id: u64,
-    px: f32,
-    py: f32,
-    radius: f32,
-) -> bool {
-    if map_id != p_map_id || instance_id != p_instance_id {
-        return false;
-    }
-    let (gx0, gx1, gy0, gy1) = lyracore_shared::spatial::covering_cell_box(px, py, radius);
-    gx0 <= gx && gx <= gx1 && gy0 <= gy && gy <= gy1
-}
-
 // ===========================================================================================
 //  Stealth detection radius (graded, level-scaled detect range vs. a stealthed target) [pure]
 // ===========================================================================================
@@ -780,21 +752,6 @@ mod tests {
         assert_eq!(aggro_override_cutoff(ASSIST_RADIUS - 1.0), 0);
     }
 
-    #[test]
-    fn cell_is_active_brackets_the_radius_and_excludes_other_maps_and_instances() {
-        let radius = combat_active_radius(0.0); // 55yd
-        let (gx, gy) = lyracore_shared::spatial::grid_cell(0.0, 0.0);
-        // The player's own cell is always active around itself.
-        assert!(cell_is_active(1, 0, gx, gy, 1, 0, 0.0, 0.0, radius));
-        // A DIFFERENT map or instance is never active, even at the identical cell coordinates — the
-        // exact 190-slice-1 isolation regression `helpers::in_same_partition` guards against.
-        assert!(!cell_is_active(2, 0, gx, gy, 1, 0, 0.0, 0.0, radius));
-        assert!(!cell_is_active(1, 7, gx, gy, 1, 0, 0.0, 0.0, radius));
-        // A cell WELL beyond the radius (many cells over) is excluded.
-        let (fgx, fgy) = lyracore_shared::spatial::grid_cell(0.0 - radius - 500.0, 0.0);
-        assert!(!cell_is_active(1, 0, fgx, fgy, 1, 0, 0.0, 0.0, radius));
-    }
-
     /// Work-item 230's engaged-creature-never-dormant rule ("a player could drag one far away") only
     /// holds if a creature glued to a player by combat can never wander past the active-cell radius
     /// before the active set would have covered it anyway. The chase and rout phases don't consult
@@ -806,7 +763,7 @@ mod tests {
     /// Distance no longer ends a fight, so the cutoff is no longer in lockstep with an evade constant: it
     /// IS the active-cell radius, which is what keeps an engaged creature pursuing while its engagement
     /// lives instead of freezing between a chase cutoff and an evade cutoff. Equality is inside, not on
-    /// the edge: `cell_is_active` brackets every point WITHIN the radius (`covering_cell_box`), and the
+    /// the edge: `spatial::covering_cell_box` includes every point within the radius, and the
     /// live radius takes the larger of this and the 100yd visibility floor.
     #[test]
     fn chase_leash_radius_stays_within_the_combat_active_radius() {
