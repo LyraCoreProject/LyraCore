@@ -679,7 +679,23 @@ mod tests {
         index.remove(7, "Thrall");
         assert_eq!(index.guid_named("Thrall"), Some(8));
         index.remove(8, "thrall");
-        assert!(index.by_name.is_empty());
+        assert_eq!(
+            index.guid_named("Thrall"),
+            None,
+            "no Character named it now"
+        );
+    }
+
+    /// `watch_character_names`'s `on_update` callback does exactly this: remove the old name, then
+    /// insert the new one. A rename must not answer to both names, nor to neither.
+    #[test]
+    fn a_renamed_character_answers_only_to_its_new_name() {
+        let mut index = CharacterNameIndex::default();
+        index.insert(7, "Thrall");
+        index.remove(7, "Thrall");
+        index.insert(7, "Go'el");
+        assert_eq!(index.guid_named("Thrall"), None, "the old name is gone");
+        assert_eq!(index.guid_named("go'el"), Some(7), "the new name resolves");
     }
 
     #[test]
@@ -691,8 +707,8 @@ mod tests {
         assert_eq!(index.ignored_by(10), vec![21]);
         index.remove(&contact(2, 10, 21, true));
         assert!(
-            index.by_owner.is_empty(),
-            "an owner with no rows is forgotten"
+            index.ignored_by(10).is_empty(),
+            "an owner with no rows left ignores nobody"
         );
     }
 

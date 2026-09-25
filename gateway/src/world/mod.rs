@@ -1204,6 +1204,19 @@ fn is_game_master<St: WorldStore + ?Sized>(store: &St, character_guid: u64) -> b
     }
 }
 
+/// The speaker's race, for the Chat Flood Limiter's language check. `None` when the read fails or
+/// the speaker has no live entity here: the line still counts as usual, and the Module's own
+/// language Gate stays the fallback authority.
+fn speaker_race<St: WorldStore + ?Sized>(store: &St, character_guid: u64) -> Option<u8> {
+    match store.speaker_facts(character_guid) {
+        Ok(facts) => facts.map(|facts| facts.race),
+        Err(error) => {
+            log::debug!("world: speaker facts read for {character_guid} failed: {error:#}");
+            None
+        }
+    }
+}
+
 /// Route one bridge-prefixed addon chat frame: parse the `STC` v1 envelope and forward to the
 /// module's `client_command` reducer as the player. The caller already checked the prefix; a
 /// malformed envelope past that point still drops silently-with-a-debug-line (a truncated or
@@ -1277,9 +1290,12 @@ fn dispatch<St: WorldStore + ?Sized>(
     // The Chat Flood Limiter runs ahead of every chat, channel and emote handler, so a muted
     // line costs no Durable Request.
     let speaker = social::self_guid(conn);
-    let flood_answer = conn.chat_flood.judge(&msg, Instant::now(), || {
-        speaker.is_some_and(|guid| is_game_master(store, guid))
-    });
+    let flood_answer = conn.chat_flood.judge(
+        &msg,
+        Instant::now(),
+        || speaker.is_some_and(|guid| is_game_master(store, guid)),
+        || speaker.and_then(|guid| speaker_race(store, guid)),
+    );
     if let Some(answer) = flood_answer {
         return send(tx, Outbound::One(answer));
     }

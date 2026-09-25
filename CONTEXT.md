@@ -447,7 +447,7 @@ One `SMSG_CHANNEL_NOTIFY`, committed on Realm-core with its explicit recipient l
 like a Realm Chat Line.
 
 **Chat Flood Limiter**:
-The Gateway's in-memory count of fast chat lines per World Session. Ten lines, each within one
+The Gateway's in-memory count of fast chat lines per World Session. Eleven lines, each within one
 second of the last, mute the session for ten seconds. `/afk`, `/dnd` and addon lines do not count,
 and a Character with a GM level is never muted. Forgotten on disconnect.
 _Avoid_: rate limiter, throttle, spam filter

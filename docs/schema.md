@@ -54,14 +54,15 @@ publish presents as an unrelated mid-session hang, not a loud "no such table".
 
 ## 2. Inventory
 
-**280 tables**, all of them in `module/src/**`: 128 public, 152 private. No table comes from a
+**281 tables**, all of them in `module/src/**`: 128 public, 153 private. No table comes from a
 package in this tree; `packages/example` is the only in-tree package and it declares none. Recount
-rather than trust the numbers below, which drift on every schema change. The second command lists
-the tables per file, which is what the rows below add up:
+rather than trust the numbers below, which drift on every schema change. The pattern matches both
+`#[table(...)]` and the fully qualified `#[spacetimedb::table(...)]`; missing the second form
+undercounts. The second command lists the tables per file, which is what the rows below add up:
 
 ```bash
-grep -rn '^#\[table(' module/src --include='*.rs' | wc -l          # 280 on 2026-09-25
-grep -rc '^#\[table(' module/src --include='*.rs' | grep -v ':0$'  # tables per file
+grep -rEn '^#\[(spacetimedb::)?table\(' module/src --include='*.rs' | wc -l   # 281 on 2026-09-25
+grep -rEc '^#\[(spacetimedb::)?table\(' module/src --include='*.rs' | grep -v ':0$'  # tables per file
 ```
 
 | Domain | Tables | Public | Where |
@@ -72,7 +73,7 @@ grep -rc '^#\[table(' module/src --include='*.rs' | grep -v ':0$'  # tables per 
 | Terrain / nav / exact vmap | 10 | 6 | `terrain.rs`, `nav.rs`, `vmap.rs` |
 | Chat / social / addon bridge | 19 | 9 | `chat.rs`, `channel.rs`, `realm_chat.rs`, `away.rs`, `bridge.rs` |
 | Combat / threat / duel | 10 | 4 | `combat/engage.rs`, `combat/death.rs`, `threat.rs`, `duel.rs` |
-| Spell / aura | 20 | 10 | `spell/tables.rs`, `spell/stacking.rs` |
+| Spell / aura | 21 | 10 | `spell/tables.rs`, `spell/stacking.rs`, `spell/cast/resolve.rs` |
 | Quest | 13 | 8 | `quest.rs` |
 | Item / vendor / trade / mail | 20 | 8 | `items/tables.rs`, `items/properties.rs`, `trade.rs`, `mail.rs`, `mail_catalogue.rs`, `mail_escrow.rs`, `mail_timer.rs`, `mail_text.rs` |
 | Auction house | 8 | 2 | `auction.rs` |

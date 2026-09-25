@@ -7,6 +7,7 @@
 
 use std::time::{Duration, Instant};
 
+use lyracore_shared::chat::{chat_kind, speakable_language};
 use wow_world_messages::vanilla::opcodes::{ClientOpcodeMessage, ServerOpcodeMessage};
 use wow_world_messages::vanilla::{CMSG_MESSAGECHAT_ChatType, Language, SMSG_NOTIFICATION};
 
@@ -48,6 +49,39 @@ fn rule(msg: &ClientOpcodeMessage) -> FloodRule {
     }
 }
 
+/// The `chat_kind` a client `CMSG_MESSAGECHAT` line carries, for every chat type this limiter
+/// counts. `None` for a type with no Chat Kind of its own (`rule` never marks those `Counted`).
+fn wire_chat_kind(chat_type: &CMSG_MESSAGECHAT_ChatType) -> Option<u8> {
+    match chat_type {
+        CMSG_MESSAGECHAT_ChatType::Say => Some(chat_kind::SAY),
+        CMSG_MESSAGECHAT_ChatType::Yell => Some(chat_kind::YELL),
+        CMSG_MESSAGECHAT_ChatType::Emote => Some(chat_kind::EMOTE),
+        CMSG_MESSAGECHAT_ChatType::Party => Some(chat_kind::PARTY),
+        CMSG_MESSAGECHAT_ChatType::Raid => Some(chat_kind::RAID),
+        CMSG_MESSAGECHAT_ChatType::RaidLeader => Some(chat_kind::RAID_LEADER),
+        CMSG_MESSAGECHAT_ChatType::RaidWarning => Some(chat_kind::RAID_WARNING),
+        CMSG_MESSAGECHAT_ChatType::Guild => Some(chat_kind::GUILD),
+        CMSG_MESSAGECHAT_ChatType::Officer => Some(chat_kind::OFFICER),
+        CMSG_MESSAGECHAT_ChatType::Channel { .. } => Some(chat_kind::CHANNEL),
+        CMSG_MESSAGECHAT_ChatType::Whisper { .. } => Some(chat_kind::WHISPER),
+        _ => None,
+    }
+}
+
+/// cm:ChatHandler.cpp:100-111: the language check runs, and returns on failure, before
+/// `UpdateSpeakTime`, so a line the language Gate refuses never reaches the mute check and never
+/// counts. `race` is `None` when the Gateway cannot read the speaker (no live entity); such a line
+/// counts as usual; the Module's own Gate is the fallback authority when this read is stale.
+fn language_refused(msg: &ClientOpcodeMessage, race: Option<u8>) -> bool {
+    let ClientOpcodeMessage::CMSG_MESSAGECHAT(chat) = msg else {
+        return false;
+    };
+    let (Some(kind), Some(race)) = (wire_chat_kind(&chat.chat_type), race) else {
+        return false;
+    };
+    speakable_language(kind, race, chat.language.as_int()).is_err()
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct ChatFloodLimiter {
     /// The previous counted line's time plus [`FAST_LINE_WINDOW`].
@@ -59,15 +93,22 @@ pub(crate) struct ChatFloodLimiter {
 impl ChatFloodLimiter {
     /// Judge one client message at `now`. `Some` is the answer to a refused message, which must go
     /// no further. `exempt` is asked only when a line would mute: cmangos never mutes a game master
-    /// for flooding (cm:Player.cpp:16346-16348).
+    /// for flooding (cm:Player.cpp:16346-16348), so the cost of that read lands on the tenth fast
+    /// line only. `speaker_race` is asked for every counted line, to keep a line the language Gate
+    /// would refuse off the count (cm:ChatHandler.cpp:100-111); that line still reaches the Module,
+    /// which answers "You don't know that language" as its own authority.
     pub(crate) fn judge(
         &mut self,
         msg: &ClientOpcodeMessage,
         now: Instant,
         exempt: impl FnOnce() -> bool,
+        speaker_race: impl FnOnce() -> Option<u8>,
     ) -> Option<ServerOpcodeMessage> {
         let rule = rule(msg);
         if rule == FloodRule::Free {
+            return None;
+        }
+        if rule == FloodRule::Counted && language_refused(msg, speaker_race()) {
             return None;
         }
         if let Some(remaining) = self.muted_for(now) {
@@ -154,12 +195,18 @@ mod tests {
         false
     }
 
+    /// A Human, who knows Common: every fixture line in this file speaks Common or forces
+    /// Universal, so this race never trips the language check.
+    fn human_race() -> Option<u8> {
+        Some(1)
+    }
+
     /// Send `count` lines 100 ms apart from `start` and return the answer to each.
     fn flood(limiter: &mut ChatFloodLimiter, start: Instant, count: u64) -> Vec<Option<String>> {
         (0..count)
             .map(|n| {
                 let now = start + Duration::from_millis(100 * n);
-                notice(limiter.judge(&say(), now, never_exempt))
+                notice(limiter.judge(&say(), now, never_exempt, human_race))
             })
             .collect()
     }
@@ -188,13 +235,19 @@ mod tests {
             notice(limiter.judge(
                 &say(),
                 muted_at + Duration::from_millis(9_500),
-                never_exempt
+                never_exempt,
+                human_race
             ))
             .as_deref(),
             Some("You must wait 1 Second(s). before speaking again.")
         );
         assert_eq!(
-            notice(limiter.judge(&say(), muted_at + Duration::from_secs(10), never_exempt)),
+            notice(limiter.judge(
+                &say(),
+                muted_at + Duration::from_secs(10),
+                never_exempt,
+                human_race
+            )),
             None,
             "cm:Player.cpp:16374-16377 lets the speaker talk once the mute time is reached"
         );
@@ -226,10 +279,16 @@ mod tests {
                 &say(),
                 muted_at + Duration::from_millis(100 * n),
                 never_exempt,
+                human_race,
             );
         }
         assert_eq!(
-            notice(limiter.judge(&say(), muted_at + Duration::from_secs(10), never_exempt)),
+            notice(limiter.judge(
+                &say(),
+                muted_at + Duration::from_secs(10),
+                never_exempt,
+                human_race
+            )),
             None
         );
     }
@@ -241,14 +300,19 @@ mod tests {
         for n in 0..30 {
             let now = start + Duration::from_millis(10 * n);
             assert_eq!(
-                notice(limiter.judge(&text_emote(), now, never_exempt)),
+                notice(limiter.judge(&text_emote(), now, never_exempt, human_race)),
                 None
             );
         }
         flood(&mut limiter, start + Duration::from_secs(5), 11);
         assert_eq!(
-            notice(limiter.judge(&text_emote(), start + Duration::from_secs(7), never_exempt))
-                .as_deref(),
+            notice(limiter.judge(
+                &text_emote(),
+                start + Duration::from_secs(7),
+                never_exempt,
+                human_race
+            ))
+            .as_deref(),
             Some("You must wait 9 Second(s). before speaking again.")
         );
     }
@@ -279,11 +343,16 @@ mod tests {
             let spoken = line(chat_type.clone(), Language::Common);
             for n in 0..11 {
                 let now = start + Duration::from_millis(100 * n);
-                assert_eq!(limiter.judge(&spoken, now, never_exempt), None);
+                assert_eq!(limiter.judge(&spoken, now, never_exempt, human_race), None);
             }
             assert!(
                 limiter
-                    .judge(&spoken, start + Duration::from_secs(2), never_exempt)
+                    .judge(
+                        &spoken,
+                        start + Duration::from_secs(2),
+                        never_exempt,
+                        human_race
+                    )
                     .is_some(),
                 "{chat_type:?}"
             );
@@ -305,19 +374,29 @@ mod tests {
         for n in 0..40 {
             let now = start + Duration::from_millis(10 * n);
             for message in &free {
-                assert_eq!(limiter.judge(message, now, never_exempt), None);
+                assert_eq!(limiter.judge(message, now, never_exempt, human_race), None);
             }
         }
         flood(&mut limiter, start + Duration::from_secs(1), 11);
         assert!(
             limiter
-                .judge(&say(), start + Duration::from_secs(3), never_exempt)
+                .judge(
+                    &say(),
+                    start + Duration::from_secs(3),
+                    never_exempt,
+                    human_race
+                )
                 .is_some(),
             "the session is muted"
         );
         for message in &free {
             assert_eq!(
-                limiter.judge(message, start + Duration::from_secs(3), never_exempt),
+                limiter.judge(
+                    message,
+                    start + Duration::from_secs(3),
+                    never_exempt,
+                    human_race
+                ),
                 None
             );
         }
@@ -329,7 +408,7 @@ mod tests {
         let mut limiter = ChatFloodLimiter::default();
         for n in 0..40 {
             let now = start + Duration::from_millis(100 * n);
-            assert_eq!(limiter.judge(&say(), now, || true), None);
+            assert_eq!(limiter.judge(&say(), now, || true, human_race), None);
         }
     }
 
@@ -340,12 +419,62 @@ mod tests {
         let reads = std::cell::Cell::new(0);
         for n in 0..11 {
             let now = start + Duration::from_millis(100 * n);
-            limiter.judge(&say(), now, || {
-                reads.set(reads.get() + 1);
-                false
-            });
+            limiter.judge(
+                &say(),
+                now,
+                || {
+                    reads.set(reads.get() + 1);
+                    false
+                },
+                human_race,
+            );
         }
         assert_eq!(reads.get(), 1);
+    }
+
+    /// cm:ChatHandler.cpp:100-111: the language check runs first and returns early, so a line the
+    /// race does not know never reaches the mute check and never counts. It still reaches the
+    /// Module, which answers "You don't know that language" on its own authority.
+    #[test]
+    fn a_line_in_an_unknown_language_does_not_count_toward_the_mute() {
+        let orcish = || line(CMSG_MESSAGECHAT_ChatType::Say, Language::Orcish);
+        let start = Instant::now();
+        let mut limiter = ChatFloodLimiter::default();
+        for n in 0..40 {
+            let now = start + Duration::from_millis(100 * n);
+            assert_eq!(
+                limiter.judge(&orcish(), now, never_exempt, human_race),
+                None
+            );
+        }
+        assert!(
+            limiter
+                .judge(
+                    &say(),
+                    start + Duration::from_secs(5),
+                    never_exempt,
+                    human_race
+                )
+                .is_none(),
+            "forty Orcish lines from a Human never muted the session"
+        );
+    }
+
+    /// A read that fails, or finds no live entity, must not stop a line from counting: the Module's
+    /// own language Gate is the fallback authority.
+    #[test]
+    fn an_unreadable_race_still_counts_toward_the_mute() {
+        let no_race = || None;
+        let start = Instant::now();
+        let mut limiter = ChatFloodLimiter::default();
+        let answers: Vec<_> = (0..12)
+            .map(|n| {
+                let now = start + Duration::from_millis(100 * n);
+                notice(limiter.judge(&say(), now, never_exempt, no_race))
+            })
+            .collect();
+        assert_eq!(answers[..11], vec![None; 11]);
+        assert!(answers[11].is_some());
     }
 
     #[test]
@@ -355,7 +484,12 @@ mod tests {
         flood(&mut limiter, start, 11);
         let ping = ClientOpcodeMessage::CMSG_PING(Default::default());
         assert_eq!(
-            limiter.judge(&ping, start + Duration::from_secs(2), never_exempt),
+            limiter.judge(
+                &ping,
+                start + Duration::from_secs(2),
+                never_exempt,
+                human_race
+            ),
             None
         );
     }

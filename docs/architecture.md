@@ -41,7 +41,7 @@ flowchart TB
         W0[("lyracore<br/>default world shard")]
         W1[("lyracore-world-1<br/>world shard (map rule)")]
         INST[("lyracore-instances<br/>instance pool")]
-        RC[("lyracore-realm — realm-core<br/>accounts · sessions · claims ·<br/>groups · guilds · chat channels ·<br/>Realm Chat Lines · mail ·<br/>auctions · loot rolls ·<br/>load samples")]
+        RC[("lyracore-realm: realm-core<br/>accounts · sessions · claims ·<br/>groups · guilds · chat channels ·<br/>Realm Chat Lines · mail ·<br/>auctions · loot rolls ·<br/>load samples")]
     end
 
     C1 -- "raw TCP · SRP6 · header-encrypted opcodes" --> LOGON
@@ -357,11 +357,11 @@ connectivity.
 Full inventory and the load-bearing row shapes are covered in depth in the maintainers' internal
 docs. The summary:
 
-- **280 tables on 2026-09-25**, `game_`-prefixed for core and `pkg_<name>_`-prefixed for packages.
+- **281 tables on 2026-09-25**, `game_`-prefixed for core and `pkg_<name>_`-prefixed for packages.
   External gtker crates keep their `wow_` names and are never renamed. Recount with
-  `grep -rn '^#\[table(' module/src --include='*.rs' | wc -l`; the per-domain breakdown is
-  [`schema.md`](./schema.md) §2.
-- **128 public / 152 private.** `public` means "subscribable by a client connection". Private tables
+  `grep -rEn '^#\[(spacetimedb::)?table\(' module/src --include='*.rs' | wc -l`; the per-domain
+  breakdown is [`schema.md`](./schema.md) §2.
+- **128 public / 153 private.** `public` means "subscribable by a client connection". Private tables
   (`game_account`, `game_session`, `game_operator`, every region/transfer/instance/realm-core table,
   every Chat Channel table and `game_realm_chat_event`) are readable only over the owner token.
 - **No `#[client_visibility_filter]` RLS filters.** The sixteen owner-scoped filters this document
