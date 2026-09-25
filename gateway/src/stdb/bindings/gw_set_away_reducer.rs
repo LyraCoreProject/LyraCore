@@ -8,56 +8,56 @@ use super::session_actor_type::SessionActor;
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
-pub(super) struct GwSendWhisperArgs {
+pub(super) struct GwSetAwayArgs {
     pub request_actor: SessionActor,
-    pub target_name: String,
+    pub kind: u8,
     pub message: String,
 }
 
-impl From<GwSendWhisperArgs> for super::Reducer {
-    fn from(args: GwSendWhisperArgs) -> Self {
-        Self::GwSendWhisper {
+impl From<GwSetAwayArgs> for super::Reducer {
+    fn from(args: GwSetAwayArgs) -> Self {
+        Self::GwSetAway {
             request_actor: args.request_actor,
-            target_name: args.target_name,
+            kind: args.kind,
             message: args.message,
         }
     }
 }
 
-impl __sdk::InModule for GwSendWhisperArgs {
+impl __sdk::InModule for GwSetAwayArgs {
     type Module = super::RemoteModule;
 }
 
 #[allow(non_camel_case_types)]
-/// Extension trait for access to the reducer `gw_send_whisper`.
+/// Extension trait for access to the reducer `gw_set_away`.
 ///
 /// Implemented for [`super::RemoteReducers`].
-pub trait gw_send_whisper {
-    /// Request that the remote module invoke the reducer `gw_send_whisper` to run as soon as possible.
+pub trait gw_set_away {
+    /// Request that the remote module invoke the reducer `gw_set_away` to run as soon as possible.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
-    /// /// Use [`gw_send_whisper:gw_send_whisper_then`] to run a callback after the reducer completes.
-    fn gw_send_whisper(
+    /// /// Use [`gw_set_away:gw_set_away_then`] to run a callback after the reducer completes.
+    fn gw_set_away(
         &self,
         request_actor: SessionActor,
-        target_name: String,
+        kind: u8,
         message: String,
     ) -> __sdk::Result<()> {
-        self.gw_send_whisper_then(request_actor, target_name, message, |_, _| {})
+        self.gw_set_away_then(request_actor, kind, message, |_, _| {})
     }
 
-    /// Request that the remote module invoke the reducer `gw_send_whisper` to run as soon as possible,
+    /// Request that the remote module invoke the reducer `gw_set_away` to run as soon as possible,
     /// registering `callback` to run when we are notified that the reducer completed.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and its status can be observed with the `callback`.
-    fn gw_send_whisper_then(
+    fn gw_set_away_then(
         &self,
         request_actor: SessionActor,
-        target_name: String,
+        kind: u8,
         message: String,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
@@ -66,11 +66,11 @@ pub trait gw_send_whisper {
     ) -> __sdk::Result<()>;
 }
 
-impl gw_send_whisper for super::RemoteReducers {
-    fn gw_send_whisper_then(
+impl gw_set_away for super::RemoteReducers {
+    fn gw_set_away_then(
         &self,
         request_actor: SessionActor,
-        target_name: String,
+        kind: u8,
         message: String,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
@@ -78,9 +78,9 @@ impl gw_send_whisper for super::RemoteReducers {
             + 'static,
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
-            GwSendWhisperArgs {
+            GwSetAwayArgs {
                 request_actor,
-                target_name,
+                kind,
                 message,
             },
             callback,

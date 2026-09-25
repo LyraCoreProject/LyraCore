@@ -751,12 +751,9 @@ parity_test!(parity_game_party_command_dispatch_lane, "game_party_command_dispat
 parity_test!(parity_game_party_command_receipt, "game_party_command_receipt", lyracore_module::PartyCommandReceipt, bindings::party_command_receipt_type::PartyCommandReceipt, {
     id, receipt_key, source_identity, intent_id, bot_guid, outcome, retain_until_micros,
 });
-// The private per-recipient whisper relay, now readable on TWO connections — the
-// per-player one under RLS (unchanged) and realm-core's coordinator, which self-filters on the
-// END-appended `recipient_guid`. Both decodes go through this binding, so a drifted column here is a
-// mis-decoded private chat line rather than a compile error.
-parity_test!(parity_game_whisper_event, "game_whisper_event", lyracore_module::WhisperEvent, bindings::whisper_event_type::WhisperEvent, {
-    id, recipient_identity, other_guid, is_inform, message, created_at, recipient_guid,
+// Auto-Replies on each Home Shard. A drifted column here hands a whisperer the wrong text.
+parity_test!(parity_game_character_away, "game_character_away", lyracore_module::CharacterAway, bindings::character_away_type::CharacterAway, {
+    character_guid, kind, message,
 });
 parity_test!(parity_game_system_message_event, "game_system_message_event", lyracore_module::SystemMessageEvent, bindings::system_message_event_type::SystemMessageEvent, {
     id, recipient_identity, recipient_guid, message, created_at,
@@ -1223,7 +1220,7 @@ const MANIFEST_TABLES: &[&str] = &[
     "game_group_event",
     "game_trade_event",
     "game_duel_event",
-    "game_whisper_event",
+    "game_character_away",
     "game_system_message_event",
     "game_realm_chat_event",
     "game_chat_channel",

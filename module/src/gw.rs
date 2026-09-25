@@ -733,18 +733,20 @@ pub fn gw_player_login(
 //  Chat / social (batch B)
 // ===========================================================================================
 
-/// [`crate::chat::apply_send_whisper`] with the speaker named by guid — the SHARD whisper plane.
+/// [`crate::away::apply_set_away`] with the Character named by guid: one `/afk` or `/dnd`. `kind`
+/// is `chat_kind::AFK` or `chat_kind::DND`. A taxi flight does not stop it, as in cmangos.
 #[reducer]
-pub fn gw_send_whisper(
+pub fn gw_set_away(
     ctx: &ReducerContext,
     request_actor: crate::SessionActor,
-    target_name: String,
+    kind: u8,
     message: String,
 ) -> Result<(), String> {
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
-    let sender = actor(ctx, actor_guid)?;
-    crate::chat::apply_send_whisper(ctx, sender, target_name, message)
+    let entity =
+        acting_entity_by_guid(ctx, actor_guid).ok_or_else(|| "mover not in world".to_string())?;
+    crate::away::apply_set_away(ctx, entity, kind, message)
 }
 
 /// Taxi flight is an expected contact Refusal. Missing actors still carry the generic actor error,

@@ -4,7 +4,7 @@ use super::handlers::{
     ChatOutcome, DuelActionStore, GuildActionStore, ItemActionStore, LootWindowRefusal,
     LootWindowRequestStatus, LootWindowStore, MeleeActionStore, MemberPresence, MemberSnapshot,
     MemberStatsStore, QuestActionStore, RealmChatRequest, ResolvedTarget, SpeakerFacts,
-    TaxiActionStore, VendorActionStore, WeatherStore,
+    TaxiActionStore, VendorActionStore, WeatherStore, WhisperRequest, WhisperTargetFacts,
 };
 use super::party::PartyOutcome;
 use super::*;
@@ -409,18 +409,22 @@ struct InMemoryStore {
     /// When set, `start_attack` returns this error. Only the session-fatal desync case is driven
     /// from here now; the refusal mapping is tested on the melee seam itself.
     start_attack_error: Option<String>,
-    /// When set, `send_whisper` returns this error (→ SMSG_CHAT_PLAYER_NOT_FOUND).
-    whisper_error: Option<String>,
-    /// Recorded `send_whisper` calls — `(target_player, message)`, the TYPED
-    /// NAME as the pre-realm-core path passes it (the module resolves it). The single-database plane's
-    /// byte-identity is asserted against this.
-    whispers: std::sync::Mutex<Vec<(String, String)>>,
     /// What `speaker_facts` answers for every speaker. `None` models a speaker with no live entity.
     speaker_facts: Option<SpeakerFacts>,
     /// What `realm_chat` answers. `None` delivers.
     realm_chat_outcome: Option<ChatOutcome>,
     /// Recorded `realm_chat` requests, with the speaker guid the session authenticated.
     realm_chats: std::sync::Mutex<Vec<(u64, RealmChatRequest)>>,
+    /// Recorded `set_away` requests: `(speaker_guid, kind, message)`.
+    away_requests: std::sync::Mutex<Vec<(u64, u8, String)>>,
+    /// This Shard's stored Auto-Replies, by Character guid.
+    auto_replies: std::sync::Mutex<std::collections::HashMap<u64, String>>,
+    /// What `realm_whisper` answers. `None` delivers.
+    realm_whisper_outcome: Option<ChatOutcome>,
+    /// When set, `realm_whisper` fails with this message.
+    realm_whisper_error: Option<String>,
+    /// Recorded `realm_whisper` requests, with the speaker guid the session authenticated.
+    realm_whispers: std::sync::Mutex<Vec<(u64, WhisperRequest)>>,
     /// When set, `gm_command` returns this error — e.g. `"permission denied"` to
     /// drive the Say-handler's `Err` → self-only `SMSG_MESSAGECHAT` System relay.
     gm_command_error: Option<String>,
@@ -658,14 +662,6 @@ struct InMemoryStore {
     mirror_error: Option<String>,
     /// How many mirror writes fail before this Shard accepts one.
     mirror_failures: std::sync::atomic::AtomicUsize,
-    /// What `realm_whisper` was asked to deliver on THIS handle —
-    /// `(sender_guid, target_guid, message, sender_is_ignored)`. The realm handle owns the list; a
-    /// world shard's staying empty is how a test tells "the whisper went to the authority" from "it
-    /// quietly went back to being shard-local".
-    realm_whispers: std::sync::Mutex<Vec<(u64, u64, String, bool)>>,
-    /// When set, `realm_whisper` fails with this message — an unreachable
-    /// realm-core, which must still leave the player with the same refusal packet they always got.
-    realm_whisper_error: Option<String>,
     /// When set, `contact_lists` fails with this message on THIS shard — the
     /// unreachable-database arm of the realm-wide ignore-list union.
     contact_lists_error: Option<String>,
@@ -803,7 +799,7 @@ struct InMemoryStore {
     /// When set, `realm_loot_op` fails with this message.
     realm_loot_op_error: Option<String>,
     /// This WORLD SHARD's staging rolls `pending_local_rolls` answers — the relay's promotion
-    /// INPUT. `Mutex`-wrapped (like `mirror`/`realm_whispers`) so a test can set it AFTER the fixture
+    /// INPUT. `Mutex`-wrapped (like `mirror`) so a test can set it AFTER the fixture
     /// is wrapped in an `Arc` — every existing party/whisper topology builder hands back `Arc`s.
     /// Empty (derive-Default) = nothing to promote, byte-identical to before this field existed.
     pending_rolls: std::sync::Mutex<Vec<super::loot::PendingLootRoll>>,
@@ -2982,23 +2978,6 @@ impl WorldStore for InMemoryStore {
         self.rec("send_emote");
         Ok(())
     }
-    fn send_whisper(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        target_player: String,
-        message: String,
-    ) -> Result<()> {
-        // Recorded per SHARD, so a test can tell the pre-realm-core path (the
-        // player-facing reducer on the player's own database, with the TYPED NAME still unresolved)
-        // from the realm-core one (`realm_whispers`, by guid).
-        self.rec("send_whisper");
-        self.whispers.lock().unwrap().push((target_player, message));
-        match &self.whisper_error {
-            Some(e) => Err(anyhow!("{e}")),
-            None => Ok(()),
-        }
-    }
     fn gm_command(&self, account_name: &str, _self_guid: u64, text: String) -> Result<()> {
         if let Some(alpha_test_tools) = &self.gm_alpha_test_tools {
             let authorized = alpha_test_tools.load(std::sync::atomic::Ordering::SeqCst);
@@ -3102,6 +3081,9 @@ impl WorldStore for InMemoryStore {
     }
     fn character_in_transit(&self, guid: u64) -> bool {
         self.members_between_places.lock().unwrap().contains(&guid)
+    }
+    fn auto_reply_text(&self, guid: u64) -> Result<Option<String>> {
+        Ok(self.auto_replies.lock().unwrap().get(&guid).cloned())
     }
     fn every_shard_vouches_for_absence(&self) -> Result<()> {
         // A Realm Presence "gone" claim spans every configured Shard, not just this handle — each
@@ -3881,28 +3863,6 @@ impl WorldStore for InMemoryStore {
         Ok(())
     }
 
-    /// The module's `realm_whisper`, modelled: it RECORDS the tuple it was told to deliver before
-    /// judging anything, because what these tests pin is what the GATEWAY claimed (the sender guid
-    /// especially — it is the whole authorization on this plane).
-    fn realm_whisper(
-        &self,
-        sender_guid: u64,
-        target_guid: u64,
-        message: String,
-        sender_is_ignored: bool,
-    ) -> Result<()> {
-        self.rec("realm_whisper");
-        self.realm_whispers.lock().unwrap().push((
-            sender_guid,
-            target_guid,
-            message,
-            sender_is_ignored,
-        ));
-        if let Some(e) = &self.realm_whisper_error {
-            return Err(anyhow!("{e}"));
-        }
-        Ok(())
-    }
     fn loot_roll(
         &self,
         _account_id: u64,
@@ -4324,6 +4284,36 @@ impl ChatActionStore for InMemoryStore {
             .unwrap()
             .push((speaker_guid, request));
         Ok(self.realm_chat_outcome.unwrap_or(ChatOutcome::Delivered))
+    }
+
+    fn set_away(&self, speaker_guid: u64, kind: u8, message: String) -> Result<()> {
+        self.away_requests
+            .lock()
+            .unwrap()
+            .push((speaker_guid, kind, message));
+        Ok(())
+    }
+
+    fn whisper_target(
+        &self,
+        speaker_guid: u64,
+        typed_name: &str,
+    ) -> Result<Option<WhisperTargetFacts>> {
+        whisper::target_facts(self, speaker_guid, typed_name)
+    }
+
+    /// The Module's `realm_whisper`, modelled: it records what the Gateway conveyed before it
+    /// answers, because the speaker guid is the whole authorization of the call.
+    fn realm_whisper(&self, speaker_guid: u64, request: WhisperRequest) -> Result<ChatOutcome> {
+        self.rec("realm_whisper");
+        self.realm_whispers
+            .lock()
+            .unwrap()
+            .push((speaker_guid, request));
+        if let Some(e) = &self.realm_whisper_error {
+            return Err(anyhow!("{e}"));
+        }
+        Ok(self.realm_whisper_outcome.unwrap_or(ChatOutcome::Delivered))
     }
 }
 
@@ -11754,9 +11744,9 @@ fn force_run_speed_change_ack_is_swallowed_with_no_reply_and_no_session_teardown
 #[test]
 fn messagechat_whisper_to_an_unknown_player_replies_player_not_found() {
     let mut s = quest_store();
-    s.whisper_error = Some("no player by that name".into());
+    s.speaker_facts = Some(human_speaker());
     let store = std::sync::Arc::new(s);
-    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
     CMSG_MESSAGECHAT {
         chat_type: CMSG_MESSAGECHAT_ChatType::Whisper {
             target_player: "Ghost".into(),
@@ -11767,13 +11757,96 @@ fn messagechat_whisper_to_an_unknown_player_replies_player_not_found() {
     .write_encrypted_client(&mut client, &mut c_enc)
     .unwrap();
     match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec)
-        .expect("a refused whisper must answer SMSG_CHAT_PLAYER_NOT_FOUND — nothing arrived")
+        .expect("a whisper to nobody must answer SMSG_CHAT_PLAYER_NOT_FOUND, and nothing arrived")
     {
         ServerOpcodeMessage::SMSG_CHAT_PLAYER_NOT_FOUND(m) => assert_eq!(m.name, "Ghost"),
         other => panic!("expected SMSG_CHAT_PLAYER_NOT_FOUND, got {other}"),
     }
     drop(client);
-    drop(server);
+    server.join().unwrap();
+    assert!(store.realm_whispers.lock().unwrap().is_empty());
+}
+
+/// `quest_store` plus the session's own Character row, which the `sync` sentinel needs.
+fn chat_session_store() -> InMemoryStore {
+    InMemoryStore {
+        characters: vec![codec::CharacterView {
+            guid: 1,
+            name: "Warrior".into(),
+            ..Default::default()
+        }],
+        ..quest_store()
+    }
+}
+
+/// `/afk Brb` becomes one `set_away` request for the session's own Character, with no reply: the
+/// client prints its own notice and observers see PLAYER_FLAGS on the entity Relay.
+#[test]
+fn messagechat_afk_and_dnd_become_set_away_requests_from_the_sessions_character() {
+    let store = std::sync::Arc::new(chat_session_store());
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+    sync(&mut client, &mut c_enc, &mut c_dec, |client, enc| {
+        for (chat_type, message) in [
+            (CMSG_MESSAGECHAT_ChatType::Afk, "Brb"),
+            (CMSG_MESSAGECHAT_ChatType::Dnd, ""),
+        ] {
+            CMSG_MESSAGECHAT {
+                chat_type,
+                language: Language::Universal,
+                message: message.into(),
+            }
+            .write_encrypted_client(&mut *client, &mut *enc)
+            .unwrap();
+        }
+    });
+    drop(client);
+    server.join().unwrap();
+    assert_eq!(
+        store.away_requests.lock().unwrap().clone(),
+        vec![(1, 0x14, "Brb".to_string()), (1, 0x15, String::new())]
+    );
+}
+
+/// cm:ChatHandler.cpp:801-815: `CMSG_CHAT_IGNORED` sends IGNORED to the Character whose line the
+/// client dropped, carrying the ignorer's own name.
+#[test]
+fn chat_ignored_becomes_an_ignored_line_to_the_dropped_speaker() {
+    let mut s = chat_session_store();
+    s.speaker_facts = Some(SpeakerFacts {
+        race: 1,
+        chat_tag: 1,
+        name: "Warrior".to_string(),
+    });
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+    sync(&mut client, &mut c_enc, &mut c_dec, |client, enc| {
+        wow_world_messages::vanilla::CMSG_CHAT_IGNORED {
+            guid: Guid::new(42),
+        }
+        .write_encrypted_client(client, enc)
+        .unwrap();
+    });
+    drop(client);
+    server.join().unwrap();
+    let requests = store.realm_chats.lock().unwrap();
+    assert_eq!(
+        requests.as_slice(),
+        &[(
+            1,
+            RealmChatRequest {
+                kind: 0x16,
+                language: 0,
+                channel_name: String::new(),
+                target_guid: 42,
+                message: "Warrior".to_string(),
+                speaker: SpeakerFacts {
+                    race: 1,
+                    chat_tag: 1,
+                    name: "Warrior".to_string(),
+                },
+            }
+        )]
+    );
 }
 
 #[test]

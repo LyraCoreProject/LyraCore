@@ -230,8 +230,7 @@ pub(crate) fn apply_initiate_trade(
         || target.as_ref().is_none_or(|t| {
             crate::faction::is_friendly(ctx, actor.faction_template, t.faction_template)
         });
-    // The whisper-enforcement shape (`chat::send_whisper`): does the TARGET have the initiator
-    // on their ignore list?
+    // Does the TARGET have the initiator on their ignore list?
     let target_ignores_initiator = ctx
         .db
         .game_character_contact()

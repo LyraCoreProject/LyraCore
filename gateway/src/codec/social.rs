@@ -187,12 +187,13 @@ fn build_chat_message(
     language: u8,
     message: String,
 ) -> SMSG_MESSAGECHAT {
-    build_chat_message_to(sender_guid, sender_name, 0, chat_type, language, message)
+    build_chat_message_to(sender_guid, sender_name, 0, chat_type, language, message, 0)
 }
 
 /// Build creature speech while retaining the addressed target chosen by EventAI. A player EMOTE
 /// row (`chat_type` 3, never a creature — EventAI has no such source) has no name, so it always
-/// hits the `(EMOTE, None)` arm and names the speaker via `sender2`.
+/// hits the `(EMOTE, None)` arm and names the speaker via `sender2`. `chat_tag` is the speaker's
+/// `lyracore_shared::chat::chat_tag`; an unknown value goes out as none.
 pub fn build_chat_message_to(
     sender_guid: u64,
     sender_name: Option<String>,
@@ -200,6 +201,7 @@ pub fn build_chat_message_to(
     chat_type: u8,
     language: u8,
     message: String,
+    chat_tag: u8,
 ) -> SMSG_MESSAGECHAT {
     let sender = Guid::new(sender_guid);
     let kind = match (chat_type, sender_name) {
@@ -248,26 +250,7 @@ pub fn build_chat_message_to(
             Language::try_from(language).unwrap_or(Language::Universal)
         },
         message,
-        tag: PlayerChatTag::None,
-    }
-}
-
-/// Build `SMSG_MESSAGECHAT` for a whisper. `is_inform` = the sender's echo ("To X:") via the
-/// `WhisperInform` type; otherwise the incoming line ("X whispers:") via `Whisper`. `other_guid` is
-/// the OTHER party (the client resolves their name via NAME_QUERY). Whispers are always understood
-/// (Universal language); tag None.
-pub fn build_whisper(other_guid: u64, is_inform: bool, message: String) -> SMSG_MESSAGECHAT {
-    let other = Guid::new(other_guid);
-    let kind = if is_inform {
-        SMSG_MESSAGECHAT_ChatType::WhisperInform { sender2: other }
-    } else {
-        SMSG_MESSAGECHAT_ChatType::Whisper { sender2: other }
-    };
-    SMSG_MESSAGECHAT {
-        chat_type: kind,
-        language: Language::Universal,
-        message,
-        tag: PlayerChatTag::None,
+        tag: PlayerChatTag::try_from(chat_tag).unwrap_or(PlayerChatTag::None),
     }
 }
 
@@ -457,6 +440,7 @@ mod tests {
             0,
             0,
             "You there!".into(),
+            0,
         );
         match &addressed.chat_type {
             SMSG_MESSAGECHAT_ChatType::MonsterSay { target, .. } => {
@@ -475,6 +459,7 @@ mod tests {
             broadcast_chat::CREATURE_TEXT_EMOTE,
             0,
             "laughs.".into(),
+            0,
         );
         match &emote.chat_type {
             SMSG_MESSAGECHAT_ChatType::MonsterEmote {
@@ -508,6 +493,7 @@ mod tests {
             broadcast_chat::EMOTE,
             1, // a non-Universal byte on the row must not leak onto the wire
             "waves wildly.".into(),
+            0,
         );
         match &emote.chat_type {
             SMSG_MESSAGECHAT_ChatType::Emote { sender2 } => assert_eq!(sender2.guid(), 7),
@@ -518,24 +504,27 @@ mod tests {
         assert_eq!(read_back(&emote), emote);
     }
 
+    /// cm:Chat.cpp:3616-3669 with cm:Player.cpp:16574: a Human's say in Common from guid 7 while
+    /// AFK. The chat tag is the last byte, after the sized message.
     #[test]
-    fn whisper_picks_variant_by_direction_and_carries_other_party() {
-        // Incoming whisper → Whisper { sender2 = the other party }; serialize so the writer runs.
-        let incoming = build_whisper(42, false, "hi".into());
-        match &incoming.chat_type {
-            SMSG_MESSAGECHAT_ChatType::Whisper { sender2 } => assert_eq!(sender2.guid(), 42),
-            other => panic!("expected Whisper, got {other:?}"),
-        }
-        assert_eq!(incoming.language, Language::Universal); // whispers are always understood
-        let mut buf = Vec::new();
-        incoming.write_unencrypted_server(&mut buf).unwrap();
-        assert!(!buf.is_empty());
-        // The sender's echo → WhisperInform { sender2 = the target }.
-        let echo = build_whisper(99, true, "hi".into());
-        match &echo.chat_type {
-            SMSG_MESSAGECHAT_ChatType::WhisperInform { sender2 } => assert_eq!(sender2.guid(), 99),
-            other => panic!("expected WhisperInform, got {other:?}"),
-        }
+    fn an_afk_players_say_ends_with_the_afk_tag() {
+        let say = build_chat_message_to(7, None, 0, 0, 7, "hi".into(), 1);
+        let mut wire = Vec::new();
+        say.write_unencrypted_server(&mut wire).unwrap();
+        let body = [
+            0x00, // CHAT_MSG_SAY
+            0x07, 0x00, 0x00, 0x00, // LANG_COMMON
+            0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // speaker guid
+            0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // speaker guid again
+            0x03, 0x00, 0x00, 0x00, b'h', b'i', 0x00, // sized message
+            0x01, // CHAT_TAG_AFK
+        ];
+        assert!(wire.ends_with(&body), "wire {wire:02x?}");
+        assert_eq!(say.tag, PlayerChatTag::Afk);
+        let dnd = build_chat_message_to(7, None, 0, 1, 7, "hi".into(), 2);
+        assert_eq!(dnd.tag, PlayerChatTag::Dnd);
+        let creature = build_chat_message_to(7, Some("Thug".into()), 0, 0, 0, "hi".into(), 9);
+        assert_eq!(creature.tag, PlayerChatTag::None);
     }
 
     fn read_back(message: &SMSG_MESSAGECHAT) -> SMSG_MESSAGECHAT {

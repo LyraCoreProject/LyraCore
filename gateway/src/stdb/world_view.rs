@@ -1004,7 +1004,7 @@ fn register_shard_callbacks(
     // The PRIVATE tier: every row is addressed to exactly one recipient, and on this feed the
     // gateway owns the guarantee RLS used to give. Delivery is recipient-keyed (the owner-session
     // lookup) + the explicit `private_recipient_audience` predicate — never a viewer fan.
-    // (The realm-core whisper/group twins for CROSS-shard delivery ride the same dispatchers,
+    // (The realm-core group and chat twins for CROSS-shard delivery ride the same dispatchers,
     // armed once per realm-core connection by `arm_realm_private` below.)
     wire_insert_live(
         db.game_resurrect_request(),
@@ -1025,12 +1025,6 @@ fn register_shard_callbacks(
             "game_guild_member.delete",
             "game_guild_petition.insert",
         ],
-    );
-    wire_insert_live(
-        db.game_whisper_event(),
-        "game_whisper_event.insert",
-        &view,
-        |v, row| whisper_appeared(v, row),
     );
     wire_insert_live(
         db.game_auction_notice(),
@@ -1251,11 +1245,11 @@ fn register_shard_callbacks(
     );
 }
 
-/// Register the cross-shard PRIVATE-tier twins (#22 → #483) on the REALM-CORE connection: whisper
-/// and group events, Realm Chat Lines, Channel Notices and Mail Arrivals written realm-side for
-/// recipients whose home shard is elsewhere. Same recipient-keyed dispatchers as `arm_shard`'s
-/// private tier, armed ONCE per realm-core connection instead of once per session — the last
-/// per-session registrations are gone (#483).
+/// Register the cross-shard PRIVATE-tier twins (#22 → #483) on the REALM-CORE connection: group
+/// events, Realm Chat Lines (whispers included), Channel Notices and Mail Arrivals written
+/// realm-side for recipients whose home shard is elsewhere. Same recipient-keyed dispatchers as
+/// `arm_shard`'s private tier, armed ONCE per realm-core connection instead of once per session;
+/// the last per-session registrations are gone (#483).
 ///
 /// Only called when realm-core is a DISTINCT database (`Coordinator::connect` gates it): on a
 /// single-database gateway the world shard's own `arm_shard` registration already watches these
@@ -1269,12 +1263,6 @@ fn register_shard_callbacks(
 pub(crate) fn arm_realm_private(view: Arc<WorldView>, realm: Coordinator, coord: Coordinator) {
     let guard = realm.0.coord();
     let db = &guard.conn.db;
-    wire_insert_live(
-        db.game_whisper_event(),
-        "realm.game_whisper_event.insert",
-        &view,
-        |v, row| whisper_appeared(v, row),
-    );
     wire_insert_live(
         db.game_auction_notice(),
         "realm.game_auction_notice.insert",
@@ -2403,25 +2391,6 @@ fn resurrect_offered(view: &WorldView, shard: ShardId, row: &ResurrectRequest) {
     });
 }
 
-/// A whisper landed → SMSG_MESSAGECHAT to the row's RECIPIENT and nobody else. This is the RLS
-/// relocation the 4c plan names: the lookup is by the recipient's guid, so a non-recipient
-/// session is structurally unreachable, and the explicit predicate re-asserts it.
-fn whisper_appeared(view: &WorldView, row: &WhisperEvent) {
-    let Some(session) = view.session_of_owner(row.recipient_guid) else {
-        return;
-    };
-    let Some(viewer) = view.viewer(session) else {
-        return;
-    };
-    if !super::subscriptions::private_recipient_audience(row.recipient_guid, viewer.self_guid) {
-        return;
-    }
-    let row = row.clone();
-    enqueue(viewer.clone(), move |_| {
-        super::subscriptions::whisper_event_outbound(&row)
-    });
-}
-
 /// A Realm Chat Line landed → one `SMSG_MESSAGECHAT` per recipient with a World Session on this
 /// Gateway, whatever Shard it plays on. The Module chose the audience. The only per-listener
 /// filter here is the listener's own ignore list, and only for lines the Module marked ignorable.
@@ -2645,7 +2614,7 @@ fn account_claim_changed(
 }
 
 /// An Auction Notice landed → SMSG_AUCTION_BIDDER_NOTIFICATION or SMSG_AUCTION_OWNER_NOTIFICATION
-/// to the row's RECIPIENT and nobody else (same shape as [`whisper_appeared`]). An offline
+/// to the row's RECIPIENT and nobody else (same shape as [`group_event_appeared`]). An offline
 /// recipient gets the Auction Mail the same transaction wrote and no packet — the vanilla rule.
 fn auction_notice_appeared(view: &WorldView, row: &AuctionNotice) {
     let Some(session) = view.session_of_owner(row.recipient_guid) else {
@@ -2699,7 +2668,7 @@ fn mail_arrived(view: &WorldView, row: &MailArrival) {
 }
 
 /// A trade status landed → the `SMSG_TRADE_STATUS` packet to the row's RECIPIENT and nobody
-/// else (same shape as [`whisper_appeared`]) (#120).
+/// else (same shape as [`resurrect_offered`]) (#120).
 fn trade_event_appeared(view: &WorldView, shard: ShardId, row: &TradeEvent) {
     let Some(viewer) = view.viewer_of_owner_on_shard(shard, OwnerGuid(row.recipient_guid)) else {
         return;
@@ -2754,7 +2723,7 @@ fn duel_event_appeared(view: &WorldView, coord: &Coordinator, shard: ShardId, ro
 }
 
 /// A group/loot-roll/quest-share event landed → the kind-decoded packet to the row's RECIPIENT
-/// and nobody else (same shape as [`whisper_appeared`]; `coord` feeds the QUEST_SHARE detail
+/// and nobody else (`coord` feeds the QUEST_SHARE detail
 /// JOIN inside the job).
 fn group_event_appeared(view: &WorldView, coord: &Coordinator, row: &GroupEvent) {
     let Some(session) = view.session_of_owner(row.recipient_guid) else {
@@ -3562,7 +3531,7 @@ mod family_audience_tests {
         assert_eq!(m.change, WeatherChangeType::Instant);
     }
 
-    /// The private tier's whole privacy guarantee (whisper/group/resurrect): the addressee and
+    /// The private tier's whole privacy guarantee (group/resurrect): the addressee and
     /// NOBODY else. The zero cases are the leak vectors — an unset recipient must never match a
     /// real viewer and a real recipient must never match a half-initialized viewer.
     #[test]

@@ -73,6 +73,51 @@ pub(crate) fn away_from_player_flags(player_flags: u32) -> AwayStatus {
     }
 }
 
+/// The Auto-Reply a whisperer gets from a Character with an Away Status.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AutoReply {
+    /// `Afk` or `Dnd`, never `None`.
+    pub away: AwayStatus,
+    /// The stored text. Empty when the Shard holds none, which the Module answers with the default.
+    pub message: String,
+}
+
+/// The Auto-Reply of the Character `presence` describes, or `None` when it has no Away Status.
+///
+/// Takes the Realm Presence the caller already read, so one decision reads it once. The Away
+/// Status comes from the live entity's `PLAYER_FLAGS`; the text is read on the Shard that
+/// answered with that entity, because the Auto-Reply lives beside it on the Home Shard.
+pub(crate) fn auto_reply<St: WorldStore + ?Sized>(
+    store: &St,
+    presence: &RealmPresence,
+) -> Result<Option<AutoReply>> {
+    let Whereabouts::InWorld {
+        away, shard_name, ..
+    } = &presence.whereabouts
+    else {
+        return Ok(None);
+    };
+    if *away == AwayStatus::None {
+        return Ok(None);
+    }
+    let message = if store.shard_name() == shard_name {
+        store.auto_reply_text(presence.guid)?
+    } else {
+        match store
+            .world_stores()
+            .into_iter()
+            .find(|shard| shard.shard_name() == shard_name)
+        {
+            Some(shard) => shard.auto_reply_text(presence.guid)?,
+            None => None,
+        }
+    };
+    Ok(Some(AutoReply {
+        away: *away,
+        message: message.unwrap_or_default(),
+    }))
+}
+
 /// A durable `game_character` row's identity and session flag, from one Shard — [`of`]'s existence
 /// signal, before it knows whether the Character is in world, in transit, or offline.
 #[derive(Clone, Debug, PartialEq)]

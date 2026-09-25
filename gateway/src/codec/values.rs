@@ -69,12 +69,16 @@ pub fn build_health_values(guid: u64, health: u32) -> SMSG_UPDATE_OBJECT {
     })
 }
 
-/// Build a VALUES partial-update carrying the ghost fields — `PLAYER_FLAGS` (GHOST bit) and
-/// `UNIT_FIELD_BYTES_1` (the vis-ghost render byte) — so a player who Releases Spirit turns into a
-/// ghost for observers already holding the object (slice 5). Player mask; same `dirty_reset`
-/// discipline as `build_health_values` so it never re-sends OBJECT_FIELD_TYPE (health relays
-/// separately via `build_health_values`). On reclaim the same fields (cleared) relay the un-ghost.
-pub fn build_ghost_values(guid: u64, player_flags: u32, unit_bytes_1: u32) -> SMSG_UPDATE_OBJECT {
+/// Build a VALUES partial-update carrying `PLAYER_FLAGS` and `UNIT_FIELD_BYTES_1`, so observers
+/// already holding the object see every `PLAYER_FLAGS` change: the GHOST bit with the vis-ghost
+/// render byte on Release Spirit and reclaim, and the AFK and DND bits of an Away Status. Player
+/// mask; same `dirty_reset` discipline as `build_health_values` so it never re-sends
+/// OBJECT_FIELD_TYPE.
+pub fn build_player_flags_values(
+    guid: u64,
+    player_flags: u32,
+    unit_bytes_1: u32,
+) -> SMSG_UPDATE_OBJECT {
     let (b1a, b1b, b1c, b1d) = unpack4(unit_bytes_1);
     player_values(guid, |player| {
         player.set_player_flags(player_flags as i32);
@@ -638,7 +642,7 @@ mod lint_tests {
         let g = 0x9u64;
         let msgs: Vec<(&str, SMSG_UPDATE_OBJECT)> = vec![
             ("health", build_health_values(g, 41)),
-            ("ghost", build_ghost_values(g, 0x10, 0)),
+            ("player_flags", build_player_flags_values(g, 0x10, 0)),
             ("dynamic_flags", build_dynamic_flags_values(g, 1)),
             ("unit_flags", build_unit_flags_values(g, 0x80000)),
             (

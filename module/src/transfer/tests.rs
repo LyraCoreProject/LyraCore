@@ -1104,14 +1104,6 @@ fn every_refuse_verdict_call_site_still_routes_through_the_by_guid_chokepoint() 
                  survives and its reaper never settles)",
         ),
         (
-            "chat.rs",
-            include_str!("../chat.rs"),
-            // Moved the body into the actor-explicit core; the fence travelled with it.
-            "pub(crate) fn apply_send_whisper(",
-            "apply_send_whisper reaches an in-transit character by NAME because begin_transfer \
-                 persists with `set_offline: false`",
-        ),
-        (
             "gm.rs",
             include_str!("../gm.rs"),
             "pub fn set_gm_level(",
@@ -2272,14 +2264,14 @@ fn the_instance_removal_dies_with_the_source_copy_and_is_not_carried() {
     );
 }
 
-/// A blob exported by the build before this one names every manifest table except the listing
-/// Hold. It must import, so a Transfer in flight across the publish finishes. Any other difference
+/// A blob exported by the build before this one names every manifest table except the Auto-Reply
+/// table. It must import, so a Transfer in flight across the publish finishes. Any other difference
 /// is still drift.
 #[test]
-fn the_previous_builds_manifest_imports_with_the_listing_hold_empty() {
+fn the_previous_builds_manifest_imports_with_the_added_table_empty() {
     let previous: Vec<ManifestEntry> = manifest()
         .into_iter()
-        .filter(|entry| entry.table != "game_auction_hold")
+        .filter(|entry| entry.table != "game_character_away")
         .collect();
     assert_eq!(previous.len() + 1, manifest().len());
     assert_eq!(check_manifest(7, &previous), Ok(()));
@@ -2300,7 +2292,7 @@ fn the_previous_builds_manifest_imports_with_the_listing_hold_empty() {
         vec![
             carried.clone(),
             TableRows {
-                table: "game_auction_hold".to_owned(),
+                table: "game_character_away".to_owned(),
                 rows: Vec::new(),
             },
         ],
@@ -2320,11 +2312,13 @@ fn a_filled_previous_payload_covers_every_transport_arm() {
         applied.set(applied.get() + 1);
     }
     let applied = std::cell::Cell::new(0);
-    let arms: &[TransportArm<'_, std::cell::Cell<usize>>] =
-        &[("game_item_instance", count), ("game_auction_hold", count)];
+    let arms: &[TransportArm<'_, std::cell::Cell<usize>>] = &[
+        ("game_item_instance", count),
+        ("game_character_away", count),
+    ];
     let previous: Vec<ManifestEntry> = manifest()
         .into_iter()
-        .filter(|entry| entry.table != "game_auction_hold")
+        .filter(|entry| entry.table != "game_character_away")
         .collect();
     let carried = [TableRows {
         table: "game_item_instance".to_owned(),
@@ -2348,7 +2342,7 @@ fn a_filled_previous_payload_covers_every_transport_arm() {
 /// so the count holds only for a build without one. The difference holds for every build.
 #[test]
 fn the_previous_manifest_is_pinned_until_the_next_manifest_change() {
-    assert_eq!(ADDED_SINCE_PREVIOUS_BUILD, ["game_auction_hold"]);
+    assert_eq!(ADDED_SINCE_PREVIOUS_BUILD, ["game_character_away"]);
     let current = manifest();
     let previous = previous_manifest();
     let added: Vec<&str> = current
@@ -2356,11 +2350,11 @@ fn the_previous_manifest_is_pinned_until_the_next_manifest_change() {
         .filter(|entry| !previous.contains(entry))
         .map(|entry| entry.table.as_str())
         .collect();
-    assert_eq!(added, ["game_auction_hold"]);
+    assert_eq!(added, ["game_character_away"]);
     assert_eq!(previous.len() + 1, current.len());
     #[cfg(not(has_packages))]
     {
-        assert_eq!(current.len(), 43);
-        assert_eq!(previous.len(), 42);
+        assert_eq!(current.len(), 44);
+        assert_eq!(previous.len(), 43);
     }
 }

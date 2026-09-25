@@ -19,6 +19,19 @@ impl super::super::connection::Coordinator {
         rows.into_iter().map(|(_, message)| message).collect()
     }
 
+    /// The stored Auto-Reply for `guid` on this Shard: one primary-key read of the private
+    /// `game_character_away` cache.
+    pub(crate) fn auto_reply_text(&self, guid: u64) -> Option<String> {
+        self.0
+            .coord()
+            .conn
+            .db
+            .game_character_away()
+            .character_guid()
+            .find(&guid)
+            .map(|row| row.message)
+    }
+
     /// The Speaker Facts for `speaker_guid` on this Home Shard: race from `UNIT_FIELD_BYTES_0`
     /// byte 0 and the chat tag from `PLAYER_FLAGS`, both off the live entity, plus the Character's
     /// name. `None` when the speaker has no live entity here.

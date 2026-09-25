@@ -49,7 +49,7 @@ fn filtered_gossip_options<St: WorldStore + ?Sized>(
 }
 
 /// Query / social family: name / creature / item lookups + the gossip / npc-text round-trips, plus
-/// the social tier (say / yell / `/e` / whisper chat + text emotes) — grouped as the stateless
+/// the social tier (say / yell / `/e` chat + text emotes), grouped as the stateless
 /// request→reply / broadcast opcodes.
 #[allow(clippy::too_many_lines)] // One arm per query and social opcode.
 pub(crate) fn handle_query<St: WorldStore + ?Sized>(
@@ -289,11 +289,10 @@ pub(crate) fn handle_query<St: WorldStore + ?Sized>(
             )?;
         }
         // Social tier: say/yell/`/e` -> send_chat (insert a broadcast game_chat_event the gateway
-        // fans back as SMSG_MESSAGECHAT on every connection's subscription); whisper ->
-        // send_whisper (private, per-recipient). Party, raid, guild and officer chat never reach
-        // this arm: `dispatch_chat_action` consumes them as Realm Chat Lines. No reply on success
-        // (the speaker sees their own line via the relay); a rejected say/yell/emote/whisper-target
-        // line is silently dropped, matching vanilla.
+        // fans back as SMSG_MESSAGECHAT on every connection's subscription). Whisper, party, raid,
+        // guild, officer chat and `/afk` `/dnd` never reach this arm: `dispatch_chat_action`
+        // consumes them. No reply on success (the speaker sees their own line via the relay); a
+        // rejected say/yell/emote line is silently dropped, matching vanilla.
         //
         // GM playtest dot-commands: a Say line starting with `.` diverts BEFORE
         // `send_chat` — never broadcast, never inserted as a `game_chat_event` row — straight to the
@@ -363,39 +362,8 @@ pub(crate) fn handle_query<St: WorldStore + ?Sized>(
                         message,
                     );
                 }
-                // Whisper: private delivery to a named player (+ a "To X:" echo to the sender). The
-                // module resolves the name (case-insensitive) → recipient identity and RLS-scopes both
-                // rows. A rejected whisper (no such online player) → SMSG_CHAT_PLAYER_NOT_FOUND so the
-                // sender sees "No player named X is online" instead of a silent drop. (In practice the
-                // only realistic failure is an unknown/offline target — a logged-in player is always
-                // "in world" and the client never sends an empty whisper.)
-                CMSG_MESSAGECHAT_ChatType::Whisper { target_player } => {
-                    // The whisper goes through `world::whisper`, which decides
-                    // WHICH DATABASE carries it — realm-core when the gateway is multi-database (the
-                    // only plane on which a target standing on another shard can be named at all),
-                    // the player's own shard otherwise. The reply is unchanged on both planes: any
-                    // refusal is SMSG_CHAT_PLAYER_NOT_FOUND carrying the name the player typed.
-                    //
-                    // `social::self_guid` — never a literal: on the realm plane the sender's guid is
-                    // an ARGUMENT to the operator-gated reducer, so the guid this socket
-                    // authenticated with IS the authorization (a whisper attributed to somebody else
-                    // is impersonation — an earlier version of this code made exactly that mistake).
-                    let sender = social::self_guid(conn);
-                    if whisper::run(store, conn.account_id, sender, &target_player, message)
-                        .is_err()
-                    {
-                        send(
-                            tx,
-                            Outbound::One(ServerOpcodeMessage::SMSG_CHAT_PLAYER_NOT_FOUND(
-                                Box::new(SMSG_CHAT_PLAYER_NOT_FOUND {
-                                    name: target_player,
-                                }),
-                            )),
-                        )?;
-                    }
-                }
-                // Party, raid, channel, guild and officer lines never get here:
-                // `dispatch_chat_action` consumes them as Realm Chat Lines.
+                // Whisper, party, raid, channel, guild and officer lines and `/afk` `/dnd` never
+                // get here: `dispatch_chat_action` consumes them.
                 _ => {}
             }
         }

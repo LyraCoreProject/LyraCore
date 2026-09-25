@@ -281,17 +281,17 @@ pub(crate) fn nearest_entity(
     best.map(|(e, _)| e)
 }
 
-/// Address a `game_group_event` / `game_whisper_event` row: the recipient's bound identity when this
+/// Address a `game_group_event` row: the recipient's bound identity when this
 /// database HAS the character (every world shard), [`Identity::ZERO`] when it does not (realm-core,
-/// whose only characters are guids in the directory tables). ZERO matches no client — the per-player
-/// RLS filter on both tables is `recipient_identity = :sender` and a client's sender is never ZERO —
-/// so a ZERO-addressed row is visible to the owner-token coordinator alone, which is exactly who
-/// reads realm-core's events. Pure, so the fallback is pinned by a test rather than by a live node.
+/// whose only characters are guids in the directory tables). ZERO matches no client: the
+/// per-player RLS filter on such a table is `recipient_identity = :sender` and a client's sender is
+/// never ZERO, so a ZERO-addressed row is visible to the owner-token coordinator alone, which is
+/// exactly who reads realm-core's events. Pure, so the fallback is pinned by a test rather than by
+/// a live node.
 ///
-/// Moved here from `group.rs`: work-item 187's roll/master-loot notifications
-/// (`loot.rs`) and `chat.rs`'s whisper relay (`push_whisper`) both reuse this SAME address rule, so
-/// it lives with the other cross-module lookups rather than under the module it happened to be
-/// written for first.
+/// Moved here from `group.rs`: the roll and master-loot notifications (`loot.rs`) reuse this SAME
+/// address rule, so it lives with the other cross-module lookups rather than under the module it
+/// happened to be written for first.
 pub(crate) fn event_recipient_identity(bound: Option<Identity>) -> Identity {
     bound.unwrap_or(Identity::ZERO)
 }

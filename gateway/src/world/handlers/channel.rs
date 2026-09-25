@@ -508,7 +508,7 @@ fn notice_outbound(view: codec::channel::ChannelNoticeView) -> Outbound {
 
 #[cfg(test)]
 mod tests {
-    use super::super::chat::{ChatOutcome, RealmChatRequest};
+    use super::super::chat::{ChatOutcome, RealmChatRequest, WhisperRequest, WhisperTargetFacts};
     use super::*;
     use std::sync::Mutex;
     use wow_world_messages::vanilla::{
@@ -548,6 +548,26 @@ mod tests {
             &self,
             _speaker_guid: u64,
             _request: RealmChatRequest,
+        ) -> Result<ChatOutcome> {
+            Ok(ChatOutcome::Delivered)
+        }
+
+        fn set_away(&self, _speaker_guid: u64, _kind: u8, _message: String) -> Result<()> {
+            Ok(())
+        }
+
+        fn whisper_target(
+            &self,
+            _speaker_guid: u64,
+            _typed_name: &str,
+        ) -> Result<Option<WhisperTargetFacts>> {
+            Ok(None)
+        }
+
+        fn realm_whisper(
+            &self,
+            _speaker_guid: u64,
+            _request: WhisperRequest,
         ) -> Result<ChatOutcome> {
             Ok(ChatOutcome::Delivered)
         }

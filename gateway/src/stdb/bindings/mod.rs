@@ -53,6 +53,7 @@ pub mod channel_event_type;
 pub mod channel_member_type;
 pub mod channel_request_type;
 pub mod char_base_info_type;
+pub mod character_away_type;
 pub mod character_explored_type;
 pub mod character_quest_event_credit_type;
 pub mod character_quest_type;
@@ -393,6 +394,7 @@ pub mod game_catalogue_fingerprint_table;
 pub mod game_channel_event_table;
 pub mod game_channel_member_table;
 pub mod game_char_base_info_table;
+pub mod game_character_away_table;
 pub mod game_character_buyback_table;
 pub mod game_character_contact_table;
 pub mod game_character_explored_table;
@@ -794,8 +796,8 @@ pub mod gw_respond_resurrect_reducer;
 pub mod gw_sell_item_reducer;
 pub mod gw_send_chat_reducer;
 pub mod gw_send_emote_reducer;
-pub mod gw_send_whisper_reducer;
 pub mod gw_set_action_button_reducer;
+pub mod gw_set_away_reducer;
 pub mod gw_set_faction_at_war_reducer;
 pub mod gw_set_sheathed_reducer;
 pub mod gw_set_target_reducer;
@@ -1140,6 +1142,8 @@ pub mod vmap_nav_coverage_type;
 pub mod walking_mode_type;
 pub mod weather_schedule_type;
 pub mod whisper_event_type;
+pub mod whisper_request_type;
+pub mod whisper_target_facts_type;
 pub mod world_entity_type;
 pub mod world_session_token_type;
 pub mod world_state_name_type;
@@ -1195,6 +1199,7 @@ pub use channel_event_type::ChannelEvent;
 pub use channel_member_type::ChannelMember;
 pub use channel_request_type::ChannelRequest;
 pub use char_base_info_type::CharBaseInfo;
+pub use character_away_type::CharacterAway;
 pub use character_explored_type::CharacterExplored;
 pub use character_quest_event_credit_type::CharacterQuestEventCredit;
 pub use character_quest_type::CharacterQuest;
@@ -1535,6 +1540,7 @@ pub use game_catalogue_fingerprint_table::*;
 pub use game_channel_event_table::*;
 pub use game_channel_member_table::*;
 pub use game_char_base_info_table::*;
+pub use game_character_away_table::*;
 pub use game_character_buyback_table::*;
 pub use game_character_contact_table::*;
 pub use game_character_explored_table::*;
@@ -1936,8 +1942,8 @@ pub use gw_respond_resurrect_reducer::gw_respond_resurrect;
 pub use gw_sell_item_reducer::gw_sell_item;
 pub use gw_send_chat_reducer::gw_send_chat;
 pub use gw_send_emote_reducer::gw_send_emote;
-pub use gw_send_whisper_reducer::gw_send_whisper;
 pub use gw_set_action_button_reducer::gw_set_action_button;
+pub use gw_set_away_reducer::gw_set_away;
 pub use gw_set_faction_at_war_reducer::gw_set_faction_at_war;
 pub use gw_set_sheathed_reducer::gw_set_sheathed;
 pub use gw_set_target_reducer::gw_set_target;
@@ -2282,6 +2288,8 @@ pub use vmap_nav_coverage_type::VmapNavCoverage;
 pub use walking_mode_type::WalkingMode;
 pub use weather_schedule_type::WeatherSchedule;
 pub use whisper_event_type::WhisperEvent;
+pub use whisper_request_type::WhisperRequest;
+pub use whisper_target_facts_type::WhisperTargetFacts;
 pub use world_entity_type::WorldEntity;
 pub use world_session_token_type::WorldSessionToken;
 pub use world_state_name_type::WorldStateName;
@@ -3644,16 +3652,16 @@ pub enum Reducer {
         emote_anim: u32,
         target_guid: u64,
     },
-    GwSendWhisper {
-        request_actor: SessionActor,
-        target_name: String,
-        message: String,
-    },
     GwSetActionButton {
         request_actor: SessionActor,
         button: u8,
         action: u32,
         action_type: u8,
+    },
+    GwSetAway {
+        request_actor: SessionActor,
+        kind: u8,
+        message: String,
     },
     GwSetFactionAtWar {
         request_actor: SessionActor,
@@ -4078,9 +4086,7 @@ pub enum Reducer {
     },
     RealmWhisper {
         request_actor: SessionActor,
-        target_guid: u64,
-        message: String,
-        sender_is_ignored: bool,
+        request: WhisperRequest,
     },
     ReapGatewayLeases {
         schedule: GatewayLeaseReaperSchedule,
@@ -4610,8 +4616,8 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwSellItem { .. } => "gw_sell_item",
             Reducer::GwSendChat { .. } => "gw_send_chat",
             Reducer::GwSendEmote { .. } => "gw_send_emote",
-            Reducer::GwSendWhisper { .. } => "gw_send_whisper",
             Reducer::GwSetActionButton { .. } => "gw_set_action_button",
+            Reducer::GwSetAway { .. } => "gw_set_away",
             Reducer::GwSetFactionAtWar { .. } => "gw_set_faction_at_war",
             Reducer::GwSetSheathed { .. } => "gw_set_sheathed",
             Reducer::GwSetTarget { .. } => "gw_set_target",
@@ -7169,15 +7175,6 @@ Reducer::GwIgnoreTrade{
                 emote_anim: emote_anim.clone(),
                 target_guid: target_guid.clone(),
 }),
-            Reducer::GwSendWhisper{
-                request_actor,
-                target_name,
-                message,
-}             => __sats::bsatn::to_vec(&gw_send_whisper_reducer::GwSendWhisperArgs {
-                request_actor: request_actor.clone(),
-                target_name: target_name.clone(),
-                message: message.clone(),
-}),
             Reducer::GwSetActionButton{
                 request_actor,
                 button,
@@ -7188,6 +7185,15 @@ Reducer::GwIgnoreTrade{
                 button: button.clone(),
                 action: action.clone(),
                 action_type: action_type.clone(),
+}),
+            Reducer::GwSetAway{
+                request_actor,
+                kind,
+                message,
+}             => __sats::bsatn::to_vec(&gw_set_away_reducer::GwSetAwayArgs {
+                request_actor: request_actor.clone(),
+                kind: kind.clone(),
+                message: message.clone(),
 }),
             Reducer::GwSetFactionAtWar{
                 request_actor,
@@ -7954,14 +7960,10 @@ Reducer::PlayerbotsFixtureCommandApply{
 }),
             Reducer::RealmWhisper{
                 request_actor,
-                target_guid,
-                message,
-                sender_is_ignored,
+                request,
 }             => __sats::bsatn::to_vec(&realm_whisper_reducer::RealmWhisperArgs {
                 request_actor: request_actor.clone(),
-                target_guid: target_guid.clone(),
-                message: message.clone(),
-                sender_is_ignored: sender_is_ignored.clone(),
+                request: request.clone(),
 }),
             Reducer::ReapGatewayLeases{
                 schedule,
@@ -8295,6 +8297,7 @@ pub struct DbUpdate {
     game_channel_member: __sdk::TableUpdate<ChannelMember>,
     game_char_base_info: __sdk::TableUpdate<CharBaseInfo>,
     game_character: __sdk::TableUpdate<Character>,
+    game_character_away: __sdk::TableUpdate<CharacterAway>,
     game_character_buyback: __sdk::TableUpdate<BuybackEntry>,
     game_character_contact: __sdk::TableUpdate<ContactEntry>,
     game_character_explored: __sdk::TableUpdate<CharacterExplored>,
@@ -8648,6 +8651,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_character" => db_update
                     .game_character
                     .append(game_character_table::parse_table_update(table_update)?),
+                "game_character_away" => db_update
+                    .game_character_away
+                    .append(game_character_away_table::parse_table_update(table_update)?),
                 "game_character_buyback" => db_update.game_character_buyback.append(
                     game_character_buyback_table::parse_table_update(table_update)?,
                 ),
@@ -9613,6 +9619,9 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.game_character = cache
             .apply_diff_to_table::<Character>("game_character", &self.game_character)
             .with_updates_by_pk(|row| &row.guid);
+        diff.game_character_away = cache
+            .apply_diff_to_table::<CharacterAway>("game_character_away", &self.game_character_away)
+            .with_updates_by_pk(|row| &row.character_guid);
         diff.game_character_buyback = cache
             .apply_diff_to_table::<BuybackEntry>(
                 "game_character_buyback",
@@ -10841,6 +10850,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_character" => db_update
                     .game_character
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_character_away" => db_update
+                    .game_character_away
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_character_buyback" => db_update
                     .game_character_buyback
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -11694,6 +11706,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_character" => db_update
                     .game_character
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_character_away" => db_update
+                    .game_character_away
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_character_buyback" => db_update
                     .game_character_buyback
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -12489,6 +12504,7 @@ pub struct AppliedDiff<'r> {
     game_channel_member: __sdk::TableAppliedDiff<'r, ChannelMember>,
     game_char_base_info: __sdk::TableAppliedDiff<'r, CharBaseInfo>,
     game_character: __sdk::TableAppliedDiff<'r, Character>,
+    game_character_away: __sdk::TableAppliedDiff<'r, CharacterAway>,
     game_character_buyback: __sdk::TableAppliedDiff<'r, BuybackEntry>,
     game_character_contact: __sdk::TableAppliedDiff<'r, ContactEntry>,
     game_character_explored: __sdk::TableAppliedDiff<'r, CharacterExplored>,
@@ -12887,6 +12903,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<Character>(
             "game_character",
             &self.game_character,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<CharacterAway>(
+            "game_character_away",
+            &self.game_character_away,
             event,
         );
         callbacks.invoke_table_row_callbacks::<BuybackEntry>(
@@ -14781,6 +14802,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_channel_member_table::register_table(client_cache);
         game_char_base_info_table::register_table(client_cache);
         game_character_table::register_table(client_cache);
+        game_character_away_table::register_table(client_cache);
         game_character_buyback_table::register_table(client_cache);
         game_character_contact_table::register_table(client_cache);
         game_character_explored_table::register_table(client_cache);
@@ -15063,6 +15085,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_channel_member",
         "game_char_base_info",
         "game_character",
+        "game_character_away",
         "game_character_buyback",
         "game_character_contact",
         "game_character_explored",

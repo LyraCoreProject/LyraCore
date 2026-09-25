@@ -1115,6 +1115,8 @@ pub(crate) fn apply_player_login(
         entity.player_flags = player_flags;
         entity.unit_bytes_1 = unit_bytes_1;
     }
+    // Away Status ends at login (cm:Player.cpp:2932). Transfer arrival also runs this login.
+    crate::away::end_at_login(ctx, &mut entity);
     entities.insert(entity);
     // Crash recovery for the narrow paid-before-gateway-arm window. A running flight already has
     // a nonzero start and is untouched; a pending flight begins from its source on this login.

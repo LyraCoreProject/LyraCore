@@ -438,10 +438,10 @@ fn target_icon_op(update: &MSG_RAID_TARGET_UPDATE_Client) -> party::Op {
 /// own `entity_by_owner` would have resolved on the shard plane. Reading it here, from the state the
 /// gateway already authenticated for this socket, is what keeps the realm-core call trustworthy.
 ///
-/// `pub(super)` because the WHISPER slice needs the same guid for the same reason: `realm_whisper`
-/// takes the sender as an argument, so this accessor is the authorization of every realm-plane whisper
-/// (see `world::whisper::run`). One accessor, so there is one place a mutation can substitute a
-/// literal — and one place the end-to-end tests pin.
+/// `pub(super)` because every Realm Chat Line needs the same guid for the same reason:
+/// `realm_chat` and `realm_whisper` take the speaker as an argument, so this accessor is the
+/// authorization of every line (see `handlers::chat`). One accessor, so there is one place a
+/// mutation can substitute a literal, and one place the end-to-end tests pin.
 pub(super) fn self_guid(conn: &WorldConn) -> Option<u64> {
     match &conn.state {
         WorldState::InWorld(iw) => Some(iw.self_guid),

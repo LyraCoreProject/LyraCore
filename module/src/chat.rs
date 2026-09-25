@@ -1,25 +1,23 @@
-//! Social tier: say, yell, `/e`, text emotes (`/dance`, `/wave`, …), whispers, contacts and
-//! `/roll`. A player's `CMSG_MESSAGECHAT` or `CMSG_TEXT_EMOTE` becomes a per-recipient or
-//! broadcast event row that the Gateway turns into `SMSG_MESSAGECHAT` / `SMSG_TEXT_EMOTE` (+
-//! `SMSG_EMOTE` animation). Say, yell and `/e` rows carry no range: the Gateway scopes them to the
-//! speaker's surroundings when it relays them. Party and channel chat are not here. They are
-//! Realm Chat Lines (`crate::realm_chat`), committed on Realm-core with their whole audience.
-//! Chat Channels themselves live in `crate::channel`. [event]
+//! Social tier: say, yell, `/e`, text emotes (`/dance`, `/wave`, …), contacts and `/roll`. A
+//! player's `CMSG_MESSAGECHAT` or `CMSG_TEXT_EMOTE` becomes a broadcast event row that the Gateway
+//! turns into `SMSG_MESSAGECHAT` / `SMSG_TEXT_EMOTE` (+ `SMSG_EMOTE` animation). Say, yell and `/e`
+//! rows carry no range: the Gateway scopes them to the speaker's surroundings when it relays them.
+//! Whisper, party and channel chat are not here. They are Realm Chat Lines (`crate::realm_chat`),
+//! committed on Realm-core with their whole audience. Chat Channels themselves live in
+//! `crate::channel`, and Away Status in `crate::away`. [event]
 
-use spacetimedb::{reducer, table, Identity, ReducerContext, Table, Timestamp};
+use spacetimedb::{table, Identity, ReducerContext, Table, Timestamp};
 
-use crate::game_character;
 use lyracore_shared::social::ContactRefusal;
 
 // `game_character_contact` is defined further down in THIS module — its `#[table]` accessor
 // (`game_character_contact`) is generated there, so it's in scope for `add_friend`/etc. without a
-// `use`. Re-exported implicitly like `game_whisper_event` above.
+// `use`.
 
 /// `game_chat_event.chat_type` discriminants for the broadcast chat types this table carries,
 /// re-exported from the shared source of truth both crates read
 /// ([`lyracore_shared::chat::broadcast_chat`]). Whisper and party are not `game_chat_event` rows:
-/// whisper rides `game_whisper_event` and party rides `game_realm_chat_event`, each with a
-/// per-recipient shape this broadcast table cannot hold.
+/// they ride `game_realm_chat_event`, whose per-recipient shape this broadcast table cannot hold.
 pub const CHAT_SAY: u8 = lyracore_shared::chat::broadcast_chat::SAY;
 pub const CHAT_YELL: u8 = lyracore_shared::chat::broadcast_chat::YELL;
 /// Creature-authored text emote (`CHAT_TYPE_TEXT_EMOTE` on the source wire). It uses the same
@@ -246,15 +244,12 @@ pub(crate) fn apply_send_emote(
 }
 
 // ===========================================================================================
-//  Whisper [event] — RLS-scoped to one recipient (unlike say/yell/emote, which broadcast)
+//  Retired whisper table. Whispers are Realm Chat Lines (`crate::realm_chat::realm_whisper`). The
+//  table stays in the schema, unwritten and unsubscribed, because dropping a table is a destructive
+//  migration.
 // ===========================================================================================
 
-/// A whisper line delivered to ONE recipient (RLS-restricted — see `game_group_event` for another
-/// per-recipient table of this shape). A whisper
-/// makes TWO rows: the incoming line to the target (`is_inform = false` → "X whispers: …") and the
-/// echo to the sender (`is_inform = true` → "To X: …"). `other_guid` is the OTHER party (the sender
-/// for the target's row, the target for the echo) — the client resolves the name via NAME_QUERY.
-/// Reaped by the shared event GC. [event]
+/// Retired: nothing writes it. [event]
 #[table(accessor = game_whisper_event, public, index(accessor = by_recipient, btree(columns = [recipient_identity])))]
 pub struct WhisperEvent {
     #[primary_key]
@@ -265,21 +260,6 @@ pub struct WhisperEvent {
     pub is_inform: bool,
     pub message: String,
     pub created_at: Timestamp,
-    /// The recipient's CHARACTER GUID (whisper slice). END-appended + defaulted, so this
-    /// is an additive auto-migration and every earlier row reads back as 0.
-    ///
-    /// `recipient_identity` cannot address a recipient on REALM-CORE: an identity is minted per
-    /// (account, database) by the node, so the identity a player holds on a world shard names nobody
-    /// on the directory database — and realm-core has no `game_character` rows to resolve one from in
-    /// the first place. A guid is the one realm-wide name a character has. The identity column stays
-    /// exactly as it was and still drives the per-player RLS on a world shard; this column is what
-    /// the gateway's realm-core whisper relay filters on (it reads through the owner token, which
-    /// bypasses RLS, and self-filters per session — the coordinator-relay law of 277/279, and the
-    /// same shape `game_group_event.recipient_guid` took in the group slice).
-    // The u64 default MUST be typed: a bare `0` encodes as 4 bytes and `publish` rejects the
-    // migration with "data too short for u64: Expected 8, given 4" (world.rs:127 records the rule,
-    // and `game_group_event.recipient_guid` shipped green with the untyped form an hour before it
-    // blocked a deploy). Nothing in `cargo test`/`cargo check` validates default-value encoding.
     #[default(0u64)]
     pub recipient_guid: u64,
 }
@@ -336,160 +316,6 @@ fn prepare_system_message(
         message,
         created_at,
     })
-}
-
-/// Whisper (`CMSG_MESSAGECHAT` with the Whisper type): deliver `message` privately to the player named
-/// `target_name`, plus an echo to the sender. The target must be online; an unknown/offline target is
-/// a clean `Err` the gateway turns into `SMSG_CHAT_PLAYER_NOT_FOUND`. Name match is case-insensitive
-/// (vanilla `/w bob` reaches "Bob").
-///
-/// **The SHARD plane** of the whisper slice: this core resolves the target inside the CALLING
-/// database, which is exactly why a whisper could not cross a shard boundary, and it stays the only
-/// path a single-database gateway ever takes (byte-identical to earlier — same gates, same order,
-/// same rows). A multi-database gateway routes to [`realm_whisper`] instead; the ROW SHAPE both
-/// planes write is the one shared core below ([`whisper_rows`] + [`push_whisper`]), so the ignore
-/// rule and the sender's echo cannot drift between them.
-///
-/// The shard-plane whisper core, actor-explicit — everything the old sender-path
-/// `send_whisper` did after resolving WHO spoke. Same split as [`apply_send_chat`];
-/// `gw::gw_send_whisper` is the entry.
-pub(crate) fn apply_send_whisper(
-    ctx: &ReducerContext,
-    sender: crate::WorldEntity,
-    target_name: String,
-    message: String,
-) -> Result<(), String> {
-    let text = normalized_message(&message).ok_or_else(|| "empty message".to_string())?;
-    // Case-insensitive name match (vanilla `/w bob` reaches "Bob"). REFUSE verdict: the
-    // fenced `character_by_name` reads an in-transit character as ABSENT, so a whisper aimed at a
-    // character mid-shard-hop falls into the existing not-found arm the gateway already maps to
-    // SMSG_CHAT_PLAYER_NOT_FOUND — no new error string, no gateway edit.
-    let target = crate::helpers::character_by_name(ctx, &target_name)
-        .ok_or_else(|| lyracore_shared::whisper::no_player_named(&target_name))?;
-    if !target.online {
-        // No offline whispering in vanilla — the gateway maps this to SMSG_CHAT_PLAYER_NOT_FOUND too.
-        return Err(lyracore_shared::whisper::player_is_offline(&target_name));
-    }
-    // Ignore enforcement: if the TARGET has the sender on their ignore list, the
-    // incoming line is silently dropped — no row for them, so no `SMSG_MESSAGECHAT` relay ever
-    // reaches "the ignorer". The sender still gets their own echo (matches vanilla: whispering
-    // someone who's ignoring you shows no error, it just never arrives).
-    let sender_is_ignored = ctx
-        .db
-        .game_character_contact()
-        .by_owner()
-        .filter(&target.guid)
-        .any(|c| c.is_ignore && c.target_guid == sender.guid);
-    for (recipient_guid, other_guid, is_inform) in
-        whisper_rows(sender.guid, target.guid, sender_is_ignored)
-    {
-        push_whisper(ctx, recipient_guid, other_guid, is_inform, text.clone());
-    }
-    Ok(())
-}
-
-/// The REALM-CORE plane of the whisper (whisper slice): deliver `message` from
-/// `sender_guid` to `target_guid`, both named by GUID because a name means nothing here.
-///
-/// **Operator-gated, and it has to be** — the same trust boundary `realm_group_op` sits on. It takes
-/// the sending character's guid as an argument instead of deriving it from `ctx.sender()`, because
-/// realm-core has no live entity to derive one from, so a client that could call it would whisper
-/// (and, worse, be *seen* to whisper) as anybody in the realm. The gateway is the only caller, it
-/// holds the coordinator (operator) token, and it passes the guid it already authenticated for that
-/// socket (`InWorld::self_guid`).
-///
-/// **Three gates ran in the gateway before this call**, and they had to: the directory database holds
-/// neither characters, nor live entities, nor contact rows.
-/// - does the target EXIST (realm-wide name → guid), and is it ONLINE — the two reads that made a
-///   cross-boundary whisper impossible, answered across every connected shard;
-/// - is the SENDER in world;
-/// - and `sender_is_ignored` — the TARGET's ignore list, which lives with the target's character on
-///   whichever shard holds it. Passing it as an argument keeps the RULE here (an ignored sender still
-///   gets their echo, and is told nothing) while the DATA is read where it exists.
-///
-/// The rows are the same [`whisper_rows`] core the shard plane writes, so an ignored whisper behaves
-/// identically on both planes. Addressing: [`push_whisper`] resolves each recipient's bound identity
-/// from its character row and falls back to `Identity::ZERO` here (no rows on realm-core), which no
-/// client's `:sender` can equal — so the RLS filter hides these rows from every player connection and
-/// the owner-token coordinator relay is their only reader.
-#[reducer]
-pub fn realm_whisper(
-    ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
-    target_guid: u64,
-    message: String,
-    sender_is_ignored: bool,
-) -> Result<(), String> {
-    crate::helpers::require_operator(ctx)?;
-    let sender_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
-    let text = normalized_message(&message).ok_or_else(|| "empty message".to_string())?;
-    for (recipient_guid, other_guid, is_inform) in
-        whisper_rows(sender_guid, target_guid, sender_is_ignored)
-    {
-        push_whisper(ctx, recipient_guid, other_guid, is_inform, text.clone());
-    }
-    Ok(())
-}
-
-/// The rows one whisper produces, as `(recipient_guid, other_guid, is_inform)` — the whole delivery
-/// rule of a whisper, extracted so it is the SAME on the shard plane and on realm-core.
-///
-/// Two rows, because a whisper is two chat lines: the incoming line to the target
-/// ("<sender> whispers: …") and the echo to the sender ("To <target>: …"). The echo is unconditional
-/// and the incoming line is not: an ignored sender's line is dropped at the source, so no
-/// `SMSG_MESSAGECHAT` can reach the ignorer, and the sender is told nothing (vanilla shows no error —
-/// the whisper simply never arrives). Order is incoming-then-echo, matching earlier insert order.
-///
-/// Pure — unit-tested without a `ReducerContext`, which is the only way either plane's delivery rule
-/// is testable in this crate at all.
-pub(crate) fn whisper_rows(
-    sender_guid: u64,
-    target_guid: u64,
-    sender_is_ignored: bool,
-) -> Vec<(u64, u64, bool)> {
-    let mut rows = Vec::with_capacity(2);
-    if !sender_is_ignored {
-        rows.push((target_guid, sender_guid, false));
-    }
-    rows.push((sender_guid, target_guid, true));
-    rows
-}
-
-/// Insert one whisper row, addressed BOTH ways (whisper slice): by `recipient_guid` (the
-/// realm-wide name, which the gateway's realm-core relay self-filters on) and by the recipient's bound
-/// `recipient_identity` (the per-player RLS a world shard delivers through, unchanged).
-///
-/// The identity is resolved from the recipient's character row, exactly as `group::push_event` does,
-/// and falls back to [`Identity::ZERO`] when this database has no such row — which is always the case
-/// on realm-core. ZERO matches no client (`:sender` is never ZERO), so a realm-core whisper row is
-/// visible to the owner-token coordinator alone.
-///
-/// On a world shard this is byte-identical to the two inline inserts it replaces: the target's row
-/// carried `target.owner_identity`, which is the same column read here, and the sender's echo carried
-/// `ctx.sender()` — the identity `establish_session` stamped onto every character row of that account
-/// and the one `entity_by_owner` just matched the sender's live entity by.
-fn push_whisper(
-    ctx: &ReducerContext,
-    recipient_guid: u64,
-    other_guid: u64,
-    is_inform: bool,
-    message: String,
-) {
-    let bound = ctx
-        .db
-        .game_character()
-        .guid()
-        .find(recipient_guid)
-        .map(|c| c.owner_identity);
-    ctx.db.game_whisper_event().insert(WhisperEvent {
-        id: 0,
-        recipient_identity: crate::helpers::event_recipient_identity(bound),
-        other_guid,
-        is_inform,
-        message,
-        created_at: ctx.timestamp,
-        recipient_guid,
-    });
 }
 
 // ===========================================================================================
@@ -710,8 +536,8 @@ mod tests {
     // ---- `apply_send_chat_to`'s type gate (EventAI's only entry into `game_chat_event`) ----
     //
     // `apply_send_chat_to` runs inside a reducer and takes no `ReducerContext` mock in this crate,
-    // so its gate is scanned rather than executed — same technique as `realm_whisper`'s operator
-    // gate below.
+    // so its gate is scanned rather than executed, the same technique as the Realm Chat reducers'
+    // operator gate scans in `realm_chat.rs`.
 
     use crate::test_scan::shape_of;
 
@@ -828,180 +654,5 @@ mod tests {
         );
         // Exactly at the ceiling is legal, not clipped below it.
         assert_eq!(normalized_roll_range(1, 10_000), (1, 10_000));
-    }
-
-    // ---- Whisper delivery (whisper slice) ----
-
-    /// The delivery rule both planes share. A whisper is TWO lines, and which of them exists is the
-    /// whole of the ignore rule: the echo is unconditional (the sender is never told they were
-    /// ignored — vanilla shows no error) and the incoming line is dropped at the source, so no
-    /// relay can reach the ignorer.
-    #[test]
-    fn a_whisper_writes_the_incoming_line_and_the_senders_echo() {
-        // (recipient, other, is_inform) — incoming first, echo second, matching earlier order.
-        assert_eq!(
-            whisper_rows(10, 20, false),
-            vec![(20, 10, false), (10, 20, true)]
-        );
-    }
-
-    #[test]
-    fn an_ignored_sender_loses_the_incoming_line_and_keeps_their_own_echo() {
-        let rows = whisper_rows(10, 20, true);
-        assert_eq!(
-            rows,
-            vec![(10, 20, true)],
-            "the ignorer must get NO row (a row is a relayed SMSG_MESSAGECHAT), and the sender must \
-             still see their own \"To X:\" echo — vanilla reports nothing to a sender being ignored"
-        );
-        assert!(
-            !rows.iter().any(|&(recipient, ..)| recipient == 20),
-            "no row may be addressed to the ignoring target"
-        );
-    }
-
-    /// A self-whisper (`/w <own name>`) is legal in vanilla and produces both lines, both addressed
-    /// to the same player — the degenerate case a `recipient != sender` filter would silently break.
-    #[test]
-    fn a_self_whisper_still_produces_both_lines() {
-        assert_eq!(
-            whisper_rows(10, 10, false),
-            vec![(10, 10, false), (10, 10, true)]
-        );
-    }
-
-    // ---- `realm_whisper`'s two unreachable decisions (whisper slice) ----
-    //
-    // A reducer body needs a live `ReducerContext`, so the two below cannot be EXECUTED by a test in
-    // this crate — which is why they are scanned. Same technique, and the same reason, as
-    // `group.rs`'s pair for `realm_group_op`.
-
-    /// The `//`-stripped body of `signature`'s function — assert on CODE, never on the prose beside
-    /// it. Shared with every other file's copy of this scan as [`crate::test_scan::code_of`]
-    /// (this used to be six near-identical, drifted-apart copies).
-    use crate::test_scan::code_of;
-
-    /// **The operator gate is the entire authorization of the realm-core whisper plane.**
-    ///
-    /// `realm_whisper` takes the SENDING character's guid as an argument rather than deriving it from
-    /// `ctx.sender()` (realm-core has no live entity to derive one from), so without the gate any
-    /// identity that can reach the node can whisper any player in the realm *as* any other player —
-    /// an impersonation primitive, not merely an unauthorized write.
-    ///
-    /// Asserted as the FIRST STATEMENT of the body, not merely present in it. A bare `contains` is
-    /// satisfied by a gate that never runs: wrapping the line in `if false { … }` — this batch's own
-    /// documented tripwire defeat — left all 521 module tests green with the reducer completely
-    /// ungated, and so would `let _ = crate::helpers::require_operator(ctx);` or a `return Ok(())`
-    /// placed above it. Anchoring to the opening brace makes every one of those visible, and it is the
-    /// same anchoring the whisper relay's own scan uses in `stdb/subscriptions.rs`.
-    #[test]
-    fn the_realm_whisper_reducer_is_operator_gated() {
-        let body = code_of(include_str!("chat.rs"), "pub fn realm_whisper(");
-        let normalized: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
-        assert!(
-            normalized.starts_with("{ crate::helpers::require_operator(ctx)?;"),
-            "`realm_whisper` no longer OPENS with the operator gate. It takes the SENDER's guid as an \
-             argument, so the gate is the only thing between an arbitrary connection and whispering \
-             as anybody in the realm — and a gate that is present but neutralized (wrapped in \
-             `if false`, `let _ =`, or preceded by an early return) is no gate. Body was:\n{body}"
-        );
-    }
-
-    /// **Both of a whisper row's addresses, pinned.** A whisper is delivered by exactly two columns
-    /// and there is no `ReducerContext` in this crate to observe either, so a wrong one is a silent
-    /// total delivery failure with every suite green — verified by mutation, twice:
-    ///
-    /// - `recipient_guid: 0` (instead of the parameter) → every CROSS-DATABASE whisper is written on
-    ///   realm-core and delivered to nobody: the gateway's realm relay self-filters on this column and
-    ///   0 is no session's guid.
-    /// - a constant `recipient_identity` → every SINGLE-DATABASE whisper stops arriving: the per-player
-    ///   RLS filter is `recipient_identity = :sender`, so the row becomes invisible to its own
-    ///   recipient. (`Identity::ZERO` is the deliberate FALLBACK for a database with no such character
-    ///   — realm-core — which is exactly why hardcoding it looks so innocent.)
-    #[test]
-    fn a_whisper_row_is_addressed_by_recipient_guid_and_by_the_recipients_bound_identity() {
-        let body = code_of(include_str!("chat.rs"), "fn push_whisper(");
-        let n: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
-        // The needle deliberately omits the `game_character()` accessor: spelling it here would count
-        // as a raw character lookup in THIS file to the `character_fence_tripwire` scanner (which
-        // reads source, not semantics), and inflating that budget to cover a test string would weaken
-        // a ratchet that exists to catch real reads.
-        assert!(
-            n.contains("let bound = ctx .db .game_char"),
-            "`push_whisper` no longer reads the recipient's character row for its identity. \
-             Body was:\n{body}"
-        );
-        assert!(
-            n.contains(".guid() .find(recipient_guid) .map(|c| c.owner_identity);"),
-            "`push_whisper` no longer resolves the RECIPIENT's own bound identity. Resolving anyone \
-             else's (the sender's, `other_guid`'s) hands a private chat line to the wrong \
-             connection. Body was:\n{body}"
-        );
-        assert!(
-            n.contains("recipient_identity: crate::helpers::event_recipient_identity(bound),"),
-            "`push_whisper` no longer addresses the row to the recipient's bound identity via the \
-             shared ZERO-fallback helper. A constant there makes every whisper on a single-database \
-             gateway invisible to its recipient (the RLS filter is `recipient_identity = :sender`). \
-             Body was:\n{body}"
-        );
-        assert!(
-            n.contains("created_at: ctx.timestamp, recipient_guid, });"),
-            "`push_whisper` no longer stamps `recipient_guid` from its argument. The gateway's \
-             realm-core relay self-filters on this column, so a literal there delivers every \
-             cross-database whisper to nobody — and nothing else in either suite can see it. \
-             Body was:\n{body}"
-        );
-        // ONE binding, because a `contains` proves presence and never exclusivity. Appending
-        // `let bound = None;` after the pinned read leaves all four needles above intact, compiles
-        // clean, adds no raw character lookup for the fence tripwire to notice — and addresses EVERY
-        // whisper row to `Identity::ZERO`, which is survivor #2 of this slice's own mutation list
-        // (every single-database whisper invisible to its recipient) wearing a scan-defeating
-        // disguise. Verified: all 521 module tests green. The count is the fence.
-        assert_eq!(
-            n.matches("let bound").count(),
-            1,
-            "`push_whisper` binds `bound` more than once. A SHADOWED rebind keeps every needle above \
-             satisfied while the row is addressed to somebody else — or to nobody. Body was:\n{body}"
-        );
-    }
-
-    /// **Both planes drive the shared core, in the declared argument order.**
-    ///
-    /// `whisper_rows(sender, target, ignored)` is the only thing that decides who receives a whisper,
-    /// and its two call sites are the two planes. Neither is executable here, and both admit a silent
-    /// mutation the rest of the tree cannot see (verified — each left all suites green):
-    ///
-    /// - the flag hardcoded to `false` on the realm plane → every ignored whisper delivered, and the
-    ///   verdict the gateway went to another database to read thrown away;
-    /// - the guids SWAPPED on the shard plane → the "X whispers:" line goes to the sender and the
-    ///   "To X:" echo to the target, so both parties see the conversation inverted.
-    #[test]
-    fn both_whisper_planes_drive_the_shared_row_core_in_its_declared_order() {
-        let src = include_str!("chat.rs");
-        for (plane, signature, call) in [
-            (
-                "the REALM-CORE plane",
-                "pub fn realm_whisper(",
-                "whisper_rows(sender_guid, target_guid, sender_is_ignored)",
-            ),
-            (
-                // Factored the shard plane's body out of the `send_whisper` reducer into the
-                // actor-explicit core both entries (sender + `gw_send_whisper`) delegate to — the
-                // pin follows the body, which is where the delivery rule actually lives.
-                "the SHARD plane",
-                "pub(crate) fn apply_send_whisper(",
-                "whisper_rows(sender.guid, target.guid, sender_is_ignored)",
-            ),
-        ] {
-            let body = code_of(src, signature);
-            let normalized: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
-            assert!(
-                normalized.contains(call),
-                "{plane} no longer drives `{call}`. The shared core is the whole delivery rule of a \
-                 whisper — who gets the line, who gets the echo, and whether an ignored sender is \
-                 dropped — and a swapped or hardcoded argument here inverts or leaks a private \
-                 conversation with nothing else in either suite able to see it. Body was:\n{body}"
-            );
-        }
     }
 }

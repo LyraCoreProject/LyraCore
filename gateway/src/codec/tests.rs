@@ -557,7 +557,7 @@ fn ghost_values_is_player_mask_without_object_type() {
     // and must NOT re-send OBJECT_FIELD_TYPE (0x09) — same dirty_reset discipline as the other
     // partial-VALUES builders (re-sending TYPE crashes the 5875 client).
     let guid = 1;
-    let msg = build_ghost_values(guid, 0x10, 0x0100_0000); // PLAYER_FLAGS_GHOST + vis-ghost byte 3
+    let msg = build_player_flags_values(guid, 0x10, 0x0100_0000); // PLAYER_FLAGS_GHOST + vis-ghost byte 3
     match &msg.objects[0] {
         Object::Values { guid1, mask1 } => {
             assert_eq!(guid1.guid(), guid);

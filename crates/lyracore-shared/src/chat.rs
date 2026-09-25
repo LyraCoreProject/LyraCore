@@ -152,10 +152,13 @@ pub enum ChatRefusal {
     NoGuildChatRight,
     /// A channel line the channel refused. Answered with the channel's notice.
     Channel(ChannelRefusal),
+    /// A whisper to a Character of the other team (cm:ChatHandler.cpp:268-275). Answered with
+    /// `SMSG_CHAT_WRONG_FACTION`.
+    WrongFaction,
 }
 
 impl ChatRefusal {
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 23] = [
         Self::NotInGroup,
         Self::NotRaid,
         Self::NotRaidLeader,
@@ -178,6 +181,7 @@ impl ChatRefusal {
         Self::Channel(ChannelRefusal::InviteWrongFaction),
         Self::Channel(ChannelRefusal::PlayerInviteBanned),
         Self::Channel(ChannelRefusal::NotModerated),
+        Self::WrongFaction,
     ];
 
     pub fn as_tag(self) -> &'static str {
@@ -192,6 +196,7 @@ impl ChatRefusal {
             Self::NotInGuild => "chat:not_in_guild",
             Self::NoGuildChatRight => "chat:no_guild_chat_right",
             Self::Channel(refusal) => refusal.as_tag(),
+            Self::WrongFaction => "chat:wrong_faction",
         }
     }
 
@@ -417,6 +422,10 @@ mod tests {
         assert_eq!(
             ChatRefusal::parse_tag("chat:channel:muted"),
             Some(ChatRefusal::Channel(ChannelRefusal::Muted))
+        );
+        assert_eq!(
+            ChatRefusal::parse_tag("chat:wrong_faction"),
+            Some(ChatRefusal::WrongFaction)
         );
         assert_eq!(
             ChatRefusal::parse_tag("realm_chat reducer timed out after 10s"),

@@ -1938,7 +1938,7 @@ pub(crate) fn aura_snapshot_outbound(
 }
 
 /// Trade-status relay (#120): `game_trade_event.kind` → the `SMSG_TRADE_STATUS` variant, to the
-/// row's recipient and nobody else (audience resolved by the caller, the `whisper_event_outbound`
+/// row's recipient and nobody else (audience resolved by the caller, the `auction_notice_outbound`
 /// shape). The kind byte is `lyracore_shared::trade::event_kind` — NOT the vanilla discriminant;
 /// this match IS the wire mapping. An unknown kind (a newer module mid-rollout) drops with a warn
 /// rather than desyncing the window.
@@ -2493,9 +2493,9 @@ fn log_unparseable_broadcast(row: &GroupEvent) {
 }
 
 /// The shared-dispatch "who may see this row" predicate for the PRIVATE recipient-addressed families
-/// (whisper, group/loot-roll/quest-share, resurrect prompt): the row's addressee and nobody else. On
-/// the shared feed this — together with the owner-session lookup that enforces it structurally — is
-/// the entire privacy guarantee RLS used to provide.
+/// (group/loot-roll/quest-share, resurrect prompt, Auction Notice, Mail Arrival, Realm Chat Line):
+/// the row's addressee and nobody else. On the shared feed this, with the owner-session lookup that
+/// enforces it structurally, is the entire privacy guarantee RLS used to provide.
 pub(crate) fn private_recipient_audience(row_recipient_guid: u64, viewer_guid: u64) -> bool {
     // 0 is "unaddressed"/"uninitialized", never a real character — an equality alone would let an
     // unaddressed row match a half-initialized viewer (0 == 0), so zero denies on either side.
@@ -2534,20 +2534,10 @@ pub(crate) fn channel_notice_outbound(row: &ChatChannelNoticeEvent) -> Vec<Outbo
     vec![Outbound::Raw { opcode, body }]
 }
 
-/// Whisper: the packet body both legs run. Audience resolved by the
-/// caller — RLS per-player, the recipient owner-session lookup on the shared leg.
-pub(crate) fn whisper_event_outbound(row: &WhisperEvent) -> Vec<Outbound> {
-    let m = codec::build_whisper(row.other_guid, row.is_inform, row.message.clone());
-    vec![Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(
-        Box::new(m),
-    ))]
-}
-
-/// Auction Notice: the packet body both legs run. Audience resolved by the caller, same as
-/// [`whisper_event_outbound`]. Outbid and Won go to the bidder on
-/// `SMSG_AUCTION_BIDDER_NOTIFICATION`; Sold, Expired and New bid go to the owner on
-/// `SMSG_AUCTION_OWNER_NOTIFICATION`; Removed goes to the bidder a Cancellation displaced on
-/// `SMSG_AUCTION_REMOVED_NOTIFICATION` (`cm:AuctionHouseHandler.cpp`/`AuctionHouseMgr.cpp`).
+/// Auction Notice: the packet body both legs run. Audience resolved by the caller. Outbid and Won
+/// go to the bidder on `SMSG_AUCTION_BIDDER_NOTIFICATION`; Sold, Expired and New bid go to the
+/// owner on `SMSG_AUCTION_OWNER_NOTIFICATION`; Removed goes to the bidder a Cancellation displaced
+/// on `SMSG_AUCTION_REMOVED_NOTIFICATION` (`cm:AuctionHouseHandler.cpp`/`AuctionHouseMgr.cpp`).
 /// `house` outside the imported 1-7 range and any other `kind` both drop the notice and log —
 /// the accompanying Auction Mail still reaches the recipient's inbox either way.
 pub(crate) fn auction_notice_outbound(row: &AuctionNotice) -> Vec<Outbound> {
@@ -2654,29 +2644,24 @@ pub(crate) fn impact_event_outbound(row: &SpellImpactEvent) -> Vec<Outbound> {
 /// AOI-scoped per-player cache could not see a 100–300yd YELL speaker. Missing endpoint → drop
 /// (safer than flooding). `/e` (EMOTE) also gates on [`lyracore_shared::faction::same_team`] — the
 /// one Chat Kind here vanilla keeps same-team-only by default; say and yell still reach both teams.
+/// A player's line carries the chat tag of its live entity's Away Status, read when the line is
+/// relayed (cm:Player.cpp:16571-16599). A creature's line carries none.
 pub(crate) fn chat_event_outbound(
     coord: &Coordinator,
     self_guid: u64,
     row: &ChatEvent,
 ) -> Vec<Outbound> {
+    let guard = coord.0.coord();
+    let entities = guard.conn.db.game_world_entity();
+    let speaker = entities.guid().find(&row.sender_guid);
     if row.sender_guid != self_guid {
+        let Some(speaker) = &speaker else {
+            return Vec::new();
+        };
+        let Some(listener) = entities.guid().find(&self_guid) else {
+            return Vec::new();
+        };
         let range_yd = chat_range_yd(row.chat_type);
-        let range_sq = range_yd * range_yd;
-        let guard = coord.0.coord();
-        let speaker = match guard
-            .conn
-            .db
-            .game_world_entity()
-            .guid()
-            .find(&row.sender_guid)
-        {
-            Some(e) => e,
-            None => return Vec::new(),
-        };
-        let listener = match guard.conn.db.game_world_entity().guid().find(&self_guid) {
-            Some(e) => e,
-            None => return Vec::new(),
-        };
         if !chat_in_range(
             speaker.map_id,
             speaker.instance_id,
@@ -2686,7 +2671,7 @@ pub(crate) fn chat_event_outbound(
             listener.instance_id,
             listener.x,
             listener.y,
-            range_sq,
+            range_yd * range_yd,
         ) {
             return Vec::new();
         }
@@ -2700,14 +2685,7 @@ pub(crate) fn chat_event_outbound(
         }
     }
     let sender_name = if matches!(row.sender_guid >> 48, 0xF130 | 0xF140) {
-        let guard = coord.0.coord();
-        let Some(speaker) = guard
-            .conn
-            .db
-            .game_world_entity()
-            .guid()
-            .find(&row.sender_guid)
-        else {
+        let Some(speaker) = &speaker else {
             return Vec::new();
         };
         let Some(template) = guard
@@ -2723,10 +2701,27 @@ pub(crate) fn chat_event_outbound(
     } else {
         None
     };
-    vec![chat_event_message(row, sender_name)]
+    vec![chat_event_message(
+        row,
+        sender_name,
+        nearby_chat_tag(speaker.as_ref()),
+    )]
 }
 
-fn chat_event_message(row: &ChatEvent, sender_name: Option<String>) -> Outbound {
+/// The chat tag a nearby line carries: a player speaker's Away Status, and none for a creature or
+/// a speaker whose entity is already gone.
+fn nearby_chat_tag(speaker: Option<&WorldEntity>) -> u8 {
+    match speaker {
+        Some(entity)
+            if entity.type_mask & lyracore_shared::constants::type_mask::PLAYER_BIT != 0 =>
+        {
+            lyracore_shared::chat::chat_tag_for(entity.player_flags)
+        }
+        _ => lyracore_shared::chat::chat_tag::NONE,
+    }
+}
+
+fn chat_event_message(row: &ChatEvent, sender_name: Option<String>, chat_tag: u8) -> Outbound {
     let message = codec::build_chat_message_to(
         row.sender_guid,
         sender_name,
@@ -2734,6 +2729,7 @@ fn chat_event_message(row: &ChatEvent, sender_name: Option<String>) -> Outbound 
         row.chat_type,
         row.language,
         row.message.clone(),
+        chat_tag,
     );
     Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(message)))
 }
@@ -3273,12 +3269,12 @@ fn entity_update_to_outbound_with_dynamic_flags(
             let m = codec::build_bank_bag_slots_values(new.guid, new.player_bytes_2);
             out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
         }
-        // Ghost transition (slice 5): PLAYER_FLAGS_GHOST + the UNIT_FIELD_BYTES_1 vis bit on Release Spirit
-        // (set) and reclaim (cleared) — observers see the player turn translucent/solid. Players only.
+        // PLAYER_FLAGS and the UNIT_FIELD_BYTES_1 vis bit: the ghost transition on Release Spirit
+        // and reclaim, and the AFK and DND bits of an Away Status. Players only.
         if is_player
             && (old.player_flags != new.player_flags || old.unit_bytes_1 != new.unit_bytes_1)
         {
-            let m = codec::build_ghost_values(new.guid, new.player_flags, new.unit_bytes_1);
+            let m = codec::build_player_flags_values(new.guid, new.player_flags, new.unit_bytes_1);
             out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
         }
         // Live power update: rage/energy/mana changing in combat. The power-type byte of unit_bytes_0 picks
@@ -4658,6 +4654,7 @@ mod tests {
                     ..base.clone()
                 },
                 Some("Defias Thug".into()),
+                0,
             );
             let Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(message)) = out else {
                 panic!("expected creature chat packet");
@@ -5778,6 +5775,60 @@ mod tests {
         new.max_health = 120;
         new.xp = 10;
         assert_eq!(entity_update_to_outbound(&old, &new).len(), 1);
+    }
+
+    /// cm:Player.cpp:16571-16599: a player's say, yell and `/e` carry `GetChatTag()`, AFK 1 and
+    /// DND 2. A creature's line carries none, whatever its flags word holds.
+    #[test]
+    fn a_nearby_line_carries_the_player_speakers_away_tag() {
+        let mut speaker = player_entity();
+        assert_eq!(nearby_chat_tag(Some(&speaker)), 0);
+        speaker.player_flags = 0x02;
+        assert_eq!(nearby_chat_tag(Some(&speaker)), 1);
+        speaker.player_flags = 0x04 | 0x10;
+        assert_eq!(nearby_chat_tag(Some(&speaker)), 2);
+        speaker.type_mask = 0;
+        assert_eq!(nearby_chat_tag(Some(&speaker)), 0, "a creature");
+        assert_eq!(nearby_chat_tag(None), 0, "a speaker already gone");
+    }
+
+    /// `/afk` sets PLAYER_FLAGS_AFK (0x02, descriptor index 190). Self and every observer run this
+    /// same diff, so each client holding the object gets one VALUES update carrying the new word.
+    #[test]
+    fn an_afk_toggle_relays_player_flags_to_every_viewer() {
+        let old = player_entity();
+        for (flags, label) in [(0x02, "AFK"), (0x04, "DND"), (0x00, "cleared")] {
+            let mut new = old.clone();
+            new.player_flags = flags;
+            let before = if flags == 0 {
+                let mut away = old.clone();
+                away.player_flags = 0x02;
+                away
+            } else {
+                old.clone()
+            };
+            let out = entity_update_to_outbound(&before, &new);
+            let [ServerOpcodeMessage::SMSG_UPDATE_OBJECT(update)] = out.as_slice() else {
+                panic!("{label}: expected one VALUES update, got {out:?}");
+            };
+            let mut wire = Vec::new();
+            wow_world_messages::vanilla::ServerMessage::write_unencrypted_server(
+                &**update, &mut wire,
+            )
+            .unwrap();
+            let values = lyracore_shared::values_mask::parse_values_updates(&wire[4..]);
+            assert_eq!(values.len(), 1, "{label}");
+            assert_eq!(values[0].guid, 1, "{label}");
+            assert!(
+                values[0].fields.contains(&(190, flags)),
+                "{label}: PLAYER_FLAGS missing from {:?}",
+                values[0].fields
+            );
+            assert!(
+                !values[0].fields.iter().any(|&(index, _)| index == 2),
+                "{label}: OBJECT_FIELD_TYPE leaked into a partial update"
+            );
+        }
     }
 
     #[test]
@@ -6963,13 +7014,14 @@ mod tests {
         );
     }
 
-    /// Tripwire for the realm-core PRIVATE tier (#22 → #483): the cross-shard whisper/group
+    /// Tripwire for the realm-core PRIVATE tier (#22 → #483): the cross-shard group and chat
     /// twins are armed ONCE per realm-core connection (`arm_realm_private`), gated on realm-core
     /// being a DISTINCT database. Without the gate a single-database gateway registers a SECOND
     /// callback on tables `arm_shard` already watches and every private packet is delivered
-    /// twice; without the arming a cross-shard whisper is written on realm-core and delivered to
-    /// nobody. No fake in this tree can reach either (a callback on another database's live
-    /// coordinator connection), so the wiring is pinned in source, comment-stripped.
+    /// twice; without the arming a cross-shard Realm Chat Line is written on realm-core and
+    /// delivered to nobody. No fake in this tree can reach either (a callback on another
+    /// database's live coordinator connection), so the wiring is pinned in source,
+    /// comment-stripped.
     #[test]
     fn the_realm_private_tier_is_armed_once_gated_on_a_distinct_database() {
         let body = decommented(top_level_fn_body_of(
@@ -6986,14 +7038,14 @@ mod tests {
             "the realm-core private tier lost its DISTINCT-DATABASE guard. On a single-database \
              gateway (or with `LYRACORE_REALM_CORE` naming a world shard) `arm_shard` already \
              watches these tables, so arming realm-core too delivers every invite dialog and \
-             whisper line twice."
+             Realm Chat Line twice."
         );
         assert!(
             body.contains(
                 "super::world_view::arm_realm_private(view.clone(), realm.clone(), world.clone());"
             ),
-            "the realm-core private tier is never armed — a cross-shard whisper is written on \
-             realm-core and delivered to nobody"
+            "the realm-core private tier is never armed: a cross-shard Realm Chat Line is \
+             written on realm-core and delivered to nobody"
         );
         assert_eq!(
             body.matches("arm_realm_private(").count(),
@@ -7004,19 +7056,15 @@ mod tests {
         );
     }
 
-    /// The other half: `arm_realm_private` must register BOTH tables through the same
+    /// The other half: `arm_realm_private` must register its tables through the same
     /// recipient-keyed dispatchers as `arm_shard`'s private tier. The recipient filter is
     /// structural there (`session_of_owner(row.recipient_guid)` + `private_recipient_audience`)
     /// — these reads ride the OWNER TOKEN, which bypasses RLS, so a dispatcher that fanned to
-    /// viewers instead would hand every player's private whispers to every session.
+    /// viewers instead would hand every player's private lines to every session.
     #[test]
     fn the_realm_private_relays_ride_the_recipient_keyed_dispatchers() {
         let body = decommented(top_level_fn_body_of("world_view.rs", "arm_realm_private"));
         let compact: String = body.chars().filter(|c| !c.is_whitespace()).collect();
-        assert!(
-            compact.contains("wire_insert_live(db.game_whisper_event(),\"realm.game_whisper_event.insert\",&view,|v,row|whisper_appeared(v,row));"),
-            "arm_realm_private no longer relays realm-core whispers through `whisper_appeared`"
-        );
         assert!(
             compact.contains("wire_insert_live(db.game_group_event(),\"realm.game_group_event.insert\",&view,move|v,row|group_event_appeared(v,&coord,row));"),
             "arm_realm_private no longer relays realm-core group events through \
@@ -7028,8 +7076,8 @@ mod tests {
         // no line is delivered twice.
         assert!(
             compact.contains("wire_insert_live(db.game_realm_chat_event(),\"realm.game_realm_chat_event.insert\",&view,|v,row|realm_chat_appeared(v,row));"),
-            "arm_realm_private no longer relays Realm Chat Lines, so every party line on a \
-             sharded Realm is written and heard by nobody"
+            "arm_realm_private no longer relays Realm Chat Lines, so every party line and \
+             whisper on a sharded Realm is written and heard by nobody"
         );
         let shard = decommented(top_level_fn_body_of(
             "world_view.rs",
@@ -7055,7 +7103,7 @@ mod tests {
         );
         // The dispatchers themselves stay recipient-keyed: each body must resolve the recipient's
         // session FIRST and re-assert the audience predicate.
-        for dispatcher in ["whisper_appeared", "mail_arrived"] {
+        for dispatcher in ["group_event_appeared", "mail_arrived"] {
             let body = decommented(top_level_fn_body_of("world_view.rs", dispatcher));
             assert!(
                 body.contains("session_of_owner(row.recipient_guid)")
@@ -7071,7 +7119,7 @@ mod tests {
     /// `game_auction_notice` rides the same private tier: armed once on each shard connection
     /// (`register_shard_callbacks`) and once more on the realm-core connection (`arm_realm_private`)
     /// for a cross-shard bidder or seller, both through `auction_notice_appeared`, which is itself
-    /// recipient-keyed the same way `whisper_appeared` is above.
+    /// recipient-keyed the same way `mail_arrived` is above.
     #[test]
     fn the_auction_notice_relay_is_armed_on_both_connections_and_recipient_keyed() {
         let shard = decommented(top_level_fn_body_of(

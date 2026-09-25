@@ -430,7 +430,7 @@ impl Coordinator {
     }
 
     /// Resolve a typed contact name to a character guid (case-insensitive, mirroring the module's own
-    /// `send_whisper` name match) via the privileged cache — the same RLS-bypass trick
+    /// `character_by_name` match) via the privileged cache, the same RLS-bypass trick
     /// `in_world_players` uses. `None` if no character has that name.
     pub fn character_guid_by_name(&self, name: &str) -> Result<Option<u64>> {
         Ok(self

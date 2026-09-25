@@ -28,7 +28,7 @@
 //! (they are, by construction, all on this shard the instant the roll starts — see below).
 //!
 //! Once promoted, a vote is a client action again (`CMSG_LOOT_ROLL`), so [`run_vote`] routes it the
-//! same way `party::run`/`whisper::run` route theirs.
+//! same way `party::run` routes its ops.
 //!
 //! # The new case
 //!

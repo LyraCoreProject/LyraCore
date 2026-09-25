@@ -139,6 +139,9 @@ pub(crate) const NOT_TRANSPORTED: &[&str] = &[
     // either participant interrupts it; no source snapshot is meaningful on the destination.
     "game_duel",
     "game_duel_event",
+    // Away Status ends at login, and Transfer arrival runs login, so the destination would delete
+    // the Auto-Reply the moment it arrived.
+    "game_character_away",
 ];
 
 // ===========================================================================================
@@ -663,7 +666,7 @@ pub(crate) fn decode_blob(transfer_id: u64, bytes: &[u8]) -> Result<ExportBlob, 
 /// names none of them and could carry no rows for them, so it imports with each one empty. That lets
 /// a Transfer in flight across the publish finish instead of freezing its Character. Empty this
 /// list, and delete [`previous_manifest`] with it, once the next build has shipped.
-pub(crate) const ADDED_SINCE_PREVIOUS_BUILD: &[&str] = &["game_auction_hold"];
+pub(crate) const ADDED_SINCE_PREVIOUS_BUILD: &[&str] = &["game_character_away"];
 
 /// The manifest the build before this one exported.
 pub(crate) fn previous_manifest() -> Vec<ManifestEntry> {

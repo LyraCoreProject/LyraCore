@@ -5,23 +5,20 @@
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
 use super::session_actor_type::SessionActor;
+use super::whisper_request_type::WhisperRequest;
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct RealmWhisperArgs {
     pub request_actor: SessionActor,
-    pub target_guid: u64,
-    pub message: String,
-    pub sender_is_ignored: bool,
+    pub request: WhisperRequest,
 }
 
 impl From<RealmWhisperArgs> for super::Reducer {
     fn from(args: RealmWhisperArgs) -> Self {
         Self::RealmWhisper {
             request_actor: args.request_actor,
-            target_guid: args.target_guid,
-            message: args.message,
-            sender_is_ignored: args.sender_is_ignored,
+            request: args.request,
         }
     }
 }
@@ -44,17 +41,9 @@ pub trait realm_whisper {
     fn realm_whisper(
         &self,
         request_actor: SessionActor,
-        target_guid: u64,
-        message: String,
-        sender_is_ignored: bool,
+        request: WhisperRequest,
     ) -> __sdk::Result<()> {
-        self.realm_whisper_then(
-            request_actor,
-            target_guid,
-            message,
-            sender_is_ignored,
-            |_, _| {},
-        )
+        self.realm_whisper_then(request_actor, request, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `realm_whisper` to run as soon as possible,
@@ -66,9 +55,7 @@ pub trait realm_whisper {
     fn realm_whisper_then(
         &self,
         request_actor: SessionActor,
-        target_guid: u64,
-        message: String,
-        sender_is_ignored: bool,
+        request: WhisperRequest,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -80,9 +67,7 @@ impl realm_whisper for super::RemoteReducers {
     fn realm_whisper_then(
         &self,
         request_actor: SessionActor,
-        target_guid: u64,
-        message: String,
-        sender_is_ignored: bool,
+        request: WhisperRequest,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -91,9 +76,7 @@ impl realm_whisper for super::RemoteReducers {
         self.imp.invoke_reducer_with_callback(
             RealmWhisperArgs {
                 request_actor,
-                target_guid,
-                message,
-                sender_is_ignored,
+                request,
             },
             callback,
         )

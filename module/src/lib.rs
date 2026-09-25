@@ -282,6 +282,7 @@ mod action_bar;
 mod actor;
 mod auction;
 mod auth;
+mod away;
 mod breath;
 mod breath_relay;
 mod bridge;
@@ -426,6 +427,7 @@ pub use account_ownership::*;
 pub use action_bar::*;
 pub use auction::*;
 pub use auth::*;
+pub use away::CharacterAway; // re-exported for the gateway schema-parity test
 pub use breath::*;
 pub use breath_relay::BreathRelayEvent; // gateway schema-parity relay
 pub use bridge::*;

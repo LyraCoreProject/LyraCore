@@ -102,7 +102,7 @@ are answered by the gateway, which is the only component that can see the whole 
 | Gate | Why it cannot live in the module | Where |
 |---|---|---|
 | "does this character exist" / "is this character online" for party invites, and "is the new leader online" when the lead passes | realm-core holds no characters and no live entities; one world shard sees only its own | `gateway/src/world/presence.rs` (`of`, `live_anywhere`) |
-| whisper target resolution by name, realm-wide, plus the ignore verdict | same | `presence.rs` (`resolve_by_name`), `gateway/src/world/whisper.rs` (`ignored_anywhere`) |
+| whisper target resolution by name, realm-wide, plus the ignore verdict and the Auto-Reply | same | `presence.rs` (`resolve_all_by_name`, `of`, `auto_reply`), `gateway/src/world/whisper.rs` (`target_facts`, `ignored_anywhere`) |
 | `CMSG_NAME_QUERY` resolution | same | `presence.rs` (`character_anywhere`) |
 | friend/ignore add target resolution by name, realm-wide — the existence check the Module no longer performs, since Realm-core holds no Character rows for it to check | same | `presence.rs` (`resolve_by_name`, `of`), `gateway/src/world/social.rs` (`resolve_add_contact`) |
 | loot-roll promotion and settlement fan-out across shards | a kill's transaction cannot reach realm-core | `gateway/src/world/loot.rs` |
@@ -431,15 +431,15 @@ Every relay hangs off a coordinator connection. Row-driven relays take one of tw
 - **Shared per-shard dispatch** (`world_view::arm_shard`, armed once per shard connection and
   re-armed through `CoordinatorInner::on_reconnect` after a watchdog swap): the broadcast-shaped
   families (entities, motion, combat, chat, auras, corpses, casts), the recipient-keyed PRIVATE
-  tier (whisper/group/resurrect/auction notice/Mail Arrival), and owner-addressed XP, level-up,
+  tier (group/resurrect/auction notice/Mail Arrival), and owner-addressed XP, level-up,
   exploration, quest, item, teleport, addon, reputation, and Instance Removal rows. GUID and bound-identity indexes select one
   viewer directly; the callback enqueues packet work on that session's FIFO writer. Combat, cast,
   impact, and emote rows carry the actor's cell. Melee stance uses the attacker's indexed cell, chat
   uses the sender's, and auras use the target's. The shared cell index selects nearby viewers and
   named owners on the source Shard, and the job's per-viewer gate stays the final filter. Only
   corpses, dynamic objects and weather still fan out per shard. `/roll` is a Group Broadcast on the
-  group event relay. The cross-shard whisper/group/auction-notice/Mail Arrival twins, Realm Chat
-  Lines, Channel Notices and the Account Claim Relay (friend online/offline notices) ride the same
+  group event relay. The cross-shard group/auction-notice/Mail Arrival twins, Realm Chat
+  Lines (whispers included), Channel Notices and the Account Claim Relay (friend online/offline notices) ride the same
   dispatchers on the realm-core connection (`arm_realm_private`), armed only when realm-core is a
   distinct database. The guild relays register in both places too (`wire_guild_relays`):
   `game_guild_event` rows go to their addressed recipient or to every online member of the Guild on
