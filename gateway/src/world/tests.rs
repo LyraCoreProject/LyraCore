@@ -413,6 +413,10 @@ struct InMemoryStore {
     speaker_facts: Option<SpeakerFacts>,
     /// What `realm_chat` answers. `None` delivers.
     realm_chat_outcome: Option<ChatOutcome>,
+    /// What `send_chat` answers; `None` delivers.
+    send_chat_outcome: Option<ChatOutcome>,
+    /// Every Character's GM level, as `speaker_gm_level` reads it.
+    gm_level: u8,
     /// Recorded `realm_chat` requests, with the speaker guid the session authenticated.
     realm_chats: std::sync::Mutex<Vec<(u64, RealmChatRequest)>>,
     /// The `WorldEntry` of every `player_login`, in order.
@@ -2965,7 +2969,7 @@ impl WorldStore for InMemoryStore {
         chat_type: u8,
         language: u8,
         message: String,
-    ) -> Result<()> {
+    ) -> Result<ChatOutcome> {
         // Recorded per SHARD like every other player-scoped call, so the partition rule (say/
         // yell stay shard-local and range-scoped) is assertable rather than merely stated.
         self.rec("send_chat");
@@ -2973,7 +2977,7 @@ impl WorldStore for InMemoryStore {
             .lock()
             .unwrap()
             .push((chat_type, language, message));
-        Ok(())
+        Ok(self.send_chat_outcome.unwrap_or(ChatOutcome::Delivered))
     }
     fn send_emote(
         &self,
@@ -4322,6 +4326,10 @@ impl ChatActionStore for InMemoryStore {
             return Err(anyhow!("{e}"));
         }
         Ok(self.realm_whisper_outcome.unwrap_or(ChatOutcome::Delivered))
+    }
+
+    fn speaker_gm_level(&self, _speaker_guid: u64) -> Result<u8> {
+        Ok(self.gm_level)
     }
 }
 
@@ -12005,6 +12013,135 @@ fn messagechat_party_from_an_ungrouped_caller_replies_not_in_group() {
         }
         other => panic!("expected SMSG_PARTY_COMMAND_RESULT(NotInGroup), got {other}"),
     }
+    drop(client);
+    server.join().unwrap();
+}
+
+/// Character 1 in the world, with a Character row so `sync`'s sentinel is answered.
+fn chat_store() -> InMemoryStore {
+    InMemoryStore {
+        speaker_facts: Some(human_speaker()),
+        characters: vec![codec::CharacterView {
+            guid: 1,
+            name: "Tester".into(),
+            ..Default::default()
+        }],
+        ..quest_store()
+    }
+}
+
+fn say_line(message: &str) -> CMSG_MESSAGECHAT {
+    CMSG_MESSAGECHAT {
+        chat_type: CMSG_MESSAGECHAT_ChatType::Say,
+        language: Language::Common,
+        message: message.into(),
+    }
+}
+
+fn notification(message: ServerOpcodeMessage) -> String {
+    match message {
+        ServerOpcodeMessage::SMSG_NOTIFICATION(notice) => notice.notification,
+        other => panic!("expected SMSG_NOTIFICATION, got {other}"),
+    }
+}
+
+#[test]
+fn a_flooding_session_is_muted_before_any_chat_durable_request() {
+    // cm:Player.cpp:16344-16377: eleven fast lines mute the speaker for ten seconds. The twelfth
+    // line and the party line after it answer the cmangos notice and reach no reducer.
+    let store = std::sync::Arc::new(chat_store());
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+    for n in 0..12 {
+        say_line(&format!("line {n}"))
+            .write_encrypted_client(&mut client, &mut c_enc)
+            .unwrap();
+    }
+    CMSG_MESSAGECHAT {
+        chat_type: CMSG_MESSAGECHAT_ChatType::Party,
+        language: Language::Common,
+        message: "form up".into(),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    for _ in 0..2 {
+        assert_eq!(
+            notification(ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap()),
+            "You must wait 10 Second(s). before speaking again."
+        );
+    }
+    sync(&mut client, &mut c_enc, &mut c_dec, |_, _| {});
+    drop(client);
+    server.join().unwrap();
+    assert_eq!(store.chats.lock().unwrap().len(), 11);
+    assert!(store.realm_chats.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_muted_session_still_sends_addon_lines() {
+    // cm:ChatHandler.cpp:113-119: the addon language is never flood-controlled.
+    let store = std::sync::Arc::new(chat_store());
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+    for n in 0..12 {
+        say_line(&format!("line {n}"))
+            .write_encrypted_client(&mut client, &mut c_enc)
+            .unwrap();
+    }
+    CMSG_MESSAGECHAT {
+        chat_type: CMSG_MESSAGECHAT_ChatType::Guild,
+        language: Language::Addon,
+        message: "LCTEST\tping".into(),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    notification(ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap());
+    sync(&mut client, &mut c_enc, &mut c_dec, |_, _| {});
+    drop(client);
+    server.join().unwrap();
+    let requests = store.realm_chats.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].1.language, 0xFFFF_FFFF);
+}
+
+#[test]
+fn a_game_master_is_never_muted_for_flooding() {
+    // cm:Player.cpp:16346-16348 skips the flood count for any account above SEC_PLAYER.
+    let mut s = chat_store();
+    s.gm_level = 1;
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+    sync(&mut client, &mut c_enc, &mut c_dec, |c, e| {
+        for n in 0..15 {
+            say_line(&format!("line {n}"))
+                .write_encrypted_client(&mut *c, &mut *e)
+                .unwrap();
+        }
+    });
+    drop(client);
+    server.join().unwrap();
+    assert_eq!(store.chats.lock().unwrap().len(), 15);
+}
+
+#[test]
+fn a_say_line_in_a_language_the_speaker_does_not_know_answers_the_vanilla_notice() {
+    // cm:ChatHandler.cpp:107-110 with cm mangos.sql:4044.
+    let mut s = chat_store();
+    s.send_chat_outcome = Some(ChatOutcome::Refused(
+        lyracore_shared::chat::ChatRefusal::UnknownLanguage,
+    ));
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_MESSAGECHAT {
+        chat_type: CMSG_MESSAGECHAT_ChatType::Say,
+        language: Language::Orcish,
+        message: "zug zug".into(),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    assert_eq!(
+        notification(ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap()),
+        "You don't know that language"
+    );
+    sync(&mut client, &mut c_enc, &mut c_dec, |_, _| {});
     drop(client);
     server.join().unwrap();
 }

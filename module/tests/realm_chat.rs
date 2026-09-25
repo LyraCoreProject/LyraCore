@@ -100,4 +100,20 @@ fn a_party_line_is_one_row_naming_every_member_of_the_realm_core_party() {
     assert_eq!(lines.len(), 1, "{updates:?}");
     assert_eq!(lines[0]["message"], "sentinel");
     assert_eq!(lines[0]["language"], 0, "Universal passes for party");
+
+    // An addon payload travels as the client sent it (cm:ChatHandler.cpp:306-312).
+    assert!(
+        support::poll_until(std::time::Duration::from_secs(20), || realm
+            .query_rows(REALM_CHAT_ROWS)
+            .is_empty()),
+        "the event GC never reaped the sentinel line"
+    );
+    let addon = party_request(0xFFFF_FFFF, "LCTEST\t ping ");
+    let updates = realm.capture_updates(REALM_CHAT_ROWS, 1, || {
+        realm.assert_call("realm_chat", &[&actor("1"), &addon]);
+    });
+    let lines = inserted_lines(&updates[0]);
+    assert_eq!(lines.len(), 1, "{updates:?}");
+    assert_eq!(lines[0]["message"], "LCTEST\t ping ", "no trim");
+    assert_eq!(lines[0]["language"], 0xFFFF_FFFF_u32);
 }

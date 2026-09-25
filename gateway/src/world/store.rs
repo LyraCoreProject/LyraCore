@@ -941,7 +941,9 @@ pub trait WorldStore:
     /// the shared curve against it.
     fn entity_max_health(&self, guid: u64) -> u32;
 
-    /// Speak (`CMSG_MESSAGECHAT`, social tier): broadcast a say/yell line. `chat_type` 0 = say, 1 = yell.
+    /// Speak (`CMSG_MESSAGECHAT`, social tier): broadcast a say, yell or `/e` line
+    /// (`lyracore_shared::chat::broadcast_chat`). A language the speaker's race does not know is a
+    /// Refusal.
     fn send_chat(
         &self,
         account_id: u64,
@@ -949,7 +951,7 @@ pub trait WorldStore:
         chat_type: u8,
         language: u8,
         message: String,
-    ) -> Result<()>;
+    ) -> Result<crate::world::ChatOutcome>;
 
     /// Perform an emote (`CMSG_TEXT_EMOTE`, social tier): broadcast the "X dances." line + animation.
     /// `target_guid` (0 = untargeted) is the client's selected target — the gateway resolves it to a

@@ -79,6 +79,9 @@ pub(crate) trait ChatActionStore: Send + Sync {
     ) -> Result<Option<WhisperTargetFacts>>;
     /// Durable Request on Realm-core.
     fn realm_whisper(&self, speaker_guid: u64, request: WhisperRequest) -> Result<ChatOutcome>;
+    /// The speaker's GM level, read on its Home Shard. The Chat Flood Limiter never mutes a
+    /// Character above 0.
+    fn speaker_gm_level(&self, speaker_guid: u64) -> Result<u8>;
 }
 
 impl ChatActionStore for crate::stdb::Coordinator {
@@ -104,6 +107,10 @@ impl ChatActionStore for crate::stdb::Coordinator {
 
     fn realm_whisper(&self, speaker_guid: u64, request: WhisperRequest) -> Result<ChatOutcome> {
         crate::stdb::Coordinator::realm_whisper(self, speaker_guid, request)
+    }
+
+    fn speaker_gm_level(&self, speaker_guid: u64) -> Result<u8> {
+        Ok(crate::stdb::Coordinator::home_gm_level(self, speaker_guid))
     }
 }
 
@@ -344,13 +351,28 @@ fn send_line<St: ChatActionStore + ?Sized>(
     };
     let request = request(speaker);
     let kind = request.kind;
-    match store.realm_chat(speaker_guid, request) {
+    settle(
+        player,
+        format_args!("chat kind {kind}"),
+        store.realm_chat(speaker_guid, request),
+    )
+}
+
+/// Sort one chat Durable Request's result. `Ok(None)` means the line went out, or was dropped for
+/// a failure the World Session survives; a Refusal comes back for the caller to answer. Only a
+/// lost reducer transport is fatal.
+pub(crate) fn settle(
+    player: ChatActionPlayer,
+    line: impl std::fmt::Display,
+    sent: Result<ChatOutcome>,
+) -> Result<Option<ChatRefusal>> {
+    match sent {
         Ok(ChatOutcome::Delivered) => Ok(None),
         Ok(ChatOutcome::Refused(refusal)) => Ok(Some(refusal)),
         Err(error) if is_transport_failure(&error) => Err(error),
         Err(error) => {
             log::debug!(
-                "world: chat kind {kind} dropped (account {}): {error:#}",
+                "world: {line} dropped (account {}): {error:#}",
                 player.account_id
             );
             Ok(None)
@@ -359,7 +381,10 @@ fn send_line<St: ChatActionStore + ?Sized>(
 }
 
 /// The answer every Chat Kind shares. Vanilla answers most chat Refusals with silence.
-fn refusal_outbound(player: ChatActionPlayer, refusal: Option<ChatRefusal>) -> Vec<Outbound> {
+pub(crate) fn refusal_outbound(
+    player: ChatActionPlayer,
+    refusal: Option<ChatRefusal>,
+) -> Vec<Outbound> {
     match refusal {
         None => Vec::new(),
         Some(ChatRefusal::UnknownLanguage) => vec![Outbound::One(
@@ -451,6 +476,10 @@ mod tests {
         fn realm_whisper(&self, speaker_guid: u64, request: WhisperRequest) -> Result<ChatOutcome> {
             self.whispers.lock().unwrap().push((speaker_guid, request));
             answer(&self.whisper_outcome, ChatOutcome::Delivered)
+        }
+
+        fn speaker_gm_level(&self, _speaker_guid: u64) -> Result<u8> {
+            Ok(0)
         }
     }
 
