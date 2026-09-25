@@ -24,9 +24,16 @@ env:
   SPACETIME_ARCHIVE_SHA256: 9b58192135733083479f30aba47dbbbc79b51db368c46cc221baa663e9c3a2c1
 
 jobs:
+  # The suite is mostly wall-clock waiting on standalones, so three shards run in parallel. Each
+  # shard takes every third test target by position in the sorted file list, so a new target lands
+  # in a shard without a workflow edit. The binding checks and the Gateway regressions run once.
   durable:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -55,11 +62,13 @@ jobs:
           [ "$found" = "$SPACETIME_VERSION" ]
 
       - name: Test the Gateway binding check
+        if: matrix.shard == 0
         run: python3 -m unittest scripts/tests/test_check_gateway_bindings.py
 
       # This regenerates the complete private schema into a temporary directory. It does not need a
       # running Realm and never publishes the Module.
       - name: Check all Gateway bindings
+        if: matrix.shard == 0
         run: scripts/check-gateway-bindings.py
 
       # Build failures report before any fixture starts. Each test process asks Cargo for the
@@ -73,13 +82,18 @@ jobs:
       # they are not in this repository, so their reducers do not exist in the published module.
       # `lethal_floor`'s ranged phase races the module's own cast-event sweep and health regen, and
       # is flaky on `main` with or without this change.
-      - name: Run the durable suite
-        run: cargo test -p lyracore-module --tests -- --ignored --test-threads=4 --skip deadmines --skip personality --skip playerbots_ --skip lethal_floor
+      - name: Run the durable suite, shard ${{ matrix.shard }} of 3
+        run: |
+          targets=$(ls module/tests/*.rs | xargs -n1 basename -s .rs | sort | awk -v shard="${{ matrix.shard }}" 'NR % 3 == shard { printf "--test %s ", $0 }')
+          echo "targets: $targets"
+          cargo test -p lyracore-module $targets -- --ignored --test-threads=4 --skip deadmines --skip personality --skip playerbots_ --skip lethal_floor
 
       - name: Run the single-shard auction Refusal regression
+        if: matrix.shard == 0
         run: cargo test -p lyracore-gateway --bin lyracore-gateway stdb::reducers::auction_reducer_tests::a_local_bid_interaction_refusal_stays_a_client_outcome -- --ignored --exact
 
       - name: Run the Gateway ownership and durable projection regressions
+        if: matrix.shard == 0
         run: |
           cargo test -p lyracore-gateway --bin lyracore-gateway stdb::account_sessions::tests::independent_coordinators_preserve_the_winner_after_delayed_cleanup -- --ignored --exact
           cargo test -p lyracore-gateway --bin lyracore-gateway world::tests::competing_world_sessions_close_the_old_socket_without_removing_the_winner -- --ignored --exact
@@ -90,7 +104,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: standalone-logs
+          name: standalone-logs-${{ matrix.shard }}
           path: /tmp/lyracore-standalone-logs
           if-no-files-found: ignore
 
