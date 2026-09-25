@@ -647,7 +647,8 @@ fn gm_create(leader: &CharacterFacts, gm_level: u8, name: String) -> GuildReques
     }
 }
 
-/// Every live Character on `name`, realm-wide; the first live candidate wins, like `whisper::run`.
+/// Every live Character on `name`, realm-wide; the first live candidate wins, the way
+/// `whisper::target_facts` picks the first online one.
 fn live_character_named<St: GuildActionStore + ?Sized>(
     store: &St,
     name: &str,

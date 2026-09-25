@@ -74,6 +74,7 @@ pub(crate) use handlers::{
     GuildOutcome, GuildRequest, ItemActionResult, LootActionStatus, LootWindowRefusal,
     LootWindowRequestStatus, MemberPresence, MemberStatsRecord, MemberStatsStore, PlaceBidOutcome,
     PlaceBidRequest, RealmChatRequest, SpeakerFacts, TrainerBuyOutcome, WeatherStore,
+    WhisperRequest, WhisperTargetFacts,
 };
 use login_queue::{Admission, LoginQueue};
 use social::handle_social;

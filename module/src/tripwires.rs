@@ -98,7 +98,6 @@ pub(crate) mod character_owned_tripwire {
                 "game_system_message_event",
                 "game_teleport_event",
                 "game_trade_event",
-                "game_whisper_event",
                 "game_xp_event",
             ],
             "short-lived Relay event reaped by event GC",
@@ -168,6 +167,10 @@ pub(crate) mod character_owned_tripwire {
         (
             &["game_channel_event", "game_channel_member"],
             "retired shard-local channel tables that nothing writes",
+        ),
+        (
+            &["game_whisper_event"],
+            "retired whisper table that nothing writes; whispers are Realm Chat Lines",
         ),
         (
             &[
@@ -1177,7 +1180,6 @@ mod character_fence_tripwire {
         // REGENERATE at the destination — connection-derived state, never carried in the blob.
         ("module/src/auth.rs", 4, "REGENERATE: create_character's two name checks (NAME_IN_USE, pre-insert and the race-losing retry) predate any character; its guid-allocator seed scan (`legacy_guid_seed_now`, first-ever touch only) needs the whole table; delete_character keeps a raw find so NO_SUCH_CHAR/NOT_OWNER/CHAR_IN_TRANSIT stay three answers, with the fence on the next line. establish_session's owner_identity rebind and create_character's per-account cap check now route through the `by_account` index instead of a full scan (issue #390), so they no longer count here"),
         // READS, not writes: name/class/race/identity lookups that mutate nothing on the character.
-        ("module/src/chat.rs", 1, "`push_whisper` reads a recipient's owner_identity to ADDRESS a whisper event row (the bridge.rs/reputation.rs verdict — no write to the character), and its ZERO fallback is the intended answer on realm-core, where no character row exists at all. `add_contact`'s own target-existence check is gone: the Gateway's realm-wide name resolution is now the sole existence Gate, so a target on another Shard, which has no row here, still resolves"),
         ("module/src/items/ops.rs", 2, "race/class reads for the starter loadout and the mana-class gate — no write to the character"),
         ("module/src/spell/cast/targeting.rs", 1, "caster NAME for the resurrect prompt — no write"),
         ("module/src/reputation.rs", 1, "owner_identity fallback for RLS visibility of a new rep row — no write to the character"),
@@ -1194,9 +1196,9 @@ mod character_fence_tripwire {
     ];
 
     /// The lookup forms that reach a character row raw. `.guid().find(` and `.name().find(` are the
-    /// indexed point reads; `.iter()` is the case-folding name scan (`send_whisper`'s convention)
-    /// and the account-scoped counts. `.guid().update(` is deliberately NOT here: the row it writes
-    /// was already resolved by one of these, so the READ is the chokepoint.
+    /// indexed point reads; `.iter()` is the case-folding name scan (`character_by_name`'s
+    /// convention) and the account-scoped counts. `.guid().update(` is deliberately NOT here: the
+    /// row it writes was already resolved by one of these, so the READ is the chokepoint.
     ///
     /// `.guid().delete(` IS here, and is the exception that proves the "the READ is the chokepoint"
     /// rule: a raw delete resolves nothing first, so no read gates it. It was added after a review

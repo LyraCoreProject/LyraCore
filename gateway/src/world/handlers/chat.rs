@@ -1,12 +1,13 @@
-//! Realm Chat dispatcher: the `CMSG_MESSAGECHAT` kinds that become Realm Chat Lines. The Gateway
-//! reads the Speaker Facts on the Home Shard, the Module decides the audience on Realm-core, and
-//! the Relay (`stdb::world_view::realm_chat_appeared`) delivers the line. Party, Raid, Raid
-//! Leader, Raid Warning, Channel, Guild and Officer lines are all Realm Chat Lines. Say, yell and
+//! Realm Chat dispatcher: the `CMSG_MESSAGECHAT` kinds that become Realm Chat Lines, `/afk` and
+//! `/dnd`, and `CMSG_CHAT_IGNORED`. The Gateway reads the Speaker Facts on the Home Shard, the
+//! Module decides the audience on Realm-core, and the Relay
+//! (`stdb::world_view::realm_chat_appeared`) delivers the line. Party, Raid, Raid Leader, Raid
+//! Warning, Channel, Guild, Officer and Whisper lines are all Realm Chat Lines. Say, yell and
 //! every kind this file does not own pass through.
 
 use super::super::*;
-use lyracore_shared::chat::{chat_kind, ChatRefusal};
-use wow_world_messages::vanilla::SMSG_NOTIFICATION;
+use lyracore_shared::chat::{chat_kind, language, ChatRefusal};
+use wow_world_messages::vanilla::{CMSG_CHAT_IGNORED, SMSG_NOTIFICATION};
 
 /// What the speaker's Home Shard knows about them. The Coordinator conveys race and chat tag to
 /// the Module; `name` stays in the Gateway for lines that must name the speaker to someone else.
@@ -30,6 +31,30 @@ pub(crate) struct RealmChatRequest {
     pub(crate) speaker: SpeakerFacts,
 }
 
+/// What the Gateway read about a whisper's target on whichever World Shard holds it
+/// (`world::whisper::target_facts`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct WhisperTargetFacts {
+    pub(crate) guid: u64,
+    pub(crate) race: u8,
+    /// The canonical spelling.
+    pub(crate) name: String,
+    pub(crate) ignores_speaker: bool,
+    /// 0, `chat_kind::AFK` or `chat_kind::DND`.
+    pub(crate) away_kind: u8,
+    /// The stored Auto-Reply. Empty means the Module's default text.
+    pub(crate) away_message: String,
+}
+
+/// One whisper on its way to the `realm_whisper` reducer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct WhisperRequest {
+    pub(crate) language: u32,
+    pub(crate) message: String,
+    pub(crate) speaker: SpeakerFacts,
+    pub(crate) target: WhisperTargetFacts,
+}
+
 /// How the Module answered one Realm Chat request. A timeout, transport or SDK failure stays an
 /// `Err` with an unknown durable outcome.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,6 +68,17 @@ pub(crate) trait ChatActionStore: Send + Sync {
     fn speaker_facts(&self, speaker_guid: u64) -> Result<Option<SpeakerFacts>>;
     /// Durable Request on Realm-core. The Coordinator picks the database; handlers never do.
     fn realm_chat(&self, speaker_guid: u64, request: RealmChatRequest) -> Result<ChatOutcome>;
+    /// Durable Request on the speaker's Home Shard: one `/afk` or `/dnd`.
+    fn set_away(&self, speaker_guid: u64, kind: u8, message: String) -> Result<()>;
+    /// Durable Read across every World Shard: the online Character the typed name reaches, with
+    /// the facts the Module's whisper Gates need. `None` when no online Character has that name.
+    fn whisper_target(
+        &self,
+        speaker_guid: u64,
+        typed_name: &str,
+    ) -> Result<Option<WhisperTargetFacts>>;
+    /// Durable Request on Realm-core.
+    fn realm_whisper(&self, speaker_guid: u64, request: WhisperRequest) -> Result<ChatOutcome>;
 }
 
 impl ChatActionStore for crate::stdb::Coordinator {
@@ -52,6 +88,22 @@ impl ChatActionStore for crate::stdb::Coordinator {
 
     fn realm_chat(&self, speaker_guid: u64, request: RealmChatRequest) -> Result<ChatOutcome> {
         crate::stdb::Coordinator::realm_chat(self, speaker_guid, request)
+    }
+
+    fn set_away(&self, speaker_guid: u64, kind: u8, message: String) -> Result<()> {
+        crate::stdb::Coordinator::set_away(self, speaker_guid, kind, message)
+    }
+
+    fn whisper_target(
+        &self,
+        speaker_guid: u64,
+        typed_name: &str,
+    ) -> Result<Option<WhisperTargetFacts>> {
+        whisper::target_facts(self, speaker_guid, typed_name)
+    }
+
+    fn realm_whisper(&self, speaker_guid: u64, request: WhisperRequest) -> Result<ChatOutcome> {
+        crate::stdb::Coordinator::realm_whisper(self, speaker_guid, request)
     }
 }
 
@@ -86,8 +138,9 @@ fn silent_refusal_chat_kind(chat_type: &CMSG_MESSAGECHAT_ChatType) -> Option<u8>
     }
 }
 
-/// Consume the `CMSG_MESSAGECHAT` kinds that are Realm Chat Lines and pass everything else on. A
-/// new Chat Kind adds one arm here and answers its own Refusals before the shared ones.
+/// Consume the `CMSG_MESSAGECHAT` kinds this file owns and `CMSG_CHAT_IGNORED`, and pass
+/// everything else on. A new Chat Kind adds one arm here and answers its own Refusals before the
+/// shared ones.
 pub(crate) fn dispatch_chat_action<St: ChatActionStore + ?Sized>(
     store: &St,
     player: ChatActionPlayer,
@@ -99,9 +152,18 @@ pub(crate) fn dispatch_chat_action<St: ChatActionStore + ?Sized>(
         message,
     } = match msg {
         ClientOpcodeMessage::CMSG_MESSAGECHAT(chat) => *chat,
+        ClientOpcodeMessage::CMSG_CHAT_IGNORED(CMSG_CHAT_IGNORED { guid }) => {
+            let outbound = chat_ignored(store, player, guid.guid())?;
+            return Ok(ChatActionOutcome::Handled { outbound });
+        }
         other => return Ok(ChatActionOutcome::PassThrough(other)),
     };
     let outbound = match chat_type {
+        CMSG_MESSAGECHAT_ChatType::Whisper { target_player } => {
+            whisper(store, player, language.as_int(), message, target_player)?
+        }
+        CMSG_MESSAGECHAT_ChatType::Afk => set_away(store, player, chat_kind::AFK, message)?,
+        CMSG_MESSAGECHAT_ChatType::Dnd => set_away(store, player, chat_kind::DND, message)?,
         CMSG_MESSAGECHAT_ChatType::Party => {
             match send_line(store, player, |speaker| RealmChatRequest {
                 kind: chat_kind::PARTY,
@@ -165,6 +227,105 @@ pub(crate) fn dispatch_chat_action<St: ChatActionStore + ?Sized>(
         }
     };
     Ok(ChatActionOutcome::Handled { outbound })
+}
+
+/// One whisper: the target is resolved realm-wide, the Module applies the Gates on Realm-core, and
+/// the lines return on the Relay. A name no online Character holds answers
+/// `SMSG_CHAT_PLAYER_NOT_FOUND` with the typed name (cm:ChatHandler.cpp:243-266). A target read
+/// that fails without a transport loss answers the same way: this Gateway cannot reach the target.
+fn whisper<St: ChatActionStore + ?Sized>(
+    store: &St,
+    player: ChatActionPlayer,
+    language: u32,
+    message: String,
+    typed_name: String,
+) -> Result<Vec<Outbound>> {
+    let Some(speaker_guid) = player.self_guid else {
+        return Ok(Vec::new());
+    };
+    let Some(speaker) = store.speaker_facts(speaker_guid)? else {
+        return Ok(Vec::new());
+    };
+    let target = match store.whisper_target(speaker_guid, &typed_name) {
+        Ok(Some(target)) => target,
+        Ok(None) => return Ok(vec![player_not_found(typed_name)]),
+        Err(error) if is_transport_failure(&error) => return Err(error),
+        Err(error) => {
+            log::debug!(
+                "world: whisper target read failed (account {}): {error:#}",
+                player.account_id
+            );
+            return Ok(vec![player_not_found(typed_name)]);
+        }
+    };
+    let request = WhisperRequest {
+        language,
+        message,
+        speaker,
+        target,
+    };
+    match store.realm_whisper(speaker_guid, request) {
+        Ok(ChatOutcome::Delivered) => Ok(Vec::new()),
+        // cm:ChatHandler.cpp:268-275, cm:ChatHandler.cpp:824-828: an empty packet.
+        Ok(ChatOutcome::Refused(ChatRefusal::WrongFaction)) => Ok(vec![Outbound::One(
+            ServerOpcodeMessage::SMSG_CHAT_WRONG_FACTION,
+        )]),
+        Ok(ChatOutcome::Refused(refusal)) => Ok(refusal_outbound(player, Some(refusal))),
+        Err(error) if is_transport_failure(&error) => Err(error),
+        Err(error) => {
+            log::debug!(
+                "world: whisper dropped (account {}): {error:#}",
+                player.account_id
+            );
+            Ok(Vec::new())
+        }
+    }
+}
+
+fn player_not_found(name: String) -> Outbound {
+    Outbound::One(ServerOpcodeMessage::SMSG_CHAT_PLAYER_NOT_FOUND(Box::new(
+        SMSG_CHAT_PLAYER_NOT_FOUND { name },
+    )))
+}
+
+/// `/afk` or `/dnd`. The client prints its own notice, and observers see the `PLAYER_FLAGS`
+/// change on the entity Relay, so nothing answers here.
+fn set_away<St: ChatActionStore + ?Sized>(
+    store: &St,
+    player: ChatActionPlayer,
+    kind: u8,
+    message: String,
+) -> Result<Vec<Outbound>> {
+    let Some(speaker_guid) = player.self_guid else {
+        return Ok(Vec::new());
+    };
+    match store.set_away(speaker_guid, kind, message) {
+        Ok(()) => {}
+        Err(error) if is_transport_failure(&error) => return Err(error),
+        Err(error) => log::debug!(
+            "world: away kind {kind} dropped (account {}): {error:#}",
+            player.account_id
+        ),
+    }
+    Ok(Vec::new())
+}
+
+/// `CMSG_CHAT_IGNORED`: this player's client dropped a line from `dropped_speaker`, who learns
+/// "X is ignoring you." (cm:ChatHandler.cpp:801-815). The notice carries the ignorer's own name.
+fn chat_ignored<St: ChatActionStore + ?Sized>(
+    store: &St,
+    player: ChatActionPlayer,
+    dropped_speaker: u64,
+) -> Result<Vec<Outbound>> {
+    let refusal = send_line(store, player, |speaker| RealmChatRequest {
+        kind: chat_kind::IGNORED,
+        language: language::UNIVERSAL,
+        channel_name: String::new(),
+        target_guid: dropped_speaker,
+        message: speaker.name.clone(),
+        speaker,
+    })?;
+    Ok(refusal_outbound(player, refusal))
 }
 
 /// Send one line through the Realm Chat path. `request` builds the Durable Request from the
@@ -237,6 +398,20 @@ mod tests {
         outcome: Option<Result<ChatOutcome, String>>,
         facts_reads: Mutex<Vec<u64>>,
         requests: Mutex<Vec<(u64, RealmChatRequest)>>,
+        away_failure: Option<String>,
+        away_requests: Mutex<Vec<(u64, u8, String)>>,
+        target: Option<Result<Option<WhisperTargetFacts>, String>>,
+        target_reads: Mutex<Vec<(u64, String)>>,
+        whisper_outcome: Option<Result<ChatOutcome, String>>,
+        whispers: Mutex<Vec<(u64, WhisperRequest)>>,
+    }
+
+    fn answer<T: Clone>(configured: &Option<Result<T, String>>, default: T) -> Result<T> {
+        match configured {
+            None => Ok(default),
+            Some(Ok(value)) => Ok(value.clone()),
+            Some(Err(failure)) => Err(anyhow::anyhow!("{failure}")),
+        }
     }
 
     impl ChatActionStore for InMemoryChatActions {
@@ -247,11 +422,35 @@ mod tests {
 
         fn realm_chat(&self, speaker_guid: u64, request: RealmChatRequest) -> Result<ChatOutcome> {
             self.requests.lock().unwrap().push((speaker_guid, request));
-            match &self.outcome {
-                None => Ok(ChatOutcome::Delivered),
-                Some(Ok(outcome)) => Ok(*outcome),
-                Some(Err(failure)) => Err(anyhow::anyhow!("{failure}")),
+            answer(&self.outcome, ChatOutcome::Delivered)
+        }
+
+        fn set_away(&self, speaker_guid: u64, kind: u8, message: String) -> Result<()> {
+            self.away_requests
+                .lock()
+                .unwrap()
+                .push((speaker_guid, kind, message));
+            match &self.away_failure {
+                None => Ok(()),
+                Some(failure) => Err(anyhow::anyhow!("{failure}")),
             }
+        }
+
+        fn whisper_target(
+            &self,
+            speaker_guid: u64,
+            typed_name: &str,
+        ) -> Result<Option<WhisperTargetFacts>> {
+            self.target_reads
+                .lock()
+                .unwrap()
+                .push((speaker_guid, typed_name.to_string()));
+            answer(&self.target, None)
+        }
+
+        fn realm_whisper(&self, speaker_guid: u64, request: WhisperRequest) -> Result<ChatOutcome> {
+            self.whispers.lock().unwrap().push((speaker_guid, request));
+            answer(&self.whisper_outcome, ChatOutcome::Delivered)
         }
     }
 
@@ -605,6 +804,206 @@ mod tests {
         }
         assert!(store.facts_reads.lock().unwrap().is_empty());
         assert!(store.requests.lock().unwrap().is_empty());
+    }
+
+    fn target() -> WhisperTargetFacts {
+        WhisperTargetFacts {
+            guid: 20,
+            race: 3,
+            name: "Vim".to_string(),
+            ignores_speaker: true,
+            away_kind: chat_kind::AFK,
+            away_message: "brb".to_string(),
+        }
+    }
+
+    fn whisper_store(
+        target: Result<Option<WhisperTargetFacts>, String>,
+        outcome: Option<Result<ChatOutcome, String>>,
+    ) -> InMemoryChatActions {
+        InMemoryChatActions {
+            target: Some(target),
+            whisper_outcome: outcome,
+            ..store(None)
+        }
+    }
+
+    fn whisper_to(name: &str) -> ClientOpcodeMessage {
+        line(
+            CMSG_MESSAGECHAT_ChatType::Whisper {
+                target_player: name.to_string(),
+            },
+            Language::Common,
+        )
+    }
+
+    fn not_found(outbound: Vec<Outbound>) -> String {
+        match only(outbound) {
+            ServerOpcodeMessage::SMSG_CHAT_PLAYER_NOT_FOUND(m) => m.name,
+            other => panic!("expected SMSG_CHAT_PLAYER_NOT_FOUND, got {other}"),
+        }
+    }
+
+    #[test]
+    fn a_whisper_conveys_the_speaker_and_the_target_facts() {
+        let store = whisper_store(Ok(Some(target())), None);
+        let outbound = handled(dispatch_chat_action(&store, player(), whisper_to("vim")).unwrap());
+        assert!(outbound.is_empty(), "the lines return on the Relay");
+        assert_eq!(
+            store.target_reads.lock().unwrap().as_slice(),
+            &[(42, "vim".to_string())]
+        );
+        assert_eq!(
+            store.whispers.lock().unwrap().as_slice(),
+            &[(
+                42,
+                WhisperRequest {
+                    language: 7,
+                    message: "form up".to_string(),
+                    speaker: speaker(),
+                    target: target(),
+                }
+            )]
+        );
+    }
+
+    /// cm:ChatHandler.cpp:243-266: the typed name comes back as the client typed it.
+    #[test]
+    fn a_whisper_to_nobody_online_answers_player_not_found() {
+        let store = whisper_store(Ok(None), None);
+        let outbound = handled(dispatch_chat_action(&store, player(), whisper_to("vIm")).unwrap());
+        assert_eq!(not_found(outbound), "vIm");
+        assert!(store.whispers.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_failed_target_read_answers_player_not_found_and_keeps_the_session() {
+        let store = whisper_store(Err("peer Shard cannot vouch".to_string()), None);
+        let outbound = handled(dispatch_chat_action(&store, player(), whisper_to("Vim")).unwrap());
+        assert_eq!(not_found(outbound), "Vim");
+        assert!(store.whispers.lock().unwrap().is_empty());
+    }
+
+    /// cm:ChatHandler.cpp:824-828: the opcode alone, with an empty body.
+    #[test]
+    fn a_cross_faction_whisper_answers_wrong_faction() {
+        let store = whisper_store(
+            Ok(Some(target())),
+            Some(Ok(ChatOutcome::Refused(ChatRefusal::WrongFaction))),
+        );
+        let outbound = handled(dispatch_chat_action(&store, player(), whisper_to("Vim")).unwrap());
+        let message = only(outbound);
+        assert!(matches!(
+            message,
+            ServerOpcodeMessage::SMSG_CHAT_WRONG_FACTION
+        ));
+        let mut wire = Vec::new();
+        message.write_unencrypted_server(&mut wire).unwrap();
+        assert_eq!(wire, [0x00, 0x02, 0x19, 0x02], "size 2, opcode 0x0219");
+    }
+
+    #[test]
+    fn every_other_whisper_refusal_is_silent() {
+        for refusal in [ChatRefusal::EmptyMessage, ChatRefusal::UnsupportedKind] {
+            let store = whisper_store(Ok(Some(target())), Some(Ok(ChatOutcome::Refused(refusal))));
+            let outbound =
+                handled(dispatch_chat_action(&store, player(), whisper_to("Vim")).unwrap());
+            assert!(outbound.is_empty(), "{refusal:?}");
+        }
+    }
+
+    #[test]
+    fn a_whisper_from_a_speaker_without_a_live_entity_reads_nothing() {
+        let store = InMemoryChatActions {
+            facts: None,
+            ..whisper_store(Ok(Some(target())), None)
+        };
+        let outbound = handled(dispatch_chat_action(&store, player(), whisper_to("Vim")).unwrap());
+        assert!(outbound.is_empty());
+        assert!(store.target_reads.lock().unwrap().is_empty());
+        assert!(store.whispers.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_lost_transport_on_a_whisper_ends_the_session() {
+        let lost = "realm_whisper reducer transport disconnected: channel closed".to_string();
+        let store = whisper_store(Ok(Some(target())), Some(Err(lost.clone())));
+        assert!(dispatch_chat_action(&store, player(), whisper_to("Vim")).is_err());
+        let store = whisper_store(Err(lost), None);
+        assert!(dispatch_chat_action(&store, player(), whisper_to("Vim")).is_err());
+    }
+
+    #[test]
+    fn any_other_whisper_failure_is_silent() {
+        let store = whisper_store(
+            Ok(Some(target())),
+            Some(Err("realm_whisper reducer timed out after 10s".to_string())),
+        );
+        let outbound = handled(dispatch_chat_action(&store, player(), whisper_to("Vim")).unwrap());
+        assert!(outbound.is_empty());
+    }
+
+    /// `/afk` and `/dnd` answer nothing: the client prints its own notice.
+    #[test]
+    fn afk_and_dnd_set_the_away_status_of_the_speaker() {
+        let store = store(None);
+        for (chat_type, message) in [
+            (CMSG_MESSAGECHAT_ChatType::Afk, "brb"),
+            (CMSG_MESSAGECHAT_ChatType::Dnd, ""),
+        ] {
+            let away = ClientOpcodeMessage::CMSG_MESSAGECHAT(Box::new(CMSG_MESSAGECHAT {
+                chat_type,
+                language: Language::Universal,
+                message: message.to_string(),
+            }));
+            let outbound = handled(dispatch_chat_action(&store, player(), away).unwrap());
+            assert!(outbound.is_empty());
+        }
+        assert_eq!(
+            store.away_requests.lock().unwrap().as_slice(),
+            &[(42, 0x14, "brb".to_string()), (42, 0x15, String::new())]
+        );
+        assert!(store.requests.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_failed_away_request_is_fatal_only_for_a_lost_transport() {
+        let afk = || line(CMSG_MESSAGECHAT_ChatType::Afk, Language::Universal);
+        let refused = InMemoryChatActions {
+            away_failure: Some("mover not in world".to_string()),
+            ..store(None)
+        };
+        assert!(handled(dispatch_chat_action(&refused, player(), afk()).unwrap()).is_empty());
+        let lost = InMemoryChatActions {
+            away_failure: Some("gw_set_away reducer transport disconnected".to_string()),
+            ..store(None)
+        };
+        assert!(dispatch_chat_action(&lost, player(), afk()).is_err());
+    }
+
+    /// cm:ChatHandler.cpp:801-815: the ignorer's name, to the Character whose line was dropped.
+    #[test]
+    fn chat_ignored_sends_the_ignorers_name_to_the_dropped_speaker() {
+        let store = store(None);
+        let ignored = ClientOpcodeMessage::CMSG_CHAT_IGNORED(CMSG_CHAT_IGNORED {
+            guid: wow_world_base::vanilla::Guid::new(20),
+        });
+        let outbound = handled(dispatch_chat_action(&store, player(), ignored).unwrap());
+        assert!(outbound.is_empty());
+        assert_eq!(
+            store.requests.lock().unwrap().as_slice(),
+            &[(
+                42,
+                RealmChatRequest {
+                    kind: 0x16,
+                    language: 0,
+                    channel_name: String::new(),
+                    target_guid: 20,
+                    message: "Speaker".to_string(),
+                    speaker: speaker(),
+                }
+            )]
+        );
     }
 
     #[test]

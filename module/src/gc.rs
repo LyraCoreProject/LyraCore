@@ -84,7 +84,9 @@ pub fn reap_movement_events(ctx: &ReducerContext, _schedule: EventReaperSchedule
     reap!(game_spell_impact_event); // deferred projectile-impact damage logs
     reap!(game_chat_event); // say/yell broadcast lines
     reap!(game_emote_event); // emote broadcast (text + animation)
-    reap!(game_whisper_event); // private whisper lines (RLS-scoped)
+                             // Nothing writes whisper rows any more. The reap stays for the build that retires them, so
+                             // rows still inside the TTL at publish are deleted. It can go in the next build.
+    reap!(game_whisper_event);
     reap!(game_realm_chat_event); // Realm Chat Lines
     reap!(game_chat_channel_notice_event); // Channel Notices
     reap!(game_system_message_event); // private Package-originated System Messages

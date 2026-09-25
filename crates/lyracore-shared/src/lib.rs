@@ -38,7 +38,6 @@ pub mod trainer;
 pub mod transfer;
 pub mod values_mask;
 pub mod vmap;
-pub mod whisper;
 
 /// The exact error text the module's `start_attack` reducer returns when the target is a corpse.
 /// The gateway pattern-matches this specific failure to reply `SMSG_ATTACKSWING_DEADTARGET` (so the

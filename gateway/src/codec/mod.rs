@@ -50,8 +50,8 @@ pub use social::{
     build_group_list_raw, build_group_set_leader, build_ignore_list_response, build_minimap_ping,
     build_party_command_result, build_raid_group_only, build_random_roll, build_ready_check,
     build_ready_check_answer, build_realm_chat_line, build_target_icon_list_raw,
-    build_target_icon_update, build_text_emote, build_whisper, build_who_response_raw,
-    FriendOnline, FriendView, WhoPlayerView,
+    build_target_icon_update, build_text_emote, build_who_response_raw, FriendOnline, FriendView,
+    WhoPlayerView,
 };
 
 // Re-export packet-family surfaces through `crate::codec::<sym>`.

@@ -287,7 +287,7 @@ pub(crate) fn parse_gm_command(text: &str) -> Result<GmCommand, String> {
 /// Grant/revoke GM level (operator-only CLI reducer, work-item 223 authz): `level` gates
 /// [`gm_command`] (`0` = no access — the moderation-facing per-level distinctions beyond "has
 /// access at all" are work-item 205's concern, not this one's). Looked up by character NAME
-/// (case-insensitive, matching `send_whisper`'s convention) since an operator drives this via
+/// (case-insensitive, as `/w bob` reaches Bob) since an operator drives this via
 /// `spacetime call`, which has no live guid to hand. `require_operator` gates it exactly like the
 /// importer reducers — never player-callable.
 #[reducer]

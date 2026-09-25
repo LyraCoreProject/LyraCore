@@ -1093,8 +1093,9 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // callbacks route addressed rows through WorldView's typed owner/identity indexes.
         //
         // Members of the class include teleport, XP/level-up, quest log, item instances, the addon
-        // bridge, reputation, explored-area fog, and realm-core's group/whisper twins. Every one is
-        // armed once in `world_view::arm_shard` (or `arm_realm_private`) and re-armed on reconnect.
+        // bridge, reputation, explored-area fog, and realm-core's group and chat twins. Every one
+        // is armed once in `world_view::arm_shard` (or `arm_realm_private`) and re-armed on
+        // reconnect.
         //
         // Teleport events — the TRANSFER relay, and the failure that produced the rule.
         "SELECT * FROM game_teleport_event",
@@ -1185,7 +1186,6 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // single-database gateway's shared path works too; on realm-core the same subscription
         // additionally feeds the per-session cross-shard twins, unchanged.
         "SELECT * FROM game_resurrect_request",
-        "SELECT * FROM game_whisper_event",
         "SELECT * FROM game_system_message_event",
         "SELECT * FROM game_mail_arrival",
         "SELECT * FROM game_group_event",
@@ -1194,6 +1194,9 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // Realm Chat Lines carry their whole audience. Only Realm-core writes them; every
         // database subscribes so an unsharded Realm hears them on its one connection.
         "SELECT * FROM game_realm_chat_event",
+        // Auto-Replies, beside the live entity on each Home Shard. A whisper reads the target's
+        // one row by primary key (`world::presence::auto_reply`).
+        "SELECT * FROM game_character_away",
         // Chat Channels and their Channel Notices. Only Realm-core writes them. The channel and
         // member tables answer `/chatlist` and the owner query through `ChannelIndex`; the
         // notices carry their whole audience like Realm Chat Lines.
@@ -1786,7 +1789,7 @@ mod coordinator_query_tests {
     /// restart (`coordinator_queries`' doc comment) — so an unconfigured gateway must ask for none.
     const MULTI_DB_TABLES: &[&str] = &[
         "SELECT * FROM game_character_shard",
-        // The party STATE table. `game_group_event`, `game_group_member`, and `game_whisper_event`
+        // The party STATE table. `game_group_event` and `game_group_member`
         // moved OUT of this list to the base set when the shared dispatch landed — both predate sharding, so the
         // restart hazard this list exists for cannot bite them, and the shared dispatch needs
         // them on every coordinator (a cache-only subscription with the flag off: the realm
@@ -2752,7 +2755,7 @@ impl Coordinator {
                 }
             }));
         }
-        // The cross-shard whisper/group twins (#22) ride realm-core's connection — armed only
+        // The cross-shard group and chat twins (#22) ride realm-core's connection, armed only
         // when realm-core is a DISTINCT database (a world shard's own `arm_shard` above already
         // watches these tables, and a second registration would deliver every packet twice).
         if let Ok(realm) = self.realm_core() {

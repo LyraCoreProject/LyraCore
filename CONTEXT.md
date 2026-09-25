@@ -420,6 +420,16 @@ with no entity there), or offline. A negative Whereabouts — offline, or no Cha
 needs every configured World Shard to vouch that none of them is hiding the Character.
 _Avoid_: presence state, location status
 
+**Away Status**:
+AFK or DND on a live Character: the `PLAYER_FLAGS` bit observers see, plus its Auto-Reply. Setting
+one ends the other. It ends at login. A cross-map world-port and a Transfer keep it.
+_Avoid_: presence, status (unqualified)
+
+**Auto-Reply**:
+The text a whisperer receives from a Character with an Away Status. It lives beside the live entity
+on the Home Shard; with none stored, the whisperer gets "Away from Keyboard" or "Do not Disturb".
+_Avoid_: away message, AFK message
+
 **Chat Channel**:
 A named, team-scoped conversation on Realm-core. Built-in (General, Trade, LocalDefense,
 WorldDefense, LookingForGroup, GuildRecruitment) or custom. Its lowercase name and team are its

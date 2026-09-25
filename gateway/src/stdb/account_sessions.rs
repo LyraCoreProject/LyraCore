@@ -677,7 +677,8 @@ mod tests {
         a.establish_session(account_id, &[7; 40], identity).unwrap();
         let first = a.claim_session(account_id, 1).unwrap();
         let old = a.bind_session(first).unwrap();
-        old.player_login(account_id, 1).unwrap();
+        old.player_login(account_id, 1, crate::codec::WorldEntry::FreshLogin)
+            .unwrap();
         assert!(matches!(
             b.delete_character(account_id, 1).unwrap(),
             crate::codec::CharDeleteOutcome::Failed
@@ -719,7 +720,9 @@ mod tests {
         let second = b.claim_session(account_id, 1).unwrap();
         assert!(second.generation > first.generation);
         let winner = b.bind_session(second).unwrap();
-        winner.player_login(account_id, 1).unwrap();
+        winner
+            .player_login(account_id, 1, crate::codec::WorldEntry::FreshLogin)
+            .unwrap();
         old.release_session(first).unwrap();
         old.release_session(first).unwrap();
         let batch = super::super::movement_batch::MovementBatch::new();

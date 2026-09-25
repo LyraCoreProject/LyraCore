@@ -552,24 +552,6 @@ pub trait WorldStore:
         Ok(())
     }
 
-    /// `realm_whisper` — deliver one whisper against the database this handle names. Called on the
-    /// realm-core handle, which is the only one that can address BOTH parties of
-    /// a cross-shard whisper: `recipient_guid` is realm-wide, a bound identity is per-database.
-    ///
-    /// `sender_is_ignored` is the target's ignore-list verdict, resolved by the gateway from the shard
-    /// that holds the target's contact rows — realm-core has none. The default errors rather than
-    /// silently succeeding: a store that does not host the realm plane must never be *asked*, and
-    /// `world::whisper` only asks the handle `realm_store()` handed it.
-    fn realm_whisper(
-        &self,
-        _sender_guid: u64,
-        _target_guid: u64,
-        _message: String,
-        _sender_is_ignored: bool,
-    ) -> Result<()> {
-        Err(anyhow!("this store does not host realm-wide whispers"))
-    }
-
     // --- Realm-wide loot rolls. Every one defaults to the single-database posture, so an
     // --- unsharded store — and every mock that does not model a realm — is unchanged: `realm_store()`
     // --- answering `None` is what routes `CMSG_LOOT_ROLL` back onto the player's own shard through
@@ -680,8 +662,14 @@ pub trait WorldStore:
 
     /// Enter the world with `character_guid` (Phase 4): calls the `player_login` reducer and
     /// returns the live entity to spawn (from the resulting `game_world_entity` row). Errors if
-    /// the character isn't the caller's.
-    fn player_login(&self, account_id: u64, character_guid: u64) -> Result<codec::EntityView>;
+    /// the character isn't the caller's. `entry` picks the reducer: a world-port keeps the Away
+    /// Status, a fresh login ends it.
+    fn player_login(
+        &self,
+        account_id: u64,
+        character_guid: u64,
+        entry: codec::WorldEntry,
+    ) -> Result<codec::EntityView>;
 
     /// Enqueue an accepted inbound movement on this shard's shared movement batch. The live store
     /// serializes `info` once and preserves the mover, opcode, position, orientation, and timestamp
@@ -973,15 +961,6 @@ pub trait WorldStore:
         text_emote: u32,
         emote_anim: u32,
         target_guid: u64,
-    ) -> Result<()>;
-
-    /// Whisper `message` privately to the player named `target_player` (`CMSG_MESSAGECHAT` Whisper).
-    fn send_whisper(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        target_player: String,
-        message: String,
     ) -> Result<()>;
 
     /// GM playtest dot-command for the proof-validated, realm-wide `account_name`: `text` is the
@@ -1370,6 +1349,10 @@ pub trait WorldStore:
     /// session-less bot mid-crossing.
     fn character_in_transit(&self, guid: u64) -> bool;
 
+    /// This Shard's stored Auto-Reply for `guid`. `None` when this Shard holds none.
+    /// [`presence::auto_reply`] asks the Shard that holds the live entity.
+    fn auto_reply_text(&self, guid: u64) -> Result<Option<String>>;
+
     /// Does every configured World Shard vouch that it is reachable and healthy enough to trust a
     /// negative read from? [`presence::of`] asks this before answering `Whereabouts::Offline` or
     /// `None` — an unreachable or stale-cached Shard could be hiding the Character, so the default
@@ -1408,8 +1391,8 @@ pub trait WorldStore:
     /// this out across every connected Shard. Unlike `contact_lists`, this never reads a `Viewer`.
     fn ignored_guids(&self, owner_guid: u64) -> Result<Vec<u64>>;
 
-    /// Resolve a typed contact name to a character guid on THIS Shard (case-insensitive, like
-    /// `send_whisper`'s target match) — `presence::resolve_by_name`'s per-Shard primitive. `None`
+    /// Resolve a typed contact name to a character guid on THIS Shard (case-insensitive, like the
+    /// Module's `character_by_name`): `presence::resolve_by_name`'s per-Shard primitive. `None`
     /// if this Shard has no character with that name.
     fn character_guid_by_name(&self, name: &str) -> Result<Option<u64>>;
 

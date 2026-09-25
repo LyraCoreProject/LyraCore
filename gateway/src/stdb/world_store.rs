@@ -515,8 +515,13 @@ impl WorldStore for Coordinator {
         }
     }
 
-    fn player_login(&self, account_id: u64, character_guid: u64) -> Result<codec::EntityView> {
-        self.player_login(account_id, character_guid)
+    fn player_login(
+        &self,
+        account_id: u64,
+        character_guid: u64,
+        entry: codec::WorldEntry,
+    ) -> Result<codec::EntityView> {
+        self.player_login(account_id, character_guid, entry)
     }
 
     fn movement_update(
@@ -1000,16 +1005,6 @@ impl WorldStore for Coordinator {
         self.send_emote(account_id, self_guid, text_emote, emote_anim, target_guid)
     }
 
-    fn send_whisper(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        target_player: String,
-        message: String,
-    ) -> Result<()> {
-        self.send_whisper(account_id, self_guid, target_player, message)
-    }
-
     fn gm_command(&self, account_name: &str, self_guid: u64, text: String) -> Result<()> {
         self.gm_command(account_name, self_guid, text)
     }
@@ -1070,6 +1065,10 @@ impl WorldStore for Coordinator {
 
     fn character_in_transit(&self, guid: u64) -> bool {
         self.character_in_transit(guid)
+    }
+
+    fn auto_reply_text(&self, guid: u64) -> Result<Option<String>> {
+        Ok(self.auto_reply_text(guid))
     }
 
     fn every_shard_vouches_for_absence(&self) -> Result<()> {
@@ -1522,15 +1521,6 @@ impl WorldStore for Coordinator {
         self.sync_group_mirror(roster)
     }
 
-    fn realm_whisper(
-        &self,
-        sender_guid: u64,
-        target_guid: u64,
-        message: String,
-        sender_is_ignored: bool,
-    ) -> Result<()> {
-        self.realm_whisper(sender_guid, target_guid, message, sender_is_ignored)
-    }
     fn loot_roll(
         &self,
         account_id: u64,

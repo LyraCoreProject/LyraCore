@@ -659,31 +659,42 @@ pub(crate) fn decode_blob(transfer_id: u64, bytes: &[u8]) -> Result<ExportBlob, 
         .map_err(|e| format!("transfer {transfer_id}: corrupt export blob: {e}"))
 }
 
-/// The manifest tables this build added to the one before it. A blob exported by the build before
-/// names none of them and could carry no rows for them, so it imports with each one empty. That lets
-/// a Transfer in flight across the publish finish instead of freezing its Character. Empty this
-/// list, and delete [`previous_manifest`] with it, once the next build has shipped.
-pub(crate) const ADDED_SINCE_PREVIOUS_BUILD: &[&str] = &["game_auction_hold"];
-
-/// The manifest the build before this one exported.
-pub(crate) fn previous_manifest() -> Vec<ManifestEntry> {
-    manifest()
-        .into_iter()
-        .filter(|entry| !ADDED_SINCE_PREVIOUS_BUILD.contains(&entry.table.as_str()))
-        .collect()
-}
+/// Manifest tables that a blob from an older build may lack. Each one joined the manifest after
+/// Core commit `decd7821` (2026-09-22). Production may run any build from that commit on, and we
+/// do not pin which, so a blob may lack any subset of these tables. A build that had no such table
+/// had no rows for it either, so each missing one imports empty. That lets a Transfer in flight
+/// across a publish finish instead of freezing its Character. Remove an entry only once every
+/// Shard runs a build that has the table.
+pub(crate) const TRANSFER_TABLES_OLD_BLOBS_MAY_LACK: &[&str] = &[
+    "game_auction_bid_hold",
+    "game_auction_hold",
+    "game_character_away",
+    "game_group_target_icon",
+    "game_guild_fee_hold",
+    "game_instance_removal",
+];
 
 /// The SCHEMA-DRIFT gate: the destination compares the arriving manifest against its OWN build and
 /// refuses an import from a shard whose character-owned table set differs, because such a shard
 /// would otherwise silently drop the tables it does not know — with the source copy cascade-deleted
-/// moments later. The one exception is the manifest of the build before this one, whose missing
-/// tables [`payload_for_this_build`] fills in as empty.
+/// moments later. The one exception is a manifest that lacks some of
+/// [`TRANSFER_TABLES_OLD_BLOBS_MAY_LACK`] and is otherwise this build's own, entry for entry and in
+/// order. [`payload_for_this_build`] fills each missing table in as empty.
 ///
 /// Shared by both step-2 reducers. It was two identical inline blocks, and the one in
 /// `import_character_blob` was reachable only through a source-scan assertion on its text.
 pub(crate) fn check_manifest(transfer_id: u64, arriving: &[ManifestEntry]) -> Result<(), String> {
     let mine = manifest();
-    if arriving != mine && arriving != previous_manifest() {
+    let named = |table: &str| arriving.iter().any(|entry| entry.table == table);
+    let expected: Vec<ManifestEntry> = mine
+        .iter()
+        .filter(|entry| {
+            named(&entry.table)
+                || !TRANSFER_TABLES_OLD_BLOBS_MAY_LACK.contains(&entry.table.as_str())
+        })
+        .cloned()
+        .collect();
+    if arriving != expected {
         return Err(format!(
             "transfer {transfer_id}: manifest mismatch — source exported {} character-owned tables, \
              this shard knows {}",
@@ -694,14 +705,15 @@ pub(crate) fn check_manifest(transfer_id: u64, arriving: &[ManifestEntry]) -> Re
     Ok(())
 }
 
-/// `payload` as this build imports it: a table this build added, which `arriving` does not name,
-/// arrives as an empty entry. Any other gap still fails the coverage check in [`import_rows_via`].
+/// `payload` as this build imports it: a table from [`TRANSFER_TABLES_OLD_BLOBS_MAY_LACK`] that
+/// `arriving` does not name arrives as an empty entry. Any other gap still fails the coverage check
+/// in [`import_rows_via`].
 pub(crate) fn payload_for_this_build(
     arriving: &[ManifestEntry],
     payload: &[TableRows],
 ) -> Vec<TableRows> {
     let mut complete = payload.to_vec();
-    for table in ADDED_SINCE_PREVIOUS_BUILD {
+    for table in TRANSFER_TABLES_OLD_BLOBS_MAY_LACK {
         if !arriving.iter().any(|entry| entry.table == *table)
             && !payload.iter().any(|entry| entry.table == *table)
         {

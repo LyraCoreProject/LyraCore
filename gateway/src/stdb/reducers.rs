@@ -1232,16 +1232,26 @@ impl Coordinator {
         &self,
         account_id: u64,
         character_guid: u64,
+        entry: crate::codec::WorldEntry,
     ) -> Result<crate::codec::EntityView> {
         // Login rides `gw_player_login` on the COORDINATOR connection (module half: delegates to
         // apply_player_login with the account's bound identity as row owner, binds entity→lease,
-        // fail-closed on either missing) — no per-player connection exists anywhere.
+        // fail-closed on either missing) — no per-player connection exists anywhere. A world-port
+        // rides its twin `gw_player_world_port`, which keeps the Away Status.
         let coord = self.0.call_pipe();
-        call_reducer!(
-            coord.conn.reducers,
-            "gw_player_login",
-            gw_player_login_then(account_id, self.session_actor(character_guid))
-        )?;
+        let actor = self.session_actor(character_guid);
+        match entry {
+            crate::codec::WorldEntry::FreshLogin => call_reducer!(
+                coord.conn.reducers,
+                "gw_player_login",
+                gw_player_login_then(account_id, actor)
+            )?,
+            crate::codec::WorldEntry::WorldPort => call_reducer!(
+                coord.conn.reducers,
+                "gw_player_world_port",
+                gw_player_world_port_then(account_id, actor)
+            )?,
+        }
 
         // The reducer committed; the row propagates to the owner cache asynchronously. Poll
         // briefly until it appears (home_* ride along from the game_character row, and its
@@ -1916,21 +1926,13 @@ impl Coordinator {
         )
     }
 
-    pub fn send_whisper(
-        &self,
-        _account_id: u64,
-        actor_guid: u64,
-        target_player: String,
-        message: String,
-    ) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("send_whisper: actor_guid unresolved"));
-        }
-        let coord = self.0.call_pipe();
+    /// `gw_set_away`: one `/afk` or `/dnd` on the Character's Home Shard, where its live entity
+    /// and Auto-Reply live.
+    pub fn set_away(&self, actor_guid: u64, kind: u8, message: String) -> Result<()> {
         call_reducer!(
-            coord.conn.reducers,
-            "gw_send_whisper",
-            gw_send_whisper_then(self.session_actor(actor_guid), target_player, message)
+            self.0.call_pipe().conn.reducers,
+            "gw_set_away",
+            gw_set_away_then(self.session_actor(actor_guid), kind, message)
         )
     }
 
@@ -1957,6 +1959,38 @@ impl Coordinator {
             realm.0.call_pipe().conn.reducers,
             "realm_chat",
             realm_chat_then(realm.session_actor(speaker_guid), request)
+        ))
+    }
+
+    /// `realm_whisper`: commit one whisper's lines on Realm-core, or on the one database of an
+    /// unsharded Realm. The Module applies every whisper Gate. The speaker's name stays here.
+    pub fn realm_whisper(
+        &self,
+        speaker_guid: u64,
+        request: crate::world::WhisperRequest,
+    ) -> Result<ChatOutcome> {
+        let realm = self.realm_core()?;
+        let target = request.target;
+        let request = WhisperRequest {
+            language: request.language,
+            message: request.message,
+            speaker: SpeakerFacts {
+                race: request.speaker.race,
+                chat_tag: request.speaker.chat_tag,
+            },
+            target: WhisperTargetFacts {
+                guid: target.guid,
+                race: target.race,
+                name: target.name,
+                ignores_speaker: target.ignores_speaker,
+                away_kind: target.away_kind,
+                away_message: target.away_message,
+            },
+        };
+        chat_outcome(call_reducer!(
+            realm.0.call_pipe().conn.reducers,
+            "realm_whisper",
+            realm_whisper_then(realm.session_actor(speaker_guid), request)
         ))
     }
 
@@ -3301,36 +3335,8 @@ impl Coordinator {
         ))
     }
 
-    /// `realm_whisper` — deliver one whisper against the database THIS handle points at. The
-    /// gateway calls it on the **realm-core** handle, the only database that can
-    /// address both parties of a cross-shard whisper (a guid is realm-wide; an identity is not).
-    ///
-    /// Through the COORDINATOR connection, not the player's: the reducer is operator-gated because it
-    /// takes the SENDING character's guid as an argument (realm-core has no live entity to derive one
-    /// from), so only the token that holds the operator identity may call it. The guid passed is the
-    /// one this socket authenticated into the world with — see `world::whisper`. `sender_is_ignored`
-    /// is the target's ignore-list verdict, read from the shard that holds the target's contact rows.
-    pub fn realm_whisper(
-        &self,
-        sender_guid: u64,
-        target_guid: u64,
-        message: String,
-        sender_is_ignored: bool,
-    ) -> Result<()> {
-        call_reducer!(
-            self.0.call_pipe().conn.reducers,
-            "realm_whisper",
-            realm_whisper_then(
-                self.session_actor(sender_guid),
-                target_guid,
-                message,
-                sender_is_ignored
-            )
-        )
-    }
-
     /// `realm_mail_mark_read` — flip a mail's read state against the database THIS handle points
-    /// at. Same trust shape as `realm_whisper` above: operator-gated, `recipient_guid` passed
+    /// at. Operator-gated, `recipient_guid` passed
     /// explicitly (the plane may hold no live entity), called on whichever handle `world::mail`
     /// picked — realm-core when sharded, this shard's own database when not.
     pub fn mail_mark_read(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
@@ -3833,6 +3839,25 @@ mod realm_chat_routing_tests {
         assert!(
             !body.contains("self.0.call_pipe()"),
             "`Coordinator::realm_chat` must not call the session's own Home Shard"
+        );
+    }
+
+    /// A whisper is a set of Realm Chat Lines, so it runs on Realm-core like `realm_chat`. Pinned
+    /// in source for the same reason.
+    #[test]
+    fn realm_whispers_run_on_the_realm_core_handle() {
+        let body = crate::test_scan::code_of(include_str!("reducers.rs"), "pub fn realm_whisper(");
+        let body: String = body.split_whitespace().collect();
+        assert!(
+            body.contains("letrealm=self.realm_core()?;")
+                && body.contains("realm.0.call_pipe().conn.reducers,\"realm_whisper\",")
+                && body.contains("realm_whisper_then(realm.session_actor(speaker_guid),request)"),
+            "`Coordinator::realm_whisper` no longer calls the reducer on the Realm-core handle. \
+             Body was:\n{body}"
+        );
+        assert!(
+            !body.contains("self.0.call_pipe()"),
+            "`Coordinator::realm_whisper` must not call the session's own Home Shard"
         );
     }
 

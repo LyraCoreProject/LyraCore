@@ -51,7 +51,7 @@ pub(crate) use channel::{resolve_online_character, ResolvedTarget};
 pub(crate) use char::handle_char;
 pub(crate) use chat::{
     dispatch_chat_action, ChatActionOutcome, ChatActionPlayer, ChatActionStore, ChatOutcome,
-    RealmChatRequest, SpeakerFacts,
+    RealmChatRequest, SpeakerFacts, WhisperRequest, WhisperTargetFacts,
 };
 pub(crate) use combat::handle_combat;
 pub(crate) use duel::{dispatch_duel_action, DuelActionOutcome, DuelActionPlayer, DuelActionStore};

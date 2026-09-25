@@ -5,57 +5,56 @@
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
 use super::session_actor_type::SessionActor;
-use super::whisper_request_type::WhisperRequest;
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
-pub(super) struct RealmWhisperArgs {
+pub(super) struct GwPlayerWorldPortArgs {
+    pub account_id: u64,
     pub request_actor: SessionActor,
-    pub request: WhisperRequest,
 }
 
-impl From<RealmWhisperArgs> for super::Reducer {
-    fn from(args: RealmWhisperArgs) -> Self {
-        Self::RealmWhisper {
+impl From<GwPlayerWorldPortArgs> for super::Reducer {
+    fn from(args: GwPlayerWorldPortArgs) -> Self {
+        Self::GwPlayerWorldPort {
+            account_id: args.account_id,
             request_actor: args.request_actor,
-            request: args.request,
         }
     }
 }
 
-impl __sdk::InModule for RealmWhisperArgs {
+impl __sdk::InModule for GwPlayerWorldPortArgs {
     type Module = super::RemoteModule;
 }
 
 #[allow(non_camel_case_types)]
-/// Extension trait for access to the reducer `realm_whisper`.
+/// Extension trait for access to the reducer `gw_player_world_port`.
 ///
 /// Implemented for [`super::RemoteReducers`].
-pub trait realm_whisper {
-    /// Request that the remote module invoke the reducer `realm_whisper` to run as soon as possible.
+pub trait gw_player_world_port {
+    /// Request that the remote module invoke the reducer `gw_player_world_port` to run as soon as possible.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
-    /// /// Use [`realm_whisper:realm_whisper_then`] to run a callback after the reducer completes.
-    fn realm_whisper(
+    /// /// Use [`gw_player_world_port:gw_player_world_port_then`] to run a callback after the reducer completes.
+    fn gw_player_world_port(
         &self,
+        account_id: u64,
         request_actor: SessionActor,
-        request: WhisperRequest,
     ) -> __sdk::Result<()> {
-        self.realm_whisper_then(request_actor, request, |_, _| {})
+        self.gw_player_world_port_then(account_id, request_actor, |_, _| {})
     }
 
-    /// Request that the remote module invoke the reducer `realm_whisper` to run as soon as possible,
+    /// Request that the remote module invoke the reducer `gw_player_world_port` to run as soon as possible,
     /// registering `callback` to run when we are notified that the reducer completed.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and its status can be observed with the `callback`.
-    fn realm_whisper_then(
+    fn gw_player_world_port_then(
         &self,
+        account_id: u64,
         request_actor: SessionActor,
-        request: WhisperRequest,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -63,20 +62,20 @@ pub trait realm_whisper {
     ) -> __sdk::Result<()>;
 }
 
-impl realm_whisper for super::RemoteReducers {
-    fn realm_whisper_then(
+impl gw_player_world_port for super::RemoteReducers {
+    fn gw_player_world_port_then(
         &self,
+        account_id: u64,
         request_actor: SessionActor,
-        request: WhisperRequest,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
-            RealmWhisperArgs {
+            GwPlayerWorldPortArgs {
+                account_id,
                 request_actor,
-                request,
             },
             callback,
         )

@@ -54,12 +54,12 @@ publish presents as an unrelated mid-session hang, not a loud "no such table".
 
 ## 2. Inventory
 
-**279 tables**, all of them in `module/src/**`: 128 public, 151 private. No table comes from a
+**280 tables**, all of them in `module/src/**`: 128 public, 152 private. No table comes from a
 package in this tree; `packages/example` is the only in-tree package and it declares none. Recount
 rather than trust the numbers below, which drift on every schema change:
 
 ```bash
-grep -rn '^#\[table(' module/src --include='*.rs' | wc -l   # 279 on 2026-09-24
+grep -rn '^#\[table(' module/src --include='*.rs' | wc -l   # 280 on 2026-09-25
 ```
 
 | Domain | Tables | Public | Where |
@@ -68,7 +68,7 @@ grep -rn '^#\[table(' module/src --include='*.rs' | wc -l   # 279 on 2026-09-24
 | Character and per-character progression | 23 | 19 | `character.rs`, `skill.rs`, `reputation.rs`, `talent.rs`, `spell/spellbook.rs`, `action_bar.rs`, `combo.rs`, `rest.rs`, `corpse.rs`, `xp.rs`, `exploration.rs`, `breath.rs`, `breath_relay.rs`, `graveyard.rs` |
 | World entity and movement | 8 | 3 | `world.rs`, `motion.rs` |
 | Terrain / nav / exact vmap | 9 | 5 | `terrain.rs`, `nav.rs`, `vmap.rs` |
-| Chat / social / addon bridge | 13 | 9 | `chat.rs`, `channel.rs`, `bridge.rs` |
+| Chat / social / addon bridge | 14 | 9 | `chat.rs`, `channel.rs`, `bridge.rs`, `away.rs` |
 | Combat / threat / duel | 10 | 4 | `combat/engage.rs`, `combat/death.rs`, `threat.rs`, `duel.rs` |
 | Spell / aura | 20 | 10 | `spell/tables.rs`, `spell/stacking.rs` |
 | Quest | 12 | 8 | `quest.rs` |
@@ -546,7 +546,7 @@ Two constraints survive the removal and bind any filter added later.
 - **The sharded-only tables are subscribed conditionally.** A subscription to a table the deployed
   module does not have **fails to apply**, which fails the whole gateway — so a gateway restarted
   before its module was republished must not ask for `game_map_region`, `game_region_assignment`,
-  `game_character_shard`, or the realm-core group/whisper/loot tables. `connection.rs:207–216`.
+  `game_character_shard`, or the realm-core group/loot tables. `connection.rs:207–216`.
 
 ---
 
