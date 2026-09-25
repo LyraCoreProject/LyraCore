@@ -222,6 +222,23 @@ impl Standalone {
         &self.database
     }
 
+    #[allow(dead_code)]
+    pub fn module_logs(&self, lines: usize) -> Output {
+        self.command()
+            .args([
+                "logs",
+                "--server",
+                &self.server,
+                "--format",
+                "json",
+                "--num-lines",
+                &lines.to_string(),
+                &self.database,
+            ])
+            .output()
+            .expect("failed to read the test Module logs")
+    }
+
     #[allow(dead_code)] // Used by Gateway tests that need the private shard's Owner Token.
     pub fn owner_token(&self) -> String {
         let config = fs::read_to_string(&self.cli_config).expect("private CLI config is missing");

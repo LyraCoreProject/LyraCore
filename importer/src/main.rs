@@ -9,7 +9,7 @@
 //! defaulting to a dry run that prints the plan and writes nothing):
 //!   --dump <classic-db .sql[.gz]>   cmangos creature/etc ETL
 //!                                   [--world-profile alliance-eastern|alliance-kalimdor|
-//!                                    alliance-single|instances]
+//!                                    alliance-single|starting-eastern|starting-kalimdor|instances]
 //!                                   [--eventai-profile cmangos-classic-z2815]
 //!                                   [advanced: --map 0 --center X,Y,Z --radius 180]
 //!                                   [--print-extents derives --box from the dump's real spawn

@@ -5,6 +5,8 @@ pub(crate) enum WorldImportProfile {
     AllianceEastern,
     AllianceKalimdor,
     AllianceSingle,
+    StartingEastern,
+    StartingKalimdor,
     Instances,
 }
 
@@ -13,6 +15,8 @@ impl WorldImportProfile {
         "alliance-eastern",
         "alliance-kalimdor",
         "alliance-single",
+        "starting-eastern",
+        "starting-kalimdor",
         "instances",
     ];
 
@@ -21,6 +25,8 @@ impl WorldImportProfile {
             "alliance-eastern" => Ok(Self::AllianceEastern),
             "alliance-kalimdor" => Ok(Self::AllianceKalimdor),
             "alliance-single" => Ok(Self::AllianceSingle),
+            "starting-eastern" => Ok(Self::StartingEastern),
+            "starting-kalimdor" => Ok(Self::StartingKalimdor),
             "instances" => Ok(Self::Instances),
             _ => bail!(
                 "--world-profile {name}: unknown profile (valid: {})",
@@ -34,6 +40,8 @@ impl WorldImportProfile {
             Self::AllianceEastern => "alliance-eastern",
             Self::AllianceKalimdor => "alliance-kalimdor",
             Self::AllianceSingle => "alliance-single",
+            Self::StartingEastern => "starting-eastern",
+            Self::StartingKalimdor => "starting-kalimdor",
             Self::Instances => "instances",
         }
     }
@@ -155,6 +163,32 @@ impl WorldImportScope {
                     (eastern()?, vec![], vec![], eastern_forced_creatures())
                 }
                 WorldImportProfile::AllianceKalimdor => (kalimdor()?, vec![], vec![], vec![]),
+                WorldImportProfile::StartingEastern => {
+                    let mut slices = eastern()?;
+                    slices.push(BoundedMapSlice::rectangle(
+                        "deathknell",
+                        0,
+                        (1_300.0, 2_300.0, 900.0, 2_200.0),
+                        (1_814.55, 1_485.20, 90.66),
+                    )?);
+                    (slices, vec![], vec![], eastern_forced_creatures())
+                }
+                WorldImportProfile::StartingKalimdor => {
+                    let mut slices = kalimdor()?;
+                    slices.push(BoundedMapSlice::rectangle(
+                        "valley-of-trials",
+                        1,
+                        (-1_300.0, 200.0, -5_000.0, -3_700.0),
+                        (-514.34, -4_344.96, 38.31),
+                    )?);
+                    slices.push(BoundedMapSlice::rectangle(
+                        "red-cloud-mesa",
+                        1,
+                        (-3_600.0, -2_300.0, -1_200.0, 500.0),
+                        (-2_951.82, -350.50, 55.86),
+                    )?);
+                    (slices, vec![], vec![], vec![])
+                }
                 WorldImportProfile::AllianceSingle => {
                     let mut slices = eastern()?;
                     slices.extend(kalimdor()?);
@@ -520,6 +554,50 @@ mod tests {
             "map=36;instance-slice=deadmines-entry-exit;cell_x=511..513;cell_y=522..524;entry=-14.5732,-385.4750,62.4561;exit=-14.3628,-393.3800,64.5605;exit_radius=6.0;collar=1"
         );
         assert!(instances.forced_creature_entries.is_empty());
+    }
+
+    #[test]
+    fn starting_profiles_preserve_alliance_content_and_add_horde_starts() {
+        for (base, expanded, additions) in [
+            (
+                WorldImportProfile::AllianceEastern,
+                WorldImportProfile::StartingEastern,
+                vec![(0, 1_676.35, 1_677.45, 121.67)],
+            ),
+            (
+                WorldImportProfile::AllianceKalimdor,
+                WorldImportProfile::StartingKalimdor,
+                vec![
+                    (1, -618.518, -4_251.67, 38.718),
+                    (1, -2_917.58, -257.98, 52.9968),
+                ],
+            ),
+        ] {
+            let before = WorldImportScope::canonical(base).unwrap();
+            let after = WorldImportScope::canonical(expanded).unwrap();
+            assert_eq!(
+                after.forced_creature_entries,
+                before.forced_creature_entries
+            );
+            assert_eq!(after.whole_maps, before.whole_maps);
+            for slice in before.bounded_slices {
+                assert!(after.bounded_slices.iter().any(|kept| {
+                    kept.name == slice.name
+                        && kept.map_id == slice.map_id
+                        && kept.bounds == slice.bounds
+                }));
+            }
+            for (map, x, y, z) in additions {
+                assert!(after
+                    .bounded_slices
+                    .iter()
+                    .any(|slice| slice.contains(map, x, y, z)));
+                assert!(!after
+                    .bounded_slices
+                    .iter()
+                    .any(|slice| slice.contains(36, x, y, z)));
+            }
+        }
     }
 
     #[test]

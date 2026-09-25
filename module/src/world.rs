@@ -107,6 +107,8 @@ pub(crate) fn clear_relay_world_states_for_instance(ctx: &ReducerContext, instan
     // `by_grid` stays: the MODULE reaches it through the generated index accessor, not SQL, so
     // the 3-column planner limit does not apply to `helpers::entities_near`.
     index(accessor = by_cell, btree(columns = [map_id, instance_id, cell])),
+    // Creature searches skip Character entry 0 before consuming their bounded read budget.
+    index(accessor = by_cell_entry, btree(columns = [map_id, instance_id, cell, entry])),
     // `entity_by_owner` is the auth prologue of ~77 player reducer call sites; without this it was a
     // full table scan per transaction (perf catalog 1.2). `owner_identity` never changes for a live
     // row, so maintenance is insert/delete-only.

@@ -815,7 +815,7 @@ fn playerbots_runner_retains_a_cast_across_real_pushback_and_resumes_home() {
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_runner_batches_due_bots_in_stable_fair_order() {
-    let (node, bots) = fixture("playerbots-runner-fair", "25");
+    let (node, bots) = fixture("playerbots-runner-fair", "300");
     node.assert_sql("DELETE FROM game_creature_move_schedule");
     for bot in &bots {
         select(&node, bot, "recordOnly");
@@ -825,19 +825,19 @@ fn playerbots_runner_batches_due_bots_in_stable_fair_order() {
     ordered.sort_by_key(|r| r["id"].parse::<u64>().unwrap());
     node.assert_call("playerbots_fixture_runner_pass", &[]);
     let first = node.query_rows("SELECT * FROM pkg_playerbots_scheduler")[0].clone();
-    assert_eq!(first["processed"], "16");
+    assert_eq!(first["processed"], "256");
     assert_eq!(first["excess_due"], "true");
     assert!(first["oldest_deferred_lag_micros"].parse::<i64>().unwrap() >= 2_000_000);
-    for bot in &ordered[..16] {
+    for bot in &ordered[..256] {
         assert!(first["processed_guids"].contains(&bot["character_guid"]));
     }
-    for bot in &ordered[16..] {
+    for bot in &ordered[256..] {
         assert!(!first["processed_guids"].contains(&bot["character_guid"]));
     }
     node.assert_call("playerbots_fixture_runner_pass", &[]);
     let second = node.query_rows("SELECT * FROM pkg_playerbots_scheduler")[0].clone();
-    assert_eq!(second["processed"], "9");
-    for bot in &ordered[16..] {
+    assert_eq!(second["processed"], "44");
+    for bot in &ordered[256..] {
         assert!(second["processed_guids"].contains(&bot["character_guid"]));
     }
     assert_eq!(second["excess_due"], "false");
