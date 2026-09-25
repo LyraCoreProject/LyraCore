@@ -682,6 +682,68 @@ fn playerbots_pending_transfer_intent_keeps_the_admitted_instance_lease() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_legacy_crossing_approaches_the_supported_areatrigger() {
+    let fixture = fixture("playerbots-transfer-legacy-approach", 1);
+    fixture.node.assert_call(
+        "playerbots_controller_transition_fixture_stage_legacy",
+        &[&fixture.companion, "false"],
+    );
+    fixture
+        .node
+        .assert_call("playerbots_fixture_runner_pass_once", &[&fixture.companion]);
+    let evidence = capture(&fixture, "legacy-approach");
+    let chosen = evidence["runner"][0]["chosen"].as_str().unwrap();
+    assert!(
+        chosen.contains("areaTrigger") && chosen.contains("transferPosition"),
+        "{evidence}"
+    );
+    assert_eq!(
+        evidence["movement"].as_array().unwrap().len(),
+        1,
+        "{evidence}"
+    );
+    assert!(
+        evidence["movement"][0]["dur_ms"]
+            .as_str()
+            .unwrap()
+            .parse::<u32>()
+            .unwrap()
+            > 0,
+        "{evidence}"
+    );
+    assert!(
+        evidence["intent"].as_array().unwrap().is_empty(),
+        "{evidence}"
+    );
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_legacy_crossing_releases_runner_when_its_party_leaves() {
+    let fixture = fixture("playerbots-transfer-legacy-handoff", 1);
+    fixture.node.assert_call(
+        "playerbots_controller_transition_fixture_stage_legacy",
+        &[&fixture.companion, "false"],
+    );
+    fixture
+        .node
+        .assert_call("playerbots_fixture_runner_pass_once", &[&fixture.companion]);
+    assert!(runner(&fixture.node, &fixture.companion)["foreground"].contains("movement"));
+    fixture.node.assert_sql(&format!(
+        "DELETE FROM game_group_member WHERE character_guid = {}",
+        fixture.companion
+    ));
+    fixture
+        .node
+        .assert_call("playerbots_fixture_runner_pass_once", &[&fixture.companion]);
+    let state = runner(&fixture.node, &fixture.companion);
+    assert!(state["foreground"].contains("none"), "{state:?}");
+    assert_eq!(state["path_pending"], "false");
+    assert_eq!(state["movement_due_micros"], i64::MAX.to_string());
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_legacy_crossing_uses_the_runner_transfer_checkpoint() {
     let fixture = fixture("playerbots-transfer-legacy-checkpoint", 2);
     fixture.node.assert_call(

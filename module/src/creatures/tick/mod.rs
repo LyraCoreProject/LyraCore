@@ -307,25 +307,9 @@ fn active_cell_radius(ctx: &ReducerContext) -> f32 {
     combat_active_radius(template_aggro_max).max(visible)
 }
 
-/// ACTIVE CELLS (work-item 230): the deduped guid set of every non-player creature within
-/// `active_cell_radius` yards of AT LEAST ONE player entity — INVERTING the old full-table scan to
-/// iterate the sparse side (players; bots included, since a bot's `game_world_entity` row carries the
-/// same PLAYER type_mask bit a real client's does — `is_player()` already covers them: a bot is a
-/// `game_world_entity` row with the PLAYER bit).
-/// Reuses `helpers::entities_near` (the existing, already-tested `by_grid`-indexed neighborhood query
-/// from work-item 190 slice 1 — until now unused) per player, so the query is instance-isolated for
-/// free. A creature absent from this set is DORMANT this tick for every pass that consults it — see
-/// the classification in `tick_creatures`'s doc comment. The neighborhood-query cost scales with
-/// Character density, not world size; authored active objects remain awake without a Character.
-///
-/// Character seeds come from the `entry == 0` index and retain the PLAYER-bit check, so legal type-mask
-/// variants remain eligible. Active objects come from their EventAI-state index and are point-read by
-/// guid. The residual whole-entity discovery is needed only for pets and exact IN_COMBAT bit masks;
-/// it therefore runs on sense firings rather than every movement firing.
-/// Work-item 229: seeds ONLY from players in instances THIS firing's scope covers — `entities_near`
-/// is already instance-gated (190 slice 1), so the returned set then contains only covered-instance
-/// creatures, which scopes patrol/aggro+assist/return/wander without touching their bodies. With
-/// only the seeded catch-all row, `covers()` is `true` for every player → identical set to pre-229.
+/// Read each occupied neighborhood once, preserving map and instance isolation.
+/// Authored active objects stay awake without a nearby Character. Pets and combat
+/// candidates retain their separate sense-firing discovery.
 pub(crate) fn active_cell_creatures(
     ctx: &ReducerContext,
     scope: &TickScope,
@@ -370,26 +354,16 @@ pub(crate) fn active_cell_creatures(
             out.insert(e.guid);
         }
     }
-    for p in players {
-        for c in crate::helpers::entities_near(ctx, p.map_id, p.instance_id, p.x, p.y, radius) {
-            // `cell_is_active` is a belt-and-suspenders re-check of the SAME predicate `entities_near`'s
-            // `by_grid` query already encodes (mirrors `entities_near`'s own `in_same_partition`
-            // re-check) — kept as a real call so the pure active-cell math it wraps stays exercised by
-            // something other than its own unit tests.
-            if !c.is_player()
-                && cell_is_active(
-                    c.map_id,
-                    c.instance_id,
-                    c.grid_x,
-                    c.grid_y,
-                    p.map_id,
-                    p.instance_id,
-                    p.x,
-                    p.y,
-                    radius,
-                )
-            {
-                out.insert(c.guid);
+    let cells = active_cells(
+        players
+            .into_iter()
+            .map(|p| (p.map_id, p.instance_id, p.x, p.y)),
+        radius,
+    );
+    for cell in cells {
+        for creature in entities.by_grid().filter(cell) {
+            if !creature.is_player() {
+                out.insert(creature.guid);
             }
         }
     }
@@ -819,8 +793,54 @@ pub(crate) fn creature_is_routing(ctx: &ReducerContext, c: &WorldEntity) -> bool
         && !crate::spell::is_self_movement_suppressed(ctx, c.guid)
 }
 
+fn active_cells(
+    positions: impl IntoIterator<Item = (u32, u64, f32, f32)>,
+    radius: f32,
+) -> std::collections::BTreeSet<(u32, u64, i32, i32)> {
+    let mut cells = std::collections::BTreeSet::new();
+    for (map, instance, x, y) in positions {
+        let (gx0, gx1, gy0, gy1) = spatial::covering_cell_box(x, y, radius);
+        for gx in gx0..=gx1 {
+            for gy in gy0..=gy1 {
+                cells.insert((map, instance, gx, gy));
+            }
+        }
+    }
+    cells
+}
+
 #[cfg(test)]
 mod relay_tripwire {
+    #[test]
+    fn overlapping_characters_read_each_active_cell_once() {
+        let cells = super::active_cells([(0, 0, 0.0, 0.0); 1_000], 100.0);
+        assert_eq!(cells.len(), 25);
+        assert!(cells.contains(&(0, 0, 339, 339)));
+        assert!(cells.contains(&(0, 0, 343, 343)));
+        assert!(!cells.contains(&(0, 0, 344, 343)));
+    }
+
+    #[test]
+    fn active_cells_keep_maps_and_instances_separate() {
+        let cells = super::active_cells(
+            [(0, 0, 0.0, 0.0), (1, 0, 0.0, 0.0), (0, 7, 0.0, 0.0)],
+            100.0,
+        );
+        assert_eq!(cells.len(), 75);
+        for partition in [(0, 0), (1, 0), (0, 7)] {
+            assert!(cells.contains(&(partition.0, partition.1, 339, 339)));
+        }
+        assert!(!cells.contains(&(1, 7, 339, 339)));
+    }
+
+    #[test]
+    fn adjacent_neighborhoods_preserve_their_outer_cells() {
+        let cells = super::active_cells([(0, 0, 0.0, 0.0), (0, 0, 50.0, 0.0)], 100.0);
+        assert_eq!(cells.len(), 30);
+        assert!(cells.contains(&(0, 0, 338, 339)));
+        assert!(cells.contains(&(0, 0, 343, 343)));
+    }
+
     #[test]
     fn active_objects_enter_only_their_creature_partition_sweep() {
         assert!(super::active_object_enters_scope(false, true, true));

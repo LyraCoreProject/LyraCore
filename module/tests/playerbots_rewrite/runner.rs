@@ -640,7 +640,7 @@ fn playerbots_movement_cast_keeps_its_identity_and_holds_position() {
 fn playerbots_movement_continues_behind_a_busy_decision_queue() {
     let (node, bot) = parked_movement("playerbots-movement-busy");
     node.assert_sql("DELETE FROM game_creature_move_schedule");
-    node.assert_call("playerbots_spawn_role", &["100", "1200", "1200", "50", "1"]);
+    node.assert_call("playerbots_spawn_role", &["300", "1200", "1200", "50", "1"]);
     for row in node.query_rows("SELECT character_guid FROM pkg_playerbots_bot") {
         if row["character_guid"] != bot {
             select(&node, &row["character_guid"], "recordOnly");
@@ -662,7 +662,7 @@ fn playerbots_movement_continues_behind_a_busy_decision_queue() {
         node.query_rows("SELECT processed FROM pkg_playerbots_scheduler")[0]["processed"]
             .parse::<usize>()
             .unwrap()
-            <= 16
+            <= 256
     );
 }
 
@@ -815,7 +815,7 @@ fn playerbots_runner_retains_a_cast_across_real_pushback_and_resumes_home() {
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_runner_batches_due_bots_in_stable_fair_order() {
-    let (node, bots) = fixture("playerbots-runner-fair", "25");
+    let (node, bots) = fixture("playerbots-runner-fair", "300");
     node.assert_sql("DELETE FROM game_creature_move_schedule");
     for bot in &bots {
         select(&node, bot, "recordOnly");
@@ -825,19 +825,19 @@ fn playerbots_runner_batches_due_bots_in_stable_fair_order() {
     ordered.sort_by_key(|r| r["id"].parse::<u64>().unwrap());
     node.assert_call("playerbots_fixture_runner_pass", &[]);
     let first = node.query_rows("SELECT * FROM pkg_playerbots_scheduler")[0].clone();
-    assert_eq!(first["processed"], "16");
+    assert_eq!(first["processed"], "256");
     assert_eq!(first["excess_due"], "true");
     assert!(first["oldest_deferred_lag_micros"].parse::<i64>().unwrap() >= 2_000_000);
-    for bot in &ordered[..16] {
+    for bot in &ordered[..256] {
         assert!(first["processed_guids"].contains(&bot["character_guid"]));
     }
-    for bot in &ordered[16..] {
+    for bot in &ordered[256..] {
         assert!(!first["processed_guids"].contains(&bot["character_guid"]));
     }
     node.assert_call("playerbots_fixture_runner_pass", &[]);
     let second = node.query_rows("SELECT * FROM pkg_playerbots_scheduler")[0].clone();
-    assert_eq!(second["processed"], "9");
-    for bot in &ordered[16..] {
+    assert_eq!(second["processed"], "44");
+    for bot in &ordered[256..] {
         assert!(second["processed_guids"].contains(&bot["character_guid"]));
     }
     assert_eq!(second["excess_due"], "false");
@@ -858,7 +858,7 @@ fn playerbots_runner_migrates_populated_preceding_wasm_and_backfills_boundedly()
     node.publish_module_bytes(&old_wasm);
     node.assert_call("claim_operator", &[]);
     node.assert_call("install_guid_range", &["1000000"]);
-    node.assert_call("playerbots_spawn_role", &["25", "1200", "1200", "50", "1"]);
+    node.assert_call("playerbots_spawn_role", &["300", "1200", "1200", "50", "1"]);
     node.assert_call("playerbots_fixture_prepare", &[]);
     let bot = node.query_rows("SELECT character_guid FROM pkg_playerbots_bot")[0]["character_guid"]
         .clone();
@@ -874,7 +874,7 @@ fn playerbots_runner_migrates_populated_preceding_wasm_and_backfills_boundedly()
     let goals = node.query_rows("SELECT * FROM pkg_playerbots_goal");
     let actions = node.query_rows("SELECT * FROM pkg_playerbots_action");
     let quests = node.query_rows("SELECT * FROM game_character_quest");
-    assert_eq!(roster.len(), 25);
+    assert_eq!(roster.len(), 300);
     assert!(!roster[0].contains_key("controller"));
     assert!(!goals.is_empty());
     assert!(!actions.is_empty());
@@ -907,12 +907,12 @@ fn playerbots_runner_migrates_populated_preceding_wasm_and_backfills_boundedly()
     node.assert_call("playerbots_fixture_runner_pass", &[]);
     assert_eq!(
         node.query_rows("SELECT * FROM pkg_playerbots_runner").len(),
-        16
+        256
     );
     node.assert_call("playerbots_fixture_runner_pass", &[]);
     assert_eq!(
         node.query_rows("SELECT * FROM pkg_playerbots_runner").len(),
-        25
+        300
     );
     select(&node, &bot, "recordOnly");
     node.assert_call("playerbots_fixture_runner_due", &[]);

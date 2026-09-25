@@ -200,7 +200,7 @@ fn destination_snapshot(topology: &TransferTopology, guid: u64) -> serde_json::V
         ),
         "catalog": topology.query(
             &topology.destination_db,
-            "SELECT * FROM pkg_playerbots_quest_catalog WHERE revision = 1",
+            "SELECT * FROM pkg_playerbots_quest_catalog WHERE revision = 2",
         ),
         "source_catalog_quest": topology.query(
             &topology.destination_db,

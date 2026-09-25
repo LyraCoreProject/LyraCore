@@ -401,9 +401,14 @@ fn playerbots_companions_receive_turns_without_starving_older_background_work() 
     for guid in companions {
         issue(&fixture, &format!("follow|{guid}"), guid, false);
     }
-    node.assert_call("playerbots_spawn_role", &["101", "1200", "1200", "50", "1"]);
+    for (count, role) in [("333", "0"), ("332", "1"), ("332", "2")] {
+        node.assert_call(
+            "playerbots_spawn_role",
+            &[count, "1200", "1200", "50", role],
+        );
+    }
     let roster = node.query_rows("SELECT character_guid FROM pkg_playerbots_bot");
-    assert_eq!(roster.len(), 104);
+    assert_eq!(roster.len(), 1000);
     for bot in &roster {
         let guid = &bot["character_guid"];
         if !companions.contains(&guid) {
@@ -414,7 +419,7 @@ fn playerbots_companions_receive_turns_without_starving_older_background_work() 
         }
     }
     node.assert_sql("UPDATE pkg_playerbots_bot SET next_think_micros = 1");
-    for turn in 0..8 {
+    for turn in 0..4 {
         for guid in companions {
             node.assert_sql(&format!(
                 "UPDATE pkg_playerbots_bot SET next_think_micros = 2 WHERE character_guid = {guid}"
@@ -431,11 +436,11 @@ fn playerbots_companions_receive_turns_without_starving_older_background_work() 
             );
         }
         let scheduler = node.query_rows("SELECT processed FROM pkg_playerbots_scheduler");
-        assert!(scheduler[0]["processed"].parse::<usize>().unwrap() <= 16);
+        assert!(scheduler[0]["processed"].parse::<usize>().unwrap() <= 256);
         let remaining = node.query_rows(
             "SELECT character_guid FROM pkg_playerbots_bot WHERE next_think_micros = 1",
         );
-        assert_eq!(remaining.len(), 101usize.saturating_sub(13 * (turn + 1)));
+        assert_eq!(remaining.len(), 997usize.saturating_sub(253 * (turn + 1)));
     }
     evidence(&fixture, "scheduler-fairness");
     node.assert_call(

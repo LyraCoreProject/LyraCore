@@ -497,7 +497,9 @@ fn search_leg(
     if stop_dist == 0.0 && !target_walkable {
         return blocked(0);
     }
-    // A* with octile heuristic, integer costs (10 straight / 14 diagonal), corner-cut guard.
+    // Prefer progress toward the destination within the finite search budget. Weighting
+    // the octile estimate by 5/4 trades shortest-path optimality for fewer expansions.
+    // Equal scores prefer the nearer node; every edge still checks both corners.
     use std::cmp::Reverse;
     use std::collections::{BinaryHeap, HashMap};
     let h = |x: u32, y: u32| {
@@ -508,17 +510,18 @@ fn search_leg(
         10 * dx.max(dy) + 4 * dx.min(dy)
     };
     let remaining = |x, y| h(x, y).saturating_sub((stop_dist / NAV_RES * 14.0).ceil() as u64);
-    let mut open: BinaryHeap<Reverse<(u64, u32, u32)>> = BinaryHeap::new();
+    let priority = |cost, x, y| cost * 4 + remaining(x, y) * 5;
+    let mut open: BinaryHeap<Reverse<(u64, u64, u32, u32)>> = BinaryHeap::new();
     let mut g_cost: HashMap<(u32, u32), u64> = HashMap::new();
     let mut came: HashMap<(u32, u32), (u32, u32)> = HashMap::new();
     g_cost.insert((sx, sy), 0);
-    open.push(Reverse((remaining(sx, sy), sx, sy)));
+    open.push(Reverse((priority(0, sx, sy), h(sx, sy), sx, sy)));
     let mut expanded = 0u32;
     let mut found = false;
     let mut best = ((sx, sy), h(sx, sy)); // nearest-approach node for the partial fallback
-    while let Some(Reverse((score, x, y))) = open.pop() {
+    while let Some(Reverse((score, _, x, y))) = open.pop() {
         let g0 = g_cost[&(x, y)];
-        if score != g0 + remaining(x, y) {
+        if score != priority(g0, x, y) {
             continue;
         }
         if ((x, y) == (tx, ty) && target_walkable)
@@ -568,7 +571,7 @@ fn search_leg(
             if g_cost.get(&(nx, ny)).is_none_or(|&old| ng < old) {
                 g_cost.insert((nx, ny), ng);
                 came.insert((nx, ny), (x, y));
-                open.push(Reverse((ng + remaining(nx, ny), nx, ny)));
+                open.push(Reverse((priority(ng, nx, ny), h(nx, ny), nx, ny)));
             }
         }
     }
@@ -597,10 +600,31 @@ fn search_leg(
     let mut anchor = from;
     let mut i = 0;
     while i + 1 < pts.len() {
-        // Furthest point still directly reachable from the anchor.
         let mut j = pts.len() - 1;
-        while j > i + 1 && !line_walkable(&mut cache, anchor, pts[j]) {
-            j -= 1;
+        if !line_walkable(&mut cache, anchor, pts[j]) {
+            // Probe progressively farther points, then refine the first blocked interval.
+            // Visibility can reopen later in the path; taking an earlier safe waypoint
+            // avoids testing every distant point against the same intervening wall.
+            let mut visible = i + 1;
+            let mut stride = 1;
+            while visible + stride < j {
+                let probe = visible + stride;
+                if !line_walkable(&mut cache, anchor, pts[probe]) {
+                    j = probe;
+                    break;
+                }
+                visible = probe;
+                stride *= 2;
+            }
+            while j - visible > 1 {
+                let probe = visible + (j - visible) / 2;
+                if line_walkable(&mut cache, anchor, pts[probe]) {
+                    visible = probe;
+                } else {
+                    j = probe;
+                }
+            }
+            j = visible;
         }
         path.push(pts[j]);
         anchor = pts[j];
@@ -906,6 +930,24 @@ mod runtime_tests {
     }
 
     #[test]
+    fn bounded_search_prioritizes_progress_around_a_wall() {
+        let from = at(10, 50);
+        let to = at(54, 50);
+        let search = find_leg_in_range_ex(&mut fetcher(), from, to, 0.0, 512);
+        let LegOutcome::Complete(path) = search.outcome else {
+            panic!("a short detour must complete within 512 expansions");
+        };
+        assert_eq!(path.last(), Some(&to));
+        let mut fetch = fetcher();
+        let mut cache = Cache::new(&mut fetch);
+        let mut previous = from;
+        for point in path {
+            assert!(line_walkable(&mut cache, previous, point));
+            previous = point;
+        }
+    }
+
+    #[test]
     fn range_search_retains_safe_partial_progress_at_the_expansion_cap() {
         let from = at(50, 8);
         let to = at(8, 8);
@@ -925,7 +967,7 @@ mod runtime_tests {
     }
 
     #[test]
-    fn stale_queue_entries_do_not_consume_the_detour_budget() {
+    fn bounded_search_completes_a_long_detour_without_cutting_corners() {
         const WIDTH: usize = 192;
         const HEIGHT: usize = 192;
         const WALL_X: usize = WIDTH / 2;
@@ -966,10 +1008,16 @@ mod runtime_tests {
 
         let search = find_leg_in_range_ex(&mut fetch, from, to, 0.0, BUDGET);
         let LegOutcome::Complete(path) = search.outcome else {
-            panic!("stale queue entries consumed the detour budget");
+            panic!("the reachable detour must fit the search budget");
         };
         assert!(search.expansions < BUDGET);
         assert_eq!(path.last(), Some(&to));
+        let mut previous = from;
+        let mut cache = Cache::new(&mut fetch);
+        for point in path {
+            assert!(line_walkable(&mut cache, previous, point));
+            previous = point;
+        }
     }
 
     #[test]

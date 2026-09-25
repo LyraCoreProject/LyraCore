@@ -130,12 +130,11 @@ jobs:
         with:
           path: lyracore
           persist-credentials: false
-      # A packages main commit that carries the raid slot and quest type fixture columns.
-      - name: Check out the continuous movement Package revision
+      - name: Check out the bounded planning Package revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: LyraCoreProject/packages
-          ref: 244ecfd63ee5d99f3cf855201479b9006654d5e8
+          ref: 7c70543f19288b5f0a7e6b1783163f8c4de0e411
           path: collection
           persist-credentials: false
       - name: Check out Core before retained waypoint paths

@@ -25,7 +25,7 @@ use lyracore_shared::nav::{
     derive_cell, merge_cells, sub_index, walk_set, NavCellData, OBS_BYTES, OBS_NONE, WALK_BYTES,
     WALK_DIM, WALK_MARGIN,
 };
-use lyracore_shared::terrain::{cell_index, cell_key};
+use lyracore_shared::terrain::{cell_index, cell_key, CELL_SIZE};
 use lyracore_shared::vmap::{TriClass, VmapTri};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Cursor;
@@ -633,6 +633,29 @@ pub(crate) fn scan_tiles(
     })
 }
 
+pub(crate) fn placement_overlaps_cells(placement: &Placement, range: (i32, i32, i32, i32)) -> bool {
+    let (Some(min), Some(max)) = (placement.bounds_min, placement.bounds_max) else {
+        return true;
+    };
+    // Only known bounds can exclude a model. Preserve malformed bounds for the existing loader
+    // and calibration checks, and retain models whose bounds need their mesh to be determined.
+    if !(0..3).all(|axis| min[axis].is_finite() && max[axis].is_finite() && min[axis] <= max[axis])
+    {
+        return true;
+    }
+    let low = place_pos(max);
+    let high = place_pos(min);
+    let (x_min, x_max, y_min, y_max) = range;
+    [(x_min, x_max), (y_min, y_max)]
+        .into_iter()
+        .enumerate()
+        .all(|(axis, (first, last))| {
+            let cell_low = PLACE_K - (last + 1) as f32 * CELL_SIZE;
+            let cell_high = PLACE_K - first as f32 * CELL_SIZE;
+            high[axis] + WALK_MARGIN >= cell_low && low[axis] - WALK_MARGIN <= cell_high
+        })
+}
+
 /// Pass 2: load each referenced model's collision mesh once (WMO keeps per-triangle group
 /// metadata; M2 doesn't have groups).
 pub(crate) fn load_meshes(
@@ -765,7 +788,7 @@ fn rasterize_slice(
         map_id,
         (cell_x_min, cell_x_max, cell_y_min, cell_y_max),
     )?;
-    let (cells, placements) = (scan.cells, scan.placements);
+    let (cells, mut placements) = (scan.cells, scan.placements);
     if cells.is_empty() {
         bail!("no MCNK cells intersected the slice");
     }
@@ -777,16 +800,19 @@ fn rasterize_slice(
         placements.iter().filter(|p| p.is_wmo).count()
     );
 
-    // Pass 2: load each referenced model's collision mesh once.
+    // Calibration uses tile-wide authored bounds, including when the selected cells have no WMO.
+    let conv = calibrate_from_placements(chain, &placements)?;
+    placements.retain(|placement| {
+        placement_overlaps_cells(placement, (cell_x_min, cell_x_max, cell_y_min, cell_y_max))
+    });
+
+    // Pass 2: load each intersecting model's collision mesh once.
     let meshes = load_meshes(chain, &placements)?;
     let mesh_tris: usize = meshes.values().map(Mesh::len).sum();
     println!(
         "nav: {} unique models, {mesh_tris} local tris",
         meshes.len()
     );
-
-    // Pass 3: calibrate the rotation convention against MODF bounds (WMOs only), capped sample.
-    let conv = calibrate_from_placements(chain, &placements)?;
 
     // Pass 4: transform to world space + bin by terrain cell.
     let mut world_tris: Vec<VmapTri> = Vec::new();
@@ -1006,6 +1032,22 @@ mod tests {
                 name_set: 2,
             }),
         }
+    }
+
+    #[test]
+    fn bounded_mesh_selection_excludes_neighboring_wmos_but_keeps_border_geometry() {
+        let range = (450, 451, 460, 461);
+        let mut placement = test_placement(true);
+        let origin = PLACE_K - 462.0 * CELL_SIZE;
+        placement.bounds_min = Some([PLACE_K - origin + 10.0, 0.0, 450.0 * CELL_SIZE]);
+        placement.bounds_max = Some([PLACE_K - origin + 20.0, 10.0, 451.0 * CELL_SIZE]);
+        assert!(!placement_overlaps_cells(&placement, range));
+
+        placement.bounds_min.as_mut().unwrap()[0] = PLACE_K - origin + WALK_MARGIN / 2.0;
+        assert!(placement_overlaps_cells(&placement, range));
+        placement.bounds_min.as_mut().unwrap()[0] = 460.0 * CELL_SIZE;
+        assert!(placement_overlaps_cells(&placement, range));
+        assert!(placement_overlaps_cells(&test_placement(false), range));
     }
 
     #[test]
