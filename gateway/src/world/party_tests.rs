@@ -3084,11 +3084,12 @@ fn relayed_invite_name(
     }
 }
 
-/// **AC: the invite dialog names the inviter, even across a shard boundary.** `push_event` writes
-/// `other_name` on whichever database the invite op runs on. On a sharded Realm that is Realm-core,
-/// which holds no `game_character` rows, so the relay reads the inviter's name from the World Shard
-/// caches instead, exactly as `SET_LEADER` does. An inviter no shard can name sends nothing rather
-/// than a popup reading "has invited you to join a group" with the name missing.
+/// **AC: the invite dialog names the inviter, even across a shard boundary, and still reaches the
+/// target when no shard can name them.** `push_event` writes `other_name` on whichever database
+/// the invite op runs on. On a sharded Realm that is Realm-core, which holds no `game_character`
+/// rows, so the relay reads the inviter's name from the World Shard caches instead. The pending
+/// `game_group_invite` row already committed, and the popup is the target's only way to learn of
+/// it, so an unresolvable name sends the popup blank rather than dropping the packet.
 #[test]
 fn the_invite_relay_names_the_inviter_from_the_far_shard() {
     let (realm, world, instances, _calls) = party_topology();
@@ -3098,7 +3099,11 @@ fn the_invite_relay_names_the_inviter_from_the_far_shard() {
         relayed_invite_name(&realm, &invite_row(VIM)).as_deref(),
         Some("Vim")
     );
-    assert_eq!(relayed_invite_name(&realm, &invite_row(404)), None);
+    assert_eq!(
+        relayed_invite_name(&realm, &invite_row(404)).as_deref(),
+        Some(""),
+        "an inviter no shard can name still gets a popup, blank rather than dropped"
+    );
 }
 
 /// A `DECLINE` row as the relay decodes it: `other_guid` is the DECLINER (`decline_invite_on`'s
@@ -3136,7 +3141,8 @@ fn relayed_decline_name(
 
 /// **AC: the inviter's "declined" line names the decliner, even across a shard boundary.** Same
 /// defect as INVITE, same fix: the relay resolves the name from the World Shard caches rather than
-/// trusting `other_name`.
+/// trusting `other_name`. Same fallback as INVITE too: a decliner no shard can name still gets a
+/// line sent, blank rather than dropped, for the same consistency reason.
 #[test]
 fn the_decline_relay_names_the_decliner_from_the_far_shard() {
     let (realm, world, instances, _calls) = party_topology();
@@ -3146,7 +3152,10 @@ fn the_decline_relay_names_the_decliner_from_the_far_shard() {
         relayed_decline_name(&realm, &decline_row(VIM)).as_deref(),
         Some("Vim")
     );
-    assert_eq!(relayed_decline_name(&realm, &decline_row(404)), None);
+    assert_eq!(
+        relayed_decline_name(&realm, &decline_row(404)).as_deref(),
+        Some("")
+    );
 }
 
 /// Decode one hand-written client frame: size (u16 BE, opcode plus body), opcode (u32 LE), body.
