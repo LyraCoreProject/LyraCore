@@ -35,12 +35,13 @@ fn capture_timings(node: &Standalone, captured: &mut Vec<String>) {
 #[test]
 #[ignore = "requires SpacetimeDB and the playerbots Package on a build host"]
 fn playerbots_capacity_starting_areas_use_imported_starts_and_refuse_partial_batches() {
+    type StartingAreaCase = (&'static str, u32, u32, &'static [(u8, u8)]);
     let mut node = Standalone::start("playerbots-capacity-starts");
     node.publish_module();
     node.assert_call("claim_operator", &[]);
     node.assert_call("install_guid_range", &["1000000"]);
     node.assert_call("debug_set_nav_enabled", &["true"]);
-    let areas: &[(&str, u32, u32, &[(u8, u8)])] = &[
+    let areas: &[StartingAreaCase] = &[
         ("northshire", 0, 12, &[(1, 1), (1, 5), (1, 8)]),
         ("coldridge", 0, 1, &[(3, 1), (3, 5), (7, 8)]),
         ("deathknell", 0, 85, &[(5, 1), (5, 5), (5, 8)]),
