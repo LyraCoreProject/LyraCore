@@ -1101,6 +1101,8 @@ fn playerbots_held_unsupported_quest_selects_supported_work_without_reaccepting(
     let (node, bots) = fixture("playerbots-quest-provided-item-loss");
     for (class, banked) in [("1", "false"), ("5", "true")] {
         let bot = bot_for_class(&bots, class);
+        node.assert_call("playerbots_fixture_runner_select_cohort", &[bot]);
+        node.assert_call("playerbots_fixture_provision_steps", &[bot, "64"]);
         node.assert_call("playerbots_quest_fixture_admit_accept", &[bot, "3905"]);
         node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
         node.assert_call(
