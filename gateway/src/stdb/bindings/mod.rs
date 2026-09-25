@@ -786,6 +786,7 @@ pub mod gw_open_taxi_reducer;
 pub mod gw_pet_command_reducer;
 pub mod gw_pick_lock_reducer;
 pub mod gw_player_login_reducer;
+pub mod gw_player_world_port_reducer;
 pub mod gw_push_quest_to_party_reducer;
 pub mod gw_ranged_attack_reducer;
 pub mod gw_reclaim_corpse_reducer;
@@ -1932,6 +1933,7 @@ pub use gw_open_taxi_reducer::gw_open_taxi;
 pub use gw_pet_command_reducer::gw_pet_command;
 pub use gw_pick_lock_reducer::gw_pick_lock;
 pub use gw_player_login_reducer::gw_player_login;
+pub use gw_player_world_port_reducer::gw_player_world_port;
 pub use gw_push_quest_to_party_reducer::gw_push_quest_to_party;
 pub use gw_ranged_attack_reducer::gw_ranged_attack;
 pub use gw_reclaim_corpse_reducer::gw_reclaim_corpse;
@@ -3606,6 +3608,10 @@ pub enum Reducer {
         account_id: u64,
         request_actor: SessionActor,
     },
+    GwPlayerWorldPort {
+        account_id: u64,
+        request_actor: SessionActor,
+    },
     GwPushQuestToParty {
         request_actor: SessionActor,
         quest_entry: u32,
@@ -4606,6 +4612,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwPetCommand { .. } => "gw_pet_command",
             Reducer::GwPickLock { .. } => "gw_pick_lock",
             Reducer::GwPlayerLogin { .. } => "gw_player_login",
+            Reducer::GwPlayerWorldPort { .. } => "gw_player_world_port",
             Reducer::GwPushQuestToParty { .. } => "gw_push_quest_to_party",
             Reducer::GwRangedAttack { .. } => "gw_ranged_attack",
             Reducer::GwReclaimCorpse { .. } => "gw_reclaim_corpse",
@@ -7090,6 +7097,13 @@ Reducer::GwIgnoreTrade{
                 account_id,
                 request_actor,
 }             => __sats::bsatn::to_vec(&gw_player_login_reducer::GwPlayerLoginArgs {
+                account_id: account_id.clone(),
+                request_actor: request_actor.clone(),
+}),
+            Reducer::GwPlayerWorldPort{
+                account_id,
+                request_actor,
+}             => __sats::bsatn::to_vec(&gw_player_world_port_reducer::GwPlayerWorldPortArgs {
                 account_id: account_id.clone(),
                 request_actor: request_actor.clone(),
 }),

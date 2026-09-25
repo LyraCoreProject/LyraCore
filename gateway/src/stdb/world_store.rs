@@ -515,8 +515,13 @@ impl WorldStore for Coordinator {
         }
     }
 
-    fn player_login(&self, account_id: u64, character_guid: u64) -> Result<codec::EntityView> {
-        self.player_login(account_id, character_guid)
+    fn player_login(
+        &self,
+        account_id: u64,
+        character_guid: u64,
+        entry: codec::WorldEntry,
+    ) -> Result<codec::EntityView> {
+        self.player_login(account_id, character_guid, entry)
     }
 
     fn movement_update(

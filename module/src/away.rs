@@ -1,6 +1,8 @@
 //! Away Status: AFK or DND on a live Character. Observers see the `PLAYER_FLAGS` bit on the live
 //! entity through the entity Relay; [`CharacterAway`] holds the Auto-Reply a whisperer receives.
-//! Both change together in one transaction. Login clears both, which covers Transfer arrival too.
+//! Both change together in one transaction. A real login ends both. A world-port rebuilds the
+//! entity from the durable row, so [`at_world_entry`] restores the bit from [`CharacterAway`];
+//! the row travels with a Transfer.
 
 use spacetimedb::{table, ReducerContext, Table};
 
@@ -104,14 +106,35 @@ pub(crate) fn apply_set_away(
     Ok(())
 }
 
-/// End the Away Status of a Character entering the world. Called from login on the entity it is
-/// about to insert, so Transfer arrival is covered too: nobody crosses a loading screen AFK.
-pub(crate) fn end_at_login(ctx: &ReducerContext, entity: &mut crate::WorldEntity) {
-    entity.player_flags &= !AWAY_BITS;
-    ctx.db
-        .game_character_away()
-        .character_guid()
-        .delete(entity.guid);
+/// The Away bits of an entity built for `entry`, from its fresh `player_flags` and the stored
+/// Auto-Reply kind. A real login ends the Away Status (cm:Player.cpp:2932 runs from
+/// `LoadFromDB`). A world-port keeps it: cmangos keeps `PLAYER_FLAGS` across a far teleport, and
+/// the rebuilt entity here starts with no Away bits, so the stored kind restores them.
+pub(crate) fn flags_at_entry(
+    player_flags: u32,
+    stored_kind: Option<u8>,
+    entry: crate::world::WorldEntry,
+) -> u32 {
+    let flags = player_flags & !AWAY_BITS;
+    match (entry, stored_kind) {
+        (crate::world::WorldEntry::WorldPort, Some(kind)) => flags | flag_of(kind),
+        _ => flags,
+    }
+}
+
+/// Apply [`flags_at_entry`] to the entity login is about to insert. A real login also deletes
+/// the Auto-Reply.
+pub(crate) fn at_world_entry(
+    ctx: &ReducerContext,
+    entity: &mut crate::WorldEntity,
+    entry: crate::world::WorldEntry,
+) {
+    let rows = ctx.db.game_character_away();
+    let stored_kind = rows.character_guid().find(entity.guid).map(|row| row.kind);
+    entity.player_flags = flags_at_entry(entity.player_flags, stored_kind, entry);
+    if entry == crate::world::WorldEntry::Login {
+        rows.character_guid().delete(entity.guid);
+    }
 }
 
 fn write_reply(ctx: &ReducerContext, character_guid: u64, reply: Option<(u8, String)>) {
@@ -138,7 +161,11 @@ fn write_reply(ctx: &ReducerContext, character_guid: u64, reply: Option<(u8, Str
 crate::character_owned!(delete, fn sweep_delete_game_character_away(ctx, character_guid) {
     ctx.db.game_character_away().character_guid().delete(character_guid);
 });
-crate::character_owned!(not_transported, fn sweep_transfer_game_character_away());
+// Transports: a Transfer is a world-port, and the Away Status survives it.
+crate::character_owned!(transfer, fn sweep_transfer_game_character_away(ctx, character_guid, io) {
+    table = game_character_away,
+    primary_key = character_guid,
+});
 
 #[cfg(test)]
 mod tests {
@@ -212,6 +239,19 @@ mod tests {
             change(0x12, Some((AFK, "Away from Keyboard")))
         );
         assert_eq!(next_away(0x12, AFK, ""), change(0x10, None));
+    }
+
+    /// cm:Player.cpp:2932: a real login ends the Away Status. A world-port keeps it, and the
+    /// ghost bit beside it stays as the rebuild set it.
+    #[test]
+    fn a_login_ends_the_away_status_and_a_world_port_keeps_it() {
+        use crate::world::WorldEntry::{Login, WorldPort};
+        assert_eq!(flags_at_entry(0x00, Some(DND), Login), 0x00);
+        assert_eq!(flags_at_entry(0x02, Some(AFK), Login), 0x00);
+        assert_eq!(flags_at_entry(0x00, Some(DND), WorldPort), 0x04);
+        assert_eq!(flags_at_entry(0x10, Some(AFK), WorldPort), 0x12);
+        assert_eq!(flags_at_entry(0x10, None, WorldPort), 0x10);
+        assert_eq!(flags_at_entry(0x06, None, WorldPort), 0x00);
     }
 
     #[test]

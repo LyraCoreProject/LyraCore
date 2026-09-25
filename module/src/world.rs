@@ -977,6 +977,15 @@ pub(crate) fn recall_to_home(ctx: &ReducerContext, guid: u64) {
 //  Enter world
 // ===========================================================================================
 
+/// Why a Character enters the world. The rebuild is the same; only what survives it differs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WorldEntry {
+    /// `CMSG_PLAYER_LOGIN`: a new World Session.
+    Login,
+    /// `MSG_MOVE_WORLDPORT_ACK` after a cross-map teleport, including a Transfer arrival.
+    WorldPort,
+}
+
 /// The login core, actor-explicit (stage 4d): everything the old sender-path `player_login`
 /// did after resolving WHOSE login this is. `owner` is the identity stamped onto the live entity
 /// and the character's owner-RLS rows — on the gateway path (`gw::gw_player_login`, the only
@@ -987,6 +996,7 @@ pub(crate) fn apply_player_login(
     account: &crate::Account,
     character_guid: u64,
     owner: spacetimedb::Identity,
+    entry: WorldEntry,
 ) -> Result<(), String> {
     let chars = ctx.db.game_character();
     let mut character = chars
@@ -1115,8 +1125,8 @@ pub(crate) fn apply_player_login(
         entity.player_flags = player_flags;
         entity.unit_bytes_1 = unit_bytes_1;
     }
-    // Away Status ends at login (cm:Player.cpp:2932). Transfer arrival also runs this login.
-    crate::away::end_at_login(ctx, &mut entity);
+    // Away Status ends at a real login and survives a world-port (see `away::at_world_entry`).
+    crate::away::at_world_entry(ctx, &mut entity, entry);
     entities.insert(entity);
     // Crash recovery for the narrow paid-before-gateway-arm window. A running flight already has
     // a nonzero start and is untouched; a pending flight begins from its source on this login.

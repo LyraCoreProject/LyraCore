@@ -415,6 +415,8 @@ struct InMemoryStore {
     realm_chat_outcome: Option<ChatOutcome>,
     /// Recorded `realm_chat` requests, with the speaker guid the session authenticated.
     realm_chats: std::sync::Mutex<Vec<(u64, RealmChatRequest)>>,
+    /// The `WorldEntry` of every `player_login`, in order.
+    login_entries: std::sync::Mutex<Vec<codec::WorldEntry>>,
     /// Recorded `set_away` requests: `(speaker_guid, kind, message)`.
     away_requests: std::sync::Mutex<Vec<(u64, u8, String)>>,
     /// This Shard's stored Auto-Replies, by Character guid.
@@ -1937,8 +1939,14 @@ impl WorldStore for InMemoryStore {
             .delete_outcome
             .unwrap_or(codec::CharDeleteOutcome::Success))
     }
-    fn player_login(&self, _account_id: u64, _character_guid: u64) -> Result<codec::EntityView> {
+    fn player_login(
+        &self,
+        _account_id: u64,
+        _character_guid: u64,
+        entry: codec::WorldEntry,
+    ) -> Result<codec::EntityView> {
         self.rec("player_login");
+        self.login_entries.lock().unwrap().push(entry);
         let call = self
             .login_calls
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -6859,6 +6867,11 @@ fn worldport_ack_reenters_with_fresh_subscription_and_empty_loot_state() {
     assert!(
         store.money_looted.lock().unwrap().is_empty(),
         "world-port re-entry must start with no open loot target"
+    );
+    // The login ends the Away Status; the world-port rides the reducer that keeps it.
+    assert_eq!(
+        store.login_entries.lock().unwrap().as_slice(),
+        [codec::WorldEntry::FreshLogin, codec::WorldEntry::WorldPort]
     );
 }
 

@@ -1232,16 +1232,26 @@ impl Coordinator {
         &self,
         account_id: u64,
         character_guid: u64,
+        entry: crate::codec::WorldEntry,
     ) -> Result<crate::codec::EntityView> {
         // Login rides `gw_player_login` on the COORDINATOR connection (module half: delegates to
         // apply_player_login with the account's bound identity as row owner, binds entity→lease,
-        // fail-closed on either missing) — no per-player connection exists anywhere.
+        // fail-closed on either missing) — no per-player connection exists anywhere. A world-port
+        // rides its twin `gw_player_world_port`, which keeps the Away Status.
         let coord = self.0.call_pipe();
-        call_reducer!(
-            coord.conn.reducers,
-            "gw_player_login",
-            gw_player_login_then(account_id, self.session_actor(character_guid))
-        )?;
+        let actor = self.session_actor(character_guid);
+        match entry {
+            crate::codec::WorldEntry::FreshLogin => call_reducer!(
+                coord.conn.reducers,
+                "gw_player_login",
+                gw_player_login_then(account_id, actor)
+            )?,
+            crate::codec::WorldEntry::WorldPort => call_reducer!(
+                coord.conn.reducers,
+                "gw_player_world_port",
+                gw_player_world_port_then(account_id, actor)
+            )?,
+        }
 
         // The reducer committed; the row propagates to the owner cache asynchronously. Poll
         // briefly until it appears (home_* ride along from the game_character row, and its

@@ -2264,39 +2264,58 @@ fn the_instance_removal_dies_with_the_source_copy_and_is_not_carried() {
     );
 }
 
-/// A blob exported by the build before this one names every manifest table except the Auto-Reply
-/// table. It must import, so a Transfer in flight across the publish finishes. Any other difference
-/// is still drift.
-#[test]
-fn the_previous_builds_manifest_imports_with_the_added_table_empty() {
-    let previous: Vec<ManifestEntry> = manifest()
+/// The tables an older blob may lack, written out: every manifest table added since Core commit
+/// `decd7821`.
+const OLD_BLOBS_MAY_LACK: [&str; 6] = [
+    "game_auction_bid_hold",
+    "game_auction_hold",
+    "game_character_away",
+    "game_group_target_icon",
+    "game_guild_fee_hold",
+    "game_instance_removal",
+];
+
+/// This build's manifest without `lacking`, as a build without those tables exported it.
+fn manifest_without(lacking: &[&str]) -> Vec<ManifestEntry> {
+    manifest()
         .into_iter()
-        .filter(|entry| entry.table != "game_character_away")
-        .collect();
-    assert_eq!(previous.len() + 1, manifest().len());
-    assert_eq!(check_manifest(7, &previous), Ok(()));
-    assert_eq!(check_manifest(7, &manifest()), Ok(()));
+        .filter(|entry| !lacking.contains(&entry.table.as_str()))
+        .collect()
+}
 
-    let mut drifted = previous.clone();
-    drifted.pop();
-    assert!(check_manifest(7, &drifted)
-        .unwrap_err()
-        .contains("manifest mismatch"));
+fn empty(table: &str) -> TableRows {
+    TableRows {
+        table: table.to_owned(),
+        rows: Vec::new(),
+    }
+}
 
+/// A blob from an older build lacks some of the listed tables. Each one alone, and all of them
+/// together, must import, so a Transfer in flight across the publish finishes.
+#[test]
+fn a_blob_lacking_any_listed_table_imports_with_it_empty() {
     let carried = TableRows {
         table: "game_item_instance".to_owned(),
         rows: vec![1, 2, 3],
     };
+    for table in OLD_BLOBS_MAY_LACK {
+        let arriving = manifest_without(&[table]);
+        assert_eq!(arriving.len() + 1, manifest().len(), "{table}");
+        assert_eq!(check_manifest(7, &arriving), Ok(()), "{table}");
+        assert_eq!(
+            payload_for_this_build(&arriving, std::slice::from_ref(&carried)),
+            vec![carried.clone(), empty(table)],
+            "{table} arrives with no rows"
+        );
+    }
+    let oldest = manifest_without(&OLD_BLOBS_MAY_LACK);
+    assert_eq!(oldest.len() + 6, manifest().len());
+    assert_eq!(check_manifest(7, &oldest), Ok(()));
+    let mut filled = vec![carried.clone()];
+    filled.extend(OLD_BLOBS_MAY_LACK.map(empty));
     assert_eq!(
-        payload_for_this_build(&previous, std::slice::from_ref(&carried)),
-        vec![
-            carried.clone(),
-            TableRows {
-                table: "game_character_away".to_owned(),
-                rows: Vec::new(),
-            },
-        ],
-        "the missing table arrives with no rows"
+        payload_for_this_build(&oldest, std::slice::from_ref(&carried)),
+        filled
     );
     assert_eq!(
         payload_for_this_build(&manifest(), std::slice::from_ref(&carried)),
@@ -2305,21 +2324,52 @@ fn the_previous_builds_manifest_imports_with_the_added_table_empty() {
     );
 }
 
+/// Only the listed tables may be missing. Any other gap, an extra table, or a changed hot mark is
+/// still drift.
+#[test]
+fn any_other_manifest_difference_is_still_drift() {
+    let mismatch = |arriving: &[ManifestEntry]| {
+        check_manifest(7, arriving)
+            .unwrap_err()
+            .contains("manifest mismatch")
+    };
+    assert_eq!(check_manifest(7, &manifest()), Ok(()));
+    assert!(mismatch(&manifest_without(&["game_item_instance"])));
+    assert!(mismatch(&manifest_without(&[
+        "game_auction_hold",
+        "game_item_instance"
+    ])));
+    let mut extra = manifest();
+    extra.push(ManifestEntry {
+        table: "game_unknown_table".to_owned(),
+        hot: false,
+    });
+    assert!(mismatch(&extra));
+    let mut rehot = manifest_without(&["game_auction_hold"]);
+    let entry = rehot
+        .iter_mut()
+        .find(|entry| entry.table == "game_character_away")
+        .expect("the Auto-Reply table is in the manifest");
+    entry.hot = !entry.hot;
+    assert!(mismatch(&rehot));
+}
+
 /// The filled payload passes the coverage check that refuses a partial import.
 #[test]
-fn a_filled_previous_payload_covers_every_transport_arm() {
+fn a_filled_old_payload_covers_every_transport_arm() {
     fn count(applied: &std::cell::Cell<usize>, _: u64, _: &mut RowIo<'_>) {
         applied.set(applied.get() + 1);
     }
     let applied = std::cell::Cell::new(0);
     let arms: &[TransportArm<'_, std::cell::Cell<usize>>] = &[
         ("game_item_instance", count),
+        ("game_auction_bid_hold", count),
+        ("game_auction_hold", count),
         ("game_character_away", count),
+        ("game_group_target_icon", count),
+        ("game_guild_fee_hold", count),
+        ("game_instance_removal", count),
     ];
-    let previous: Vec<ManifestEntry> = manifest()
-        .into_iter()
-        .filter(|entry| entry.table != "game_character_away")
-        .collect();
     let carried = [TableRows {
         table: "game_item_instance".to_owned(),
         rows: Vec::new(),
@@ -2329,32 +2379,28 @@ fn a_filled_previous_payload_covers_every_transport_arm() {
     import_rows_via(
         &applied,
         73,
-        &payload_for_this_build(&previous, &carried),
+        &payload_for_this_build(&manifest_without(&OLD_BLOBS_MAY_LACK), &carried),
         arms,
     )
     .expect("the filled payload imports");
-    assert_eq!(applied.get(), 2);
+    assert_eq!(applied.get(), 7);
 }
 
-/// Pins the Core manifest by count. A Core table added to or removed from the manifest fails here.
-/// The build before the next one is then this one: empty `ADDED_SINCE_PREVIOUS_BUILD`, delete
-/// `previous_manifest`, and only then change these numbers. A linked Package adds its own tables,
-/// so the count holds only for a build without one. The difference holds for every build.
+/// Pins the list and the Core manifest by count. A Core table added to the manifest fails here:
+/// add it to `TRANSFER_TABLES_OLD_BLOBS_MAY_LACK` too, then change these numbers. A linked Package
+/// adds its own tables, so the counts hold only for a build without one.
 #[test]
-fn the_previous_manifest_is_pinned_until_the_next_manifest_change() {
-    assert_eq!(ADDED_SINCE_PREVIOUS_BUILD, ["game_character_away"]);
-    let current = manifest();
-    let previous = previous_manifest();
-    let added: Vec<&str> = current
-        .iter()
-        .filter(|entry| !previous.contains(entry))
-        .map(|entry| entry.table.as_str())
-        .collect();
-    assert_eq!(added, ["game_character_away"]);
-    assert_eq!(previous.len() + 1, current.len());
+fn the_tables_old_blobs_may_lack_are_pinned() {
+    assert_eq!(TRANSFER_TABLES_OLD_BLOBS_MAY_LACK, OLD_BLOBS_MAY_LACK);
+    for table in OLD_BLOBS_MAY_LACK {
+        assert!(
+            manifest().iter().any(|entry| entry.table == table),
+            "{table} is not in this build's manifest"
+        );
+    }
     #[cfg(not(has_packages))]
     {
-        assert_eq!(current.len(), 44);
-        assert_eq!(previous.len(), 43);
+        assert_eq!(manifest().len(), 44);
+        assert_eq!(manifest_without(&OLD_BLOBS_MAY_LACK).len(), 38);
     }
 }

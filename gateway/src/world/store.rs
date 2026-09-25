@@ -662,8 +662,14 @@ pub trait WorldStore:
 
     /// Enter the world with `character_guid` (Phase 4): calls the `player_login` reducer and
     /// returns the live entity to spawn (from the resulting `game_world_entity` row). Errors if
-    /// the character isn't the caller's.
-    fn player_login(&self, account_id: u64, character_guid: u64) -> Result<codec::EntityView>;
+    /// the character isn't the caller's. `entry` picks the reducer: a world-port keeps the Away
+    /// Status, a fresh login ends it.
+    fn player_login(
+        &self,
+        account_id: u64,
+        character_guid: u64,
+        entry: codec::WorldEntry,
+    ) -> Result<codec::EntityView>;
 
     /// Enqueue an accepted inbound movement on this shard's shared movement batch. The live store
     /// serializes `info` once and preserves the mover, opcode, position, orientation, and timestamp

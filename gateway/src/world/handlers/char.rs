@@ -84,7 +84,7 @@ fn enter_world<St: WorldStore + ?Sized>(
 ) -> Result<()> {
     conn.state = WorldState::CharSelect;
 
-    let mut entity = store.player_login(conn.account_id, character_guid)?;
+    let mut entity = store.player_login(conn.account_id, character_guid, entry)?;
     // Character sheet (UNIT_FIELD_RESISTANCES[0]): override the BASE armor `player_login` set with
     // the EFFECTIVE armor (base + worn gear) so the Armor readout is correct at relog. Armor auras
     // self-correct via the on_aura relay; combat mitigation is unchanged (the module still folds its

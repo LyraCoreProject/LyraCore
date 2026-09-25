@@ -605,7 +605,13 @@ fn enter_transferred_actor(
         let _entered = runtime.enter();
         shard.bind_session(token).unwrap()
     };
-    bound.player_login(account_id, character_guid).unwrap();
+    bound
+        .player_login(
+            account_id,
+            character_guid,
+            crate::codec::WorldEntry::FreshLogin,
+        )
+        .unwrap();
     assert!(poll_until(POLL_TIMEOUT, || topology
         .cli
         .rows(

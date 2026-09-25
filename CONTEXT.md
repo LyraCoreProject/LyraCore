@@ -422,7 +422,7 @@ _Avoid_: presence state, location status
 
 **Away Status**:
 AFK or DND on a live Character: the `PLAYER_FLAGS` bit observers see, plus its Auto-Reply. Setting
-one ends the other. It ends at login and at Transfer arrival.
+one ends the other. It ends at login. A cross-map world-port and a Transfer keep it.
 _Avoid_: presence, status (unqualified)
 
 **Auto-Reply**:

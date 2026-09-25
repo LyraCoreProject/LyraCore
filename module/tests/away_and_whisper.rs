@@ -60,8 +60,8 @@ fn reply(kind: u64, message: &str) -> Option<(String, String)> {
 }
 
 /// Criteria 1, 2 and 8: `/afk` and `/dnd` on the live entity's PLAYER_FLAGS (AFK 0x02, DND 0x04)
-/// with the Auto-Reply beside it, as cm:ChatHandler.cpp:641-693 applies them, and login clears
-/// both (cm:Player.cpp:2932).
+/// with the Auto-Reply beside it, as cm:ChatHandler.cpp:641-693 applies them. A world-port keeps
+/// both; a real login clears both (cm:Player.cpp:2932).
 #[test]
 #[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
 fn away_status_lives_on_the_entity_and_ends_at_login() {
@@ -104,6 +104,13 @@ fn away_status_lives_on_the_entity_and_ends_at_login() {
         &["1", &key, r#"{"__identity__":"0x1"}"#],
     );
     shard.assert_call("gw_heartbeat", &[]);
+
+    // A cross-map world-port rebuilds the entity from the durable row. cmangos keeps
+    // PLAYER_FLAGS across a far teleport, so DND and its Auto-Reply survive.
+    shard.assert_call("gw_player_world_port", &["1", &actor("1")]);
+    assert_eq!(player_flags(&shard), "4", "a world-port keeps DND");
+    assert_eq!(auto_reply(&shard), reply(DND, "busy"));
+
     shard.assert_call("gw_player_login", &["1", &actor("1")]);
     assert_eq!(player_flags(&shard), "0", "login ends the Away Status");
     assert_eq!(auto_reply(&shard), None, "and deletes the Auto-Reply");

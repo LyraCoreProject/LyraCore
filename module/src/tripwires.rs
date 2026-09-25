@@ -1412,8 +1412,6 @@ mod gc_reap_tripwire {
         "game_creature_move_event",
         // Retired with the shard-local channel path: nothing writes it.
         "game_channel_event",
-        // Retired when whispers became Realm Chat Lines: nothing writes it.
-        "game_whisper_event",
         "game_mail",
         // Durable source-side work. The exact Gateway completion deletes it; a transfer source
         // deletion retains it so process restart can finish the destination release.

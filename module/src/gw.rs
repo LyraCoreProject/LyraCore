@@ -694,6 +694,39 @@ pub fn gw_player_login(
     request_actor: crate::SessionActor,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    enter_world(
+        ctx,
+        account_id,
+        request_actor,
+        crate::world::WorldEntry::Login,
+    )
+}
+
+/// [`gw_player_login`] for a Character that finishes a cross-map world-port, including a
+/// Transfer arrival. The same entry, except that the Away Status survives it: cmangos keeps
+/// `PLAYER_FLAGS` across a far teleport and clears AFK and DND only at a real login.
+#[reducer]
+pub fn gw_player_world_port(
+    ctx: &ReducerContext,
+    account_id: u64,
+    request_actor: crate::SessionActor,
+) -> Result<(), String> {
+    require_operator(ctx)?;
+    enter_world(
+        ctx,
+        account_id,
+        request_actor,
+        crate::world::WorldEntry::WorldPort,
+    )
+}
+
+/// The body both entries share, after their operator gate.
+fn enter_world(
+    ctx: &ReducerContext,
+    account_id: u64,
+    request_actor: crate::SessionActor,
+    entry: crate::world::WorldEntry,
+) -> Result<(), String> {
     let character_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let account = ctx
         .db
@@ -713,7 +746,7 @@ pub fn gw_player_login(
         .ok_or_else(|| {
             "no lease for this gateway — gw_heartbeat must run before logins".to_string()
         })?;
-    crate::world::apply_player_login(ctx, &account, character_guid, owner)?;
+    crate::world::apply_player_login(ctx, &account, character_guid, owner, entry)?;
     // Bind AFTER the login succeeds: a refused login must not leave a session row for the reaper
     // to chase. Upsert — a ghost-relog through the gateway rebinds the same guid.
     let sessions = ctx.db.game_gateway_session();
