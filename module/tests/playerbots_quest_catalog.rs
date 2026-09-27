@@ -120,6 +120,8 @@ fn record(node: &Standalone, suffix: &str) {
         "admission": node.query_rows("SELECT * FROM pkg_playerbots_quest_admission"),
         "retained": node.query_rows("SELECT * FROM pkg_playerbots_quest_objective"),
         "provisioning": node.query_rows("SELECT * FROM pkg_playerbots_provisioning"),
+        "runners": node.query_rows("SELECT * FROM pkg_playerbots_runner"),
+        "attacks": node.query_rows("SELECT * FROM game_melee_attack"),
         "actions": node.query_rows("SELECT * FROM pkg_playerbots_action"),
         "character_quests": node.query_rows("SELECT * FROM game_character_quest"),
         "items": node.query_rows("SELECT * FROM game_item_instance"),
@@ -215,9 +217,9 @@ fn playerbots_catalog_is_named_versioned_and_shared_by_starter_classes() {
     );
     let header = node.query_rows("SELECT * FROM pkg_playerbots_quest_catalog");
     assert_eq!(header.len(), 1);
-    assert_eq!(header[0]["name"], "northshire-elwynn-supported-v1");
-    assert_eq!(header[0]["revision"], "1");
-    assert_eq!(header[0]["quest_count"], "12");
+    assert_eq!(header[0]["name"], "starting-areas-supported-v2");
+    assert_eq!(header[0]["revision"], "2");
+    assert_eq!(header[0]["quest_count"], "22");
     assert_eq!(header[0]["reference_source_revision"], "unknown");
     assert!(header[0]["blueprint_revision"].contains("d2083bcd"));
     let mut seeds = node.query_rows(
@@ -233,11 +235,11 @@ fn playerbots_catalog_is_named_versioned_and_shared_by_starter_classes() {
     );
     assert!(seeds
         .iter()
-        .all(|row| row["catalog_revision"] == "1" && row["quest_order"].contains("3904")));
+        .all(|row| row["catalog_revision"] == "2" && row["quest_order"].contains("3904")));
     assert_eq!(
         node.query_rows("SELECT quest_entry FROM pkg_playerbots_catalog_quest")
             .len(),
-        12
+        22
     );
     let harvest = node.query_rows(
         "SELECT kind, target_entry, executor, source_entries, source_destinations, work_area, destination_evidence_revision FROM pkg_playerbots_catalog_objective WHERE quest_entry = 3904",
@@ -709,7 +711,7 @@ fn playerbots_quest_objective_survives_combat_and_refreshes_changed_evidence() {
         .clone();
     assert_eq!(before_detail["quest_entry"], "7");
     assert_eq!(before_detail["actual_ender_entry"], "197");
-    assert_eq!(before_detail["catalog_revision"], "1");
+    assert_eq!(before_detail["catalog_revision"], "2");
     assert!(before_detail["destination_evidence_revision"].starts_with("observed-catalog-v1:"));
 
     node.assert_call("playerbots_fixture_runner_damage", &[CREATURE_6, bot, "1"]);
@@ -1057,9 +1059,14 @@ fn playerbots_quest_retries_after_deferral_without_replacing_its_purpose() {
 fn playerbots_held_unsupported_quest_selects_supported_work_without_reaccepting() {
     let (node, bots) = fixture("playerbots-quest-reconcile");
     let bot = bot_for_class(&bots, "1");
+    node.assert_call("playerbots_fixture_runner_select_cohort", &[bot]);
+    node.assert_call("playerbots_fixture_provision_steps", &[bot, "64"]);
     node.assert_call("playerbots_quest_fixture_admit_accept", &[bot, "7"]);
     node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
-    node.assert_call("playerbots_fixture_runner_select_cohort", &[bot]);
+    node.assert_call(
+        "playerbots_select_controller",
+        &[bot, "{\"recordOnly\":[]}"],
+    );
     node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
     let objective_before = runner(&node, bot)["objective_sequence"].clone();
     let before = quest(&node, bot, 7);
@@ -1074,6 +1081,7 @@ fn playerbots_held_unsupported_quest_selects_supported_work_without_reaccepting(
     assert_eq!(admission[0]["selected_quest"], "(some = 5261)");
     assert!(admission[0]["state"].contains("unsupported"));
     assert!(admission[0]["missing_capability"].contains("escort"));
+    node.assert_call("playerbots_fixture_runner_select_cohort", &[bot]);
     node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
     let reconciled = runner(&node, bot);
     let selected = node.query_rows(&format!(
@@ -1083,7 +1091,7 @@ fn playerbots_held_unsupported_quest_selects_supported_work_without_reaccepting(
     assert_eq!(selected[0]["quest_entry"], "5261");
     assert_eq!(selected[0]["actual_ender_entry"], "196");
     assert_ne!(reconciled["objective_sequence"], objective_before);
-    assert!(reconciled["chosen"].contains("quest"));
+    assert!(reconciled["chosen"].contains("quest"), "{reconciled:?}");
     assert_eq!(quest(&node, bot, 7), before);
     let persistent = node.query_rows(&format!(
         "SELECT selected_quest, missing_capability FROM pkg_playerbots_quest_admission WHERE character_guid = {bot}"
@@ -1095,9 +1103,14 @@ fn playerbots_held_unsupported_quest_selects_supported_work_without_reaccepting(
     let (node, bots) = fixture("playerbots-quest-provided-item-loss");
     for (class, banked) in [("1", "false"), ("5", "true")] {
         let bot = bot_for_class(&bots, class);
+        node.assert_call("playerbots_fixture_runner_select_cohort", &[bot]);
+        node.assert_call("playerbots_fixture_provision_steps", &[bot, "64"]);
         node.assert_call("playerbots_quest_fixture_admit_accept", &[bot, "3905"]);
         node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
-        node.assert_call("playerbots_fixture_runner_select_cohort", &[bot]);
+        node.assert_call(
+            "playerbots_select_controller",
+            &[bot, "{\"recordOnly\":[]}"],
+        );
         node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
         record(&node, &format!("provided-item-selected-class-{class}"));
         assert_eq!(
@@ -1111,6 +1124,7 @@ fn playerbots_held_unsupported_quest_selects_supported_work_without_reaccepting(
             "playerbots_quest_fixture_lose_provided_item",
             &[bot, banked],
         );
+        node.assert_call("playerbots_fixture_runner_select_cohort", &[bot]);
         node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
         record(&node, &format!("provided-item-loss-class-{class}"));
         assert_eq!(quest(&node, bot, 3905), held_before);
@@ -1210,6 +1224,12 @@ fn playerbots_active_quest_overflow_preserves_the_retained_purpose() {
         .parse::<u32>()
         .unwrap();
     node.assert_call("playerbots_fixture_runner_damage", &[bot, CREATURE_6, "1"]);
+    let damaged_health = node.query_rows(&format!(
+        "SELECT health FROM game_world_entity WHERE guid = {bot}"
+    ))[0]["health"]
+        .parse::<u32>()
+        .unwrap();
+    assert!(damaged_health < health_before);
     node.assert_call(
         "playerbots_fixture_runner_stage_defense_retry",
         &[bot, CREATURE_6],
@@ -1250,13 +1270,18 @@ fn playerbots_active_quest_overflow_preserves_the_retained_purpose() {
     );
     node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
     let defense = runner(&node, bot);
-    let health_after = node.query_rows(&format!(
-        "SELECT health FROM game_world_entity WHERE guid = {bot}"
-    ))[0]["health"]
-        .parse::<u32>()
-        .unwrap();
     record(&node, "active-overflow-defense");
-    assert!(health_after < health_before);
+    // Ordinary combat can remove the live melee row before this read.
+    let attacks: Vec<_> = node
+        .query_rows(&format!(
+            "SELECT kind, target_guid, outcome FROM pkg_playerbots_action WHERE character_guid = {bot}"
+        ))
+        .into_iter()
+        .filter(|action| action["kind"] == "(attack = ())")
+        .collect();
+    assert_eq!(attacks.len(), 1);
+    assert_eq!(attacks[0]["target_guid"], CREATURE_6);
+    assert_eq!(attacks[0]["outcome"], "(attackAccepted = (armed = ()))");
     assert!(defense["chosen"].contains("defense"), "{defense:?}");
     assert!(defense["chosen"].contains(CREATURE_6), "{defense:?}");
     assert_eq!(
