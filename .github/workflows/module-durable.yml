@@ -130,11 +130,12 @@ jobs:
         with:
           path: lyracore
           persist-credentials: false
+      # The packages main merge commit for the bounded planning Package (packages #44).
       - name: Check out the bounded planning Package revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: LyraCoreProject/packages
-          ref: 7c70543f19288b5f0a7e6b1783163f8c4de0e411
+          ref: e2eaccb928ea2813b9c70d1551ce7581af143782
           path: collection
           persist-credentials: false
       - name: Check out Core before retained waypoint paths
