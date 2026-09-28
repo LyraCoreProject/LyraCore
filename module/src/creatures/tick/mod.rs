@@ -8,7 +8,8 @@
 //!   - `mod.rs` (this file) — the two tables + the schedule table, the `tick_creatures` shell, the
 //!     active-cell sweep and rows-visited evidence logs, the shared candidate gate
 //!     `movable_creature`, the rout predicates, and the one spline writer
-//!     (`emit_move_spline`/`emit_creature_leg`) every movement decision funnels through.
+//!     (`emit_move_spline`/`emit_creature_leg`) every movement decision funnels through, with
+//!     the persist gate for a leg advance (`advance_needs_persist`).
 //!   - [`lifecycle`] — the canonical despawn checklist + decay/respawn/GO-respawn, the
 //!     due-time passes that run regardless of proximity.
 
@@ -728,6 +729,34 @@ pub(crate) fn emit_creature_leg(
     ctx.db.game_world_entity().guid().update(e);
 }
 
+/// Must a leg advance stay in the creature's stored row once the firing ends? The cycle's passes
+/// always read the advanced row; only the commit log may skip it. `stored` is the row before the
+/// advance, `advanced` the row it wrote, `settled` the row at the end of the firing, and `leg` the
+/// mover's spline row then. Arrival, a new leg, a halt, any other write, a cell change, a turn,
+/// combat and a Character all keep the advance.
+pub(crate) fn advance_needs_persist(
+    stored: &WorldEntity,
+    advanced: &WorldEntity,
+    settled: &WorldEntity,
+    leg: Option<&CreatureSpline>,
+    now_micros: u64,
+) -> bool {
+    // Range and line-of-sight checks outside the cycle may read a walking creature up to this far
+    // behind, the trade Characters' own heartbeat gate makes.
+    let max_drift = crate::world::PERSIST_MAX_DRIFT_YD;
+    let drift_sq = (advanced.x - stored.x).powi(2)
+        + (advanced.y - stored.y).powi(2)
+        + (advanced.z - stored.z).powi(2);
+    let same_leg_in_flight = leg.is_some_and(|leg| leg.start_micros < now_micros);
+    !same_leg_in_flight
+        || settled != advanced
+        || stored.is_player()
+        || stored.unit_flags & lyracore_shared::constants::unit_flags::IN_COMBAT != 0
+        || (stored.grid_x, stored.grid_y) != (advanced.grid_x, advanced.grid_y)
+        || stored.orientation != advanced.orientation
+        || drift_sq > max_drift * max_drift
+}
+
 /// The shared gate ladder every ENGAGED/table-driven phase (cast, threat retarget, chase, rout and
 /// fear) opens its per-candidate loop with: resolve `guid` to a live CREATURE (no PLAYER bit, not
 /// dead) whose instance THIS firing's `scope` covers. `None` collapses each site's `let Some(c) = ...
@@ -890,5 +919,153 @@ mod relay_tripwire {
                 file.display()
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod advance_persist_gate {
+    use super::{advance_needs_persist, CreatureSpline};
+    use crate::WorldEntity;
+    use lyracore_shared::constants::{type_mask, unit_flags};
+    use lyracore_shared::spatial;
+
+    const NOW_MICROS: u64 = 60_000_000;
+    const NOW_MS: u32 = 60_000;
+
+    /// An out-of-combat creature at `(x, 0)` whose move clock reads `moved_ms`.
+    fn creature_at(x: f32, moved_ms: u32) -> WorldEntity {
+        let (gx, gy) = spatial::grid_cell(x, 0.0);
+        let mut creature = crate::helpers::tests::entity(7, 0, 0, gx, gy);
+        creature.x = x;
+        creature.last_move_ms = moved_ms;
+        creature
+    }
+
+    fn leg_started_at(start_micros: u64, dur_ms: u32) -> CreatureSpline {
+        CreatureSpline {
+            guid: 7,
+            start_micros,
+            dur_ms,
+            sx: 0.0,
+            sy: 0.0,
+            sz: 0.0,
+            dx: 20.0,
+            dy: 0.0,
+            dz: 0.0,
+            map_id: 0,
+            instance_id: 0,
+            grid_x: 0,
+            grid_y: 0,
+            cell: 0,
+            spline_id: (start_micros / 1000) as u32,
+            run: false,
+            facing: false,
+            facing_angle: 0.0,
+            path: None,
+        }
+    }
+
+    /// One advance to judge: stored at `from_x`, advanced to `to_x` one second into an eight-second
+    /// leg, with nothing else writing the row this firing.
+    struct Walk {
+        stored: WorldEntity,
+        advanced: WorldEntity,
+        settled: WorldEntity,
+        leg: Option<CreatureSpline>,
+    }
+
+    impl Walk {
+        fn between(from_x: f32, to_x: f32) -> Self {
+            Walk {
+                stored: creature_at(from_x, NOW_MS - 1_000),
+                advanced: creature_at(to_x, NOW_MS),
+                settled: creature_at(to_x, NOW_MS),
+                leg: Some(leg_started_at(NOW_MICROS - 1_000_000, 8_000)),
+            }
+        }
+
+        fn rows(&mut self) -> [&mut WorldEntity; 3] {
+            [&mut self.stored, &mut self.advanced, &mut self.settled]
+        }
+
+        fn persists(&self) -> bool {
+            advance_needs_persist(
+                &self.stored,
+                &self.advanced,
+                &self.settled,
+                self.leg.as_ref(),
+                NOW_MICROS,
+            )
+        }
+    }
+
+    #[test]
+    fn a_walk_within_four_yards_leaves_the_stored_row_behind() {
+        assert!(!Walk::between(1.0, 4.0).persists());
+        assert!(!Walk::between(1.0, 5.0).persists(), "exactly four yards");
+    }
+
+    #[test]
+    fn a_walk_past_four_yards_is_written() {
+        assert!(Walk::between(1.0, 5.5).persists());
+    }
+
+    #[test]
+    fn a_step_into_another_cell_is_written() {
+        let walk = Walk::between(15.0, 18.0);
+        assert_ne!(
+            walk.stored.grid_x, walk.advanced.grid_x,
+            "x=16.67 is a cell edge"
+        );
+        assert!(walk.persists());
+    }
+
+    #[test]
+    fn arrival_is_written() {
+        let mut walk = Walk::between(1.0, 2.0);
+        walk.leg = None;
+        assert!(walk.persists());
+    }
+
+    #[test]
+    fn a_leg_started_or_halted_this_firing_is_written() {
+        let mut walk = Walk::between(1.0, 2.0);
+        walk.leg = Some(leg_started_at(NOW_MICROS, 3_000));
+        assert!(walk.persists(), "a new leg");
+        walk.leg = Some(leg_started_at(NOW_MICROS, 0));
+        assert!(walk.persists(), "a halt");
+    }
+
+    #[test]
+    fn another_write_to_the_row_this_firing_keeps_the_advance() {
+        let mut walk = Walk::between(1.0, 2.0);
+        walk.settled.wp_target = 3;
+        assert!(walk.persists());
+    }
+
+    #[test]
+    fn a_turn_along_the_path_is_written() {
+        let mut walk = Walk::between(1.0, 2.0);
+        walk.advanced.orientation = 1.5;
+        walk.settled.orientation = 1.5;
+        assert!(walk.persists());
+    }
+
+    #[test]
+    fn a_creature_in_combat_is_written() {
+        let mut walk = Walk::between(1.0, 2.0);
+        for row in walk.rows() {
+            row.unit_flags = unit_flags::IN_COMBAT;
+        }
+        assert!(walk.persists());
+    }
+
+    #[test]
+    fn a_character_on_a_leg_is_written() {
+        let mut walk = Walk::between(1.0, 2.0);
+        for row in walk.rows() {
+            row.type_mask = type_mask::PLAYER_BIT;
+        }
+        assert!(walk.persists());
     }
 }

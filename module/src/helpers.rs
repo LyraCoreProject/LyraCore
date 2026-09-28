@@ -365,12 +365,18 @@ pub(crate) fn entity_addr(e: &WorldEntity) -> (u32, u64, i32, i32) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
-    /// A minimal `WorldEntity` for the partition test — every field but `map_id`/`instance_id`/
+    /// A minimal `WorldEntity` for pure tests — every field but `map_id`/`instance_id`/
     /// `grid_x`/`grid_y` is a neutral zero/default, mirroring `combat/tables.rs`'s `entity_for_regen`.
-    fn entity(guid: u64, map_id: u32, instance_id: u64, grid_x: i32, grid_y: i32) -> WorldEntity {
+    pub(crate) fn entity(
+        guid: u64,
+        map_id: u32,
+        instance_id: u64,
+        grid_x: i32,
+        grid_y: i32,
+    ) -> WorldEntity {
         WorldEntity {
             guid,
             owner_identity: Identity::ZERO,
