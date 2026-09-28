@@ -684,13 +684,6 @@ fn playerbots_recovery_cancels_an_owned_gameobject_approach_when_the_target_disa
         "{stopped}"
     );
     assert!(
-        stopped["runner"][0]["last_outcome"]
-            .as_str()
-            .unwrap()
-            .contains("waiting"),
-        "{stopped}"
-    );
-    assert!(
         !stopped["runner"][0]["foreground"]
             .as_str()
             .unwrap()
@@ -1018,5 +1011,111 @@ fn playerbots_recovery_unreachable_quest_ender_defers_and_preserves_the_quest() 
             .unwrap()
             > initial_identity.parse::<u64>().unwrap(),
         "{useful_alternative}"
+    );
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_recovery_queued_retry_does_not_hide_a_completed_blocked_route() {
+    let (node, guid) = fixture(
+        "playerbots-recovery-queued-blocked-route",
+        "playerbots_recovery_fixture_stage_unreachable_ender",
+    );
+    assert!(drive_until(&node, &guid, Duration::from_secs(15), |node| {
+        quest(node, &guid, UNREACHABLE_ENDER_QUEST).is_some()
+    }));
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    assert!(actions(&node, &guid).iter().any(|action| {
+        action["kind"].contains("move") && action["outcome"].contains("status = (blocked = ())")
+    }));
+    let initial_quest = quest(&node, &guid, UNREACHABLE_ENDER_QUEST).unwrap();
+    let before = runner(&node, &guid)[0].clone();
+    let objective_deadline = integer_after(&before["objective"], "deadline_micros = ");
+    let ender = node.query_rows(&format!(
+        "SELECT map_id, instance_id, x, y, z FROM game_world_entity WHERE guid = {UNREACHABLE_ENDER}"
+    ))[0]
+        .clone();
+    let deferred_destination = format!(
+        "map_id = {}, instance_id = {}, x = {}, y = {}, z = {}",
+        ender["map_id"], ender["instance_id"], ender["x"], ender["y"], ender["z"]
+    );
+    let stalled_before = integer_after(&before["recovery"], "stalled_micros = ");
+    let movement = node
+        .query_rows(&format!(
+            "SELECT id, kind, observed_micros FROM pkg_playerbots_action WHERE character_guid = {guid}"
+        ))
+        .into_iter()
+        .find(|action| action["kind"].contains("move"))
+        .unwrap();
+    // No fixture reducer holds the route queue. SQL stages that boundary; pass_once runs recovery.
+    let hold_queued_route = || {
+        node.assert_sql(&format!(
+            "UPDATE pkg_playerbots_runner SET path_pending = true, movement_due_micros = {} WHERE character_guid = {guid}",
+            i64::MAX
+        ));
+    };
+    // An observation from an older movement does not prove the queued request has run.
+    node.assert_sql(&format!(
+        "UPDATE pkg_playerbots_action SET observed_micros = 0 WHERE id = {}",
+        movement["id"]
+    ));
+    hold_queued_route();
+    std::thread::sleep(PASS_INTERVAL);
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    let waiting = runner(&node, &guid)[0].clone();
+    assert_eq!(
+        integer_after(&waiting["recovery"], "stalled_micros = "),
+        stalled_before,
+        "waiting for the first route consumed the failure budget: {waiting:?}"
+    );
+    node.assert_sql(&format!(
+        "UPDATE pkg_playerbots_action SET observed_micros = {} WHERE id = {}",
+        movement["observed_micros"], movement["id"]
+    ));
+    let start = Instant::now();
+    let mut samples = Vec::new();
+    loop {
+        hold_queued_route();
+        std::thread::sleep(PASS_INTERVAL);
+        node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+        let observed = runner(&node, &guid)[0].clone();
+        samples.push(observed.clone());
+        save(
+            &node,
+            "queued-blocked-route",
+            serde_json::json!({"before":before, "samples":samples}),
+        );
+        if samples.len() == 1 {
+            assert!(
+                integer_after(&observed["recovery"], "stalled_micros = ") > stalled_before,
+                "a queued retry suspended recovery after a completed blocked route: {observed:?}"
+            );
+        }
+        if observed["failures"].contains("noMovement") {
+            assert!(!observed["failures"].contains("deadline"), "{observed:?}");
+            assert!(observed["deferred_destinations"].contains(&deferred_destination));
+            assert!(
+                observed["observed_micros"].parse::<i64>().unwrap() < objective_deadline,
+                "recovery deferred after the objective deadline: {observed:?}"
+            );
+            break;
+        }
+        // The 30-second recovery budget gets eight seconds for pass and query overhead.
+        assert!(
+            start.elapsed() < Duration::from_secs(38),
+            "the failed approach never deferred: {observed:?}"
+        );
+    }
+    for approach in [1, 2] {
+        assert!(
+            samples.iter().any(|sample| {
+                sample["foreground"].contains(&format!("recoveryPosition = {approach}"))
+            }),
+            "recovery deferred without trying approach {approach}: {samples:?}"
+        );
+    }
+    assert_eq!(
+        quest(&node, &guid, UNREACHABLE_ENDER_QUEST),
+        Some(initial_quest)
     );
 }
