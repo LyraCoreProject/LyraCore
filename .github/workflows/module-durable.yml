@@ -130,12 +130,12 @@ jobs:
         with:
           path: lyracore
           persist-credentials: false
-      # Starting-area placement and its Core regression must use the same Package revision.
+      # Placement and queued recovery regressions must use the matching Package revision.
       - name: Check out the bounded planning Package revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: LyraCoreProject/packages
-          ref: 1334bf5d74043c35fd0308fa27d8326c0bb245ef
+          ref: 1e2b8244f913c000269a834f933b1223c00fdd00
           path: collection
           persist-credentials: false
       - name: Check out Core before retained waypoint paths

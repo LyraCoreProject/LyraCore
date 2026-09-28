@@ -1020,3 +1020,87 @@ fn playerbots_recovery_unreachable_quest_ender_defers_and_preserves_the_quest() 
         "{useful_alternative}"
     );
 }
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_recovery_queued_retry_does_not_hide_a_completed_blocked_route() {
+    let (node, guid) = fixture(
+        "playerbots-recovery-queued-blocked-route",
+        "playerbots_recovery_fixture_stage_unreachable_ender",
+    );
+    assert!(drive_until(&node, &guid, Duration::from_secs(15), |node| {
+        quest(node, &guid, UNREACHABLE_ENDER_QUEST).is_some()
+    }));
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    assert!(actions(&node, &guid).iter().any(|action| {
+        action["kind"].contains("move") && action["outcome"].contains("status = (blocked = ())")
+    }));
+    let initial_quest = quest(&node, &guid, UNREACHABLE_ENDER_QUEST).unwrap();
+    let before = runner(&node, &guid)[0].clone();
+    let stalled_before = integer_after(&before["recovery"], "stalled_micros = ");
+    let movement = node
+        .query_rows(&format!(
+            "SELECT id, kind, observed_micros FROM pkg_playerbots_action WHERE character_guid = {guid}"
+        ))
+        .into_iter()
+        .find(|action| action["kind"].contains("move"))
+        .unwrap();
+    // An observation from an older movement does not prove the queued request has run.
+    node.assert_sql(&format!(
+        "UPDATE pkg_playerbots_action SET observed_micros = 0 WHERE id = {}",
+        movement["id"]
+    ));
+    node.assert_sql(&format!(
+        "UPDATE pkg_playerbots_runner SET path_pending = true, movement_due_micros = {} WHERE character_guid = {guid}",
+        i64::MAX
+    ));
+    std::thread::sleep(PASS_INTERVAL);
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    let waiting = runner(&node, &guid)[0].clone();
+    assert_eq!(
+        integer_after(&waiting["recovery"], "stalled_micros = "),
+        stalled_before,
+        "waiting for the first route consumed the failure budget: {waiting:?}"
+    );
+    node.assert_sql(&format!(
+        "UPDATE pkg_playerbots_action SET observed_micros = {} WHERE id = {}",
+        movement["observed_micros"], movement["id"]
+    ));
+    let start = Instant::now();
+    let mut samples = Vec::new();
+    loop {
+        // Hold the next search in the queue after the planner has reported a blocked route.
+        node.assert_sql(&format!(
+            "UPDATE pkg_playerbots_runner SET path_pending = true, movement_due_micros = {} WHERE character_guid = {guid}",
+            i64::MAX
+        ));
+        std::thread::sleep(PASS_INTERVAL);
+        node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+        let observed = runner(&node, &guid)[0].clone();
+        samples.push(observed.clone());
+        save(
+            &node,
+            "queued-blocked-route",
+            serde_json::json!({"before":before, "samples":samples}),
+        );
+        if samples.len() == 1 {
+            assert!(
+                integer_after(&observed["recovery"], "stalled_micros = ") > stalled_before,
+                "a queued retry suspended recovery after a completed blocked route: {observed:?}"
+            );
+        }
+        if observed["failures"].contains("noMovement") {
+            assert!(!observed["failures"].contains("deadline"), "{observed:?}");
+            assert!(observed["deferred_destinations"].contains("map_id = 0"));
+            break;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(38),
+            "the failed approach never deferred: {observed:?}"
+        );
+    }
+    assert_eq!(
+        quest(&node, &guid, UNREACHABLE_ENDER_QUEST),
+        Some(initial_quest)
+    );
+}
