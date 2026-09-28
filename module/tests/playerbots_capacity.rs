@@ -178,33 +178,29 @@ fn playerbots_capacity_starting_areas_use_imported_starts_and_refuse_partial_bat
         36
     );
     let population_before = population();
+    let assert_unplaceable_batch = |area: &str| {
+        assert!(!node
+            .call(
+                "playerbots_spawn_starting_area",
+                &[
+                    &serde_json::to_string(area).unwrap(),
+                    "1",
+                    "{\"frozen\":[]}"
+                ]
+            )
+            .status
+            .success());
+        assert_eq!(
+            population(),
+            population_before,
+            "refused {area} batch changed the population"
+        );
+    };
     node.assert_sql("UPDATE game_area SET parent_area_id = 14 WHERE id = 215");
-    assert!(!node
-        .call(
-            "playerbots_spawn_starting_area",
-            &["\"red-cloud-mesa\"", "1", "{\"frozen\":[]}"]
-        )
-        .status
-        .success());
-    assert_eq!(
-        population(),
-        population_before,
-        "a batch without ground in its zone changed the population"
-    );
+    assert_unplaceable_batch("red-cloud-mesa");
     let navigation = node.query_rows("SELECT cell_x, cell_y FROM game_nav_chunk WHERE map_id = 0");
     node.assert_sql("DELETE FROM game_nav_chunk WHERE map_id = 0");
-    assert!(!node
-        .call(
-            "playerbots_spawn_starting_area",
-            &["\"northshire\"", "1", "{\"frozen\":[]}"]
-        )
-        .status
-        .success());
-    assert_eq!(
-        population(),
-        population_before,
-        "a batch without navigation changed the population"
-    );
+    assert_unplaceable_batch("northshire");
     let blocked = "00".repeat(lyracore_shared::nav::WALK_BYTES);
     for batch in navigation.chunks(64) {
         let packed: Vec<_> = batch
@@ -216,18 +212,7 @@ fn playerbots_capacity_starting_areas_use_imported_starts_and_refuse_partial_bat
             &[&serde_json::to_string(&packed.join(";")).unwrap()],
         );
     }
-    assert!(!node
-        .call(
-            "playerbots_spawn_starting_area",
-            &["\"northshire\"", "1", "{\"frozen\":[]}"]
-        )
-        .status
-        .success());
-    assert_eq!(
-        population(),
-        population_before,
-        "a batch on blocked ground changed the population"
-    );
+    assert_unplaceable_batch("northshire");
     assert!(!node
         .call(
             "playerbots_spawn_starting_area",
