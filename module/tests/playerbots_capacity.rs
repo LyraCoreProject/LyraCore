@@ -41,6 +41,13 @@ fn playerbots_capacity_starting_areas_use_imported_starts_and_refuse_partial_bat
     node.assert_call("claim_operator", &[]);
     node.assert_call("install_guid_range", &["1000000"]);
     node.assert_call("debug_set_nav_enabled", &["true"]);
+    let population = || {
+        (
+            node.query_rows("SELECT guid, name FROM game_character"),
+            node.query_rows("SELECT character_guid FROM pkg_playerbots_bot"),
+            node.query_rows("SELECT guid FROM game_world_entity WHERE entry = 0"),
+        )
+    };
     let areas: &[StartingAreaCase] = &[
         ("northshire", 0, 12, &[(1, 1), (1, 5), (1, 8)]),
         ("coldridge", 0, 1, &[(3, 1), (3, 5), (7, 8)]),
@@ -51,25 +58,31 @@ fn playerbots_capacity_starting_areas_use_imported_starts_and_refuse_partial_bat
     ];
     for (area_index, &(name, map, zone, classes)) in areas.iter().enumerate() {
         let x = 1200.0 + area_index as f32 * 1000.0;
-        let y = 1200.0;
+        let starts: std::collections::BTreeMap<_, _> = classes
+            .iter()
+            .enumerate()
+            .map(|(index, &pair)| (pair, (x, 1200.0 + index as f32 * 600.0)))
+            .collect();
         node.assert_sql(&format!("DELETE FROM game_area WHERE id = {zone}"));
         node.assert_sql(&format!("INSERT INTO game_area (id,map_id,parent_area_id,area_bit,flags,exploration_level,faction_group,name) VALUES ({zone},{map},0,0,0,1,0,'Starting area')"));
-        for &(race, class) in classes {
+        for (&(race, class), &(x, y)) in &starts {
             let key = (u16::from(race) << 8) | u16::from(class);
             node.assert_sql(&format!(
                 "DELETE FROM game_start_position WHERE race_class = {key}"
             ));
             node.assert_sql(&format!("INSERT INTO game_start_position (race_class,race,class,map_id,zone_id,x,y,z,orientation,display_id) VALUES ({key},{race},{class},{map},{zone},{x},{y},50,0,49)"));
         }
-        let cx = lyracore_shared::terrain::cell_index(x).unwrap();
-        let cy = lyracore_shared::terrain::cell_index(y).unwrap();
         let heights = vec!["50"; 145].join(":");
         let mut terrain = Vec::new();
         let mut navigation = Vec::new();
-        for gx in cx - 8..=cx + 8 {
-            for gy in cy - 8..=cy + 8 {
-                terrain.push(format!("{map},{gx},{gy},0,0,0,{zone},{heights}"));
-                navigation.push(format!("{map},{gx},{gy},50,,"));
+        for &(x, y) in starts.values() {
+            let cx = lyracore_shared::terrain::cell_index(x).unwrap();
+            let cy = lyracore_shared::terrain::cell_index(y).unwrap();
+            for gx in cx - 8..=cx + 8 {
+                for gy in cy - 8..=cy + 8 {
+                    terrain.push(format!("{map},{gx},{gy},0,0,0,{zone},{heights}"));
+                    navigation.push(format!("{map},{gx},{gy},50,,"));
+                }
             }
         }
         for (reducer, rows) in [
@@ -84,7 +97,7 @@ fn playerbots_capacity_starting_areas_use_imported_starts_and_refuse_partial_bat
             }
         }
         if area_index == 0 {
-            let characters_before = node.query_rows("SELECT guid, name FROM game_character");
+            let population_before = population();
             node.assert_sql("DELETE FROM game_start_position WHERE race_class = 264");
             let output = node.call(
                 "playerbots_spawn_starting_area",
@@ -101,10 +114,11 @@ fn playerbots_capacity_starting_areas_use_imported_starts_and_refuse_partial_bat
                 "{refusal}"
             );
             assert_eq!(
-                node.query_rows("SELECT guid, name FROM game_character"),
-                characters_before,
-                "refused batch changed Characters"
+                population(),
+                population_before,
+                "refused batch changed the population"
             );
+            let (x, y) = starts[&(1, 8)];
             node.assert_sql(&format!("INSERT INTO game_start_position (race_class,race,class,map_id,zone_id,x,y,z,orientation,display_id) VALUES (264,1,8,0,12,{x},{y},50,0,49)"));
         }
         let before: std::collections::BTreeSet<_> = node
@@ -131,6 +145,7 @@ fn playerbots_capacity_starting_areas_use_imported_starts_and_refuse_partial_bat
         let radii: Vec<_> = area_rows
             .iter()
             .map(|row| {
+                let (x, y) = starts[&(row["race"].parse().unwrap(), row["class"].parse().unwrap())];
                 (row["x"].parse::<f32>().unwrap() - x).hypot(row["y"].parse::<f32>().unwrap() - y)
             })
             .collect();
@@ -139,6 +154,8 @@ fn playerbots_capacity_starting_areas_use_imported_starts_and_refuse_partial_bat
             radii.iter().filter(|radius| **radius > 100.0).count() >= 3,
             "{name} concentrated the batch at the start: {radii:?}"
         );
+        let homes = node
+            .query_rows("SELECT character_guid, home_map, home_x, home_y FROM pkg_playerbots_bot");
         for row in area_rows {
             assert!(
                 classes.contains(&(row["race"].parse().unwrap(), row["class"].parse().unwrap()))
@@ -146,6 +163,13 @@ fn playerbots_capacity_starting_areas_use_imported_starts_and_refuse_partial_bat
             assert_eq!(row["map_id"], map.to_string());
             assert_eq!(row["level"], "1");
             assert_eq!(row["xp"], "0");
+            let home = homes
+                .iter()
+                .find(|home| home["character_guid"] == row["guid"])
+                .unwrap();
+            assert_eq!(home["home_map"], row["map_id"]);
+            assert_eq!(home["home_x"], row["x"]);
+            assert_eq!(home["home_y"], row["y"]);
         }
     }
     assert_eq!(
@@ -153,7 +177,7 @@ fn playerbots_capacity_starting_areas_use_imported_starts_and_refuse_partial_bat
             .len(),
         36
     );
-    let characters_before = node.query_rows("SELECT guid, name FROM game_character");
+    let population_before = population();
     node.assert_sql("UPDATE game_area SET parent_area_id = 14 WHERE id = 215");
     assert!(!node
         .call(
@@ -163,9 +187,22 @@ fn playerbots_capacity_starting_areas_use_imported_starts_and_refuse_partial_bat
         .status
         .success());
     assert_eq!(
-        node.query_rows("SELECT guid, name FROM game_character"),
-        characters_before,
-        "a batch without ground in its zone changed Characters"
+        population(),
+        population_before,
+        "a batch without ground in its zone changed the population"
+    );
+    node.assert_sql("DELETE FROM game_nav_chunk WHERE map_id = 0");
+    assert!(!node
+        .call(
+            "playerbots_spawn_starting_area",
+            &["\"northshire\"", "1", "{\"frozen\":[]}"]
+        )
+        .status
+        .success());
+    assert_eq!(
+        population(),
+        population_before,
+        "a batch without navigation changed the population"
     );
     assert!(!node
         .call(
