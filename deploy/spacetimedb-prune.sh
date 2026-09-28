@@ -24,9 +24,10 @@ today=$(date -u +%F)
   echo "$data has no replicas/ directory; not a SpacetimeDB data dir" >&2
   exit 1
 }
-# Resolve to an absolute path: a relative DATA_DIR would otherwise be re-applied against itself
-# below, once as the loop root and again inside each "$data"/... glob.
+# Resolve to an absolute path, then work from it: find fails when the caller's directory is
+# unreadable to the service account (a root shell in /root, for example).
 data=$(cd "$data" && pwd)
+cd "$data"
 
 offset() { echo $((10#${1%%.*})); }
 settled() { [ -z "$(find "$1" -maxdepth 0 -mmin "-$min_age")" ]; }
