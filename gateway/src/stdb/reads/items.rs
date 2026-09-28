@@ -55,11 +55,18 @@ impl Coordinator {
                     max_durability: tmpl.max_durability,
                     container_slots: tmpl.container_slots,
                     random_property_id: i.random_property_id,
+                    random_property_enchant_ids: property_enchant_ids(db, i.random_property_id),
                     item_text_id: i.item_text_id,
                     enchantment: 0,
                 })
             })
             .collect()
+    }
+
+    /// The three enchant ids of `random_property_id`, zero where it names none.
+    pub fn random_property_enchant_ids(&self, random_property_id: u32) -> [u32; 3] {
+        let guard = self.0.coord();
+        property_enchant_ids(&guard.conn.db, random_property_id)
     }
 
     /// Does `owner_guid` hold an item carrying `item_text_id`? `CMSG_ITEM_TEXT_QUERY`'s ownership
@@ -215,6 +222,21 @@ impl Coordinator {
             .map(|b| (b.item_entry, b.stack_count, b.price, b.random_property_id))
             .collect()
     }
+}
+
+/// A Random Property's enchant ids from the cached catalogue; `[0; 3]` for property 0 or an
+/// unknown property.
+pub(crate) fn property_enchant_ids(db: &RemoteTables, random_property_id: u32) -> [u32; 3] {
+    db.game_item_random_property()
+        .property_id()
+        .find(&random_property_id)
+        .map_or([0; 3], |property| {
+            [
+                property.enchant_id_1,
+                property.enchant_id_2,
+                property.enchant_id_3,
+            ]
+        })
 }
 
 /// Whether `viewer_guid` is in a Raid, read from this handle's cache: the `PartyMembershipIndex`

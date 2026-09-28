@@ -4786,6 +4786,10 @@ impl VendorActionStore for InMemoryStore {
         self.buyback_ring.clone()
     }
 
+    fn random_property_enchant_ids(&self, _random_property_id: u32) -> [u32; 3] {
+        [0; 3]
+    }
+
     fn vendor_item_slot(&self, item_guid: u64) -> Option<u8> {
         self.item_slots
             .iter()
@@ -7022,6 +7026,7 @@ fn login_with_resident_items_and_reputation_emits_no_gain_feedback() {
             max_durability: 20,
             container_slots: 0,
             random_property_id: 0,
+            random_property_enchant_ids: [0; 3],
             item_text_id: 0,
             enchantment: 0,
         }],
@@ -7059,6 +7064,49 @@ fn login_with_resident_items_and_reputation_emits_no_gain_feedback() {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).is_err(),
         "login queued an unexpected post-snapshot feedback frame"
     );
+
+    drop(client);
+    server.join().unwrap();
+}
+
+#[test]
+fn login_fills_a_resident_suffix_items_enchantment_slots_after_the_entry_batch() {
+    let item_guid = 0x4000_0000_0000_0001;
+    let store = std::sync::Arc::new(InMemoryStore {
+        login_entity: Some(warrior_entity()),
+        player_items_fixture: vec![codec::ItemInstanceView {
+            guid: item_guid,
+            entry: 25,
+            owner_guid: 1,
+            slot: 23,
+            stack_count: 1,
+            random_property_id: 22,
+            random_property_enchant_ids: [73, 0, 0],
+            ..Default::default()
+        }],
+        ..tester_store(7)
+    });
+
+    let (mut client, server_end) = world_session_socket_pair();
+    let server_store = store.clone();
+    let server = std::thread::spawn(move || {
+        run_world_session(server_end, server_store.as_ref()).unwrap();
+    });
+    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
+    CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+
+    // World entry plus the item's CREATE, then the raw update gtker's typed reader rejects.
+    for _ in 0..WORLD_ENTRY_PACKETS + 1 {
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
+    }
+    let (opcode, body) = read_raw_frame(&mut client, &mut c_dec);
+    assert_eq!(opcode, 0x00A9);
+    let updates = lyracore_shared::values_mask::parse_values_updates(&body);
+    assert_eq!(updates.len(), 1);
+    assert_eq!(updates[0].guid, item_guid);
+    assert_eq!(updates[0].fields, vec![(31, 73)]);
 
     drop(client);
     server.join().unwrap();
@@ -8511,6 +8559,7 @@ fn quest_choose_reward_relays_inventory_before_completion_over_the_cipher() {
         max_durability: 20,
         container_slots: 0,
         random_property_id: 0,
+        random_property_enchant_ids: [0; 3],
         item_text_id: 0,
         enchantment: 0,
     };

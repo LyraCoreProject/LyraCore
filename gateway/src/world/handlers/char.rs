@@ -134,6 +134,10 @@ fn enter_world<St: WorldStore + ?Sized>(
         WeatherChangeType::Instant,
     ));
     send(tx, Outbound::Batch(batch))?;
+    // A typed batch cannot hold a raw update, so Random Property enchant ids follow the batch.
+    for (opcode, body) in items.iter().filter_map(codec::build_random_property_values) {
+        send(tx, Outbound::Raw { opcode, body })?;
+    }
     // Subscribe AFTER the self-spawn batch is on the wire — so the AOI initial-apply creates for
     // entities ALREADY in view (notably a questgiver you spawn right next to) arrive AFTER the
     // client is in-world. Spawning ON a questgiver otherwise left it targetable but with no '!' /
