@@ -1,0 +1,10 @@
+[Unit]
+Description=Delete SpacetimeDB history that no restart can need
+After=spacetimedb-standalone.service
+
+[Service]
+Type=oneshot
+User=lyracore
+Group=lyracore
+WorkingDirectory=/var/lib/lyracore/spacetimedb
+ExecStart=/opt/lyracore/bin/spacetimedb-prune --apply /var/lib/lyracore/spacetimedb
