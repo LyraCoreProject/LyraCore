@@ -5861,7 +5861,8 @@ fn discovery_stays_on_the_narrow_candidate_universes() {
 /// What a silent edit here costs, method by method: `commit_position` no-op'd and every creature
 /// stands still while the client animates on; `drop_leg` no-op'd and one leg replays forever;
 /// `engage` no-op'd and nothing ever aggroes; `restore` no-op'd and health never comes back;
-/// `awake_creatures` returning an empty sweep and the world goes dormant with every test passing.
+/// `awake_creatures` returning an empty sweep and the world goes dormant with every test passing;
+/// `settle_advances` skipping its gate and every stored creature position stays at its leg start.
 ///
 /// Several methods are deliberately more than one expression — `place`, `engage`, `retarget`,
 /// `combat_healed_to`, `restore`, `face` and `take_victim` — so the pin is the exact current body
@@ -5877,18 +5878,29 @@ fn the_production_adapter_is_the_pass_through_the_harness_assumes() {
             "pub(crate) fn run(ctx: &ReducerContext, tick: TickContext) -> CycleOutcome {",
             concat!(
                 "{ let regen_window = crate::combat::RegenWindow::new( tick.now_micros / 1_000, ",
-                "(f64::from(tick.sense_secs) * 1_000.0).round() as u64, ); run_cycle(&mut ",
-                "CtxWorld { ctx, regen_window }, tick) }",
+                "(f64::from(tick.sense_secs) * 1_000.0).round() as u64, ); let mut world = CtxWorld { ",
+                "ctx, regen_window, advances: Vec::new(), }; let outcome = run_cycle(&mut world, ",
+                "tick); world.settle_advances(); outcome }",
             ),
         ),
         (
             "struct CtxWorld<'a> {",
-            "{ ctx: &'a ReducerContext, regen_window: crate::combat::RegenWindow, }",
+            concat!(
+                "{ ctx: &'a ReducerContext, regen_window: crate::combat::RegenWindow, advances: ",
+                "Vec<(WorldEntity, WorldEntity)>, }",
+            ),
         ),
         (
             "impl CtxWorld<'_> {",
             concat!(
-                "{ fn place( &self, guid: u64, at: Point, moved_ms: Option<u32>, orientation: ",
+                "{ fn settle_advances(self) { let entities = self.ctx.db.game_world_entity(); let ",
+                "now_micros = self.ctx.timestamp.to_micros_since_unix_epoch() as u64; for (stored, ",
+                "advanced) in self.advances { let Some(settled) = entities.guid().find(stored.guid) ",
+                "else { continue; }; let leg = ",
+                "self.ctx.db.game_creature_spline().guid().find(stored.guid); if ",
+                "!tick::advance_needs_persist(&stored, &advanced, &settled, leg.as_ref(), ",
+                "now_micros) { entities.guid().update(stored); } } } ",
+                "fn place( &self, guid: u64, at: Point, moved_ms: Option<u32>, orientation: ",
                 "Option<f32>, ) -> Option<WorldEntity> { let entities = ",
                 "self.ctx.db.game_world_entity(); let mut e = entities.guid().find(guid)?; let ",
                 "(gx, gy) = spatial::grid_cell(at.x, at.y); e.x = at.x; e.y = at.y; e.z = at.z; ",
@@ -5955,8 +5967,10 @@ fn the_production_adapter_is_the_pass_through_the_harness_assumes() {
                 ".path .as_ref()? .points .iter() .map(|p| (p.x, p.y, p.z)) .collect(); let (_, next) = ",
                 "lyracore_shared::movement_path::sample( (s.sx, s.sy, s.sz), &points, super::spline_t( ",
                 "self.ctx.timestamp.to_micros_since_unix_epoch() as u64, s.start_micros, s.dur_ms, ), ); ",
-                "points.get(next).map(|p| (p.1 - at.y).atan2(p.0 - at.x)) }); self.place(guid, at, ",
-                "Some(moved_ms), heading); } fn halt(&mut self, leg: &LegInFlight, at: Point, spline_id: ",
+                "points.get(next).map(|p| (p.1 - at.y).atan2(p.0 - at.x)) }); let stored = ",
+                "self.ctx.db.game_world_entity().guid().find(guid); if let (Some(stored), ",
+                "Some(advanced)) = (stored, self.place(guid, at, Some(moved_ms), heading)) { ",
+                "self.advances.push((stored, advanced)); } } fn halt(&mut self, leg: &LegInFlight, at: Point, spline_id: ",
                 "u32) { if let Some(e) = self.place(leg.guid, at, None, None) { tick::emit_move_spline( ",
                 "self.ctx, leg.guid, (at.x, at.y, at.z), (at.x, at.y, at.z), 0, false, spline_id, ",
                 "leg.map_id, leg.instance_id, (e.grid_x, e.grid_y), ); } } fn drop_leg(&mut self, guid: ",

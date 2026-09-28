@@ -115,7 +115,9 @@ pub(crate) trait MotionSink {
     /// Is this creature rooted, stunned, polymorphed or fear-frozen — unable to move itself?
     fn movement_suppressed(&self, guid: u64) -> bool;
     /// Move the creature to `at` — position, grid address and packed cell in one write — and stamp
-    /// its move clock at `moved_ms`.
+    /// its move clock at `moved_ms`. Every later pass reads the moved row; the production adapter
+    /// may keep a short advance out of the stored row when the firing ends
+    /// (`tick::advance_needs_persist`).
     fn commit_position(&mut self, guid: u64, at: Point, moved_ms: u32);
     /// Stop this mover at `at` and tell the client to halt there: the position moves, the move clock
     /// does not, and the emitted leg has zero duration, REPLACING the leg it interrupts so the next

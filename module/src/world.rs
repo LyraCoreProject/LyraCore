@@ -97,6 +97,7 @@ pub(crate) fn clear_relay_world_states_for_instance(ctx: &ReducerContext, instan
 // ===========================================================================================
 
 /// A player currently in the world. Created at login, deleted at disconnect. [entity]
+#[derive(PartialEq)]
 #[table(
     accessor = game_world_entity,
     public,
@@ -1349,7 +1350,9 @@ pub fn debug_delete_character(ctx: &ReducerContext, character_guid: u64) -> Resu
 /// being measured. A wasm module instance is single-threaded, so `Relaxed` is free here.
 static MOVEMENT_ENTRIES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// How far the STORED position may lag the client's before a heartbeat must be persisted.
+/// How far the STORED position may lag the client's before a heartbeat must be persisted. A
+/// creature's leg advance out of combat follows the same rule
+/// (`creatures::tick::advance_needs_persist`).
 ///
 /// 4 yards, not the catalog's suggested ~10: everything server-authoritative reads this row — melee
 /// reach, interact range, aggro radius — and a range gate that disagrees with the client by more

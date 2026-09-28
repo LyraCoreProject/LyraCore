@@ -8,7 +8,8 @@
 //!   - `mod.rs` (this file) — the two tables + the schedule table, the `tick_creatures` shell, the
 //!     active-cell sweep and rows-visited evidence logs, the shared candidate gate
 //!     `movable_creature`, the rout predicates, and the one spline writer
-//!     (`emit_move_spline`/`emit_creature_leg`) every movement decision funnels through.
+//!     (`emit_move_spline`/`emit_creature_leg`) every movement decision funnels through, with
+//!     the persist gate for a leg advance (`advance_needs_persist`).
 //!   - [`lifecycle`] — the canonical despawn checklist + decay/respawn/GO-respawn, the
 //!     due-time passes that run regardless of proximity.
 
@@ -16,8 +17,8 @@ use lyracore_shared::spatial;
 use spacetimedb::{log, reducer, table, ReducerContext, ScheduleAt, Table, Timestamp};
 
 use crate::{
-    game_aura, game_creature_ai_state, game_entity_motion, game_melee_attack, game_world_entity,
-    WorldEntity,
+    game_aura, game_creature_ai_state, game_entity_motion, game_melee_attack,
+    game_sessionless_action_consent, game_world_entity, WorldEntity,
 };
 
 use super::*;
@@ -309,13 +310,16 @@ fn active_cell_radius(ctx: &ReducerContext) -> f32 {
 
 /// Read each occupied neighborhood once, preserving map and instance isolation.
 /// Authored active objects stay awake without a nearby Character. Pets and combat
-/// candidates retain their separate sense-firing discovery.
+/// candidates retain their separate sense-firing discovery. An Idle Bot wakes no cell.
 pub(crate) fn active_cell_creatures(
     ctx: &ReducerContext,
     scope: &TickScope,
     sense: bool,
 ) -> TickSweep {
     let entities = ctx.db.game_world_entity();
+    let consents = ctx.db.game_sessionless_action_consent();
+    let package_controlled = |guid: u64| consents.character_guid().find(guid).is_some();
+    let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u32;
     let radius = active_cell_radius(ctx);
     let mut out = std::collections::HashSet::new();
     let mut pets: Vec<u64> = Vec::new();
@@ -340,6 +344,7 @@ pub(crate) fn active_cell_creatures(
         .by_entry()
         .filter(&0u32)
         .filter(|e| e.is_player() && scope.covers(e.instance_id))
+        .filter(|e| !is_idle_bot(e, now_ms, || package_controlled(e.guid)))
         .collect();
     for state in ctx
         .db
@@ -378,10 +383,27 @@ fn active_object_enters_scope(is_player: bool, partition_covered: bool, active: 
     !is_player && partition_covered && active
 }
 
+/// How long a Package-controlled Character stands still out of combat before it is an Idle Bot.
+const IDLE_BOT_AFTER_MS: u32 = 30_000;
+
+/// Is this Character an Idle Bot? `package_controlled` reports a Sessionless Action Consent row and
+/// runs last because it is a lookup. A leg advance stamps the move clock every firing, so a
+/// Character on a movement leg is never idle.
+fn is_idle_bot(
+    character: &WorldEntity,
+    now_ms: u32,
+    package_controlled: impl FnOnce() -> bool,
+) -> bool {
+    character.unit_flags & lyracore_shared::constants::unit_flags::IN_COMBAT == 0
+        && now_ms.wrapping_sub(character.last_move_ms) >= IDLE_BOT_AFTER_MS
+        && package_controlled()
+}
+
 /// One firing's active-cell creature set plus the sense-cadence pet and in-combat candidate lists.
 #[derive(Default)]
 pub(crate) struct TickSweep {
-    /// Creatures within `active_cell_radius` of at least one covered player (work-item 230).
+    /// Creatures within `active_cell_radius` of at least one covered Character that is not an Idle
+    /// Bot (work-item 230).
     pub(crate) active: std::collections::HashSet<u64>,
     /// Live pets (`owner_guid != 0`), in table order — the cycle's pet-phase candidate list.
     pub(crate) pets: Vec<u64>,
@@ -728,6 +750,34 @@ pub(crate) fn emit_creature_leg(
     ctx.db.game_world_entity().guid().update(e);
 }
 
+/// Must a leg advance stay in the creature's stored row once the firing ends? The cycle's passes
+/// always read the advanced row; only the commit log may skip it. `stored` is the row before the
+/// advance, `advanced` the row it wrote, `settled` the row at the end of the firing, and `leg` the
+/// mover's spline row then. Arrival, a new leg, a halt, any other write, a cell change, a turn,
+/// combat and a Character all keep the advance.
+pub(crate) fn advance_needs_persist(
+    stored: &WorldEntity,
+    advanced: &WorldEntity,
+    settled: &WorldEntity,
+    leg: Option<&CreatureSpline>,
+    now_micros: u64,
+) -> bool {
+    // Range and line-of-sight checks outside the cycle may read a walking creature up to this far
+    // behind, the trade Characters' own heartbeat gate makes.
+    let max_drift = crate::world::PERSIST_MAX_DRIFT_YD;
+    let drift_sq = (advanced.x - stored.x).powi(2)
+        + (advanced.y - stored.y).powi(2)
+        + (advanced.z - stored.z).powi(2);
+    let same_leg_in_flight = leg.is_some_and(|leg| leg.start_micros < now_micros);
+    !same_leg_in_flight
+        || settled != advanced
+        || stored.is_player()
+        || stored.unit_flags & lyracore_shared::constants::unit_flags::IN_COMBAT != 0
+        || (stored.grid_x, stored.grid_y) != (advanced.grid_x, advanced.grid_y)
+        || stored.orientation != advanced.orientation
+        || drift_sq > max_drift * max_drift
+}
+
 /// The shared gate ladder every ENGAGED/table-driven phase (cast, threat retarget, chase, rout and
 /// fear) opens its per-candidate loop with: resolve `guid` to a live CREATURE (no PLAYER bit, not
 /// dead) whose instance THIS firing's `scope` covers. `None` collapses each site's `let Some(c) = ...
@@ -890,5 +940,204 @@ mod relay_tripwire {
                 file.display()
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod advance_persist_gate {
+    use super::{advance_needs_persist, CreatureSpline};
+    use crate::WorldEntity;
+    use lyracore_shared::constants::{type_mask, unit_flags};
+    use lyracore_shared::spatial;
+
+    const NOW_MICROS: u64 = 60_000_000;
+    const NOW_MS: u32 = 60_000;
+
+    /// An out-of-combat creature at `(x, 0)` whose move clock reads `moved_ms`.
+    fn creature_at(x: f32, moved_ms: u32) -> WorldEntity {
+        let (gx, gy) = spatial::grid_cell(x, 0.0);
+        let mut creature = crate::helpers::tests::entity(7, 0, 0, gx, gy);
+        creature.x = x;
+        creature.last_move_ms = moved_ms;
+        creature
+    }
+
+    fn leg_started_at(start_micros: u64, dur_ms: u32) -> CreatureSpline {
+        CreatureSpline {
+            guid: 7,
+            start_micros,
+            dur_ms,
+            sx: 0.0,
+            sy: 0.0,
+            sz: 0.0,
+            dx: 20.0,
+            dy: 0.0,
+            dz: 0.0,
+            map_id: 0,
+            instance_id: 0,
+            grid_x: 0,
+            grid_y: 0,
+            cell: 0,
+            spline_id: (start_micros / 1000) as u32,
+            run: false,
+            facing: false,
+            facing_angle: 0.0,
+            path: None,
+        }
+    }
+
+    /// One advance to judge: stored at `from_x`, advanced to `to_x` one second into an eight-second
+    /// leg, with nothing else writing the row this firing.
+    struct Walk {
+        stored: WorldEntity,
+        advanced: WorldEntity,
+        settled: WorldEntity,
+        leg: Option<CreatureSpline>,
+    }
+
+    impl Walk {
+        fn between(from_x: f32, to_x: f32) -> Self {
+            Walk {
+                stored: creature_at(from_x, NOW_MS - 1_000),
+                advanced: creature_at(to_x, NOW_MS),
+                settled: creature_at(to_x, NOW_MS),
+                leg: Some(leg_started_at(NOW_MICROS - 1_000_000, 8_000)),
+            }
+        }
+
+        fn rows(&mut self) -> [&mut WorldEntity; 3] {
+            [&mut self.stored, &mut self.advanced, &mut self.settled]
+        }
+
+        fn persists(&self) -> bool {
+            advance_needs_persist(
+                &self.stored,
+                &self.advanced,
+                &self.settled,
+                self.leg.as_ref(),
+                NOW_MICROS,
+            )
+        }
+    }
+
+    #[test]
+    fn a_walk_within_four_yards_leaves_the_stored_row_behind() {
+        assert!(!Walk::between(1.0, 4.0).persists());
+        assert!(!Walk::between(1.0, 5.0).persists(), "exactly four yards");
+    }
+
+    #[test]
+    fn a_walk_past_four_yards_is_written() {
+        assert!(Walk::between(1.0, 5.5).persists());
+    }
+
+    #[test]
+    fn a_step_into_another_cell_is_written() {
+        let walk = Walk::between(15.0, 18.0);
+        assert_ne!(
+            walk.stored.grid_x, walk.advanced.grid_x,
+            "x=16.67 is a cell edge"
+        );
+        assert!(walk.persists());
+    }
+
+    #[test]
+    fn arrival_is_written() {
+        let mut walk = Walk::between(1.0, 2.0);
+        walk.leg = None;
+        assert!(walk.persists());
+    }
+
+    #[test]
+    fn a_leg_started_or_halted_this_firing_is_written() {
+        let mut walk = Walk::between(1.0, 2.0);
+        walk.leg = Some(leg_started_at(NOW_MICROS, 3_000));
+        assert!(walk.persists(), "a new leg");
+        walk.leg = Some(leg_started_at(NOW_MICROS, 0));
+        assert!(walk.persists(), "a halt");
+    }
+
+    #[test]
+    fn another_write_to_the_row_this_firing_keeps_the_advance() {
+        let mut walk = Walk::between(1.0, 2.0);
+        walk.settled.wp_target = 3;
+        assert!(walk.persists());
+    }
+
+    #[test]
+    fn a_turn_along_the_path_is_written() {
+        let mut walk = Walk::between(1.0, 2.0);
+        walk.advanced.orientation = 1.5;
+        walk.settled.orientation = 1.5;
+        assert!(walk.persists());
+    }
+
+    #[test]
+    fn a_creature_in_combat_is_written() {
+        let mut walk = Walk::between(1.0, 2.0);
+        for row in walk.rows() {
+            row.unit_flags = unit_flags::IN_COMBAT;
+        }
+        assert!(walk.persists());
+    }
+
+    #[test]
+    fn a_character_on_a_leg_is_written() {
+        let mut walk = Walk::between(1.0, 2.0);
+        for row in walk.rows() {
+            row.type_mask = type_mask::PLAYER_BIT;
+        }
+        assert!(walk.persists());
+    }
+}
+
+#[cfg(test)]
+mod idle_bot {
+    use super::is_idle_bot;
+    use crate::WorldEntity;
+    use lyracore_shared::constants::{type_mask, unit_flags};
+
+    const NOW_MS: u32 = 3_600_000;
+
+    /// An out-of-combat Character whose move clock last ticked `still_ms` ago.
+    fn character_still_for(still_ms: u32) -> WorldEntity {
+        let mut character = crate::helpers::tests::entity(42, 0, 0, 0, 0);
+        character.type_mask = type_mask::PLAYER_BIT;
+        character.last_move_ms = NOW_MS - still_ms;
+        character
+    }
+
+    #[test]
+    fn a_package_controlled_character_still_for_thirty_seconds_is_an_idle_bot() {
+        assert!(is_idle_bot(&character_still_for(30_000), NOW_MS, || true));
+        assert!(is_idle_bot(&character_still_for(600_000), NOW_MS, || true));
+    }
+
+    #[test]
+    fn a_character_without_consent_is_never_an_idle_bot() {
+        // Humans and test fixture Characters have no Sessionless Action Consent row.
+        let human = character_still_for(600_000);
+        assert!(!is_idle_bot(&human, NOW_MS, || false));
+    }
+
+    #[test]
+    fn a_bot_in_combat_is_not_idle() {
+        let mut bot = character_still_for(600_000);
+        bot.unit_flags = unit_flags::IN_COMBAT;
+        assert!(!is_idle_bot(&bot, NOW_MS, || true));
+    }
+
+    #[test]
+    fn a_bot_on_a_movement_leg_is_not_idle() {
+        // The leg advance stamped the move clock on the last firing.
+        assert!(!is_idle_bot(&character_still_for(500), NOW_MS, || true));
+    }
+
+    #[test]
+    fn a_bot_that_moved_within_thirty_seconds_is_not_idle() {
+        assert!(!is_idle_bot(&character_still_for(29_999), NOW_MS, || true));
+        let mut across_the_wrap = character_still_for(0);
+        across_the_wrap.last_move_ms = u32::MAX - 4_999;
+        assert!(!is_idle_bot(&across_the_wrap, 5_000, || true));
     }
 }

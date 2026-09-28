@@ -130,12 +130,12 @@ jobs:
         with:
           path: lyracore
           persist-credentials: false
-      # The packages main merge commit for the bounded planning Package (packages #44).
+      # The packages main merge commit whose moving-cast fixture stamps its move clock (packages #46).
       - name: Check out the bounded planning Package revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: LyraCoreProject/packages
-          ref: e2eaccb928ea2813b9c70d1551ce7581af143782
+          ref: caefdeafd76f4f27cb22e211e437bccfa471afcf
           path: collection
           persist-credentials: false
       - name: Check out Core before retained waypoint paths

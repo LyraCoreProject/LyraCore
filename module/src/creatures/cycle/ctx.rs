@@ -36,15 +36,41 @@ pub(crate) fn run(ctx: &ReducerContext, tick: TickContext) -> CycleOutcome {
         tick.now_micros / 1_000,
         (f64::from(tick.sense_secs) * 1_000.0).round() as u64,
     );
-    run_cycle(&mut CtxWorld { ctx, regen_window }, tick)
+    let mut world = CtxWorld {
+        ctx,
+        regen_window,
+        advances: Vec::new(),
+    };
+    let outcome = run_cycle(&mut world, tick);
+    world.settle_advances();
+    outcome
 }
 
 struct CtxWorld<'a> {
     ctx: &'a ReducerContext,
     regen_window: crate::combat::RegenWindow,
+    /// Each leg advance this firing wrote: the stored row before it, and the row it wrote.
+    advances: Vec<(WorldEntity, WorldEntity)>,
 }
 
 impl CtxWorld<'_> {
+    /// Put back each stored row whose advance [`tick::advance_needs_persist`] lets lag. Restoring
+    /// the stored row in the same transaction leaves no commit-log entry.
+    fn settle_advances(self) {
+        let entities = self.ctx.db.game_world_entity();
+        let now_micros = self.ctx.timestamp.to_micros_since_unix_epoch() as u64;
+        for (stored, advanced) in self.advances {
+            let Some(settled) = entities.guid().find(stored.guid) else {
+                continue;
+            };
+            let leg = self.ctx.db.game_creature_spline().guid().find(stored.guid);
+            if !tick::advance_needs_persist(&stored, &advanced, &settled, leg.as_ref(), now_micros)
+            {
+                entities.guid().update(stored);
+            }
+        }
+    }
+
     /// Move the creature's authoritative row to `at`, writing grid address and packed cell in the
     /// SAME statement (a stale `cell` puts the row in the wrong AOI cell), and hand back the row as
     /// written. `moved_ms` stamps the move clock; a halted creature passes `None` because it did not
@@ -231,7 +257,12 @@ impl MotionSink for CtxWorld<'_> {
                 );
                 points.get(next).map(|p| (p.1 - at.y).atan2(p.0 - at.x))
             });
-        self.place(guid, at, Some(moved_ms), heading);
+        let stored = self.ctx.db.game_world_entity().guid().find(guid);
+        if let (Some(stored), Some(advanced)) =
+            (stored, self.place(guid, at, Some(moved_ms), heading))
+        {
+            self.advances.push((stored, advanced));
+        }
     }
     fn halt(&mut self, leg: &LegInFlight, at: Point, spline_id: u32) {
         if let Some(e) = self.place(leg.guid, at, None, None) {
