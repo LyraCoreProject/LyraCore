@@ -191,6 +191,7 @@ fn playerbots_capacity_starting_areas_use_imported_starts_and_refuse_partial_bat
         population_before,
         "a batch without ground in its zone changed the population"
     );
+    let navigation = node.query_rows("SELECT cell_x, cell_y FROM game_nav_chunk WHERE map_id = 0");
     node.assert_sql("DELETE FROM game_nav_chunk WHERE map_id = 0");
     assert!(!node
         .call(
@@ -203,6 +204,29 @@ fn playerbots_capacity_starting_areas_use_imported_starts_and_refuse_partial_bat
         population(),
         population_before,
         "a batch without navigation changed the population"
+    );
+    let blocked = "00".repeat(lyracore_shared::nav::WALK_BYTES);
+    for batch in navigation.chunks(64) {
+        let packed: Vec<_> = batch
+            .iter()
+            .map(|row| format!("0,{},{},50,{blocked},", row["cell_x"], row["cell_y"]))
+            .collect();
+        node.assert_call(
+            "import_nav_chunks_append",
+            &[&serde_json::to_string(&packed.join(";")).unwrap()],
+        );
+    }
+    assert!(!node
+        .call(
+            "playerbots_spawn_starting_area",
+            &["\"northshire\"", "1", "{\"frozen\":[]}"]
+        )
+        .status
+        .success());
+    assert_eq!(
+        population(),
+        population_before,
+        "a batch on blocked ground changed the population"
     );
     assert!(!node
         .call(
