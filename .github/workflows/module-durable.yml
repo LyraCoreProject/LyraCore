@@ -217,11 +217,11 @@ jobs:
                     --skip playerbots_recovery_upgrades_a_retained_quest_and_owned_cast_without_resetting_them \
                     2>&1 | tee "$RUNNER_TEMP/companion-movement-recovery.log" || regression_status=1
                   cargo test --locked -p lyracore-module --test playerbots_recovery_failures \
-                    --features=debug_reducers \
-                    playerbots_recovery_queued_retry_does_not_hide_a_completed_blocked_route \
                     -- --ignored --exact --nocapture --test-threads=1 \
+                    playerbots_recovery_queued_retry_does_not_hide_a_completed_blocked_route \
+                    playerbots_recovery_cancels_an_owned_gameobject_approach_when_the_target_disappears \
                     2>&1 | tee "$RUNNER_TEMP/companion-queued-recovery.log" || regression_status=1
-                  grep -F "test result: ok. 1 passed; 0 failed; 0 ignored;" \
+                  grep -F "test result: ok. 2 passed; 0 failed; 0 ignored;" \
                     "$RUNNER_TEMP/companion-queued-recovery.log" || regression_status=1
                   cargo test --locked -p lyracore-module --test playerbots_transfer_lifecycle \
                     playerbots_process_restart_resumes_one_owned_movement_leg \

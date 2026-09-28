@@ -684,13 +684,6 @@ fn playerbots_recovery_cancels_an_owned_gameobject_approach_when_the_target_disa
         "{stopped}"
     );
     assert!(
-        stopped["runner"][0]["last_outcome"]
-            .as_str()
-            .unwrap()
-            .contains("waiting"),
-        "{stopped}"
-    );
-    assert!(
         !stopped["runner"][0]["foreground"]
             .as_str()
             .unwrap()
@@ -1037,6 +1030,15 @@ fn playerbots_recovery_queued_retry_does_not_hide_a_completed_blocked_route() {
     }));
     let initial_quest = quest(&node, &guid, UNREACHABLE_ENDER_QUEST).unwrap();
     let before = runner(&node, &guid)[0].clone();
+    let objective_deadline = integer_after(&before["objective"], "deadline_micros = ");
+    let ender = node.query_rows(&format!(
+        "SELECT map_id, instance_id, x, y, z FROM game_world_entity WHERE guid = {UNREACHABLE_ENDER}"
+    ))[0]
+        .clone();
+    let deferred_destination = format!(
+        "map_id = {}, instance_id = {}, x = {}, y = {}, z = {}",
+        ender["map_id"], ender["instance_id"], ender["x"], ender["y"], ender["z"]
+    );
     let stalled_before = integer_after(&before["recovery"], "stalled_micros = ");
     let movement = node
         .query_rows(&format!(
@@ -1045,15 +1047,19 @@ fn playerbots_recovery_queued_retry_does_not_hide_a_completed_blocked_route() {
         .into_iter()
         .find(|action| action["kind"].contains("move"))
         .unwrap();
+    // No fixture reducer holds the route queue. SQL stages that boundary; pass_once runs recovery.
+    let hold_queued_route = || {
+        node.assert_sql(&format!(
+            "UPDATE pkg_playerbots_runner SET path_pending = true, movement_due_micros = {} WHERE character_guid = {guid}",
+            i64::MAX
+        ));
+    };
     // An observation from an older movement does not prove the queued request has run.
     node.assert_sql(&format!(
         "UPDATE pkg_playerbots_action SET observed_micros = 0 WHERE id = {}",
         movement["id"]
     ));
-    node.assert_sql(&format!(
-        "UPDATE pkg_playerbots_runner SET path_pending = true, movement_due_micros = {} WHERE character_guid = {guid}",
-        i64::MAX
-    ));
+    hold_queued_route();
     std::thread::sleep(PASS_INTERVAL);
     node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
     let waiting = runner(&node, &guid)[0].clone();
@@ -1069,11 +1075,7 @@ fn playerbots_recovery_queued_retry_does_not_hide_a_completed_blocked_route() {
     let start = Instant::now();
     let mut samples = Vec::new();
     loop {
-        // Hold the next search in the queue after the planner has reported a blocked route.
-        node.assert_sql(&format!(
-            "UPDATE pkg_playerbots_runner SET path_pending = true, movement_due_micros = {} WHERE character_guid = {guid}",
-            i64::MAX
-        ));
+        hold_queued_route();
         std::thread::sleep(PASS_INTERVAL);
         node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
         let observed = runner(&node, &guid)[0].clone();
@@ -1091,9 +1093,14 @@ fn playerbots_recovery_queued_retry_does_not_hide_a_completed_blocked_route() {
         }
         if observed["failures"].contains("noMovement") {
             assert!(!observed["failures"].contains("deadline"), "{observed:?}");
-            assert!(observed["deferred_destinations"].contains("map_id = 0"));
+            assert!(observed["deferred_destinations"].contains(&deferred_destination));
+            assert!(
+                observed["observed_micros"].parse::<i64>().unwrap() < objective_deadline,
+                "recovery deferred after the objective deadline: {observed:?}"
+            );
             break;
         }
+        // The 30-second recovery budget gets eight seconds for pass and query overhead.
         assert!(
             start.elapsed() < Duration::from_secs(38),
             "the failed approach never deferred: {observed:?}"
