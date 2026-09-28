@@ -1,0 +1,10 @@
+[Unit]
+Description=Prune SpacetimeDB history daily
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

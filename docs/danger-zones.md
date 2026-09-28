@@ -238,6 +238,39 @@ repeat those inspections. Do not delete `/var/lib/lyracore/spacetimedb` during a
 node's persistent database state. The unit binds standalone to loopback; expose it only through the
 separately configured front door, never by changing this service's listen address casually.
 
+### SpacetimeDB never deletes its own history
+
+SpacetimeDB 2.7.1 keeps every commit-log segment, every snapshot and every daily module log until
+someone deletes them, and no release up to 2.11.0 adds retention. It only compresses older segments
+and snapshots. On a busy shard this fills the disk: on 2026-09-28 the `lyracore` database held 73 GB
+of history, and the next deploy had no room to build.
+
+A restart needs only the newest valid snapshot and the segments after it. It falls back to an older
+snapshot if the newest one fails to load, and a gap between segments stops the database from
+starting. `deploy/spacetimedb-prune.sh` follows those rules:
+
+- it keeps the two newest valid snapshots, plus any snapshot that is incomplete or locked;
+- it keeps every segment from the one that holds S2 + 1, where S2 is the older kept snapshot, and
+  deletes only a run of the oldest segments, so no gap can open;
+- it deletes module logs from before today (UTC), and skips files changed in the last 30 minutes.
+
+It is safe with the node running. Without `--apply` it only reports. Install it as root, with a daily
+timer:
+
+```bash
+sudo install -d /opt/lyracore/bin
+sudo install -o root -g root -m 0755 deploy/spacetimedb-prune.sh /opt/lyracore/bin/spacetimedb-prune
+sudo install -o root -g root -m 0644 deploy/systemd/spacetimedb-prune.service deploy/systemd/spacetimedb-prune.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now spacetimedb-prune.timer
+sudo -u lyracore /opt/lyracore/bin/spacetimedb-prune /var/lib/lyracore/spacetimedb   # report only
+```
+
+Never delete files under `replicas/` by hand. Deleting a segment in the middle, or the newest
+snapshot, makes the database unrecoverable. Cap journald too: the gateway logs continuously, and
+journald's default cap is 4 GB. Put `SystemMaxUse=500M` under `[Journal]` in
+`/etc/systemd/journald.conf.d/lyracore.conf` and restart `systemd-journald`.
+
 ### Live capacity-edge node-death validation (human-authorized)
 
 This is the production validation for #83, tracked by #176. It is deliberately a **runbook**, not a
