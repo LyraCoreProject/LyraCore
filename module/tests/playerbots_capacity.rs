@@ -50,8 +50,10 @@ fn playerbots_capacity_starting_areas_use_imported_starts_and_refuse_partial_bat
         ("red-cloud-mesa", 1, 215, &[(6, 1)]),
     ];
     for (area_index, &(name, map, zone, classes)) in areas.iter().enumerate() {
-        let x = 1200.0 + area_index as f32 * 200.0;
+        let x = 1200.0 + area_index as f32 * 1000.0;
         let y = 1200.0;
+        node.assert_sql(&format!("DELETE FROM game_area WHERE id = {zone}"));
+        node.assert_sql(&format!("INSERT INTO game_area (id,map_id,parent_area_id,area_bit,flags,exploration_level,faction_group,name) VALUES ({zone},{map},0,0,0,1,0,'Starting area')"));
         for &(race, class) in classes {
             let key = (u16::from(race) << 8) | u16::from(class);
             node.assert_sql(&format!(
@@ -62,17 +64,22 @@ fn playerbots_capacity_starting_areas_use_imported_starts_and_refuse_partial_bat
         let cx = lyracore_shared::terrain::cell_index(x).unwrap();
         let cy = lyracore_shared::terrain::cell_index(y).unwrap();
         let heights = vec!["50"; 145].join(":");
-        for gx in cx - 1..=cx + 1 {
-            for gy in cy - 1..=cy + 1 {
-                let terrain = format!("{map},{gx},{gy},0,0,0,{zone},{heights}");
-                let navigation = format!("{map},{gx},{gy},50,,");
+        let mut terrain = Vec::new();
+        let mut navigation = Vec::new();
+        for gx in cx - 8..=cx + 8 {
+            for gy in cy - 8..=cy + 8 {
+                terrain.push(format!("{map},{gx},{gy},0,0,0,{zone},{heights}"));
+                navigation.push(format!("{map},{gx},{gy},50,,"));
+            }
+        }
+        for (reducer, rows) in [
+            ("import_terrain_chunks_append", terrain),
+            ("import_nav_chunks_append", navigation),
+        ] {
+            for batch in rows.chunks(64) {
                 node.assert_call(
-                    "import_terrain_chunks_append",
-                    &[&serde_json::to_string(&terrain).unwrap()],
-                );
-                node.assert_call(
-                    "import_nav_chunks_append",
-                    &[&serde_json::to_string(&navigation).unwrap()],
+                    reducer,
+                    &[&serde_json::to_string(&batch.join(";")).unwrap()],
                 );
             }
         }
@@ -100,7 +107,11 @@ fn playerbots_capacity_starting_areas_use_imported_starts_and_refuse_partial_bat
             );
             node.assert_sql(&format!("INSERT INTO game_start_position (race_class,race,class,map_id,zone_id,x,y,z,orientation,display_id) VALUES (264,1,8,0,12,{x},{y},50,0,49)"));
         }
-        let before = node.query_rows("SELECT guid FROM game_character").len();
+        let before: std::collections::BTreeSet<_> = node
+            .query_rows("SELECT guid FROM game_character")
+            .into_iter()
+            .map(|row| row["guid"].clone())
+            .collect();
         node.assert_call(
             "playerbots_spawn_starting_area",
             &[
@@ -111,12 +122,23 @@ fn playerbots_capacity_starting_areas_use_imported_starts_and_refuse_partial_bat
         );
         let rows = node
             .query_rows("SELECT guid, race, class, map_id, x, y, level, xp FROM game_character");
-        assert_eq!(rows.len(), before + 6);
+        assert_eq!(rows.len(), before.len() + 6);
         let area_rows: Vec<_> = rows
             .iter()
-            .filter(|row| (row["x"].parse::<f32>().unwrap() - x).abs() < 20.0)
+            .filter(|row| !before.contains(&row["guid"]))
             .collect();
         assert_eq!(area_rows.len(), 6);
+        let radii: Vec<_> = area_rows
+            .iter()
+            .map(|row| {
+                (row["x"].parse::<f32>().unwrap() - x).hypot(row["y"].parse::<f32>().unwrap() - y)
+            })
+            .collect();
+        assert!(radii.iter().all(|radius| *radius <= 250.01));
+        assert!(
+            radii.iter().filter(|radius| **radius > 100.0).count() >= 3,
+            "{name} concentrated the batch at the start: {radii:?}"
+        );
         for row in area_rows {
             assert!(
                 classes.contains(&(row["race"].parse().unwrap(), row["class"].parse().unwrap()))
@@ -130,6 +152,20 @@ fn playerbots_capacity_starting_areas_use_imported_starts_and_refuse_partial_bat
         node.query_rows("SELECT character_guid FROM pkg_playerbots_bot")
             .len(),
         36
+    );
+    let characters_before = node.query_rows("SELECT guid, name FROM game_character");
+    node.assert_sql("UPDATE game_area SET parent_area_id = 14 WHERE id = 215");
+    assert!(!node
+        .call(
+            "playerbots_spawn_starting_area",
+            &["\"red-cloud-mesa\"", "1", "{\"frozen\":[]}"]
+        )
+        .status
+        .success());
+    assert_eq!(
+        node.query_rows("SELECT guid, name FROM game_character"),
+        characters_before,
+        "a batch without ground in its zone changed Characters"
     );
     assert!(!node
         .call(
