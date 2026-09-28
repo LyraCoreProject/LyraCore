@@ -35,9 +35,12 @@ its 96-creature read budget. Solo Target Claims remain in force; party members m
 | Red Cloud Mesa | 1 | Tauren Warrior | 166 |
 
 `playerbots_spawn_starting_area` accepts an area name, a count from 1 through 50 and a Cohort or Frozen
-Bot Controller. Each batch uses imported race/class start positions and walkable imported ground.
-A missing input refuses the whole transaction. Existing coordinate-based spawn commands retain
-their map-0 behavior. No unsupported class kit is implied by these profiles.
+Bot Controller. Each bot selects from at most 100 positions within 250 yards of its imported
+race/class start. A position needs finite imported ground, explicit walkable navigation and the
+same imported zone. Spreading their home positions gives solo bots access to more creatures than
+the immediate hub. A missing input refuses the whole transaction. Existing coordinate-based spawn
+commands retain their map-0 behavior and 15-yard spread. No unsupported class kit is implied by
+these profiles.
 
 The supported quest catalog retains the 12 Human quests and adds 179, 233, 363, 364, 456, 457, 458,
 747, 752 and 788. Definitions were checked against the catalog's existing source digest. Destinations
