@@ -3,8 +3,8 @@
 # segments, snapshots or module logs by itself. A restart loads the newest valid snapshot and replays
 # the segments after it, and falls back to an older snapshot if the newest fails to load. So this
 # keeps the two newest valid snapshots, keeps every segment from the one that holds S2 + 1 (S2 is the
-# older kept snapshot), and deletes module logs from before today (UTC). The rules come from the
-# v2.7.1 source and clockworklabs/SpacetimeDB#5542.
+# older kept snapshot), and deletes settled module logs from before today (UTC). The rules come from
+# the v2.7.1 source and clockworklabs/SpacetimeDB#5542.
 #
 # Usage: spacetimedb-prune.sh [--apply] [DATA_DIR]
 # Without --apply it only reports. DATA_DIR defaults to /var/lib/lyracore/spacetimedb.
@@ -24,12 +24,17 @@ today=$(date -u +%F)
   echo "$data has no replicas/ directory; not a SpacetimeDB data dir" >&2
   exit 1
 }
-cd "$data"
+# Resolve to an absolute path: a relative DATA_DIR would otherwise be re-applied against itself
+# below, once as the loop root and again inside each "$data"/... glob.
+data=$(cd "$data" && pwd)
 
 offset() { echo $((10#${1%%.*})); }
 settled() { [ -z "$(find "$1" -maxdepth 0 -mmin "-$min_age")" ]; }
 bytes() { du -sb "$@" | awk '{s += $1} END {print s + 0}'; }
-drop() { [ "$apply" = 1 ] && rm -rf -- "$@"; return 0; }
+drop() {
+  [ "$apply" = 1 ] || return 0
+  rm -rf -- "$@"
+}
 
 total=0
 for replica in "$data"/replicas/*/; do
@@ -62,15 +67,21 @@ for replica in "$data"/replicas/*/; do
   mapfile -t segs < <(find "$clog" -maxdepth 1 -name '*.stdb.log' -printf '%f\n' | sort)
   old_segs=()
   for ((i = 0; i + 1 < ${#segs[@]}; i++)); do
-    [ "$(offset "${segs[i + 1]}")" -le $((s2 + 1)) ] && settled "$clog/${segs[i]}" || break
     base=$clog/${segs[i]%.stdb.log}
+    ofs=$base.stdb.ofs
+    # The compressor can touch the index after the log; a recent .stdb.ofs stops the run just
+    # like a recent .stdb.log does.
+    [ "$(offset "${segs[i + 1]}")" -le $((s2 + 1)) ] || break
+    settled "$base.stdb.log" || break
+    [ ! -e "$ofs" ] || settled "$ofs" || break
     old_segs+=("$base.stdb.log")
-    [ -e "$base.stdb.ofs" ] && old_segs+=("$base.stdb.ofs")
+    [ -e "$ofs" ] && old_segs+=("$ofs")
   done
 
+  # A log named for yesterday can still be settling across the UTC boundary; settled guards it too.
   old_logs=()
   for log in "$replica"/module_logs/*.log; do
-    [ -f "$log" ] && [[ "$(basename "$log" .log)" < "$today" ]] && old_logs+=("$log")
+    [ -f "$log" ] && [[ "$(basename "$log" .log)" < "$today" ]] && settled "$log" && old_logs+=("$log")
   done
 
   freed=0

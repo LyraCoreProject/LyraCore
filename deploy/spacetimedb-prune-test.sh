@@ -16,13 +16,21 @@ snapshot() { # offset [nofile|locked]
   [ "${2:-}" = locked ] && touch "$root/replicas/1/snapshots/$(pad "$1").lock"
   touch -t "$old" "$d"
 }
-segment() {
+segment() { # offset [recent-ofs]
   local b
   b=$root/replicas/1/clog/$(pad "$1")
   mkdir -p "$root/replicas/1/clog"
   echo x > "$b.stdb.log"
   echo x > "$b.stdb.ofs"
-  touch -t "$old" "$b.stdb.log" "$b.stdb.ofs"
+  touch -t "$old" "$b.stdb.log"
+  [ "${2:-}" = recent-ofs ] || touch -t "$old" "$b.stdb.ofs"
+}
+module_log() { # date [recent]
+  local f
+  mkdir -p "$root/replicas/1/module_logs"
+  f=$root/replicas/1/module_logs/$1.log
+  echo x > "$f"
+  [ "${2:-}" = recent ] || touch -t "$old" "$f"
 }
 exists() { if [ -e "$1" ]; then echo "  ok    kept $2"; else echo "  FAIL  deleted $2"; fail=1; fi; }
 gone() { if [ -e "$1" ]; then echo "  FAIL  kept $2"; fail=1; else echo "  ok    deleted $2"; fi; }
@@ -31,9 +39,8 @@ for n in 0 100 200 300; do snapshot "$n"; done
 snapshot 250 nofile
 snapshot 350 locked
 for n in 0 90 180 260 320; do segment "$n"; done
-mkdir -p "$root/replicas/1/module_logs"
-echo x > "$root/replicas/1/module_logs/2020-01-01.log"
-echo x > "$root/replicas/1/module_logs/$(date -u +%F).log"
+module_log 2020-01-01
+module_log "$(date -u +%F)" recent
 S=$root/replicas/1/snapshots C=$root/replicas/1/clog L=$root/replicas/1/module_logs
 
 echo "[prune] dry run deletes nothing:"
@@ -65,5 +72,33 @@ bash "$here/spacetimedb-prune.sh" --apply "$root" > /dev/null
 gone "$C/$(pad 0).stdb.log" "segment 0"
 exists "$C/$(pad 90).stdb.log" "recent segment 90"
 exists "$C/$(pad 180).stdb.log" "segment 180"
+
+echo "[prune] a recent segment index stops the run too:"
+rm -rf "$root/replicas"
+for n in 0 100 200 300; do snapshot "$n"; done
+for n in 0 90 180 260; do segment "$n"; done
+segment 90 recent-ofs
+bash "$here/spacetimedb-prune.sh" --apply "$root" > /dev/null
+gone "$C/$(pad 0).stdb.log" "segment 0"
+exists "$C/$(pad 90).stdb.log" "segment 90 (recent index)"
+exists "$C/$(pad 90).stdb.ofs" "segment 90 index (recent)"
+exists "$C/$(pad 180).stdb.log" "segment 180"
+
+echo "[prune] a module log written in the last 30 minutes stays, even dated before today:"
+rm -rf "$root/replicas"
+for n in 0 100 200 300; do snapshot "$n"; done
+segment 0
+module_log 2020-01-01 recent
+bash "$here/spacetimedb-prune.sh" --apply "$root" > /dev/null
+exists "$L/2020-01-01.log" "recently written old-dated module log"
+
+echo "[prune] a relative DATA_DIR still finds its replicas:"
+rm -rf "$root/replicas"
+for n in 0 100 200 300; do snapshot "$n"; done
+segment 0
+(cd "$(dirname "$root")" && bash "$here/spacetimedb-prune.sh" --apply "$(basename "$root")" > /dev/null)
+gone "$S/$(pad 0).snapshot_dir" "snapshot 0 (relative DATA_DIR)"
+exists "$S/$(pad 200).snapshot_dir" "snapshot 200 (relative DATA_DIR, S2)"
+exists "$S/$(pad 300).snapshot_dir" "snapshot 300 (relative DATA_DIR, newest)"
 
 exit "$fail"
