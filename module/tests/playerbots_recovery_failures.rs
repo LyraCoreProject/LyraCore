@@ -1099,6 +1099,14 @@ fn playerbots_recovery_queued_retry_does_not_hide_a_completed_blocked_route() {
             "the failed approach never deferred: {observed:?}"
         );
     }
+    for approach in [1, 2] {
+        assert!(
+            samples.iter().any(|sample| {
+                sample["foreground"].contains(&format!("recoveryPosition = {approach}"))
+            }),
+            "recovery deferred without trying approach {approach}: {samples:?}"
+        );
+    }
     assert_eq!(
         quest(&node, &guid, UNREACHABLE_ENDER_QUEST),
         Some(initial_quest)
