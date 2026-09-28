@@ -361,6 +361,13 @@ on the owning World Shard. Suppression leaves a pending invitation unanswered. A
 before a later selection may still finish on Realm-core. Admission and membership are separate
 transactions across Shards. Consent travels with the Character on Transfer and is deleted with it.
 
+**Idle Bot**:
+A Package-controlled Character, one with a Sessionless Action Consent row, that is out of combat and
+has not moved for thirty seconds. Its cells wake no creatures. A Character on a movement leg moves
+every firing, so it is never an Idle Bot. Humans and test fixture Characters have no consent row and
+always wake creatures.
+_Avoid_: AFK bot, sleeping bot, inactive bot
+
 **Home Shard**:
 The shard that currently holds a Character's row.
 

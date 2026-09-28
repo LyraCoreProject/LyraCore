@@ -17,8 +17,8 @@ use lyracore_shared::spatial;
 use spacetimedb::{log, reducer, table, ReducerContext, ScheduleAt, Table, Timestamp};
 
 use crate::{
-    game_aura, game_creature_ai_state, game_entity_motion, game_melee_attack, game_world_entity,
-    WorldEntity,
+    game_aura, game_creature_ai_state, game_entity_motion, game_melee_attack,
+    game_sessionless_action_consent, game_world_entity, WorldEntity,
 };
 
 use super::*;
@@ -310,13 +310,16 @@ fn active_cell_radius(ctx: &ReducerContext) -> f32 {
 
 /// Read each occupied neighborhood once, preserving map and instance isolation.
 /// Authored active objects stay awake without a nearby Character. Pets and combat
-/// candidates retain their separate sense-firing discovery.
+/// candidates retain their separate sense-firing discovery. An Idle Bot wakes no cell.
 pub(crate) fn active_cell_creatures(
     ctx: &ReducerContext,
     scope: &TickScope,
     sense: bool,
 ) -> TickSweep {
     let entities = ctx.db.game_world_entity();
+    let consents = ctx.db.game_sessionless_action_consent();
+    let package_controlled = |guid: u64| consents.character_guid().find(guid).is_some();
+    let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u32;
     let radius = active_cell_radius(ctx);
     let mut out = std::collections::HashSet::new();
     let mut pets: Vec<u64> = Vec::new();
@@ -341,6 +344,7 @@ pub(crate) fn active_cell_creatures(
         .by_entry()
         .filter(&0u32)
         .filter(|e| e.is_player() && scope.covers(e.instance_id))
+        .filter(|e| !is_idle_bot(e, now_ms, || package_controlled(e.guid)))
         .collect();
     for state in ctx
         .db
@@ -379,10 +383,27 @@ fn active_object_enters_scope(is_player: bool, partition_covered: bool, active: 
     !is_player && partition_covered && active
 }
 
+/// How long a Package-controlled Character stands still out of combat before it is an Idle Bot.
+const IDLE_BOT_AFTER_MS: u32 = 30_000;
+
+/// Is this Character an Idle Bot? `package_controlled` reports a Sessionless Action Consent row and
+/// runs last because it is a lookup. A leg advance stamps the move clock every firing, so a
+/// Character on a movement leg is never idle.
+fn is_idle_bot(
+    character: &WorldEntity,
+    now_ms: u32,
+    package_controlled: impl FnOnce() -> bool,
+) -> bool {
+    character.unit_flags & lyracore_shared::constants::unit_flags::IN_COMBAT == 0
+        && now_ms.wrapping_sub(character.last_move_ms) >= IDLE_BOT_AFTER_MS
+        && package_controlled()
+}
+
 /// One firing's active-cell creature set plus the sense-cadence pet and in-combat candidate lists.
 #[derive(Default)]
 pub(crate) struct TickSweep {
-    /// Creatures within `active_cell_radius` of at least one covered player (work-item 230).
+    /// Creatures within `active_cell_radius` of at least one covered Character that is not an Idle
+    /// Bot (work-item 230).
     pub(crate) active: std::collections::HashSet<u64>,
     /// Live pets (`owner_guid != 0`), in table order — the cycle's pet-phase candidate list.
     pub(crate) pets: Vec<u64>,
@@ -1067,5 +1088,56 @@ mod advance_persist_gate {
             row.type_mask = type_mask::PLAYER_BIT;
         }
         assert!(walk.persists());
+    }
+}
+
+#[cfg(test)]
+mod idle_bot {
+    use super::is_idle_bot;
+    use crate::WorldEntity;
+    use lyracore_shared::constants::{type_mask, unit_flags};
+
+    const NOW_MS: u32 = 3_600_000;
+
+    /// An out-of-combat Character whose move clock last ticked `still_ms` ago.
+    fn character_still_for(still_ms: u32) -> WorldEntity {
+        let mut character = crate::helpers::tests::entity(42, 0, 0, 0, 0);
+        character.type_mask = type_mask::PLAYER_BIT;
+        character.last_move_ms = NOW_MS - still_ms;
+        character
+    }
+
+    #[test]
+    fn a_package_controlled_character_still_for_thirty_seconds_is_an_idle_bot() {
+        assert!(is_idle_bot(&character_still_for(30_000), NOW_MS, || true));
+        assert!(is_idle_bot(&character_still_for(600_000), NOW_MS, || true));
+    }
+
+    #[test]
+    fn a_character_without_consent_is_never_an_idle_bot() {
+        // Humans and test fixture Characters have no Sessionless Action Consent row.
+        let human = character_still_for(600_000);
+        assert!(!is_idle_bot(&human, NOW_MS, || false));
+    }
+
+    #[test]
+    fn a_bot_in_combat_is_not_idle() {
+        let mut bot = character_still_for(600_000);
+        bot.unit_flags = unit_flags::IN_COMBAT;
+        assert!(!is_idle_bot(&bot, NOW_MS, || true));
+    }
+
+    #[test]
+    fn a_bot_on_a_movement_leg_is_not_idle() {
+        // The leg advance stamped the move clock on the last firing.
+        assert!(!is_idle_bot(&character_still_for(500), NOW_MS, || true));
+    }
+
+    #[test]
+    fn a_bot_that_moved_within_thirty_seconds_is_not_idle() {
+        assert!(!is_idle_bot(&character_still_for(29_999), NOW_MS, || true));
+        let mut across_the_wrap = character_still_for(0);
+        across_the_wrap.last_move_ms = u32::MAX - 4_999;
+        assert!(!is_idle_bot(&across_the_wrap, 5_000, || true));
     }
 }
