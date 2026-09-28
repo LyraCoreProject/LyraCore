@@ -23,6 +23,9 @@ pub(crate) trait VendorActionStore: Send + Sync {
     /// The player's buyback ring, newest-first: `(item_entry, stack_count, price, random_property_id)` per entry (≤12).
     fn buyback_slots(&self, player_guid: u64) -> Vec<(u32, u32, u32, u32)>;
 
+    /// The three enchant ids of a Random Property, zero where it names none.
+    fn random_property_enchant_ids(&self, random_property_id: u32) -> [u32; 3];
+
     /// Bag slot of the item instance with `item_guid`. Item guids are globally unique, so no
     /// owner check is needed here — the module reducer enforces ownership on the repair call.
     fn vendor_item_slot(&self, item_guid: u64) -> Option<u8>;
@@ -78,6 +81,10 @@ impl VendorActionStore for crate::stdb::Coordinator {
 
     fn buyback_slots(&self, player_guid: u64) -> Vec<(u32, u32, u32, u32)> {
         crate::stdb::Coordinator::buyback_ring(self, player_guid)
+    }
+
+    fn random_property_enchant_ids(&self, random_property_id: u32) -> [u32; 3] {
+        crate::stdb::Coordinator::random_property_enchant_ids(self, random_property_id)
     }
 
     fn vendor_item_slot(&self, item_guid: u64) -> Option<u8> {
@@ -373,7 +380,7 @@ pub(crate) fn build_buyback_view<St: VendorActionStore + ?Sized>(
 ) -> Vec<Outbound> {
     let ring = store.buyback_slots(self_guid);
     log::debug!("buyback view: guid={self_guid} ring_len={}", ring.len());
-    render_buyback_view(self_guid, &ring)
+    render_buyback_view(store, self_guid, &ring)
 }
 
 /// World-entry replay of the persisted ring. An empty ring renders NOTHING: the client's descriptor
@@ -388,10 +395,14 @@ pub(crate) fn build_buyback_view_replay<St: VendorActionStore + ?Sized>(
     if ring.is_empty() {
         return Vec::new();
     }
-    render_buyback_view(self_guid, &ring)
+    render_buyback_view(store, self_guid, &ring)
 }
 
-fn render_buyback_view(self_guid: u64, ring: &[(u32, u32, u32, u32)]) -> Vec<Outbound> {
+fn render_buyback_view<St: VendorActionStore + ?Sized>(
+    store: &St,
+    self_guid: u64,
+    ring: &[(u32, u32, u32, u32)],
+) -> Vec<Outbound> {
     let mut outbound = Vec::new();
     let mut mask = codec::update_mask::UpdateMaskValues::new();
     for i in 0..BUYBACK_SLOTS {
@@ -409,12 +420,17 @@ fn render_buyback_view(self_guid: u64, ring: &[(u32, u32, u32, u32)]) -> Vec<Out
                     max_durability: 0,
                     container_slots: 0,
                     random_property_id,
+                    random_property_enchant_ids: store
+                        .random_property_enchant_ids(random_property_id),
                     item_text_id: 0,
                     enchantment: 0,
                 };
                 outbound.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
                     Box::new(codec::build_item_create_object(&view)),
                 )));
+                if let Some((opcode, body)) = codec::build_random_property_values(&view) {
+                    outbound.push(Outbound::Raw { opcode, body });
+                }
                 (fab_guid, price)
             }
             None => (0, 0),
@@ -461,6 +477,7 @@ mod tests {
         gate_error: Option<String>,
         buy_error: Option<String>,
         ring: Vec<(u32, u32, u32, u32)>,
+        random_properties: Vec<(u32, [u32; 3])>,
         item_slots: Vec<(u64, u8)>,
         repair_error: Option<String>,
         sell_error: Option<String>,
@@ -511,6 +528,13 @@ mod tests {
 
         fn buyback_slots(&self, _player_guid: u64) -> Vec<(u32, u32, u32, u32)> {
             self.ring.clone()
+        }
+
+        fn random_property_enchant_ids(&self, random_property_id: u32) -> [u32; 3] {
+            self.random_properties
+                .iter()
+                .find(|&&(id, _)| id == random_property_id)
+                .map_or([0; 3], |&(_, enchant_ids)| enchant_ids)
         }
 
         fn vendor_item_slot(&self, item_guid: u64) -> Option<u8> {
@@ -1013,6 +1037,7 @@ mod tests {
                 max_durability: 0,
                 container_slots: 0,
                 random_property_id,
+                random_property_enchant_ids: [0; 3],
                 item_text_id: 0,
                 enchantment: 0,
             },
@@ -1046,6 +1071,30 @@ mod tests {
         let outbound = build_buyback_view(&actions, PLAYER_GUID);
 
         assert_renders_ring(&outbound, &ring);
+    }
+
+    #[test]
+    fn a_buyback_entry_with_a_random_property_fills_its_enchantment_slots_after_its_create() {
+        let actions = InMemoryVendorActions {
+            ring: vec![(2589, 1, 120, 22)],
+            random_properties: vec![(22, [73, 0, 0])],
+            ..Default::default()
+        };
+
+        let outbound = build_buyback_view(&actions, PLAYER_GUID);
+
+        assert_eq!(outbound.len(), 3);
+        assert!(matches!(
+            &outbound[0],
+            Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(_))
+        ));
+        let Outbound::Raw { body, .. } = &outbound[1] else {
+            panic!("expected the property update right after the CREATE");
+        };
+        let updates = lyracore_shared::values_mask::parse_values_updates(body);
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].guid, 0x4090_0000_0000_0000);
+        assert_eq!(updates[0].fields, vec![(31, 73)]);
     }
 
     #[test]

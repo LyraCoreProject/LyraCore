@@ -3527,12 +3527,16 @@ pub(crate) fn item_instance_insert_outbound(
         max_durability,
         container_slots,
         random_property_id: row.random_property_id,
+        random_property_enchant_ids: super::reads::property_enchant_ids(db, row.random_property_id),
         item_text_id: row.item_text_id,
         enchantment,
     };
     out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
         Box::new(codec::build_item_create_object(&view)),
     )));
+    if let Some((opcode, body)) = codec::build_random_property_values(&view) {
+        out.push(Outbound::Raw { opcode, body });
+    }
     if let Some(values) = codec::build_inv_slot_values(self_guid, row.slot, row.guid) {
         out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
             Box::new(values),

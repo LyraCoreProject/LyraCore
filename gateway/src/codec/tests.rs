@@ -1798,6 +1798,7 @@ fn item_create_object_is_item_typed_and_serializes() {
         max_durability: 20,
         container_slots: 0,
         random_property_id: 509_0101,
+        random_property_enchant_ids: [0; 3],
         item_text_id: 0,
         enchantment: 0,
     };
@@ -1834,6 +1835,7 @@ fn a_copied_letters_create_block_carries_its_item_text_id() {
         max_durability: 0,
         container_slots: 0,
         random_property_id: 0,
+        random_property_enchant_ids: [0; 3],
         item_text_id: 7,
         enchantment: 0,
     };
@@ -3627,6 +3629,7 @@ fn item_create_object_bag_slots_build_a_container_with_num_slots() {
         max_durability: 0,
         container_slots: 8, // an 8-slot bag
         random_property_id: 509_0101,
+        random_property_enchant_ids: [0; 3],
         item_text_id: 0,
         enchantment: 0,
     };

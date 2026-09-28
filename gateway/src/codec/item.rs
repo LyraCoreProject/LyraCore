@@ -98,6 +98,9 @@ pub struct ItemInstanceView {
     /// opens the bag window. Non-bags use `ObjectType::Item` as before (baseline-safe).
     pub container_slots: u8,
     pub random_property_id: u32,
+    /// The Random Property's three enchant ids, zero where it names none. An owned item's tooltip
+    /// takes its property stat lines from these; `random_property_id` only names the Suffix.
+    pub random_property_enchant_ids: [u32; 3],
     /// `ITEM_FIELD_ITEM_TEXT_ID` — nonzero on a Letter Copy's Plain Letter
     /// (`CMSG_MAIL_CREATE_TEXT_ITEM`). Zero means the item carries no readable text.
     pub item_text_id: u32,
@@ -115,6 +118,31 @@ pub fn build_charter_petition_values(charter_item_guid: u64, petition_id: u32) -
     let mut mask = update_mask::UpdateMaskValues::new();
     mask.set_u32(ITEM_FIELD_ENCHANTMENT, petition_id);
     build_values_update_raw(charter_item_guid, &mask)
+}
+
+/// The id words of enchantment slots 3, 4 and 5, where cmangos `Item::SetItemRandomProperties`
+/// writes a Random Property's enchant ids. Each slot is three words: id, duration, charges.
+const RANDOM_PROPERTY_ENCHANT_ID_FIELDS: [u16; 3] = [
+    ITEM_FIELD_ENCHANTMENT + 3 * 3,
+    ITEM_FIELD_ENCHANTMENT + 4 * 3,
+    ITEM_FIELD_ENCHANTMENT + 5 * 3,
+];
+
+/// A Random Property's enchant ids as a partial VALUES update that follows the item's CREATE. The
+/// typed CREATE reaches only enchantment slot 0. `None` when the item has no property enchant ids.
+pub fn build_random_property_values(inst: &ItemInstanceView) -> Option<(u16, Vec<u8>)> {
+    if inst.random_property_enchant_ids == [0; 3] {
+        return None;
+    }
+    let mut mask = update_mask::UpdateMaskValues::new();
+    for (field, enchant_id) in RANDOM_PROPERTY_ENCHANT_ID_FIELDS
+        .into_iter()
+        .zip(inst.random_property_enchant_ids)
+        .filter(|&(_, enchant_id)| enchant_id != 0)
+    {
+        mask.set_u32(field, enchant_id);
+    }
+    Some(build_values_update_raw(inst.guid, &mask))
 }
 
 /// Build `SMSG_ITEM_QUERY_SINGLE_RESPONSE` so the client caches the item's name/tooltip/icon (the
@@ -630,5 +658,50 @@ mod tests {
         assert_eq!(updates.len(), 1);
         assert_eq!(updates[0].guid, 0x4000_0000_0000_0101);
         assert_eq!(updates[0].fields, vec![(22, 42)]);
+    }
+
+    fn suffix_item(random_property_enchant_ids: [u32; 3]) -> ItemInstanceView {
+        ItemInstanceView {
+            guid: 0x4000_0000_0000_0102,
+            entry: 25,
+            owner_guid: 1,
+            slot: 23,
+            stack_count: 1,
+            random_property_id: 22,
+            random_property_enchant_ids,
+            ..ItemInstanceView::default()
+        }
+    }
+
+    fn random_property_fields(inst: &ItemInstanceView) -> Vec<(u16, u32)> {
+        let (opcode, body) = build_random_property_values(inst).expect("a property update");
+        assert_eq!(opcode, 0x00A9);
+        let updates = lyracore_shared::values_mask::parse_values_updates(&body);
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].guid, inst.guid);
+        updates[0].fields.clone()
+    }
+
+    /// Slot k's id word is 22 + 3k (`cm:UpdateFields.h`, `cm:Item.h`), so slots 3, 4 and 5 are
+    /// words 31, 34 and 37.
+    #[test]
+    fn a_random_property_fills_enchantment_slots_three_to_five() {
+        assert_eq!(
+            random_property_fields(&suffix_item([73, 74, 75])),
+            vec![(31, 73), (34, 74), (37, 75)]
+        );
+    }
+
+    #[test]
+    fn a_single_enchant_random_property_leaves_the_other_slots_unwritten() {
+        assert_eq!(
+            random_property_fields(&suffix_item([73, 0, 0])),
+            vec![(31, 73)]
+        );
+    }
+
+    #[test]
+    fn an_item_without_property_enchant_ids_sends_no_property_update() {
+        assert_eq!(build_random_property_values(&suffix_item([0; 3])), None);
     }
 }
