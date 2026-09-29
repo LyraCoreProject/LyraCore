@@ -524,6 +524,29 @@ fn playerbots_movement_samples_terrain_between_straight_path_endpoints() {
     outcomes(&node);
 }
 
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_movement_interpolates_height_without_imported_floors() {
+    let (node, bots) = fixture("playerbots-walk-without-floors", "1");
+    let bot = &bots[0];
+    select(&node, bot, "frozen");
+    node.assert_call("debug_teleport", &[bot, "0", "1200", "1200", "40", "0"]);
+    park_movement(&node, bot);
+    let mut observed = Vec::new();
+    assert!(poll_until(Duration::from_secs(6), || {
+        observed = node.query_rows(&format!(
+            "SELECT x, z FROM game_world_entity WHERE guid = {bot}"
+        ));
+        observed[0]["x"].parse::<f32>().unwrap() > 1220.0
+    }));
+    outcomes(&node);
+    let x = observed[0]["x"].parse::<f32>().unwrap();
+    let z = observed[0]["z"].parse::<f32>().unwrap();
+    // With no imported floor, the known endpoints are (1200, 1200, 40) and (1240, 1200, 50).
+    let expected = 40.0 + (x - 1200.0) / 4.0;
+    assert!((z - expected).abs() < 0.25, "{observed:?}");
+}
+
 fn model_floor_movement(name: &str) -> (Standalone, String) {
     use lyracore_shared::terrain::{cell_index, cell_key};
     use lyracore_shared::vmap::{encode, TriClass, VmapTri};
@@ -634,6 +657,7 @@ fn playerbots_movement_keeps_the_walked_floor_below_a_model() {
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_movement_keeps_the_walked_floor_on_a_model() {
     let (node, bot) = model_floor_movement("playerbots-walk-on-model");
+    node.assert_sql("DELETE FROM game_terrain_chunk");
     node.assert_call("debug_teleport", &[&bot, "0", "1210", "1200", "51.5", "0"]);
     park_movement(&node, &bot);
     let mut positions = Vec::new();

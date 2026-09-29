@@ -495,15 +495,17 @@ pub fn route_path(
             if (endpoint.0 - from.0).hypot(endpoint.1 - from.1) < 0.01 {
                 break 'route;
             }
-            // Follow the floor reached by this path. Destination height can select an overhead
-            // model while the walker is still on lower ground.
-            let z = crate::terrain::snap_z(
+            let fraction = ((endpoint.0 - start.0).hypot(endpoint.1 - start.1)
+                / (dest.0 - cur.0).hypot(dest.1 - cur.1).max(0.01))
+            .min(1.0);
+            let z = crate::terrain::walking_z(
                 ctx,
                 map_id,
                 instance_id,
                 endpoint.0,
                 endpoint.1,
                 from.2,
+                start.2 + (destination.2 - start.2) * fraction,
             );
             let next = (endpoint.0, endpoint.1, z);
             let travelled = movement_path::distance(from, next);
