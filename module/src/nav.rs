@@ -491,19 +491,19 @@ pub fn route_path(
             } else {
                 endpoint
             };
+            result.step.clipping = clipping;
             if (endpoint.0 - from.0).hypot(endpoint.1 - from.1) < 0.01 {
                 break 'route;
             }
-            let fraction = ((endpoint.0 - start.0).hypot(endpoint.1 - start.1)
-                / (dest.0 - cur.0).hypot(dest.1 - cur.1).max(0.01))
-            .min(1.0);
+            // Follow the floor reached by this path. Destination height can select an overhead
+            // model while the walker is still on lower ground.
             let z = crate::terrain::snap_z(
                 ctx,
                 map_id,
                 instance_id,
                 endpoint.0,
                 endpoint.1,
-                start.2 + (destination.2 - start.2) * fraction,
+                from.2,
             );
             let next = (endpoint.0, endpoint.1, z);
             let travelled = movement_path::distance(from, next);
@@ -514,7 +514,6 @@ pub fn route_path(
             result.points.push(next);
             from = next;
             let shortened = endpoint != stepped || clipping.is_some();
-            result.step.clipping = clipping;
             if shortened {
                 break 'route;
             }

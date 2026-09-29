@@ -524,6 +524,139 @@ fn playerbots_movement_samples_terrain_between_straight_path_endpoints() {
     outcomes(&node);
 }
 
+fn model_floor_movement(name: &str) -> (Standalone, String) {
+    use lyracore_shared::terrain::{cell_index, cell_key};
+    use lyracore_shared::vmap::{encode, TriClass, VmapTri};
+
+    let (node, bots) = fixture(name, "1");
+    let bot = bots[0].clone();
+    select(&node, &bot, "frozen");
+    let heights = std::iter::repeat_n("49", 145).collect::<Vec<_>>().join(":");
+    let mut terrain = Vec::new();
+    for x in cell_index(1250.0).unwrap()..=cell_index(1190.0).unwrap() {
+        for y in cell_index(1210.0).unwrap()..=cell_index(1190.0).unwrap() {
+            terrain.push(format!("0,{x},{y},0,0,0,0,{heights}"));
+        }
+    }
+    node.assert_call("import_terrain_chunks", &[&terrain.join(";")]);
+
+    let blob = encode(&[
+        VmapTri {
+            verts: [
+                [1208.0, 1198.0, 51.5],
+                [1232.0, 1198.0, 51.5],
+                [1208.0, 1202.0, 51.5],
+            ],
+            class: TriClass::M2,
+        },
+        VmapTri {
+            verts: [
+                [1232.0, 1198.0, 51.5],
+                [1232.0, 1202.0, 51.5],
+                [1208.0, 1202.0, 51.5],
+            ],
+            class: TriClass::M2,
+        },
+    ]);
+    let mut manifest = blake3::Hasher::new();
+    manifest.update(b"lyracore-vmap-manifest-v1");
+    let mut chunks = Vec::new();
+    let mut cells = Vec::new();
+    let hex: String = blob.iter().map(|byte| format!("{byte:02x}")).collect();
+    for x in cell_index(1232.0).unwrap()..=cell_index(1208.0).unwrap() {
+        for y in cell_index(1202.0).unwrap()..=cell_index(1198.0).unwrap() {
+            manifest.update(&cell_key(0, x, y).to_le_bytes());
+            manifest.update(&0u32.to_le_bytes());
+            manifest.update(&(blob.len() as u32).to_le_bytes());
+            manifest.update(&blob);
+            chunks.push(format!("0,0,{x},{y},{hex}"));
+            cells.push(serde_json::json!({"cell_x":x,"cell_y":y}));
+        }
+    }
+    node.assert_call(
+        "stage_vmap_generation",
+        &[
+            "5090900",
+            "0",
+            &chunks.len().to_string(),
+            &(chunks.len() * blob.len()).to_string(),
+            &serde_json::to_string(&manifest.finalize().to_hex().to_string()).unwrap(),
+            "\"movement-model-floor\"",
+            "\"map=0;fixture\"",
+        ],
+    );
+    node.assert_call(
+        "append_vmap_generation_chunks",
+        &[
+            "5090900",
+            &serde_json::to_string(&chunks.join(";")).unwrap(),
+        ],
+    );
+    node.assert_call("verify_vmap_generation", &["5090900"]);
+    node.assert_call(
+        "prepare_vmap_nav_coverage",
+        &["5090900", &serde_json::to_string(&cells).unwrap()],
+    );
+    node.assert_call("finalize_vmap_nav_coverage", &["5090900"]);
+    node.assert_call("activate_vmap_generation", &["5090900"]);
+    node.assert_call("debug_set_vmap_enabled", &["true"]);
+    node.assert_call("debug_set_nav_enabled", &["true"]);
+    (node, bot)
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_movement_keeps_the_walked_floor_below_a_model() {
+    let (node, bot) = model_floor_movement("playerbots-walk-below-model");
+    park_movement(&node, &bot);
+    let mut positions = Vec::new();
+    let progressed = poll_until(Duration::from_secs(8), || {
+        let rows = node.query_rows(&format!(
+            "SELECT x, z FROM game_world_entity WHERE guid = {bot}"
+        ));
+        let x = rows[0]["x"].parse::<f32>().unwrap();
+        let z = rows[0]["z"].parse::<f32>().unwrap();
+        positions.push((x, z));
+        x > 1234.0 || z > 50.1
+    });
+    outcomes(&node);
+    assert!(
+        positions.iter().all(|(_, z)| *z <= 50.1),
+        "walk climbed through the model: {positions:?}"
+    );
+    assert!(
+        progressed && positions.last().unwrap().0 > 1234.0,
+        "walk did not pass beneath the model: {positions:?}"
+    );
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_movement_keeps_the_walked_floor_on_a_model() {
+    let (node, bot) = model_floor_movement("playerbots-walk-on-model");
+    node.assert_call("debug_teleport", &[&bot, "0", "1210", "1200", "51.5", "0"]);
+    park_movement(&node, &bot);
+    let mut positions = Vec::new();
+    let progressed = poll_until(Duration::from_secs(4), || {
+        let rows = node.query_rows(&format!(
+            "SELECT x, z FROM game_world_entity WHERE guid = {bot}"
+        ));
+        let x = rows[0]["x"].parse::<f32>().unwrap();
+        let z = rows[0]["z"].parse::<f32>().unwrap();
+        positions.push((x, z));
+        x > 1222.0 || (z - 51.5).abs() > 0.1
+    });
+    outcomes(&node);
+    assert!(
+        positions.iter().all(|(_, z)| (*z - 51.5).abs() <= 0.1),
+        "walk left the model floor: {positions:?}"
+    );
+    assert!(
+        progressed && positions.last().unwrap().0 > 1222.0,
+        "walk did not cross the model: {positions:?}"
+    );
+}
+
 fn parked_movement(name: &str) -> (Standalone, String) {
     let (node, bots) = fixture(name, "1");
     let bot = &bots[0];
