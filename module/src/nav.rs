@@ -513,7 +513,7 @@ pub fn route_path(
             remaining -= travelled;
             result.points.push(next);
             from = next;
-            let shortened = endpoint != stepped || clipping.is_some();
+            let shortened = endpoint != stepped || result.step.clipping.is_some();
             if shortened {
                 break 'route;
             }
