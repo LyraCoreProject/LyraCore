@@ -253,7 +253,7 @@ jobs:
                   cargo test --locked -p lyracore-module --test playerbots_rewrite \
                     runner::playerbots_movement_ -- --ignored --nocapture --test-threads=1 \
                     2>&1 | tee "$RUNNER_TEMP/companion-continuous-movement.log"
-                  grep -F "test result: ok. 15 passed; 0 failed; 0 ignored;" \
+                  grep -F "test result: ok. 18 passed; 0 failed; 0 ignored;" \
                     "$RUNNER_TEMP/companion-continuous-movement.log"
                   cargo test --locked -p lyracore-module --test playerbots_orders \
                     -- --ignored --test-threads=1 \

@@ -73,6 +73,27 @@ pub fn snap_z(
     }
 }
 
+/// Follow an imported floor from the preceding waypoint's height. Use the endpoint estimate only
+/// where neither terrain nor a model floor is available.
+pub(crate) fn walking_z(
+    ctx: &ReducerContext,
+    map_id: u32,
+    instance_id: u64,
+    x: f32,
+    y: f32,
+    previous_z: f32,
+    fallback: f32,
+) -> f32 {
+    match (
+        ground_z(ctx, map_id, x, y),
+        crate::vmap::floor_z(ctx, map_id, instance_id, x, y, previous_z),
+    ) {
+        (Some(ground), Some(floor)) => ground.max(floor),
+        (Some(z), None) | (None, Some(z)) => z,
+        (None, None) => fallback,
+    }
+}
+
 /// The imported `AreaTable.dbc` area id (MCNK header field) for the cell at `(x, y)`, or `None` when
 /// no terrain chunk is imported there OR the chunk's `area_id` is 0 (unset — some cells never got a
 /// real client-side AreaTable assignment). Same single indexed lookup as `ground_z` — cheap enough

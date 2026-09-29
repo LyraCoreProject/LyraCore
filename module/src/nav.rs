@@ -491,18 +491,20 @@ pub fn route_path(
             } else {
                 endpoint
             };
+            result.step.clipping = clipping;
             if (endpoint.0 - from.0).hypot(endpoint.1 - from.1) < 0.01 {
                 break 'route;
             }
             let fraction = ((endpoint.0 - start.0).hypot(endpoint.1 - start.1)
                 / (dest.0 - cur.0).hypot(dest.1 - cur.1).max(0.01))
             .min(1.0);
-            let z = crate::terrain::snap_z(
+            let z = crate::terrain::walking_z(
                 ctx,
                 map_id,
                 instance_id,
                 endpoint.0,
                 endpoint.1,
+                from.2,
                 start.2 + (destination.2 - start.2) * fraction,
             );
             let next = (endpoint.0, endpoint.1, z);
@@ -513,8 +515,7 @@ pub fn route_path(
             remaining -= travelled;
             result.points.push(next);
             from = next;
-            let shortened = endpoint != stepped || clipping.is_some();
-            result.step.clipping = clipping;
+            let shortened = endpoint != stepped || result.step.clipping.is_some();
             if shortened {
                 break 'route;
             }
