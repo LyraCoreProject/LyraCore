@@ -1056,6 +1056,56 @@ fn playerbots_quest_retries_after_deferral_without_replacing_its_purpose() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_quest_retry_keeps_a_selected_trip_to_another_giver() {
+    let (node, bots) = fixture("playerbots-quest-retained-trip");
+    let bot = bot_for_class(&bots, "1");
+    node.assert_call("playerbots_quest_fixture_admit_accept", &[bot, "7"]);
+    node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
+    node.assert_call("playerbots_recovery_fixture_block_quest_target", &[bot]);
+    node.assert_call("playerbots_fixture_position", &[CREATURE_823, "1240"]);
+    assert!(support::poll_until(support::POLL_TIMEOUT, || {
+        node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
+        runner(&node, bot)["recovery"].contains("active = (some = (fight")
+    }));
+    node.assert_call("playerbots_recovery_fixture_exhaust_attempt", &[bot]);
+    node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
+    let travelling = runner(&node, bot);
+    record(&node, "travelling-before-retry");
+    assert!(
+        travelling["chosen"].contains(&format!("entity = {CREATURE_823}")),
+        "{travelling:?}"
+    );
+    assert_eq!(
+        node.query_rows(&format!(
+            "SELECT quest_entry FROM pkg_playerbots_quest_objective WHERE character_guid = {bot}"
+        ))[0]["quest_entry"],
+        "5261"
+    );
+
+    node.assert_call("playerbots_recovery_fixture_expire_destinations", &[bot]);
+    node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
+    let resumed = runner(&node, bot);
+    record(&node, "travelling-after-retry");
+    assert_eq!(
+        resumed["objective_sequence"], travelling["objective_sequence"],
+        "a retry discarded the selected trip: {resumed:?}"
+    );
+    assert!(
+        resumed["chosen"].contains(&format!("entity = {CREATURE_823}")),
+        "{resumed:?}"
+    );
+    node.assert_call("debug_set_nav_enabled", &["false"]);
+    assert!(
+        support::poll_until(std::time::Duration::from_secs(10), || {
+            node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
+            !node.query_rows(&format!("SELECT quest_entry FROM game_character_quest WHERE character_guid = {bot} AND quest_entry = 5261")).is_empty()
+        }),
+        "the retained trip did not reach and accept the quest"
+    );
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_held_unsupported_quest_selects_supported_work_without_reaccepting() {
     let (node, bots) = fixture("playerbots-quest-reconcile");
     let bot = bot_for_class(&bots, "1");
