@@ -1809,6 +1809,7 @@ dependencies = [
  "log",
  "lyracore-module",
  "lyracore-shared",
+ "lyracore-test-support",
  "serde_json",
  "spacetimedb-lib",
  "spacetimedb-sdk",
@@ -1846,6 +1847,7 @@ dependencies = [
  "getrandom 0.3.4",
  "lyracore-package-delta",
  "lyracore-shared",
+ "lyracore-test-support",
  "piccolo",
  "serde_json",
  "spacetimedb",
@@ -1861,6 +1863,13 @@ dependencies = [
 [[package]]
 name = "lyracore-shared"
 version = "0.1.0"
+
+[[package]]
+name = "lyracore-test-support"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
 
 [[package]]
 name = "lzma-rs"

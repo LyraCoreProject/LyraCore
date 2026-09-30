@@ -8224,5 +8224,4 @@ mod tests {
 mod character_gone_durable_tests;
 
 #[cfg(test)]
-#[path = "subscriptions_party_command_durable_tests.rs"]
-mod party_command_durable_tests;
+include!(concat!(env!("OUT_DIR"), "/package-coordinator-tests.rs"));

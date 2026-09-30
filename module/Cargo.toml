@@ -44,6 +44,7 @@ piccolo = "=0.3.3"
 getrandom = "0.3"
 
 [dev-dependencies]
+lyracore-test-support.workspace = true
 # Integration tests only. `spacetime call` parses every reducer argument as JSON, so a `String`
 # parameter has to arrive as a JSON string literal rather than as bare text — this encodes them.
 # Already in the lockfile through `lyracore-package-delta`, so it adds nothing to the tree.
