@@ -503,24 +503,21 @@ pub(crate) fn route_path_with_budget(
             } else {
                 crate::creatures::chase_step(from.0, from.1, point.0, point.1, reach, 0.0)
             };
-            let fraction = ((stepped.0 - start.0).hypot(stepped.1 - start.1)
-                / (dest.0 - cur.0).hypot(dest.1 - cur.1).max(0.01))
-            .min(1.0);
-            let z = crate::terrain::walking_z(
+            let attempted_z = crate::terrain::walking_z(
                 ctx,
                 map_id,
                 instance_id,
                 stepped.0,
                 stepped.1,
                 from.2,
-                start.2 + (destination.2 - start.2) * fraction,
+                height_on_segment(start, destination, stepped),
             );
             let (endpoint, clipping) = step_gate_with_fetch(
                 ctx,
                 map_id,
                 instance_id,
                 from,
-                (stepped.0, stepped.1, z),
+                (stepped.0, stepped.1, attempted_z),
                 &mut fetch,
             );
             let endpoint = if enabled {
@@ -532,9 +529,7 @@ pub(crate) fn route_path_with_budget(
             if (endpoint.0 - from.0).hypot(endpoint.1 - from.1) < 0.01 {
                 break 'route;
             }
-            let progress = (endpoint.0 - from.0).hypot(endpoint.1 - from.1)
-                / (stepped.0 - from.0).hypot(stepped.1 - from.1);
-            let z = from.2 + (z - from.2) * progress.min(1.0);
+            let z = height_on_segment(from, (stepped.0, stepped.1, attempted_z), endpoint);
             let next = (endpoint.0, endpoint.1, z);
             let travelled = movement_path::distance(from, next);
             if !travelled.is_finite() || travelled > remaining + 0.01 {
@@ -855,16 +850,20 @@ fn step_gate_with_fetch(
         let exact = crate::vmap::collision_ray(ctx, map_id, instance_id, from, to);
         let grid = if !crate::vmap::vmap_enabled(ctx, map_id) && nav_enabled(ctx) {
             // The grid query adds eye height itself, so it starts at foot height.
-            lyracore_shared::nav::step_hit(fetch, cur, stepped).map(|p| {
-                let length = (stepped.0 - cur.0).hypot(stepped.1 - cur.1);
-                let fraction = (p.0 - cur.0).hypot(p.1 - cur.1) / length.max(0.001);
-                [p.0, p.1, from[2] + (to[2] - from[2]) * fraction]
-            })
+            lyracore_shared::nav::step_hit(fetch, cur, stepped)
+                .map(|p| [p.0, p.1, height_on_segment(from.into(), to.into(), p)])
         } else {
             None
         };
         crate::vmap::nearest_hit(from, exact, grid).map(|p| (p[0], p[1]))
     })
+}
+
+/// Retain the checked segment's slope when a horizontal Gate shortens movement.
+fn height_on_segment(from: (f32, f32, f32), to: (f32, f32, f32), at: (f32, f32)) -> f32 {
+    let length = (to.0 - from.0).hypot(to.1 - from.1);
+    let fraction = ((at.0 - from.0).hypot(at.1 - from.1) / length.max(0.001)).min(1.0);
+    from.2 + (to.2 - from.2) * fraction
 }
 
 fn gate_step(
@@ -876,10 +875,10 @@ fn gate_step(
         return ((stepped.0, stepped.1), None);
     }
     // Probe above walkable steps. A ray at foot height stops on every stair riser.
-    let height = lyracore_shared::nav::WALK_STEP_UP;
+    let probe_height = lyracore_shared::nav::WALK_STEP_UP;
     let hit = collision(
-        [cur.0, cur.1, cur.2 + height],
-        [stepped.0, stepped.1, stepped.2 + height],
+        [cur.0, cur.1, cur.2 + probe_height],
+        [stepped.0, stepped.1, stepped.2 + probe_height],
     );
     match hit {
         Some((hx, hy)) => {
@@ -972,16 +971,34 @@ mod tests {
         let hit = (3.0, 0.0);
         let (endpoint, clipping) = gate_step(
             (from.0, from.1, 80.0),
-            (attempted.0, attempted.1, 80.0),
+            (attempted.0, attempted.1, 82.0),
             |_, _| Some(hit),
         );
         assert_eq!(endpoint, (2.0, 0.0));
+        let height = height_on_segment((0.0, 0.0, 80.0), (5.0, 0.0, 82.0), endpoint);
+        assert!((height - 80.8).abs() < 0.001);
         assert_eq!(
             clipping,
             Some(RouteClip {
                 attempted: attempted.into(),
                 hit: hit.into()
             })
+        );
+    }
+
+    #[test]
+    fn a_shortened_segment_keeps_height_within_its_endpoints() {
+        assert_eq!(
+            height_on_segment((0.0, 0.0, 80.0), (0.0, 0.0, 82.0), (0.0, 0.0)),
+            80.0
+        );
+        assert_eq!(
+            height_on_segment((0.0, 0.0, 80.0), (5.0, 0.0, 82.0), (6.0, 0.0)),
+            82.0
+        );
+        assert_eq!(
+            height_on_segment((0.0, 0.0, 82.0), (5.0, 0.0, 80.0), (2.5, 0.0)),
+            81.0
         );
     }
 
@@ -1048,6 +1065,44 @@ mod tests {
             walk: vec![0xFF; WALK_BYTES],
             obs: vec![OBS_NONE; OBS_BYTES],
         }
+    }
+
+    #[test]
+    fn movement_follows_an_incline_without_hitting_the_floor() {
+        use lyracore_shared::vmap::{cast_ray, RayFlavor, TriClass, VmapTri};
+        let triangles = vec![
+            VmapTri {
+                verts: [
+                    [1200.0, 1198.0, 50.0],
+                    [1205.0, 1198.0, 52.0],
+                    [1200.0, 1202.0, 50.0],
+                ],
+                class: TriClass::M2,
+            },
+            VmapTri {
+                verts: [
+                    [1205.0, 1198.0, 52.0],
+                    [1205.0, 1202.0, 52.0],
+                    [1200.0, 1202.0, 50.0],
+                ],
+                class: TriClass::M2,
+            },
+        ];
+        let (endpoint, clipping) = gate_step(
+            (1200.0, 1200.0, 50.0),
+            (1205.0, 1200.0, 52.0),
+            |from, to| {
+                cast_ray(
+                    &mut |_, _| Some(triangles.clone()),
+                    from,
+                    to,
+                    RayFlavor::Collision,
+                )
+                .map(|hit| (hit[0], hit[1]))
+            },
+        );
+        assert_eq!(endpoint, (1205.0, 1200.0));
+        assert_eq!(clipping, None);
     }
 
     #[test]
