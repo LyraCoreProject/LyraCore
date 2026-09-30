@@ -160,23 +160,6 @@ impl<'a, F: FnMut(u16, u16) -> Option<NavCellData>> Cache<'a, F> {
             .or_insert_with(|| f(cx, cy))
             .as_ref()
     }
-    /// Walkable at world (x, y)? Missing chunk = walkable (no obstacles known).
-    fn walkable(&mut self, x: f32, y: f32) -> bool {
-        let (Some(cx), Some(cy)) = (crate::terrain::cell_index(x), crate::terrain::cell_index(y))
-        else {
-            return false; // off the map square entirely
-        };
-        match self.get(cx, cy) {
-            None => true,
-            Some(c) => {
-                let (Some(nx), Some(ny)) = (sub_index(x, cx, WALK_DIM), sub_index(y, cy, WALK_DIM))
-                else {
-                    return true;
-                };
-                walk_get(&c.walk, nx, ny)
-            }
-        }
-    }
 }
 
 /// Eye height added to both endpoints of a sight line (vanilla uses ~2 yd collision height).
@@ -286,7 +269,19 @@ fn grid_walkable(
     gx: u32,
     gy: u32,
 ) -> bool {
-    cache.walkable(grid_to_world(gx), grid_to_world(gy))
+    let dimension = WALK_DIM as u32;
+    if gx >= 1024 * dimension || gy >= 1024 * dimension {
+        return false;
+    }
+    // Grid coordinates already identify the imported cell and walkability bit.
+    let cell = cache.get((gx / dimension) as u16, (gy / dimension) as u16);
+    cell.is_none_or(|cell| {
+        walk_get(
+            &cell.walk,
+            (gx % dimension) as usize,
+            (gy % dimension) as usize,
+        )
+    })
 }
 
 /// Check every crossed cell before accepting a direct route or removing a waypoint.
@@ -886,6 +881,29 @@ mod runtime_tests {
         ] {
             let route = find_leg(&mut fetch, (start_x, 1190.3), (end_x, 1190.3), 0);
             assert_eq!(route.is_some(), reachable, "endpoint x={end_x:?}");
+        }
+    }
+
+    #[test]
+    fn blocked_sub_cells_at_map_edges_refuse_entry_but_allow_escape() {
+        for cell_index in [0, 1023] {
+            for blocked in [0, WALK_DIM - 1] {
+                let mut cell = NavCellData {
+                    base_z: 50.0,
+                    walk: vec![0xff; WALK_BYTES],
+                    obs: Vec::new(),
+                };
+                walk_set(&mut cell.walk, blocked, blocked, false);
+                let mut fetch = |x, y| ((x, y) == (cell_index, cell_index)).then(|| cell.clone());
+                let inside = if blocked == 0 { 1 } else { WALK_DIM - 2 };
+                let from = sub_center(cell_index, inside, WALK_DIM);
+                let to = sub_center(cell_index, blocked, WALK_DIM);
+                assert!(find_leg(&mut fetch, (from, from), (to, to), 0).is_none());
+                assert_eq!(
+                    find_leg(&mut fetch, (to, to), (from, from), 0),
+                    Some(vec![(from, from)])
+                );
+            }
         }
     }
 
