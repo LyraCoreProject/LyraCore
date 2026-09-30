@@ -109,7 +109,7 @@ jobs:
           if-no-files-found: ignore
 
   # The companion suite is mostly wall-clock waiting: each test starts a standalone and runs real
-  # reducer ticks, one test at a time. Four shards run in parallel so the slowest shard, not the
+  # reducer ticks, one test at a time. Jobs run in parallel so the slowest job, not the
   # sum of all targets, sets the time. The quest loops split by position in their own test list,
   # so a new test lands in a shard without a workflow edit.
   playerbots-companion-orders:
@@ -118,7 +118,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [quest-loops-a, quest-loops-b, recovery, orders]
+        shard: [quest-loops-a, quest-loops-b, recovery, orders, quest-catalog]
     env:
       CARGO_BUILD_JOBS: 2
       CARGO_INCREMENTAL: 0
@@ -130,12 +130,12 @@ jobs:
         with:
           path: lyracore
           persist-credentials: false
-      # Placement and queued recovery regressions must use the matching Package revision.
+      # Retained quest objectives and recovery checks need the matching Package revision.
       - name: Check out the bounded planning Package revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: LyraCoreProject/packages
-          ref: 0125a7dc0bd02d61ccdc4c7e63b932d6d5343fdc
+          ref: c4bfdfeefc7d7a83210a17a26d65b11d8dfda907
           path: collection
           persist-credentials: false
       - name: Check out Core before retained waypoint paths
@@ -233,6 +233,12 @@ jobs:
                   grep -F "test result: ok. 2 passed; 0 failed; 0 ignored;" \
                     "$RUNNER_TEMP/companion-movement-upgrade.log"
                   exit "$regression_status"
+                  ;;
+                quest-catalog)
+                  cargo test --locked -p lyracore-module --test playerbots_quest_catalog \
+                    --features=debug_reducers -- --ignored --nocapture --test-threads=1 \
+                    --skip playerbots_quest_catalog_upgrades_populated_pb002_runner_state \
+                    2>&1 | tee "$RUNNER_TEMP/companion-quest-catalog.log"
                   ;;
                 orders)
                   cargo test --locked -p lyracore-module --lib --features=debug_reducers \
