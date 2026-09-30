@@ -496,30 +496,34 @@ pub(crate) fn route_path_with_budget(
             if result.points.len() == MAX_POINTS || remaining < 0.01 {
                 break 'route;
             }
-            // Sample height at least once per terrain quad, including otherwise straight routes.
-            let reach = remaining.min(lyracore_shared::terrain::QUAD);
-            let stepped = if (point.0 - from.0).hypot(point.1 - from.1) <= reach {
-                point
-            } else {
-                crate::creatures::chase_step(from.0, from.1, point.0, point.1, reach, 0.0)
-            };
-            let attempted_z = crate::terrain::walking_z(
-                ctx,
-                map_id,
-                instance_id,
-                stepped.0,
-                stepped.1,
-                from.2,
-                height_on_segment(start, destination, stepped),
+            let sample = sample_walking_step(
+                (from.0, from.1),
+                point,
+                remaining.min(lyracore_shared::terrain::QUAD),
+                |stepped| {
+                    let attempted_z = crate::terrain::walking_z(
+                        ctx,
+                        map_id,
+                        instance_id,
+                        stepped.0,
+                        stepped.1,
+                        from.2,
+                        height_on_segment(start, destination, stepped),
+                    );
+                    let attempted = (stepped.0, stepped.1, attempted_z);
+                    let (endpoint, clipping) =
+                        step_gate_with_fetch(ctx, map_id, instance_id, from, attempted, &mut fetch);
+                    WalkingStep {
+                        attempted,
+                        endpoint,
+                        clipping,
+                    }
+                },
             );
-            let (endpoint, clipping) = step_gate_with_fetch(
-                ctx,
-                map_id,
-                instance_id,
-                from,
-                (stepped.0, stepped.1, attempted_z),
-                &mut fetch,
-            );
+            let stepped = (sample.attempted.0, sample.attempted.1);
+            let attempted_z = sample.attempted.2;
+            let endpoint = sample.endpoint;
+            let clipping = sample.clipping;
             let endpoint = if enabled {
                 nav::walkable_prefix(&mut fetch, (from.0, from.1), endpoint)
             } else {
@@ -563,6 +567,49 @@ pub(crate) fn route_path_with_budget(
         }
     }
     result
+}
+
+struct WalkingStep {
+    attempted: (f32, f32, f32),
+    endpoint: (f32, f32),
+    clipping: Option<RouteClip>,
+}
+
+/// Resample a clipped floor segment down to half a navigation cell. A clear shorter step must
+/// pass the original collision point; stopping before it would erode the wall clearance margin.
+fn sample_walking_step(
+    from: (f32, f32),
+    towards: (f32, f32),
+    max_reach: f32,
+    mut sample: impl FnMut((f32, f32)) -> WalkingStep,
+) -> WalkingStep {
+    let distance = (towards.0 - from.0).hypot(towards.1 - from.1);
+    let mut reach = max_reach.min(distance);
+    let point = |reach| {
+        if reach >= distance {
+            towards
+        } else {
+            crate::creatures::chase_step(from.0, from.1, towards.0, towards.1, reach, 0.0)
+        }
+    };
+    let original = sample(point(reach));
+    let Some(clip) = &original.clipping else {
+        return original;
+    };
+    let hit_distance = (clip.hit.x - from.0).hypot(clip.hit.y - from.1);
+    let minimum = lyracore_shared::nav::NAV_RES * 0.5;
+    while reach > minimum {
+        reach = (reach * 0.5).max(minimum);
+        let stepped = point(reach);
+        if (stepped.0 - from.0).hypot(stepped.1 - from.1) <= hit_distance + 0.01 {
+            break;
+        }
+        let shorter = sample(stepped);
+        if shorter.clipping.is_none() {
+            return shorter;
+        }
+    }
+    original
 }
 
 /// Fit vanilla's quarter-yard points without cutting corners. A small bounded search permits
@@ -943,6 +990,84 @@ pub fn debug_find_leg(
 mod tests {
     use super::*;
     use lyracore_shared::nav::{walk_get, walk_set, OBS_BYTES, OBS_NONE, WALK_BYTES};
+
+    #[test]
+    fn walking_samples_climb_close_stairs_without_reducing_wall_clearance() {
+        use lyracore_shared::vmap::{cast_ray, RayFlavor, TriClass, VmapTri};
+        let from = (1200.0, 1200.0, 50.0);
+        for wall in [false, true] {
+            let mut triangles = Vec::new();
+            for (x, height) in [(1200.125, 0.8), (1200.375, if wall { 4.0 } else { 1.6 })] {
+                for verts in [
+                    [
+                        [x, 1199.0, 50.0],
+                        [x, 1201.0, 50.0],
+                        [x, 1201.0, 50.0 + height],
+                    ],
+                    [
+                        [x, 1199.0, 50.0],
+                        [x, 1201.0, 50.0 + height],
+                        [x, 1199.0, 50.0 + height],
+                    ],
+                ] {
+                    triangles.push(VmapTri {
+                        verts,
+                        class: TriClass::M2,
+                    });
+                }
+            }
+            let sample = |point: (f32, f32)| {
+                let z = if !wall && point.0 >= 1200.375 {
+                    51.6
+                } else if point.0 >= 1200.125 && point.0 < 1200.375 {
+                    50.8
+                } else {
+                    50.0
+                };
+                let attempted = (point.0, point.1, z);
+                let (endpoint, clipping) = gate_step(from, attempted, |a, b| {
+                    cast_ray(
+                        &mut |_, _| Some(triangles.clone()),
+                        a,
+                        b,
+                        RayFlavor::Collision,
+                    )
+                    .map(|hit| (hit[0], hit[1]))
+                });
+                WalkingStep {
+                    attempted,
+                    endpoint,
+                    clipping,
+                }
+            };
+            let step = sample_walking_step((from.0, from.1), (1204.0, 1200.0), 4.0, sample);
+            if wall {
+                assert_eq!(step.endpoint, (from.0, from.1));
+                assert!(step.clipping.is_some());
+            } else {
+                assert!(step.endpoint.0 > 1200.375);
+                assert_eq!(step.attempted.2, 51.6);
+                assert!(step.clipping.is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn blocked_walking_samples_retain_the_original_collision_and_progress() {
+        let step = sample_walking_step((1200.0, 1200.0), (1204.0, 1200.0), 4.0, |point| {
+            let attempted = (point.0, point.1, 50.0);
+            let (endpoint, clipping) = gate_step((1200.0, 1200.0, 50.0), attempted, |_, _| {
+                Some((1203.0, 1200.0))
+            });
+            WalkingStep {
+                attempted,
+                endpoint,
+                clipping,
+            }
+        });
+        assert_eq!(step.endpoint, (1202.0, 1200.0));
+        assert_eq!(step.clipping.unwrap().attempted, (1204.0, 1200.0).into());
+    }
 
     #[test]
     fn collision_evidence_retains_the_attempt_when_the_step_cannot_advance() {
