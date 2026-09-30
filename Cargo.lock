@@ -1830,6 +1830,7 @@ dependencies = [
  "flate2",
  "lyracore-package-delta",
  "lyracore-shared",
+ "lyracore-test-support",
  "serde_json",
  "wow-adt",
  "wow-m2",
