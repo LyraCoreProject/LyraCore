@@ -1135,6 +1135,7 @@ fn playerbots_quest_giver_objective_refuses_an_obsolete_catalog_entry() {
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_quest_giver_objective_preserves_an_unsupported_held_quest_refusal() {
     let (node, bot) = selected_quest_giver_objective("playerbots-quest-unsupported-trip");
+    node.assert_call("playerbots_fixture_position", &[CREATURE_823, "1200"]);
     node.assert_call("playerbots_quest_fixture_held_becomes_unsupported", &[&bot]);
     node.assert_sql(&format!(
         "DELETE FROM game_character_quest WHERE character_guid = {bot} AND quest_entry = 5261"
