@@ -290,8 +290,8 @@ impl OccupancySampler {
 //  The driver — pure given the RealmDb abstraction, tested against `realm_core::fake::Handle`.
 // ===================================================================================================
 
-/// One sampling cycle: for every connected world shard, record its occupancy (if measured) +
-/// session count onto realm-core. Returns one "SHARDLOAD ..."
+/// Record measured occupancy and cached Session counts for the connected World Shards,
+/// Instance Pools and Realm-core. A single-Shard Realm is sampled once. Returns one "SHARDLOAD ..."
 /// line per shard for the caller to log at the sample cadence (the QUEUESTAT/AOISTAT convention,
 /// `gateway/src/world/mod.rs`) — visible without `spacetime sql`.
 ///
@@ -314,8 +314,12 @@ pub(crate) fn sample_and_record<D: RealmDb>(
             )]
         }
     };
-    let mut lines = Vec::with_capacity(db.world_shards().len());
-    for (name, shard) in db.world_shards() {
+    let mut shards = db.world_shards();
+    if !shards.iter().any(|(name, _)| name == rc.shard_name()) {
+        shards.push((rc.shard_name().to_string(), rc.clone()));
+    }
+    let mut lines = Vec::with_capacity(shards.len());
+    for (name, shard) in shards {
         let sessions = shard.session_count() as u32;
         match occupancy_by_shard.get(&name) {
             Some(&pct) => {
@@ -542,6 +546,60 @@ spacetime_txn_cpu_time_sec_sum{db="zzz999",txn_type="Reducer"} 99.0
         let lines = sample_and_record(&h, &HashMap::from([(WORLD.to_string(), 5.0f32)]), 1);
         assert_eq!(lines.len(), 1);
         assert!(lines[0].contains("realm-core unreachable"), "{lines:?}");
+    }
+
+    #[test]
+    fn sample_and_record_includes_realm_core_and_the_instance_pool() {
+        let h = realm(
+            &["world-a", "world-b", "instances", CORE],
+            "1:*=world-b,36:*=instances",
+            Some(CORE),
+        );
+        *h.db_at("world-a").open_sessions.lock().unwrap() = 10;
+        *h.db_at("world-b").open_sessions.lock().unwrap() = 20;
+        *h.db_at("instances").open_sessions.lock().unwrap() = 5;
+        *h.db_at(CORE).open_sessions.lock().unwrap() = 35;
+        let occupancy = HashMap::from([
+            ("world-a".to_string(), 10.0),
+            ("world-b".to_string(), 90.0),
+            ("instances".to_string(), 5.0),
+            (CORE.to_string(), 2.5),
+        ]);
+
+        let lines = sample_and_record(&h, &occupancy, 99);
+
+        let mut recorded = h.db_at(CORE).recorded_shard_loads.lock().unwrap().clone();
+        recorded.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            recorded,
+            vec![
+                ("instances".to_string(), 5.0, 5, 99),
+                (CORE.to_string(), 2.5, 35, 99),
+                ("world-a".to_string(), 10.0, 10, 99),
+                ("world-b".to_string(), 90.0, 20, 99),
+            ]
+        );
+        assert_eq!(lines.len(), 4);
+        assert!(lines.contains(&format!(
+            "SHARDLOAD shard={CORE} occupancy=2.5% sessions=35"
+        )));
+    }
+
+    #[test]
+    fn sample_and_record_reports_missing_realm_core_occupancy_without_a_false_sample() {
+        let h = one_shard_realm();
+        let occupancy = HashMap::from([(WORLD.to_string(), 42.5)]);
+
+        let lines = sample_and_record(&h, &occupancy, 99);
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line
+                    .starts_with(&format!("SHARDLOAD shard={CORE} occupancy=unmeasured ")))
+        );
+        let recorded = h.db_at(CORE).recorded_shard_loads.lock().unwrap().clone();
+        assert_eq!(recorded, vec![(WORLD.to_string(), 42.5, 0, 99)]);
     }
 
     #[test]
