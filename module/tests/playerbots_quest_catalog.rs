@@ -1150,7 +1150,7 @@ fn retry_quest_during_return_home(node: &Standalone, bot: &str) {
 }
 
 fn finish_home_and_resume_quest(node: &Standalone, bot: &str) {
-    let held = quest(node, bot, 7);
+    let quest_before = quest(node, bot, 7);
     record(node, "missing-target-home-retry");
     let mut position = Vec::new();
     let mut movement_starts = BTreeSet::new();
@@ -1201,7 +1201,7 @@ fn finish_home_and_resume_quest(node: &Standalone, bot: &str) {
         resumed["objective"].contains("kind = (quest = ())"),
         "{resumed:?}"
     );
-    assert_eq!(quest(node, bot, 7), held);
+    assert_eq!(quest(node, bot, 7), quest_before);
 }
 
 #[test]
@@ -1257,7 +1257,7 @@ fn playerbots_missing_quest_target_retry_reconsiders_an_expired_home_objective()
     let (node, bot) = returning_home_after_missing_quest_target("playerbots-quest-expired-home");
     node.assert_sql("DELETE FROM game_creature_move_schedule");
     node.assert_call("playerbots_fixture_runner_pass_once", &[&bot]);
-    node.assert_call("playerbots_recovery_fixture_expire_destinations", &[&bot]);
+    retry_quest_during_return_home(&node, &bot);
     node.assert_call("playerbots_fixture_runner_expire_objective", &[&bot]);
     node.assert_call("playerbots_fixture_runner_pass_once", &[&bot]);
     let resumed = runner(&node, &bot);

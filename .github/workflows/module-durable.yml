@@ -131,7 +131,7 @@ jobs:
           path: lyracore
           persist-credentials: false
       # Retained quest objectives and recovery checks need the matching Package revision.
-      - name: Check out the bounded planning Package revision
+      - name: Check out the retained movement Package revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: LyraCoreProject/packages
