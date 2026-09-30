@@ -592,9 +592,12 @@ spacetime_txn_cpu_time_sec_sum{db="zzz999",txn_type="Reducer"} 99.0
 
         let lines = sample_and_record(&h, &occupancy, 99);
 
-        assert!(lines.iter().any(|line| line.starts_with(&format!(
-            "SHARDLOAD shard={CORE} occupancy=unmeasured "
-        ))));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line
+                    .starts_with(&format!("SHARDLOAD shard={CORE} occupancy=unmeasured ")))
+        );
         let recorded = h.db_at(CORE).recorded_shard_loads.lock().unwrap().clone();
         assert_eq!(recorded, vec![(WORLD.to_string(), 42.5, 0, 99)]);
     }
