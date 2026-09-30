@@ -390,6 +390,27 @@ pub fn route_path(
     destination: (f32, f32, f32),
     stop_dist: f32,
 ) -> RoutePath {
+    route_path_with_budget(
+        ctx,
+        map_id,
+        instance_id,
+        start,
+        destination,
+        stop_dist,
+        LEG_MAX_EXPANSIONS,
+    )
+}
+
+/// Use a caller's smaller search allowance while retaining the normal movement limits.
+pub(crate) fn route_path_with_budget(
+    ctx: &ReducerContext,
+    map_id: u32,
+    instance_id: u64,
+    start: (f32, f32, f32),
+    destination: (f32, f32, f32),
+    stop_dist: f32,
+    max_expansions: u32,
+) -> RoutePath {
     use lyracore_shared::movement_path::{self, MAX_DISTANCE, MAX_POINTS};
     let cur = (start.0, start.1);
     let dest = (destination.0, destination.1);
@@ -437,8 +458,13 @@ pub fn route_path(
         if let (Some(cx), Some(cy)) = (cell_index(cur.0), cell_index(cur.1)) {
             fetch(cx, cy);
         }
-        let search =
-            nav::find_leg_in_range_ex(&mut fetch, cur, dest, stop_dist, LEG_MAX_EXPANSIONS);
+        let search = nav::find_leg_in_range_ex(
+            &mut fetch,
+            cur,
+            dest,
+            stop_dist,
+            max_expansions.min(LEG_MAX_EXPANSIONS),
+        );
         result.step.expansions = search.expansions;
         match search.outcome {
             nav::LegOutcome::Complete(points) => {
@@ -477,13 +503,24 @@ pub fn route_path(
             } else {
                 crate::creatures::chase_step(from.0, from.1, point.0, point.1, reach, 0.0)
             };
+            let fraction = ((stepped.0 - start.0).hypot(stepped.1 - start.1)
+                / (dest.0 - cur.0).hypot(dest.1 - cur.1).max(0.01))
+            .min(1.0);
+            let z = crate::terrain::walking_z(
+                ctx,
+                map_id,
+                instance_id,
+                stepped.0,
+                stepped.1,
+                from.2,
+                start.2 + (destination.2 - start.2) * fraction,
+            );
             let (endpoint, clipping) = step_gate_with_fetch(
                 ctx,
                 map_id,
                 instance_id,
-                (from.0, from.1),
-                stepped,
-                from.2,
+                from,
+                (stepped.0, stepped.1, z),
                 &mut fetch,
             );
             let endpoint = if enabled {
@@ -495,18 +532,9 @@ pub fn route_path(
             if (endpoint.0 - from.0).hypot(endpoint.1 - from.1) < 0.01 {
                 break 'route;
             }
-            let fraction = ((endpoint.0 - start.0).hypot(endpoint.1 - start.1)
-                / (dest.0 - cur.0).hypot(dest.1 - cur.1).max(0.01))
-            .min(1.0);
-            let z = crate::terrain::walking_z(
-                ctx,
-                map_id,
-                instance_id,
-                endpoint.0,
-                endpoint.1,
-                from.2,
-                start.2 + (destination.2 - start.2) * fraction,
-            );
+            let progress = (endpoint.0 - from.0).hypot(endpoint.1 - from.1)
+                / (stepped.0 - from.0).hypot(stepped.1 - from.1);
+            let z = from.2 + (z - from.2) * progress.min(1.0);
             let next = (endpoint.0, endpoint.1, z);
             let travelled = movement_path::distance(from, next);
             if !travelled.is_finite() || travelled > remaining + 0.01 {
@@ -626,8 +654,7 @@ fn segment_clear_with_fetch(
 ) -> bool {
     let end = (to.0, to.1);
     let start = (from.0, from.1);
-    let (stepped, clipping) =
-        step_gate_with_fetch(ctx, map_id, instance_id, start, end, from.2, fetch);
+    let (stepped, clipping) = step_gate_with_fetch(ctx, map_id, instance_id, from, to, fetch);
     clipping.is_none()
         && stepped == end
         && (!enabled || nav::walkable_prefix(fetch, start, end) == end)
@@ -722,8 +749,14 @@ pub fn route_step(
         result.status = RouteStatus::Direct;
         crate::creatures::chase_step(cur.0, cur.1, dest.0, dest.1, max_step, stop_dist)
     };
-    let (endpoint, clipping) =
-        step_gate_with_fetch(ctx, map_id, instance_id, cur, attempted, z, &mut fetch);
+    let (endpoint, clipping) = step_gate_with_fetch(
+        ctx,
+        map_id,
+        instance_id,
+        (cur.0, cur.1, z),
+        (attempted.0, attempted.1, z),
+        &mut fetch,
+    );
     result.endpoint = if enabled {
         nav::walkable_prefix(&mut fetch, cur, endpoint)
     } else {
@@ -799,9 +832,14 @@ fn step_gate(
     z: f32,
 ) -> (f32, f32) {
     let mut fetch = None;
-    step_gate_with_fetch(ctx, map_id, instance_id, cur, stepped, z, &mut |cx, cy| {
-        fetch.get_or_insert_with(|| fetcher(ctx, map_id))(cx, cy)
-    })
+    step_gate_with_fetch(
+        ctx,
+        map_id,
+        instance_id,
+        (cur.0, cur.1, z),
+        (stepped.0, stepped.1, z),
+        &mut |cx, cy| fetch.get_or_insert_with(|| fetcher(ctx, map_id))(cx, cy),
+    )
     .0
 }
 
@@ -809,17 +847,19 @@ fn step_gate_with_fetch(
     ctx: &ReducerContext,
     map_id: u32,
     instance_id: u64,
-    cur: (f32, f32),
-    stepped: (f32, f32),
-    z: f32,
+    cur: (f32, f32, f32),
+    stepped: (f32, f32, f32),
     fetch: &mut impl FnMut(u16, u16) -> Option<NavCellData>,
 ) -> ((f32, f32), Option<RouteClip>) {
-    gate_step(cur, stepped, z, |from, to| {
+    gate_step(cur, stepped, |from, to| {
         let exact = crate::vmap::collision_ray(ctx, map_id, instance_id, from, to);
         let grid = if !crate::vmap::vmap_enabled(ctx, map_id) && nav_enabled(ctx) {
             // The grid query adds eye height itself, so it starts at foot height.
-            lyracore_shared::nav::step_hit(fetch, (from[0], from[1], z), (to[0], to[1], z))
-                .map(|p| [p.0, p.1, from[2]])
+            lyracore_shared::nav::step_hit(fetch, cur, stepped).map(|p| {
+                let length = (stepped.0 - cur.0).hypot(stepped.1 - cur.1);
+                let fraction = (p.0 - cur.0).hypot(p.1 - cur.1) / length.max(0.001);
+                [p.0, p.1, from[2] + (to[2] - from[2]) * fraction]
+            })
         } else {
             None
         };
@@ -828,24 +868,26 @@ fn step_gate_with_fetch(
 }
 
 fn gate_step(
-    cur: (f32, f32),
-    stepped: (f32, f32),
-    z: f32,
+    cur: (f32, f32, f32),
+    stepped: (f32, f32, f32),
     mut collision: impl FnMut([f32; 3], [f32; 3]) -> Option<(f32, f32)>,
 ) -> ((f32, f32), Option<RouteClip>) {
     if stepped == cur {
-        return (stepped, None);
+        return ((stepped.0, stepped.1), None);
     }
     // Probe above walkable steps. A ray at foot height stops on every stair riser.
-    let probe_z = z + lyracore_shared::nav::WALK_STEP_UP;
-    let hit = collision([cur.0, cur.1, probe_z], [stepped.0, stepped.1, probe_z]);
+    let height = lyracore_shared::nav::WALK_STEP_UP;
+    let hit = collision(
+        [cur.0, cur.1, cur.2 + height],
+        [stepped.0, stepped.1, stepped.2 + height],
+    );
     match hit {
         Some((hx, hy)) => {
             let (dx, dy) = (hx - cur.0, hy - cur.1);
             let hit_dist = (dx * dx + dy * dy).sqrt();
             let land_dist = hit_dist - GATE_CLEARANCE_YD;
             let endpoint = if land_dist <= 0.0 {
-                cur // hit inside the clearance margin — hold in place
+                (cur.0, cur.1) // hit inside the clearance margin — hold in place
             } else {
                 (
                     cur.0 + dx / hit_dist * land_dist,
@@ -855,12 +897,12 @@ fn gate_step(
             (
                 endpoint,
                 Some(RouteClip {
-                    attempted: stepped.into(),
+                    attempted: (stepped.0, stepped.1).into(),
                     hit: (hx, hy).into(),
                 }),
             )
         }
-        None => (stepped, None),
+        None => ((stepped.0, stepped.1), None),
     }
 }
 
@@ -908,7 +950,11 @@ mod tests {
         let from = (0.0, 0.0);
         let attempted = (5.0, 0.0);
         let hit = (0.5, 0.0);
-        let (endpoint, clipping) = gate_step(from, attempted, 80.0, |_, _| Some(hit));
+        let (endpoint, clipping) = gate_step(
+            (from.0, from.1, 80.0),
+            (attempted.0, attempted.1, 80.0),
+            |_, _| Some(hit),
+        );
         assert_eq!(endpoint, from);
         assert_eq!(
             clipping,
@@ -924,7 +970,11 @@ mod tests {
         let from = (0.0, 0.0);
         let attempted = (5.0, 0.0);
         let hit = (3.0, 0.0);
-        let (endpoint, clipping) = gate_step(from, attempted, 80.0, |_, _| Some(hit));
+        let (endpoint, clipping) = gate_step(
+            (from.0, from.1, 80.0),
+            (attempted.0, attempted.1, 80.0),
+            |_, _| Some(hit),
+        );
         assert_eq!(endpoint, (2.0, 0.0));
         assert_eq!(
             clipping,
@@ -938,7 +988,11 @@ mod tests {
     #[test]
     fn an_unclipped_step_has_no_collision_evidence() {
         let attempted = (5.0, 0.0);
-        let (endpoint, clipping) = gate_step((0.0, 0.0), attempted, 80.0, |_, _| None);
+        let (endpoint, clipping) = gate_step(
+            (0.0, 0.0, 80.0),
+            (attempted.0, attempted.1, 80.0),
+            |_, _| None,
+        );
         assert_eq!(endpoint, attempted);
         assert_eq!(clipping, None);
     }
@@ -974,15 +1028,16 @@ mod tests {
                     },
                 },
             ];
-            let (stepped, _) = gate_step(cur, dest, 80.0, |from, to| {
-                cast_ray(
-                    &mut |_, _| Some(tris.clone()),
-                    from,
-                    to,
-                    RayFlavor::Collision,
-                )
-                .map(|h| (h[0], h[1]))
-            });
+            let (stepped, _) =
+                gate_step((cur.0, cur.1, 80.0), (dest.0, dest.1, 80.0), |from, to| {
+                    cast_ray(
+                        &mut |_, _| Some(tris.clone()),
+                        from,
+                        to,
+                        RayFlavor::Collision,
+                    )
+                    .map(|h| (h[0], h[1]))
+                });
             assert_eq!(stepped, expected, "height={height}");
         }
     }
@@ -992,6 +1047,47 @@ mod tests {
             base_z,
             walk: vec![0xFF; WALK_BYTES],
             obs: vec![OBS_NONE; OBS_BYTES],
+        }
+    }
+
+    #[test]
+    fn rising_movement_stops_before_crossing_an_overhead_surface() {
+        use lyracore_shared::vmap::{cast_ray, RayFlavor, TriClass, VmapTri};
+        let triangles = vec![
+            VmapTri {
+                verts: [
+                    [1200.0, 1198.0, 51.5],
+                    [1206.0, 1198.0, 51.5],
+                    [1200.0, 1202.0, 51.5],
+                ],
+                class: TriClass::M2,
+            },
+            VmapTri {
+                verts: [
+                    [1206.0, 1198.0, 51.5],
+                    [1206.0, 1202.0, 51.5],
+                    [1200.0, 1202.0, 51.5],
+                ],
+                class: TriClass::M2,
+            },
+        ];
+        for (from, to, expected_x) in [
+            // The body ray reaches the surface at x=1204; retain one yard of clearance.
+            ((1200.0, 1200.0, 49.0), (1205.0, 1200.0, 51.0), 1203.0),
+            ((1201.0, 1200.0, 49.0), (1201.0, 1200.0, 51.0), 1201.0),
+        ] {
+            let (endpoint, clipping) = gate_step(from, to, |from, to| {
+                cast_ray(
+                    &mut |_, _| Some(triangles.clone()),
+                    from,
+                    to,
+                    RayFlavor::Collision,
+                )
+                .map(|hit| (hit[0], hit[1]))
+            });
+            assert!((endpoint.0 - expected_x).abs() < 0.01, "{endpoint:?}");
+            assert_eq!(endpoint.1, 1200.0);
+            assert!(clipping.is_some());
         }
     }
 
