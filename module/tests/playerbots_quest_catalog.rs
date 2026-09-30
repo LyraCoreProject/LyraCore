@@ -2,7 +2,7 @@
 
 mod support;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use support::Standalone;
 
 const CREATURE_197: &str = "17379390965327855617";
@@ -1082,6 +1082,190 @@ fn selected_quest_giver_objective(name: &str) -> (Standalone, String) {
 
     let bot = bot.to_string();
     (node, bot)
+}
+
+fn returning_home_after_missing_quest_target(name: &str) -> (Standalone, String) {
+    let (node, bots) = fixture(name);
+    let bot = bot_for_class(&bots, "1");
+    node.assert_call("debug_set_nav_enabled", &["false"]);
+    node.assert_call("playerbots_quest_fixture_admit_accept", &[bot, "7"]);
+    node.assert_sql("DELETE FROM pkg_playerbots_catalog_quest WHERE quest_entry != 7");
+    node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
+    node.assert_call("playerbots_fixture_runner_select_cohort", &[bot]);
+    node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
+    node.assert_call(
+        "playerbots_fixture_runner_stage_completed_quest_wait",
+        &[bot],
+    );
+    node.assert_sql(&format!(
+        "UPDATE pkg_playerbots_bot SET home_x = 1360, home_y = 1200, home_z = 50 WHERE character_guid = {bot}"
+    ));
+    node.assert_call(
+        "playerbots_fixture_runner_expire_completed_quest_wait",
+        &[bot],
+    );
+    node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
+    let deferred = runner(&node, bot);
+    assert!(
+        deferred["objective"].contains("stage = (deferred = ())"),
+        "{deferred:?}"
+    );
+    node.assert_sql(&format!(
+        "UPDATE pkg_playerbots_runner SET next_eligible_micros = 0 WHERE character_guid = {bot}"
+    ));
+    node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
+    let travelling = runner(&node, bot);
+    assert!(
+        travelling["chosen"].contains("reason = (returnHome = ())"),
+        "{travelling:?}"
+    );
+    assert!(
+        travelling["chosen"].contains("move = (home = ())"),
+        "{travelling:?}"
+    );
+    assert!(
+        travelling["foreground"].contains("movement"),
+        "{travelling:?}"
+    );
+    let guid = bot.to_string();
+    (node, guid)
+}
+
+fn retry_quest_during_return_home(node: &Standalone, bot: &str) {
+    let travelling = runner(node, bot);
+    node.assert_sql(&format!(
+        "UPDATE pkg_playerbots_runner SET next_eligible_micros = 0 WHERE character_guid = {bot}"
+    ));
+    node.assert_call("playerbots_recovery_fixture_expire_destinations", &[bot]);
+    node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
+    let retried = runner(node, bot);
+    assert!(
+        retried["chosen"].contains("reason = (returnHome = ())"),
+        "a missing Quest target stopped the return home: {retried:?}"
+    );
+    assert_eq!(
+        retried["objective_sequence"],
+        travelling["objective_sequence"]
+    );
+}
+
+fn finish_home_and_resume_quest(node: &Standalone, bot: &str) {
+    let quest_before = quest(node, bot, 7);
+    record(node, "missing-target-home-retry");
+    let mut position = Vec::new();
+    let mut movement_starts = BTreeSet::new();
+    let mut last_pass = std::time::Instant::now();
+    let arrived = support::poll_until(std::time::Duration::from_secs(40), || {
+        position = node.query_rows(&format!(
+            "SELECT x, y, z FROM game_world_entity WHERE guid = {bot}"
+        ));
+        for spline in node.query_rows(&format!(
+            "SELECT start_micros, dur_ms FROM game_creature_spline WHERE guid = {bot}"
+        )) {
+            if spline["dur_ms"].parse::<u32>().unwrap() > 0 {
+                movement_starts.insert(spline["start_micros"].parse::<u64>().unwrap());
+            }
+        }
+        let arrived = (position[0]["x"].parse::<f32>().unwrap() - 1360.0)
+            .hypot(position[0]["y"].parse::<f32>().unwrap() - 1200.0)
+            .hypot(position[0]["z"].parse::<f32>().unwrap() - 50.0)
+            <= 2.05;
+        if !arrived && last_pass.elapsed() >= std::time::Duration::from_millis(1250) {
+            last_pass = std::time::Instant::now();
+            node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
+        }
+        arrived
+    });
+    record(node, "home-arrival");
+    std::fs::write(
+        support::log_dir().join(format!("{}-home-position.json", node.shard_name())),
+        serde_json::to_vec_pretty(
+            &serde_json::json!({"position": position, "movement_starts": movement_starts}),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        arrived,
+        "the bot did not return home: {:?}",
+        runner(node, bot)
+    );
+    assert!(
+        movement_starts.len() >= 2,
+        "the fixture did not cross a path leg boundary"
+    );
+    node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
+    let resumed = runner(node, bot);
+    record(node, "quest-retried-after-home");
+    assert!(
+        resumed["objective"].contains("kind = (quest = ())"),
+        "{resumed:?}"
+    );
+    assert_eq!(quest(node, bot, 7), quest_before);
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_missing_quest_target_retry_allows_return_home_to_finish() {
+    let (node, bot) = returning_home_after_missing_quest_target("playerbots-quest-home-retry");
+    retry_quest_during_return_home(&node, &bot);
+    finish_home_and_resume_quest(&node, &bot);
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_missing_quest_target_retry_keeps_a_queued_return_home() {
+    let (node, bot) =
+        returning_home_after_missing_quest_target("playerbots-quest-queued-home-retry");
+    // Stage the recorded queue boundary, then let the ordinary controller and movement pass run.
+    node.assert_sql("DELETE FROM game_creature_move_schedule");
+    node.assert_sql(&format!(
+        "DELETE FROM game_creature_spline WHERE guid = {bot}"
+    ));
+    node.assert_sql(&format!(
+        "UPDATE pkg_playerbots_action SET observed_micros = 0 WHERE character_guid = {bot}"
+    ));
+    node.assert_sql(&format!(
+        "UPDATE pkg_playerbots_runner SET path_pending = true, movement_due_micros = {} WHERE character_guid = {bot}", i64::MAX
+    ));
+    retry_quest_during_return_home(&node, &bot);
+    let delayed_until = runner(&node, &bot)["observed_micros"]
+        .parse::<i64>()
+        .unwrap()
+        + 30_000_000;
+    node.assert_sql(&format!(
+        "UPDATE pkg_playerbots_runner SET next_eligible_micros = {delayed_until}, movement_due_micros = {} WHERE character_guid = {bot}", i64::MAX
+    ));
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&bot]);
+    let waiting = runner(&node, &bot);
+    assert_eq!(waiting["path_pending"], "true", "{waiting:?}");
+    assert!(waiting["foreground"].contains("movement"), "{waiting:?}");
+    assert!(
+        waiting["chosen"].contains("move = (home = ())"),
+        "{waiting:?}"
+    );
+    node.assert_sql(&format!(
+        "UPDATE pkg_playerbots_runner SET next_eligible_micros = 0, movement_due_micros = 0 WHERE character_guid = {bot}"
+    ));
+    node.assert_call("debug_repair_after_publish", &[]);
+    finish_home_and_resume_quest(&node, &bot);
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_missing_quest_target_retry_reconsiders_an_expired_home_objective() {
+    let (node, bot) = returning_home_after_missing_quest_target("playerbots-quest-expired-home");
+    node.assert_sql("DELETE FROM game_creature_move_schedule");
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&bot]);
+    retry_quest_during_return_home(&node, &bot);
+    node.assert_call("playerbots_fixture_runner_expire_objective", &[&bot]);
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&bot]);
+    let resumed = runner(&node, &bot);
+    record(&node, "quest-retried-after-expired-home");
+    assert!(
+        resumed["objective"].contains("kind = (quest = ())"),
+        "{resumed:?}"
+    );
 }
 
 #[test]

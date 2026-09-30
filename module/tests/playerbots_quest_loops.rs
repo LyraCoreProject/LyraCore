@@ -2328,11 +2328,11 @@ fn playerbots_disappeared_target_reselects_without_changing_quest_purpose() {
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_ninth_inaccessible_corpse_reports_an_inconclusive_read() {
     let (node, guid) = fixture("playerbots-quest-loop-corpse-limit", 8, 2, true);
+    node.assert_call("playerbots_quest_fixture_admit_accept", &[&guid, "33"]);
     node.assert_call(
         "playerbots_select_controller",
         &[&guid, "{\"recordOnly\":[]}"],
     );
-    node.assert_call("playerbots_quest_fixture_admit_accept", &[&guid, "33"]);
     drive_until(&node, &guid, Duration::from_secs(10), |node| {
         let retained = query_one(
             node,
@@ -2458,11 +2458,11 @@ fn playerbots_ninth_inaccessible_corpse_reports_an_inconclusive_read() {
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_inconclusive_corpse_search_uses_a_valid_live_source() {
     let (node, guid) = fixture("playerbots-quest-loop-corpse-live-fallback", 8, 2, true);
+    node.assert_call("playerbots_quest_fixture_admit_accept", &[&guid, "33"]);
     node.assert_call(
         "playerbots_select_controller",
         &[&guid, "{\"recordOnly\":[]}"],
     );
-    node.assert_call("playerbots_quest_fixture_admit_accept", &[&guid, "33"]);
     drive_until(&node, &guid, Duration::from_secs(10), |node| {
         let retained = query_one(
             node,
