@@ -71,9 +71,7 @@ mod vmap;
 mod world_import_scope;
 
 #[cfg(test)]
-// The shared Wasm builder requires this package directly beneath the workspace root.
-#[path = "../../module/tests/support/mod.rs"]
-mod standalone_support;
+use lyracore_test_support as standalone_support;
 
 use std::collections::HashMap;
 use std::io::Read;

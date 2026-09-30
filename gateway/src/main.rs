@@ -16,9 +16,7 @@ mod accept;
 mod codec;
 mod config;
 #[cfg(test)]
-#[allow(dead_code)] // Shared commands are also used by Module integration tests.
-#[path = "../../module/tests/support/mod.rs"]
-mod durable_test_support;
+use lyracore_test_support as durable_test_support;
 mod fd_limit;
 mod load_sample;
 mod logon;

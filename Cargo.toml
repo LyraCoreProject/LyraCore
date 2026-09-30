@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/lyracore-package-delta",
     "crates/lyracore-shared",
+    "crates/lyracore-test-support",
     "module",
     "gateway",
     "importer",
@@ -37,4 +38,5 @@ too_many_lines = "warn"
 
 [workspace.dependencies]
 lyracore-shared = { path = "crates/lyracore-shared" }
+lyracore-test-support = { path = "crates/lyracore-test-support" }
 lyracore-package-delta = { path = "crates/lyracore-package-delta" }

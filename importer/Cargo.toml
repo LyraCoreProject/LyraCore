@@ -40,5 +40,8 @@ wow_dbc = { version = "0.3", features = ["vanilla"] }
 # (same type instance) to name the variants by hand. Pure parser, ships ZERO Blizzard data.
 wow_world_base = { version = "=0.2.0", features = ["vanilla"] }
 
+[dev-dependencies]
+lyracore-test-support.workspace = true
+
 [lints]
 workspace = true

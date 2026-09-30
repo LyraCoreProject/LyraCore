@@ -4,7 +4,7 @@ name: Module durable tests and Gateway bindings
 # starts its own SpacetimeDB standalone, publishes the module to it, and drives real reducers.
 # `rust.yml`'s `--lib` run cannot reach any of it.
 #
-# There is no shared node to start here: `module/tests/support/mod.rs` starts one standalone per
+# There is no shared node to start here: `lyracore-test-support` starts one standalone per
 # test on a free loopback port with `--in-memory`, publishes with `--features=debug_reducers` (the
 # feature set `lyracore publish` bakes in), and kills it on drop. This job installs the pinned CLI
 # and gets out of the way.
@@ -78,15 +78,14 @@ jobs:
 
       # Each test owns a whole database process, so the thread cap is a memory bound, not a CPU one.
       #
-      # `deadmines` and `playerbots` are Packages an Operator installs (`lyracore packages add`);
-      # they are not in this repository, so their reducers do not exist in the published module.
+      # Deadmines fixtures need the separately installed Package's reducers.
       # `lethal_floor`'s ranged phase races the module's own cast-event sweep and health regen, and
       # is flaky on `main` with or without this change.
       - name: Run the durable suite, shard ${{ matrix.shard }} of 3
         run: |
           targets=$(ls module/tests/*.rs | xargs -n1 basename -s .rs | sort | awk -v shard="${{ matrix.shard }}" 'NR % 3 == shard { printf "--test %s ", $0 }')
           echo "targets: $targets"
-          cargo test -p lyracore-module $targets -- --ignored --test-threads=4 --skip deadmines --skip personality --skip playerbots_ --skip lethal_floor
+          cargo test -p lyracore-module $targets -- --ignored --test-threads=4 --skip deadmines --skip lethal_floor
 
       - name: Run the single-shard auction Refusal regression
         if: matrix.shard == 0
@@ -107,180 +106,3 @@ jobs:
           name: standalone-logs-${{ matrix.shard }}
           path: /tmp/lyracore-standalone-logs
           if-no-files-found: ignore
-
-  # The companion suite is mostly wall-clock waiting: each test starts a standalone and runs real
-  # reducer ticks, one test at a time. Jobs run in parallel so the slowest job, not the
-  # sum of all targets, sets the time. The quest loops split by position in their own test list,
-  # so a new test lands in a shard without a workflow edit.
-  playerbots-companion-orders:
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [quest-loops-a, quest-loops-b, recovery, orders, quest-catalog]
-    env:
-      CARGO_BUILD_JOBS: 2
-      CARGO_INCREMENTAL: 0
-      CARGO_PROFILE_DEV_DEBUG: 0
-      CARGO_PROFILE_TEST_DEBUG: 0
-      CARGO_PROFILE_RELEASE_DEBUG: 0
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          path: lyracore
-          persist-credentials: false
-      # Retained quest objectives and recovery checks need the matching Package revision.
-      - name: Check out the retained movement Package revision
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: LyraCoreProject/packages
-          ref: a29c4a52cb87292a85db720536dd902a5fecd6ce
-          path: collection
-          persist-credentials: false
-      - name: Check out Core before retained waypoint paths
-        if: matrix.shard == 'recovery'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: LyraCoreProject/LyraCore
-          ref: 286e8404d3399b2849ae4a34a253f190e2fd7c05
-          path: preceding-core
-          persist-credentials: false
-      - name: Check out the preceding movement Package revision
-        if: matrix.shard == 'recovery'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: LyraCoreProject/packages
-          ref: 859f296b942e714cc934db89e7d0be06fa049e18
-          path: preceding-collection
-          persist-credentials: false
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          workspaces: lyracore
-          shared-key: playerbots-companion-orders
-      - name: Install the pinned SpacetimeDB CLI
-        run: |
-          archive_path="$RUNNER_TEMP/spacetime.tar.gz"
-          cli_dir="$RUNNER_TEMP/spacetime-$SPACETIME_VERSION"
-          curl --fail --location --retry 3 \
-            "https://github.com/clockworklabs/SpacetimeDB/releases/download/v$SPACETIME_VERSION/spacetime-x86_64-unknown-linux-gnu.tar.gz" \
-            --output "$archive_path"
-          printf '%s  %s\n' "$SPACETIME_ARCHIVE_SHA256" "$archive_path" | sha256sum --check --strict
-          mkdir -p "$cli_dir"
-          tar --extract --gzip --file "$archive_path" --directory "$cli_dir"
-          ln -s spacetimedb-cli "$cli_dir/spacetime"
-          echo "$cli_dir" >> "$GITHUB_PATH"
-      - name: Build the preceding movement schema for populated migration
-        if: matrix.shard == 'recovery'
-        working-directory: preceding-core
-        run: |
-          "$GITHUB_WORKSPACE/preceding-collection/.github/check-core-tip.sh" "$GITHUB_WORKSPACE/preceding-core" \
-            cargo build --locked --release --target wasm32-unknown-unknown \
-            -p lyracore-module --features=debug_reducers
-          cp target/wasm32-unknown-unknown/release/lyracore_module.wasm "$RUNNER_TEMP/companion-preceding.wasm"
-          sha256sum "$RUNNER_TEMP/companion-preceding.wasm" > "$RUNNER_TEMP/companion-preceding-wasm.log"
-          echo "PLAYERBOTS_MOVEMENT_PRECEDING_WASM=$RUNNER_TEMP/companion-preceding.wasm" >> "$GITHUB_ENV"
-          cargo clean -p lyracore-module
-      - name: Run companion orders with the pinned Package Collection
-        working-directory: lyracore
-        env:
-          SHARD: ${{ matrix.shard }}
-        run: |
-          git rev-parse HEAD > "$RUNNER_TEMP/companion-core-revision.txt"
-          git -C "$GITHUB_WORKSPACE/collection" rev-parse HEAD > "$RUNNER_TEMP/companion-collection-revision.txt"
-          "$GITHUB_WORKSPACE/collection/.github/check-core-tip.sh" "$GITHUB_WORKSPACE/lyracore" \
-            bash -eu -o pipefail -c '
-              # One half of the quest-loop tests, chosen by position in the sorted ignored list.
-              quest_loop_half() {
-                local half=$1 names
-                names=$(cargo test --locked -p lyracore-module --test playerbots_quest_loops \
-                    -- --ignored --list --format terse \
-                  | sed -n "s/: test\$//p" \
-                  | grep -v -x -F playerbots_populated_pb004_quest_objective_and_runner_upgrade_in_place \
-                  | sort | awk -v half="$half" "NR % 2 == half")
-                test -n "$names"
-                cargo test --locked -p lyracore-module --test playerbots_quest_loops \
-                  -- --ignored --exact --nocapture --test-threads=1 $names \
-                  2>&1 | tee "$RUNNER_TEMP/companion-movement-quests-$half.log"
-              }
-              case "$SHARD" in
-                quest-loops-a) quest_loop_half 0 ;;
-                quest-loops-b) quest_loop_half 1 ;;
-                recovery)
-                  regression_status=0
-                  cargo test --locked -p lyracore-module --test playerbots_companion \
-                    playerbots_casting_position_retains_one_injured_ally_across_movement_legs \
-                    -- --ignored --exact --nocapture \
-                    2>&1 | tee "$RUNNER_TEMP/companion-movement-handoff.log" || regression_status=1
-                  cargo test --locked -p lyracore-module --test playerbots_recovery \
-                    --test playerbots_recovery_casting -- --ignored --nocapture --test-threads=1 \
-                    --skip playerbots_recovery_upgrades_a_retained_quest_and_owned_cast_without_resetting_them \
-                    2>&1 | tee "$RUNNER_TEMP/companion-movement-recovery.log" || regression_status=1
-                  cargo test --locked -p lyracore-module --test playerbots_recovery_failures \
-                    -- --ignored --exact --nocapture --test-threads=1 \
-                    playerbots_recovery_queued_retry_does_not_hide_a_completed_blocked_route \
-                    playerbots_recovery_cancels_an_owned_gameobject_approach_when_the_target_disappears \
-                    2>&1 | tee "$RUNNER_TEMP/companion-queued-recovery.log" || regression_status=1
-                  grep -F "test result: ok. 2 passed; 0 failed; 0 ignored;" \
-                    "$RUNNER_TEMP/companion-queued-recovery.log" || regression_status=1
-                  cargo test --locked -p lyracore-module --test playerbots_transfer_lifecycle \
-                    playerbots_process_restart_resumes_one_owned_movement_leg \
-                    -- --ignored --exact --nocapture \
-                    2>&1 | tee "$RUNNER_TEMP/companion-movement-restart.log" || regression_status=1
-                  cargo test --locked -p lyracore-module --test playerbots_movement_upgrade \
-                    -- --ignored --nocapture \
-                    2>&1 | tee "$RUNNER_TEMP/companion-movement-upgrade.log"
-                  grep -F "test result: ok. 2 passed; 0 failed; 0 ignored;" \
-                    "$RUNNER_TEMP/companion-movement-upgrade.log"
-                  exit "$regression_status"
-                  ;;
-                quest-catalog)
-                  cargo test --locked -p lyracore-module --test playerbots_quest_catalog \
-                    --features=debug_reducers -- --ignored --nocapture --test-threads=1 \
-                    --skip playerbots_quest_catalog_upgrades_populated_pb002_runner_state \
-                    2>&1 | tee "$RUNNER_TEMP/companion-quest-catalog.log"
-                  ;;
-                orders)
-                  cargo test --locked -p lyracore-module --lib --features=debug_reducers \
-                    2>&1 | tee "$RUNNER_TEMP/companion-module-library.log"
-                  cargo test --locked -p lyracore-module --test playerbots_rewrite \
-                    runner::playerbots_runner_batches_due_bots_in_stable_fair_order \
-                    -- --ignored --exact --nocapture \
-                    2>&1 | tee "$RUNNER_TEMP/companion-default-fairness.log"
-                  grep -F "test runner::playerbots_runner_batches_due_bots_in_stable_fair_order ... ok" \
-                    "$RUNNER_TEMP/companion-default-fairness.log"
-                  cargo test --locked -p lyracore-module --test playerbots_capacity \
-                    --features=debug_reducers \
-                    playerbots_capacity_starting_areas_use_imported_starts_and_refuse_partial_batches \
-                    -- --ignored --exact --nocapture \
-                    2>&1 | tee "$RUNNER_TEMP/companion-starting-areas.log"
-                  grep -F "test result: ok. 1 passed; 0 failed; 0 ignored;" \
-                    "$RUNNER_TEMP/companion-starting-areas.log"
-                  cargo test --locked -p lyracore-module --test playerbots_rewrite \
-                    runner::playerbots_movement_ -- --ignored --nocapture --test-threads=1 \
-                    2>&1 | tee "$RUNNER_TEMP/companion-continuous-movement.log"
-                  grep -F "test result: ok. 18 passed; 0 failed; 0 ignored;" \
-                    "$RUNNER_TEMP/companion-continuous-movement.log"
-                  cargo test --locked -p lyracore-module --test playerbots_orders \
-                    -- --ignored --test-threads=1 \
-                    --skip playerbots_populated_pb008_state_adds_empty_order_state_without_changing_current_work \
-                    2>&1 | tee "$RUNNER_TEMP/companion-orders.log"
-                  grep -F "test playerbots_companions_receive_turns_without_starving_older_background_work ... ok" \
-                    "$RUNNER_TEMP/companion-orders.log"
-                  ;;
-                *) echo "unknown shard $SHARD" >&2; exit 1 ;;
-              esac
-            '
-      # Historical PB-004, PB-007 and PB-008 upgrades need preceding Wasm and remain in Collection CI.
-      # This job exercises current companion behavior, including scheduled Follow under load.
-      - name: Upload companion test evidence
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: playerbots-companion-orders-evidence-${{ matrix.shard }}
-          path: |
-            /tmp/lyracore-standalone-logs
-            ${{ runner.temp }}/companion-*.log
-            ${{ runner.temp }}/companion-*-revision.txt
-            lyracore/target/wasm32-unknown-unknown/release/lyracore_module.wasm
-          if-no-files-found: error
