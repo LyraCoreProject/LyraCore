@@ -409,6 +409,11 @@ impl NavRow {
     }
 }
 
+// MCNK four-bit rows follow world X, matching the first heightmap index.
+fn has_hole(holes: u32, quad_x: usize, quad_y: usize) -> bool {
+    holes & (1 << ((quad_x / 2) * 4 + quad_y / 2)) != 0
+}
+
 /// The terrain half of a cell: slope and MCNK holes, the only blockers the height grid alone
 /// knows. None when the terrain is clear everywhere in the cell.
 fn terrain_cell(cell: &crate::terrain::CellRow) -> Option<NavCellData> {
@@ -426,7 +431,7 @@ fn terrain_cell(cell: &crate::terrain::CellRow) -> Option<NavCellData> {
                 corner(qi + 1, qj + 1),
             );
             let rise = a.max(b).max(c).max(d) - a.min(b).min(c).min(d);
-            if rise > MAX_QUAD_RISE || lyracore_shared::terrain::has_hole(cell.holes, qi, qj) {
+            if rise > MAX_QUAD_RISE || has_hole(cell.holes, qi, qj) {
                 dirty = true;
                 for ny in qj * 8..(qj + 1) * 8 {
                     for nx in qi * 8..(qi + 1) * 8 {
