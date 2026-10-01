@@ -923,7 +923,7 @@ pub(crate) fn walking_floor_z(
     nearest_hit(
         top,
         lyracore_shared::vmap::cast_floor(&mut fetcher(ctx, map_id), top, bottom),
-        crate::go_collider::ray(ctx, map_id, instance_id, top, bottom),
+        crate::go_collider::floor_ray(ctx, map_id, instance_id, top, bottom),
     )
     .map(|point| point[2])
 }

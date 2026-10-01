@@ -161,22 +161,32 @@ pub fn cast_ray(
     nearest_hit(fetch, a, b, want).map(|(t, _)| point_at(a, b, t))
 }
 
-/// Nearest model floor with a slope no greater than 50 degrees. Movement support and imported
-/// route checks share this query; collision and area queries still include steep surfaces.
+/// Nearest model floor from `a` with a slope no greater than 50 degrees. The segment runs
+/// downward from `a` to `b`; collision and area queries still include steep surfaces.
 pub fn cast_floor(
     fetch: &mut impl FnMut(u16, u16) -> Option<Vec<VmapTri>>,
     a: [f32; 3],
     b: [f32; 3],
 ) -> Option<[f32; 3]> {
     nearest_hit(fetch, a, b, |tri| {
-        let ab = sub3(tri.verts[1], tri.verts[0]);
-        let ac = sub3(tri.verts[2], tri.verts[0]);
-        let normal = cross3(ab, ac);
-        let length_squared = dot3(normal, normal);
-        length_squared > 0.0
-            && normal[2] * normal[2] >= 50.0f32.to_radians().cos().powi(2) * length_squared
+        let normal = cross3(
+            sub3(tri.verts[1], tri.verts[0]),
+            sub3(tri.verts[2], tri.verts[0]),
+        );
+        supports_walking(normal, [0.0, 0.0, 1.0])
     })
     .map(|(t, _)| point_at(a, b, t))
+}
+
+/// Whether a plane supports walking within 50 degrees of horizontal, ignoring winding.
+/// Both vectors use the same coordinate space and need not be normalized. Dynamic models
+/// transform world up with the same rotation and scale as their collision probe.
+pub fn supports_walking(normal: [f32; 3], up: [f32; 3]) -> bool {
+    let lengths_squared = dot3(normal, normal) * dot3(up, up);
+    let alignment = dot3(normal, up);
+    lengths_squared > 0.0
+        && lengths_squared.is_finite()
+        && alignment * alignment >= 50.0f32.to_radians().cos().powi(2) * lengths_squared
 }
 
 /// Nearest-hit walk for collision, sight, floor and area queries: same DDA cell walk + global-min
@@ -460,6 +470,21 @@ mod tests {
         let mut fetch = |_, _| Some(vec![tri(5.0, class), tri(10.0, TriClass::M2)]);
         assert!((cast_floor(&mut fetch, top, bottom).unwrap()[2] - 10.0).abs() < 0.001);
         assert!(cast_floor(&mut |_, _| None, top, bottom).is_none());
+    }
+
+    #[test]
+    fn walking_support_has_a_fifty_degree_limit_in_either_winding() {
+        for (degrees, expected) in [(49.9_f32, true), (50.1, false)] {
+            let angle = degrees.to_radians();
+            for winding in [-1.0, 1.0] {
+                let normal = [angle.sin() * winding, 0.0, angle.cos() * winding];
+                assert_eq!(supports_walking(normal, [0.0, 0.0, 3.0]), expected);
+            }
+        }
+        for invalid in [[0.0; 3], [f32::NAN; 3], [f32::INFINITY; 3]] {
+            assert!(!supports_walking(invalid, [0.0, 0.0, 1.0]));
+            assert!(!supports_walking([0.0, 0.0, 1.0], invalid));
+        }
     }
 
     #[test]

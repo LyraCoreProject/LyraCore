@@ -2,7 +2,7 @@
 
 use crate::gameobject::{game_gameobject, game_gameobject_template, GameObject};
 use crate::go_model::game_go_model;
-use lyracore_shared::vmap::{decode, segment_tri_hit};
+use lyracore_shared::vmap::{decode, segment_tri_hit, supports_walking};
 use spacetimedb::{reducer, table, ReducerContext, Table};
 
 #[table(accessor = game_go_collider, index(accessor = by_partition, btree(columns = [map_id, instance_id])))]
@@ -152,6 +152,28 @@ pub(crate) fn ray(
     a: [f32; 3],
     b: [f32; 3],
 ) -> Option<[f32; 3]> {
+    cast(ctx, map_id, instance_id, a, b, false)
+}
+
+/// Nearest walkable support in a vertical world probe, including rotated closed doors.
+pub(crate) fn floor_ray(
+    ctx: &ReducerContext,
+    map_id: u32,
+    instance_id: u64,
+    a: [f32; 3],
+    b: [f32; 3],
+) -> Option<[f32; 3]> {
+    cast(ctx, map_id, instance_id, a, b, true)
+}
+
+fn cast(
+    ctx: &ReducerContext,
+    map_id: u32,
+    instance_id: u64,
+    a: [f32; 3],
+    b: [f32; 3],
+    floor_only: bool,
+) -> Option<[f32; 3]> {
     let mut nearest: Option<f32> = None;
     for collider in ctx
         .db
@@ -191,7 +213,19 @@ pub(crate) fn ray(
         let Ok(tris) = decode(&model.blob) else {
             continue;
         };
+        let local_up = sub(local_a, local_b);
         for tri in tris {
+            if floor_only
+                && !supports_walking(
+                    cross(
+                        sub(tri.verts[1], tri.verts[0]),
+                        sub(tri.verts[2], tri.verts[0]),
+                    ),
+                    local_up,
+                )
+            {
+                continue;
+            }
             if let Some(t) = segment_tri_hit(local_a, local_b, tri.verts) {
                 nearest = Some(nearest.map_or(t, |old| old.min(t)));
             }
@@ -290,6 +324,33 @@ mod tests {
             assert!(local_point([0.0; 3], [0.0; 3], [0.0; 4], 0.0, scale).is_none());
         }
         assert!(local_point([0.0; 3], [0.0; 3], [f32::NAN; 4], 0.0, 1.0).is_none());
+    }
+
+    #[test]
+    fn walking_support_uses_world_slope_after_model_rotation_and_scale() {
+        let local_floor = [[-1.0, -1.0, 0.0], [1.0, -1.0, 0.0], [0.0, 1.0, 0.0]];
+        let floor_normal = cross(
+            sub(local_floor[1], local_floor[0]),
+            sub(local_floor[2], local_floor[0]),
+        );
+        for (degrees, expected) in [(0.0_f32, true), (45.0, true), (60.0, false)] {
+            let angle = degrees.to_radians() * 0.5;
+            let rotation = [angle.sin(), 0.0, 0.0, angle.cos()];
+            let a = local_point([0.0, 0.0, 10.0], [0.0; 3], rotation, 0.0, 2.0).unwrap();
+            let b = local_point([0.0, 0.0, -10.0], [0.0; 3], rotation, 0.0, 2.0).unwrap();
+            assert!(segment_tri_hit(a, b, local_floor).is_some());
+            assert_eq!(supports_walking(floor_normal, sub(a, b)), expected);
+        }
+        let vertical_face = [[0.0, -1.0, -1.0], [0.0, 1.0, -1.0], [0.0, 0.0, 1.0]];
+        let rotation = [0.0, 1.0, 0.0, 1.0];
+        let a = local_point([0.0, 0.0, 10.0], [0.0; 3], rotation, 0.0, 3.0).unwrap();
+        let b = local_point([0.0, 0.0, -10.0], [0.0; 3], rotation, 0.0, 3.0).unwrap();
+        assert!(segment_tri_hit(a, b, vertical_face).is_some());
+        let face_normal = cross(
+            sub(vertical_face[1], vertical_face[0]),
+            sub(vertical_face[2], vertical_face[0]),
+        );
+        assert!(supports_walking(face_normal, sub(a, b)));
     }
 
     #[test]
