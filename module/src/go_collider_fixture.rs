@@ -159,6 +159,29 @@ fn packed_model(entry: u32, scale: f32) -> String {
     format!("{entry},{scale},0.01,{hex}")
 }
 
+fn walking_support(ctx: &ReducerContext) -> Result<(), String> {
+    for (degrees, walkable) in [(90.0_f32, true), (45.0, true), (30.0, false)] {
+        let angle = degrees.to_radians();
+        let mut transformed = door(ctx, 0)?;
+        transformed.rotation_1 = (angle * 0.5).sin();
+        transformed.rotation_3 = (angle * 0.5).cos();
+        ctx.db.game_gameobject().guid().update(transformed);
+        let floor = 30.0 - 2.0 / angle.sin();
+        require(
+            crate::vmap::floor_z(ctx, MAP, 0, 10.0, 20.0, 30.0)
+                .is_some_and(|z| (z - floor).abs() < 0.001),
+            "slope filter changed closed-door collision",
+        )?;
+        let walking = crate::terrain::walking_z(ctx, MAP, 0, 10.0, 20.0, 30.0, 777.0);
+        let expected = if walkable { floor } else { 777.0 };
+        require(
+            (walking - expected).abs() < 0.001,
+            "walking floor used the closed door's local slope instead of its world slope",
+        )?;
+    }
+    Ok(())
+}
+
 fn pool_lifecycle(ctx: &ReducerContext) -> Result<(), String> {
     use crate::gameobject::{
         game_gameobject_pool, game_gameobject_pool_member, GameObjectPool, GameObjectPoolMember,
@@ -416,25 +439,7 @@ pub fn debug_assert_go_collision(ctx: &ReducerContext) -> Result<(), String> {
         "quaternion floor probe missed scaled door",
     )?;
 
-    for (degrees, walkable) in [(90.0_f32, true), (45.0, true), (30.0, false)] {
-        let angle = degrees.to_radians();
-        let mut transformed = door(ctx, 0)?;
-        transformed.rotation_1 = (angle * 0.5).sin();
-        transformed.rotation_3 = (angle * 0.5).cos();
-        ctx.db.game_gameobject().guid().update(transformed);
-        let floor = 30.0 - 2.0 / angle.sin();
-        require(
-            crate::vmap::floor_z(ctx, MAP, 0, 10.0, 20.0, 30.0)
-                .is_some_and(|z| (z - floor).abs() < 0.001),
-            "slope filter changed closed-door collision",
-        )?;
-        let walking = crate::terrain::walking_z(ctx, MAP, 0, 10.0, 20.0, 30.0, 777.0);
-        let expected = if walkable { floor } else { 777.0 };
-        require(
-            (walking - expected).abs() < 0.001,
-            "walking floor used the closed door's local slope instead of its world slope",
-        )?;
-    }
+    walking_support(ctx)?;
 
     // A stale registry row cannot resurrect a deleted GameObject.
     let source = door(ctx, 0)?.guid;
