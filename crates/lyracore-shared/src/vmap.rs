@@ -179,7 +179,7 @@ pub fn cast_floor(
     .map(|(t, _)| point_at(a, b, t))
 }
 
-/// Shared nearest-hit walk behind `cast_ray` and `cast_ray_area`: same DDA cell walk + global-min
+/// Nearest-hit walk for collision, sight, floor and area queries: same DDA cell walk + global-min
 /// `t` correctness argument (see `cast_ray`'s doc comment), parameterized on which triangles
 /// participate. Returns the winning hit parameter *and* that triangle's class, so a caller
 /// that needs the source metadata (the WMO group/flags an area-info query reports) doesn't have to
