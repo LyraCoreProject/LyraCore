@@ -1229,9 +1229,9 @@ impl WorldTri {
     }
 
     /// The triangle's z-interval over 2D point (x, y), testing inside-ness with a `margin`-yd
-    /// outward inflation by signed edge distance. None means outside the inflated footprint.
+    /// outward inflation by signed edge distance, clipped to the XY bounds plus that margin.
+    /// Diagonal tips retain the conservative box corner. None means outside this footprint.
     fn z_at(&self, x: f32, y: f32, margin: f32) -> Option<(f32, f32)> {
-        // Offset edges of a narrow triangle can meet far beyond its tips.
         if x < self.lo[0] - margin
             || x > self.hi[0] + margin
             || y < self.lo[1] - margin
@@ -1590,26 +1590,6 @@ mod derive_tests {
     use super::*;
     use crate::terrain::cell_index;
     use crate::vmap::{cast_ray, RayFlavor};
-
-    #[test]
-    fn a_thin_wall_tip_does_not_extend_past_its_clearance() {
-        let (cx, cy) = test_cell();
-        let (x, y) = at(32, 32);
-        let wall = VmapTri {
-            verts: [
-                [x, y + WALK_MARGIN + 0.05, GROUND_Z],
-                [x - 0.05, y + WALK_MARGIN + 0.35, GROUND_Z + 5.0],
-                [x + 0.05, y + WALK_MARGIN + 0.35, GROUND_Z + 5.0],
-            ],
-            class: wmo(),
-        };
-        let cell = derive_cell(cx, cy, Some(&flat_heights()), &[wall]).unwrap();
-        assert!(
-            walk_get(&cell.walk, 32, 32),
-            "beyond the inflated footprint"
-        );
-        assert!(!walk_get(&cell.walk, 32, 31), "inside the wall clearance");
-    }
 
     const GROUND_Z: f32 = 80.0;
 
@@ -1984,6 +1964,26 @@ mod derive_tests {
         assert!(obs_top(&cell.obs, cell.base_z, 16, 16).is_some());
         assert!(obs_top(&cell.obs, cell.base_z, 15, 16).is_none());
         assert!(obs_top(&cell.obs, cell.base_z, 17, 16).is_none());
+    }
+
+    #[test]
+    fn a_thin_wall_tip_does_not_extend_past_its_clearance() {
+        let (cx, cy) = test_cell();
+        let (x, y) = at(32, 32);
+        let wall = VmapTri {
+            verts: [
+                [x, y + WALK_MARGIN + 0.05, GROUND_Z],
+                [x - 0.05, y + WALK_MARGIN + 0.35, GROUND_Z + 5.0],
+                [x + 0.05, y + WALK_MARGIN + 0.35, GROUND_Z + 5.0],
+            ],
+            class: wmo(),
+        };
+        let cell = derive_cell(cx, cy, Some(&flat_heights()), &[wall]).unwrap();
+        assert!(
+            walk_get(&cell.walk, 32, 32),
+            "beyond the inflated footprint"
+        );
+        assert!(!walk_get(&cell.walk, 32, 31), "inside the wall clearance");
     }
 
     #[test]
