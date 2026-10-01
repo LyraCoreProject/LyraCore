@@ -426,25 +426,12 @@ fn terrain_cell(cell: &crate::terrain::CellRow) -> Option<NavCellData> {
                 corner(qi + 1, qj + 1),
             );
             let rise = a.max(b).max(c).max(d) - a.min(b).min(c).min(d);
-            if rise > MAX_QUAD_RISE {
+            if rise > MAX_QUAD_RISE || lyracore_shared::terrain::has_hole(cell.holes, qi, qj) {
                 dirty = true;
                 for ny in qj * 8..(qj + 1) * 8 {
                     for nx in qi * 8..(qi + 1) * 8 {
                         walk_set(&mut walk, nx, ny, false);
                     }
-                }
-            }
-        }
-    }
-
-    // MCNK holes: low 16 bits, 4×4 quadrants, bit k = quadrant (k%4 along x, k/4 along y).
-    for k in 0..16u32 {
-        if cell.holes & (1 << k) != 0 {
-            dirty = true;
-            let (hx, hy) = ((k % 4) as usize, (k / 4) as usize);
-            for ny in hy * 16..(hy + 1) * 16 {
-                for nx in hx * 16..(hx + 1) * 16 {
-                    walk_set(&mut walk, nx, ny, false);
                 }
             }
         }
@@ -1181,6 +1168,16 @@ mod tests {
         assert!(obs_top(&row.obs, row.base_z, 16, 16).is_some());
         assert!(obs_top(&row.obs, row.base_z, 15, 16).is_none());
         assert!(obs_top(&row.obs, row.base_z, 17, 16).is_none());
+    }
+
+    #[test]
+    fn an_asymmetric_terrain_hole_uses_world_coordinate_axes() {
+        let mut cell = flat_cell();
+        // Raw MCNK row one, column zero covers world-X subcells 16..32 and Y 0..16.
+        cell.holes = 0x0010;
+        let row = rasterize_cell(&cell, &[]).unwrap();
+        assert!(!walk_get(&row.walk, 24, 8));
+        assert!(walk_get(&row.walk, 8, 24));
     }
 
     #[test]

@@ -13,6 +13,15 @@ pub const CELL_SIZE: f32 = 533.333_3 / 16.0;
 /// 9×9 corner-grid spacing inside a cell (8 sub-quads per axis).
 pub const QUAD: f32 = CELL_SIZE / 8.0;
 
+/// Whether a raw MCNK mask removes this world-X/world-Y terrain quad. Its four-bit rows
+/// follow world X, matching the first index of the heightmap. Out-of-cell quads refuse support.
+pub fn has_hole(holes: u32, quad_x: usize, quad_y: usize) -> bool {
+    if quad_x >= 8 || quad_y >= 8 {
+        return true;
+    }
+    holes & (1 << ((quad_x / 2) * 4 + quad_y / 2)) != 0
+}
+
 /// World coord → global terrain cell index on one axis, or None outside the map square.
 ///
 /// NOT `!(0.0..1024.0).contains(&c)` (what `clippy::manual_range_contains` asks for): the two differ
@@ -61,6 +70,18 @@ pub fn interpolate(heights: &[f32], cell_x: u16, cell_y: u16, x: f32, y: f32) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn raw_hole_rows_follow_world_x_and_columns_follow_world_y() {
+        assert!(has_hole(0x0010, 2, 0));
+        assert!(has_hole(0x0010, 3, 1));
+        assert!(!has_hole(0x0010, 0, 2));
+        assert!(!has_hole(0x0010, 4, 0));
+        assert!(has_hole(0x0002, 0, 2));
+        assert!(!has_hole(0x0002, 2, 0));
+        assert!(has_hole(0, 8, 0));
+        assert!(has_hole(0, 0, 8));
+    }
 
     /// A cell whose outer corners encode a plane z = row index recovers the plane everywhere,
     /// exercised through real world coordinates (not just local quad units).
