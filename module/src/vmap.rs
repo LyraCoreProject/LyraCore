@@ -905,6 +905,29 @@ pub fn floor_z(
     collision_ray(ctx, map_id, instance_id, top, bottom).map(|hit| hit[2])
 }
 
+/// Walkable model support for a movement waypoint. A steep face remains an obstacle even when
+/// a downward ray intersects it near the preceding foot height.
+pub(crate) fn walking_floor_z(
+    ctx: &ReducerContext,
+    map_id: u32,
+    instance_id: u64,
+    x: f32,
+    y: f32,
+    probe_z: f32,
+) -> Option<f32> {
+    if !rays_enabled(ctx) {
+        return None;
+    }
+    let top = [x, y, probe_z + FLOOR_PROBE_UP_YD];
+    let bottom = [x, y, probe_z - FLOOR_PROBE_DOWN_YD];
+    nearest_hit(
+        top,
+        lyracore_shared::vmap::cast_floor(&mut fetcher(ctx, map_id), top, bottom),
+        crate::go_collider::floor_ray(ctx, map_id, instance_id, top, bottom),
+    )
+    .map(|point| point[2])
+}
+
 /// Static and closed-door floor probe, independent of the gameplay Gate.
 pub fn probe_floor_z(
     ctx: &ReducerContext,

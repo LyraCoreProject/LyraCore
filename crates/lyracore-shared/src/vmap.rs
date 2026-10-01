@@ -157,20 +157,48 @@ pub fn cast_ray(
     flavor: RayFlavor,
 ) -> Option<[f32; 3]> {
     let want =
-        |class: &TriClass| flavor == RayFlavor::Collision || matches!(class, TriClass::Wmo { .. });
+        |tri: &VmapTri| flavor == RayFlavor::Collision || matches!(tri.class, TriClass::Wmo { .. });
     nearest_hit(fetch, a, b, want).map(|(t, _)| point_at(a, b, t))
 }
 
-/// Shared nearest-hit walk behind `cast_ray` and `cast_ray_area`: same DDA cell walk + global-min
-/// `t` correctness argument (see `cast_ray`'s doc comment), parameterized on which triangle
-/// classes participate. Returns the winning hit parameter *and* that triangle's class, so a caller
+/// Nearest model floor from `a` with a slope no greater than 50 degrees. The segment runs
+/// downward from `a` to `b`; collision and area queries still include steep surfaces.
+pub fn cast_floor(
+    fetch: &mut impl FnMut(u16, u16) -> Option<Vec<VmapTri>>,
+    a: [f32; 3],
+    b: [f32; 3],
+) -> Option<[f32; 3]> {
+    nearest_hit(fetch, a, b, |tri| {
+        let normal = cross3(
+            sub3(tri.verts[1], tri.verts[0]),
+            sub3(tri.verts[2], tri.verts[0]),
+        );
+        supports_walking(normal, [0.0, 0.0, 1.0])
+    })
+    .map(|(t, _)| point_at(a, b, t))
+}
+
+/// Whether a plane supports walking within 50 degrees of horizontal, ignoring winding.
+/// Both vectors use the same coordinate space and need not be normalized. Dynamic models
+/// transform world up with the same rotation and scale as their collision probe.
+pub fn supports_walking(normal: [f32; 3], up: [f32; 3]) -> bool {
+    let lengths_squared = dot3(normal, normal) * dot3(up, up);
+    let alignment = dot3(normal, up);
+    lengths_squared > 0.0
+        && lengths_squared.is_finite()
+        && alignment * alignment >= 50.0f32.to_radians().cos().powi(2) * lengths_squared
+}
+
+/// Nearest-hit walk for collision, sight, floor and area queries: same DDA cell walk + global-min
+/// `t` correctness argument (see `cast_ray`'s doc comment), parameterized on which triangles
+/// participate. Returns the winning hit parameter *and* that triangle's class, so a caller
 /// that needs the source metadata (the WMO group/flags an area-info query reports) doesn't have to
 /// re-walk the segment.
 fn nearest_hit(
     fetch: &mut impl FnMut(u16, u16) -> Option<Vec<VmapTri>>,
     a: [f32; 3],
     b: [f32; 3],
-    want: impl Fn(&TriClass) -> bool,
+    want: impl Fn(&VmapTri) -> bool,
 ) -> Option<(f32, TriClass)> {
     let mut best: Option<(f32, TriClass)> = None;
     for (cx, cy) in crossed_cells(a, b) {
@@ -178,7 +206,7 @@ fn nearest_hit(
             continue;
         };
         for t in &tris {
-            if !want(&t.class) {
+            if !want(t) {
                 continue;
             }
             if let Some(hit_t) = segment_tri_hit(a, b, t.verts) {
@@ -227,7 +255,7 @@ pub fn cast_ray_area(
     a: [f32; 3],
     b: [f32; 3],
 ) -> Option<AreaInfo> {
-    let (t, class) = nearest_hit(fetch, a, b, |class| matches!(class, TriClass::Wmo { .. }))?;
+    let (t, class) = nearest_hit(fetch, a, b, |tri| matches!(tri.class, TriClass::Wmo { .. }))?;
     let TriClass::Wmo {
         group_id,
         mogp_flags,
@@ -396,6 +424,66 @@ mod tests {
         VmapTri {
             verts: [[0.0, 0.0, z], [1.0, 0.0, z], [0.0, 1.0, z]],
             class,
+        }
+    }
+
+    #[test]
+    fn walking_floor_keeps_ramps_but_rejects_steep_model_faces() {
+        let class = TriClass::Wmo {
+            group_id: 1,
+            mogp_flags: 0,
+        };
+        for (surface_class, rise) in [
+            (class, 0.0),
+            (class, 1.0),
+            (class, 3.0),
+            (TriClass::M2, 0.0),
+            (TriClass::M2, 1.0),
+            (TriClass::M2, 3.0),
+        ] {
+            let surface = VmapTri {
+                verts: [[0.0, 0.0, 10.0], [1.0, 0.0, 10.0 + rise], [0.0, 1.0, 10.0]],
+                class: surface_class,
+            };
+            let mut fetch = |_, _| Some(vec![tri(5.0, class), surface]);
+            let top = [0.25, 0.25, 12.0];
+            let bottom = [0.25, 0.25, 0.0];
+            let expected = if rise > 1.0 { 5.0 } else { 10.0 + rise * 0.25 };
+            let floor = cast_floor(&mut fetch, top, bottom).unwrap();
+            assert!(
+                (floor[2] - expected).abs() < 0.001,
+                "rise={rise}, floor={floor:?}"
+            );
+            let collision = cast_ray(&mut fetch, top, bottom, RayFlavor::Collision).unwrap();
+            assert!((collision[2] - (10.0 + rise * 0.25)).abs() < 0.001);
+        }
+    }
+
+    #[test]
+    fn walking_floor_keeps_the_nearest_supporting_model_surface() {
+        let class = TriClass::Wmo {
+            group_id: 1,
+            mogp_flags: 0,
+        };
+        let top = [0.25, 0.25, 12.0];
+        let bottom = [0.25, 0.25, 0.0];
+        let mut fetch = |_, _| Some(vec![tri(5.0, class), tri(10.0, TriClass::M2)]);
+        assert!((cast_floor(&mut fetch, top, bottom).unwrap()[2] - 10.0).abs() < 0.001);
+        assert!(cast_floor(&mut |_, _| None, top, bottom).is_none());
+    }
+
+    #[test]
+    fn walking_support_has_a_fifty_degree_limit_in_either_winding() {
+        for (degrees, expected) in [(49.9_f32, true), (50.1, false)] {
+            let angle = degrees.to_radians();
+            for winding in [-1.0, 1.0] {
+                let normal = [angle.sin() * winding, 0.0, angle.cos() * winding];
+                assert_eq!(supports_walking(normal, [0.0, 0.0, 3.0]), expected);
+            }
+        }
+        for invalid in [[0.0; 3], [f32::NAN; 3], [f32::INFINITY; 3]] {
+            assert!(!supports_walking(invalid, [0.0, 0.0, 1.0]));
+            assert!(!supports_walking([0.0, 0.0, 1.0], invalid));
         }
     }
 

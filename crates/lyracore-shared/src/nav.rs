@@ -1322,11 +1322,7 @@ fn standing_heights(
     let mut floor = vec![f32::INFINITY; side * side];
     for t in triangles {
         // A floor must be WMO geometry with a slope no greater than 50 degrees.
-        let normal_squared = t.n.iter().map(|v| v * v).sum::<f32>();
-        if !t.is_wmo
-            || normal_squared == 0.0
-            || t.n[2] * t.n[2] < 50.0f32.to_radians().cos().powi(2) * normal_squared
-        {
+        if !t.is_wmo || !crate::vmap::supports_walking(t.n, [0.0, 0.0, 1.0]) {
             continue;
         }
         for ny in 0..side {

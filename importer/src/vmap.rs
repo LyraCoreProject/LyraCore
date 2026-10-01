@@ -1249,39 +1249,19 @@ fn walkable_floor(
     top: [f32; 3],
     bottom: [f32; 3],
 ) -> Option<f32> {
-    let cell = (
-        lyracore_shared::terrain::cell_index(top[0])?,
-        lyracore_shared::terrain::cell_index(top[1])?,
-    );
-    tris.get(&cell)?
-        .iter()
-        .filter(|tri| matches!(tri.class, TriClass::Wmo { .. }))
-        .filter_map(|tri| {
-            let ab = [
-                tri.verts[1][0] - tri.verts[0][0],
-                tri.verts[1][1] - tri.verts[0][1],
-                tri.verts[1][2] - tri.verts[0][2],
-            ];
-            let ac = [
-                tri.verts[2][0] - tri.verts[0][0],
-                tri.verts[2][1] - tri.verts[0][1],
-                tri.verts[2][2] - tri.verts[0][2],
-            ];
-            let normal = [
-                ab[1] * ac[2] - ab[2] * ac[1],
-                ab[2] * ac[0] - ab[0] * ac[2],
-                ab[0] * ac[1] - ab[1] * ac[0],
-            ];
-            let normal_squared = normal.iter().map(|value| value * value).sum::<f32>();
-            if normal_squared == 0.0
-                || normal[2] * normal[2] < 50.0f32.to_radians().cos().powi(2) * normal_squared
-            {
-                return None;
-            }
-            lyracore_shared::vmap::segment_tri_hit(top, bottom, tri.verts)
-                .map(|t| top[2] + (bottom[2] - top[2]) * t)
-        })
-        .max_by(f32::total_cmp)
+    lyracore_shared::vmap::cast_floor(
+        &mut |cx, cy| {
+            tris.get(&(cx, cy)).map(|rows| {
+                rows.iter()
+                    .copied()
+                    .filter(|tri| matches!(tri.class, TriClass::Wmo { .. }))
+                    .collect()
+            })
+        },
+        top,
+        bottom,
+    )
+    .map(|point| point[2])
 }
 
 fn format_point(value: Option<f32>) -> String {
