@@ -160,6 +160,15 @@ fn packed_model(entry: u32, scale: f32) -> String {
 }
 
 fn walking_support(ctx: &ReducerContext) -> Result<(), String> {
+    let mut transformed = door(ctx, 0)?;
+    transformed.rotation_1 = 1.0;
+    transformed.rotation_3 = 1.0;
+    ctx.db.game_gameobject().guid().update(transformed);
+    require(
+        crate::vmap::floor_z(ctx, MAP, 0, 10.0, 20.0, 30.0)
+            .is_some_and(|z| (z - 28.0).abs() < 0.001),
+        "quaternion floor probe missed scaled door",
+    )?;
     for (degrees, walkable) in [(90.0_f32, true), (45.0, true), (30.0, false)] {
         let angle = degrees.to_radians();
         let mut transformed = door(ctx, 0)?;
@@ -429,16 +438,6 @@ pub fn debug_assert_go_collision(ctx: &ReducerContext) -> Result<(), String> {
             "translated yaw and scale did not place the door at y=22",
         )?;
     }
-    let mut transformed = door(ctx, 0)?;
-    transformed.rotation_1 = 1.0;
-    transformed.rotation_3 = 1.0;
-    ctx.db.game_gameobject().guid().update(transformed);
-    require(
-        crate::vmap::floor_z(ctx, MAP, 0, 10.0, 20.0, 30.0)
-            .is_some_and(|z| (z - 28.0).abs() < 0.001),
-        "quaternion floor probe missed scaled door",
-    )?;
-
     walking_support(ctx)?;
 
     // A stale registry row cannot resurrect a deleted GameObject.
