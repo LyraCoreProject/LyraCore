@@ -86,7 +86,7 @@ pub(crate) fn walking_z(
 ) -> f32 {
     match (
         ground_z(ctx, map_id, x, y),
-        crate::vmap::floor_z(ctx, map_id, instance_id, x, y, previous_z),
+        crate::vmap::walking_floor_z(ctx, map_id, instance_id, x, y, previous_z),
     ) {
         (Some(ground), Some(floor)) => ground.max(floor),
         (Some(z), None) | (None, Some(z)) => z,
