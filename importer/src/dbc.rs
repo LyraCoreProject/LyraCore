@@ -686,16 +686,18 @@ fn skill_ability_sql(table: &DbcSkillLineAbility) -> (Vec<String>, usize) {
 }
 
 /// The pinned reader calls the vanilla SupercededBySpell column `acquire_method`.
-pub(crate) fn spell_rank_links(data_dir: &str) -> Result<Vec<(u32, u32)>> {
+pub(crate) fn read_spell_rank_links(data_dir: &str) -> Result<Vec<(u32, u32)>> {
     let mut chain = open_chain(Path::new(data_dir))?;
     let abilities: DbcSkillLineAbility = read_table(&mut chain)?;
+    spell_rank_links(&abilities)
+}
+
+fn spell_rank_links(abilities: &DbcSkillLineAbility) -> Result<Vec<(u32, u32)>> {
     let mut links = Vec::new();
     for row in abilities.rows() {
         let next = u32::try_from(row.acquire_method)
             .context("SkillLineAbility has a negative successor spell")?;
-        if row.spell.id != 0 && next != 0 {
-            links.push((row.spell.id, next));
-        }
+        links.push((row.spell.id, next));
     }
     Ok(links)
 }
@@ -2298,13 +2300,28 @@ mod tests {
             exclude_race: SkillChrRacesKey::new(0),
             exclude_class: ChrClassesKey::new(0),
             superseded_by: SpellKey::new(min_skill), // corrected reads real MinSkillLineRank here
-            acquire_method: 0,                       // real SupercededBySpell (unused by us)
+            acquire_method: 0,                       // real SupercededBySpell
             trivial_skill_line_rank_high: acquire_method, // corrected reads real AcquireMethod here
             trivial_skill_line_rank_low: gray,       // corrected reads real TrivialHigh here
             character_points: [green, 0],            // corrected reads real TrivialLow here
             num_skills_up: 1,
             unknown_padding: 0,
         }
+    }
+
+    #[test]
+    fn spell_rank_links_read_the_successor_column() {
+        let mut row = skill_ability_row(1, 26, 78, 0, 1, 75, 2, 100, 50);
+        row.acquire_method = 284;
+        let table = DbcSkillLineAbility { rows: vec![row] };
+        assert_eq!(spell_rank_links(&table).unwrap(), vec![(78, 284)]);
+    }
+
+    #[test]
+    fn spell_rank_links_reject_negative_successors() {
+        let mut row = skill_ability_row(1, 26, 78, 0, 1, 0, 0, 0, 0);
+        row.acquire_method = -1;
+        assert!(spell_rank_links(&DbcSkillLineAbility { rows: vec![row] }).is_err());
     }
 
     fn skill_availability_row(

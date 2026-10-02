@@ -1933,8 +1933,8 @@ fn build_createinfo_item_sql(dump: &str, dbc_dir: Option<&str>) -> Result<Vec<St
 /// to require the previous rank already known before a higher rank can be trained. No Timestamp → plain
 /// SQL. `spell_id > 0` in the DELETE (not `>= 0`, unlike the unsigned-PK tables elsewhere) matches the
 /// module's `u32` PK exactly and is still a wholesale wipe (every real spell_id is > 0).
-fn build_spell_chain_sql(dump: &str) -> Vec<String> {
-    let rows: Vec<String> = parse_table(dump, "spell_chain")
+fn build_spell_chain_sql(dump: &str, links: &[(u32, u32)]) -> Result<Vec<String>> {
+    let parsed: Vec<(u32, String)> = parse_table(dump, "spell_chain")
         .iter()
         .filter_map(|r| {
             let spell_id: u32 = field(r, sc::SPELL_ID).parse().ok()?;
@@ -1948,11 +1948,15 @@ fn build_spell_chain_sql(dump: &str) -> Vec<String> {
             let first_spell: u32 = field(r, sc::FIRST_SPELL).parse().ok()?;
             let rank: u8 = field(r, sc::RANK).parse().ok()?;
             let req_spell: u32 = field(r, sc::REQ_SPELL).parse().ok()?;
-            Some(format!(
-                "({spell_id},{prev_spell},{first_spell},{rank},{req_spell})"
+            Some((
+                spell_id,
+                format!("({spell_id},{prev_spell},{first_spell},{rank},{req_spell})"),
             ))
         })
         .collect();
+    let explicit = parsed.iter().map(|(spell, _)| *spell).collect();
+    let mut rows: Vec<_> = parsed.into_iter().map(|(_, sql)| sql).collect();
+    rows.extend(client_spell_rank_rows(links, &explicit)?);
     let mut stmts = vec!["DELETE FROM game_spell_chain WHERE spell_id > 0".to_string()];
     push_insert(
         &mut stmts,
@@ -1961,20 +1965,38 @@ fn build_spell_chain_sql(dump: &str) -> Vec<String> {
         &rows,
     );
     eprintln!("spell chain: {} rows", rows.len());
-    stmts
+    Ok(stmts)
 }
 
-/// Add complete client rank families absent from the dump before emitting any import writes.
-fn supplement_spell_chain_sql(dump: &str, links: &[(u32, u32)]) -> Result<Vec<String>> {
+/// Derive only families not owned by explicit dump rows, including deliberate partial overrides.
+fn client_spell_rank_rows(
+    links: &[(u32, u32)],
+    explicit: &std::collections::BTreeSet<u32>,
+) -> Result<Vec<String>> {
     use std::collections::{BTreeMap, BTreeSet};
-    let explicit: BTreeSet<u32> = parse_table(dump, "spell_chain")
+    let links: BTreeSet<_> = links
         .iter()
-        .filter_map(|row| field(row, sc::SPELL_ID).parse().ok())
+        .copied()
+        .filter(|(spell, next)| *spell != 0 && *next != 0)
         .collect();
+    let mut neighbors: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+    for &(spell, next) in &links {
+        neighbors.entry(spell).or_default().push(next);
+        neighbors.entry(next).or_default().push(spell);
+    }
+    let mut ignored = explicit.clone();
+    let mut pending: Vec<_> = explicit.iter().copied().collect();
+    while let Some(spell) = pending.pop() {
+        for &next in neighbors.get(&spell).into_iter().flatten() {
+            if ignored.insert(next) {
+                pending.push(next);
+            }
+        }
+    }
     let mut successors = BTreeMap::new();
     let mut predecessors = BTreeMap::new();
-    for &(spell, next) in links {
-        if spell == 0 || next == 0 {
+    for &(spell, next) in &links {
+        if ignored.contains(&spell) {
             continue;
         }
         if successors
@@ -2003,10 +2025,6 @@ fn supplement_spell_chain_sql(dump: &str, links: &[(u32, u32)]) -> Result<Vec<St
             spell = next;
         }
         visited.insert(spell);
-        // The dump may deliberately split or override a client chain. Preserve that family whole.
-        if family.iter().any(|spell| explicit.contains(spell)) {
-            continue;
-        }
         let mut previous = 0;
         for (index, spell) in family.into_iter().enumerate() {
             rows.push(format!("({spell},{previous},{first},{},0)", index + 1));
@@ -2016,18 +2034,11 @@ fn supplement_spell_chain_sql(dump: &str, links: &[(u32, u32)]) -> Result<Vec<St
     if successors.keys().any(|spell| !visited.contains(spell)) {
         anyhow::bail!("client spell rank links contain a cycle");
     }
-    let mut statements = build_spell_chain_sql(dump);
-    push_insert(
-        &mut statements,
-        "game_spell_chain",
-        "spell_id,prev_spell,first_spell,rank,req_spell",
-        &rows,
-    );
     eprintln!(
         "spell chain: {} additional client-derived ranks",
         rows.len()
     );
-    Ok(statements)
+    Ok(rows)
 }
 
 /// Clear+reload SQL for `game_spell_learn` from cmangos `spell_learn_spell` (work-item 102, reduced
@@ -5673,10 +5684,13 @@ fn push_global_statements(args: &Args, dump: &str, stmts: &mut Vec<String>) -> R
     // "globals" precedent).
     let mut spellmeta_row_count = 0u64;
     if family_active(args, "spellmeta") {
-        let spell_chain_sql = match args.dbc.as_deref() {
-            Some(dir) => supplement_spell_chain_sql(dump, &dbc::spell_rank_links(dir)?)?,
-            None => build_spell_chain_sql(dump),
-        };
+        let links = args
+            .dbc
+            .as_deref()
+            .map(dbc::read_spell_rank_links)
+            .transpose()?
+            .unwrap_or_default();
+        let spell_chain_sql = build_spell_chain_sql(dump, &links)?;
         let spell_learn_sql = build_spell_learn_sql(dump);
         let spell_proc_event_sql = build_spell_proc_event_sql(dump);
         spellmeta_row_count = insert_row_count(&spell_chain_sql)
@@ -6713,7 +6727,7 @@ mod tests {
         // Fireball rank 2 (spell_id 143): prev=133 (rank 1), first=133, rank=2, no extra req_spell.
         // Rank 1 itself (133): prev=0 (no predecessor), first=133, rank=1.
         let dump = "x INSERT INTO `spell_chain` VALUES (133,0,133,1,0),(143,133,133,2,0); y";
-        let stmts = build_spell_chain_sql(dump);
+        let stmts = build_spell_chain_sql(dump, &[]).unwrap();
         assert_eq!(stmts[0], "DELETE FROM game_spell_chain WHERE spell_id > 0");
         let insert = stmts
             .iter()
@@ -6727,7 +6741,7 @@ mod tests {
     #[test]
     fn spell_chains_include_client_ranks_missing_from_the_dump() {
         let dump = "x INSERT INTO `spell_chain` VALUES (133,0,133,1,0),(143,133,133,2,0);";
-        let sql = supplement_spell_chain_sql(dump, &[(78, 284), (284, 285), (78, 284)])
+        let sql = build_spell_chain_sql(dump, &[(78, 284), (284, 285), (78, 284)])
             .unwrap()
             .join("\n");
         for row in [
@@ -6745,19 +6759,47 @@ mod tests {
     }
 
     #[test]
-    fn spell_chains_preserve_explicit_families_and_refuse_ambiguous_client_links() {
+    fn spell_chains_preserve_explicit_partial_families() {
         let dump = "x INSERT INTO `spell_chain` VALUES (133,0,133,1,0),(143,133,133,2,99);";
         assert_eq!(
-            supplement_spell_chain_sql(dump, &[(133, 143), (143, 145)]).unwrap(),
-            build_spell_chain_sql(dump),
+            build_spell_chain_sql(dump, &[(133, 143), (143, 145)]).unwrap(),
+            build_spell_chain_sql(dump, &[]).unwrap(),
         );
-        for links in [
-            vec![(1, 2), (1, 3)],
-            vec![(1, 3), (2, 3)],
-            vec![(1, 2), (2, 1)],
-        ] {
-            assert!(supplement_spell_chain_sql("", &links).is_err());
+    }
+
+    #[test]
+    fn spell_chains_ignore_invalid_links_in_explicit_families() {
+        let dump = "x INSERT INTO `spell_chain` VALUES (133,0,133,1,0);";
+        assert_eq!(
+            build_spell_chain_sql(dump, &[(133, 143), (133, 145), (143, 133)]).unwrap(),
+            build_spell_chain_sql(dump, &[]).unwrap(),
+        );
+    }
+
+    #[test]
+    fn spell_chains_refuse_ambiguous_client_families() {
+        for links in [vec![(1, 2), (1, 3)], vec![(1, 3), (2, 3)]] {
+            assert!(build_spell_chain_sql("", &links).is_err());
         }
+    }
+
+    #[test]
+    fn spell_chains_refuse_cyclic_client_families() {
+        for links in [
+            vec![(1, 1)],
+            vec![(1, 2), (2, 1)],
+            vec![(1, 2), (2, 3), (3, 2)],
+        ] {
+            assert!(build_spell_chain_sql("", &links).is_err());
+        }
+    }
+
+    #[test]
+    fn spell_chains_enforce_the_stored_rank_limit() {
+        let mut links: Vec<_> = (1..255).map(|spell| (spell, spell + 1)).collect();
+        assert!(build_spell_chain_sql("", &links).is_ok());
+        links.push((255, 256));
+        assert!(build_spell_chain_sql("", &links).is_err());
     }
 
     #[test]
@@ -6815,7 +6857,7 @@ mod tests {
     fn build_spell_chain_sql_empty_table_yields_delete_only_no_insert() {
         // No cmangos `spell_chain` rows at all (e.g. an un-imported dump) — the DELETE still runs
         // (wholesale wipe), but push_insert emits no INSERT for zero rows.
-        let stmts = build_spell_chain_sql("x y");
+        let stmts = build_spell_chain_sql("x y", &[]).unwrap();
         assert_eq!(
             stmts,
             vec!["DELETE FROM game_spell_chain WHERE spell_id > 0".to_string()]
@@ -9942,7 +9984,7 @@ mod tests {
         // rejected rather than wrapping.
         let dump = "x INSERT INTO `spell_chain` VALUES (133,0,133,1,0),(143,133),\
                     (145,133,133,300,0),(147,133,133,2,'x'),(0,0,0,1,0); y";
-        let stmts = build_spell_chain_sql(dump);
+        let stmts = build_spell_chain_sql(dump, &[]).unwrap();
         let insert = stmts
             .iter()
             .find(|s| s.starts_with("INSERT INTO game_spell_chain "))
