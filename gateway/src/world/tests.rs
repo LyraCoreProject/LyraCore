@@ -2,9 +2,10 @@ use super::handlers::{
     resolve_online_character, AuctionActionStore, AuctionInteraction, CastStore,
     ChannelActionStore, ChannelOutcome, ChannelRequest, ChannelRoster, ChatActionStore,
     ChatOutcome, DuelActionStore, GuildActionStore, ItemActionStore, LootWindowRefusal,
-    LootWindowRequestStatus, LootWindowStore, MeleeActionStore, MemberPresence, MemberSnapshot,
-    MemberStatsStore, QuestActionStore, RealmChatRequest, ResolvedTarget, SpeakerFacts,
-    TaxiActionStore, VendorActionStore, WeatherStore, WhisperRequest, WhisperTargetFacts,
+    LootWindowRequestStatus, LootWindowStore, MeetingStoneActionStore, MeetingStoneOutcome,
+    MeleeActionStore, MemberPresence, MemberSnapshot, MemberStatsStore, QuestActionStore,
+    RealmChatRequest, ResolvedTarget, SpeakerFacts, TaxiActionStore, VendorActionStore,
+    WeatherStore, WhisperRequest, WhisperTargetFacts,
 };
 use super::party::PartyOutcome;
 use super::*;
@@ -4372,6 +4373,42 @@ impl ChannelActionStore for InMemoryStore {
 
     fn ignores(&self, owner_guid: u64, other_guid: u64) -> Result<bool> {
         whisper::ignored_anywhere(self, owner_guid, other_guid)
+    }
+}
+
+/// The Meeting Stone family is tested against its own Fake in `handlers/meeting_stone.rs`. Here no
+/// stone exists and nobody is queued.
+impl MeetingStoneActionStore for InMemoryStore {
+    fn admit_meeting_stone(&self, _actor_guid: u64, _go_guid: u64) -> Result<MeetingStoneOutcome> {
+        Ok(MeetingStoneOutcome::Refused(
+            lyracore_shared::meeting_stone::MeetingStoneRefusal::NotAMeetingStone,
+        ))
+    }
+
+    fn meeting_stone_area(&self, _go_guid: u64) -> Result<Option<u32>> {
+        Ok(None)
+    }
+
+    fn party_members(&self, _actor_guid: u64) -> Result<Option<Vec<u64>>> {
+        Ok(None)
+    }
+
+    fn seeker_facts(&self, _character_guid: u64) -> Result<Option<super::SeekerFacts>> {
+        Ok(None)
+    }
+
+    fn meeting_stone_op(
+        &self,
+        _actor_guid: u64,
+        _op: u8,
+        _area_id: u32,
+        _seekers: Vec<super::SeekerFacts>,
+    ) -> Result<MeetingStoneOutcome> {
+        Ok(MeetingStoneOutcome::Ran)
+    }
+
+    fn queued_area(&self, _character_guid: u64) -> Result<Option<u32>> {
+        Ok(None)
     }
 }
 

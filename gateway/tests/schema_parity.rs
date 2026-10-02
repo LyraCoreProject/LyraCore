@@ -780,6 +780,14 @@ parity_test!(parity_game_chat_channel_notice_event, "game_chat_channel_notice_ev
     id, notice, channel_name, subject_guid, actor_guid, old_flags, new_flags, channel_flags, text,
     recipients, created_at,
 });
+// The Meeting Stone Queue. A drifted stone column names the wrong dungeon area; a drifted Seeker
+// column answers `CMSG_MEETINGSTONE_INFO` wrongly.
+parity_test!(parity_game_meeting_stone, "game_meeting_stone", lyracore_module::MeetingStone, bindings::meeting_stone_type::MeetingStone, {
+    entry, min_level, max_level, area_id,
+});
+parity_test!(parity_game_meeting_stone_seeker, "game_meeting_stone_seeker", lyracore_module::MeetingStoneSeeker, bindings::meeting_stone_seeker_type::MeetingStoneSeeker, {
+    character_guid, area_id, team, class, group_id, queued_at,
+});
 // Private (no per-player subscriber to decode these — every wire-visible roll transition still
 // rides `game_group_event`, unchanged). Subscribed so the gateway's loot-roll relay
 // (`world::loot::relay_tick`) can promote a world shard's staging roll onto realm-core and read
@@ -1227,6 +1235,8 @@ const MANIFEST_TABLES: &[&str] = &[
     "game_chat_channel_member",
     "game_chat_channel_ban",
     "game_chat_channel_notice_event",
+    "game_meeting_stone",
+    "game_meeting_stone_seeker",
     "game_loot_roll",
     "game_loot_roll_vote",
     "game_guid_allocator",

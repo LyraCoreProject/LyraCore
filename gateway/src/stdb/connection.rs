@@ -1210,6 +1210,11 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         "SELECT * FROM game_chat_channel_member",
         "SELECT * FROM game_chat_channel_ban",
         "SELECT * FROM game_chat_channel_notice_event",
+        // The Meeting Stone Queue. Stones are static and read on the Home Shard to name a stone's
+        // dungeon area; Seekers are written on Realm-core and answer `CMSG_MEETINGSTONE_INFO`.
+        // Both are small, and an unsharded Realm reads both on its one connection.
+        "SELECT * FROM game_meeting_stone",
+        "SELECT * FROM game_meeting_stone_seeker",
         // Server-wide tunables. The gateway reads ONE column: `hosts_instances`, at
         // startup, to answer "when this realm creates a dungeon instance, will anything actually
         // spawn its population" (`ShardMap::check_instance_hosting`). Before this subscription the

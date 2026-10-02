@@ -47,6 +47,8 @@ pub struct GameObjectTemplateView {
     pub name: String,
     pub data0: u32,
     pub data1: u32,
+    /// A Meeting Stone's dungeon area. 0 for every other type.
+    pub data2: u32,
 }
 
 /// Build the CREATE_OBJECT for a gameobject: a GAMEOBJECT-type object with a stationary position
@@ -146,7 +148,7 @@ pub fn build_gameobject_query_response(
                 name3: String::new(),
                 name4: String::new(),
                 name5: String::new(),
-                raw_data: [t.data0, t.data1, 0, 0, 0, 0],
+                raw_data: [t.data0, t.data1, t.data2, 0, 0, 0],
             }),
         },
     }
@@ -361,6 +363,7 @@ mod tests {
             name: "Reinforced Chest".to_string(),
             data0: 1,
             data1: 2,
+            data2: 0,
         };
         let found = build_gameobject_query_response(50100, Some(&t));
         assert_eq!(found.entry_id, 50100);
@@ -377,5 +380,24 @@ mod tests {
             "unknown entry sets the high 'not found' bit"
         );
         assert!(missing.found.is_none());
+    }
+
+    /// A Meeting Stone's tooltip reads its level range from `data0`/`data1` and its dungeon from
+    /// `data2` (cm:Entities/GameObject.h:266-272).
+    #[test]
+    fn a_meeting_stone_query_response_carries_its_level_range_and_area() {
+        let stone = GameObjectTemplateView {
+            type_id: lyracore_shared::constants::go_type::MEETINGSTONE,
+            display_id: 6973,
+            name: "Meeting Stone".to_string(),
+            data0: 15,
+            data1: 20,
+            data2: 1581,
+        };
+        let found = build_gameobject_query_response(179584, Some(&stone))
+            .found
+            .expect("a known template must reply found");
+        assert_eq!(found.info_type, 23);
+        assert_eq!(found.raw_data, [15, 20, 1581, 0, 0, 0]);
     }
 }

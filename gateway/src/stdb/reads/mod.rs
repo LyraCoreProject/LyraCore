@@ -12,6 +12,7 @@ mod chat;
 mod guild;
 mod items;
 mod mail;
+mod meeting_stone;
 mod npc_vendor;
 mod party;
 mod pet;

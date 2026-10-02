@@ -2197,6 +2197,7 @@ pub(crate) fn group_event_outbound<St: crate::world::WorldStore + ?Sized>(
 ) -> Vec<Outbound> {
     use lyracore_shared::group::event_kind as group_kind;
     use lyracore_shared::loot_roll::event_kind as roll_kind;
+    use lyracore_shared::meeting_stone::event_kind as stone_kind;
     use lyracore_shared::quest::share_event_kind as quest_share_kind;
     let msg = match row.kind {
         // Sent even when no shard can name the inviter (falls back to an empty name, like
@@ -2441,6 +2442,23 @@ pub(crate) fn group_event_outbound<St: crate::world::WorldStore + ?Sized>(
                 )))
             },
         ),
+        stone_kind::QUEUE => {
+            let packet = lyracore_shared::meeting_stone::decode_queue(&row.payload)
+                .and_then(|(area_id, status)| codec::build_meetingstone_setqueue(area_id, status));
+            if packet.is_none() {
+                log::warn!(
+                    "meeting stone QUEUE relay: unencodable payload {:?} (event {})",
+                    row.payload,
+                    row.id
+                );
+            }
+            packet.map(ServerOpcodeMessage::SMSG_MEETINGSTONE_SETQUEUE)
+        }
+        stone_kind::MEMBER_ADDED => Some(ServerOpcodeMessage::SMSG_MEETINGSTONE_MEMBER_ADDED(
+            codec::build_meetingstone_member_added(row.other_guid),
+        )),
+        stone_kind::IN_PROGRESS => Some(ServerOpcodeMessage::SMSG_MEETINGSTONE_IN_PROGRESS),
+        stone_kind::COMPLETE => Some(ServerOpcodeMessage::SMSG_MEETINGSTONE_COMPLETE),
         other => {
             log::warn!("group event relay: unknown kind {other} (id {})", row.id);
             None
@@ -4746,6 +4764,7 @@ mod tests {
             name: "Duel Arbiter".into(),
             data0: 0,
             data1: 0,
+            data2: 0,
         };
         let row = duel_event(0, 0);
         let out = duel_event_outbound(&row, Some(&template));

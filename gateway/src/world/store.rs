@@ -1,7 +1,8 @@
 //! `WorldStore`: the broad storage/coordination seam used by the world session. Deep protocol
 //! families may add focused supertraits such as [`AuctionActionStore`], [`ChannelActionStore`],
 //! [`ChatActionStore`],
-//! [`ItemActionStore`], [`MeleeActionStore`], [`QuestActionStore`], [`TaxiActionStore`] and
+//! [`ItemActionStore`], [`MeetingStoneActionStore`], [`MeleeActionStore`], [`QuestActionStore`],
+//! [`TaxiActionStore`] and
 //! [`VendorActionStore`] so their wire mapping and failure policy can be tested without
 //! implementing this entire interface — a migrated family's operations live only on its own trait,
 //! never here. Kept as one broad trait for the remaining
@@ -10,8 +11,8 @@
 
 use super::handlers::{
     AuctionActionStore, CastStore, ChannelActionStore, ChatActionStore, DuelActionStore,
-    GuildActionStore, ItemActionStore, LootWindowStore, MeleeActionStore, MemberStatsStore,
-    QuestActionStore, TaxiActionStore, VendorActionStore, WeatherStore,
+    GuildActionStore, ItemActionStore, LootWindowStore, MeetingStoneActionStore, MeleeActionStore,
+    MemberStatsStore, QuestActionStore, TaxiActionStore, VendorActionStore, WeatherStore,
 };
 use super::*;
 
@@ -31,6 +32,7 @@ pub trait WorldStore:
     + GuildActionStore
     + ItemActionStore
     + LootWindowStore
+    + MeetingStoneActionStore
     + MeleeActionStore
     + MemberStatsStore
     + QuestActionStore

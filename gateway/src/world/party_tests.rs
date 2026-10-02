@@ -1108,7 +1108,7 @@ fn deleted_character_leave_returns_with_the_committed_roster_visible() {
 #[test]
 fn a_world_session_runs_its_realm_party_op_on_the_visibility_pipe() {
     let run = crate::test_scan::code_of(include_str!("party.rs"), "pub(crate) fn run<");
-    assert!(run.contains("run_on_authority_visible(realm.as_ref(), self_guid, op)"));
+    assert!(run.contains("run_on_authority_visible(realm.as_ref(), self_guid, op, acceptor)"));
     let visible =
         crate::test_scan::code_of(include_str!("party.rs"), "fn run_on_authority_visible<");
     assert!(visible.contains("authority.realm_group_op_visible("));
@@ -1473,7 +1473,7 @@ fn a_players_invite_to_a_session_less_bot_is_answered_by_the_bot_itself() {
         party_state.ops.clone(),
         vec![
             (realm_op::INVITE, GINGER, BOT, 0, 0, 0),
-            (realm_op::ACCEPT, BOT, 0, 0, 0, 0)
+            (realm_op::ACCEPT, BOT, 0, 1, 1, 0)
         ],
         "the accept must run on realm-core with the BOT as the actor — never the inviter, and never 0"
     );
@@ -1654,7 +1654,7 @@ fn a_bot_that_cannot_join_declines_out_loud_instead_of_leaving_the_dialog_hangin
         state.ops.clone(),
         vec![
             (realm_op::INVITE, GINGER, BOT, 0, 0, 0),
-            (realm_op::ACCEPT, BOT, 0, 0, 0, 0),
+            (realm_op::ACCEPT, BOT, 0, 1, 1, 0),
             // …and the decline is the bot's own too, not the inviter's.
             (realm_op::DECLINE, BOT, 0, 0, 0, 0),
         ],
@@ -1724,8 +1724,8 @@ fn every_party_op_reaches_realm_core_in_its_declared_argument_slots() {
         vec![
             // INVITE: the target rides `target_guid`, nothing else is used.
             (realm_op::INVITE, GINGER, VIM, 0, 0, 0),
-            // ACCEPT: the actor alone.
-            (realm_op::ACCEPT, VIM, 0, 0, 0, 0),
+            // ACCEPT: the acceptor's class in arg_a and race in arg_b, the fixture's Human Warrior.
+            (realm_op::ACCEPT, VIM, 0, 1, 1, 0),
             // LOOT_METHOD: setting in arg_a, MASTER in target_guid, threshold in arg_b —
             // CMSG_LOOT_METHOD's own field order.
             (realm_op::LOOT_METHOD, GINGER, VIM, 2, 4, 0),
@@ -1901,7 +1901,7 @@ fn a_real_session_syncs_its_party_at_login_and_routes_an_invite_to_realm_core() 
             // World entry asks for the Party's Target Icons after the list.
             (realm_op::TARGET_ICON, GINGER, 0, 0xFF, 0, 0),
             (realm_op::INVITE, GINGER, VIM, 0, 0, 0),
-            (realm_op::ACCEPT, GINGER, 0, 0, 0, 0),
+            (realm_op::ACCEPT, GINGER, 0, 1, 1, 0),
             (realm_op::DECLINE, GINGER, 0, 0, 0, 0),
             // CMSG_LOOT_METHOD's own field order: setting in arg_a, MASTER in target_guid,
             // threshold in arg_b.
@@ -1977,7 +1977,7 @@ fn a_bot_invite_forms_a_party_on_realm_core_across_a_shard_boundary() {
         party_state.ops.clone(),
         vec![
             (realm_op::INVITE, BOT, FAR_BOT, 0, 0, 0),
-            (realm_op::ACCEPT, FAR_BOT, 0, 0, 0, 0)
+            (realm_op::ACCEPT, FAR_BOT, 0, 1, 1, 0)
         ],
         "both halves must run on realm-core, attributed to the right actor each time — the bot as \
          itself for both the invite and (through the session-less answer) the accept"
@@ -2094,7 +2094,7 @@ fn the_intent_op_byte_picks_the_party_op_that_runs() {
         party_state.ops.clone(),
         vec![
             (realm_op::INVITE, BOT, FAR_BOT, 0, 0, 0),
-            (realm_op::ACCEPT, FAR_BOT, 0, 0, 0, 0),
+            (realm_op::ACCEPT, FAR_BOT, 0, 1, 1, 0),
             (realm_op::LEAVE, BOT, 0, 0, 0, 0),
         ],
         "the invite runs INVITE (plus the session-less answer) and the leave runs LEAVE, each \
@@ -4199,6 +4199,141 @@ fn the_relay_renders_each_group_broadcast_kind() {
         let sent: Vec<_> = packets.iter().map(wire).collect();
         assert_eq!(sent, [expected], "kind {kind} payload {payload:?}");
     }
+}
+
+/// **Each Meeting Stone kind renders its vanilla packet**: SETQUEUE is `u32 area, u8 status`
+/// (cm:LFG/LFGHandler.cpp:146-152), MEMBER_ADDED the added guid, and COMPLETE and IN_PROGRESS are
+/// empty (cm:LFG/LFGMgr.cpp:288-309).
+#[test]
+fn the_relay_renders_each_meeting_stone_kind() {
+    use lyracore_shared::meeting_stone::event_kind;
+    let (realm, _world, _instances, _calls) = party_topology();
+    let cases: [(u8, u64, &str, Wire); 4] = [
+        (
+            event_kind::QUEUE,
+            0,
+            "1581,1",
+            (0x0295, vec![0x2D, 0x06, 0, 0, 1]),
+        ),
+        (
+            event_kind::MEMBER_ADDED,
+            VIM,
+            "",
+            (0x0299, VIM.to_le_bytes().to_vec()),
+        ),
+        (event_kind::IN_PROGRESS, 0, "", (0x0298, Vec::new())),
+        (event_kind::COMPLETE, 0, "", (0x0297, Vec::new())),
+    ];
+    for (kind, other_guid, payload, expected) in cases {
+        let row = group_event(kind, other_guid, payload);
+
+        let packets =
+            crate::stdb::subscriptions::group_event_outbound(realm.as_ref(), GINGER, &row);
+
+        let sent: Vec<_> = packets.iter().map(wire).collect();
+        assert_eq!(sent, [expected], "kind {kind} payload {payload:?}");
+    }
+}
+
+/// A QUEUE payload the client could not read, or an area it has no id for, reaches no client.
+#[test]
+fn the_relay_drops_a_meeting_stone_queue_it_cannot_encode() {
+    use lyracore_shared::meeting_stone::event_kind;
+    let (realm, _world, _instances, _calls) = party_topology();
+    for payload in ["1581", "1581,6", "x,1", "4294967295,1"] {
+        let row = group_event(event_kind::QUEUE, 0, payload);
+        assert!(
+            crate::stdb::subscriptions::group_event_outbound(realm.as_ref(), GINGER, &row)
+                .is_empty(),
+            "payload {payload:?}"
+        );
+    }
+}
+
+/// A Dwarf Priest stands on `instances`, so the acceptor's facts differ from the party fixture's
+/// Human Warrior and cross a shard when the asking session is on `world`.
+fn dwarf_priest_topology() -> (
+    std::sync::Arc<InMemoryStore>,
+    std::sync::Arc<InMemoryStore>,
+    std::sync::Arc<InMemoryStore>,
+) {
+    let dwarf_priest = |guid: u64, name: &str| codec::CharacterView {
+        race: 3,
+        class: 5,
+        ..character(guid, name)
+    };
+    let realm = std::sync::Arc::new(InMemoryStore {
+        shard: "lyracore-realm".into(),
+        is_realm: true,
+        ..Default::default()
+    });
+    let world = std::sync::Arc::new(InMemoryStore {
+        shard: "world".into(),
+        realm: Some(realm.clone()),
+        characters: vec![character(GINGER, "Ginger")],
+        live_guids: vec![GINGER],
+        entity_partitions: std::sync::Mutex::new(vec![(GINGER, 0, 0)]),
+        ..Default::default()
+    });
+    let instances = std::sync::Arc::new(InMemoryStore {
+        shard: "instances".into(),
+        realm: Some(realm.clone()),
+        characters: vec![dwarf_priest(VIM, "Vim"), dwarf_priest(FAR_BOT, "Farbotty")],
+        live_guids: vec![VIM, FAR_BOT],
+        entity_partitions: std::sync::Mutex::new(vec![(VIM, 0, 0), (FAR_BOT, 0, 0)]),
+        offline_guids: vec![FAR_BOT],
+        ..Default::default()
+    });
+    for shard in [&world, &instances] {
+        *shard.peers.lock().unwrap() = vec![world.clone(), instances.clone()];
+    }
+    (realm, world, instances)
+}
+
+fn accepts(realm: &InMemoryStore) -> Vec<(u8, u64, u64, u8, u8, u64)> {
+    realm
+        .party
+        .lock()
+        .unwrap()
+        .ops
+        .iter()
+        .copied()
+        .filter(|op| op.0 == realm_op::ACCEPT)
+        .collect()
+}
+
+/// A client's Realm-core ACCEPT conveys the acceptor's class in `arg_a` and race in `arg_b`, so a
+/// queued party can give the joiner a Seeker row.
+#[test]
+fn a_client_accept_carries_the_acceptors_class_and_race() {
+    let (realm, world, instances) = dwarf_priest_topology();
+    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(VIM)).unwrap();
+
+    party::run(instances.as_ref(), 8, VIM, party::Op::Accept).unwrap();
+
+    assert_eq!(accepts(&realm), [(realm_op::ACCEPT, VIM, 0, 5, 3, 0)]);
+}
+
+/// A playerbot's automatic accept reads its facts from the Shard that holds it, here not the
+/// inviter's.
+#[test]
+fn a_playerbot_accept_carries_its_class_and_race_from_its_own_shard() {
+    let (realm, world, _instances) = dwarf_priest_topology();
+
+    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(FAR_BOT)).unwrap();
+
+    assert_eq!(accepts(&realm), [(realm_op::ACCEPT, FAR_BOT, 0, 5, 3, 0)]);
+}
+
+/// An acceptor no World Shard names conveys 0s, and the accept still runs.
+#[test]
+fn an_accept_nobody_can_name_conveys_zero_class_and_race() {
+    let (realm, world, _instances, _calls) = party_topology();
+    realm.party.lock().unwrap().invites.push((99, GINGER));
+
+    party::run(world.as_ref(), 9, 99, party::Op::Accept).unwrap();
+
+    assert_eq!(accepts(&realm), [(realm_op::ACCEPT, 99, 0, 0, 0, 0)]);
 }
 
 /// A payload that does not decode reaches no client.

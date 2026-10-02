@@ -399,11 +399,50 @@ impl GroupBroadcastCooldowns {
 /// `realm_group_op`'s argument slots after the actor: `(op, target_guid, arg_a, arg_b, arg_c)`.
 type RealmOpArgs = (u8, u64, u8, u8, u64);
 
+/// The class and race of a Character accepting an invite. Realm-core holds no Character rows, so an
+/// ACCEPT conveys them for the Seeker row a queued party gains. 0 when no World Shard names the
+/// Character.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct AcceptorFacts {
+    class: u8,
+    race: u8,
+}
+
+impl AcceptorFacts {
+    /// What `realm_group_op` receives for every op but ACCEPT.
+    const NONE: Self = Self { class: 0, race: 0 };
+
+    /// The facts an ACCEPT conveys, read realm-wide. A failed read conveys 0s rather than losing
+    /// the accept: the Module treats an unknown class as a seat with no role.
+    fn of<St: WorldStore + ?Sized>(store: &St, guid: u64) -> Self {
+        match presence::character_anywhere(store, guid) {
+            Ok(Some(character)) => Self {
+                class: character.class,
+                race: character.race,
+            },
+            Ok(None) => Self::NONE,
+            Err(error) => {
+                log::warn!("party: class and race of acceptor {guid} unread: {error:#}");
+                Self::NONE
+            }
+        }
+    }
+
+    /// [`Self::of`] for an ACCEPT, [`Self::NONE`] for any other op.
+    fn for_op<St: WorldStore + ?Sized>(store: &St, guid: u64, op: Op) -> Self {
+        match op {
+            Op::Accept => Self::of(store, guid),
+            _ => Self::NONE,
+        }
+    }
+}
+
 impl Op {
-    fn realm_args(self) -> RealmOpArgs {
+    /// The argument slots for this op. Only ACCEPT reads `acceptor`.
+    fn realm_args(self, acceptor: AcceptorFacts) -> RealmOpArgs {
         match self {
             Op::Invite(target) => (realm_op::INVITE, target, 0, 0, 0),
-            Op::Accept => (realm_op::ACCEPT, 0, 0, 0, 0),
+            Op::Accept => (realm_op::ACCEPT, 0, acceptor.class, acceptor.race, 0),
             Op::Decline => (realm_op::DECLINE, 0, 0, 0, 0),
             Op::Leave => (realm_op::LEAVE, 0, 0, 0, 0),
             Op::Uninvite(target) => (realm_op::UNINVITE, target, 0, 0, 0),
@@ -469,26 +508,28 @@ impl Op {
 /// Run `op` as `self_guid` through `realm_group_op` on `authority`, the database that holds the
 /// party: Realm-core when sharded, the home shard otherwise. It returns before the Coordinator
 /// cache holds the commit, so it is only for an op that pushes no Group mirror after it: a Group
-/// Broadcast, a Target Icon request, a declined invite, or an op on a single database.
+/// Broadcast, a Target Icon request, a declined invite, or an op on a single database. An ACCEPT
+/// changes a roster, so it never comes here.
 fn run_on_authority<A: WorldStore + ?Sized>(
     authority: &A,
     self_guid: u64,
     op: Op,
 ) -> Result<PartyOutcome> {
-    let (code, target, arg_a, arg_b, arg_c) = op.realm_args();
+    let (code, target, arg_a, arg_b, arg_c) = op.realm_args(AcceptorFacts::NONE);
     authority.realm_group_op(code, self_guid, target, arg_a, arg_b, arg_c)
 }
 
 /// [`run_on_authority`] that returns only after the Coordinator cache holds the commit, so the
 /// mirror push after it reads the op's own roster. Every op that changes a roster uses it, for a
 /// World Session and for a session-less Character alike. It waits on the Coordinator pump, so the
-/// caller must run on its own thread.
+/// caller must run on its own thread. `acceptor` is read only for an ACCEPT.
 fn run_on_authority_visible<A: WorldStore + ?Sized>(
     authority: &A,
     self_guid: u64,
     op: Op,
+    acceptor: AcceptorFacts,
 ) -> Result<PartyOutcome> {
-    let (code, target, arg_a, arg_b, arg_c) = op.realm_args();
+    let (code, target, arg_a, arg_b, arg_c) = op.realm_args(acceptor);
     authority.realm_group_op_visible(code, self_guid, target, arg_a, arg_b, arg_c)
 }
 
@@ -880,7 +921,8 @@ fn answer_for_session_less<St: WorldStore + ?Sized>(store: &St, realm: &dyn Worl
             return;
         }
     }
-    let joined = match run_on_authority_visible(realm, guid, Op::Accept) {
+    let acceptor = AcceptorFacts::of(store, guid);
+    let joined = match run_on_authority_visible(realm, guid, Op::Accept, acceptor) {
         Ok(PartyOutcome::Ran) => {
             log::info!("party: session-less {guid} accepted its group invite");
             return;
@@ -987,7 +1029,9 @@ pub(crate) fn run<St: WorldStore + ?Sized>(
     if matches!(op, Op::Leave | Op::Uninvite(_)) {
         crate::world::loot::flush_pending_promotions(store, realm.as_ref());
     }
-    if let PartyOutcome::Refused(refusal) = run_on_authority_visible(realm.as_ref(), self_guid, op)?
+    let acceptor = AcceptorFacts::for_op(store, self_guid, op);
+    if let PartyOutcome::Refused(refusal) =
+        run_on_authority_visible(realm.as_ref(), self_guid, op, acceptor)?
     {
         return Ok(PartyOutcome::Refused(refusal));
     }
@@ -1165,9 +1209,12 @@ pub(crate) fn run_bot_invite<St: WorldStore>(
         return Ok(refusal.into());
     }
     let before = realm.group_roster(inviter_guid)?;
-    if let PartyOutcome::Refused(refusal) =
-        run_on_authority_visible(realm, inviter_guid, Op::Invite(target_guid))?
-    {
+    if let PartyOutcome::Refused(refusal) = run_on_authority_visible(
+        realm,
+        inviter_guid,
+        Op::Invite(target_guid),
+        AcceptorFacts::NONE,
+    )? {
         return Ok(PartyOutcome::Refused(refusal));
     }
     answer_for_session_less(store, realm, target_guid);
@@ -1199,7 +1246,7 @@ pub(crate) fn run_bot_leave<St: WorldStore>(store: &St, leaver_guid: u64) -> Res
         None => store,
     };
     let leave = run_server_leave(store, realm, leaver_guid, 1, |realm, character_guid| {
-        run_on_authority_visible(realm, character_guid, Op::Leave)
+        run_on_authority_visible(realm, character_guid, Op::Leave, AcceptorFacts::NONE)
     })?;
     if leave.outcome == PartyOutcome::Ran {
         sync_membership_mirrors(store, realm, leaver_guid, leave.previous_roster);
