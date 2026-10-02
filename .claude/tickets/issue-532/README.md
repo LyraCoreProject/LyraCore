@@ -298,10 +298,11 @@ Account Claim ends      → the claim's Character loses its solo Seeker row, no 
     `raid_convert_on`.
 23. Passing the lead keeps the party queued with no event. Both cores do this, and the party row
     is keyed by `group_id`, so nothing changes.
-24. The Seeker and party tables go in `tripwires.rs`'s `NOT_CHARACTER_OWNED` list, the Chat Channel
+24. The Seeker table goes in `tripwires.rs`'s `NOT_CHARACTER_OWNED` list, the Chat Channel
     precedent. A solo Seeker ends with its claim. A party Seeker ends with its membership, and a
     deleted Character leaves its party through `remove_member` on both planes, where T3's hook
-    drops the row.
+    drops the row. The party table has no Character guid column, so the census test rejects an
+    entry for it as stale.
 25. Packages cannot author meeting stones in this work. `game_meeting_stone` does not join the
     Package Delta `gameobjects` Import Family. A Package type-23 template has no stone row and
     is refused as `NotAMeetingStone`. No Package ships a stone today; adding the table to the

@@ -78,16 +78,18 @@ as a `SpacetimeType`. All three tables private. No schedule table in this ticket
     deletes the party and its Seekers, and every member gets `QUEUE(0, LEAVE_QUEUE)`. Anyone else in
     a party gets `QUEUE(0, NONE)`. Nobody queued and no party: `Ok`, no event.
   - Membership reads go through `group::checked_group_membership`, `group_kind_of` and
-    `members_of`. Events go through `group::push_event`. Widen `checked_group_membership` and
-    `gameobject::usable_go` to `pub(crate)`; change nothing else in `group.rs` or `gameobject.rs`.
+    `members_of`. Events go through `group::push_event`. Widen `checked_group_membership`, its
+    error type `GroupOpError`, and `gameobject::usable_go` to `pub(crate)`; change nothing else in
+    `group.rs` or `gameobject.rs`.
 - `meeting_stone::claim_ended(ctx, character_guid)` deletes that Character's solo Seeker row, no
   event. A party Seeker row stays. Call it at the three points in `account_ownership.rs` that call
   `channel::leave_all` (`claim_account` replacing a dead generation, `release_account_claim`,
   `reap_account_claims`). If the two calls then always travel together, fold them into one
   `account_ownership` helper so the next claim-scoped feature has one place to hook.
-- `tripwires.rs`: add `game_meeting_stone_seeker` and `game_meeting_stone_party` to
-  `NOT_CHARACTER_OWNED` with the reason "Realm-core Meeting Stone Queue; a solo Seeker ends with
-  its Account Claim, a party Seeker with its party membership". No `character_owned!` markers.
+- `tripwires.rs`: add `game_meeting_stone_seeker` to `NOT_CHARACTER_OWNED` with the reason
+  "Realm-core Meeting Stone Queue; a solo Seeker ends with its Account Claim, a party Seeker with
+  its party membership". `game_meeting_stone_party` has no Character guid column, so it needs no
+  entry, and the census test fails on one. No `character_owned!` markers.
 - `debug/meeting_stone.rs`, behind `debug_reducers`, ids `509_6000`-`509_6099` (grep first): stage
   a stone template, stone row and spawned GO; stage Characters with chosen race, class and level
   beside it, each with a live Account Claim; stage a Party or Raid led by one of them; backdate a
