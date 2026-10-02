@@ -180,6 +180,10 @@ pub(crate) mod character_owned_tripwire {
             ],
             "Realm-core Chat Channel state; membership ends with the Account Claim that admitted it",
         ),
+        (
+            &["game_meeting_stone_seeker"],
+            "Realm-core Meeting Stone Queue; a solo Seeker ends with its Account Claim, a party Seeker with its party membership",
+        ),
         (&["game_gateway_session"], "live Session routing state"),
         (
             &["game_entity_motion_pending"],

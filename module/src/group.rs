@@ -387,7 +387,7 @@ pub(crate) fn refused(refusal: GroupRefusal, detail: &str) -> String {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum GroupOpError {
+pub(crate) enum GroupOpError {
     Refused(GroupRefusal),
     Invariant(String),
 }
@@ -1090,7 +1090,7 @@ pub fn party_facts(
 
 /// Resolve a membership and its required parent for mutation cores. `Ok(None)` means the
 /// Character has no membership; a membership without its Group is a durable invariant failure.
-fn checked_group_membership(
+pub(crate) fn checked_group_membership(
     ctx: &ReducerContext,
     character_guid: u64,
 ) -> Result<Option<(GroupMember, Group)>, GroupOpError> {

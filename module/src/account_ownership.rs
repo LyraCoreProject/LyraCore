@@ -183,10 +183,10 @@ pub fn claim_account(
             .ok_or("Account generation exhausted")?,
         None => 1,
     };
-    // The prior generation is dead: released, or expired before the reaper closed it. Its
-    // Character leaves every Chat Channel before the new generation exists. A no-op after release.
+    // The prior generation is dead: released, or expired before the reaper closed it. What it
+    // admitted ends before the new generation exists. A no-op after release.
     if let Some(row) = &prior {
-        crate::channel::leave_all(ctx, row.character_guid);
+        claim_ended(ctx, row.character_guid);
     }
     let row = AccountClaim {
         account_id,
@@ -233,10 +233,18 @@ pub fn release_account_claim(ctx: &ReducerContext, token: WorldSessionToken) -> 
             let character_guid = row.character_guid;
             row.closed = true;
             ctx.db.game_account_claim().account_id().update(row);
-            crate::channel::leave_all(ctx, character_guid);
+            claim_ended(ctx, character_guid);
         }
     }
     Ok(())
+}
+
+/// End what an Account Claim admitted for its Character: every Chat Channel Membership and a solo
+/// Seeker. Each place that releases, replaces or reaps a claim calls this, so the next claim-scoped
+/// state hooks here once.
+fn claim_ended(ctx: &ReducerContext, character_guid: u64) {
+    crate::channel::leave_all(ctx, character_guid);
+    crate::meeting_stone::claim_ended(ctx, character_guid);
 }
 
 /// The Gateway must obtain this generation from Realm-core and install it on every configured
@@ -543,7 +551,8 @@ pub(crate) fn require_actor_for(
 }
 
 /// Close open Account Claims whose deadline has passed, at most [`REAP_LIMIT`] per call. Called
-/// from the Gateway lease schedule, so a crashed Gateway's Characters leave their Chat Channels.
+/// from the Gateway lease schedule, so a crashed Gateway's Characters leave their Chat Channels
+/// and the Meeting Stone Queue.
 /// [`claim_account`] and [`require_actor`] already treat an expired claim as dead, so closing one
 /// changes no admission outcome.
 pub(crate) fn reap_account_claims(ctx: &ReducerContext) {
@@ -560,7 +569,7 @@ pub(crate) fn reap_account_claims(ctx: &ReducerContext) {
         let character_guid = row.character_guid;
         row.closed = true;
         ctx.db.game_account_claim().account_id().update(row);
-        crate::channel::leave_all(ctx, character_guid);
+        claim_ended(ctx, character_guid);
     }
 }
 

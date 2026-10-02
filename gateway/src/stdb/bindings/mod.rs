@@ -147,6 +147,8 @@ pub mod debug_assert_unreachable_goal_stops_at_wall_reducer;
 pub mod debug_audit_class_kits_reducer;
 pub mod debug_audit_quest_chains_reducer;
 pub mod debug_auto_bank_item_reducer;
+pub mod debug_backdate_meeting_stone_party_reducer;
+pub mod debug_backdate_meeting_stone_seeker_reducer;
 pub mod debug_backfill_cell_ids_reducer;
 pub mod debug_backfill_go_grid_reducer;
 pub mod debug_begin_cast_reducer;
@@ -279,6 +281,9 @@ pub mod debug_stage_loot_roll_fixture_reducer;
 pub mod debug_stage_mail_expiry_fixture_reducer;
 pub mod debug_stage_mail_legacy_fixture_reducer;
 pub mod debug_stage_mail_take_fixture_reducer;
+pub mod debug_stage_meeting_stone_character_reducer;
+pub mod debug_stage_meeting_stone_group_reducer;
+pub mod debug_stage_meeting_stone_reducer;
 pub mod debug_stage_ranged_lethal_damage_floor_fixture_reducer;
 pub mod debug_stage_reward_letter_fixture_reducer;
 pub mod debug_stress_relay_reducer;
@@ -546,6 +551,9 @@ pub mod game_mail_table;
 pub mod game_mail_template_table;
 pub mod game_mail_timer_table;
 pub mod game_map_region_table;
+pub mod game_meeting_stone_party_table;
+pub mod game_meeting_stone_seeker_table;
+pub mod game_meeting_stone_table;
 pub mod game_melee_attack_table;
 pub mod game_melee_schedule_table;
 pub mod game_motion_publish_schedule_table;
@@ -721,6 +729,7 @@ pub mod gw_ack_taxi_reply_reducer;
 pub mod gw_activate_taxi_reducer;
 pub mod gw_add_friend_reducer;
 pub mod gw_add_ignore_reducer;
+pub mod gw_admit_meeting_stone_reducer;
 pub mod gw_arm_taxi_flight_reducer;
 pub mod gw_attack_reducer;
 pub mod gw_auction_bid_local_reducer;
@@ -871,6 +880,9 @@ pub mod mail_timer_type;
 pub mod mail_type;
 pub mod map_region_type;
 pub mod mark_bot_transfer_arrival_ready_reducer;
+pub mod meeting_stone_party_type;
+pub mod meeting_stone_seeker_type;
+pub mod meeting_stone_type;
 pub mod melee_attack_type;
 pub mod melee_schedule_type;
 pub mod missing_text_template_no_effect_type;
@@ -975,6 +987,7 @@ pub mod realm_mail_take_item_fence_reducer;
 pub mod realm_mail_take_item_reducer;
 pub mod realm_mail_take_money_fence_reducer;
 pub mod realm_mail_take_money_reducer;
+pub mod realm_meeting_stone_op_reducer;
 pub mod realm_type;
 pub mod realm_whisper_reducer;
 pub mod reap_gateway_leases_reducer;
@@ -1051,6 +1064,7 @@ pub mod scale_all_threat_instruction_type;
 pub mod scale_selected_threat_instruction_type;
 pub mod school_lockout_type;
 pub mod script_type;
+pub mod seeker_facts_type;
 pub mod server_config_type;
 pub mod session_actor_type;
 pub mod session_reaper_schedule_type;
@@ -1294,6 +1308,8 @@ pub use debug_assert_unreachable_goal_stops_at_wall_reducer::debug_assert_unreac
 pub use debug_audit_class_kits_reducer::debug_audit_class_kits;
 pub use debug_audit_quest_chains_reducer::debug_audit_quest_chains;
 pub use debug_auto_bank_item_reducer::debug_auto_bank_item;
+pub use debug_backdate_meeting_stone_party_reducer::debug_backdate_meeting_stone_party;
+pub use debug_backdate_meeting_stone_seeker_reducer::debug_backdate_meeting_stone_seeker;
 pub use debug_backfill_cell_ids_reducer::debug_backfill_cell_ids;
 pub use debug_backfill_go_grid_reducer::debug_backfill_go_grid;
 pub use debug_begin_cast_reducer::debug_begin_cast;
@@ -1426,6 +1442,9 @@ pub use debug_stage_loot_roll_fixture_reducer::debug_stage_loot_roll_fixture;
 pub use debug_stage_mail_expiry_fixture_reducer::debug_stage_mail_expiry_fixture;
 pub use debug_stage_mail_legacy_fixture_reducer::debug_stage_mail_legacy_fixture;
 pub use debug_stage_mail_take_fixture_reducer::debug_stage_mail_take_fixture;
+pub use debug_stage_meeting_stone_character_reducer::debug_stage_meeting_stone_character;
+pub use debug_stage_meeting_stone_group_reducer::debug_stage_meeting_stone_group;
+pub use debug_stage_meeting_stone_reducer::debug_stage_meeting_stone;
 pub use debug_stage_ranged_lethal_damage_floor_fixture_reducer::debug_stage_ranged_lethal_damage_floor_fixture;
 pub use debug_stage_reward_letter_fixture_reducer::debug_stage_reward_letter_fixture;
 pub use debug_stress_relay_reducer::debug_stress_relay;
@@ -1693,6 +1712,9 @@ pub use game_mail_table::*;
 pub use game_mail_template_table::*;
 pub use game_mail_timer_table::*;
 pub use game_map_region_table::*;
+pub use game_meeting_stone_party_table::*;
+pub use game_meeting_stone_seeker_table::*;
+pub use game_meeting_stone_table::*;
 pub use game_melee_attack_table::*;
 pub use game_melee_schedule_table::*;
 pub use game_motion_publish_schedule_table::*;
@@ -1868,6 +1890,7 @@ pub use gw_ack_taxi_reply_reducer::gw_ack_taxi_reply;
 pub use gw_activate_taxi_reducer::gw_activate_taxi;
 pub use gw_add_friend_reducer::gw_add_friend;
 pub use gw_add_ignore_reducer::gw_add_ignore;
+pub use gw_admit_meeting_stone_reducer::gw_admit_meeting_stone;
 pub use gw_arm_taxi_flight_reducer::gw_arm_taxi_flight;
 pub use gw_attack_reducer::gw_attack;
 pub use gw_auction_bid_local_reducer::gw_auction_bid_local;
@@ -2018,6 +2041,9 @@ pub use mail_timer_type::MailTimer;
 pub use mail_type::Mail;
 pub use map_region_type::MapRegion;
 pub use mark_bot_transfer_arrival_ready_reducer::mark_bot_transfer_arrival_ready;
+pub use meeting_stone_party_type::MeetingStoneParty;
+pub use meeting_stone_seeker_type::MeetingStoneSeeker;
+pub use meeting_stone_type::MeetingStone;
 pub use melee_attack_type::MeleeAttack;
 pub use melee_schedule_type::MeleeSchedule;
 pub use missing_text_template_no_effect_type::MissingTextTemplateNoEffect;
@@ -2122,6 +2148,7 @@ pub use realm_mail_take_item_fence_reducer::realm_mail_take_item_fence;
 pub use realm_mail_take_item_reducer::realm_mail_take_item;
 pub use realm_mail_take_money_fence_reducer::realm_mail_take_money_fence;
 pub use realm_mail_take_money_reducer::realm_mail_take_money;
+pub use realm_meeting_stone_op_reducer::realm_meeting_stone_op;
 pub use realm_type::Realm;
 pub use realm_whisper_reducer::realm_whisper;
 pub use reap_gateway_leases_reducer::reap_gateway_leases;
@@ -2198,6 +2225,7 @@ pub use scale_all_threat_instruction_type::ScaleAllThreatInstruction;
 pub use scale_selected_threat_instruction_type::ScaleSelectedThreatInstruction;
 pub use school_lockout_type::SchoolLockout;
 pub use script_type::Script;
+pub use seeker_facts_type::SeekerFacts;
 pub use server_config_type::ServerConfig;
 pub use session_actor_type::SessionActor;
 pub use session_reaper_schedule_type::SessionReaperSchedule;
@@ -2490,6 +2518,14 @@ pub enum Reducer {
     DebugAutoBankItem {
         character_guid: u64,
         slot: u8,
+    },
+    DebugBackdateMeetingStoneParty {
+        group_id: u64,
+        secs: u32,
+    },
+    DebugBackdateMeetingStoneSeeker {
+        character_guid: u64,
+        secs: u32,
     },
     DebugBackfillCellIds,
     DebugBackfillGoGrid,
@@ -3039,6 +3075,33 @@ pub enum Reducer {
     DebugStageMailExpiryFixture,
     DebugStageMailLegacyFixture,
     DebugStageMailTakeFixture,
+    DebugStageMeetingStone {
+        entry: u32,
+        go_guid: u64,
+        min_level: u32,
+        max_level: u32,
+        area_id: u32,
+        map_id: u32,
+        x: f32,
+        y: f32,
+        z: f32,
+    },
+    DebugStageMeetingStoneCharacter {
+        guid: u64,
+        account_id: u64,
+        race: u8,
+        class: u8,
+        level: u8,
+        map_id: u32,
+        x: f32,
+        y: f32,
+        z: f32,
+    },
+    DebugStageMeetingStoneGroup {
+        leader_guid: u64,
+        member_guids: Vec<u64>,
+        raid: bool,
+    },
     DebugStageRangedLethalDamageFloorFixture {
         attacker_guid: u64,
         target_guid: u64,
@@ -3291,6 +3354,10 @@ pub enum Reducer {
     GwAddIgnore {
         request_actor: SessionActor,
         target_guid: u64,
+    },
+    GwAdmitMeetingStone {
+        request_actor: SessionActor,
+        go_guid: u64,
     },
     GwArmTaxiFlight {
         request_actor: SessionActor,
@@ -4090,6 +4157,12 @@ pub enum Reducer {
         mail_id: u64,
         expect_money: u32,
     },
+    RealmMeetingStoneOp {
+        op: u8,
+        request_actor: SessionActor,
+        area_id: u32,
+        seekers: Vec<SeekerFacts>,
+    },
     RealmWhisper {
         request_actor: SessionActor,
         request: WhisperRequest,
@@ -4311,6 +4384,10 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugAuditClassKits => "debug_audit_class_kits",
             Reducer::DebugAuditQuestChains => "debug_audit_quest_chains",
             Reducer::DebugAutoBankItem { .. } => "debug_auto_bank_item",
+            Reducer::DebugBackdateMeetingStoneParty { .. } => "debug_backdate_meeting_stone_party",
+            Reducer::DebugBackdateMeetingStoneSeeker { .. } => {
+                "debug_backdate_meeting_stone_seeker"
+            }
             Reducer::DebugBackfillCellIds => "debug_backfill_cell_ids",
             Reducer::DebugBackfillGoGrid => "debug_backfill_go_grid",
             Reducer::DebugBeginCast { .. } => "debug_begin_cast",
@@ -4468,6 +4545,11 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugStageMailExpiryFixture => "debug_stage_mail_expiry_fixture",
             Reducer::DebugStageMailLegacyFixture => "debug_stage_mail_legacy_fixture",
             Reducer::DebugStageMailTakeFixture => "debug_stage_mail_take_fixture",
+            Reducer::DebugStageMeetingStone { .. } => "debug_stage_meeting_stone",
+            Reducer::DebugStageMeetingStoneCharacter { .. } => {
+                "debug_stage_meeting_stone_character"
+            }
+            Reducer::DebugStageMeetingStoneGroup { .. } => "debug_stage_meeting_stone_group",
             Reducer::DebugStageRangedLethalDamageFloorFixture { .. } => {
                 "debug_stage_ranged_lethal_damage_floor_fixture"
             }
@@ -4548,6 +4630,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwActivateTaxi { .. } => "gw_activate_taxi",
             Reducer::GwAddFriend { .. } => "gw_add_friend",
             Reducer::GwAddIgnore { .. } => "gw_add_ignore",
+            Reducer::GwAdmitMeetingStone { .. } => "gw_admit_meeting_stone",
             Reducer::GwArmTaxiFlight { .. } => "gw_arm_taxi_flight",
             Reducer::GwAttack { .. } => "gw_attack",
             Reducer::GwAuctionBidLocal { .. } => "gw_auction_bid_local",
@@ -4715,6 +4798,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::RealmMailTakeItemFence { .. } => "realm_mail_take_item_fence",
             Reducer::RealmMailTakeMoney { .. } => "realm_mail_take_money",
             Reducer::RealmMailTakeMoneyFence { .. } => "realm_mail_take_money_fence",
+            Reducer::RealmMeetingStoneOp { .. } => "realm_meeting_stone_op",
             Reducer::RealmWhisper { .. } => "realm_whisper",
             Reducer::ReapGatewayLeases { .. } => "reap_gateway_leases",
             Reducer::ReapInstances { .. } => "reap_instances",
@@ -5092,6 +5176,20 @@ Reducer::DebugAutoBankItem{
 }             => __sats::bsatn::to_vec(&debug_auto_bank_item_reducer::DebugAutoBankItemArgs {
                 character_guid: character_guid.clone(),
                 slot: slot.clone(),
+}),
+            Reducer::DebugBackdateMeetingStoneParty{
+                group_id,
+                secs,
+}             => __sats::bsatn::to_vec(&debug_backdate_meeting_stone_party_reducer::DebugBackdateMeetingStonePartyArgs {
+                group_id: group_id.clone(),
+                secs: secs.clone(),
+}),
+            Reducer::DebugBackdateMeetingStoneSeeker{
+                character_guid,
+                secs,
+}             => __sats::bsatn::to_vec(&debug_backdate_meeting_stone_seeker_reducer::DebugBackdateMeetingStoneSeekerArgs {
+                character_guid: character_guid.clone(),
+                secs: secs.clone(),
 }),
             Reducer::DebugBackfillCellIds => __sats::bsatn::to_vec(&debug_backfill_cell_ids_reducer::DebugBackfillCellIdsArgs {
                 }),
@@ -6075,7 +6173,58 @@ Reducer::DebugStageMailLegacyFixture => __sats::bsatn::to_vec(&debug_stage_mail_
                 }),
 Reducer::DebugStageMailTakeFixture => __sats::bsatn::to_vec(&debug_stage_mail_take_fixture_reducer::DebugStageMailTakeFixtureArgs {
                 }),
-Reducer::DebugStageRangedLethalDamageFloorFixture{
+Reducer::DebugStageMeetingStone{
+                entry,
+                go_guid,
+                min_level,
+                max_level,
+                area_id,
+                map_id,
+                x,
+                y,
+                z,
+}             => __sats::bsatn::to_vec(&debug_stage_meeting_stone_reducer::DebugStageMeetingStoneArgs {
+                entry: entry.clone(),
+                go_guid: go_guid.clone(),
+                min_level: min_level.clone(),
+                max_level: max_level.clone(),
+                area_id: area_id.clone(),
+                map_id: map_id.clone(),
+                x: x.clone(),
+                y: y.clone(),
+                z: z.clone(),
+}),
+            Reducer::DebugStageMeetingStoneCharacter{
+                guid,
+                account_id,
+                race,
+                class,
+                level,
+                map_id,
+                x,
+                y,
+                z,
+}             => __sats::bsatn::to_vec(&debug_stage_meeting_stone_character_reducer::DebugStageMeetingStoneCharacterArgs {
+                guid: guid.clone(),
+                account_id: account_id.clone(),
+                race: race.clone(),
+                class: class.clone(),
+                level: level.clone(),
+                map_id: map_id.clone(),
+                x: x.clone(),
+                y: y.clone(),
+                z: z.clone(),
+}),
+            Reducer::DebugStageMeetingStoneGroup{
+                leader_guid,
+                member_guids,
+                raid,
+}             => __sats::bsatn::to_vec(&debug_stage_meeting_stone_group_reducer::DebugStageMeetingStoneGroupArgs {
+                leader_guid: leader_guid.clone(),
+                member_guids: member_guids.clone(),
+                raid: raid.clone(),
+}),
+            Reducer::DebugStageRangedLethalDamageFloorFixture{
                 attacker_guid,
                 target_guid,
                 damage,
@@ -6530,6 +6679,13 @@ Reducer::DebugVerifyRangedLethalDamageFloorFixture{
 }             => __sats::bsatn::to_vec(&gw_add_ignore_reducer::GwAddIgnoreArgs {
                 request_actor: request_actor.clone(),
                 target_guid: target_guid.clone(),
+}),
+            Reducer::GwAdmitMeetingStone{
+                request_actor,
+                go_guid,
+}             => __sats::bsatn::to_vec(&gw_admit_meeting_stone_reducer::GwAdmitMeetingStoneArgs {
+                request_actor: request_actor.clone(),
+                go_guid: go_guid.clone(),
 }),
             Reducer::GwArmTaxiFlight{
                 request_actor,
@@ -7972,6 +8128,17 @@ Reducer::PlayerbotsFixtureCommandApply{
                 mail_id: mail_id.clone(),
                 expect_money: expect_money.clone(),
 }),
+            Reducer::RealmMeetingStoneOp{
+                op,
+                request_actor,
+                area_id,
+                seekers,
+}             => __sats::bsatn::to_vec(&realm_meeting_stone_op_reducer::RealmMeetingStoneOpArgs {
+                op: op.clone(),
+                request_actor: request_actor.clone(),
+                area_id: area_id.clone(),
+                seekers: seekers.clone(),
+}),
             Reducer::RealmWhisper{
                 request_actor,
                 request,
@@ -8459,6 +8626,9 @@ pub struct DbUpdate {
     game_mail_template: __sdk::TableUpdate<MailTemplate>,
     game_mail_timer: __sdk::TableUpdate<MailTimer>,
     game_map_region: __sdk::TableUpdate<MapRegion>,
+    game_meeting_stone: __sdk::TableUpdate<MeetingStone>,
+    game_meeting_stone_party: __sdk::TableUpdate<MeetingStoneParty>,
+    game_meeting_stone_seeker: __sdk::TableUpdate<MeetingStoneSeeker>,
     game_melee_attack: __sdk::TableUpdate<MeleeAttack>,
     game_melee_schedule: __sdk::TableUpdate<MeleeSchedule>,
     game_motion_publish_schedule: __sdk::TableUpdate<MotionPublishSchedule>,
@@ -9160,6 +9330,15 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_map_region" => db_update
                     .game_map_region
                     .append(game_map_region_table::parse_table_update(table_update)?),
+                "game_meeting_stone" => db_update
+                    .game_meeting_stone
+                    .append(game_meeting_stone_table::parse_table_update(table_update)?),
+                "game_meeting_stone_party" => db_update.game_meeting_stone_party.append(
+                    game_meeting_stone_party_table::parse_table_update(table_update)?,
+                ),
+                "game_meeting_stone_seeker" => db_update.game_meeting_stone_seeker.append(
+                    game_meeting_stone_seeker_table::parse_table_update(table_update)?,
+                ),
                 "game_melee_attack" => db_update
                     .game_melee_attack
                     .append(game_melee_attack_table::parse_table_update(table_update)?),
@@ -10320,6 +10499,21 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.game_map_region = cache
             .apply_diff_to_table::<MapRegion>("game_map_region", &self.game_map_region)
             .with_updates_by_pk(|row| &row.key);
+        diff.game_meeting_stone = cache
+            .apply_diff_to_table::<MeetingStone>("game_meeting_stone", &self.game_meeting_stone)
+            .with_updates_by_pk(|row| &row.entry);
+        diff.game_meeting_stone_party = cache
+            .apply_diff_to_table::<MeetingStoneParty>(
+                "game_meeting_stone_party",
+                &self.game_meeting_stone_party,
+            )
+            .with_updates_by_pk(|row| &row.group_id);
+        diff.game_meeting_stone_seeker = cache
+            .apply_diff_to_table::<MeetingStoneSeeker>(
+                "game_meeting_stone_seeker",
+                &self.game_meeting_stone_seeker,
+            )
+            .with_updates_by_pk(|row| &row.character_guid);
         diff.game_melee_attack = cache
             .apply_diff_to_table::<MeleeAttack>("game_melee_attack", &self.game_melee_attack)
             .with_updates_by_pk(|row| &row.attacker_guid);
@@ -11305,6 +11499,15 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_map_region" => db_update
                     .game_map_region
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_meeting_stone" => db_update
+                    .game_meeting_stone
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_meeting_stone_party" => db_update
+                    .game_meeting_stone_party
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_meeting_stone_seeker" => db_update
+                    .game_meeting_stone_seeker
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_melee_attack" => db_update
                     .game_melee_attack
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -12161,6 +12364,15 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_map_region" => db_update
                     .game_map_region
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_meeting_stone" => db_update
+                    .game_meeting_stone
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_meeting_stone_party" => db_update
+                    .game_meeting_stone_party
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_meeting_stone_seeker" => db_update
+                    .game_meeting_stone_seeker
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_melee_attack" => db_update
                     .game_melee_attack
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -12668,6 +12880,9 @@ pub struct AppliedDiff<'r> {
     game_mail_template: __sdk::TableAppliedDiff<'r, MailTemplate>,
     game_mail_timer: __sdk::TableAppliedDiff<'r, MailTimer>,
     game_map_region: __sdk::TableAppliedDiff<'r, MapRegion>,
+    game_meeting_stone: __sdk::TableAppliedDiff<'r, MeetingStone>,
+    game_meeting_stone_party: __sdk::TableAppliedDiff<'r, MeetingStoneParty>,
+    game_meeting_stone_seeker: __sdk::TableAppliedDiff<'r, MeetingStoneSeeker>,
     game_melee_attack: __sdk::TableAppliedDiff<'r, MeleeAttack>,
     game_melee_schedule: __sdk::TableAppliedDiff<'r, MeleeSchedule>,
     game_motion_publish_schedule: __sdk::TableAppliedDiff<'r, MotionPublishSchedule>,
@@ -13624,6 +13839,21 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<MapRegion>(
             "game_map_region",
             &self.game_map_region,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<MeetingStone>(
+            "game_meeting_stone",
+            &self.game_meeting_stone,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<MeetingStoneParty>(
+            "game_meeting_stone_party",
+            &self.game_meeting_stone_party,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<MeetingStoneSeeker>(
+            "game_meeting_stone_seeker",
+            &self.game_meeting_stone_seeker,
             event,
         );
         callbacks.invoke_table_row_callbacks::<MeleeAttack>(
@@ -14963,6 +15193,9 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_mail_template_table::register_table(client_cache);
         game_mail_timer_table::register_table(client_cache);
         game_map_region_table::register_table(client_cache);
+        game_meeting_stone_table::register_table(client_cache);
+        game_meeting_stone_party_table::register_table(client_cache);
+        game_meeting_stone_seeker_table::register_table(client_cache);
         game_melee_attack_table::register_table(client_cache);
         game_melee_schedule_table::register_table(client_cache);
         game_motion_publish_schedule_table::register_table(client_cache);
@@ -15246,6 +15479,9 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_mail_template",
         "game_mail_timer",
         "game_map_region",
+        "game_meeting_stone",
+        "game_meeting_stone_party",
+        "game_meeting_stone_seeker",
         "game_melee_attack",
         "game_melee_schedule",
         "game_motion_publish_schedule",

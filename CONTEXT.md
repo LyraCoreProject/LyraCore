@@ -830,6 +830,22 @@ One Character's endorsement of a Petition. One per Realm Account; nine found the
 An NPC with the petitioner flag. One that is also a Tabard Designer sells Guild Charters.
 _Avoid_: guild registrar
 
+### Meeting stones
+
+**Meeting Stone**:
+A type-23 GameObject at a dungeon entrance. Using it puts the Character, or the Party it leads, in
+the Meeting Stone Queue for the stone's dungeon area, inside the stone's level range.
+_Avoid_: summoning stone, LFG tool
+
+**Meeting Stone Queue**:
+Realm-core's realm-wide list of Seekers and queued Parties, per dungeon area and team.
+_Avoid_: LFG queue, matchmaking queue
+
+**Seeker**:
+One Character in the Meeting Stone Queue, alone or as a member of a queued Party. It carries the
+class and team the Gateway supplied. A solo Seeker lasts as long as its Account Claim.
+_Avoid_: queued player, LFG player
+
 ### World clock and weather
 
 **Realm Clock**:
