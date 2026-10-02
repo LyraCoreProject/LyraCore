@@ -251,23 +251,8 @@ impl MotionSink for CtxWorld<'_> {
             .guid()
             .find(guid)
             .and_then(|s| {
-                let points: Vec<_> = s
-                    .path
-                    .as_ref()?
-                    .points
-                    .iter()
-                    .map(|p| (p.x, p.y, p.z))
-                    .collect();
-                let (_, next) = lyracore_shared::movement_path::sample(
-                    (s.sx, s.sy, s.sz),
-                    &points,
-                    super::spline_t(
-                        self.ctx.timestamp.to_micros_since_unix_epoch() as u64,
-                        s.start_micros,
-                        s.dur_ms,
-                    ),
-                );
-                points.get(next).map(|p| (p.1 - at.y).atan2(p.0 - at.x))
+                as_leg(s, false)
+                    .heading_on_path(at, self.ctx.timestamp.to_micros_since_unix_epoch() as u64)
             });
         let stored = self.ctx.db.game_world_entity().guid().find(guid);
         if let (Some(stored), Some(advanced)) =

@@ -1364,6 +1364,7 @@ mod lethality_tests {
         assert_in_order(
             &body,
             [
+                "crate::creatures::tick::stop_where_rendered(",
                 "crate::loot::tag::death_entitlement(",
                 "crate::creatures::begin_death_dispatch",
                 "disengage(ctx, target_guid)",
