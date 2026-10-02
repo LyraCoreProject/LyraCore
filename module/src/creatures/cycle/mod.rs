@@ -30,7 +30,7 @@ mod ctx;
 #[cfg(test)]
 mod harness;
 
-pub(crate) use ctx::{rendered_point, run};
+pub(crate) use ctx::{run, stop_on_stored_leg};
 
 /// A world point a behavior decision moves a creature to.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -82,6 +82,46 @@ impl LegInFlight {
         };
         (at, t >= 1.0)
     }
+
+    /// The heading from `at` toward the waypoint the mover walks to at `now_micros`, as a leg
+    /// advance turns it. `None` off a Route Path and once the path has landed.
+    fn heading_on_path(&self, at: Point, now_micros: u64) -> Option<f32> {
+        let (_, next) = lyracore_shared::movement_path::sample(
+            (self.start.x, self.start.y, self.start.z),
+            &self.waypoints,
+            spline_t(now_micros, self.started_micros, self.dur_ms),
+        );
+        self.waypoints
+            .get(next)
+            .map(|p| (p.1 - at.y).atan2(p.0 - at.x))
+    }
+}
+
+/// Where a stop between firings leaves a mover.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct Stop {
+    pub at: Point,
+    /// The heading along the Route Path segment the mover is on. `None` keeps its heading.
+    pub heading: Option<f32>,
+}
+
+/// Where a stop at `now_micros` leaves `leg`'s mover, by the rules a leg advance follows then. The
+/// mover stops on the point the client renders, facing along its Route Path. If the advance would
+/// halt the path instead (a blocked segment or changed navigation inputs), the stop takes the halt
+/// point, so it never lands past an obstruction. `None` for a non-finite point: the mover keeps
+/// its stored position.
+pub(crate) fn stop_on_leg(w: &impl MotionSink, leg: &LegInFlight, now_micros: u64) -> Option<Stop> {
+    let (at, _) = leg.rendered_at(now_micros);
+    if let Some(halted) = w.path_obstruction(leg, now_micros) {
+        return Some(Stop {
+            at: halted,
+            heading: None,
+        });
+    }
+    finite_point(at.x, at.y, at.z).then(|| Stop {
+        at,
+        heading: leg.heading_on_path(at, now_micros),
+    })
 }
 
 /// Everything ONE firing knows before any behavior runs: when it fires, how far a creature travels

@@ -296,9 +296,10 @@ movement. Call it before issuing a movement leg, including continuation between 
 current state and does not cancel casts or change position.
 
 `creatures::tick::stop_where_rendered(ctx, &mut mover)` stops the mover's current leg where the
-client renders it now. It moves the row to that point and sends a stop there. The caller writes the
-row. A mover's stored position can lag its leg, so a stop at the stored position moves the client
-back.
+client renders it now, facing along its Route Path. It moves the row to that point and sends a stop
+there. The caller writes the row. A mover's stored position can lag its leg, so a stop at the stored
+position moves the client back. A blocked Route Path segment or changed navigation inputs halt the
+stop where a leg advance would halt, so it never lands past an obstruction.
 
 `actor::area_trigger_route(ctx, trigger_id)` reads one exact imported AreaTrigger source volume and
 target map. It exposes the source center and containment rule for Candidate movement while keeping
