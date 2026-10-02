@@ -618,6 +618,7 @@ pub(crate) const GO_BUTTON: u8 = 1;
 const GO_QUESTGIVER: u8 = lyracore_shared::constants::go_type::QUESTGIVER; // shared const (041) — no drift
 const GO_CHEST: u8 = 3;
 const GO_GOOBER: u8 = 10;
+const GO_MEETINGSTONE: u8 = lyracore_shared::constants::go_type::MEETINGSTONE;
 const RELAY_TRAP_TEMPLATE_ENTRY: u64 = 180_391;
 /// Synthetic — must equal module `go_type::GATHER`. Vanilla's REAL type 25 is
 /// GAMEOBJECT_TYPE_FISHINGHOLE; see the TYPE-25 COLLISION GUARD in `classify_go_type`.
@@ -889,6 +890,8 @@ pub(crate) mod got {
     // raw dump columns.
     pub const DATA0: usize = 8;
     pub const DATA1: usize = 9;
+    /// MEETINGSTONE: the dungeon's AreaTable id (cm:Entities/GameObject.h:266-272).
+    pub const DATA2: usize = 10;
     pub const DATA3: usize = 11;
     pub const DATA5: usize = 13;
 }
@@ -4061,8 +4064,12 @@ fn build_dump_plan(
     );
 
     let go_spawns = collect_gameobject_spawns(dump, &scope);
-    let (go_template_rows, go_trap_rows, chest_loot_ids_used) =
-        gameobject_template_rows(&go_spawns);
+    let GameobjectTemplateRows {
+        templates: go_template_rows,
+        traps: go_trap_rows,
+        meeting_stones: go_meeting_stone_rows,
+        chest_loot_ids: chest_loot_ids_used,
+    } = gameobject_template_rows(&go_spawns);
     let trainer_rows = build_trainer_spell_rows(dump, &entries, profession_tier_values);
 
     // Quests: map quest_template + the giver-relation tables (creature AND gameobject) for quests given
@@ -4158,6 +4165,7 @@ fn build_dump_plan(
         mail_loot_rows: &mail_loot_rows,
         go_template_rows: &go_template_rows,
         go_trap_rows: &go_trap_rows,
+        go_meeting_stone_rows: &go_meeting_stone_rows,
         trainer_rows: &trainer_rows,
         creature_casts: &creature_casts,
         creature_rotation_rows: &creature_rotation_rows,
@@ -4263,6 +4271,8 @@ struct GoMeta {
     data1: u32,
     trap_spell_id: u32,
     trap_cooldown_secs: u32,
+    /// MEETINGSTONE only: the dump's `data2`, the dungeon area. 0 for every other type.
+    meeting_stone_area_id: u32,
     size: f32,
 }
 
@@ -4301,6 +4311,7 @@ struct MappedContent<'a> {
     mail_loot_rows: &'a [String],
     go_template_rows: &'a [String],
     go_trap_rows: &'a [String],
+    go_meeting_stone_rows: &'a [String],
     trainer_rows: &'a [String],
     creature_casts: &'a [String],
     creature_rotation_rows: &'a [String],
@@ -4947,6 +4958,11 @@ fn collect_gameobject_spawns(dump: &str, scope: &WorldImportScope) -> Gameobject
             } else {
                 0
             };
+            let meeting_stone_area_id = if raw_type == u32::from(GO_MEETINGSTONE) {
+                field(row, got::DATA2).parse().unwrap_or(0)
+            } else {
+                0
+            };
             // 0 on an unparseable/absent column — the gateway reads that as "no size stored" and
             // sends 1.0, never an invisible prop.
             let size: f32 = field(row, got::SIZE).parse().unwrap_or(0.0);
@@ -4960,6 +4976,7 @@ fn collect_gameobject_spawns(dump: &str, scope: &WorldImportScope) -> Gameobject
                     data1,
                     trap_spell_id,
                     trap_cooldown_secs,
+                    meeting_stone_area_id,
                     size,
                 },
             ))
@@ -5040,9 +5057,18 @@ fn collect_gameobject_spawns(dump: &str, scope: &WorldImportScope) -> Gameobject
     }
 }
 
-/// The `game_gameobject_template` + `game_gameobject_trap` rows for the spawned gameobjects, and the
-/// CHEST loot ids they reference.
-fn gameobject_template_rows(spawns: &GameobjectSpawns) -> (Vec<String>, Vec<String>, Vec<u32>) {
+/// The rows the `gameobjects` family loads for the spawned gameobjects, and the CHEST loot ids they
+/// reference.
+struct GameobjectTemplateRows {
+    templates: Vec<String>,
+    traps: Vec<String>,
+    /// One `game_meeting_stone` row per spawned MEETINGSTONE template. The template row keeps its
+    /// inert shape, so this is the only copy of the stone's level range and dungeon area.
+    meeting_stones: Vec<String>,
+    chest_loot_ids: Vec<u32>,
+}
+
+fn gameobject_template_rows(spawns: &GameobjectSpawns) -> GameobjectTemplateRows {
     let GameobjectSpawns {
         go_meta,
         dropped_type25,
@@ -5056,6 +5082,7 @@ fn gameobject_template_rows(spawns: &GameobjectSpawns) -> (Vec<String>, Vec<Stri
     // imported chest, not a curated allowlist — work-item 210's scoping now spans the whole live set).
     let mut go_template_rows: Vec<String> = Vec::new();
     let mut go_trap_rows: Vec<String> = Vec::new();
+    let mut go_meeting_stone_rows: Vec<String> = Vec::new();
     let mut chest_loot_ids_used: Vec<u32> = Vec::new();
     let mut go_type_histogram: std::collections::BTreeMap<u8, u32> =
         std::collections::BTreeMap::new();
@@ -5086,6 +5113,12 @@ fn gameobject_template_rows(spawns: &GameobjectSpawns) -> (Vec<String>, Vec<Stri
                 meta.trap_spell_id, meta.trap_cooldown_secs
             ));
         }
+        if meta.stored_type == GO_MEETINGSTONE {
+            go_meeting_stone_rows.push(format!(
+                "({entry},{},{},{})",
+                meta.data0, meta.data1, meta.meeting_stone_area_id
+            ));
+        }
         if let Some(loot_id) = loot_id_used {
             chest_loot_ids_used.push(loot_id);
         }
@@ -5111,6 +5144,13 @@ fn gameobject_template_rows(spawns: &GameobjectSpawns) -> (Vec<String>, Vec<Stri
             eprintln!("  type {type_id:>2} QUESTGIVER {count} (quest flow, not use-dispatched)");
             continue;
         }
+        if type_id == GO_MEETINGSTONE {
+            // The client sends CMSG_MEETINGSTONE_JOIN, never CMSG_GAMEOBJ_USE, for a stone.
+            eprintln!(
+                "  type {type_id:>2} MEETINGSTONE {count} (meeting stone flow, not use-dispatched)"
+            );
+            continue;
+        }
         match GO_LIVE_TYPE_NAMES.iter().find(|&&(t, _)| t == type_id) {
             Some((_, name)) => eprintln!("  type {type_id:>2} {name:<10} {count} (LIVE)"),
             None => eprintln!("  type {type_id:>2} (unhandled) {count} INERT — use() no-ops"),
@@ -5124,7 +5164,12 @@ fn gameobject_template_rows(spawns: &GameobjectSpawns) -> (Vec<String>, Vec<Stri
         );
     }
 
-    (go_template_rows, go_trap_rows, chest_loot_ids_used)
+    GameobjectTemplateRows {
+        templates: go_template_rows,
+        traps: go_trap_rows,
+        meeting_stones: go_meeting_stone_rows,
+        chest_loot_ids: chest_loot_ids_used,
+    }
 }
 
 /// The `game_trainer_spell` rows for the scope's trainers: every cmangos offering, plus the
@@ -5464,6 +5509,7 @@ fn push_quest_and_gameobject_statements(
         mail_loot_rows,
         go_template_rows,
         go_trap_rows,
+        go_meeting_stone_rows,
         trainer_rows,
         ..
     } = content;
@@ -5549,6 +5595,7 @@ fn push_quest_and_gameobject_statements(
     // The gameobject SPAWNS load separately via the import_gameobjects reducer below (also family-gated).
     if family_active(args, "gameobjects") {
         stmts.push("DELETE FROM game_gameobject_trap WHERE entry > 0".into());
+        stmts.push("DELETE FROM game_meeting_stone WHERE entry > 0".into());
         stmts.push("DELETE FROM game_gameobject_template WHERE entry > 0".into());
         push_insert(stmts, "game_gameobject_template", "entry,type_id,display_id,name,data0,data1,gather_skill_line,respawn_secs,gather_gray,lock_id,size", go_template_rows);
         push_insert(
@@ -5556,6 +5603,12 @@ fn push_quest_and_gameobject_statements(
             "game_gameobject_trap",
             "entry,spell_id,cooldown_secs",
             go_trap_rows,
+        );
+        push_insert(
+            stmts,
+            "game_meeting_stone",
+            "entry,min_level,max_level,area_id",
+            go_meeting_stone_rows,
         );
     }
     // Trainer spell lists (family "trainers").
@@ -5724,6 +5777,7 @@ fn family_stamps(
         quests,
         go_template_rows,
         go_trap_rows,
+        go_meeting_stone_rows,
         trainer_rows,
         creature_casts,
         creature_rotation_rows,
@@ -5766,7 +5820,7 @@ fn family_stamps(
     if family_active(args, "gameobjects") {
         stamps.push((
             "gameobjects",
-            (go_template_rows.len() + go_trap_rows.len()) as u64,
+            (go_template_rows.len() + go_trap_rows.len() + go_meeting_stone_rows.len()) as u64,
         ));
     }
     if family_active(args, "trainers") {
@@ -6195,6 +6249,40 @@ mod tests {
         assert_eq!(go_initial_state(GO_GOOBER, 1), 0);
         assert_eq!(go_initial_state(GO_GATHER, 1), 0);
         assert_eq!(go_initial_state(GO_QUESTGIVER, 1), 0);
+    }
+
+    /// Only a spawned stone gets a row, and the row is the dump's `data0`, `data1`, `data2`. The
+    /// Deadmines stone (Westfall) is level 15 to 20 for area 1581.
+    #[test]
+    fn gameobject_family_emits_one_meeting_stone_row_per_spawned_stone() {
+        let dump = "INSERT INTO `gameobject_template` VALUES \
+            (179584,23,6973,'Meeting Stone',0,0,0,1,15,20,1581,0,0,0),\
+            (179585,23,6973,'Unspawned Stone',0,0,0,1,30,40,717,0,0,0); \
+            INSERT INTO `gameobject` VALUES \
+            (60,179584,0,1,-8949.95,-132.493,83.5312,0,0,0,0,0);";
+        let mut args = test_args();
+        args.family = Some("gameobjects".to_string());
+        let plan = build_dump_plan(dump, &args, &None, &None).unwrap();
+
+        let stones: Vec<_> = plan
+            .stmts
+            .iter()
+            .filter(|statement| statement.contains("game_meeting_stone"))
+            .collect();
+        assert_eq!(
+            stones,
+            [
+                "DELETE FROM game_meeting_stone WHERE entry > 0",
+                "INSERT INTO game_meeting_stone (entry,min_level,max_level,area_id) VALUES \
+                 (179584,15,20,1581)",
+            ]
+        );
+        assert!(plan.stmts.iter().any(|statement| {
+            statement.starts_with("INSERT INTO game_gameobject_template")
+                && statement.contains("(179584,23,6973,'Meeting Stone',0,0,0,0,0,0,1)")
+        }));
+        // One template row and one stone row.
+        assert_eq!(plan.stamps, vec![("gameobjects", 2)]);
     }
 
     #[test]
