@@ -132,7 +132,7 @@ time{{font-variant-numeric:tabular-nums}}li{{margin:5px 0}}.notice{{border-left:
 @media print{{.controls{{display:none}}body{{max-width:none;padding:0;font-size:10pt}}.scroll{{overflow:visible}}a{{color:inherit}}}}
 </style></head><body>
 <header><h1>LyraCore issue order and delivery</h1>
-<p>Owner: Codex in the triage and delivery thread. Updated <time>{escape(queue["updated_at"])}</time>.
+<p>Owner: {escape(queue["coordinator"])} in the triage and delivery thread. Updated <time>{escape(queue["updated_at"])}</time>.
 {assessed} of {len(issues)} issues assessed. {open_count} open on GitHub.
 Source revision {escape(queue["base_revision"])}.</p>
 <p>{escape(queue["status_note"])}</p></header>
@@ -156,13 +156,13 @@ Retired or shipped proposals stay visible until their GitHub issues are resolved
 <th scope="col">Importance</th><th scope="col">Gain</th><th scope="col">Effort</th><th scope="col">Return</th>
 <th scope="col">State and owner</th><th scope="col">Next action</th></tr></thead><tbody>{rows}</tbody></table></div></section>
 <section id="reviews"><h2>PRs to completion</h2>
-<p>Each implementer owns their PR until it merges or has a named blocker. Codex checks CI, CodeRabbit reviews,
+<p>Each implementer owns their PR until it merges or has a named blocker. {escape(queue["coordinator"])} checks CI, CodeRabbit reviews,
 human comments and unresolved threads after each push. Accepted findings get a fix and fresh checks; disputed findings get a reasoned response.
 Rebase before opening a PR and recheck the reviewed commit before merge.</p>
 <p>{escape(queue["merge_policy"])}</p>
 <div class="scroll"><table><thead><tr><th>PR</th><th>Change</th><th>Owner</th><th>State</th><th>Next action</th></tr></thead><tbody>{pulls}</tbody></table></div></section>
 <section id="maintenance"><h2>Ownership and updates</h2>
-<p>This report is the working dispatch list. Codex updates the same published URL after triage, assignment,
+<p>This report is the working dispatch list. {escape(queue["coordinator"])} updates the same published URL after triage, assignment,
 PR creation, review changes and merge. Scores change when new evidence changes the expected benefit or effort.
 New issues enter as audit pending. A merged PR does not satisfy an outstanding real-client acceptance check.</p>
 <p>{escape(queue["monitoring_note"])}</p>

@@ -1,7 +1,8 @@
 # Issue order and delivery
 
-The [published report](https://1u1gh8ximdga.postplan.dev) is Codex's working dispatch list for
-the GitHub issue queue. GitHub remains authoritative for issue state, review comments and CI.
+The [published report](https://1u1gh8ximdga.postplan.dev) is the coordinating agent's working dispatch
+list for the GitHub issue queue. `coordinator` in `issues.json` names that agent. GitHub remains
+authoritative for issue state, review comments and CI.
 
 `issues.json` holds the assessments, owners, next actions and review state. `report.html` is generated
 from it. The report explains the scoring rule. Treat scores as estimates and revise them when
