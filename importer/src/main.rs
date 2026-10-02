@@ -1964,6 +1964,72 @@ fn build_spell_chain_sql(dump: &str) -> Vec<String> {
     stmts
 }
 
+/// Add complete client rank families absent from the dump before emitting any import writes.
+fn supplement_spell_chain_sql(dump: &str, links: &[(u32, u32)]) -> Result<Vec<String>> {
+    use std::collections::{BTreeMap, BTreeSet};
+    let explicit: BTreeSet<u32> = parse_table(dump, "spell_chain")
+        .iter()
+        .filter_map(|row| field(row, sc::SPELL_ID).parse().ok())
+        .collect();
+    let mut successors = BTreeMap::new();
+    let mut predecessors = BTreeMap::new();
+    for &(spell, next) in links {
+        if spell == 0 || next == 0 {
+            continue;
+        }
+        if successors
+            .insert(spell, next)
+            .is_some_and(|seen| seen != next)
+            || predecessors
+                .insert(next, spell)
+                .is_some_and(|seen| seen != spell)
+        {
+            anyhow::bail!("ambiguous client spell rank link {spell} -> {next}");
+        }
+    }
+    let mut visited = BTreeSet::new();
+    let mut rows = Vec::new();
+    for &first in successors
+        .keys()
+        .filter(|spell| !predecessors.contains_key(spell))
+    {
+        let mut family = vec![first];
+        let mut spell = first;
+        while let Some(&next) = successors.get(&spell) {
+            if !visited.insert(spell) || family.len() >= usize::from(u8::MAX) {
+                anyhow::bail!("cyclic or oversized client spell family {first}");
+            }
+            family.push(next);
+            spell = next;
+        }
+        visited.insert(spell);
+        // The dump may deliberately split or override a client chain. Preserve that family whole.
+        if family.iter().any(|spell| explicit.contains(spell)) {
+            continue;
+        }
+        let mut previous = 0;
+        for (index, spell) in family.into_iter().enumerate() {
+            rows.push(format!("({spell},{previous},{first},{},0)", index + 1));
+            previous = spell;
+        }
+    }
+    if successors.keys().any(|spell| !visited.contains(spell)) {
+        anyhow::bail!("client spell rank links contain a cycle");
+    }
+    let mut statements = build_spell_chain_sql(dump);
+    push_insert(
+        &mut statements,
+        "game_spell_chain",
+        "spell_id,prev_spell,first_spell,rank,req_spell",
+        &rows,
+    );
+    eprintln!(
+        "spell chain: {} additional client-derived ranks",
+        rows.len()
+    );
+    Ok(statements)
+}
+
 /// Clear+reload SQL for `game_spell_learn` from cmangos `spell_learn_spell` (work-item 102, reduced
 /// scope) — auto-taught dependents (e.g. a weapon-skill spell that also grants a companion passive).
 /// `module/src/spell/spellbook.rs::learn_spell_with_dependents` reads this via `parent_spell` (the
@@ -5607,7 +5673,10 @@ fn push_global_statements(args: &Args, dump: &str, stmts: &mut Vec<String>) -> R
     // "globals" precedent).
     let mut spellmeta_row_count = 0u64;
     if family_active(args, "spellmeta") {
-        let spell_chain_sql = build_spell_chain_sql(dump);
+        let spell_chain_sql = match args.dbc.as_deref() {
+            Some(dir) => supplement_spell_chain_sql(dump, &dbc::spell_rank_links(dir)?)?,
+            None => build_spell_chain_sql(dump),
+        };
         let spell_learn_sql = build_spell_learn_sql(dump);
         let spell_proc_event_sql = build_spell_proc_event_sql(dump);
         spellmeta_row_count = insert_row_count(&spell_chain_sql)
@@ -6653,6 +6722,42 @@ mod tests {
         // spell_id,prev_spell,first_spell,rank,req_spell
         assert!(insert.contains("(133,0,133,1,0)"), "{insert}");
         assert!(insert.contains("(143,133,133,2,0)"), "{insert}");
+    }
+
+    #[test]
+    fn spell_chains_include_client_ranks_missing_from_the_dump() {
+        let dump = "x INSERT INTO `spell_chain` VALUES (133,0,133,1,0),(143,133,133,2,0);";
+        let sql = supplement_spell_chain_sql(dump, &[(78, 284), (284, 285), (78, 284)])
+            .unwrap()
+            .join("\n");
+        for row in [
+            "(78,0,78,1,0)",
+            "(284,78,78,2,0)",
+            "(285,284,78,3,0)",
+            "(143,133,133,2,0)",
+        ] {
+            assert_eq!(
+                sql.matches(row).count(),
+                1,
+                "missing or duplicated rank: {sql}"
+            );
+        }
+    }
+
+    #[test]
+    fn spell_chains_preserve_explicit_families_and_refuse_ambiguous_client_links() {
+        let dump = "x INSERT INTO `spell_chain` VALUES (133,0,133,1,0),(143,133,133,2,99);";
+        assert_eq!(
+            supplement_spell_chain_sql(dump, &[(133, 143), (143, 145)]).unwrap(),
+            build_spell_chain_sql(dump),
+        );
+        for links in [
+            vec![(1, 2), (1, 3)],
+            vec![(1, 3), (2, 3)],
+            vec![(1, 2), (2, 1)],
+        ] {
+            assert!(supplement_spell_chain_sql("", &links).is_err());
+        }
     }
 
     #[test]

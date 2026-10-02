@@ -685,6 +685,21 @@ fn skill_ability_sql(table: &DbcSkillLineAbility) -> (Vec<String>, usize) {
     (stmts, n)
 }
 
+/// The pinned reader calls the vanilla SupercededBySpell column `acquire_method`.
+pub(crate) fn spell_rank_links(data_dir: &str) -> Result<Vec<(u32, u32)>> {
+    let mut chain = open_chain(Path::new(data_dir))?;
+    let abilities: DbcSkillLineAbility = read_table(&mut chain)?;
+    let mut links = Vec::new();
+    for row in abilities.rows() {
+        let next = u32::try_from(row.acquire_method)
+            .context("SkillLineAbility has a negative successor spell")?;
+        if row.spell.id != 0 && next != 0 {
+            links.push((row.spell.id, next));
+        }
+    }
+    Ok(links)
+}
+
 /// Clear+reload SQL for `game_skill_availability` from `SkillRaceClassInfo.dbc` — which (race, class)
 /// combos a skill line is available to, its availability flags, and the minimum character level to
 /// pick it up (~700-800 rows in vanilla). Ids assigned sequentially, same convention as
