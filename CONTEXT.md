@@ -546,7 +546,8 @@ evidence. Its endpoint is proposed movement, not proof of advancement or arrival
 **Route Path**:
 A bounded sequence of waypoints retained for one movement. The Module advances along the same
 geometry and duration that the Gateway sends to the client. Crossing a waypoint does not require
-another decision. A changed destination or a failed movement Gate can replace or stop the path.
+another decision. A changed destination or a failed movement Gate can replace or stop the path. A
+stop holds the point the client renders at that moment, even between two advance firings.
 
 **Cast Handle**:
 The scheduled identity, spell, target, and current due time of one timed cast. Repeated bot requests

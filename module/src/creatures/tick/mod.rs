@@ -9,7 +9,8 @@
 //!     active-cell sweep and rows-visited evidence logs, the shared candidate gate
 //!     `movable_creature`, the rout predicates, and the one spline writer
 //!     (`emit_move_spline`/`emit_creature_leg`) every movement decision funnels through, with
-//!     the persist gate for a leg advance (`advance_needs_persist`).
+//!     the stop between firings (`stop_where_rendered`) and the persist gate for a leg advance
+//!     (`advance_needs_persist`).
 //!   - [`lifecycle`] — the canonical despawn checklist + decay/respawn/GO-respawn, the
 //!     due-time passes that run regardless of proximity.
 
@@ -750,6 +751,52 @@ pub(crate) fn emit_creature_leg(
     ctx.db.game_world_entity().guid().update(e);
 }
 
+/// Stop `mover`'s leg where the client renders it now. The row moves to that point and a
+/// zero-duration stop there replaces the leg, so the stored position and the stop packet agree
+/// with the client. Without this, a stop between two advance firings holds the position the last
+/// firing wrote, behind the client. The caller writes `mover`. A mover with no leg is unchanged.
+pub(crate) fn stop_where_rendered(ctx: &ReducerContext, mover: &mut WorldEntity) {
+    let Some(leg) = ctx.db.game_creature_spline().guid().find(mover.guid) else {
+        return;
+    };
+    let now_micros = ctx.timestamp.to_micros_since_unix_epoch() as u64;
+    // The client ignores a spline id that does not exceed the one of the leg it replaces.
+    let spline_id = ((now_micros / 1000) as u32).max(leg.spline_id.wrapping_add(1));
+    let at = move_to_rendered_point(mover, leg, now_micros);
+    emit_move_spline(
+        ctx,
+        mover.guid,
+        at,
+        at,
+        0,
+        false,
+        spline_id,
+        mover.map_id,
+        mover.instance_id,
+        (mover.grid_x, mover.grid_y),
+    );
+}
+
+/// Move `mover` to where `leg` renders it at `now_micros`, grid address and packed cell included,
+/// and return that point. A non-finite point leaves the row where it is, as the advance phase does.
+fn move_to_rendered_point(
+    mover: &mut WorldEntity,
+    leg: CreatureSpline,
+    now_micros: u64,
+) -> (f32, f32, f32) {
+    let at = super::cycle::rendered_point(leg, now_micros);
+    if crate::creatures::ai::finite_point(at.x, at.y, at.z) {
+        let (grid_x, grid_y) = spatial::grid_cell(at.x, at.y);
+        mover.x = at.x;
+        mover.y = at.y;
+        mover.z = at.z;
+        mover.grid_x = grid_x;
+        mover.grid_y = grid_y;
+        mover.cell = spatial::grid_cell_id(grid_x, grid_y);
+    }
+    (mover.x, mover.y, mover.z)
+}
+
 /// Must a leg advance stay in the creature's stored row once the firing ends? The cycle's passes
 /// always read the advanced row; only the commit log may skip it. `stored` is the row before the
 /// advance, `advanced` the row it wrote, `settled` the row at the end of the firing, and `leg` the
@@ -1088,6 +1135,103 @@ mod advance_persist_gate {
             row.type_mask = type_mask::PLAYER_BIT;
         }
         assert!(walk.persists());
+    }
+}
+
+#[cfg(test)]
+mod stop_between_firings {
+    use super::{move_to_rendered_point, CreaturePath, CreaturePathPoint, CreatureSpline};
+    use crate::nav::NavigationInputs;
+    use crate::WorldEntity;
+    use lyracore_shared::spatial;
+
+    const STARTED_MICROS: u64 = 60_000_000;
+
+    /// A Route Path from (0, 0, 0) through (10, 0, 0) to (10, 10, 0): 20 yd in 4 s, so 5 yd/s.
+    /// Its first leg ends 2 s after the start.
+    fn route_path() -> CreatureSpline {
+        let point = |x, y| CreaturePathPoint { x, y, z: 0.0 };
+        CreatureSpline {
+            guid: 42,
+            start_micros: STARTED_MICROS,
+            dur_ms: 4_000,
+            sx: 0.0,
+            sy: 0.0,
+            sz: 0.0,
+            dx: 10.0,
+            dy: 10.0,
+            dz: 0.0,
+            map_id: 0,
+            instance_id: 0,
+            grid_x: 0,
+            grid_y: 0,
+            cell: 0,
+            spline_id: (STARTED_MICROS / 1000) as u32,
+            run: true,
+            facing: false,
+            facing_angle: 0.0,
+            path: Some(CreaturePath {
+                points: vec![point(10.0, 0.0), point(10.0, 10.0)],
+                navigation: NavigationInputs {
+                    imported_revision: None,
+                    navigation_enabled: true,
+                    collision_enabled: true,
+                    coverage_enabled: true,
+                    static_generation: None,
+                    coverage_generation: None,
+                },
+            }),
+        }
+    }
+
+    /// The Character as the last firing stored it, at (`x`, `y`, 0).
+    fn stored_at(x: f32, y: f32) -> WorldEntity {
+        let (grid_x, grid_y) = spatial::grid_cell(x, y);
+        let mut character = crate::helpers::tests::entity(42, 0, 0, grid_x, grid_y);
+        character.x = x;
+        character.y = y;
+        character
+    }
+
+    fn assert_at(mover: &WorldEntity, x: f32, y: f32) {
+        assert!(
+            (mover.x - x).abs() < 1e-4 && (mover.y - y).abs() < 1e-4 && mover.z == 0.0,
+            "expected ({x}, {y}, 0), stored ({}, {}, {})",
+            mover.x,
+            mover.y,
+            mover.z
+        );
+        let (grid_x, grid_y) = spatial::grid_cell(x, y);
+        assert_eq!((mover.grid_x, mover.grid_y), (grid_x, grid_y));
+        assert_eq!(mover.cell, spatial::grid_cell_id(grid_x, grid_y));
+    }
+
+    #[test]
+    fn a_stop_after_a_leg_end_holds_the_point_on_the_next_leg() {
+        // The last firing ran 1.5 s in, at (7.5, 0). The first leg ended at 2 s and the stop
+        // comes at 2.3 s, so the Character is 1.5 yd up the second leg.
+        let mut character = stored_at(7.5, 0.0);
+        let at = move_to_rendered_point(&mut character, route_path(), STARTED_MICROS + 2_300_000);
+        assert_at(&character, 10.0, 1.5);
+        assert_eq!(at, (character.x, character.y, character.z));
+    }
+
+    #[test]
+    fn a_stop_after_the_route_path_ends_holds_its_destination() {
+        // The last firing ran 3.5 s in, at (10, 7.5). The path ended at 4 s.
+        let mut character = stored_at(10.0, 7.5);
+        move_to_rendered_point(&mut character, route_path(), STARTED_MICROS + 4_200_000);
+        assert_at(&character, 10.0, 10.0);
+    }
+
+    #[test]
+    fn a_non_finite_leg_leaves_the_stored_point() {
+        let mut leg = route_path();
+        leg.path = None;
+        leg.dx = f32::NAN;
+        let mut character = stored_at(7.5, 0.0);
+        move_to_rendered_point(&mut character, leg, STARTED_MICROS + 2_300_000);
+        assert_at(&character, 7.5, 0.0);
     }
 }
 

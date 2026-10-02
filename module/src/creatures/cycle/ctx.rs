@@ -101,6 +101,11 @@ impl CtxWorld<'_> {
     }
 }
 
+/// Where `leg`'s mover renders at `now_micros`. An advance firing then would commit the same point.
+pub(crate) fn rendered_point(leg: CreatureSpline, now_micros: u64) -> Point {
+    as_leg(leg, false).rendered_at(now_micros).0
+}
+
 /// The spline row as the cycle reads a leg. `mover_gone` is the caller's to answer: the advance
 /// phase has to reap orphans, while a chaser's leg belongs to a creature it just resolved.
 fn as_leg(s: CreatureSpline, mover_gone: bool) -> LegInFlight {

@@ -30,7 +30,7 @@ mod ctx;
 #[cfg(test)]
 mod harness;
 
-pub(crate) use ctx::run;
+pub(crate) use ctx::{rendered_point, run};
 
 /// A world point a behavior decision moves a creature to.
 #[derive(Clone, Copy, PartialEq, Debug)]

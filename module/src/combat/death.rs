@@ -15,8 +15,8 @@ use spacetimedb::{table, ReducerContext, Table, TimeDuration};
 use spacetimedb::ScheduleAt;
 
 use crate::{
-    game_aura, game_creature_spawn, game_creature_spline, game_creature_template, game_threat,
-    game_world_entity, WorldEntity,
+    game_aura, game_creature_spawn, game_creature_template, game_threat, game_world_entity,
+    WorldEntity,
 };
 #[cfg(feature = "debug_reducers")]
 use crate::{game_corpse_loot, game_spell_cast_event};
@@ -582,15 +582,15 @@ fn kill_creature_with_attribution(
     // corpse toward the old destination after death (a Kobold Vermin sliding onward while dead). Same
     // "TOLD to halt instead of left interpolating" 0-duration stop the cycle's chase phase uses when a
     // creature plants to swing, but fired here instead so EVERY lethal path (flee/patrol/chase, not just
-    // engaged melee) gets the same treatment at this one death chokepoint. The stop lands at the
-    // server's authoritative death position (`target.x/y/z`, unmoved by the kill) so the corpse renders
-    // exactly where loot-click range judges it.
+    // engaged melee) gets the same treatment at this one death chokepoint. The stop lands where the
+    // client renders the creature at the kill, and the corpse row moves there too, so the corpse
+    // renders exactly where loot-click range judges it.
     //
     // Deliberately NOT deleted here too, for two independent reasons:
     //   1. SpacetimeDB diffs a transaction's NET effect per row, not each intermediate write — update
     //      then delete of the SAME PK in one transaction nets out, for subscribers, as a bare delete of
-    //      the PRE-transaction row. The stop values staged by `emit_move_spline` above would never reach
-    //      the wire, and the gateway has no `on_delete` handler for `game_creature_spline` either
+    //      the PRE-transaction row. The stop values staged by `stop_where_rendered` below would never
+    //      reach the wire, and the gateway has no `on_delete` handler for `game_creature_spline` either
     //      (`world_view.rs`), so a bare delete relays nothing — the corpse would keep sliding exactly as
     //      before this fix.
     //   2. `game_creature_spline` deletion is deliberately confined to ONE chokepoint,
@@ -598,32 +598,10 @@ fn kill_creature_with_attribution(
     //      in `tick/lifecycle.rs`), which forbids new deletion sites for this table on the same grounds
     //      Retired the old per-caller copies. Adding a second deletion path here would be exactly
     //      the divergence this checklist exists to prevent.
-    // So the row is left for the existing 60s corpse-decay reap (`pass_decay` → `despawn_creature_entity`,
-    // a LATER transaction) to clear, same as it always has for every other creature death. This means
-    // the literal "no row for the dead guid" Done-when only becomes true after that reap, not
-    // immediately on kill — the stop-spline packet and position are what a headless check right after
-    // kill can assert; row absence is a 60s-later assertion. See the issue-519 comment reconciling this.
-    if ctx
-        .db
-        .game_creature_spline()
-        .guid()
-        .find(target_guid)
-        .is_some()
-    {
-        let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u32;
-        crate::creatures::tick::emit_move_spline(
-            ctx,
-            target_guid,
-            (target.x, target.y, target.z),
-            (target.x, target.y, target.z),
-            0,
-            false,
-            now_ms,
-            target.map_id,
-            target.instance_id,
-            (target.grid_x, target.grid_y),
-        );
-    }
+    // So the row is left for a LATER transaction: the next advance firing reads the zero-duration
+    // stop as arrived and forgets it. A headless check right after the kill can assert the stop and
+    // the corpse position, not row absence.
+    crate::creatures::tick::stop_where_rendered(ctx, &mut target);
     entities.guid().update(target);
     crate::creatures::begin_death_dispatch(ctx, target_guid, killer);
     // Snapshot the victim's threat table for the death payload BEFORE disengage wipes it — threat

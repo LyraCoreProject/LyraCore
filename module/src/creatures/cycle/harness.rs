@@ -5862,7 +5862,8 @@ fn discovery_stays_on_the_narrow_candidate_universes() {
 /// stands still while the client animates on; `drop_leg` no-op'd and one leg replays forever;
 /// `engage` no-op'd and nothing ever aggroes; `restore` no-op'd and health never comes back;
 /// `awake_creatures` returning an empty sweep and the world goes dormant with every test passing;
-/// `settle_advances` skipping its gate and every stored creature position stays at its leg start.
+/// `settle_advances` skipping its gate and every stored creature position stays at its leg start;
+/// `rendered_point` drifting from `rendered_at` and a stop between firings moves the client back.
 ///
 /// Several methods are deliberately more than one expression — `place`, `engage`, `retarget`,
 /// `combat_healed_to`, `restore`, `face` and `take_victim` — so the pin is the exact current body
@@ -5908,6 +5909,10 @@ fn the_production_adapter_is_the_pass_through_the_harness_assumes() {
                 "Some(ms) = moved_ms { e.last_move_ms = ms; } if let Some(rad) = orientation { ",
                 "e.orientation = rad; } Some(entities.guid().update(e)) } }",
             ),
+        ),
+        (
+            "pub(crate) fn rendered_point(leg: CreatureSpline, now_micros: u64) -> Point {",
+            "{ as_leg(leg, false).rendered_at(now_micros).0 }",
         ),
         (
             "fn as_leg(s: CreatureSpline, mover_gone: bool) -> LegInFlight {",
