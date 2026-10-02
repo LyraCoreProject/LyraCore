@@ -64,8 +64,9 @@ index; never scan the whole Seeker table.
   `advance_group_revision`, the helper `realm_group_op` uses. That includes every party the bucket
   pass forms or fills during a `realm_meeting_stone_op` JOIN, and a party a kick re-queue fills.
   Advancing a party twice in one transaction is fine. T2's relay pushes whatever this advances.
-- `realm_group_op` passes ACCEPT's `arg_a` class and `arg_b` race into the accept core. On the
-  single-database plane (`gw_group_accept`, `Plane::Shard`) read the acceptor's class from its local
+- `realm_group_op` passes ACCEPT's `arg_a` class into the accept core. The core does not read
+  `arg_b` race: the Seeker row a queued party gains takes the party's team. On the single-database
+  plane (`gw_accept_group_invite`, `Plane::Shard`) read the acceptor's class from its local
   `game_character` row.
 - Hooks for queued parties, per the README fact table. Keep `remove_member` the one removal core;
   tell kick from leave with a cause argument or with work in `uninvite_on` before it calls
@@ -113,8 +114,9 @@ before the roster LIST it precedes in cmangos. T4 proves the relay keeps that or
    Seeker or party row remains.
 2. Five mage Seekers form a party of leader, first member and one more damage add. It stays queued
    with tank and healer open, and two mages keep waiting.
-3. A queued warrior and mage party takes the longest-waiting healer-capable Seeker as healer. A
-   second priest waits.
+3. A queued party of a warrior and three mages takes the longest-waiting healer-capable Seeker as
+   healer. A second priest waits. (A warrior and one mage would also take the second priest as
+   damage: priests fill damage at low priority, cm:LFG/LFGMgr.cpp:99,146.)
 4. Existing members get `MEMBER_ADDED(guid)` for each stone add. The added Character does not.
 5. Horde and Alliance Seekers of one area never meet. Different areas never meet.
 6. A Seeker without a live Account Claim is never added and its row is gone after the pass.
@@ -139,7 +141,8 @@ before the roster LIST it precedes in cmangos. T4 proves the relay keeps that or
   through T1's debug fixtures. One test per criterion 1-3 and 5-12, asserting `game_group`,
   `game_group_member`, `game_group_roster_revision`, the Seeker and party tables and the ordered
   `game_group_event` rows per recipient. Criterion 7 runs through `realm_group_op` for the
-  Realm-core plane and through the `gw_group_*` reducers for the single-database plane. The
+  Realm-core plane and through the `gw_group_*` reducers for the single-database plane. Raid
+  convert has no `gw_group_*` reducer, so its case runs through `realm_group_op` only. The
   existing `raid_convert.rs`, `instance_removal.rs` and `loot_tag.rs` durable tests must stay green
   after the join core extraction.
 - The Module wasm check and `cargo test -p lyracore-module --lib` for the tripwires.
