@@ -809,8 +809,8 @@ pub struct PartyFactsUnavailable {
 
 /// Whether another current party member is certified in `partition`. This portal Gate reads only
 /// the bounded roster and exact member projections; combat facts cannot make location unavailable.
-/// The bound stays at the Party cap on purpose: a Raid reads as unavailable here, as the 5-player
-/// dungeon cap in `instance.rs` also refuses it.
+/// The bound stays at the Party cap on purpose: a Raid of more than five members reads as
+/// unavailable here, as the 5-player dungeon cap in `instance.rs` also refuses it.
 pub(crate) fn has_known_party_member_in_partition(
     ctx: &ReducerContext,
     character_guid: u64,
@@ -946,7 +946,9 @@ pub fn party_facts(
             }
         })
         .collect();
-    let party_guids: Vec<_> = members.iter().map(|member| member.character_guid).collect();
+    let party_guids: std::collections::BTreeSet<u64> =
+        members.iter().map(|member| member.character_guid).collect();
+    let mut party_melee_targets = std::collections::BTreeSet::new();
     let anchor = ctx.db.game_world_entity().guid().find(character_guid);
     let melee = ctx.db.game_melee_attack();
     let pending = ctx.db.game_pending_cast();
@@ -962,6 +964,7 @@ pub fn party_facts(
     for guid in &party_guids {
         if let Some(attack) = melee.attacker_guid().find(*guid) {
             enemy_guids.insert(attack.target_guid);
+            party_melee_targets.insert(attack.target_guid);
         }
         let attacks: Vec<_> = melee
             .by_target()
@@ -1040,12 +1043,7 @@ pub fn party_facts(
         let current_target_guid = melee.attacker_guid().find(guid).map(|row| row.target_guid);
         let attacking_party =
             current_target_guid.is_some_and(|target| party_guids.contains(&target));
-        let party_attacking = party_guids.iter().any(|party_guid| {
-            melee
-                .attacker_guid()
-                .find(*party_guid)
-                .is_some_and(|row| row.target_guid == guid)
-        });
+        let party_attacking = party_melee_targets.contains(&guid);
         let party_casting = pending_damage_targets.contains(&guid);
         let threat =
             crate::threat::party_threat_facts(ctx, guid, &party_guids, THREAT_SOURCE_LIMIT)

@@ -280,7 +280,7 @@ pub(crate) struct PartyThreatFacts {
 pub(crate) fn party_threat_facts(
     ctx: &ReducerContext,
     creature_guid: u64,
-    party_guids: &[u64],
+    party_guids: &std::collections::BTreeSet<u64>,
     limit: usize,
 ) -> Result<PartyThreatFacts, ()> {
     let entities = ctx.db.game_world_entity();

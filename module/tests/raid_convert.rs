@@ -303,4 +303,14 @@ fn a_raid_past_five_certifies_a_companion_order_for_any_member() {
         &[group_id.as_str(), "1", "7", "2", stale.as_str()],
     );
     assert!(text.contains("StalePartyMirror"), "{text}");
+
+    let text = failure_text(
+        &realm,
+        "admit_party_command_authority",
+        &[group_id.as_str(), "2", "7", "3", current.as_str()],
+    );
+    assert!(
+        text.contains("NotLeader"),
+        "a Raid member who is not the leader: {text}"
+    );
 }

@@ -298,9 +298,10 @@ fn store_with_roster_of(extra: usize) -> InMemoryStore {
     }
 }
 
-/// A Companion Order covers the whole Raid. The Group leader may order a bot in another Subgroup
-/// and name a member in a third, so the order reaches target application with every member
-/// certified.
+/// A Companion Order covers the whole Raid, but only the Group leader issues it. The leader may
+/// order a bot in another Subgroup and name a member in a third, so the order reaches target
+/// application with every member certified. A member of the Raid who is not the leader gets
+/// `NotLeader`.
 #[test]
 fn a_companion_order_in_a_ten_member_raid_reaches_target_application() {
     let store = store_with_roster_of(8);
@@ -308,11 +309,12 @@ fn a_companion_order_in_a_ten_member_raid_reaches_target_application() {
     {
         let mut mirror = store.mirror.lock().unwrap();
         for member in &mut mirror[0].members {
-            member.slot = match member.guid {
-                BOT => RaidSlot::new(1, false).unwrap(),
-                guid if guid == named_member => RaidSlot::new(2, false).unwrap(),
-                _ => member.slot,
+            let subgroup = match member.guid {
+                GINGER | 80_000..=80_003 => 0,
+                BOT | 80_004..=80_006 => 1,
+                _ => 2,
             };
+            member.slot = RaidSlot::new(subgroup, false).unwrap();
         }
     }
     store
@@ -322,6 +324,12 @@ fn a_companion_order_in_a_ten_member_raid_reaches_target_application() {
         .push((named_member, 0, 0));
     let mut intent = command_intent(BOT);
     intent.authority_member_guid = named_member;
+
+    let mut from_a_member = intent.clone();
+    from_a_member.issuer_guid = 80_000;
+    let refused = party::run_party_command_intent(&store, &from_a_member, 9).unwrap();
+    assert_eq!(refused, party::CompanionCommandOutcome::NotLeader);
+    assert!(store.admitted_party_commands.lock().unwrap().is_empty());
 
     let outcome = party::run_party_command_intent(&store, &intent, 9).unwrap();
 
