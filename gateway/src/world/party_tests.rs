@@ -298,20 +298,43 @@ fn store_with_roster_of(extra: usize) -> InMemoryStore {
     }
 }
 
-/// Companion Orders keep the Party cap. A Raid above five is a gameplay answer, so the order
-/// finishes at once with the documented terminal outcome instead of retrying until it expires.
+/// A Companion Order covers the whole Raid. The Group leader may order a bot in another Subgroup
+/// and name a member in a third, so the order reaches target application with every member
+/// certified.
 #[test]
-fn a_companion_order_in_a_raid_above_five_finishes_as_a_stale_party_mirror() {
-    let store = store_with_roster_of(lyracore_shared::group::GROUP_MAX_MEMBERS);
+fn a_companion_order_in_a_ten_member_raid_reaches_target_application() {
+    let store = store_with_roster_of(8);
+    let named_member = 80_007;
+    {
+        let mut mirror = store.mirror.lock().unwrap();
+        for member in &mut mirror[0].members {
+            member.slot = match member.guid {
+                BOT => RaidSlot::new(1, false).unwrap(),
+                guid if guid == named_member => RaidSlot::new(2, false).unwrap(),
+                _ => member.slot,
+            };
+        }
+    }
+    store
+        .entity_partitions
+        .lock()
+        .unwrap()
+        .push((named_member, 0, 0));
+    let mut intent = command_intent(BOT);
+    intent.authority_member_guid = named_member;
 
-    let outcome = party::run_party_command_intent(&store, &command_intent(BOT), 9).unwrap();
+    let outcome = party::run_party_command_intent(&store, &intent, 9).unwrap();
 
-    assert_eq!(outcome, party::CompanionCommandOutcome::StalePartyMirror);
-    assert_eq!(
-        store.party_command_finishes.lock().unwrap().clone(),
-        vec![(41, 9, party::CompanionCommandOutcome::StalePartyMirror)]
-    );
-    assert!(store.admitted_party_commands.lock().unwrap().is_empty());
+    assert_eq!(outcome, party::CompanionCommandOutcome::Applied);
+    let admitted = store.admitted_party_commands.lock().unwrap();
+    assert_eq!(admitted.len(), 1);
+    let mut certified = admitted[0].members.clone();
+    certified.sort_unstable();
+    let mut expected = vec![GINGER, BOT];
+    expected.extend((0..8).map(|offset| 80_000 + offset));
+    expected.sort_unstable();
+    assert_eq!(expected.len(), 10);
+    assert_eq!(certified, expected);
 }
 
 /// A roster longer than any Raid is a damaged cache, not a gameplay answer: the intent stays

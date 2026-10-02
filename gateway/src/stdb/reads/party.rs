@@ -88,7 +88,7 @@ impl Coordinator {
     }
 
     /// Read only the bounded roster projection accepted by companion-command authority. The bound
-    /// is the Raid cap: a longer list is a damaged cache, and the caller refuses a Raid above five.
+    /// is the Raid cap: a longer list is a damaged cache.
     pub fn party_command_group_roster(
         &self,
         character_guid: u64,

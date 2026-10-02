@@ -738,7 +738,7 @@ pub fn companion_target_facts(
 
 /// Recheck the Gateway-certified authority projection and the bot Gate in the target transaction.
 /// `None` means Package application may proceed; `Some` is a terminal typed Refusal. Companion
-/// Orders keep the Party cap, so a Raid above five members reads as a stale mirror.
+/// Orders cover the whole Raid: the bound is the Raid cap, and a longer list is a damaged mirror.
 pub(crate) fn admit_party_command(
     ctx: &ReducerContext,
     admitted: &crate::bridge::AdmittedClientCommand,
@@ -770,13 +770,13 @@ pub(crate) fn admit_party_command(
         .game_group_member()
         .by_group()
         .filter(&member.group_id)
-        .take(GROUP_MAX_MEMBERS + 1)
+        .take(RAID_MAX_MEMBERS + 1)
         .map(|row| row.character_guid)
         .collect();
     let mut certified = admitted.members.clone();
     local.sort_unstable();
     certified.sort_unstable();
-    if local.len() > GROUP_MAX_MEMBERS
+    if local.len() > RAID_MAX_MEMBERS
         || member.group_id != admitted.group_id
         || group.leader_guid != admitted.leader_guid
         || admitted.leader_guid != admitted.issuer_guid
@@ -809,8 +809,8 @@ pub struct PartyFactsUnavailable {
 
 /// Whether another current party member is certified in `partition`. This portal Gate reads only
 /// the bounded roster and exact member projections; combat facts cannot make location unavailable.
-/// The bound stays at the Party cap on purpose: a Raid above five reads as unavailable, as the
-/// 5-player dungeon cap in `instance.rs` also refuses it.
+/// The bound stays at the Party cap on purpose: a Raid reads as unavailable here, as the 5-player
+/// dungeon cap in `instance.rs` also refuses it.
 pub(crate) fn has_known_party_member_in_partition(
     ctx: &ReducerContext,
     character_guid: u64,
@@ -884,12 +884,12 @@ fn known_party_partition(
 /// melee, cast, threat, or control evidence. Membership remains useful when a member has no live
 /// entity on this Shard, so those facts are nullable.
 ///
-/// Reads stop with `FightLimit` above five members, 24 incoming melee or threat-source rows for one
-/// member, one pending cast for one member, or 24 aggregate enemy GUIDs. Each retained enemy permits
-/// 16 threat sources, 64 control auras, and three effects on a pending spell. A missing parent Group
-/// stops with `MissingGroup`; neither failure returns facts selected from an arbitrary prefix.
-/// The five-member bound is deliberate for Raids too: bots keep the Party cap, so a Raid above
-/// five has no party facts.
+/// Facts cover every member of the Group, Raid included, whatever the Subgroup. Reads stop with
+/// `FightLimit` above 40 members (only a damaged mirror holds more), 24 incoming melee or
+/// threat-source rows for one member, one pending cast for one member, or 24 aggregate enemy GUIDs.
+/// Each retained enemy permits 80 threat sources (a full Raid and one pet each), 64 control auras,
+/// and three effects on a pending spell. A missing parent Group stops with `MissingGroup`; neither
+/// failure returns facts selected from an arbitrary prefix.
 #[cfg_attr(not(has_packages), allow(dead_code))]
 pub fn party_facts(
     ctx: &ReducerContext,
@@ -912,9 +912,9 @@ pub fn party_facts(
         .game_group_member()
         .by_group()
         .filter(&member.group_id)
-        .take(GROUP_MAX_MEMBERS + 1)
+        .take(RAID_MAX_MEMBERS + 1)
         .collect();
-    if members.len() > GROUP_MAX_MEMBERS {
+    if members.len() > RAID_MAX_MEMBERS {
         return Err(PartyFactsUnavailable {
             group_id: member.group_id,
             reason: PartyFactsUnavailableReason::FightLimit,
@@ -954,7 +954,7 @@ pub fn party_facts(
     let mut pending_damage_targets = std::collections::BTreeSet::new();
     let mut pending_control_targets = std::collections::BTreeMap::new();
     const ENEMY_LIMIT: usize = 24;
-    const THREAT_SOURCE_LIMIT: usize = 16;
+    const THREAT_SOURCE_LIMIT: usize = RAID_MAX_MEMBERS * 2;
     let unavailable = || PartyFactsUnavailable {
         group_id: member.group_id,
         reason: PartyFactsUnavailableReason::FightLimit,
@@ -2447,7 +2447,8 @@ fn mirror_slots_differ(
 }
 
 /// Acknowledged Realm-core party authority read for one companion command attempt. Companion
-/// Orders keep the Party cap, so a Raid above five members reads as a stale mirror.
+/// Orders cover the whole Raid: both lists are bounded at the Raid cap, and a longer list is a
+/// damaged mirror.
 #[reducer]
 pub fn admit_party_command_authority(
     ctx: &ReducerContext,
@@ -2475,10 +2476,10 @@ pub fn admit_party_command_authority(
     let mut current_members: Vec<_> = members
         .by_group()
         .filter(&group_id)
-        .take(GROUP_MAX_MEMBERS + 1)
+        .take(RAID_MAX_MEMBERS + 1)
         .map(|member| member.character_guid)
         .collect();
-    if current_members.len() > GROUP_MAX_MEMBERS || expected_members.len() > GROUP_MAX_MEMBERS {
+    if current_members.len() > RAID_MAX_MEMBERS || expected_members.len() > RAID_MAX_MEMBERS {
         return Err(crate::bridge::CommandOutcome::StalePartyMirror
             .tag()
             .to_string());

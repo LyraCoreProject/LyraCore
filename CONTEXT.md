@@ -237,7 +237,8 @@ leg changes. Quest selection resumes after arrival, movement cancellation or the
 An authenticated human leader's retained Follow, Stay, Assist, or Target instruction for one bot.
 Realm-core certifies party authority before the bot's World Shard applies it. The order directs the
 existing Bot Controller and does not form a second runner. Each authenticated issuer carries a
-monotonic order sequence across Shards, so a delayed older command cannot replace a newer one.
+monotonic order sequence across Shards, so a delayed older command cannot replace a newer one. In a
+Raid, the Group leader may order a bot in any Subgroup and may name any Raid member.
 
 **Solo Target Claim**:
 The retained fight work of an ungrouped Cohort bot reserves one nearby creature while the bot

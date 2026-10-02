@@ -161,10 +161,11 @@ excluded because PvP party assistance is outside this contract. An absent member
 A Realm-owned Roster Revision orders the complete member list, leader, loot rules, Group kind, and
 every Raid Slot. World Shards retain its disband state, so delayed Gateway fanout cannot remove a
 newer member, restore older party rules, or recreate a disbanded party.
-A membership whose Group row is missing returns `MissingGroup`. `FightLimit` reports more than five
-members, so a Raid above five has no party facts. It also reports 24 incoming melee or threat rows
-for one member, one pending cast for one member, or 24 aggregate enemy GUIDs. For each retained
-enemy, the read permits 16 threat sources, 64 control auras, and three effects on a pending spell.
+A membership whose Group row is missing returns `MissingGroup`. Party facts cover every
+Raid member, whatever the Subgroup. `FightLimit` reports more than 40 members, which only a damaged
+mirror holds. It also reports 24 incoming melee or threat rows for one member, one pending cast for
+one member, or 24 aggregate enemy GUIDs. For each retained enemy, the read permits 80 threat
+sources, 64 control auras, and three effects on a pending spell.
 Either failure returns `PartyFactsUnavailable`, so a Package can hold party control instead of
 acting from an arbitrary prefix.
 
