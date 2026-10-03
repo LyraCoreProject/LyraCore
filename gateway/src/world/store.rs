@@ -1,7 +1,8 @@
 //! `WorldStore`: the broad storage/coordination seam used by the world session. Deep protocol
 //! families may add focused supertraits such as [`AuctionActionStore`], [`ChannelActionStore`],
 //! [`ChatActionStore`],
-//! [`ItemActionStore`], [`MeleeActionStore`], [`QuestActionStore`], [`TaxiActionStore`] and
+//! [`ItemActionStore`], [`MeetingStoneActionStore`], [`MeleeActionStore`], [`QuestActionStore`],
+//! [`TaxiActionStore`] and
 //! [`VendorActionStore`] so their wire mapping and failure policy can be tested without
 //! implementing this entire interface — a migrated family's operations live only on its own trait,
 //! never here. Kept as one broad trait for the remaining
@@ -10,8 +11,8 @@
 
 use super::handlers::{
     AuctionActionStore, CastStore, ChannelActionStore, ChatActionStore, DuelActionStore,
-    GuildActionStore, ItemActionStore, LootWindowStore, MeleeActionStore, MemberStatsStore,
-    QuestActionStore, TaxiActionStore, VendorActionStore, WeatherStore,
+    GuildActionStore, ItemActionStore, LootWindowStore, MeetingStoneActionStore, MeleeActionStore,
+    MemberStatsStore, QuestActionStore, TaxiActionStore, VendorActionStore, WeatherStore,
 };
 use super::*;
 
@@ -31,6 +32,7 @@ pub trait WorldStore:
     + GuildActionStore
     + ItemActionStore
     + LootWindowStore
+    + MeetingStoneActionStore
     + MeleeActionStore
     + MemberStatsStore
     + QuestActionStore
@@ -500,6 +502,13 @@ pub trait WorldStore:
     /// Realm-core's durable order for a complete party roster, including a disbanded party.
     fn group_roster_revision(&self, _group_id: u64) -> Result<u64> {
         Ok(1)
+    }
+
+    /// The Roster Revision this database holds for one party, or `None` when it holds no row. On a
+    /// World Shard it is the mirror's revision, kept after a disband; on Realm-core it is the
+    /// authoritative one.
+    fn held_roster_revision(&self, _group_id: u64) -> Result<Option<u64>> {
+        Ok(None)
     }
 
     /// Realm-core's ordered locator for one Character. World Shards never supply this fact.

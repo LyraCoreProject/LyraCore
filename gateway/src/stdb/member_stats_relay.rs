@@ -118,6 +118,7 @@ mod tests {
             ignored: Mutex::default(),
             friends: Mutex::default(),
             team: lyracore_shared::faction::TEAM_ALLIANCE,
+            group_events: Default::default(),
         })
     }
 

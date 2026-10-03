@@ -669,7 +669,7 @@ fn locked_shut(ctx: &ReducerContext, go_guid: u64, lock_id: u32) -> bool {
 
 /// The typed GameObject target Gate shared by lock picking and both use adapters. It resolves the
 /// GameObject, template and live Character, then applies partition and range Gates once.
-fn usable_go(
+pub(crate) fn usable_go(
     ctx: &ReducerContext,
     caster_guid: u64,
     go_guid: u64,

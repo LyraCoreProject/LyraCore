@@ -85,6 +85,7 @@ impl PlayerSubscriptions {
             ignored: Mutex::default(),
             friends: Mutex::default(),
             team: lyracore_shared::faction::TEAM_ALLIANCE,
+            group_events: Default::default(),
         });
         view.add_viewer_on_shard(
             viewer.clone(),
@@ -2197,6 +2198,7 @@ pub(crate) fn group_event_outbound<St: crate::world::WorldStore + ?Sized>(
 ) -> Vec<Outbound> {
     use lyracore_shared::group::event_kind as group_kind;
     use lyracore_shared::loot_roll::event_kind as roll_kind;
+    use lyracore_shared::meeting_stone::event_kind as stone_kind;
     use lyracore_shared::quest::share_event_kind as quest_share_kind;
     let msg = match row.kind {
         // Sent even when no shard can name the inviter (falls back to an empty name, like
@@ -2441,6 +2443,23 @@ pub(crate) fn group_event_outbound<St: crate::world::WorldStore + ?Sized>(
                 )))
             },
         ),
+        stone_kind::QUEUE => {
+            let packet = lyracore_shared::meeting_stone::decode_queue(&row.payload)
+                .and_then(|(area_id, status)| codec::build_meetingstone_setqueue(area_id, status));
+            if packet.is_none() {
+                log::warn!(
+                    "meeting stone QUEUE relay: unencodable payload {:?} (event {})",
+                    row.payload,
+                    row.id
+                );
+            }
+            packet.map(ServerOpcodeMessage::SMSG_MEETINGSTONE_SETQUEUE)
+        }
+        stone_kind::MEMBER_ADDED => Some(ServerOpcodeMessage::SMSG_MEETINGSTONE_MEMBER_ADDED(
+            codec::build_meetingstone_member_added(row.other_guid),
+        )),
+        stone_kind::IN_PROGRESS => Some(ServerOpcodeMessage::SMSG_MEETINGSTONE_IN_PROGRESS),
+        stone_kind::COMPLETE => Some(ServerOpcodeMessage::SMSG_MEETINGSTONE_COMPLETE),
         other => {
             log::warn!("group event relay: unknown kind {other} (id {})", row.id);
             None
@@ -3945,6 +3964,7 @@ impl Coordinator {
             ignored: Mutex::new(ignored),
             friends: Mutex::new(friends),
             team,
+            group_events: Default::default(),
         });
         view.add_viewer(
             self,
@@ -4139,6 +4159,69 @@ impl Coordinator {
                     );
                 }
             });
+    }
+
+    /// Start the Roster Revision Relay: Realm-core's `game_group_roster_revision` callbacks mark a
+    /// party dirty, and one worker pushes it to every stale World Shard mirror. Called once at
+    /// startup. Arms nothing unless Realm-core is a distinct database. A Realm-core reconnect
+    /// re-arms the callbacks on the fresh connection; changes missed while it was down are the
+    /// reconciliation pass's, which that reconnect also starts.
+    pub fn spawn_roster_revision_relay(&self) {
+        let realm = match self.realm_core() {
+            Ok(realm) => realm,
+            Err(error) => {
+                log::error!(
+                    "party: the Roster Revision Relay is not running; Realm-core is unavailable at \
+                     startup ({error:#}). World Shard mirrors follow only party ops and the \
+                     reconnect pass until the Gateway restarts"
+                );
+                return;
+            }
+        };
+        if self
+            .all_shards()
+            .iter()
+            .any(|shard| shard.shard_name() == realm.shard_name())
+        {
+            return;
+        }
+        let relay = match crate::world::party_mirror::RosterRevisionRelay::spawn(self.clone()) {
+            Ok(relay) => relay,
+            Err(error) => {
+                log::error!("party: could not start the Roster Revision Relay: {error}");
+                return;
+            }
+        };
+        realm.arm_roster_revision_relay(&relay);
+        let hook_realm = realm.clone();
+        realm
+            .0
+            .on_reconnect
+            .lock()
+            .unwrap()
+            .push(std::sync::Arc::new(move || {
+                hook_realm.arm_roster_revision_relay(&relay);
+            }));
+    }
+
+    /// Realm-core's half of [`Self::spawn_roster_revision_relay`], on the current connection. The
+    /// callbacks only mark the party dirty; the worker makes every reducer call.
+    fn arm_roster_revision_relay(
+        &self,
+        relay: &std::sync::Arc<crate::world::party_mirror::RosterRevisionRelay>,
+    ) {
+        use spacetimedb_sdk::TableWithPrimaryKey;
+        let live = self.0.coord();
+        let inserted = relay.clone();
+        live.conn
+            .db
+            .game_group_roster_revision()
+            .on_insert(move |_ctx, row| inserted.mark_dirty(row.group_id));
+        let updated = relay.clone();
+        live.conn
+            .db
+            .game_group_roster_revision()
+            .on_update(move |_ctx, _old, row| updated.mark_dirty(row.group_id));
     }
 
     /// Start one bounded Transfer Intent dispatcher per configured World Shard. Each pass reads the
@@ -4577,6 +4660,7 @@ mod tests {
             ignored: Mutex::default(),
             friends: Mutex::default(),
             team: lyracore_shared::faction::TEAM_ALLIANCE,
+            group_events: Default::default(),
         }
     }
 
@@ -4746,6 +4830,7 @@ mod tests {
             name: "Duel Arbiter".into(),
             data0: 0,
             data1: 0,
+            data2: 0,
         };
         let row = duel_event(0, 0);
         let out = duel_event_outbound(&row, Some(&template));
@@ -7079,7 +7164,7 @@ mod tests {
         let body = decommented(top_level_fn_body_of("world_view.rs", "arm_realm_private"));
         let compact: String = body.chars().filter(|c| !c.is_whitespace()).collect();
         assert!(
-            compact.contains("wire_insert_live(db.game_group_event(),\"realm.game_group_event.insert\",&view,move|v,row|group_event_appeared(v,&coord,row));"),
+            compact.contains("wire_group_events(db,\"realm.game_group_event.insert\",&view,coord.clone(),GroupEventSource::RealmCore);"),
             "arm_realm_private no longer relays realm-core group events through \
              `group_event_appeared` (which also carries the QUEST_SHARE detail JOIN through a \
              WORLD handle — realm-core's cache has no quest catalogue)"
@@ -8222,6 +8307,14 @@ mod tests {
 #[cfg(test)]
 #[path = "subscriptions_character_gone_durable_tests.rs"]
 mod character_gone_durable_tests;
+
+#[cfg(test)]
+#[path = "subscriptions_roster_relay_durable_tests.rs"]
+mod roster_relay_durable_tests;
+
+#[cfg(test)]
+#[path = "subscriptions_meeting_stone_durable_tests.rs"]
+mod meeting_stone_durable_tests;
 
 #[cfg(test)]
 include!(concat!(env!("OUT_DIR"), "/package-coordinator-tests.rs"));

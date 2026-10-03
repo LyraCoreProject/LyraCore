@@ -2,9 +2,10 @@ use super::handlers::{
     resolve_online_character, AuctionActionStore, AuctionInteraction, CastStore,
     ChannelActionStore, ChannelOutcome, ChannelRequest, ChannelRoster, ChatActionStore,
     ChatOutcome, DuelActionStore, GuildActionStore, ItemActionStore, LootWindowRefusal,
-    LootWindowRequestStatus, LootWindowStore, MeleeActionStore, MemberPresence, MemberSnapshot,
-    MemberStatsStore, QuestActionStore, RealmChatRequest, ResolvedTarget, SpeakerFacts,
-    TaxiActionStore, VendorActionStore, WeatherStore, WhisperRequest, WhisperTargetFacts,
+    LootWindowRequestStatus, LootWindowStore, MeetingStoneActionStore, MeetingStoneOutcome,
+    MeleeActionStore, MemberPresence, MemberSnapshot, MemberStatsStore, QuestActionStore,
+    RealmChatRequest, ResolvedTarget, SpeakerFacts, TaxiActionStore, VendorActionStore,
+    WeatherStore, WhisperRequest, WhisperTargetFacts,
 };
 use super::party::PartyOutcome;
 use super::*;
@@ -102,6 +103,11 @@ fn world_session_socket_pair_times_out_when_the_server_writes_nothing() {
 /// file because this one is already the largest in the tree.
 #[path = "party_tests.rs"]
 mod party_tests;
+
+/// The Roster Revision Relay against the party topology. A sibling of `party_tests` so it reaches
+/// `InMemoryStore` and that topology without widening anything.
+#[path = "party_mirror_tests.rs"]
+mod party_mirror_tests;
 
 /// Member Stats: the Relay tick and the stats request against the party topology. A sibling of
 /// `party_tests` so it reaches `InMemoryStore` and that topology without widening anything.
@@ -650,6 +656,9 @@ struct InMemoryStore {
     /// What `sync_group_mirror` wrote onto THIS shard, latest per group. The invalidation
     /// story, made observable.
     mirror: std::sync::Mutex<Vec<super::party::GroupRoster>>,
+    /// The Roster Revision each `sync_group_mirror` accepted on THIS shard, kept after the disband
+    /// tombstone, as the Module's mirror keeps its `game_group_roster_revision` row.
+    mirror_revisions: std::sync::Mutex<std::collections::HashMap<u64, u64>>,
     /// Guids with a LIVE entity on this shard — the per-guid `entity_in_world` answer a
     /// realm-wide party frame's online flags are built from. Empty = the single `entity_in_world`
     /// flag above decides, as it did before.
@@ -3827,6 +3836,22 @@ impl WorldStore for InMemoryStore {
             .cloned())
     }
 
+    fn group_roster_revision(&self, group_id: u64) -> Result<u64> {
+        Ok(self.held_roster_revision(group_id)?.unwrap_or(1))
+    }
+
+    fn held_roster_revision(&self, group_id: u64) -> Result<Option<u64>> {
+        if self.is_realm {
+            return Ok(self.realm_cache(|p| p.revisions.get(&group_id).copied()));
+        }
+        Ok(self
+            .mirror_revisions
+            .lock()
+            .unwrap()
+            .get(&group_id)
+            .copied())
+    }
+
     fn party_member_guids(&self) -> Result<Vec<u64>> {
         if !self.is_realm {
             return Ok(Vec::new());
@@ -3880,6 +3905,10 @@ impl WorldStore for InMemoryStore {
         if let Some(e) = &self.mirror_error {
             return Err(anyhow!("{e}"));
         }
+        self.mirror_revisions
+            .lock()
+            .unwrap()
+            .insert(roster.group_id, roster.roster_revision);
         let mut mirror = self.mirror.lock().unwrap();
         mirror.retain(|r| r.group_id != roster.group_id);
         // An empty roster is the disband tombstone — the shard forgets the party rather than
@@ -4372,6 +4401,42 @@ impl ChannelActionStore for InMemoryStore {
 
     fn ignores(&self, owner_guid: u64, other_guid: u64) -> Result<bool> {
         whisper::ignored_anywhere(self, owner_guid, other_guid)
+    }
+}
+
+/// The Meeting Stone family is tested against its own Fake in `handlers/meeting_stone.rs`. Here no
+/// stone exists and nobody is queued.
+impl MeetingStoneActionStore for InMemoryStore {
+    fn admit_meeting_stone(&self, _actor_guid: u64, _go_guid: u64) -> Result<MeetingStoneOutcome> {
+        Ok(MeetingStoneOutcome::Refused(
+            lyracore_shared::meeting_stone::MeetingStoneRefusal::NotAMeetingStone,
+        ))
+    }
+
+    fn meeting_stone_area(&self, _go_guid: u64) -> Result<Option<u32>> {
+        Ok(None)
+    }
+
+    fn party_members(&self, _actor_guid: u64) -> Result<Option<Vec<u64>>> {
+        Ok(None)
+    }
+
+    fn seeker_facts(&self, _character_guid: u64) -> Result<Option<super::SeekerFacts>> {
+        Ok(None)
+    }
+
+    fn meeting_stone_op(
+        &self,
+        _actor_guid: u64,
+        _op: u8,
+        _area_id: u32,
+        _seekers: Vec<super::SeekerFacts>,
+    ) -> Result<MeetingStoneOutcome> {
+        Ok(MeetingStoneOutcome::Ran)
+    }
+
+    fn queued_area(&self, _character_guid: u64) -> Result<Option<u32>> {
+        Ok(None)
     }
 }
 

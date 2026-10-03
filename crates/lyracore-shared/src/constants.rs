@@ -110,6 +110,10 @@ pub mod go_type {
     /// `GAMEOBJECT_TYPE_CHEST` (3) — the only GameObject type whose right-click belongs to the
     /// gateway loot-window lifecycle.
     pub const CHEST: u8 = 3;
+    /// `GAMEOBJECT_TYPE_MEETINGSTONE` (23). The client sends `CMSG_MEETINGSTONE_JOIN` on use, not
+    /// `CMSG_GAMEOBJ_USE`. `data0` is the minimum level, `data1` the maximum and `data2` the dungeon
+    /// area (cm:Entities/GameObject.h:266-272).
+    pub const MEETINGSTONE: u8 = 23;
 }
 
 /// `UNIT_FIELD_BYTES_1` byte-3 visibility flags (vanilla 1.12). Drives client render state, stored in
@@ -451,6 +455,12 @@ mod tests {
     #[test]
     fn go_type_questgiver_is_cmangos_type_2() {
         assert_eq!(go_type::QUESTGIVER, 2);
+    }
+
+    /// cmangos `GAMEOBJECT_TYPE_MEETINGSTONE`. The importer, the Module and the Gateway read it.
+    #[test]
+    fn go_type_meetingstone_is_cmangos_type_23() {
+        assert_eq!(go_type::MEETINGSTONE, 23);
     }
 
     /// Work-item 217: the gossip option action codes the dispatcher matches on must be pairwise

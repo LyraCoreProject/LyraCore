@@ -170,7 +170,7 @@ crate::character_owned!(not_transported, fn sweep_transfer_game_group_member_par
 // leader-transfer/disband logic a voluntary leave uses — never a bare row delete, which would
 // orphan leadership or leave a 1-member group alive.
 crate::character_owned!(delete, fn sweep_delete_game_group_member(ctx, character_guid) {
-    remove_member(ctx, character_guid);
+    remove_member(ctx, character_guid, Departure::Left);
 });
 crate::character_owned!(restamp, fn sweep_restamp_game_group_member(ctx, character_guid, identity) {
     let members = ctx.db.game_group_member();
@@ -387,7 +387,7 @@ pub(crate) fn refused(refusal: GroupRefusal, detail: &str) -> String {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum GroupOpError {
+pub(crate) enum GroupOpError {
     Refused(GroupRefusal),
     Invariant(String),
 }
@@ -1066,7 +1066,7 @@ pub fn party_facts(
 
 /// Resolve a membership and its required parent for mutation cores. `Ok(None)` means the
 /// Character has no membership; a membership without its Group is a durable invariant failure.
-fn checked_group_membership(
+pub(crate) fn checked_group_membership(
     ctx: &ReducerContext,
     character_guid: u64,
 ) -> Result<Option<(GroupMember, Group)>, GroupOpError> {
@@ -1085,6 +1085,19 @@ fn checked_group_membership(
             ))
         })?;
     Ok(Some((member, group)))
+}
+
+/// `character_guid`'s Group and its members, through [`checked_group_membership`].
+pub(crate) fn group_with_members(
+    ctx: &ReducerContext,
+    character_guid: u64,
+) -> Result<Option<(Group, Vec<GroupMember>)>, GroupOpError> {
+    Ok(
+        checked_group_membership(ctx, character_guid)?.map(|(_, group)| {
+            let members = members_of(ctx, group.group_id);
+            (group, members)
+        }),
+    )
 }
 
 /// The leader-authorization sequence of the ops only the leader may run (loot rules, convert, set
@@ -1368,13 +1381,13 @@ fn invite_core_on(
 /// The identity-free accept core: shared by `gw::gw_accept_group_invite` and any server-driven
 /// acceptor (a playerbot's auto-accept hook calls this with the bot's guid).
 pub(crate) fn accept_invite_for(ctx: &ReducerContext, acceptor_guid: u64) -> Result<(), String> {
-    if crate::helpers::character_by_guid(ctx, acceptor_guid)
-        .is_some_and(|character| !character.online)
-    {
+    let acceptor = crate::helpers::character_by_guid(ctx, acceptor_guid);
+    if acceptor.as_ref().is_some_and(|character| !character.online) {
         crate::sessionless::group_action_gate(ctx, acceptor_guid)
             .map_err(|refusal| refused(refusal, "session-less group acceptance"))?;
     }
-    accept_invite_on(ctx, Plane::Shard, acceptor_guid).map_err(|error| {
+    let class = acceptor.map_or(0, |character| character.class);
+    accept_invite_on(ctx, Plane::Shard, acceptor_guid, class).map_err(|error| {
         group_op_error(
             error,
             &format!("{acceptor_guid} could not accept its invite"),
@@ -1392,10 +1405,13 @@ fn has_pending_leader_invite(ctx: &ReducerContext, character_guid: u64) -> bool 
         .any(|invite| invite.inviter_guid == character_guid && invite.group_id == 0)
 }
 
+/// Consume `acceptor_guid`'s pending invite and join its Group through [`plan_join`]. `class` is
+/// the acceptor's, for the Seeker row a queued Party gains; 0 when unknown.
 fn accept_invite_on(
     ctx: &ReducerContext,
     plane: Plane,
     acceptor_guid: u64,
+    class: u8,
 ) -> Result<(), GroupOpError> {
     let invites = ctx.db.game_group_invite();
     let invite = invites
@@ -1404,110 +1420,188 @@ fn accept_invite_on(
         .next()
         .ok_or(GroupRefusal::NoPendingInvite)?;
     invites.id().delete(invite.id);
-    if checked_group_membership(ctx, acceptor_guid)?.is_some() {
+    // cmangos joins the invite's Group whatever the inviter did since: left, removed or demoted
+    // (cm:GroupHandler.cpp:185-227). An invite without a Group forms the inviter's.
+    let target = match invite.group_id {
+        0 => JoinTarget::NewParty {
+            leader_guid: invite.inviter_guid,
+        },
+        group_id => JoinTarget::Group(group_id),
+    };
+    let plan = plan_join(ctx, acceptor_guid, target)?;
+    // A World Shard holds every Character it groups, so a missing row is a Character that is gone
+    // or in transit. Realm-core holds none and takes the Gateway's word.
+    if plane == Plane::Shard {
+        if let JoinTarget::NewParty { leader_guid } = target {
+            crate::helpers::character_by_guid(ctx, leader_guid)
+                .ok_or(GroupRefusal::InviterUnavailable)?;
+        }
+        crate::helpers::character_by_guid(ctx, acceptor_guid).ok_or(GroupRefusal::NoSuchPlayer)?;
+    }
+    let joined = plan.apply(ctx);
+    if joined.formed {
+        crate::meeting_stone::party_joined(ctx, joined.group_id, invite.inviter_guid, 0)
+            .map_err(GroupOpError::Invariant)?;
+    }
+    crate::meeting_stone::party_joined(ctx, joined.group_id, acceptor_guid, class)
+        .map_err(GroupOpError::Invariant)
+}
+
+/// Which Group [`plan_join`] adds a Character to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum JoinTarget {
+    /// An existing Group.
+    Group(u64),
+    /// A Party this join forms. The leader joins it first.
+    NewParty { leader_guid: u64 },
+}
+
+/// The Group [`JoinPlan::apply`] added a Character to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct JoinedGroup {
+    pub(crate) group_id: u64,
+    /// The join formed this Party.
+    pub(crate) formed: bool,
+}
+
+/// A join that passed every check and has written nothing yet. [`JoinPlan::apply`] cannot fail, so
+/// a caller may write its own rows between the two and never leave half a join behind. The plan
+/// holds while nothing between the two changes group membership.
+#[derive(Debug)]
+pub(crate) struct JoinPlan {
+    joiner_guid: u64,
+    target: JoinTarget,
+    slot: RaidSlot,
+}
+
+/// The one way a Character joins a Group: an accepted invite and a Stone Add both come here.
+///
+/// The joiner must be in no Group. An existing Group must exist and have room for its kind; a Raid
+/// joiner takes a free Raid Slot. A new Party's leader must be in no Group either. Writes nothing.
+pub(crate) fn plan_join(
+    ctx: &ReducerContext,
+    joiner_guid: u64,
+    target: JoinTarget,
+) -> Result<JoinPlan, GroupOpError> {
+    if checked_group_membership(ctx, joiner_guid)?.is_some() {
         return Err(GroupRefusal::AlreadyInGroup.into());
     }
-    let inviter_guid = invite.inviter_guid;
-    let members = ctx.db.game_group_member();
-    let (group_id, slot) = if invite.group_id != 0 {
-        // cmangos joins the invite's Group whatever the inviter did since: left, removed or
-        // demoted (cm:GroupHandler.cpp:185-227). A Group that is gone ends the invite. Member
-        // rows that still name a missing Group are broken state, not a lapsed invite.
-        let current = members_of(ctx, invite.group_id);
-        let Some(group) = ctx.db.game_group().group_id().find(invite.group_id) else {
-            if current.is_empty() {
-                return Err(GroupRefusal::NoPendingInvite.into());
+    let slot = match target {
+        JoinTarget::Group(group_id) => {
+            let current = members_of(ctx, group_id);
+            let Some(group) = ctx.db.game_group().group_id().find(group_id) else {
+                // A Group that is gone ends the invite. Member rows that still name a missing
+                // Group are broken state, not a lapsed invite.
+                if current.is_empty() {
+                    return Err(GroupRefusal::NoPendingInvite.into());
+                }
+                return Err(GroupOpError::Invariant(format!(
+                    "members point to missing group {group_id}"
+                )));
+            };
+            let kind = group_kind_of(&group);
+            if !has_room(kind, current.len()) {
+                return Err(GroupRefusal::GroupFull.into());
             }
-            return Err(GroupOpError::Invariant(format!(
-                "members point to missing group {}",
-                invite.group_id
-            )));
-        };
-        let kind = group_kind_of(&group);
-        if !has_room(kind, current.len()) {
-            return Err(GroupRefusal::GroupFull.into());
+            match kind {
+                GroupKind::Party => RaidSlot::default(),
+                GroupKind::Raid => RaidSlot::for_raid_joiner(current.iter().map(raid_slot_of))
+                    .ok_or(GroupRefusal::GroupFull)?,
+            }
         }
-        let slot = match kind {
-            GroupKind::Party => RaidSlot::default(),
-            GroupKind::Raid => RaidSlot::for_raid_joiner(current.iter().map(raid_slot_of))
-                .ok_or(GroupRefusal::GroupFull)?,
-        };
-        (group.group_id, slot)
-    } else {
-        // The inviter had no Group. If it has joined one since, this invite speaks for nobody.
-        if checked_group_membership(ctx, inviter_guid)?.is_some() {
-            return Err(GroupRefusal::InviterUnavailable.into());
+        JoinTarget::NewParty { leader_guid } => {
+            // A leader that has joined a Group since speaks for nobody.
+            if checked_group_membership(ctx, leader_guid)?.is_some() {
+                return Err(GroupRefusal::InviterUnavailable.into());
+            }
+            RaidSlot::default()
         }
-        // The member row's `owner_identity` is the SHARD's binding for that character. On
-        // realm-core there is no such binding to read (identities are per-database), so the
-        // directory plane stores ZERO and each shard's mirror re-derives its own, which is what
-        // `player_login`'s restamp does for every other character-owned row.
-        let inviter_identity = match plane {
-            Plane::Shard => Some(
-                ctx.db
-                    .game_character()
-                    .guid()
-                    .find(inviter_guid)
-                    .ok_or(GroupRefusal::InviterUnavailable)?
-                    .owner_identity,
-            ),
-            Plane::RealmCore => None,
+    };
+    Ok(JoinPlan {
+        joiner_guid,
+        target,
+        slot,
+    })
+}
+
+impl JoinPlan {
+    /// Add the joiner. A new Party starts with Vanilla's defaults, group loot at Uncommon, and its
+    /// leader's other pending invites now join it. Every member gets the roster list. The joiner,
+    /// and a new Party's leader, get their Instance Removal reconciled, so joining the Group that
+    /// owns the instance cancels the countdown (cm:Group.cpp:880-885).
+    ///
+    /// A member row's `owner_identity` is the local Character row's identity when this database
+    /// holds one, else zero: Realm-core holds no Character rows, and each World Shard mirror
+    /// re-derives it.
+    pub(crate) fn apply(self, ctx: &ReducerContext) -> JoinedGroup {
+        let Self {
+            joiner_guid,
+            target,
+            slot,
+        } = self;
+        let members = ctx.db.game_group_member();
+        let joined = match target {
+            JoinTarget::Group(group_id) => JoinedGroup {
+                group_id,
+                formed: false,
+            },
+            JoinTarget::NewParty { leader_guid } => {
+                let group = ctx.db.game_group().insert(Group {
+                    group_id: 0,
+                    leader_guid,
+                    loot_method: loot_method::GROUP,
+                    loot_threshold: 2,
+                    rr_cursor: 0,
+                    master_looter_guid: 0,
+                    group_type: GroupKind::Party.wire(),
+                });
+                members.insert(GroupMember {
+                    id: 0,
+                    group_id: group.group_id,
+                    character_guid: leader_guid,
+                    owner_identity: member_identity(ctx, leader_guid),
+                    raid_slot: RaidSlot::default().wire(),
+                });
+                let invites = ctx.db.game_group_invite();
+                let pending: Vec<GroupInvite> = invites
+                    .iter()
+                    .filter(|other| other.inviter_guid == leader_guid && other.group_id == 0)
+                    .collect();
+                for other in pending {
+                    invites.id().update(GroupInvite {
+                        group_id: group.group_id,
+                        ..other
+                    });
+                }
+                JoinedGroup {
+                    group_id: group.group_id,
+                    formed: true,
+                }
+            }
         };
-        // First acceptance forms the group: the inviter leads and joins it here.
-        let group = ctx.db.game_group().insert(Group {
-            group_id: 0,
-            leader_guid: inviter_guid,
-            // Vanilla's real default for a freshly-formed party (work-item 187): GROUP LOOT at
-            // Uncommon threshold, no master, cursor at 0.
-            loot_method: loot_method::GROUP,
-            loot_threshold: 2,
-            rr_cursor: 0,
-            master_looter_guid: 0,
-            group_type: GroupKind::Party.wire(),
-        });
         members.insert(GroupMember {
             id: 0,
-            group_id: group.group_id,
-            character_guid: inviter_guid,
-            owner_identity: crate::helpers::event_recipient_identity(inviter_identity),
-            raid_slot: RaidSlot::default().wire(),
+            group_id: joined.group_id,
+            character_guid: joiner_guid,
+            owner_identity: member_identity(ctx, joiner_guid),
+            raid_slot: slot.wire(),
         });
-        // The inviter's other pending invites now join the Group this accept formed.
-        let pending: Vec<GroupInvite> = invites
-            .iter()
-            .filter(|other| other.inviter_guid == inviter_guid && other.group_id == 0)
-            .collect();
-        for other in pending {
-            invites.id().update(GroupInvite {
-                group_id: group.group_id,
-                ..other
-            });
+        push_list_to_all(ctx, joined.group_id);
+        crate::instance::reconcile_instance_removal(ctx, joiner_guid);
+        if let JoinTarget::NewParty { leader_guid } = target {
+            crate::instance::reconcile_instance_removal(ctx, leader_guid);
         }
-        (group.group_id, RaidSlot::default())
-    };
-    let acceptor_identity = match plane {
-        Plane::Shard => ctx
-            .db
-            .game_character()
-            .guid()
-            .find(acceptor_guid)
-            .map(|c| c.owner_identity)
-            .ok_or(GroupRefusal::NoSuchPlayer)?,
-        Plane::RealmCore => Identity::ZERO,
-    };
-    members.insert(GroupMember {
-        id: 0,
-        group_id,
-        character_guid: acceptor_guid,
-        owner_identity: acceptor_identity,
-        raid_slot: slot.wire(),
-    });
-    push_list_to_all(ctx, group_id);
-    // Rejoining the Group that owns the instance cancels the countdown (cm:Group.cpp:880-885).
-    // The inviter is new to a Group this accept forms.
-    crate::instance::reconcile_instance_removal(ctx, acceptor_guid);
-    crate::instance::reconcile_instance_removal(ctx, inviter_guid);
-    Ok(())
+        joined
+    }
+}
+
+/// A member row's `owner_identity`: this database's binding for the Character, or zero where it
+/// holds no Character row.
+fn member_identity(ctx: &ReducerContext, character_guid: u64) -> Identity {
+    crate::helpers::event_recipient_identity(
+        crate::helpers::character_by_guid(ctx, character_guid)
+            .map(|character| character.owner_identity),
+    )
 }
 
 /// The identity-free decline core: the body `group_decline` used to inline, so the realm-core
@@ -1554,7 +1648,7 @@ fn leave_group_on(ctx: &ReducerContext, leaver_guid: u64, cause: u8) -> Result<(
     if cause == leave_cause::CHARACTER_DELETED {
         delete_target_icons_on(ctx, leaver_guid);
     }
-    remove_member(ctx, leaver_guid);
+    remove_member(ctx, leaver_guid, Departure::Left);
     Ok(())
 }
 
@@ -1592,7 +1686,7 @@ fn uninvite_on(
     if target_guid == group.leader_guid {
         return Err(GroupRefusal::NotLeader.into());
     }
-    remove_member(ctx, target_guid);
+    remove_member(ctx, target_guid, Departure::Kicked);
     Ok(())
 }
 
@@ -1672,6 +1766,13 @@ fn raid_convert_on(ctx: &ReducerContext, actor_guid: u64) -> Result<RosterChange
     }
     group.group_type = GroupKind::Raid.wire();
     ctx.db.game_group().group_id().update(group);
+    // A queued raid would keep taking Stone Adds past the Party's roles, and JOIN refuses a raid,
+    // so the Party leaves the Meeting Stone Queue. Both cores keep it queued.
+    crate::meeting_stone::dequeue_party(
+        ctx,
+        member.group_id,
+        lyracore_shared::meeting_stone::queue_status::LEAVE_QUEUE,
+    );
     push_list_to_all(ctx, member.group_id);
     Ok(RosterChange::Changed)
 }
@@ -1831,13 +1932,23 @@ enum RosterChange {
     Unchanged,
 }
 
+/// How a member left its Group. The Meeting Stone Queue answers a kick differently from a leave.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Departure {
+    /// The member left, or its Character was deleted.
+    Left,
+    /// The leader or an Assistant removed the member.
+    Kicked,
+}
+
 /// The single membership-removal core (voluntary leave, kick, character delete): drops the member
 /// row, notifies the leaver, transfers leadership if the leader left, and DISBANDS below 2 members
 /// (vanilla: a party of one is no party), which also deletes the Group's Target Icons. A new leader
 /// is announced to the remaining members before their list (cm:Group.cpp:464-470). Every Character
-/// that lost its Group here gets its Instance Removal reconciled (cm:Group.cpp:461). Idempotent for
-/// a guid not in any group.
-pub(crate) fn remove_member(ctx: &ReducerContext, character_guid: u64) {
+/// that lost its Group here gets its Instance Removal reconciled (cm:Group.cpp:461). A queued
+/// Party's Meeting Stone Queue state follows the departure before the list
+/// ([`crate::meeting_stone::party_left`]). Idempotent for a guid not in any group.
+pub(crate) fn remove_member(ctx: &ReducerContext, character_guid: u64, departure: Departure) {
     let Some(m) = group_of(ctx, character_guid) else {
         return;
     };
@@ -1856,7 +1967,7 @@ pub(crate) fn remove_member(ctx: &ReducerContext, character_guid: u64) {
     let group = ctx.db.game_group().group_id().find(group_id);
     // The incumbent-leader arg only matters for the survive branch; a missing group row (shouldn't
     // happen while members exist) falls back to 0 — no update runs without a row to update anyway.
-    match leader_after_removal(
+    let rematch = match leader_after_removal(
         group.as_ref().map_or(GroupKind::Party, group_kind_of),
         &remaining,
         character_guid,
@@ -1887,6 +1998,7 @@ pub(crate) fn remove_member(ctx: &ReducerContext, character_guid: u64) {
                 );
                 ctx.db.game_group_member().id().delete(r.id);
             }
+            crate::meeting_stone::party_disbanded(ctx, group_id, &all_guids);
             clear_target_icons(ctx, group_id);
             ctx.db.game_group().group_id().delete(group_id);
             // A disband starts the countdown for every former member in the instance, the last
@@ -1897,17 +2009,35 @@ pub(crate) fn remove_member(ctx: &ReducerContext, character_guid: u64) {
             return;
         }
         Some(new_leader) => {
+            let mut leader_changed = false;
             if let Some(mut group) = group {
                 if group.leader_guid != new_leader {
                     group.leader_guid = new_leader;
                     ctx.db.game_group().group_id().update(group);
                     announce_leader(ctx, group_id, new_leader);
+                    leader_changed = true;
                 }
             }
+            crate::meeting_stone::party_left(
+                ctx,
+                crate::meeting_stone::PartyDeparture {
+                    group_id,
+                    character_guid,
+                    departure,
+                    leader_changed,
+                },
+            )
         }
-    }
+    };
     push_list_to_all(ctx, group_id);
     crate::instance::reconcile_instance_removal(ctx, character_guid);
+    // `remove_member` has no failure path: a delete sweep runs it. A broken relationship stops
+    // the pass and is logged; the removal itself stands.
+    if let Some(bucket) = rematch {
+        if let Err(reason) = crate::meeting_stone::match_bucket(ctx, bucket) {
+            spacetimedb::log::error!("meeting stone pass after {character_guid} left: {reason}");
+        }
+    }
 }
 
 /// Tell every member who leads now. `SMSG_GROUP_SET_LEADER` carries only a name, which the Gateway
@@ -2006,7 +2136,10 @@ pub fn realm_group_op(
         realm_op::INVITE => {
             invite_core_on(ctx, Plane::RealmCore, actor_guid, target_guid).map(|()| Unchanged)
         }
-        realm_op::ACCEPT => accept_invite_on(ctx, Plane::RealmCore, actor_guid).map(|()| Changed),
+        // Realm-core holds no Character rows, so the Gateway conveys the acceptor's class.
+        realm_op::ACCEPT => {
+            accept_invite_on(ctx, Plane::RealmCore, actor_guid, arg_a).map(|()| Changed)
+        }
         realm_op::DECLINE => decline_invite_on(ctx, actor_guid).map(|()| Unchanged),
         realm_op::LEAVE => leave_group_on(ctx, actor_guid, arg_a).map(|()| Changed),
         realm_op::UNINVITE => uninvite_on(ctx, actor_guid, target_guid).map(|()| Changed),
@@ -2094,7 +2227,14 @@ fn realm_op_groups(
         .collect()
 }
 
-fn advance_group_revision(ctx: &ReducerContext, group_id: u64, was_active: bool, active: bool) {
+/// Advance `group_id`'s Roster Revision. `was_active` says whether the Group existed before this
+/// transaction, which sets the first revision of a Group that has no row yet.
+pub(crate) fn advance_group_revision(
+    ctx: &ReducerContext,
+    group_id: u64,
+    was_active: bool,
+    active: bool,
+) {
     let table = ctx.db.game_group_roster_revision();
     let current = table.group_id().find(group_id);
     let revision = next_group_revision(current.as_ref().map(|row| row.revision), was_active);
@@ -3507,7 +3647,7 @@ mod tests {
             ),
             (
                 "realm_op::ACCEPT =>",
-                "accept_invite_on(ctx, Plane::RealmCore, actor_guid)",
+                "accept_invite_on(ctx, Plane::RealmCore, actor_guid, arg_a)",
             ),
             ("realm_op::DECLINE =>", "decline_invite_on(ctx, actor_guid)"),
             (

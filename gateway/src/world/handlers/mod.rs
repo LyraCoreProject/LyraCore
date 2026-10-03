@@ -6,7 +6,7 @@ use super::*;
 // Two shapes live here. A `handle_*` handler is code-motion of the former dispatch match arms
 // (bodies verbatim): it sends on the socket itself and returns `Ok(None)` once it consumes its
 // opcode, else `Ok(Some(msg))` to pass the message on. A `dispatch_*_action` seam (auction, channel,
-// chat, item, melee, quest and vendor) owns a whole protocol family instead: it takes a narrow store
+// chat, item, meeting stone, melee, quest and vendor) owns a whole protocol family instead: it takes a narrow store
 // trait and a player context, decides refusal-versus-fatal itself, and returns the outbound batch
 // for the world session to send, so the family can be tested without a socket.
 
@@ -22,6 +22,7 @@ mod guild;
 mod item;
 mod loot;
 mod mail;
+mod meeting_stone;
 mod melee;
 mod member_stats;
 mod query;
@@ -70,6 +71,10 @@ pub(crate) use loot::{
     LootWindowRefusal, LootWindowRequestStatus, LootWindowStore, OpenLootState,
 };
 pub(crate) use mail::handle_mail;
+pub(crate) use meeting_stone::{
+    dispatch_meeting_stone_action, MeetingStoneActionOutcome, MeetingStoneActionStore,
+    MeetingStoneOutcome, MeetingStonePlayer, SeekerFacts,
+};
 pub(crate) use melee::{
     dispatch_melee_action, MeleeActionOutcome, MeleeActionPlayer, MeleeActionStore,
 };

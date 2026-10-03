@@ -179,7 +179,7 @@ impl RaidSlot {
 /// - 12-19: unassigned, left for the Realm-core chat seam.
 /// - 20: the leader announcement, below.
 /// - 21-26: Group Broadcasts, below.
-/// - 27-30: reserved for meeting stones.
+/// - 27-30: the Meeting Stone Queue, `crate::meeting_stone::event_kind`.
 pub mod event_kind {
     /// You are invited (`other_*` = the inviter) → `SMSG_GROUP_INVITE`.
     pub const INVITE: u8 = 0;
@@ -236,8 +236,9 @@ pub mod event_kind {
 ///
 /// Argument slots (`realm_group_op(op, actor_guid, target_guid, arg_a, arg_b, arg_c)`), per op:
 /// - [`INVITE`] / [`UNINVITE`]: `target_guid` is the invitee/kicked member; the rest unused.
-/// - [`ACCEPT`] / [`DECLINE`]: `actor_guid` alone; every other slot unused. `ACCEPT` keeps
-///   `arg_a`/`arg_b` free for meeting stones, which will send class and race there.
+/// - [`ACCEPT`]: `arg_a` is the acceptor's class, 0 when the Gateway cannot read it. Realm-core
+///   holds no Character rows, so the Seeker row a queued party gains needs it. The rest unused.
+/// - [`DECLINE`]: `actor_guid` alone; every other slot unused.
 /// - [`LEAVE`]: `actor_guid` leaves; `arg_a` = a [`super::leave_cause`] value.
 /// - [`LOOT_METHOD`]: `arg_a` = loot setting, `target_guid` = the master looter, `arg_b` = the
 ///   quality threshold. (That is `CMSG_LOOT_METHOD`'s own field order, kept so the gateway hands the
@@ -646,6 +647,45 @@ impl RosterPayload {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every producer of `game_group_event` shares one kind byte space, and kind 9 stays retired.
+    #[test]
+    fn every_group_event_kind_is_distinct_and_none_reuses_kind_9() {
+        use crate::loot_roll::event_kind as roll;
+        use crate::meeting_stone::event_kind as stone;
+        use crate::quest::share_event_kind as share;
+        let kinds = [
+            event_kind::INVITE,
+            event_kind::LIST,
+            event_kind::DECLINE,
+            event_kind::DESTROYED,
+            roll::ROLL_START,
+            roll::ROLL_VOTE,
+            roll::ROLL_WON,
+            roll::MASTER_LIST,
+            roll::MONEY_SHARE,
+            share::QUEST_SHARE,
+            share::QUEST_PUSH_RESULT,
+            event_kind::SET_LEADER,
+            event_kind::READY_CHECK,
+            event_kind::READY_CHECK_ANSWER,
+            event_kind::TARGET_ICON_UPDATE,
+            event_kind::TARGET_ICON_LIST,
+            event_kind::MINIMAP_PING,
+            event_kind::RANDOM_ROLL,
+            stone::QUEUE,
+            stone::MEMBER_ADDED,
+            stone::IN_PROGRESS,
+            stone::COMPLETE,
+        ];
+        let mut sorted = kinds;
+        sorted.sort_unstable();
+        assert_eq!(
+            sorted,
+            [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
+        );
+        assert_eq!(event_kind::LOOT_ROLL_RESERVED_START, roll::ROLL_START);
+    }
 
     #[test]
     fn every_group_refusal_tag_round_trips() {

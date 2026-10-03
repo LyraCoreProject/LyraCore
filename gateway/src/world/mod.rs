@@ -44,6 +44,7 @@ pub mod loot;
 pub mod mail;
 pub mod packet_lint;
 pub mod party;
+pub(crate) mod party_mirror;
 pub mod presence;
 pub(crate) mod social;
 mod store;
@@ -52,7 +53,8 @@ pub mod whisper;
 mod who;
 use coalesce::CoalesceState;
 pub(crate) use handlers::{
-    character_facts, reconcile_deleted_guild_characters, DurableCharacterFacts, GuildCleanup,
+    character_facts, dispatch_meeting_stone_action, reconcile_deleted_guild_characters,
+    DurableCharacterFacts, GuildCleanup, MeetingStoneActionOutcome, MeetingStonePlayer,
 };
 use handlers::{
     decode_auction_browse, dispatch_auction_action, dispatch_auction_browse_action, dispatch_cast,
@@ -73,9 +75,9 @@ pub(crate) use handlers::{
     CancelAuctionOutcome, CancelAuctionRequest, ChannelOutcome, ChannelRequest, ChannelRoster,
     CharacterFacts, ChatOutcome, CreateAuctionOutcome, CreateAuctionRequest, GuildEventSnapshot,
     GuildOutcome, GuildRequest, ItemActionResult, LootActionStatus, LootWindowRefusal,
-    LootWindowRequestStatus, MemberPresence, MemberStatsRecord, MemberStatsStore, PlaceBidOutcome,
-    PlaceBidRequest, RealmChatRequest, SpeakerFacts, TrainerBuyOutcome, WeatherStore,
-    WhisperRequest, WhisperTargetFacts,
+    LootWindowRequestStatus, MeetingStoneOutcome, MemberPresence, MemberStatsRecord,
+    MemberStatsStore, PlaceBidOutcome, PlaceBidRequest, RealmChatRequest, SeekerFacts,
+    SpeakerFacts, TrainerBuyOutcome, WeatherStore, WhisperRequest, WhisperTargetFacts,
 };
 use login_queue::{Admission, LoginQueue};
 use social::handle_social;
@@ -1571,6 +1573,22 @@ fn dispatch<St: WorldStore + ?Sized>(
             return Ok(());
         }
         ChannelActionOutcome::PassThrough(msg) => msg,
+    };
+    let msg = match dispatch_meeting_stone_action(
+        store,
+        MeetingStonePlayer {
+            account_id: conn.account_id,
+            self_guid: social::self_guid(conn),
+        },
+        msg,
+    )? {
+        MeetingStoneActionOutcome::Handled { outbound } => {
+            for message in outbound {
+                send(tx, message)?;
+            }
+            return Ok(());
+        }
+        MeetingStoneActionOutcome::PassThrough(msg) => msg,
     };
     let msg = match dispatch_guild_action(
         store,

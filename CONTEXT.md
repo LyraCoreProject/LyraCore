@@ -345,6 +345,11 @@ Realm-core's monotonic order for one complete Group member list, leader, loot ru
 and every Raid Slot. A World Shard keeps the last accepted value after disband. Older snapshots
 cannot change its party mirror.
 
+**Roster Revision Relay**:
+The Gateway's push of a party's Realm-core roster to each World Shard whose mirror holds an older
+Roster Revision or none, whatever changed it on Realm-core.
+_Avoid_: mirror sync thread, roster watcher
+
 **Member Stats**:
 The status, health, power, level, zone, map position, auras, and live pet a group member's frame
 shows for another member. The Gateway projects them from the Home Shard's cache and sends them
@@ -832,6 +837,33 @@ One Character's endorsement of a Petition. One per Realm Account; nine found the
 **Petitioner**:
 An NPC with the petitioner flag. One that is also a Tabard Designer sells Guild Charters.
 _Avoid_: guild registrar
+
+### Meeting stones
+
+**Meeting Stone**:
+A type-23 GameObject at a dungeon entrance. Using it puts the Character, or the Party it leads, in
+the Meeting Stone Queue for the stone's dungeon area, inside the stone's level range.
+_Avoid_: summoning stone, LFG tool
+
+**Meeting Stone Queue**:
+Realm-core's realm-wide list of Seekers and queued Parties, per dungeon area and team.
+_Avoid_: LFG queue, matchmaking queue
+
+**Seeker**:
+One Character in the Meeting Stone Queue, alone or as a member of a queued Party. It carries its
+class and its team, from the class and race the Gateway supplied. A solo Seeker lasts as long as
+its Account Claim.
+_Avoid_: queued player, LFG player
+
+**Open Role**:
+One of a queued Party's one tank, one healer and three damage roles that no member's class fills
+yet.
+_Avoid_: vacancy, role slot
+
+**Stone Add**:
+The Module adding a Seeker to a queued Party, or forming a Party from five waiting Seekers, through
+the party authority's join core.
+_Avoid_: matchmaking, auto-invite
 
 ### World clock and weather
 

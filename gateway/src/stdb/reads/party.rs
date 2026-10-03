@@ -215,6 +215,19 @@ impl Coordinator {
             .map_or(1, |row| row.revision)
     }
 
+    /// The Roster Revision this database holds for one party, or `None` when it holds no row. On a
+    /// World Shard this is the mirror's revision, which outlives a disband.
+    pub fn held_roster_revision(&self, group_id: u64) -> Option<u64> {
+        self.0
+            .coord()
+            .conn
+            .db
+            .game_group_roster_revision()
+            .group_id()
+            .find(&group_id)
+            .map(|row| row.revision)
+    }
+
     /// Every UNRESOLVED `game_loot_roll` row on THIS handle's database, joined with its votes.
     ///
     /// A cache read, like [`group_roster`](Self::group_roster) — this table is now part of the

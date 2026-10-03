@@ -41,7 +41,7 @@ flowchart TB
         W0[("lyracore<br/>default world shard")]
         W1[("lyracore-world-1<br/>world shard (map rule)")]
         INST[("lyracore-instances<br/>instance pool")]
-        RC[("lyracore-realm: realm-core<br/>accounts · sessions · claims ·<br/>groups · guilds · chat channels ·<br/>Realm Chat Lines · mail ·<br/>auctions · loot rolls ·<br/>load samples")]
+        RC[("lyracore-realm: realm-core<br/>accounts · sessions · claims ·<br/>groups · guilds · chat channels ·<br/>Realm Chat Lines · mail ·<br/>auctions · loot rolls ·<br/>Meeting Stone Queue · load samples")]
     end
 
     C1 -- "raw TCP · SRP6 · header-encrypted opcodes" --> LOGON
@@ -108,6 +108,7 @@ are answered by the gateway, which is the only component that can see the whole 
 | `CMSG_NAME_QUERY` resolution | same | `presence.rs` (`character_anywhere`) |
 | friend/ignore add target resolution by name, realm-wide, plus the friend's race for the Enemy Gate. This is the existence check the Module no longer performs, since Realm-core holds no Character rows for it to check | same | `presence.rs` (`resolve_by_name`, `of`), `gateway/src/world/social.rs` (`resolve_add_contact`) |
 | Speaker Facts: the speaker's race and chat tag for every Realm Chat Line and Chat Channel op | Realm-core holds no Characters and no live entities | `gateway/src/world/handlers/chat.rs` (`speaker_facts`), `stdb/reads/chat.rs` |
+| Seeker facts: the race and class of the Character that uses a Meeting Stone, or of every member of the Party it leads, and the class of a Character that accepts an invite into a queued Party. Also whether the client can name the stone's dungeon area, checked before any state changes | Realm-core holds no Characters, and only the Gateway knows which areas the client protocol encodes | `gateway/src/world/handlers/meeting_stone.rs` (`facts_for_join`, the `Area` check in `join`), `gateway/src/world/party.rs` (`AcceptorFacts`) |
 | channel moderation target names, realm-wide, plus whether the target ignores the actor for an invite | same | `gateway/src/world/handlers/channel.rs` (`resolve_online_character`, `ignores`) |
 | the per-listener ignore filter on an ignorable Realm Chat Line | the ignore list is on each listener's Home Shard; the line is on Realm-core | `gateway/src/stdb/world_view.rs` (`realm_chat_appeared`, `Viewer::ignores`) |
 | loot-roll promotion and settlement fan-out across shards | a kill's transaction cannot reach realm-core | `gateway/src/world/loot.rs` |
@@ -204,7 +205,7 @@ The realm runs as **four SpacetimeDB databases** behind one gateway tier:
 | `lyracore` | default database + world shard |
 | `lyracore-world-1` | world shard (map 1, Kalimdor) |
 | `lyracore-instances` | instance pool (map 36 / Deadmines and friends) |
-| `lyracore-realm` | realm-core: accounts, sessions, Account Claims, groups, guilds, Chat Channels, Realm Chat Lines, mail, auctions, loot rolls, load samples |
+| `lyracore-realm` | realm-core: accounts, sessions, Account Claims, groups, guilds, Chat Channels, Realm Chat Lines, mail, auctions, loot rolls, the Meeting Stone Queue, load samples |
 
 The **local developer fixture has one database per tier above** (#108) — `lyracore`,
 `lyracore-kalimdor`, `lyracore-instances`, `lyracore-realm` — brought up by `./lyracore dev up`;
@@ -463,6 +464,18 @@ Every relay hangs off a coordinator connection. Row-driven relays take one of tw
   claim that opens or closes into friend online and offline notices for same-team viewers who list
   the Character. A recipient with no registered viewer misses the line, and that includes one on a
   loading screen during a Transfer. Nothing buffers it.
+- **Group events in insert order** (`group_event_appeared`). The SDK fires one transaction's
+  inserts in hash order, so the first `game_group_event` callback of a transaction takes every row
+  of that transaction for its recipient from the cache, in id order, and the later callbacks find
+  theirs taken (`GroupEventCursor`, one cursor per source database). A filled Meeting Stone Party's
+  `COMPLETE` therefore reaches the client before its `SETQUEUE(0, NONE)`.
+- **Roster Revision Relay** (`world/party_mirror.rs`). Realm-core can change a party that no actor
+  of the op belongs to: a Stone Add moves Seekers into a Party from any World Shard. Realm-core's
+  `game_group_roster_revision` callbacks only mark the party dirty. One worker thread per Gateway
+  reads Realm-core's revision and pushes the roster to each World Shard whose mirror holds an older
+  revision or none, through the retries of `sync_group_mirrors_required`. It arms only when
+  Realm-core is a distinct database and healthy at Gateway start. A change missed while Realm-core
+  is disconnected is the reconnect reconciliation pass's.
 - **Viewer lifetime** (`subscribe_player_events`): world entry prepares relay state, registers one
   viewer, and performs resident-state sweeps. `PlayerSubscriptions` owns only that registration;
   dropping it removes the viewer. It owns no row callbacks. A world-port removes the source viewer
@@ -775,6 +788,7 @@ explains why two rungs of the ladder are written down instead of automated.
 | [`auction-house-client-check.md`](./auction-house-client-check.md) | The auction house against a real 5875 client. Status: outstanding, needs a human. |
 | [`guild-client-check.md`](./guild-client-check.md) | Guilds between two real 5875 clients across a Shard Boundary: founding, invites, chat, ranks, Transfer, emblem, Charter and deletion. Status: outstanding, needs a human. |
 | [`mail-client-check.md`](./mail-client-check.md) | Mail against a real 5875 client. Status: outstanding, needs a human. |
+| [`meeting-stone-client-check.md`](./meeting-stone-client-check.md) | Meeting stones between two real 5875 clients across a Shard Boundary: the JOIN packet, tooltip, minimap button, every status line, Transfer, logout and a stone-formed Party. Status: outstanding, needs a human. |
 | [`duel-client-check.md`](./duel-client-check.md) | Duel visuals against a real 5875 client, which the automated tests cannot see. Status: outstanding. |
 | [`chat-client-check.md`](./chat-client-check.md) | Realm-wide chat between two real 5875 clients across a Shard Boundary: party, channels and moderation, AFK and DND, whisper, friends, `/who`, ignore, say range, proximity emotes, the language Gate and the flood mute. Status: outstanding, needs a human. |
 | [`raid-client-check.md`](./raid-client-check.md) | Raids, Group Broadcasts, raid chat, member stats across Shards and the Instance Removal countdown against real 5875 clients. Status: outstanding, needs a human. |

@@ -15,7 +15,7 @@ use crate::world::guild_fee;
 use crate::world::party::{AdmittedCompanionCommand, CompanionCommandOutcome, PartyOutcome};
 use crate::world::{
     ChannelOutcome, ChatOutcome, ContactOutcome, ItemActionResult, LootActionStatus,
-    LootWindowRefusal, LootWindowRequestStatus,
+    LootWindowRefusal, LootWindowRequestStatus, MeetingStoneOutcome,
 };
 use lyracore_shared::auction::AuctionRefusal;
 use lyracore_shared::channel::ChannelRefusal;
@@ -24,6 +24,7 @@ use lyracore_shared::group::GroupRefusal;
 use lyracore_shared::guild::GuildRefusal;
 use lyracore_shared::item::ItemRefusal;
 use lyracore_shared::loot::{LootBoundaryFailure, LootRefusal};
+use lyracore_shared::meeting_stone::MeetingStoneRefusal;
 use lyracore_shared::social::ContactRefusal;
 use lyracore_shared::trainer::TrainerRefusal;
 
@@ -2021,6 +2022,45 @@ impl Coordinator {
             realm.0.call_pipe().conn.reducers,
             "realm_channel_op",
             realm_channel_op_then(realm.session_actor(actor_guid), op, request)
+        ))
+    }
+
+    /// `gw_admit_meeting_stone` on this Home Shard: may the actor use the stone? Writes nothing.
+    pub fn admit_meeting_stone(
+        &self,
+        actor_guid: u64,
+        go_guid: u64,
+    ) -> Result<MeetingStoneOutcome> {
+        let coord = self.0.call_pipe();
+        meeting_stone_outcome(call_reducer!(
+            coord.conn.reducers,
+            "gw_admit_meeting_stone",
+            gw_admit_meeting_stone_then(self.session_actor(actor_guid), go_guid)
+        ))
+    }
+
+    /// `realm_meeting_stone_op`: run one Meeting Stone Queue op on Realm-core, or on the one
+    /// database of an unsharded Realm. The Module applies every queue rule.
+    pub fn meeting_stone_op(
+        &self,
+        actor_guid: u64,
+        op: u8,
+        area_id: u32,
+        seekers: Vec<crate::world::SeekerFacts>,
+    ) -> Result<MeetingStoneOutcome> {
+        let realm = self.realm_core()?;
+        let seekers = seekers
+            .into_iter()
+            .map(|facts| SeekerFacts {
+                character_guid: facts.character_guid,
+                race: facts.race,
+                class: facts.class,
+            })
+            .collect();
+        meeting_stone_outcome(call_reducer!(
+            realm.0.call_pipe().conn.reducers,
+            "realm_meeting_stone_op",
+            realm_meeting_stone_op_then(op, realm.session_actor(actor_guid), area_id, seekers)
         ))
     }
 
@@ -4173,6 +4213,17 @@ fn channel_outcome(result: Result<()>) -> Result<ChannelOutcome> {
         Ok(()) => Ok(ChannelOutcome::Done),
         Err(error) => match reducer_refusal_reason(&error).and_then(ChannelRefusal::parse_tag) {
             Some(refusal) => Ok(ChannelOutcome::Refused(refusal)),
+            None => Err(error),
+        },
+    }
+}
+
+fn meeting_stone_outcome(result: Result<()>) -> Result<MeetingStoneOutcome> {
+    match result {
+        Ok(()) => Ok(MeetingStoneOutcome::Ran),
+        Err(error) => match reducer_refusal_reason(&error).and_then(MeetingStoneRefusal::parse_tag)
+        {
+            Some(refusal) => Ok(MeetingStoneOutcome::Refused(refusal)),
             None => Err(error),
         },
     }

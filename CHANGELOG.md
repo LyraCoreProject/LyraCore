@@ -22,6 +22,9 @@ and is not reconstructed here.
   under `packages/*/src/` against that list and fails on a path outside it, naming the Package, the
   file, the line and the path. A Package that needs a path off the surface writes
   `// package-api: exempt <reason>` on the line that names it.
+- **Meeting stones.** Using a dungeon's meeting stone puts a Character, or the Party it leads, in one
+  realm-wide queue on Realm-core. Five Seekers for one dungeon and team form a Party, and a queued
+  Party fills its open tank, healer and damage roles from Seekers on any World Shard.
 
 ## [0.1.0-alpha.1] — unreleased
 

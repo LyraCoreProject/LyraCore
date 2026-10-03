@@ -354,6 +354,8 @@ mod mail_reward;
 mod mail_text;
 /// The Mail Timer, Mail Expiry and the Mail Arrival event.
 mod mail_timer;
+/// The Meeting Stone Queue on Realm-core, and the Home Shard Gate for using a stone.
+mod meeting_stone;
 /// Batched movement republish: the PRIVATE `game_entity_motion_pending` staging table that
 /// `movement_update` writes, and the 20 Hz `publish_motion` tick that drains it into the public
 /// `game_entity_motion` relay in one transaction.
@@ -459,6 +461,7 @@ pub use mail::Mail; // re-exported for the gateway schema-parity test
 pub use mail_escrow::MailEscrow; // re-exported for the gateway schema-parity test
 pub use mail_text::ItemText; // re-exported for the gateway schema-parity test
 pub use mail_timer::{MailArrival, MailTimer}; // re-exported for the gateway schema-parity test
+pub use meeting_stone::{MeetingStone, MeetingStoneSeeker}; // gateway schema-parity test
 pub use motion::*;
 pub use quest::*;
 // Named, not globbed: the `realm_chat` reducer's generated type would shadow the module name.
