@@ -1,14 +1,13 @@
 {
-  "updated_at": "2026-10-02 16:40 UTC",
-  "base_revision": "da11dcfc71c235c0c4b7f7c34236b2c6b99bbd1d",
-  "status_note": "All 71 open issues have current assessments. PRs #481 to #602 shipped the Playerbots rewrite, realm-wide chat, guilds, mail, auctions, raid groups and navigation fixes. Most remaining issues now wait on real-client acceptance, an Operator run on a named host, or a design decision. Four issues are ready for agent work. No PR is open.",
+  "updated_at": "2026-10-03 21:00 UTC",
+  "base_revision": "c2f2373a4516d06f8fa3f6c6ed37f386eb9f8191",
+  "status_note": "The 2026-10-02 backlog session closed #559 and #534, merged meeting stones (#532) and both halves of the #570 stop fix. #532 and #570 wait on real-client checks. Two follow-ups are ready: #607 (shared group event snapshot) and #608 (snap-back on a path renewal). No Core PR is open.",
   "monitoring_note": "Claude owns this report and the dispatch order from 2026-10-02. Every open issue has an owner and a next action. Monitoring runs during active work sessions. No unattended scheduler is installed. Refresh GitHub state before the next batch.",
   "focus": [
-    "Agent work in the playerbots Package: fix the two random test failures (#559), the Route leg snap-back (#570) and raid membership beyond five members (#534). #559 and #534 change the packages repository.",
-    "Share the four-Ticket meeting stone spec for #532 on the issue before implementation. It is in a local folder that git ignores.",
-    "Hand-play a loot take on Argus for #584. If taking an item does nothing for a stock client, the core loot loop is broken and the issue moves to ready.",
-    "Measure on approved development targets before choosing another runtime change: World Session seats (#77), movement batching (#88), dense-crowd login (#86) and the full wire-harness suite (#105). The disconnect, crash and motion runs (#59, #60, #424) need an Operator and a named host.",
-    "Real-client acceptance is the largest group. Raid groups (#27) and realm-wide social (#3) have written checklists. Run spell rank acceptance (#37) after the PR #602 import reaches a Realm."
+    "Agent work: #607 and #608 are ready. Packages issue #62 tracks two tests that fail at random in the durable jobs.",
+    "Real-client checks: meeting stones (#532, docs/meeting-stone-client-check.md, after a gameobjects re-import and debug_repair_after_publish) and the bot stop point (#570).",
+    "Hand-play a loot take on Argus for #584. If taking an item does nothing for a stock client, the issue moves to ready.",
+    "Measure on approved development targets before choosing another runtime change: #77, #88, #86 and #105. The disconnect, crash and motion runs (#59, #60, #424) need an Operator and a named host."
   ],
   "issues": [
     {
@@ -2720,27 +2719,28 @@
     {
       "number": 532,
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/532",
-      "summary": "Meeting stones (GameObject type 23) and the 1.12.1 dungeon queue do not exist; the maintainer deferred them from issue #3 and left a four-Ticket spec.",
+      "summary": "Meeting stones are merged; the real-client check list remains.",
       "importance": 2,
       "gain": 3,
-      "effort": 5,
-      "confidence": "medium",
-      "disposition": "ready",
-      "rationale": "The issue gives the vanilla rules, sources, the Realm-core design and the maintainer defaults (humans only, bots join by ordinary invite). The raid prerequisites it waited on (raid convert, Roster Revision) shipped in #543 to #558. The spec folder is git-ignored and local, so it must be shared or rewritten before an agent can use it.",
-      "next_action": "Move the four Tickets from .claude/tickets/issue-3-lfg into the tracked tree or the issue, then start T1 (queue on Realm-core) and finish with the client check T4 describes.",
-      "blockers": [],
+      "effort": 2,
+      "confidence": "high",
+      "disposition": "human",
+      "rationale": "PR #605 shipped the queue and matching on Realm-core, the Roster Revision Relay and the Gateway handlers. CI runs both cross-shard Gateway durable tests.",
+      "next_action": "Re-import the gameobjects family, run debug_repair_after_publish, then run docs/meeting-stone-client-check.md with a real client.",
+      "blockers": [
+        "Real 1.12.1 client check",
+        "Named-host deploy"
+      ],
       "evidence": [
-        "https://github.com/LyraCoreProject/LyraCore/issues/532",
-        "grep: no MEETINGSTONE or meeting stone code in module/src, gateway/src or importer/src",
-        ".claude/tickets/issue-3-lfg/ holds README plus T1 to T4, and git status shows it as ignored (not tracked)",
-        "module/src/group.rs: raid kind, Raid Slot and Roster Revision exist (merged #543)"
+        "https://github.com/LyraCoreProject/LyraCore/pull/605",
+        "docs/meeting-stone-client-check.md"
       ],
       "related_prs": [
-        543
+        605
       ],
       "updatedAt": "2026-09-23T11:16:03Z",
       "github_state": "open",
-      "owner": "Claude"
+      "owner": "Human"
     },
     {
       "number": 533,
@@ -2772,81 +2772,76 @@
     {
       "number": 534,
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/534",
-      "summary": "Bots still read party facts and Companion Orders for at most 5 members, so a bot in a Raid of more than 5 sees no party facts and its Orders read as a stale mirror.",
+      "summary": "Bots in a Raid read party facts and take Companion Orders across the whole Raid.",
       "importance": 2,
       "gain": 2,
       "effort": 3,
       "confidence": "medium",
-      "disposition": "ready",
-      "rationale": "Raids shipped (#543 to #558) and the cap is deliberate in code and comments. The Done-when names the scope rule (own Subgroup, whole Raid for heals) and the test (10-member raid in the companion suite). The work spans Core group.rs and the playerbots Package, which now owns its tests (packages repo).",
-      "next_action": "Lift the 5-member bound in party_facts and admit_party_command to a Subgroup-scoped read in Core, then add the 10-member raid case to the companion suite in the packages repo.",
+      "disposition": "done",
+      "rationale": "Core #604 and #606 lift the bound to the Group kind cap. Packages #60 proves a 10-member Raid heal, an Assist across Subgroups and the 80/81 threat bound.",
+      "next_action": "Closed on GitHub with evidence.",
       "blockers": [],
       "evidence": [
-        "https://github.com/LyraCoreProject/LyraCore/issues/534",
-        "module/src/group.rs:741 and :891: Companion Orders and party_facts keep the Party cap on purpose",
-        "module/src/group.rs:812: has_known_party_member_in_partition reads a Raid above five as unavailable",
-        "PR #595 moved playerbot behavior tests to the packages repo"
+        "https://github.com/LyraCoreProject/LyraCore/pull/604",
+        "https://github.com/LyraCoreProject/LyraCore/pull/606",
+        "https://github.com/LyraCoreProject/packages/pull/60"
       ],
       "related_prs": [
-        543,
-        595
+        604,
+        606
       ],
-      "updatedAt": "2026-09-23T11:16:06Z",
-      "github_state": "open",
+      "updatedAt": "2026-10-03T21:00:00Z",
+      "github_state": "closed",
       "owner": "Claude"
     },
     {
       "number": 559,
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/559",
-      "summary": "Packages CI playerbots-durable fails at random on up to three tests; packages PR #56 fixed the recovery one, the Warrior facing one is still unresolved, and the Mage Fireball one still asserts one cast's damage.",
+      "summary": "The three random test failures are fixed on packages main.",
       "importance": 2,
       "gain": 3,
       "effort": 2,
       "confidence": "medium",
-      "disposition": "ready",
-      "rationale": "The tests moved out of Core in #595, so the fix is a packages repo change and the Core paths in the issue no longer exist. Packages #56 (merged 2026-10-02) parks movement maintenance for the recovery test. In the packages repo the Mage test still asserts health(&first) < 1_000 after a random-miss Fireball, and #56 says the facing failure is not reproduced.",
-      "next_action": "In the packages repo force a hit or assert the cast outcome in the Mage defense test, stop the target creature's movement before playerbots_fixture_position in the facing test, then re-run CI several times and close the issue.",
+      "disposition": "done",
+      "rationale": "Packages #58 asserts the Fireball cast outcome instead of one cast's damage. c08a784 and packages #56 had already fixed the facing and recovery tests.",
+      "next_action": "Closed on GitHub with evidence.",
       "blockers": [],
       "evidence": [
-        "https://github.com/LyraCoreProject/LyraCore/issues/559",
-        "https://github.com/LyraCoreProject/LyraCore/issues/559#issuecomment-5820135379",
-        "https://github.com/LyraCoreProject/packages/pull/56: recovery test isolated; says the facing failure remains unresolved",
-        "packages playerbots/testsuite/tests/playerbots_rewrite/runner.rs:1400 still asserts health(&first) < 1_000",
-        "packages playerbots/testsuite/tests/playerbots_rewrite.rs:422 holds the facing test",
-        "Core module/tests no longer has these tests (moved by #595)"
+        "https://github.com/LyraCoreProject/packages/pull/58",
+        "https://github.com/LyraCoreProject/LyraCore/issues/559"
       ],
       "related_prs": [
-        569,
-        595
+        58
       ],
-      "updatedAt": "2026-09-24T18:47:07Z",
-      "github_state": "open",
+      "updatedAt": "2026-10-03T00:00:00Z",
+      "github_state": "closed",
       "owner": "Claude"
     },
     {
       "number": 570,
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/570",
-      "summary": "A bot stopped after a Route leg ends but before the next 500 ms creature tick snaps back 0.04 to 0.3 yards, because the stop uses the last ticked position; Core's death stop does the same.",
+      "summary": "Both halves are merged; only the real-client check remains.",
       "importance": 2,
       "gain": 2,
-      "effort": 3,
-      "confidence": "medium",
-      "disposition": "ready",
-      "rationale": "The cause is understood and the issue proposes a fix (interpolate the position along the running leg at stop time). Recent perf work (#587) lets short advances stay out of the stored row, so a fix must check that path. The change touches movement for every bot, so it needs a careful review.",
-      "next_action": "Add a stop path that interpolates the position along the running leg at the stop time, cover it with a Module test for a stop between leg end and tick, and check the #587 persist rule.",
-      "blockers": [],
+      "effort": 1,
+      "confidence": "high",
+      "disposition": "human",
+      "rationale": "Core #603 added stop_where_rendered and fixed the death stop. Packages #61 makes the runner stop at the rendered point; its test fails with the change reverted.",
+      "next_action": "In a real client, interrupt a bot on a bent path mid-leg and kill a creature mid-walk. Neither should snap back.",
+      "blockers": [
+        "Real 1.12.1 client check"
+      ],
       "evidence": [
-        "https://github.com/LyraCoreProject/LyraCore/issues/570",
-        "module/src/creatures/cycle/mod.rs: MotionSink::commit_position may keep a short advance out of the stored row (tick::advance_needs_persist)",
-        "module/src/creatures/cycle/mod.rs: halt stops a mover at a given point, so the stop point is the caller's choice"
+        "https://github.com/LyraCoreProject/LyraCore/pull/603",
+        "https://github.com/LyraCoreProject/packages/pull/61",
+        "https://github.com/LyraCoreProject/LyraCore/issues/608"
       ],
       "related_prs": [
-        569,
-        587
+        603
       ],
       "updatedAt": "2026-09-24T20:44:21Z",
       "github_state": "open",
-      "owner": "Claude"
+      "owner": "Human"
     },
     {
       "number": 584,
@@ -2905,6 +2900,46 @@
       "updatedAt": "2026-09-28T08:27:40Z",
       "github_state": "open",
       "owner": "Human"
+    },
+    {
+      "number": 607,
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/607",
+      "summary": "Each group event recipient reads the cached event table once per transaction.",
+      "importance": 2,
+      "gain": 2,
+      "effort": 2,
+      "confidence": "medium",
+      "disposition": "ready",
+      "rationale": "The event GC keeps the table small, so the cost has a ceiling. One shared snapshot per transaction removes the repeat.",
+      "next_action": "Collect one transaction's rows once per source and give each recipient its slice; prove one read per transaction in a test.",
+      "blockers": [],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/pull/605"
+      ],
+      "related_prs": [],
+      "updatedAt": "2026-10-03T00:00:00Z",
+      "github_state": "open",
+      "owner": "Claude"
+    },
+    {
+      "number": 608,
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/608",
+      "summary": "A path renewal mid-leg starts the new spline from the stored point, which can lag the rendered one.",
+      "importance": 2,
+      "gain": 2,
+      "effort": 2,
+      "confidence": "medium",
+      "disposition": "ready",
+      "rationale": "The #603 stop rule covers stops but not renewals. The 4 yd persist rule makes the lag visible.",
+      "next_action": "Start a renewed leg from the stop_on_leg point, with the obstruction check, and add a test that renews between ticks.",
+      "blockers": [],
+      "evidence": [
+        "https://github.com/LyraCoreProject/packages/pull/61"
+      ],
+      "related_prs": [],
+      "updatedAt": "2026-10-03T00:00:00Z",
+      "github_state": "open",
+      "owner": "Claude"
     }
   ],
   "pull_requests": [],
@@ -3308,6 +3343,10 @@
     {
       "at": "2026-10-02 16:40 UTC",
       "text": "Claude took over the report. Re-audited all 71 open issues after PRs #481 to #602. Added #532, #533, #534, #559, #570, #584 and #585. Recorded #31 as closed. Four issues are ready; #27 and #3 moved to real-client acceptance."
+    },
+    {
+      "at": "2026-10-03 21:00 UTC",
+      "text": "Backlog session: closed #559 (packages #58) and #534 (Core #604, #606, packages #60). Merged meeting stones (#605) and the #570 stop fix (Core #603, packages #61); both wait on client checks. Filed #607 and #608."
     }
   ],
   "postplan_draft": "1u1gh8ximdga",
