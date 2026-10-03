@@ -313,6 +313,13 @@ fn a_raid_past_five_certifies_a_companion_order_for_any_member() {
         text.contains("NotLeader"),
         "a Raid member who is not the leader: {text}"
     );
+
+    realm.assert_call("debug_spawn_player_entity", &["1"]);
+    let outcome = applied_order_outcome(&realm, group_id.as_str(), &all_members);
+    assert_eq!(
+        outcome, "(suppressed = ())",
+        "a Raid of ten passes the target roster bound"
+    );
 }
 
 /// Mirror a Group of `count` members whose GUIDs start at `first_guid`, Raid members five to a
@@ -372,4 +379,46 @@ fn a_party_mirror_past_five_is_damaged_while_a_raid_of_ten_certifies() {
         "admit_party_command_authority",
         &["901", "20", "27", "21", raid.as_str()],
     );
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+fn a_party_mirror_past_five_refuses_a_companion_order_at_the_target() {
+    let mut realm = Standalone::start("raid-convert-target-bounded-roster");
+    realm.publish_module();
+    realm.assert_call("claim_operator", &[]);
+    realm.assert_call("debug_spawn_player_entity", &["1"]);
+    mirror_group(&realm, 900, 1, 6, GroupKind::Party);
+
+    // The certified list matches the six mirrored rows, so only the roster bound can refuse it.
+    let outcome = applied_order_outcome(&realm, "900", &[1, 2, 3, 4, 5, 6]);
+    assert_eq!(outcome, "(stalePartyMirror = ())");
+}
+
+const SOURCE_IDENTITY: &str = "0x0000000000000000000000000000000000000000000000000000000000000001";
+
+/// Apply a Companion Order for the fixture bot (Character 1) as `leader`, certifying `members`
+/// for `group_id`, then return the outcome the Command Receipt recorded.
+fn applied_order_outcome(node: &Standalone, group_id: &str, members: &[u64]) -> String {
+    let members = serde_json::to_string(members).unwrap();
+    let identity = format!("\"{SOURCE_IDENTITY}\"");
+    node.assert_call(
+        "apply_admitted_party_command",
+        &[
+            identity.as_str(),
+            "1",
+            "1",
+            "1",
+            group_id,
+            "1",
+            members.as_str(),
+            "0",
+            "1",
+            "0",
+            "0",
+            "9223372036854775807",
+            "9223372036854775807",
+        ],
+    );
+    node.query_rows("SELECT outcome FROM game_party_command_receipt")[0]["outcome"].clone()
 }

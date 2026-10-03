@@ -904,12 +904,12 @@ pub fn party_facts(
                 group_id: member.group_id,
                 reason: PartyFactsUnavailableReason::MissingGroup,
             })?;
-    let members = bounded_roster(ctx, member.group_id, group_kind_of(&group)).ok_or(
-        PartyFactsUnavailable {
-            group_id: member.group_id,
-            reason: PartyFactsUnavailableReason::FightLimit,
-        },
-    )?;
+    let unavailable = || PartyFactsUnavailable {
+        group_id: member.group_id,
+        reason: PartyFactsUnavailableReason::FightLimit,
+    };
+    let members =
+        bounded_roster(ctx, member.group_id, group_kind_of(&group)).ok_or_else(unavailable)?;
     let members: Vec<_> = members
         .into_iter()
         .map(|member| {
@@ -947,10 +947,6 @@ pub fn party_facts(
     let mut pending_control_targets = std::collections::BTreeMap::new();
     const ENEMY_LIMIT: usize = 24;
     const THREAT_SOURCE_LIMIT: usize = RAID_MAX_MEMBERS * 2;
-    let unavailable = || PartyFactsUnavailable {
-        group_id: member.group_id,
-        reason: PartyFactsUnavailableReason::FightLimit,
-    };
     for guid in &party_guids {
         if let Some(attack) = melee.attacker_guid().find(*guid) {
             enemy_guids.insert(attack.target_guid);
