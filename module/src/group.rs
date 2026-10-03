@@ -1470,7 +1470,7 @@ pub(crate) struct JoinedGroup {
 /// A join that passed every check and has written nothing yet. [`JoinPlan::apply`] cannot fail, so
 /// a caller may write its own rows between the two and never leave half a join behind. The plan
 /// holds while nothing between the two changes group membership.
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 pub(crate) struct JoinPlan {
     joiner_guid: u64,
     target: JoinTarget,
