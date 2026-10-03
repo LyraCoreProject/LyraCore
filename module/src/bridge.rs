@@ -696,16 +696,15 @@ fn fixture_command_apply_after_authority(
         .group_id()
         .find(member.group_id)
         .ok_or_else(|| CommandOutcome::NotMember.tag().to_string())?;
-    // Companion Orders keep the Party cap, so a Raid above five members reads as a stale mirror.
     let members: Vec<_> = ctx
         .db
         .game_group_member()
         .by_group()
         .filter(&member.group_id)
-        .take(crate::group::GROUP_MAX_MEMBERS + 1)
+        .take(lyracore_shared::group::RAID_MAX_MEMBERS + 1)
         .map(|row| row.character_guid)
         .collect();
-    if members.len() > crate::group::GROUP_MAX_MEMBERS {
+    if members.len() > lyracore_shared::group::RAID_MAX_MEMBERS {
         return Err(CommandOutcome::StalePartyMirror.tag().to_string());
     }
     crate::group::admit_party_command_authority(
