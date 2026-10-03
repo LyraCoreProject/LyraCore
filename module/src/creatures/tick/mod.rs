@@ -9,7 +9,8 @@
 //!     active-cell sweep and rows-visited evidence logs, the shared candidate gate
 //!     `movable_creature`, the rout predicates, and the one spline writer
 //!     (`emit_move_spline`/`emit_creature_leg`) every movement decision funnels through, with
-//!     the persist gate for a leg advance (`advance_needs_persist`).
+//!     the stop between firings (`stop_where_rendered`) and the persist gate for a leg advance
+//!     (`advance_needs_persist`).
 //!   - [`lifecycle`] — the canonical despawn checklist + decay/respawn/GO-respawn, the
 //!     due-time passes that run regardless of proximity.
 
@@ -750,6 +751,59 @@ pub(crate) fn emit_creature_leg(
     ctx.db.game_world_entity().guid().update(e);
 }
 
+/// Stop `mover`'s leg where the client renders it now, facing along its Route Path. The row moves
+/// to that point and a zero-duration stop there replaces the leg, so the stored position and the
+/// stop packet agree with the client. Without this, a stop between two advance firings holds the
+/// position the last firing wrote, behind the client. A blocked Route Path segment or changed
+/// navigation inputs halt the stop where a leg advance would halt, so it never lands past an
+/// obstruction. The caller writes `mover`. A mover with no leg is unchanged.
+pub(crate) fn stop_where_rendered(ctx: &ReducerContext, mover: &mut WorldEntity) {
+    let Some(leg) = ctx.db.game_creature_spline().guid().find(mover.guid) else {
+        return;
+    };
+    let spline_id = next_spline_id(
+        ctx.timestamp.to_micros_since_unix_epoch() as u64,
+        leg.spline_id,
+    );
+    if let Some(stop) = super::cycle::stop_on_stored_leg(ctx, leg) {
+        place_stopped(mover, stop);
+    }
+    let at = (mover.x, mover.y, mover.z);
+    emit_move_spline(
+        ctx,
+        mover.guid,
+        at,
+        at,
+        0,
+        false,
+        spline_id,
+        mover.map_id,
+        mover.instance_id,
+        (mover.grid_x, mover.grid_y),
+    );
+}
+
+/// The id for a leg that replaces one with id `previous`. The client ignores an id that does not
+/// exceed the one it replaces, so a second leg in the same millisecond takes `previous + 1`.
+fn next_spline_id(now_micros: u64, previous: u32) -> u32 {
+    ((now_micros / 1000) as u32).max(previous.wrapping_add(1))
+}
+
+/// Move `mover` to `stop`: position, grid address and packed cell together, and the stop's heading
+/// when it has one.
+fn place_stopped(mover: &mut WorldEntity, stop: super::cycle::Stop) {
+    let (grid_x, grid_y) = spatial::grid_cell(stop.at.x, stop.at.y);
+    mover.x = stop.at.x;
+    mover.y = stop.at.y;
+    mover.z = stop.at.z;
+    mover.grid_x = grid_x;
+    mover.grid_y = grid_y;
+    mover.cell = spatial::grid_cell_id(grid_x, grid_y);
+    if let Some(heading) = stop.heading {
+        mover.orientation = heading;
+    }
+}
+
 /// Must a leg advance stay in the creature's stored row once the firing ends? The cycle's passes
 /// always read the advanced row; only the commit log may skip it. `stored` is the row before the
 /// advance, `advanced` the row it wrote, `settled` the row at the end of the firing, and `leg` the
@@ -1088,6 +1142,72 @@ mod advance_persist_gate {
             row.type_mask = type_mask::PLAYER_BIT;
         }
         assert!(walk.persists());
+    }
+}
+
+#[cfg(test)]
+mod stop_between_firings {
+    use super::{next_spline_id, place_stopped};
+    use crate::creatures::cycle::{Point, Stop};
+    use crate::WorldEntity;
+    use lyracore_shared::spatial;
+
+    /// A creature the last firing stored at (`x`, 0, 0), in the cell that point lies in.
+    fn creature_stored_at(x: f32) -> WorldEntity {
+        let (grid_x, grid_y) = spatial::grid_cell(x, 0.0);
+        let mut creature = crate::helpers::tests::entity(42, 0, 0, grid_x, grid_y);
+        creature.x = x;
+        creature.cell = spatial::grid_cell_id(grid_x, grid_y);
+        creature
+    }
+
+    #[test]
+    fn a_stop_past_a_cell_edge_moves_the_creature_into_the_next_cell() {
+        // x = 16.67 is a cell edge. The last firing stored the creature short of it.
+        let mut creature = creature_stored_at(15.0);
+        let before = (creature.grid_x, creature.cell);
+        place_stopped(
+            &mut creature,
+            Stop {
+                at: Point {
+                    x: 20.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+                heading: Some(1.5),
+            },
+        );
+        let (grid_x, grid_y) = spatial::grid_cell(20.0, 0.0);
+        assert_ne!(before.0, grid_x, "the stop must cross the cell edge");
+        assert_eq!((creature.x, creature.y, creature.z), (20.0, 0.0, 0.0));
+        assert_eq!((creature.grid_x, creature.grid_y), (grid_x, grid_y));
+        assert_eq!(creature.cell, spatial::grid_cell_id(grid_x, grid_y));
+        assert_ne!(creature.cell, before.1);
+        assert_eq!(creature.orientation, 1.5);
+    }
+
+    #[test]
+    fn a_stop_without_a_heading_keeps_the_creatures_facing() {
+        let mut creature = creature_stored_at(15.0);
+        creature.orientation = 0.7;
+        place_stopped(
+            &mut creature,
+            Stop {
+                at: Point {
+                    x: 15.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+                heading: None,
+            },
+        );
+        assert_eq!(creature.orientation, 0.7);
+    }
+
+    #[test]
+    fn a_stop_in_the_same_millisecond_as_its_leg_still_gets_a_newer_spline_id() {
+        assert_eq!(next_spline_id(60_000_400, 60_000), 60_001);
+        assert_eq!(next_spline_id(60_000_400, 59_000), 60_000);
     }
 }
 

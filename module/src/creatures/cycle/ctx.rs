@@ -14,8 +14,8 @@ use super::{
     run_cycle, AggroTarget, CastSink, CastWhen, Caster, Combatant, CreatureWorld, CycleOutcome,
     EngageSink, Engagement, FearSink, Fighter, Gait, Home, IdleCreature, IdleSink, Leg,
     LegInFlight, MotionSink, Panicked, Pet, PetCommand, PetOwner, PetReact, PetSink, Point, Pull,
-    Pursuit, PursuitSink, Recovering, RegenSink, RoutSink, Router, Sensor, SpellOption, ThreatSink,
-    TickContext, Waypoint,
+    Pursuit, PursuitSink, Recovering, RegenSink, RoutSink, Router, Sensor, SpellOption, Stop,
+    ThreatSink, TickContext, Waypoint,
 };
 use crate::combat::MOVE_FLAG_FORWARD;
 use crate::creatures::ai::TickScope;
@@ -99,6 +99,18 @@ impl CtxWorld<'_> {
         }
         Some(entities.guid().update(e))
     }
+}
+
+/// [`super::stop_on_leg`] for a stop outside a firing, on the mover's stored leg row. Only the
+/// obstruction check reads the world, and it ignores the regen window.
+pub(crate) fn stop_on_stored_leg(ctx: &ReducerContext, leg: CreatureSpline) -> Option<Stop> {
+    let now_micros = ctx.timestamp.to_micros_since_unix_epoch() as u64;
+    let world = CtxWorld {
+        ctx,
+        regen_window: crate::combat::RegenWindow::new(now_micros / 1_000, 0),
+        advances: Vec::new(),
+    };
+    super::stop_on_leg(&world, &as_leg(leg, false), now_micros)
 }
 
 /// The spline row as the cycle reads a leg. `mover_gone` is the caller's to answer: the advance
@@ -239,23 +251,8 @@ impl MotionSink for CtxWorld<'_> {
             .guid()
             .find(guid)
             .and_then(|s| {
-                let points: Vec<_> = s
-                    .path
-                    .as_ref()?
-                    .points
-                    .iter()
-                    .map(|p| (p.x, p.y, p.z))
-                    .collect();
-                let (_, next) = lyracore_shared::movement_path::sample(
-                    (s.sx, s.sy, s.sz),
-                    &points,
-                    super::spline_t(
-                        self.ctx.timestamp.to_micros_since_unix_epoch() as u64,
-                        s.start_micros,
-                        s.dur_ms,
-                    ),
-                );
-                points.get(next).map(|p| (p.1 - at.y).atan2(p.0 - at.x))
+                as_leg(s, false)
+                    .heading_on_path(at, self.ctx.timestamp.to_micros_since_unix_epoch() as u64)
             });
         let stored = self.ctx.db.game_world_entity().guid().find(guid);
         if let (Some(stored), Some(advanced)) =
