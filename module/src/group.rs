@@ -824,16 +824,8 @@ pub(crate) fn has_known_party_member_in_partition(
     {
         return Err(PartyFactsUnavailableReason::MissingGroup);
     }
-    let members: Vec<_> = ctx
-        .db
-        .game_group_member()
-        .by_group()
-        .filter(&member.group_id)
-        .take(GROUP_MAX_MEMBERS + 1)
-        .collect();
-    if members.len() > GROUP_MAX_MEMBERS {
-        return Err(PartyFactsUnavailableReason::FightLimit);
-    }
+    let members = bounded_roster(ctx, member.group_id, GroupKind::Party)
+        .ok_or(PartyFactsUnavailableReason::FightLimit)?;
     Ok(members.into_iter().any(|candidate| {
         candidate.character_guid != character_guid
             && ctx
@@ -2396,6 +2388,13 @@ fn mirror_kind_and_slots(
 ) -> Result<(GroupKind, std::collections::BTreeMap<u64, RaidSlot>), String> {
     let kind = GroupKind::from_wire(group_kind)
         .ok_or_else(|| format!("group mirror has unknown group kind {group_kind}"))?;
+    if members.len() > kind.member_cap() {
+        return Err(format!(
+            "group mirror has {} members for a group that holds at most {}",
+            members.len(),
+            kind.member_cap()
+        ));
+    }
     if raid_slots.len() != members.len() {
         return Err(format!(
             "group mirror has {} Raid Slots for {} members",
@@ -2462,25 +2461,21 @@ pub fn admit_party_command_authority(
     mut expected_members: Vec<u64>,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
-    let group = ctx
-        .db
-        .game_group()
-        .group_id()
-        .find(group_id)
-        .ok_or_else(|| {
-            crate::bridge::CommandOutcome::StalePartyMirror
-                .tag()
-                .to_string()
-        })?;
-    if group.leader_guid != leader_guid {
-        return Err(crate::bridge::CommandOutcome::NotLeader.tag().to_string());
-    }
-    let kind = group_kind_of(&group);
     let stale = || {
         crate::bridge::CommandOutcome::StalePartyMirror
             .tag()
             .to_string()
     };
+    let group = ctx
+        .db
+        .game_group()
+        .group_id()
+        .find(group_id)
+        .ok_or_else(stale)?;
+    if group.leader_guid != leader_guid {
+        return Err(crate::bridge::CommandOutcome::NotLeader.tag().to_string());
+    }
+    let kind = group_kind_of(&group);
     if expected_members.len() > kind.member_cap() {
         return Err(stale());
     }
@@ -2489,14 +2484,12 @@ pub fn admit_party_command_authority(
         .into_iter()
         .map(|member| member.character_guid)
         .collect();
-    let members = ctx.db.game_group_member();
     current_members.sort_unstable();
     expected_members.sort_unstable();
     if current_members != expected_members {
-        return Err(crate::bridge::CommandOutcome::StalePartyMirror
-            .tag()
-            .to_string());
+        return Err(stale());
     }
+    let members = ctx.db.game_group_member();
     for guid in [leader_guid, bot_guid, authority_member_guid]
         .into_iter()
         .filter(|guid| *guid != 0)
