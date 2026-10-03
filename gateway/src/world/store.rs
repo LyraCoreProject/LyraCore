@@ -476,7 +476,7 @@ pub trait WorldStore:
 
     /// Bounded party projection used by companion-command authority. A roster longer than a Raid,
     /// or an otherwise unreadable projection, is an infrastructure failure, never proof of
-    /// membership. A Raid above five is a real answer the caller refuses as a stale mirror.
+    /// membership.
     fn party_command_group_roster(
         &self,
         character_guid: u64,

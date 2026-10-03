@@ -272,3 +272,45 @@ fn a_world_shard_mirror_takes_the_kind_and_every_raid_slot_or_refuses_the_push()
     assert_eq!(slot_of(&shard, 10), "0");
     assert_eq!(slot_of(&shard, 11), "129");
 }
+
+#[test]
+#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+fn a_raid_past_five_certifies_a_companion_order_for_any_member() {
+    let mut realm = Standalone::start("raid-convert-companion-order");
+    realm.publish_module();
+    realm.assert_call("claim_operator", &[]);
+    join(&realm, 1, 2);
+    group_op(&realm, RAID_CONVERT, 1, 0);
+    for guid in 3..=10 {
+        join(&realm, 1, guid);
+    }
+    assert_eq!(slot_of(&realm, 2), "0");
+    assert_eq!(slot_of(&realm, 7), "1");
+    let group_id = realm.query_rows("SELECT group_id FROM game_group")[0]["group_id"].clone();
+
+    // The bot sits in Subgroup 1 and the named member in Subgroup 0.
+    let all_members: Vec<u64> = (1..=10).collect();
+    let current = serde_json::to_string(&all_members).unwrap();
+    realm.assert_call(
+        "admit_party_command_authority",
+        &[group_id.as_str(), "1", "7", "2", current.as_str()],
+    );
+
+    let stale = serde_json::to_string(&all_members[..9]).unwrap();
+    let text = failure_text(
+        &realm,
+        "admit_party_command_authority",
+        &[group_id.as_str(), "1", "7", "2", stale.as_str()],
+    );
+    assert!(text.contains("StalePartyMirror"), "{text}");
+
+    let text = failure_text(
+        &realm,
+        "admit_party_command_authority",
+        &[group_id.as_str(), "2", "7", "3", current.as_str()],
+    );
+    assert!(
+        text.contains("NotLeader"),
+        "a Raid member who is not the leader: {text}"
+    );
+}
