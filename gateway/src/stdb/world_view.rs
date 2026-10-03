@@ -1478,8 +1478,10 @@ fn wire_insert_live<T>(
     });
 }
 
-/// [`wire_insert_live`] for `game_group_event` from `source`. The dispatcher also gets the cached
-/// table, which already holds the whole transaction when the callback runs.
+/// [`wire_insert_live`] for `game_group_event` from `source`. The dispatcher also gets a read of
+/// the cached table, which already holds the whole transaction when the callback runs. It runs
+/// the read only for a recipient with a session, once per transaction, because the SDK copies
+/// every cached row to iterate.
 fn wire_group_events(
     db: &RemoteTables,
     label: &'static str,
@@ -1493,7 +1495,9 @@ fn wire_group_events(
             return;
         }
         guarded(label, || {
-            group_event_appeared(&view, &coord, source, row, ctx.db.game_group_event().iter());
+            group_event_appeared(&view, &coord, source, row, || {
+                ctx.db.game_group_event().iter().collect()
+            });
         });
     });
 }
@@ -2749,7 +2753,7 @@ fn group_event_appeared(
     coord: &Coordinator,
     source: GroupEventSource,
     row: &GroupEvent,
-    cached: impl IntoIterator<Item = GroupEvent>,
+    cached: impl FnOnce() -> Vec<GroupEvent>,
 ) {
     let Some(session) = view.session_of_owner(row.recipient_guid) else {
         return;
@@ -2798,20 +2802,21 @@ impl GroupEventCursor {
     /// The SDK fires the inserts of one transaction in hash order, and the client must hear them
     /// in insert order: a filled Meeting Stone party's `COMPLETE` comes before `SETQUEUE(0, NONE)`.
     /// So the first callback of a transaction takes every row of that transaction for this
-    /// recipient from `cached`, which already holds the whole transaction, and the later callbacks
-    /// find theirs taken. Rows of one transaction share `created_at`.
+    /// recipient from `cached`, which reads the table that already holds the whole transaction, and
+    /// the later callbacks find theirs taken without reading it. Rows of one transaction share
+    /// `created_at`.
     fn take(
         &self,
         source: GroupEventSource,
         row: &GroupEvent,
-        cached: impl IntoIterator<Item = GroupEvent>,
+        cached: impl FnOnce() -> Vec<GroupEvent>,
     ) -> Vec<GroupEvent> {
         let mut cursors = self.0.lock().unwrap_or_else(|p| p.into_inner());
         let cursor = cursors.entry(source).or_default();
         if row.id <= *cursor {
             return Vec::new();
         }
-        let mut rows: Vec<GroupEvent> = cached
+        let mut rows: Vec<GroupEvent> = cached()
             .into_iter()
             .filter(|cached| {
                 cached.recipient_guid == row.recipient_guid
@@ -6053,10 +6058,14 @@ mod group_event_order_tests {
         let cursor = GroupEventCursor::default();
         let source = GroupEventSource::RealmCore;
 
-        let first = cursor.take(source, &cached[1], cached.clone());
+        let first = cursor.take(source, &cached[1], || cached.to_vec());
         let later: Vec<GroupEvent> = [&cached[2], &cached[4]]
             .into_iter()
-            .flat_map(|row| cursor.take(source, row, cached.clone()))
+            .flat_map(|row| {
+                cursor.take(source, row, || -> Vec<GroupEvent> {
+                    panic!("a row already taken must not read the table again")
+                })
+            })
             .collect();
 
         assert_eq!(ids(&first), [10, 11, 12]);
@@ -6069,7 +6078,7 @@ mod group_event_order_tests {
     fn each_source_database_keeps_its_own_cursor() {
         let cursor = GroupEventCursor::default();
         let realm = [event(10, RECIPIENT, 200), event(11, RECIPIENT, 200)];
-        cursor.take(GroupEventSource::RealmCore, &realm[0], realm.clone());
+        cursor.take(GroupEventSource::RealmCore, &realm[0], || realm.to_vec());
 
         let next = [
             event(10, RECIPIENT, 200),
@@ -6079,11 +6088,11 @@ mod group_event_order_tests {
         let shard = [event(3, RECIPIENT, 200)];
 
         assert_eq!(
-            ids(&cursor.take(GroupEventSource::RealmCore, &next[2], next.clone())),
+            ids(&cursor.take(GroupEventSource::RealmCore, &next[2], || next.to_vec())),
             [14]
         );
         assert_eq!(
-            ids(&cursor.take(GroupEventSource::Shard(0), &shard[0], shard.clone())),
+            ids(&cursor.take(GroupEventSource::Shard(0), &shard[0], || shard.to_vec())),
             [3]
         );
     }

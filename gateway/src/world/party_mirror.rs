@@ -33,7 +33,16 @@ impl RosterRevisionRelay {
             .name("roster-revision-relay".into())
             .spawn(move || loop {
                 worker.wait_for_dirty();
-                worker.push_dirty(&store);
+                // A panic in one pass must not end the relay for the life of the process.
+                let pass = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    worker.push_dirty(&store);
+                }));
+                if pass.is_err() {
+                    log::error!(
+                        "party: a Roster Revision Relay pass panicked; its parties wait for their \
+                         next revision or the reconnect pass"
+                    );
+                }
             })?;
         Ok(relay)
     }

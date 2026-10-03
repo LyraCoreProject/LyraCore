@@ -17,7 +17,7 @@
 //! Matching runs inside the transaction that changes a bucket ([`match_bucket`]), not on a tick:
 //! once cmangos's `bool` priority compare is read literally, its queue thread reduces to longest
 //! wait per Open Role, so a tick would add latency and no behavior. Every Stone Add goes through
-//! the party authority's join core, [`crate::group::join_group`], the same path an accepted invite
+//! the party authority's join core, [`crate::group::plan_join`], the same path an accepted invite
 //! takes. The group cores call back here when a queued Party's roster changes.
 
 use std::collections::BTreeSet;
@@ -33,8 +33,8 @@ use lyracore_shared::meeting_stone::{
     encode_queue, event_kind, queue_status, realm_op, MeetingStoneRefusal,
 };
 
-use crate::game_account_claim;
-use crate::group::{Departure, JoinTarget};
+use crate::group::{Departure, JoinPlan, JoinTarget};
+use crate::{game_account_claim, game_group};
 
 /// A queued party is reminded that the queue is still working every five minutes
 /// (cm:LFG/LFGMgr.cpp:55).
@@ -315,12 +315,20 @@ fn join(
             .iter()
             .map(|member| (member.character_guid, class_of(member.character_guid)))
             .collect();
-        queue_party(ctx, group.group_id, bucket, &members).map_err(StoneOpError::Invalid)?;
+        let next_reminder_at = first_reminder_at(ctx).map_err(StoneOpError::Invalid)?;
+        queue_party(ctx, group.group_id, bucket, &members, next_reminder_at);
     } else {
         upsert_seeker(ctx, actor_guid, bucket, actor.class, 0);
         push_queue(ctx, actor_guid, area_id, queue_status::JOINED_QUEUE);
     }
     match_bucket(ctx, bucket).map_err(StoneOpError::Invalid)
+}
+
+/// When a Party queued now first hears IN_PROGRESS.
+fn first_reminder_at(ctx: &ReducerContext) -> Result<Timestamp, String> {
+    ctx.timestamp
+        .checked_add(TimeDuration::from_micros(REMINDER_INTERVAL_MICROS))
+        .ok_or_else(|| "reminder time overflow".to_string())
 }
 
 /// Queue `group_id` in `bucket` with `members` as its Seekers, `(guid, class)` each, and tell each
@@ -331,11 +339,8 @@ fn queue_party(
     group_id: u64,
     bucket: Bucket,
     members: &[(u64, u8)],
-) -> Result<(), String> {
-    let next_reminder_at = ctx
-        .timestamp
-        .checked_add(TimeDuration::from_micros(REMINDER_INTERVAL_MICROS))
-        .ok_or("reminder time overflow")?;
+    next_reminder_at: Timestamp,
+) {
     let row = MeetingStoneParty {
         group_id,
         area_id: bucket.area_id,
@@ -365,7 +370,6 @@ fn queue_party(
     for &(guid, _) in members {
         push_queue(ctx, guid, bucket.area_id, queue_status::JOINED_QUEUE);
     }
-    Ok(())
 }
 
 /// Queue `character_guid`, replacing any earlier row and its wait time.
@@ -662,8 +666,9 @@ pub(crate) fn match_bucket(ctx: &ReducerContext, bucket: Bucket) -> Result<(), S
 }
 
 /// The bucket's waiting solo Seekers, and its queued Parties oldest first. Reads the bucket through
-/// its index. Drops a solo Seeker without a live Account Claim, and a stale solo row of a Character
-/// that is in a Group.
+/// its index. Drops a solo Seeker without a live Account Claim, a stale solo row of a Character
+/// that is in a Group, and a party row whose Group is gone or is a Raid. What is left cannot make
+/// a Stone Add fail, so a pass that runs where it cannot roll back leaves no half-done add.
 fn read_bucket(
     ctx: &ReducerContext,
     bucket: Bucket,
@@ -689,6 +694,23 @@ fn read_bucket(
     let mut parties: Vec<MeetingStoneParty> = group_ids
         .into_iter()
         .filter_map(|group_id| ctx.db.game_meeting_stone_party().group_id().find(group_id))
+        .filter(|party| {
+            let kind = ctx
+                .db
+                .game_group()
+                .group_id()
+                .find(party.group_id)
+                .map(|group| crate::group::group_kind_of(&group));
+            let queueable = kind == Some(GroupKind::Party);
+            if !queueable {
+                spacetimedb::log::warn!(
+                    "meeting stone party {} left the queue: its Group is {kind:?}",
+                    party.group_id
+                );
+                dequeue_party_rows(ctx, party.group_id);
+            }
+            queueable
+        })
         .collect();
     parties.sort_unstable_by_key(|party| (party.queued_at, party.group_id));
     (solos, parties)
@@ -706,7 +728,8 @@ fn has_live_claim(ctx: &ReducerContext, character_guid: u64) -> bool {
 
 /// Give `party` Stone Adds from `solos` while it has fewer than five members and a Seeker fits an
 /// Open Role. Before each add the current members get MEMBER_ADDED; at five members the party is
-/// complete (cm:LFG/LFGQueue.cpp:372-383).
+/// complete (cm:LFG/LFGQueue.cpp:372-383). A full Party is completed, never joined, so a Stone Add
+/// never meets a full Group.
 fn fill_party(
     ctx: &ReducerContext,
     party: &MeetingStoneParty,
@@ -730,13 +753,14 @@ fn fill_party(
             return Ok(());
         };
         let joiner = solos.remove(pick);
+        let plan = plan_stone_add(ctx, &joiner, JoinTarget::Group(party.group_id))?;
         push_to_each(
             ctx,
             &members,
             event_kind::MEMBER_ADDED,
             joiner.character_guid,
         );
-        stone_add(ctx, &joiner, JoinTarget::Group(party.group_id))?;
+        stone_add(ctx, &joiner, plan);
         upsert_seeker(
             ctx,
             joiner.character_guid,
@@ -765,6 +789,14 @@ fn form_party(
     leader: &MeetingStoneSeeker,
     member: &MeetingStoneSeeker,
 ) -> Result<(), String> {
+    let plan = plan_stone_add(
+        ctx,
+        member,
+        JoinTarget::NewParty {
+            leader_guid: leader.character_guid,
+        },
+    )?;
+    let next_reminder_at = first_reminder_at(ctx)?;
     crate::group::push_event(
         ctx,
         leader.character_guid,
@@ -776,13 +808,7 @@ fn form_party(
         .game_meeting_stone_seeker()
         .character_guid()
         .delete(leader.character_guid);
-    let group_id = stone_add(
-        ctx,
-        member,
-        JoinTarget::NewParty {
-            leader_guid: leader.character_guid,
-        },
-    )?;
+    let group_id = stone_add(ctx, member, plan);
     queue_party(
         ctx,
         group_id,
@@ -791,28 +817,35 @@ fn form_party(
             (leader.character_guid, leader.class),
             (member.character_guid, member.class),
         ],
-    )
+        next_reminder_at,
+    );
+    Ok(())
 }
 
-/// Take `joiner` out of the solo queue and add it to `target` through the join core, advancing the
-/// Group's Roster Revision. Returns the Group id.
-fn stone_add(
+/// Check that `joiner` can join `target`, before the Stone Add writes anything.
+fn plan_stone_add(
     ctx: &ReducerContext,
     joiner: &MeetingStoneSeeker,
     target: JoinTarget,
-) -> Result<u64, String> {
-    ctx.db
-        .game_meeting_stone_seeker()
-        .character_guid()
-        .delete(joiner.character_guid);
-    let joined = crate::group::join_group(ctx, joiner.character_guid, target).map_err(|error| {
+) -> Result<JoinPlan, String> {
+    crate::group::plan_join(ctx, joiner.character_guid, target).map_err(|error| {
         format!(
             "stone add of {} to {target:?} failed: {error:?}",
             joiner.character_guid
         )
-    })?;
+    })
+}
+
+/// Take `joiner` out of the solo queue and add it through `plan`, advancing the Group's Roster
+/// Revision. Returns the Group id.
+fn stone_add(ctx: &ReducerContext, joiner: &MeetingStoneSeeker, plan: JoinPlan) -> u64 {
+    ctx.db
+        .game_meeting_stone_seeker()
+        .character_guid()
+        .delete(joiner.character_guid);
+    let joined = plan.apply(ctx);
     crate::group::advance_group_revision(ctx, joined.group_id, !joined.formed, true);
-    Ok(joined.group_id)
+    joined.group_id
 }
 
 // =================================================================================================
@@ -873,8 +906,9 @@ pub(crate) struct PartyDeparture {
 /// - Left, leader changed: the leaver hears NONE and the party leaves the queue with LEAVE_QUEUE
 ///   (cm:Groups/Group.cpp:464-476).
 /// - Kicked: the rest hear PARTY_MEMBER_REMOVED_PARTY_REMOVED and the party leaves the queue with
-///   LEAVE_QUEUE. The kicked Character hears LOOKING_FOR_NEW_PARTY_IN_QUEUE and waits alone with
-///   its class and team (cm:Groups/Group.cpp:413-435).
+///   LEAVE_QUEUE. A kicked Character with a live Account Claim hears
+///   LOOKING_FOR_NEW_PARTY_IN_QUEUE and waits alone with its class and team
+///   (cm:Groups/Group.cpp:413-435). A kicked playerbot or offline member only leaves.
 ///
 /// Returns the bucket to match when a role opened or a Character was queued.
 pub(crate) fn party_left(ctx: &ReducerContext, departed: PartyDeparture) -> Option<Bucket> {
@@ -900,6 +934,11 @@ pub(crate) fn party_left(ctx: &ReducerContext, departed: PartyDeparture) -> Opti
                 );
             }
             dequeue_party(ctx, departed.group_id, queue_status::LEAVE_QUEUE);
+            // Only a Character with a World Session waits alone: a kicked playerbot or offline
+            // member just leaves, as in cmangos (`if (player)`).
+            if !has_live_claim(ctx, guid) {
+                return None;
+            }
             push_queue(
                 ctx,
                 guid,

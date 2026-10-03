@@ -754,6 +754,87 @@ fn a_kicked_member_waits_alone_and_the_party_leaves_the_queue() {
     }
 }
 
+/// A kicked member without a live Account Claim, a playerbot or an offline Character, only
+/// leaves. The party still leaves the queue, and nobody waits alone.
+#[test]
+#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+fn a_kicked_member_without_a_claim_does_not_wait_alone() {
+    let realm = start("stone-hook-kick-unclaimed");
+    const LEADER: u64 = 509_6065;
+    const KICKED: u64 = 509_6066;
+    const STAYS: u64 = 509_6067;
+    stage(&realm, LEADER, HUMAN, WARRIOR);
+    stage(&realm, KICKED, HUMAN, PRIEST);
+    stage(&realm, STAYS, HUMAN, MAGE);
+    stage_group(&realm, LEADER, &[KICKED, STAYS]);
+    join_party(
+        &realm,
+        LEADER,
+        DEADMINES,
+        &[(LEADER, WARRIOR), (KICKED, PRIEST), (STAYS, MAGE)],
+    );
+    realm.assert_sql(&format!(
+        "UPDATE game_account_claim SET expires_micros = 0 WHERE account_id = {KICKED}"
+    ));
+
+    let kicked = heard(&realm, || group_op(&realm, UNINVITE, LEADER, KICKED, 0, 0));
+
+    for rest in [LEADER, STAYS] {
+        assert_eq!(
+            kicked.stone(rest),
+            [
+                Event::Queue(0, PARTY_MEMBER_REMOVED_PARTY_REMOVED),
+                Event::Queue(0, LEAVE_QUEUE),
+            ]
+        );
+    }
+    assert!(kicked.stone(KICKED).is_empty());
+    assert!(queued_parties(&realm).is_empty());
+    assert!(seekers(&realm).is_empty());
+}
+
+/// A queued party row whose Group is gone is broken state. The next pass drops it, and the JOIN
+/// that runs the pass still succeeds and forms its own Party.
+#[test]
+#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+fn a_stale_party_row_leaves_the_queue_without_blocking_a_join() {
+    let realm = start("stone-match-stale-party");
+    const LEADER: u64 = 509_6090;
+    const MEMBER: u64 = 509_6091;
+    let mages: Vec<u64> = (509_6092..509_6097).collect();
+    stage(&realm, LEADER, HUMAN, WARRIOR);
+    stage(&realm, MEMBER, HUMAN, PRIEST);
+    stage_group(&realm, LEADER, &[MEMBER]);
+    join_party(
+        &realm,
+        LEADER,
+        DEADMINES,
+        &[(LEADER, WARRIOR), (MEMBER, PRIEST)],
+    );
+    let stale = group_of(&realm, LEADER).unwrap();
+    realm.assert_sql(&format!(
+        "DELETE FROM game_group_member WHERE group_id = {stale}"
+    ));
+    realm.assert_sql(&format!("DELETE FROM game_group WHERE group_id = {stale}"));
+    assert_eq!(queued_parties(&realm), [stale]);
+
+    stage(&realm, mages[0], HUMAN, MAGE);
+    join_alone(&realm, mages[0], MAGE, DEADMINES);
+    assert!(queued_parties(&realm).is_empty());
+    assert_eq!(
+        seekers(&realm),
+        BTreeMap::from([(mages[0], alone(DEADMINES, ALLIANCE, MAGE))])
+    );
+
+    for &guid in &mages[1..] {
+        stage(&realm, guid, HUMAN, MAGE);
+        join_alone(&realm, guid, MAGE, DEADMINES);
+    }
+    let group = group_of(&realm, mages[0]).expect("five mages form a party");
+    assert_eq!(members(&realm, group), mages[..3]);
+    assert_eq!(queued_parties(&realm), [group]);
+}
+
 /// Criterion 7, disband by a leave or a kick from two members: both hear NONE once, and nobody
 /// waits on alone.
 #[test]

@@ -4167,8 +4167,16 @@ impl Coordinator {
     /// re-arms the callbacks on the fresh connection; changes missed while it was down are the
     /// reconciliation pass's, which that reconnect also starts.
     pub fn spawn_roster_revision_relay(&self) {
-        let Ok(realm) = self.realm_core() else {
-            return;
+        let realm = match self.realm_core() {
+            Ok(realm) => realm,
+            Err(error) => {
+                log::error!(
+                    "party: the Roster Revision Relay is not running; Realm-core is unavailable at \
+                     startup ({error:#}). World Shard mirrors follow only party ops and the \
+                     reconnect pass until the Gateway restarts"
+                );
+                return;
+            }
         };
         if self
             .all_shards()

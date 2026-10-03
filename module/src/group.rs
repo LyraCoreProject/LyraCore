@@ -1397,7 +1397,7 @@ fn has_pending_leader_invite(ctx: &ReducerContext, character_guid: u64) -> bool 
         .any(|invite| invite.inviter_guid == character_guid && invite.group_id == 0)
 }
 
-/// Consume `acceptor_guid`'s pending invite and join its Group through [`join_group`]. `class` is
+/// Consume `acceptor_guid`'s pending invite and join its Group through [`plan_join`]. `class` is
 /// the acceptor's, for the Seeker row a queued Party gains; 0 when unknown.
 fn accept_invite_on(
     ctx: &ReducerContext,
@@ -1420,8 +1420,9 @@ fn accept_invite_on(
         },
         group_id => JoinTarget::Group(group_id),
     };
-    // A World Shard holds every Character it groups, so a missing row is a Character that is gone.
-    // Realm-core holds none and takes the Gateway's word.
+    let plan = plan_join(ctx, acceptor_guid, target)?;
+    // A World Shard holds every Character it groups, so a missing row is a Character that is gone
+    // or in transit. Realm-core holds none and takes the Gateway's word.
     if plane == Plane::Shard {
         if let JoinTarget::NewParty { leader_guid } = target {
             crate::helpers::character_by_guid(ctx, leader_guid)
@@ -1429,7 +1430,7 @@ fn accept_invite_on(
         }
         crate::helpers::character_by_guid(ctx, acceptor_guid).ok_or(GroupRefusal::NoSuchPlayer)?;
     }
-    let joined = join_group(ctx, acceptor_guid, target)?;
+    let joined = plan.apply(ctx);
     if joined.formed {
         crate::meeting_stone::party_joined(ctx, joined.group_id, invite.inviter_guid, 0)
             .map_err(GroupOpError::Invariant)?;
@@ -1438,7 +1439,7 @@ fn accept_invite_on(
         .map_err(GroupOpError::Invariant)
 }
 
-/// Which Group [`join_group`] adds a Character to.
+/// Which Group [`plan_join`] adds a Character to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum JoinTarget {
     /// An existing Group.
@@ -1447,7 +1448,7 @@ pub(crate) enum JoinTarget {
     NewParty { leader_guid: u64 },
 }
 
-/// The Group [`join_group`] added a Character to.
+/// The Group [`JoinPlan::apply`] added a Character to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct JoinedGroup {
     pub(crate) group_id: u64,
@@ -1455,26 +1456,29 @@ pub(crate) struct JoinedGroup {
     pub(crate) formed: bool,
 }
 
+/// A join that passed every check and has written nothing yet. [`JoinPlan::apply`] cannot fail, so
+/// a caller may write its own rows between the two and never leave half a join behind. The plan
+/// holds while nothing between the two changes group membership.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct JoinPlan {
+    joiner_guid: u64,
+    target: JoinTarget,
+    slot: RaidSlot,
+}
+
 /// The one way a Character joins a Group: an accepted invite and a Stone Add both come here.
 ///
-/// An existing Group must exist and have room for its kind; a Raid joiner takes a free Raid Slot.
-/// A new Party starts with Vanilla's defaults, group loot at Uncommon, and its leader's other pending
-/// invites now join it. Every member gets the roster list. The joiner, and a new Party's leader, get
-/// their Instance Removal reconciled, so joining the Group that owns the instance cancels the
-/// countdown (cm:Group.cpp:880-885).
-///
-/// A member row's `owner_identity` is the local Character row's identity when this database holds
-/// one, else zero: Realm-core holds no Character rows, and each World Shard mirror re-derives it.
-pub(crate) fn join_group(
+/// The joiner must be in no Group. An existing Group must exist and have room for its kind; a Raid
+/// joiner takes a free Raid Slot. A new Party's leader must be in no Group either. Writes nothing.
+pub(crate) fn plan_join(
     ctx: &ReducerContext,
     joiner_guid: u64,
     target: JoinTarget,
-) -> Result<JoinedGroup, GroupOpError> {
+) -> Result<JoinPlan, GroupOpError> {
     if checked_group_membership(ctx, joiner_guid)?.is_some() {
         return Err(GroupRefusal::AlreadyInGroup.into());
     }
-    let members = ctx.db.game_group_member();
-    let (joined, slot) = match target {
+    let slot = match target {
         JoinTarget::Group(group_id) => {
             let current = members_of(ctx, group_id);
             let Some(group) = ctx.db.game_group().group_id().find(group_id) else {
@@ -1491,69 +1495,96 @@ pub(crate) fn join_group(
             if !has_room(kind, current.len()) {
                 return Err(GroupRefusal::GroupFull.into());
             }
-            let slot = match kind {
+            match kind {
                 GroupKind::Party => RaidSlot::default(),
                 GroupKind::Raid => RaidSlot::for_raid_joiner(current.iter().map(raid_slot_of))
                     .ok_or(GroupRefusal::GroupFull)?,
-            };
-            let joined = JoinedGroup {
-                group_id,
-                formed: false,
-            };
-            (joined, slot)
+            }
         }
         JoinTarget::NewParty { leader_guid } => {
             // A leader that has joined a Group since speaks for nobody.
             if checked_group_membership(ctx, leader_guid)?.is_some() {
                 return Err(GroupRefusal::InviterUnavailable.into());
             }
-            let group = ctx.db.game_group().insert(Group {
-                group_id: 0,
-                leader_guid,
-                loot_method: loot_method::GROUP,
-                loot_threshold: 2,
-                rr_cursor: 0,
-                master_looter_guid: 0,
-                group_type: GroupKind::Party.wire(),
-            });
-            members.insert(GroupMember {
-                id: 0,
-                group_id: group.group_id,
-                character_guid: leader_guid,
-                owner_identity: member_identity(ctx, leader_guid),
-                raid_slot: RaidSlot::default().wire(),
-            });
-            let invites = ctx.db.game_group_invite();
-            let pending: Vec<GroupInvite> = invites
-                .iter()
-                .filter(|other| other.inviter_guid == leader_guid && other.group_id == 0)
-                .collect();
-            for other in pending {
-                invites.id().update(GroupInvite {
-                    group_id: group.group_id,
-                    ..other
-                });
-            }
-            let joined = JoinedGroup {
-                group_id: group.group_id,
-                formed: true,
-            };
-            (joined, RaidSlot::default())
+            RaidSlot::default()
         }
     };
-    members.insert(GroupMember {
-        id: 0,
-        group_id: joined.group_id,
-        character_guid: joiner_guid,
-        owner_identity: member_identity(ctx, joiner_guid),
-        raid_slot: slot.wire(),
-    });
-    push_list_to_all(ctx, joined.group_id);
-    crate::instance::reconcile_instance_removal(ctx, joiner_guid);
-    if let JoinTarget::NewParty { leader_guid } = target {
-        crate::instance::reconcile_instance_removal(ctx, leader_guid);
+    Ok(JoinPlan {
+        joiner_guid,
+        target,
+        slot,
+    })
+}
+
+impl JoinPlan {
+    /// Add the joiner. A new Party starts with Vanilla's defaults, group loot at Uncommon, and its
+    /// leader's other pending invites now join it. Every member gets the roster list. The joiner,
+    /// and a new Party's leader, get their Instance Removal reconciled, so joining the Group that
+    /// owns the instance cancels the countdown (cm:Group.cpp:880-885).
+    ///
+    /// A member row's `owner_identity` is the local Character row's identity when this database
+    /// holds one, else zero: Realm-core holds no Character rows, and each World Shard mirror
+    /// re-derives it.
+    pub(crate) fn apply(self, ctx: &ReducerContext) -> JoinedGroup {
+        let Self {
+            joiner_guid,
+            target,
+            slot,
+        } = self;
+        let members = ctx.db.game_group_member();
+        let joined = match target {
+            JoinTarget::Group(group_id) => JoinedGroup {
+                group_id,
+                formed: false,
+            },
+            JoinTarget::NewParty { leader_guid } => {
+                let group = ctx.db.game_group().insert(Group {
+                    group_id: 0,
+                    leader_guid,
+                    loot_method: loot_method::GROUP,
+                    loot_threshold: 2,
+                    rr_cursor: 0,
+                    master_looter_guid: 0,
+                    group_type: GroupKind::Party.wire(),
+                });
+                members.insert(GroupMember {
+                    id: 0,
+                    group_id: group.group_id,
+                    character_guid: leader_guid,
+                    owner_identity: member_identity(ctx, leader_guid),
+                    raid_slot: RaidSlot::default().wire(),
+                });
+                let invites = ctx.db.game_group_invite();
+                let pending: Vec<GroupInvite> = invites
+                    .iter()
+                    .filter(|other| other.inviter_guid == leader_guid && other.group_id == 0)
+                    .collect();
+                for other in pending {
+                    invites.id().update(GroupInvite {
+                        group_id: group.group_id,
+                        ..other
+                    });
+                }
+                JoinedGroup {
+                    group_id: group.group_id,
+                    formed: true,
+                }
+            }
+        };
+        members.insert(GroupMember {
+            id: 0,
+            group_id: joined.group_id,
+            character_guid: joiner_guid,
+            owner_identity: member_identity(ctx, joiner_guid),
+            raid_slot: slot.wire(),
+        });
+        push_list_to_all(ctx, joined.group_id);
+        crate::instance::reconcile_instance_removal(ctx, joiner_guid);
+        if let JoinTarget::NewParty { leader_guid } = target {
+            crate::instance::reconcile_instance_removal(ctx, leader_guid);
+        }
+        joined
     }
-    Ok(joined)
 }
 
 /// A member row's `owner_identity`: this database's binding for the Character, or zero where it
