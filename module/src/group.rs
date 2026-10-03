@@ -2141,7 +2141,8 @@ fn next_group_revision(current: Option<u64>, was_active: bool) -> u64 {
 /// each Character whose membership the push changes: the mirror is how this Shard learns of it.
 ///
 /// `group_kind` is the [`GroupKind`] byte and `raid_slots[n]` is `members[n]`'s [`RaidSlot`] byte.
-/// A length mismatch, an unknown kind or an invalid slot refuses the whole push.
+/// A length mismatch, an unknown kind, more members than the kind holds, or an invalid slot refuses
+/// the whole push.
 #[reducer]
 #[allow(clippy::too_many_arguments)] // The roster and initiating Actor are the reducer wire contract.
 pub fn sync_group_mirror(

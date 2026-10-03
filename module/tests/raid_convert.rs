@@ -377,7 +377,7 @@ fn a_party_mirror_past_five_is_stale_at_both_companion_order_readers() {
     mirror_group(&realm, 900, &[1, 2, 3, 4, 5, 6], GroupKind::Raid);
     realm.assert_sql("UPDATE game_group SET group_type = 0 WHERE group_id = 900");
 
-    // The certified list matches the six rows, so these refuse on the Party cap alone.
+    // The certified list matches the six rows, so these refuse on the Party cap.
     let party = serde_json::to_string(&[1, 2, 3, 4, 5, 6]).unwrap();
     let text = failure_text(
         &realm,
