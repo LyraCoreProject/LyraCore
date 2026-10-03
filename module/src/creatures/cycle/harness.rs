@@ -3654,6 +3654,74 @@ fn a_new_obstruction_stops_a_retained_path_before_committing_the_next_position()
     assert_eq!(w.effects()[0].dur_ms, 0);
 }
 
+/// A wolf the last firing stored at `stored`, 1.5 s along a Route Path from (0, 0) through
+/// (10, 0) to (10, 10): 20 yd in 4 s, so its first segment ends 2 s after the start.
+fn wolf_on_a_route_path(stored: Point) -> Scenario {
+    let w = Scenario::new(1_500_000).creature(WOLF, stored).flying(
+        WOLF,
+        p(0.0, 0.0, 10.0),
+        p(10.0, 10.0, 10.0),
+        0,
+        4_000,
+    );
+    w.legs.borrow_mut()[0].waypoints = vec![(10.0, 0.0, 10.0), (10.0, 10.0, 10.0)];
+    w
+}
+
+fn assert_near(at: Point, want: Point) {
+    assert!(
+        (at.x - want.x).abs() < 1e-4 && (at.y - want.y).abs() < 1e-4 && at.z == want.z,
+        "expected {want:?}, stopped at {at:?}"
+    );
+}
+
+#[test]
+fn a_stop_after_a_segment_end_holds_the_rendered_point_facing_the_next_segment() {
+    // The first segment ended at 2 s and the stop comes at 2.3 s, before the next firing.
+    let w = wolf_on_a_route_path(p(7.5, 0.0, 10.0));
+    let leg = w.legs.borrow()[0].clone();
+    let stop = stop_on_leg(&w, &leg, 2_300_000).expect("a finite stop");
+    assert_near(stop.at, p(10.0, 1.5, 10.0));
+    assert_eq!(
+        stop.heading,
+        Some(std::f32::consts::FRAC_PI_2),
+        "facing along +y"
+    );
+}
+
+#[test]
+fn a_stop_after_the_route_path_ends_holds_its_destination() {
+    let w = wolf_on_a_route_path(p(10.0, 7.5, 10.0));
+    let leg = w.legs.borrow()[0].clone();
+    let stop = stop_on_leg(&w, &leg, 4_200_000).expect("a finite stop");
+    assert_near(stop.at, p(10.0, 10.0, 10.0));
+    assert_eq!(stop.heading, None, "a landed path names no next waypoint");
+}
+
+#[test]
+fn a_stop_on_an_obstructed_route_path_keeps_the_stored_point() {
+    let w = wolf_on_a_route_path(p(7.5, 0.0, 10.0));
+    w.obstructed_paths.borrow_mut().insert(WOLF);
+    let leg = w.legs.borrow()[0].clone();
+    assert_eq!(
+        stop_on_leg(&w, &leg, 2_300_000),
+        Some(Stop {
+            at: p(7.5, 0.0, 10.0),
+            heading: None,
+        }),
+        "a stop must halt where the advance would, never past the obstruction"
+    );
+}
+
+#[test]
+fn a_stop_on_a_non_finite_leg_keeps_the_stored_point() {
+    let w = Scenario::new(1_500_000)
+        .creature(WOLF, p(7.5, 0.0, 10.0))
+        .flying(WOLF, p(0.0, 0.0, 10.0), p(f32::NAN, 0.0, 10.0), 0, 4_000);
+    let leg = w.legs.borrow()[0].clone();
+    assert_eq!(stop_on_leg(&w, &leg, 2_300_000), None);
+}
+
 #[test]
 fn crowd_control_interrupts_a_retained_path_at_its_current_turn() {
     let mut w = Scenario::new(1_000_000)
@@ -5862,7 +5930,8 @@ fn discovery_stays_on_the_narrow_candidate_universes() {
 /// stands still while the client animates on; `drop_leg` no-op'd and one leg replays forever;
 /// `engage` no-op'd and nothing ever aggroes; `restore` no-op'd and health never comes back;
 /// `awake_creatures` returning an empty sweep and the world goes dormant with every test passing;
-/// `settle_advances` skipping its gate and every stored creature position stays at its leg start.
+/// `settle_advances` skipping its gate and every stored creature position stays at its leg start;
+/// `stop_on_stored_leg` skipping the obstruction check and a stop lands past a blocked segment.
 ///
 /// Several methods are deliberately more than one expression — `place`, `engage`, `retarget`,
 /// `combat_healed_to`, `restore`, `face` and `take_victim` — so the pin is the exact current body
@@ -5907,6 +5976,14 @@ fn the_production_adapter_is_the_pass_through_the_harness_assumes() {
                 "e.grid_x = gx; e.grid_y = gy; e.cell = spatial::grid_cell_id(gx, gy); if let ",
                 "Some(ms) = moved_ms { e.last_move_ms = ms; } if let Some(rad) = orientation { ",
                 "e.orientation = rad; } Some(entities.guid().update(e)) } }",
+            ),
+        ),
+        (
+            "pub(crate) fn stop_on_stored_leg(ctx: &ReducerContext, leg: CreatureSpline) -> Option<Stop> {",
+            concat!(
+                "{ let now_micros = ctx.timestamp.to_micros_since_unix_epoch() as u64; let world = ",
+                "CtxWorld { ctx, regen_window: crate::combat::RegenWindow::new(now_micros / 1_000, 0), ",
+                "advances: Vec::new(), }; super::stop_on_leg(&world, &as_leg(leg, false), now_micros) }",
             ),
         ),
         (
@@ -5963,11 +6040,9 @@ fn the_production_adapter_is_the_pass_through_the_harness_assumes() {
                 "crate::spell::is_self_movement_suppressed(self.ctx, guid) || ",
                 "eventai::movement::intent(self.ctx, guid).is_some_and(|intent| intent.immobilized) } fn ",
                 "commit_position(&mut self, guid: u64, at: Point, moved_ms: u32) { let heading = self .ctx ",
-                ".db .game_creature_spline() .guid() .find(guid) .and_then(|s| { let points: Vec<_> = s ",
-                ".path .as_ref()? .points .iter() .map(|p| (p.x, p.y, p.z)) .collect(); let (_, next) = ",
-                "lyracore_shared::movement_path::sample( (s.sx, s.sy, s.sz), &points, super::spline_t( ",
-                "self.ctx.timestamp.to_micros_since_unix_epoch() as u64, s.start_micros, s.dur_ms, ), ); ",
-                "points.get(next).map(|p| (p.1 - at.y).atan2(p.0 - at.x)) }); let stored = ",
+                ".db .game_creature_spline() .guid() .find(guid) .and_then(|s| { as_leg(s, false) ",
+                ".heading_on_path(at, self.ctx.timestamp.to_micros_since_unix_epoch() as u64) }); ",
+                "let stored = ",
                 "self.ctx.db.game_world_entity().guid().find(guid); if let (Some(stored), ",
                 "Some(advanced)) = (stored, self.place(guid, at, Some(moved_ms), heading)) { ",
                 "self.advances.push((stored, advanced)); } } fn halt(&mut self, leg: &LegInFlight, at: Point, spline_id: ",
