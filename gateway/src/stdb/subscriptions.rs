@@ -4159,6 +4159,61 @@ impl Coordinator {
             });
     }
 
+    /// Start the Roster Revision Relay: Realm-core's `game_group_roster_revision` callbacks mark a
+    /// party dirty, and one worker pushes it to every stale World Shard mirror. Called once at
+    /// startup. Arms nothing unless Realm-core is a distinct database. A Realm-core reconnect
+    /// re-arms the callbacks on the fresh connection; changes missed while it was down are the
+    /// reconciliation pass's, which that reconnect also starts.
+    pub fn spawn_roster_revision_relay(&self) {
+        let Ok(realm) = self.realm_core() else {
+            return;
+        };
+        if self
+            .all_shards()
+            .iter()
+            .any(|shard| shard.shard_name() == realm.shard_name())
+        {
+            return;
+        }
+        let relay = match crate::world::party_mirror::RosterRevisionRelay::spawn(self.clone()) {
+            Ok(relay) => relay,
+            Err(error) => {
+                log::error!("party: could not start the Roster Revision Relay: {error}");
+                return;
+            }
+        };
+        realm.arm_roster_revision_relay(&relay);
+        let hook_realm = realm.clone();
+        realm
+            .0
+            .on_reconnect
+            .lock()
+            .unwrap()
+            .push(std::sync::Arc::new(move || {
+                hook_realm.arm_roster_revision_relay(&relay);
+            }));
+    }
+
+    /// Realm-core's half of [`Self::spawn_roster_revision_relay`], on the current connection. The
+    /// callbacks only mark the party dirty; the worker makes every reducer call.
+    fn arm_roster_revision_relay(
+        &self,
+        relay: &std::sync::Arc<crate::world::party_mirror::RosterRevisionRelay>,
+    ) {
+        use spacetimedb_sdk::TableWithPrimaryKey;
+        let live = self.0.coord();
+        let inserted = relay.clone();
+        live.conn
+            .db
+            .game_group_roster_revision()
+            .on_insert(move |_ctx, row| inserted.mark_dirty(row.group_id));
+        let updated = relay.clone();
+        live.conn
+            .db
+            .game_group_roster_revision()
+            .on_update(move |_ctx, _old, row| updated.mark_dirty(row.group_id));
+    }
+
     /// Start one bounded Transfer Intent dispatcher per configured World Shard. Each pass reads the
     /// current connection, so a reconnect needs no second thread or connection-scoped callback.
     pub fn spawn_bot_transfer_relay(&self) {
@@ -8241,6 +8296,10 @@ mod tests {
 #[cfg(test)]
 #[path = "subscriptions_character_gone_durable_tests.rs"]
 mod character_gone_durable_tests;
+
+#[cfg(test)]
+#[path = "subscriptions_roster_relay_durable_tests.rs"]
+mod roster_relay_durable_tests;
 
 #[cfg(test)]
 include!(concat!(env!("OUT_DIR"), "/package-coordinator-tests.rs"));
