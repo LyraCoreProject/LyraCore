@@ -344,6 +344,11 @@ Realm-core's monotonic order for one complete Group member list, leader, loot ru
 and every Raid Slot. A World Shard keeps the last accepted value after disband. Older snapshots
 cannot change its party mirror.
 
+**Roster Revision Relay**:
+The Gateway's push of a party's Realm-core roster to each World Shard whose mirror holds an older
+Roster Revision or none, whatever changed it on Realm-core.
+_Avoid_: mirror sync thread, roster watcher
+
 **Member Stats**:
 The status, health, power, level, zone, map position, auras, and live pet a group member's frame
 shows for another member. The Gateway projects them from the Home Shard's cache and sends them

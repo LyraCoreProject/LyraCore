@@ -504,6 +504,13 @@ pub trait WorldStore:
         Ok(1)
     }
 
+    /// The Roster Revision this database holds for one party, or `None` when it holds no row. On a
+    /// World Shard it is the mirror's revision, kept after a disband; on Realm-core it is the
+    /// authoritative one.
+    fn held_roster_revision(&self, _group_id: u64) -> Result<Option<u64>> {
+        Ok(None)
+    }
+
     /// Realm-core's ordered locator for one Character. World Shards never supply this fact.
     fn realm_character_partition(
         &self,

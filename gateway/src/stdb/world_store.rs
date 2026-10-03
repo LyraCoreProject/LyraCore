@@ -1463,6 +1463,10 @@ impl WorldStore for Coordinator {
         Ok(self.group_roster_revision(group_id))
     }
 
+    fn held_roster_revision(&self, group_id: u64) -> Result<Option<u64>> {
+        Ok(self.held_roster_revision(group_id))
+    }
+
     fn realm_character_partition(
         &self,
         character_guid: u64,

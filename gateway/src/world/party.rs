@@ -1073,7 +1073,13 @@ fn sync_membership_mirrors<St: WorldStore + ?Sized>(
         ),
     }
     for group_id in touched {
-        if let Err(error) = sync_group_mirrors_required(store, realm, group_id, before.as_ref()) {
+        if let Err(error) = sync_group_mirrors_required(
+            store,
+            realm,
+            group_id,
+            before.as_ref(),
+            &store.world_stores(),
+        ) {
             log::warn!(
                 "party: group {group_id} mirrors stay stale until the next op or world entry \
                  ({error:#})"
@@ -1356,6 +1362,7 @@ pub(crate) fn cleanup_deleted_character<St: WorldStore>(
                     realm.as_ref(),
                     previous.group_id,
                     Some(&previous),
+                    &store.world_stores(),
                 )?;
             }
             Ok(DeletedCharacterPartyCleanup::Removed)
@@ -1402,7 +1409,13 @@ pub(crate) fn reconcile_deleted_character_parties<St: WorldStore>(store: &St) ->
         }
     }
     for group_id in group_ids {
-        if let Err(error) = sync_group_mirrors_required(store, realm.as_ref(), group_id, None) {
+        if let Err(error) = sync_group_mirrors_required(
+            store,
+            realm.as_ref(),
+            group_id,
+            None,
+            &store.world_stores(),
+        ) {
             failures += 1;
             log::warn!("party: could not reconcile group {group_id} mirrors ({error:#}); retrying");
             last_error = Some(error);
@@ -1424,11 +1437,15 @@ const MIRROR_PUSH_ATTEMPTS: usize = 3;
 /// its first attempt. A timed-out push may still commit, and a repeated push is idempotent.
 const MIRROR_RETRY_WINDOW: std::time::Duration = std::time::Duration::from_secs(5);
 
-fn sync_group_mirrors_required<St: WorldStore + ?Sized>(
+/// Push Realm-core's roster or disband tombstone for one party to each of `shards`, with up to
+/// [`MIRROR_PUSH_ATTEMPTS`] attempts per Shard inside [`MIRROR_RETRY_WINDOW`]. Partition
+/// certification still reads every World Shard.
+pub(crate) fn sync_group_mirrors_required<St: WorldStore + ?Sized>(
     store: &St,
     realm: &dyn WorldStore,
     group_id: u64,
     previous: Option<&GroupRoster>,
+    shards: &[std::sync::Arc<dyn WorldStore>],
 ) -> Result<()> {
     let roster = match realm.party_cleanup_group_roster_by_id(group_id)? {
         Some(roster) => roster,
@@ -1439,7 +1456,7 @@ fn sync_group_mirrors_required<St: WorldStore + ?Sized>(
     let mut failures = 0usize;
     let mut last_error = None;
     let retry_until = std::time::Instant::now() + MIRROR_RETRY_WINDOW;
-    for shard in store.world_stores() {
+    for shard in shards {
         let mut synced = false;
         for attempt in 0..MIRROR_PUSH_ATTEMPTS {
             if attempt > 0 && std::time::Instant::now() >= retry_until {

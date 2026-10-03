@@ -126,6 +126,10 @@ async fn run() -> Result<()> {
     // party realm-core still lists it in; no client and no Shard reducer can reach realm-core.
     coordinator.spawn_character_gone_relay();
 
+    // Realm-core can change a party no session acted in. Push each Roster Revision to the World
+    // Shard mirrors that lack it.
+    coordinator.spawn_roster_revision_relay();
+
     // Keep this gateway's lease alive. The module's lease reaper despawns every session bound to
     // a lease that stops heartbeating, so the heartbeat is what bounds ghost lifetime after a
     // gateway crash — and its ABSENCE while sessions are bound is what would despawn a healthy
@@ -559,6 +563,54 @@ mod character_gone_relay_tripwires {
                 && worker.contains("party::reconcile_deleted_character_parties(&store)")
                 && worker.contains("reconcile_deleted_guild_characters(&store, &guild_work)"),
             "reconciliation must run on its worker thread. Body was:\n{worker}"
+        );
+    }
+}
+
+/// The Roster Revision Relay: armed at startup, re-armed on a Realm-core reconnect, and its
+/// callbacks never call a reducer.
+#[cfg(test)]
+mod roster_revision_relay_tripwires {
+    use crate::test_scan::code_of;
+
+    #[test]
+    fn main_arms_the_roster_revision_relay_at_startup() {
+        let src = include_str!("main.rs");
+        let body = code_of(src, "async fn run() -> Result<()> {");
+        assert!(
+            body.contains("coordinator.spawn_roster_revision_relay();"),
+            "`main` no longer calls `spawn_roster_revision_relay`; a party Realm-core changes \
+             without a session op stays stale on every World Shard mirror. Body was:\n{body}"
+        );
+    }
+
+    #[test]
+    fn spawn_roster_revision_relay_installs_the_realm_core_reconnect_hook() {
+        let src = include_str!("stdb/subscriptions.rs");
+        let body = code_of(src, "pub fn spawn_roster_revision_relay(&self) {");
+        assert!(
+            body.contains("self.realm_core()")
+                && body.contains("realm.arm_roster_revision_relay(&relay);")
+                && body.contains("on_reconnect")
+                && body.contains("hook_realm.arm_roster_revision_relay(&relay);"),
+            "`spawn_roster_revision_relay` must arm Realm-core now and again on every Realm-core \
+             reconnect, or the relay goes silent at the first reconnect. Body was:\n{body}"
+        );
+    }
+
+    #[test]
+    fn the_callbacks_only_mark_the_party_dirty() {
+        let src = include_str!("stdb/subscriptions.rs");
+        let body = code_of(src, "fn arm_roster_revision_relay(");
+        let normalized: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            normalized.contains(".on_insert(move |_ctx, row| inserted.mark_dirty(row.group_id));")
+                && normalized.contains(
+                    ".on_update(move |_ctx, _old, row| updated.mark_dirty(row.group_id));"
+                )
+                && !normalized.contains("sync_group_mirror"),
+            "the Realm-core callbacks must mark the party dirty and return; a reducer call there \
+             blocks the Coordinator pump. Body was:\n{body}"
         );
     }
 }

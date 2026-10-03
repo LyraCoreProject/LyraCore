@@ -44,6 +44,7 @@ pub mod loot;
 pub mod mail;
 pub mod packet_lint;
 pub mod party;
+pub(crate) mod party_mirror;
 pub mod presence;
 pub(crate) mod social;
 mod store;
