@@ -1109,6 +1109,19 @@ pub(crate) fn checked_group_membership(
     Ok(Some((member, group)))
 }
 
+/// `character_guid`'s Group and its members, through [`checked_group_membership`].
+pub(crate) fn group_with_members(
+    ctx: &ReducerContext,
+    character_guid: u64,
+) -> Result<Option<(Group, Vec<GroupMember>)>, GroupOpError> {
+    Ok(
+        checked_group_membership(ctx, character_guid)?.map(|(_, group)| {
+            let members = members_of(ctx, group.group_id);
+            (group, members)
+        }),
+    )
+}
+
 /// The leader-authorization sequence of the ops only the leader may run (loot rules, convert, set
 /// leader, set Assistant): resolve `guid`'s group membership, its `Group` row, and confirm `guid`
 /// actually IS that group's leader. [`GroupRefusal::NotInGroup`] if `guid` has no group at all;

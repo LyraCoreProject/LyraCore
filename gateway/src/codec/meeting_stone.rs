@@ -7,8 +7,7 @@ use wow_world_messages::vanilla::{
 };
 use wow_world_messages::Guid;
 
-/// `u32 area, u8 status` (cm:LFG/LFGHandler.cpp:146-152). `None` when `wow_world_messages` has no
-/// `Area` for the id or the status byte is unknown, since neither could be encoded.
+/// `None` when `wow_world_messages` has no `Area` for the id or knows no such status.
 pub fn build_meetingstone_setqueue(area_id: u32, status: u8) -> Option<SMSG_MEETINGSTONE_SETQUEUE> {
     Some(SMSG_MEETINGSTONE_SETQUEUE {
         area: Area::try_from(area_id).ok()?,
@@ -23,15 +22,15 @@ pub fn build_meetingstone_joinfailed(reason: u8) -> Option<SMSG_MEETINGSTONE_JOI
     })
 }
 
-/// A stone add told to the members already in the party (cm:LFG/LFGMgr.cpp:288-309).
+/// A Stone Add, told to the members already in the Party.
 pub fn build_meetingstone_member_added(guid: u64) -> SMSG_MEETINGSTONE_MEMBER_ADDED {
     SMSG_MEETINGSTONE_MEMBER_ADDED {
         guid: Guid::new(guid),
     }
 }
 
-/// The answer to `MSG_LOOKING_FOR_GROUP`. vmangos sends 0 (vm:Handlers/MiscHandler.cpp:277-282);
-/// the stock UI never reads it.
+/// The answer to `MSG_LOOKING_FOR_GROUP`. vmangos sends 0 (vm:Handlers/MiscHandler.cpp:277-282),
+/// and the stock UI never reads it.
 pub fn build_looking_for_group() -> MSG_LOOKING_FOR_GROUP_Server {
     MSG_LOOKING_FOR_GROUP_Server { unknown1: 0 }
 }

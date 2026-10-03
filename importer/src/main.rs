@@ -890,7 +890,7 @@ pub(crate) mod got {
     // raw dump columns.
     pub const DATA0: usize = 8;
     pub const DATA1: usize = 9;
-    /// MEETINGSTONE: the dungeon's AreaTable id (cm:Entities/GameObject.h:266-272).
+    /// MEETINGSTONE: the dungeon's AreaTable id.
     pub const DATA2: usize = 10;
     pub const DATA3: usize = 11;
     pub const DATA5: usize = 13;
@@ -4271,7 +4271,7 @@ struct GoMeta {
     data1: u32,
     trap_spell_id: u32,
     trap_cooldown_secs: u32,
-    /// MEETINGSTONE only: the dump's `data2`, the dungeon area. 0 for every other type.
+    /// 0 for every type but MEETINGSTONE.
     meeting_stone_area_id: u32,
     size: f32,
 }
@@ -5062,8 +5062,7 @@ fn collect_gameobject_spawns(dump: &str, scope: &WorldImportScope) -> Gameobject
 struct GameobjectTemplateRows {
     templates: Vec<String>,
     traps: Vec<String>,
-    /// One `game_meeting_stone` row per spawned MEETINGSTONE template. The template row keeps its
-    /// inert shape, so this is the only copy of the stone's level range and dungeon area.
+    /// The only copy of a spawned stone's level range and dungeon area.
     meeting_stones: Vec<String>,
     chest_loot_ids: Vec<u32>,
 }
@@ -5145,7 +5144,6 @@ fn gameobject_template_rows(spawns: &GameobjectSpawns) -> GameobjectTemplateRows
             continue;
         }
         if type_id == GO_MEETINGSTONE {
-            // The client sends CMSG_MEETINGSTONE_JOIN, never CMSG_GAMEOBJ_USE, for a stone.
             eprintln!(
                 "  type {type_id:>2} MEETINGSTONE {count} (meeting stone flow, not use-dispatched)"
             );
@@ -6251,8 +6249,7 @@ mod tests {
         assert_eq!(go_initial_state(GO_QUESTGIVER, 1), 0);
     }
 
-    /// Only a spawned stone gets a row, and the row is the dump's `data0`, `data1`, `data2`. The
-    /// Deadmines stone (Westfall) is level 15 to 20 for area 1581.
+    /// The Deadmines stone is level 15 to 20 for area 1581.
     #[test]
     fn gameobject_family_emits_one_meeting_stone_row_per_spawned_stone() {
         let dump = "INSERT INTO `gameobject_template` VALUES \
@@ -6281,7 +6278,6 @@ mod tests {
             statement.starts_with("INSERT INTO game_gameobject_template")
                 && statement.contains("(179584,23,6973,'Meeting Stone',0,0,0,0,0,0,1)")
         }));
-        // One template row and one stone row.
         assert_eq!(plan.stamps, vec![("gameobjects", 2)]);
     }
 

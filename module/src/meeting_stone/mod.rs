@@ -1,24 +1,11 @@
-//! The Meeting Stone Queue: a Character, or the Party it leads, waits at a dungeon's Meeting Stone
-//! for other Seekers of the same dungeon area and team.
+//! The Meeting Stone Queue. [`gw_admit_meeting_stone`] admits a Character at the stone on its Home
+//! Shard and writes nothing. [`realm_meeting_stone_op`] queues it on Realm-core, where party
+//! membership is authoritative, so Seekers on every World Shard share one queue. Realm-core holds
+//! no Character rows, so the Gateway conveys race and class as [`SeekerFacts`].
 //!
-//! Two Durable Requests split the work. [`gw_admit_meeting_stone`] runs on the Character's Home
-//! Shard, the only database that holds the stone and the live entity, and writes nothing.
-//! [`realm_meeting_stone_op`] runs on Realm-core, where party membership is authoritative, so
-//! Seekers on different World Shards wait in one queue. Realm-core holds no Character rows, so the
-//! Gateway conveys each Seeker's race and class as [`SeekerFacts`].
-//!
-//! Notifications are `game_group_event` rows of the
-//! [`lyracore_shared::meeting_stone::event_kind`] kinds. A Refusal rolls its transaction back and
-//! returns its stable tag; the Gateway answers the party Refusals with `SMSG_MEETINGSTONE_JOINFAILED`.
-//!
-//! A solo Seeker lasts as long as the Account Claim of its World Session: [`claim_ended`] runs
-//! where a claim is released, replaced or reaped. A party Seeker lasts as long as its membership.
-//!
-//! Matching runs inside the transaction that changes a bucket ([`match_bucket`]), not on a tick:
-//! once cmangos's `bool` priority compare is read literally, its queue thread reduces to longest
-//! wait per Open Role, so a tick would add latency and no behavior. Every Stone Add goes through
-//! the party authority's join core, [`crate::group::plan_join`], the same path an accepted invite
-//! takes. The group cores call back here when a queued Party's roster changes.
+//! Matching runs in the transaction that changes a bucket ([`match_bucket`]): the cores' queue
+//! thread reduces to longest wait per Open Role, so a tick would only add latency. A solo Seeker
+//! lasts as long as its Account Claim ([`claim_ended`]); a party Seeker as long as its membership.
 
 use std::collections::BTreeSet;
 
@@ -33,19 +20,20 @@ use lyracore_shared::meeting_stone::{
     encode_queue, event_kind, queue_status, realm_op, MeetingStoneRefusal,
 };
 
+mod matching;
+
+use matching::{formation, next_stone_add, open_roles};
+
 use crate::group::{Departure, JoinPlan, JoinTarget};
 use crate::{game_account_claim, game_group};
 
-/// A queued party is reminded that the queue is still working every five minutes
-/// (cm:LFG/LFGMgr.cpp:55).
+/// A queued Party hears IN_PROGRESS this often (cm:LFG/LFGMgr.cpp:55).
 const REMINDER_INTERVAL_MICROS: i64 = 5 * 60 * 1_000_000;
 
-/// How often [`remind_queued_parties`] looks for a due reminder.
 const REMINDER_TICK_MICROS: i64 = 5_000_000;
 
-/// One Meeting Stone template's level range and dungeon area, from the dump's `data0`, `data1` and
-/// `data2`. Private: the Gateway reads it with the owner token. Imported with the `gameobjects`
-/// family; a Package does not author it. [static]
+/// One Meeting Stone template's level range and dungeon area, imported from `data0` to `data2`.
+/// Packages do not author it. [static]
 #[table(accessor = game_meeting_stone)]
 pub struct MeetingStone {
     #[primary_key]
@@ -53,12 +41,10 @@ pub struct MeetingStone {
     pub min_level: u32,
     /// 0 means no upper bound.
     pub max_level: u32,
-    /// The dungeon's AreaTable id.
     pub area_id: u32,
 }
 
-/// One Seeker: a Character in the Meeting Stone Queue, alone or as a member of a queued Party.
-/// Private: the Gateway reads it with the owner token to answer `CMSG_MEETINGSTONE_INFO`. [entity]
+/// One Seeker. The Gateway reads it to answer `CMSG_MEETINGSTONE_INFO`. [entity]
 #[table(
     accessor = game_meeting_stone_seeker,
     index(accessor = by_bucket, btree(columns = [area_id, team])),
@@ -68,17 +54,16 @@ pub struct MeetingStoneSeeker {
     #[primary_key]
     pub character_guid: u64,
     pub area_id: u32,
-    /// `lyracore_shared::faction` team id. Seekers of different teams never meet.
     pub team: u32,
-    /// The class the Gateway conveyed. 0 when it could not read one.
+    /// 0 when the Gateway could not read it.
     pub class: u8,
-    /// The queued party. 0 for a solo Seeker.
+    /// 0 for a solo Seeker.
     pub group_id: u64,
     pub queued_at: Timestamp,
 }
 
-/// One queued Party. A row exists exactly while the party is queued, and its Seeker rows are its
-/// current members. Private and Module only. [entity]
+/// One queued Party. It exists exactly while the Party is queued, and its Seeker rows are its
+/// current members. [entity]
 #[table(accessor = game_meeting_stone_party)]
 pub struct MeetingStoneParty {
     #[primary_key]
@@ -86,11 +71,9 @@ pub struct MeetingStoneParty {
     pub area_id: u32,
     pub team: u32,
     pub queued_at: Timestamp,
-    /// When the members next get `SMSG_MEETINGSTONE_IN_PROGRESS`.
     pub next_reminder_at: Timestamp,
 }
 
-/// Drives [`remind_queued_parties`]. One row; its `scheduled_at` is the cadence.
 #[table(accessor = game_meeting_stone_reminder_schedule, scheduled(remind_queued_parties))]
 pub struct MeetingStoneReminderSchedule {
     #[primary_key]
@@ -106,7 +89,6 @@ pub(crate) struct Bucket {
     pub(crate) team: u32,
 }
 
-/// What the Gateway read about one Seeker from whichever World Shard holds it.
 #[derive(SpacetimeType, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SeekerFacts {
     pub character_guid: u64,
@@ -120,10 +102,8 @@ fn refused(refusal: MeetingStoneRefusal, detail: &str) -> String {
     tag.to_string()
 }
 
-/// May `actor_guid` use the Meeting Stone `go_guid`? Runs on the actor's Home Shard and writes
-/// nothing. Refuses an actor without a World Session, one on a taxi flight, a GameObject out of
-/// reach or not a stone, and a level outside the stone's range. Neither core checks the level;
-/// the client does, and 1.12 has no failure code for it, so the Gateway drops this Refusal.
+/// May `actor_guid` use the Meeting Stone `go_guid`? Writes nothing. The level check has no 1.12
+/// failure code, so the Gateway drops that Refusal silently, as the client checks it first.
 #[reducer]
 pub fn gw_admit_meeting_stone(
     ctx: &ReducerContext,
@@ -146,7 +126,7 @@ fn admit(
     actor_guid: u64,
     go_guid: u64,
 ) -> Result<(), MeetingStoneRefusal> {
-    // Humans only. An Operator-driven Character without a World Session never queues.
+    // Humans only: no World Session, no queue.
     if request_actor.ownership.is_none() || crate::taxi::is_in_flight(ctx, actor_guid) {
         return Err(MeetingStoneRefusal::ActorUnavailable);
     }
@@ -170,8 +150,6 @@ fn admit(
     Ok(())
 }
 
-/// The shared GameObject Gate's answer as a Meeting Stone Refusal. `usable_go` produces only the
-/// four kinds named here.
 fn gate_refusal(kind: crate::actor::ActionRefusalKind) -> MeetingStoneRefusal {
     use crate::actor::ActionRefusalKind;
     match kind {
@@ -182,12 +160,11 @@ fn gate_refusal(kind: crate::actor::ActionRefusalKind) -> MeetingStoneRefusal {
     }
 }
 
-/// Inclusive on both ends. A `max_level` of 0 has no upper bound.
+/// A `max_level` of 0 has no upper bound.
 fn level_in_range(level: u32, min_level: u32, max_level: u32) -> bool {
     level >= min_level && (max_level == 0 || level <= max_level)
 }
 
-/// The actor's party, as the JOIN Gate needs it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Membership {
     leads: bool,
@@ -195,8 +172,8 @@ struct Membership {
     members: usize,
 }
 
-/// A grouped actor queues only as the leader of a Party with room, checked in cmangos's order:
-/// not the leader, then a raid, then a full party (cm:LFG/LFGHandler.cpp:58-77).
+/// A grouped actor queues only as the leader of a Party with room. The order of the checks picks
+/// the failure code (cm:LFG/LFGHandler.cpp:58-77).
 fn party_join_gate(membership: Membership) -> Result<(), MeetingStoneRefusal> {
     if !membership.leads {
         return Err(MeetingStoneRefusal::NotLeader);
@@ -212,8 +189,7 @@ fn party_join_gate(membership: Membership) -> Result<(), MeetingStoneRefusal> {
 
 enum StoneOpError {
     Refused(MeetingStoneRefusal),
-    /// A broken durable relationship or a malformed request. Untagged, so the Gateway treats it
-    /// as a failure with an unknown outcome.
+    /// Untagged, so the Gateway treats the outcome as unknown.
     Invalid(String),
 }
 
@@ -223,14 +199,15 @@ impl From<MeetingStoneRefusal> for StoneOpError {
     }
 }
 
-/// Run one Meeting Stone Queue op for `request_actor` on the party authority.
-///
-/// Operator-gated because the actor is an argument: Realm-core has no live entity to derive it
-/// from. `area_id` and `seekers` are JOIN's: the stone's dungeon area, and the facts of the actor
-/// or of every member of the party it leads. A missing member's class is 0. A JOIN ends with the
-/// bucket pass, so it can form or fill Parties in the same transaction. LEAVE reads neither.
-/// More than [`GROUP_MAX_MEMBERS`] facts, facts that omit the actor, or an unknown op byte is an
-/// untagged error.
+impl From<crate::group::GroupOpError> for StoneOpError {
+    fn from(error: crate::group::GroupOpError) -> Self {
+        Self::Invalid(format!("{error:?}"))
+    }
+}
+
+/// One Meeting Stone Queue op on the party authority. Operator-gated because the actor is an
+/// argument. JOIN reads `area_id` and the `seekers` of the actor or its whole Party; LEAVE reads
+/// neither. Too many facts, facts without the actor, or an unknown op is an untagged error.
 #[reducer]
 pub fn realm_meeting_stone_op(
     ctx: &ReducerContext,
@@ -268,18 +245,6 @@ pub fn realm_meeting_stone_op(
     })
 }
 
-fn membership_of(
-    ctx: &ReducerContext,
-    character_guid: u64,
-) -> Result<Option<(crate::Group, Vec<crate::GroupMember>)>, StoneOpError> {
-    let membership = crate::group::checked_group_membership(ctx, character_guid)
-        .map_err(|error| StoneOpError::Invalid(format!("{error:?}")))?;
-    Ok(membership.map(|(_, group)| {
-        let members = crate::group::members_of(ctx, group.group_id);
-        (group, members)
-    }))
-}
-
 fn join(
     ctx: &ReducerContext,
     actor_guid: u64,
@@ -299,7 +264,7 @@ fn join(
         area_id,
         team: team_for_race(actor.race),
     };
-    if let Some((group, members)) = membership_of(ctx, actor_guid)? {
+    if let Some((group, members)) = crate::group::group_with_members(ctx, actor_guid)? {
         party_join_gate(Membership {
             leads: group.leader_guid == actor_guid,
             kind: crate::group::group_kind_of(&group),
@@ -324,16 +289,14 @@ fn join(
     match_bucket(ctx, bucket).map_err(StoneOpError::Invalid)
 }
 
-/// When a Party queued now first hears IN_PROGRESS.
 fn first_reminder_at(ctx: &ReducerContext) -> Result<Timestamp, String> {
     ctx.timestamp
         .checked_add(TimeDuration::from_micros(REMINDER_INTERVAL_MICROS))
         .ok_or_else(|| "reminder time overflow".to_string())
 }
 
-/// Queue `group_id` in `bucket` with `members` as its Seekers, `(guid, class)` each, and tell each
-/// of them JOINED. Re-queueing a party replaces its area and wait time and drops the
-/// Seeker rows of Characters that are no longer members.
+/// Queue `group_id` with `members`, `(guid, class)` each, and tell each JOINED. Re-queueing resets
+/// the area and wait time and drops Seeker rows of former members.
 fn queue_party(
     ctx: &ReducerContext,
     group_id: u64,
@@ -372,7 +335,6 @@ fn queue_party(
     }
 }
 
-/// Queue `character_guid`, replacing any earlier row and its wait time.
 fn upsert_seeker(
     ctx: &ReducerContext,
     character_guid: u64,
@@ -396,7 +358,6 @@ fn upsert_seeker(
     }
 }
 
-/// `SMSG_MEETINGSTONE_SETQUEUE(area_id, status)` to `recipient_guid`.
 fn push_queue(ctx: &ReducerContext, recipient_guid: u64, area_id: u32, status: u8) {
     crate::group::push_event(
         ctx,
@@ -407,7 +368,6 @@ fn push_queue(ctx: &ReducerContext, recipient_guid: u64, area_id: u32, status: u
     );
 }
 
-/// An event of `kind` with no payload to each of `recipients`.
 fn push_to_each(ctx: &ReducerContext, recipients: &[u64], kind: u8, other_guid: u64) {
     for &recipient in recipients {
         crate::group::push_event(ctx, recipient, kind, other_guid, String::new());
@@ -423,11 +383,10 @@ fn member_guids(ctx: &ReducerContext, group_id: u64) -> Vec<u64> {
         .collect()
 }
 
-/// cm:LFG/LFGHandler.cpp:86-110. A solo Seeker leaves with LEAVE_QUEUE. The leader of a queued
-/// party takes the whole party out, and every member gets LEAVE_QUEUE. Anyone else in a party only
-/// gets NONE. Nobody queued and no party: nothing happens.
+/// A solo Seeker leaves with LEAVE_QUEUE, and a queued Party's leader takes the whole Party out.
+/// Any other member only hears NONE.
 fn leave(ctx: &ReducerContext, actor_guid: u64) -> Result<(), StoneOpError> {
-    let Some((group, _)) = membership_of(ctx, actor_guid)? else {
+    let Some((group, _)) = crate::group::group_with_members(ctx, actor_guid)? else {
         let seekers = ctx.db.game_meeting_stone_seeker();
         if seekers.character_guid().find(actor_guid).is_some() {
             seekers.character_guid().delete(actor_guid);
@@ -449,8 +408,7 @@ fn leave(ctx: &ReducerContext, actor_guid: u64) -> Result<(), StoneOpError> {
     Ok(())
 }
 
-/// Take a queued party out of the queue: every member gets `SETQUEUE(0, status)`, and the party
-/// row and its Seeker rows go. Nothing happens for a party that is not queued.
+/// Take a queued Party out of the queue. Every member hears `SETQUEUE(0, status)`.
 pub(crate) fn dequeue_party(ctx: &ReducerContext, group_id: u64, status: u8) {
     if ctx
         .db
@@ -467,7 +425,6 @@ pub(crate) fn dequeue_party(ctx: &ReducerContext, group_id: u64, status: u8) {
     dequeue_party_rows(ctx, group_id);
 }
 
-/// Delete a queued party's row and every Seeker row it holds.
 fn dequeue_party_rows(ctx: &ReducerContext, group_id: u64) {
     ctx.db
         .game_meeting_stone_party()
@@ -484,8 +441,7 @@ fn dequeue_party_rows(ctx: &ReducerContext, group_id: u64) {
     }
 }
 
-/// A queued party with five members is complete: every member gets COMPLETE, then
-/// `SETQUEUE(0, NONE)`, and the party leaves the queue (cm:LFG/LFGQueue.cpp:420-454).
+/// Every member hears COMPLETE, then `SETQUEUE(0, NONE)`, and the Party leaves the queue.
 fn complete_party(ctx: &ReducerContext, group_id: u64) {
     let members = member_guids(ctx, group_id);
     push_to_each(ctx, &members, event_kind::COMPLETE, 0);
@@ -496,162 +452,11 @@ fn complete_party(ctx: &ReducerContext, group_id: u64) {
 }
 
 // =================================================================================================
-//  Roles
-// =================================================================================================
-
-/// 1.12 class ids (ChrClasses.dbc).
-mod class {
-    pub const WARRIOR: u8 = 1;
-    pub const PALADIN: u8 = 2;
-    pub const HUNTER: u8 = 3;
-    pub const ROGUE: u8 = 4;
-    pub const PRIEST: u8 = 5;
-    pub const SHAMAN: u8 = 7;
-    pub const MAGE: u8 = 8;
-    pub const WARLOCK: u8 = 9;
-    pub const DRUID: u8 = 11;
-}
-
-/// A Party's dungeon roles, in the order a Party fills them (cm:Groups/Group.cpp:1594-1599).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Role {
-    Tank,
-    Healer,
-    Damage,
-}
-
-const ROLE_ORDER: [Role; 3] = [Role::Tank, Role::Healer, Role::Damage];
-
-/// A Party has three damage roles (cm:LFG/LFGMgr.h:51).
-const DAMAGE_ROLES: u8 = 3;
-
-/// How well `class` fills `role`: 0 not at all, then 1 low, 2 normal, 3 high
-/// (cm:LFG/LFGMgr.cpp:108-158). A class fills exactly the roles it has a priority for, which is
-/// cmangos's class role table (cm:LFG/LFGMgr.cpp:91-106). An unknown class fills nothing.
-fn role_priority(class: u8, role: Role) -> u8 {
-    use class::*;
-    const LOW: u8 = 1;
-    const NORMAL: u8 = 2;
-    const HIGH: u8 = 3;
-    match (role, class) {
-        (Role::Tank, WARRIOR) => HIGH,
-        (Role::Tank, DRUID | PALADIN) => NORMAL,
-        (Role::Healer, DRUID | PALADIN | PRIEST | SHAMAN) => HIGH,
-        (Role::Damage, HUNTER | MAGE | ROGUE | WARLOCK) => HIGH,
-        (Role::Damage, DRUID | PALADIN | SHAMAN | WARRIOR) => NORMAL,
-        (Role::Damage, PRIEST) => LOW,
-        _ => 0,
-    }
-}
-
-fn fills(class: u8, role: Role) -> bool {
-    role_priority(class, role) > 0
-}
-
-/// A queued Party's Open Roles: which of its one tank, one healer and three damage roles no
-/// member's class fills yet.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct OpenRoles {
-    tank: bool,
-    healer: bool,
-    damage: u8,
-}
-
-impl OpenRoles {
-    const ALL: Self = Self {
-        tank: true,
-        healer: true,
-        damage: DAMAGE_ROLES,
-    };
-
-    fn is_open(self, role: Role) -> bool {
-        match role {
-            Role::Tank => self.tank,
-            Role::Healer => self.healer,
-            Role::Damage => self.damage > 0,
-        }
-    }
-
-    fn fill(&mut self, role: Role) {
-        match role {
-            Role::Tank => self.tank = false,
-            Role::Healer => self.healer = false,
-            Role::Damage => self.damage = self.damage.saturating_sub(1),
-        }
-    }
-}
-
-/// The Open Roles of a Party whose members have `classes`, in join order
-/// (cm:Groups/Group.cpp:1589-1685). Each member takes the first of tank, healer and damage that its
-/// class fills and that is still open, unless a member not yet placed has a higher priority for it.
-/// A member left without a role holds a seat and fills nothing.
-fn open_roles(classes: &[u8]) -> OpenRoles {
-    let mut open = OpenRoles::ALL;
-    let mut placed = vec![false; classes.len()];
-    for (seat, &class) in classes.iter().enumerate() {
-        let outranked = |role: Role| {
-            classes.iter().enumerate().any(|(other, &other_class)| {
-                other != seat
-                    && !placed[other]
-                    && role_priority(other_class, role) > role_priority(class, role)
-            })
-        };
-        let taken = ROLE_ORDER
-            .into_iter()
-            .find(|&role| fills(class, role) && open.is_open(role) && !outranked(role));
-        if let Some(role) = taken {
-            open.fill(role);
-            placed[seat] = true;
-        }
-    }
-    open
-}
-
-/// The longest wait first, ties by guid.
-fn wait_order(seeker: &MeetingStoneSeeker) -> (Timestamp, u64) {
-    (seeker.queued_at, seeker.character_guid)
-}
-
-/// The index in `solos` of the next Stone Add for a Party with `open` roles: for tank, then healer,
-/// then damage, if open, the longest-waiting Seeker whose class fills it. cm:LFG/LFGQueue.cpp:292-390
-/// compares class priority as a `bool`, so every capable Seeker ties on class and the wait decides.
-fn next_stone_add(open: OpenRoles, solos: &[MeetingStoneSeeker]) -> Option<usize> {
-    ROLE_ORDER
-        .into_iter()
-        .filter(|&role| open.is_open(role))
-        .find_map(|role| {
-            solos
-                .iter()
-                .enumerate()
-                .filter(|(_, seeker)| fills(seeker.class, role))
-                .min_by_key(|(_, seeker)| wait_order(seeker))
-                .map(|(index, _)| index)
-        })
-}
-
-/// Five solo Seekers in one bucket form a Party: the longest wait leads, the next joins, and the
-/// bucket pass fills the rest (cm:LFG/LFGQueue.cpp:173-221). Both cores count Seekers across every
-/// area and then block on the first Seeker's area; counting one bucket removes that block.
-fn formation(solos: &[MeetingStoneSeeker]) -> Option<(&MeetingStoneSeeker, &MeetingStoneSeeker)> {
-    if solos.len() < GROUP_MAX_MEMBERS {
-        return None;
-    }
-    let mut waiting: Vec<&MeetingStoneSeeker> = solos.iter().collect();
-    waiting.sort_unstable_by_key(|seeker| wait_order(seeker));
-    Some((waiting[0], waiting[1]))
-}
-
-// =================================================================================================
 //  The bucket pass
 // =================================================================================================
 
-/// Match `bucket` until nothing changes. Each queued Party, oldest first, takes Stone Adds for its
-/// Open Roles; then, while the bucket holds five solo Seekers, they form a Party and the Parties fill
-/// again. Every Party this forms or changes advances its Roster Revision.
-///
-/// A solo Seeker whose Account Claim is closed or expired leaves the queue silently when the pass
-/// meets it. The Account Claim's end drops it too, but the lease reaper may take up to 15 s to close
-/// an expired claim. An `Err` is a broken durable relationship.
+/// Match `bucket` until nothing changes: queued Parties fill oldest first, then five solo Seekers
+/// form a Party and the Parties fill again. An `Err` is a broken durable relationship.
 pub(crate) fn match_bucket(ctx: &ReducerContext, bucket: Bucket) -> Result<(), String> {
     loop {
         let (mut solos, parties) = read_bucket(ctx, bucket);
@@ -665,10 +470,9 @@ pub(crate) fn match_bucket(ctx: &ReducerContext, bucket: Bucket) -> Result<(), S
     }
 }
 
-/// The bucket's waiting solo Seekers, and its queued Parties oldest first. Reads the bucket through
-/// its index. Drops a solo Seeker without a live Account Claim, a stale solo row of a Character
-/// that is in a Group, and a party row whose Group is gone or is a Raid. What is left cannot make
-/// a Stone Add fail, so a pass that runs where it cannot roll back leaves no half-done add.
+/// The bucket's solo Seekers, and its queued Parties oldest first. Drops what could make a Stone
+/// Add fail: a solo Seeker without a live claim (the lease reaper may take 15 s) or in a Group, and
+/// a party row whose Group is gone or is a Raid. `remove_member` cannot roll a pass back.
 fn read_bucket(
     ctx: &ReducerContext,
     bucket: Bucket,
@@ -716,7 +520,6 @@ fn read_bucket(
     (solos, parties)
 }
 
-/// Whether `character_guid` has an open Account Claim before its deadline.
 fn has_live_claim(ctx: &ReducerContext, character_guid: u64) -> bool {
     let now = ctx.timestamp.to_micros_since_unix_epoch();
     ctx.db
@@ -726,10 +529,8 @@ fn has_live_claim(ctx: &ReducerContext, character_guid: u64) -> bool {
         .any(|claim| !claim.closed && claim.expires_micros > now)
 }
 
-/// Give `party` Stone Adds from `solos` while it has fewer than five members and a Seeker fits an
-/// Open Role. Before each add the current members get MEMBER_ADDED; at five members the party is
-/// complete (cm:LFG/LFGQueue.cpp:372-383). A full Party is completed, never joined, so a Stone Add
-/// never meets a full Group.
+/// Give `party` Stone Adds while a Seeker fits an Open Role. The current members hear MEMBER_ADDED
+/// before each add. A full Party is completed, never joined.
 fn fill_party(
     ctx: &ReducerContext,
     party: &MeetingStoneParty,
@@ -771,7 +572,6 @@ fn fill_party(
     }
 }
 
-/// The class a queued party's Seeker row holds for `guid`, or 0.
 fn party_class(ctx: &ReducerContext, guid: u64, group_id: u64) -> u8 {
     ctx.db
         .game_meeting_stone_seeker()
@@ -781,8 +581,8 @@ fn party_class(ctx: &ReducerContext, guid: u64, group_id: u64) -> u8 {
         .map_or(0, |seeker| seeker.class)
 }
 
-/// Form a Party of `leader` and `member` and queue it in `bucket`. The leader hears MEMBER_ADDED
-/// before the Party exists, then both hear JOINED (cm:LFG/LFGQueue.cpp:190-218).
+/// Form a Party of `leader` and `member` and queue it. The leader hears MEMBER_ADDED before the
+/// Party exists, then both hear JOINED.
 fn form_party(
     ctx: &ReducerContext,
     bucket: Bucket,
@@ -822,7 +622,6 @@ fn form_party(
     Ok(())
 }
 
-/// Check that `joiner` can join `target`, before the Stone Add writes anything.
 fn plan_stone_add(
     ctx: &ReducerContext,
     joiner: &MeetingStoneSeeker,
@@ -836,8 +635,7 @@ fn plan_stone_add(
     })
 }
 
-/// Take `joiner` out of the solo queue and add it through `plan`, advancing the Group's Roster
-/// Revision. Returns the Group id.
+/// Add `joiner` through `plan` and advance the Group's Roster Revision. Returns the Group id.
 fn stone_add(ctx: &ReducerContext, joiner: &MeetingStoneSeeker, plan: JoinPlan) -> u64 {
     ctx.db
         .game_meeting_stone_seeker()
@@ -852,10 +650,9 @@ fn stone_add(ctx: &ReducerContext, joiner: &MeetingStoneSeeker, plan: JoinPlan) 
 //  Group core hooks
 // =================================================================================================
 
-/// `character_guid` joined `group_id` through an accepted invite. A solo Seeker leaves the queue
-/// and hears LEAVE_QUEUE unless the Party is queued for the same area (cm:Groups/Group.cpp:360-374).
-/// A queued Party gains the Character as a Seeker with `class`; at five members it is complete,
-/// below five the bucket pass runs, because the new member can move the Open Roles.
+/// `character_guid` joined `group_id` through an accepted invite. A solo Seeker leaves the queue,
+/// with LEAVE_QUEUE unless the Party is queued for the same area. A queued Party gains a Seeker,
+/// completes at five, and otherwise rematches, because the new member moves the Open Roles.
 pub(crate) fn party_joined(
     ctx: &ReducerContext,
     group_id: u64,
@@ -889,7 +686,6 @@ pub(crate) fn party_joined(
     match_bucket(ctx, bucket)
 }
 
-/// A member left a Party that survives it. See [`party_left`].
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PartyDeparture {
     pub(crate) group_id: u64,
@@ -898,19 +694,14 @@ pub(crate) struct PartyDeparture {
     pub(crate) leader_changed: bool,
 }
 
-/// A member left a queued Party that survives it. Runs after the member row is gone and before the
-/// roster list.
+/// A member left a queued Party that survives it, after the member row is gone and before the
+/// roster list (cm:Groups/Group.cpp:413-476). Returns the bucket to rematch, if any.
 ///
-/// - Left, leader unchanged: the leaver hears NONE, the rest PARTY_MEMBER_LEFT_LFG, and the party
-///   stays queued without the leaver (cm:Groups/Group.cpp:437-447).
-/// - Left, leader changed: the leaver hears NONE and the party leaves the queue with LEAVE_QUEUE
-///   (cm:Groups/Group.cpp:464-476).
-/// - Kicked: the rest hear PARTY_MEMBER_REMOVED_PARTY_REMOVED and the party leaves the queue with
-///   LEAVE_QUEUE. A kicked Character with a live Account Claim hears
-///   LOOKING_FOR_NEW_PARTY_IN_QUEUE and waits alone with its class and team
-///   (cm:Groups/Group.cpp:413-435). A kicked playerbot or offline member only leaves.
-///
-/// Returns the bucket to match when a role opened or a Character was queued.
+/// - Left, same leader: the leaver hears NONE, the rest PARTY_MEMBER_LEFT_LFG, the Party stays.
+/// - Left, new leader: the leaver hears NONE and the Party leaves with LEAVE_QUEUE.
+/// - Kicked: the rest hear PARTY_MEMBER_REMOVED_PARTY_REMOVED and the Party leaves with
+///   LEAVE_QUEUE. The kicked Character, if it has a World Session, hears
+///   LOOKING_FOR_NEW_PARTY_IN_QUEUE and waits alone.
 pub(crate) fn party_left(ctx: &ReducerContext, departed: PartyDeparture) -> Option<Bucket> {
     let party = ctx
         .db
@@ -934,8 +725,7 @@ pub(crate) fn party_left(ctx: &ReducerContext, departed: PartyDeparture) -> Opti
                 );
             }
             dequeue_party(ctx, departed.group_id, queue_status::LEAVE_QUEUE);
-            // Only a Character with a World Session waits alone: a kicked playerbot or offline
-            // member just leaves, as in cmangos (`if (player)`).
+            // A kicked playerbot or offline member only leaves, as in cmangos (`if (player)`).
             if !has_live_claim(ctx, guid) {
                 return None;
             }
@@ -972,8 +762,7 @@ pub(crate) fn party_left(ctx: &ReducerContext, departed: PartyDeparture) -> Opti
     }
 }
 
-/// A queued Party disbanded: every former member hears NONE and the party leaves the queue. Nobody
-/// waits on alone (cm:Groups/Group.cpp:550-562).
+/// A queued Party disbanded: every former member hears NONE, and nobody waits on alone.
 pub(crate) fn party_disbanded(ctx: &ReducerContext, group_id: u64, former_members: &[u64]) {
     if ctx
         .db
@@ -994,9 +783,8 @@ pub(crate) fn party_disbanded(ctx: &ReducerContext, group_id: u64, former_member
 //  Reminders
 // =================================================================================================
 
-/// Remind every queued Party whose reminder is due that the queue is still working: each member
-/// gets IN_PROGRESS, and the next reminder is five minutes on (cm:LFG/LFGQueue.cpp:149-163).
-/// Scheduler-only. The party table is small and holds only queued Parties, so this reads it whole.
+/// Every member of a queued Party whose reminder is due hears IN_PROGRESS. Scheduler-only. The
+/// party table holds only queued Parties, so this reads it whole.
 #[reducer]
 pub fn remind_queued_parties(ctx: &ReducerContext, _schedule: MeetingStoneReminderSchedule) {
     if ctx.sender() != ctx.database_identity() {
@@ -1024,8 +812,8 @@ pub fn remind_queued_parties(ctx: &ReducerContext, _schedule: MeetingStoneRemind
     }
 }
 
-/// Arm the reminder tick, leaving exactly one schedule row. `init` and `debug_repair_after_publish`
-/// both call this, so the two paths arm one interval.
+/// Arm the reminder tick with exactly one schedule row. `init` and `debug_repair_after_publish`
+/// both call this.
 pub(crate) fn rearm_reminder_schedule(ctx: &ReducerContext) {
     let schedule = ctx.db.game_meeting_stone_reminder_schedule();
     let stale: Vec<u64> = schedule.iter().map(|row| row.scheduled_id).collect();
@@ -1038,9 +826,8 @@ pub(crate) fn rearm_reminder_schedule(ctx: &ReducerContext) {
     });
 }
 
-/// The Account Claim that admitted `character_guid` ended: drop its solo Seeker row, silently. The
-/// Character's World Session is gone, so no packet could reach it. A party Seeker row stays, because
-/// it ends with the party membership, not the session.
+/// `character_guid`'s Account Claim ended: drop its solo Seeker row without a packet, since no
+/// session is left to hear one. A party Seeker row ends with the membership instead.
 pub(crate) fn claim_ended(ctx: &ReducerContext, character_guid: u64) {
     let seekers = ctx.db.game_meeting_stone_seeker();
     if seekers
@@ -1066,140 +853,6 @@ mod tests {
         assert!(!level_in_range(14, 15, 0));
     }
 
-    /// cm:LFG/LFGMgr.cpp:91-158, row by row: the roles each class fills and its priority in each.
-    #[test]
-    fn the_role_table_is_the_cmangos_class_table() {
-        use class::*;
-        let row = |class: u8| ROLE_ORDER.map(|role| role_priority(class, role));
-        assert_eq!(row(WARRIOR), [3, 0, 2]);
-        assert_eq!(row(PALADIN), [2, 3, 2]);
-        assert_eq!(row(HUNTER), [0, 0, 3]);
-        assert_eq!(row(ROGUE), [0, 0, 3]);
-        assert_eq!(row(PRIEST), [0, 3, 1]);
-        assert_eq!(row(SHAMAN), [0, 3, 2]);
-        assert_eq!(row(MAGE), [0, 0, 3]);
-        assert_eq!(row(WARLOCK), [0, 0, 3]);
-        assert_eq!(row(DRUID), [2, 3, 2]);
-        assert_eq!(row(0), [0, 0, 0], "an unknown class fills nothing");
-        assert_eq!(row(6), [0, 0, 0], "class 6 does not exist in 1.12");
-    }
-
-    fn open(tank: bool, healer: bool, damage: u8) -> OpenRoles {
-        OpenRoles {
-            tank,
-            healer,
-            damage,
-        }
-    }
-
-    /// The paladin outranks nobody for tank while the warrior waits, so it heals.
-    #[test]
-    fn a_paladin_then_a_warrior_leave_three_damage_roles_open() {
-        use class::*;
-        assert_eq!(open_roles(&[PALADIN, WARRIOR]), open(false, false, 3));
-    }
-
-    /// Equal priority does not outrank, so the first warrior tanks and the second deals damage.
-    #[test]
-    fn two_warriors_leave_the_healer_and_two_damage_roles_open() {
-        use class::*;
-        assert_eq!(open_roles(&[WARRIOR, WARRIOR]), open(false, true, 2));
-    }
-
-    #[test]
-    fn a_full_party_has_no_open_role() {
-        use class::*;
-        assert_eq!(
-            open_roles(&[WARRIOR, PRIEST, MAGE, ROGUE, HUNTER]),
-            open(false, false, 0)
-        );
-    }
-
-    #[test]
-    fn a_member_of_unknown_class_holds_a_seat_and_no_role() {
-        use class::*;
-        assert_eq!(open_roles(&[]), OpenRoles::ALL);
-        assert_eq!(open_roles(&[0, MAGE]), open(true, true, 2));
-    }
-
-    /// A fourth damage dealer finds every damage role taken and fills nothing.
-    #[test]
-    fn a_member_whose_roles_are_taken_fills_nothing() {
-        use class::*;
-        assert_eq!(open_roles(&[MAGE, MAGE, MAGE, MAGE]), open(true, true, 0));
-    }
-
-    fn seeker(character_guid: u64, class: u8, waited_secs: i64) -> MeetingStoneSeeker {
-        MeetingStoneSeeker {
-            character_guid,
-            area_id: 1581,
-            team: 469,
-            class,
-            group_id: 0,
-            queued_at: Timestamp::from_micros_since_unix_epoch(
-                1_000_000_000_000 - waited_secs * 1_000_000,
-            ),
-        }
-    }
-
-    fn picked(open: OpenRoles, solos: &[MeetingStoneSeeker]) -> Option<u64> {
-        next_stone_add(open, solos).map(|index| solos[index].character_guid)
-    }
-
-    #[test]
-    fn the_next_stone_add_takes_tank_then_healer_then_damage() {
-        use class::*;
-        let solos = [
-            seeker(1, MAGE, 90),
-            seeker(2, PRIEST, 10),
-            seeker(3, WARRIOR, 5),
-        ];
-        assert_eq!(picked(OpenRoles::ALL, &solos), Some(3));
-        assert_eq!(picked(open(false, true, 3), &solos), Some(2));
-        assert_eq!(picked(open(false, false, 3), &solos), Some(1));
-        assert_eq!(picked(open(false, false, 0), &solos), None);
-    }
-
-    #[test]
-    fn the_longest_wait_takes_a_role_and_the_lower_guid_breaks_a_tie() {
-        use class::*;
-        let solos = [
-            seeker(7, PRIEST, 30),
-            seeker(5, DRUID, 60),
-            seeker(4, SHAMAN, 60),
-        ];
-        assert_eq!(picked(open(false, true, 0), &solos), Some(4));
-        let solos = [
-            seeker(7, PRIEST, 61),
-            seeker(5, DRUID, 60),
-            seeker(4, SHAMAN, 60),
-        ];
-        assert_eq!(picked(open(false, true, 0), &solos), Some(7));
-    }
-
-    #[test]
-    fn a_seeker_of_unknown_class_is_never_a_stone_add() {
-        assert_eq!(picked(OpenRoles::ALL, &[seeker(1, 0, 600)]), None);
-    }
-
-    #[test]
-    fn five_solo_seekers_form_a_party_led_by_the_longest_wait() {
-        use class::*;
-        let waiting = || {
-            vec![
-                seeker(1, MAGE, 10),
-                seeker(2, MAGE, 50),
-                seeker(3, MAGE, 40),
-                seeker(4, MAGE, 40),
-            ]
-        };
-        assert!(formation(&waiting()).is_none());
-        let mut five = waiting();
-        five.push(seeker(5, MAGE, 5));
-        let (leader, member) = formation(&five).expect("five Seekers form a party");
-        assert_eq!((leader.character_guid, member.character_guid), (2, 3));
-    }
-
     fn party(leads: bool, kind: GroupKind, members: usize) -> Membership {
         Membership {
             leads,
@@ -1218,8 +871,7 @@ mod tests {
         }
     }
 
-    /// cm:LFG/LFGHandler.cpp:58-77 checks the leader first, then the raid, then the size, so a
-    /// member of a full raid hears only that it does not lead.
+    /// A member of a full raid hears only that it does not lead.
     #[test]
     fn the_join_gate_checks_leader_then_raid_then_size() {
         use MeetingStoneRefusal::*;

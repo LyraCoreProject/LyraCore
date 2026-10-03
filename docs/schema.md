@@ -81,7 +81,7 @@ grep -rEc '^#\[(spacetimedb::)?table\(' module/src --include='*.rs' | grep -v ':
 | GameObject | 10 | 6 | `gameobject.rs`, `go_model.rs`, `go_collider.rs` |
 | Loot | 13 | 6 | `loot/*` |
 | Group / party | 8 | 5 | `group.rs` |
-| Meeting stones | 4 | 0 | `meeting_stone.rs` |
+| Meeting stones | 4 | 0 | `meeting_stone/mod.rs` |
 | Guild | 9 | 0 | `guild/mod.rs`, `guild/fee.rs`, `guild/membership.rs`, `guild/petition.rs` |
 | Instance / encounter | 8 | 1 | `instance.rs`, `encounter.rs` |
 | Sharding: region, transfer, load | 9 | 0 | `region.rs`, `transfer/mod.rs`, `load.rs` |
@@ -609,7 +609,7 @@ grep -rn 'scheduled(' module/src --include='*.rs'   # 27 tables plus 4 comment l
 | `game_event_reaper_schedule` | `reap_movement_events` | 1 s (`EVENT_TTL_MICROS`) | `gc.rs:24` |
 | `game_transfer_reaper_schedule` | `reap_transfers` | 5 s, armed lazily by `begin_transfer` | `transfer/mod.rs:250` |
 | `game_mail_escrow_reaper_schedule` | `reap_mail_escrows` | 5 s, armed lazily | `mail_escrow.rs:68` |
-| `game_meeting_stone_reminder_schedule` | `remind_queued_parties` | 5 s; a queued Party hears `IN_PROGRESS` every 5 min | `meeting_stone.rs:94` |
+| `game_meeting_stone_reminder_schedule` | `remind_queued_parties` | 5 s; a queued Party hears `IN_PROGRESS` every 5 min | `meeting_stone/mod.rs:77` |
 | `game_pet_care_schedule` | `tick_pet_care` | 7.5 s | `creatures/pet_care.rs:18` |
 | `game_gateway_lease_reaper_schedule` | `reap_gateway_leases` | 15 s | `gw.rs:71` |
 | `game_instance_reaper_schedule` | `reap_instances` | 60 s | `instance.rs:312` |

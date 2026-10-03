@@ -1,22 +1,16 @@
-//! The Roster Revision Relay: whatever changes a party on Realm-core, push that party's roster to
-//! each World Shard whose mirror holds an older Roster Revision or none.
+//! The Roster Revision Relay: push a party's Realm-core roster to each World Shard whose mirror
+//! holds an older Roster Revision or none, whatever changed it. `party::run` pushes only the
+//! actor's parties, and a Stone Add changes parties the actor is not in.
 //!
-//! `party::run` pushes only the acting Character's before and after parties. Realm-core can also
-//! change parties no actor of the op belongs to, so the mirror follows the revision instead. The
-//! Realm-core row callbacks only mark a party dirty; one worker thread per Gateway process drains
-//! the dirty set, so several revisions of one party before the worker runs cost one push, and no
-//! reducer call runs on an SDK callback thread.
-//!
-//! A push that still fails after [`party::sync_group_mirrors_required`]'s attempts is logged and
-//! dropped. The party waits for its next revision, or for the reconciliation pass a Realm-core
-//! reconnect starts.
+//! Row callbacks only mark a party dirty, and one worker thread drains the set, so no reducer call
+//! runs on an SDK callback thread. A push that fails every attempt is logged and dropped; the party
+//! waits for its next revision or the reconnect pass.
 
 use super::party;
 use super::WorldStore;
 use std::collections::BTreeSet;
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 
-/// The dirty party ids and the worker that pushes them.
 #[derive(Default)]
 pub(crate) struct RosterRevisionRelay {
     dirty: Mutex<BTreeSet<u64>>,
@@ -24,8 +18,7 @@ pub(crate) struct RosterRevisionRelay {
 }
 
 impl RosterRevisionRelay {
-    /// Start the worker thread. `store` is any Coordinator handle: it names Realm-core and every
-    /// World Shard.
+    /// Start the worker thread. `store` is any Coordinator handle.
     pub(crate) fn spawn<St: WorldStore + 'static>(store: St) -> std::io::Result<Arc<Self>> {
         let relay = Arc::new(Self::default());
         let worker = relay.clone();
@@ -47,8 +40,7 @@ impl RosterRevisionRelay {
         Ok(relay)
     }
 
-    /// Note that Realm-core moved this party's Roster Revision. Safe on an SDK callback thread:
-    /// it takes one short lock and calls nothing.
+    /// Safe on an SDK callback thread: one short lock, no calls.
     pub(crate) fn mark_dirty(&self, group_id: u64) {
         self.dirty
             .lock()
@@ -67,8 +59,8 @@ impl RosterRevisionRelay {
         }
     }
 
-    /// Take every dirty party and push it to the World Shards whose mirror is stale. A party marked
-    /// again while this runs stays for the next pass.
+    /// Push every dirty party to the World Shards whose mirror is stale. A party marked during the
+    /// pass waits for the next one.
     pub(crate) fn push_dirty<St: WorldStore + ?Sized>(&self, store: &St) {
         let parties =
             std::mem::take(&mut *self.dirty.lock().unwrap_or_else(PoisonError::into_inner));
@@ -133,9 +125,8 @@ fn push_party<St: WorldStore + ?Sized>(
     }
 }
 
-/// A World Shard mirror needs Realm-core's roster when it holds no row for the party or an older
-/// Roster Revision. A newer one means this Gateway's Realm-core cache lags; pushing it would be
-/// refused as older anyway.
+/// A newer mirrored revision means this Gateway's Realm-core cache lags, and the shard would refuse
+/// the older push anyway.
 fn mirror_is_stale(realm_revision: u64, mirrored: Option<u64>) -> bool {
     mirrored.is_none_or(|mirrored| mirrored < realm_revision)
 }

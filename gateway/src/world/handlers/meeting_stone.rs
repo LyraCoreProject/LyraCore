@@ -1,10 +1,8 @@
-//! Meeting Stone dispatcher: join, leave and the queue status query, plus the vanilla
-//! `MSG_LOOKING_FOR_GROUP` answer. The client sends `CMSG_MEETINGSTONE_JOIN` when it uses a stone.
+//! Meeting Stone dispatcher: join, leave, the queue status query and `MSG_LOOKING_FOR_GROUP`.
 //!
-//! A JOIN takes two Durable Requests. The actor's Home Shard admits it at the stone, then the party
-//! authority queues it. Realm-core holds no Characters, so this file reads each Seeker's race and
-//! class realm-wide and conveys them. Queue notices return on the group event relay
-//! (`stdb::subscriptions::group_event_outbound`); only a refused party JOIN is answered here.
+//! A JOIN is two Durable Requests: the Home Shard admits the actor at the stone, then the party
+//! authority queues it with the Seekers' race and class, read realm-wide. Queue notices arrive on
+//! the group event relay; only a refused party JOIN is answered here.
 
 use super::super::*;
 use super::chat::is_transport_failure;
@@ -14,7 +12,6 @@ use lyracore_shared::meeting_stone::{
 };
 use wow_world_messages::vanilla::Area;
 
-/// One Seeker's facts as the party authority needs them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct SeekerFacts {
     pub(crate) character_guid: u64,
@@ -22,8 +19,7 @@ pub(crate) struct SeekerFacts {
     pub(crate) class: u8,
 }
 
-/// How the Module answered one Meeting Stone Durable Request. A timeout, transport or SDK failure
-/// stays an `Err` with an unknown durable outcome.
+/// A timeout, transport or SDK failure stays an `Err` with an unknown outcome.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MeetingStoneOutcome {
     Ran,
@@ -31,16 +27,15 @@ pub(crate) enum MeetingStoneOutcome {
 }
 
 pub(crate) trait MeetingStoneActionStore {
-    /// Durable Request on the actor's Home Shard: may it use the stone `go_guid`? Writes nothing.
+    /// Durable Request on the actor's Home Shard. Writes nothing.
     fn admit_meeting_stone(&self, actor_guid: u64, go_guid: u64) -> Result<MeetingStoneOutcome>;
-    /// Durable Read of the Home Shard cache: the dungeon area of the stone spawned as `go_guid`.
+    /// Durable Read of the Home Shard cache.
     fn meeting_stone_area(&self, go_guid: u64) -> Result<Option<u32>>;
-    /// Durable Read of the party authority: the members of `actor_guid`'s party in join order, or
-    /// `None` outside a party.
+    /// Durable Read of the party authority, in join order. `None` outside a party.
     fn party_members(&self, actor_guid: u64) -> Result<Option<Vec<u64>>>;
-    /// Race and class of `character_guid` from whichever World Shard holds it.
+    /// One Seeker's race and class, from whichever World Shard holds it.
     fn seeker_facts(&self, character_guid: u64) -> Result<Option<SeekerFacts>>;
-    /// Durable Request on the party authority. The Coordinator picks the database.
+    /// Durable Request on the party authority.
     fn meeting_stone_op(
         &self,
         actor_guid: u64,
@@ -48,7 +43,7 @@ pub(crate) trait MeetingStoneActionStore {
         area_id: u32,
         seekers: Vec<SeekerFacts>,
     ) -> Result<MeetingStoneOutcome>;
-    /// Durable Read of the party authority: the area `character_guid` is queued for.
+    /// Durable Read of the party authority.
     fn queued_area(&self, character_guid: u64) -> Result<Option<u32>>;
 }
 
@@ -106,8 +101,8 @@ pub(crate) enum MeetingStoneActionOutcome {
     PassThrough(ClientOpcodeMessage),
 }
 
-/// Consume the three meeting stone opcodes and `MSG_LOOKING_FOR_GROUP`, and pass everything else
-/// on. All four are dropped silently outside the world.
+/// Consume the meeting stone opcodes and `MSG_LOOKING_FOR_GROUP`, silently outside the world, and
+/// pass everything else on.
 pub(crate) fn dispatch_meeting_stone_action<St: MeetingStoneActionStore + ?Sized>(
     store: &St,
     player: MeetingStonePlayer,
@@ -153,9 +148,8 @@ enum Action {
     LookingForGroup,
 }
 
-/// A Store call that ends the World Session only on transport loss. Anything else is logged at
-/// debug and answered with nothing: the client has no message for it, and a Refusal or a peer
-/// Shard read this Gateway cannot finish must not close the session.
+/// Only a transport loss ends the World Session. Anything else is logged and answered with nothing,
+/// because the client has no message for it.
 fn recoverable<T>(what: &str, account_id: u64, result: Result<T>) -> Result<Option<T>> {
     match result {
         Ok(value) => Ok(Some(value)),
@@ -167,8 +161,8 @@ fn recoverable<T>(what: &str, account_id: u64, result: Result<T>) -> Result<Opti
     }
 }
 
-/// Admission at the stone, then the queue. Every failure before the queue is silent, as in both
-/// cores; a refused party JOIN answers `SMSG_MEETINGSTONE_JOINFAILED`.
+/// Every failure before the queue is silent, as in both cores. A refused party JOIN answers
+/// `SMSG_MEETINGSTONE_JOINFAILED`.
 fn join<St: MeetingStoneActionStore + ?Sized>(
     store: &St,
     account_id: u64,
@@ -198,8 +192,7 @@ fn join<St: MeetingStoneActionStore + ?Sized>(
     else {
         return Ok(Vec::new());
     };
-    // Only the Gateway can tell whether the client can be told about this area, so it drops a
-    // stone it could never answer for before any state changes.
+    // Only the Gateway knows which areas the client protocol can name.
     if Area::try_from(area_id).is_err() {
         log::debug!("world: meeting stone {go_guid} names unknown area {area_id}");
         return Ok(Vec::new());
@@ -207,7 +200,7 @@ fn join<St: MeetingStoneActionStore + ?Sized>(
     let Some(seekers) = recoverable(
         "seeker facts read",
         account_id,
-        seeker_facts(store, actor_guid),
+        facts_for_join(store, actor_guid),
     )?
     else {
         return Ok(Vec::new());
@@ -231,9 +224,9 @@ fn join<St: MeetingStoneActionStore + ?Sized>(
         .collect())
 }
 
-/// The facts of the actor, or of every member of the party it is in. Only a Raid holds more than
-/// a Party's five, and the queue refuses a Raid, so the actor's own facts are enough to hear that.
-fn seeker_facts<St: MeetingStoneActionStore + ?Sized>(
+/// The Seeker facts a JOIN conveys: the actor's, or every member's of its Party. The queue refuses
+/// a Raid, so a Raid's actor conveys only its own.
+fn facts_for_join<St: MeetingStoneActionStore + ?Sized>(
     store: &St,
     actor_guid: u64,
 ) -> Result<Vec<SeekerFacts>> {
@@ -248,7 +241,7 @@ fn seeker_facts<St: MeetingStoneActionStore + ?Sized>(
     Ok(facts)
 }
 
-/// One queue op. `None` when it failed short of a transport loss.
+/// `None` when the op failed short of a transport loss.
 fn run_op<St: MeetingStoneActionStore + ?Sized>(
     store: &St,
     account_id: u64,
@@ -271,10 +264,8 @@ fn run_op<St: MeetingStoneActionStore + ?Sized>(
     Ok(outcome)
 }
 
-/// `CMSG_MEETINGSTONE_INFO`: the queue status the client shows after a loading screen. A Seeker
-/// row answers JOINED for its area, alone or in a party; anything else answers NONE. Both cores
-/// read a restore map nothing fills, so they never report a solo Seeker; this reports the real
-/// state.
+/// `CMSG_MEETINGSTONE_INFO`, sent after a loading screen: JOINED for a Seeker's area, else NONE.
+/// Both cores read a restore map nothing fills; this reports the real state.
 fn info<St: MeetingStoneActionStore + ?Sized>(
     store: &St,
     account_id: u64,
@@ -491,7 +482,7 @@ mod tests {
         );
     }
 
-    /// Each party Refusal answers with cmangos's byte (cm:LFG/LFGHandler.cpp:58-77).
+    /// Each party Refusal answers with cmangos's failure byte.
     #[test]
     fn each_party_refusal_answers_its_join_failure_byte() {
         for (refusal, reason) in [
@@ -602,7 +593,7 @@ mod tests {
         );
     }
 
-    /// vmangos answers 0 (vm:Handlers/MiscHandler.cpp:277-282).
+    /// vmangos answers 0.
     #[test]
     fn looking_for_group_answers_zero() {
         let store = FakeMeetingStones::default();
