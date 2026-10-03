@@ -314,3 +314,62 @@ fn a_raid_past_five_certifies_a_companion_order_for_any_member() {
         "a Raid member who is not the leader: {text}"
     );
 }
+
+/// Mirror a Group of `count` members whose GUIDs start at `first_guid`, Raid members five to a
+/// Subgroup. The first member leads.
+fn mirror_group(node: &Standalone, group_id: u64, first_guid: u64, count: u64, kind: GroupKind) {
+    let guids: Vec<u64> = (first_guid..first_guid + count).collect();
+    let partitions: Vec<_> = guids
+        .iter()
+        .map(|&guid| {
+            let mut row = partition(guid, 1);
+            row["group_id"] = group_id.into();
+            row
+        })
+        .collect();
+    let slots: Vec<u8> = (0..count)
+        .map(|index| match kind {
+            GroupKind::Party => 0,
+            GroupKind::Raid => (index / 5) as u8,
+        })
+        .collect();
+    let args = [
+        group_id.to_string(),
+        first_guid.to_string(),
+        "3".to_string(),
+        "2".to_string(),
+        "0".to_string(),
+        serde_json::to_string(&guids).unwrap(),
+        actor("0"),
+        serde_json::to_string(&partitions).unwrap(),
+        "1".to_string(),
+        kind.wire().to_string(),
+        serde_json::to_string(&slots).unwrap(),
+    ];
+    let args: Vec<_> = args.iter().map(String::as_str).collect();
+    node.assert_call("sync_group_mirror", &args);
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+fn a_party_mirror_past_five_is_damaged_while_a_raid_of_ten_certifies() {
+    let mut realm = Standalone::start("raid-convert-bounded-roster");
+    realm.publish_module();
+    realm.assert_call("claim_operator", &[]);
+    mirror_group(&realm, 900, 10, 6, GroupKind::Party);
+    mirror_group(&realm, 901, 20, 10, GroupKind::Raid);
+
+    let party = serde_json::to_string(&(10..16).collect::<Vec<u64>>()).unwrap();
+    let text = failure_text(
+        &realm,
+        "admit_party_command_authority",
+        &["900", "10", "11", "12", party.as_str()],
+    );
+    assert!(text.contains("StalePartyMirror"), "{text}");
+
+    let raid = serde_json::to_string(&(20..30).collect::<Vec<u64>>()).unwrap();
+    realm.assert_call(
+        "admit_party_command_authority",
+        &["901", "20", "27", "21", raid.as_str()],
+    );
+}

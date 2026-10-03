@@ -17,7 +17,7 @@ use lyracore_shared::group::COMMAND_RESULT_WINDOW_MICROS;
 use spacetimedb::{reducer, table, Identity, ReducerContext, Table, Timestamp};
 
 #[cfg(feature = "debug_reducers")]
-use crate::{game_group, game_group_member, game_world_entity};
+use crate::{game_group, game_world_entity};
 
 const COMMAND_LIFETIME_MICROS: i64 = 30_000_000;
 const CLAIM_LEASE_MICROS: i64 = 2_000_000;
@@ -696,17 +696,12 @@ fn fixture_command_apply_after_authority(
         .group_id()
         .find(member.group_id)
         .ok_or_else(|| CommandOutcome::NotMember.tag().to_string())?;
-    let members: Vec<_> = ctx
-        .db
-        .game_group_member()
-        .by_group()
-        .filter(&member.group_id)
-        .take(lyracore_shared::group::RAID_MAX_MEMBERS + 1)
-        .map(|row| row.character_guid)
-        .collect();
-    if members.len() > lyracore_shared::group::RAID_MAX_MEMBERS {
-        return Err(CommandOutcome::StalePartyMirror.tag().to_string());
-    }
+    let members: Vec<_> =
+        crate::group::bounded_roster(ctx, member.group_id, crate::group::group_kind_of(&group))
+            .ok_or_else(|| CommandOutcome::StalePartyMirror.tag().to_string())?
+            .into_iter()
+            .map(|row| row.character_guid)
+            .collect();
     crate::group::admit_party_command_authority(
         ctx,
         member.group_id,
