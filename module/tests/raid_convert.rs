@@ -198,25 +198,30 @@ fn a_party_still_caps_at_five() {
         .all(|row| row["raid_slot"] == "0"));
 }
 
-fn partition(guid: u64, membership_revision: u64) -> serde_json::Value {
+fn partition(group_id: u64, guid: u64) -> serde_json::Value {
     serde_json::json!({
-        "character_guid": guid, "group_id": 900,
-        "membership_revision": membership_revision, "member_active": true,
+        "character_guid": guid, "group_id": group_id,
+        "membership_revision": 1, "member_active": true,
         "map_id": 0, "instance_id": 0, "locator_revision": 0,
         "state": {"unknown": []},
     })
 }
 
-fn mirror_args(revision: u64, kind: u8, slots: &[u8]) -> Vec<String> {
+/// Arguments for one `sync_group_mirror` push. The first member leads.
+fn mirror_args(group_id: u64, guids: &[u64], revision: u64, kind: u8, slots: &[u8]) -> Vec<String> {
+    let partitions: Vec<_> = guids
+        .iter()
+        .map(|&guid| partition(group_id, guid))
+        .collect();
     vec![
-        "900".to_string(),
-        "10".to_string(),
+        group_id.to_string(),
+        guids[0].to_string(),
         "3".to_string(),
         "2".to_string(),
         "0".to_string(),
-        "[10,11]".to_string(),
+        serde_json::to_string(guids).unwrap(),
         actor("0"),
-        serde_json::to_string(&[partition(10, 1), partition(11, 2)]).unwrap(),
+        serde_json::to_string(&partitions).unwrap(),
         revision.to_string(),
         kind.to_string(),
         serde_json::to_string(slots).unwrap(),
@@ -224,13 +229,30 @@ fn mirror_args(revision: u64, kind: u8, slots: &[u8]) -> Vec<String> {
 }
 
 fn mirror_refusal(node: &Standalone, revision: u64, kind: u8, slots: &[u8]) -> String {
-    let args = mirror_args(revision, kind, slots);
+    let args = mirror_args(900, &[10, 11], revision, kind, slots);
     let args: Vec<_> = args.iter().map(String::as_str).collect();
     failure_text(node, "sync_group_mirror", &args)
 }
 
 fn mirror(node: &Standalone, revision: u64, kind: u8, slots: &[u8]) {
-    let args = mirror_args(revision, kind, slots);
+    let args = mirror_args(900, &[10, 11], revision, kind, slots);
+    let args: Vec<_> = args.iter().map(String::as_str).collect();
+    node.assert_call("sync_group_mirror", &args);
+}
+
+/// The first push of a Group of `guids`, Raid members five to a Subgroup.
+fn first_push_args(group_id: u64, guids: &[u64], kind: GroupKind) -> Vec<String> {
+    let slots: Vec<u8> = (0..guids.len())
+        .map(|index| match kind {
+            GroupKind::Party => 0,
+            GroupKind::Raid => (index / 5) as u8,
+        })
+        .collect();
+    mirror_args(group_id, guids, 1, kind.wire(), &slots)
+}
+
+fn mirror_group(node: &Standalone, group_id: u64, guids: &[u64], kind: GroupKind) {
+    let args = first_push_args(group_id, guids, kind);
     let args: Vec<_> = args.iter().map(String::as_str).collect();
     node.assert_call("sync_group_mirror", &args);
 }
@@ -313,4 +335,85 @@ fn a_raid_past_five_certifies_a_companion_order_for_any_member() {
         text.contains("NotLeader"),
         "a Raid member who is not the leader: {text}"
     );
+
+    realm.assert_call("debug_spawn_player_entity", &["1"]);
+    let outcome = applied_order_outcome(&realm, group_id.as_str(), &all_members);
+    assert_eq!(
+        outcome, "(suppressed = ())",
+        "a Raid of ten passes the target roster bound"
+    );
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+fn a_world_shard_mirror_refuses_a_party_past_five() {
+    let mut shard = Standalone::start("raid-convert-party-cap");
+    shard.publish_module();
+    shard.assert_call("claim_operator", &[]);
+
+    let args = first_push_args(900, &[1, 2, 3, 4, 5, 6], GroupKind::Party);
+    let args: Vec<_> = args.iter().map(String::as_str).collect();
+    let text = failure_text(&shard, "sync_group_mirror", &args);
+    assert!(
+        text.contains("6 members for a group that holds at most 5"),
+        "{text}"
+    );
+    assert!(shard
+        .query_rows("SELECT * FROM game_group WHERE group_id = 900")
+        .is_empty());
+
+    mirror_group(&shard, 901, &[1, 2, 3, 4, 5], GroupKind::Party);
+    mirror_group(&shard, 902, &[11, 12, 13, 14, 15, 16], GroupKind::Raid);
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+fn a_party_mirror_past_five_is_stale_at_both_companion_order_readers() {
+    let mut realm = Standalone::start("raid-convert-damaged-party");
+    realm.publish_module();
+    realm.assert_call("claim_operator", &[]);
+    realm.assert_call("debug_spawn_player_entity", &["1"]);
+    // The writer refuses a Party past five, so plant the damage: a Raid of six turned into a Party.
+    mirror_group(&realm, 900, &[1, 2, 3, 4, 5, 6], GroupKind::Raid);
+    realm.assert_sql("UPDATE game_group SET group_type = 0 WHERE group_id = 900");
+
+    // The certified list matches the six rows, so these refuse on the Party cap.
+    let party = serde_json::to_string(&[1, 2, 3, 4, 5, 6]).unwrap();
+    let text = failure_text(
+        &realm,
+        "admit_party_command_authority",
+        &["900", "1", "2", "3", party.as_str()],
+    );
+    assert!(text.contains("StalePartyMirror"), "{text}");
+
+    let outcome = applied_order_outcome(&realm, "900", &[1, 2, 3, 4, 5, 6]);
+    assert_eq!(outcome, "(stalePartyMirror = ())");
+}
+
+const SOURCE_IDENTITY: &str = "0x0000000000000000000000000000000000000000000000000000000000000001";
+
+/// Apply a Companion Order for the fixture bot (Character 1) as `leader`, certifying `members`
+/// for `group_id`, then return the outcome the Command Receipt recorded.
+fn applied_order_outcome(node: &Standalone, group_id: &str, members: &[u64]) -> String {
+    let members = serde_json::to_string(members).unwrap();
+    let identity = format!("\"{SOURCE_IDENTITY}\"");
+    node.assert_call(
+        "apply_admitted_party_command",
+        &[
+            identity.as_str(),
+            "1",
+            "1",
+            "1",
+            group_id,
+            "1",
+            members.as_str(),
+            "0",
+            "1",
+            "0",
+            "0",
+            "9223372036854775807",
+            "9223372036854775807",
+        ],
+    );
+    node.query_rows("SELECT outcome FROM game_party_command_receipt")[0]["outcome"].clone()
 }

@@ -738,7 +738,8 @@ pub fn companion_target_facts(
 
 /// Recheck the Gateway-certified authority projection and the bot Gate in the target transaction.
 /// `None` means Package application may proceed; `Some` is a terminal typed Refusal. Companion
-/// Orders cover the whole Raid: the bound is the Raid cap, and a longer list is a damaged mirror.
+/// Orders cover the whole Raid: the bound is the member cap of the Group's kind, and a longer list
+/// is a damaged mirror.
 pub(crate) fn admit_party_command(
     ctx: &ReducerContext,
     admitted: &crate::bridge::AdmittedClientCommand,
@@ -765,19 +766,14 @@ pub(crate) fn admit_party_command(
     let Some(group) = ctx.db.game_group().group_id().find(member.group_id) else {
         return Some(CommandOutcome::StalePartyMirror);
     };
-    let mut local: Vec<_> = ctx
-        .db
-        .game_group_member()
-        .by_group()
-        .filter(&member.group_id)
-        .take(RAID_MAX_MEMBERS + 1)
-        .map(|row| row.character_guid)
-        .collect();
+    let Some(roster) = bounded_roster(ctx, member.group_id, group_kind_of(&group)) else {
+        return Some(CommandOutcome::StalePartyMirror);
+    };
+    let mut local: Vec<_> = roster.into_iter().map(|row| row.character_guid).collect();
     let mut certified = admitted.members.clone();
     local.sort_unstable();
     certified.sort_unstable();
-    if local.len() > RAID_MAX_MEMBERS
-        || member.group_id != admitted.group_id
+    if member.group_id != admitted.group_id
         || group.leader_guid != admitted.leader_guid
         || admitted.leader_guid != admitted.issuer_guid
         || local != certified
@@ -828,16 +824,8 @@ pub(crate) fn has_known_party_member_in_partition(
     {
         return Err(PartyFactsUnavailableReason::MissingGroup);
     }
-    let members: Vec<_> = ctx
-        .db
-        .game_group_member()
-        .by_group()
-        .filter(&member.group_id)
-        .take(GROUP_MAX_MEMBERS + 1)
-        .collect();
-    if members.len() > GROUP_MAX_MEMBERS {
-        return Err(PartyFactsUnavailableReason::FightLimit);
-    }
+    let members = bounded_roster(ctx, member.group_id, GroupKind::Party)
+        .ok_or(PartyFactsUnavailableReason::FightLimit)?;
     Ok(members.into_iter().any(|candidate| {
         candidate.character_guid != character_guid
             && ctx
@@ -885,8 +873,9 @@ fn known_party_partition(
 /// entity on this Shard, so those facts are nullable.
 ///
 /// Facts cover every member of the Group, Raid included, whatever the Subgroup. Reads stop with
-/// `FightLimit` above 40 members (only a damaged mirror holds more), 24 incoming melee or
-/// threat-source rows for one member, one pending cast for one member, or 24 aggregate enemy GUIDs.
+/// `FightLimit` above the member cap of the Group's kind (only a damaged mirror holds more), 24
+/// incoming melee or threat-source rows for one member, one pending cast for one member, or 24
+/// aggregate enemy GUIDs.
 /// Each retained enemy permits 80 threat sources (a full Raid and one pet each), 64 control auras,
 /// and three effects on a pending spell. A missing parent Group stops with `MissingGroup`; neither
 /// failure returns facts selected from an arbitrary prefix.
@@ -907,19 +896,12 @@ pub fn party_facts(
                 group_id: member.group_id,
                 reason: PartyFactsUnavailableReason::MissingGroup,
             })?;
-    let members: Vec<_> = ctx
-        .db
-        .game_group_member()
-        .by_group()
-        .filter(&member.group_id)
-        .take(RAID_MAX_MEMBERS + 1)
-        .collect();
-    if members.len() > RAID_MAX_MEMBERS {
-        return Err(PartyFactsUnavailable {
-            group_id: member.group_id,
-            reason: PartyFactsUnavailableReason::FightLimit,
-        });
-    }
+    let unavailable = || PartyFactsUnavailable {
+        group_id: member.group_id,
+        reason: PartyFactsUnavailableReason::FightLimit,
+    };
+    let members =
+        bounded_roster(ctx, member.group_id, group_kind_of(&group)).ok_or_else(unavailable)?;
     let members: Vec<_> = members
         .into_iter()
         .map(|member| {
@@ -957,10 +939,6 @@ pub fn party_facts(
     let mut pending_control_targets = std::collections::BTreeMap::new();
     const ENEMY_LIMIT: usize = 24;
     const THREAT_SOURCE_LIMIT: usize = RAID_MAX_MEMBERS * 2;
-    let unavailable = || PartyFactsUnavailable {
-        group_id: member.group_id,
-        reason: PartyFactsUnavailableReason::FightLimit,
-    };
     for guid in &party_guids {
         if let Some(attack) = melee.attacker_guid().find(*guid) {
             enemy_guids.insert(attack.target_guid);
@@ -1129,6 +1107,25 @@ pub(crate) fn members_of(ctx: &ReducerContext, group_id: u64) -> Vec<GroupMember
         .by_group()
         .filter(&group_id)
         .collect()
+}
+
+/// The roster of `group_id`, read no further than the Group kind's member cap. `None` means the
+/// mirror holds more rows than that kind allows, so the roster is damaged and no caller may act
+/// on a prefix of it.
+pub(crate) fn bounded_roster(
+    ctx: &ReducerContext,
+    group_id: u64,
+    kind: GroupKind,
+) -> Option<Vec<GroupMember>> {
+    let cap = kind.member_cap();
+    let roster: Vec<_> = ctx
+        .db
+        .game_group_member()
+        .by_group()
+        .filter(&group_id)
+        .take(cap + 1)
+        .collect();
+    (roster.len() <= cap).then_some(roster)
 }
 
 /// Who hears a party line: every member of the speaker's Group, the speaker included, in a Party.
@@ -2144,7 +2141,8 @@ fn next_group_revision(current: Option<u64>, was_active: bool) -> u64 {
 /// each Character whose membership the push changes: the mirror is how this Shard learns of it.
 ///
 /// `group_kind` is the [`GroupKind`] byte and `raid_slots[n]` is `members[n]`'s [`RaidSlot`] byte.
-/// A length mismatch, an unknown kind or an invalid slot refuses the whole push.
+/// A length mismatch, an unknown kind, more members than the kind holds, or an invalid slot refuses
+/// the whole push.
 #[reducer]
 #[allow(clippy::too_many_arguments)] // The roster and initiating Actor are the reducer wire contract.
 pub fn sync_group_mirror(
@@ -2391,6 +2389,13 @@ fn mirror_kind_and_slots(
 ) -> Result<(GroupKind, std::collections::BTreeMap<u64, RaidSlot>), String> {
     let kind = GroupKind::from_wire(group_kind)
         .ok_or_else(|| format!("group mirror has unknown group kind {group_kind}"))?;
+    if members.len() > kind.member_cap() {
+        return Err(format!(
+            "group mirror has {} members for a group that holds at most {}",
+            members.len(),
+            kind.member_cap()
+        ));
+    }
     if raid_slots.len() != members.len() {
         return Err(format!(
             "group mirror has {} Raid Slots for {} members",
@@ -2445,8 +2450,8 @@ fn mirror_slots_differ(
 }
 
 /// Acknowledged Realm-core party authority read for one companion command attempt. Companion
-/// Orders cover the whole Raid: both lists are bounded at the Raid cap, and a longer list is a
-/// damaged mirror.
+/// Orders cover the whole Raid: both lists are bounded at the member cap of the Group's kind, and a
+/// longer list is a damaged mirror.
 #[reducer]
 pub fn admit_party_command_authority(
     ctx: &ReducerContext,
@@ -2457,38 +2462,35 @@ pub fn admit_party_command_authority(
     mut expected_members: Vec<u64>,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    let stale = || {
+        crate::bridge::CommandOutcome::StalePartyMirror
+            .tag()
+            .to_string()
+    };
     let group = ctx
         .db
         .game_group()
         .group_id()
         .find(group_id)
-        .ok_or_else(|| {
-            crate::bridge::CommandOutcome::StalePartyMirror
-                .tag()
-                .to_string()
-        })?;
+        .ok_or_else(stale)?;
     if group.leader_guid != leader_guid {
         return Err(crate::bridge::CommandOutcome::NotLeader.tag().to_string());
     }
-    let members = ctx.db.game_group_member();
-    let mut current_members: Vec<_> = members
-        .by_group()
-        .filter(&group_id)
-        .take(RAID_MAX_MEMBERS + 1)
+    let kind = group_kind_of(&group);
+    if expected_members.len() > kind.member_cap() {
+        return Err(stale());
+    }
+    let mut current_members: Vec<_> = bounded_roster(ctx, group_id, kind)
+        .ok_or_else(stale)?
+        .into_iter()
         .map(|member| member.character_guid)
         .collect();
-    if current_members.len() > RAID_MAX_MEMBERS || expected_members.len() > RAID_MAX_MEMBERS {
-        return Err(crate::bridge::CommandOutcome::StalePartyMirror
-            .tag()
-            .to_string());
-    }
     current_members.sort_unstable();
     expected_members.sort_unstable();
     if current_members != expected_members {
-        return Err(crate::bridge::CommandOutcome::StalePartyMirror
-            .tag()
-            .to_string());
+        return Err(stale());
     }
+    let members = ctx.db.game_group_member();
     for guid in [leader_guid, bot_guid, authority_member_guid]
         .into_iter()
         .filter(|guid| *guid != 0)
