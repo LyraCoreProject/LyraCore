@@ -549,7 +549,11 @@ pub fn debug_verify_loot_tag_fixture(ctx: &ReducerContext) -> Result<(), String>
         LOOT_TAG_FIXTURE_CHARACTER_E,
         LiveLootTagEligibility::Foreign,
     )?;
-    crate::group::remove_member(ctx, LOOT_TAG_FIXTURE_CHARACTER_C);
+    crate::group::remove_member(
+        ctx,
+        LOOT_TAG_FIXTURE_CHARACTER_C,
+        crate::group::Departure::Left,
+    );
     members.insert(crate::GroupMember {
         id: 0,
         group_id: group.group_id,
@@ -588,15 +592,27 @@ pub fn debug_verify_loot_tag_fixture(ctx: &ReducerContext) -> Result<(), String>
     let departed_tagger = fixture_creature_guid(14);
     insert_fixture_entity(ctx, &origin, departed_tagger, base_x, false, 0);
     crate::threat::add_threat(ctx, departed_tagger, LOOT_TAG_FIXTURE_CHARACTER_A, 10);
-    crate::group::remove_member(ctx, LOOT_TAG_FIXTURE_CHARACTER_A);
+    crate::group::remove_member(
+        ctx,
+        LOOT_TAG_FIXTURE_CHARACTER_A,
+        crate::group::Departure::Left,
+    );
     expect_live_loot_tag_eligibility(
         ctx,
         departed_tagger,
         LOOT_TAG_FIXTURE_CHARACTER_E,
         LiveLootTagEligibility::Available,
     )?;
-    crate::group::remove_member(ctx, LOOT_TAG_FIXTURE_CHARACTER_C);
-    crate::group::remove_member(ctx, LOOT_TAG_FIXTURE_CHARACTER_D);
+    crate::group::remove_member(
+        ctx,
+        LOOT_TAG_FIXTURE_CHARACTER_C,
+        crate::group::Departure::Left,
+    );
+    crate::group::remove_member(
+        ctx,
+        LOOT_TAG_FIXTURE_CHARACTER_D,
+        crate::group::Departure::Left,
+    );
     revoke_group_member(ctx, LOOT_TAG_FIXTURE_GROUP, LOOT_TAG_FIXTURE_CHARACTER_E);
     expect_live_loot_tag_eligibility(
         ctx,

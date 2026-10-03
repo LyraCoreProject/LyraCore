@@ -846,6 +846,16 @@ One Character in the Meeting Stone Queue, alone or as a member of a queued Party
 class and team the Gateway supplied. A solo Seeker lasts as long as its Account Claim.
 _Avoid_: queued player, LFG player
 
+**Open Role**:
+One of a queued Party's one tank, one healer and three damage roles that no member's class fills
+yet.
+_Avoid_: vacancy, role slot
+
+**Stone Add**:
+The Module adding a Seeker to a queued Party, or forming a Party from five waiting Seekers, through
+the party authority's join core.
+_Avoid_: matchmaking, auto-invite
+
 ### World clock and weather
 
 **Realm Clock**:

@@ -288,6 +288,10 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
     // only interval. Absent, weather silently stops advancing.
     crate::weather::rearm_weather_schedule(ctx);
 
+    // Re-arm the 5 s Meeting Stone reminder tick, for the weather roll's reason. Absent, a queued
+    // Party never hears IN_PROGRESS.
+    crate::meeting_stone::rearm_reminder_schedule(ctx);
+
     // Re-tag legacy auction mail (plain English subject, Character sender) to the vanilla
     // AuctionHouse sender and machine subject — see `auction::repair_legacy_auction_mail`, which
     // runs at most once per database on its own marker. MUST stay ordered before any Mail Timer

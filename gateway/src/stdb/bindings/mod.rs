@@ -552,6 +552,7 @@ pub mod game_mail_template_table;
 pub mod game_mail_timer_table;
 pub mod game_map_region_table;
 pub mod game_meeting_stone_party_table;
+pub mod game_meeting_stone_reminder_schedule_table;
 pub mod game_meeting_stone_seeker_table;
 pub mod game_meeting_stone_table;
 pub mod game_melee_attack_table;
@@ -881,6 +882,7 @@ pub mod mail_type;
 pub mod map_region_type;
 pub mod mark_bot_transfer_arrival_ready_reducer;
 pub mod meeting_stone_party_type;
+pub mod meeting_stone_reminder_schedule_type;
 pub mod meeting_stone_seeker_type;
 pub mod meeting_stone_type;
 pub mod melee_attack_type;
@@ -1049,6 +1051,7 @@ pub mod release_account_claim_reducer;
 pub mod release_bot_transfer_arrival_reducer;
 pub mod release_player_transfer_arrival_reducer;
 pub mod release_transfer_reducer;
+pub mod remind_queued_parties_reducer;
 pub mod remove_aura_instruction_type;
 pub mod remove_guardians_instruction_type;
 pub mod renew_account_claim_reducer;
@@ -1713,6 +1716,7 @@ pub use game_mail_template_table::*;
 pub use game_mail_timer_table::*;
 pub use game_map_region_table::*;
 pub use game_meeting_stone_party_table::*;
+pub use game_meeting_stone_reminder_schedule_table::*;
 pub use game_meeting_stone_seeker_table::*;
 pub use game_meeting_stone_table::*;
 pub use game_melee_attack_table::*;
@@ -2042,6 +2046,7 @@ pub use mail_type::Mail;
 pub use map_region_type::MapRegion;
 pub use mark_bot_transfer_arrival_ready_reducer::mark_bot_transfer_arrival_ready;
 pub use meeting_stone_party_type::MeetingStoneParty;
+pub use meeting_stone_reminder_schedule_type::MeetingStoneReminderSchedule;
 pub use meeting_stone_seeker_type::MeetingStoneSeeker;
 pub use meeting_stone_type::MeetingStone;
 pub use melee_attack_type::MeleeAttack;
@@ -2210,6 +2215,7 @@ pub use release_account_claim_reducer::release_account_claim;
 pub use release_bot_transfer_arrival_reducer::release_bot_transfer_arrival;
 pub use release_player_transfer_arrival_reducer::release_player_transfer_arrival;
 pub use release_transfer_reducer::release_transfer;
+pub use remind_queued_parties_reducer::remind_queued_parties;
 pub use remove_aura_instruction_type::RemoveAuraInstruction;
 pub use remove_guardians_instruction_type::RemoveGuardiansInstruction;
 pub use renew_account_claim_reducer::renew_account_claim;
@@ -4223,6 +4229,9 @@ pub enum Reducer {
         transfer_id: u64,
         request_actor: SessionActor,
     },
+    RemindQueuedParties {
+        schedule: MeetingStoneReminderSchedule,
+    },
     RenewAccountClaim {
         token: WorldSessionToken,
     },
@@ -4813,6 +4822,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::ReleaseBotTransferArrival { .. } => "release_bot_transfer_arrival",
             Reducer::ReleasePlayerTransferArrival { .. } => "release_player_transfer_arrival",
             Reducer::ReleaseTransfer { .. } => "release_transfer",
+            Reducer::RemindQueuedParties { .. } => "remind_queued_parties",
             Reducer::RenewAccountClaim { .. } => "renew_account_claim",
             Reducer::RenewAccountFence { .. } => "renew_account_fence",
             Reducer::RestoreTaxiFixture => "restore_taxi_fixture",
@@ -8246,6 +8256,11 @@ Reducer::RecordRegionLoad{
                 transfer_id: transfer_id.clone(),
                 request_actor: request_actor.clone(),
 }),
+            Reducer::RemindQueuedParties{
+                schedule,
+}             => __sats::bsatn::to_vec(&remind_queued_parties_reducer::RemindQueuedPartiesArgs {
+                schedule: schedule.clone(),
+}),
             Reducer::RenewAccountClaim{
                 token,
 }             => __sats::bsatn::to_vec(&renew_account_claim_reducer::RenewAccountClaimArgs {
@@ -8628,6 +8643,7 @@ pub struct DbUpdate {
     game_map_region: __sdk::TableUpdate<MapRegion>,
     game_meeting_stone: __sdk::TableUpdate<MeetingStone>,
     game_meeting_stone_party: __sdk::TableUpdate<MeetingStoneParty>,
+    game_meeting_stone_reminder_schedule: __sdk::TableUpdate<MeetingStoneReminderSchedule>,
     game_meeting_stone_seeker: __sdk::TableUpdate<MeetingStoneSeeker>,
     game_melee_attack: __sdk::TableUpdate<MeleeAttack>,
     game_melee_schedule: __sdk::TableUpdate<MeleeSchedule>,
@@ -9336,6 +9352,13 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_meeting_stone_party" => db_update.game_meeting_stone_party.append(
                     game_meeting_stone_party_table::parse_table_update(table_update)?,
                 ),
+                "game_meeting_stone_reminder_schedule" => {
+                    db_update.game_meeting_stone_reminder_schedule.append(
+                        game_meeting_stone_reminder_schedule_table::parse_table_update(
+                            table_update,
+                        )?,
+                    )
+                }
                 "game_meeting_stone_seeker" => db_update.game_meeting_stone_seeker.append(
                     game_meeting_stone_seeker_table::parse_table_update(table_update)?,
                 ),
@@ -10508,6 +10531,12 @@ impl __sdk::DbUpdate for DbUpdate {
                 &self.game_meeting_stone_party,
             )
             .with_updates_by_pk(|row| &row.group_id);
+        diff.game_meeting_stone_reminder_schedule = cache
+            .apply_diff_to_table::<MeetingStoneReminderSchedule>(
+                "game_meeting_stone_reminder_schedule",
+                &self.game_meeting_stone_reminder_schedule,
+            )
+            .with_updates_by_pk(|row| &row.scheduled_id);
         diff.game_meeting_stone_seeker = cache
             .apply_diff_to_table::<MeetingStoneSeeker>(
                 "game_meeting_stone_seeker",
@@ -11505,6 +11534,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_meeting_stone_party" => db_update
                     .game_meeting_stone_party
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_meeting_stone_reminder_schedule" => db_update
+                    .game_meeting_stone_reminder_schedule
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_meeting_stone_seeker" => db_update
                     .game_meeting_stone_seeker
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -12370,6 +12402,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_meeting_stone_party" => db_update
                     .game_meeting_stone_party
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_meeting_stone_reminder_schedule" => db_update
+                    .game_meeting_stone_reminder_schedule
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_meeting_stone_seeker" => db_update
                     .game_meeting_stone_seeker
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -12882,6 +12917,7 @@ pub struct AppliedDiff<'r> {
     game_map_region: __sdk::TableAppliedDiff<'r, MapRegion>,
     game_meeting_stone: __sdk::TableAppliedDiff<'r, MeetingStone>,
     game_meeting_stone_party: __sdk::TableAppliedDiff<'r, MeetingStoneParty>,
+    game_meeting_stone_reminder_schedule: __sdk::TableAppliedDiff<'r, MeetingStoneReminderSchedule>,
     game_meeting_stone_seeker: __sdk::TableAppliedDiff<'r, MeetingStoneSeeker>,
     game_melee_attack: __sdk::TableAppliedDiff<'r, MeleeAttack>,
     game_melee_schedule: __sdk::TableAppliedDiff<'r, MeleeSchedule>,
@@ -13849,6 +13885,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<MeetingStoneParty>(
             "game_meeting_stone_party",
             &self.game_meeting_stone_party,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<MeetingStoneReminderSchedule>(
+            "game_meeting_stone_reminder_schedule",
+            &self.game_meeting_stone_reminder_schedule,
             event,
         );
         callbacks.invoke_table_row_callbacks::<MeetingStoneSeeker>(
@@ -15195,6 +15236,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_map_region_table::register_table(client_cache);
         game_meeting_stone_table::register_table(client_cache);
         game_meeting_stone_party_table::register_table(client_cache);
+        game_meeting_stone_reminder_schedule_table::register_table(client_cache);
         game_meeting_stone_seeker_table::register_table(client_cache);
         game_melee_attack_table::register_table(client_cache);
         game_melee_schedule_table::register_table(client_cache);
@@ -15481,6 +15523,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_map_region",
         "game_meeting_stone",
         "game_meeting_stone_party",
+        "game_meeting_stone_reminder_schedule",
         "game_meeting_stone_seeker",
         "game_melee_attack",
         "game_melee_schedule",

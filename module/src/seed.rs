@@ -19,7 +19,8 @@
 //!    1-10-alpha consumable breadth, the mock-seed fixture kits (`seed/fixtures.rs`), enchant/
 //!    disenchant, talents, and the stacking-group starter set.
 //! 4. **`seed_scheduler_arming`**: the event reaper, instance reaper, creature movement/melee/aura/
-//!    ground-AoE/weather ticks. Runs last so nothing fires against a half-seeded database.
+//!    ground-AoE/weather/Meeting Stone reminder ticks. Runs last so nothing fires against a
+//!    half-seeded database.
 //!
 //! Base-row constructors (`base_spell`/`base_effect`/`base_item`, `seed/fixtures.rs`) plus the
 //! `spell`/`effect` closures below keep the ~700 lines of `Spell`/`SpellEffect`/`ItemTemplate`
@@ -1551,8 +1552,8 @@ pub(crate) fn repair_lesser_heal_target(ctx: &ReducerContext) -> u64 {
 }
 
 /// Stratum 4 — scheduler arming: the event reaper, instance reaper, creature movement tick, melee
-/// swing tick, aura-expiry tick, ground-AoE damage tick, and weather roll. Runs last so nothing
-/// fires against a half-seeded database.
+/// swing tick, aura-expiry tick, ground-AoE damage tick, weather roll, and Meeting Stone reminder.
+/// Runs last so nothing fires against a half-seeded database.
 fn seed_scheduler_arming(ctx: &ReducerContext) {
     // Schedule the event reaper every 1s.
     ctx.db
@@ -1672,6 +1673,10 @@ fn seed_scheduler_arming(ctx: &ReducerContext) {
     // already-migrated database where `init` does not re-run — one definition of the canonical row,
     // so the two paths cannot arm different intervals.
     crate::weather::rearm_weather_schedule(ctx);
+
+    // Meeting Stone reminder tick every 5 s: each queued Party hears IN_PROGRESS every five minutes.
+    // Shared with `debug_repair_after_publish`, as the weather roll is.
+    crate::meeting_stone::rearm_reminder_schedule(ctx);
 }
 
 // Test/mock-seed fixture kits (Test PW:Shield, scenario quest/vendor/trainer, …) live in their
