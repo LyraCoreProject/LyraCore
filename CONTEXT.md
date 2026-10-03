@@ -849,8 +849,9 @@ Realm-core's realm-wide list of Seekers and queued Parties, per dungeon area and
 _Avoid_: LFG queue, matchmaking queue
 
 **Seeker**:
-One Character in the Meeting Stone Queue, alone or as a member of a queued Party. It carries the
-class and team the Gateway supplied. A solo Seeker lasts as long as its Account Claim.
+One Character in the Meeting Stone Queue, alone or as a member of a queued Party. It carries its
+class and its team, from the class and race the Gateway supplied. A solo Seeker lasts as long as
+its Account Claim.
 _Avoid_: queued player, LFG player
 
 **Open Role**:

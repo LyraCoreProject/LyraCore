@@ -6,14 +6,14 @@ use crate::world::party::PartyOutcome;
 use lyracore_shared::group::realm_op;
 
 /// Holds the process-wide topology variables for the whole test, then restores them.
-struct TopologyEnv {
+pub(super) struct TopologyEnv {
     shard_map: Option<std::ffi::OsString>,
     realm_core: Option<std::ffi::OsString>,
     _guard: std::sync::MutexGuard<'static, ()>,
 }
 
 impl TopologyEnv {
-    fn install(shard_map: &str, realm_core: &str) -> Self {
+    pub(super) fn install(shard_map: &str, realm_core: &str) -> Self {
         let guard = DURABLE_TOPOLOGY_ENV_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -43,7 +43,7 @@ impl Drop for TopologyEnv {
 
 /// Every World Shard holds Realm-core's Roster Revision for the party and, while it exists, its
 /// members.
-fn mirrors_follow_realm_core(
+pub(super) fn mirrors_follow_realm_core(
     realm: &Coordinator,
     shards: &[(String, Coordinator)],
     group_id: u64,
@@ -108,7 +108,7 @@ fn a_roster_change_made_only_on_realm_core_reaches_every_world_shard_mirror() {
     );
     assert_eq!(
         realm
-            .realm_group_op(realm_op::ACCEPT, MEMBER, 0, 1, 1, 0)
+            .realm_group_op(realm_op::ACCEPT, MEMBER, 0, 1, 0, 0)
             .unwrap(),
         PartyOutcome::Ran
     );

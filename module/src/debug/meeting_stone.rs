@@ -1,8 +1,8 @@
 //! Meeting Stone Queue fixtures for the durable tests. Fixture ids sit in `509_6000`-`509_6099`.
 //!
 //! The levers stage the world a Meeting Stone needs: a stone and its spawned GameObject, Characters
-//! with a chosen race, class and level, each with a live entity and a live Account Claim, and a
-//! Party or Raid led by one of them. Two more move a Seeker's or a queued party's time back, so a
+//! with a chosen race, class and level, each with a live entity and a live Account Claim, the same
+//! claim alone on Realm-core, and a Party or Raid led by one of them. Two more move a Seeker's or a queued party's time back, so a
 //! test never waits on the clock.
 
 use spacetimedb::{reducer, ReducerContext, Table, TimeDuration};
@@ -126,6 +126,23 @@ pub fn debug_stage_meeting_stone_character(
         ctx.db.game_character().insert(character);
     }
     super::debug_spawn_player_entity(ctx, guid)?;
+    stage_claim(ctx, guid, account_id)
+}
+
+/// Stage only the live Account Claim [`debug_stage_meeting_stone_character`] writes, with the same
+/// World Session Token. On a sharded realm the Character lives on a World Shard and its claim on
+/// Realm-core, which holds no Character rows. A second call replaces the claim.
+#[reducer]
+pub fn debug_stage_meeting_stone_claim(
+    ctx: &ReducerContext,
+    guid: u64,
+    account_id: u64,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    stage_claim(ctx, guid, account_id)
+}
+
+fn stage_claim(ctx: &ReducerContext, guid: u64, account_id: u64) -> Result<(), String> {
     let expires_micros = ctx
         .timestamp
         .to_micros_since_unix_epoch()

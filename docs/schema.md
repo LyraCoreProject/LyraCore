@@ -54,14 +54,14 @@ publish presents as an unrelated mid-session hang, not a loud "no such table".
 
 ## 2. Inventory
 
-**281 tables**, all of them in `module/src/**`: 128 public, 153 private. No table comes from a
+**285 tables**, all of them in `module/src/**`: 128 public, 157 private. No table comes from a
 package in this tree; `packages/example` is the only in-tree package and it declares none. Recount
 rather than trust the numbers below, which drift on every schema change. The pattern matches both
 `#[table(...)]` and the fully qualified `#[spacetimedb::table(...)]`; missing the second form
 undercounts. The second command lists the tables per file, which is what the rows below add up:
 
 ```bash
-grep -rEn '^#\[(spacetimedb::)?table\(' module/src --include='*.rs' | wc -l   # 281 on 2026-09-25
+grep -rEn '^#\[(spacetimedb::)?table\(' module/src --include='*.rs' | wc -l   # 285 on 2026-10-03
 grep -rEc '^#\[(spacetimedb::)?table\(' module/src --include='*.rs' | grep -v ':0$'  # tables per file
 ```
 
@@ -81,6 +81,7 @@ grep -rEc '^#\[(spacetimedb::)?table\(' module/src --include='*.rs' | grep -v ':
 | GameObject | 10 | 6 | `gameobject.rs`, `go_model.rs`, `go_collider.rs` |
 | Loot | 13 | 6 | `loot/*` |
 | Group / party | 8 | 5 | `group.rs` |
+| Meeting stones | 4 | 0 | `meeting_stone.rs` |
 | Guild | 9 | 0 | `guild/mod.rs`, `guild/fee.rs`, `guild/membership.rs`, `guild/petition.rs` |
 | Instance / encounter | 8 | 1 | `instance.rs`, `encounter.rs` |
 | Sharding: region, transfer, load | 9 | 0 | `region.rs`, `transfer/mod.rs`, `load.rs` |
@@ -588,11 +589,11 @@ Two constraints survive the removal and bind any filter added later.
 
 ## 6. Scheduled tables
 
-**26 scheduled tables** drive every periodic and deferred effect in the game. Nothing on a gateway
+**27 scheduled tables** drive every periodic and deferred effect in the game. Nothing on a gateway
 timer decides gameplay. Recount and re-list them with:
 
 ```bash
-grep -rn 'scheduled(' module/src --include='*.rs'   # 26 tables plus 4 comment lines, 2026-09-24
+grep -rn 'scheduled(' module/src --include='*.rs'   # 27 tables plus 4 comment lines, 2026-10-03
 ```
 
 | Scheduled table | Reducer | Cadence | Where |
@@ -608,6 +609,7 @@ grep -rn 'scheduled(' module/src --include='*.rs'   # 26 tables plus 4 comment l
 | `game_event_reaper_schedule` | `reap_movement_events` | 1 s (`EVENT_TTL_MICROS`) | `gc.rs:24` |
 | `game_transfer_reaper_schedule` | `reap_transfers` | 5 s, armed lazily by `begin_transfer` | `transfer/mod.rs:250` |
 | `game_mail_escrow_reaper_schedule` | `reap_mail_escrows` | 5 s, armed lazily | `mail_escrow.rs:68` |
+| `game_meeting_stone_reminder_schedule` | `remind_queued_parties` | 5 s; a queued Party hears `IN_PROGRESS` every 5 min | `meeting_stone.rs:94` |
 | `game_pet_care_schedule` | `tick_pet_care` | 7.5 s | `creatures/pet_care.rs:18` |
 | `game_gateway_lease_reaper_schedule` | `reap_gateway_leases` | 15 s | `gw.rs:71` |
 | `game_instance_reaper_schedule` | `reap_instances` | 60 s | `instance.rs:312` |
@@ -631,8 +633,8 @@ externally.
 
 ⚠ Re-arming after a schema change is a real operational step: a republish can leave a schedule row
 stale, because `init` does not re-run on an auto-migrating publish. `debug_repair_after_publish`
-re-arms the motion, creature-tick, aura, ground-area, weather, gateway-lease and instance-reaper
-schedules, restores a missing Auction expiry, re-tags legacy auction mail as Auction Mail once, arms
+re-arms the motion, creature-tick, aura, ground-area, weather, gateway-lease, instance-reaper and
+meeting stone reminder schedules, restores a missing Auction expiry, re-tags legacy auction mail as Auction Mail once, arms
 a Mail Timer for each Mail that has none, and re-seeds every fixture family `init` seeds. It does not
 repair every scheduled table: the event reaper and melee schedules are outside this reducer.
 **Nothing runs it for you.** The operator calls it by hand on every shard after every publish:

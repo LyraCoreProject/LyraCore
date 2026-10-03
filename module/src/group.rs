@@ -1379,7 +1379,7 @@ pub(crate) fn accept_invite_for(ctx: &ReducerContext, acceptor_guid: u64) -> Res
             .map_err(|refusal| refused(refusal, "session-less group acceptance"))?;
     }
     let class = acceptor.map_or(0, |character| character.class);
-    accept_invite_on(ctx, acceptor_guid, class).map_err(|error| {
+    accept_invite_on(ctx, Plane::Shard, acceptor_guid, class).map_err(|error| {
         group_op_error(
             error,
             &format!("{acceptor_guid} could not accept its invite"),
@@ -1401,6 +1401,7 @@ fn has_pending_leader_invite(ctx: &ReducerContext, character_guid: u64) -> bool 
 /// the acceptor's, for the Seeker row a queued Party gains; 0 when unknown.
 fn accept_invite_on(
     ctx: &ReducerContext,
+    plane: Plane,
     acceptor_guid: u64,
     class: u8,
 ) -> Result<(), GroupOpError> {
@@ -1419,6 +1420,15 @@ fn accept_invite_on(
         },
         group_id => JoinTarget::Group(group_id),
     };
+    // A World Shard holds every Character it groups, so a missing row is a Character that is gone.
+    // Realm-core holds none and takes the Gateway's word.
+    if plane == Plane::Shard {
+        if let JoinTarget::NewParty { leader_guid } = target {
+            crate::helpers::character_by_guid(ctx, leader_guid)
+                .ok_or(GroupRefusal::InviterUnavailable)?;
+        }
+        crate::helpers::character_by_guid(ctx, acceptor_guid).ok_or(GroupRefusal::NoSuchPlayer)?;
+    }
     let joined = join_group(ctx, acceptor_guid, target)?;
     if joined.formed {
         crate::meeting_stone::party_joined(ctx, joined.group_id, invite.inviter_guid, 0)
@@ -2088,7 +2098,9 @@ pub fn realm_group_op(
             invite_core_on(ctx, Plane::RealmCore, actor_guid, target_guid).map(|()| Unchanged)
         }
         // Realm-core holds no Character rows, so the Gateway conveys the acceptor's class.
-        realm_op::ACCEPT => accept_invite_on(ctx, actor_guid, arg_a).map(|()| Changed),
+        realm_op::ACCEPT => {
+            accept_invite_on(ctx, Plane::RealmCore, actor_guid, arg_a).map(|()| Changed)
+        }
         realm_op::DECLINE => decline_invite_on(ctx, actor_guid).map(|()| Unchanged),
         realm_op::LEAVE => leave_group_on(ctx, actor_guid, arg_a).map(|()| Changed),
         realm_op::UNINVITE => uninvite_on(ctx, actor_guid, target_guid).map(|()| Changed),
@@ -3590,7 +3602,7 @@ mod tests {
             ),
             (
                 "realm_op::ACCEPT =>",
-                "accept_invite_on(ctx, actor_guid, arg_a)",
+                "accept_invite_on(ctx, Plane::RealmCore, actor_guid, arg_a)",
             ),
             ("realm_op::DECLINE =>", "decline_invite_on(ctx, actor_guid)"),
             (

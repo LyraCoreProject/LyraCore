@@ -236,8 +236,8 @@ pub mod event_kind {
 ///
 /// Argument slots (`realm_group_op(op, actor_guid, target_guid, arg_a, arg_b, arg_c)`), per op:
 /// - [`INVITE`] / [`UNINVITE`]: `target_guid` is the invitee/kicked member; the rest unused.
-/// - [`ACCEPT`]: `arg_a` is the acceptor's class and `arg_b` its race, 0 when the Gateway cannot
-///   read them. Realm-core holds no Character rows, so the Seeker row a queued party gains needs them.
+/// - [`ACCEPT`]: `arg_a` is the acceptor's class, 0 when the Gateway cannot read it. Realm-core
+///   holds no Character rows, so the Seeker row a queued party gains needs it. The rest unused.
 /// - [`DECLINE`]: `actor_guid` alone; every other slot unused.
 /// - [`LEAVE`]: `actor_guid` leaves; `arg_a` = a [`super::leave_cause`] value.
 /// - [`LOOT_METHOD`]: `arg_a` = loot setting, `target_guid` = the master looter, `arg_b` = the

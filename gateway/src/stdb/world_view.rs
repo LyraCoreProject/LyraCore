@@ -108,6 +108,9 @@ pub(crate) struct Viewer {
     /// at world entry from its race. A friend online/offline notice goes only to a same-team
     /// viewer, the faction separation the friends pane has in vanilla.
     pub(crate) team: u32,
+    /// The group events already relayed to this viewer, so one transaction's rows go out once
+    /// and in order.
+    pub(crate) group_events: GroupEventCursor,
 }
 
 impl Viewer {
@@ -1092,15 +1095,13 @@ fn register_shard_callbacks(
         &view,
         |v, row| mail_arrived(v, row),
     );
-    {
-        let coord = coord.clone();
-        wire_insert_live(
-            db.game_group_event(),
-            "game_group_event.insert",
-            &view,
-            move |v, row| group_event_appeared(v, &coord, row),
-        );
-    }
+    wire_group_events(
+        db,
+        "game_group_event.insert",
+        &view,
+        coord.clone(),
+        GroupEventSource::Shard(shard),
+    );
     {
         let insert_coord = coord.clone();
         wire_insert(
@@ -1269,15 +1270,13 @@ pub(crate) fn arm_realm_private(view: Arc<WorldView>, realm: Coordinator, coord:
         &view,
         |v, row| auction_notice_appeared(v, row),
     );
-    {
-        let coord = coord.clone();
-        wire_insert_live(
-            db.game_group_event(),
-            "realm.game_group_event.insert",
-            &view,
-            move |v, row| group_event_appeared(v, &coord, row),
-        );
-    }
+    wire_group_events(
+        db,
+        "realm.game_group_event.insert",
+        &view,
+        coord.clone(),
+        GroupEventSource::RealmCore,
+    );
     wire_insert_live(
         db.game_realm_chat_event(),
         "realm.game_realm_chat_event.insert",
@@ -1476,6 +1475,26 @@ fn wire_insert_live<T>(
             return;
         }
         guarded(label, || f(&view, row));
+    });
+}
+
+/// [`wire_insert_live`] for `game_group_event` from `source`. The dispatcher also gets the cached
+/// table, which already holds the whole transaction when the callback runs.
+fn wire_group_events(
+    db: &RemoteTables,
+    label: &'static str,
+    view: &Arc<WorldView>,
+    coord: Coordinator,
+    source: GroupEventSource,
+) {
+    let view = view.clone();
+    db.game_group_event().on_insert(move |ctx, row| {
+        if is_initial_apply(&ctx.event) {
+            return;
+        }
+        guarded(label, || {
+            group_event_appeared(&view, &coord, source, row, ctx.db.game_group_event().iter());
+        });
     });
 }
 
@@ -2722,10 +2741,16 @@ fn duel_event_appeared(view: &WorldView, coord: &Coordinator, shard: ShardId, ro
     }
 }
 
-/// A group/loot-roll/quest-share event landed → the kind-decoded packet to the row's RECIPIENT
-/// and nobody else (`coord` feeds the QUEST_SHARE detail
-/// JOIN inside the job).
-fn group_event_appeared(view: &WorldView, coord: &Coordinator, row: &GroupEvent) {
+/// A group/loot-roll/quest-share event landed → the kind-decoded packets to the row's RECIPIENT
+/// and nobody else (`coord` feeds the QUEST_SHARE detail JOIN inside the job). The recipient gets
+/// its rows of one transaction in the order the Module inserted them ([`GroupEventCursor::take`]).
+fn group_event_appeared(
+    view: &WorldView,
+    coord: &Coordinator,
+    source: GroupEventSource,
+    row: &GroupEvent,
+    cached: impl IntoIterator<Item = GroupEvent>,
+) {
     let Some(session) = view.session_of_owner(row.recipient_guid) else {
         return;
     };
@@ -2735,16 +2760,72 @@ fn group_event_appeared(view: &WorldView, coord: &Coordinator, row: &GroupEvent)
     if !super::subscriptions::private_recipient_audience(row.recipient_guid, viewer.self_guid) {
         return;
     }
-    let (row, coord) = (row.clone(), coord.clone());
+    let rows = viewer.group_events.take(source, row, cached);
+    if rows.is_empty() {
+        return;
+    }
+    let coord = coord.clone();
     let self_guid = viewer.self_guid;
     enqueue(viewer.clone(), move |viewer| {
-        let packets = super::subscriptions::group_event_outbound(&coord, self_guid, &row);
-        // A party frame sets every member's online flag, so Member Stats start over behind it.
-        if row.kind == lyracore_shared::group::event_kind::LIST {
-            viewer.member_stats.forget_all();
+        let mut packets = Vec::new();
+        for row in &rows {
+            packets.extend(super::subscriptions::group_event_outbound(
+                &coord, self_guid, row,
+            ));
+            // A party frame sets every member's online flag, so Member Stats start over behind it.
+            if row.kind == lyracore_shared::group::event_kind::LIST {
+                viewer.member_stats.forget_all();
+            }
         }
         packets
     });
+}
+
+/// The database a `game_group_event` row came from. Each database numbers its rows itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum GroupEventSource {
+    Shard(ShardId),
+    RealmCore,
+}
+
+/// The newest `game_group_event` id relayed to one viewer from each source database.
+#[derive(Default)]
+pub(crate) struct GroupEventCursor(Mutex<HashMap<GroupEventSource, u64>>);
+
+impl GroupEventCursor {
+    /// The rows to relay for the insert callback of `row`, oldest first.
+    ///
+    /// The SDK fires the inserts of one transaction in hash order, and the client must hear them
+    /// in insert order: a filled Meeting Stone party's `COMPLETE` comes before `SETQUEUE(0, NONE)`.
+    /// So the first callback of a transaction takes every row of that transaction for this
+    /// recipient from `cached`, which already holds the whole transaction, and the later callbacks
+    /// find theirs taken. Rows of one transaction share `created_at`.
+    fn take(
+        &self,
+        source: GroupEventSource,
+        row: &GroupEvent,
+        cached: impl IntoIterator<Item = GroupEvent>,
+    ) -> Vec<GroupEvent> {
+        let mut cursors = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        let cursor = cursors.entry(source).or_default();
+        if row.id <= *cursor {
+            return Vec::new();
+        }
+        let mut rows: Vec<GroupEvent> = cached
+            .into_iter()
+            .filter(|cached| {
+                cached.recipient_guid == row.recipient_guid
+                    && cached.created_at == row.created_at
+                    && cached.id > *cursor
+            })
+            .collect();
+        if !rows.iter().any(|cached| cached.id == row.id) {
+            rows.push(row.clone());
+        }
+        rows.sort_unstable_by_key(|cached| cached.id);
+        *cursor = rows.last().map_or(row.id, |last| last.id);
+        rows
+    }
 }
 
 /// A shard mirror delta is the point at which viewer-relative Loot Tag flags can be projected from
@@ -3318,6 +3399,7 @@ mod family_audience_tests {
             ignored: Mutex::default(),
             friends: Mutex::default(),
             team: lyracore_shared::faction::TEAM_ALLIANCE,
+            group_events: Default::default(),
         })
     }
 
@@ -4540,6 +4622,7 @@ mod family_audience_tests {
             ignored: Mutex::default(),
             friends: Mutex::default(),
             team: lyracore_shared::faction::TEAM_ALLIANCE,
+            group_events: Default::default(),
         });
         view.add_viewer_on_shard(old.clone(), CellKey::at(0, 0, 0, 0), 3);
         view.add_viewer_on_shard(replacement.clone(), CellKey::at(1, 2, 0, 0), 4);
@@ -5318,6 +5401,7 @@ mod realm_chat_relay_tests {
             ignored: Mutex::default(),
             friends: Mutex::default(),
             team: lyracore_shared::faction::TEAM_ALLIANCE,
+            group_events: Default::default(),
         });
         view.add_viewer_on_shard(viewer.clone(), CellKey::at(0, 0, 0, 0), shard);
         (viewer, rx)
@@ -5627,6 +5711,7 @@ mod account_claim_relay_tests {
             ignored: Mutex::default(),
             friends: Mutex::new(HashSet::from([FRIEND])),
             team,
+            group_events: Default::default(),
         });
         view.add_viewer_on_shard(viewer.clone(), CellKey::at(0, 0, 0, 0), shard);
         (viewer, rx)
@@ -5926,6 +6011,80 @@ mod account_claim_relay_tests {
             enqueue_at < read_at,
             "the team read (`claim_close_team`) must happen INSIDE the enqueued job, never before \
              it — the shared pump must not block on a read that can cross to another Shard"
+        );
+    }
+}
+
+#[cfg(test)]
+mod group_event_order_tests {
+    use super::{GroupEvent, GroupEventCursor, GroupEventSource};
+
+    const RECIPIENT: u64 = 7;
+
+    fn event(id: u64, recipient_guid: u64, created_micros: i64) -> GroupEvent {
+        GroupEvent {
+            id,
+            recipient_identity: spacetimedb_sdk::Identity::ZERO,
+            kind: 0,
+            other_guid: 0,
+            other_name: String::new(),
+            created_at: spacetimedb_sdk::Timestamp::from_micros_since_unix_epoch(created_micros),
+            payload: String::new(),
+            recipient_guid,
+        }
+    }
+
+    fn ids(rows: &[GroupEvent]) -> Vec<u64> {
+        rows.iter().map(|row| row.id).collect()
+    }
+
+    /// One transaction wrote rows 10 to 12 for the recipient and row 13 for someone else. Row 5 is
+    /// an older transaction's. The SDK fires the inserts in hash order; the recipient still gets
+    /// 10, 11, 12 once, in that order.
+    #[test]
+    fn the_first_callback_of_a_transaction_relays_its_rows_in_insert_order() {
+        let cached = [
+            event(5, RECIPIENT, 100),
+            event(12, RECIPIENT, 200),
+            event(10, RECIPIENT, 200),
+            event(13, 8, 200),
+            event(11, RECIPIENT, 200),
+        ];
+        let cursor = GroupEventCursor::default();
+        let source = GroupEventSource::RealmCore;
+
+        let first = cursor.take(source, &cached[1], cached.clone());
+        let later: Vec<GroupEvent> = [&cached[2], &cached[4]]
+            .into_iter()
+            .flat_map(|row| cursor.take(source, row, cached.clone()))
+            .collect();
+
+        assert_eq!(ids(&first), [10, 11, 12]);
+        assert!(later.is_empty());
+    }
+
+    /// The next transaction starts after the cursor, even with the same timestamp, and another
+    /// database's ids are counted apart.
+    #[test]
+    fn each_source_database_keeps_its_own_cursor() {
+        let cursor = GroupEventCursor::default();
+        let realm = [event(10, RECIPIENT, 200), event(11, RECIPIENT, 200)];
+        cursor.take(GroupEventSource::RealmCore, &realm[0], realm.clone());
+
+        let next = [
+            event(10, RECIPIENT, 200),
+            event(11, RECIPIENT, 200),
+            event(14, RECIPIENT, 200),
+        ];
+        let shard = [event(3, RECIPIENT, 200)];
+
+        assert_eq!(
+            ids(&cursor.take(GroupEventSource::RealmCore, &next[2], next.clone())),
+            [14]
+        );
+        assert_eq!(
+            ids(&cursor.take(GroupEventSource::Shard(0), &shard[0], shard.clone())),
+            [3]
         );
     }
 }

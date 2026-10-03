@@ -85,6 +85,7 @@ impl PlayerSubscriptions {
             ignored: Mutex::default(),
             friends: Mutex::default(),
             team: lyracore_shared::faction::TEAM_ALLIANCE,
+            group_events: Default::default(),
         });
         view.add_viewer_on_shard(
             viewer.clone(),
@@ -3963,6 +3964,7 @@ impl Coordinator {
             ignored: Mutex::new(ignored),
             friends: Mutex::new(friends),
             team,
+            group_events: Default::default(),
         });
         view.add_viewer(
             self,
@@ -4650,6 +4652,7 @@ mod tests {
             ignored: Mutex::default(),
             friends: Mutex::default(),
             team: lyracore_shared::faction::TEAM_ALLIANCE,
+            group_events: Default::default(),
         }
     }
 
@@ -7153,7 +7156,7 @@ mod tests {
         let body = decommented(top_level_fn_body_of("world_view.rs", "arm_realm_private"));
         let compact: String = body.chars().filter(|c| !c.is_whitespace()).collect();
         assert!(
-            compact.contains("wire_insert_live(db.game_group_event(),\"realm.game_group_event.insert\",&view,move|v,row|group_event_appeared(v,&coord,row));"),
+            compact.contains("wire_group_events(db,\"realm.game_group_event.insert\",&view,coord.clone(),GroupEventSource::RealmCore);"),
             "arm_realm_private no longer relays realm-core group events through \
              `group_event_appeared` (which also carries the QUEST_SHARE detail JOIN through a \
              WORLD handle — realm-core's cache has no quest catalogue)"
@@ -8300,6 +8303,10 @@ mod character_gone_durable_tests;
 #[cfg(test)]
 #[path = "subscriptions_roster_relay_durable_tests.rs"]
 mod roster_relay_durable_tests;
+
+#[cfg(test)]
+#[path = "subscriptions_meeting_stone_durable_tests.rs"]
+mod meeting_stone_durable_tests;
 
 #[cfg(test)]
 include!(concat!(env!("OUT_DIR"), "/package-coordinator-tests.rs"));

@@ -399,30 +399,27 @@ impl GroupBroadcastCooldowns {
 /// `realm_group_op`'s argument slots after the actor: `(op, target_guid, arg_a, arg_b, arg_c)`.
 type RealmOpArgs = (u8, u64, u8, u8, u64);
 
-/// The class and race of a Character accepting an invite. Realm-core holds no Character rows, so an
-/// ACCEPT conveys them for the Seeker row a queued party gains. 0 when no World Shard names the
-/// Character.
+/// The class of a Character accepting an invite. Realm-core holds no Character rows, so an ACCEPT
+/// conveys it for the Seeker row a queued party gains. 0 when no World Shard names the Character.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct AcceptorFacts {
     class: u8,
-    race: u8,
 }
 
 impl AcceptorFacts {
     /// What `realm_group_op` receives for every op but ACCEPT.
-    const NONE: Self = Self { class: 0, race: 0 };
+    const NONE: Self = Self { class: 0 };
 
-    /// The facts an ACCEPT conveys, read realm-wide. A failed read conveys 0s rather than losing
+    /// The facts an ACCEPT conveys, read realm-wide. A failed read conveys 0 rather than losing
     /// the accept: the Module treats an unknown class as a seat with no role.
     fn of<St: WorldStore + ?Sized>(store: &St, guid: u64) -> Self {
         match presence::character_anywhere(store, guid) {
             Ok(Some(character)) => Self {
                 class: character.class,
-                race: character.race,
             },
             Ok(None) => Self::NONE,
             Err(error) => {
-                log::warn!("party: class and race of acceptor {guid} unread: {error:#}");
+                log::warn!("party: class of acceptor {guid} unread: {error:#}");
                 Self::NONE
             }
         }
@@ -442,7 +439,7 @@ impl Op {
     fn realm_args(self, acceptor: AcceptorFacts) -> RealmOpArgs {
         match self {
             Op::Invite(target) => (realm_op::INVITE, target, 0, 0, 0),
-            Op::Accept => (realm_op::ACCEPT, 0, acceptor.class, acceptor.race, 0),
+            Op::Accept => (realm_op::ACCEPT, 0, acceptor.class, 0, 0),
             Op::Decline => (realm_op::DECLINE, 0, 0, 0, 0),
             Op::Leave => (realm_op::LEAVE, 0, 0, 0, 0),
             Op::Uninvite(target) => (realm_op::UNINVITE, target, 0, 0, 0),

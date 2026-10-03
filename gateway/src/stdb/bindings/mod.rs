@@ -282,6 +282,7 @@ pub mod debug_stage_mail_expiry_fixture_reducer;
 pub mod debug_stage_mail_legacy_fixture_reducer;
 pub mod debug_stage_mail_take_fixture_reducer;
 pub mod debug_stage_meeting_stone_character_reducer;
+pub mod debug_stage_meeting_stone_claim_reducer;
 pub mod debug_stage_meeting_stone_group_reducer;
 pub mod debug_stage_meeting_stone_reducer;
 pub mod debug_stage_ranged_lethal_damage_floor_fixture_reducer;
@@ -1446,6 +1447,7 @@ pub use debug_stage_mail_expiry_fixture_reducer::debug_stage_mail_expiry_fixture
 pub use debug_stage_mail_legacy_fixture_reducer::debug_stage_mail_legacy_fixture;
 pub use debug_stage_mail_take_fixture_reducer::debug_stage_mail_take_fixture;
 pub use debug_stage_meeting_stone_character_reducer::debug_stage_meeting_stone_character;
+pub use debug_stage_meeting_stone_claim_reducer::debug_stage_meeting_stone_claim;
 pub use debug_stage_meeting_stone_group_reducer::debug_stage_meeting_stone_group;
 pub use debug_stage_meeting_stone_reducer::debug_stage_meeting_stone;
 pub use debug_stage_ranged_lethal_damage_floor_fixture_reducer::debug_stage_ranged_lethal_damage_floor_fixture;
@@ -3103,6 +3105,10 @@ pub enum Reducer {
         y: f32,
         z: f32,
     },
+    DebugStageMeetingStoneClaim {
+        guid: u64,
+        account_id: u64,
+    },
     DebugStageMeetingStoneGroup {
         leader_guid: u64,
         member_guids: Vec<u64>,
@@ -4558,6 +4564,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugStageMeetingStoneCharacter { .. } => {
                 "debug_stage_meeting_stone_character"
             }
+            Reducer::DebugStageMeetingStoneClaim { .. } => "debug_stage_meeting_stone_claim",
             Reducer::DebugStageMeetingStoneGroup { .. } => "debug_stage_meeting_stone_group",
             Reducer::DebugStageRangedLethalDamageFloorFixture { .. } => {
                 "debug_stage_ranged_lethal_damage_floor_fixture"
@@ -6224,6 +6231,13 @@ Reducer::DebugStageMeetingStone{
                 x: x.clone(),
                 y: y.clone(),
                 z: z.clone(),
+}),
+            Reducer::DebugStageMeetingStoneClaim{
+                guid,
+                account_id,
+}             => __sats::bsatn::to_vec(&debug_stage_meeting_stone_claim_reducer::DebugStageMeetingStoneClaimArgs {
+                guid: guid.clone(),
+                account_id: account_id.clone(),
 }),
             Reducer::DebugStageMeetingStoneGroup{
                 leader_guid,

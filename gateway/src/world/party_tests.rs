@@ -1473,7 +1473,7 @@ fn a_players_invite_to_a_session_less_bot_is_answered_by_the_bot_itself() {
         party_state.ops.clone(),
         vec![
             (realm_op::INVITE, GINGER, BOT, 0, 0, 0),
-            (realm_op::ACCEPT, BOT, 0, 1, 1, 0)
+            (realm_op::ACCEPT, BOT, 0, 1, 0, 0)
         ],
         "the accept must run on realm-core with the BOT as the actor — never the inviter, and never 0"
     );
@@ -1654,7 +1654,7 @@ fn a_bot_that_cannot_join_declines_out_loud_instead_of_leaving_the_dialog_hangin
         state.ops.clone(),
         vec![
             (realm_op::INVITE, GINGER, BOT, 0, 0, 0),
-            (realm_op::ACCEPT, BOT, 0, 1, 1, 0),
+            (realm_op::ACCEPT, BOT, 0, 1, 0, 0),
             // …and the decline is the bot's own too, not the inviter's.
             (realm_op::DECLINE, BOT, 0, 0, 0, 0),
         ],
@@ -1724,8 +1724,8 @@ fn every_party_op_reaches_realm_core_in_its_declared_argument_slots() {
         vec![
             // INVITE: the target rides `target_guid`, nothing else is used.
             (realm_op::INVITE, GINGER, VIM, 0, 0, 0),
-            // ACCEPT: the acceptor's class in arg_a and race in arg_b, the fixture's Human Warrior.
-            (realm_op::ACCEPT, VIM, 0, 1, 1, 0),
+            // ACCEPT: the acceptor's class in arg_a, the fixture's Warrior.
+            (realm_op::ACCEPT, VIM, 0, 1, 0, 0),
             // LOOT_METHOD: setting in arg_a, MASTER in target_guid, threshold in arg_b —
             // CMSG_LOOT_METHOD's own field order.
             (realm_op::LOOT_METHOD, GINGER, VIM, 2, 4, 0),
@@ -1901,7 +1901,7 @@ fn a_real_session_syncs_its_party_at_login_and_routes_an_invite_to_realm_core() 
             // World entry asks for the Party's Target Icons after the list.
             (realm_op::TARGET_ICON, GINGER, 0, 0xFF, 0, 0),
             (realm_op::INVITE, GINGER, VIM, 0, 0, 0),
-            (realm_op::ACCEPT, GINGER, 0, 1, 1, 0),
+            (realm_op::ACCEPT, GINGER, 0, 1, 0, 0),
             (realm_op::DECLINE, GINGER, 0, 0, 0, 0),
             // CMSG_LOOT_METHOD's own field order: setting in arg_a, MASTER in target_guid,
             // threshold in arg_b.
@@ -1977,7 +1977,7 @@ fn a_bot_invite_forms_a_party_on_realm_core_across_a_shard_boundary() {
         party_state.ops.clone(),
         vec![
             (realm_op::INVITE, BOT, FAR_BOT, 0, 0, 0),
-            (realm_op::ACCEPT, FAR_BOT, 0, 1, 1, 0)
+            (realm_op::ACCEPT, FAR_BOT, 0, 1, 0, 0)
         ],
         "both halves must run on realm-core, attributed to the right actor each time — the bot as \
          itself for both the invite and (through the session-less answer) the accept"
@@ -2094,7 +2094,7 @@ fn the_intent_op_byte_picks_the_party_op_that_runs() {
         party_state.ops.clone(),
         vec![
             (realm_op::INVITE, BOT, FAR_BOT, 0, 0, 0),
-            (realm_op::ACCEPT, FAR_BOT, 0, 1, 1, 0),
+            (realm_op::ACCEPT, FAR_BOT, 0, 1, 0, 0),
             (realm_op::LEAVE, BOT, 0, 0, 0, 0),
         ],
         "the invite runs INVITE (plus the session-less answer) and the leave runs LEAVE, each \
@@ -4302,32 +4302,32 @@ fn accepts(realm: &InMemoryStore) -> Vec<(u8, u64, u64, u8, u8, u64)> {
         .collect()
 }
 
-/// A client's Realm-core ACCEPT conveys the acceptor's class in `arg_a` and race in `arg_b`, so a
-/// queued party can give the joiner a Seeker row.
+/// A client's Realm-core ACCEPT conveys the acceptor's class in `arg_a`, so a queued party can give
+/// the joiner a Seeker row.
 #[test]
-fn a_client_accept_carries_the_acceptors_class_and_race() {
+fn a_client_accept_carries_the_acceptors_class() {
     let (realm, world, instances) = dwarf_priest_topology();
     party::run(world.as_ref(), 7, GINGER, party::Op::Invite(VIM)).unwrap();
 
     party::run(instances.as_ref(), 8, VIM, party::Op::Accept).unwrap();
 
-    assert_eq!(accepts(&realm), [(realm_op::ACCEPT, VIM, 0, 5, 3, 0)]);
+    assert_eq!(accepts(&realm), [(realm_op::ACCEPT, VIM, 0, 5, 0, 0)]);
 }
 
 /// A playerbot's automatic accept reads its facts from the Shard that holds it, here not the
 /// inviter's.
 #[test]
-fn a_playerbot_accept_carries_its_class_and_race_from_its_own_shard() {
+fn a_playerbot_accept_carries_its_class_from_its_own_shard() {
     let (realm, world, _instances) = dwarf_priest_topology();
 
     party::run(world.as_ref(), 7, GINGER, party::Op::Invite(FAR_BOT)).unwrap();
 
-    assert_eq!(accepts(&realm), [(realm_op::ACCEPT, FAR_BOT, 0, 5, 3, 0)]);
+    assert_eq!(accepts(&realm), [(realm_op::ACCEPT, FAR_BOT, 0, 5, 0, 0)]);
 }
 
-/// An acceptor no World Shard names conveys 0s, and the accept still runs.
+/// An acceptor no World Shard names conveys class 0, and the accept still runs.
 #[test]
-fn an_accept_nobody_can_name_conveys_zero_class_and_race() {
+fn an_accept_nobody_can_name_conveys_zero_class() {
     let (realm, world, _instances, _calls) = party_topology();
     realm.party.lock().unwrap().invites.push((99, GINGER));
 
