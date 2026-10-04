@@ -292,8 +292,6 @@ impl Standalone {
                     "-s",
                     &self.server,
                     "--print-initial-update",
-                    "--num-updates",
-                    &count.to_string(),
                     "--timeout",
                     "45",
                     &self.database,
@@ -308,11 +306,14 @@ impl Standalone {
         assert!(reader.read_line(&mut initial).unwrap() > 0);
         serde_json::from_str::<serde_json::Value>(&initial).expect("initial subscription result");
         action();
-        let updates = reader
+        // Keep the CLI alive until its output is read. Its update limit can exit before the
+        // final asynchronous stdout write reaches this pipe.
+        let updates: Vec<_> = reader
             .lines()
+            .take(count as usize)
             .map(|line| serde_json::from_str(&line.unwrap()).expect("transaction update"))
             .collect();
-        assert!(child.0.wait().unwrap().success(), "subscription failed");
+        assert_eq!(updates.len(), count as usize, "subscription ended early");
         updates
     }
 
