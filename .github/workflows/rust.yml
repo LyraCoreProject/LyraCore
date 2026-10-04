@@ -58,3 +58,4 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The history prune deletes database files on the realm host; check its rules on a fake data dir.
       - run: bash deploy/spacetimedb-prune-test.sh
+      - run: python3 -m unittest discover -s deploy -p 'test_*.py'

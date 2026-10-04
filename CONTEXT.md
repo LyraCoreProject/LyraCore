@@ -83,8 +83,9 @@ The identity that publishes and owns the shards, and the only caller of Gateway 
 
 **Standalone Supervisor**:
 The systemd unit that runs a host's `spacetimedb-standalone` process. The tracked artifact is
-`deploy/systemd/spacetimedb-standalone.service`. It restarts every standalone exit, gives each
-restart 524288 file descriptors, and appends standalone stderr to a durable log.
+`deploy/systemd/spacetimedb-standalone.service`. It waits thirty seconds before restarting an exit,
+allows five starts in five minutes, gives each restart 524288 file descriptors, and appends
+standalone stderr to a durable log. Exhausting the start limit requires Operator recovery.
 
 **Service Reconciliation**:
 Making a host's Standalone Supervisor match the unit tracked in the checkout. `lyracore service
@@ -218,6 +219,11 @@ _Avoid_: invite intent, group request, party order
 **Bot Controller**:
 The durable selector for Legacy, RecordOnly, Cohort, or Frozen behavior. RecordOnly records decisions
 and authorizes no bot gameplay. Frozen cancels Foreground Actions and authorizes no new bot gameplay.
+
+**Bot Capacity Lease**:
+An optional host-issued expiry in the playerbots Package Config. A managed Realm renews it only
+while its disk reserve is available. Expiry refuses spawning and controller activation and freezes
+existing bots. Recovery never resumes frozen bots automatically.
 
 **Provisioning Profile**:
 A revisioned, bounded upkeep policy for a supported bot class and role. It selects free training and

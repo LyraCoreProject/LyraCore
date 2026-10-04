@@ -1,9 +1,10 @@
 [Unit]
-Description=Prune SpacetimeDB history daily
+Description=Prune SpacetimeDB history every fifteen minutes
 
 [Timer]
-OnCalendar=daily
-RandomizedDelaySec=30min
+OnCalendar=*:0/15
+RandomizedDelaySec=30s
+AccuracySec=10s
 Persistent=true
 
 [Install]

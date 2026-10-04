@@ -20,6 +20,12 @@ need "$unit" '^Restart=always$' \
   "a clean standalone exit is restarted"
 need "$unit" '^RestartSec=[1-9][0-9]*s$' \
   "restart backoff is explicit"
+need "$unit" '^RestartSec=30s$' \
+  "failed starts wait thirty seconds"
+need "$unit" '^StartLimitIntervalSec=300s$' \
+  "restart attempts are counted across five minutes"
+need "$unit" '^StartLimitBurst=5$' \
+  "five failed starts stop the retry loop"
 need "$unit" '^LimitNOFILE=524288$' \
   "every standalone process receives the capacity FD limit"
 need "$unit" '^StandardError=append:/var/log/lyracore/spacetimedb-standalone\.log$' \

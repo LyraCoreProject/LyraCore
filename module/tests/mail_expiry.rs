@@ -261,3 +261,31 @@ fn a_cod_payment_fenced_before_the_letter_expires_comes_back_to_the_payer() {
     standalone.assert_call("realm_mail_take_money", &[&taker, &refund["id"]]);
     assert_eq!(purse(&standalone), PURSE, "no copper was lost");
 }
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn subscription_capture_keeps_both_back_to_back_mail_arrivals() {
+    let mut node = Standalone::start("mail-capture-output");
+    node.publish_module();
+    node.assert_call("claim_operator", &[]);
+    node.assert_call("install_guid_range", &["0"]);
+    for iteration in 0..32 {
+        let newest = node
+            .query_rows("SELECT id FROM game_mail_arrival")
+            .iter()
+            .map(|row| row["id"].parse::<u64>().unwrap())
+            .max()
+            .unwrap_or(0);
+        let query = format!(
+            "SELECT * FROM game_mail_arrival WHERE recipient_guid = {SENDER} AND id > {newest}"
+        );
+        let arrivals = node.capture_updates(&query, 2, || {
+            node.assert_call("debug_stage_mail_expiry_fixture", &[]);
+        });
+        assert_eq!(
+            changes(&arrivals, "inserts"),
+            [1, 1],
+            "capture iteration {iteration}: {arrivals:?}"
+        );
+    }
+}

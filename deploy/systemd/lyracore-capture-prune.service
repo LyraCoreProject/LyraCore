@@ -1,0 +1,9 @@
+[Unit]
+Description=Expire completed routine diagnostic captures
+
+[Service]
+Type=oneshot
+User=lyracore
+Group=lyracore
+ExecStart=/usr/bin/python3 /opt/lyracore/bin/lyracore-capture.py --prune
+UMask=0077
