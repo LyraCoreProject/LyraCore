@@ -3,6 +3,7 @@
 import argparse
 import fcntl
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -27,9 +28,14 @@ def retained(root):
             continue
         try:
             meta = json.loads(marker.read_text())
+            if not isinstance(meta, dict):
+                continue
+            finished = meta.get('finished_at')
+            if not isinstance(finished, (int, float)) or isinstance(finished, bool) or not math.isfinite(finished):
+                continue
             if meta.get('format') == MARKER:
                 size = sum(p.stat().st_size for p in path.iterdir() if p.is_file() and not p.is_symlink())
-                result.append((meta['finished_at'], size, path))
+                result.append((finished, size, path))
         except (ValueError, KeyError):
             continue
     return sorted(result)

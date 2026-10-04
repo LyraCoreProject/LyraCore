@@ -31,10 +31,41 @@ class DiskPolicyTests(unittest.TestCase):
         self.assertEqual(guard.decide(30 * guard.GIB, False), 'healthy')
 
     def test_growth_and_expiring_lease_have_explicit_units(self):
-        status = guard.sample({'databases': ['world']}, {'sampled_at': 100, 'free_bytes': 50 * guard.GIB}, 160, 49 * guard.GIB)
+        status = guard.sample({'databases': ['world']}, {'state': 'healthy', 'sampled_at': 100, 'free_bytes': 50 * guard.GIB}, 160, 49 * guard.GIB)
         self.assertEqual(status['lease_until_micros'], 340_000_000)
         self.assertAlmostEqual(status['growth_bytes_per_second'], guard.GIB / 60)
         self.assertAlmostEqual(status['hours_to_reserve'], 29 / 60)
+
+    def test_lost_status_requires_explicit_resume_even_with_free_space(self):
+        self.assertEqual(guard.sample({'databases': ['world']}, {}, 160, 50 * guard.GIB)['lease_until_micros'], 0)
+        self.assertGreater(guard.sample({'databases': ['world']}, {}, 160, 50 * guard.GIB, True)['lease_until_micros'], 0)
+
+    def test_failed_or_overdue_pruning_revokes_capacity_and_latches_suspension(self):
+        for result, age in [('exit-code', 10), ('success', 1801), ('success', None)]:
+            status = {'state': 'healthy', 'lease_until_micros': 300_000_000}
+            self.assertFalse(guard.require_recent_prune(status, result, age))
+            self.assertEqual(status['state'], 'suspended')
+            self.assertEqual(status['lease_until_micros'], 0)
+            recovered = guard.sample({'databases': ['world']}, status, 160, 50 * guard.GIB)
+            self.assertEqual(recovered['state'], 'suspended')
+
+    def test_invalid_config_names_the_offending_field(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'config.json'
+            for value, message in [([], 'JSON object'), ({}, 'data_directory'), ({'data_directory': 10}, 'data_directory')]:
+                path.write_text(json.dumps(value))
+                with self.assertRaisesRegex(ValueError, message):
+                    guard.load_config(path)
+
+    def test_unrecognized_capture_metadata_is_preserved(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for index, meta in enumerate([[], {'format': capture.MARKER, 'finished_at': 'broken'}, {'format': capture.MARKER, 'finished_at': None}]):
+                path = root / str(index)
+                path.mkdir()
+                (path / 'complete.json').write_text(json.dumps(meta))
+            capture.prune(root, time.time(), budget=0)
+            self.assertEqual(len(list(root.iterdir())), 3)
 
     def test_partial_reducer_failure_is_reported_and_remaining_shards_are_attempted(self):
         attempts = []

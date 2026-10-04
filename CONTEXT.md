@@ -223,7 +223,7 @@ and authorizes no bot gameplay. Frozen cancels Foreground Actions and authorizes
 **Bot Capacity Lease**:
 An optional host-issued expiry in the playerbots Package Config. A managed Realm renews it only
 while its disk reserve is available. Expiry refuses spawning and controller activation and freezes
-due bots. Recovery never resumes frozen bots automatically.
+existing bots. Recovery never resumes frozen bots automatically.
 
 **Provisioning Profile**:
 A revisioned, bounded upkeep policy for a supported bot class and role. It selects free training and

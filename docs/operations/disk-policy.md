@@ -6,18 +6,18 @@ deletion inside `replicas/`.
 
 The host disk monitor runs every minute. It warns below 30 GiB free and suspends bots below 20 GiB.
 It records the last sample, growth rate, estimated hours until the reserve and per-Shard renewal
-failures in `/var/lib/lyracore-disk-guard/status.json`. Failed or overdue pruning also produces an
-error and a failed monitor service. Journal priorities make warnings and errors visible to host
+failures in `/var/lib/lyracore-disk-guard/status.json`. Failed or overdue pruning also suspends
+capacity and produces a failed monitor service. Journal priorities make warnings and errors visible to host
 monitoring; these units do not send email or chat notifications.
 
 Each successful sample renews a three-minute Bot Capacity Lease on every configured Shard through
 `set_package_config`. Playerbots must include the Package capacity check before enabling this
-monitor. Expiry refuses new bots and controller activation; the Runner freezes existing due bots
+monitor. Expiry refuses new bots and controller activation; the Runner freezes existing bots
 in bounded batches and cancels their actions. A failed monitor therefore cannot leave a permanent
 permission to spawn. The filesystem and the monitor must refer to the Standalone's actual data
 directory. Keep the Shard list aligned with the independently approved Gateway configuration.
 
-The monitor latches a low-disk suspension. After repairing the cause and restoring at least 30 GiB,
+The monitor starts suspended when its status file is absent and latches low-disk or failed-pruning suspension. After repairing the cause and restoring at least 30 GiB,
 run it with `--resume` as the service account. This renews capacity but leaves bots Frozen. Select
 their controllers explicitly after verifying the population and reserve. Do not remove the Package
 Config key to bypass the Gate.
@@ -37,6 +37,8 @@ sudo systemctl daemon-reload
 sudo systemctl start spacetimedb-prune.service
 sudo systemctl enable --now lyracore-disk-guard.timer lyracore-capture-prune.timer
 sudo systemctl start lyracore-disk-guard.service
+# After proving expiry refuses spawning on every Shard:
+sudo -u lyracore python3 /opt/lyracore/bin/lyracore-disk-guard.py /etc/lyracore/disk-guard.json --resume
 ```
 
 The Package uses an absent lease key only for unmanaged Realms. Installation must prove a lease
