@@ -43,7 +43,14 @@ fn failure_text(node: &Standalone, reducer: &str, args: &[&str]) -> String {
 
 /// Every LIST row one reducer call inserted, decoded.
 fn lists_pushed_by(node: &Standalone, action: impl FnOnce()) -> Vec<(u64, RosterPayload)> {
-    let updates = node.capture_updates("SELECT * FROM game_group_event WHERE kind = 1", 1, action);
+    let newest = node
+        .query_rows("SELECT id FROM game_group_event")
+        .iter()
+        .map(|row| row["id"].parse::<u64>().unwrap())
+        .max()
+        .unwrap_or(0);
+    let query = format!("SELECT * FROM game_group_event WHERE kind = 1 AND id > {newest}");
+    let updates = node.capture_updates(&query, 1, action);
     updates
         .iter()
         .flat_map(|update| {
@@ -85,6 +92,25 @@ fn roster_revision(node: &Standalone) -> u64 {
     node.query_rows("SELECT revision FROM game_group_roster_revision")[0]["revision"]
         .parse()
         .unwrap()
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+fn expired_roster_rows_do_not_end_the_next_roster_capture() {
+    let mut realm = Standalone::start("raid-roster-capture");
+    realm.publish_module();
+    realm.assert_call("claim_operator", &[]);
+    join(&realm, 1, 2);
+
+    let lists = lists_pushed_by(&realm, || {
+        // Let event GC delete the old Party list while the subscription is open.
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        group_op(&realm, RAID_CONVERT, 1, 0);
+    });
+    let mut recipients: Vec<_> = lists.iter().map(|(guid, _)| *guid).collect();
+    recipients.sort_unstable();
+    assert_eq!(recipients, [1, 2]);
+    assert!(lists.iter().all(|(_, list)| list.kind == GroupKind::Raid));
 }
 
 #[test]

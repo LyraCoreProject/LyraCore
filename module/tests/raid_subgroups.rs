@@ -67,7 +67,14 @@ fn lists_pushed_by(
     node: &Standalone,
     action: impl FnOnce(),
 ) -> Vec<(u64, lyracore_shared::group::RosterPayload)> {
-    let updates = node.capture_updates("SELECT * FROM game_group_event WHERE kind = 1", 1, action);
+    let newest = node
+        .query_rows("SELECT id FROM game_group_event")
+        .iter()
+        .map(|row| row["id"].parse::<u64>().unwrap())
+        .max()
+        .unwrap_or(0);
+    let query = format!("SELECT * FROM game_group_event WHERE kind = 1 AND id > {newest}");
+    let updates = node.capture_updates(&query, 1, action);
     updates
         .iter()
         .flat_map(|update| {
