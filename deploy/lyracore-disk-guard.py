@@ -68,13 +68,14 @@ def sample(config, previous, now, free, resume=False):
 
 def renew(config, status, run=subprocess.run):
     failures = []
+    timeout = min(10.0, 45.0 / len(config['databases']))
     for database in config['databases']:
         args = [config['spacetime'], 'call', '--server', 'local', database, '--',
                 'set_package_config', json.dumps('playerbots'),
                 json.dumps('capacity_until_micros'),
                 json.dumps(str(status['lease_until_micros'])), 'true']
         try:
-            result = run(args, capture_output=True, timeout=10)
+            result = run(args, capture_output=True, timeout=timeout)
             if result.returncode:
                 failures.append(database)
         except (OSError, subprocess.TimeoutExpired):

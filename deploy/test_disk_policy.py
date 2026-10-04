@@ -78,6 +78,22 @@ class DiskPolicyTests(unittest.TestCase):
         self.assertEqual(attempts[0][-2:], ['"0"', 'true'])
         self.assertIn('local', attempts[0])
 
+    def test_renewal_time_budget_covers_more_than_four_shards(self):
+        timeouts = []
+        def run(args, **kwargs):
+            timeouts.append(kwargs['timeout'])
+            raise subprocess.TimeoutExpired(args, kwargs['timeout'])
+        shards = ['shard-' + str(n) for n in range(8)]
+        self.assertEqual(guard.renew({'spacetime': '/pinned/cli', 'databases': shards}, {'lease_until_micros': 0}, run), shards)
+        self.assertLessEqual(sum(timeouts), 45)
+
+    def test_silent_command_times_out_without_holding_capture_open(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            code = capture.capture(root, 'silent', [sys.executable, '-c', 'import time; time.sleep(60)'], timeout=0.05)
+            self.assertEqual(code, 124)
+            self.assertTrue(json.loads((root / 'silent/complete.json').read_text())['timed_out'])
+
     def test_capture_bounds_output_preserves_exit_status_and_last_lines(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

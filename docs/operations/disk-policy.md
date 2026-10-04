@@ -32,8 +32,12 @@ existing SpacetimeDB login.
 ```bash
 sudo install -o root -g root -m 0755 deploy/lyracore-disk-guard.py deploy/lyracore-capture.py /opt/lyracore/bin/
 sudo install -o root -g root -m 0644 deploy/systemd/lyracore-disk-guard.{service,timer} deploy/systemd/lyracore-capture-prune.{service,timer} /etc/systemd/system/
+sudo install -o root -g root -m 0644 deploy/systemd/spacetimedb-prune.timer /etc/systemd/system/
 sudo install -d -o lyracore -g lyracore -m 0700 /var/lib/lyracore/routine-captures
 sudo systemctl daemon-reload
+sudo systemctl enable --now spacetimedb-prune.timer
+sudo systemctl restart spacetimedb-prune.timer
+sudo systemctl list-timers spacetimedb-prune.timer
 sudo systemctl start spacetimedb-prune.service
 sudo systemctl enable --now lyracore-disk-guard.timer lyracore-capture-prune.timer
 sudo systemctl start lyracore-disk-guard.service
@@ -56,7 +60,9 @@ python3 /opt/lyracore/bin/lyracore-capture.py unique-run-name -- command argumen
 ```
 
 Each capture keeps up to 256 MiB of initial output and a 64 KiB tail, plus exit status and truncation
-counts. It continues draining output after reaching the limit so the command can finish. The shared
+counts. It continues draining output after reaching the limit so the command can finish. Commands
+have a one-hour lifetime limit, adjustable with `--timeout-seconds` before the capture name. Timeout
+terminates the command's process group and records exit 124. The shared
 lock refuses concurrent captures instead of allowing the budget to race. Completed captures expire
 after seven days or when their combined size exceeds 2 GiB, oldest first. An hourly timer expires
 them even when no new capture starts. Incomplete and unrecognized files are preserved and consume
