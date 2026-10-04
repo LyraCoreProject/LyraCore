@@ -198,8 +198,10 @@ separate, resolvable convention and are unaffected by this.
 
 The gateway only recovers a coordinator connection when a healthy standalone node comes back. Run
 that node under the committed `deploy/systemd/spacetimedb-standalone.service` unit, rather than in
-`nohup`, `screen`, or a login shell. The unit restarts **every** standalone exit, gives every
-restart `524288` file descriptors, and appends standalone stderr to
+`nohup`, `screen`, or a login shell. The unit waits thirty seconds between restart attempts and
+allows five starts in five minutes. After repairing a start-limit failure, an Operator runs
+`systemctl reset-failed spacetimedb-standalone` before starting it again. It gives every
+restart `524288` file descriptors and appends standalone stderr to
 `/var/log/lyracore/spacetimedb-standalone.log`.
 
 Install the exact 2.7.1 `spacetimedb-standalone` binary at
@@ -254,8 +256,8 @@ starting. `deploy/spacetimedb-prune.sh` follows those rules:
   deletes only a run of the oldest segments, so no gap can open;
 - it deletes module logs from before today (UTC), and skips files changed in the last 30 minutes.
 
-It is safe with the node running. Without `--apply` it only reports. Install it as root, with a daily
-timer:
+It is safe with the node running. Without `--apply` it only reports. Install it as root, with the
+fifteen-minute timer. Daily cleanup filled Argus's disk during a 1,000-bot run:
 
 ```bash
 sudo install -d /opt/lyracore/bin
@@ -270,6 +272,10 @@ Never delete files under `replicas/` by hand. Deleting a segment in the middle, 
 snapshot, makes the database unrecoverable. Cap journald too: the gateway logs continuously, and
 journald's default cap is 4 GB. Put `SystemMaxUse=500M` under `[Journal]` in
 `/etc/systemd/journald.conf.d/lyracore.conf` and restart `systemd-journald`.
+
+Install the [disk reserve and diagnostic retention policy](./operations/disk-policy.md) before
+another sustained bot run. A retention timer does not protect the Realm if pruning fails or the
+retained recovery history exceeds available space.
 
 ### Live capacity-edge node-death validation (human-authorized)
 

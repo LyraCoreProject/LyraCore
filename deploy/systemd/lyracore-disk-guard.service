@@ -1,0 +1,13 @@
+[Unit]
+Description=Protect Realm disk reserve and playerbot capacity
+After=spacetimedb-standalone.service
+
+[Service]
+Type=oneshot
+User=lyracore
+Group=lyracore
+WorkingDirectory=/home/lyracore/LyraCore
+ExecStart=/usr/bin/python3 /opt/lyracore/bin/lyracore-disk-guard.py /etc/lyracore/disk-guard.json
+TimeoutStartSec=55s
+StateDirectory=lyracore-disk-guard
+UMask=0077

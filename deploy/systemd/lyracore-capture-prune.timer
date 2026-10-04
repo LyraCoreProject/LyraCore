@@ -1,0 +1,9 @@
+[Unit]
+Description=Check routine diagnostic retention hourly
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+
+[Install]
+WantedBy=timers.target
