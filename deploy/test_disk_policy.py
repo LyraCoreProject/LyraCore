@@ -80,12 +80,22 @@ class DiskPolicyTests(unittest.TestCase):
 
     def test_renewal_time_budget_covers_more_than_four_shards(self):
         timeouts = []
+        elapsed = [0.0]
         def run(args, **kwargs):
             timeouts.append(kwargs['timeout'])
+            elapsed[0] += kwargs['timeout'] + 0.5
             raise subprocess.TimeoutExpired(args, kwargs['timeout'])
         shards = ['shard-' + str(n) for n in range(8)]
-        self.assertEqual(guard.renew({'spacetime': '/pinned/cli', 'databases': shards}, {'lease_until_micros': 0}, run), shards)
-        self.assertLessEqual(sum(timeouts), 45)
+        self.assertEqual(guard.renew({'spacetime': '/pinned/cli', 'databases': shards}, {'lease_until_micros': 0}, run, lambda: elapsed[0]), shards)
+        self.assertEqual(len(timeouts), len(shards))
+        self.assertLessEqual(sum(timeouts) + 0.5 * (len(shards) - 1), 45)
+
+    def test_renewal_reports_unattempted_shards_when_deadline_is_exhausted(self):
+        elapsed = [0.0]
+        def run(args, **kwargs):
+            elapsed[0] = 46
+            return subprocess.CompletedProcess(args, 0)
+        self.assertEqual(guard.renew({'spacetime': '/pinned/cli', 'databases': ['first', 'second']}, {'lease_until_micros': 0}, run, lambda: elapsed[0]), ['second'])
 
     def test_silent_command_times_out_without_holding_capture_open(self):
         with tempfile.TemporaryDirectory() as directory:

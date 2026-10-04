@@ -66,10 +66,15 @@ def sample(config, previous, now, free, resume=False):
     }
 
 
-def renew(config, status, run=subprocess.run):
+def renew(config, status, run=subprocess.run, clock=time.monotonic):
     failures = []
-    timeout = min(10.0, 45.0 / len(config['databases']))
-    for database in config['databases']:
+    deadline = clock() + 45
+    for index, database in enumerate(config['databases']):
+        remaining = deadline - clock()
+        if remaining <= 0:
+            failures.extend(config['databases'][index:])
+            break
+        timeout = min(10.0, remaining / (len(config['databases']) - index))
         args = [config['spacetime'], 'call', '--server', 'local', database, '--',
                 'set_package_config', json.dumps('playerbots'),
                 json.dumps('capacity_until_micros'),
