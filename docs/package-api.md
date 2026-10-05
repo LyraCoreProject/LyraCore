@@ -302,6 +302,11 @@ there. The caller writes the row. A mover's stored position can lag its leg, so 
 position moves the client back. A blocked Route Path segment or changed navigation inputs halt the
 stop where a leg advance would halt, so it never lands past an obstruction.
 
+`creatures::tick::emit_creature_path(ctx, mover, points, run)` sends the mover along a checked Route
+Path and writes the row. A mover on a leg starts the path from the point that
+`stop_where_rendered` would stop it at, so a renewal between two advance firings does not move the
+client back.
+
 `actor::area_trigger_route(ctx, trigger_id)` reads one exact imported AreaTrigger source volume and
 target map. It exposes the source center and containment rule for Candidate movement while keeping
 the landing coordinates private. `actor::enter_sessionless_areatrigger` rechecks the current body,

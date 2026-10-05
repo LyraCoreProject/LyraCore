@@ -169,6 +169,7 @@ pub mod debug_clear_creatures_reducer;
 pub mod debug_compute_spell_reducer;
 pub mod debug_compute_swing_reducer;
 pub mod debug_create_fixture_instance_reducer;
+pub mod debug_creature_path_reducer;
 pub mod debug_delete_character_reducer;
 pub mod debug_deliver_mail_fixture_reducer;
 pub mod debug_disarm_instance_tick_reducer;
@@ -1334,6 +1335,7 @@ pub use debug_clear_creatures_reducer::debug_clear_creatures;
 pub use debug_compute_spell_reducer::debug_compute_spell;
 pub use debug_compute_swing_reducer::debug_compute_swing;
 pub use debug_create_fixture_instance_reducer::debug_create_fixture_instance;
+pub use debug_creature_path_reducer::debug_creature_path;
 pub use debug_delete_character_reducer::debug_delete_character;
 pub use debug_deliver_mail_fixture_reducer::debug_deliver_mail_fixture;
 pub use debug_disarm_instance_tick_reducer::debug_disarm_instance_tick;
@@ -2631,6 +2633,13 @@ pub enum Reducer {
     },
     DebugCreateFixtureInstance {
         character_guid: u64,
+    },
+    DebugCreaturePath {
+        guid: u64,
+        x: f32,
+        y: f32,
+        z: f32,
+        run: bool,
     },
     DebugDeleteCharacter {
         character_guid: u64,
@@ -4423,6 +4432,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugComputeSpell { .. } => "debug_compute_spell",
             Reducer::DebugComputeSwing { .. } => "debug_compute_swing",
             Reducer::DebugCreateFixtureInstance { .. } => "debug_create_fixture_instance",
+            Reducer::DebugCreaturePath { .. } => "debug_creature_path",
             Reducer::DebugDeleteCharacter { .. } => "debug_delete_character",
             Reducer::DebugDeliverMailFixture { .. } => "debug_deliver_mail_fixture",
             Reducer::DebugDisarmInstanceTick { .. } => "debug_disarm_instance_tick",
@@ -5384,6 +5394,19 @@ Reducer::DebugCheckRestAt{
                 character_guid,
 }             => __sats::bsatn::to_vec(&debug_create_fixture_instance_reducer::DebugCreateFixtureInstanceArgs {
                 character_guid: character_guid.clone(),
+}),
+            Reducer::DebugCreaturePath{
+                guid,
+                x,
+                y,
+                z,
+                run,
+}             => __sats::bsatn::to_vec(&debug_creature_path_reducer::DebugCreaturePathArgs {
+                guid: guid.clone(),
+                x: x.clone(),
+                y: y.clone(),
+                z: z.clone(),
+                run: run.clone(),
 }),
             Reducer::DebugDeleteCharacter{
                 character_guid,
