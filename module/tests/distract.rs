@@ -442,6 +442,11 @@ fn a_distraction_holds_idle_movement_until_its_expiry_and_ends_on_an_engagement(
             && walking(wanderer)),
         "the patroller and the wanderer must both walk a leg"
     );
+    // The wait can outlast the player's out-of-combat power, so refill it for the cast.
+    shard.assert_call(
+        "debug_set_power",
+        &[&PLAYER.to_string(), &ENERGY.to_string()],
+    );
     let cast = cast_at(&shard, point);
     assert!(cast.status.success(), "{cast:?}");
     let cursor: u64 = number(&entity(&shard, patroller), "wp_target");
