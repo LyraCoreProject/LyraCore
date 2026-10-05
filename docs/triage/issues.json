@@ -3351,7 +3351,7 @@
   ],
   "postplan_draft": "1u1gh8ximdga",
   "report_url": "https://1u1gh8ximdga.postplan.dev",
-  "merge_policy": "Codex takes the final merge after current-head checks pass and review findings are resolved. Explicit human review requirements and real-client acceptance remain separate.",
-  "audit_note": "The 2026-10-02 audit covered all 71 open issues against their bodies, comments, PRs merged since 2026-09-08 and source at da11dcf. Four parallel audits each started from the prior assessment. Issue #31 closed on 2026-09-28.",
-  "coordinator": "Claude"
+  "merge_policy": "Claude takes the final merge after current-head checks pass and review findings are resolved. Explicit human review requirements and real-client acceptance remain separate.",
+  "audit_note": "The 2026-10-02 audit covered all 71 open issues against their bodies, comments, PRs merged since 2026-09-08 and source at da11dcf. The report was then rebased to f454a98 with no assessment changes. Four parallel audits each started from the prior assessment. Issue #31 closed on 2026-09-28.",
+  "report_owner": "Claude"
 }

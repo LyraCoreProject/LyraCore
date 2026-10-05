@@ -1,7 +1,7 @@
 # Issue order and delivery
 
-The [published report](https://1u1gh8ximdga.postplan.dev) is the coordinating agent's working dispatch
-list for the GitHub issue queue. `coordinator` in `issues.json` names that agent. GitHub remains
+The [published report](https://1u1gh8ximdga.postplan.dev) is the report owner's working dispatch list
+for the GitHub issue queue. `report_owner` in `issues.json` names that agent. GitHub remains
 authoritative for issue state, review comments and CI.
 
 `issues.json` holds the assessments, owners, next actions and review state. `report.html` is generated
