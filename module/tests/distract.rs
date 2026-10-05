@@ -316,7 +316,7 @@ fn distract_turns_only_the_idle_creatures_near_the_point_and_keeps_the_rogue_hid
                 &PLAYER.to_string(),
             ],
         ),
-        "only target",
+        "only target a ground point",
     );
     assert_refused(&cast_at(&shard, line.at(40.0, 0.0)), "out of range");
     assert_eq!(number::<u32>(&entity(&shard, PLAYER), "power"), ENERGY);
@@ -427,15 +427,21 @@ fn a_distraction_holds_idle_movement_until_its_expiry_and_ends_on_an_engagement(
     let idle = spawn_wolf(&shard, 14.0);
     let spawn_orientation = line.o;
 
-    // Cast while the patroller walks a leg.
+    // Cast while both the patroller and the wanderer walk a leg. A wander leg starts on about one
+    // sense firing in three, so this can take several firings.
+    let walking = |guid: u64| {
+        spline(&shard, guid).is_some_and(|leg| {
+            let ends_micros = number::<u64>(&leg, "start_micros")
+                + number::<u64>(&leg, "dur_ms") * 1_000
+                - 600_000;
+            leg["facing"] == "false" && now_ms() * 1_000 < ends_micros
+        })
+    };
     assert!(
-        poll_until(Duration::from_secs(10), || spline(&shard, patroller)
-            .is_some_and(|leg| {
-                leg["facing"] == "false" && number::<u32>(&leg, "dur_ms") > 1_000
-            })),
-        "the patroller must start a leg"
+        poll_until(Duration::from_secs(60), || walking(patroller)
+            && walking(wanderer)),
+        "the patroller and the wanderer must both walk a leg"
     );
-    std::thread::sleep(Duration::from_millis(700));
     let cast = cast_at(&shard, point);
     assert!(cast.status.success(), "{cast:?}");
     let cursor: u64 = number(&entity(&shard, patroller), "wp_target");
@@ -451,9 +457,15 @@ fn a_distraction_holds_idle_movement_until_its_expiry_and_ends_on_an_engagement(
         held.push((guid, x, y));
     }
 
-    // Patrol and wander hold across several sense firings: no leg, only the facing row until the
+    // Keep every Distraction active past the hold window, however slow the runner.
+    shard.assert_sql(&format!(
+        "UPDATE game_creature_distraction SET ends_ms = {} WHERE ends_ms > 0",
+        now_ms() + 600_000
+    ));
+
+    // Patrol and wander hold across two sense firings: no leg, only the facing row until the
     // advance reaps it.
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let deadline = std::time::Instant::now() + Duration::from_secs(8);
     while std::time::Instant::now() < deadline {
         for guid in [patroller, wanderer] {
             if let Some(leg) = spline(&shard, guid) {
@@ -505,7 +517,11 @@ fn a_distraction_holds_idle_movement_until_its_expiry_and_ends_on_an_engagement(
         "the patrol continues toward the same waypoint"
     );
 
-    // An Engagement ends the wanderer's Distraction at once.
+    // An Engagement ends the wanderer's Distraction long before its expiry.
+    assert!(
+        distraction(&shard, wanderer).is_some_and(|ends| ends > now_ms() + 60_000),
+        "the wanderer must still be distracted before the Engagement"
+    );
     shard.assert_call(
         "debug_engage",
         &[&wanderer.to_string(), &PLAYER.to_string()],

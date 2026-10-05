@@ -18,37 +18,6 @@ pub struct CreatureDistraction {
     pub ends_ms: u64,
 }
 
-/// The facts that decide whether a unit reacts to a Distract.
-#[derive(Clone, Copy)]
-struct Candidate {
-    player: bool,
-    dead: bool,
-    in_combat: bool,
-    engaged: bool,
-    action_blocked: bool,
-}
-
-impl Candidate {
-    /// Only an idle Creature that can act turns. A fight or crowd control already owns its movement.
-    fn may_be_distracted(self) -> bool {
-        !(self.player || self.dead || self.in_combat || self.engaged || self.action_blocked)
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum Phase {
-    Active,
-    Expired,
-}
-
-fn phase(ends_ms: u64, now_ms: u64) -> Phase {
-    if now_ms < ends_ms {
-        Phase::Active
-    } else {
-        Phase::Expired
-    }
-}
-
 /// The orientation that faces `to` from `from`, in the client's radians.
 fn heading(from: (f32, f32), to: (f32, f32)) -> f32 {
     (to.1 - from.1).atan2(to.0 - from.0)
@@ -81,14 +50,21 @@ pub(crate) fn distract(
     let Some(mut creature) = entities.guid().find(creature_guid) else {
         return;
     };
-    let candidate = Candidate {
-        player: creature.is_player(),
-        dead: creature.dead,
-        in_combat: creature.unit_flags & unit_flags::IN_COMBAT != 0,
-        engaged: crate::combat::is_engaged(ctx, creature_guid),
-        action_blocked: crate::spell::is_action_blocked(ctx, creature_guid),
-    };
-    if !candidate.may_be_distracted() {
+    // Only an idle Creature that can act turns: a fight or crowd control already owns its movement.
+    // It must also see the point, as vmangos requires of an area target at a destination.
+    if creature.is_player()
+        || creature.dead
+        || creature.unit_flags & unit_flags::IN_COMBAT != 0
+        || crate::combat::is_engaged(ctx, creature_guid)
+        || crate::spell::is_action_blocked(ctx, creature_guid)
+        || !crate::nav::has_los(
+            ctx,
+            creature.map_id,
+            creature.instance_id,
+            dest,
+            (creature.x, creature.y, creature.z),
+        )
+    {
         return;
     }
     tick::stop_where_rendered(ctx, &mut creature);
@@ -124,24 +100,27 @@ pub(crate) fn distract(
     }
 }
 
-/// Is `guid` distracted now? Patrol and wander hold while this is true.
-pub(crate) fn active(ctx: &ReducerContext, guid: u64) -> bool {
+fn ends_ms(ctx: &ReducerContext, guid: u64) -> Option<u64> {
     ctx.db
         .game_creature_distraction()
         .creature_guid()
         .find(guid)
-        .is_some_and(|row| phase(row.ends_ms, now_ms(ctx)) == Phase::Active)
+        .map(|row| row.ends_ms)
+}
+
+/// Is `guid` distracted now? Patrol and wander hold while this is true.
+pub(crate) fn active(ctx: &ReducerContext, guid: u64) -> bool {
+    ends_ms(ctx, guid).is_some_and(|ends| now_ms(ctx) < ends)
+}
+
+fn expired(ctx: &ReducerContext, guid: u64) -> bool {
+    ends_ms(ctx, guid).is_some_and(|ends| now_ms(ctx) >= ends)
 }
 
 /// The orientation to turn back to once the Distraction has expired: the spawn orientation, or the
 /// current one for a Creature without a spawn row. `None` while it is active or absent.
 pub(crate) fn expired_facing(ctx: &ReducerContext, guid: u64) -> Option<f32> {
-    let row = ctx
-        .db
-        .game_creature_distraction()
-        .creature_guid()
-        .find(guid)?;
-    if phase(row.ends_ms, now_ms(ctx)) == Phase::Active {
+    if !expired(ctx, guid) {
         return None;
     }
     ctx.db
@@ -160,7 +139,7 @@ pub(crate) fn expired_facing(ctx: &ReducerContext, guid: u64) -> Option<f32> {
 
 /// End an expired Distraction after its turn back has played. An active one is kept.
 pub(crate) fn end_expired(ctx: &ReducerContext, guid: u64) {
-    if expired_facing(ctx, guid).is_some() {
+    if expired(ctx, guid) {
         clear(ctx, guid);
     }
 }
@@ -190,45 +169,5 @@ mod tests {
         assert_eq!(length_ms(10), Some(10_000));
         assert_eq!(length_ms(0), None);
         assert_eq!(length_ms(-5), None);
-    }
-
-    #[test]
-    fn only_an_idle_creature_that_can_act_is_distracted() {
-        let idle = Candidate {
-            player: false,
-            dead: false,
-            in_combat: false,
-            engaged: false,
-            action_blocked: false,
-        };
-        assert!(idle.may_be_distracted());
-        for ignored in [
-            Candidate {
-                player: true,
-                ..idle
-            },
-            Candidate { dead: true, ..idle },
-            Candidate {
-                in_combat: true,
-                ..idle
-            },
-            Candidate {
-                engaged: true,
-                ..idle
-            },
-            Candidate {
-                action_blocked: true,
-                ..idle
-            },
-        ] {
-            assert!(!ignored.may_be_distracted());
-        }
-    }
-
-    #[test]
-    fn a_distraction_is_active_until_its_expiry() {
-        assert_eq!(phase(10_000, 9_999), Phase::Active);
-        assert_eq!(phase(10_000, 10_000), Phase::Expired);
-        assert_eq!(phase(10_000, 12_000), Phase::Expired);
     }
 }

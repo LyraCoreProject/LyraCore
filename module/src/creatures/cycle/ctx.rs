@@ -362,6 +362,9 @@ impl IdleSink for CtxWorld<'_> {
         eventai::movement::returning_home(self.ctx, guid)
     }
     fn follow_target_at(&self, guid: u64) -> Option<Point> {
+        if distraction::active(self.ctx, guid) {
+            return None;
+        }
         let creature = self.ctx.db.game_world_entity().guid().find(guid)?;
         let target_guid = eventai::movement::follow_target(self.ctx, guid)?;
         self.ctx

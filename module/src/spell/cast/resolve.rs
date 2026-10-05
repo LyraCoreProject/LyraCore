@@ -123,7 +123,7 @@ pub(crate) fn resolve_cast_at_typed(
 
     check_cast_gates(ctx, &caster, &hdr, &effects, target_guid, spell_id, level)?;
     if effects.iter().any(|e| e.kind == E_DISTRACT) {
-        check_ground_destination((caster.x, caster.y, caster.z), dest, hdr.range_yd)?;
+        check_distract_destination(ctx, &caster, dest, hdr.range_yd)?;
     }
 
     // Charge + flush BEFORE the effects (a self-heal effect re-reads the caster row, so it sees the
@@ -933,14 +933,32 @@ pub(crate) fn check_pending_cast_los(
 /// melee twin is `MELEE_RANGE_LEEWAY_SQ`). The unit range Gate and the ground destination Gate share it.
 const CAST_RANGE_LEEWAY_YD: f32 = 2.0 + 8.0 / 3.0; // ≈ 4.67 yd
 
-/// The ground destination Gate: a Distract needs a clicked ground point inside the spell's range plus
-/// the cast leeway. The phrases map to `SPELL_FAILED_BAD_TARGETS` and `SPELL_FAILED_OUT_OF_RANGE` in
-/// the Gateway.
+/// The ground destination Gate for Distract: a clicked ground point, inside the spell's range plus the
+/// cast leeway, that the caster can see. The phrases map to `SPELL_FAILED_BAD_TARGETS`,
+/// `SPELL_FAILED_OUT_OF_RANGE` and `SPELL_FAILED_LINE_OF_SIGHT` in the Gateway.
+fn check_distract_destination(
+    ctx: &ReducerContext,
+    caster: &WorldEntity,
+    dest: Option<(f32, f32, f32)>,
+    range_yd: u32,
+) -> Result<(), CastRefusal> {
+    let caster_at = (caster.x, caster.y, caster.z);
+    let point = check_ground_destination(caster_at, dest, range_yd)?;
+    if !crate::nav::has_los(ctx, caster.map_id, caster.instance_id, caster_at, point) {
+        return Err(CastRefusal::new(
+            CastRefusalKind::NoLineOfSight,
+            "ground point is not in line of sight".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// The distance half of the ground destination Gate. Returns the point it accepted.
 fn check_ground_destination(
     caster_at: (f32, f32, f32),
     dest: Option<(f32, f32, f32)>,
     range_yd: u32,
-) -> Result<(), CastRefusal> {
+) -> Result<(f32, f32, f32), CastRefusal> {
     let Some((x, y, z)) = dest else {
         return Err(CastRefusal::from(
             "spell can only target a ground point".to_string(),
@@ -955,7 +973,7 @@ fn check_ground_destination(
             ),
         ));
     }
-    Ok(())
+    Ok((x, y, z))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1538,7 +1556,10 @@ mod ground_destination_tests {
     #[test]
     fn a_distract_without_a_ground_point_is_a_bad_target() {
         let refusal = check_ground_destination(CASTER, None, 30).unwrap_err();
-        assert!(refusal.message.contains("only target"), "{refusal}");
+        assert!(
+            refusal.message.contains("only target a ground point"),
+            "{refusal}"
+        );
     }
 
     #[test]

@@ -284,26 +284,44 @@ pub fn build_spell_go_area(caster_guid: u64, spell_id: u32) -> SMSG_SPELL_GO {
     }
 }
 
-/// The GO for an instant cast at a clicked ground point (Distract): no hits, and the point echoed in
-/// the target block as the client sent it, so the client plays the cast at the point and not on the
-/// caster.
+/// The target block for a cast at a clicked ground point (`TARGET_FLAG_DEST_LOCATION`), echoing the
+/// point as the client sent it, as vmangos does.
+fn ground_point_targets(dest: (f32, f32, f32)) -> SpellCastTargets {
+    SpellCastTargets {
+        target_flags: SpellCastTargets_SpellCastTargetFlags::new_dest_location(
+            SpellCastTargets_SpellCastTargetFlags_DestLocation {
+                destination: Vector3d {
+                    x: dest.0,
+                    y: dest.1,
+                    z: dest.2,
+                },
+            },
+        ),
+    }
+}
+
+/// The instant START for a cast at a clicked ground point, with the point in the target block.
+pub fn build_spell_start_dest(
+    caster_guid: u64,
+    spell_id: u32,
+    dest: (f32, f32, f32),
+) -> SMSG_SPELL_START {
+    SMSG_SPELL_START {
+        targets: ground_point_targets(dest),
+        ..build_spell_start(caster_guid, spell_id, 0, 0, None)
+    }
+}
+
+/// The GO for any instant cast at a clicked ground point (Distract, Blizzard, Rain of Fire, Flare and
+/// the other ground-targeted spells): no hits, and the point in the target block, so the client plays
+/// the cast at the point and not on the caster.
 pub fn build_spell_go_dest(
     caster_guid: u64,
     spell_id: u32,
     dest: (f32, f32, f32),
 ) -> SMSG_SPELL_GO {
     SMSG_SPELL_GO {
-        targets: SpellCastTargets {
-            target_flags: SpellCastTargets_SpellCastTargetFlags::new_dest_location(
-                SpellCastTargets_SpellCastTargetFlags_DestLocation {
-                    destination: Vector3d {
-                        x: dest.0,
-                        y: dest.1,
-                        z: dest.2,
-                    },
-                },
-            ),
-        },
+        targets: ground_point_targets(dest),
         ..build_spell_go_area(caster_guid, spell_id)
     }
 }
@@ -551,8 +569,8 @@ mod tests {
     }
 
     #[test]
-    fn ground_destination_refusals_map_to_bad_targets_and_out_of_range() {
-        // gtker vanilla CastFailureReason: BAD_TARGETS 0x0A, OUT_OF_RANGE 0x59.
+    fn ground_destination_refusals_map_to_bad_targets_out_of_range_and_line_of_sight() {
+        // gtker vanilla CastFailureReason: BAD_TARGETS 0x0A, OUT_OF_RANGE 0x59, LINE_OF_SIGHT 0x2A.
         assert_eq!(
             cast_failure_reason_for("spell can only target a ground point"),
             0x0A
@@ -560,6 +578,10 @@ mod tests {
         assert_eq!(
             cast_failure_reason_for("ground point out of range (40.0 yd > 30 + 4.7 yd leeway)"),
             0x59
+        );
+        assert_eq!(
+            cast_failure_reason_for("ground point is not in line of sight"),
+            0x2A
         );
     }
 
