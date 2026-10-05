@@ -66,6 +66,10 @@ pub fn position(row: &Row) -> (f32, f32, f32) {
     (number(row, "x"), number(row, "y"), number(row, "z"))
 }
 
+pub fn distance(a: (f32, f32, f32), b: (f32, f32, f32)) -> f32 {
+    ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2) + (a.2 - b.2).powi(2)).sqrt()
+}
+
 pub fn assert_near(actual: (f32, f32, f32), expected: (f32, f32, f32), what: &str) {
     assert!(
         (actual.0 - expected.0).abs() < 0.01

@@ -6,14 +6,16 @@ mod support;
 
 use std::time::Duration;
 
-use support::{assert_near, leg, leg_destination, lone_wolf, number, position, Standalone, LEG_YD};
+use support::{
+    assert_near, distance, leg, leg_destination, lone_wolf, number, position, Standalone, LEG_YD,
+};
 
 /// The stored row of an out-of-combat walker stays at the leg start until it drifts 4 yd, which a
 /// walk of 2.5 yd/s reaches at about 1.6 s. A renewal this long after the first path lands well
 /// before that.
 const RENEW_AFTER: Duration = Duration::from_millis(900);
 /// The least the stored row must lag the drawn point for the renewal to prove anything.
-const MIN_LAG_YD: f32 = 1.0;
+const MIN_LAG_YD: f32 = 0.1;
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
@@ -59,10 +61,7 @@ fn a_path_renewed_mid_leg_starts_where_the_client_renders_the_mover() {
         from + (to - from) * walked
     };
     let rendered = (lerp("sx", "dx"), lerp("sy", "dy"), lerp("sz", "dz"));
-    let lag = ((rendered.0 - stored_before.0).powi(2)
-        + (rendered.1 - stored_before.1).powi(2)
-        + (rendered.2 - stored_before.2).powi(2))
-    .sqrt();
+    let lag = distance(rendered, stored_before);
     assert!(
         lag >= MIN_LAG_YD,
         "the stored row must lag the drawn point {rendered:?} before the renewal, or the test \

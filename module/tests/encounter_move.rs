@@ -7,8 +7,8 @@ mod support;
 use std::time::Duration;
 
 use support::{
-    assert_near, leg, leg_destination, lone_wolf, number, poll_until, position, wolves, Row,
-    Standalone, LEG_YD, POLL_TIMEOUT,
+    assert_near, distance, leg, leg_destination, lone_wolf, number, poll_until, position, wolves,
+    Row, Standalone, LEG_YD, POLL_TIMEOUT,
 };
 
 fn stored(shard: &Standalone, guid: &str) -> Row {
@@ -30,10 +30,6 @@ fn move_to(shard: &Standalone, guid: &str, to: (f32, f32, f32)) {
             "false",
         ],
     );
-}
-
-fn distance(a: (f32, f32, f32), b: (f32, f32, f32)) -> f32 {
-    ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2) + (a.2 - b.2).powi(2)).sqrt()
 }
 
 fn equipment_rows(shard: &Standalone, guid: &str) -> usize {
@@ -75,11 +71,11 @@ fn a_scripted_move_leaves_the_stored_row_on_the_leg_and_a_kill_stops_at_the_draw
         "the stored row right after the call",
     );
 
-    // An out-of-combat walker's stored row first moves after 4 yd, a 1.6 s walk.
+    // The walk covers 2.5 yd/s, so the wolf is about 3 yd along, however the call round trips go.
     std::thread::sleep(Duration::from_millis(900));
     let walking = position(&stored(&shard, &guid));
     assert!(
-        distance(walking, destination) > LEG_YD - 4.0,
+        distance(walking, destination) > LEG_YD / 2.0,
         "a reader mid-leg must not see the destination, but the wolf is stored at {walking:?}"
     );
 
@@ -87,7 +83,7 @@ fn a_scripted_move_leaves_the_stored_row_on_the_leg_and_a_kill_stops_at_the_draw
     let corpse = position(&stored(&shard, &guid));
     let walked = distance(start, corpse);
     assert!(
-        walked > 0.0 && walked < LEG_YD - 4.0,
+        walked > 0.0 && walked < LEG_YD / 2.0,
         "the corpse must rest on the drawn point part way along the leg, not at {corpse:?}"
     );
 }
@@ -145,4 +141,14 @@ fn a_move_dynamic_arrival_is_dropped_when_a_newer_leg_replaced_the_leg() {
         0,
         "the replaced leg's arrival must not run"
     );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn a_move_dynamic_arrival_puts_the_mover_on_the_destination_and_reaps_the_leg() {
+    let mut shard = Standalone::start("encounter-move-arrival-placement");
+    let pair = wolves(&mut shard, &[5.0, 30.0]);
+    let (mover, target) = (pair[0]["guid"].clone(), pair[1]["guid"].clone());
+
+    shard.assert_call("debug_verify_relay_arrival_placement", &[&mover, &target]);
 }

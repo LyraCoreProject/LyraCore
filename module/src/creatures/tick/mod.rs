@@ -792,7 +792,7 @@ pub(crate) fn begin_leg(ctx: &ReducerContext, mover: &mut WorldEntity) -> u32 {
 
 /// Move `mover` to where a stop now would leave it on its leg, and return that leg's spline id.
 /// `None` for a mover with no leg, which stays unchanged. The caller writes `mover`.
-pub(crate) fn place_where_rendered(ctx: &ReducerContext, mover: &mut WorldEntity) -> Option<u32> {
+fn place_where_rendered(ctx: &ReducerContext, mover: &mut WorldEntity) -> Option<u32> {
     let leg = ctx.db.game_creature_spline().guid().find(mover.guid)?;
     let spline_id = leg.spline_id;
     if let Some(stop) = super::cycle::stop_on_stored_leg(ctx, leg) {
@@ -809,7 +809,7 @@ pub(crate) fn next_spline_id(now_micros: u64, previous: u32) -> u32 {
 
 /// Move `mover` to `stop`: position, grid address and packed cell together, and the stop's heading
 /// when it has one.
-fn place_stopped(mover: &mut WorldEntity, stop: super::cycle::Stop) {
+pub(crate) fn place_stopped(mover: &mut WorldEntity, stop: super::cycle::Stop) {
     let (grid_x, grid_y) = spatial::grid_cell(stop.at.x, stop.at.y);
     mover.x = stop.at.x;
     mover.y = stop.at.y;

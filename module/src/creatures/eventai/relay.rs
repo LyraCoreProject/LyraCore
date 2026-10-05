@@ -1729,15 +1729,7 @@ fn schedule_arrival(
     Ok(())
 }
 
-/// The mover's live leg, as a relay arrival reads it.
-#[derive(Clone, Copy)]
-struct ArrivalLeg {
-    spline_id: u32,
-    ends_micros: u64,
-}
-
 fn arrival_is_current(
-    now_micros: u64,
     source: &crate::WorldEntity,
     spline: Option<&crate::creatures::CreatureSpline>,
     arrival: &RelayArrival,
@@ -1746,34 +1738,24 @@ fn arrival_is_current(
         && (source.map_id, source.instance_id) == (arrival.map_id, arrival.instance_id)
         && arrival_motion_matches(
             (source.x, source.y, source.z),
-            spline.map(|spline| ArrivalLeg {
-                spline_id: spline.spline_id,
-                ends_micros: spline
-                    .start_micros
-                    .saturating_add(u64::from(spline.dur_ms) * 1_000),
-            }),
-            now_micros,
+            spline.map(|spline| spline.spline_id),
             (arrival.x, arrival.y, arrival.z),
             arrival.spline_id,
         )
 }
 
-/// An arrival is current when the mover's leg is the one the arrival waits on and has landed, even
-/// though the creature tick has not yet stored the destination. Without that leg it is current
-/// when the mover stands on the destination. A leg that replaced the arrival's leg is not current.
+/// An arrival is current while the mover's leg is still the one the arrival waits on, even though
+/// the creature tick has not yet stored the destination: a newer leg would carry another spline id.
+/// With no leg of its own, or once the leg is reaped, the mover must stand on the destination.
 fn arrival_motion_matches(
     source_position: (f32, f32, f32),
-    current_leg: Option<ArrivalLeg>,
-    now_micros: u64,
+    current_spline_id: Option<u32>,
     destination: (f32, f32, f32),
     arrival_spline_id: u32,
 ) -> bool {
-    let at_destination = distance_sq(source_position, destination) <= f32::EPSILON;
-    match current_leg {
-        Some(leg) if arrival_spline_id != 0 => {
-            leg.spline_id == arrival_spline_id && (at_destination || now_micros >= leg.ends_micros)
-        }
-        _ => at_destination,
+    match current_spline_id {
+        Some(id) if arrival_spline_id != 0 => id == arrival_spline_id,
+        _ => distance_sq(source_position, destination) <= f32::EPSILON,
     }
 }
 
@@ -1787,6 +1769,11 @@ pub fn resume_relay_arrival(ctx: &ReducerContext, arrival: RelayArrival) {
     if ctx.sender() != ctx.database_identity() {
         return;
     }
+    run_relay_arrival(ctx, arrival);
+}
+
+/// Start the arrival relay if the mover still waits on this arrival.
+pub(crate) fn run_relay_arrival(ctx: &ReducerContext, arrival: RelayArrival) {
     let Some(mut source) = ctx.db.game_world_entity().guid().find(arrival.source_guid) else {
         reap_unused_definitions(ctx);
         return;
@@ -1796,16 +1783,29 @@ pub fn resume_relay_arrival(ctx: &ReducerContext, arrival: RelayArrival) {
         .game_creature_spline()
         .guid()
         .find(arrival.source_guid);
-    let now_micros = ctx.timestamp.to_micros_since_unix_epoch() as u64;
-    if !arrival_is_current(now_micros, &source, spline.as_ref(), &arrival) {
+    if !arrival_is_current(&source, spline.as_ref(), &arrival) {
         reap_unused_definitions(ctx);
         return;
     }
     if arrival.spline_id != 0 && spline.is_some() {
-        // The leg landed before the creature tick stored its end, and the arrival relay reads the
-        // mover where it arrived.
-        crate::creatures::tick::place_where_rendered(ctx, &mut source);
+        // The leg landed before the creature tick stored its end. Settle the mover as the tick
+        // would, so the arrival relay reads it at the destination and not on a moving leg.
+        crate::creatures::tick::place_stopped(
+            &mut source,
+            crate::creatures::cycle::Stop {
+                at: crate::creatures::cycle::Point {
+                    x: arrival.x,
+                    y: arrival.y,
+                    z: arrival.z,
+                },
+                heading: None,
+            },
+        );
         ctx.db.game_world_entity().guid().update(source);
+        ctx.db
+            .game_creature_spline()
+            .guid()
+            .delete(arrival.source_guid);
     }
     if let Err(error) = start_relay(
         ctx,
@@ -2607,34 +2607,25 @@ mod tests {
     }
 
     #[test]
-    fn arrival_relay_requires_its_leg_to_land_or_its_destination_and_no_replacement_leg() {
+    fn arrival_relay_requires_its_leg_or_its_destination_and_no_replacement_leg() {
         let destination = (3.0, 4.0, 5.0);
         let away = (0.0, 0.0, 0.0);
-        let now = 1_000;
-        let leg = |spline_id, ends_micros| {
-            Some(ArrivalLeg {
-                spline_id,
-                ends_micros,
-            })
-        };
-        // (mover position, mover's leg, the arrival's spline id, is the arrival current)
+        // (mover position, mover's spline id, the arrival's spline id, is the arrival current)
         let cases = [
-            (destination, leg(7, 900), 7, true),
+            (destination, Some(7), 7, true),
+            (away, Some(7), 7, true),
             (destination, None, 7, true),
-            (away, leg(7, now), 7, true),
-            (away, leg(7, now + 1), 7, false),
             (away, None, 7, false),
-            (destination, leg(8, 900), 7, false),
-            (away, leg(8, 900), 7, false),
-            (destination, leg(8, 900), 0, true),
-            (away, leg(8, 900), 0, false),
+            (destination, Some(8), 7, false),
+            (away, Some(8), 7, false),
+            (destination, Some(8), 0, true),
+            (away, Some(8), 0, false),
         ];
-        for (position, current_leg, arrival_spline_id, current) in cases {
+        for (position, current_spline_id, arrival_spline_id, current) in cases {
             assert_eq!(
-                arrival_motion_matches(position, current_leg, now, destination, arrival_spline_id),
+                arrival_motion_matches(position, current_spline_id, destination, arrival_spline_id),
                 current,
-                "mover at {position:?}, leg {:?}, arrival leg {arrival_spline_id}",
-                current_leg.map(|leg| (leg.spline_id, leg.ends_micros)),
+                "mover at {position:?}, leg {current_spline_id:?}, arrival leg {arrival_spline_id}",
             );
         }
     }

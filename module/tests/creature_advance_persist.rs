@@ -6,18 +6,12 @@ mod support;
 
 use std::time::{Duration, Instant};
 
-use support::{leg, leg_destination, lone_wolf, number, Row, Standalone, LEG_YD};
+use support::{
+    distance, leg, leg_destination, lone_wolf, number, position, Row, Standalone, LEG_YD,
+};
 
 /// The drift a stored creature row may lag behind its leg, as `world::PERSIST_MAX_DRIFT_YD`.
 const PERSIST_MAX_DRIFT_YD: f32 = 4.0;
-
-fn drift(from: &Row, to: &Row) -> f32 {
-    ["x", "y", "z"]
-        .iter()
-        .map(|axis| (number::<f32>(to, axis) - number::<f32>(from, axis)).powi(2))
-        .sum::<f32>()
-        .sqrt()
-}
 
 /// The columns that differ between two stored rows.
 fn changed_columns(from: &Row, to: &Row) -> Vec<String> {
@@ -87,7 +81,7 @@ fn a_walking_creature_stores_its_position_past_four_yards_and_on_arrival() {
         );
     }
     for pair in walk.windows(2) {
-        let step = drift(&pair[0], &pair[1]);
+        let step = distance(position(&pair[0]), position(&pair[1]));
         assert!(
             step > PERSIST_MAX_DRIFT_YD,
             "a mid-leg write moved the stored row only {step} yd: {:?} -> {:?}",
