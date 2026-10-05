@@ -2616,6 +2616,33 @@ fn player_ammo_id_values_is_player_only_no_object_type() {
 }
 
 #[test]
+fn self_res_spell_values_sets_only_field_1224() {
+    // PLAYER_SELF_RES_SPELL is vanilla update field 1224 (cmangos-classic UpdateFields.h:
+    // PLAYER_AMMO_ID + 1). 1224 = 38 * 32 + 8, so the mask spans 39 blocks: 38 empty ones (block 0
+    // carries no OBJECT_FIELD_TYPE bit 2), then bit 8 of block 38, then the one value word. Minor
+    // Soulstone's self-resurrect spell is 3026 = 0x0BD2.
+    let msg = build_self_res_spell_values(1, 3026);
+    let mut buf = Vec::new();
+    msg.write_unencrypted_server(&mut buf).unwrap();
+    let mut tail = vec![39u8];
+    tail.extend(std::iter::repeat_n(0u8, 38 * 4));
+    tail.extend([0x00, 0x01, 0x00, 0x00]);
+    tail.extend([0xD2, 0x0B, 0x00, 0x00]);
+    assert!(
+        buf.ends_with(&tail),
+        "the VALUES mask must carry field 1224 alone; tail was {:02x?}",
+        &buf[buf.len().saturating_sub(tail.len())..]
+    );
+
+    let cleared = build_self_res_spell_values(1, 0);
+    let mut buf = Vec::new();
+    cleared.write_unencrypted_server(&mut buf).unwrap();
+    tail.truncate(tail.len() - 4);
+    tail.extend([0x00; 4]);
+    assert!(buf.ends_with(&tail), "spell 0 clears the field");
+}
+
+#[test]
 fn player_xp_values_carries_xp_and_next_level_no_object_type() {
     let msg = build_player_xp_values(1, 450, 1000);
     match &msg.objects[0] {

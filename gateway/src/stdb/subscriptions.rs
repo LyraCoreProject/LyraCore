@@ -2655,6 +2655,15 @@ pub(crate) fn resurrect_request_outbound(row: &ResurrectRequest) -> Vec<Outbound
     ))]
 }
 
+/// Self-Resurrection Option: the owner's `PLAYER_SELF_RES_SPELL` write. `spell_id` 0 clears it.
+/// Audience: the option's Character, resolved by the caller.
+pub(crate) fn self_res_option_outbound(character_guid: u64, spell_id: u32) -> Vec<Outbound> {
+    let m = codec::build_self_res_spell_values(character_guid, spell_id);
+    vec![Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+        Box::new(m),
+    ))]
+}
+
 /// Projectile impact: the floating damage number for a projectile that
 /// finished its travel — never a START/GO. Pure over the row; broadcast.
 pub(crate) fn impact_event_outbound(row: &SpellImpactEvent) -> Vec<Outbound> {
