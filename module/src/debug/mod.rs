@@ -265,6 +265,13 @@ pub fn debug_spirit_healer_res(ctx: &ReducerContext, character_guid: u64) -> Res
     crate::actor::spirit_res(ctx, character_guid)
 }
 
+/// Use the Self-Resurrection Option by explicit guid (the `CMSG_SELF_RES` path). Errors if the
+/// Character is alive or holds no option.
+#[reducer]
+pub fn debug_self_resurrect(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
+    crate::actor::self_resurrect(ctx, character_guid)
+}
+
 /// Answer a pending resurrect offer by explicit guid (`CMSG_RESURRECT_RESPONSE` / `resurrect_response`
 /// path) — drives the shared `do_resurrect_response` core against the row directly (the CLI
 /// identity owns no entity), so the parent can verify the accept-prompt handshake headlessly. Errors if

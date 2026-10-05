@@ -133,6 +133,7 @@ pub(crate) mod character_owned_tripwire {
                 "game_ranged_impact_schedule",
                 "game_resurrect_request",
                 "game_school_lockout",
+                "game_self_resurrect_option",
                 "game_spell_cd",
                 "game_spell_cooldown",
             ],

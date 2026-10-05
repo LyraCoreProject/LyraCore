@@ -69,6 +69,7 @@ const E_DUEL: u8 = 0x22; // Duel (raw effect 83): p0 is the duel-flag gameobject
 const E_DISENCHANT: u8 = 0x18; // DISENCHANT (real Disenchant 13262, work-item 282): gateway-intercepted, routed to the disenchant reducer by kind. Mapped from raw vanilla effect 99 (SPELL_EFFECT_DISENCHANT); no params (the module validates + yields dust by item). Lockstep with the module taxonomy (module/src/spell/taxonomy.rs E_DISENCHANT).
 const E_DISMOUNT: u8 = 0x23; // remove the target's active land mount (Dazed's mount-removal half): translated from a raw DISPEL_MECHANIC effect (108) whose misc value names the mount mechanic (21) — see `dismount_effect_kind` below. No params. Lockstep with module taxonomy.
 const E_SUMMON_HOSTILE: u8 = 0x24; // temporary ownerless summon; p0 = creature entry, p1 = required spell focus, header duration = lifetime
+const E_SELF_RESURRECT: u8 = 0x26; // raw effect 94: base_points < 0 is flat health with p0 (P_FLAT_MANA) mana, else a percent of max; die_sides ignored (lockstep with module taxonomy)
 
 // cmangos/classic-db cd0c426a3b2ff56dd518bf009025299468e60fdb:
 // spell_template 7728/8674 send events 1131/1134; dbscripts_on_event summons
@@ -113,6 +114,7 @@ const A_MOUNTED: u8 = 0xB3; // land mount, the state of record (vanilla AuraMod 
                             // aura 43, ProcTriggerDamage). p0 = the header's school_mask, p0_kind = P_SCHOOL_MASK (lockstep with
                             // module taxonomy).
 const A_PROC_DAMAGE: u8 = 0xB4;
+const A_SELF_RESURRECT: u8 = 0xB5; // Soulstone Resurrection: p0 (P_SPELL_ID) becomes the Self-Resurrection Option at death (lockstep with module taxonomy)
 
 // MECHANICS (p0 for A_CONTROL when p0_kind == P_MECHANIC)
 const M_STUN: i32 = 1;
@@ -136,6 +138,8 @@ const P_SPELLMOD_OP: u8 = 11; // p0 is a SpellModOp (A_SPELLMOD_*)
 const P_PCT_MAX_POWER: u8 = 12; // the effect's `amount` is a PERCENT of the caster's max power (Evocation); aura_apply converts it to an absolute per-tick (lockstep with module taxonomy)
 const P_GAMEOBJECT_ENTRY: u8 = 13; // p0 is a game_gameobject_template entry (E_DUEL)
 const P_DISPLAY_ID: u8 = 14; // p0 is a creature DISPLAY id (A_MOUNTED — the UNIT_FIELD_MOUNTDISPLAYID value)
+const P_SPELL_ID: u8 = 15; // p0 is a game_spell id (A_SELF_RESURRECT)
+const P_FLAT_MANA: u8 = 16; // p0 is a flat mana amount (E_SELF_RESURRECT)
 const P_RAW: u8 = 255;
 
 // TargetKind
@@ -452,6 +456,7 @@ fn instant_effect_to_kind(effect_id: i32) -> u8 {
         33 | 59 => E_OPEN_LOCK, // OpenLock (33) / OpenLockItem (59) — Pick Lock (work-item 119): gateway-intercepted, routed to the pick_lock reducer by kind (Pick Lock 1804 carries the raw OpenLock effect; the item-lock variant 59 covers a lockpick-on-item spell)
         99 => E_DISENCHANT, // Disenchant (13262, work-item 282): gateway-intercepted, routed to the disenchant reducer by kind — the AUTOLEARN enchanting ability. Was falling through to E_SCRIPTED (a no-op).
         80 => E_ADD_COMBO, // AddComboPoints (work-item 101) — the curated Rogue generators (Sinister Strike/Backstab/Gouge/Garrote) carry the generic Dummy effect in-kit and are rescued BY NAME in correct_script_effect_kind below, not via this raw id, so this arm is currently unexercised by the curated kit but correct for any spell that DOES carry the raw AddComboPoints effect
+        94 => E_SELF_RESURRECT, // SelfResurrect (Soulstone Resurrection, Reincarnation): read by the Module's self-resurrection, never cast
         18 | 113 => E_RESURRECT, // Resurrect / ResurrectNew (work-item 101) — the curated kit's two resurrects (Priest Resurrection 2006, Paladin Redemption 7328) are ALSO rescued by name below; if either carries raw effect 18/113 in the real DBC (plausible — that is literally what the effect exists for) this arm now resolves them natively too, moving them out of `cov.unmapped_effect` even though the final kind was already E_RESURRECT via the name rescue either way — unverified without a client DBC dump, so [V]
         _ => E_SCRIPTED,         // remaining vanilla effects: queryable no-op
     }
@@ -540,7 +545,23 @@ fn correct_script_effect_kind(name: &str, kind: u8) -> u8 {
         | "Create Healthstone (Lesser)"
         | "Create Healthstone (Greater)"
         | "Create Healthstone (Major)" => E_CREATE_ITEM,
+        // Every Soulstone rank's buff is a Dummy aura; its rank picks the option spell below.
+        "Soulstone Resurrection" => A_SELF_RESURRECT,
         _ => kind,
+    }
+}
+
+/// The Self-Resurrection Option spell each Soulstone Resurrection aura rank grants. The ranks share
+/// one name, so the aura spell id decides. Source: ClassicDB 1.12.1 `spell_template` at the pinned
+/// commit, cross-checked against cmangos-classic `Player::GetResurrectionSpellId`.
+fn soulstone_option_spell(aura_spell_id: u32) -> Option<i32> {
+    match aura_spell_id {
+        20707 => Some(3026),
+        20762 => Some(20758),
+        20763 => Some(20759),
+        20764 => Some(20760),
+        20765 => Some(20761),
+        _ => None,
     }
 }
 
@@ -904,6 +925,7 @@ fn resolve_instant_params(kind: u8, misc: u32, item_type: i32) -> (i32, u8) {
         // Summon names a creature template in EffectMiscValue.
         E_SUMMON_PET => (misc as i32, P_ENTRY),
         E_DUEL => (misc as i32, P_GAMEOBJECT_ENTRY),
+        E_SELF_RESURRECT => (misc as i32, P_FLAT_MANA),
         _ => (0, P_NONE), // damage/heal/trigger/taunt school is on the header; no p0
     }
 }
@@ -1628,6 +1650,12 @@ fn resolve_effect_kind(
         (p0, p0_kind)
     };
 
+    let (p0, p0_kind) = if kind == A_SELF_RESURRECT {
+        (soulstone_option_spell(s.id).unwrap_or(0), P_SPELL_ID)
+    } else {
+        (p0, p0_kind)
+    };
+
     let base_points = dbc_flat_amount(s.effect_base_points[i]); // DBC +1 convention (mounted-speed 59/99 → 60/100 falls out of this for free)
                                                                 // Avoidance-chance combat fields are basis-points in our engine but PERCENT in the DBC, so
                                                                 // scale ×100 (Evasion's +50% dodge → +5000 bp). COMBAT_THREAT is a signed percent in both
@@ -1701,7 +1729,8 @@ fn resolve_effect_target(s: &Spell, i: usize, kind: u8, header: &SpellHeader) ->
         E_CHARGE | E_JUDGEMENT | E_PICKPOCKET | E_INTERRUPT | E_NEXT_SWING | E_TAUNT
         | E_TAME_CREATURE => T_TARGET_ENEMY,
         E_RESURRECT => T_TARGET_ALLY,
-        E_REDUCE_THREAT | E_BLINK | E_PERSISTENT_AREA | E_SUMMON_PET | E_SUMMON_HOSTILE => T_SELF,
+        E_REDUCE_THREAT | E_BLINK | E_PERSISTENT_AREA | E_SUMMON_PET | E_SUMMON_HOSTILE
+        | E_SELF_RESURRECT => T_SELF,
         E_DUEL => T_TARGET_ANY,
         _ => target,
     };
@@ -2007,6 +2036,7 @@ fn kind_name(kind: u8) -> &'static str {
         E_FEED_PET => "E_FEED_PET",
         E_POWER_BURN => "E_POWER_BURN",
         E_DUEL => "E_DUEL",
+        E_SELF_RESURRECT => "E_SELF_RESURRECT",
         E_SCRIPTED => "E_SCRIPTED",
         A_PERIODIC_DAMAGE => "A_PERIODIC_DAMAGE",
         A_PERIODIC_HEAL => "A_PERIODIC_HEAL",
@@ -2024,6 +2054,7 @@ fn kind_name(kind: u8) -> &'static str {
         A_FLAG => "A_FLAG",
         A_PROC_TRIGGER => "A_PROC_TRIGGER",
         A_PROC_DAMAGE => "A_PROC_DAMAGE",
+        A_SELF_RESURRECT => "A_SELF_RESURRECT",
         _ => "?",
     }
 }
@@ -2992,6 +3023,104 @@ mod tests {
             correct_script_effect_kind("Reincarnation", E_SCRIPTED),
             E_SCRIPTED
         );
+    }
+
+    /// ClassicDB 1.12.1 `spell_template`: each Soulstone Resurrection aura rank (Dummy aura, friendly
+    /// target) and the self-resurrect spell it grants (raw effect 94, raw base = -(health + 1), misc =
+    /// mana).
+    const SOULSTONE_RANKS: [(u32, u32, i32, u32); 5] = [
+        (20707, 3026, -401, 700),
+        (20762, 20758, -751, 1200),
+        (20763, 20759, -1101, 1700),
+        (20764, 20760, -1601, 2200),
+        (20765, 20761, -2201, 2800),
+    ];
+
+    fn soulstone_aura(id: u32) -> Spell {
+        Spell {
+            id,
+            name: "Soulstone Resurrection".into(),
+            effect: [EFFECT_APPLY_AURA, 0, 0],
+            effect_aura: [AuraMod::Dummy as u32, 0, 0],
+            implicit_target_a: [21, 0, 0],
+            ..Default::default()
+        }
+    }
+
+    fn self_resurrect_spell(id: u32, raw_base: i32, misc: u32) -> Spell {
+        Spell {
+            id,
+            name: "Use Soulstone".into(),
+            effect: [94, 0, 0],
+            effect_base_points: [raw_base, 0, 0],
+            effect_die_sides: [1, 0, 0],
+            effect_misc_value: [misc, 0, 0],
+            implicit_target_a: [1, 0, 0],
+            ..Default::default()
+        }
+    }
+
+    fn first_effect(rows: &SpellRows, spell_id: u32) -> &SpellEffectRow {
+        rows.effects
+            .iter()
+            .find(|effect| effect.spell_id == spell_id)
+            .unwrap()
+    }
+
+    #[test]
+    fn every_soulstone_aura_rank_names_its_self_resurrect_spell() {
+        let mut dbc = fixture_tables();
+        dbc.spells = SOULSTONE_RANKS
+            .iter()
+            .map(|&(aura, ..)| soulstone_aura(aura))
+            .chain([soulstone_aura(999_998)])
+            .collect();
+
+        let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+        for (aura, option, ..) in SOULSTONE_RANKS {
+            let effect = first_effect(&rows, aura);
+            assert_eq!(
+                (effect.kind, effect.p0, effect.p0_kind),
+                (A_SELF_RESURRECT, option as i32, P_SPELL_ID),
+                "aura rank {aura}"
+            );
+        }
+        let unknown = first_effect(&rows, 999_998);
+        assert_eq!((unknown.kind, unknown.p0), (A_SELF_RESURRECT, 0));
+    }
+
+    #[test]
+    fn self_resurrect_effects_keep_the_vanilla_sign_rule() {
+        let mut dbc = fixture_tables();
+        dbc.spells = SOULSTONE_RANKS
+            .iter()
+            .map(|&(_, option, raw_base, mana)| self_resurrect_spell(option, raw_base, mana))
+            .chain([self_resurrect_spell(21169, 19, 0)])
+            .collect();
+
+        let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+        let expected = [
+            (3026, -400, 700),
+            (20758, -750, 1200),
+            (20759, -1100, 1700),
+            (20760, -1600, 2200),
+            (20761, -2200, 2800),
+            (21169, 20, 0),
+        ];
+        for (spell_id, base_points, mana) in expected {
+            let effect = first_effect(&rows, spell_id);
+            assert_eq!(
+                (
+                    effect.kind,
+                    effect.base_points,
+                    effect.p0,
+                    effect.p0_kind,
+                    effect.target
+                ),
+                (E_SELF_RESURRECT, base_points, mana, P_FLAT_MANA, T_SELF),
+                "spell {spell_id}"
+            );
+        }
     }
 
     #[test]

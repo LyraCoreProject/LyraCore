@@ -517,6 +517,18 @@ the effective run speed. Never a second state machine.
 The one shared operation that removes the active Land Mount's aura rows and re-derives the Mount
 Projection. Idempotent, and a no-op for a rider who is not mounted.
 
+### Death and resurrection
+
+**Self-Resurrection Option**:
+The one spell a dead Character may cast on itself from the death dialog. Chosen at death from the
+Character's Soulstone aura, kept through Release Spirit, and spent when the Character is resurrected
+by any path or leaves the world. The client sees it as `PLAYER_SELF_RES_SPELL`.
+_Avoid_: self-res offer, rez offer, resurrect offer (an offer is a resurrect request from another Character)
+
+**Soulstone**:
+The item a Warlock creates, and the Aura its use puts on a Character. A Character that dies while the
+Aura is on it gets a Self-Resurrection Option. The Aura itself does not survive death.
+
 ### Procs
 
 **Proc**:

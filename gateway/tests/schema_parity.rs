@@ -1086,6 +1086,9 @@ parity_test!(parity_game_creature_cast, "game_creature_cast", lyracore_module::C
 parity_test!(parity_game_resurrect_request, "game_resurrect_request", lyracore_module::ResurrectRequest, bindings::resurrect_request_type::ResurrectRequest, {
     target_guid, target_identity, caster_guid, caster_name, points, created_at,
 });
+parity_test!(parity_game_self_resurrect_option, "game_self_resurrect_option", lyracore_module::SelfResurrectOption, bindings::self_resurrect_option_type::SelfResurrectOption, {
+    character_guid, spell_id,
+});
 parity_test!(parity_game_aura, "game_aura", lyracore_module::Aura, bindings::aura_type::Aura, {
     id, target_guid, caster_guid, spell_id, slot, level, flags, applied_at, expires_at, effect_id,
     eff_kind, amount, eff_p0, eff_p0_kind, eff_p1, period_ms, amount_remaining, stacks,
@@ -1302,6 +1305,7 @@ const MANIFEST_TABLES: &[&str] = &[
     "game_spell_impact_event",
     "game_creature_cast",
     "game_resurrect_request",
+    "game_self_resurrect_option",
     "game_aura",
     "game_player_reputation",
     "game_character_contact",

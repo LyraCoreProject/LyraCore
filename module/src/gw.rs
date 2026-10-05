@@ -607,6 +607,18 @@ pub fn gw_repop(ctx: &ReducerContext, request_actor: crate::SessionActor) -> Res
     crate::actor::repop(ctx, actor_guid)
 }
 
+/// [`crate::actor::self_resurrect`] behind the gateway gate: use the Self-Resurrection Option.
+#[reducer]
+pub fn gw_self_resurrect(
+    ctx: &ReducerContext,
+    request_actor: crate::SessionActor,
+) -> Result<(), String> {
+    require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
+    actor(ctx, actor_guid)?;
+    crate::actor::self_resurrect(ctx, actor_guid)
+}
+
 /// [`crate::actor::spirit_res`] behind the gateway gate — ghost res at the spirit healer.
 #[reducer]
 pub fn gw_spirit_res(

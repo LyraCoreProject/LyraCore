@@ -554,6 +554,21 @@ pub(crate) fn handle_loot<St: WorldStore + ?Sized>(
                 );
             }
         }
+        // The death dialog's second button: use the Self-Resurrection Option the Module wrote into
+        // PLAYER_SELF_RES_SPELL. The revive replicates through the entity VALUES relay. A Refusal
+        // (already used, already alive) is expected after a race and sends nothing.
+        ClientOpcodeMessage::CMSG_SELF_RES => {
+            let self_guid = match &conn.state {
+                WorldState::InWorld(iw) => iw.self_guid,
+                WorldState::CharSelect => 0,
+            };
+            if let Err(e) = store.self_resurrect(conn.account_id, self_guid) {
+                log::debug!(
+                    "world: self_resurrect ignored (account {}): {e}",
+                    conn.account_id
+                );
+            }
+        }
         // Spirit-Healer resurrection: a ghost activated the graveyard Spirit Healer (npc_flags
         // SPIRITHEALER). The module res's in place at 50% + applies Resurrection Sickness; on success
         // reply with SMSG_SPIRIT_HEALER_CONFIRM (echoing the healer's guid) so the client closes the
