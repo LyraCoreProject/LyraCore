@@ -845,6 +845,13 @@ pub(crate) fn apply_effect(
             }
             EffectHit::none()
         }
+        E_DISTRACT => {
+            // The ground destination Gate refuses a Distract without a point before it gets here.
+            if let Some(point) = dest {
+                crate::creatures::distraction::distract(ctx, target_guid, point, points);
+            }
+            EffectHit::none()
+        }
         E_DUEL => {
             if e.p0_kind == P_GAMEOBJECT_ENTRY {
                 crate::duel::request_duel(ctx, caster_guid, target_guid, e.p0.max(0) as u32);

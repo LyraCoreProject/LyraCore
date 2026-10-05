@@ -795,7 +795,7 @@ fn place_where_rendered(ctx: &ReducerContext, mover: &mut WorldEntity) -> Option
 
 /// The id for a leg that replaces one with id `previous`. The client ignores an id that does not
 /// exceed the one it replaces, so a second leg in the same millisecond takes `previous + 1`.
-fn next_spline_id(now_micros: u64, previous: u32) -> u32 {
+pub(crate) fn next_spline_id(now_micros: u64, previous: u32) -> u32 {
     ((now_micros / 1000) as u32).max(previous.wrapping_add(1))
 }
 

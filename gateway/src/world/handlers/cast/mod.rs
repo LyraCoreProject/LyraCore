@@ -404,10 +404,12 @@ fn ordinary_cast<St: CastStore + ?Sized>(
                 opcode: OP_CAST_RESULT,
                 body: codec::build_cast_result_ok(spell),
             });
-            // A ground-area spell (Consecration) impacts the ground: an EMPTY hit list, or the
-            // self-cast fallback puts the caster in `hits[]` and the client plays the impact
-            // animation on the caster.
-            let go = if store.spell_is_ground_area(spell) {
+            // A cast at a clicked point (Distract) and a ground-area spell (Consecration) impact
+            // the ground: an EMPTY hit list, or the self-cast fallback puts the caster in `hits[]`
+            // and the client plays the impact animation on the caster.
+            let go = if let Some(dest) = dest_target(c) {
+                codec::build_spell_go_dest(caster, spell, dest)
+            } else if store.spell_is_ground_area(spell) {
                 codec::build_spell_go_area(caster, spell)
             } else {
                 codec::build_spell_go(caster, spell, target, None)
@@ -933,6 +935,38 @@ pub(super) mod tests {
         assert!(
             spell_go(&outbound).hits.is_empty(),
             "a ground area impacts the ground, not a unit"
+        );
+    }
+
+    #[test]
+    fn instant_destination_cast_sends_a_spell_go_with_no_hits_and_the_clicked_point() {
+        let store = InMemoryCasts::instant();
+
+        let (_, outbound) = handled(
+            dispatch_cast(
+                &store,
+                player(),
+                cast(1725, dest_targets(-8913.5, 554.25, 93.75)),
+            )
+            .unwrap(),
+        );
+
+        assert_eq!(sequence(&outbound), ["START", "CAST_RESULT(OK)", "GO"]);
+        let go = spell_go(&outbound);
+        assert!(
+            go.hits.is_empty(),
+            "Distract impacts the ground, not the caster"
+        );
+        let point = go
+            .targets
+            .target_flags
+            .get_dest_location()
+            .expect("the GO echoes the destination")
+            .destination;
+        assert_eq!((point.x, point.y, point.z), (-8913.5, 554.25, 93.75));
+        assert_eq!(
+            store.ground_casts.lock().unwrap().as_slice(),
+            &[(ACCOUNT, CASTER, 1725, 0, -8913.5, 554.25, 93.75)]
         );
     }
 

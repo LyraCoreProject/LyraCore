@@ -116,6 +116,9 @@ pub(crate) const E_DUEL: u8 = 0x22; // Duel (raw effect 83): request a server-au
 /// implements a generic mechanic dispel and never branches on spell 1604 or a spell name.
 pub(crate) const E_DISMOUNT: u8 = 0x23;
 pub(crate) const E_SUMMON_HOSTILE: u8 = 0x24; // temporary ownerless summon; p0 = creature entry, p1 = required spell focus, header duration = lifetime
+/// Start or refresh a Distraction on each idle enemy Creature around the ground point. The effect
+/// amount is its length in seconds; the importer maps raw effect 69 here.
+pub(crate) const E_DISTRACT: u8 = 0x25;
 
 pub(crate) const E_POWER_BURN: u8 = 0x19; // drain N mana from the target and deal a fraction of it as damage (Mana Burn): MANA-power-type gate read off the target's `unit_bytes_0` byte 3 (same read as `is_rage_user`) — a rage/energy target is a silent no-op (power AND health untouched), matching vanilla's behaviour of skipping the effect entirely. drained = min(base_points, target.power) (floor-at-available; an empty/low pool just burns less, never fails the cast). damage = drained * p1 / 100 (p1 = the effect's ratio in basis-points — vanilla Mana Burn is EffectMultipleValue=0.5 -> p1=50 -> half the drained mana as Shadow damage); `p1<=0` (unauthored data) defaults to 100 (1:1), so a missing p1 never silently zeroes all burn damage. Dealt via the shared `apply_target_damage` (threat/kill/absorb reuse, no new wire work)
 
@@ -412,6 +415,7 @@ pub(crate) const ALL_INSTANT_KINDS: &[u8] = &[
     E_TAME_CREATURE,
     E_FEED_PET,
     E_DISMOUNT,
+    E_DISTRACT,
 ];
 
 /// Canonical, ordered list of every AURA (`A_*`) kind — same rationale and same fix as

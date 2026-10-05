@@ -106,6 +106,7 @@ pub mod creature_ai_summon_origin_type;
 pub mod creature_ai_summon_type;
 pub mod creature_cast_type;
 pub mod creature_dead_callback_cast_admission_type;
+pub mod creature_distraction_type;
 pub mod creature_entry_condition_type;
 pub mod creature_family_type;
 pub mod creature_gossip_menu_override_type;
@@ -445,6 +446,7 @@ pub mod game_creature_ai_summon_origin_table;
 pub mod game_creature_ai_summon_table;
 pub mod game_creature_cast_table;
 pub mod game_creature_dead_callback_cast_admission_table;
+pub mod game_creature_distraction_table;
 pub mod game_creature_family_table;
 pub mod game_creature_gossip_menu_override_table;
 pub mod game_creature_lethal_damage_floor_table;
@@ -1272,6 +1274,7 @@ pub use creature_ai_summon_origin_type::CreatureAiSummonOrigin;
 pub use creature_ai_summon_type::CreatureAiSummon;
 pub use creature_cast_type::CreatureCast;
 pub use creature_dead_callback_cast_admission_type::CreatureDeadCallbackCastAdmission;
+pub use creature_distraction_type::CreatureDistraction;
 pub use creature_entry_condition_type::CreatureEntryCondition;
 pub use creature_family_type::CreatureFamily;
 pub use creature_gossip_menu_override_type::CreatureGossipMenuOverride;
@@ -1611,6 +1614,7 @@ pub use game_creature_ai_summon_origin_table::*;
 pub use game_creature_ai_summon_table::*;
 pub use game_creature_cast_table::*;
 pub use game_creature_dead_callback_cast_admission_table::*;
+pub use game_creature_distraction_table::*;
 pub use game_creature_family_table::*;
 pub use game_creature_gossip_menu_override_table::*;
 pub use game_creature_lethal_damage_floor_table::*;
@@ -8574,6 +8578,7 @@ pub struct DbUpdate {
     game_creature_cast: __sdk::TableUpdate<CreatureCast>,
     game_creature_dead_callback_cast_admission:
         __sdk::TableUpdate<CreatureDeadCallbackCastAdmission>,
+    game_creature_distraction: __sdk::TableUpdate<CreatureDistraction>,
     game_creature_family: __sdk::TableUpdate<CreatureFamily>,
     game_creature_gossip_menu_override: __sdk::TableUpdate<CreatureGossipMenuOverride>,
     game_creature_lethal_damage_floor: __sdk::TableUpdate<CreatureLethalDamageFloor>,
@@ -9053,6 +9058,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                         )?,
                     )
                 }
+                "game_creature_distraction" => db_update.game_creature_distraction.append(
+                    game_creature_distraction_table::parse_table_update(table_update)?,
+                ),
                 "game_creature_family" => db_update.game_creature_family.append(
                     game_creature_family_table::parse_table_update(table_update)?,
                 ),
@@ -10103,6 +10111,12 @@ impl __sdk::DbUpdate for DbUpdate {
                 &self.game_creature_dead_callback_cast_admission,
             )
             .with_updates_by_pk(|row| &row.caster_guid);
+        diff.game_creature_distraction = cache
+            .apply_diff_to_table::<CreatureDistraction>(
+                "game_creature_distraction",
+                &self.game_creature_distraction,
+            )
+            .with_updates_by_pk(|row| &row.creature_guid);
         diff.game_creature_family = cache
             .apply_diff_to_table::<CreatureFamily>(
                 "game_creature_family",
@@ -11253,6 +11267,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_creature_dead_callback_cast_admission" => db_update
                     .game_creature_dead_callback_cast_admission
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_creature_distraction" => db_update
+                    .game_creature_distraction
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_creature_family" => db_update
                     .game_creature_family
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -12121,6 +12138,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_creature_dead_callback_cast_admission" => db_update
                     .game_creature_dead_callback_cast_admission
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_creature_distraction" => db_update
+                    .game_creature_distraction
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_creature_family" => db_update
                     .game_creature_family
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -12847,6 +12867,7 @@ pub struct AppliedDiff<'r> {
     game_creature_cast: __sdk::TableAppliedDiff<'r, CreatureCast>,
     game_creature_dead_callback_cast_admission:
         __sdk::TableAppliedDiff<'r, CreatureDeadCallbackCastAdmission>,
+    game_creature_distraction: __sdk::TableAppliedDiff<'r, CreatureDistraction>,
     game_creature_family: __sdk::TableAppliedDiff<'r, CreatureFamily>,
     game_creature_gossip_menu_override: __sdk::TableAppliedDiff<'r, CreatureGossipMenuOverride>,
     game_creature_lethal_damage_floor: __sdk::TableAppliedDiff<'r, CreatureLethalDamageFloor>,
@@ -13416,6 +13437,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<CreatureDeadCallbackCastAdmission>(
             "game_creature_dead_callback_cast_admission",
             &self.game_creature_dead_callback_cast_admission,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<CreatureDistraction>(
+            "game_creature_distraction",
+            &self.game_creature_distraction,
             event,
         );
         callbacks.invoke_table_row_callbacks::<CreatureFamily>(
@@ -15167,6 +15193,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_creature_ai_summon_origin_table::register_table(client_cache);
         game_creature_cast_table::register_table(client_cache);
         game_creature_dead_callback_cast_admission_table::register_table(client_cache);
+        game_creature_distraction_table::register_table(client_cache);
         game_creature_family_table::register_table(client_cache);
         game_creature_gossip_menu_override_table::register_table(client_cache);
         game_creature_lethal_damage_floor_table::register_table(client_cache);
@@ -15454,6 +15481,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_creature_ai_summon_origin",
         "game_creature_cast",
         "game_creature_dead_callback_cast_admission",
+        "game_creature_distraction",
         "game_creature_family",
         "game_creature_gossip_menu_override",
         "game_creature_lethal_damage_floor",

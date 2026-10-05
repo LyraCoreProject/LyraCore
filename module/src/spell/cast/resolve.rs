@@ -122,6 +122,9 @@ pub(crate) fn resolve_cast_at_typed(
     effects.sort_by_key(|e| (e.kind != E_INTERRUPT, e.effect_index));
 
     check_cast_gates(ctx, &caster, &hdr, &effects, target_guid, spell_id, level)?;
+    if effects.iter().any(|e| e.kind == E_DISTRACT) {
+        check_ground_destination((caster.x, caster.y, caster.z), dest, hdr.range_yd)?;
+    }
 
     // Charge + flush BEFORE the effects (a self-heal effect re-reads the caster row, so it sees the
     // deducted power; a cost-0 cast writes nothing, preserving the Battle Shout baseline). Deduct ONLY for
@@ -925,6 +928,36 @@ pub(crate) fn check_pending_cast_los(
     check_targeted_los(ctx, &caster, &effects, target_guid)
 }
 
+/// The leeway a cast range check adds to the spell range, as vanilla does: a 2 yd combat reach plus an
+/// 8/3 yd moving-target tolerance, so a Creature that drifts a little during a cast is still hit (the
+/// melee twin is `MELEE_RANGE_LEEWAY_SQ`). The unit range Gate and the ground destination Gate share it.
+const CAST_RANGE_LEEWAY_YD: f32 = 2.0 + 8.0 / 3.0; // ≈ 4.67 yd
+
+/// The ground destination Gate: a Distract needs a clicked ground point inside the spell's range plus
+/// the cast leeway. The phrases map to `SPELL_FAILED_BAD_TARGETS` and `SPELL_FAILED_OUT_OF_RANGE` in
+/// the Gateway.
+fn check_ground_destination(
+    caster_at: (f32, f32, f32),
+    dest: Option<(f32, f32, f32)>,
+    range_yd: u32,
+) -> Result<(), CastRefusal> {
+    let Some((x, y, z)) = dest else {
+        return Err(CastRefusal::from(
+            "spell can only target a ground point".to_string(),
+        ));
+    };
+    let dist = distance_3d(caster_at.0, caster_at.1, caster_at.2, x, y, z);
+    if dist > range_yd as f32 + CAST_RANGE_LEEWAY_YD {
+        return Err(CastRefusal::new(
+            CastRefusalKind::OutOfRange,
+            format!(
+                "ground point out of range ({dist:.1} yd > {range_yd} + {CAST_RANGE_LEEWAY_YD:.1} yd leeway)"
+            ),
+        ));
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_lines)] // One gate per refusal a cast can hit.
 fn check_cast_gate_suffix(
@@ -1083,14 +1116,6 @@ fn check_cast_gate_suffix(
                 ));
             }
             let dist = distance_3d(caster.x, caster.y, caster.z, target.x, target.y, target.z);
-            // Range LEEWAY (vanilla): the cast-COMPLETION range check is lenient — vanilla adds the
-            // target's combat reach + a moving-target tolerance, so a mob that drifts a couple yards out of
-            // nominal range during the cast still gets hit (mirrors the melee leeway in combat/tables.rs:
-            // MELEE_RANGE_LEEWAY_SQ). A mob that RUNS well clear still exceeds this and the cast fails →
-            // fire_pending_cast emits the interrupt teardown. Deliberate simplification: flat ≈
-            // combat-reach + 8/3 moving tolerance; bump CAST_RANGE_LEEWAY_YD if it still feels too
-            // tight on a fleeing mob.
-            const CAST_RANGE_LEEWAY_YD: f32 = 2.0 + 8.0 / 3.0; // ≈ 4.67 yd
             if dist > hdr.range_yd as f32 + CAST_RANGE_LEEWAY_YD {
                 return Err(CastRefusal::new(
                     CastRefusalKind::OutOfRange,
@@ -1502,6 +1527,37 @@ pub(crate) fn begin_cast_with_admission(
         ..SpellCastEvent::signal(ctx, caster_guid, spell_id, SpellCastEventKind::Start)
     });
     Ok(CastStart::Started(cast.into()))
+}
+
+#[cfg(test)]
+mod ground_destination_tests {
+    use super::*;
+
+    const CASTER: (f32, f32, f32) = (0.0, 0.0, 0.0);
+
+    #[test]
+    fn a_distract_without_a_ground_point_is_a_bad_target() {
+        let refusal = check_ground_destination(CASTER, None, 30).unwrap_err();
+        assert!(refusal.message.contains("only target"), "{refusal}");
+    }
+
+    #[test]
+    fn a_ground_point_inside_the_range_passes() {
+        assert!(check_ground_destination(CASTER, Some((30.0, 0.0, 0.0)), 30).is_ok());
+    }
+
+    #[test]
+    fn a_ground_point_inside_the_leeway_passes() {
+        // 30 yd range plus the 2 yd combat reach and 8/3 yd moving tolerance.
+        assert!(check_ground_destination(CASTER, Some((34.6, 0.0, 0.0)), 30).is_ok());
+    }
+
+    #[test]
+    fn a_ground_point_beyond_the_leeway_is_out_of_range() {
+        let refusal = check_ground_destination(CASTER, Some((34.7, 0.0, 0.0)), 30).unwrap_err();
+        assert_eq!(refusal.kind, CastRefusalKind::OutOfRange);
+        assert!(refusal.message.contains("out of range"), "{refusal}");
+    }
 }
 
 #[cfg(test)]
