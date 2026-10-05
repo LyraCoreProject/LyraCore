@@ -1871,7 +1871,7 @@ fn player_create_seeds_inventory_slot_descriptor() {
     let msg = build_create_object(
         &warrior_entity(),
         CreateKind::SelfPlayer,
-        &[(23, item_guid, 25, 0)],
+        &[worn_item(23, item_guid, 25, 0)],
         &[],
     )
     .unwrap();
@@ -1983,7 +1983,7 @@ fn player_create_equips_mainhand_renders_visible_item() {
     let msg = build_create_object(
         &warrior_entity(),
         CreateKind::SelfPlayer,
-        &[(15, item_guid, 25, 0)],
+        &[worn_item(15, item_guid, 25, 0)],
         &[],
     )
     .unwrap();
@@ -3205,7 +3205,7 @@ fn visible_item_index_boundary_stops_after_equipment_slot_18() {
     let msg = build_create_object(
         &warrior_entity(),
         CreateKind::SelfPlayer,
-        &[(18, g18, 100, 0), (19, g19, 200, 0)],
+        &[worn_item(18, g18, 100, 0), worn_item(19, g19, 200, 0)],
         &[],
     )
     .unwrap();
@@ -3735,10 +3735,24 @@ fn creature_query_response_maps_names_and_flags_and_serializes() {
     assert!(!buf.is_empty());
 }
 
+fn worn_item(slot: u8, guid: u64, entry: u32, enchantment: u32) -> ItemInstanceView {
+    ItemInstanceView {
+        guid,
+        entry,
+        slot,
+        enchantment,
+        ..Default::default()
+    }
+}
+
 #[test]
 fn visible_item_values_render_and_clear_equipment_slots_only_work_item_087() {
     // Equip: the VALUES partial must carry PLAYER_VISIBLE_ITEM[15] = the item entry.
-    let msg = build_visible_item_values(1, 15, 25, 117).expect("slot 15 (mainhand) is equipment");
+    let sword = ItemInstanceView {
+        random_property_id: 117,
+        ..worn_item(15, 1, 25, 0)
+    };
+    let msg = build_visible_item_values(1, 15, &sword).expect("slot 15 (mainhand) is equipment");
     match &msg.objects[0] {
         Object::Values {
             mask1: UpdateMask::Player(p),
@@ -3756,7 +3770,7 @@ fn visible_item_values_render_and_clear_equipment_slots_only_work_item_087() {
         other => panic!("expected a Player Values update, got {other:?}"),
     }
     // Unequip: entry 0 is a real (zeroed) write, not a skipped update.
-    let cleared = build_visible_item_values(1, 15, 0, 0).unwrap();
+    let cleared = build_visible_item_values(1, 15, &ItemInstanceView::default()).unwrap();
     match &cleared.objects[0] {
         Object::Values {
             mask1: UpdateMask::Player(p),
@@ -3766,13 +3780,91 @@ fn visible_item_values_render_and_clear_equipment_slots_only_work_item_087() {
                 .player_visible_item(VisibleItemIndex::Index15)
                 .expect("cleared but present");
             assert_eq!(vi.item, 0);
+            assert_eq!(
+                vi.enchants,
+                [0, 0],
+                "an unequip clears the enchant words too"
+            );
         }
         other => panic!("expected a Player Values update, got {other:?}"),
     }
     // Non-equipment slots (backpack 23, bags 19, bag contents 120+) are None — no model residue.
-    assert!(build_visible_item_values(1, 23, 25, 0).is_none());
-    assert!(build_visible_item_values(1, 19, 25, 0).is_none());
-    assert!(build_visible_item_values(1, 120, 25, 0).is_none());
+    assert!(build_visible_item_values(1, 23, &sword).is_none());
+    assert!(build_visible_item_values(1, 19, &sword).is_none());
+    assert!(build_visible_item_values(1, 120, &sword).is_none());
+}
+
+#[test]
+fn visible_item_values_carry_the_permanent_enchant_in_the_first_enchant_word() {
+    let bracer = worn_item(8, 1, 25, 823);
+    let msg = build_visible_item_values(1, 8, &bracer).expect("slot 8 (wrist) is equipment");
+    match &msg.objects[0] {
+        Object::Values {
+            mask1: UpdateMask::Player(p),
+            ..
+        } => {
+            let vi = p
+                .player_visible_item(VisibleItemIndex::Index8)
+                .expect("visible item set");
+            assert_eq!(vi.item, 25);
+            assert_eq!(
+                vi.enchants,
+                [823, 0],
+                "slot 0 is permanent, slot 1 temporary"
+            );
+        }
+        other => panic!("expected a Player Values update, got {other:?}"),
+    }
+    let mut buf = Vec::new();
+    msg.write_unencrypted_server(&mut buf).unwrap();
+    let updates = lyracore_shared::values_mask::parse_values_updates(&buf[4..]);
+    let fields = &updates[0].fields;
+    assert!(
+        !fields.iter().any(|&(idx, _)| idx == 2),
+        "OBJECT_FIELD_TYPE must stay off the partial update"
+    );
+    assert_eq!(fields.iter().filter(|&&(_, word)| word == 823).count(), 1);
+}
+
+#[test]
+fn item_enchantment_values_set_only_the_first_enchantment_word() {
+    let msg = build_item_enchantment_values(0x4000_0000_0000_0007, 823);
+    match &msg.objects[0] {
+        Object::Values {
+            mask1: UpdateMask::Item(item),
+            ..
+        } => assert_eq!(item.item_enchantment(), Some(823)),
+        other => panic!("expected an Item Values update, got {other:?}"),
+    }
+    let mut buf = Vec::new();
+    msg.write_unencrypted_server(&mut buf).unwrap();
+    let updates = lyracore_shared::values_mask::parse_values_updates(&buf[4..]);
+    assert_eq!(
+        updates[0].fields,
+        vec![(22, 823)],
+        "only ITEM_FIELD_ENCHANTMENT is written, never OBJECT_FIELD_TYPE"
+    );
+}
+
+#[test]
+fn player_create_carries_each_worn_items_permanent_enchant_for_self_and_peer() {
+    let bracer = worn_item(8, (0x4000u64 << 48) | 8, 25, 724);
+    for kind in [CreateKind::SelfPlayer, CreateKind::Peer] {
+        let msg = build_create_object(&warrior_entity(), kind, std::slice::from_ref(&bracer), &[])
+            .unwrap();
+        match &msg.objects[0] {
+            Object::CreateObject2 {
+                mask2: UpdateMask::Player(p),
+                ..
+            } => {
+                let vi = p
+                    .player_visible_item(VisibleItemIndex::Index8)
+                    .expect("wrist VISIBLE_ITEM set");
+                assert_eq!((vi.item, vi.enchants), (25, [724, 0]), "{kind:?}");
+            }
+            other => panic!("expected a Player CreateObject2, got {other:?}"),
+        }
+    }
 }
 
 // ===========================================================================================

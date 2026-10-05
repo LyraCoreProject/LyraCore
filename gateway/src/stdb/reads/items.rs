@@ -57,7 +57,9 @@ impl Coordinator {
                     random_property_id: i.random_property_id,
                     random_property_enchant_ids: property_enchant_ids(db, i.random_property_id),
                     item_text_id: i.item_text_id,
-                    enchantment: 0,
+                    enchantment: lyracore_shared::item_property::client_enchantment_id(
+                        i.enchant_id,
+                    ),
                 })
             })
             .collect()

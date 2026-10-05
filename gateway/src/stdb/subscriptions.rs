@@ -285,14 +285,13 @@ fn build_peer_create(
     viewer_guid: u64,
     row: &WorldEntity,
 ) -> Option<Vec<Outbound>> {
-    let inv: Vec<(u8, u64, u32, u32)> =
+    let inv: Vec<codec::ItemInstanceView> =
         if row.type_mask & lyracore_shared::constants::type_mask::PLAYER_BIT != 0 {
             coord
                 .player_items(row.guid)
                 .unwrap_or_default()
                 .into_iter()
                 .filter(|i| i.slot <= 18)
-                .map(|i| (i.slot, i.guid, i.entry, i.random_property_id))
                 .collect()
         } else {
             Vec::new()
@@ -331,7 +330,7 @@ fn peer_entity_view(
 /// could see it, so another aura callback cannot be relied on to supply them.
 fn peer_create_outbound(
     view: &codec::EntityView,
-    inventory: &[(u8, u64, u32, u32)],
+    inventory: &[codec::ItemInstanceView],
     auras: &[Aura],
 ) -> Result<Vec<Outbound>> {
     let create = codec::build_create_object(view, CreateKind::Peer, inventory, &[])?;
@@ -2167,7 +2166,7 @@ fn trade_offer_extended(
             item: v.entry,
             display_id: v.display_id,
             stack_count: v.stack_count,
-            enchantment: v.enchantment,
+            enchantment: lyracore_shared::item_property::client_enchantment_id(v.enchantment),
             item_random_properties_id: v.random_property_id,
             max_durability: v.max_durability,
             durability: v.durability,
@@ -3561,9 +3560,7 @@ pub(crate) fn item_instance_insert_outbound(
             Box::new(values),
         )));
     }
-    if let Some(values) =
-        codec::build_visible_item_values(self_guid, row.slot, row.entry, row.random_property_id)
-    {
+    if let Some(values) = codec::build_visible_item_values(self_guid, row.slot, &view) {
         out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
             Box::new(values),
         )));
@@ -3609,7 +3606,9 @@ pub(crate) fn item_instance_delete_outbound(
             Box::new(values),
         )));
     }
-    if let Some(values) = codec::build_visible_item_values(self_guid, row.slot, 0, 0) {
+    if let Some(values) =
+        codec::build_visible_item_values(self_guid, row.slot, &codec::ItemInstanceView::default())
+    {
         out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
             Box::new(values),
         )));
@@ -3663,9 +3662,10 @@ pub(crate) fn item_instance_update_outbound(
             db.game_item_instance()
                 .iter()
                 .find(|item| item.owner_guid == self_guid && item.slot == slot)
-                .map(|item| (item.guid, item.entry, item.random_property_id))
+                .map(|item| look_of_item_row(&item))
         });
     }
+    out.extend(enchant_change_outbound(self_guid, old, row));
     if old.stack_count != row.stack_count || old.durability != row.durability {
         out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
             Box::new(codec::build_item_values(
@@ -3679,9 +3679,51 @@ pub(crate) fn item_instance_update_outbound(
     let emptied_equipment = old.slot != row.slot && old.slot <= 18 && old_slot_is_empty;
     if moved_into_equipment
         || emptied_equipment
-        || row.slot <= 18 && (old.durability == 0) != (row.durability == 0)
+        || row.slot <= 18
+            && ((old.durability == 0) != (row.durability == 0) || old.enchant_id != row.enchant_id)
     {
         append_item_armor_and_sheet(db, self_guid, &mut out);
+    }
+    out
+}
+
+/// The parts of an item row that a slot descriptor or a visible item shows. The enchantment is the
+/// ID the client resolves.
+fn look_of_item_row(row: &ItemInstance) -> codec::ItemInstanceView {
+    codec::ItemInstanceView {
+        guid: row.guid,
+        entry: row.entry,
+        slot: row.slot,
+        random_property_id: row.random_property_id,
+        enchantment: lyracore_shared::item_property::client_enchantment_id(row.enchant_id),
+        ..Default::default()
+    }
+}
+
+/// An in-place permanent enchant change: the item's enchantment word and, for worn gear that did
+/// not change slot, its visible item. A change of slot is covered by the slot projection. Empty
+/// when the enchant did not change.
+fn enchant_change_outbound(
+    self_guid: u64,
+    old: &ItemInstance,
+    row: &ItemInstance,
+) -> Vec<Outbound> {
+    if old.enchant_id == row.enchant_id {
+        return Vec::new();
+    }
+    let look = look_of_item_row(row);
+    let mut out = vec![Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+        Box::new(codec::build_item_enchantment_values(
+            row.guid,
+            look.enchantment,
+        )),
+    ))];
+    if old.slot == row.slot {
+        if let Some(values) = codec::build_visible_item_values(self_guid, row.slot, &look) {
+            out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+                Box::new(values),
+            )));
+        }
     }
     out
 }
@@ -3691,36 +3733,34 @@ fn append_final_item_slots(
     old_slot: u8,
     new_slot: u8,
     out: &mut Vec<Outbound>,
-    item_in_slot: impl Fn(u8) -> Option<(u64, u32, u32)>,
+    item_in_slot: impl Fn(u8) -> Option<codec::ItemInstanceView>,
 ) {
     let old_item = item_in_slot(old_slot);
     let new_item = item_in_slot(new_slot).unwrap_or_default();
     let slots = old_item
         .is_none()
-        .then_some((old_slot, (0, 0, 0)))
+        .then_some((old_slot, codec::ItemInstanceView::default()))
         .into_iter()
         .chain([(new_slot, new_item)]);
-    for (slot, (guid, _, _)) in slots.clone() {
-        if let Some(values) = codec::build_inv_slot_values(self_guid, slot, guid) {
+    for (slot, item) in slots.clone() {
+        if let Some(values) = codec::build_inv_slot_values(self_guid, slot, item.guid) {
             out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
                 Box::new(values),
             )));
         }
     }
-    for (slot, (_, entry, random_property_id)) in slots.clone() {
-        if let Some(values) =
-            codec::build_visible_item_values(self_guid, slot, entry, random_property_id)
-        {
+    for (slot, item) in slots.clone() {
+        if let Some(values) = codec::build_visible_item_values(self_guid, slot, &item) {
             out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
                 Box::new(values),
             )));
         }
     }
-    for (slot, (guid, _, _)) in slots {
+    for (slot, item) in slots {
         if let Some((bag_slot, slot_in_bag)) = bag_content_parts(slot) {
-            if let Some((bag_guid, _, _)) = item_in_slot(bag_slot) {
+            if let Some(bag) = item_in_slot(bag_slot) {
                 let (opcode, body) =
-                    codec::build_container_slot_values(bag_guid, slot_in_bag, guid);
+                    codec::build_container_slot_values(bag.guid, slot_in_bag, item.guid);
                 out.push(Outbound::Raw { opcode, body });
             }
         }
@@ -5219,6 +5259,39 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_compatibility_enchant_in_an_offer_goes_out_as_its_client_enchantment() {
+        use lyracore_shared::trade::{encode_offer, event_kind as kind, OfferSlot};
+        let slot = |trade_slot, enchantment| OfferSlot {
+            trade_slot,
+            entry: 6948,
+            display_id: 6418,
+            stack_count: 1,
+            enchantment,
+            durability: 40,
+            max_durability: 40,
+            random_property_id: 0,
+        };
+        let payload = encode_offer(0, &[slot(0, 7745), slot(1, 7748)]);
+        let event = TradeEvent {
+            id: 1,
+            recipient_identity: spacetimedb_sdk::Identity::from_byte_array([0u8; 32]),
+            kind: kind::OFFER_SELF,
+            other_guid: 77,
+            created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
+            recipient_guid: 1,
+            payload,
+        };
+        let out = trade_event_outbound(&event);
+        let Some(Outbound::One(ServerOpcodeMessage::SMSG_TRADE_STATUS_EXTENDED(extended))) =
+            out.first()
+        else {
+            panic!("expected one SMSG_TRADE_STATUS_EXTENDED");
+        };
+        assert_eq!(extended.trade_slots[0].enchantment, 823);
+        assert_eq!(extended.trade_slots[1].enchantment, 724);
+    }
+
     const HEROIC_STRIKE_CASTER: u64 = 7;
     /// The module's `CAST_FAIL_NO_POWER`.
     const NO_POWER_CODE: u8 = 1;
@@ -6394,9 +6467,17 @@ mod tests {
             assert_eq!(index.stealth_count(0, entity.guid), 0);
 
             let view = entity_view(entity, 0);
-            let out =
-                peer_create_outbound(&view, &[(0, 700, 1337, 0)], &index.on_target(0, view.guid))
-                    .unwrap();
+            let out = peer_create_outbound(
+                &view,
+                &[codec::ItemInstanceView {
+                    guid: 700,
+                    entry: 1337,
+                    enchantment: 823,
+                    ..Default::default()
+                }],
+                &index.on_target(0, view.guid),
+            )
+            .unwrap();
             let [Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(create)), Outbound::Raw { opcode, body }] =
                 out.as_slice()
             else {
@@ -6407,13 +6488,10 @@ mod tests {
             };
             assert_eq!(guid3.guid(), view.guid);
             if let UpdateMask::Player(player) = mask2 {
-                assert_eq!(
-                    player
-                        .player_visible_item(VisibleItemIndex::Index0)
-                        .unwrap()
-                        .item,
-                    1337,
-                );
+                let visible = player
+                    .player_visible_item(VisibleItemIndex::Index0)
+                    .unwrap();
+                assert_eq!((visible.item, visible.enchants), (1337, [823, 0]));
             }
             assert_eq!(*opcode, 0x00A9);
             let decoded = lyracore_shared::values_mask::parse_values_updates(body);
@@ -6501,6 +6579,136 @@ mod tests {
         assert_eq!(bag_content_parts(192), Some((23, 0)));
     }
 
+    fn item_view(guid: u64, entry: u32) -> codec::ItemInstanceView {
+        codec::ItemInstanceView {
+            guid,
+            entry,
+            ..Default::default()
+        }
+    }
+
+    fn item_row(slot: u8, enchant_id: u32) -> ItemInstance {
+        ItemInstance {
+            guid: 0x4000_0000_0000_0007,
+            entry: 1337,
+            owner_identity: spacetimedb_sdk::Identity::from_byte_array([0u8; 32]),
+            owner_guid: 7,
+            slot,
+            stack_count: 1,
+            durability: 20,
+            created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
+            enchant_id,
+            soulbound: false,
+            random_property_id: 0,
+            item_text_id: 0,
+        }
+    }
+
+    /// The enchantment word of the item update and the first enchant word of the visible item in an
+    /// in-place enchant outbound, with the raw field indexes of every VALUES block.
+    fn enchant_words(out: &[Outbound]) -> (Option<u32>, Option<u32>, Vec<Vec<u16>>) {
+        use wow_world_messages::vanilla::{Object, ServerMessage, UpdateMask, VisibleItemIndex};
+        let (mut item_word, mut visible_word) = (None, None);
+        let mut field_indexes = Vec::new();
+        for message in out {
+            let Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(update)) = message else {
+                continue;
+            };
+            let mut bytes = Vec::new();
+            update.write_unencrypted_server(&mut bytes).unwrap();
+            for values in lyracore_shared::values_mask::parse_values_updates(&bytes[4..]) {
+                field_indexes.push(values.fields.iter().map(|&(idx, _)| idx).collect());
+            }
+            match &update.objects[0] {
+                Object::Values {
+                    mask1: UpdateMask::Item(item),
+                    ..
+                } => item_word = item.item_enchantment().map(|word| word as u32),
+                Object::Values {
+                    mask1: UpdateMask::Player(player),
+                    ..
+                } => {
+                    visible_word = player
+                        .player_visible_item(VisibleItemIndex::Index8)
+                        .map(|visible| visible.enchants[0])
+                }
+                _ => {}
+            }
+        }
+        (item_word, visible_word, field_indexes)
+    }
+
+    #[test]
+    fn enchanting_a_worn_item_in_place_updates_its_enchant_word_and_visible_item() {
+        for (stored, client) in [(7745, 823), (7748, 724), (2564, 2564)] {
+            let out = enchant_change_outbound(7, &item_row(8, 0), &item_row(8, stored));
+            let (item_word, visible_word, fields) = enchant_words(&out);
+            assert_eq!(item_word, Some(client), "stored {stored}");
+            assert_eq!(visible_word, Some(client), "stored {stored}");
+            assert!(
+                fields.iter().all(|idx| !idx.contains(&2)),
+                "OBJECT_FIELD_TYPE must stay off the partial update"
+            );
+        }
+    }
+
+    #[test]
+    fn enchanting_a_bagged_item_in_place_updates_only_its_enchant_word() {
+        let out = enchant_change_outbound(7, &item_row(23, 0), &item_row(23, 7745));
+        let (item_word, visible_word, _) = enchant_words(&out);
+        assert_eq!(item_word, Some(823));
+        assert_eq!(visible_word, None);
+    }
+
+    #[test]
+    fn a_change_that_leaves_the_enchant_alone_sends_no_enchant_word() {
+        let mut worn = item_row(8, 7745);
+        worn.durability = 3;
+        assert!(enchant_change_outbound(7, &item_row(8, 7745), &worn).is_empty());
+    }
+
+    #[test]
+    fn removing_a_permanent_enchant_in_place_clears_the_word() {
+        let out = enchant_change_outbound(7, &item_row(8, 7745), &item_row(8, 0));
+        let (item_word, visible_word, _) = enchant_words(&out);
+        assert_eq!((item_word, visible_word), (Some(0), Some(0)));
+    }
+
+    #[test]
+    fn a_slot_change_with_an_enchant_change_leaves_the_visible_item_to_the_slot_projection() {
+        let out = enchant_change_outbound(7, &item_row(23, 0), &item_row(8, 7745));
+        let (item_word, visible_word, _) = enchant_words(&out);
+        assert_eq!((item_word, visible_word), (Some(823), None));
+    }
+
+    #[test]
+    fn a_worn_item_moved_into_a_slot_shows_its_client_enchantment_on_the_visible_item() {
+        use wow_world_messages::vanilla::{Object, UpdateMask, VisibleItemIndex};
+        let committed = item_row(8, 7748);
+        let mut out = Vec::new();
+        append_final_item_slots(7, 23, 8, &mut out, |slot| {
+            (slot == 8).then(|| look_of_item_row(&committed))
+        });
+        let mut words = Vec::new();
+        for message in &out {
+            let Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(update)) = message else {
+                continue;
+            };
+            if let Object::Values {
+                mask1: UpdateMask::Player(player),
+                ..
+            } = &update.objects[0]
+            {
+                words.extend(
+                    player
+                        .player_visible_item(VisibleItemIndex::Index8)
+                        .map(|visible| visible.enchants),
+                );
+            }
+        }
+        assert_eq!(words, [[724, 0]]);
+    }
+
     #[test]
     fn occupied_equipment_swap_projects_committed_slot_occupants() {
         use wow_world_messages::vanilla::{Guid, ItemSlot, Object, UpdateMask, VisibleItemIndex};
@@ -6520,7 +6728,11 @@ mod tests {
             committed
                 .iter()
                 .find(|item| item.0 == slot)
-                .map(|item| (item.1, item.2, 0))
+                .map(|item| codec::ItemInstanceView {
+                    guid: item.1,
+                    entry: item.2,
+                    ..Default::default()
+                })
         };
         let mut outbound = Vec::new();
 
@@ -6575,7 +6787,7 @@ mod tests {
 
         let mut outbound = Vec::new();
         append_final_item_slots(7, 23, 0, &mut outbound, |slot| {
-            (slot == 0).then_some((202, 1337, 0))
+            (slot == 0).then(|| item_view(202, 1337))
         });
 
         let mut equipment = Vec::new();
@@ -6605,7 +6817,7 @@ mod tests {
 
         let mut outbound = Vec::new();
         append_final_item_slots(7, 23, 24, &mut outbound, |slot| {
-            (slot == 24).then_some((202, 1337, 0))
+            (slot == 24).then(|| item_view(202, 1337))
         });
 
         let mut source = Vec::new();

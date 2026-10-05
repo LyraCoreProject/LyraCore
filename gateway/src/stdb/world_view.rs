@@ -2096,7 +2096,7 @@ fn item_owner_job(
 fn item_inserted(view: &WorldView, coord: &Coordinator, shard: ShardId, row: &ItemInstance) {
     let (coord, row) = (coord.clone(), row.clone());
     item_owner_job(view, shard, row.owner_guid, move |viewer| {
-        let enchantment = charter_petition_id(&coord, &row);
+        let enchantment = item_enchantment_word(&coord, &row);
         let guard = coord.0.coord();
         super::subscriptions::item_instance_insert_outbound(
             &guard.conn.db,
@@ -2107,12 +2107,13 @@ fn item_inserted(view: &WorldView, coord: &Coordinator, shard: ShardId, row: &It
     });
 }
 
-/// The Petition id a Guild Charter shows, read from the Realm-core cache before the Home Shard's
-/// cache guard is taken. 0 for every other item, and for a Charter whose Petition is not open
-/// yet; the Petition insert relay sends it later.
-fn charter_petition_id(coord: &Coordinator, row: &ItemInstance) -> u32 {
+/// The value of ITEM_FIELD_ENCHANTMENT for a newly inserted item. A Guild Charter shows its Petition
+/// id, read from the Realm-core cache before the Home Shard's cache guard is taken; it shows 0 when
+/// its Petition is not open yet, and the Petition insert relay sends it later. Every other item
+/// shows the enchantment ID the client resolves for its permanent enchant.
+fn item_enchantment_word(coord: &Coordinator, row: &ItemInstance) -> u32 {
     if row.entry != lyracore_shared::guild::GUILD_CHARTER_ENTRY {
-        return 0;
+        return lyracore_shared::item_property::client_enchantment_id(row.enchant_id);
     }
     coord
         .realm_core()
