@@ -27,6 +27,7 @@
 //!   `begin_cast` / the passive-apply path).
 //! - `proc`      — the Proc engine: the pure proc decision plus the ONE pass, from `apply_hit`.
 //! - `scheduler` — the `#[reducer]`s (`tick_auras` / `fire_pending_cast` / `cast_spell`).
+//! - `self_resurrect`: the Self-Resurrection Option, chosen at death and used from the death dialog.
 //!
 //! Everything is re-exported below so every `crate::spell::<sym>` path resolves regardless of which
 //! submodule actually defines it.
@@ -39,6 +40,7 @@ mod effects;
 mod math;
 pub(crate) mod proc;
 mod scheduler;
+mod self_resurrect;
 pub(crate) mod spellbook;
 pub(crate) mod stacking;
 mod tables;
@@ -55,6 +57,7 @@ pub use control::*;
 pub(crate) use effects::*;
 pub use math::*;
 pub use scheduler::*;
+pub(crate) use self_resurrect::*;
 pub use spellbook::*;
 pub use tables::*;
 pub(crate) use taxonomy::*;

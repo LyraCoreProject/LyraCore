@@ -783,3 +783,14 @@ pub struct ResurrectRequest {
     pub points: i32,         // frozen E_RESURRECT base_points (%), applied on accept
     pub created_at: Timestamp,
 }
+
+/// The Self-Resurrection Option a dead Character holds: the one spell it may cast on itself. Chosen at
+/// death, kept through Release Spirit, and deleted when the Character is resurrected or leaves the
+/// world. The Gateway writes `spell_id` into the owner's `PLAYER_SELF_RES_SPELL` and sends it to the
+/// owner only.
+#[table(accessor = game_self_resurrect_option, public)]
+pub struct SelfResurrectOption {
+    #[primary_key]
+    pub character_guid: u64,
+    pub spell_id: u32,
+}

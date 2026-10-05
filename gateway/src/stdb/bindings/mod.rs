@@ -249,6 +249,7 @@ pub mod debug_seed_creature_ai_fixtures_reducer;
 pub mod debug_seed_mail_reducer;
 pub mod debug_seed_package_config_reducer;
 pub mod debug_seed_scenario_fixtures_reducer;
+pub mod debug_self_resurrect_reducer;
 pub mod debug_sell_item_reducer;
 pub mod debug_set_health_reducer;
 pub mod debug_set_lethal_damage_floor_fixture_reducer;
@@ -612,6 +613,7 @@ pub mod game_resurrect_request_table;
 pub mod game_roll_event_table;
 pub mod game_school_lockout_table;
 pub mod game_script_table;
+pub mod game_self_resurrect_option_table;
 pub mod game_session_reaper_schedule_table;
 pub mod game_session_table;
 pub mod game_sessionless_action_consent_table;
@@ -806,6 +808,7 @@ pub mod gw_repair_item_reducer;
 pub mod gw_repop_reducer;
 pub mod gw_reset_talents_reducer;
 pub mod gw_respond_resurrect_reducer;
+pub mod gw_self_resurrect_reducer;
 pub mod gw_sell_item_reducer;
 pub mod gw_send_chat_reducer;
 pub mod gw_send_emote_reducer;
@@ -1070,6 +1073,7 @@ pub mod scale_selected_threat_instruction_type;
 pub mod school_lockout_type;
 pub mod script_type;
 pub mod seeker_facts_type;
+pub mod self_resurrect_option_type;
 pub mod server_config_type;
 pub mod session_actor_type;
 pub mod session_reaper_schedule_type;
@@ -1415,6 +1419,7 @@ pub use debug_seed_creature_ai_fixtures_reducer::debug_seed_creature_ai_fixtures
 pub use debug_seed_mail_reducer::debug_seed_mail;
 pub use debug_seed_package_config_reducer::debug_seed_package_config;
 pub use debug_seed_scenario_fixtures_reducer::debug_seed_scenario_fixtures;
+pub use debug_self_resurrect_reducer::debug_self_resurrect;
 pub use debug_sell_item_reducer::debug_sell_item;
 pub use debug_set_health_reducer::debug_set_health;
 pub use debug_set_lethal_damage_floor_fixture_reducer::debug_set_lethal_damage_floor_fixture;
@@ -1778,6 +1783,7 @@ pub use game_resurrect_request_table::*;
 pub use game_roll_event_table::*;
 pub use game_school_lockout_table::*;
 pub use game_script_table::*;
+pub use game_self_resurrect_option_table::*;
 pub use game_session_reaper_schedule_table::*;
 pub use game_session_table::*;
 pub use game_sessionless_action_consent_table::*;
@@ -1972,6 +1978,7 @@ pub use gw_repair_item_reducer::gw_repair_item;
 pub use gw_repop_reducer::gw_repop;
 pub use gw_reset_talents_reducer::gw_reset_talents;
 pub use gw_respond_resurrect_reducer::gw_respond_resurrect;
+pub use gw_self_resurrect_reducer::gw_self_resurrect;
 pub use gw_sell_item_reducer::gw_sell_item;
 pub use gw_send_chat_reducer::gw_send_chat;
 pub use gw_send_emote_reducer::gw_send_emote;
@@ -2236,6 +2243,7 @@ pub use scale_selected_threat_instruction_type::ScaleSelectedThreatInstruction;
 pub use school_lockout_type::SchoolLockout;
 pub use script_type::Script;
 pub use seeker_facts_type::SeekerFacts;
+pub use self_resurrect_option_type::SelfResurrectOption;
 pub use server_config_type::ServerConfig;
 pub use session_actor_type::SessionActor;
 pub use session_reaper_schedule_type::SessionReaperSchedule;
@@ -2973,6 +2981,9 @@ pub enum Reducer {
         value: String,
     },
     DebugSeedScenarioFixtures,
+    DebugSelfResurrect {
+        character_guid: u64,
+    },
     DebugSellItem {
         character_guid: u64,
         vendor_guid: u64,
@@ -3728,6 +3739,9 @@ pub enum Reducer {
     GwRespondResurrect {
         request_actor: SessionActor,
         accept: bool,
+    },
+    GwSelfResurrect {
+        request_actor: SessionActor,
     },
     GwSellItem {
         request_actor: SessionActor,
@@ -4523,6 +4537,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugSeedMail { .. } => "debug_seed_mail",
             Reducer::DebugSeedPackageConfig { .. } => "debug_seed_package_config",
             Reducer::DebugSeedScenarioFixtures => "debug_seed_scenario_fixtures",
+            Reducer::DebugSelfResurrect { .. } => "debug_self_resurrect",
             Reducer::DebugSellItem { .. } => "debug_sell_item",
             Reducer::DebugSetHealth { .. } => "debug_set_health",
             Reducer::DebugSetLethalDamageFloorFixture { .. } => {
@@ -4729,6 +4744,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwRepop { .. } => "gw_repop",
             Reducer::GwResetTalents { .. } => "gw_reset_talents",
             Reducer::GwRespondResurrect { .. } => "gw_respond_resurrect",
+            Reducer::GwSelfResurrect { .. } => "gw_self_resurrect",
             Reducer::GwSellItem { .. } => "gw_sell_item",
             Reducer::GwSendChat { .. } => "gw_send_chat",
             Reducer::GwSendEmote { .. } => "gw_send_emote",
@@ -6001,7 +6017,12 @@ Reducer::DebugSeedMail{
 }),
             Reducer::DebugSeedScenarioFixtures => __sats::bsatn::to_vec(&debug_seed_scenario_fixtures_reducer::DebugSeedScenarioFixturesArgs {
                 }),
-Reducer::DebugSellItem{
+Reducer::DebugSelfResurrect{
+                character_guid,
+}             => __sats::bsatn::to_vec(&debug_self_resurrect_reducer::DebugSelfResurrectArgs {
+                character_guid: character_guid.clone(),
+}),
+            Reducer::DebugSellItem{
                 character_guid,
                 vendor_guid,
                 slot,
@@ -7360,6 +7381,11 @@ Reducer::GwIgnoreTrade{
 }             => __sats::bsatn::to_vec(&gw_respond_resurrect_reducer::GwRespondResurrectArgs {
                 request_actor: request_actor.clone(),
                 accept: accept.clone(),
+}),
+            Reducer::GwSelfResurrect{
+                request_actor,
+}             => __sats::bsatn::to_vec(&gw_self_resurrect_reducer::GwSelfResurrectArgs {
+                request_actor: request_actor.clone(),
 }),
             Reducer::GwSellItem{
                 request_actor,
@@ -8727,6 +8753,7 @@ pub struct DbUpdate {
     game_roll_event: __sdk::TableUpdate<RollEvent>,
     game_school_lockout: __sdk::TableUpdate<SchoolLockout>,
     game_script: __sdk::TableUpdate<Script>,
+    game_self_resurrect_option: __sdk::TableUpdate<SelfResurrectOption>,
     game_session: __sdk::TableUpdate<Session>,
     game_session_reaper_schedule: __sdk::TableUpdate<SessionReaperSchedule>,
     game_sessionless_action_consent: __sdk::TableUpdate<SessionlessActionConsent>,
@@ -9536,6 +9563,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_script" => db_update
                     .game_script
                     .append(game_script_table::parse_table_update(table_update)?),
+                "game_self_resurrect_option" => db_update.game_self_resurrect_option.append(
+                    game_self_resurrect_option_table::parse_table_update(table_update)?,
+                ),
                 "game_session" => db_update
                     .game_session
                     .append(game_session_table::parse_table_update(table_update)?),
@@ -10784,6 +10814,12 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.game_script = cache
             .apply_diff_to_table::<Script>("game_script", &self.game_script)
             .with_updates_by_pk(|row| &row.script_id);
+        diff.game_self_resurrect_option = cache
+            .apply_diff_to_table::<SelfResurrectOption>(
+                "game_self_resurrect_option",
+                &self.game_self_resurrect_option,
+            )
+            .with_updates_by_pk(|row| &row.character_guid);
         diff.game_session = cache
             .apply_diff_to_table::<Session>("game_session", &self.game_session)
             .with_updates_by_pk(|row| &row.account_id);
@@ -11712,6 +11748,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_script" => db_update
                     .game_script
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_self_resurrect_option" => db_update
+                    .game_self_resurrect_option
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_session" => db_update
                     .game_session
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -12580,6 +12619,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_script" => db_update
                     .game_script
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_self_resurrect_option" => db_update
+                    .game_self_resurrect_option
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_session" => db_update
                     .game_session
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -13001,6 +13043,7 @@ pub struct AppliedDiff<'r> {
     game_roll_event: __sdk::TableAppliedDiff<'r, RollEvent>,
     game_school_lockout: __sdk::TableAppliedDiff<'r, SchoolLockout>,
     game_script: __sdk::TableAppliedDiff<'r, Script>,
+    game_self_resurrect_option: __sdk::TableAppliedDiff<'r, SelfResurrectOption>,
     game_session: __sdk::TableAppliedDiff<'r, Session>,
     game_session_reaper_schedule: __sdk::TableAppliedDiff<'r, SessionReaperSchedule>,
     game_sessionless_action_consent: __sdk::TableAppliedDiff<'r, SessionlessActionConsent>,
@@ -14151,6 +14194,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
             event,
         );
         callbacks.invoke_table_row_callbacks::<Script>("game_script", &self.game_script, event);
+        callbacks.invoke_table_row_callbacks::<SelfResurrectOption>(
+            "game_self_resurrect_option",
+            &self.game_self_resurrect_option,
+            event,
+        );
         callbacks.invoke_table_row_callbacks::<Session>("game_session", &self.game_session, event);
         callbacks.invoke_table_row_callbacks::<SessionReaperSchedule>(
             "game_session_reaper_schedule",
@@ -15320,6 +15368,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_roll_event_table::register_table(client_cache);
         game_school_lockout_table::register_table(client_cache);
         game_script_table::register_table(client_cache);
+        game_self_resurrect_option_table::register_table(client_cache);
         game_session_table::register_table(client_cache);
         game_session_reaper_schedule_table::register_table(client_cache);
         game_sessionless_action_consent_table::register_table(client_cache);
@@ -15607,6 +15656,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_roll_event",
         "game_school_lockout",
         "game_script",
+        "game_self_resurrect_option",
         "game_session",
         "game_session_reaper_schedule",
         "game_sessionless_action_consent",

@@ -235,6 +235,7 @@ pub(crate) fn do_resurrect_response(
                 t.player_flags &= !lyracore_shared::constants::player_flags::GHOST;
                 t.unit_bytes_1 &= !lyracore_shared::constants::unit_vis_flags::GHOST;
                 ctx.db.game_world_entity().guid().update(t);
+                crate::spell::clear_resurrect_request_and_option(ctx, target_guid);
             }
         }
     }
