@@ -647,6 +647,8 @@ pub struct CreaturePathPoint {
 }
 
 /// Publish the already checked path as one movement, shared by server advance and client relay.
+/// A mover on a leg starts the path where [`stop_where_rendered`] would stop it, so a renewal
+/// between two advance firings does not move the client back.
 #[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn emit_creature_path(
     ctx: &ReducerContext,
@@ -658,6 +660,10 @@ pub(crate) fn emit_creature_path(
     let Some(&destination) = points.last() else {
         return;
     };
+    let now_micros = ctx.timestamp.to_micros_since_unix_epoch() as u64;
+    let now_ms = (now_micros / 1000) as u32;
+    let spline_id = place_where_rendered(ctx, &mut mover)
+        .map_or(now_ms, |previous| next_spline_id(now_micros, previous));
     let start = (mover.x, mover.y, mover.z);
     let length = movement_path::length(start, &points);
     if !length.is_finite() || length <= 0.0 {
@@ -665,7 +671,6 @@ pub(crate) fn emit_creature_path(
     }
     let speed = if run { speeds::RUN } else { speeds::WALK };
     let duration = (length / speed * 1000.0).ceil().max(1.0) as u32;
-    let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u32;
     emit_move_spline(
         ctx,
         mover.guid,
@@ -673,7 +678,7 @@ pub(crate) fn emit_creature_path(
         destination,
         duration,
         run,
-        now_ms,
+        spline_id,
         mover.map_id,
         mover.instance_id,
         (mover.grid_x, mover.grid_y),
@@ -758,16 +763,10 @@ pub(crate) fn emit_creature_leg(
 /// navigation inputs halt the stop where a leg advance would halt, so it never lands past an
 /// obstruction. The caller writes `mover`. A mover with no leg is unchanged.
 pub(crate) fn stop_where_rendered(ctx: &ReducerContext, mover: &mut WorldEntity) {
-    let Some(leg) = ctx.db.game_creature_spline().guid().find(mover.guid) else {
+    let Some(previous) = place_where_rendered(ctx, mover) else {
         return;
     };
-    let spline_id = next_spline_id(
-        ctx.timestamp.to_micros_since_unix_epoch() as u64,
-        leg.spline_id,
-    );
-    if let Some(stop) = super::cycle::stop_on_stored_leg(ctx, leg) {
-        place_stopped(mover, stop);
-    }
+    let spline_id = next_spline_id(ctx.timestamp.to_micros_since_unix_epoch() as u64, previous);
     let at = (mover.x, mover.y, mover.z);
     emit_move_spline(
         ctx,
@@ -781,6 +780,17 @@ pub(crate) fn stop_where_rendered(ctx: &ReducerContext, mover: &mut WorldEntity)
         mover.instance_id,
         (mover.grid_x, mover.grid_y),
     );
+}
+
+/// Move `mover` to where a stop now would leave it on its leg, and return that leg's spline id.
+/// `None` for a mover with no leg, which stays unchanged. The caller writes `mover`.
+fn place_where_rendered(ctx: &ReducerContext, mover: &mut WorldEntity) -> Option<u32> {
+    let leg = ctx.db.game_creature_spline().guid().find(mover.guid)?;
+    let spline_id = leg.spline_id;
+    if let Some(stop) = super::cycle::stop_on_stored_leg(ctx, leg) {
+        place_stopped(mover, stop);
+    }
+    Some(spline_id)
 }
 
 /// The id for a leg that replaces one with id `previous`. The client ignores an id that does not

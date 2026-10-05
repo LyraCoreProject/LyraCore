@@ -1505,6 +1505,23 @@ pub fn debug_turn_in_quest(
     crate::actor::turn_in_quest(ctx, character_guid, giver_guid, quest_entry, reward_index)
 }
 
+/// Start or renew a one-waypoint Route Path for `guid` to (`x`, `y`, `z`) through
+/// `creatures::tick::emit_creature_path`, the call a Package runner makes.
+#[reducer]
+pub fn debug_creature_path(
+    ctx: &ReducerContext,
+    guid: u64,
+    x: f32,
+    y: f32,
+    z: f32,
+    run: bool,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    let mover = crate::helpers::live_entity(ctx, guid)?;
+    crate::creatures::tick::emit_creature_path(ctx, mover, vec![(x, y, z)], run);
+    Ok(())
+}
+
 /// Kill creature `target_guid` crediting player `killer_guid` — drives the SHARED killing-blow path
 /// (`combat::kill_creature` with a killer), so it produces the exact same corpse + loot AND the XP +
 /// quest-objective credit a real player kill does. The machine-test counterpart to fighting a mob to
