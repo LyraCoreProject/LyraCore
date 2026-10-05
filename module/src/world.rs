@@ -864,12 +864,10 @@ pub(crate) fn teleport_player(
     // A motion tick also applies zero-duration legs. Replace the old destination so a retained
     // leg cannot undo this teleport, and peers receive a stop at the new position.
     if let Some(previous) = ctx.db.game_creature_spline().guid().find(player_guid) {
-        let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u32;
-        let spline_id = if now_ms > previous.spline_id {
-            now_ms
-        } else {
-            previous.spline_id.wrapping_add(1)
-        };
+        let spline_id = crate::creatures::tick::next_spline_id(
+            ctx.timestamp.to_micros_since_unix_epoch() as u64,
+            previous.spline_id,
+        );
         crate::creatures::tick::emit_move_spline(
             ctx,
             player_guid,

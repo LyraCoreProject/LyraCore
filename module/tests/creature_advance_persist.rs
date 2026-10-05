@@ -4,29 +4,17 @@
 
 mod support;
 
-use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-use lyracore_shared::spatial::{grid_cell, GRID_CELL_SIZE, MAP_COORD_MAX};
-use support::Standalone;
+use support::{leg, leg_destination, lone_wolf, number, Row, Standalone, LEG_YD};
 
 /// The drift a stored creature row may lag behind its leg, as `world::PERSIST_MAX_DRIFT_YD`.
 const PERSIST_MAX_DRIFT_YD: f32 = 4.0;
-/// Long enough for several persisted steps, short enough to stay inside one 50 yd cell.
-const LEG_YD: f32 = 20.0;
-
-type Row = BTreeMap<String, String>;
-
-fn yd(row: &Row, column: &str) -> f32 {
-    row[column]
-        .parse()
-        .unwrap_or_else(|_| panic!("{column} is not a number in {row:?}"))
-}
 
 fn drift(from: &Row, to: &Row) -> f32 {
     ["x", "y", "z"]
         .iter()
-        .map(|axis| (yd(to, axis) - yd(from, axis)).powi(2))
+        .map(|axis| (number::<f32>(to, axis) - number::<f32>(from, axis)).powi(2))
         .sum::<f32>()
         .sqrt()
 }
@@ -43,26 +31,9 @@ fn changed_columns(from: &Row, to: &Row) -> Vec<String> {
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_walking_creature_stores_its_position_past_four_yards_and_on_arrival() {
     let mut shard = Standalone::start("creature-advance-persist");
-    shard.publish_module();
-    shard.assert_call("claim_operator", &[]);
-    shard.assert_call("install_guid_range", &["0"]);
-    shard.assert_call("debug_seed_scenario_fixtures", &[]);
-    shard.assert_call("debug_spawn_player_entity", &["1"]);
-    shard.assert_sql("DELETE FROM game_world_entity WHERE entry = 51000");
-    shard.assert_call("debug_spawn_at_feet", &["1", "51000", "5"]);
-    // With no Character left, no cell is awake: only the leg advance touches the wolf's row.
-    shard.assert_sql("DELETE FROM game_world_entity WHERE guid = 1");
-
-    let wolf = shard.query_rows("SELECT * FROM game_world_entity WHERE entry = 51000");
-    assert_eq!(wolf.len(), 1, "{wolf:?}");
-    let wolf = &wolf[0];
+    let wolf = lone_wolf(&mut shard);
     let guid = wolf["guid"].clone();
-    let (x, y, z) = (yd(wolf, "x"), yd(wolf, "y"), yd(wolf, "z"));
-    // Walk toward the cell centre, so no step of the leg crosses a cell edge.
-    let (grid_x, _) = grid_cell(x, y);
-    let centre_x = MAP_COORD_MAX - (grid_x as f32 + 0.5) * GRID_CELL_SIZE;
-    let dest_x = x + LEG_YD.copysign(centre_x - x);
-    assert_eq!(grid_cell(dest_x, y), grid_cell(x, y));
+    let (dest_x, y, z) = leg_destination(&wolf);
 
     shard.assert_call(
         "debug_encounter_move",
@@ -74,11 +45,7 @@ fn a_walking_creature_stores_its_position_past_four_yards_and_on_arrival() {
             "false",
         ],
     );
-    let leg = shard.query_rows(&format!(
-        "SELECT dur_ms FROM game_creature_spline WHERE guid = {guid}"
-    ));
-    assert_eq!(leg.len(), 1, "{leg:?}");
-    let dur_ms: u32 = leg[0]["dur_ms"].parse().unwrap();
+    let dur_ms: u32 = number(&leg(&shard, &guid), "dur_ms");
     assert!(
         dur_ms >= 4_000,
         "a walk must advance under 4 yd per 0.5 s firing, and {LEG_YD} yd took {dur_ms} ms"
@@ -106,7 +73,8 @@ fn a_walking_creature_stores_its_position_past_four_yards_and_on_arrival() {
 
     let (arrival, walk) = stored.split_last().unwrap();
     assert!(
-        (yd(arrival, "x") - dest_x).abs() < 0.01 && (yd(arrival, "y") - y).abs() < 0.01,
+        (number::<f32>(arrival, "x") - dest_x).abs() < 0.01
+            && (number::<f32>(arrival, "y") - y).abs() < 0.01,
         "arrival must store the destination ({dest_x}, {y}): {arrival:?}"
     );
     for pair in stored.windows(2) {
@@ -129,7 +97,7 @@ fn a_walking_creature_stores_its_position_past_four_yards_and_on_arrival() {
     }
     let between = walk
         .iter()
-        .filter(|row| (yd(row, "x") - dest_x).abs() >= 0.01)
+        .filter(|row| (number::<f32>(row, "x") - dest_x).abs() >= 0.01)
         .count();
     assert!(
         between >= 2,

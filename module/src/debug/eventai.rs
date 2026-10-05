@@ -102,3 +102,30 @@ pub fn debug_verify_eventai_summon_expiry(ctx: &ReducerContext) -> Result<(), St
         .ok_or_else(|| "fixture EventAI owner is unavailable".to_string())?;
     crate::creatures::verify_summon_expiry_boundaries_for_debug(ctx, &owner, FIXTURE_OWNER_ENTRY)
 }
+
+/// Start a relay that runs `source_guid` to `selected_guid` and, once the leg lands, equips item 50
+/// through an arrival relay. The test reads the equipment row to see whether the arrival fired.
+#[reducer]
+pub fn debug_start_relay_move(
+    ctx: &ReducerContext,
+    source_guid: u64,
+    selected_guid: u64,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    let catalogue_version = crate::creatures::replace_relays_for_debug(
+        ctx,
+        &[
+            (90_002, "source>selected", "move-dynamic:0:0:0:run:90003"),
+            (90_003, "source>source", "set-equipment:0:50:0:0"),
+        ],
+    )?;
+    crate::creatures::start_imported_relay(
+        ctx,
+        90_002,
+        source_guid,
+        selected_guid,
+        1,
+        catalogue_version,
+    )?;
+    Ok(())
+}

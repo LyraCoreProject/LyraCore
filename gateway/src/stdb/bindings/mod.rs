@@ -288,6 +288,7 @@ pub mod debug_stage_meeting_stone_group_reducer;
 pub mod debug_stage_meeting_stone_reducer;
 pub mod debug_stage_ranged_lethal_damage_floor_fixture_reducer;
 pub mod debug_stage_reward_letter_fixture_reducer;
+pub mod debug_start_relay_move_reducer;
 pub mod debug_stress_relay_reducer;
 pub mod debug_sweep_encounter_state_reducer;
 pub mod debug_sweep_slice_lens_reducer;
@@ -1454,6 +1455,7 @@ pub use debug_stage_meeting_stone_group_reducer::debug_stage_meeting_stone_group
 pub use debug_stage_meeting_stone_reducer::debug_stage_meeting_stone;
 pub use debug_stage_ranged_lethal_damage_floor_fixture_reducer::debug_stage_ranged_lethal_damage_floor_fixture;
 pub use debug_stage_reward_letter_fixture_reducer::debug_stage_reward_letter_fixture;
+pub use debug_start_relay_move_reducer::debug_start_relay_move;
 pub use debug_stress_relay_reducer::debug_stress_relay;
 pub use debug_sweep_encounter_state_reducer::debug_sweep_encounter_state;
 pub use debug_sweep_slice_lens_reducer::debug_sweep_slice_lens;
@@ -3130,6 +3132,10 @@ pub enum Reducer {
         delay_ms: u32,
     },
     DebugStageRewardLetterFixture,
+    DebugStartRelayMove {
+        source_guid: u64,
+        selected_guid: u64,
+    },
     DebugStressRelay {
         character_guid: u64,
         victim_entry: u32,
@@ -4580,6 +4586,7 @@ impl __sdk::Reducer for Reducer {
                 "debug_stage_ranged_lethal_damage_floor_fixture"
             }
             Reducer::DebugStageRewardLetterFixture => "debug_stage_reward_letter_fixture",
+            Reducer::DebugStartRelayMove { .. } => "debug_start_relay_move",
             Reducer::DebugStressRelay { .. } => "debug_stress_relay",
             Reducer::DebugSweepEncounterState { .. } => "debug_sweep_encounter_state",
             Reducer::DebugSweepSliceLens => "debug_sweep_slice_lens",
@@ -6284,7 +6291,14 @@ Reducer::DebugStageMeetingStone{
 }),
             Reducer::DebugStageRewardLetterFixture => __sats::bsatn::to_vec(&debug_stage_reward_letter_fixture_reducer::DebugStageRewardLetterFixtureArgs {
                 }),
-Reducer::DebugStressRelay{
+Reducer::DebugStartRelayMove{
+                source_guid,
+                selected_guid,
+}             => __sats::bsatn::to_vec(&debug_start_relay_move_reducer::DebugStartRelayMoveArgs {
+                source_guid: source_guid.clone(),
+                selected_guid: selected_guid.clone(),
+}),
+            Reducer::DebugStressRelay{
                 character_guid,
                 victim_entry,
                 item_entry,
