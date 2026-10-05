@@ -1478,10 +1478,10 @@ fn wire_insert_live<T>(
     });
 }
 
-/// [`wire_insert_live`] for `game_group_event` from `source`. The dispatcher also gets a read of
-/// the cached table, which already holds the whole transaction when the callback runs. It runs
-/// the read only for a recipient with a session, once per transaction, because the SDK copies
-/// every cached row to iterate.
+/// [`wire_insert_live`] for `game_group_event` from `source`. The dispatcher also gets the rows of
+/// the row's transaction for its recipient, sliced from one [`GroupEventSnapshot`] per source
+/// database. The table read behind the snapshot happens once per transaction, and only when some
+/// recipient with a session needs it, because the SDK copies every cached row to iterate.
 fn wire_group_events(
     db: &RemoteTables,
     label: &'static str,
@@ -1490,13 +1490,14 @@ fn wire_group_events(
     source: GroupEventSource,
 ) {
     let view = view.clone();
+    let snapshot = GroupEventSnapshot::default();
     db.game_group_event().on_insert(move |ctx, row| {
         if is_initial_apply(&ctx.event) {
             return;
         }
         guarded(label, || {
             group_event_appeared(&view, &coord, source, row, || {
-                ctx.db.game_group_event().iter().collect()
+                snapshot.recipient_rows(row, || ctx.db.game_group_event().iter().collect())
             });
         });
     });
@@ -2802,9 +2803,9 @@ impl GroupEventCursor {
     /// The SDK fires the inserts of one transaction in hash order, and the client must hear them
     /// in insert order: a filled Meeting Stone party's `COMPLETE` comes before `SETQUEUE(0, NONE)`.
     /// So the first callback of a transaction takes every row of that transaction for this
-    /// recipient from `cached`, which reads the table that already holds the whole transaction, and
-    /// the later callbacks find theirs taken without reading it. Rows of one transaction share
-    /// `created_at`.
+    /// recipient from `cached`, which slices the transaction's rows out of a
+    /// [`GroupEventSnapshot`], and the later callbacks find theirs taken without calling it. Rows
+    /// of one transaction share `created_at`.
     fn take(
         &self,
         source: GroupEventSource,
@@ -2830,6 +2831,75 @@ impl GroupEventCursor {
         rows.sort_unstable_by_key(|cached| cached.id);
         *cursor = rows.last().map_or(row.id, |last| last.id);
         rows
+    }
+}
+
+/// The `game_group_event` rows of the latest transaction seen from one source database, grouped by
+/// recipient. Every recipient of the transaction slices its rows from the same copy.
+#[derive(Default)]
+pub(crate) struct GroupEventSnapshot(Mutex<Option<TransactionRows>>);
+
+struct TransactionRows {
+    created_at: spacetimedb_sdk::Timestamp,
+    by_recipient: HashMap<u64, Vec<GroupEvent>>,
+}
+
+impl TransactionRows {
+    /// The rows of `row`'s transaction in `table`. `row` joins them when the table lacks it.
+    fn collect(row: &GroupEvent, table: Vec<GroupEvent>) -> Self {
+        let mut by_recipient: HashMap<u64, Vec<GroupEvent>> = HashMap::new();
+        let mut found = false;
+        for cached in table {
+            if cached.created_at != row.created_at {
+                continue;
+            }
+            found |= cached.id == row.id;
+            by_recipient
+                .entry(cached.recipient_guid)
+                .or_default()
+                .push(cached);
+        }
+        if !found {
+            by_recipient
+                .entry(row.recipient_guid)
+                .or_default()
+                .push(row.clone());
+        }
+        Self {
+            created_at: row.created_at,
+            by_recipient,
+        }
+    }
+
+    fn holds(&self, row: &GroupEvent) -> bool {
+        self.created_at == row.created_at
+            && self
+                .by_recipient
+                .get(&row.recipient_guid)
+                .is_some_and(|rows| rows.iter().any(|held| held.id == row.id))
+    }
+}
+
+impl GroupEventSnapshot {
+    /// The rows of `row`'s transaction addressed to `row`'s recipient, in no particular order.
+    ///
+    /// The first call for a transaction runs `read_table`, which must return the cached table
+    /// holding the whole transaction. Every later call for the same transaction reuses that
+    /// copy. A row the held transaction lacks starts a new one, so two transactions with the
+    /// same `created_at` never share a copy.
+    fn recipient_rows(
+        &self,
+        row: &GroupEvent,
+        read_table: impl FnOnce() -> Vec<GroupEvent>,
+    ) -> Vec<GroupEvent> {
+        let mut held = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        if !held.as_ref().is_some_and(|rows| rows.holds(row)) {
+            *held = Some(TransactionRows::collect(row, read_table()));
+        }
+        held.as_ref()
+            .and_then(|rows| rows.by_recipient.get(&row.recipient_guid))
+            .cloned()
+            .unwrap_or_default()
     }
 }
 
@@ -6022,7 +6092,7 @@ mod account_claim_relay_tests {
 
 #[cfg(test)]
 mod group_event_order_tests {
-    use super::{GroupEvent, GroupEventCursor, GroupEventSource};
+    use super::{GroupEvent, GroupEventCursor, GroupEventSnapshot, GroupEventSource};
 
     const RECIPIENT: u64 = 7;
 
@@ -6095,6 +6165,71 @@ mod group_event_order_tests {
             ids(&cursor.take(GroupEventSource::Shard(0), &shard[0], || shard.to_vec())),
             [3]
         );
+    }
+
+    /// A Raid roster list writes rows for every member in one transaction. The SDK fires an
+    /// insert callback per row; the table is read once, and every member still gets its own rows.
+    #[test]
+    fn one_transaction_reads_the_table_once_for_every_recipient() {
+        let members = 40_u64;
+        let transaction: Vec<GroupEvent> = (0..members)
+            .flat_map(|member| {
+                let guid = 100 + member;
+                [
+                    event(1000 + member * 2, guid, 200),
+                    event(1001 + member * 2, guid, 200),
+                ]
+            })
+            .collect();
+        let mut table = vec![event(5, 100, 100)];
+        table.extend(transaction.iter().cloned());
+
+        let snapshot = GroupEventSnapshot::default();
+        let reads = std::cell::Cell::new(0);
+        let mut relayed: Vec<(u64, Vec<u64>)> = Vec::new();
+        for row in transaction.iter().rev() {
+            let cursor = GroupEventCursor::default();
+            let rows = cursor.take(GroupEventSource::RealmCore, row, || {
+                snapshot.recipient_rows(row, || {
+                    reads.set(reads.get() + 1);
+                    table.clone()
+                })
+            });
+            relayed.push((row.recipient_guid, ids(&rows)));
+        }
+
+        assert_eq!(reads.get(), 1);
+        for member in 0..members {
+            let first = 1000 + member * 2;
+            assert!(relayed.contains(&(100 + member, vec![first, first + 1])));
+        }
+    }
+
+    /// A row the held transaction lacks starts the next one, even with the same timestamp.
+    #[test]
+    fn the_next_transaction_reads_the_table_again() {
+        let table = [
+            event(10, RECIPIENT, 200),
+            event(11, RECIPIENT, 200),
+            event(12, RECIPIENT, 200),
+        ];
+        let snapshot = GroupEventSnapshot::default();
+        let reads = std::cell::Cell::new(0);
+        let recipient_rows = |row: &GroupEvent, visible: usize| {
+            snapshot.recipient_rows(row, || {
+                reads.set(reads.get() + 1);
+                table[..visible].to_vec()
+            })
+        };
+
+        let first = recipient_rows(&table[0], 2);
+        let again = recipient_rows(&table[1], 2);
+        let next = recipient_rows(&table[2], 3);
+
+        assert_eq!(reads.get(), 2);
+        assert_eq!(ids(&first), [10, 11]);
+        assert_eq!(ids(&again), [10, 11]);
+        assert_eq!(ids(&next), [10, 11, 12]);
     }
 }
 
