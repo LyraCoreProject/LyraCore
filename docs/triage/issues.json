@@ -1,6 +1,6 @@
 {
-  "updated_at": "2026-10-03 21:00 UTC",
-  "base_revision": "c2f2373a4516d06f8fa3f6c6ed37f386eb9f8191",
+  "updated_at": "2026-10-05 16:40 UTC",
+  "base_revision": "f454a983b4cf76e6c72cd58c54b74a8066f30114",
   "status_note": "The 2026-10-02 backlog session closed #559 and #534, merged meeting stones (#532) and both halves of the #570 stop fix. #532 and #570 wait on real-client checks. Two follow-ups are ready: #607 (shared group event snapshot) and #608 (snap-back on a path renewal). No Core PR is open.",
   "monitoring_note": "Claude owns this report and the dispatch order from 2026-10-02. Every open issue has an owner and a next action. Monitoring runs during active work sessions. No unattended scheduler is installed. Refresh GitHub state before the next batch.",
   "focus": [
