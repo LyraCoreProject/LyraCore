@@ -1156,9 +1156,11 @@ mod partition_discipline_tripwire {
 /// The fence is `helpers::character_by_guid` / `character_by_name`, which read an in-transit
 /// character as ABSENT so each caller's existing "no such character" arm fires. This test
 /// source-scans the same file set as its two sibling tripwires for RAW character lookups and fails
-/// on any file over its whitelisted budget. The whitelist FREEZES today's audited exceptions with
-/// a verdict each (see the verdict table in `transfer/mod.rs`'s module doc, and `docs/history/transfer-by-guid-verdict-table.md` for each verdict's reasoning); it is a ratchet, so it should only
-/// ever shrink.
+/// on any file over its whitelisted budget. `WHITELIST` FREEZES today's audited exceptions in
+/// Core's own source, each with a verdict (see the verdict table in `transfer/mod.rs`'s module doc,
+/// and `docs/history/transfer-by-guid-verdict-table.md` for each verdict's reasoning); it is a
+/// ratchet, so it should only ever shrink. `PACKAGE_FILE_BUDGET` carries the same budget for an
+/// installed Package's file, keyed by file shape instead of by Package, so Core names no Package.
 ///
 // Note: same (file, count) granularity, same text-scan mechanism, and the same two ceilings as
 // `partition_discipline_tripwire` — swapping one whitelisted lookup for a different one inside an
@@ -1172,6 +1174,8 @@ mod character_fence_tripwire {
 
     /// `(repo-relative path, allowed raw-lookup count, verdict + why)`. One line each; every entry
     /// is an audited exception from the by-guid verdict table in `module/src/transfer/mod.rs`.
+    /// Core's own files only — an installed Package's file is never named here; see
+    /// `PACKAGE_FILE_BUDGET` below.
     const WHITELIST: &[(&str, usize, &str)] = &[
         ("module/src/account_ownership.rs", 2, "Account fencing reads ownership even during Transfer. These two reads only check the Account name before fencing or removing a live entity; Character rows and Transfer records remain intact."),
         // THE GATE ITSELF.
@@ -1197,8 +1201,42 @@ mod character_fence_tripwire {
         // Split the former single `debug.rs` into a directory; this lookup lives in the one
         // reducer the collapse put it in.
         ("module/src/debug/repair.rs", 1, "`debug_repair_after_publish`'s gm-tester backfill (guid 1, formerly the standalone `debug_seed_gm_tester`); every debug WRITER that touches character state is fenced"),
-        ("packages/playerbots/src/mod.rs", 4, "bot roster bookkeeping over rows this same reducer just created — free-name probe, post-create fetch, post-update re-read; +1 for `ensure_bot_account`'s per-account character COUNT, which reaches no character (it decides which bot account still has room under the 10-character cap) — an in-transit bot counting or not counting toward that cap is harmless either way"),
     ];
+
+    /// `(path relative to a Package's own root, allowed raw-lookup count, verdict + why)` — keyed
+    /// this way so Core names no Package. No staleness ratchet: it names a file shape, not one
+    /// installed Package, so there is no single file to measure it against.
+    const PACKAGE_FILE_BUDGET: &[(&str, usize, &str)] = &[(
+        "src/mod.rs",
+        4,
+        "roster bookkeeping over rows this same reducer just created — free-name probe, post-create fetch, post-update re-read; +1 for a per-account character COUNT, which reaches no character (it decides whether an account still has room under its character cap) — an in-transit character counting or not toward that cap is harmless either way",
+    )];
+
+    /// If `rel` sits under `packages/<pkg>/`, its path relative to that Package's own root —
+    /// `packages/example/src/mod.rs` → `Some("src/mod.rs")`. `None` for a Core file.
+    fn package_relative_path(rel: &str) -> Option<&str> {
+        let after = rel.strip_prefix("packages/")?;
+        let (_pkg, tail) = after.split_once('/')?;
+        Some(tail)
+    }
+
+    /// The raw-lookup budget for `rel`: a Package file is checked against `PACKAGE_FILE_BUDGET` by
+    /// its path relative to the Package root; a Core file is checked against `WHITELIST` by its
+    /// full repo-relative path. Either way, an unlisted file gets zero.
+    fn budget_for(rel: &str) -> usize {
+        if let Some(pkg_rel) = package_relative_path(rel) {
+            return PACKAGE_FILE_BUDGET
+                .iter()
+                .find(|(p, _, _)| *p == pkg_rel)
+                .map(|(_, n, _)| *n)
+                .unwrap_or(0);
+        }
+        WHITELIST
+            .iter()
+            .find(|(p, _, _)| *p == rel)
+            .map(|(_, n, _)| *n)
+            .unwrap_or(0)
+    }
 
     /// The lookup forms that reach a character row raw. `.guid().find(` and `.name().find(` are the
     /// indexed point reads; `.iter()` is the case-folding name scan (`character_by_name`'s
@@ -1262,11 +1300,7 @@ mod character_fence_tripwire {
             let content =
                 std::fs::read_to_string(&file).unwrap_or_else(|e| panic!("cannot read {rel}: {e}"));
             let found = raw_lookups(&content);
-            let allowed = WHITELIST
-                .iter()
-                .find(|(p, _, _)| *p == rel)
-                .map(|(_, n, _)| *n)
-                .unwrap_or(0);
+            let allowed = budget_for(&rel);
             if found.len() > allowed {
                 violations.push(format!(
                     "{rel}: {} raw game_character lookup(s) (budget {allowed}) at line(s) {found:?}",
@@ -1286,29 +1320,28 @@ mod character_fence_tripwire {
              absent, so your existing not-found arm fires and no new error string reaches the \
              gateway. If refusal is the WRONG answer for your path (it would drop a third party's \
              value, or the field is connection-derived and regenerated at the destination), pick the \
-             DEFER or REGENERATE verdict instead and add the site to `WHITELIST` (module/src/tripwires.rs) \
-             WITH its verdict — see the table in `module/src/transfer/mod.rs`'s module doc. \
-             Whitelisted today: {} lookup(s) across {} file(s).",
+             DEFER or REGENERATE verdict instead and add the site WITH its verdict — to `WHITELIST` \
+             (module/src/tripwires.rs) for a Core file, or to `PACKAGE_FILE_BUDGET` for a Package \
+             file — see the table in `module/src/transfer/mod.rs`'s module doc. Whitelisted today: \
+             {} Core lookup(s) across {} Core file(s), plus {} Package lookup(s) across {} Package \
+             file shape(s).",
             violations.join("\n  "),
             WHITELIST.iter().map(|(_, n, _)| n).sum::<usize>(),
             WHITELIST.len(),
+            PACKAGE_FILE_BUDGET.iter().map(|(_, n, _)| n).sum::<usize>(),
+            PACKAGE_FILE_BUDGET.len(),
         );
     }
 
-    /// Ratchet: an entry whose file no longer needs its full budget must be trimmed, or the budget
-    /// quietly re-opens the door it was closed for.
-    ///
-    /// Same optional-drop-in rule as its sibling: an entry under a `packages/<name>/` this checkout
-    /// does not have is skipped; one under an INSTALLED package that has lost the file still counts
-    /// zero and fails.
+    /// Ratchet: a `WHITELIST` entry whose file no longer needs its full budget must be trimmed, or
+    /// the budget quietly re-opens the door it was closed for. `WHITELIST` holds Core files only
+    /// (never optional), so every entry is checked unconditionally; `PACKAGE_FILE_BUDGET` carries no
+    /// matching ratchet — see its own doc comment for why.
     #[test]
     fn character_whitelist_has_no_stale_entries() {
         let root = repo_root();
         let mut stale = Vec::new();
         for (rel, allowed, _) in WHITELIST {
-            if !crate::test_scan::is_installed(rel) {
-                continue;
-            }
             let actual = std::fs::read_to_string(root.join(rel))
                 .map(|c| raw_lookups(&c).len())
                 .unwrap_or(0);
