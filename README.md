@@ -82,6 +82,7 @@ walk. `dev up --single` brings up `lyracore` alone.
 | [`docs/quickstart.md`](./docs/quickstart.md) | Clone → running realm → connected client. |
 | [`docs/architecture.md`](./docs/architecture.md) | Tiers, topology, data model, sharding, packages — and the doc index. |
 | [`docs/danger-zones.md`](./docs/danger-zones.md) | **Authoritative** over every other doc: traps and the exact deploy procedure. Read before any engine change. |
+| [`CONTRIBUTING.md`](./CONTRIBUTING.md) | Where to start, what gets in, and how a pull request is judged. |
 
 
 LyraCore is an independent implementation — **not** a fork or port of any existing emulator. It heavily relies on knowledge and data rather than code from other projects:

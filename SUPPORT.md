@@ -29,14 +29,10 @@ published.
 
 ## Where to ask
 
-**Questions and discussion → GitHub Discussions**, on this repository. Setup questions, "is this
-supposed to work like that", ideas you want to sanity-check before writing code, and anything where
-you are not yet sure whether you have found a bug.
-
-**Bugs and concrete feature proposals → [GitHub Issues](https://github.com/LyraCoreProject/LyraCore/issues).**
-Whichever you are filing, include the quickstart step you were on, your `./lyracore doctor` output,
-and which log the failure appeared in. Those three answers are what turns a report into a fix rather
-than a thread.
+**Bugs, questions and concrete proposals → [GitHub Issues](https://github.com/LyraCoreProject/LyraCore/issues).**
+For a bug, include the quickstart step you were on, your `./lyracore doctor` output, and the log the
+failure appeared in. Those three answers turn a report into a fix. A question is welcome there too:
+say what you expected and what you saw.
 
 **Security reports → not here.** Use GitHub's private vulnerability reporting on this repository; do
 not open a public issue.
@@ -75,5 +71,5 @@ A quiet issue has not been rejected, and note that anything labelled `needs-live
 on a human sitting in front of a real game client, which is a scarcer resource here than engineering
 time.
 
-The fastest way to get something fixed is a pull request. `good first issue` and `help wanted` are
-the labels to start from.
+The fastest way to get something fixed is a pull request. [`CONTRIBUTING.md`](./CONTRIBUTING.md)
+says where to start and how a pull request is judged.
