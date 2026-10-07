@@ -222,6 +222,26 @@ Name this root only from a Package file whose first non-blank line is
 `#![cfg(feature = "debug_reducers")]`. The lint refuses it anywhere else, and no exemption clears
 it, because a release build would compile that file without the root.
 
+### Package tests (test only)
+
+`crate::package_test` exists only in a Module test build. It holds what a Package's own unit tests
+need.
+
+| operation | does |
+|---|---|
+| `ask_offline(event, actor, target, scripts)` | runs `scripts` in order on a fresh Runtime Script Host and returns the Script Answer as `script_binding::ask` reads it; discards Staged Effects and returns any Script Diagnostic as an error |
+| `EntityView`, `RuntimeScript` | the event entity and script values `ask_offline` takes |
+| `read_scanned(rel)` | reads a repository-relative source file; `None` when its optional directory is not installed |
+| `code_of(src, signature)` | the body after `signature`, comments removed |
+| `shape_of(src, signature)` | `code_of` with whitespace collapsed, for an exact comparison |
+
+A source scan pins a chokepoint that no unit test can reach. Prefer a pure function and assert on
+it wherever one exists.
+
+Name this root only from a Package file whose first non-blank line is `#![cfg(test)]`. The lint
+refuses it anywhere else, and no exemption clears it, because an ordinary build would compile that
+file without the root.
+
 ### Tables
 
 A Package declares its own tables with `#[table(accessor = pkg_<package>_<name>, ..)]`, the naming
@@ -247,6 +267,7 @@ terrain    transfer world     xp
 ```
 
 Debug only: `package_fixture`, in a file gated on `debug_reducers` (see Package fixtures above).
+Test only: `package_test`, in a file gated on `#![cfg(test)]` (see Package tests above).
 
 Plus, at the crate root: any `game_*` name (a table accessor or registration marker), any
 `pkg_*` name (a Package's own generated root module), any type name in UpperCamelCase (a row or

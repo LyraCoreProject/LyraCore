@@ -381,6 +381,10 @@ mod package_fixture;
 /// per-Package provenance that records what landed. Not re-exported below, for the same reason
 /// `import_meta` is not: nothing outside this module reads its table.
 mod package_import;
+/// The test-only Package API root for Package unit tests. Not re-exported below, for the same
+/// reason as `package_fixture`.
+#[cfg(test)]
+mod package_test;
 mod professions;
 /// Deploy-safety tripwire: source-scans `scripts/**` + `tools/**` for a destructive
 /// `spacetime publish -c`, and pins the sanctioned deploy script's own argv guard and required

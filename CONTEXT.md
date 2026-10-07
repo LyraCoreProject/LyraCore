@@ -912,14 +912,15 @@ _Avoid_: plugin, addon (when meaning the whole folder), mod, extension
 The part of the Module a Package may name, versioned and written down at `docs/package-api.md`: the
 marker macros, the hook catalogue, the encounter kernel, the actor verbs and helpers, the Package
 Config seam, the Package Event seam, the table accessor conventions, and the list of module roots
-everything else hangs under. The build lints every Package file against it and fails on a path
+everything else hangs under. Two roots are gated: `package_fixture` exists only with
+`debug_reducers`, and `package_test` only in a test build. The build lints every Package file against it and fails on a path
 outside it, so a core refactor breaks a Package at compile time rather than on a live realm. It is a
 compatibility contract, never a sandbox: compiled Package code is trusted either way.
 _Avoid_: SDK, plugin API, public API, allowlist
 
 **Package Fixture**:
 Package code that stages or observes state for the Package's own durable tests. It compiles only
-with `debug_reducers` and reaches Core through `crate::package_fixture`, the one Package API root a
+with `debug_reducers` and reaches Core through `crate::package_fixture`, a Package API root a
 release build does not have.
 _Avoid_: test harness, debug hook, test helper
 
