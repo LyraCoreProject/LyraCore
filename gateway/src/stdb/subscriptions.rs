@@ -4156,14 +4156,14 @@ impl Coordinator {
                         ) {
                             Ok(crate::world::party::PartyOutcome::Ran) => {}
                             outcome => log::debug!(
-                                "playerbots: group intent {intent_id} op {op} ({inviter_guid} -> \
+                                "group intent {intent_id} op {op} ({inviter_guid} -> \
                                  {target_guid}) did not execute: {outcome:?}"
                             ),
                         }
                     });
                 if let Err(error) = spawned {
                     log::error!(
-                        "playerbots: could not start consumer for group intent {intent_id} op {op} \
+                        "could not start consumer for group intent {intent_id} op {op} \
                          ({inviter_guid} -> {target_guid}): {error}"
                     );
                 }

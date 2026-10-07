@@ -676,12 +676,12 @@ mod tests {
     #[test]
     fn text_rows_preserve_the_addon_reply_separator() {
         let rows = parse_text_rows(
-            "id | cmd | payload\n---+-----+--------\n1 | \"playerbots.order.result\" | \"1|Applied\"\n",
+            "id | cmd | payload\n---+-----+--------\n1 | \"example.order.result\" | \"1|Applied\"\n",
         );
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].len(), 3);
         assert_eq!(rows[0]["id"], "1");
-        assert_eq!(rows[0]["cmd"], "playerbots.order.result");
+        assert_eq!(rows[0]["cmd"], "example.order.result");
         assert_eq!(rows[0]["payload"], "1|Applied");
     }
 
