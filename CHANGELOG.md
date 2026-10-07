@@ -22,6 +22,11 @@ and is not reconstructed here.
   under `packages/*/src/` against that list and fails on a path outside it, naming the Package, the
   file, the line and the path. A Package that needs a path off the surface writes
   `// package-api: exempt <reason>` on the line that names it.
+- **Package fixtures.** A Module built with `debug_reducers` adds `crate::package_fixture`, a
+  Package API root for a Package's own debug fixtures. It applies real Core damage, removes a live
+  Character as a logout does, refuses imported content, reads the top threat target, casts through
+  the client cast Gates and declares the next creature movement tick. A Package names it only from
+  a file gated on `debug_reducers`, and the lint refuses it anywhere else.
 - **Meeting stones.** Using a dungeon's meeting stone puts a Character, or the Party it leads, in one
   realm-wide queue on Realm-core. Five Seekers for one dungeon and team form a Party, and a queued
   Party fills its open tank, healer and damage roles from Seekers on any World Shard.

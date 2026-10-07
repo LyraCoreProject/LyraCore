@@ -369,6 +369,10 @@ pub mod nav;
 /// their own ensure/init path. Not re-exported below, for the same reason `import_meta` is not:
 /// nothing outside this module reads its table.
 mod package_config;
+/// The debug-only Package API root for Package fixtures. Not re-exported below: Packages name it by
+/// path, which is what the Package API lint checks.
+#[cfg(feature = "debug_reducers")]
+mod package_fixture;
 /// Package Deltas applied to the spell tables as the last stage of their base import, and the
 /// per-Package provenance that records what landed. Not re-exported below, for the same reason
 /// `import_meta` is not: nothing outside this module reads its table.
