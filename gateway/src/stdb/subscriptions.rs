@@ -8326,4 +8326,5 @@ mod roster_relay_durable_tests;
 mod meeting_stone_durable_tests;
 
 #[cfg(test)]
-include!(concat!(env!("OUT_DIR"), "/package-coordinator-tests.rs"));
+#[path = "subscriptions_party_command_durable_tests.rs"]
+mod party_command_durable_tests;
