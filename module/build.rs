@@ -277,6 +277,7 @@ const PACKAGE_API_ROOTS: &[&str] = &[
     "items",
     "loot",
     "nav",
+    "package_account",
     "package_config",
     "quest",
     "script_binding",
@@ -1932,14 +1933,14 @@ mod package_api_lint_tests {
     #[test]
     fn the_failure_names_the_package_the_file_the_line_and_the_path() {
         let message = out_of_surface_message(
-            "playerbots",
-            Path::new("packages/playerbots/src/mod.rs"),
+            "sample_package",
+            Path::new("packages/sample_package/src/mod.rs"),
             618,
             "crate::auth::create_character",
         );
-        assert!(message.contains("playerbots"), "{message}");
+        assert!(message.contains("sample_package"), "{message}");
         assert!(
-            message.contains("packages/playerbots/src/mod.rs:618"),
+            message.contains("packages/sample_package/src/mod.rs:618"),
             "{message}"
         );
         assert!(
