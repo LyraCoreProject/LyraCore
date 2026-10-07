@@ -275,7 +275,8 @@ file without the root.
 
 A Package declares its own tables with `#[table(accessor = pkg_<package>_<name>, ..)]`, the naming
 rule `docs/schema.md` states. The Package name in the accessor is what keeps two Packages from
-colliding.
+colliding. The accessor is also the table name Package Teardown empties, so the build refuses a
+Package table that sets its own `name`.
 
 Core table accessors are named `game_*` and are reached at the crate root:
 `use crate::{game_world_entity, game_character};`. Row types are re-exported at the crate root under

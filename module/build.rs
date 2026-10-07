@@ -761,8 +761,19 @@ fn table_accessors(content: &str) -> Vec<String> {
 }
 
 fn accessor_item(item: &str) -> Option<String> {
+    let item = item.trim();
+    // Teardown clears a table by name, and `name = ..` would make the name differ from the
+    // accessor this scan reads.
+    if item
+        .strip_prefix("name")
+        .is_some_and(|rest| rest.trim_start().starts_with('='))
+    {
+        panic!(
+            "build.rs: a Package table sets `name`; keep the accessor as its table name so \
+             Package Teardown can empty it"
+        );
+    }
     let value = item
-        .trim()
         .strip_prefix("accessor")?
         .trim_start()
         .strip_prefix('=')?
@@ -2070,6 +2081,12 @@ mod package_api_lint_tests {
                       #[spacetimedb::table(\n    index(accessor = by_due, btree(columns = [due, id])),\n    accessor = pkg_demo_two,\n)]\nstruct Two;\n\
                       #[derive(Clone)]\n#[tables(accessor = not_a_table)]\nstruct Three;\n";
         assert_eq!(table_accessors(source), ["pkg_demo_one", "pkg_demo_two"]);
+    }
+
+    #[test]
+    #[should_panic(expected = "sets `name`")]
+    fn a_package_table_with_its_own_name_fails_the_build() {
+        table_accessors("#[table(accessor = pkg_demo_one, name = other)]\nstruct One;\n");
     }
 
     #[test]
