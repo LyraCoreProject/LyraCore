@@ -6,53 +6,62 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
-pub(super) struct PlayerbotsFixtureCommandApplyArgs {
+pub(super) struct PartyCommandFixtureApplyAfterGateChangeArgs {
     pub intent_id: u64,
     pub claim_token: u64,
+    pub mode: u8,
 }
 
-impl From<PlayerbotsFixtureCommandApplyArgs> for super::Reducer {
-    fn from(args: PlayerbotsFixtureCommandApplyArgs) -> Self {
-        Self::PlayerbotsFixtureCommandApply {
+impl From<PartyCommandFixtureApplyAfterGateChangeArgs> for super::Reducer {
+    fn from(args: PartyCommandFixtureApplyAfterGateChangeArgs) -> Self {
+        Self::PartyCommandFixtureApplyAfterGateChange {
             intent_id: args.intent_id,
             claim_token: args.claim_token,
+            mode: args.mode,
         }
     }
 }
 
-impl __sdk::InModule for PlayerbotsFixtureCommandApplyArgs {
+impl __sdk::InModule for PartyCommandFixtureApplyAfterGateChangeArgs {
     type Module = super::RemoteModule;
 }
 
 #[allow(non_camel_case_types)]
-/// Extension trait for access to the reducer `playerbots_fixture_command_apply`.
+/// Extension trait for access to the reducer `party_command_fixture_apply_after_gate_change`.
 ///
 /// Implemented for [`super::RemoteReducers`].
-pub trait playerbots_fixture_command_apply {
-    /// Request that the remote module invoke the reducer `playerbots_fixture_command_apply` to run as soon as possible.
+pub trait party_command_fixture_apply_after_gate_change {
+    /// Request that the remote module invoke the reducer `party_command_fixture_apply_after_gate_change` to run as soon as possible.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
-    /// /// Use [`playerbots_fixture_command_apply:playerbots_fixture_command_apply_then`] to run a callback after the reducer completes.
-    fn playerbots_fixture_command_apply(
+    /// /// Use [`party_command_fixture_apply_after_gate_change:party_command_fixture_apply_after_gate_change_then`] to run a callback after the reducer completes.
+    fn party_command_fixture_apply_after_gate_change(
         &self,
         intent_id: u64,
         claim_token: u64,
+        mode: u8,
     ) -> __sdk::Result<()> {
-        self.playerbots_fixture_command_apply_then(intent_id, claim_token, |_, _| {})
+        self.party_command_fixture_apply_after_gate_change_then(
+            intent_id,
+            claim_token,
+            mode,
+            |_, _| {},
+        )
     }
 
-    /// Request that the remote module invoke the reducer `playerbots_fixture_command_apply` to run as soon as possible,
+    /// Request that the remote module invoke the reducer `party_command_fixture_apply_after_gate_change` to run as soon as possible,
     /// registering `callback` to run when we are notified that the reducer completed.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and its status can be observed with the `callback`.
-    fn playerbots_fixture_command_apply_then(
+    fn party_command_fixture_apply_after_gate_change_then(
         &self,
         intent_id: u64,
         claim_token: u64,
+        mode: u8,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -60,20 +69,22 @@ pub trait playerbots_fixture_command_apply {
     ) -> __sdk::Result<()>;
 }
 
-impl playerbots_fixture_command_apply for super::RemoteReducers {
-    fn playerbots_fixture_command_apply_then(
+impl party_command_fixture_apply_after_gate_change for super::RemoteReducers {
+    fn party_command_fixture_apply_after_gate_change_then(
         &self,
         intent_id: u64,
         claim_token: u64,
+        mode: u8,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
-            PlayerbotsFixtureCommandApplyArgs {
+            PartyCommandFixtureApplyAfterGateChangeArgs {
                 intent_id,
                 claim_token,
+                mode,
             },
             callback,
         )

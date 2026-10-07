@@ -152,7 +152,7 @@ package_only! {
 }
 
 #[cfg(all(has_packages, feature = "debug_reducers"))]
-pub(crate) use crate::bridge::playerbots_fixture_command_drive as fixture_command_drive;
+pub(crate) use crate::bridge::party_command_fixture_drive as fixture_command_drive;
 debug_only! { pub(crate) use crate::quest::grant_quest_unchecked as stage_quest; }
 
 // ---- loot / inventory / vendor ----

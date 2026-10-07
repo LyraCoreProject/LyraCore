@@ -9,9 +9,9 @@
 //! connection — the 279 delivery law: addon UI state must survive fat transactions) as an
 //! addon-language whisper the client surfaces to addons as `CHAT_MSG_ADDON`.
 //!
-//! Core owns `ping`; one installed Package may register a parser and admitted apply operation with
-//! `game_client_command!`. Parsing queues only a pending intent. Gateway certifies Realm-core party
-//! authority before the target World Shard applies gameplay.
+//! Core owns `ping`; one installed Package may register a parser, an admitted apply operation and a
+//! reply command name with `game_client_command!`. Parsing queues only a pending intent. Gateway
+//! certifies Realm-core party authority before the target World Shard applies gameplay.
 
 use lyracore_shared::group::COMMAND_RESULT_WINDOW_MICROS;
 use spacetimedb::{reducer, table, Identity, ReducerContext, Table, Timestamp};
@@ -94,6 +94,8 @@ pub struct AdmittedClientCommand {
 pub struct ClientCommandHandler {
     pub parse: fn(&str, &str) -> Option<Result<ParsedClientCommand, CommandOutcome>>,
     pub apply: fn(&ReducerContext, &AdmittedClientCommand) -> CommandOutcome,
+    /// The addon command name that carries each outcome back to the issuer.
+    pub reply: &'static str,
 }
 
 #[derive(spacetimedb::SpacetimeType, Clone, Debug, PartialEq, Eq)]
@@ -261,8 +263,11 @@ fn dispatch(ctx: &ReducerContext, character_guid: u64, cmd: &str, payload: &str)
         // The 184 acceptance round-trip: `STC ping` → `STC pong` (payload echoed).
         "ping" => send(ctx, character_guid, "pong", payload),
         other => {
-            match crate::GAME_CLIENT_COMMAND.and_then(|handler| (handler.parse)(other, payload)) {
-                Some(Ok(command)) => {
+            let parsed = crate::GAME_CLIENT_COMMAND.and_then(|handler| {
+                (handler.parse)(other, payload).map(|parsed| (handler, parsed))
+            });
+            match parsed {
+                Some((_, Ok(command))) => {
                     let now = ctx.timestamp.to_micros_since_unix_epoch();
                     let Some(reply_identity) =
                         crate::helpers::character_by_guid(ctx, character_guid)
@@ -309,12 +314,9 @@ fn dispatch(ctx: &ReducerContext, character_guid: u64, cmd: &str, payload: &str)
                         });
                     enqueue_party_command_intent(ctx, &inserted);
                 }
-                Some(Err(outcome)) => send(
-                    ctx,
-                    character_guid,
-                    "playerbots.order.result",
-                    outcome.tag(),
-                ),
+                Some((handler, Err(outcome))) => {
+                    send(ctx, character_guid, handler.reply, outcome.tag())
+                }
                 None => {
                     spacetimedb::log::info!(
                         "bridge: unknown client command {other:?} from {character_guid} (dropped)"
@@ -500,12 +502,15 @@ pub fn finish_party_command_intent(
     let reply_identity = intent.reply_identity;
     retire_party_command_intent(ctx, &intent)?;
     table.id().update(intent);
-    send_to_identity(
-        ctx,
-        reply_identity,
-        "playerbots.order.result",
-        &format!("{response_id}|{}", outcome.tag()),
-    );
+    // An intent outlives an uninstalled Package; no addon remains to read its reply.
+    if let Some(handler) = crate::GAME_CLIENT_COMMAND {
+        send_to_identity(
+            ctx,
+            reply_identity,
+            handler.reply,
+            &format!("{response_id}|{}", outcome.tag()),
+        );
+    }
     Ok(())
 }
 
@@ -653,7 +658,7 @@ fn fixture_command_intent(
 /// before source finalization so durable tests can model a Gateway loss at that boundary.
 #[cfg(feature = "debug_reducers")]
 #[reducer]
-pub fn playerbots_fixture_command_apply(
+pub fn party_command_fixture_apply(
     ctx: &ReducerContext,
     intent_id: u64,
     claim_token: u64,
@@ -666,7 +671,7 @@ pub fn playerbots_fixture_command_apply(
 /// transaction. Mode 1 removes the live body; mode 2 suppresses Sessionless Action Consent.
 #[cfg(feature = "debug_reducers")]
 #[reducer]
-pub fn playerbots_fixture_command_apply_after_gate_change(
+pub fn party_command_fixture_apply_after_gate_change(
     ctx: &ReducerContext,
     intent_id: u64,
     claim_token: u64,
@@ -750,7 +755,7 @@ fn fixture_command_apply_after_authority(
 /// Finish a private fixture command from the exact target receipt without applying it again.
 #[cfg(feature = "debug_reducers")]
 #[reducer]
-pub fn playerbots_fixture_command_finish(
+pub fn party_command_fixture_finish(
     ctx: &ReducerContext,
     intent_id: u64,
     claim_token: u64,
@@ -770,13 +775,13 @@ pub fn playerbots_fixture_command_finish(
 /// Apply and finish one private unsharded fixture command through the production phase operations.
 #[cfg(feature = "debug_reducers")]
 #[reducer]
-pub fn playerbots_fixture_command_drive(
+pub fn party_command_fixture_drive(
     ctx: &ReducerContext,
     intent_id: u64,
     claim_token: u64,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
-    playerbots_fixture_command_apply(ctx, intent_id, claim_token)?;
+    party_command_fixture_apply(ctx, intent_id, claim_token)?;
     if ctx
         .db
         .game_party_command_receipt()
@@ -785,7 +790,7 @@ pub fn playerbots_fixture_command_drive(
         .next()
         .is_some()
     {
-        playerbots_fixture_command_finish(ctx, intent_id, claim_token)?;
+        party_command_fixture_finish(ctx, intent_id, claim_token)?;
     }
     Ok(())
 }
@@ -793,7 +798,7 @@ pub fn playerbots_fixture_command_drive(
 /// Release the oldest receipt owned by one private command fixture to exercise capacity recovery.
 #[cfg(feature = "debug_reducers")]
 #[reducer]
-pub fn playerbots_fixture_command_release_receipt(
+pub fn party_command_fixture_release_receipt(
     ctx: &ReducerContext,
     bot_guid: u64,
 ) -> Result<(), String> {
@@ -812,10 +817,7 @@ pub fn playerbots_fixture_command_release_receipt(
 /// Expire one still-pending private fixture command without changing its target receipt.
 #[cfg(feature = "debug_reducers")]
 #[reducer]
-pub fn playerbots_fixture_command_expire(
-    ctx: &ReducerContext,
-    intent_id: u64,
-) -> Result<(), String> {
+pub fn party_command_fixture_expire(ctx: &ReducerContext, intent_id: u64) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let table = ctx.db.game_party_command_intent();
     let mut intent = fixture_command_intent(ctx, intent_id)?;
@@ -830,7 +832,7 @@ pub fn playerbots_fixture_command_expire(
 /// Move one pending fixture intent beyond the target receipt-retention guarantee.
 #[cfg(feature = "debug_reducers")]
 #[reducer]
-pub fn playerbots_fixture_command_expire_after_receipt_window(
+pub fn party_command_fixture_expire_after_receipt_window(
     ctx: &ReducerContext,
     intent_id: u64,
 ) -> Result<(), String> {

@@ -70,6 +70,38 @@ pub fn client_cast(
     )
 }
 
+/// Stage instance `instance_id` of `map_id` for `party_id` as a dungeon entry leaves it, and bind
+/// `character_guid` to it. `request_actor` passes the instance placement Gates. Refuses when entry
+/// resolves to another instance.
+pub fn admit_to_instance(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    map_id: u32,
+    instance_id: u64,
+    party_id: u64,
+    request_actor: crate::SessionActor,
+) -> Result<(), String> {
+    crate::instance::ensure_instance(ctx, instance_id, map_id, party_id, request_actor)?;
+    let admitted = crate::instance::resolve_or_create_instance(ctx, character_guid, map_id)?;
+    if admitted != instance_id {
+        return Err(format!(
+            "fixture entry resolved instance {admitted}, not {instance_id}"
+        ));
+    }
+    Ok(())
+}
+
+/// Record a finished Transfer of `character_guid` to `map_id` and `instance_id` in Realm-core's
+/// character-to-shard index. The index revision advances only when the map or instance changes.
+pub fn record_completed_transfer(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    map_id: u32,
+    instance_id: u64,
+) {
+    crate::realm_core::record_shard(ctx, character_guid, map_id, instance_id);
+}
+
 /// Declare that the next creature movement tick fires once, `delay` from now. Refuses unless the
 /// catch-all row is the only movement schedule, which holds on a fresh Shard. The row then fires
 /// once, not on an interval.

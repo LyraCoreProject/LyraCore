@@ -38,7 +38,7 @@ which must be written literally.
 |---|---|
 | `crate::game_hook!(EVENT, fn NAME(ctx, payload) { .. })` | a notify handler for one hook event |
 | `crate::game_tick_pass!(fn NAME(ctx) { .. })` | a periodic pass, run at the end of every `tick_creatures` tick (0.5s), after every core pass |
-| `crate::game_client_command!(PARSE, APPLY)` | the single Package parser and admitted apply operation for authenticated addon commands |
+| `crate::game_client_command!(PARSE, APPLY, REPLY)` | the single Package parser, admitted apply operation and reply command name for authenticated addon commands |
 | `crate::character_owned!(delete \| restamp \| transfer \| not_transported, ..)` | a Package table's character-keyed sweeps and its cross-shard transport arm |
 | `crate::encounter_package!(BINDING, fn NAME(ctx, instance_id, signal) { .. })` | encounter authority for one Encounter Binding |
 
@@ -212,6 +212,8 @@ observation steps a Package's own debug fixtures need. A release build has no su
 | `require_no_imported_content(ctx)` | refuses when the Shard holds imported content; the temporary weather seed a fresh Module stamps does not count |
 | `top_threat_target(ctx, creature_guid)` | reads the highest-threat living source on the creature's map and instance |
 | `client_cast(ctx, caster_guid, spell_id, target_guid)` | casts through the same Gates a client cast passes |
+| `admit_to_instance(ctx, character_guid, map_id, instance_id, party_id, request_actor)` | stages the party's instance as a dungeon entry leaves it and binds the Character to it; refuses when entry resolves to another instance |
+| `record_completed_transfer(ctx, character_guid, map_id, instance_id)` | records a finished Transfer in Realm-core's character-to-shard index |
 | `declare_next_movement_tick(ctx, delay)` | makes the next creature movement tick fire once, `delay` from now; refuses unless the catch-all tick is the only movement schedule |
 
 A fixture reads the navigation revision through `nav::inputs(ctx, map_id).imported_revision`.
