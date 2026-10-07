@@ -6,46 +6,46 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
-pub(super) struct PlayerbotsFixtureCommandExpireArgs {
-    pub intent_id: u64,
+pub(super) struct PartyCommandFixtureReleaseReceiptArgs {
+    pub bot_guid: u64,
 }
 
-impl From<PlayerbotsFixtureCommandExpireArgs> for super::Reducer {
-    fn from(args: PlayerbotsFixtureCommandExpireArgs) -> Self {
-        Self::PlayerbotsFixtureCommandExpire {
-            intent_id: args.intent_id,
+impl From<PartyCommandFixtureReleaseReceiptArgs> for super::Reducer {
+    fn from(args: PartyCommandFixtureReleaseReceiptArgs) -> Self {
+        Self::PartyCommandFixtureReleaseReceipt {
+            bot_guid: args.bot_guid,
         }
     }
 }
 
-impl __sdk::InModule for PlayerbotsFixtureCommandExpireArgs {
+impl __sdk::InModule for PartyCommandFixtureReleaseReceiptArgs {
     type Module = super::RemoteModule;
 }
 
 #[allow(non_camel_case_types)]
-/// Extension trait for access to the reducer `playerbots_fixture_command_expire`.
+/// Extension trait for access to the reducer `party_command_fixture_release_receipt`.
 ///
 /// Implemented for [`super::RemoteReducers`].
-pub trait playerbots_fixture_command_expire {
-    /// Request that the remote module invoke the reducer `playerbots_fixture_command_expire` to run as soon as possible.
+pub trait party_command_fixture_release_receipt {
+    /// Request that the remote module invoke the reducer `party_command_fixture_release_receipt` to run as soon as possible.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
-    /// /// Use [`playerbots_fixture_command_expire:playerbots_fixture_command_expire_then`] to run a callback after the reducer completes.
-    fn playerbots_fixture_command_expire(&self, intent_id: u64) -> __sdk::Result<()> {
-        self.playerbots_fixture_command_expire_then(intent_id, |_, _| {})
+    /// /// Use [`party_command_fixture_release_receipt:party_command_fixture_release_receipt_then`] to run a callback after the reducer completes.
+    fn party_command_fixture_release_receipt(&self, bot_guid: u64) -> __sdk::Result<()> {
+        self.party_command_fixture_release_receipt_then(bot_guid, |_, _| {})
     }
 
-    /// Request that the remote module invoke the reducer `playerbots_fixture_command_expire` to run as soon as possible,
+    /// Request that the remote module invoke the reducer `party_command_fixture_release_receipt` to run as soon as possible,
     /// registering `callback` to run when we are notified that the reducer completed.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and its status can be observed with the `callback`.
-    fn playerbots_fixture_command_expire_then(
+    fn party_command_fixture_release_receipt_then(
         &self,
-        intent_id: u64,
+        bot_guid: u64,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -53,17 +53,17 @@ pub trait playerbots_fixture_command_expire {
     ) -> __sdk::Result<()>;
 }
 
-impl playerbots_fixture_command_expire for super::RemoteReducers {
-    fn playerbots_fixture_command_expire_then(
+impl party_command_fixture_release_receipt for super::RemoteReducers {
+    fn party_command_fixture_release_receipt_then(
         &self,
-        intent_id: u64,
+        bot_guid: u64,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
-            PlayerbotsFixtureCommandExpireArgs { intent_id },
+            PartyCommandFixtureReleaseReceiptArgs { bot_guid },
             callback,
         )
     }

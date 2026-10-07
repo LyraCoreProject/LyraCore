@@ -6,50 +6,46 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
-pub(super) struct PlayerbotsFixtureCommandFinishArgs {
+pub(super) struct PartyCommandFixtureDriveArgs {
     pub intent_id: u64,
     pub claim_token: u64,
 }
 
-impl From<PlayerbotsFixtureCommandFinishArgs> for super::Reducer {
-    fn from(args: PlayerbotsFixtureCommandFinishArgs) -> Self {
-        Self::PlayerbotsFixtureCommandFinish {
+impl From<PartyCommandFixtureDriveArgs> for super::Reducer {
+    fn from(args: PartyCommandFixtureDriveArgs) -> Self {
+        Self::PartyCommandFixtureDrive {
             intent_id: args.intent_id,
             claim_token: args.claim_token,
         }
     }
 }
 
-impl __sdk::InModule for PlayerbotsFixtureCommandFinishArgs {
+impl __sdk::InModule for PartyCommandFixtureDriveArgs {
     type Module = super::RemoteModule;
 }
 
 #[allow(non_camel_case_types)]
-/// Extension trait for access to the reducer `playerbots_fixture_command_finish`.
+/// Extension trait for access to the reducer `party_command_fixture_drive`.
 ///
 /// Implemented for [`super::RemoteReducers`].
-pub trait playerbots_fixture_command_finish {
-    /// Request that the remote module invoke the reducer `playerbots_fixture_command_finish` to run as soon as possible.
+pub trait party_command_fixture_drive {
+    /// Request that the remote module invoke the reducer `party_command_fixture_drive` to run as soon as possible.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
-    /// /// Use [`playerbots_fixture_command_finish:playerbots_fixture_command_finish_then`] to run a callback after the reducer completes.
-    fn playerbots_fixture_command_finish(
-        &self,
-        intent_id: u64,
-        claim_token: u64,
-    ) -> __sdk::Result<()> {
-        self.playerbots_fixture_command_finish_then(intent_id, claim_token, |_, _| {})
+    /// /// Use [`party_command_fixture_drive:party_command_fixture_drive_then`] to run a callback after the reducer completes.
+    fn party_command_fixture_drive(&self, intent_id: u64, claim_token: u64) -> __sdk::Result<()> {
+        self.party_command_fixture_drive_then(intent_id, claim_token, |_, _| {})
     }
 
-    /// Request that the remote module invoke the reducer `playerbots_fixture_command_finish` to run as soon as possible,
+    /// Request that the remote module invoke the reducer `party_command_fixture_drive` to run as soon as possible,
     /// registering `callback` to run when we are notified that the reducer completed.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and its status can be observed with the `callback`.
-    fn playerbots_fixture_command_finish_then(
+    fn party_command_fixture_drive_then(
         &self,
         intent_id: u64,
         claim_token: u64,
@@ -60,8 +56,8 @@ pub trait playerbots_fixture_command_finish {
     ) -> __sdk::Result<()>;
 }
 
-impl playerbots_fixture_command_finish for super::RemoteReducers {
-    fn playerbots_fixture_command_finish_then(
+impl party_command_fixture_drive for super::RemoteReducers {
+    fn party_command_fixture_drive_then(
         &self,
         intent_id: u64,
         claim_token: u64,
@@ -71,7 +67,7 @@ impl playerbots_fixture_command_finish for super::RemoteReducers {
             + 'static,
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
-            PlayerbotsFixtureCommandFinishArgs {
+            PartyCommandFixtureDriveArgs {
                 intent_id,
                 claim_token,
             },

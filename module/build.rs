@@ -579,8 +579,8 @@ fn main() {
     }
     out.push_str("];\n");
     match registries.client_commands.first() {
-        Some((parse, apply)) => out.push_str(&format!(
-            "pub const GAME_CLIENT_COMMAND: Option<crate::bridge::ClientCommandHandler> = Some(crate::bridge::ClientCommandHandler {{ parse: {parse}, apply: {apply} }});\n"
+        Some((parse, apply, reply)) => out.push_str(&format!(
+            "pub const GAME_CLIENT_COMMAND: Option<crate::bridge::ClientCommandHandler> = Some(crate::bridge::ClientCommandHandler {{ parse: {parse}, apply: {apply}, reply: {reply} }});\n"
         )),
         None => out.push_str(
             "pub const GAME_CLIENT_COMMAND: Option<crate::bridge::ClientCommandHandler> = None;\n",
@@ -649,7 +649,7 @@ struct Registries {
     tick_passes: Vec<String>,
     hooks: Vec<(String, String)>, // (event, fully-qualified fn path)
     encounter_packages: Vec<(String, String)>, // (binding variant, fully-qualified fn path)
-    client_commands: Vec<(String, String)>, // (parser path, admitted apply path)
+    client_commands: Vec<(String, String, String)>, // (parser, admitted apply, reply name) paths
 }
 
 /// The table accessor a transport arm's fully-qualified fn path names: the same
@@ -1049,26 +1049,19 @@ fn try_match_hook(head: &str) -> Option<(String, String)> {
     Some((event, name))
 }
 
-fn try_match_client_command(head: &str) -> Option<(String, String)> {
-    let rest = head.strip_prefix('(')?.trim_start();
-    let parse_end = rest.find(|c: char| !(c.is_alphanumeric() || c == '_'))?;
-    if parse_end == 0 {
-        return None;
-    }
-    let parse = rest[..parse_end].to_string();
-    let rest = rest[parse_end..]
-        .trim_start()
-        .strip_prefix(',')?
-        .trim_start();
-    let apply_end = rest.find(|c: char| !(c.is_alphanumeric() || c == '_'))?;
-    if apply_end == 0 {
-        return None;
-    }
-    let apply = rest[..apply_end].to_string();
-    rest[apply_end..]
-        .trim_start()
-        .starts_with(')')
-        .then_some((parse, apply))
+/// `game_client_command!` head: `(PARSE, APPLY, REPLY)` — package files only.
+fn try_match_client_command(head: &str) -> Option<(String, String, String)> {
+    let mut rest = head.strip_prefix('(')?;
+    let mut ident_before = |separator: char| {
+        let trimmed = rest.trim_start();
+        let end = trimmed.find(|c: char| !(c.is_alphanumeric() || c == '_'))?;
+        if end == 0 {
+            return None;
+        }
+        rest = trimmed[end..].trim_start().strip_prefix(separator)?;
+        Some(trimmed[..end].to_string())
+    };
+    Some((ident_before(',')?, ident_before(',')?, ident_before(')')?))
 }
 
 /// `encounter_package!` head: `(BINDING, fn NAME(...` — package files only.
@@ -1209,7 +1202,7 @@ fn scan_file(file: &Path, scan_root: &Path, in_package: bool, prefix: &str, reg:
 
     scan_marker(&content, file, "game_client_command!", |head, line| {
         match try_match_client_command(head) {
-            Some((parse, apply)) => {
+            Some((parse, apply, reply)) => {
                 if !in_package {
                     panic!(
                         "build.rs: `game_client_command!` in {}:{line} is core code; command meaning belongs to a Package",
@@ -1218,11 +1211,15 @@ fn scan_file(file: &Path, scan_root: &Path, in_package: bool, prefix: &str, reg:
                 }
                 check_facade_reexport(file, scan_root, in_package, &parse);
                 check_facade_reexport(file, scan_root, in_package, &apply);
-                reg.client_commands
-                    .push((format!("{prefix}::{parse}"), format!("{prefix}::{apply}")));
+                check_facade_reexport(file, scan_root, in_package, &reply);
+                reg.client_commands.push((
+                    format!("{prefix}::{parse}"),
+                    format!("{prefix}::{apply}"),
+                    format!("{prefix}::{reply}"),
+                ));
             }
             None => panic!(
-                "build.rs: malformed `game_client_command!` marker in {}:{line} — expected `game_client_command!(PARSE, APPLY)`",
+                "build.rs: malformed `game_client_command!` marker in {}:{line} — expected `game_client_command!(PARSE, APPLY, REPLY)`",
                 file.display()
             ),
         }
@@ -1884,16 +1881,29 @@ mod package_api_lint_tests {
     }
 
     #[test]
-    fn client_command_marker_names_one_parser_and_apply_operation() {
+    fn client_command_marker_names_one_parser_apply_operation_and_reply() {
+        assert_eq!(
+            try_match_client_command("(parse_order, apply_order, ORDER_RESULT);"),
+            Some((
+                "parse_order".to_string(),
+                "apply_order".to_string(),
+                "ORDER_RESULT".to_string()
+            ))
+        );
         assert_eq!(
             try_match_client_command("(parse_order, apply_order);"),
-            Some(("parse_order".to_string(), "apply_order".to_string()))
+            None
         );
-        assert_eq!(try_match_client_command("(parse_order);"), None);
-        assert_eq!(try_match_client_command("(, apply_order);"), None);
-        assert_eq!(try_match_client_command("(parse_order, );"), None);
         assert_eq!(
-            try_match_client_command("(parse_order, apply_order, extra);"),
+            try_match_client_command("(, apply_order, ORDER_RESULT);"),
+            None
+        );
+        assert_eq!(
+            try_match_client_command("(parse_order, apply_order, );"),
+            None
+        );
+        assert_eq!(
+            try_match_client_command("(parse_order, apply_order, ORDER_RESULT, extra);"),
             None
         );
     }

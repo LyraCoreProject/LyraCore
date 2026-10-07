@@ -239,10 +239,11 @@ macro_rules! game_hook {
 }
 
 /// Installs the one Package-owned parser and admitted apply operation for addon client commands.
+/// `REPLY` names a `&'static str` const: the addon command that carries each outcome to the issuer.
 /// Core authenticates the issuer and Gateway certifies realm-wide party authority before apply.
 #[macro_export]
 macro_rules! game_client_command {
-    ($parse:ident, $apply:ident) => {};
+    ($parse:ident, $apply:ident, $reply:ident) => {};
 }
 
 /// Installs one package as the sole authority for a map-scoped encounter binding. `build.rs`

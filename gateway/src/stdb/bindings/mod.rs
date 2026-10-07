@@ -915,6 +915,13 @@ pub mod package_config_type;
 pub mod package_import_type;
 pub mod parsed_client_command_type;
 pub mod party_command_dispatch_lane_type;
+pub mod party_command_fixture_apply_after_gate_change_reducer;
+pub mod party_command_fixture_apply_reducer;
+pub mod party_command_fixture_drive_reducer;
+pub mod party_command_fixture_expire_after_receipt_window_reducer;
+pub mod party_command_fixture_expire_reducer;
+pub mod party_command_fixture_finish_reducer;
+pub mod party_command_fixture_release_receipt_reducer;
 pub mod party_command_intent_type;
 pub mod party_command_issuer_type;
 pub mod party_command_receipt_type;
@@ -932,13 +939,6 @@ pub mod player_action_type;
 pub mod player_reputation_type;
 pub mod player_skill_type;
 pub mod player_spell_type;
-pub mod playerbots_fixture_command_apply_after_gate_change_reducer;
-pub mod playerbots_fixture_command_apply_reducer;
-pub mod playerbots_fixture_command_drive_reducer;
-pub mod playerbots_fixture_command_expire_after_receipt_window_reducer;
-pub mod playerbots_fixture_command_expire_reducer;
-pub mod playerbots_fixture_command_finish_reducer;
-pub mod playerbots_fixture_command_release_receipt_reducer;
 pub mod posture_admission_type;
 pub mod prepare_vmap_nav_coverage_reducer;
 pub mod provision_account_reducer;
@@ -2088,6 +2088,13 @@ pub use package_config_type::PackageConfig;
 pub use package_import_type::PackageImport;
 pub use parsed_client_command_type::ParsedClientCommand;
 pub use party_command_dispatch_lane_type::PartyCommandDispatchLane;
+pub use party_command_fixture_apply_after_gate_change_reducer::party_command_fixture_apply_after_gate_change;
+pub use party_command_fixture_apply_reducer::party_command_fixture_apply;
+pub use party_command_fixture_drive_reducer::party_command_fixture_drive;
+pub use party_command_fixture_expire_after_receipt_window_reducer::party_command_fixture_expire_after_receipt_window;
+pub use party_command_fixture_expire_reducer::party_command_fixture_expire;
+pub use party_command_fixture_finish_reducer::party_command_fixture_finish;
+pub use party_command_fixture_release_receipt_reducer::party_command_fixture_release_receipt;
 pub use party_command_intent_type::PartyCommandIntent;
 pub use party_command_issuer_type::PartyCommandIssuer;
 pub use party_command_receipt_type::PartyCommandReceipt;
@@ -2105,13 +2112,6 @@ pub use player_action_type::PlayerAction;
 pub use player_reputation_type::PlayerReputation;
 pub use player_skill_type::PlayerSkill;
 pub use player_spell_type::PlayerSpell;
-pub use playerbots_fixture_command_apply_after_gate_change_reducer::playerbots_fixture_command_apply_after_gate_change;
-pub use playerbots_fixture_command_apply_reducer::playerbots_fixture_command_apply;
-pub use playerbots_fixture_command_drive_reducer::playerbots_fixture_command_drive;
-pub use playerbots_fixture_command_expire_after_receipt_window_reducer::playerbots_fixture_command_expire_after_receipt_window;
-pub use playerbots_fixture_command_expire_reducer::playerbots_fixture_command_expire;
-pub use playerbots_fixture_command_finish_reducer::playerbots_fixture_command_finish;
-pub use playerbots_fixture_command_release_receipt_reducer::playerbots_fixture_command_release_receipt;
 pub use posture_admission_type::PostureAdmission;
 pub use prepare_vmap_nav_coverage_reducer::prepare_vmap_nav_coverage;
 pub use provision_account_reducer::provision_account;
@@ -3937,30 +3937,30 @@ pub enum Reducer {
         claim_token: u64,
     },
     OnDisconnect,
-    PlayerbotsFixtureCommandApply {
+    PartyCommandFixtureApply {
         intent_id: u64,
         claim_token: u64,
     },
-    PlayerbotsFixtureCommandApplyAfterGateChange {
+    PartyCommandFixtureApplyAfterGateChange {
         intent_id: u64,
         claim_token: u64,
         mode: u8,
     },
-    PlayerbotsFixtureCommandDrive {
+    PartyCommandFixtureDrive {
         intent_id: u64,
         claim_token: u64,
     },
-    PlayerbotsFixtureCommandExpire {
+    PartyCommandFixtureExpire {
         intent_id: u64,
     },
-    PlayerbotsFixtureCommandExpireAfterReceiptWindow {
+    PartyCommandFixtureExpireAfterReceiptWindow {
         intent_id: u64,
     },
-    PlayerbotsFixtureCommandFinish {
+    PartyCommandFixtureFinish {
         intent_id: u64,
         claim_token: u64,
     },
-    PlayerbotsFixtureCommandReleaseReceipt {
+    PartyCommandFixtureReleaseReceipt {
         bot_guid: u64,
     },
     PrepareVmapNavCoverage {
@@ -4806,18 +4806,18 @@ impl __sdk::Reducer for Reducer {
             Reducer::InstallGuidRange { .. } => "install_guid_range",
             Reducer::MarkBotTransferArrivalReady { .. } => "mark_bot_transfer_arrival_ready",
             Reducer::OnDisconnect => "on_disconnect",
-            Reducer::PlayerbotsFixtureCommandApply { .. } => "playerbots_fixture_command_apply",
-            Reducer::PlayerbotsFixtureCommandApplyAfterGateChange { .. } => {
-                "playerbots_fixture_command_apply_after_gate_change"
+            Reducer::PartyCommandFixtureApply { .. } => "party_command_fixture_apply",
+            Reducer::PartyCommandFixtureApplyAfterGateChange { .. } => {
+                "party_command_fixture_apply_after_gate_change"
             }
-            Reducer::PlayerbotsFixtureCommandDrive { .. } => "playerbots_fixture_command_drive",
-            Reducer::PlayerbotsFixtureCommandExpire { .. } => "playerbots_fixture_command_expire",
-            Reducer::PlayerbotsFixtureCommandExpireAfterReceiptWindow { .. } => {
-                "playerbots_fixture_command_expire_after_receipt_window"
+            Reducer::PartyCommandFixtureDrive { .. } => "party_command_fixture_drive",
+            Reducer::PartyCommandFixtureExpire { .. } => "party_command_fixture_expire",
+            Reducer::PartyCommandFixtureExpireAfterReceiptWindow { .. } => {
+                "party_command_fixture_expire_after_receipt_window"
             }
-            Reducer::PlayerbotsFixtureCommandFinish { .. } => "playerbots_fixture_command_finish",
-            Reducer::PlayerbotsFixtureCommandReleaseReceipt { .. } => {
-                "playerbots_fixture_command_release_receipt"
+            Reducer::PartyCommandFixtureFinish { .. } => "party_command_fixture_finish",
+            Reducer::PartyCommandFixtureReleaseReceipt { .. } => {
+                "party_command_fixture_release_receipt"
             }
             Reducer::PrepareVmapNavCoverage { .. } => "prepare_vmap_nav_coverage",
             Reducer::ProvisionAccount { .. } => "provision_account",
@@ -7732,49 +7732,49 @@ Reducer::GwIgnoreTrade{
 }),
             Reducer::OnDisconnect => __sats::bsatn::to_vec(&on_disconnect_reducer::OnDisconnectArgs {
                 }),
-Reducer::PlayerbotsFixtureCommandApply{
+Reducer::PartyCommandFixtureApply{
                 intent_id,
                 claim_token,
-}             => __sats::bsatn::to_vec(&playerbots_fixture_command_apply_reducer::PlayerbotsFixtureCommandApplyArgs {
+}             => __sats::bsatn::to_vec(&party_command_fixture_apply_reducer::PartyCommandFixtureApplyArgs {
                 intent_id: intent_id.clone(),
                 claim_token: claim_token.clone(),
 }),
-            Reducer::PlayerbotsFixtureCommandApplyAfterGateChange{
+            Reducer::PartyCommandFixtureApplyAfterGateChange{
                 intent_id,
                 claim_token,
                 mode,
-}             => __sats::bsatn::to_vec(&playerbots_fixture_command_apply_after_gate_change_reducer::PlayerbotsFixtureCommandApplyAfterGateChangeArgs {
+}             => __sats::bsatn::to_vec(&party_command_fixture_apply_after_gate_change_reducer::PartyCommandFixtureApplyAfterGateChangeArgs {
                 intent_id: intent_id.clone(),
                 claim_token: claim_token.clone(),
                 mode: mode.clone(),
 }),
-            Reducer::PlayerbotsFixtureCommandDrive{
+            Reducer::PartyCommandFixtureDrive{
                 intent_id,
                 claim_token,
-}             => __sats::bsatn::to_vec(&playerbots_fixture_command_drive_reducer::PlayerbotsFixtureCommandDriveArgs {
+}             => __sats::bsatn::to_vec(&party_command_fixture_drive_reducer::PartyCommandFixtureDriveArgs {
                 intent_id: intent_id.clone(),
                 claim_token: claim_token.clone(),
 }),
-            Reducer::PlayerbotsFixtureCommandExpire{
+            Reducer::PartyCommandFixtureExpire{
                 intent_id,
-}             => __sats::bsatn::to_vec(&playerbots_fixture_command_expire_reducer::PlayerbotsFixtureCommandExpireArgs {
+}             => __sats::bsatn::to_vec(&party_command_fixture_expire_reducer::PartyCommandFixtureExpireArgs {
                 intent_id: intent_id.clone(),
 }),
-            Reducer::PlayerbotsFixtureCommandExpireAfterReceiptWindow{
+            Reducer::PartyCommandFixtureExpireAfterReceiptWindow{
                 intent_id,
-}             => __sats::bsatn::to_vec(&playerbots_fixture_command_expire_after_receipt_window_reducer::PlayerbotsFixtureCommandExpireAfterReceiptWindowArgs {
+}             => __sats::bsatn::to_vec(&party_command_fixture_expire_after_receipt_window_reducer::PartyCommandFixtureExpireAfterReceiptWindowArgs {
                 intent_id: intent_id.clone(),
 }),
-            Reducer::PlayerbotsFixtureCommandFinish{
+            Reducer::PartyCommandFixtureFinish{
                 intent_id,
                 claim_token,
-}             => __sats::bsatn::to_vec(&playerbots_fixture_command_finish_reducer::PlayerbotsFixtureCommandFinishArgs {
+}             => __sats::bsatn::to_vec(&party_command_fixture_finish_reducer::PartyCommandFixtureFinishArgs {
                 intent_id: intent_id.clone(),
                 claim_token: claim_token.clone(),
 }),
-            Reducer::PlayerbotsFixtureCommandReleaseReceipt{
+            Reducer::PartyCommandFixtureReleaseReceipt{
                 bot_guid,
-}             => __sats::bsatn::to_vec(&playerbots_fixture_command_release_receipt_reducer::PlayerbotsFixtureCommandReleaseReceiptArgs {
+}             => __sats::bsatn::to_vec(&party_command_fixture_release_receipt_reducer::PartyCommandFixtureReleaseReceiptArgs {
                 bot_guid: bot_guid.clone(),
 }),
             Reducer::PrepareVmapNavCoverage{
