@@ -275,6 +275,7 @@ const PACKAGE_API_ROOTS: &[&str] = &[
     "items",
     "loot",
     "nav",
+    "package_account",
     "package_config",
     "quest",
     "script_binding",

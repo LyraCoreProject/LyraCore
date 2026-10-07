@@ -169,6 +169,7 @@ pub mod debug_clear_creatures_reducer;
 pub mod debug_compute_spell_reducer;
 pub mod debug_compute_swing_reducer;
 pub mod debug_create_fixture_instance_reducer;
+pub mod debug_create_package_character_reducer;
 pub mod debug_creature_path_reducer;
 pub mod debug_delete_character_reducer;
 pub mod debug_deliver_mail_fixture_reducer;
@@ -577,6 +578,7 @@ pub mod game_object_trap_type;
 pub mod game_object_type;
 pub mod game_object_unlocked_type;
 pub mod game_operator_table;
+pub mod game_package_account_table;
 pub mod game_package_config_table;
 pub mod game_package_import_table;
 pub mod game_party_command_dispatch_lane_table;
@@ -908,6 +910,7 @@ pub mod npc_vendor_type;
 pub mod on_disconnect_reducer;
 pub mod operator_type;
 pub mod out_of_combat_sight_condition_type;
+pub mod package_account_type;
 pub mod package_config_type;
 pub mod package_import_type;
 pub mod parsed_client_command_type;
@@ -1339,6 +1342,7 @@ pub use debug_clear_creatures_reducer::debug_clear_creatures;
 pub use debug_compute_spell_reducer::debug_compute_spell;
 pub use debug_compute_swing_reducer::debug_compute_swing;
 pub use debug_create_fixture_instance_reducer::debug_create_fixture_instance;
+pub use debug_create_package_character_reducer::debug_create_package_character;
 pub use debug_creature_path_reducer::debug_creature_path;
 pub use debug_delete_character_reducer::debug_delete_character;
 pub use debug_deliver_mail_fixture_reducer::debug_deliver_mail_fixture;
@@ -1747,6 +1751,7 @@ pub use game_object_trap_type::GameObjectTrap;
 pub use game_object_type::GameObject;
 pub use game_object_unlocked_type::GameObjectUnlocked;
 pub use game_operator_table::*;
+pub use game_package_account_table::*;
 pub use game_package_config_table::*;
 pub use game_package_import_table::*;
 pub use game_party_command_dispatch_lane_table::*;
@@ -2078,6 +2083,7 @@ pub use npc_vendor_type::NpcVendor;
 pub use on_disconnect_reducer::on_disconnect;
 pub use operator_type::Operator;
 pub use out_of_combat_sight_condition_type::OutOfCombatSightCondition;
+pub use package_account_type::PackageAccount;
 pub use package_config_type::PackageConfig;
 pub use package_import_type::PackageImport;
 pub use parsed_client_command_type::ParsedClientCommand;
@@ -2641,6 +2647,12 @@ pub enum Reducer {
     },
     DebugCreateFixtureInstance {
         character_guid: u64,
+    },
+    DebugCreatePackageCharacter {
+        package_name: String,
+        name: String,
+        race: u8,
+        class: u8,
     },
     DebugCreaturePath {
         guid: u64,
@@ -4446,6 +4458,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugComputeSpell { .. } => "debug_compute_spell",
             Reducer::DebugComputeSwing { .. } => "debug_compute_swing",
             Reducer::DebugCreateFixtureInstance { .. } => "debug_create_fixture_instance",
+            Reducer::DebugCreatePackageCharacter { .. } => "debug_create_package_character",
             Reducer::DebugCreaturePath { .. } => "debug_creature_path",
             Reducer::DebugDeleteCharacter { .. } => "debug_delete_character",
             Reducer::DebugDeliverMailFixture { .. } => "debug_deliver_mail_fixture",
@@ -5410,6 +5423,17 @@ Reducer::DebugCheckRestAt{
                 character_guid,
 }             => __sats::bsatn::to_vec(&debug_create_fixture_instance_reducer::DebugCreateFixtureInstanceArgs {
                 character_guid: character_guid.clone(),
+}),
+            Reducer::DebugCreatePackageCharacter{
+                package_name,
+                name,
+                race,
+                class,
+}             => __sats::bsatn::to_vec(&debug_create_package_character_reducer::DebugCreatePackageCharacterArgs {
+                package_name: package_name.clone(),
+                name: name.clone(),
+                race: race.clone(),
+                class: class.clone(),
 }),
             Reducer::DebugCreaturePath{
                 guid,
@@ -8718,6 +8742,7 @@ pub struct DbUpdate {
     game_npc_text_slot: __sdk::TableUpdate<NpcTextSlot>,
     game_npc_vendor: __sdk::TableUpdate<NpcVendor>,
     game_operator: __sdk::TableUpdate<Operator>,
+    game_package_account: __sdk::TableUpdate<PackageAccount>,
     game_package_config: __sdk::TableUpdate<PackageConfig>,
     game_package_import: __sdk::TableUpdate<PackageImport>,
     game_party_command_dispatch_lane: __sdk::TableUpdate<PartyCommandDispatchLane>,
@@ -9456,6 +9481,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_operator" => db_update
                     .game_operator
                     .append(game_operator_table::parse_table_update(table_update)?),
+                "game_package_account" => db_update.game_package_account.append(
+                    game_package_account_table::parse_table_update(table_update)?,
+                ),
                 "game_package_config" => db_update
                     .game_package_config
                     .append(game_package_config_table::parse_table_update(table_update)?),
@@ -10649,6 +10677,12 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.game_operator = cache
             .apply_diff_to_table::<Operator>("game_operator", &self.game_operator)
             .with_updates_by_pk(|row| &row.id);
+        diff.game_package_account = cache
+            .apply_diff_to_table::<PackageAccount>(
+                "game_package_account",
+                &self.game_package_account,
+            )
+            .with_updates_by_pk(|row| &row.account_id);
         diff.game_package_config = cache
             .apply_diff_to_table::<PackageConfig>("game_package_config", &self.game_package_config)
             .with_updates_by_pk(|row| &row.id);
@@ -11643,6 +11677,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_operator" => db_update
                     .game_operator
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_package_account" => db_update
+                    .game_package_account
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_package_config" => db_update
                     .game_package_config
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -12514,6 +12551,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_operator" => db_update
                     .game_operator
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_package_account" => db_update
+                    .game_package_account
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_package_config" => db_update
                     .game_package_config
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -13008,6 +13048,7 @@ pub struct AppliedDiff<'r> {
     game_npc_text_slot: __sdk::TableAppliedDiff<'r, NpcTextSlot>,
     game_npc_vendor: __sdk::TableAppliedDiff<'r, NpcVendor>,
     game_operator: __sdk::TableAppliedDiff<'r, Operator>,
+    game_package_account: __sdk::TableAppliedDiff<'r, PackageAccount>,
     game_package_config: __sdk::TableAppliedDiff<'r, PackageConfig>,
     game_package_import: __sdk::TableAppliedDiff<'r, PackageImport>,
     game_party_command_dispatch_lane: __sdk::TableAppliedDiff<'r, PartyCommandDispatchLane>,
@@ -14025,6 +14066,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<Operator>(
             "game_operator",
             &self.game_operator,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<PackageAccount>(
+            "game_package_account",
+            &self.game_package_account,
             event,
         );
         callbacks.invoke_table_row_callbacks::<PackageConfig>(
@@ -15333,6 +15379,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_npc_text_slot_table::register_table(client_cache);
         game_npc_vendor_table::register_table(client_cache);
         game_operator_table::register_table(client_cache);
+        game_package_account_table::register_table(client_cache);
         game_package_config_table::register_table(client_cache);
         game_package_import_table::register_table(client_cache);
         game_party_command_dispatch_lane_table::register_table(client_cache);
@@ -15621,6 +15668,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_npc_text_slot",
         "game_npc_vendor",
         "game_operator",
+        "game_package_account",
         "game_package_config",
         "game_package_import",
         "game_party_command_dispatch_lane",

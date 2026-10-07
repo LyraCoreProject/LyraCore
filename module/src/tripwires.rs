@@ -1187,7 +1187,7 @@ mod character_fence_tripwire {
         // OPEN, not decided — spec puts group MEMBERSHIP state on realm-core, settled.
         ("module/src/group.rs", 3, "OPEN: group_accept/group_uninvite/group_leave have a THIRD party mutate game_group_member; if #22 lands membership on realm-core these stop being a world shard's concern entirely. Guessing a verdict here is the mistake #30 exists to correct. `push_event`'s own `other_guid` lookup dropped from this count: it could never resolve INVITE's or DECLINE's name on Realm-core (no `game_character` rows there), so the gateway now resolves it from the World Shard caches at render time instead. The join core's two member-identity reads now go through `character_by_guid`"),
         // REGENERATE at the destination — connection-derived state, never carried in the blob.
-        ("module/src/auth.rs", 4, "REGENERATE: create_character's two name checks (NAME_IN_USE, pre-insert and the race-losing retry) predate any character; its guid-allocator seed scan (`legacy_guid_seed_now`, first-ever touch only) needs the whole table; delete_character keeps a raw find so NO_SUCH_CHAR/NOT_OWNER/CHAR_IN_TRANSIT stay three answers, with the fence on the next line. establish_session's owner_identity rebind and create_character's per-account cap check now route through the `by_account` index instead of a full scan (issue #390), so they no longer count here"),
+        ("module/src/auth.rs", 4, "REGENERATE: character creation's two name checks (NAME_IN_USE in `check_new_character` and `insert_new_character`'s race-losing retry) predate any character; its guid-allocator seed scan (`legacy_guid_seed_now`, first-ever touch only) needs the whole table; delete_character keeps a raw find so NO_SUCH_CHAR/NOT_OWNER/CHAR_IN_TRANSIT stay three answers, with the fence on the next line. establish_session's owner_identity rebind and `account_has_room`'s per-account cap check now route through the `by_account` index instead of a full scan (issue #390), so they no longer count here"),
         // READS, not writes: name/class/race/identity lookups that mutate nothing on the character.
         ("module/src/items/ops.rs", 2, "race/class reads for the starter loadout and the mana-class gate — no write to the character"),
         ("module/src/spell/cast/targeting.rs", 1, "caster NAME for the resurrect prompt — no write"),
@@ -1208,8 +1208,8 @@ mod character_fence_tripwire {
     /// installed Package, so there is no single file to measure it against.
     const PACKAGE_FILE_BUDGET: &[(&str, usize, &str)] = &[(
         "src/mod.rs",
-        4,
-        "roster bookkeeping over rows this same reducer just created — free-name probe, post-create fetch, post-update re-read; +1 for a per-account character COUNT, which reaches no character (it decides whether an account still has room under its character cap) — an in-transit character counting or not toward that cap is harmless either way",
+        2,
+        "roster bookkeeping over rows this same reducer just created: the free-name probe and the post-create fetch",
     )];
 
     /// If `rel` sits under `packages/<pkg>/`, its path relative to that Package's own root —
