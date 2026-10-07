@@ -98,6 +98,22 @@ def require_recent_prune(status, result, age):
     return healthy
 
 
+def check_prune(status, previous, properties, now, boot_id):
+    result = properties.get('Result', 'unknown')
+    finished = int(properties.get('ExecMainExitTimestampMonotonic', '0')) / 1_000_000
+    if not finished and result == 'success' and properties.get('ActiveState') == 'activating':
+        # A new oneshot clears its exit timestamp. Retain the last observed success,
+        # with its original deadline, only within the same boot.
+        if previous.get('boot_id') == boot_id:
+            finished = previous.get('prune_success_monotonic', 0)
+    if (isinstance(finished, bool) or not isinstance(finished, (int, float))
+            or not math.isfinite(finished) or not 0 < finished <= now):
+        finished = 0
+    status['boot_id'] = boot_id
+    status['prune_success_monotonic'] = finished if result == 'success' else 0
+    return require_recent_prune(status, result, now - finished if finished else None)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('config', type=Path)
@@ -112,13 +128,13 @@ def main():
         previous = json.loads(path.read_text()) if path.exists() else {}
         status = sample(config, previous, time.time(), shutil.disk_usage(config['data_directory']).free, args.resume)
         prune = subprocess.run(['systemctl', 'show', 'spacetimedb-prune.service',
-                                '--property=Result', '--property=ExecMainExitTimestampMonotonic'],
+                                '--property=Result', '--property=ActiveState',
+                                '--property=ExecMainExitTimestampMonotonic'],
                                capture_output=True, text=True, timeout=5)
-        properties = dict(line.split('=', 1) for line in prune.stdout.splitlines() if '=' in line)
-        finished = int(properties.get('ExecMainExitTimestampMonotonic', '0')) / 1_000_000
-        prune_healthy = require_recent_prune(status,
-            properties.get('Result', 'unknown') if prune.returncode == 0 else 'unknown',
-            time.monotonic() - finished if finished else None)
+        properties = (dict(line.split('=', 1) for line in prune.stdout.splitlines() if '=' in line)
+                      if prune.returncode == 0 else {})
+        prune_healthy = check_prune(status, previous, properties, time.monotonic(),
+                                   Path('/proc/sys/kernel/random/boot_id').read_text().strip())
         # Persist the latch before network calls, so a partial update cannot resume bots later.
         atomic_json(path, status)
         failures = renew(config, status)
