@@ -62,9 +62,9 @@
 //! The same pass also lints each package file against the Package API surface
 //! (`PACKAGE_API_ROOTS`, documented at `docs/package-api.md`): a path that reaches the crate root
 //! outside it fails the build naming the Package, the file, the line and the path, unless the line
-//! carries `// package-api: exempt <reason>`. A debug root (`PACKAGE_API_DEBUG_ROOTS`) is on the
-//! surface only in a file that starts with the debug cfg above, and no exemption clears it. Core
-//! `src/` is never linted.
+//! carries `// package-api: exempt <reason>`. A gated root (`PACKAGE_API_GATED_ROOTS`) is on the
+//! surface only in a file that starts with its gate, the debug cfg above or `#![cfg(test)]`, and no
+//! exemption clears it. Core `src/` is never linted.
 //!
 //! EVALUATED AND REJECTED: replacing the marker scan with an explicit per-package `register()`
 //! convention. The registries are const fn-pointer arrays (no allocator-dependent init order in
@@ -289,10 +289,13 @@ const PACKAGE_API_ROOTS: &[&str] = &[
     "xp",
 ];
 
-/// Roots on the surface only in a Package file gated by `DEBUG_REDUCERS_FILE_CFG`. Core compiles
-/// them only with `debug_reducers`, so naming one anywhere else would break a release build. An
-/// exemption cannot clear one for the same reason.
-const PACKAGE_API_DEBUG_ROOTS: &[&str] = &["package_fixture"];
+/// Roots on the surface only in a Package file whose first non-blank line is the paired gate. Core
+/// compiles each root only under that cfg, so naming one in any other file would break a build
+/// without it. An exemption cannot clear one for the same reason.
+const PACKAGE_API_GATED_ROOTS: &[(&str, &str)] = &[
+    ("package_fixture", DEBUG_REDUCERS_FILE_CFG),
+    ("package_test", TEST_FILE_CFG),
+];
 
 /// Crate-root names on the surface that are neither a module nor a type: the two marker macros the
 /// `game_` prefix below does not already cover, and the generated character-owned table manifest.
@@ -1255,6 +1258,7 @@ fn scan_file(file: &Path, scan_root: &Path, in_package: bool, prefix: &str, reg:
 }
 
 const DEBUG_REDUCERS_FILE_CFG: &str = "#![cfg(feature = \"debug_reducers\")]";
+const TEST_FILE_CFG: &str = "#![cfg(test)]";
 
 /// Keep registry discovery on the same whole-file feature boundary as rustc.
 ///
@@ -1267,10 +1271,20 @@ fn registry_file_enabled(source: &str, debug_reducers: bool) -> bool {
 
 /// Whether the file's first non-blank line is `DEBUG_REDUCERS_FILE_CFG`.
 fn debug_only_file(source: &str) -> bool {
-    source
-        .lines()
-        .find(|line| !line.trim().is_empty())
-        .is_some_and(|line| line.trim() == DEBUG_REDUCERS_FILE_CFG)
+    file_gate(source) == Some(DEBUG_REDUCERS_FILE_CFG)
+}
+
+/// The file's first non-blank line, trimmed: the whole-file gate when it is one.
+fn file_gate(source: &str) -> Option<&str> {
+    source.lines().map(str::trim).find(|line| !line.is_empty())
+}
+
+/// The gate a gated root needs, or `None` when `root` is not gated.
+fn root_gate(root: &str) -> Option<&'static str> {
+    PACKAGE_API_GATED_ROOTS
+        .iter()
+        .find(|(gated, _)| *gated == root)
+        .map(|(_, gate)| *gate)
 }
 
 /// Whether `root`, the first segment of a crate-root path, is on the Package API surface.
@@ -1278,8 +1292,8 @@ fn debug_only_file(source: &str) -> bool {
 /// Three families beyond the listed roots: `game_*` covers the table accessor traits and the
 /// `game_hook!`/`game_tick_pass!` markers, `pkg_*` covers a Package's own generated root (and its
 /// siblings'), and an UpperCamelCase name is a row or payload type re-exported at the crate root.
-/// A debug root is on the surface only in a debug-only file.
-fn on_package_api(root: &str, debug_only_file: bool) -> bool {
+/// A gated root is on the surface only in a file that starts with its gate.
+fn on_package_api(root: &str, file_gate: Option<&str>) -> bool {
     let upper_camel = root.starts_with(|c: char| c.is_ascii_uppercase())
         && root.chars().any(|c| c.is_ascii_lowercase());
     PACKAGE_API_ROOTS.contains(&root)
@@ -1287,7 +1301,7 @@ fn on_package_api(root: &str, debug_only_file: bool) -> bool {
         || root.starts_with("game_")
         || root.starts_with("pkg_")
         || upper_camel
-        || (debug_only_file && PACKAGE_API_DEBUG_ROOTS.contains(&root))
+        || root_gate(root).is_some_and(|gate| file_gate == Some(gate))
 }
 
 #[derive(Clone, Copy)]
@@ -1659,17 +1673,17 @@ fn record_rooted_paths(
     prefix: &str,
     stripped: &str,
     exempt_lines: &[usize],
-    debug_only_file: bool,
+    file_gate: Option<&str>,
     found: &mut Vec<(usize, usize, String)>,
 ) {
     for (root_index, root, written) in roots_after_separator(tokens, separator, prefix) {
         let normalized_root = root.strip_prefix("r#").unwrap_or(&root);
-        if normalized_root == "self" || on_package_api(normalized_root, debug_only_file) {
+        if normalized_root == "self" || on_package_api(normalized_root, file_gate) {
             continue;
         }
         let offset = tokens[root_index].start;
         let line = stripped[..offset].matches('\n').count() + 1;
-        if !exempt_lines.contains(&line) || PACKAGE_API_DEBUG_ROOTS.contains(&normalized_root) {
+        if !exempt_lines.contains(&line) || root_gate(normalized_root).is_some() {
             found.push((offset, line, written));
         }
     }
@@ -1685,7 +1699,7 @@ fn record_rooted_paths(
 fn out_of_surface_paths(source: &str, file_depth: usize) -> Vec<(usize, String)> {
     let stripped_source = strip_source(source);
     let stripped = stripped_source.code;
-    let debug_only_file = debug_only_file(source);
+    let file_gate = file_gate(source);
     let tokens = source_tokens(&stripped);
     let pairs = brace_pairs(&tokens);
     let modules = inline_modules(&tokens, &pairs);
@@ -1707,7 +1721,7 @@ fn out_of_surface_paths(source: &str, file_depth: usize) -> Vec<(usize, String)>
                 "$crate",
                 &stripped,
                 &stripped_source.package_api_exempt_lines,
-                debug_only_file,
+                file_gate,
                 &mut found,
             );
             index += 3;
@@ -1725,7 +1739,7 @@ fn out_of_surface_paths(source: &str, file_depth: usize) -> Vec<(usize, String)>
                 "crate",
                 &stripped,
                 &stripped_source.package_api_exempt_lines,
-                debug_only_file,
+                file_gate,
                 &mut found,
             );
         } else if tokens[index].text == "super" && (index == 0 || tokens[index - 1].text != "::") {
@@ -1755,7 +1769,7 @@ fn out_of_surface_paths(source: &str, file_depth: usize) -> Vec<(usize, String)>
                     &prefix,
                     &stripped,
                     &stripped_source.package_api_exempt_lines,
-                    debug_only_file,
+                    file_gate,
                     &mut found,
                 );
             }
@@ -1778,11 +1792,11 @@ fn out_of_surface_message(package: &str, file: &Path, line: usize, path: &str) -
         .split("::")
         .find(|segment| !matches!(*segment, "crate" | "$crate" | "super" | "self"))
         .map(|segment| segment.strip_prefix("r#").unwrap_or(segment));
-    if root.is_some_and(|root| PACKAGE_API_DEBUG_ROOTS.contains(&root)) {
+    if let Some(gate) = root.and_then(root_gate) {
         return format!(
-            "build.rs: Package `{package}` names `{path}` at {}:{line}, a Package API root that \
-             exists only with `debug_reducers` (docs/package-api.md, version 1). Name it only from \
-             a file whose first non-blank line is `{DEBUG_REDUCERS_FILE_CFG}`.",
+            "build.rs: Package `{package}` names `{path}` at {}:{line}, a gated Package API root \
+             (docs/package-api.md, version 1). Name it only from a file whose first non-blank line \
+             is `{gate}`.",
             file.display()
         );
     }
@@ -1996,6 +2010,60 @@ mod package_api_lint_tests {
             "{message}"
         );
         assert!(message.contains(DEBUG_REDUCERS_FILE_CFG), "{message}");
+        assert!(!message.contains(PACKAGE_API_EXEMPT), "{message}");
+    }
+
+    #[test]
+    fn a_test_root_is_refused_outside_a_test_only_file() {
+        // An ordinary build compiles this file, and an item gate does not change what the lint
+        // sees.
+        let source = "#[cfg(test)]\nmod tests {\n    use crate::package_test::shape_of;\n}\n";
+        assert_eq!(reported(source), vec!["3:crate::package_test::shape_of"]);
+    }
+
+    #[test]
+    fn a_test_root_is_on_the_surface_in_a_test_only_file() {
+        let source = "#![cfg(test)]\nuse crate::package_test::{ask_offline, read_scanned};\nfn f() {\n    super::super::package_test::shape_of();\n}\n";
+        assert!(
+            reported_at_depth(source, 1).is_empty(),
+            "{:?}",
+            reported_at_depth(source, 1)
+        );
+    }
+
+    #[test]
+    fn each_gated_root_needs_its_own_gate() {
+        let test_file = "#![cfg(test)]\ncrate::package_fixture::apply_damage();\n";
+        let debug_file =
+            "#![cfg(feature = \"debug_reducers\")]\ncrate::package_test::ask_offline();\n";
+        assert_eq!(
+            reported(test_file),
+            vec!["2:crate::package_fixture::apply_damage"]
+        );
+        assert_eq!(
+            reported(debug_file),
+            vec!["2:crate::package_test::ask_offline"]
+        );
+    }
+
+    #[test]
+    fn an_exemption_cannot_clear_a_test_root() {
+        let source = "use crate::package_test::read_scanned; // package-api: exempt scan Core\n";
+        assert_eq!(
+            reported(source),
+            vec!["1:crate::package_test::read_scanned"]
+        );
+    }
+
+    #[test]
+    fn a_test_root_failure_names_the_test_gate() {
+        let message = out_of_surface_message(
+            "bots",
+            Path::new("packages/bots/src/goals.rs"),
+            9,
+            "crate::package_test::shape_of",
+        );
+        assert!(message.contains(TEST_FILE_CFG), "{message}");
         assert!(!message.contains(PACKAGE_API_EXEMPT), "{message}");
     }
 
