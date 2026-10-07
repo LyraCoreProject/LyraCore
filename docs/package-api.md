@@ -212,6 +212,8 @@ observation steps a Package's own debug fixtures need. A release build has no su
 | `require_no_imported_content(ctx)` | refuses when the Shard holds imported content; the temporary weather seed a fresh Module stamps does not count |
 | `top_threat_target(ctx, creature_guid)` | reads the highest-threat living source on the creature's map and instance |
 | `client_cast(ctx, caster_guid, spell_id, target_guid)` | casts through the same Gates a client cast passes |
+| `admit_to_instance(ctx, character_guid, map_id, instance_id, party_id, request_actor)` | stages the party's instance as a dungeon entry leaves it and binds the Character to it; refuses when entry resolves to another instance |
+| `record_completed_transfer(ctx, character_guid, map_id, instance_id)` | records a finished Transfer in Realm-core's character-to-shard index |
 | `declare_next_movement_tick(ctx, delay)` | makes the next creature movement tick fire once, `delay` from now; refuses unless the catch-all tick is the only movement schedule |
 
 A fixture reads the navigation revision through `nav::inputs(ctx, map_id).imported_revision`.

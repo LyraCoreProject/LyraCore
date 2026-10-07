@@ -25,8 +25,9 @@ and is not reconstructed here.
 - **Package fixtures.** A Module built with `debug_reducers` adds `crate::package_fixture`, a
   Package API root for a Package's own debug fixtures. It applies real Core damage, removes a live
   Character as a logout does, refuses imported content, reads the top threat target, casts through
-  the client cast Gates and declares the next creature movement tick. A Package names it only from
-  a file gated on `debug_reducers`, and the lint refuses it anywhere else.
+  the client cast Gates, declares the next creature movement tick, admits a Character to a party
+  instance and records a finished Transfer in the character-to-shard index. A Package names it
+  only from a file gated on `debug_reducers`, and the lint refuses it anywhere else.
 - **Package-owned Accounts.** `package_account::create_package_character` lets a Package create a
   Character with no Session. It applies the name, race and class Refusals of client creation, and
   puts the Character on an Account without credentials. `game_package_account` records which
