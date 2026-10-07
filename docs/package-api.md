@@ -41,6 +41,7 @@ which must be written literally.
 | `crate::game_client_command!(PARSE, APPLY, REPLY)` | the single Package parser, admitted apply operation and reply command name for authenticated addon commands |
 | `crate::character_owned!(delete \| restamp \| transfer \| not_transported, ..)` | a Package table's character-keyed sweeps and its cross-shard transport arm |
 | `crate::encounter_package!(BINDING, fn NAME(ctx, instance_id, signal) { .. })` | encounter authority for one Encounter Binding |
+| `crate::game_package_characters!(fn NAME(ctx) { .. })` | the guids of the Characters the Package controls on this Shard, read by Package Teardown |
 
 A Package table that is keyed by `character_guid` needs a `delete` marker and a transport arm. Without
 them a despawned character leaves rows behind, and a character that crosses a shard loses them.
@@ -99,6 +100,34 @@ so it stays when the Package is disabled. Pass the Package's own name.
 
 The Character starts at level 1 at its race and class start position, with zero gender and
 appearance bytes. The Package places it, levels it and builds its live entity.
+
+### Package Teardown
+
+`teardown_package(package_name)` is an Operator reducer. Run it on every Shard of the Realm before a
+Package leaves the build, then run it once more on each Shard. The second pass catches a Character
+that crossed into a Shard that was already torn down. `lyracore packages disable` runs both passes.
+In one transaction, teardown does these steps:
+
+- It makes each Character of the Package a Dormant Character. The Character goes offline and loses
+  its live entity, its Sessionless Action Consent and its pending Transfer and Group Intents. Its
+  Account and Character rows stay.
+- It empties every table the Package declares.
+- It deletes the Package's Package Config rows.
+- It stops every hook, tick pass, encounter handler and client command the Package registered.
+
+The Characters of a Package are the Characters on Accounts it owns on this Shard, plus the guids its
+`game_package_characters!` read returns. Register the read when Core cannot find every Character
+through ownership. Two cases need it: a Character that crossed from another Shard, and a Character
+on an Account made before Package-owned Accounts existed. A Character with a World Session is never
+made Dormant.
+
+Teardown refuses while one of these Characters has a Transfer escrow row or a claimed Transfer
+Intent on the Shard, because the escrow names the Package's tables. A Refusal writes nothing.
+Retry when the crossing settles.
+
+A Package stays stopped until the first tick of a build that does not compile it. Enabling it again
+then starts it fresh: empty tables, default Package Config, and no Characters from before. Its old
+Characters stay Dormant.
 
 ### Encounter kernel
 
@@ -246,7 +275,8 @@ file without the root.
 
 A Package declares its own tables with `#[table(accessor = pkg_<package>_<name>, ..)]`, the naming
 rule `docs/schema.md` states. The Package name in the accessor is what keeps two Packages from
-colliding.
+colliding. The accessor is also the table name Package Teardown empties, so the build refuses a
+Package table that sets its own `name`.
 
 Core table accessors are named `game_*` and are reached at the crate root:
 `use crate::{game_world_entity, game_character};`. Row types are re-exported at the crate root under

@@ -61,7 +61,7 @@ rather than trust the numbers below, which drift on every schema change. The pat
 undercounts. The second command lists the tables per file, which is what the rows below add up:
 
 ```bash
-grep -rEn '^#\[(spacetimedb::)?table\(' module/src --include='*.rs' | wc -l   # 287 on 2026-10-07
+grep -rEn '^#\[(spacetimedb::)?table\(' module/src --include='*.rs' | wc -l   # 288 on 2026-10-07
 grep -rEc '^#\[(spacetimedb::)?table\(' module/src --include='*.rs' | grep -v ':0$'  # tables per file
 ```
 
@@ -89,7 +89,7 @@ grep -rEc '^#\[(spacetimedb::)?table\(' module/src --include='*.rs' | grep -v ':
 | Gateway leases | 3 | 0 | `gw.rs` |
 | Taxi | 5 | 1 | `taxi.rs` |
 | Weather | 3 | 1 | `weather.rs` |
-| Packages | 4 | 1 | `package_account.rs`, `package_config.rs`, `package_import.rs`, `script_binding.rs` |
+| Packages | 5 | 1 | `package_account.rs`, `package_config.rs`, `package_import.rs`, `package_teardown.rs`, `script_binding.rs` |
 | Event GC | 1 | 0 | `gc.rs` |
 | Config / static data / diagnostics | 22 | 21 | `config.rs`, `gm.rs`, `faction.rs`, `skilldata.rs`, `stats.rs`, `import_meta.rs`, `debug/*` |
 

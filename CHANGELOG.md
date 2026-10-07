@@ -36,6 +36,11 @@ and is not reconstructed here.
   Character with no Session. It applies the name, race and class Refusals of client creation, and
   puts the Character on an Account without credentials. `game_package_account` records which
   Package owns that Account, and the record stays when the Package is disabled.
+- **Package Teardown.** `teardown_package` stops a Package on one Shard before it leaves the build.
+  It empties the Package's tables, deletes its Package Config and stops its registered code, so the
+  next publish can remove the tables. The Package's Characters become Dormant Characters: offline,
+  with no live entity, and with their Account and Character rows kept. A Package names Characters
+  Core cannot find through ownership with `game_package_characters!`.
 - **Meeting stones.** Using a dungeon's meeting stone puts a Character, or the Party it leads, in one
   realm-wide queue on Realm-core. Five Seekers for one dungeon and team form a Party, and a queued
   Party fills its open tank, healer and damage roles from Seekers on any World Shard.
