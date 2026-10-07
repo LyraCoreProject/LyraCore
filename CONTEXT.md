@@ -140,6 +140,12 @@ credentials, so no login reaches it. `game_package_account` records the owning P
 the record outlives the Package when the Package is disabled.
 _Avoid_: bot account, account block
 
+**Dormant Character**:
+A Character whose Package was torn down. It is offline and has no live entity, Sessionless Action
+Consent or pending Intent. Its Account and Character rows stay, by maintainer decision: turning a
+Package off never deletes its Characters. A Package enabled again does not adopt them.
+_Avoid_: deleted bot, orphan bot, frozen bot
+
 **Alpha Test Tools**:
 Account-owned authority for a limited set of alpha testing dot-commands. The Gateway reads its
 current value from Realm-core for every command and conveys it to the Home Shard. The Module applies
@@ -934,6 +940,13 @@ _Avoid_: config file, setting (unqualified), package setting
 **Package Inventory**:
 The two directories that hold installed Packages. `packages/` holds the enabled ones, which the build compiles. `.lyracore/packages-disabled/` holds the disabled ones, which it cannot see. A Package's location IS its enabled state; no file records it, so nothing can disagree with the disk about what the next build compiles. `lyracore packages enable` and `lyracore packages disable` move one folder between the two.
 _Avoid_: registry, package list, enabled flag, state file
+
+**Package Teardown**:
+The Operator step that stops a Package on every Shard before it leaves the Package Inventory. It
+makes the Package's Characters Dormant Characters, empties the Package's tables, deletes its Package
+Config, and stops its registered code. A publish that removes a table refuses while the table holds
+rows, so the Package's tables must be empty first. `lyracore packages disable` runs it.
+_Avoid_: uninstall, package wipe, cleanup
 
 **Reference Package**:
 The maintained, minimal Package at `packages/example/`, committed to the LyraCore repo and present in every checkout. It doubles as living documentation for a Package's shape and is the template `lyracore packages new` copies and renames. It is deliberately inert: Rust-only, one commented hook pattern, no gameplay behavior.

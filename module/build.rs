@@ -31,7 +31,9 @@
 //!   `GAME_TICK_PASSES` (periodic passes run by the core scheduler tick) and one
 //!   `GAME_HOOKS_<EVENT>` array per known notify-hook event, dispatched at the core chokepoints
 //!   (see `src/hooks.rs`), the optional Package client-command handler, and the map-scoped
-//!   encounter authority registry.
+//!   encounter authority registry. Each Package registration is wrapped so it stops once Package
+//!   Teardown has run (`src/package_teardown.rs`). `GAME_PACKAGES` lists every compiled Package
+//!   with its `#[table]` accessors and its `game_package_characters!` read, for that teardown.
 //! - `hook_dispatch.rs` — from `HOOK_EVENTS` below: the `payload_for` alias mod
 //!   and one `fire_*` fn per event, included INSIDE `src/hooks.rs` so the paths every chokepoint
 //!   already uses (`hooks::fire_*`, `hooks::payload_for::*`) are unchanged. This is what keeps the
@@ -544,7 +546,8 @@ fn main() {
          pub const GAME_TICK_PASSES: &[(&str, fn(&spacetimedb::ReducerContext))] = &[\n",
     );
     for path in &registries.tick_passes {
-        out.push_str(&format!("    (\"{path}\", {path}),\n"));
+        let pass = gated(path, "ctx: &spacetimedb::ReducerContext", "ctx", "");
+        out.push_str(&format!("    (\"{path}\", {pass}),\n"));
     }
     out.push_str("];\n");
     for HookEvent {
@@ -563,7 +566,11 @@ fn main() {
             event.to_uppercase()
         ));
         for path in &hooks {
-            out.push_str(&format!("    {path},\n"));
+            let params = format!("ctx: &spacetimedb::ReducerContext, payload: &{payload_ty}");
+            out.push_str(&format!(
+                "    {},\n",
+                gated(path, &params, "ctx, payload", "")
+            ));
         }
         out.push_str("];\n");
     }
@@ -571,8 +578,14 @@ fn main() {
         "pub const GAME_ENCOUNTER_PACKAGES: &[(crate::encounter::EncounterBinding, crate::encounter::EncounterPackageHandler)] = &[\n",
     );
     for (binding, path) in &registries.encounter_packages {
+        let handler = gated(
+            path,
+            "ctx: &spacetimedb::ReducerContext, instance_id: u64, signal: crate::encounter::EncounterSignal",
+            "ctx, instance_id, signal",
+            "Ok(())",
+        );
         out.push_str(&format!(
-            "    (crate::encounter::EncounterBinding::{binding}, {path}),\n"
+            "    (crate::encounter::EncounterBinding::{binding}, {handler}),\n"
         ));
     }
     out.push_str("];\n");
@@ -582,9 +595,17 @@ fn main() {
     }
     out.push_str("];\n");
     match registries.client_commands.first() {
-        Some((parse, apply, reply)) => out.push_str(&format!(
-            "pub const GAME_CLIENT_COMMAND: Option<crate::bridge::ClientCommandHandler> = Some(crate::bridge::ClientCommandHandler {{ parse: {parse}, apply: {apply}, reply: {reply} }});\n"
-        )),
+        Some((parse, apply, reply)) => {
+            let apply = gated(
+                apply,
+                "ctx: &spacetimedb::ReducerContext, command: &crate::bridge::AdmittedClientCommand",
+                "ctx, command",
+                "crate::bridge::CommandOutcome::Suppressed",
+            );
+            out.push_str(&format!(
+                "pub const GAME_CLIENT_COMMAND: Option<crate::bridge::ClientCommandHandler> = Some(crate::bridge::ClientCommandHandler {{ parse: {parse}, apply: {apply}, reply: {reply} }});\n"
+            ))
+        }
         None => out.push_str(
             "pub const GAME_CLIENT_COMMAND: Option<crate::bridge::ClientCommandHandler> = None;\n",
         ),
@@ -595,6 +616,40 @@ fn main() {
     out.push_str("pub const GAME_HOOK_EVENT_NAMES: &[&str] = &[\n");
     for HookEvent { event, .. } in HOOK_EVENTS {
         out.push_str(&format!("    \"{event}\",\n"));
+    }
+    out.push_str("];\n");
+    registries.package_characters.sort();
+    for duplicate in registries.package_characters.windows(2) {
+        if duplicate[0].0 == duplicate[1].0 {
+            panic!(
+                "build.rs: Package {} registers `game_package_characters!` twice: {} and {}",
+                duplicate[0].0, duplicate[0].1, duplicate[1].1
+            );
+        }
+    }
+    out.push_str("pub const GAME_PACKAGES: &[crate::package_teardown::InstalledPackage] = &[\n");
+    for (ident, _) in &pkg_mods {
+        let mut tables: Vec<&str> = registries
+            .package_tables
+            .iter()
+            .filter(|(package, _)| package == ident)
+            .map(|(_, table)| table.as_str())
+            .collect();
+        tables.sort_unstable();
+        tables.dedup();
+        let characters = registries
+            .package_characters
+            .iter()
+            .find(|(package, _)| package == ident)
+            .map_or("None".to_string(), |(_, path)| format!("Some({path})"));
+        out.push_str(&format!(
+            "    crate::package_teardown::InstalledPackage {{ name: \"{ident}\", tables: &[{}], characters: {characters} }},\n",
+            tables
+                .iter()
+                .map(|table| format!("\"{table}\""))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
     }
     out.push_str("];\n");
     write_out(&out_dir, "package_registries.rs", &out);
@@ -653,6 +708,67 @@ struct Registries {
     hooks: Vec<(String, String)>, // (event, fully-qualified fn path)
     encounter_packages: Vec<(String, String)>, // (binding variant, fully-qualified fn path)
     client_commands: Vec<(String, String, String)>, // (parser, admitted apply, reply name) paths
+    package_tables: Vec<(String, String)>, // (package ident, table accessor)
+    package_characters: Vec<(String, String)>, // (package ident, fully-qualified fn path)
+}
+
+/// The registry entry for `path`. A Package's fn is wrapped so it stops running once Package
+/// Teardown has run for that Package; the wrapper then returns `otherwise`.
+fn gated(path: &str, params: &str, args: &str, otherwise: &str) -> String {
+    match path
+        .strip_prefix("crate::pkg_")
+        .and_then(|rest| rest.split("::").next())
+    {
+        Some(package) => format!(
+            "|{params}| if crate::package_teardown::runs(ctx, \"{package}\") {{ {path}({args}) }} else {{ {otherwise} }}"
+        ),
+        None => path.to_string(),
+    }
+}
+
+/// The accessor of every `#[table(..)]` and `#[spacetimedb::table(..)]` in stripped source.
+/// Only the attribute's top-level `accessor`, so an index's own `accessor = ..` is never taken.
+fn table_accessors(content: &str) -> Vec<String> {
+    let mut accessors = Vec::new();
+    for (start, _) in content.match_indices("#[") {
+        let attribute = content[start + 2..].trim_start();
+        let Some(args) = attribute
+            .strip_prefix("table")
+            .or_else(|| attribute.strip_prefix("spacetimedb::table"))
+            .and_then(|rest| rest.trim_start().strip_prefix('('))
+        else {
+            continue;
+        };
+        let mut depth = 0usize;
+        let mut item_start = 0usize;
+        for (index, c) in args.char_indices() {
+            match c {
+                '(' | '[' => depth += 1,
+                ')' | ']' if depth == 0 => {
+                    accessors.extend(accessor_item(&args[item_start..index]));
+                    break;
+                }
+                ')' | ']' => depth -= 1,
+                ',' if depth == 0 => {
+                    accessors.extend(accessor_item(&args[item_start..index]));
+                    item_start = index + 1;
+                }
+                _ => {}
+            }
+        }
+    }
+    accessors
+}
+
+fn accessor_item(item: &str) -> Option<String> {
+    let value = item
+        .trim()
+        .strip_prefix("accessor")?
+        .trim_start()
+        .strip_prefix('=')?
+        .trim();
+    (!value.is_empty() && value.chars().all(|c| c.is_alphanumeric() || c == '_'))
+        .then(|| value.to_string())
 }
 
 /// The table accessor a transport arm's fully-qualified fn path names: the same
@@ -1223,6 +1339,32 @@ fn scan_file(file: &Path, scan_root: &Path, in_package: bool, prefix: &str, reg:
             }
             None => panic!(
                 "build.rs: malformed `game_client_command!` marker in {}:{line} — expected `game_client_command!(PARSE, APPLY, REPLY)`",
+                file.display()
+            ),
+        }
+    });
+
+    if let Some(package) = prefix.strip_prefix("crate::pkg_") {
+        for table in table_accessors(&content) {
+            reg.package_tables.push((package.to_string(), table));
+        }
+    }
+
+    scan_marker(&content, file, "game_package_characters!", |head, line| {
+        match (try_match_tick_pass(head), prefix.strip_prefix("crate::pkg_")) {
+            (Some(name), Some(package)) => {
+                check_facade_reexport(file, scan_root, in_package, &name);
+                reg.package_characters
+                    .push((package.to_string(), format!("{prefix}::{name}")));
+            }
+            (Some(_), None) => panic!(
+                "build.rs: `game_package_characters!` in {}:{line} is core code; only a Package names its Characters",
+                file.display()
+            ),
+            (None, _) => panic!(
+                "build.rs: malformed `game_package_characters!` marker in {}:{line} — expected exactly \
+                 `game_package_characters!(fn NAME(ctx) {{ .. }})`. A marker must never be silently \
+                 skipped.",
                 file.display()
             ),
         }
@@ -1919,6 +2061,26 @@ mod package_api_lint_tests {
         assert_eq!(
             try_match_client_command("(parse_order, apply_order, ORDER_RESULT, extra);"),
             None
+        );
+    }
+
+    #[test]
+    fn teardown_finds_each_table_by_its_own_accessor() {
+        let source = "#[table(accessor = pkg_demo_one, public)]\nstruct One;\n\
+                      #[spacetimedb::table(\n    index(accessor = by_due, btree(columns = [due, id])),\n    accessor = pkg_demo_two,\n)]\nstruct Two;\n\
+                      #[derive(Clone)]\n#[tables(accessor = not_a_table)]\nstruct Three;\n";
+        assert_eq!(table_accessors(source), ["pkg_demo_one", "pkg_demo_two"]);
+    }
+
+    #[test]
+    fn a_package_registration_stops_after_teardown_and_core_code_never_does() {
+        assert_eq!(
+            gated("crate::pkg_demo::pass", "ctx: &C", "ctx", ""),
+            "|ctx: &C| if crate::package_teardown::runs(ctx, \"demo\") { crate::pkg_demo::pass(ctx) } else {  }"
+        );
+        assert_eq!(
+            gated("crate::hooks::pass", "ctx: &C", "ctx", ""),
+            "crate::hooks::pass"
         );
     }
 

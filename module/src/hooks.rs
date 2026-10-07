@@ -261,6 +261,7 @@ include!(concat!(env!("OUT_DIR"), "/hook_dispatch.rs"));
 /// Called at the END of `tick_creatures` every tick (0.5s), after all core passes — see the cadence
 /// note in the `game_tick_pass` macro doc.
 pub(crate) fn run_package_tick_passes(ctx: &ReducerContext) {
+    crate::package_teardown::forget_removed_packages(ctx);
     for (_name, f) in crate::GAME_TICK_PASSES {
         f(ctx);
     }
