@@ -10,6 +10,10 @@ failures in `/var/lib/lyracore-disk-guard/status.json`. Failed or overdue prunin
 capacity and produces a failed monitor service. Journal priorities make warnings and errors visible to host
 monitoring; these units do not send email or chat notifications.
 
+While cleanup runs, the monitor uses its last observed successful completion from the same boot.
+Starting cleanup does not extend that completion's thirty-minute deadline. Missing history, a
+failed cleanup, or an overdue completion revokes capacity even if cleanup is still running.
+
 Each successful sample renews a three-minute Bot Capacity Lease on every configured Shard through
 `set_package_config`. Playerbots must include the Package capacity check before enabling this
 monitor. Expiry refuses new bots and controller activation; the Runner freezes existing bots
