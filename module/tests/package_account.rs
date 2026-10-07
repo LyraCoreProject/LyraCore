@@ -120,3 +120,26 @@ fn a_package_character_meets_the_client_name_race_and_class_refusals() {
         "a legal pair was refused: {output:?}"
     );
 }
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn a_new_package_account_skips_a_name_an_unowned_account_holds() {
+    let shard = stage("package-account-taken-name");
+    let first = create(&shard, "Bota", "1", "1");
+    assert!(first.status.success(), "{first:?}");
+    // The Account `example#0` stays, but no longer counts as owned.
+    shard.assert_sql("DELETE FROM game_package_account");
+
+    let second = create(&shard, "Botb", "1", "1");
+    assert!(
+        second.status.success(),
+        "a held Account name blocked creation: {second:?}"
+    );
+    let owned = package_accounts(&shard);
+    assert_eq!(owned.len(), 1, "one new owned Account: {owned:?}");
+    let account = shard.query_rows(&format!(
+        "SELECT username FROM game_account WHERE id = {}",
+        owned[0]
+    ));
+    assert_eq!(account[0]["username"], "example#1");
+}
