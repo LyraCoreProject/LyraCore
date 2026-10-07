@@ -1159,13 +1159,8 @@ mod partition_discipline_tripwire {
 /// on any file over its whitelisted budget. `WHITELIST` FREEZES today's audited exceptions in
 /// Core's own source, each with a verdict (see the verdict table in `transfer/mod.rs`'s module doc,
 /// and `docs/history/transfer-by-guid-verdict-table.md` for each verdict's reasoning); it is a
-/// ratchet, so it should only ever shrink.
-///
-/// An installed Package's source compiles into this same module, so its files need the same fence
-/// — but Core must not hold a literal entry for one Package's file, or Core names a Package.
-/// `PACKAGE_FILE_BUDGET` covers that case: it keys a budget on a file's path RELATIVE TO ITS
-/// PACKAGE ROOT (`src/mod.rs`, not the full `packages/<name>/src/mod.rs`), so the same audited
-/// shape applies to whichever Package ships it, with no Package name anywhere in Core.
+/// ratchet, so it should only ever shrink. `PACKAGE_FILE_BUDGET` carries the same budget for an
+/// installed Package's file, keyed by file shape instead of by Package, so Core names no Package.
 ///
 // Note: same (file, count) granularity, same text-scan mechanism, and the same two ceilings as
 // `partition_discipline_tripwire` — swapping one whitelisted lookup for a different one inside an
@@ -1208,24 +1203,9 @@ mod character_fence_tripwire {
         ("module/src/debug/repair.rs", 1, "`debug_repair_after_publish`'s gm-tester backfill (guid 1, formerly the standalone `debug_seed_gm_tester`); every debug WRITER that touches character state is fenced"),
     ];
 
-    /// `(path relative to a Package's own root, allowed raw-lookup count, verdict + why)`. Applies
-    /// identically to every installed Package: the key is a file SHAPE (`src/mod.rs`), never which
-    /// Package ships it, so Core carries this budget with no Package name anywhere in it. A Package
-    /// file whose relative path matches no entry gets a budget of zero, same as an unlisted Core
-    /// file in `WHITELIST`.
-    ///
-    /// The one entry here is the audited exception ticket 2 inherited from the former
-    /// `packages/<name>/src/mod.rs` line in `WHITELIST`: roster bookkeeping over rows the same
-    /// reducer just created — a free-name probe, a post-create fetch, a post-update re-read, and a
-    /// per-account character COUNT that reaches no character (it only decides whether an account
-    /// still has room under its character cap, so an in-transit character counting toward it or not
-    /// is harmless either way).
-    ///
-    /// No staleness ratchet checks this list the way `character_whitelist_has_no_stale_entries`
-    /// checks `WHITELIST`: a generic entry names a file shape, not one Package, so there is no
-    /// single installed Package to measure it against. Ticket 3 is already expected to revisit this
-    /// number when the Package that earns it moves its account and character creation behind the
-    /// Package API.
+    /// `(path relative to a Package's own root, allowed raw-lookup count, verdict + why)` — keyed
+    /// this way so Core names no Package. No staleness ratchet: it names a file shape, not one
+    /// installed Package, so there is no single file to measure it against.
     const PACKAGE_FILE_BUDGET: &[(&str, usize, &str)] = &[(
         "src/mod.rs",
         4,
