@@ -45,6 +45,10 @@ In this project we focus on building complex things as simple as possible. We lo
 - Before changing `./lyracore` behaviour or its pin, read `docs/agents/cross-repo-cli.md`. The CLI
   source is the sibling `lyracore-cli` repository, not `.lyracore/cli/`'s installed cache.
 
+## Issues
+
+- File and rewrite issues in the shape `CONTRIBUTING.md` gives under "The issue shape". Check every claim against the code at the commit you name.
+
 ## Pull Requests
 
 - Before opening a PR, read `CONTRIBUTING.md`: what gets in, and where gameplay beyond 1.12.1 goes.

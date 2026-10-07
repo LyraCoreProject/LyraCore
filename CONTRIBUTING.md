@@ -7,9 +7,8 @@ Package, not in core.
 
 ## Where to start
 
-The maintainers file issues in one shape. Each says what 1.12.1 does or what the tool should do,
-what LyraCore does instead at a named commit and where in the code, how it shows, and a fix
-direction.
+The maintainers file issues in one shape (see "The issue shape"). Each says what 1.12.1 does,
+what LyraCore does instead and where in the code, and how to fix it.
 
 - `ready-for-agent` means the issue holds everything you need to build it, whether you work alone
   or with an agent. Start here.
@@ -84,6 +83,21 @@ the install, and [`docs/quickstart.md`](docs/quickstart.md) goes from clone to a
 
 The seeded world needs no client data, and most tests run against it. Tests that need imported
 data skip when it is absent, so a green run without an import does not cover them.
+
+## The issue shape
+
+Every issue a maintainer or an agent files uses this shape. A bug report from the template is
+welcome as it is, and a maintainer rewrites it into this shape.
+
+- **Title:** one plain sentence that states the defect or the gap, for example "A Warlock cannot
+  place a Soulstone on another player".
+- **Expected (1.12.1).** What vanilla does, and how that is known. Use **Expected.** for tooling.
+- **Actual** (at a commit). What LyraCore does now, with permalinks to the code at that commit.
+- **How it shows.** What a player, a developer or an operator sees.
+- **Fix direction.** The likely change, in a few sentences.
+
+When the code is done and only a check on a real client remains, **How to check** and **Done
+when** replace **Fix direction**.
 
 ## Reporting a bug
 
