@@ -3,7 +3,7 @@
 //! that doc comment stays true. `#[cfg(test)] mod tripwires;` is `lib.rs`'s only mention of this
 //! file.
 //!
-//! Nine tripwires, in file order:
+//! Ten tripwires, in file order:
 //! - [`character_owned_tripwire`] — every table with a Character-capable guid field has a
 //!   `character_owned` sweep marker or an explicit exclusion.
 //! - [`build_scan_strip_tripwire`] — a commented-out marker invocation never registers.
@@ -15,6 +15,7 @@
 //! - [`grid_cell_tripwire`] — indexed cell fields are derived from their grid coordinates.
 //! - [`issue_reference_tripwire`] — no comment carries a tracker issue reference.
 //! - [`dead_code_allowance_tripwire`] — dead-code allowances stay confined to declared boundaries.
+//! - [`package_name_tripwire`] — Core source names no official Package.
 //!
 //! `partition_discipline_tripwire::raw_scans` and `character_fence_tripwire::raw_lookups` used to
 //! be ~70-line near-clones — identical bound-handle walk-back, handle dedup, comment-line filtering
@@ -2224,5 +2225,92 @@ pub(crate) mod dead_code_allowance_tripwire {
         let source =
             "#[allow(dead_code, reason = \"residue\")]\n#[cfg_attr(test, allow(dead_code))]\n";
         assert_eq!(unconditional_dead_code_allows(source), vec![1]);
+    }
+}
+
+/// ENFORCEMENT tripwire: Core source names no official Package, in code, comments or the
+/// generated Gateway bindings. Core must build and read the same with no Package installed.
+#[cfg(test)]
+pub(crate) mod package_name_tripwire {
+    use std::path::{Path, PathBuf};
+
+    /// The official Packages (LyraCoreProject/packages) that Core must not name.
+    const OFFICIAL_PACKAGES: &[&str] = &["playerbots"];
+
+    const CORE_TREES: &[&str] = &["module", "gateway", "crates", "importer"];
+
+    /// Test-only files may name a Package, and this file holds the list.
+    fn is_exempt(rel: &str) -> bool {
+        rel == "module/src/tripwires.rs"
+            || rel.ends_with("_tests.rs")
+            || rel.ends_with("/tests.rs")
+            || rel.split('/').any(|part| part == "tests")
+    }
+
+    fn named_packages(content: &str) -> Vec<(usize, &'static str)> {
+        let content = content.to_ascii_lowercase();
+        let mut found = Vec::new();
+        for (index, line) in content.lines().enumerate() {
+            for name in OFFICIAL_PACKAGES {
+                if line.contains(name) {
+                    found.push((index + 1, *name));
+                }
+            }
+        }
+        found
+    }
+
+    fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
+        let entries =
+            std::fs::read_dir(dir).unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display()));
+        for entry in entries {
+            let path = entry.expect("readable dir entry").path();
+            if path.is_dir() {
+                collect_files(&path, out);
+            } else {
+                out.push(path);
+            }
+        }
+    }
+
+    #[test]
+    fn core_source_names_no_official_package() {
+        let root = crate::test_scan::repo_root();
+        let mut files = Vec::new();
+        for tree in CORE_TREES {
+            collect_files(&root.join(tree), &mut files);
+        }
+        let mut found = Vec::new();
+        for file in files {
+            let rel = file
+                .strip_prefix(&root)
+                .expect("walked from the repo root")
+                .to_string_lossy()
+                .replace('\\', "/");
+            if is_exempt(&rel) {
+                continue;
+            }
+            let bytes = std::fs::read(&file).expect("readable Core file");
+            for (line, name) in named_packages(&String::from_utf8_lossy(&bytes)) {
+                found.push(format!("{rel}:{line} names {name}"));
+            }
+        }
+        assert!(
+            found.is_empty(),
+            "Core source names an official Package:\n  {}\n\nName the capability instead.",
+            found.join("\n  ")
+        );
+    }
+
+    #[test]
+    fn the_scan_reads_comments_and_bindings_but_not_tests() {
+        let source = "let x = 1;\n/// a Playerbots brain\nlet t = \"pkg_playerbots_bot\";\n";
+        assert_eq!(
+            named_packages(source),
+            vec![(2, "playerbots"), (3, "playerbots")]
+        );
+        assert!(!is_exempt("gateway/src/stdb/bindings/mod.rs"));
+        assert!(is_exempt("gateway/src/world/party_tests.rs"));
+        assert!(is_exempt("module/tests/package_account.rs"));
     }
 }
