@@ -181,8 +181,8 @@ mod tests {
     #[test]
     fn the_refusal_names_the_packages_existing_keys_sorted() {
         let known = vec!["max_bots".to_string(), "spawn_rate".to_string()];
-        let message = unknown_key_message("playerbots", "spwan_rate", &known);
-        assert!(message.contains("playerbots"), "{message}");
+        let message = unknown_key_message("sample_package", "spwan_rate", &known);
+        assert!(message.contains("sample_package"), "{message}");
         assert!(message.contains("spwan_rate"), "{message}");
         assert!(
             message.contains("max_bots, spawn_rate"),

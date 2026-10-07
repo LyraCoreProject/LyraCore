@@ -479,7 +479,7 @@ fn evict_finished_instance(source: &dyn WorldStore, transfer_id: u64, instance_i
     }
 }
 
-/// Drive one Shard crossing for a character with **no session** — a playerbot following its party
+/// Drive one Shard crossing for a character with **no session** — a bot following its party
 /// through a portal, and the same path again on the way out.
 ///
 /// A player's crossing is driven inside its own loading screen: the client acks

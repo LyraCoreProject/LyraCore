@@ -975,7 +975,7 @@ mod relay_tripwire {
     /// table still exists and `gc.rs` sweeps whatever is left.)
     ///
     /// This used to be a HAND-PICKED file list (`tick.rs` + `encounter.rs` + `spell/cast.rs` +
-    /// playerbots), and the list omitted `creatures/pet.rs` — the Follow leg it writes leaked
+    /// a Package file), and the list omitted `creatures/pet.rs` — the Follow leg it writes leaked
     /// undelivered rows into this table every sense tick, unbounded, on a live shard, and the scan
     /// never saw it. Scan the WHOLE compiled tree instead — `character_owned_tripwire::scanned_files`
     /// already walks `module/src` plus every installed `packages/*/src`, so a new file (or a moved

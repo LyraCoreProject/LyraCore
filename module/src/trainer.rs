@@ -145,7 +145,7 @@ pub(crate) fn trainer_buy_check(
 /// E_SCRIPTED (never one of the excluded kinds), so it still resolves. This exclusion list MUST stay
 /// in lockstep with the importer's `wrapper_to_rank` heuristic (importer/src/spell.rs) — the two are
 /// the same rule on the two sides of the wire. Generic over the kind. Shared by `apply_trainer_buy`
-/// (the player buy) and the playerbots trainer-kit pass (work-item 156) — ONE wrapper-resolution
+/// (the player buy) and a Package's trainer-kit pass — ONE wrapper-resolution
 /// chokepoint, so a bot's spellbook and a trained player's can never drift. [entity]
 fn learn_target_trigger(effect: &crate::SpellEffect) -> Option<u32> {
     (effect.trigger_spell != 0
@@ -607,7 +607,7 @@ pub(crate) fn apply_trainer_buy(
         )
     } else {
         // The castable RANK behind the offering — extracted to `resolve_learn_target` (see its doc) so
-        // the playerbots trainer-kit pass (work-item 156) resolves wrappers IDENTICALLY to a real buy.
+        // a Package's trainer-kit pass resolves wrappers IDENTICALLY to a real buy.
         // The already-known gate keys on the RANK so a re-buy of a known rank is rejected (not silently
         // re-charged).
         let to_learn = resolve_learn_target(ctx, spell_id);

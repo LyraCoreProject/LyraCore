@@ -103,7 +103,7 @@ pub fn debug_teleport(
 }
 
 /// Record a Transfer Intent for `character_guid`: the session-less Shard crossing a Package's
-/// playerbot decides for itself, driven by hand.
+/// bot decides for itself, driven by hand.
 ///
 /// The lever exists because the acceptance test for that crossing must NOT need a Package installed.
 /// It calls the same `transfer::emit_bot_transfer_intent` the Package calls, so what it exercises is
@@ -171,7 +171,7 @@ pub fn debug_apply_damage(
     target_guid: u64,
     amount: u32,
     // The attributed attacker (0 = anonymous): threads through to `on_damage_taken` so
-    // attacker-reactive systems (the playerbots defend hook, Retaliation, the proc pass) see a real
+    // attacker-reactive systems (a Package defend hook, Retaliation, the proc pass) see a real
     // source.
     attacker_guid: u64,
 ) -> Result<(), String> {

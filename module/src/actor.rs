@@ -1,6 +1,6 @@
 //! The ACTOR VERB API: one documented surface over every explicit-guid action
-//! core, so anything that acts ON BEHALF OF a unit — the `debug_*` harness reducers, the
-//! playerbots brains, and the future Tier-2 Lua host API — consumes the SAME verbs the
+//! core, so anything that acts ON BEHALF OF a unit — the `debug_*` harness reducers, Package
+//! bots, and the future Tier-2 Lua host API — consumes the SAME verbs the
 //! player reducers do, with identical gates.
 //!
 //! Existing verbs retain their `Result<(), String>` contract. Typed requests expose accepted
@@ -165,7 +165,7 @@ package_only! {
     pub(crate) use crate::items::request_profile_item as reconcile_profile_item;
     pub(crate) use crate::items::apply_equip_profile_upgrade as equip_profile_upgrade;
     pub(crate) use crate::items::request_take_loot as request_take_loot;
-    // `loot_money` also feeds playerbots' drink-at-rest behavior (work-item 154).
+    // A Package bot also loots money through this verb.
     pub(crate) use crate::loot::apply_loot_money as loot_money;
 }
 pub(crate) use crate::creatures::apply_item_target_spell as cast_item_target;

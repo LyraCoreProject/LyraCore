@@ -1025,7 +1025,7 @@ pub fn reap_instances(ctx: &ReducerContext, _schedule: InstanceReaperSchedule) {
 }
 
 /// The set of instance ids with at least one live PLAYER entity — one pass classifies every
-/// instance at once (playerbots count: a parked bot holds its instance open, correctly).
+/// instance at once (bots count: a parked bot holds its instance open, correctly).
 ///
 /// Plus every instance claimed by a pending Transfer Intent or Escrow. A Transfer Intent removes
 /// the live body before the Gateway can begin Escrow, so both durable phases must hold the source

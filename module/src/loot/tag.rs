@@ -216,8 +216,8 @@ fn membership_is_current(
     }
 }
 
-/// Read one live Loot Tag: tap membership alone, with no reward-distance check. The playerbots
-/// Package calls it so a bot skips a creature another Character has tagged, and keeps fighting one
+/// Read one live Loot Tag: tap membership alone, with no reward-distance check. A Package
+/// calls it so a bot skips a creature another Character has tagged, and keeps fighting one
 /// it still has a claim on. Loot and quest credit read the same membership rule once, at death,
 /// through `death_entitlement`. The read is bounded at the Raid cap.
 #[cfg_attr(not(has_packages), allow(dead_code))]
