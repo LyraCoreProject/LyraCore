@@ -581,6 +581,7 @@ pub mod game_operator_table;
 pub mod game_package_account_table;
 pub mod game_package_config_table;
 pub mod game_package_import_table;
+pub mod game_package_teardown_table;
 pub mod game_party_command_dispatch_lane_table;
 pub mod game_party_command_intent_table;
 pub mod game_party_command_issuer_table;
@@ -913,6 +914,7 @@ pub mod out_of_combat_sight_condition_type;
 pub mod package_account_type;
 pub mod package_config_type;
 pub mod package_import_type;
+pub mod package_teardown_type;
 pub mod parsed_client_command_type;
 pub mod party_command_dispatch_lane_type;
 pub mod party_command_fixture_apply_after_gate_change_reducer;
@@ -1137,6 +1139,7 @@ pub mod taunt_lock_type;
 pub mod taxi_flight_schedule_type;
 pub mod taxi_passenger_spline_type;
 pub mod taxi_service_reply_type;
+pub mod teardown_package_reducer;
 pub mod teleport_event_type;
 pub mod terrain_chunk_type;
 pub mod threat_entry_type;
@@ -1754,6 +1757,7 @@ pub use game_operator_table::*;
 pub use game_package_account_table::*;
 pub use game_package_config_table::*;
 pub use game_package_import_table::*;
+pub use game_package_teardown_table::*;
 pub use game_party_command_dispatch_lane_table::*;
 pub use game_party_command_intent_table::*;
 pub use game_party_command_issuer_table::*;
@@ -2086,6 +2090,7 @@ pub use out_of_combat_sight_condition_type::OutOfCombatSightCondition;
 pub use package_account_type::PackageAccount;
 pub use package_config_type::PackageConfig;
 pub use package_import_type::PackageImport;
+pub use package_teardown_type::PackageTeardown;
 pub use parsed_client_command_type::ParsedClientCommand;
 pub use party_command_dispatch_lane_type::PartyCommandDispatchLane;
 pub use party_command_fixture_apply_after_gate_change_reducer::party_command_fixture_apply_after_gate_change;
@@ -2310,6 +2315,7 @@ pub use taunt_lock_type::TauntLock;
 pub use taxi_flight_schedule_type::TaxiFlightSchedule;
 pub use taxi_passenger_spline_type::TaxiPassengerSpline;
 pub use taxi_service_reply_type::TaxiServiceReply;
+pub use teardown_package_reducer::teardown_package;
 pub use teleport_event_type::TeleportEvent;
 pub use terrain_chunk_type::TerrainChunk;
 pub use threat_entry_type::ThreatEntry;
@@ -4355,6 +4361,9 @@ pub enum Reducer {
         group_kind: u8,
         raid_slots: Vec<u8>,
     },
+    TeardownPackage {
+        package_name: String,
+    },
     TickAuras {
         schedule: AuraSchedule,
     },
@@ -4886,6 +4895,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::StageVmapGeneration { .. } => "stage_vmap_generation",
             Reducer::StampImportMeta { .. } => "stamp_import_meta",
             Reducer::SyncGroupMirror { .. } => "sync_group_mirror",
+            Reducer::TeardownPackage { .. } => "teardown_package",
             Reducer::TickAuras { .. } => "tick_auras",
             Reducer::TickBreath { .. } => "tick_breath",
             Reducer::TickCreatures { .. } => "tick_creatures",
@@ -8496,6 +8506,11 @@ Reducer::ResumeRelayArrival{
                 group_kind: group_kind.clone(),
                 raid_slots: raid_slots.clone(),
 }),
+            Reducer::TeardownPackage{
+                package_name,
+}             => __sats::bsatn::to_vec(&teardown_package_reducer::TeardownPackageArgs {
+                package_name: package_name.clone(),
+}),
             Reducer::TickAuras{
                 schedule,
 }             => __sats::bsatn::to_vec(&tick_auras_reducer::TickAurasArgs {
@@ -8745,6 +8760,7 @@ pub struct DbUpdate {
     game_package_account: __sdk::TableUpdate<PackageAccount>,
     game_package_config: __sdk::TableUpdate<PackageConfig>,
     game_package_import: __sdk::TableUpdate<PackageImport>,
+    game_package_teardown: __sdk::TableUpdate<PackageTeardown>,
     game_party_command_dispatch_lane: __sdk::TableUpdate<PartyCommandDispatchLane>,
     game_party_command_intent: __sdk::TableUpdate<PartyCommandIntent>,
     game_party_command_issuer: __sdk::TableUpdate<PartyCommandIssuer>,
@@ -9490,6 +9506,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_package_import" => db_update
                     .game_package_import
                     .append(game_package_import_table::parse_table_update(table_update)?),
+                "game_package_teardown" => db_update.game_package_teardown.append(
+                    game_package_teardown_table::parse_table_update(table_update)?,
+                ),
                 "game_party_command_dispatch_lane" => {
                     db_update.game_party_command_dispatch_lane.append(
                         game_party_command_dispatch_lane_table::parse_table_update(table_update)?,
@@ -10689,6 +10708,12 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.game_package_import = cache
             .apply_diff_to_table::<PackageImport>("game_package_import", &self.game_package_import)
             .with_updates_by_pk(|row| &row.id);
+        diff.game_package_teardown = cache
+            .apply_diff_to_table::<PackageTeardown>(
+                "game_package_teardown",
+                &self.game_package_teardown,
+            )
+            .with_updates_by_pk(|row| &row.package_name);
         diff.game_party_command_dispatch_lane = cache
             .apply_diff_to_table::<PartyCommandDispatchLane>(
                 "game_party_command_dispatch_lane",
@@ -11686,6 +11711,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_package_import" => db_update
                     .game_package_import
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_package_teardown" => db_update
+                    .game_package_teardown
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_party_command_dispatch_lane" => db_update
                     .game_party_command_dispatch_lane
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -12560,6 +12588,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_package_import" => db_update
                     .game_package_import
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_package_teardown" => db_update
+                    .game_package_teardown
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_party_command_dispatch_lane" => db_update
                     .game_party_command_dispatch_lane
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -13051,6 +13082,7 @@ pub struct AppliedDiff<'r> {
     game_package_account: __sdk::TableAppliedDiff<'r, PackageAccount>,
     game_package_config: __sdk::TableAppliedDiff<'r, PackageConfig>,
     game_package_import: __sdk::TableAppliedDiff<'r, PackageImport>,
+    game_package_teardown: __sdk::TableAppliedDiff<'r, PackageTeardown>,
     game_party_command_dispatch_lane: __sdk::TableAppliedDiff<'r, PartyCommandDispatchLane>,
     game_party_command_intent: __sdk::TableAppliedDiff<'r, PartyCommandIntent>,
     game_party_command_issuer: __sdk::TableAppliedDiff<'r, PartyCommandIssuer>,
@@ -14081,6 +14113,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<PackageImport>(
             "game_package_import",
             &self.game_package_import,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<PackageTeardown>(
+            "game_package_teardown",
+            &self.game_package_teardown,
             event,
         );
         callbacks.invoke_table_row_callbacks::<PartyCommandDispatchLane>(
@@ -15382,6 +15419,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_package_account_table::register_table(client_cache);
         game_package_config_table::register_table(client_cache);
         game_package_import_table::register_table(client_cache);
+        game_package_teardown_table::register_table(client_cache);
         game_party_command_dispatch_lane_table::register_table(client_cache);
         game_party_command_intent_table::register_table(client_cache);
         game_party_command_issuer_table::register_table(client_cache);
@@ -15671,6 +15709,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_package_account",
         "game_package_config",
         "game_package_import",
+        "game_package_teardown",
         "game_party_command_dispatch_lane",
         "game_party_command_intent",
         "game_party_command_issuer",
