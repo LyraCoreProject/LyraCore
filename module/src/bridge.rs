@@ -245,6 +245,47 @@ fn send_to_identity(ctx: &ReducerContext, recipient_identity: Identity, cmd: &st
     });
 }
 
+#[cfg(not(feature = "debug_reducers"))]
+fn client_command_handler() -> Option<ClientCommandHandler> {
+    crate::GAME_CLIENT_COMMAND
+}
+
+/// A debug Module with no Package handler uses [`FIXTURE_COMMAND`], so Core's durable tests drive
+/// the command transport with no Package installed.
+#[cfg(feature = "debug_reducers")]
+fn client_command_handler() -> Option<ClientCommandHandler> {
+    crate::GAME_CLIENT_COMMAND.or(Some(FIXTURE_COMMAND))
+}
+
+/// Core's neutral test command: `fixture.command` with a bot guid as payload. It applies nothing,
+/// so each outcome comes from the transport's own Gates.
+#[cfg(feature = "debug_reducers")]
+const FIXTURE_COMMAND: ClientCommandHandler = ClientCommandHandler {
+    parse: parse_fixture_command,
+    apply: |_, _| CommandOutcome::Applied,
+    reply: "fixture.command.result",
+};
+
+#[cfg(feature = "debug_reducers")]
+fn parse_fixture_command(
+    cmd: &str,
+    payload: &str,
+) -> Option<Result<ParsedClientCommand, CommandOutcome>> {
+    (cmd == "fixture.command").then(|| {
+        payload
+            .parse()
+            .ok()
+            .filter(|bot_guid| *bot_guid != 0)
+            .map(|bot_guid| ParsedClientCommand {
+                kind: 0,
+                bot_guid,
+                authority_member_guid: 0,
+                exact_target_guid: 0,
+            })
+            .ok_or(CommandOutcome::Malformed)
+    })
+}
+
 /// The shared core behind [`client_command`] and its gateway twin `gw_client_command`:
 /// dispatch with the sender already resolved to a guid.
 pub(crate) fn apply_client_command(
@@ -263,7 +304,7 @@ fn dispatch(ctx: &ReducerContext, character_guid: u64, cmd: &str, payload: &str)
         // The 184 acceptance round-trip: `STC ping` → `STC pong` (payload echoed).
         "ping" => send(ctx, character_guid, "pong", payload),
         other => {
-            let parsed = crate::GAME_CLIENT_COMMAND.and_then(|handler| {
+            let parsed = client_command_handler().and_then(|handler| {
                 (handler.parse)(other, payload).map(|parsed| (handler, parsed))
             });
             match parsed {
@@ -503,7 +544,7 @@ pub fn finish_party_command_intent(
     retire_party_command_intent(ctx, &intent)?;
     table.id().update(intent);
     // An intent outlives an uninstalled Package; no addon remains to read its reply.
-    if let Some(handler) = crate::GAME_CLIENT_COMMAND {
+    if let Some(handler) = client_command_handler() {
         send_to_identity(
             ctx,
             reply_identity,
@@ -588,7 +629,7 @@ pub fn apply_admitted_party_command(
         receipt_retain_until_micros,
     };
     let outcome = crate::group::admit_party_command(ctx, &command).unwrap_or_else(|| {
-        crate::GAME_CLIENT_COMMAND.map_or(CommandOutcome::Suppressed, |handler| {
+        client_command_handler().map_or(CommandOutcome::Suppressed, |handler| {
             (handler.apply)(ctx, &command)
         })
     });
