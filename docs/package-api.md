@@ -200,6 +200,26 @@ caller keeps its own fallback, which is what makes a Runtime Script an override 
 dependency. Core hook events reach bound scripts on their own; a Package fires only its own Package
 Events.
 
+### Package fixtures (debug only)
+
+`crate::package_fixture` exists only in a Module built with `debug_reducers`. It holds the setup and
+observation steps a Package's own debug fixtures need. A release build has no such root.
+
+| operation | does |
+|---|---|
+| `apply_damage(ctx, target_guid, amount, attacker_guid)` | deals main-hand damage through the real Core damage pipeline, capped one below the target's health |
+| `remove_live_character(ctx, character_guid)` | removes a live Character from the world as a logout does; `on_logout` fires and the Character row stays |
+| `require_no_imported_content(ctx)` | refuses when the Shard holds imported content; the temporary weather seed a fresh Module stamps does not count |
+| `top_threat_target(ctx, creature_guid)` | reads the highest-threat living source on the creature's map and instance |
+| `client_cast(ctx, caster_guid, spell_id, target_guid)` | casts through the same Gates a client cast passes |
+| `declare_next_movement_tick(ctx, delay)` | makes the next creature movement tick fire once, `delay` from now; refuses unless the catch-all tick is the only movement schedule |
+
+A fixture reads the navigation revision through `nav::inputs(ctx, map_id).imported_revision`.
+
+Name this root only from a Package file whose first non-blank line is
+`#![cfg(feature = "debug_reducers")]`. The lint refuses it anywhere else, and no exemption clears
+it, because a release build would compile that file without the root.
+
 ### Tables
 
 A Package declares its own tables with `#[table(accessor = pkg_<package>_<name>, ..)]`, the naming
@@ -223,6 +243,8 @@ group      helpers  hooks     items      loot       nav       package_account
 package_config      quest     script_binding        spell     stats
 terrain    transfer world     xp
 ```
+
+Debug only: `package_fixture`, in a file gated on `debug_reducers` (see Package fixtures above).
 
 Plus, at the crate root: any `game_*` name (a table accessor or registration marker), any
 `pkg_*` name (a Package's own generated root module), any type name in UpperCamelCase (a row or

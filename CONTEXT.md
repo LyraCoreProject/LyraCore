@@ -917,6 +917,12 @@ outside it, so a core refactor breaks a Package at compile time rather than on a
 compatibility contract, never a sandbox: compiled Package code is trusted either way.
 _Avoid_: SDK, plugin API, public API, allowlist
 
+**Package Fixture**:
+Package code that stages or observes state for the Package's own durable tests. It compiles only
+with `debug_reducers` and reaches Core through `crate::package_fixture`, the one Package API root a
+release build does not have.
+_Avoid_: test harness, debug hook, test helper
+
 **Package Config**:
 A row of `game_package_config`, keyed by `(package_name, key)`: one durable value a Package reads
 and the Operator edits. A Package seeds its own defaults idempotently, from its own ensure/init

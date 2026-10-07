@@ -62,7 +62,9 @@
 //! The same pass also lints each package file against the Package API surface
 //! (`PACKAGE_API_ROOTS`, documented at `docs/package-api.md`): a path that reaches the crate root
 //! outside it fails the build naming the Package, the file, the line and the path, unless the line
-//! carries `// package-api: exempt <reason>`. Core `src/` is never linted.
+//! carries `// package-api: exempt <reason>`. A debug root (`PACKAGE_API_DEBUG_ROOTS`) is on the
+//! surface only in a file that starts with the debug cfg above, and no exemption clears it. Core
+//! `src/` is never linted.
 //!
 //! EVALUATED AND REJECTED: replacing the marker scan with an explicit per-package `register()`
 //! convention. The registries are const fn-pointer arrays (no allocator-dependent init order in
@@ -286,6 +288,11 @@ const PACKAGE_API_ROOTS: &[&str] = &[
     "world",
     "xp",
 ];
+
+/// Roots on the surface only in a Package file gated by `DEBUG_REDUCERS_FILE_CFG`. Core compiles
+/// them only with `debug_reducers`, so naming one anywhere else would break a release build. An
+/// exemption cannot clear one for the same reason.
+const PACKAGE_API_DEBUG_ROOTS: &[&str] = &["package_fixture"];
 
 /// Crate-root names on the surface that are neither a module nor a type: the two marker macros the
 /// `game_` prefix below does not already cover, and the generated character-owned table manifest.
@@ -1255,11 +1262,15 @@ const DEBUG_REDUCERS_FILE_CFG: &str = "#![cfg(feature = \"debug_reducers\")]";
 /// general Rust `cfg` expressions. A parent module may repeat the gate, but the file owns the
 /// registry contract so recursive discovery can decide without reconstructing the module tree.
 fn registry_file_enabled(source: &str, debug_reducers: bool) -> bool {
-    debug_reducers
-        || source
-            .lines()
-            .find(|line| !line.trim().is_empty())
-            .is_none_or(|line| line.trim() != DEBUG_REDUCERS_FILE_CFG)
+    debug_reducers || !debug_only_file(source)
+}
+
+/// Whether the file's first non-blank line is `DEBUG_REDUCERS_FILE_CFG`.
+fn debug_only_file(source: &str) -> bool {
+    source
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .is_some_and(|line| line.trim() == DEBUG_REDUCERS_FILE_CFG)
 }
 
 /// Whether `root`, the first segment of a crate-root path, is on the Package API surface.
@@ -1267,7 +1278,8 @@ fn registry_file_enabled(source: &str, debug_reducers: bool) -> bool {
 /// Three families beyond the listed roots: `game_*` covers the table accessor traits and the
 /// `game_hook!`/`game_tick_pass!` markers, `pkg_*` covers a Package's own generated root (and its
 /// siblings'), and an UpperCamelCase name is a row or payload type re-exported at the crate root.
-fn on_package_api(root: &str) -> bool {
+/// A debug root is on the surface only in a debug-only file.
+fn on_package_api(root: &str, debug_only_file: bool) -> bool {
     let upper_camel = root.starts_with(|c: char| c.is_ascii_uppercase())
         && root.chars().any(|c| c.is_ascii_lowercase());
     PACKAGE_API_ROOTS.contains(&root)
@@ -1275,6 +1287,7 @@ fn on_package_api(root: &str) -> bool {
         || root.starts_with("game_")
         || root.starts_with("pkg_")
         || upper_camel
+        || (debug_only_file && PACKAGE_API_DEBUG_ROOTS.contains(&root))
 }
 
 #[derive(Clone, Copy)]
@@ -1646,16 +1659,17 @@ fn record_rooted_paths(
     prefix: &str,
     stripped: &str,
     exempt_lines: &[usize],
+    debug_only_file: bool,
     found: &mut Vec<(usize, usize, String)>,
 ) {
     for (root_index, root, written) in roots_after_separator(tokens, separator, prefix) {
         let normalized_root = root.strip_prefix("r#").unwrap_or(&root);
-        if normalized_root == "self" || on_package_api(normalized_root) {
+        if normalized_root == "self" || on_package_api(normalized_root, debug_only_file) {
             continue;
         }
         let offset = tokens[root_index].start;
         let line = stripped[..offset].matches('\n').count() + 1;
-        if !exempt_lines.contains(&line) {
+        if !exempt_lines.contains(&line) || PACKAGE_API_DEBUG_ROOTS.contains(&normalized_root) {
             found.push((offset, line, written));
         }
     }
@@ -1671,6 +1685,7 @@ fn record_rooted_paths(
 fn out_of_surface_paths(source: &str, file_depth: usize) -> Vec<(usize, String)> {
     let stripped_source = strip_source(source);
     let stripped = stripped_source.code;
+    let debug_only_file = debug_only_file(source);
     let tokens = source_tokens(&stripped);
     let pairs = brace_pairs(&tokens);
     let modules = inline_modules(&tokens, &pairs);
@@ -1692,6 +1707,7 @@ fn out_of_surface_paths(source: &str, file_depth: usize) -> Vec<(usize, String)>
                 "$crate",
                 &stripped,
                 &stripped_source.package_api_exempt_lines,
+                debug_only_file,
                 &mut found,
             );
             index += 3;
@@ -1709,6 +1725,7 @@ fn out_of_surface_paths(source: &str, file_depth: usize) -> Vec<(usize, String)>
                 "crate",
                 &stripped,
                 &stripped_source.package_api_exempt_lines,
+                debug_only_file,
                 &mut found,
             );
         } else if tokens[index].text == "super" && (index == 0 || tokens[index - 1].text != "::") {
@@ -1738,6 +1755,7 @@ fn out_of_surface_paths(source: &str, file_depth: usize) -> Vec<(usize, String)>
                     &prefix,
                     &stripped,
                     &stripped_source.package_api_exempt_lines,
+                    debug_only_file,
                     &mut found,
                 );
             }
@@ -1756,6 +1774,18 @@ fn out_of_surface_paths(source: &str, file_depth: usize) -> Vec<(usize, String)>
 
 /// What the build says when a Package names a core path outside the surface.
 fn out_of_surface_message(package: &str, file: &Path, line: usize, path: &str) -> String {
+    let root = path
+        .split("::")
+        .find(|segment| !matches!(*segment, "crate" | "$crate" | "super" | "self"))
+        .map(|segment| segment.strip_prefix("r#").unwrap_or(segment));
+    if root.is_some_and(|root| PACKAGE_API_DEBUG_ROOTS.contains(&root)) {
+        return format!(
+            "build.rs: Package `{package}` names `{path}` at {}:{line}, a Package API root that \
+             exists only with `debug_reducers` (docs/package-api.md, version 1). Name it only from \
+             a file whose first non-blank line is `{DEBUG_REDUCERS_FILE_CFG}`.",
+            file.display()
+        );
+    }
     format!(
         "build.rs: Package `{package}` names `{path}` at {}:{line}, which is outside the Package \
          API surface (docs/package-api.md, version 1). Use a path under a documented root, or, if \
@@ -1924,6 +1954,49 @@ mod package_api_lint_tests {
     fn an_exemption_clears_its_own_line_and_no_other() {
         let source = "fn f() {\n    crate::auth::create_character(); // package-api: exempt bots fabricate their own characters\n    crate::auth::Account::default();\n}\n";
         assert_eq!(reported(source), vec!["3:crate::auth::Account::default"]);
+    }
+
+    #[test]
+    fn a_debug_root_is_refused_outside_a_debug_only_file() {
+        // A build without `debug_reducers` compiles this file, and an item gate does not change
+        // what the lint sees.
+        let source = "#[cfg(feature = \"debug_reducers\")]\nfn f() {\n    crate::package_fixture::apply_damage();\n}\n";
+        assert_eq!(
+            reported(source),
+            vec!["3:crate::package_fixture::apply_damage"]
+        );
+    }
+
+    #[test]
+    fn a_debug_root_is_on_the_surface_in_a_debug_only_file() {
+        let source = "\n#![cfg(feature = \"debug_reducers\")]\nuse crate::package_fixture::{apply_damage, top_threat_target};\nfn f() {\n    super::package_fixture::client_cast();\n}\n";
+        assert!(reported(source).is_empty(), "{:?}", reported(source));
+    }
+
+    #[test]
+    fn an_exemption_cannot_clear_a_debug_root() {
+        let source =
+            "crate::package_fixture::apply_damage(); // package-api: exempt fixture damage\n";
+        assert_eq!(
+            reported(source),
+            vec!["1:crate::package_fixture::apply_damage"]
+        );
+    }
+
+    #[test]
+    fn a_debug_root_failure_names_the_file_gate() {
+        let message = out_of_surface_message(
+            "dungeons",
+            Path::new("packages/dungeons/src/verify.rs"),
+            3,
+            "crate::package_fixture::apply_damage",
+        );
+        assert!(
+            message.contains("packages/dungeons/src/verify.rs:3"),
+            "{message}"
+        );
+        assert!(message.contains(DEBUG_REDUCERS_FILE_CFG), "{message}");
+        assert!(!message.contains(PACKAGE_API_EXEMPT), "{message}");
     }
 
     #[test]
