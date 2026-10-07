@@ -134,6 +134,12 @@ _Avoid_: reject, deny, error (for gameplay refusals)
 **Account**:
 A login. Owns characters.
 
+**Package-owned Account**:
+An Account a Package created for its session-less Characters through the Package API. It has no
+credentials, so no login reaches it. `game_package_account` records the owning Package in Core, so
+the record outlives the Package when the Package is disabled.
+_Avoid_: bot account, account block
+
 **Alpha Test Tools**:
 Account-owned authority for a limited set of alpha testing dot-commands. The Gateway reads its
 current value from Realm-core for every command and conveys it to the Home Shard. The Module applies

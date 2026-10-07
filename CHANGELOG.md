@@ -22,6 +22,10 @@ and is not reconstructed here.
   under `packages/*/src/` against that list and fails on a path outside it, naming the Package, the
   file, the line and the path. A Package that needs a path off the surface writes
   `// package-api: exempt <reason>` on the line that names it.
+- **Package-owned Accounts.** `package_account::create_package_character` lets a Package create a
+  Character with no Session. It applies the name, race and class Refusals of client creation, and
+  puts the Character on an Account without credentials. `game_package_account` records which
+  Package owns that Account, and the record stays when the Package is disabled.
 - **Meeting stones.** Using a dungeon's meeting stone puts a Character, or the Party it leads, in one
   realm-wide queue on Realm-core. Five Seekers for one dungeon and team form a Party, and a queued
   Party fills its open tank, healer and damage roles from Seekers on any World Shard.

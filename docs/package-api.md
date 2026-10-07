@@ -85,6 +85,21 @@ The Gateway obtains acknowledged admission from the owning World Shard before it
 Realm-core. Admission committed before a concurrent controller change can finish afterwards; this
 ordering does not promise an atomic operation across Shards.
 
+### Package-owned Accounts
+
+`package_account::create_package_character(ctx, package_name, name, race, class) -> Result<u64, String>`
+creates a Character with no Session and returns its guid. It applies the Refusals a client-created
+Character meets: `NAME_IN_USE` for a taken name, `INVALID_RACE_CLASS` for a pair the imported
+CharBaseInfo does not list, and the guid range Refusal. These Refusals write nothing.
+
+The Character goes on the first Account that `package_name` owns with room for another Character.
+When every owned Account is full, Core creates a new Account without credentials, so no login can
+reach it. `game_package_account` records `package_name` as its owner. That record is a Core table,
+so it stays when the Package is disabled. Pass the Package's own name.
+
+The Character starts at level 1 at its race and class start position, with zero gender and
+appearance bytes. The Package places it, levels it and builds its live entity.
+
 ### Encounter kernel
 
 `crate::encounter` holds the encounter state machine and the choreography verbs a Package drives it
@@ -204,9 +219,9 @@ contract.
 
 ```
 actor      chat     combat    creatures  encounter  faction   gameobject
-group      helpers  hooks     items      loot       nav       package_config
-quest      script_binding     spell      stats      terrain   transfer
-world      xp
+group      helpers  hooks     items      loot       nav       package_account
+package_config      quest     script_binding        spell     stats
+terrain    transfer world     xp
 ```
 
 Plus, at the crate root: any `game_*` name (a table accessor or registration marker), any
@@ -248,7 +263,7 @@ inert.
 A Package that genuinely needs a path off the surface writes the reason on the line that names it:
 
 ```rust
-crate::auth::create_character(ctx, ..) // package-api: exempt a bot Character is created without a Session
+crate::realm_core::record_shard(ctx, ..) // package-api: exempt fixture models a completed Realm locator crossing
 ```
 
 The marker clears that line and no other. There is no global toggle, and the reason is required — a

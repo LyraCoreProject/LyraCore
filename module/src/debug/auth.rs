@@ -15,3 +15,17 @@ pub fn debug_expire_session(ctx: &ReducerContext, account_id: u64) -> Result<(),
     sessions.account_id().update(session);
     Ok(())
 }
+
+/// Drive `package_account::create_package_character` for `package_name` without a Package present.
+#[reducer]
+pub fn debug_create_package_character(
+    ctx: &ReducerContext,
+    package_name: String,
+    name: String,
+    race: u8,
+    class: u8,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    crate::package_account::create_package_character(ctx, &package_name, &name, race, class)
+        .map(|_| ())
+}
