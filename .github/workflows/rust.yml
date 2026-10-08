@@ -57,10 +57,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # A paired packages PR uses the same branch name; build against it when it exists.
+      - id: packages-ref
+        env:
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          if git ls-remote --exit-code --heads https://github.com/LyraCoreProject/packages "refs/heads/$BRANCH" >/dev/null; then
+            echo "ref=$BRANCH" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=main" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: LyraCoreProject/packages
-          ref: main
+          ref: ${{ steps.packages-ref.outputs.ref }}
           path: official-packages
           persist-credentials: false
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
