@@ -22,7 +22,7 @@ For the next harness release, add a LyraCore adapter scenario that:
    rebuilds at that same map, position, and orientation.
 
 Publish that harness change as a tagged release, update `.wire-harness-rev` to the tag and commit,
-and run the full adapter suite before removing the pull request's `needs-live-eyeball` marker.
+and run the full adapter suite.
 
 The attended gate remains separate: an unmodified 1.12.1 build-5875 client must confirm the taxi
 map, multi-point spline, mount, flight animation, landing cleanup, and session stability by eye.

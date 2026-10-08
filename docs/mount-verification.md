@@ -133,7 +133,7 @@ For the next release, add a LyraCore adapter scenario that:
     that a concurrent land dismount call leaves the flight display and the taxi unit flag intact.
 
 Publish that change as a tagged release, update `.wire-harness-rev` to the tag and commit, and run
-the full adapter suite before removing the pull request's `needs-live-eyeball` marker.
+the full adapter suite.
 
 ## 5. Attended gate
 

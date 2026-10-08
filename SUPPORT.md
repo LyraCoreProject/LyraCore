@@ -67,9 +67,8 @@ Out of scope, and closed as such:
 
 Best effort, by people with day jobs. `P1` (blocks play, or a live regression) gets looked at first;
 everything else is queued by priority label (`P1`-`P4`) on [GitHub Issues](https://github.com/LyraCoreProject/LyraCore/issues).
-A quiet issue has not been rejected, and note that anything labelled `needs-live-eyeball` is waiting
-on a human sitting in front of a real game client, which is a scarcer resource here than engineering
-time.
+A quiet issue has not been rejected. An issue with **How to check** waits on a person at a real game
+client, which is scarcer here than engineering time.
 
 The fastest way to get something fixed is a pull request. [`CONTRIBUTING.md`](./CONTRIBUTING.md)
 says where to start and how a pull request is judged.

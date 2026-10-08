@@ -34,8 +34,8 @@ Higher rungs, if the change reaches them — no rung substitutes for another
 ## What you did NOT verify
 
 <!-- Say it plainly. "Not run on macOS", "no live stack, so the wire path is untested",
-     "needs a human eyeball on the client" — the last one means the issue keeps its
-     `needs-live-eyeball` label and this PR does not close it. -->
+     "needs a human eyeball on the client" — the last one means this PR does not close
+     the issue. -->
 
 ## Risk
 

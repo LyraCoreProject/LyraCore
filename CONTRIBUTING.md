@@ -12,8 +12,8 @@ what LyraCore does instead and where in the code, and how to fix it.
 
 - `ready-for-agent` means the issue holds everything you need to build it, whether you work alone
   or with an agent. Start here.
-- `needs-live-eyeball` needs a person at a real 1.12.1 build 5875 client. If you have one, these
-  are welcome.
+- An issue with **How to check** in place of **Fix direction** has its code done. It needs a person
+  at a real 1.12.1 build 5875 client. If you have one, these are welcome.
 - `ready-for-human` needs a maintainer: a decision, a maintainer's Realm, or coordination. Leave
   these to the maintainers.
 - `in progress` is taken. Pick another issue.
