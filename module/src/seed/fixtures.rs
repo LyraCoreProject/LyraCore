@@ -1456,7 +1456,7 @@ pub(crate) fn seed_scenario_fixtures(ctx: &ReducerContext) {
     if templates.entry().find(PROFESSION_TRAINER_ENTRY).is_none() {
         templates.insert(profession_trainer_template());
     }
-    // "Test Wolf Elder" (51002) — the BOT-SUITE fight fixture (266). The playerbots tests level
+    // "Test Wolf Elder" (51002) — the BOT-SUITE fight fixture. The Package bot tests level
     // their bots to clear the cast level-gate (Taunt 355 = spell_level 10), which greys the L1
     // Test Wolf 51000 (aggro_radius returns 0 at a >=8 level gap) — so its wolves stop aggroing and
     // the tank has nothing to Taunt. This one is level 9: non-grey to a level-10 bot (20-level gap

@@ -68,8 +68,8 @@ pub struct CreatureSpawnPayload {
 }
 
 /// A group invite was just recorded for `target_guid`. Fired AFTER the invite row + notification
-/// event are written — a handler may accept immediately via `group::accept_invite_for` (the
-/// playerbots auto-accept path).
+/// event are written — a handler may accept immediately via `group::accept_invite_for` (a
+/// Package's auto-accept path).
 pub struct GroupInvitePayload {
     pub target_guid: u64,
     pub inviter_guid: u64,

@@ -357,7 +357,7 @@ pub(crate) fn character_anywhere<St: WorldStore + ?Sized>(
 }
 
 /// Does `guid` have a live entity on any connected Shard — `game_world_entity`, unioned across the
-/// boundary. NOT `game_character.online`: a session-less playerbot is inserted straight into
+/// boundary. NOT `game_character.online`: a session-less Character is inserted straight into
 /// `game_world_entity` and never runs `player_login`, so its session flag stays false for its
 /// whole life. [`of`] exposes both, as `Whereabouts::InWorld` and `session_online`; this is the
 /// `in_world`-only shortcut a caller that does not need the rest of [`RealmPresence`] keeps using.

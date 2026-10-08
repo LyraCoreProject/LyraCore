@@ -19,7 +19,7 @@ use crate::{
 pub fn debug_audit_class_kits(ctx: &ReducerContext) {
     use crate::game_trainer_spell;
     use crate::spell::{A_FLAG, E_SCRIPTED};
-    // (class label, trainer creature entry) — the stable CLASS_TRAINERS map (playerbots mod.rs).
+    // (class label, trainer creature entry): the Goldshire class trainers.
     const TRAINERS: &[(&str, u32)] = &[
         ("Warrior", 913),
         ("Paladin", 927),

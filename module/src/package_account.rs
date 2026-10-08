@@ -17,8 +17,8 @@ pub struct PackageAccount {
 
 /// Create a Character with no Session on an Account `package_name` owns, and return its guid. The
 /// Character meets the same name, race and class Refusals as a client-created one, and those
-/// Refusals write nothing. The Character goes on the first owned Account with room; when every one is full,
-/// a new Account without credentials is created and recorded as owned by `package_name`.
+/// Refusals write nothing. The Character goes on the first owned Account with room. When every one
+/// is full, a new Account without credentials is created and recorded as owned by `package_name`.
 #[cfg_attr(not(has_packages), allow(dead_code))] // package-only caller — see `build.rs`
 pub(crate) fn create_package_character(
     ctx: &ReducerContext,
@@ -53,13 +53,17 @@ fn owned_account_with_room(ctx: &ReducerContext, package_name: &str) -> Result<u
     {
         return Ok(id);
     }
-    // `#` keeps the name apart from every login name, which are uppercased alphanumerics.
-    let account = ctx
-        .db
-        .game_account()
+    // `#` keeps the name apart from every login name, which are uppercased alphanumerics. An
+    // Account that lost its ownership row still holds its name, so skip taken names.
+    let accounts = ctx.db.game_account();
+    let username = (owned.len()..)
+        .map(|n| format!("{package_name}#{n}"))
+        .find(|name| accounts.username().find(name).is_none())
+        .expect("an unbounded range holds a free name");
+    let account = accounts
         .try_insert(Account {
             id: 0,
-            username: format!("{package_name}#{}", owned.len()),
+            username,
             salt: Vec::new(),
             verifier: Vec::new(),
             identity: None,
