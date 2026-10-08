@@ -101,8 +101,8 @@ when** replace **Fix direction**.
 
 ## Reporting a bug
 
-Open an issue with the bug template: what you did, what you saw, what 1.12.1 does instead, and your
-`./lyracore doctor` output. Report a security problem privately through
+Open an issue with the bug template: what you did, what you saw, and your `./lyracore doctor`
+output. If you know what 1.12.1 does instead, say so. Report a security problem privately through
 [GitHub's vulnerability reporting](https://github.com/LyraCoreProject/LyraCore/security/advisories/new),
 never in a public issue. [`SUPPORT.md`](SUPPORT.md) says what is in scope.
 
