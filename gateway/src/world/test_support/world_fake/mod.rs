@@ -32,7 +32,6 @@ mod weather;
 
 pub(crate) use self::auction::*;
 pub(crate) use self::cast::*;
-pub(crate) use self::channel::*;
 pub(crate) use self::character::*;
 pub(crate) use self::chat::*;
 pub(crate) use self::combat::*;
@@ -82,7 +81,6 @@ pub(crate) struct WorldFake {
     pub(crate) taxi: TaxiState,
     pub(crate) chat: ChatState,
     pub(crate) speech: SpeechState,
-    pub(crate) channel: ChannelState,
     pub(crate) guild: GuildState,
     pub(crate) auction: AuctionState,
     pub(crate) quest: QuestState,

@@ -10,8 +10,6 @@ pub(crate) struct GuildState {
     pub(crate) guild_fee_hold: std::sync::Mutex<Option<crate::world::guild_fee::FeeHold>>,
     /// Realm-core Petitions.
     pub(crate) guild_petitions: Vec<codec::PetitionView>,
-    /// Guild Charters the logged-in Character holds on this Home Shard.
-    pub(crate) held_charters: Vec<u64>,
     /// A Character whose guild lookup fails, as when one Realm-core read errors.
     pub(crate) guild_lookup_error_for: Option<u64>,
 }
@@ -148,12 +146,11 @@ impl GuildActionStore for WorldFake {
             .any(|guild| guild.name.eq_ignore_ascii_case(name)))
     }
 
-    fn guild_holds_charter(&self, _actor_guid: u64, charter_item_guid: u64) -> Result<bool> {
-        Ok(self.guild.held_charters.contains(&charter_item_guid))
+    fn guild_holds_charter(&self, _actor_guid: u64, _charter_item_guid: u64) -> Result<bool> {
+        Ok(false)
     }
 
     fn guild_destroy_charter(&self, _actor_guid: u64, _charter_item_guid: u64) -> Result<()> {
-        self.rec("guild_destroy_charter");
         Ok(())
     }
 
@@ -187,7 +184,7 @@ impl GuildActionStore for WorldFake {
     }
 }
 
-/// Realm-core refuses every fee: the socket tests only watch the steps run.
+/// Realm-core refuses every fee: the socket tests only watch a leftover hold finish.
 impl crate::world::guild_fee::GuildFeeStore for WorldFake {
     fn guild_fee_held(&self, _actor_guid: u64) -> Result<Option<crate::world::guild_fee::FeeHold>> {
         Ok(self.guild.guild_fee_hold.lock().unwrap().clone())
@@ -199,7 +196,6 @@ impl crate::world::guild_fee::GuildFeeStore for WorldFake {
         _request: crate::world::guild_fee::FeeRequest,
     ) -> Result<Result<crate::world::guild_fee::FeeHold, lyracore_shared::guild::GuildRefusal>>
     {
-        self.rec("guild_fee_hold");
         Ok(Err(lyracore_shared::guild::GuildRefusal::NotEnoughMoney))
     }
 

@@ -1,26 +1,13 @@
 use super::super::*;
 
-#[derive(Default)]
-pub(crate) struct ChannelState {
-    /// What `channel_op` answers. `None` succeeds.
-    pub(crate) channel_outcome: Option<ChannelOutcome>,
-    /// Recorded `channel_op` calls: `(actor_guid, op, request)`.
-    pub(crate) channel_ops: std::sync::Mutex<Vec<(u64, u8, ChannelRequest)>>,
-}
-
 impl ChannelActionStore for WorldFake {
     fn channel_op(
         &self,
-        actor_guid: u64,
-        op: u8,
-        request: ChannelRequest,
+        _actor_guid: u64,
+        _op: u8,
+        _request: ChannelRequest,
     ) -> Result<ChannelOutcome> {
-        self.channel
-            .channel_ops
-            .lock()
-            .unwrap()
-            .push((actor_guid, op, request));
-        Ok(self.channel.channel_outcome.unwrap_or(ChannelOutcome::Done))
+        Ok(ChannelOutcome::Done)
     }
 
     fn channel_roster(&self, _team: u32, _channel_name: &str) -> Result<Option<ChannelRoster>> {

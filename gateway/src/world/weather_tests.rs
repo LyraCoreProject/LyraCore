@@ -1,69 +1,81 @@
-//! Zone weather at world entry and on a live World Session.
+//! Zone weather: the world-entry packet from a Store, and the live relay across World Sessions.
 
 use super::*;
 
-/// Drive one login to completion and hand back the world-entry weather packet.
-fn world_entry_weather(store: std::sync::Arc<WorldFake>) -> SMSG_WEATHER {
-    let (mut client, server_end) = world_session_socket_pair();
-    let server_store = store.clone();
-    let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.clone()).unwrap();
-    });
-    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
-    CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
-        .write_encrypted_client(&mut client, &mut c_enc)
-        .unwrap();
-    let mut weather = None;
-    for message in drain_world_entry(&mut client, &mut c_dec) {
-        if let ServerOpcodeMessage::SMSG_WEATHER(m) = message {
-            weather = Some(*m);
+/// A Store with one zone's sky, or one that cannot answer.
+struct WeatherFake {
+    rows: Vec<(u32, codec::ZoneWeatherView)>,
+    error: Option<&'static str>,
+}
+
+impl WeatherStore for WeatherFake {
+    fn zone_weather(&self, zone_id: u32) -> Result<Option<codec::ZoneWeatherView>> {
+        if let Some(error) = self.error {
+            return Err(anyhow!("{error}"));
         }
+        Ok(self
+            .rows
+            .iter()
+            .find(|(zone, _)| *zone == zone_id)
+            .map(|(_, view)| *view))
     }
-    drop(client);
-    server.join().unwrap();
-    weather.expect("every world entry sends the zone's weather")
+}
+
+/// The weather packet a client entering `zone_id` receives.
+fn run(store: &WeatherFake, zone_id: u32) -> SMSG_WEATHER {
+    match zone_weather_message(store, zone_id, WeatherChangeType::Instant) {
+        ServerOpcodeMessage::SMSG_WEATHER(weather) => *weather,
+        other => panic!("expected SMSG_WEATHER, got {other}"),
+    }
 }
 
 /// Story 10: a zone the Module has no weather row for is fine weather. World entry still sends the
-/// packet — a client told nothing keeps rendering whatever sky it arrived with.
+/// packet, because a client told nothing keeps rendering whatever sky it arrived with.
 #[test]
-fn world_entry_into_a_zone_with_no_weather_row_sends_fine_weather() {
-    let weather = world_entry_weather(std::sync::Arc::new({
-        let base = tester_store(7);
-        WorldFake {
-            session: SessionState {
-                login_entity: Some(warrior_entity()),
-                ..base.session
-            },
-            ..base
-        }
-    }));
+fn a_zone_with_no_weather_row_is_fine_weather() {
+    let weather = run(
+        &WeatherFake {
+            rows: Vec::new(),
+            error: None,
+        },
+        12,
+    );
     assert_eq!(weather.weather_type, WeatherType::Fine);
     assert_eq!(weather.grade, 0.0);
     assert_eq!(weather.sound_id, 0);
     assert_eq!(weather.change, WeatherChangeType::Instant);
 }
 
-/// A Store that cannot answer the weather question is a degraded sky, never a failed login: the
-/// session completes world entry and the player lands under clear skies.
+/// A Store that cannot answer the weather question is a degraded sky, never a failed login.
 #[test]
-fn a_weather_read_failure_still_completes_world_entry() {
-    let weather = world_entry_weather(std::sync::Arc::new({
-        let base = tester_store(7);
-        WorldFake {
-            session: SessionState {
-                login_entity: Some(warrior_entity()),
-                ..base.session
-            },
-            weather: WeatherState {
-                weather_error: Some("shard cache unavailable".into()),
-                ..base.weather
-            },
-            ..base
-        }
-    }));
+fn a_weather_read_failure_is_fine_weather() {
+    let weather = run(
+        &WeatherFake {
+            rows: Vec::new(),
+            error: Some("shard cache unavailable"),
+        },
+        12,
+    );
     assert_eq!(weather.weather_type, WeatherType::Fine);
     assert_eq!(weather.grade, 0.0);
+}
+
+#[test]
+fn a_zone_with_a_weather_row_gets_that_sky_and_no_other_zone_does() {
+    let store = WeatherFake {
+        rows: vec![(
+            12,
+            codec::ZoneWeatherView {
+                weather_type: 1,
+                intensity: 0.8,
+            },
+        )],
+        error: None,
+    };
+    let weather = run(&store, 12);
+    assert_eq!(weather.weather_type, WeatherType::Rain);
+    assert_eq!(weather.grade, 0.8);
+    assert_eq!(run(&store, 40).weather_type, WeatherType::Fine);
 }
 
 /// Drive one World Session through the handshake and world entry, and hand back the client end

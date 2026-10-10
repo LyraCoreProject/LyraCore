@@ -640,7 +640,6 @@ fn player_login_emits_sequence_then_self_create() {
                         intensity: 0.8,
                     },
                 )],
-                ..base.weather
             },
             ..base
         }

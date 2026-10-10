@@ -3664,6 +3664,76 @@ mod tests {
     }
 
     #[test]
+    fn every_membership_opcode_reaches_its_durable_request() {
+        use wow_world_messages::vanilla as wire;
+        let mut store = founded_with_members();
+        store.characters.push(facts(DAVE, "Dave"));
+        let named = snapshot_name(BOB);
+        let messages = [
+            (
+                DAVE,
+                ClientOpcodeMessage::CMSG_GUILD_ACCEPT,
+                GuildRequest::Accept {
+                    actor_name: "Dave".into(),
+                    actor_team: lyracore_shared::faction::TEAM_ALLIANCE,
+                },
+            ),
+            (
+                DAVE,
+                ClientOpcodeMessage::CMSG_GUILD_DECLINE,
+                GuildRequest::Decline {
+                    actor_name: "Dave".into(),
+                },
+            ),
+            (
+                GM,
+                ClientOpcodeMessage::CMSG_GUILD_REMOVE(Box::new(wire::CMSG_GUILD_REMOVE {
+                    player_name: named.clone(),
+                })),
+                GuildRequest::Remove { target_guid: BOB },
+            ),
+            (
+                GM,
+                ClientOpcodeMessage::CMSG_GUILD_PROMOTE(Box::new(wire::CMSG_GUILD_PROMOTE {
+                    player_name: named.clone(),
+                })),
+                GuildRequest::Promote { target_guid: BOB },
+            ),
+            (
+                GM,
+                ClientOpcodeMessage::CMSG_GUILD_DEMOTE(Box::new(wire::CMSG_GUILD_DEMOTE {
+                    player_name: named.clone(),
+                })),
+                GuildRequest::Demote { target_guid: BOB },
+            ),
+            (
+                GM,
+                ClientOpcodeMessage::CMSG_GUILD_LEADER(Box::new(wire::CMSG_GUILD_LEADER {
+                    new_guild_leader_name: named,
+                })),
+                GuildRequest::SetLeader { target_guid: BOB },
+            ),
+            (
+                BOB,
+                ClientOpcodeMessage::CMSG_GUILD_LEAVE,
+                GuildRequest::Leave,
+            ),
+            (
+                GM,
+                ClientOpcodeMessage::CMSG_GUILD_DISBAND,
+                GuildRequest::Disband,
+            ),
+        ];
+        for (actor, message, expected) in messages {
+            dispatch(&store, in_world(actor), message);
+            assert_eq!(
+                store.ops.lock().unwrap().last().cloned(),
+                Some((actor, expected))
+            );
+        }
+    }
+
+    #[test]
     fn guild_motd_opcode_runs_the_op_and_replies_nothing_on_success() {
         let store = founded_with_members();
         let outbound = dispatch(
