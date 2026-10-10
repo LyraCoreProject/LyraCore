@@ -12,11 +12,11 @@ pub(crate) use self::world_fake::*;
 use super::handlers::{
     resolve_online_character, AuctionActionStore, AuctionInteraction, CastStore,
     ChannelActionStore, ChannelOutcome, ChannelRequest, ChannelRoster, ChatActionStore,
-    ChatOutcome, DuelActionStore, GuildActionStore, ItemActionStore, LootWindowRefusal,
-    LootWindowRequestStatus, LootWindowStore, MeetingStoneActionStore, MeetingStoneOutcome,
-    MeleeActionStore, MemberPresence, MemberSnapshot, MemberStatsStore, QuestActionStore,
-    RealmChatRequest, ResolvedTarget, SpeakerFacts, TaxiActionStore, VendorActionStore,
-    WeatherStore, WhisperRequest, WhisperTargetFacts,
+    ChatOutcome, DuelActionStore, GuildActionStore, ItemActionStore, LootWindowRequestStatus,
+    LootWindowStore, MeetingStoneActionStore, MeetingStoneOutcome, MeleeActionStore,
+    MemberPresence, MemberSnapshot, MemberStatsStore, QuestActionStore, RealmChatRequest,
+    ResolvedTarget, SpeakerFacts, TaxiActionStore, VendorActionStore, WeatherStore, WhisperRequest,
+    WhisperTargetFacts,
 };
 use super::party::PartyOutcome;
 use super::*;

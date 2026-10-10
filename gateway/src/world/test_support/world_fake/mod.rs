@@ -36,7 +36,6 @@ pub(crate) use self::channel::*;
 pub(crate) use self::character::*;
 pub(crate) use self::chat::*;
 pub(crate) use self::combat::*;
-pub(crate) use self::death::*;
 pub(crate) use self::guild::*;
 pub(crate) use self::item::*;
 pub(crate) use self::loot_roll::*;
@@ -81,7 +80,6 @@ pub(crate) struct WorldFake {
     pub(crate) npc: NpcState,
     pub(crate) trainer: TrainerState,
     pub(crate) combat: CombatState,
-    pub(crate) death: DeathState,
     pub(crate) cast: CastState,
     pub(crate) taxi: TaxiState,
     pub(crate) melee: MeleeState,

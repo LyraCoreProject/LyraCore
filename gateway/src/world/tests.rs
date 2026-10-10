@@ -3,8 +3,8 @@
 //! This module holds the imports those files share and the helpers more than one of them uses.
 
 use super::handlers::{
-    AuctionInteraction, ChannelOutcome, ChatOutcome, LootWindowRefusal, RealmChatRequest,
-    SpeakerFacts, WhisperRequest, WhisperTargetFacts,
+    AuctionInteraction, ChannelOutcome, ChatOutcome, RealmChatRequest, SpeakerFacts,
+    WhisperRequest, WhisperTargetFacts,
 };
 use super::party::PartyOutcome;
 use super::test_support::*;
@@ -55,7 +55,6 @@ use wow_world_messages::vanilla::{
     CMSG_AUTOBANK_ITEM,
     CMSG_AUTOEQUIP_ITEM,
     CMSG_AUTOSTORE_BANK_ITEM,
-    CMSG_AUTOSTORE_LOOT_ITEM,
     CMSG_BANKER_ACTIVATE,
     CMSG_BUYBACK_ITEM,
     CMSG_BUY_BANK_SLOT,
@@ -91,7 +90,6 @@ use wow_world_messages::vanilla::{
     CMSG_LOOT_MASTER_GIVE,
     CMSG_LOOT_METHOD,
     CMSG_LOOT_MONEY,
-    CMSG_LOOT_RELEASE,
     CMSG_LOOT_ROLL,
     CMSG_NPC_TEXT_QUERY,
     CMSG_PLAYED_TIME,
@@ -102,9 +100,7 @@ use wow_world_messages::vanilla::{
     CMSG_QUEST_QUERY,
     // Item guid → slot resolution (vendor sell / armorer repair).
     CMSG_RECLAIM_CORPSE,
-    CMSG_REPOP_REQUEST,
     CMSG_RESURRECT_RESPONSE,
-    CMSG_SELF_RES,
     CMSG_SETSHEATHED,
     CMSG_SET_SELECTION,
     CMSG_SPIRIT_HEALER_ACTIVATE,
