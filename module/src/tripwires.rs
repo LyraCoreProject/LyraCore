@@ -1001,12 +1001,11 @@ mod partition_discipline_tripwire {
     /// and its operator reducer. `game_shard_load.shard` is a database-name LABEL an ops sample is
     /// filed under, ring-evicted and compared for equality, exactly like `RegionAssignment.shard`.
     /// Both write or compare. Neither branches on the value to decide anything gameplay-visible.
-    /// `tables.rs` and the crate root re-export every table by name and read no row.
+    /// `tables.rs` re-exports every table by name and reads no row.
     const SHARD_ID_OWNERS: &[&str] = &[
         "module/src/region.rs",
         "module/src/load.rs",
         "module/src/tables.rs",
-        "module/src/lib.rs",
     ];
 
     /// The ways module code could reach a shard id: the assignment table's accessor, the `.shard`
