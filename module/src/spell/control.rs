@@ -513,6 +513,20 @@ fn interrupt_cast_with_outcome(
         .map(|p| (p.scheduled_id, p.spell_id, p.target_guid))
         .collect();
     let interrupted = !hits.is_empty();
+    // Cancel before launch releases the cast's GCD. A channel has already started and keeps it.
+    // Clear it before hooks can start another cast with its own GCD.
+    if hits.iter().any(|(_, spell_id, _)| {
+        ctx.db
+            .game_spell()
+            .spell_id()
+            .find(*spell_id)
+            .is_some_and(|spell| spell.gcd_ms > 0 && spell.cast_flags & SPELL_ATTR_CHANNELED == 0)
+    }) {
+        ctx.db
+            .game_spell_cooldown()
+            .caster_guid()
+            .delete(caster_guid);
+    }
     for (id, spell_id, target_guid) in hits {
         pending.scheduled_id().delete(id);
         clear_dead_callback_cast_admission(ctx, caster_guid, spell_id);
