@@ -4550,7 +4550,6 @@ pub(crate) fn character_has_auction_value(ctx: &ReducerContext, character_guid: 
 /// The exact English subjects LyraCore's earlier auction code sent, each a `Character` mail with
 /// no vanilla twin. A real player's letter can carry the same words, so the subject alone never
 /// authorizes a re-tag; [`legacy_mail_matches_shape`] is the rest of the check.
-#[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
 const LEGACY_AUCTION_SUBJECTS: &[(&str, AuctionMailAction)] = &[
     ("Auction outbid", AuctionMailAction::Outbid),
     ("Auction won", AuctionMailAction::Won),
@@ -4564,7 +4563,6 @@ const LEGACY_AUCTION_SUBJECTS: &[(&str, AuctionMailAction)] = &[
 
 /// The pure half of the repair: which `AuctionMailAction` a legacy row's exact English subject
 /// maps to, or `None` for a subject this repair does not recognize.
-#[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
 fn legacy_auction_action(subject: &str) -> Option<AuctionMailAction> {
     LEGACY_AUCTION_SUBJECTS
         .iter()
@@ -4584,7 +4582,6 @@ fn legacy_auction_action(subject: &str) -> Option<AuctionMailAction> {
 /// - Won carries an item and no money; Sold carries money and no item. Neither has a guid-0 tell —
 ///   a real player letter can be titled either with a real sender and the right shape — so
 ///   [`legacy_repair_authorization`] is what actually clears them, not this function.
-#[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
 fn legacy_mail_matches_shape(mail: &crate::Mail) -> bool {
     if mail.cod != 0 || !mail.body.is_empty() {
         return false;
@@ -4601,7 +4598,6 @@ fn legacy_mail_matches_shape(mail: &crate::Mail) -> bool {
 }
 
 /// A converted row's house and the item reference its vanilla subject encodes.
-#[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
 struct LegacyRepairTarget {
     house: u32,
     item_entry: u32,
@@ -4638,7 +4634,6 @@ struct LegacyRepairTarget {
 /// to the race lookup only if no receipt matches their item (a legacy row that predates receipts,
 /// say); Outbid and the deferred bid refund have no receipt to draw from at all — a bidder is never
 /// a receipt's actor — and always use the race lookup.
-#[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
 fn legacy_repair_authorization(
     ctx: &ReducerContext,
     mail: &crate::Mail,
@@ -4723,7 +4718,6 @@ fn legacy_repair_authorization(
 /// skips a whole copper as price climbs by one (its cut grows by at most one copper per copper of
 /// price), so every integer between its low and high ends is reachable — checking the two ends
 /// bounds every price in between too.
-#[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
 fn receipt_could_pay_out(receipt: &AuctionOperationReceipt, money: u32) -> bool {
     let Some(low) = seller_proceeds(receipt.start_bid, receipt.deposit, receipt.consignment_rate)
     else {
@@ -4747,7 +4741,6 @@ fn receipt_could_pay_out(receipt: &AuctionOperationReceipt, money: u32) -> bool 
 /// (`crates/lyracore-shared/src/auction.rs`). Falls back to the neutral house (7) for a recipient
 /// with no Character row — the same fallback that function uses for a template it cannot place on
 /// either team, and Realm-core's only outcome, since it carries no Character rows at all.
-#[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
 fn legacy_character_house(ctx: &ReducerContext, recipient_guid: u64) -> u32 {
     match crate::helpers::character_by_guid(ctx, recipient_guid) {
         Some(character)
@@ -4764,7 +4757,6 @@ fn legacy_character_house(ctx: &ReducerContext, recipient_guid: u64) -> u32 {
 /// Family name `repair_legacy_auction_mail` stamps in `game_import_meta` once it has run on a
 /// database, so a later publish's repair pass does not re-scan mail a player wrote after the
 /// re-tag — including a letter that happens to name one of [`LEGACY_AUCTION_SUBJECTS`].
-#[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
 const LEGACY_AUCTION_MAIL_REPAIR_FAMILY: &str = "repair_legacy_auction_mail";
 
 /// Re-tag auction mail written before the vanilla Auction Mail format shipped to the vanilla
@@ -4784,7 +4776,6 @@ const LEGACY_AUCTION_MAIL_REPAIR_FAMILY: &str = "repair_legacy_auction_mail";
 /// sold", which carry no tell of their own — a durable listing receipt backs its claim. Returns
 /// `(converted, unmapped)`; a nonzero `unmapped` is an auction-looking row this repair left alone,
 /// worth a human look.
-#[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
 pub(crate) fn repair_legacy_auction_mail(ctx: &ReducerContext) -> (u64, u64) {
     if ctx
         .db

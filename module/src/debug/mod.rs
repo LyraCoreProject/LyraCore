@@ -3,18 +3,17 @@
 //! (teleport / set HP / spawn-at-feet / force-cast / set level / clear creatures) so most ⭐ tests
 //! lose their blind 3D-navigation step and become deterministic.
 //!
-//! # PROD-SAFETY GATE
-//! The whole module is behind `#![cfg(feature = "debug_reducers")]` — with the feature OFF (the
-//! default, so a plain `spacetime build` / `cargo build` and any production publish) this file
-//! compiles to nothing and the reducers don't exist in the module at all. The test build / the
-//! automation harness opt in explicitly:
+//! # Feature gate
+//! `lib.rs` declares `mod debug;` behind `#[cfg(feature = "debug_reducers")]`. A default build
+//! compiles this directory out. Every `lyracore publish`, production included, builds with the
+//! feature on, so these reducers exist on every published database:
 //!
 //! ```text
 //! spacetime publish -s local --build-options='--features=debug_reducers' lyracore
 //! ```
 //!
-//! (`--build-options` is forwarded verbatim to `cargo build --target=wasm32-… --release`, so the
-//! feature reaches the wasm compile — verified against the 2.5 CLI.)
+//! `docs/danger-zones.md` is authoritative on that posture. The post-publish repair pass lives in
+//! the ungated `operations` module.
 //!
 //! # CRITICAL identity caveat (docs §6 / HANDOFF §10.2)
 //! A `spacetime call` runs as the **CLI identity**, which is NOT a player's bound identity. So every
@@ -22,20 +21,10 @@
 //! MUST NOT use `entity_by_owner(ctx, ctx.sender())` (that only resolves the gateway's per-player
 //! connection identity). This is the single most important difference from the player reducers.
 //!
-//! # LAYOUT
-//! Split along the section banners after the reseed/rearm collapse: this file (`mod`) holds the
-//! world/combat/item levers + the shared `equip_into` helper; `readout` is the `DebugReadout` table +
-//! its two writers; `audit` is the class-kit/quest-chain content audits; `repair` is the consolidated
-//! post-publish repair pass; `encounter`/`instance` are the work-item 228/190 operator levers; and
-//! `fingerprint` is the catalogue-parity content hash. `lib.rs`'s single `#[cfg(feature =
-//! "debug_reducers")] mod debug;` gates the whole directory unchanged — a directory module resolves
-//! identically to a single file as far as that `cfg` and the crate-root `pub use debug::*;` are
-//! concerned.
-// NOTE: no `#![cfg(feature = "debug_reducers")]` here — `lib.rs` already gates `mod debug;` on that
-// exact feature, so repeating it inside the file is a duplicated `cfg` (clippy::duplicated_attributes)
-// that reads as a second, independent gate while adding nothing. lib.rs:175 is THE gate; if it ever
-// loses its `#[cfg]`, this whole directory compiles into production — that is what preflight check 1
-// (`cargo check --features=debug_reducers`) and the prod-safety note above lib.rs's `mod debug;` guard.
+//! # Layout
+//! This file holds the world, combat and item levers and the shared `equip_into` helper. `readout` is
+//! the `DebugReadout` table and its writers, `audit` the class-kit and quest-chain content audits,
+//! `encounter` and `instance` the operator levers, and `fingerprint` the catalogue-parity hash.
 
 mod audit;
 mod auth;
@@ -47,7 +36,6 @@ mod mail;
 mod meeting_stone;
 mod package_config;
 mod readout;
-mod repair;
 mod runtime_script;
 
 pub use audit::*;
@@ -60,7 +48,6 @@ pub use mail::*;
 pub use meeting_stone::*;
 pub use package_config::*;
 pub use readout::*;
-pub use repair::*;
 pub use runtime_script::*;
 
 use lyracore_shared::{constants, spatial};

@@ -1479,7 +1479,6 @@ pub(crate) fn reconcile_curated_starter_role_levels(ctx: &ReducerContext) -> u32
     repaired
 }
 
-#[cfg(feature = "debug_reducers")]
 fn legacy_lesser_heal_header(spell: &Spell) -> bool {
     spell.spell_id == 2050
         && spell.name == "Lesser Heal"
@@ -1508,7 +1507,6 @@ fn legacy_lesser_heal_header(spell: &Spell) -> bool {
         && spell.proc_charges == 0
 }
 
-#[cfg(feature = "debug_reducers")]
 fn legacy_lesser_heal_effect(effect: &SpellEffect) -> bool {
     effect.id == (2050u64 << 2)
         && effect.spell_id == 2050
@@ -1532,7 +1530,6 @@ fn legacy_lesser_heal_effect(effect: &SpellEffect) -> bool {
 
 /// Repair only the exact curated Lesser Heal row, before or after its level reconciliation.
 /// Imported or tuned spell data does not match both complete shapes and remains authoritative.
-#[cfg(feature = "debug_reducers")]
 pub(crate) fn repair_lesser_heal_target(ctx: &ReducerContext) -> u64 {
     let Some(spell) = ctx.db.game_spell().spell_id().find(2050) else {
         return 0;
