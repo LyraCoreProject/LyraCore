@@ -59,6 +59,11 @@ gameplay data, not a Gateway Relay.
 A durable invocation of one Relay Definition. It pins its catalogue and definition versions,
 participants, next step, due time, and saved random state.
 
+**Relay Arrival**:
+The relay a `move-dynamic` step schedules for when its mover lands. Its arrival leg is the leg that
+step started. While the mover's live leg is still the arrival leg, the arrival settles the mover on
+the destination and runs. A newer leg drops it. A mover with no leg must stand on the destination.
+
 **Bounded Map Slice**:
 A named rectangular or circular part of one map, with the anchor used for terrain and navigation
 selection. The anchor is a real ground point on the client heightmap inside the slice, not a WMO

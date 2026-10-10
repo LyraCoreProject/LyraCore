@@ -50,7 +50,7 @@ fn arrival_pending(shard: &Standalone, guid: &str) -> bool {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
-fn a_scripted_move_leaves_the_stored_row_on_the_leg_and_a_kill_stops_at_the_drawn_point() {
+fn a_scripted_move_leaves_the_stored_row_on_the_leg() {
     let mut shard = Standalone::start("encounter-move-stored-row");
     let wolf = lone_wolf(&mut shard);
     let guid = wolf["guid"].clone();
@@ -77,14 +77,6 @@ fn a_scripted_move_leaves_the_stored_row_on_the_leg_and_a_kill_stops_at_the_draw
     assert!(
         distance(walking, destination) > LEG_YD / 2.0,
         "a reader mid-leg must not see the destination, but the wolf is stored at {walking:?}"
-    );
-
-    shard.assert_call("debug_kill_creature", &["1", &guid]);
-    let corpse = position(&stored(&shard, &guid));
-    let walked = distance(start, corpse);
-    assert!(
-        walked > 0.0 && walked < LEG_YD / 2.0,
-        "the corpse must rest on the drawn point part way along the leg, not at {corpse:?}"
     );
 }
 

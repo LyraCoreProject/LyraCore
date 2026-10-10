@@ -760,7 +760,8 @@ pub fn equip_swap(
 /// where the client draws the mover now, and the creature tick advances the stored position along
 /// it as along any other leg, so a reader mid-leg never sees the destination. The duration comes
 /// from the snare-aware `combat::effective_move_speed` over the 2D distance. Errs for a missing,
-/// player or dead mover; a zero-length leg is a no-op Ok.
+/// player or dead mover. An immobilized mover is a no-op Ok. A mover the client already draws on
+/// the point stops there and takes no new leg.
 pub fn move_to_point(
     ctx: &ReducerContext,
     creature_guid: u64,
@@ -785,11 +786,17 @@ pub fn move_to_point(
         constants::speeds::WALK
     };
     let speed = crate::combat::effective_move_speed(ctx, creature_guid, base);
+    if speed <= 0.0 {
+        return Ok(());
+    }
     let spline_id = crate::creatures::tick::begin_leg(ctx, &mut e);
     let (dx, dy) = (x - e.x, y - e.y);
     let dist = (dx * dx + dy * dy).sqrt();
-    if dist <= f32::EPSILON || speed <= 0.0 {
-        return Ok(()); // already there (or immobilized) — no zero-length leg
+    if dist <= f32::EPSILON {
+        // End the old leg here, so a relay arrival sees a leg of its own land on the point.
+        crate::creatures::tick::stop_where_rendered(ctx, &mut e);
+        entities.guid().update(e);
+        return Ok(());
     }
     crate::creatures::tick::emit_move_spline(
         ctx,
@@ -803,7 +810,7 @@ pub fn move_to_point(
         e.instance_id,
         (e.grid_x, e.grid_y),
     );
-    e.last_move_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u32;
+    e.last_move_ms = crate::creatures::tick::now_ms(ctx);
     entities.guid().update(e);
     Ok(())
 }

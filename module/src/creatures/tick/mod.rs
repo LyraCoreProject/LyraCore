@@ -660,7 +660,6 @@ pub(crate) fn emit_creature_path(
     let Some(&destination) = points.last() else {
         return;
     };
-    let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u32;
     let spline_id = begin_leg(ctx, &mut mover);
     let start = (mover.x, mover.y, mover.z);
     let length = movement_path::length(start, &points);
@@ -692,7 +691,7 @@ pub(crate) fn emit_creature_path(
         ctx.db.game_creature_spline().guid().update(spline);
     }
     mover.orientation = (points[0].1 - mover.y).atan2(points[0].0 - mover.x);
-    mover.last_move_ms = now_ms;
+    mover.last_move_ms = now_ms(ctx);
     ctx.db.game_world_entity().guid().update(mover);
 }
 
@@ -764,7 +763,7 @@ pub(crate) fn stop_where_rendered(ctx: &ReducerContext, mover: &mut WorldEntity)
     let Some(previous) = place_where_rendered(ctx, mover) else {
         return;
     };
-    let spline_id = next_spline_id(ctx.timestamp.to_micros_since_unix_epoch() as u64, previous);
+    let spline_id = next_spline_id(now_ms(ctx), previous);
     let at = (mover.x, mover.y, mover.z);
     emit_move_spline(
         ctx,
@@ -784,10 +783,8 @@ pub(crate) fn stop_where_rendered(ctx: &ReducerContext, mover: &mut WorldEntity)
 /// leave it, and return the spline id the new leg takes. The caller emits the leg and writes
 /// `mover`.
 pub(crate) fn begin_leg(ctx: &ReducerContext, mover: &mut WorldEntity) -> u32 {
-    let now_micros = ctx.timestamp.to_micros_since_unix_epoch() as u64;
-    place_where_rendered(ctx, mover).map_or((now_micros / 1000) as u32, |previous| {
-        next_spline_id(now_micros, previous)
-    })
+    let now_ms = now_ms(ctx);
+    place_where_rendered(ctx, mover).map_or(now_ms, |previous| next_spline_id(now_ms, previous))
 }
 
 /// Move `mover` to where a stop now would leave it on its leg, and return that leg's spline id.
@@ -803,8 +800,14 @@ fn place_where_rendered(ctx: &ReducerContext, mover: &mut WorldEntity) -> Option
 
 /// The id for a leg that replaces one with id `previous`. The client ignores an id that does not
 /// exceed the one it replaces, so a second leg in the same millisecond takes `previous + 1`.
-pub(crate) fn next_spline_id(now_micros: u64, previous: u32) -> u32 {
-    ((now_micros / 1000) as u32).max(previous.wrapping_add(1))
+pub(crate) fn next_spline_id(now_ms: u32, previous: u32) -> u32 {
+    now_ms.max(previous.wrapping_add(1))
+}
+
+/// The transaction's clock as the wrapping millisecond count that spline ids and `last_move_ms`
+/// use.
+pub(crate) fn now_ms(ctx: &ReducerContext) -> u32 {
+    (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u32
 }
 
 /// Move `mover` to `stop`: position, grid address and packed cell together, and the stop's heading
@@ -1224,8 +1227,8 @@ mod stop_between_firings {
 
     #[test]
     fn a_stop_in_the_same_millisecond_as_its_leg_still_gets_a_newer_spline_id() {
-        assert_eq!(next_spline_id(60_000_400, 60_000), 60_001);
-        assert_eq!(next_spline_id(60_000_400, 59_000), 60_000);
+        assert_eq!(next_spline_id(60_000, 60_000), 60_001);
+        assert_eq!(next_spline_id(60_000, 59_000), 60_000);
     }
 }
 

@@ -616,9 +616,9 @@ fn face_requested_melee_target(ctx: &ReducerContext, attacker_guid: u64, target_
         return;
     }
     let now_ms = (now_micros / 1_000) as u32;
-    let spline_id = retained
-        .as_ref()
-        .map_or(now_ms, |last| now_ms.max(last.spline_id.wrapping_add(1)));
+    let spline_id = retained.as_ref().map_or(now_ms, |last| {
+        crate::creatures::tick::next_spline_id(now_ms, last.spline_id)
+    });
     let position = (attacker.x, attacker.y, attacker.z);
     let partition = (attacker.map_id, attacker.instance_id);
     let grid = (attacker.grid_x, attacker.grid_y);

@@ -1729,33 +1729,51 @@ fn schedule_arrival(
     Ok(())
 }
 
-fn arrival_is_current(
+/// Where a due Relay Arrival finds its mover.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ArrivalCheck {
+    /// The mover died, left the partition, took a newer leg or stands off the destination.
+    Stale,
+    /// The mover's live leg is still the arrival leg. It has landed, but the creature tick has not
+    /// stored its end yet.
+    LegLanded,
+    /// The mover has no leg of its own and stands on the destination.
+    OnDestination,
+}
+
+fn check_arrival(
     source: &crate::WorldEntity,
     spline: Option<&crate::creatures::CreatureSpline>,
     arrival: &RelayArrival,
-) -> bool {
-    !source.dead
-        && (source.map_id, source.instance_id) == (arrival.map_id, arrival.instance_id)
-        && arrival_motion_matches(
-            (source.x, source.y, source.z),
-            spline.map(|spline| spline.spline_id),
-            (arrival.x, arrival.y, arrival.z),
-            arrival.spline_id,
-        )
+) -> ArrivalCheck {
+    if source.dead || (source.map_id, source.instance_id) != (arrival.map_id, arrival.instance_id) {
+        return ArrivalCheck::Stale;
+    }
+    arrival_motion(
+        (source.x, source.y, source.z),
+        spline.map(|spline| spline.spline_id),
+        arrival,
+    )
 }
 
-/// An arrival is current while the mover's leg is still the one the arrival waits on, even though
-/// the creature tick has not yet stored the destination: a newer leg would carry another spline id.
-/// With no leg of its own, or once the leg is reaped, the mover must stand on the destination.
-fn arrival_motion_matches(
+/// A newer leg carries another spline id, so a matching leg needs no time check.
+fn arrival_motion(
     source_position: (f32, f32, f32),
     current_spline_id: Option<u32>,
-    destination: (f32, f32, f32),
-    arrival_spline_id: u32,
-) -> bool {
+    arrival: &RelayArrival,
+) -> ArrivalCheck {
     match current_spline_id {
-        Some(id) if arrival_spline_id != 0 => id == arrival_spline_id,
-        _ => distance_sq(source_position, destination) <= f32::EPSILON,
+        Some(id) if arrival.spline_id != 0 => {
+            if id == arrival.spline_id {
+                ArrivalCheck::LegLanded
+            } else {
+                ArrivalCheck::Stale
+            }
+        }
+        _ if distance_sq(source_position, (arrival.x, arrival.y, arrival.z)) <= f32::EPSILON => {
+            ArrivalCheck::OnDestination
+        }
+        _ => ArrivalCheck::Stale,
     }
 }
 
@@ -1783,29 +1801,33 @@ pub(crate) fn run_relay_arrival(ctx: &ReducerContext, arrival: RelayArrival) {
         .game_creature_spline()
         .guid()
         .find(arrival.source_guid);
-    if !arrival_is_current(&source, spline.as_ref(), &arrival) {
-        reap_unused_definitions(ctx);
-        return;
-    }
-    if arrival.spline_id != 0 && spline.is_some() {
-        // The leg landed before the creature tick stored its end. Settle the mover as the tick
-        // would, so the arrival relay reads it at the destination and not on a moving leg.
-        crate::creatures::tick::place_stopped(
-            &mut source,
-            crate::creatures::cycle::Stop {
-                at: crate::creatures::cycle::Point {
-                    x: arrival.x,
-                    y: arrival.y,
-                    z: arrival.z,
+    match check_arrival(&source, spline.as_ref(), &arrival) {
+        ArrivalCheck::Stale => {
+            reap_unused_definitions(ctx);
+            return;
+        }
+        ArrivalCheck::OnDestination => {}
+        ArrivalCheck::LegLanded => {
+            // Land the leg as the creature tick would, so the arrival relay reads the mover on the
+            // destination and not on a moving leg.
+            crate::creatures::tick::place_stopped(
+                &mut source,
+                crate::creatures::cycle::Stop {
+                    at: crate::creatures::cycle::Point {
+                        x: arrival.x,
+                        y: arrival.y,
+                        z: arrival.z,
+                    },
+                    heading: None,
                 },
-                heading: None,
-            },
-        );
-        ctx.db.game_world_entity().guid().update(source);
-        ctx.db
-            .game_creature_spline()
-            .guid()
-            .delete(arrival.source_guid);
+            );
+            source.last_move_ms = crate::creatures::tick::now_ms(ctx);
+            ctx.db.game_world_entity().guid().update(source);
+            ctx.db
+                .game_creature_spline()
+                .guid()
+                .delete(arrival.source_guid);
+        }
     }
     if let Err(error) = start_relay(
         ctx,
@@ -2608,23 +2630,41 @@ mod tests {
 
     #[test]
     fn arrival_relay_requires_its_leg_or_its_destination_and_no_replacement_leg() {
+        use ArrivalCheck::{LegLanded, OnDestination, Stale};
         let destination = (3.0, 4.0, 5.0);
         let away = (0.0, 0.0, 0.0);
-        // (mover position, mover's spline id, the arrival's spline id, is the arrival current)
+        let arrival = |spline_id| RelayArrival {
+            scheduled_id: 0,
+            scheduled_at: ScheduleAt::Time(Timestamp::UNIX_EPOCH),
+            map_id: 1,
+            instance_id: 42,
+            source_guid: 1,
+            selected_guid: 2,
+            parent_run_id: 0,
+            relay_id: 90_003,
+            catalogue_version: 1,
+            lifetime: RelayLifetime::MapOrInstance,
+            saved_random_state: 0,
+            spline_id,
+            x: destination.0,
+            y: destination.1,
+            z: destination.2,
+        };
+        // (mover position, mover's spline id, the arrival leg's spline id, expected check)
         let cases = [
-            (destination, Some(7), 7, true),
-            (away, Some(7), 7, true),
-            (destination, None, 7, true),
-            (away, None, 7, false),
-            (destination, Some(8), 7, false),
-            (away, Some(8), 7, false),
-            (destination, Some(8), 0, true),
-            (away, Some(8), 0, false),
+            (destination, Some(7), 7, LegLanded),
+            (away, Some(7), 7, LegLanded),
+            (destination, None, 7, OnDestination),
+            (away, None, 7, Stale),
+            (destination, Some(8), 7, Stale),
+            (away, Some(8), 7, Stale),
+            (destination, Some(8), 0, OnDestination),
+            (away, Some(8), 0, Stale),
         ];
-        for (position, current_spline_id, arrival_spline_id, current) in cases {
+        for (position, current_spline_id, arrival_spline_id, expected) in cases {
             assert_eq!(
-                arrival_motion_matches(position, current_spline_id, destination, arrival_spline_id),
-                current,
+                arrival_motion(position, current_spline_id, &arrival(arrival_spline_id)),
+                expected,
                 "mover at {position:?}, leg {current_spline_id:?}, arrival leg {arrival_spline_id}",
             );
         }
