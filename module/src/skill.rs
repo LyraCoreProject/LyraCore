@@ -20,7 +20,7 @@ use lyracore_shared::constants::starter_item;
 // `threat::game_threat`), so it's in scope without a `use`. `game_item_template` (items/) is read to
 // resolve the equipped weapon's subclass; `game_world_entity` (world.rs) only by the debug reducer.
 use crate::skilldata::{game_skill_ability, game_skill_availability};
-use crate::{game_item_template, game_world_entity, WorldEntity}; // accessor trait for the autolearn read (282)
+use crate::{game_item_template, game_world_entity, WorldEntity}; // accessor trait for the autolearn read
 
 // ===========================================================================================
 //  Pure skill math + taxonomy (ctx-free, unit-tested) [server]
@@ -736,7 +736,7 @@ pub(crate) fn gain_profession_skill(
         let Some(new_current) = raise_skill(ctx, guid, line) else {
             return;
         };
-        // AUTOLEARN at threshold (282): climbing may have unlocked acquire_method=2 abilities whose
+        // AUTOLEARN at threshold: climbing may have unlocked acquire_method=2 abilities whose
         // min_skill the new rank now meets. Idempotent; owner from the live caster entity (a skill-up
         // only ever fires for an in-world crafter). Requires a REAL live entity — the "always
         // in-world" invariant broke once already, and minting a `game_player_spell` row under
@@ -792,7 +792,7 @@ pub(crate) fn learn_profession(
             max_rank: cap,
         });
     }
-    // AUTOLEARN (282): learning a profession instantly grants its base abilities — this is how
+    // AUTOLEARN: learning a profession instantly grants its base abilities — this is how
     // Charred Wolf Meat (2538) / Disenchant (13262) arrive in vanilla (NOT from a trainer). Grant
     // at the row's current skill; higher-threshold autolearn abilities land as it climbs (via
     // gain_profession_skill below).
@@ -805,7 +805,7 @@ pub(crate) fn learn_profession(
     grant_autolearn_abilities(ctx, guid, owner, skill_line, current);
 }
 
-/// AUTOLEARN grant (282): for `skill_line`, learn every `game_skill_ability` spell whose real
+/// AUTOLEARN grant: for `skill_line`, learn every `game_skill_ability` spell whose real
 /// `acquire_method` is autolearn (1 = on skill learn, 2 = on reaching the skill rank) and whose
 /// `min_skill <= current`. Idempotent (`learn_spell` dedups), so it's safe to call on every learn +
 /// skill-up. Race/class masks on profession recipes are universal in vanilla, so they're not
@@ -1096,13 +1096,13 @@ pub fn debug_learn_riding_from_trainer(
 /// derived from `game_skill_availability` (`SkillRaceClassInfo.dbc`'s `class_mask`, imported by
 /// `skilldata.rs`) joined against `skill_line::*`'s known combat lines — that data-driven replacement
 /// is a follow-up, not done here (this function's behavior is UNCHANGED by this item).
-/// Vanilla STARTING weapon proficiencies (256) — what a FRESH character knows before visiting a
+/// Vanilla STARTING weapon proficiencies — what a FRESH character knows before visiting a
 /// weapon master, matching vanilla's per-race/class proficiency spells (race-merged;
 /// wand/thrown/bow/gun lines are unmodeled — ranged rides the UNARMED fallback). The FULL per-class
 /// list below stays as the "ever learnable by this class" reference; seeding from THAT list gave every
 /// fresh paladin swords/axes/polearms and made the weapon masters pointless (live find, faladin).
 /// Existing characters are GRANDFATHERED: `ensure_player_skills` only inserts missing lines, never
-/// deletes, so a pre-256 character keeps its wide set.
+/// deletes, so an existing character keeps its wide set.
 pub fn class_starting_weapon_skill_lines(class: u8) -> &'static [u32] {
     use skill_line::*;
     match class {

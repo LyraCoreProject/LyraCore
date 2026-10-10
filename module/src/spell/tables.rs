@@ -48,7 +48,7 @@ pub struct Spell {
     #[default(0)]
     pub stances: u8,
     /// SpellFamilyName (Spell.dbc `spell_class_set` — MAGE=3, WARRIOR=4, …; 0 = generic). With
-    /// `family_flags` this is how a spell MODIFIER names its affected spells (264): a modifier aura
+    /// `family_flags` this is how a spell MODIFIER names its affected spells: a modifier aura
     /// applies to a cast iff family_name matches AND `family_flags & modifier_mask != 0`.
     /// END-appended + `#[default(0)]` → auto-migrates. [data]
     #[default(0)]
@@ -394,13 +394,13 @@ pub struct SpellCastEvent {
     // delay_ms note above). END-appended + #[default(0u32)] → additive auto-migration.
     #[default(0u32)]
     pub healed: u32,
-    // Legacy compatibility field on a PROC_LOG row (114), such as Seal of Righteousness damage on a
+    // Legacy compatibility field on a PROC_LOG row, such as Seal of Righteousness damage on a
     // landed melee swing. The Gateway sends only SMSG_SPELLNONMELEEDAMAGELOG. An on-next-swing fire
     // uses GO with is_completion=true because the client holds a pending cast for it.
     // END-appended + #[default(false)] -> additive auto-migration.
     #[default(false)]
     pub is_proc_log: bool,
-    // The melee swing outcome an on-next-swing FIRE row rode (114): CombatEvent hit_info codes
+    // The melee swing outcome an on-next-swing FIRE row rode: CombatEvent hit_info codes
     // (0 normal, 1 crit, 2 miss, 3 dodge, 4 parry, ...). The relay shapes the SMSG_SPELL_GO miss
     // list from it when damage == 0 — the client then prints the yellow "Your Heroic Strike
     // missed/was dodged/was parried" line instead of a white MISS. 0 (normal) on every other row.

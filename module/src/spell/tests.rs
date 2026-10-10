@@ -89,7 +89,7 @@ fn stance_allows_gate() {
 
 /// The stance → client ShapeshiftForm byte map (UNIT_FIELD_BYTES_1[2], written by the E_SET_STANCE arm):
 /// the inverse of the importer's form_to_stance per the taxonomy STANCE_* convention block. The warrior
-/// trio MUST stay byte-identical to the pre-156 inline `stance + 17` (pinned against hardcoded values,
+/// trio MUST stay byte-identical to the inline `stance + 17` (pinned against hardcoded values,
 /// not the formula); unassigned ids keep the legacy fallback.
 #[test]
 fn client_form_for_stance_matches_the_convention() {
@@ -99,7 +99,7 @@ fn client_form_for_stance_matches_the_convention() {
     assert_eq!(client_form_for_stance(STANCE_BEAR), 5);
     assert_eq!(client_form_for_stance(STANCE_CAT), 1);
     assert_eq!(client_form_for_stance(STANCE_DIRE_BEAR), 8);
-    // Unassigned stance ids (6, 7) fall back to the legacy warrior formula — the pre-156 behavior.
+    // Unassigned stance ids (6, 7) fall back to the legacy warrior formula.
     assert_eq!(client_form_for_stance(6), 23);
     assert_eq!(client_form_for_stance(7), 24);
 }

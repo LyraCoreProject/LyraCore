@@ -143,7 +143,7 @@ pub fn debug_nav_probe(ctx: &ReducerContext, map: u32, x: f32, y: f32) {
 }
 
 /// Toggle nav-grid consumption (`game_config.nav_enabled`), upserts row 0 like
-/// `debug_set_xp_rate`. OFF = pre-243 straight-line movement + wall-blind aggro/casts.
+/// `debug_set_xp_rate`. OFF = straight-line movement + wall-blind aggro/casts.
 #[reducer]
 pub fn debug_set_nav_enabled(ctx: &ReducerContext, enabled: bool) -> Result<(), String> {
     let cfg = ctx.db.game_config();
@@ -1058,7 +1058,7 @@ pub fn debug_grant_default_actions(
     Ok(())
 }
 
-/// One-time backfill (246): stamp grid_x/grid_y on every existing gameobject row from its (x, y)
+/// One-time backfill: stamp grid_x/grid_y on every existing gameobject row from its (x, y)
 /// — imported/seeded rows predate the columns. Idempotent.
 #[reducer]
 pub fn debug_backfill_go_grid(ctx: &ReducerContext) {

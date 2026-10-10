@@ -359,7 +359,7 @@ pub(crate) fn seal_amount(ctx: &ReducerContext, unit_guid: u64) -> i32 {
     sum_active_auras(ctx, unit_guid, |a| a.eff_kind == A_SEAL)
 }
 
-/// `seal_amount` plus the seal's SPELL id — the swing-proc damage log (114) names its yellow combat-log
+/// `seal_amount` plus the seal's SPELL id — the swing-proc damage log names its yellow combat-log
 /// line after the seal spell. Only one seal is ever active (`remove_seal_auras` enforces it), so the first
 /// `A_SEAL` row's spell_id is THE seal. `(0, 0)` with no seal (baseline-safe).
 pub(crate) fn seal_amount_and_spell(ctx: &ReducerContext, unit_guid: u64) -> (i32, u32) {
@@ -426,7 +426,7 @@ pub(crate) fn break_stealth(ctx: &ReducerContext, unit_guid: u64) -> u32 {
     removed
 }
 
-/// Spell-modifier fold (264): sum the CASTER's `A_SPELLMOD_FLAT` / `A_SPELLMOD_PCT` auras whose
+/// Spell-modifier fold: sum the CASTER's `A_SPELLMOD_FLAT` / `A_SPELLMOD_PCT` auras whose
 /// SpellModOp (`eff_p0`) is `op` AND whose affected-spell family mask (`eff_p1`, the DBC
 /// EffectItemType) names the cast — the MODIFIER's source spell must share `family_name` with the
 /// cast header and `hdr.family_flags & mask != 0` (vanilla's SpellModifier match). Returns
@@ -544,7 +544,7 @@ pub(crate) fn stance_allows(mask: u8, stance: u8) -> bool {
 /// Pure: the vanilla ShapeshiftForm id the 5875 client expects in UNIT_FIELD_BYTES_1[2] for our 0-based
 /// `stance` — the inverse of the importer's `form_to_stance` (see the STANCE_* convention block in
 /// taxonomy.rs, the definition site): Battle 0→17 / Defensive 1→18 / Berserker 2→19 / Bear 3→5 /
-/// Cat 4→1 / Dire Bear 5→8. An UNASSIGNED stance id (6, 7, …) falls back to the pre-156 warrior formula
+/// Cat 4→1 / Dire Bear 5→8. An UNASSIGNED stance id (6, 7, …) falls back to the warrior formula
 /// (`stance + 17`) so the three warrior stances' byte is BIT-IDENTICAL to what the old inline
 /// `(new_stance + 17)` computed and out-of-range ids behave exactly as before the widening. [pure]
 pub(crate) fn client_form_for_stance(stance: u8) -> u32 {

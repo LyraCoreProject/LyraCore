@@ -274,7 +274,7 @@ fn rest_pool_after(pool: u32, offline_micros: u64, level: u32) -> u32 {
     (pool as u64 + accrued).min(cap) as u32
 }
 
-/// Live rested accrual (196): the pool after resting ONLINE for `elapsed_micros` at the FULL rest rate,
+/// Live rested accrual: the pool after resting ONLINE for `elapsed_micros` at the FULL rest rate,
 /// starting from `pool`. Same math as the offline path (`rest_pool_after`) — a rest-area inn accrues at
 /// the full rate whether you're logged in or out. Lossless when driven off a fixed `rested_since` clock:
 /// the caller advances the clock only once the increment banks ≥1 XP, so sub-1-XP ticks don't round away.
@@ -285,7 +285,7 @@ pub(crate) fn rest_accrue_live(pool: u32, elapsed_micros: u64, level: u32) -> u3
 /// Accrue rested XP onto a character for being offline since `last_logout_micros` — called by
 /// `player_login`. Returns `(new_rested_pool, consume_logout)`: the grown pool, and `true` once the
 /// logout stamp has been consumed (so a re-login without an intervening logout can't double-accrue). A
-/// never-logged-out character (`last_logout_micros == 0`) accrues nothing. `was_resting` (196) = logged
+/// never-logged-out character (`last_logout_micros == 0`) accrues nothing. `was_resting` = logged
 /// out in a rest area (inn/city) → the FULL rate; the open field accrues at 1/4 (vanilla). The rate
 /// scales linearly with offline time before the 1.5-level cap, so quartering the effective offline span
 /// is exactly the 1/4 field rate. [entity]

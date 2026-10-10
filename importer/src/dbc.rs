@@ -816,7 +816,7 @@ fn area_sql(table: &DbcAreaTable) -> (Vec<String>, usize) {
 }
 
 /// Clear+reload SQL for `game_area_trigger` from `AreaTrigger.dbc`: the geometric
-/// half of inn triggers (196), dungeon entrances (190), and quest explore objectives — a trigger
+/// half of inn triggers, dungeon entrances, and quest explore objectives — a trigger
 /// volume is either a sphere (`radius`) or a box (`box_length`/`box_width`/`box_height`/`box_yaw`);
 /// the DBC carries both fields for every row regardless of which shape a given trigger actually
 /// uses. Loads ALL rows (small table — map filtering is a verify-time concern). No Timestamp →
@@ -2359,7 +2359,7 @@ mod tests {
     #[test]
     fn skill_ability_sql_remaps_off_by_one_dbc_fields() {
         // Params are REAL semantics (min_skill, acquire_method, gray, green); the builder places
-        // them into the mis-named wow_dbc fields the corrected importer reads (282). Row 1: a
+        // them into the mis-named wow_dbc fields the corrected importer reads. Row 1: a
         // trained recipe (min 25, acquire 0, gray 75, green 30). Row 2: an autolearn ability
         // (acquire 1) with a trained-with-skill min.
         let table = DbcSkillLineAbility {

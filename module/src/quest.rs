@@ -2791,7 +2791,7 @@ pub(crate) fn on_areatrigger_entered(ctx: &ReducerContext, player_guid: u64, tri
 /// table needs no gateway binding at all (danger-zones.md §1's "new table → regenerate bindings" rule
 /// only applies to tables a gateway subscription reads). [`apply_enter_areatrigger`] looks this up by
 /// `trigger_id`; a hit routes the player through [`crate::world::teleport_player`], a miss leaves the
-/// pre-225 quest-credit-only behavior byte-identical. No Timestamp → plain SQL, clear+reload. [static]
+/// quest-credit-only behavior byte-identical. No Timestamp → plain SQL, clear+reload. [static]
 #[table(accessor = game_areatrigger_teleport)]
 pub struct AreatriggerTeleport {
     #[primary_key]

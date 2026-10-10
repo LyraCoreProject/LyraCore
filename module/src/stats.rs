@@ -237,7 +237,7 @@ pub(crate) fn set_character_level(
                   // …and the THRESHOLD, which the xp reset alone does not fix. `grant_xp`'s ding loop compares
                   // `xp >= next_level_xp`, so a character left holding its OLD level's (much smaller) threshold
                   // dings on its very next kill: a bot set to level 10 hit 11 after one wolf, in every bot test
-                  // that stages a level. Same defect family as the xp reset above (266) — that fixed the banked
+                  // that stages a level. Same defect family as the xp reset above — that fixed the banked
                   // side and left the bar where it was.
         e.next_level_xp = crate::xp::xp_to_next_level(level);
         apply_level_stats(ctx, &mut e, race, class, level); // attributes + armor + max health/power
@@ -250,7 +250,7 @@ pub(crate) fn set_character_level(
         crate::spell::recompute_sheet(ctx, character_guid);
     }
 
-    // Persist the level to the character row so a relog keeps it. XP resets to 0 (266): banked
+    // Persist the level to the character row so a relog keeps it. XP resets to 0: banked
     // xp survives a level-set otherwise, and any pool past the new level's threshold re-dings
     // the character on the next xp pass — "set level 5" on a played character silently became
     // level 6+, skewing every level-keyed fixture (exploration's L5 discovery paid the L6 value).

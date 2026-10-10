@@ -140,7 +140,7 @@ pub(crate) fn learn_spell(ctx: &ReducerContext, guid: u64, owner: Identity, spel
         owner_identity: owner,
         spell_id,
     });
-    // Pick Lock (119): learning it grants the Lockpicking (633) skill line, so the first pick_lock cast
+    // Pick Lock: learning it grants the Lockpicking (633) skill line, so the first pick_lock cast
     // reads a real skill row (a no-op for every other spell). Runs on the single grant seam.
     crate::skill::grant_lockpicking_on_learn(ctx, guid, owner, spell_id);
 }

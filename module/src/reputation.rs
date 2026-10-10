@@ -79,7 +79,7 @@ const REP_MAX: i32 = 42000;
 
 /// Reputation RANK (vanilla `ReputationRank`, 0=Hated .. 7=Exalted, Neutral=3) for a raw standing.
 /// Thresholds are the raw lower bounds mangos uses. Pure — unit-tested. `pub(crate)` so vendor pricing
-/// (195) can read it. Neutral is the baseline (an unknown faction → 0 standing → Neutral).
+/// can read it. Neutral is the baseline (an unknown faction → 0 standing → Neutral).
 pub(crate) fn reputation_rank(standing: i32) -> u8 {
     match standing {
         s if s >= 42000 => 7, // Exalted
@@ -93,7 +93,7 @@ pub(crate) fn reputation_rank(standing: i32) -> u8 {
     }
 }
 
-/// Vendor buy-price discount PERCENT for a raw standing (195). Vanilla `GetReputationPriceDiscount`:
+/// Vendor buy-price discount PERCENT for a raw standing. Vanilla `GetReputationPriceDiscount`:
 /// 5% per rank ABOVE Neutral — Friendly 5, Honored 10, Revered 15, Exalted 20; Neutral and below give 0.
 /// Buy only (sell is unchanged). Pure — unit-tested.
 pub(crate) fn reputation_discount_pct(standing: i32) -> u32 {
@@ -107,7 +107,7 @@ pub(crate) fn reputation_discount_pct(standing: i32) -> u32 {
 }
 
 /// The vendor buy-price discount PERCENT `player_guid` gets at a creature whose FactionTemplate is
-/// `faction_template_id` (195). Resolves the template → its parent Faction.dbc id → the player's standing
+/// `faction_template_id`. Resolves the template → its parent Faction.dbc id → the player's standing
 /// with that faction → `reputation_discount_pct`. 0 when the vendor has no parent faction, the faction
 /// has no rep bar, or the player has no standing row (Neutral). Reuses the `grant_reputation` lookup idiom.
 pub(crate) fn vendor_discount_pct(

@@ -117,14 +117,14 @@ pub struct Character {
 
     #[default(false)]
     pub pending_ghost: bool,
-    /// Rest state (196): logged out in a rest area (inn/city)? Stamped by `persist_entity` from the live
+    /// Rest state: logged out in a rest area (inn/city)? Stamped by `persist_entity` from the live
     /// entity's `resting` flag at logout, read by `player_login` to pick the offline rested rate (full in
     /// a rest area vs 1/4 in the field) and to spawn the character already showing the zzz/blue-bar byte.
     /// `#[default(false)]` + END-appended → auto-migrates. Gateway-subscribed (`game_character`) →
     /// hand-synced in `character_type.rs` + `schema_parity.rs` (the `gm_level`/`pending_ghost` precedent).
     #[default(false)]
     pub resting: bool,
-    /// Live-accrual clock (196): unix-epoch micros from which un-materialized ONLINE rested time is
+    /// Live-accrual clock: unix-epoch micros from which un-materialized ONLINE rested time is
     /// counted; 0 = not live-accruing (offline, or not in a rest area). The `rested_accrue_pass` tick
     /// grows `rested_xp` from this stamp and re-stamps it once ≥1 XP banks (lossless). `#[default(0u64)]`
     /// — TYPED (a bare `0` is a 4-byte i32 → the u64-column migration rejects it, `last_logout_micros`

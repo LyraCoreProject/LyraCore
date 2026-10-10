@@ -7591,7 +7591,7 @@ mod tests {
         );
         assert_eq!(msg.duration, 0);
 
-        // A non-facing leg (the pre-518 baseline) keeps the Normal variant unchanged.
+        // A non-facing leg keeps the Normal variant unchanged.
         let mut normal_row = row.clone();
         normal_row.facing = false;
         normal_row.dur_ms = 500;

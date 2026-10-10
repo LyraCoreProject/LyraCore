@@ -85,7 +85,7 @@ pub struct CreatureTemplate {
     // entry (collapsed like `LootId`); `skin_loot_id` keys `game_skinning_loot` (NOT collapsed — many
     // creatures of the same level band share one skin table). 0 on either ⇒ "not imported" — E_PICKPOCKET
     // grants copper only (unchanged) and `skin_corpse` falls back to the flat Light Leather — so every
-    // existing row (imported pre-210, or seeded) auto-migrates byte-identical. `#[default(0u32)]` +
+    // existing row auto-migrates byte-identical. `#[default(0u32)]` +
     // end-appended (migration rule).
     #[default(0u32)]
     pub pickpocket_loot_id: u32,
@@ -252,9 +252,9 @@ pub struct NpcText {
 /// its male line DUPLICATES `NpcText.text` (a reader who only touches this table still gets a
 /// self-contained slot 0; when slot 0 is empty, `NpcText.text` instead carries the first NON-empty
 /// slot for back-compat and no slot-0 row exists here — empty slots are never emitted). A
-/// `text_id` with NO rows here at all (an existing pre-217 row, or any id nobody has re-imported
+/// `text_id` with NO rows here at all (an existing row, or any id nobody has re-imported
 /// since) is read by the gateway as "legacy single-slot": `NpcText.text` in both genders at
-/// probability 1.0, every other slot silent — byte-identical to pre-217 behavior. Importer-owned
+/// probability 1.0, every other slot silent. Importer-owned
 /// (clear+reload). No Timestamp → SQL-seedable. [static]
 #[table(accessor = game_npc_text_slot, public, index(accessor = by_text_id, btree(columns = [text_id])))]
 pub struct NpcTextSlot {
@@ -725,7 +725,7 @@ pub fn build_creature_entity(
         instance_id,            // every caller passes 0 (open world)
         run_speed_mult_bp: 10_000, // 1× — GM `.speed` targets players only
         godmode: false,         // GM `.god` targets players only
-        resting: false,         // creatures never rest (196)
+        resting: false,         // creatures never rest
         // A creature never calls `recompute_sheet`, so its sheet fields stay 0.
         sheet_str_bonus: 0,
         sheet_agi_bonus: 0,
@@ -824,7 +824,7 @@ pub fn build_player_entity(
             character.hair_style,
             character.hair_color,
         ),
-        // Rest state (196): bake the RESTED byte if this character logged out in an inn, so it logs
+        // Rest state: bake the RESTED byte if this character logged out in an inn, so it logs
         // back in already showing the zzz icon + blue XP bar (no post-login relay needed). Byte 2
         // carries the persisted bank bag slot count so a purchase survives logout without a relog.
         player_bytes_2: packing::player_bytes_2_with_rest(

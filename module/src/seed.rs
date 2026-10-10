@@ -225,7 +225,7 @@ fn seed_production_core(ctx: &ReducerContext) {
     // Action-bar rows, same no-op-pre-import grant `create_character` calls.
     crate::action_bar::grant_createinfo_actions(ctx, 1, Identity::ZERO, hw::RACE, hw::CLASS);
 
-    // Creature EventAI (193): the fixture on-aggro barks (Kobold/Defias/Hogger).
+    // Creature EventAI: the fixture on-aggro barks (Kobold/Defias/Hogger).
     crate::creatures::seed_on_aggro_fixtures(ctx);
 }
 

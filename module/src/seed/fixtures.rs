@@ -68,7 +68,7 @@ pub(crate) fn test_wolf_template() -> CreatureTemplate {
         damage_max: 0,
         armor: 0,              // set via `spacetime sql` on this row to mock-test mitigation
         pickpocket_loot_id: 0, // not imported — the test wolf has no pickpocket table
-        // 0 ⇒ `skin_corpse` falls back to the flat Light Leather — the pre-210 verify flow
+        // 0 ⇒ `skin_corpse` falls back to the flat Light Leather — the verify flow
         // (debug_skin_nearest → 1x Light Leather) stays byte-identical without a seeded skin table.
         skin_loot_id: 0,
         trainer_type: 0, // the test wolf is a beast, not a trainer

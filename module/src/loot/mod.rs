@@ -57,7 +57,7 @@ pub struct CorpseLoot {
     // does this row carry a QUEST-only item (rolled from a `quest_only` creature/pickpocket/
     // gameobject-loot row)? Quest rows now roll UNCONDITIONALLY (the drop-chance still applies; only
     // the pre-roll killer gate is gone) — visibility (gateway) and takability (`apply_take_loot`) are
-    // decided per-viewer/per-taker instead. `#[default(false)]` so every pre-187 row (and every
+    // decided per-viewer/per-taker instead. `#[default(false)]` so every existing row (and every
     // non-quest drop) keeps behaving exactly as before — additive auto-migration.
     #[default(false)]
     pub quest_only: bool,
@@ -77,7 +77,7 @@ pub struct CorpseLoot {
     // loot-open; see the module doc below for why). All three are meaningless (stay at their
     // defaults) for an ungrouped kill, an FFA-method group, or any `quest_only` row (the two systems
     // are kept ORTHOGONAL — `apply_group_loot_rules` never touches a `quest_only` row). `#[default]`
-    // on all three — additive, byte-identical for every pre-187 row.
+    // on all three — additive, byte-identical for every existing row.
     /// `0` = no round-robin/master restriction (FFA, or a solo/ungrouped kill); nonzero = ONLY this
     /// character guid may see/take the row via the plain loot path (ROUND_ROBIN/GROUP-below-
     /// threshold: the corpse's picked-once designee; MASTER-above-threshold: the master looter).
@@ -117,7 +117,7 @@ pub struct CreatureLoot {
     // END-APPENDED: cmangos `ChanceOrQuestChance < 0`, the item is a QUEST-drop, only
     // ever visible to a player who currently needs it (an active matching COLLECT_ITEM objective — see
     // `killer_needs_item`). Gated at ROLL TIME against the CREDITED KILLER (see the module doc),
-    // never re-evaluated later. `#[default(false)]` so existing rows (imported pre-210, or seeded) keep
+    // never re-evaluated later. `#[default(false)]` so existing rows keep
     // rolling exactly as before (never quest-gated) — additive auto-migration.
     #[default(false)]
     pub quest_only: bool,
@@ -1126,7 +1126,7 @@ mod tests {
     }
 
     /// Schema round-trip guard: `CreatureLoot.quest_only` defaults to `false` (additive migration —
-    /// every pre-210 row keeps rolling unconditionally), and the new tables' row shapes construct with
+    /// every existing row keeps rolling unconditionally), and the new tables' row shapes construct with
     /// named fields exactly like `CreatureLoot` (a compile-time guard against a silently reordered /
     /// renamed column — the importer's positional SQL INSERT depends on this order matching its
     /// column list verbatim). `CorpseLoot` now END-carries `quest_only`/`reserved_for` too.
@@ -1332,7 +1332,7 @@ mod tests {
     // ---- Money-loot split ----
 
     /// SOLO passthrough: an empty `recipients` slice (no `game_corpse_loot_eligible` snapshot) always
-    /// credits the WHOLE amount to the looter in a single entry — byte-identical to the pre-221
+    /// credits the WHOLE amount to the looter in a single entry — byte-identical to the
     /// unconditional-credit path, regardless of amount.
     #[test]
     fn split_money_solo_passthrough_credits_the_whole_amount_to_the_looter() {

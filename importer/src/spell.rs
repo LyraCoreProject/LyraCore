@@ -186,7 +186,7 @@ const SPEED_MOUNTED: i32 = 3; // ModIncreaseMountedSpeed family; T4 folds this s
 //   form 19 Berserker → stance 2        form  8 Dire Bear → stance 5
 // Unmapped forms (Aquatic 4 / Travel 3 / Tree 2 / Ghoul 7 / Moonkin 31 / …) stay out of scope: their
 // mask bits are DROPPED (a spell usable ONLY in an unmapped form imports with the mapped-form bits it
-// has, or 0 = "any stance" — the pre-156 behavior for every non-warrior form).
+// has, or 0 = "any stance").
 const FORM_CAT: i32 = 1;
 const FORM_BEAR: i32 = 5;
 const FORM_DIRE_BEAR: i32 = 8;
@@ -502,7 +502,7 @@ fn correct_script_effect_kind(name: &str, kind: u8) -> u8 {
         // carrying the heal in base_points — and fell to E_SCRIPTED (a hollow no-op "heal") without this.
         "Life Tap" => E_CONVERT_RESOURCE,  // health -> mana, 1:1
         "Charge" => E_CHARGE, // the rush effect (vanilla effect 96) -> teleport-to-target
-        "Blink" => E_BLINK, // Mage Blink (116): the dead SCRIPT teleport effect (raw 29) -> teleport the caster ~20yd FORWARD along its facing. Name-rescued like Charge (raw 29 is a generic teleport with per-spell destination rules; Blink's is "forward"). eff2 (root/snare A_IMMUNITY) already maps natively.
+        "Blink" => E_BLINK, // Mage Blink: the dead SCRIPT teleport effect (raw 29) -> teleport the caster ~20yd FORWARD along its facing. Name-rescued like Charge (raw 29 is a generic teleport with per-spell destination rules; Blink's is "forward"). eff2 (root/snare A_IMMUNITY) already maps natively.
         "Seal of Righteousness" => A_SEAL, // the inert A_FLAG marker IS a proc-on-swing holy seal
         "Stealth" => A_STEALTH, // the inert A_FLAG marker IS the stealth presence (creatures skip it; broken on action)
         "Retaliation" => A_RETALIATE, // the inert A_FLAG marker IS the free-counter-swing self-buff (any melee attacker gets swung back at)
@@ -636,7 +636,7 @@ fn aura_mod_to_kind(aura: AuraMod) -> u8 {
 
         // stat — FLAT (ModStat) vs PERCENT (ModPercentStat / ModTotalStatPercentage). The percent ones fold
         // as a multiplier in recompute_vitals (The Human Spirit = +5% Spirit), so they need a distinct kind.
-        // Spell modifiers (264): the talent-passive class (Improved Fireball's cast-time cut,
+        // Spell modifiers: the talent-passive class (Improved Fireball's cast-time cut,
         // fire-damage-% talents). Op rides EffectMiscValue -> p0 (P_SPELLMOD_OP); the affected-spell
         // family mask rides EffectItemType -> p1. The engine folds them at the cast-time/damage seams.
         AddFlatModifier => A_SPELLMOD_FLAT,
@@ -1672,7 +1672,7 @@ fn resolve_effect_kind(
     // DoT. The DBC encodes it as A_PERIODIC_DAMAGE with a dynobj/self target that resolves WRONG —
     // Consecration → T_SELF would DoT the paladin himself. Reclassify BY NAME to E_PERSISTENT_AREA
     // (the Charge/Blink name-rescue precedent) so it spawns a game_ground_area whose own
-    // tick_ground_areas damages hostiles inside. Consecration is caster-anchored; Flamestrike (262)
+    // tick_ground_areas damages hostiles inside. Consecration is caster-anchored; Flamestrike
     // is the first CLICKED-GROUND one: the ground-target dest plumbing anchors the area at
     // the click when the cast carries a DEST_LOCATION block, so the same kind serves both.
     // Blizzard/Rain of Fire remain un-rescued (channeled patches — their channel/tick interplay is
@@ -1810,7 +1810,7 @@ fn trainer_offering_rows(
     trainer_rows
 }
 
-/// Fishing (060): the E_FISH marker effect rows for the three tier ids (skill 356 — 7620/7731/7732,
+/// Fishing: the E_FISH marker effect rows for the three tier ids (skill 356 — 7620/7731/7732,
 /// PROFESSION_LEARN's fishing entry). The gateway routes CMSG_CAST_SPELL to the `fish` reducer by
 /// this KIND (the enchant-route pattern — never a spell-id list). These are OUR OWN taxonomy rows
 /// (not client data, firewall-clean), written by key AFTER the bulk insert so they replace whatever
@@ -1852,7 +1852,7 @@ fn assemble_spell_sql(
         "id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat",
         &rows.effects.iter().map(SpellEffectRow::sql_values).collect::<Vec<_>>(),
     );
-    // Reagents (282): same clear-guard as the spell/effect tables (spell_delete_statements only
+    // Reagents: same clear-guard as the spell/effect tables (spell_delete_statements only
     // wipes < SYNTHETIC_SPELL_ID_FLOOR, so hand/test-fixture reagents survive a curated reload).
     push_insert(
         &mut stmts,
@@ -1916,7 +1916,7 @@ fn build_spell_sql(
     Ok((sql, cov, samples))
 }
 
-/// Reserved `game_trainer_spell` id range for the CURATED override rows (259): far above the --dump
+/// Reserved `game_trainer_spell` id range for the CURATED override rows: far above the --dump
 /// ETL's explicit ids (~4300) and disjoint from every other reserved range. The reload deletes this
 /// whole span by id, so a shrunken override list leaves no stale rows behind.
 const CURATED_TRAINER_ID_BASE: u64 = 5_200_000;
@@ -1934,7 +1934,7 @@ fn spell_delete_statements(only: &[u32]) -> Vec<String> {
         return vec![
             format!("DELETE FROM game_spell WHERE spell_id < {SYNTHETIC_SPELL_ID_FLOOR}"),
             format!("DELETE FROM game_spell_effect WHERE spell_id < {SYNTHETIC_SPELL_ID_FLOOR}"),
-            // Reagents (282) share the fixture-floor guard so hand/test reagents survive a reload.
+            // Reagents share the fixture-floor guard so hand/test reagents survive a reload.
             format!("DELETE FROM game_spell_reagent WHERE spell_id < {SYNTHETIC_SPELL_ID_FLOOR}"),
             format!("DELETE FROM game_creature_ai_spell_metadata WHERE spell_id < {SYNTHETIC_SPELL_ID_FLOOR}"),
         ];
@@ -3150,7 +3150,7 @@ mod tests {
             E_SET_STANCE
         );
         assert_eq!(correct_script_effect_kind("Cat Form", A_FLAG), E_SET_STANCE);
-        // Non-combat forms are NOT rescued — their marker stays the inert A_FLAG (the pre-156 shape).
+        // Non-combat forms are NOT rescued — their marker stays the inert A_FLAG.
         assert_eq!(correct_script_effect_kind("Aquatic Form", A_FLAG), A_FLAG);
         assert_eq!(correct_script_effect_kind("Travel Form", A_FLAG), A_FLAG);
         assert_eq!(correct_script_effect_kind("Moonkin Form", A_FLAG), A_FLAG);
@@ -3694,7 +3694,7 @@ mod tests {
         );
         assert_eq!(resolve_aura_params(A_MOD_STAT, ModStat, 3), (3, P_STAT_ID)); // INT
                                                                                  // ModStat is FLAT; ModTotalStatPercentage / ModPercentStat are PERCENT (distinct kind). BOTH resolve
-                                                                                 // the stat from misc — a SPECIFIC stat (4=Spirit, The Human Spirit), not a blanket all-stats (104).
+                                                                                 // the stat from misc — a SPECIFIC stat (4=Spirit, The Human Spirit), not a blanket all-stats.
         assert_eq!(aura_mod_to_kind(ModStat), A_MOD_STAT);
         assert_eq!(aura_mod_to_kind(ModTotalStatPercentage), A_MOD_STAT_PCT);
         assert_eq!(

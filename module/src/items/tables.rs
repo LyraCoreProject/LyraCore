@@ -166,7 +166,7 @@ pub struct ItemTemplate {
     pub start_quest: u32,
     #[default(0)]
     pub bag_family: u32,
-    /// cmangos `BuyCount` (080): the stack a vendor hands over per purchase (water/food ×5, ammo
+    /// cmangos `BuyCount`: the stack a vendor hands over per purchase (water/food ×5, ammo
     /// ×200). Defaulted 1 so un-reimported rows keep single-unit sales. END-appended + defaulted →
     /// additive auto-migration.
     #[default(1u32)]
@@ -302,7 +302,7 @@ pub struct NpcVendor {
 /// Per-player buyback ring — the last ≤12 items sold to any vendor. Newest = highest id; the client
 /// numbers slots 69–81 (SLOT1 = 0-index 0 = most recent). On sell: oldest is evicted if at capacity,
 /// new row inserted. On buyback: the player pays `price` copper and the item is granted back via
-/// `store_item`. The gateway subscribes (coordinator) to build the vendor-window buyback tab (248).
+/// `store_item`. The gateway subscribes (coordinator) to build the vendor-window buyback tab.
 #[table(accessor = game_character_buyback, index(accessor = by_player_guid, btree(columns = [player_guid])))]
 pub struct BuybackEntry {
     #[primary_key]

@@ -149,7 +149,7 @@ pub struct CreatureSpline {
     /// (`SMSG_MONSTER_MOVE`'s `FacingAngle` variant). A stationary stand-and-swing creature never
     /// throws a normal leg (nothing to interpolate), so without this the client never learns its
     /// heading changed — the "keeps its pre-combat orientation until you move" bug. `false`/`0.0`
-    /// (the pre-518 baseline) reproduces the old `Normal`-type stop exactly, so every other caller
+    /// reproduces the `Normal`-type stop exactly, so every other caller
     /// of [`emit_move_spline`] is unaffected. END-appended + defaulted (migration rule).
     #[default(false)]
     pub facing: bool,

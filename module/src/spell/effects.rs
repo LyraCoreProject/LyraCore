@@ -1,7 +1,7 @@
 //! The ctx-bound spell/aura ORCHESTRATION family: the handful of `math.rs` helpers that don't just
 //! compute a number but WRITE to the live module — mutating `game_world_entity`/`game_aura`/
 //! `game_melee_attack` rows, dispatching into `combat::apply_hit`'s kill fork, or both. Split out of
-//! `math.rs` (388) so that file's own doc claim — "everything here is unit-testable without a live
+//! `math.rs` so that file's own doc claim — "everything here is unit-testable without a live
 //! module" — is true again: every fn below takes a `ReducerContext` and has a side effect, so none of
 //! them belong in a "pure spell math" file, and (per the `test_scan` playbook) none of them get a direct
 //! unit test here either — there is no `ReducerContext` harness in this crate by design. `mod.rs`

@@ -503,7 +503,7 @@ fn swing_blocked(
     // within the 5 yd 3D reach of a player just inside it (live find: the Rogue Wizard
     // beat a wall-separated player to death by melee). One LoS ray per due swing, both
     // directions symmetric (players can't hit through walls either). `has_los` is `true`
-    // whenever nav is off — byte-identical pre-243 combat.
+    // whenever nav is off.
     if !crate::nav::has_los(
         ctx,
         attacker.map_id,

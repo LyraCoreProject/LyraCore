@@ -468,7 +468,7 @@ mod tests {
             err36.contains("stacked instance floors"),
             "the map-36 refusal names the floor representation limit: {err36}"
         );
-        // Any other unknown map still fails loud (the pre-226 behavior, message widened).
+        // Any other unknown map still fails loud.
         assert!(super::map_dir(429).is_err());
     }
 

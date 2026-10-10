@@ -31,16 +31,16 @@ pub(crate) const MELEE_RANGE_LEEWAY_SQ: f32 =
                                                                    // standstill does not (no leeway leak into stationary combat).
 pub(crate) const MELEE_RANGE_LEEWAY_CREATURE_SQ: f32 = (5.0 + 8.0 / 3.0) * (5.0 + 8.0 / 3.0); // (7.67 yd)²
 pub(crate) const MELEE_LEEWAY_WINDOW_MS: u32 = 1200;
-pub(crate) const RANGED_RANGE_SQ: f32 = 1225.0; // (35 yd)² — ranged auto-attack max reach; inside MELEE_RANGE_SQ is "too close" (shot hard-fails, 097)
-pub(crate) const RANGED_INITIAL_SHOT_MS: u32 = 500; // Auto Shot wind-up before the FIRST shot (vanilla's 0.5s RANGED_ATTACK timer re-arm), vs firing instantly on activation (097)
+pub(crate) const RANGED_RANGE_SQ: f32 = 1225.0; // (35 yd)² — ranged auto-attack max reach; inside MELEE_RANGE_SQ is "too close" (shot hard-fails)
+pub(crate) const RANGED_INITIAL_SHOT_MS: u32 = 500; // Auto Shot wind-up before the FIRST shot (vanilla's 0.5s RANGED_ATTACK timer re-arm), vs firing instantly on activation
                                                     // Projectile speeds from the real 1.12 Spell.dbc (speed column, calibrated on Fireball=24.0):
                                                     // spell 75 Auto Shot = 40 yd/s, spell 5019 wand Shoot = 20 yd/s. Drive the shot's damage-at-impact
-                                                    // delay (dist/speed) so the hit lands with the client's arrow, not at the muzzle (097).
+                                                    // delay (dist/speed) so the hit lands with the client's arrow, not at the muzzle.
 pub(crate) const AUTO_SHOT_PROJECTILE_SPEED: f32 = 40.0;
 pub(crate) const WAND_PROJECTILE_SPEED: f32 = 20.0;
 // The 1.12 MovementFlags bits that mean "actually translating" (vmangos movementFlagsMask minus the
 // turn/pitch bits): forward|backward|strafe L/R|jumping|falling-far. Turning in place must NOT
-// count — vanilla keeps Auto Shot firing while you spin, but DEFERS shots while you move (097).
+// count — vanilla keeps Auto Shot firing while you spin, but DEFERS shots while you move.
 pub(crate) const MOVE_MASK_MOVING: u32 = 0x1 | 0x2 | 0x4 | 0x8 | 0x2000 | 0x4000;
 /// The single forward bit the SERVER sets on a unit it moves itself (vanilla `MOVEFLAG_FORWARD`,
 /// which its own spline launch records on the unit). A client-driven unit sends its own flags on

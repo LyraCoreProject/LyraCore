@@ -208,7 +208,7 @@ pub struct GameObject {
     /// hand-synced in the SAME change (playbook failure-mode).
     #[default(0u64)]
     pub instance_id: u64,
-    /// AOI grid cell (246): stamped from (x, y) at insert — GOs are static, no re-stamp. The
+    /// AOI grid cell: stamped from (x, y) at insert — GOs are static, no re-stamp. The
     /// per-player GO subscription scopes to the viewer's grid box exactly like game_world_entity
     /// (the un-scoped table made the client draw all ~4.6k zone GOs at once — the felt frame
     /// hitch). END-appended + defaulted → auto-migrates; backfill via debug_backfill_go_grid.
@@ -600,8 +600,8 @@ pub(crate) fn respawn_due(state: u8, respawn_at_micros: u64, now: u64) -> bool {
 
 /// Does the lock `lock_id` require opening before a CHEST/GOOBER/DOOR use? True iff `game_lock`
 /// holds a REAL opener row for it, either a skill line to meet or a key item. A lock
-/// with ONLY degenerate `property==0` slots (unmapped LockTypes = open-by-hand) is NOT gated: it opened
-/// freely pre-119 and still does, so widening the import's lock coverage never bricks a hand-open chest.
+/// with ONLY degenerate `property==0` slots (unmapped LockTypes = open-by-hand) is NOT gated: it opens
+/// freely, so widening the import's lock coverage never bricks a hand-open chest.
 fn lock_requires_opening(ctx: &ReducerContext, lock_id: u32) -> bool {
     ctx.db
         .game_lock()

@@ -156,7 +156,7 @@ pub(crate) fn nearest_of(candidates: &[Graveyard], px: f32, py: f32) -> Option<G
 }
 
 /// Return the graveyard whose 2-D position is closest (squared distance) to `(px, py)`, among
-/// ONLY the five hardcoded fallback consts (never touches the DB). Kept as the pre-209 API for
+/// ONLY the five hardcoded fallback consts (never touches the DB). Kept for
 /// the unit tests below and as `resolve_graveyard`'s last-resort floor; live release code should
 /// call `resolve_graveyard` instead so an imported `game_graveyard` table actually gets consulted.
 pub(crate) fn nearest(px: f32, py: f32) -> Graveyard {

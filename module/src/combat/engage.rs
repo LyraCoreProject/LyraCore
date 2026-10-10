@@ -398,7 +398,7 @@ pub struct CombatEvent {
     /// the client renders the arrow projectile. END-appended + `#[default(0)]` → auto-migrates. [event]
     #[default(0)]
     pub ammo_display_id: u32,
-    /// True when a queued on-next-swing spell (Heroic Strike/Cleave) FIRED on this landed swing (114):
+    /// True when a queued on-next-swing spell (Heroic Strike/Cleave) FIRED on this landed swing:
     /// vanilla REPLACES the white hit — the whole swing is the spell (one yellow named line, carried by
     /// the SpellCastEvent the swing inserts). The gateway then SKIPS the SMSG_ATTACKERSTATEUPDATE for
     /// this row (killing_blow/ATTACKSTOP still honored); `damage` keeps the true total for QA readers.
@@ -460,7 +460,7 @@ pub struct MeleeSchedule {
     pub scheduled_at: ScheduleAt,
 }
 
-/// One in-flight RANGED projectile (097): scheduled at fire + travel time; `ranged_impact` then
+/// One in-flight RANGED projectile: scheduled at fire + travel time; `ranged_impact` then
 /// applies the frozen post-mitigation damage (health/lethal/threat/rage/skill/combat-flag) so the
 /// server-side hit lands when the client's arrow does. The final damage and its client log are both
 /// committed at impact, after fresh lethal-floor and health checks. Module-private.
@@ -786,7 +786,7 @@ pub(crate) fn apply_start_ranged_attack(
     // LAND-MOUNT dismount (22): the ranged twin of the melee hook — after the last activation gate,
     // before the engagement is armed, so a refused activation leaves the mount up.
     crate::mount::dismount(ctx, attacker.guid);
-    // Initial-shot wind-up (097): a ranged auto-attack must NOT fire instantly on activation — vanilla's
+    // Initial-shot wind-up: a ranged auto-attack must NOT fire instantly on activation — vanilla's
     // Auto Shot has a ~0.5s cast before the first shot (the user: "we shoot right away, no waiting for the
     // attack timer"). `last_swing_ms == 0` would make the swing tick fire THIS tick; instead seed it so the
     // first shot is `RANGED_INITIAL_SHOT_MS` out. The swing gate fires when `now - last_swing >= delay`, so

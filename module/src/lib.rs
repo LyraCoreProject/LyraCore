@@ -458,7 +458,7 @@ pub use creatures::*;
 pub use debug::*;
 pub use duel::*;
 pub use encounter::*;
-pub use exploration::CharacterExplored; // re-exported for the gateway schema-parity test (282)
+pub use exploration::CharacterExplored; // re-exported for the gateway schema-parity test
 pub use faction::*;
 pub use gameobject::*;
 pub use gc::*;

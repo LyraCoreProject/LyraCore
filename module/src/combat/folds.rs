@@ -100,7 +100,7 @@ pub(crate) fn aura_attack_power_bonus(ctx: &ReducerContext, unit_guid: u64) -> u
 /// Holy damage a unit's active SEAL aura adds to a LANDED melee swing (Seal of Righteousness): the summed
 /// `A_SEAL` aura value, weapon-speed-weighted — vanilla SoR is per-swing, scaled by weapon speed. `(0, 0)`
 /// for a unit with no seal (baseline-safe). Pull model — the swing READS the seal aura, no per-spell code.
-/// Also returns the seal's SPELL id so the swing can name the yellow proc line after it (114).
+/// Also returns the seal's SPELL id so the swing can name the yellow proc line after it.
 pub(crate) fn seal_holy_on_swing(ctx: &ReducerContext, attacker: &WorldEntity) -> (u32, u32) {
     let (amount, spell) = crate::spell::seal_amount_and_spell(ctx, attacker.guid);
     (seal_swing_holy(amount, attacker.base_attack_time_ms), spell)

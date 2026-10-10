@@ -150,8 +150,8 @@ pub struct GameArea {
 /// `box_length`/`box_width`/`box_height`/`box_yaw`; vanilla trigger definitions use one shape or the
 /// other, never both). Loaded from the client `AreaTrigger.dbc` by the importer's `--dbc` mode
 /// (see `importer/src/dbc.rs::area_trigger_sql`). The geometric half of inn triggers
-/// (196 — "make this inn your home" needs the player standing inside the inn's trigger volume),
-/// dungeon entrances (190), and quest explore objectives. No Timestamp → plain SQL. [static]
+/// ("make this inn your home" needs the player standing inside the inn's trigger volume),
+/// dungeon entrances, and quest explore objectives. No Timestamp → plain SQL. [static]
 #[table(accessor = game_area_trigger, public)]
 pub struct GameAreaTrigger {
     #[primary_key]

@@ -1214,7 +1214,7 @@ pub fn debug_fill_aura_slots(
     Ok(())
 }
 
-/// Log the reputation vendor discount (195) `player_guid` gets at a creature whose FactionTemplate is
+/// Log the reputation vendor discount `player_guid` gets at a creature whose FactionTemplate is
 /// `faction_template_id` — runs the real `vendor_discount_pct` resolution against live data (server-side
 /// proof without needing to drive a full buy, whose vendor guid >2^53 mangles through `spacetime call`).
 #[reducer]

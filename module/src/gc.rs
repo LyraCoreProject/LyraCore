@@ -94,7 +94,7 @@ pub fn reap_movement_events(ctx: &ReducerContext, _schedule: EventReaperSchedule
     reap!(game_bot_invite_intent); // bot-decided invites awaiting gateway pickup
     reap!(game_auction_notice); // live outbid/won/sold/expired/new-bid notices to an online seller or bidder
     reap!(game_movement_violation); // recent anti-cheat diagnostics
-                                    // Rest-area zzz/blue-bar relay rows (196). Caught missing by the gc_reap_tripwire: this
+                                    // Rest-area zzz/blue-bar relay rows. Caught missing by the gc_reap_tripwire: this
                                     // table carries the same `id: u64` + `created_at: Timestamp` TTL shape as every table above but
                                     // had no reap line — every inn threshold crossing for the lifetime of a character left one more
                                     // row behind. The durable rest state (`Character.resting`/`rested_xp`) lives elsewhere; this row

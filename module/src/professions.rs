@@ -167,7 +167,7 @@ pub(crate) fn skin_corpse(
     // `skin_loot_id` (cmangos `skinning_loot_template`, level-banded across many creatures sharing a
     // band); roll it and grant every winner. `skin_loot_id == 0` (unimported / a seeded/test beast) OR
     // an empty/no-win roll falls back to the flat `LEATHER_ENTRY`/`LEATHER_COUNT` — byte-identical to
-    // the pre-210 alpha, so a skin never comes up empty-handed. `?`-rollback: ANY winner's `grant_item`
+    // a plain flat drop, so a skin never comes up empty-handed. `?`-rollback: ANY winner's `grant_item`
     // failing (full bag) rolls back the WHOLE skin BEFORE the corpse is marked skinned (the reducer tx
     // rolls the whole call back), so no partial skin — retry after freeing space, exactly the COOKING
     // reagent-gate rollback shape.

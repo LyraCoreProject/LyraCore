@@ -38,7 +38,7 @@ pub fn fire_pending_cast(ctx: &ReducerContext, sched: PendingCast) {
                 // START(cast_time)); only a genuine instant (is_completion=false) sends the START(0)+GO pair. A 2nd
                 // START(0) at completion reset the cast bar to zero-length ("stuck on full") — the cast-lock bug.
                 true,
-                // NOT client-initiated (088): the completion GO must reach the caster via the relay — the
+                // NOT client-initiated: the completion GO must reach the caster via the relay — the
                 // synchronous send only covered the instant CMSG path, never a timed completion.
                 false,
                 // The clicked ground point carried across the cast bar: a timed ground-AoE
@@ -249,7 +249,7 @@ pub(crate) fn do_cancel_cast(
 ) -> Result<(), String> {
     interrupt_cast(ctx, caster.guid);
     break_channel(ctx, caster.guid);
-    // Un-queue a pending on-next-swing strike too (114): the vanilla client cancels a queued Heroic
+    // Un-queue a pending on-next-swing strike too: the vanilla client cancels a queued Heroic
     // Strike (pressing its lit button again) with the same CMSG_CANCEL_CAST. No refund — matches the
     // charge-up-front rule in the E_NEXT_SWING handler. No-op when nothing is queued.
     if caster.next_swing_spell != 0 {
@@ -325,7 +325,7 @@ pub(crate) fn do_cancel_aura(
 }
 
 /// Is `expires_at` due to be reaped by NATURAL EXPIRY at `now`? Two rules, both preserved byte-for-byte
-/// from the pre-232 `auras.iter().filter(|a| a.expires_at <= now && a.eff_kind != A_STEALTH)` full scan:
+/// from the `auras.iter().filter(|a| a.expires_at <= now && a.eff_kind != A_STEALTH)` full scan:
 /// (1) the boundary is INCLUSIVE (`<=`, not `<`) — an aura expiring at EXACTLY `now` reaps this tick, the
 /// mirror of the periodic pass's own inclusive `>=` final-tick boundary just below (a 3s/1s DoT ticks 3×,
 /// not 2×, then reaps on that same tick); (2) `A_STEALTH` is a permanent-until-broken PRESENCE (vanilla

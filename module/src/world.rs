@@ -260,8 +260,8 @@ pub struct WorldEntity {
     #[default(0u64)]
     pub revenge_until_ms: u64,
     // The unit's active stance/form, 0-based per the taxonomy STANCE_* convention block (THE definition
-    // site): Warrior Battle 0 (default) / Defensive 1 / Berserker 2, Druid Bear 3 / Cat 4 / DireBear 5
-    // (156). Written by the E_SET_STANCE effect (stance/form spells, importer name-rescued). The cast
+    // site): Warrior Battle 0 (default) / Defensive 1 / Berserker 2, Druid Bear 3 / Cat 4 / DireBear 5.
+    // Written by the E_SET_STANCE effect (stance/form spells, importer name-rescued). The cast
     // gate reads it (Spell.dbc Stances usability mask → `stance_allows`); the combat folds key the
     // Defensive mitigation/threat off it directly (a pure function of this field, so a switch clears
     // the old stance's effect for FREE — no aura cleanup). 0 for classes with no stance mechanic AND
@@ -324,7 +324,7 @@ pub struct WorldEntity {
 
     #[default(false)]
     pub godmode: bool,
-    /// Rest state (196): the LIVE resting flag, so `check_rest_state` can detect an inn threshold
+    /// Rest state: the LIVE resting flag, so `check_rest_state` can detect an inn threshold
     /// crossing with an in-memory compare against the already-loaded mover row — no per-heartbeat
     /// `game_character` lookup (only a threshold FLIP touches the DB). Restored from `Character.resting`
     /// at spawn; persisted back at logout. `#[default(false)]` + END-appended → `publish` auto-migrates.
@@ -523,7 +523,7 @@ pub struct EntityMotion {
 
 // ── Anti-cheat: movement plausibility (255, tier 1 — DETECT-AND-FLAG, never reject inline) ────────────
 // The mangos-anticheat lesson: rubber-banding a false positive is worse than the cheat. We LOG anomalies
-// and leave the position write untouched; a GM tool (205) surfaces the flags. Per-character score = the
+// and leave the position write untouched; a GM tool surfaces the flags. Per-character score = the
 // COUNT of a guid's rows (no separate counter table — a detect-and-flag MVP doesn't need O(1) reads).
 pub const MOVE_VIOLATION_SPEED: u8 = 1; // observed speed over the client's own elapsed time > allowed
 pub const MOVE_VIOLATION_TELEPORT: u8 = 2; // a single heartbeat delta larger than any legit step
@@ -631,8 +631,8 @@ pub(crate) fn score_and_log_movement(ctx: &ReducerContext, guid: u64, delta: &Mo
     });
 }
 
-/// A logged movement-plausibility anomaly (255). One row per flagged delta; the flag is advisory (the
-/// move was NOT rejected). Not `public` — server-internal until the GM console (205) surfaces it. These
+/// A logged movement-plausibility anomaly. One row per flagged delta; the flag is advisory (the
+/// move was NOT rejected). Not `public` — server-internal until the GM console surfaces it. These
 /// are recent diagnostics, reaped after the shared `EVENT_TTL_MICROS` window so a benchmark's intentional
 /// speeders cannot grow the table without bound. Query a live character with
 /// `SELECT * FROM game_movement_violation WHERE guid = :guid`; durable forensics belongs in reducer logs.
@@ -1138,7 +1138,7 @@ pub(crate) fn apply_player_login(
     if consumed {
         character.last_logout_micros = 0;
     }
-    // Rest state (196): resume the LIVE accrual clock if this character logs back in still flagged
+    // Rest state: resume the LIVE accrual clock if this character logs back in still flagged
     // resting (logged out in an inn). The first movement heartbeat re-detects and clears it if they've
     // since walked out. The spawn baked the RESTED byte into PLAYER_BYTES_2 from `character.resting`.
     if character.resting {
@@ -1448,9 +1448,9 @@ pub(crate) fn apply_movement_update(
     // pure-turn / stationary heartbeat (which does not) — vanilla breaks a channel on movement, not on
     // turning in place. Compared below, after the row is persisted.
     let (old_x, old_y, old_z) = (mover.x, mover.y, mover.z);
-    // Exploration (200): the pre-move grid cell, to gate the area check to a real cell crossing below.
+    // Exploration: the pre-move grid cell, to gate the area check to a real cell crossing below.
     let (old_gx, old_gy) = (mover.grid_x, mover.grid_y);
-    // Anti-cheat (255): the mover's prior heartbeat time, for the speed check's dt. Read here before the
+    // Anti-cheat: the mover's prior heartbeat time, for the speed check's dt. Read here before the
     // row overwrites last_move_ms below. The player/godmode/GM exemptions live in score_and_log_movement.
     let old_move_ms = mover.last_move_ms;
     // SNAPSHOT PERSISTENCE (perf catalog 2.2): the fields whose change forces the row write below.
@@ -1482,7 +1482,7 @@ pub(crate) fn apply_movement_update(
     let mover_guid = mover.guid;
     let map_id = mover.map_id;
     let instance_id = mover.instance_id;
-    // FALL DAMAGE (058): a landing packet carries the client's airborne time — fold it through the
+    // FALL DAMAGE: a landing packet carries the client's airborne time — fold it through the
     // shared curve (lyracore_shared::env, the SAME one the gateway's flavor-log line uses). The
     // health/lethal DECISION is `resolve_fall_damage` (pure, tested); this block only computes the
     // curve's raw damage figure and applies the decision. Godmode and already-dead movers skip.
@@ -1500,7 +1500,7 @@ pub(crate) fn apply_movement_update(
         }
     }
     // AREA CROSSING: on crossing into a new grid cell, resolve the position's area ONCE and drive
-    // both hooks off it — discovery XP (200) if this is a fresh subzone, and the authoritative zone
+    // both hooks off it — discovery XP if this is a fresh subzone, and the authoritative zone
     // transition the Gateway routes zone-scoped delivery on. Gated on the grid change so the lookup
     // runs ~once per 50 yd, not per heartbeat; a grid change also forces the single `update` below,
     // so both hooks' mutations to `mover` persist without a second write. Unimported terrain or area
@@ -1511,7 +1511,7 @@ pub(crate) fn apply_movement_update(
             apply_zone_transition(ctx, &mut mover, Some(crate::terrain::zone_of(&area)));
         }
     }
-    // Rest state (196): not grid-gated (an inn is smaller than a 50yd cell) but THROTTLED to
+    // Rest state: not grid-gated (an inn is smaller than a 50yd cell) but THROTTLED to
     // ~1Hz per mover: gate on the heartbeat clock crossing a second boundary. At run
     // speed that is a check every ~7yd — still finer than any inn — and it removes a per-
     // heartbeat rest evaluation from the hottest path on the server (measured: the per-move
@@ -1594,7 +1594,7 @@ pub(crate) fn apply_movement_update(
         crate::spell::break_channel(ctx, mover_guid);
     }
 
-    // Anti-cheat (255): score this delta for speed / teleport plausibility and LOG (never reject) any
+    // Anti-cheat: score this delta for speed / teleport plausibility and LOG (never reject) any
     // anomaly (exemptions — player-only, godmode, GM — are enforced inside the helper). Server-side
     // teleport/blink/charge write the stored position first, so the following client delta is small and
     // auto-exempt (no special-case).
@@ -1828,7 +1828,7 @@ pub(crate) fn do_repop(ctx: &ReducerContext, guid: u64) -> Result<(), String> {
 /// its persist, so a preserved ghost there would have nothing to reclaim). A dead-but-UNRELEASED
 /// player (death screen, no ghost flag yet) deliberately does NOT preserve: the only cross-map paths
 /// a dead-unreleased player can take are GM/debug teleports (movement is frozen pre-release), and
-/// rebuilding those alive-at-1-HP matches the pre-226 behavior for that GM edge. Pure. [226]
+/// rebuilding those alive-at-1-HP is intended for that GM edge. Pure.
 pub(crate) fn persisted_pending_ghost(dead: bool, player_flags: u32, set_offline: bool) -> bool {
     !set_offline && dead && player_flags & lyracore_shared::constants::player_flags::GHOST != 0
 }
@@ -2049,7 +2049,7 @@ pub(crate) fn persist_entity(ctx: &ReducerContext, entity: &WorldEntity, set_off
             // offline span. Only on a REAL logout/disconnect (set_offline) — the ghost-relog cleanup
             // path passes false, so it never falsely starts the rest clock.
             c.last_logout_micros = ctx.timestamp.to_micros_since_unix_epoch() as u64;
-            // Rest state (196): persist the live resting flag (so `player_login` picks the full vs 1/4
+            // Rest state: persist the live resting flag (so `player_login` picks the full vs 1/4
             // offline rate) and BANK any live accrual before the offline clock takes over from the
             // logout stamp — otherwise the online stay's rested would be lost.
             c.resting = entity.resting;
@@ -2425,7 +2425,7 @@ mod tests {
             "alive + stale GHOST flag is not a ghost"
         );
         // Dead but UNRELEASED (death screen, no ghost flag): deliberately NOT preserved — see the
-        // fn's doc comment (GM-teleport edge keeps the pre-226 alive-at-1-HP rebuild).
+        // fn's doc comment (GM-teleport edge keeps the alive-at-1-HP rebuild).
         assert!(
             !persisted_pending_ghost(true, 0, false),
             "dead-unreleased does not preserve"

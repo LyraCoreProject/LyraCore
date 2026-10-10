@@ -434,7 +434,7 @@ pub(crate) fn apply_buy_item(
     if tmpl.buy_price == 0 {
         return Err("item cannot be bought".to_string());
     }
-    // Reputation vendor discount (195): Honored+ with the vendor's parent faction cuts the BUY price
+    // Reputation vendor discount: Honored+ with the vendor's parent faction cuts the BUY price
     // (vanilla 5% per rank above Neutral — Honored 10%). Sell is unchanged. Neutral / no-standing / a
     // factionless vendor → 0% → full price. Applied at this single buy chokepoint, after the count math.
     let cost = {

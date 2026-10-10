@@ -8,7 +8,7 @@ use crate::{game_character, game_creature_template, game_world_entity};
 // Tables, taxonomy consts, math helpers, and the control predicates are all re-exported by `spell::mod`.
 use crate::spell::*;
 // game_skill_ability lives in the skilldata module — its accessor trait must be in scope for the
-// data-driven recipe skill-up (282).
+// data-driven recipe skill-up.
 use crate::skilldata::game_skill_ability;
 // game_script (the Runtime Script identity table) is NOT re-exported at the crate root — see its
 // module doc — so the E_SCRIPTED arm reaches it by explicit path.
@@ -31,7 +31,7 @@ pub(crate) struct EffectHit {
     pub resisted: u32, // magic resisted off the crit-scaled hit (0 for physical / unresisted)
     pub absorbed: u32, // soaked by A_ABSORB shields before the health write
     pub crit: bool,    // the spell-crit roll landed
-    pub healed: u32, // EFFECTIVE health restored (overheal excluded) — feeds SMSG_SPELLHEALLOG (251)
+    pub healed: u32,   // EFFECTIVE health restored (overheal excluded) — feeds SMSG_SPELLHEALLOG
 }
 impl EffectHit {
     fn none() -> Self {
@@ -432,7 +432,7 @@ pub(crate) fn aura_apply(
     // every sibling effect sharing its spell_id, not just the A_SEAL-tagged row, or the displaced seal's
     // other effects (AP/haste) would linger as an orphaned buff after the swap. Generic over A_SEAL — no
     // spell id hardcoded here, but the OTHER seal's spell_id is looked up to scope the sibling sweep.
-    // `displace_auras` is the shared collect-then-delete mechanism (381) — this call site's only job is
+    // `displace_auras` is the shared collect-then-delete mechanism — this call site's only job is
     // to name WHICH spell_ids it displaces.
     if e.kind == A_SEAL {
         let other_seal_spell_ids: std::collections::HashSet<u32> = auras
@@ -936,7 +936,7 @@ fn apply_damage_effect(
             // points` (the existing Fireball still hits for 20 on the L2 player — baseline byte-identical).
             let sp = spell_power(ctx, caster_guid, hdr.school_mask);
             let scaled = compose_magnitude(points, sp, SPELL_POWER_COEFF_PCT);
-            // Spell-modifier fold (264): the caster's A_SPELLMOD damage-op auras (fire-damage-%
+            // Spell-modifier fold: the caster's A_SPELLMOD damage-op auras (fire-damage-%
             // talents etc.) move THIS spell's direct damage — flat then percent, before crit
             // (crit amplifies the modified base, mirroring the cast-time fold's lockstep rule).
             let (dmg_flat, dmg_pct) =
@@ -1618,7 +1618,7 @@ fn mana_burn_drain(power: u32, points: i32) -> u32 {
     (points.max(0) as u32).min(power)
 }
 
-/// E_POWER_BURN damage math (117): `drained * ratio_bp / 100`, integer floor (vanilla damage =
+/// E_POWER_BURN damage math: `drained * ratio_bp / 100`, integer floor (vanilla damage =
 /// drained mana * EffectMultipleValue; Mana Burn's is 0.5, carried on the effect row as `p1` = 50
 /// basis-points). `ratio_bp <= 0` (unauthored/default data) is treated as 100 (1:1) so a spell that
 /// never got its multiplier seeded doesn't silently deal zero damage. Pure, unit-tested.
@@ -1790,7 +1790,7 @@ pub(crate) fn dynamic_object_guid(area_id: u64) -> u64 {
     (0xF100u64 << 48) | area_id
 }
 
-/// Charge (261): RUSH the caster along the ground into melee of the target — a server-driven spline (the
+/// Charge: RUSH the caster along the ground into melee of the target — a server-driven spline (the
 /// same `SMSG_MONSTER_MOVE` leg creatures use for chase), NOT the old instant teleport-snap. Lands ~3yd
 /// short facing the target. The straight rush is obstruction-clamped (vanilla Charge stops short on
 /// blocked terrain — it does NOT path-find around, so no A*). The +rage rides a separate E_ENERGIZE
@@ -2126,7 +2126,7 @@ mod effect_handler_tests {
         assert_eq!(super::pick_aura_slot(&both_full, 8888, false, 32, 48), None);
     }
 
-    /// The craft-recipe predicate is now DATA-DRIVEN (282): reagents from game_spell_reagent, the
+    /// The craft-recipe predicate is now DATA-DRIVEN: reagents from game_spell_reagent, the
     /// profession line + band from game_skill_ability — both ctx-aware, verified live in the import
     /// (P5) rather than unit-tested here. The one pure decision left is `is_profession_line`, which
     /// distinguishes a craft's skill-line ability from a combat/class spell's: a reagent-consuming

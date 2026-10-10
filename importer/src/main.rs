@@ -349,7 +349,7 @@ mod it {
     // already-verified BUY_PRICE=8 two columns later (Quality(5), Flags(6), BuyCount(7), BuyPrice(8)
     // is the standard cmangos 1.12 item_template column run).
     pub const FLAGS: usize = 6;
-    // BuyCount (080): the per-purchase stack a vendor hands over (water/food ×5, ammo ×200) —
+    // BuyCount: the per-purchase stack a vendor hands over (water/food ×5, ammo ×200) —
     // anchored between the verified Flags(6) and BUY_PRICE(8).
     pub const BUY_COUNT: usize = 7;
     pub const BUY_PRICE: usize = 8;
@@ -606,7 +606,7 @@ fn gather_node(entry: u64) -> Option<(u32, u32, u32, u32)> {
 
 pub(crate) const GO_DOOR: u8 = 0;
 pub(crate) const GO_BUTTON: u8 = 1;
-const GO_QUESTGIVER: u8 = lyracore_shared::constants::go_type::QUESTGIVER; // shared const (041) — no drift
+const GO_QUESTGIVER: u8 = lyracore_shared::constants::go_type::QUESTGIVER; // shared const — no drift
 const GO_CHEST: u8 = 3;
 const GO_GOOBER: u8 = 10;
 const GO_MEETINGSTONE: u8 = lyracore_shared::constants::go_type::MEETINGSTONE;
@@ -679,7 +679,7 @@ fn go_template_row(
 }
 
 /// DOOR/BUTTON's initial SPAWN state from the dump's own `data0` (cmangos `startOpen` [V]): nonzero →
-/// spawns OPEN (state 1), else CLOSED (state 0, the pre-211 always-closed default). Every other type
+/// spawns OPEN (state 1), else CLOSED (state 0). Every other type
 /// always spawns state 0 (CHEST closed/unlooted, GOOBER/GATHER/inert unused). Pure + fixture-tested.
 fn go_initial_state(stored_type: u8, data0: u32) -> u8 {
     if (stored_type == GO_DOOR || stored_type == GO_BUTTON) && data0 != 0 {
@@ -1034,7 +1034,7 @@ pub(crate) struct Args {
     server: String,
     pub(crate) apply: bool,
     pub(crate) family: Option<String>,
-    // clear+reload instead of the full ETL. `None` = full run (byte-identical to pre-216 behavior).
+    // clear+reload instead of the full ETL. `None` = full run.
     pub(crate) source_sha: String,
     // classic-db commit this dump came from. It is threaded into every `stamp_import_meta` call this
     // run makes. Empty string ("") when not given (no external provenance to record).
@@ -1739,7 +1739,7 @@ fn distinct_race_class_combos(rows: &[(u32, u32)]) -> usize {
 /// Clear+reload SQL for `game_createinfo_spell` from cmangos `playercreateinfo_spell`.
 /// **FLIPS THE SOURCE FROM SEED TO IMPORT**: `module/src/seed.rs::seed_createinfo_spells` only inserts
 /// the hand-authored `CREATEINFO_KIT` rows if the table is EMPTY (the `game_start_position` / Talent.dbc
-/// (207) precedent — an importer clear+reload REPLACES whatever is there, seed or a prior import; it
+/// precedent — an importer clear+reload REPLACES whatever is there, seed or a prior import; it
 /// does not merge or coexist with it). The `id >= 0` DELETE is a tautology on the unsigned PK (mirrors
 /// 207's own phrasing) — it's a wholesale wipe, not a conditional one. A character created BEFORE this
 /// import keeps the `game_player_spell` rows ITS creation already copied (durable, per-character); only
@@ -2168,7 +2168,7 @@ fn parse_npc_text_slots(
 }
 
 /// The first non-empty (male-then-female) text across all 8 slots — the back-compat single string
-/// (`game_npc_text.text`, matching the pre-217 single-slot importer behavior), derived from the SAME
+/// (`game_npc_text.text`), derived from the SAME
 /// parsed slots the multi-slot table uses, so the two can never disagree.
 fn slots_first_nonempty(slots: &[NpcTextSlot; 8]) -> String {
     for (male, female, _) in slots {
@@ -2596,7 +2596,7 @@ fn parse_ref_pools(dump: &str) -> std::collections::HashMap<u64, Vec<(u64, f64, 
 /// pool reachable from itself (directly or transitively) stops re-entering rather than looping forever
 /// — cmangos data isn't expected to cycle, but the importer never trusts the operator's dump not to.
 /// Quest-only rows (`chance < 0`) inside a pool are skipped (no cmangos pool is quest-gated in this
-/// family; the pre-210 one-level behavior already dropped them the same way).
+/// family).
 fn resolve_ref_pool(
     pool_id: u64,
     refs: &std::collections::HashMap<u64, Vec<(u64, f64, i64, u32)>>,
@@ -2647,7 +2647,7 @@ fn resolve_ref_pool(
 /// (`resolve_ref_pool`, cycle-guarded), a FRESH `visited` set per referencing row, so the
 /// SAME pool resolves independently for every entry that references it (only a resolution's OWN
 /// recursion path is cycle-guarded, not the whole import). `quest_only` is cmangos's
-/// `ChanceOrQuestChance < 0` marker, KEPT (not folded away like the pre-210 `.abs()`-only behavior) so
+/// `ChanceOrQuestChance < 0` marker, KEPT (not folded away with `.abs()`) so
 /// the module can gate the roll on quest possession at roll time (see the module doc). A
 /// raw-chance-0 row is an empty placeholder → skipped.
 // ETL row shapes: each tuple is one parsed cmangos `*_loot_template` row, kept positional so the
@@ -3453,7 +3453,7 @@ fn build_items_and_loot(
             startquest_nonzero_count += 1;
         }
         let bag_family: u32 = field(&row, it::BAG_FAMILY).parse().unwrap_or(0);
-        // BuyCount (080): floor at 1 — a 0 in the dump (or a parse miss) must not sell zero items.
+        // BuyCount: floor at 1 — a 0 in the dump (or a parse miss) must not sell zero items.
         let buy_count: u32 = field(&row, it::BUY_COUNT).parse().unwrap_or(1).max(1);
         let food_type: u8 = field(&row, it::FOOD_TYPE).parse().unwrap_or(0);
         // ON-USE SPELL OVERRIDE: a curated entry's spellid_1/spelltrigger_1 is OUR synthetic
@@ -3866,7 +3866,7 @@ pub(crate) const FAMILIES: &[&str] = &[
 const SPAWN_BATCH: usize = 250;
 
 /// Whether `name`'s DELETE+INSERT block should be pushed/applied this run: true when `--family` was
-/// not given (full run — every family active, BYTE-IDENTICAL to pre-216 behavior) or when it names
+/// not given (full run — every family active) or when it names
 /// exactly this family.
 pub(crate) fn family_active(args: &Args, name: &str) -> bool {
     match &args.family {
@@ -4900,7 +4900,7 @@ fn collect_gameobject_spawns(dump: &str, scope: &WorldImportScope) -> Gameobject
         })
         .collect();
     // GOOBER entries (ALL, not just spawned) — kept for `build_quests`' USE_GAMEOBJECT objective gate
-    // below (unchanged behavior from pre-211: a quest referencing a non-GOOBER or unimported GO entry
+    // below (a quest referencing a non-GOOBER or unimported GO entry
     // is dropped rather than left stuck).
     let goober_entries: std::collections::HashSet<u64> = go_meta
         .iter()
@@ -5368,7 +5368,7 @@ fn push_world_content_statements(args: &Args, content: MappedContent, stmts: &mu
     }
 
     if family_active(args, "gossip") {
-        // RESERVED RANGES (283): the ETL owns only the low id bands (it emits dense low ids); a
+        // RESERVED RANGES: the ETL owns only the low id bands (it emits dense low ids); a
         // PACKAGE that mints its own gossip (e.g. the dynamic-events guard) uses the high bands —
         // menu.entry ≥ 1_000_000 (above every real creature entry), and option.row_id / text_id /
         // slot.id ≥ 50_000 — so a routine import never wipes package rows. Documented in danger-zones.
@@ -6154,7 +6154,7 @@ mod tests {
         // DOOR/BUTTON with a nonzero startOpen (dump data0) spawn OPEN (state 1).
         assert_eq!(go_initial_state(GO_DOOR, 1), 1);
         assert_eq!(go_initial_state(GO_BUTTON, 1), 1);
-        // DOOR/BUTTON with startOpen == 0 spawn CLOSED (state 0) — the pre-211 default.
+        // DOOR/BUTTON with startOpen == 0 spawn CLOSED (state 0).
         assert_eq!(go_initial_state(GO_DOOR, 0), 0);
         assert_eq!(go_initial_state(GO_BUTTON, 0), 0);
         // Every OTHER type always spawns state 0 regardless of data0 (data0 means something else there
@@ -6553,7 +6553,7 @@ mod tests {
 
     /// A template with no resistance/spell-3-5/skill/rep/maxcount/flags/page_text/startquest/
     /// bag_family data at all keeps every column at 0, the additive-migration
-    /// baseline (byte-identical to the pre-213 shape for an ordinary existing item like the starter
+    /// baseline (unchanged for an ordinary existing item like the starter
     /// Worn Shortsword). Built the same index-constant-driven way as the row above, so a real
     /// no-frills weapon row round-trips with every new column zeroed.
     #[test]

@@ -188,9 +188,9 @@ pub struct GossipSelectPayload {
     pub npc_guid: u64,
     /// The clicked option's POSITION in the per-player filtered menu — NOT stable across viewers
     /// (a cond-gated row or a second option renumbers it). Kept for the vendor/inn routing; a hook
-    /// that needs to identify a SPECIFIC option must use `option_row_id` instead (283).
+    /// that needs to identify a SPECIFIC option must use `option_row_id` instead.
     pub option_id: u32,
-    /// The clicked option's `game_gossip_option.row_id` — the STABLE identifier (283). A package
+    /// The clicked option's `game_gossip_option.row_id` — the STABLE identifier. A package
     /// that mints its own gossip option at a known reserved row_id (≥50000) keys on this, immune to
     /// menu position. `u32::MAX` for the trailing Farewell line and the flag-synthesized
     /// vendor/inn/browse options (which have no imported row).

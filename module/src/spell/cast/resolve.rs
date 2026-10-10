@@ -266,7 +266,7 @@ pub(crate) fn resolve_cast_at_typed(
         }
     }
 
-    // Notify-hook (146): the cast fully RESOLVED — every cast path (player, timed completion,
+    // Notify-hook: the cast fully RESOLVED — every cast path (player, timed completion,
     // channel, creature, triggered, debug) funnels through this success exit. Rejections above
     // returned Err and never reach here.
     crate::hooks::fire_on_cast_resolved(
@@ -1147,7 +1147,7 @@ fn check_cast_gate_suffix(
     // fan-out in `select_targets` re-checks `is_hostile`/`is_friendly` PER resolved target, so a PBAoE
     // (explicit==0, which skips this gate) is still faction-filtered there — no exploit is opened.
     if target_guid != caster_guid {
-        // A_FLAG effects are excluded from BOTH scans (266): an inert marker aura carries whatever
+        // A_FLAG effects are excluded from BOTH scans: an inert marker aura carries whatever
         // target type the DBC happened to encode (Taunt's ModTaunt marker reads ALLY, Slice and
         // Dice's read ally too — the name-fix precedent) and imposes no real faction constraint;
         // letting it vote turned Taunt into "targets allies" and refused every yank.
@@ -1194,7 +1194,7 @@ fn check_cast_gate_suffix(
         )));
     }
 
-    // Blink (116) requires its teleport DISTANCE as data — the effect's DBC radius (`radius_yd`,
+    // Blink requires its teleport DISTANCE as data — the effect's DBC radius (`radius_yd`,
     // SpellRadius.dbc = 20yd for Blink). A 0/unauthored radius is a DATA BUG, not something to paper
     // over with a hardcoded default (a silent fallback would hide a mis-seeded spell forever). Reject
     // the cast LOUD: the Err propagates to the reducer → SMSG_CAST_FAILED at the client AND a server log.
@@ -1449,7 +1449,7 @@ pub(crate) fn begin_cast_with_admission(
     // importer from the DBC), never a spell id. Arcane Missiles' DBC `cast_time_ms` is already 0 so it would
     // take the instant path regardless; this guard makes a channel resolve-now even if a channeled spell
     // carried a nonzero cast time, and documents the channel path explicitly.
-    // Spell-modifier fold (264): the caster's A_SPELLMOD auras (Improved Fireball et al) move THIS
+    // Spell-modifier fold: the caster's A_SPELLMOD auras (Improved Fireball et al) move THIS
     // spell's cast time — flat then percent, floored at 0. The folded value drives the
     // instant-vs-timed branch, the completion schedule AND the START event's cast bar in LOCKSTEP
     // (a bar that lies about the fire time is the wedge class the cast-lock saga taught us).

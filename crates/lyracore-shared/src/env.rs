@@ -1,4 +1,4 @@
-//! Environmental damage (058): fall damage from the client-reported airborne time. Shared by the
+//! Environmental damage: fall damage from the client-reported airborne time. Shared by the
 //! module (applies the damage in `movement_update`) and the gateway (sends the matching
 //! `SMSG_ENVIRONMENTAL_DAMAGE_LOG` flavor line) so the two can never drift.
 

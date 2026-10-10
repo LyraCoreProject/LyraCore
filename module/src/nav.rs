@@ -203,8 +203,8 @@ pub fn import_nav_chunks_append(ctx: &ReducerContext, packed: String) -> Result<
 
 // ===========================================================================================
 //  Runtime consumption, the module-side wrappers over `lyracore_shared::nav`'s
-//  pure queries, gated on `game_config.nav_enabled` (default OFF; the 244 benchmark + live
-//  verify flips it). Every wrapper degrades to the pre-243 straight-line behavior when the
+//  pure queries, gated on `game_config.nav_enabled` (default OFF; the benchmark + live
+//  verify flips it). Every wrapper degrades to straight-line behavior when the
 //  flag is off or a chunk is missing. `route_step` holds position when no path exists.
 // ===========================================================================================
 
