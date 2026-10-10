@@ -568,6 +568,74 @@ pub fn build_create_object(
     })
 }
 
+/// Create the Character with its existing quest log already populated, so map changes do not
+/// introduce an empty-to-populated quest transition.
+pub fn build_self_create_object(
+    entity: &EntityView,
+    inventory: &[ItemInstanceView],
+    learned_skills: &[(u32, u16, u16)],
+    quests: &[update_mask::QuestLogSlot],
+) -> Result<SMSG_UPDATE_OBJECT> {
+    use wow_world_messages::vanilla::ServerMessage;
+
+    let mut create =
+        build_create_object(entity, CreateKind::SelfPlayer, inventory, learned_skills)?;
+    if quests.is_empty() {
+        return Ok(create);
+    }
+    anyhow::ensure!(
+        quests
+            .iter()
+            .all(|q| u16::from(q.slot) < update_mask::idx::QUEST_LOG_SLOTS),
+        "quest log slot outside the Character descriptor"
+    );
+    let Object::CreateObject2 { mask2, .. } = &mut create.objects[0] else {
+        unreachable!("build_create_object returns one CREATE_OBJECT2");
+    };
+    // The typed codec has no quest timer setters or public field-index setter. Its message
+    // reader does preserve those fields. Use a local VALUES envelope to extend the mask, then
+    // put it back in CREATE. This envelope carries OBJECT_FIELD_TYPE and must never be sent.
+    let envelope = SMSG_UPDATE_OBJECT {
+        has_transport: 0,
+        objects: vec![Object::Values {
+            guid1: Guid::new(0),
+            mask1: mask2.clone(),
+        }],
+    };
+    let mut bytes = Vec::new();
+    envelope.write_unencrypted_server(&mut bytes)?;
+    let decoded = lyracore_shared::values_mask::parse_values_updates(&bytes[4..]);
+    let fields = &decoded
+        .first()
+        .ok_or_else(|| anyhow!("could not read CREATE descriptor"))?
+        .fields;
+    let mut mask = update_mask::UpdateMaskValues::new();
+    for &(index, value) in fields {
+        mask.set_u32(index, value);
+    }
+    let quest_mask = update_mask::full_quest_log_mask(quests);
+    for index in update_mask::idx::PLAYER_QUEST_LOG_1_1
+        ..update_mask::quest_log_field(update_mask::idx::QUEST_LOG_SLOTS, 0)
+    {
+        mask.set_u32(index, quest_mask.get(index).unwrap_or(0));
+    }
+    // Header, object count, transport flag, VALUES tag, and the one-byte packed zero guid.
+    bytes.truncate(4 + 4 + 1 + 1 + 1);
+    mask.write_to(&mut bytes);
+    let size = u16::try_from(bytes.len() - 2)?;
+    bytes[..2].copy_from_slice(&size.to_be_bytes());
+    let ServerOpcodeMessage::SMSG_UPDATE_OBJECT(mut envelope) =
+        ServerOpcodeMessage::read_unencrypted(&mut bytes.as_slice())?
+    else {
+        unreachable!("the local envelope is SMSG_UPDATE_OBJECT");
+    };
+    let Object::Values { mask1, .. } = envelope.objects.remove(0) else {
+        unreachable!("the local envelope contains one VALUES descriptor");
+    };
+    *mask2 = mask1;
+    Ok(create)
+}
+
 /// Which world entry a login sequence serves — `SMSG_LOGIN_VERIFY_WORLD` is a command to load the
 /// named map, so only a fresh login may carry it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

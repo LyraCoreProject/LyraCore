@@ -4286,3 +4286,52 @@ fn item_guid_allocation_bits_survive_item_and_container_wire_updates() {
         }
     }
 }
+
+#[test]
+fn self_create_preserves_non_quest_fields_and_movement() {
+    let entity = warrior_entity();
+    let original = build_create_object(&entity, CreateKind::SelfPlayer, &[], &[]).unwrap();
+    let quests = [update_mask::QuestLogSlot {
+        slot: 19,
+        quest_id: 777,
+        counts: vec![3],
+        state: 0,
+        timer: 123456,
+    }];
+    let created = build_self_create_object(&entity, &[], &[], &quests).unwrap();
+    let descriptor = |packet: SMSG_UPDATE_OBJECT| {
+        let Object::CreateObject2 {
+            guid3,
+            object_type,
+            movement2,
+            mask2,
+        } = packet.objects[0].clone()
+        else {
+            panic!("expected a Character CREATE");
+        };
+        let values = SMSG_UPDATE_OBJECT {
+            has_transport: 0,
+            objects: vec![Object::Values {
+                guid1: guid3,
+                mask1: mask2,
+            }],
+        };
+        let mut bytes = Vec::new();
+        values.write_unencrypted_server(&mut bytes).unwrap();
+        let mut updates = lyracore_shared::values_mask::parse_values_updates(&bytes[4..]);
+        updates[0]
+            .fields
+            .retain(|(index, _)| !(198..258).contains(index));
+        (guid3, object_type, movement2, updates)
+    };
+    assert_eq!(descriptor(original), descriptor(created));
+}
+
+#[test]
+fn self_create_with_no_quests_matches_the_ordinary_create() {
+    let entity = warrior_entity();
+    assert_eq!(
+        build_self_create_object(&entity, &[], &[], &[]).unwrap(),
+        build_create_object(&entity, CreateKind::SelfPlayer, &[], &[]).unwrap(),
+    );
+}

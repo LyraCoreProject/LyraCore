@@ -1,7 +1,6 @@
 //! Character selection, world entry, and connection-level ping and Realm Clock replies.
 
 use super::super::*;
-use super::quest::{quest_log_update, QuestActionStore};
 use super::vendor::build_buyback_view_replay;
 
 /// Character select, and the per-Character reads world entry builds the self CREATE from.
@@ -115,28 +114,6 @@ fn abort_pending_transfer<St: TransferStore + ?Sized>(
     }
 }
 
-/// Build + send the player's quest-log descriptor fields as a raw VALUES update, the
-/// world-entry copy of the block, sent right after the self CREATE. A no-op when the gate is off
-/// or the player has no active quests (`quest_log_update` returns an empty batch, so the CREATE
-/// packet's already-zeroed fields stand). The in-session relay on accept / progress / turn-in is
-/// `stdb::subscriptions`'s `quest_log_sync`, which renders the same descriptor from the same
-/// builders.
-fn send_quest_log<St: QuestActionStore + ?Sized>(
-    tx: &SessionTx,
-    store: &St,
-    player_guid: u64,
-) -> Result<()> {
-    if !crate::config::quest_log_fields_enabled() {
-        return Ok(());
-    }
-    // A read failure is treated as an empty log, not a login failure — the same defensive
-    // `unwrap_or_default` every other read in `enter_world` uses; this one is display-only too.
-    for message in quest_log_update(store, player_guid).unwrap_or_default() {
-        send(tx, message)?;
-    }
-    Ok(())
-}
-
 /// Rebuild the Character's entity and subscriptions, then send its entry batch.
 /// The bound Store retains Account ownership across a map change. Entry after a map change omits
 /// `SMSG_LOGIN_VERIFY_WORLD`, which would tell the client to load the map again.
@@ -182,8 +159,14 @@ fn enter_world(
             codec::build_item_create_object(item),
         )));
     }
+    let quests_enabled = crate::config::quest_log_fields_enabled();
+    let quests = if quests_enabled {
+        store.player_quest_log(character_guid)?
+    } else {
+        Vec::new()
+    };
     batch.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
-        codec::build_create_object(&entity, codec::CreateKind::SelfPlayer, &items, &skills)?,
+        codec::build_self_create_object(&entity, &items, &skills, &quests)?,
     )));
     // The environment, closing the same contiguous batch: the client must land with the right sky
     // rather than the last one it rendered, so this is Instant and is sent on EVERY world entry —
@@ -219,6 +202,30 @@ fn enter_world(
     // is seeded with self_guid so the player's own row (delivered on initial apply) is skipped.
     let subs =
         store.subscribe_player_events(conn.account_id, character_guid, &entity, tx.clone())?;
+    if quests_enabled {
+        // A quest can change before viewer registration. Read again on the writer, where live
+        // quest Relays also read, so reconciliation cannot overwrite newer queued progress.
+        let store = conn.store.current();
+        let close = tx.clone();
+        send(
+            tx,
+            Outbound::Job(Box::new(move || {
+                match store.player_quest_log(character_guid) {
+                    Ok(current) if current != quests => {
+                        let mask = codec::update_mask::full_quest_log_mask(&current);
+                        let (opcode, body) = codec::build_values_update_raw(character_guid, &mask);
+                        vec![Outbound::Raw { opcode, body }]
+                    }
+                    Ok(_) => Vec::new(),
+                    Err(error) => {
+                        log::error!("world: quest log reconciliation failed for guid {character_guid}: {error:#}");
+                        close.close();
+                        Vec::new()
+                    }
+                }
+            })),
+        )?;
+    }
     // Replay the buyback-tab view (the ring persists across sessions; without this the tab
     // is empty until the first in-session sell).
     for message in build_buyback_view_replay(store, character_guid) {
@@ -289,9 +296,6 @@ fn enter_world(
         open_loot: OpenLootState::default(),
         ranged_repeat: false,
     });
-    // Quest-log window: sent as a separate raw VALUES update AFTER the CREATE
-    // (gtker's CREATE can't carry these walled fields), gated behind LYRACORE_QUEST_LOG until verified.
-    send_quest_log(tx, store, character_guid)?;
     // If the player carries ammo (a Projectile item, class 6), tell the client it's loaded
     // (PLAYER_AMMO_ID) so Auto Shot is usable. Deliberate simplification: login-time only — no
     // live re-send on pickup/runout (the next login re-syncs; the shot itself gates on the bag

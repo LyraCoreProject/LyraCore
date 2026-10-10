@@ -8,6 +8,8 @@ pub(crate) struct QuestState {
     pub(crate) quest_details: Vec<codec::QuestDetailView>,
     /// The player's quest-log slots `player_quest_log` returns (drives the login descriptor block).
     pub(crate) quest_log_slots: Vec<codec::update_mask::QuestLogSlot>,
+    pub(crate) quest_log_read_error: Option<String>,
+    pub(crate) quest_log_after_subscribe: Option<Vec<codec::update_mask::QuestLogSlot>>,
     /// Recorded `turn_in_quest` dispatches: (actor, giver, quest, reward_index) — so the
     /// choose-reward socket test asserts the player's pick reached the store unchanged.
     pub(crate) turned_in: std::sync::Mutex<Vec<(u64, u64, u32, u32)>>,
@@ -69,6 +71,14 @@ impl QuestActionStore for WorldFake {
     }
 
     fn player_quest_log(&self, _player_guid: u64) -> Result<Vec<codec::update_mask::QuestLogSlot>> {
+        if let Some(error) = &self.quest.quest_log_read_error {
+            return Err(anyhow!(error.clone()));
+        }
+        if !self.session.subscribed.lock().unwrap().is_empty() {
+            if let Some(slots) = &self.quest.quest_log_after_subscribe {
+                return Ok(slots.clone());
+            }
+        }
         Ok(self.quest.quest_log_slots.clone())
     }
 
