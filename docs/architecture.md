@@ -763,7 +763,7 @@ warning banner states plainly, not a contradiction to resolve in this document.
 | [`testing.md`](./testing.md) | The test tiers and the commands CI runs. |
 | Recipes | Step lists for common changes: [add an opcode](./recipes/add-an-opcode.md), [add a spell effect](./recipes/add-a-spell-effect.md). |
 | [`schema.md`](./schema.md) | The table-level data model. |
-| [`package-api.md`](./package-api.md) | The Package API, version 1: what a Package's Rust half may call, and what core promises about it. |
+| [`package-api.md`](./package-api.md) | The Package API, version 2: what a Package's Rust half may call, and what core promises about it. |
 
 ### Operating and building
 

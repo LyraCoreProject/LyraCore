@@ -90,7 +90,9 @@ A login. Owns characters.
 
 **Character**:
 A guid-owned player entity.
-_Avoid_: player (as a noun in code)
+The public Runtime Script authoring API calls a Character `player`, as in `event.player` and
+`PlayerLoginEvent`. Core code uses Character.
+_Avoid_: player as a noun in Core code outside that authoring contract
 
 **Session**:
 The Module's record that an Account is logged in on a Character.

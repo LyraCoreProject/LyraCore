@@ -1876,6 +1876,7 @@ dependencies = [
  "lyracore-shared",
  "lyracore-test-support",
  "piccolo",
+ "serde",
  "serde_json",
  "spacetimedb",
 ]

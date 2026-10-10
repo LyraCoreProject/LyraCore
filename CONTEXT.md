@@ -37,7 +37,7 @@ A World of Warcraft 1.12.1 server. Game state lives in SpacetimeDB; the gateway 
 
 **R** [Raid](#sharding-and-transfer) · [Raid Quest](#sharding-and-transfer) · [Raid Slot](#sharding-and-transfer) · [Random Property](#random-properties) · [Ranged Posture](#creature-ai) · [Rank Rights](#guilds) · [Ready Check](#sharding-and-transfer) · [Realm](#realm-topology) · [Realm Chat Line](#chat) · [Realm Clock](#world-clock-and-weather) · [Realm Presence](#chat) · [Realm-core](#realm-topology) · [Recorded Revision](#packages) · [Recovery Attempt](#sharding-and-transfer) · [Recovery Scan](#sharding-and-transfer) · [Reference Datascript](#packages) · [Reference Package](#packages) · [Refusal](#gateway-and-module) · [Relay](#gateway-and-module) · [Relay Definition](#realm-topology) · [Relay Run](#realm-topology) · [Returned Mail](#mail) · [Reward Letter](#mail) · [Roster Revision](#sharding-and-transfer) · [Roster Revision Relay](#sharding-and-transfer) · [Route Path](#procs) · [Route Step](#procs) · [Rule State](#creature-ai) · [Runtime Script](#runtime-scripts) · [Runtime Script Host](#runtime-scripts) · [Runtime Script Toolchain](#packages)
 
-**S** [Script Answer](#runtime-scripts) · [Script Artifact](#packages) · [Script Diagnostic](#runtime-scripts) · [Script Directive](#packages) · [Seam](#working-method) · [Seeker](#meeting-stones) · [Self-Resurrection Option](#death-and-resurrection) · [Service Reconciliation](#realm-topology) · [Session](#accounts-characters-and-sessions) · [Session Expiry](#accounts-characters-and-sessions) · [SessionActor](#accounts-characters-and-sessions) · [Sessionless Action Consent](#sharding-and-transfer) · [Settlement](#auctions) · [Shard](#realm-topology) · [Shard Boundary](#sharding-and-transfer) · [Shard Map](#sharding-and-transfer) · [Signature](#guilds) · [Solo Target Claim](#sharding-and-transfer) · [Soulstone](#death-and-resurrection) · [Spatial Claim](#packages) · [Speaker Facts](#chat) · [Spec](#working-method) · [Speech](#chat) · [Spell Cast Event Kind](#procs) · [Staged Effect](#runtime-scripts) · [Standalone Supervisor](#realm-topology) · [Stat Kind](#random-properties) · [Stone Add](#meeting-stones) · [Store](#working-method) · [Strategy](#sharding-and-transfer) · [Subgroup](#sharding-and-transfer) · [Suffix](#random-properties)
+**S** [Script Answer](#runtime-scripts) · [Script Artifact](#packages) · [Script Diagnostic](#runtime-scripts) · [Script Directive](#packages) · [Script Identity](#packages) · [Seam](#working-method) · [Seeker](#meeting-stones) · [Self-Resurrection Option](#death-and-resurrection) · [Service Reconciliation](#realm-topology) · [Session](#accounts-characters-and-sessions) · [Session Expiry](#accounts-characters-and-sessions) · [SessionActor](#accounts-characters-and-sessions) · [Sessionless Action Consent](#sharding-and-transfer) · [Settlement](#auctions) · [Shard](#realm-topology) · [Shard Boundary](#sharding-and-transfer) · [Shard Map](#sharding-and-transfer) · [Signature](#guilds) · [Solo Target Claim](#sharding-and-transfer) · [Soulstone](#death-and-resurrection) · [Spatial Claim](#packages) · [Speaker Facts](#chat) · [Spec](#working-method) · [Speech](#chat) · [Spell Cast Event Kind](#procs) · [Staged Effect](#runtime-scripts) · [Standalone Supervisor](#realm-topology) · [Stat Kind](#random-properties) · [Stone Add](#meeting-stones) · [Store](#working-method) · [Strategy](#sharding-and-transfer) · [Subgroup](#sharding-and-transfer) · [Suffix](#random-properties)
 
 **T** [Tabard Designer](#guilds) · [Target Icon](#sharding-and-transfer) · [Ticket](#working-method) · [Tracer](#working-method) · [Trade Commit](#trading) · [Trade Session](#trading) · [Transfer](#sharding-and-transfer) · [Transfer Intent](#sharding-and-transfer) · [Transport Loss](#gateway-and-module) · [Triggered Cast](#procs) · [Trust Review](#packages)
 
@@ -211,7 +211,10 @@ the final Gate.
 
 **Character**:
 A guid-owned player entity.
-_Avoid_: player (as a noun in code)
+The public Runtime Script authoring API calls a Character `player`, as in `events.player`,
+`event.player`, `PlayerEntity` and `PlayerLoginEvent`. The public event payload uses the same
+word, for example `victimIsPlayer`. Core code uses Character.
+_Avoid_: player as a noun in Core code outside that authoring contract
 
 **Actor**:
 The Character a Gateway Verb acts as. In the Gateway it is the `Actor` type, a nonzero guid.
@@ -1095,7 +1098,8 @@ _Avoid_: apply log, history, audit trail
 The recorded inputs `packages build` writes next to a source-built artifact, in a sibling file
 rather than inside it. A Package Delta records its Datascript source tree, generated Module
 typings, Base Snapshot, authoring library, and pinned Datascript toolchain. A source-built Script
-Artifact records its `scripts/` sources, Runtime Script Toolchain, Bun pin, and artifact hash. A
+Artifact records its `scripts/` sources, optional `script-ids.json`, Runtime Script Toolchain,
+Bun pin, and artifact hash. A
 source-free prebuilt Script Artifact has no local author inputs or Build Identity; the authoritative
 checker still parses and traces it. `lyracore packages check` and preflight recompute a present
 identity against the checkout on disk and refuse, naming the input that changed.
@@ -1132,12 +1136,23 @@ _Avoid_: script bundle, script manifest, script delta
 
 **Event Binding**:
 The event a Runtime Script runs for: a name from the Module's hook catalogue, or a Package Event of
-the shipping Package.
+the shipping Package. A source file declares one binding, such as `events.player.onLogin(welcome)`,
+and the toolchain emits an Invocation of that function with the typed event payload.
 _Avoid_: hook registration, subscription, listener
 
+**Script Identity**:
+A Runtime Script's Package and source-file stem, paired with its durable numeric ID in
+`script-ids.json`. The Runtime Script Toolchain allocates new IDs and preserves recorded ones,
+including entries whose source was removed. Renaming a handler keeps its identity; renaming its
+source file creates a new one. An independent scaffold starts with new identities.
+
 **Script Directive**:
-A `@key value` comment line at the top of a Runtime Script source, declaring what the file cannot
-say in its own code.
+A legacy `@key value` comment at the top of a Runtime Script source. Existing directives still
+build and preserve their IDs. New source declares its Event Binding in code; the toolchain records
+its Script Identity.
+Legacy directives select the legacy source contract for the whole file. They remain supported
+while Package API version 1 sources remain supported; their removal requires an explicit API
+migration.
 _Avoid_: annotation, frontmatter, pragma, metadata header
 
 **Runtime Script Toolchain**:

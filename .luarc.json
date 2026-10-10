@@ -1,0 +1,4 @@
+{
+  "runtime.version": "Lua 5.3",
+  "workspace.library": ["datascripts/runtime-scripts/runtime-script.lua"]
+}

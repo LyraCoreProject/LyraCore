@@ -10,5 +10,6 @@
     "skipLibCheck": true,
     "types": ["bun", "node"]
   },
-  "include": ["lib", "src", "tests", "generated", "runtime-scripts/build-scripts.ts"]
+  "include": ["lib", "src", "tests", "generated", "runtime-scripts/build-scripts.ts"],
+  "exclude": ["tests/fixtures/typed"]
 }

@@ -1434,6 +1434,7 @@ fn apply_delegating_effect(
                             name: format!("spell_effect:{}:{}", e.spell_id, e.effect_index),
                             actor: crate::runtime_script::EntityView::read(ctx, caster_guid),
                             target: crate::runtime_script::EntityView::read(ctx, target_guid),
+                            ..crate::runtime_script::ScriptEvent::default()
                         };
                         crate::runtime_script::invoke_by_identity(
                             ctx,

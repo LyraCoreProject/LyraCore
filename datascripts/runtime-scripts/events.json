@@ -1,0 +1,398 @@
+[
+  {
+    "event": "on_damage_taken",
+    "payloadType": "crate::hooks::DamageTakenPayload",
+    "actor": "payload.attacker_guid",
+    "target": "payload.target_guid",
+    "binding": [
+      "combat",
+      "onDamageTaken"
+    ],
+    "typeName": "DamageTakenEvent",
+    "fields": [
+      {
+        "name": "periodic",
+        "type": "boolean",
+        "source": "payload.periodic"
+      }
+    ]
+  },
+  {
+    "event": "on_death_prevented",
+    "payloadType": "crate::hooks::DeathPreventedPayload",
+    "actor": "payload.attacker_guid",
+    "target": "payload.creature_guid",
+    "binding": [
+      "creature",
+      "onDeathPrevented"
+    ],
+    "typeName": "CreatureDeathPreventedEvent",
+    "fields": []
+  },
+  {
+    "event": "on_creature_spawn",
+    "payloadType": "crate::hooks::CreatureSpawnPayload",
+    "actor": "payload.guid",
+    "target": "0",
+    "binding": [
+      "creature",
+      "onSpawn"
+    ],
+    "typeName": "CreatureSpawnEvent",
+    "fields": [
+      {
+        "name": "entry",
+        "type": "number",
+        "source": "payload.entry"
+      },
+      {
+        "name": "x",
+        "type": "number",
+        "source": "payload.x"
+      },
+      {
+        "name": "y",
+        "type": "number",
+        "source": "payload.y"
+      },
+      {
+        "name": "z",
+        "type": "number",
+        "source": "payload.z"
+      }
+    ]
+  },
+  {
+    "event": "on_levelup",
+    "payloadType": "crate::hooks::LevelupPayload",
+    "actor": "payload.character_guid",
+    "target": "0",
+    "binding": [
+      "player",
+      "onLevelUp"
+    ],
+    "typeName": "PlayerLevelUpEvent",
+    "fields": [
+      {
+        "name": "player",
+        "type": "PlayerEntity",
+        "source": "actor"
+      },
+      {
+        "name": "newLevel",
+        "type": "number",
+        "source": "payload.new_level"
+      }
+    ]
+  },
+  {
+    "event": "on_group_invite",
+    "payloadType": "crate::hooks::GroupInvitePayload",
+    "actor": "payload.inviter_guid",
+    "target": "payload.target_guid",
+    "binding": [
+      "group",
+      "onInvite"
+    ],
+    "typeName": "GroupInviteEvent",
+    "fields": []
+  },
+  {
+    "event": "on_death",
+    "payloadType": "crate::hooks::DeathPayload",
+    "actor": "payload.killer_guid",
+    "target": "payload.victim_guid",
+    "binding": [
+      "combat",
+      "onDeath"
+    ],
+    "typeName": "DeathEvent",
+    "fields": [
+      {
+        "name": "victimIsPlayer",
+        "type": "boolean",
+        "source": "payload.victim_is_player"
+      }
+    ]
+  },
+  {
+    "event": "on_kill",
+    "payloadType": "crate::hooks::KillPayload",
+    "actor": "payload.killer_guid",
+    "target": "payload.victim_guid",
+    "binding": [
+      "combat",
+      "onKill"
+    ],
+    "typeName": "KillEvent",
+    "fields": [
+      {
+        "name": "victimEntry",
+        "type": "number",
+        "source": "payload.victim_entry"
+      },
+      {
+        "name": "victimLevel",
+        "type": "number",
+        "source": "payload.victim_level"
+      }
+    ]
+  },
+  {
+    "event": "on_aggro",
+    "payloadType": "crate::hooks::AggroPayload",
+    "actor": "payload.creature_guid",
+    "target": "payload.target_guid",
+    "binding": [
+      "creature",
+      "onAggro"
+    ],
+    "typeName": "CreatureAggroEvent",
+    "fields": [
+      {
+        "name": "assist",
+        "type": "boolean",
+        "source": "payload.assist"
+      }
+    ]
+  },
+  {
+    "event": "on_cast_resolved",
+    "payloadType": "crate::hooks::CastResolvedPayload",
+    "actor": "payload.caster_guid",
+    "target": "payload.target_guid",
+    "binding": [
+      "spell",
+      "onCastResolved"
+    ],
+    "typeName": "SpellCastResolvedEvent",
+    "fields": [
+      {
+        "name": "spellId",
+        "type": "number",
+        "source": "payload.spell_id"
+      }
+    ]
+  },
+  {
+    "event": "on_cast_finished",
+    "payloadType": "crate::hooks::CastFinishedPayload",
+    "actor": "payload.caster_guid",
+    "target": "payload.target_guid",
+    "binding": [
+      "spell",
+      "onCastFinished"
+    ],
+    "typeName": "SpellCastFinishedEvent",
+    "fields": [
+      {
+        "name": "scheduledId",
+        "type": "string",
+        "source": "payload.scheduled_id"
+      },
+      {
+        "name": "outcome",
+        "type": "string",
+        "source": "match &payload.outcome { crate::spell::CastFinish::Resolved => \"resolved\", crate::spell::CastFinish::Refused(_) => \"refused\", crate::spell::CastFinish::Cancelled => \"cancelled\", crate::spell::CastFinish::Expired => \"expired\" }"
+      }
+    ]
+  },
+  {
+    "event": "on_loot",
+    "payloadType": "crate::hooks::LootPayload",
+    "actor": "payload.looter_guid",
+    "target": "payload.corpse_guid",
+    "binding": [
+      "player",
+      "onLoot"
+    ],
+    "typeName": "PlayerLootEvent",
+    "fields": [
+      {
+        "name": "itemEntry",
+        "type": "number",
+        "source": "payload.item_entry"
+      },
+      {
+        "name": "count",
+        "type": "number",
+        "source": "payload.count"
+      }
+    ]
+  },
+  {
+    "event": "on_quest_accept",
+    "payloadType": "crate::hooks::QuestAcceptPayload",
+    "actor": "payload.character_guid",
+    "target": "0",
+    "binding": [
+      "player",
+      "onQuestAccept"
+    ],
+    "typeName": "PlayerQuestAcceptEvent",
+    "fields": [
+      {
+        "name": "questEntry",
+        "type": "number",
+        "source": "payload.quest_entry"
+      }
+    ]
+  },
+  {
+    "event": "on_quest_turnin",
+    "payloadType": "crate::hooks::QuestTurninPayload",
+    "actor": "payload.character_guid",
+    "target": "0",
+    "binding": [
+      "player",
+      "onQuestTurnIn"
+    ],
+    "typeName": "PlayerQuestTurnInEvent",
+    "fields": [
+      {
+        "name": "questEntry",
+        "type": "number",
+        "source": "payload.quest_entry"
+      }
+    ]
+  },
+  {
+    "event": "on_login",
+    "payloadType": "crate::hooks::LoginPayload",
+    "actor": "payload.character_guid",
+    "target": "0",
+    "binding": [
+      "player",
+      "onLogin"
+    ],
+    "typeName": "PlayerLoginEvent",
+    "fields": [
+      {
+        "name": "player",
+        "type": "PlayerEntity",
+        "source": "actor"
+      }
+    ]
+  },
+  {
+    "event": "on_character_relocated",
+    "payloadType": "crate::hooks::CharacterRelocatedPayload",
+    "actor": "payload.character_guid",
+    "target": "0",
+    "binding": [
+      "player",
+      "onRelocated"
+    ],
+    "typeName": "PlayerRelocatedEvent",
+    "fields": []
+  },
+  {
+    "event": "on_logout",
+    "payloadType": "crate::hooks::LogoutPayload",
+    "actor": "payload.character_guid",
+    "target": "0",
+    "binding": [
+      "player",
+      "onLogout"
+    ],
+    "typeName": "PlayerLogoutEvent",
+    "fields": []
+  },
+  {
+    "event": "on_gossip_select",
+    "payloadType": "crate::hooks::GossipSelectPayload",
+    "actor": "payload.character_guid",
+    "target": "payload.npc_guid",
+    "binding": [
+      "player",
+      "onGossipSelect"
+    ],
+    "typeName": "PlayerGossipSelectEvent",
+    "fields": [
+      {
+        "name": "optionId",
+        "type": "number",
+        "source": "payload.option_id"
+      },
+      {
+        "name": "optionRowId",
+        "type": "number",
+        "source": "payload.option_row_id"
+      }
+    ]
+  },
+  {
+    "event": "on_creature_death",
+    "payloadType": "crate::hooks::CreatureDeathPayload",
+    "actor": "payload.killer_guid",
+    "target": "payload.creature_guid",
+    "binding": [
+      "creature",
+      "onDeath"
+    ],
+    "typeName": "CreatureDeathEvent",
+    "fields": [
+      {
+        "name": "entry",
+        "type": "number",
+        "source": "payload.entry"
+      },
+      {
+        "name": "instanceId",
+        "type": "string",
+        "source": "payload.instance_id"
+      }
+    ]
+  },
+  {
+    "event": "on_hp_threshold",
+    "payloadType": "crate::hooks::HpThresholdPayload",
+    "actor": "0",
+    "target": "payload.creature_guid",
+    "binding": [
+      "creature",
+      "onHpThreshold"
+    ],
+    "typeName": "CreatureHpThresholdEvent",
+    "fields": [
+      {
+        "name": "entry",
+        "type": "number",
+        "source": "payload.entry"
+      },
+      {
+        "name": "instanceId",
+        "type": "string",
+        "source": "payload.instance_id"
+      },
+      {
+        "name": "pct",
+        "type": "number",
+        "source": "payload.pct"
+      }
+    ]
+  },
+  {
+    "event": "on_go_used",
+    "payloadType": "crate::hooks::GoUsedPayload",
+    "actor": "payload.user_guid",
+    "target": "payload.go_guid",
+    "binding": [
+      "gameobject",
+      "onUsed"
+    ],
+    "typeName": "GameobjectUsedEvent",
+    "fields": [
+      {
+        "name": "entry",
+        "type": "number",
+        "source": "payload.go_entry"
+      },
+      {
+        "name": "instanceId",
+        "type": "string",
+        "source": "payload.instance_id"
+      }
+    ]
+  }
+]

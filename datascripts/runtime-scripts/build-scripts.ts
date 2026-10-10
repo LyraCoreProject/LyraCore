@@ -1,61 +1,21 @@
-// Compile one Package's Runtime Scripts into its Script Artifact.
-//
-//   bun run datascripts/runtime-scripts/build-scripts.ts <package>
-//
-// `lyracore packages build` runs this once per enabled Package that carries a `scripts/` folder,
-// the same way it runs a Datascript: one Bun subprocess, one artifact written, non-zero on any
-// refusal and nothing written. Run it by hand the same way.
-//
-// # What a Package ships
-//
-// `packages/<package>/scripts/` holds the sources. A `.ts` file is compiled by the pinned
-// `typescript-to-lua` under `tsconfig.json` next to this file; a `.lua` file is shipped unchanged,
-// for the author who would rather write Lua. Both carry the same directive header:
-//
-//     // @event on_login          -- @event on_login
-//     // @id 100200               -- @id 100201
-//     // @priority 10             -- @priority 10
-//     // @enabled false           -- @enabled false
-//
-// `@event` and `@id` are required; `@priority` defaults to 0 and `@enabled` to true. The directives
-// stop at the first line that is neither blank nor a comment, so ordinary comments below them are
-// just comments.
-//
-// # Why the identifier is written down
-//
-// A `script_id` is DURABLE: it is what `game_script` keys on and what a Package's own rows will
-// point at. Deriving it from a sorted file index would renumber every later script the moment an
-// author adds one alphabetically earlier, and two Packages would both start at the bottom of the
-// band. So the author writes it, once, and a collision is a refusal that names both Packages
-// instead of a silent renumber. The band is 100000..=999999.
-//
-// The script NAME is not written down: it is `<package>.<file stem>`, which is the one part of the
-// identity that has an obviously right answer.
-//
-// # What checks what
-//
-// This builder refuses what it can name a FILE and a directive for. `lyracore-delta-check` is the
-// authority on the artifact itself and runs afterwards over every Package at once, because a
-// collision between Packages cannot be seen from inside one. The event catalogue arrives through
-// `LYRACORE_HOOK_EVENTS` (the CLI fills it from `lyracore-delta-check --print-events`); without it
-// this builder does not check event names and says so, and the validator still refuses an unknown
-// one.
+// Compile a Package's Runtime Scripts into one Script Artifact. Each file binds one named
+// function to a typed event. Legacy Script Directives remain readable during migration.
+// Stable numeric identities live in the Package's script-ids.json and must travel with its source.
 
 import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { mkdir, mkdtemp, open, readFile, rename, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
+import { bindInvocation, readBinding, type SourceBinding } from "./bindings.ts";
+import { readDirectives } from "./directives.ts";
+import { allocateScriptId, renderScriptIds, scriptIds, SCRIPT_IDS_FILE } from "./script-ids.ts";
 
 /// Where a Package keeps its Runtime Script sources, relative to the Package folder.
 const SCRIPTS_DIR = "scripts";
 
 /// Where a Package's generated artifacts live, relative to the Package folder.
 const GENERATED_DIR = "data/.generated";
-
-/// The Package script band. Mirrors `is_package_script_id` in `lyracore-package-delta`.
-const SCRIPT_ID_FLOOR = 100_000;
-const SCRIPT_ID_CEIL = 999_999;
 
 /// One script, as its directives and its Lua describe it.
 interface RuntimeScript {
@@ -76,39 +36,12 @@ function refuse(file: string, what: string): never {
 
 // ---- directives ----
 
-/// The `@key value` lines at the top of a script file, before the first line that is neither blank
-/// nor a comment. Both comment markers are accepted so one reader serves `.ts` and `.lua`.
-function readDirectives(file: string, source: string): Map<string, string> {
-  const directives = new Map<string, string>();
-  for (const line of source.split("\n")) {
-    const text = line.trim();
-    if (text.length === 0) continue;
-    const comment = text.startsWith("//") ? text.slice(2) : text.startsWith("--") ? text.slice(2) : undefined;
-    if (comment === undefined) break;
-    const match = /^\s*@([a-z]+)\s+(\S+)\s*$/.exec(comment);
-    if (!match) continue;
-    const [, key, value] = match as unknown as [string, string, string];
-    if (directives.has(key)) refuse(file, `\`@${key}\` is declared twice`);
-    directives.set(key, value);
-  }
-  return directives;
-}
-
 function requiredDirective(file: string, directives: Map<string, string>, key: string): string {
   const value = directives.get(key);
   if (value === undefined) {
-    refuse(file, `no \`@${key}\` directive. Every Runtime Script declares \`@event\` and \`@id\`.`);
+    refuse(file, `no \`@${key}\` directive. A legacy Runtime Script declares both \`@event\` and \`@id\`.`);
   }
   return value;
-}
-
-function scriptId(file: string, directives: Map<string, string>): number {
-  const raw = requiredDirective(file, directives, "id");
-  const id = Number(raw);
-  if (!Number.isInteger(id) || id < SCRIPT_ID_FLOOR || id > SCRIPT_ID_CEIL) {
-    refuse(file, `\`@id ${raw}\` is not a whole number in ${SCRIPT_ID_FLOOR}..=${SCRIPT_ID_CEIL}, the Package script band`);
-  }
-  return id;
 }
 
 function priority(file: string, directives: Map<string, string>): number {
@@ -171,7 +104,7 @@ function packagesRoot(): string {
 /// made absolute. It is NOT an `extends` of it: `typescript-to-lua` resolves a plugin path against
 /// the config it was invoked with, so a relative one in a base config would resolve from the wrong
 /// directory. Materialising the whole config keeps that resolution the toolchain's own business.
-async function compile(scriptsDir: string, source: string, outDir: string): Promise<void> {
+async function compile(scriptsDir: string, source: string, outDir: string, bound: boolean): Promise<void> {
   const toolchain = toolchainDir();
   const config = JSON.parse(await readFile(join(toolchain, "tsconfig.json"), "utf8")) as {
     compilerOptions: Record<string, unknown>;
@@ -180,10 +113,11 @@ async function compile(scriptsDir: string, source: string, outDir: string): Prom
   };
   config.compilerOptions.rootDir = scriptsDir;
   config.compilerOptions.outDir = outDir;
-  config.files = [join(toolchain, "runtime-script.d.ts"), source];
+  config.files = [join(toolchain, bound ? "runtime-script.d.ts" : "runtime-script.base.d.ts"), source];
   config.tstl.luaPlugins = config.tstl.luaPlugins.map((plugin) => ({
     ...plugin,
     name: resolve(toolchain, plugin.name),
+    bound,
   }));
 
   const configPath = join(outDir, "tsconfig.json");
@@ -205,15 +139,15 @@ async function compile(scriptsDir: string, source: string, outDir: string): Prom
 
 // ---- the artifact ----
 
-/// The digest of the sources this artifact was generated from: each immediate regular `.ts` or
-/// `.lua` file under `scripts/`, by sorted name, length-prefixed so no two inventories can collide.
+/// The digest covers immediate `.ts` and `.lua` sources and the recorded script identities,
+/// sorted by basename and length-prefixed to match the CLI Build Identity.
 ///
 /// The toolchain is deliberately NOT in it. `source_hash` answers "which revision of this Package's
 /// sources is on the Shard"; whether the compiler moved is the Build Identity sidecar's question.
-async function sourceHash(scriptsDir: string, files: string[]): Promise<string> {
+async function sourceHash(scriptsDir: string, files: string[], ids: string): Promise<string> {
   const digest = createHash("sha256");
-  for (const file of files) {
-    const bytes = await readFile(join(scriptsDir, file));
+  for (const file of [...files, SCRIPT_IDS_FILE].sort()) {
+    const bytes = file === SCRIPT_IDS_FILE ? Buffer.from(ids) : await readFile(join(scriptsDir, file));
     digest.update(file);
     digest.update("\0");
     digest.update(String(bytes.length));
@@ -301,52 +235,56 @@ export async function buildPackageScripts(packageName: string): Promise<string> 
     );
   }
 
-  // Directives first, for every file, so a bad `@id` or a collision is a refusal before the first
-  // compile rather than after the last one.
-  const declared: Array<Omit<RuntimeScript, "source"> & { file: string }> = [];
+  const ids = await scriptIds(packageDir, packageName);
+  const declared: Array<Omit<RuntimeScript, "source" | "script_id"> & {
+    file: string; stem: string; legacyId?: number; binding?: SourceBinding;
+  }> = [];
   for (const file of files) {
     const path = join(scriptsDir, file);
-    const directives = readDirectives(path, await readFile(path, "utf8"));
-    const event = requiredDirective(path, directives, "event");
+    const source = await readFile(path, "utf8");
+    const directives = readDirectives(path, source);
+    const binding = directives.size === 0 ? readBinding(path, source, packageName) : undefined;
+    if (!binding && directives.size === 0) refuse(path, "declare one top-level Event Binding, such as events.player.onLogin(welcome)");
+    const event = binding?.event ?? requiredDirective(path, directives, "event");
     checkEvent(path, event, packageName, catalogue);
+    const stem = file.slice(0, file.lastIndexOf("."));
+    const name = `${packageName}.${stem}`;
+    if (!/^[a-z0-9_.-]{1,64}$/.test(name)) refuse(path, "a script name must fit 64 lowercase letters, digits, dots, underscores or hyphens");
+    if (declared.some((entry) => entry.name === name)) refuse(path, `collides with another source on script name ${name}`);
     declared.push({
       file,
-      script_id: scriptId(path, directives),
-      name: `${packageName}.${file.slice(0, file.lastIndexOf("."))}`,
+      stem,
+      binding,
+      legacyId: binding ? undefined : Number(requiredDirective(path, directives, "id")),
+      name,
       event,
-      priority: priority(path, directives),
-      enabled: enabled(path, directives),
+      priority: binding?.priority ?? priority(path, directives),
+      enabled: binding?.enabled ?? enabled(path, directives),
     });
-  }
-  for (const [index, script] of declared.entries()) {
-    const clash = declared.findIndex(
-      (other, at) => at < index && (other.script_id === script.script_id || other.name === script.name),
-    );
-    if (clash !== -1) {
-      refuse(join(scriptsDir, script.file), `collides with ${declared[clash]?.file} on \`@id\` or name`);
-    }
   }
 
   const outDir = mkdtempSync(join(tmpdir(), "lyracore-scripts-"));
   try {
     const scripts: RuntimeScript[] = [];
-    for (const { file, ...script } of declared) {
+    for (const { file, stem, legacyId, binding, ...script } of declared) {
       const path = join(scriptsDir, file);
-      const stem = file.slice(0, file.lastIndexOf("."));
+      const script_id = allocateScriptId(path, ids, stem, legacyId);
       let source: string;
       if (file.endsWith(".lua")) {
         source = await readFile(path, "utf8");
       } else {
-        await compile(scriptsDir, path, outDir);
+        await compile(scriptsDir, path, outDir, binding !== undefined);
         source = await readFile(join(outDir, `${stem}.lua`), "utf8").catch(() => {
           refuse(path, "typescript-to-lua emitted no Lua for it");
         });
       }
       if (source.trim().length === 0) refuse(path, "compiles to nothing; a Runtime Script needs Lua in it");
-      scripts.push({ ...script, source });
+      scripts.push({ ...script, script_id, source: binding ? bindInvocation(source, binding) : source });
     }
 
-    const artifact = renderArtifact(packageName, await sourceHash(scriptsDir, files), scripts);
+    const recordedIds = renderScriptIds(ids);
+    const artifact = renderArtifact(packageName, await sourceHash(scriptsDir, files, recordedIds), scripts);
+    await writeArtifact(join(packageDir, SCRIPT_IDS_FILE), recordedIds);
     const path = join(packageDir, GENERATED_DIR, `${packageName}.script.json`);
     await writeArtifact(path, artifact);
     return path;

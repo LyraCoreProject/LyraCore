@@ -18,12 +18,8 @@
 // itself invents for classes, spreads and library helpers, which a visitor over TypeScript nodes
 // never meets.
 //
-// # The entry point
-//
-// A Runtime Script answers its caller by RETURNING a number, and TypeScript has no top-level
-// return. So every authored `.ts` script declares `function script()` and this printer closes the
-// emitted file with `return script()`. `beforeTransform` refuses a file without one, where the
-// diagnostic can name it, rather than leaving a chunk that calls nil at runtime.
+// Named Event Bindings get their invocation wrapper from build-scripts.ts. Legacy sources still
+// declare script(); the appended call preserves its Script Answer.
 
 const ts = require("typescript");
 const tstl = require("typescript-to-lua");
@@ -87,7 +83,7 @@ class PiccoloPrinter extends tstl.LuaPrinter {
   printFile(file) {
     return super.printFile({
       ...file,
-      statements: [guardDeclaration(), ...file.statements, entryCall()],
+      statements: [guardDeclaration(), ...file.statements, ...(this.bound ? [] : [entryCall()])],
     });
   }
 }
@@ -145,8 +141,11 @@ function requireEntryPoint(program) {
   return diagnostics;
 }
 
-module.exports = {
-  beforeTransform: (program) => requireEntryPoint(program),
-  printer: (program, emitHost, fileName, file) =>
-    new PiccoloPrinter(emitHost, program, fileName).print(file),
-};
+module.exports = ({ bound = false }) => ({
+  beforeTransform: (program) => bound ? [] : requireEntryPoint(program),
+  printer: (program, emitHost, fileName, file) => {
+    const printer = new PiccoloPrinter(emitHost, program, fileName);
+    printer.bound = bound;
+    return printer.print(file);
+  },
+});

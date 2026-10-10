@@ -28,6 +28,7 @@ pub fn debug_run_runtime_script(
         name: event,
         actor: EntityView::read(ctx, actor_guid),
         target: EntityView::read(ctx, target_guid),
+        ..ScriptEvent::default()
     };
     let Some((diagnostics, compilations)) = crate::runtime_script::with_host(|host| {
         let diagnostics = run_event(
