@@ -7,11 +7,11 @@
 use spacetimedb::{table, ReducerContext, Table, Timestamp};
 
 /// A breath timer began; the gateway sends `SMSG_START_MIRROR_TIMER`.
-pub const KIND_START: u8 = 0;
+pub(crate) const KIND_START: u8 = 0;
 /// A breath timer ended after surfacing; the gateway sends `SMSG_STOP_MIRROR_TIMER`.
-pub const KIND_STOP: u8 = 1;
+pub(crate) const KIND_STOP: u8 = 1;
 /// One server-applied drowning hit; the gateway sends `SMSG_ENVIRONMENTAL_DAMAGE_LOG`.
-pub const KIND_DROWNING_DAMAGE: u8 = 2;
+pub(crate) const KIND_DROWNING_DAMAGE: u8 = 2;
 
 /// A public relay row consumed by the gateway. The recipient is always `character_guid`; this is
 /// public rather than RLS-scoped because coordinator subscriptions share the feed and resolve that

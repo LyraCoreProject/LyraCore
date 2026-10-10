@@ -9,7 +9,7 @@ use spacetimedb::{Identity, ReducerContext, Table};
 /// deploy CLI). Defends `import_*` / account-provisioning from a DIRECT anonymous SpacetimeDB connection
 /// that bypasses the gateway — the one check that can't move to the gateway. Fail-closed: rejects until
 /// `claim_operator` has run. See [`crate::auth::claim_operator`].
-pub fn require_operator(ctx: &ReducerContext) -> Result<(), String> {
+pub(crate) fn require_operator(ctx: &ReducerContext) -> Result<(), String> {
     match ctx.db.game_operator().id().find(0) {
         Some(op) if op.identity == ctx.sender() => Ok(()),
         Some(_) => Err("operator only".to_string()),
@@ -42,7 +42,7 @@ pub fn require_operator(ctx: &ReducerContext) -> Result<(), String> {
 /// row and hand back the next matching entity instead of none, silently defeating the fence rather
 /// than closing it. The sense of the check itself (in-transit ⇒ refuse) lives in
 /// [`gate_in_transit`], not here — see its doc for why.
-pub fn entity_by_owner(ctx: &ReducerContext, owner: Identity) -> Option<WorldEntity> {
+pub(crate) fn entity_by_owner(ctx: &ReducerContext, owner: Identity) -> Option<WorldEntity> {
     gate_by_guid(
         ctx,
         ctx.db.game_world_entity().by_owner().filter(&owner).next(),
@@ -55,7 +55,7 @@ pub fn entity_by_owner(ctx: &ReducerContext, owner: Identity) -> Option<WorldEnt
 /// `require_operator`-gated reducer instead of via `ctx.sender()`. Same in-transit fence, same
 /// shared [`gate_by_guid`]: a mid-transfer character reads "not in world" on the `gw_*` path
 /// exactly as it does on the sender path. NOT [`live_entity`], which deliberately skips the fence.
-pub fn acting_entity_by_guid(ctx: &ReducerContext, guid: u64) -> Option<WorldEntity> {
+pub(crate) fn acting_entity_by_guid(ctx: &ReducerContext, guid: u64) -> Option<WorldEntity> {
     gate_by_guid(ctx, ctx.db.game_world_entity().guid().find(guid), |e| {
         e.guid
     })
@@ -82,14 +82,14 @@ pub fn acting_entity_by_guid(ctx: &ReducerContext, guid: u64) -> Option<WorldEnt
 ///
 /// Same `.find()`-then-check ordering as `entity_by_owner` above, and the same shared
 /// [`gate_by_guid`] for the check itself.
-pub fn character_by_guid(ctx: &ReducerContext, guid: u64) -> Option<Character> {
+pub(crate) fn character_by_guid(ctx: &ReducerContext, guid: u64) -> Option<Character> {
     gate_by_guid(ctx, ctx.db.game_character().guid().find(guid), |c| c.guid)
 }
 
 /// [`character_by_guid`], name-keyed. Case-insensitive ASCII fold — the operator/whisper convention
 /// (`/w bob` reaches "Bob"), which the `#[unique]` exact-match name index cannot do, so this is a
 /// scan by construction. Same fence, same read-as-absent semantics.
-pub fn character_by_name(ctx: &ReducerContext, name: &str) -> Option<Character> {
+pub(crate) fn character_by_name(ctx: &ReducerContext, name: &str) -> Option<Character> {
     gate_by_guid(
         ctx,
         ctx.db
@@ -268,7 +268,7 @@ pub(crate) fn event_recipient_identity(bound: Option<Identity>) -> Identity {
 /// error is explicitly load-bearing — see its doc) keep their own string via `.map_err(...)` on top of
 /// this helper instead of adopting the default, so the migration is a pure lookup consolidation with
 /// zero change to any error string a caller relies on.
-pub fn live_entity(ctx: &ReducerContext, guid: u64) -> Result<WorldEntity, String> {
+pub(crate) fn live_entity(ctx: &ReducerContext, guid: u64) -> Result<WorldEntity, String> {
     ctx.db
         .game_world_entity()
         .guid()
@@ -287,7 +287,7 @@ pub fn live_entity(ctx: &ReducerContext, guid: u64) -> Result<WorldEntity, Strin
 /// the feature this is dead code the cold-clone build gate rejects. If a non-debug caller ever wants
 /// the `Result` shape, drop the gate rather than re-hand-rolling the `ok_or_else`.
 #[cfg(feature = "debug_reducers")]
-pub fn require_character(ctx: &ReducerContext, guid: u64) -> Result<Character, String> {
+pub(crate) fn require_character(ctx: &ReducerContext, guid: u64) -> Result<Character, String> {
     character_by_guid(ctx, guid).ok_or_else(|| format!("no character {guid}"))
 }
 

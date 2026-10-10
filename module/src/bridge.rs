@@ -45,7 +45,7 @@ pub enum CommandOutcome {
 }
 
 impl CommandOutcome {
-    pub fn tag(&self) -> &'static str {
+    pub(crate) fn tag(&self) -> &'static str {
         match self {
             Self::Applied => "Applied",
             Self::Unchanged => "Unchanged",
@@ -90,6 +90,7 @@ pub struct AdmittedClientCommand {
     pub receipt_retain_until_micros: i64,
 }
 
+// Named by the generated `GAME_CLIENT_COMMAND` constant at the crate root.
 #[derive(Clone, Copy)]
 pub struct ClientCommandHandler {
     pub parse: fn(&str, &str) -> Option<Result<ParsedClientCommand, CommandOutcome>>,

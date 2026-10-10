@@ -442,20 +442,20 @@ impl WorldEntity {
     /// Is this entity a player (vs a server-authored creature/Unit)? Tests the PLAYER bit of
     /// `OBJECT_FIELD_TYPE`. The single spelling of this check — drives damage amount, the
     /// death-vs-floor decision in the swing tick, the loot/corpse owner test, etc.
-    pub fn is_player(&self) -> bool {
+    pub(crate) fn is_player(&self) -> bool {
         self.type_mask & lyracore_shared::constants::type_mask::PLAYER_BIT != 0
     }
 
     /// The entity's RACE id — byte 0 of `unit_bytes_0` (race|class|gender|powertype). The one
     /// spelling of the unpack; the packing layout itself is pinned by lyracore-shared's
     /// `unit_bytes_0` tests.
-    pub fn race(&self) -> u8 {
+    pub(crate) fn race(&self) -> u8 {
         (self.unit_bytes_0 & 0xFF) as u8
     }
 
     /// The entity's CLASS id — byte 1 of `unit_bytes_0`. The single spelling of this shift; callers
     /// should use it rather than hand-unpacking the bitfield.
-    pub fn class(&self) -> u8 {
+    pub(crate) fn class(&self) -> u8 {
         ((self.unit_bytes_0 >> 8) & 0xFF) as u8
     }
 }
@@ -525,9 +525,9 @@ pub struct EntityMotion {
 // The mangos-anticheat lesson: rubber-banding a false positive is worse than the cheat. We LOG anomalies
 // and leave the position write untouched; a GM tool surfaces the flags. Per-character score = the
 // COUNT of a guid's rows (no separate counter table — a detect-and-flag MVP doesn't need O(1) reads).
-pub const MOVE_VIOLATION_SPEED: u8 = 1; // observed speed over the client's own elapsed time > allowed
-pub const MOVE_VIOLATION_TELEPORT: u8 = 2; // a single heartbeat delta larger than any legit step
-                                           // Follow-up kinds (fall/gravity, fly/under-world z, wall-clip via nav find_leg) are reserved 3..=5.
+pub(crate) const MOVE_VIOLATION_SPEED: u8 = 1; // observed speed over the client's own elapsed time > allowed
+pub(crate) const MOVE_VIOLATION_TELEPORT: u8 = 2; // a single heartbeat delta larger than any legit step
+                                                  // Follow-up kinds (fall/gravity, fly/under-world z, wall-clip via nav find_leg) are reserved 3..=5.
 
 /// Speed slack over the effective max: covers latency jitter, diagonal/z movement the 2D check ignores,
 /// and packet-time rounding. A real 3× speedhack still trips this; a legit session never should.
@@ -544,7 +544,7 @@ const MIN_DT_S: f32 = 0.05;
 /// `max_speed` the mover's effective allowed speed (RUN through `effective_move_speed`, so a snare lowers
 /// and Sprint raises it). Returns `(kind, magnitude)` for the worst violation, or `None` when plausible.
 /// Magnitude: teleport = the jump distance (yd); speed = the observed multiple of normal (×).
-pub fn movement_violation(dist_2d: f32, dt_s: f32, max_speed: f32) -> Option<(u8, f32)> {
+pub(crate) fn movement_violation(dist_2d: f32, dt_s: f32, max_speed: f32) -> Option<(u8, f32)> {
     // Teleport ceiling first (distance-only, applies even with an unknown dt).
     if dist_2d > TELEPORT_MAX_YD {
         return Some((MOVE_VIOLATION_TELEPORT, dist_2d));
@@ -1910,7 +1910,7 @@ pub(crate) fn apply_set_sheathed(
 
 /// Resurrection Sickness debuff spell id (vanilla 15007). Seeded in `seed.rs` as a single negative
 /// A_MOD_STAT(STAT_ALL) aura and landed by `do_spirit_healer_res` via the shared aura engine.
-pub const RESURRECTION_SICKNESS_SPELL: u32 = 15007;
+pub(crate) const RESURRECTION_SICKNESS_SPELL: u32 = 15007;
 
 /// The vitals a Spirit-Healer res restores: 50% of max health (floored, but at least 1 — a ghost is
 /// never res'd back to 0 hp) and 50% of max mana (0 for a rage/energy class, whose `max_power` is 0).

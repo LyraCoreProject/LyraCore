@@ -145,6 +145,7 @@ pub(crate) fn admit_command_issuer_import(
 /// The direction a `character_owned!(transfer, ..)` arm is running in. ONE body serves both, so a
 /// table cannot ship rows it does not know how to receive (the drift that would silently drop a
 /// table's data at the destination).
+// Named by the generated `CHARACTER_OWNED_TRANSFERS` constant at the crate root.
 pub enum RowIo<'a> {
     /// Collect this table's rows for the character into `0` (bsatn of `Vec<Row>`).
     Export(&'a mut Vec<u8>),

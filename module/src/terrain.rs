@@ -38,7 +38,7 @@ pub struct TerrainChunk {
 /// arithmetic. This sits in the 0.5s movement tick, so it must never scan. The cell math + bilinear interpolation live in
 /// `lyracore_shared::terrain` (unit-tested there; the importer's self-check shares the SAME code,
 /// so import-time verification covers this exact function).
-pub fn ground_z(ctx: &ReducerContext, map_id: u32, x: f32, y: f32) -> Option<f32> {
+pub(crate) fn ground_z(ctx: &ReducerContext, map_id: u32, x: f32, y: f32) -> Option<f32> {
     let (cx, cy) = (cell_index(x)?, cell_index(y)?);
     let chunk = ctx
         .db
@@ -57,7 +57,7 @@ pub fn ground_z(ctx: &ReducerContext, map_id: u32, x: f32, y: f32) -> Option<f32
 /// the vmap floor never both apply to the same surface (a bridge deck isn't in the ADT MCVT
 /// grid), so `max` picks whichever one actually has an answer here rather than averaging or
 /// preferring one system outright.
-pub fn snap_z(
+pub(crate) fn snap_z(
     ctx: &ReducerContext,
     map_id: u32,
     instance_id: u64,
@@ -97,7 +97,7 @@ pub(crate) fn walking_z(
 /// no terrain chunk is imported there OR the chunk's `area_id` is 0 (unset — some cells never got a
 /// real client-side AreaTable assignment). Same single indexed lookup as `ground_z` — cheap enough
 /// for the release-time graveyard-zone resolution it feeds (now `zone_id_at` below).
-pub fn area_id_at(ctx: &ReducerContext, map_id: u32, x: f32, y: f32) -> Option<u32> {
+pub(crate) fn area_id_at(ctx: &ReducerContext, map_id: u32, x: f32, y: f32) -> Option<u32> {
     let (cx, cy) = (cell_index(x)?, cell_index(y)?);
     let chunk = ctx
         .db
@@ -110,7 +110,7 @@ pub fn area_id_at(ctx: &ReducerContext, map_id: u32, x: f32, y: f32) -> Option<u
 /// The imported liquid surface at `(x, y)`, or `None` when terrain is absent or its cell records
 /// no liquid. Like [`ground_z`] and [`area_id_at`], this is one indexed primary-key lookup with no
 /// interpolation because imported liquid is flat for a cell.
-pub fn liquid_level_at(ctx: &ReducerContext, map_id: u32, x: f32, y: f32) -> Option<f32> {
+pub(crate) fn liquid_level_at(ctx: &ReducerContext, map_id: u32, x: f32, y: f32) -> Option<f32> {
     let (cx, cy) = (cell_index(x)?, cell_index(y)?);
     let chunk = ctx
         .db
@@ -155,7 +155,7 @@ pub fn debug_check_submerged(ctx: &ReducerContext, guid: u64) -> Result<(), Stri
 ///
 /// The single canonical zone resolver: `world::graveyard`'s release pick
 /// and `loot::apply_fish`'s catch roll both call this instead of each keeping its own one-hop walk.
-pub fn zone_id_at(ctx: &ReducerContext, map_id: u32, x: f32, y: f32) -> Option<u32> {
+pub(crate) fn zone_id_at(ctx: &ReducerContext, map_id: u32, x: f32, y: f32) -> Option<u32> {
     area_at(ctx, map_id, x, y).map(|area| zone_of(&area))
 }
 
@@ -163,7 +163,12 @@ pub fn zone_id_at(ctx: &ReducerContext, map_id: u32, x: f32, y: f32) -> Option<u
 /// that need both the area and its zone (the movement grid-crossing hook drives discovery XP and the
 /// zone transition off the same crossing) resolve once here instead of looking the position up twice.
 /// `None` under the same conditions as [`area_id_at`], plus an unimported `game_area`.
-pub fn area_at(ctx: &ReducerContext, map_id: u32, x: f32, y: f32) -> Option<crate::GameArea> {
+pub(crate) fn area_at(
+    ctx: &ReducerContext,
+    map_id: u32,
+    x: f32,
+    y: f32,
+) -> Option<crate::GameArea> {
     if ctx.db.game_area().count() == 0 {
         return None;
     }
@@ -174,7 +179,7 @@ pub fn area_at(ctx: &ReducerContext, map_id: u32, x: f32, y: f32) -> Option<crat
 /// The one-hop subzone→zone chase itself: an area with a `parent_area_id` IS a subzone, and its
 /// parent is the zone; a top-level area is its own zone. Split out of [`zone_id_at`] so a caller
 /// holding a resolved area does not repeat the rule.
-pub fn zone_of(area: &crate::GameArea) -> u32 {
+pub(crate) fn zone_of(area: &crate::GameArea) -> u32 {
     if area.parent_area_id != 0 {
         area.parent_area_id
     } else {

@@ -18,16 +18,16 @@ use lyracore_shared::social::ContactRefusal;
 /// re-exported from the shared source of truth both crates read
 /// ([`lyracore_shared::chat::broadcast_chat`]). Whisper and party are not `game_chat_event` rows:
 /// they ride `game_realm_chat_event`, whose per-recipient shape this broadcast table cannot hold.
-pub const CHAT_SAY: u8 = lyracore_shared::chat::broadcast_chat::SAY;
-pub const CHAT_YELL: u8 = lyracore_shared::chat::broadcast_chat::YELL;
+pub(crate) const CHAT_SAY: u8 = lyracore_shared::chat::broadcast_chat::SAY;
+pub(crate) const CHAT_YELL: u8 = lyracore_shared::chat::broadcast_chat::YELL;
 /// Creature-authored text emote (`CHAT_TYPE_TEXT_EMOTE` on the source wire). It uses the same
 /// broadcast row as Say and Yell; the gateway maps the discriminant to `CHAT_MSG_MONSTER_EMOTE`.
 /// EventAI is its only source — [`apply_send_chat`] refuses it from a Character.
-pub const CHAT_TEXT_EMOTE: u8 = lyracore_shared::chat::broadcast_chat::CREATURE_TEXT_EMOTE;
+pub(crate) const CHAT_TEXT_EMOTE: u8 = lyracore_shared::chat::broadcast_chat::CREATURE_TEXT_EMOTE;
 /// A Character's `/e` custom emote. [`apply_send_chat`] is its only source and always stores it in
 /// [`lyracore_shared::chat::language::UNIVERSAL`], whatever language byte the client sent
 /// (cm:Player.cpp:16591-16599).
-pub const CHAT_EMOTE: u8 = lyracore_shared::chat::broadcast_chat::EMOTE;
+pub(crate) const CHAT_EMOTE: u8 = lyracore_shared::chat::broadcast_chat::EMOTE;
 
 /// Max stored message length — vanilla caps client input around 255; we hard-cap to bound the row.
 const MAX_CHAT_LEN: usize = 255;
@@ -50,13 +50,13 @@ pub struct ChatEvent {
     pub target_guid: u64,
 }
 
-pub fn is_supported_chat_type(chat_type: u8) -> bool {
+pub(crate) fn is_supported_chat_type(chat_type: u8) -> bool {
     matches!(chat_type, CHAT_SAY | CHAT_YELL | CHAT_TEXT_EMOTE)
 }
 
 /// Trim + length-cap a chat line, returning `None` when nothing is left (so an empty/whitespace line
 /// is rejected rather than broadcast). Pure — unit-tested. [pure]
-pub fn normalized_message(raw: &str) -> Option<String> {
+pub(crate) fn normalized_message(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return None;
@@ -67,7 +67,7 @@ pub fn normalized_message(raw: &str) -> Option<String> {
 /// An addon-language payload exactly as the client sent it, length-capped like any line. Addons
 /// frame their own data, so a trim would change it in transit; cmangos reads it raw and drops only
 /// an empty one (cm:ChatHandler.cpp:306-312). [pure]
-pub fn addon_payload(raw: &str) -> Option<String> {
+pub(crate) fn addon_payload(raw: &str) -> Option<String> {
     (!raw.is_empty()).then(|| raw.chars().take(MAX_CHAT_LEN).collect())
 }
 
@@ -344,8 +344,8 @@ fn prepare_system_message(
 // ===========================================================================================
 
 /// Vanilla client caps: the social pane won't render past 50 friends / 25 ignored names.
-pub const MAX_FRIENDS: usize = 50;
-pub const MAX_IGNORED: usize = 25;
+pub(crate) const MAX_FRIENDS: usize = 50;
+pub(crate) const MAX_IGNORED: usize = 25;
 
 /// One contact-list row: `owner_guid`'s friend OR ignore entry for `target_guid` (same table for
 /// both — `is_ignore` picks the list, mirroring how `chat_type` picks Say vs Yell). RLS-scoped to

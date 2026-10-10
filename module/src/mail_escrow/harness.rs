@@ -132,7 +132,7 @@ impl ReapSink for FakeLedger {
     }
 }
 #[derive(Default)]
-pub struct FakeShard {
+pub(crate) struct FakeShard {
     purses: RefCell<HashMap<u64, u32>>,
     receipts: RefCell<HashMap<u64, (u64, u64)>>,
     items: RefCell<HashMap<u64, (u64, ItemSnapshot)>>,
@@ -291,7 +291,7 @@ struct XMail {
     mail_template_id: u32,
 }
 #[derive(Default)]
-pub struct FakeMailPlane {
+pub(crate) struct FakeMailPlane {
     mails: RefCell<Vec<XMail>>,
     receipts: RefCell<HashMap<u64, (u64, u64)>>,
     next_mail_id: Cell<u64>,

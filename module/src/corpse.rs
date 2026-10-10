@@ -11,7 +11,7 @@ use crate::game_world_entity;
 
 /// HIGHGUID_CORPSE high bits (0xF101): marks a guid as a corpse object for the 5875 client. The
 /// corpse guid is `(HIGHGUID_CORPSE << 48) | owner_guid_low`, so one corpse per player at a time.
-pub const HIGHGUID_CORPSE: u64 = 0xF101;
+pub(crate) const HIGHGUID_CORPSE: u64 = 0xF101;
 
 /// The deterministic corpse guid for a player (one corpse per player). Shared by `repop` (spawn),
 /// `reclaim_corpse` (the client sends this guid), and the relog/logout cleanup so they all agree.
@@ -47,7 +47,7 @@ const RECLAIM_RADIUS_SQ: f32 = 1521.0;
 
 /// The reclaim-delay ladder, by streak rung: how long the ghost waits before it may reclaim.
 /// Rung 1 (index 0) is an ordinary death; the last entry is the saturation ceiling.
-pub const CORPSE_RECLAIM_DELAY_SECS: [i64; 3] = [30, 60, 120];
+pub(crate) const CORPSE_RECLAIM_DELAY_SECS: [i64; 3] = [30, 60, 120];
 
 /// One rung of streak credit, in micros. Dying banks this much time onto the streak deadline, and
 /// the streak is over once the deadline passes — so 5 quiet real-world minutes clear one rung.

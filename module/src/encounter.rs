@@ -63,24 +63,7 @@ pub(crate) type EncounterPackageHandler =
     fn(&ReducerContext, u64, EncounterSignal) -> Result<(), String>;
 
 impl EncounterBinding {
-    pub const ALL: [Self; 14] = [
-        Self::BlackfathomDeepsKelris,
-        Self::BlackrockDepthsTombOfSeven,
-        Self::DireMaulAlzzin,
-        Self::RazorfenKraulWardKeepers,
-        Self::ShadowfangKeepRethilgore,
-        Self::ShadowfangKeepFenrus,
-        Self::ShadowfangKeepNandos,
-        Self::SunkenTempleAvatar,
-        Self::WailingCavernsAnacondra,
-        Self::WailingCavernsCobrahn,
-        Self::WailingCavernsPythas,
-        Self::WailingCavernsSerpentis,
-        Self::WailingCavernsMutanus,
-        Self::ZulGurubOhgan,
-    ];
-
-    pub fn map_id(self) -> u32 {
+    pub(crate) fn map_id(self) -> u32 {
         match self {
             Self::BlackfathomDeepsKelris => 48,
             Self::BlackrockDepthsTombOfSeven => 230,
@@ -96,25 +79,6 @@ impl EncounterBinding {
             | Self::WailingCavernsSerpentis
             | Self::WailingCavernsMutanus => 43,
             Self::ZulGurubOhgan => 309,
-        }
-    }
-
-    pub fn encounter_id(self) -> u32 {
-        match self {
-            Self::BlackfathomDeepsKelris => 1,
-            Self::BlackrockDepthsTombOfSeven => 4,
-            Self::DireMaulAlzzin => 0,
-            Self::RazorfenKraulWardKeepers => 1,
-            Self::ShadowfangKeepRethilgore => 2,
-            Self::ShadowfangKeepFenrus => 3,
-            Self::ShadowfangKeepNandos => 4,
-            Self::SunkenTempleAvatar => 4,
-            Self::WailingCavernsAnacondra => 0,
-            Self::WailingCavernsCobrahn => 1,
-            Self::WailingCavernsPythas => 2,
-            Self::WailingCavernsSerpentis => 3,
-            Self::WailingCavernsMutanus => 5,
-            Self::ZulGurubOhgan => 5,
         }
     }
 }
@@ -219,19 +183,22 @@ fn encounter_state_for_signal(signal: EncounterSignal) -> Option<u8> {
 //  Encounter state machine values (mangos EncounterState analogue)
 // ===========================================================================================
 
-pub const ENCOUNTER_NOT_STARTED: u8 = 0;
-pub const ENCOUNTER_IN_PROGRESS: u8 = 1;
-pub const ENCOUNTER_DONE: u8 = 2;
-pub const ENCOUNTER_FAILED: u8 = 3;
+pub(crate) const ENCOUNTER_NOT_STARTED: u8 = 0;
+#[cfg_attr(not(has_packages), allow(dead_code))]
+pub(crate) const ENCOUNTER_IN_PROGRESS: u8 = 1;
+#[cfg_attr(not(has_packages), allow(dead_code))]
+pub(crate) const ENCOUNTER_DONE: u8 = 2;
+#[cfg_attr(not(has_packages), allow(dead_code))]
+pub(crate) const ENCOUNTER_FAILED: u8 = 3;
 
 /// Encounter ids with this bit set are RESERVED for kernel bookkeeping (today: the per-entry
 /// HP-threshold fired-marks, [`hp_fired_key`]). Packages must key their encounters below it —
 /// vanilla creature entries are < 2^24, so the namespaces can never collide.
-pub const RESERVED_ENCOUNTER_ID_BIT: u32 = 0x8000_0000;
+pub(crate) const RESERVED_ENCOUNTER_ID_BIT: u32 = 0x8000_0000;
 
 /// Sentinel for "no HP threshold has fired yet" in a reserved dedup row's `payload` — one past the
 /// highest possible percentage, so every watch `pct` (0..=100) compares strictly below it.
-pub const HP_FIRED_NONE: u32 = 101;
+pub(crate) const HP_FIRED_NONE: u32 = 101;
 
 // ===========================================================================================
 //  Tables (all server-side only — none is gateway-subscribed)
@@ -299,18 +266,18 @@ pub struct EncounterEquip {
 
 /// The reserved `encounter_id` carrying the per-instance HP-threshold fired-mark for creature
 /// `entry` (its `payload` = lowest pct fired so far, [`HP_FIRED_NONE`] when virgin). Pure.
-pub fn hp_fired_key(entry: u32) -> u32 {
+pub(crate) fn hp_fired_key(entry: u32) -> u32 {
     RESERVED_ENCOUNTER_ID_BIT | entry
 }
 
 /// Is `encounter_id` in the kernel-reserved namespace? Pure.
-pub fn is_reserved_encounter_id(encounter_id: u32) -> bool {
+pub(crate) fn is_reserved_encounter_id(encounter_id: u32) -> bool {
     encounter_id & RESERVED_ENCOUNTER_ID_BIT != 0
 }
 
 /// Current HP as an integer percentage (floor), u64 math so `health * 100` can never wrap.
 /// `max == 0` (malformed row) reads as 100% — nothing fires. Pure.
-pub fn hp_pct(health: u32, max_health: u32) -> u32 {
+pub(crate) fn hp_pct(health: u32, max_health: u32) -> u32 {
     if max_health == 0 {
         return 100;
     }
@@ -324,7 +291,7 @@ pub fn hp_pct(health: u32, max_health: u32) -> u32 {
 /// changes nothing, because `lowest_fired` only ratchets DOWN). A single huge hit crossing several
 /// watches fires them all, ordered high→low (66 before 33 — phase order). Duplicate watch rows
 /// collapse to one firing. Returns the fired pcts (desc). Pure — unit-tested.
-pub fn crossed_thresholds(watches: &[u8], lowest_fired: u32, new_pct: u32) -> Vec<u8> {
+pub(crate) fn crossed_thresholds(watches: &[u8], lowest_fired: u32, new_pct: u32) -> Vec<u8> {
     let mut fired: Vec<u8> = watches
         .iter()
         .copied()
@@ -338,18 +305,14 @@ pub fn crossed_thresholds(watches: &[u8], lowest_fired: u32, new_pct: u32) -> Ve
 /// Wave-spawn guid: `HIGHGUID_UNIT` high bits + `entry` in 24..47 + a unique low 24 — the same
 /// namespace layout the importer/seed/debug spawns use, so the 5875 client classifies the add as a
 /// Unit and the low part can't collide with an existing spawn of the same entry. Pure.
-pub fn wave_guid(entry: u32, next_low: u64) -> u64 {
+pub(crate) fn wave_guid(entry: u32, next_low: u64) -> u64 {
     const HIGHGUID_UNIT: u64 = 0xF130;
     (HIGHGUID_UNIT << 48) | ((entry as u64) << 24) | (next_low & 0x00FF_FFFF)
 }
 
-pub fn entry_of_unit_guid(guid: u64) -> u32 {
-    ((guid >> 24) & 0x00FF_FFFF) as u32
-}
-
 /// Deterministic per-add spread around the wave anchor so a multi-add wave doesn't stack on one
 /// point: a compact 3-wide grid, 2 yd pitch, row-major. Pure.
-pub fn wave_offset(index: usize) -> (f32, f32) {
+pub(crate) fn wave_offset(index: usize) -> (f32, f32) {
     (2.0 * ((index % 3) as f32 - 1.0), 2.0 * ((index / 3) as f32))
 }
 
@@ -358,7 +321,8 @@ pub fn wave_offset(index: usize) -> (f32, f32) {
 /// 0 = closed/ready, 1 = open/used, and the gateway relays the raw value
 /// (`set_gameobject_state(go.state)`); no live client in this sandbox to confirm the rendering —
 /// if a live check shows doors inverted, flip THIS const (one place).
-pub const DOOR_OPEN_STATE: u8 = 1;
+#[cfg_attr(not(has_packages), allow(dead_code))]
+pub(crate) const DOOR_OPEN_STATE: u8 = 1;
 
 // ===========================================================================================
 //  State accessors (SetData / GetData)
@@ -400,13 +364,15 @@ fn upsert_state_row(
 }
 
 /// Current state of `(instance_id, encounter_id)` — `ENCOUNTER_NOT_STARTED` when no row exists.
-pub fn get_encounter_state(ctx: &ReducerContext, instance_id: u64, encounter_id: u32) -> u8 {
+#[cfg_attr(not(has_packages), allow(dead_code))]
+pub(crate) fn get_encounter_state(ctx: &ReducerContext, instance_id: u64, encounter_id: u32) -> u8 {
     state_row(ctx, instance_id, encounter_id)
         .map(|r| r.state)
         .unwrap_or(ENCOUNTER_NOT_STARTED)
 }
 
-pub fn set_encounter_state(
+#[cfg_attr(not(has_packages), allow(dead_code))]
+pub(crate) fn set_encounter_state(
     ctx: &ReducerContext,
     instance_id: u64,
     encounter_id: u32,
@@ -423,7 +389,8 @@ pub fn set_encounter_state(
 }
 
 /// `GetData`: the row's scratch u32 — 0 when no row exists.
-pub fn get_encounter_data(ctx: &ReducerContext, instance_id: u64, encounter_id: u32) -> u32 {
+#[cfg_attr(not(has_packages), allow(dead_code))]
+pub(crate) fn get_encounter_data(ctx: &ReducerContext, instance_id: u64, encounter_id: u32) -> u32 {
     state_row(ctx, instance_id, encounter_id)
         .map(|r| r.payload)
         .unwrap_or(0)
@@ -431,7 +398,8 @@ pub fn get_encounter_data(ctx: &ReducerContext, instance_id: u64, encounter_id: 
 
 /// `SetData`: set the scratch u32, preserving `state`. Upserts. Same reserved-namespace refusal
 /// as [`set_encounter_state`].
-pub fn set_encounter_data(
+#[cfg_attr(not(has_packages), allow(dead_code))]
+pub(crate) fn set_encounter_data(
     ctx: &ReducerContext,
     instance_id: u64,
     encounter_id: u32,
@@ -456,7 +424,8 @@ pub fn set_encounter_data(
 /// Idempotent (check-before-insert, the `learn_spell` grant idiom): packages typically call this
 /// from their seed/fixture reducer or an `on_creature_spawn` handler, either of which may run
 /// repeatedly. `pct` must be 1..=99 (0 is the death hook's job; 100 would fire on any scratch).
-pub fn watch_hp_threshold(ctx: &ReducerContext, entry: u32, pct: u8) -> Result<(), String> {
+#[cfg_attr(not(has_packages), allow(dead_code))]
+pub(crate) fn watch_hp_threshold(ctx: &ReducerContext, entry: u32, pct: u8) -> Result<(), String> {
     if !(1..=99).contains(&pct) {
         return Err(format!("hp watch pct must be 1..=99, got {pct}"));
     }
@@ -477,7 +446,7 @@ pub fn watch_hp_threshold(ctx: &ReducerContext, entry: u32, pct: u8) -> Result<(
 /// calls this from its wipe/evade reset alongside [`encounter_reset`] (the boss healed to full;
 /// the next attempt's crossings must re-fire). Instance-scoped: other instances' marks are
 /// untouched. The instance reap sweeps these rows wholesale ([`sweep_encounter_state`]).
-pub fn reset_hp_fired(ctx: &ReducerContext, instance_id: u64, entry: u32) {
+pub(crate) fn reset_hp_fired(ctx: &ReducerContext, instance_id: u64, entry: u32) {
     let t = ctx.db.game_encounter_state();
     if let Some(row) = state_row(ctx, instance_id, hp_fired_key(entry)) {
         t.id().delete(row.id);
@@ -550,7 +519,12 @@ fn probe_hp_thresholds(ctx: &ReducerContext, target_guid: u64) {
     }
 }
 
-pub fn open_door(ctx: &ReducerContext, go_entry: u32, instance_id: u64) -> Result<u32, String> {
+#[cfg_attr(not(has_packages), allow(dead_code))]
+pub(crate) fn open_door(
+    ctx: &ReducerContext,
+    go_entry: u32,
+    instance_id: u64,
+) -> Result<u32, String> {
     let tmpl = ctx
         .db
         .game_gameobject_template()
@@ -594,7 +568,8 @@ pub fn open_door(ctx: &ReducerContext, go_entry: u32, instance_id: u64) -> Resul
 
 // A wave's full placement (entries, count, anchor position, instance, encounter id).
 #[allow(clippy::too_many_arguments)]
-pub fn spawn_wave(
+#[cfg_attr(not(has_packages), allow(dead_code))]
+pub(crate) fn spawn_wave(
     ctx: &ReducerContext,
     instance_id: u64,
     encounter_id: u32,
@@ -663,7 +638,7 @@ pub fn spawn_wave(
 /// Authored values are item entries; the durable row carries the corresponding display ids expected
 /// by `UNIT_VIRTUAL_ITEM_SLOT_DISPLAY`. Zero unequips a slot. Upserts; errs for a missing creature
 /// or item template so a relay never reports success without an observable projection.
-pub fn equip_swap(
+pub(crate) fn equip_swap(
     ctx: &ReducerContext,
     creature_guid: u64,
     main_hand: u32,
@@ -715,7 +690,7 @@ pub fn equip_swap(
 /// from the snare-aware `combat::effective_move_speed` over the 2D distance. Errs for a missing,
 /// player or dead mover. An immobilized mover is a no-op Ok. A mover the client already draws on
 /// the point stops there and takes no new leg.
-pub fn move_to_point(
+pub(crate) fn move_to_point(
     ctx: &ReducerContext,
     creature_guid: u64,
     x: f32,
@@ -773,7 +748,7 @@ pub fn move_to_point(
 /// corpse loot + equip + tracking row). Does NOT touch the HP fired-marks — those are keyed by
 /// creature ENTRY, not encounter id, so the package's reset handler calls [`reset_hp_fired`] for
 /// its boss entries alongside this (documented on that fn).
-pub fn encounter_reset(ctx: &ReducerContext, instance_id: u64, encounter_id: u32) {
+pub(crate) fn encounter_reset(ctx: &ReducerContext, instance_id: u64, encounter_id: u32) {
     upsert_state_row(ctx, instance_id, encounter_id, ENCOUNTER_NOT_STARTED, 0);
     let tracked: Vec<EncounterSpawn> = ctx
         .db
@@ -785,7 +760,8 @@ pub fn encounter_reset(ctx: &ReducerContext, instance_id: u64, encounter_id: u32
     despawn_tracked(ctx, &tracked);
 }
 
-pub fn encounter_reset_full(
+#[cfg_attr(not(has_packages), allow(dead_code))]
+pub(crate) fn encounter_reset_full(
     ctx: &ReducerContext,
     instance_id: u64,
     encounter_id: u32,

@@ -28,7 +28,7 @@ pub struct GuildInvite {
 /// `Invite` (`cm:GuildHandler.cpp:66-131`): a member on `actor_guid`'s side offers `request.target_guid`
 /// a place in its Guild. An ignored actor gets a silent success and no row, matching mangos'
 /// "OK result but not send invite".
-pub fn invite(
+pub(crate) fn invite(
     ctx: &ReducerContext,
     actor_guid: u64,
     request: GuildInviteRequest,
@@ -82,7 +82,7 @@ pub fn invite(
 
 /// `Accept` (`cm:GuildHandler.cpp:192-211`): the actor joins the Guild that invited it, at the
 /// lowest Guild Rank. A stale, missing or cross-team invite is silent, exactly like mangos.
-pub fn accept(
+pub(crate) fn accept(
     ctx: &ReducerContext,
     actor_guid: u64,
     actor_account: u64,
@@ -130,7 +130,7 @@ pub fn accept(
 
 /// `Decline` (`cm:GuildHandler.cpp:214-238`): the actor refuses its pending Guild Invite. The
 /// inviter hears about it through SMSG_GUILD_DECLINE, addressed by this Guild Event.
-pub fn decline(
+pub(crate) fn decline(
     ctx: &ReducerContext,
     actor_guid: u64,
     actor_name: &str,
@@ -175,7 +175,7 @@ fn leave_outcome(is_leader: bool, member_count: usize) -> Result<LeaveOutcome, G
 
 /// `Leave` (`cm:GuildHandler.cpp:383-404`): an ordinary member departs; a lone Guild Leader
 /// disbands the Guild instead. A Guild Leader with company must pass leadership first.
-pub fn leave(ctx: &ReducerContext, actor_guid: u64) -> Result<(), GuildRefusal> {
+pub(crate) fn leave(ctx: &ReducerContext, actor_guid: u64) -> Result<(), GuildRefusal> {
     let actor = member(ctx, actor_guid).ok_or(GuildRefusal::NotInGuild)?;
     let guild = ctx
         .db
@@ -224,7 +224,11 @@ fn remove_gate(actor_rank: u32, target_rank: u32) -> Result<(), GuildRefusal> {
 }
 
 /// `Remove` (`cm:GuildHandler.cpp:136-190`): the actor expels `target_guid` from its own Guild.
-pub fn remove(ctx: &ReducerContext, actor_guid: u64, target_guid: u64) -> Result<(), GuildRefusal> {
+pub(crate) fn remove(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    target_guid: u64,
+) -> Result<(), GuildRefusal> {
     let actor = member(ctx, actor_guid).ok_or(GuildRefusal::NotInGuild)?;
     let actor_rights = super::rank_rights(ctx, actor.guild_id, actor.rank_id);
     if !has_right(actor_rights, rights::REMOVE) {
@@ -268,7 +272,7 @@ fn promote_target_rank(
 
 /// `Promote` (`cm:GuildHandler.cpp:269-320`): `target_guid` moves one Guild Rank up (its rank id
 /// decreases by one).
-pub fn promote(
+pub(crate) fn promote(
     ctx: &ReducerContext,
     actor_guid: u64,
     target_guid: u64,
@@ -319,7 +323,11 @@ fn demote_target_rank(
 
 /// `Demote` (`cm:GuildHandler.cpp:322-380`): `target_guid` moves one Guild Rank down (its rank id
 /// increases by one).
-pub fn demote(ctx: &ReducerContext, actor_guid: u64, target_guid: u64) -> Result<(), GuildRefusal> {
+pub(crate) fn demote(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    target_guid: u64,
+) -> Result<(), GuildRefusal> {
     let actor = member(ctx, actor_guid).ok_or(GuildRefusal::NotInGuild)?;
     let actor_rights = super::rank_rights(ctx, actor.guild_id, actor.rank_id);
     if !has_right(actor_rights, rights::DEMOTE) {
@@ -353,7 +361,7 @@ pub fn demote(ctx: &ReducerContext, actor_guid: u64, target_guid: u64) -> Result
 /// `SetLeader` (`cm:GuildHandler.cpp:441-486`): the Guild Leader passes leadership to `target_guid`.
 /// Naming itself is a no-op: mangos' own code demotes the leader to Officer here through a shared
 /// path (`cm:GuildHandler.cpp:482-483`), which this Gate declines to reproduce.
-pub fn set_leader(
+pub(crate) fn set_leader(
     ctx: &ReducerContext,
     actor_guid: u64,
     target_guid: u64,
@@ -400,7 +408,7 @@ pub fn set_leader(
 }
 
 /// `Disband` (`cm:GuildHandler.cpp:424-435`): the Guild Leader dissolves its own Guild.
-pub fn disband(ctx: &ReducerContext, actor_guid: u64) -> Result<(), GuildRefusal> {
+pub(crate) fn disband(ctx: &ReducerContext, actor_guid: u64) -> Result<(), GuildRefusal> {
     let actor = member(ctx, actor_guid).ok_or(GuildRefusal::NotInGuild)?;
     let guild = ctx
         .db

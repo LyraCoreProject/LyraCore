@@ -20,36 +20,37 @@ use crate::game_world_entity;
 use crate::nav::game_nav_chunk; // arm_pool's map-fence — neither is wildcard-exported at the crate root
 use crate::terrain::game_terrain_chunk;
 
-pub mod go_type {
+pub(crate) mod go_type {
 
-    pub const DOOR: u8 = 0;
+    pub(crate) const DOOR: u8 = 0;
     /// Button/lever prop — cmangos models a lever as a differently-DISPLAYED door; the toggle
     /// semantics are identical to DOOR (same match arm). cmangos type 1 (GAMEOBJECT_TYPE_BUTTON).
-    pub const BUTTON: u8 = 1;
+    pub(crate) const BUTTON: u8 = 1;
     /// Quest-giver prop (Wanted Poster, a corpse that offers/completes a quest, …). Its giver/role
     /// gate lives entirely in `game_gameobject_quest` (see `quest::validate_giver`); `use_gameobject`
     /// still does not dispatch on this type SERVER-SIDE (opening the quest window is presentation, not
     /// a state mutation — the gateway's `CMSG_GAMEOBJ_USE` handler does that dispatch itself,
     /// module and gateway copies of this value can never drift. cmangos type 2
     /// (GAMEOBJECT_TYPE_QUESTGIVER).
-    pub const QUESTGIVER: u8 = lyracore_shared::constants::go_type::QUESTGIVER;
+    #[cfg_attr(not(has_packages), allow(dead_code))]
+    pub(crate) const QUESTGIVER: u8 = lyracore_shared::constants::go_type::QUESTGIVER;
     /// Loot container — `use` rolls its drop into the loot window. cmangos type 3.
-    pub const CHEST: u8 = lyracore_shared::constants::go_type::CHEST;
+    pub(crate) const CHEST: u8 = lyracore_shared::constants::go_type::CHEST;
     /// Spell trap. Relay activation uses its imported spell and cooldown metadata.
-    pub const TRAP: u8 = 6;
+    pub(crate) const TRAP: u8 = 6;
     /// Quest-use object such as a lever or totem. Unlocked `use` grants USE_GAMEOBJECT quest credit.
     /// This is cmangos type 10.
-    pub const GOOBER: u8 = 10;
+    pub(crate) const GOOBER: u8 = 10;
     /// Gather node (mining vein / herb bush). `use` skill-gates then DIRECT-grants the ore/herb
     /// (skinning-style, NOT the loot window — the gtker loot-window codec is incomplete). cmangos models
     /// these as locked CHESTs; we give them a distinct synthetic type so the gather path is unambiguous
     /// and never collides with the CHEST loot-window path. `data0` = item entry granted; `data1` =
     /// required skill level; `gather_skill_line` = MINING/HERBALISM the use requires.
-    pub const GATHER: u8 = 25; // synthetic; vanilla has no type 25 — our gather marker
-                               // COLLISION NOTE: real cmangos type 25 IS assigned (GAMEOBJECT_TYPE_FISHINGHOLE),
-                               // it just happens to collide with this synthetic marker. The importer's TYPE-25 COLLISION GUARD
-                               // (`importer/src/main.rs::classify_go_type`) is the ONLY place that decides what gets stored as
-                               // module type 25: a real FISHINGHOLE row is dropped from import, never stored here as GATHER.
+    pub(crate) const GATHER: u8 = 25; // synthetic; vanilla has no type 25 — our gather marker
+                                      // COLLISION NOTE: real cmangos type 25 IS assigned (GAMEOBJECT_TYPE_FISHINGHOLE),
+                                      // it just happens to collide with this synthetic marker. The importer's TYPE-25 COLLISION GUARD
+                                      // (`importer/src/main.rs::classify_go_type`) is the ONLY place that decides what gets stored as
+                                      // module type 25: a real FISHINGHOLE row is dropped from import, never stored here as GATHER.
 }
 
 /// Pure skill-gate for a gather node (ctx-free, unit-tested): a character may gather iff it has LEARNED
@@ -352,20 +353,20 @@ pub struct GameObjectPoolMember {
 /// pool points live in a DISJOINT sub-namespace. Without it, a pool `point_id` (auto_inc from 1) collided
 /// with a standalone GO at the same low-48 (seeded Copper Vein = `GO_HIGH | 3` == pool point 3), so arming
 /// a pool silently deleted/clobbered real nodes and a standalone respawn misrouted into a foreign pool.
-pub const POOL_TAG: u64 = 1 << 47;
+pub(crate) const POOL_TAG: u64 = 1 << 47;
 
 /// Derive a pool point's `game_gameobject` guid from its `point_id` — HIGHGUID_GAMEOBJECT (0xF110 in bits
 /// 48..63, the same scheme as `debug_spawn_gameobject` and the GO seed) | [`POOL_TAG`] | point_id. The tag
 /// bit keeps the point's live row findable/deletable by the reroll while staying disjoint from standalone
 /// GO guids (see [`pool_point_id_of`] — the standalone-vs-pooled discriminator).
-pub fn pool_point_guid(point_id: u64) -> u64 {
+pub(crate) fn pool_point_guid(point_id: u64) -> u64 {
     (0xF110u64 << 48) | POOL_TAG | (point_id & 0x7FFF_FFFF_FFFF)
 }
 
 /// Recover the `point_id` from a guid IFF it is a tagged pool point (HIGHGUID_GAMEOBJECT + [`POOL_TAG`]).
 /// `None` for a standalone GO (tag bit clear) → the respawn pass never even queries the member table for it
 /// and always takes the in-place branch. A STRUCTURAL test, collision-proof — not a member-row lookup.
-pub fn pool_point_id_of(guid: u64) -> Option<u64> {
+pub(crate) fn pool_point_id_of(guid: u64) -> Option<u64> {
     if (guid >> 48) == 0xF110 && (guid & POOL_TAG) != 0 {
         Some(guid & 0x7FFF_FFFF_FFFF)
     } else {

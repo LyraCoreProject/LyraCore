@@ -48,11 +48,11 @@ pub struct LevelStats {
 }
 
 /// Lookup key for `game_class_level_stats`.
-pub fn class_level_key(class: u8, level: u32) -> u32 {
+pub(crate) fn class_level_key(class: u8, level: u32) -> u32 {
     ((class as u32) << 8) | (level & 0xFF)
 }
 /// Lookup key for `game_level_stats`.
-pub fn race_class_level_key(race: u8, class: u8, level: u32) -> u32 {
+pub(crate) fn race_class_level_key(race: u8, class: u8, level: u32) -> u32 {
     ((race as u32) << 16) | ((class as u32) << 8) | (level & 0xFF)
 }
 
@@ -61,7 +61,7 @@ pub fn race_class_level_key(race: u8, class: u8, level: u32) -> u32 {
 // ===========================================================================================
 
 /// Vanilla health from stamina: the first 20 points give 1 HP each, every point beyond gives 10.
-pub fn hp_from_stamina(stamina: u32) -> u32 {
+pub(crate) fn hp_from_stamina(stamina: u32) -> u32 {
     if stamina <= 20 {
         stamina
     } else {
@@ -70,7 +70,7 @@ pub fn hp_from_stamina(stamina: u32) -> u32 {
 }
 
 /// Vanilla mana from intellect: the first 20 points give 1 mana each, every point beyond gives 15.
-pub fn mana_from_intellect(intellect: u32) -> u32 {
+pub(crate) fn mana_from_intellect(intellect: u32) -> u32 {
     if intellect <= 20 {
         intellect
     } else {
@@ -84,7 +84,7 @@ pub fn mana_from_intellect(intellect: u32) -> u32 {
 
 /// Max health for (race, class, level): class/level base HP + the stamina contribution. Falls back
 /// to the flat placeholder curve when the curve data isn't loaded, so login never breaks on a miss.
-pub fn max_health_for(ctx: &ReducerContext, race: u8, class: u8, level: u32) -> u32 {
+pub(crate) fn max_health_for(ctx: &ReducerContext, race: u8, class: u8, level: u32) -> u32 {
     let base = ctx
         .db
         .game_class_level_stats()
@@ -104,7 +104,7 @@ pub fn max_health_for(ctx: &ReducerContext, race: u8, class: u8, level: u32) -> 
 /// Max power for (race, class, level), power-type-aware: mana classes get class/level base mana + the
 /// intellect contribution; **rage = 1000** (a 100-point bar stored ×10 — what the live slice uses);
 /// **energy = 100**. Falls back to the power-type constant (or 0 mana) when the curve isn't loaded.
-pub fn max_power_for(ctx: &ReducerContext, race: u8, class: u8, level: u32) -> u32 {
+pub(crate) fn max_power_for(ctx: &ReducerContext, race: u8, class: u8, level: u32) -> u32 {
     match power_type::for_class(class) {
         power_type::MANA => {
             let base = ctx
@@ -131,7 +131,7 @@ pub fn max_power_for(ctx: &ReducerContext, race: u8, class: u8, level: u32) -> u
 /// energy classes (Rogue) also spawn full (energy is non-persisted in vanilla — always 100/100 at
 /// login), and rage starts at 0. Pure so it's unit-testable without a live DB. Lives next to
 /// `max_power_for`, which owns power-type semantics.
-pub fn starting_power(pt: u8, max_power: u32) -> u32 {
+pub(crate) fn starting_power(pt: u8, max_power: u32) -> u32 {
     if pt == power_type::MANA || pt == power_type::ENERGY {
         max_power
     } else {
@@ -144,7 +144,7 @@ pub fn starting_power(pt: u8, max_power: u32) -> u32 {
 /// Falls back to all-zero when the row isn't loaded (the sheet then reads 0s until the importer
 /// runs — login is unaffected, and these are display-only state). Reads the SAME `game_level_stats`
 /// row `max_health_for`/`max_power_for` use, so the stamina/intellect stay consistent with HP/mana.
-pub fn base_attributes_for(
+pub(crate) fn base_attributes_for(
     ctx: &ReducerContext,
     race: u8,
     class: u8,

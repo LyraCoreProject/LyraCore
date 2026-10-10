@@ -680,7 +680,7 @@ pub fn finalize_vmap_nav_coverage(ctx: &ReducerContext, generation_id: u64) -> R
 /// generation selects none, and `nav.rs::fetcher` degrades to terrain-only exactly as if coverage
 /// had never been prepared. Re-evaluated on every call rather than snapshotted at activation time,
 /// because preparation can retrofit an already active generation.
-pub fn active_vmap_nav_coverage_manifest(
+pub(crate) fn active_vmap_nav_coverage_manifest(
     ctx: &ReducerContext,
     map_id: u32,
 ) -> Option<VmapNavCoverageManifest> {
@@ -767,7 +767,7 @@ pub(crate) fn active_generation_id(ctx: &ReducerContext, map_id: u32) -> Option<
 
 /// Static geometry consumes only with the global Gate and a complete active generation.
 /// This decides whether navigation still needs its coarse grid fallback.
-pub fn vmap_enabled(ctx: &ReducerContext, map_id: u32) -> bool {
+pub(crate) fn vmap_enabled(ctx: &ReducerContext, map_id: u32) -> bool {
     rays_enabled(ctx) && active_generation_id(ctx, map_id).is_some()
 }
 
@@ -808,7 +808,7 @@ fn fetcher(ctx: &ReducerContext, map_id: u32) -> impl FnMut(u16, u16) -> Option<
 }
 
 /// Exact sight includes WMO geometry and closed doors in the requested instance.
-pub fn los_ray(
+pub(crate) fn los_ray(
     ctx: &ReducerContext,
     map_id: u32,
     instance_id: u64,
@@ -821,7 +821,7 @@ pub fn los_ray(
 }
 
 /// Exact collision includes WMO, static doodads and closed doors.
-pub fn collision_ray(
+pub(crate) fn collision_ray(
     ctx: &ReducerContext,
     map_id: u32,
     instance_id: u64,
@@ -862,7 +862,8 @@ fn ray(
 }
 
 /// Operator geometry probe, independent of the gameplay Gate.
-pub fn probe_rays(
+#[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
+pub(crate) fn probe_rays(
     ctx: &ReducerContext,
     map_id: u32,
     instance_id: u64,
@@ -883,7 +884,7 @@ const FLOOR_PROBE_DOWN_YD: f32 = 200.0;
 /// Highest static or closed-door surface in the vertical probe segment in this partition.
 /// The segment starts slightly above `probe_z` so a point already on the surface can find it.
 /// Returns `None` when the gameplay Gate is off or no collision triangle lies in that segment.
-pub fn floor_z(
+pub(crate) fn floor_z(
     ctx: &ReducerContext,
     map_id: u32,
     instance_id: u64,
@@ -920,7 +921,8 @@ pub(crate) fn walking_floor_z(
 }
 
 /// Static and closed-door floor probe, independent of the gameplay Gate.
-pub fn probe_floor_z(
+#[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
+pub(crate) fn probe_floor_z(
     ctx: &ReducerContext,
     map_id: u32,
     instance_id: u64,
@@ -947,7 +949,7 @@ pub fn probe_floor_z(
 /// The downward budget is `AREA_PROBE_DOWN_YD`, NOT the 200 yd `FLOOR_PROBE_DOWN_YD`: a floor
 /// probe wants the deepest deck it can reach, an area query wants only the surface this point is
 /// standing on, and the long budget reports a point in the open as inside a WMO far below it.
-pub fn area_info(
+pub(crate) fn area_info(
     ctx: &ReducerContext,
     map_id: u32,
     x: f32,
@@ -1054,7 +1056,7 @@ fn cell_may_be_indoor(ctx: &ReducerContext, map_id: u32, x: f32, y: f32) -> bool
 /// skips the ray cast for a cell with no interior geometry, then `area_info`, which is already
 /// `None` with vmap off, with no active generation, or with nothing under the probe. So an
 /// operator running without vmap data never gets an indoor dismount, and never gets a false one.
-pub fn is_indoor(ctx: &ReducerContext, map_id: u32, x: f32, y: f32, z: f32) -> bool {
+pub(crate) fn is_indoor(ctx: &ReducerContext, map_id: u32, x: f32, y: f32, z: f32) -> bool {
     cell_may_be_indoor(ctx, map_id, x, y)
         && area_info(ctx, map_id, x, y, z).is_some_and(|info| info.indoor)
 }

@@ -38,7 +38,7 @@ use spacetimedb::{reducer, table, Identity, ReducerContext, Table, Timestamp};
 
 use crate::{game_character, game_melee_attack, game_pending_cast, game_threat, game_world_entity};
 
-pub use lyracore_shared::group::GROUP_MAX_MEMBERS;
+pub(crate) use lyracore_shared::group::GROUP_MAX_MEMBERS;
 use lyracore_shared::group::{
     GroupKind, RaidSlot, RosterMember, RosterPayload, TargetIcon, RAID_MAX_MEMBERS, RAID_SUBGROUPS,
     TARGET_ICON_COUNT, TARGET_ICON_LIST_REQUEST,
@@ -46,14 +46,14 @@ use lyracore_shared::group::{
 
 /// Group kill-reward radius² — members farther than this from the slain creature get neither XP
 /// nor quest credit. Vanilla's `sWorld.getConfig(CONFIG_FLOAT_GROUP_XP_DISTANCE)` = 74.0 yd.
-pub const GROUP_XP_RANGE_SQ: f32 = 74.0 * 74.0;
+pub(crate) const GROUP_XP_RANGE_SQ: f32 = 74.0 * 74.0;
 
-pub mod loot_method {
-    pub const FFA: u8 = 0;
-    pub const ROUND_ROBIN: u8 = 1;
-    pub const MASTER: u8 = 2;
-    pub const GROUP: u8 = 3;
-    pub const NEED_BEFORE_GREED: u8 = 4;
+pub(crate) mod loot_method {
+    pub(crate) const FFA: u8 = 0;
+    pub(crate) const ROUND_ROBIN: u8 = 1;
+    pub(crate) const MASTER: u8 = 2;
+    pub(crate) const GROUP: u8 = 3;
+    pub(crate) const NEED_BEFORE_GREED: u8 = 4;
 }
 
 /// A Group: a Party, or a Raid its leader converted. `leader_guid` is a member's character guid;
@@ -600,7 +600,7 @@ pub(crate) fn group_of(ctx: &ReducerContext, character_guid: u64) -> Option<Grou
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct PartyUnitFacts {
+pub(crate) struct PartyUnitFacts {
     pub map_id: u32,
     pub instance_id: u64,
     pub x: f32,
@@ -615,21 +615,21 @@ pub struct PartyUnitFacts {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct PartyMemberFacts {
+pub(crate) struct PartyMemberFacts {
     pub character_guid: u64,
     pub unit: Option<PartyUnitFacts>,
     pub partition: Option<PartyPartitionFacts>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PartyPartitionFacts {
+pub(crate) struct PartyPartitionFacts {
     pub map_id: u32,
     pub instance_id: u64,
     pub locator_revision: u64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct PartyFacts {
+pub(crate) struct PartyFacts {
     pub group_id: u64,
     pub leader_guid: u64,
     pub members: Vec<PartyMemberFacts>,
@@ -638,7 +638,7 @@ pub struct PartyFacts {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct PartyEnemyFacts {
+pub(crate) struct PartyEnemyFacts {
     pub guid: u64,
     pub map_id: u32,
     pub instance_id: u64,
@@ -657,7 +657,7 @@ pub struct PartyEnemyFacts {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct CompanionTargetFacts {
+pub(crate) struct CompanionTargetFacts {
     pub guid: u64,
     pub map_id: u32,
     pub instance_id: u64,
@@ -671,7 +671,7 @@ pub struct CompanionTargetFacts {
 /// Resolve only the named hostile creature. This exact read permits a designated pull without
 /// widening the party fight scan or choosing a substitute target.
 #[cfg_attr(not(has_packages), allow(dead_code))]
-pub fn companion_target_facts(
+pub(crate) fn companion_target_facts(
     ctx: &ReducerContext,
     bot_guid: u64,
     target_guid: u64,
@@ -777,7 +777,7 @@ pub(crate) fn admit_party_command(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PartyFactsUnavailable {
+pub(crate) struct PartyFactsUnavailable {
     pub group_id: u64,
     pub reason: PartyFactsUnavailableReason,
 }
@@ -859,7 +859,7 @@ fn known_party_partition(
 /// and three effects on a pending spell. A missing parent Group stops with `MissingGroup`; neither
 /// failure returns facts selected from an arbitrary prefix.
 #[cfg_attr(not(has_packages), allow(dead_code))]
-pub fn party_facts(
+pub(crate) fn party_facts(
     ctx: &ReducerContext,
     character_guid: u64,
 ) -> Result<Option<PartyFacts>, PartyFactsUnavailable> {

@@ -4,9 +4,9 @@ use spacetimedb::{reducer, table, Identity, ReducerContext, ScheduleAt, Table, T
 
 use crate::game_world_entity;
 
-pub use lyracore_shared::duel::completion_kind as duel_completion_kind;
-pub use lyracore_shared::duel::event_kind as duel_event_kind;
-pub use lyracore_shared::duel::state as duel_state;
+pub(crate) use lyracore_shared::duel::completion_kind as duel_completion_kind;
+pub(crate) use lyracore_shared::duel::event_kind as duel_event_kind;
+pub(crate) use lyracore_shared::duel::state as duel_state;
 
 pub(crate) const COUNTDOWN_MICROS: i64 = 3_000_000;
 pub(crate) const DUEL_TICK_MICROS: i64 = 250_000;

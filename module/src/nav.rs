@@ -51,7 +51,7 @@ pub struct NavigationInputs {
 
 /// Identifies the inputs to movement on one map. It does not certify coverage at a position;
 /// the retained RouteStep carries that evidence. Dynamic obstacles still require bounded expiry.
-pub fn inputs(ctx: &ReducerContext, map_id: u32) -> NavigationInputs {
+pub(crate) fn inputs(ctx: &ReducerContext, map_id: u32) -> NavigationInputs {
     NavigationInputs {
         imported_revision: ctx
             .db
@@ -83,7 +83,7 @@ pub(crate) fn record_change(ctx: &ReducerContext) -> Result<(), String> {
 
 /// Is (x, y) standable? `None` = no nav chunk here (un-imported or fully clear) — callers keep
 /// their current behavior, exactly like `terrain::ground_z`'s off-slice contract. One PK find.
-pub fn walkable(ctx: &ReducerContext, map_id: u32, x: f32, y: f32) -> Option<bool> {
+pub(crate) fn walkable(ctx: &ReducerContext, map_id: u32, x: f32, y: f32) -> Option<bool> {
     let (cx, cy) = (cell_index(x)?, cell_index(y)?);
     let chunk = ctx
         .db
@@ -98,7 +98,8 @@ pub fn walkable(ctx: &ReducerContext, map_id: u32, x: f32, y: f32) -> Option<boo
 }
 
 /// Obstruction top-Z over (x, y), or `None` when the column (or the whole cell) is clear.
-pub fn obstruction_top(ctx: &ReducerContext, map_id: u32, x: f32, y: f32) -> Option<f32> {
+#[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
+pub(crate) fn obstruction_top(ctx: &ReducerContext, map_id: u32, x: f32, y: f32) -> Option<f32> {
     let (cx, cy) = (cell_index(x)?, cell_index(y)?);
     let chunk = ctx
         .db
@@ -213,7 +214,7 @@ use crate::vmap::game_vmap_nav_coverage;
 use lyracore_shared::nav::NavCellData;
 
 /// The 243 consumption gate. Missing config row = false (fresh DB stays baseline).
-pub fn nav_enabled(ctx: &ReducerContext) -> bool {
+pub(crate) fn nav_enabled(ctx: &ReducerContext) -> bool {
     ctx.db
         .game_config()
         .id()
@@ -223,7 +224,7 @@ pub fn nav_enabled(ctx: &ReducerContext) -> bool {
 }
 
 /// The vmap-derived coverage gate. Missing config row = false, like `nav_enabled`.
-pub fn nav_coverage_enabled(ctx: &ReducerContext) -> bool {
+pub(crate) fn nav_coverage_enabled(ctx: &ReducerContext) -> bool {
     ctx.db
         .game_config()
         .id()
@@ -302,7 +303,7 @@ fn fetch_cell(
 }
 
 /// Closed doors apply even where static geometry falls back to the coarse navigation grid.
-pub fn has_los(
+pub(crate) fn has_los(
     ctx: &ReducerContext,
     map_id: u32,
     instance_id: u64,
@@ -376,13 +377,14 @@ pub struct RouteStep {
     pub coverage: CoverageEvidence,
 }
 
-pub struct RoutePath {
+pub(crate) struct RoutePath {
     pub step: RouteStep,
     pub points: Vec<(f32, f32, f32)>,
 }
 
 /// Retain a bounded part of one route, including its turns, after checking every segment.
-pub fn route_path(
+#[cfg_attr(not(has_packages), allow(dead_code))]
+pub(crate) fn route_path(
     ctx: &ReducerContext,
     map_id: u32,
     instance_id: u64,
@@ -402,6 +404,7 @@ pub fn route_path(
 }
 
 /// Use a caller's smaller search allowance while retaining the normal movement limits.
+#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn route_path_with_budget(
     ctx: &ReducerContext,
     map_id: u32,
@@ -723,8 +726,9 @@ pub(crate) fn route_segment_clear(
 
 /// Plan one bot movement step. A failed search holds position; sparse missing rows retain
 /// unknown coverage. Collision can shorten complete, partial, and direct steps independently.
+#[cfg_attr(not(has_packages), allow(dead_code))]
 #[allow(clippy::too_many_arguments)] // A movement step carries its partition, endpoints and distances.
-pub fn route_step(
+pub(crate) fn route_step(
     ctx: &ReducerContext,
     map_id: u32,
     instance_id: u64,
@@ -827,7 +831,7 @@ pub fn route_step(
 /// before flipping `vmap_enabled` on a populated map, and compare its wall time to
 /// `debug_bench_los(exact=true)`'s on that box.
 #[allow(clippy::too_many_arguments)] // A movement step carries its partition, endpoints and distances.
-pub fn nav_step(
+pub(crate) fn nav_step(
     ctx: &ReducerContext,
     map_id: u32,
     instance_id: u64,
@@ -957,7 +961,8 @@ fn gate_step(
 /// pair readable: the same leg run with the gate off and on shows how many expansions routing
 /// around real geometry actually costs against `LEG_MAX_EXPANSIONS`, and `complete=false` means
 /// the budget ran out and the leg is best-effort.
-pub fn debug_find_leg(
+#[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
+pub(crate) fn debug_find_leg(
     ctx: &ReducerContext,
     map_id: u32,
     from: (f32, f32),

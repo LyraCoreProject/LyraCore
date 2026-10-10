@@ -29,7 +29,7 @@ use crate::{game_item_template, game_world_entity, WorldEntity}; // accessor tra
 /// Skill points gained per character level — the cap on every skill line is `level * SKILL_PER_LEVEL`
 /// (vanilla: weapon/defense skill maxes at level×5). Also the level→skill conversion the baseline
 /// fallback uses, so an untracked skill reads as if perfectly trained for its level.
-pub const SKILL_PER_LEVEL: u32 = 5;
+pub(crate) const SKILL_PER_LEVEL: u32 = 5;
 
 /// Real vanilla `SkillLine.dbc` IDs (kept verbatim so the DEFERRED client skill-pane relay is a straight
 /// read with no remap — a local enum would force a translation layer at the descriptor boundary). Only
@@ -40,50 +40,50 @@ pub const SKILL_PER_LEVEL: u32 = 5;
 /// it carries every vanilla line (~135), not just the ~17 hand-picked here. These consts stay because
 /// the wire protocol is still keyed on the same verbatim ids (no remap needed either way), but treat
 /// `game_skill_line` as the source of truth for anything beyond this hardcoded combat/profession subset.
-pub mod skill_line {
-    pub const AXE_1H: u32 = 44;
-    pub const AXE_2H: u32 = 172;
-    pub const MACE_1H: u32 = 54;
-    pub const MACE_2H: u32 = 160;
-    pub const POLEARM: u32 = 229;
-    pub const SWORD_1H: u32 = 43;
-    pub const SWORD_2H: u32 = 55;
-    pub const STAFF: u32 = 136;
-    pub const FIST: u32 = 473;
-    pub const DAGGER: u32 = 173;
-    pub const UNARMED: u32 = 162;
-    pub const DEFENSE: u32 = 95;
+pub(crate) mod skill_line {
+    pub(crate) const AXE_1H: u32 = 44;
+    pub(crate) const AXE_2H: u32 = 172;
+    pub(crate) const MACE_1H: u32 = 54;
+    pub(crate) const MACE_2H: u32 = 160;
+    pub(crate) const POLEARM: u32 = 229;
+    pub(crate) const SWORD_1H: u32 = 43;
+    pub(crate) const SWORD_2H: u32 = 55;
+    pub(crate) const STAFF: u32 = 136;
+    pub(crate) const FIST: u32 = 473;
+    pub(crate) const DAGGER: u32 = 173;
+    pub(crate) const UNARMED: u32 = 162;
+    pub(crate) const DEFENSE: u32 = 95;
     // --- Profession lines (verbatim vanilla SkillLine.dbc IDs, same convention as the combat lines so the
     // client skill-pane relay is a straight read). Unlike combat skills these are NOT level-capped (cooking
     // can reach 75 at level 1) — the profession learn path uses `max_rank=75` directly, never `level*5`.
-    pub const COOKING: u32 = 185;
-    pub const SKINNING: u32 = 393; // skin→leather producer
-    pub const LEATHERWORKING: u32 = 165; // skin→leather→CRAFT consumer
-    pub const HERBALISM: u32 = 182; // gather: herb nodes -> herbs
-    pub const MINING: u32 = 186; // gather: mining veins -> ore
-                                 // --- Profession-breadth batch (verbatim vanilla SkillLine.dbc IDs). Four new LEARNABLE craft lines;
-                                 // SMELTING is NOT a separate skill — it rides MINING (186), so a recipe under MINING with no learn marker.
-    pub const ALCHEMY: u32 = 171;
-    pub const FIRST_AID: u32 = 129;
-    pub const TAILORING: u32 = 197;
-    pub const BLACKSMITHING: u32 = 164;
+    pub(crate) const COOKING: u32 = 185;
+    pub(crate) const SKINNING: u32 = 393; // skin→leather producer
+    pub(crate) const LEATHERWORKING: u32 = 165; // skin→leather→CRAFT consumer
+    pub(crate) const HERBALISM: u32 = 182; // gather: herb nodes -> herbs
+    pub(crate) const MINING: u32 = 186; // gather: mining veins -> ore
+                                        // --- Profession-breadth batch (verbatim vanilla SkillLine.dbc IDs). Four new LEARNABLE craft lines;
+                                        // SMELTING is NOT a separate skill — it rides MINING (186), so a recipe under MINING with no learn marker.
+    pub(crate) const ALCHEMY: u32 = 171;
+    pub(crate) const FIRST_AID: u32 = 129;
+    pub(crate) const TAILORING: u32 = 197;
+    pub(crate) const BLACKSMITHING: u32 = 164;
     // --- The final three professions (completing the 13). Verbatim vanilla SkillLine.dbc IDs, same
     // convention. ENGINEERING is a craft line (recipes → products incl. on-use BOMBS); ENCHANTING is a
     // craft line driven by disenchant/enchant reducers (a server-side per-instance enchant overlay);
     // FISHING is a secondary gather line driven by the `fish` reducer (immediate-catch, no bobber).
-    pub const ENGINEERING: u32 = 202;
-    pub const ENCHANTING: u32 = 333;
-    pub const FISHING: u32 = 356;
+    pub(crate) const ENGINEERING: u32 = 202;
+    pub(crate) const ENCHANTING: u32 = 333;
+    pub(crate) const FISHING: u32 = 356;
 
-    pub const LOCKPICKING: u32 = 633;
+    pub(crate) const LOCKPICKING: u32 = 633;
     /// Riding — the mount line. Neither a profession nor a combat line: its rank is a TRAINED TIER
     /// (Apprentice 75, Journeyman 150) granted whole by a `trainer_type::MOUNTS` trainer, never climbed
     /// by use and never derived from level. Aliased from the shared crate because the gateway reads the
     /// same id to tell a riding offering from a spell offering.
-    pub const RIDING: u32 = lyracore_shared::trainer::RIDING_SKILL_LINE;
+    pub(crate) const RIDING: u32 = lyracore_shared::trainer::RIDING_SKILL_LINE;
 }
 
-pub fn is_profession_line(line: u32) -> bool {
+pub(crate) fn is_profession_line(line: u32) -> bool {
     use skill_line::*;
     matches!(
         line,
@@ -105,11 +105,11 @@ pub fn is_profession_line(line: u32) -> bool {
 /// Apprentice rank cap for a freshly-learned primary/secondary profession (vanilla: the first training tier
 /// caps at 75). A profession row is born `current: 1, max_rank: APPRENTICE_CAP` and climbs toward it on use —
 /// NOT bounded by `level*5` (the combat invariant), so a level-1 character can train cooking to 75.
-pub const APPRENTICE_CAP: u16 = 75;
+pub(crate) const APPRENTICE_CAP: u16 = 75;
 
 /// Map a vanilla weapon `ItemTemplate.subclass` to its `skill_line`. Anything unrecognized (or no weapon)
 /// resolves to `UNARMED` — the line an empty-handed swing trains, so a fist/unmapped weapon never errors.
-pub fn weapon_subclass_to_skill_line(subclass: u8) -> u32 {
+pub(crate) fn weapon_subclass_to_skill_line(subclass: u8) -> u32 {
     use skill_line::*;
     match subclass {
         0 => AXE_1H,
@@ -128,19 +128,19 @@ pub fn weapon_subclass_to_skill_line(subclass: u8) -> u32 {
 
 /// The skill cap for a unit of `level` — `level * SKILL_PER_LEVEL`. Both the max a tracked skill can reach
 /// and the baseline value an UNtracked skill reads as (so combat against an equal-level foe nets 0).
-pub fn skill_cap_for_level(level: u32) -> u32 {
+pub(crate) fn skill_cap_for_level(level: u32) -> u32 {
     level * SKILL_PER_LEVEL
 }
 
 /// The attack-table skill difference (in skill points) driving miss/dodge/parry/block: how far the
 /// defender's defense skill exceeds the attacker's weapon skill, clamped at 0 (a higher-skilled attacker
 /// adds nothing — the band floors). The single definition both live combat and the readback use.
-pub fn skill_diff(defense_skill: u32, weapon_skill: u32) -> u32 {
+pub(crate) fn skill_diff(defense_skill: u32, weapon_skill: u32) -> u32 {
     defense_skill.saturating_sub(weapon_skill)
 }
 
 /// One skill-up step: `current + 1`, clamped to `cap`. A skill already at cap is unchanged.
-pub fn next_skill(current: u32, cap: u32) -> u32 {
+pub(crate) fn next_skill(current: u32, cap: u32) -> u32 {
     (current + 1).min(cap)
 }
 
@@ -252,7 +252,7 @@ fn intellect_assist(intellect: u32, level: u32) -> f64 {
 /// grinding a grey mob still trains a lagging weapon skill here. That is a statement about observable
 /// behaviour we match — no implementation of it was copied. Pure → unit-tested at the seam, the
 /// monotonicity contract, and the clamp edges.
-pub fn combat_skillup_chance_bp(
+pub(crate) fn combat_skillup_chance_bp(
     current: u32,
     cap: u32,
     level: u32,
@@ -279,7 +279,7 @@ pub fn combat_skillup_chance_bp(
 /// SENTINEL: `gray <= orange` (notably the default-band `orange=1, gray=0`) means "no difficulty / always
 /// skill up" → returns 10000. The seeded recipes/nodes carry the default band, so every craft/gather
 /// deterministically +1s.
-pub fn skillup_chance_bp(current: u32, orange: u32, gray: u32) -> u32 {
+pub(crate) fn skillup_chance_bp(current: u32, orange: u32, gray: u32) -> u32 {
     if gray <= orange {
         return 10_000; // degenerate/disabled band (incl. the default sentinel) => always skill up
     }
@@ -299,7 +299,7 @@ pub fn skillup_chance_bp(current: u32, orange: u32, gray: u32) -> u32 {
 /// tier (Journeyman 150 over Apprentice 75) lifts the ceiling; re-buying the same/lower tier is a no-op
 /// (the idempotency the trainer's already-known gate also enforces). `learn_profession` uses exactly this
 /// for the present-row case (a NEW row instead just inserts `1/offered_cap`).
-pub fn raised_cap(current_cap: u16, offered_cap: u16) -> u16 {
+pub(crate) fn raised_cap(current_cap: u16, offered_cap: u16) -> u16 {
     current_cap.max(offered_cap)
 }
 
@@ -382,7 +382,7 @@ fn skill_value_or_cap(ctx: &ReducerContext, guid: u64, line: u32, level: u32) ->
 
 /// A unit's EFFECTIVE weapon skill: the trained value of its equipped weapon's line, else the `level*5`
 /// baseline. A creature (no items) always reads the baseline → its swings are unchanged.
-pub fn effective_weapon_skill(ctx: &ReducerContext, attacker: &WorldEntity) -> u32 {
+pub(crate) fn effective_weapon_skill(ctx: &ReducerContext, attacker: &WorldEntity) -> u32 {
     let line = equipped_weapon_skill_line(ctx, attacker.guid);
     skill_value_or_cap(ctx, attacker.guid, line, attacker.level)
 }
@@ -391,7 +391,7 @@ pub fn effective_weapon_skill(ctx: &ReducerContext, attacker: &WorldEntity) -> u
 /// `A_MOD_COMBAT(COMBAT_DEFENSE)` aura and Defense from working equipped items. More defense raises
 /// `skill_diff` against an attacker, so it tightens the attacker's miss/dodge/parry/block bands — a
 /// defender's avoidance. With neither source, this is exactly the trained or baseline value. [entity]
-pub fn effective_defense_skill(ctx: &ReducerContext, target: &WorldEntity) -> u32 {
+pub(crate) fn effective_defense_skill(ctx: &ReducerContext, target: &WorldEntity) -> u32 {
     let base = skill_value_or_cap(ctx, target.guid, skill_line::DEFENSE, target.level);
     let aura = crate::spell::combat_field_bonus(ctx, target.guid, crate::spell::COMBAT_DEFENSE);
     let gear =
@@ -402,7 +402,11 @@ pub fn effective_defense_skill(ctx: &ReducerContext, target: &WorldEntity) -> u3
 /// The attack-table skill difference for a swing of `attacker` at `target`: the defender's defense skill
 /// minus the attacker's weapon skill (clamped ≥0). With no tracked rows this is exactly
 /// `(target.level - attacker.level) * 5` — the pure level-derived `skill_diff` (baseline-safe). [entity]
-pub fn skill_diff_ctx(ctx: &ReducerContext, attacker: &WorldEntity, target: &WorldEntity) -> u32 {
+pub(crate) fn skill_diff_ctx(
+    ctx: &ReducerContext,
+    attacker: &WorldEntity,
+    target: &WorldEntity,
+) -> u32 {
     skill_diff(
         effective_defense_skill(ctx, target),
         effective_weapon_skill(ctx, attacker),
@@ -475,7 +479,7 @@ fn roll_and_raise_skill(
 /// Skill-up the attacker's equipped weapon line on a landed player→creature hit. Gated by the caller on
 /// `attacker.is_player()` + a real hit; trains the line the swing actually used, at the
 /// headroom/level/intellect chance (`combat_skillup_chance_bp`, `weapon = true`).
-pub fn gain_weapon_skill(ctx: &ReducerContext, attacker: &WorldEntity) {
+pub(crate) fn gain_weapon_skill(ctx: &ReducerContext, attacker: &WorldEntity) {
     let line = equipped_weapon_skill_line(ctx, attacker.guid);
     roll_and_raise_skill(
         ctx,
@@ -490,7 +494,7 @@ pub fn gain_weapon_skill(ctx: &ReducerContext, attacker: &WorldEntity) {
 /// Skill-up the defender's Defense line on a landed hit it survived. Gated by the caller on the defender
 /// being a player, at the headroom/level chance (`combat_skillup_chance_bp`, `weapon = false` — vanilla
 /// gives the intellect assist to weapon lines only, so Defense never gets it).
-pub fn gain_defense_skill(ctx: &ReducerContext, target: &WorldEntity) {
+pub(crate) fn gain_defense_skill(ctx: &ReducerContext, target: &WorldEntity) {
     roll_and_raise_skill(
         ctx,
         target.guid,
@@ -1103,7 +1107,7 @@ pub fn debug_learn_riding_from_trainer(
 /// fresh paladin swords/axes/polearms and made the weapon masters pointless (live find, faladin).
 /// Existing characters are GRANDFATHERED: `ensure_player_skills` only inserts missing lines, never
 /// deletes, so an existing character keeps its wide set.
-pub fn class_starting_weapon_skill_lines(class: u8) -> &'static [u32] {
+pub(crate) fn class_starting_weapon_skill_lines(class: u8) -> &'static [u32] {
     use skill_line::*;
     match class {
         // Warrior: 1H axes, 1H maces, 1H swords (createinfo grants exactly these three).
@@ -1128,7 +1132,7 @@ pub fn class_starting_weapon_skill_lines(class: u8) -> &'static [u32] {
     }
 }
 
-pub fn class_weapon_skill_lines(class: u8) -> &'static [u32] {
+pub(crate) fn class_weapon_skill_lines(class: u8) -> &'static [u32] {
     use skill_line::*;
     match class {
         // Warrior: axes, maces, polearms, swords, fist, daggers (no staves; ranged → UNARMED fallback, not listed).
@@ -1164,7 +1168,7 @@ pub fn class_weapon_skill_lines(class: u8) -> &'static [u32] {
 /// character lacks, so a relog never duplicates (mirrors `grant_starter_item`). Seeding at cap
 /// keeps a fresh login baseline (defense = weapon = level*5 → 0 skill_diff vs an equal-level foe).
 /// `class` is the vanilla class id (1=Warrior … 11=Druid) from `Character.class`. [entity]
-pub fn ensure_player_skills(
+pub(crate) fn ensure_player_skills(
     ctx: &ReducerContext,
     guid: u64,
     owner: Identity,

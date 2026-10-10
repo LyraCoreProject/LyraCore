@@ -274,7 +274,7 @@ pub(crate) fn open(
 /// `SignPetition`: the actor signs. Both the owner and the signer hear the result through an
 /// addressed Guild Event, so an already-signed Realm Account is an outcome, not a Refusal: the
 /// owner's event must commit even though no Signature does.
-pub fn sign(
+pub(crate) fn sign(
     ctx: &ReducerContext,
     actor_guid: u64,
     actor_account: u64,
@@ -338,7 +338,7 @@ pub fn sign(
 
 /// `OfferPetition` (`cm:PetitionsHandler.cpp:452-512`): the owner shows its Petition to a live
 /// Character of its team outside any Guild and without a pending Guild Invite.
-pub fn offer(
+pub(crate) fn offer(
     ctx: &ReducerContext,
     actor_guid: u64,
     request: GuildPetitionOffer,
@@ -365,7 +365,7 @@ pub fn offer(
 }
 
 /// `DeclinePetition` (`cm:PetitionsHandler.cpp:424-450`): the owner learns who declined.
-pub fn decline(
+pub(crate) fn decline(
     ctx: &ReducerContext,
     actor_guid: u64,
     charter_item_guid: u64,
@@ -385,7 +385,7 @@ pub fn decline(
 }
 
 /// `RenamePetition` (`cm:PetitionsHandler.cpp:284-319`).
-pub fn rename(
+pub(crate) fn rename(
     ctx: &ReducerContext,
     actor_guid: u64,
     request: GuildPetitionRename,
@@ -409,7 +409,7 @@ pub fn rename(
 /// Signatures go first, so the `add_member` hook finds none of them. The Charter item is the
 /// Gateway's to destroy on the Home Shard afterwards; until then it is inert, because its Petition
 /// is gone.
-pub fn turn_in(
+pub(crate) fn turn_in(
     ctx: &ReducerContext,
     actor_guid: u64,
     actor_account: u64,
@@ -459,7 +459,11 @@ pub fn turn_in(
 
 /// `ClosePetition`: the owner drops its Petition, as the Gateway does before a new Charter
 /// purchase when the old Charter is gone.
-pub fn close(ctx: &ReducerContext, actor_guid: u64, petition_id: u32) -> Result<(), GuildRefusal> {
+pub(crate) fn close(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    petition_id: u32,
+) -> Result<(), GuildRefusal> {
     let petition = ctx
         .db
         .game_guild_petition()

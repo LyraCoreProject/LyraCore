@@ -1,7 +1,19 @@
 //! Character Transfer. See `docs/character-transfer.md` for the contract and rationale.
 
 mod transport;
-pub(crate) use transport::*;
+#[cfg(test)]
+pub(crate) use transport::NOT_TRANSPORTED;
+#[cfg(test)]
+use transport::{
+    admit_command_issuer_import, decode_rows, encode_rows, export_rows_via, import_rows_via,
+    manifest, CommandIssuerImportRefusal, ManifestEntry, TransportArm, HOT_TABLES,
+    MANIFEST_EXCLUDE, TRANSFER_TABLES_OLD_BLOBS_MAY_LACK,
+};
+use transport::{
+    build_export_blob, check_manifest, decode_blob, export_rows, import_rows,
+    payload_for_this_build, ExportBlob, TableRows,
+};
+pub(crate) use transport::{move_rows, not_transported, Destination, RowIo};
 
 #[cfg(test)]
 mod harness;

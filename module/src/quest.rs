@@ -42,19 +42,19 @@ use crate::{game_creature_spawn, game_creature_template};
 /// Objective kinds (`QuestObjective.kind`). Only KILL ships today; the others are the documented
 /// extension points the schema already accommodates (a new kind needs only a new call site into
 /// [`credit_objective`], no migration).
-pub mod objective_kind {
+pub(crate) mod objective_kind {
     /// Kill `required_count` of creature `target_entry`. [kill]
-    pub const KILL_CREATURE: u8 = 0;
+    pub(crate) const KILL_CREATURE: u8 = 0;
     /// Hold `required_count` of ITEM `target_entry` — completion is a LIVE inventory count (no kill
     /// counter), consumed on turn-in. Covers cmangos quest ReqItemId/ReqItemCount. [collect]
-    pub const COLLECT_ITEM: u8 = 1;
+    pub(crate) const COLLECT_ITEM: u8 = 1;
     /// Use `required_count` of GAMEOBJECT `target_entry` (a lever/totem/quest-object). Credited by
     /// [`on_gameobject_used`] from the CMSG_GAMEOBJ_USE path, mirroring KILL_CREATURE. [use]
-    pub const USE_GAMEOBJECT: u8 = 2;
+    pub(crate) const USE_GAMEOBJECT: u8 = 2;
     /// Enter AreaTrigger `target_entry` (a zone the client detects, e.g. a mine for an "explore" quest).
     /// Credited by [`on_areatrigger_entered`] from the CMSG_AREATRIGGER path, mirroring USE_GAMEOBJECT.
     /// `required_count` is 1 (a single explore). [explore]
-    pub const EXPLORE_AREATRIGGER: u8 = 3;
+    pub(crate) const EXPLORE_AREATRIGGER: u8 = 3;
 }
 
 /// The raid quest-credit rule. Shared with the Gateway (`gateway/src/stdb/reads/items.rs`'s loot
@@ -137,11 +137,11 @@ pub(crate) enum QuestCreditOutcome {
 /// `CreatureQuest.role` — whether a creature is where you GET the quest or where you HAND IT IN. A
 /// quest is offered by its START giver(s) (`!`) and completed at its END giver(s) (`?`); the two are
 /// often the same NPC but need not be (cmangos `creature_questrelation` vs `creature_involvedrelation`).
-pub mod quest_role {
+pub(crate) mod quest_role {
     /// The creature OFFERS this quest (`!` overhead) — gates [`accept_quest`].
-    pub const START: u8 = 0;
+    pub(crate) const START: u8 = 0;
     /// The creature COMPLETES this quest (`?` overhead) — gates [`turn_in_quest`].
-    pub const END: u8 = 1;
+    pub(crate) const END: u8 = 1;
 }
 
 /// Max distance to talk to a quest giver: (10 yd)². The client walks into range before sending the
@@ -492,7 +492,7 @@ crate::character_owned!(transfer, fn sweep_transfer_game_character_quest_event_c
 
 /// Hard cap on a quest's objectives — vanilla's quest log shows 4, and the progress `counts` vector is
 /// sized to the quest's objective count (≤ this). Objectives past this are ignored at accept time.
-pub const MAX_OBJECTIVES: usize = 4;
+pub(crate) const MAX_OBJECTIVES: usize = 4;
 
 /// Is `cq` complete — has every objective of its quest reached its `required_count`? Joins the quest's
 /// [`QuestObjective`] rows and compares each against `counts[obj_index]` (a missing/short count = not

@@ -9,15 +9,15 @@ use super::MeetingStoneSeeker;
 
 /// 1.12 class ids (ChrClasses.dbc).
 mod class {
-    pub const WARRIOR: u8 = 1;
-    pub const PALADIN: u8 = 2;
-    pub const HUNTER: u8 = 3;
-    pub const ROGUE: u8 = 4;
-    pub const PRIEST: u8 = 5;
-    pub const SHAMAN: u8 = 7;
-    pub const MAGE: u8 = 8;
-    pub const WARLOCK: u8 = 9;
-    pub const DRUID: u8 = 11;
+    pub(crate) const WARRIOR: u8 = 1;
+    pub(crate) const PALADIN: u8 = 2;
+    pub(crate) const HUNTER: u8 = 3;
+    pub(crate) const ROGUE: u8 = 4;
+    pub(crate) const PRIEST: u8 = 5;
+    pub(crate) const SHAMAN: u8 = 7;
+    pub(crate) const MAGE: u8 = 8;
+    pub(crate) const WARLOCK: u8 = 9;
+    pub(crate) const DRUID: u8 = 11;
 }
 
 /// A Party's dungeon roles, in the order a Party fills them.

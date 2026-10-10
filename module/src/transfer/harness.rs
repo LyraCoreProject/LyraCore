@@ -34,7 +34,7 @@ pub struct RelayRow {
 
 /// One in-memory database. RefCell turns re-entrant access into a failing test instead of a hang.
 #[derive(Default)]
-pub struct FakeDb {
+pub(crate) struct FakeDb {
     chars: RefCell<HashMap<u64, crate::character::Character>>,
     gear: RefCell<Vec<GearRow>>,
     quests: RefCell<Vec<QuestRow>>,
@@ -85,7 +85,7 @@ pub struct FakeDb {
 /// `apply_confirm` copies the escrowed BLOB onto the attestation, so a fake that dropped the
 /// blob would have made the six-step sequence untestable end to end.
 #[derive(Clone, Default)]
-pub struct XOut {
+pub(crate) struct XOut {
     pub character_guid: u64,
     pub dest_map_id: u32,
     pub dest_instance_id: u64,
@@ -157,7 +157,7 @@ fn arm_machinery(db: &FakeDb, guid: u64, io: &mut RowIo<'_>) {
 }
 
 /// The harness's transport registry — the stand-in for `crate::CHARACTER_OWNED_TRANSFERS`.
-pub const ARMS: &[TransportArm<'static, FakeDb>] = &[
+pub(crate) const ARMS: &[TransportArm<'static, FakeDb>] = &[
     ("harness_gear", arm_gear),
     ("harness_quest", arm_quests),
     ("harness_relay", arm_relay),

@@ -1665,7 +1665,23 @@ fn seed_scheduler_arming(ctx: &ReducerContext) {
 // own file; `init` and the `debug_seed_*` reducers reach them through this re-export, so callers
 // keep the `seed::seed_*_fixture` paths.
 mod fixtures;
-pub(crate) use fixtures::*;
+#[cfg_attr(not(feature = "debug_reducers"), allow(unused_imports))]
+pub(crate) use fixtures::seed_scenario_fixtures;
+use fixtures::{
+    base_effect, profession_trainer_template, seed_hunter_tame_fixture, test_wolf_template,
+    PROFESSION_TRAINER_ENTRY, TEST_WOLF_ENTRY,
+};
+pub(crate) use fixtures::{
+    base_item, base_spell, seed_demon_skin_fixture, seed_drain_soul_fixture,
+    seed_fixture_catalogue, seed_frost_armor_fixture, seed_mana_burn_fixture, seed_mount_fixture,
+    seed_pw_shield_fixture, seed_regen_fixture, seed_soul_shard_item, seed_stacking_probe_fixture,
+    seed_stealth_fixture, seed_taxi_fixture, seed_test_proc_fixtures, tempered_blade_template,
+    tough_jerky_template, FIXTURE_BLADE, FIXTURE_DAZED_SPELL, FIXTURE_FACTION, FIXTURE_JERKY,
+    FIXTURE_MOUNT_SPELL, TEST_PROC_CHARGES, TEST_PROC_COIN, TEST_PROC_COOLDOWN, TEST_PROC_MARK,
+    TEST_PROC_PPM, TEST_PROC_ZAP,
+};
+#[cfg(test)]
+use fixtures::{FIXTURE_REINS, RIDING_TRAINER_ENTRY, TEST_TAME_BEAST_SPELL, TEST_TAME_BOAR_ENTRY};
 
 /// The createinfo starting kits — the spells a fresh character knows before any training, copied
 /// into `game_player_spell` at creation (`grant_createinfo_spells`). `race == 0` rows are class kits

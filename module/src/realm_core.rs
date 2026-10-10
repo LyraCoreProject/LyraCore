@@ -402,7 +402,7 @@ pub fn set_character_shard(
 /// a billion issued identities per Shard shared by Characters and items. Current assignments are
 /// far below `2^53`, above which `spacetime call` mangles a u64
 /// argument (danger-zones).
-pub const GUID_RANGE_SIZE: u64 = 1_000_000_000;
+pub(crate) const GUID_RANGE_SIZE: u64 = 1_000_000_000;
 
 /// Which slot a database that has already minted up to `mark` is *actually* using. Pure.
 pub(crate) fn slot_of(mark: u64) -> u32 {

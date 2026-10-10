@@ -97,20 +97,20 @@ fn relation_holds(
 /// Is `a` hostile to `b`? The enemy direction of the relationship rule: an explicit enemy entry
 /// proves it, an explicit friend entry disproves it, otherwise `a`'s enemy-group mask against `b`'s
 /// faction group decides.
-pub fn compute_hostile(a: &FactionTemplate, b: &FactionTemplate) -> bool {
+pub(crate) fn compute_hostile(a: &FactionTemplate, b: &FactionTemplate) -> bool {
     relation_holds(&a.enemies(), &a.friends(), a.enemy_group, b)
 }
 
 /// Is `a` friendly to `b`? The friend direction of the same rule. Used for the "can I attack" gate —
 /// a unit you are NOT friendly to is attackable (hostile AND neutral), only friendly units are
 /// protected.
-pub fn compute_friendly(a: &FactionTemplate, b: &FactionTemplate) -> bool {
+pub(crate) fn compute_friendly(a: &FactionTemplate, b: &FactionTemplate) -> bool {
     relation_holds(&a.friends(), &a.enemies(), a.friend_group, b)
 }
 
 /// Look up two faction templates by id and decide hostility. Missing data → not hostile (a safe
 /// default). (`compute_hostile`/`compute_friendly` are the pure predicates.)
-pub fn is_hostile(ctx: &ReducerContext, attacker_faction: u32, target_faction: u32) -> bool {
+pub(crate) fn is_hostile(ctx: &ReducerContext, attacker_faction: u32, target_faction: u32) -> bool {
     let ft = ctx.db.game_faction_template();
     match (ft.id().find(attacker_faction), ft.id().find(target_faction)) {
         (Some(a), Some(b)) => compute_hostile(&a, &b),
@@ -122,7 +122,11 @@ pub fn is_hostile(ctx: &ReducerContext, attacker_faction: u32, target_faction: u
 /// this is true — so hostile (red) AND neutral (yellow, e.g. Elwynn wolves) targets stay attackable,
 /// matching vanilla; only friendly (green) units are protected. Missing data → not friendly (so
 /// combat is never blocked when the table isn't loaded; the gate is additionally count-guarded).
-pub fn is_friendly(ctx: &ReducerContext, attacker_faction: u32, target_faction: u32) -> bool {
+pub(crate) fn is_friendly(
+    ctx: &ReducerContext,
+    attacker_faction: u32,
+    target_faction: u32,
+) -> bool {
     let ft = ctx.db.game_faction_template();
     match (ft.id().find(attacker_faction), ft.id().find(target_faction)) {
         (Some(a), Some(b)) => compute_friendly(&a, &b),

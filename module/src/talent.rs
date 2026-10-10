@@ -32,7 +32,7 @@ pub struct Talent {
     pub max_rank: u8,
     pub spell_id: u32, // PASSIVE aura spell (0 = none); applied with points = rank * base_points
     pub required_talent_id: u32, // 0 = none; else the prereq talent must be at rank >= 1
-    pub required_points_in_tree: u32, // tier gate (tier * POINTS_PER_TIER); 0 for tier 0
+    pub required_points_in_tree: u32, // tier gate (tier * 5); 0 for tier 0
     /// An ABILITY this talent TEACHES at rank 1 (0 = none) — a learnable active spell added to the player's
     /// spellbook (`spell::learn_spell`). For an ability talent (Death Wish, …) `spell_id` (the passive) is 0
     /// and this is the granted active. END-appended `#[default(0)]` → auto-migrates. [static]
@@ -136,13 +136,11 @@ crate::character_owned!(restamp, fn sweep_restamp_game_character_talent(ctx, cha
 // ===========================================================================================
 
 /// The character level at which the FIRST talent point is granted (vanilla: level 10).
-pub const TALENT_START_LEVEL: u32 = 10;
-/// Points that must be spent in a tree to unlock each next tier (vanilla: 5 per tier row).
-pub const POINTS_PER_TIER: u32 = 5;
+pub(crate) const TALENT_START_LEVEL: u32 = 10;
 
 /// Talent points AVAILABLE to spend: `(level - 9)` earned (1/level from L10, 51 at L60) minus the points
 /// already `spent`, saturating at 0. Pure — unit-tested.
-pub fn talent_points_available(level: u32, spent: u32) -> u32 {
+pub(crate) fn talent_points_available(level: u32, spent: u32) -> u32 {
     level
         .saturating_sub(TALENT_START_LEVEL - 1)
         .saturating_sub(spent)
@@ -151,7 +149,7 @@ pub fn talent_points_available(level: u32, spent: u32) -> u32 {
 /// Validate a learn of a talent: returns the NEXT rank on success, else a distinguished error. Gates, in
 /// order: a point must be available; the talent must be below max rank; the tier must be unlocked (enough
 /// points spent in that tree); the prerequisite (if any) must be met. Pure — unit-tested.
-pub fn validate_learn(
+pub(crate) fn validate_learn(
     current_rank: u8,
     max_rank: u8,
     available: u32,
@@ -180,7 +178,7 @@ pub fn validate_learn(
 /// every demo-seeded talent (which never set a rank requirement) AND for a genuine Talent.dbc prereq that
 /// only requires the SAME-tab talent below it at rank 1 — so a real import behaves exactly like the
 /// pre-import demo gate unless the DBC row explicitly requires a higher rank. Pure — unit-tested.
-pub fn prereq_satisfied(
+pub(crate) fn prereq_satisfied(
     required_talent_id: u32,
     learned_prereq_rank: u8,
     required_talent_rank: u8,
@@ -605,7 +603,7 @@ fn apply_talent_rank(
 /// Re-apply every learned passive talent's aura to `guid` at login (mirrors `ensure_player_skills`). Each
 /// learned talent's spell is applied at its current rank; idempotent (aura_apply refreshes by effect_id),
 /// so a relog never stacks. A character with no learned talents applies nothing (baseline-safe). [entity]
-pub fn apply_learned_talents(ctx: &ReducerContext, guid: u64, owner: Identity, level: u32) {
+pub(crate) fn apply_learned_talents(ctx: &ReducerContext, guid: u64, owner: Identity, level: u32) {
     let talents = ctx.db.game_talent();
     let learned: Vec<(u32, u8)> = ctx
         .db

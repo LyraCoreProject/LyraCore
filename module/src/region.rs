@@ -6,7 +6,7 @@ use spacetimedb::{reducer, table, ReducerContext, Table};
 
 /// `(map_id, region_id)` as one u64 primary key. Same trick as `terrain::cell_key` — SpacetimeDB
 /// takes a single `#[primary_key]` column, and a packed key is cheaper than a scan-and-match.
-pub fn region_key(map_id: u32, region_id: u32) -> u64 {
+pub(crate) fn region_key(map_id: u32, region_id: u32) -> u64 {
     ((map_id as u64) << 32) | region_id as u64
 }
 

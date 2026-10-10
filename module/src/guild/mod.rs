@@ -18,7 +18,7 @@ use spacetimedb::{reducer, table, ReducerContext, SpacetimeType, Table, Timestam
 pub(crate) mod chat;
 mod cleanup;
 pub mod fee;
-pub mod membership;
+pub(crate) mod membership;
 pub mod petition;
 pub(crate) use fee::{sweep_delete_game_guild_fee_hold, sweep_transfer_game_guild_fee_hold};
 mod settings;
@@ -312,7 +312,7 @@ fn sign_off(ctx: &ReducerContext, actor_guid: u64) -> Result<(), GuildRefusal> {
 
 /// Found a Guild with the five default Guild Ranks and `leader_guid` at rank 0
 /// (`cm:Guild.cpp:104-154`). The Gates and their order are `founding_gate`'s.
-pub fn create_guild(
+pub(crate) fn create_guild(
     ctx: &ReducerContext,
     leader_guid: u64,
     leader_name: &str,
@@ -369,7 +369,7 @@ pub fn create_guild(
 /// Insert one member row. This is the only place a member row is inserted. Refuses a Character
 /// that is already a member of any Guild (`cm:Guild.cpp:167-179`). A joiner's own Petition closes
 /// and its Signatures are struck.
-pub fn add_member(
+pub(crate) fn add_member(
     ctx: &ReducerContext,
     guild_id: u32,
     character_guid: u64,
@@ -395,7 +395,7 @@ pub fn add_member(
 }
 
 /// The membership row of `character_guid`, if it is in a Guild.
-pub fn member(ctx: &ReducerContext, character_guid: u64) -> Option<GuildMember> {
+pub(crate) fn member(ctx: &ReducerContext, character_guid: u64) -> Option<GuildMember> {
     ctx.db
         .game_guild_member()
         .character_guid()
@@ -403,7 +403,7 @@ pub fn member(ctx: &ReducerContext, character_guid: u64) -> Option<GuildMember> 
 }
 
 /// The Guild Ranks of `guild_id`, highest first.
-pub fn ranks(ctx: &ReducerContext, guild_id: u32) -> Vec<GuildRank> {
+pub(crate) fn ranks(ctx: &ReducerContext, guild_id: u32) -> Vec<GuildRank> {
     let mut ranks: Vec<GuildRank> = ctx
         .db
         .game_guild_rank()
@@ -415,7 +415,7 @@ pub fn ranks(ctx: &ReducerContext, guild_id: u32) -> Vec<GuildRank> {
 }
 
 /// The lowest Guild Rank's id: where a new member starts.
-pub fn lowest_rank(ctx: &ReducerContext, guild_id: u32) -> u32 {
+pub(crate) fn lowest_rank(ctx: &ReducerContext, guild_id: u32) -> u32 {
     ctx.db
         .game_guild_rank()
         .by_guild()
@@ -426,7 +426,7 @@ pub fn lowest_rank(ctx: &ReducerContext, guild_id: u32) -> u32 {
 }
 
 /// The Rank Rights of one Guild Rank. An unknown rank reads 0 (`cm:Guild.cpp:660-666`).
-pub fn rank_rights(ctx: &ReducerContext, guild_id: u32, rank_id: u32) -> u32 {
+pub(crate) fn rank_rights(ctx: &ReducerContext, guild_id: u32, rank_id: u32) -> u32 {
     ctx.db
         .game_guild_rank()
         .by_guild()
@@ -436,7 +436,7 @@ pub fn rank_rights(ctx: &ReducerContext, guild_id: u32, rank_id: u32) -> u32 {
 }
 
 /// Write one Guild Event. `recipient_guid == 0` broadcasts to the Guild's online members.
-pub fn push_event(
+pub(crate) fn push_event(
     ctx: &ReducerContext,
     guild_id: u32,
     recipient_guid: u64,

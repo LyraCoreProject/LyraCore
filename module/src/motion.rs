@@ -50,15 +50,15 @@ use crate::{game_entity_motion, game_world_entity, EntityMotion};
 /// Default republish cadence — 50 000 µs = **20 Hz** (the default). Peer movement gains at most
 /// one tick (50 ms) of latency; vanilla clients dead-reckon between updates, and BitCraft ships far
 /// coarser (one row per path segment, lerped on read).
-pub const MOTION_TICK_MICROS: i64 = 50_000;
+pub(crate) const MOTION_TICK_MICROS: i64 = 50_000;
 
 /// Cadence floor for [`set_motion_tick_ms`]. Every firing is a transaction on the one serialized
 /// commit stream, so a very tight interval trades the win this whole item exists to buy back for
 /// scheduler pressure (`debug_arm_instance_tick`'s floor, same reasoning).
-pub const MOTION_TICK_MS_FLOOR: u64 = 10;
+pub(crate) const MOTION_TICK_MS_FLOOR: u64 = 10;
 /// Cadence ceiling for [`set_motion_tick_ms`] — a second of staged movement is already well past
 /// what peer dead-reckoning covers; anything larger is a misconfiguration, not a tuning choice.
-pub const MOTION_TICK_MS_CEIL: u64 = 1_000;
+pub(crate) const MOTION_TICK_MS_CEIL: u64 = 1_000;
 
 // ===========================================================================================
 //  The private staging table [server] — NO `public`, deliberately

@@ -244,7 +244,7 @@ pub fn restore_taxi_fixture(ctx: &ReducerContext) -> Result<(), String> {
 
 /// The pure half of [`set_realm_address`]: `host:port`, trimmed, port in `1..=65535`. Blank is
 /// refused rather than written — advertising nothing fails at realm select for every player at once.
-pub fn validate_realm_address(raw: &str) -> Result<String, String> {
+pub(crate) fn validate_realm_address(raw: &str) -> Result<String, String> {
     let address = raw.trim();
     if address.is_empty() {
         return Err("realm address must not be blank".to_string());

@@ -73,7 +73,7 @@ pub struct LevelupEvent {
 /// Indexed L1..59 (L60 = cap → 0). Returns 0 for level 0 and any level >= the cap so the ding loop
 /// (`grant_xp`) terminates and the rested-pool math (`rest_pool_after`) treats a capped char as
 /// "no level to fill". This is the single source of the leveling curve.
-pub fn xp_to_next_level(level: u32) -> u32 {
+pub(crate) fn xp_to_next_level(level: u32) -> u32 {
     // XP_PER_LEVEL[i] = XP to go from level (i+1) to (i+2); i.e. index 0 = L1->L2 = 400.
     const XP_PER_LEVEL: [u32; 59] = [
         400, 900, 1400, 2100, 2800, 3600, 4500, 5400, 6500, 7600, 8800, 10100, 11400, 12900, 14400,
@@ -92,7 +92,7 @@ pub fn xp_to_next_level(level: u32) -> u32 {
 /// when the real cmangos `player_classlevelstats`/`player_levelstats` curve (importer P3) isn't
 /// loaded. The ding (`award_xp`) and `player_login` call `stats::max_health_for`, which uses this when
 /// a row is missing — so login/leveling work identically before an import (L1 = 60 either way).
-pub fn max_health_for_level(level: u32) -> u32 {
+pub(crate) fn max_health_for_level(level: u32) -> u32 {
     60 + 15 * level.saturating_sub(1)
 }
 

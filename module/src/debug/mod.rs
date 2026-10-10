@@ -36,9 +36,9 @@ mod package_config;
 mod readout;
 mod runtime_script;
 
-pub use fingerprint::*;
-pub use instance::*;
-pub use readout::*;
+pub use fingerprint::{game_catalogue_fingerprint, CatalogueFingerprint};
+pub(crate) use instance::debug_set_vmap_enabled;
+pub use readout::{game_debug_readout, DebugReadout};
 
 use lyracore_shared::{constants, spatial};
 use spacetimedb::{log, reducer, ReducerContext, ScheduleAt, Table, TimeDuration};

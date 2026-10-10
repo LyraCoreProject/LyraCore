@@ -21,9 +21,9 @@
 use spacetimedb::{reducer, table, ReducerContext, Table};
 
 /// Keep at most this many samples per shard (~10 minutes at the gateway's default 30s cadence).
-pub const SHARD_LOAD_RING: usize = 20;
+pub(crate) const SHARD_LOAD_RING: usize = 20;
 /// Same, per `(map_id, region_id)`.
-pub const REGION_LOAD_RING: usize = 20;
+pub(crate) const REGION_LOAD_RING: usize = 20;
 
 /// Occupancy readings above this are almost certainly a unit error (a fraction instead of a
 /// percentage, or raw seconds instead of a percentage) rather than a real writer — refuse rather
