@@ -1,137 +1,174 @@
-//! Death and resurrection opcodes over an encrypted World Session.
+//! Death and resurrection requests, handled against a Fake that models only who is alive.
 
 use super::*;
+use handle_loot_fake::{HandleLootFake, Life};
 
-#[test]
-fn repop_request_dispatches_repop_for_the_caller() {
-    let store = std::sync::Arc::new(quest_store());
-    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_REPOP_REQUEST {}
-        .write_encrypted_client(&mut client, &mut c_enc)
-        .unwrap();
-    drop(client); // repop's revive replicates via the entity VALUES relay, not a direct SMSG here
-    server.join().unwrap();
-    assert_eq!(store.death.repopped.lock().unwrap().as_slice(), &[1]);
-}
+#[path = "handle_loot_fake.rs"]
+pub(crate) mod handle_loot_fake;
 
-#[test]
-fn reclaim_corpse_dispatches_with_the_wire_corpse_guid() {
-    let store = std::sync::Arc::new(quest_store());
-    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_RECLAIM_CORPSE {
-        guid: Guid::new(777),
+pub(crate) const SELF_GUID: u64 = 1;
+
+/// A World Session connection in the world as `SELF_GUID`. `handle_loot` never reads the
+/// connection's Store, but `WorldConn` needs one.
+pub(crate) fn in_world_conn() -> WorldConn {
+    let (_, crypto) = ProofSeed::new().into_client_header_crypto(&ns("TESTER"), K, 0);
+    let (_, decrypt) = crypto.split();
+    WorldConn {
+        session_claim: None,
+        account_id: 7,
+        account_name: "TESTER".into(),
+        decrypt,
+        state: WorldState::InWorld(InWorld {
+            self_guid: SELF_GUID,
+            subs: PlayerSubscriptions::empty(),
+            attacking_target: None,
+            open_loot: OpenLootState::default(),
+            ranged_repeat: false,
+        }),
+        move_coalesce: Default::default(),
+        gossip_menu: None,
+        store: RoutedStore::new(std::sync::Arc::new(WorldFake::default())),
+        session_key: None,
+        guild_signed_on: None,
+        move_desync_drops: 0,
+        who_throttled_until: None,
+        group_broadcast_cooldowns: Default::default(),
+        chat_flood: Default::default(),
     }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    drop(client);
-    server.join().unwrap();
-    assert_eq!(
-        store.death.reclaimed_corpses.lock().unwrap().as_slice(),
-        &[(1, 777)]
-    );
+}
+
+/// Handle one request and return what the client is sent. Fails when the handler ends the session
+/// or passes the request on.
+pub(crate) fn run(
+    store: &HandleLootFake,
+    conn: &mut WorldConn,
+    msg: ClientOpcodeMessage,
+) -> Vec<Outbound> {
+    let (tx, rx) = SessionTx::with_depth(0);
+    let passed_on = handle_loot(&tx, store, conn, msg).expect("the request ends the session");
+    assert!(passed_on.is_none(), "the request was passed on");
+    drop(tx);
+    rx.try_iter().collect()
 }
 
 #[test]
-fn resurrect_response_accept_maps_status_byte_to_true() {
-    let store = std::sync::Arc::new(quest_store());
-    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_RESURRECT_RESPONSE {
-        guid: Guid::new(42),
-        status: 1,
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    drop(client);
-    server.join().unwrap();
-    assert_eq!(
-        store.death.resurrect_responses.lock().unwrap().as_slice(),
-        &[(1, true)]
+fn repop_revives_the_caller_and_no_one_else() {
+    let store = HandleLootFake::default()
+        .with_life(SELF_GUID, Life::Dead)
+        .with_life(2, Life::Dead);
+
+    // The revive reaches the client through the entity relay, not as a direct reply.
+    let sent = run(
+        &store,
+        &mut in_world_conn(),
+        ClientOpcodeMessage::CMSG_REPOP_REQUEST,
     );
+
+    assert!(sent.is_empty());
+    assert_eq!(store.life(SELF_GUID), Life::Alive);
+    assert_eq!(store.life(2), Life::Dead);
 }
 
 #[test]
-fn resurrect_response_decline_maps_status_byte_to_false() {
-    // Proves the `status != 0` mapping actually distinguishes decline from accept, not just that
-    // SOME boolean reaches the store.
-    let store = std::sync::Arc::new(quest_store());
-    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_RESURRECT_RESPONSE {
-        guid: Guid::new(42),
-        status: 0,
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    drop(client);
-    server.join().unwrap();
-    assert_eq!(
-        store.death.resurrect_responses.lock().unwrap().as_slice(),
-        &[(1, false)]
-    );
+fn reclaim_corpse_uses_the_corpse_guid_from_the_wire() {
+    let store = HandleLootFake::default()
+        .with_life(SELF_GUID, Life::Ghost)
+        .with_corpse(SELF_GUID, 777);
+    let mut conn = in_world_conn();
+    let reclaim = |guid| {
+        ClientOpcodeMessage::CMSG_RECLAIM_CORPSE(CMSG_RECLAIM_CORPSE {
+            guid: Guid::new(guid),
+        })
+    };
+
+    run(&store, &mut conn, reclaim(778));
+    assert_eq!(store.life(SELF_GUID), Life::Ghost, "another corpse");
+
+    run(&store, &mut conn, reclaim(777));
+    assert_eq!(store.life(SELF_GUID), Life::Alive);
 }
 
 #[test]
-fn self_res_dispatches_self_resurrect_for_the_caller() {
-    let store = std::sync::Arc::new(quest_store());
-    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_SELF_RES {}
-        .write_encrypted_client(&mut client, &mut c_enc)
-        .unwrap();
-    drop(client); // the revive replicates via the entity VALUES relay, not a direct SMSG here
-    server.join().unwrap();
-    assert_eq!(store.death.self_resurrects.lock().unwrap().as_slice(), &[1]);
+fn accepting_a_resurrect_offer_revives_the_caller() {
+    let store = HandleLootFake::default()
+        .with_life(SELF_GUID, Life::Dead)
+        .with_res_offer(SELF_GUID);
+
+    run(&store, &mut in_world_conn(), resurrect_response(1));
+
+    assert_eq!(store.life(SELF_GUID), Life::Alive);
+}
+
+#[test]
+fn declining_a_resurrect_offer_leaves_the_caller_dead_and_spends_the_offer() {
+    let store = HandleLootFake::default()
+        .with_life(SELF_GUID, Life::Dead)
+        .with_res_offer(SELF_GUID);
+
+    run(&store, &mut in_world_conn(), resurrect_response(0));
+
+    assert_eq!(store.life(SELF_GUID), Life::Dead);
+    assert!(!store.has_res_offer(SELF_GUID));
+}
+
+#[test]
+fn self_res_revives_the_caller_and_spends_the_option() {
+    let store = HandleLootFake::default()
+        .with_life(SELF_GUID, Life::Dead)
+        .with_self_res_option(SELF_GUID);
+
+    // The revive reaches the client through the entity relay, not as a direct reply.
+    let sent = run(
+        &store,
+        &mut in_world_conn(),
+        ClientOpcodeMessage::CMSG_SELF_RES,
+    );
+
+    assert!(sent.is_empty());
+    assert_eq!(store.life(SELF_GUID), Life::Alive);
+    assert!(!store.has_self_res_option(SELF_GUID));
 }
 
 #[test]
 fn a_refused_self_res_sends_nothing_and_keeps_the_session() {
-    let store = std::sync::Arc::new({
-        let base = quest_store();
-        WorldFake {
-            death: DeathState {
-                self_resurrect_error: Some("no Self-Resurrection Option".into()),
-                ..base.death
-            },
-            ..base
-        }
-    });
-    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_SELF_RES {}
-        .write_encrypted_client(&mut client, &mut c_enc)
-        .unwrap();
-    CMSG_QUESTGIVER_STATUS_QUERY {
-        guid: Guid::new(50),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
-        ServerOpcodeMessage::SMSG_QUESTGIVER_STATUS(_) => {}
-        other => panic!("expected the sentinel (the Refusal sends nothing), got {other}"),
-    }
-    drop(client);
-    server.join().unwrap();
-    assert_eq!(store.death.self_resurrects.lock().unwrap().as_slice(), &[1]);
+    let store = HandleLootFake::default().with_life(SELF_GUID, Life::Dead);
+
+    // `run` fails the test when the handler ends the session.
+    let sent = run(
+        &store,
+        &mut in_world_conn(),
+        ClientOpcodeMessage::CMSG_SELF_RES,
+    );
+
+    assert!(sent.is_empty());
+    assert_eq!(store.life(SELF_GUID), Life::Dead);
 }
 
 #[test]
-fn spirit_healer_activate_dispatches_and_confirms_the_healer_guid() {
-    let store = std::sync::Arc::new(quest_store());
-    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_SPIRIT_HEALER_ACTIVATE {
-        guid: Guid::new(888),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
-        ServerOpcodeMessage::SMSG_SPIRIT_HEALER_CONFIRM(p) => {
-            assert_eq!(p.guid, Guid::new(888), "echoes the healer's own guid");
-        }
-        other => panic!("expected SMSG_SPIRIT_HEALER_CONFIRM, got {other}"),
-    }
-    drop(client);
-    server.join().unwrap();
-    // The SMSG above echoes the WIRE guid verbatim, so it alone can't catch a swapped-argument bug —
-    // this pins that the STORE call also got (self_guid, healer_guid) in the right order.
-    assert_eq!(
-        store.death.spirit_healer_calls.lock().unwrap().as_slice(),
-        &[(1, 888)]
+fn spirit_healer_revives_the_ghost_and_confirms_the_healer_guid() {
+    let store = HandleLootFake::default()
+        .with_life(SELF_GUID, Life::Ghost)
+        .with_spirit_healer(888);
+
+    let sent = run(
+        &store,
+        &mut in_world_conn(),
+        ClientOpcodeMessage::CMSG_SPIRIT_HEALER_ACTIVATE(CMSG_SPIRIT_HEALER_ACTIVATE {
+            guid: Guid::new(888),
+        }),
     );
+
+    let [Outbound::One(ServerOpcodeMessage::SMSG_SPIRIT_HEALER_CONFIRM(confirm))] = sent.as_slice()
+    else {
+        panic!("expected one SMSG_SPIRIT_HEALER_CONFIRM");
+    };
+    assert_eq!(confirm.guid, Guid::new(888), "echoes the healer's own guid");
+    assert_eq!(store.life(SELF_GUID), Life::Alive);
+}
+
+fn resurrect_response(status: u8) -> ClientOpcodeMessage {
+    ClientOpcodeMessage::CMSG_RESURRECT_RESPONSE(Box::new(CMSG_RESURRECT_RESPONSE {
+        guid: Guid::new(42),
+        status,
+    }))
 }
