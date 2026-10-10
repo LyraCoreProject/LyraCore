@@ -249,7 +249,8 @@ of history, and the next deploy had no room to build.
 
 A restart needs only the newest valid snapshot and the segments after it. It falls back to an older
 snapshot if the newest one fails to load, and a gap between segments stops the database from
-starting. `deploy/spacetimedb-prune.sh` follows those rules:
+starting. `deploy/spacetimedb-prune.sh` in the
+[`lyracore-cli`](https://github.com/LyraCoreProject/lyracore-cli) repository follows those rules:
 
 - it keeps the two newest valid snapshots, plus any snapshot that is incomplete or locked;
 - it keeps every segment from the one that holds S2 + 1, where S2 is the older kept snapshot, and
@@ -257,7 +258,8 @@ starting. `deploy/spacetimedb-prune.sh` follows those rules:
 - it deletes module logs from before today (UTC), and skips files changed in the last 30 minutes.
 
 It is safe with the node running. Without `--apply` it only reports. Install it as root, with the
-fifteen-minute timer. Daily cleanup filled Argus's disk during a 1,000-bot run:
+fifteen-minute timer. Daily cleanup filled Argus's disk during a 1,000-bot run. Run these from a
+`lyracore-cli` checkout:
 
 ```bash
 sudo install -d /opt/lyracore/bin

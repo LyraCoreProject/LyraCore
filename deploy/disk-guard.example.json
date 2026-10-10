@@ -1,6 +1,0 @@
-{
-  "data_directory": "/var/lib/lyracore/spacetimedb",
-  "state_directory": "/var/lib/lyracore-disk-guard",
-  "spacetime": "/home/lyracore/.local/share/spacetime/bin/2.7.1/spacetimedb-cli",
-  "databases": ["lyracore", "lyracore-world-1", "lyracore-instances", "lyracore-realm"]
-}
