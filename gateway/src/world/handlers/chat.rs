@@ -91,8 +91,7 @@ pub(crate) trait SpeechStore: Send + Sync {
     /// Refusal.
     fn send_chat(
         &self,
-        account_id: u64,
-        self_guid: u64,
+        actor: Actor,
         chat_type: u8,
         language: u8,
         message: String,
@@ -103,8 +102,7 @@ pub(crate) trait SpeechStore: Send + Sync {
     /// name so the chat line reads "X waves at <target>."
     fn send_emote(
         &self,
-        account_id: u64,
-        self_guid: u64,
+        actor: Actor,
         text_emote: u32,
         emote_anim: u32,
         target_guid: u64,
@@ -116,7 +114,7 @@ pub(crate) trait SpeechStore: Send + Sync {
     /// verbatim (module-side parsing keeps the command set data-free). A Refusal's reason is relayed
     /// back to the SENDER ONLY as a system chat line (never broadcast, never a `game_chat_event`
     /// row). Any other `Err` ends the World Session.
-    fn gm_command(&self, account_name: &str, self_guid: u64, text: String) -> Result<()>;
+    fn gm_command(&self, account_name: &str, actor: Actor, text: String) -> Result<()>;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

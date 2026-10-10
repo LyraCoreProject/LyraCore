@@ -304,11 +304,14 @@ fn an_unreadable_candidate_is_an_error_not_a_missing_character() {
 fn say_yell_and_emotes_stay_on_the_players_own_shard_when_sharded() {
     let (realm, world, _instances, calls) = party_topology();
 
+    let speaker = Actor::new(7).expect("speaker guid");
     world
-        .send_chat(7, 0, 0, 0, "hello Elwynn".into())
+        .send_chat(speaker, 0, 0, "hello Elwynn".into())
         .expect("say");
-    world.send_chat(7, 0, 1, 0, "HELP".into()).expect("yell");
-    world.send_emote(7, 0, 4, 4, TRIN).expect("targeted emote");
+    world.send_chat(speaker, 1, 0, "HELP".into()).expect("yell");
+    world
+        .send_emote(speaker, 4, 4, TRIN)
+        .expect("targeted emote");
 
     assert_eq!(
         world.speech.chats.lock().unwrap().clone(),
