@@ -1,10 +1,9 @@
 //! `Coordinator`'s [`TrainerStore`] adapter.
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use lyracore_shared::trainer::TrainerRefusal;
 use spacetimedb_sdk::Table;
 
-use crate::codec;
 use crate::stdb::bindings::*;
 use crate::stdb::connection::{call_reducer, reducer_refusal_reason};
 use crate::stdb::reads::spell_ranks_stack_in_book;
@@ -12,92 +11,9 @@ use crate::stdb::Coordinator;
 use crate::world::{Actor, TrainerStore};
 
 impl TrainerStore for Coordinator {
-    fn trainer_serves(&self, player_guid: u64, trainer_guid: u64) -> Result<bool> {
-        self.trainer_serves(player_guid, trainer_guid)
-    }
-
-    fn trainer_list(
-        &self,
-        player_guid: u64,
-        trainer_guid: u64,
-    ) -> Result<Vec<codec::TrainerSpellView>> {
-        self.trainer_list(player_guid, trainer_guid)
-    }
-
-    fn buy_trainer_spell(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        trainer_guid: u64,
-        spell_id: u32,
-    ) -> Result<crate::world::TrainerBuyOutcome> {
-        self.buy_trainer_spell(account_id, self_guid, trainer_guid, spell_id)
-    }
-
-    fn trainer_offer_skill_line(&self, trainer_guid: u64, spell_id: u32) -> u32 {
-        self.trainer_offer_skill_line(trainer_guid, spell_id)
-    }
-
-    fn talent_grant_spell(&self, talent_id: u32) -> u32 {
-        self.talent_by_id(talent_id)
-            .map(|t| t.grant_spell_id)
-            .unwrap_or(0)
-    }
-
-    fn set_faction_at_war(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        reputation_index: u32,
-        at_war: bool,
-    ) -> Result<()> {
-        self.set_faction_at_war(account_id, self_guid, reputation_index, at_war)
-    }
-
-    fn set_action_button(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        button: u8,
-        action: u32,
-        action_type: u8,
-    ) -> Result<()> {
-        self.set_action_button(account_id, self_guid, button, action, action_type)
-    }
-
-    fn talent_pane_sync(&self, character_guid: u64, talent_id: u32) -> (u32, u32, u32) {
-        self.talent_pane_sync(character_guid, talent_id)
-    }
-
-    fn talent_points_spent(&self, character_guid: u64) -> u32 {
-        self.talent_points_spent(character_guid)
-    }
-
-    fn learn_talent(&self, account_id: u64, self_guid: u64, talent_id: u32) -> Result<()> {
-        self.learn_talent(account_id, self_guid, talent_id)
-    }
-
-    fn reset_talents(&self, account_id: u64, self_guid: u64, trainer_guid: u64) -> Result<()> {
-        self.reset_talents(account_id, self_guid, trainer_guid)
-    }
-
-    fn resolve_learn_target(&self, spell_id: u32) -> u32 {
-        self.resolve_learn_target(spell_id)
-    }
-
-    fn superseded_old_rank(&self, new_spell: u32, player_guid: u64) -> Option<u32> {
-        self.superseded_old_rank(new_spell, player_guid)
-    }
-
-    fn character_presence(&self, guid: u64) -> Result<Option<(bool, u8, u8, u32)>> {
-        self.character_presence(guid)
-    }
-}
-
-impl Coordinator {
     /// A character's live presence `(online, level, class, zone_id)` for `SMSG_FRIEND_STATUS`/
     /// `SMSG_FRIEND_LIST`. `None` if the guid doesn't resolve to any character (a stale reference).
-    pub fn character_presence(&self, guid: u64) -> Result<Option<(bool, u8, u8, u32)>> {
+    fn character_presence(&self, guid: u64) -> Result<Option<(bool, u8, u8, u32)>> {
         Ok(self
             .0
             .coord()
@@ -111,7 +27,7 @@ impl Coordinator {
 
     /// Does this trainer serve `player_guid`'s class? Fail-open on any missing read (trainer,
     /// character, template), matching `npc_refuses_interaction`.
-    pub fn trainer_serves(&self, player_guid: u64, trainer_guid: u64) -> Result<bool> {
+    fn trainer_serves(&self, player_guid: u64, trainer_guid: u64) -> Result<bool> {
         let guard = self.0.coord();
         let db = &guard.conn.db;
         let (Some(trainer), Some(player)) = (
@@ -132,7 +48,7 @@ impl Coordinator {
     /// The skill line offering `spell_id` teaches at trainer `trainer_guid`, or 0 for an ordinary spell
     /// offering (and for any missing trainer/offering row). The offering list is keyed by the trainer's
     /// creature-template `entry`, like the vendor stock. Read from the privileged cache.
-    pub fn trainer_offer_skill_line(&self, trainer_guid: u64, spell_id: u32) -> u32 {
+    fn trainer_offer_skill_line(&self, trainer_guid: u64, spell_id: u32) -> u32 {
         let guard = self.0.coord();
         let db = &guard.conn.db;
         let Some(entry) = db
@@ -156,7 +72,7 @@ impl Coordinator {
     /// codec can render each Green/Red/Gray. The trainer's creature-template `entry` keys the list (like
     /// the vendor stock); `known` = a `game_player_spell` row (the one castability source). A missing
     /// trainer/player → empty list. Read from the privileged cache (coordinator bypasses RLS).
-    pub fn trainer_list(
+    fn trainer_list(
         &self,
         player_guid: u64,
         trainer_guid: u64,
@@ -245,7 +161,7 @@ impl Coordinator {
     /// downranking Holy Light is a real thing): MANA spells keep EVERY rank visible (casters
     /// downrank for mana efficiency); rage/energy/health-cost spells and PASSIVES supersede
     /// (Heroic Strike replaces its old rank — there is no "downranked HS").
-    pub fn superseded_old_rank(&self, new_spell: u32, player_guid: u64) -> Option<u32> {
+    fn superseded_old_rank(&self, new_spell: u32, player_guid: u64) -> Option<u32> {
         let guard = self.0.coord();
         let db = &guard.conn.db;
         if spell_ranks_stack_in_book(db, new_spell) {
@@ -266,7 +182,7 @@ impl Coordinator {
         knows_prev.then_some(prev)
     }
 
-    pub fn resolve_learn_target(&self, spell_id: u32) -> u32 {
+    fn resolve_learn_target(&self, spell_id: u32) -> u32 {
         const EXCLUDED: [u8; 4] = [0x93, 0xBE, 0xAB, 0x05];
         let guard = self.0.coord();
         let resolved = guard
@@ -281,9 +197,9 @@ impl Coordinator {
         resolved.unwrap_or(spell_id)
     }
 
-    /// Look up the static `Talent` metadata for `talent_id` (from the coordinator's `game_talent` cache).
-    /// Returns `None` if the talent isn't seeded (the dispatch treats an unknown talent as a noop).
-    pub fn talent_by_id(&self, talent_id: u32) -> Option<Talent> {
+    /// The `grant_spell_id` for `talent_id` from the coordinator's `game_talent` cache (0 = passive,
+    /// no ability granted, or an unseeded talent).
+    fn talent_grant_spell(&self, talent_id: u32) -> u32 {
         self.0
             .coord()
             .conn
@@ -291,12 +207,14 @@ impl Coordinator {
             .game_talent()
             .iter()
             .find(|t| t.talent_id == talent_id)
+            .map(|t| t.grant_spell_id)
+            .unwrap_or(0)
     }
 
     /// Sum of the character's spent talent ranks (`game_character_talent`, coordinator RLS-bypassed).
     /// Non-zero gates the post-CREATE login correction of `PLAYER_CHARACTER_POINTS1` (the CREATE's
     /// formula counts points EARNED only — see `codec/entity.rs`).
-    pub fn talent_points_spent(&self, character_guid: u64) -> u32 {
+    fn talent_points_spent(&self, character_guid: u64) -> u32 {
         let guard = self.0.coord();
         guard
             .conn
@@ -317,7 +235,7 @@ impl Coordinator {
     /// rank's now-replaced spell (drives SMSG_SUPERCEDED_SPELL; 0 for rank 1 / same-spell demo
     /// trees). `points_remaining` = earned (level−9, floor 0) minus spent — the live
     /// `PLAYER_CHARACTER_POINTS1` value. Callers may pass `talent_id = 0` to get just the points.
-    pub fn talent_pane_sync(&self, character_guid: u64, talent_id: u32) -> (u32, u32, u32) {
+    fn talent_pane_sync(&self, character_guid: u64, talent_id: u32) -> (u32, u32, u32) {
         let guard = self.0.coord();
         let db = &guard.conn.db;
         let level = db
@@ -369,15 +287,12 @@ impl Coordinator {
     /// connection. The module gates it (range / level / cost / not-already-known) and charges copper.
     /// A Refusal the Module tagged comes back as an outcome; anything else stays an error.
     /// Rides the coordinator connection as `gw_trainer_buy`.
-    pub fn buy_trainer_spell(
+    fn buy_trainer_spell(
         &self,
-        _account_id: u64,
-        actor_guid: u64,
+        actor: Actor,
         trainer_guid: u64,
         spell_id: u32,
     ) -> Result<crate::world::TrainerBuyOutcome> {
-        let actor = Actor::new(actor_guid)
-            .ok_or_else(|| anyhow!("buy_trainer_spell: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         let result: Result<()> = call_reducer!(
             coord.conn.reducers,
@@ -393,9 +308,7 @@ impl Coordinator {
         }
     }
 
-    pub fn learn_talent(&self, _account_id: u64, actor_guid: u64, talent_id: u32) -> Result<()> {
-        let actor =
-            Actor::new(actor_guid).ok_or_else(|| anyhow!("learn_talent: actor_guid unresolved"))?;
+    fn learn_talent(&self, actor: Actor, talent_id: u32) -> Result<()> {
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
@@ -407,14 +320,7 @@ impl Coordinator {
     /// Respec at a trainer (the "I wish to unlearn my talents." gossip option), clears every
     /// learned talent for the calling player's escalating gold cost. Rides the coordinator
     /// connection as `gw_reset_talents` (deleted the per-player sender path).
-    pub fn reset_talents(
-        &self,
-        _account_id: u64,
-        actor_guid: u64,
-        trainer_guid: u64,
-    ) -> Result<()> {
-        let actor = Actor::new(actor_guid)
-            .ok_or_else(|| anyhow!("reset_talents: actor_guid unresolved"))?;
+    fn reset_talents(&self, actor: Actor, trainer_guid: u64) -> Result<()> {
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
@@ -425,16 +331,13 @@ impl Coordinator {
 
     /// Persist one action-bar button (`CMSG_SET_ACTION_BUTTON`): upsert by (character, button);
     /// action 0 clears. Without this every bar drag was lost on relog (only creation seeds survived).
-    pub fn set_action_button(
+    fn set_action_button(
         &self,
-        _account_id: u64,
-        actor_guid: u64,
+        actor: Actor,
         button: u8,
         action: u32,
         action_type: u8,
     ) -> Result<()> {
-        let actor = Actor::new(actor_guid)
-            .ok_or_else(|| anyhow!("set_action_button: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
@@ -446,15 +349,7 @@ impl Coordinator {
     /// Persist the rep pane's At-War checkbox (`CMSG_SET_FACTION_ATWAR`): the wire's
     /// u16 is the client's 0..63 rep-array slot (ReputationListID — the gtker `Faction` field name
     /// lies, same as SET_FACTION_STANDING); the module reverse-resolves the faction and upserts.
-    pub fn set_faction_at_war(
-        &self,
-        _account_id: u64,
-        actor_guid: u64,
-        reputation_index: u32,
-        at_war: bool,
-    ) -> Result<()> {
-        let actor = Actor::new(actor_guid)
-            .ok_or_else(|| anyhow!("set_faction_at_war: actor_guid unresolved"))?;
+    fn set_faction_at_war(&self, actor: Actor, reputation_index: u32, at_war: bool) -> Result<()> {
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
@@ -492,6 +387,7 @@ fn trainer_refusal(error: &anyhow::Error) -> Option<TrainerRefusal> {
 mod trainer_reducer_tests {
     use super::*;
     use crate::stdb::connection::ReducerCallError;
+    use anyhow::anyhow;
 
     #[test]
     fn only_a_rejected_reducer_carries_a_typed_refusal() {
