@@ -53,6 +53,7 @@ pub(crate) fn enter_combat(ctx: &ReducerContext, guid: u64) {
     e.combat_until_ms = now_ms + COMBAT_DROP_MS;
     e.unit_flags |= lyracore_shared::constants::unit_flags::IN_COMBAT;
     entities.guid().update(e);
+    crate::creatures::distraction::clear(ctx, guid);
 }
 
 /// Arm a creature's first outgoing melee engagement and dispatch its aggro edge once.

@@ -6368,6 +6368,9 @@ fn the_production_adapter_is_the_pass_through_the_harness_assumes() {
         "eventai::movement::explicit_route",
         "eventai::movement::follow_target",
         "eventai::movement::facing",
+        "distraction::active",
+        "distraction::expired_facing",
+        "distraction::end_expired",
         "tick::emit_creature_leg",
     ] {
         assert!(idle.contains(capability), "IdleSink lost `{capability}`");

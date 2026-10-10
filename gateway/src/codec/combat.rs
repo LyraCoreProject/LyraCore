@@ -284,6 +284,48 @@ pub fn build_spell_go_area(caster_guid: u64, spell_id: u32) -> SMSG_SPELL_GO {
     }
 }
 
+/// The target block for a cast at a clicked ground point (`TARGET_FLAG_DEST_LOCATION`), echoing the
+/// point as the client sent it, as vmangos does.
+fn ground_point_targets(dest: (f32, f32, f32)) -> SpellCastTargets {
+    SpellCastTargets {
+        target_flags: SpellCastTargets_SpellCastTargetFlags::new_dest_location(
+            SpellCastTargets_SpellCastTargetFlags_DestLocation {
+                destination: Vector3d {
+                    x: dest.0,
+                    y: dest.1,
+                    z: dest.2,
+                },
+            },
+        ),
+    }
+}
+
+/// The instant START for a cast at a clicked ground point, with the point in the target block.
+pub fn build_spell_start_dest(
+    caster_guid: u64,
+    spell_id: u32,
+    dest: (f32, f32, f32),
+) -> SMSG_SPELL_START {
+    SMSG_SPELL_START {
+        targets: ground_point_targets(dest),
+        ..build_spell_start(caster_guid, spell_id, 0, 0, None)
+    }
+}
+
+/// The GO for any instant cast at a clicked ground point (Distract, Blizzard, Rain of Fire, Flare and
+/// the other ground-targeted spells): no hits, and the point in the target block, so the client plays
+/// the cast at the point and not on the caster.
+pub fn build_spell_go_dest(
+    caster_guid: u64,
+    spell_id: u32,
+    dest: (f32, f32, f32),
+) -> SMSG_SPELL_GO {
+    SMSG_SPELL_GO {
+        targets: ground_point_targets(dest),
+        ..build_spell_go_area(caster_guid, spell_id)
+    }
+}
+
 /// `build_spell_go` with an explicit MISS outcome: a MISSED ranged auto-shot puts the target in
 /// the GO's `misses` list (SpellMissInfo::Miss) instead of `hits` — the 5875 client renders the white
 /// "Miss" over the target from this list (vanilla shape; a missed shot sends NO damage log). Every
@@ -505,6 +547,42 @@ mod tests {
         // Self-cast (hit_target 0) keeps the default SELF target block — no unit target.
         let self_go = build_spell_go(caster, 686, 0, None);
         assert!(self_go.targets.target_flags.get_unit().is_none());
+    }
+
+    #[test]
+    fn spell_go_at_a_ground_point_lists_no_hits_and_writes_the_destination_block() {
+        use wow_world_messages::Message;
+        let mut bytes = Vec::new();
+        build_spell_go_dest(5, 1725, (1.5, -2.0, 30.25))
+            .write_into_vec(&mut bytes)
+            .unwrap();
+        // Packed guid 5 for the cast item and the caster: mask 0x01, then the one nonzero byte.
+        let mut want = vec![0x01, 0x05, 0x01, 0x05];
+        want.extend_from_slice(&1725u32.to_le_bytes());
+        want.extend_from_slice(&0x0100u16.to_le_bytes()); // CAST_FLAG_UNKNOWN9
+        want.extend_from_slice(&[0, 0]); // hit count, miss count
+        want.extend_from_slice(&0x0040u16.to_le_bytes()); // TARGET_FLAG_DEST_LOCATION
+        for coordinate in [1.5f32, -2.0, 30.25] {
+            want.extend_from_slice(&coordinate.to_le_bytes());
+        }
+        assert_eq!(bytes, want);
+    }
+
+    #[test]
+    fn ground_destination_refusals_map_to_bad_targets_out_of_range_and_line_of_sight() {
+        // gtker vanilla CastFailureReason: BAD_TARGETS 0x0A, OUT_OF_RANGE 0x59, LINE_OF_SIGHT 0x2A.
+        assert_eq!(
+            cast_failure_reason_for("spell can only target a ground point"),
+            0x0A
+        );
+        assert_eq!(
+            cast_failure_reason_for("ground point out of range (40.0 yd > 30 + 4.7 yd leeway)"),
+            0x59
+        );
+        assert_eq!(
+            cast_failure_reason_for("ground point is not in line of sight"),
+            0x2A
+        );
     }
 
     #[test]

@@ -20,6 +20,7 @@ use super::{
 use crate::combat::MOVE_FLAG_FORWARD;
 use crate::creatures::ai::TickScope;
 use crate::creatures::cast_condition;
+use crate::creatures::distraction;
 use crate::creatures::eventai::movement::{AuthoredIdleMovement, AuthoredWalkingMode};
 use crate::creatures::eventai::{self, EventAiRequest};
 use crate::creatures::pet;
@@ -350,16 +351,20 @@ impl IdleSink for CtxWorld<'_> {
     }
     fn patrol_paused(&self, guid: u64) -> bool {
         eventai::movement::intent(self.ctx, guid).is_some_and(|intent| intent.patrol_paused)
+            || distraction::active(self.ctx, guid)
     }
     fn idle_stationary(&self, guid: u64) -> bool {
         eventai::movement::intent(self.ctx, guid).is_some_and(|intent| {
             intent.idle_active && intent.idle == AuthoredIdleMovement::Stationary
-        })
+        }) || distraction::active(self.ctx, guid)
     }
     fn returning_home(&self, guid: u64) -> bool {
         eventai::movement::returning_home(self.ctx, guid)
     }
     fn follow_target_at(&self, guid: u64) -> Option<Point> {
+        if distraction::active(self.ctx, guid) {
+            return None;
+        }
         let creature = self.ctx.db.game_world_entity().guid().find(guid)?;
         let target_guid = eventai::movement::follow_target(self.ctx, guid)?;
         self.ctx
@@ -378,9 +383,15 @@ impl IdleSink for CtxWorld<'_> {
     }
     fn pending_facing(&self, guid: u64) -> Option<f32> {
         eventai::movement::facing(self.ctx, guid)
+            .or_else(|| distraction::expired_facing(self.ctx, guid))
     }
     fn clear_pending_facing(&mut self, guid: u64) {
-        eventai::movement::clear_facing(self.ctx, guid);
+        // Clear only the facing that played, so the other one plays on a later firing.
+        if eventai::movement::facing(self.ctx, guid).is_some() {
+            eventai::movement::clear_facing(self.ctx, guid);
+        } else {
+            distraction::end_expired(self.ctx, guid);
+        }
     }
     fn idle_gait(&self, guid: u64, default: Gait) -> Gait {
         match eventai::movement::intent(self.ctx, guid).map(|intent| intent.walking) {

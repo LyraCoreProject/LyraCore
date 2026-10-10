@@ -69,6 +69,7 @@ const E_DUEL: u8 = 0x22; // Duel (raw effect 83): p0 is the duel-flag gameobject
 const E_DISENCHANT: u8 = 0x18; // DISENCHANT (real Disenchant 13262, work-item 282): gateway-intercepted, routed to the disenchant reducer by kind. Mapped from raw vanilla effect 99 (SPELL_EFFECT_DISENCHANT); no params (the module validates + yields dust by item). Lockstep with the module taxonomy (module/src/spell/taxonomy.rs E_DISENCHANT).
 const E_DISMOUNT: u8 = 0x23; // remove the target's active land mount (Dazed's mount-removal half): translated from a raw DISPEL_MECHANIC effect (108) whose misc value names the mount mechanic (21) — see `dismount_effect_kind` below. No params. Lockstep with module taxonomy.
 const E_SUMMON_HOSTILE: u8 = 0x24; // temporary ownerless summon; p0 = creature entry, p1 = required spell focus, header duration = lifetime
+const E_DISTRACT: u8 = 0x25; // turn idle enemy Creatures near the ground point toward it; raw effect 69, amount = seconds (lockstep with module taxonomy)
 const E_SELF_RESURRECT: u8 = 0x26; // raw effect 94: base_points < 0 is flat health with p0 (P_FLAT_MANA) mana, else a percent of max; die_sides ignored (lockstep with module taxonomy)
 
 // cmangos/classic-db cd0c426a3b2ff56dd518bf009025299468e60fdb:
@@ -215,7 +216,7 @@ fn form_to_stance(form_id: i32) -> Option<i32> {
 // resolve_cast_at.
 const SPELL_ATTR_REQ_BEHIND: u32 = 0x0001; // must be cast from behind the target (Backstab)
 const SPELL_ATTR_REQ_STEALTH: u32 = 0x0002; // must be cast while stealthed (Sap)
-const SPELL_ATTR_STEALTH_SAFE: u32 = 0x0004; // casting it does NOT break stealth (Sap, Pick Pocket)
+const SPELL_ATTR_STEALTH_SAFE: u32 = 0x0004; // casting it does NOT break stealth (Sap, Pick Pocket, Distract)
 const SPELL_ATTR_FINISHER_DURATION: u32 = 0x0008; // combo-finisher whose aura DURATION scales with combo points (Slice and Dice)
 const SPELL_ATTR_INCAP_OPENER: u32 = 0x0010; // Sap-shaped incapacitate opener: additionally require the target OUT of combat + HUMANOID (Sap). Split OUT of REQ_STEALTH so Garrote (a stealth opener on ANY type, usable in combat) carries REQ_STEALTH without these constraints
 const SPELL_ATTR_REQ_OVERPOWER: u32 = 0x0020; // Overpower: castable only in the ~5s window after the caster's swing was DODGED (Tier 2b react window)
@@ -296,7 +297,7 @@ fn aura_interrupt_bits(raw: u32) -> u16 {
 ///   - REQUIRES_BEHIND: Backstab — only castable from the target's rear hemisphere.
 ///   - REQUIRES_STEALTH: Sap — opener; caster must be stealthed (the engine also enforces out-of-combat +
 ///     humanoid for a REQ_STEALTH spell).
-///   - STEALTH_SAFE: Sap + Pick Pocket — casting keeps the rogue stealthed (vanilla).
+///   - STEALTH_SAFE: Sap, Pick Pocket and Distract. Casting keeps the rogue stealthed (vanilla).
 ///   - REQ_DAGGER: Backstab — only castable with a dagger equipped in the main hand.
 ///
 /// Keyed by NAME so BOTH ranks (the LearnSpell/combo wrapper AND the real spell) carry the flag; the gate
@@ -322,9 +323,9 @@ fn spell_flag_attributes(name: &str) -> u32 {
     if name == "Sap" {
         bits |= SPELL_ATTR_INCAP_OPENER;
     }
-    // STEALTH_SAFE — Sap + Pick Pocket keep the rogue stealthed when cast (Garrote is NOT here → it breaks
-    // stealth via the cast-path break_stealth chokepoint, correctly revealing the rogue).
-    if matches!(name, "Sap" | "Pick Pocket") {
+    // STEALTH_SAFE: Sap, Pick Pocket and Distract keep the rogue stealthed. Garrote is not here, so the
+    // cast path's break_stealth reveals the rogue.
+    if matches!(name, "Sap" | "Pick Pocket" | "Distract") {
         bits |= SPELL_ATTR_STEALTH_SAFE;
     }
     // FINISHER_DURATION — Slice and Dice: the haste aura's DURATION scales with the combo points spent.
@@ -453,6 +454,7 @@ fn instant_effect_to_kind(effect_id: i32) -> u8 {
         56 => E_SUMMON_PET, // Summon (Summon Imp et al.) — p0 = the summoned creature entry (misc_value)
         62 => E_POWER_BURN, // PowerBurn (Priest Mana Burn) — p1 = EffectMultipleValue*100 (work-items 117)
         83 => E_DUEL,       // Duel — p0 carries the duel-flag gameobject entry
+        69 => E_DISTRACT,   // Distract: the effect amount is the Distraction's length in seconds
         33 | 59 => E_OPEN_LOCK, // OpenLock (33) / OpenLockItem (59) — Pick Lock (work-item 119): gateway-intercepted, routed to the pick_lock reducer by kind (Pick Lock 1804 carries the raw OpenLock effect; the item-lock variant 59 covers a lockpick-on-item spell)
         99 => E_DISENCHANT, // Disenchant (13262, work-item 282): gateway-intercepted, routed to the disenchant reducer by kind — the AUTOLEARN enchanting ability. Was falling through to E_SCRIPTED (a no-op).
         80 => E_ADD_COMBO, // AddComboPoints (work-item 101) — the curated Rogue generators (Sinister Strike/Backstab/Gouge/Garrote) carry the generic Dummy effect in-kit and are rescued BY NAME in correct_script_effect_kind below, not via this raw id, so this arm is currently unexercised by the curated kit but correct for any spell that DOES carry the raw AddComboPoints effect
@@ -2031,6 +2033,7 @@ fn kind_name(kind: u8) -> &'static str {
         E_SET_STANCE => "E_SET_STANCE",
         E_SUMMON_PET => "E_SUMMON_PET",
         E_SUMMON_HOSTILE => "E_SUMMON_HOSTILE",
+        E_DISTRACT => "E_DISTRACT",
         E_HEAL_MAX_HEALTH => "E_HEAL_MAX_HEALTH",
         E_TAME_CREATURE => "E_TAME_CREATURE",
         E_FEED_PET => "E_FEED_PET",
@@ -2592,6 +2595,41 @@ mod tests {
             .all(|effect| effect.target == T_TARGET_ALLY));
         assert_eq!(effects(18435)[1].target, T_SCRIPTED);
         assert_eq!(effects(28374)[2].target, T_SCRIPTED);
+    }
+
+    #[test]
+    #[ignore = "requires LYRACORE_TEST_DBC with the owned build 5875 client"]
+    fn actual_distract_imports_one_ground_area_effect_and_a_stealth_safe_header() {
+        let dir = std::env::var("LYRACORE_TEST_DBC").expect("set LYRACORE_TEST_DBC");
+        let (rows, _, _) = build_spell_rows(Path::new(&dir), &[1725], &[]).unwrap();
+        let effects = rows
+            .effects
+            .iter()
+            .filter(|effect| effect.spell_id == 1725)
+            .map(|e| {
+                (
+                    e.effect_index,
+                    e.kind,
+                    e.target,
+                    e.radius_yd,
+                    e.base_points,
+                    e.die_sides,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(effects, [(0, E_DISTRACT, T_AREA_ENEMY, 10.0, 10, 1)]);
+        let header = rows.headers.iter().find(|s| s.spell_id == 1725).unwrap();
+        assert_eq!(
+            (
+                header.range_yd,
+                header.power_type,
+                header.cost,
+                header.cooldown_ms,
+                header.cast_time_ms
+            ),
+            (30, 3, 30, 30_000, 0)
+        );
+        assert_ne!(header.cast_flags & SPELL_ATTR_STEALTH_SAFE, 0);
     }
 
     fn imported_spell_fixture(
@@ -3340,6 +3378,19 @@ mod tests {
             resolve_instant_params(E_TAME_CREATURE, 123, 456),
             (0, P_NONE)
         );
+    }
+
+    #[test]
+    fn distract_maps_natively_to_an_enemy_area_effect_that_keeps_stealth() {
+        assert_eq!(instant_effect_to_kind(69), E_DISTRACT);
+        assert_eq!(kind_name(E_DISTRACT), "E_DISTRACT");
+        // Spell 1725 carries the implicit target pair (16, 0): enemies around the ground point.
+        assert_eq!(
+            resolve_target(unit_selection_from_pair(16, 0), true),
+            T_AREA_ENEMY
+        );
+        assert_eq!(resolve_instant_params(E_DISTRACT, 0, 0), (0, P_NONE));
+        assert_eq!(spell_flag_attributes("Distract"), SPELL_ATTR_STEALTH_SAFE);
     }
 
     #[test]

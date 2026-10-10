@@ -631,6 +631,13 @@ window runs the creature whatever its health or kind, as often as the rule fires
 An authored stance holding a creature at a scripted distance and angle from its victim instead of
 the melee approach. Set by the script, dropped with the Engagement.
 
+**Distraction**:
+The temporary state in which a Creature faces one ground point and holds its idle movement. It ends
+at its expiry, at the Creature's next Engagement, or at its death or despawn. A second Distract
+refreshes it. At the expiry the Creature turns back to its spawn orientation and a patrol continues
+from the same waypoint.
+_Avoid_: distract state, attention state, aggro redirect
+
 ### Runtime Scripts
 
 **Runtime Script**:
