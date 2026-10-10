@@ -361,7 +361,7 @@ fn alone(area: u32, team: u32, class: u8) -> SeekerRow {
 /// Criteria 1 and 4: five Seekers covering every role form one Party that completes at once.
 /// Each Stone Add is announced to the members before it, never to the added Character.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn five_seekers_with_every_role_complete_a_party_at_once() {
     let realm = start("stone-match-complete");
     const TANK: u64 = 509_6000;
@@ -428,7 +428,7 @@ fn five_seekers_with_every_role_complete_a_party_at_once() {
 /// Criterion 2: five mages form a party of three damage dealers that waits for a tank and a
 /// healer. The other two mages keep waiting alone.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn five_mages_form_a_party_that_waits_for_a_tank_and_a_healer() {
     let realm = start("stone-match-mages");
     let mages: Vec<u64> = (509_6010..509_6015).collect();
@@ -455,7 +455,7 @@ fn five_mages_form_a_party_that_waits_for_a_tank_and_a_healer() {
 /// Criterion 3: a queued party with only its healer open takes the longest-waiting priest. The
 /// second priest keeps waiting. The leader hears MEMBER_ADDED before the roster list it precedes.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_queued_party_takes_the_longest_waiting_healer() {
     let realm = start("stone-match-healer");
     const LEADER: u64 = 509_6020;
@@ -513,7 +513,7 @@ fn a_queued_party_takes_the_longest_waiting_healer() {
 
 /// Criterion 5: a team or an area apart, Seekers never meet, neither to form a party nor to fill one.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn seekers_of_another_team_or_area_never_meet() {
     let realm = start("stone-match-buckets");
     let mages: Vec<u64> = (509_6030..509_6034).collect();
@@ -572,7 +572,7 @@ fn seekers_of_another_team_or_area_never_meet() {
 /// Criterion 6: a Seeker whose claim expired before the lease reaper closed it is never added, and
 /// the pass that meets it drops its row without a packet.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_seeker_without_a_live_claim_is_dropped_by_the_pass() {
     let realm = start("stone-match-claims");
     // Without the lease reaper only the pass can notice the expired claim.
@@ -606,7 +606,7 @@ fn a_seeker_without_a_live_claim_is_dropped_by_the_pass() {
 /// Criterion 7, leave and deletion with the leader staying: the leaver hears NONE, the rest hear
 /// PARTY_MEMBER_LEFT_LFG, and the party stays queued and fills the role the leaver freed.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_member_who_leaves_keeps_the_party_queued_and_frees_a_role() {
     for plane in PLANES {
         let realm = plane.start("stone-hook-leave");
@@ -674,7 +674,7 @@ fn a_member_who_leaves_keeps_the_party_queued_and_frees_a_role() {
 
 /// Criterion 7, leave with the leader changing: the party leaves the queue with LEAVE_QUEUE.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_leader_who_leaves_takes_the_party_out_of_the_queue() {
     for plane in PLANES {
         let realm = plane.start("stone-hook-leader-leaves");
@@ -708,7 +708,7 @@ fn a_leader_who_leaves_takes_the_party_out_of_the_queue() {
 /// Criterion 7, kick from a party that survives: the party leaves the queue, and the kicked
 /// Character waits alone with its class and team.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_kicked_member_waits_alone_and_the_party_leaves_the_queue() {
     for plane in PLANES {
         let realm = plane.start("stone-hook-kick");
@@ -757,7 +757,7 @@ fn a_kicked_member_waits_alone_and_the_party_leaves_the_queue() {
 /// A kicked member without a live Account Claim, a playerbot or an offline Character, only
 /// leaves. The party still leaves the queue, and nobody waits alone.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_kicked_member_without_a_claim_does_not_wait_alone() {
     let realm = start("stone-hook-kick-unclaimed");
     const LEADER: u64 = 509_6065;
@@ -796,7 +796,7 @@ fn a_kicked_member_without_a_claim_does_not_wait_alone() {
 /// A queued party row whose Group is gone is broken state. The next pass drops it, and the JOIN
 /// that runs the pass still succeeds and forms its own Party.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_stale_party_row_leaves_the_queue_without_blocking_a_join() {
     let realm = start("stone-match-stale-party");
     const LEADER: u64 = 509_6090;
@@ -838,7 +838,7 @@ fn a_stale_party_row_leaves_the_queue_without_blocking_a_join() {
 /// Criterion 7, disband by a leave or a kick from two members: both hear NONE once, and nobody
 /// waits on alone.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_disband_answers_every_former_member_with_none() {
     for plane in PLANES {
         let realm = plane.start("stone-hook-disband");
@@ -874,7 +874,7 @@ fn a_disband_answers_every_former_member_with_none() {
 /// unless the party is queued for its area. A queued party gains it as a Seeker with its class and
 /// completes at five members.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn accepting_an_invite_moves_a_solo_seeker_into_the_party() {
     for plane in PLANES {
         let realm = plane.start("stone-hook-accept");
@@ -944,7 +944,7 @@ fn accepting_an_invite_moves_a_solo_seeker_into_the_party() {
 /// Criterion 7, raid convert: every member hears LEAVE_QUEUE before the raid list. The convert has
 /// no single-database reducer; the Gateway sends it to the party authority on both realm shapes.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_queued_party_that_converts_to_a_raid_leaves_the_queue() {
     let realm = start("stone-hook-raid-convert");
     const LEADER: u64 = 509_6085;
@@ -973,7 +973,7 @@ fn a_queued_party_that_converts_to_a_raid_leaves_the_queue() {
 /// Criterion 8: a kicked Character re-queued alone fills a second queued party's open healer in the
 /// same transaction.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_kicked_member_joins_a_second_queued_party_at_once() {
     let realm = start("stone-match-kick-requeue");
     const FIRST_LEADER: u64 = 509_6090;
@@ -1029,7 +1029,7 @@ fn a_kicked_member_joins_a_second_queued_party_at_once() {
 /// Criterion 9: the pass advances the Roster Revision of each party it forms and of each party a
 /// Stone Add changes.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn every_party_the_pass_forms_or_fills_has_a_higher_roster_revision() {
     let realm = start("stone-match-revisions");
     let mages: Vec<u64> = (509_6000..509_6005).collect();
@@ -1051,7 +1051,7 @@ fn every_party_the_pass_forms_or_fills_has_a_higher_roster_revision() {
 /// Criterion 10: a due reminder sends IN_PROGRESS to every member once and is due again five
 /// minutes after it fired.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_due_reminder_tells_every_member_once() {
     let realm = start("stone-match-reminder");
     const LEADER: u64 = 509_6000;
@@ -1108,7 +1108,7 @@ fn a_due_reminder_tells_every_member_once() {
 
 /// Criterion 11: a stone-formed party starts with the same `game_group` defaults as an invited one.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_stone_formed_party_has_the_defaults_of_an_invited_one() {
     let realm = start("stone-match-defaults");
     let mages: Vec<u64> = (509_6000..509_6005).collect();
@@ -1150,7 +1150,7 @@ fn a_stone_formed_party_has_the_defaults_of_an_invited_one() {
 
 /// Criterion 12: a Character counting down in an instance its new stone party owns stays.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_stone_add_into_the_party_that_owns_the_instance_cancels_the_countdown() {
     let realm = start("stone-match-instance");
     // The Characters `debug_stage_instance_removal_fixture` stages; all three stand in its instance.

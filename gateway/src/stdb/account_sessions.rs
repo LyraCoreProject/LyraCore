@@ -636,7 +636,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+    #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
     fn independent_coordinators_preserve_the_winner_after_delayed_cleanup() {
         for name in [
             "LYRACORE_SHARD_MAP",

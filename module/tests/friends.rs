@@ -24,7 +24,7 @@ fn refused(shard: &Standalone, reducer: &str, args: &[&str], tag: &str) {
 /// is the actor's own: every target guid below has no `game_character` row here at all, proving the
 /// Gateway's realm-wide name resolution is now the only existence Gate.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn gw_add_friend_needs_no_local_row_and_gates_self_enemy_duplicate_and_full() {
     let mut shard = Standalone::start("friends-add");
     shard.publish_module();

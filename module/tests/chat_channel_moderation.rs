@@ -234,7 +234,7 @@ fn owner_guid(realm: &Standalone, name: &str) -> String {
 /// everyone but themselves, and SET_OWNER moving ownership while the old owner keeps MODERATOR. A
 /// built-in channel refuses SET_OWNER with NOT_OWNER along the way, since it has no owner to be.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn moderator_rights_gate_ownership_and_moderator_changes() {
     let realm = start("chat-channel-moderation-rights");
     join(&realm, &actor("1"), "Raiders", HUMAN);
@@ -381,7 +381,7 @@ fn moderator_rights_gate_ownership_and_moderator_changes() {
 /// Criteria 4, 5 and 6: MUTE gates channel speech, KICK and BAN remove a member (a repeat BAN just
 /// kicks), and the owner removing themselves runs succession.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn mute_kick_and_ban_remove_or_silence_members() {
     let realm = start("chat-channel-moderation-removal");
     join(&realm, &actor("1"), "Raiders", HUMAN);
@@ -544,7 +544,7 @@ fn mute_kick_and_ban_remove_or_silence_members() {
 /// in both, never sent by default. A kick or ban of the owner that leaves exactly one member
 /// behind sends MODE_CHANGE alone; leaving two or more sends OWNER_CHANGED too.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn kick_or_ban_of_the_owner_sends_owner_changed_only_past_one_remaining_member() {
     let realm = start("chat-channel-moderation-owner-changed");
     join(&realm, &actor("1"), "Pair", HUMAN);
@@ -593,7 +593,7 @@ fn kick_or_ban_of_the_owner_sends_owner_changed_only_past_one_remaining_member()
 /// Criterion 8: invites reach their target unless ignored, a same-team-only Gate, and the already
 /// member and invite-banned Refusals.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn invite_notifies_the_target_and_follows_faction_and_ban_rules() {
     let realm = start("chat-channel-moderation-invite");
     join(&realm, &actor("1"), "Raiders", HUMAN);
@@ -682,7 +682,7 @@ fn invite_notifies_the_target_and_follows_faction_and_ban_rules() {
 /// Criterion 9: MODERATE gates channel speech to moderators, and ANNOUNCEMENTS off stops JOINED
 /// and LEFT while YOU_JOINED and YOU_LEFT keep answering the joiner and leaver.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn moderation_and_announcements_toggle_for_moderators_only() {
     let realm = start("chat-channel-moderation-toggles");
     join(&realm, &actor("1"), "Officers", HUMAN);
@@ -772,7 +772,7 @@ fn moderation_and_announcements_toggle_for_moderators_only() {
 /// PLAYER_NOT_FOUND first; only once membership and rights clear does an unresolved target answer
 /// PLAYER_NOT_FOUND.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn an_unresolved_target_refuses_after_membership_and_rights_checks() {
     let realm = start("chat-channel-moderation-order");
     join(&realm, &actor("1"), "Raiders", HUMAN);

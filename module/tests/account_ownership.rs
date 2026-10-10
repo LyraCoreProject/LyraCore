@@ -54,7 +54,7 @@ fn make_test_account_shadow(shard: &Standalone) {
 }
 
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn claim_replay_recovers_a_lost_reply_without_reopening_closed_ownership() {
     let mut shard = Standalone::start("account-claim-replay");
     shard.publish_module();
@@ -130,7 +130,7 @@ fn claim_replay_recovers_a_lost_reply_without_reopening_closed_ownership() {
 }
 
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_new_generation_completes_partial_admission_and_fences_transfer_completion() {
     let mut source = Standalone::start("account-transfer-source");
     source.publish_module();
@@ -258,7 +258,7 @@ fn a_new_generation_completes_partial_admission_and_fences_transfer_completion()
 }
 
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn expired_account_ownership_is_reaped_while_another_gateway_keeps_its_lease_alive() {
     let mut shard = Standalone::start("account-owner-crash");
     shard.publish_module();
@@ -312,7 +312,7 @@ fn expired_account_ownership_is_reaped_while_another_gateway_keeps_its_lease_ali
 }
 
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn realm_core_party_requests_use_the_account_claim_without_a_world_shard_fence() {
     let mut realm = Standalone::start("account-realm-party");
     realm.publish_module();
@@ -341,7 +341,7 @@ fn realm_core_party_requests_use_the_account_claim_without_a_world_shard_fence()
 }
 
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn first_admission_cleans_each_legacy_character_with_a_shared_identity() {
     let mut shard = Standalone::start("account-legacy-identity");
     shard.publish_module();
@@ -389,7 +389,7 @@ fn first_admission_cleans_each_legacy_character_with_a_shared_identity() {
 }
 
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn account_character_ownership_survives_account_switching() {
     let mut realm = Standalone::start("account-owner-switch-realm");
     realm.publish_module();
@@ -575,7 +575,7 @@ fn account_character_ownership_survives_account_switching() {
 }
 
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn retained_account_ownership_overflow_refuses_without_cleanup() {
     let mut shard = Standalone::start("account-owner-overflow");
     shard.publish_module();
@@ -622,7 +622,7 @@ fn retained_account_ownership_overflow_refuses_without_cleanup() {
 }
 
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn expired_fences_make_progress_in_bounded_batches() {
     let mut shard = Standalone::start("account-fence-batches");
     shard.publish_module();

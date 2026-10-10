@@ -13122,7 +13122,7 @@ fn cancel_cast_dispatches_for_the_caller() {
 }
 
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn competing_world_sessions_close_the_old_socket_without_removing_the_winner() {
     use crate::accept::BlockingTaskCapacity;
     use crate::config::GatewayConfig;

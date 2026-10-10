@@ -162,7 +162,7 @@ fn start(name: &str) -> Standalone {
 /// lead, or to a Character outside the Group changes nothing. In a Raid the new leader keeps its
 /// Raid Slot.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn the_leader_passes_the_lead_and_every_member_hears_it_before_the_list() {
     let realm = start("raid-leadership-set-leader");
     join(&realm, 1, 2);
@@ -216,7 +216,7 @@ fn the_leader_passes_the_lead_and_every_member_hears_it_before_the_list() {
 /// first, and the remaining members hear it before their list. Without an Assistant the first
 /// member in join order leads.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_leaving_raid_leader_passes_the_lead_to_the_first_assistant_in_join_order() {
     let realm = start("raid-leadership-succession");
     for guid in 2..=4 {
@@ -255,7 +255,7 @@ fn a_leaving_raid_leader_passes_the_lead_to_the_first_assistant_in_join_order() 
 /// and each change advances the Roster Revision. Repeating a promotion changes nothing. A Party
 /// refuses both, and only the leader may do either.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn the_raid_leader_promotes_and_demotes_an_assistant() {
     let realm = start("raid-leadership-assistant");
     join(&realm, 1, 2);
@@ -303,7 +303,7 @@ fn the_raid_leader_promotes_and_demotes_an_assistant() {
 /// Assistants but never the leader. The leader removes a member by guid. As in cmangos, an invite
 /// joins its Group even after its sender is demoted or leaves, and ends once the Group is gone.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn an_assistant_invites_and_removes_members_but_never_the_leader() {
     let realm = start("raid-leadership-rights");
     for guid in 2..=4 {
@@ -380,7 +380,7 @@ fn an_assistant_invites_and_removes_members_but_never_the_leader() {
 /// forms no Party and does not lead into the other Group. Nobody can invite a Character that has
 /// invited someone while it has no Group (cm:GroupHandler.cpp:105-114).
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_solo_inviters_pending_invites_follow_the_group_its_first_accept_forms() {
     let realm = start("raid-leadership-solo-inviter");
     group_op(&realm, INVITE, 1, 2, 0);
@@ -408,7 +408,7 @@ fn a_solo_inviters_pending_invites_follow_the_group_its_first_accept_forms() {
 /// may start a Ready Check that reaches every remaining member, and the departed leader, no
 /// longer in any Group, may not.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn the_assistant_who_inherits_the_lead_can_start_a_ready_check() {
     let realm = start("raid-leadership-succession-ready-check");
     for guid in 2..=4 {
@@ -438,7 +438,7 @@ fn the_assistant_who_inherits_the_lead_can_start_a_ready_check() {
 /// A demoted Assistant loses both rights the flag granted: it may no longer move a member to
 /// another Subgroup, nor mark a Target Icon.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_demoted_assistant_can_no_longer_move_a_member_or_mark_a_target_icon() {
     let realm = start("raid-leadership-demoted-assistant-rights");
     for guid in 2..=3 {

@@ -171,7 +171,7 @@ fn raid(name: &str) -> Standalone {
 /// **AC 1, 2 and 10.** The leader or an Assistant asks every member, the asker included
 /// (cm:GroupHandler.cpp:549-564). Each answer reaches the leader alone (cm:GroupHandler.cpp:566-581).
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_ready_check_asks_every_member_and_the_answers_reach_the_leader_alone() {
     let realm = raid("raid-broadcasts-ready-check");
     let revision = roster_revision(&realm);
@@ -207,7 +207,7 @@ fn a_ready_check_asks_every_member_and_the_answers_reach_the_leader_alone() {
 
 /// **AC 3, 4, 5, 7 and 10.** cm:Group.cpp:583-601 and cm:GroupHandler.cpp:444-471.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn target_icons_follow_the_vanilla_placement_and_go_when_the_raid_disbands() {
     let realm = raid("raid-broadcasts-target-icons");
     let revision = roster_revision(&realm);
@@ -298,7 +298,7 @@ fn target_icons_follow_the_vanilla_placement_and_go_when_the_raid_disbands() {
 /// **AC 6.** A Party client clears its marks on every list, so a Party's LIST carries its icons
 /// (vm:Group.cpp:1343-1360). A Raid keeps its marks, and its LIST carries none.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_party_list_carries_its_target_icons_and_a_raid_list_carries_none() {
     let realm = party("raid-broadcasts-party-icons", &[2]);
     group_op(&realm, TARGET_ICON, 1, DEFIAS, 7, 0);
@@ -326,7 +326,7 @@ fn a_party_list_carries_its_target_icons_and_a_raid_list_carries_none() {
 /// A leader change pushes a list too, and a Party's list always carries its Target Icons: the
 /// marks survive a leader change the same way they survive any other list-pushing op.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_leader_change_list_still_carries_the_partys_target_icons() {
     let realm = party("raid-broadcasts-leader-change-icons", &[2]);
     group_op(&realm, TARGET_ICON, 1, DEFIAS, 7, 0);
@@ -353,7 +353,7 @@ fn a_leader_change_list_still_carries_the_partys_target_icons() {
 /// (cm:GroupHandler.cpp:395-415). A grouped roll reaches every member, the roller included; an
 /// ungrouped one reaches the roller alone (cm:GroupHandler.cpp:436-441, vm:GroupHandler.cpp:419-431).
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_ping_skips_the_sender_and_a_roll_reaches_the_whole_group() {
     let realm = raid("raid-broadcasts-ping-roll");
     let revision = roster_revision(&realm);
@@ -421,7 +421,7 @@ fn a_ping_skips_the_sender_and_a_roll_reaches_the_whole_group() {
 /// deleted-Character LEAVE (`arg_a` = `leave_cause::CHARACTER_DELETED`) drops them. A plain leave
 /// keeps the icon on the unit.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_deleted_characters_leave_drops_the_target_icons_on_it() {
     let realm = party("raid-broadcasts-deleted-icons", &[2, 3, 4]);
     group_op(&realm, TARGET_ICON, 1, 2, 7, 0);

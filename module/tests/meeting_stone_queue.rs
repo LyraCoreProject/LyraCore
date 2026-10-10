@@ -223,7 +223,7 @@ fn solo(area: u32, class: u8) -> (String, String, String, String) {
 
 /// Criterion 3: one SETQUEUE(area, JOINED) and one Seeker row; a second stone replaces the row.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_lone_seeker_queues_once_and_a_second_stone_replaces_its_row() {
     let realm = start("meeting-stone-solo");
     const ALDO: u64 = 509_6010;
@@ -255,7 +255,7 @@ fn a_lone_seeker_queues_once_and_a_second_stone_replaces_its_row() {
 
 /// Criterion 4: every admission Refusal leaves no row and no event.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn the_stone_admission_refuses_without_writing_anything() {
     let realm = start("meeting-stone-admission");
     const BRAM: u64 = 509_6020;
@@ -352,7 +352,7 @@ fn the_stone_admission_refuses_without_writing_anything() {
 
 /// Criterion 5: the three party Refusals in cmangos's order, none of which writes anything.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_party_join_refusal_changes_nothing() {
     let realm = start("meeting-stone-party-refusals");
     const LEADER: u64 = 509_6030;
@@ -398,7 +398,7 @@ fn a_party_join_refusal_changes_nothing() {
 /// Criterion 6: one party row, one Seeker row per member with the class the Gateway supplied, and
 /// SETQUEUE(area, JOINED) to every member.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_party_leaders_join_queues_every_member() {
     let realm = start("meeting-stone-party-join");
     const CARA: u64 = 509_6050;
@@ -454,7 +454,7 @@ fn a_party_leaders_join_queues_every_member() {
 
 /// Criterion 7: LEAVE per cm:LFG/LFGHandler.cpp:86-110.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn leave_answers_the_seeker_the_party_and_the_member() {
     let realm = start("meeting-stone-leave");
     const FINN: u64 = 509_6060;
@@ -505,7 +505,7 @@ fn leave_answers_the_seeker_the_party_and_the_member() {
 /// Criterion 9: release, reap and replacement each drop a solo Seeker without a packet. A party
 /// Seeker survives all three.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_solo_seeker_ends_with_its_account_claim() {
     let realm = start("meeting-stone-claims");
     const RELEASED: u64 = 509_6070;

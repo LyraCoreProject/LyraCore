@@ -121,7 +121,7 @@ fn join(node: &Standalone, leader: u64, guid: u64) {
 /// The leader moves a member; a plain member, an out-of-range Subgroup, and a full destination are
 /// each refused; only the accepted move advances the Roster Revision.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_leader_moves_a_member_while_a_plain_member_and_bad_input_are_refused() {
     let mut realm = Standalone::start("raid-subgroups-move");
     realm.publish_module();
@@ -187,7 +187,7 @@ fn a_leader_moves_a_member_while_a_plain_member_and_bad_input_are_refused() {
 /// of the two full Subgroups needs no capacity Gate; swapping two members of one Subgroup changes
 /// nothing.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_leader_swaps_members_of_two_full_subgroups_and_a_same_subgroup_swap_is_a_no_op() {
     let mut realm = Standalone::start("raid-subgroups-swap");
     realm.publish_module();
@@ -241,7 +241,7 @@ fn a_leader_swaps_members_of_two_full_subgroups_and_a_same_subgroup_swap_is_a_no
 
 /// **AC 5**: in a Party, both ops refuse and change nothing.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn subgroup_ops_in_a_party_are_refused() {
     let mut party = Standalone::start("raid-subgroups-party-refuses");
     party.publish_module();
