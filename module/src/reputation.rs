@@ -280,9 +280,7 @@ pub(crate) fn apply_set_watched_faction(
         ));
     }
     let characters = ctx.db.game_character();
-    let mut character = characters
-        .guid()
-        .find(character_guid)
+    let mut character = crate::helpers::character_by_guid(ctx, character_guid)
         .ok_or_else(|| "Character not found".to_string())?;
     character.watched_faction_index = reputation_index;
     characters.guid().update(character);
