@@ -817,7 +817,7 @@ name matches nothing and still exits 1 — indistinguishable from "already stopp
 
 If you are here to contribute rather than to play:
 
-- [`CONTRIBUTING.md`](../CONTRIBUTING.md) — where to start, what gets in, and how a pull request
+- [`CONTRIBUTING.md`](../CONTRIBUTING.md): where to start, what gets in, and how a pull request
   is judged.
 - [`SUPPORT.md`](../SUPPORT.md) — where to ask a question, and what is in and out of scope.
 - **Security reports** go through GitHub's private

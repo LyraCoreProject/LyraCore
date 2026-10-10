@@ -6,7 +6,7 @@ body:
     attributes:
       value: |
         An issue is for a proposal you can state as a change. Gameplay that 1.12.1 does not have
-        belongs in a Package; see CONTRIBUTING.md, "Building on top".
+        belongs in a Package; see [Building on top](https://github.com/LyraCoreProject/LyraCore/blob/main/CONTRIBUTING.md#building-on-top).
 
         Out of scope for this alpha, and closed as such: public/VPS hosting as a supported product,
         Windows/WSL support, clients other than build 5875, and anything requiring redistributed

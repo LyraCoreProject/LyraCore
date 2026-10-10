@@ -141,7 +141,8 @@ request cannot add a scenario to it. Do not patch the ignored cache under
 `.lyracore/wire-harness/<sha>/`.
 
 The established substitute is `docs/taxi-flight-verification.md`: a repo doc that specifies the
-adapter scenario for the *next* harness release, plus a `needs-live-eyeball` marker on the PR.
+adapter scenario for the *next* harness release, plus the client check as **How to check** on the
+issue, which stays open until a person confirms it.
 T6 writes the mount equivalent. Every other ticket carries its behavior in module and gateway
 tests in the local idiom (existing spell-gate, aura-cancellation, combat-fold and movement-edge
 prior art; the gateway codec tests extend the taxi mount-display CREATE and VALUES prior art).

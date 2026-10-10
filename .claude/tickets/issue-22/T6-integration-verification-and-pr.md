@@ -50,7 +50,7 @@ entries. The scenario must cover:
   causes no dismount.
 
 Close with the same publish instruction the taxi doc uses: tag a harness release, bump
-`.wire-harness-rev`, run the full adapter suite, then clear the PR's `needs-live-eyeball` marker.
+`.wire-harness-rev`, run the full adapter suite.
 State the attended gate separately — an unmodified 1.12.1 build-5875 client must confirm by eye
 that the mount renders, moves at the expected speed, dismounts on buff cancellation and on action,
 and stays up after ordinary damage.
@@ -67,8 +67,8 @@ and stays up after ordinary damage.
 **5. File the PR** with the `file-pr` skill. Rebase onto the latest `main` first. Title in
 conventional-commit style, simple: `feat(mount): ...`. The description opens with the problem,
 then the solution, in Simplified Technical English, using `CONTEXT.md` vocabulary, no em dashes.
-Include the story coverage summary, anything reconciled in step 1, and the `needs-live-eyeball`
-marker. End with the model and harness blurb.
+Include the story coverage summary, anything reconciled in step 1, and the client check as the
+issue's **How to check**. The PR does not close the issue. End with the model and harness blurb.
 
 ## Acceptance criteria
 
