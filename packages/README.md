@@ -42,8 +42,9 @@ After creating, installing or changing a Package, apply the enabled Packages to 
 With no Shard names, the command uses the recorded development topology. Pass Shard names to
 choose other Shards. It builds missing or stale artifacts from enabled sources, then applies
 spell Package Deltas and Script Artifacts. Current Script Artifacts need neither Bun nor client data.
-A Datascript build needs Bun and your own client data. If its Base Snapshot is missing, `apply`
-extracts one locally. Use `--client-data PATH` to select the client's Data directory.
+A Datascript build needs Bun and a Base Snapshot. If the snapshot is missing, `apply` extracts one
+from your own client data. Applying spell Package Deltas also reads client data. Use
+`--client-data PATH` to select the client's Data directory.
 
 If an enabled or disabled Package contains `src/mod.rs`, or a Shard records pending Package
 Teardown, `apply` publishes the Module built from the enabled Packages. Including disabled Rust
