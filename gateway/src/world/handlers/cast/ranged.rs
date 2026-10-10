@@ -27,30 +27,27 @@ pub(super) fn activate<St: CastStore + ?Sized>(
     // the raw failure result, and the 5875 client drops its auto-repeat toggle on that — client and
     // server stay in lockstep. Acknowledging first and failing after left the client toggled ON
     // over a dead loop, so the next press sent a cancel instead of a cast.
-    if let Err(e) = store.start_ranged_attack(
-        player.account_id,
-        player.self_guid.unwrap_or(0),
-        target,
-        spell,
-    ) {
-        return refuse(store, player, spell, e);
+    let Some(actor) = player.actor() else {
+        return refuse(store, player, spell, NO_ACTOR);
+    };
+    if let Err(e) = store.start_ranged_attack(actor, target, spell) {
+        return refuse(store, player, spell, &refusal_reason(e)?);
     }
 
     // The activation ack is `SMSG_SPELL_START` alone: timer 0 (the wind-up is an attack timer, not
     // a cast bar — the client animates its own), the ammo block that nocks the projectile, and the
     // real unit target. No CAST_RESULT(OK) and no GO: this cast parks in the client's auto-repeat
     // slot and never resolves, and each shot's GO comes from the swing-tick relay.
-    let outbound = player.self_guid.map_or_else(Vec::new, |caster| {
-        vec![Outbound::One(ServerOpcodeMessage::SMSG_SPELL_START(
-            Box::new(codec::build_spell_start(
-                caster,
-                spell,
-                0,
-                target,
-                ammo_display(store, caster),
-            )),
-        ))]
-    });
+    let caster = actor.guid();
+    let outbound = vec![Outbound::One(ServerOpcodeMessage::SMSG_SPELL_START(
+        Box::new(codec::build_spell_start(
+            caster,
+            spell,
+            0,
+            target,
+            ammo_display(store, caster),
+        )),
+    ))];
     Ok(CastOutcome::Handled {
         transition: CastTransition {
             ranged_repeat: Some(true),
@@ -59,26 +56,20 @@ pub(super) fn activate<St: CastStore + ?Sized>(
     })
 }
 
-/// A refused activation. Gameplay refusals are handled outcomes; a dead reducer transport is not.
+/// A refused activation. A Refusal is a handled outcome; a Transport Loss never reaches here.
 fn refuse<St: CastStore + ?Sized>(
     store: &St,
     player: CastPlayer,
     spell: u32,
-    e: anyhow::Error,
+    reason: &str,
 ) -> Result<CastOutcome> {
-    if is_transport_failure(&e) {
-        return Err(e);
-    }
     log::info!(
-        "world[autoshot]: start_ranged_attack refused spell={spell} (account {}): {e}",
+        "world[autoshot]: start_ranged_attack refused spell={spell} (account {}): {reason}",
         player.account_id
     );
     let outbound = vec![Outbound::Raw {
         opcode: OP_CAST_RESULT,
-        body: codec::build_cast_result_failed(
-            spell,
-            codec::cast_failure_reason_for(&e.to_string()),
-        ),
+        body: codec::build_cast_result_failed(spell, codec::cast_failure_reason_for(reason)),
     }];
     // A refused RETARGET drops the client's toggle on that failure result, so the still-firing OLD
     // loop has to go too — otherwise the server keeps shooting a target the client believes it
@@ -89,7 +80,7 @@ fn refuse<St: CastStore + ?Sized>(
             outbound,
         });
     }
-    stop_loop(store, player, "reject-teardown");
+    stop_loop(store, player, "reject-teardown")?;
     Ok(CastOutcome::Handled {
         transition: CastTransition {
             ranged_repeat: Some(false),
@@ -99,7 +90,10 @@ fn refuse<St: CastStore + ?Sized>(
 }
 
 /// `CMSG_CANCEL_AUTO_REPEAT_SPELL`: the client toggled the loop off, or auto-switched to melee.
-pub(super) fn cancel<St: CastStore + ?Sized>(store: &St, player: CastPlayer) -> CastOutcome {
+pub(super) fn cancel<St: CastStore + ?Sized>(
+    store: &St,
+    player: CastPlayer,
+) -> Result<CastOutcome> {
     log::info!(
         "world[autoshot]: cancel auto-repeat active={} (account {})",
         player.ranged_repeat,
@@ -110,25 +104,30 @@ pub(super) fn cancel<St: CastStore + ?Sized>(store: &St, player: CastPlayer) -> 
     // engagement row to melee — an unconditional stop deleted that just-armed melee row. No inline
     // ack either: the engagement's on_delete relay is the one sender of SMSG_CANCEL_AUTO_REPEAT.
     if player.ranged_repeat {
-        stop_loop(store, player, "cancel_auto_repeat");
+        stop_loop(store, player, "cancel_auto_repeat")?;
     }
-    CastOutcome::Handled {
+    Ok(CastOutcome::Handled {
         transition: CastTransition {
             ranged_repeat: Some(false),
         },
         outbound: Vec::new(),
-    }
+    })
 }
 
-/// Ask the module to tear the engagement down. Best effort: a refused stop (nothing armed, a race
-/// with the swing tick) must not end the session or reach the client.
-fn stop_loop<St: CastStore + ?Sized>(store: &St, player: CastPlayer, context: &str) {
-    if let Err(e) = store.stop_attack(player.account_id, player.self_guid.unwrap_or(0)) {
+/// Ask the module to tear the engagement down. A Refusal (nothing armed, a race with the swing
+/// tick) must not end the session or reach the client; a Transport Loss ends the session.
+fn stop_loop<St: CastStore + ?Sized>(store: &St, player: CastPlayer, context: &str) -> Result<()> {
+    let Some(actor) = player.actor() else {
+        return Ok(());
+    };
+    if let Err(e) = store.stop_attack(actor) {
+        let reason = refusal_reason(e)?;
         log::debug!(
-            "world: {context} stop_attack ignored (account {}): {e}",
+            "world: {context} stop_attack ignored (account {}): {reason}",
             player.account_id
         );
     }
+    Ok(())
 }
 
 /// The `(display_id, inv_type)` ammo block for the activation START. `Some` only when the ranged
@@ -249,7 +248,7 @@ mod tests {
 
         assert_eq!(
             store.ranged_attacks.lock().unwrap().as_slice(),
-            &[(ACCOUNT, CASTER, 88, AUTO_SHOT)],
+            &[(CASTER, 88, AUTO_SHOT)],
             "the cast's unit target arms the loop, with no selection fallback"
         );
         assert_eq!(
@@ -321,7 +320,7 @@ mod tests {
         );
         assert_eq!(
             store.stop_attacks.lock().unwrap().as_slice(),
-            &[(ACCOUNT, CASTER)],
+            &[CASTER],
             "the client dropped its toggle, so the still-firing old loop must go too"
         );
     }
@@ -329,11 +328,26 @@ mod tests {
     #[test]
     fn a_dead_reducer_transport_during_activation_is_session_fatal() {
         let store = InMemoryCasts {
-            ranged_error: Some("start_ranged_attack reducer transport disconnected".into()),
+            transport_lost: true,
             ..ranged_store()
         };
 
         assert!(dispatch_cast(&store, player(), cast(AUTO_SHOT, unit_targets(88))).is_err());
+    }
+
+    #[test]
+    fn a_dead_reducer_transport_while_stopping_the_loop_is_session_fatal() {
+        let store = InMemoryCasts {
+            transport_lost: true,
+            ..ranged_store()
+        };
+
+        assert!(dispatch_cast(
+            &store,
+            repeating(),
+            ClientOpcodeMessage::CMSG_CANCEL_AUTO_REPEAT_SPELL
+        )
+        .is_err());
     }
 
     // ── Cancellation ─────────────────────────────────────────────────────────
@@ -357,10 +371,7 @@ mod tests {
                 ranged_repeat: Some(false)
             }
         );
-        assert_eq!(
-            store.stop_attacks.lock().unwrap().as_slice(),
-            &[(ACCOUNT, CASTER)]
-        );
+        assert_eq!(store.stop_attacks.lock().unwrap().as_slice(), &[CASTER]);
         assert!(
             outbound.is_empty(),
             "the engagement's on_delete relay is the one sender of the cancel signal"

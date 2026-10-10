@@ -164,10 +164,10 @@ fn auto_shot_intercept_starts_the_ranged_attack_instead_of_casting() {
 }
 
 #[test]
-fn a_cast_before_entering_the_world_answers_nothing_and_does_not_fail() {
+fn a_cast_before_entering_the_world_makes_no_request_and_does_not_fail() {
     // A cast can arrive while the session is still at character select: a stale addon macro, a
-    // reconnect race. The seam answers no frames and names a zero caster; the dispatcher returns
-    // Ok, so the session serves the next opcode.
+    // reconnect race. The seam has no Actor to cast as, so it makes no durable request and
+    // answers a failed cast. The dispatcher returns Ok, so the session serves the next opcode.
     let store = InMemoryCasts::instant();
     let sent = run(
         &store,
@@ -177,7 +177,14 @@ fn a_cast_before_entering_the_world_answers_nothing_and_does_not_fail() {
             targets: unit_targets(77),
         },
     );
-    assert!(sent.is_empty());
+    assert!(matches!(
+        sent.as_slice(),
+        [Outbound::Raw {
+            opcode: OP_CAST_RESULT,
+            ..
+        }]
+    ));
+    assert!(store.casts.lock().unwrap().is_empty());
 }
 
 #[test]

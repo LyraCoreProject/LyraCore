@@ -1,88 +1,21 @@
 //! `Coordinator`'s [`QuestActionStore`] adapter.
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use spacetimedb_sdk::Table;
 
-use crate::codec;
 use crate::stdb::bindings::*;
 use crate::stdb::connection::call_reducer;
 use crate::stdb::reads::{build_quest_log_slots, quest_objectives_complete};
 use crate::stdb::Coordinator;
 use crate::world::{Actor, QuestActionStore};
 
-impl QuestActionStore for crate::stdb::Coordinator {
-    fn giver_quest_evals(
-        &self,
-        giver_guid: u64,
-        player_guid: u64,
-    ) -> Result<Vec<codec::GiverQuestEval>> {
-        crate::stdb::Coordinator::quest_giver_evals(self, giver_guid, player_guid)
-    }
-
-    fn quest_detail_view(&self, quest_id: u32) -> Result<Option<codec::QuestDetailView>> {
-        crate::stdb::Coordinator::quest_detail(self, quest_id)
-    }
-
-    fn giver_refuses_interaction(&self, giver_guid: u64, player_guid: u64) -> Result<bool> {
-        crate::stdb::Coordinator::npc_refuses_interaction(self, giver_guid, player_guid)
-    }
-
-    fn accept_quest(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        giver_guid: u64,
-        quest_id: u32,
-    ) -> Result<()> {
-        crate::stdb::Coordinator::accept_quest(self, account_id, self_guid, giver_guid, quest_id)
-    }
-
-    fn item_start_quest(&self, owner_guid: u64, slot: u8) -> Option<(u64, u32)> {
-        crate::stdb::Coordinator::item_start_quest(self, owner_guid, slot)
-    }
-
-    fn turn_in_quest(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        giver_guid: u64,
-        quest_id: u32,
-        reward_index: u32,
-    ) -> Result<()> {
-        crate::stdb::Coordinator::turn_in_quest(
-            self,
-            account_id,
-            self_guid,
-            giver_guid,
-            quest_id,
-            reward_index,
-        )
-    }
-
-    fn player_quest_log(&self, player_guid: u64) -> Result<Vec<codec::update_mask::QuestLogSlot>> {
-        crate::stdb::Coordinator::player_quest_log(self, player_guid)
-    }
-
-    fn abandon_quest(&self, account_id: u64, self_guid: u64, quest_id: u32) -> Result<()> {
-        crate::stdb::Coordinator::abandon_quest(self, account_id, self_guid, quest_id)
-    }
-
-    fn push_quest(&self, account_id: u64, self_guid: u64, quest_id: u32) -> Result<()> {
-        crate::stdb::Coordinator::push_quest(self, account_id, self_guid, quest_id)
-    }
-
-    fn quest_status(&self, player_guid: u64, quest_id: u32) -> (bool, bool) {
-        crate::stdb::Coordinator::quest_status(self, player_guid, quest_id)
-    }
-}
-
-impl Coordinator {
+impl QuestActionStore for Coordinator {
     /// Item-starts-quest: does the item in `owner_guid`'s inventory `slot` carry a
     /// non-zero `item_template.start_quest`? Returns `(item_guid, quest_id)` if so — the gateway's
     /// `CMSG_USE_ITEM` handler uses this to open `SMSG_QUESTGIVER_QUEST_DETAILS` (item guid as giver)
     /// INSTEAD of calling `use_item` (never both — the item isn't consumed). `None` for every ordinary
     /// item (the ubiquitous case), which falls through to the normal use-item path unchanged.
-    pub fn item_start_quest(&self, owner_guid: u64, slot: u8) -> Option<(u64, u32)> {
+    fn item_start_quest(&self, owner_guid: u64, slot: u8) -> Option<(u64, u32)> {
         let guard = self.0.coord();
         let db = &guard.conn.db;
         let hit: Option<(u64, u32)> = db
@@ -100,10 +33,10 @@ impl Coordinator {
     }
 
     /// `(taken, rewarded)` for `quest_id` in `guid`'s quest log (privileged read — RLS bypassed, like
-    /// `quest_giver_evals`) — feeds `option_condition_holds` for the QUEST_TAKEN/QUEST_REWARDED gossip
+    /// `giver_quest_evals`) — feeds `option_condition_holds` for the QUEST_TAKEN/QUEST_REWARDED gossip
     /// option conditions. `taken` is true whenever a log row exists at all (accepted,
     /// whether or not yet turned in); a quest never seen by this player is `(false, false)`.
-    pub fn quest_status(&self, guid: u64, quest_id: u32) -> (bool, bool) {
+    fn quest_status(&self, guid: u64, quest_id: u32) -> (bool, bool) {
         let guard = self.0.coord();
         let db = &guard.conn.db;
         let found = db
@@ -131,7 +64,7 @@ impl Coordinator {
     /// level-qualifying START), `active` (held + un-rewarded END), and `complete` (active + every
     /// objective's count met). One guard, all inline — no nested cache locks. The codec
     /// ([`crate::codec::quest_giver_status`]) folds these.
-    pub fn quest_giver_evals(
+    fn giver_quest_evals(
         &self,
         giver_guid: u64,
         player_guid: u64,
@@ -212,16 +145,20 @@ impl Coordinator {
     /// `lyracore_shared::quest::xp_reward` so it matches the module's grant), reward items joined with their
     /// display ids, and a synthesized objectives line per kill objective ("Creature slain: 0/N" from the
     /// creature-template name — quest body text isn't imported yet). `None` if the quest isn't loaded.
-    pub fn quest_detail(&self, quest_id: u32) -> Result<Option<crate::codec::QuestDetailView>> {
+    fn quest_detail_view(&self, quest_id: u32) -> Result<Option<crate::codec::QuestDetailView>> {
         let guard = self.0.coord();
         Ok(quest_detail_view(&guard.conn.db, quest_id))
+    }
+
+    fn giver_refuses_interaction(&self, giver_guid: u64, player_guid: u64) -> Result<bool> {
+        Coordinator::npc_refuses_interaction(self, giver_guid, player_guid)
     }
 
     /// The player's active (un-rewarded) quests as quest-log descriptor slots: the quest-log window.
     /// Deterministic slot assignment (sorted by quest_entry → slot 0..), capped at the 20 vanilla slots;
     /// each slot carries the quest id, per-objective counts, and a state byte (1 = all objectives met,
     /// else 0). The gateway encodes these into the `PLAYER_QUEST_LOG_*` fields. RLS-bypassed read.
-    pub fn player_quest_log(
+    fn player_quest_log(
         &self,
         player_guid: u64,
     ) -> Result<Vec<crate::codec::update_mask::QuestLogSlot>> {
@@ -233,9 +170,7 @@ impl Coordinator {
 
     /// `CMSG_PUSHQUESTTOPARTY` — over the coordinator connection so the module
     /// attributes the sender + its grouped/on-quest gates to the caller.
-    pub fn push_quest(&self, _account_id: u64, actor_guid: u64, quest_id: u32) -> Result<()> {
-        let actor =
-            Actor::new(actor_guid).ok_or_else(|| anyhow!("push_quest: actor_guid unresolved"))?;
+    fn push_quest(&self, actor: Actor, quest_id: u32) -> Result<()> {
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
@@ -248,15 +183,7 @@ impl Coordinator {
     /// coordinator connection so the module attributes it to the caller. The module gates the accept
     /// (giver relation + range + level + not-already-held); a gameplay `Err` is per-action, not fatal.
     /// Rides the coordinator connection as `gw_accept_quest`.
-    pub fn accept_quest(
-        &self,
-        _account_id: u64,
-        actor_guid: u64,
-        giver_guid: u64,
-        quest_id: u32,
-    ) -> Result<()> {
-        let actor =
-            Actor::new(actor_guid).ok_or_else(|| anyhow!("accept_quest: actor_guid unresolved"))?;
+    fn accept_quest(&self, actor: Actor, giver_guid: u64, quest_id: u32) -> Result<()> {
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
@@ -269,16 +196,13 @@ impl Coordinator {
     /// validates completion + grants the rewards (money/XP/items). `reward_index` is the player's
     /// pick-1-of-N choice slot; ignored when the quest has no choices. This call uses the subscribed
     /// visibility pipe so committed item relays are queued before success presentation is allowed.
-    pub fn turn_in_quest(
+    fn turn_in_quest(
         &self,
-        _account_id: u64,
-        actor_guid: u64,
+        actor: Actor,
         giver_guid: u64,
         quest_id: u32,
         reward_index: u32,
     ) -> Result<()> {
-        let actor = Actor::new(actor_guid)
-            .ok_or_else(|| anyhow!("turn_in_quest: actor_guid unresolved"))?;
         let coord = self.0.visibility_pipe();
         call_reducer!(
             coord.conn.reducers,
@@ -294,9 +218,7 @@ impl Coordinator {
 
     /// Abandon quest `quest_id` (`CMSG_QUESTLOG_REMOVE_QUEST`) over the coordinator connection. The
     /// module deletes the player's quest-log row; the quest-log relay then clears the slot.
-    pub fn abandon_quest(&self, _account_id: u64, actor_guid: u64, quest_id: u32) -> Result<()> {
-        let actor = Actor::new(actor_guid)
-            .ok_or_else(|| anyhow!("abandon_quest: actor_guid unresolved"))?;
+    fn abandon_quest(&self, actor: Actor, quest_id: u32) -> Result<()> {
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
@@ -389,7 +311,7 @@ pub(crate) fn quest_detail_view(
 /// Evaluate ONE giver relation (a `game_creature_quest` OR `game_gameobject_quest` row, already
 /// filtered to the giver's entry by the caller) against `player_guid`'s quest log. Takes the bare
 /// `quest_entry`/`role` rather than a table row type — `game_creature_quest` and `game_gameobject_quest`
-/// have the identical `(quest_entry, role)` shape, so `quest_giver_evals` calls this
+/// have the identical `(quest_entry, role)` shape, so `giver_quest_evals` calls this
 /// same function for both, keyed only on which relation table it iterated.
 ///
 /// PARITY: `startable` answers the same question as the Module's `quest::accept_gates`

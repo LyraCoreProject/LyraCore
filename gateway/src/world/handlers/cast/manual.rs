@@ -47,47 +47,47 @@ pub(crate) fn manual_completion_cast<St: CastStore + ?Sized>(
     route: ManualRoute,
 ) -> Result<CastOutcome> {
     let spell = c.spell;
-    let self_guid = player.self_guid.unwrap_or(0);
-    let result = match route {
-        ManualRoute::Enchant(enchant_route) => {
-            let item_guid = item_target(c);
-            if item_guid == 0 {
-                Err(anyhow!("enchant: no item target in cast"))
-            } else {
-                match store.item_slot_by_guid(player.account_id, item_guid) {
-                    Some(slot) => match enchant_route {
-                        EnchantRoute::Disenchant => {
-                            store.disenchant_item(player.account_id, self_guid, slot)
-                        }
-                        EnchantRoute::Enchant(enchant_id) => store.enchant_item_on_slot(
-                            player.account_id,
-                            self_guid,
-                            slot,
-                            enchant_id,
-                        ),
-                    },
-                    None => Err(anyhow!("enchant: item {item_guid} not in player bag")),
+    // `Err` carries the reason the request ended in a Refusal: the Module's, or the Gateway's own
+    // when the cast names no usable target.
+    let completed: std::result::Result<Actor, String> = 'request: {
+        let Some(actor) = player.actor() else {
+            break 'request Err(NO_ACTOR.to_string());
+        };
+        let result = match route {
+            ManualRoute::Enchant(enchant_route) => {
+                let item_guid = item_target(c);
+                if item_guid == 0 {
+                    break 'request Err("enchant: no item target in cast".to_string());
+                }
+                let Some(slot) = store.item_slot_by_guid(player.account_id, item_guid) else {
+                    break 'request Err(format!("enchant: item {item_guid} not in player bag"));
+                };
+                match enchant_route {
+                    EnchantRoute::Disenchant => store.disenchant_item(actor, slot),
+                    EnchantRoute::Enchant(enchant_id) => {
+                        store.enchant_item_on_slot(actor, slot, enchant_id)
+                    }
                 }
             }
-        }
-        ManualRoute::Fish => store.fish(player.account_id, self_guid),
-        ManualRoute::OpenLock => {
-            let go_guid = gameobject_target(c);
-            if go_guid == 0 {
-                Err(anyhow!("pick_lock: no gameobject target in cast"))
-            } else {
-                store.pick_lock(player.account_id, self_guid, go_guid)
+            ManualRoute::Fish => store.fish(actor),
+            ManualRoute::OpenLock => {
+                let go_guid = gameobject_target(c);
+                if go_guid == 0 {
+                    break 'request Err("pick_lock: no gameobject target in cast".to_string());
+                }
+                store.pick_lock(actor, go_guid)
             }
+        };
+        match result {
+            Ok(()) => Ok(actor),
+            Err(e) => Err(refusal_reason(e)?),
         }
     };
 
-    let outbound = match result {
-        Err(e) => {
-            if is_transport_failure(&e) {
-                return Err(e);
-            }
+    let outbound = match completed {
+        Err(reason) => {
             log::debug!(
-                "world: manual-completion cast {spell} rejected (account {}): {e}",
+                "world: manual-completion cast {spell} rejected (account {}): {reason}",
                 player.account_id
             );
             vec![Outbound::One(ServerOpcodeMessage::SMSG_CAST_RESULT(
@@ -97,19 +97,18 @@ pub(crate) fn manual_completion_cast<St: CastStore + ?Sized>(
                 }),
             ))]
         }
-        Ok(()) if player.self_guid.is_some() => vec![
+        Ok(actor) => vec![
             Outbound::One(ServerOpcodeMessage::SMSG_SPELL_START(Box::new(
-                codec::build_spell_start(self_guid, spell, 0, 0, None),
+                codec::build_spell_start(actor.guid(), spell, 0, 0, None),
             ))),
             Outbound::Raw {
                 opcode: OP_CAST_RESULT,
                 body: codec::build_cast_result_ok(spell),
             },
             Outbound::One(ServerOpcodeMessage::SMSG_SPELL_GO(Box::new(
-                codec::build_spell_go(self_guid, spell, 0, None),
+                codec::build_spell_go(actor.guid(), spell, 0, None),
             ))),
         ],
-        Ok(()) => Vec::new(),
     };
     Ok(CastOutcome::Handled {
         transition: CastTransition::default(),

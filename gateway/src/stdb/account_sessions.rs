@@ -757,7 +757,8 @@ mod tests {
             fixture.query_rows("SELECT x,last_move_ms FROM game_world_entity WHERE guid = 1");
         assert_eq!(entity[0]["x"].parse::<f32>().unwrap(), 100.0);
         assert_eq!(entity[0]["last_move_ms"], "100");
-        let stale = old.stop_attack(account_id, 1).unwrap_err();
+        let stale =
+            crate::world::MeleeActionStore::stop_attack(&old, Actor::new(1).unwrap()).unwrap_err();
         assert!(
             stale.to_string().contains("STALE_WORLD_SESSION"),
             "{stale:#}"
