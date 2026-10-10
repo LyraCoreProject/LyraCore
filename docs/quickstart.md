@@ -400,8 +400,9 @@ It prints the notice above in full and waits for you to type `yes`. Then it pull
 (checksum-verified against the pinned commit), confirms the client path, and runs the world ETL plus
 the curated class-spell trainer offerings on every content destination. The sharded plan is
 `lyracore` with `alliance-eastern`, `lyracore-kalimdor` with `alliance-kalimdor`, and
-`lyracore-instances` with `instances`. Under `--single`, `lyracore` receives `alliance-single`, the
-union of both continents and map 36. Pass `--accept` to answer the consent question in advance for a
+`lyracore-instances` with `instances`. The Eastern profiles include all of Deeprun Tram, map 369,
+on the default World Shard. Under `--single`, `lyracore` receives `alliance-single`, the
+union of both continents, map 36 and map 369. Pass `--accept` to answer the consent question in advance for a
 scripted run, and leave `--client-data` off to be prompted for the path.
 
 **What to expect.** The pull is a few hundred megabytes of git history. Each ETL is the long
