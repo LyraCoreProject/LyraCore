@@ -1,11 +1,5 @@
 //! Raw decoder for `SMSG_UPDATE_OBJECT` VALUES blocks (testing-hardening §3.1).
-//!
-//! gtker's typed reader REJECTS a TYPE-less partial VALUES mask (bit 2 absent — which is exactly
-//! what a correct 5875 server sends; see `codec::values`'s dirty_reset doc), so every wire assert
-//! on a live field change used to be a bespoke `body.windows(4)` byte scan. This is the one shared
-//! decoder instead: parse the leading VALUES objects out of a raw frame and hand back
-//! `(field_index, raw_word)` pairs addressed exactly like the update-mask descriptor table
-//! (e.g. `PLAYER_SKILL_INFO` starts at field 718, 3 words per slot; `UNIT_FIELD_HEALTH` = 22).
+
 //!
 //! Scope: VALUES blocks only, and only the LEADING run of them — a CREATE/MOVEMENT block has a
 //! variable-length movement payload this deliberately does not decode (the typed reader handles

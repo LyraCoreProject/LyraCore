@@ -31,9 +31,6 @@ use lyracore_shared::trainer::TrainerRefusal;
 static NEXT_TAXI_REQUEST_ID: OnceLock<AtomicU64> = OnceLock::new();
 
 fn next_taxi_request_id() -> u64 {
-    // Seed from this process start's wall-clock nanoseconds. The reply table survives a gateway
-    // restart, so restarting the old `1, 2, ...` sequence could make the cache's pre-restart row
-    // look like the just-committed reply before its replacement subscription delta arrived.
     let next = NEXT_TAXI_REQUEST_ID.get_or_init(|| {
         let seed = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -379,8 +376,6 @@ impl Coordinator {
             }))
     }
 
-    /// Cohesive open request: source discovery and direct-route filtering commit together, then
-    /// this projects the module's client node ids without re-reading raw taxi tables.
     pub fn open_taxi(
         &self,
         character_guid: u64,
@@ -1226,7 +1221,7 @@ impl Coordinator {
         })
     }
 
-    /// Enter the world (Phase 4): call the `player_login` reducer on the coordinator connection
+    /// Enter the world: call the `player_login` reducer on the coordinator connection
     /// (so `ctx.sender` is the player's bound identity), then read the resulting
     /// `game_world_entity` row back through the privileged cache as an `EntityView`.
     pub fn player_login(
@@ -1334,7 +1329,7 @@ impl Coordinator {
         });
     }
 
-    /// Provision SRP6 credentials computed by the gateway (Phase 0 bring-up).
+    /// Provision SRP6 credentials computed by the Gateway.
     pub fn provision_account(&self, username: &str, salt: &[u8], verifier: &[u8]) -> Result<()> {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
@@ -1442,7 +1437,7 @@ impl Coordinator {
         Ok(self.realm_core()?.has_auction(character_guid))
     }
 
-    /// Logon writes K + the bound per-account identity (Phase 1).
+    /// Logon writes K + the bound per-account identity.
     pub fn establish_session(
         &self,
         account_id: u64,
@@ -1770,7 +1765,7 @@ impl Coordinator {
         )
     }
 
-    /// Draw or stow the player's weapons (`CMSG_SETSHEATHED`). [#101]
+    /// Draw or stow the player's weapons (`CMSG_SETSHEATHED`).
     pub fn set_sheathed(&self, _account_id: u64, actor_guid: u64, state: u8) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("set_sheathed: actor_guid unresolved"));
@@ -2075,7 +2070,7 @@ impl Coordinator {
     /// Deliberately does NOT use the `call_reducer!` macro: that macro wraps a module `Err` as
     /// `"{what} reducer failed: {e}"` (fine when a caller only reads its Refusal tag), but the Say
     /// handler relays this `Err`'s text VERBATIM to the sender as a system chat line — a raw
-    /// `"permission denied"` / `"unknown command: .foo"` must reach the client with no wrapper
+    /// `"permission denied"` / `"unknown command:.foo"` must reach the client with no wrapper
     /// prefix.
     pub(crate) fn request_gm_command(
         &self,
@@ -2165,7 +2160,7 @@ impl Coordinator {
         ))
     }
 
-    /// `CMSG_INITIATE_TRADE` — `target_guid` is the client's targeted player (#120).
+    /// `CMSG_INITIATE_TRADE`, `target_guid` is the client's targeted player.
     pub fn initiate_trade(
         &self,
         _account_id: u64,
@@ -2183,7 +2178,7 @@ impl Coordinator {
         )
     }
 
-    /// `CMSG_BEGIN_TRADE` (#120).
+    /// `CMSG_BEGIN_TRADE`.
     pub fn begin_trade(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("begin_trade: actor_guid unresolved"));
@@ -2196,7 +2191,7 @@ impl Coordinator {
         )
     }
 
-    /// `CMSG_CANCEL_TRADE` (#120).
+    /// `CMSG_CANCEL_TRADE`.
     pub fn cancel_trade(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("cancel_trade: actor_guid unresolved"));
@@ -2233,7 +2228,7 @@ impl Coordinator {
         )
     }
 
-    /// `CMSG_SET_TRADE_ITEM` (#121).
+    /// `CMSG_SET_TRADE_ITEM`.
     pub fn set_trade_item(
         &self,
         _account_id: u64,
@@ -2252,7 +2247,7 @@ impl Coordinator {
         )
     }
 
-    /// `CMSG_CLEAR_TRADE_ITEM` (#121).
+    /// `CMSG_CLEAR_TRADE_ITEM`.
     pub fn clear_trade_item(
         &self,
         _account_id: u64,
@@ -2270,7 +2265,7 @@ impl Coordinator {
         )
     }
 
-    /// `CMSG_SET_TRADE_GOLD` (#121).
+    /// `CMSG_SET_TRADE_GOLD`.
     pub fn set_trade_gold(&self, _account_id: u64, actor_guid: u64, copper: u32) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("set_trade_gold: actor_guid unresolved"));
@@ -2283,7 +2278,7 @@ impl Coordinator {
         )
     }
 
-    /// `CMSG_ACCEPT_TRADE` (#122).
+    /// `CMSG_ACCEPT_TRADE`.
     pub fn accept_trade(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("accept_trade: actor_guid unresolved"));
@@ -2296,7 +2291,7 @@ impl Coordinator {
         )
     }
 
-    /// `CMSG_UNACCEPT_TRADE` (#122).
+    /// `CMSG_UNACCEPT_TRADE`.
     pub fn unaccept_trade(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("unaccept_trade: actor_guid unresolved"));
@@ -2309,7 +2304,7 @@ impl Coordinator {
         )
     }
 
-    /// `CMSG_BUSY_TRADE` (#123).
+    /// `CMSG_BUSY_TRADE`.
     pub fn busy_trade(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("busy_trade: actor_guid unresolved"));
@@ -2322,7 +2317,7 @@ impl Coordinator {
         )
     }
 
-    /// `CMSG_IGNORE_TRADE` (#123).
+    /// `CMSG_IGNORE_TRADE`.
     pub fn ignore_trade(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("ignore_trade: actor_guid unresolved"));
@@ -2758,9 +2753,9 @@ impl Coordinator {
         )
     }
 
-    /// Respec at a trainer (the "I wish to unlearn my talents." gossip option, #516) — clears every
+    /// Respec at a trainer (the "I wish to unlearn my talents." gossip option), clears every
     /// learned talent for the calling player's escalating gold cost. Rides the coordinator
-    /// connection as `gw_reset_talents` (#483 deleted the per-player sender path).
+    /// connection as `gw_reset_talents` (deleted the per-player sender path).
     pub fn reset_talents(
         &self,
         _account_id: u64,
@@ -4806,7 +4801,7 @@ mod auction_reducer_tests {
                 operation: "gw_auction_hold_listing".to_string(),
                 reason: refusal.as_tag().to_string(),
             })
-            .context("listing phase 1");
+            .context("preparing auction listing");
             assert_eq!(auction_refusal(&error), Some(refusal));
         }
 

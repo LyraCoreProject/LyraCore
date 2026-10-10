@@ -1,86 +1,11 @@
-//! Build-time codegen for the module's self-registration registries.
-//!
-//! Scans every `.rs` file under `src/` AND under each drop-in package's `packages/<name>/src/`
-//! at the repository root for marker invocations. Packages are installed separately. Generates
-//! into `$OUT_DIR` the files the crate `include!`s:
-//!
-//! - `character_sweeps.rs` — from `character_owned!` markers: the two `&[fn(...)]`
-//!   const arrays `CHARACTER_OWNED_DELETE_SWEEPS` and `CHARACTER_OWNED_RESTAMP_SWEEPS`, plus
-//!   `CHARACTER_OWNED_TABLES: &[&str]` — the same enumeration as NAMES, which is what the escrowed
-//!   transfer manifest (`src/transfer.rs`, issue #16) exports. The names are derived from the
-//!   `delete` sweep fn names by stripping the mandatory `sweep_delete_` prefix (every marker in the
-//!   tree follows it), so the manifest can never drift from the sweep registry — there is exactly
-//!   ONE list, and a table that gets a sweep gets a manifest entry in the same edit. A `delete`
-//!   marker whose fn is not named `sweep_delete_<table_accessor>` panics below: the transfer
-//!   manifest would silently name a non-existent table. The `transfer` and `not_transported` marker
-//!   kinds add `CHARACTER_OWNED_TRANSFERS: &[(&str, fn(..))]` (issue #19) — the cross-DATABASE row
-//!   transport, keyed by the same table-accessor name so a mover can never be paired with the wrong
-//!   manifest entry (`sweep_transfer_<table_accessor>`, same prefix-strip rule) — plus two
-//!   plain-string views of it (#380): `CHARACTER_OWNED_TRANSFER_NAMES` (every transported table, so
-//!   a NATIVE test binary can read the registry without materializing fn pointers it cannot link)
-//!   and `CHARACTER_OWNED_NOT_TRANSPORTED` (the subset registered through the `not_transported`
-//!   kind, cross-checked against `transfer::NOT_TRANSPORTED`'s written reasons). A declining arm is
-//!   still a transport arm — it lands in `CHARACTER_OWNED_TRANSFERS` too — so "this table has an
-//!   arm" and "this table's rows actually cross" stay two separate, separately-ratcheted facts.
-//! - `package_mods.rs` — one `#[path = ...] pub mod pkg_<name>;` per discovered package, so a
-//!   folder dropped into `packages/` compiles into the module wasm with ZERO core-file edits.
-//!   A package = `packages/<name>/src/mod.rs` (+ sibling submodule files).
-//! - `package_registries.rs` — from `game_tick_pass!`, `game_hook!`,
-//!   `game_client_command!`, and `encounter_package!` markers:
-//!   `GAME_TICK_PASSES` (periodic passes run by the core scheduler tick) and one
-//!   `GAME_HOOKS_<EVENT>` array per known notify-hook event, dispatched at the core chokepoints
-//!   (see `src/hooks.rs`), the optional Package client-command handler, and the map-scoped
-//!   encounter authority registry. Each Package registration is wrapped so it stops once Package
-//!   Teardown has run (`src/package_teardown.rs`). `GAME_PACKAGES` lists every compiled Package
-//!   with its `#[table]` accessors and its `game_package_characters!` read, for that teardown.
-//! - `hook_dispatch.rs` — from `HOOK_EVENTS` below: the `payload_for` alias mod
-//!   and one `fire_*` fn per event, included INSIDE `src/hooks.rs` so the paths every chokepoint
-//!   already uses (`hooks::fire_*`, `hooks::payload_for::*`) are unchanged. This is what keeps the
-//!   event catalog to TWO homes: the payload struct in hooks.rs and the `HOOK_EVENTS` row here.
-//!
-//! This is a text scan, not a real Rust parser — it never inspects a marker's body, only the shape
-//! of the invocation head. The scan runs on a COMMENT- AND STRING-STRIPPED copy of each
-//! file (newlines preserved, so panic line numbers stay true): a commented-out marker, or marker
-//! syntax quoted in a doc example or string literal, neither registers nor breaks the build — the
-//! macro docs in `src/lib.rs` show real invocation syntax precisely because of this. On the CODE
-//! that remains, the scan is deliberately strict: every occurrence of a marker's literal substring
-//! must match the exact expected shape, or the build panics (loudly, at `cargo build`/`cargo
-//! check` time) instead of silently registering nothing. A typo'd or reshaped marker must never
-//! just vanish from the registry.
-//!
-//! The fully-qualified path is derived from the file's location, using plain Rust module
-//! conventions collapsed to the top segment: `src/foo.rs` -> `crate::foo`, `src/foo/bar.rs` ->
-//! `crate::foo` (every directory module in this crate is a thin facade whose `mod.rs` does
-//! `pub use bar::*;`). Package files map to the package's generated root module:
-//! `packages/<name>/src/**` -> `crate::pkg_<name>`. The facade assumption is CHECKED:
-//! a marker in a nested submodule file whose facade does not visibly re-export it panics at build
-//! time naming the missing `pub use` — instead of failing later as an opaque rustc error inside
-//! `$OUT_DIR`.
-//! A source file compiled only with `debug_reducers` must put the canonical inner attribute
-//! `#![cfg(feature = "debug_reducers")]` before every non-blank line. Registry discovery applies
-//! that same feature boundary, so an ordinary build never receives paths to functions rustc omitted.
-//!
-//! The same pass also lints each package file against the Package API surface
-//! (`PACKAGE_API_ROOTS`, documented at `docs/package-api.md`): a path that reaches the crate root
-//! outside it fails the build naming the Package, the file, the line and the path, unless the line
-//! carries `// package-api: exempt <reason>`. A gated root (`PACKAGE_API_GATED_ROOTS`) is on the
-//! surface only in a file that starts with its gate, the debug cfg above or `#![cfg(test)]`, and no
-//! exemption clears it. Core `src/` is never linted.
-//!
-//! EVALUATED AND REJECTED: replacing the marker scan with an explicit per-package `register()`
-//! convention. The registries are const fn-pointer arrays (no allocator-dependent init order in
-//! wasm), and `character_owned!` markers are deliberately scattered NEXT TO their tables across
-//! core files — a tripwire test enforces that locality. A central register() would keep codegen
-//! anyway (package discovery) while losing the write-the-marker-where-the-code-lives property the
-//! substrate is built on. Hardening the scan (strip + facade check) buys the same safety without
-//! the churn.
+//! Module registry generation and Package discovery. See `docs/module-build.md`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 /// One row of the notify-hook event catalog.
 ///
-/// `actor`/`target` are the Runtime Script Event Binding half (#318): Rust expressions, evaluated
+/// `actor`/`target` are the Runtime Script Event Binding half: Rust expressions, evaluated
 /// against `payload` inside the generated `fire_*`, naming the guid that CAUSED the event and the
 /// guid it acted ON. `"0"` means the event has no such participant, which reaches a Runtime Script
 /// as an absent `event.actor`/`event.target` rather than as an error.
@@ -428,7 +353,7 @@ fn main() {
         out.push_str(&format!("    \"{table}\",\n"));
     }
     out.push_str("];\n");
-    // The CROSS-DATABASE row transport (issue #19), keyed by table accessor so
+    // The CROSS-DATABASE row transport, keyed by table accessor so
     // `transfer::export_rows`/`import_rows` can pair a manifest entry with its mover. Derived from
     // the `sweep_transfer_<table_accessor>` fn names by the same prefix-strip rule as the delete
     // sweeps — so a transport arm can never name a table that isn't in the manifest.
@@ -464,7 +389,7 @@ fn main() {
         ));
     }
     out.push_str("];\n");
-    // The SAME names again, as plain strings (#380). `CHARACTER_OWNED_TRANSFERS` above cannot be
+    // The SAME names again, as plain strings. `CHARACTER_OWNED_TRANSFERS` above cannot be
     // named from a NATIVE test binary — referencing it materializes every registered fn's POINTER,
     // which drags the SpacetimeDB host imports (`datastore_insert_bsatn`, …) in and they cannot
     // link outside wasm. The transfer ratchet used to work around that by string-parsing this very
@@ -478,7 +403,7 @@ fn main() {
     // The DECLINING subset — the arms written with the `not_transported` marker kind. This is the
     // mechanical half of the decision; the reasoned half is `transfer::NOT_TRANSPORTED`, and
     // `the_not_transported_allowlist_matches_the_arms_that_decline` fails if they disagree in
-    // either direction (#380). Sorted by TABLE name so the assertion compares two stable lists.
+    // either direction. Sorted by TABLE name so the assertion compares two stable lists.
     registries.not_transported.sort();
     let mut declines: Vec<String> = registries
         .not_transported
@@ -692,7 +617,7 @@ struct Registries {
     restamp: Vec<String>,
     transfer: Vec<String>,
     /// The subset of `transfer` registered through the `not_transported` marker kind — the arms
-    /// that deliberately carry nothing. Emitted as `CHARACTER_OWNED_NOT_TRANSPORTED` (#380).
+    /// that deliberately carry nothing. Emitted as `CHARACTER_OWNED_NOT_TRANSPORTED`.
     not_transported: Vec<String>,
     tick_passes: Vec<String>,
     hooks: Vec<(String, String)>, // (event, fully-qualified fn path)
@@ -1248,7 +1173,7 @@ fn scan_file(file: &Path, scan_root: &Path, in_package: bool, prefix: &str, reg:
                     // seeing an arm for the table — but it is ALSO recorded separately, because
                     // "these rows deliberately do not cross" is a decision that must be
                     // cross-checkable against `transfer::NOT_TRANSPORTED`'s written reasons
-                    // instead of being read back out of the arm's source text (#380).
+                    // instead of being read back out of the arm's source text.
                     // A PACKAGE's decline is registered as a transport arm like any other, but it
                     // is NOT cross-checked against `transfer::NOT_TRANSPORTED`. That list is the
                     // core's written decision about core tables, and it cannot name a table that

@@ -17,9 +17,7 @@ use crate::{game_active_taxi_flight, game_race_info, game_world_entity, Characte
 #[table(
     accessor = game_creature_template,
     public,
-    // Perf catalog 1.19: `tick::active_cell_radius` used to fold `max(aggro_range)` over EVERY template
-    // on every 500ms firing. With this btree it asks the only question that can change the answer —
-    // "does any template override exceed the visibility floor?" — as one index probe.
+
     index(accessor = by_aggro_range, btree(columns = [aggro_range]))
 )]
 pub struct CreatureTemplate {
@@ -64,7 +62,7 @@ pub struct CreatureTemplate {
     #[default(0)]
     pub aggro_range: u32,
 
-    // Per-creature melee swing damage (parity #7): cmangos MinMeleeDmg/MaxMeleeDmg, rounded to int. Lets
+    // Per-creature melee swing damage (parity): cmangos MinMeleeDmg/MaxMeleeDmg, rounded to int. Lets
     // an L5 Garrick (6-7) hit harder than an L1 wolf (2) instead of every mob sharing the flat 1-3.
     // `damage_max == 0` ⇒ "not imported" → `swing_range_ctx` falls back to CREATURE_MELEE_MIN/MAX, so
     // existing rows + the seed chicken stay byte-identical. `#[default(0)]` + end-appended (migration rule).
@@ -80,7 +78,7 @@ pub struct CreatureTemplate {
     #[default(0)]
     pub armor: u32,
 
-    // Loot-family completeness (work-item 210): the creature's PICKPOCKET and SKIN loot-table ids —
+    // Loot-family completeness : the creature's PICKPOCKET and SKIN loot-table ids ,
     // cmangos `creature_template.PickpocketLootId` / `SkinLootId`, sitting immediately after `LootId`
     // in the real schema (the importer's `ct::PICKPOCKET_LOOT_ID`/`ct::SKIN_LOOT_ID`, `[V]` — confirm
     // against your own dump). `pickpocket_loot_id` keys `game_pickpocket_loot` directly by CREATURE
@@ -110,20 +108,6 @@ pub struct CreatureTemplate {
     pub trainer_class: u8,
 }
 
-/// Beast-family reference data, keyed by the family id that `CreatureTemplate.creature_family`
-/// points at (cmangos `creature_template.family`, already imported — see that column's doc
-/// comment). Source: `CreatureFamily.dbc` (work-item 214, the 188 pet system's data half).
-/// `pet_food_mask` is the cmangos `PetDiet` bitmask (`MEAT 0x1 · FISH 0x2 · CHEESE 0x4 ·
-/// BREAD 0x8 · MUSHROOM 0x10 · FRUIT 0x20 · RAW_MEAT 0x40 · RAW_FISH 0x80`) — which food item
-/// classes satisfy this family's hunger. `pet_talent_type` is `-1` for a non-pet family (most
-/// beasts — wolves, boars, bears that are never tameable) and `>= 0` for a tameable Hunter-pet
-/// family (the talent tree the tamed pet gets). `category` is the DBC's own grouping id, kept
-/// as the raw foreign key (same "store the raw key" convention as `race_info_sql`/`faction_sql`
-/// in the importer). NOTE: vanilla `CreatureFamily.dbc` carries NO skill-line column — a pet
-/// family's actual spells ride `SkillLineAbility` (work-item 208's `game_skill_ability`), not
-/// this table. Consumer: work-item 188 (the pet feeding gate reads `pet_food_mask`, the
-/// tameable gate reads `pet_talent_type != -1`) — not wired up here, data-only. No Timestamp →
-/// SQL-seedable, importer-owned (clear+reload). [static]
 #[table(accessor = game_creature_family, public)]
 pub struct CreatureFamily {
     #[primary_key]
@@ -251,12 +235,12 @@ pub struct NpcText {
     pub text: String, // slot 0, male (back-compat)
 }
 
-/// The remaining weighted npc_text slots (work-item 217 — vanilla ships 8 greeting variants; the
+/// The remaining weighted npc_text slots, vanilla ships 8 greeting variants; the
 /// CLIENT does the random weighted pick from `SMSG_NPC_TEXT_UPDATE`'s 8-slot array, no server RNG,
 /// see `gateway::codec::build_npc_text_update`). A SEPARATE table from `NpcText`, NOT an end-append
 /// of it: SpacetimeDB 2.5's `#[table]` macro cannot default a `String` column — `#[default(String::new())]`
 /// fails to compile (`error[E0493]`: `String`'s `Drop` can't run inside the macro's compile-time
-/// type-check, which is a plain `const { .. }` block — this is a hard Rust limitation, not a repo
+/// type-check, which is a plain `const {.. }` block, this is a hard Rust limitation, not a repo
 /// convention, so it applies to ANY end-appended `String` column, verified in this pass). A brand
 /// NEW table sidesteps it entirely (zero existing rows ⇒ nothing to backfill ⇒ no column needs a
 /// default at all), and this is the SAME one-row-plus-child-rows shape already used everywhere else
@@ -284,7 +268,7 @@ pub struct NpcTextSlot {
     pub probability: f32,
 }
 
-/// Per-creature gossip MENU OPTION (work-item 217): a clickable line in `SMSG_GOSSIP_MESSAGE`
+/// Per-creature gossip MENU OPTION : a clickable line in `SMSG_GOSSIP_MESSAGE`
 /// (browse-goods / make-home / "Train me" / plain gossip text / submenu link), imported from cmangos
 /// `gossip_menu_option`. Keyed by creature template `entry` (NOT the cmangos `gossip_menu_option.menu_id`
 /// — the importer collapses the same menu→entry indirection `GossipMenu` already collapses for the
@@ -301,7 +285,7 @@ pub struct NpcTextSlot {
 /// `lyracore_shared::constants::gossip_condition`; an option the importer can't classify gets `cond_type = 0`
 /// (fail-open, always shown) rather than silently hidden, and is logged at import time.
 ///
-/// A NEW table (work-item 217) → auto-migrates with no `-c`. No Timestamp → SQL-seedable,
+/// A NEW table  → auto-migrates with no `-c`. No Timestamp → SQL-seedable,
 /// importer-owned (clear+reload each ETL run, like its sibling `GossipMenu`). [static]
 #[table(accessor = game_gossip_option, public, index(accessor = by_entry, btree(columns = [entry])))]
 pub struct GossipOption {
@@ -318,12 +302,6 @@ pub struct GossipOption {
     pub cond_value2: u32,    // reserved (unused by the current minimal condition set)
 }
 
-/// Which spell a caster-type creature nukes/debuffs with while engaged, keyed by creature entry (one
-/// cast spell per entry for this slice). The CAST pass in `tick_creatures` fires it at the creature's
-/// current melee target. The cast cadence is the SPELL'S OWN GCD — `resolve_cast_at` rejects (returns
-/// `Err`, ignored) while on cooldown — so no separate cooldown column is needed. Hand-authored
-/// reference data, public + read-only, no Timestamp → SQL-seedable. A creature with NO row never casts
-/// (baseline-safe — it just melees/chases as before). [static]
 #[table(accessor = game_creature_cast, public)]
 pub struct CreatureCast {
     #[primary_key]
@@ -381,44 +359,6 @@ pub const MOVEMENT_IDLE: u8 = 0;
 pub const MOVEMENT_RANDOM: u8 = 1;
 pub const MOVEMENT_WAYPOINT: u8 = 2;
 
-/// The persistent spawn record for a creature — the source of truth that survives the creature's
-/// death. The live `game_world_entity` row is deleted on death; this row holds the data to
-/// re-create it once `respawn_at` elapses. While the creature is alive, `respawn_at` is
-/// ignored. [static]
-/// The **not-armed sentinel** for `respawn_at` / `despawn_at`.
-///
-/// Both columns are "ignored" in most states — `respawn_at` while the creature is alive,
-/// `despawn_at` while it is not a corpse — and they used to be stamped with `ctx.timestamp` at
-/// creation, i.e. a value permanently in the PAST. That made the due predicate
-/// (`respawn_at <= now`) true for every row in the table, so `pass_respawn` and `pass_decay` could
-/// only ever find their handful of genuinely-due rows by scanning all of them and re-testing the
-/// state that actually mattered (is the entity gone / is it dead).
-///
-/// Measured: three such passes visited 5,735 rows each, every sense tick, with **nobody online** —
-/// 2.2% of the writer at idle, and it scales with SPAWN COUNT, not players, so a full-world import
-/// (~10× the spawns) multiplies it.
-///
-/// Parking the columns far in the future instead makes the due predicate mean what it says, so a
-/// btree range scan (`..=now`) visits only rows that are actually armed — normally none. Same trick
-/// as `game_aura`'s `by_next_tick` (`0` sentinel, `1..=now` range). `encounter.rs` already used a
-/// far-future `respawn_at` for exactly this reason; this promotes that one-off to the rule.
-///
-/// Relative rather than absolute (`now + u32::MAX seconds`, ~136 years) to match that precedent and
-/// to stay clear of `Timestamp` overflow — anything past `now` is equally "never" to a `..=now` scan.
-/// **One-time migration for `timer_never`.** Every spawn row created before the sentinel existed
-/// carries `respawn_at`/`despawn_at` stamped at creation time — permanently in the past — so the
-/// range scans in `pass_respawn`/`pass_decay` would still visit all of them and the index would
-/// narrow nothing. This disarms the timers on rows that are not actually pending anything:
-///
-///   * `respawn_at` is disarmed when the creature is ALIVE (a live entity exists for the guid), and
-///   * `despawn_at` is disarmed when it is NOT a corpse (no entity, or an entity that is not dead).
-///
-/// Deliberately conservative: a genuinely pending respawn (dead/absent creature with a timer) and a
-/// genuinely rotting corpse are both left alone, so running this can never resurrect or vanish
-/// anything. Idempotent, and safe to run repeatedly.
-///
-/// `limit` caps rows touched per call so a big world can be migrated in chunks rather than one
-/// enormous transaction; it returns how many it changed, so an operator can loop until it reports 0.
 #[cfg(feature = "debug_reducers")]
 #[reducer]
 pub fn debug_normalize_spawn_timers(ctx: &ReducerContext, limit: u32) -> Result<(), String> {
@@ -703,15 +643,6 @@ pub(crate) fn insert_creature_entity(ctx: &spacetimedb::ReducerContext, mut enti
     crate::hooks::fire_on_creature_spawn(ctx, &payload);
 }
 
-/// Build the live `game_world_entity` row for a creature from its spawn record + template. Used by
-/// both the initial seed and the respawn pass. `rand` (the caller's `ctx.random()`) drives the
-/// level/health roll within the template range (`rolled_creature_stats`); pass a fixed value for a
-/// deterministic spawn. `owner_identity` is the server sentinel (ZERO); `unit_bytes_0` is a
-/// dummy-but-valid Human/Warrior/Male/Mana (non-rendering for a Unit; the codec rejects race 0).
-/// `instance_id` is a REQUIRED param (work-item 190 slice 1) — every slice-1 caller passes 0
-/// (open world); it is NOT read from `CreatureSpawn` this slice (spawn templates stay
-/// instance-agnostic — slice 2's dungeon population creates per-instance copies at a call site,
-/// not by adding a column here).
 pub fn build_creature_entity(
     spawn: &CreatureSpawn,
     tmpl: &CreatureTemplate,
@@ -941,11 +872,9 @@ pub fn build_player_entity(
         // Threaded from the DURABLE column: the reclaim-escalation ladder must survive a
         // disconnect/relog, or die-relog-die resets every death to the 30s floor.
         death_expire_micros: character.death_expire_micros,
-        // Threaded from the DURABLE column (work-item 190 slice 1, always 0 this slice) so a relog
-        // rebuilds the entity into the instance it was in, not open world — the `death_expire_micros`
-        // precedent.
+
         instance_id: character.pending_instance_id,
-        // GM playtest fields (work-item 223) threaded from the DURABLE carry columns (work-item 289 —
+        // GM playtest fields  threaded from the DURABLE carry columns ,
         // the `death_expire_micros` precedent). They are NOT durable settings: `persist_entity` clears
         // them on a real logout/disconnect and carries them across a despawn/rebuild WITHIN a session
         // (`persisted_gm_playtest`), so a login still starts at 1× speed / not-godmode while a

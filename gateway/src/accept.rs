@@ -1,63 +1,4 @@
-//! Accept-loop resource policy. This is the one place that decides whether an `accept(2)` failure
-//! ends a listener or costs one connection, and it provides the shared non-waiting capacity that
-//! keeps accepted sockets out of Tokio's unbounded blocking-task queue. Root-caused on the
-//! mass-session login storm that killed the gateway outright (see below).
-//!
-//! # The bug this exists to prevent
-//!
-//! `main` joins the two listener tasks with `tokio::try_join!`, and both accept loops used to write
-//! `listener.accept().await?`. tokio retries exactly one errno — `WouldBlock`
-//! (`tokio/src/net/tcp/listener.rs`: every other `Err(e)` is `return Poll::Ready(Err(e))`) — so any
-//! other errno travelled out of the accept loop, into `try_join!`, out of `main`, and ended the
-//! process. On 2026-08-07 that is exactly what happened, and the gateway's last line was:
-//!
-//! ```text
-//! Error: Too many open files (os error 24)
-//! ```
-//!
-//! One `EMFILE` — a *per-call* condition that says nothing about the listener — took down every
-//! session on the realm. `ECONNABORTED` (a peer resetting while queued in the backlog, which is what
-//! a synthetic load harness killing its clients produces en masse) would have done the same.
-//!
-//! # The policy, and why it is shaped as a fatal ALLOWLIST
-//!
-//! [`classify_accept_error`] names a small, explicit set of errnos as fatal and treats everything
-//! else as transient. The list is deliberately in that direction rather than the other:
-//!
-//! - The fatal set is exactly the errnos that mean **the listening socket itself is unusable**, so
-//!   retrying could only spin forever. Each is also a condition **no remote peer can induce** — they
-//!   are local programming/lifetime faults, not traffic.
-//! - Everything else — including errnos we have never seen — is about *one connection* or a
-//!   momentary shortage, and the honest response is to log it loudly and take the next connection.
-//!   An unknown errno ending the realm is the failure mode we are fixing; an unknown errno costing
-//!   one connection is not a failure mode at all.
-//!
-//! This is not "swallow anything". Every transient error is logged at WARN by the caller with its
-//! errno text, and [`AcceptBackoff`] bounds the cost of a *permanent* condition we misjudged as
-//! transient: the loop degrades to one attempt (and one log line) per second instead of spinning a
-//! core at full tilt. A gateway that is loudly degraded beats a gateway that is gone.
-//!
-//! # Why exactly these four are fatal
-//!
-//! | errno | what it means for `accept` | why retrying is pointless |
-//! |---|---|---|
-//! | `EBADF` | the listener fd is not an open descriptor | it will never become one; every retry returns `EBADF` |
-//! | `ENOTSOCK` | the fd is open but is not a socket | same fd, same answer, forever |
-//! | `EINVAL` | the socket is not listening (or `addrlen` is bogus) | our listener came from `TcpListener::bind`, so this can only mean the fd was replaced underneath us |
-//! | `EFAULT` | the address argument is not writable | a bug in tokio or in us; it will not fix itself between iterations |
-//!
-//! `EOPNOTSUPP` is the interesting **exclusion**. `accept(2)` lists it twice with opposite meanings: as
-//! "the socket is not of type `SOCK_STREAM`" (permanent) *and* in the Linux-specific set of
-//! already-pending network errors — `ENETDOWN`, `EPROTO`, `ENOPROTOOPT`, `EHOSTDOWN`, `ENONET`,
-//! `EHOSTUNREACH`, `EOPNOTSUPP`, `ENETUNREACH` — which the man page says "should be treated like
-//! `EAGAIN` by retrying". The permanent reading is impossible for us by construction: this listener
-//! is a `TcpListener::bind`, hence `SOCK_STREAM`, hence the pending-network reading is the only one
-//! that can apply. So it retries. `EPERM` likewise: on Linux `accept` reports it when a firewall
-//! rule forbids *that* connection — a per-connection verdict, not a listener verdict.
-//!
-//! An `io::Error` carrying **no** raw errno (a synthetic error, never observed from `accept`) is
-//! treated as transient for the same reason unknown errnos are: we cannot show it is permanent, and
-//! the backoff caps what being wrong costs.
+//! Accept-loop resource policy. See `docs/accept-policy.md` for the contract and rationale.
 
 use std::io;
 use std::sync::Arc;
@@ -114,9 +55,7 @@ pub enum AcceptOutcome {
 
 /// The errnos that mean the *listening socket* is broken rather than one connection.
 ///
-/// Kept as data so the test below can assert the whole set at once, and so adding to it is a
-/// visible, reviewable act. See the module docs for why each one is here — and, just as
-/// importantly, why `EMFILE`/`ENFILE`/`ECONNABORTED`/`EOPNOTSUPP` are **not**.
+/// `docs/accept-policy.md` explains the allowlist and the transient resource errors.
 const FATAL_ACCEPT_ERRNOS: &[i32] = &[libc::EBADF, libc::ENOTSOCK, libc::EINVAL, libc::EFAULT];
 
 /// Decide whether an accept-path error ends the listener task or one connection.
@@ -195,16 +134,11 @@ mod tests {
         io::Error::from_raw_os_error(errno)
     }
 
-    /// The whole point of this change: the errno that actually killed the realm on 2026-08-07 — and
-    /// its siblings among the transient errnos this module retries — must cost one connection, not
-    /// the process.
+    /// Resource exhaustion and interrupted connections leave the listener available.
     #[test]
     fn the_errnos_that_killed_the_realm_are_transient() {
         for (errno, name) in [
-            (
-                libc::EMFILE,
-                "EMFILE — this process is out of fds (the 08-07 death)",
-            ),
+            (libc::EMFILE, "EMFILE: this process is out of fds"),
             (libc::ENFILE, "ENFILE — the system is out of fds"),
             (
                 libc::ECONNABORTED,
@@ -315,7 +249,6 @@ mod tests {
         assert_eq!(b.consecutive(), 3);
         b.record_success();
         assert_eq!(b.consecutive(), 0);
-        // ...and the next lone failure is free again, so one bad connection an hour costs nothing.
         assert_eq!(b.record_failure(), Duration::ZERO);
     }
 

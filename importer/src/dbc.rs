@@ -209,10 +209,6 @@ pub fn run(data_dir: &str, args: &Args) -> Result<()> {
     let (si_stmts, si_count) = start_item_sql(&mut chain)?;
     let (property_stmts, _, _) = crate::item_property::catalogue_sql(&mut chain)?;
 
-    // Areas / area triggers / graveyards (work-item 209): AreaTable.dbc → game_area, AreaTrigger.dbc
-    // → game_area_trigger, WorldSafeLocs.dbc → game_graveyard. All small tables — load ALL rows (no
-    // map filtering here; that's a verify-time concern, see import-world.sh). All no-Timestamp →
-    // plain SQL, same clear+reload shape as the blocks above.
     let area_table: DbcAreaTable = read_table(&mut chain)?;
     let (area_stmts, area_count) = area_sql(&area_table);
     let area_triggers: DbcAreaTrigger = read_table(&mut chain)?;
@@ -220,7 +216,7 @@ pub fn run(data_dir: &str, args: &Args) -> Result<()> {
     let safe_locs: DbcWorldSafeLocs = read_table(&mut chain)?;
     let (graveyard_stmts, graveyard_count) = graveyard_sql(&safe_locs);
 
-    // Creature families (work-item 214): CreatureFamily.dbc → game_creature_family. Small table (no
+    // Creature families : CreatureFamily.dbc → game_creature_family. Small table (no
     // map filtering — same "load ALL rows" convention as the other DBC-backed lookups above). No
     // Timestamp → plain SQL, same clear+reload shape.
     let creature_families: DbcCreatureFamily = read_table(&mut chain)?;
@@ -231,7 +227,7 @@ pub fn run(data_dir: &str, args: &Args) -> Result<()> {
         .filter(|r| r.pet_talent_type != -1)
         .count();
 
-    // Locks (work-item 211): Lock.dbc → game_lock, the DATA half of open-lock (119 wires enforcement).
+    // Locks : Lock.dbc → game_lock, the DATA half of open-lock (119 wires enforcement).
     // Small table (a few hundred rows in vanilla) — load ALL, same "load ALL rows" convention as the
     // other DBC-backed lookups above. No Timestamp → plain SQL, same clear+reload shape.
     let locks: DbcLock = read_table(&mut chain)?;
@@ -254,7 +250,7 @@ pub fn run(data_dir: &str, args: &Args) -> Result<()> {
     }
 
     // Load game_skill_line + game_skill_ability + game_skill_availability from SkillLine.dbc /
-    // SkillLineAbility.dbc / SkillRaceClassInfo.dbc (work-item 208: the skill fabric as data — see
+    // SkillLineAbility.dbc / SkillRaceClassInfo.dbc: the skill fabric as data, see
     // module/src/skilldata.rs). All no-Timestamp → plain SQL, same clear+reload shape as the blocks
     // above. `SkillTiers.dbc` is NOT loaded here (no `game_*` table of its own) — it only feeds
     // `profession_tier_values` below, which `importer/src/main.rs` uses for the profession trainer
@@ -332,13 +328,13 @@ pub fn run(data_dir: &str, args: &Args) -> Result<()> {
     println!("SkillRaceClassInfo: {sav_count} availability rows");
     println!("AuctionHouse: {auction_house_count} houses");
     println!("MailTemplate: {mail_template_count} templates");
-    // Work-item 209 coverage prints (always printed, like the skill lines above).
+    // coverage prints (always printed, like the skill lines above).
     println!("AreaTable: {area_count} areas");
     println!("AreaTrigger: {trigger_count} triggers");
     println!("WorldSafeLocs: {graveyard_count} graveyards");
-    // Work-item 214 coverage print (always printed, like the ones above).
+    // coverage print (always printed, like the ones above).
     println!("CreatureFamily: {family_count} families ({tameable_family_count} tameable)");
-    // Work-item 211 coverage print (always printed, like the ones above). Loud about any Lock.dbc
+    // coverage print (always printed, like the ones above). Loud about any Lock.dbc
     // LocktypeReference id `LOCKTYPE_TO_SKILL_LINE` doesn't cover — see that const's doc comment.
     if lock_unmapped.is_empty() {
         println!("Lock: {lock_count} lock indices");
@@ -511,7 +507,7 @@ fn char_base_info_sql(chain: &mut PatchChain) -> Result<(Vec<String>, usize)> {
 }
 
 /// The `CharStartOutfit.dbc` (race_class, item) set — shared by `start_item_sql` (the outfit's own
-/// clear+reload) AND `main.rs`'s `build_createinfo_item_sql` (work-item 212: the cmangos dump's
+/// clear+reload) AND `main.rs`'s `build_createinfo_item_sql`: the cmangos dump's
 /// `playercreateinfo_item` EXTRAS are deduped against this SAME set, so an item CharStartOutfit
 /// already grants for a (race, class) is never double-listed). `race == 0 || class == 0` rows are
 /// skipped (not a real playable combo) and `item == 0` slots (empty) are skipped, matching
@@ -536,15 +532,6 @@ pub(crate) fn outfit_item_set(
     Ok(seen)
 }
 
-/// Clear+reload SQL for `game_start_item` from `CharStartOutfit.dbc` — the per-(race,class) creation
-/// loadout (the cmangos dump's `playercreateinfo_item` used to be treated as EMPTY; work-item 212 now
-/// imports its EXTRAS separately — see `main.rs::build_createinfo_item_sql`, deduped against the SAME
-/// (race_class, item) pairs this function writes via `outfit_item_set`). One row per non-empty item
-/// slot, DEDUPED on (race_class, item) so the male+female outfits (identical item ids, differing only
-/// in display) don't double-grant. Keyed by race_class = (race<<8)|class, matching game_start_position.
-/// Ids are assigned densely from 1 — `build_createinfo_item_sql` uses a disjoint high id range
-/// (`CREATEINFO_ITEM_ID_FLOOR`) so the two writers' DELETEs never touch each other's rows, regardless
-/// of which pass runs first. No Timestamp → plain SQL.
 fn start_item_sql(chain: &mut PatchChain) -> Result<(Vec<String>, usize)> {
     let outfits: DbcCharStartOutfit = read_table(chain)?;
     let mut seen: std::collections::HashSet<(u32, i32)> = std::collections::HashSet::new();
@@ -579,7 +566,7 @@ fn start_item_sql(chain: &mut PatchChain) -> Result<(Vec<String>, usize)> {
 /// this way). The DBC carries no strings for this enum, so this is sourced from community DBC
 /// documentation (wowdev.wiki), not something verified against our own client dump — it's informational
 /// only HERE (it only drives the "N autolearn" coverage-print count); a future AUTOLEARN consumer
-/// (work-item 208's "auto-learned spells at thresholds" follow-up) is what needs this value truly
+/// Automatic spell learning at level thresholds is what needs this value truly
 /// load-bearing-correct, and can re-derive/correct it against a real client at that point.
 const AUTOLEARN_ACQUIRE_METHOD: i32 = 1;
 
@@ -650,12 +637,6 @@ fn skill_ability_sql(table: &DbcSkillLineAbility) -> (Vec<String>, usize) {
         .iter()
         .enumerate()
         .map(|(i, r)| {
-            // ⚠ wow_dbc 0.3 SkillLineAbilityRow MIS-NAMES every field from position 8 (work-item
-            // 282): it omits the real `MinSkillLineRank` column, so each field's NAME lags the real
-            // column by one while the byte OFFSET stays correct. CONFIRMED against the live import:
-            // the field wow_dbc calls `acquire_method` holds SupercededBySpell SPELL IDS (thousands),
-            // and the real 0/1/2 `AcquireMethod` enum sits in `trivial_skill_line_rank_high`. Remap
-            // by CONTENT (same off-by-one class as the Spell.dbc InterruptFlags bug in spell.rs):
             let min_skill = r.superseded_by.id; // real MinSkillLineRank
             let acquire_method = r.trivial_skill_line_rank_high; // real AcquireMethod (0/1/2)
             let gray = r.trivial_skill_line_rank_low; // real TrivialSkillLineRankHigh
@@ -799,7 +780,7 @@ fn faction_template_sql(chain: &mut PatchChain) -> Result<(Vec<String>, usize)> 
     Ok((stmts, n))
 }
 
-/// Clear+reload SQL for `game_area` from `AreaTable.dbc` (work-item 209): every zone AND subzone row
+/// Clear+reload SQL for `game_area` from `AreaTable.dbc` : every zone AND subzone row
 /// (id, map, parent, area_bit, flags, exploration level, faction group, name). `flags` is the raw
 /// `AreaFlags` bitmask reinterpreted as `u32` (`as_int()` widened) — undecoded here, a consumer
 /// decodes what it needs (rest-state city detection is 196's job). Name via `.en_gb` + `sql_text`
@@ -834,7 +815,7 @@ fn area_sql(table: &DbcAreaTable) -> (Vec<String>, usize) {
     (stmts, n)
 }
 
-/// Clear+reload SQL for `game_area_trigger` from `AreaTrigger.dbc` (work-item 209): the geometric
+/// Clear+reload SQL for `game_area_trigger` from `AreaTrigger.dbc` : the geometric
 /// half of inn triggers (196), dungeon entrances (190), and quest explore objectives — a trigger
 /// volume is either a sphere (`radius`) or a box (`box_length`/`box_width`/`box_height`/`box_yaw`);
 /// the DBC carries both fields for every row regardless of which shape a given trigger actually
@@ -871,8 +852,8 @@ fn area_trigger_sql(table: &DbcAreaTrigger) -> (Vec<String>, usize) {
     (stmts, n)
 }
 
-/// Clear+reload SQL for `game_graveyard` from `WorldSafeLocs.dbc` (work-item 209): a graveyard's
-/// fixed position, replacing the hand-coded `world::graveyard::{NORTHSHIRE, GOLDSHIRE, ...}` consts
+/// Clear+reload SQL for `game_graveyard` from `WorldSafeLocs.dbc` : a graveyard's
+/// fixed position, replacing the hand-coded `world::graveyard::{NORTHSHIRE, GOLDSHIRE,...}` consts
 /// as the primary data source (those consts — and `seed.rs`'s row-seeded twins — remain the
 /// no-import fallback). No orientation column — the DBC carries none. Name via `.en_gb` +
 /// `sql_text`. Loads ALL rows (small table). No Timestamp → plain SQL.
@@ -1214,7 +1195,7 @@ fn taxi_catalogue_sql(
     })
 }
 
-/// Clear+reload SQL for `game_creature_family` from `CreatureFamily.dbc` (work-item 214: the 188 pet
+/// Clear+reload SQL for `game_creature_family` from `CreatureFamily.dbc`: the 188 pet
 /// system's data half — `CreatureTemplate.creature_family`/`type_flags` already import via
 /// `main.rs`'s `ct::FAMILY`/`ct::CREATURE_TYPE_FLAGS`, and the Wolf faction fixup already reads
 /// `family_id` off the dump; this is the last missing piece, the family lookup table itself). Name
@@ -1266,7 +1247,7 @@ fn locktype_skill_line(locktype_id: u32) -> Option<u32> {
         .map(|&(_, skill)| skill)
 }
 
-/// Clear+reload SQL for `game_lock` from `Lock.dbc` (work-item 211 — the DATA half of open-lock; 119
+/// Clear+reload SQL for `game_lock` from `Lock.dbc`, the DATA half of open-lock; 119
 /// wires the enforcement). Each Lock.dbc row packs FOUR parallel `[;8]` arrays: `ty`/`property`/
 /// `required_skill`/`action` — up to 8 ALTERNATIVE ways to open the SAME lock (e.g. "the right key OR
 /// enough Lockpicking"). Only the non-`LockType::None` indices are real; a lock with 1 requirement
@@ -1356,10 +1337,6 @@ fn resolve_profession_tier_values(
 ) -> HashMap<u32, [u16; 4]> {
     let mut out = HashMap::new();
     for &line in PROFESSION_SKILL_LINES {
-        // A line can carry SEVERAL SkillRaceClassInfo rows (race/class variants, trainer-visibility
-        // flag rows) and not all of them carry the tier FK — take the first row whose skill_tier
-        // RESOLVES, not the first row that merely matches the line (first-match spuriously failed
-        // the parity guard when a non-tier variant row sorted first — review catch).
         let Some(tier) = availability
             .rows()
             .iter()
@@ -2072,7 +2049,7 @@ mod tests {
         // A CONSTRUCTED fixture (not client-verified — this sandbox has no real client MPQ to read a
         // real trigger id from) shaped like Goldshire's Lion's Pride Inn entrance trigger, proving
         // the emitted tuple's column order — id,map_id,x,y,z,radius,box_length,box_width,box_height,
-        // box_yaw — is exactly what work-item 196's rest-state system will read a real inn
+        // box_yaw, is exactly what the rest-state system will read a real inn
         // AreaTrigger row as.
         let table = DbcAreaTrigger {
             rows: vec![area_trigger_row(
@@ -2520,9 +2497,6 @@ mod tests {
 
     #[test]
     fn profession_tier_values_skips_past_a_non_tier_variant_row_to_the_resolving_one() {
-        // Real SkillRaceClassInfo carries multiple rows per line (race/class variants, visibility
-        // flag rows) and not all carry the tier FK. A non-resolving row sorted FIRST must not sink
-        // the line — the resolver scans until a skill_tier resolves (the review's spurious-bail case).
         let availability = DbcSkillRaceClassInfo {
             rows: vec![
                 skill_availability_row(1, 186 /* Mining */, 0x1, 0x1, 0, 1, 0), // variant: tier FK 0 → unresolvable

@@ -1,4 +1,4 @@
-//! `--dump-collision <client Data/ dir>` — work-item 240 SPIKE: prove we can read WMO/M2
+//! `--dump-collision <client Data/ dir>`, SPIKE: prove we can read WMO/M2
 //! collision geometry out of the operator's own client MPQs before building the nav rasterizer
 //! (241). Same licensing firewall as `--dbc`/`--terrain`: in-memory read, nothing written.
 //!

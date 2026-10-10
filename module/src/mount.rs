@@ -195,12 +195,6 @@ fn trained_for_spell(ctx: &ReducerContext, guid: u64, spell_id: u32, race: u8, c
         })
 }
 
-/// Does this heartbeat cross a 100 ms boundary on the CLIENT's own move clock? The movement
-/// heartbeat's indoor check runs only when it does — ~10 Hz, fine enough to catch a doorway at run
-/// speed (a rider covers ~1.4 yd per window) and coarse enough that a 30 Hz client does not buy 30
-/// area queries a second. STATELESS by construction, exactly like the 1 Hz rest and breath gates
-/// beside it: the boundary is derived from the two timestamps the packet already carries, so there
-/// is no per-mover throttle field to persist, reset on login, or leave stale. Pure.
 pub(crate) fn indoor_check_is_due(old_move_ms: u32, move_time_ms: u32) -> bool {
     move_time_ms / 100 != old_move_ms / 100
 }
@@ -375,10 +369,6 @@ mod tests {
         assert!(!mask_admits(u32::MAX, 33));
     }
 
-    /// The heartbeat's 100 ms window, at the boundary it actually decides. Two heartbeats inside one
-    /// window skip the area query; the first heartbeat of a new window pays it. The clock is the
-    /// CLIENT's own `move_time_ms`, so a client that stops sending simply stops being checked — and a
-    /// mounted player who walks a doorway crosses at most one window before dismounting.
     #[test]
     fn indoor_check_is_due_only_on_a_100ms_boundary() {
         assert!(!indoor_check_is_due(0, 0));

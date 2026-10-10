@@ -1,25 +1,6 @@
-//! The TRUSTED GATEWAY verb surface (stage 4a).
-//!
-//! One reducer family — `gw_<verb>(ctx, actor_guid, ...)` — for a gateway that holds a SHARED
-//! SpacetimeDB connection instead of one connection per player. The sender-shaped player reducers
-//! resolve "who is acting" from `ctx.sender()`; these resolve it from an explicit `actor_guid`,
-//! because on a shared connection every call arrives from the same identity.
-//!
-//! Design rules (mirroring `actor.rs`, which this surface consumes):
-//! - **Every reducer's first act is `require_operator`.** That is the entire trust model: the
-//!   shared connection's identity is the claimed operator, and a direct anonymous SpacetimeDB
-//!   client that bypasses the gateway is refused before any actor resolution happens. The
-//!   self-scan test at the bottom of this file pins this ordering for every reducer here.
-//! - **The actor resolves through [`crate::helpers::acting_entity_by_guid`]** — the guid-keyed
-//!   twin of `entity_by_owner`, carrying the SAME in-transit transfer fence. Never `live_entity`
-//!   (it skips the fence) and never a bare `.guid().find(...)`.
-//! - **No behavior**: each verb delegates to the same core its sender-shaped sibling calls
-//!   (`world::apply_movement_update`, the `actor.rs` verbs, ...). Gates live in the cores and
-//!   cannot drift between the two entries.
-//!
-//! These are THE player-verb surface: the sender-shaped (`ctx.sender`-authorized) twins
-//! are deleted, and every player action reaches the module through a `gw_*` verb on the
-//! gateway's privileged connection.
+//! Player action reducers for the Gateway's shared Operator connection.
+//! Each request requires the Operator and resolves its Session Actor before entering the owning
+//! gameplay operation. Acting entity lookup applies the Transfer fence.
 
 use lyracore_shared::loot::LootBoundaryFailure;
 use spacetimedb::{reducer, table, Identity, ReducerContext, ScheduleAt, Table, Timestamp};
@@ -1397,8 +1378,6 @@ pub fn gw_learn_talent(
     crate::talent::do_learn_talent(ctx, actor_guid, learner.owner_identity, talent_id).map(|_| ())
 }
 
-/// [`crate::talent::do_reset_talents`] behind the gateway gate — the "I wish to unlearn my
-/// talents." gossip option (work-item 198's respec primitive, wired to gossip).
 #[reducer]
 pub fn gw_reset_talents(
     ctx: &ReducerContext,

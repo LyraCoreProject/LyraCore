@@ -1,4 +1,4 @@
-//! Player-to-player trading (#8) — the Trade Session handshake.
+//! Player-to-player trading, the Trade Session handshake.
 //!
 //! A **Trade Session** (see `CONTEXT.md`) is transient module state, the `GroupInvite` template:
 //! private rows, defensive teardown, never Escrow — after a crash or teardown the trade simply
@@ -83,10 +83,10 @@ pub struct TradeSlot {
 crate::character_owned!(delete, fn sweep_delete_game_trade_slot(ctx, character_guid) {
     let slots = ctx.db.game_trade_slot();
     let owned: Vec<u64> = slots
-        .iter()
-        .filter(|s| s.owner_guid == character_guid)
-        .map(|s| s.id)
-        .collect();
+.iter()
+.filter(|s| s.owner_guid == character_guid)
+.map(|s| s.id)
+.collect();
     for id in owned {
         slots.id().delete(id);
     }
@@ -582,9 +582,6 @@ fn decline_proposal(ctx: &ReducerContext, target_guid: u64, kind: u8) {
     push_trade_event(ctx, session.initiator_guid, kind, session.target_guid);
 }
 
-/// One seat's commit-relevant facts — gathered impurely by [`run_trade_commit`], judged
-/// purely by [`commit_verdict`] (the transfer-planner lesson: decisions pure, reducers thin).
-/// `items_offered` counts TRADED slots only — the Will-Not-Be-Traded Slot never reaches a commit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CommitSide {
     pub guid: u64,
@@ -702,9 +699,6 @@ pub(crate) fn apply_unaccept_trade(ctx: &ReducerContext, actor: WorldEntity) -> 
     Ok(())
 }
 
-/// One seat's commit facts + the offered instances behind them, gathered in-transaction.
-/// A slot row whose item vanished or changed owner is SKIPPED (the push_offer_events self-heal
-/// posture) — it simply isn't part of the swap.
 fn gather_commit_side(
     ctx: &ReducerContext,
     session: &TradeSession,

@@ -1,17 +1,4 @@
-//! Stream 1 (client DBC) — `TalentTab.dbc` + `Talent.dbc` → `game_talent_tab` + `game_talent` importer.
-//! Reads the operator's OWN `TalentTab.dbc`/`Talent.dbc` via the same `open_chain`/`read_table` path as
-//! `dbc.rs`, and emits derived `game_*` rows as chunked clear+reload SQL (mirrors `spell.rs`'s shape).
-//! This is the DATA half of work-item 031 (the real talent PANE is the wire/system half); a talent's
-//! rank-1 spell (`spell_id`) may reference a `Spell.dbc` row that hasn't been imported yet — a missing
-//! header is a graceful no-op at learn time, never a hard error (the rotation-latency doctrine — see
-//! `module/src/talent.rs::do_learn_talent`).
-//!
-//! LICENSING FIREWALL: like the rest of `dbc.rs`, the client bytes stay in memory — NO `.dbc` (or any
-//! Blizzard file) is ever written; only derived `game_talent_tab`/`game_talent` rows are emitted.
-//!
-//! Talent.dbc carries NO name field for a talent (the client shows the rank-1 spell's own name) — we
-//! stamp a placeholder `"Talent {id}"` so the NOT NULL `game_talent.name` column stays populated; the
-//! real display name is a client-side (Spell.dbc) concern the wire side already owns.
+//! Client talent data extraction and import planning.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;

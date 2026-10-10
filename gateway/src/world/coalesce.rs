@@ -1,11 +1,3 @@
-//! Per-connection movement coalescing. Every inbound `MSG_MOVE_*` used to become
-//! its own `movement_update` reducer transaction, so movement dominates the serialized stream as
-//! players scale. `CoalesceState` cuts pure-heartbeat volume ~3-5x while keeping every
-//! STATE-CHANGE (start/stop/turn/jump/fall-land/strafe, or ANY packet whose flags or heading
-//! differ from the last one actually forwarded) byte-identical and undelayed — peers key
-//! animation/extrapolation off state changes, not heartbeats, so perceived smoothness is
-//! unaffected (a real client's own heartbeat cadence is far coarser than this window; it
-//! interpolates from pos+heading+speed between them regardless of the wire cadence to the module).
 //!
 //! The decision logic is a PURE state machine (no I/O, no real clock) per this repo's testing
 //! convention ("extract pure functions and test those"): `now_ms` is

@@ -50,7 +50,6 @@ pub struct ChatEvent {
     pub target_guid: u64,
 }
 
-/// True for the creature broadcast chat types this slice relays. [pure]
 pub fn is_supported_chat_type(chat_type: u8) -> bool {
     matches!(chat_type, CHAT_SAY | CHAT_YELL | CHAT_TEXT_EMOTE)
 }

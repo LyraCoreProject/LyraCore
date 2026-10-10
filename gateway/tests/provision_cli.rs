@@ -4,10 +4,7 @@ use std::process::{Command, Output, Stdio};
 fn run_gateway(args: &[&str], stdin: &[u8]) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_lyracore-gateway"))
         .args(args)
-        // Keep the functional test isolated from any production/sharded environment inherited by
-        // the test runner. Individual tests can add the loopback-only values they need below.
-        // (These were `GW_*` until the rebrand — the stale names made every removal a no-op, so a
-        // runner with a sharded environment exported leaked it into the child unnoticed.)
+        // Isolate the child from inherited Realm topology and credentials.
         .env_remove("LYRACORE_COORDINATOR_TOKEN")
         .env_remove("LYRACORE_DATABASE")
         .env_remove("LYRACORE_SPACETIMEDB_URL")
@@ -27,9 +24,7 @@ fn run_gateway(args: &[&str], stdin: &[u8]) -> Output {
 fn run_gateway_against_unreachable_loopback(args: &[&str], stdin: &[u8]) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_lyracore-gateway"))
         .args(args)
-        // Rebrand fix: these were `GW_*`, which the gateway stopped reading — the URI override was
-        // dead, the child fell back to the DEFAULT http://127.0.0.1:3000, and the "unreachable"
-        // premise held only while nothing listened there (a live local dev node broke it).
+        // An unreachable loopback port keeps the connection failure independent of local nodes.
         .env("LYRACORE_COORDINATOR_TOKEN", "functional-test-token")
         .env("LYRACORE_DATABASE", "spacetime-core")
         .env("LYRACORE_SPACETIMEDB_URL", "http://127.0.0.1:0")

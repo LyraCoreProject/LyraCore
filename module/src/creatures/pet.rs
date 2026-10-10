@@ -34,13 +34,6 @@ use crate::{
 
 use super::spawn::{build_creature_entity, CreatureSpawn};
 
-// ── Pet command bar (CMSG_PET_ACTION → stay/follow/attack/dismiss + passive/defensive/aggressive) ──
-/// The player's pet-bar command/react state, in a MODULE-ONLY table (the gateway never reads it — it
-/// only relays the resulting entity/melee changes, so no gateway binding is needed). Keyed by
-/// `owner_guid` (one pet per owner). An ABSENT row IS the vanilla default (Follow + Defensive), which
-/// is byte-for-byte the derived behavior pets had before the bar — so every existing pet is unchanged
-/// until the player presses a bar button. Ephemeral: cleared on despawn/logout with the pet (vanilla
-/// pets persist their state; that's a durable-per-character follow-up, not v1). [entity]
 #[table(accessor = game_pet_command)]
 pub struct PetCommand {
     #[primary_key]
@@ -49,7 +42,7 @@ pub struct PetCommand {
     pub command: u8,
     /// REACT_* — governs auto-engage.
     pub react: u8,
-    /// the ATTACK command's target (0 otherwise).
+
     pub command_target: u64,
 }
 

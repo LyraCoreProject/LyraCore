@@ -175,12 +175,6 @@ pub(crate) struct LevelStatsDelta {
     pub old_spirit: u32,
 }
 
-/// Write the level-derived stat block onto `e` for `(race, class, level)`: the five base attributes,
-/// armor (`agility * 2`, classic base armor), and max health/power — from the SAME
-/// `base_attributes_for`/`max_health_for`/`max_power_for` curve lookups every call site used to inline
-/// separately. Does **not** touch the CURRENT `health`/`power` pool (a ding always fully heals; a
-/// level-set refills fully; login instead resumes from the persisted value) or anything outside the
-/// stat block (display, faction, position, …) — those stay each caller's own concern.
 ///
 /// This was three hand-mirrored copies (`build_player_entity` at login, `grant_xp`'s ding loop, and
 /// `set_character_level`) held in sync only by a comment ("mirrors build_player_entity"). The third
@@ -216,15 +210,6 @@ pub(crate) fn apply_level_stats(
     old
 }
 
-/// Set `character_guid`'s level and recompute `max_health`/`max_power`/the five base attributes/armor
-/// from the real stat curve, via `apply_level_stats` (the SAME writer `player_login` and the ding loop
-/// use — not reimplemented). Health/power are refilled to the new max. Persists the level to the
-/// durable `game_character` row too, so a relog keeps it. Shared by `debug::debug_set_level`
-/// (the test-harness lever) and `gm::gm_command`'s `.level` (work-item 223's playtest kit) so the two
-/// paths can never drift. Works for an OFFLINE character too (266): the old live-entity requirement
-/// silently no-opped every fixture that set a logged-out character's level (exploration set Ginger to 5
-/// while she was offline — the wire phase then ran at her real, drifted level), and login rebuilds the
-/// entity from the character row anyway. Errors only when NEITHER a live entity nor a character row exists.
 pub(crate) fn set_character_level(
     ctx: &ReducerContext,
     character_guid: u64,

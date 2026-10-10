@@ -22,10 +22,7 @@
 //! `game_entity_motion_pending` **iff** that mover has motion the tick has not published yet; the
 //! tick drains (deletes) every row it publishes. An entity that did not move therefore has no row
 //! and is not touched — the tick's cost is O(movers since the last firing), never O(world).
-//!
-//! `seq` is NOT staged here: it lives on the public row and is bumped at publish time, exactly as
-//! `movement_update` used to bump it, so per-mover ordering/de-duplication on the gateway side is
-//! unchanged.
+
 //!
 //! # Discrete transitions (the part that is easy to get subtly wrong)
 //!
@@ -120,7 +117,7 @@ pub struct MotionPublishSchedule {
 /// swim/run-walk-mode) is an edge the client animates off; dropping one shows a peer sliding into a
 /// run with no start, or landing with no jump.
 ///
-/// This mirrors the gateway's own rule 1 (`world/coalesce.rs`, work-item 231: "any non-heartbeat
+/// This mirrors the gateway's own rule 1 (`world/coalesce.rs`): "any non-heartbeat
 /// opcode is ALWAYS a state change"), one layer down — it is deliberately the SAME classification,
 /// only stricter about `SET_FACING`, which the gateway forwards eagerly because the module's stored
 /// heading feeds server-side facing checks.
@@ -152,7 +149,7 @@ pub(crate) enum Coalesce {
     /// Publish the QUEUED one immediately (in this movement transaction, paying one sweep) and
     /// stage the new one. This is the only path that still costs a per-packet sweep, and it is
     /// reachable only when a player produces two input-state changes inside one tick window — with
-    /// the gateway's own 150 ms heartbeat coalescing (work-item 231) upstream, that is rare and
+    /// the gateway's own 150 ms heartbeat coalescing  upstream, that is rare and
     /// self-limiting, never proportional to player count.
     FlushThenReplace,
 }
@@ -542,7 +539,6 @@ mod tests {
             Some(&(HEARTBEAT, vec![1, 2, 3], 0)),
             "a staged heartbeat must reach the public relay on the next firing"
         );
-        // ...and a second, later packet republishes with a bumped seq.
         w.movement(7, HEARTBEAT, &[4, 5, 6]);
         w.tick();
         assert_eq!(w.published.get(&7), Some(&(HEARTBEAT, vec![4, 5, 6], 1)));
@@ -581,7 +577,6 @@ mod tests {
         w.pending.remove(&7);
         w.tick();
         assert!(!w.published.contains_key(&7));
-        // ...and even if a packet were staged with no lifecycle cleanup at all (a delete site
         // missed, a race), the tick's own liveness gate still refuses to write the public row.
         w.movement(7, HEARTBEAT, &[9]);
         w.tick();
@@ -608,7 +603,7 @@ mod tests {
              survive — 'latest position wins' would publish the heartbeat and the peer would never \
              play the jump"
         );
-        // The heartbeat's fresher position is not lost forever: the next packet carries it.
+
         w.movement(7, HEARTBEAT, &[0xCC]);
         w.tick();
         assert_eq!(

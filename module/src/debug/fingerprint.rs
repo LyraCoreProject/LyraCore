@@ -58,12 +58,6 @@ fn fold_table<Row: spacetimedb::Serialize>(
     encoded.hash(hasher);
 }
 
-/// Fold a CURATED family of tables into one hash+count+comma-joined table list in one shot — the
-/// local macro `debug_catalogue_fingerprint`'s per-family blocks expand to, replacing what used to be
-/// a hand-written `fold_table(&mut h, &mut n, "name", ctx.db.name().iter())` call PER TABLE (6 lines
-/// each, rustfmt-exploded on the `impl Iterator` arg) with one line naming the members. `$ctx.db
-/// .$table().iter()` reproduces exactly what those hand-written calls did; the returned `tables`
-/// string is the same comma-joined list the deleted code built by hand, in the same member order.
 macro_rules! fold_family {
     ($ctx:expr, $h:expr, $n:expr; $($table:ident),+ $(,)?) => {{
         $( fold_table(&mut $h, &mut $n, stringify!($table), $ctx.db.$table().iter()); )+

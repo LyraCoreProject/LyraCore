@@ -778,11 +778,6 @@ fn rule_uses_linked_random(rule: &EventAiRule) -> bool {
                 CreatureInstruction::RandomPhase(_) | CreatureInstruction::RandomPhaseRange(_) => {
                     true
                 }
-                // The linked lane seeds the Relay Run's saved random state, and the relay's own
-                // steps (multi-line talk, random emote, dynamic move) consume it. This predicate
-                // cannot see inside a Relay Definition, so starting one always draws a real roll:
-                // the deterministic fallback is stable across a long window and would otherwise
-                // freeze a whole authored sequence to one outcome for the session.
                 CreatureInstruction::StartRelay(_) => true,
                 CreatureInstruction::FleeForAssist
                 | CreatureInstruction::CallForHelp(_)

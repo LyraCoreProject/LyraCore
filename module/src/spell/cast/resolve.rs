@@ -52,7 +52,7 @@ pub(crate) fn resolve_cast_at(
     // its duplicate. Channel ticks / triggers / creature / debug / item-use casts pass false and the
     // relay DELIVERS the caster's visual (they never had a synchronous send).
     client_initiated: bool,
-    // The clicked GROUND point (118 phase 2), for a ground-targeted cast (CMSG_CAST_SPELL's
+    // The clicked GROUND point (118, for a ground-targeted cast (CMSG_CAST_SPELL's
     // DEST_LOCATION). `Some` → AREA effects splash from it and a ground patch anchors there; `None` for
     // every non-ground cast (self/unit-target/creature/trigger). Threaded verbatim to select_targets +
     // create_ground_area.
@@ -88,7 +88,7 @@ pub(crate) fn resolve_cast_at_typed(
     // its duplicate. Channel ticks / triggers / creature / debug / item-use casts pass false and the
     // relay DELIVERS the caster's visual (they never had a synchronous send).
     client_initiated: bool,
-    // The clicked GROUND point (118 phase 2), for a ground-targeted cast (CMSG_CAST_SPELL's
+    // The clicked GROUND point (118, for a ground-targeted cast (CMSG_CAST_SPELL's
     // DEST_LOCATION). `Some` → AREA effects splash from it and a ground patch anchors there; `None` for
     // every non-ground cast (self/unit-target/creature/trigger). Threaded verbatim to select_targets +
     // create_ground_area.
@@ -744,18 +744,6 @@ pub(crate) fn start_creature_spell(
     }
 }
 
-/// The GATE SWEEP `resolve_cast_at` runs before spending anything — extracted (381) from what used to be
-/// a single ~630-line function, where each of these checks landed as its own commented block, one per
-/// work item, in this exact order. Every check here is READ-ONLY (no `.update`/`.insert`/`.delete`, no
-/// `power`/item/reagent spend) — the hard boundary is the COST CHARGE in `resolve_cast_at` right after
-/// this returns `Ok`, so "spend nothing before cost" holds by construction: nothing below can spend, and
-/// everything that spends runs strictly after this call. `effects` is the SAME already-loaded,
-/// already-sorted (E_INTERRUPT-first) vec `resolve_cast_at`'s effect loop reuses.
-///
-/// One deliberate reorder from the pre-381 layout: `is_action_blocked` used to run BEFORE the caster row
-/// was loaded (it only reads `game_aura`, not the row); `check_cast_gates` takes the row already in hand,
-/// so the load now happens first in the caller. Both are independent early-bail reads with no shared
-/// state, so this is a no-observable-difference reorder — not a behavior change.
 fn check_cast_gates(
     ctx: &ReducerContext,
     caster: &WorldEntity,
@@ -1129,7 +1117,7 @@ fn check_cast_gate_suffix(
     if hdr.range_yd > 0 && target_guid != caster_guid {
         if let Some(target) = ctx.db.game_world_entity().guid().find(target_guid) {
             // World coordinates are per-map, so a Euclidean distance is only meaningful when both units
-            // share a map AND instance (work-item 190 slice 1) — a cross-map/cross-instance target is
+            // share a map AND instance, a cross-map/cross-instance target is
             // unreachable (treat as out of range) before trusting it.
             if caster.map_id != target.map_id || caster.instance_id != target.instance_id {
                 return Err(CastRefusal::new(
@@ -1385,9 +1373,9 @@ pub(crate) fn begin_cast(
     spell_id: u32,
     level: u8,
     target_guid: u64,
-    // 088: true only from the cast_spell reducer (the CMSG path) — see resolve_cast_at's param doc.
+
     client_initiated: bool,
-    // The clicked GROUND point (118 phase 2) for a ground-targeted cast. An INSTANT/channel ground cast
+    // The clicked GROUND point (118 for a ground-targeted cast. An INSTANT/channel ground cast
     // passes it straight to resolve_cast_at; a TIMED one stashes it on the PendingCast row so the
     // completion (`fire_pending_cast`) can anchor the patch at the click. `None` for every normal cast.
     dest: Option<(f32, f32, f32)>,

@@ -105,13 +105,6 @@ pub fn build_loot_start_roll(
     }
 }
 
-/// The wire `roll_number` for one vote: vanilla has NO separate `auto_pass` field (that's a
-/// TBC/WRATH-only wire addition — `wow_world_messages::vanilla::SMSG_LOOT_ROLL` genuinely lacks it,
-/// confirmed against the vendored crate) — a PASS (manual OR auto-at-deadline; the two are
-/// indistinguishable on the vanilla wire, `[V]`, no live client to confirm the exact convention)
-/// is instead signaled by `roll_number > 127` per the field's own doc comment ("> 127: you passed").
-/// `128` is the value cmangos/vmangos use. A NEED/GREED vote's real 1-100 roll passes through
-/// unchanged. Pure — unit-tested.
 pub(crate) fn wire_roll_number(vote: u8, rolled: u8) -> u8 {
     if vote == vote_kind::PASS {
         128

@@ -11,7 +11,6 @@
 //!
 //! NOT here: the quest-LOG window (`PLAYER_QUEST_LOG_*` descriptor fields) + `CMSG_QUEST_QUERY` text —
 //! those ride the UpdateMask wall (the hand-rolled `update_mask` encoder lacks the quest-log indices)
-//! and are the deferred Phase-2 sub-slice.
 
 use super::*;
 use wow_world_base::shared::quest_party_message_vanilla_tbc::QuestPartyMessage;

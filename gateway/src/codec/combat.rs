@@ -267,11 +267,6 @@ pub fn build_spell_go(
     build_spell_go_outcome(caster_guid, spell_id, hit_target, ammo, false)
 }
 
-/// The GO for a GROUND-AREA spell (118, Consecration): an EMPTY hit list — the spell hits the
-/// ground, nothing "impacts" a unit at cast time (the area's ticks deal the damage; the swirl is
-/// the DynamicObject). The generic self-cast fallback put the CASTER in `hits[]` and the 5875
-/// client played the impact animation ON the paladin (user bug). Targets stay SELF (the area is
-/// caster-anchored this slice; a dest-clicked area rides cast_spell_at's dest block separately).
 pub fn build_spell_go_area(caster_guid: u64, spell_id: u32) -> SMSG_SPELL_GO {
     SMSG_SPELL_GO {
         cast_item: Guid::new(caster_guid),

@@ -1,9 +1,4 @@
 //! The cell-anchored relays against the whole-shard-then-gate path they replaced.
-//!
-//! Every relay here used to enqueue one job per viewer on the shard and let the job's gate reject
-//! the row. Now the actor's cell picks the candidates first. The property under test, over
-//! randomised realms: filtering the candidates through the same gate yields exactly the set the
-//! whole-shard path yielded, and the candidates are fewer than the shard.
 
 use super::*;
 use crate::codec::property_tests::Rng;

@@ -496,8 +496,6 @@ pub(crate) struct Fighter {
     pub victim: u64,
 }
 
-/// Threat's surface. The authority is `crate::threat`: who counts as a valid source, how ties break,
-/// and when a taunt lock is still live all stay there — the cycle only composes them.
 pub(crate) trait ThreatSink {
     /// Every engaged creature this firing covers, with the unit it is fighting now.
     fn fighters(&self, scope: &TickScope) -> Vec<Fighter>;

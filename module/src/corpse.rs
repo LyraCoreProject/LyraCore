@@ -109,7 +109,7 @@ pub(crate) fn corpse_appearance_bytes(
     player_bytes: u32,
     player_bytes_2: u32,
 ) -> (u32, u32) {
-    // `unpack4` returns the four little-endian bytes (.0 = bits 0-7 … .3 = 24-31); take the same
+    // `unpack4` returns the four little-endian bytes (.0 = bits 0-7 ….3 = 24-31); take the same
     // bytes the inline mask/shifts did. race/gender from `unit_bytes_0` bytes 0/2; skin/face/hair
     // from `player_bytes` bytes 0-3; facialhair from `player_bytes_2` byte 0.
     let (race, _, gender, _) = unpack4(unit_bytes_0);
@@ -160,13 +160,13 @@ pub struct Corpse {
     #[default(false)]
     pub is_bones: bool,
 
-    // Which instance the death happened in (work-item 190 slice 2): stamped from the dying
+    // Which instance the death happened in : stamped from the dying
     // player's own entity in `do_repop`; 0 = open world (every existing row auto-migrates to 0).
     // Gates reclaim (below) and the gateway's corpse CREATE relay by viewer instance; the instance
     // reap deletes any corpse left inside (the ghost's outcome is then spirit-healer-only —
     // vanilla's expired-corpse rule). END-appended + `#[default(0u64)]` (danger-zones §2).
     // GATEWAY-SUBSCRIBED table → `gateway/src/stdb/bindings/corpse_type.rs` + the
-    // `schema_parity.rs` manifest hand-synced in the SAME change (playbook failure-mode #1).
+    // `schema_parity.rs` manifest hand-synced in the SAME change (playbook failure-mode).
     #[default(0u64)]
     pub instance_id: u64,
 }

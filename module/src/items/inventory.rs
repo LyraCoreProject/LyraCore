@@ -22,17 +22,6 @@ use crate::{game_player_reputation, game_player_skill};
 
 // Live only under `debug_reducers`: `debug_split_item` is its sole caller.
 #[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
-/// Stack-split core: split `count` units off the stack in `slot` into the empty `to_slot`, leaving
-/// the remainder in the source. Vanilla only splits a STRICT subset
-/// (you can't split off the whole stack — that's a move), so `count == 0` or `count >= stack_count` is
-/// rejected; the destination must be empty AND outside the equipment region
-/// (`valid_split_dest_slot`) — a split can never legitimately land on the body, and unlike
-/// `apply_item_move` this path runs no equip-validation at all, so admitting 0..=18 here bypassed
-/// `can_equip_into`/proficiency/required-level/BoE entirely. The new partial-stack row reuses the
-/// source's entry / owner / durability and takes a fresh GUID and the
-/// current timestamp. Errors if the source slot is empty, the count is invalid, the destination is
-/// an equipment slot, or the destination is occupied. Additive — decrements the source row and
-/// inserts one new item row. [entity]
 pub(crate) fn apply_item_split(
     ctx: &ReducerContext,
     player_guid: u64,
@@ -287,7 +276,7 @@ pub(crate) fn apply_item_move(
     }
     src.slot = to_slot;
     instances.guid().update(src);
-    // Parity #8: if either endpoint is an EQUIPMENT slot (0..=18), gear just changed on the body, so
+    // Parity: if either endpoint is an EQUIPMENT slot (0..=18), gear just changed on the body, so
     // re-derive the owner's max HP/mana (recompute_vitals now folds equipped Stamina/Intellect). The
     // health bar grows when you equip a +Sta piece and shrinks when you take it off. A pure bag↔bag move
     // touches no equip slot → skipped, so loose-inventory shuffles are byte-identical. (recompute_vitals
@@ -581,10 +570,6 @@ fn bank_access(ctx: &ReducerContext, player_guid: u64) -> Result<(), ItemRefusal
 
 // Live only under `debug_reducers`: `apply_item_split` is its sole caller.
 #[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
-/// A split must leave at least one unit in BOTH the source and the new stack — splitting off none
-/// (`count == 0`) or the whole stack (`count >= stack_count`, that's a move) is rejected. Extracted from
-/// `apply_item_split` (pure code-motion) so the count-gate boundaries are unit-tested without a live
-/// module.
 pub(crate) fn valid_split_count(count: u32, stack_count: u32) -> bool {
     count != 0 && count < stack_count
 }
@@ -773,8 +758,6 @@ mod tests {
         }
     }
 
-    /// SPLIT COUNT GATE: `count == 0` and `count == stack_count` (splitting off nothing, or the whole
-    /// stack — that's a move) are rejected; every count strictly between 0 and the stack passes.
     #[test]
     fn valid_split_count_rejects_zero_and_the_whole_stack_only() {
         const STACK: u32 = 5;

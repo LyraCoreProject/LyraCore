@@ -1,14 +1,3 @@
-//! Targeting + effect dispatch — `select_targets` / `aura_apply` / `apply_effect` and their per-kind
-//! handlers (381 split: this used to be the first ~1700 lines of the old flat `cast.rs`; the cast CORE
-//! — `resolve_cast_at` / `resolve_cast` / `begin_cast` — now lives in the sibling `resolve` module,
-//! and the cast-bar teardown family — `pushback_cast` / `interrupt_cast` / `break_channel` /
-//! `interrupt_cast_and_lock` — moved into `control.rs`, which already called back into it).
-//! `cast::mod` glob re-exports both siblings, and `spell::mod` globs `cast::*` in turn, so every
-//! `crate::spell::<sym>` call site is unchanged. `select_targets`/`apply_effect`/`aura_apply`/
-//! `recipe_reagents` are `pub(crate)` (not private) SOLELY because `resolve.rs` — a sibling module
-//! under `cast/`, not a `use super::*` descendant — calls them; nothing outside `spell::` reaches
-//! them via the flat re-export by accident (they aren't re-exported a second time by name anywhere).
-
 use lyracore_shared::constants::tracer_spell;
 use spacetimedb::{log, ReducerContext, ScheduleAt, Table, TimeDuration, Timestamp};
 
@@ -64,7 +53,7 @@ impl EffectHit {
 }
 
 // ===========================================================================================
-//  Crafting professions — the end-to-end craft loop, DATA-DRIVEN (work-item 282).
+//  Crafting professions, the end-to-end craft loop, DATA-DRIVEN.
 //  A craft recipe is a real `game_spell` with an `E_CREATE_ITEM` effect (product = `p0`) whose
 //  mats live in `game_spell_reagent` (importer-filled from Spell.dbc's Reagent[1-8]) and whose
 //  profession line + skill-up band live in `game_skill_ability` (SkillLineAbility.dbc). Two thin
@@ -176,7 +165,7 @@ pub(crate) fn select_targets(
     caster_guid: u64,
     explicit: u64,
     e: &SpellEffect,
-    // The clicked GROUND point (118 phase 2). When `Some`, an AREA effect splashes from the dest
+    // The clicked GROUND point (118. When `Some`, an AREA effect splashes from the dest
     // (Flamestrike/Blizzard's initial impact centered on the click), NOT the caster/explicit unit.
     dest: Option<(f32, f32, f32)>,
 ) -> Vec<u64> {
@@ -311,7 +300,7 @@ fn pick_aura_slot(
 /// just the A_SEAL-tagged one), and a same-NAME higher/lower rank displacing the other. Both call sites
 /// compute `spell_ids` with a DIFFERENT predicate (A_SEAL-sibling scan vs. same-name spell resolution)
 /// but converge on this identical shape (mirrored by `stacking.rs`'s group-eviction sweep, a third,
-/// independent instance of the same pattern) — a future `spell_chain` import (work-item 102, the real
+/// independent instance of the same pattern), a future `spell_chain` import, the real
 /// rank-chain data) swaps the RANK predicate that feeds this fn, never a second displacement mechanism.
 /// A no-op for an empty set (nothing to displace) — every existing call site is baseline-safe by
 /// construction, since an empty-set filter matches nothing either way.
@@ -385,13 +374,7 @@ pub(crate) fn aura_apply(
     } else {
         hdr.duration_ms
     };
-    // CC diminishing returns (work-item 192): PLAYER targets only, `A_CONTROL(mechanic)` effects only —
-    // `dr_category_for_effect` is `None` for every other kind/target (a creature, a non-CC aura), so this
-    // is a complete no-op for every existing aura. Runs on EVERY `aura_apply` call (fresh insert AND a
-    // same-spell refresh) — recasting the identical CC spell while the target is STILL under its previous
-    // application is exactly the work item's t=16 vector (the second poly hasn't been REMOVED yet, so this
-    // must scale the refresh too, not just a fresh insert). A `Refuse` bails out before anything else is
-    // touched (no aura placed/refreshed, no other state written) — matches "immune".
+
     let now_micros = now.to_micros_since_unix_epoch();
     let dr_category =
         crate::spell::stacking::dr_category_for_effect(ctx, e.kind, e.p0_kind, e.p0, target_guid);
@@ -460,20 +443,6 @@ pub(crate) fn aura_apply(
             .collect();
         displace_auras(ctx, target_guid, &other_seal_spell_ids);
     }
-    // Same-buff-RANK exclusivity: the importer keeps the shared base NAME across ranks
-    // (Arcane Intellect R1/R2, Frost Armor/Ice Armor, Demon Skin, ...) but each rank is a DISTINCT
-    // spell_id, so `pick_aura_slot`'s exact-spell_id dedupe doesn't catch a higher rank cast over a
-    // lower one — both auras stacked and double-folded their stat/armor effects. Generalizes the
-    // A_SEAL sibling-sweep above to ANY spell whose NAME matches this one's and whose spell_id differs:
-    // resolve the OTHER rank's spell_id(s) sharing this name, then hand them to the SAME
-    // `displace_auras` the seal sweep uses — one displacement mechanism, two predicates for "which
-    // spell_ids". Name-keyed is the honest slice available today; the real rank-chain data
-    // (`spell_chain`) is future work (work-item 102 tracks importing it) and will refine the PREDICATE
-    // later (a same-named-but-unrelated pair would incorrectly collide under this heuristic —
-    // acceptable for now, there is no such collision in the seed data) — the future `spell_chain`
-    // import swaps this predicate, not a third displacement mechanism.
-    // A re-cast of the SAME spell_id is excluded here (`a.spell_id != hdr.spell_id`) so a single-rank
-    // recast still only refreshes in place via the `existing` lookup below — never displaces itself.
     if !hdr.name.is_empty() {
         let spells = ctx.db.game_spell();
         let other_rank_ids: std::collections::HashSet<u32> = auras
@@ -550,7 +519,7 @@ pub(crate) fn aura_apply(
         a.proc_icd_ms = proc.icd_ms;
         auras.id().update(a);
     } else {
-        // Stacking-group conflict (work-item 192): resolve BEFORE picking a slot, so a Refuse never
+        // Stacking-group conflict : resolve BEFORE picking a slot, so a Refuse never
         // consumes a slot and an Apply's evictions free slots for this fresh insert. A same-spell recast
         // never reaches this branch (caught by the `existing`-by-effect_id match above) — matches "same-
         // spell-same-caster refresh keeps the existing precedence rule, runs BEFORE group logic". No-op
@@ -580,13 +549,6 @@ pub(crate) fn aura_apply(
             tracer_spell::BUFF_SLOT_COUNT,
             tracer_spell::AURA_SLOTS,
         ) else {
-            // All slots full → DROP rather than colliding at slot 0 (which would corrupt the buff display).
-            // LOUD (work-item 192): this used to be a silent drop — now it ALSO relays SMSG_SPELL_FAILURE
-            // to the CASTER via the existing generic is_interrupted signal row (the same mechanism
-            // `interrupt_cast` uses; `gateway/src/stdb/subscriptions.rs`'s `on_cast` relay is untouched —
-            // it already fires for ANY `is_interrupted` row, keyed off `caster_guid == self_guid`, so this
-            // is a module-only change with zero gateway edits) — the 17th debuff / 33rd buff is refused
-            // with a clear cast-bar failure instead of vanishing silently.
             log::info!(
                 "aura slot overflow: all {} slots on {target_guid} full — dropping spell {} (loud: relayed to caster {caster_guid})",
                 tracer_spell::AURA_SLOTS,
@@ -779,7 +741,7 @@ pub(crate) fn apply_effect(
     cast_target_guid: u64,
     level: u8,
     points: i32,
-    // The clicked GROUND point (118 phase 2) — only the E_PERSISTENT_AREA arm reads it (anchors the patch
+    // The clicked GROUND point (118, only the E_PERSISTENT_AREA arm reads it (anchors the patch
     // at the dest); every other effect ignores it. `None` for all non-ground casts.
     dest: Option<(f32, f32, f32)>,
     // This effect is running inside a **Triggered Cast** (a fired Proc). Every hit it deals is marked
@@ -987,10 +949,6 @@ fn apply_damage_effect(
             // scale → CRIT → resist → absorb → health → threat.
             let is_crit = (ctx.random::<u32>() % 10_000) < spell_crit_bp(ctx, caster_guid);
             let crit_scaled = apply_spell_crit(scaled, is_crit);
-            // Magic resistance: the target's resistance to the spell's school reduces the (crit-scaled)
-            // damage, vanilla-style, capped 75%. No matching resist aura → unchanged (baseline-safe).
-            // `apply_target_damage` folds absorb shields in AFTER this, so threat accrues on the final
-            // post-ABSORB damage actually dealt, not on this pre-absorb resisted value.
             let after_resist =
                 apply_resistance(ctx, target_guid, caster_guid, hdr.school_mask, crit_scaled);
             // resisted = what the school resist shaved off the crit-scaled hit (clamp ≥0 — a partial resist
@@ -1383,7 +1341,7 @@ fn apply_inventory_effect(
             // life is rejected (the `pickpocketed` marker), so the same spawn can't be drained twice. Money
             // is the creature's TEMPLATE range (`money_min`/`money_max` — the SAME source the kill path
             // uses, reused via `roll_money`), falling back to the level heuristic for un-imported creatures
-            // (`money_max == 0`). NOT rank-scaled (vanilla pickpocket isn't). Item rows (work-item 210):
+            // (`money_max == 0`). NOT rank-scaled (vanilla pickpocket isn't). Item rows :
             // `roll_pickpocket_loot` rolls the creature's `game_pickpocket_loot` table into
             // `game_corpse_loot` keyed on the TARGET's (still-alive) guid, inside this SAME once-gate, so
             // items can never be drained twice per life either. Never on players (no pockets / not a
@@ -1403,9 +1361,7 @@ fn apply_inventory_effect(
                         rogue.money = rogue.money.saturating_add(copper);
                         entities.guid().update(rogue);
                     }
-                    // Mark picked BEFORE rolling: roll_pickpocket_loot's refresh_lootable does its
-                    // own fetch+write of this row (LOOTABLE flag), and writing our pre-roll snapshot
-                    // AFTERWARDS clobbered that flag — the rolled items were unreachable (review catch).
+
                     let target_entry = target.entry;
                     target.pickpocketed = true; // a re-pickpocket this life is rejected
                     entities.guid().update(target);
@@ -1570,12 +1526,6 @@ fn apply_character_effect(
             let new_stance = e.p0.clamp(0, u8::MAX as i32) as u8;
             if let Some(mut c) = ctx.db.game_world_entity().guid().find(caster_guid) {
                 if c.stance != new_stance {
-                    // Vanilla 1.12 clears RAGE on a stance switch (the "stance dance" cost; Tactical Mastery
-                    // later retains some — not in this slice). Guarded to the RAGE power type, derived from
-                    // class (DATA, not a hardcode) — so a future caster/energy stance isn't wrongly drained.
-                    // Mana AND energy are spared by design; vanilla has no discrete "lose rage" effect, this
-                    // wipe is engine behavior keyed on power type. Extracted to a pure predicate so the
-                    // switch-vs-power-type gate is unit-testable without a live ReducerContext.
                     let power_type = lyracore_shared::packing::power_type::for_class(c.class());
                     let clears_power = stance_switch_clears_power(c.stance, new_stance, power_type);
                     c.stance = new_stance;
@@ -1757,7 +1707,7 @@ fn create_ground_area(
     caster_guid: u64,
     anchor_guid: u64,
     amount: i32,
-    // The clicked GROUND point (118 phase 2). `Some` → the area anchors there (map/instance still come from
+    // The clicked GROUND point (118. `Some` → the area anchors there (map/instance still come from
     // the caster); `None` → it anchors on `anchor_guid`'s entity position (Consecration's T_SELF paladin).
     dest: Option<(f32, f32, f32)>,
 ) {
@@ -2110,13 +2060,6 @@ mod effect_handler_tests {
         );
     }
 
-    /// Debuff cap (work-item 192, verbatim vector): the REAL slot geometry gives exactly 16 debuff slots
-    /// (`AURA_SLOTS`(48) - `BUFF_SLOT_COUNT`(32)). 16 live debuffs fully occupy `[32, 48)`; a 17th distinct
-    /// debuff gets `None` (the existing 16 are untouched — `pick_aura_slot` takes `&self` and never
-    /// mutates its input), and `aura_apply`'s caller now also relays a LOUD `SMSG_SPELL_FAILURE` + module
-    /// log on that `None` (see the work-item report — the relay itself needs a live `ReducerContext` +
-    /// gateway, not unit-testable here). The buff cap (32) is the identical mechanism at the other
-    /// polarity, already covered by `debuffs_take_the_upper_range_...`'s `buffs_full` case above.
     #[test]
     fn sixteen_debuffs_full_refuses_the_seventeenth_leaving_the_sixteen_untouched() {
         let debuffs_full: Vec<(u8, u32)> =
@@ -2173,9 +2116,7 @@ mod effect_handler_tests {
             super::pick_aura_slot(&debuffs_full, 8888, false, 32, 48),
             Some(0)
         );
-        // Both ranges full simultaneously: a fresh debuff is refused (debuff range is what's full for
-        // it) and a fresh buff is refused (buff range is what's full for it) — each by its OWN range,
-        // not by the other polarity's occupancy.
+
         let both_full: Vec<(u8, u32)> = buffs_full
             .iter()
             .chain(debuffs_full.iter())

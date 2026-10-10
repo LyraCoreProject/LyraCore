@@ -377,7 +377,7 @@ fn an_unfinished_cancellation_hold_travels_with_its_seller_and_settles_on_the_ne
     );
     let seller = actor(LOCAL_SELLER);
 
-    // Phase 1 only: the Gateway stopped before Realm-core decided.
+    // The Gateway stopped with only the World Shard Hold committed.
     source.assert_call(
         "gw_auction_hold_cancel",
         &["5090092", &seller, &vendor, BID_LISTING, HOUSE, CUT],
@@ -453,8 +453,8 @@ fn an_unfinished_cancellation_hold_travels_with_its_seller_and_settles_on_the_ne
 
 const HOLD_QUERY: &str = "SELECT * FROM game_auction_hold WHERE operation_id = 5090094";
 
-/// A Shard where the seller holds a listing of five Tough Jerky, phase 1 only: the Gateway stopped
-/// before Realm-core committed it. Returns the Shard, the Hold row and the purse after the deposit.
+/// A five-item Tough Jerky listing held on the World Shard before Realm-core commitment.
+/// Returns the Shard, Hold row, and purse after the deposit.
 fn a_held_listing(name: &str) -> (Standalone, BTreeMap<String, String>, String) {
     let mut shard = Standalone::start(name);
     shard.publish_module();

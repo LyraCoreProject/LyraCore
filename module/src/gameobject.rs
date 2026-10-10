@@ -1,6 +1,6 @@
 //! Gameobjects — the world's interactive props. A spawned `game_gameobject` is relayed to clients as a
 //! GameObject CREATE_OBJECT (gateway); `use_gameobject` (CMSG_GAMEOBJ_USE) dispatches by template type:
-//! a CHEST rolls its real `game_gameobject_loot` table (work-item 210) into the shared
+//! a CHEST rolls its real `game_gameobject_loot` table  into the shared
 //! `game_corpse_loot` table KEYED ON THE GO GUID (so the existing corpse loot window + take path serve
 //! it unchanged) — falling back to the legacy single `data0` drop when the chest has no data-driven
 //! table (the seed/demo chest) — a GOOBER grants quest credit for a USE_GAMEOBJECT objective, a
@@ -14,19 +14,14 @@ use std::collections::HashSet;
 
 use spacetimedb::{reducer, table, ReducerContext, Table, TimeDuration, Timestamp};
 
-use crate::game_gameobject_loot; // CHEST data-driven loot table (work-item 210)
+use crate::game_gameobject_loot;
 use crate::game_player_skill; // GATHER skill-gate reads the gather skill row (accessor trait)
 use crate::game_world_entity;
 use crate::nav::game_nav_chunk; // arm_pool's map-fence — neither is wildcard-exported at the crate root
 use crate::terrain::game_terrain_chunk;
 
-/// The gameobject types this slice handles (cmangos `GAMEOBJECT_TYPE_*`). Deliberate
-/// simplification: only these two plus the synthetic GATHER marker.
 pub mod go_type {
-    /// Door prop. `use` toggles open/closed (state 0↔1 via [`super::toggle_state`]), byte-identical
-    /// shape to the BUTTON toggle below. A lock with a real opener must be opened first.
-    /// autoCloseTime (cmangos data2) is NOT modeled — a toggled-open door stays open
-    /// until toggled again (no auto-close timer this slice). cmangos type 0 (GAMEOBJECT_TYPE_DOOR).
+
     pub const DOOR: u8 = 0;
     /// Button/lever prop — cmangos models a lever as a differently-DISPLAYED door; the toggle
     /// semantics are identical to DOOR (same match arm). cmangos type 1 (GAMEOBJECT_TYPE_BUTTON).
@@ -35,7 +30,6 @@ pub mod go_type {
     /// gate lives entirely in `game_gameobject_quest` (see `quest::validate_giver`); `use_gameobject`
     /// still does not dispatch on this type SERVER-SIDE (opening the quest window is presentation, not
     /// a state mutation — the gateway's `CMSG_GAMEOBJ_USE` handler does that dispatch itself,
-    /// work-item 041). Re-exported from `lyracore_shared::constants::go_type` (not a local literal) so the
     /// module and gateway copies of this value can never drift. cmangos type 2
     /// (GAMEOBJECT_TYPE_QUESTGIVER).
     pub const QUESTGIVER: u8 = lyracore_shared::constants::go_type::QUESTGIVER;
@@ -52,7 +46,7 @@ pub mod go_type {
     /// and never collides with the CHEST loot-window path. `data0` = item entry granted; `data1` =
     /// required skill level; `gather_skill_line` = MINING/HERBALISM the use requires.
     pub const GATHER: u8 = 25; // synthetic; vanilla has no type 25 — our gather marker
-                               // COLLISION NOTE (work-item 211): real cmangos type 25 IS assigned (GAMEOBJECT_TYPE_FISHINGHOLE) —
+                               // COLLISION NOTE : real cmangos type 25 IS assigned (GAMEOBJECT_TYPE_FISHINGHOLE) ,
                                // it just happens to collide with this synthetic marker. The importer's TYPE-25 COLLISION GUARD
                                // (`importer/src/main.rs::classify_go_type`) is the ONLY place that decides what gets stored as
                                // module type 25: a real FISHINGHOLE row is dropped from import, never stored here as GATHER.
@@ -107,9 +101,6 @@ pub struct GameObjectTemplate {
     // type. Existing rows default to 0.
     #[default(0u32)]
     pub lock_id: u32,
-    // END-APPENDED. The cmangos `gameobject_template.size` the client renders this prop at
-    // (OBJECT_FIELD_SCALE_X). 0 = no size stored, which the gateway renders as 1.0. Read by the
-    // gateway, so it is hand-synced into `game_object_template_type.rs` (unlike `lock_id` above).
     #[default(0f32)]
     pub size: f32,
 }
@@ -160,29 +151,14 @@ pub struct GameLock {
     pub required_skill: u32, // kind 2: the skill VALUE needed; kind 1: unused (Lock.dbc's own 0/garbage)
 }
 
-/// `game_lock.kind` values (work-item 119): the two opener kinds [`GameLock`] models.
+/// `game_lock.kind` values : the two opener kinds [`GameLock`] models.
 pub(crate) const LOCK_KIND_ITEM: u8 = 1; // property = the key item entry the opener must HOLD
 pub(crate) const LOCK_KIND_SKILL: u8 = 2; // property = a SkillLine id (Lockpicking 633 / Herbalism 182 / Mining 186)
 
-/// Is a `game_lock` row a REAL opener — a requirement a player can be gated on AND can satisfy
-/// (ctx-free, unit-tested)? A SKILL row (kind 2) counts ONLY when it names a real SkillLine
-/// (`property != 0`): the importer stores an UNMAPPED `LockType.dbc` id (LOCKTYPE_OPEN / blasting /
-/// disarm-trap — "open by hand or a non-lockpick method") as `property 0` (see `importer/src/dbc.rs`'s
-/// `LOCKTYPE_TO_SKILL_LINE` — an id outside {1,2,3} resolves to SkillLine 0). Such a slot is NOT
-/// lockpicking (Pick Lock can't satisfy it) AND must NOT lock a hand-openable chest — those opened
-/// freely pre-119 and still do. An ITEM row (kind 1) always names a key item entry. Any other kind →
-/// not a lock this slice models (never gates the use path, never picked).
 pub(crate) fn is_real_lock_opener(kind: u8, property: u32) -> bool {
     (kind == LOCK_KIND_SKILL && property != 0) || kind == LOCK_KIND_ITEM
 }
 
-/// A GameObject whose lock has been PICKED open. The CHEST/GOOBER/DOOR use-gate reads
-/// this by GO guid to admit a use that a lock would refuse. Module-only + UNSUBSCRIBED (no gateway
-/// binding files, no gateway subscription — the `game_lock` precedent above); `public` + no Timestamp so
-/// a verify can inspect it via `spacetime sql`. One row per unlocked GO guid; never re-locked this slice
-/// (matches vanilla — a picked chest stays open). A row for a despawned GO is a harmless orphan (a live
-/// HIGHGUID_GAMEOBJECT guid is minted per spawn; `debug_spawn_gameobject` clears the row for its DERIVED
-/// guid so a re-spawn is deterministically locked again). New table → additive auto-migration. [entity]
 #[table(accessor = game_gameobject_unlocked, public)]
 pub struct GameObjectUnlocked {
     #[primary_key]
@@ -196,10 +172,7 @@ pub struct GameObjectUnlocked {
     public,
     index(accessor = by_map, btree(columns = [map_id])),
     index(accessor = by_grid, btree(columns = [map_id, grid_x, grid_y])),
-    // Perf catalog 1.21: the sense-tick respawn pass used to full-scan this table (~25-30k rows after a
-    // full-world GO import) for a minutes-scale due check. `respawn_at_micros == 0` is the not-armed
-    // sentinel on every live row, so a `1..=now` range visits only DUE nodes — the same trick
-    // `game_aura.by_next_tick` uses.
+
     index(accessor = by_respawn_at, btree(columns = [respawn_at_micros])),
     index(
         accessor = by_template_scope,
@@ -226,13 +199,13 @@ pub struct GameObject {
     /// ctx.timestamp + RESPAWN_WINDOW_MICROS; cleared (back to 0) when the respawn pass flips state 0.
     #[default(0u64)]
     pub respawn_at_micros: u64,
-    /// Which instance this GO belongs to (work-item 190 slice 2). 0 = open world — EVERY static
+    /// Which instance this GO belongs to. 0 = open world, EVERY static
     /// imported/seeded/pool/debug row stays 0; only the per-instance COPIES `instance::create_instance`
     /// makes of a dungeon's DOOR/BUTTON/CHEST/GOOBER rows carry a live instance id (GO_COPY_BAND
     /// guids), and the instance reap deletes them. END-appended + `#[default(0u64)]` (danger-zones §2
     /// additive migration). GATEWAY-SUBSCRIBED table → the binding
     /// (`gateway/src/stdb/bindings/game_object_type.rs`) and the `schema_parity.rs` manifest are
-    /// hand-synced in the SAME change (playbook failure-mode #1).
+    /// hand-synced in the SAME change (playbook failure-mode).
     #[default(0u64)]
     pub instance_id: u64,
     /// AOI grid cell (246): stamped from (x, y) at insert — GOs are static, no re-stamp. The
@@ -249,7 +222,7 @@ pub struct GameObject {
     /// column of that index is matched by an equality term, and it skips any index with more than 3
     /// columns outright (`MAX_EXACT_INDEX_COLS`); range predicates are never index-served at all
     /// (`IndexProbe::Range` — "we currently never construct this variant") and an `OR` is evaluated
-    /// row-by-row. So a `grid_x BETWEEN .. AND grid_y BETWEEN ..` box degrades to a full partition
+    /// row-by-row. So a `grid_x BETWEEN.. AND grid_y BETWEEN..` box degrades to a full partition
     /// scan — 1.1 BILLION rows examined on `game_gameobject` in a 445-player measurement. Folding the
     /// two grid columns into one makes `by_cell` a 3-column all-equality index, which the planner CAN
     /// serve, and the AOI box becomes 25 point probes instead of a scan.
@@ -354,7 +327,7 @@ pub struct GameObjectPool {
 }
 
 /// A pool member POINT (cmangos `pool_gameobject` subset). A *potential* spawn location: a point is
-/// ACTIVE iff a `game_gameobject` row exists at `pool_point_guid(point_id)`, INACTIVE otherwise — the
+/// TIVE iff a `game_gameobject` row exists at `pool_point_guid(point_id)`, INACTIVE otherwise, the
 /// active/inactive distinction is the EXISTENCE OF A ROW, not a column (so the spawn row is untouched).
 /// `template_entry` chooses which GO spawns here (a higher-tier template = a rarer member); `weight` is
 /// the relative selection weight (0 = never auto-selected). Public + SQL-loadable (no Timestamp).
@@ -468,7 +441,7 @@ pub(crate) fn reroll_pool(ctx: &ReducerContext, pool_id: u32, gathered_guid: u64
     activate_point(ctx, chosen);
 }
 
-/// ACTIVATE a pool point — insert its READY `game_gameobject` row at the derived guid. Shared by
+/// TIVATE a pool point, insert its READY `game_gameobject` row at the derived guid. Shared by
 /// `arm_pool` (initial fill) and `reroll_pool` (rotation). Idempotent-by-guid: the caller guarantees
 /// the point is currently inactive (no row at its guid), so this is a plain insert.
 fn activate_point(ctx: &ReducerContext, m: &GameObjectPoolMember) {
@@ -512,26 +485,10 @@ fn imported_terrain_maps(ctx: &ReducerContext) -> HashSet<u32> {
         .collect()
 }
 
-/// Whether a pool member's map is one this database's real imported content covers (pure, unit-tested
-/// — see `imported_terrain_maps` for how `imported_maps` is derived from live tables). An EMPTY
-/// `imported_maps` means nothing has been imported here yet, so `init`'s own publish-time `arm_pool`
-/// call (and a bare-dev-DB `debug_setup_gather_pool`) must still arm every pool — this admits
-/// everything in that case. Once ANY map has real terrain/nav content, a member on a DIFFERENT map is
-/// foreign: refusing it is what stops `arm_all_pools` resurrecting another continent's fixture after
-/// that continent's own import already wiped it (the false REGRESSION a clean map-1 import
-/// used to end with, because the demo tier-pool's map-0 Northshire point got re-armed regardless).
 pub(crate) fn pool_member_map_is_live(member_map: u32, imported_maps: &HashSet<u32>) -> bool {
     imported_maps.is_empty() || imported_maps.contains(&member_map)
 }
 
-/// The exact candidate filter `arm_pool` splices into its `&&` chain each iteration — weight>0, on a
-/// live map (`pool_member_map_is_live`), and not already an active point (`active_point_guids`, the
-/// pool's currently-armed point guids at `pool_point_guid`). Pulled out to a pure fn (no
-/// `ReducerContext`, `members`/`active_point_guids` are plain owned/borrowed values a unit test can
-/// construct directly) SPECIFICALLY so this splice point — not just the isolated
-/// `pool_member_map_is_live` predicate — has an automated mutation-testing guard (review: the
-/// original review disclosed this wiring as unreachable without a live `ReducerContext`; it isn't —
-/// `arm_pool` below now calls this directly, so mutating IT mutates the real production code path).
 pub(crate) fn eligible_pool_candidates(
     members: Vec<GameObjectPoolMember>,
     active_point_guids: &HashSet<u64>,
@@ -719,7 +676,7 @@ pub(crate) fn usable_go(
     Ok((go, tmpl))
 }
 
-/// Pick the lock on a locked GameObject (work-item 119 — Pick Lock 1804, gateway-intercepted by the
+/// Pick the lock on a locked GameObject, Pick Lock 1804, gateway-intercepted by the
 /// E_OPEN_LOCK effect kind). Gated same-map/instance + range like [`apply_use_gameobject`] (the caster
 /// walked up to click it). Reads the GO template's `lock_id`, then scans `game_lock` for a SATISFIABLE
 /// real opener — a SKILL row (kind 2, `property != 0`) the caster's `game_player_skill(property)` meets,
@@ -829,7 +786,7 @@ fn use_resolved_gameobject(
         (go.guid, go.template_entry, go.instance_id);
     match tmpl.type_id {
         go_type::CHEST => {
-            // LOCK gate (work-item 119): a CHEST whose lock has a REAL opener (`locked_shut`) refuses
+            // LOCK gate : a CHEST whose lock has a REAL opener (`locked_shut`) refuses
             // the loot roll until Pick Lock (`apply_pick_lock`) records a `game_gameobject_unlocked` row.
             // lock_id 0 / a hand-open (property==0-only) lock opens freely (unchanged). BEFORE the loot.
             if locked_shut(ctx, go.guid, tmpl.lock_id) {
@@ -838,14 +795,7 @@ fn use_resolved_gameobject(
             if go.state != 0 {
                 return Err("chest already looted".to_string());
             }
-            // DATA-DRIVEN (work-item 210): `data1` names a `game_gameobject_loot` loot id (the REAL
-            // cmangos `gameobject_template.Data1`) — roll ALL independent rows + one pick per group as
-            // real multi-slot `game_corpse_loot` rows, keyed on the GO guid so the existing CMSG_LOOT/
-            // take-loot path serves it unchanged. Quest-only rows roll UNCONDITIONALLY now (work-item
-            // 187 slice 0 — no user/killer gate; visibility/takability are per-viewer/per-taker
-            // downstream, same as the creature/pickpocket families). `data1 == 0` (unimported, or the
-            // seed/demo chest) OR a table whose roll produced NOTHING falls back to the legacy single
-            // guaranteed `data0` drop, so existing seed/demo data + tests stay byte-identical.
+
             let raw: Vec<(u32, u32, u32, u32, bool)> = if tmpl.data1 != 0 {
                 ctx.db
                     .game_gameobject_loot()
@@ -914,7 +864,7 @@ fn use_resolved_gameobject(
             //
             // (1) ROAMING pool (a pooled point whose pool is `in_place == false`) → the rotation IS the
             //     respawn: `reroll_pool` NOW (delete this point, activate a DIFFERENT inactive one) and RETURN
-            //     — no state flip, no armed timer (reroll_pool deleted the row, so pass_gameobject_respawn
+            //   , no state flip, no armed timer (reroll_pool deleted the row, so pass_gameobject_respawn
             //     never sees this guid → no double-respawn). Deleting the point relays SMSG_DESTROY_OBJECT
             //     (vanishes on gather = correct feedback) and the new point's INSERT relays CREATE_OBJECT (the
             //     node roams visible now). Active count stays max_active. DEBUG-ONLY: vanilla Elwynn is not
@@ -965,10 +915,10 @@ fn use_resolved_gameobject(
             }
         }
         go_type::DOOR | go_type::BUTTON => {
-            // DOOR/BUTTON toggle (work-item 211): open↔closed is state 0↔1, the same field the
+            // DOOR/BUTTON toggle : open↔closed is state 0↔1, the same field the
             // gateway already relays in the CREATE_OBJECT (`gameobject_state`) — see the new
             // `on_go_update` relay (subscriptions.rs) that re-emits it live, mirroring the corpse
-            // body→bones re-emit. LOCK gate (work-item 119): a DOOR/BUTTON whose lock has a REAL opener
+            // body→bones re-emit. LOCK gate : a DOOR/BUTTON whose lock has a REAL opener
             // (`locked_shut`) refuses the toggle until Pick Lock records a `game_gameobject_unlocked`
             // row. lock_id 0 / a hand-open (property==0-only) lock toggles freely (unchanged, per 211).
             if locked_shut(ctx, go.guid, tmpl.lock_id) {
@@ -978,13 +928,13 @@ fn use_resolved_gameobject(
             ctx.db.game_gameobject().guid().update(go);
         }
         _ => {
-            // INERT type (work-item 211 widened import): every in-scope cmangos GO type now imports
+            // INERT type (widened import): every in-scope cmangos GO type now imports
             // (template + spawn), but only CHEST/GOOBER/GATHER/DOOR/BUTTON dispatch above — everything
-            // else (SPELL_FOCUS, MAILBOX until work-item 068, etc.) is a benign no-op so the object is
+            // else (SPELL_FOCUS, MAILBOX until, etc.) is a benign no-op so the object is
             // at least usable/clickable without a hard error, not a silent capability promise.
         }
     }
-    // Encounter kernel notify hook (work-item 228): every SUCCESSFUL use — the gates above (range,
+    // Encounter kernel notify hook : every SUCCESSFUL use, the gates above (range,
     // already-looted, skill) `?`-returned before this line, so a rejected use never fires.
     crate::hooks::fire_on_go_used(
         ctx,
@@ -1147,7 +1097,7 @@ pub fn debug_pick_lock_entry(
 ///
 /// `packed`: rows separated by `;`, fields by `,`, in the order
 /// `guid,template_entry,map_id,x,y,z,orientation,initial_state,rot0,rot1,rot2,rot3`. `created_at` =
-/// `ctx.timestamp`. `initial_state` (work-item 211, END field — widened alongside
+/// `ctx.timestamp`. `initial_state`, END field, widened alongside
 /// `import_gameobjects_append` in the SAME commit, not a table migration: this is a string protocol
 /// between the importer and this reducer, not a reducer arg) lets a DOOR/BUTTON spawn already-open
 /// (cmangos `startOpen`); every other type's importer row carries 0 (ready/closed), byte-identical to
@@ -1180,14 +1130,6 @@ pub fn import_gameobjects_append(ctx: &ReducerContext, packed: String) -> Result
     Ok(())
 }
 
-/// Parse `packed` (`;`-separated rows of
-/// `guid,template_entry,map,x,y,z,o,initial_state,rot0,rot1,rot2,rot3`) into `game_gameobject` rows
-/// (stamped at `ctx.timestamp`), returning the count loaded. Shared by both reducers above.
-/// `initial_state` is work-item 211's DOOR/BUTTON `startOpen` carry — every non-door/button importer
-/// row still sends 0, so existing content is byte-identical. `rot0..3` is the cmangos
-/// spawn quaternion; the importer sends the dump's literal `0,0,0,0` for any row it doesn't have one
-/// for, so this reducer never needs to derive a fallback itself — that derivation is the WIRE codec's
-/// job (`gateway/src/codec/gameobject.rs`), not storage's.
 fn load_go_batch(ctx: &ReducerContext, packed: &str) -> Result<u32, String> {
     let gos = ctx.db.game_gameobject();
     let now = ctx.timestamp;
@@ -1204,10 +1146,7 @@ fn load_go_batch(ctx: &ReducerContext, packed: &str) -> Result<u32, String> {
         let pu32 = |s: &str| s.parse::<u32>().map_err(|_| format!("bad u32: {s}"));
         let pf32 = |s: &str| s.parse::<f32>().map_err(|_| format!("bad f32: {s}"));
         let pu8 = |s: &str| s.parse::<u8>().map_err(|_| format!("bad u8 state: {s}"));
-        // Parse the position ONCE: the grid columns used to re-parse `f[3]`/`f[4]` per
-        // component, and `cell` would have made that four parses of the same two fields. Hoisting
-        // also makes it structurally impossible for `grid_x`, `grid_y` and `cell` below to be
-        // derived from different coordinates.
+
         let (gx_src, gy_src) = (pf32(f[3])?, pf32(f[4])?);
         let go = gos
             .try_insert(GameObject {
@@ -1222,8 +1161,7 @@ fn load_go_batch(ctx: &ReducerContext, packed: &str) -> Result<u32, String> {
                 created_at: now,
                 respawn_at_micros: 0, // a freshly-imported node is ready (no pending respawn)
                 instance_id: 0, // imported static rows are open-world (dungeon copies are runtime, 190 slice 2)
-                // note: the new respawn_secs/gather_gray cols live on the TEMPLATE (GameObjectTemplate), not on
-                // this SPAWN row — so this GameObject literal is otherwise unchanged this slice.,
+
                 grid_x: lyracore_shared::spatial::grid_cell(gx_src, gy_src).0,
                 grid_y: lyracore_shared::spatial::grid_cell(gx_src, gy_src).1,
                 cell: lyracore_shared::spatial::cell_id_at(gx_src, gy_src),
@@ -1261,7 +1199,7 @@ mod tests {
         assert_eq!(go_type::GATHER, 25);
         assert_ne!(go_type::GATHER, go_type::CHEST);
         assert_ne!(go_type::GATHER, go_type::GOOBER);
-        // DOOR/BUTTON (work-item 211) sit at cmangos' real 0/1 — guard them too, and confirm none of
+        // DOOR/BUTTON  sit at cmangos' real 0/1, guard them too, and confirm none of
         // the five LIVE type ids collide with each other.
         assert_eq!(go_type::DOOR, 0);
         assert_eq!(go_type::BUTTON, 1);
@@ -1283,7 +1221,7 @@ mod tests {
         }
     }
 
-    /// Work-item 041: `QUESTGIVER` is re-exported from `lyracore_shared::constants::go_type` (not a local
+    /// `QUESTGIVER` is re-exported from `lyracore_shared::constants::go_type` (not a local
     /// literal) so the module and gateway copies can never drift — pin BOTH the cmangos value and the
     /// identity with the shared source in one assertion.
     #[test]
@@ -1295,7 +1233,7 @@ mod tests {
         );
     }
 
-    /// DOOR/BUTTON TOGGLE (work-item 211) — the pure decision `apply_use_gameobject`'s DOOR|BUTTON arm
+    /// DOOR/BUTTON TOGGLE, the pure decision `apply_use_gameobject`'s DOOR|BUTTON arm
     /// calls. Total over every `u8` (not just 0/1): only exact 0 flips to 1, anything else (a corrupt/
     /// foreign value) flips to 0 rather than panicking or wedging the reducer.
     #[test]
@@ -1307,7 +1245,7 @@ mod tests {
         assert_eq!(toggle_state(255), 0);
     }
 
-    /// LOCK opener classification (work-item 119) — the pure decision the use-gate + pick path share. A
+    /// LOCK opener classification, the pure decision the use-gate + pick path share. A
     /// SKILL row (kind 2) is a REAL opener only with a real SkillLine (`property != 0`): the importer
     /// stores an UNMAPPED LockType.dbc id as `property 0` (LOCKTYPE_OPEN/blasting/disarm), which must NOT
     /// gate a hand-open chest and which Pick Lock can't satisfy. An ITEM row (kind 1) always opens; an
@@ -1397,10 +1335,6 @@ mod tests {
         assert_eq!(respawn_window_micros(180), RESPAWN_WINDOW_MICROS); // 180s == the const, no surprise
     }
 
-    /// `arm_pool`'s map-fence. An EMPTY imported-maps set (nothing has ever been really
-    /// imported into this database) must admit every member regardless of its map: that's `init`'s own
-    /// publish-time arm, and a bare-dev-DB `debug_setup_gather_pool`, and both must keep working exactly
-    /// as before this fence existed.
     #[test]
     fn pool_member_map_is_live_admits_everything_before_any_real_import() {
         let none_imported: HashSet<u32> = HashSet::new();
@@ -1444,10 +1378,6 @@ mod tests {
         assert!(!pool_member_map_is_live(1, &multi_map));
     }
 
-    /// `eligible_pool_candidates` — the ACTUAL splice `arm_pool` calls each iteration (review:
-    /// the disclosed gap was that only the isolated `pool_member_map_is_live` predicate had a unit test,
-    /// not the wiring; this exercises the real production filter — weight>0 AND live-map AND not-already-
-    /// active — together, exactly as `arm_pool` composes them).
     #[test]
     fn eligible_pool_candidates_applies_weight_map_and_already_active_together() {
         fn member(point_id: u64, map_id: u32, weight: u32) -> GameObjectPoolMember {

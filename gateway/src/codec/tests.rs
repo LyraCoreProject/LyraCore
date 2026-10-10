@@ -1,6 +1,4 @@
-//! Unit + golden-vector tests for the wire codec. Hoisted out of `mod.rs` (was an 819-line
-//! trailing `#[cfg(test)] mod tests` block) so the production codec reads on its own; this is
-//! pure code-motion, byte-identical to the previous inline module.
+//! Unit and golden-vector tests for the wire codec.
 
 use super::*;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -44,7 +42,7 @@ fn warrior_entity() -> EntityView {
 fn set_faction_standing_raw_sends_the_rep_index_not_the_faction_id() {
     // 5875 layout: count(u32) + ReputationListID(u32) + standing(u32) = 12 bytes. The CRASH FIX: the middle
     // field is the rep-list INDEX (Stormwind = 19), NOT the faction id (72). Sending 72 indexed past the
-    // client's 64-slot rep array → null deref → ERROR #132. The caller passes game_faction.reputation_index.
+    // client's 64-slot rep array → null deref → ERROR. The caller passes game_faction.reputation_index.
     let (opcode, body) =
         build_set_faction_standing_raw(19, 500).expect("a valid rep-index always builds");
     assert_eq!(opcode, 0x0124);
@@ -1437,8 +1435,6 @@ fn worn_shortsword() -> ItemTemplateView {
     }
 }
 
-/// A simple chest armor with known stat values — used to pin that stat_armor + equip stats
-/// reach the wire response (not zeroed out by the codec).
 fn blackrock_gauntlets() -> ItemTemplateView {
     ItemTemplateView {
         entry: 1448,
@@ -1533,10 +1529,7 @@ fn item_query_response_armor_and_stats_reach_wire() {
     match ServerOpcodeMessage::read_unencrypted(&mut buf.as_slice()).unwrap() {
         ServerOpcodeMessage::SMSG_ITEM_QUERY_SINGLE_RESPONSE(m) => {
             let found = m.found.expect("Blackrock Gauntlets must be found");
-            assert_eq!(
-                found.armor, 105,
-                "stat_armor must reach the wire (was 0 before fix)"
-            );
+            assert_eq!(found.armor, 105, "stat_armor must reach the wire");
             // First stat slot must carry Strength=3; remaining slots padded with Mana=0.
             assert_eq!(
                 found.stats[0].stat_type,
@@ -1853,7 +1846,7 @@ fn a_copied_letters_create_block_carries_its_item_text_id() {
     match &build_item_create_object(&plain).objects[0] {
         Object::CreateObject2 {
             mask2: UpdateMask::Item(it),
-            ..
+..
         } => assert_eq!(
             it.item_item_text_id(),
             None,
@@ -1939,7 +1932,7 @@ fn skill_block_reads_learned_rows_override_and_append() {
 
 #[test]
 fn create_object_carries_the_sheath_state_for_player_and_creature() {
-    // #101: the CREATE is how a peer entering AOI range learns a unit's sheath state. Omit
+    // the CREATE is how a peer entering AOI range learns a unit's sheath state. Omit
     // UNIT_FIELD_BYTES_2 and everyone who walks up to a player with a drawn sword sees them
     // empty-handed until the next toggle. Byte 0 is the state; bytes 1-3 ride along untouched.
     let mut e = warrior_entity();
@@ -2283,7 +2276,7 @@ fn gossip_message_body_is_exact_5875_layout() {
     let guid = 0xF130_0000_0000_0001u64;
     let msg = SMSG_GOSSIP_MESSAGE {
         guid: Guid::new(guid),
-        title_text_id: GOSSIP_GREETING_TEXT_ID, // == 1 after the fix (low, in-range npc_text id)
+        title_text_id: GOSSIP_GREETING_TEXT_ID, // Low, in-range npc_text id.
         gossips: vec![GossipItem {
             id: 0,
             item_icon: 1,
@@ -2311,7 +2304,7 @@ fn gossip_message_body_is_exact_5875_layout() {
 
     let mut want: Vec<u8> = Vec::new();
     want.extend_from_slice(&guid.to_le_bytes()); // guid: u64
-    want.extend_from_slice(&1u32.to_le_bytes()); // title_text_id: u32 (== 1, the fix)
+    want.extend_from_slice(&1u32.to_le_bytes()); // title_text_id: u32.
     want.extend_from_slice(&1u32.to_le_bytes()); // amount_of_gossip_items: u32
                                                  // gossip item: id u32 | icon u8 | coded u8 | message CString — NO BoxMoney/BoxText (those are TBC)
     want.extend_from_slice(&0u32.to_le_bytes()); // id
@@ -3505,7 +3498,7 @@ fn monster_move_run_flag_selects_the_run_spline_bit() {
 
 #[test]
 fn monster_move_facing_carries_the_angle_and_a_degenerate_single_point_spline() {
-    // #518: a stand-and-swing creature turns to face its target without moving. The wire shape must
+    // a stand-and-swing creature turns to face its target without moving. The wire shape must
     // be the `FacingAngle` variant (the client's ONLY source of a non-moving heading change), zero
     // duration, and a single-point spline at the mover's own position (there IS no destination).
     let pos = Vector3d {

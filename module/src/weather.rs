@@ -46,9 +46,6 @@ const INTENSITY_STEP: f32 = 0.333_333_34;
 /// Two thirds of the intensity range — the radical branch's drop from heavy back towards light.
 const RADICAL_STEP: f32 = 0.666_666_7;
 
-/// The spread of one intensity band (light, medium, heavy). CMaNGOS spells this `0.3333` rather than
-/// deriving it from [`INTENSITY_STEP`], and the two are deliberately not the same number: a band's
-/// spread has to leave room under the `0.3334` and `0.6667` offsets stacked on it.
 const BAND_WIDTH: f32 = 0.3333;
 
 /// A weather type the 1.12.1 client renders.

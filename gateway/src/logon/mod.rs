@@ -463,11 +463,7 @@ pub async fn run(cfg: GatewayConfig, coordinator: Coordinator) -> Result<()> {
 /// re-resolved from the username by [`CoordinatorStore::world_account_id`]. The id this store is
 /// handed came from realm-core and is meaningless anywhere else.
 ///
-/// Generic over the STORE rather than hard-wired to `Coordinator`, because `Coordinator` wraps a
-/// live SpacetimeDB websocket and nothing in the crate could execute these bodies without a node —
-/// which is why four mutations against them, including "read the SRP6 material off the world DB",
-/// survived the realm-core PR's own suite before this fix. Production binds `D = Coordinator`;
-/// `realm_core::tests` binds `D = fake::Handle` and runs THESE bodies, not a model of them.
+/// Production binds `Coordinator`; the RealmDb Fake exercises the same Store in unit tests.
 pub(crate) struct CoordinatorStore<D: crate::realm_core::RealmDb> {
     coordinator: D,
 }
@@ -958,9 +954,6 @@ mod tests {
             other => panic!("expected realm list, got {other:?}"),
         }
 
-        // EVERY store call that then talks to the world shard must be told the username. Review
-        // caught `bound_identity` and `realms` still running on realm-core's id after
-        // `save_session` was fixed, so this asserts the whole set, not the one method.
         for method in ["bound_identity", "save_session", "realms"] {
             assert_eq!(
                 store.told(method).as_deref(),

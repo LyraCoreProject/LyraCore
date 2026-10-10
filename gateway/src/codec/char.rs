@@ -39,7 +39,7 @@ pub struct CharacterView {
     pub guild_id: u32,
 }
 
-/// Build the `SMSG_CHAR_ENUM` reply for the character-select screen (Phase 3, gateway
+/// Build the `SMSG_CHAR_ENUM` reply for the character-select screen, gateway
 /// translation §4). Each [`CharacterView`] becomes a `wow_world_messages` `Character` block;
 /// The five appearance bytes a player picks at character creation, bundled so `create_character`
 /// (dispatch → trait → coordinator) passes one value instead of five positional `u8`s that are
@@ -184,12 +184,6 @@ pub fn logout_denied_in_combat() -> SMSG_LOGOUT_RESPONSE {
     }
 }
 
-/// The reply to `CMSG_PLAYED_TIME` (`/played`): `total_played_time` is the durable
-/// `played_total_secs` plus this session's live elapsed span (so an online player's total keeps
-/// ticking without a periodic write); `level_played_time` is not tracked per-level in this slice, so
-/// it mirrors the total (matching vanilla's own `/played` fallback shape when level-time is unset).
-/// `now_micros` is the caller's current wall-clock reading (unix-epoch micros) so this stays pure/
-/// testable rather than reaching for `SystemTime::now()` internally.
 pub fn build_played_time(
     played_total_secs: u32,
     session_start_micros: u64,

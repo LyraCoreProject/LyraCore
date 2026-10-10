@@ -215,12 +215,6 @@ pub fn melee_attack_power(strength: u32, level: u32) -> u32 {
 const CLASS_HUNTER: u8 = 3;
 const CLASS_ROGUE: u8 = 4;
 
-/// Class-specific melee attack power. Agility-based classes (Rogue/Hunter) use the
-/// vanilla `level*2 + Str + Agi - 20` curve so AGILITY feeds the swing — without this a leveling Rogue
-/// gained nothing from their primary stat. Every other class (Warrior/Paladin + the default) keeps the
-/// Str-class `melee_attack_power` curve, so their AP is byte-identical to before (baseline-safe). Clamped
-/// ≥0. Known limitation: pure casters technically use `Str-10` in vanilla, but that's an
-/// unrequested balance change — left on the Str-class default until a caster-melee pass needs it.
 pub fn melee_attack_power_for(class: u8, strength: u32, agility: u32, level: u32) -> u32 {
     match class {
         CLASS_ROGUE | CLASS_HUNTER => (level * 2 + strength + agility).saturating_sub(20),
@@ -275,12 +269,6 @@ pub fn weapon_swing_range_ap(ap: u32, dmg_min: u32, dmg_max: u32, delay_ms: u32)
     (dmg_min + bonus, dmg_max + bonus)
 }
 
-/// The vanilla dual-wield OFF-HAND penalty: an off-hand swing's `[min, max]` (already the AP-scaled
-/// off-hand weapon range from `weapon_swing_range_ap`) lands at 50% of its unpenalized damage, floored
-/// at 1 so a very low-roll off-hander never swings for 0. Pure — unit-tested. `resolve_swing`'s off-hand
-/// roll applies this to the off-hand's own AP-scaled range BEFORE the shared
-/// attack-table roll (`roll_swing_with_range`), so crit/glancing/armor still multiply off the already-
-/// halved base — the same shape as `weapon_swing_range_ap`'s main-hand range feeding `roll_swing`.
 pub fn apply_offhand_penalty(min: u32, max: u32) -> (u32, u32) {
     ((min / 2).max(1), (max / 2).max(1))
 }
@@ -377,12 +365,6 @@ pub fn armor_mitigation_pct(armor: u32, attacker_level: u32) -> u32 {
     (armor * 100 / denom).min(75)
 }
 
-/// Magic-school resistance reduction as a whole-number percent (vanilla average-resist): `75 ×
-/// resistance / (caster_level × 5)`, capped at 75%. Resistance beyond the per-level cap (`caster_level ×
-/// 5`) doesn't help — that's the 75% ceiling. `resistance == 0` (no resist aura — every unit today) or a
-/// 0-level caster → 0%, so a magic hit is byte-identical to before (baseline-safe). The MAGIC twin of
-/// `armor_mitigation_pct` (physical) — both live here as the canonical mitigation formulas; the
-/// spell-damage path folds this in (`spell::apply_resistance`). Pure — unit-tested.
 ///
 /// PROVENANCE: the linear `75 × resist / (level×5)` average-resist with a 75% cap is the widely-used
 /// 1.12 community approximation (the real engine rolls partial-resist bands whose *average* this models)

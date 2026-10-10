@@ -1011,15 +1011,6 @@ pub(crate) fn run<St: WorldStore + ?Sized>(
     // just left (their membership row is gone by the time we look again, but the members still in it
     // need their mirrors updated too).
     let before = realm.group_roster(self_guid)?;
-    // Found in adversarial review: LEAVE/UNINVITE are the only two ops that can shrink a group
-    // below 2 members and reach `remove_member`'s disband branch on realm-core — and that branch
-    // force-resolves live loot rolls, which the periodic loot-roll relay may not have promoted yet. A
-    // roll staged in the gap between its kill-time creation and its next scheduled promotion is
-    // invisible to `remove_member` if a disband lands in that gap ("someone gets kicked right after a
-    // kill"), and the relay then promotes an ORPHANED roll onto a group id that no longer exists,
-    // which resolves only at the 60s deadline — exactly the fallback the operator's decision
-    // rejected, reintroduced in a narrow window. Flushing HERE, synchronously, in-line with the
-    // dispatch below (not on the relay's own timer), closes it: see `loot::flush_pending_promotions`.
     if matches!(op, Op::Leave | Op::Uninvite(_)) {
         crate::world::loot::flush_pending_promotions(store, realm.as_ref());
     }
@@ -1175,10 +1166,6 @@ pub(crate) fn run_bot_invite_intent<St: WorldStore>(
     }
 }
 
-/// Run a SERVER-DRIVEN invite with no client behind it — a session-less Character's invite, closing
-/// the gap the group slice opened: the module used to write this shard's LOCAL
-/// `game_group`/`game_group_member` rows directly, which the next `sync_group_mirror` push wiped
-/// because realm-core had never heard of them.
 ///
 /// There is no `account_id` here on purpose: a bot has no per-account connection for a reducer to
 /// authenticate as, on EITHER topology. So this never takes [`run`]'s unsharded arm (which needs

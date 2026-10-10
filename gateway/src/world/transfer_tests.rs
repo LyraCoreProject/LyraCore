@@ -1,20 +1,10 @@
-//! Cross-database transfer — Phase A of the elastic-sharding spec.
-//!
-//! A child module of `world::tests` for the same reason as its siblings — it reaches
-//! `InMemoryStore` and the fixtures below without widening anything. Unlike the other extracted
-//! sections, the fixture TYPES this section drives (`FakeChar`, `FakeEscrow`, `FakeShardDb`,
-//! `fake_blob`/`parse_blob`, and the generic `lk` lock helper) stay defined in `tests.rs` itself:
-//! tests.rs's own `InMemoryStore` (the `xdb`/`xstep` glue its `Store` impl uses) and two
-//! world-port-abort regression tests earlier in that file construct `FakeShardDb`/`FakeChar`
-//! directly, so those definitions are a shared fixture, not section-local — see the comment above
-//! them in `tests.rs`. `sharded_stores`/`drive_routed_session`/`ShardCallLog` are `shard_routing_tests`'s,
-//! reused here the same way `loot_tests` reuses `party_tests`'s fixtures.
+//! Cross-database Transfer tests through the shared InMemoryStore topology.
 
 use super::shard_routing_tests::{drive_routed_session, sharded_stores, ShardCallLog};
 use super::*;
 
 // ===========================================================================================
-//  Cross-database transfer — Phase A of the elastic-sharding spec.
+//  Cross-database Transfer and Shard routing
 //
 //  `FakeShardDb` is a faithful re-implementation of the MODULE's escrow guards
 //  (`module/src/transfer/mod.rs`'s `plan_begin`/`plan_import`/`plan_finish` + `release_transfer`'s
@@ -23,15 +13,7 @@ use super::*;
 //  Two `FakeShardDb`s stand for two SpacetimeDB databases — the same shape `sharded_stores`
 //  uses for routing.
 //
-//  Deliberately NOT a permissive mock: a fake that recorded calls and returned Ok would let every
-//  ordering mutation pass, which is the exact coverage gap the transfer-primitive and
-//  in-transit-gate reviews kept finding.
-// ===========================================================================================
 
-/// Run a test body under a wall-clock deadline, so a hang is a FAILURE rather than a CI job that
-/// sits at "still running" until someone kills it. Used on the cross-database driver tests — the
-/// ones that walk two databases through a multi-step protocol and are therefore the only place in
-/// this suite where a wedge could be a loop rather than a lock.
 fn no_hang<T: Send + 'static>(secs: u64, f: impl FnOnce() -> T + Send + 'static) -> T {
     let h = std::thread::spawn(f);
     // Poll `is_finished` rather than shipping the result through a channel, so a body that PANICS
@@ -100,12 +82,6 @@ fn xdb_pair(
     (src, dst, src_db, dst_db, calls)
 }
 
-/// A deadlock found in review, turned into a named failure.
-///
-/// `FakeShardDb::import_character_blob` used to hold the `in_rows` guard across `db.live()`, which
-/// locks `in_rows` again — only the `&&` short-circuit in `has()` kept the happy path alive. When a
-/// driver mutation reached that line the gateway suite HUNG instead of turning a test red. Every
-/// lock now goes through `lk` (`try_lock`), so the same re-entrancy is an instant, named panic.
 ///
 /// This test asserts the property directly: hold a guard, take the same mutex again, and the
 /// process must come back with a failure rather than never coming back at all.
@@ -263,14 +239,6 @@ fn a_completed_transfer_publishes_the_destination_to_the_realm_core_index() {
     });
 }
 
-/// Step 5b publishes the ESCROW OUT-ROW's destination, never the caller's `plan`.
-///
-/// This is the clause the whole "a replication, not a stale-index generator" argument rests on —
-/// the index can only ever name a destination `finish_transfer` actually settled, because it is read
-/// from the same row `do_finish` recorded its own receipt from. Every other clause was executed;
-/// this one was not, and substituting `plan.dest_*` for `escrow.dest_*` survived the whole suite
-/// (found by adversarial review). The two agree on today's call paths, which is exactly why nothing
-/// noticed — and `run_transfer` re-reads the escrow precisely because they are not guaranteed to.
 #[test]
 fn a_resumed_transfer_publishes_the_escrow_destination_not_the_callers_plan() {
     no_hang(30, || {
@@ -798,9 +766,6 @@ fn a_normal_resident_does_not_need_transfer_arrival_repair() {
 
 #[test]
 fn a_second_transfer_of_the_same_character_is_never_swallowed_as_a_replay() {
-    // THE REPEAT-TRANSFER CASE (found by adversarial review). The transfer id IS the character
-    // guid, so every hop a character ever makes reuses ONE id — and `plan_begin` reads "an out-row
-    // OR an in-row filed under this id names this character" as `BeginPlan::Replay`, i.e. `Ok(())`.
     //
     // Reachable state: the character hopped world -> instances and the driver died between
     // `finish_transfer` and `release_transfer`, so the instances shard holds the character AND an
@@ -918,14 +883,6 @@ fn entering_the_world_binds_this_accounts_identity_on_the_shard_it_landed_on() {
         "the identity must be bound BEFORE player_login, not after: {log:?}"
     );
 }
-
-// The escrow-priority tripwire that used to live here (`locate_character_still_prefers_the_shard_
-// holding_the_escrow`, a source scan of `Coordinator::locate_character`) was retired once
-// `settle_home_shard`'s holder lookup became `realm_core::locate_home_shard`, generic over the
-// `RealmDb` seam, and the escrow-priority property is pinned BEHAVIOURALLY there instead —
-// `locate_home_shard_still_prefers_the_shard_holding_the_escrow_in_the_fallback_scan` in
-// `realm_core.rs`, which runs the real fallback-scan code against `fake::Handle` rather than
-// matching its source text.
 
 #[test]
 fn a_resumed_transfer_reuses_the_escrowed_destination_not_the_character_row() {

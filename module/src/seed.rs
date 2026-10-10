@@ -1,10 +1,6 @@
-//! The `init` lifecycle reducer — the single entrypoint that populates a fresh database. `init`
-//! itself is a four-line dispatcher over four banner-stratum fns, each a straight
-//! extraction of what used to be one ~1,600-line function (a reader still sees the whole seed by
-//! reading top to bottom — the split is fn boundaries, not a reorder):
 //!
 //! 1. **`seed_production_core`**: realm, server config, the human-warrior start position, the
-//!    fallback graveyard/graveyard-zone rows (work-item 209), the TEST account + pre-seeded
+//!    fallback graveyard/graveyard-zone rows , the TEST account + pre-seeded
 //!    character (with its starter spellbook/action-bar kit), and the EventAI on-aggro barks. Every
 //!    fresh database needs this regardless of whether it will ever host a real import.
 //! 2. **`seed_map0_demo_content`** (the in-body `DECISION` comment has the full
@@ -51,11 +47,6 @@ use crate::{game_alpha_test_tools_enrollment, AlphaTestToolsEnrollment};
 
 #[reducer(init)]
 pub fn init(ctx: &ReducerContext) {
-    // Four banner strata (split these out of what used to be one ~1,600-line fn — see this
-    // file's header for what each one seeds and why the split points fall where they do). Order
-    // matters: later strata reference nothing from earlier ones (each re-derives its own `hw`
-    // alias), but the production core must exist before anything reads `game_config`/`game_realm`,
-    // and the scheduler must arm last so nothing fires against a half-seeded database.
     seed_production_core(ctx);
     seed_map0_demo_content(ctx);
     seed_spell_registry(ctx);
@@ -65,7 +56,7 @@ pub fn init(ctx: &ReducerContext) {
 
 /// Stratum 1 — the production core every fresh database needs regardless of whether it will ever
 /// host a real import: realm, server config, the human-warrior start position, the fallback
-/// graveyard/graveyard-zone rows (work-item 209), the TEST account + pre-seeded character (with its
+/// graveyard/graveyard-zone rows , the TEST account + pre-seeded character (with its
 /// starter spellbook/action-bar kit), and the EventAI on-aggro barks.
 fn seed_production_core(ctx: &ReducerContext) {
     use constants::start_human_warrior as hw;
@@ -116,7 +107,7 @@ fn seed_production_core(ctx: &ReducerContext) {
         display_id: 49,
     });
 
-    // Graveyard fallback seed (work-item 209): the SAME five Elwynn/Westfall graveyards
+    // Graveyard fallback seed : the SAME five Elwynn/Westfall graveyards
     // `world::graveyard`'s hardcoded consts carry, ALSO row-seeded into `game_graveyard` +
     // `game_graveyard_zone` so a fresh unimported DB and the live `graveyard::resolve_graveyard`
     // path agree exactly — mirrors the `game_start_position` precedent (init seeds; the importer's
@@ -218,12 +209,12 @@ fn seed_production_core(ctx: &ReducerContext) {
         health: 0, // sentinel: spawn at full health
         power: 0,  // sentinel: spawn at starting power
         respec_count: 0,
-        death_expire_micros: 0,                                   // never died
-        pending_instance_id: 0,                                   // open world
-        gm_level: 3, // work-item 223: the seeded Tester is playtest-GM by default
-        pending_ghost: false, // alive (work-item 226)
-        resting: false, // 196
-        rested_since_micros: 0, // 196
+        death_expire_micros: 0, // never died
+        pending_instance_id: 0, // open world
+        gm_level: 3,
+        pending_ghost: false,
+        resting: false,                                           // 196
+        rested_since_micros: 0,                                   // 196
         pending_godmode: false, // 289: GM playtest carry — off until `.god` + a map change
         pending_run_speed_mult_bp: crate::world::RUN_SPEED_BP_1X, // 289: 1×
         bank_bag_slots: 0,
@@ -231,7 +222,7 @@ fn seed_production_core(ctx: &ReducerContext) {
     // The seeded character goes through the same creation-time kit grant as `create_character`
     // (rows restamp to the real owner identity at establish_session, like its other owned rows).
     crate::spell::spellbook::grant_createinfo_spells(ctx, 1, Identity::ZERO, hw::RACE, hw::CLASS);
-    // Action-bar rows (work-item 212) — same no-op-pre-import grant `create_character` calls.
+    // Action-bar rows, same no-op-pre-import grant `create_character` calls.
     crate::action_bar::grant_createinfo_actions(ctx, 1, Identity::ZERO, hw::RACE, hw::CLASS);
 
     // Creature EventAI (193): the fixture on-aggro barks (Kobold/Defias/Hogger).
@@ -598,8 +589,8 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
             gather_skill_line: 0, // not a gather node
             respawn_secs: 0, // n/a (a CHEST has no respawn timer); 0 ⇒ the 3-min fallback if ever used
             gather_gray: 0,  // n/a (not a gather node) — the always-skill sentinel
-            lock_id: 0,      // work-item 211: unlocked (seed/demo chest)
-            size: 0.0,       // no dump size — the gateway renders this at 1.0
+            lock_id: 0,
+            size: 0.0, // no dump size, the gateway renders this at 1.0
         });
     ctx.db.game_gameobject().insert(GameObject {
         guid: GO_HIGH | 1,
@@ -633,8 +624,8 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
             gather_skill_line: 0, // not a gather node
             respawn_secs: 0,      // n/a (a GOOBER has no respawn timer)
             gather_gray: 0,       // n/a (not a gather node)
-            lock_id: 0,           // work-item 211: unlocked (seed/demo goober)
-            size: 0.0,            // no dump size — the gateway renders this at 1.0
+            lock_id: 0,
+            size: 0.0, // no dump size, the gateway renders this at 1.0
         });
     ctx.db.game_gameobject().insert(GameObject {
         guid: GO_HIGH | 2,
@@ -674,8 +665,8 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
             gather_skill_line: crate::skill::skill_line::MINING, // 186
             respawn_secs: 0, // 0 ⇒ the 3-min RESPAWN_WINDOW_MICROS fallback
             gather_gray: 0, // 0 ⇒ the always-skill sentinel (deterministic +1 every gather)
-            lock_id: 0,  // work-item 211: gather nodes don't source a lockId this slice
-            size: 0.0,   // no dump size — the ETL carries the real one
+            lock_id: 0,
+            size: 0.0, // no dump size, the ETL carries the real one
         });
     ctx.db.game_gameobject().insert(GameObject {
         guid: GO_HIGH | 3,
@@ -709,8 +700,8 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
             gather_skill_line: crate::skill::skill_line::HERBALISM, // 182
             respawn_secs: 0, // 0 ⇒ the 3-min RESPAWN_WINDOW_MICROS fallback
             gather_gray: 0, // 0 ⇒ the always-skill sentinel (deterministic +1 every gather)
-            lock_id: 0,  // work-item 211: gather nodes don't source a lockId this slice
-            size: 0.0,   // no dump size — the ETL carries the real one
+            lock_id: 0,
+            size: 0.0, // no dump size, the ETL carries the real one
         });
     ctx.db.game_gameobject().insert(GameObject {
         guid: GO_HIGH | 4,
@@ -744,7 +735,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
     // REAL entries 1731/1732 (NOT the synthetic 50102 Copper Vein above): both type 25 GATHER, line 186
     // MINING. INIT-ONLY (the live pool/member rows are made here + arm); a re-import (`DELETE FROM
     // game_gameobject_pool WHERE pool_id > 0`) wipes this pool, so on the live/imported DB it is re-seeded
-    // post-import via `debug_setup_gather_pool 2 1 true ...`. pool_id 2
+    // post-import via `debug_setup_gather_pool 2 1 true...`. pool_id 2
     // is distinct from the debug pool (1) and the importer's roaming base (1000). Ensure the two tier
     // templates exist first (idempotent — the bare seed lacks them; the ETL also loads them).
     for (e, name, item, req) in [
@@ -764,8 +755,8 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
                     gather_skill_line: crate::skill::skill_line::MINING, // 186
                     respawn_secs: 300, // real vanilla mining-node window (5 min); reroll fires at timer-fire
                     gather_gray: 0,    // always-skill sentinel (deterministic +1 every gather)
-                    lock_id: 0, // work-item 211: gather nodes don't source a lockId this slice
-                    size: 0.0,  // no dump size — the gateway renders this at 1.0
+                    lock_id: 0,
+                    size: 0.0, // no dump size, the gateway renders this at 1.0
                 });
         }
     }
@@ -1003,7 +994,7 @@ fn seed_spell_registry(ctx: &ReducerContext) {
     spell(50050, "Test Conjure", 0, 0, 0, 0, 0, 1, 0, false, 0);
     effect(50050, 0, 0x07, 2, 0, 0, 5349, 8); // E_CREATE_ITEM: 2× item 5349 (Conjured Muffin), self
 
-    // Craft RECIPES are no longer seeded (work-item 282): they import from the real Spell.dbc with real
+    // Craft RECIPES are no longer seeded : they import from the real Spell.dbc with real
     // reagents (game_spell_reagent) + skill-up bands (game_skill_ability), offered by the real in-box
     // trainers. The old synthetic recipe spells here (2538 — which was even FABRICATED as "Roasted Boar
     // Meat" when the real 2538 is "Charred Wolf Meat"; 50071; 50090-50097) are gone. Crafted-item ON-USE
@@ -1245,20 +1236,13 @@ fn seed_spell_registry(ctx: &ReducerContext) {
 
     // Test Fear (50022) — the FEAR crowd-control: ONE A_CONTROL (0xB0) effect whose p0 names the MECHANIC
     // M_FEAR (3, p0_kind 3 P_MECHANIC), targeting an ENEMY. A feared unit cannot ACT (no swing/cast — the
-    // ACTION gates fold fear in) and is force-walked AWAY from the caster by the fear-flee pass each tick
+    // TION gates fold fear in) and is force-walked AWAY from the caster by the fear-flee pass each tick
     // ("flees in terror"); it stays engaged so it resumes attacking when the aura ends. SHORT 8s duration
     // (≈2 ticks, like Warlock Fear) — bounded so the test subject doesn't run off the map. aura_interrupt
     // stays 0: base fear does NOT break on damage (unlike polymorph). is_negative true.
     spell(50022, "Test Fear", 0, 0, 0, 30, 8000, 1, 0, true, 1);
     effect(50022, 0, 0xB0, 0, 0, 1, 3, 3); // A_CONTROL, p0 = M_FEAR (3), p0_kind = P_MECHANIC (3), enemy
 
-    // Test Poly (50023, work-item 192) — the POLYMORPH crowd-control: ONE A_CONTROL (0xB0) effect whose p0
-    // names the MECHANIC M_POLY (4, p0_kind 3 P_MECHANIC), targeting an ENEMY. `is_incapacitated` gates
-    // stun/poly identically (no act, no move) — this fixture exists so CC DIMINISHING RETURNS has a real,
-    // debug-castable spell to drive the live-probe runbook (two poly casts on a player target 15s apart or
-    // less land at 100/50/25/0%; the same double-cast on a CREATURE target is always full duration — see
-    // `spell::stacking`'s DR resolver + the work-item's completion note). 10s duration matches the
-    // pure-fn DR test vector's base duration exactly (10s → 5s → 2.5s at levels 1/2/3). is_negative true.
     spell(50023, "Test Poly", 0, 0, 0, 30, 10000, 1, 0, true, 1);
     effect(50023, 0, 0xB0, 0, 0, 1, 4, 3); // A_CONTROL, p0 = M_POLY (4), p0_kind = P_MECHANIC (3), enemy
 
@@ -1325,7 +1309,7 @@ fn seed_spell_registry(ctx: &ReducerContext) {
     // `debug_seed_talents` (init does NOT re-run on an auto-migrate publish, so the live DB re-seeds via that).
     crate::talent::seed_talents(ctx);
 
-    // Stacking-group starter set (work-item 192) — hand-authored until 102's cmangos `spell_group` SQL
+    // Stacking-group starter set, hand-authored until 102's cmangos `spell_group` SQL
     // dump lands wholesale. Idempotent + shared with `debug_repair_after_publish`, which is how an
     // already-migrated development database picks up reconciled rows (init does NOT re-run).
     seed_spell_groups(ctx);
@@ -1560,7 +1544,7 @@ fn seed_scheduler_arming(ctx: &ReducerContext) {
             scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(EVENT_TTL_MICROS)),
         });
 
-    // Schedule the instance reaper (work-item 190 slice 3) every 60s — minutes-scale occupancy
+    // Schedule the instance reaper  every 60s, minutes-scale occupancy
     // stamping + the 30min-empty / reset-requested reap. A live DB (auto-migrate publish) never
     // re-runs init, so re-arm there via `debug_rearm_instance_reaper` (the
     // `debug_rearm_creature_tick` precedent).
@@ -1577,7 +1561,7 @@ fn seed_scheduler_arming(ctx: &ReducerContext) {
     // every tick (smooth, mangos-cadence motion); the O(N) sensing passes only every 8th tick (~4s) —
     // see `tick_creatures`. A live DB (auto-migrate publish) keeps its old interval, so re-arm via the
     // `debug_rearm_creature_tick` reducer (init does NOT re-run on a plain publish).
-    // Work-item 229: this seeded row is the GLOBAL/CATCH-ALL ticker (`GLOBAL_TICK_INSTANCE`) — it
+    // this seeded row is the GLOBAL/CATCH-ALL ticker (`GLOBAL_TICK_INSTANCE`), it
     // covers instance 0 AND every instance without a dedicated row of its own (load-bearing; never
     // delete it). Dedicated per-instance rows are inserted by 190 slice 2's create_instance (or, until
     // then, `debug_arm_instance_tick`).
@@ -1705,7 +1689,7 @@ pub(crate) fn seed_createinfo_spells(ctx: &ReducerContext) {
     }
 }
 
-/// The stacking-group starter set (work-item 192) — hand-authored ahead of 102's cmangos `spell_group`/
+/// The stacking-group starter set, hand-authored ahead of 102's cmangos `spell_group`/
 /// `spell_group_stack_rules` SQL dump, which will fill `game_spell_group`/`game_spell_group_rule`
 /// wholesale and supersede this. Idempotent (only-if-empty, mirroring `seed_createinfo_spells`); shared by
 /// `init` and `debug_repair_after_publish` (init does NOT re-run on an auto-migrate publish). It

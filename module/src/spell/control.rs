@@ -201,7 +201,7 @@ pub fn is_rooted(ctx: &ReducerContext, unit_guid: u64) -> bool {
 }
 
 /// Is `unit_guid` FEARED — carrying an active `A_CONTROL(M_FEAR)` aura? A feared unit cannot ACT (the
-/// ACTION gates fold it into `is_action_blocked`) and does not steer its OWN movement; instead the
+/// TION gates fold it into `is_action_blocked`) and does not steer its OWN movement; instead the
 /// creature fear-flee pass force-walks it AWAY from the fear source each tick ("flees in terror"). It is
 /// the one mechanic that MOVES the unit: stun/poly freeze (no act, no move), root pins (act, no move),
 /// fear routs (no act, forced flee). Pure read over `game_aura` (no entity write); `false` for any unit
@@ -358,10 +358,7 @@ pub(crate) fn break_auras_on_damage(
                     .unwrap_or(false)
         })
         .collect();
-    // CC DR: break-on-damage is the THIRD removal event that starts the 15s DR window (with natural
-    // expiry — scheduler::tick_auras — and dispel — effects::dispel_target; 192 review finding #1).
-    // Without this stamp the window keeps the provisional apply-time value (scheduled expiry + 15s),
-    // running LONGER than vanilla's actual-break + 15s. No-op for non-CC auras / creature targets.
+
     let now_micros = ctx.timestamp.to_micros_since_unix_epoch();
     for a in &to_break {
         if let Some(category) = crate::spell::stacking::dr_category_for_effect(
@@ -383,7 +380,7 @@ pub(crate) fn break_auras_on_damage(
     // break (landing a swing/cast reveals the ATTACKER) is a separate call at each call site; this is
     // the VICTIM-side half. No-op on a non-stealthed target (the common path).
     super::break_stealth(ctx, target_guid);
-    // Cast PUSHBACK-on-damage (work-item 039): DIRECT damage (melee swing, direct spell) PUSHES BACK the
+    // Cast PUSHBACK-on-damage : DIRECT damage (melee swing, direct spell) PUSHES BACK the
     // victim's in-progress TIMED cast (the cast bar slides `CAST_PUSHBACK_MS`, capped at
     // `CAST_PUSHBACK_MAX` pushbacks) — vanilla 1.12 does NOT cancel a regular cast on damage; only
     // Kick/Counterspell-style interrupts (`interrupt_cast_and_lock`) and CC (`interrupt_cast` via
@@ -833,7 +830,7 @@ mod tests {
         }
     }
 
-    /// Cast pushback (work-item 039): the per-hit slide is cmangos's fixed 500ms, and the cap is 2
+    /// Cast pushback : the per-hit slide is cmangos's fixed 500ms, and the cap is 2
     /// pushbacks per cast (the vanilla cap) — so a 3rd+ direct hit is a documented no-op.
     #[test]
     fn pushback_constants_match_the_cmangos_convention() {

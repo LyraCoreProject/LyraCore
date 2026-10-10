@@ -306,11 +306,6 @@ impl Coordinator {
         let mut rows: Vec<_> = db
             .game_trainer_spell()
             .iter()
-            // Profession-learn offerings (learn_skill_line != 0) are now SHOWN: the importer synthesizes
-            // them with REAL Spell.dbc learn ids (2575 Mining, 2366 Herbalism, …), so the 5875 client
-            // resolves the name/icon + emits a valid SMSG_LEARNED_SPELL — unlike the old 50080-88 markers
-            // this filter used to hide. The buy still routes to crate::skill::learn_profession (module
-            // unchanged). The per-row `known` below grays tiers the player has already trained past.
             .filter(|t| t.trainer_entry == trainer_entry)
             .collect();
         rows.sort_by_key(|t| t.spell_id); // stable order (SQL has no ORDER BY in 2.5)

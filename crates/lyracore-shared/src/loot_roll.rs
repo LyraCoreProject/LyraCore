@@ -1,38 +1,10 @@
-//! The module↔gateway NEED/GREED-ROLL + MASTER-LOOTER wire contract (work-item 187, slices 2-4).
-//!
-//! **Relay-pattern decision**: rolls/master-loot notifications ride the SAME per-recipient
-//! `game_group_event` table + relay the group system already uses for INVITE/LIST/DECLINE/DESTROYED
-//! (`crate::group`) — they are NOT a new gateway-subscribed table. The shape every one of these
-//! needs is identical: one recipient (RLS-scoped by identity), a small kind byte, and a compact
-//! payload the recipient's own connection decodes. Standing up a parallel `game_loot_roll_event`
-//! table would require the FULL new-table gateway-binding checklist (binding file pair + ~13
-//! `bindings/mod.rs` splice sites) for zero behavioral gain over reusing the existing relay — the
-//! `game_group_event.kind` byte already discriminates payload shape per-row, which is exactly what a
-//! second table would also need to do internally. `crate::group::event_kind::LOOT_ROLL_RESERVED_START`
-//! documents the kind-byte range reserved here so the two producers (group.rs, loot.rs, both
-//! module-side) can never collide on a kind number.
-//!
-//! The actual per-item roll STATE (`game_loot_roll` / `game_loot_roll_vote`) lives in
-//! `module/src/loot.rs`. Client-visible transitions (start / a vote lands / the winner is decided /
-//! the master's eligible-recipient list) ride the SAME `game_group_event` relay this doc describes —
-//! the gateway never needs a wire binding to `game_loot_roll` for the CLIENT'S sake, and that rule is
-//! unchanged by issue #50 below.
-//!
-//! **Issue #50** moves `game_loot_roll` / `game_loot_roll_vote` to be authoritative on realm-core,
-//! alongside `game_group` / `game_group_member` (#22) — a roll's audience is defined by who is in the
-//! group, not by where anyone stands, exactly like the membership it depends on. Unlike #22's
-//! membership tables, nothing else in the module reads a roll's internal vote state (only the
-//! lifecycle functions in `loot.rs` do), so there is no world-shard MIRROR to keep in sync — instead
-//! the gateway's coordinator DOES subscribe `game_loot_roll` / `game_loot_roll_vote` now (a first for
-//! this pair), purely so its loot-roll relay (`gateway/src/world/loot.rs`) can see a freshly-created
-//! roll on a world shard and PROMOTE it onto realm-core (`realm_loot_op`'s `loot_op::START`), then
-//! clear the shard's transient staging copy. Voting, once promoted, is routed the same way
-//! (`loot_op::VOTE`); the winning GRANT settles back onto the corpse's own world shard through a
-//! separate operator reducer (`settle_loot_roll`) the relay calls after observing the `ROLL_WON`
-//! event realm-core pushes — items and their escrow guarantees never leave the world shard.
+//! Shared loot-roll, master-loot, and money-share wire codes.
+//! Client transitions use the per-recipient `game_group_event` relay.
+//! Realm-core owns roll votes; World Shards stage new rolls and settle the winning item.
+//! See `docs/realm-loot-routing.md` for ordering across databases.
 
 /// Kinds carried in `game_group_event.kind` for a loot-roll/master-loot/money-share notification
-/// (work-item 187 slices 2-4, work-item 221). Reserved range `4..=8` — see
+/// Reserved range `4..=8`, see
 /// `crate::group::event_kind::LOOT_ROLL_RESERVED_START`.
 pub mod event_kind {
     /// A need/greed/pass window opened for one item → `SMSG_LOOT_START_ROLL`.
@@ -46,7 +18,7 @@ pub mod event_kind {
     /// The master looter's eligible-recipient list for a just-appeared above-threshold row →
     /// `SMSG_LOOT_MASTER_LIST`. Sent to the master only.
     pub const MASTER_LIST: u8 = 7;
-    /// Work-item 221: a grouped money-loot split resolved — this recipient's copper share →
+    /// a grouped money-loot split resolved, this recipient's copper share →
     /// `SMSG_LOOT_MONEY_NOTIFY(share)`. Next free kind after `MASTER_LIST`; reuses the SAME
     /// per-recipient relay (one recipient, a kind byte, a small payload) rather than a new gateway-
     /// subscribed table, for the identical reasons the roll/master-loot kinds above do. Pushed to
@@ -54,11 +26,11 @@ pub mod event_kind {
     /// own "Your share of the loot is X" line too, not the solo "You loot X copper" line) — a SOLO
     /// money loot never pushes this kind at all (no `game_corpse_loot_eligible` snapshot for that
     /// corpse), so the gateway sends no notify and the client's own local "You loot" line is the only
-    /// feedback (work-item 221's whole fix).
+    /// feedback.
     pub const MONEY_SHARE: u8 = 8;
 }
 
-/// The REALM-CORE loot-roll ops (issue #50): the `op` byte of the operator-gated `realm_loot_op`
+/// The REALM-CORE loot-roll ops : the `op` byte of the operator-gated `realm_loot_op`
 /// reducer, mirroring `crate::group::realm_op`'s one-reducer-not-several trade (see that module's
 /// doc for why: a hand-maintained gateway binding per reducer, `docs/danger-zones.md` §1.2).
 ///
@@ -80,7 +52,7 @@ pub mod loot_op {
 /// Vote kinds (`game_loot_roll_vote.vote`) — matches the vanilla wire `RollVote` enum EXACTLY
 /// (`Pass=0, Need=1, Greed=2`; `Disenchant=3` unused here) so a vote byte from `CMSG_LOOT_ROLL`
 /// (gateway-decoded via `RollVote::as_int()`) round-trips to the module with ZERO translation table —
-/// avoiding the #1 silent-bug shape in this codebase: an invented enum ordering that doesn't match
+/// avoiding the silent-bug shape in this codebase: an invented enum ordering that doesn't match
 /// the wire.
 pub mod vote_kind {
     pub const PASS: u8 = 0;
@@ -161,10 +133,6 @@ pub fn decode_vote(payload: &str) -> Option<(u64, u8, u32, u8, u8, bool, u32)> {
     ))
 }
 
-/// Encode a `ROLL_WON` payload: `corpse_guid,slot,item_entry,winning_roll,winning_vote`. The
-/// winner's guid rides `GroupEvent.other_guid`, matching `encode_vote`'s convention.
-/// `winning_vote` is the tier that won (`vote_kind::NEED` or `GREED`) — without it the wire's
-/// won-line misreports every greed-only win as a Need win (187 review finding #3).
 pub fn encode_won(
     corpse_guid: u64,
     slot: u8,
@@ -198,7 +166,7 @@ pub fn decode_won(payload: &str) -> Option<(u64, u8, u32, u8, u8, u32)> {
     ))
 }
 
-/// Encode a `MASTER_LIST` payload: `corpse_guid|guid,guid,...` (the eligible-recipient set).
+/// Encode a `MASTER_LIST` payload: `corpse_guid|guid,guid...` (the eligible-recipient set).
 pub fn encode_master_list(corpse_guid: u64, eligible: &[u64]) -> String {
     let guids: Vec<String> = eligible.iter().map(|g| g.to_string()).collect();
     format!("{corpse_guid}|{}", guids.join(","))
@@ -354,7 +322,7 @@ mod tests {
         assert!(decode_money_share("-1").is_none()); // u32, no sign
     }
 
-    // ---- Realm-core loot-roll ops (issue #50) ----
+    // ---- Realm-core loot-roll ops  ----
 
     /// The op byte is a WIRE value the gateway sends and the module dispatches on, deployed
     /// separately — a renumber only one side learns about silently runs the wrong op (a VOTE

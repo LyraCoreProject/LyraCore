@@ -201,10 +201,6 @@ pub(crate) fn hit_bits(hit: &Hit) -> (u32, u32) {
     }
 }
 
-/// The chance this Proc fires, in basis points, capped at certainty. Procs-per-minute replaces the
-/// flat chance only for a Carrier that DEALT the hit: the rate is per swing, and a taken-side Proc has
-/// no swing of its own to scale by (its attacker's weapon must not decide its rate). A flat chance at
-/// or above 100 percent returns the whole roll space, so it always passes.
 pub(crate) fn proc_chance_bp(profile: &ProcProfile, side: ProcSide, attack_time_ms: u32) -> u32 {
     if profile.ppm > 0.0 && side == ProcSide::Dealer {
         let pct = profile.ppm * attack_time_ms as f32 / PPM_DIVISOR_PCT;
@@ -213,12 +209,6 @@ pub(crate) fn proc_chance_bp(profile: &ProcProfile, side: ProcSide, attack_time_
     (profile.chance as u32 * 100).min(BASIS_POINTS)
 }
 
-/// Does the hit pass this Proc's school and family filter?
-///
-/// A hit with NO spell is an auto-attack swing: it belongs to the physical school and to no family, so
-/// a school filter judges it against physical (a fire-only filter excludes it; a physical filter keeps
-/// it) and a family filter — which names spells — does not apply to it at all. That is cmangos's rule
-/// in `IsSpellProcEventCanTriggeredBy`, and it is why a filter cannot silently disarm a weapon Proc.
 fn filter_matches(profile: &ProcProfile, spell: Option<&TriggeringSpell>) -> bool {
     let Some(spell) = spell else {
         return profile.school_mask == 0 || profile.school_mask & SCHOOL_MASK_PHYSICAL != 0;

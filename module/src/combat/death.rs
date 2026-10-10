@@ -32,7 +32,7 @@ pub(crate) const CORPSE_DECAY_MICROS: i64 = 60_000_000; // a corpse lingers 60s 
 // Soul Shard when its channel's target dies mid-cast. Our Drain Soul import carries no Rust script hook
 // for that effect, so the grant lives here instead, at the ONE place every creature death already
 // funnels through. `DRAIN_SOUL_SPELL_ID` is the real vanilla spell id (1120); `SOUL_SHARD_ENTRY` is the
-// real vanilla item id (6265, hand-seeded in `seed.rs` since the .import ETL doesn't reliably carry it).
+// real vanilla item id (6265, hand-seeded in `seed.rs` since the.import ETL doesn't reliably carry it).
 pub(crate) const DRAIN_SOUL_SPELL_ID: u32 = 1120;
 pub(crate) const SOUL_SHARD_ENTRY: u32 = 6265;
 
@@ -499,7 +499,7 @@ pub fn debug_verify_lethal_damage_floor_fixture(
     Ok(())
 }
 
-// Tables' pure formulas/consts and the sibling submodules' re-exports (`roll_money`, `is_engaged`, ...)
+// Tables' pure formulas/consts and the sibling submodules' re-exports (`roll_money`, `is_engaged`,...)
 // are all pulled in from `mod.rs` (`pub use tables::*` + `pub use folds::*`/`engage::*`/`swing::*`) so
 // every symbol resolves the same as before the split.
 use super::*;
@@ -569,7 +569,7 @@ fn kill_creature_with_attribution(
     // is mutated (and `target` moved into the update) before they fire.
     let victim_entry = target.entry;
     let victim_level = target.level;
-    let victim_instance = target.instance_id; // for on_creature_death (work-item 228)
+    let victim_instance = target.instance_id;
     let current_target_guid = target.target_guid;
     // The Loot Tag, not the killing blow, owns rewards and corpse eligibility. Resolve it while the
     // creature is still live. Death dispatch defers its combat-end clear until every hook runs.
@@ -648,7 +648,7 @@ fn kill_creature_with_attribution(
             victim_is_player: false,
         },
     );
-    // Encounter kernel (work-item 228): the entry-keyed, instance-stamped creature death — the
+    // Encounter kernel : the entry-keyed, instance-stamped creature death, the
     // pet clean-despawn branch above deliberately does NOT fire this (encounters key on wild
     // creatures). Snapshots were taken before the corpse row was mutated.
     crate::hooks::fire_on_creature_death(
@@ -794,7 +794,7 @@ fn roll_corpse_loot(
     // A valid Loot Tag rolls quest-only rows with ordinary corpse loot. Visibility and takability
     // remain per-viewer decisions downstream, so `roll_creature_loot` needs no killing source.
     let dropped = crate::loot::roll_creature_loot(ctx, target.entry, target_guid);
-    // Group loot methods (work-item 187 slices 1-4): a GROUPED kill's above-threshold rows may
+    // Group loot methods : a GROUPED kill's above-threshold rows may
     // spawn a need/greed roll, below-threshold/round-robin rows get a designated looter stamped, and
     // above-threshold-under-MASTER rows get restricted to the master — all decided HERE at kill
     // time (see loot.rs's module doc for why not lazily "at loot-open"). A no-op for an ungrouped
@@ -863,11 +863,7 @@ pub(crate) fn kill_player(ctx: &ReducerContext, victim_guid: u64, killer_guid: u
 // ===========================================================================================
 //  The SHARED damage pipeline [entity]
 //
-//  Everything that happens to a target AFTER the damage number is rolled used to exist in four
-//  near-verbatim copies — the main-hand swing, the off-hand swing, the ranged projectile impact, and
-//  `spell::apply_target_damage`. They drifted twice (the off-hand ignored Disarm, the
-//  ranged impact ignored godmode), which is what a copy of a pipeline always eventually does. The
-//  pipeline now lives here, exactly once, in three stages:
+
 //
 //    1. `fold_incoming_damage` — the MODIFIER stage: outgoing % → incoming % → absorb → godmode.
 //       Every caller that rolls a fresh number runs it; the ranged IMPACT skips it because its

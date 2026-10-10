@@ -1,4 +1,4 @@
-//! Encounter kernel (work-item 228) — the mangos `InstanceScript` analogue as a PACKAGE-SUPPORT
+//! Encounter kernel, the mangos `InstanceScript` analogue as a PACKAGE-SUPPORT
 //! layer. Ships ZERO encounter content: dungeons' choreography lives in drop-in packages
 //! (`packages/dungeons/`, first consumer: 227 Deadmines), which consume three things from here:
 //!
@@ -284,10 +284,6 @@ pub struct EncounterSpawn {
     pub guid: u64,
 }
 
-/// Client-visible virtual-item display slots for a creature. [`equip_swap`] resolves authored item
-/// entries through `game_item_template` before writing this projection. The gateway relays the three
-/// display fields through its crash-safe partial VALUES path and replays them after a peer CREATE.
-/// Swept per instance ([`sweep_encounter_state`]) and per tracked despawn. [entity]
 #[table(accessor = game_encounter_equip, public, index(accessor = by_instance, btree(columns = [instance_id])))]
 pub struct EncounterEquip {
     #[primary_key]
@@ -348,11 +344,6 @@ pub fn wave_guid(entry: u32, next_low: u64) -> u64 {
     (HIGHGUID_UNIT << 48) | ((entry as u64) << 24) | (next_low & 0x00FF_FFFF)
 }
 
-/// The creature ENTRY carried in bits 24..47 of every unit guid this codebase mints (importer,
-/// seed, debug, wave, instance-population — all share the layout above). Lets cleanup code
-/// identify a guid's creature even after the entity row is gone (dead + decayed/reaped), which an
-/// entity-table lookup cannot (227 review: the Smite equip reset silently no-op'd on exactly the
-/// corpse-decayed case it existed for). Pure.
 pub fn entry_of_unit_guid(guid: u64) -> u32 {
     ((guid >> 24) & 0x00FF_FFFF) as u32
 }
@@ -364,7 +355,7 @@ pub fn wave_offset(index: usize) -> (f32, f32) {
 }
 
 /// `[V]` The `game_gameobject.state` value that renders a DOOR/BUTTON as OPEN on the 5875 client.
-/// The in-repo convention (gameobject.rs `toggle_state`'s test labels, work-item 211) is
+/// The in-repo convention (gameobject.rs `toggle_state`'s test labels) is
 /// 0 = closed/ready, 1 = open/used, and the gateway relays the raw value
 /// (`set_gameobject_state(go.state)`); no live client in this sandbox to confirm the rendering —
 /// if a live check shows doors inverted, flip THIS const (one place).
@@ -416,10 +407,6 @@ pub fn get_encounter_state(ctx: &ReducerContext, instance_id: u64, encounter_id:
         .unwrap_or(ENCOUNTER_NOT_STARTED)
 }
 
-/// Set the state, preserving `payload`. Upserts. Packages own the transition semantics (the
-/// kernel enforces none — mangos likewise lets a script move Failed→InProgress on a retry).
-/// REFUSES a reserved (bit-31) encounter_id: writing one would silently corrupt an hp-fired
-/// ratchet row (`hp_fired_key(entry)` shares the table) — review finding; refuse, never corrupt.
 pub fn set_encounter_state(
     ctx: &ReducerContext,
     instance_id: u64,
@@ -466,7 +453,7 @@ pub fn set_encounter_data(
 // ===========================================================================================
 
 /// Register "fire `on_hp_threshold` when a creature of `entry` reaches `pct`% or below" — the
-/// package-side half of the hook (the `game_hook!(on_hp_threshold, ...)` handler is the other).
+/// package-side half of the hook (the `game_hook!(on_hp_threshold,...)` handler is the other).
 /// Idempotent (check-before-insert, the `learn_spell` grant idiom): packages typically call this
 /// from their seed/fixture reducer or an `on_creature_spawn` handler, either of which may run
 /// repeatedly. `pct` must be 1..=99 (0 is the death hook's job; 100 would fire on any scratch).
@@ -475,8 +462,6 @@ pub fn watch_hp_threshold(ctx: &ReducerContext, entry: u32, pct: u8) -> Result<(
         return Err(format!("hp watch pct must be 1..=99, got {pct}"));
     }
     if entry & RESERVED_ENCOUNTER_ID_BIT != 0 {
-        // hp_fired_key(entry) FOLDS bit 31 — two entries >= 2^31 would share one ratchet row
-        // (review finding). No vanilla entry is remotely close; refuse garbage loudly.
         return Err(format!(
             "hp watch entry {entry:#x} has bit 31 set (reserved-key fold)"
         ));
@@ -566,19 +551,6 @@ fn probe_hp_thresholds(ctx: &ReducerContext, target_guid: u64) {
     }
 }
 
-// ===========================================================================================
-//  Choreography primitives
-// ===========================================================================================
-
-/// Open every DOOR/BUTTON gameobject of `go_entry` (Rhahk'Zor's door on his death, the iron door
-/// on the cannon blast): set `state` to [`DOOR_OPEN_STATE`] the way a player `use` does (same
-/// row update — the gateway's `on_go_update` relay re-emits the CREATE_OBJECT, work-item 211),
-/// but SET-OPEN rather than toggle so a re-fired death hook can never swing the door shut again.
-/// Idempotent. `instance_id` filters to THAT instance's per-instance GO copies (190 slice 2 landed
-/// the `game_gameobject.instance_id` column — the splice this doc used to defer): a boss death in
-/// instance 7 opens instance 7's door and nobody else's; `instance_id` 0 targets the open-world
-/// (static) rows. Errs when no such GO exists in that instance or its template isn't a DOOR/BUTTON
-/// (a chest's `state` means "looted" — refusing the type keeps this verb from corrupting loot state).
 pub fn open_door(ctx: &ReducerContext, go_entry: u32, instance_id: u64) -> Result<u32, String> {
     let tmpl = ctx
         .db
@@ -595,8 +567,7 @@ pub fn open_door(ctx: &ReducerContext, go_entry: u32, instance_id: u64) -> Resul
         ));
     }
     let gos = ctx.db.game_gameobject();
-    // ONE pass collects both the flip set and existence (review nit: was two full iters).
-    // 190 slice 2: the instance-equality filter this loop's splice comment documented — landed.
+
     let mut any_of_entry = false;
     let mut targets: Vec<u64> = Vec::new();
     for g in gos.iter() {
@@ -624,18 +595,6 @@ pub fn open_door(ctx: &ReducerContext, go_entry: u32, instance_id: u64) -> Resul
 
 // A wave's full placement (entries, count, anchor position, instance, encounter id).
 #[allow(clippy::too_many_arguments)]
-/// Spawn a wave of adds (VanCleef's bodyguards) at `(x, y, z)` facing `orientation`, tracked for
-/// despawn-on-reset. Each add gets a REAL `game_creature_spawn` row (so the normal corpse-decay
-/// pass reaps its body) with `respawn_secs = u32::MAX` (~136 years — decay arms the respawn that
-/// far out, so a dead add NEVER respawns; the instance is reaped long before) and a
-/// `game_encounter_spawn` tracking row so [`encounter_reset`]/[`sweep_encounter_state`] can tear
-/// everything down. Spawns via the shared `build_creature_entity`/`insert_creature_entity` path
-/// (so `on_creature_spawn` fires per add) at `instance_id`, spread on a 2 yd grid
-/// ([`wave_offset`]). Aggro/leash then ride the normal proximity-aggro + pursuit-timer leash
-/// passes — a per-wave leash RADIUS is not representable today (the engine's chase/leash radii are
-/// global consts, and the return anchor is the spawn row, i.e. the wave anchor); a custom radius needs a
-/// `CreatureSpawn` column (deferred, noted in the work item). Entries missing a template are
-/// skipped with a log line. Returns the spawned guids in `entries` order.
 pub fn spawn_wave(
     ctx: &ReducerContext,
     instance_id: u64,
@@ -674,12 +633,7 @@ pub fn spawn_wave(
             y: y + dy,
             z,
             orientation,
-            // FAR-FUTURE, not `ctx.timestamp` (review MEDIUM): a past-armed respawn_at is
-            // respawn-ELIGIBLE the instant the entity vanishes by any path that bypasses decay —
-            // debug_clear_creatures deletes entities and deliberately keeps spawn rows, and
-            // pass_respawn rebuilds at INSTANCE 0 — resurrecting the wave into the open world.
-            // A far-future stamp is equally "never matches while alive" and stays safe after any
-            // entity delete; decay's re-arm (respawn_secs = u32::MAX) keeps it far-future forever.
+
             respawn_at: ctx
                 .timestamp
                 .checked_add(spacetimedb::TimeDuration::from_micros(
@@ -832,12 +786,6 @@ pub fn encounter_reset(ctx: &ReducerContext, instance_id: u64, encounter_id: u32
     despawn_tracked(ctx, &tracked);
 }
 
-/// [`encounter_reset`] + [`reset_hp_fired`] for the named boss entries in ONE call — the verb a
-/// wipe handler almost always wants (review finding: a package that calls the bare reset but
-/// forgets the ratchets gets a re-pulled boss whose 66/33 events never fire, with no error
-/// anywhere; mangos' `Reset()` reconstructs phase state implicitly, so the trap is easy to walk
-/// into). Prefer this from 227-style wipe/evade handlers; the split verbs remain for the rare
-/// asymmetric reset.
 pub fn encounter_reset_full(
     ctx: &ReducerContext,
     instance_id: u64,
@@ -856,11 +804,6 @@ pub fn encounter_reset_full(
 /// it may already be decay-deleted, which is fine), plus this path's OWN extras: the spawn row (the
 /// row that would otherwise respawn into instance 0 — see [`EncounterSpawn`]), any equip row, and the
 /// tracking row itself.
-///
-/// This used to carry a private copy of the checklist, and that copy deleted every
-/// `game_corpse_loot` row on the guid with NO `!withheld` filter — the invariant, which the other
-/// two teardown paths honour. Wave adds are ordinary group-killable creatures and `encounter_reset` is
-/// the wipe handler, so a mid-roll wipe hit exactly this delete and silently ate the winner's item.
 fn despawn_tracked(ctx: &ReducerContext, tracked: &[EncounterSpawn]) {
     for t in tracked {
         crate::creatures::despawn_creature_entity(ctx, t.guid);
@@ -889,7 +832,7 @@ pub(crate) fn sweep_encounter_state(ctx: &ReducerContext, instance_id: u64) {
         .collect();
     despawn_tracked(ctx, &tracked);
     let states = ctx.db.game_encounter_state();
-    // by_pair prefix scan (instance_id is the leading column) — not a full-table iter (review nit).
+
     let stale: Vec<u64> = states
         .by_pair()
         .filter(&instance_id)
@@ -1000,7 +943,6 @@ mod tests {
         assert!(is_reserved_encounter_id(hp_fired_key(1)));
         assert!(is_reserved_encounter_id(hp_fired_key(646))); // Mr. Smite
         assert_eq!(hp_fired_key(646), 0x8000_0000 | 646);
-        // ...and no sane package encounter id (below the bit) is ever reserved.
         assert!(!is_reserved_encounter_id(0));
         assert!(!is_reserved_encounter_id(1));
         assert!(!is_reserved_encounter_id(0x7FFF_FFFF));

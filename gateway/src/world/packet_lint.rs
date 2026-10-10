@@ -39,7 +39,7 @@ pub fn lint_raw(opcode: u16, body: &[u8]) -> Vec<&'static str> {
         SET_FACTION_STANDING => {
             // Layout (build_set_faction_standing_raw): count u32, then per faction
             // reputation_index u32 + standing u32. An index >= 64 addresses past the client's
-            // fixed rep array — the McBride ERROR #132 crash class.
+            // fixed rep array, the McBride ERROR crash class.
             if body.len() >= 4 {
                 let count = u32::from_le_bytes(body[0..4].try_into().unwrap()) as usize;
                 for i in 0..count {

@@ -561,9 +561,9 @@ impl WorldView {
     ) -> Result<()> {
         let shards = self.shards.read().unwrap();
         let shard = shards
-            .iter()
-            .position(|registered| registered.shard_name() == coord.shard_name())
-            .ok_or_else(|| {
+.iter()
+.position(|registered| registered.shard_name() == coord.shard_name())
+.ok_or_else(|| {
                 anyhow!(
                     "cannot register viewer {}: coordinator shard `{}` is absent from the world-view shard table ({:?})",
                     viewer.session,
@@ -1004,12 +1004,6 @@ fn register_shard_callbacks(
         move |v, row| melee_disengaged(v, shard, row),
     );
 
-    // ---- recipient-keyed private event relays -----------------------------------------------
-    // The PRIVATE tier: every row is addressed to exactly one recipient, and on this feed the
-    // gateway owns the guarantee RLS used to give. Delivery is recipient-keyed (the owner-session
-    // lookup) + the explicit `private_recipient_audience` predicate — never a viewer fan.
-    // (The realm-core group and chat twins for CROSS-shard delivery ride the same dispatchers,
-    // armed once per realm-core connection by `arm_realm_private` below.)
     wire_insert_live(
         db.game_resurrect_request(),
         "game_resurrect_request.insert",
@@ -1266,11 +1260,11 @@ fn register_shard_callbacks(
     );
 }
 
-/// Register the cross-shard PRIVATE-tier twins (#22 → #483) on the REALM-CORE connection: group
+/// Register the cross-shard private relays on the REALM-CORE connection: group
 /// events, Realm Chat Lines (whispers included), Channel Notices and Mail Arrivals written
 /// realm-side for recipients whose home shard is elsewhere. Same recipient-keyed dispatchers as
 /// `arm_shard`'s private tier, armed ONCE per realm-core connection instead of once per session;
-/// the last per-session registrations are gone (#483).
+/// the last per-session registrations are gone.
 ///
 /// Only called when realm-core is a DISTINCT database (`Coordinator::connect` gates it): on a
 /// single-database gateway the world shard's own `arm_shard` registration already watches these
@@ -1450,7 +1444,7 @@ fn guarded(what: &str, body: impl FnOnce()) {
 }
 
 // -----------------------------------------------------------------------------------------------
-//  Registration helpers — the clone-per-callback + `guarded(label, ...)` shape that every
+//  Registration helpers, the clone-per-callback + `guarded(label,...)` shape that every
 //  `arm_shard` registration repeated verbatim, factored to one line per callsite. `T::Row` and
 //  `EventContext` are pinned to the module's generated types, so a mismatched table/body pairing
 //  is a compile error, not a mislabeled log line.
@@ -1583,13 +1577,8 @@ fn entity_appeared(view: &Arc<WorldView>, shard: ShardId, row: &WorldEntity) {
     }
 }
 
-/// A row changed. Three audiences, decided from the cell delta:
-///
-/// * sessions that can see the NEW cell get the same "create if unseen, else diff" treatment the
-///   per-player `on_update` gave them (the re-entry-as-update branch, unchanged);
-/// * sessions that could see the OLD cell but not the new one get a DESTROY — the packet the SDK
-///   used to produce as an `on_delete` when a row left a box;
-/// * nobody else is touched.
+/// Create or update for the new cell's viewers, destroy for viewers left behind,
+/// and leave all other viewers untouched.
 fn entity_changed(view: &Arc<WorldView>, shard: ShardId, old: &WorldEntity, new: &WorldEntity) {
     let key = entity_key(new);
     let previous = view.spatial.upsert_entity(
@@ -2727,7 +2716,7 @@ fn mail_arrived(view: &WorldView, row: &MailArrival) {
 }
 
 /// A trade status landed → the `SMSG_TRADE_STATUS` packet to the row's RECIPIENT and nobody
-/// else (same shape as [`resurrect_offered`]) (#120).
+/// else (same shape as [`resurrect_offered`]).
 fn trade_event_appeared(view: &WorldView, shard: ShardId, row: &TradeEvent) {
     let Some(viewer) = view.viewer_of_owner_on_shard(shard, OwnerGuid(row.recipient_guid)) else {
         return;
@@ -4017,12 +4006,6 @@ mod family_audience_tests {
         assert_eq!(reads.load(Ordering::Relaxed), 1);
     }
 
-    /// The addressed path finds the actor's session by guid alone, with no membership check, so
-    /// its job is the one place that must refuse a recipient whose membership row is already
-    /// gone by the time the job runs. `map_or(0, ...)` used to turn a miss into rank 0 — Guild
-    /// Master, holding every right including VIEWOFFNOTE — so a member who left or was kicked
-    /// while this job sat in the queue would receive the officer roster. `unreachable_snapshot_read`
-    /// also proves the guard runs before the snapshot read it would otherwise share.
     #[test]
     fn roster_to_actor_with_no_membership_row_sends_nothing() {
         use lyracore_shared::guild::event_kind;
@@ -4041,7 +4024,7 @@ mod family_audience_tests {
         assert!(queued_job(&actor_rx).is_empty());
     }
 
-    /// The same guard also has to check which Guild the membership row names: `map_or(0, ...)`
+    /// The same guard also has to check which Guild the membership row names: `map_or(0,...)`
     /// ignored the returned guild_id, so a member who moved to another Guild between this job's
     /// enqueue and its run would still get a roster, rendered under its new Guild's own Rank
     /// Rights.
@@ -5773,9 +5756,6 @@ mod account_claim_relay_tests {
         );
     }
 
-    /// **The bug this file's review round fixed:** `character_online_changed` fires with the
-    /// JUST-COMMITTED row's own level/zone/class, never a stale pre-login value, and marks the
-    /// Character online for the later claim close to find.
     #[test]
     fn character_online_changed_reaches_a_same_team_friend_with_the_just_committed_row() {
         let view = WorldView::new(true);
@@ -5855,12 +5835,6 @@ mod account_claim_relay_tests {
         assert!(!view.take_character_online(FRIEND));
     }
 
-    /// **The abandoned-transfer case a review round flagged:** a rolled-back same-database
-    /// transfer leaves `online: true` with no live entity — `freeze_live_entity` never sets
-    /// `online` false, and the reaper's rollback only deletes the escrow, not the Character's
-    /// stuck row. A plain `old.online` check would read true on both sides of the Character's
-    /// real next login and never fire. The login's own `session_start_micros` stamp still
-    /// changes — 0 (zeroed by the freeze) to a real timestamp — so the edge fires anyway.
     #[test]
     fn character_online_changed_fires_for_a_real_login_even_when_online_was_stuck_true() {
         let view = WorldView::new(true);
@@ -6064,10 +6038,6 @@ pub(super) fn enqueue(
 
 /// Move a session's anchor and relay the visibility delta the move implies: a CREATE for everything
 /// that entered the box, a DESTROY for everything that left it.
-///
-/// The subscription engine used to produce these as `on_insert`/`on_delete` when a box was
-/// re-subscribed. Runs on the session's OWN movement thread — never on a pump — and does no I/O:
-/// the entering rows are read out of the shard coordinator caches already in memory.
 pub(crate) fn recenter(view: &Arc<WorldView>, viewer: &Arc<Viewer>, map_id: u32, x: f32, y: f32) {
     let key = CellKey::of_position(map_id, viewer.instance_id, x, y);
     let Some(delta) = view.spatial.move_viewer_delta(viewer.session, key) else {

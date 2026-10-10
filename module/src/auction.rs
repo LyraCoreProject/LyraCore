@@ -110,12 +110,12 @@ pub struct AuctionHold {
 // Hold exists.
 crate::character_owned!(delete, fn sweep_delete_game_auction_hold(ctx, character_guid) {
     let operations: Vec<u64> = ctx
-        .db
-        .game_auction_hold()
-        .by_seller()
-        .filter(&character_guid)
-        .map(|hold| hold.operation_id)
-        .collect();
+.db
+.game_auction_hold()
+.by_seller()
+.filter(&character_guid)
+.map(|hold| hold.operation_id)
+.collect();
     for operation_id in operations {
         ctx.db.game_auction_hold().operation_id().delete(operation_id);
     }
@@ -195,12 +195,12 @@ pub struct AuctionBidHold {
 // delete sweep only removes finished rows.
 crate::character_owned!(delete, fn sweep_delete_game_auction_bid_hold(ctx, character_guid) {
     let operations: Vec<u64> = ctx
-        .db
-        .game_auction_bid_hold()
-        .by_bidder()
-        .filter(&character_guid)
-        .map(|hold| hold.operation_id)
-        .collect();
+.db
+.game_auction_bid_hold()
+.by_bidder()
+.filter(&character_guid)
+.map(|hold| hold.operation_id)
+.collect();
     for operation_id in operations {
         ctx.db.game_auction_bid_hold().operation_id().delete(operation_id);
     }
@@ -2621,7 +2621,7 @@ pub fn gw_auction_list_local(
     .map_err(|refusal| refused(refusal, "listing rejected"))
 }
 
-/// Sharded listing phase 1: atomically move the source value into a caller-identified Hold.
+/// Sharded listing: atomically move the source value into a caller-identified Hold.
 #[reducer]
 #[allow(clippy::too_many_arguments)]
 pub fn gw_auction_hold_listing(
@@ -2687,7 +2687,7 @@ pub fn gw_auction_hold_listing(
     .map_err(|refusal| refused(refusal, "listing Hold rejected"))
 }
 
-/// Sharded listing phase 2: create the realm Auction and idempotency receipt from a held payload.
+/// Sharded listing: create the realm Auction and idempotency receipt from a held payload.
 #[reducer]
 #[allow(clippy::too_many_arguments)]
 pub fn realm_auction_commit_listing(
@@ -2771,7 +2771,7 @@ fn require_listing_actor(
     Ok(())
 }
 
-/// Sharded listing phase 3: copy the matching realm receipt onto the source shard.
+/// Sharded listing: copy the matching realm receipt onto the source shard.
 #[reducer]
 pub fn realm_auction_confirm_listing(
     ctx: &ReducerContext,
@@ -2799,7 +2799,7 @@ pub fn realm_auction_confirm_listing(
     .map_err(|refusal| refused(refusal, "listing receipt conflict"))
 }
 
-/// Sharded listing phase 4: delete the Hold only after the source has matching receipt evidence.
+/// Sharded listing: delete the Hold only after the source has matching receipt evidence.
 #[reducer]
 pub fn realm_auction_settle_listing(
     ctx: &ReducerContext,
@@ -2812,7 +2812,7 @@ pub fn realm_auction_settle_listing(
         .map_err(|refusal| refused(refusal, "listing Hold is not confirmed"))
 }
 
-/// Sharded listing abort phase 3: Realm-core commits the seller's exact return Mail and durable
+/// Sharded listing abort: Realm-core commits the seller's exact return Mail and durable
 /// refund receipt together. Replays with the same payload do not create a second Mail.
 #[reducer]
 #[allow(clippy::too_many_arguments)] // The persisted refund receipt's value columns.
@@ -2867,7 +2867,7 @@ pub fn realm_auction_refund_listing(
     .map_err(|refusal| refused(refusal, "listing refund conflict"))
 }
 
-/// Sharded listing abort: after realm-core refuses phase 2, mail the held item and deposit back
+/// Sharded listing abort: after realm-core refuses, mail the held item and deposit back
 /// to the seller and delete the Hold. The gateway calls this only after Realm-core has committed
 /// the matching refund receipt and Mail. Refused once the Hold has a receipt.
 #[reducer]
@@ -2985,7 +2985,7 @@ pub fn gw_auction_cancel_local(
     drive_local_hold(ctx, request, auctioneer_guid)
 }
 
-/// Sharded bid phase 1: move the complete offer into a source-shard Hold before realm-core decides.
+/// Sharded bid: move the complete offer into a source-shard Hold before realm-core decides.
 #[reducer]
 pub fn gw_auction_hold_bid(
     ctx: &ReducerContext,
@@ -3009,7 +3009,7 @@ pub fn gw_auction_hold_bid(
     gate_and_fence(ctx, request, auctioneer_guid)
 }
 
-/// Sharded Cancellation phase 1: move the Auction Cut into a source-shard Hold before realm-core
+/// Sharded Cancellation: move the Auction Cut into a source-shard Hold before realm-core
 /// decides. A seller who cannot pay it is refused with nothing held.
 #[reducer]
 pub fn gw_auction_hold_cancel(
@@ -3034,7 +3034,7 @@ pub fn gw_auction_hold_cancel(
     gate_and_fence(ctx, request, auctioneer_guid)
 }
 
-/// Sharded bid phase 2: serialize against the realm Auction and persist one terminal decision.
+/// Sharded bid: serialize against the realm Auction and persist one terminal decision.
 #[reducer]
 pub fn realm_auction_decide_bid(
     ctx: &ReducerContext,
@@ -3061,7 +3061,7 @@ pub fn realm_auction_decide_bid(
     .map_err(|refusal| refused(refusal, "bid decision conflict"))
 }
 
-/// Sharded Cancellation phase 2: serialize against the realm Auction and persist one terminal
+/// Sharded Cancellation: serialize against the realm Auction and persist one terminal
 /// decision. A Cancelled decision removes the listing and writes its mail and notice in the same
 /// transaction; a replay changes nothing.
 #[reducer]
@@ -3090,7 +3090,7 @@ pub fn realm_auction_decide_cancel(
     .map_err(|refusal| refused(refusal, "Cancellation decision conflict"))
 }
 
-/// Sharded phase 3 for a bid or a Cancellation: consume the accepted price or the cut, or restore
+/// Sharded for a bid or a Cancellation: consume the accepted price or the cut, or restore
 /// refused value, exactly once. The operation comes from the stored Hold.
 #[reducer]
 #[allow(clippy::too_many_arguments)]
@@ -3138,7 +3138,7 @@ pub fn gw_auction_finish_bid(
     .map_err(|refusal| refused(refusal, "Hold outcome conflict"))
 }
 
-/// Sharded phase 4 for a bid or a Cancellation: place an unrepresentable purse refund in
+/// Sharded for a bid or a Cancellation: place an unrepresentable purse refund in
 /// realm-core mail exactly once. The operation comes from the stored decision.
 #[reducer]
 pub fn realm_auction_refund_bid(
@@ -3167,7 +3167,7 @@ pub fn realm_auction_refund_bid(
     .map_err(|refusal| refused(refusal, "Hold refund conflict"))
 }
 
-/// Sharded phase 5 for a bid or a Cancellation: record on the source that realm-core durably
+/// Sharded for a bid or a Cancellation: record on the source that realm-core durably
 /// accepted the refund mail. The operation comes from the stored Hold.
 #[reducer]
 pub fn gw_auction_confirm_bid_refund(
@@ -5767,7 +5767,7 @@ mod tests {
         assert_eq!(source.money, Some(40));
         assert!(source.item.is_none());
 
-        // Realm-core refused phase 2 (for example, its item catalogue lacks the template), so
+        // Realm-core refused (for example, its item catalogue lacks the template), so
         // the market never took the listing and the source Hold is the only copy of the value.
         // The refund Mail and its receipt are written on Realm-core before its source Hold moves.
         let refund = listing_refund(&source.hold(request.operation_id).unwrap().listing);

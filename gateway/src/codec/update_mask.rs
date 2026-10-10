@@ -33,7 +33,7 @@
 use std::collections::BTreeMap;
 
 /// Vanilla (build 5875) UNIT/PLAYER object update-field indices, each a u32 slot. Every number is
-/// the literal `set_int(N, ..)` / `set_bytes(N, ..)` argument from `wow_world_messages`' setters, so
+/// the literal `set_int(N,..)` / `set_bytes(N,..)` argument from `wow_world_messages`' setters, so
 /// the byte-equivalence tests cross-check them against gtker's serializer.
 ///
 /// This is the reference layout for the whole vanilla descriptor, not just the fields a caller
@@ -88,7 +88,7 @@ pub mod idx {
     /// `UNIT_FIELD_BYTES_2` — packed; BYTE 0 is the sheath state (0 stowed / 1 melee / 2 ranged), the
     /// field `CMSG_SETSHEATHED` drives. Vanilla 1.12 index 164, cross-checked against gtker
     /// `set_unit_bytes_2 → set_bytes(164, …)`. NOT `PLAYER_BYTES_2` (194) — different field, and
-    /// gtker labels this setter's params with PLAYER_BYTES_2's names, which is a red herring. [#101]
+    /// gtker labels this setter's params with PLAYER_BYTES_2's names, which is a red herring.
     pub const UNIT_BYTES_2: u16 = 164;
     /// `UNIT_FIELD_STAT0..4` — STR, AGI, STA, INT, SPI (add 0..4).
     pub const UNIT_STAT0: u16 = 150;
@@ -97,7 +97,7 @@ pub mod idx {
     /// Slot N (0-indexed): `CONTAINER_FIELD_SLOT_1 + N * 2`. The gtker vanilla builder only exposes
     /// `set_container_slot_1` (this index); slots 1+ require the hand-rolled raw encoder (same
     /// 'gtker descriptor-setter wall' as multi-aura). Cross-checked against `wow_world_messages`
-    /// vanilla `UpdateContainerBuilder::set_container_slot_1 → set_guid(50, ..)`.
+    /// vanilla `UpdateContainerBuilder::set_container_slot_1 → set_guid(50,..)`.
     pub const CONTAINER_FIELD_SLOT_1: u16 = 50;
 
     /// `PLAYER_DUEL_ARBITER` — the duel flag gameobject guid, u64 at slots 188 and 189.
@@ -135,8 +135,7 @@ pub mod idx {
     /// `GAMEOBJECT_ROTATION` — a GAMEOBJECT-descriptor field (its own index space, separate from
     /// UNIT/PLAYER above), 4 consecutive f32 slots (rot0..3, this + 0..=3). Cross-checked against
     /// `wow_world_messages` vanilla `UpdateGameObjectBuilder::set_gameobject_rotation` → `set_float(10,
-    /// ..)` — gtker's typed setter only reaches slot 0 (the descriptor-setter wall, same as multi-aura),
-    /// so all 4 slots ride the hand-rolled raw encoder (issue #515). `GAMEOBJECT_STATE` follows
+    /// so all 4 slots ride the hand-rolled raw encoder. `GAMEOBJECT_STATE` follows
     /// immediately at 14, confirming the 4-slot width.
     pub const GAMEOBJECT_ROTATION: u16 = 10;
 }

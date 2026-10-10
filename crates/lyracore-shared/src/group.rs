@@ -190,7 +190,7 @@ pub mod event_kind {
     pub const DECLINE: u8 = 2;
     /// You are no longer in a group (left / kicked / disbanded) → `SMSG_GROUP_DESTROYED`.
     pub const DESTROYED: u8 = 3;
-    // --- work-item 187 (group loot methods) / work-item 221 (money-loot split) — the roll/master-
+    // --- (group loot methods) / (money-loot split), the roll/master-
     // loot/money-share relay REUSES this same per-recipient event table + relay (see
     // `crate::loot_roll`'s module doc for why: identical shape — one recipient, a kind byte, a small
     // payload — so a parallel new table would only add binding-checklist ceremony for zero
@@ -325,8 +325,6 @@ pub mod bot_op {
 /// Module. Gateway reads at most one head from each lane per dispatch turn.
 pub const COMMAND_DISPATCH_LANES: u8 = 8;
 
-/// A terminal target receipt and its source response remain recoverable for this long after the
-/// command's admission deadline.
 pub const COMMAND_RESULT_WINDOW_MICROS: i64 = 30_000_000;
 
 /// Why the Module refused a party Durable Request. The tag is the whole reducer error text, so
@@ -783,7 +781,7 @@ mod tests {
         }
     }
 
-    /// AC 3, 4: a full destination Subgroup refuses, an out-of-range one refuses, and the
+    /// 3, 4: a full destination Subgroup refuses, an out-of-range one refuses, and the
     /// Assistant bit survives an accepted move.
     #[test]
     fn a_subgroup_move_refuses_a_full_or_out_of_range_destination() {
@@ -813,7 +811,7 @@ mod tests {
         assert_eq!(mover.moved_to_subgroup(3, 5), Ok(None));
     }
 
-    /// AC 6: a swap between two full Subgroups needs no capacity Gate: the pair trade places
+    /// 6: a swap between two full Subgroups needs no capacity Gate: the pair trade places
     /// atomically, so neither Subgroup ever holds six members mid-swap.
     #[test]
     fn a_subgroup_swap_needs_no_capacity_gate() {
@@ -829,7 +827,7 @@ mod tests {
         );
     }
 
-    /// AC 7: cm:GroupHandler.cpp:939: two members already in one Subgroup swap to a no-op.
+    /// 7: cm:GroupHandler.cpp:939: two members already in one Subgroup swap to a no-op.
     #[test]
     fn a_subgroup_swap_within_one_subgroup_is_a_no_op() {
         let first = RaidSlot::new(4, true).unwrap();
@@ -918,7 +916,7 @@ mod tests {
         }
     }
 
-    // ---- Realm-core party ops (issue #22, group slice) ----
+    // ---- Realm-core party ops (group slice) ----
 
     /// The intent op byte is a MIGRATION value as well as a wire one: `op` was END-appended to
     /// `game_bot_invite_intent` with a `0` default, so every row written before the column existed

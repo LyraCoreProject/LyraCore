@@ -102,36 +102,19 @@ pub struct Character {
     /// END-appended. [entity]
     #[default(0i64)]
     pub death_expire_micros: i64,
-    /// The instance to enter THIS character into on its next rebuild (work-item 190 slice 1 —
-    /// always 0 this slice). Set at teleport-accept time (slice 2's dungeon entry) so a relog
-    /// inside a dungeon puts the rebuilt entity back in the right instance rather than open
-    /// world; `build_player_entity` reads it, `persist_entity` writes the live entity's
-    /// `instance_id` back here on logout. `#[default(0u64)]` (typed — u64 needs 8 bytes) +
-    /// END-appended so `publish` auto-migrates existing rows (migration rule). [entity]
+
     #[default(0u64)]
     pub pending_instance_id: u64,
-    /// GM playtest authorization level (work-item 223): `0` = no access to any `.command`; the
+    /// GM playtest authorization level : `0` = no access to any `.command`; the
     /// operator-only `gm::set_gm_level` reducer is the only writer. Moderation-facing per-level
-    /// distinctions beyond "has access at all" are work-item 205's concern, not this one's — every
+    /// distinctions beyond "has access at all" are's concern, not this one's, every
     /// `gm_command` today only checks `gm_level != 0`. `#[default(0)]` + END-appended so `publish`
     /// auto-migrates existing characters to "no GM access" (safe default). Gateway-subscribed
     /// (`game_character` is in the coordinator's subscription list) → hand-synced in
     /// `character_type.rs` + widened in `gateway/tests/schema_parity.rs`.
     #[default(0)]
     pub gm_level: u8,
-    /// Released-GHOST state that must survive an entity despawn/rebuild (work-item 226 — the 224
-    /// review-finding-#2 landmine): a cross-map graveyard release (`do_repop` on map 36 → a Westfall
-    /// graveyard on map 0) DESPAWNS the live entity, and the `MSG_MOVE_WORLDPORT_ACK` rebuild goes
-    /// through `player_login`, whose relog path deleted the corpse and rebuilt `dead: false` — a
-    /// silent free resurrect. `persist_entity` stamps this from the live entity's actual ghost state
-    /// (`dead` + `PLAYER_FLAGS_GHOST`) on every NON-logout persist (cross-map hop, stale-entity
-    /// cleanup) and FORCES it false on a real logout/disconnect (`set_offline` — the established
-    /// "relog comes back alive" rule, whose corpse delete already lives in `remove_from_world`);
-    /// `player_login` consumes it: skip the corpse delete + re-apply ghost state onto the rebuilt
-    /// entity (`world::ghost_restored_fields`). `#[default(false)]` + END-appended so `publish`
-    /// auto-migrates existing rows (migration rule). Gateway-subscribed (`game_character` is in the
-    /// coordinator's subscription list) → hand-synced in `character_type.rs` + widened in
-    /// `gateway/tests/schema_parity.rs` (the `gm_level` precedent).
+
     #[default(false)]
     pub pending_ghost: bool,
     /// Rest state (196): logged out in a rest area (inn/city)? Stamped by `persist_entity` from the live
@@ -148,7 +131,7 @@ pub struct Character {
     /// precedent) + END-appended → auto-migrates.
     #[default(0u64)]
     pub rested_since_micros: u64,
-    /// GM playtest GODMODE carried across an entity REBUILD (work-item 289 — the 226 landmine wearing
+    /// GM playtest GODMODE carried across an entity REBUILD, the 226 landmine wearing
     /// a GM hat): a CROSS-MAP `.tele` (and every cross-database shard hop, which rides the same
     /// primitive) DESPAWNS the live entity, and `build_player_entity` rebuilds it from THIS row — so
     /// before this column, `.god` was silently dropped on arrival and the GM was eaten by the local
@@ -162,12 +145,7 @@ pub struct Character {
     /// `gateway/tests/schema_parity.rs` (the `gm_level`/`pending_ghost` precedent).
     #[default(false)]
     pub pending_godmode: bool,
-    /// GM playtest RUN-SPEED multiplier (basis points, 10000 = 1.0×) carried across an entity rebuild —
-    /// `pending_godmode`'s twin, same stamp/clear policy (`persisted_gm_playtest`), same reason:
-    /// `.speed 3` then `.tele valley` used to arrive back at 1×. `#[default(10000)]` (a bare int
-    /// literal is 4 bytes, which is exactly a u32 — the `WorldEntity::run_speed_mult_bp` precedent) +
-    /// END-appended so `publish` auto-migrates existing rows to 1× (byte-identical to before this
-    /// column existed). Gateway-subscribed → hand-synced in `character_type.rs` + widened parity.
+
     #[default(10000)]
     pub pending_run_speed_mult_bp: u32,
     /// Bank bag slots bought at a banker (0..=6). Mirrors `WorldEntity.bank_bag_slots` while online

@@ -312,7 +312,7 @@ pub(crate) const SPEED_MOUNTED: u8 = 3;
 // --- STANCES / FORMS (the value WorldEntity.stance holds + the value `p0` carries on an E_SET_STANCE
 // effect; 0-based, our OWN small taxonomy — THE DEFINITION SITE of the stance-id convention). 0 = Battle
 // (the login/default stance — every non-stance class also sits at 0, so they're "in Battle" inertly but
-// never gate on it). Work-item 156 widened the space past the Warrior trio to the Druid COMBAT forms
+// never gate on it). widened the space past the Warrior trio to the Druid COMBAT forms
 // (Bear/Cat/Dire Bear — the shapeshift switches the importer name-rescues to E_SET_STANCE); the druid
 // non-combat forms (Aquatic/Travel/Moonkin/Tree) remain out of scope, their markers stay inert A_FLAGs.
 // The ONE convention, end to end:
@@ -379,17 +379,6 @@ pub(crate) const STAT_ALL: u8 = 0xFF; // an A_MOD_STAT effect that buffs every a
 // --- resistance schools (the value of `p0` for an A_MOD_RESISTANCE aura; a bitmask, armor = bit 0) ---
 pub(crate) const RESIST_ARMOR: u8 = 0x01; // physical armor (bit 0 of the school mask)
 
-/// Canonical, ordered list of every INSTANT (`E_*`) effect kind — the deduplicated effect taxonomy the
-/// importer maps mangos `Effect` ids onto. This is the SINGLE source of truth for "every instant kind
-/// that exists": `tests.rs`'s `instant_kind_wire_values_exhaustive` loops it (never a hand-copied
-/// duplicate) so a kind is exhaustively covered by construction, and referencing every `E_*` const here
-/// keeps an as-yet-unwired one from tripping `dead_code` (CI's clippy gate runs `-D warnings`, so a
-/// kind added to the taxonomy but left OFF this slice fails the build, not just a test). This
-/// replaces the old `_TAXONOMY` scaffold + four separately hand-copied `E_*`/`A_*` lists in `tests.rs`,
-/// one of which had drifted (E_BLINK/E_PERSISTENT_AREA/E_FISH/E_OPEN_LOCK were missing from it).
-/// `#[allow(dead_code)]`: like `_TAXONOMY` before it, this binding is read only from `#[cfg(test)]`
-/// code (`tests.rs`), so the non-test `lib` build never itself "reads" `ALL_INSTANT_KINDS` — but every
-/// `E_*` const named INSIDE it is still counted as used, which is the array's actual job.
 #[allow(dead_code)]
 pub(crate) const ALL_INSTANT_KINDS: &[u8] = &[
     E_DAMAGE,

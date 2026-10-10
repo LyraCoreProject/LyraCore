@@ -90,7 +90,7 @@ crate::character_owned!(not_transported, fn sweep_transfer_game_character_shard(
 
 /// Upsert the index entry for `character_guid`. Shared by [`set_character_shard`] (the gateway's
 /// write, on realm-core) and by `transfer::do_finish` (the module's write, in the SAME transaction
-/// that releases the escrow — AC#3).
+/// that releases the escrow).
 pub(crate) fn record_shard(
     ctx: &ReducerContext,
     character_guid: u64,

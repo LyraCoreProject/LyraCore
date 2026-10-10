@@ -628,12 +628,10 @@ pub(crate) fn apply_commit<S: DeliverySink>(
     if payment == Some(CodPayment::Hold) {
         return Err(format!(
             "mail escrow {escrow_id}: mail {cod_mail_id} owes {sender_guid} no delivered price yet \
-             — holding the payment"
+            — holding the payment"
         ));
     }
     let subject = if pays_cod {
-        // A payment fenced by the previous Gateway stored this prefix. The client adds it again
-        // for a COD_PAYMENT letter.
         draft
             .subject
             .strip_prefix(LEGACY_COD_PAYMENT_PREFIX)
@@ -727,7 +725,7 @@ pub(crate) fn apply_take_fence<S: TakeFenceSink>(
     if money != expect_money {
         return Err(format!(
             "mail {mail_id} holds {money} copper, not the {expect_money} this take was driven for \
-             — refusing to fence an amount the payout would not match"
+            — refusing to fence an amount the payout would not match"
         ));
     }
     sink.clear_mail_money(mail_id);

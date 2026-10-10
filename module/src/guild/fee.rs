@@ -336,7 +336,7 @@ trait FeeLedger {
     );
 }
 
-/// Phase 1. Gates in mangos order: the NPC, the Charter template, the purse, then a bag slot for
+/// Gates in mangos order: the NPC, the Charter template, the purse, then a bag slot for
 /// the Charter (`cm:GuildHandler.cpp:726-755`, `cm:PetitionsHandler.cpp:76-134`).
 fn hold_fee<P: FeePurse>(purse: &mut P, hold: HeldFee) -> Result<(), FeeError> {
     if hold.operation_id == 0 {
@@ -375,7 +375,7 @@ fn charter_fits(max_count: u32, held: usize) -> bool {
     max_count == 0 || held < max_count as usize
 }
 
-/// Phase 2. Exactly one decision per operation id; a retry changes nothing.
+/// Exactly one decision per operation id; a retry changes nothing.
 fn decide_fee<L: FeeLedger>(
     ledger: &mut L,
     operation_id: u64,
@@ -445,7 +445,7 @@ fn charter_gate<L: FeeLedger>(
     Ok(())
 }
 
-/// Phase 3. A Hold with another operation id, or none, means this finish already ran. Both
+/// A Hold with another operation id, or none, means this finish already ran. Both
 /// outcomes need the payer in the world here, so a Character in transit keeps its Hold for the
 /// destination.
 fn finish_fee<P: FeePurse>(
@@ -765,7 +765,7 @@ impl FeeLedger for CtxLedger<'_> {
     }
 }
 
-/// Fee phase 1 on the payer's Home Shard: move the fee from the purse into a Fee Hold. While that
+/// Fee on the payer's Home Shard: move the fee from the purse into a Fee Hold. While that
 /// Hold exists, the same operation id with the same request is a replay and succeeds without a
 /// second debit. After the finish deletes the Hold, a replay would take the fee again, so the
 /// Gateway never replays a hold.
@@ -785,7 +785,7 @@ pub fn gw_guild_fee_hold(
     .map_err(FeeError::into_text)
 }
 
-/// Fee phase 2 on Realm-core: commit the one decision for `operation_id`. Always Ok once a
+/// Fee on Realm-core: commit the one decision for `operation_id`. Always Ok once a
 /// decision exists for this payer and kind, accepted or refused.
 #[reducer]
 pub fn realm_guild_fee_decide(
@@ -800,7 +800,7 @@ pub fn realm_guild_fee_decide(
         .map_err(FeeError::into_text)
 }
 
-/// Fee phase 3 on the payer's Home Shard: spend the Hold, or refund it when Realm-core refused,
+/// Fee on the payer's Home Shard: spend the Hold, or refund it when Realm-core refused,
 /// then delete it. Without a Hold for `operation_id` it is a replay and changes nothing.
 #[reducer]
 pub fn gw_guild_fee_finish(

@@ -86,7 +86,7 @@ pub struct VmapGeneration {
     pub expected_bytes: u64,
     /// Immutable 32-byte BLAKE3 digest of the canonical manifest stream.
     pub manifest_digest: Vec<u8>,
-    /// Immutable canonical identity of the source client data used to plan this generation.
+
     pub source_identity: String,
     /// Immutable canonical identity of the selected map/cell coverage.
     pub selection_identity: String,
@@ -875,15 +875,6 @@ pub fn probe_rays(
     )
 }
 
-// ===========================================================================================
-//  Model floor heights — a down-ray probe over the same collision-class triangle store,
-//  so creature Z-placement/movement can stand on model floors (bridges, WMO interiors like
-//  Deadmines' decks) that terrain's heightmap knows nothing about (`terrain::ground_z` only
-//  samples the ADT MCVT grid — the walkable surface UNDER a bridge, not the deck itself).
-// ===========================================================================================
-
-/// How far above `probe_z` the down-ray starts — covers a probe that's already sitting exactly
-/// on (or a hair under, from float drift) the floor it should detect.
 const FLOOR_PROBE_UP_YD: f32 = 2.0;
 /// How far below `probe_z` the down-ray searches — generous enough to reach the ground floor of
 /// a multi-deck WMO interior (Deadmines) from a probe standing on an upper deck.
