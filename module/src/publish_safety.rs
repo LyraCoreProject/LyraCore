@@ -32,8 +32,7 @@ const DESTRUCTIVE_LONG_FLAGS: &[&str] = &["--clear-database", "--delete-data"];
 /// Strip a `#`-comment from one line of shell (or Python), respecting single- and double-quoted
 /// strings so a `#` inside one survives.
 ///
-/// `test_scan::strip_line_comment` understands Rust's `//` and is no use here. Two shell rules this
-/// must get right, both load-bearing on the real files:
+/// Two shell rules this must get right, both load-bearing on the real files:
 /// - `#` only opens a comment at the start of a WORD. `[ ${#dbs[@]} -eq 0 ]` in
 ///   the sanctioned deploy script is code, not a comment, and a naive scanner truncates that script
 ///   at line 30 — losing the publish line entirely and passing vacuously.
@@ -124,8 +123,8 @@ fn destructive_publish_lines(src: &str) -> Vec<(usize, String)> {
 
 /// `src` with comments gone and every whitespace run collapsed to one space, so a block of shell
 /// can be compared for EQUALITY (or exact containment) instead of by loose `.contains()` on raw
-/// text. Same rationale as `test_scan::shape_of`, which is for Rust bodies and cannot be reused:
-/// equality is what distinguishes "this guard IS exactly this" from "these words appear somewhere".
+/// text. Equality is what distinguishes "this guard IS exactly this" from "these words appear
+/// somewhere".
 fn shell_shape(src: &str) -> String {
     src.lines()
         .map(strip_shell_comment)

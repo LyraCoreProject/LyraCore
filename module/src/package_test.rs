@@ -6,7 +6,8 @@
 use crate::runtime_script::{ask_event, EffectSink, RuntimeScriptHost, ScriptEvent};
 
 pub(crate) use crate::runtime_script::{EntityView, RuntimeScript};
-pub(crate) use crate::test_scan::{code_of, read_scanned, shape_of};
+pub(crate) use crate::test_scan::read_scanned;
+pub(crate) use lyracore_test_support::source_scan::{code_of, shape_of};
 
 /// Run `scripts` in order for one event on a fresh Runtime Script Host and return the Script
 /// Answer, read as `script_binding::ask` reads it. Staged Effects are discarded. Any Script
