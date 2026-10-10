@@ -12,7 +12,7 @@ implementation-status statements are not — this began life as a planning docum
 > [`danger-zones.md`](./danger-zones.md) §2 for the traps a content import can spring.
 
 Exact collision geometry has an additional shard-ownership and live-acceptance contract: see
-[`vmap-rollout.md`](./vmap-rollout.md). Its importer preflight admits map 0 only on shards that own
+[`vmap-rollout.md`](./verification/vmap-rollout.md). Its importer preflight admits map 0 only on shards that own
 both its terrain and nav data; importing never enables collision consumption.
 
 How real vanilla 1.12.1 content reaches the SpacetimeDB backend. Captured from the 2026-06-17
@@ -414,7 +414,7 @@ families now compare effect magnitude, with an existing aura's stack count folde
   value. The policy tests use its 5-combo-point value.
 
 **How the families are checked on a live database:**
-[`aura-stacking-probes.md`](./aura-stacking-probes.md) — replacement, refusal, per-caster Blessings,
+[`aura-stacking-probes.md`](./verification/aura-stacking-probes.md) — replacement, refusal, per-caster Blessings,
 and persisted `game_aura` rows, through the debug reducers on a development database.
 
 ## Where these questions landed

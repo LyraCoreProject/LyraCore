@@ -427,7 +427,7 @@ run a stage at a time.
 Exact model/WMO rays are a separate step. `./lyracore import vmaps` imports matching profile
 geometry on each populated World Shard and skips the Instance Pool. It does not enable exact rays.
 `debug_set_vmap_enabled true` remains an explicit Operator decision after the checks in
-[`docs/vmap-rollout.md`](./vmap-rollout.md).
+[`docs/verification/vmap-rollout.md`](./verification/vmap-rollout.md).
 
 The direct importer can dry-run the bounded Map 36 entry and exit route with
 `--vmap <client Data/ dir> --world-profile instances`. This is an archive-derived geometry check.

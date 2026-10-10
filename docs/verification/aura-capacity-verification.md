@@ -2,7 +2,7 @@
 
 The vanilla 32-buff/16-debuff cap is enforced by `pick_aura_slot`
 (`module/src/spell/cast/targeting.rs`) and its caller in `aura_apply`. Two rungs prove it, per
-[`architecture.md` §8](./architecture.md#8-verification): pure policy is a `cargo test` vector, the
+[`architecture.md` §8](../architecture.md#8-verification): pure policy is a `cargo test` vector, the
 persisted/wire behavior needs a live stack. This page is the live rung's procedure — read it when you
 need to re-run the probe (a regression, a reviewer request, or before touching `pick_aura_slot` or the
 overflow relay).
