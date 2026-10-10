@@ -24,8 +24,7 @@ fn an_unsharded_store_routes_the_vote_through_the_players_own_reducer() {
     let store = WorldFake::default();
     loot::run_vote(
         &store,
-        7,
-        42,
+        Actor::new(42).unwrap(),
         500,
         2,
         lyracore_shared::loot_roll::vote_kind::NEED,
@@ -50,8 +49,7 @@ fn a_sharded_store_routes_the_vote_to_realm_core_with_the_authenticated_guid() {
     let (realm, world, _instances, _calls) = party_topology();
     loot::run_vote(
         world.as_ref(),
-        7,
-        GINGER,
+        Actor::new(GINGER).unwrap(),
         500,
         2,
         lyracore_shared::loot_roll::vote_kind::GREED,
@@ -99,8 +97,7 @@ fn a_vote_on_a_staged_roll_reaches_realm_core_after_its_promotion() {
 
     loot::run_vote(
         world.as_ref(),
-        7,
-        GINGER,
+        Actor::new(GINGER).unwrap(),
         500,
         2,
         lyracore_shared::loot_roll::vote_kind::GREED,
@@ -211,7 +208,7 @@ fn relay_tick_promotes_a_staging_roll_and_clears_it() {
 fn a_refused_promotion_keeps_its_source_identity_and_staging_row_for_retry() {
     let realm = std::sync::Arc::new(WorldFake {
         loot_roll: LootRollState {
-            realm_loot_op_error: Some("another Loot Roll is active in this slot".into()),
+            realm_loot_op_refusal: Some("another Loot Roll is active in this slot".into()),
             ..Default::default()
         },
         ..Default::default()
@@ -293,7 +290,7 @@ fn a_failed_settlement_retries_after_the_shard_recovers() {
             ..Default::default()
         },
         loot_roll: LootRollState {
-            settle_loot_roll_error: Some("Shard connection unavailable".into()),
+            settle_loot_roll_transport_lost: true,
             ..Default::default()
         },
         ..Default::default()
@@ -530,9 +527,9 @@ fn loot_master_give_refusals_keep_the_world_session_alive() {
 }
 
 #[test]
-fn loot_roll_timeout_ends_the_world_session() {
+fn loot_roll_transport_loss_ends_the_world_session() {
     let mut s = quest_store();
-    s.loot_roll.loot_action_failure = Some("gw_loot_roll reducer timed out after 10s".to_string());
+    s.loot_roll.loot_action_transport_lost = true;
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, _c_dec, server) = enter_world(store, 1);
     CMSG_LOOT_ROLL {
@@ -553,8 +550,7 @@ fn loot_roll_timeout_ends_the_world_session() {
 #[test]
 fn loot_master_give_transport_failure_ends_the_world_session() {
     let mut s = quest_store();
-    s.loot_roll.loot_action_failure =
-        Some("gw_loot_master_give reducer transport disconnected".to_string());
+    s.loot_roll.loot_action_transport_lost = true;
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, _c_dec, server) = enter_world(store, 1);
     CMSG_LOOT_MASTER_GIVE {
