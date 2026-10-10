@@ -27,7 +27,7 @@ struct RestTrigger {
 
 const REST_TRIGGERS: &[RestTrigger] = &[
     // Lion's Pride Inn, Goldshire (Elwynn, map 0). Center + a radius covering the interior. FIXTURE
-    // ESTIMATE — confirm the exact threshold against the real inn on a real client.
+    // ESTIMATE: confirm the exact threshold against the real inn on a real client.
     RestTrigger {
         map_id: 0,
         x: -9464.0,

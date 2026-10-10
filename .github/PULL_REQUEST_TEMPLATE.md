@@ -34,7 +34,7 @@ Higher rungs, if the change reaches them — no rung substitutes for another
 ## What you did NOT verify
 
 <!-- Say it plainly. "Not run on macOS", "no live stack, so the wire path is untested",
-     "needs a human eyeball on the client" — the last one means this PR does not close
+     "needs a human eyeball on the client". The last one means this PR does not close
      the issue. -->
 
 ## Risk
