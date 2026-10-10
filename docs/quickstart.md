@@ -237,8 +237,7 @@ portal crosses to the Instance Pool, which the same import populates with map 36
 > The fixture used to carry a second Elwynn database and a **walkable seam** on the road to
 > Goldshire — a mid-session handoff between two databases serving one map. That region tier was
 > removed from the codebase on 2026-08-08 (#471, an operator decision to keep the alpha on the broad
-> splits alone); the design is preserved in
-> [`docs/region-sharding.md`](./region-sharding.md) (retired).
+> splits alone).
 
 ⚠ **Expect empty ground beyond Northshire.** Everything the fixture seeds lives in Northshire
 Valley; the rest of Elwynn stays unpopulated until you run `./lyracore import` (which needs a
@@ -810,8 +809,6 @@ name matches nothing and still exits 1 — indistinguishable from "already stopp
   production (four-database) deploy procedure. `dev up` runs its own four-database fixture
   topology — the same tiers, on a loopback node — which is the deliberate exception to §3; do not
   use it to launch or repair a production realm.
-- [`docs/region-sharding.md`](./region-sharding.md) — retired (#471): the removed region tier's
-  design — seam menus, assignments, view merge — kept for reference.
 - [`docs/architecture.md`](./architecture.md) and [`docs/schema.md`](./schema.md) — how the module
   and gateway are put together, if you are here to write game logic.
 

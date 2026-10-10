@@ -218,9 +218,8 @@ purpose".
 
 **Direction:** the **region tier** — sub-map seams, the seam menu, region→shard assignments, warm
 mid-walk handoff — was **removed 2026-08-08 (#471)**, an operator decision to keep the alpha on the
-broad splits above (continents, the instance pool, realm-core) and nothing finer. The design is
-preserved in [`region-sharding.md`](./region-sharding.md) (retired), and the two region tables stay
-in the module schema, unused, because dropping a table is a destructive migration.
+broad splits above (continents, the instance pool, realm-core) and nothing finer. The two region
+tables stay in the module schema, unused, because dropping a table is a destructive migration.
 
 ⚠ **All four databases run on one SpacetimeDB node, and that is a licensing constraint as well as a
 deployment fact.** Seven `spacetimedb-*` crates are BSL-1.1, whose Additional Use Grant permits
@@ -565,10 +564,8 @@ This is the sharding model in full: the hierarchy, routing, and transfer.
 > **The region tier was removed 2026-08-08 (#471).** Sub-map regions, the seam menu, region→shard
 > assignments, and mid-walk seam detection with its warm handoff are gone from the gateway, by
 > operator decision: the alpha runs on the broad splits alone — the static shard map (continents),
-> the instance pool, and realm-core. The full design is preserved, with its reasoning, in
-> [`region-sharding.md`](./region-sharding.md) (retired). `game_map_region` and
-> `game_region_assignment` stay in the module schema, unused — dropping a table is a destructive
-> migration.
+> the instance pool, and realm-core. `game_map_region` and `game_region_assignment` stay in the
+> module schema, unused, because dropping a table is a destructive migration.
 
 ### 6.1 The hierarchy
 
@@ -665,9 +662,7 @@ coordinator stream feeds ONE in-process cell index keyed by `(map_id, instance_i
 guids are globally unique across databases (#103/#108), so a peer on any connected shard renders
 through the same dispatch. With the region tier gone (#471), no open-world map has two owners — the
 remaining splits are per-map and per-instance, whose populations never share an AOI box, so nothing
-straddles a database boundary mid-walk. The retired per-player view-merge mechanism
-(`LYRACORE_VIEW_MERGE`, `split_box_by_shard`, the seam chat/emote relay) is documented in
-[`region-sharding.md`](./region-sharding.md).
+straddles a database boundary mid-walk.
 
 ### 6.5 Load sampling
 
@@ -760,7 +755,6 @@ warning banner states plainly, not a contradiction to resolve in this document.
 | [`danger-zones.md`](./danger-zones.md) | **Authoritative.** Traps, tooling gotchas, and the exact deploy/verify procedure. Read before any engine change. |
 | [`schema.md`](./schema.md) | The table-level data model. |
 | [`package-api.md`](./package-api.md) | The Package API, version 1: what a Package's Rust half may call, and what core promises about it. |
-| [`region-sharding.md`](./region-sharding.md) | Retired (#471): the removed region tier's design — seam menus, assignments, view merge — kept for reference. |
 
 ### Operating and building
 
