@@ -663,7 +663,13 @@ pub(crate) fn emit_creature_path(
     let spline_id = begin_leg(ctx, &mut mover);
     let start = (mover.x, mover.y, mover.z);
     let length = movement_path::length(start, &points);
-    if !length.is_finite() || length <= 0.0 {
+    if !length.is_finite() {
+        return;
+    }
+    if length <= 0.0 {
+        // Already drawn on the destination: end the old leg here, as `move_to_point` does.
+        stop_where_rendered(ctx, &mut mover);
+        ctx.db.game_world_entity().guid().update(mover);
         return;
     }
     let speed = if run { speeds::RUN } else { speeds::WALK };
