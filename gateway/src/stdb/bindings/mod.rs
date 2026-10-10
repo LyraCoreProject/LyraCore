@@ -772,6 +772,7 @@ pub mod gw_client_command_reducer;
 pub mod gw_del_friend_reducer;
 pub mod gw_del_ignore_reducer;
 pub mod gw_destroy_guild_charter_reducer;
+pub mod gw_destroy_item_reducer;
 pub mod gw_disenchant_reducer;
 pub mod gw_duel_accept_reducer;
 pub mod gw_duel_cancel_reducer;
@@ -828,6 +829,7 @@ pub mod gw_set_trade_gold_reducer;
 pub mod gw_set_trade_item_reducer;
 pub mod gw_skin_reducer;
 pub mod gw_spirit_res_reducer;
+pub mod gw_split_item_reducer;
 pub mod gw_stop_attack_reducer;
 pub mod gw_take_loot_reducer;
 pub mod gw_taxi_node_status_reducer;
@@ -1952,6 +1954,7 @@ pub use gw_client_command_reducer::gw_client_command;
 pub use gw_del_friend_reducer::gw_del_friend;
 pub use gw_del_ignore_reducer::gw_del_ignore;
 pub use gw_destroy_guild_charter_reducer::gw_destroy_guild_charter;
+pub use gw_destroy_item_reducer::gw_destroy_item;
 pub use gw_disenchant_reducer::gw_disenchant;
 pub use gw_duel_accept_reducer::gw_duel_accept;
 pub use gw_duel_cancel_reducer::gw_duel_cancel;
@@ -2008,6 +2011,7 @@ pub use gw_set_trade_gold_reducer::gw_set_trade_gold;
 pub use gw_set_trade_item_reducer::gw_set_trade_item;
 pub use gw_skin_reducer::gw_skin;
 pub use gw_spirit_res_reducer::gw_spirit_res;
+pub use gw_split_item_reducer::gw_split_item;
 pub use gw_stop_attack_reducer::gw_stop_attack;
 pub use gw_take_loot_reducer::gw_take_loot;
 pub use gw_taxi_node_status_reducer::gw_taxi_node_status;
@@ -3518,6 +3522,7 @@ pub enum Reducer {
     },
     GwBindHome {
         request_actor: SessionActor,
+        innkeeper_guid: u64,
     },
     GwBusyTrade {
         request_actor: SessionActor,
@@ -3590,6 +3595,11 @@ pub enum Reducer {
     GwDestroyGuildCharter {
         request_actor: SessionActor,
         charter_item_guid: u64,
+    },
+    GwDestroyItem {
+        request_actor: SessionActor,
+        slot: u8,
+        count: u32,
     },
     GwDisenchant {
         request_actor: SessionActor,
@@ -3833,6 +3843,12 @@ pub enum Reducer {
     },
     GwSpiritRes {
         request_actor: SessionActor,
+    },
+    GwSplitItem {
+        request_actor: SessionActor,
+        from_slot: u8,
+        to_slot: u8,
+        count: u32,
     },
     GwStopAttack {
         request_actor: SessionActor,
@@ -4744,6 +4760,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwDelFriend { .. } => "gw_del_friend",
             Reducer::GwDelIgnore { .. } => "gw_del_ignore",
             Reducer::GwDestroyGuildCharter { .. } => "gw_destroy_guild_charter",
+            Reducer::GwDestroyItem { .. } => "gw_destroy_item",
             Reducer::GwDisenchant { .. } => "gw_disenchant",
             Reducer::GwDuelAccept { .. } => "gw_duel_accept",
             Reducer::GwDuelCancel { .. } => "gw_duel_cancel",
@@ -4799,6 +4816,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwSetTradeItem { .. } => "gw_set_trade_item",
             Reducer::GwSkin { .. } => "gw_skin",
             Reducer::GwSpiritRes { .. } => "gw_spirit_res",
+            Reducer::GwSplitItem { .. } => "gw_split_item",
             Reducer::GwStopAttack { .. } => "gw_stop_attack",
             Reducer::GwTakeLoot { .. } => "gw_take_loot",
             Reducer::GwTaxiNodeStatus { .. } => "gw_taxi_node_status",
@@ -6994,8 +7012,10 @@ Reducer::DebugVerifyRangedLethalDamageFloorFixture{
 }),
             Reducer::GwBindHome{
                 request_actor,
+                innkeeper_guid,
 }             => __sats::bsatn::to_vec(&gw_bind_home_reducer::GwBindHomeArgs {
                 request_actor: request_actor.clone(),
+                innkeeper_guid: innkeeper_guid.clone(),
 }),
             Reducer::GwBusyTrade{
                 request_actor,
@@ -7124,6 +7144,15 @@ Reducer::DebugVerifyRangedLethalDamageFloorFixture{
 }             => __sats::bsatn::to_vec(&gw_destroy_guild_charter_reducer::GwDestroyGuildCharterArgs {
                 request_actor: request_actor.clone(),
                 charter_item_guid: charter_item_guid.clone(),
+}),
+            Reducer::GwDestroyItem{
+                request_actor,
+                slot,
+                count,
+}             => __sats::bsatn::to_vec(&gw_destroy_item_reducer::GwDestroyItemArgs {
+                request_actor: request_actor.clone(),
+                slot: slot.clone(),
+                count: count.clone(),
 }),
             Reducer::GwDisenchant{
                 request_actor,
@@ -7556,6 +7585,17 @@ Reducer::GwIgnoreTrade{
                 request_actor,
 }             => __sats::bsatn::to_vec(&gw_spirit_res_reducer::GwSpiritResArgs {
                 request_actor: request_actor.clone(),
+}),
+            Reducer::GwSplitItem{
+                request_actor,
+                from_slot,
+                to_slot,
+                count,
+}             => __sats::bsatn::to_vec(&gw_split_item_reducer::GwSplitItemArgs {
+                request_actor: request_actor.clone(),
+                from_slot: from_slot.clone(),
+                to_slot: to_slot.clone(),
+                count: count.clone(),
 }),
             Reducer::GwStopAttack{
                 request_actor,

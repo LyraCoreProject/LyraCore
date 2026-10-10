@@ -5,6 +5,8 @@ pub(crate) type MoveRecord = (u32, f32, f32, f32, f32, u32);
 
 #[derive(Default)]
 pub(crate) struct SessionState {
+    pub(crate) movement_world:
+        Option<std::sync::Arc<crate::world::tests::benilla_tests::MovementWorld>>,
     /// WORLDPORT_ACK gate: true = entity present -> a spurious ack is ignored;
     /// false (derive-Default) = absent -> a genuine transfer is pending.
     pub(crate) entity_in_world: bool,
@@ -112,7 +114,7 @@ impl SessionStore for WorldFake {
     fn movement_update(
         &self,
         _account_id: u64,
-        _self_guid: u64,
+        self_guid: u64,
         opcode: u32,
         info: &MovementInfo,
     ) -> Result<()> {
@@ -128,6 +130,9 @@ impl SessionStore for WorldFake {
             info.orientation,
             info.timestamp,
         ));
+        if let Some(world) = &self.session.movement_world {
+            world.update(self_guid, opcode, info)?;
+        }
         Ok(())
     }
 

@@ -27,12 +27,16 @@ pub enum ItemRefusal {
     ItemNotUsable,
     /// The action is blocked for now: a live bandage cooldown, or a cast Gate.
     NotRightNow,
+    /// The item template forbids destruction.
+    Indestructible,
+    /// An equipped bag still contains items.
+    BagNotEmpty,
     /// The Module could not act and has no gameplay reason to name.
     Internal,
 }
 
 impl ItemRefusal {
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 14] = [
         Self::ItemNotFound,
         Self::InventoryFull,
         Self::WrongSlot,
@@ -44,6 +48,8 @@ impl ItemRefusal {
         Self::BankUnavailable,
         Self::ItemNotUsable,
         Self::NotRightNow,
+        Self::Indestructible,
+        Self::BagNotEmpty,
         Self::Internal,
     ];
 
@@ -60,6 +66,8 @@ impl ItemRefusal {
             Self::BankUnavailable => "item:bank_unavailable",
             Self::ItemNotUsable => "item:item_not_usable",
             Self::NotRightNow => "item:not_right_now",
+            Self::Indestructible => "item:indestructible",
+            Self::BagNotEmpty => "item:bag_not_empty",
             Self::Internal => "item:internal",
         }
     }

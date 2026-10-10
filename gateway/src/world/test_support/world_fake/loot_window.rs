@@ -17,6 +17,9 @@ pub(crate) struct LootWindowState {
 
 impl LootWindowStore for WorldFake {
     fn loot_target_money(&self, _target_guid: u64) -> Result<u32> {
+        if let Some(state) = &self.benilla_gameplay {
+            return Ok(state.lock().unwrap().corpse_money);
+        }
         Ok(self.loot_window.corpse_money)
     }
 
@@ -25,6 +28,9 @@ impl LootWindowStore for WorldFake {
         _target_guid: u64,
         viewer_guid: u64,
     ) -> Result<Vec<codec::LootItemView>> {
+        if let Some(state) = &self.benilla_gameplay {
+            return Ok(state.lock().unwrap().loot.clone());
+        }
         Ok(self
             .loot_window
             .corpse_loot_by_viewer
@@ -76,13 +82,17 @@ impl LootWindowStore for WorldFake {
             .lock()
             .unwrap()
             .push(target_guid);
+        if let Some(state) = &self.benilla_gameplay {
+            let mut state = state.lock().unwrap();
+            state.copper += std::mem::take(&mut state.corpse_money);
+        }
         Ok(LootWindowRequestStatus::Applied)
     }
 
     fn take_loot(
         &self,
         _account_id: u64,
-        _actor_guid: u64,
+        actor_guid: u64,
         target_guid: u64,
         loot_slot: u8,
     ) -> Result<LootWindowRequestStatus> {
@@ -91,6 +101,21 @@ impl LootWindowStore for WorldFake {
             .lock()
             .unwrap()
             .push((target_guid, loot_slot));
+        if let Some(state) = &self.benilla_gameplay {
+            let mut state = state.lock().unwrap();
+            if let Some(index) = state.loot.iter().position(|item| item.0 == loot_slot) {
+                let (_, entry, stack_count, _, random_property_id) = state.loot.remove(index);
+                state.inventory.push(codec::ItemInstanceView {
+                    guid: 0x4000_0000_0000_0000 | (u64::from(loot_slot) + 1),
+                    owner_guid: actor_guid,
+                    entry,
+                    stack_count,
+                    random_property_id,
+                    slot: 23,
+                    ..Default::default()
+                });
+            }
+        }
         Ok(LootWindowRequestStatus::Applied)
     }
 }

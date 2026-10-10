@@ -1101,7 +1101,10 @@ fn register_shard_callbacks(
         db.game_character(),
         "game_character.update",
         &view,
-        |v, old, new| character_online_changed(v, old, new),
+        move |v, old, new| {
+            character_home_changed(v, shard, old, new);
+            character_online_changed(v, old, new);
+        },
     );
     wire_insert_live(
         db.game_mail_arrival(),
@@ -2535,6 +2538,42 @@ fn friend_notice_candidates(view: &WorldView, subject_guid: u64) -> Vec<Arc<View
         .collect()
 }
 
+fn character_home_changed(view: &WorldView, shard: ShardId, old: &Character, new: &Character) {
+    let home = (
+        new.home_x,
+        new.home_y,
+        new.home_z,
+        new.home_map,
+        new.home_zone,
+    );
+    if home
+        == (
+            old.home_x,
+            old.home_y,
+            old.home_z,
+            old.home_map,
+            old.home_zone,
+        )
+    {
+        return;
+    }
+    let Some(viewer) = view.viewer_of_owner_on_shard(shard, OwnerGuid(new.guid)) else {
+        return;
+    };
+    enqueue(viewer, move |_| {
+        let mut body = Vec::with_capacity(20);
+        for coordinate in [home.0, home.1, home.2] {
+            body.extend_from_slice(&coordinate.to_le_bytes());
+        }
+        body.extend_from_slice(&home.3.to_le_bytes());
+        body.extend_from_slice(&home.4.to_le_bytes());
+        vec![Outbound::Raw {
+            opcode: 0x0155,
+            body,
+        }]
+    });
+}
+
 /// A Character logged in on this Shard → `FRIEND_ONLINE` to every same-team viewer, on any Shard,
 /// who lists it as a friend (cm:CharacterHandler.cpp:856, cm:WorldSession.cpp:754,
 /// cm:SocialMgr.cpp:263-292).
@@ -3094,14 +3133,17 @@ fn online_audience(
         .collect()
 }
 
-/// An aura names its target and nothing else; the target's indexed cell anchors it. A target
-/// with no row (a unit already gone) leaves the owner leg as the only recipient, and the owner
-/// is the only viewer whose gate could still pass.
+/// Aura descriptors follow the target's AOI; channel timers also reach the caster.
 fn aura_audience(view: &WorldView, shard: ShardId, row: &Aura) -> Vec<Arc<Viewer>> {
     let key = view
         .spatial
         .entity_cell_on_shard(EntityLayer::WorldEntity, row.target_guid, shard);
-    view.cell_audience(shard, key, BOX_HALF_SPAN, &[row.target_guid])
+    view.cell_audience(
+        shard,
+        key,
+        BOX_HALF_SPAN,
+        &[row.target_guid, row.caster_guid],
+    )
 }
 
 /// An aura appeared → per viewer: array sync + self-only packets + the stealth HIDE transition
@@ -3366,6 +3408,16 @@ mod cell_audience_tests;
 
 #[cfg(test)]
 mod relay_bench;
+
+#[cfg(all(test, unix))]
+mod benilla_movement_tests {
+    #[test]
+    fn benilla_clients_observe_each_others_movement_within_aoi() {
+        crate::world::tests::benilla_tests::two_clients_observe_movement(|view, row| {
+            super::motion(view, 0, row, &Default::default());
+        });
+    }
+}
 
 #[allow(clippy::items_after_test_module)]
 #[cfg(test)]
@@ -4971,6 +5023,7 @@ mod family_audience_tests {
                     total_exp: 123,
                     created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
                     is_kill: true,
+                    rested_bonus: 0,
                 },
             );
             levelup_appeared(
@@ -5016,7 +5069,7 @@ mod family_audience_tests {
             );
             assert!(matches!(
                 queued_job(&owner_rx).as_slice(),
-                [Outbound::One(ServerOpcodeMessage::SMSG_LOG_XPGAIN(_))]
+                [Outbound::Raw { opcode: 0x01d0, .. }]
             ));
             assert!(matches!(
                 queued_job(&owner_rx).as_slice(),

@@ -240,6 +240,19 @@ impl ItemStoragePlan {
     }
 
     pub(super) fn commit(self, ctx: &ReducerContext) -> Result<(), ActionRefusal> {
+        let mut changed_offer = false;
+        for (item, &(count, soulbound)) in self.items.iter().zip(&self.original_stacks) {
+            if (item.stack_count, item.soulbound) != (count, soulbound)
+                && crate::trade::item_is_offered(ctx, self.character_guid, item.guid)
+            {
+                if item.stack_count < count {
+                    return Err(
+                        super::refused(lyracore_shared::item::ItemRefusal::NotRightNow).into(),
+                    );
+                }
+                changed_offer = true;
+            }
+        }
         let mut guids =
             allocate_item_guids(ctx, self.items.len() - self.original_stacks.len())?.into_iter();
         let instances = ctx.db.game_item_instance();
@@ -261,6 +274,9 @@ impl ItemStoragePlan {
                     instances.insert(item);
                 }
             }
+        }
+        if changed_offer {
+            crate::trade::refresh_offer(ctx, self.character_guid);
         }
         Ok(())
     }

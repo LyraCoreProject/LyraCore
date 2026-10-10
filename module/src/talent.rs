@@ -630,16 +630,7 @@ pub fn apply_learned_talents(ctx: &ReducerContext, guid: u64, owner: Identity, l
     }
 }
 
-pub(crate) fn respec_cost_copper(respec_count: u32) -> u32 {
-    const CAP_COPPER: u32 = 500_000;
-    let copper = match respec_count {
-        0 => 10_000,
-        1 => 50_000,
-        2 => 100_000,
-        n => 100_000 + 50_000 * (n - 2),
-    };
-    copper.min(CAP_COPPER)
-}
+pub(crate) use lyracore_shared::talent::respec_cost_copper;
 
 /// Shared validated core of a talent respec (`gw_reset_talents` and the debug reducer both call
 /// this). Gates
@@ -1063,5 +1054,6 @@ mod tests {
         assert_eq!(respec_cost_copper(10), 500_000); // cap (50g)
         assert_eq!(respec_cost_copper(11), 500_000); // stays capped
         assert_eq!(respec_cost_copper(1000), 500_000);
+        assert_eq!(respec_cost_copper(u32::MAX), 500_000);
     }
 }

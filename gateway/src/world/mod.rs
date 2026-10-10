@@ -92,8 +92,8 @@ pub(crate) use party::PartyStore;
 use social::handle_social;
 pub(crate) use social::ContactOutcome;
 pub(crate) use social::SocialStore;
+pub use store::{InteractionOutcome, WorldSessionToken, WorldStore};
 pub(crate) use store::{SessionStore, ShardRoutingStore};
-pub use store::{WorldSessionToken, WorldStore};
 pub(crate) use transfer::TransferStore;
 
 /// One unit of outbound traffic for the single writer thread. A `Batch` is written contiguously so
@@ -377,6 +377,8 @@ pub struct WorldConn {
     /// condition-filtered list, so re-deriving that list at click time renumbers it under a quest
     /// accepted while the window was open.
     pub(crate) gossip_menu: Option<GossipMenuSnapshot>,
+    /// Automatic client requests announce each missing feature once per World Session.
+    unavailable_notices: std::collections::HashSet<handlers::UnavailableNotice>,
     /// The Store every message of this session runs against.
     store: RoutedStore,
     /// The shared session key K, kept from the world handshake so a session that lands on a NON-
@@ -694,6 +696,7 @@ fn world_handshake_with_queue_and_deadline<S: Read + Write + IoDeadline, C: Dead
             state: WorldState::CharSelect,
             move_coalesce: CoalesceState::default(),
             gossip_menu: None,
+            unavailable_notices: Default::default(),
             store: RoutedStore::new(store), // pinned at CMSG_PLAYER_LOGIN
             session_key: Some(session_key), // for establish_session on a non-realm shard
             guild_signed_on: None,
@@ -1135,14 +1138,29 @@ fn run_world_session_with_queue_and_deadline<S: DuplexStream, C: DeadlineClock>(
                 // Auth is over, and the typed decoder would size a buffer from the body.
                 return Err(anyhow!("world read error: CMSG_AUTH_SESSION after auth"));
             }
-            let mut framed = Vec::with_capacity(6 + body.len());
-            framed.extend_from_slice(&hdr.size.to_be_bytes());
-            framed.extend_from_slice(&hdr.opcode.to_le_bytes());
-            framed.extend_from_slice(&body);
-            let msg = match ClientOpcodeMessage::read_unencrypted(&mut std::io::Cursor::new(framed))
-            {
-                Ok(m) => m,
-                Err(e) => return Err(anyhow!("world read error: {e}")),
+            if hdr.opcode == 0x0125 {
+                let store = conn.store.current();
+                handlers::handle_at_war(&tx, &*store, &mut conn, &body)?;
+                continue;
+            }
+            if let Some(replies) = handlers::raw_unavailable_outbound(hdr.opcode, &body)? {
+                if matches!(conn.state, WorldState::InWorld(_)) {
+                    for reply in replies {
+                        send(&tx, reply)?;
+                    }
+                }
+                continue;
+            }
+            let msg = match codec::read_movement_client(hdr.opcode, &body)? {
+                Some(msg) => msg,
+                None => {
+                    let mut framed = Vec::with_capacity(6 + body.len());
+                    framed.extend_from_slice(&hdr.size.to_be_bytes());
+                    framed.extend_from_slice(&hdr.opcode.to_le_bytes());
+                    framed.extend_from_slice(&body);
+                    ClientOpcodeMessage::read_unencrypted(&mut std::io::Cursor::new(framed))
+                        .map_err(|e| anyhow!("world read error: {e}"))?
+                }
             };
             // Every in-world message is dispatched against the player's HOME shard; until
             // CMSG_PLAYER_LOGIN resolves one (and always, with a single-entry shard map) this is
@@ -1611,7 +1629,11 @@ fn dispatch(
         // field-TYPE lie; cmangos reads u32) — reinterpret the raw bits.
         if let ClientOpcodeMessage::MSG_MOVE_FALL_LAND(mv) = &msg {
             if let WorldState::InWorld(iw) = &conn.state {
-                let fall_time_ms = mv.info.fall_time.to_bits();
+                let fall_time_ms = if mv.info.flags.get_on_transport().is_some() {
+                    0
+                } else {
+                    mv.info.fall_time.to_bits()
+                };
                 let dmg = lyracore_shared::env::fall_damage(
                     fall_time_ms,
                     store.entity_max_health(iw.self_guid),
@@ -1641,7 +1663,30 @@ fn dispatch(
             }
         }
     } else {
-        log::debug!("world: ignoring {msg} (account {})", conn.account_id);
+        if handlers::is_control_receipt(&msg) {
+            return Ok(());
+        }
+        if let ClientOpcodeMessage::CMSG_SET_ACTIVE_MOVER(request) = &msg {
+            if social::self_guid(conn) == Some(request.guid.guid()) {
+                return Ok(());
+            }
+            return send(
+                tx,
+                Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(
+                    codec::build_gm_system_message(
+                        "Control of another mover is not available on this realm.".into(),
+                    ),
+                ))),
+            );
+        }
+        if let Some(outbound) = handlers::unavailable_outbound(&msg, &mut conn.unavailable_notices)
+        {
+            for message in outbound {
+                send(tx, message)?;
+            }
+        } else {
+            log::debug!("world: ignoring {msg} (account {})", conn.account_id);
+        }
     }
     Ok(())
 }
@@ -1951,4 +1996,4 @@ pub async fn run(
 #[cfg(all(test, unix))]
 mod test_support;
 #[cfg(all(test, unix))]
-mod tests;
+pub(crate) mod tests;

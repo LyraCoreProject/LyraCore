@@ -11,6 +11,13 @@ pub struct WorldSessionToken {
     pub request_nonce: u128,
 }
 
+/// A completed Character request. Infrastructure failures remain an outer `Err`.
+#[derive(Debug, PartialEq, Eq)]
+pub enum InteractionOutcome {
+    Done,
+    Refused(String),
+}
+
 /// Every Store family a World Session reaches. The blanket impl below supplies it, so a Store
 /// implements the families and never this trait.
 pub trait WorldStore:

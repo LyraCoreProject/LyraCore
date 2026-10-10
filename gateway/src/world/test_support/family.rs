@@ -31,6 +31,7 @@ pub(crate) fn in_world_conn(account_id: u64, self_guid: u64) -> WorldConn {
         }),
         move_coalesce: Default::default(),
         gossip_menu: None,
+        unavailable_notices: Default::default(),
         store: RoutedStore::new(Arc::new(WorldFake::default())),
         session_key: None,
         guild_signed_on: None,
@@ -97,7 +98,12 @@ macro_rules! npc_store_refusing_by {
                 unimplemented!("enter_areatrigger")
             }
 
-            fn bind_home(&self, _account_id: u64, _self_guid: u64) -> Result<()> {
+            fn bind_home(
+                &self,
+                _account_id: u64,
+                _self_guid: u64,
+                _innkeeper_guid: u64,
+            ) -> Result<InteractionOutcome> {
                 unimplemented!("bind_home")
             }
 

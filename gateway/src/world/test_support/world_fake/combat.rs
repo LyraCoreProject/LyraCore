@@ -8,10 +8,15 @@ pub(crate) struct CombatState {
 }
 
 impl CombatStore for WorldFake {
-    fn set_target(&self, _account_id: u64, _self_guid: u64, _target_guid: u64) -> Result<()> {
+    fn set_target(&self, _account_id: u64, _self_guid: u64, target_guid: u64) -> Result<()> {
         match &self.combat.set_target_error {
             Some(e) => Err(anyhow!("{e}")),
-            None => Ok(()),
+            None => {
+                if let Some(state) = &self.benilla_gameplay {
+                    state.lock().unwrap().selected = target_guid;
+                }
+                Ok(())
+            }
         }
     }
 

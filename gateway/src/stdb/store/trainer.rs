@@ -3,11 +3,23 @@
 use anyhow::Result;
 
 use crate::codec;
-use crate::world::TrainerStore;
+use crate::world::{InteractionOutcome, TrainerStore};
 
 use crate::stdb::Coordinator;
 
 impl TrainerStore for Coordinator {
+    fn talent_reset_cost(&self, character_guid: u64) -> Option<u32> {
+        use crate::stdb::bindings::game_character_table::GameCharacterTableAccess;
+        self.0
+            .coord()
+            .conn
+            .db
+            .game_character()
+            .guid()
+            .find(&character_guid)
+            .map(|character| lyracore_shared::talent::respec_cost_copper(character.respec_count))
+    }
+
     fn trainer_serves(&self, player_guid: u64, trainer_guid: u64) -> Result<bool> {
         self.trainer_serves(player_guid, trainer_guid)
     }
@@ -46,7 +58,7 @@ impl TrainerStore for Coordinator {
         self_guid: u64,
         reputation_index: u32,
         at_war: bool,
-    ) -> Result<()> {
+    ) -> Result<InteractionOutcome> {
         self.set_faction_at_war(account_id, self_guid, reputation_index, at_war)
     }
 
@@ -73,7 +85,12 @@ impl TrainerStore for Coordinator {
         self.learn_talent(account_id, self_guid, talent_id)
     }
 
-    fn reset_talents(&self, account_id: u64, self_guid: u64, trainer_guid: u64) -> Result<()> {
+    fn reset_talents(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        trainer_guid: u64,
+    ) -> Result<InteractionOutcome> {
         self.reset_talents(account_id, self_guid, trainer_guid)
     }
 

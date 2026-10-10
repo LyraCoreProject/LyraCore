@@ -3,7 +3,7 @@
 use anyhow::Result;
 
 use crate::codec;
-use crate::world::NpcStore;
+use crate::world::{InteractionOutcome, NpcStore};
 
 use crate::stdb::Coordinator;
 
@@ -37,8 +37,13 @@ impl NpcStore for Coordinator {
         self.npc_refuses_interaction(npc_guid, player_guid)
     }
 
-    fn bind_home(&self, account_id: u64, self_guid: u64) -> Result<()> {
-        self.bind_home(account_id, self_guid)
+    fn bind_home(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        innkeeper_guid: u64,
+    ) -> Result<InteractionOutcome> {
+        self.bind_home(account_id, self_guid, innkeeper_guid)
     }
 
     fn npc_is_innkeeper(&self, guid: u64) -> Result<bool> {

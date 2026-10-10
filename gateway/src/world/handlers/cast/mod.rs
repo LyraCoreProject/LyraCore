@@ -365,7 +365,8 @@ pub(crate) fn dispatch_cast<St: CastStore + ?Sized>(
             }
         },
         ClientOpcodeMessage::CMSG_CANCEL_AUTO_REPEAT_SPELL => Ok(ranged::cancel(store, player)),
-        ClientOpcodeMessage::CMSG_CANCEL_CAST(_) => cancel::cancel_cast(store, player),
+        ClientOpcodeMessage::CMSG_CANCEL_CAST(_)
+        | ClientOpcodeMessage::CMSG_CANCEL_CHANNELLING(_) => cancel::cancel_cast(store, player),
         ClientOpcodeMessage::CMSG_CANCEL_AURA(c) => cancel::cancel_aura(store, player, c.id),
         other => Ok(CastOutcome::PassThrough(other)),
     }

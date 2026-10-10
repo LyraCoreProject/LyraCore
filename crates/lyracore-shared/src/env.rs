@@ -6,6 +6,9 @@
 /// must be combined with the water-surface test in [`is_submerged`].
 pub const MOVEMENT_FLAG_SWIMMING: u32 = 0x0020_0000;
 
+/// Build-5875 transport movement carries a full guid and relative pose.
+pub const MOVEMENT_FLAG_ON_TRANSPORT: u32 = 0x0200_0000;
+
 /// Default player collision height.
 pub const UNDERWATER_HEAD_HEIGHT: f32 = 2.0;
 
@@ -89,15 +92,14 @@ pub fn fall_damage(fall_time_ms: u32, max_health: u32) -> u32 {
 }
 
 /// `fall_time` (u32 ms) out of a raw vanilla MovementInfo body: flags u32 LE, time u32, x/y/z/o
-/// 16 B, then [transport guid u64 + pos 16 B if flag 0x0200], [pitch f32 if SWIMMING 0x0020_0000],
+/// 16 B, then [transport guid u64 + pos 16 B if flag 0x02000000], [pitch f32 if SWIMMING 0x0020_0000],
 /// then fall_time. `None` on a short body or an on-transport mover (no fall damage on transports).
 /// NOTE the wire TYPE: cmangos reads fall time as u32 MILLISECONDS; gtker's MovementInfo types the
 /// same 4 bytes f32 (a field-type lie, like its field-name ones) — this parser and any gtker-side
 /// consumer must agree on the raw-u32 reading (`f32::to_bits` at the gtker boundary).
 pub fn fall_time_from_movement_info(body: &[u8]) -> Option<u32> {
-    const ON_TRANSPORT: u32 = 0x0200;
     let flags = u32::from_le_bytes(body.get(0..4)?.try_into().ok()?);
-    if flags & ON_TRANSPORT != 0 {
+    if flags & MOVEMENT_FLAG_ON_TRANSPORT != 0 {
         return None;
     }
     let mut off = 4 + 4 + 16; // flags + time + x/y/z/o
@@ -133,7 +135,7 @@ mod tests {
         swim.extend_from_slice(&2000u32.to_le_bytes());
         assert_eq!(fall_time_from_movement_info(&swim), Some(2000));
         // transport: no fall damage
-        let mut tr = 0x0200u32.to_le_bytes().to_vec();
+        let mut tr = 0x0200_0000u32.to_le_bytes().to_vec();
         tr.extend_from_slice(&[0u8; 60]);
         assert_eq!(fall_time_from_movement_info(&tr), None);
         // short body: None, never a panic

@@ -8,49 +8,57 @@ use super::session_actor_type::SessionActor;
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
-pub(super) struct GwBindHomeArgs {
+pub(super) struct GwDestroyItemArgs {
     pub request_actor: SessionActor,
-    pub innkeeper_guid: u64,
+    pub slot: u8,
+    pub count: u32,
 }
 
-impl From<GwBindHomeArgs> for super::Reducer {
-    fn from(args: GwBindHomeArgs) -> Self {
-        Self::GwBindHome {
+impl From<GwDestroyItemArgs> for super::Reducer {
+    fn from(args: GwDestroyItemArgs) -> Self {
+        Self::GwDestroyItem {
             request_actor: args.request_actor,
-            innkeeper_guid: args.innkeeper_guid,
+            slot: args.slot,
+            count: args.count,
         }
     }
 }
 
-impl __sdk::InModule for GwBindHomeArgs {
+impl __sdk::InModule for GwDestroyItemArgs {
     type Module = super::RemoteModule;
 }
 
 #[allow(non_camel_case_types)]
-/// Extension trait for access to the reducer `gw_bind_home`.
+/// Extension trait for access to the reducer `gw_destroy_item`.
 ///
 /// Implemented for [`super::RemoteReducers`].
-pub trait gw_bind_home {
-    /// Request that the remote module invoke the reducer `gw_bind_home` to run as soon as possible.
+pub trait gw_destroy_item {
+    /// Request that the remote module invoke the reducer `gw_destroy_item` to run as soon as possible.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
-    /// /// Use [`gw_bind_home:gw_bind_home_then`] to run a callback after the reducer completes.
-    fn gw_bind_home(&self, request_actor: SessionActor, innkeeper_guid: u64) -> __sdk::Result<()> {
-        self.gw_bind_home_then(request_actor, innkeeper_guid, |_, _| {})
+    /// /// Use [`gw_destroy_item:gw_destroy_item_then`] to run a callback after the reducer completes.
+    fn gw_destroy_item(
+        &self,
+        request_actor: SessionActor,
+        slot: u8,
+        count: u32,
+    ) -> __sdk::Result<()> {
+        self.gw_destroy_item_then(request_actor, slot, count, |_, _| {})
     }
 
-    /// Request that the remote module invoke the reducer `gw_bind_home` to run as soon as possible,
+    /// Request that the remote module invoke the reducer `gw_destroy_item` to run as soon as possible,
     /// registering `callback` to run when we are notified that the reducer completed.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and its status can be observed with the `callback`.
-    fn gw_bind_home_then(
+    fn gw_destroy_item_then(
         &self,
         request_actor: SessionActor,
-        innkeeper_guid: u64,
+        slot: u8,
+        count: u32,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -58,20 +66,22 @@ pub trait gw_bind_home {
     ) -> __sdk::Result<()>;
 }
 
-impl gw_bind_home for super::RemoteReducers {
-    fn gw_bind_home_then(
+impl gw_destroy_item for super::RemoteReducers {
+    fn gw_destroy_item_then(
         &self,
         request_actor: SessionActor,
-        innkeeper_guid: u64,
+        slot: u8,
+        count: u32,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
-            GwBindHomeArgs {
+            GwDestroyItemArgs {
                 request_actor,
-                innkeeper_guid,
+                slot,
+                count,
             },
             callback,
         )

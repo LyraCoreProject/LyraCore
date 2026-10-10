@@ -457,6 +457,16 @@ pub(crate) fn remove_items(
         .collect();
     let original_counts: Vec<u32> = stacks.iter().map(|item| item.stack_count).collect();
     super::exchange::consume_item_stacks(&mut stacks, item_entry, count).map_err(String::from)?;
+    if stacks
+        .iter()
+        .zip(&original_counts)
+        .any(|(item, original_count)| {
+            item.stack_count != *original_count
+                && crate::trade::item_is_offered(ctx, owner_guid, item.guid)
+        })
+    {
+        return Err(super::refused(ItemRefusal::NotRightNow));
+    }
     for (inst, original_count) in stacks.into_iter().zip(original_counts) {
         if inst.stack_count == original_count {
             continue;
@@ -493,6 +503,7 @@ pub(crate) fn restore_carried_items(
     for item in items {
         instances.insert(item);
     }
+    crate::trade::refresh_offer(ctx, owner_guid);
 }
 
 /// "Recently Bandaged" debuff spell id (vanilla 11196) — already seeded (a 60s `A_FLAG` marker aura, no
@@ -589,6 +600,9 @@ pub(crate) fn apply_item_use(
     let instances = ctx.db.game_item_instance();
     let mut inst = item_in_slot(ctx, player_guid, slot)
         .ok_or_else(|| refuse(ItemRefusal::ItemNotFound, format!("no item in slot {slot}")))?;
+    if crate::trade::item_is_offered(ctx, player_guid, inst.guid) {
+        return Err(ItemRefusal::NotRightNow);
+    }
     // A banked item must be taken out before it can be used — the bank is not a second action bar.
     if !is_carried_slot(inst.slot) {
         return Err(refuse(

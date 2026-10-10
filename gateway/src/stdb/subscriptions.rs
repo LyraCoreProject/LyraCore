@@ -142,25 +142,6 @@ impl Drop for PlayerSubscriptions {
     }
 }
 
-/// Bag-content slot layout — mirrors the identically-named constants in `module/src/items/ops.rs`.
-/// Flat slot space: equipped bags occupy slots 19..=22 (`BAG_SLOT_START..=22`), their CONTENTS
-/// live in the flat range `BAG_CONTENT_OFFSET..BAG_CONTENT_END` (120..191 inclusive). Slot math:
-/// `bag_idx = (slot - 120) / 18`, `slot_in_bag = (slot - 120) % 18`, `bag_equip = 19 + bag_idx`.
-const BAG_CONTENT_OFFSET: u8 = 120;
-const MAX_BAG_SIZE: u8 = 18;
-const BAG_SLOT_START: u8 = 19;
-
-/// Decompose a bag-content slot (`120..=191`) into `(bag_equip_slot, slot_in_bag)`. Returns `None`
-/// for slots outside the bag-content range. `bag_equip_slot` is the slot where the bag itself is
-/// equipped (19..=22); `slot_in_bag` is 0-indexed within that bag (0..MAX_BAG_SIZE).
-fn bag_content_parts(slot: u8) -> Option<(u8, u8)> {
-    if slot < BAG_CONTENT_OFFSET {
-        return None;
-    }
-    let rel = slot - BAG_CONTENT_OFFSET;
-    Some((BAG_SLOT_START + rel / MAX_BAG_SIZE, rel % MAX_BAG_SIZE))
-}
-
 /// Build the wire relay for one `game_teleport_event` row. Pure: takes the
 /// already-derived `still_here` boolean (whether the live entity survived the transaction — the
 /// module/gateway-mirrored same-map/cross-map signal, see the `on_teleport` callback's doc comment)
@@ -229,10 +210,13 @@ pub(crate) fn hunter_pet_outbound(row: &HunterPetProtocol) -> Vec<Outbound> {
 
 /// Build the XP-gain result for one identity-addressed row.
 pub(crate) fn xp_event_outbound(row: &XpEvent) -> Vec<Outbound> {
-    let message = codec::build_log_xpgain(row.killed_guid, row.total_exp, row.is_kill);
-    vec![Outbound::One(ServerOpcodeMessage::SMSG_LOG_XPGAIN(
-        Box::new(message),
-    ))]
+    let (opcode, body) = codec::build_log_xpgain_raw(
+        row.killed_guid,
+        row.total_exp,
+        row.is_kill,
+        row.rested_bonus,
+    );
+    vec![Outbound::Raw { opcode, body }]
 }
 
 /// Build the level-up result for one identity-addressed row.
@@ -305,7 +289,32 @@ fn build_peer_create(
         |guid| guild_projection_of(coord, guid),
     );
     let auras = world.auras.on_target(shard, row.guid);
-    match peer_create_outbound(&view, &inv, &auras) {
+    let movement = coord
+        .0
+        .coord()
+        .conn
+        .db
+        .game_entity_motion()
+        .guid()
+        .find(&row.guid)
+        .filter(|motion| motion.map_id == row.map_id && motion.instance_id == row.instance_id)
+        .filter(|motion| {
+            codec::bytes_to_movement_info(&motion.movement_info).is_ok_and(|info| {
+                info.timestamp == row.last_move_ms
+                    && info.position.x == row.x
+                    && info.position.y == row.y
+                    && info.position.z == row.z
+                    && info.orientation == row.orientation
+            })
+        });
+    match peer_create_outbound(
+        &view,
+        &inv,
+        &auras,
+        movement
+            .as_ref()
+            .map(|motion| motion.movement_info.as_slice()),
+    ) {
         Ok(out) => Some(out),
         Err(e) => {
             log::warn!("peer create encode failed for guid {}: {e}", row.guid);
@@ -335,11 +344,17 @@ fn peer_create_outbound(
     view: &codec::EntityView,
     inventory: &[codec::ItemInstanceView],
     auras: &[Aura],
+    movement: Option<&[u8]>,
 ) -> Result<Vec<Outbound>> {
     let create = codec::build_create_object(view, CreateKind::Peer, inventory, &[])?;
-    let mut out = vec![Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
-        Box::new(create),
-    ))];
+    let created = match movement {
+        Some(movement) => Outbound::Raw {
+            opcode: 0x00a9,
+            body: codec::create_with_movement(&create, movement)?,
+        },
+        None => Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(create))),
+    };
+    let mut out = vec![created];
     if !auras.is_empty() {
         out.push(aura_sync(auras.iter().cloned(), view.guid));
     }
@@ -1693,6 +1708,56 @@ pub(crate) fn stealth_visibility(
     }
 }
 
+/// Channel timers belong to the caster, including channels whose auras sit on an enemy.
+fn spell_channel_outbound(
+    coord: &Coordinator,
+    self_guid: u64,
+    row: &Aura,
+    removed: bool,
+) -> Option<Outbound> {
+    use wow_world_messages::vanilla::{MSG_CHANNEL_START_Server, MSG_CHANNEL_UPDATE_Server};
+    if row.caster_guid != self_guid {
+        return None;
+    }
+    let guard = coord.0.coord();
+    let db = &guard.conn.db;
+    let is_channel = |aura: &Aura| {
+        let flags = db
+            .game_spell()
+            .spell_id()
+            .find(&aura.spell_id)
+            .map_or(0, |spell| spell.cast_flags);
+        lyracore_shared::spell::is_channel_aura(aura.eff_kind, flags)
+    };
+    if !is_channel(row) {
+        return None;
+    }
+    let active = db
+        .game_aura()
+        .iter()
+        .filter(|aura| aura.caster_guid == self_guid && is_channel(aura))
+        .min_by_key(|aura| aura.id);
+    let packet = if removed {
+        if active.is_some() {
+            return None;
+        }
+        ServerOpcodeMessage::MSG_CHANNEL_UPDATE(MSG_CHANNEL_UPDATE_Server { time: 0 })
+    } else {
+        if active.as_ref().is_none_or(|active| active.id != row.id) {
+            return None;
+        }
+        let duration = ((row.expires_at.to_micros_since_unix_epoch()
+            - row.applied_at.to_micros_since_unix_epoch())
+            / 1000)
+            .clamp(0, u32::MAX as i64) as u32;
+        ServerOpcodeMessage::MSG_CHANNEL_START(MSG_CHANNEL_START_Server {
+            spell: row.spell_id,
+            duration,
+        })
+    };
+    Some(Outbound::One(packet))
+}
+
 /// Aura insert leg: array sync, self-only duration/run-speed/armor/sheet packets, and the
 /// stealth HIDE transition. The target's current aura set comes from the gateway's aura index,
 /// post-change like the cache it mirrors; `stealth_count` was taken on the pump.
@@ -1708,6 +1773,7 @@ pub(crate) fn aura_insert_outbound(
     stealth_count: usize,
 ) -> Vec<Outbound> {
     let mut out = Vec::new();
+    out.extend(spell_channel_outbound(coord, self_guid, row, false));
     // A stealth-hidden peer (not in `created`) must get NO per-peer relay: a partial VALUES on
     // a DESTROYed object is a client crash/desync vector.
     let visible =
@@ -1795,6 +1861,7 @@ pub(crate) fn aura_delete_outbound(
     stealth_count: usize,
 ) -> Vec<Outbound> {
     let mut out = Vec::new();
+    out.extend(spell_channel_outbound(coord, self_guid, row, true));
     let visible =
         row.target_guid == self_guid || created.lock().unwrap().contains(&row.target_guid);
     if visible {
@@ -3450,8 +3517,8 @@ fn item_gain_feedback(
     let mut out = vec![Outbound::One(ServerOpcodeMessage::SMSG_ITEM_PUSH_RESULT(
         Box::new(codec::build_item_push_result(
             self_guid,
-            255,
-            slot as u32,
+            codec::bag_content_parts(slot).map_or(255, |(bag, _)| bag),
+            u32::from(codec::bag_content_parts(slot).map_or(slot, |(_, position)| position)),
             entry,
             gained,
             stack_add,
@@ -3516,7 +3583,7 @@ pub(crate) fn item_instance_insert_outbound(
             Box::new(values),
         )));
     }
-    if let Some((bag_slot, slot_in_bag)) = bag_content_parts(row.slot) {
+    if let Some((bag_slot, slot_in_bag)) = codec::bag_content_parts(row.slot) {
         if let Some(bag) = db
             .game_item_instance()
             .iter()
@@ -3564,7 +3631,7 @@ pub(crate) fn item_instance_delete_outbound(
             Box::new(values),
         )));
     }
-    if let Some((bag_slot, slot_in_bag)) = bag_content_parts(row.slot) {
+    if let Some((bag_slot, slot_in_bag)) = codec::bag_content_parts(row.slot) {
         if let Some(bag) = db
             .game_item_instance()
             .iter()
@@ -3696,7 +3763,7 @@ fn append_final_item_slots(
         }
     }
     for (slot, item) in slots {
-        if let Some((bag_slot, slot_in_bag)) = bag_content_parts(slot) {
+        if let Some((bag_slot, slot_in_bag)) = codec::bag_content_parts(slot) {
             if let Some(bag) = item_in_slot(bag_slot) {
                 let (opcode, body) =
                     codec::build_container_slot_values(bag.guid, slot_in_bag, item.guid);
@@ -5488,7 +5555,7 @@ mod tests {
             assert_eq!(guid, row.guid);
             (7, 3)
         });
-        let player = created_player(&peer_create_outbound(&view, &[], &[]).unwrap());
+        let player = created_player(&peer_create_outbound(&view, &[], &[], None).unwrap());
         assert_eq!(player.player_guildid(), Some(7));
         assert_eq!(player.player_guildrank(), Some(3));
     }
@@ -5497,7 +5564,7 @@ mod tests {
     fn a_peer_outside_any_guild_is_created_with_an_explicit_zero() {
         let row = human_warrior();
         let player = created_player(
-            &peer_create_outbound(&peer_entity_view(&row, 0, |_| (0, 0)), &[], &[]).unwrap(),
+            &peer_create_outbound(&peer_entity_view(&row, 0, |_| (0, 0)), &[], &[], None).unwrap(),
         );
         assert_eq!(player.player_guildid(), Some(0));
         assert_eq!(player.player_guildrank(), Some(0));
@@ -6412,6 +6479,7 @@ mod tests {
                     ..Default::default()
                 }],
                 &index.on_target(0, view.guid),
+                None,
             )
             .unwrap();
             let [Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(create)), Outbound::Raw { opcode, body }] =
@@ -6451,7 +6519,7 @@ mod tests {
     fn peer_create_without_auras_needs_no_followup() {
         let mut entity = player_entity();
         entity.unit_bytes_0 = 0x0000_0101;
-        let out = peer_create_outbound(&entity_view(entity, 0), &[], &[]).unwrap();
+        let out = peer_create_outbound(&entity_view(entity, 0), &[], &[], None).unwrap();
         assert!(matches!(
             out.as_slice(),
             [Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(_))]
@@ -6504,15 +6572,12 @@ mod tests {
 
     #[test]
     fn bag_content_parts_boundaries() {
-        assert_eq!(bag_content_parts(119), None); // just below the bag-content range
-        assert_eq!(bag_content_parts(120), Some((19, 0))); // first bag, first slot
-        assert_eq!(bag_content_parts(137), Some((19, 17))); // first bag, last slot (0..MAX_BAG_SIZE)
-        assert_eq!(bag_content_parts(138), Some((20, 0))); // second bag, first slot
-        assert_eq!(bag_content_parts(191), Some((22, 17))); // fourth (last) bag, last slot
-                                                            // The function has no upper-bound gate on the nominal 4-bag range (that gate lives at the
-                                                            // caller, which only ever looks up a bag that actually exists) — pin its actual unclamped
-                                                            // behavior past 191 rather than asserting an invariant it doesn't enforce.
-        assert_eq!(bag_content_parts(192), Some((23, 0)));
+        assert_eq!(codec::bag_content_parts(119), None); // just below the bag-content range
+        assert_eq!(codec::bag_content_parts(120), Some((19, 0))); // first bag, first slot
+        assert_eq!(codec::bag_content_parts(137), Some((19, 17))); // first bag, last slot (0..MAX_BAG_SIZE)
+        assert_eq!(codec::bag_content_parts(138), Some((20, 0))); // second bag, first slot
+        assert_eq!(codec::bag_content_parts(191), Some((22, 17))); // fourth (last) bag, last slot
+        assert_eq!(codec::bag_content_parts(192), None);
     }
 
     fn item_view(guid: u64, entry: u32) -> codec::ItemInstanceView {
@@ -7175,7 +7240,7 @@ mod tests {
     fn creature_create_outbound() -> Vec<Outbound> {
         let mut creature = creature_entity();
         creature.unit_bytes_0 = 0x0000_0101;
-        peer_create_outbound(&entity_view(creature, 0), &[], &[]).unwrap()
+        peer_create_outbound(&entity_view(creature, 0), &[], &[], None).unwrap()
     }
 
     #[test]

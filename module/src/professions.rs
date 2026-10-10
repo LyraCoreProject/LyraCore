@@ -336,6 +336,11 @@ pub(crate) fn apply_disenchant(ctx: &ReducerContext, guid: u64, slot: u8) -> Res
     }
     let inst = crate::items::item_in_slot(ctx, guid, slot)
         .ok_or_else(|| format!("no item in slot {slot}"))?;
+    if crate::trade::item_is_offered(ctx, guid, inst.guid) {
+        return Err(crate::items::refused(
+            lyracore_shared::item::ItemRefusal::NotRightNow,
+        ));
+    }
     require_gear(ctx, inst.entry)?; // weapon/armor only — never destroy a trade-good stack for 1 dust
                                     // AUTO-LEARN Enchanting on the first disenchant (idempotent), giving the skill-up hook a row to climb.
     crate::skill::learn_profession(

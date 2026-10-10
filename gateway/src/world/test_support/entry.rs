@@ -121,6 +121,10 @@ pub(crate) fn auth_session(
 /// fields via `..`. `quest_store()` is the sibling for tests that also need a login entity.
 pub(crate) fn tester_store(account_id: u64) -> WorldFake {
     WorldFake {
+        trainer: TrainerState {
+            talent_reset_quote: Some(10_000),
+            ..Default::default()
+        },
         session: SessionState {
             entity_in_world: true,
             username: "TESTER".into(),

@@ -131,6 +131,7 @@ pub(crate) fn check_area_exploration(
             total_exp: xp,
             created_at: ctx.timestamp,
             is_kill: false,
+            rested_bonus: 0,
         });
     }
 }
