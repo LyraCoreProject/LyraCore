@@ -21,9 +21,9 @@
 //!    consumer pays one predictable branch per damage event and nothing else.
 //! 3. **Primitives** — thin package-callable choreography verbs: [`open_door`], [`spawn_wave`]
 //!    (with despawn-on-reset bookkeeping via `game_encounter_spawn`), [`equip_swap`] (durable
-//!    virtual-item display projection), [`move_to_point`] (the
-//!    existing creature move-event emission pattern, used directly — work-item 181's shared leg
-//!    chokepoint is NOT built yet; fold this in when it lands), and [`encounter_reset`].
+//!    virtual-item display projection), [`move_to_point`] (one
+//!    leg through `creatures::tick::emit_move_spline`; the creature tick advances the stored
+//!    position), and [`encounter_reset`].
 //!
 //! Reset/sweep: 190 slice 3 (instance reap) deletes per-instance kernel state via
 //! [`sweep_encounter_state`], called from `instance::teardown_instance_inner` right before the
@@ -32,13 +32,13 @@
 
 use spacetimedb::{table, ReducerContext, Table};
 
-use lyracore_shared::{constants, spatial};
+use lyracore_shared::constants;
 
 use crate::game_item_template;
 
 use crate::{
-    game_creature_spawn, game_creature_spline, game_creature_template, game_gameobject,
-    game_gameobject_template, game_instance, game_world_entity,
+    game_creature_spawn, game_creature_template, game_gameobject, game_gameobject_template,
+    game_instance, game_world_entity,
 };
 
 /// Package-owned encounter selected by the EventAI import boundary.
@@ -756,13 +756,12 @@ pub fn equip_swap(
     Ok(())
 }
 
-/// Send a creature on a single movement leg to `(x, y, z)` (Smite's run to the weapon rack): the
-/// EXISTING creature move-event emission pattern (chase/pet-follow legs), used directly — emit one
-/// `CreatureMoveEvent` (relayed as `SMSG_MONSTER_MOVE`) and snap the server-side position/grid to
-/// the destination, exactly like a chase leg. Duration from the snare-aware
-/// `combat::effective_move_speed` over the 2D distance. NOTE (future cleanup, work-item 181): when
-/// the shared leg chokepoint lands, route this through it instead. Errs for a missing/player/dead
-/// mover; a zero-length leg is a no-op Ok.
+/// Send a creature on one movement leg to `(x, y, z)`, the Smite rack-run motion. The leg starts
+/// where the client draws the mover now, and the creature tick advances the stored position along
+/// it as along any other leg, so a reader mid-leg never sees the destination. The duration comes
+/// from the snare-aware `combat::effective_move_speed` over the 2D distance. Errs for a missing,
+/// player or dead mover. An immobilized mover is a no-op Ok. A mover the client already draws on
+/// the point stops there and takes no new leg.
 pub fn move_to_point(
     ctx: &ReducerContext,
     creature_guid: u64,
@@ -787,29 +786,18 @@ pub fn move_to_point(
         constants::speeds::WALK
     };
     let speed = crate::combat::effective_move_speed(ctx, creature_guid, base);
+    if speed <= 0.0 {
+        return Ok(());
+    }
+    let spline_id = crate::creatures::tick::begin_leg(ctx, &mut e);
     let (dx, dy) = (x - e.x, y - e.y);
     let dist = (dx * dx + dy * dy).sqrt();
-    if dist <= f32::EPSILON || speed <= 0.0 {
-        return Ok(()); // already there (or immobilized) — no zero-length leg
+    if dist <= f32::EPSILON {
+        // End the old leg here, so a relay arrival sees a leg of its own land on the point.
+        crate::creatures::tick::stop_where_rendered(ctx, &mut e);
+        entities.guid().update(e);
+        return Ok(());
     }
-    let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u32;
-    // STRICTLY-INCREASING spline id (227 review HIGH): the codec contract says a non-increasing
-    // spline_id per creature is IGNORED by the client (gateway/src/codec/movement.rs). Every
-    // tick-pass emitter is once-per-creature-per-tick so `now_ms` suffices there, but a package
-    // calling this twice in ONE transaction (same timestamp) would have its second leg silently
-    // client-dropped while the server position moved — take max(now_ms, last+1) over the mover's
-    // pending legs so back-to-back calls stay renderable.
-    // The spline row is per-mover and updated in place, so the "two legs in one transaction" guard
-    // reads the LIVE row's id rather than scanning an append-only event table.
-    let spline_id = ctx
-        .db
-        .game_creature_spline()
-        .guid()
-        .find(creature_guid)
-        .map_or(now_ms, |last| now_ms.max(last.spline_id.wrapping_add(1)));
-    // ONE relay path (perf 2.3) — see `creatures::tick::emit_move_spline`. This site kept writing
-    // `game_creature_move_event` after the gateway stopped subscribing it, so scripted encounter
-    // movement moved the server and nothing else.
     crate::creatures::tick::emit_move_spline(
         ctx,
         creature_guid,
@@ -822,14 +810,7 @@ pub fn move_to_point(
         e.instance_id,
         (e.grid_x, e.grid_y),
     );
-    let (gx, gy) = spatial::grid_cell(x, y);
-    e.x = x;
-    e.y = y;
-    e.z = z;
-    e.grid_x = gx;
-    e.grid_y = gy;
-    e.cell = spatial::grid_cell_id(gx, gy);
-    e.last_move_ms = now_ms;
+    e.last_move_ms = crate::creatures::tick::now_ms(ctx);
     entities.guid().update(e);
     Ok(())
 }

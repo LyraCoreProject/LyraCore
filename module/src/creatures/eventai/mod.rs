@@ -60,7 +60,9 @@ pub(crate) use presentation::{
 };
 pub use relay::*;
 #[cfg(feature = "debug_reducers")]
-pub(crate) use relay::{replace_relay_catalogue_for_debug, replace_single_relay_for_debug};
+pub(crate) use relay::{
+    replace_relay_catalogue_for_debug, replace_relays_for_debug, replace_single_relay_for_debug,
+};
 pub use tables::*;
 
 use spacetimedb::ReducerContext;

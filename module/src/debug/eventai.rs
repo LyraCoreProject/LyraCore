@@ -1,8 +1,10 @@
 //! EventAI production-boundary verifiers for standalone tests.
 
-use spacetimedb::{reducer, ReducerContext};
+use spacetimedb::{reducer, ReducerContext, Table};
 
-use crate::{game_encounter_equip, game_world_entity};
+use crate::{
+    game_creature_ai_relay_arrival, game_creature_spline, game_encounter_equip, game_world_entity,
+};
 
 const FIXTURE_OWNER_ENTRY: u32 = 51_000;
 const FIXTURE_OWNER_GUID: u64 = (0xF130_u64 << 48) | ((FIXTURE_OWNER_ENTRY as u64) << 24) | 1;
@@ -101,4 +103,97 @@ pub fn debug_verify_eventai_summon_expiry(ctx: &ReducerContext) -> Result<(), St
         .find(FIXTURE_OWNER_GUID)
         .ok_or_else(|| "fixture EventAI owner is unavailable".to_string())?;
     crate::creatures::verify_summon_expiry_boundaries_for_debug(ctx, &owner, FIXTURE_OWNER_ENTRY)
+}
+
+/// Start a relay that runs `source_guid` to `selected_guid` and, once the leg lands, equips item 50
+/// through an arrival relay. The test reads the equipment row to see whether the arrival fired.
+/// It replaces the entire relay catalogue, so never call it on a live realm.
+#[reducer]
+pub fn debug_start_relay_move(
+    ctx: &ReducerContext,
+    source_guid: u64,
+    selected_guid: u64,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    start_relay_move(ctx, source_guid, selected_guid)
+}
+
+/// [`debug_start_relay_move`], then run its arrival at once. The arrival must put the mover on the
+/// destination, reap the leg and run the arrival relay. It replaces the entire relay catalogue, so
+/// never call it on a live realm.
+#[reducer]
+pub fn debug_verify_relay_arrival_placement(
+    ctx: &ReducerContext,
+    source_guid: u64,
+    selected_guid: u64,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    start_relay_move(ctx, source_guid, selected_guid)?;
+    let arrival = ctx
+        .db
+        .game_creature_ai_relay_arrival()
+        .iter()
+        .find(|arrival| arrival.source_guid == source_guid)
+        .ok_or_else(|| "the relay scheduled no arrival".to_string())?;
+    ctx.db
+        .game_creature_ai_relay_arrival()
+        .scheduled_id()
+        .delete(arrival.scheduled_id);
+    let destination = (arrival.x, arrival.y, arrival.z);
+    crate::creatures::run_relay_arrival(ctx, arrival);
+
+    let mover = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(source_guid)
+        .ok_or_else(|| "the mover is gone".to_string())?;
+    if (mover.x, mover.y, mover.z) != destination {
+        return Err(format!(
+            "the arrival left the mover at ({}, {}, {}), not at {destination:?}",
+            mover.x, mover.y, mover.z
+        ));
+    }
+    if ctx
+        .db
+        .game_creature_spline()
+        .guid()
+        .find(source_guid)
+        .is_some()
+    {
+        return Err("the arrival left the landed leg in place".to_string());
+    }
+    if ctx
+        .db
+        .game_encounter_equip()
+        .creature_guid()
+        .find(source_guid)
+        .is_none()
+    {
+        return Err("the arrival relay did not run".to_string());
+    }
+    Ok(())
+}
+
+fn start_relay_move(
+    ctx: &ReducerContext,
+    source_guid: u64,
+    selected_guid: u64,
+) -> Result<(), String> {
+    let catalogue_version = crate::creatures::replace_relays_for_debug(
+        ctx,
+        &[
+            (90_002, "source>selected", "move-dynamic:0:0:0:run:90003"),
+            (90_003, "source>source", "set-equipment:0:50:0:0"),
+        ],
+    )?;
+    crate::creatures::start_imported_relay(
+        ctx,
+        90_002,
+        source_guid,
+        selected_guid,
+        1,
+        catalogue_version,
+    )?;
+    Ok(())
 }

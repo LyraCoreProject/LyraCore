@@ -4,60 +4,30 @@
 
 mod support;
 
-use std::collections::BTreeMap;
 use std::time::Duration;
 
-use lyracore_shared::spatial::{grid_cell, GRID_CELL_SIZE, MAP_COORD_MAX};
-use support::Standalone;
+use support::{
+    assert_near, distance, leg, leg_destination, lone_wolf, number, position, Standalone, LEG_YD,
+};
 
-/// Long enough to span several firings, short enough to stay inside one 50 yd cell.
-const LEG_YD: f32 = 20.0;
-
-type Row = BTreeMap<String, String>;
-
-fn number<T: std::str::FromStr>(row: &Row, column: &str) -> T {
-    row[column]
-        .parse()
-        .unwrap_or_else(|_| panic!("{column} is not a number in {row:?}"))
-}
-
-fn leg(shard: &Standalone, guid: &str) -> Row {
-    let mut legs = shard.query_rows(&format!(
-        "SELECT sx, sy, sz, dx, dy, dz, start_micros, dur_ms FROM game_creature_spline \
-         WHERE guid = {guid}"
-    ));
-    assert_eq!(legs.len(), 1, "{legs:?}");
-    legs.remove(0)
-}
+/// The stored row of an out-of-combat walker stays at the leg start until it drifts 4 yd, which a
+/// walk of 2.5 yd/s reaches at about 1.6 s. A renewal this long after the first path lands well
+/// before that.
+const RENEW_AFTER: Duration = Duration::from_millis(900);
+/// The least the stored row must lag the drawn point for the renewal to prove anything.
+const MIN_LAG_YD: f32 = 0.1;
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_path_renewed_mid_leg_starts_where_the_client_renders_the_mover() {
     let mut shard = Standalone::start("creature-path-renewal");
-    shard.publish_module();
-    shard.assert_call("claim_operator", &[]);
-    shard.assert_call("install_guid_range", &["0"]);
-    shard.assert_call("debug_seed_scenario_fixtures", &[]);
-    shard.assert_call("debug_spawn_player_entity", &["1"]);
-    shard.assert_sql("DELETE FROM game_world_entity WHERE entry = 51000");
-    shard.assert_call("debug_spawn_at_feet", &["1", "51000", "5"]);
-    // With no Character left, the wolf stays out of combat, so its stored row may lag its leg.
-    shard.assert_sql("DELETE FROM game_world_entity WHERE guid = 1");
-
-    let wolf = shard.query_rows("SELECT * FROM game_world_entity WHERE entry = 51000");
-    assert_eq!(wolf.len(), 1, "{wolf:?}");
-    let guid = wolf[0]["guid"].clone();
-    let (x, y, z): (f32, f32, f32) = (
-        number(&wolf[0], "x"),
-        number(&wolf[0], "y"),
-        number(&wolf[0], "z"),
-    );
-    let (grid_x, _) = grid_cell(x, y);
-    let centre_x = MAP_COORD_MAX - (grid_x as f32 + 0.5) * GRID_CELL_SIZE;
+    let wolf = lone_wolf(&mut shard);
+    let guid = wolf["guid"].clone();
+    let destination = leg_destination(&wolf);
     let destination = [
-        (x + LEG_YD.copysign(centre_x - x)).to_string(),
-        y.to_string(),
-        z.to_string(),
+        destination.0.to_string(),
+        destination.1.to_string(),
+        destination.2.to_string(),
     ];
     let path_args = [
         guid.as_str(),
@@ -72,8 +42,9 @@ fn a_path_renewed_mid_leg_starts_where_the_client_renders_the_mover() {
     let dur_ms: u32 = number(&first, "dur_ms");
     assert!(dur_ms >= 4_000, "{LEG_YD} yd walked in only {dur_ms} ms");
 
-    // Renew part way along the leg, at no particular phase of the 0.5 s firing.
-    std::thread::sleep(Duration::from_millis(1_730));
+    std::thread::sleep(RENEW_AFTER);
+    let row_query = format!("SELECT * FROM game_world_entity WHERE guid = {guid}");
+    let stored_before = position(&shard.query_rows(&row_query)[0]);
     shard.assert_call("debug_creature_path", &path_args);
     let renewed = leg(&shard, &guid);
 
@@ -90,16 +61,26 @@ fn a_path_renewed_mid_leg_starts_where_the_client_renders_the_mover() {
         from + (to - from) * walked
     };
     let rendered = (lerp("sx", "dx"), lerp("sy", "dy"), lerp("sz", "dz"));
+    let lag = distance(rendered, stored_before);
+    assert!(
+        lag >= MIN_LAG_YD,
+        "the stored row must lag the drawn point {rendered:?} before the renewal, or the test \
+         cannot show the bug, but it is at {stored_before:?}"
+    );
+
     let start: (f32, f32, f32) = (
         number(&renewed, "sx"),
         number(&renewed, "sy"),
         number(&renewed, "sz"),
     );
-    assert!(
-        (start.0 - rendered.0).abs() < 0.01
-            && (start.1 - rendered.1).abs() < 0.01
-            && (start.2 - rendered.2).abs() < 0.01,
-        "the renewed path must start at {rendered:?}, where the client rendered the wolf, but it \
-         starts at {start:?}"
+    assert_near(
+        start,
+        rendered,
+        "the renewed path must start where the client rendered the wolf",
+    );
+    assert_near(
+        position(&shard.query_rows(&row_query)[0]),
+        start,
+        "the stored row must hold the renewed path's start",
     );
 }

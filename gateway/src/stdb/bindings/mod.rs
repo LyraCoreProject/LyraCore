@@ -291,6 +291,7 @@ pub mod debug_stage_meeting_stone_group_reducer;
 pub mod debug_stage_meeting_stone_reducer;
 pub mod debug_stage_ranged_lethal_damage_floor_fixture_reducer;
 pub mod debug_stage_reward_letter_fixture_reducer;
+pub mod debug_start_relay_move_reducer;
 pub mod debug_stress_relay_reducer;
 pub mod debug_sweep_encounter_state_reducer;
 pub mod debug_sweep_slice_lens_reducer;
@@ -320,6 +321,7 @@ pub mod debug_verify_mail_fixture_held_reducer;
 pub mod debug_verify_mail_legacy_fixture_reducer;
 pub mod debug_verify_raid_quest_credit_fixture_reducer;
 pub mod debug_verify_ranged_lethal_damage_floor_fixture_reducer;
+pub mod debug_verify_relay_arrival_placement_reducer;
 pub mod debug_vmap_area_info_reducer;
 pub mod debug_vmap_ray_instance_reducer;
 pub mod debug_vmap_ray_reducer;
@@ -1469,6 +1471,7 @@ pub use debug_stage_meeting_stone_group_reducer::debug_stage_meeting_stone_group
 pub use debug_stage_meeting_stone_reducer::debug_stage_meeting_stone;
 pub use debug_stage_ranged_lethal_damage_floor_fixture_reducer::debug_stage_ranged_lethal_damage_floor_fixture;
 pub use debug_stage_reward_letter_fixture_reducer::debug_stage_reward_letter_fixture;
+pub use debug_start_relay_move_reducer::debug_start_relay_move;
 pub use debug_stress_relay_reducer::debug_stress_relay;
 pub use debug_sweep_encounter_state_reducer::debug_sweep_encounter_state;
 pub use debug_sweep_slice_lens_reducer::debug_sweep_slice_lens;
@@ -1498,6 +1501,7 @@ pub use debug_verify_mail_fixture_held_reducer::debug_verify_mail_fixture_held;
 pub use debug_verify_mail_legacy_fixture_reducer::debug_verify_mail_legacy_fixture;
 pub use debug_verify_raid_quest_credit_fixture_reducer::debug_verify_raid_quest_credit_fixture;
 pub use debug_verify_ranged_lethal_damage_floor_fixture_reducer::debug_verify_ranged_lethal_damage_floor_fixture;
+pub use debug_verify_relay_arrival_placement_reducer::debug_verify_relay_arrival_placement;
 pub use debug_vmap_area_info_reducer::debug_vmap_area_info;
 pub use debug_vmap_ray_instance_reducer::debug_vmap_ray_instance;
 pub use debug_vmap_ray_reducer::debug_vmap_ray;
@@ -3163,6 +3167,10 @@ pub enum Reducer {
         delay_ms: u32,
     },
     DebugStageRewardLetterFixture,
+    DebugStartRelayMove {
+        source_guid: u64,
+        selected_guid: u64,
+    },
     DebugStressRelay {
         character_guid: u64,
         victim_entry: u32,
@@ -3256,6 +3264,10 @@ pub enum Reducer {
         creature_guid: u64,
         expected_health: u32,
         expected_damage_log: u32,
+    },
+    DebugVerifyRelayArrivalPlacement {
+        source_guid: u64,
+        selected_guid: u64,
     },
     DebugVmapAreaInfo {
         map: u32,
@@ -4621,6 +4633,7 @@ impl __sdk::Reducer for Reducer {
                 "debug_stage_ranged_lethal_damage_floor_fixture"
             }
             Reducer::DebugStageRewardLetterFixture => "debug_stage_reward_letter_fixture",
+            Reducer::DebugStartRelayMove { .. } => "debug_start_relay_move",
             Reducer::DebugStressRelay { .. } => "debug_stress_relay",
             Reducer::DebugSweepEncounterState { .. } => "debug_sweep_encounter_state",
             Reducer::DebugSweepSliceLens => "debug_sweep_slice_lens",
@@ -4663,6 +4676,9 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugVerifyRaidQuestCreditFixture => "debug_verify_raid_quest_credit_fixture",
             Reducer::DebugVerifyRangedLethalDamageFloorFixture { .. } => {
                 "debug_verify_ranged_lethal_damage_floor_fixture"
+            }
+            Reducer::DebugVerifyRelayArrivalPlacement { .. } => {
+                "debug_verify_relay_arrival_placement"
             }
             Reducer::DebugVmapAreaInfo { .. } => "debug_vmap_area_info",
             Reducer::DebugVmapRay { .. } => "debug_vmap_ray",
@@ -6343,7 +6359,14 @@ Reducer::DebugStageMeetingStone{
 }),
             Reducer::DebugStageRewardLetterFixture => __sats::bsatn::to_vec(&debug_stage_reward_letter_fixture_reducer::DebugStageRewardLetterFixtureArgs {
                 }),
-Reducer::DebugStressRelay{
+Reducer::DebugStartRelayMove{
+                source_guid,
+                selected_guid,
+}             => __sats::bsatn::to_vec(&debug_start_relay_move_reducer::DebugStartRelayMoveArgs {
+                source_guid: source_guid.clone(),
+                selected_guid: selected_guid.clone(),
+}),
+            Reducer::DebugStressRelay{
                 character_guid,
                 victim_entry,
                 item_entry,
@@ -6512,6 +6535,13 @@ Reducer::DebugVerifyRangedLethalDamageFloorFixture{
                 creature_guid: creature_guid.clone(),
                 expected_health: expected_health.clone(),
                 expected_damage_log: expected_damage_log.clone(),
+}),
+            Reducer::DebugVerifyRelayArrivalPlacement{
+                source_guid,
+                selected_guid,
+}             => __sats::bsatn::to_vec(&debug_verify_relay_arrival_placement_reducer::DebugVerifyRelayArrivalPlacementArgs {
+                source_guid: source_guid.clone(),
+                selected_guid: selected_guid.clone(),
 }),
             Reducer::DebugVmapAreaInfo{
                 map,

@@ -137,6 +137,11 @@ with: `get_encounter_state`, `set_encounter_state`, `get_encounter_data`, `set_e
 `encounter_reset`, `encounter_reset_full`, and the four `ENCOUNTER_*` state constants. Core ships no
 encounter content; the kernel exists for Packages.
 
+`move_to_point` sends the creature on one leg from the point the client draws it at. The creature's
+stored position follows the leg and reaches the destination when the leg lands, so a Package that
+needs the arrival schedules it from the leg, as a relay arrival does, and does not read the
+destination from the row at once.
+
 ### Actor verbs and helpers
 
 `crate::actor` holds explicit-guid operations with the Gates of the core operation each names.
