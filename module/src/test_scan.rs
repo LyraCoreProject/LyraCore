@@ -298,8 +298,8 @@ pub(crate) fn repo_root() -> std::path::PathBuf {
 /// The optional directory a repo-relative path belongs to, if any — the ONLY directory whose
 /// absence licenses skipping that path.
 ///
-/// A drop-in package is optional ONE PACKAGE AT A TIME — a missing `packages/playerbots/src/goals.rs`
-/// inside an installed `packages/playerbots/` is a typo, not an uninstalled package — unlike the
+/// A drop-in package is optional ONE PACKAGE AT A TIME — a missing `packages/sample_package/src/goals.rs`
+/// inside an installed `packages/sample_package/` is a typo, not an uninstalled package — unlike the
 /// private-only tooling trees below, which are optional WHOLESALE. `packages/` itself is always
 /// there, in every checkout including the public mirror (it ships the reference Package,
 /// `packages/example/`), so only an individual OTHER package — `packages/<pkg>` — can be absent;
@@ -430,8 +430,8 @@ mod tests {
     #[test]
     fn optional_owner_scopes_a_package_to_its_own_directory() {
         assert_eq!(
-            optional_owner("packages/playerbots/src/mod.rs").as_deref(),
-            Some("packages/playerbots"),
+            optional_owner("packages/sample_package/src/mod.rs").as_deref(),
+            Some("packages/sample_package"),
             "a package's absence is per-package: `packages/` itself carries a checked-in README, so \
              keying the skip on `packages/` would wave through a typo'd file inside an INSTALLED \
              package"

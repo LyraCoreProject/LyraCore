@@ -1,6 +1,6 @@
 //! The ACTOR VERB API: one documented surface over every explicit-guid action
-//! core, so anything that acts ON BEHALF OF a unit — the `debug_*` harness reducers, the
-//! playerbots brains, and the future Tier-2 Lua host API — consumes the SAME verbs the
+//! core, so anything that acts ON BEHALF OF a unit — the `debug_*` harness reducers, Package
+//! bots, and the future Tier-2 Lua host API — consumes the SAME verbs the
 //! player reducers do, with identical gates.
 //!
 //! Existing verbs retain their `Result<(), String>` contract. Typed requests expose accepted
@@ -45,6 +45,7 @@
 //! | `repop` | `world::do_repop` | dead actor releases to the graveyard ghost |
 //! | `respond_resurrect` | `spell::do_resurrect_response` | consume the actor's pending rez offer; accept revives IN PLACE at the offer's % |
 //! | `spirit_res` | `world::do_spirit_healer_res` | ghost actor res at the spirit healer (sickness applies) |
+//! | `self_resurrect` | `spell::do_self_resurrect` | dead actor with a Self-Resurrection Option revives in place; no sickness |
 //! | `accept_group_invite` | `group::accept_invite_for` | pending invite exists + its Group still exists (or a solo inviter is still ungrouped) + group not full; roster events fire |
 //! | `set_sessionless_action_consent` | `sessionless::set_sessionless_action_consent` | update Package consent and clear unclaimed Group Intents atomically |
 //! | `companion_target_facts` | `group::companion_target_facts` | exact hostile creature + partition/death/control gates; never selects a substitute |
@@ -151,7 +152,7 @@ package_only! {
 }
 
 #[cfg(all(has_packages, feature = "debug_reducers"))]
-pub(crate) use crate::bridge::playerbots_fixture_command_drive as fixture_command_drive;
+pub(crate) use crate::bridge::party_command_fixture_drive as fixture_command_drive;
 debug_only! { pub(crate) use crate::quest::grant_quest_unchecked as stage_quest; }
 
 // ---- loot / inventory / vendor ----
@@ -164,7 +165,7 @@ package_only! {
     pub(crate) use crate::items::request_profile_item as reconcile_profile_item;
     pub(crate) use crate::items::apply_equip_profile_upgrade as equip_profile_upgrade;
     pub(crate) use crate::items::request_take_loot as request_take_loot;
-    // `loot_money` also feeds playerbots' drink-at-rest behavior (work-item 154).
+    // A Package bot also loots money through this verb.
     pub(crate) use crate::loot::apply_loot_money as loot_money;
 }
 pub(crate) use crate::creatures::apply_item_target_spell as cast_item_target;
@@ -192,6 +193,7 @@ package_only! {
     pub(crate) use crate::spell::do_resurrect_response as respond_resurrect;
     pub(crate) use crate::world::do_repop as repop;
     pub(crate) use crate::world::do_spirit_healer_res as spirit_res;
+    pub(crate) use crate::spell::do_self_resurrect as self_resurrect;
 }
 
 // ---- social ----

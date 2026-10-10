@@ -840,7 +840,9 @@ pub(crate) fn kill_player(ctx: &ReducerContext, victim_guid: u64, killer_guid: u
     crate::spell::break_channel(ctx, victim_guid);
     // Dying sheds the auras vanilla does not exempt, and converges every projection they fed. A rider
     // who dies is dismounted HERE, by ordinary aura removal — the corpse must not keep its mount, its
-    // buffs, or the crowd control that was on it.
+    // buffs, or the crowd control that was on it. The Self-Resurrection Option is read first: the
+    // Soulstone aura that grants it does not survive the shed.
+    crate::spell::record_self_resurrect_option(ctx, victim_guid);
     crate::spell::remove_auras_on_death(ctx, victim_guid);
     // A live Trade Session dies with the victim — both windows hear `TradeCanceled`.
     crate::trade::cancel_trade_for(ctx, victim_guid);

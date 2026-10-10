@@ -19,8 +19,8 @@
 //! A single-database deployment has no realm-core to route to and keeps calling the player-facing
 //! reducers below exactly as before; the whole split is a gateway routing decision, not a schema one.
 //!
-//! **Server-driven invites.** A playerbot's serendipity invite has no client and no
-//! `ctx.sender()` to resolve — it is a decision the module's own goal tick makes. It cannot write
+//! **Server-driven invites.** A session-less Character's invite has no client and no
+//! `ctx.sender()` to resolve — it is a decision a Package makes inside the Module. It cannot write
 //! group rows for the same reason a player's cross-shard invite cannot: only the gateway can reach
 //! realm-core. [`BotInviteIntent`] is the module's half of that split — a DECISION, not a write —
 //! picked up by `gateway/src/world/party.rs`'s `run_bot_invite`. The same row carries a bot's
@@ -271,11 +271,10 @@ crate::character_owned!(not_transported, fn sweep_transfer_game_group_invite());
 
 /// A bot-initiated invite the MODULE has DECIDED but cannot execute (closing the gap
 /// the group slice opened): `game_group`/`game_group_member` are authoritative on realm-core, and
-/// only the gateway can reach it — the module never has. Before this table existed, playerbots'
-/// serendipity invite (`packages/playerbots/src/goals.rs`, `maybe_invite_fellow_quester`) called
-/// [`invite_core`] directly, writing this shard's LOCAL `game_group`/`game_group_member` rows, which
-/// realm-core had never heard of; the next `sync_group_mirror` push then wiped the party the mirror
-/// did not recognise.
+/// only the gateway can reach it — the module never has. Before this table existed, a Package's
+/// server-driven invite called [`invite_core`] directly, writing this shard's LOCAL
+/// `game_group`/`game_group_member` rows, which realm-core had never heard of; the next
+/// `sync_group_mirror` push then wiped the party the mirror did not recognise.
 ///
 /// The fix splits the decision from the execution, the same way `world::party` already splits a
 /// player's own invite: the module picks the fellow quester (it already owns the spatial + quest
@@ -317,7 +316,7 @@ pub struct BotInviteIntent {
 /// player's own CMSG_GROUP_INVITE is a pure gateway-side resolve-then-call with no module-side
 /// pre-check either.
 ///
-/// Its ONLY caller is the playerbots drop-in (see the `package_only!` macro in `actor.rs`): a
+/// Its ONLY callers are Packages (see the `package_only!` macro in `actor.rs`): a
 /// build with no REAL package installed — the common case, since only the inert reference Package,
 /// `packages/example/`, ships by default — has no caller for this, which is a designed state, not
 /// dead code.
@@ -1269,8 +1268,8 @@ fn push_list_to_all(ctx: &ReducerContext, group_id: u64) {
 /// `gw::gw_group_invite`.
 ///
 /// The identity-free invite core (the `accept_invite_for` pattern): shared by `gw::gw_group_invite`
-/// and any server-driven inviter — a playerbot's serendipity invite (276) calls this with
-/// the bot's guid. Same gates in the same order for every caller.
+/// and any server-driven inviter, which passes the bot's guid. Same gates in the same order for
+/// every caller.
 pub(crate) fn invite_core(
     ctx: &ReducerContext,
     inviter_guid: u64,
@@ -1304,7 +1303,7 @@ fn invite_core_on(
         if ctx.db.game_character().guid().find(target_guid).is_none() {
             return Err(GroupRefusal::NoSuchPlayer.into());
         }
-        // Vanilla requires the target online; a session-less playerbot's live entity counts (its
+        // Vanilla requires the target online; a session-less Character's live entity counts (its
         // auto-accept rides the hook below, not a client).
         if ctx
             .db
@@ -1355,10 +1354,10 @@ fn invite_core_on(
         String::new(),
     );
     // The hook is PLANE-LOCAL, and this is what that costs: package tables live on the world
-    // shards, so on a TRUE multi-database realm-core `pkg_playerbots_bot` is empty and the playerbots
+    // shards, so on a TRUE multi-database realm-core a Package's bot table is empty and its
     // auto-accept handler returns immediately — a player's invite to a bot was created correctly and
     // then nobody answered it (observed live 2026-07-26). Fired here regardless: a single-database
-    // gateway's realm-core IS the world shard, so `pkg_playerbots_bot` is populated and the hook
+    // gateway's realm-core IS the world shard, so the bot table is populated and the hook
     // still answers in this transaction there — including every bot-to-bot serendipity invite
     // which since that fix runs through `realm_group_op`/Plane::RealmCore like every
     // other invite, never through `invite_core`/Plane::Shard directly. On a real multi-database
@@ -1379,7 +1378,7 @@ fn invite_core_on(
 /// via `gw::gw_accept_group_invite`.
 ///
 /// The identity-free accept core: shared by `gw::gw_accept_group_invite` and any server-driven
-/// acceptor (a playerbot's auto-accept hook calls this with the bot's guid).
+/// acceptor (a Package auto-accept hook calls this with the bot's guid).
 pub(crate) fn accept_invite_for(ctx: &ReducerContext, acceptor_guid: u64) -> Result<(), String> {
     let acceptor = crate::helpers::character_by_guid(ctx, acceptor_guid);
     if acceptor.as_ref().is_some_and(|character| !character.online) {

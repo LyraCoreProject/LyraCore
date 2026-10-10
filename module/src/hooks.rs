@@ -68,8 +68,8 @@ pub struct CreatureSpawnPayload {
 }
 
 /// A group invite was just recorded for `target_guid`. Fired AFTER the invite row + notification
-/// event are written — a handler may accept immediately via `group::accept_invite_for` (the
-/// playerbots auto-accept path).
+/// event are written — a handler may accept immediately via `group::accept_invite_for` (a
+/// Package's auto-accept path).
 pub struct GroupInvitePayload {
     pub target_guid: u64,
     pub inviter_guid: u64,
@@ -261,6 +261,7 @@ include!(concat!(env!("OUT_DIR"), "/hook_dispatch.rs"));
 /// Called at the END of `tick_creatures` every tick (0.5s), after all core passes — see the cadence
 /// note in the `game_tick_pass` macro doc.
 pub(crate) fn run_package_tick_passes(ctx: &ReducerContext) {
+    crate::package_teardown::forget_removed_packages(ctx);
     for (_name, f) in crate::GAME_TICK_PASSES {
         f(ctx);
     }

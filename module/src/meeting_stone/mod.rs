@@ -725,7 +725,7 @@ pub(crate) fn party_left(ctx: &ReducerContext, departed: PartyDeparture) -> Opti
                 );
             }
             dequeue_party(ctx, departed.group_id, queue_status::LEAVE_QUEUE);
-            // A kicked playerbot or offline member only leaves, as in cmangos (`if (player)`).
+            // A kicked bot or offline member only leaves, as in cmangos (`if (player)`).
             if !has_live_claim(ctx, guid) {
                 return None;
             }

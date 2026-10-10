@@ -267,8 +267,8 @@ mod tests {
     #[test]
     fn escaped_envelope_decodes_payload_pipes_once() {
         assert_eq!(
-            parse_bridge_envelope("STC\tv1||playerbots.order||21||1/1||follow||2126"),
-            Some(("playerbots.order".into(), "follow|2126".into()))
+            parse_bridge_envelope("STC\tv1||example.order||21||1/1||follow||2126"),
+            Some(("example.order".into(), "follow|2126".into()))
         );
         assert_eq!(
             parse_bridge_envelope("STC\tv1||ping||22||1/1||a||||b"),

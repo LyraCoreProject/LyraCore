@@ -860,24 +860,27 @@ mod guid_allocator_tests {
     }
 
     /// …and the WIRING (playbook §8 — the repo's dominant test failure is pinning the helper and
-    /// not the call site). `create_character` must consult the rule BEFORE it writes anything;
+    /// not the call site). Character creation must consult the rule BEFORE it writes anything;
     /// deleting that one line brings back exactly the silent minting this rule exists to end, with every
     /// other test in this file still green.
     #[test]
-    fn create_character_refuses_before_it_writes_anything() {
-        // The trailing newline matters: this test module sits ABOVE the reducer in the file, so a
-        // bare `"pub fn create_character("` needle finds THIS line's own string literal first and
-        // scans the test instead of the reducer. The real signature breaks its line after the `(`.
-        let body = crate::test_scan::code_of(include_str!("auth.rs"), "pub fn create_character(\n");
+    fn character_creation_refuses_before_it_writes_anything() {
+        // The trailing newline matters: this test module sits ABOVE the functions in the file, so a
+        // bare needle finds THIS test's own string literal first and scans the test instead.
+        let src = include_str!("auth.rs");
+        let check = crate::test_scan::code_of(src, "pub(crate) fn check_new_character(\n");
         assert!(
-            body.contains("require_guid_range(ctx)?"),
-            "`create_character` no longer checks this database's guid range, so a shard that was \
-             never assigned one mints from zero into another shard's guids — silently. Body \
-             was:\n{body}"
+            check
+                .trim_start_matches(|c: char| c == '{' || c.is_whitespace())
+                .starts_with("require_guid_range(ctx)?"),
+            "`check_new_character` no longer checks this database's guid range first, so a shard \
+             that was never assigned one mints from zero into another shard's guids — silently. \
+             Body was:\n{check}"
         );
+        let body = crate::test_scan::code_of(src, "pub(crate) fn insert_new_character(\n");
         let check_at = body
-            .find("require_guid_range(ctx)?")
-            .expect("checked above");
+            .find("check_new_character(ctx")
+            .expect("insert_new_character must run check_new_character");
         let mint_at = body.find("next_character_guid(ctx)").unwrap_or(usize::MAX);
         assert!(
             check_at < mint_at,
@@ -1037,6 +1040,21 @@ mod guid_allocator_tests {
 //  Character creation (CMSG_CHAR_CREATE)
 // ===========================================================================================
 
+/// Most Characters one Account holds. The 5875 client cannot render a longer character list: it
+/// rejects SMSG_CHAR_ENUM with "Error retrieving character list".
+pub(crate) const CHARACTERS_PER_ACCOUNT: usize = 10;
+
+/// The look bytes a client picks at character creation.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Appearance {
+    pub gender: u8,
+    pub skin: u8,
+    pub face: u8,
+    pub hair_style: u8,
+    pub hair_color: u8,
+    pub facial_hair: u8,
+}
+
 /// Create a new character for `account_id` (called by the trusted gateway on `CMSG_CHAR_CREATE`,
 /// like `provision_account`/`establish_session`; restrict to the gateway identity in production).
 /// Returns a distinguished `Err("NAME_IN_USE")` for a taken name (the gateway maps it to
@@ -1059,21 +1077,38 @@ pub fn create_character(
     facial_hair: u8,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    let appearance = Appearance {
+        gender,
+        skin,
+        face,
+        hair_style,
+        hair_color,
+        facial_hair,
+    };
+    insert_new_character(ctx, account_id, name, race, class, appearance).map(|_| ())
+}
+
+/// The Refusals a new Character meets before anything is written. Client and Package creation
+/// both pass through here.
+pub(crate) fn check_new_character(
+    ctx: &ReducerContext,
+    name: &str,
+    race: u8,
+    class: u8,
+) -> Result<(), String> {
     // Minting is licensed by a range realm-core assigned, and an unlicensed database refuses
-    // rather than minting from zero into another shard's guids. FIRST — before any write, and
-    // before the cheaper validations, so the refusal is unambiguous in the log.
+    // rather than minting from zero into another shard's guids. FIRST — before the cheaper
+    // validations, so the refusal is unambiguous in the log.
     require_guid_range(ctx)?;
-    let chars = ctx.db.game_character();
     // `name` is unique; check first so we can return a clean, distinguished result.
-    if chars.name().find(&name).is_some() {
+    if ctx
+        .db
+        .game_character()
+        .name()
+        .find(name.to_string())
+        .is_some()
+    {
         return Err("NAME_IN_USE".to_string());
-    }
-    // Per-realm character cap (vanilla: 10). The 5875 client can't render a char list with >10 entries
-    // (it rejects SMSG_CHAR_ENUM → "Error retrieving character list"), so refuse the 11th here with a
-    // distinguished error the gateway maps to CHAR_CREATE_SERVER_LIMIT ("cannot create any more").
-    // Routed through the `by_account` index — this used to be a full-table scan.
-    if chars.by_account().filter(&account_id).count() >= 10 {
-        return Err("SERVER_LIMIT".to_string());
     }
     // Reject an illegal (race, class) (e.g. Human Shaman) — server-side defense-in-depth from the
     // imported CharBaseInfo.dbc (the client already gates the UI). Skipped when the table is empty
@@ -1087,6 +1122,36 @@ pub fn create_character(
     {
         return Err("INVALID_RACE_CLASS".to_string());
     }
+    Ok(())
+}
+
+/// Whether `account_id` holds fewer than [`CHARACTERS_PER_ACCOUNT`] Characters on this database.
+pub(crate) fn account_has_room(ctx: &ReducerContext, account_id: u64) -> bool {
+    ctx.db
+        .game_character()
+        .by_account()
+        .filter(&account_id)
+        .count()
+        < CHARACTERS_PER_ACCOUNT
+}
+
+/// Create a Character for `account_id` and return its guid. Applies every
+/// [`check_new_character`] Refusal, then the per-Account cap.
+pub(crate) fn insert_new_character(
+    ctx: &ReducerContext,
+    account_id: u64,
+    name: String,
+    race: u8,
+    class: u8,
+    appearance: Appearance,
+) -> Result<u64, String> {
+    check_new_character(ctx, &name, race, class)?;
+    // The distinguished error the gateway maps to CHAR_CREATE_SERVER_LIMIT ("cannot create any
+    // more").
+    if !account_has_room(ctx, account_id) {
+        return Err("SERVER_LIMIT".to_string());
+    }
+    let chars = ctx.db.game_character();
     let account = ctx
         .db
         .game_account()
@@ -1121,12 +1186,12 @@ pub fn create_character(
         name: name.clone(),
         race,
         class,
-        gender,
-        skin,
-        face,
-        hair_style,
-        hair_color,
-        facial_hair,
+        gender: appearance.gender,
+        skin: appearance.skin,
+        face: appearance.face,
+        hair_style: appearance.hair_style,
+        hair_color: appearance.hair_color,
+        facial_hair: appearance.facial_hair,
         level: 1,
         xp: 0,
         next_level_xp: crate::xp::xp_to_next_level(1),
@@ -1190,7 +1255,7 @@ pub fn create_character(
     // ZERO/stale owner stamp is corrected by player_login's restamp_owned_data sweep BEFORE the
     // first player-scoped (RLS) read of these rows can happen.
     crate::items::grant_starter_item(ctx, next_guid, owner)?;
-    Ok(())
+    Ok(next_guid)
 }
 
 /// Delete `character_guid` for `account_id` — the player `CMSG_CHAR_DELETE` path. Operator-gated (the

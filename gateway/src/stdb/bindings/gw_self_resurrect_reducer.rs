@@ -4,48 +4,50 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
-pub(super) struct PlayerbotsFixtureCommandExpireArgs {
-    pub intent_id: u64,
+pub(super) struct GwSelfResurrectArgs {
+    pub request_actor: SessionActor,
 }
 
-impl From<PlayerbotsFixtureCommandExpireArgs> for super::Reducer {
-    fn from(args: PlayerbotsFixtureCommandExpireArgs) -> Self {
-        Self::PlayerbotsFixtureCommandExpire {
-            intent_id: args.intent_id,
+impl From<GwSelfResurrectArgs> for super::Reducer {
+    fn from(args: GwSelfResurrectArgs) -> Self {
+        Self::GwSelfResurrect {
+            request_actor: args.request_actor,
         }
     }
 }
 
-impl __sdk::InModule for PlayerbotsFixtureCommandExpireArgs {
+impl __sdk::InModule for GwSelfResurrectArgs {
     type Module = super::RemoteModule;
 }
 
 #[allow(non_camel_case_types)]
-/// Extension trait for access to the reducer `playerbots_fixture_command_expire`.
+/// Extension trait for access to the reducer `gw_self_resurrect`.
 ///
 /// Implemented for [`super::RemoteReducers`].
-pub trait playerbots_fixture_command_expire {
-    /// Request that the remote module invoke the reducer `playerbots_fixture_command_expire` to run as soon as possible.
+pub trait gw_self_resurrect {
+    /// Request that the remote module invoke the reducer `gw_self_resurrect` to run as soon as possible.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
-    /// /// Use [`playerbots_fixture_command_expire:playerbots_fixture_command_expire_then`] to run a callback after the reducer completes.
-    fn playerbots_fixture_command_expire(&self, intent_id: u64) -> __sdk::Result<()> {
-        self.playerbots_fixture_command_expire_then(intent_id, |_, _| {})
+    /// /// Use [`gw_self_resurrect:gw_self_resurrect_then`] to run a callback after the reducer completes.
+    fn gw_self_resurrect(&self, request_actor: SessionActor) -> __sdk::Result<()> {
+        self.gw_self_resurrect_then(request_actor, |_, _| {})
     }
 
-    /// Request that the remote module invoke the reducer `playerbots_fixture_command_expire` to run as soon as possible,
+    /// Request that the remote module invoke the reducer `gw_self_resurrect` to run as soon as possible,
     /// registering `callback` to run when we are notified that the reducer completed.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and its status can be observed with the `callback`.
-    fn playerbots_fixture_command_expire_then(
+    fn gw_self_resurrect_then(
         &self,
-        intent_id: u64,
+        request_actor: SessionActor,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -53,18 +55,16 @@ pub trait playerbots_fixture_command_expire {
     ) -> __sdk::Result<()>;
 }
 
-impl playerbots_fixture_command_expire for super::RemoteReducers {
-    fn playerbots_fixture_command_expire_then(
+impl gw_self_resurrect for super::RemoteReducers {
+    fn gw_self_resurrect_then(
         &self,
-        intent_id: u64,
+        request_actor: SessionActor,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
-        self.imp.invoke_reducer_with_callback(
-            PlayerbotsFixtureCommandExpireArgs { intent_id },
-            callback,
-        )
+        self.imp
+            .invoke_reducer_with_callback(GwSelfResurrectArgs { request_actor }, callback)
     }
 }

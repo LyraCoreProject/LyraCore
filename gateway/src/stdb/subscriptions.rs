@@ -2654,6 +2654,15 @@ pub(crate) fn resurrect_request_outbound(row: &ResurrectRequest) -> Vec<Outbound
     ))]
 }
 
+/// Self-Resurrection Option: the owner's `PLAYER_SELF_RES_SPELL` write. `spell_id` 0 clears it.
+/// Audience: the option's Character, resolved by the caller.
+pub(crate) fn self_res_option_outbound(character_guid: u64, spell_id: u32) -> Vec<Outbound> {
+    let m = codec::build_self_res_spell_values(character_guid, spell_id);
+    vec![Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+        Box::new(m),
+    ))]
+}
+
 /// Projectile impact: the floating damage number for a projectile that
 /// finished its travel — never a START/GO. Pure over the row; broadcast.
 pub(crate) fn impact_event_outbound(row: &SpellImpactEvent) -> Vec<Outbound> {
@@ -4187,14 +4196,14 @@ impl Coordinator {
                         ) {
                             Ok(crate::world::party::PartyOutcome::Ran) => {}
                             outcome => log::debug!(
-                                "playerbots: group intent {intent_id} op {op} ({inviter_guid} -> \
+                                "group intent {intent_id} op {op} ({inviter_guid} -> \
                                  {target_guid}) did not execute: {outcome:?}"
                             ),
                         }
                     });
                 if let Err(error) = spawned {
                     log::error!(
-                        "playerbots: could not start consumer for group intent {intent_id} op {op} \
+                        "could not start consumer for group intent {intent_id} op {op} \
                          ({inviter_guid} -> {target_guid}): {error}"
                     );
                 }
@@ -8529,4 +8538,5 @@ mod roster_relay_durable_tests;
 mod meeting_stone_durable_tests;
 
 #[cfg(test)]
-include!(concat!(env!("OUT_DIR"), "/package-coordinator-tests.rs"));
+#[path = "subscriptions_party_command_durable_tests.rs"]
+mod party_command_durable_tests;

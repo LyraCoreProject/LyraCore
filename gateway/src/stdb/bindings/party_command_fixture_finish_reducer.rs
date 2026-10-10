@@ -6,49 +6,49 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
-pub(super) struct PlayerbotsFixtureCommandExpireAfterReceiptWindowArgs {
+pub(super) struct PartyCommandFixtureFinishArgs {
     pub intent_id: u64,
+    pub claim_token: u64,
 }
 
-impl From<PlayerbotsFixtureCommandExpireAfterReceiptWindowArgs> for super::Reducer {
-    fn from(args: PlayerbotsFixtureCommandExpireAfterReceiptWindowArgs) -> Self {
-        Self::PlayerbotsFixtureCommandExpireAfterReceiptWindow {
+impl From<PartyCommandFixtureFinishArgs> for super::Reducer {
+    fn from(args: PartyCommandFixtureFinishArgs) -> Self {
+        Self::PartyCommandFixtureFinish {
             intent_id: args.intent_id,
+            claim_token: args.claim_token,
         }
     }
 }
 
-impl __sdk::InModule for PlayerbotsFixtureCommandExpireAfterReceiptWindowArgs {
+impl __sdk::InModule for PartyCommandFixtureFinishArgs {
     type Module = super::RemoteModule;
 }
 
 #[allow(non_camel_case_types)]
-/// Extension trait for access to the reducer `playerbots_fixture_command_expire_after_receipt_window`.
+/// Extension trait for access to the reducer `party_command_fixture_finish`.
 ///
 /// Implemented for [`super::RemoteReducers`].
-pub trait playerbots_fixture_command_expire_after_receipt_window {
-    /// Request that the remote module invoke the reducer `playerbots_fixture_command_expire_after_receipt_window` to run as soon as possible.
+pub trait party_command_fixture_finish {
+    /// Request that the remote module invoke the reducer `party_command_fixture_finish` to run as soon as possible.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
-    /// /// Use [`playerbots_fixture_command_expire_after_receipt_window:playerbots_fixture_command_expire_after_receipt_window_then`] to run a callback after the reducer completes.
-    fn playerbots_fixture_command_expire_after_receipt_window(
-        &self,
-        intent_id: u64,
-    ) -> __sdk::Result<()> {
-        self.playerbots_fixture_command_expire_after_receipt_window_then(intent_id, |_, _| {})
+    /// /// Use [`party_command_fixture_finish:party_command_fixture_finish_then`] to run a callback after the reducer completes.
+    fn party_command_fixture_finish(&self, intent_id: u64, claim_token: u64) -> __sdk::Result<()> {
+        self.party_command_fixture_finish_then(intent_id, claim_token, |_, _| {})
     }
 
-    /// Request that the remote module invoke the reducer `playerbots_fixture_command_expire_after_receipt_window` to run as soon as possible,
+    /// Request that the remote module invoke the reducer `party_command_fixture_finish` to run as soon as possible,
     /// registering `callback` to run when we are notified that the reducer completed.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and its status can be observed with the `callback`.
-    fn playerbots_fixture_command_expire_after_receipt_window_then(
+    fn party_command_fixture_finish_then(
         &self,
         intent_id: u64,
+        claim_token: u64,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -56,17 +56,21 @@ pub trait playerbots_fixture_command_expire_after_receipt_window {
     ) -> __sdk::Result<()>;
 }
 
-impl playerbots_fixture_command_expire_after_receipt_window for super::RemoteReducers {
-    fn playerbots_fixture_command_expire_after_receipt_window_then(
+impl party_command_fixture_finish for super::RemoteReducers {
+    fn party_command_fixture_finish_then(
         &self,
         intent_id: u64,
+        claim_token: u64,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
-            PlayerbotsFixtureCommandExpireAfterReceiptWindowArgs { intent_id },
+            PartyCommandFixtureFinishArgs {
+                intent_id,
+                claim_token,
+            },
             callback,
         )
     }
