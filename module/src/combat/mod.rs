@@ -24,7 +24,7 @@
 //! Everything is re-exported below so every `crate::combat::<sym>` path resolves regardless of which
 //! submodule actually defines it.
 
-mod death;
+pub(crate) mod death;
 mod engage;
 mod folds;
 mod swing;

@@ -2568,7 +2568,7 @@ impl ExpirySink for CtxExpiry<'_> {
 pub fn gw_auction_list_local(
     ctx: &ReducerContext,
     operation_id: u64,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     item_guid: u64,
     auctioneer_guid: u64,
     house: u32,
@@ -2627,7 +2627,7 @@ pub fn gw_auction_list_local(
 pub fn gw_auction_hold_listing(
     ctx: &ReducerContext,
     operation_id: u64,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     item_guid: u64,
     auctioneer_guid: u64,
     house: u32,
@@ -2693,7 +2693,7 @@ pub fn gw_auction_hold_listing(
 pub fn realm_auction_commit_listing(
     ctx: &ReducerContext,
     operation_id: u64,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     item_guid: u64,
     item_entry: u32,
     item_stack_count: u32,
@@ -2755,7 +2755,7 @@ pub fn realm_auction_commit_listing(
 fn require_listing_actor(
     ctx: &ReducerContext,
     operation_id: u64,
-    actor: crate::SessionActor,
+    actor: crate::account_ownership::SessionActor,
 ) -> Result<(), String> {
     crate::account_ownership::require_actor(ctx, actor)?;
     let seller = CtxSource { ctx }
@@ -2777,7 +2777,7 @@ pub fn realm_auction_confirm_listing(
     ctx: &ReducerContext,
     operation_id: u64,
     auction_id: u32,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     require_listing_actor(ctx, operation_id, request_actor)?;
@@ -2804,7 +2804,7 @@ pub fn realm_auction_confirm_listing(
 pub fn realm_auction_settle_listing(
     ctx: &ReducerContext,
     operation_id: u64,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     require_listing_actor(ctx, operation_id, request_actor)?;
@@ -2819,7 +2819,7 @@ pub fn realm_auction_settle_listing(
 pub fn realm_auction_refund_listing(
     ctx: &ReducerContext,
     operation_id: u64,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     item_guid: u64,
     item_entry: u32,
     item_stack_count: u32,
@@ -2874,7 +2874,7 @@ pub fn realm_auction_refund_listing(
 pub fn gw_auction_release_listing_hold(
     ctx: &ReducerContext,
     operation_id: u64,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let seller_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
@@ -2941,7 +2941,7 @@ fn drive_local_hold(
 pub fn gw_auction_bid_local(
     ctx: &ReducerContext,
     operation_id: u64,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     auctioneer_guid: u64,
     auction_id: u32,
     house: u32,
@@ -2966,7 +2966,7 @@ pub fn gw_auction_bid_local(
 pub fn gw_auction_cancel_local(
     ctx: &ReducerContext,
     operation_id: u64,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     auctioneer_guid: u64,
     auction_id: u32,
     house: u32,
@@ -2990,7 +2990,7 @@ pub fn gw_auction_cancel_local(
 pub fn gw_auction_hold_bid(
     ctx: &ReducerContext,
     operation_id: u64,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     auctioneer_guid: u64,
     auction_id: u32,
     house: u32,
@@ -3015,7 +3015,7 @@ pub fn gw_auction_hold_bid(
 pub fn gw_auction_hold_cancel(
     ctx: &ReducerContext,
     operation_id: u64,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     auctioneer_guid: u64,
     auction_id: u32,
     house: u32,
@@ -3039,7 +3039,7 @@ pub fn gw_auction_hold_cancel(
 pub fn realm_auction_decide_bid(
     ctx: &ReducerContext,
     operation_id: u64,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     auction_id: u32,
     house: u32,
     offer: u32,
@@ -3068,7 +3068,7 @@ pub fn realm_auction_decide_bid(
 pub fn realm_auction_decide_cancel(
     ctx: &ReducerContext,
     operation_id: u64,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     auction_id: u32,
     house: u32,
     cut: u32,
@@ -3097,7 +3097,7 @@ pub fn realm_auction_decide_cancel(
 pub fn gw_auction_finish_bid(
     ctx: &ReducerContext,
     operation_id: u64,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     auction_id: u32,
     house: u32,
     offer: u32,
@@ -3144,7 +3144,7 @@ pub fn gw_auction_finish_bid(
 pub fn realm_auction_refund_bid(
     ctx: &ReducerContext,
     operation_id: u64,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     auction_id: u32,
     house: u32,
     offer: u32,
@@ -3173,7 +3173,7 @@ pub fn realm_auction_refund_bid(
 pub fn gw_auction_confirm_bid_refund(
     ctx: &ReducerContext,
     operation_id: u64,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     auction_id: u32,
     house: u32,
     offer: u32,

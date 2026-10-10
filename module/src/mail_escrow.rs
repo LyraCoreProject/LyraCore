@@ -974,7 +974,7 @@ pub(crate) fn apply_reap<S: ReapSink>(sink: &mut S) {
 pub fn realm_mail_fence(
     ctx: &ReducerContext,
     escrow_id: u64,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     recipient_guid: u64,
     subject: String,
     body: String,
@@ -1013,7 +1013,7 @@ pub fn realm_mail_fence(
 pub fn realm_mail_commit(
     ctx: &ReducerContext,
     escrow_id: u64,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     recipient_guid: u64,
     subject: String,
     body: String,
@@ -1064,7 +1064,7 @@ pub fn realm_mail_commit(
 pub fn realm_mail_take_money_fence(
     ctx: &ReducerContext,
     escrow_id: u64,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     mail_id: u64,
     expect_money: u32,
 ) -> Result<(), String> {
@@ -1082,7 +1082,7 @@ pub fn realm_mail_take_money_fence(
 pub fn realm_mail_payout(
     ctx: &ReducerContext,
     escrow_id: u64,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     mail_id: u64,
     amount: u32,
 ) -> Result<(), String> {
@@ -1094,7 +1094,7 @@ pub fn realm_mail_payout(
 pub fn realm_mail_take_item_fence(
     ctx: &ReducerContext,
     escrow_id: u64,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     mail_id: u64,
     expect_entry: u32,
 ) -> Result<(), String> {
@@ -1113,7 +1113,7 @@ pub fn realm_mail_take_item_fence(
 pub fn realm_mail_item_payout(
     ctx: &ReducerContext,
     escrow_id: u64,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     mail_id: u64,
     item_entry: u32,
     item_stack_count: u32,
@@ -1144,7 +1144,7 @@ pub fn realm_mail_item_payout(
 fn require_escrow_actor(
     ctx: &ReducerContext,
     escrow_id: u64,
-    actor: crate::SessionActor,
+    actor: crate::account_ownership::SessionActor,
 ) -> Result<(), String> {
     crate::account_ownership::require_actor(ctx, actor)?;
     if let Some(row) = ctx.db.game_mail_escrow().escrow_id().find(escrow_id) {
@@ -1157,7 +1157,7 @@ fn require_escrow_actor(
 pub fn realm_mail_confirm_delivery(
     ctx: &ReducerContext,
     escrow_id: u64,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
 ) -> Result<(), String> {
     require_operator(ctx)?;
     require_escrow_actor(ctx, escrow_id, request_actor)?;
@@ -1167,7 +1167,7 @@ pub fn realm_mail_confirm_delivery(
 pub fn realm_mail_settle(
     ctx: &ReducerContext,
     escrow_id: u64,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
 ) -> Result<(), String> {
     require_operator(ctx)?;
     require_escrow_actor(ctx, escrow_id, request_actor)?;

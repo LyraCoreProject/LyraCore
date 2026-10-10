@@ -150,7 +150,7 @@ pub fn begin_character_shard_transfer(
     source_module_identity: Identity,
     transfer_intent_id: u64,
     controller_generation: u64,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     crate::account_ownership::require_actor_for(ctx, request_actor, character_guid)?;
@@ -218,7 +218,7 @@ pub fn finish_character_shard_transfer(
     source_module_identity: Identity,
     transfer_intent_id: u64,
     controller_generation: u64,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     crate::account_ownership::require_actor_for(ctx, request_actor, character_guid)?;
@@ -301,7 +301,7 @@ pub fn finish_pending_character_shard_transfer(
     source_module_identity: Identity,
     transfer_intent_id: u64,
     controller_generation: u64,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     crate::account_ownership::require_actor_for(ctx, request_actor, character_guid)?;
@@ -374,7 +374,7 @@ pub fn set_character_shard(
     character_guid: u64,
     map_id: u32,
     instance_id: u64,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     crate::account_ownership::require_actor_for(ctx, request_actor, character_guid)?;

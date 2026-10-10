@@ -2078,7 +2078,7 @@ pub(crate) enum Plane {
 pub fn realm_group_op(
     ctx: &ReducerContext,
     op: u8,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     target_guid: u64,
     arg_a: u8,
     arg_b: u8,
@@ -2252,7 +2252,7 @@ pub fn sync_group_mirror(
     loot_threshold: u8,
     master_looter_guid: u64,
     members: Vec<u64>,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     partitions: Vec<GroupMemberPartition>,
     roster_revision: u64,
     group_kind: u8,

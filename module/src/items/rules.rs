@@ -248,7 +248,7 @@ pub fn can_equip_into(class: u8, inventory_type: u8, dest_slot: u8, can_dual_wie
     resolved == canonical
 }
 
-pub use lyracore_shared::item::{armor_subclass, weapon_subclass, Proficiency};
+pub use lyracore_shared::item::{weapon_subclass, Proficiency};
 
 /// Whether a character of `player_level` meets an item's `required_level` to EQUIP or USE it. Pure —
 /// unit-tested. A required_level of 1 (every seeded item today) is met by every character, so this gate
@@ -834,7 +834,7 @@ pub(crate) mod tests {
     /// the spellbook, and mail is wearable from the first level either way.
     #[test]
     fn plate_needs_the_trained_passive_whatever_the_level() {
-        use armor_subclass as a;
+        use lyracore_shared::item::armor_subclass as a;
         const ARMOR: u8 = 4;
         for class in [1u8, 2] {
             let untrained = Proficiency::derive(class, false, false);
@@ -853,7 +853,7 @@ pub(crate) mod tests {
     /// EQUIP GATE, MAIL: Hunter and Shaman start in leather and buy the mail upgrade (8737) at 40.
     #[test]
     fn hunters_and_shamans_need_the_trained_passive_for_mail() {
-        use armor_subclass as a;
+        use lyracore_shared::item::armor_subclass as a;
         const ARMOR: u8 = 4;
         for class in [3u8, 7] {
             assert!(!Proficiency::derive(class, false, false).can_equip(ARMOR, a::MAIL));

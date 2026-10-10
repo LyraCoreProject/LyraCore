@@ -15,7 +15,7 @@
 //! `crate::spell::cast::*`, and `spell::mod` globs `cast::*` in turn — so every `crate::spell::<sym>`
 //! call site outside this module is unchanged by the split.
 
-mod resolve;
+pub(crate) mod resolve;
 mod targeting;
 
 pub(crate) use resolve::*;

@@ -4,11 +4,12 @@
 use spacetimedb::{log, reducer, ReducerContext, Table};
 
 // trait imports — VmapChunk/NavChunk are module-private, no crate-root glob re-export
+use crate::creatures::build_creature_entity;
 use crate::nav::game_nav_chunk;
 use crate::vmap::game_vmap_chunk;
 use crate::{
-    build_creature_entity, game_config, game_creature_spawn, game_creature_template,
-    game_gameobject, game_instance, game_world_entity, CreatureSpawn, ServerConfig,
+    game_config, game_creature_spawn, game_creature_template, game_gameobject, game_instance,
+    game_world_entity, CreatureSpawn, ServerConfig,
 };
 
 /// THE FIXTURE DUNGEON (headless, zero imports): resolve-or-create an instance of

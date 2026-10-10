@@ -54,7 +54,7 @@ pub(crate) fn action_gate(
     use crate::actor::{ActionRefusal, ActionRefusalKind};
     crate::account_ownership::require_actor(
         ctx,
-        crate::SessionActor {
+        crate::account_ownership::SessionActor {
             guid: character_guid,
             ownership: None,
         },
@@ -130,7 +130,7 @@ pub(crate) fn transfer_authority_gate(
     use crate::actor::{ActionRefusal, ActionRefusalKind};
     crate::account_ownership::require_actor(
         ctx,
-        crate::SessionActor {
+        crate::account_ownership::SessionActor {
             guid: character_guid,
             ownership: None,
         },

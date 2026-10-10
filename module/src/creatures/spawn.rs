@@ -815,7 +815,7 @@ pub fn build_player_entity(
         display_id: display,
         native_display_id: display,
         unit_flags: constants::unit_flags::PLAYER_CONTROLLED,
-        base_attack_time_ms: crate::DEFAULT_ATTACK_TIME_MS, // unarmed 2.0s
+        base_attack_time_ms: crate::combat::DEFAULT_ATTACK_TIME_MS, // unarmed 2.0s
         dynamic_flags: 0,
         dead: false,
         player_bytes: packing::player_bytes(

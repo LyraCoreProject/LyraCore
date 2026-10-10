@@ -3,6 +3,8 @@
 use crate::import_meta::game_import_meta;
 use spacetimedb::ReducerContext;
 
+pub(crate) mod movement;
+
 #[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) struct ImportRevision {
     pub source_sha: String,
@@ -81,6 +83,18 @@ package_only! {
     pub(crate) use crate::quest::request_turn_in_quest as request_turn_in_quest;
 }
 
+package_only! {
+    pub(crate) use crate::quest::accept_gates as quest_acceptance;
+    pub(crate) use crate::quest::quest_is_complete as quest_complete;
+    pub(crate) use crate::quest::character_quest_row as character_quest;
+    pub(crate) use crate::quest::objective_kind as objective_kind;
+    pub(crate) use crate::quest::quest_role as quest_role;
+    pub(crate) use crate::quest::MAX_QUEST_LOG_SIZE as MAX_QUEST_LOG_SIZE;
+    pub(crate) use crate::quest::AreaTriggerRoute as AreaTriggerRoute;
+    pub(crate) use crate::creatures::creature_spawn_evidence as creature_spawn_evidence;
+    pub(crate) use crate::gameobject::gameobject_destination_evidence as gameobject_destination_evidence;
+}
+
 #[cfg(all(has_packages, feature = "debug_reducers"))]
 pub(crate) use crate::bridge::party_command_fixture_drive as fixture_command_drive;
 debug_only! { pub(crate) use crate::quest::grant_quest_unchecked as stage_quest; }
@@ -112,6 +126,81 @@ package_only! {
     pub(crate) use crate::seed::reconcile_curated_starter_role_levels as reconcile_starter_role_spell_levels;
 }
 
+// ---- reads ----
+
+package_only! {
+    pub(crate) use crate::helpers::live_entity as live_entity;
+    pub(crate) use crate::helpers::character_by_guid as character_by_guid;
+    pub(crate) use crate::helpers::character_by_name as character_by_name;
+    pub(crate) use crate::helpers::entities_near as entities_near;
+    pub(crate) use crate::helpers::in_same_partition as in_same_partition;
+    pub(crate) use crate::faction::is_friendly as is_friendly;
+    pub(crate) use crate::combat::validate_attack_target as attack_target_gate;
+    pub(crate) use crate::combat::AttackStart as AttackStart;
+    pub(crate) use crate::items::has_free_slot as has_free_slot;
+    pub(crate) use crate::items::item_count as item_count;
+    pub(crate) use crate::xp::xp_for_kill as xp_for_kill;
+    pub(crate) use crate::xp::rank_xp_multiplier as rank_xp_multiplier;
+    pub(crate) use crate::gameobject::go_type as go_type;
+}
+
+// ---- loot entitlement ----
+
+package_only! {
+    pub(crate) use crate::loot::corpse_access as corpse_access;
+    pub(crate) use crate::loot::corpse_eligible_for_access as corpse_eligible_for_access;
+    pub(crate) use crate::loot::corpse_eligible_recipients as corpse_eligible_recipients;
+    pub(crate) use crate::loot::death_entitlement as death_entitlement;
+    pub(crate) use crate::loot::tag::live_loot_tag_eligibility as live_loot_tag_eligibility;
+    pub(crate) use crate::loot::tag::LiveLootTagEligibility as LiveLootTagEligibility;
+}
+
+// ---- spells ----
+
+package_only! {
+    pub(crate) use crate::spell::pending_cast as pending_cast;
+    pub(crate) use crate::spell::cancel_cast_attempt as cancel_cast_attempt;
+    pub(crate) use crate::spell::expire_cast_attempt as expire_cast_attempt;
+    pub(crate) use crate::spell::buff_status as buff_status;
+    pub(crate) use crate::spell::control_status as control_status;
+    pub(crate) use crate::spell::has_aura as has_aura;
+    pub(crate) use crate::spell::knows_spell as knows_spell;
+    pub(crate) use crate::spell::CastHandle as CastHandle;
+    pub(crate) use crate::spell::CastStart as CastStart;
+    pub(crate) use crate::spell::CastFinish as CastFinish;
+    pub(crate) use crate::spell::CastRefusal as CastRefusal;
+    pub(crate) use crate::spell::CastRefusalKind as CastRefusalKind;
+    pub(crate) use crate::spell::BuffStatus as BuffStatus;
+    pub(crate) use crate::spell::BuffUnavailableReason as BuffUnavailableReason;
+    pub(crate) use crate::spell::ControlReadError as ControlReadError;
+    pub(crate) use crate::spell::A_CONTROL as A_CONTROL;
+    pub(crate) use crate::spell::A_PERIODIC_HEAL as A_PERIODIC_HEAL;
+    pub(crate) use crate::spell::A_PERIODIC_TRIGGER as A_PERIODIC_TRIGGER;
+    pub(crate) use crate::spell::A_PROC_TRIGGER as A_PROC_TRIGGER;
+    pub(crate) use crate::spell::E_HEAL as E_HEAL;
+    pub(crate) use crate::spell::E_HEAL_MAX_HEALTH as E_HEAL_MAX_HEALTH;
+    pub(crate) use crate::spell::E_NEXT_SWING as E_NEXT_SWING;
+    pub(crate) use crate::spell::E_SCRIPTED as E_SCRIPTED;
+    pub(crate) use crate::spell::T_TARGET_ALLY as T_TARGET_ALLY;
+    pub(crate) use crate::spell::T_TARGET_ENEMY as T_TARGET_ENEMY;
+}
+
+// ---- party ----
+
+package_only! {
+    pub(crate) use crate::group::party_facts as party_facts;
+    pub(crate) use crate::group::group_of as group_of;
+    pub(crate) use crate::group::emit_bot_invite_intent as emit_bot_invite_intent;
+    pub(crate) use crate::group::emit_bot_leave_intent as emit_bot_leave_intent;
+    pub(crate) use crate::group::leave_group_for as leave_group_for;
+    pub(crate) use crate::group::PartyEnemyFacts as PartyEnemyFacts;
+    pub(crate) use crate::group::PartyFactsUnavailable as PartyFactsUnavailable;
+    pub(crate) use crate::group::PartyFactsUnavailableReason as PartyFactsUnavailableReason;
+    pub(crate) use crate::group::PartyMemberFacts as PartyMemberFacts;
+    pub(crate) use crate::group::PartyPartitionFacts as PartyPartitionFacts;
+    pub(crate) use crate::group::PartyUnitFacts as PartyUnitFacts;
+}
+
 // ---- NPC services / world ----
 
 package_only! {
@@ -130,6 +219,7 @@ package_only! {
 
 package_only! {
     pub(crate) use crate::chat::emit_system_message as system_message;
+    pub(crate) use crate::chat::apply_send_chat as send_chat;
     pub(crate) use crate::group::accept_invite_for as accept_group_invite;
     pub(crate) use crate::sessionless::set_sessionless_action_consent as set_sessionless_action_consent;
     pub(crate) use crate::sessionless::action_gate as sessionless_action_gate;

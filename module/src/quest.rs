@@ -2452,15 +2452,16 @@ pub fn debug_verify_raid_quest_credit_fixture(ctx: &ReducerContext) -> Result<()
         y: player.y,
         z: player.z,
         orientation: player.orientation,
-        respawn_at: crate::timer_never(ctx),
-        despawn_at: crate::timer_never(ctx),
-        movement_type: crate::MOVEMENT_IDLE,
+        respawn_at: crate::creatures::timer_never(ctx),
+        despawn_at: crate::creatures::timer_never(ctx),
+        movement_type: crate::creatures::MOVEMENT_IDLE,
         respawn_secs: 0,
         life_seq: 0,
     };
-    let wolf_entity = crate::build_creature_entity(&spawn, &wolf_template, 0, player.instance_id);
+    let wolf_entity =
+        crate::creatures::build_creature_entity(&spawn, &wolf_template, 0, player.instance_id);
     ctx.db.game_creature_spawn().insert(spawn);
-    crate::insert_creature_entity(ctx, wolf_entity);
+    crate::creatures::insert_creature_entity(ctx, wolf_entity);
     if !crate::loot::tag::record_first_threat(ctx, RQC_WOLF_GUID, RQC_PLAYER) {
         return Err("the raid quest credit fixture kill was not tapped".to_string());
     }

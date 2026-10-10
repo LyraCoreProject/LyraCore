@@ -165,7 +165,7 @@ fn actor(ctx: &ReducerContext, actor_guid: u64) -> Result<crate::WorldEntity, St
 #[allow(clippy::too_many_arguments)]
 pub fn gw_movement_update(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     opcode: u16,
     movement_info: Vec<u8>,
     x: f32,
@@ -187,7 +187,7 @@ pub fn gw_movement_update(
 /// `gw_movement_update` argument list with the actor made explicit per entry.
 #[derive(spacetimedb::SpacetimeType)]
 pub struct GwMove {
-    pub actor: crate::SessionActor,
+    pub actor: crate::account_ownership::SessionActor,
     pub opcode: u16,
     pub movement_info: Vec<u8>,
     pub x: f32,
@@ -261,7 +261,7 @@ pub fn gw_movement_batch(ctx: &ReducerContext, moves: Vec<GwMove>) -> Result<(),
 #[reducer]
 pub fn gw_attack(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     target_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx)?;
@@ -274,7 +274,7 @@ pub fn gw_attack(
 #[reducer]
 pub fn gw_cast_at(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     spell_id: u32,
     target_guid: u64,
 ) -> Result<(), String> {
@@ -290,7 +290,7 @@ pub fn gw_cast_at(
 #[reducer]
 pub fn gw_cast_spell_at(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     spell_id: u32,
     target_guid: u64,
     x: f32,
@@ -332,7 +332,7 @@ fn loot_operator_error(detail: String) -> String {
 #[reducer]
 pub fn gw_take_loot(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     corpse_guid: u64,
     loot_slot: u8,
 ) -> Result<(), String> {
@@ -347,7 +347,7 @@ pub fn gw_take_loot(
 #[reducer]
 pub fn gw_open_creature_loot(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     corpse_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx).map_err(loot_operator_error)?;
@@ -360,7 +360,7 @@ pub fn gw_open_creature_loot(
 #[reducer]
 pub fn gw_ranged_attack(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     target_guid: u64,
     spell_id: u32,
 ) -> Result<(), String> {
@@ -374,7 +374,7 @@ pub fn gw_ranged_attack(
 #[reducer]
 pub fn gw_stop_attack(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
 ) -> Result<(), String> {
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
@@ -387,7 +387,7 @@ pub fn gw_stop_attack(
 #[reducer]
 pub fn gw_set_sheathed(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     state: u8,
 ) -> Result<(), String> {
     require_operator(ctx)?;
@@ -400,7 +400,7 @@ pub fn gw_set_sheathed(
 #[reducer]
 pub fn gw_accept_quest(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     giver_guid: u64,
     quest_entry: u32,
 ) -> Result<(), String> {
@@ -414,7 +414,7 @@ pub fn gw_accept_quest(
 #[reducer]
 pub fn gw_turn_in_quest(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     giver_guid: u64,
     quest_entry: u32,
     reward_index: u32,
@@ -446,7 +446,7 @@ fn item_actor(ctx: &ReducerContext, actor_guid: u64) -> Result<crate::WorldEntit
 #[reducer]
 pub fn gw_use_item(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     slot: u8,
 ) -> Result<(), String> {
     require_operator(ctx)?;
@@ -460,7 +460,7 @@ pub fn gw_use_item(
 #[reducer]
 pub fn gw_cast_item_target(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     spell_id: u32,
     slot: u8,
 ) -> Result<(), String> {
@@ -474,7 +474,7 @@ pub fn gw_cast_item_target(
 #[reducer]
 pub fn gw_loot_money(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     target_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx).map_err(loot_operator_error)?;
@@ -487,7 +487,7 @@ pub fn gw_loot_money(
 #[reducer]
 pub fn gw_buy_item(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     vendor_guid: u64,
     item_entry: u32,
     count: u32,
@@ -502,7 +502,7 @@ pub fn gw_buy_item(
 #[reducer]
 pub fn gw_sell_item(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     vendor_guid: u64,
     slot: u8,
 ) -> Result<(), String> {
@@ -516,7 +516,7 @@ pub fn gw_sell_item(
 #[reducer]
 pub fn gw_equip_item(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     from_slot: u8,
 ) -> Result<(), String> {
     require_operator(ctx)?;
@@ -529,7 +529,7 @@ pub fn gw_equip_item(
 #[reducer]
 pub fn gw_use_gameobject(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     go_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx).map_err(loot_operator_error)?;
@@ -556,7 +556,7 @@ fn trainer_actor(ctx: &ReducerContext, actor_guid: u64) -> Result<crate::WorldEn
 #[reducer]
 pub fn gw_trainer_buy(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     trainer_guid: u64,
     spell_id: u32,
 ) -> Result<(), String> {
@@ -570,7 +570,7 @@ pub fn gw_trainer_buy(
 #[reducer]
 pub fn gw_respond_resurrect(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     accept: bool,
 ) -> Result<(), String> {
     require_operator(ctx)?;
@@ -581,7 +581,10 @@ pub fn gw_respond_resurrect(
 
 /// [`crate::actor::repop`] behind the gateway gate — a dead actor releases to the graveyard.
 #[reducer]
-pub fn gw_repop(ctx: &ReducerContext, request_actor: crate::SessionActor) -> Result<(), String> {
+pub fn gw_repop(
+    ctx: &ReducerContext,
+    request_actor: crate::account_ownership::SessionActor,
+) -> Result<(), String> {
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
@@ -592,7 +595,7 @@ pub fn gw_repop(ctx: &ReducerContext, request_actor: crate::SessionActor) -> Res
 #[reducer]
 pub fn gw_self_resurrect(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
 ) -> Result<(), String> {
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
@@ -604,7 +607,7 @@ pub fn gw_self_resurrect(
 #[reducer]
 pub fn gw_spirit_res(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
 ) -> Result<(), String> {
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
@@ -616,7 +619,7 @@ pub fn gw_spirit_res(
 #[reducer]
 pub fn gw_accept_group_invite(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
 ) -> Result<(), String> {
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
@@ -629,7 +632,7 @@ pub fn gw_accept_group_invite(
 #[reducer]
 pub fn gw_set_target(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     target_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx)?;
@@ -642,7 +645,7 @@ pub fn gw_set_target(
 #[reducer]
 pub fn gw_send_chat(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     chat_type: u8,
     language: u8,
     message: String,
@@ -657,7 +660,7 @@ pub fn gw_send_chat(
 #[reducer]
 pub fn gw_send_emote(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     text_emote: u32,
     emote_anim: u32,
     target_guid: u64,
@@ -684,7 +687,7 @@ pub fn gw_send_emote(
 pub fn gw_player_login(
     ctx: &ReducerContext,
     account_id: u64,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
 ) -> Result<(), String> {
     require_operator(ctx)?;
     enter_world(
@@ -702,7 +705,7 @@ pub fn gw_player_login(
 pub fn gw_player_world_port(
     ctx: &ReducerContext,
     account_id: u64,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
 ) -> Result<(), String> {
     require_operator(ctx)?;
     enter_world(
@@ -717,7 +720,7 @@ pub fn gw_player_world_port(
 fn enter_world(
     ctx: &ReducerContext,
     account_id: u64,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     entry: crate::world::WorldEntry,
 ) -> Result<(), String> {
     let character_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
@@ -764,7 +767,7 @@ fn enter_world(
 #[reducer]
 pub fn gw_set_away(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     kind: u8,
     message: String,
 ) -> Result<(), String> {
@@ -794,7 +797,7 @@ fn contact_actor(ctx: &ReducerContext, actor_guid: u64) -> Result<crate::WorldEn
 #[reducer]
 pub fn gw_add_friend(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     target_guid: u64,
     target_race: u8,
 ) -> Result<(), String> {
@@ -808,7 +811,7 @@ pub fn gw_add_friend(
 #[reducer]
 pub fn gw_del_friend(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     target_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx)?;
@@ -821,7 +824,7 @@ pub fn gw_del_friend(
 #[reducer]
 pub fn gw_add_ignore(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     target_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx)?;
@@ -834,7 +837,7 @@ pub fn gw_add_ignore(
 #[reducer]
 pub fn gw_del_ignore(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     target_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx)?;
@@ -865,7 +868,7 @@ fn group_actor(ctx: &ReducerContext, actor_guid: u64) -> Result<crate::WorldEnti
 #[reducer]
 pub fn gw_group_invite(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     target_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx)?;
@@ -878,7 +881,7 @@ pub fn gw_group_invite(
 #[reducer]
 pub fn gw_group_decline(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
 ) -> Result<(), String> {
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
@@ -891,7 +894,7 @@ pub fn gw_group_decline(
 #[reducer]
 pub fn gw_initiate_trade(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     target_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx)?;
@@ -904,7 +907,7 @@ pub fn gw_initiate_trade(
 #[reducer]
 pub fn gw_begin_trade(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
 ) -> Result<(), String> {
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
@@ -917,7 +920,7 @@ pub fn gw_begin_trade(
 #[reducer]
 pub fn gw_cancel_trade(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
 ) -> Result<(), String> {
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
@@ -930,7 +933,7 @@ pub fn gw_cancel_trade(
 #[reducer]
 pub fn gw_set_trade_item(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     trade_slot: u8,
     inv_slot: u8,
 ) -> Result<(), String> {
@@ -944,7 +947,7 @@ pub fn gw_set_trade_item(
 #[reducer]
 pub fn gw_clear_trade_item(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     trade_slot: u8,
 ) -> Result<(), String> {
     require_operator(ctx)?;
@@ -957,7 +960,7 @@ pub fn gw_clear_trade_item(
 #[reducer]
 pub fn gw_set_trade_gold(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     copper: u32,
 ) -> Result<(), String> {
     require_operator(ctx)?;
@@ -971,7 +974,7 @@ pub fn gw_set_trade_gold(
 #[reducer]
 pub fn gw_accept_trade(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
 ) -> Result<(), String> {
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
@@ -983,7 +986,7 @@ pub fn gw_accept_trade(
 #[reducer]
 pub fn gw_unaccept_trade(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
 ) -> Result<(), String> {
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
@@ -995,7 +998,7 @@ pub fn gw_unaccept_trade(
 #[reducer]
 pub fn gw_busy_trade(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
 ) -> Result<(), String> {
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
@@ -1007,7 +1010,7 @@ pub fn gw_busy_trade(
 #[reducer]
 pub fn gw_ignore_trade(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
 ) -> Result<(), String> {
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
@@ -1019,7 +1022,7 @@ pub fn gw_ignore_trade(
 #[reducer]
 pub fn gw_duel_accept(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     flag_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx)?;
@@ -1033,7 +1036,7 @@ pub fn gw_duel_accept(
 #[reducer]
 pub fn gw_duel_cancel(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     flag_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx)?;
@@ -1047,7 +1050,7 @@ pub fn gw_duel_cancel(
 #[reducer]
 pub fn gw_group_leave(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
 ) -> Result<(), String> {
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
@@ -1059,7 +1062,7 @@ pub fn gw_group_leave(
 #[reducer]
 pub fn gw_group_uninvite(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     target_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx)?;
@@ -1072,7 +1075,7 @@ pub fn gw_group_uninvite(
 #[reducer]
 pub fn gw_group_loot_method(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     loot_setting: u8,
     master_guid: u64,
     loot_threshold: u8,
@@ -1087,7 +1090,7 @@ pub fn gw_group_loot_method(
 #[reducer]
 pub fn gw_push_quest_to_party(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     quest_entry: u32,
 ) -> Result<(), String> {
     require_operator(ctx)?;
@@ -1104,7 +1107,7 @@ pub fn gw_push_quest_to_party(
 #[reducer]
 pub fn gw_move_item(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     from_slot: u8,
     to_slot: u8,
 ) -> Result<(), String> {
@@ -1119,7 +1122,7 @@ pub fn gw_move_item(
 #[reducer]
 pub fn gw_destroy_item(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     slot: u8,
     count: u32,
 ) -> Result<(), String> {
@@ -1133,7 +1136,7 @@ pub fn gw_destroy_item(
 #[reducer]
 pub fn gw_split_item(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     from_slot: u8,
     to_slot: u8,
     count: u32,
@@ -1149,7 +1152,7 @@ pub fn gw_split_item(
 #[reducer]
 pub fn gw_unequip_item(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     from_slot: u8,
 ) -> Result<(), String> {
     require_operator(ctx)?;
@@ -1164,7 +1167,7 @@ pub fn gw_unequip_item(
 #[reducer]
 pub fn gw_auto_bank_item(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     slot: u8,
 ) -> Result<(), String> {
     require_operator(ctx)?;
@@ -1177,7 +1180,7 @@ pub fn gw_auto_bank_item(
 #[reducer]
 pub fn gw_buyback_item(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     vendor_guid: u64,
     slot: u8,
 ) -> Result<(), String> {
@@ -1191,7 +1194,7 @@ pub fn gw_buyback_item(
 #[reducer]
 pub fn gw_repair_item(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     npc_guid: u64,
     slot: u8,
 ) -> Result<(), String> {
@@ -1206,7 +1209,7 @@ pub fn gw_repair_item(
 #[reducer]
 pub fn gw_buy_bank_slot(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     banker_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx)?;
@@ -1223,7 +1226,7 @@ pub fn gw_buy_bank_slot(
 #[reducer]
 pub fn gw_disenchant(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     slot: u8,
 ) -> Result<(), String> {
     require_operator(ctx)?;
@@ -1236,7 +1239,7 @@ pub fn gw_disenchant(
 #[reducer]
 pub fn gw_enchant_item(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     target_slot: u8,
     enchant_id: u32,
 ) -> Result<(), String> {
@@ -1248,7 +1251,10 @@ pub fn gw_enchant_item(
 
 /// [`crate::professions::apply_fish`] with the fisher named by guid.
 #[reducer]
-pub fn gw_fish(ctx: &ReducerContext, request_actor: crate::SessionActor) -> Result<(), String> {
+pub fn gw_fish(
+    ctx: &ReducerContext,
+    request_actor: crate::account_ownership::SessionActor,
+) -> Result<(), String> {
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
@@ -1259,7 +1265,7 @@ pub fn gw_fish(ctx: &ReducerContext, request_actor: crate::SessionActor) -> Resu
 #[reducer]
 pub fn gw_bind_home(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     innkeeper_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx)?;
@@ -1278,7 +1284,7 @@ pub fn gw_bind_home(
 #[reducer]
 pub fn gw_skin(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     corpse_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx).map_err(loot_operator_error)?;
@@ -1291,7 +1297,7 @@ pub fn gw_skin(
 #[reducer]
 pub fn gw_loot_roll(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     corpse_guid: u64,
     loot_slot: u32,
     vote: u8,
@@ -1306,7 +1312,7 @@ pub fn gw_loot_roll(
 #[reducer]
 pub fn gw_loot_master_give(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     corpse_guid: u64,
     loot_slot: u8,
     target_guid: u64,
@@ -1327,7 +1333,7 @@ pub fn gw_loot_master_give(
 #[reducer]
 pub fn gw_cast_spell(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     spell_id: u32,
     target_guid: u64,
 ) -> Result<(), String> {
@@ -1341,7 +1347,7 @@ pub fn gw_cast_spell(
 #[reducer]
 pub fn gw_cancel_cast(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
 ) -> Result<(), String> {
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
@@ -1353,7 +1359,7 @@ pub fn gw_cancel_cast(
 #[reducer]
 pub fn gw_cancel_aura(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     spell_id: u32,
 ) -> Result<(), String> {
     require_operator(ctx)?;
@@ -1370,7 +1376,7 @@ pub fn gw_cancel_aura(
 #[reducer]
 pub fn gw_gossip_select(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     npc_guid: u64,
     option_id: u32,
     option_row_id: u32,
@@ -1385,7 +1391,7 @@ pub fn gw_gossip_select(
 #[reducer]
 pub fn gw_inspect(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     target_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx)?;
@@ -1399,7 +1405,7 @@ pub fn gw_inspect(
 #[reducer]
 pub fn gw_learn_talent(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     talent_id: u32,
 ) -> Result<(), String> {
     require_operator(ctx)?;
@@ -1411,7 +1417,7 @@ pub fn gw_learn_talent(
 #[reducer]
 pub fn gw_reset_talents(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     trainer_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx)?;
@@ -1424,7 +1430,7 @@ pub fn gw_reset_talents(
 #[reducer]
 pub fn gw_pick_lock(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     go_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx)?;
@@ -1437,7 +1443,7 @@ pub fn gw_pick_lock(
 #[reducer]
 pub fn gw_set_action_button(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     button: u8,
     action: u32,
     action_type: u8,
@@ -1452,7 +1458,7 @@ pub fn gw_set_action_button(
 #[reducer]
 pub fn gw_set_faction_at_war(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     reputation_index: u32,
     at_war: bool,
 ) -> Result<(), String> {
@@ -1466,7 +1472,7 @@ pub fn gw_set_faction_at_war(
 #[reducer]
 pub fn gw_abandon_quest(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     quest_entry: u32,
 ) -> Result<(), String> {
     require_operator(ctx)?;
@@ -1481,7 +1487,7 @@ pub fn gw_abandon_quest(
 #[reducer]
 pub fn gw_reclaim_corpse(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     _corpse_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx)?;
@@ -1494,7 +1500,7 @@ pub fn gw_reclaim_corpse(
 #[reducer]
 pub fn gw_enter_areatrigger(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     trigger_id: u32,
 ) -> Result<(), String> {
     require_operator(ctx)?;
@@ -1508,7 +1514,7 @@ pub fn gw_enter_areatrigger(
 #[reducer]
 pub fn gw_pet_command(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     data: u32,
     target_guid: u64,
 ) -> Result<(), String> {
@@ -1524,7 +1530,7 @@ pub fn gw_pet_command(
 #[reducer]
 pub fn gw_client_command(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     cmd: String,
     payload: String,
 ) -> Result<(), String> {
@@ -1540,7 +1546,7 @@ pub fn gw_client_command(
 #[reducer]
 pub fn gw_gm_command(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     alpha_test_tools: bool,
     text: String,
 ) -> Result<(), String> {
@@ -1567,7 +1573,7 @@ mod tests {
 
     fn movement(actor_guid: u64, opcode: u16, x: f32, move_time_ms: u32, body: &[u8]) -> GwMove {
         GwMove {
-            actor: crate::SessionActor {
+            actor: crate::account_ownership::SessionActor {
                 guid: actor_guid,
                 ownership: None,
             },

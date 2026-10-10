@@ -774,7 +774,7 @@ pub fn ensure_instance(
     instance_id: u64,
     map_id: u32,
     party_id: u64,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     crate::account_ownership::require_actor(ctx, request_actor)?;
@@ -823,7 +823,7 @@ pub fn ensure_instance(
 pub fn evict_instance_population(
     ctx: &ReducerContext,
     instance_id: u64,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     crate::account_ownership::require_actor(ctx, request_actor)?;

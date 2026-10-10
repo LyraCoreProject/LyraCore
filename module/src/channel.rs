@@ -136,7 +136,7 @@ pub struct ChannelRequest {
 #[reducer]
 pub fn realm_channel_op(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     op: u8,
     request: ChannelRequest,
 ) -> Result<(), String> {

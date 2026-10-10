@@ -36,25 +36,18 @@ mod package_config;
 mod readout;
 mod runtime_script;
 
-pub use audit::*;
-pub use auth::*;
-pub use encounter::*;
-pub use eventai::*;
 pub use fingerprint::*;
 pub use instance::*;
-pub use mail::*;
-pub use meeting_stone::*;
-pub use package_config::*;
 pub use readout::*;
-pub use runtime_script::*;
 
 use lyracore_shared::{constants, spatial};
 use spacetimedb::{log, reducer, ReducerContext, ScheduleAt, Table, TimeDuration};
 
+use crate::creatures::build_creature_entity;
 use crate::{
-    build_creature_entity, game_aura, game_character, game_config, game_creature_move_schedule,
-    game_creature_spawn, game_creature_spline, game_creature_template, game_entity_motion,
-    game_gameobject, game_gameobject_pool, game_gameobject_pool_member, game_gameobject_template,
+    game_aura, game_character, game_config, game_creature_move_schedule, game_creature_spawn,
+    game_creature_spline, game_creature_template, game_entity_motion, game_gameobject,
+    game_gameobject_pool, game_gameobject_pool_member, game_gameobject_template,
     game_gameobject_unlocked, game_ground_area, game_item_instance, game_item_template,
     game_melee_attack, game_quest_template, game_spell, game_spell_effect, game_world_entity,
     CreatureMoveSchedule, CreatureSpawn, GroundArea, ItemInstance, ServerConfig,
@@ -390,7 +383,7 @@ pub fn debug_spawn_player_entity(ctx: &ReducerContext, character_guid: u64) -> R
     // `world::player_login` runs, factored into the shared `build_player_entity`. The ONLY difference:
     // `owner_identity` is the character's PERSISTED binding (NOT `ctx.sender()` — a `spacetime call`
     // runs as the CLI identity, which owns no player binding), so per-owner RLS matches a real login.
-    let entity = crate::build_player_entity(ctx, &character, character.owner_identity);
+    let entity = crate::creatures::build_player_entity(ctx, &character, character.owner_identity);
     let (level, max_health) = (entity.level, entity.max_health);
     entities.insert(entity);
     // Same rebuild contract as `player_login`: a land mount lives in the aura set, so a materialize
@@ -526,7 +519,7 @@ pub fn debug_spawn_ground_area(
         ))
         .ok_or("duration overflow")?;
     // Perf catalog 1.20: the tick schedule is demand-armed (it disarms when the area table drains).
-    crate::arm_ground_area_tick(ctx);
+    crate::spell::arm_ground_area_tick(ctx);
     ctx.db.game_ground_area().insert(GroundArea {
         id: 0,
         spell_id,

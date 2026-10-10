@@ -9,9 +9,10 @@
 
 use spacetimedb::{reducer, ReducerContext, ScheduleAt, Table, TimeDuration};
 
+use crate::spell::SpellCastEventKind;
 use crate::{
     game_item_instance, game_item_template, game_spell, game_spell_cast_event, game_world_entity,
-    SpellCastEvent, SpellCastEventKind, WorldEntity,
+    SpellCastEvent, WorldEntity,
 };
 
 // Tables' pure formulas/consts and the sibling submodules' re-exports (`roll_swing`, `apply_hit`,

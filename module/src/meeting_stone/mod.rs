@@ -107,7 +107,7 @@ fn refused(refusal: MeetingStoneRefusal, detail: &str) -> String {
 #[reducer]
 pub fn gw_admit_meeting_stone(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     go_guid: u64,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
@@ -122,7 +122,7 @@ pub fn gw_admit_meeting_stone(
 
 fn admit(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     actor_guid: u64,
     go_guid: u64,
 ) -> Result<(), MeetingStoneRefusal> {
@@ -212,7 +212,7 @@ impl From<crate::group::GroupOpError> for StoneOpError {
 pub fn realm_meeting_stone_op(
     ctx: &ReducerContext,
     op: u8,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     area_id: u32,
     seekers: Vec<SeekerFacts>,
 ) -> Result<(), String> {

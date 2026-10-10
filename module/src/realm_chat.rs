@@ -90,7 +90,7 @@ pub(crate) struct RealmChatLine {
 #[reducer]
 pub fn realm_chat(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     request: RealmChatRequest,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
@@ -211,7 +211,7 @@ pub struct WhisperRequest {
 #[reducer]
 pub fn realm_whisper(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     request: WhisperRequest,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;

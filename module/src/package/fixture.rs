@@ -10,7 +10,25 @@ use crate::creatures::{game_creature_move_schedule, GLOBAL_TICK_INSTANCE};
 use crate::import_meta::game_import_meta;
 
 /// The highest-threat living source on the creature's map and instance. Ties go to the lower guid.
-pub use crate::threat::top_threat_target;
+pub(crate) use crate::threat::top_threat_target;
+
+pub(crate) use crate::account_ownership::SessionActor;
+pub(crate) use crate::combat::{
+    apply_hit, enter_combat, final_damage, fold_incoming_damage, kill_creature, Hit, HitSource,
+};
+pub(crate) use crate::creatures::tick::emit_move_spline;
+pub(crate) use crate::creatures::{
+    build_creature_entity, despawn_creature_entity, insert_creature_entity, timer_never,
+};
+pub(crate) use crate::group::sync_group_mirror;
+pub(crate) use crate::items::{grant_item, remove_items};
+pub(crate) use crate::loot::tag::clear as clear_loot_tag;
+pub(crate) use crate::nav::record_change as record_navigation_change;
+pub(crate) use crate::spell::{
+    cast_triggered, do_cancel_aura, learn_spell, start_creature_spell,
+    CreatureSpellCasterAdmission, CreatureSpellStart, CreatureSpellStartMode, CreatureSpellTarget,
+};
+pub(crate) use crate::xp::grant_xp;
 
 /// Damage a live, living target through the real Core damage pipeline as a main-hand hit from
 /// `attacker_guid` (0 means anonymous). Damage is capped one below the target's health, so the
@@ -61,7 +79,7 @@ pub fn client_cast(
 ) -> Result<(), String> {
     crate::gw::gw_cast_at(
         ctx,
-        crate::SessionActor {
+        SessionActor {
             guid: caster_guid,
             ownership: None,
         },
@@ -79,7 +97,7 @@ pub fn admit_to_instance(
     map_id: u32,
     instance_id: u64,
     party_id: u64,
-    request_actor: crate::SessionActor,
+    request_actor: SessionActor,
 ) -> Result<(), String> {
     crate::instance::ensure_instance(ctx, instance_id, map_id, party_id, request_actor)?;
     let admitted = crate::instance::resolve_or_create_instance(ctx, character_guid, map_id)?;

@@ -8,10 +8,10 @@
 //! the gameplay logic, `transfer` is the escrowed cross-database character-transport subsystem,
 //! and `seed` is the `init` lifecycle reducer that populates a fresh database.
 //!
-//! Each module is re-exported below so submodules can reference any table uniformly via
-//! `crate::{<accessor_trait>, <RowType>}`. The `#[table(accessor = X)]` macro generates a trait
-//! named `X` (inheriting the struct's `pub` visibility) that provides `ctx.db.X()`; the glob
-//! re-exports carry those traits to the crate root. Scheduled tables are co-located with the
+//! `tables.rs` names every table, and the crate root re-exports that list, so any module reaches a
+//! table as `crate::{<accessor_trait>, <RowType>}`. The `#[table(accessor = X)]` macro generates a
+//! trait named `X` (inheriting the struct's `pub` visibility) that provides `ctx.db.X()`. Every
+//! other item is reached through its owning family. Scheduled tables are co-located with the
 //! reducer they name (`scheduled(...)` resolves the reducer in its own module's scope).
 //!
 //! Built against SpacetimeDB 2.7.1 (`accessor =` table syntax; `ctx.sender()` /
@@ -338,8 +338,7 @@ mod loot;
 /// authoritative; a single-database gateway reads and writes its own copy through the same rules.
 mod mail;
 /// Imported mail catalogue: letter bodies, the item a letter may carry, and which quests send one at
-/// turn-in. Not re-exported below, for the same reason `import_meta` is not: only the importer and
-/// `mail_reward` read these tables, and the Gateway reads none.
+/// turn-in. Only the importer and `mail_reward` read these tables, and the Gateway reads none.
 mod mail_catalogue;
 /// Mail attachment escrow: the source-side fence, the mail-plane commit keyed by the same
 /// caller-chosen id, and the reaper. The mechanism for moving value into a mail row across a
@@ -367,28 +366,20 @@ mod mount;
 pub mod nav;
 /// Operator reducers every build carries: the post-publish repair pass.
 mod operations;
+/// The Package API root for Package operations, encounters, fixtures and tests.
+mod package;
 /// Package-owned Accounts: the operation a Package creates its session-less Characters through, and
 /// the record of which Package owns each Account.
 mod package_account;
 /// The Operator key-value config surface any installed Package reads: `game_package_config`,
 /// `set_package_config`, and the `ensure_package_config_default` seeding helper Packages call from
-/// their own ensure/init path. Not re-exported below, for the same reason `import_meta` is not:
-/// nothing outside this module reads its table.
+/// their own ensure/init path.
 mod package_config;
-/// The debug-only Package API root for Package fixtures. Not re-exported below: Packages name it by
-/// path, which is what the Package API lint checks.
-#[cfg(feature = "debug_reducers")]
-mod package_fixture;
 /// Package Deltas applied to the spell tables as the last stage of their base import, and the
-/// per-Package provenance that records what landed. Not re-exported below, for the same reason
-/// `import_meta` is not: nothing outside this module reads its table.
+/// per-Package provenance that records what landed.
 mod package_import;
 /// Package Teardown: the Operator step that stops a Package before it leaves the build.
 mod package_teardown;
-/// The test-only Package API root for Package unit tests. Not re-exported below, for the same
-/// reason as `package_fixture`.
-#[cfg(test)]
-mod package_test;
 mod professions;
 /// Publish-safety Architecture Tests scan `scripts/**` + `tools/**` for a destructive
 /// `spacetime publish -c`, and pins the sanctioned deploy script's own argv guard and required
@@ -407,8 +398,7 @@ mod rest;
 // default build.
 mod runtime_script;
 /// The `game_script` table and the Event Binding dispatch: which Runtime Scripts run for which
-/// event. Not re-exported below, for the same reason `package_import` is not — nothing outside this
-/// module reads its table.
+/// event.
 mod script_binding;
 mod seed;
 mod sessionless;
@@ -416,6 +406,7 @@ mod skill;
 mod skilldata;
 mod spell;
 mod stats;
+pub mod tables;
 mod talent;
 mod taxi;
 pub mod terrain;
@@ -438,67 +429,243 @@ mod weather;
 mod world;
 mod xp;
 
-pub use account_ownership::*;
-pub use action_bar::*;
-pub use auction::*;
-pub use auth::*;
-pub use away::CharacterAway; // re-exported for the gateway schema-parity test
-pub use breath::*;
-pub use breath_relay::BreathRelayEvent; // gateway schema-parity relay
-pub use bridge::*;
-// Named, like `realm_chat`: re-exported for the gateway schema-parity test.
-pub use channel::{ChatChannel, ChatChannelBan, ChatChannelMember, ChatChannelNoticeEvent};
-pub use character::*;
-pub use chat::*;
-pub use combat::*;
-pub use config::*;
-pub use corpse::*;
-pub use creatures::*;
+// The crate root names every core table so `crate::game_x` and `crate::Row` resolve here. The
+// list mirrors `tables.rs`; nothing else is re-exported at the root.
+pub use tables::{
+    game_account, game_alpha_test_tools_enrollment, game_guid_allocator, game_guid_range,
+    game_operator, game_session, game_session_reaper_schedule, Account, AlphaTestToolsEnrollment,
+    GuidAllocator, GuidRange, Operator, Session, SessionReaperSchedule,
+};
+pub use tables::{
+    game_account_character_owner, game_account_claim, game_account_fence, AccountCharacterOwner,
+    AccountClaim, AccountFence,
+};
+pub use tables::{
+    game_active_taxi_flight, game_character_taxi_node, game_taxi_flight_schedule,
+    game_taxi_passenger_spline, game_taxi_service_reply, ActiveTaxiFlight, CharacterTaxiNode,
+    TaxiFlightSchedule, TaxiPassengerSpline, TaxiServiceReply,
+};
+pub use tables::{
+    game_addon_message, game_party_command_dispatch_lane, game_party_command_intent,
+    game_party_command_issuer, game_party_command_receipt, AddonMessage, PartyCommandDispatchLane,
+    PartyCommandIntent, PartyCommandIssuer, PartyCommandReceipt,
+};
+pub use tables::{
+    game_area, game_area_trigger, game_char_base_info, game_config, game_race_info, game_realm,
+    game_start_item, game_start_position, game_taxi_node, game_taxi_path, game_taxi_path_node,
+    CharBaseInfo, GameArea, GameAreaTrigger, GameTaxiNode, GameTaxiPath, GameTaxiPathNode,
+    RaceInfo, Realm, ServerConfig, StartItem, StartPosition,
+};
+pub use tables::{
+    game_areatrigger_teleport, game_character_quest, game_character_quest_event_credit,
+    game_creature_quest, game_gameobject_quest, game_quest_cast_objective,
+    game_quest_event_requirement, game_quest_objective, game_quest_reward_choice,
+    game_quest_reward_item, game_quest_reward_spell, game_quest_template, game_quest_text,
+    AreatriggerTeleport, CharacterQuest, CharacterQuestEventCredit, CreatureQuest, GameObjectQuest,
+    QuestCastObjective, QuestEventRequirement, QuestObjective, QuestRewardChoice, QuestRewardItem,
+    QuestRewardSpell, QuestTemplate, QuestText,
+};
+pub use tables::{
+    game_auction, game_auction_bid_decision, game_auction_bid_hold, game_auction_expiry,
+    game_auction_hold, game_auction_house, game_auction_notice, game_auction_operation_receipt,
+    Auction, AuctionBidDecision, AuctionBidHold, AuctionExpiry, AuctionHold,
+    AuctionHouseDefinition, AuctionNotice, AuctionOperationReceipt,
+};
+pub use tables::{
+    game_aura, game_aura_schedule, game_createinfo_spell, game_dynamic_object, game_ground_area,
+    game_ground_area_schedule, game_pending_cast, game_pending_spell_impact, game_player_spell,
+    game_resurrect_request, game_school_lockout, game_self_resurrect_option, game_spell,
+    game_spell_cast_event, game_spell_cd, game_spell_chain, game_spell_cooldown, game_spell_effect,
+    game_spell_impact_event, game_spell_learn, game_spell_proc_event, game_spell_reagent, Aura,
+    AuraSchedule, CreateinfoSpell, DynamicObject, GroundArea, GroundAreaSchedule, PendingCast,
+    PendingSpellImpact, PlayerSpell, ResurrectRequest, SchoolLockout, SelfResurrectOption, Spell,
+    SpellCastEvent, SpellCd, SpellChain, SpellCooldown, SpellEffect, SpellImpactEvent, SpellLearn,
+    SpellProcEvent, SpellReagent,
+};
+pub use tables::{
+    game_bot_invite_intent, game_group, game_group_event, game_group_invite, game_group_member,
+    game_group_member_partition, game_group_roster_revision, game_group_target_icon,
+    BotInviteIntent, Group, GroupEvent, GroupInvite, GroupMember, GroupMemberPartition,
+    GroupRosterRevision, GroupTargetIcon, PartyPartitionState,
+};
+pub use tables::{
+    game_bot_transfer_intent, game_transfer_in, game_transfer_out, game_transfer_reaper_schedule,
+    BotTransferIntent, TransferIn, TransferOut, TransferReaperSchedule,
+};
+pub use tables::{game_breath_relay_event, BreathRelayEvent};
+pub use tables::{game_breath_schedule, game_breath_state, BreathSchedule, BreathState};
 #[cfg(feature = "debug_reducers")]
-pub use debug::*;
-pub use duel::*;
-pub use encounter::*;
-pub use exploration::CharacterExplored; // re-exported for the gateway schema-parity test
-pub use faction::*;
-pub use gameobject::*;
-pub use gc::*;
-pub use gm::*;
-pub use graveyard::*;
-pub use group::*;
-pub use gw::*;
-pub use instance::*;
-pub use items::*;
-pub use load::*;
-pub use loot::*;
-pub use mail::Mail; // re-exported for the gateway schema-parity test
-pub use mail_escrow::MailEscrow; // re-exported for the gateway schema-parity test
-pub use mail_text::ItemText; // re-exported for the gateway schema-parity test
-pub use mail_timer::{MailArrival, MailTimer}; // re-exported for the gateway schema-parity test
-pub use meeting_stone::{MeetingStone, MeetingStoneSeeker}; // gateway schema-parity test
-pub use motion::*;
-pub use quest::*;
-// Named, not globbed: the `realm_chat` reducer's generated type would shadow the module name.
-pub use realm_chat::RealmChatEvent; // re-exported for the gateway schema-parity test
-pub use realm_core::*;
-pub use region::*;
-pub use reputation::*;
-pub use rest::RestStateEvent; // re-exported for the gateway schema-parity test (4c)
-pub use sessionless::*;
-pub use skill::*;
-pub use skilldata::*;
-pub use spell::stacking::SpellGroupRule; // Keeps this generated table in schema-parity coverage.
-pub use spell::*;
-pub use stats::*;
-pub use talent::*;
-pub use taxi::*;
-pub use threat::*;
-pub use trade::*;
-pub use trainer::*;
-// Re-exported for the gateway schema-parity test.
-pub use transfer::{BotTransferIntent, TransferIn, TransferOut};
-pub use weather::*;
-pub use world::*;
-pub use xp::*;
+pub use tables::{
+    game_catalogue_fingerprint, game_debug_readout, CatalogueFingerprint, DebugReadout,
+};
+pub use tables::{
+    game_channel_event, game_channel_member, game_character_contact, game_chat_event,
+    game_emote_event, game_roll_event, game_system_message_event, game_whisper_event, ChannelEvent,
+    ChannelMember, ChatEvent, ContactEntry, EmoteEvent, RollEvent, SystemMessageEvent,
+    WhisperEvent,
+};
+pub use tables::{game_character, Character};
+pub use tables::{game_character_away, CharacterAway};
+pub use tables::{
+    game_character_buyback, game_item_enchantment, game_item_instance, game_item_property_weight,
+    game_item_random_property, game_item_template, game_npc_vendor, BuybackEntry, ItemEnchantment,
+    ItemInstance, ItemPropertyWeight, ItemRandomProperty, ItemTemplate, NpcVendor,
+};
+pub use tables::{game_character_explored, CharacterExplored};
+pub use tables::{
+    game_character_shard, game_guid_range_registry, CharacterShard, GuidRangeAssignment,
+};
+pub use tables::{
+    game_character_talent, game_talent, game_talent_tab, CharacterTalent, Talent, TalentTab,
+};
+pub use tables::{
+    game_chat_channel, game_chat_channel_ban, game_chat_channel_member,
+    game_chat_channel_notice_event, ChatChannel, ChatChannelBan, ChatChannelMember,
+    ChatChannelNoticeEvent,
+};
+pub use tables::{game_class_level_stats, game_level_stats, ClassLevelStats, LevelStats};
+pub use tables::{
+    game_combat_event, game_melee_attack, game_melee_schedule, game_ranged_impact_schedule,
+    CombatEvent, MeleeAttack, MeleeSchedule, RangedImpactSchedule,
+};
+pub use tables::{game_combo_point, ComboPoint};
+pub use tables::{game_corpse, Corpse};
+pub use tables::{
+    game_corpse_loot, game_corpse_loot_eligible, game_creature_loot, game_creature_loot_tag_group,
+    game_creature_quest_tap, game_creature_quest_tap_member, game_fishing_loot,
+    game_gameobject_loot, game_loot_roll, game_loot_roll_promotion_receipt, game_loot_roll_vote,
+    game_pickpocket_loot, game_skinning_loot, CorpseLoot, CorpseLootEligible, CreatureLoot,
+    CreatureLootTagGroup, CreatureQuestTap, CreatureQuestTapMember, GameFishingLoot,
+    GameObjectLoot, GamePickpocketLoot, GameSkinningLoot, LootRoll, LootRollPromotionReceipt,
+    LootRollVote,
+};
+pub use tables::{game_createinfo_action, game_player_action, CreateinfoAction, PlayerAction};
+pub use tables::{
+    game_creature_ai_broadcast_text, game_creature_ai_definition, game_creature_ai_event,
+    game_creature_ai_forced_despawn, game_creature_ai_movement_intent,
+    game_creature_ai_movement_path_waypoint, game_creature_ai_relay_arrival,
+    game_creature_ai_relay_continuation, game_creature_ai_relay_definition,
+    game_creature_ai_relay_run, game_creature_ai_reset_deferral, game_creature_ai_returning_home,
+    game_creature_ai_rule_state, game_creature_ai_spell_metadata, game_creature_ai_state,
+    game_creature_ai_summon, game_creature_ai_summon_expiry, game_creature_ai_summon_origin,
+    game_creature_cast, game_creature_family, game_creature_gossip_menu_override,
+    game_creature_move_event, game_creature_move_schedule, game_creature_presentation,
+    game_creature_relay_temporary_faction, game_creature_spawn, game_creature_spell,
+    game_creature_spline, game_creature_template, game_creature_waypoint, game_gossip_menu,
+    game_gossip_menu_profile, game_gossip_menu_profile_option, game_gossip_option, game_hunter_pet,
+    game_hunter_pet_protocol, game_live_pet_kind, game_npc_text, game_npc_text_slot,
+    game_pet_care_schedule, game_pet_command, CreatureAiBroadcastText, CreatureAiDefinition,
+    CreatureAiEvent, CreatureAiForcedDespawn, CreatureAiMovementIntent,
+    CreatureAiMovementPathWaypoint, CreatureAiResetDeferral, CreatureAiReturningHome,
+    CreatureAiRuleState, CreatureAiSpellMetadata, CreatureAiState, CreatureAiSummon,
+    CreatureAiSummonExpiry, CreatureAiSummonOrigin, CreatureCast, CreatureFamily,
+    CreatureGossipMenuOverride, CreatureMoveEvent, CreatureMoveSchedule, CreaturePresentation,
+    CreatureRelayTemporaryFaction, CreatureSpawn, CreatureSpell, CreatureSpline, CreatureTemplate,
+    CreatureWaypoint, GossipMenu, GossipMenuProfile, GossipMenuProfileOption, GossipOption,
+    HunterPet, HunterPetProtocol, LivePetKind, NpcText, NpcTextSlot, PetCareSchedule, PetCommand,
+    RelayArrival, RelayContinuation, RelayDefinition, RelayRun,
+};
+pub use tables::{game_creature_dead_callback_cast_admission, CreatureDeadCallbackCastAdmission};
+pub use tables::{game_creature_distraction, CreatureDistraction};
+pub use tables::{game_creature_lethal_damage_floor, CreatureLethalDamageFloor};
+pub use tables::{
+    game_dr_state, game_spell_group, game_spell_group_rule, DrState, SpellGroup, SpellGroupRule,
+};
+pub use tables::{game_duel, game_duel_event, game_duel_schedule, Duel, DuelEvent, DuelSchedule};
+pub use tables::{
+    game_encounter_equip, game_encounter_hp_watch, game_encounter_spawn, game_encounter_state,
+    EncounterEquip, EncounterHpWatch, EncounterSpawn, EncounterState,
+};
+pub use tables::{
+    game_entity_motion, game_movement_violation, game_teleport_event, game_world_entity,
+    game_world_state, game_world_state_name, EntityMotion, MovementViolation, TeleportEvent,
+    WorldEntity, WorldState, WorldStateName,
+};
+pub use tables::{
+    game_entity_motion_pending, game_motion_publish_schedule, MotionPublishSchedule, PendingMotion,
+};
+pub use tables::{game_event_reaper_schedule, EventReaperSchedule};
+pub use tables::{game_faction, game_faction_template, Faction, FactionTemplate};
+pub use tables::{
+    game_gameobject, game_gameobject_pool, game_gameobject_pool_member, game_gameobject_template,
+    game_gameobject_trap, game_gameobject_trap_cooldown, game_gameobject_unlocked, game_lock,
+    GameLock, GameObject, GameObjectPool, GameObjectPoolMember, GameObjectTemplate, GameObjectTrap,
+    GameObjectTrapCooldown, GameObjectUnlocked,
+};
+pub use tables::{
+    game_gateway_lease, game_gateway_lease_reaper_schedule, game_gateway_session, GatewayLease,
+    GatewayLeaseReaperSchedule, GatewaySession,
+};
+pub use tables::{game_go_collider, GoCollider};
+pub use tables::{game_go_model, GoModel};
+pub use tables::{game_graveyard, game_graveyard_zone, GraveyardLoc, GraveyardZone};
+pub use tables::{
+    game_guild, game_guild_event, game_guild_member, game_guild_rank, Guild, GuildEvent,
+    GuildMember, GuildRank,
+};
+pub use tables::{game_guild_fee_decision, game_guild_fee_hold, GuildFeeDecision, GuildFeeHold};
+pub use tables::{game_guild_invite, GuildInvite};
+pub use tables::{
+    game_guild_petition, game_guild_petition_signature, GuildPetition, GuildPetitionSignature,
+};
+pub use tables::{game_import_meta, ImportMeta};
+pub use tables::{
+    game_instance, game_instance_binding, game_instance_reaper_schedule, game_instance_removal,
+    GameInstance, GameInstanceBinding, InstanceReaperSchedule, InstanceRemoval,
+};
+pub use tables::{game_item_text, ItemText};
+pub use tables::{game_levelup_event, game_xp_event, LevelupEvent, XpEvent};
+pub use tables::{game_mail, Mail};
+pub use tables::{game_mail_arrival, game_mail_timer, MailArrival, MailTimer};
+pub use tables::{
+    game_mail_delivery, game_mail_escrow, game_mail_escrow_reaper_schedule, MailDelivery,
+    MailEscrow, MailEscrowReaperSchedule,
+};
+pub use tables::{
+    game_mail_loot, game_mail_template, game_quest_reward_mail, MailLoot, MailTemplate,
+    QuestRewardMail,
+};
+pub use tables::{game_map_region, game_region_assignment, MapRegion, RegionAssignment};
+pub use tables::{
+    game_meeting_stone, game_meeting_stone_party, game_meeting_stone_reminder_schedule,
+    game_meeting_stone_seeker, MeetingStone, MeetingStoneParty, MeetingStoneReminderSchedule,
+    MeetingStoneSeeker,
+};
+pub use tables::{game_nav_chunk, game_navigation_revision, NavChunk, NavigationRevision};
+pub use tables::{game_package_account, PackageAccount};
+pub use tables::{game_package_config, PackageConfig};
+pub use tables::{game_package_import, PackageImport};
+pub use tables::{game_package_teardown, PackageTeardown};
+pub use tables::{game_player_reputation, PlayerReputation};
+pub use tables::{game_player_skill, PlayerSkill};
+pub use tables::{game_realm_chat_event, RealmChatEvent};
+pub use tables::{
+    game_region_load, game_shard_load, game_shard_load_total, RegionLoad, ShardLoad, ShardLoadTotal,
+};
+pub use tables::{game_rest_state_event, RestStateEvent};
+pub use tables::{game_script, Script};
+pub use tables::{game_sessionless_action_consent, SessionlessActionConsent};
+pub use tables::{
+    game_skill_ability, game_skill_availability, game_skill_line, SkillAbility, SkillAvailability,
+    SkillLine,
+};
+pub use tables::{game_taunt_lock, game_threat, TauntLock, ThreatEntry};
+pub use tables::{game_terrain_chunk, TerrainChunk};
+pub use tables::{
+    game_trade_event, game_trade_session, game_trade_slot, TradeEvent, TradeSession, TradeSlot,
+};
+pub use tables::{game_trainer_spell, TrainerSpell};
+pub use tables::{
+    game_vmap_chunk, game_vmap_generation, game_vmap_generation_chunk,
+    game_vmap_generation_receipt, game_vmap_indoor_cell, game_vmap_nav_coverage,
+    game_vmap_nav_coverage_manifest, VmapChunk, VmapGeneration, VmapGenerationChunk,
+    VmapGenerationReceipt, VmapIndoorCell, VmapNavCoverage, VmapNavCoverageManifest,
+};
+pub use tables::{
+    game_weather, game_weather_schedule, game_zone_weather, WeatherSchedule, ZoneWeather,
+    ZoneWeatherChance,
+};
+pub use tables::{game_world_config, GmWorldConfig};
 
 /// How long a movement / creature-move event lives before the reaper GCs it. Events are delivered
 /// to subscribers in real time on insert, so a short TTL is safe (see docs).

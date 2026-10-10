@@ -190,7 +190,7 @@ pub(crate) fn drop_character_letters(ctx: &ReducerContext, character_guid: u64) 
 #[reducer]
 pub fn realm_mail_copy_text(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     mail_id: u64,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
@@ -207,7 +207,7 @@ pub fn realm_mail_copy_text(
 #[reducer]
 pub fn gw_mail_grant_letter(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     item_text_id: u32,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
@@ -239,7 +239,7 @@ pub(crate) fn apply_mark_letter_granted(
 #[reducer]
 pub fn realm_mail_mark_letter_granted(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     mail_id: u64,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;

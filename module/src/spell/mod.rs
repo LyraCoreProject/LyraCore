@@ -15,7 +15,7 @@
 //! Everything is re-exported below so every `crate::spell::<sym>` path resolves regardless of which
 //! submodule actually defines it.
 
-mod cast;
+pub(crate) mod cast;
 mod outcome;
 pub(crate) use outcome::*;
 mod control;

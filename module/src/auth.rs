@@ -1068,7 +1068,7 @@ pub(crate) fn insert_new_character(
 pub fn delete_character(
     ctx: &ReducerContext,
     account_id: u64,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let character_guid = crate::account_ownership::require_actor(ctx, request_actor)?;

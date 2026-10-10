@@ -647,7 +647,7 @@ pub(crate) fn returned(row: Mail, arrives: Timestamp) -> Mail {
 #[reducer]
 pub fn realm_mail_mark_read(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     mail_id: u64,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
@@ -660,7 +660,7 @@ pub fn realm_mail_mark_read(
 #[allow(clippy::too_many_arguments)] // a reducer's arguments are the wire
 pub fn realm_mail_send(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     recipient_guid: u64,
     subject: String,
     body: String,
@@ -686,7 +686,7 @@ pub fn realm_mail_send(
 #[reducer]
 pub fn realm_mail_take_item(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     mail_id: u64,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
@@ -696,7 +696,7 @@ pub fn realm_mail_take_item(
 #[reducer]
 pub fn realm_mail_take_money(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     mail_id: u64,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
@@ -706,7 +706,7 @@ pub fn realm_mail_take_money(
 #[reducer]
 pub fn realm_mail_item_room(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let payee_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
@@ -721,7 +721,7 @@ pub fn realm_mail_item_room(
 #[reducer]
 pub fn realm_mail_delete(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     mail_id: u64,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
@@ -733,7 +733,7 @@ pub fn realm_mail_delete(
 #[reducer]
 pub fn realm_mail_return(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     mail_id: u64,
     same_account: bool,
 ) -> Result<(), String> {

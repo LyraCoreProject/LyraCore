@@ -522,7 +522,7 @@ pub(super) fn withdraw(ctx: &ReducerContext, character_guid: u64) {
 #[reducer]
 pub fn gw_destroy_guild_charter(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     charter_item_guid: u64,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;

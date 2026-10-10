@@ -20,8 +20,6 @@ pub(crate) use combat::{authored_combat, current_definition_revision};
 #[cfg(test)]
 pub(crate) use combat::{beneficiary_guid, condition, AuthoredCombat};
 pub(crate) use edges::reset_creature_lifecycle;
-pub use edges::CreatureAiResetDeferral;
-pub use edges::CreatureAiReturningHome;
 pub(crate) use edges::{
     begin_death_dispatch, creature_ai_on_aggro, creature_ai_on_creature_death,
     creature_ai_on_creature_spawn, creature_ai_on_unit_death, finish_death_dispatch,
@@ -35,6 +33,10 @@ pub(crate) use edges::{
     eventai_on_evade, eventai_on_reached_home, eventai_on_receive_ai_event,
     eventai_on_receive_emote, eventai_on_spell_hit, eventai_on_target_not_reachable,
 };
+pub use edges::{
+    game_creature_ai_reset_deferral, game_creature_ai_returning_home, CreatureAiResetDeferral,
+    CreatureAiReturningHome,
+};
 #[cfg(test)]
 pub(crate) use engine::{evaluate, EventAiWorld};
 pub(crate) use fixtures::seed_on_aggro_fixtures;
@@ -46,14 +48,18 @@ pub(crate) use mobility::summon_lifetime_after;
 pub(crate) use mobility::verify_summon_expiry_boundaries_for_debug;
 pub(crate) use mobility::{drop_summon_expiry, ranged_posture, react_state};
 pub use mobility::{
-    expire_eventai_summon, fire_eventai_forced_despawn, CreatureAiForcedDespawn,
-    CreatureAiSummonExpiry, CreatureAiSummonOrigin,
+    game_creature_ai_forced_despawn, game_creature_ai_summon_expiry,
+    game_creature_ai_summon_origin, CreatureAiForcedDespawn, CreatureAiSummonExpiry,
+    CreatureAiSummonOrigin,
 };
 #[cfg(feature = "debug_reducers")]
 pub(crate) use mobility::{mark_summon_origin_for_debug, remove_guardians};
 pub(crate) use mobility::{place_temporary_summon, summon_life_seq};
 pub(crate) use model::*;
-pub use movement::{CreatureAiMovementIntent, CreatureAiMovementPathWaypoint};
+pub use movement::{
+    game_creature_ai_movement_intent, game_creature_ai_movement_path_waypoint,
+    CreatureAiMovementIntent, CreatureAiMovementPathWaypoint,
+};
 use presentation::import_verified_rajaxx_spawn_protection;
 pub(crate) use presentation::{
     CreaturePresentationInstruction, CreaturePresentationMount, FlagOverride,

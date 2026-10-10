@@ -213,7 +213,7 @@ pub enum GuildOp {
 #[reducer]
 pub fn realm_guild_op(
     ctx: &ReducerContext,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     op: GuildOp,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;

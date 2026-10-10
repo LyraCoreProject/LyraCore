@@ -11,13 +11,13 @@
 
 use spacetimedb::{ReducerContext, Table};
 
+use crate::items::{ALL_PLAYABLE_CLASS_MASK, ALL_PLAYABLE_RACE_MASK};
 use crate::{
     game_createinfo_spell, game_creature_family, game_creature_spawn, game_creature_template,
     game_faction, game_item_template, game_spell, game_spell_effect, game_spell_proc_event,
     game_taxi_node, game_taxi_path, game_taxi_path_node, game_world_entity, CreateinfoSpell,
     CreatureFamily, CreatureSpawn, CreatureTemplate, Faction, GameTaxiNode, GameTaxiPath,
-    GameTaxiPathNode, ItemTemplate, Spell, SpellEffect, SpellProcEvent, ALL_PLAYABLE_CLASS_MASK,
-    ALL_PLAYABLE_RACE_MASK,
+    GameTaxiPathNode, ItemTemplate, Spell, SpellEffect, SpellProcEvent,
 };
 
 /// Canonical fixture-NPC/item constructors — the single source of truth for the synthetic rows
@@ -357,7 +357,7 @@ pub(crate) fn seed_taxi_fixture(ctx: &ReducerContext) {
     });
     crate::creatures::insert_creature_entity(
         ctx,
-        crate::build_creature_entity(&spawn, &template, 0, 0),
+        crate::creatures::build_creature_entity(&spawn, &template, 0, 0),
     );
 }
 

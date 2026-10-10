@@ -773,7 +773,7 @@ impl FeeLedger for CtxLedger<'_> {
 pub fn gw_guild_fee_hold(
     ctx: &ReducerContext,
     operation_id: u64,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     request: GuildFeeRequest,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
@@ -791,7 +791,7 @@ pub fn gw_guild_fee_hold(
 pub fn realm_guild_fee_decide(
     ctx: &ReducerContext,
     operation_id: u64,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     terms: GuildFeeTerms,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
@@ -806,7 +806,7 @@ pub fn realm_guild_fee_decide(
 pub fn gw_guild_fee_finish(
     ctx: &ReducerContext,
     operation_id: u64,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     accepted: bool,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;

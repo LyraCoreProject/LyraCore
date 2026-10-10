@@ -748,7 +748,7 @@ pub fn realm_loot_op(
     corpse_guid: u64,
     slot: u8,
     item_entry: u32,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
     vote: u8,
     deadline_micros: i64,
     recipients: Vec<u64>,
@@ -854,7 +854,7 @@ pub fn settle_loot_roll(
     corpse_guid: u64,
     slot: u8,
     winner_guid: u64,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     crate::account_ownership::require_actor(ctx, request_actor)?;
@@ -870,7 +870,7 @@ pub fn settle_loot_roll(
 pub fn clear_promoted_loot_roll(
     ctx: &ReducerContext,
     roll_id: u64,
-    request_actor: crate::SessionActor,
+    request_actor: crate::account_ownership::SessionActor,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     crate::account_ownership::require_actor(ctx, request_actor)?;

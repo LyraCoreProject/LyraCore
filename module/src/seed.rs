@@ -28,11 +28,12 @@
 use lyracore_shared::constants;
 use spacetimedb::{reducer, Identity, ReducerContext, ScheduleAt, Table, TimeDuration};
 
+use crate::creatures::build_creature_entity;
 use crate::{
-    build_creature_entity, game_account, game_aura_schedule, game_breath_schedule, game_character,
-    game_config, game_creature_loot, game_creature_move_schedule, game_creature_spawn,
-    game_creature_template, game_creature_waypoint, game_duel_schedule, game_event_reaper_schedule,
-    game_gameobject, game_gameobject_pool, game_gameobject_pool_member, game_gameobject_template,
+    game_account, game_aura_schedule, game_breath_schedule, game_character, game_config,
+    game_creature_loot, game_creature_move_schedule, game_creature_spawn, game_creature_template,
+    game_creature_waypoint, game_duel_schedule, game_event_reaper_schedule, game_gameobject,
+    game_gameobject_pool, game_gameobject_pool_member, game_gameobject_template,
     game_gateway_lease_reaper_schedule, game_graveyard, game_graveyard_zone,
     game_ground_area_schedule, game_instance_reaper_schedule, game_item_template,
     game_melee_schedule, game_motion_publish_schedule, game_pet_care_schedule, game_realm,

@@ -1064,7 +1064,7 @@ pub(crate) fn apply_player_login(
     // `debug_spawn_player_entity` runs, factored into `build_player_entity`. `owner_identity` is the
     // connection's bound identity (`ctx.sender()`); `account.id` is identical to `character.account_id`
     // (gated above), so the builder reads `account_id` from the character row.
-    let mut entity = crate::build_player_entity(ctx, &character, owner);
+    let mut entity = crate::creatures::build_player_entity(ctx, &character, owner);
     // a preserved ghost rebuilds AS a ghost, `build_player_entity` always builds
     // alive (it's the shared player construction, creature-side code), so the released-ghost state
     // `persist_entity` stamped is re-applied here, the one player-owned call site. Health 1 matches
