@@ -43,78 +43,6 @@ pub(crate) trait LootWindowStore: Send + Sync {
         target_guid: u64,
         loot_slot: u8,
     ) -> Result<LootWindowRequestStatus>;
-
-    // Mirrors the `realm_loot_op` REDUCER's parameter list 1:1 — this trait is the seam between them, so the shapes have to match.
-    #[allow(clippy::too_many_arguments)]
-    /// `realm_loot_op` — run one loot-roll op against the database THIS handle names. Called on
-    /// the **realm-core** handle: START promotes a world shard's staging roll, VOTE casts a vote.
-    fn realm_loot_op(
-        &self,
-        op: u8,
-        corpse_guid: u64,
-        slot: u8,
-        item_entry: u32,
-        actor_guid: u64,
-        vote: u8,
-        deadline_micros: i64,
-        recipients: Vec<u64>,
-        random_property_id: u32,
-        promotion_source: spacetimedb_sdk::Identity,
-        source_roll_id: u64,
-    ) -> Result<()>;
-
-    /// Cast one player vote on realm-core. The Store returns a typed gameplay answer while keeping
-    /// failures with an unknown durable result as `Err`.
-    fn realm_loot_vote(
-        &self,
-        corpse_guid: u64,
-        slot: u8,
-        actor_guid: u64,
-        vote: u8,
-    ) -> Result<LootActionStatus>;
-
-    /// Every UNRESOLVED loot roll this WORLD SHARD has created but not yet had promoted onto
-    /// realm-core — the relay's promotion queue. Empty on realm-core's own handle: nothing is ever
-    /// created there directly — only `realm_loot_op`'s START arm writes it, and that is not this
-    /// method.
-    fn pending_local_rolls(&self) -> Result<Vec<loot::PendingLootRoll>>;
-
-    /// `settle_loot_roll` — grant a resolved roll's item on THIS world shard, if it holds the
-    /// matching corpse row. A shard that does not hold the corpse is unaffected: the module's own
-    /// `withheld` guard makes a wrong-shard call harmless.
-    fn settle_loot_roll(&self, corpse_guid: u64, slot: u8, winner_guid: u64) -> Result<()>;
-
-    /// `clear_promoted_loot_roll` — delete a staging roll's rows on THIS world shard, once the relay
-    /// has promoted it onto realm-core.
-    fn clear_promoted_loot_roll(&self, roll_id: u64) -> Result<()>;
-
-    // Same shape as `Coordinator::loot_won_since` (watermark + `(corpse, slot, winner)` triples) — the trait mirrors the read it fronts.
-    #[allow(clippy::type_complexity)]
-    /// Every `ROLL_WON` `game_group_event` row realm-core has pushed with an id greater than
-    /// `after_id` — `(corpse_guid, slot, winner_guid)` triples, plus the new high-water mark to
-    /// poll from next. Called on the **realm-core** handle.
-    fn loot_won_since(&self, after_id: u64) -> Result<(u64, Vec<(u64, u8, u64)>)>;
-
-    /// `CMSG_LOOT_ROLL` — record the caller's need/greed/pass vote.
-    fn loot_roll(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        corpse_guid: u64,
-        loot_slot: u32,
-        vote: u8,
-    ) -> Result<LootActionStatus>;
-
-    /// `CMSG_LOOT_MASTER_GIVE` — the master looter assigns an above-
-    /// threshold row to `target_guid`.
-    fn loot_master_give(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        corpse_guid: u64,
-        loot_slot: u8,
-        target_guid: u64,
-    ) -> Result<LootActionStatus>;
 }
 
 /// How the Module answered a loot Durable Request. A Refusal is an outcome; a timeout or transport
@@ -227,83 +155,6 @@ impl LootWindowStore for crate::stdb::Coordinator {
         loot_slot: u8,
     ) -> Result<LootWindowRequestStatus> {
         crate::stdb::Coordinator::take_loot(self, account_id, actor_guid, target_guid, loot_slot)
-    }
-
-    fn loot_roll(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        corpse_guid: u64,
-        loot_slot: u32,
-        vote: u8,
-    ) -> Result<crate::world::LootActionStatus> {
-        self.loot_roll(account_id, self_guid, corpse_guid, loot_slot, vote)
-    }
-
-    fn realm_loot_op(
-        &self,
-        op: u8,
-        corpse_guid: u64,
-        slot: u8,
-        item_entry: u32,
-        actor_guid: u64,
-        vote: u8,
-        deadline_micros: i64,
-        recipients: Vec<u64>,
-        random_property_id: u32,
-        promotion_source: spacetimedb_sdk::Identity,
-        source_roll_id: u64,
-    ) -> Result<()> {
-        self.realm_loot_op(
-            op,
-            corpse_guid,
-            slot,
-            item_entry,
-            actor_guid,
-            vote,
-            deadline_micros,
-            recipients,
-            random_property_id,
-            promotion_source,
-            source_roll_id,
-        )
-    }
-
-    fn realm_loot_vote(
-        &self,
-        corpse_guid: u64,
-        slot: u8,
-        actor_guid: u64,
-        vote: u8,
-    ) -> Result<crate::world::LootActionStatus> {
-        self.realm_loot_vote(corpse_guid, slot, actor_guid, vote)
-    }
-
-    fn pending_local_rolls(&self) -> Result<Vec<crate::world::loot::PendingLootRoll>> {
-        self.pending_local_rolls()
-    }
-
-    fn settle_loot_roll(&self, corpse_guid: u64, slot: u8, winner_guid: u64) -> Result<()> {
-        self.settle_loot_roll(corpse_guid, slot, winner_guid)
-    }
-
-    fn clear_promoted_loot_roll(&self, roll_id: u64) -> Result<()> {
-        self.clear_promoted_loot_roll(roll_id)
-    }
-
-    fn loot_won_since(&self, after_id: u64) -> Result<(u64, Vec<(u64, u8, u64)>)> {
-        self.loot_won_since(after_id)
-    }
-
-    fn loot_master_give(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        corpse_guid: u64,
-        loot_slot: u8,
-        target_guid: u64,
-    ) -> Result<crate::world::LootActionStatus> {
-        self.loot_master_give(account_id, self_guid, corpse_guid, loot_slot, target_guid)
     }
 }
 
@@ -543,7 +394,7 @@ pub(crate) fn dispatch_loot_window<St: LootWindowStore + ?Sized>(
 /// Remaining group-loot, non-window GameObject, and death-recovery operations not yet migrated to
 /// a focused action interface.
 pub(crate) fn handle_loot<
-    St: DeathStore + LootWindowStore + NpcStore + ShardRoutingStore + ?Sized,
+    St: DeathStore + LootRollStore + LootWindowStore + NpcStore + ShardRoutingStore + ?Sized,
 >(
     tx: &SessionTx,
     store: &St,
@@ -887,71 +738,6 @@ mod tests {
                 loot_slot,
             ));
             request_status(self.item_take_refusal, &self.item_take_fatal_error)
-        }
-
-        fn realm_loot_op(
-            &self,
-            _op: u8,
-            _corpse_guid: u64,
-            _slot: u8,
-            _item_entry: u32,
-            _actor_guid: u64,
-            _vote: u8,
-            _deadline_micros: i64,
-            _recipients: Vec<u64>,
-            _random_property_id: u32,
-            _promotion_source: spacetimedb_sdk::Identity,
-            _source_roll_id: u64,
-        ) -> Result<()> {
-            unreachable!("the loot window never runs a Loot Roll op")
-        }
-
-        fn realm_loot_vote(
-            &self,
-            _corpse_guid: u64,
-            _slot: u8,
-            _actor_guid: u64,
-            _vote: u8,
-        ) -> Result<LootActionStatus> {
-            unreachable!("the loot window never casts a Loot Roll vote")
-        }
-
-        fn pending_local_rolls(&self) -> Result<Vec<crate::world::loot::PendingLootRoll>> {
-            unreachable!("the loot window never reads pending Loot Rolls")
-        }
-
-        fn settle_loot_roll(&self, _corpse_guid: u64, _slot: u8, _winner_guid: u64) -> Result<()> {
-            unreachable!("the loot window never settles a Loot Roll")
-        }
-
-        fn clear_promoted_loot_roll(&self, _roll_id: u64) -> Result<()> {
-            unreachable!("the loot window never clears a promoted Loot Roll")
-        }
-
-        fn loot_won_since(&self, _after_id: u64) -> Result<(u64, Vec<(u64, u8, u64)>)> {
-            unreachable!("the loot window never reads won Loot Rolls")
-        }
-
-        fn loot_roll(
-            &self,
-            _account_id: u64,
-            _self_guid: u64,
-            _corpse_guid: u64,
-            _loot_slot: u32,
-            _vote: u8,
-        ) -> Result<LootActionStatus> {
-            unreachable!("the loot window never records a Loot Roll vote")
-        }
-
-        fn loot_master_give(
-            &self,
-            _account_id: u64,
-            _self_guid: u64,
-            _corpse_guid: u64,
-            _loot_slot: u8,
-            _target_guid: u64,
-        ) -> Result<LootActionStatus> {
-            unreachable!("the loot window never assigns master loot")
         }
     }
 

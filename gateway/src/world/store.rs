@@ -20,6 +20,7 @@ pub trait WorldStore:
     + TransferStore
     + PartyStore
     + LootWindowStore
+    + LootRollStore
     + MailStore
     + SocialStore
     + NpcStore
@@ -32,6 +33,7 @@ pub trait WorldStore:
     + CastStore
     + ChannelActionStore
     + ChatActionStore
+    + SpeechStore
     + DuelActionStore
     + GuildActionStore
     + ItemActionStore
@@ -54,6 +56,7 @@ impl<T> WorldStore for T where
         + TransferStore
         + PartyStore
         + LootWindowStore
+        + LootRollStore
         + MailStore
         + SocialStore
         + NpcStore
@@ -66,6 +69,7 @@ impl<T> WorldStore for T where
         + CastStore
         + ChannelActionStore
         + ChatActionStore
+        + SpeechStore
         + DuelActionStore
         + GuildActionStore
         + ItemActionStore

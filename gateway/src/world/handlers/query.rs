@@ -126,7 +126,7 @@ fn filtered_gossip_options<
 /// Say, yell or `/e` (a `broadcast_chat` type) through the speaker's Home Shard. The line itself
 /// returns on the Relay; a Refusal gets the answer every chat line shares, and only a lost reducer
 /// transport ends the World Session.
-fn speak_nearby<St: ChatActionStore + ?Sized>(
+fn speak_nearby<St: SpeechStore + ?Sized>(
     tx: &SessionTx,
     store: &St,
     conn: &WorldConn,
@@ -163,7 +163,6 @@ fn speak_nearby<St: ChatActionStore + ?Sized>(
 pub(crate) fn handle_query<
     St: CastStore
         + CharacterStore
-        + ChatActionStore
         + GuildActionStore
         + NpcStore
         + PartyStore
@@ -171,6 +170,7 @@ pub(crate) fn handle_query<
         + SessionStore
         + ShardRoutingStore
         + SocialStore
+        + SpeechStore
         + TaxiActionStore
         + TrainerStore
         + VendorActionStore

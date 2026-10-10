@@ -82,10 +82,11 @@ pub(crate) use handlers::{
 pub(crate) use handlers::{
     AuctionActionStore, BankStore, CastStore, ChannelActionStore, CharacterStore, ChatActionStore,
     CombatStore, DeathStore, DuelActionStore, GuildActionStore, ItemActionStore, LootWindowStore,
-    MeetingStoneActionStore, MeleeActionStore, NpcStore, QuestActionStore, TaxiActionStore,
-    TradeStore, TrainerStore, VendorActionStore,
+    MeetingStoneActionStore, MeleeActionStore, NpcStore, QuestActionStore, SpeechStore,
+    TaxiActionStore, TradeStore, TrainerStore, VendorActionStore,
 };
 use login_queue::{Admission, LoginQueue};
+pub(crate) use loot::LootRollStore;
 pub(crate) use mail::MailStore;
 pub(crate) use party::PartyStore;
 use social::handle_social;

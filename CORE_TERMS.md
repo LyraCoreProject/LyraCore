@@ -66,6 +66,11 @@ The Gateway's subscribed connection per shard, authenticated with the Owner Toke
 Gateway code that turns a table change into a client message.
 _Avoid_: forwarder, pusher
 
+**Speech**:
+A line a Character speaks to the Characters near it: a say, yell or `/e` line, or a text emote. Its
+Durable Request goes to the speaker's Home Shard, and a Relay delivers it to listeners in range.
+_Avoid_: local chat, proximity chat
+
 **AOI**:
 The area of interest that decides which entities a World Session sees.
 _Avoid_: visibility set, interest radius

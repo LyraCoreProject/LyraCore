@@ -4374,7 +4374,9 @@ impl ChatActionStore for InMemoryStore {
     fn speaker_gm_level(&self, _speaker_guid: u64) -> Result<u8> {
         Ok(self.gm_level)
     }
+}
 
+impl SpeechStore for InMemoryStore {
     fn send_chat(
         &self,
         _account_id: u64,
@@ -5146,7 +5148,9 @@ impl LootWindowStore for InMemoryStore {
             .push((target_guid, loot_slot));
         Ok(LootWindowRequestStatus::Applied)
     }
+}
 
+impl LootRollStore for InMemoryStore {
     fn loot_roll(
         &self,
         _account_id: u64,

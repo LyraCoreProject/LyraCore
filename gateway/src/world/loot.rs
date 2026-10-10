@@ -1,16 +1,16 @@
 //! Realm loot routing. See `docs/realm-loot-routing.md` for the contract and rationale.
 
-use crate::world::{LootWindowStore, ShardRoutingStore};
+use crate::world::ShardRoutingStore;
 use anyhow::Result;
 
 use super::{LootActionStatus, WorldStore};
 use lyracore_shared::loot_roll::loot_op;
 
 /// One unresolved loot roll a world shard has created but not yet had promoted onto realm-core —
-/// [`LootWindowStore::pending_local_rolls`]'s answer, and [`relay_tick`]'s promotion input.
+/// [`LootRollStore::pending_local_rolls`]'s answer, and [`relay_tick`]'s promotion input.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PendingLootRoll {
-    /// This shard's own row id — what [`LootWindowStore::clear_promoted_loot_roll`] addresses.
+    /// This shard's own row id — what [`LootRollStore::clear_promoted_loot_roll`] addresses.
     pub roll_id: u64,
     pub corpse_guid: u64,
     pub slot: u8,
@@ -23,6 +23,82 @@ pub struct PendingLootRoll {
     pub promotion_source: spacetimedb_sdk::Identity,
 }
 
+/// Durable Reads and Durable Requests for Loot Rolls: the vote, the master looter's assignment, and
+/// the relay that promotes each roll onto Realm-core and settles its winner.
+pub(crate) trait LootRollStore: Send + Sync {
+    // Mirrors the `realm_loot_op` REDUCER's parameter list 1:1 — this trait is the seam between them, so the shapes have to match.
+    #[allow(clippy::too_many_arguments)]
+    /// `realm_loot_op` — run one loot-roll op against the database THIS handle names. Called on
+    /// the **realm-core** handle: START promotes a world shard's staging roll, VOTE casts a vote.
+    fn realm_loot_op(
+        &self,
+        op: u8,
+        corpse_guid: u64,
+        slot: u8,
+        item_entry: u32,
+        actor_guid: u64,
+        vote: u8,
+        deadline_micros: i64,
+        recipients: Vec<u64>,
+        random_property_id: u32,
+        promotion_source: spacetimedb_sdk::Identity,
+        source_roll_id: u64,
+    ) -> Result<()>;
+
+    /// Cast one player vote on realm-core. The Store returns a typed gameplay answer while keeping
+    /// failures with an unknown durable result as `Err`.
+    fn realm_loot_vote(
+        &self,
+        corpse_guid: u64,
+        slot: u8,
+        actor_guid: u64,
+        vote: u8,
+    ) -> Result<LootActionStatus>;
+
+    /// Every UNRESOLVED loot roll this WORLD SHARD has created but not yet had promoted onto
+    /// realm-core — the relay's promotion queue. Empty on realm-core's own handle: nothing is ever
+    /// created there directly — only `realm_loot_op`'s START arm writes it, and that is not this
+    /// method.
+    fn pending_local_rolls(&self) -> Result<Vec<PendingLootRoll>>;
+
+    /// `settle_loot_roll` — grant a resolved roll's item on THIS world shard, if it holds the
+    /// matching corpse row. A shard that does not hold the corpse is unaffected: the module's own
+    /// `withheld` guard makes a wrong-shard call harmless.
+    fn settle_loot_roll(&self, corpse_guid: u64, slot: u8, winner_guid: u64) -> Result<()>;
+
+    /// `clear_promoted_loot_roll` — delete a staging roll's rows on THIS world shard, once the relay
+    /// has promoted it onto realm-core.
+    fn clear_promoted_loot_roll(&self, roll_id: u64) -> Result<()>;
+
+    // Same shape as `Coordinator::loot_won_since` (watermark + `(corpse, slot, winner)` triples) — the trait mirrors the read it fronts.
+    #[allow(clippy::type_complexity)]
+    /// Every `ROLL_WON` `game_group_event` row realm-core has pushed with an id greater than
+    /// `after_id` — `(corpse_guid, slot, winner_guid)` triples, plus the new high-water mark to
+    /// poll from next. Called on the **realm-core** handle.
+    fn loot_won_since(&self, after_id: u64) -> Result<(u64, Vec<(u64, u8, u64)>)>;
+
+    /// `CMSG_LOOT_ROLL` — record the caller's need/greed/pass vote.
+    fn loot_roll(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        corpse_guid: u64,
+        loot_slot: u32,
+        vote: u8,
+    ) -> Result<LootActionStatus>;
+
+    /// `CMSG_LOOT_MASTER_GIVE` — the master looter assigns an above-
+    /// threshold row to `target_guid`.
+    fn loot_master_give(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        corpse_guid: u64,
+        loot_slot: u8,
+        target_guid: u64,
+    ) -> Result<LootActionStatus>;
+}
+
 /// Route `CMSG_LOOT_ROLL` for the session that owns `self_guid`.
 ///
 /// Unsharded → the pre-realm-core path, verbatim: `loot_roll` on the player's own connection. Sharded →
@@ -32,7 +108,7 @@ pub struct PendingLootRoll {
 ///
 /// A client can vote as soon as `SMSG_LOOT_START_ROLL` arrives, before the next [`relay_tick`].
 /// Realm-core refuses a vote for a roll it does not hold, so pending promotions are flushed first.
-pub(crate) fn run_vote<St: LootWindowStore + ShardRoutingStore + ?Sized>(
+pub(crate) fn run_vote<St: LootRollStore + ShardRoutingStore + ?Sized>(
     store: &St,
     account_id: u64,
     self_guid: u64,
