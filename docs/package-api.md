@@ -1,4 +1,4 @@
-# Package API, version 1
+# Package API, version 2
 
 The Package API is the part of the Module a Package may name. A Package compiles into the Module
 wasm and can reach any `crate::` path the compiler resolves; this document says which of those paths
@@ -264,6 +264,7 @@ need.
 | operation | does |
 |---|---|
 | `ask_offline(event, actor, target, scripts)` | runs `scripts` in order on a fresh Runtime Script Host and returns the Script Answer as `script_binding::ask` reads it; discards Staged Effects and returns any Script Diagnostic as an error |
+| `ask_artifact_offline(event, actor, target, artifact_json)` | parses a Script Artifact, selects its enabled Event Bindings in dispatch order, and runs them through `ask_offline` |
 | `EntityView`, `RuntimeScript` | the event entity and script values `ask_offline` takes |
 | `read_scanned(rel)` | reads a repository-relative source file; `None` when its optional directory is not installed |
 | `code_of(src, signature)` | the body after `signature`, comments removed |
@@ -458,14 +459,26 @@ Script has no base import, so the Package owns the whole row, and two Packages m
 a collision rather than a merge. Script Artifacts and Package Deltas both live in
 `packages/<name>/data/.generated/`, told apart by a top-level kind.
 
-**Script Directives.** `@event` and `@id` are required. `@priority` and `@enabled` have defaults. The
-identifier is written down rather than derived because it is durable: deriving it from a file index
-would renumber a Package's scripts the moment an author added one.
+**Event Bindings.** Each source file binds one named function to an event, for example
+`events.player.onLogin(welcome)`. The function takes the event payload and may return a numeric
+Script Answer. TypeScript and Lua use the same Event Binding names. TypeScript declarations and
+Lua editor definitions come from the catalogue in `datascripts/runtime-scripts/events.json`.
+Login and level-up guarantee `event.player`; level-up carries its attained level in `newLevel`.
+Other fields follow each event's declaration. Entity Handles keep their existing constraints.
 
-**Runtime Script Toolchain.** Bun plus `typescript-to-lua`, its config, the hand-maintained Host API
-typings, and the emitter that keeps generated Lua off the interpreter's known call-shape fault. It
-lives in `datascripts/runtime-scripts/` and runs at author time only. An Operator installs the
-prebuilt Lua.
+**Script Identities.** The toolchain records numeric IDs in the Package-root `script-ids.json`,
+keyed by source-file stem. Commit it with the sources and Script Artifact. Existing artifacts and
+legacy `@event`/`@id` directives supply migration IDs; a conflict is refused. Renaming a function
+keeps its identity. A source-file rename creates a new identity. Deleted entries remain reserved.
+
+**Runtime Script Toolchain.** Bun, `typescript-to-lua`, the Lua parser, event catalogue, generated
+declarations and emitter live in `datascripts/runtime-scripts/`. They run only at author time.
+The emitted Lua captures the declared function and calls it with the event in one Invocation.
+An Operator can install the prebuilt Script Artifact. See
+[Runtime Script authoring](../packages/README.md#building-source) for examples and migration.
+
+Version 2 includes this authoring form. The collection's `api-v1` tag remains available to older
+checkouts whose toolchain requires Script Directives.
 
 ## Package identifier ranges
 

@@ -315,6 +315,21 @@ pub(crate) struct ScriptEvent {
     pub name: String,
     pub actor: Option<EntityView>,
     pub target: Option<EntityView>,
+    pub payload: ScriptPayload,
+}
+
+/// Payload fields captured at the core hook, before an Invocation reads the entity snapshot.
+#[derive(Clone, PartialEq, Debug, Default)]
+pub(crate) struct ScriptPayload {
+    pub player: bool,
+    pub fields: Vec<(&'static str, ScriptScalar)>,
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub(crate) enum ScriptScalar {
+    Number(f64),
+    Boolean(bool),
+    Text(String),
 }
 
 /// What an Entity Handle carries: the identity the Host acts on, and nothing a script can read.
@@ -628,6 +643,20 @@ fn event_table<'gc>(ctx: Context<'gc>, event: &ScriptEvent) -> Table<'gc> {
         let value = match view {
             Some(view) => Value::UserData(entity_handle(ctx, view)),
             None => Value::Nil,
+        };
+        set(ctx, table, field, value);
+        if field == "actor"
+            && event.payload.player
+            && view.as_ref().is_some_and(|view| view.is_player)
+        {
+            set(ctx, table, "player", value);
+        }
+    }
+    for (field, scalar) in &event.payload.fields {
+        let value = match scalar {
+            ScriptScalar::Number(number) => Value::Number(*number),
+            ScriptScalar::Boolean(boolean) => Value::Boolean(*boolean),
+            ScriptScalar::Text(value) => Value::String(text(ctx, value)),
         };
         set(ctx, table, field, value);
     }
@@ -1168,6 +1197,7 @@ if #roster > 0 then grant_xp(event.actor, 25) end
             name: "on_login".to_string(),
             actor: Some(player()),
             target: Some(creature()),
+            ..ScriptEvent::default()
         }
     }
 
@@ -1459,6 +1489,194 @@ if #roster > 0 then grant_xp(event.actor, 25) end
     // ---- the event and its Entity Handles ----
 
     #[test]
+    fn compiled_typescript_login_handler_sends_chat_through_its_event_parameter() {
+        let mut host = RuntimeScriptHost::new();
+        let event = ScriptEvent {
+            payload: ScriptPayload {
+                player: true,
+                fields: vec![],
+            },
+            ..engagement()
+        };
+        let source =
+            include_str!("../../datascripts/tests/fixtures/typed/welcome.generated.lua");
+        assert_eq!(
+            committed(&mut host, &event, source).expect("compiled login handler runs"),
+            [Committed::Chat {
+                recipient: PLAYER_GUID,
+                message: "Welcome, Thrall".to_string(),
+            }]
+        );
+        let missing = unattended("on_login");
+        let failure = host
+            .invoke(script("welcome", source), &missing)
+            .expect_err("a typed handler cannot run without its required Character");
+        assert_eq!(failure.kind, FailureKind::Runtime);
+        assert!(failure.message.contains("requires a Character"));
+    }
+
+    #[test]
+    fn compiled_lua_levelup_handler_reads_the_attained_level() {
+        let mut host = RuntimeScriptHost::new();
+        let event = ScriptEvent {
+            name: "on_levelup".to_string(),
+            actor: Some(player()),
+            payload: ScriptPayload {
+                player: true,
+                fields: vec![("newLevel", ScriptScalar::Number(13.0))],
+            },
+            ..ScriptEvent::default()
+        };
+        assert_eq!(
+            committed(
+                &mut host,
+                &event,
+                include_str!("../../datascripts/tests/fixtures/typed/ding.generated.lua"),
+            )
+            .expect("compiled level-up handler runs"),
+            [Committed::Chat {
+                recipient: PLAYER_GUID,
+                message: "Ding 13".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn compiled_package_handler_keeps_zero_and_negative_answers_and_discards_failed_effects() {
+        let mut host = RuntimeScriptHost::new();
+        let source = include_str!("../../datascripts/tests/fixtures/typed/answer.generated.lua");
+        for level in [12, 11, 0] {
+            let mut character = player();
+            character.level = level;
+            let event = ScriptEvent {
+                actor: Some(character),
+                ..unattended("example.scripts.answer")
+            };
+            let mut sink = FakeEffects::default();
+            let (diagnostics, answer) =
+                ask_event(&mut host, &mut sink, &event, &[script("answer", source)]);
+            if level == 0 {
+                assert_eq!(diagnostics.len(), 1);
+                assert_eq!(answer, None);
+                assert!(sink.committed.is_empty());
+            } else {
+                assert!(diagnostics.is_empty());
+                assert_eq!(answer, Some(f64::from(level) - 12.0));
+                assert_eq!(sink.committed, [xp(PLAYER_GUID, 3)]);
+            }
+        }
+    }
+
+    #[test]
+    fn a_levelup_handler_reads_the_hook_level_while_the_character_snapshot_is_stale() {
+        let mut host = RuntimeScriptHost::new();
+        let event = ScriptEvent {
+            name: "on_levelup".to_string(),
+            actor: Some(player()),
+            payload: ScriptPayload {
+                player: true,
+                fields: vec![("newLevel", ScriptScalar::Number(13.0))],
+            },
+            ..ScriptEvent::default()
+        };
+        assert_eq!(
+            committed(
+                &mut host,
+                &event,
+                r#"
+local function celebrate(event)
+    if event.player ~= event.actor then error("the Character must keep one handle") end
+    if event.player.level ~= 12 then error("the entity snapshot must keep its old level") end
+    grant_xp(event.player, event.newLevel)
+end
+celebrate(event)
+"#,
+            )
+            .expect("the hook's new level reaches the typed handler"),
+            [xp(PLAYER_GUID, 13)]
+        );
+    }
+
+    #[test]
+    fn a_login_handler_receives_an_opaque_character_handle() {
+        let mut host = RuntimeScriptHost::new();
+        let event = ScriptEvent {
+            payload: ScriptPayload {
+                player: true,
+                fields: vec![],
+            },
+            ..engagement()
+        };
+        assert_eq!(
+            committed(
+                &mut host,
+                &event,
+                r#"
+local function welcome(event)
+    if not event.player.is_player then error("login requires a Character") end
+    if event.player.guid ~= nil or type(event.player) ~= "userdata" then error("the handle must stay opaque") end
+    send_chat(event.player, "Welcome, " .. event.player.name)
+end
+welcome(event)
+"#,
+            )
+            .expect("login carries a Character handle"),
+            [Committed::Chat { recipient: PLAYER_GUID, message: "Welcome, Thrall".to_string() }]
+        );
+    }
+
+    #[test]
+    fn a_required_character_field_never_aliases_a_creature_or_an_absent_actor() {
+        let mut host = RuntimeScriptHost::new();
+        for actor in [None, Some(creature())] {
+            let event = ScriptEvent {
+                actor,
+                payload: ScriptPayload {
+                    player: true,
+                    fields: vec![],
+                },
+                ..unattended("on_login")
+            };
+            committed(
+                &mut host,
+                &event,
+                "if event.player ~= nil then error('no Character is present') end",
+            )
+            .expect("an absent Character field reads as nil");
+        }
+    }
+
+    #[test]
+    fn a_hook_payload_preserves_boolean_and_decimal_identifier_fields() {
+        let mut host = RuntimeScriptHost::new();
+        let event = ScriptEvent {
+            payload: ScriptPayload {
+                player: false,
+                fields: vec![
+                    ("assist", ScriptScalar::Boolean(true)),
+                    (
+                        "instanceId",
+                        ScriptScalar::Text("18446744073709551615".to_string()),
+                    ),
+                ],
+            },
+            ..engagement()
+        };
+        assert_eq!(
+            committed(
+                &mut host,
+                &event,
+                "if event.assist then send_chat(event.actor, event.instanceId) end",
+            )
+            .expect("scalar payload fields retain their types"),
+            [Committed::Chat {
+                recipient: PLAYER_GUID,
+                message: "18446744073709551615".to_string()
+            }]
+        );
+    }
+
+    #[test]
     fn a_script_reads_the_curated_fields_of_the_event_actor_and_target() {
         let mut host = RuntimeScriptHost::new();
         let read = committed(
@@ -1510,6 +1728,7 @@ if #roster > 0 then grant_xp(event.actor, 25) end
             name: "on_tick".to_string(),
             actor: Some(player()),
             target: None,
+            ..ScriptEvent::default()
         };
         assert_eq!(
             committed(
@@ -1550,6 +1769,7 @@ if #roster > 0 then grant_xp(event.actor, 25) end
             name: "on_tick".to_string(),
             actor: None,
             target: Some(creature()),
+            ..ScriptEvent::default()
         };
         assert_eq!(
             committed(&mut host, &no_actor, "heal(event.target, 5)").unwrap(),
@@ -1617,6 +1837,7 @@ if #roster > 0 then grant_xp(event.actor, 25) end
             name: "on_tick".to_string(),
             actor: Some(player()),
             target: None,
+            ..ScriptEvent::default()
         };
         for (event, source, fault) in [
             (

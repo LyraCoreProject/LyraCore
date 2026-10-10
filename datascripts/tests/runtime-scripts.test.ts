@@ -88,7 +88,7 @@ test("two builds of one source tree write the same bytes", async () => {
   expect((await build(files)).artifact).toBe((await build(files)).artifact);
 });
 
-test("the source digest covers only immediate regular TypeScript and Lua files", async () => {
+test("the source digest covers immediate sources and recorded script identities", async () => {
   const built = await build({
     "alpha.ts": `${directives(EVENT, 100_201)}function script(): void {}\n`,
     "zeta.lua": "-- @event on_login\n-- @id 100202\nreturn 2\n",
@@ -97,7 +97,7 @@ test("the source digest covers only immediate regular TypeScript and Lua files",
   });
 
   expect(JSON.parse(built.artifact).source_hash).toBe(
-    "8395ead00aad341a7daa23658447385da94dabf6932b406cbfbdb5e2fd664002",
+    "1286e02d1b2421c63549d302a6a01c33a9dc0004a10188abc34357baa22c9a4d",
   );
   expect(built.scripts.map((script) => script.name)).toEqual([
     `${PACKAGE}.alpha`,

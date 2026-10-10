@@ -24,12 +24,19 @@ never stops the next one, and never stops the core work that follows.
 
 # Host operations
 
-An Invocation sees one global per host operation and one `event` table:
+Authors bind a named function to an event. The toolchain emits a local wrapper that calls that
+function with the event table and returns its Script Answer. Event Binding does not execute
+source during the build or install persistent handlers in the interpreter.
+
+The Host still supplies one global per Host Operation and one `event` table, so existing compiled
+Script Artifacts remain valid:
 
 ```lua
 event.name              -- the event label, a string
 event.actor             -- the Entity Handle that caused the event, or nil
 event.target            -- the Entity Handle the event acted on, or nil
+event.player            -- a Character Entity Handle for login and level-up
+event.newLevel          -- the attained level, only for level-up
 
 -- An Entity Handle's readable fields, snapshotted when the Invocation started:
 e.name, e.is_player, e.level, e.health, e.max_health, e.map_id, e.x, e.y, e.z
@@ -47,7 +54,11 @@ because a core hook event has no caller waiting on one.
 
 An Entity Handle is opaque: a script cannot read a guid out of it and cannot mint one, so the
 only entities a Runtime Script can act on are the ones the Host resolved for that Invocation.
-Every readable field is a snapshot taken before the script ran; writing to one changes nothing.
+Every Entity Handle field is a snapshot taken before the script ran; writing to one changes nothing.
+Hook payload fields come from `events.json`. The level-up hook carries `newLevel` even before its
+Character row stores that level. The required `player` field aliases the actor's opaque handle;
+the generated wrapper refuses to invoke a typed handler if that Character is absent. Scalar
+64-bit identifiers use decimal strings to preserve their value in TypeScript.
 
 A host operation called with a missing entity, the wrong type, an out-of-range amount, or past
 the staging cap raises a Lua error naming the call and the fault. The Invocation returns a

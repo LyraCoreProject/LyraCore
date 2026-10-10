@@ -65,19 +65,52 @@ Authoring Library and a Base Snapshot from your own client data. Their Package D
 Identities stay local under `data/.generated/`.
 Never commit a Package Delta to the collection.
 
-Runtime Scripts use `scripts/*.ts` or `scripts/*.lua`. The build compiles them into a Script
-Artifact and records its Build Identity. These two files may be committed to the collection.
-Each source starts with an event and a durable Script ID:
+Runtime Scripts use `scripts/*.ts` or `scripts/*.lua`. Each file declares one named function and
+one Event Binding. TypeScript checks the event payload:
 
 ```ts
-// @event on_login
-// @id 100300
+function welcome(event: PlayerLoginEvent): void {
+  send_chat(event.player, "Welcome!");
+}
+
+events.player.onLogin(welcome);
 ```
 
-Optional `@priority` defaults to `0`, and `@enabled` defaults to `true`. TypeScript declares
-`function script(): number | void`. A numeric Script Answer is what a Package reads through
-`ask()`. Choose distinct IDs before installing multiple copies of a rung. After scaffolding,
-run `packages apply` to build and activate the renamed source.
+Lua uses the same function and Event Binding shape:
+
+```lua
+local function ding(event)
+    send_chat(event.player, "You reached level " .. event.newLevel)
+end
+
+events.player.onLevelUp(ding)
+```
+
+The event catalogue generates TypeScript declarations and Lua editor definitions. The checkout's
+editor configuration loads them for installed Packages. Login and level-up carry a Character in
+`event.player`; level-up also carries `event.newLevel`, even while the Character's level snapshot
+still holds the old value. Other events expose their declared payload fields and optional
+`event.actor` and `event.target` Entity Handles.
+
+A second argument sets options, for example `events.player.onLogin(welcome, { priority: 10 })`.
+Priority defaults to `0` and enabled state to `true`. Lua uses `{ priority = 10 }`. An Event Binding
+must be an unconditional top-level call to a named function in the file. Put shared helpers in that
+file too. A function can return a numeric Script Answer for a Package that calls `ask()`.
+Bind a Package Event with `events.package.on("welcome", welcome)`; the builder supplies the
+shipping Package's prefix.
+
+`packages build` records stable Script Identities in the Package-root `script-ids.json` and emits
+a Script Artifact with its Build Identity. Commit all three files with the sources. The Runtime
+Script name remains `<package>.<file stem>`, so changing the function name keeps its identity.
+Deleted entries stay reserved. `packages new` omits the copied identities and artifacts so the
+new Package gets its own IDs. A filename change creates a new script identity.
+
+Existing `@event` and `@id` Script Directives still build. To migrate, build once to record the
+identities, then replace the directives with a named function and Event Binding. An existing
+Script Artifact also supplies its original IDs. The builder refuses a disagreement between
+recorded identities, legacy directives and an existing artifact.
+
+After creating or editing a Package, run `packages apply` to build and activate it.
 
 ## Client content
 

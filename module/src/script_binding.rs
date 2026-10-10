@@ -6,7 +6,7 @@
 //!
 //! # The dispatch
 //!
-//! [`fire`] is called from every generated `fire_*` in `hooks.rs`, after that event's compiled
+//! [`fire_hook`] is called from every generated `fire_*` in `hooks.rs`, after that event's compiled
 //! `game_hook!` handlers have run. It is a lookup, an ordering, and one call into the Runtime
 //! Script Host:
 //!
@@ -47,7 +47,7 @@
 use spacetimedb::{log, table, ReducerContext};
 
 use crate::runtime_script::{
-    ask_event, with_host, CoreEffects, EntityView, RuntimeScript, ScriptEvent,
+    ask_event, with_host, CoreEffects, EntityView, RuntimeScript, ScriptEvent, ScriptPayload,
 };
 
 /// One Runtime Script a Package ships, reconciled onto this Shard.
@@ -96,11 +96,21 @@ pub struct Script {
 /// name something that is not a live entity (a corpse, a gameobject, a character in transit), which
 /// reaches the script as an absent `event.actor`/`event.target` rather than as a failure.
 ///
-/// Called only from the generated `fire_*` dispatchers, which is what keeps the event label here
-/// identical to the one a Package binds to. A core hook event has no caller waiting on a Script
-/// Answer, so any answer the scripts gave is dropped.
+/// A Package Event has no caller waiting on a Script Answer, so any answer is dropped.
+#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn fire(ctx: &ReducerContext, event: &str, actor_guid: u64, target_guid: u64) {
-    dispatch(ctx, event, actor_guid, target_guid);
+    dispatch(ctx, event, actor_guid, target_guid, ScriptPayload::default);
+}
+
+/// Generated core dispatch supplies its typed payload after the Event Binding lookup.
+pub(crate) fn fire_hook(
+    ctx: &ReducerContext,
+    event: &str,
+    actor_guid: u64,
+    target_guid: u64,
+    payload: impl FnOnce() -> ScriptPayload,
+) {
+    dispatch(ctx, event, actor_guid, target_guid, payload);
 }
 
 /// Run every enabled Runtime Script bound to `event`, and read back the Script Answer.
@@ -118,13 +128,19 @@ pub(crate) fn ask(
     actor_guid: u64,
     target_guid: u64,
 ) -> Option<f64> {
-    dispatch(ctx, event, actor_guid, target_guid)
+    dispatch(ctx, event, actor_guid, target_guid, ScriptPayload::default)
 }
 
 /// The lookup, the ordering and the one Host call both [`fire`] and [`ask`] are. One body rather
 /// than two, so the two verbs can never drift on the order they run scripts in or on what a failure
 /// does; they differ only in whether the Script Answer has a caller waiting for it.
-fn dispatch(ctx: &ReducerContext, event: &str, actor_guid: u64, target_guid: u64) -> Option<f64> {
+fn dispatch(
+    ctx: &ReducerContext,
+    event: &str,
+    actor_guid: u64,
+    target_guid: u64,
+    payload: impl FnOnce() -> ScriptPayload,
+) -> Option<f64> {
     let bound = dispatch_order(ctx.db.game_script().by_event().filter(event).collect());
     if bound.is_empty() {
         return None;
@@ -136,6 +152,7 @@ fn dispatch(ctx: &ReducerContext, event: &str, actor_guid: u64, target_guid: u64
         name: event.to_string(),
         actor: EntityView::read(ctx, actor_guid),
         target: EntityView::read(ctx, target_guid),
+        payload: payload(),
     };
     let scripts: Vec<RuntimeScript<'_>> = bound
         .iter()
@@ -200,7 +217,7 @@ mod tests {
 
     /// Event Bindings are what make Host re-entry REACHABLE for the first time: a script's Staged
     /// Effect commits through a core operation, that operation fires a hook, and the hook lands
-    /// back in [`fire`] — inside the invocation that staged it.
+    /// back in [`fire_hook`], inside the invocation that staged it.
     ///
     /// The Host must refuse the second borrow rather than recurse or panic, because recursion here
     /// is unbounded and a panic would take the whole reducer down. This drives the exact nesting
@@ -224,17 +241,13 @@ mod tests {
         );
     }
 
-    /// The catalog has two homes that cannot see each other: `HOOK_EVENTS` in `module/build.rs`,
-    /// which generates the dispatch, and `HOOK_EVENT_NAMES` in the Package Delta crate, which
-    /// refuses a Package binding to an event that does not exist. An event added to one and not the
-    /// other would make every Package binding to it unshippable, with nothing to say why.
+    /// The artifact parser must accept exactly the core hooks the Module dispatches.
     #[test]
     fn the_hook_catalogue_and_the_artifact_parsers_event_list_are_identical() {
         assert_eq!(
             crate::GAME_HOOK_EVENT_NAMES,
             lyracore_package_delta::HOOK_EVENT_NAMES,
-            "add the event to `HOOK_EVENT_NAMES` in crates/lyracore-package-delta/src/script.rs \
-             as well as to `HOOK_EVENTS` in module/build.rs"
+            "run datascripts/runtime-scripts/generate-events.ts after changing events.json"
         );
     }
 

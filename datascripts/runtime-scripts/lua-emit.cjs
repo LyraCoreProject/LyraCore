@@ -18,12 +18,8 @@
 // itself invents for classes, spreads and library helpers, which a visitor over TypeScript nodes
 // never meets.
 //
-// # The entry point
-//
-// A Runtime Script answers its caller by RETURNING a number, and TypeScript has no top-level
-// return. So every authored `.ts` script declares `function script()` and this printer closes the
-// emitted file with `return script()`. `beforeTransform` refuses a file without one, where the
-// diagnostic can name it, rather than leaving a chunk that calls nil at runtime.
+// Named Event Bindings get their invocation wrapper from build-scripts.ts. Legacy sources still
+// declare script(), whose return value becomes the Script Answer through the appended call.
 
 const ts = require("typescript");
 const tstl = require("typescript-to-lua");
@@ -87,9 +83,18 @@ class PiccoloPrinter extends tstl.LuaPrinter {
   printFile(file) {
     return super.printFile({
       ...file,
-      statements: [guardDeclaration(), ...file.statements, entryCall()],
+      statements: [guardDeclaration(), ...file.statements, ...(this.bound ? [] : [entryCall()])],
     });
   }
+}
+
+function hasEventBinding(file) {
+  return file.statements.some((statement) => {
+    if (!ts.isExpressionStatement(statement) || !ts.isCallExpression(statement.expression)) return false;
+    let target = statement.expression.expression;
+    while (ts.isPropertyAccessExpression(target)) target = target.expression;
+    return ts.isIdentifier(target) && target.text === "events";
+  });
 }
 
 function acceptsScriptAnswer(type) {
@@ -103,7 +108,7 @@ function requireEntryPoint(program) {
   const diagnostics = [];
   const checker = program.getTypeChecker();
   for (const file of program.getSourceFiles()) {
-    if (file.isDeclarationFile) continue;
+    if (file.isDeclarationFile || hasEventBinding(file)) continue;
     const declarations = file.statements.filter(
       (statement) =>
         ts.isFunctionDeclaration(statement) && statement.name && statement.name.text === ENTRY,
@@ -147,6 +152,9 @@ function requireEntryPoint(program) {
 
 module.exports = {
   beforeTransform: (program) => requireEntryPoint(program),
-  printer: (program, emitHost, fileName, file) =>
-    new PiccoloPrinter(emitHost, program, fileName).print(file),
+  printer: (program, emitHost, fileName, file) => {
+    const printer = new PiccoloPrinter(emitHost, program, fileName);
+    printer.bound = program.getSourceFiles().some((source) => !source.isDeclarationFile && hasEventBinding(source));
+    return printer.print(file);
+  },
 };

@@ -25,8 +25,11 @@ registers a transport arm, which exports an empty entry and absorbs arriving row
 handlers, and map-specific Encounter Authority. Registration wrappers stop Package work after
 Package Teardown. `GAME_PACKAGES` lists compiled Packages, their tables, and their Character reads.
 
-`HOOK_EVENTS` generates `hook_dispatch.rs`, including the payload aliases and a `fire_*` function
-for each event. `module/src/hooks.rs` includes it, so callers use the same dispatch paths.
+`datascripts/runtime-scripts/events.json` supplies the event catalogue. The build uses it to
+emit `hook_dispatch.rs`, including payload aliases, each `fire_*` function and the Runtime Script
+payload fields. `module/src/hooks.rs` includes it, so callers keep the same dispatch paths.
+`generate-events.ts` reads the same catalogue to emit TS/Lua editor declarations and the names
+accepted by the Script Artifact parser. The Runtime Script tests check these generated files.
 
 The marker scanner ignores comments and string literals. It reads invocation heads, without
 interpreting function bodies. A live marker must match the supported grammar; malformed markers

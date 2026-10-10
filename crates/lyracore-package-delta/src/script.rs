@@ -80,35 +80,7 @@ pub const SCRIPT_ARTIFACT_KIND: &str = "script";
 /// The Script Artifact version this build reads and writes.
 pub const SCRIPT_VERSION: u64 = 1;
 
-/// Every event a Runtime Script may bind to: the Module's `HOOK_EVENTS` catalogue, in its order.
-///
-/// This is the SECOND copy of that catalogue — the first is `HOOK_EVENTS` in `module/build.rs`,
-/// which generates the dispatch. A pure crate cannot read the Module's build script, so the copy is
-/// held here and the Module asserts the two are identical against the `GAME_HOOK_EVENT_NAMES` its
-/// build emits. Adding an event without updating this list fails that test rather than silently
-/// refusing every Package that binds to it.
-pub const HOOK_EVENT_NAMES: &[&str] = &[
-    "on_damage_taken",
-    "on_death_prevented",
-    "on_creature_spawn",
-    "on_levelup",
-    "on_group_invite",
-    "on_death",
-    "on_kill",
-    "on_aggro",
-    "on_cast_resolved",
-    "on_cast_finished",
-    "on_loot",
-    "on_quest_accept",
-    "on_quest_turnin",
-    "on_login",
-    "on_character_relocated",
-    "on_logout",
-    "on_gossip_select",
-    "on_creature_death",
-    "on_hp_threshold",
-    "on_go_used",
-];
+include!("../../../datascripts/runtime-scripts/event-names.rs");
 
 /// Which artifact a file in a Package's generated directory holds.
 ///

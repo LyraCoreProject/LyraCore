@@ -2,7 +2,11 @@
   "name": "lyracore-script-compiler",
   "private": true,
   "dependencies": {
+    "luaparse": "0.3.1",
     "typescript": "6.0.2",
     "typescript-to-lua": "1.37.1"
+  },
+  "devDependencies": {
+    "@types/luaparse": "0.2.13"
   }
 }

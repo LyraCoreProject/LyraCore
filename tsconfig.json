@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleDetection": "force",
+    "noEmit": true,
+    "types": []
+  },
+  "include": [
+    "packages/*/scripts/*.ts",
+    "datascripts/runtime-scripts/runtime-script.d.ts"
+  ]
+}
