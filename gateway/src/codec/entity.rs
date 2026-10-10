@@ -523,10 +523,8 @@ pub fn build_create_object(
     // range mid-move spawns in its real state (running/strafing) rather than idle-floating (it missed
     // the MSG_MOVE_START sent while out of range). Only the directional + walk bits are stamped:
     // FORWARD|BACKWARD|STRAFE_LEFT|STRAFE_RIGHT|TURN_LEFT|TURN_RIGHT|WALK_MODE. The conditional-data
-    // bits (ON_TRANSPORT 0x200, JUMPING/FALLING 0x2000, SWIMMING 0x200000, SPLINE_* 0x4/0x8000000) are
-    // MASKED OUT — `MovementBlock_MovementFlags::new` takes their sub-struct payloads as args, and a
-    // set bit with `None` payload would mis-encode; those states just spawn idle (corrected by the
-    // peer's next packet). SELF is added only for the player's own body (peers omit it).
+    // bits require their optional bodies. Peer snapshots replace this simple pose with the
+    // stored vanilla MovementInfo when its timestamp and position still match the entity.
     const SIMPLE_MOVE_MASK: u32 = 0x01 | 0x02 | 0x04 | 0x08 | 0x10 | 0x20 | 0x100; // = 0x13F
     let running_speed = speeds::RUN * (entity.run_speed_mult_bp as f32 / 10_000.0);
     let mut update_flag = MovementBlock_UpdateFlag::empty()

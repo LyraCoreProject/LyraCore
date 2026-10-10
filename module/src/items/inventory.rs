@@ -20,8 +20,64 @@ use super::tables::{
 };
 use crate::{game_player_reputation, game_player_skill};
 
-// Live only under `debug_reducers`: `debug_split_item` is its sole caller.
-#[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
+fn bag_has_contents(ctx: &ReducerContext, character_guid: u64, slot: u8) -> bool {
+    if !(BAG_SLOT_START..=BAG_SLOT_END_INCL).contains(&slot) {
+        return false;
+    }
+    let start = BAG_CONTENT_OFFSET + (slot - BAG_SLOT_START) * MAX_BAG_SIZE;
+    ctx.db
+        .game_item_instance()
+        .by_owner_guid()
+        .filter(&character_guid)
+        .any(|item| (start..start + MAX_BAG_SIZE).contains(&item.slot))
+}
+
+/// Destroy only the addressed owned stack. Zero means the whole stack.
+pub(crate) fn apply_item_destroy(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    slot: u8,
+    count: u32,
+) -> Result<(), ItemRefusal> {
+    let character = crate::helpers::live_entity(ctx, character_guid)
+        .map_err(|_| refuse(ItemRefusal::Internal, "Character is not in world"))?;
+    if character.health == 0 {
+        return Err(ItemRefusal::PlayerDead);
+    }
+    if is_bank_slot(slot) {
+        bank_access(ctx, character_guid)?;
+    }
+    let mut item = item_in_slot(ctx, character_guid, slot).ok_or(ItemRefusal::ItemNotFound)?;
+    if crate::trade::item_is_offered(ctx, character_guid, item.guid) {
+        return Err(ItemRefusal::NotRightNow);
+    }
+    let template = ctx
+        .db
+        .game_item_template()
+        .entry()
+        .find(item.entry)
+        .ok_or(ItemRefusal::ItemNotFound)?;
+    if template.item_flags & 0x20 != 0 {
+        return Err(ItemRefusal::Indestructible);
+    }
+    if bag_has_contents(ctx, character_guid, slot) {
+        return Err(ItemRefusal::BagNotEmpty);
+    }
+    if count == 0 || count >= item.stack_count {
+        ctx.db.game_item_instance().guid().delete(item.guid);
+    } else {
+        item.stack_count -= count;
+        ctx.db.game_item_instance().guid().update(item);
+    }
+    if slot <= equip_slot::END {
+        crate::spell::recompute_vitals(ctx, character_guid);
+        crate::spell::recompute_sheet(ctx, character_guid);
+    }
+    Ok(())
+}
+
+/// Split a proper subset into empty storage, preserving ownership and binding state.
+/// Equipment and bag equipment slots cannot receive a split stack.
 pub(crate) fn apply_item_split(
     ctx: &ReducerContext,
     player_guid: u64,
@@ -36,16 +92,14 @@ pub(crate) fn apply_item_split(
     let instances = ctx.db.game_item_instance();
     let mut inst = item_in_slot(ctx, player_guid, slot)
         .ok_or_else(|| refuse(ItemRefusal::ItemNotFound, format!("no item in slot {slot}")))?;
+    if crate::trade::item_is_offered(ctx, player_guid, inst.guid) {
+        return Err(ItemRefusal::NotRightNow);
+    }
     // A split must leave at least one unit in BOTH slots — splitting off none or the whole stack isn't
     // a split (the latter is a move).
     if !valid_split_count(count, inst.stack_count) {
         return Err(refuse(ItemRefusal::WrongSlot, "invalid split count"));
     }
-    // Reject an out-of-range destination (anti-overflow; same phantom-slot dupe vector as apply_item_move)
-    // AND reject an equipment-region destination (0..=18): a split can never legitimately target the
-    // body — unlike apply_item_move it runs no can_equip_into/proficiency/required-level/BoE check, so
-    // admitting 0..=18 here let a modified client CMSG_SPLIT_ITEM a stack straight into an empty head or
-    // off-hand slot, bypassing every gate the move path enforces for that region.
     if !valid_split_dest_slot(to_slot) {
         return Err(refuse(
             ItemRefusal::WrongSlot,
@@ -85,15 +139,8 @@ pub(crate) fn apply_item_split(
     Ok(())
 }
 
-/// Shared move/swap logic for the player + debug paths: move the item in `from_slot` to `to_slot`.
-/// If `to_slot` holds an item too, the two SWAP slots; if it's empty, the item just moves. The item
-/// GUID remains stable when its inventory slot changes.
-/// One EXCEPTION to the swap (FEATURE B): if the destination holds the SAME stackable item
-/// (`dst.entry == src.entry` and the template's `max_stack > 1`), the stacks MERGE instead of swapping
-/// — `merge_amount` units flow from src into dst (capped by dst's headroom); src is deleted if drained,
-/// else left with the remainder. A non-matching or non-stackable destination keeps the SWAP byte-for-byte.
-/// Errors if `from_slot` is empty. A no-op when the slots are equal. Additive — touches only the two
-/// item rows' `slot`/`stack_count` (and may delete the drained src on a full merge). [entity]
+/// Move, swap or merge two owned stacks after both destinations pass their Gates.
+/// Nonempty equipped bags stay in place until contents can follow a bag-slot change.
 pub(crate) fn apply_item_move(
     ctx: &ReducerContext,
     player_guid: u64,
@@ -103,7 +150,7 @@ pub(crate) fn apply_item_move(
     if from_slot == to_slot {
         return Ok(());
     }
-    // The bank is a place, not a portable bag: either endpoint in bank space needs an open bank.
+    // Bank access applies to either endpoint.
     if is_bank_slot(from_slot) || is_bank_slot(to_slot) {
         bank_access(ctx, player_guid)?;
     }
@@ -114,140 +161,149 @@ pub(crate) fn apply_item_move(
             format!("no item in slot {from_slot}"),
         )
     })?;
-    // Reject an out-of-range destination. Valid slots: equipment 0..=18, bag-equip 19..=22,
-    // backpack 23..=38, or a bag-content slot (120..=191) for items landing inside an equipped bag.
-    // Anything outside these ranges (e.g. 39..=119 = bank/keyring we don't model, or 192..255) is
-    // an inventory-overflow dupe vector from a modified client and is rejected.
-    if !valid_dest_slot(to_slot) {
-        return Err(refuse(
-            ItemRefusal::WrongSlot,
-            format!("invalid destination slot {to_slot}"),
-        ));
-    }
-    // If the destination is in the bag-content region, validate that the corresponding bag is
-    // equipped and the slot is within its capacity (prevents stashing items in unequipped bags).
-    validate_bag_dest_slot(ctx, player_guid, to_slot)?;
-    // Equip-validation: moving INTO any EQUIPMENT slot (0..=18) requires the SOURCE item's
-    // `inventory_type` map to that slot (`can_equip_into`). A missing template fails closed (we can't
-    // prove it's wearable). Slot 15 (main-hand) defers to the stricter `can_equip_mainhand` rule inside
-    // `can_equip_into`; the other 18 slots use the general resolver. Non-equipment destinations (>18:
-    // bag/backpack/bank) don't reach this branch — the move/swap/merge below run unconditionally.
-    if to_slot <= equip_slot::END {
-        // Dual Wield: a caster who has LEARNED spell 674 may equip a second one-hander into OFFHAND —
-        // `can_equip_into` only accepts that combination when this is true.
-        let can_dual_wield = crate::spell::knows_spell(
-            ctx,
-            player_guid,
-            lyracore_shared::constants::dual_wield::SPELL_ID,
-        );
-        let tmpl = match ctx.db.game_item_template().entry().find(src.entry) {
-            Some(tmpl)
-                if can_equip_into(tmpl.class, tmpl.inventory_type, to_slot, can_dual_wield) =>
-            {
-                tmpl
+    let mut destination = item_in_slot(ctx, player_guid, to_slot);
+    // Check both placements before storing either item.
+    for (src, to_slot) in
+        std::iter::once((&mut src, to_slot)).chain(destination.as_mut().map(|dst| (dst, from_slot)))
+    {
+        if crate::trade::item_is_offered(ctx, player_guid, src.guid) {
+            return Err(ItemRefusal::NotRightNow);
+        }
+        if !valid_dest_slot(to_slot) {
+            return Err(refuse(
+                ItemRefusal::WrongSlot,
+                format!("invalid destination slot {to_slot}"),
+            ));
+        }
+        validate_bag_dest_slot(ctx, player_guid, to_slot)?;
+        if bag_has_contents(ctx, player_guid, src.slot) {
+            return Err(ItemRefusal::BagNotEmpty);
+        }
+        if (BAG_SLOT_START..=BAG_SLOT_END_INCL).contains(&src.slot) {
+            let start = BAG_CONTENT_OFFSET + (src.slot - BAG_SLOT_START) * MAX_BAG_SIZE;
+            if (start..start + MAX_BAG_SIZE).contains(&to_slot) {
+                return Err(ItemRefusal::WrongSlot);
             }
-            _ => {
+        }
+        if to_slot <= BAG_SLOT_END_INCL {
+            let can_dual_wield = crate::spell::knows_spell(
+                ctx,
+                player_guid,
+                lyracore_shared::constants::dual_wield::SPELL_ID,
+            );
+            let tmpl = ctx
+                .db
+                .game_item_template()
+                .entry()
+                .find(src.entry)
+                .ok_or(ItemRefusal::CannotEquip)?;
+            let fits = if to_slot >= BAG_SLOT_START {
+                matches!(tmpl.class, 1 | 11)
+                    && tmpl.inventory_type == invtype::BAG
+                    && tmpl.container_slots > 0
+            } else {
+                can_equip_into(tmpl.class, tmpl.inventory_type, to_slot, can_dual_wield)
+            };
+            if !fits {
+                return Err(ItemRefusal::CannotEquip);
+            }
+            let player = crate::helpers::live_entity(ctx, player_guid)
+                .map_err(|_| refuse(ItemRefusal::Internal, "user not in world"))?;
+            if !meets_required_level(player.level, tmpl.required_level) {
                 return Err(refuse(
                     ItemRefusal::CannotEquip,
-                    format!("cannot equip that item in slot {to_slot}"),
-                ))
+                    format!("requires level {}", tmpl.required_level),
+                ));
             }
-        };
-        // Required-level gate: you can carry a too-high item in the bag, but can't EQUIP it. Read the
-        // player entity just for its level here (the move path doesn't otherwise need it); a missing
-        // entity fails closed. Seeded items are required_level 1, so this never trips for the loadout.
-        let player = crate::helpers::live_entity(ctx, player_guid)
-            .map_err(|_| refuse(ItemRefusal::Internal, "user not in world"))?;
-        // Vanilla's level result carries the required level in the packet, and a Refusal tag has no
-        // payload, so a level Gate reads as the generic equip failure.
-        if !meets_required_level(player.level, tmpl.required_level) {
-            return Err(refuse(
-                ItemRefusal::CannotEquip,
-                format!("requires level {}", tmpl.required_level),
-            ));
-        }
-        // Proficiency gate: enforce class armor/weapon restrictions (e.g. a Mage can't equip
-        // plate). The class is byte 1 of unit_bytes_0 (race | class<<8 | gender<<16 | power<<24).
-        // Creatures (class 0) never call equip_item; fail closed for unknown classes.
-        let player_class = player.class();
-        if !eligibility_mask_allows(tmpl.allowed_class, player_class) {
-            return Err(refuse(
-                ItemRefusal::NoProficiency,
-                format!("class {player_class} is not allowed to equip this item"),
-            ));
-        }
-        let player_race = player.race();
-        if !eligibility_mask_allows(tmpl.allowed_race, player_race) {
-            return Err(refuse(
-                ItemRefusal::NoProficiency,
-                format!("race {player_race} is not allowed to equip this item"),
-            ));
-        }
-        let current_skill = ctx
-            .db
-            .game_player_skill()
-            .by_character()
-            .filter(&player_guid)
-            .find(|skill| skill.skill_line == tmpl.required_skill)
-            .map(|skill| skill.current);
-        if !meets_required_skill(tmpl.required_skill, tmpl.required_skill_rank, current_skill) {
-            return Err(refuse(
-                ItemRefusal::RequiredSkill,
-                format!(
-                    "requires skill {} at rank {}",
-                    tmpl.required_skill, tmpl.required_skill_rank
-                ),
-            ));
-        }
-        let reputation_standing = ctx
-            .db
-            .game_player_reputation()
-            .by_character()
-            .filter(&player_guid)
-            .find(|reputation| reputation.faction_id == tmpl.required_reputation_faction)
-            .map(|reputation| reputation.standing);
-        if !meets_required_reputation(
-            tmpl.required_reputation_faction,
-            tmpl.required_reputation_rank,
-            reputation_standing,
-        ) {
-            return Err(refuse(
-                ItemRefusal::RequiredReputation,
-                format!(
-                    "requires reputation faction {} at rank {}",
-                    tmpl.required_reputation_faction, tmpl.required_reputation_rank
-                ),
-            ));
-        }
-        // Armor proficiency is class base set PLUS the two upgrades a class trainer teaches at 40:
-        // knowing the passive IS the proficiency, so an untrained Warrior wears mail but not plate.
-        // Same derivation the gateway masks into SMSG_SET_PROFICIENCY, so the tint cannot promise
-        // what this Gate refuses.
-        let proficiency = Proficiency::from_spellbook(player_class, |spell_id| {
-            crate::spell::knows_spell(ctx, player_guid, spell_id)
-        });
-        if !proficiency.can_equip(tmpl.class, tmpl.subclass) {
-            return Err(refuse(
-                ItemRefusal::NoProficiency,
-                format!(
-                    "class {} lacks proficiency for item class {}/subclass {}",
-                    player_class, tmpl.class, tmpl.subclass
-                ),
-            ));
-        }
-        // BoE: a Bind-on-Equip item binds the FIRST time it lands on the body — not on pickup. Every
-        // equip lands here (apply_equip_item and a direct manual move both route through this branch),
-        // so this is the single BoE binding trigger. Idempotent: an already-bound item just stays
-        // bound (no-op re-equip / re-swap).
-        if binds_on_equip(tmpl.bonding) {
-            src.soulbound = true;
+            let player_class = player.class();
+            if !eligibility_mask_allows(tmpl.allowed_class, player_class) {
+                return Err(refuse(
+                    ItemRefusal::NoProficiency,
+                    format!("class {player_class} is not allowed to equip this item"),
+                ));
+            }
+            let player_race = player.race();
+            if !eligibility_mask_allows(tmpl.allowed_race, player_race) {
+                return Err(refuse(
+                    ItemRefusal::NoProficiency,
+                    format!("race {player_race} is not allowed to equip this item"),
+                ));
+            }
+            let current_skill = ctx
+                .db
+                .game_player_skill()
+                .by_character()
+                .filter(&player_guid)
+                .find(|skill| skill.skill_line == tmpl.required_skill)
+                .map(|skill| skill.current);
+            if !meets_required_skill(tmpl.required_skill, tmpl.required_skill_rank, current_skill) {
+                return Err(refuse(
+                    ItemRefusal::RequiredSkill,
+                    format!(
+                        "requires skill {} at rank {}",
+                        tmpl.required_skill, tmpl.required_skill_rank
+                    ),
+                ));
+            }
+            let reputation_standing = ctx
+                .db
+                .game_player_reputation()
+                .by_character()
+                .filter(&player_guid)
+                .find(|reputation| reputation.faction_id == tmpl.required_reputation_faction)
+                .map(|reputation| reputation.standing);
+            if !meets_required_reputation(
+                tmpl.required_reputation_faction,
+                tmpl.required_reputation_rank,
+                reputation_standing,
+            ) {
+                return Err(refuse(
+                    ItemRefusal::RequiredReputation,
+                    format!(
+                        "requires reputation faction {} at rank {}",
+                        tmpl.required_reputation_faction, tmpl.required_reputation_rank
+                    ),
+                ));
+            }
+            let proficiency = Proficiency::from_spellbook(player_class, |spell_id| {
+                crate::spell::knows_spell(ctx, player_guid, spell_id)
+            });
+            if !proficiency.can_equip(tmpl.class, tmpl.subclass) {
+                return Err(refuse(
+                    ItemRefusal::NoProficiency,
+                    format!(
+                        "class {} lacks proficiency for item class {}/subclass {}",
+                        player_class, tmpl.class, tmpl.subclass
+                    ),
+                ));
+            }
+            if binds_on_equip(tmpl.bonding) {
+                src.soulbound = true;
+            }
         }
     }
-    // If the destination is occupied, either MERGE (same stackable item) or SWAP (anything else).
-    if let Some(mut dst) = item_in_slot(ctx, player_guid, to_slot) {
-        // MERGE only when dropping onto the SAME entry AND the item is stackable (max_stack > 1).
-        // A missing template can't be merged (we can't know max_stack) — fall through to SWAP, which
-        // needs no template, so the move never wedges on unseeded item data.
+    if [from_slot, to_slot]
+        .iter()
+        .any(|slot| matches!(*slot, equip_slot::MAINHAND | equip_slot::OFFHAND))
+    {
+        let entry_after_move = |slot| {
+            if to_slot == slot {
+                Some(src.entry)
+            } else if from_slot == slot {
+                destination.as_ref().map(|item| item.entry)
+            } else {
+                item_in_slot(ctx, player_guid, slot).map(|item| item.entry)
+            }
+        };
+        if entry_after_move(equip_slot::OFFHAND).is_some()
+            && entry_after_move(equip_slot::MAINHAND)
+                .and_then(|entry| ctx.db.game_item_template().entry().find(entry))
+                .is_some_and(|template| template.inventory_type == invtype::TWO_HAND_WEAPON)
+        {
+            return Err(ItemRefusal::CannotEquip);
+        }
+    }
+    if let Some(mut dst) = destination {
         if dst.entry == src.entry && dst.random_property_id == src.random_property_id {
             if let Some(tmpl) = ctx.db.game_item_template().entry().find(src.entry) {
                 if tmpl.max_stack > 1 {
@@ -256,31 +312,21 @@ pub(crate) fn apply_item_move(
                         dst.stack_count += moved;
                         instances.guid().update(dst);
                         if moved >= src.stack_count {
-                            // The whole source stack flowed into dst → remove the now-empty src row.
                             instances.guid().delete(src.guid);
                         } else {
-                            // Partial merge (dst hit max_stack) → leave the remainder in src, in place.
                             src.stack_count -= moved;
                             instances.guid().update(src);
                         }
                     }
-                    // `moved == 0` (dst already full) is a no-op: both stacks stay exactly as they were,
-                    // which matches vanilla refusing to merge into a full stack (no swap, no error).
                     return Ok(());
                 }
             }
         }
-        // Not a same-item stackable pair → the original SWAP: dst falls back into the source slot.
         dst.slot = from_slot;
         instances.guid().update(dst);
     }
     src.slot = to_slot;
     instances.guid().update(src);
-    // Parity: if either endpoint is an EQUIPMENT slot (0..=18), gear just changed on the body, so
-    // re-derive the owner's max HP/mana (recompute_vitals now folds equipped Stamina/Intellect). The
-    // health bar grows when you equip a +Sta piece and shrinks when you take it off. A pure bag↔bag move
-    // touches no equip slot → skipped, so loose-inventory shuffles are byte-identical. (recompute_vitals
-    // is a no-op for non-players + when the derived max is unchanged.)
     if from_slot <= equip_slot::END || to_slot <= equip_slot::END {
         crate::spell::recompute_vitals(ctx, player_guid);
         crate::spell::recompute_sheet(ctx, player_guid);
@@ -497,16 +543,9 @@ pub(crate) fn is_carried_slot(slot: u8) -> bool {
         || (BAG_CONTENT_OFFSET..BAG_CONTENT_END).contains(&slot) // 120..=191
 }
 
-// Live only under `debug_reducers`: `apply_item_split` is its sole caller.
-#[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
-/// The destination-slot gate for `apply_item_split` ONLY: everything `valid_dest_slot` admits, MINUS
-/// the equipment region (0..=`equip_slot::END`, i.e. 0..=18). A split can never legitimately place an
-/// item on the body — `apply_item_move` is the only path that runs equip-validation
-/// (`can_equip_into`/proficiency/required-level/BoE), and a split has no source-template check at all,
-/// so admitting 0..=18 here was a total bypass of that region's gates. Splits only ever land in
-/// bag-equip/backpack/bag-content space.
+/// Splits target storage slots only. Equipment requires the move path's Gates.
 pub(crate) fn valid_split_dest_slot(to_slot: u8) -> bool {
-    valid_dest_slot(to_slot) && to_slot > equip_slot::END
+    valid_dest_slot(to_slot) && to_slot > BAG_SLOT_END_INCL
 }
 
 /// Decompose a bag-content slot (120..=191) into `(bag_idx, slot_in_bag)`: which of the four equipped
@@ -568,8 +607,7 @@ fn bank_access(ctx: &ReducerContext, player_guid: u64) -> Result<(), ItemRefusal
         .map_err(|detail| refuse(ItemRefusal::BankUnavailable, detail))
 }
 
-// Live only under `debug_reducers`: `apply_item_split` is its sole caller.
-#[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
+/// A split must leave at least one unit in each stack.
 pub(crate) fn valid_split_count(count: u32, stack_count: u32) -> bool {
     count != 0 && count < stack_count
 }
@@ -726,8 +764,8 @@ pub(crate) fn apply_auto_bank_item(
 #[cfg(test)]
 mod tests {
     use super::{
-        bag_content_decompose, equip_slot, is_bank_slot, is_carried_slot, valid_dest_slot,
-        valid_split_count, valid_split_dest_slot, BANK_SLOT_END_INCL, BANK_SLOT_START,
+        bag_content_decompose, is_bank_slot, is_carried_slot, valid_dest_slot, valid_split_count,
+        valid_split_dest_slot, BANK_SLOT_END_INCL, BANK_SLOT_START,
     };
 
     /// BANK SLOT RANGE: exactly the 24 base bank slots (39..=62). The bank-bag ordinals just past them
@@ -798,35 +836,18 @@ mod tests {
         assert!(!valid_dest_slot(255));
     }
 
-    /// SPLIT DESTINATION GATE (regression): a split can never legitimately target the body, so
-    /// `valid_split_dest_slot` must refuse every equipment-region slot (0..=18) even though
-    /// `valid_dest_slot` alone admits it (0..=38 is the modeled equip+bag-equip+backpack range). Every
-    /// non-equipment slot `valid_dest_slot` admits stays admitted.
     #[test]
-    fn valid_split_dest_slot_refuses_the_equipment_region() {
-        // The whole equipment region (0..=18, e.g. HEAD=0..=TABARD=18) is valid for a plain move/dest
-        // check but MUST be refused for a split — this is the exact reported bypass.
-        for slot in 0u8..=equip_slot::END {
-            assert!(
-                valid_dest_slot(slot),
-                "slot {slot} should still be in the general 0..=38 range"
-            );
-            assert!(
-                !valid_split_dest_slot(slot),
-                "slot {slot} is in the equipment region and must be refused as a split destination"
-            );
+    fn valid_split_dest_slot_accepts_only_storage() {
+        for slot in 0..=22 {
+            assert!(valid_dest_slot(slot));
+            assert!(!valid_split_dest_slot(slot));
         }
-        // Bag-equip, backpack, bank, and bag-content slots (non-equipment) stay valid split destinations.
-        for slot in [19u8, 22, 23, 38, 39, 62, 120, 191] {
-            assert!(
-                valid_split_dest_slot(slot),
-                "slot {slot} is outside the equipment region and should remain a valid split destination"
-            );
+        for slot in [23, 38, 39, 62, 120, 191] {
+            assert!(valid_split_dest_slot(slot));
         }
-        // The already-invalid ranges stay invalid.
-        assert!(!valid_split_dest_slot(63));
-        assert!(!valid_split_dest_slot(119));
-        assert!(!valid_split_dest_slot(192));
+        for slot in [63, 119, 192, 255] {
+            assert!(!valid_split_dest_slot(slot));
+        }
     }
 
     /// BAG-CONTENT SLOT DECOMPOSITION: a flat bag-content slot (120..=191) decomposes into

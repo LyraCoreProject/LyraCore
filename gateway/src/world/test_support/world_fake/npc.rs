@@ -49,11 +49,21 @@ impl NpcStore for WorldFake {
         Ok(self.npc_refuses) // default false — every existing fixture NPC keeps interacting
     }
 
-    fn bind_home(&self, _account_id: u64, _self_guid: u64) -> Result<()> {
+    fn bind_home(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        _innkeeper_guid: u64,
+    ) -> Result<InteractionOutcome> {
+        if !self.npc.innkeeper {
+            return Ok(InteractionOutcome::Refused(
+                "target is not an innkeeper".into(),
+            ));
+        }
         self.npc
             .home_bound
             .store(true, std::sync::atomic::Ordering::SeqCst);
-        Ok(())
+        Ok(InteractionOutcome::Done)
     }
 
     fn npc_is_innkeeper(&self, _guid: u64) -> Result<bool> {

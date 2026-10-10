@@ -60,6 +60,8 @@ use crate::world::codec;
 /// Each family keeps its state in its own field, defined beside that family's impl.
 #[derive(Default)]
 pub(crate) struct WorldFake {
+    pub(crate) benilla_gameplay:
+        Option<std::sync::Mutex<crate::world::tests::benilla_tests::GameplayState>>,
     /// The Characters this Shard holds. Several families read it.
     pub(crate) characters: Vec<codec::CharacterView>,
     /// 195: `npc_refuses_interaction` return — false (derive-Default) keeps every fixture NPC open.

@@ -53,3 +53,6 @@ pub const ERR_ATTACK_TARGET_DEAD: &str = "target is dead";
 pub const ERR_ATTACK_FRIENDLY: &str = "target is friendly";
 
 pub mod item_property;
+
+pub mod spell;
+pub mod talent;

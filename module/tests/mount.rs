@@ -61,6 +61,8 @@ fn assert_projection(shard: &Standalone, display: u32, speed_bp: u32) {
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn an_untrained_mount_refusal_keeps_the_item_vitals_and_auras_unchanged() {
     let shard = fixture("mount-untrained");
+    // Keep scheduled rage decay out of the refusal's before-and-after comparison.
+    shard.assert_sql("DELETE FROM game_creature_move_schedule");
     let items = reins(&shard);
     assert_eq!(items.len(), 1);
     let vitals = shard.query_rows(

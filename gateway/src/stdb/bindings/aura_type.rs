@@ -124,6 +124,7 @@ impl __sdk::__query_builder::HasCols for Aura {
 ///
 /// Provides typed access to indexed columns for query building.
 pub struct AuraIxCols {
+    pub caster_guid: __sdk::__query_builder::IxCol<Aura, u64>,
     pub expires_at: __sdk::__query_builder::IxCol<Aura, __sdk::Timestamp>,
     pub id: __sdk::__query_builder::IxCol<Aura, u64>,
     pub next_tick_micros: __sdk::__query_builder::IxCol<Aura, i64>,
@@ -134,6 +135,7 @@ impl __sdk::__query_builder::HasIxCols for Aura {
     type IxCols = AuraIxCols;
     fn ix_cols(table_name: &'static str) -> Self::IxCols {
         AuraIxCols {
+            caster_guid: __sdk::__query_builder::IxCol::new(table_name, "caster_guid"),
             expires_at: __sdk::__query_builder::IxCol::new(table_name, "expires_at"),
             id: __sdk::__query_builder::IxCol::new(table_name, "id"),
             next_tick_micros: __sdk::__query_builder::IxCol::new(table_name, "next_tick_micros"),

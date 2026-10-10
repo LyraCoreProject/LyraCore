@@ -54,7 +54,7 @@ pub(crate) const SPELL_ATTR_REQ_REVENGE: u32 = 0x0040;
 /// bit (`0x44`), with a by-NAME fallback (Arcane Missiles); it ALSO drives the importer's reclassification of
 /// the periodic-trigger effect (`PeriodicTriggerSpell`/`E_TRIGGER` with `period_ms>0` + a T_SELF target) into
 /// `A_PERIODIC_TRIGGER`. The engine reads this bit / the kind, NEVER a spell id.
-pub(crate) const SPELL_ATTR_CHANNELED: u32 = 0x0080;
+pub(crate) use lyracore_shared::spell::SPELL_ATTR_CHANNELED;
 /// Backstab: castable ONLY while the caster has a DAGGER (weapon subclass 15) equipped in the MAIN-HAND
 /// slot (15) — vanilla's melee-weapon-type restriction. Gate: join the caster's `game_item_instance` in
 /// the main-hand slot -> `game_item_template` -> `subclass == weapon_subclass::DAGGER`; a missing/broken/

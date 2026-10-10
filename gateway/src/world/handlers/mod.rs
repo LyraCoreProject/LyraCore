@@ -31,6 +31,7 @@ mod quest;
 mod taxi;
 mod trade;
 mod trainer;
+mod unavailable;
 mod vendor;
 mod weather;
 
@@ -106,7 +107,7 @@ pub(crate) use taxi::{
     TaxiActionStore,
 };
 pub(crate) use trade::{handle_trade, TradeStore};
-pub(crate) use trainer::{handle_trainer, TrainerBuyOutcome, TrainerStore};
+pub(crate) use trainer::{handle_at_war, handle_trainer, TrainerBuyOutcome, TrainerStore};
 #[cfg(test)]
 pub(crate) use vendor::tests::InMemoryVendorActions;
 pub(crate) use vendor::{
@@ -124,3 +125,7 @@ fn send_show_bank(tx: &SessionTx, banker_guid: u64) -> Result<()> {
         ))),
     )
 }
+
+pub(crate) use unavailable::{
+    is_control_receipt, raw_unavailable_outbound, unavailable_outbound, UnavailableNotice,
+};

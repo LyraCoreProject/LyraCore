@@ -2,6 +2,9 @@ use super::super::*;
 
 #[derive(Default)]
 pub(crate) struct TrainerState {
+    pub(crate) reputation_at_war: std::sync::Mutex<std::collections::BTreeMap<u32, bool>>,
+    pub(crate) talent_reset_quote: Option<u32>,
+    pub(crate) reset_talents_refusal: Option<String>,
     /// Spelled as a refusal so derive-Default (false) keeps every fixture trainer serving; the
     /// trait method reads the negation.
     pub(crate) trainer_refuses_class: bool,
@@ -11,6 +14,10 @@ pub(crate) struct TrainerState {
 }
 
 impl TrainerStore for WorldFake {
+    fn talent_reset_cost(&self, _character_guid: u64) -> Option<u32> {
+        self.trainer.talent_reset_quote
+    }
+
     fn trainer_serves(&self, _player_guid: u64, _trainer_guid: u64) -> Result<bool> {
         Ok(!self.trainer.trainer_refuses_class) // default true — every existing fixture trainer serves
     }
@@ -41,10 +48,15 @@ impl TrainerStore for WorldFake {
         &self,
         _account_id: u64,
         _self_guid: u64,
-        _reputation_index: u32,
-        _at_war: bool,
-    ) -> Result<()> {
-        Ok(())
+        reputation_index: u32,
+        at_war: bool,
+    ) -> Result<InteractionOutcome> {
+        self.trainer
+            .reputation_at_war
+            .lock()
+            .unwrap()
+            .insert(reputation_index, at_war);
+        Ok(InteractionOutcome::Done)
     }
 
     fn set_action_button(
@@ -70,13 +82,21 @@ impl TrainerStore for WorldFake {
         Ok(())
     }
 
-    fn reset_talents(&self, account_id: u64, self_guid: u64, trainer_guid: u64) -> Result<()> {
+    fn reset_talents(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        trainer_guid: u64,
+    ) -> Result<InteractionOutcome> {
+        if let Some(e) = &self.trainer.reset_talents_refusal {
+            return Ok(InteractionOutcome::Refused(e.clone()));
+        }
         self.trainer.reset_talents_calls.lock().unwrap().push((
             account_id,
             self_guid,
             trainer_guid,
         ));
-        Ok(())
+        Ok(InteractionOutcome::Done)
     }
 
     fn resolve_learn_target(&self, spell_id: u32) -> u32 {

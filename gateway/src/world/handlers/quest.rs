@@ -306,6 +306,40 @@ pub(crate) fn quest_gate_state<St: QuestActionStore + ?Sized>(
     store.quest_status(player_guid, quest_id)
 }
 
+/// Both opening a turn-in and continuing its progress screen use the current durable evaluation.
+fn quest_reward_screen<St: QuestActionStore + ?Sized>(
+    store: &St,
+    giver: u64,
+    self_guid: u64,
+    quest_id: u32,
+) -> Result<QuestActionOutcome> {
+    let Some(detail) = store.quest_detail_view(quest_id)? else {
+        return Ok(QuestActionOutcome::Handled {
+            outbound: Vec::new(),
+        });
+    };
+    let complete = store
+        .giver_quest_evals(giver, self_guid)?
+        .iter()
+        .any(|evaluation| {
+            evaluation.quest_id == quest_id
+                && evaluation.role == codec::ROLE_END
+                && evaluation.complete
+        });
+    let screen = if complete {
+        ServerOpcodeMessage::SMSG_QUESTGIVER_OFFER_REWARD(Box::new(codec::build_offer_reward(
+            giver, &detail,
+        )))
+    } else {
+        ServerOpcodeMessage::SMSG_QUESTGIVER_REQUEST_ITEMS(Box::new(codec::build_request_items(
+            giver, &detail, false,
+        )))
+    };
+    Ok(QuestActionOutcome::Handled {
+        outbound: vec![Outbound::One(screen)],
+    })
+}
+
 /// The quest opcodes that own their whole protocol round trip. Anything else — and anything at all
 /// before world entry — passes through to the next family in the dispatch chain.
 pub(crate) fn dispatch_quest_action<St: QuestActionStore + ?Sized>(
@@ -394,32 +428,11 @@ pub(crate) fn dispatch_quest_action<St: QuestActionStore + ?Sized>(
                 outbound: Vec::new(),
             })
         }
-        // Opened a turn-in (clicked the `?`): the offer-reward screen when the giver's current
-        // evaluation reports the quest complete, else the request-items "not finished" screen. The
-        // module is the authority on completion; this only picks the screen and grants nothing.
         ClientOpcodeMessage::CMSG_QUESTGIVER_COMPLETE_QUEST(c) => {
-            let giver = c.guid.guid();
-            let Some(detail) = store.quest_detail_view(c.quest_id)? else {
-                return Ok(QuestActionOutcome::Handled {
-                    outbound: Vec::new(),
-                });
-            };
-            let complete = store
-                .giver_quest_evals(giver, self_guid)?
-                .iter()
-                .any(|e| e.quest_id == c.quest_id && e.role == codec::ROLE_END && e.complete);
-            let screen = if complete {
-                ServerOpcodeMessage::SMSG_QUESTGIVER_OFFER_REWARD(Box::new(
-                    codec::build_offer_reward(giver, &detail),
-                ))
-            } else {
-                ServerOpcodeMessage::SMSG_QUESTGIVER_REQUEST_ITEMS(Box::new(
-                    codec::build_request_items(giver, &detail, false),
-                ))
-            };
-            Ok(QuestActionOutcome::Handled {
-                outbound: vec![Outbound::One(screen)],
-            })
+            quest_reward_screen(store, c.guid.guid(), self_guid, c.quest_id)
+        }
+        ClientOpcodeMessage::CMSG_QUESTGIVER_REQUEST_REWARD(c) => {
+            quest_reward_screen(store, c.guid.guid(), self_guid, c.quest_id)
         }
         // Chose the reward → the module grants money/XP/items (gated on completion). The durable
         // turn-in is requested BEFORE any outbound is built, so a refused turn-in can never show a

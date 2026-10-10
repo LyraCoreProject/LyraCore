@@ -79,16 +79,25 @@ pub(crate) fn bank_access_gate(ctx: &ReducerContext, player_guid: u64) -> Result
     )
 }
 
-/// The hearth-bind trust gate: binding a home needs a live INNKEEPER npc in reach.
-pub(crate) fn innkeeper_access_gate(ctx: &ReducerContext, player_guid: u64) -> Result<(), String> {
-    use lyracore_shared::constants::npc_flags;
-    flagged_npc_in_reach_gate(
+/// Binding a home requires the selected innkeeper to be alive and in reach.
+pub(crate) fn innkeeper_access_gate(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    innkeeper_guid: u64,
+) -> Result<(), String> {
+    let (_, innkeeper) = npc_interaction_gate(
         ctx,
-        player_guid,
-        npc_flags::INNKEEPER,
+        character_guid,
+        innkeeper_guid,
+        lyracore_shared::constants::npc_flags::INNKEEPER,
         "innkeeper",
+        "target is not an innkeeper",
         "bind a home",
-    )
+    )?;
+    if innkeeper.dead || innkeeper.health == 0 {
+        return Err("innkeeper is dead".into());
+    }
+    Ok(())
 }
 
 /// Is the player alive with a live NPC carrying `flag` inside the interaction radius? The gate for
@@ -280,6 +289,11 @@ pub(crate) fn apply_item_sell(
     let instances = ctx.db.game_item_instance();
     let inst =
         item_in_slot(ctx, player_guid, slot).ok_or_else(|| format!("no item in slot {slot}"))?;
+    if crate::trade::item_is_offered(ctx, player_guid, inst.guid) {
+        return Err(super::refused(
+            lyracore_shared::item::ItemRefusal::NotRightNow,
+        ));
+    }
     // Only BACKPACK/bag items are sellable. Refuse an EQUIPPED item (slots 0..=18): vanilla's vendor
     // window can't target worn gear, so a client must not be able to sell items off the body.
     if inst.slot <= equip_slot::END {
@@ -568,7 +582,7 @@ mod tests {
         buy_bank_slot_result, buyback_newest_first, buyback_ring_full, flagged_npc_in_reach,
         BuyBankSlotOutcome, VENDOR_RANGE_SQ,
     };
-    use lyracore_shared::constants::npc_flags::{BANKER, INNKEEPER, VENDOR};
+    use lyracore_shared::constants::npc_flags::{BANKER, VENDOR};
 
     /// BANK ACCESS: only a live BANKER-flagged NPC inside the interaction radius opens the bank. A
     /// player, a corpse, a non-banker NPC, and a banker one yard too far all leave it shut — so a move
@@ -585,20 +599,6 @@ mod tests {
         assert!(!banker_in_reach(false, VENDOR, false, 0.0)); // wrong npc kind
         assert!(!banker_in_reach(false, 0, false, 0.0)); // no npc flags at all
         assert!(!banker_in_reach(false, BANKER, false, edge + 1.0)); // out of range
-    }
-
-    /// HEARTH BIND: the same gate, keyed on INNKEEPER — a distant innkeeper must refuse the bind.
-    #[test]
-    fn innkeeper_in_reach_refuses_a_distant_or_wrong_kind_npc() {
-        let edge = VENDOR_RANGE_SQ;
-        let inn_in_reach =
-            |is_player, flags, dead, d| flagged_npc_in_reach(INNKEEPER, is_player, flags, dead, d);
-        assert!(inn_in_reach(false, INNKEEPER, false, 0.0));
-        assert!(inn_in_reach(false, INNKEEPER | VENDOR, false, edge));
-        assert!(!inn_in_reach(false, INNKEEPER, false, edge + 1.0)); // across the room, not at the bar
-        assert!(!inn_in_reach(false, BANKER, false, 0.0)); // wrong npc kind
-        assert!(!inn_in_reach(true, INNKEEPER, false, 0.0)); // another player
-        assert!(!inn_in_reach(false, INNKEEPER, true, 0.0)); // an innkeeper's corpse
     }
 
     /// Each purchase outcome must reach the reducer boundary as its own wire code, so the relay never

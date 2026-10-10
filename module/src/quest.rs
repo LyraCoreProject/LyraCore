@@ -1189,6 +1189,7 @@ pub(crate) fn request_turn_in_quest(
             total_exp: xp,
             created_at: ctx.timestamp,
             is_kill: false,
+            rested_bonus: 0,
         });
         crate::xp::grant_xp(ctx, &mut player, xp);
     }

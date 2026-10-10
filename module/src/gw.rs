@@ -1115,6 +1115,36 @@ pub fn gw_move_item(
         .map_err(crate::items::refused)
 }
 
+/// Destroy an item owned by the Character holding this World Session.
+#[reducer]
+pub fn gw_destroy_item(
+    ctx: &ReducerContext,
+    request_actor: crate::SessionActor,
+    slot: u8,
+    count: u32,
+) -> Result<(), String> {
+    require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
+    item_actor(ctx, actor_guid)?;
+    crate::items::apply_item_destroy(ctx, actor_guid, slot, count).map_err(crate::items::refused)
+}
+
+/// Split a stack owned by the Character holding this World Session.
+#[reducer]
+pub fn gw_split_item(
+    ctx: &ReducerContext,
+    request_actor: crate::SessionActor,
+    from_slot: u8,
+    to_slot: u8,
+    count: u32,
+) -> Result<(), String> {
+    require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
+    item_actor(ctx, actor_guid)?;
+    crate::items::apply_item_split(ctx, actor_guid, from_slot, count, to_slot)
+        .map_err(crate::items::refused)
+}
+
 /// [`crate::items::apply_unequip_item`] with the owner named by guid.
 #[reducer]
 pub fn gw_unequip_item(
@@ -1225,17 +1255,17 @@ pub fn gw_fish(ctx: &ReducerContext, request_actor: crate::SessionActor) -> Resu
     crate::professions::apply_fish(ctx, actor_guid)
 }
 
-/// [`crate::world::set_home`] with the binder named by guid — the innkeeper hearth bind. The bind
-/// names no NPC, so ungated it would let any client hearth anywhere on the map.
+/// Bind the Character's home after checking the selected innkeeper.
 #[reducer]
 pub fn gw_bind_home(
     ctx: &ReducerContext,
     request_actor: crate::SessionActor,
+    innkeeper_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
-    crate::items::innkeeper_access_gate(ctx, actor_guid)?;
+    crate::items::innkeeper_access_gate(ctx, actor_guid, innkeeper_guid)?;
     crate::world::set_home(ctx, actor_guid);
     Ok(())
 }

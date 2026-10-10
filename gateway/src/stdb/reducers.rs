@@ -14,8 +14,8 @@ use super::views::entity_view;
 use crate::world::guild_fee;
 use crate::world::party::{AdmittedCompanionCommand, CompanionCommandOutcome, PartyOutcome};
 use crate::world::{
-    ChannelOutcome, ChatOutcome, ContactOutcome, ItemActionResult, LootActionStatus,
-    LootWindowRefusal, LootWindowRequestStatus, MeetingStoneOutcome,
+    ChannelOutcome, ChatOutcome, ContactOutcome, InteractionOutcome, ItemActionResult,
+    LootActionStatus, LootWindowRefusal, LootWindowRequestStatus, MeetingStoneOutcome,
 };
 use lyracore_shared::auction::AuctionRefusal;
 use lyracore_shared::channel::ChannelRefusal;
@@ -2761,16 +2761,16 @@ impl Coordinator {
         _account_id: u64,
         actor_guid: u64,
         trainer_guid: u64,
-    ) -> Result<()> {
+    ) -> Result<InteractionOutcome> {
         if actor_guid == 0 {
             return Err(anyhow!("reset_talents: actor_guid unresolved"));
         }
         let coord = self.0.call_pipe();
-        call_reducer!(
+        interaction_outcome(call_reducer!(
             coord.conn.reducers,
             "gw_reset_talents",
             gw_reset_talents_then(self.session_actor(actor_guid), trainer_guid)
-        )
+        ))
     }
 
     /// Fishing cast: instant-resolve catch — the module's lenient alpha gate auto-learns the
@@ -2824,7 +2824,7 @@ impl Coordinator {
     }
 
     /// Persist the rep pane's At-War checkbox (`CMSG_SET_FACTION_ATWAR`): the wire's
-    /// u16 is the client's 0..63 rep-array slot (ReputationListID — the gtker `Faction` field name
+    /// u32 is the client's 0..63 rep-array slot (ReputationListID — the gtker `Faction` field name
     /// lies, same as SET_FACTION_STANDING); the module reverse-resolves the faction and upserts.
     pub fn set_faction_at_war(
         &self,
@@ -2832,16 +2832,16 @@ impl Coordinator {
         actor_guid: u64,
         reputation_index: u32,
         at_war: bool,
-    ) -> Result<()> {
+    ) -> Result<InteractionOutcome> {
         if actor_guid == 0 {
             return Err(anyhow!("set_faction_at_war: actor_guid unresolved"));
         }
         let coord = self.0.call_pipe();
-        call_reducer!(
+        interaction_outcome(call_reducer!(
             coord.conn.reducers,
             "gw_set_faction_at_war",
             gw_set_faction_at_war_then(self.session_actor(actor_guid), reputation_index, at_war)
-        )
+        ))
     }
 
     /// Sell the item in inventory `slot` back to a vendor (`CMSG_SELL_ITEM`, Tier 2) over the
@@ -2964,19 +2964,22 @@ impl Coordinator {
         ))
     }
 
-    /// Bind the caller's hearthstone home to their current position (`CMSG_GOSSIP_SELECT_OPTION` on an
-    /// innkeeper's "Make this inn your home.") over the coordinator connection so the module attributes
-    /// it to the caller's entity. No args — `bind_home` resolves the caller via `ctx.sender`.
-    pub fn bind_home(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
+    /// Bind the Character's home at the selected innkeeper.
+    pub fn bind_home(
+        &self,
+        _account_id: u64,
+        actor_guid: u64,
+        innkeeper_guid: u64,
+    ) -> Result<InteractionOutcome> {
         if actor_guid == 0 {
             return Err(anyhow!("bind_home: actor_guid unresolved"));
         }
         let coord = self.0.call_pipe();
-        call_reducer!(
+        interaction_outcome(call_reducer!(
             coord.conn.reducers,
             "gw_bind_home",
-            gw_bind_home_then(self.session_actor(actor_guid))
-        )
+            gw_bind_home_then(self.session_actor(actor_guid), innkeeper_guid)
+        ))
     }
 
     /// Move (or swap) main-inventory `from_slot` → `to_slot` (`CMSG_SWAP_INV_ITEM`/`CMSG_SWAP_ITEM`)
@@ -2996,6 +2999,43 @@ impl Coordinator {
             coord.conn.reducers,
             "gw_move_item",
             gw_move_item_then(self.session_actor(actor_guid), from_slot, to_slot)
+        ))
+    }
+
+    pub fn split_item(
+        &self,
+        _account_id: u64,
+        actor_guid: u64,
+        from_slot: u8,
+        to_slot: u8,
+        count: u32,
+    ) -> Result<ItemActionResult> {
+        let Some(actor_guid) = resolved_item_actor("split_item", actor_guid) else {
+            return Ok(ItemRefusal::Internal.into());
+        };
+        let coord = self.0.call_pipe();
+        item_action(call_reducer!(
+            coord.conn.reducers,
+            "gw_split_item",
+            gw_split_item_then(self.session_actor(actor_guid), from_slot, to_slot, count)
+        ))
+    }
+
+    pub fn destroy_item(
+        &self,
+        _account_id: u64,
+        actor_guid: u64,
+        slot: u8,
+        count: u32,
+    ) -> Result<ItemActionResult> {
+        let Some(actor_guid) = resolved_item_actor("destroy_item", actor_guid) else {
+            return Ok(ItemRefusal::Internal.into());
+        };
+        let coord = self.0.call_pipe();
+        item_action(call_reducer!(
+            coord.conn.reducers,
+            "gw_destroy_item",
+            gw_destroy_item_then(self.session_actor(actor_guid), slot, count)
         ))
     }
 
@@ -4086,6 +4126,16 @@ fn item_action(result: Result<()>) -> Result<ItemActionResult> {
     }
 }
 
+fn interaction_outcome(result: Result<()>) -> Result<InteractionOutcome> {
+    match result {
+        Ok(()) => Ok(InteractionOutcome::Done),
+        Err(error) => match reducer_refusal_reason(&error) {
+            Some(reason) => Ok(InteractionOutcome::Refused(reason.to_owned())),
+            None => Err(error),
+        },
+    }
+}
+
 /// An item action needs the caller's own entity. Without one there is nothing to request, so the
 /// client gets a Refusal rather than a dead session.
 fn resolved_item_actor(operation: &str, actor_guid: u64) -> Option<u64> {
@@ -4614,6 +4664,36 @@ mod item_reducer_tests {
         for error in not_refusals {
             let text = format!("{error:#}");
             assert!(item_action(Err(error)).is_err(), "{text}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod interaction_reducer_tests {
+    use super::*;
+    use crate::stdb::connection::ReducerCallError;
+
+    #[test]
+    fn interaction_outcomes_keep_module_refusals_separate_from_infrastructure_failures() {
+        assert_eq!(
+            interaction_outcome(Ok(())).unwrap(),
+            InteractionOutcome::Done
+        );
+        let refusal = anyhow::Error::from(ReducerCallError::Rejected {
+            operation: "gw_bind_home".into(),
+            reason: "innkeeper out of range".into(),
+        })
+        .context("request completion");
+        assert_eq!(
+            interaction_outcome(Err(refusal)).unwrap(),
+            InteractionOutcome::Refused("innkeeper out of range".into())
+        );
+        for failure in [
+            anyhow::Error::from(ReducerCallError::fatal("request timed out".into())),
+            anyhow::Error::from(ReducerCallError::fatal("transport disconnected".into())),
+            anyhow!("innkeeper out of range"),
+        ] {
+            assert!(interaction_outcome(Err(failure)).is_err());
         }
     }
 }

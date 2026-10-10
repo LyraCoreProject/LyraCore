@@ -95,13 +95,17 @@ jobs:
         if: matrix.shard == 0
         run: |
           cargo test -p lyracore-gateway --bin lyracore-gateway stdb::account_sessions::tests::independent_coordinators_preserve_the_winner_after_delayed_cleanup -- --ignored --exact
-          cargo test -p lyracore-gateway --bin lyracore-gateway world::tests::competing_world_sessions_close_the_old_socket_without_removing_the_winner -- --ignored --exact
+          cargo test -p lyracore-gateway --bin lyracore-gateway world::tests::session_tests::competing_world_sessions_close_the_old_socket_without_removing_the_winner -- --ignored --exact
           cargo test -p lyracore-gateway --bin lyracore-gateway stdb::subscriptions::character_gone_durable_tests::another_gateway_waits_for_the_transfer_then_cleans_the_deleted_character -- --ignored --exact
           cargo test -p lyracore-gateway --bin lyracore-gateway stdb::subscriptions::roster_relay_durable_tests::a_roster_change_made_only_on_realm_core_reaches_every_world_shard_mirror -- --ignored --exact
           cargo test -p lyracore-gateway --bin lyracore-gateway stdb::subscriptions::meeting_stone_durable_tests::seekers_on_two_world_shards_form_one_party_that_reaches_every_mirror -- --ignored --exact
           cargo test -p lyracore-gateway --bin lyracore-gateway stdb::armor::tests::resistance_projection_adds_property_effects_only_while_the_item_is_worn_and_unbroken -- --ignored --exact
           cargo test -p lyracore-gateway --test provision_cli provision_writes_the_account_to_the_world_shard_and_realm_core -- --ignored --exact
           cargo test -p lyracore-gateway --test startup_relays -- --ignored --test-threads=1
+
+      - name: Run Benilla against private Module instances
+        if: matrix.shard == 0
+        run: cargo test --locked -p lyracore-gateway --bin lyracore-gateway benilla_durable_ -- --ignored --test-threads=1
 
       # No Package registers a client command here, so the Module's fixture command carries it.
       - name: Run the cross-Shard command transport tests
