@@ -90,6 +90,52 @@ events.player.onLogin(welcome)
   });
 });
 
+test("Lua handlers preserve UTF-8 messages and ordinary events fields", async () => {
+  await scratch(async (dir, build) => {
+    const source = `local messages = { events = "你好，世界 🌍" }
+local function welcome(event) send_chat(event.player, messages.events) end
+events.player.onLogin(welcome)
+`;
+    writeFileSync(join(dir, "scripts/welcome.lua"), source);
+    expect((await build()).scripts[0]!.source).toContain(source);
+  });
+});
+
+test("typed TS handlers can use fields named events", async () => {
+  await scratch(async (dir, build) => {
+    writeFileSync(join(dir, "scripts/welcome.ts"), `function welcome(event: PlayerLoginEvent): void {
+  const counts: { events: number } = { events: 1 };
+  const { events: count } = counts;
+  send_chat(event.player, String(counts.events + count));
+}
+events.player.onLogin(welcome);
+`);
+    expect((await build()).scripts[0]!.event).toBe("on_login");
+  });
+});
+
+test("legacy scripts retain local events names and UTF-8 source", async () => {
+  await scratch(async (dir, build) => {
+    const lua = `-- @event on_login
+-- @id 100300
+local events = { greet = function() return "你好" end }
+events.greet()
+return 1
+`;
+    writeFileSync(join(dir, "scripts/welcome.lua"), lua);
+    writeFileSync(join(dir, "scripts/other.ts"), `// @event on_login
+// @id 100301
+const events = { count: 1 };
+function script(): number {
+  return events.count;
+}
+`);
+    const scripts = (await build()).scripts;
+    expect(scripts.find((script) => script.script_id === 100300)!.source).toBe(lua);
+    expect(scripts.find((script) => script.script_id === 100301)!.source).toContain("return script()");
+  });
+});
+
 test("conditional, duplicate, aliased and unknown bindings are refused", async () => {
   await scratch(async (dir, build) => {
     const path = join(dir, "scripts/welcome.lua");

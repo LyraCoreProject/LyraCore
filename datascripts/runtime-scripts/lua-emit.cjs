@@ -88,15 +88,6 @@ class PiccoloPrinter extends tstl.LuaPrinter {
   }
 }
 
-function hasEventBinding(file) {
-  return file.statements.some((statement) => {
-    if (!ts.isExpressionStatement(statement) || !ts.isCallExpression(statement.expression)) return false;
-    let target = statement.expression.expression;
-    while (ts.isPropertyAccessExpression(target)) target = target.expression;
-    return ts.isIdentifier(target) && target.text === "events";
-  });
-}
-
 function acceptsScriptAnswer(type) {
   if (type.isUnion()) return type.types.every(acceptsScriptAnswer);
   return (type.flags & (ts.TypeFlags.NumberLike | ts.TypeFlags.Void | ts.TypeFlags.Undefined | ts.TypeFlags.Never)) !== 0;
@@ -108,7 +99,7 @@ function requireEntryPoint(program) {
   const diagnostics = [];
   const checker = program.getTypeChecker();
   for (const file of program.getSourceFiles()) {
-    if (file.isDeclarationFile || hasEventBinding(file)) continue;
+    if (file.isDeclarationFile) continue;
     const declarations = file.statements.filter(
       (statement) =>
         ts.isFunctionDeclaration(statement) && statement.name && statement.name.text === ENTRY,
@@ -150,11 +141,11 @@ function requireEntryPoint(program) {
   return diagnostics;
 }
 
-module.exports = {
-  beforeTransform: (program) => requireEntryPoint(program),
+module.exports = ({ bound = false }) => ({
+  beforeTransform: (program) => bound ? [] : requireEntryPoint(program),
   printer: (program, emitHost, fileName, file) => {
     const printer = new PiccoloPrinter(emitHost, program, fileName);
-    printer.bound = program.getSourceFiles().some((source) => !source.isDeclarationFile && hasEventBinding(source));
+    printer.bound = bound;
     return printer.print(file);
   },
-};
+});

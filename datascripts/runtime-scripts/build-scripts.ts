@@ -134,7 +134,7 @@ function packagesRoot(): string {
 /// made absolute. It is NOT an `extends` of it: `typescript-to-lua` resolves a plugin path against
 /// the config it was invoked with, so a relative one in a base config would resolve from the wrong
 /// directory. Materialising the whole config keeps that resolution the toolchain's own business.
-async function compile(scriptsDir: string, source: string, outDir: string): Promise<void> {
+async function compile(scriptsDir: string, source: string, outDir: string, bound: boolean): Promise<void> {
   const toolchain = toolchainDir();
   const config = JSON.parse(await readFile(join(toolchain, "tsconfig.json"), "utf8")) as {
     compilerOptions: Record<string, unknown>;
@@ -143,10 +143,11 @@ async function compile(scriptsDir: string, source: string, outDir: string): Prom
   };
   config.compilerOptions.rootDir = scriptsDir;
   config.compilerOptions.outDir = outDir;
-  config.files = [join(toolchain, "runtime-script.d.ts"), source];
+  config.files = [join(toolchain, bound ? "runtime-script.d.ts" : "runtime-script.base.d.ts"), source];
   config.tstl.luaPlugins = config.tstl.luaPlugins.map((plugin) => ({
     ...plugin,
     name: resolve(toolchain, plugin.name),
+    bound,
   }));
 
   const configPath = join(outDir, "tsconfig.json");
@@ -265,7 +266,9 @@ export async function buildPackageScripts(packageName: string): Promise<string> 
   }
 
   const ids = await scriptIds(packageDir, packageName);
-  const declared: Array<Omit<RuntimeScript, "source"> & { file: string; binding?: SourceBinding }> = [];
+  const declared: Array<Omit<RuntimeScript, "source" | "script_id"> & {
+    file: string; stem: string; legacyId?: number; binding?: SourceBinding;
+  }> = [];
   for (const file of files) {
     const path = join(scriptsDir, file);
     const source = await readFile(path, "utf8");
@@ -280,8 +283,9 @@ export async function buildPackageScripts(packageName: string): Promise<string> 
     if (declared.some((entry) => entry.name === name)) refuse(path, `collides with another source on script name ${name}`);
     declared.push({
       file,
+      stem,
       binding,
-      script_id: allocateScriptId(path, ids, stem, binding ? undefined : scriptId(path, directives)),
+      legacyId: binding ? undefined : scriptId(path, directives),
       name,
       event,
       priority: binding?.priority ?? priority(path, directives),
@@ -289,23 +293,28 @@ export async function buildPackageScripts(packageName: string): Promise<string> 
     });
   }
 
+  // A new identity must never take an ID from a legacy source that sorts after it.
+  for (const { file, stem, legacyId } of declared) {
+    if (legacyId !== undefined) allocateScriptId(join(scriptsDir, file), ids, stem, legacyId);
+  }
+
   const outDir = mkdtempSync(join(tmpdir(), "lyracore-scripts-"));
   try {
     const scripts: RuntimeScript[] = [];
-    for (const { file, binding, ...script } of declared) {
+    for (const { file, stem, legacyId, binding, ...script } of declared) {
       const path = join(scriptsDir, file);
-      const stem = file.slice(0, file.lastIndexOf("."));
+      const script_id = allocateScriptId(path, ids, stem, legacyId);
       let source: string;
       if (file.endsWith(".lua")) {
         source = await readFile(path, "utf8");
       } else {
-        await compile(scriptsDir, path, outDir);
+        await compile(scriptsDir, path, outDir, binding !== undefined);
         source = await readFile(join(outDir, `${stem}.lua`), "utf8").catch(() => {
           refuse(path, "typescript-to-lua emitted no Lua for it");
         });
       }
       if (source.trim().length === 0) refuse(path, "compiles to nothing; a Runtime Script needs Lua in it");
-      scripts.push({ ...script, source: binding ? bindInvocation(source, binding) : source });
+      scripts.push({ ...script, script_id, source: binding ? bindInvocation(source, binding) : source });
     }
 
     const recordedIds = renderScriptIds(ids);

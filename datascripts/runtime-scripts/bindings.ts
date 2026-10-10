@@ -63,21 +63,33 @@ function tsLiteral(file: string, expression: ts.Expression): unknown {
 
 function tsBinding(file: string, source: string, packageName: string): SourceBinding | undefined {
   const tree = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
+  // A legacy source can own a local variable with this name.
+  if (tree.statements.some((node) =>
+    (ts.isVariableStatement(node) && node.declarationList.declarations.some((declaration) =>
+      ts.isIdentifier(declaration.name) && declaration.name.text === "events"))
+    || (ts.isFunctionDeclaration(node) && node.name?.text === "events"))) return undefined;
   const calls = tree.statements.filter(ts.isExpressionStatement)
     .map((statement) => statement.expression).filter(ts.isCallExpression)
     .filter((call) => tsPath(call.expression)[0] === "events");
   if (calls.length > 1) refuse(file, "each source file has exactly one Event Binding");
   const call = calls[0];
+  if (!call) return undefined;
   let root: ts.Node | undefined = call?.expression;
   while (root && ts.isPropertyAccessExpression(root)) root = root.expression;
   const walk = (node: ts.Node): void => {
-    if (ts.isIdentifier(node) && node.text === "events" && node !== root) {
+    const parent = node.parent;
+    const field = parent && (
+      (ts.isPropertyAccessExpression(parent) && parent.name === node)
+      || (ts.isPropertyAssignment(parent) && parent.name === node)
+      || (ts.isPropertySignature(parent) && parent.name === node)
+      || (ts.isBindingElement(parent) && parent.propertyName === node)
+    );
+    if (ts.isIdentifier(node) && node.text === "events" && node !== root && !field) {
       refuse(file, "events may only appear in one unconditional top-level Event Binding");
     }
     ts.forEachChild(node, walk);
   };
   walk(tree);
-  if (!call) return undefined;
   if (ts.isExternalModule(tree)) refuse(file, "a Runtime Script cannot import or export a module");
   const path = tsPath(call.expression);
   const own = path[1] === "package" && path[2] === "on";
@@ -130,15 +142,23 @@ function luaLiteral(file: string, expression: lua.Expression): unknown {
 function luaBinding(file: string, source: string, packageName: string): SourceBinding | undefined {
   let tree: lua.Chunk;
   try {
-    tree = lua.parse(source, { luaVersion: "5.3", encodingMode: "x-user-defined" });
+    // Lua strings contain bytes. Parse those bytes without changing the emitted UTF-8 source.
+    tree = lua.parse(Buffer.from(source, "utf8").toString("latin1"), {
+      luaVersion: "5.3", encodingMode: "pseudo-latin1",
+    });
   } catch (error) {
     return refuse(file, `invalid Lua: ${error instanceof Error ? error.message : String(error)}`);
   }
+  if (tree.body.some((node) =>
+    (node.type === "LocalStatement" && node.variables.some((variable) => variable.name === "events"))
+    || (node.type === "FunctionDeclaration" && node.identifier?.type === "Identifier"
+      && node.identifier.name === "events"))) return undefined;
   const calls = tree.body.filter((node): node is lua.CallStatement => node.type === "CallStatement")
     .map((node) => node.expression)
     .filter((node): node is lua.CallExpression => node.type === "CallExpression" && luaPath(node.base)[0] === "events");
   if (calls.length > 1) refuse(file, "each source file has exactly one Event Binding");
   const call = calls[0];
+  if (!call) return undefined;
   let root = call?.base;
   while (root?.type === "MemberExpression") root = root.base;
   const walk = (node: unknown): void => {
@@ -147,13 +167,14 @@ function luaBinding(file: string, source: string, packageName: string): SourceBi
     if ("type" in node && node.type === "Identifier" && "name" in node && node.name === "events") {
       refuse(file, "events may only appear in one unconditional top-level Event Binding");
     }
-    for (const value of Object.values(node)) {
+    for (const [key, value] of Object.entries(node)) {
+      if ("type" in node && ((node.type === "MemberExpression" && key === "identifier")
+        || (node.type === "TableKeyString" && key === "key"))) continue;
       if (Array.isArray(value)) value.forEach(walk);
       else walk(value);
     }
   };
   walk(tree);
-  if (!call) return undefined;
   if (tree.body.some((node) => node.type === "ReturnStatement")) refuse(file, "return a Script Answer from the handler, not the source file");
   const path = luaPath(call.base);
   const own = path[1] === "package" && path[2] === "on";
