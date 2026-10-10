@@ -19,8 +19,17 @@ fn fixture(name: &str) -> Standalone {
     shard
 }
 
+fn bind_session(shard: &Standalone) {
+    let key = serde_json::to_string(&vec![7u8; 40]).unwrap();
+    shard.assert_call(
+        "establish_session",
+        &[RIDER, &key, r#"{"__identity__":"0x1"}"#],
+    );
+    shard.assert_call("gw_heartbeat", &[]);
+}
+
 fn reins(shard: &Standalone) -> Vec<Row> {
-    shard.query_rows("SELECT * FROM game_item_instance WHERE owner_guid = 1 AND entry = 5090054")
+    shard.query_rows("SELECT guid, entry, owner_guid, slot, stack_count, durability, soulbound FROM game_item_instance WHERE owner_guid = 1 AND entry = 5090054")
 }
 
 fn use_reins(shard: &Standalone) {
@@ -115,6 +124,14 @@ fn reusable_reins_restore_the_mount_on_rebuild_and_clear_it_on_dismount() {
     assert_eq!(mount_auras(&shard).len(), 2);
     assert_projection(&shard, 1147, 16_000);
 
+    bind_session(&shard);
+    for entry in ["gw_player_world_port", "gw_player_login"] {
+        shard.assert_call(entry, &[RIDER, &actor(RIDER)]);
+        assert_eq!(mount_auras(&shard).len(), 2);
+        assert_projection(&shard, 1147, 16_000);
+        assert_eq!(reins(&shard), items);
+    }
+
     shard.assert_call("gw_cancel_aura", &[&actor(RIDER), MOUNT]);
     assert!(mount_auras(&shard).is_empty());
     assert_projection(&shard, 0, 10_000);
@@ -138,4 +155,25 @@ fn reusable_reins_restore_the_mount_on_rebuild_and_clear_it_on_dismount() {
     assert!(mount_auras(&shard).is_empty());
     assert_projection(&shard, 0, 10_000);
     assert_eq!(reins(&shard), items);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn world_entry_preserves_godmode_and_the_unmounted_speed_multiplier() {
+    let shard = fixture("gm-world-entry");
+    bind_session(&shard);
+    shard.assert_sql(
+        "UPDATE game_world_entity SET godmode = true, run_speed_mult_bp = 15000 WHERE guid = 1",
+    );
+    for entry in ["gw_player_world_port", "gw_player_login"] {
+        shard.assert_call(entry, &[RIDER, &actor(RIDER)]);
+        assert_projection(&shard, 0, 15_000);
+        let live = shard.query_rows("SELECT godmode FROM game_world_entity WHERE guid = 1");
+        assert_eq!(live[0]["godmode"], "true");
+        let durable = shard.query_rows(
+            "SELECT pending_godmode, pending_run_speed_mult_bp FROM game_character WHERE guid = 1",
+        );
+        assert_eq!(durable[0]["pending_godmode"], "true");
+        assert_eq!(durable[0]["pending_run_speed_mult_bp"], "15000");
+    }
 }

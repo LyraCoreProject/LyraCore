@@ -956,11 +956,8 @@ pub(crate) enum WorldEntry {
     WorldPort,
 }
 
-/// The login core, actor-explicit (stage 4d): everything the old sender-path `player_login`
-/// did after resolving WHOSE login this is. `owner` is the identity stamped onto the live entity
-/// and the character's owner-RLS rows — on the gateway path (`gw::gw_player_login`, the only
-/// remaining caller) the account's BOUND identity, so the rows a per-player connection would
-/// see stay owned by the identity that connection would present.
+/// Enter the World as the caller-authorized Actor using the Account's bound identity.
+/// Live Entity and owner-addressed durable rows share the identity the player connection presents.
 pub(crate) fn apply_player_login(
     ctx: &ReducerContext,
     account: &crate::Account,
