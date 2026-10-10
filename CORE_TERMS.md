@@ -119,6 +119,10 @@ _Avoid_: SDK, plugin API, public API, allowlist
 **Seam**:
 The interface where session or protocol handling hands work to durable state, expressed as a trait so tests can substitute the far side. Not the Shard Boundary, not any arbitrary trait.
 
+**Protocol Family**:
+A group of client opcodes one Gateway handler owns, with the Store trait that handler calls (for example the vendor family and `VendorActionStore`). `WorldStore` is the umbrella over every family; a handler takes only its family's Store.
+_Avoid_: family (unqualified), domain
+
 **Store**:
 The durable side of a Seam: the trait a handler calls for Durable Reads and Durable Requests. The Coordinator implements it in production, a Fake in tests.
 _Avoid_: repository, adapter, port, backend, service

@@ -8,10 +8,6 @@ use lyracore_shared::constants::armor_proficiency::{
 };
 use lyracore_shared::trainer::TrainerRefusal;
 
-#[path = "family_harness.rs"]
-pub(super) mod family_harness;
-use family_harness::{drain_outbound, in_world_conn, npc_store_refusing_by};
-
 /// What the Module would answer a trainer window, a buy and a talent pick, set per test.
 #[derive(Default)]
 struct TrainerFake {

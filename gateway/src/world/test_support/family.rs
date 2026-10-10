@@ -1,7 +1,7 @@
 //! Pieces the handler-level family tests share: a session connection to run a handler against, and
 //! a drain for what the handler sent. A family test owns its Fake and its `run` helper.
 
-use super::super::*;
+use super::*;
 use std::sync::mpsc::Receiver;
 
 /// A connection for `account_id` in the world as `self_guid`. The session's routed Store is

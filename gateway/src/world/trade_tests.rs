@@ -3,7 +3,6 @@
 //! relay, so the handler sends nothing and a test reads the Fake's Trade Session instead.
 
 use super::handlers::{handle_trade, TradeStore};
-use super::trainer_tests::family_harness::in_world_conn;
 use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;

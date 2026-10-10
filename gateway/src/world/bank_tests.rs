@@ -2,7 +2,6 @@
 //! the handler is bounded on.
 
 use super::handlers::{handle_bank, BankStore, NpcStore};
-use super::trainer_tests::family_harness::{drain_outbound, in_world_conn, npc_store_refusing_by};
 use super::*;
 use std::collections::BTreeSet;
 use std::sync::Mutex;

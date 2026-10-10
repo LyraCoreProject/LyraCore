@@ -2,7 +2,6 @@
 //! Store the handler is bounded on.
 
 use super::handlers::{handle_combat, CombatStore};
-use super::trainer_tests::family_harness::in_world_conn;
 use super::*;
 use std::collections::BTreeMap;
 use std::sync::Mutex;

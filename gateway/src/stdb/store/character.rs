@@ -80,11 +80,12 @@ impl CharacterStore for Coordinator {
     /// This costs nothing NEW: the escrowed transfer it rides is the one already proven against a
     /// full gateway-kill crash matrix
     /// (`a_gateway_kill_at_every_transfer_step_recovers_to_exactly_one_whole_copy`,
-    /// `world/tests.rs`), and a fresh character has no live history to lose in transit — if
+    /// `world/transfer_tests.rs`), and a fresh character has no live history to lose in transit — if
     /// anything the simplest case that machinery handles. What it did NOT have at first is a
     /// test that the first login of a freshly created character actually drives that transfer
     /// end-to-end rather than merely reusing already-tested machinery by assumption:
-    /// `a_freshly_created_characters_first_login_transfers_off_the_default_shard` (`world/tests.rs`).
+    /// `a_freshly_created_characters_first_login_transfers_off_the_default_shard`
+    /// (`world/shard_routing_tests.rs`).
     fn create_character(
         &self,
         account_id: u64,
