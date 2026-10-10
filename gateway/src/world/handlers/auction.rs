@@ -610,7 +610,7 @@ pub(crate) fn dispatch_auction_action<St: AuctionActionStore + ?Sized>(
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use std::sync::Mutex;
     use wow_world_messages::shared::Gold;
@@ -622,7 +622,7 @@ mod tests {
         CMSG_AUCTION_SELL_ITEM,
     };
 
-    struct InMemoryAuctionActions {
+    pub(crate) struct InMemoryAuctionActions {
         result: Mutex<Result<Option<AuctionInteraction>, String>>,
         lookups: Mutex<Vec<(u64, u64)>>,
         creates: Mutex<Vec<CreateAuctionRequest>>,
@@ -724,7 +724,7 @@ mod tests {
         }
     }
 
-    fn store_with(interaction: Option<AuctionInteraction>) -> InMemoryAuctionActions {
+    pub(crate) fn store_with(interaction: Option<AuctionInteraction>) -> InMemoryAuctionActions {
         InMemoryAuctionActions {
             result: Mutex::new(Ok(interaction)),
             lookups: Mutex::default(),

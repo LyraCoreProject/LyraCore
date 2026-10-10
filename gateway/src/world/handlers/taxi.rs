@@ -183,7 +183,7 @@ pub(crate) fn dispatch_taxi_action<St: TaxiActionStore + ?Sized>(
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use std::sync::Mutex;
     use wow_world_messages::{
@@ -192,15 +192,18 @@ mod tests {
     };
 
     #[derive(Default)]
-    struct InMemoryTaxiActions {
-        calls: Mutex<Vec<(&'static str, u64, u64)>>,
-        status: Mutex<Option<codec::TaxiNodeStatusView>>,
-        map: Mutex<Option<codec::TaxiMapView>>,
-        activation: Mutex<codec::TaxiActivationResult>,
-        activation_inputs: Mutex<Vec<(u64, u64, u32, u32)>>,
-        fail: bool,
-        arm_tx_probe: Mutex<Option<SessionTx>>,
-        arm_observed_depth: Mutex<Option<usize>>,
+    pub(crate) struct InMemoryTaxiActions {
+        pub(crate) calls: Mutex<Vec<(&'static str, u64, u64)>>,
+        pub(crate) status: Mutex<Option<codec::TaxiNodeStatusView>>,
+        pub(crate) map: Mutex<Option<codec::TaxiMapView>>,
+        pub(crate) activation: Mutex<codec::TaxiActivationResult>,
+        pub(crate) activation_inputs: Mutex<Vec<(u64, u64, u32, u32)>>,
+        pub(crate) fail: bool,
+        /// The one (source, destination) node pair the Module accepts; any other pair answers
+        /// `ACTIVATE_NO_SUCH_PATH`. `None` accepts every pair.
+        pub(crate) route: Option<(u32, u32)>,
+        pub(crate) arm_tx_probe: Mutex<Option<SessionTx>>,
+        pub(crate) arm_observed_depth: Mutex<Option<usize>>,
     }
 
     impl TaxiActionStore for InMemoryTaxiActions {
@@ -216,7 +219,7 @@ mod tests {
             if self.fail {
                 anyhow::bail!("offline")
             }
-            Ok(*self.status.lock().unwrap())
+            Ok((*self.status.lock().unwrap()).filter(|view| view.npc_guid == npc_guid))
         }
 
         fn open_taxi(
@@ -231,7 +234,12 @@ mod tests {
             if self.fail {
                 anyhow::bail!("offline")
             }
-            Ok(self.map.lock().unwrap().clone())
+            Ok(self
+                .map
+                .lock()
+                .unwrap()
+                .clone()
+                .filter(|view| view.npc_guid == npc_guid))
         }
 
         fn activate_taxi(
@@ -253,6 +261,14 @@ mod tests {
             ));
             if self.fail {
                 anyhow::bail!("offline")
+            }
+            if self
+                .route
+                .is_some_and(|route| route != (source_client_node_id, destination_client_node_id))
+            {
+                return Ok(codec::TaxiActivationResult {
+                    result_code: lyracore_shared::constants::taxi_protocol::ACTIVATE_NO_SUCH_PATH,
+                });
             }
             Ok(*self.activation.lock().unwrap())
         }
