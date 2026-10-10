@@ -264,6 +264,7 @@ use wow_world_messages::vanilla::{
     CMSG_RECLAIM_CORPSE,
     CMSG_REPOP_REQUEST,
     CMSG_RESURRECT_RESPONSE,
+    CMSG_SELF_RES,
     CMSG_SETSHEATHED,
     CMSG_SET_SELECTION,
     CMSG_SPIRIT_HEALER_ACTIVATE,
@@ -853,6 +854,10 @@ struct InMemoryStore {
     /// Recorded `resurrect_response` calls — `(self_guid, accept)`, pinning the wire's
     /// `status != 0` → bool mapping.
     resurrect_responses: std::sync::Mutex<Vec<(u64, bool)>>,
+    /// Recorded `self_resurrect` calls: the caller's self_guid off CMSG_SELF_RES.
+    self_resurrects: std::sync::Mutex<Vec<u64>>,
+    /// When set, `self_resurrect` returns this Refusal after recording the call.
+    self_resurrect_error: Option<String>,
     /// Recorded `spirit_healer_res` calls — `(self_guid, healer_guid)` off
     /// CMSG_SPIRIT_HEALER_ACTIVATE.
     spirit_healer_calls: std::sync::Mutex<Vec<(u64, u64)>>,
@@ -3072,6 +3077,13 @@ impl WorldStore for InMemoryStore {
             .unwrap()
             .push((self_guid, accept));
         Ok(())
+    }
+    fn self_resurrect(&self, _account_id: u64, self_guid: u64) -> Result<()> {
+        self.self_resurrects.lock().unwrap().push(self_guid);
+        match &self.self_resurrect_error {
+            Some(e) => Err(anyhow!("{e}")),
+            None => Ok(()),
+        }
     }
     fn spirit_healer_res(&self, _account_id: u64, self_guid: u64, healer_guid: u64) -> Result<()> {
         self.spirit_healer_calls
@@ -12871,7 +12883,7 @@ fn gossip_keeps_the_train_and_unlearn_options_for_a_class_the_trainer_serves() {
 }
 
 // ── Death/resurrection dispatch (CMSG_REPOP_REQUEST / CMSG_RECLAIM_CORPSE /
-// CMSG_RESURRECT_RESPONSE / CMSG_SPIRIT_HEALER_ACTIVATE) ───────────────────────────────────────────
+// CMSG_RESURRECT_RESPONSE / CMSG_SELF_RES / CMSG_SPIRIT_HEALER_ACTIVATE) ───────────────────────────────────────────
 
 #[test]
 fn repop_request_dispatches_repop_for_the_caller() {
@@ -12938,6 +12950,42 @@ fn resurrect_response_decline_maps_status_byte_to_false() {
         store.resurrect_responses.lock().unwrap().as_slice(),
         &[(1, false)]
     );
+}
+
+#[test]
+fn self_res_dispatches_self_resurrect_for_the_caller() {
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_SELF_RES {}
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    drop(client); // the revive replicates via the entity VALUES relay, not a direct SMSG here
+    server.join().unwrap();
+    assert_eq!(store.self_resurrects.lock().unwrap().as_slice(), &[1]);
+}
+
+#[test]
+fn a_refused_self_res_sends_nothing_and_keeps_the_session() {
+    let store = std::sync::Arc::new(InMemoryStore {
+        self_resurrect_error: Some("no Self-Resurrection Option".into()),
+        ..quest_store()
+    });
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_SELF_RES {}
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    CMSG_QUESTGIVER_STATUS_QUERY {
+        guid: Guid::new(50),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_QUESTGIVER_STATUS(_) => {}
+        other => panic!("expected the sentinel (the Refusal sends nothing), got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+    assert_eq!(store.self_resurrects.lock().unwrap().as_slice(), &[1]);
 }
 
 #[test]

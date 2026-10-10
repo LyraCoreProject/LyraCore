@@ -38,9 +38,10 @@ which must be written literally.
 |---|---|
 | `crate::game_hook!(EVENT, fn NAME(ctx, payload) { .. })` | a notify handler for one hook event |
 | `crate::game_tick_pass!(fn NAME(ctx) { .. })` | a periodic pass, run at the end of every `tick_creatures` tick (0.5s), after every core pass |
-| `crate::game_client_command!(PARSE, APPLY)` | the single Package parser and admitted apply operation for authenticated addon commands |
+| `crate::game_client_command!(PARSE, APPLY, REPLY)` | the single Package parser, admitted apply operation and reply command name for authenticated addon commands |
 | `crate::character_owned!(delete \| restamp \| transfer \| not_transported, ..)` | a Package table's character-keyed sweeps and its cross-shard transport arm |
 | `crate::encounter_package!(BINDING, fn NAME(ctx, instance_id, signal) { .. })` | encounter authority for one Encounter Binding |
+| `crate::game_package_characters!(fn NAME(ctx) { .. })` | the guids of the Characters the Package controls on this Shard, read by Package Teardown |
 
 A Package table that is keyed by `character_guid` needs a `delete` marker and a transport arm. Without
 them a despawned character leaves rows behind, and a character that crosses a shard loses them.
@@ -84,6 +85,49 @@ preserves Legacy behavior. Core Gates check consent when accepting an invite or 
 The Gateway obtains acknowledged admission from the owning World Shard before it accepts at
 Realm-core. Admission committed before a concurrent controller change can finish afterwards; this
 ordering does not promise an atomic operation across Shards.
+
+### Package-owned Accounts
+
+`package_account::create_package_character(ctx, package_name, name, race, class) -> Result<u64, String>`
+creates a Character with no Session and returns its guid. It applies the Refusals a client-created
+Character meets: `NAME_IN_USE` for a taken name, `INVALID_RACE_CLASS` for a pair the imported
+CharBaseInfo does not list, and the guid range Refusal. These Refusals write nothing.
+
+The Character goes on the first Account that `package_name` owns with room for another Character.
+When every owned Account is full, Core creates a new Account without credentials, so no login can
+reach it. `game_package_account` records `package_name` as its owner. That record is a Core table,
+so it stays when the Package is disabled. Pass the Package's own name.
+
+The Character starts at level 1 at its race and class start position, with zero gender and
+appearance bytes. The Package places it, levels it and builds its live entity.
+
+### Package Teardown
+
+`teardown_package(package_name)` is an Operator reducer. Run it on every Shard of the Realm before a
+Package leaves the build, then run it once more on each Shard. The second pass catches a Character
+that crossed into a Shard that was already torn down. `lyracore packages disable` runs both passes.
+In one transaction, teardown does these steps:
+
+- It makes each Character of the Package a Dormant Character. The Character goes offline and loses
+  its live entity, its Sessionless Action Consent and its pending Transfer and Group Intents. Its
+  Account and Character rows stay.
+- It empties every table the Package declares.
+- It deletes the Package's Package Config rows.
+- It stops every hook, tick pass, encounter handler and client command the Package registered.
+
+The Characters of a Package are the Characters on Accounts it owns on this Shard, plus the guids its
+`game_package_characters!` read returns. Register the read when Core cannot find every Character
+through ownership. Two cases need it: a Character that crossed from another Shard, and a Character
+on an Account made before Package-owned Accounts existed. A Character with a World Session is never
+made Dormant.
+
+Teardown refuses while one of these Characters has a Transfer escrow row or a claimed Transfer
+Intent on the Shard, because the escrow names the Package's tables. A Refusal writes nothing.
+Retry when the crossing settles.
+
+A Package stays stopped until the first tick of a build that does not compile it. Enabling it again
+then starts it fresh: empty tables, default Package Config, and no Characters from before. Its old
+Characters stay Dormant.
 
 ### Encounter kernel
 
@@ -190,11 +234,54 @@ caller keeps its own fallback, which is what makes a Runtime Script an override 
 dependency. Core hook events reach bound scripts on their own; a Package fires only its own Package
 Events.
 
+### Package fixtures (debug only)
+
+`crate::package_fixture` exists only in a Module built with `debug_reducers`. It holds the setup and
+observation steps a Package's own debug fixtures need. A release build has no such root.
+
+| operation | does |
+|---|---|
+| `apply_damage(ctx, target_guid, amount, attacker_guid)` | deals main-hand damage through the real Core damage pipeline, capped one below the target's health |
+| `remove_live_character(ctx, character_guid)` | removes a live Character from the world as a logout does; `on_logout` fires and the Character row stays |
+| `require_no_imported_content(ctx)` | refuses when the Shard holds imported content; the temporary weather seed a fresh Module stamps does not count |
+| `top_threat_target(ctx, creature_guid)` | reads the highest-threat living source on the creature's map and instance |
+| `client_cast(ctx, caster_guid, spell_id, target_guid)` | casts through the same Gates a client cast passes |
+| `admit_to_instance(ctx, character_guid, map_id, instance_id, party_id, request_actor)` | stages the party's instance as a dungeon entry leaves it and binds the Character to it; refuses when entry resolves to another instance |
+| `record_completed_transfer(ctx, character_guid, map_id, instance_id)` | records a finished Transfer in Realm-core's character-to-shard index |
+| `declare_next_movement_tick(ctx, delay)` | makes the next creature movement tick fire once, `delay` from now; refuses unless the catch-all tick is the only movement schedule |
+
+A fixture reads the navigation revision through `nav::inputs(ctx, map_id).imported_revision`.
+
+Name this root only from a Package file whose first non-blank line is
+`#![cfg(feature = "debug_reducers")]`. The lint refuses it anywhere else, and no exemption clears
+it, because a release build would compile that file without the root.
+
+### Package tests (test only)
+
+`crate::package_test` exists only in a Module test build. It holds what a Package's own unit tests
+need.
+
+| operation | does |
+|---|---|
+| `ask_offline(event, actor, target, scripts)` | runs `scripts` in order on a fresh Runtime Script Host and returns the Script Answer as `script_binding::ask` reads it; discards Staged Effects and returns any Script Diagnostic as an error |
+| `EntityView`, `RuntimeScript` | the event entity and script values `ask_offline` takes |
+| `read_scanned(rel)` | reads a repository-relative source file; `None` when its optional directory is not installed |
+| `code_of(src, signature)` | the body after `signature`, comments removed |
+| `shape_of(src, signature)` | `code_of` with whitespace collapsed, for an exact comparison |
+
+A source scan pins a chokepoint that no unit test can reach. Prefer a pure function and assert on
+it wherever one exists.
+
+Name this root only from a Package file whose first non-blank line is `#![cfg(test)]`. The lint
+refuses it anywhere else, and no exemption clears it, because an ordinary build would compile that
+file without the root.
+
 ### Tables
 
 A Package declares its own tables with `#[table(accessor = pkg_<package>_<name>, ..)]`, the naming
 rule `docs/schema.md` states. The Package name in the accessor is what keeps two Packages from
-colliding.
+colliding. The accessor is also the table name Package Teardown empties, so the build refuses a
+Package table that sets its own `name`.
 
 Core table accessors are named `game_*` and are reached at the crate root:
 `use crate::{game_world_entity, game_character};`. Row types are re-exported at the crate root under
@@ -209,10 +296,13 @@ contract.
 
 ```
 actor      chat     combat    creatures  encounter  faction   gameobject
-group      helpers  hooks     items      loot       nav       package_config
-quest      script_binding     spell      stats      terrain   transfer
-world      xp
+group      helpers  hooks     items      loot       nav       package_account
+package_config      quest     script_binding        spell     stats
+terrain    transfer world     xp
 ```
+
+Debug only: `package_fixture`, in a file gated on `debug_reducers` (see Package fixtures above).
+Test only: `package_test`, in a file gated on `#![cfg(test)]` (see Package tests above).
 
 Plus, at the crate root: any `game_*` name (a table accessor or registration marker), any
 `pkg_*` name (a Package's own generated root module), any type name in UpperCamelCase (a row or
@@ -253,7 +343,7 @@ inert.
 A Package that genuinely needs a path off the surface writes the reason on the line that names it:
 
 ```rust
-crate::auth::create_character(ctx, ..) // package-api: exempt a bot Character is created without a Session
+crate::realm_core::record_shard(ctx, ..) // package-api: exempt fixture models a completed Realm locator crossing
 ```
 
 The marker clears that line and no other. There is no global toggle, and the reason is required — a

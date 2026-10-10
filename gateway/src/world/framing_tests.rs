@@ -426,8 +426,8 @@ fn an_authenticated_stc_order_uses_the_logged_in_actor_and_keeps_the_session_liv
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
 
     for text in [
-        "STC\tv1|playerbots.order|same|1/1|follow|77\0",
-        "STC\tv1||playerbots.order||changed||1/1||follow||77\0",
+        "STC\tv1|example.order|same|1/1|follow|77\0",
+        "STC\tv1||example.order||changed||1/1||follow||77\0",
     ] {
         let mut body = Vec::new();
         body.extend_from_slice(&1u32.to_le_bytes());
@@ -453,8 +453,8 @@ fn an_authenticated_stc_order_uses_the_logged_in_actor_and_keeps_the_session_liv
     assert_eq!(
         *store.client_commands.lock().unwrap(),
         vec![
-            (42, 1, "playerbots.order".into(), "follow|77".into()),
-            (42, 1, "playerbots.order".into(), "follow|77".into()),
+            (42, 1, "example.order".into(), "follow|77".into()),
+            (42, 1, "example.order".into(), "follow|77".into()),
         ]
     );
     drop(client);

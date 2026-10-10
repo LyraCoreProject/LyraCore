@@ -76,7 +76,7 @@ pub struct ServerConfig {
     // path: the gateway derives it from the shard map and asserts it at startup.
     #[default(true)]
     pub hosts_instances: bool,
-    // END-APPENDED: park every playerbot where it was spawned — the GOAL brain and the COMBAT brain
+    // END-APPENDED: park every Package bot where it was spawned — the GOAL and COMBAT brains
     // return immediately, so a crowd neither picks up quests nor grinds its way out of the zone. The
     // WANDER pass deliberately keeps running (6 yd hops around home), because a launch-day crowd
     // milling in a plaza is the movement load worth measuring. The load-test lever: bots that quest

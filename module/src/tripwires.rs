@@ -3,7 +3,7 @@
 //! that doc comment stays true. `#[cfg(test)] mod tripwires;` is `lib.rs`'s only mention of this
 //! file.
 //!
-//! Nine tripwires, in file order:
+//! Ten tripwires, in file order:
 //! - [`character_owned_tripwire`] — every table with a Character-capable guid field has a
 //!   `character_owned` sweep marker or an explicit exclusion.
 //! - [`build_scan_strip_tripwire`] — a commented-out marker invocation never registers.
@@ -15,6 +15,7 @@
 //! - [`grid_cell_tripwire`] — indexed cell fields are derived from their grid coordinates.
 //! - [`issue_reference_tripwire`] — no comment carries a tracker issue reference.
 //! - [`dead_code_allowance_tripwire`] — dead-code allowances stay confined to declared boundaries.
+//! - [`package_name_tripwire`] — Core source names no official Package.
 //!
 //! `partition_discipline_tripwire::raw_scans` and `character_fence_tripwire::raw_lookups` used to
 //! be ~70-line near-clones — identical bound-handle walk-back, handle dedup, comment-line filtering
@@ -133,6 +134,7 @@ pub(crate) mod character_owned_tripwire {
                 "game_ranged_impact_schedule",
                 "game_resurrect_request",
                 "game_school_lockout",
+                "game_self_resurrect_option",
                 "game_spell_cd",
                 "game_spell_cooldown",
             ],
@@ -1155,9 +1157,11 @@ mod partition_discipline_tripwire {
 /// The fence is `helpers::character_by_guid` / `character_by_name`, which read an in-transit
 /// character as ABSENT so each caller's existing "no such character" arm fires. This test
 /// source-scans the same file set as its two sibling tripwires for RAW character lookups and fails
-/// on any file over its whitelisted budget. The whitelist FREEZES today's audited exceptions with
-/// a verdict each (see the verdict table in `transfer/mod.rs`'s module doc, and `docs/history/transfer-by-guid-verdict-table.md` for each verdict's reasoning); it is a ratchet, so it should only
-/// ever shrink.
+/// on any file over its whitelisted budget. `WHITELIST` FREEZES today's audited exceptions in
+/// Core's own source, each with a verdict (see the verdict table in `transfer/mod.rs`'s module doc,
+/// and `docs/history/transfer-by-guid-verdict-table.md` for each verdict's reasoning); it is a
+/// ratchet, so it should only ever shrink. `PACKAGE_FILE_BUDGET` carries the same budget for an
+/// installed Package's file, keyed by file shape instead of by Package, so Core names no Package.
 ///
 // Note: same (file, count) granularity, same text-scan mechanism, and the same two ceilings as
 // `partition_discipline_tripwire` — swapping one whitelisted lookup for a different one inside an
@@ -1171,6 +1175,8 @@ mod character_fence_tripwire {
 
     /// `(repo-relative path, allowed raw-lookup count, verdict + why)`. One line each; every entry
     /// is an audited exception from the by-guid verdict table in `module/src/transfer/mod.rs`.
+    /// Core's own files only — an installed Package's file is never named here; see
+    /// `PACKAGE_FILE_BUDGET` below.
     const WHITELIST: &[(&str, usize, &str)] = &[
         ("module/src/account_ownership.rs", 2, "Account fencing reads ownership even during Transfer. These two reads only check the Account name before fencing or removing a live entity; Character rows and Transfer records remain intact."),
         // THE GATE ITSELF.
@@ -1182,7 +1188,7 @@ mod character_fence_tripwire {
         // OPEN, not decided — spec puts group MEMBERSHIP state on realm-core, settled.
         ("module/src/group.rs", 3, "OPEN: group_accept/group_uninvite/group_leave have a THIRD party mutate game_group_member; if #22 lands membership on realm-core these stop being a world shard's concern entirely. Guessing a verdict here is the mistake #30 exists to correct. `push_event`'s own `other_guid` lookup dropped from this count: it could never resolve INVITE's or DECLINE's name on Realm-core (no `game_character` rows there), so the gateway now resolves it from the World Shard caches at render time instead. The join core's two member-identity reads now go through `character_by_guid`"),
         // REGENERATE at the destination — connection-derived state, never carried in the blob.
-        ("module/src/auth.rs", 4, "REGENERATE: create_character's two name checks (NAME_IN_USE, pre-insert and the race-losing retry) predate any character; its guid-allocator seed scan (`legacy_guid_seed_now`, first-ever touch only) needs the whole table; delete_character keeps a raw find so NO_SUCH_CHAR/NOT_OWNER/CHAR_IN_TRANSIT stay three answers, with the fence on the next line. establish_session's owner_identity rebind and create_character's per-account cap check now route through the `by_account` index instead of a full scan (issue #390), so they no longer count here"),
+        ("module/src/auth.rs", 4, "REGENERATE: character creation's two name checks (NAME_IN_USE in `check_new_character` and `insert_new_character`'s race-losing retry) predate any character; its guid-allocator seed scan (`legacy_guid_seed_now`, first-ever touch only) needs the whole table; delete_character keeps a raw find so NO_SUCH_CHAR/NOT_OWNER/CHAR_IN_TRANSIT stay three answers, with the fence on the next line. establish_session's owner_identity rebind and `account_has_room`'s per-account cap check now route through the `by_account` index instead of a full scan (issue #390), so they no longer count here"),
         // READS, not writes: name/class/race/identity lookups that mutate nothing on the character.
         ("module/src/items/ops.rs", 2, "race/class reads for the starter loadout and the mana-class gate — no write to the character"),
         ("module/src/spell/cast/targeting.rs", 1, "caster NAME for the resurrect prompt — no write"),
@@ -1196,8 +1202,42 @@ mod character_fence_tripwire {
         // Split the former single `debug.rs` into a directory; this lookup lives in the one
         // reducer the collapse put it in.
         ("module/src/debug/repair.rs", 1, "`debug_repair_after_publish`'s gm-tester backfill (guid 1, formerly the standalone `debug_seed_gm_tester`); every debug WRITER that touches character state is fenced"),
-        ("packages/playerbots/src/mod.rs", 4, "bot roster bookkeeping over rows this same reducer just created — free-name probe, post-create fetch, post-update re-read; +1 for `ensure_bot_account`'s per-account character COUNT, which reaches no character (it decides which bot account still has room under the 10-character cap) — an in-transit bot counting or not counting toward that cap is harmless either way"),
     ];
+
+    /// `(path relative to a Package's own root, allowed raw-lookup count, verdict + why)` — keyed
+    /// this way so Core names no Package. No staleness ratchet: it names a file shape, not one
+    /// installed Package, so there is no single file to measure it against.
+    const PACKAGE_FILE_BUDGET: &[(&str, usize, &str)] = &[(
+        "src/mod.rs",
+        2,
+        "roster bookkeeping over rows this same reducer just created: the free-name probe and the post-create fetch",
+    )];
+
+    /// If `rel` sits under `packages/<pkg>/`, its path relative to that Package's own root —
+    /// `packages/example/src/mod.rs` → `Some("src/mod.rs")`. `None` for a Core file.
+    fn package_relative_path(rel: &str) -> Option<&str> {
+        let after = rel.strip_prefix("packages/")?;
+        let (_pkg, tail) = after.split_once('/')?;
+        Some(tail)
+    }
+
+    /// The raw-lookup budget for `rel`: a Package file is checked against `PACKAGE_FILE_BUDGET` by
+    /// its path relative to the Package root; a Core file is checked against `WHITELIST` by its
+    /// full repo-relative path. Either way, an unlisted file gets zero.
+    fn budget_for(rel: &str) -> usize {
+        if let Some(pkg_rel) = package_relative_path(rel) {
+            return PACKAGE_FILE_BUDGET
+                .iter()
+                .find(|(p, _, _)| *p == pkg_rel)
+                .map(|(_, n, _)| *n)
+                .unwrap_or(0);
+        }
+        WHITELIST
+            .iter()
+            .find(|(p, _, _)| *p == rel)
+            .map(|(_, n, _)| *n)
+            .unwrap_or(0)
+    }
 
     /// The lookup forms that reach a character row raw. `.guid().find(` and `.name().find(` are the
     /// indexed point reads; `.iter()` is the case-folding name scan (`character_by_name`'s
@@ -1261,11 +1301,7 @@ mod character_fence_tripwire {
             let content =
                 std::fs::read_to_string(&file).unwrap_or_else(|e| panic!("cannot read {rel}: {e}"));
             let found = raw_lookups(&content);
-            let allowed = WHITELIST
-                .iter()
-                .find(|(p, _, _)| *p == rel)
-                .map(|(_, n, _)| *n)
-                .unwrap_or(0);
+            let allowed = budget_for(&rel);
             if found.len() > allowed {
                 violations.push(format!(
                     "{rel}: {} raw game_character lookup(s) (budget {allowed}) at line(s) {found:?}",
@@ -1285,29 +1321,28 @@ mod character_fence_tripwire {
              absent, so your existing not-found arm fires and no new error string reaches the \
              gateway. If refusal is the WRONG answer for your path (it would drop a third party's \
              value, or the field is connection-derived and regenerated at the destination), pick the \
-             DEFER or REGENERATE verdict instead and add the site to `WHITELIST` (module/src/tripwires.rs) \
-             WITH its verdict — see the table in `module/src/transfer/mod.rs`'s module doc. \
-             Whitelisted today: {} lookup(s) across {} file(s).",
+             DEFER or REGENERATE verdict instead and add the site WITH its verdict — to `WHITELIST` \
+             (module/src/tripwires.rs) for a Core file, or to `PACKAGE_FILE_BUDGET` for a Package \
+             file — see the table in `module/src/transfer/mod.rs`'s module doc. Whitelisted today: \
+             {} Core lookup(s) across {} Core file(s), plus {} Package lookup(s) across {} Package \
+             file shape(s).",
             violations.join("\n  "),
             WHITELIST.iter().map(|(_, n, _)| n).sum::<usize>(),
             WHITELIST.len(),
+            PACKAGE_FILE_BUDGET.iter().map(|(_, n, _)| n).sum::<usize>(),
+            PACKAGE_FILE_BUDGET.len(),
         );
     }
 
-    /// Ratchet: an entry whose file no longer needs its full budget must be trimmed, or the budget
-    /// quietly re-opens the door it was closed for.
-    ///
-    /// Same optional-drop-in rule as its sibling: an entry under a `packages/<name>/` this checkout
-    /// does not have is skipped; one under an INSTALLED package that has lost the file still counts
-    /// zero and fails.
+    /// Ratchet: a `WHITELIST` entry whose file no longer needs its full budget must be trimmed, or
+    /// the budget quietly re-opens the door it was closed for. `WHITELIST` holds Core files only
+    /// (never optional), so every entry is checked unconditionally; `PACKAGE_FILE_BUDGET` carries no
+    /// matching ratchet — see its own doc comment for why.
     #[test]
     fn character_whitelist_has_no_stale_entries() {
         let root = repo_root();
         let mut stale = Vec::new();
         for (rel, allowed, _) in WHITELIST {
-            if !crate::test_scan::is_installed(rel) {
-                continue;
-            }
             let actual = std::fs::read_to_string(root.join(rel))
                 .map(|c| raw_lookups(&c).len())
                 .unwrap_or(0);
@@ -2190,5 +2225,92 @@ pub(crate) mod dead_code_allowance_tripwire {
         let source =
             "#[allow(dead_code, reason = \"residue\")]\n#[cfg_attr(test, allow(dead_code))]\n";
         assert_eq!(unconditional_dead_code_allows(source), vec![1]);
+    }
+}
+
+/// ENFORCEMENT tripwire: Core source names no official Package, in code, comments or the
+/// generated Gateway bindings. Core must build and read the same with no Package installed.
+#[cfg(test)]
+pub(crate) mod package_name_tripwire {
+    use std::path::{Path, PathBuf};
+
+    /// The official Packages (LyraCoreProject/packages) that Core must not name.
+    const OFFICIAL_PACKAGES: &[&str] = &["playerbots"];
+
+    const CORE_TREES: &[&str] = &["module", "gateway", "crates", "importer"];
+
+    /// Test-only files may name a Package, and this file holds the list.
+    fn is_exempt(rel: &str) -> bool {
+        rel == "module/src/tripwires.rs"
+            || rel.ends_with("_tests.rs")
+            || rel.ends_with("/tests.rs")
+            || rel.split('/').any(|part| part == "tests")
+    }
+
+    fn named_packages(content: &str) -> Vec<(usize, &'static str)> {
+        let content = content.to_ascii_lowercase();
+        let mut found = Vec::new();
+        for (index, line) in content.lines().enumerate() {
+            for name in OFFICIAL_PACKAGES {
+                if line.contains(name) {
+                    found.push((index + 1, *name));
+                }
+            }
+        }
+        found
+    }
+
+    fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
+        let entries =
+            std::fs::read_dir(dir).unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display()));
+        for entry in entries {
+            let path = entry.expect("readable dir entry").path();
+            if path.is_dir() {
+                collect_files(&path, out);
+            } else {
+                out.push(path);
+            }
+        }
+    }
+
+    #[test]
+    fn core_source_names_no_official_package() {
+        let root = crate::test_scan::repo_root();
+        let mut files = Vec::new();
+        for tree in CORE_TREES {
+            collect_files(&root.join(tree), &mut files);
+        }
+        let mut found = Vec::new();
+        for file in files {
+            let rel = file
+                .strip_prefix(&root)
+                .expect("walked from the repo root")
+                .to_string_lossy()
+                .replace('\\', "/");
+            if is_exempt(&rel) {
+                continue;
+            }
+            let bytes = std::fs::read(&file).expect("readable Core file");
+            for (line, name) in named_packages(&String::from_utf8_lossy(&bytes)) {
+                found.push(format!("{rel}:{line} names {name}"));
+            }
+        }
+        assert!(
+            found.is_empty(),
+            "Core source names an official Package:\n  {}\n\nName the capability instead.",
+            found.join("\n  ")
+        );
+    }
+
+    #[test]
+    fn the_scan_reads_comments_and_bindings_but_not_tests() {
+        let source = "let x = 1;\n/// a Playerbots brain\nlet t = \"pkg_playerbots_bot\";\n";
+        assert_eq!(
+            named_packages(source),
+            vec![(2, "playerbots"), (3, "playerbots")]
+        );
+        assert!(!is_exempt("gateway/src/stdb/bindings/mod.rs"));
+        assert!(is_exempt("gateway/src/world/party_tests.rs"));
+        assert!(is_exempt("module/tests/package_account.rs"));
     }
 }

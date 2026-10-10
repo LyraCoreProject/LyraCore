@@ -134,6 +134,18 @@ _Avoid_: reject, deny, error (for gameplay refusals)
 **Account**:
 A login. Owns characters.
 
+**Package-owned Account**:
+An Account a Package created for its session-less Characters through the Package API. It has no
+credentials, so no login reaches it. `game_package_account` records the owning Package in Core, so
+the record outlives the Package when the Package is disabled.
+_Avoid_: bot account, account block
+
+**Dormant Character**:
+A Character whose Package was torn down. It is offline and has no live entity, Sessionless Action
+Consent or pending Intent. Its Account and Character rows stay, by maintainer decision: turning a
+Package off never deletes its Characters. A Package enabled again does not adopt them.
+_Avoid_: deleted bot, orphan bot, frozen bot
+
 **Alpha Test Tools**:
 Account-owned authority for a limited set of alpha testing dot-commands. The Gateway reads its
 current value from Realm-core for every command and conveys it to the Home Shard. The Module applies
@@ -517,6 +529,18 @@ the effective run speed. Never a second state machine.
 The one shared operation that removes the active Land Mount's aura rows and re-derives the Mount
 Projection. Idempotent, and a no-op for a rider who is not mounted.
 
+### Death and resurrection
+
+**Self-Resurrection Option**:
+The one spell a dead Character may cast on itself from the death dialog. Chosen at death from the
+Character's Soulstone aura, kept through Release Spirit, and spent when the Character is resurrected
+by any path or leaves the world. The client sees it as `PLAYER_SELF_RES_SPELL`.
+_Avoid_: self-res offer, rez offer, resurrect offer (an offer is a resurrect request from another Character)
+
+**Soulstone**:
+The item a Warlock creates, and the Aura its use puts on a Character. A Character that dies while the
+Aura is on it gets a Self-Resurrection Option. The Aura itself does not survive death.
+
 ### Procs
 
 **Proc**:
@@ -894,10 +918,17 @@ _Avoid_: plugin, addon (when meaning the whole folder), mod, extension
 The part of the Module a Package may name, versioned and written down at `docs/package-api.md`: the
 marker macros, the hook catalogue, the encounter kernel, the actor verbs and helpers, the Package
 Config seam, the Package Event seam, the table accessor conventions, and the list of module roots
-everything else hangs under. The build lints every Package file against it and fails on a path
+everything else hangs under. Two roots are gated: `package_fixture` exists only with
+`debug_reducers`, and `package_test` only in a test build. The build lints every Package file against it and fails on a path
 outside it, so a core refactor breaks a Package at compile time rather than on a live realm. It is a
 compatibility contract, never a sandbox: compiled Package code is trusted either way.
 _Avoid_: SDK, plugin API, public API, allowlist
+
+**Package Fixture**:
+Package code that stages or observes state for the Package's own durable tests. It compiles only
+with `debug_reducers` and reaches Core through `crate::package_fixture`, a Package API root a
+release build does not have.
+_Avoid_: test harness, debug hook, test helper
 
 **Package Config**:
 A row of `game_package_config`, keyed by `(package_name, key)`: one durable value a Package reads
@@ -909,6 +940,13 @@ _Avoid_: config file, setting (unqualified), package setting
 **Package Inventory**:
 The two directories that hold installed Packages. `packages/` holds the enabled ones, which the build compiles. `.lyracore/packages-disabled/` holds the disabled ones, which it cannot see. A Package's location IS its enabled state; no file records it, so nothing can disagree with the disk about what the next build compiles. `lyracore packages enable` and `lyracore packages disable` move one folder between the two.
 _Avoid_: registry, package list, enabled flag, state file
+
+**Package Teardown**:
+The Operator step that stops a Package on every Shard before it leaves the Package Inventory. It
+makes the Package's Characters Dormant Characters, empties the Package's tables, deletes its Package
+Config, and stops its registered code. A publish that removes a table refuses while the table holds
+rows, so the Package's tables must be empty first. `lyracore packages disable` runs it.
+_Avoid_: uninstall, package wipe, cleanup
 
 **Reference Package**:
 The maintained, minimal Package at `packages/example/`, committed to the LyraCore repo and present in every checkout. It doubles as living documentation for a Package's shape and is the template `lyracore packages new` copies and renames. It is deliberately inert: Rust-only, one commented hook pattern, no gameplay behavior.

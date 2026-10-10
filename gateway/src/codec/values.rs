@@ -436,6 +436,15 @@ pub fn build_player_ammo_id_values(guid: u64, ammo_entry: u32) -> SMSG_UPDATE_OB
     })
 }
 
+/// Build a VALUES partial-update carrying `PLAYER_SELF_RES_SPELL`, the Self-Resurrection Option the
+/// 5875 death dialog offers as its second button. `spell_id` 0 clears it. Owner-only field; same
+/// `dirty_reset` discipline as `build_coinage_values`, so `OBJECT_FIELD_TYPE` is never re-sent.
+pub fn build_self_res_spell_values(guid: u64, spell_id: u32) -> SMSG_UPDATE_OBJECT {
+    player_values(guid, |player| {
+        player.set_player_self_res_spell(spell_id as i32);
+    })
+}
+
 /// `PLAYER_CHARACTER_POINTS1` partial VALUES — the talent pane's unspent-points counter. Pushed
 /// LIVE after a talent pick (fires the client's CHARACTER_POINTS_CHANGED → TalentFrame refresh)
 /// and once after the login CREATE for a character with spent points (the CREATE's formula counts

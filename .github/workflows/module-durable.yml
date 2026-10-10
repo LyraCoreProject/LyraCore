@@ -101,6 +101,11 @@ jobs:
           cargo test -p lyracore-gateway --bin lyracore-gateway stdb::subscriptions::meeting_stone_durable_tests::seekers_on_two_world_shards_form_one_party_that_reaches_every_mirror -- --ignored --exact
           cargo test -p lyracore-gateway --bin lyracore-gateway stdb::armor::tests::resistance_projection_adds_property_effects_only_while_the_item_is_worn_and_unbroken -- --ignored --exact
 
+      # No Package registers a client command here, so the Module's fixture command carries it.
+      - name: Run the cross-Shard command transport tests
+        if: matrix.shard == 1
+        run: cargo test -p lyracore-gateway --bin lyracore-gateway stdb::subscriptions::party_command_durable_tests -- --ignored --test-threads=1
+
       - name: Upload the standalone logs
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

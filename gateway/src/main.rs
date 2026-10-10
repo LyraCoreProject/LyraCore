@@ -112,7 +112,7 @@ async fn run() -> Result<()> {
     // Here because this is the first point the realm row is readable.
     warn_on_unreachable_realm_address(&coordinator, &cfg);
 
-    // Bot-initiated (serendipity) invites: a playerbot's goal tick has no client and no
+    // Bot-initiated (serendipity) invites: a session-less Character's invite has no client and no
     // player connection to ride, so it is picked up here — on the coordinator, independent of any
     // session — rather than from a per-player relay.
     coordinator.spawn_bot_invite_relay();

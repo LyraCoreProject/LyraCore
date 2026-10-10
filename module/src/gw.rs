@@ -442,7 +442,7 @@ pub fn gw_turn_in_quest(
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
     crate::actor::turn_in_quest(ctx, actor_guid, giver_guid, quest_entry, reward_index)?;
-    // Only the World Session files a Reward Letter: no Gateway drives a playerbot's mail, so the
+    // Only the World Session files a Reward Letter: no Gateway drives a bot's mail, so the
     // Package turn-in path would leave the letter held.
     crate::mail_reward::file_reward_letter(ctx, actor_guid, giver_guid, quest_entry)
 }
@@ -605,6 +605,18 @@ pub fn gw_repop(ctx: &ReducerContext, request_actor: crate::SessionActor) -> Res
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
     crate::actor::repop(ctx, actor_guid)
+}
+
+/// [`crate::actor::self_resurrect`] behind the gateway gate: use the Self-Resurrection Option.
+#[reducer]
+pub fn gw_self_resurrect(
+    ctx: &ReducerContext,
+    request_actor: crate::SessionActor,
+) -> Result<(), String> {
+    require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
+    actor(ctx, actor_guid)?;
+    crate::actor::self_resurrect(ctx, actor_guid)
 }
 
 /// [`crate::actor::spirit_res`] behind the gateway gate — ghost res at the spirit healer.

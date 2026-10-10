@@ -169,6 +169,7 @@ pub mod debug_clear_creatures_reducer;
 pub mod debug_compute_spell_reducer;
 pub mod debug_compute_swing_reducer;
 pub mod debug_create_fixture_instance_reducer;
+pub mod debug_create_package_character_reducer;
 pub mod debug_creature_path_reducer;
 pub mod debug_delete_character_reducer;
 pub mod debug_deliver_mail_fixture_reducer;
@@ -249,6 +250,7 @@ pub mod debug_seed_creature_ai_fixtures_reducer;
 pub mod debug_seed_mail_reducer;
 pub mod debug_seed_package_config_reducer;
 pub mod debug_seed_scenario_fixtures_reducer;
+pub mod debug_self_resurrect_reducer;
 pub mod debug_sell_item_reducer;
 pub mod debug_set_health_reducer;
 pub mod debug_set_lethal_damage_floor_fixture_reducer;
@@ -578,8 +580,10 @@ pub mod game_object_trap_type;
 pub mod game_object_type;
 pub mod game_object_unlocked_type;
 pub mod game_operator_table;
+pub mod game_package_account_table;
 pub mod game_package_config_table;
 pub mod game_package_import_table;
+pub mod game_package_teardown_table;
 pub mod game_party_command_dispatch_lane_table;
 pub mod game_party_command_intent_table;
 pub mod game_party_command_issuer_table;
@@ -614,6 +618,7 @@ pub mod game_resurrect_request_table;
 pub mod game_roll_event_table;
 pub mod game_school_lockout_table;
 pub mod game_script_table;
+pub mod game_self_resurrect_option_table;
 pub mod game_session_reaper_schedule_table;
 pub mod game_session_table;
 pub mod game_sessionless_action_consent_table;
@@ -808,6 +813,7 @@ pub mod gw_repair_item_reducer;
 pub mod gw_repop_reducer;
 pub mod gw_reset_talents_reducer;
 pub mod gw_respond_resurrect_reducer;
+pub mod gw_self_resurrect_reducer;
 pub mod gw_sell_item_reducer;
 pub mod gw_send_chat_reducer;
 pub mod gw_send_emote_reducer;
@@ -907,10 +913,19 @@ pub mod npc_vendor_type;
 pub mod on_disconnect_reducer;
 pub mod operator_type;
 pub mod out_of_combat_sight_condition_type;
+pub mod package_account_type;
 pub mod package_config_type;
 pub mod package_import_type;
+pub mod package_teardown_type;
 pub mod parsed_client_command_type;
 pub mod party_command_dispatch_lane_type;
+pub mod party_command_fixture_apply_after_gate_change_reducer;
+pub mod party_command_fixture_apply_reducer;
+pub mod party_command_fixture_drive_reducer;
+pub mod party_command_fixture_expire_after_receipt_window_reducer;
+pub mod party_command_fixture_expire_reducer;
+pub mod party_command_fixture_finish_reducer;
+pub mod party_command_fixture_release_receipt_reducer;
 pub mod party_command_intent_type;
 pub mod party_command_issuer_type;
 pub mod party_command_receipt_type;
@@ -928,13 +943,6 @@ pub mod player_action_type;
 pub mod player_reputation_type;
 pub mod player_skill_type;
 pub mod player_spell_type;
-pub mod playerbots_fixture_command_apply_after_gate_change_reducer;
-pub mod playerbots_fixture_command_apply_reducer;
-pub mod playerbots_fixture_command_drive_reducer;
-pub mod playerbots_fixture_command_expire_after_receipt_window_reducer;
-pub mod playerbots_fixture_command_expire_reducer;
-pub mod playerbots_fixture_command_finish_reducer;
-pub mod playerbots_fixture_command_release_receipt_reducer;
 pub mod posture_admission_type;
 pub mod prepare_vmap_nav_coverage_reducer;
 pub mod provision_account_reducer;
@@ -1072,6 +1080,7 @@ pub mod scale_selected_threat_instruction_type;
 pub mod school_lockout_type;
 pub mod script_type;
 pub mod seeker_facts_type;
+pub mod self_resurrect_option_type;
 pub mod server_config_type;
 pub mod session_actor_type;
 pub mod session_reaper_schedule_type;
@@ -1132,6 +1141,7 @@ pub mod taunt_lock_type;
 pub mod taxi_flight_schedule_type;
 pub mod taxi_passenger_spline_type;
 pub mod taxi_service_reply_type;
+pub mod teardown_package_reducer;
 pub mod teleport_event_type;
 pub mod terrain_chunk_type;
 pub mod threat_entry_type;
@@ -1337,6 +1347,7 @@ pub use debug_clear_creatures_reducer::debug_clear_creatures;
 pub use debug_compute_spell_reducer::debug_compute_spell;
 pub use debug_compute_swing_reducer::debug_compute_swing;
 pub use debug_create_fixture_instance_reducer::debug_create_fixture_instance;
+pub use debug_create_package_character_reducer::debug_create_package_character;
 pub use debug_creature_path_reducer::debug_creature_path;
 pub use debug_delete_character_reducer::debug_delete_character;
 pub use debug_deliver_mail_fixture_reducer::debug_deliver_mail_fixture;
@@ -1417,6 +1428,7 @@ pub use debug_seed_creature_ai_fixtures_reducer::debug_seed_creature_ai_fixtures
 pub use debug_seed_mail_reducer::debug_seed_mail;
 pub use debug_seed_package_config_reducer::debug_seed_package_config;
 pub use debug_seed_scenario_fixtures_reducer::debug_seed_scenario_fixtures;
+pub use debug_self_resurrect_reducer::debug_self_resurrect;
 pub use debug_sell_item_reducer::debug_sell_item;
 pub use debug_set_health_reducer::debug_set_health;
 pub use debug_set_lethal_damage_floor_fixture_reducer::debug_set_lethal_damage_floor_fixture;
@@ -1746,8 +1758,10 @@ pub use game_object_trap_type::GameObjectTrap;
 pub use game_object_type::GameObject;
 pub use game_object_unlocked_type::GameObjectUnlocked;
 pub use game_operator_table::*;
+pub use game_package_account_table::*;
 pub use game_package_config_table::*;
 pub use game_package_import_table::*;
+pub use game_package_teardown_table::*;
 pub use game_party_command_dispatch_lane_table::*;
 pub use game_party_command_intent_table::*;
 pub use game_party_command_issuer_table::*;
@@ -1782,6 +1796,7 @@ pub use game_resurrect_request_table::*;
 pub use game_roll_event_table::*;
 pub use game_school_lockout_table::*;
 pub use game_script_table::*;
+pub use game_self_resurrect_option_table::*;
 pub use game_session_reaper_schedule_table::*;
 pub use game_session_table::*;
 pub use game_sessionless_action_consent_table::*;
@@ -1976,6 +1991,7 @@ pub use gw_repair_item_reducer::gw_repair_item;
 pub use gw_repop_reducer::gw_repop;
 pub use gw_reset_talents_reducer::gw_reset_talents;
 pub use gw_respond_resurrect_reducer::gw_respond_resurrect;
+pub use gw_self_resurrect_reducer::gw_self_resurrect;
 pub use gw_sell_item_reducer::gw_sell_item;
 pub use gw_send_chat_reducer::gw_send_chat;
 pub use gw_send_emote_reducer::gw_send_emote;
@@ -2075,10 +2091,19 @@ pub use npc_vendor_type::NpcVendor;
 pub use on_disconnect_reducer::on_disconnect;
 pub use operator_type::Operator;
 pub use out_of_combat_sight_condition_type::OutOfCombatSightCondition;
+pub use package_account_type::PackageAccount;
 pub use package_config_type::PackageConfig;
 pub use package_import_type::PackageImport;
+pub use package_teardown_type::PackageTeardown;
 pub use parsed_client_command_type::ParsedClientCommand;
 pub use party_command_dispatch_lane_type::PartyCommandDispatchLane;
+pub use party_command_fixture_apply_after_gate_change_reducer::party_command_fixture_apply_after_gate_change;
+pub use party_command_fixture_apply_reducer::party_command_fixture_apply;
+pub use party_command_fixture_drive_reducer::party_command_fixture_drive;
+pub use party_command_fixture_expire_after_receipt_window_reducer::party_command_fixture_expire_after_receipt_window;
+pub use party_command_fixture_expire_reducer::party_command_fixture_expire;
+pub use party_command_fixture_finish_reducer::party_command_fixture_finish;
+pub use party_command_fixture_release_receipt_reducer::party_command_fixture_release_receipt;
 pub use party_command_intent_type::PartyCommandIntent;
 pub use party_command_issuer_type::PartyCommandIssuer;
 pub use party_command_receipt_type::PartyCommandReceipt;
@@ -2096,13 +2121,6 @@ pub use player_action_type::PlayerAction;
 pub use player_reputation_type::PlayerReputation;
 pub use player_skill_type::PlayerSkill;
 pub use player_spell_type::PlayerSpell;
-pub use playerbots_fixture_command_apply_after_gate_change_reducer::playerbots_fixture_command_apply_after_gate_change;
-pub use playerbots_fixture_command_apply_reducer::playerbots_fixture_command_apply;
-pub use playerbots_fixture_command_drive_reducer::playerbots_fixture_command_drive;
-pub use playerbots_fixture_command_expire_after_receipt_window_reducer::playerbots_fixture_command_expire_after_receipt_window;
-pub use playerbots_fixture_command_expire_reducer::playerbots_fixture_command_expire;
-pub use playerbots_fixture_command_finish_reducer::playerbots_fixture_command_finish;
-pub use playerbots_fixture_command_release_receipt_reducer::playerbots_fixture_command_release_receipt;
 pub use posture_admission_type::PostureAdmission;
 pub use prepare_vmap_nav_coverage_reducer::prepare_vmap_nav_coverage;
 pub use provision_account_reducer::provision_account;
@@ -2240,6 +2258,7 @@ pub use scale_selected_threat_instruction_type::ScaleSelectedThreatInstruction;
 pub use school_lockout_type::SchoolLockout;
 pub use script_type::Script;
 pub use seeker_facts_type::SeekerFacts;
+pub use self_resurrect_option_type::SelfResurrectOption;
 pub use server_config_type::ServerConfig;
 pub use session_actor_type::SessionActor;
 pub use session_reaper_schedule_type::SessionReaperSchedule;
@@ -2300,6 +2319,7 @@ pub use taunt_lock_type::TauntLock;
 pub use taxi_flight_schedule_type::TaxiFlightSchedule;
 pub use taxi_passenger_spline_type::TaxiPassengerSpline;
 pub use taxi_service_reply_type::TaxiServiceReply;
+pub use teardown_package_reducer::teardown_package;
 pub use teleport_event_type::TeleportEvent;
 pub use terrain_chunk_type::TerrainChunk;
 pub use threat_entry_type::ThreatEntry;
@@ -2637,6 +2657,12 @@ pub enum Reducer {
     },
     DebugCreateFixtureInstance {
         character_guid: u64,
+    },
+    DebugCreatePackageCharacter {
+        package_name: String,
+        name: String,
+        race: u8,
+        class: u8,
     },
     DebugCreaturePath {
         guid: u64,
@@ -2977,6 +3003,9 @@ pub enum Reducer {
         value: String,
     },
     DebugSeedScenarioFixtures,
+    DebugSelfResurrect {
+        character_guid: u64,
+    },
     DebugSellItem {
         character_guid: u64,
         vendor_guid: u64,
@@ -3741,6 +3770,9 @@ pub enum Reducer {
         request_actor: SessionActor,
         accept: bool,
     },
+    GwSelfResurrect {
+        request_actor: SessionActor,
+    },
     GwSellItem {
         request_actor: SessionActor,
         vendor_guid: u64,
@@ -3923,30 +3955,30 @@ pub enum Reducer {
         claim_token: u64,
     },
     OnDisconnect,
-    PlayerbotsFixtureCommandApply {
+    PartyCommandFixtureApply {
         intent_id: u64,
         claim_token: u64,
     },
-    PlayerbotsFixtureCommandApplyAfterGateChange {
+    PartyCommandFixtureApplyAfterGateChange {
         intent_id: u64,
         claim_token: u64,
         mode: u8,
     },
-    PlayerbotsFixtureCommandDrive {
+    PartyCommandFixtureDrive {
         intent_id: u64,
         claim_token: u64,
     },
-    PlayerbotsFixtureCommandExpire {
+    PartyCommandFixtureExpire {
         intent_id: u64,
     },
-    PlayerbotsFixtureCommandExpireAfterReceiptWindow {
+    PartyCommandFixtureExpireAfterReceiptWindow {
         intent_id: u64,
     },
-    PlayerbotsFixtureCommandFinish {
+    PartyCommandFixtureFinish {
         intent_id: u64,
         claim_token: u64,
     },
-    PlayerbotsFixtureCommandReleaseReceipt {
+    PartyCommandFixtureReleaseReceipt {
         bot_guid: u64,
     },
     PrepareVmapNavCoverage {
@@ -4341,6 +4373,9 @@ pub enum Reducer {
         group_kind: u8,
         raid_slots: Vec<u8>,
     },
+    TeardownPackage {
+        package_name: String,
+    },
     TickAuras {
         schedule: AuraSchedule,
     },
@@ -4444,6 +4479,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugComputeSpell { .. } => "debug_compute_spell",
             Reducer::DebugComputeSwing { .. } => "debug_compute_swing",
             Reducer::DebugCreateFixtureInstance { .. } => "debug_create_fixture_instance",
+            Reducer::DebugCreatePackageCharacter { .. } => "debug_create_package_character",
             Reducer::DebugCreaturePath { .. } => "debug_creature_path",
             Reducer::DebugDeleteCharacter { .. } => "debug_delete_character",
             Reducer::DebugDeliverMailFixture { .. } => "debug_deliver_mail_fixture",
@@ -4535,6 +4571,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugSeedMail { .. } => "debug_seed_mail",
             Reducer::DebugSeedPackageConfig { .. } => "debug_seed_package_config",
             Reducer::DebugSeedScenarioFixtures => "debug_seed_scenario_fixtures",
+            Reducer::DebugSelfResurrect { .. } => "debug_self_resurrect",
             Reducer::DebugSellItem { .. } => "debug_sell_item",
             Reducer::DebugSetHealth { .. } => "debug_set_health",
             Reducer::DebugSetLethalDamageFloorFixture { .. } => {
@@ -4745,6 +4782,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwRepop { .. } => "gw_repop",
             Reducer::GwResetTalents { .. } => "gw_reset_talents",
             Reducer::GwRespondResurrect { .. } => "gw_respond_resurrect",
+            Reducer::GwSelfResurrect { .. } => "gw_self_resurrect",
             Reducer::GwSellItem { .. } => "gw_sell_item",
             Reducer::GwSendChat { .. } => "gw_send_chat",
             Reducer::GwSendEmote { .. } => "gw_send_emote",
@@ -4793,18 +4831,18 @@ impl __sdk::Reducer for Reducer {
             Reducer::InstallGuidRange { .. } => "install_guid_range",
             Reducer::MarkBotTransferArrivalReady { .. } => "mark_bot_transfer_arrival_ready",
             Reducer::OnDisconnect => "on_disconnect",
-            Reducer::PlayerbotsFixtureCommandApply { .. } => "playerbots_fixture_command_apply",
-            Reducer::PlayerbotsFixtureCommandApplyAfterGateChange { .. } => {
-                "playerbots_fixture_command_apply_after_gate_change"
+            Reducer::PartyCommandFixtureApply { .. } => "party_command_fixture_apply",
+            Reducer::PartyCommandFixtureApplyAfterGateChange { .. } => {
+                "party_command_fixture_apply_after_gate_change"
             }
-            Reducer::PlayerbotsFixtureCommandDrive { .. } => "playerbots_fixture_command_drive",
-            Reducer::PlayerbotsFixtureCommandExpire { .. } => "playerbots_fixture_command_expire",
-            Reducer::PlayerbotsFixtureCommandExpireAfterReceiptWindow { .. } => {
-                "playerbots_fixture_command_expire_after_receipt_window"
+            Reducer::PartyCommandFixtureDrive { .. } => "party_command_fixture_drive",
+            Reducer::PartyCommandFixtureExpire { .. } => "party_command_fixture_expire",
+            Reducer::PartyCommandFixtureExpireAfterReceiptWindow { .. } => {
+                "party_command_fixture_expire_after_receipt_window"
             }
-            Reducer::PlayerbotsFixtureCommandFinish { .. } => "playerbots_fixture_command_finish",
-            Reducer::PlayerbotsFixtureCommandReleaseReceipt { .. } => {
-                "playerbots_fixture_command_release_receipt"
+            Reducer::PartyCommandFixtureFinish { .. } => "party_command_fixture_finish",
+            Reducer::PartyCommandFixtureReleaseReceipt { .. } => {
+                "party_command_fixture_release_receipt"
             }
             Reducer::PrepareVmapNavCoverage { .. } => "prepare_vmap_nav_coverage",
             Reducer::ProvisionAccount { .. } => "provision_account",
@@ -4873,6 +4911,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::StageVmapGeneration { .. } => "stage_vmap_generation",
             Reducer::StampImportMeta { .. } => "stamp_import_meta",
             Reducer::SyncGroupMirror { .. } => "sync_group_mirror",
+            Reducer::TeardownPackage { .. } => "teardown_package",
             Reducer::TickAuras { .. } => "tick_auras",
             Reducer::TickBreath { .. } => "tick_breath",
             Reducer::TickCreatures { .. } => "tick_creatures",
@@ -5410,6 +5449,17 @@ Reducer::DebugCheckRestAt{
                 character_guid,
 }             => __sats::bsatn::to_vec(&debug_create_fixture_instance_reducer::DebugCreateFixtureInstanceArgs {
                 character_guid: character_guid.clone(),
+}),
+            Reducer::DebugCreatePackageCharacter{
+                package_name,
+                name,
+                race,
+                class,
+}             => __sats::bsatn::to_vec(&debug_create_package_character_reducer::DebugCreatePackageCharacterArgs {
+                package_name: package_name.clone(),
+                name: name.clone(),
+                race: race.clone(),
+                class: class.clone(),
 }),
             Reducer::DebugCreaturePath{
                 guid,
@@ -6017,7 +6067,12 @@ Reducer::DebugSeedMail{
 }),
             Reducer::DebugSeedScenarioFixtures => __sats::bsatn::to_vec(&debug_seed_scenario_fixtures_reducer::DebugSeedScenarioFixturesArgs {
                 }),
-Reducer::DebugSellItem{
+Reducer::DebugSelfResurrect{
+                character_guid,
+}             => __sats::bsatn::to_vec(&debug_self_resurrect_reducer::DebugSelfResurrectArgs {
+                character_guid: character_guid.clone(),
+}),
+            Reducer::DebugSellItem{
                 character_guid,
                 vendor_guid,
                 slot,
@@ -7391,6 +7446,11 @@ Reducer::GwIgnoreTrade{
                 request_actor: request_actor.clone(),
                 accept: accept.clone(),
 }),
+            Reducer::GwSelfResurrect{
+                request_actor,
+}             => __sats::bsatn::to_vec(&gw_self_resurrect_reducer::GwSelfResurrectArgs {
+                request_actor: request_actor.clone(),
+}),
             Reducer::GwSellItem{
                 request_actor,
                 vendor_guid,
@@ -7712,49 +7772,49 @@ Reducer::GwIgnoreTrade{
 }),
             Reducer::OnDisconnect => __sats::bsatn::to_vec(&on_disconnect_reducer::OnDisconnectArgs {
                 }),
-Reducer::PlayerbotsFixtureCommandApply{
+Reducer::PartyCommandFixtureApply{
                 intent_id,
                 claim_token,
-}             => __sats::bsatn::to_vec(&playerbots_fixture_command_apply_reducer::PlayerbotsFixtureCommandApplyArgs {
+}             => __sats::bsatn::to_vec(&party_command_fixture_apply_reducer::PartyCommandFixtureApplyArgs {
                 intent_id: intent_id.clone(),
                 claim_token: claim_token.clone(),
 }),
-            Reducer::PlayerbotsFixtureCommandApplyAfterGateChange{
+            Reducer::PartyCommandFixtureApplyAfterGateChange{
                 intent_id,
                 claim_token,
                 mode,
-}             => __sats::bsatn::to_vec(&playerbots_fixture_command_apply_after_gate_change_reducer::PlayerbotsFixtureCommandApplyAfterGateChangeArgs {
+}             => __sats::bsatn::to_vec(&party_command_fixture_apply_after_gate_change_reducer::PartyCommandFixtureApplyAfterGateChangeArgs {
                 intent_id: intent_id.clone(),
                 claim_token: claim_token.clone(),
                 mode: mode.clone(),
 }),
-            Reducer::PlayerbotsFixtureCommandDrive{
+            Reducer::PartyCommandFixtureDrive{
                 intent_id,
                 claim_token,
-}             => __sats::bsatn::to_vec(&playerbots_fixture_command_drive_reducer::PlayerbotsFixtureCommandDriveArgs {
+}             => __sats::bsatn::to_vec(&party_command_fixture_drive_reducer::PartyCommandFixtureDriveArgs {
                 intent_id: intent_id.clone(),
                 claim_token: claim_token.clone(),
 }),
-            Reducer::PlayerbotsFixtureCommandExpire{
+            Reducer::PartyCommandFixtureExpire{
                 intent_id,
-}             => __sats::bsatn::to_vec(&playerbots_fixture_command_expire_reducer::PlayerbotsFixtureCommandExpireArgs {
+}             => __sats::bsatn::to_vec(&party_command_fixture_expire_reducer::PartyCommandFixtureExpireArgs {
                 intent_id: intent_id.clone(),
 }),
-            Reducer::PlayerbotsFixtureCommandExpireAfterReceiptWindow{
+            Reducer::PartyCommandFixtureExpireAfterReceiptWindow{
                 intent_id,
-}             => __sats::bsatn::to_vec(&playerbots_fixture_command_expire_after_receipt_window_reducer::PlayerbotsFixtureCommandExpireAfterReceiptWindowArgs {
+}             => __sats::bsatn::to_vec(&party_command_fixture_expire_after_receipt_window_reducer::PartyCommandFixtureExpireAfterReceiptWindowArgs {
                 intent_id: intent_id.clone(),
 }),
-            Reducer::PlayerbotsFixtureCommandFinish{
+            Reducer::PartyCommandFixtureFinish{
                 intent_id,
                 claim_token,
-}             => __sats::bsatn::to_vec(&playerbots_fixture_command_finish_reducer::PlayerbotsFixtureCommandFinishArgs {
+}             => __sats::bsatn::to_vec(&party_command_fixture_finish_reducer::PartyCommandFixtureFinishArgs {
                 intent_id: intent_id.clone(),
                 claim_token: claim_token.clone(),
 }),
-            Reducer::PlayerbotsFixtureCommandReleaseReceipt{
+            Reducer::PartyCommandFixtureReleaseReceipt{
                 bot_guid,
-}             => __sats::bsatn::to_vec(&playerbots_fixture_command_release_receipt_reducer::PlayerbotsFixtureCommandReleaseReceiptArgs {
+}             => __sats::bsatn::to_vec(&party_command_fixture_release_receipt_reducer::PartyCommandFixtureReleaseReceiptArgs {
                 bot_guid: bot_guid.clone(),
 }),
             Reducer::PrepareVmapNavCoverage{
@@ -8476,6 +8536,11 @@ Reducer::ResumeRelayArrival{
                 group_kind: group_kind.clone(),
                 raid_slots: raid_slots.clone(),
 }),
+            Reducer::TeardownPackage{
+                package_name,
+}             => __sats::bsatn::to_vec(&teardown_package_reducer::TeardownPackageArgs {
+                package_name: package_name.clone(),
+}),
             Reducer::TickAuras{
                 schedule,
 }             => __sats::bsatn::to_vec(&tick_auras_reducer::TickAurasArgs {
@@ -8722,8 +8787,10 @@ pub struct DbUpdate {
     game_npc_text_slot: __sdk::TableUpdate<NpcTextSlot>,
     game_npc_vendor: __sdk::TableUpdate<NpcVendor>,
     game_operator: __sdk::TableUpdate<Operator>,
+    game_package_account: __sdk::TableUpdate<PackageAccount>,
     game_package_config: __sdk::TableUpdate<PackageConfig>,
     game_package_import: __sdk::TableUpdate<PackageImport>,
+    game_package_teardown: __sdk::TableUpdate<PackageTeardown>,
     game_party_command_dispatch_lane: __sdk::TableUpdate<PartyCommandDispatchLane>,
     game_party_command_intent: __sdk::TableUpdate<PartyCommandIntent>,
     game_party_command_issuer: __sdk::TableUpdate<PartyCommandIssuer>,
@@ -8757,6 +8824,7 @@ pub struct DbUpdate {
     game_roll_event: __sdk::TableUpdate<RollEvent>,
     game_school_lockout: __sdk::TableUpdate<SchoolLockout>,
     game_script: __sdk::TableUpdate<Script>,
+    game_self_resurrect_option: __sdk::TableUpdate<SelfResurrectOption>,
     game_session: __sdk::TableUpdate<Session>,
     game_session_reaper_schedule: __sdk::TableUpdate<SessionReaperSchedule>,
     game_sessionless_action_consent: __sdk::TableUpdate<SessionlessActionConsent>,
@@ -9459,12 +9527,18 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_operator" => db_update
                     .game_operator
                     .append(game_operator_table::parse_table_update(table_update)?),
+                "game_package_account" => db_update.game_package_account.append(
+                    game_package_account_table::parse_table_update(table_update)?,
+                ),
                 "game_package_config" => db_update
                     .game_package_config
                     .append(game_package_config_table::parse_table_update(table_update)?),
                 "game_package_import" => db_update
                     .game_package_import
                     .append(game_package_import_table::parse_table_update(table_update)?),
+                "game_package_teardown" => db_update.game_package_teardown.append(
+                    game_package_teardown_table::parse_table_update(table_update)?,
+                ),
                 "game_party_command_dispatch_lane" => {
                     db_update.game_party_command_dispatch_lane.append(
                         game_party_command_dispatch_lane_table::parse_table_update(table_update)?,
@@ -9566,6 +9640,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_script" => db_update
                     .game_script
                     .append(game_script_table::parse_table_update(table_update)?),
+                "game_self_resurrect_option" => db_update.game_self_resurrect_option.append(
+                    game_self_resurrect_option_table::parse_table_update(table_update)?,
+                ),
                 "game_session" => db_update
                     .game_session
                     .append(game_session_table::parse_table_update(table_update)?),
@@ -10649,12 +10726,24 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.game_operator = cache
             .apply_diff_to_table::<Operator>("game_operator", &self.game_operator)
             .with_updates_by_pk(|row| &row.id);
+        diff.game_package_account = cache
+            .apply_diff_to_table::<PackageAccount>(
+                "game_package_account",
+                &self.game_package_account,
+            )
+            .with_updates_by_pk(|row| &row.account_id);
         diff.game_package_config = cache
             .apply_diff_to_table::<PackageConfig>("game_package_config", &self.game_package_config)
             .with_updates_by_pk(|row| &row.id);
         diff.game_package_import = cache
             .apply_diff_to_table::<PackageImport>("game_package_import", &self.game_package_import)
             .with_updates_by_pk(|row| &row.id);
+        diff.game_package_teardown = cache
+            .apply_diff_to_table::<PackageTeardown>(
+                "game_package_teardown",
+                &self.game_package_teardown,
+            )
+            .with_updates_by_pk(|row| &row.package_name);
         diff.game_party_command_dispatch_lane = cache
             .apply_diff_to_table::<PartyCommandDispatchLane>(
                 "game_party_command_dispatch_lane",
@@ -10814,6 +10903,12 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.game_script = cache
             .apply_diff_to_table::<Script>("game_script", &self.game_script)
             .with_updates_by_pk(|row| &row.script_id);
+        diff.game_self_resurrect_option = cache
+            .apply_diff_to_table::<SelfResurrectOption>(
+                "game_self_resurrect_option",
+                &self.game_self_resurrect_option,
+            )
+            .with_updates_by_pk(|row| &row.character_guid);
         diff.game_session = cache
             .apply_diff_to_table::<Session>("game_session", &self.game_session)
             .with_updates_by_pk(|row| &row.account_id);
@@ -11637,11 +11732,17 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_operator" => db_update
                     .game_operator
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_package_account" => db_update
+                    .game_package_account
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_package_config" => db_update
                     .game_package_config
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_package_import" => db_update
                     .game_package_import
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_package_teardown" => db_update
+                    .game_package_teardown
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_party_command_dispatch_lane" => db_update
                     .game_party_command_dispatch_lane
@@ -11741,6 +11842,9 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_script" => db_update
                     .game_script
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_self_resurrect_option" => db_update
+                    .game_self_resurrect_option
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_session" => db_update
                     .game_session
@@ -12505,11 +12609,17 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_operator" => db_update
                     .game_operator
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_package_account" => db_update
+                    .game_package_account
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_package_config" => db_update
                     .game_package_config
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_package_import" => db_update
                     .game_package_import
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_package_teardown" => db_update
+                    .game_package_teardown
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_party_command_dispatch_lane" => db_update
                     .game_party_command_dispatch_lane
@@ -12609,6 +12719,9 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_script" => db_update
                     .game_script
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_self_resurrect_option" => db_update
+                    .game_self_resurrect_option
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_session" => db_update
                     .game_session
@@ -12996,8 +13109,10 @@ pub struct AppliedDiff<'r> {
     game_npc_text_slot: __sdk::TableAppliedDiff<'r, NpcTextSlot>,
     game_npc_vendor: __sdk::TableAppliedDiff<'r, NpcVendor>,
     game_operator: __sdk::TableAppliedDiff<'r, Operator>,
+    game_package_account: __sdk::TableAppliedDiff<'r, PackageAccount>,
     game_package_config: __sdk::TableAppliedDiff<'r, PackageConfig>,
     game_package_import: __sdk::TableAppliedDiff<'r, PackageImport>,
+    game_package_teardown: __sdk::TableAppliedDiff<'r, PackageTeardown>,
     game_party_command_dispatch_lane: __sdk::TableAppliedDiff<'r, PartyCommandDispatchLane>,
     game_party_command_intent: __sdk::TableAppliedDiff<'r, PartyCommandIntent>,
     game_party_command_issuer: __sdk::TableAppliedDiff<'r, PartyCommandIssuer>,
@@ -13031,6 +13146,7 @@ pub struct AppliedDiff<'r> {
     game_roll_event: __sdk::TableAppliedDiff<'r, RollEvent>,
     game_school_lockout: __sdk::TableAppliedDiff<'r, SchoolLockout>,
     game_script: __sdk::TableAppliedDiff<'r, Script>,
+    game_self_resurrect_option: __sdk::TableAppliedDiff<'r, SelfResurrectOption>,
     game_session: __sdk::TableAppliedDiff<'r, Session>,
     game_session_reaper_schedule: __sdk::TableAppliedDiff<'r, SessionReaperSchedule>,
     game_sessionless_action_consent: __sdk::TableAppliedDiff<'r, SessionlessActionConsent>,
@@ -14014,6 +14130,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
             &self.game_operator,
             event,
         );
+        callbacks.invoke_table_row_callbacks::<PackageAccount>(
+            "game_package_account",
+            &self.game_package_account,
+            event,
+        );
         callbacks.invoke_table_row_callbacks::<PackageConfig>(
             "game_package_config",
             &self.game_package_config,
@@ -14022,6 +14143,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<PackageImport>(
             "game_package_import",
             &self.game_package_import,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<PackageTeardown>(
+            "game_package_teardown",
+            &self.game_package_teardown,
             event,
         );
         callbacks.invoke_table_row_callbacks::<PartyCommandDispatchLane>(
@@ -14181,6 +14307,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
             event,
         );
         callbacks.invoke_table_row_callbacks::<Script>("game_script", &self.game_script, event);
+        callbacks.invoke_table_row_callbacks::<SelfResurrectOption>(
+            "game_self_resurrect_option",
+            &self.game_self_resurrect_option,
+            event,
+        );
         callbacks.invoke_table_row_callbacks::<Session>("game_session", &self.game_session, event);
         callbacks.invoke_table_row_callbacks::<SessionReaperSchedule>(
             "game_session_reaper_schedule",
@@ -15315,8 +15446,10 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_npc_text_slot_table::register_table(client_cache);
         game_npc_vendor_table::register_table(client_cache);
         game_operator_table::register_table(client_cache);
+        game_package_account_table::register_table(client_cache);
         game_package_config_table::register_table(client_cache);
         game_package_import_table::register_table(client_cache);
+        game_package_teardown_table::register_table(client_cache);
         game_party_command_dispatch_lane_table::register_table(client_cache);
         game_party_command_intent_table::register_table(client_cache);
         game_party_command_issuer_table::register_table(client_cache);
@@ -15350,6 +15483,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_roll_event_table::register_table(client_cache);
         game_school_lockout_table::register_table(client_cache);
         game_script_table::register_table(client_cache);
+        game_self_resurrect_option_table::register_table(client_cache);
         game_session_table::register_table(client_cache);
         game_session_reaper_schedule_table::register_table(client_cache);
         game_sessionless_action_consent_table::register_table(client_cache);
@@ -15602,8 +15736,10 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_npc_text_slot",
         "game_npc_vendor",
         "game_operator",
+        "game_package_account",
         "game_package_config",
         "game_package_import",
+        "game_package_teardown",
         "game_party_command_dispatch_lane",
         "game_party_command_intent",
         "game_party_command_issuer",
@@ -15637,6 +15773,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_roll_event",
         "game_school_lockout",
         "game_script",
+        "game_self_resurrect_option",
         "game_session",
         "game_session_reaper_schedule",
         "game_sessionless_action_consent",

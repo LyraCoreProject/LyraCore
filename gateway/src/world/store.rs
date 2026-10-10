@@ -1299,6 +1299,11 @@ pub trait WorldStore:
     /// for the caller) is expected when the offer already lapsed/was answered — per-action, log + ignore.
     fn resurrect_response(&self, account_id: u64, self_guid: u64, accept: bool) -> Result<()>;
 
+    /// Use the caller's Self-Resurrection Option (`CMSG_SELF_RES`): the module revives the dead
+    /// caller in place and spends the option. A Refusal (alive, or no option) is expected after a
+    /// race. Per-action: log and ignore.
+    fn self_resurrect(&self, account_id: u64, self_guid: u64) -> Result<()>;
+
     /// Spirit-Healer resurrect (`CMSG_SPIRIT_HEALER_ACTIVATE`): a ghost activates the graveyard Spirit
     /// Healer to res IN PLACE at 50% health/mana + a Resurrection Sickness debuff. `healer_guid` is the
     /// activated healer's guid (passed through to the confirm echo). The module gates on ghost state.

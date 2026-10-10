@@ -1015,6 +1015,25 @@ fn register_shard_callbacks(
         &view,
         move |v, row| resurrect_offered(v, shard, row),
     );
+    // The Self-Resurrection Option is state, not an event: a replayed row re-sends the same field.
+    wire_insert(
+        db.game_self_resurrect_option(),
+        "game_self_resurrect_option.insert",
+        &view,
+        move |v, row| self_res_option_changed(v, shard, row.character_guid, row.spell_id),
+    );
+    wire_update(
+        db.game_self_resurrect_option(),
+        "game_self_resurrect_option.update",
+        &view,
+        move |v, _old, row| self_res_option_changed(v, shard, row.character_guid, row.spell_id),
+    );
+    wire_delete(
+        db.game_self_resurrect_option(),
+        "game_self_resurrect_option.delete",
+        &view,
+        move |v, row| self_res_option_changed(v, shard, row.character_guid, 0),
+    );
     // Guild rows exist only on Realm-core. On a sharded realm this Shard holds none, and
     // `arm_realm_private` relays them from the Realm-core connection instead.
     wire_guild_relays(
@@ -2415,6 +2434,20 @@ fn resurrect_offered(view: &WorldView, shard: ShardId, row: &ResurrectRequest) {
     });
 }
 
+/// A Self-Resurrection Option changed → the owner's `PLAYER_SELF_RES_SPELL` (0 clears it), and
+/// nobody else's.
+fn self_res_option_changed(view: &WorldView, shard: ShardId, character_guid: u64, spell_id: u32) {
+    let Some(viewer) = view.viewer_of_owner_on_shard(shard, OwnerGuid(character_guid)) else {
+        return;
+    };
+    if !super::subscriptions::private_recipient_audience(character_guid, viewer.self_guid) {
+        return;
+    }
+    enqueue(viewer.clone(), move |_| {
+        super::subscriptions::self_res_option_outbound(character_guid, spell_id)
+    });
+}
+
 /// A Realm Chat Line landed → one `SMSG_MESSAGECHAT` per recipient with a World Session on this
 /// Gateway, whatever Shard it plays on. The Module chose the audience. The only per-listener
 /// filter here is the listener's own ignore list, and only for lines the Module marked ignorable.
@@ -3351,10 +3384,10 @@ mod family_audience_tests {
         exploration_outbound_for_word, guild_event_appeared, guild_membership_changed,
         instance_removal_ended, instance_removal_started, instance_removal_time_left_ms,
         is_initial_apply, item_owner_job, levelup_appeared, mail_arrived, petition_event_appeared,
-        reputation_appeared, resident_countdown_ms, sweep_into_view, system_message_appeared,
-        teleport_appeared, weather_changed, xp_appeared, zone_crossed, BoundIdentity,
-        ExplorationReplay, GuildMembershipRead, GuildRosterSnapshotRead, MotionPending, OwnerGuid,
-        PetitionRead, Viewer, WorldView,
+        reputation_appeared, resident_countdown_ms, self_res_option_changed, sweep_into_view,
+        system_message_appeared, teleport_appeared, weather_changed, xp_appeared, zone_crossed,
+        BoundIdentity, ExplorationReplay, GuildMembershipRead, GuildRosterSnapshotRead,
+        MotionPending, OwnerGuid, PetitionRead, Viewer, WorldView,
     };
     use crate::stdb::aoi::ViewerGates;
     use crate::stdb::bindings::{
@@ -4462,6 +4495,55 @@ mod family_audience_tests {
 
         assert_eq!(queued_job(&remaining_rx).len(), 1);
         assert!(removed_rx.try_recv().is_err());
+    }
+
+    /// The owner's `PLAYER_SELF_RES_SPELL` from one queued VALUES packet.
+    fn self_res_spell_of(outbound: Vec<Outbound>) -> Option<i32> {
+        use wow_world_messages::vanilla::{Object, UpdateMask};
+        let [Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(packet))] = outbound.as_slice()
+        else {
+            panic!("the owner must receive one SMSG_UPDATE_OBJECT");
+        };
+        match packet.objects.as_slice() {
+            [Object::Values {
+                mask1: UpdateMask::Player(player),
+                ..
+            }] => player.player_self_res_spell(),
+            other => panic!("expected one Player VALUES block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_self_resurrect_option_reaches_only_its_character_on_this_shard() {
+        let view = WorldView::new(true);
+        let anchor = CellKey::at(0, 0, 0, 0);
+        let (owner_tx, owner_rx) = SessionTx::with_depth(0);
+        let (bystander_tx, bystander_rx) = SessionTx::with_depth(0);
+        let (remote_tx, remote_rx) = SessionTx::with_depth(0);
+        view.add_viewer_on_shard(viewer_with_tx(1, 9001, identity(1), owner_tx), anchor, 0);
+        view.add_viewer_on_shard(
+            viewer_with_tx(2, 9002, identity(2), bystander_tx),
+            anchor,
+            0,
+        );
+        view.add_viewer_on_shard(viewer_with_tx(3, 9003, identity(3), remote_tx), anchor, 1);
+
+        self_res_option_changed(&view, 0, 9001, 3026);
+        assert_eq!(self_res_spell_of(queued_job(&owner_rx)), Some(3026));
+        assert!(owner_rx.try_recv().is_err(), "one change queues one job");
+        assert!(
+            bystander_rx.try_recv().is_err(),
+            "a nearby Character never sees another Character's option"
+        );
+
+        self_res_option_changed(&view, 0, 9003, 3026);
+        assert!(
+            remote_rx.try_recv().is_err(),
+            "a Character on another Shard is not this Shard's to address"
+        );
+
+        self_res_option_changed(&view, 0, 9001, 0);
+        assert_eq!(self_res_spell_of(queued_job(&owner_rx)), Some(0));
     }
 
     #[test]

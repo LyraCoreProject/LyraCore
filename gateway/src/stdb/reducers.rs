@@ -3134,6 +3134,20 @@ impl Coordinator {
         )
     }
 
+    /// Use the caller's Self-Resurrection Option (`CMSG_SELF_RES`) over the coordinator connection.
+    /// Rides the coordinator connection as `gw_self_resurrect`.
+    pub fn self_resurrect(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
+        if actor_guid == 0 {
+            return Err(anyhow!("self_resurrect: actor_guid unresolved"));
+        }
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_self_resurrect",
+            gw_self_resurrect_then(self.session_actor(actor_guid))
+        )
+    }
+
     /// Spirit-Healer resurrect (`CMSG_SPIRIT_HEALER_ACTIVATE`) over the coordinator connection: the
     /// module res's the caller in place at 50% + applies Resurrection Sickness if it's a ghost.
     /// `gw_spirit_res` takes no `healer_guid`.

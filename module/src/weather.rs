@@ -504,7 +504,7 @@ pub fn gw_force_zone_weather(
 /// The provenance family [`seed_weather_weights`] stamps. Deliberately distinct from the family the
 /// world-data import will use, so the two never claim the same rows: when the import lands it fills
 /// `game_weather` under its own family and this seed goes away in the same change.
-const WEATHER_SEED_FAMILY: &str = "weather_seed";
+pub(crate) const WEATHER_SEED_FAMILY: &str = "weather_seed";
 
 /// One zone's four seasons of `(rain, snow, storm)` percentages, spring first.
 type SeasonalPercents = [(u8, u8, u8); 4];

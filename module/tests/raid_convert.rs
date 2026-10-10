@@ -362,10 +362,11 @@ fn a_raid_past_five_certifies_a_companion_order_for_any_member() {
         "a Raid member who is not the leader: {text}"
     );
 
+    // With no Package installed, the Module's fixture command applies past every Core Gate.
     realm.assert_call("debug_spawn_player_entity", &["1"]);
     let outcome = applied_order_outcome(&realm, group_id.as_str(), &all_members);
     assert_eq!(
-        outcome, "(suppressed = ())",
+        outcome, "(applied = ())",
         "a Raid of ten passes the target roster bound"
     );
 }

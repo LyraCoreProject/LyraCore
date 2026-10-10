@@ -63,7 +63,7 @@ lyracore packages add FOLDER|GIT-URL|NAME [--yes]
 lyracore packages build
 lyracore packages check
 lyracore packages config NAME [KEY [VALUE]] [--new]
-lyracore packages disable NAME
+lyracore packages disable NAME [--yes]
 lyracore packages enable NAME
 lyracore packages list
 lyracore packages new NAME
@@ -96,7 +96,7 @@ lyracore update
 | `packages build` | regenerate the Module schema typings, typecheck every Datascript against them, then emit and validate each enabled Package's Package Delta and Script Artifact |
 | `packages check` | verify every enabled Package's generated artifact against its recorded Build Identity, regenerating the Module typings fresh |
 | `packages config` | read a Package's key-values, or write one to every Shard of the fixture topology |
-| `packages disable` | move an enabled Package out of the build's sight, keeping it on disk |
+| `packages disable` | run Package Teardown on every Shard, then move the Package out of the build's sight, keeping it on disk |
 | `packages enable` | move a disabled Package back into the build |
 | `packages list` | every installed Package: enabled or disabled, where it came from, and whether it has drifted |
 | `packages new` | scaffold a new Package offline, by copying and renaming the reference Package this checkout ships |
@@ -311,7 +311,8 @@ in `datascripts/` is checkout-wide today, not per-Package.
 ## `packages enable`, `disable`, `remove` — taking a Package out of the build
 
 ```bash
-./lyracore packages disable my-package        # out of the build, still on disk
+./lyracore packages disable my-package        # tear down, then out of the build, still on disk
+./lyracore packages disable my-package --yes  # answer the teardown question in advance
 ./lyracore packages enable my-package         # back into the build
 ./lyracore packages remove my-package         # delete a disabled Package, asks first
 ./lyracore packages remove my-package --yes   # answer the deletion question in advance
@@ -322,20 +323,45 @@ in `datascripts/` is checkout-wide today, not per-Package.
 `disable` rename one folder between the two. Nothing can disagree with the filesystem about which
 Packages the next build compiles.
 
-Both directories are on the same filesystem, so the rename is atomic and each verb is the other's
-undo. That is why neither asks for confirmation. The Provenance Stamp lives inside the folder, so it
-travels with the move and is never rewritten: a re-enabled Package still reports its Package Source
-and still reads as `clean` rather than drifted.
+Both directories are on the same filesystem, so the rename is atomic and each verb undoes the other's
+move. The Provenance Stamp lives inside the folder, so it travels with the move and is never
+rewritten: a re-enabled Package still reports its Package Source and still reads as `clean` rather
+than drifted. `enable` never asks. `disable` asks before it runs Package Teardown, because teardown
+deletes the Package's rows.
 
 Name collisions fail before anything moves, on the Rust identifier rather than the folder name. A
 disabled `foo_bar` cannot be enabled next to an enabled `foo-bar`, because both fold onto
 `pkg_foo_bar`.
 
-**Before `disable` moves a Package, it reports the Module tables that Package registers.** Disabling
-takes those tables out of the schema, so the next publish is a schema change that removes them.
-`lyracore publish` never passes SpacetimeDB's destructive wipe flag, so a publish that would drop a
-table still holding rows stops instead of deleting them. The report tells you that before you commit
-to the move. It does not block it.
+**`disable` runs Package Teardown before it moves anything.** Disabling takes the Package's tables
+out of the schema, so the next publish removes them. SpacetimeDB refuses to remove a table that
+still holds rows, and `lyracore publish` never passes the destructive wipe flag, so that publish
+stops. Teardown prevents this. When the recorded dev stack is up, `disable` calls
+`teardown_package` on every Shard of the recorded topology, then once more on each Shard. On each
+Shard, teardown does these steps:
+
+- It empties the Package's tables and deletes its Package Config.
+- It stops the Package's hooks and tick passes until a build without the Package runs.
+- It makes the Package's Characters Dormant Characters. They go offline and lose their live
+  entities, and their Accounts and Characters stay.
+
+`disable` asks before the teardown, and `--yes` answers in advance. If a Shard refuses, nothing
+moves. The usual Refusal is a Package Character that is crossing
+between Shards. Re-run `disable` when the crossing settles. When the stack is down, `disable` moves
+the folder without a teardown and reports the Package's tables. The next publish then stops if
+those tables hold rows; enable the Package, start the stack, and disable it again.
+
+The off path for a Package on a running Realm:
+
+```bash
+./lyracore packages disable playerbots   # asks, tears down every Shard, then moves the folder
+./lyracore publish                       # the Module without the Package; its empty tables go
+./lyracore packages replay               # removes the Package's Runtime Scripts from every Shard
+./lyracore client sync                   # only when the Package ships client content
+```
+
+`packages enable` followed by `publish` brings the Package back fresh: empty tables and default
+Package Config. Its Dormant Characters stay as they are, and the Package creates new ones.
 
 **`packages remove NAME` deletes, so it has gates.** It requires the Package to be disabled already,
 and points at `packages disable` when it is not: the build has to stop compiling a Package before
