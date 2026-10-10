@@ -9,12 +9,12 @@ use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::bindings::*;
-use super::connection::{call_reducer, recv_reducer_on, reducer_refusal_reason, Coordinator};
+use super::connection::{call_reducer, reducer_refusal_reason, Coordinator};
 use super::views::entity_view;
 use crate::world::guild_fee;
 use crate::world::party::{AdmittedCompanionCommand, CompanionCommandOutcome, PartyOutcome};
 use crate::world::{
-    ChannelOutcome, ChatOutcome, ContactOutcome, ItemActionResult, LootActionStatus,
+    Actor, ChannelOutcome, ChatOutcome, ContactOutcome, ItemActionResult, LootActionStatus,
     LootWindowRefusal, LootWindowRequestStatus, MeetingStoneOutcome,
 };
 use lyracore_shared::auction::AuctionRefusal;
@@ -75,7 +75,7 @@ impl Coordinator {
                 source.map_id,
                 source.instance_id,
                 source.revision,
-                self.session_actor(0)
+                self.owner_actor()
             )
         )
     }
@@ -330,7 +330,7 @@ impl Coordinator {
                 call_reducer!(
                     self.0.call_pipe().conn.reducers,
                     "gw_ack_taxi_reply",
-                    gw_ack_taxi_reply_then(self.session_actor(character_guid), request_id)
+                    gw_ack_taxi_reply_then(self.actor_or_owner(character_guid), request_id)
                 )?;
                 if !reply.accepted {
                     log::debug!(
@@ -353,14 +353,14 @@ impl Coordinator {
         character_guid: u64,
         npc_guid: u64,
     ) -> Result<Option<crate::codec::TaxiNodeStatusView>> {
-        if character_guid == 0 {
+        let Some(actor) = Actor::new(character_guid) else {
             return Ok(None);
-        }
+        };
         let request_id = next_taxi_request_id();
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "gw_taxi_node_status",
-            gw_taxi_node_status_then(self.session_actor(character_guid), npc_guid, request_id)
+            gw_taxi_node_status_then(self.session_actor(actor), npc_guid, request_id)
         )?;
         Ok(self
             .await_taxi_reply(
@@ -381,14 +381,14 @@ impl Coordinator {
         character_guid: u64,
         npc_guid: u64,
     ) -> Result<Option<crate::codec::TaxiMapView>> {
-        if character_guid == 0 {
+        let Some(actor) = Actor::new(character_guid) else {
             return Ok(None);
-        }
+        };
         let request_id = next_taxi_request_id();
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "gw_open_taxi",
-            gw_open_taxi_then(self.session_actor(character_guid), npc_guid, request_id)
+            gw_open_taxi_then(self.session_actor(actor), npc_guid, request_id)
         )?;
         Ok(self
             .await_taxi_reply(
@@ -414,18 +414,18 @@ impl Coordinator {
         source_client_node_id: u32,
         destination_client_node_id: u32,
     ) -> Result<crate::codec::TaxiActivationResult> {
-        if character_guid == 0 {
+        let Some(actor) = Actor::new(character_guid) else {
             return Ok(crate::codec::TaxiActivationResult {
                 result_code:
                     lyracore_shared::constants::taxi_protocol::ACTIVATE_UNSPECIFIED_SERVER_ERROR,
             });
-        }
+        };
         let request_id = next_taxi_request_id();
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "gw_activate_taxi",
             gw_activate_taxi_then(
-                self.session_actor(character_guid),
+                self.session_actor(actor),
                 npc_guid,
                 source_client_node_id,
                 destination_client_node_id,
@@ -449,7 +449,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "gw_arm_taxi_flight",
-            gw_arm_taxi_flight_then(self.session_actor(character_guid))
+            gw_arm_taxi_flight_then(self.actor_or_owner(character_guid))
         )
     }
 
@@ -567,7 +567,7 @@ impl Coordinator {
             "gw_auction_list_local",
             gw_auction_list_local_then(
                 operation_id,
-                self.session_actor(request.actor_guid),
+                self.actor_or_owner(request.actor_guid),
                 request.item_guid,
                 request.auctioneer_guid,
                 request.house_id,
@@ -588,7 +588,7 @@ impl Coordinator {
             "gw_auction_hold_listing",
             gw_auction_hold_listing_then(
                 operation_id,
-                self.session_actor(request.actor_guid),
+                self.actor_or_owner(request.actor_guid),
                 request.item_guid,
                 request.auctioneer_guid,
                 request.house_id,
@@ -605,7 +605,7 @@ impl Coordinator {
             "realm_auction_commit_listing",
             realm_auction_commit_listing_then(
                 hold.operation_id,
-                self.session_actor(hold.seller_guid),
+                self.actor_or_owner(hold.seller_guid),
                 hold.item_guid,
                 hold.item_entry,
                 hold.item_stack_count,
@@ -631,7 +631,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "realm_auction_confirm_listing",
-            realm_auction_confirm_listing_then(operation_id, auction_id, self.session_actor(0))
+            realm_auction_confirm_listing_then(operation_id, auction_id, self.owner_actor())
         )
     }
 
@@ -639,7 +639,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "realm_auction_settle_listing",
-            realm_auction_settle_listing_then(operation_id, self.session_actor(0))
+            realm_auction_settle_listing_then(operation_id, self.owner_actor())
         )
     }
 
@@ -649,7 +649,7 @@ impl Coordinator {
             "realm_auction_refund_listing",
             realm_auction_refund_listing_then(
                 hold.operation_id,
-                self.session_actor(hold.seller_guid),
+                self.actor_or_owner(hold.seller_guid),
                 hold.item_guid,
                 hold.item_entry,
                 hold.item_stack_count,
@@ -677,7 +677,7 @@ impl Coordinator {
             "gw_auction_release_listing_hold",
             gw_auction_release_listing_hold_then(
                 hold.operation_id,
-                self.session_actor(hold.seller_guid)
+                self.actor_or_owner(hold.seller_guid)
             )
         )
     }
@@ -890,7 +890,7 @@ impl Coordinator {
             "gw_auction_bid_local",
             gw_auction_bid_local_then(
                 operation_id,
-                self.session_actor(request.actor_guid),
+                self.actor_or_owner(request.actor_guid),
                 request.auctioneer_guid,
                 request.auction_id,
                 request.house_id,
@@ -909,7 +909,7 @@ impl Coordinator {
             "gw_auction_hold_bid",
             gw_auction_hold_bid_then(
                 operation_id,
-                self.session_actor(request.actor_guid),
+                self.actor_or_owner(request.actor_guid),
                 request.auctioneer_guid,
                 request.auction_id,
                 request.house_id,
@@ -929,7 +929,7 @@ impl Coordinator {
             "gw_auction_hold_cancel",
             gw_auction_hold_cancel_then(
                 operation_id,
-                self.session_actor(request.actor_guid),
+                self.actor_or_owner(request.actor_guid),
                 request.auctioneer_guid,
                 request.auction_id,
                 request.house_id,
@@ -949,7 +949,7 @@ impl Coordinator {
             "gw_auction_cancel_local",
             gw_auction_cancel_local_then(
                 operation_id,
-                self.session_actor(request.actor_guid),
+                self.actor_or_owner(request.actor_guid),
                 request.auctioneer_guid,
                 request.auction_id,
                 request.house_id,
@@ -967,7 +967,7 @@ impl Coordinator {
                 "realm_auction_decide_bid",
                 realm_auction_decide_bid_then(
                     hold.operation_id,
-                    self.session_actor(hold.bidder_guid),
+                    self.actor_or_owner(hold.bidder_guid),
                     hold.auction_id,
                     hold.house,
                     hold.offer
@@ -978,7 +978,7 @@ impl Coordinator {
                 "realm_auction_decide_cancel",
                 realm_auction_decide_cancel_then(
                     hold.operation_id,
-                    self.session_actor(hold.bidder_guid),
+                    self.actor_or_owner(hold.bidder_guid),
                     hold.auction_id,
                     hold.house,
                     hold.offer
@@ -1098,7 +1098,7 @@ impl Coordinator {
             "gw_auction_finish_bid",
             gw_auction_finish_bid_then(
                 hold.operation_id,
-                self.session_actor(hold.bidder_guid),
+                self.actor_or_owner(hold.bidder_guid),
                 hold.auction_id,
                 hold.house,
                 hold.offer,
@@ -1118,7 +1118,7 @@ impl Coordinator {
             "realm_auction_refund_bid",
             realm_auction_refund_bid_then(
                 hold.operation_id,
-                self.session_actor(hold.bidder_guid),
+                self.actor_or_owner(hold.bidder_guid),
                 hold.auction_id,
                 hold.house,
                 hold.offer,
@@ -1133,7 +1133,7 @@ impl Coordinator {
             "gw_auction_confirm_bid_refund",
             gw_auction_confirm_bid_refund_then(
                 hold.operation_id,
-                self.session_actor(hold.bidder_guid),
+                self.actor_or_owner(hold.bidder_guid),
                 hold.auction_id,
                 hold.house,
                 hold.offer,
@@ -1235,7 +1235,7 @@ impl Coordinator {
         // fail-closed on either missing) — no per-player connection exists anywhere. A world-port
         // rides its twin `gw_player_world_port`, which keeps the Away Status.
         let coord = self.0.call_pipe();
-        let actor = self.session_actor(character_guid);
+        let actor = self.actor_or_owner(character_guid);
         match entry {
             crate::codec::WorldEntry::FreshLogin => call_reducer!(
                 coord.conn.reducers,
@@ -1409,7 +1409,7 @@ impl Coordinator {
         let result = call_reducer!(
             self.0.call_pipe().conn.reducers,
             "delete_character",
-            delete_character_then(account_id, self.session_actor(character_guid))
+            delete_character_then(account_id, self.actor_or_owner(character_guid))
         );
         Ok(match result {
             Ok(()) => CharDeleteOutcome::Success,
@@ -1471,7 +1471,7 @@ impl Coordinator {
                 character_guid,
                 map_id,
                 instance_id,
-                self.session_actor(character_guid)
+                self.actor_or_owner(character_guid)
             )
         )
     }
@@ -1503,7 +1503,7 @@ impl Coordinator {
                 source_module_identity,
                 intent_id,
                 controller_generation,
-                self.session_actor(character_guid)
+                self.actor_or_owner(character_guid)
             )
         )
     }
@@ -1525,7 +1525,7 @@ impl Coordinator {
                 intent.source_module_identity,
                 intent.id,
                 intent.controller_generation,
-                self.session_actor(intent.bot_guid)
+                self.actor_or_owner(intent.bot_guid)
             )
         )
     }
@@ -1552,7 +1552,7 @@ impl Coordinator {
                 spacetimedb_sdk::Identity::ZERO,
                 0,
                 0,
-                self.session_actor(character_guid)
+                self.actor_or_owner(character_guid)
             )
         )
     }
@@ -1584,7 +1584,7 @@ impl Coordinator {
                 source_module_identity,
                 transfer_intent_id,
                 controller_generation,
-                self.session_actor(character_guid)
+                self.actor_or_owner(character_guid)
             )
         )
     }
@@ -1613,14 +1613,13 @@ impl Coordinator {
     /// Set the player's current target (`CMSG_SET_SELECTION`, Tier 2 / N3) over the coordinator
     /// connection so the module attributes it to the caller. `target_guid` 0 clears it.
     pub fn set_target(&self, _account_id: u64, actor_guid: u64, target_guid: u64) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("set_target: actor_guid unresolved"));
-        }
+        let actor =
+            Actor::new(actor_guid).ok_or_else(|| anyhow!("set_target: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_set_target",
-            gw_set_target_then(self.session_actor(actor_guid), target_guid)
+            gw_set_target_then(self.session_actor(actor), target_guid)
         )
     }
 
@@ -1628,14 +1627,13 @@ impl Coordinator {
     /// range, friendly) over the coordinator connection so the module resolves the caller from
     /// `ctx.sender`. `Err` (out of range / hostile / no such target) → the caller ignores it.
     pub fn inspect(&self, _account_id: u64, actor_guid: u64, target_guid: u64) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("inspect: actor_guid unresolved"));
-        }
+        let actor =
+            Actor::new(actor_guid).ok_or_else(|| anyhow!("inspect: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_inspect",
-            gw_inspect_then(self.session_actor(actor_guid), target_guid)
+            gw_inspect_then(self.session_actor(actor), target_guid)
         )
     }
 
@@ -1648,14 +1646,13 @@ impl Coordinator {
         actor_guid: u64,
         go_guid: u64,
     ) -> Result<LootWindowRequestStatus> {
-        if actor_guid == 0 {
-            return Err(anyhow!("use_gameobject: actor_guid unresolved"));
-        }
+        let actor = Actor::new(actor_guid)
+            .ok_or_else(|| anyhow!("use_gameobject: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         legacy_loot_request_status(call_reducer!(
             coord.conn.reducers,
             "gw_use_gameobject",
-            gw_use_gameobject_then(self.session_actor(actor_guid), go_guid)
+            gw_use_gameobject_then(self.session_actor(actor), go_guid)
         ))
     }
 
@@ -1666,14 +1663,13 @@ impl Coordinator {
         actor_guid: u64,
         trigger_id: u32,
     ) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("enter_areatrigger: actor_guid unresolved"));
-        }
+        let actor = Actor::new(actor_guid)
+            .ok_or_else(|| anyhow!("enter_areatrigger: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_enter_areatrigger",
-            gw_enter_areatrigger_then(self.session_actor(actor_guid), trigger_id)
+            gw_enter_areatrigger_then(self.session_actor(actor), trigger_id)
         )
     }
 
@@ -1685,28 +1681,26 @@ impl Coordinator {
         cmd: String,
         payload: String,
     ) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("client_command: actor_guid unresolved"));
-        }
+        let actor = Actor::new(actor_guid)
+            .ok_or_else(|| anyhow!("client_command: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_client_command",
-            gw_client_command_then(self.session_actor(actor_guid), cmd, payload)
+            gw_client_command_then(self.session_actor(actor), cmd, payload)
         )
     }
 
     /// Start the player's melee auto-attack on `target_guid` (`CMSG_ATTACKSWING`, combat C1) over
     /// the coordinator connection so the module attributes the swing to the caller.
     pub fn start_attack(&self, _account_id: u64, actor_guid: u64, target_guid: u64) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("start_attack: actor_guid unresolved"));
-        }
+        let actor =
+            Actor::new(actor_guid).ok_or_else(|| anyhow!("start_attack: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_attack",
-            gw_attack_then(self.session_actor(actor_guid), target_guid)
+            gw_attack_then(self.session_actor(actor), target_guid)
         )
     }
 
@@ -1720,14 +1714,13 @@ impl Coordinator {
         data: u32,
         target_guid: u64,
     ) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("pet_command: actor_guid unresolved"));
-        }
+        let actor =
+            Actor::new(actor_guid).ok_or_else(|| anyhow!("pet_command: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_pet_command",
-            gw_pet_command_then(self.session_actor(actor_guid), data, target_guid)
+            gw_pet_command_then(self.session_actor(actor), data, target_guid)
         )
     }
 
@@ -1741,40 +1734,37 @@ impl Coordinator {
         target_guid: u64,
         spell_id: u32,
     ) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("start_ranged_attack: actor_guid unresolved"));
-        }
+        let actor = Actor::new(actor_guid)
+            .ok_or_else(|| anyhow!("start_ranged_attack: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_ranged_attack",
-            gw_ranged_attack_then(self.session_actor(actor_guid), target_guid, spell_id)
+            gw_ranged_attack_then(self.session_actor(actor), target_guid, spell_id)
         )
     }
 
     /// Stop the player's melee auto-attack (`CMSG_ATTACKSTOP`, combat C1).
     pub fn stop_attack(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("stop_attack: actor_guid unresolved"));
-        }
+        let actor =
+            Actor::new(actor_guid).ok_or_else(|| anyhow!("stop_attack: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_stop_attack",
-            gw_stop_attack_then(self.session_actor(actor_guid))
+            gw_stop_attack_then(self.session_actor(actor))
         )
     }
 
     /// Draw or stow the player's weapons (`CMSG_SETSHEATHED`).
     pub fn set_sheathed(&self, _account_id: u64, actor_guid: u64, state: u8) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("set_sheathed: actor_guid unresolved"));
-        }
+        let actor =
+            Actor::new(actor_guid).ok_or_else(|| anyhow!("set_sheathed: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_set_sheathed",
-            gw_set_sheathed_then(self.session_actor(actor_guid), state)
+            gw_set_sheathed_then(self.session_actor(actor), state)
         )
     }
 
@@ -1788,14 +1778,13 @@ impl Coordinator {
         spell_id: u32,
         target_guid: u64,
     ) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("cast_spell: actor_guid unresolved"));
-        }
+        let actor =
+            Actor::new(actor_guid).ok_or_else(|| anyhow!("cast_spell: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_cast_spell",
-            gw_cast_spell_then(self.session_actor(actor_guid), spell_id, target_guid)
+            gw_cast_spell_then(self.session_actor(actor), spell_id, target_guid)
         )
     }
 
@@ -1807,14 +1796,13 @@ impl Coordinator {
         spell_id: u32,
         slot: u8,
     ) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("cast_item_target: actor_guid unresolved"));
-        }
+        let actor = Actor::new(actor_guid)
+            .ok_or_else(|| anyhow!("cast_item_target: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_cast_item_target",
-            gw_cast_item_target_then(self.session_actor(actor_guid), spell_id, slot)
+            gw_cast_item_target_then(self.session_actor(actor), spell_id, slot)
         )
     }
 
@@ -1833,49 +1821,39 @@ impl Coordinator {
         y: f32,
         z: f32,
     ) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("cast_spell_at: actor_guid unresolved"));
-        }
+        let actor = Actor::new(actor_guid)
+            .ok_or_else(|| anyhow!("cast_spell_at: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_cast_spell_at",
-            gw_cast_spell_at_then(
-                self.session_actor(actor_guid),
-                spell_id,
-                target_guid,
-                x,
-                y,
-                z
-            )
+            gw_cast_spell_at_then(self.session_actor(actor), spell_id, target_guid, x, y, z)
         )
     }
 
     /// Cancel one of the caller's own auras by spell id (`CMSG_CANCEL_AURA`) over the coordinator
     /// connection so the module attributes the removal to the caller.
     pub fn cancel_aura(&self, _account_id: u64, actor_guid: u64, spell_id: u32) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("cancel_aura: actor_guid unresolved"));
-        }
+        let actor =
+            Actor::new(actor_guid).ok_or_else(|| anyhow!("cancel_aura: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_cancel_aura",
-            gw_cancel_aura_then(self.session_actor(actor_guid), spell_id)
+            gw_cancel_aura_then(self.session_actor(actor), spell_id)
         )
     }
 
     /// Cancel the caller's in-progress cast (`CMSG_CANCEL_CAST`) over the coordinator connection so the
     /// module clears the caller's pending cast — no phantom completion GO.
     pub fn cancel_cast(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("cancel_cast: actor_guid unresolved"));
-        }
+        let actor =
+            Actor::new(actor_guid).ok_or_else(|| anyhow!("cancel_cast: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_cancel_cast",
-            gw_cancel_cast_then(self.session_actor(actor_guid))
+            gw_cancel_cast_then(self.session_actor(actor))
         )
     }
 
@@ -1889,14 +1867,13 @@ impl Coordinator {
         language: u8,
         message: String,
     ) -> Result<ChatOutcome> {
-        if actor_guid == 0 {
-            return Err(anyhow!("send_chat: actor_guid unresolved"));
-        }
+        let actor =
+            Actor::new(actor_guid).ok_or_else(|| anyhow!("send_chat: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         chat_outcome(call_reducer!(
             coord.conn.reducers,
             "gw_send_chat",
-            gw_send_chat_then(self.session_actor(actor_guid), chat_type, language, message)
+            gw_send_chat_then(self.session_actor(actor), chat_type, language, message)
         ))
     }
 
@@ -1908,15 +1885,14 @@ impl Coordinator {
         emote_anim: u32,
         target_guid: u64,
     ) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("send_emote: actor_guid unresolved"));
-        }
+        let actor =
+            Actor::new(actor_guid).ok_or_else(|| anyhow!("send_emote: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_send_emote",
             gw_send_emote_then(
-                self.session_actor(actor_guid),
+                self.session_actor(actor),
                 text_emote,
                 emote_anim,
                 target_guid
@@ -1930,7 +1906,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "gw_set_away",
-            gw_set_away_then(self.session_actor(actor_guid), kind, message)
+            gw_set_away_then(self.actor_or_owner(actor_guid), kind, message)
         )
     }
 
@@ -1956,7 +1932,7 @@ impl Coordinator {
         chat_outcome(call_reducer!(
             realm.0.call_pipe().conn.reducers,
             "realm_chat",
-            realm_chat_then(realm.session_actor(speaker_guid), request)
+            realm_chat_then(realm.actor_or_owner(speaker_guid), request)
         ))
     }
 
@@ -1988,7 +1964,7 @@ impl Coordinator {
         chat_outcome(call_reducer!(
             realm.0.call_pipe().conn.reducers,
             "realm_whisper",
-            realm_whisper_then(realm.session_actor(speaker_guid), request)
+            realm_whisper_then(realm.actor_or_owner(speaker_guid), request)
         ))
     }
 
@@ -2016,7 +1992,7 @@ impl Coordinator {
         channel_outcome(call_reducer!(
             realm.0.call_pipe().conn.reducers,
             "realm_channel_op",
-            realm_channel_op_then(realm.session_actor(actor_guid), op, request)
+            realm_channel_op_then(realm.actor_or_owner(actor_guid), op, request)
         ))
     }
 
@@ -2030,7 +2006,7 @@ impl Coordinator {
         meeting_stone_outcome(call_reducer!(
             coord.conn.reducers,
             "gw_admit_meeting_stone",
-            gw_admit_meeting_stone_then(self.session_actor(actor_guid), go_guid)
+            gw_admit_meeting_stone_then(self.actor_or_owner(actor_guid), go_guid)
         ))
     }
 
@@ -2055,7 +2031,7 @@ impl Coordinator {
         meeting_stone_outcome(call_reducer!(
             realm.0.call_pipe().conn.reducers,
             "realm_meeting_stone_op",
-            realm_meeting_stone_op_then(op, realm.session_actor(actor_guid), area_id, seekers)
+            realm_meeting_stone_op_then(op, realm.actor_or_owner(actor_guid), area_id, seekers)
         ))
     }
 
@@ -2066,79 +2042,33 @@ impl Coordinator {
     }
 
     /// Send one classified command request to this Home Shard. The Module combines the conveyed
-    /// Account authority with its own Character GM level and remains the final Gate.
-    /// Deliberately does NOT use the `call_reducer!` macro: that macro wraps a module `Err` as
-    /// `"{what} reducer failed: {e}"` (fine when a caller only reads its Refusal tag), but the Say
-    /// handler relays this `Err`'s text VERBATIM to the sender as a system chat line — a raw
-    /// `"permission denied"` / `"unknown command:.foo"` must reach the client with no wrapper
-    /// prefix.
+    /// Account authority with its own Character GM level and remains the final Gate. Its Refusal
+    /// reason is the text the GM sees.
     pub(crate) fn request_gm_command(
         &self,
         actor_guid: u64,
         alpha_test_tools: bool,
         text: String,
     ) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("gm_command: actor_guid unresolved"));
-        }
-        let (tx, rx) = std::sync::mpsc::channel::<
-            std::result::Result<(), super::connection::ReducerCompletionFailure>,
-        >();
-        // Raw-module-message plumbing: the GM console renders the module's own rejection text
-        // ("permission denied", parse errors) verbatim, no "reducer failed" wrapper.
-        let coord = self.0.call_pipe();
-        let completion = coord.reducer_completion.clone();
-        let call_id = completion
-            .register(tx)
-            .map_err(|e| anyhow!("gm_command reducer transport disconnected: {e}"))?;
-        let callback_completion = completion.clone();
-        coord
-            .conn
-            .reducers
-            .gw_gm_command_then(
-                self.session_actor(actor_guid),
-                alpha_test_tools,
-                text,
-                move |_ctx, status| {
-                    callback_completion.finish(
-                        call_id,
-                        match status {
-                            Ok(Ok(())) => Ok(()),
-                            Ok(Err(reason)) => Err(
-                                super::connection::ReducerCompletionFailure::Rejected(reason),
-                            ),
-                            Err(error) => {
-                                Err(super::connection::ReducerCompletionFailure::Internal(error))
-                            }
-                        },
-                    );
-                },
-            )
-            .map_err(|e| {
-                completion.cancel(call_id);
-                super::connection::ReducerCallError::sdk_send("gw_gm_command", e)
-            })?;
-        match recv_reducer_on(rx, "gm_command", &completion, call_id) {
-            Ok(()) => Ok(()),
-            Err(e) if super::connection::is_reducer_refusal(&e) => Err(anyhow!(e
-                .to_string()
-                .trim_start_matches("gm_command reducer failed: ")
-                .to_string())),
-            Err(e) => Err(e),
-        }
+        let actor =
+            Actor::new(actor_guid).ok_or_else(|| anyhow!("gm_command: actor_guid unresolved"))?;
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "gw_gm_command",
+            gw_gm_command_then(self.session_actor(actor), alpha_test_tools, text)
+        )
     }
 
     /// `CMSG_PUSHQUESTTOPARTY` — over the coordinator connection so the module
     /// attributes the sender + its grouped/on-quest gates to the caller.
     pub fn push_quest(&self, _account_id: u64, actor_guid: u64, quest_id: u32) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("push_quest: actor_guid unresolved"));
-        }
+        let actor =
+            Actor::new(actor_guid).ok_or_else(|| anyhow!("push_quest: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_push_quest_to_party",
-            gw_push_quest_to_party_then(self.session_actor(actor_guid), quest_id)
+            gw_push_quest_to_party_then(self.session_actor(actor), quest_id)
         )
     }
 
@@ -2149,14 +2079,13 @@ impl Coordinator {
         actor_guid: u64,
         target_guid: u64,
     ) -> Result<PartyOutcome> {
-        if actor_guid == 0 {
-            return Err(anyhow!("group_invite: actor_guid unresolved"));
-        }
+        let actor =
+            Actor::new(actor_guid).ok_or_else(|| anyhow!("group_invite: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         party_outcome(call_reducer!(
             coord.conn.reducers,
             "gw_group_invite",
-            gw_group_invite_then(self.session_actor(actor_guid), target_guid)
+            gw_group_invite_then(self.session_actor(actor), target_guid)
         ))
     }
 
@@ -2167,64 +2096,59 @@ impl Coordinator {
         actor_guid: u64,
         target_guid: u64,
     ) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("initiate_trade: actor_guid unresolved"));
-        }
+        let actor = Actor::new(actor_guid)
+            .ok_or_else(|| anyhow!("initiate_trade: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_initiate_trade",
-            gw_initiate_trade_then(self.session_actor(actor_guid), target_guid)
+            gw_initiate_trade_then(self.session_actor(actor), target_guid)
         )
     }
 
     /// `CMSG_BEGIN_TRADE`.
     pub fn begin_trade(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("begin_trade: actor_guid unresolved"));
-        }
+        let actor =
+            Actor::new(actor_guid).ok_or_else(|| anyhow!("begin_trade: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_begin_trade",
-            gw_begin_trade_then(self.session_actor(actor_guid))
+            gw_begin_trade_then(self.session_actor(actor))
         )
     }
 
     /// `CMSG_CANCEL_TRADE`.
     pub fn cancel_trade(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("cancel_trade: actor_guid unresolved"));
-        }
+        let actor =
+            Actor::new(actor_guid).ok_or_else(|| anyhow!("cancel_trade: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_cancel_trade",
-            gw_cancel_trade_then(self.session_actor(actor_guid))
+            gw_cancel_trade_then(self.session_actor(actor))
         )
     }
 
     pub fn duel_accept(&self, _account_id: u64, actor_guid: u64, flag_guid: u64) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("duel_accept: actor_guid unresolved"));
-        }
+        let actor =
+            Actor::new(actor_guid).ok_or_else(|| anyhow!("duel_accept: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_duel_accept",
-            gw_duel_accept_then(self.session_actor(actor_guid), flag_guid)
+            gw_duel_accept_then(self.session_actor(actor), flag_guid)
         )
     }
 
     pub fn duel_cancel(&self, _account_id: u64, actor_guid: u64, flag_guid: u64) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("duel_cancel: actor_guid unresolved"));
-        }
+        let actor =
+            Actor::new(actor_guid).ok_or_else(|| anyhow!("duel_cancel: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_duel_cancel",
-            gw_duel_cancel_then(self.session_actor(actor_guid), flag_guid)
+            gw_duel_cancel_then(self.session_actor(actor), flag_guid)
         )
     }
 
@@ -2236,14 +2160,13 @@ impl Coordinator {
         trade_slot: u8,
         inv_slot: u8,
     ) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("set_trade_item: actor_guid unresolved"));
-        }
+        let actor = Actor::new(actor_guid)
+            .ok_or_else(|| anyhow!("set_trade_item: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_set_trade_item",
-            gw_set_trade_item_then(self.session_actor(actor_guid), trade_slot, inv_slot)
+            gw_set_trade_item_then(self.session_actor(actor), trade_slot, inv_slot)
         )
     }
 
@@ -2254,119 +2177,110 @@ impl Coordinator {
         actor_guid: u64,
         trade_slot: u8,
     ) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("clear_trade_item: actor_guid unresolved"));
-        }
+        let actor = Actor::new(actor_guid)
+            .ok_or_else(|| anyhow!("clear_trade_item: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_clear_trade_item",
-            gw_clear_trade_item_then(self.session_actor(actor_guid), trade_slot)
+            gw_clear_trade_item_then(self.session_actor(actor), trade_slot)
         )
     }
 
     /// `CMSG_SET_TRADE_GOLD`.
     pub fn set_trade_gold(&self, _account_id: u64, actor_guid: u64, copper: u32) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("set_trade_gold: actor_guid unresolved"));
-        }
+        let actor = Actor::new(actor_guid)
+            .ok_or_else(|| anyhow!("set_trade_gold: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_set_trade_gold",
-            gw_set_trade_gold_then(self.session_actor(actor_guid), copper)
+            gw_set_trade_gold_then(self.session_actor(actor), copper)
         )
     }
 
     /// `CMSG_ACCEPT_TRADE`.
     pub fn accept_trade(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("accept_trade: actor_guid unresolved"));
-        }
+        let actor =
+            Actor::new(actor_guid).ok_or_else(|| anyhow!("accept_trade: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_accept_trade",
-            gw_accept_trade_then(self.session_actor(actor_guid))
+            gw_accept_trade_then(self.session_actor(actor))
         )
     }
 
     /// `CMSG_UNACCEPT_TRADE`.
     pub fn unaccept_trade(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("unaccept_trade: actor_guid unresolved"));
-        }
+        let actor = Actor::new(actor_guid)
+            .ok_or_else(|| anyhow!("unaccept_trade: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_unaccept_trade",
-            gw_unaccept_trade_then(self.session_actor(actor_guid))
+            gw_unaccept_trade_then(self.session_actor(actor))
         )
     }
 
     /// `CMSG_BUSY_TRADE`.
     pub fn busy_trade(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("busy_trade: actor_guid unresolved"));
-        }
+        let actor =
+            Actor::new(actor_guid).ok_or_else(|| anyhow!("busy_trade: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_busy_trade",
-            gw_busy_trade_then(self.session_actor(actor_guid))
+            gw_busy_trade_then(self.session_actor(actor))
         )
     }
 
     /// `CMSG_IGNORE_TRADE`.
     pub fn ignore_trade(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("ignore_trade: actor_guid unresolved"));
-        }
+        let actor =
+            Actor::new(actor_guid).ok_or_else(|| anyhow!("ignore_trade: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_ignore_trade",
-            gw_ignore_trade_then(self.session_actor(actor_guid))
+            gw_ignore_trade_then(self.session_actor(actor))
         )
     }
 
     /// `CMSG_GROUP_ACCEPT`. Rides the coordinator connection as
     /// `gw_accept_group_invite`.
     pub fn group_accept(&self, _account_id: u64, actor_guid: u64) -> Result<PartyOutcome> {
-        if actor_guid == 0 {
-            return Err(anyhow!("group_accept: actor_guid unresolved"));
-        }
+        let actor =
+            Actor::new(actor_guid).ok_or_else(|| anyhow!("group_accept: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         party_outcome(call_reducer!(
             coord.conn.reducers,
             "gw_accept_group_invite",
-            gw_accept_group_invite_then(self.session_actor(actor_guid))
+            gw_accept_group_invite_then(self.session_actor(actor))
         ))
     }
 
     /// `CMSG_GROUP_DECLINE`.
     pub fn group_decline(&self, _account_id: u64, actor_guid: u64) -> Result<PartyOutcome> {
-        if actor_guid == 0 {
-            return Err(anyhow!("group_decline: actor_guid unresolved"));
-        }
+        let actor = Actor::new(actor_guid)
+            .ok_or_else(|| anyhow!("group_decline: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         party_outcome(call_reducer!(
             coord.conn.reducers,
             "gw_group_decline",
-            gw_group_decline_then(self.session_actor(actor_guid))
+            gw_group_decline_then(self.session_actor(actor))
         ))
     }
 
     /// `CMSG_GROUP_DISBAND` — leave the caller's group.
     pub fn group_leave(&self, _account_id: u64, actor_guid: u64) -> Result<PartyOutcome> {
-        if actor_guid == 0 {
-            return Err(anyhow!("group_leave: actor_guid unresolved"));
-        }
+        let actor =
+            Actor::new(actor_guid).ok_or_else(|| anyhow!("group_leave: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         party_outcome(call_reducer!(
             coord.conn.reducers,
             "gw_group_leave",
-            gw_group_leave_then(self.session_actor(actor_guid))
+            gw_group_leave_then(self.session_actor(actor))
         ))
     }
 
@@ -2378,14 +2292,13 @@ impl Coordinator {
         actor_guid: u64,
         target_guid: u64,
     ) -> Result<PartyOutcome> {
-        if actor_guid == 0 {
-            return Err(anyhow!("group_uninvite: actor_guid unresolved"));
-        }
+        let actor = Actor::new(actor_guid)
+            .ok_or_else(|| anyhow!("group_uninvite: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         party_outcome(call_reducer!(
             coord.conn.reducers,
             "gw_group_uninvite",
-            gw_group_uninvite_then(self.session_actor(actor_guid), target_guid)
+            gw_group_uninvite_then(self.session_actor(actor), target_guid)
         ))
     }
 
@@ -2401,15 +2314,14 @@ impl Coordinator {
         master_guid: u64,
         loot_threshold: u8,
     ) -> Result<PartyOutcome> {
-        if actor_guid == 0 {
-            return Err(anyhow!("group_loot_method: actor_guid unresolved"));
-        }
+        let actor = Actor::new(actor_guid)
+            .ok_or_else(|| anyhow!("group_loot_method: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         party_outcome(call_reducer!(
             coord.conn.reducers,
             "gw_group_loot_method",
             gw_group_loot_method_then(
-                self.session_actor(actor_guid),
+                self.session_actor(actor),
                 loot_setting,
                 master_guid,
                 loot_threshold
@@ -2427,15 +2339,14 @@ impl Coordinator {
         option_id: u32,
         option_row_id: u32,
     ) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("gossip_select: actor_guid unresolved"));
-        }
+        let actor = Actor::new(actor_guid)
+            .ok_or_else(|| anyhow!("gossip_select: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_gossip_select",
             gw_gossip_select_then(
-                self.session_actor(actor_guid),
+                self.session_actor(actor),
                 npc_guid,
                 option_id,
                 option_row_id
@@ -2452,14 +2363,13 @@ impl Coordinator {
         target_guid: u64,
         target_race: u8,
     ) -> Result<ContactOutcome> {
-        if actor_guid == 0 {
-            return Err(anyhow!("add_friend: actor_guid unresolved"));
-        }
+        let actor =
+            Actor::new(actor_guid).ok_or_else(|| anyhow!("add_friend: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         contact_outcome(call_reducer!(
             coord.conn.reducers,
             "gw_add_friend",
-            gw_add_friend_then(self.session_actor(actor_guid), target_guid, target_race)
+            gw_add_friend_then(self.session_actor(actor), target_guid, target_race)
         ))
     }
 
@@ -2470,14 +2380,13 @@ impl Coordinator {
         actor_guid: u64,
         target_guid: u64,
     ) -> Result<ContactOutcome> {
-        if actor_guid == 0 {
-            return Err(anyhow!("del_friend: actor_guid unresolved"));
-        }
+        let actor =
+            Actor::new(actor_guid).ok_or_else(|| anyhow!("del_friend: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         contact_outcome(call_reducer!(
             coord.conn.reducers,
             "gw_del_friend",
-            gw_del_friend_then(self.session_actor(actor_guid), target_guid)
+            gw_del_friend_then(self.session_actor(actor), target_guid)
         ))
     }
 
@@ -2488,14 +2397,13 @@ impl Coordinator {
         actor_guid: u64,
         target_guid: u64,
     ) -> Result<ContactOutcome> {
-        if actor_guid == 0 {
-            return Err(anyhow!("add_ignore: actor_guid unresolved"));
-        }
+        let actor =
+            Actor::new(actor_guid).ok_or_else(|| anyhow!("add_ignore: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         contact_outcome(call_reducer!(
             coord.conn.reducers,
             "gw_add_ignore",
-            gw_add_ignore_then(self.session_actor(actor_guid), target_guid)
+            gw_add_ignore_then(self.session_actor(actor), target_guid)
         ))
     }
 
@@ -2506,14 +2414,13 @@ impl Coordinator {
         actor_guid: u64,
         target_guid: u64,
     ) -> Result<ContactOutcome> {
-        if actor_guid == 0 {
-            return Err(anyhow!("del_ignore: actor_guid unresolved"));
-        }
+        let actor =
+            Actor::new(actor_guid).ok_or_else(|| anyhow!("del_ignore: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         contact_outcome(call_reducer!(
             coord.conn.reducers,
             "gw_del_ignore",
-            gw_del_ignore_then(self.session_actor(actor_guid), target_guid)
+            gw_del_ignore_then(self.session_actor(actor), target_guid)
         ))
     }
 
@@ -2525,14 +2432,13 @@ impl Coordinator {
         actor_guid: u64,
         target_guid: u64,
     ) -> Result<LootWindowRequestStatus> {
-        if actor_guid == 0 {
-            return Err(anyhow!("loot_money: actor_guid unresolved"));
-        }
+        let actor =
+            Actor::new(actor_guid).ok_or_else(|| anyhow!("loot_money: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         strict_loot_request_status(call_reducer!(
             coord.conn.reducers,
             "gw_loot_money",
-            gw_loot_money_then(self.session_actor(actor_guid), target_guid)
+            gw_loot_money_then(self.session_actor(actor), target_guid)
         ))
     }
 
@@ -2543,14 +2449,13 @@ impl Coordinator {
         actor_guid: u64,
         corpse_guid: u64,
     ) -> Result<LootWindowRequestStatus> {
-        if actor_guid == 0 {
-            return Err(anyhow!("open_creature_loot: actor_guid unresolved"));
-        }
+        let actor = Actor::new(actor_guid)
+            .ok_or_else(|| anyhow!("open_creature_loot: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         strict_loot_request_status(call_reducer!(
             coord.conn.reducers,
             "gw_open_creature_loot",
-            gw_open_creature_loot_then(self.session_actor(actor_guid), corpse_guid)
+            gw_open_creature_loot_then(self.session_actor(actor), corpse_guid)
         ))
     }
 
@@ -2565,14 +2470,13 @@ impl Coordinator {
         corpse_guid: u64,
         loot_slot: u8,
     ) -> Result<LootWindowRequestStatus> {
-        if actor_guid == 0 {
-            return Err(anyhow!("take_loot: actor_guid unresolved"));
-        }
+        let actor =
+            Actor::new(actor_guid).ok_or_else(|| anyhow!("take_loot: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         strict_loot_request_status(call_reducer!(
             coord.conn.reducers,
             "gw_take_loot",
-            gw_take_loot_then(self.session_actor(actor_guid), corpse_guid, loot_slot)
+            gw_take_loot_then(self.session_actor(actor), corpse_guid, loot_slot)
         ))
     }
 
@@ -2582,14 +2486,13 @@ impl Coordinator {
         actor_guid: u64,
         corpse_guid: u64,
     ) -> Result<LootWindowRequestStatus> {
-        if actor_guid == 0 {
-            return Err(anyhow!("skin_corpse: actor_guid unresolved"));
-        }
+        let actor =
+            Actor::new(actor_guid).ok_or_else(|| anyhow!("skin_corpse: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         legacy_loot_request_status(call_reducer!(
             coord.conn.reducers,
             "gw_skin",
-            gw_skin_then(self.session_actor(actor_guid), corpse_guid)
+            gw_skin_then(self.session_actor(actor), corpse_guid)
         ))
     }
 
@@ -2604,14 +2507,13 @@ impl Coordinator {
         loot_slot: u32,
         vote: u8,
     ) -> Result<LootActionStatus> {
-        if actor_guid == 0 {
-            return Err(anyhow!("loot_roll: actor_guid unresolved"));
-        }
+        let actor =
+            Actor::new(actor_guid).ok_or_else(|| anyhow!("loot_roll: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         loot_action_status(call_reducer!(
             coord.conn.reducers,
             "gw_loot_roll",
-            gw_loot_roll_then(self.session_actor(actor_guid), corpse_guid, loot_slot, vote)
+            gw_loot_roll_then(self.session_actor(actor), corpse_guid, loot_slot, vote)
         ))
     }
 
@@ -2625,15 +2527,14 @@ impl Coordinator {
         loot_slot: u8,
         target_guid: u64,
     ) -> Result<LootActionStatus> {
-        if actor_guid == 0 {
-            return Err(anyhow!("loot_master_give: actor_guid unresolved"));
-        }
+        let actor = Actor::new(actor_guid)
+            .ok_or_else(|| anyhow!("loot_master_give: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         loot_action_status(call_reducer!(
             coord.conn.reducers,
             "gw_loot_master_give",
             gw_loot_master_give_then(
-                self.session_actor(actor_guid),
+                self.session_actor(actor),
                 corpse_guid,
                 loot_slot,
                 target_guid
@@ -2642,14 +2543,13 @@ impl Coordinator {
     }
 
     pub fn disenchant_item(&self, _account_id: u64, actor_guid: u64, slot: u8) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("disenchant_item: actor_guid unresolved"));
-        }
+        let actor = Actor::new(actor_guid)
+            .ok_or_else(|| anyhow!("disenchant_item: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_disenchant",
-            gw_disenchant_then(self.session_actor(actor_guid), slot)
+            gw_disenchant_then(self.session_actor(actor), slot)
         )
     }
 
@@ -2660,14 +2560,13 @@ impl Coordinator {
         slot: u8,
         enchant_id: u32,
     ) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("enchant_item_on_slot: actor_guid unresolved"));
-        }
+        let actor = Actor::new(actor_guid)
+            .ok_or_else(|| anyhow!("enchant_item_on_slot: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_enchant_item",
-            gw_enchant_item_then(self.session_actor(actor_guid), slot, enchant_id)
+            gw_enchant_item_then(self.session_actor(actor), slot, enchant_id)
         )
     }
 
@@ -2682,19 +2581,13 @@ impl Coordinator {
         item_entry: u32,
         count: u32,
     ) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("buy_item: actor_guid unresolved"));
-        }
+        let actor =
+            Actor::new(actor_guid).ok_or_else(|| anyhow!("buy_item: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_buy_item",
-            gw_buy_item_then(
-                self.session_actor(actor_guid),
-                vendor_guid,
-                item_entry,
-                count
-            )
+            gw_buy_item_then(self.session_actor(actor), vendor_guid, item_entry, count)
         )
     }
 
@@ -2709,14 +2602,13 @@ impl Coordinator {
         trainer_guid: u64,
         spell_id: u32,
     ) -> Result<crate::world::TrainerBuyOutcome> {
-        if actor_guid == 0 {
-            return Err(anyhow!("buy_trainer_spell: actor_guid unresolved"));
-        }
+        let actor = Actor::new(actor_guid)
+            .ok_or_else(|| anyhow!("buy_trainer_spell: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         let result: Result<()> = call_reducer!(
             coord.conn.reducers,
             "gw_trainer_buy",
-            gw_trainer_buy_then(self.session_actor(actor_guid), trainer_guid, spell_id)
+            gw_trainer_buy_then(self.session_actor(actor), trainer_guid, spell_id)
         );
         match result {
             Ok(()) => Ok(crate::world::TrainerBuyOutcome::Learned),
@@ -2730,26 +2622,24 @@ impl Coordinator {
     /// Buy the next bank bag slot from `banker_guid` (`CMSG_BUY_BANK_SLOT`) over the coordinator
     /// connection. A refusal carries the module's `[N]` `SMSG_BUY_BANK_SLOT_RESULT` code tag.
     pub fn buy_bank_slot(&self, _account_id: u64, actor_guid: u64, banker_guid: u64) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("buy_bank_slot: actor_guid unresolved"));
-        }
+        let actor = Actor::new(actor_guid)
+            .ok_or_else(|| anyhow!("buy_bank_slot: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_buy_bank_slot",
-            gw_buy_bank_slot_then(self.session_actor(actor_guid), banker_guid)
+            gw_buy_bank_slot_then(self.session_actor(actor), banker_guid)
         )
     }
 
     pub fn learn_talent(&self, _account_id: u64, actor_guid: u64, talent_id: u32) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("learn_talent: actor_guid unresolved"));
-        }
+        let actor =
+            Actor::new(actor_guid).ok_or_else(|| anyhow!("learn_talent: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_learn_talent",
-            gw_learn_talent_then(self.session_actor(actor_guid), talent_id)
+            gw_learn_talent_then(self.session_actor(actor), talent_id)
         )
     }
 
@@ -2762,28 +2652,25 @@ impl Coordinator {
         actor_guid: u64,
         trainer_guid: u64,
     ) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("reset_talents: actor_guid unresolved"));
-        }
+        let actor = Actor::new(actor_guid)
+            .ok_or_else(|| anyhow!("reset_talents: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_reset_talents",
-            gw_reset_talents_then(self.session_actor(actor_guid), trainer_guid)
+            gw_reset_talents_then(self.session_actor(actor), trainer_guid)
         )
     }
 
     /// Fishing cast: instant-resolve catch — the module's lenient alpha gate auto-learns the
     /// skill and grants the fish straight to the bag. Caller resolved via ctx.sender.
     pub fn fish(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("fish: actor_guid unresolved"));
-        }
+        let actor = Actor::new(actor_guid).ok_or_else(|| anyhow!("fish: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_fish",
-            gw_fish_then(self.session_actor(actor_guid))
+            gw_fish_then(self.session_actor(actor))
         )
     }
 
@@ -2791,14 +2678,13 @@ impl Coordinator {
     /// module attributes the pick to the caller via ctx.sender). The module gates range / lock
     /// requirement / Lockpicking skill; on success it records the GO unlocked + climbs the skill.
     pub fn pick_lock(&self, _account_id: u64, actor_guid: u64, go_guid: u64) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("pick_lock: actor_guid unresolved"));
-        }
+        let actor =
+            Actor::new(actor_guid).ok_or_else(|| anyhow!("pick_lock: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_pick_lock",
-            gw_pick_lock_then(self.session_actor(actor_guid), go_guid)
+            gw_pick_lock_then(self.session_actor(actor), go_guid)
         )
     }
 
@@ -2812,14 +2698,13 @@ impl Coordinator {
         action: u32,
         action_type: u8,
     ) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("set_action_button: actor_guid unresolved"));
-        }
+        let actor = Actor::new(actor_guid)
+            .ok_or_else(|| anyhow!("set_action_button: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_set_action_button",
-            gw_set_action_button_then(self.session_actor(actor_guid), button, action, action_type)
+            gw_set_action_button_then(self.session_actor(actor), button, action, action_type)
         )
     }
 
@@ -2833,14 +2718,13 @@ impl Coordinator {
         reputation_index: u32,
         at_war: bool,
     ) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("set_faction_at_war: actor_guid unresolved"));
-        }
+        let actor = Actor::new(actor_guid)
+            .ok_or_else(|| anyhow!("set_faction_at_war: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_set_faction_at_war",
-            gw_set_faction_at_war_then(self.session_actor(actor_guid), reputation_index, at_war)
+            gw_set_faction_at_war_then(self.session_actor(actor), reputation_index, at_war)
         )
     }
 
@@ -2855,14 +2739,13 @@ impl Coordinator {
         vendor_guid: u64,
         slot: u8,
     ) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("sell_item: actor_guid unresolved"));
-        }
+        let actor =
+            Actor::new(actor_guid).ok_or_else(|| anyhow!("sell_item: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_sell_item",
-            gw_sell_item_then(self.session_actor(actor_guid), vendor_guid, slot)
+            gw_sell_item_then(self.session_actor(actor), vendor_guid, slot)
         )
     }
 
@@ -2873,14 +2756,13 @@ impl Coordinator {
         vendor_guid: u64,
         slot: u8,
     ) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("buyback_item: actor_guid unresolved"));
-        }
+        let actor =
+            Actor::new(actor_guid).ok_or_else(|| anyhow!("buyback_item: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_buyback_item",
-            gw_buyback_item_then(self.session_actor(actor_guid), vendor_guid, slot)
+            gw_buyback_item_then(self.session_actor(actor), vendor_guid, slot)
         )
     }
 
@@ -2894,14 +2776,13 @@ impl Coordinator {
         npc_guid: u64,
         slot: u8,
     ) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("repair_item: actor_guid unresolved"));
-        }
+        let actor =
+            Actor::new(actor_guid).ok_or_else(|| anyhow!("repair_item: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_repair_item",
-            gw_repair_item_then(self.session_actor(actor_guid), npc_guid, slot)
+            gw_repair_item_then(self.session_actor(actor), npc_guid, slot)
         )
     }
 
@@ -2914,14 +2795,14 @@ impl Coordinator {
         actor_guid: u64,
         from_slot: u8,
     ) -> Result<ItemActionResult> {
-        let Some(actor_guid) = resolved_item_actor("equip_item", actor_guid) else {
+        let Some(actor) = resolved_item_actor("equip_item", actor_guid) else {
             return Ok(ItemRefusal::Internal.into());
         };
         let coord = self.0.call_pipe();
         item_action(call_reducer!(
             coord.conn.reducers,
             "gw_equip_item",
-            gw_equip_item_then(self.session_actor(actor_guid), from_slot)
+            gw_equip_item_then(self.session_actor(actor), from_slot)
         ))
     }
 
@@ -2933,14 +2814,14 @@ impl Coordinator {
         actor_guid: u64,
         from_slot: u8,
     ) -> Result<ItemActionResult> {
-        let Some(actor_guid) = resolved_item_actor("unequip_item", actor_guid) else {
+        let Some(actor) = resolved_item_actor("unequip_item", actor_guid) else {
             return Ok(ItemRefusal::Internal.into());
         };
         let coord = self.0.call_pipe();
         item_action(call_reducer!(
             coord.conn.reducers,
             "gw_unequip_item",
-            gw_unequip_item_then(self.session_actor(actor_guid), from_slot)
+            gw_unequip_item_then(self.session_actor(actor), from_slot)
         ))
     }
 
@@ -2953,14 +2834,14 @@ impl Coordinator {
         actor_guid: u64,
         slot: u8,
     ) -> Result<ItemActionResult> {
-        let Some(actor_guid) = resolved_item_actor("use_item", actor_guid) else {
+        let Some(actor) = resolved_item_actor("use_item", actor_guid) else {
             return Ok(ItemRefusal::Internal.into());
         };
         let coord = self.0.call_pipe();
         item_action(call_reducer!(
             coord.conn.reducers,
             "gw_use_item",
-            gw_use_item_then(self.session_actor(actor_guid), slot)
+            gw_use_item_then(self.session_actor(actor), slot)
         ))
     }
 
@@ -2968,14 +2849,13 @@ impl Coordinator {
     /// innkeeper's "Make this inn your home.") over the coordinator connection so the module attributes
     /// it to the caller's entity. No args — `bind_home` resolves the caller via `ctx.sender`.
     pub fn bind_home(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("bind_home: actor_guid unresolved"));
-        }
+        let actor =
+            Actor::new(actor_guid).ok_or_else(|| anyhow!("bind_home: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_bind_home",
-            gw_bind_home_then(self.session_actor(actor_guid))
+            gw_bind_home_then(self.session_actor(actor))
         )
     }
 
@@ -2988,14 +2868,14 @@ impl Coordinator {
         from_slot: u8,
         to_slot: u8,
     ) -> Result<ItemActionResult> {
-        let Some(actor_guid) = resolved_item_actor("move_item", actor_guid) else {
+        let Some(actor) = resolved_item_actor("move_item", actor_guid) else {
             return Ok(ItemRefusal::Internal.into());
         };
         let coord = self.0.call_pipe();
         item_action(call_reducer!(
             coord.conn.reducers,
             "gw_move_item",
-            gw_move_item_then(self.session_actor(actor_guid), from_slot, to_slot)
+            gw_move_item_then(self.session_actor(actor), from_slot, to_slot)
         ))
     }
 
@@ -3003,14 +2883,13 @@ impl Coordinator {
     /// over the coordinator connection. The module infers deposit vs. withdraw from `slot` and
     /// resolves the receiving free slot itself.
     pub fn auto_bank_item(&self, _account_id: u64, actor_guid: u64, slot: u8) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("auto_bank_item: actor_guid unresolved"));
-        }
+        let actor = Actor::new(actor_guid)
+            .ok_or_else(|| anyhow!("auto_bank_item: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_auto_bank_item",
-            gw_auto_bank_item_then(self.session_actor(actor_guid), slot)
+            gw_auto_bank_item_then(self.session_actor(actor), slot)
         )
     }
 
@@ -3025,14 +2904,13 @@ impl Coordinator {
         giver_guid: u64,
         quest_id: u32,
     ) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("accept_quest: actor_guid unresolved"));
-        }
+        let actor =
+            Actor::new(actor_guid).ok_or_else(|| anyhow!("accept_quest: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_accept_quest",
-            gw_accept_quest_then(self.session_actor(actor_guid), giver_guid, quest_id)
+            gw_accept_quest_then(self.session_actor(actor), giver_guid, quest_id)
         )
     }
 
@@ -3048,15 +2926,14 @@ impl Coordinator {
         quest_id: u32,
         reward_index: u32,
     ) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("turn_in_quest: actor_guid unresolved"));
-        }
+        let actor = Actor::new(actor_guid)
+            .ok_or_else(|| anyhow!("turn_in_quest: actor_guid unresolved"))?;
         let coord = self.0.visibility_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_turn_in_quest",
             gw_turn_in_quest_then(
-                self.session_actor(actor_guid),
+                self.session_actor(actor),
                 giver_guid,
                 quest_id,
                 reward_index
@@ -3067,28 +2944,26 @@ impl Coordinator {
     /// Abandon quest `quest_id` (`CMSG_QUESTLOG_REMOVE_QUEST`) over the coordinator connection. The
     /// module deletes the player's quest-log row; the quest-log relay then clears the slot.
     pub fn abandon_quest(&self, _account_id: u64, actor_guid: u64, quest_id: u32) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("abandon_quest: actor_guid unresolved"));
-        }
+        let actor = Actor::new(actor_guid)
+            .ok_or_else(|| anyhow!("abandon_quest: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_abandon_quest",
-            gw_abandon_quest_then(self.session_actor(actor_guid), quest_id)
+            gw_abandon_quest_then(self.session_actor(actor), quest_id)
         )
     }
 
     /// Revive the caller after death (`CMSG_REPOP_REQUEST`) over the coordinator connection.
     /// Rides the coordinator connection as `gw_repop`.
     pub fn repop(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("repop: actor_guid unresolved"));
-        }
+        let actor =
+            Actor::new(actor_guid).ok_or_else(|| anyhow!("repop: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_repop",
-            gw_repop_then(self.session_actor(actor_guid))
+            gw_repop_then(self.session_actor(actor))
         )
     }
 
@@ -3099,14 +2974,13 @@ impl Coordinator {
         actor_guid: u64,
         corpse_guid: u64,
     ) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("reclaim_corpse: actor_guid unresolved"));
-        }
+        let actor = Actor::new(actor_guid)
+            .ok_or_else(|| anyhow!("reclaim_corpse: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_reclaim_corpse",
-            gw_reclaim_corpse_then(self.session_actor(actor_guid), corpse_guid)
+            gw_reclaim_corpse_then(self.session_actor(actor), corpse_guid)
         )
     }
 
@@ -3118,28 +2992,26 @@ impl Coordinator {
         actor_guid: u64,
         accept: bool,
     ) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("resurrect_response: actor_guid unresolved"));
-        }
+        let actor = Actor::new(actor_guid)
+            .ok_or_else(|| anyhow!("resurrect_response: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_respond_resurrect",
-            gw_respond_resurrect_then(self.session_actor(actor_guid), accept)
+            gw_respond_resurrect_then(self.session_actor(actor), accept)
         )
     }
 
     /// Use the caller's Self-Resurrection Option (`CMSG_SELF_RES`) over the coordinator connection.
     /// Rides the coordinator connection as `gw_self_resurrect`.
     pub fn self_resurrect(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("self_resurrect: actor_guid unresolved"));
-        }
+        let actor = Actor::new(actor_guid)
+            .ok_or_else(|| anyhow!("self_resurrect: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_self_resurrect",
-            gw_self_resurrect_then(self.session_actor(actor_guid))
+            gw_self_resurrect_then(self.session_actor(actor))
         )
     }
 
@@ -3152,14 +3024,13 @@ impl Coordinator {
         actor_guid: u64,
         _healer_guid: u64,
     ) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("spirit_healer_res: actor_guid unresolved"));
-        }
+        let actor = Actor::new(actor_guid)
+            .ok_or_else(|| anyhow!("spirit_healer_res: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_spirit_res",
-            gw_spirit_res_then(self.session_actor(actor_guid))
+            gw_spirit_res_then(self.session_actor(actor))
         )
     }
 
@@ -3178,7 +3049,7 @@ impl Coordinator {
             "begin_transfer",
             begin_transfer_then(
                 plan.transfer_id,
-                self.session_actor(plan.character_guid),
+                self.actor_or_owner(plan.character_guid),
                 plan.dest_map_id,
                 plan.dest_instance_id,
                 plan.dest_x,
@@ -3207,7 +3078,7 @@ impl Coordinator {
                 source.map_id,
                 source.instance_id,
                 source.revision,
-                self.session_actor(0)
+                self.owner_actor()
             )
         )
     }
@@ -3233,7 +3104,7 @@ impl Coordinator {
                 intent.source_map,
                 intent.source_instance,
                 intent.source_locator_revision,
-                self.session_actor(0)
+                self.owner_actor()
             )
         )
     }
@@ -3244,7 +3115,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "confirm_import",
-            confirm_import_then(transfer_id, self.session_actor(0))
+            confirm_import_then(transfer_id, self.owner_actor())
         )
     }
 
@@ -3253,7 +3124,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "finish_transfer",
-            finish_transfer_then(transfer_id, self.session_actor(0))
+            finish_transfer_then(transfer_id, self.owner_actor())
         )
     }
 
@@ -3262,7 +3133,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "release_transfer",
-            release_transfer_then(transfer_id, self.session_actor(0))
+            release_transfer_then(transfer_id, self.owner_actor())
         )
     }
 
@@ -3272,7 +3143,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "ensure_instance",
-            ensure_instance_then(instance_id, map_id, party_id, self.session_actor(0))
+            ensure_instance_then(instance_id, map_id, party_id, self.owner_actor())
         )
     }
 
@@ -3281,7 +3152,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "evict_instance_population",
-            evict_instance_population_then(instance_id, self.session_actor(0))
+            evict_instance_population_then(instance_id, self.owner_actor())
         )
     }
 
@@ -3332,7 +3203,7 @@ impl Coordinator {
             "realm_group_op",
             realm_group_op_then(
                 op,
-                self.session_actor(actor_guid),
+                self.actor_or_owner(actor_guid),
                 target_guid,
                 arg_a,
                 arg_b,
@@ -3359,7 +3230,7 @@ impl Coordinator {
             "realm_group_op",
             realm_group_op_then(
                 op,
-                self.session_actor(actor_guid),
+                self.actor_or_owner(actor_guid),
                 target_guid,
                 arg_a,
                 arg_b,
@@ -3377,7 +3248,7 @@ impl Coordinator {
             "realm_group_op",
             realm_group_op_then(
                 lyracore_shared::group::realm_op::LEAVE,
-                self.session_actor(character_guid),
+                self.actor_or_owner(character_guid),
                 0,
                 lyracore_shared::group::leave_cause::CHARACTER_DELETED,
                 0,
@@ -3394,7 +3265,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "realm_mail_mark_read",
-            realm_mail_mark_read_then(self.session_actor(recipient_guid), mail_id)
+            realm_mail_mark_read_then(self.actor_or_owner(recipient_guid), mail_id)
         )
     }
 
@@ -3403,7 +3274,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "realm_mail_delete",
-            realm_mail_delete_then(self.session_actor(recipient_guid), mail_id)
+            realm_mail_delete_then(self.actor_or_owner(recipient_guid), mail_id)
         )
     }
 
@@ -3414,7 +3285,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "realm_mail_return",
-            realm_mail_return_then(self.session_actor(recipient_guid), mail_id, same_account)
+            realm_mail_return_then(self.actor_or_owner(recipient_guid), mail_id, same_account)
         )
     }
 
@@ -3441,7 +3312,7 @@ impl Coordinator {
             self.0.call_pipe().conn.reducers,
             "realm_mail_send",
             realm_mail_send_then(
-                self.session_actor(sender_guid),
+                self.actor_or_owner(sender_guid),
                 recipient_guid,
                 subject,
                 body,
@@ -3459,7 +3330,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "realm_mail_take_money",
-            realm_mail_take_money_then(self.session_actor(recipient_guid), mail_id)
+            realm_mail_take_money_then(self.actor_or_owner(recipient_guid), mail_id)
         )
     }
 
@@ -3469,7 +3340,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "realm_mail_take_item",
-            realm_mail_take_item_then(self.session_actor(recipient_guid), mail_id)
+            realm_mail_take_item_then(self.actor_or_owner(recipient_guid), mail_id)
         )
     }
 
@@ -3480,7 +3351,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "realm_mail_item_room",
-            realm_mail_item_room_then(self.session_actor(payee_guid))
+            realm_mail_item_room_then(self.actor_or_owner(payee_guid))
         )
     }
 
@@ -3490,7 +3361,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "realm_mail_copy_text",
-            realm_mail_copy_text_then(self.session_actor(recipient_guid), mail_id)
+            realm_mail_copy_text_then(self.actor_or_owner(recipient_guid), mail_id)
         )
     }
 
@@ -3500,7 +3371,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "gw_mail_grant_letter",
-            gw_mail_grant_letter_then(self.session_actor(payee_guid), item_text_id)
+            gw_mail_grant_letter_then(self.actor_or_owner(payee_guid), item_text_id)
         )
     }
 
@@ -3510,7 +3381,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "realm_mail_mark_letter_granted",
-            realm_mail_mark_letter_granted_then(self.session_actor(recipient_guid), mail_id)
+            realm_mail_mark_letter_granted_then(self.actor_or_owner(recipient_guid), mail_id)
         )
     }
 
@@ -3536,7 +3407,7 @@ impl Coordinator {
             "realm_mail_fence",
             realm_mail_fence_then(
                 escrow_id,
-                self.session_actor(sender_guid),
+                self.actor_or_owner(sender_guid),
                 recipient_guid,
                 subject,
                 body,
@@ -3575,7 +3446,7 @@ impl Coordinator {
             "realm_mail_commit",
             realm_mail_commit_then(
                 escrow_id,
-                self.session_actor(sender_guid),
+                self.actor_or_owner(sender_guid),
                 recipient_guid,
                 subject,
                 body,
@@ -3611,7 +3482,7 @@ impl Coordinator {
             "realm_mail_take_money_fence",
             realm_mail_take_money_fence_then(
                 escrow_id,
-                self.session_actor(payee_guid),
+                self.actor_or_owner(payee_guid),
                 mail_id,
                 expect_money
             )
@@ -3630,7 +3501,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "realm_mail_payout",
-            realm_mail_payout_then(escrow_id, self.session_actor(payee_guid), mail_id, amount)
+            realm_mail_payout_then(escrow_id, self.actor_or_owner(payee_guid), mail_id, amount)
         )
     }
 
@@ -3648,7 +3519,7 @@ impl Coordinator {
             "realm_mail_take_item_fence",
             realm_mail_take_item_fence_then(
                 escrow_id,
-                self.session_actor(payee_guid),
+                self.actor_or_owner(payee_guid),
                 mail_id,
                 expect_entry
             )
@@ -3669,7 +3540,7 @@ impl Coordinator {
             "realm_mail_item_payout",
             realm_mail_item_payout_then(
                 escrow_id,
-                self.session_actor(payee_guid),
+                self.actor_or_owner(payee_guid),
                 mail_id,
                 item.entry,
                 item.stack_count,
@@ -3688,7 +3559,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "realm_mail_confirm_delivery",
-            realm_mail_confirm_delivery_then(escrow_id, self.session_actor(0))
+            realm_mail_confirm_delivery_then(escrow_id, self.owner_actor())
         )
     }
 
@@ -3697,7 +3568,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "realm_mail_settle",
-            realm_mail_settle_then(escrow_id, self.session_actor(0))
+            realm_mail_settle_then(escrow_id, self.owner_actor())
         )
     }
 
@@ -3737,7 +3608,7 @@ impl Coordinator {
                 roster.loot_threshold,
                 roster.master_looter_guid,
                 roster.member_guids(),
-                self.session_actor(0),
+                self.owner_actor(),
                 partitions,
                 roster.roster_revision,
                 roster.kind.wire(),
@@ -3782,7 +3653,7 @@ impl Coordinator {
                 corpse_guid,
                 slot,
                 item_entry,
-                self.session_actor(actor_guid),
+                self.actor_or_owner(actor_guid),
                 vote,
                 deadline_micros,
                 recipients,
@@ -3809,7 +3680,7 @@ impl Coordinator {
                 corpse_guid,
                 slot,
                 0,
-                self.session_actor(actor_guid),
+                self.actor_or_owner(actor_guid),
                 vote,
                 0,
                 Vec::new(),
@@ -3828,7 +3699,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "settle_loot_roll",
-            settle_loot_roll_then(corpse_guid, slot, winner_guid, self.session_actor(0))
+            settle_loot_roll_then(corpse_guid, slot, winner_guid, self.owner_actor())
         )
     }
 
@@ -3838,7 +3709,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "clear_promoted_loot_roll",
-            clear_promoted_loot_roll_then(roll_id, self.session_actor(0))
+            clear_promoted_loot_roll_then(roll_id, self.owner_actor())
         )
     }
 }
@@ -4088,12 +3959,12 @@ fn item_action(result: Result<()>) -> Result<ItemActionResult> {
 
 /// An item action needs the caller's own entity. Without one there is nothing to request, so the
 /// client gets a Refusal rather than a dead session.
-fn resolved_item_actor(operation: &str, actor_guid: u64) -> Option<u64> {
-    if actor_guid == 0 {
+fn resolved_item_actor(operation: &str, actor_guid: u64) -> Option<Actor> {
+    let actor = Actor::new(actor_guid);
+    if actor.is_none() {
         log::warn!("stdb: {operation} has no resolved actor");
-        return None;
     }
-    Some(actor_guid)
+    actor
 }
 
 /// The Module's typed chat Refusal. Only a reducer the Module rejected carries a tag; a timeout,
@@ -4393,7 +4264,7 @@ impl Coordinator {
         let result = call_reducer!(
             self.0.call_pipe().conn.reducers,
             "realm_guild_op",
-            realm_guild_op_then(self.session_actor(actor_guid), op)
+            realm_guild_op_then(self.actor_or_owner(actor_guid), op)
         );
         match result {
             Ok(()) => Ok(crate::world::GuildOutcome::Ran),
@@ -4429,7 +4300,7 @@ impl Coordinator {
         let result = call_reducer!(
             self.0.call_pipe().conn.reducers,
             "gw_guild_fee_hold",
-            gw_guild_fee_hold_then(operation_id, self.session_actor(actor_guid), request)
+            gw_guild_fee_hold_then(operation_id, self.actor_or_owner(actor_guid), request)
         );
         match result {
             Ok(()) => wait_for_cache_row(operation_id, "guild Fee Hold", || {
@@ -4477,7 +4348,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "realm_guild_fee_decide",
-            realm_guild_fee_decide_then(hold.operation_id, self.session_actor(actor_guid), terms)
+            realm_guild_fee_decide_then(hold.operation_id, self.actor_or_owner(actor_guid), terms)
         )?;
         let decision = wait_for_cache_row(hold.operation_id, "guild fee decision", || {
             self.guild_fee_decision_row(hold.operation_id)
@@ -4495,7 +4366,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "gw_destroy_guild_charter",
-            gw_destroy_guild_charter_then(self.session_actor(actor_guid), charter_item_guid)
+            gw_destroy_guild_charter_then(self.actor_or_owner(actor_guid), charter_item_guid)
         )
     }
 
@@ -4509,7 +4380,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "gw_guild_fee_finish",
-            gw_guild_fee_finish_then(operation_id, self.session_actor(actor_guid), accepted)
+            gw_guild_fee_finish_then(operation_id, self.actor_or_owner(actor_guid), accepted)
         )
     }
 }

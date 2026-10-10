@@ -113,8 +113,9 @@ pub(crate) trait SpeechStore: Send + Sync {
     /// GM playtest dot-command for the proof-validated, realm-wide `account_name`: `text` is the
     /// raw Say line, STILL carrying its
     /// leading `.` — the Say handler intercepts it BEFORE any chat relay/insert and forwards it here
-    /// verbatim (module-side parsing keeps the command set data-free). `Err`'s message is relayed back
-    /// to the SENDER ONLY as a system chat line (never broadcast, never a `game_chat_event` row).
+    /// verbatim (module-side parsing keeps the command set data-free). A Refusal's reason is relayed
+    /// back to the SENDER ONLY as a system chat line (never broadcast, never a `game_chat_event`
+    /// row). Any other `Err` ends the World Session.
     fn gm_command(&self, account_name: &str, self_guid: u64, text: String) -> Result<()>;
 }
 

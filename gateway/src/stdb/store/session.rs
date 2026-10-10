@@ -4,7 +4,7 @@ use anyhow::{anyhow, Result};
 use wow_world_messages::vanilla::MovementInfo;
 
 use crate::codec;
-use crate::world::{SessionStore, SessionTx, WorldSession, WorldStore, MOVE_SUBMITTED};
+use crate::world::{Actor, SessionStore, SessionTx, WorldSession, WorldStore, MOVE_SUBMITTED};
 
 use crate::stdb::bindings::GwMove;
 use crate::stdb::Coordinator;
@@ -31,15 +31,14 @@ impl SessionStore for Coordinator {
         opcode: u32,
         info: &MovementInfo,
     ) -> Result<()> {
-        if self_guid == 0 {
-            return Err(anyhow!("movement_update: actor_guid unresolved"));
-        }
+        let actor = Actor::new(self_guid)
+            .ok_or_else(|| anyhow!("movement_update: actor_guid unresolved"))?;
         // Carry the MovementInfo verbatim so the module can relay it to in-range observers under
         // the same opcode. Queueing is the only completion observable on the shared batch;
         // individual reducer outcomes are intentionally unavailable.
         let body = codec::movement_info_to_bytes(info)?;
         self.0.motion_batch.push(GwMove {
-            actor: self.session_actor(self_guid),
+            actor: self.session_actor(actor),
             opcode: opcode as u16,
             movement_info: body,
             x: info.position.x,

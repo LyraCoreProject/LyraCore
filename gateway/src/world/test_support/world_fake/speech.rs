@@ -4,9 +4,8 @@ use super::super::*;
 pub(crate) struct SpeechState {
     /// What `send_chat` answers; `None` delivers.
     pub(crate) send_chat_outcome: Option<ChatOutcome>,
-    /// When set, `gm_command` returns this error — e.g. `"permission denied"` to
-    /// drive the Say-handler's `Err` → self-only `SMSG_MESSAGECHAT` System relay.
-    pub(crate) gm_command_error: Option<String>,
+    /// When set, `gm_command` fails with this error: a Refusal the GM reads, or a Transport Loss.
+    pub(crate) gm_command_error: Option<fn() -> anyhow::Error>,
     /// Recorded `gm_command` dispatches — the dot-command divert test asserts the
     /// RIGHT raw text (still carrying its leading `.`) reached the reducer call, and that a NON-dot
     /// Say never reaches this vec at all.
@@ -75,10 +74,14 @@ impl SpeechStore for WorldFake {
                 self.speech.gm_gameplay_changes.lock().unwrap().push(text);
                 return Ok(());
             }
-            return Err(anyhow!("permission denied"));
+            return Err(crate::stdb::ReducerCallError::refused(
+                "gw_gm_command",
+                "permission denied",
+            )
+            .into());
         }
-        match &self.speech.gm_command_error {
-            Some(e) => Err(anyhow!("{e}")),
+        match self.speech.gm_command_error {
+            Some(error) => Err(error()),
             None => {
                 self.speech
                     .gm_commands

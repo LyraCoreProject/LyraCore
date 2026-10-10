@@ -35,6 +35,7 @@ use wow_world_messages::vanilla::{
     SMSG_SPIRIT_HEALER_CONFIRM,
 };
 
+mod actor;
 mod chat_flood;
 mod coalesce;
 pub(crate) mod guild_fee;
@@ -51,6 +52,7 @@ mod store;
 pub mod transfer;
 pub mod whisper;
 mod who;
+pub(crate) use actor::Actor;
 use coalesce::CoalesceState;
 pub(crate) use handlers::{
     character_facts, dispatch_meeting_stone_action, reconcile_deleted_guild_characters,

@@ -7,7 +7,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use super::bindings::*;
 use super::connection::{call_reducer, Coordinator};
-use crate::world::{SessionTx, WorldSessionToken as Token};
+use crate::world::{Actor, SessionTx, WorldSessionToken as Token};
 
 pub(crate) struct SessionOwnership {
     token: Token,
@@ -116,13 +116,25 @@ impl Coordinator {
         realm_account_of(owner.as_ref(), local_account.as_ref())
     }
 
-    pub(crate) fn session_actor(&self, guid: u64) -> SessionActor {
+    /// `actor` acting under this handle's Account Claim.
+    pub(crate) fn session_actor(&self, actor: Actor) -> SessionActor {
+        self.signed_actor(actor.guid())
+    }
+
+    /// The bound owner's Character, for Durable Requests the Gateway makes on the World Session's
+    /// behalf rather than a client's. Guid 0 when no session is bound.
+    pub(crate) fn owner_actor(&self) -> SessionActor {
+        self.signed_actor(self.2.as_ref().map_or(0, |owner| owner.character_guid))
+    }
+
+    /// `guid` as the Actor, or the bound owner's Character when `guid` is 0.
+    pub(crate) fn actor_or_owner(&self, guid: u64) -> SessionActor {
+        Actor::new(guid).map_or_else(|| self.owner_actor(), |actor| self.session_actor(actor))
+    }
+
+    fn signed_actor(&self, guid: u64) -> SessionActor {
         SessionActor {
-            guid: if guid == 0 {
-                self.2.as_ref().map_or(0, |owner| owner.character_guid)
-            } else {
-                guid
-            },
+            guid,
             ownership: self.2.as_ref().map(|owner| wire(owner.token)),
         }
     }
@@ -690,7 +702,7 @@ mod tests {
             1
         );
         let queued_before_takeover = GwMove {
-            actor: old.session_actor(1),
+            actor: old.session_actor(Actor::new(1).unwrap()),
             opcode: lyracore_shared::opcodes::movement::MSG_MOVE_HEARTBEAT as u16,
             movement_info: vec![],
             x: 500.0,
@@ -727,7 +739,7 @@ mod tests {
         old.release_session(first).unwrap();
         let batch = super::super::movement_batch::MovementBatch::new();
         batch.push(GwMove {
-            actor: winner.session_actor(1),
+            actor: winner.session_actor(Actor::new(1).unwrap()),
             x: 100.0,
             move_time_ms: 100,
             ..queued_before_takeover.clone()

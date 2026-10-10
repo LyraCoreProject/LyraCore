@@ -522,6 +522,20 @@ impl ReducerCallError {
     pub(crate) fn fatal(message: String) -> Self {
         Self::Fatal(message)
     }
+
+    /// A Module Gate refusing `operation` with `reason`, as a Fake reports it.
+    #[cfg(test)]
+    pub(crate) fn refused(operation: &str, reason: &str) -> Self {
+        Self::rejected(operation, reason.to_string())
+    }
+
+    /// The transport dropping `operation` mid-call, as a Fake reports it.
+    #[cfg(test)]
+    pub(crate) fn transport_lost(operation: &str) -> Self {
+        Self::fatal(format!(
+            "{operation} reducer failed: transport disconnected"
+        ))
+    }
 }
 
 impl std::fmt::Display for ReducerCallError {
@@ -549,9 +563,23 @@ impl std::error::Error for ReducerCallError {
     }
 }
 
-/// True only for an error returned deliberately by module gameplay rules.
-pub(crate) fn is_reducer_refusal(error: &anyhow::Error) -> bool {
-    reducer_refusal_reason(error).is_some()
+/// How a failed Durable Read or Durable Request ended, as the World Session must treat it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DurableFailure<'e> {
+    /// A Module Gate refused. `reason` is the Module's stable tag. Durable state is unchanged.
+    Refusal { reason: &'e str },
+    /// The outcome is unknown: transport lost, timeout, SDK send or internal failure.
+    /// Ends the World Session.
+    TransportLoss,
+}
+
+/// Fails closed: only a reducer the Module rejected is a Refusal. Any other error, typed or not,
+/// leaves the durable outcome unknown.
+pub(crate) fn classify(error: &anyhow::Error) -> DurableFailure<'_> {
+    match reducer_refusal_reason(error) {
+        Some(reason) => DurableFailure::Refusal { reason },
+        None => DurableFailure::TransportLoss,
+    }
 }
 
 /// The Module's unwrapped refusal reason, preserving its stable gameplay prefix.
@@ -2212,9 +2240,66 @@ mod pump_tests {
 }
 
 #[cfg(test)]
+mod classify_tests {
+    use super::{classify, recv_reducer, DurableFailure, ReducerCallError};
+
+    #[test]
+    fn a_rejected_reducer_is_a_refusal_with_the_module_reason() {
+        let error =
+            anyhow::Error::from(ReducerCallError::refused("gw_buy_item", "vendor:no_money"))
+                .context("buy phase");
+        assert_eq!(
+            classify(&error),
+            DurableFailure::Refusal {
+                reason: "vendor:no_money"
+            }
+        );
+    }
+
+    #[test]
+    fn an_sdk_internal_error_is_transport_loss() {
+        let error = anyhow::Error::from(ReducerCallError::internal(
+            "gw_buy_item",
+            spacetimedb_sdk::error::InternalError::failed_parse("ReducerResult", "Message"),
+        ));
+        assert_eq!(classify(&error), DurableFailure::TransportLoss);
+    }
+
+    #[test]
+    fn a_failed_sdk_send_is_transport_loss() {
+        let error = anyhow::Error::from(ReducerCallError::sdk_send(
+            "gw_buy_item",
+            spacetimedb_sdk::Error::Disconnected,
+        ));
+        assert_eq!(classify(&error), DurableFailure::TransportLoss);
+    }
+
+    #[test]
+    fn a_dropped_transport_is_transport_loss() {
+        let error = anyhow::Error::from(ReducerCallError::transport_lost("gw_buy_item"));
+        assert_eq!(classify(&error), DurableFailure::TransportLoss);
+    }
+
+    #[test]
+    fn a_completion_that_never_arrives_is_transport_loss() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        drop(tx);
+        let error = recv_reducer(rx, "gw_buy_item").expect_err("no completion is an error");
+        assert_eq!(error.to_string(), "gw_buy_item reducer timed out after 10s");
+        assert_eq!(classify(&error), DurableFailure::TransportLoss);
+    }
+
+    #[test]
+    fn an_untyped_error_is_transport_loss_even_when_it_reads_like_a_refusal() {
+        let error = anyhow::anyhow!("gw_buy_item reducer failed: vendor:no_money");
+        assert_eq!(classify(&error), DurableFailure::TransportLoss);
+    }
+}
+
+#[cfg(test)]
 mod recv_reducer_tests {
     use super::{
-        is_reducer_refusal, recv_reducer, reducer_refusal_reason, ReducerCompletion,
+        classify, recv_reducer, reducer_refusal_reason, DurableFailure, ReducerCompletion,
         ReducerCompletionFailure,
     };
     use std::sync::mpsc;
@@ -2243,7 +2328,6 @@ mod recv_reducer_tests {
             err.to_string(),
             "buy_item reducer failed: not enough copper"
         );
-        assert!(is_reducer_refusal(&err));
         assert_eq!(reducer_refusal_reason(&err), Some("not enough copper"));
     }
 
@@ -2258,7 +2342,7 @@ mod recv_reducer_tests {
         let err = recv_reducer(rx, "gw_loot_money")
             .expect_err("an SDK InternalError must remain session-fatal");
 
-        assert!(!is_reducer_refusal(&err));
+        assert_eq!(classify(&err), DurableFailure::TransportLoss);
         assert!(err.to_string().starts_with("gw_loot_money reducer failed:"));
     }
 
@@ -2275,7 +2359,7 @@ mod recv_reducer_tests {
 
         let error = recv_reducer(dead_rx, "gw_loot_money")
             .expect_err("a disconnected reducer completion must be fatal");
-        assert!(!is_reducer_refusal(&error));
+        assert_eq!(classify(&error), DurableFailure::TransportLoss);
         assert_eq!(
             error.to_string(),
             "gw_loot_money reducer failed: transport disconnected"

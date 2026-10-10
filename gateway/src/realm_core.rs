@@ -1060,7 +1060,10 @@ pub(crate) mod fake {
             if alpha_test_tools && text.starts_with(".speed") {
                 Ok(())
             } else {
-                Err(anyhow!("permission denied"))
+                Err(
+                    crate::stdb::ReducerCallError::refused("gw_gm_command", "permission denied")
+                        .into(),
+                )
             }
         }
         fn character_location(&self, guid: u64) -> Option<(u32, u64)> {
@@ -1370,7 +1373,12 @@ mod tests {
         let refusal = run_gm_command(&h, USER, 42, ".speed 4".into())
             .expect_err("the same World Session must see the revocation");
 
-        assert_eq!(refusal.to_string(), "permission denied");
+        assert_eq!(
+            crate::stdb::classify(&refusal),
+            crate::stdb::DurableFailure::Refusal {
+                reason: "permission denied"
+            }
+        );
         assert_eq!(
             h.db_at(WORLD).gm_commands.lock().unwrap().as_slice(),
             &[

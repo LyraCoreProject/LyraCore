@@ -440,12 +440,19 @@ pub(crate) fn handle_query<
                         )?;
                     }
                 }
+                // The GM reads the Module's Refusal text verbatim. Any other failure ends the
+                // World Session.
                 CMSG_MESSAGECHAT_ChatType::Say if message.starts_with('.') => {
-                    if let Err(e) = store.gm_command(&conn.account_name, self_guid, message) {
+                    if let Err(error) = store.gm_command(&conn.account_name, self_guid, message) {
+                        let crate::stdb::DurableFailure::Refusal { reason } =
+                            crate::stdb::classify(&error)
+                        else {
+                            return Err(error);
+                        };
                         send(
                             tx,
                             Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(
-                                codec::build_gm_system_message(e.to_string()),
+                                codec::build_gm_system_message(reason.to_string()),
                             ))),
                         )?;
                     }

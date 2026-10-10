@@ -36,6 +36,9 @@ mod world_store; // impl RealmDb for Coordinator
 pub(crate) mod world_view; // shared per-shard spatial, broadcast, private, and owner dispatch
 
 pub use connection::Coordinator;
+#[cfg(test)]
+pub(crate) use connection::ReducerCallError;
+pub(crate) use connection::{classify, DurableFailure};
 pub use subscriptions::PlayerSubscriptions;
 // Re-exported so `crate::stdb::{RealmRow, AccountRow}` resolves (they are the return types of
 // `Coordinator::realm` / `account_by_username`). `allow(unused_imports)` because in this *binary*
