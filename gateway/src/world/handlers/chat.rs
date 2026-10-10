@@ -411,14 +411,6 @@ pub(super) fn drop_unrecognised_refusal(
     }
 }
 
-/// The meeting stone handler still classifies by message text through this. Delete it with that
-/// handler's conversion to `classify`.
-pub(super) fn is_transport_failure(error: &anyhow::Error) -> bool {
-    error
-        .chain()
-        .any(|cause| cause.to_string().contains("reducer transport disconnected"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

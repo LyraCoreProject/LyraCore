@@ -9,7 +9,7 @@ use crate::world::handlers::{
 };
 use crate::world::loot::{LootRollStore, PendingLootRoll};
 use crate::world::{Actor, ShardRoutingStore, WorldStore};
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
