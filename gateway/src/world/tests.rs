@@ -3,8 +3,8 @@
 //! This module holds the imports those files share and the helpers more than one of them uses.
 
 use super::handlers::{
-    AuctionInteraction, ChannelOutcome, ChatOutcome, LootWindowRefusal, RealmChatRequest,
-    SpeakerFacts, WhisperRequest, WhisperTargetFacts,
+    AuctionInteraction, ChatOutcome, LootWindowRefusal, SpeakerFacts, WhisperRequest,
+    WhisperTargetFacts,
 };
 use super::party::PartyOutcome;
 use super::test_support::*;
@@ -73,15 +73,6 @@ use wow_world_messages::vanilla::{
     CMSG_GAMEOBJ_USE,
     CMSG_GOSSIP_HELLO,
     CMSG_GOSSIP_SELECT_OPTION,
-    CMSG_GUILD_ACCEPT,
-    CMSG_GUILD_DECLINE,
-    CMSG_GUILD_DEMOTE,
-    CMSG_GUILD_DISBAND,
-    CMSG_GUILD_INVITE,
-    CMSG_GUILD_LEADER,
-    CMSG_GUILD_LEAVE,
-    CMSG_GUILD_PROMOTE,
-    CMSG_GUILD_REMOVE,
     CMSG_INSPECT,
     CMSG_ITEM_QUERY_SINGLE,
     CMSG_LEARN_TALENT,
@@ -127,8 +118,6 @@ mod auction_tests;
 mod bank_tests;
 #[path = "cast_tests.rs"]
 mod cast_tests;
-#[path = "channel_tests.rs"]
-mod channel_tests;
 #[path = "character_tests.rs"]
 mod character_tests;
 #[path = "chat_tests.rs"]
