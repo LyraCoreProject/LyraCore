@@ -34,6 +34,8 @@ mod trainer;
 mod vendor;
 mod weather;
 
+#[cfg(test)]
+pub(crate) use auction::tests::{store_with, InMemoryAuctionActions};
 pub(crate) use auction::{
     decode_auction_browse, dispatch_auction_action, dispatch_auction_browse_action,
     AuctionActionOutcome, AuctionActionPlayer, AuctionActionStore, AuctionBrowseRequest,
@@ -42,12 +44,10 @@ pub(crate) use auction::{
 };
 #[cfg(test)]
 pub(crate) use auction::{AuctionHousePolicy, AuctionInteraction};
-#[cfg(test)]
-pub(crate) use auction::tests::{store_with, InMemoryAuctionActions};
 pub(crate) use bank::{handle_bank, BankStore};
-pub(crate) use cast::{dispatch_cast, CastOutcome, CastPlayer, CastStore, CastTransition};
 #[cfg(test)]
 pub(crate) use cast::tests::InMemoryCasts;
+pub(crate) use cast::{dispatch_cast, CastOutcome, CastPlayer, CastStore, CastTransition};
 pub(crate) use channel::{
     dispatch_channel_action, ChannelActionOutcome, ChannelActionStore, ChannelOutcome,
     ChannelRequest, ChannelRoster,
@@ -69,11 +69,11 @@ pub(crate) use guild::{
     DurableCharacterFacts, GuildActionOutcome, GuildActionPlayer, GuildActionStore, GuildCleanup,
     GuildEventSnapshot, GuildOutcome, GuildRequest,
 };
+#[cfg(test)]
+pub(crate) use item::tests::InMemoryItemActions;
 pub(crate) use item::{
     dispatch_item_action, ItemActionOutcome, ItemActionPlayer, ItemActionResult, ItemActionStore,
 };
-#[cfg(test)]
-pub(crate) use item::tests::InMemoryItemActions;
 pub(crate) use loot::{
     dispatch_loot_window, handle_loot, LootActionStatus, LootWindowOutcome, LootWindowPlayer,
     LootWindowRefusal, LootWindowRequestStatus, LootWindowStore, OpenLootState,
@@ -83,11 +83,11 @@ pub(crate) use meeting_stone::{
     dispatch_meeting_stone_action, MeetingStoneActionOutcome, MeetingStoneActionStore,
     MeetingStoneOutcome, MeetingStonePlayer, SeekerFacts,
 };
+#[cfg(test)]
+pub(crate) use melee::tests::InMemoryMeleeActions;
 pub(crate) use melee::{
     dispatch_melee_action, MeleeActionOutcome, MeleeActionPlayer, MeleeActionStore,
 };
-#[cfg(test)]
-pub(crate) use melee::tests::InMemoryMeleeActions;
 #[cfg(test)]
 pub(crate) use member_stats::MemberSnapshot;
 pub(crate) use member_stats::{
@@ -99,19 +99,19 @@ pub(crate) use quest::{
     dispatch_quest_action, quest_giver_menu, QuestActionOutcome, QuestActionPlayer,
     QuestActionStore,
 };
+#[cfg(test)]
+pub(crate) use taxi::tests::InMemoryTaxiActions;
 pub(crate) use taxi::{
     dispatch_taxi_action, queue_reply_then_arm, TaxiActionOutcome, TaxiActionPlayer,
     TaxiActionStore,
 };
-#[cfg(test)]
-pub(crate) use taxi::tests::InMemoryTaxiActions;
 pub(crate) use trade::{handle_trade, TradeStore};
 pub(crate) use trainer::{handle_trainer, TrainerBuyOutcome, TrainerStore};
+#[cfg(test)]
+pub(crate) use vendor::tests::InMemoryVendorActions;
 pub(crate) use vendor::{
     dispatch_vendor_action, VendorActionOutcome, VendorActionPlayer, VendorActionStore,
 };
-#[cfg(test)]
-pub(crate) use vendor::tests::InMemoryVendorActions;
 pub(crate) use weather::{zone_weather_message, WeatherStore};
 
 /// Open the bank window for `banker_guid`. Single chokepoint for `CMSG_BANKER_ACTIVATE` and the
