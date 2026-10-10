@@ -98,66 +98,6 @@ impl LootWindowRefusal {
     }
 }
 
-impl LootWindowStore for crate::stdb::Coordinator {
-    fn loot_target_money(&self, target_guid: u64) -> Result<u32> {
-        crate::stdb::Coordinator::loot_target_money(self, target_guid)
-    }
-
-    fn loot_target_items(
-        &self,
-        target_guid: u64,
-        viewer_guid: u64,
-    ) -> Result<Vec<codec::LootItemView>> {
-        crate::stdb::Coordinator::corpse_loot(self, target_guid, viewer_guid)
-    }
-
-    fn use_gameobject(
-        &self,
-        account_id: u64,
-        actor_guid: u64,
-        target_guid: u64,
-    ) -> Result<LootWindowRequestStatus> {
-        crate::stdb::Coordinator::use_gameobject(self, account_id, actor_guid, target_guid)
-    }
-
-    fn open_creature_loot(
-        &self,
-        account_id: u64,
-        actor_guid: u64,
-        corpse_guid: u64,
-    ) -> Result<LootWindowRequestStatus> {
-        crate::stdb::Coordinator::open_creature_loot(self, account_id, actor_guid, corpse_guid)
-    }
-
-    fn skin_corpse(
-        &self,
-        account_id: u64,
-        actor_guid: u64,
-        target_guid: u64,
-    ) -> Result<LootWindowRequestStatus> {
-        crate::stdb::Coordinator::skin_corpse(self, account_id, actor_guid, target_guid)
-    }
-
-    fn loot_money(
-        &self,
-        account_id: u64,
-        actor_guid: u64,
-        target_guid: u64,
-    ) -> Result<LootWindowRequestStatus> {
-        crate::stdb::Coordinator::loot_money(self, account_id, actor_guid, target_guid)
-    }
-
-    fn take_loot(
-        &self,
-        account_id: u64,
-        actor_guid: u64,
-        target_guid: u64,
-        loot_slot: u8,
-    ) -> Result<LootWindowRequestStatus> {
-        crate::stdb::Coordinator::take_loot(self, account_id, actor_guid, target_guid, loot_slot)
-    }
-}
-
 /// The target whose loot window is currently open for this world session.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct OpenLootState {

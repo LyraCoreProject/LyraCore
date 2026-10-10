@@ -2,9 +2,8 @@
 
 use anyhow::Result;
 
-use crate::world::{ShardRoutingStore, WorldStore};
-
 use crate::stdb::Coordinator;
+use crate::world::{ShardRoutingStore, WorldStore};
 
 impl ShardRoutingStore for Coordinator {
     fn shard_name(&self) -> &str {

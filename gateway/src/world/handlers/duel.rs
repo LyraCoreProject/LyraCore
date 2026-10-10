@@ -7,16 +7,6 @@ pub(crate) trait DuelActionStore: Send + Sync {
     fn duel_cancel(&self, account_id: u64, actor_guid: u64, flag_guid: u64) -> Result<()>;
 }
 
-impl DuelActionStore for crate::stdb::Coordinator {
-    fn duel_accept(&self, account_id: u64, actor_guid: u64, flag_guid: u64) -> Result<()> {
-        crate::stdb::Coordinator::duel_accept(self, account_id, actor_guid, flag_guid)
-    }
-
-    fn duel_cancel(&self, account_id: u64, actor_guid: u64, flag_guid: u64) -> Result<()> {
-        crate::stdb::Coordinator::duel_cancel(self, account_id, actor_guid, flag_guid)
-    }
-}
-
 #[derive(Clone, Copy)]
 pub(crate) struct DuelActionPlayer {
     pub(crate) account_id: u64,

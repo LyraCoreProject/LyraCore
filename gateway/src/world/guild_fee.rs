@@ -9,7 +9,7 @@
 //! A hold call mints its own operation id and is never retried, so no Hold is taken twice for one
 //! id. After a lost answer the Hold is found by its payer and re-driven, not held again.
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use lyracore_shared::guild::GuildRefusal;
 
 /// The five tabard design values of a Guild Emblem, in wire order.
@@ -127,42 +127,10 @@ fn settle<St: GuildFeeStore + ?Sized>(
     Ok(outcome)
 }
 
-impl GuildFeeStore for crate::stdb::Coordinator {
-    fn guild_fee_held(&self, actor_guid: u64) -> Result<Option<FeeHold>> {
-        Ok(self.guild_fee_hold_row(actor_guid))
-    }
-
-    fn guild_fee_hold(
-        &self,
-        actor_guid: u64,
-        request: FeeRequest,
-    ) -> Result<Result<FeeHold, GuildRefusal>> {
-        self.hold_guild_fee(actor_guid, request)
-    }
-
-    fn guild_fee_decide(&self, actor_guid: u64, hold: FeeHold) -> Result<FeeOutcome> {
-        let owner = match hold.terms {
-            FeeTerms::Emblem(_) => None,
-            FeeTerms::Charter { .. } => {
-                let facts = crate::stdb::Coordinator::guild_character_facts(self, actor_guid)?
-                    .ok_or_else(|| anyhow!("Guild Charter owner {actor_guid} is unreadable"))?;
-                Some(CharterOwner {
-                    name: facts.name,
-                    team: lyracore_shared::faction::team_for_race(facts.race),
-                })
-            }
-        };
-        self.realm_core()?.decide_guild_fee(actor_guid, hold, owner)
-    }
-
-    fn guild_fee_finish(&self, actor_guid: u64, operation_id: u64, accepted: bool) -> Result<()> {
-        self.finish_guild_fee(actor_guid, operation_id, accepted)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::anyhow;
     use lyracore_shared::guild::EMBLEM_COST_COPPER;
     use std::sync::{Arc, Mutex};
 

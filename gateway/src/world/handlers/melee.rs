@@ -9,16 +9,6 @@ pub(crate) trait MeleeActionStore: Send + Sync {
     fn stop_attack(&self, account_id: u64, actor_guid: u64) -> Result<()>;
 }
 
-impl MeleeActionStore for crate::stdb::Coordinator {
-    fn start_attack(&self, account_id: u64, actor_guid: u64, target_guid: u64) -> Result<()> {
-        crate::stdb::Coordinator::start_attack(self, account_id, actor_guid, target_guid)
-    }
-
-    fn stop_attack(&self, account_id: u64, actor_guid: u64) -> Result<()> {
-        crate::stdb::Coordinator::stop_attack(self, account_id, actor_guid)
-    }
-}
-
 /// The melee-relevant session facts. `self_guid` is `None` outside the world.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct MeleeActionPlayer {

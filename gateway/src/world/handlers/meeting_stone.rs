@@ -47,48 +47,6 @@ pub(crate) trait MeetingStoneActionStore {
     fn queued_area(&self, character_guid: u64) -> Result<Option<u32>>;
 }
 
-impl MeetingStoneActionStore for crate::stdb::Coordinator {
-    fn admit_meeting_stone(&self, actor_guid: u64, go_guid: u64) -> Result<MeetingStoneOutcome> {
-        crate::stdb::Coordinator::admit_meeting_stone(self, actor_guid, go_guid)
-    }
-
-    fn meeting_stone_area(&self, go_guid: u64) -> Result<Option<u32>> {
-        crate::stdb::Coordinator::meeting_stone_area(self, go_guid)
-    }
-
-    fn party_members(&self, actor_guid: u64) -> Result<Option<Vec<u64>>> {
-        let authority = self.realm_core()?;
-        Ok(
-            crate::stdb::Coordinator::group_roster(&authority, actor_guid)
-                .map(|roster| roster.members.iter().map(|member| member.guid).collect()),
-        )
-    }
-
-    fn seeker_facts(&self, character_guid: u64) -> Result<Option<SeekerFacts>> {
-        Ok(
-            presence::character_anywhere(self, character_guid)?.map(|character| SeekerFacts {
-                character_guid,
-                race: character.race,
-                class: character.class,
-            }),
-        )
-    }
-
-    fn meeting_stone_op(
-        &self,
-        actor_guid: u64,
-        op: u8,
-        area_id: u32,
-        seekers: Vec<SeekerFacts>,
-    ) -> Result<MeetingStoneOutcome> {
-        crate::stdb::Coordinator::meeting_stone_op(self, actor_guid, op, area_id, seekers)
-    }
-
-    fn queued_area(&self, character_guid: u64) -> Result<Option<u32>> {
-        crate::stdb::Coordinator::queued_area(self, character_guid)
-    }
-}
-
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct MeetingStonePlayer {
     pub(crate) account_id: u64,

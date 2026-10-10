@@ -42,7 +42,6 @@ pub(crate) use auction::{
     AuctionPage, AuctionQuery, CancelAuctionOutcome, CancelAuctionRequest, CreateAuctionOutcome,
     CreateAuctionRequest, PlaceBidOutcome, PlaceBidRequest, CMSG_AUCTION_LIST_ITEMS_OPCODE,
 };
-#[cfg(test)]
 pub(crate) use auction::{AuctionHousePolicy, AuctionInteraction};
 pub(crate) use bank::{handle_bank, BankStore};
 #[cfg(test)]
@@ -52,7 +51,6 @@ pub(crate) use channel::{
     dispatch_channel_action, ChannelActionOutcome, ChannelActionStore, ChannelOutcome,
     ChannelRequest, ChannelRoster,
 };
-#[cfg(test)]
 pub(crate) use channel::{resolve_online_character, ResolvedTarget};
 pub(crate) use char::{handle_char, CharacterStore};
 pub(crate) use chat::{

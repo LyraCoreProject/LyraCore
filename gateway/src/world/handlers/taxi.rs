@@ -23,40 +23,6 @@ pub(crate) trait TaxiActionStore: Send + Sync {
     fn arm_taxi_flight(&self, character_guid: u64) -> Result<()>;
 }
 
-impl TaxiActionStore for crate::stdb::Coordinator {
-    fn taxi_node_status(
-        &self,
-        character_guid: u64,
-        npc_guid: u64,
-    ) -> Result<Option<codec::TaxiNodeStatusView>> {
-        crate::stdb::Coordinator::taxi_node_status(self, character_guid, npc_guid)
-    }
-
-    fn open_taxi(&self, character_guid: u64, npc_guid: u64) -> Result<Option<codec::TaxiMapView>> {
-        crate::stdb::Coordinator::open_taxi(self, character_guid, npc_guid)
-    }
-
-    fn activate_taxi(
-        &self,
-        character_guid: u64,
-        npc_guid: u64,
-        source_client_node_id: u32,
-        destination_client_node_id: u32,
-    ) -> Result<codec::TaxiActivationResult> {
-        crate::stdb::Coordinator::activate_taxi(
-            self,
-            character_guid,
-            npc_guid,
-            source_client_node_id,
-            destination_client_node_id,
-        )
-    }
-
-    fn arm_taxi_flight(&self, character_guid: u64) -> Result<()> {
-        crate::stdb::Coordinator::arm_taxi_flight(self, character_guid)
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct TaxiActionPlayer {
     pub(crate) self_guid: Option<u64>,

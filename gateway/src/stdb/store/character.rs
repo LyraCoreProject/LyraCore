@@ -1,11 +1,14 @@
 //! `Coordinator`'s [`CharacterStore`] adapter.
 
 use anyhow::Result;
+use spacetimedb_sdk::Table;
 
 use crate::codec;
+use crate::stdb::bindings::*;
+use crate::stdb::connection::{call_reducer, CharacterPresenceSnapshot, Coordinator};
+use crate::stdb::reads::spell_ranks_stack_in_book;
+use crate::stdb::views::character_view;
 use crate::world::CharacterStore;
-
-use crate::stdb::connection::{CharacterPresenceSnapshot, Coordinator};
 
 fn stable_character_absence(
     first: &[CharacterPresenceSnapshot],
@@ -186,6 +189,282 @@ impl CharacterStore for Coordinator {
 
     fn player_actions(&self, player_guid: u64) -> Result<Vec<(u8, u32, u8)>> {
         self.player_actions(player_guid)
+    }
+}
+
+impl Coordinator {
+    /// Read an account's characters for the character-select screen. In production
+    /// this reads the per-player `game_character` subscription cache (RLS-restricted to owner).
+    /// Equipment slots (0..=18) are populated from `game_item_instance` + `game_item_template`
+    /// so the client renders the character's gear on the select screen instead of all-naked.
+    pub fn characters(&self, account_id: u64) -> Result<Vec<crate::codec::CharacterView>> {
+        use wow_world_messages::vanilla::{CharacterGear, InventoryType};
+        let guard = self.0.coord();
+        let db = &guard.conn.db;
+        let mut views: Vec<crate::codec::CharacterView> = db
+            .game_character()
+            .iter()
+            .filter(|c| c.account_id == account_id)
+            .map(character_view)
+            .collect();
+        // Fill equipment slots 0..=18 from item instances.  Slots ≥ 19 are backpack/bag slots;
+        // skip them.  An unknown inventory_type degrades to InventoryType::default (Non) which
+        // the client treats the same as display_id=0 — no model shown, no crash.
+        for view in &mut views {
+            for item in db
+                .game_item_instance()
+                .iter()
+                .filter(|i| i.owner_guid == view.guid && i.slot <= 18)
+            {
+                let Some(tmpl) = db.game_item_template().entry().find(&item.entry) else {
+                    continue;
+                };
+                let inv_type =
+                    InventoryType::try_from(u32::from(tmpl.inventory_type)).unwrap_or_default();
+                view.equipment[item.slot as usize] = CharacterGear {
+                    equipment_display_id: tmpl.display_id,
+                    inventory_type: inv_type,
+                };
+            }
+        }
+        Ok(views)
+    }
+
+    /// Read a single character by guid (any owner) for a `CMSG_NAME_QUERY` reply. The queried guid
+    /// is usually a *peer*, so this reads across owners via the privileged cache (no RLS on the
+    /// owner connection), unlike `characters` which filters to one account.
+    pub fn character_by_guid(&self, guid: u64) -> Result<Option<crate::codec::CharacterView>> {
+        Ok(self
+            .0
+            .coord()
+            .conn
+            .db
+            .game_character()
+            .guid()
+            .find(&guid)
+            .map(character_view))
+    }
+
+    /// folded from the coordinator's privileged cache: base (`game_world_entity.armor`) + worn gear armor.
+    /// The coordinator isn't subscribed to `game_aura`, so the aura term is 0 here — login-present armor
+    /// auras are pushed by the on_aura relay the instant they insert. Delegates to the shared
+    /// `stdb::armor::effective_armor` so CREATE and the relays compute the IDENTICAL fold.
+    pub fn effective_armor(&self, guid: u64) -> u32 {
+        let guard = self.0.coord();
+        super::super::armor::effective_armor(&guard.conn.db, guid)
+    }
+
+    pub fn effective_magic_resistances(&self, guid: u64) -> [u32; 6] {
+        let guard = self.0.coord();
+        super::super::armor::effective_magic_resistances(&guard.conn.db, guid)
+    }
+
+    /// The character's active SPELL-MODIFIER auras as raw `(family_mask, op, amount, is_pct)`
+    /// rows — the client-mirror source for SMSG_SET_FLAT/PCT_SPELL_MODIFIER (aggregation by
+    /// (op, mask-bit) happens in the codec helper; mangos sends the TOTAL per bit).
+    pub fn spell_modifiers(&self, character_guid: u64) -> Vec<(u32, u8, i32, bool)> {
+        const A_SPELLMOD_FLAT: u8 = 0xAC; // lockstep with module taxonomy
+        const A_SPELLMOD_PCT: u8 = 0xAD;
+        self.0
+            .coord()
+            .conn
+            .db
+            .game_aura()
+            .iter()
+            .filter(|a| {
+                a.target_guid == character_guid
+                    && (a.eff_kind == A_SPELLMOD_FLAT || a.eff_kind == A_SPELLMOD_PCT)
+            })
+            .map(|a| {
+                (
+                    a.eff_p1 as u32,
+                    a.eff_p0 as u8,
+                    a.amount,
+                    a.eff_kind == A_SPELLMOD_PCT,
+                )
+            })
+            .collect()
+    }
+
+    /// The player's LEARNED spells — `game_player_spell` rows for this character (the coordinator
+    /// bypasses RLS so it reads any player's). Chained into the login spellbook so a taught ability
+    /// (Auto Shot) reaches the client and `CastSpellByName` can fire it.
+    pub fn player_learned_spells(&self, player_guid: u64) -> Result<Vec<u32>> {
+        let guard = self.0.coord();
+        let db = &guard.conn.db;
+        let known: Vec<u32> = db
+            .game_player_spell()
+            .iter()
+            .filter(|s| s.character_guid == player_guid)
+            .map(|s| s.spell_id)
+            .collect();
+        // 258 rank collapse: drop a known rank that another KNOWN spell supersedes (a game_spell_chain
+        // row whose prev_spell is this id) — GATED on the same cmangos stacking rule as
+        // superseded_old_rank (operator-corrected): MANA spells keep every rank in the book
+        // (downranking Holy Light is a real thing); only non-mana/passive chains collapse
+        // (Heroic Strike). One pass suffices: each superseded rank is prev of its own successor.
+        let known_set: std::collections::HashSet<u32> = known.iter().copied().collect();
+        let superseded: std::collections::HashSet<u32> = db
+            .game_spell_chain()
+            .iter()
+            .filter(|c| {
+                c.prev_spell != 0
+                    && known_set.contains(&c.prev_spell)
+                    && known_set.contains(&c.spell_id)
+                    && !spell_ranks_stack_in_book(db, c.spell_id)
+            })
+            .map(|c| c.prev_spell)
+            .collect();
+        Ok(known
+            .into_iter()
+            .filter(|id| !superseded.contains(id))
+            .collect())
+    }
+
+    /// The player's IMPORTED action-bar rows as `(button, action, action_type)` triples —
+    /// `game_player_action` rows copied at character creation from `game_createinfo_action` (empty when
+    /// no dump has been imported, the common case today). Chained into the login codec
+    /// (`login_sequence_messages`), which builds the bar from these when non-empty and falls back to
+    /// the spellbook synth otherwise. RLS-bypassed read, like `player_learned_spells`.
+    pub fn player_actions(&self, player_guid: u64) -> Result<Vec<(u8, u32, u8)>> {
+        let guard = self.0.coord();
+        let db = &guard.conn.db;
+        Ok(db
+            .game_player_action()
+            .iter()
+            .filter(|a| a.character_guid == player_guid)
+            .map(|a| (a.button, a.action, a.action_type))
+            .collect())
+    }
+
+    /// The player's persisted reputation standings as `(reputation_index, standing,
+    /// at_war)` triples — chained into the login `SMSG_INITIALIZE_FACTIONS` so a relog carries the
+    /// real standing + the At-War checkbox instead of the all-neutral stub. Rows with
+    /// `reputation_index < 0` (stale pre-migration filler) are skipped — there is no slot to
+    /// address. RLS-bypassed read, like `player_learned_spells`.
+    pub fn player_reputations(&self, player_guid: u64) -> Result<Vec<(i32, i32, bool)>> {
+        let guard = self.0.coord();
+        let db = &guard.conn.db;
+        Ok(db
+            .game_player_reputation()
+            .iter()
+            .filter(|r| r.character_guid == player_guid && r.reputation_index >= 0)
+            .map(|r| (r.reputation_index, r.standing, r.at_war))
+            .collect())
+    }
+
+    /// Does `character_guid` sell, or lead the bidding on, an Auction on THIS handle?
+    fn has_auction(&self, character_guid: u64) -> bool {
+        let auctions = self.auction_keys(|index| &index.auctions, character_guid);
+        let guard = self.0.coord();
+        auctions.into_iter().any(|id| {
+            u32::try_from(id)
+                .ok()
+                .and_then(|id| guard.conn.db.game_auction().id().find(&id))
+                .is_some_and(|auction| {
+                    auction.owner_guid == character_guid
+                        || auction.highest_bidder_guid == character_guid
+                })
+        })
+    }
+
+    /// Create a character via the `create_character` reducer (owner connection), mapping the
+    /// reducer result to a game outcome. A distinguished `NAME_IN_USE` error → `NameInUse`; any
+    /// other reducer/transport error → `Failed` (never propagated as a hard error, so a bad
+    /// creation can't drop the world session).
+    pub fn create_character(
+        &self,
+        account_id: u64,
+        name: &str,
+        race: u8,
+        class: u8,
+        gender: u8,
+        appearance: crate::codec::Appearance,
+    ) -> Result<crate::codec::CharCreateOutcome> {
+        use crate::codec::CharCreateOutcome;
+        // The SpacetimeDB-generated reducer binding takes the five appearance bytes positionally;
+        // unbundle `Appearance` here, at the single generated-boundary call.
+        let result = call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "create_character",
+            create_character_then(
+                account_id,
+                name.to_string(),
+                race,
+                class,
+                gender,
+                appearance.skin,
+                appearance.face,
+                appearance.hair_style,
+                appearance.hair_color,
+                appearance.facial_hair
+            )
+        );
+        Ok(match result {
+            Ok(()) => CharCreateOutcome::Success,
+            Err(e) if e.to_string().contains("NAME_IN_USE") => CharCreateOutcome::NameInUse,
+            Err(e) if e.to_string().contains("SERVER_LIMIT") => CharCreateOutcome::ServerLimit,
+            // The 5875 client has no code for "this database may not mint guids", so the outcome is
+            // the generic failure — but the REASON must not be swallowed: the whole point of
+            // guid-range licensing is that an unlicensed shard fails loudly instead of minting
+            // into someone else's range.
+            Err(e) => {
+                log::warn!("create_character on {} failed: {e:#}", self.shard_name());
+                CharCreateOutcome::Failed
+            }
+        })
+    }
+
+    /// Delete a character via the `delete_character` reducer (owner connection — the reducer is
+    /// operator-gated, mirroring `create_character`). Ownership is enforced module-side (`NOT_OWNER`
+    /// if `character_guid` isn't `account_id`'s), so a malicious/buggy client can't delete another
+    /// account's character. Maps to a game outcome the same way `create_character` does: never
+    /// propagated as a hard error, so a bad delete can't drop the world session.
+    pub fn delete_character(
+        &self,
+        account_id: u64,
+        character_guid: u64,
+    ) -> Result<crate::codec::CharDeleteOutcome> {
+        use crate::codec::CharDeleteOutcome;
+        match self.character_has_auction_value(character_guid) {
+            Ok(true) => return Ok(CharDeleteOutcome::Failed),
+            Ok(false) => {}
+            Err(error) => {
+                log::warn!(
+                    "delete_character: could not verify auction value for {character_guid}: {error:#}"
+                );
+                return Ok(CharDeleteOutcome::Failed);
+            }
+        }
+        let result = call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "delete_character",
+            delete_character_then(account_id, self.actor_or_owner(character_guid))
+        );
+        Ok(match result {
+            Ok(()) => CharDeleteOutcome::Success,
+            // The 1.12 client has one reason for every refusal, so the reason goes to the log:
+            // CHAR_HAS_GUILD_FEE_HOLD clears when the Character next enters the world and the
+            // Gateway finishes its Fee Hold.
+            Err(error) => {
+                log::info!("delete_character: {character_guid} not deleted: {error:#}");
+                CharDeleteOutcome::Failed
+            }
+        })
+    }
+
+    fn character_has_auction_value(&self, character_guid: u64) -> Result<bool> {
+        for (_, shard) in self.world_shards() {
+            if !shard.listing_holds(character_guid).is_empty()
+                || shard
+                    .unfinished_auction_holds(character_guid)
+                    .next()
+                    .is_some()
+            {
+                return Ok(true);
+            }
+        }
+        Ok(self.realm_core()?.has_auction(character_guid))
     }
 }
 

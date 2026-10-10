@@ -119,36 +119,6 @@ pub(crate) trait SpeechStore: Send + Sync {
     fn gm_command(&self, account_name: &str, self_guid: u64, text: String) -> Result<()>;
 }
 
-impl ChatActionStore for crate::stdb::Coordinator {
-    fn speaker_facts(&self, speaker_guid: u64) -> Result<Option<SpeakerFacts>> {
-        crate::stdb::Coordinator::speaker_facts(self, speaker_guid)
-    }
-
-    fn realm_chat(&self, speaker_guid: u64, request: RealmChatRequest) -> Result<ChatOutcome> {
-        crate::stdb::Coordinator::realm_chat(self, speaker_guid, request)
-    }
-
-    fn set_away(&self, speaker_guid: u64, kind: u8, message: String) -> Result<()> {
-        crate::stdb::Coordinator::set_away(self, speaker_guid, kind, message)
-    }
-
-    fn whisper_target(
-        &self,
-        speaker_guid: u64,
-        typed_name: &str,
-    ) -> Result<Option<WhisperTargetFacts>> {
-        whisper::target_facts(self, speaker_guid, typed_name)
-    }
-
-    fn realm_whisper(&self, speaker_guid: u64, request: WhisperRequest) -> Result<ChatOutcome> {
-        crate::stdb::Coordinator::realm_whisper(self, speaker_guid, request)
-    }
-
-    fn speaker_gm_level(&self, speaker_guid: u64) -> Result<u8> {
-        Ok(crate::stdb::Coordinator::home_gm_level(self, speaker_guid))
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ChatActionPlayer {
     pub(crate) account_id: u64,

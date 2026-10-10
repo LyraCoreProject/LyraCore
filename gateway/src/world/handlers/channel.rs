@@ -73,29 +73,6 @@ pub(crate) trait ChannelActionStore: ChatActionStore {
     fn ignores(&self, owner_guid: u64, other_guid: u64) -> Result<bool>;
 }
 
-impl ChannelActionStore for crate::stdb::Coordinator {
-    fn channel_op(
-        &self,
-        actor_guid: u64,
-        op: u8,
-        request: ChannelRequest,
-    ) -> Result<ChannelOutcome> {
-        crate::stdb::Coordinator::channel_op(self, actor_guid, op, request)
-    }
-
-    fn channel_roster(&self, team: u32, channel_name: &str) -> Result<Option<ChannelRoster>> {
-        crate::stdb::Coordinator::channel_roster(self, team, channel_name)
-    }
-
-    fn online_character_by_name(&self, name: &str) -> Result<Option<ResolvedTarget>> {
-        resolve_online_character(self, name)
-    }
-
-    fn ignores(&self, owner_guid: u64, other_guid: u64) -> Result<bool> {
-        whisper::ignored_anywhere(self, owner_guid, other_guid)
-    }
-}
-
 /// The read [`ChannelActionStore::online_character_by_name`] and its Fakes share: every op that
 /// names a Character resolves it realm-wide and requires it online, the same shape whisper's
 /// ONLINE gate uses (`whisper::run`). A channel can only name a Character presently reachable to

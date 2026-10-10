@@ -73,13 +73,14 @@ use handlers::{
     CMSG_AUCTION_LIST_ITEMS_OPCODE,
 };
 pub(crate) use handlers::{
-    member_stats_tick, zone_weather_message, AuctionBrowseRequest, AuctionPage, AuctionQuery,
-    CancelAuctionOutcome, CancelAuctionRequest, ChannelOutcome, ChannelRequest, ChannelRoster,
-    CharacterFacts, ChatOutcome, CreateAuctionOutcome, CreateAuctionRequest, GuildEventSnapshot,
-    GuildOutcome, GuildRequest, ItemActionResult, LootActionStatus, LootWindowRefusal,
-    LootWindowRequestStatus, MeetingStoneOutcome, MemberPresence, MemberStatsRecord,
-    MemberStatsStore, PlaceBidOutcome, PlaceBidRequest, RealmChatRequest, SeekerFacts,
-    SpeakerFacts, TrainerBuyOutcome, WeatherStore, WhisperRequest, WhisperTargetFacts,
+    member_stats_tick, resolve_online_character, zone_weather_message, AuctionBrowseRequest,
+    AuctionHousePolicy, AuctionInteraction, AuctionPage, AuctionQuery, CancelAuctionOutcome,
+    CancelAuctionRequest, ChannelOutcome, ChannelRequest, ChannelRoster, CharacterFacts,
+    ChatOutcome, CreateAuctionOutcome, CreateAuctionRequest, GuildEventSnapshot, GuildOutcome,
+    GuildRequest, ItemActionResult, LootActionStatus, LootWindowRefusal, LootWindowRequestStatus,
+    MeetingStoneOutcome, MemberPresence, MemberStatsRecord, MemberStatsStore, PlaceBidOutcome,
+    PlaceBidRequest, RealmChatRequest, ResolvedTarget, SeekerFacts, SpeakerFacts,
+    TrainerBuyOutcome, WeatherStore, WhisperRequest, WhisperTargetFacts,
 };
 pub(crate) use handlers::{
     AuctionActionStore, BankStore, CastStore, ChannelActionStore, CharacterStore, ChatActionStore,

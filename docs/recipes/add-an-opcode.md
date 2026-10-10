@@ -59,15 +59,15 @@ Required for every new table and every new reducer.
 
 ## 5. Call the reducer from the Coordinator
 
-File: `gateway/src/stdb/reducers.rs`. Add an `impl Coordinator` method that makes the Durable
-Request:
+File: `gateway/src/stdb/store/<family>.rs`, declared in `gateway/src/stdb/store/mod.rs`. Add an
+`impl Coordinator` method that makes the Durable Request as the `Actor` the handler resolved:
 
 ```rust
 let coord = self.0.call_pipe();
 call_reducer!(
     coord.conn.reducers,
     "gw_admit_meeting_stone",
-    gw_admit_meeting_stone_then(self.session_actor(actor_guid), go_guid)
+    gw_admit_meeting_stone_then(self.session_actor(actor), go_guid)
 )
 ```
 
@@ -76,8 +76,8 @@ outcome with `reducer_refusal_reason`, and return every other error unchanged.
 
 ## 6. Add the Durable Reads
 
-File: `gateway/src/stdb/reads/<family>.rs`, declared in `gateway/src/stdb/reads/mod.rs`. Each read
-is an `impl Coordinator` method that finds rows in the Coordinator cache by a unique index. The SDK
+File: `gateway/src/stdb/store/<family>.rs`. A read that a Relay or another family also calls goes
+in `gateway/src/stdb/reads/`. Each read is an `impl Coordinator` method that finds rows in the Coordinator cache by a unique index. The SDK
 cache has no other index, and a whole-table `iter()` holds the lock the pump needs.
 
 ## 7. Write the family dispatcher
@@ -88,7 +88,8 @@ family's dispatcher and skip to step 10.
 
 - A Store trait, `<Family>ActionStore`. Each method's doc says whether it is a Durable Request or a
   Durable Read and on which Shard.
-- `impl <Family>ActionStore for crate::stdb::Coordinator`, each method one call to step 5 or 6.
+- `impl <Family>ActionStore for Coordinator` in `gateway/src/stdb/store/<family>.rs`, each method
+  one call to step 5 or 6.
 - A player struct with the session facts the family needs, and an outcome enum with
   `Handled { outbound }` and `PassThrough(msg)`.
 - `dispatch_<family>_action(store, player, msg)` matches the family's `ClientOpcodeMessage` variants

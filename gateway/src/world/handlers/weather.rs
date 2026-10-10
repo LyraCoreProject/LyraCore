@@ -15,12 +15,6 @@ pub(crate) trait WeatherStore: Send + Sync {
     fn zone_weather(&self, zone_id: u32) -> Result<Option<codec::ZoneWeatherView>>;
 }
 
-impl WeatherStore for crate::stdb::Coordinator {
-    fn zone_weather(&self, zone_id: u32) -> Result<Option<codec::ZoneWeatherView>> {
-        crate::stdb::Coordinator::zone_weather(self, zone_id)
-    }
-}
-
 /// The `SMSG_WEATHER` a client in `zone_id` should be holding right now.
 ///
 /// Total by design: an absent row, an unresolved zone, and a Store that could not answer all mean

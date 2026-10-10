@@ -44,40 +44,6 @@ pub(crate) trait ItemActionStore: Send + Sync {
     fn use_item(&self, account_id: u64, actor_guid: u64, slot: u8) -> Result<ItemActionResult>;
 }
 
-impl ItemActionStore for crate::stdb::Coordinator {
-    fn equip_item(
-        &self,
-        account_id: u64,
-        actor_guid: u64,
-        from_slot: u8,
-    ) -> Result<ItemActionResult> {
-        crate::stdb::Coordinator::equip_item(self, account_id, actor_guid, from_slot)
-    }
-
-    fn unequip_item(
-        &self,
-        account_id: u64,
-        actor_guid: u64,
-        from_slot: u8,
-    ) -> Result<ItemActionResult> {
-        crate::stdb::Coordinator::unequip_item(self, account_id, actor_guid, from_slot)
-    }
-
-    fn move_item(
-        &self,
-        account_id: u64,
-        actor_guid: u64,
-        from_slot: u8,
-        to_slot: u8,
-    ) -> Result<ItemActionResult> {
-        crate::stdb::Coordinator::move_item(self, account_id, actor_guid, from_slot, to_slot)
-    }
-
-    fn use_item(&self, account_id: u64, actor_guid: u64, slot: u8) -> Result<ItemActionResult> {
-        crate::stdb::Coordinator::use_item(self, account_id, actor_guid, slot)
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ItemActionPlayer {
     pub(crate) account_id: u64,

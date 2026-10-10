@@ -3,11 +3,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use lyracore_shared::channel::ChannelName;
-
-use super::super::connection::Coordinator;
 use super::*;
-use crate::world::ChannelRoster;
 
 /// The Gateway-side index over `game_chat_channel` and `game_chat_channel_member`, kept current by
 /// the cache's insert, update and delete callbacks. The SDK cache has only unique-index finds, and a
@@ -48,66 +44,15 @@ impl ChannelIndex {
         }
     }
 
-    fn channel_id(&self, team: u32, name_key: &str) -> Option<u64> {
+    pub(in crate::stdb) fn channel_id(&self, team: u32, name_key: &str) -> Option<u64> {
         self.by_name.get(&(team, name_key.to_string())).copied()
     }
 
-    fn members(&self, channel_id: u64) -> Vec<(u64, u8)> {
+    pub(in crate::stdb) fn members(&self, channel_id: u64) -> Vec<(u64, u8)> {
         self.members
             .get(&channel_id)
             .map(|members| members.values().copied().collect())
             .unwrap_or_default()
-    }
-}
-
-impl Coordinator {
-    /// The channel `channel_name` names for `team` on Realm-core, with its members in join order
-    /// and its owner's name from whichever World Shard holds the Character.
-    pub(crate) fn channel_roster(
-        &self,
-        team: u32,
-        channel_name: &str,
-    ) -> anyhow::Result<Option<ChannelRoster>> {
-        let realm = self.realm_core()?;
-        let key = ChannelName::normalize(channel_name).key;
-        let found = {
-            let guard = realm.0.coord();
-            // The index lock is released before the cache read: the pump takes the cache and
-            // then the index in its callbacks.
-            let indexed = {
-                let index = guard.chat_channels.read().unwrap();
-                index
-                    .channel_id(team, &key)
-                    .map(|channel_id| (channel_id, index.members(channel_id)))
-            };
-            indexed.and_then(|(channel_id, members)| {
-                let channel = guard
-                    .conn
-                    .db
-                    .game_chat_channel()
-                    .channel_id()
-                    .find(&channel_id)?;
-                Some((channel, members))
-            })
-        };
-        // The guard is gone: the owner's name reads other Shards' caches.
-        let Some((channel, members)) = found else {
-            return Ok(None);
-        };
-        let owner_name = if channel.owner_guid == 0 {
-            String::new()
-        } else {
-            crate::world::presence::character_anywhere(self, channel.owner_guid)?
-                .map(|character| character.name)
-                .unwrap_or_default()
-        };
-        Ok(Some(ChannelRoster {
-            name: channel.name,
-            flags: channel.flags,
-            owner_guid: channel.owner_guid,
-            owner_name,
-            members,
-        }))
     }
 }
 
