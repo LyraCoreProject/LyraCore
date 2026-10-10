@@ -51,7 +51,7 @@ pub struct FakeDb {
     group_members: RefCell<HashMap<u64, u64>>,
     /// Parties torn down by `remove_member`'s disband — what the character-owned DELETE sweep
     /// does to a party when one of its members is deleted, and precisely what
-    /// `detach_for_transfer` exists to run AHEAD of (AC).
+    /// `detach_for_transfer` exists to run AHEAD of.
     disbanded: RefCell<HashSet<u64>>,
     /// `game_character_shard`: the forwarding receipt. CHARACTER-OWNED, so the cascade sweeps
     /// it — which is why `apply_finish` must record it AFTER the cascade, never before.
@@ -1277,7 +1277,7 @@ fn a_corrupt_blob_is_refused_rather_than_half_applied() {
 }
 
 /// The export loop's OWN guards, driven directly: the guid it hands each mover, and the
-/// machinery filter. (`export_rows` passing guid `0` to every mover was a survivor.)
+/// machinery filter. A mutant that passes guid `0` to every mover must fail here.
 #[test]
 fn the_export_loop_hands_each_mover_the_transferring_guid() {
     let src = FakeDb::populated(GUID);
@@ -1293,7 +1293,7 @@ fn the_export_loop_hands_each_mover_the_transferring_guid() {
     );
     assert!(
         decoded::<GearRow>(&nobody, "harness_gear").is_empty(),
-        "the reaper must use the Escrow's Character guid; guid 0 owns no rows"
+        "the export loop must hand each mover the transferring guid; guid 0 owns no rows"
     );
     assert!(
         !mine.iter().any(|t| t.table == "game_transfer_out"),
