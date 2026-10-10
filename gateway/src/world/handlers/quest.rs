@@ -187,26 +187,6 @@ pub(crate) fn item_started_quest<St: QuestActionStore + ?Sized>(
     Ok(Some(quest_details_screen(store, item_guid, quest_id)?))
 }
 
-/// The raw quest-log descriptor VALUES update for `player_guid` — the world-entry (login) copy of
-/// the block. The in-session relay renders its own copy in `stdb::subscriptions`'s
-/// `quest_log_sync`, off the same `build_quest_log_slots` read and the same
-/// `full_quest_log_mask` encoding, so the two cannot describe a slot differently. The one
-/// deliberate difference is here: an empty log answers an EMPTY batch, because the client's
-/// descriptor fields start zeroed at world entry; the relay always sends, since an all-zero mask
-/// is how a turned-in quest's slot gets cleared mid-session.
-pub(crate) fn quest_log_update<St: QuestActionStore + ?Sized>(
-    store: &St,
-    player_guid: u64,
-) -> Result<Vec<Outbound>> {
-    let slots = store.player_quest_log(player_guid)?;
-    if slots.is_empty() {
-        return Ok(Vec::new());
-    }
-    let mask = codec::update_mask::full_quest_log_mask(&slots);
-    let (opcode, body) = codec::build_values_update_raw(player_guid, &mask);
-    Ok(vec![Outbound::Raw { opcode, body }])
-}
-
 /// The quest section of a combined gossip menu for `npc` against `self_guid` — the same evaluation
 /// and the same menu-item derivation `quest_giver_menu` uses, so a gossip-flagged questgiver can
 /// never show different quest icons than `CMSG_QUESTGIVER_HELLO` would.
@@ -446,7 +426,6 @@ mod tests {
         accept_requests: Mutex<Vec<(u64, u64, u32)>>,
         start_quest_requests: Mutex<Vec<(u64, u8)>>,
         turn_in_calls: Mutex<Vec<TurnInCall>>,
-        quest_log_requests: Mutex<Vec<u64>>,
         abandon_requests: Mutex<Vec<(u64, u32)>>,
         push_requests: Mutex<Vec<(u64, u32)>>,
         status_requests: Mutex<Vec<(u64, u32)>>,
@@ -547,9 +526,8 @@ mod tests {
 
         fn player_quest_log(
             &self,
-            player_guid: u64,
+            _player_guid: u64,
         ) -> Result<Vec<codec::update_mask::QuestLogSlot>> {
-            self.quest_log_requests.lock().unwrap().push(player_guid);
             Ok(self.quest_log.clone())
         }
 
@@ -1118,49 +1096,6 @@ mod tests {
         };
 
         assert!(matches!(classify(&error), DurableFailure::TransportLoss));
-    }
-
-    #[test]
-    fn quest_log_update_answers_nothing_for_an_empty_log() {
-        let actions = InMemoryQuestActions::default();
-
-        assert!(quest_log_update(&actions, SELF_GUID).unwrap().is_empty());
-    }
-
-    #[test]
-    fn quest_log_update_answers_the_current_raw_descriptor_for_a_non_empty_log() {
-        let slots = vec![log_slot(0, QUEST), log_slot(3, QUEST + 1)];
-        let actions = InMemoryQuestActions {
-            quest_log: slots.clone(),
-            ..Default::default()
-        };
-        let mask = codec::update_mask::full_quest_log_mask(&slots);
-        let want = codec::build_values_update_raw(SELF_GUID, &mask);
-
-        let batch = quest_log_update(&actions, SELF_GUID).unwrap();
-
-        assert!(matches!(
-            batch.as_slice(),
-            [Outbound::Raw { opcode, body }] if (*opcode, body.clone()) == want
-        ));
-    }
-
-    #[test]
-    fn abandon_resolution_and_the_world_entry_block_read_the_same_slot_ordering() {
-        // Both paths ask `player_quest_log` for the same player guid — the one read that decides
-        // what a slot means, so the click and the window cannot disagree.
-        let actions = InMemoryQuestActions {
-            quest_log: vec![log_slot(3, 777)],
-            ..Default::default()
-        };
-
-        let _ = dispatch_quest_action(&actions, player(), abandon(3)).unwrap();
-        let _ = quest_log_update(&actions, SELF_GUID).unwrap();
-
-        assert_eq!(
-            actions.quest_log_requests.lock().unwrap().as_slice(),
-            &[SELF_GUID, SELF_GUID]
-        );
     }
 
     // ── Player context and error classification ──────────────────────────────

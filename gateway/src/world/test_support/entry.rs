@@ -221,7 +221,7 @@ pub(crate) fn quest_store() -> WorldFake {
 }
 
 /// Spin up a world session over a socket pair, handshake as TESTER, enter the world as `guid`, and
-/// drain the world entry batch, then the quest-log update when the player has quests. Draining one
+/// drain the world entry batch. Draining one
 /// message too few manifests as the CLIENT closing with unread bytes still queued — which the kernel
 /// reports back to the SERVER thread's next read as ECONNRESET, not a clean EOF.
 /// Returns the client socket + encrypted halves + the server join handle for the test to drive.
@@ -235,9 +235,6 @@ pub(crate) fn enter_world(
     std::thread::JoinHandle<()>,
 ) {
     let (mut client, server_end) = world_session_socket_pair();
-    // The login sequence ends with the quest-log VALUES packet IFF the player has quests (mirrors
-    // `send_quest_log`'s skip-when-empty). Checked before `store` is moved into the server thread.
-    let has_quest_log = !store.quest.quest_log_slots.is_empty();
     let server_store = store;
     let server = std::thread::spawn(move || {
         run_world_session(server_end, server_store.clone()).unwrap();
@@ -249,11 +246,5 @@ pub(crate) fn enter_world(
     .write_encrypted_client(&mut client, &mut c_enc)
     .unwrap();
     drain_world_entry(&mut client, &mut c_dec);
-    if has_quest_log {
-        // The quest-log packet is a PARTIAL VALUES update with OBJECT_FIELD_TYPE stripped (so the real
-        // 5875 client doesn't crash — see the health-VALUES note). gtker's DECODER rejects that ("Missing
-        // object TYPE"), but the frame bytes are consumed, so drain it tolerantly rather than unwrap.
-        let _ = ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec);
-    }
     (client, c_enc, c_dec, server)
 }

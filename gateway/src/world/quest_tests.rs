@@ -87,38 +87,248 @@ fn quest_choose_reward_relays_inventory_before_completion_over_the_cipher() {
 }
 
 #[test]
-fn login_sends_the_quest_log_descriptor_raw_update_after_the_create_packet() {
-    let slots = vec![codec::update_mask::QuestLogSlot {
-        slot: 3,
+fn login_creates_the_character_with_existing_quest_progress() {
+    assert_quest_entry(false, false);
+}
+
+#[test]
+fn same_shard_worldport_creates_the_character_with_existing_quest_progress() {
+    assert_quest_entry(true, false);
+}
+
+#[test]
+fn cross_shard_worldport_reads_existing_quests_from_the_destination() {
+    assert_quest_entry(true, true);
+}
+
+#[test]
+fn login_ends_before_create_when_the_quest_log_read_fails() {
+    let mut store = quest_store();
+    store.quest.quest_log_read_error = Some("quest log unavailable".into());
+    let (mut client, server_end) = world_session_socket_pair();
+    let server =
+        std::thread::spawn(move || run_world_session(server_end, std::sync::Arc::new(store)));
+    let (mut enc, mut dec) = client_handshake(&mut client, "TESTER", K);
+    CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
+        .write_encrypted_client(&mut client, &mut enc)
+        .unwrap();
+    assert!(ServerOpcodeMessage::read_encrypted(&mut client, &mut dec).is_err());
+    drop(client);
+    let error = server.join().unwrap().unwrap_err();
+    assert!(format!("{error:#}").contains("quest log unavailable"));
+}
+
+#[test]
+fn quest_progress_during_entry_reaches_the_character_after_create() {
+    assert_quest_reconciliation(Some(4));
+}
+
+#[test]
+fn a_quest_removed_during_entry_is_cleared_after_create() {
+    assert_quest_reconciliation(None);
+}
+
+fn assert_quest_reconciliation(count: Option<u32>) {
+    let slot = codec::update_mask::QuestLogSlot {
+        slot: 0,
         quest_id: 777,
-        counts: Vec::new(),
+        counts: vec![3],
         state: 0,
         timer: 0,
-    }];
-    let mut s = quest_store();
-    s.quest.quest_log_slots = slots.clone();
-    let store = std::sync::Arc::new(s);
+    };
+    let mut store = quest_store();
+    store.quest.quest_log_slots = vec![slot.clone()];
+    store.quest.quest_log_after_subscribe = Some(Ok(count
+        .map(|count| codec::update_mask::QuestLogSlot {
+            counts: vec![count],
+            ..slot
+        })
+        .into_iter()
+        .collect()));
+    let (mut client, mut enc, mut dec, server) = enter_world(std::sync::Arc::new(store), 1);
+    let (opcode, body) = read_raw_frame(&mut client, &mut dec);
+    assert_eq!(opcode, 0x00A9);
+    let updates = lyracore_shared::values_mask::parse_values_updates(&body);
+    let fields = &updates[0].fields;
+    assert!(fields.contains(&(198, if count.is_some() { 777 } else { 0 })));
+    assert!(fields.contains(&(199, count.unwrap_or(0))));
+    assert!(
+        !fields.iter().any(|(index, _)| *index == 2),
+        "reconciliation must omit OBJECT_FIELD_TYPE"
+    );
+    wow_world_messages::vanilla::CMSG_PING {
+        sequence_id: 647,
+        round_time_in_ms: 0,
+    }
+    .write_encrypted_client(&mut client, &mut enc)
+    .unwrap();
+    assert!(matches!(
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut dec).unwrap(),
+        ServerOpcodeMessage::SMSG_PONG(_)
+    ));
+    drop(client);
+    server.join().unwrap();
+}
 
+#[test]
+fn a_failed_quest_reconciliation_closes_the_world_session() {
+    let mut store = quest_store();
+    store.quest.quest_log_after_subscribe = Some(Err("quest log unavailable".into()));
+    let (mut client, _, _, server) = enter_world(std::sync::Arc::new(store), 1);
+    let mut byte = [0];
+    assert_eq!(
+        client.read(&mut byte).unwrap(),
+        0,
+        "the writer must close the socket"
+    );
+    drop(client);
+    server.join().unwrap();
+}
+
+#[test]
+fn disabled_quest_descriptors_skip_the_durable_read() {
+    const CHILD_ENV: &str = "LYRACORE_TEST_QUEST_DESCRIPTORS_DISABLED";
+    if std::env::var_os(CHILD_ENV).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "world::tests::quest_tests::disabled_quest_descriptors_skip_the_durable_read",
+            ])
+            .env(CHILD_ENV, "1")
+            .env("LYRACORE_QUEST_LOG", "0")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        return;
+    }
+    let mut store = quest_store();
+    store.quest.quest_log_read_error = Some("quest reads must be disabled".into());
+    let (client, _, _, server) = enter_world(std::sync::Arc::new(store), 1);
+    drop(client);
+    server.join().unwrap();
+}
+
+fn assert_quest_entry(worldport: bool, cross_shard: bool) {
+    let slots = vec![
+        codec::update_mask::QuestLogSlot {
+            slot: 3,
+            quest_id: 777,
+            counts: vec![3, 2, 1, 4],
+            state: 1,
+            timer: 123456,
+        },
+        codec::update_mask::QuestLogSlot {
+            slot: 19,
+            quest_id: 888,
+            counts: vec![7],
+            state: 2,
+            timer: 0,
+        },
+    ];
+    let mut s = quest_store();
+    s.session.entity_in_world = false;
+    let mut ported = warrior_entity();
+    ported.map_id = 1;
+    s.session.worldport_entity = Some(ported.clone());
+    if cross_shard {
+        let mut destination = quest_store();
+        destination.session.worldport_entity = Some(ported);
+        destination.quest.quest_log_slots = slots.clone();
+        s.topology.home_after_flip = Some(std::sync::Arc::new(destination));
+    } else {
+        s.quest.quest_log_slots = slots.clone();
+    }
+    let store = std::sync::Arc::new(s);
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.clone()).unwrap();
+        run_world_session(server_end, server_store).unwrap();
     });
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-
-    // World entry — discarded, this test is about what comes right after.
-    drain_world_entry(&mut client, &mut c_dec);
-    // gtker's typed reader rejects this raw partial VALUES body (no OBJECT_FIELD_TYPE), so read it
-    // RAW and compare it against the same builder the seam's `quest_log_update` calls.
-    let (opcode, body) = read_raw_frame(&mut client, &mut c_dec);
-    let mask = codec::update_mask::full_quest_log_mask(&slots);
-    assert_eq!((opcode, body), codec::build_values_update_raw(1, &mask));
-
+    let mut frames = drain_world_entry(&mut client, &mut c_dec);
+    if worldport {
+        // Drain all login traffic before the map acknowledgement.
+        wow_world_messages::vanilla::CMSG_PING {
+            sequence_id: 647,
+            round_time_in_ms: 0,
+        }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+        while read_raw_frame(&mut client, &mut c_dec).0 != 0x01DD {}
+        MSG_MOVE_WORLDPORT_ACK {}
+            .write_encrypted_client(&mut client, &mut c_enc)
+            .unwrap();
+        frames = drain_world_entry(&mut client, &mut c_dec);
+    }
+    assert_create_quest_progress(&frames);
+    wow_world_messages::vanilla::CMSG_PING {
+        sequence_id: 647,
+        round_time_in_ms: 0,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    assert!(
+        matches!(
+            ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap(),
+            ServerOpcodeMessage::SMSG_PONG(_)
+        ),
+        "world entry must not replay quest VALUES after CREATE"
+    );
     drop(client);
     server.join().unwrap();
+}
+
+fn assert_create_quest_progress(frames: &[ServerOpcodeMessage]) {
+    let mask = frames
+        .iter()
+        .find_map(|message| {
+            let ServerOpcodeMessage::SMSG_UPDATE_OBJECT(update) = message else {
+                return None;
+            };
+            update.objects.iter().find_map(|object| match object {
+                Object::CreateObject2 { guid3, mask2, .. } if guid3.guid() == 1 => {
+                    Some(mask2.clone())
+                }
+                _ => None,
+            })
+        })
+        .expect("world entry must create the Character");
+    // Reframe the received CREATE descriptor as VALUES for the independent field decoder.
+    let values = wow_world_messages::vanilla::SMSG_UPDATE_OBJECT {
+        has_transport: 0,
+        objects: vec![Object::Values {
+            guid1: Guid::new(1),
+            mask1: mask,
+        }],
+    };
+    let mut bytes = Vec::new();
+    values.write_unencrypted_server(&mut bytes).unwrap();
+    let updates = lyracore_shared::values_mask::parse_values_updates(&bytes[4..]);
+    let fields = &updates[0].fields;
+    let field = |index| {
+        fields
+            .iter()
+            .find(|(i, _)| *i == index)
+            .map(|(_, value)| *value)
+            .unwrap_or(0)
+    };
+    assert_eq!(field(207), 777, "CREATE must contain the existing quest");
+    assert_eq!(
+        field(208),
+        0x01101083,
+        "CREATE must preserve counters and state"
+    );
+    assert_eq!(field(209), 123456, "CREATE must preserve the timer");
+    assert_eq!(field(255), 888, "the last quest slot must survive");
+    assert_eq!(field(256), 0x02000007);
+    assert_eq!(field(198), 0, "empty slots stay empty");
 }
 
 #[test]
