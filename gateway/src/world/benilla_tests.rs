@@ -1113,10 +1113,6 @@ fn benilla_missing_gameplay_returns_a_specific_refusal_without_disconnect() {
             opcode::CMSG_SET_FACTION_INACTIVE,
             messages::set_faction_inactive(2, true),
         ),
-        (
-            opcode::CMSG_SET_WATCHED_FACTION,
-            messages::set_watched_faction(-1),
-        ),
         (opcode::CMSG_FAR_SIGHT, vec![1]),
         (opcode::CMSG_SUMMON_RESPONSE, messages::summon_response(99)),
         (
@@ -1367,4 +1363,80 @@ fn benilla_compatibility_requests_refuse_truncation_and_trailing_bytes() {
             assert!(gateway.join().unwrap().is_err());
         }
     }
+}
+
+#[test]
+fn benilla_watched_faction_selects_and_clears_only_the_private_field() {
+    let store = gameplay_store(GameplayState::default());
+    let (mut client, gateway) = client_in_world(store.clone());
+    assert_eq!(client.objects[&1].get(&1261), Some(&u32::MAX));
+    for index in [0i32, 19, 63, -1] {
+        client.send(
+            opcode::CMSG_SET_WATCHED_FACTION,
+            &messages::set_watched_faction(index),
+        );
+        let ServerPacket::UpdateObject { objects } = client.recv() else {
+            panic!("expected watched faction update");
+        };
+        let [Object::Values { guid, mask }] = objects.as_slice() else {
+            panic!("expected one VALUES block");
+        };
+        assert_eq!(*guid, 1);
+        assert_eq!(
+            mask.raw_fields().collect::<Vec<_>>(),
+            vec![(1261, index as u32)]
+        );
+        assert_eq!(
+            store.trainer.watched_factions.lock().unwrap().get(&1),
+            Some(&index)
+        );
+    }
+    client.logout();
+    drop(client);
+    gateway.join().unwrap().unwrap();
+}
+
+#[test]
+fn benilla_watched_faction_refusal_preserves_the_selection() {
+    let store = gameplay_store(GameplayState::default());
+    let (mut client, gateway) = client_in_world(store.clone());
+    client.send(
+        opcode::CMSG_SET_WATCHED_FACTION,
+        &messages::set_watched_faction(19),
+    );
+    assert!(matches!(client.recv(), ServerPacket::UpdateObject { .. }));
+    for index in [-2, 64, i32::MAX, i32::MIN] {
+        client.send(
+            opcode::CMSG_SET_WATCHED_FACTION,
+            &messages::set_watched_faction(index),
+        );
+        assert!(matches!(client.recv(), ServerPacket::MessageChat(_)));
+        assert_eq!(client.objects[&1].get(&1261), Some(&19));
+        assert_eq!(
+            store.trainer.watched_factions.lock().unwrap().get(&1),
+            Some(&19)
+        );
+    }
+    client.query_clock();
+    client.logout();
+    drop(client);
+    gateway.join().unwrap().unwrap();
+}
+
+#[test]
+fn benilla_watched_faction_transport_loss_ends_the_world_session_without_an_update() {
+    let mut store = gameplay_store(GameplayState::default());
+    Arc::get_mut(&mut store)
+        .unwrap()
+        .trainer
+        .watched_faction_transport_lost = true;
+    let (mut client, gateway) = client_in_world(store.clone());
+    client.send(
+        opcode::CMSG_SET_WATCHED_FACTION,
+        &messages::set_watched_faction(19),
+    );
+    assert_eq!(client.socket.read(&mut [0; 1]).unwrap(), 0);
+    assert!(store.trainer.watched_factions.lock().unwrap().is_empty());
+    drop(client);
+    assert!(gateway.join().unwrap().is_err());
 }

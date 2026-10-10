@@ -3,6 +3,9 @@
 
 use spacetimedb::{table, Identity};
 
+// A named constant avoids the table macro's unary-expression precedence in default serialization.
+const NO_WATCHED_FACTION: i32 = -1;
+
 /// Durable character; exists whether or not online. [entity]
 #[table(accessor = game_character, public, index(accessor = by_account, btree(columns = [account_id])))]
 pub struct Character {
@@ -153,4 +156,7 @@ pub struct Character {
     /// Gateway-subscribed (`game_character`) → hand-synced in `character_type.rs` + `schema_parity.rs`.
     #[default(0)]
     pub bank_bag_slots: u8,
+    /// The watched reputation slot, or -1 when the Character has no selection.
+    #[default(NO_WATCHED_FACTION)]
+    pub watched_faction_index: i32,
 }

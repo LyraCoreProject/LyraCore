@@ -477,8 +477,8 @@ pub struct ExportBlob {
     pub dest_z: f32,
     pub dest_o: f32,
     /// bsatn of the whole `Character` row. Opaque here on purpose: `import_character_blob` decodes
-    /// it with the DESTINATION's own `Character` type, so a shard on a different build fails loudly
-    /// at decode instead of silently dropping the columns it does not know.
+    /// it with the destination's `Character` type. Legacy rows that predate the watched slot
+    /// receive -1; unknown trailing columns refuse the import.
     pub character_row: Vec<u8>,
     /// One entry per manifest table, in `CHARACTER_OWNED_TRANSFERS` order.
     pub payload: Vec<TableRows>,
@@ -550,6 +550,40 @@ impl crate::character::Character {
 pub(crate) fn decode_blob(transfer_id: u64, bytes: &[u8]) -> Result<ExportBlob, String> {
     spacetimedb::sats::bsatn::from_slice(bytes)
         .map_err(|e| format!("transfer {transfer_id}: corrupt export blob: {e}"))
+}
+
+/// Old Escrow predates the watched slot. Only a missing final i32 receives its default;
+/// partial fields, malformed rows and unknown trailing columns refuse the import.
+pub(crate) fn decode_character_row(
+    transfer_id: u64,
+    bytes: &[u8],
+) -> Result<crate::character::Character, String> {
+    use spacetimedb::sats::bsatn::{from_reader, DecodeError};
+
+    let refusal = |reason| {
+        format!("transfer {transfer_id}: cannot decode the arriving character row: {reason}")
+    };
+    let mut remaining = bytes;
+    match from_reader::<crate::character::Character>(&mut remaining) {
+        Ok(character) if remaining.is_empty() => Ok(character),
+        Ok(_) => Err(refusal("trailing bytes".to_string())),
+        Err(DecodeError::BufferLength {
+            for_type: "i32",
+            expected: 4,
+            given: 0,
+        }) if remaining.is_empty() => {
+            let mut upgraded = bytes.to_vec();
+            upgraded.extend_from_slice(&(-1i32).to_le_bytes());
+            let mut remaining = upgraded.as_slice();
+            let character = from_reader::<crate::character::Character>(&mut remaining)
+                .map_err(|e| refusal(e.to_string()))?;
+            if !remaining.is_empty() {
+                return Err(refusal("trailing bytes".to_string()));
+            }
+            Ok(character)
+        }
+        Err(e) => Err(refusal(e.to_string())),
+    }
 }
 
 /// Manifest tables that a blob from an older build may lack. Each one joined the manifest after

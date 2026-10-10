@@ -737,7 +737,7 @@ parity_test!(parity_game_character, "game_character", lyracore_module::Character
     first_login, online, money, rested_xp, last_logout_micros, home_map, home_zone, home_x,
     home_y, home_z, played_total_secs, session_start_micros, health, power, respec_count,
     death_expire_micros, pending_instance_id, gm_level, pending_ghost, resting, rested_since_micros,
-    pending_godmode, pending_run_speed_mult_bp, bank_bag_slots,
+    pending_godmode, pending_run_speed_mult_bp, bank_bag_slots, watched_faction_index,
 });
 parity_test!(parity_game_world_entity, "game_world_entity", lyracore_module::WorldEntity, bindings::world_entity_type::WorldEntity, {
     guid, owner_identity, account_id, map_id, x, y, z, orientation, grid_x, grid_y,

@@ -50,20 +50,6 @@ impl SessionStore for Coordinator {
         // briefly until it appears (home_* ride along from the game_character row, and its
         // zone_id is the fallback for a live row the Module could not resolve a zone for).
         let character_guid = character.guid();
-        let char_row = self
-            .0
-            .coord()
-            .conn
-            .db
-            .game_character()
-            .guid()
-            .find(&character_guid);
-        let zone_id = char_row.as_ref().map(|c| c.zone_id).unwrap_or(0);
-        let home_map = char_row.as_ref().map(|c| c.home_map).unwrap_or(0);
-        let home_zone = char_row.as_ref().map(|c| c.home_zone).unwrap_or(0);
-        let home_x = char_row.as_ref().map(|c| c.home_x).unwrap_or(0.0);
-        let home_y = char_row.as_ref().map(|c| c.home_y).unwrap_or(0.0);
-        let home_z = char_row.as_ref().map(|c| c.home_z).unwrap_or(0.0);
         // 15 s cap, 15 ms steps. Was 3 s — the cold-1000 measurement showed the reducer
         // COMMITTING while the coordinator stream lagged the login-burst tail past 3 s (writer at
         // 34.5%, so pure propagation, not CPU): 67/1000 logins died here with the entity already
@@ -78,18 +64,31 @@ impl SessionStore for Coordinator {
                 .guid()
                 .find(&character_guid)
             {
-                let mut view = entity_view(e, zone_id);
-                view.home_map = home_map;
-                view.home_zone = home_zone;
-                view.home_x = home_x;
-                view.home_y = home_y;
-                view.home_z = home_z;
+                let Some(character) = self
+                    .0
+                    .coord()
+                    .conn
+                    .db
+                    .game_character()
+                    .guid()
+                    .find(&character_guid)
+                else {
+                    std::thread::sleep(Duration::from_millis(15));
+                    continue;
+                };
+                let mut view = entity_view(e, character.zone_id);
+                view.home_map = character.home_map;
+                view.home_zone = character.home_zone;
+                view.home_x = character.home_x;
+                view.home_y = character.home_y;
+                view.home_z = character.home_z;
+                view.watched_faction_index = Some(character.watched_faction_index);
                 return Ok(view);
             }
             std::thread::sleep(Duration::from_millis(15));
         }
         Err(anyhow!(
-            "player_login committed but game_world_entity {character_guid} not visible in the \
+            "player_login committed but Character or game_world_entity {character_guid} not visible in the \
              coordinator cache within 15s"
         ))
     }

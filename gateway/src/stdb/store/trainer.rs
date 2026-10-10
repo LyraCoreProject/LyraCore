@@ -374,6 +374,32 @@ impl TrainerStore for Coordinator {
             gw_set_faction_at_war_then(self.session_actor(actor), reputation_index, at_war)
         ))
     }
+
+    fn set_watched_faction(
+        &self,
+        actor: Actor,
+        reputation_index: i32,
+    ) -> Result<InteractionOutcome> {
+        let coord = self.0.call_pipe();
+        let outcome = interaction_outcome(call_reducer!(
+            coord.conn.reducers,
+            "gw_set_watched_faction",
+            gw_set_watched_faction_then(self.session_actor(actor), reputation_index)
+        ))?;
+        if matches!(outcome, InteractionOutcome::Done) {
+            super::wait_for_cache_row(actor.guid(), "watched faction", || {
+                self.0
+                    .coord()
+                    .conn
+                    .db
+                    .game_character()
+                    .guid()
+                    .find(&actor.guid())
+                    .filter(|character| character.watched_faction_index == reputation_index)
+            })?;
+        }
+        Ok(outcome)
+    }
 }
 
 /// Mirror of the module's `talent::pick_rank_spell`: rank N's spell from the per-rank columns

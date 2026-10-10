@@ -203,10 +203,6 @@ pub(crate) fn raw_unavailable_outbound(opcode: u32, body: &[u8]) -> Result<Optio
             );
             Ok(Some(vec![unavailable("Reputation display preferences")]))
         }
-        0x0318 => {
-            anyhow::ensure!(body.len() == 4, "invalid CMSG_SET_WATCHED_FACTION body");
-            Ok(Some(vec![unavailable("Reputation display preferences")]))
-        }
         0x005a => {
             anyhow::ensure!(body.len() == 12, "invalid CMSG_PAGE_TEXT_QUERY body");
             Ok(Some(vec![page_unavailable(u32::from_le_bytes(

@@ -107,6 +107,14 @@ impl CharacterStore for TrainerFake {
 }
 
 impl TrainerStore for TrainerFake {
+    fn set_watched_faction(
+        &self,
+        _actor: Actor,
+        _reputation_index: i32,
+    ) -> Result<InteractionOutcome> {
+        unimplemented!("set_watched_faction")
+    }
+
     fn trainer_serves(&self, _player_guid: u64, _trainer_guid: u64) -> Result<bool> {
         Ok(!self.refuses_class)
     }

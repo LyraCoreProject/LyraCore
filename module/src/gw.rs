@@ -1462,6 +1462,19 @@ pub fn gw_set_faction_at_war(
     crate::reputation::apply_set_faction_at_war(ctx, player, reputation_index, at_war)
 }
 
+/// Save the Actor's watched reputation slot, or clear it with -1.
+#[reducer]
+pub fn gw_set_watched_faction(
+    ctx: &ReducerContext,
+    request_actor: crate::SessionActor,
+    reputation_index: i32,
+) -> Result<(), String> {
+    require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
+    acting_entity_by_guid(ctx, actor_guid).ok_or_else(|| "mover not in world".to_string())?;
+    crate::reputation::apply_set_watched_faction(ctx, actor_guid, reputation_index)
+}
+
 /// [`crate::quest::apply_abandon_quest`] with the abandoner named by guid.
 #[reducer]
 pub fn gw_abandon_quest(

@@ -5744,6 +5744,7 @@ mod account_claim_relay_tests {
             pending_godmode: false,
             pending_run_speed_mult_bp: 0,
             bank_bag_slots: 0,
+            watched_faction_index: -1,
         }
     }
 

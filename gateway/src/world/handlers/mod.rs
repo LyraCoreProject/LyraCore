@@ -105,7 +105,9 @@ pub(crate) use taxi::{
     TaxiActionStore,
 };
 pub(crate) use trade::{handle_trade, TradeStore};
-pub(crate) use trainer::{handle_at_war, handle_trainer, TrainerBuyOutcome, TrainerStore};
+pub(crate) use trainer::{
+    handle_at_war, handle_trainer, handle_watched_faction, TrainerBuyOutcome, TrainerStore,
+};
 #[cfg(test)]
 pub(crate) use vendor::tests::InMemoryVendorActions;
 pub(crate) use vendor::{

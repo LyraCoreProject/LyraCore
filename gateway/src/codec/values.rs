@@ -32,6 +32,13 @@ fn player_values(guid: u64, apply: impl FnOnce(&mut UpdatePlayer)) -> SMSG_UPDAT
     }
 }
 
+/// Update the Character's private watched reputation selection. -1 clears the bar.
+pub fn build_watched_faction_values(guid: u64, reputation_index: i32) -> SMSG_UPDATE_OBJECT {
+    player_values(guid, |player| {
+        player.set_player_field_watched_faction_index(reputation_index);
+    })
+}
+
 /// Build a VALUES partial-update (`Object::Values`) carrying only `UNIT_FIELD_HEALTH` (Tier 3
 /// combat). Unlike `build_create_object`, this pushes a *single changed field* to observers via a
 /// sparse update mask — no re-create, no flicker. The foundation for combat damage (and any future
