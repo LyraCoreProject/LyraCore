@@ -4,12 +4,12 @@ use super::super::*;
 
 /// Release Spirit, corpse reclaim and resurrection.
 pub(crate) trait DeathStore: Send + Sync {
-    /// Revive the caller after death (`CMSG_REPOP_REQUEST` / Release Spirit, slice 4): the module
+    /// Revive the caller after death (`CMSG_REPOP_REQUEST` / Release Spirit): the module
     /// restores full health in place and clears the dead state (the client leaves the death screen
     /// once the restored health replicates).
     fn repop(&self, account_id: u64, self_guid: u64) -> Result<()>;
 
-    /// Reclaim the caller's corpse (`CMSG_RECLAIM_CORPSE`, slice 5): the module validates the caller
+    /// Reclaim the caller's corpse (`CMSG_RECLAIM_CORPSE`): the module validates the caller
     /// is a ghost owning the corpse, in range, past the reclaim delay, then resurrects at 50%.
     fn reclaim_corpse(&self, account_id: u64, self_guid: u64, corpse_guid: u64) -> Result<()>;
 
@@ -28,6 +28,6 @@ pub(crate) trait DeathStore: Send + Sync {
     /// activated healer's guid (passed through to the confirm echo). The module gates on ghost state.
     fn spirit_healer_res(&self, account_id: u64, self_guid: u64, healer_guid: u64) -> Result<()>;
 
-    /// Find `owner_guid`'s corpse location `(map_id, x, y, z)` for `MSG_CORPSE_QUERY` (slice 5).
+    /// Find `owner_guid`'s corpse location `(map_id, x, y, z)` for `MSG_CORPSE_QUERY`.
     fn corpse_location(&self, owner_guid: u64) -> Result<Option<(u32, f32, f32, f32)>>;
 }

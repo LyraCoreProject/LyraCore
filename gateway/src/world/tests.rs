@@ -4055,7 +4055,7 @@ impl DeathStore for InMemoryStore {
 }
 
 impl TradeStore for InMemoryStore {
-    // Trade : pure recorders, the module owns every gate, so the fake just proves which
+    // Trade: pure recorders, the module owns every gate, so the fake just proves which
     // verb the dispatch chose and which args survived the wire.
     fn initiate_trade(&self, _account_id: u64, self_guid: u64, target_guid: u64) -> Result<()> {
         self.rec("initiate_trade");

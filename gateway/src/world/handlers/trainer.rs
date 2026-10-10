@@ -51,7 +51,7 @@ pub(crate) trait TrainerStore: Send + Sync {
         action_type: u8,
     ) -> Result<()>;
 
-    /// Persist the rep pane's At-War checkbox (`CMSG_SET_FACTION_ATWAR`, 195 slice B).
+    /// Persist the rep pane's At-War checkbox (`CMSG_SET_FACTION_ATWAR`).
     /// `reputation_index` is the client's 0..63 rep-array slot, NOT a faction id.
     fn set_faction_at_war(
         &self,
