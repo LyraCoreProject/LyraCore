@@ -239,7 +239,7 @@ opcode rows; decoder presence alone does not require a realm to emit each one.
 
 ## Verification record
 
-The workspace run passed 4,398 tests with `lyracore-package-delta` excluded,
+The workspace run passed 4,376 tests with `lyracore-package-delta` excluded,
 using the Module's `debug_reducers` feature. All eight durable Benilla scenarios
 passed against disposable SpacetimeDB instances. Formatting, workspace Clippy with
 all targets and features, and the check of all 1,182 Gateway binding files passed.
