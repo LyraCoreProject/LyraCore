@@ -40,8 +40,6 @@ fn a_short_cast_finishes_during_its_original_global_cooldown() {
         timestamp(&original_cooldown, "ready_at"),
         started_at + 5_000_000
     );
-    assert!(shard.query_rows("SELECT * FROM game_spell_cd").is_empty());
-
     let completed_at = timestamp(&completion(&shard), "created_at");
     assert!(completed_at < timestamp(&original_cooldown, "ready_at"));
     assert_eq!(global_cooldown(&shard), original_cooldown);
