@@ -1,29 +1,5 @@
-//! Regions: the cell→region→shard hierarchy as DATA (spec).
-//!
-//! Two tables, one job each, and **no game logic in this file reads either of them**:
-//!
-//! - [`MapRegion`] — the baked region definitions (`region_of(map_id, cell)`), content data loaded
-//!   by [`import_map_regions`] from the seam-menu format in `docs/region-sharding.md`. Imported
-//!   alongside the world ETL that bakes `grid_x`/`grid_y`, because it is the same kind of thing: a
-//!   pre-computed spatial fact, not something gameplay derives at runtime.
-//! - [`RegionAssignment`] — `{ map_id, region_id, shard, epoch }`, the epoch-versioned ops table
-//!   that says which DATABASE owns a region. It is authoritative **on realm-core** (the same wasm
-//!   published under another database name — see `realm_core.rs` for why that is the whole
-//!   mechanism), and the gateway subscribes to it.
-//!
-//! # Why the module never reads a shard id
-//!
-//! `shard` is a database name: a GATEWAY routing fact. The moment a reducer branches on it, the
-//! module stops being relocatable and the world stops being shardable — so `tripwires.rs`'s
-//! `partition_discipline_tripwire` fails the build if the accessor or the `.shard` field is touched
-//! anywhere but this file. The reducer below writes it; nothing reads it.
-//!
-//! # What this ticket deliberately does NOT do
-//!
-//! Nothing here migrates anything. With every region of a map assigned to one shard — or with no
-//! assignment rows at all, the default — routing is a strict no-op and the seams are dormant.
-//! View-merge, warm handoff, relayed intents and live migration are later tickets, gated on the
-//! Benchmark showing a tuned writer actually saturating.
+//! Region definitions and epoch-versioned assignments.
+//! The Module writes routing data for the Gateway and never branches on a Shard name.
 
 use lyracore_shared::region::RegionMap;
 use spacetimedb::{reducer, table, ReducerContext, Table};
@@ -57,11 +33,6 @@ pub struct MapRegion {
 /// `region_assignment { map_id, region_id, shard, epoch }` — which database owns a region, and at
 /// which epoch. Authoritative on realm-core; inert everywhere else (nothing writes it there).
 ///
-/// **Epoch semantics.** `epoch` is a monotonic version stamp per `(map_id, region_id)`: a flip must
-/// carry a STRICTLY higher epoch than the row it replaces, so a retried or reordered operator call
-/// can never resurrect a superseded assignment. A flip re-routes **new entrants only** — the gateway
-/// resolves a region→shard exactly once per world entry — and this ticket moves no resident.
-///
 /// PRIVATE: this table names the realm's databases. Never hand a client the topology.
 #[table(accessor = game_region_assignment)]
 pub struct RegionAssignment {
@@ -79,7 +50,7 @@ pub struct RegionAssignment {
     pub updated_micros: i64,
 }
 
-/// Replace the realm's whole seam menu with `packed` (the `docs/region-sharding.md` format).
+/// Replace the realm's whole seam menu with `packed` (the `RegionMap::parse` format).
 /// Operator-only, like every other importer.
 ///
 /// Rejects the WHOLE payload if any line is malformed or breaks the geometry rules (overlap, the

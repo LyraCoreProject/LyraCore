@@ -128,7 +128,7 @@ pub struct CreatureSpline {
     /// column of that index is matched by an equality term, and it skips any index with more than 3
     /// columns outright (`MAX_EXACT_INDEX_COLS`); range predicates are never index-served at all
     /// (`IndexProbe::Range` — "we currently never construct this variant") and an `OR` is evaluated
-    /// row-by-row. So a `grid_x BETWEEN .. AND grid_y BETWEEN ..` box degrades to a full partition
+    /// row-by-row. So a `grid_x BETWEEN.. AND grid_y BETWEEN..` box degrades to a full partition
     /// scan — 1.1 BILLION rows examined on `game_gameobject` in a 445-player measurement. Folding the
     /// two grid columns into one makes `by_cell` a 3-column all-equality index, which the planner CAN
     /// serve, and the AOI box becomes 25 point probes instead of a scan.
@@ -164,13 +164,13 @@ pub struct CreatureSpline {
 //  Patrol scheduling [server]
 // ===========================================================================================
 
-/// Drives the creature tick — one row per FIRING SCOPE (work-item 229). The seeded row is the
+/// Drives the creature tick, one row per FIRING SCOPE. The seeded row is the
 /// GLOBAL/CATCH-ALL ticker (`instance_id == GLOBAL_TICK_INSTANCE`); an optional DEDICATED row per
 /// instance makes that instance tick at its own cadence while the catch-all skips it (`TickScope` in
 /// ai.rs is the coverage rule — a partition, never an overlap, so a second row DIVIDES the per-firing
 /// work instead of multiplying it).
 ///
-/// HONEST BOUND (work-item 229): SpacetimeDB serializes every reducer on ONE commit stream — this is
+/// HONEST BOUND : SpacetimeDB serializes every reducer on ONE commit stream, this is
 /// LATENCY SMOOTHING + WORK AVOIDANCE, **NOT parallelism**. Each extra row's firings preempt the
 /// shared stream (10 instances at 100ms = 100 extra transactions/sec), so tight per-instance
 /// cadences are a knob to use sparingly, measured via the per-pass rows-visited log below.
@@ -197,7 +197,7 @@ pub struct CreatureMoveSchedule {
     // EXISTING seeded row auto-migrates into the catch-all — every live creature keeps exactly one
     // ticker, no re-seed needed. This table is NOT gateway-subscribed (no entry in connection.rs's
     // subscription list or gateway/tests/schema_parity.rs's manifest) → no binding hand-sync needed
-    // (playbook failure-mode #1, the "No" branch).
+    // (playbook failure-mode, the "No" branch).
     #[default(18_446_744_073_709_551_615u64)]
     pub instance_id: u64,
 }
@@ -215,7 +215,7 @@ pub struct CreatureMoveSchedule {
 /// 0.5s row. This is mangos's one-loop-with-recheck-timers model on one scheduled reducer — a single
 /// tick, so no cross-scheduler `spline_id` collision.
 ///
-/// INSTANCE SCOPE (work-item 229 — latency smoothing + work avoidance, NOT parallelism; see the
+/// INSTANCE SCOPE, latency smoothing + work avoidance, NOT parallelism; see the
 /// `CreatureMoveSchedule` doc): every firing resolves a `TickScope` from ITS OWN schedule row. The
 /// catch-all row covers every instance without a dedicated row; a dedicated row covers exactly its
 /// instance. Coverage is a PARTITION, so no creature is ever ticked by two rows.
@@ -257,10 +257,9 @@ pub fn tick_creatures(ctx: &ReducerContext, schedule: CreatureMoveSchedule) {
     let outcome = crate::creatures::cycle::run(ctx, tick);
 
     if global {
-        // The 230/233 evidence lines describe the WORLD tick; a dedicated row's numbers would only
-        // muddy them (its scoped stats land in `log_pass_stats` below, labeled per scope).
+        // World counters exclude dedicated rows, which report their own scoped pass counts.
         log_active_cell_stats(ctx, outcome.awake);
-        log_narrowed_pass_stats(ctx); // work-item 233 done-when evidence (rows-visited drop)
+        log_narrowed_pass_stats(ctx);
     }
     log_pass_stats(
         ctx,
@@ -272,10 +271,10 @@ pub fn tick_creatures(ctx: &ReducerContext, schedule: CreatureMoveSchedule) {
 }
 
 // ===========================================================================================
-//  Active cells [server] — work-item 230: grid-activation; only cells near players tick
+//  Active cells [server] ,: grid-activation; only cells near players tick
 // ===========================================================================================
 
-/// Rough heartbeat period (micros) for the active-cell rows-visited log line — the work-item 230
+/// Rough heartbeat period (micros) for the active-cell rows-visited log line, the
 /// done-when evidence. NOT every tick (would spam `RUST_LOG=info` at the 0.5s movement cadence);
 /// roughly once a minute is plenty to eyeball the before/after ratio on a live node.
 const ACTIVE_CELL_LOG_PERIOD_MICROS: i64 = 60_000_000;
@@ -291,12 +290,7 @@ const ACTIVE_CELL_LOG_PERIOD_MICROS: i64 = 60_000_000;
 /// population this item exists to stop scanning — reading it once per tick is cheap.
 fn active_cell_radius(ctx: &ReducerContext) -> f32 {
     let visible = spatial::BOX_HALF_SPAN as f32 * spatial::GRID_CELL_SIZE;
-    // Perf catalog 1.19: the max-fold over every template used to run on EVERY firing (2+/s, and a
-    // full cmangos import carries ~4,000 templates) even though the visibility floor dominates it at
-    // every data set we ship. `by_aggro_range` answers the ONLY question that can change the outcome
-    // in one indexed probe: is there an override big enough to beat the floor? If not, the floor IS
-    // the answer (provably — see `aggro_override_cutoff`), so the fold is skipped entirely. When one
-    // does exist (nothing imports one today) we fall back to the exact original fold.
+
     let templates = ctx.db.game_creature_template();
     let cutoff = crate::creatures::ai::aggro_override_cutoff(visible);
     if templates.by_aggro_range().filter(cutoff..).next().is_none() {
@@ -404,7 +398,7 @@ fn is_idle_bot(
 #[derive(Default)]
 pub(crate) struct TickSweep {
     /// Creatures within `active_cell_radius` of at least one covered Character that is not an Idle
-    /// Bot (work-item 230).
+    /// Bot.
     pub(crate) active: std::collections::HashSet<u64>,
     /// Live pets (`owner_guid != 0`), in table order — the cycle's pet-phase candidate list.
     pub(crate) pets: Vec<u64>,
@@ -413,7 +407,7 @@ pub(crate) struct TickSweep {
     pub(crate) in_combat: Vec<u64>,
 }
 
-/// Work-item 230 done-when evidence: log the active-cell rows-visited/total ratio roughly once a
+/// done-when evidence: log the active-cell rows-visited/total ratio roughly once a
 /// minute. `total` (a full non-player-entity count) is deliberately gated behind the SAME rare window
 /// so the O(N) count itself never reintroduces the per-tick cost this item removes.
 fn log_active_cell_stats(ctx: &ReducerContext, awake: usize) {
@@ -427,12 +421,10 @@ fn log_active_cell_stats(ctx: &ReducerContext, awake: usize) {
         .iter()
         .filter(|e| !e.is_player())
         .count();
-    log::info!(
-        "tick_creatures active-cell (work-item 230): {awake}/{total} creatures visited this tick"
-    );
+    log::info!("tick_creatures active-cell: {awake}/{total} creatures visited this tick");
 }
 
-/// Work-item 233 done-when evidence: log the cast/rout/fear rows-visited drop, in
+/// done-when evidence: log the cast/rout/fear rows-visited drop, in
 /// the SAME rare window `log_active_cell_stats` uses (reusing its throttle — no extra per-tick cost).
 /// `melee_rows` is the candidate universe BOTH the cycle's cast and rout phases outer-loop (identical
 /// gate: "currently the attacker in `game_melee_attack`"); `fear_rows` is what the fear phase
@@ -453,8 +445,8 @@ fn log_narrowed_pass_stats(ctx: &ReducerContext) {
         .filter(|a| a.eff_kind == crate::spell::A_CONTROL && a.eff_p0 == crate::spell::M_FEAR)
         .count();
     log::info!(
-        "tick_creatures narrowed passes (work-item 233): cast/rout visit {melee_rows} melee rows, \
-         fear visits {fear_rows} aura rows, vs {total_all} total entities each used to scan"
+        "tick_creatures narrowed passes: cast/rout visit {melee_rows} melee rows, \
+         fear visits {fear_rows} aura rows, vs {total_all} entities in the full catalogue"
     );
 }
 
@@ -468,35 +460,8 @@ fn scope_label(scope: &TickScope) -> String {
     }
 }
 
-/// Emit the per-pass rows-visited line for this firing, labeled with the firing's scope, throttled to
-/// the SAME once-a-minute window as `log_active_cell_stats` (work-items 230/233 precedent).
-///
-/// WHY A SAMPLED LOG LINE AND NOT A `game_tick_stats` TABLE ROW: the counter must not itself become
-/// the tax it measures — a table write per firing appends 2 rows/sec (world tick alone; +10/sec per
-/// 100ms dedicated row) to the SAME serialized commit stream the honesty addendum warns about, and
-/// this repo has no debug-feature-gated tick path to hide it behind (`debug_reducers` gates whole
-/// reducers, not branches of a hot scheduled one). The done-when ("per-pass row-visit count does not
-/// grow with instance count") needs COMPARATIVE evidence, which a once-a-minute INFO sample answers:
-/// grep two samples, before and after arming a dedicated row, and compare per-pass counts. [V] the
-/// live readout itself (no node in the sandbox) — runbook in work-item 229, "per-instance-ticks"
-/// (archived).
-///
-/// COUNTER SEMANTICS (review finding — the two families are NOT comparable to each other): scoped
-/// passes count POST-GATE candidates (rows this scope actually considered — these must not grow
-/// when another instance is armed/populated), while the `*`-suffixed global passes count what they
-/// visited across ALL instances (full table rows for decay and respawn, the harvested candidate
-/// list for regen and combat exit) — those grow with world size BY DESIGN and answer 233-style scan
-/// questions, not scoping ones.
-///
-/// WINDOW: `max(own interval, 500ms)` — an interval-spaced firing lattice always has exactly one
-/// point in any half-open window of its own interval's length, so EVERY row logs once a minute;
-/// the old fixed 500ms window let a slow row (the runbook's slow-a-row-by-hand pause substitute,
-/// e.g. 1000ms) miss the window FOREVER on an unlucky arm-time phase (review finding).
-///
-/// SENSE AT THE LOG WINDOW (500ms catch-all): now ∈ [60s·k, 60s·k + 500ms) ⇒ ⌊now/500ms⌋ = 120k
-/// ≡ 0 (mod SENSE_EVERY_N_TICKS=8) — phase-independent, so the catch-all's logged line ALWAYS
-/// carries the sense-gated counters (regen/decay/…). Dedicated rows can log sense=false lines;
-/// the flag is printed, read accordingly.
+/// Sample per-pass row visits once per minute without adding diagnostic table writes.
+/// Catch-all samples include the sense pass; dedicated samples report whether it ran.
 fn log_pass_stats(
     ctx: &ReducerContext,
     scope_label: &str,
@@ -514,13 +479,13 @@ fn log_pass_stats(
         .collect::<Vec<_>>()
         .join(" ");
     log::info!(
-        "tick_creatures pass rows-visited (work-item 229): scope={scope_label} sense={sense} {body} (*=full-table scan, scales with world not instances)"
+        "tick_creatures pass rows-visited: scope={scope_label} sense={sense} {body} (*=full-table scan, scales with world not instances)"
     );
 }
 
-/// The ONE shared creature move-leg writer (work-item 181): every movement decision (the cycle's
+/// The ONE shared creature move-leg writer : every movement decision (the cycle's
 /// idle and chase legs, flee, fear-flee) funnels its ALREADY-STEPPED landing point through here, so a
-/// single ground-snap / anti-desync fix (work-item 174) applies to ALL of them at once. The per-pass
+/// single ground-snap / anti-desync fix  applies to ALL of them at once. The per-pass
 /// STEP is computed by the caller BEFORE this call (different math per pass — waypoint segment / chase
 /// step / walk-home / wander hop / flee dash); this owns only what every pass shares:
 ///   1. ground-snap the landing point (`snap_z`) — off-slice / unimported areas fall back to the
@@ -713,7 +678,7 @@ pub(crate) fn emit_creature_leg(
     now_ms: u32,
     set_leg_ends: bool,
 ) {
-    // Ground-snap THIS leg's landing point (work-item 174) — one snap now covers every pass.
+    // Ground-snap THIS leg's landing point, one snap now covers every pass.
     let nz = crate::terrain::snap_z(ctx, e.map_id, e.instance_id, to.0, to.1, z_fallback);
     // REFUSE a non-finite leg (see `ai::finite_point`). Writing one makes the creature invisible to
     // this very tick — its grid cell casts to `i32::MIN`, so no active cell ever contains it again —
@@ -727,7 +692,7 @@ pub(crate) fn emit_creature_leg(
         );
         return;
     }
-    // ONE WRITER (work-item 181/383): funnel the row build + upsert through `emit_move_spline` — the
+    // ONE WRITER : funnel the row build + upsert through `emit_move_spline`, the
     // SAME call the cycle's spline-advance halt and its chase stop
     // already use, so "one spline writer" is a fact the type system enforces, not doctrine repeated at
     // each call site. Was: a `game_creature_move_event` INSERT (globally subscribed — so every leg was
@@ -886,7 +851,7 @@ pub(crate) fn advance_needs_persist(
 
 /// The shared gate ladder every ENGAGED/table-driven phase (cast, threat retarget, chase, rout and
 /// fear) opens its per-candidate loop with: resolve `guid` to a live CREATURE (no PLAYER bit, not
-/// dead) whose instance THIS firing's `scope` covers. `None` collapses each site's `let Some(c) = ...
+/// dead) whose instance THIS firing's `scope` covers. `None` collapses each site's `let Some(c) =...
 /// else { continue }; if c.is_player() || c.dead { continue }; if !scope.covers(c.instance_id) {
 /// continue }` into one check — every call site still increments its own `visited` counter only on
 /// `Some`, matching the existing "gate first, then count" order everywhere.

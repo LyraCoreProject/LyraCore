@@ -145,9 +145,6 @@ fn both_ends_of_the_package_band_are_shippable() {
     }
 }
 
-/// The band's placement, not just its ends: a fixture-reserved identifier is UNSPELLABLE as a
-/// script rather than refused by a second check, because the whole band sits below every reserved
-/// one. `ids.rs` asserts that at compile time; this states the consequence a package author sees.
 #[test]
 fn no_reserved_identifier_is_inside_the_package_script_band() {
     for reserved in [

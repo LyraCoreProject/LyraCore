@@ -579,7 +579,6 @@ fn collect_raw(root: &Path, dir: &Path, out: &mut Vec<PackFile>) -> Result<()> {
     Ok(())
 }
 
-/// Recursively copy `from` into `to` (used to install an addon folder).
 fn copy_dir(from: &Path, to: &Path) -> Result<()> {
     fs::create_dir_all(to)?;
     for entry in fs::read_dir(from)? {

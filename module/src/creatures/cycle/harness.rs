@@ -4490,10 +4490,6 @@ fn a_lead_leg_is_stopped_where_it_renders_once_the_victim_stops() {
     );
 }
 
-/// The rule the production carrier has by construction, made visible: one `game_creature_spline`
-/// row per creature, and a subscriber sees only a transaction's net change. Written as a pair of
-/// direct sink calls — the very pair `stand_and_face` used to make — because no scenario can reach
-/// the forbidden write any more, and a rule nothing proves detects anything is not a rule.
 #[test]
 #[should_panic(expected = "wrote two carrier rows in one firing")]
 fn the_fake_refuses_a_second_carrier_row_for_one_creature_in_one_firing() {

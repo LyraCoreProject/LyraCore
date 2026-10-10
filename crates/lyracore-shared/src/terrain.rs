@@ -1,11 +1,3 @@
-//! Terrain cell math shared by the module's `ground_z` and the importer's self-check
-//! (work-items 172/173; extracted per PR-9 review — one copy of the interpolation, unit-tested
-//! here, with both consumers as thin callers).
-//!
-//! Geometry (mangos GridDefines parity): 64×64 tiles of 533.33333 yd per map, 16 MCNK cells per
-//! tile → 1024×1024 cells of 33.33 yd. Cell indices count DOWN from +`spatial::MAP_COORD_MAX`,
-//! the same coords-measured-downward convention as the AOI grid — one origin for both systems.
-
 use crate::spatial::MAP_COORD_MAX;
 
 /// Side of one MCNK terrain cell in yards (533.33333 yd tile / 16).

@@ -206,8 +206,6 @@ const EXPLORE_LEVEL_BAND: i32 = 5;
 /// so the award reaches zero about 25 levels over the area, the point where it has gone fully grey.
 const EXPLORE_GREY_TAPER_PCT_PER_LEVEL: i32 = 5;
 
-/// What fraction (percent) of an area's discovery award survives, for a player `levels_above` the
-/// band's top edge. Clamped both ways, so a wildly over-levelled player gets 0 and never a negative.
 fn explore_grey_taper_pct(levels_above_area: i32) -> u32 {
     (100 - (levels_above_area - EXPLORE_LEVEL_BAND) * EXPLORE_GREY_TAPER_PCT_PER_LEVEL)
         .clamp(0, 100) as u32
@@ -396,11 +394,11 @@ pub(crate) fn grant_xp(ctx: &ReducerContext, p: &mut WorldEntity, amount: u32) {
     if amount == 0 {
         return;
     }
-    // GM playtest `.xprate` (work-item 223): a basis-points multiplier (10000 = 1×) ON TOP of the
+    // GM playtest `.xprate` : a basis-points multiplier (10000 = 1×) ON TOP of the
     // realm `xp_rate` (`rated_xp`, already folded in by the caller at each SOURCE — kill XP in
     // `award_xp`, quest XP in `quest.rs`). Applied HERE, the one chokepoint both sources share, so a
     // single multiply can never drift between them. u64 math to avoid a u32*u32 overflow. Missing
-    // config row ⇒ 10000 (1×) — byte-identical to before this feature existed.
+    // An absent config row uses 10000 (1×).
     let amount = (amount as u64 * crate::gm::xprate_bp(ctx) as u64) / 10_000;
     if amount == 0 {
         return;

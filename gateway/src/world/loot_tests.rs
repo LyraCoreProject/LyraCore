@@ -296,8 +296,6 @@ fn a_failed_settlement_retries_after_the_shard_recovers() {
     assert_eq!(*instances.settled_rolls.lock().unwrap(), vec![win]);
 }
 
-// ---- `flush_pending_promotions` (the disband race, found in adversarial review) ----
-
 /// **AC: a disband-capable op promotes every connected shard's pending rolls BEFORE it reaches
 /// realm-core.** Without this, `remove_member`'s disband branch (on realm-core) cannot see a roll
 /// that is still a local staging copy, and the periodic relay's own 200ms cadence is not fast enough

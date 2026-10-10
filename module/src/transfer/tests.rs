@@ -39,15 +39,6 @@ fn manifest_is_the_generated_enumeration_minus_the_machinery() {
     );
 }
 
-/// [`MANIFEST_EXCLUDE`] is the ONLY input to three separate subtractions — the manifest, the
-/// export loop, and the arriving payload's required set — and nothing pinned its
-/// CONTENTS. Verified by mutation: adding a real character-owned table to it left all 501
-/// module tests green while that table silently vanished from the manifest, was never exported,
-/// and was no longer required of an arriving payload. That is the defect reintroduced one
-/// name at a time, and it is data loss (a transfer would drop the rows) rather than a missing
-/// popup. The test above cannot see it: both sides of its length equation move together.
-///
-/// Adding a name here is a DECISION. Make it in this assertion, with the reason.
 #[test]
 fn manifest_exclude_holds_only_transfer_machinery() {
     assert_eq!(
@@ -56,7 +47,7 @@ fn manifest_exclude_holds_only_transfer_machinery() {
         // blob. No table a CHARACTER owns belongs on this list.
         ["game_transfer_out"],
         "MANIFEST_EXCLUDE changed. Every name on it is dropped from the transfer manifest, from \
-             every export blob, AND from the set an arriving payload must cover (#42) — so a \
+             every export blob, AND from the set an arriving payload must cover — so a \
              character-owned table added here loses its rows at every shard crossing, silently and \
              with no other test failing. Only transfer MACHINERY may be listed."
     );
@@ -146,14 +137,6 @@ fn hot_marks_name_only_real_manifest_tables() {
 // Rogue's Stealth presence on the source database — the destination simply never got them.
 // -------------------------------------------------------------------------------------
 
-/// Mutation-check per the playbook (§8): reverting `sweep_delete_game_aura` /
-/// `sweep_transfer_game_aura` back out (or repointing the transfer arm at `not_transported`
-/// without adding `game_aura` to `NOT_TRANSPORTED`) makes THIS assertion fail — `game_aura`
-/// would no longer be in the generated manifest, or would no longer be marked hot. The two
-/// generic ratchets above (`every_manifest_table_can_cross_a_database_boundary`,
-/// `the_not_transported_allowlist_matches_the_arms_that_decline`) only prove a table THAT IS
-/// in the manifest is shaped correctly — neither one required `game_aura` to be there at all,
-/// which is exactly how the drop went unnoticed. This is the test that would have caught it.
 #[test]
 fn aura_rows_are_a_manifest_table_marked_hot() {
     let m = manifest();
@@ -592,7 +575,6 @@ fn crash_point_e_during_finish_is_retryable() {
     // Aborted finish == no state change; a retry completes.
     let retried = step(imported, Step::Finish);
     assert!(retried.live_dst() && !retried.src_durable && retried.settled());
-    // ...and so does the reaper if the driver never retries.
     assert_eq!(reap_to_fixpoint(imported), retried);
 }
 
@@ -659,7 +641,6 @@ fn a_transfer_id_reused_for_a_different_character_is_refused_not_replayed() {
         plan_begin(Some(GUID), GUID + 1, true, false),
         BeginPlan::IdCollision
     );
-    // ...in the imported phase too — the in-row is consulted as the fallback claim.
     assert_eq!(
         plan_begin(Some(GUID), GUID + 1, true, true),
         BeginPlan::IdCollision
@@ -839,15 +820,10 @@ fn the_pure_planners_are_enumerated_over_their_whole_input_space() {
     assert_eq!(escrowed_guid(None, None), None);
     assert_eq!(escrowed_guid(Some(7), None), Some(7));
     assert_eq!(
-            escrowed_guid(None, Some(9)),
-            Some(9),
-            "a database holding ONLY an unreleased arrival in-row must still read as escrowed for \
-             that character. Reading it as an unused id is the permanent login wedge the #36 review \
-             found (blocker 2): `is_in_transit` sees the in-row and refuses the hop out, and nothing \
-             ever reaps it, because `reap_transfers` iterates game_transfer_out only — so the \
-             character is refused a transfer off the shard it is stuck on, permanently, with no \
-             operator recourse"
-        );
+        escrowed_guid(None, Some(9)),
+        Some(9),
+        "an unreleased arrival must resolve the escrowed Character guid"
+    );
     assert_eq!(
         escrowed_guid(Some(7), Some(9)),
         Some(7),
@@ -974,14 +950,14 @@ fn folding_a_money_delta_adds_it_to_the_escrowed_blob() {
 // CROSS-DATABASE: the transport ratchet, and the six-step crash matrix
 // -------------------------------------------------------------------------------------
 
-/// THE RATCHET. A character-owned table with no `character_owned!(transfer, ..)` arm does not
+/// THE RATCHET. A character-owned table with no `character_owned!(transfer,..)` arm does not
 /// cross a database boundary — and unlike a missing delete sweep (which leaks rows, loudly,
 /// forever) that failure is INVISIBLE: the character simply arrives without that table's data,
 /// and the source copy it came from has already been cascade-deleted. There is no second chance
 /// and no error anywhere. So: every manifest table must have an arm, and a NEW character-owned
 /// table fails this test by name in the same edit that adds it.
 ///
-/// "Not transported" is a legal answer — via the `character_owned!(not_transported, ..)` marker
+/// "Not transported" is a legal answer, via the `character_owned!(not_transported,..)` marker
 /// kind, written AT the table (see `rest.rs` / `group.rs`'s invite row) — because a decision
 /// recorded at the table is a different thing from an omission nobody noticed.
 ///
@@ -1014,13 +990,12 @@ fn every_manifest_table_can_cross_a_database_boundary() {
             missing.is_empty(),
             "character-owned table(s) with NO cross-database transport arm: {missing:?}\n\
              Their rows would be silently dropped the first time a character moves between two \
-             SpacetimeDB databases (issue #19) — the source copy is cascade-deleted by \
+             SpacetimeDB databases — the source copy is cascade-deleted by \
              finish_transfer, so the data is gone with no error anywhere. Add \
              `crate::character_owned!(transfer, fn sweep_transfer_<accessor>(ctx, guid, io) {{ .. }})` \
              next to the table (see any of the existing arms), or `transfer::not_transported(io)` if \
              the rows genuinely must not cross — but write the decision AT the table."
         );
-    // ...and no arm may name a table that is not in the manifest (a rename that left the arm's
     // `sweep_transfer_<accessor>` name stale would ship rows under a table nobody imports).
     let tables: Vec<String> = manifest().into_iter().map(|e| e.table).collect();
     for t in &transports {
@@ -1032,33 +1007,6 @@ fn every_manifest_table_can_cross_a_database_boundary() {
     }
 }
 
-/// THE RATCHET'S SECOND HALF, and the one that actually stops silent data loss.
-///
-/// `every_manifest_table_can_cross_a_database_boundary` only proves an arm EXISTS. It cannot
-/// tell a real transport arm from one that declines to carry anything — so the single edit it is
-/// supposed to prevent used to walk straight past it. Verified by mutation: repointing
-/// `sweep_transfer_game_item_instance` at `not_transported` left all 468 module tests green
-/// while deleting every character's entire inventory and equipped gear on every shard hop.
-///
-/// **The mechanism changed.** "Transports" vs "declines" is no longer a property of an
-/// arm's BODY that a scanner has to read back out of the source — a transport arm has no body
-/// any more. It is the `character_owned!` marker KIND (`transfer` vs `not_transported`), which
-/// build.rs already parses, so the mechanical half of the decision arrives here as a generated
-/// list. The reasoned half is [`NOT_TRANSPORTED`], where each entry is written out with its
-/// justification. This test is the equality between them, and it fails in BOTH directions: a
-/// table that stops transporting without being justified, and an allowlist entry that quietly
-/// started transporting again (or that names a table which no longer exists).
-///
-/// CORE tables only. A `packages/` decline is not on either side of this equality — see
-/// [`NOT_TRANSPORTED`]'s doc. What stops a drop-in from declining a CORE table's arm behind this
-/// test's back is build.rs, which refuses a second transport arm for a table that already has one.
-///
-/// What this replaced was a 100-line brace-depth parser plus a documented adversarial arms race
-/// — `contains("move_rows")`, then "exactly once", then "at the top of the arm", then "and its
-/// export closure filters by the guid" — each round added after the previous one was defeated by
-/// a dead branch. None of those mutations can be written any more: the macro emits the
-/// `move_rows` call, the guid filter and the destination insert itself, so an arm that skips any
-/// of them does not parse.
 #[test]
 fn the_not_transported_allowlist_matches_the_arms_that_decline() {
     let mut declared: Vec<&str> = NOT_TRANSPORTED.to_vec();
@@ -1110,12 +1058,6 @@ fn every_transported_table_has_exactly_one_arm() {
     );
 }
 
-/// REAL behavioural coverage of the row codec — the half of the transport that actually carries
-/// player data, and which had none: every module test is pure or a source scan, so nothing in
-/// this crate ever executed `move_rows`. Mutation-testing confirmed the gap (making the import
-/// arm inert, so that NO table's rows ever arrive on any transfer, left all 468 tests green).
-/// [`encode_rows`]/[`decode_rows`] exist as `ReducerContext`-free halves precisely so this test
-/// can drive them.
 #[test]
 fn the_row_codec_round_trips_and_refuses_garbage() {
     let rows = vec![
@@ -1157,7 +1099,6 @@ fn the_row_codec_round_trips_and_refuses_garbage() {
         "a payload that does not decode must record the failure"
     );
 
-    // ...and the FIRST failure is the one kept (import_rows walks every table with one outcome).
     let first = outcome.clone();
     let _: Vec<ManifestEntry> = decode_rows(&[0x01], &mut outcome);
     assert_eq!(
@@ -1470,7 +1411,7 @@ fn party_membership_does_not_ride_the_export_blob() {
     assert!(
             crate::CHARACTER_OWNED_NOT_TRANSPORTED.contains(&"game_group_member"),
             "`game_group_member` transports again. Party membership is authoritative on realm-core \
-             (#22): the gateway re-pushes the roster onto the destination at world entry, and a \
+             the gateway re-pushes the roster onto the destination at world entry, and a \
              blob snapshot taken back at `begin_transfer` would overwrite it with the membership the \
              character had when it stepped into the portal."
         );

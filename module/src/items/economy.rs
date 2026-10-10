@@ -20,13 +20,6 @@ use super::tables::{
 /// `CMSG_BUY_ITEM`, so this only rejects clearly-out-of-range abuse (mirrors `loot::LOOT_RANGE_SQ`).
 const VENDOR_RANGE_SQ: f32 = 100.0;
 
-/// The shared trust-boundary gate for a player-initiated NPC interaction — vendor sell/buyback/buy and
-/// armorer repair all reduce to the SAME five checks: the player must be alive, the target must be a
-/// real NPC (never another player, `is_player()`) carrying `required_flag`, on the player's own
-/// map+instance, within `VENDOR_RANGE_SQ`. Extracted ("the exact place drift happens" — the
-/// 190 review already caught one copy of this shape missing the instance check once) from
-/// `apply_item_sell` / `apply_buyback_item` / `apply_buy_item` / `apply_player_repair`, which used to
-/// paste this ~20-line block four times.
 ///
 /// The four call sites' WIRE-VISIBLE error text differs in wording, not in the checks themselves, so
 /// three of the five messages stay parameterized rather than folded into one template:

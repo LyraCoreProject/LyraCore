@@ -206,8 +206,7 @@ impl Coordinator {
     /// A PK lookup on `game_gameobject`, then the same map/instance/range check
     /// `module/src/gameobject.rs::usable_go` applies to a chest. It must STAY a PK lookup:
     /// `game_gameobject` is spatial, and a scan over a sharded table returns a silent subset, so a
-    /// mailbox would work or not depending on which database the session happens to read
-    /// (`module/src/mail.rs` pins this by source scan).
+    /// mailbox availability would depend on which database the session reads.
     ///
     /// `false` for an unknown guid, a non-mailbox gameobject, another map or instance, and anything
     /// out of range — the gate answers the question, and the caller decides what a refusal costs.

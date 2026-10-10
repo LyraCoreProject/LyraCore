@@ -63,7 +63,7 @@ pub fn quest_xp(reward_money_max_level: u32) -> u32 {
     (((reward_money_max_level as u64) * 5).div_ceil(3)) as u32
 }
 
-/// Work-item 194 (sharing): kinds carried in `game_group_event.kind` for `push_quest_to_party`'s
+/// (sharing): kinds carried in `game_group_event.kind` for `push_quest_to_party`'s
 /// notifications. Reserved slots `10..=11`; kind 9 is retired party chat and never reused. See
 /// `crate::group::event_kind` for the full reserved-range bookkeeping (loot-roll kinds `4..=8` live
 /// in the sibling `crate::loot_roll` file).
@@ -79,12 +79,6 @@ pub mod share_event_kind {
     pub const QUEST_PUSH_RESULT: u8 = 11;
 }
 
-/// Work-item 194 (sharing): the `MSG_QUEST_PUSH_RESULT` wire codes (mirrors gtker's
-/// `QuestPartyMessage::as_int()` exactly — `SharingQuest=0, CantTakeQuest=1, TooFar=4, LogFull=6,
-/// HaveQuest=7, FinishQuest=8` — so the gateway's decode of a `QUEST_PUSH_RESULT` payload is a plain
-/// `u8::try_into()`, never a translation table). Not every gtker variant is reachable from
-/// `share_result` (this slice never produces `AcceptQuest`/`DeclineQuest`/`Busy` — there is no
-/// asynchronous accept/decline round trip here, only the push + its immediate feedback).
 pub mod share_result {
     pub const SHARING_QUEST: u8 = 0;
     pub const CANT_TAKE_QUEST: u8 = 1;
@@ -229,7 +223,7 @@ mod tests {
         assert!(!class_allowed(u32::MAX, u8::MAX));
     }
 
-    // ---- Level-cap payout (work-item 194(e)) ----
+    // ---- Level-cap payout(e)) ----
 
     #[test]
     fn max_level_money_reward_uses_the_documented_v_coefficient() {
@@ -239,7 +233,7 @@ mod tests {
         assert_eq!(max_level_money_reward(u32::MAX), u32::MAX); // saturates, never wraps/panics
     }
 
-    // ---- Sharing (work-item 194): share_event_kind distinctness + share_result priority ----
+    // ---- Sharing : share_event_kind distinctness + share_result priority ----
 
     /// `QUEST_SHARE`/`QUEST_PUSH_RESULT` (10/11) follow every loot-roll kind (4..=8) and skip kind
     /// 9, retired party chat, which nothing may reuse.

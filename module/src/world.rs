@@ -8,7 +8,7 @@ use lyracore_shared::spatial;
 use spacetimedb::{reducer, table, Identity, ReducerContext, Table};
 
 use crate::faction::game_faction_template;
-// Graveyard resolution (work-item 209/226) lives in `graveyard.rs` (extraction) — this
+// Graveyard resolution  lives in `graveyard.rs` (extraction), this
 // alias keeps every `graveyard::...` call site below byte-identical.
 use crate::graveyard;
 use crate::helpers::entity_by_owner;
@@ -308,16 +308,10 @@ pub struct WorldEntity {
     // `publish` auto-migrates existing rows (migration rule).
     #[default(0i64)]
     pub death_expire_micros: i64,
-    // Dungeon/instance isolation key (work-item 190 slice 1 — pure plumbing, always 0 this slice):
-    // 0 = open world; a nonzero value will (slice 2+) identify one `game_instance` row's private
-    // population. Folded into the by_grid index alongside map_id so spatial scans can never cross
-    // an instance boundary once slice 2 creates real instances; every entity-vs-entity gate that
-    // today compares `map_id` gains the matching `instance_id` equality check in the same commit.
-    // `#[default(0u64)]` (typed — u64 needs 8 bytes) + end-appended so `publish` auto-migrates
-    // existing rows (migration rule). Gateway-subscribed → hand-synced in world_entity_type.rs.
+
     #[default(0u64)]
     pub instance_id: u64,
-    /// GM playtest run-speed multiplier in basis points (10000 = 1.0×, work-item 223's `.speed`).
+    /// GM playtest run-speed multiplier in basis points (10000 = 1.0×).
     /// Live-only (NOT threaded through `Character` — a relog resets it to 1×, an accepted
     /// simplification for a solo-playtest toggle). The gateway relays a change as
     /// `SMSG_FORCE_RUN_SPEED_CHANGE` (`entity_update_to_outbound`), mirroring the existing aura-based
@@ -327,13 +321,7 @@ pub struct WorldEntity {
     /// column existed). Gateway-subscribed → hand-synced in `world_entity_type.rs` + widened parity.
     #[default(10000)]
     pub run_speed_mult_bp: u32,
-    /// GM playtest godmode (work-item 223's `.god`): INCOMING damage no-ops on a godmode entity
-    /// (`spell::apply_target_damage` + both melee swing-resolution sites in `combat/mod.rs`);
-    /// OUTGOING damage is unaffected. Live-only (NOT threaded through `Character`, same rationale as
-    /// `run_speed_mult_bp` — a relog resets it off). `#[default(false)]` + END-appended so `publish`
-    /// auto-migrates existing rows to "not godmode" (byte-identical to before this column existed).
-    /// Gateway-subscribed → hand-synced in `world_entity_type.rs` + widened parity (no wire relay: no
-    /// client field maps to it, it's a pure server-side gate).
+
     #[default(false)]
     pub godmode: bool,
     /// Rest state (196): the LIVE resting flag, so `check_rest_state` can detect an inn threshold
@@ -351,7 +339,7 @@ pub struct WorldEntity {
     /// columns outright (`MAX_EXACT_INDEX_COLS`); range predicates are never index-served at all
     /// (`IndexProbe::Range` — "we currently never construct this variant") and an `OR` is evaluated
     /// row-by-row. So the four-column `by_grid` index is unreachable from SQL, and a
-    /// `grid_x BETWEEN .. AND grid_y BETWEEN ..` box degrades to a full partition scan — 1.1 BILLION
+    /// `grid_x BETWEEN.. AND grid_y BETWEEN..` box degrades to a full partition scan, 1.1 BILLION
     /// rows examined on `game_world_entity` in a 445-player measurement, 53% of all writer time.
     /// Folding the two grid columns into one makes `by_cell` a 3-column all-equality index, which the
     /// planner CAN serve, and the AOI box becomes 25 point probes instead of a scan.
@@ -472,10 +460,6 @@ impl WorldEntity {
     }
 }
 
-/// **The per-mover motion row (perf catalog 2.1).** One row per moving entity, UPDATED IN PLACE,
-/// carrying the same `(opcode, movement_info)` payload the old per-recipient `game_movement_event`
-/// relay table used to carry (dropped; nothing wrote it any more after this table replaced
-/// it).
 ///
 /// Why it exists: the old table inserted one row PER NEARBY PLAYER per movement, so a crowd cost
 /// O(C²) event inserts per second through the serialized writer, plus O(C²) rows the reaper deleted
@@ -519,7 +503,7 @@ pub struct EntityMotion {
     /// columns outright (`MAX_EXACT_INDEX_COLS`); range predicates are never index-served at all
     /// (`IndexProbe::Range` — "we currently never construct this variant") and an `OR` is evaluated
     /// row-by-row. So the four-column `by_grid` index is unreachable from SQL, and a
-    /// `grid_x BETWEEN .. AND grid_y BETWEEN ..` box degrades to a full partition scan — 1.1 BILLION
+    /// `grid_x BETWEEN.. AND grid_y BETWEEN..` box degrades to a full partition scan, 1.1 BILLION
     /// rows examined on `game_world_entity` in a 445-player measurement, 53% of all writer time.
     /// Folding the two grid columns into one makes `by_cell` a 3-column all-equality index, which the
     /// planner CAN serve, and the AOI box becomes 25 point probes instead of a scan.
@@ -574,9 +558,6 @@ pub fn movement_violation(dist_2d: f32, dt_s: f32, max_speed: f32) -> Option<(u8
     None
 }
 
-/// Is the character behind `guid` a GM (`gm_level != 0`)? Used to EXEMPT GMs from anti-cheat movement
-/// flagging (255) — a GM's `.speed`/`.tele` are legitimate. A non-player guid (creature) has no
-/// `game_character` row → `false` (and creatures aren't scored anyway). Mirrors `gm_command`'s lookup.
 fn is_gm_character(ctx: &ReducerContext, guid: u64) -> bool {
     ctx.db
         .game_character()
@@ -586,10 +567,6 @@ fn is_gm_character(ctx: &ReducerContext, guid: u64) -> bool {
         .unwrap_or(false)
 }
 
-/// One heartbeat's raw position/time delta since the mover's last PERSISTED heartbeat — the anti-cheat
-/// scorer's whole input, and what `plan_movement` derives `moved` from. Bundled instead of
-/// 7 loose positional floats/u32s (`score_and_log_movement` used to take 9 arguments counting
-/// `ctx`/`guid`; `debug_score_movement` builds one of these from its own flat wire args to call it).
 pub(crate) struct MovementDelta {
     pub old_x: f32,
     pub old_y: f32,
@@ -602,10 +579,6 @@ pub(crate) struct MovementDelta {
 }
 
 impl MovementDelta {
-    /// A real translation vs a pure-turn/stationary heartbeat — vanilla breaks a channel on movement,
-    /// not on turning in place. Both `movement_update` call sites that used to re-derive this
-    /// independently (`break_channel`'s guard and the anti-cheat scoring guard) now read the one
-    /// value computed here.
     pub(crate) fn moved(&self) -> bool {
         (self.x - self.old_x).powi(2)
             + (self.y - self.old_y).powi(2)
@@ -624,10 +597,6 @@ impl MovementDelta {
 /// character (`gm_level != 0`) — a GM's `.speed`/`.tele` are legitimate, so flagging them is always a
 /// false positive. Creatures/godmode/GM return without touching the table.
 pub(crate) fn score_and_log_movement(ctx: &ReducerContext, guid: u64, delta: &MovementDelta) {
-    // Perf catalog 1.22: the three table reads (entity re-fetch, GM character row, aura speed fold)
-    // used to run BEFORE the pure math on every moving heartbeat, even though the check almost always
-    // returns None. Reordered so the free arithmetic gates them. Byte-identical: the exemptions only
-    // decide whether a violation gets LOGGED, and nothing is logged when there is no violation.
     let dist_2d = ((delta.x - delta.old_x).powi(2) + (delta.y - delta.old_y).powi(2)).sqrt();
     let dt_s = if delta.move_time_ms > delta.old_move_ms {
         (delta.move_time_ms - delta.old_move_ms) as f32 / 1000.0
@@ -1040,21 +1009,6 @@ pub(crate) fn apply_player_login(
         character = chars.guid().find(character_guid).unwrap_or(character);
     }
 
-    // STRANDING GUARD (work-item 190 slice 3, the design's biggest trap): a login whose
-    // `pending_instance_id` names a REAPED instance (logged out inside, the 30min-empty/reset reap
-    // ran while offline) must NEVER rebuild into a dead id — the module queries and relay gates
-    // would isolate them into an empty phantom world. Fall back per `instance::stranding_fallback`:
-    // a known dungeon map → its entrance const at instance 0 (the design doc §3 rule); a
-    // non-dungeon map (the dev-map fixture) → in place at instance 0; a dungeon map with no
-    // entrance arm (pinned-never by test) → hearthstone home. Alive-or-ghost is PRESERVED per
-    // 226's rules (`pending_ghost` untouched — the ghost branch below still applies): a ghost
-    // whose corpse was reaped WITH the instance simply has nothing left to reclaim — the
-    // vanilla-consistent outcome is SPIRIT HEALER ONLY (same as an expired corpse), documented in
-    // the 190 runbook. The rewritten fields persist via the character update at the end of login.
-    // NOTE (190 review nit): this checks row EXISTENCE only — a relog into a live instance whose
-    // reset_requested flag is set rides the condemned instance and, by occupying it, PINS the
-    // reset until they leave (the reaper requires empty). Safe by construction (never reaped out
-    // from under a player), just a coherence wrinkle: the resetting leader waits them out.
     if character.pending_instance_id != 0
         && ctx
             .db
@@ -1098,7 +1052,7 @@ pub(crate) fn apply_player_login(
     // A relog comes back ALIVE (we don't persist ghost state across a REAL logout), so clear any
     // leftover corpse — else it orphans (rendered with no owning ghost, with a stale reclaim marker
     // that MSG_CORPSE_QUERY keeps offering for a now-alive player). Idempotent (no-op if none).
-    // EXCEPTION (work-item 226): `pending_ghost` means this world entry is the rebuild half of a
+    // EXCEPTION : `pending_ghost` means this world entry is the rebuild half of a
     // released ghost's despawn (a cross-map graveyard release, or a reconnect that raced the ghost's
     // corpse run) — the corpse IS the ghost's reclaim target and MUST survive the rebuild, or a
     // Deadmines death would silently resurrect corpseless at the Westfall graveyard.
@@ -1114,7 +1068,7 @@ pub(crate) fn apply_player_login(
     // connection's bound identity (`ctx.sender()`); `account.id` is identical to `character.account_id`
     // (gated above), so the builder reads `account_id` from the character row.
     let mut entity = crate::build_player_entity(ctx, &character, owner);
-    // Work-item 226: a preserved ghost rebuilds AS a ghost — `build_player_entity` always builds
+    // a preserved ghost rebuilds AS a ghost, `build_player_entity` always builds
     // alive (it's the shared player construction, creature-side code), so the released-ghost state
     // `persist_entity` stamped is re-applied here, the one player-owned call site. Health 1 matches
     // both `do_repop`'s release and the `persist_entity` clamp (`health.max(1)`).
@@ -1165,7 +1119,7 @@ pub(crate) fn apply_player_login(
     // or ACTIVE racial (Perception) is skipped. BEFORE recompute_vitals so the +stat racial folds into vitals.
     crate::spell::apply_racial_passives(ctx, character.guid, character.race, character.level);
 
-    // Parity #8: fold the now-equipped starter gear's Stamina/Intellect into max HP/mana. The entity was
+    // Parity: fold the now-equipped starter gear's Stamina/Intellect into max HP/mana. The entity was
     // built from the bare level curve; grant_starter_item + apply_learned_talents have since equipped gear
     // and applied talent auras, so re-derive vitals once here (a no-talent newbie still gets its gear HP;
     // recompute_vitals no-ops if nothing moved). Health may sit a hair under the new max until the first
@@ -1261,12 +1215,7 @@ pub(crate) fn cascade_delete_character(ctx: &ReducerContext, character_guid: u64
     // allocation comment predicted: a fresh character spawned wearing a despawned bot's
     // resurrection sickness (live find, 2026-07-19).
     //
-    // Auras ON the character used to be hand-deleted here too, for the identical reason
-    // (`target_guid` is not one of the tripwire's magic field names). The hot-state audit
-    // gave `game_aura` a real `character_owned!` marker instead (`sweep_delete_game_aura` /
-    // `sweep_transfer_game_aura`, `spell/tables.rs`) — the delete half above already runs it via
-    // `CHARACTER_OWNED_DELETE_SWEEPS`, and the marker is also what lets a warm handoff carry the
-    // rows across a database boundary, which this hand-roll never could.
+
     {
         use crate::combo::game_combo_point;
         let combos = ctx.db.game_combo_point();
@@ -1287,13 +1236,7 @@ pub(crate) fn cascade_delete_character(ctx: &ReducerContext, character_guid: u64
     // never be re-armed, and nothing ever disengaged it. Despawning 300 bots orphaned ~100 creatures
     // this way (live, 2026-07-29) and they piled onto the only player left standing.
     //
-    // This used to hand-roll `combat::disengage` inline (delete the outgoing row, free
-    // attackers via `by_target`, clear_target each, `threat::clear_for_unit`) — the same three steps
-    // the logout path (below) and the cross-map teleport path call the real helper for. The hand-roll
-    // had drifted: `disengage` ALSO drops IN_COMBAT (+ zeroes `combat_until_ms`) on any attacker left
-    // with no remaining engagement (the 249 rule), which the copy silently omitted — attackers of a
-    // deleted character kept the flag set forever. Routing through the canonical helper closes that
-    // gap and keeps this chokepoint from drifting again.
+
     crate::combat::disengage(ctx, character_guid);
     ctx.db
         .game_corpse()
@@ -1358,11 +1301,6 @@ pub(crate) const PERSIST_MAX_DRIFT_YD: f32 = 4.0;
 
 /// **Does this heartbeat have to be written to the ~60-column entity row?** (perf catalog 2.2)
 ///
-/// `movement_update` used to rewrite the full public row on EVERY heartbeat, and SpacetimeDB then
-/// evaluated that row against every in-box subscription and shipped a delta to each. Since 2.1 peers
-/// are animated from `game_entity_motion`, not from this row, so most of that work produced nothing
-/// any client rendered.
-///
 /// The row is persisted only when something OBSERVABLE changed:
 ///
 ///   - **grid cell** — AOI correctness; also the gate `check_area_exploration` rides;
@@ -1413,22 +1351,12 @@ pub(crate) fn resolve_environmental_damage(dmg: u32, health: u32) -> (u32, bool)
     }
 }
 
-/// What `movement_update` decided to DO with one heartbeat — computed once every impure,
-/// DB-touching mutator on the path (exploration/rest, which can flip `resting`/`health`/`xp`) has
-/// already run against `mover`. From here on the reducer does nothing but execute this: no further
-/// branching on raw movement state happens after `plan_movement` returns.
-///
-/// This replaces the reducer's own formatted source as what the "relay is never gated on
-/// the persist decision" invariant pins against — a whitespace-collapsed exact-body match that broke
-/// on every rename or rustfmt re-wrap. `relay_motion` is unconditionally `true` (see `plan_movement`'s
-/// doc) regardless of every other field, which is exactly the shape that regressed once (only the
-/// entity row gated; the per-mover motion relay never is) — and it is now an ordinary value-level unit
-/// test (`plan_movement`'s tests, below) instead of a source scan.
+/// Movement decisions after exploration and rest have updated the mover.
+/// Entity persistence may be skipped; motion relay always runs for every accepted heartbeat.
 pub(crate) struct MovementPlan {
     /// Write the (possibly-mutated) entity row back — gated on [`snapshot_needs_persist`].
     pub persist_entity: bool,
-    /// Relay this heartbeat's motion to nearby peers via `game_entity_motion`. Always `true` by
-    /// construction — see the struct doc.
+
     pub relay_motion: bool,
     /// A lethal fall (see [`resolve_environmental_damage`]): the position already persisted (if
     /// `persist_entity`), `combat::kill_player` runs next.
@@ -1454,9 +1382,6 @@ pub(crate) fn movement_is_accepted(
         && o.is_finite()
 }
 
-/// Build the plan `movement_update` executes. Pure — no `ReducerContext` — so every decision this
-/// used to make inline (and that the old source-scan pin existed to guard) is now a plain function of
-/// its inputs, directly unit-tested below.
 pub(crate) fn plan_movement(
     opcode: u16,
     grid_changed: bool,
@@ -1680,10 +1605,6 @@ pub(crate) fn apply_movement_update(
         score_and_log_movement(ctx, mover_guid, &delta);
     }
 
-    // PER-MOVER MOTION ROW (perf catalog 2.1) — the ONLY movement relay path. Gated on
-    // `plan.relay_motion` — which `plan_movement`'s own tests prove is ALWAYS `true` — never on
-    // `plan.persist_entity` or any raw movement state re-derived here: recreating that coupling is
-    // exactly the regression this used to guard against with a much larger, rename-brittle scan.
     //
     // This replaced a 25-probe recipient scan plus one `game_movement_event` INSERT per nearby
     // player: O(C) writes per heartbeat, so O(C²) per second zone-wide, plus the same again for the
@@ -1879,15 +1800,15 @@ pub(crate) fn do_repop(ctx: &ReducerContext, guid: u64) -> Result<(), String> {
     // The cycle's pet phase ALSO despawns a pet whose owner is dead, so this is belt-and-suspenders (prompt; immediate).
     crate::creatures::despawn_pets(ctx, player_guid);
 
-    // Teleport the ghost to the graveyard `graveyard::resolve_graveyard` (work-item 209) resolves for
+    // Teleport the ghost to the graveyard `graveyard::resolve_graveyard`  resolves for
     // this death: prefer a zone-linked graveyard (imported `game_graveyard`/`game_graveyard_zone` —
     // cmangos WorldSafeLocs + game_graveyard_zone), falling back to the nearest of every imported
     // graveyard on the map, falling back to the five hardcoded Elwynn/Westfall consts
     // (`graveyard::nearest`) when nothing is imported at all (this sandbox's default state):
-    //   105 Northshire Abbey  (-8935, -188)          — zone 12 Elwynn
-    //   106 Goldshire          (-9339,  171)          — zone 12 Elwynn
-    //   854 Eastvale Logging Camp (-9552, -1374)      — zone 12 Elwynn
-    //   ≈80 Sentinel Hill (-10650, 1180) [V]          — zone 40 Westfall (work-item 206)
+    //   105 Northshire Abbey  (-8935, -188)        , zone 12 Elwynn
+    //   106 Goldshire          (-9339,  171)        , zone 12 Elwynn
+    //   854 Eastvale Logging Camp (-9552, -1374)    , zone 12 Elwynn
+    //   ≈80 Sentinel Hill (-10650, 1180) [V]        , zone 40 Westfall
     //   ≈81 Westfall coast (-11390, 1590) [V]           (seed.rs also row-seeds these five, see 209)
     // The corpse was just inserted at (death_x, death_y) — use those coords + the player's map/race
     // to resolve the release point, then teleport_player emits MSG_MOVE_TELEPORT_ACK.
@@ -1920,7 +1841,7 @@ pub(crate) fn persisted_pending_ghost(dead: bool, player_flags: u32, set_offline
 pub(crate) const RUN_SPEED_BP_1X: u32 = 10_000;
 
 /// What `(pending_godmode, pending_run_speed_mult_bp)` should be stamped onto the durable Character
-/// row for this persist — the SCOPE DECISION of work-item 289, in one pure function.
+/// row for this persist, the SCOPE DECISION of, in one pure function.
 ///
 /// `!set_offline` (a cross-map teleport, a shard-transfer freeze, the stale-entity cleanup in
 /// `player_login`) CARRIES the live values, because the entity is about to be rebuilt from this row
@@ -2008,15 +1929,6 @@ fn spirit_res_vitals(max_health: u32, max_power: u32) -> (u32, u32) {
 /// healer arg (the healer's guid) is IGNORED like `reclaim_corpse`'s `_corpse_guid`: the res targets
 /// the actor named by guid (the client only sends this from the healer dialog, which the
 /// SPIRITHEALER flag already ghost-gates).
-///
-/// The `do_spirit_healer_res` body keyed off an explicit player guid — shared by `gw::gw_spirit_res`
-/// (resolves the actor guid from the shared connection) and `debug::debug_spirit_healer_res` (a CLI
-/// `spacetime call` drives the res by guid, so the feature is verifiable without the mouse-only
-/// healer dialog). Gates on the entity
-/// being a ghost (mirroring `reclaim_corpse`); res's IN PLACE at 50% health + 50% mana (no range/delay/
-/// corpse check — that's the corpse-run path), clears the ghost/dead state (health > 0 + cleared flags
-/// replicate → the client leaves the death screen, exactly like `reclaim_corpse`; vanilla has no
-/// "alive" opcode), deletes any leftover corpse, and lands Resurrection Sickness through the aura engine.
 pub(crate) fn do_spirit_healer_res(ctx: &ReducerContext, guid: u64) -> Result<(), String> {
     use lyracore_shared::constants::{player_flags, unit_vis_flags};
     let entities = ctx.db.game_world_entity();
@@ -2104,14 +2016,11 @@ pub(crate) fn persist_entity(ctx: &ReducerContext, entity: &WorldEntity, set_off
         // indistinguishable from that and re-trigger the full-heal path).
         c.health = entity.health.max(1);
         c.power = entity.power;
-        // Corpse-reclaim escalation state survives the session boundary — without this, a mere
-        // disconnect reset the death ladder to 30s (the review's die-die-relog-die exploit).
+
         c.death_expire_micros = entity.death_expire_micros;
-        // Instance the entity was in survives the session boundary (work-item 190 slice 1, always 0
-        // this slice) — the death_expire_micros precedent — so a relog rebuilds into the same instance
-        // rather than open world.
+
         c.pending_instance_id = entity.instance_id;
-        // Released-GHOST state survives an entity despawn (work-item 226 — the 224 landmine): a
+        // Released-GHOST state survives an entity despawn (the 224 landmine): a
         // cross-map graveyard release persists-then-deletes the entity via `teleport_player`, and
         // without this stamp the WORLDPORT_ACK rebuild came back ALIVE with no ghost and (via
         // `player_login`'s corpse delete) no corpse — a silent free resurrect. Re-derived from the
@@ -2119,7 +2028,7 @@ pub(crate) fn persist_entity(ctx: &ReducerContext, entity: &WorldEntity, set_off
         // logout/disconnect (`set_offline`) — the established "relog comes back alive" rule, whose
         // corpse delete lives in `remove_from_world` right after this persist.
         c.pending_ghost = persisted_pending_ghost(entity.dead, entity.player_flags, set_offline);
-        // GM playtest state (work-item 289) survives an entity despawn the same way, and for the same
+        // GM playtest state  survives an entity despawn the same way, and for the same
         // reason: a cross-map `.tele` (or a cross-database shard hop, whose `begin_transfer` freeze
         // calls this with `set_offline: false` too) persists-then-deletes the entity, and without this
         // stamp `build_player_entity` rebuilds it with `.god`/`.speed` silently off. Cleared on a real
@@ -2254,7 +2163,7 @@ pub(crate) fn apply_gossip_select(
 }
 
 /// Abrupt socket drop. Wired to SpacetimeDB's lifecycle so an ungraceful disconnect also
-/// removes the entity (acceptance criterion #7 for non-clean disconnects).
+/// removes the entity (acceptance criterion for non-clean disconnects).
 #[reducer(client_disconnected)]
 pub fn on_disconnect(ctx: &ReducerContext) {
     remove_from_world(ctx, ctx.sender());
@@ -2289,9 +2198,6 @@ mod tests {
         ));
     }
 
-    /// Each trigger on its own. Mutation target: drop any arm of the `||` and exactly one of these
-    /// goes red — a heartbeat that silently stops persisting real state is the expensive failure
-    /// (a stale row is what melee reach, interact and aggro all read).
     #[test]
     fn every_observable_change_forces_the_row_write() {
         assert!(
@@ -2401,9 +2307,7 @@ mod tests {
             move_time_ms: 0,
         };
         // The persist decision is EXACTLY snapshot_needs_persist's, for every trigger that matters —
-        // and for every one of them, the relay is NEVER gated on the outcome. This second assertion,
-        // repeated across every persist/no-persist combination below, IS the invariant the old
-        // source-scan pin existed to guard.
+        // Motion relay runs for every persistence decision.
         for &(grid, flags, state, drift) in &[
             (false, false, false, 0.0),
             (true, false, false, 0.0),
@@ -2451,7 +2355,7 @@ mod tests {
         assert!(!plan_movement(HEARTBEAT, false, false, false, 0.0, false, &stationary).moved);
     }
 
-    // ---- Work-item 255: movement plausibility (detect-and-flag) ------------------------------
+    // ----: movement plausibility (detect-and-flag) ------------------------------
     #[test]
     fn movement_violation_flags_speed_and_teleport_but_not_legit_motion() {
         let run = lyracore_shared::constants::speeds::RUN; // 7.0 yd/s
@@ -2480,7 +2384,7 @@ mod tests {
         );
     }
 
-    // ---- Work-item 224: cross-map teleport decision ------------------------------------------
+    // ----: cross-map teleport decision ------------------------------------------
 
     #[test]
     fn is_cross_map_teleport_only_when_target_map_differs() {
@@ -2501,8 +2405,6 @@ mod tests {
             "Deadmines -> Elwynn (exit) is cross-map"
         );
     }
-
-    // ---- Work-item 226: cross-map ghost preservation (the 224 review-finding-#2 landmine) --------
 
     #[test]
     fn pending_ghost_persists_only_a_released_ghost_and_never_across_a_real_logout() {
@@ -2533,11 +2435,8 @@ mod tests {
         );
     }
 
-    // ---- Work-item 289: GM playtest state across a cross-map / cross-shard entity rebuild --------
+    // ----: GM playtest state across a cross-map / cross-shard entity rebuild --------
 
-    /// The POLICY (behavioural, the decision itself — not a scan): carried across a despawn/rebuild
-    /// within a session, reset at a session boundary. Mutation targets: flip either branch of
-    /// `persisted_gm_playtest` and exactly one half of this goes red.
     #[test]
     fn gm_playtest_state_carries_across_a_map_change_and_resets_on_a_real_logout() {
         // The bug: `.god` + `.speed 3`, then `.tele valley` — the cross-map persist (set_offline
@@ -2546,7 +2445,7 @@ mod tests {
         assert_eq!(
             persisted_gm_playtest(true, 30_000, false),
             (true, 30_000),
-            "a cross-map hop carries godmode AND the speed multiplier — dropping them is work-item 289"
+            "a cross-map hop carries godmode and the speed multiplier"
         );
         // A real logout/disconnect resets both: a GM who forgets `.god` off must not stay
         // invulnerable (and unaggroable) across sessions with nothing printed.

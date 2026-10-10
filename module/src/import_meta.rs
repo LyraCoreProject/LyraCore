@@ -1,4 +1,4 @@
-//! Import provenance stamps (work-item 216). `game_import_meta` records, per FAMILY, the source
+//! Import provenance stamps. `game_import_meta` records, per FAMILY, the source
 //! SHA / file hash / row count / timestamp of the last successful (re)load, so a live DB can answer
 //! "what data am I running?" via `spacetime sql` — a question neither `import-world.sh`'s floor
 //! assertions nor the wire suite's data gates (docs/danger-zones.md) can answer on their own (they

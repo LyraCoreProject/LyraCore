@@ -60,7 +60,7 @@ fn gear_armor_contribution(slot: u8, stat_armor: i32, max_durability: u32, durab
 }
 
 /// Everything the paperdoll shows that GEAR/AURAS move on the STR/AGI/STA/INT/SPI/AP/damage-range/crit
-/// half of the sheet (#517 + #532) — a plain row read of `module::spell::recompute_sheet`'s output,
+/// half of the sheet, a plain row read of `module::spell::recompute_sheet`'s output,
 /// never a second fold. `strength`/`agility`/`stamina`/`intellect`/`spirit` are the BASE attributes (the
 /// white `UNIT_FIELD_STAT0..4` total); `*_bonus` is the SIGNED aura+gear(+enchant) delta the caller
 /// splits into the green/red `PLAYER_FIELD_POSSTAT`/`NEGSTAT` pair via `.max(0)`/`.min(0)` — sign
@@ -95,17 +95,13 @@ pub(crate) fn sheet_stats(db: &RemoteTables, guid: u64) -> Option<crate::codec::
         ranged_attack_power: e.sheet_ranged_ap,
         ranged_dmg_min: e.sheet_ranged_dmg_min,
         ranged_dmg_max: e.sheet_ranged_dmg_max,
-        // #532: PLAYER_CRIT_PERCENTAGE wants a float percent; `sheet_crit_bp` is basis points
+        // PLAYER_CRIT_PERCENTAGE wants a float percent; `sheet_crit_bp` is basis points
         // (100 bp == 1%), so divide by 100.0 — the sheet value IS `effective_crit_bp`'s output,
         // no second crit formula.
         crit_pct: e.sheet_crit_bp as f32 / 100.0,
     })
 }
 
-/// The POSITIVE aura portion of `guid`'s armor: the sum of positive `A_MOD_RESISTANCE(armor)`
-/// contributions only — what the paperdoll renders as the green "(+N)" via
-/// `UNIT_FIELD_RESISTANCEBUFFMODSPOSITIVE[0]`. Negative auras (Sunder) are excluded (they'd ride the
-/// NEGATIVE twin field — not wired this slice; the ceiling is a red armor readout instead of white).
 pub(crate) fn aura_armor_positive(db: &RemoteTables, guid: u64) -> u32 {
     db.game_aura()
         .iter()
@@ -311,7 +307,7 @@ mod tests {
     }
 
     // The former `melee_attack_power_for`/`swing_range_ap` gateway-side mirrors (and the parity tests
-    // that pinned them against `lyracore_module`) are GONE (#517): `sheet_stats` above is now a plain
+    // that pinned them against `lyracore_module`) are GONE : `sheet_stats` above is now a plain
     // read of `module::spell::recompute_sheet`'s output, so there is no gateway-side formula left to
     // drift from the module — the module row IS the source of truth.
 
@@ -320,7 +316,7 @@ mod tests {
         // `effective_armor` itself needs a live `RemoteTables` subscription cache and is NOT
         // unit-tested here (no ReducerContext mocking) — this only pins that its two REAL pure
         // terms (`aura_armor_contribution`, `gear_armor_contribution`) compose by simple addition
-        // with a base, and that the max(0, ..) clamp `effective_armor` applies to that same sum
+        // with a base, and that the max(0,..) clamp `effective_armor` applies to that same sum
         // never underflows on a debuff exceeding base + gear.
         let base = 40i64; // agility 20 * 2
         let aura = aura_armor_contribution(0xA1, 0x01, 160, 1) as i64; // Demon Skin

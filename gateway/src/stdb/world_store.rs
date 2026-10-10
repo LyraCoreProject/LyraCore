@@ -74,12 +74,6 @@ impl WorldStore for Coordinator {
     // path: the escrowed transfer moves the character rows, instance entry drives it,
     // and the arriving shard's `establish_session` (or `player_login`'s restamp) does the binding.
     fn home_shard(&self, character_guid: u64) -> Option<std::sync::Arc<dyn WorldStore>> {
-        // The single-shard short-circuit, the realm-core index hint, the confirming
-        // probe and the self-heal write-back — all of it in `realm_core::settle_shard_index`,
-        // written against the `RealmDb` trait so the tests can execute THIS decision (index reads,
-        // probe order, heal write and the "one database costs zero reads" property) without a live
-        // node. It was unreachable by any test while it lived inline here, and a mutation review
-        // left two surviving mutations in it for exactly that reason.
         let resolved = crate::realm_core::settle_shard_index(self, character_guid)?;
         // The handle comes from `shard_for`, unchanged: it resolves the same location
         // through the same map and returns `None` when that is already this handle's shard. All
@@ -325,11 +319,6 @@ impl WorldStore for Coordinator {
         self.establish_session(account_id, session_key, identity)
     }
 
-    /// The world handshake's account→K lookup, split across the two databases that own the two
-    /// halves of the answer. The body is `realm_core::lookup_session`, written against the
-    /// `RealmDb` trait so the split it performs — K from realm-core, the account id from THIS world
-    /// shard — is executed by a test rather than only described by a comment. Both of those were
-    /// surviving mutations in a mutation review.
     fn lookup_session(&self, account_name: &str) -> Result<Option<WorldSession>> {
         crate::realm_core::lookup_session(self, account_name)
     }
@@ -403,19 +392,9 @@ impl WorldStore for Coordinator {
         crate::realm_core::publish_bot_shard_index(self, intent)
     }
 
-    /// The character-select list, UNIONED across every connected shard.
-    ///
-    /// A character that logged out inside a dungeon lives on the instance shard, not the realm
-    /// database — and Phase A has no realm-core character index to ask, so the gateway asks every
-    /// shard. The escrow guarantees a character has exactly one durable copy once a transfer has
-    /// settled, so the union is the list; the `guid` dedup covers the seconds-long window where an
-    /// interrupted transfer left a frozen copy on both sides (first hit wins, and the source is
-    /// listed first because `all_shards` puts the default database first).
-    ///
-    /// Single-shard → one read of this handle's own rows.
-    ///
-    /// Each Character's guild id comes from Realm-core membership. When Realm-core cannot answer,
-    /// the list still loads, with no guild names.
+    /// Union the account's Characters across connected World Shards. Deduplicate by guid
+    /// during interrupted Transfers, keeping the first copy in default-first probe order.
+    /// Guild membership comes from Realm-core; an unavailable authority leaves guild names empty.
     fn characters(&self, account_id: u64) -> Result<Vec<codec::CharacterView>> {
         let mut out: Vec<codec::CharacterView> = if self.is_sharded() {
             let mut out: Vec<codec::CharacterView> = Vec::new();

@@ -38,7 +38,7 @@ pub fn grid_cell(x: f32, y: f32) -> (i32, i32) {
 }
 
 /// Pack a `(grid_x, grid_y)` cell address into ONE `i64` — the `cell` column every AOI-scoped table
-/// carries alongside its `grid_x`/`grid_y` pair (#456).
+/// carries alongside its `grid_x`/`grid_y` pair.
 ///
 /// # Why a packed column exists at all
 ///
@@ -48,7 +48,7 @@ pub fn grid_cell(x: f32, y: f32) -> (i32, i32) {
 /// index-served at all — `IndexProbe::Range` is documented in that release as "we currently never
 /// construct this variant" — and a disjunction (`OR`) is evaluated row-by-row, never turned into
 /// multiple probes. So the 4-column `by_grid` index `(map_id, instance_id, grid_x, grid_y)` is
-/// *unusable* from SQL, and a `grid_x BETWEEN .. AND grid_y BETWEEN ..` box is a residual filter over
+/// *unusable* from SQL, and a `grid_x BETWEEN.. AND grid_y BETWEEN..` box is a residual filter over
 /// a full scan no matter how the columns are ordered. Folding the two grid columns into one turns the
 /// only shape the planner CAN serve — a 3-column all-equality probe on
 /// `(map_id, instance_id, cell)` — into an exact match for a single grid cell.
@@ -148,7 +148,7 @@ impl GridBox {
 
     /// Inclusive grid-cell bounds of the box (anchor ± [`BOX_HALF_SPAN`]): `(gx_min, gx_max, gy_min,
     /// gy_max)` — the WHERE-clause range the AOI subscription uses (`grid_x BETWEEN gx_min AND gx_max AND
-    /// grid_y BETWEEN ...`). The SAME range drives the module's movement-recipient selection, so the
+    /// grid_y BETWEEN...`). The SAME range drives the module's movement-recipient selection, so the
     /// gateway's spawn set and the peer-movement relay stay aligned.
     pub fn bounds(&self) -> (i32, i32, i32, i32) {
         (
@@ -159,19 +159,12 @@ impl GridBox {
         )
     }
 
-    /// Every grid cell in the box as `(gx, gy)` — the ENUMERATION form of [`GridBox::bounds`], for a
-    /// caller that probes a `(map_id, instance_id, grid_x, grid_y)` btree cell by cell instead of
-    /// filtering a full scan with the four `bounds()` inequalities (the module's movement-recipient
-    /// selection does exactly that). Kept here, next to `bounds()`, because the two MUST agree: the
-    /// unit test asserts the emitted set is exactly the cells `bounds()` accepts, with no duplicate —
-    /// a range typo would otherwise silently shrink or double a peer's movement-recipient set, which
-    /// is invisible in code review and shows up live as a frozen or double-stepping peer.
     pub fn cells(self) -> impl Iterator<Item = (i32, i32)> {
         let (gx_min, gx_max, gy_min, gy_max) = self.bounds();
         (gx_min..=gx_max).flat_map(move |gx| (gy_min..=gy_max).map(move |gy| (gx, gy)))
     }
 
-    /// The box's cells as PACKED ids (#456) — [`GridBox::cells`] run through [`grid_cell_id`]. This is
+    /// The box's cells as PACKED ids, [`GridBox::cells`] run through [`grid_cell_id`]. This is
     /// what the AOI subscription enumerates: one equality query per cell is the only box-shaped read
     /// SpacetimeDB 2.7.1's planner can serve entirely from an index (see [`grid_cell_id`]).
     pub fn cell_ids(self) -> impl Iterator<Item = i64> {
@@ -192,7 +185,7 @@ impl GridBox {
 }
 
 /// An axis-aligned grid-cell RECTANGLE with no anchor — the per-shard split unit for cross-seam
-/// view-merge (issue #73). A [`GridBox`] is always a fixed-size square around one anchor cell; a
+/// view-merge. A [`GridBox`] is always a fixed-size square around one anchor cell; a
 /// `GridRect` is any inclusive `(gx_min..=gx_max) × (gy_min..=gy_max)` span, which is what a straddling
 /// box's per-shard share looks like after [`crate::region`]'s rectangle boundaries cut it.
 ///
@@ -229,7 +222,7 @@ impl GridRect {
         (self.gx_min, self.gx_max, self.gy_min, self.gy_max)
     }
 
-    /// Every cell in the rect as a PACKED id (#456) — the rect twin of [`GridBox::cell_ids`], and what
+    /// Every cell in the rect as a PACKED id, the rect twin of [`GridBox::cell_ids`], and what
     /// a per-shard AOI rect actually subscribes. A rect built from a whole box
     /// ([`GridRect::from_box`]) emits the identical id sequence [`GridBox::cell_ids`] does, which is
     /// what keeps a non-straddling recenter byte-identical to the login subscription.
@@ -258,7 +251,7 @@ mod tests {
         assert!(b.needs_recenter(0, -8949.95 - 600.0, -132.493));
     }
 
-    /// #73: a non-straddling recenter's home share must be BYTE-IDENTICAL to today's whole-box
+    /// a non-straddling recenter's home share must be BYTE-IDENTICAL to today's whole-box
     /// query, and this is the property that makes that true — `GridRect::from_box` emits the exact
     /// same 4-tuple `GridBox::bounds` does, so a query builder driven by either type produces the
     /// same SQL string for the same box.
@@ -313,7 +306,7 @@ mod tests {
         );
     }
 
-    /// #456: the packed `cell` id must be a BIJECTION over `(i32, i32)`. Every writer of `grid_x`/
+    /// the packed `cell` id must be a BIJECTION over `(i32, i32)`. Every writer of `grid_x`/
     /// `grid_y` also writes this value and the AOI subscription probes it with an equality, so a
     /// collision would silently merge two cells — two players 500yd apart would see each other, and
     /// the entities of one cell would be delivered to the wrong box. Round-tripping is the proof:

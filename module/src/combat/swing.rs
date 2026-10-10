@@ -15,7 +15,7 @@ use crate::{
 };
 
 // Tables' pure formulas/consts and the sibling submodules' re-exports (`roll_swing`, `apply_hit`,
-// `enter_combat`, ...) are all pulled in from `mod.rs` (`pub use tables::*` + `pub use
+// `enter_combat`,...) are all pulled in from `mod.rs` (`pub use tables::*` + `pub use
 // folds::*`/`death::*`/`engage::*`) so every symbol resolves the same as before the split.
 use super::*;
 
@@ -29,7 +29,7 @@ use super::*;
 /// A leash pass runs first: a creature whose pursuit deadline expired with the target away from the
 /// remembered refresh position evades.
 ///
-/// Work-item 229 (per-instance ticks): DELIBERATELY LEFT GLOBAL — one schedule row, no `instance_id`
+/// (per-instance ticks): DELIBERATELY LEFT GLOBAL, one schedule row, no `instance_id`
 /// scoping. Verified same-instance-by-construction: every pass here outer-loops `game_melee_attack`,
 /// and a melee row's attacker/target pair shares one instance at ARM time on every arming path —
 /// `apply_start_attack`/`apply_start_ranged_attack` reject a cross-instance target explicitly, this
@@ -186,20 +186,6 @@ fn aggro_pass(ctx: &ReducerContext) {
 /// swing count). Runs on its OWN clock — the off-hand weapon's own `delay_ms`, tracked in
 /// `MeleeAttack::last_offhand_swing_ms` — so it fires at a different cadence than the main hand and is
 /// NOT gated by the main-hand swing-timer `continue` in `resolve_swing`.
-///
-/// Its own function rather than a branch of `fire_melee_swing`'s locals: it re-fetches its OWN fresh
-/// `target` row (the main-hand swing may go on to damage or even kill the SAME target this tick) and
-/// persists its own `last_offhand_swing_ms` stamp directly — it does not rely on the main hand's
-/// tail-of-loop stamp, which that path's various early returns (corpse/CC/lethal) may skip.
-///
-/// The DAMAGE half is not duplicated at all any more: the same
-/// `fold_incoming_damage` → `final_damage` → event → [`apply_hit`] the main-hand swing and ranged
-/// impact use, over the off-hand's AP-scaled range reduced by `apply_offhand_penalty` (vanilla's 50%
-/// dual-wield penalty). What stays off-hand-specific is only what vanilla makes MAIN-HAND-only: it does not arm
-/// the Overpower/Revenge react windows, does not fire the seal / next-swing procs, and does not wear
-/// durability (no separate off-hand durability model yet — a deliberate simplification, like the
-/// main-hand's own DURABILITY_WEAR_CHANCE_PCT tuning). It also leaves the IN_COMBAT stamp to the main
-/// hand's tail (the engagement is shared).
 fn resolve_offhand_swing(
     ctx: &ReducerContext,
     attacker_guid: u64,
@@ -282,9 +268,6 @@ fn resolve_offhand_swing(
         return;
     }
 
-    // Persist the off-hand's own clock — re-fetch fresh (the engagement row may not have been touched
-    // by anything above, but read-your-writes is cheap insurance and matches the file's established
-    // "re-fetch a fresh mutable copy" pattern for a row written mid-function).
     if let Some(mut fresh) = melee.attacker_guid().find(attacker_guid) {
         fresh.last_offhand_swing_ms = now_ms;
         melee.attacker_guid().update(fresh);
@@ -293,15 +276,6 @@ fn resolve_offhand_swing(
 
 /// Pass 2 — swings. For each engagement (re-read, since aggro may have added rows), run the SHARED
 /// ELIGIBILITY GATE and, if it passes, fire the swing.
-///
-/// This function is the gate and nothing else: both parties still in the world and not
-/// corpses, the attacker not crowd-controlled and not routing, the ranged weapon still equipped, the
-/// vanilla movement rule for a ranged loop, [`swing_blocked`]'s positional checks, the off-hand's
-/// independent second stream, and the swing timer. What a swing then DOES lives in one of two
-/// resolvers — [`fire_melee_swing`] or [`fire_ranged_shot`] — because a melee swing and a ranged shot
-/// share their gate and almost nothing else. They used to be one ~370-line body with a mid-loop
-/// `continue` fork, four repetitions of the ranged teardown rule, and `ranged.is_none()` sprinkled
-/// through every melee-only proc.
 fn resolve_swing(ctx: &ReducerContext) {
     let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u32;
     let melee = ctx.db.game_melee_attack();
@@ -420,12 +394,6 @@ fn resolve_swing(ctx: &ReducerContext) {
             }
         }
 
-        // POSITIONAL eligibility — max range, ranged minimum range, line of sight, facing — all four
-        // in ONE gate. They used to be four separate `if ... { if ranged_due { delete } continue }`
-        // blocks, i.e. four copies of the teardown rule ("a blocker on a DUE ranged shot INTERRUPTS the
-        // auto-repeat loop; a melee blocker just waits for the next tick") — one per gate, each free to
-        // drift. `swing_blocked` is side-effect-free and short-circuits in the same order, so this is
-        // behaviour-identical; the teardown now exists once.
         let (dx, dy, dz) = (
             target.x - attacker.x,
             target.y - attacker.y,
@@ -439,38 +407,20 @@ fn resolve_swing(ctx: &ReducerContext) {
             continue;
         }
 
-        // Off-hand swing (dual wield): a MELEE engagement (never ranged — Auto Shot/wand
-        // have no off-hand analog) whose attacker has a live off-hand WEAPON rolls a SECOND, independent
-        // swing on the off-hand's OWN clock (`last_offhand_swing_ms`), gated on the SAME in-range check
-        // just above but NOT on the main-hand's swing timer below — so the off-hand still fires on a tick
-        // where the main hand is mid-cooldown. Self-contained: re-fetches its own fresh `target` (the
-        // main-hand branch below may go on to kill/damage the SAME target this tick) and writes its own
-        // event + damage + rage/threat/skill side effects, mirroring the main-hand shape. No-op (and
-        // `atk.last_offhand_swing_ms` stays untouched) for a ranged engagement, an unarmed/shielded
-        // off-hand, or a timer not yet elapsed — so a main-hand-only attacker's tick is unchanged
-        // (baseline-safe).
         if ranged.is_none() {
             resolve_offhand_swing(ctx, atk.attacker_guid, atk.target_guid, &attacker, now_ms);
             if melee.attacker_guid().find(atk.attacker_guid).is_none() {
                 continue; // a lethal off-hand Duel hit removed both participants' attack rows
             }
-            // The off-hand swing may have killed/disengaged `target` (or, on a lethal PLAYER off-hand
-            // hit, zeroed its health) via its own writes — re-sync the in-hand snapshot the main-hand
-            // path below reads/writes so it never clobbers the off-hand's kill with a stale pre-swing
-            // copy. A miss/no-off-hand-weapon tick leaves `target` byte-identical (re-fetch is a no-op).
+
             match entities.guid().find(atk.target_guid) {
                 Some(refreshed) => target = refreshed,
                 None => {
-                    // The off-hand's killing blow fully removed the target (a PET death delete, or a
-                    // creature corpse this loop's earlier existence guard would otherwise have caught).
                     melee.attacker_guid().delete(atk.attacker_guid);
                     continue;
                 }
             }
             if target.dead {
-                // The off-hand swing was the killing blow — the main-hand's own swing this tick is
-                // moot (there's nothing left to hit), so stop here exactly like the top-of-loop corpse
-                // guard would on the NEXT tick, just one tick earlier for this row.
                 continue;
             }
         }
@@ -487,13 +437,6 @@ fn resolve_swing(ctx: &ReducerContext) {
             continue;
         }
 
-        // FIRE. Everything above is the SHARED eligibility gate — existence, corpse, CC, rout, the
-        // ranged weapon, the movement rule, position, the off-hand's independent stream, and the swing
-        // timer. What a fired swing then DOES splits cleanly in two: a melee swing (the full
-        // attack table, the seal / next-swing / react procs, an instant hit) and a ranged shot (a
-        // reduced table, ammo, and a projectile whose damage lands on a scheduled impact). Each
-        // resolver owns its own wire event and its own `last_swing_ms` stamp, and both apply damage
-        // through the one shared `apply_hit` pipeline.
         match ranged {
             Some(weapon) => fire_ranged_shot(
                 ctx,
@@ -734,7 +677,7 @@ fn fire_melee_swing(
     // (never at queue time). is_completion=true rides the timed-completion relay shape, which is
     // exactly the vanilla on-next-swing fire: CAST_RESULT(OK) to the caster (releases the client's
     // pending cast = un-lights the button) + SMSG_SPELL_GO alone (no second START) + the yellow
-    // "Heroic Strike hits ..." damage log carrying the WHOLE landed swing (weapon roll + bonus,
+    // "Heroic Strike hits..." damage log carrying the WHOLE landed swing (weapon roll + bonus,
     // post-mitigation; the seal's portion stays on its own line). A MISSED swing still emits the
     // row (damage 0, no log) — the GO must fire or the client's button stays lit forever.
     if swing_is_spell {
@@ -752,7 +695,6 @@ fn fire_melee_swing(
     }
     // 114 FIX (b): the seal's holy portion — a log-only row (is_proc_log): the gateway sends ONLY
     // SMSG_SPELLNONMELEEDAMAGELOG named after the seal spell (yellow "Seal of Righteousness hits
-    // ... Holy"), never START/GO (nothing casts; the seal aura is already up — vanilla shape).
     if projected_seal > 0 {
         ctx.db.game_spell_cast_event().insert(SpellCastEvent {
             target_guid,
@@ -968,12 +910,7 @@ pub fn ranged_impact(ctx: &ReducerContext, shot: RangedImpactSchedule) {
     if !crate::combat::may_harm(ctx, &attacker, &target) {
         return; // Duel or faction authorization changed while the projectile was in flight
     }
-    // GM playtest godmode (work-item 223's `.god`): the ONE modifier this path re-evaluates at impact.
-    // The rest of the chain (outgoing %, damage-taken %, absorb) was folded and FROZEN at launch by
-    // `fire_ranged_shot`, so the delayed damage LOG equals what actually lands — but godmode can be
-    // toggled on DURING the arrow's flight, and re-checking only the frozen value would let a delayed
-    // arrow land damage that a melee swing at the same instant would zero. `false` for a
-    // non-godmode target, so this is byte-identical for them.
+
     let dmg = if target.godmode { 0 } else { shot.damage };
     let damage = final_damage(ctx, shot.target_guid, dmg);
     // The SHARED pipeline — the same one the main-hand and off-hand swings route through, so a

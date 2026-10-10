@@ -86,14 +86,7 @@ pub(crate) fn grant_starter_item(
         starter_item::HEARTHSTONE_SLOT,
         1,
     )?;
-    // Per-class loadout from CharStartOutfit (game_start_item, importer --dbc): EQUIP each equippable
-    // piece into its resolved slot (so weapons/armor render on the model) and stow the rest in the
-    // backpack — so a Mage spawns with a staff/robe, not the Warrior's sword. Keyed by the character's
-    // (race, class) (unit_bytes_0). Falls back to the hand-authored Warrior loadout below when the outfit
-    // table is empty (pre-import) — login never breaks.
-    // (race, class) from the DURABLE character row — NOT the live world entity: the creation-time
-    // call site runs before any entity exists (that's the whole point — gear must show on the
-    // char-select screen, which renders from item rows alone).
+
     let race_class: u16 = ctx
         .db
         .game_character()
@@ -435,7 +428,7 @@ pub(crate) fn grant_letter_item(
 }
 
 /// Total quantity of `item_entry` the player owns across ALL stacks (bag + equipped) — drives
-/// collect-quest completion (parity #4). Sums `stack_count` over the owner's matching item rows. [entity]
+/// collect-quest completion (parity). Sums `stack_count` over the owner's matching item rows. [entity]
 pub(crate) fn item_count(ctx: &ReducerContext, owner_guid: u64, item_entry: u32) -> u32 {
     ctx.db
         .game_item_instance()
@@ -508,14 +501,6 @@ pub(crate) fn restore_carried_items(
 /// Reusing the existing 11196 row avoids seeding a new cooldown spell entirely.
 pub(crate) const RECENTLY_BANDAGED_SPELL: u32 = 11196;
 
-/// The on-use spell for `tmpl`, or `None` if it carries no on-use effect. `spellid_1`/`spelltrigger_1`
-/// (`ItemTemplate`, shipped to the client for tooltips) are the SINGLE on-use authority (finishing
-/// the migration `rules.rs` used to name as the end state): a nonzero `spellid_1` whose trigger slot is
-/// `ItemSpellTriggerType::OnUse` (0) IS the item's on-use cast. This retires the old hardcoded
-/// `USE_EFFECTS` shadow-map (a duplicate of exactly this column) — the importer/seed data populate the
-/// column directly, so a newly-imported consumable works with zero code, and `apply_item_use` reads
-/// this ONE thing instead of two competing mechanisms. Pure — unit-tested. The `begin_cast` core then
-/// routes the spell instant/channel/buff off its OWN header (no per-item code).
 fn use_spell_for(tmpl: &ItemTemplate) -> Option<u32> {
     (tmpl.spellid_1 != 0 && tmpl.spelltrigger_1 == 0).then_some(tmpl.spellid_1)
 }
@@ -880,11 +865,7 @@ pub(crate) fn request_take_loot(
             "loot on another map",
         ));
     }
-    // Instance gate (190 slice 2 review HIGH): instances overlay IDENTICAL coordinates, so the
-    // range gate below is routinely satisfiable across the instance wall — party B's looter in
-    // their own Deadmines stands within 10yd of party A's corpse/chest position. This was the ONE
-    // loot path with no slice-1 DEFERRED marker, so the gate sweep missed it: the module is the
-    // authority regardless of what any client shows.
+
     if src_instance != player.instance_id {
         return Err(ActionRefusal::new(
             ActionRefusalKind::OtherPartition,
@@ -910,7 +891,7 @@ pub(crate) fn request_take_loot(
         .ok_or_else(|| {
             ActionRefusal::new(ActionRefusalKind::MissingTarget, "no loot in that slot")
         })?;
-    // Quest-only rows (work-item 187 slice 0): the TAKER's OWN need is re-validated server-side (the
+    // Quest-only rows : the TAKER's OWN need is re-validated server-side (the
     // gateway's window is a display hint, not authoritative) — an unreserved row (`reserved_for == 0`,
     // the shared row nobody has split yet) is claimable by anyone who currently needs it; an already
     // per-member-reserved clone is claimable ONLY by its reserved owner. A non-quest row (the common
@@ -934,7 +915,7 @@ pub(crate) fn request_take_loot(
         row.designated_looter_guid,
         player_guid,
     ) {
-        // Group loot methods (work-item 187 slices 2-4): a NEED/GREED winner-locked row
+        // Group loot methods : a NEED/GREED winner-locked row
         // (`reserved_for`), a MASTER-only row, or a round-robin/below-threshold row designated to
         // someone else all reject the plain autostore path here — server-authoritative, the gateway's
         // per-viewer loot-window filter (`reads.rs`) is a display hint only.

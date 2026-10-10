@@ -1,43 +1,3 @@
-//! FIFO admission gate for world-session establishment: a login storm arrives faster than
-//! the writer can absorb enter-world/subscription-setup cost — measured 2026-07-30 at 500 sessions,
-//! 40 ms stagger: `subscribe` alone was 38% of the writer, 148 reducer calls timed out, and 233 of
-//! 500 players were silently dropped (`create_character`/`establish_session`/`release_transfer`/
-//! `set_target` all among the timeouts). Rather than let every connection race straight into
-//! `CMSG_PLAYER_LOGIN`, cap how many world sessions the gateway holds open at once; anyone over the
-//! cap queues, holding their socket and rendering the client's NATIVE "Position in queue: N" screen
-//! (`SMSG_AUTH_RESPONSE`'s `AuthWaitQueue { queue_position }` variant — the same message vmangos/
-//! cmangos use) until a seat opens up. Nobody is dropped; the storm degrades into a wait instead.
-//!
-//! **Gate point**: `world_handshake` in `world/mod.rs`, right after the SRP client proof validates
-//! (so the header cipher already exists — every packet from here on, including the queued resends,
-//! must be encrypted) but BEFORE `AUTH_OK`. That is before the client can even reach
-//! `CMSG_CHAR_ENUM`, let alone `CMSG_PLAYER_LOGIN`'s `subscribe_player_events` — the actual
-//! expensive part measured above. NOT the logon tier (SRP + realm list on 3724): that authenticates
-//! the account, not world capacity, and stays ungated.
-//!
-//! **Config** (both env vars, both default `0` = unlimited — an unconfigured gateway, including
-//! every single-player dev realm, never queues anyone):
-//! - `LYRACORE_MAX_SESSIONS` — the seat cap. A seat is held from admission (`AUTH_OK`) until the socket
-//!   closes, covering character-select browsing as well as in-world play: the cheapest place to
-//!   stop a storm is before any of it starts, not just before the expensive part.
-//! - `LYRACORE_ADMIT_CONCURRENCY` — an ADDITIONAL rate limit on how many queued sessions may be admitted
-//!   per tick (1s), independent of how many seats happen to be free at once. Without it, a mass
-//!   simultaneous disconnect (a raid wipe, a restart draining a full queue) frees N seats in the
-//!   same instant and admits the entire backlog at once — reproducing the exact storm this exists
-//!   to prevent, just one hop later. With it, admissions trickle even when capacity allows more.
-//!
-//! Deliberate simplification: no priority tiers, no persistence. A disconnected queued socket just
-//! leaves the line ([`LoginQueue::cancel`]); a reconnect gets a fresh ticket at the back.
-//!
-//! **Both knobs are per-process, not realm-wide (#309).** This queue lives in one gateway's memory:
-//! `active` counts only sessions admitted through *this* process, so `N` gateways each configured
-//! with `LYRACORE_MAX_SESSIONS=500` admit `500*N` sessions realm-wide, and QUEUESTAT depth is
-//! per-gateway. That's a legitimate reading — the cap guards this process's own egress, a real
-//! per-process resource — but the storm this queue exists to survive (#180) is a *writer* problem
-//! shared across every gateway in the realm; a multi-gateway deployment must divide its intended
-//! realm-wide ceiling by the gateway count when setting `LYRACORE_MAX_SESSIONS` /
-//! `LYRACORE_ADMIT_CONCURRENCY`. See `docs/architecture.md` §3.2.
-
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -308,7 +268,7 @@ mod tests {
         assert_eq!(
             admitted, CAP,
             "with {ARRIVALS} simultaneous arrivals and {CAP} seats, exactly {CAP} must be admitted \
-             — fewer means seats were stranded, more means the cap was breached under contention"
+            — fewer means seats were stranded, more means the cap was breached under contention"
         );
         assert_eq!(
             q.active(),

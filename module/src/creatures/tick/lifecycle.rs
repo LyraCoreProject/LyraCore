@@ -61,9 +61,9 @@ pub(crate) fn despawn_creature_entity(ctx: &ReducerContext, guid: u64) {
 /// respawn timer armed to a FUTURE time (so respawn does NOT re-create it the same tick). Reaps the
 /// corpse's item-loot rows.
 ///
-/// Work-item 230 classification: STAYS GLOBAL — `despawn_at` is a due-time, not a proximity concern; a
+/// classification: STAYS GLOBAL, `despawn_at` is a due-time, not a proximity concern; a
 /// corpse must decay on schedule whether or not a player is anywhere near it.
-/// Work-item 229: catch-all firing only, still covering ALL instances (see
+/// catch-all firing only, still covering ALL instances (see
 /// `TickScope::runs_global_passes`). Returns spawn rows scanned.
 pub(crate) fn pass_decay(ctx: &ReducerContext) -> usize {
     let now_ts = ctx.timestamp;
@@ -93,11 +93,7 @@ pub(crate) fn pass_decay(ctx: &ReducerContext) -> usize {
         })
         .map(|s| s.guid)
         .collect();
-    // Work-item 187 (review finding #2): the roll deadline and the corpse decay are stamped from
-    // the SAME kill timestamp with the SAME 60s constant, and this pass ticks more often than the
-    // gc sweep — without resolving due rolls FIRST, decay wins the race and silently discards an
-    // unresolved roll (no winner, no ROLL_WON, item gone). Sweeping here guarantees every roll
-    // whose deadline has arrived resolves (absent voters auto-pass) before its rows can be reaped.
+
     if !decaying.is_empty() {
         crate::loot::sweep_loot_rolls(ctx);
     }
@@ -130,10 +126,7 @@ pub(crate) fn pass_decay(ctx: &ReducerContext) -> usize {
         {
             continue;
         }
-        // The ONE checklist: entity + spline/motion + the whole loot family (slice 4's
-        // item rows and work-item 187's eligibility snapshot + resolved rolls + votes, so a decayed
-        // corpse never orphans them — an UNRESOLVED roll blocked the decay above). This pass's own
-        // extra is the respawn-timer re-arm below.
+
         crate::creatures::despawn_creature_entity(ctx, guid);
         if let Some(mut spawn) = spawns.guid().find(guid) {
             // Honor the per-spawn cmangos respawn timer (respawn_secs, seconds from DEATH) over the
@@ -181,9 +174,9 @@ pub(crate) fn pass_decay(ctx: &ReducerContext) -> usize {
 /// elapsed, from its persistent spawn record + template. Runs AFTER decay (decay arms a future
 /// `respawn_at`, so a just-decayed creature isn't re-spawned this tick).
 ///
-/// Work-item 230 classification: STAYS GLOBAL — `respawn_at` is a due-time; a spawn point must
+/// classification: STAYS GLOBAL, `respawn_at` is a due-time; a spawn point must
 /// repopulate on schedule whether or not a player is nearby to see it happen.
-/// Work-item 229: catch-all firing only, still covering ALL instances. Returns spawn rows scanned.
+/// catch-all firing only, still covering ALL instances. Returns spawn rows scanned.
 pub(crate) fn pass_respawn(ctx: &ReducerContext) -> usize {
     let now_ts = ctx.timestamp;
     let entities = ctx.db.game_world_entity();
@@ -239,10 +232,10 @@ pub(crate) fn pass_respawn(ctx: &ReducerContext) -> usize {
 /// `by_state` index would still have visited every depleted node every tick; the due-time range
 /// visits only the ones actually due.
 ///
-/// Work-item 230 classification: STAYS GLOBAL — `respawn_at_micros` is a due-time (like creature
+/// classification: STAYS GLOBAL, `respawn_at_micros` is a due-time (like creature
 /// respawn/decay), not proximity; GAMEOBJECTS are also out of this item's creature-ticking scope (see
 /// the "defer it" note above, pre-dating 230).
-/// Work-item 229: catch-all firing only, still covering ALL instances. Returns GO rows scanned.
+/// catch-all firing only, still covering ALL instances. Returns GO rows scanned.
 pub(crate) fn pass_gameobject_respawn(ctx: &ReducerContext) -> usize {
     let now = ctx.timestamp.to_micros_since_unix_epoch() as u64;
     let gos = ctx.db.game_gameobject();

@@ -13,7 +13,7 @@ use super::super::views::{character_view, AccountRow, RealmRow};
 use crate::realm_core::SessionKey;
 
 impl Coordinator {
-    /// Read the single realm row for the realm-list reply (Phase 1).
+    /// Read the single realm row for the realm-list reply.
     pub fn realm(&self) -> Result<RealmRow> {
         self.0
             .coord()
@@ -34,7 +34,7 @@ impl Coordinator {
             .ok_or_else(|| anyhow!("no game_realm row in the coordinator cache"))
     }
 
-    /// Read an account's SRP6 salt/verifier for the logon challenge (Phase 1).
+    /// Read an account's SRP6 salt/verifier for the logon challenge.
     pub fn account_by_username(&self, username: &str) -> Result<Option<AccountRow>> {
         Ok(self
             .0
@@ -68,7 +68,7 @@ impl Coordinator {
         Ok(n.min(u8::MAX as usize) as u8)
     }
 
-    /// Read an account's characters for the character-select screen (Phase 3). In production
+    /// Read an account's characters for the character-select screen. In production
     /// this reads the per-player `game_character` subscription cache (RLS-restricted to owner).
     /// Equipment slots (0..=18) are populated from `game_item_instance` + `game_item_template`
     /// so the client renders the character's gear on the select screen instead of all-naked.

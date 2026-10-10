@@ -23,7 +23,7 @@ fn filtered_gossip_options<St: WorldStore + ?Sized>(
     // GossipHello, not via a `conditions` row — see `gossip_option::UNLEARNTALENTS`'s doc), so it
     // needs its own level check here rather than falling through `option_condition_holds`. Below
     // level 10 a character literally cannot have a talent point, so the option would be inert even
-    // if shown (#516).
+    // if shown.
     let level = store
         .character_by_guid(player_guid)?
         .map(|c| c.level)
@@ -189,7 +189,7 @@ pub(crate) fn handle_query<St: WorldStore + ?Sized>(
                 WorldState::InWorld(iw) => quest::gossip_quest_items(store, npc, iw.self_guid)?,
                 WorldState::CharSelect => Vec::new(),
             };
-            // A vendor that ALSO has the gossip bit gets a "browse goods" menu entry (rank-vendor #6);
+            // A vendor that ALSO has the gossip bit gets a "browse goods" menu entry (rank-vendor);
             // having stock is the is-vendor signal, so no npc_flags read is needed. An innkeeper gets a
             // "Make this inn your home." entry (hearthstone bind) — that one DOES need the npc_flags
             // read. Both are APPENDED to the imported options rather than replaced by them: a dump menu
@@ -285,7 +285,7 @@ pub(crate) fn handle_query<St: WorldStore + ?Sized>(
                     )?;
                 }
                 Some(gossip_option::UNLEARNTALENTS) => {
-                    // Respec (#516). Errors (out of range / not enough gold) are per-action —
+                    // Respec. Errors (out of range / not enough gold) are per-action ,
                     // the window closes either way, same as bind_home above.
                     let _ = store.reset_talents(conn.account_id, player_guid, npc);
                     send(tx, Outbound::One(ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE))?;
@@ -329,12 +329,6 @@ pub(crate) fn handle_query<St: WorldStore + ?Sized>(
         // or `/e` line in a language the speaker's race does not know answers "You don't know that
         // language"; every other Refusal is silent, matching vanilla.
         //
-        // GM playtest dot-commands: a Say line starting with `.` diverts BEFORE
-        // `send_chat` — never broadcast, never inserted as a `game_chat_event` row — straight to the
-        // module's one generic `gm_command` reducer. A reducer `Err` (bad gm_level, unknown command,
-        // bad args) is relayed back to the SENDER ONLY as a system chat line (`SMSG_MESSAGECHAT`
-        // System); success has no reply (the command's own effect — a teleport, a stat change — is
-        // its own feedback).
         ClientOpcodeMessage::CMSG_MESSAGECHAT(c) => {
             let CMSG_MESSAGECHAT {
                 chat_type,

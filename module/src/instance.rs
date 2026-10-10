@@ -1,76 +1,4 @@
-//! Dungeon-instancing lifecycle (work-item 190 slices 2+3). Slice 1 landed the substrate — an
-//! `instance_id` column on `game_world_entity` (+ `by_grid`), every entity↔entity gate, and the
-//! gateway relay gates. This module adds the LIFECYCLE:
-//!
-//! - **`game_instance`** — one row per live instance (map, owning party, occupancy stamp, reset
-//!   flag). `instance_id` is the `#[auto_inc]` PK: SpacetimeDB allocates from 1, so **0 = the open
-//!   world** is reserved by construction, never by convention-checking code.
-//! - **`game_instance_binding`** — one row per (character, map): which instance that character
-//!   re-enters through the dungeon portal. Survives party disband (vanilla: you stay bound to the
-//!   instance you entered until it resets/reaps); dropped when the instance is reaped.
-//! - **Entry** — `resolve_or_create_instance`, called from the 225 areatrigger hook
-//!   (`quest::apply_enter_areatrigger`) when the portal targets a DUNGEON map. Resolve order: **the
-//!   party's live instance → the character's own live binding → create** (reversed the
-//!   first two — the 190 design's binding-first order split a party whose members had entered
-//!   separately). Solo entry allowed (binds to the character, `party_id = 0`), and a solo instance
-//!   is ADOPTED by the party its holder has since joined so the members behind them join it too.
-//! - **`create_instance`** — inserts the row, spawns the per-instance POPULATION (every
-//!   `game_creature_spawn` template on the map through the NORMAL `build_creature_entity` path with
-//!   the new instance id — templates/spawn rows are NEVER cloned), per-instance COPIES of the
-//!   dungeon's interactive gameobjects (DOOR/BUTTON/CHEST/GOOBER, type-gated) — unless
-//!   `game_config.hosts_instances` is off, in which case it files the row alone as a LEASE and the
-//!   shard that owns the map spawns the population via `ensure_instance`. It does NOT arm a
-//!   dedicated 229 tick row — the catch-all covers every instance at the same cadence for free (perf
-//!   catalog 1.3); `debug_arm_instance_tick` still arms one on demand for a faster cadence.
-//! - **Reap (slice 3)** — its own scheduled reducer (`reap_instances`, the `EventReaperSchedule`
-//!   precedent — gc.rs is deliberately untouched): reaps an instance empty for
-//!   [`INSTANCE_EMPTY_REAP_MICROS`] (30min) or flagged `reset_requested` while empty. Teardown
-//!   order per the design: population (entities/corpses/loot/GO copies) → the 228 encounter-kernel
-//!   sweep splice → the 229 tick row → bindings → the `game_instance` row.
-//!
-//! ## Occupancy mechanism (slice 3 decision — stated per the work item)
-//! `last_empty_at_micros` is maintained by the REAPER itself, not by the per-instance tick row's
-//! sense tick: each `reap_instances` firing makes ONE pass over `game_world_entity` classifying
-//! every instance's player-occupancy at once (a `HashSet` of instance ids with a live player), then
-//! stamps/clears/reaps per instance. Cost: one entity-table scan per reaper firing (60s), ZERO
-//! added work on the hot 0.5s creature tick, and a single writer for the stamp (no tick↔reaper
-//! write race). Minute resolution is exact enough for a 30-minute threshold — reap eligibility
-//! requires two reaper observations ≥30min apart to BOTH see the instance empty, and any re-entry
-//! in between clears the stamp. The 229 sense-tick alternative would add a per-4s write path per
-//! instance for no accuracy the 30-minute constant can use. `reset_requested` takes effect on the
-//! next firing that observes the instance empty (≤60s latency — acceptable; vanilla's reset is
-//! instant but our async reap is invisible to the resetting party, who by definition are outside).
-//!
-//! ## Respawn-within-a-run (v1 decision — stated per the work item)
-//! Instance populations are **entity-only** (the 229 trap: `game_creature_spawn` rows are NOT
-//! instance-tagged, and `pass_respawn` builds at instance 0 — riding it would leak respawns into
-//! the open world). So trash killed inside a live run does NOT respawn (vanilla 5-mans do respawn
-//! trash on a timer; honest v1 gap — per-instance spawn bookkeeping is the future fix), instance
-//! corpses do NOT decay mid-run (`pass_decay` is spawn-row-driven; corpses + their loot live until
-//! the reap — cosmetically fine for a bounded-lifetime instance, and loot stays takable), and the
-//! population is stationary-until-aggro (no waypoint/wander/return-home passes: all three anchor on
-//! spawn rows/waypoints keyed by the spawn guid, which per-instance copies deliberately don't
-//! share). Aggro/assist/chase/flee/casting all work — they are entity+template+melee-row driven.
-//!
-//! ## Guid namespaces (collision-proofing, unit-tested)
-//! Per-instance creature copies reuse the wave-guid layout (`encounter::wave_guid`:
-//! `0xF130 | entry<<24 | low24`) with **bit 23 of the low set** ([`INSTANCE_POP_LOW_BAND`]) — a
-//! band disjoint from imported spawn lows (cmangos db guids ≪ 2^23) and from `spawn_wave`'s
-//! allocator (which maxes over SPAWN rows only and so must never be able to collide with these
-//! spawn-row-less entities). Per-instance GO copies get `0xF110 | bit46 | seq`
-//! ([`GO_COPY_BAND`]) — below `gameobject::POOL_TAG` (bit 47), above every static/debug low.
-//!
-//! ## Instance Removal
-//! A Character that stands in a Group's dungeon instance without being a member of that Group gets
-//! a 60-second countdown, then goes to its hearthstone home (cm:Player.cpp:17694-17731). The rule
-//! is state, not an edge: [`reconcile_instance_removal`] runs wherever membership or location
-//! changes on this Shard (the Group mirror, the membership cores, login), and the one-shot
-//! `game_instance_removal` row fires [`expire_instance_removal`], which reads the rule again
-//! before it moves anybody.
-//!
-//! Every table here is private. The Coordinator subscribes to `game_instance` with the Owner Token
-//! so Transfer can read the source lease's admitted map and party, and to `game_instance_removal`
-//! to relay the countdown. `game_instance_binding` remains unsubscribed. [server]
+//! Instance lifecycle. See `docs/instance-lifecycle.md` for the contract and rationale.
 
 use std::collections::{HashMap, HashSet};
 
@@ -103,25 +31,12 @@ pub(crate) use lyracore_shared::instance::is_dungeon_map;
 #[cfg(test)]
 pub(crate) use lyracore_shared::instance::DUNGEON_MAPS as SHARED_DUNGEON_MAP_IDS;
 
-/// One fully-described dungeon. This used to be FOUR hand-synchronized `match map_id`
-/// sites — [`entrance_fallback`] here, plus `world::graveyard::instance_release_zone` and
-/// `...instance_static_fallback` — each of which could independently gain (or omit) an arm for a
-/// map, and the omission surfaced only as a runtime `warn!` the first time a release actually hit
-/// the gap (`resolve_graveyard`, earlier). A `DungeonMap` has no optional fields, so a map is now
-/// either fully described here — entrance AND release zone AND release fallback, together — or
-/// absent, i.e. not a dungeon; there is no half-configured state left to warn about.
 pub(crate) struct DungeonMap {
     pub(crate) map_id: u32,
     /// The open-world position OUTSIDE the entrance — `(map, x, y, z, o)`, the stranding fallback
     /// for a login whose `pending_instance_id` was reaped ("fall back to the entrance at instance
     /// 0", design doc §3).
     ///
-    /// PREMISE CORRECTION (vs. the work item's "reverse-lookup the areatrigger pair" option): the
-    /// reverse-lookup is NOT implementable with current data — `game_areatrigger_teleport` rows
-    /// carry only the TARGET (the entrance row's target is INSIDE the dungeon; the exit row's
-    /// target is the coords we want but the row records neither its source map nor which dungeon it
-    /// exits, so with a second dungeon imported the lookup is ambiguous). Hence the per-map record,
-    /// `[V]`.
     pub(crate) entrance: (u32, f32, f32, f32, f32),
     /// The instance's own zone id for graveyard release (cmangos `game_graveyard_zone.ghost_zone`)
     /// — the map→zone hop `world::graveyard::resolve_zone_id` can't make without terrain.
@@ -177,7 +92,7 @@ pub(crate) const INSTANCE_REAPER_INTERVAL_MICROS: i64 = 60 * 1_000_000;
 /// How long a **LEASE** must read empty before the reaper takes it.
 ///
 /// A lease is a `game_instance` row on a database that does not host instance populations
-/// (`game_config.hosts_instances = false`) — the world shard of a Phase A deployment.
+/// (`game_config.hosts_instances = false`).
 /// It reads EMPTY within seconds of the last party member transferring to the instance shard, i.e.
 /// seconds after the run *starts*, because occupancy is counted from live player entities and there
 /// are none here any more. Reaping it on the ordinary 30-minute timer therefore deletes the world
@@ -204,7 +119,7 @@ pub(crate) const INSTANCE_REAPER_INTERVAL_MICROS: i64 = 60 * 1_000_000;
 /// hole. Upgrade path is the one [`teardown_instance_inner`] already names: realm-core owns the
 /// instance→shard index and the lease stops existing. **Single-database realms never reach
 /// this arm at all** — `hosts_instances` defaults to true, so their reap semantics are byte-for-byte
-/// what they were (AC#4).
+/// what they were (AC).
 pub(crate) const INSTANCE_LEASE_REAP_MICROS: i64 = 12 * 60 * 60 * 1_000_000;
 
 /// The empty-timer this database reaps instances on: [`INSTANCE_EMPTY_REAP_MICROS`] where the
@@ -235,13 +150,6 @@ pub(crate) const INSTANCE_POP_LOW_BAND: u64 = 0x80_0000;
 /// entry-derived lows (< 2^24).
 pub(crate) const GO_COPY_BAND: u64 = 1 << 46;
 
-/// The gameobject types that get per-instance copies at `create_instance` (type-gated per the
-/// design: the dungeon's interactive props — doors, levers, chests, quest objects). GATHER nodes
-/// and pool points deliberately do NOT copy: the pool/respawn machinery is spawn-row/point-table
-/// driven and open-world-only. QUESTGIVER-type GOs are deliberately NOT in this list either (190
-/// review LOW): a static instance-0 QUESTGIVER on a dungeon map is UNREACHABLE from inside a run
-/// (the use/giver gates require instance equality) — no such GO exists in today's content; if a
-/// dungeon ever needs one, add the type here so it copies like the other interactive props.
 const GO_COPY_TYPES: [u8; 4] = [
     crate::gameobject::go_type::DOOR,
     crate::gameobject::go_type::BUTTON,
@@ -310,11 +218,6 @@ crate::character_owned!(transfer, fn sweep_transfer_game_instance_binding(ctx, c
     remint = id,
 });
 
-/// Drives the instance reaper (slice 3) — its OWN scheduled table per the `EventReaperSchedule`
-/// precedent (gc.rs untouched by design). Seeded by `seed::init` at 60s; a live (auto-migrated)
-/// node re-arms via `debug_repair_after_publish` (formerly the standalone
-/// `debug_rearm_instance_reaper`) (init does not re-run on a plain publish —
-/// danger-zones "init only on fresh publish" rule). [server]
 #[table(accessor = game_instance_reaper_schedule, scheduled(reap_instances))]
 pub struct InstanceReaperSchedule {
     #[primary_key]
@@ -369,13 +272,6 @@ pub(crate) fn route_instance(
     party_live: Option<u64>,
 ) -> InstanceRoute {
     match (own_binding_live, party_live) {
-        // THE PARTY OUTRANKS THE PERSONAL BINDING (defect 3). This used to be the other
-        // way round, which SPLIT a party: a member who had already entered solo carried a binding
-        // to their own `party_id = 0` instance, that binding won, and the rest of the party — who
-        // could not see a solo instance through `by_party` — created a second dungeon. Vanilla's
-        // rule is the one here: a non-saved 5-man takes the GROUP's instance, and the personal
-        // binding is what you fall back to when you have no group (or your group has not entered
-        // yet). It still survives disband, because a party-less character reaches the `Own` arm.
         (_, Some(id)) => InstanceRoute::Party(id),
         (Some(id), None) => InstanceRoute::Own(id),
         (None, None) => InstanceRoute::Create,
@@ -432,7 +328,7 @@ pub(crate) fn occupancy_action(
     }
 }
 
-/// Where a login whose `pending_instance_id` was reaped lands (NEVER strand — design trap #3).
+/// Where a login whose `pending_instance_id` was reaped lands (NEVER strand, design trap).
 /// Pure over the two facts the caller derives ([`entrance_fallback`], [`is_dungeon_map`]);
 /// alive-or-ghost is orthogonal and preserved per 226's `pending_ghost` rules at the call site.
 #[derive(Debug, PartialEq)]
@@ -721,14 +617,8 @@ pub(crate) fn create_instance_with_id(
     });
     let instance_id = inst.instance_id;
 
-    // --- THE HOSTING GATE (defect 1). ------------------------------------------------
-    // A database that does not host instance populations files the row + (the caller's) binding and
-    // spawns NOTHING: a LEASE, the exact shape `teardown_instance_inner(delete_row = false)` leaves
-    // behind after a cross-database eviction. On the open-world shard of a Phase A deployment this
-    // is the whole fix for "the portal spawned 207 creatures + 28 GO copies on the writer that is
-    // not going to run the dungeon" — the population is spawned on the shard that owns the map,
-    // when the gateway mirrors this id there via `ensure_instance`, which runs on a database where
-    // this flag is (and stays) true. Default true ⇒ a single-database realm is unchanged.
+    // A non-hosting database files the lease and binding without population.
+    // The owning Shard creates population when ensure_instance receives this lease.
     if !hosts_instance_populations(ctx) {
         log::info!(
             "create_instance: instance {instance_id} map {map_id} party {party_id} — LEASE only \
@@ -756,12 +646,7 @@ pub(crate) fn create_instance_with_id(
             }
         }
     }
-    // Tracked wave/summon spawn rows are NOT population (190 review HIGH): 227's spawn_wave
-    // inserts REAL untagged game_creature_spawn rows on the dungeon map (Sneed, VanCleef adds)
-    // that persist until THEIR instance's reset/sweep — without this exclusion, a fresh instance
-    // created while another run is live (or recently dead) would spawn a pre-summoned Sneed
-    // standing on the wreck and duplicate mid-fight adds. Every wave row is tracked in
-    // game_encounter_spawn by definition — that table IS the wave registry.
+
     let tracked_wave_guids: std::collections::HashSet<u64> = ctx
         .db
         .game_encounter_spawn()
@@ -857,18 +742,6 @@ pub(crate) fn create_instance_with_id(
         copied += 1;
     }
 
-    // --- NO dedicated per-instance tick row (perf catalog 1.3). This used to unconditionally insert
-    // one at INSTANCE_TICK_INTERVAL_MICROS — the SAME cadence as the global catch-all, so it bought
-    // zero latency smoothing while each firing paid the FIXED per-firing costs the partition does not
-    // divide: a transaction commit on the serialized writer, a TickScope rebuild, active_cell_radius,
-    // active_cell_creatures' player scan, and the pet phase's candidate list on sense ticks. With M live
-    // instances that is M extra tx/s each carrying an O(E) scan, for creature populations that are
-    // stationary-until-aggro. The catch-all covers every instance with no dedicated row
-    // (`TickScope::from_rows`) — the exact coverage teardown already relies on (step 5 below deletes
-    // the row and lets the catch-all take over), so instance creatures tick identically, just inside
-    // the catch-all's transaction. An operator who wants a genuinely FASTER cadence for one instance
-    // still arms one explicitly via `debug_arm_instance_tick`.
-
     log::info!(
         "create_instance: instance {instance_id} map {map_id} party {party_id} — {spawned} creatures, {copied} GO copies"
     );
@@ -938,7 +811,7 @@ pub fn ensure_instance(
 /// **Source side.** Evict an instance's POPULATION from this database, keeping the `game_instance`
 /// row and its bindings as a lease (see [`teardown_instance_inner`]).
 ///
-/// This is what makes AC#2 true: the world shard spawned the dungeon when the first
+/// This is what makes AC true: the world shard spawned the dungeon when the first
 /// player stepped through the portal, but the run happens on the instance shard, so the world
 /// writer must stop ticking its creatures. Refuses while a live player is inside — the same guard
 /// `teardown_instance` has, and here it is load-bearing: a member who has NOT transferred yet is a
@@ -974,13 +847,8 @@ pub fn evict_instance_population(
 /// player-occupancy, then each instance stamps/clears/waits/reaps per [`occupancy_action`].
 /// Teardown is batched ([`REAP_MAX_PER_FIRING`]); leftovers reap next firing (60s later).
 ///
-/// **Reaper LOCALITY (AC#1).** Every database runs its own reaper over its own
-/// `game_instance` rows and nothing else — there is no cross-database sweep and no shard id
-/// anywhere in it. A database that owns no instances therefore does no work at all: the row scan
-/// below finds nothing and returns *before* the O(entities) occupancy pass, so an open-world writer
-/// in a Phase A deployment pays for the reaper only while it is actually holding leases, and a
-/// pool member pays only for the runs it hosts. The empty timer itself is per-database too — see
-/// [`empty_reap_micros`].
+/// Each database reaps only its hosted Instances. With no leases, it skips the entity scan.
+/// Empty timers are database-local; see [`empty_reap_micros`].
 #[reducer]
 pub fn reap_instances(ctx: &ReducerContext, _schedule: InstanceReaperSchedule) {
     if ctx.sender() != ctx.database_identity() {
@@ -1413,14 +1281,6 @@ mod tests {
         );
     }
 
-    /// The cross-tier tripwire: [`lyracore_shared::instance::DUNGEON_MAPS`] is the id
-    /// list `gateway::config::ShardMap::check_instance_hosting` walks — every id in it
-    /// MUST have a full record in this crate's [`DUNGEON_MAPS`], or a login/release on that map
-    /// would silently take the "not a dungeon" path every helper here takes for an absent
-    /// `DungeonMap`. This is the test-time replacement for the runtime `warn!` `resolve_graveyard`
-    /// used to log the first time a release actually hit a half-configured map (deleted — a
-    /// `DungeonMap` has no optional fields, so once an id clears this pin it can never regress into
-    /// a half-configured state).
     #[test]
     fn every_shared_dungeon_map_has_a_dungeon_maps_record() {
         for &m in SHARED_DUNGEON_MAP_IDS {
@@ -1435,7 +1295,7 @@ mod tests {
                 is_dungeon_map(d.map_id),
                 "map {} has a module::instance::DUNGEON_MAPS record but is missing from \
                  lyracore_shared::instance::DUNGEON_MAPS — its instance-hosting would never be \
-                 checked at gateway startup (issue #48)",
+                 checked at Gateway startup",
                 d.map_id
             );
         }
@@ -1512,7 +1372,7 @@ mod tests {
         );
     }
 
-    /// **AC#4** — reap semantics on a shard-pool deployment, stated against the single-database
+    /// **AC**, reap semantics on a shard-pool deployment, stated against the single-database
     /// ones they must not change.
     #[test]
     fn a_lease_only_database_holds_its_stub_rows_far_past_the_thirty_minute_run_timer() {
@@ -1546,19 +1406,13 @@ mod tests {
             "with the lease timer the world shard still knows which instance that party is in"
         );
 
-        // The MAGNITUDE, not just the ordering. Adversarial review: the assertions above pass with
-        // any lease timer over ~40 minutes (45min was verified green), and a lease's countdown
-        // starts at the run's START — it is not an idle grace period, it is a bound on RUN LENGTH.
-        // A vanilla BRD or Stratholme clear runs 3–5 hours and a raid night runs longer, so a 3h
-        // lease re-creates the exact 30-minute fork for the longest runs. Pin the requirement to
-        // the run length the realm intends to support, so shrinking the constant is what fails.
         let longest_supported_run = 8 * 60 * 60 * 1_000_000i64;
         assert!(
             lease > longest_supported_run,
             "the lease timer ({lease}µs) must outlast the LONGEST run it is a receipt for, not \
              merely the 30-minute hosting timer: it starts counting when the party leaves the world \
              shard, i.e. at minute ~0 of the run. Below this bound a long dungeon or raid forks its \
-             own party exactly as the 30-minute timer did — the bug #21 set out to fix."
+             own party exactly as the 30-minute timer did."
         );
         assert_eq!(
             occupancy_action(false, now - longest_supported_run, false, now, lease),

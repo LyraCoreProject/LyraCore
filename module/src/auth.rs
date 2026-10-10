@@ -491,11 +491,6 @@ fn legacy_guid_seed(
         .max(owned_guids.max().unwrap_or(0))
 }
 
-/// The whole decision behind `next_character_guid`, pure: advance the seed by exactly one — no
-/// ratchet needed here, since the seed IS the current mark (or the legacy scan's max), so "advance"
-/// can never be a floor call in disguise. Mutation target: this is where a `next_character_guid`
-/// that stops allocating (e.g. swapping `seed + 1` for `seed`) would live if it weren't pulled out
-/// here — pulling it out is what lets a ctx-free test catch that mutation at all (playbook §7).
 fn allocate_next_guid(seed: u64) -> u64 {
     seed + 1
 }
@@ -537,10 +532,7 @@ fn write_high_water(ctx: &ReducerContext, existing: Option<GuidAllocator>, mark:
     }
 }
 
-/// Allocate the next character guid, durably. Replaces `create_character`'s old inline scan. Thin
-/// on purpose: the only decision here — [`allocate_next_guid`] — is pure and unit-tested; this
-/// wrapper is just the read/compute/write around it. Pinned by [`guid_allocator_tests::next_character_guid_routes_through_allocate_next_guid`]
-/// (ctx glue can't be unit-tested directly — playbook §7).
+/// Allocate and persist the next Character guid from the durable high-water mark.
 pub(crate) fn next_character_guid(ctx: &ReducerContext) -> u64 {
     let existing = read_high_water(ctx);
     let seed = existing
@@ -711,15 +703,6 @@ pub fn install_guid_range(ctx: &ReducerContext, base: u64) -> Result<(), String>
 mod guid_allocator_tests {
     use super::{allocate_next_guid, legacy_guid_seed, ratchet_high_water};
 
-    /// Two shards that both mint characters must never mint the same guid, and the
-    /// mechanism is a per-shard floor. The property that makes a floor SAFE to apply to a live
-    /// database — and safe to re-apply — is that it can only ratchet UP: a floor below the current
-    /// mark must not rewind the allocator onto guids that are already issued. `install_guid_range`
-    /// (below) is the only caller left that applies one (deleted the standalone
-    /// `set_guid_floor` reducer — dead once every shard's floor got a licensed, non-optional
-    /// path instead), and it reaches the mark through this same function, so this pin still covers
-    /// it. Mutation target: swapping `ratchet_high_water(seed, floor)` for a plain assignment inside
-    /// `bump_guid_high_water` makes the second assertion re-issue guid 40.
     #[test]
     fn a_guid_floor_only_ever_ratchets_upwards() {
         // A fresh shard given a floor: the mark jumps to it, so the next guid is above it.
@@ -808,7 +791,6 @@ mod guid_allocator_tests {
         assert!(!in_guid_range(range, 3_000_000_000));
     }
 
-    /// Mutation target: flip `.max` to `.min` (or drop the `floor` arm entirely) and this goes red.
     #[test]
     fn ratchet_high_water_never_moves_backwards() {
         assert_eq!(
@@ -824,8 +806,6 @@ mod guid_allocator_tests {
         assert_eq!(ratchet_high_water(0, 0), 0);
     }
 
-    /// Mutation target: swap the `.max` between the two iterators, or drop either arm, and this
-    /// goes red — it's the exact scan `create_character` used to run inline.
     #[test]
     fn legacy_guid_seed_is_the_max_of_both_sources() {
         assert_eq!(
@@ -839,10 +819,6 @@ mod guid_allocator_tests {
         assert_eq!(legacy_guid_seed(std::iter::empty(), std::iter::empty()), 0);
     }
 
-    /// Mutation target: reproduces the reviewer's exact find — `next_character_guid` used to inline
-    /// `ratchet_high_water(current, current + 1)` with no ctx-free seam to catch a mutation that
-    /// swapped it for plain `current` (never advances). That decision now lives in
-    /// `allocate_next_guid`, so this test alone catches it.
     #[test]
     fn allocate_next_guid_always_advances_past_the_seed() {
         assert_eq!(allocate_next_guid(50), 51);
@@ -854,14 +830,6 @@ mod guid_allocator_tests {
         );
     }
 
-    /// Defect 1, COMPOSED end-to-end through the pure functions (no ctx, so this can run
-    /// as a plain unit test): a database with characters up to 49 has JUST cascade-deleted guid 50
-    /// (a departed transfer) — `legacy_guid_seed` therefore only sees the survivors, exactly the
-    /// scan `create_character` used to run inline. Flooring the mark at 50 (what
-    /// `cascade_delete_character`'s new `bump_guid_high_water` call does) must make the NEXT
-    /// allocation land on 51, never re-issue the departed 50. This is the outcome the individual
-    /// `ratchet_high_water`/`allocate_next_guid` tests above don't quite prove on their own — this
-    /// one composes them the way production actually does, guid-for-guid.
     #[test]
     fn defect_1_transfer_then_create_no_longer_reissues_the_departed_guid() {
         let chars_after_transfer = [10u64, 30, 49]; // guid 50 already gone when this runs
@@ -1059,7 +1027,7 @@ pub(crate) fn insert_new_character(
         death_expire_micros: 0, // never died // fresh character, never respec'd
         pending_instance_id: 0, // open world
         gm_level: 0,            // no GM access until granted via set_gm_level
-        pending_ghost: false,   // fresh characters are alive (work-item 226)
+        pending_ghost: false,
         resting: false,         // 196: not in an inn until they walk into one
         rested_since_micros: 0, // 196: live-accrual clock idle
         pending_godmode: false, // 289: GM playtest carry — off until `.god` + a map change
@@ -1082,16 +1050,11 @@ pub(crate) fn insert_new_character(
     // the one castability source (`knows_spell`) and the gateway's SMSG_INITIAL_SPELLS both read them.
     let owner = account.identity.unwrap_or(Identity::ZERO);
     crate::spell::spellbook::grant_createinfo_spells(ctx, next_guid, owner, race, class);
-    // Action-bar rows (work-item 212): copies `game_createinfo_action` the same way the spell grant
+    // Action-bar rows : copies `game_createinfo_action` the same way the spell grant
     // above copies `game_createinfo_spell` — a no-op pre-import (table empty), so the gateway's login
     // synth covers it until the dump is imported.
     crate::action_bar::grant_createinfo_actions(ctx, next_guid, owner, race, class);
-    // And the starter LOADOUT (outfit + hearthstone) — at creation, not first login, so the
-    // char-select screen renders the gear (SMSG_CHAR_ENUM reads item rows; a never-logged-in
-    // character used to have none and showed a naked model). Identity staleness is a non-issue
-    // here: char-select reads ride the gateway's PRIVILEGED coordinator (RLS-bypassed), and any
-    // ZERO/stale owner stamp is corrected by player_login's restamp_owned_data sweep BEFORE the
-    // first player-scoped (RLS) read of these rows can happen.
+
     crate::items::grant_starter_item(ctx, next_guid, owner)?;
     Ok(next_guid)
 }

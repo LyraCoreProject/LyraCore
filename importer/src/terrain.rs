@@ -1,4 +1,4 @@
-//! `--terrain <client Data/ dir>` — ADT heightmap slice → `game_terrain_chunk` (work-item 172).
+//! `--terrain <client Data/ dir>`, ADT heightmap slice → `game_terrain_chunk`.
 //!
 //! Reads the operator's OWN client terrain MPQs (same licensing firewall as `--dbc`: extracted
 //! data never enters the repo), parses the ADT tiles covering the content slice with `wow-adt`,
@@ -7,7 +7,7 @@
 //! Heights are rebased to ABSOLUTE world Z here (MCVT is relative to the chunk header Z), so
 //! the module's `ground_z` is pure arithmetic. Dry-run prints the plan + a self-check; `--apply`
 //! calls the reducers. Honors `--map/--center/--radius`, or `--box X0,X1,Y0,Y1` in place of
-//! `--radius` for an exact rectangle (work-item 206 — a wide zone like Westfall+Elwynn together
+//! `--radius` for an exact rectangle, a wide zone like Westfall+Elwynn together
 //! needs a rectangle, not a center-radius circle's bounding square); `--center` still drives the
 //! interpolate self-check below, so put it INSIDE the box.
 
@@ -19,7 +19,7 @@ use std::path::Path;
 use wow_mpq::PatchChain;
 
 /// Vanilla map id → client map directory name. Both CONTINENTS are supported: map 0 is the Elwynn
-/// corridor, and map 1 is the Phase B Kalimdor world shard (issue #24) — `--terrain`/`--nav --map 1`
+/// corridor, and map 1 is the Kalimdor continent, `--terrain`/`--nav --map 1`
 /// read `World\Maps\Kalimdor\*.adt` through this same code path, self-checks included. Instance
 /// terrain remains refused because this height row represents only one floor per cell.
 // Deliberate simplification: two-arm match, not Map.dbc — add arms (or read the DBC) when a third
@@ -71,7 +71,6 @@ fn open_terrain_chain(data_dir: &Path) -> Result<PatchChain> {
     Ok(chain)
 }
 
-/// One output row, already in the reducer wire format's field order.
 pub(crate) struct CellRow {
     pub(crate) map_id: u32,
     pub(crate) cell_x: u16,
@@ -108,7 +107,7 @@ fn cell_index(coord: f32) -> i32 {
 }
 
 /// Cell-index range `(x_min, x_max, y_min, y_max)` covering the content slice: a `--box`
-/// rectangle when given (work-item 206 — the Westfall widening needed an exact rectangle, not a
+/// rectangle when given, the Westfall widening needed an exact rectangle, not a
 /// center±radius bounding square that either misses corners or overshoots into neighbours), else
 /// the original center±radius square. Cell indices count DOWN as world coordinates grow (see
 /// `cell_index`), so a box's HIGH world coordinate (x1/y1) maps to the LOW cell index and vice
@@ -227,14 +226,6 @@ fn collect_slice(
     let mut tiles_read = 0u32;
     for tx in tx_min..=tx_max {
         for ty in ty_min..=ty_max {
-            // ADT filename order is folkloric ({name}_{a}_{b}.adt — which index is which axis?),
-            // and for interior tiles BOTH candidate names exist (they're just different map
-            // locations), so file existence proves nothing (PR-9 review). Arbitrate by CONTENT:
-            // parse each candidate and accept the one whose own MCNK header positions land in
-            // this (tx, ty) tile's cell range. Wrong-order picks are a hard error, not a
-            // silently-holed slice. A tile with no ADT at all is open sea or an unbuilt map
-            // edge: the client ships no file there, so a slice rectangle that reaches the coast
-            // skips it with a warning instead of refusing the whole slice.
             let candidates = [
                 format!("World\\Maps\\{map_name}\\{map_name}_{ty}_{tx}.adt"),
                 format!("World\\Maps\\{map_name}\\{map_name}_{tx}_{ty}.adt"),
@@ -347,14 +338,6 @@ pub(crate) fn collect_cells(
         if mcvt.heights.len() != 145 {
             continue;
         }
-        // MCNK header position: [0]/[1] are the world x/y of the chunk corner, [2] the base
-        // height MCVT values are relative to. wow-adt 0.6.4's header.rs:238 doc claims the raw
-        // field is [Z, X, Y] (and offers world_position() to reorder) — that doc is WRONG for
-        // vanilla ADTs and contradicts line 106 of the same file. Arbitrated empirically at
-        // commit 14e5702 (PR-9 review): dry-run self-checks pass reading [X, Y, Z] at both the
-        // near-flat Northshire center (83.529 vs 83.5312) and a sloped point (80.400 exact);
-        // were [0] really Z (~80), cell_index(80)=509 would fall outside the slice band
-        // (774..784) and ZERO rows would collect. Worth reporting upstream.
         let (px, py, pz) = (
             mcnk.header.position[0],
             mcnk.header.position[1],
@@ -386,9 +369,6 @@ pub(crate) fn collect_cells(
     Ok(())
 }
 
-/// Interp at (x, y) from collected rows via the SAME `lyracore_shared::terrain::interpolate` the
-/// module's ground_z calls — so the run()-time self-check verifies the import, not a second
-/// copy of the math (PR-9 review).
 fn interp_check(rows: &[CellRow], x: f32, y: f32) -> Result<f32> {
     let (cx, cy) = (cell_index(x) as u16, cell_index(y) as u16);
     let row = rows
@@ -465,7 +445,7 @@ mod tests {
 
     #[test]
     fn slice_cell_range_from_box_uses_corners_not_center_radius() {
-        // work-item 206: the widened Westfall box. High world X/Y (x1/y1) map to the LOW cell index
+        // the widened Westfall box. High world X/Y (x1/y1) map to the LOW cell index
         // (cell index counts DOWN as world coords grow) — the min/max pairing is corner-derived, not
         // center±radius, and radius is ignored entirely once a box is given.
         let (x0, x1, y0, y1) = (-11400.0f64, -8000.0, -1600.0, 2000.0);

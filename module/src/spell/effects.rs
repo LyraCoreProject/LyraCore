@@ -20,7 +20,7 @@ use crate::game_world_entity;
 use crate::game_melee_attack;
 // The taxonomy consts, the `Aura` struct + the generated `game_aura`/`game_spell` accessor traits, and
 // every pure helper this file calls (`should_arm_spell_retaliation`, `dispel_category_matches`,
-// `rederive_pool`, `absorb_draw`, `drain_shields`, `stat_bonus`, ...) are re-exported by `mod.rs`.
+// `rederive_pool`, `absorb_draw`, `drain_shields`, `stat_bonus`,...) are re-exported by `mod.rs`.
 use super::*;
 
 /// Should a PLAYER's spell hit arm the target creature's reciprocal melee retaliation? True only when the
@@ -57,13 +57,6 @@ pub(crate) fn arm_spell_retaliation(ctx: &ReducerContext, caster_guid: u64, targ
     }
 }
 
-/// Apply `basis` spell damage to `target_guid`, credited to `caster_guid`. A CREATURE reduced to 0
-/// **dies** via the SHARED `combat::kill_creature` (corpse + loot + decay — identical to a melee blow);
-/// a PLAYER is FLOORED at 1 hp (no spell-death of players yet). A non-lethal hit just subtracts. No-op
-/// if the target is gone/dead. XP credited only when the caster is a PLAYER. [entity]
-/// Returns `(dealt, absorbed)`: the post-mitigation damage written to health and the amount an A_ABSORB
-/// shield soaked before the health write (so the cast-GO row can carry the absorbed figure for the
-/// floating damage log). A target that's gone/dead absorbs nothing → `(0, 0)`.
 pub(crate) fn apply_target_damage(
     ctx: &ReducerContext,
     target_guid: u64,
@@ -88,11 +81,7 @@ pub(crate) fn apply_target_damage(
     {
         return (0, 0);
     }
-    // Stage 1 of the SHARED damage pipeline: the caster's outgoing % (Defensive Stance's −10%
-    // plus any A_MOD_COMBAT(COMBAT_DMG_DONE) curse), the target's A_MOD_DAMAGE_TAKEN %, absorb shields
-    // (soaked BEFORE the kill check, so a fully-absorbed hit can't kill), and the GM godmode zero.
-    // This is the exact chain the melee/ranged swings fold — they used to be four hand-maintained
-    // copies of it.
+
     let (dmg, absorbed) =
         crate::combat::fold_incoming_damage(ctx, caster_guid, target_guid, basis.max(0) as u32);
     let damage = crate::combat::final_damage(ctx, target_guid, dmg);
@@ -125,7 +114,7 @@ pub(crate) fn apply_target_damage(
 pub(crate) fn dispel_target(ctx: &ReducerContext, target_guid: u64, category: u8) -> u32 {
     let auras = ctx.db.game_aura();
     let spells = ctx.db.game_spell();
-    // Collect full rows (not just ids): a DISPEL is the other DR-removal event (work-item 192) — CC
+    // Collect full rows (not just ids): a DISPEL is the other DR-removal event, CC
     // diminishing returns starts its 15s window at removal (natural expiry OR dispel), so each dispelled
     // row's `eff_*` fields must still be readable to check `dr_category_for_effect` BEFORE it's deleted.
     let debuffs: Vec<Aura> = auras
@@ -200,10 +189,7 @@ pub(crate) fn recompute_vitals(ctx: &ReducerContext, unit_guid: u64) {
 
     // --- max_health from effective stamina (every class has health) ---
     let login_max_health = crate::stats::max_health_for(ctx, race, class, e.level);
-    // Effective Stamina bonus = aura A_MOD_STAT(STA) PLUS the Stamina summed across EQUIPPED gear
-    // — so a +Stamina chest/ring actually grows the health bar, not just a Mark-of-the-Wild
-    // aura. Mirrors how combat's effective_strength folds aura + gear. No gear and no aura → 0, so the
-    // pool stays byte-identical to the bare level curve (baseline-safe).
+
     let sta_bonus = stat_bonus(ctx, unit_guid, STAT_STA).saturating_add(
         crate::items::equipped_stat_bonus(ctx, unit_guid, crate::items::EquipStat::Stamina),
     );

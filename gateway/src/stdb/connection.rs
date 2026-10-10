@@ -472,8 +472,6 @@ struct ReducerCompletionState {
         HashMap<u64, std::sync::mpsc::Sender<std::result::Result<(), ReducerCompletionFailure>>>,
 }
 
-/// The SDK callback keeps module refusals distinct from failures in the SDK itself. Both used to
-/// share a `String`, which made callers infer provenance from rendered error text.
 #[derive(Debug, Clone)]
 pub(crate) enum ReducerCompletionFailure {
     Rejected(String),
@@ -1058,7 +1056,7 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // cheapest possible query, but that was never the cost. The cost was that ~600 DISTINCT
         // query strings can neither be shared nor pruned, so every committed transaction woke ~600
         // SDK pumps to re-evaluate them: load average 11–14 on 8 cores at 34% CPU with 7 runnable
-        // threads (clockworklabs/SpacetimeDB#2783). One subscription wakes one pump.
+        // threads (clockworklabs/SpacetimeDB). One subscription wakes one pump.
         //
         // ⚠ These are the two HIGHEST-RATE tables in the module (one upsert per mover per movement
         // heartbeat, one per creature leg). They are handled by `world_view`'s dispatch, which does
@@ -1075,55 +1073,7 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // RECOVERY: a restarted gateway re-derives an in-flight transfer's id, destination and
         // payload from this row alone.
         //
-        // BASE list, not `sharded_tables`: the table is the escrow primitive itself, present on every
-        // module since long before any of the sharding work, so subscribing it unconditionally
-        // cannot brick the restart of a gateway whose module predates multi-database routing. Nothing READS
-        // it unsharded (`settle_home_shard` short-circuits on `is_sharded()`).
-        "SELECT * FROM game_transfer_out",
-        // The destination fence. A world-entry retry reads its exact presence before doing the
-        // required party synchronization, and the bot driver binds an exact intent identity to it
-        // before release. Like the source escrow, this is private owner-token state. The table
-        // predates the multi-Shard query split, so it stays in the base subscription for older
-        // Modules.
-        "SELECT * FROM game_transfer_in",
-        // The source instance lease owns the admitted map and party during Transfer. This table
-        // predates the Shard split, so the base Coordinator can read that lease.
-        "SELECT * FROM game_instance",
-        // ── THE COORDINATOR-RELAY RULE ─────────────────────────────────────────────────────────
-        // Every relay whose loss leaves the CLIENT stuck in a wrong state — as opposed to merely
-        // late — is subscribed HERE, on the stable coordinator connection, and never on the
-        // session-scoped connection. Historical AOI subscriptions churned as the player moved, and
-        // the SDK's in-flight apply could swallow a concurrent transaction's deltas: an
-        // instance-creating portal entry lost its teleport event and left the player despawned.
-        // The owner token bypasses recipient RLS, so every player's rows arrive here. Shared
-        // callbacks route addressed rows through WorldView's typed owner/identity indexes.
-        //
-        // Members of the class include teleport, XP/level-up, quest log, item instances, the addon
-        // bridge, reputation, explored-area fog, and realm-core's group and chat twins. Every one
-        // is armed once in `world_view::arm_shard` (or `arm_realm_private`) and re-armed on
-        // reconnect.
-        //
-        // Teleport events — the TRANSFER relay, and the failure that produced the rule.
-        "SELECT * FROM game_teleport_event",
-        // XP/level-up events, same rule: they ride large kill transactions and
-        // their relays moved off the churning per-player conn onto this stable one.
-        "SELECT * FROM game_xp_event",
-        "SELECT * FROM game_levelup_event",
-        // Bot-initiated (serendipity) group invites: the module cannot reach realm-core
-        // to write a party itself, so it writes the DECISION here and the coordinator's
-        // `world::party::run_bot_invite` relay executes it — the same guid-based `realm_group_op` a
-        // player's own CMSG_GROUP_INVITE takes. Rides this stable connection for the same reason the
-        // XP/levelup/teleport relays do: there is no player connection to ride at all here (a bot has
-        // none), so the coordinator is the ONLY connection that could ever see this row.
-        //
-        // BASE list, not `sharded_tables`: bots run on every topology, single-database included —
-        // gating this behind sharding would silently stop every serendipity invite on the common
-        // single-database dev/test deployment (`local-test-harness`), the opposite of the
-        // `game_config` reasoning below but the same list for the same kind of reason. One-time
-        // bootstrap cost, same as every other base-list table added after day one: a gateway built
-        // against this change must not be RESTARTED until the module carrying this table has been
-        // published, or `connect_blocking`'s subscription fails to apply (`coordinator_queries`'s own
-        // doc comment).
+        // Session-less Group Intents run on every topology, including a single database.
         "SELECT * FROM game_bot_invite_intent",
         "SELECT * FROM game_party_command_intent WHERE pending = true",
         "SELECT * FROM game_party_command_dispatch_lane",
@@ -1422,8 +1372,8 @@ const COORDINATOR_WATCHDOG_POLL: Duration = Duration::from_secs(3);
 /// Readers retain the old cache during recovery; failed connections retry on the next poll.
 fn spawn_coordinator_watchdog(inner: Arc<CoordinatorInner>) -> std::thread::JoinHandle<()> {
     std::thread::Builder::new()
-        .name("stdb-coordinator-watchdog".into())
-        .spawn(move || {
+.name("stdb-coordinator-watchdog".into())
+.spawn(move || {
             let mut previous = inner.motion_batch.delivery.snapshot();
             let mut sampled_at = std::time::Instant::now();
             loop {
@@ -1491,7 +1441,7 @@ fn spawn_coordinator_watchdog(inner: Arc<CoordinatorInner>) -> std::thread::Join
                 }
             }
         })
-        .expect("spawn coordinator watchdog")
+.expect("spawn coordinator watchdog")
 }
 
 /// How often the loot-roll relay promotes staging rolls and settles resolved winners. Short
@@ -1530,7 +1480,7 @@ fn spawn_load_sampler(
 ) -> std::thread::JoinHandle<()> {
     let sampler = crate::load_sample::OccupancySampler::from_env(&stdb_uri);
     let interval = crate::load_sample::sample_interval();
-    // Hashed once at startup (issue #308): `game_shard_load.gateway_key` is what keys this
+    // Hashed once at startup : `game_shard_load.gateway_key` is what keys this
     // process's samples apart from every OTHER gateway process's, so N gateways sampling the same
     // shard sum to a realm-wide total instead of the last writer clobbering the rest.
     let this_gateway_key = crate::load_sample::gateway_key(&gateway_id);
@@ -1821,10 +1771,6 @@ mod coordinator_query_tests {
 
     #[test]
     fn a_single_database_gateway_subscribes_no_multi_database_table() {
-        // A review caught exactly this class of regression — a table subscribed on every
-        // coordinator connection even when unconfigured, which bricks a gateway restarted before
-        // the module was republished. Each sharded-only table re-enters the same trap, so the
-        // guard gets a NAMED test rather than a comment.
         let single = coordinator_queries(false);
         for table in MULTI_DB_TABLES {
             assert!(
@@ -2430,8 +2376,8 @@ macro_rules! call_reducer {
         >();
         let completion = $live.reducer_completion.clone();
         let call_id = completion
-            .register(tx)
-            .map_err(|e| {
+.register(tx)
+.map_err(|e| {
                 $crate::stdb::connection::ReducerCallError::fatal(format!(
                     concat!($what, " reducer transport disconnected: {}"),
                     e
@@ -2439,9 +2385,9 @@ macro_rules! call_reducer {
             })?;
         let callback_completion = completion.clone();
         $live
-            .conn
-            .reducers
-            .$method($($arg,)* move |_ctx, status| {
+.conn
+.reducers
+.$method($($arg,)* move |_ctx, status| {
                 callback_completion.finish(call_id, match status {
                     Ok(Ok(())) => Ok(()),
                     Ok(Err(reason)) => Err(
@@ -2452,7 +2398,7 @@ macro_rules! call_reducer {
                     ),
                 });
             })
-            .map_err(|e| {
+.map_err(|e| {
                 completion.cancel(call_id);
                 $crate::stdb::connection::ReducerCallError::sdk_send($what, e)
             })?;
@@ -2767,7 +2713,7 @@ impl Coordinator {
                 }
             }));
         }
-        // The cross-shard group and chat twins (#22) ride realm-core's connection, armed only
+        // The cross-shard group and chat twins  ride realm-core's connection, armed only
         // when realm-core is a DISTINCT database (a world shard's own `arm_shard` above already
         // watches these tables, and a second registration would deliver every packet twice).
         if let Ok(realm) = self.realm_core() {
@@ -2883,25 +2829,8 @@ impl Coordinator {
             .collect()
     }
 
-    // Realm-core removed `realm_shard()` — the old "the default shard is where accounts AND
-    // characters live" assumption. Both of its jobs now have a more precise owner: accounts and sessions belong to `realm_core()`
-    // below, and "which shard holds this character" is answered by probing (`world_shards()`) rather
-    // than by assuming the default — the assumption that stops being true the first time a transfer
-    // actually moves someone. It had no other callers.
-
-    /// The **realm-core** handle: the database that owns accounts, sessions, and the
-    /// character→shard index. Unconfigured (`LYRACORE_REALM_CORE` unset, blank, or naming the world
-    /// database) → the default shard, i.e. auth reads and writes land exactly where they land
-    /// today. Configured but not connected → `Err`, and every auth path must propagate that rather
-    /// than fall back to the world DB's stale auth cache (see `ShardMap::auth_db`).
-    ///
-    /// "Connected" is checked LIVE, not "was in the set at boot". `conns` is built once at startup
-    /// and never shrinks, so membership alone would mean a realm-core that connected and then died
-    /// still answers auth — out of the SDK's last-known local cache, which is exactly the stale
-    /// salt/verifier/`banned` snapshot fail-closed exists to refuse. The watchdog reconnects it
-    /// within a poll, and until it does, logons are refused rather than served from that snapshot.
-    /// The unconfigured path never evaluates this predicate at all (`auth_db` short-circuits), so
-    /// it costs a single-database gateway nothing.
+    /// Check current subscription health before returning the authentication authority.
+    /// The configured connection map survives disconnection and may retain stale credentials.
     pub(crate) fn realm_core(&self) -> Result<Coordinator> {
         let db = self
             .1

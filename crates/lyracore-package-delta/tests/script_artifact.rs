@@ -40,8 +40,6 @@ fn an_artifact_reads_every_member_of_every_script() {
     assert_eq!(script.source(), "grant_xp(event.actor, 10)");
 }
 
-/// A Package that ships nothing is a legal statement, not an empty file to guess about. It is how
-/// a Package that used to ship scripts says it no longer does.
 #[test]
 fn an_artifact_may_ship_no_scripts_at_all() {
     let parsed = ScriptArtifact::parse(&artifact("example.quiet", &[])).expect("artifact parses");

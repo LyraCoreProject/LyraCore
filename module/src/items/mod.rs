@@ -9,15 +9,6 @@
 //! would hide it). See [[gtker-descriptor-setter-wall]]: the inventory slot is reachable via gtker's
 //! typed `set_player_field_inv(ItemSlot, Guid)` (NOT walled like the aura array), so this needs no raw
 //! encoder.
-//!
-//! This file is a thin facade over five by-concern submodules — `tables` (the two table structs + RLS
-//! filter + guid/slot primitives), `rules` (the pure equip/economy taxonomy + arithmetic + their unit
-//! tests), `ops` (the grant/use/loot mutation cores), `economy` (the vendor sell/buy/buyback/repair
-//! cores + their shared NPC gate), and `inventory` (the move/split/equip/unequip cores + slot-space
-//! vocabulary). The `pub use ...::*` re-exports keep every symbol reachable as
-//! `crate::items::<sym>` regardless of which submodule defines it. The sender-path `#[reducer]` entry
-//! points that used to live in a `reducers` submodule here are gone — the gateway's `gw_*`
-//! reducers (`gw.rs`) are the only surviving callers of these cores.
 
 mod economy;
 mod exchange;

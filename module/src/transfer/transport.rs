@@ -2,7 +2,7 @@
 //!
 //! `mod.rs` owns the escrow protocol — when a character may move and what each step is allowed to
 //! do. This file owns the cargo: the manifest that says WHICH tables travel, the [`RowIo`] direction
-//! marker and [`move_rows`] shim every `character_owned!(transfer, ..)` arm flows through, the bsatn
+//! marker and [`move_rows`] shim every `character_owned!(transfer,..)` arm flows through, the bsatn
 //! codec underneath it, and [`ExportBlob`], the one value that crosses the wire.
 //!
 //! Everything here is `ReducerContext`-generic or `ReducerContext`-free, which is what lets
@@ -19,15 +19,8 @@ use crate::items::{game_item_instance, ItemInstance};
 #[path = "legacy_item_rows.rs"]
 mod legacy_item_rows;
 
-/// The subset of [`crate::CHARACTER_OWNED_TABLES`] marked **hot**: state the destination needs in
-/// the player's first frame (worn gear, castable abilities, trained skills, the action bar). The
-/// rest is **cold** — correct to stream in behind the loading screen.
-///
-/// Deliberate simplification: in v1 the mark is CARRIED but not ACTED ON — one blob ships
-/// everything, because same-database transfers have nothing to stream. It becomes load-bearing
-/// when the seam-crossing warm handoff has to fit a ~1s budget (spec, Phase C): cold tables
-/// move after the handshake.
-/// Verified against the generated enumeration by `hot_marks_name_only_real_manifest_tables`.
+/// Manifest tables marked hot for first-frame state. The current protocol carries every
+/// table in one blob and does not stream cold tables separately.
 pub(crate) const HOT_TABLES: &[&str] = &[
     "game_item_instance",
     "game_player_action",
@@ -47,72 +40,6 @@ pub(crate) const HOT_TABLES: &[&str] = &[
 /// export blob is nonsense.
 pub(crate) const MANIFEST_EXCLUDE: &[&str] = &["game_transfer_out"];
 
-/// The CORE manifest tables whose rows deliberately do NOT cross a database boundary — the only
-/// core tables whose arm may be written with the `character_owned!(not_transported, ..)` marker
-/// kind (review).
-///
-/// A Package's decline is not listed here and is not cross-checked against this list. This list
-/// exists so a core table's decision is reviewable in one place by everyone who reads the core; a
-/// drop-in Package is absent from most builds, so naming its tables here would make the equality
-/// below depend on which Packages happen to be installed. A Package writes its reason at its own
-/// table, where the reader of that table looks for it.
-///
-/// The arm-exists ratchet (`every_manifest_table_can_cross_a_database_boundary`) cannot tell a
-/// transport arm from a declining one, so on its own it is defeated by the one edit it exists to
-/// stop: swapping a real table's arm for a decline keeps the ratchet green while every character
-/// silently arrives without that table's rows. Verified by mutation — pointing
-/// `sweep_transfer_game_item_instance` at `not_transported` left all 468 module tests passing while
-/// deleting every player's gear on every hop.
-///
-/// So a core table's "not transported" decision is written HERE, with its REASON, as well as at the
-/// table, where build.rs reads it off the marker kind into `CHARACTER_OWNED_NOT_TRANSPORTED`.
-/// `the_not_transported_allowlist_matches_the_arms_that_decline` fails if the two disagree in
-/// either direction. Each entry needs its reason, exactly like `EXEMPT_ACCESSORS` in `tripwires.rs`:
-///
-/// - `game_rest_state_event` — a one-shot relay row with a GC TTL; the DURABLE rest state
-///   (`resting` / `rested_xp` / `rested_since_micros`) lives on the character row and travels in
-///   `character_row`.
-/// - `game_breath_relay_event` — a one-shot timer/damage relay with a GC TTL; private breath
-///   state is re-armed from movement after arrival, so carrying a packet would replay stale UI.
-/// - `game_breath_state` — transient live-world state. The destination derives a fresh timer from
-///   movement after arrival, rather than resuming a source-side underwater snapshot.
-/// - `game_group_invite` — a 2-minute dialog whose inviter is by definition not transferring.
-/// - `game_pet_command` — the live pet's stay/follow/aggressive state; the pet is a
-///   `game_world_entity`, which does not cross, so its command row has nothing to attach to.
-/// - `game_group_member` — party membership (group slice). Authoritative on REALM-CORE, so the
-///   blob must not carry it: a snapshot taken at `begin_transfer` would race the authority, and it
-///   is exactly the snapshot the interim mirror was (a party SPLIT across the boundary could never
-///   see itself). The gateway re-pushes realm-core's roster onto the destination at world entry
-///   (`sync_group_mirror`), so membership crosses by replication rather than by carriage.
-/// - `game_group_member_partition` — the same realm-core roster mirror derives each member's
-///   partition. Carrying a source snapshot would bypass its roster and locator revisions, so the
-///   gateway re-pushes the certified projection with the membership row.
-/// - `game_group_target_icon` — a Target Icon belongs to the Group on the party authority. It names
-///   the marked unit, and the unit keeps it across a Transfer with no row to carry.
-/// - `game_instance_removal` - an Instance Removal counts down for one instance. A Character that
-///   leaves the Instance Pool has left that instance, which ends the countdown
-///   (cm:MovementHandler.cpp:133-135), so the source cascade deletes the row and nothing crosses.
-/// - `game_mail_delivery` — the mail plane's delivery receipts. They only exist where the
-///   authoritative mail rows do, and no character transfers off realm-core.
-///
-///   `game_mail_timer` and `game_mail_arrival` stay with the mail rows too, but they are not in
-///   this list because they have no marker: the timer names a Mail, not a Character, and the
-///   arrival is a short-lived Relay event. A Mail a Transfer imports gets its timer from
-///   `debug_repair_after_publish`.
-///
-/// - `game_character_shard` — the realm-core character→shard directory. A routing HINT about
-///   where the character is, and the blob exists to change that: the snapshot `begin_transfer` takes
-///   still names the SOURCE, so carrying it would hand the destination a forwarding receipt pointing
-///   back at the shard the character just left. `do_finish` rewrites the source's own row to name the
-///   destination, and the authoritative copy on realm-core is the gateway's write.
-/// - `game_taxi_service_reply` — a transient request/reply mailbox. A destination recomputes taxi
-///   status from the transported discovery rows; carrying an old reply could answer a new request
-///   with a source NPC that only existed on the previous shard.
-/// - `game_active_taxi_flight` — an in-progress baseline flight is confined to one open-world shard.
-///   Carrying it would strand a route whose source NPC and scheduled geometry remain on the source.
-// Read only by the ratchet below — it is a written DECISION, kept next to `MANIFEST_EXCLUDE` in
-// the file that owns the protocol rather than hidden in `mod tests`, so the next person to reach
-// for `not_transported` finds the list they have to justify themselves against.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) const NOT_TRANSPORTED: &[&str] = &[
     "game_rest_state_event",
@@ -215,7 +142,7 @@ pub(crate) fn admit_command_issuer_import(
 //  Cross-database row transport
 // ===========================================================================================
 
-/// The direction a `character_owned!(transfer, ..)` arm is running in. ONE body serves both, so a
+/// The direction a `character_owned!(transfer,..)` arm is running in. ONE body serves both, so a
 /// table cannot ship rows it does not know how to receive (the drift that would silently drop a
 /// table's data at the destination).
 pub enum RowIo<'a> {
@@ -260,14 +187,6 @@ pub(crate) fn move_rows<C, R>(
     }
 }
 
-/// The EXPORT codec, split out of [`move_rows`] so it is `ReducerContext`-free and therefore
-/// natively testable (`the_row_codec_round_trips_and_refuses_garbage`). Every module test in this
-/// crate is pure or a source scan — nothing can run a reducer — so a codec left inside `move_rows`
-/// has literally no behavioural coverage, and mutation-testing this file proved exactly that.
-///
-/// An unserializable row would silently ship an EMPTY table, and the import-side manifest check
-/// cannot tell "no rows" from "lost rows" — so the failure is logged loudly and the buffer left
-/// empty rather than half-written.
 pub(crate) fn encode_rows<R>(rows: Vec<R>) -> Vec<u8>
 where
     R: spacetimedb::SpacetimeType + spacetimedb::sats::Serialize,
@@ -323,7 +242,7 @@ pub(crate) fn not_transported(io: &mut RowIo<'_>) {
     }
 }
 
-/// One entry of a transport registry: a table name and the `character_owned!(transfer, ..)` arm
+/// One entry of a transport registry: a table name and the `character_owned!(transfer,..)` arm
 /// that moves its rows. `crate::CHARACTER_OWNED_TRANSFERS` is `&[TransportArm<ReducerContext>]`;
 /// the harness supplies its own slice over a fake context.
 pub(crate) type TransportArm<'a, C> = (&'a str, fn(&C, u64, &mut RowIo<'_>));
@@ -336,16 +255,9 @@ pub(crate) type TransportArm<'a, C> = (&'a str, fn(&C, u64, &mut RowIo<'_>));
 /// only seam by which a test in this crate can run the real export body, since the arms themselves
 /// need a `ReducerContext`.
 ///
-/// **No coverage check here, deliberately** (AC 4). The import side needs one because it
-/// consumes a payload from ANOTHER database; this loop MANUFACTURES the payload from the same
-/// registry it would check against, pushing one entry per non-excluded arm unconditionally, so
-/// "the payload covers the registry" is a tautology no mutation of this body can break without
-/// also breaking `a_populated_character_crosses_a_database_with_every_row_and_value` (which pins
-/// the payload's table list to `TRANSPORTED`, in registry order). The one export failure that IS
-/// real — [`encode_rows`] logging and yielding an empty buffer when a row will not serialize — a
-/// coverage check cannot see either, because the entry is present and "no rows" is a legal empty.
-/// Catching that needs `RowIo::Export` to carry a `Result`, which is a protocol change, not this
-/// issue.
+/// Export manufactures one entry per transported registry table. Import checks payload coverage
+/// because it receives data from another database. An empty encoded buffer is indistinguishable
+/// from a legal empty table, so a coverage check cannot detect a serialization failure here.
 pub(crate) fn export_rows_via<C>(
     ctx: &C,
     character_guid: u64,
@@ -373,25 +285,6 @@ pub(crate) fn export_rows(ctx: &ReducerContext, character_guid: u64) -> Vec<Tabl
     payload
 }
 
-/// Apply an arriving payload. Refuses (whole transaction aborts) on a table this build does not
-/// know, a table this build DOES know that the payload does not carry, or a payload it cannot
-/// decode — a partial import is the one outcome worse than none, since the in-row filed afterwards
-/// would license deleting the source copy.
-///
-/// The coverage half is this loop used to iterate the PAYLOAD, so a blob missing one or
-/// more manifest tables imported with a clean `Ok(())`, the in-row was filed, and `finish_transfer`
-/// then destroyed the complete source copy of a character that had arrived partial. The unknown-table
-/// direction (the drift contract) was already guarded; the inverse was not, which reads as an
-/// oversight rather than a decision. Low reachability while every shard runs the same build, routine
-/// at Phase B, where a rolling deploy makes payload and registry disagree by design.
-///
-/// Note: the required set is every registry table minus [`MANIFEST_EXCLUDE`] — including the
-/// `not_transported` ones, which is stricter than "the tables that carry rows" and needs no second
-/// list to stay in step. [`export_rows_via`] emits an entry for each of them too (an EMPTY one), so
-/// this is exactly the contract a blob built by this protocol already satisfies; a blob that omits
-/// the entry entirely was not built by it.
-///
-/// Registry-parameterized for the same reason [`export_rows_via`] is.
 pub(crate) fn import_rows_via<C>(
     ctx: &C,
     character_guid: u64,
@@ -552,7 +445,7 @@ pub(crate) fn import_rows(
 /// The manifest is the load-bearing SCHEMA half: the destination compares it against its OWN build
 /// (`manifest()`) and refuses an import from a shard whose character-owned table set differs. The
 /// `payload` alongside it is the DATA half — the actual rows, one entry per manifest
-/// table, produced by that table's `character_owned!(transfer, ..)` arm.
+/// table, produced by that table's `character_owned!(transfer,..)` arm.
 ///
 /// **Nothing that is already inside `character_row` gets a second field here.** Until then
 /// the blob ALSO carried `name`/`level`/`map_id`/`instance_id`/`x`/`y`/`z`/`o`/`health`/`power` as
@@ -681,8 +574,7 @@ pub(crate) const TRANSFER_TABLES_OLD_BLOBS_MAY_LACK: &[&str] = &[
 /// [`TRANSFER_TABLES_OLD_BLOBS_MAY_LACK`] and is otherwise this build's own, entry for entry and in
 /// order. [`payload_for_this_build`] fills each missing table in as empty.
 ///
-/// Shared by both step-2 reducers. It was two identical inline blocks, and the one in
-/// `import_character_blob` was reachable only through a source-scan assertion on its text.
+/// Check the arriving manifest against this build's transport registry.
 pub(crate) fn check_manifest(transfer_id: u64, arriving: &[ManifestEntry]) -> Result<(), String> {
     let mine = manifest();
     let named = |table: &str| arriving.iter().any(|entry| entry.table == table);

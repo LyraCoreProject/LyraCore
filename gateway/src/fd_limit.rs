@@ -1,35 +1,3 @@
-//! Raise this process's `RLIMIT_NOFILE` soft limit to its hard limit at startup — the file-descriptor
-//! ceiling was root cause when the gateway died outright under a mass-session login storm (see the
-//! measured consequence below).
-//!
-//! # Why a server does this to itself
-//!
-//! A process may raise its own soft limit up to the hard limit with no privileges at all
-//! (`setrlimit(2)`: "an unprivileged process may set only its soft limit... to a value in the range
-//! from 0 up to the hard limit"). The soft limit is a *courtesy default* meant to catch runaway
-//! programs, not a security boundary — which is why servers routinely lift it and why leaving it
-//! alone is the unusual choice, not the safe one.
-//!
-//! The measured consequence of not doing it (2026-08-07): a default Docker container has
-//! `RLIMIT_NOFILE` soft **1024** against a hard limit of **524288**, and the gateway died at ~200
-//! sessions with `Error: Too many open files (os error 24)` — a 512× headroom sitting unused. A live
-//! session now needs three client descriptors: the reader, writer and ownership-loss shutdown
-//! handle. Each subscribed Shard also needs a SpacetimeDB websocket. Capacity therefore depends
-//! on the topology and on how widely the Characters are spread.
-//!
-//! # Failure is never fatal
-//!
-//! Both syscalls are best-effort. If either fails we log and continue: a gateway running with a low
-//! limit still serves the players it can fit, whereas one that refuses to start serves nobody. That
-//! is also why this runs *before* the tokio runtime is built — the limit should be in place before
-//! anything opens a descriptor, and it needs no runtime to do it.
-//!
-//! This is a mitigation for the fd *ceiling*, not for a leak. The per-account `PlayerConn` leak
-//! (`release_player_conn` was dead code, so the cached connection was never released at session
-//! teardown) is a separate defect: raising the limit buys headroom, it does not stop the accumulation.
-//! A further change — the accept loop surviving `EMFILE` — is what keeps the realm alive when the
-//! headroom does run out.
-
 use std::io;
 
 /// What [`plan_raise`] decided to do about the limits it read. Split out from the syscalls so the

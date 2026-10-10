@@ -31,9 +31,6 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
     crate::talent::seed_talents(ctx);
     let talents = ctx.db.game_talent().count();
 
-    // formerly `debug_seed_gm_tester`: (re)grant the seeded Tester (guid 1) `gm_level` 3 — needed on
-    // an already-migrated dev DB where `seed::init` did NOT re-run (work-item 223: the `gm_level`
-    // column auto-migrates existing rows to 0). No-op if the Tester character row is gone.
     if let Some(mut c) = ctx.db.game_character().guid().find(1) {
         c.gm_level = 3;
         ctx.db.game_character().guid().update(c);
@@ -136,8 +133,6 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
     // and its sky stays fine.
     let weather_climate = crate::weather::seed_weather_weights(ctx);
 
-    // --- schedule ensures (idempotent: no-op if a row is already present) ---
-    // formerly `debug_ensure_aura_schedule`: matches the 1s interval in `seed::init`.
     let aura_schedule = if ctx.db.game_aura_schedule().iter().next().is_some() {
         0
     } else {
@@ -170,7 +165,6 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
         1
     };
 
-    // formerly `debug_ensure_ground_area_schedule`: matches the 500ms interval in `seed::init`.
     let ground_area_schedule = if ctx.db.game_ground_area_schedule().iter().next().is_some() {
         0
     } else {
@@ -221,12 +215,7 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
         1
     };
 
-    // --- rearms (idempotent: always replace with the canonical row) ---
-    // formerly `debug_rearm_creature_tick`: re-arm the GLOBAL creature movement tick to 0.5s. Work-item
-    // 229: DEDICATED per-instance rows (armed via `debug_arm_instance_tick`) are deliberately left
-    // alone — this only ever touches the catch-all row, and doubles as the recovery path if that
-    // load-bearing row was ever deleted (every instance lacking a dedicated row stops ticking
-    // entirely, including the open world, without it).
+    // Restore the global tick without changing dedicated Instance tick rows.
     let move_sched = ctx.db.game_creature_move_schedule();
     let stale_move: Vec<u64> = move_sched
         .iter()
@@ -242,7 +231,6 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
         instance_id: crate::creatures::GLOBAL_TICK_INSTANCE,
     });
 
-    // formerly `debug_rearm_instance_reaper`: re-seed the 60s instance-reaper schedule row.
     let reaper_sched = ctx.db.game_instance_reaper_schedule();
     let stale_reaper: Vec<u64> = reaper_sched.iter().map(|r| r.scheduled_id).collect();
     for id in stale_reaper {
@@ -349,9 +337,8 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
         proc_profiles += 1;
     }
 
-    // row_count: total rows/rearms across every family this pass touched (work-item 216 provenance
-    // stamp) — one stamp for the whole repair pass, replacing the 13 separate per-family stamps the
-    // deleted reducers wrote. The trailing `+ 3` is the three schedule rows this always (re)arms
+    // row_count: total rows/rearms across every family this pass touched. One provenance
+    // stamp records the whole repair pass. The trailing `+ 3` is the three schedule rows this always (re)arms
     // unconditionally (creature tick + instance reaper + weather roll), which have no "was it
     // already present" signal worth stamping separately.
     let total = talents

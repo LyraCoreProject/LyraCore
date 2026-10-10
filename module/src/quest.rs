@@ -7,11 +7,11 @@
 //! Data model — a clean header + list shape (NOT cmangos's one fat row), so the runtime joins are
 //! direct and the importer maps cmangos's flattened columns onto normalized rows:
 //!
-//! - [`QuestTemplate`]   — the quest header (level gate, title, money/XP reward). [static]
-//! - [`QuestObjective`]  — a quest's objective list (today: kill N of a creature). [static]
+//! - [`QuestTemplate`] , the quest header (level gate, title, money/XP reward). [static]
+//! - [`QuestObjective`], a quest's objective list (today: kill N of a creature). [static]
 //! - [`QuestRewardItem`] — a quest's guaranteed reward items. [static]
-//! - [`CreatureQuest`]   — which creature STARTS (`!`) / ENDS (`?`) which quest (many-to-many). [static]
-//! - [`CharacterQuest`]  — a character's live quest log: one row per accepted quest with per-objective
+//! - [`CreatureQuest`] , which creature STARTS (`!`) / ENDS (`?`) which quest (many-to-many). [static]
+//! - [`CharacterQuest`], a character's live quest log: one row per accepted quest with per-objective
 //!   progress counts, RLS-scoped to the owner. Born in `accept_quest`. [entity]
 //!
 //! Flow: `accept_quest(giver, quest)` validates the giver offers it + the player qualifies, then opens
@@ -28,7 +28,7 @@ use spacetimedb::{table, Identity, ReducerContext, Table};
 
 use crate::game_area_trigger;
 use crate::game_gameobject; // GAMEOBJECT quest givers (e.g. Wanted Poster, Lost Guards corpses)
-use crate::game_item_instance; // ITEM quest givers (work-item 194: item_template.start_quest)
+use crate::game_item_instance;
 use crate::game_item_template;
 use crate::game_world_entity;
 use crate::game_xp_event; // quest XP "+N experience" relay (non-kill SMSG_LOG_XPGAIN)
@@ -148,7 +148,7 @@ pub mod quest_role {
 /// `CMSG_QUESTGIVER_*` op, so this only rejects clearly-out-of-range abuse (mirrors `loot`/vendor range).
 const QUEST_GIVER_RANGE_SQ: f32 = 100.0;
 
-/// Party quest-SHARE range (work-item 194): reuses the group system's own kill-reward range
+/// Party quest-SHARE range : reuses the group system's own kill-reward range
 /// (`crate::group::GROUP_XP_RANGE_SQ`, vanilla's 74yd `CONFIG_FLOAT_GROUP_XP_DISTANCE`) rather than
 /// the tight NPC-interaction [`QUEST_GIVER_RANGE_SQ`] (10yd) — sharing a quest is a party-visibility
 /// action (no walking up to a person), the same range the game already treats as "close enough to
@@ -160,7 +160,7 @@ const PARTY_SHARE_RANGE_SQ: f32 = crate::group::GROUP_XP_RANGE_SQ;
 /// (`gateway/src/stdb/reads.rs`) — both sides model the same 20-slot vanilla quest log.
 pub(crate) const MAX_QUEST_LOG_SIZE: usize = 20;
 
-/// Vanilla level cap (quest XP→money conversion gate, work-item 194(e)) — matches `xp::xp_to_next_level`'s
+/// Vanilla level cap (quest XP→money conversion gate,(e)), matches `xp::xp_to_next_level`'s
 /// own hardcoded cap check (`level >= 60` there too; not re-exported as a shared const, so this is a
 /// second literal by necessity — pinned by a test alongside `xp::xp_to_next_level`'s own cap tests).
 const QUEST_MAX_LEVEL_PAYOUT: u32 = 60;
@@ -230,7 +230,7 @@ pub struct QuestTemplate {
     // for a repeatable quest is reset in place (counts zeroed, rewarded=false) rather than rejected.
     #[default(false)]
     pub repeatable: bool,
-    // --- forward chains + timed quests (work-item 194, END-appended, #[default(0)] → additive
+    // --- forward chains + timed quests, END-appended, #[default(0)] → additive
     // auto-migration) ---
     // cmangos NextQuestId/NextQuestInChain: the successor quest auto-offered on this quest's turn-in
     // (0 = no successor). `prev_quest_id`/auto_finish already do the ACCEPT-side gating + the
@@ -420,7 +420,7 @@ pub struct CharacterQuest {
     pub quest_entry: u32,         // -> QuestTemplate.entry
     pub counts: Vec<u32>, // per-objective kill progress, indexed by QuestObjective.obj_index
     pub rewarded: bool,   // true once turned in — the row stays to block a repeat
-    // --- timed quests (work-item 194, END-appended, #[default(...)] → additive auto-migration) ---
+    // --- timed quests, END-appended, #[default(...)] → additive auto-migration) ---
     // Micros-since-epoch deadline stamped by `apply_accept_quest` from `QuestTemplate.limit_time`
     // (`ctx.timestamp` micros + `limit_time * 1_000_000`); 0 = untimed (the vast majority of quests —
     // existing rows default to this, unchanged behavior). Cleared back to 0 the instant the quest
@@ -604,14 +604,14 @@ enum GiverKind {
     /// A spawned gameobject (`game_gameobject`) — checked against `game_gameobject_quest`
     /// (some quests, like GO 68 "Wanted Poster", have no creature giver at all).
     GameObject(u32),
-    /// Work-item 194 (item-starts-quest): a USED item whose template names `start_quest`
+    /// (item-starts-quest): a USED item whose template names `start_quest`
     /// (cmangos `item_template.startquest`, the "dropped tabard starts a quest" pattern) — carries the
     /// item's TEMPLATE entry (checked against `ItemTemplate.start_quest`, never a `game_*_quest`
     /// relation table). The gateway sends the item's OWN instance guid as the "giver" guid
     /// (`CMSG_USE_ITEM` → `SMSG_QUESTGIVER_QUEST_DETAILS`); `validate_giver` resolves it back against
     /// the PLAYER'S OWN `game_item_instance` row (never someone else's bag). Satisfies START only.
     Item(u32),
-    /// Work-item 194 (sharing): a live PLAYER entity that shared this quest via `push_quest_to_party`
+    /// (sharing): a live PLAYER entity that shared this quest via `push_quest_to_party`
     /// — carries the SHARER's character guid. Re-validated FRESH here every time (grouped + in range,
     /// via [`validate_party_giver`]) — a spoofed/stale giver_guid can never self-authorize, and
     /// [`giver_has_quest_role`] additionally requires the sharer to be CURRENTLY, ACTIVELY on the
@@ -630,7 +630,7 @@ fn validate_giver(
 ) -> Result<GiverKind, ActionRefusal> {
     if let Some(giver) = ctx.db.game_world_entity().guid().find(giver_guid) {
         if giver.is_player() {
-            // Work-item 194 (sharing): the ONLY case a live PLAYER entity is a valid giver — a
+            // (sharing): the ONLY case a live PLAYER entity is a valid giver, a
             // party-share re-validated fresh (never trusts the earlier push_quest_to_party call).
             return validate_party_giver(ctx, player, giver_guid, &giver);
         }
@@ -671,7 +671,7 @@ fn validate_giver(
         }
         return Ok(GiverKind::GameObject(go.template_entry));
     }
-    // Work-item 194 (item-starts-quest): not a live creature/GO/player entity — try the PLAYER'S
+    // (item-starts-quest): not a live creature/GO/player entity, try the PLAYER'S
     // OWN item instance (never someone else's bag; a used item's instance guid is what the gateway
     // sends as "giver" for CMSG_USE_ITEM's start_quest path). Tried LAST — the common paths above are
     // cheap and never collide with an item's HIGHGUID_ITEM-tagged guid space anyway.
@@ -702,7 +702,7 @@ pub(crate) fn quest_ender(
         .map(|go| QuestGiver::Gameobject(go.template_entry))
 }
 
-/// Work-item 194 (sharing): validates a live PLAYER `giver_guid` as a party-share giver for `player`
+/// (sharing): validates a live PLAYER `giver_guid` as a party-share giver for `player`
 /// — grouped with the accepting player (the SAME group id), on the same map/instance, within
 /// [`PARTY_SHARE_RANGE_SQ`]. Every field is re-read LIVE here — never trusts that
 /// `push_quest_to_party` ran, so a spoofed/stale giver_guid that no longer names a real grouped,
@@ -752,7 +752,7 @@ fn giver_has_quest_role(
     match *giver {
         GiverKind::Creature(entry) => creature_has_quest_role(ctx, entry, quest_entry, role),
         GiverKind::GameObject(entry) => gameobject_has_quest_role(ctx, entry, quest_entry, role),
-        // Item-starts-quest (work-item 194): satisfies START iff the item's OWN template names this
+        // Item-starts-quest : satisfies START iff the item's OWN template names this
         // quest — never END (an item never completes a quest).
         GiverKind::Item(entry) => {
             role == quest_role::START
@@ -763,7 +763,7 @@ fn giver_has_quest_role(
                     .find(entry)
                     .is_some_and(|t| t.start_quest == quest_entry)
         }
-        // Party share (work-item 194): satisfies START iff the sharer is CURRENTLY, ACTIVELY on the
+        // Party share : satisfies START iff the sharer is CURRENTLY, ACTIVELY on the
         // quest (an un-rewarded, un-failed row) — never END. This is the hard gate against a spoofed
         // giver_guid self-authorizing: even a genuinely grouped, in-range peer can't hand out a quest
         // they aren't actually holding right now.
@@ -821,7 +821,7 @@ pub(crate) fn accept_gates(
     // (exactly like any other active quest); it never erases the fact the quest was completed before, and
     // `apply_turn_in_quest` always marks it rewarded again on the next turn-in. Any other existing row
     // (still active, or a non-repeatable already-rewarded row) is a hard duplicate.
-    // Work-item 194 (timed quests): an existing FAILED row (expired past its deadline) is re-acceptable
+    // (timed quests): an existing FAILED row (expired past its deadline) is re-acceptable
     // exactly like a repeatable-rewarded one — reset in place, never a hard duplicate. This is
     // independent of `repeatable`: ANY timed quest can be retried after it fails, not just repeatable
     // ones (vanilla: a failed escort/timed quest can always be picked up again).
@@ -883,7 +883,7 @@ pub(crate) fn request_accept_quest(
     // Package ask as well. It hands back the row `apply_accept_effects` resets in place, so the
     // reset-in-place-vs-insert decision costs no second point-scan of the same row.
     let existing = accept_gates(ctx, &player, &tmpl)?;
-    // Timed quests (work-item 194): a `limit_time > 0` template stamps a deadline (accept-time
+    // Timed quests : a `limit_time > 0` template stamps a deadline (accept-time
     // ctx.timestamp micros + limit_time seconds, as micros); 0 = untimed (the vast majority).
     let deadline_micros = if tmpl.limit_time > 0 {
         ctx.timestamp.to_micros_since_unix_epoch() + (tmpl.limit_time as i64) * 1_000_000
@@ -1090,7 +1090,7 @@ pub(crate) fn request_turn_in_quest(
     if cq.rewarded {
         return Err("quest already turned in".to_string().into());
     }
-    // Work-item 194 (timed quests): a FAILED (expired) quest can't be turned in — it must be
+    // (timed quests): a FAILED (expired) quest can't be turned in, it must be
     // re-accepted first (the duplicate guard in `apply_accept_quest` lets that through).
     if cq.failed {
         return Err("quest has expired".to_string().into());
@@ -1164,7 +1164,7 @@ pub(crate) fn request_turn_in_quest(
         lyracore_shared::quest::xp_reward(tmpl.quest_level)
     };
     let xp = crate::xp::rated_xp(ctx, base_xp);
-    // Level-cap payout (work-item 194(e)): at the vanilla level cap, quest XP is USELESS (no next
+    // Level-cap payout(e)): at the vanilla level cap, quest XP is USELESS (no next
     // level to fill) — real vanilla instead converts it to copper. Money-converted, never granted as
     // XP (vanilla behaviour: a capped character never dings off a quest). Below the cap, unchanged: XP
     // granted normally, no conversion. `max_level_money_reward` (the gateway's quest-log-preview stub,
@@ -2783,11 +2783,11 @@ pub(crate) fn on_areatrigger_entered(ctx: &ReducerContext, player_guid: u64, tri
     );
 }
 
-/// One cmangos `areatrigger_teleport` row — a dungeon entrance/exit portal (work-item 225).
+/// One cmangos `areatrigger_teleport` row, a dungeon entrance/exit portal.
 /// Loaded by the importer's `--dump` "globals" family
 /// (`importer/src/main.rs::build_areatrigger_teleport_sql`). Module-only: deliberately NOT `public` —
 /// no client or gateway ever reads a teleport TARGET directly, only its EFFECT (the cross-map teleport
-/// handshake, work-item 224, which already carries its own `game_teleport_event` wire path), so this
+/// handshake,, which already carries its own `game_teleport_event` wire path), so this
 /// table needs no gateway binding at all (danger-zones.md §1's "new table → regenerate bindings" rule
 /// only applies to tables a gateway subscription reads). [`apply_enter_areatrigger`] looks this up by
 /// `trigger_id`; a hit routes the player through [`crate::world::teleport_player`], a miss leaves the
@@ -3036,7 +3036,7 @@ pub(crate) fn enter_sessionless_areatrigger(
     )
 }
 
-/// The shared core behind [`enter_areatrigger`] and `debug_enter_areatrigger` (work-item 225). Quest
+/// The shared core behind [`enter_areatrigger`] and `debug_enter_areatrigger`. Quest
 /// credit fires FIRST and UNCONDITIONALLY (unchanged from pre-225 behavior), then — iff `trigger_id`
 /// has an imported `game_areatrigger_teleport` row — the player is routed through 224's cross-map
 /// teleport. A trigger can be BOTH a quest-explore objective AND a teleport (Deadmines' Moonbrook
@@ -3048,7 +3048,7 @@ pub(crate) fn enter_sessionless_areatrigger(
 /// instance (`instance::resolve_or_create_instance`: own live binding → party's live instance →
 /// create; solo allowed; 5-player cap enforced here at trigger time) and teleports into it. Every
 /// NON-dungeon target keeps the byte-identical instance-0 path (`is_dungeon_map` false → the same
-/// `teleport_player(..., 0, ...)` call as before) — the Deadmines EXIT trigger (map 36 → map 0)
+/// `teleport_player(..., 0,...)` call as before), the Deadmines EXIT trigger (map 36 → map 0)
 /// rides that arm, correctly landing the leaver back in the open world.
 pub(crate) fn apply_enter_areatrigger(ctx: &ReducerContext, player_guid: u64, trigger_id: u32) {
     let teleport_target = ctx
@@ -3081,7 +3081,7 @@ pub(crate) fn apply_enter_areatrigger(ctx: &ReducerContext, player_guid: u64, tr
 }
 
 // ===========================================================================================
-//  Timed quests (work-item 194) — expiry tick
+//  Timed quests, expiry tick
 // ===========================================================================================
 
 /// Is a timed quest EXPIRED? Pure: `deadline_micros == 0` (untimed) never expires; an already
@@ -3092,7 +3092,7 @@ fn is_expired(now_micros: i64, deadline_micros: i64, rewarded: bool, failed: boo
     deadline_micros != 0 && !rewarded && !failed && now_micros >= deadline_micros
 }
 
-// The timed-quest expiry tick (work-item 194): every `tick_creatures` cadence (0.5s, via the
+// The timed-quest expiry tick : every `tick_creatures` cadence (0.5s, via the
 // `game_tick_pass!` marker — zero core edits needed elsewhere), scan the quest log for rows whose
 // deadline has passed and fail them (`failed = true`, `deadline_micros` cleared back to 0 — a failed
 // row's deadline is meaningless past this point). The gateway's `on_quest_update` relay diffs
@@ -3114,10 +3114,10 @@ crate::game_tick_pass!(fn quest_timer_pass(ctx) {
     // transfer settles fails the quest exactly as it would have. It is also the better player
     // outcome — a character frozen on a shard-hop loading screen cannot act on a timer.
     let expired: Vec<CharacterQuest> = log
-        .iter()
-        .filter(|q| is_expired(now, q.deadline_micros, q.rewarded, q.failed))
-        .filter(|q| !crate::transfer::is_in_transit(ctx, q.character_guid))
-        .collect();
+.iter()
+.filter(|q| is_expired(now, q.deadline_micros, q.rewarded, q.failed))
+.filter(|q| !crate::transfer::is_in_transit(ctx, q.character_guid))
+.collect();
     for mut cq in expired {
         cq.failed = true;
         cq.deadline_micros = 0;
@@ -3126,7 +3126,7 @@ crate::game_tick_pass!(fn quest_timer_pass(ctx) {
 });
 
 // ===========================================================================================
-//  Sharing (work-item 194) — CMSG_PUSHQUESTTOPARTY
+//  Sharing, CMSG_PUSHQUESTTOPARTY
 // ===========================================================================================
 
 /// The shared core behind [`push_quest_to_party`] and its debug twin `debug_push_quest`.
@@ -3248,12 +3248,6 @@ pub(crate) fn debug_force_expire(
     Ok(())
 }
 
-// ===========================================================================================
-//  Player reducers — authorized via ctx.sender, delegate to the cores
-// ===========================================================================================
-
-/// The abandon core, actor-explicit — the body [`abandon_quest`] used to inline, shared with
-/// `gw::gw_abandon_quest`.
 pub(crate) fn apply_abandon_quest(
     ctx: &ReducerContext,
     player_guid: u64,
@@ -3400,7 +3394,7 @@ mod tests {
         assert!(pick_choice_reward(&choices, u32::MAX, 42).is_err());
     }
 
-    // ---- Timed quests (work-item 194): is_expired boundary tests ----
+    // ---- Timed quests : is_expired boundary tests ----
 
     #[test]
     fn untimed_deadline_never_expires() {

@@ -1,4 +1,4 @@
-//! Dungeon-instancing fixture + operator levers (work-item 190 slices 2+3), plus the nav-probe and
+//! Dungeon-instancing fixture + operator levers, plus the nav-probe and
 //! one-time-backfill levers that accreted next to them (no section of their own).
 
 use spacetimedb::{log, reducer, ReducerContext, Table};
@@ -29,11 +29,6 @@ use crate::{
 /// "sees only its own population" should therefore be made on a FRESH login after the switch
 /// (login rebuilds into `pending_instance_id` with a fresh created set + initial-apply sweep).
 /// The real dungeon flow (areatrigger portal) is cross-map and has no such caveat.
-///
-/// COST NOTE: the population copy covers EVERY spawn template on the character's map — on the
-/// bare seeded dev node that's a handful of creatures; on a node with the full Elwynn/Westfall
-/// import it's the whole ~2k-spawn map-0 roster per instance. Fixture-scale testing belongs on
-/// the seeded node (or accept the copy cost knowingly).
 #[reducer]
 pub fn debug_create_fixture_instance(
     ctx: &ReducerContext,
@@ -147,7 +142,7 @@ pub fn debug_nav_probe(ctx: &ReducerContext, map: u32, x: f32, y: f32) {
     );
 }
 
-/// Toggle nav-grid consumption (`game_config.nav_enabled`, work-item 243) — upserts row 0 like
+/// Toggle nav-grid consumption (`game_config.nav_enabled`), upserts row 0 like
 /// `debug_set_xp_rate`. OFF = pre-243 straight-line movement + wall-blind aggro/casts.
 #[reducer]
 pub fn debug_set_nav_enabled(ctx: &ReducerContext, enabled: bool) -> Result<(), String> {
@@ -311,27 +306,6 @@ pub fn debug_vmap_area_info(ctx: &ReducerContext, map: u32, x: f32, y: f32, z: f
     );
 }
 
-/// Done-when: server-side proof that a probe (and a creature spawn) stand on a model floor
-/// instead of the terrain underneath it — the headless substitute for eyeballing a bridge/WMO
-/// interior deck (e.g. Deadmines) in the live client. Same synthetic-rig shape as
-/// `debug_assert_blink_clamp`/`debug_assert_chase_stops_at_column` (the exact
-/// `lyracore_shared::vmap::encode` codec, a fixed ORIGIN in an unimported-terrain patch of the map
-/// so `terrain::ground_z` is known-`None` there and can't accidentally agree with the synthetic
-/// floor by coincidence), but the rig is a horizontal quad — a floor, not a vertical wall —
-/// elevated `FLOOR_Z` above a PROBE that lands a hair (`PROBE_UNDERSHOOT_YD`, comfortably inside
-/// `floor_z`'s upward search margin) below it, standing in for the ordinary case: imported spawn
-/// data or a computed movement destination that's already close to the real surface but not
-/// exact, because whatever produced it (client extraction, terrain interpolation) doesn't know
-/// about the bridge deck. `floor_z`'s contract is "topmost floor AT OR BELOW the probe" — it is
-/// not a levitation search, so this probe is deliberately realistic rather than far below the
-/// deck. Asserts, in order: (1) `vmap::floor_z` finds it from a probe just under it, (2)
-/// `terrain::snap_z` picks the floor over the (missing) terrain fallback — the `max(terrain,
-/// floor)` integration the issue specifies, and (3) a creature spawned there through the REAL
-/// `insert_creature_entity` chokepoint (spawn.z left at that same undershoot, exactly like an
-/// imported spawn row with no floor awareness) lands on the floor, not at its spawn.z. Cleans up
-/// the synthetic vmap rows, the spawn/entity rows and the `vmap_enabled` flag unconditionally
-/// (cleanup runs before any assert can fail out), so it never leaves the database in a different
-/// state than it found it.
 #[reducer]
 pub fn debug_assert_floor_snap(
     ctx: &ReducerContext,
@@ -1018,17 +992,6 @@ pub fn debug_bench_los(
     );
 }
 
-/// Perf-risk companion to `debug_bench_los`: `nav_step`'s collision gate (`vmap::collision_ray`)
-/// runs on every COMMITTED movement step (chase/return/wander/flee/pet-follow — the 500ms tick),
-/// not the 4s sense tick the LoS benchmark measured, so it pays the exact-ray cost 8x more often per mover. Same
-/// shape as `debug_bench_los` — one probe per real creature per compass direction, `radius` yd out
-/// — but calls `nav::nav_step` (the actual committed-step choke point) instead of a raw LoS ray, so
-/// the query volume this produces is directly comparable against `debug_bench_los`'s numbers on the
-/// SAME box: if this reducer's wall time isn't roughly `directions`× cheaper per creature than
-/// `debug_bench_los(exact=true)`, the per-tick multiplication the review flagged is real and
-/// needs the "cheap PK existence check" fallback the issue text proposed. `gated` counts how many
-/// probes the ray actually truncated (checksum, not just speed, so two runs can be diffed for
-/// correctness too).
 #[reducer]
 #[allow(clippy::too_many_arguments)] // A reducer's arguments are its call signature.
 pub fn debug_bench_collision_gate(
@@ -1078,7 +1041,7 @@ pub fn debug_bench_collision_gate(
     );
 }
 
-/// Backfill the imported default action bar (work-items 110/212) onto an EXISTING character —
+/// Backfill the imported default action bar  onto an EXISTING character ,
 /// chars created before the `game_createinfo_action` import have no `game_player_action` rows and
 /// fall back to the gateway's known-spells synth (which slots passives and misses the stance
 /// pages). Idempotent per button (the grant skips occupied ones). Takes effect next login.

@@ -1,35 +1,3 @@
-//! The Package Delta stage: read every enabled Package's generated artifacts, report the plan they
-//! form, and hand the whole plan to the module in one reducer call.
-//!
-//! A base import replaces a whole Import Family, so a Package's claims have to be reapplied after
-//! it. This stage runs last, once the family's base rows are back and its provenance is stamped.
-//!
-//! # Where the artifacts live
-//!
-//! `<enabled packages root>/<package>/data/.generated/*.json`. The path sits INSIDE the Package
-//! folder on purpose: `lyracore packages enable`/`disable` moves that folder between `packages/` and
-//! `.lyracore/packages-disabled/`, so the artifacts move with it. What this stage can see IS the
-//! enabled set — there is no second list to disagree with the Package Inventory.
-//!
-//! # Check and apply
-//!
-//! The importer's own convention decides which: without `--apply` this prints the plan and writes
-//! nothing, with `--apply` it calls the reducer. The plan printed by a check is the plan an apply
-//! sends.
-//!
-//! # Routing a spatial claim
-//!
-//! Most claimed tables are global catalogues every Shard loads whole. Two are SPATIAL — a creature
-//! spawn and a gameobject spawn — and each names the map it sits on in its own key. A spatial claim
-//! belongs to this Shard exactly when this run's World Import Scope owns that map, which is the same
-//! fence the base import filters its own spawns through (`creature_row_kept_in_scope`). Routing
-//! reads that scope and nothing else: there is no second concept, and no per-Package Shard list to
-//! disagree with it.
-//!
-//! A claim for another Shard's map is DROPPED from this plan, not refused. Refusing it would make a
-//! realm of several Shards impossible to import, because every Shard would choke on the maps it does
-//! not own. The report names what was routed away, so a check still accounts for every claim.
-
 use std::fs;
 use std::path::{Path, PathBuf};
 

@@ -5,7 +5,7 @@
 //! core chokepoint calls exactly ONE `fire_*` fn here, which iterates the generated per-event
 //! registry. Handlers are NOTIFY-ONLY: they observe the payload and may act through the same
 //! reducer-internal fns core code uses (grant, damage, spawn, ...), but there is no veto/fold —
-//! mutating/decorator hooks are a separately-green-lit Phase 2.
+//! These hooks do not veto or fold a result.
 //!
 //! The catalog:
 //!
@@ -27,9 +27,9 @@
 //! | `on_character_relocated` | `world::teleport_player`, after placement and motion cleanup | [`CharacterRelocatedPayload`] |
 //! | `on_logout`         | `world::remove_from_world` — covers explicit logout AND abrupt disconnect | [`LogoutPayload`] |
 //! | `on_gossip_select`  | `world::gossip_select` — the notify reducer the gateway calls on CMSG_GOSSIP_SELECT_OPTION | [`GossipSelectPayload`] |
-//! | `on_creature_death` | `combat::kill_creature`, non-pet branch — the encounter-grade twin of `on_death` (entry + instance snapshot; work-item 228) | [`CreatureDeathPayload`] |
-//! | `on_hp_threshold`   | `encounter::encounter_hp_probe` — the kernel's own `on_damage_taken` handler; fires once per registered `(entry, pct)` crossing per instance (work-item 228) | [`HpThresholdPayload`] |
-//! | `on_go_used`        | `gameobject::apply_use_gameobject` success exit — player use AND the debug drivers (work-item 228) | [`GoUsedPayload`] |
+//! | `on_creature_death` | `combat::kill_creature`, non-pet branch, the encounter-grade twin of `on_death` (entry + instance snapshot) | [`CreatureDeathPayload`] |
+//! | `on_hp_threshold`   | `encounter::encounter_hp_probe`, the kernel's own `on_damage_taken` handler; fires once per registered `(entry, pct)` crossing per instance | [`HpThresholdPayload`] |
+//! | `on_go_used`        | `gameobject::apply_use_gameobject` success exit, player use AND the debug drivers | [`GoUsedPayload`] |
 //!
 //! Extending the catalog = the payload struct here + the `HOOK_EVENTS` row in `module/build.rs`
 //! (which generates the `payload_for` alias, the `fire_*` fn, and the registry array from that
@@ -197,7 +197,7 @@ pub struct GossipSelectPayload {
     pub option_row_id: u32,
 }
 
-/// A CREATURE died for real (work-item 228, the encounter kernel's death event) — fired from
+/// A CREATURE died for real (the encounter kernel's death event), fired from
 /// `combat::kill_creature`'s non-pet branch right after `on_death`, with the encounter-grade
 /// identity `on_death` lacks: the victim's `entry` and `instance_id`, SNAPSHOTTED before the corpse
 /// row was mutated. Pet clean-despawns and player deaths do NOT fire this (encounters key on wild
@@ -221,16 +221,6 @@ pub struct CreatureDeathPayload {
     pub threat_snapshot: Vec<(u64, i64)>,
 }
 
-/// A watched creature crossed a registered HP threshold (work-item 228): its post-damage health
-/// reached `pct`% or below for the FIRST time in this instance. Fired by the encounter kernel's
-/// damage probe (`encounter::encounter_hp_probe`, itself an `on_damage_taken` handler), once per
-/// `(entry, pct)` watch per instance — a heal back above and a re-drop never re-fires until
-/// `encounter::reset_hp_fired`/the instance sweep clears the fired-mark. Register watches via
-/// `encounter::watch_hp_threshold(ctx, entry, pct)`; with no registered `on_hp_threshold` handler
-/// anywhere in the build the probe is a single constant branch per damage event (zero-cost path).
-/// A LETHAL blow never reaches the probe (every kill path returns before the damage hook), so
-/// thresholds skipped by the killing hit do NOT fire — key final-phase/execute logic on
-/// `on_creature_death`, never on a low-pct watch (review note; a 1% watch is unreliable by design).
 pub struct HpThresholdPayload {
     pub creature_guid: u64,
     pub entry: u32,
@@ -238,7 +228,7 @@ pub struct HpThresholdPayload {
     pub pct: u8,
 }
 
-/// A unit successfully USED a gameobject (work-item 228) — fired at `apply_use_gameobject`'s
+/// A unit successfully USED a gameobject, fired at `apply_use_gameobject`'s
 /// success exit (player `use_gameobject` and the debug drivers share that core), AFTER the
 /// type-dispatch committed its effect (chest looted, door toggled, goober credited, inert no-op).
 /// Rejected uses (out of range, already-looted chest...) never fire. `instance_id` is the GO

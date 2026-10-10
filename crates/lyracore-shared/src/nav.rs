@@ -1,21 +1,3 @@
-//! Nav-grid cell math + blob codec shared by the module's runtime queries (242) and the
-//! importer's rasterizer (241) — same one-copy rule as `terrain.rs` (PR-9 review).
-//!
-//! One nav chunk per terrain MCNK cell (33.33 yd): a 64×64 walkability bitmask (0.52 yd nav
-//! cells) and a 32×32 obstruction-height byte grid (1.04 yd) for line-of-sight. Cells with no
-//! obstruction/slope/hole anywhere emit NO row — a missing chunk means "unobstructed here (or
-//! un-imported)", and both readers fall back to today's straight-line behavior.
-//!
-//! Blob formats (fixed, versionless — schema changes reload the table):
-//! - walk: 512 bytes; bit `ny*64+nx`, 1 = standable. Sub-indices count DOWN from the cell's
-//!   high-coordinate corner, the same direction as `terrain::cell_index`.
-//! - obs:  1024 bytes; `oy*32+ox`; 255 = no obstruction, else top-of-obstruction =
-//!   `base_z + value * OBS_STEP` (`base_z` rides on the row). Height-above-BASE, not
-//!   above-terrain, so a LoS ray tests against it with zero interpolation.
-// Deliberate simplification: one obstruction column per 1 yd cell — can't express "clear under the
-// bridge / two floors". Ground-floor WMO surfaces can replace nearby terrain; stacked floors
-// still require navigation layers.
-
 use crate::spatial::MAP_COORD_MAX;
 use crate::terrain::{interpolate, CELL_SIZE};
 use crate::vmap::{TriClass, VmapTri};
@@ -125,7 +107,7 @@ mod tests {
 }
 
 // =============================================================================================
-//  Runtime queries (work-item 242) — pure algorithms over fetched chunks. The chunk source is
+//  Runtime queries, pure algorithms over fetched chunks. The chunk source is
 //  a closure (module: one PK find per cell; tests: synthetic chunks) so ALL pathing/LoS logic
 //  unit-tests here without a database. Missing chunk = "no obstacles known" (the 241 contract:
 //  fully-clear cells emit no row), so every query degrades to today's straight-line behavior
@@ -364,7 +346,7 @@ pub fn walkable_prefix(
 /// including `to`, or None when unreachable within `max_expansions`. The straight-line fast
 /// path returns `[to]` with ZERO expansions — an open-field chase costs one line test.
 /// Callers keep legs SHORT (the 500 ms tick's chase legs); long travel stays on the waypoint
-/// graph (work-item 150).
+/// graph.
 pub fn find_leg(
     fetch: &mut impl FnMut(u16, u16) -> Option<NavCellData>,
     from: (f32, f32),

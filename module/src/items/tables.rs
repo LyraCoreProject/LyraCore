@@ -35,16 +35,7 @@ pub struct ItemTemplate {
     pub damage_min: f32, // physical melee damage range (tooltip)
     pub damage_max: f32,
     pub delay_ms: u32, // weapon swing speed (ms)
-    // --- equip stat bonuses (END-appended, #[default(0)] → additive auto-migration) ---
-    // Vanilla items carry up to 10 (stat_type, stat_value) pairs plus an armor value; this slice flattens
-    // the handful that the EXISTING effective-* combat pipeline can fold into observable readouts into one
-    // typed column each (the union-killed form, like the spell module's typed `p0`/`amount`). A piece with no
-    // bonus leaves every column 0, so an existing template (e.g. the starter Worn Shortsword, entry 25)
-    // is byte-identical after migration and the player's swing readout is unchanged (baseline-safe). The
-    // five base attributes match the `UNIT_FIELD_STAT` order; `stat_crit`/`stat_hit` are rating points
-    // (basis-point-ish, folded straight into the attack-table crit/miss bands); `stat_armor` adds on TOP
-    // of the agility*2 base armor (the combat module ADDS, never double-counts). i32 so a (future) negative
-    // suffix-enchant fits; today every seeded value is ≥ 0. [reference]
+
     #[default(0)]
     pub stat_strength: i32,
     #[default(0)]
@@ -106,7 +97,7 @@ pub struct ItemTemplate {
     /// Item binding: the cmangos `item_template.bonding` value — 0 = NoBind, 1 = Bind on Pickup (BoP),
     /// 2 = Bind on Equip (BoE), 3 = Bind on Use, 4/5 = Quest Item (see [`super::rules::bonding`]).
     /// Drives the client's "Binds when picked up/equipped" tooltip line via
-    /// `SMSG_ITEM_QUERY_SINGLE_RESPONSE.bonding`. Trade and mail enforcement (work-items 067, 068) are
+    /// `SMSG_ITEM_QUERY_SINGLE_RESPONSE.bonding`. Trade and mail enforcement (068) are
     /// out of scope here — this is the data model only.
     /// END-appended + `#[default(0)]` → additive auto-migration (every existing template reads
     /// NoBind, baseline-safe). [reference]
@@ -114,7 +105,7 @@ pub struct ItemTemplate {
     pub bonding: u8,
     /// The 6 vanilla resistance schools (cmangos `item_template.holyres/fireres/natureres/frostres/
     /// shadowres/arcaneres`) — resist gear is dead weight until these land; the effective-resistance
-    /// combat math already exists and can fold these in once a consumer reads them. Work-item 213:
+    /// combat math already exists and can fold these in once a consumer reads them.:
     /// DATA PLUMBING ONLY — no consumer reads these yet, so every existing template stays at 0
     /// (baseline-safe). i32 matching `stat_armor`'s sibling convention (a future negative
     /// suffix-enchant fits). END-appended + `#[default(0)]` → additive auto-migration. [reference]
@@ -132,7 +123,7 @@ pub struct ItemTemplate {
     pub arcane_res: i32,
     /// On-use/on-equip spell slots 3-5 (vanilla items carry up to 5; slots 1-2 already cover every
     /// 1-10 consumable). Completes the 191 proc engine's item half — no consumer reads these yet
-    /// (work-item 213: data plumbing only). Same shape as `spellid_1`/`spelltrigger_1`: `u32` id,
+    /// (data plumbing only). Same shape as `spellid_1`/`spelltrigger_1`: `u32` id,
     /// `u8` `ItemSpellTriggerType`. END-appended + `#[default(0)]` → additive auto-migration.
     /// [reference]
     #[default(0)]
@@ -148,7 +139,7 @@ pub struct ItemTemplate {
     #[default(0)]
     pub spelltrigger_5: u8,
     /// Weapon-skill proficiency gate (cmangos `RequiredSkill`/`RequiredSkillRank`) — mail/plate
-    /// proficiency + weapon-skill requirements beyond the class tables. Work-item 213: data
+    /// proficiency + weapon-skill requirements beyond the class tables.: data
     /// plumbing only, no consumer reads these yet (0 = no skill gate, baseline-safe).
     /// END-appended + `#[default(0)]` → additive auto-migration. [reference]
     #[default(0)]
@@ -156,7 +147,7 @@ pub struct ItemTemplate {
     #[default(0)]
     pub required_skill_rank: u32,
     /// Reputation gate (cmangos `RequiredReputationFaction`/`RequiredReputationRank`) — the 195
-    /// item half. Work-item 213: data plumbing only, no consumer reads these yet (0 = no rep gate,
+    /// item half.: data plumbing only, no consumer reads these yet (0 = no rep gate,
     /// baseline-safe). END-appended + `#[default(0)]` → additive auto-migration. [reference]
     #[default(0)]
     pub required_reputation_faction: u32,
@@ -214,7 +205,7 @@ pub struct ItemInstance {
     #[default(0)]
     pub enchant_id: u32,
     /// Item binding state: true once this SPECIFIC instance has bound to its owner and cannot be
-    /// traded or mailed away (enforcement lands via work-items 067/068 — this column is the data
+    /// traded or mailed away (enforcement lands via, this column is the data
     /// model they gate on). Set `true` at grant time for a BoP-templated item (quest reward, starter
     /// kit, loot, vendor buy — any `store_item`/`grant_starter_item` insert) and on first EQUIP for a
     /// BoE-templated item (`apply_item_move`'s equip-validation branch). A BoU/unbound-type template

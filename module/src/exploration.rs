@@ -1,4 +1,4 @@
-//! Exploration / discovery XP (work-item 200; the "Discovered: <area>" toast + map fog have
+//! Exploration / discovery XP; the "Discovered: <area>" toast + map fog have
 //! landed). Entering a subzone for the FIRST time awards discovery XP and sends TWO packets — this is
 //! retail parity, not a duplicate (see `check_area_exploration`'s doc comment for the
 //! cited source): `SMSG_EXPLORATION_EXPERIENCE` (the toast + fog-clear, off the

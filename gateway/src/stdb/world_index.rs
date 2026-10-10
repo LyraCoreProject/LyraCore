@@ -1,52 +1,4 @@
-//! The in-process AOI index — the gateway-side replacement for ~600 per-player,
-//! box-scoped SpacetimeDB subscriptions.
-//!
-//! # Why this exists
-//!
-//! Before the shared-connection model, every session opened its own SpacetimeDB connection and
-//! subscribed a 5×5 grid box over four tables (`game_world_entity`, `game_gameobject`, `game_entity_motion`,
-//! `game_creature_spline`), re-subscribing on every cell crossing. At 600 players that is ~600
-//! distinct query strings that can neither be shared nor pruned, and every committed transaction
-//! woke ~600 SDK pumps to evaluate them — measured as load average 11–14 on 8 cores with only 7
-//! runnable threads and 34% CPU, i.e. a WAKEUP problem, not a CPU problem (SpacetimeDB's own
-//! clockworklabs/SpacetimeDB#2783).
-//!
-//! Now the four tables ride ONE global subscription per shard, on that shard's coordinator
-//! connection, and this structure answers the question the subscription engine used to answer:
-//! **which sessions can see this row?**
-//!
-//! # The shape, and why it is this shape
-//!
-//! Interest is a SYMMETRIC square: a viewer anchored on cell `A` sees exactly the cells within
-//! `±BOX_HALF_SPAN` of `A` on each axis (`lyracore_shared::spatial::GridBox::bounds`). Symmetry is
-//! what makes the inverse cheap — "who sees cell `E`" is "every viewer anchored within ±SPAN of
-//! `E`", the same 25-cell neighbourhood walked in the other direction. So both directions are a
-//! fixed 25 hash lookups plus the size of the answer, INDEPENDENT of how many players are online:
-//!
-//! | operation | cost |
-//! |---|---|
-//! | [`WorldIndex::upsert_entity`] (a row moved / appeared) | O(1) |
-//! | [`WorldIndex::viewers_of`] (row → sessions) | O(25 + V), V = viewers that can see it |
-//! | [`WorldIndex::move_viewer_delta`] (a cell crossing) | O(50 + delta) — 5 cells in, 5 out on an axis crossing |
-//! | [`WorldIndex::visible_entities`] (the login sweep) | O(25 + E), E = entities in view |
-//!
-//! A naive "for each session, is this row in its box" scan would be O(players) PER ROW UPDATE,
-//! which at 600 players and ~2 movement heartbeats/s is the same fan-out problem in a different
-//! process. That shape is deliberately not available here.
-//!
-//! # Shards
-//!
-//! Guids are globally unique across databases, so every shard's coordinator stream
-//! feeds ONE index keyed by `(map_id, instance_id, cell)` — one view spans the whole realm. Each
-//! entity remembers which shard's cache holds its row ([`ShardId`]) so a sweep can read the row
-//! back without searching every shard.
-//!
-//! # The escape hatch
-//!
-//! `LYRACORE_AOI=0` (`config::aoi_enabled`) keeps its old meaning — no cell scoping, every viewer
-//! sees the whole partition. That path is deliberately O(viewers) / O(entities): it reproduces the
-//! cost profile of the global subscription it stands in for, and it is a debugging hatch, not a
-//! production mode.
+//! Indexed snapshots of subscribed World Shard rows.
 
 use lyracore_shared::spatial::{grid_cell, grid_cell_id, BOX_HALF_SPAN};
 use std::collections::{HashMap, HashSet};
@@ -452,12 +404,6 @@ impl WorldIndex {
     /// Move a viewer's anchor and report the VISIBILITY delta the move implies, or `None` when the
     /// anchor did not change (the overwhelmingly common per-heartbeat call — a plain hash lookup and
     /// a compare, no allocation).
-    ///
-    /// The subscription engine used to produce this delta itself, as the `on_insert`/`on_delete`
-    /// pair a re-subscribed box generated. Computed by diffing the two 25-cell neighbourhoods and
-    /// gathering guids only from the cells that actually differ: an axis crossing touches 5 cells in
-    /// and 5 out, so the answer costs ~50 hash lookups plus the size of the answer — never a scan of
-    /// the world or of the box's contents.
     pub fn move_viewer_delta(&self, session: SessionId, key: CellKey) -> Option<RecenterDelta> {
         let mut inner = self.lock();
         let old = *inner.viewer_cell.get(&session)?;
@@ -578,13 +524,6 @@ mod tests {
     // ===========================================================================================
     //  Fixture + the SQL ORACLE.
     //
-    //  The oracle is the SUBSCRIPTION SQL ITSELF — `box_queries` builds the exact WHERE clause the
-    //  per-player box subscription used to send, and `sql_selects` below EVALUATES that text.
-    //  Deliberately a parser rather than a re-implementation of the predicate: a re-implementation
-    //  would drift with the index it is supposed to be independent of, and the class of bug this
-    //  whole test exists to catch (a peer that never appears, or one visible through a wall) is
-    //  exactly the class where index and predicate disagree by one cell.
-    // ===========================================================================================
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     struct Row {
@@ -792,10 +731,6 @@ mod tests {
         }
     }
 
-    /// The recenter delta must be exactly the difference between the two SQL-defined visible sets.
-    /// This is the half of the change the subscription engine used to do for us: re-subscribing a
-    /// box produced the enter/leave events itself, and getting the delta wrong here is invisible in
-    /// review and shows up live as a peer that never despawns, or one that never comes back.
     #[test]
     fn a_recenter_delta_is_exactly_the_difference_between_the_two_sql_visible_sets() {
         let mut rng = Rng(0xDEAD_BEEF_0000_0007);

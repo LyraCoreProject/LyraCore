@@ -1,24 +1,5 @@
-//! Skill-fabric static data: `SkillLine.dbc` (the skill lines themselves — weapon/defense lines +
-//! the 12 professions + a long tail of NPC-only/deprecated lines), `SkillLineAbility.dbc` (which
-//! spell each line teaches/grants, at which skill threshold, and the green/gray skill-up difficulty
-//! band for recipes), and `SkillRaceClassInfo.dbc` (which lines a given race/class combo can actually
-//! train, and at what character level). Loaded by the importer's `--dbc` mode (see
-//! `importer/src/dbc.rs`); no Timestamp columns, so every table here is plain SQL-loadable
-//! (`spacetime sql` clear+reload, no reducer needed — same convention as `game_faction_template`/
-//! `game_race_info` in `faction.rs`/`config.rs`).
-//!
-//! SCOPE: this is the DATA half of work-item 208 — the import + tables + the ONE wired consumer
-//! (profession trainer tier caps, resolved in `importer/src/main.rs`'s `PROFESSION_LEARN` +
-//! `assert_profession_tier_parity`, sourced from `SkillRaceClassInfo.dbc`'s `skill_tier` foreign key
-//! into `SkillTiers.dbc` — NOT from `SkillLine.dbc` itself, correcting the original item spec). The
-//! remaining consumers each ride their own follow-up item: recipe skill-up ranges from
-//! `game_skill_ability.gray`/`.green` (replacing the sentinel-band shortcut `skill::skillup_chance_bp`'s
-//! callers currently use), weapon-master availability from `game_skill_availability` (work-item 202's
-//! data half), and auto-learned spells at thresholds from `game_skill_ability`'s AUTOLEARN rows
-//! (`acquire_method`). `skill.rs`'s hand-authored `skill_line` consts + `class_weapon_skill_lines`
-//! now carry a deprecation pointer to these tables (see there) — the consts stay because the wire
-//! protocol is still keyed on the same verbatim vanilla ids; they're just no longer the
-//! AUTHORITATIVE source for "what skill lines exist".
+//! Skill catalogues, race/class availability, and learn-level metadata.
+//! The importer loads these rows from client data. Trainer and spell-learning operations read them.
 
 use spacetimedb::table;
 

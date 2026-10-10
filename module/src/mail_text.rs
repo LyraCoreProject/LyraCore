@@ -120,11 +120,6 @@ pub(crate) fn plan_copy_text(row: Option<&Mail>, caller_guid: u64) -> CopyTextPl
 }
 
 /// Sets COPIED on the mail and files its body as durable item text, keyed by the mail's own id.
-/// This is the ONE-TRANSACTION half of a Letter Copy: `mail_text.rs` writes `game_mail` directly
-/// (rather than through a `mail.rs` helper) because `module/src/mail.rs` is shared ground with
-/// other mail work landing in the same window — a new function here keeps this change out of its
-/// way.
-///
 /// Replay-safe: a retry that reaches here again before GRANTED is ever set (bags filled, logout,
 /// timeout, a crash between here and the Home Shard grant) re-runs harmlessly. The text row is
 /// reused when it already exists: `mail::returned` keeps a returned mail's id, so a letter a second

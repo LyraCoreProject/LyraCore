@@ -41,7 +41,7 @@ pub(crate) fn handle_combat<St: WorldStore + ?Sized>(
         // consumed here (rather than falling through to the dispatch tail's `log::debug!` "ignoring"
         // line) so a `.speed` never spams the log or risks a future desync-classifier false-positive.
         ClientOpcodeMessage::CMSG_FORCE_RUN_SPEED_CHANGE_ACK(_) => {}
-        // Draw / stow weapons (#101). The client sends this on `Z`, on a weapon swap, and when an
+        // Draw / stow weapons. The client sends this on `Z`, on a weapon swap, and when an
         // ability auto-draws. It is a pure render-state change: nothing gates on it, so a failure is
         // logged and dropped rather than being session-fatal like ATTACKSWING/ATTACKSTOP. gtker
         // already parsed the payload into a `SheathState`, so the byte reaching the module is one of

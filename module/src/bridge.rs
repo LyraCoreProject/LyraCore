@@ -1,4 +1,4 @@
-//! Addon⇄server message bridge (work-item 184) — the UI↔server RPC channel custom features ride.
+//! Addon⇄server message bridge, the UI↔server RPC channel custom features ride.
 //!
 //! Client→server: the 1.12 client's `SendAddonMessage` is `CMSG_MESSAGECHAT` with language
 //! `LANG_ADDON` (0xFFFFFFFF) and text `"<prefix>\t<message>"`. The GATEWAY intercepts those frames
@@ -149,9 +149,9 @@ pub struct PartyCommandIssuer {
 
 crate::character_owned!(delete, fn sweep_delete_game_party_command_issuer(ctx, character_guid) {
     ctx.db
-        .game_party_command_issuer()
-        .character_guid()
-        .delete(character_guid);
+.game_party_command_issuer()
+.character_guid()
+.delete(character_guid);
 });
 
 crate::character_owned!(transfer, fn sweep_transfer_game_party_command_issuer(ctx, character_guid, io) {

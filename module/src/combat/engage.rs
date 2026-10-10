@@ -13,7 +13,7 @@ use spacetimedb::{table, ReducerContext, ScheduleAt, Table, Timestamp};
 use crate::{game_faction_template, game_world_entity, WorldEntity};
 
 // Tables' pure formulas/consts and the sibling submodules' re-exports (`roll_swing`, `kill_creature`,
-// ...) are all pulled in from `mod.rs` (`pub use tables::*` + `pub use folds::*`/`death::*`/`swing::*`)
+//...) are all pulled in from `mod.rs` (`pub use tables::*` + `pub use folds::*`/`death::*`/`swing::*`)
 // — this ALSO brings `tick_melee`/`ranged_impact` into scope for the `MeleeSchedule`/
 // `RangedImpactSchedule` tables' `scheduled(..)` macros below to resolve, since those two reducers are
 // defined in `swing.rs` (mirrors `spell::tables`'s identical cross-file `scheduled(..)` pattern).
@@ -318,8 +318,7 @@ pub(crate) fn melee_combatant_guids(ctx: &ReducerContext) -> Vec<u64> {
 #[table(
     accessor = game_melee_attack,
     public,
-    // Perf catalog 1.15: every "who is attacking X" question (disengage, kill_creature's
-    // still_engaged, is_engaged, combatant_guids, heal threat) used to full-scan this table.
+
     index(accessor = by_target, btree(columns = [target_guid]))
 )]
 pub struct MeleeAttack {
@@ -334,7 +333,7 @@ pub struct MeleeAttack {
     /// auto-migrates existing rows (no `-c` wipe). [entity]
     #[default(0)]
     pub ranged_spell_id: u32,
-    /// Work-item 037 (dual wield): the OFF-HAND swing's own clock, independent of `last_swing_ms` — an
+    /// (dual wield): the OFF-HAND swing's own clock, independent of `last_swing_ms`, an
     /// off-hand weapon has its own `delay_ms`, so it swings on a different cadence than the main hand.
     /// 0 = never swung (the next eligible tick swings immediately), same sentinel as `last_swing_ms`.
     /// Only consulted for a MELEE engagement (`ranged_spell_id == 0`) with a live off-hand weapon
@@ -425,15 +424,6 @@ pub struct CombatEvent {
 }
 
 impl CombatEvent {
-    /// A baseline `CombatEvent` row for `attacker`/`target_guid`, stamped from the attacker's
-    /// already-fetched [`WorldEntity`] — zero `game_world_entity` lookups. `id`=0,
-    /// `created_at`=`ctx.timestamp`, the AOI address (`map_id`/`instance_id`/`grid_x`/`grid_y`) copied
-    /// straight off `attacker`, every other field at its neutral zero/false. Replaces the field-literal
-    /// plus the four-call `grid_of` copy-paste this used to require at every call site (perf catalog
-    /// audit, 2026-08-06) — every current call site already has the attacker entity in hand (the swing
-    /// tick fetches it once up front), so this is the only constructor `CombatEvent` needs; a guid-only
-    /// `grid_of`-backed variant can be added the day a call site without the entity shows up. A call
-    /// site overrides only the handful of fields that carry real signal via struct-update syntax.
     pub(crate) fn signal_at(
         ctx: &ReducerContext,
         attacker: &WorldEntity,
@@ -743,10 +733,7 @@ pub(crate) fn apply_start_ranged_attack(
     if target_guid == attacker.guid {
         return Err("cannot attack self".to_string());
     }
-    // The equipped ranged weapon, read ONCE for the whole reducer (it used to be fetched three times:
-    // here, for the ammo gate, and again for the wind-up seed) — Auto Shot / Shoot are impossible
-    // bare-handed. Checked BEFORE the shared target gate, preserving the order in which a command that
-    // is invalid on both counts reports its reason.
+
     let ranged_weapon = equipped_ranged_weapon(ctx, attacker.guid)
         .ok_or_else(|| "no ranged weapon equipped".to_string())?;
     let target = validate_attack_target(ctx, &attacker, target_guid)?;
@@ -788,10 +775,7 @@ pub(crate) fn apply_start_ranged_attack(
         ) {
             return Err("target not in line of sight".to_string());
         }
-        // A launcher (bow/gun/crossbow) with an empty quiver rejects at activation — vanilla's
-        // SPELL_FAILED_NO_AMMO red error — instead of arming, sending a clean START, and silently
-        // cancelling ~500ms later when the first shot's find_ammo comes up empty (review find).
-        // Wands consume nothing. The mid-loop run-out keeps the swing tick's teardown+cancel.
+
         use crate::items::weapon_subclass as ws;
         if matches!(ranged_weapon.3, ws::BOW | ws::GUN | ws::CROSSBOW)
             && find_ammo(ctx, attacker.guid).is_none()

@@ -413,10 +413,10 @@ fn field_shape<T: BindingFieldShape>(value: &T, ts: &mut RawModuleDefV9Builder) 
 /// `name: value` way inside its own `{ .. }`). Brace/paren/bracket-depth aware; only records
 /// identifiers seen at depth 1 (directly inside the outermost struct's braces).
 ///
-/// NOT string-literal aware (found by review): a Sentinel value whose Debug output embeds
+/// Not string-literal aware: a Sentinel value whose Debug output embeds
 /// `word: ` inside a quoted string would inject a spurious identifier here. Every current sentinel
 /// is empty/zero/None so this cannot fire today, and an injection would surface as a LOUD
-/// order-mismatch failure, not a silent pass — but keep Sentinel impls free of colon/comma-bearing
+/// order-mismatch failure, not a silent pass; keep Sentinel impls free of colon/comma-bearing
 /// string values (or teach this parser about `"` first).
 fn top_level_debug_fields(debug: &str) -> Vec<String> {
     let open = debug
@@ -562,7 +562,7 @@ fn check<M: SpacetimeType>(table: &str, binding: BindingShape, renames: &[(&str,
         if expected_b_name != m_name {
             // A rename entry may ONLY paper over the SDK's cosmetic trailing-digit underscore
             // normalization (data0 -> data_0). Without this guard, a PAIR of same-typed swapped
-            // fields could hide behind two compensating bogus renames (found by review).
+            // fields could hide behind two compensating bogus renames.
             assert_eq!(
                 expected_b_name.replace('_', ""),
                 m_name.replace('_', ""),
@@ -717,7 +717,7 @@ parity_test!(parity_game_corpse_loot_eligible, "game_corpse_loot_eligible", lyra
 parity_test!(parity_game_group_event, "game_group_event", lyracore_module::GroupEvent, bindings::group_event_type::GroupEvent, {
     id, recipient_identity, kind, other_guid, other_name, created_at, payload, recipient_guid,
 });
-// The private per-recipient trade-status relay (#120) — the `game_group_event` shape minus the
+// The private per-recipient trade-status relay — the `game_group_event` shape minus the
 // name/payload columns (no trade status carries either).
 parity_test!(parity_game_trade_event, "game_trade_event", lyracore_module::TradeEvent, bindings::trade_event_type::TradeEvent, {
     id, recipient_identity, kind, other_guid, created_at, recipient_guid, payload,

@@ -1,33 +1,5 @@
-//! Talents — FIRST SLICE: the talent engine + a starter set of PASSIVE Warrior talents.
-//!
-//! A talent is a tree node (`game_talent`) a character spends points into (`game_character_talent`),
-//! whose effect is a PASSIVE aura applied at login / on-learn. The effect rides the existing spell/aura
-//! pipeline: each talent maps to ONE `game_spell` carrying an `A_MOD_*` effect, applied with
-//! `points = rank * base_points` — so rank 3 of Cruelty (+100 crit/rank) applies +300 crit. Re-applying
-//! refreshes the SAME aura (keyed by `effect_id`), so a rank-up updates the magnitude with no stacking and
-//! a relog is idempotent. This reuses the proven combat folds (`effective_crit_bp`/`effective_armor`/…) —
-//! a learned talent is a real, server-verifiable combat change (`debug_compute_swing`).
-//!
-//! Talent points are DERIVED, not stored: `max(0, level-9) - sum(learned ranks)` (the first point at L10,
-//! 1/level to 51 at L60). No `Character` column → no gateway-binding change.
-//!
-//! BASELINE SAFETY: a character with zero learned-talent rows applies nothing → byte-identical combat. The
-//! seeded talent data is inert until a point is spent. The two tables are NEW → `publish` auto-migrates.
-//!
-//! DEFERRED (this slice): ability-granting talents (Mortal Strike/Bloodthirst/… — need a per-player
-//! learnable-spell system; `CASTABLE` is a hardcoded const); the client talent pane (the update-mask
-//! descriptor wall — work-item 031's wire/system half); auto-granting points on a mid-session ding
-//! (re-derived correctly at the next learn); gossip surfacing of "unlearn talents" at the trainer
-//! (work-item 198 follow-up — the reducer is wired, the gateway arm is not). [entity]
-//!
-//! DEMO SEED (work-item 207): `seed_talents` inserts a small hand-authored Warrior tree (ids 1-8) so a
-//! no-DBC sandbox has a talent tree to exercise `learn_talent`/`reset_talents`/the aura pipeline. A real
-//! `TalentTab.dbc`/`Talent.dbc` import normally replaces those rows. If imported tabs coexist with a
-//! tab-less demo row, the owning learn Gate treats the imported catalogue as authoritative and refuses
-//! the demo row. Only a Shard with no `TalentTab` rows may use the Warrior-only demo tree. A character
-//! who learned a demo talent before an import keeps an orphaned `game_character_talent` row;
-//! `apply_learned_talents` logs and skips it at login. The reserved 51xxx demo spell ids do not collide
-//! with imported Spell.dbc ids.
+//! Talent definitions, Character selections, and passive aura application.
+//! Points derive from level and learned ranks. Login and learning apply the same effect pipeline.
 
 use spacetimedb::{table, Identity, ReducerContext, Table};
 
@@ -66,7 +38,7 @@ pub struct Talent {
     /// and this is the granted active. END-appended `#[default(0)]` → auto-migrates. [static]
     #[default(0)]
     pub grant_spell_id: u32,
-    // --- Talent.dbc import columns (work-item 207, END-appended, #[default(0)] → additive auto-migration).
+    // --- Talent.dbc import columns, END-appended, #[default(0)] → additive auto-migration).
     // Every demo-seeded talent (ids 1-8) leaves these at 0 — byte-identical baseline behavior.
     /// The real `game_talent_tab.tab_id` this talent belongs to (Talent.dbc `Talent.tab`) — 0 for a
     /// demo-seeded talent (no real tab). Unlike `tree_id` (which repeats 0/1/2 across EVERY class's tabs),
@@ -658,14 +630,6 @@ pub fn apply_learned_talents(ctx: &ReducerContext, guid: u64, owner: Identity, l
     }
 }
 
-// ===========================================================================================
-//  Respec — unlearn every learned talent for an escalating gold cost (work-item 198)
-// ===========================================================================================
-
-/// Gold cost (copper) of a character's NEXT respec, given `respec_count` prior resets: vanilla's
-/// `Player::resetTalentsCost` step table — 1g / 5g / 10g, then +5g per further reset, capped at 50g
-/// (1.12 has no cost decay — that's a TBC addition). Expressed directly in copper (1g = 10_000c, the
-/// server's existing money unit — see `game_trainer_spell.cost`). Pure — unit-tested.
 pub(crate) fn respec_cost_copper(respec_count: u32) -> u32 {
     const CAP_COPPER: u32 = 500_000;
     let copper = match respec_count {

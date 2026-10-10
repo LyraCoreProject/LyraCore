@@ -160,11 +160,11 @@ pub fn reap_movement_events(ctx: &ReducerContext, _schedule: EventReaperSchedule
         }
     }
 
-    // CC diminishing-returns windows (work-item 192): rows whose 15s post-removal window has
+    // CC diminishing-returns windows : rows whose 15s post-removal window has
     // elapsed are dead state — the next same-category CC starts fresh at level 1 anyway.
     crate::spell::stacking::sweep_dr_state(ctx);
 
-    // Need/greed roll deadlines (work-item 187): resolves any roll whose 60s window lapsed with
+    // Need/greed roll deadlines : resolves any roll whose 60s window lapsed with
     // votes outstanding (absent members auto-pass) — the deadline half of resolve-exactly-once.
     crate::loot::sweep_loot_rolls(ctx);
 

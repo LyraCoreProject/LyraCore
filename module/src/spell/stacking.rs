@@ -1,23 +1,3 @@
-//! Stacking-group exclusion + CC diminishing returns — work-item 192. `module/src/spell/cast/targeting.rs`'s
-//! `aura_apply` (already the sole `game_aura` insert site — verified by grep, see the work-item report) is
-//! the ONLY caller of `apply_group_conflict`/`resolve_dr_for_target`, so every aura placement in the engine
-//! routes through this file (the "filtered_gossip_options lesson": one chokepoint, never a second copy of
-//! the policy).
-//!
-//! Two concerns, two pure decision fns, sharing one result type (`ApplyDecision`) — they're mutually
-//! exclusive per effect (a spell effect is either a stacking-group member OR a CC-DR effect, never both in
-//! today's data), so there's no shared "incoming application" struct pretending to unify them:
-//!   1. STACKING GROUPS (`game_spell_group` + `game_spell_group_rule`) — same-effect exclusive families
-//!      across casters/spells (Fortitude, Blessings, armor debuffs, ...). Module-only tables (no
-//!      `public`, no gateway binding — mirrors the `game_spell_chain`/`game_spell_learn` precedent),
-//!      because `game_aura` itself carries everything the client needs (the eviction just deletes rows);
-//!      NO `game_aura` column was added for this (verified: see the report's "zero subscribed-schema
-//!      change" note). Decided by [`resolve_group_conflict`].
-//!   2. CC DIMINISHING RETURNS (`game_dr_state`) — PLAYER targets only; same-category CC within 15s of
-//!      the PREVIOUS REMOVAL lands at 100/50/25/0% duration. The window starts at REMOVAL (natural expiry
-//!      OR dispel), never at apply — the classically-misimplemented part the work item calls out. Decided
-//!      by [`resolve_dr`].
-
 use spacetimedb::{log, table, ReducerContext, Table};
 
 use crate::game_world_entity;
@@ -62,10 +42,6 @@ pub struct SpellGroupRule {
     pub rank_is_comparable: bool,
 }
 
-/// Rule byte constants (`game_spell_group_rule.rule`) — mirrors the work item's architecture section
-/// verbatim. `seed.rs` and `group_rule_from_u8` are the only readers. `RULE_STACKS` (0) is never matched
-/// BY NAME in `group_rule_from_u8` (it's the `_` wildcard fallback, so any future rule byte the importer
-/// doesn't recognize degrades to it too) — `#[allow(dead_code)]` documents that as deliberate, not a bug.
 #[allow(dead_code)]
 pub(crate) const RULE_STACKS: u8 = 0;
 pub(crate) const RULE_EXCLUSIVE: u8 = 1;
@@ -164,7 +140,7 @@ pub(crate) enum ApplyDecision {
     },
 }
 
-/// THE stacking-group chokepoint (work-item 192). Called by `apply_group_conflict` for a fresh
+/// THE stacking-group chokepoint. Called by `apply_group_conflict` for a fresh
 /// stacking-group member application (a same-spell refresh never reaches this — see that fn's doc). Pure:
 /// no DB access, no logging, no side effects — the caller does all the I/O and acts on the returned
 /// `ApplyDecision`.
@@ -316,7 +292,7 @@ pub(crate) fn buff_group_status(
     }
 }
 
-/// THE CC-diminishing-returns chokepoint (work-item 192). Called by `resolve_dr_for_target` for every
+/// THE CC-diminishing-returns chokepoint. Called by `resolve_dr_for_target` for every
 /// `A_CONTROL(mechanic)` effect on a player target. `prior` is the DR window state read for this
 /// `(target, category)` BEFORE this application (`None` if the target has never taken this category of
 /// CC, or its prior window has lapsed by `now_micros`). Pure: no DB access, no logging, no side effects —
@@ -394,12 +370,6 @@ pub(crate) fn rank_of(ctx: &ReducerContext, spell_id: u32) -> u8 {
         .unwrap_or(0)
 }
 
-/// Does `(eff_kind, eff_p0_kind, eff_p0)` name a DR-tracked CC mechanic, AND is `target_guid` a PLAYER?
-/// Creatures are explicitly OUT (per the work item: "creatures take full duration, skip the PvE stun cap"
-/// — this fn returning `None` for a creature is exactly that skip). The ONE mapping both the apply-side
-/// (`cast::aura_apply`, before the row exists — passes the raw effect fields) and the two removal-side
-/// hooks (`scheduler::tick_auras`'s expiry pass, `effects::dispel_target` — pass an existing `Aura` row's
-/// frozen `eff_*` fields) go through, so "is this aura DR-tracked" has exactly one definition.
 pub(crate) fn dr_category_for_effect(
     ctx: &ReducerContext,
     eff_kind: u8,
@@ -578,11 +548,6 @@ pub(crate) fn bump_dr_level(
     }
 }
 
-/// Stamp the AUTHORITATIVE DR window on `(target_guid, category)`'s removal — `removed_at_micros + 15s`,
-/// per the work item's "window starts at removal" pin. Called from BOTH removal paths:
-/// `scheduler::tick_auras`'s natural-expiry pass and `effects::dispel_target`'s dispel. No-op if no row exists
-/// (can't happen in practice — a DR-tracked aura always got `bump_dr_level`'d at its own apply — but
-/// defensive rather than materializing a level-0 row purely from a removal).
 pub(crate) fn dr_window_on_removal(
     ctx: &ReducerContext,
     target_guid: u64,
@@ -624,11 +589,6 @@ pub(crate) fn sweep_dr_state(ctx: &ReducerContext) {
 mod tests {
     use super::*;
 
-    // --- Stacking groups -----------------------------------------------------------------------
-
-    /// Fortitude rank cross-caster (verbatim work-item vector): rank2(caster A) onto a target already
-    /// carrying rank1(caster B) — EXCLUSIVE_STRONGER → Apply, evicting B's aura. The reverse (rank1 onto an
-    /// existing rank2) is weaker → Refuse.
     #[test]
     fn fortitude_rank_beats_lower_rank_any_caster_exclusive_stronger() {
         let rank1_b = AuraSummary {
@@ -845,10 +805,10 @@ mod tests {
 
     // --- CC diminishing returns ------------------------------------------------------------------
 
-    /// The verbatim poly DR timeline (t in seconds -> micros): t=0 full (fresh); t=12 (aura #1 expired at
-    /// t=10, its removal set the window to expire at t=25) -> 50%, level->2; t=16 (aura #2, still active,
+    /// The verbatim poly DR timeline (t in seconds -> micros): t=0 full (fresh); t=12 (aura expired at
+    /// t=10, its removal set the window to expire at t=25) -> 50%, level->2; t=16 (aura, still active,
     /// hasn't been removed yet — its own apply-time level bump already put the row at level 2) -> 25%,
-    /// level->3; t=20 (aura #3 removed at t=18.5, its removal reset the window to expire at t=33.5, still
+    /// level->3; t=20 (aura removed at t=18.5, its removal reset the window to expire at t=33.5, still
     /// live) -> Refuse{immune}; t=40.1 (> t=33.5, window lapsed) -> full duration, level reset.
     #[test]
     // Every timestamp in this vector is written `<n> * SECOND` so the timeline reads off the page in
@@ -870,7 +830,7 @@ mod tests {
         // bump_dr_level's own math (mirrored here, no ctx): pre_level 0 -> new_level 1.
         assert_eq!(dr_pre_level(None, t0), 0);
 
-        // Aura #1 (full 10s) removed at t=10 (natural expiry) -> window row: level 1, expires t=10+15=25.
+        // Aura (full 10s) removed at t=10 (natural expiry) -> window row: level 1, expires t=10+15=25.
         let row_after_removal_1 = DrWindow {
             level: 1,
             window_expires_micros: 25 * SECOND,
@@ -894,7 +854,7 @@ mod tests {
             window_expires_micros: 17 * SECOND + DR_WINDOW_MICROS,
         };
 
-        // t=16: aura #2 still active (expires t=17) — a recast reads the row AS-IS (no removal happened),
+        // t=16: aura still active (expires t=17), a recast reads the row AS-IS (no removal happened),
         // level 2 -> 25%, i.e. 2.5s of a 10s base.
         let t16 = 16 * SECOND;
         let decision16 = resolve_dr(Some(row_after_apply_2), t16);

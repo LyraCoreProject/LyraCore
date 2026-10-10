@@ -197,7 +197,7 @@ mod tests {
         );
     }
 
-    /// AC (fix #1): the client's `SendAddonMessage` API distributes over PARTY, RAID, GUILD and
+    /// the client's `SendAddonMessage` API distributes over PARTY, RAID, GUILD and
     /// OFFICER only. RAID_LEADER and RAID_WARNING chat lines cannot carry addon traffic at all,
     /// and WHISPER/CHANNEL addon frames are this bridge's own private channels, not shared wire.
     #[test]
@@ -222,10 +222,6 @@ mod tests {
         assert!(!is_bridge_prefixed("no tab at all"));
     }
 
-    /// AC (fix #1): a RAID addon frame from another addon's prefix is not ours, but its chat type
-    /// still reaches real players — `gateway/src/world/mod.rs` lets it fall through to the typed
-    /// reader instead of dropping it. This proves the premise the module doc now states: a typed
-    /// `CMSG_MESSAGECHAT` on the addon language decodes cleanly, chat type and all.
     #[test]
     fn a_raid_addon_frame_from_another_prefix_decodes_through_the_typed_reader() {
         use wow_world_messages::vanilla::opcodes::ClientOpcodeMessage;
@@ -260,7 +256,7 @@ mod tests {
         }
     }
 
-    /// AC (fix #1): a SAY addon frame is not a typed chat type, so the caller keeps dropping it —
+    /// a SAY addon frame is not a typed chat type, so the caller keeps dropping it ,
     /// SAY has no chat-kind route to a real player, addon-language or not.
     #[test]
     fn a_say_addon_frame_is_still_dropped() {

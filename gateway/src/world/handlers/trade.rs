@@ -1,4 +1,4 @@
-//! Trade family (#120): the Trade Session handshake — initiate / begin / cancel. The module owns
+//! The Trade Session handshake, initiate / begin / cancel. The module owns
 //! every gate; ALL statuses, to both parties, ride the `game_trade_event` relay
 //! (`stdb::subscriptions::trade_event_outbound`), so no arm here answers synchronously. Reducer
 //! rejections are transient per-action failures (logged, never session-fatal), the vendor-arm
@@ -48,7 +48,7 @@ pub(crate) fn handle_trade<St: WorldStore + ?Sized>(
             }
             Ok(None)
         }
-        // Offer mutations (#121). The (bag, slot) pair maps onto the module's absolute slots the
+        // Offer mutations. The (bag, slot) pair maps onto the module's absolute slots the
         // same way the item family does: only the main pseudo-bag (255) is modelled — items inside
         // equipped sub-bags are logged + ignored, matching the item-action dispatcher's posture.
         ClientOpcodeMessage::CMSG_SET_TRADE_ITEM(c) => {
@@ -93,7 +93,7 @@ pub(crate) fn handle_trade<St: WorldStore + ?Sized>(
             }
             Ok(None)
         }
-        // Accept / unaccept (#122). The accept body's `unknown1` is padding (vmangos skips it;
+        // Accept / unaccept. The accept body's `unknown1` is padding (vmangos skips it;
         // bots set 1) — dropped here, the module needs only who accepted.
         ClientOpcodeMessage::CMSG_ACCEPT_TRADE(_) => {
             if let Some(me) = self_guid(conn) {
@@ -117,7 +117,7 @@ pub(crate) fn handle_trade<St: WorldStore + ?Sized>(
             }
             Ok(None)
         }
-        // Proposal declines (#123): the client auto-answers a BeginTrade it can't take — busy
+        // Proposal declines : the client auto-answers a BeginTrade it can't take, busy
         // (already in a dialog) or the initiator is on the ignore list.
         ClientOpcodeMessage::CMSG_BUSY_TRADE => {
             if let Some(me) = self_guid(conn) {

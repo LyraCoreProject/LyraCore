@@ -39,9 +39,6 @@ fn spell_crit_is_one_and_a_half() {
     assert_eq!(apply_spell_crit(0, true), 0); // a 0-damage effect stays 0
 }
 
-/// Incoming-damage modifier (A_MOD_DAMAGE_TAKEN): signed percent, 0 = no-op, ≥100% reduction = immunity.
-/// `apply_damage_pct` is direction-neutral (also folds the OUTGOING percent — see its doc comment); this
-/// test exercises it through the incoming-damage framing its name used to (wrongly) assert alone.
 #[test]
 fn damage_taken_modifier_scales_and_clamps() {
     assert_eq!(apply_damage_pct(100, 0), 100); // no aura → unchanged (baseline-safe)
@@ -75,7 +72,7 @@ fn stance_allows_gate() {
     assert!(stance_allows(0x05, STANCE_BERSERKER));
     // An out-of-range stance is disallowed under a non-zero mask (the shift is bounded → no overflow/panic).
     assert!(!stance_allows(0x01, 9));
-    // Druid combat forms (work-item 156 — stance ids 3/4/5 flow through the SAME gate/mask convention):
+    // Druid combat forms (stance ids 3/4/5 flow through the SAME gate/mask convention):
     // a Maul/Growl-shaped Bear|DireBear mask (bits 3,5 = 0x28) admits Bear and Dire Bear only.
     assert!(stance_allows(0x28, STANCE_BEAR));
     assert!(stance_allows(0x28, STANCE_DIRE_BEAR));
@@ -144,9 +141,6 @@ fn stance_switch_clears_power_only_on_real_switch_for_rage() {
     ));
 }
 
-/// Form-recast toggle-off gate (156 review): recasting the ACTIVE druid form (Bear/Cat/DireBear)
-/// leaves it; a warrior recasting his active stance stays a no-op (warriors are never formless);
-/// switching TO a different form/stance is never a toggle (the change arm handles it).
 #[test]
 fn form_recast_toggles_off_only_for_active_druid_forms() {
     // Druid recasting the form he is IN → leave it.
@@ -512,7 +506,7 @@ fn instant_kind_wire_values_exhaustive() {
         );
         assert!(
             !passive_applies_effect_kind(*k),
-            "instant kind 0x{k:02x} must not reach the passive-apply path (#90: Consecration's \
+            "instant kind 0x{k:02x} must not reach the passive-apply path (Consecration's \
              E_PERSISTENT_AREA-only shape must never mint a spurious login/world-change buff)"
         );
         for other in &ALL_INSTANT_KINDS[i + 1..] {
@@ -547,7 +541,7 @@ fn aura_kind_wire_values_exhaustive() {
         );
         assert!(
             passive_applies_effect_kind(*k),
-            "aura kind 0x{k:02x} must still reach the passive-apply path (#90 control)"
+            "aura kind 0x{k:02x} must still reach the passive-apply path"
         );
         for other in &ALL_AURA_KINDS[i + 1..] {
             assert_ne!(
@@ -718,7 +712,7 @@ fn break_on_damage_flag_decode() {
     assert!(!breaks_on_damage(0x2)); // a different aura_interrupt bit (not BREAK_ON_DAMAGE) → not broken
 }
 
-// --- Aura-expiry reap gate (work-item 232) --------------------------------------------------------
+// --- Aura-expiry reap gate  --------------------------------------------------------
 // `tick_auras`'s expiry pass now range-scans `game_aura.by_expiry()` (a btree index on `expires_at`) to
 // the horizon instead of `.iter()`ing the whole table, then applies `is_due_for_expiry` as the exact same
 // combined predicate the old full scan used inline (`a.expires_at <= now && a.eff_kind != A_STEALTH`).

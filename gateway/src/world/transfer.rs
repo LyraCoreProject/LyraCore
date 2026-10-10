@@ -1,40 +1,4 @@
-//! The gateway's half of the escrowed cross-database transfer — the Phase A tracer (enter Deadmines
-//! on the instances shard and come back), part of the elastic world-sharding design.
-//!
-//! The module owns the state machine (`module/src/transfer/`); this file owns the ORDER the two
-//! databases are driven in, because that ordering is the one safety property neither database can
-//! check for itself — each can only see its own ledger row.
-//!
-//! ```text
-//!   SOURCE shard                                   DESTINATION shard
-//!   1 begin_transfer  ── freeze + serialize ──►    (nothing yet)
-//!                                                  2 ensure_instance        (mirror the dungeon)
-//!                                                  3 import_character_blob  (rows land, fenced)
-//!   4 confirm_import  ◄── "it committed" ──────
-//!   5 finish_transfer ── source copy destroyed
-//!   6 publish_shard_index ── realm routing ready
-//!                                                  7 sync_transfer_arrival (party mirror ready)
-//!                                                  8 release_transfer       (arrival goes LIVE)
-//!   9 evict_instance_population (the world writer stops ticking the dungeon)
-//! ```
-//!
-//! **Every step is idempotent**, which is what makes a killed gateway recoverable without any
-//! gateway-side state: the escrow row on the source carries the transfer id, the destination and the
-//! blob, so a fresh process re-derives the whole plan from durable data and re-runs the sequence
-//! from the top. Replayed steps are no-ops (`BeginPlan::Replay`, the in-row PK, `FinishPlan::
-//! AlreadyDone`, `release_transfer`'s missing-row arm).
-//!
-//! **The transfer id IS the character guid.** A character can hold at most one escrow at a time
-//! (`BeginPlan::AlreadyInTransit` refuses a second), and guid 0 does not exist — so using the guid
-//! makes the id re-derivable by a gateway that restarted with no memory of what it was doing. That
-//! is the entire recovery mechanism: nothing about an in-flight transfer lives in gateway RAM.
-//!
-//! Deliberate simplification: the Escrow drive is synchronous. For a player it runs on the world
-//! session's own thread, inside the client's loading screen (the WORLDPORT_ACK handler); ceiling: a
-//! slow or unreachable destination shard stalls that one session for the reducer timeout.
-//!
-//! A Character with no Session is driven by one bounded Gateway dispatcher per World Shard. A slow
-//! destination holds that dispatcher's worker while other Gateway and SDK threads continue.
+//! The Gateway drives escrowed cross-database Transfers and resumes interrupted crossings.
 
 use anyhow::{anyhow, Result};
 

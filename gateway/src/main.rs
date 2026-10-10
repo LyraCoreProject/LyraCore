@@ -31,8 +31,6 @@ use anyhow::Result;
 use config::GatewayConfig;
 use provision_cli::{parse_gateway_mode, read_password_line, GatewayMode};
 
-// Heap profiling: `--features dhat-heap` swaps in dhat's allocator and
-// writes dhat-heap.json at exit. Never for production — it records every allocation and is slow.
 #[cfg(feature = "dhat-heap")]
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;
@@ -198,18 +196,7 @@ async fn provision(cfg: &GatewayConfig, username: &str, password: &[u8]) -> Resu
     // character is owned by the world shard's account row.
     coordinator.provision_account(&user, &salt, &pw_verifier)?;
 
-    // REALM-CORE's copy, which is the one that can actually log you in. The SRP6 challenge is
-    // answered from realm-core and never from a world shard's cache — pinned by
-    // `the_srp6_challenge_material_comes_from_realm_core_never_the_world_shards_cache`
-    // (`realm_core.rs`). Without this write an account provisioned on a SHARDED realm exists,
-    // reports success, and can never log in: the logon server looks it up on realm-core and finds
-    // nothing. It cost a whole capacity-benchmark run (200 accounts, every login refused) before
-    // anyone read the account tables on both databases.
-    //
-    // Unsharded, `realm_core()` IS this handle and the second call would be a duplicate, so it is
-    // skipped by name. `?` rather than best-effort: a provision that half-succeeded is exactly the
-    // state this comment exists to describe, and reporting success for it is what made the failure
-    // so hard to see.
+    // SRP6 credentials belong to Realm-core. Unsharded, it is the world handle already written.
     let rc = coordinator.realm_core()?;
     if rc.shard_name() != coordinator.shard_name() {
         rc.provision_account(&user, &salt, &pw_verifier)?;

@@ -288,7 +288,7 @@ mod rep_tests {
         assert_eq!(reputation_discount_pct(0), 0); // Neutral → full price
         assert_eq!(reputation_discount_pct(-10000), 0); // hostile → no discount (never a surcharge)
         assert_eq!(reputation_discount_pct(3000), 5); // Friendly → 5%
-        assert_eq!(reputation_discount_pct(9000), 10); // Honored → 10% (the work-item's headline case)
+        assert_eq!(reputation_discount_pct(9000), 10);
         assert_eq!(reputation_discount_pct(21000), 15); // Revered → 15%
         assert_eq!(reputation_discount_pct(42000), 20); // Exalted → 20%
     }

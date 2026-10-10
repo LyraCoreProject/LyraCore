@@ -1,7 +1,3 @@
-//! Realm Presence — the Gateway's realm-wide read of one Character: in world, session online,
-//! race, class, level, zone and Away Status, from whichever World Shard holds it. Guild rosters,
-//! friends, `/who`, whisper and Member Stats all read it here, instead of each resolving its own
-//! realm-wide Character read the way `party.rs` and `handlers/member_stats.rs` used to.
 //!
 //! Existence alone (a durable `game_character` row) never needs proof of absence: it is a positive
 //! signal, read best-effort from whichever connected Shard answers first. A NEGATIVE claim —

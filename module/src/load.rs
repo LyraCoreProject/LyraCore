@@ -16,9 +16,7 @@
 //! history: enough to eyeball a sustained trend against a momentary spike without a single `ORDER
 //! BY` (`spacetime sql` has none — `docs/danger-zones.md` §2).
 //!
-//! See `docs/region-sharding.md` for the two `spacetime sql` queries an operator runs against this
-//! data, and `docs/danger-zones.md` §1.2 for why these are hand-authored gateway bindings rather
-//! than a `spacetime generate` regen.
+//! `docs/danger-zones.md` describes the Gateway binding generation rules.
 
 use spacetimedb::{reducer, table, ReducerContext, Table};
 
@@ -288,7 +286,7 @@ mod tests {
         assert_eq!(
             realm_wide_sessions(vec![(1, 10, 5), (2, 11, 7)].into_iter()),
             12,
-            "distinct gateways' latest samples sum to the realm-wide total (issue #308)"
+            "distinct gateways' latest samples sum to the realm-wide total"
         );
         // Ids need not arrive in order.
         assert_eq!(

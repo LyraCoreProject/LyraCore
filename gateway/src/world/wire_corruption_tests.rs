@@ -308,20 +308,6 @@ fn writer_trace_dump_writes_a_file_with_the_traced_frames() {
     std::fs::remove_dir(dir).unwrap();
 }
 
-/// Hardening (the actual fix): an `Outbound::Raw` body that overflows the u16 frame-size
-/// field must end the session instead of silently wrapping the declared size — the wrap is exactly
-/// the "one wrong size field desyncs every later header" mechanism this whole investigation chased.
-/// No current builder produces a body this large (confirmed by reading every `Outbound::Raw` call
-/// site), so this exercises the guard directly rather than waiting for a caller to reach it.
-///
-/// Mutation-checked by hand: reverting this arm to the old `debug_assert!`-only form makes this test
-/// FAIL — in `cargo test`'s own debug profile, the reinstated `debug_assert!` fires and panics the
-/// `world-writer` thread (caught here as `writer.join()` returning `Err`, not `Ok`). That panic is a
-/// debug-profile-only tripwire, though: in the RELEASE profile the capacity benchmark and any live
-/// deploy actually run, `debug_assert!` compiles out entirely and the `as u16` cast just wraps
-/// silently — a header claiming a tiny size, followed by the full oversized body, corrupting every
-/// packet after it. The mutation is caught here either way (panic in debug, corruption in release);
-/// this test's own build only exercises the debug-panic half of that story.
 #[test]
 fn oversized_raw_body_ends_the_session_instead_of_wrapping_the_size_field() {
     let store = std::sync::Arc::new(InMemoryStore {

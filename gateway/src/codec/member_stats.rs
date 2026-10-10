@@ -269,13 +269,6 @@ impl MemberStats {
     }
 }
 
-/// The fields that differ between what a viewer last received and `current`. `None` means the
-/// viewer holds nothing, so every field goes, unconditionally, pet fields included even with no
-/// pet: cmangos marks a joining or newly-online member's whole update flag set with
-/// `GROUP_UPDATE_FULL` (cm:Group.cpp:306-307, 746-747), and the next heartbeat's delta packet
-/// carries that mask as-is, not the pet-omitting mask the explicit FULL answer builds. A
-/// power-type change also resends both power values, on the member and on its pet alike
-/// (cm:GroupHandler.cpp:589-593).
 pub fn stats_delta(previous: Option<&MemberStats>, current: &MemberStats) -> GroupUpdateMask {
     let Some(previous) = previous else {
         return GroupUpdateMask::FULL;

@@ -134,7 +134,7 @@ pub struct TaxiServiceReply {
     pub refusal: String,
     pub created_micros: i64,
     /// Stable primitive result for activation replies. Status/open callers ignore it. End-appended
-    /// with a default so publishing over the Ticket 02 mailbox schema is migration-safe.
+    /// with a default so publishing over the mailbox schema is migration-safe.
     #[default(0)]
     pub result_code: u8,
 }
