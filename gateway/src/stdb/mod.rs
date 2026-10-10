@@ -36,7 +36,6 @@ mod world_store; // impl RealmDb for Coordinator
 pub(crate) mod world_view; // shared per-shard spatial, broadcast, private, and owner dispatch
 
 pub use connection::Coordinator;
-#[cfg(test)]
 pub(crate) use connection::ReducerCallError;
 pub(crate) use connection::{classify, DurableFailure};
 pub use subscriptions::PlayerSubscriptions;

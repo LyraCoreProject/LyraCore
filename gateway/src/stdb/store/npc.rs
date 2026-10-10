@@ -1,6 +1,6 @@
 //! `Coordinator`'s [`NpcStore`] adapter.
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use spacetimedb_sdk::Table;
 
 use crate::codec;
@@ -11,75 +11,18 @@ use crate::stdb::Coordinator;
 use crate::world::{Actor, NpcStore};
 
 impl NpcStore for Coordinator {
-    fn creature_template(&self, entry: u32) -> Result<Option<codec::CreatureView>> {
-        self.creature_template(entry)
-    }
-
-    fn pet_name(
-        &self,
-        requester_guid: u64,
-        pet_number: u32,
-        pet_guid: u64,
-    ) -> Result<Option<codec::PetNameView>> {
-        self.pet_name(requester_guid, pet_number, pet_guid)
+    /// Standing-derived reaction gate. The inherent read has other callers (vendor, guild, quest).
+    fn npc_refuses_interaction(&self, npc_guid: u64, player_guid: u64) -> Result<bool> {
+        Coordinator::npc_refuses_interaction(self, npc_guid, player_guid)
     }
 
     fn gameobject_template(&self, entry: u32) -> Result<Option<codec::GameObjectTemplateView>> {
-        self.gameobject_template(entry)
+        Coordinator::gameobject_template(self, entry)
     }
 
-    fn gameobject_type(&self, go_guid: u64) -> Result<Option<u8>> {
-        self.gameobject_type(go_guid)
-    }
-
-    fn enter_areatrigger(&self, account_id: u64, self_guid: u64, trigger_id: u32) -> Result<()> {
-        self.enter_areatrigger(account_id, self_guid, trigger_id)
-    }
-
-    fn npc_refuses_interaction(&self, npc_guid: u64, player_guid: u64) -> Result<bool> {
-        self.npc_refuses_interaction(npc_guid, player_guid)
-    }
-
-    fn bind_home(&self, account_id: u64, self_guid: u64) -> Result<()> {
-        self.bind_home(account_id, self_guid)
-    }
-
-    fn npc_is_innkeeper(&self, guid: u64) -> Result<bool> {
-        self.npc_is_innkeeper(guid)
-    }
-
-    fn npc_gossip_text_id(&self, npc_guid: u64) -> u32 {
-        self.npc_gossip_text_id(npc_guid)
-    }
-
-    fn npc_text_for_id(&self, text_id: u32) -> Option<codec::NpcTextView> {
-        self.npc_text_for_id(text_id)
-    }
-
-    fn gossip_options(&self, npc_guid: u64) -> Result<Vec<codec::GossipOptionView>> {
-        self.gossip_options(npc_guid)
-    }
-
-    fn inspect(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()> {
-        self.inspect(account_id, self_guid, target_guid)
-    }
-
-    fn gossip_select(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        npc_guid: u64,
-        option_id: u32,
-        option_row_id: u32,
-    ) -> Result<()> {
-        self.gossip_select(account_id, self_guid, npc_guid, option_id, option_row_id)
-    }
-}
-
-impl Coordinator {
     /// Resolve the active title text for one NPC, with a per-creature menu override before the
     /// entry-owned default menu.
-    pub fn npc_gossip_text_id(&self, npc_guid: u64) -> u32 {
+    fn npc_gossip_text_id(&self, npc_guid: u64) -> u32 {
         let guard = self.0.coord();
         let db = &guard.conn.db;
         let entity = match db.game_world_entity().guid().find(&npc_guid) {
@@ -109,7 +52,7 @@ impl Coordinator {
     /// are used verbatim (real per-slot probabilities from the dump) and slot 0's base-row `text` is
     /// NOT separately re-applied (the slot-0 row, always emitted by the importer alongside the others,
     /// is the source of truth once any slot row exists).
-    pub fn npc_text_for_id(&self, text_id: u32) -> Option<crate::codec::NpcTextView> {
+    fn npc_text_for_id(&self, text_id: u32) -> Option<crate::codec::NpcTextView> {
         let guard = self.0.coord();
         let db = &guard.conn.db;
         let base = db.game_npc_text().text_id().find(&text_id)?;
@@ -136,7 +79,7 @@ impl Coordinator {
 
     /// Return the active imported options for one NPC. A live per-creature override replaces the
     /// entry-owned default options. The dispatcher applies conditions at both HELLO and SELECT.
-    pub fn gossip_options(&self, npc_guid: u64) -> Result<Vec<crate::codec::GossipOptionView>> {
+    fn gossip_options(&self, npc_guid: u64) -> Result<Vec<crate::codec::GossipOptionView>> {
         let guard = self.0.coord();
         let db = &guard.conn.db;
         let Some(entity) = db.game_world_entity().guid().find(&npc_guid) else {
@@ -193,7 +136,7 @@ impl Coordinator {
 
     /// Does the NPC at `guid` carry the innkeeper flag? Gates the "Make this inn your home." gossip
     /// option + the `bind_home` select. Reads `npc_flags` off the entity (privileged cache); absent → false.
-    pub fn npc_is_innkeeper(&self, guid: u64) -> Result<bool> {
+    fn npc_is_innkeeper(&self, guid: u64) -> Result<bool> {
         let guard = self.0.coord();
         let db = &guard.conn.db;
         Ok(db
@@ -206,13 +149,13 @@ impl Coordinator {
     /// Resolve a live pet visible to the world. Pet names are public unit presentation: Hunter
     /// names come from the bounded durable projection, while summoned-pet names remain authored
     /// creature-template data. The requester must be in world, but need not own the observed pet.
-    pub fn pet_name(
+    fn pet_name(
         &self,
-        requester_guid: u64,
+        _requester: Actor,
         pet_number: u32,
         pet_guid: u64,
     ) -> Result<Option<PetNameView>, anyhow::Error> {
-        if requester_guid == 0 || pet_guid == 0 {
+        if pet_guid == 0 {
             return Ok(None);
         }
         let guard = self.0.coord();
@@ -244,7 +187,7 @@ impl Coordinator {
     }
 
     /// Read a creature template by entry for a `CMSG_CREATURE_QUERY` reply (Tier 2 / NPCs).
-    pub fn creature_template(&self, entry: u32) -> Result<Option<crate::codec::CreatureView>> {
+    fn creature_template(&self, entry: u32) -> Result<Option<crate::codec::CreatureView>> {
         Ok(self
             .0
             .coord()
@@ -271,7 +214,7 @@ impl Coordinator {
     /// opens the quest window instead of rolling loot / toggling state — that is what a questgiver
     /// gameobject does in vanilla. `None` for an unspawned/unknown guid (the caller falls back to the
     /// ordinary use-reducer path, which itself no-ops on an unknown guid).
-    pub fn gameobject_type(&self, go_guid: u64) -> Result<Option<u8>> {
+    fn gameobject_type(&self, go_guid: u64) -> Result<Option<u8>> {
         let guard = self.0.coord();
         let db = &guard.conn.db;
         Ok(db
@@ -289,9 +232,7 @@ impl Coordinator {
     /// Validate a `CMSG_INSPECT` request (target is a real in-world player, on the caller's map, in
     /// range, friendly) over the coordinator connection so the module resolves the caller from
     /// `ctx.sender`. `Err` (out of range / hostile / no such target) → the caller ignores it.
-    pub fn inspect(&self, _account_id: u64, actor_guid: u64, target_guid: u64) -> Result<()> {
-        let actor =
-            Actor::new(actor_guid).ok_or_else(|| anyhow!("inspect: actor_guid unresolved"))?;
+    fn inspect(&self, actor: Actor, target_guid: u64) -> Result<()> {
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
@@ -301,14 +242,7 @@ impl Coordinator {
     }
 
     /// Enter an area trigger (`CMSG_AREATRIGGER`) — credit any active explore quest tied to `trigger_id`.
-    pub fn enter_areatrigger(
-        &self,
-        _account_id: u64,
-        actor_guid: u64,
-        trigger_id: u32,
-    ) -> Result<()> {
-        let actor = Actor::new(actor_guid)
-            .ok_or_else(|| anyhow!("enter_areatrigger: actor_guid unresolved"))?;
+    fn enter_areatrigger(&self, actor: Actor, trigger_id: u32) -> Result<()> {
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
@@ -319,16 +253,13 @@ impl Coordinator {
 
     /// `CMSG_GOSSIP_SELECT_OPTION` — the NOTIFY-ONLY module chokepoint. Fired
     /// best-effort BEFORE the gateway's own gossip behavior; a failure never blocks the reply.
-    pub fn gossip_select(
+    fn gossip_select(
         &self,
-        _account_id: u64,
-        actor_guid: u64,
+        actor: Actor,
         npc_guid: u64,
         option_id: u32,
         option_row_id: u32,
     ) -> Result<()> {
-        let actor = Actor::new(actor_guid)
-            .ok_or_else(|| anyhow!("gossip_select: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
@@ -345,9 +276,7 @@ impl Coordinator {
     /// Bind the caller's hearthstone home to their current position (`CMSG_GOSSIP_SELECT_OPTION` on an
     /// innkeeper's "Make this inn your home.") over the coordinator connection so the module attributes
     /// it to the caller's entity. No args — `bind_home` resolves the caller via `ctx.sender`.
-    pub fn bind_home(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
-        let actor =
-            Actor::new(actor_guid).ok_or_else(|| anyhow!("bind_home: actor_guid unresolved"))?;
+    fn bind_home(&self, actor: Actor) -> Result<()> {
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,

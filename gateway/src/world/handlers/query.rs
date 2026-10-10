@@ -4,8 +4,13 @@
 use super::super::*;
 use super::quest;
 use super::taxi::open_taxi_outbound;
+use super::trainer::settle_per_action;
 use super::vendor::{vendor_has_stock, vendor_open_outbound};
+use crate::stdb::{classify, DurableFailure};
 use lyracore_shared::chat::broadcast_chat;
+
+/// What the GM reads when a dot-command arrives before the session has a Character.
+const NO_CHARACTER_FOR_GM_COMMAND: &str = "gm_command: actor_guid unresolved";
 
 /// NPC and gameobject templates, gossip, area triggers and inspect.
 pub(crate) trait NpcStore: Send + Sync {
@@ -15,7 +20,7 @@ pub(crate) trait NpcStore: Send + Sync {
     /// Resolve the public name of a live pet for an in-world requester.
     fn pet_name(
         &self,
-        requester_guid: u64,
+        requester: Actor,
         pet_number: u32,
         pet_guid: u64,
     ) -> Result<Option<codec::PetNameView>>;
@@ -29,7 +34,7 @@ pub(crate) trait NpcStore: Send + Sync {
     fn gameobject_type(&self, go_guid: u64) -> Result<Option<u8>>;
 
     /// Enter an area trigger (`CMSG_AREATRIGGER`): credit any active "explore" quest tied to it.
-    fn enter_areatrigger(&self, account_id: u64, self_guid: u64, trigger_id: u32) -> Result<()>;
+    fn enter_areatrigger(&self, actor: Actor, trigger_id: u32) -> Result<()>;
 
     /// Standing-derived reaction gate: does this NPC refuse `player_guid` its
     /// interaction WINDOW? Rep-bar factions refuse at Unfriendly-or-below standing; bar-less
@@ -41,7 +46,7 @@ pub(crate) trait NpcStore: Send + Sync {
 
     /// Bind the caller's hearthstone home to their current position (innkeeper gossip "Make this inn
     /// your home."). No args — the module resolves the caller via `ctx.sender`.
-    fn bind_home(&self, account_id: u64, self_guid: u64) -> Result<()>;
+    fn bind_home(&self, actor: Actor) -> Result<()>;
 
     /// Does the NPC at `guid` carry the innkeeper flag? Gates the "Make this inn your home." gossip
     /// option + the bind select.
@@ -65,14 +70,13 @@ pub(crate) trait NpcStore: Send + Sync {
     /// caller's map, in range, and friendly. `Ok(())` → the gateway replies `SMSG_INSPECT(target_guid)`;
     /// `Err` (out of range / hostile / no such target) → silently ignored, matching the other
     /// stateless-gate reducers (`enter_areatrigger`, `use_gameobject`).
-    fn inspect(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()>;
+    fn inspect(&self, actor: Actor, target_guid: u64) -> Result<()>;
 
     /// NOTIFY-ONLY module chokepoint for a gossip-option click — fired best-effort
     /// before the gateway's own gossip handling; failure never blocks the gossip reply.
     fn gossip_select(
         &self,
-        account_id: u64,
-        self_guid: u64,
+        actor: Actor,
         npc_guid: u64,
         option_id: u32,
         option_row_id: u32,
@@ -124,32 +128,42 @@ fn filtered_gossip_options<
 }
 
 /// Say, yell or `/e` (a `broadcast_chat` type) through the speaker's Home Shard. The line itself
-/// returns on the Relay; a Refusal gets the answer every chat line shares, and only a lost reducer
-/// transport ends the World Session.
+/// returns on the Relay; a Refusal gets the answer every chat line shares, and only a Transport
+/// Loss ends the World Session. A speaker with no Character yet is silent.
 fn speak_nearby<St: SpeechStore + ?Sized>(
     tx: &SessionTx,
     store: &St,
     conn: &WorldConn,
+    actor: Option<Actor>,
     chat_type: u8,
     language: u8,
     message: String,
 ) -> Result<()> {
+    let Some(actor) = actor else {
+        log::debug!(
+            "world: broadcast chat type {chat_type} dropped (account {}): no Character",
+            conn.account_id
+        );
+        return Ok(());
+    };
     let player = super::ChatActionPlayer {
         account_id: conn.account_id,
         self_guid: social::self_guid(conn),
     };
-    let sent = store.send_chat(
-        conn.account_id,
-        player.self_guid.unwrap_or(0),
-        chat_type,
-        language,
-        message,
-    );
-    let refusal = super::chat::settle(
-        player,
-        format_args!("broadcast chat type {chat_type}"),
-        sent,
-    )?;
+    let refusal = match store.send_chat(actor, chat_type, language, message) {
+        Ok(ChatOutcome::Delivered) => None,
+        Ok(ChatOutcome::Refused(refusal)) => Some(refusal),
+        Err(error) => match classify(&error) {
+            DurableFailure::Refusal { reason } => {
+                log::debug!(
+                    "world: broadcast chat type {chat_type} dropped (account {}): {reason}",
+                    player.account_id
+                );
+                None
+            }
+            DurableFailure::TransportLoss => return Err(error),
+        },
+    };
     for message in super::chat::refusal_outbound(player, refusal) {
         send(tx, message)?;
     }
@@ -181,11 +195,10 @@ pub(crate) fn handle_query<
     conn: &mut WorldConn,
     msg: ClientOpcodeMessage,
 ) -> Result<Option<ClientOpcodeMessage>> {
-    // The shared-call path names the actor by guid; 0 (not in world) forces the
-    // per-player path in the store.
-    let self_guid = match &conn.state {
-        WorldState::InWorld(iw) => iw.self_guid,
-        _ => 0,
+    // `None` until the session has a Character in the world.
+    let actor = match &conn.state {
+        WorldState::InWorld(iw) => Actor::new(iw.self_guid),
+        _ => None,
     };
 
     match msg {
@@ -210,7 +223,11 @@ pub(crate) fn handle_query<
         }
         ClientOpcodeMessage::CMSG_PET_NAME_QUERY(q) => {
             let pet_guid = q.guid.guid();
-            match store.pet_name(self_guid, q.pet_number, pet_guid)? {
+            let pet = match actor {
+                Some(actor) => store.pet_name(actor, q.pet_number, pet_guid)?,
+                None => None,
+            };
+            match pet {
                 Some(pet) => send(
                     tx,
                     Outbound::One(ServerOpcodeMessage::SMSG_PET_NAME_QUERY_RESPONSE(Box::new(
@@ -230,14 +247,16 @@ pub(crate) fn handle_query<
         // stateless gates (CMSG_GAMEOBJ_USE, CMSG_AREATRIGGER).
         ClientOpcodeMessage::CMSG_INSPECT(i) => {
             let target_guid = i.guid.guid();
-            match store.inspect(conn.account_id, self_guid, target_guid) {
-                Ok(()) => send(
-                    tx,
-                    Outbound::One(ServerOpcodeMessage::SMSG_INSPECT(
-                        codec::build_inspect_response(target_guid),
-                    )),
-                )?,
-                Err(e) => log::debug!("world: inspect ignored (account {}): {e}", conn.account_id),
+            if let Some(actor) = actor {
+                match store.inspect(actor, target_guid) {
+                    Ok(()) => send(
+                        tx,
+                        Outbound::One(ServerOpcodeMessage::SMSG_INSPECT(
+                            codec::build_inspect_response(target_guid),
+                        )),
+                    )?,
+                    Err(error) => settle_per_action("inspect", conn.account_id, Err(error))?,
+                }
             }
         }
         // Creature name resolution (the NPC analogue of CMSG_NAME_QUERY).
@@ -261,10 +280,7 @@ pub(crate) fn handle_query<
         // unchanged).
         ClientOpcodeMessage::CMSG_GOSSIP_HELLO(h) => {
             let npc = h.guid.guid();
-            let player_guid = match &conn.state {
-                WorldState::InWorld(iw) => iw.self_guid,
-                WorldState::CharSelect => 0,
-            };
+            let player_guid = actor.map_or(0, Actor::guid);
             // A gossip NPC that dislikes you doesn't open its menu (silent drop —
             // vanilla unfriendly NPCs just ignore the click).
             if player_guid != 0
@@ -324,10 +340,7 @@ pub(crate) fn handle_query<
         // deferred (`action_menu_id` stays inert).
         ClientOpcodeMessage::CMSG_GOSSIP_SELECT_OPTION(c) => {
             let npc = c.guid.guid();
-            let player_guid = match &conn.state {
-                WorldState::InWorld(iw) => iw.self_guid,
-                WorldState::CharSelect => 0,
-            };
+            let player_guid = actor.map_or(0, Actor::guid);
             // A click naming an NPC other than the one the open menu belongs to is stale (the client
             // sends HELLO before it can show a menu), so it selects nothing.
             let clicked = conn
@@ -341,13 +354,13 @@ pub(crate) fn handle_query<
             let option_row_id = clicked.map_or(codec::SYNTHESIZED_ROW_ID, |(row_id, _)| row_id);
             // Notify the module (the on_gossip_select hook chokepoint) — best-effort,
             // so a module hiccup never blocks the gossip reply below.
-            let _ = store.gossip_select(
-                conn.account_id,
-                self_guid,
-                npc,
-                c.gossip_list_id,
-                option_row_id,
-            );
+            if let Some(actor) = actor {
+                settle_per_action(
+                    "gossip_select",
+                    conn.account_id,
+                    store.gossip_select(actor, npc, c.gossip_list_id, option_row_id),
+                )?;
+            }
             use lyracore_shared::constants::gossip_option;
             match clicked.map(|(_, action)| action) {
                 // The gossip click does not run the interaction gate — it never has: only the
@@ -361,7 +374,9 @@ pub(crate) fn handle_query<
                     // Bind failure (not in world) is per-action; close the window either way (the
                     // post-bind SMSG_BINDPOINTUPDATE confirmation is cosmetic — sent fresh at next
                     // login; the recall is server-authoritative regardless).
-                    let _ = store.bind_home(conn.account_id, social::self_guid(conn).unwrap_or(0));
+                    if let Some(actor) = actor {
+                        settle_per_action("bind_home", conn.account_id, store.bind_home(actor))?;
+                    }
                     send(tx, Outbound::One(ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE))?;
                 }
                 Some(gossip_option::TRAINER) => {
@@ -376,11 +391,17 @@ pub(crate) fn handle_query<
                 Some(gossip_option::UNLEARNTALENTS) => {
                     // Respec. Errors (out of range / not enough gold) are per-action,
                     // the window closes either way, same as bind_home above.
-                    let _ = store.reset_talents(conn.account_id, player_guid, npc);
+                    if let Some(actor) = actor {
+                        settle_per_action(
+                            "reset_talents",
+                            conn.account_id,
+                            store.reset_talents(actor, npc),
+                        )?;
+                    }
                     send(tx, Outbound::One(ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE))?;
                 }
                 Some(gossip_option::TAXI) => {
-                    for message in open_taxi_outbound(store, player_guid, npc)? {
+                    for message in open_taxi_outbound(store, actor, npc)? {
                         send(tx, message)?;
                     }
                 }
@@ -443,29 +464,34 @@ pub(crate) fn handle_query<
                 // The GM reads the Module's Refusal text verbatim. Any other failure ends the
                 // World Session.
                 CMSG_MESSAGECHAT_ChatType::Say if message.starts_with('.') => {
-                    if let Err(error) = store.gm_command(&conn.account_name, self_guid, message) {
-                        let crate::stdb::DurableFailure::Refusal { reason } =
-                            crate::stdb::classify(&error)
-                        else {
-                            return Err(error);
-                        };
+                    let reply = match actor {
+                        Some(actor) => match store.gm_command(&conn.account_name, actor, message) {
+                            Ok(()) => None,
+                            Err(error) => match classify(&error) {
+                                DurableFailure::Refusal { reason } => Some(reason.to_string()),
+                                DurableFailure::TransportLoss => return Err(error),
+                            },
+                        },
+                        None => Some(NO_CHARACTER_FOR_GM_COMMAND.to_string()),
+                    };
+                    if let Some(line) = reply {
                         send(
                             tx,
                             Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(
-                                codec::build_gm_system_message(reason.to_string()),
+                                codec::build_gm_system_message(line),
                             ))),
                         )?;
                     }
                 }
                 CMSG_MESSAGECHAT_ChatType::Say => {
-                    speak_nearby(tx, store, conn, broadcast_chat::SAY, lang, message)?;
+                    speak_nearby(tx, store, conn, actor, broadcast_chat::SAY, lang, message)?;
                 }
                 CMSG_MESSAGECHAT_ChatType::Yell => {
-                    speak_nearby(tx, store, conn, broadcast_chat::YELL, lang, message)?;
+                    speak_nearby(tx, store, conn, actor, broadcast_chat::YELL, lang, message)?;
                 }
                 // `/e` custom emote: same broadcast path as Say/Yell, EMOTE type.
                 CMSG_MESSAGECHAT_ChatType::Emote => {
-                    speak_nearby(tx, store, conn, broadcast_chat::EMOTE, lang, message)?;
+                    speak_nearby(tx, store, conn, actor, broadcast_chat::EMOTE, lang, message)?;
                 }
                 // Whisper, party, raid, channel, guild and officer lines and `/afk` `/dnd` never
                 // get here: `dispatch_chat_action` consumes them.
@@ -475,15 +501,15 @@ pub(crate) fn handle_query<
         // Social tier: a text emote (/dance, /wave, …) → send_emote (insert a broadcast
         // game_emote_event the gateway fans back as SMSG_TEXT_EMOTE + SMSG_EMOTE). The client supplies
         // the social-emote id, the animation, and its selected target (0 guid = untargeted); the
-        // gateway resolves the target guid to a name on relay. Failure is dropped.
+        // gateway resolves the target guid to a name on relay. A Refusal is dropped.
         ClientOpcodeMessage::CMSG_TEXT_EMOTE(c) => {
-            let _ = store.send_emote(
-                conn.account_id,
-                self_guid,
-                c.text_emote.as_int(),
-                c.emote,
-                c.target.guid(),
-            );
+            if let Some(actor) = actor {
+                settle_per_action(
+                    "send_emote",
+                    conn.account_id,
+                    store.send_emote(actor, c.text_emote.as_int(), c.emote, c.target.guid()),
+                )?;
+            }
         }
         // /roll is a Group Broadcast: the party authority draws the result and sends it to every
         // group member on any shard, or to the roller alone when ungrouped.

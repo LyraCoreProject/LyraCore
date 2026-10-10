@@ -3,6 +3,7 @@
 
 use super::handlers::{handle_trainer, CharacterStore, TrainerBuyOutcome, TrainerStore};
 use super::*;
+use crate::stdb::ReducerCallError;
 use lyracore_shared::constants::armor_proficiency::{
     PLATE_PASSIVE_SPELL_ID, PLATE_TRAINER_SPELL_ID,
 };
@@ -17,8 +18,10 @@ struct TrainerFake {
     /// `learn_skill_line` per offering id. An offering absent here teaches an ordinary spell.
     skill_lines: std::collections::HashMap<u32, u32>,
     buy_refusal: Option<TrainerRefusal>,
-    /// A failed Durable Request: the result is unknown.
-    buy_error: Option<String>,
+    /// A failed Durable Request on the buy.
+    buy_error: Option<fn() -> anyhow::Error>,
+    /// A failed Durable Request on the talent pick.
+    talent_error: Option<fn() -> anyhow::Error>,
     /// The known previous rank a buy of a non-stacking chain replaces.
     superseded: Option<u32>,
     /// The spellbook after the buy.
@@ -118,16 +121,15 @@ impl TrainerStore for TrainerFake {
 
     fn buy_trainer_spell(
         &self,
-        _account_id: u64,
-        _self_guid: u64,
+        _actor: Actor,
         _trainer_guid: u64,
         _spell_id: u32,
     ) -> Result<TrainerBuyOutcome> {
         if let Some(refusal) = self.buy_refusal {
             return Ok(refusal.into());
         }
-        match &self.buy_error {
-            Some(error) => Err(anyhow!("{error}")),
+        match self.buy_error {
+            Some(error) => Err(error()),
             None => Ok(TrainerBuyOutcome::Learned),
         }
     }
@@ -142,8 +144,7 @@ impl TrainerStore for TrainerFake {
 
     fn set_action_button(
         &self,
-        _account_id: u64,
-        _self_guid: u64,
+        _actor: Actor,
         _button: u8,
         _action: u32,
         _action_type: u8,
@@ -153,8 +154,7 @@ impl TrainerStore for TrainerFake {
 
     fn set_faction_at_war(
         &self,
-        _account_id: u64,
-        _self_guid: u64,
+        _actor: Actor,
         _reputation_index: u32,
         _at_war: bool,
     ) -> Result<()> {
@@ -169,11 +169,14 @@ impl TrainerStore for TrainerFake {
         unimplemented!("talent_points_spent")
     }
 
-    fn learn_talent(&self, _account_id: u64, _self_guid: u64, _talent_id: u32) -> Result<()> {
-        Ok(())
+    fn learn_talent(&self, _actor: Actor, _talent_id: u32) -> Result<()> {
+        match self.talent_error {
+            Some(error) => Err(error()),
+            None => Ok(()),
+        }
     }
 
-    fn reset_talents(&self, _account_id: u64, _self_guid: u64, _trainer_guid: u64) -> Result<()> {
+    fn reset_talents(&self, _actor: Actor, _trainer_guid: u64) -> Result<()> {
         unimplemented!("reset_talents")
     }
 
@@ -380,22 +383,43 @@ fn every_module_refusal_has_one_client_failure_reason() {
     }
 }
 
-/// A reducer timeout leaves the durable result unknown, so it must not reach the client as a
+/// A Transport Loss leaves the durable result unknown, so it must not reach the client as a
 /// gameplay Refusal that says the purchase did not happen. The handler fails; the session ends.
 #[test]
-fn a_trainer_reducer_timeout_is_not_answered_as_a_refusal() {
+fn a_trainer_transport_loss_is_not_answered_as_a_refusal() {
     let store = TrainerFake {
-        buy_error: Some("gw_trainer_buy reducer timed out after 10s".into()),
+        buy_error: Some(|| ReducerCallError::transport_lost("gw_trainer_buy").into()),
         ..Default::default()
     };
     let (verdict, sent) = drive(&store, buy(1234));
-    let error = verdict.expect_err("a timed-out trainer reducer must be session-fatal");
-    assert!(format!("{error:#}").contains("timed out"));
+    verdict.expect_err("a lost trainer reducer transport must be session-fatal");
     assert!(
         sent.is_empty(),
         "nothing claims the purchase failed: [{}]",
         kinds(&sent)
     );
+}
+
+/// A refused talent pick is per-action: the client hears nothing and the session goes on. A lost
+/// transport leaves the pick's outcome unknown and ends the session.
+#[test]
+fn a_refused_talent_pick_keeps_the_session_and_a_transport_loss_ends_it() {
+    let refused = TrainerFake {
+        talent_error: Some(|| {
+            ReducerCallError::refused("gw_learn_talent", "no talent points left").into()
+        }),
+        ..Default::default()
+    };
+    let (verdict, sent) = drive(&refused, pick_talent());
+    verdict.unwrap();
+    assert!(sent.is_empty(), "got [{}]", kinds(&sent));
+
+    let lost = TrainerFake {
+        talent_error: Some(|| ReducerCallError::transport_lost("gw_learn_talent").into()),
+        ..Default::default()
+    };
+    let (verdict, _) = drive(&lost, pick_talent());
+    verdict.expect_err("a lost talent pick must be session-fatal");
 }
 
 /// An ability talent (`grant_spell_id != 0`) pushes the granted spell so the new button works

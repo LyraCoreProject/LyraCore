@@ -12,48 +12,107 @@ use crate::stdb::connection::call_reducer;
 use crate::stdb::Coordinator;
 use crate::world::{Actor, TaxiActionStore};
 
-impl TaxiActionStore for crate::stdb::Coordinator {
+impl TaxiActionStore for Coordinator {
+    /// Cohesive status request: module resolution + policy runs before this returns one known bit.
     fn taxi_node_status(
         &self,
-        character_guid: u64,
+        actor: Actor,
         npc_guid: u64,
     ) -> Result<Option<codec::TaxiNodeStatusView>> {
-        crate::stdb::Coordinator::taxi_node_status(self, character_guid, npc_guid)
+        let request_id = next_taxi_request_id();
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "gw_taxi_node_status",
+            gw_taxi_node_status_then(self.session_actor(actor), npc_guid, request_id)
+        )?;
+        Ok(self
+            .await_taxi_reply(
+                actor,
+                npc_guid,
+                request_id,
+                lyracore_shared::constants::taxi_protocol::REPLY_STATUS,
+            )?
+            .filter(|reply| reply.accepted)
+            .map(|reply| codec::TaxiNodeStatusView {
+                npc_guid: reply.npc_guid,
+                known: reply.known,
+            }))
     }
 
-    fn open_taxi(&self, character_guid: u64, npc_guid: u64) -> Result<Option<codec::TaxiMapView>> {
-        crate::stdb::Coordinator::open_taxi(self, character_guid, npc_guid)
+    fn open_taxi(&self, actor: Actor, npc_guid: u64) -> Result<Option<codec::TaxiMapView>> {
+        let request_id = next_taxi_request_id();
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "gw_open_taxi",
+            gw_open_taxi_then(self.session_actor(actor), npc_guid, request_id)
+        )?;
+        Ok(self
+            .await_taxi_reply(
+                actor,
+                npc_guid,
+                request_id,
+                lyracore_shared::constants::taxi_protocol::REPLY_OPEN,
+            )?
+            .filter(|reply| reply.accepted)
+            .map(|reply| codec::TaxiMapView {
+                npc_guid: reply.npc_guid,
+                source_client_node_id: reply.source_client_node_id,
+                available_client_node_ids: reply.available_client_node_ids,
+            }))
     }
 
+    /// Cohesive direct-flight activation. The module commits every gameplay outcome as a stable
+    /// result code; only a failed Durable Request escapes as `Err`.
     fn activate_taxi(
         &self,
-        character_guid: u64,
+        actor: Actor,
         npc_guid: u64,
         source_client_node_id: u32,
         destination_client_node_id: u32,
     ) -> Result<codec::TaxiActivationResult> {
-        crate::stdb::Coordinator::activate_taxi(
-            self,
-            character_guid,
-            npc_guid,
-            source_client_node_id,
-            destination_client_node_id,
-        )
+        let request_id = next_taxi_request_id();
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "gw_activate_taxi",
+            gw_activate_taxi_then(
+                self.session_actor(actor),
+                npc_guid,
+                source_client_node_id,
+                destination_client_node_id,
+                request_id
+            )
+        )?;
+        let reply = self
+            .await_taxi_reply(
+                actor,
+                npc_guid,
+                request_id,
+                lyracore_shared::constants::taxi_protocol::REPLY_ACTIVATE,
+            )?
+            .ok_or_else(|| anyhow!("taxi activation reply {request_id} disappeared"))?;
+        Ok(codec::TaxiActivationResult {
+            result_code: reply.result_code,
+        })
     }
 
-    fn arm_taxi_flight(&self, character_guid: u64) -> Result<()> {
-        crate::stdb::Coordinator::arm_taxi_flight(self, character_guid)
+    fn arm_taxi_flight(&self, actor: Actor) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "gw_arm_taxi_flight",
+            gw_arm_taxi_flight_then(self.session_actor(actor))
+        )
     }
 }
 
 impl Coordinator {
     fn await_taxi_reply(
         &self,
-        character_guid: u64,
+        actor: Actor,
         npc_guid: u64,
         request_id: u64,
         operation: u8,
     ) -> Result<Option<TaxiServiceReply>> {
+        let character_guid = actor.guid();
         // Reducer completion and subscription propagation travel on the same SDK connection but
         // are separate events. Poll by the caller-chosen id so an older cached reply can never be
         // mistaken for this operation's result.
@@ -74,7 +133,7 @@ impl Coordinator {
                 call_reducer!(
                     self.0.call_pipe().conn.reducers,
                     "gw_ack_taxi_reply",
-                    gw_ack_taxi_reply_then(self.actor_or_owner(character_guid), request_id)
+                    gw_ack_taxi_reply_then(self.session_actor(actor), request_id)
                 )?;
                 if !reply.accepted {
                     log::debug!(
@@ -89,112 +148,6 @@ impl Coordinator {
         Err(anyhow!(
             "taxi operation {operation} committed but reply {request_id} was not visible within 1s"
         ))
-    }
-
-    /// Cohesive status request: module resolution + policy runs before this returns one known bit.
-    pub fn taxi_node_status(
-        &self,
-        character_guid: u64,
-        npc_guid: u64,
-    ) -> Result<Option<crate::codec::TaxiNodeStatusView>> {
-        let Some(actor) = Actor::new(character_guid) else {
-            return Ok(None);
-        };
-        let request_id = next_taxi_request_id();
-        call_reducer!(
-            self.0.call_pipe().conn.reducers,
-            "gw_taxi_node_status",
-            gw_taxi_node_status_then(self.session_actor(actor), npc_guid, request_id)
-        )?;
-        Ok(self
-            .await_taxi_reply(
-                character_guid,
-                npc_guid,
-                request_id,
-                lyracore_shared::constants::taxi_protocol::REPLY_STATUS,
-            )?
-            .filter(|reply| reply.accepted)
-            .map(|reply| crate::codec::TaxiNodeStatusView {
-                npc_guid: reply.npc_guid,
-                known: reply.known,
-            }))
-    }
-
-    pub fn open_taxi(
-        &self,
-        character_guid: u64,
-        npc_guid: u64,
-    ) -> Result<Option<crate::codec::TaxiMapView>> {
-        let Some(actor) = Actor::new(character_guid) else {
-            return Ok(None);
-        };
-        let request_id = next_taxi_request_id();
-        call_reducer!(
-            self.0.call_pipe().conn.reducers,
-            "gw_open_taxi",
-            gw_open_taxi_then(self.session_actor(actor), npc_guid, request_id)
-        )?;
-        Ok(self
-            .await_taxi_reply(
-                character_guid,
-                npc_guid,
-                request_id,
-                lyracore_shared::constants::taxi_protocol::REPLY_OPEN,
-            )?
-            .filter(|reply| reply.accepted)
-            .map(|reply| crate::codec::TaxiMapView {
-                npc_guid: reply.npc_guid,
-                source_client_node_id: reply.source_client_node_id,
-                available_client_node_ids: reply.available_client_node_ids,
-            }))
-    }
-
-    /// Cohesive direct-flight activation. The module commits every gameplay outcome as a stable
-    /// result code; only reducer transport/timeout failures escape as `Err` and end the session.
-    pub fn activate_taxi(
-        &self,
-        character_guid: u64,
-        npc_guid: u64,
-        source_client_node_id: u32,
-        destination_client_node_id: u32,
-    ) -> Result<crate::codec::TaxiActivationResult> {
-        let Some(actor) = Actor::new(character_guid) else {
-            return Ok(crate::codec::TaxiActivationResult {
-                result_code:
-                    lyracore_shared::constants::taxi_protocol::ACTIVATE_UNSPECIFIED_SERVER_ERROR,
-            });
-        };
-        let request_id = next_taxi_request_id();
-        call_reducer!(
-            self.0.call_pipe().conn.reducers,
-            "gw_activate_taxi",
-            gw_activate_taxi_then(
-                self.session_actor(actor),
-                npc_guid,
-                source_client_node_id,
-                destination_client_node_id,
-                request_id
-            )
-        )?;
-        let reply = self
-            .await_taxi_reply(
-                character_guid,
-                npc_guid,
-                request_id,
-                lyracore_shared::constants::taxi_protocol::REPLY_ACTIVATE,
-            )?
-            .ok_or_else(|| anyhow!("taxi activation reply {request_id} disappeared"))?;
-        Ok(crate::codec::TaxiActivationResult {
-            result_code: reply.result_code,
-        })
-    }
-
-    pub fn arm_taxi_flight(&self, character_guid: u64) -> Result<()> {
-        call_reducer!(
-            self.0.call_pipe().conn.reducers,
-            "gw_arm_taxi_flight",
-            gw_arm_taxi_flight_then(self.actor_or_owner(character_guid))
-        )
     }
 }
 

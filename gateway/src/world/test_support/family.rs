@@ -70,7 +70,7 @@ macro_rules! npc_store_refusing_by {
 
             fn pet_name(
                 &self,
-                _requester_guid: u64,
+                _requester: Actor,
                 _pet_number: u32,
                 _pet_guid: u64,
             ) -> Result<Option<codec::PetNameView>> {
@@ -88,16 +88,11 @@ macro_rules! npc_store_refusing_by {
                 unimplemented!("gameobject_type")
             }
 
-            fn enter_areatrigger(
-                &self,
-                _account_id: u64,
-                _self_guid: u64,
-                _trigger_id: u32,
-            ) -> Result<()> {
+            fn enter_areatrigger(&self, _actor: Actor, _trigger_id: u32) -> Result<()> {
                 unimplemented!("enter_areatrigger")
             }
 
-            fn bind_home(&self, _account_id: u64, _self_guid: u64) -> Result<()> {
+            fn bind_home(&self, _actor: Actor) -> Result<()> {
                 unimplemented!("bind_home")
             }
 
@@ -117,14 +112,13 @@ macro_rules! npc_store_refusing_by {
                 unimplemented!("gossip_options")
             }
 
-            fn inspect(&self, _account_id: u64, _self_guid: u64, _target_guid: u64) -> Result<()> {
+            fn inspect(&self, _actor: Actor, _target_guid: u64) -> Result<()> {
                 unimplemented!("inspect")
             }
 
             fn gossip_select(
                 &self,
-                _account_id: u64,
-                _self_guid: u64,
+                _actor: Actor,
                 _npc_guid: u64,
                 _option_id: u32,
                 _option_row_id: u32,

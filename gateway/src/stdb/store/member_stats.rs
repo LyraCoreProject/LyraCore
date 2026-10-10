@@ -7,21 +7,11 @@ use crate::stdb::bindings::*;
 use crate::stdb::Coordinator;
 use crate::world::{MemberPresence, MemberStatsStore};
 
-impl MemberStatsStore for crate::stdb::Coordinator {
-    fn group_mates(&self, self_guid: u64) -> Result<Vec<u64>> {
-        crate::stdb::Coordinator::group_mates(self, self_guid)
-    }
-
-    fn member_presence(&self, guid: u64) -> Result<MemberPresence> {
-        crate::stdb::Coordinator::member_presence(self, guid)
-    }
-}
-
-impl Coordinator {
+impl MemberStatsStore for Coordinator {
     /// Every other member of `self_guid`'s group, from the party authority's membership index:
     /// Realm-core on a sharded Realm, this database otherwise. A list longer than a Raid is a
     /// damaged cache, not a group.
-    pub(crate) fn group_mates(&self, self_guid: u64) -> Result<Vec<u64>> {
+    fn group_mates(&self, self_guid: u64) -> Result<Vec<u64>> {
         let authority = if self.is_sharded() {
             self.realm_core()?
         } else {
@@ -44,10 +34,9 @@ impl Coordinator {
             .unwrap_or_default())
     }
 
-    /// Find `guid` for Member Stats from its Realm Presence — the same live-entity / in-transit /
-    /// absence-gated-offline decision every other realm-wide read now shares, so there is no
-    /// second discovery left to disagree with it.
-    pub(crate) fn member_presence(&self, guid: u64) -> Result<crate::world::MemberPresence> {
+    /// Find `guid` for Member Stats from its Realm Presence, the same live-entity / in-transit /
+    /// absence-gated-offline decision every other realm-wide read shares.
+    fn member_presence(&self, guid: u64) -> Result<MemberPresence> {
         use crate::world::presence::Whereabouts;
         Ok(
             match crate::world::presence::of(self, guid)?.map(|presence| presence.whereabouts) {
@@ -55,16 +44,16 @@ impl Coordinator {
                     entity, shard_name, ..
                 }) => {
                     let entity = self.with_member_shard_stats(&shard_name, guid, entity);
-                    crate::world::MemberPresence::Live(Box::new(
-                        crate::codec::MemberStats::from_entity(&entity),
-                    ))
+                    MemberPresence::Live(Box::new(crate::codec::MemberStats::from_entity(&entity)))
                 }
-                Some(Whereabouts::InTransit) => crate::world::MemberPresence::InTransit,
-                Some(Whereabouts::Offline) | None => crate::world::MemberPresence::Offline,
+                Some(Whereabouts::InTransit) => MemberPresence::InTransit,
+                Some(Whereabouts::Offline) | None => MemberPresence::Offline,
             },
         )
     }
+}
 
+impl Coordinator {
     /// Overlay `guid`'s aura slots and live pet onto `entity` — the one piece of Member Stats a
     /// generic Realm Presence read cannot supply, because it does not know about `ShardId` or
     /// `WorldView`'s `AuraIndex`. Reads from the exact Shard named `shard_name`, the same one

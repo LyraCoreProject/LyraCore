@@ -188,7 +188,8 @@ fn taxi_gossip_transport_failure_ends_the_world_session() {
     use lyracore_shared::constants::gossip_option;
     let mut s = quest_store();
     s.npc.gossip_opts = vec![opt(0, "Show me your flight routes.", gossip_option::TAXI)];
-    s.taxi.taxi_error = Some("taxi reducer transport disconnected: channel closed".into());
+    s.taxi.taxi_error =
+        Some(|| crate::stdb::ReducerCallError::transport_lost("gw_open_taxi").into());
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
     gossip_hello(&mut client, &mut c_enc, &mut c_dec, 90);
