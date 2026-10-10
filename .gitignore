@@ -55,15 +55,9 @@ __pycache__/
 /datascripts/node_modules/
 /datascripts/runtime-scripts/node_modules/
 
-# Packages installed on a host (`lyracore packages add`) are local to that checkout. Unknown
-# Package directories stay out of Git status. Source files in the committed first-party Packages
-# remain visible.
+# Installed Packages are local to this checkout. Reference Packages live in the collection.
 /packages/*
-!/packages/example/
-!/packages/fire_nova/
+!/packages/README.md
 
-# What `lyracore packages build` writes into a first-party Package: Package Deltas, Script Artifacts
-# and their Build Identity sidecars. Here they are output the sources next to them reproduce, so
-# none is committed. A Package Delta is never committed anywhere (licensing firewall); the Official
-# Package Collection does commit Script Artifacts, so an Operator installs prebuilt Lua without Bun.
+# Generated Package output stays local. The collection may commit Script Artifacts, never Deltas.
 /packages/*/data/.generated/

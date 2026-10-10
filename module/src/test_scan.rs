@@ -298,12 +298,8 @@ pub(crate) fn repo_root() -> std::path::PathBuf {
 /// The optional directory a repo-relative path belongs to, if any — the ONLY directory whose
 /// absence licenses skipping that path.
 ///
-/// A drop-in package is optional ONE PACKAGE AT A TIME — a missing `packages/sample_package/src/goals.rs`
-/// inside an installed `packages/sample_package/` is a typo, not an uninstalled package — unlike the
-/// private-only tooling trees below, which are optional WHOLESALE. `packages/` itself is always
-/// there, in every checkout including the public mirror (it ships the reference Package,
-/// `packages/example/`), so only an individual OTHER package — `packages/<pkg>` — can be absent;
-/// every path under it still resolves correctly here because it maps to its own subpackage dir.
+/// Each installed Package owns its paths. A missing file within an installed Package is a defect;
+/// an absent Package is optional. The private tooling roots below are optional as a whole.
 fn optional_owner(rel: &str) -> Option<String> {
     let mut segs = rel.split('/');
     match segs.next()? {

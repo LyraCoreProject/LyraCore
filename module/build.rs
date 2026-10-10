@@ -1,9 +1,8 @@
 //! Build-time codegen for the module's self-registration registries.
 //!
 //! Scans every `.rs` file under `src/` AND under each drop-in package's `packages/<name>/src/`
-//! (repo root — `packages/` ships the maintained reference Package, `packages/example/`, even in
-//! the public mirror; every OTHER package is an operator's own private addition) for the three
-//! marker invocations and generates, into `$OUT_DIR`, the files the crate `include!`s:
+//! at the repository root for marker invocations. Packages are installed separately. Generates
+//! into `$OUT_DIR` the files the crate `include!`s:
 //!
 //! - `character_sweeps.rs` — from `character_owned!` markers: the two `&[fn(...)]`
 //!   const arrays `CHARACTER_OWNED_DELETE_SWEEPS` and `CHARACTER_OWNED_RESTAMP_SWEEPS`, plus
@@ -78,11 +77,6 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-
-/// The folder name of the maintained reference Package (`packages/example/`) that
-/// `lyracore packages new` scaffolds from. It ships in every checkout, including the public
-/// mirror, and is deliberately excluded from the `has_packages` cfg — see its use below.
-const REFERENCE_PACKAGE: &str = "example";
 
 /// One row of the notify-hook event catalog.
 ///
@@ -318,9 +312,6 @@ fn main() {
     let src_dir = Path::new(&manifest_dir).join("src");
     println!("cargo:rerun-if-changed={}", src_dir.display());
 
-    // packages/ lives at the repo root (module/'s parent), holding at minimum the reference
-    // Package (`example/`) — present in every checkout including the public mirror — so
-    // rerun-if-changed never points at a missing path here.
     let packages_dir = Path::new(&manifest_dir)
         .parent()
         .expect("module/ has a parent (the repo root)")
@@ -353,12 +344,11 @@ fn main() {
             let name = pkg.file_name().unwrap().to_string_lossy().into_owned();
             let pkg_src = pkg.join("src");
             if !pkg_src.is_dir() {
-                // A package needs no Rust half. A CLIENT-ONLY package (client/ — addons/FrameXML
-                // shipped by --pack-client) and a DATA-ONLY package (data/ — the Package Deltas a
-                // Datascript generates, applied by the importer) are both legal, quiet shapes. A
-                // package with none of the three is probably a typo'd `scr/` folder — warn loudly.
-                if !pkg.join("client").is_dir() && !pkg.join("data").is_dir() {
-                    println!("cargo:warning=packages/{name}: none of src/, client/ or data/ — nothing registered (typo'd folder?)");
+                if !["client", "data", "scripts", "datascripts"]
+                    .iter()
+                    .any(|part| pkg.join(part).is_dir())
+                {
+                    println!("cargo:warning=packages/{name}: none of src/, client/, data/, scripts/ or datascripts/; nothing registered");
                 }
                 continue;
             }
@@ -382,18 +372,18 @@ fn main() {
         }
     }
 
-    // `has_packages`: at least one drop-in package with Rust in it compiled into this crate, OTHER
-    // than the reference Package (`packages/example/`). A handful of `actor.rs` verbs and one
-    // `group.rs` emitter exist SOLELY for a real package to call (the same shape as the
-    // `debug_only!` verbs, whose only consumer is the feature-gated debug harness), so without this
-    // cfg a build with no such package — which, since the reference Package ships in every
-    // checkout, is now the common case rather than the packages-less one — reports them as unused
-    // imports and dead code. `packages/example/` never calls them, by design (it stays inert), so it
-    // is excluded here rather than counted. The check-cfg line is unconditional so rustc's
-    // `unexpected_cfgs` lint knows the name either way.
+    // Package-only actor verbs need no caller in a Core checkout with no installed Rust Package.
     println!("cargo::rustc-check-cfg=cfg(has_packages)");
-    if pkg_mods.iter().any(|(ident, _)| ident != REFERENCE_PACKAGE) {
+    if !pkg_mods.is_empty() {
         println!("cargo::rustc-cfg=has_packages");
+    }
+
+    // Durable tests need a registered name for ownership and teardown, without installing content.
+    if std::env::var_os("CARGO_FEATURE_PACKAGE_TEST_FIXTURE").is_some() {
+        pkg_mods.push((
+            "test_fixture".to_string(),
+            Path::new(&manifest_dir).join("tests/fixtures/test_fixture.rs"),
+        ));
     }
 
     let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR is set by cargo");

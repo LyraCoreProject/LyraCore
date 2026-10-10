@@ -19,6 +19,8 @@ crate-type = ["cdylib", "rlib"]
 # `--build-options` is forwarded verbatim to the wasm-target `cargo build`. `danger-zones.md` §3 is
 # authoritative on this accepted alpha posture.
 debug_reducers = []
+# Inert Package registration used only by the disposable integration-test Module.
+package_test_fixture = ["debug_reducers"]
 
 [dependencies]
 blake3 = "1"

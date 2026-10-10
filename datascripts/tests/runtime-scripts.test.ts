@@ -37,13 +37,12 @@ interface Built {
 async function build(
   files: Record<string, string>,
   events?: string[],
-  packageName = PACKAGE,
 ): Promise<Built> {
   const root = mkdtempSync(join(tmpdir(), "lyracore-runtime-scripts-"));
   const previousRoot = process.env.LYRACORE_PACKAGES_ROOT;
   const previousEvents = process.env.LYRACORE_HOOK_EVENTS;
   try {
-    const scripts = join(root, packageName, "scripts");
+    const scripts = join(root, PACKAGE, "scripts");
     mkdirSync(scripts, { recursive: true });
     for (const [name, source] of Object.entries(files)) {
       const path = join(scripts, name);
@@ -54,7 +53,7 @@ async function build(
     if (events === undefined) delete process.env.LYRACORE_HOOK_EVENTS;
     else process.env.LYRACORE_HOOK_EVENTS = events.join("\n");
 
-    const artifact = readFileSync(await buildPackageScripts(packageName), "utf8");
+    const artifact = readFileSync(await buildPackageScripts(PACKAGE), "utf8");
     return { artifact, scripts: JSON.parse(artifact).scripts };
   } finally {
     if (previousRoot === undefined) delete process.env.LYRACORE_PACKAGES_ROOT;
@@ -79,38 +78,6 @@ test("the committed fuel workload Lua is what the pinned toolchain emits today",
   const built = await build({ "fuel-workload.ts": source });
 
   expect(built.scripts[0]?.source).toBe(committed);
-});
-
-test("every checked-in Package Runtime Script passes through the pinned compiler", async () => {
-  const packagesRoot = join(import.meta.dir, "..", "..", "packages");
-  const packageScripts = readdirSync(packagesRoot, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .sort((a, b) => a.name.localeCompare(b.name))
-    .flatMap((entry) => {
-      const scriptsDir = join(packagesRoot, entry.name, "scripts");
-      let sources;
-      try {
-        sources = readdirSync(scriptsDir, { withFileTypes: true });
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-        throw error;
-      }
-      const files = Object.fromEntries(
-        sources
-          .filter(
-            (source) =>
-              source.isFile() && (source.name.endsWith(".ts") || source.name.endsWith(".lua")),
-          )
-          .sort((a, b) => a.name.localeCompare(b.name))
-          .map((source) => [source.name, readFileSync(join(scriptsDir, source.name), "utf8")]),
-      );
-      return Object.keys(files).length === 0 ? [] : [{ package: entry.name, files }];
-    });
-
-  expect(packageScripts.length).toBeGreaterThan(0);
-  for (const checkedIn of packageScripts) {
-    await build(checkedIn.files, undefined, checkedIn.package);
-  }
 });
 
 // ---- determinism ----

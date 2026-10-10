@@ -1,21 +1,4 @@
-// Fire Nova: the worked example of authoring spells as a Package Delta.
-//
-// It clones a real spell, changes what it needs, loops a rank ladder, and emits one artifact. Every
-// column below is named the way the Module declares it, so a schema move fails the typecheck here
-// rather than at import.
-//
-// Run it with `lyracore packages build`, or directly:
-//
-//   bun run datascripts/src/fire_nova/spells.ts
-//
-// The artifact lands at `packages/fire_nova/data/.generated/spell.json`. Only THIS file is
-// committed: the artifact is derived, and regenerating it is one command.
-//
-// # Why a clone
-//
-// A Package may not invent a spell out of nothing — an insert has to carry every column, and half a
-// row is not a spell. Cloning a real one gives a complete, coherent starting point, and every column
-// the author does not name keeps the source's value.
+// Five spell ranks for the Datascript emission and Rust interop tests. Uses a synthetic Base Snapshot.
 
 import { run } from "../../lib/index.ts";
 

@@ -5,7 +5,7 @@ wasm and can reach any `crate::` path the compiler resolves; this document says 
 core will keep working, and `module/build.rs` fails the build on the rest.
 
 This is a contract, not a tutorial. Read `packages/README.md` for how a Package is installed and
-`packages/example/src/mod.rs` for the shape of one.
+[the Reference Packages](https://github.com/LyraCoreProject/packages#packages) for working examples.
 
 ## Compatibility promise
 
