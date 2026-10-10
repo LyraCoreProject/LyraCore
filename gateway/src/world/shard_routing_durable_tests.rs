@@ -3,7 +3,55 @@ use crate::config::GatewayConfig;
 use crate::durable_test_support::{module_bytes, poll_until, Standalone, POLL_TIMEOUT};
 use crate::stdb::subscriptions::DURABLE_TOPOLOGY_ENV_LOCK;
 use crate::stdb::Coordinator;
-use crate::world::{ShardRoutingStore, TransferStore};
+use crate::world::TransferStore;
+
+fn login_on_kalimdor(gateway: Coordinator, runtime: &tokio::runtime::Runtime, guid: u64) {
+    use crate::world::test_support::{
+        client_handshake, drain_world_entry, world_session_socket_pair,
+    };
+    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+    use wow_world_messages::vanilla::{
+        ClientMessage, Map, CMSG_PING, CMSG_PLAYER_LOGIN, SMSG_PONG,
+    };
+    use wow_world_messages::{Guid, Message};
+
+    for shard in [&gateway, &gateway.realm_core().unwrap()] {
+        let account = shard.account_by_username("TEST").unwrap().unwrap().id;
+        shard
+            .establish_session(account, &[7; 40], shard.bound_identity(account).unwrap())
+            .unwrap();
+    }
+    let (mut client, socket) = world_session_socket_pair();
+    let handle = runtime.handle().clone();
+    let session = std::thread::spawn(move || {
+        let _entered = handle.enter();
+        crate::world::run_world_session(socket, std::sync::Arc::new(gateway))
+    });
+    let (mut encrypt, mut decrypt) = client_handshake(&mut client, "TEST", [7; 40]);
+    CMSG_PLAYER_LOGIN {
+        guid: Guid::new(guid),
+    }
+    .write_encrypted_client(&mut client, &mut encrypt)
+    .unwrap();
+    let entry = drain_world_entry(&mut client, &mut decrypt);
+    assert!(entry.iter().any(|packet| matches!(packet, ServerOpcodeMessage::SMSG_LOGIN_VERIFY_WORLD(world) if world.map == Map::Kalimdor)));
+    CMSG_PING {
+        sequence_id: 7,
+        round_time_in_ms: 0,
+    }
+    .write_encrypted_client(&mut client, &mut encrypt)
+    .unwrap();
+    let answered = (0..64).any(|_| {
+        let (opcode, body) = super::read_raw_frame(&mut client, &mut decrypt);
+        opcode == SMSG_PONG::OPCODE as u16 && body == 7u32.to_le_bytes()
+    });
+    assert!(
+        answered,
+        "the Character must remain connected after Kalimdor entry"
+    );
+    drop(client);
+    session.join().unwrap().unwrap();
+}
 
 struct TopologyEnv {
     previous: Vec<(&'static str, Option<std::ffi::OsString>)>,
@@ -61,6 +109,7 @@ fn a_first_kalimdor_transfer_arrives_and_recovers_after_import_or_source_finish(
     node.publish_module();
     node.assert_call("claim_operator", &[]);
     node.assert_call("install_guid_range", &["0"]);
+    node.assert_sql("INSERT INTO game_start_position (race_class, race, class, map_id, zone_id, x, y, z, orientation, display_id) VALUES (1025, 4, 1, 1, 141, 0, 0, 0, 0, 55)");
     for (shard, base) in [
         (KALIMDOR, "1000000000"),
         (INSTANCES, "2000000000"),
@@ -83,6 +132,13 @@ fn a_first_kalimdor_transfer_arrives_and_recovers_after_import_or_source_finish(
     };
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let gateway = runtime.block_on(Coordinator::connect(&config)).unwrap();
+    for shard in [node.shard_name(), KALIMDOR, INSTANCES, REALM] {
+        node.assert_call_database(shard, "gw_heartbeat", &[]);
+    }
+    {
+        let _entered = runtime.enter();
+        gateway.spawn_gateway_heartbeat();
+    }
     let destination = gateway.shard_handle(KALIMDOR).unwrap();
 
     for (name, interruption) in [
@@ -126,8 +182,7 @@ fn a_first_kalimdor_transfer_arrives_and_recovers_after_import_or_source_finish(
 
         // A fresh Coordinator reads the committed state as a replacement Gateway would.
         let replacement = runtime.block_on(Coordinator::connect(&config)).unwrap();
-        let holder = replacement.settle_home_shard(guid).unwrap().unwrap();
-        assert_eq!(holder.shard_name(), KALIMDOR);
+        login_on_kalimdor(replacement, &runtime, guid);
         let character_query = format!("SELECT guid FROM game_character WHERE guid = {guid}");
         assert!(node.query_rows(&character_query).is_empty());
         assert_eq!(

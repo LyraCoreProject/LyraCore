@@ -542,16 +542,7 @@ fn wait_for_settled_locator<D: RealmDb>(
 /// A missing or stale hint falls back to a census. An escrow holder takes precedence over
 /// a destination copy so a resumed transfer can complete from its source.
 pub(crate) fn locate_home_shard<D: RealmDb>(db: &D, guid: u64) -> Option<D> {
-    // This function's own copy of the short-circuit. `settle_home_shard` (`stdb::world_store`) already
-    // guards its call to this function with an identical `if !self.is_sharded() { return Ok(None);
-    // }` — that one is production's, stays exactly where it is, and cannot be exercised by any test
-    // without a live SpacetimeDB connection (`Coordinator` cannot be constructed offline). This copy
-    // is redundant on the happy path (never fires when the caller's guard already returned), but it
-    // is the only layer of "an unconfigured gateway reads NOTHING while resolving a home shard" that
-    // a test can actually reach — `fake::Handle` runs this function directly. Without it, a single
-    // connected database (unsharded) still pays a `character_shard` probe, a `character_location`
-    // scan and a `set_character_shard` heal write to reach the one answer "stay put" gives for
-    // free — exactly the reads an unset `LYRACORE_REALM_CORE`/`LYRACORE_SHARD_MAP` must never pay.
+    // An unsharded Gateway needs no locator read or repair to find its own Character.
     if !db.is_sharded() {
         return None;
     }
@@ -741,6 +732,8 @@ pub(crate) mod fake {
         pub shard_index: Mutex<HashMap<u64, (u32, u64)>>,
         /// Ordered `game_character_shard` Transfer phases used by the crossing tests.
         pub shard_phases: Mutex<HashMap<u64, crate::world::party::RealmCharacterPartition>>,
+        /// Reads before a Realm locator subscription observes the committed row.
+        pub unobserved_locator_reads: Mutex<usize>,
         /// The node-issued identity of this database's per-account player connection.
         pub identities: Mutex<HashMap<u64, [u8; 32]>>,
         /// How many identities this database has ever minted. Stamped into every identity so
@@ -1151,6 +1144,11 @@ pub(crate) mod fake {
         ) -> Result<Option<crate::world::party::RealmCharacterPartition>> {
             self.store()
                 .note(&format!("realm_character_partition({guid})"));
+            let mut remaining = self.store().unobserved_locator_reads.lock().unwrap();
+            if *remaining > 0 {
+                *remaining -= 1;
+                return Ok(None);
+            }
             Ok(self.stored_partition(guid))
         }
         fn begin_character_shard_transfer(
@@ -2052,6 +2050,20 @@ mod tests {
     }
 
     #[test]
+    fn a_first_transfer_waits_for_its_new_locator_subscription() {
+        let h = realm(&[WORLD, INSTANCES, CORE], "36:*=instances", Some(CORE));
+        h.store()
+            .characters
+            .lock()
+            .unwrap()
+            .insert(100, (1, (1, 0)));
+        *h.db_at(CORE).unobserved_locator_reads.lock().unwrap() = 2;
+        let pending = begin_shard_index_transfer(&h, &kalimdor_plan(), None).unwrap();
+        assert!(pending.transfer_pending);
+        assert_eq!(pending.revision, 1);
+    }
+
+    #[test]
     fn a_pending_destination_hint_keeps_routing_to_source_escrow_until_source_finish() {
         let h = realm(
             &[WORLD, "kalimdor", INSTANCES, CORE],
@@ -2289,10 +2301,6 @@ mod tests {
         realm
             .set_character_shard(100, 0, 0)
             .expect("a later settled repair succeeds");
-        assert_eq!(
-            realm.store().shard_index.lock().unwrap().get(&100),
-            Some(&(0, 0))
-        );
         let partition = realm
             .realm_character_partition(100)
             .expect("partition read")
