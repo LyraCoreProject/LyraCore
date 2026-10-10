@@ -4290,7 +4290,10 @@ fn item_guid_allocation_bits_survive_item_and_container_wire_updates() {
 #[test]
 fn self_create_preserves_non_quest_fields_and_movement() {
     let entity = warrior_entity();
-    let original = build_create_object(&entity, CreateKind::SelfPlayer, &[], &[]).unwrap();
+    let inventory = [worn_item(23, 0x4000_0000_0000_0042, 25, 0)];
+    let skills = [(164, 37, 75)];
+    let original =
+        build_create_object(&entity, CreateKind::SelfPlayer, &inventory, &skills).unwrap();
     let quests = [update_mask::QuestLogSlot {
         slot: 19,
         quest_id: 777,
@@ -4298,7 +4301,7 @@ fn self_create_preserves_non_quest_fields_and_movement() {
         state: 0,
         timer: 123456,
     }];
-    let created = build_self_create_object(&entity, &[], &[], &quests).unwrap();
+    let created = build_self_create_object(&entity, &inventory, &skills, &quests).unwrap();
     let descriptor = |packet: SMSG_UPDATE_OBJECT| {
         let Object::CreateObject2 {
             guid3,

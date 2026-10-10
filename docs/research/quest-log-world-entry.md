@@ -91,3 +91,26 @@ An existing limitation remains outside this packet-order change. `build_quest_lo
 state only from objective completion and always emits timer zero, so it does not project `failed`
 or `deadline_micros`. This research does not claim to fix timed or failed quest display.
 [Current slot read](https://github.com/LyraCoreProject/LyraCore/blob/46bf948b27b6d21555832b7505ce06ba5fae4f48/gateway/src/stdb/reads/quest.rs#L38-L66).
+
+## Implementation checks
+
+The change now puts the quest snapshot in self CREATE. After viewer registration, a writer job
+compares the latest quest slots with that snapshot. It sends a full quest VALUES update only when
+the slots changed, including when the final quest disappeared. Both this job and live quest Relays
+read on the writer, so an earlier snapshot cannot overwrite newer queued progress.
+
+Local checks on 2026-10-10:
+
+- The login regression failed before the fix with quest ID 0 in CREATE instead of 777.
+- `cargo test -p lyracore-gateway` passed 2,124 tests, with 26 ignored. A final targeted run with
+  `--bin lyracore-gateway quest` passed 138 tests after adding reconciliation-failure coverage
+  and populated inventory and skills to the descriptor preservation test.
+- `cargo test -p lyracore-module --test quest_transfer -- --ignored --nocapture` passed. Two private
+  Shards preserved four quests through Escrow, import, finish, release and world-port entry.
+  Counters, rewarded and failed flags, and deadlines matched; the source quest rows were removed.
+- Workspace formatting and Clippy with all targets and features passed.
+- Two adversarial reviewers found the registration gap in the first review. Both accepted the
+  reconciliation fix in the second review.
+
+These checks do not establish the real client's acceptance-feedback behavior. That remains the
+client check described above.

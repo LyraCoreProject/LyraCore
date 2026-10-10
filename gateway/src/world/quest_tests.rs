@@ -138,15 +138,13 @@ fn assert_quest_reconciliation(count: Option<u32>) {
     };
     let mut store = quest_store();
     store.quest.quest_log_slots = vec![slot.clone()];
-    store.quest.quest_log_after_subscribe = Some(
-        count
-            .map(|count| codec::update_mask::QuestLogSlot {
-                counts: vec![count],
-                ..slot
-            })
-            .into_iter()
-            .collect(),
-    );
+    store.quest.quest_log_after_subscribe = Some(Ok(count
+        .map(|count| codec::update_mask::QuestLogSlot {
+            counts: vec![count],
+            ..slot
+        })
+        .into_iter()
+        .collect()));
     let (mut client, mut enc, mut dec, server) = enter_world(std::sync::Arc::new(store), 1);
     let (opcode, body) = read_raw_frame(&mut client, &mut dec);
     assert_eq!(opcode, 0x00A9);
@@ -168,6 +166,21 @@ fn assert_quest_reconciliation(count: Option<u32>) {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut dec).unwrap(),
         ServerOpcodeMessage::SMSG_PONG(_)
     ));
+    drop(client);
+    server.join().unwrap();
+}
+
+#[test]
+fn a_failed_quest_reconciliation_closes_the_world_session() {
+    let mut store = quest_store();
+    store.quest.quest_log_after_subscribe = Some(Err("quest log unavailable".into()));
+    let (mut client, _, _, server) = enter_world(std::sync::Arc::new(store), 1);
+    let mut byte = [0];
+    assert_eq!(
+        client.read(&mut byte).unwrap(),
+        0,
+        "the writer must close the socket"
+    );
     drop(client);
     server.join().unwrap();
 }
