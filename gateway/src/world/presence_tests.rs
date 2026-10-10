@@ -257,9 +257,11 @@ fn offline_needs_every_configured_shard_healthy() {
         ..Default::default()
     });
     *world.topology.peers.lock().unwrap() = vec![world.clone(), down.clone()];
+    let error = presence::of(world.as_ref(), DORMANT)
+        .expect_err("an unhealthy configured Shard must refuse to let Offline through");
     assert!(
-        presence::of(world.as_ref(), DORMANT).is_err(),
-        "an unhealthy configured Shard must refuse to let Offline through"
+        presence::is_unknown(&error),
+        "another Shard's health is not this session's transport"
     );
 
     let healthy = std::sync::Arc::new(WorldFake {

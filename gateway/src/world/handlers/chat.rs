@@ -249,7 +249,8 @@ pub(crate) fn dispatch_chat_action<St: ChatActionStore + ?Sized>(
 
 /// One whisper: the target is resolved realm-wide, the Module applies the Gates on Realm-core, and
 /// the lines return on the Relay. A name no online Character holds answers
-/// `SMSG_CHAT_PLAYER_NOT_FOUND` with the typed name (cm:ChatHandler.cpp:243-266).
+/// `SMSG_CHAT_PLAYER_NOT_FOUND` with the typed name (cm:ChatHandler.cpp:243-266), and so does a
+/// target whose Realm Presence is unknown.
 fn whisper<St: ChatActionStore + ?Sized>(
     store: &St,
     player: ChatActionPlayer,
@@ -263,7 +264,8 @@ fn whisper<St: ChatActionStore + ?Sized>(
     let Some(speaker) = store.speaker_facts(actor.guid())? else {
         return Ok(Vec::new());
     };
-    let target = match store.whisper_target(actor.guid(), &typed_name)? {
+    let read = store.whisper_target(actor.guid(), &typed_name);
+    let target = match presence::unknown_as_absent(read)? {
         Some(target) => target,
         None => return Ok(vec![player_not_found(typed_name)]),
     };
@@ -425,6 +427,8 @@ mod tests {
         /// The Module rejects with a tag this Gateway does not know.
         Refused,
         TransportLost,
+        /// Another World Shard cannot vouch for a Character's absence.
+        PresenceUnknown,
     }
 
     impl Failure {
@@ -432,6 +436,10 @@ mod tests {
             match self {
                 Self::Refused => ReducerCallError::refused(op, "mystery").into(),
                 Self::TransportLost => ReducerCallError::transport_lost(op).into(),
+                Self::PresenceUnknown => presence::PresenceUnknown(anyhow::anyhow!(
+                    "World Shard instances has no healthy Coordinator subscription"
+                ))
+                .into(),
             }
         }
     }
@@ -929,9 +937,20 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_target_read_ends_the_session() {
+    fn an_unknown_target_presence_answers_player_not_found() {
+        let store = whisper_store(Err(Failure::PresenceUnknown), None);
+        let outbound = handled(dispatch_chat_action(&store, player(), whisper_to("vIm")).unwrap());
+        assert_eq!(not_found(outbound), "vIm");
+        assert!(store.whispers.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_lost_target_read_ends_the_session() {
         let store = whisper_store(Err(Failure::TransportLost), None);
-        assert!(dispatch_chat_action(&store, player(), whisper_to("Vim")).is_err());
+        let error = dispatch_chat_action(&store, player(), whisper_to("Vim"))
+            .err()
+            .expect("a lost read is fatal");
+        assert_eq!(classify(&error), DurableFailure::TransportLoss);
         assert!(store.whispers.lock().unwrap().is_empty());
     }
 

@@ -231,9 +231,12 @@ impl GuildActionPlayer {
     }
 }
 
-/// A Transport Loss ends the World Session. A Refusal this Gateway has no answer for comes back
-/// for the caller to drop, and the client hears silence.
+/// A Transport Loss ends the World Session. A Refusal this Gateway has no answer for, or a Realm
+/// Presence another World Shard cannot vouch for, comes back for the caller to drop.
 fn unless_transport_loss(error: anyhow::Error) -> Result<anyhow::Error> {
+    if presence::is_unknown(&error) {
+        return Ok(error);
+    }
     match classify(&error) {
         DurableFailure::TransportLoss => Err(error),
         DurableFailure::Refusal { .. } => Ok(error),
@@ -2332,6 +2335,14 @@ mod tests {
         ReducerCallError::transport_lost("realm_guild_op").into()
     }
 
+    /// Another World Shard cannot vouch for a Character's absence.
+    fn presence_unknown() -> anyhow::Error {
+        presence::PresenceUnknown(anyhow::anyhow!(
+            "World Shard instances has no healthy Coordinator subscription"
+        ))
+        .into()
+    }
+
     /// A Module rejection whose tag this Gateway does not know.
     fn unknown_refusal() -> anyhow::Error {
         ReducerCallError::refused("realm_guild_op", "mystery").into()
@@ -2481,13 +2492,25 @@ mod tests {
     }
 
     #[test]
-    fn dot_create_ends_the_session_when_presence_cannot_answer() {
+    fn dot_create_answers_not_created_when_presence_is_unknown() {
+        let store = InMemoryGuildActions {
+            facts_error: Some(presence_unknown),
+            ..realm()
+        };
+        let line =
+            run_guild_dot_command(&store, in_world(GM), ".guild create \"Knights\"").unwrap();
+        assert_eq!(line.as_deref(), Some("guild not created"));
+        assert!(store.ops.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn dot_create_ends_the_session_when_the_leader_read_is_lost() {
         let store = InMemoryGuildActions {
             facts_error: Some(lost_transport),
             ..realm()
         };
         let error = run_guild_dot_command(&store, in_world(GM), ".guild create \"Knights\"")
-            .expect_err("a failed read is a Transport Loss");
+            .expect_err("a lost read is a Transport Loss");
         assert_eq!(classify(&error), DurableFailure::TransportLoss);
         assert!(store.ops.lock().unwrap().is_empty());
     }
@@ -3650,6 +3673,41 @@ mod tests {
     }
 
     #[test]
+    fn a_guild_invite_drops_silently_when_presence_is_unknown() {
+        let mut store = founded_with_members();
+        store.characters.push(facts(DAVE, "Dave"));
+        store.facts_error = Some(presence_unknown);
+        let ops_before = store.ops.lock().unwrap().len();
+        let outbound = dispatch(
+            &store,
+            in_world(GM),
+            ClientOpcodeMessage::CMSG_GUILD_INVITE(Box::new(
+                wow_world_messages::vanilla::CMSG_GUILD_INVITE {
+                    invited_player: "Dave".into(),
+                },
+            )),
+        );
+        assert!(outbound.is_empty());
+        assert_eq!(store.ops.lock().unwrap().len(), ops_before);
+    }
+
+    #[test]
+    fn a_guild_invite_ends_the_session_when_the_target_read_is_lost() {
+        let mut store = founded_with_members();
+        store.characters.push(facts(DAVE, "Dave"));
+        store.facts_error = Some(lost_transport);
+        let msg = ClientOpcodeMessage::CMSG_GUILD_INVITE(Box::new(
+            wow_world_messages::vanilla::CMSG_GUILD_INVITE {
+                invited_player: "Dave".into(),
+            },
+        ));
+        let error = dispatch_guild_action(&store, in_world(GM), msg)
+            .err()
+            .expect("a lost read is a Transport Loss");
+        assert_eq!(classify(&error), DurableFailure::TransportLoss);
+    }
+
+    #[test]
     fn every_membership_opcode_reaches_its_durable_request() {
         use wow_world_messages::vanilla as wire;
         let mut store = founded_with_members();
@@ -4434,6 +4492,17 @@ mod tests {
                 target_team: HORDE_TEAM,
             }]
         );
+    }
+
+    #[test]
+    fn an_offer_drops_silently_when_presence_is_unknown() {
+        let store = InMemoryGuildActions {
+            characters: vec![facts(BOB, "Bob"), horde_facts(CAROL, "Carol")],
+            facts_error: Some(presence_unknown),
+            ..bobs_petition()
+        };
+        assert!(offer(&store, CAROL).is_empty());
+        assert!(recorded_ops(&store).is_empty());
     }
 
     #[test]
