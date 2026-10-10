@@ -97,9 +97,10 @@ family's dispatcher and skip to step 10.
 
 ## 8. Join the family to `WorldStore`
 
-- File: `gateway/src/world/store.rs`. Add the trait to the `WorldStore` supertrait list.
-- File: `gateway/src/world/tests.rs`. Implement the trait for `InMemoryStore`, the shared Fake that
-  implements every family.
+- File: `gateway/src/world/store.rs`. Add the trait to the `WorldStore` supertrait list and to the
+  bounds of its blanket impl.
+- File: `gateway/src/world/test_support/world_fake/<family>.rs`. Implement the trait for `WorldFake`,
+  the shared Fake that implements every family, and keep the family's state in its own struct there.
 
 ## 9. Link the dispatcher into the chain
 

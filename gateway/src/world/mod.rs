@@ -1949,4 +1949,6 @@ pub async fn run(
 }
 
 #[cfg(all(test, unix))]
+mod test_support;
+#[cfg(all(test, unix))]
 mod tests;
