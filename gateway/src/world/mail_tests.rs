@@ -16,38 +16,62 @@ fn mail(id: u64, from: u64, subject: &str, body: &str) -> codec::MailView {
     }
 }
 fn sharded_mailbox() -> (
-    std::sync::Arc<InMemoryStore>,
-    std::sync::Arc<InMemoryStore>,
+    std::sync::Arc<WorldFake>,
+    std::sync::Arc<WorldFake>,
     ShardCallLog,
 ) {
     let calls: ShardCallLog = Default::default();
-    let realm = std::sync::Arc::new(InMemoryStore {
-        shard: "lyracore-realm".into(),
-        calls: calls.clone(),
-        is_realm: true,
+    let realm = std::sync::Arc::new(WorldFake {
+        topology: TopologyState {
+            shard: "lyracore-realm".into(),
+            calls: calls.clone(),
+            ..Default::default()
+        },
+        party: PartyState {
+            is_realm: true,
+            ..Default::default()
+        },
         ..Default::default()
     });
-    let world = std::sync::Arc::new(InMemoryStore {
-        shard: "world".into(),
-        calls: calls.clone(),
-        realm: Some(realm.clone()),
+    let world = std::sync::Arc::new(WorldFake {
+        topology: TopologyState {
+            shard: "world".into(),
+            calls: calls.clone(),
+            realm: Some(realm.clone()),
+            ..Default::default()
+        },
         characters: vec![character(GINGER, "Ginger"), character(TRIN, "Trin")],
-        live_guids: vec![GINGER, TRIN],
-        mailboxes: vec![MAILBOX],
+        session: SessionState {
+            live_guids: vec![GINGER, TRIN],
+            ..Default::default()
+        },
+        mail: MailState {
+            mailboxes: vec![MAILBOX],
+            ..Default::default()
+        },
         ..Default::default()
     });
-    *realm.mails.lock().unwrap() = seeded_mail();
+    *realm.mail.mails.lock().unwrap() = seeded_mail();
     (realm, world, calls)
 }
-fn unsharded_mailbox() -> std::sync::Arc<InMemoryStore> {
-    let store = std::sync::Arc::new(InMemoryStore {
-        shard: "lyracore".into(),
+fn unsharded_mailbox() -> std::sync::Arc<WorldFake> {
+    let store = std::sync::Arc::new(WorldFake {
+        topology: TopologyState {
+            shard: "lyracore".into(),
+            ..Default::default()
+        },
         characters: vec![character(GINGER, "Ginger"), character(TRIN, "Trin")],
-        live_guids: vec![GINGER, TRIN],
-        mailboxes: vec![MAILBOX],
+        session: SessionState {
+            live_guids: vec![GINGER, TRIN],
+            ..Default::default()
+        },
+        mail: MailState {
+            mailboxes: vec![MAILBOX],
+            ..Default::default()
+        },
         ..Default::default()
     });
-    *store.mails.lock().unwrap() = seeded_mail();
+    *store.mail.mails.lock().unwrap() = seeded_mail();
     store
 }
 fn seeded_mail() -> Vec<(u64, codec::MailView)> {
@@ -77,7 +101,7 @@ fn a_seeded_mail_is_listed_for_its_recipient_and_for_nobody_else() {
 #[test]
 fn a_player_with_no_mail_gets_an_empty_list_and_not_a_refusal() {
     let (realm, world, _calls) = sharded_mailbox();
-    realm.mails.lock().unwrap().clear();
+    realm.mail.mails.lock().unwrap().clear();
 
     assert_eq!(
         mail::open_mailbox(world.as_ref(), Some(GINGER), MAILBOX).expect("an empty mailbox opens"),
@@ -190,13 +214,13 @@ fn the_unread_poll_follows_the_same_mailbox_the_window_lists() {
     let (realm, world, _calls) = sharded_mailbox();
     assert!(mail::has_unread(world.as_ref(), Some(GINGER)).unwrap());
 
-    realm.mails.lock().unwrap()[0].1.was_read = true;
+    realm.mail.mails.lock().unwrap()[0].1.was_read = true;
     assert!(
         !mail::has_unread(world.as_ref(), Some(GINGER)).unwrap(),
         "a mailbox holding only READ mail must not light the envelope"
     );
 
-    realm.mails.lock().unwrap().clear();
+    realm.mail.mails.lock().unwrap().clear();
     assert!(!mail::has_unread(world.as_ref(), Some(GINGER)).unwrap());
 }
 
@@ -223,6 +247,7 @@ fn a_letter_body_is_readable_by_its_recipient_and_by_nobody_else() {
 fn a_mail_with_no_body_advertises_text_id_zero() {
     let (realm, world, _calls) = sharded_mailbox();
     realm
+        .mail
         .mails
         .lock()
         .unwrap()
@@ -237,20 +262,29 @@ fn a_mail_with_no_body_advertises_text_id_zero() {
         .collect();
     assert_eq!(text_ids, vec![(3, 0), (1, 1)]);
 }
-fn seated_store() -> std::sync::Arc<InMemoryStore> {
-    let store = std::sync::Arc::new(InMemoryStore {
-        login_entity: Some(warrior_entity()),
-        mailboxes: vec![MAILBOX],
-        ..tester_store(7)
+fn seated_store() -> std::sync::Arc<WorldFake> {
+    let store = std::sync::Arc::new({
+        let base = tester_store(7);
+        WorldFake {
+            session: SessionState {
+                login_entity: Some(warrior_entity()),
+                ..base.session
+            },
+            mail: MailState {
+                mailboxes: vec![MAILBOX],
+                ..base.mail
+            },
+            ..base
+        }
     });
-    *store.mails.lock().unwrap() = vec![(1, mail(1, VIM, "Your sword", "left it at the inn"))];
+    *store.mail.mails.lock().unwrap() = vec![(1, mail(1, VIM, "Your sword", "left it at the inn"))];
     store
 }
 
 #[test]
 fn an_empty_mailbox_is_answered_with_an_empty_list_packet() {
     let store = seated_store();
-    store.mails.lock().unwrap().clear();
+    store.mail.mails.lock().unwrap().clear();
 
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
@@ -468,7 +502,7 @@ fn returning_a_mail_moves_it_from_the_recipients_list_to_the_senders() {
 #[test]
 fn returning_a_mail_carries_its_attachment_and_copper_unchanged() {
     let world = unsharded_mailbox();
-    *world.mails.lock().unwrap() = vec![(
+    *world.mail.mails.lock().unwrap() = vec![(
         GINGER,
         codec::MailView {
             id: 1,
@@ -485,7 +519,7 @@ fn returning_a_mail_carries_its_attachment_and_copper_unchanged() {
         },
     )];
     // Vim is Ginger's alt here, so the item comes back at once.
-    *world.realm_accounts.lock().unwrap() = alts(&[GINGER, VIM]);
+    *world.mail.realm_accounts.lock().unwrap() = alts(&[GINGER, VIM]);
 
     mail::return_to_sender(world.as_ref(), Some(GINGER), MAILBOX, 1).expect("Ginger owns mail 1");
 
@@ -505,7 +539,7 @@ fn returning_a_mail_carries_its_attachment_and_copper_unchanged() {
 #[test]
 fn returning_an_already_taken_mail_does_not_duplicate_the_attachment() {
     let world = unsharded_mailbox();
-    *world.mails.lock().unwrap() = vec![(
+    *world.mail.mails.lock().unwrap() = vec![(
         GINGER,
         codec::MailView {
             id: 1,
@@ -668,7 +702,7 @@ fn return_acks_with_send_mail_result_and_the_next_list_is_empty() {
 #[test]
 fn a_refused_return_still_acks_and_never_kills_the_session() {
     let store = seated_store();
-    store.mails.lock().unwrap()[0].0 = 999;
+    store.mail.mails.lock().unwrap()[0].0 = 999;
 
     let (mut client, server_end) = UnixStream::pair().unwrap();
     let server_store = store.clone();
@@ -817,7 +851,7 @@ fn delete_acks_with_send_mail_result_and_the_next_list_is_empty() {
 #[test]
 fn a_refused_delete_still_acks_and_never_kills_the_session() {
     let store = seated_store();
-    store.mails.lock().unwrap()[0].0 = 999;
+    store.mail.mails.lock().unwrap()[0].0 = 999;
 
     let (mut client, server_end) = UnixStream::pair().unwrap();
     let server_store = store.clone();
@@ -881,22 +915,31 @@ fn alts(guids: &[u64]) -> Vec<(u64, String)> {
     guids.iter().map(|guid| (*guid, ALTS.to_string())).collect()
 }
 fn sharded_send() -> (
-    std::sync::Arc<InMemoryStore>,
-    std::sync::Arc<InMemoryStore>,
-    std::sync::Arc<InMemoryStore>,
+    std::sync::Arc<WorldFake>,
+    std::sync::Arc<WorldFake>,
+    std::sync::Arc<WorldFake>,
     ShardCallLog,
 ) {
     let calls: ShardCallLog = Default::default();
-    let realm = std::sync::Arc::new(InMemoryStore {
-        shard: "lyracore-realm".into(),
-        calls: calls.clone(),
-        is_realm: true,
+    let realm = std::sync::Arc::new(WorldFake {
+        topology: TopologyState {
+            shard: "lyracore-realm".into(),
+            calls: calls.clone(),
+            ..Default::default()
+        },
+        party: PartyState {
+            is_realm: true,
+            ..Default::default()
+        },
         ..Default::default()
     });
-    let world = std::sync::Arc::new(InMemoryStore {
-        shard: "world".into(),
-        calls: calls.clone(),
-        realm: Some(realm.clone()),
+    let world = std::sync::Arc::new(WorldFake {
+        topology: TopologyState {
+            shard: "world".into(),
+            calls: calls.clone(),
+            realm: Some(realm.clone()),
+            ..Default::default()
+        },
         characters: vec![
             character(GINGER, "Ginger"),
             character(TRIN, "Trin"),
@@ -904,38 +947,65 @@ fn sharded_send() -> (
             character(ECHO_WORLD, "Echo"),
             orc(GRUG, "Grug"),
         ],
-        live_guids: vec![GINGER, TRIN, GRUG],
-        offline_guids: vec![DORMANT],
-        mailboxes: vec![MAILBOX],
+        session: SessionState {
+            live_guids: vec![GINGER, TRIN, GRUG],
+            ..Default::default()
+        },
+        social: SocialState {
+            offline_guids: vec![DORMANT],
+            ..Default::default()
+        },
+        mail: MailState {
+            mailboxes: vec![MAILBOX],
+            ..Default::default()
+        },
         ..Default::default()
     });
-    let instances = std::sync::Arc::new(InMemoryStore {
-        shard: "instances".into(),
-        calls: calls.clone(),
-        realm: Some(realm.clone()),
+    let instances = std::sync::Arc::new(WorldFake {
+        topology: TopologyState {
+            shard: "instances".into(),
+            calls: calls.clone(),
+            realm: Some(realm.clone()),
+            ..Default::default()
+        },
         characters: vec![character(VIM, "Vim"), character(ECHO_INSTANCES, "Echo")],
-        live_guids: vec![VIM],
-        mailboxes: vec![MAILBOX],
+        session: SessionState {
+            live_guids: vec![VIM],
+            ..Default::default()
+        },
+        mail: MailState {
+            mailboxes: vec![MAILBOX],
+            ..Default::default()
+        },
         ..Default::default()
     });
-    *world.purses.lock().unwrap() = vec![(GINGER, PURSE)];
-    *world.realm_accounts.lock().unwrap() = alts(&[GINGER, TRIN, DORMANT]);
-    *instances.realm_accounts.lock().unwrap() = vec![(VIM, VIMS_ACCOUNT.to_string())];
+    *world.mail.purses.lock().unwrap() = vec![(GINGER, PURSE)];
+    *world.mail.realm_accounts.lock().unwrap() = alts(&[GINGER, TRIN, DORMANT]);
+    *instances.mail.realm_accounts.lock().unwrap() = vec![(VIM, VIMS_ACCOUNT.to_string())];
     for shard in [&world, &instances] {
-        *shard.peers.lock().unwrap() = vec![world.clone(), instances.clone()];
+        *shard.topology.peers.lock().unwrap() = vec![world.clone(), instances.clone()];
     }
     (realm, world, instances, calls)
 }
-fn unsharded_send() -> std::sync::Arc<InMemoryStore> {
-    let store = std::sync::Arc::new(InMemoryStore {
-        shard: "lyracore".into(),
+fn unsharded_send() -> std::sync::Arc<WorldFake> {
+    let store = std::sync::Arc::new(WorldFake {
+        topology: TopologyState {
+            shard: "lyracore".into(),
+            ..Default::default()
+        },
         characters: vec![character(GINGER, "Ginger"), character(TRIN, "Trin")],
-        live_guids: vec![GINGER, TRIN],
-        mailboxes: vec![MAILBOX],
+        session: SessionState {
+            live_guids: vec![GINGER, TRIN],
+            ..Default::default()
+        },
+        mail: MailState {
+            mailboxes: vec![MAILBOX],
+            ..Default::default()
+        },
         ..Default::default()
     });
-    *store.purses.lock().unwrap() = vec![(GINGER, PURSE)];
-    *store.realm_accounts.lock().unwrap() = alts(&[GINGER, TRIN]);
+    *store.mail.purses.lock().unwrap() = vec![(GINGER, PURSE)];
+    *store.mail.realm_accounts.lock().unwrap() = alts(&[GINGER, TRIN]);
     store
 }
 
@@ -1025,7 +1095,7 @@ fn postage_is_debited_from_the_senders_own_shard_at_send() {
     post(world.as_ref(), "Trin").expect("the send goes through");
 
     assert_eq!(
-        world.purses.lock().unwrap()[0].1,
+        world.mail.purses.lock().unwrap()[0].1,
         PURSE - lyracore_shared::mail::postage()
     );
     let log = calls.lock().unwrap().clone();
@@ -1042,12 +1112,16 @@ fn postage_is_debited_from_the_senders_own_shard_at_send() {
 #[test]
 fn a_sender_who_cannot_afford_the_postage_is_refused_and_charged_nothing() {
     let (_realm, world, _instances, calls) = sharded_send();
-    *world.purses.lock().unwrap() = vec![(GINGER, 10)];
+    *world.mail.purses.lock().unwrap() = vec![(GINGER, 10)];
 
     let refusal = post(world.as_ref(), "Trin").expect_err("10 copper does not cover the postage");
     assert!(matches!(refusal, mail::SendRefusal::NotEnoughMoney(_)));
 
-    assert_eq!(world.purses.lock().unwrap()[0].1, 10, "charged nothing");
+    assert_eq!(
+        world.mail.purses.lock().unwrap()[0].1,
+        10,
+        "charged nothing"
+    );
     assert!(mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX)
         .unwrap()
         .is_empty());
@@ -1075,7 +1149,11 @@ fn each_refused_gate_produces_its_own_distinct_refusal() {
         mail::SendRefusal::NotYourTeam
     );
 
-    assert_eq!(world.purses.lock().unwrap()[0].1, PURSE, "charged nothing");
+    assert_eq!(
+        world.mail.purses.lock().unwrap()[0].1,
+        PURSE,
+        "charged nothing"
+    );
     let log = calls.lock().unwrap().clone();
     assert!(
         !log.iter().any(|(_, call)| call == "mail_send"),
@@ -1086,7 +1164,7 @@ fn each_refused_gate_produces_its_own_distinct_refusal() {
 #[test]
 fn the_faction_gate_refuses_in_both_directions() {
     let (_realm, world, _instances, _calls) = sharded_send();
-    *world.purses.lock().unwrap() = vec![(GRUG, PURSE)];
+    *world.mail.purses.lock().unwrap() = vec![(GRUG, PURSE)];
 
     let refusal = mail::send(
         world.as_ref(),
@@ -1182,7 +1260,7 @@ fn sending_is_refused_at_character_select_and_away_from_a_mailbox() {
         "got {refusal}"
     );
 
-    assert_eq!(world.purses.lock().unwrap()[0].1, PURSE);
+    assert_eq!(world.mail.purses.lock().unwrap()[0].1, PURSE);
     let log = calls.lock().unwrap().clone();
     assert!(
         !log.iter()
@@ -1205,7 +1283,7 @@ fn both_planes_produce_the_same_row_for_the_same_letter() {
         "the two planes must produce one letter"
     );
     assert_eq!(
-        single.purses.lock().unwrap()[0].1,
+        single.mail.purses.lock().unwrap()[0].1,
         PURSE - lyracore_shared::mail::postage(),
         "and both must charge the same postage"
     );
@@ -1221,10 +1299,10 @@ fn the_whole_cost_leaves_the_purse_once_on_either_plane() {
     post_money(world.as_ref(), "Trin", attached).expect("realm plane");
     post_money(single.as_ref(), "Trin", attached).expect("fallback plane");
 
-    assert_eq!(world.purses.lock().unwrap()[0].1, PURSE - cost);
-    assert_eq!(single.purses.lock().unwrap()[0].1, PURSE - cost);
-    assert_eq!(single.sent_mail.lock().unwrap()[0].4, attached);
-    assert!(single.mail_escrows.lock().unwrap().is_empty());
+    assert_eq!(world.mail.purses.lock().unwrap()[0].1, PURSE - cost);
+    assert_eq!(single.mail.purses.lock().unwrap()[0].1, PURSE - cost);
+    assert_eq!(single.mail.sent_mail.lock().unwrap()[0].4, attached);
+    assert!(single.mail.mail_escrows.lock().unwrap().is_empty());
     let log = calls.lock().unwrap().clone();
     assert!(
         !log.iter().any(|(_, call)| call == "mail_send"),
@@ -1247,23 +1325,32 @@ fn a_sent_letters_body_is_readable_through_the_item_text_query_path() {
         Some("left it at the inn".to_string())
     );
 }
-fn seated_sender() -> std::sync::Arc<InMemoryStore> {
-    let store = std::sync::Arc::new(InMemoryStore {
-        login_entity: Some(warrior_entity()),
-        mailboxes: vec![MAILBOX],
-        characters: vec![
-            character(1, "Tester"),
-            character(TRIN, "Trin"),
-            orc(GRUG, "Grug"),
-        ],
-        live_guids: vec![1, TRIN, GRUG],
-        ..tester_store(7)
+fn seated_sender() -> std::sync::Arc<WorldFake> {
+    let store = std::sync::Arc::new({
+        let base = tester_store(7);
+        WorldFake {
+            session: SessionState {
+                login_entity: Some(warrior_entity()),
+                live_guids: vec![1, TRIN, GRUG],
+                ..base.session
+            },
+            mail: MailState {
+                mailboxes: vec![MAILBOX],
+                ..base.mail
+            },
+            characters: vec![
+                character(1, "Tester"),
+                character(TRIN, "Trin"),
+                orc(GRUG, "Grug"),
+            ],
+            ..base
+        }
     });
-    *store.purses.lock().unwrap() = vec![(1, PURSE)];
+    *store.mail.purses.lock().unwrap() = vec![(1, PURSE)];
     store
 }
 fn send_over_the_wire(
-    store: &std::sync::Arc<InMemoryStore>,
+    store: &std::sync::Arc<WorldFake>,
     receiver: &str,
 ) -> wow_world_messages::vanilla::SMSG_SEND_MAIL_RESULT_MailResultTwo {
     let (mut client, server_end) = UnixStream::pair().unwrap();
@@ -1323,32 +1410,50 @@ fn a_letter_sent_over_the_wire_is_acked_ok_and_lands_in_the_recipients_mailbox()
     let trins = mail::open_mailbox(store.as_ref(), Some(TRIN), MAILBOX).expect("the gate opens");
     assert_eq!(trins.len(), 1);
     assert_eq!(trins[0].body, "left it at the inn");
-    assert_eq!(store.purses.lock().unwrap()[0].1, PURSE - 30);
+    assert_eq!(store.mail.purses.lock().unwrap()[0].1, PURSE - 30);
 }
 
 /// `seated_sender`'s sharded twin: the sender's own handle plus a realm-core handle, so
 /// `CMSG_SEND_MAIL` drives the fence → commit → confirm → settle escrow instead of the
 /// single-database fallback.
-fn sharded_seated_sender() -> std::sync::Arc<InMemoryStore> {
-    let realm = std::sync::Arc::new(InMemoryStore {
-        shard: "lyracore-realm".into(),
-        is_realm: true,
+fn sharded_seated_sender() -> std::sync::Arc<WorldFake> {
+    let realm = std::sync::Arc::new(WorldFake {
+        topology: TopologyState {
+            shard: "lyracore-realm".into(),
+            ..Default::default()
+        },
+        party: PartyState {
+            is_realm: true,
+            ..Default::default()
+        },
         ..Default::default()
     });
-    let store = std::sync::Arc::new(InMemoryStore {
-        shard: "world".into(),
-        realm: Some(realm),
-        login_entity: Some(warrior_entity()),
-        mailboxes: vec![MAILBOX],
-        characters: vec![
-            character(1, "Tester"),
-            character(TRIN, "Trin"),
-            orc(GRUG, "Grug"),
-        ],
-        live_guids: vec![1, TRIN, GRUG],
-        ..tester_store(7)
+    let store = std::sync::Arc::new({
+        let base = tester_store(7);
+        WorldFake {
+            topology: TopologyState {
+                shard: "world".into(),
+                realm: Some(realm),
+                ..base.topology
+            },
+            session: SessionState {
+                login_entity: Some(warrior_entity()),
+                live_guids: vec![1, TRIN, GRUG],
+                ..base.session
+            },
+            mail: MailState {
+                mailboxes: vec![MAILBOX],
+                ..base.mail
+            },
+            characters: vec![
+                character(1, "Tester"),
+                character(TRIN, "Trin"),
+                orc(GRUG, "Grug"),
+            ],
+            ..base
+        }
     });
-    *store.purses.lock().unwrap() = vec![(1, PURSE)];
+    *store.mail.purses.lock().unwrap() = vec![(1, PURSE)];
     store
 }
 
@@ -1356,6 +1461,7 @@ fn sharded_seated_sender() -> std::sync::Arc<InMemoryStore> {
 fn a_real_session_gets_the_send_mail_result_once_a_lagging_escrow_cache_catches_up() {
     let store = sharded_seated_sender();
     store
+        .mail
         .mail_escrow_reads_before_visible
         .store(3, std::sync::atomic::Ordering::SeqCst);
 
@@ -1367,7 +1473,7 @@ fn a_real_session_gets_the_send_mail_result_once_a_lagging_escrow_cache_catches_
     let trins = mail::open_mailbox(store.as_ref(), Some(TRIN), MAILBOX).expect("the gate opens");
     assert_eq!(trins.len(), 1);
     assert_eq!(trins[0].body, "left it at the inn");
-    assert_eq!(store.purses.lock().unwrap()[0].1, PURSE - 30);
+    assert_eq!(store.mail.purses.lock().unwrap()[0].1, PURSE - 30);
 }
 
 #[test]
@@ -1382,13 +1488,13 @@ fn each_refused_send_reaches_the_client_as_its_own_wire_error() {
         let store = seated_sender();
         assert_eq!(send_over_the_wire(&store, receiver), want, "for {receiver}");
         assert_eq!(
-            store.purses.lock().unwrap()[0].1,
+            store.mail.purses.lock().unwrap()[0].1,
             PURSE,
             "a refused send charges nothing"
         );
     }
     let store = seated_sender();
-    *store.purses.lock().unwrap() = vec![(1, 10)];
+    *store.mail.purses.lock().unwrap() = vec![(1, 10)];
     assert_eq!(send_over_the_wire(&store, "Trin"), R::ErrNotEnoughMoney);
 }
 
@@ -1463,7 +1569,7 @@ fn attached_copper_leaves_the_senders_purse_at_send_and_rides_the_letter() {
     post_money(world.as_ref(), "Trin", ATTACHED).expect("the send goes through");
 
     assert_eq!(
-        world.purses.lock().unwrap()[0].1,
+        world.mail.purses.lock().unwrap()[0].1,
         PURSE - lyracore_shared::mail::total_cost(ATTACHED),
         "one debit for the postage AND the coin"
     );
@@ -1475,13 +1581,17 @@ fn attached_copper_leaves_the_senders_purse_at_send_and_rides_the_letter() {
 fn a_sender_who_cannot_afford_the_attachment_is_refused_and_charged_nothing() {
     let (_realm, world, _instances, calls) = sharded_send();
     let barely = lyracore_shared::mail::total_cost(ATTACHED) - 1;
-    *world.purses.lock().unwrap() = vec![(GINGER, barely)];
+    *world.mail.purses.lock().unwrap() = vec![(GINGER, barely)];
 
     let refusal = post_money(world.as_ref(), "Trin", ATTACHED)
         .expect_err("the postage alone is affordable, the letter is not");
     assert!(matches!(refusal, mail::SendRefusal::NotEnoughMoney(_)));
 
-    assert_eq!(world.purses.lock().unwrap()[0].1, barely, "charged nothing");
+    assert_eq!(
+        world.mail.purses.lock().unwrap()[0].1,
+        barely,
+        "charged nothing"
+    );
     assert!(mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX)
         .unwrap()
         .is_empty());
@@ -1495,13 +1605,13 @@ fn a_sender_who_cannot_afford_the_attachment_is_refused_and_charged_nothing() {
 #[test]
 fn taking_a_mails_money_credits_the_purse_and_leaves_the_letter_readable() {
     let (_realm, world, _instances, _calls) = sharded_send();
-    *world.purses.lock().unwrap() = vec![(GINGER, PURSE), (TRIN, 0)];
+    *world.mail.purses.lock().unwrap() = vec![(GINGER, PURSE), (TRIN, 0)];
     post_money(world.as_ref(), "Trin", ATTACHED).expect("the send goes through");
     let mail_id = mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).unwrap()[0].id;
 
     mail::take_money(world.as_ref(), Some(TRIN), MAILBOX, mail_id).expect("the take goes through");
 
-    assert_eq!(world.purses.lock().unwrap()[1].1, ATTACHED);
+    assert_eq!(world.mail.purses.lock().unwrap()[1].1, ATTACHED);
     let trins = mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).expect("the gate opens");
     assert_eq!(trins.len(), 1, "a mail emptied of money is still a letter");
     assert_eq!(trins[0].money, 0);
@@ -1514,7 +1624,7 @@ fn taking_a_mails_money_credits_the_purse_and_leaves_the_letter_readable() {
 #[test]
 fn taking_the_money_twice_credits_the_purse_once() {
     let (_realm, world, _instances, _calls) = sharded_send();
-    *world.purses.lock().unwrap() = vec![(GINGER, PURSE), (TRIN, 0)];
+    *world.mail.purses.lock().unwrap() = vec![(GINGER, PURSE), (TRIN, 0)];
     post_money(world.as_ref(), "Trin", ATTACHED).expect("the send goes through");
     let mail_id = mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).unwrap()[0].id;
 
@@ -1523,13 +1633,13 @@ fn taking_the_money_twice_credits_the_purse_once() {
         .expect_err("there is nothing left in it");
 
     assert!(err.to_string().contains("nothing to take"), "got {err}");
-    assert_eq!(world.purses.lock().unwrap()[1].1, ATTACHED);
+    assert_eq!(world.mail.purses.lock().unwrap()[1].1, ATTACHED);
 }
 
 #[test]
 fn taking_money_from_somebody_elses_mail_is_refused() {
     let (_realm, world, _instances, _calls) = sharded_send();
-    *world.purses.lock().unwrap() = vec![(GINGER, PURSE), (TRIN, 0)];
+    *world.mail.purses.lock().unwrap() = vec![(GINGER, PURSE), (TRIN, 0)];
     post_money(world.as_ref(), "Trin", ATTACHED).expect("the send goes through");
     let mail_id = mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).unwrap()[0].id;
 
@@ -1544,7 +1654,7 @@ fn taking_money_from_somebody_elses_mail_is_refused() {
         "'not yours' and 'no such mail' must read the same, or a crafted id enumerates mailboxes"
     );
     assert_eq!(
-        world.purses.lock().unwrap()[0].1,
+        world.mail.purses.lock().unwrap()[0].1,
         PURSE - lyracore_shared::mail::total_cost(ATTACHED)
     );
     assert_eq!(
@@ -1559,7 +1669,7 @@ fn both_planes_attach_and_take_the_same_copper() {
     let (_realm, world, _instances, calls) = sharded_send();
     let single = unsharded_send();
     for store in [&world, &single] {
-        *store.purses.lock().unwrap() = vec![(GINGER, PURSE), (TRIN, 0)];
+        *store.mail.purses.lock().unwrap() = vec![(GINGER, PURSE), (TRIN, 0)];
     }
 
     for store in [world.as_ref(), single.as_ref()] {
@@ -1569,8 +1679,8 @@ fn both_planes_attach_and_take_the_same_copper() {
     }
 
     assert_eq!(
-        world.purses.lock().unwrap().clone(),
-        single.purses.lock().unwrap().clone(),
+        world.mail.purses.lock().unwrap().clone(),
+        single.mail.purses.lock().unwrap().clone(),
         "the two planes must move the same copper"
     );
     assert_eq!(
@@ -1578,8 +1688,8 @@ fn both_planes_attach_and_take_the_same_copper() {
         mail::open_mailbox(single.as_ref(), Some(TRIN), MAILBOX).unwrap(),
     );
     assert!(
-        single.mail_escrows.lock().unwrap().is_empty()
-            && single.mail_receipts.lock().unwrap().is_empty(),
+        single.mail.mail_escrows.lock().unwrap().is_empty()
+            && single.mail.mail_receipts.lock().unwrap().is_empty(),
         "the single-database plane must not route through the escrow — it HAS the transaction"
     );
     assert!(!escrow_steps(&calls).is_empty(), "and the sharded one must");
@@ -1612,6 +1722,7 @@ fn a_sharded_send_drives_fence_then_commit_then_confirm_then_settle() {
 fn a_sharded_send_waits_out_a_lagging_escrow_cache_and_still_settles() {
     let (_realm, world, _instances, calls) = sharded_send();
     world
+        .mail
         .mail_escrow_reads_before_visible
         .store(3, std::sync::atomic::Ordering::SeqCst);
 
@@ -1632,11 +1743,12 @@ fn a_sharded_send_waits_out_a_lagging_escrow_cache_and_still_settles() {
     assert_eq!(trins.len(), 1);
     assert_eq!(trins[0].money, ATTACHED);
     assert_eq!(
-        world.purses.lock().unwrap()[0].1,
+        world.mail.purses.lock().unwrap()[0].1,
         PURSE - lyracore_shared::mail::total_cost(ATTACHED)
     );
     assert_eq!(
         world
+            .mail
             .mail_escrow_reads_before_visible
             .load(std::sync::atomic::Ordering::SeqCst),
         0,
@@ -1647,7 +1759,7 @@ fn a_sharded_send_waits_out_a_lagging_escrow_cache_and_still_settles() {
 #[test]
 fn a_sharded_take_drives_the_same_four_steps_the_other_way() {
     let (_realm, world, _instances, calls) = sharded_send();
-    *world.purses.lock().unwrap() = vec![(GINGER, PURSE), (TRIN, 0)];
+    *world.mail.purses.lock().unwrap() = vec![(GINGER, PURSE), (TRIN, 0)];
     post_money(world.as_ref(), "Trin", ATTACHED).expect("posted");
     let mail_id = mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).unwrap()[0].id;
     calls.lock().unwrap().clear();
@@ -1668,29 +1780,32 @@ fn a_sharded_take_drives_the_same_four_steps_the_other_way() {
 #[test]
 fn a_send_killed_before_the_commit_is_re_driven_at_the_next_mailbox_visit() {
     let (realm, world, _instances, _calls) = sharded_send();
-    *realm.mail_kill_at.lock().unwrap() = Some("mail_commit".into());
+    *realm.mail.mail_kill_at.lock().unwrap() = Some("mail_commit".into());
 
     let refusal = post_money(world.as_ref(), "Trin", ATTACHED)
         .expect_err("realm-core never answered the commit");
     assert!(matches!(refusal, mail::SendRefusal::Internal(_)));
     assert_eq!(
-        world.purses.lock().unwrap()[0].1,
+        world.mail.purses.lock().unwrap()[0].1,
         PURSE - lyracore_shared::mail::total_cost(ATTACHED),
         "the sender has PAID, and nothing refunds a fence"
     );
-    assert_eq!(world.mail_escrows.lock().unwrap().len(), 1, "held");
+    assert_eq!(world.mail.mail_escrows.lock().unwrap().len(), 1, "held");
     assert!(mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX)
         .unwrap()
         .is_empty());
-    *realm.mail_kill_at.lock().unwrap() = None;
+    *realm.mail.mail_kill_at.lock().unwrap() = None;
     mail::open_mailbox(world.as_ref(), Some(GINGER), MAILBOX).expect("the gate opens");
 
     let trins = mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).expect("the gate opens");
     assert_eq!(trins.len(), 1, "the letter finally landed — exactly once");
     assert_eq!(trins[0].money, ATTACHED);
-    assert!(world.mail_escrows.lock().unwrap().is_empty(), "and settled");
+    assert!(
+        world.mail.mail_escrows.lock().unwrap().is_empty(),
+        "and settled"
+    );
     assert_eq!(
-        world.purses.lock().unwrap()[0].1,
+        world.mail.purses.lock().unwrap()[0].1,
         PURSE - lyracore_shared::mail::total_cost(ATTACHED),
         "debited once across the whole episode"
     );
@@ -1699,7 +1814,7 @@ fn a_send_killed_before_the_commit_is_re_driven_at_the_next_mailbox_visit() {
 #[test]
 fn a_send_killed_after_the_commit_re_drives_into_one_letter() {
     let (_realm, world, _instances, _calls) = sharded_send();
-    *world.mail_kill_at.lock().unwrap() = Some("mail_confirm_delivery".into());
+    *world.mail.mail_kill_at.lock().unwrap() = Some("mail_confirm_delivery".into());
 
     post_money(world.as_ref(), "Trin", ATTACHED).expect_err("the attestation never landed");
     assert_eq!(
@@ -1708,9 +1823,13 @@ fn a_send_killed_after_the_commit_re_drives_into_one_letter() {
             .len(),
         1
     );
-    assert_eq!(world.mail_escrows.lock().unwrap().len(), 1, "still fenced");
+    assert_eq!(
+        world.mail.mail_escrows.lock().unwrap().len(),
+        1,
+        "still fenced"
+    );
 
-    *world.mail_kill_at.lock().unwrap() = None;
+    *world.mail.mail_kill_at.lock().unwrap() = None;
     mail::open_mailbox(world.as_ref(), Some(GINGER), MAILBOX).expect("the gate opens");
 
     assert_eq!(
@@ -1720,9 +1839,9 @@ fn a_send_killed_after_the_commit_re_drives_into_one_letter() {
         1,
         "one letter — the replayed commit found its receipt"
     );
-    assert!(world.mail_escrows.lock().unwrap().is_empty());
+    assert!(world.mail.mail_escrows.lock().unwrap().is_empty());
     assert_eq!(
-        world.purses.lock().unwrap()[0].1,
+        world.mail.purses.lock().unwrap()[0].1,
         PURSE - lyracore_shared::mail::total_cost(ATTACHED)
     );
 }
@@ -1730,63 +1849,86 @@ fn a_send_killed_after_the_commit_re_drives_into_one_letter() {
 #[test]
 fn a_take_killed_before_the_payout_is_re_driven_at_the_next_mailbox_visit() {
     let (realm, world, _instances, _calls) = sharded_send();
-    *world.purses.lock().unwrap() = vec![(GINGER, PURSE), (TRIN, 0)];
+    *world.mail.purses.lock().unwrap() = vec![(GINGER, PURSE), (TRIN, 0)];
     post_money(world.as_ref(), "Trin", ATTACHED).expect("posted");
     let mail_id = mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).unwrap()[0].id;
-    *world.mail_kill_at.lock().unwrap() = Some("mail_payout".into());
+    *world.mail.mail_kill_at.lock().unwrap() = Some("mail_payout".into());
 
     mail::take_money(world.as_ref(), Some(TRIN), MAILBOX, mail_id)
         .expect_err("the purse was never credited");
-    assert_eq!(world.purses.lock().unwrap()[1].1, 0);
+    assert_eq!(world.mail.purses.lock().unwrap()[1].1, 0);
     assert_eq!(
         mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).unwrap()[0].money,
         0,
         "the copper has left the row"
     );
-    assert_eq!(realm.mail_escrows.lock().unwrap().len(), 1, "and is held");
+    assert_eq!(
+        realm.mail.mail_escrows.lock().unwrap().len(),
+        1,
+        "and is held"
+    );
 
-    *world.mail_kill_at.lock().unwrap() = None;
+    *world.mail.mail_kill_at.lock().unwrap() = None;
     mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).expect("the gate opens");
 
-    assert_eq!(world.purses.lock().unwrap()[1].1, ATTACHED, "paid, once");
-    assert!(realm.mail_escrows.lock().unwrap().is_empty(), "and settled");
+    assert_eq!(
+        world.mail.purses.lock().unwrap()[1].1,
+        ATTACHED,
+        "paid, once"
+    );
+    assert!(
+        realm.mail.mail_escrows.lock().unwrap().is_empty(),
+        "and settled"
+    );
 }
 
 #[test]
 fn a_take_killed_after_the_payout_re_drives_into_one_credit() {
     let (realm, world, _instances, _calls) = sharded_send();
-    *world.purses.lock().unwrap() = vec![(GINGER, PURSE), (TRIN, 0)];
+    *world.mail.purses.lock().unwrap() = vec![(GINGER, PURSE), (TRIN, 0)];
     post_money(world.as_ref(), "Trin", ATTACHED).expect("posted");
     let mail_id = mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).unwrap()[0].id;
-    *realm.mail_kill_at.lock().unwrap() = Some("mail_confirm_delivery".into());
+    *realm.mail.mail_kill_at.lock().unwrap() = Some("mail_confirm_delivery".into());
 
     mail::take_money(world.as_ref(), Some(TRIN), MAILBOX, mail_id)
         .expect_err("the attestation never landed, so the click is reported as failed");
     assert_eq!(
-        world.purses.lock().unwrap()[1].1,
+        world.mail.purses.lock().unwrap()[1].1,
         ATTACHED,
         "but the purse WAS credited — which is exactly why the re-drive must not credit it again"
     );
-    assert_eq!(realm.mail_escrows.lock().unwrap().len(), 1, "still fenced");
+    assert_eq!(
+        realm.mail.mail_escrows.lock().unwrap().len(),
+        1,
+        "still fenced"
+    );
 
-    *realm.mail_kill_at.lock().unwrap() = None;
+    *realm.mail.mail_kill_at.lock().unwrap() = None;
     mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).expect("the gate opens");
 
-    assert_eq!(world.purses.lock().unwrap()[1].1, ATTACHED, "credited once");
-    assert!(realm.mail_escrows.lock().unwrap().is_empty());
+    assert_eq!(
+        world.mail.purses.lock().unwrap()[1].1,
+        ATTACHED,
+        "credited once"
+    );
+    assert!(realm.mail.mail_escrows.lock().unwrap().is_empty());
 }
 
 #[test]
 fn a_settle_without_an_attestation_is_refused_and_the_fence_survives() {
     let (_realm, world, _instances, _calls) = sharded_send();
-    *world.mail_kill_at.lock().unwrap() = Some("mail_confirm_delivery".into());
+    *world.mail.mail_kill_at.lock().unwrap() = Some("mail_confirm_delivery".into());
     post_money(world.as_ref(), "Trin", ATTACHED).expect_err("no attestation");
 
-    let escrow_id = world.mail_escrows.lock().unwrap()[0].1.escrow_id;
+    let escrow_id = world.mail.mail_escrows.lock().unwrap()[0].1.escrow_id;
     let err = world.mail_settle(escrow_id).expect_err("not attested");
 
     assert!(err.to_string().contains("not attested"), "got {err}");
-    assert_eq!(world.mail_escrows.lock().unwrap().len(), 1, "still held");
+    assert_eq!(
+        world.mail.mail_escrows.lock().unwrap().len(),
+        1,
+        "still held"
+    );
 }
 
 #[test]
@@ -1816,7 +1958,7 @@ fn taking_money_over_the_wire_acks_and_credits_the_purse() {
         SMSG_SEND_MAIL_RESULT_MailAction, SMSG_SEND_MAIL_RESULT_MailResultTwo,
     };
     let store = seated_sender();
-    *store.mails.lock().unwrap() = vec![(
+    *store.mail.mails.lock().unwrap() = vec![(
         1,
         codec::MailView {
             id: 7,
@@ -1862,8 +2004,8 @@ fn taking_money_over_the_wire_acks_and_credits_the_purse() {
 
     drop(client);
     server.join().unwrap();
-    assert_eq!(store.purses.lock().unwrap()[0].1, PURSE + ATTACHED);
-    assert_eq!(store.mails.lock().unwrap()[0].1.money, 0);
+    assert_eq!(store.mail.purses.lock().unwrap()[0].1, PURSE + ATTACHED);
+    assert_eq!(store.mail.mails.lock().unwrap()[0].1.money, 0);
 }
 const SWORD_GUID: u64 = 0x4000_0000_0000_0011;
 fn sword() -> mail::AttachedItem {
@@ -1877,15 +2019,21 @@ fn sword() -> mail::AttachedItem {
         item_text_id: 0,
     }
 }
-fn give_item(shard: &InMemoryStore, owner: u64, guid: u64, item: mail::AttachedItem) {
-    shard.mail_items.lock().unwrap().push((guid, owner, item));
+fn give_item(shard: &WorldFake, owner: u64, guid: u64, item: mail::AttachedItem) {
+    shard
+        .mail
+        .mail_items
+        .lock()
+        .unwrap()
+        .push((guid, owner, item));
 }
-fn claimable_swords(shards: &[&InMemoryStore], realm: &InMemoryStore) -> usize {
+fn claimable_swords(shards: &[&WorldFake], realm: &WorldFake) -> usize {
     let in_bags: usize = shards
         .iter()
-        .map(|s| s.mail_items.lock().unwrap().len())
+        .map(|s| s.mail.mail_items.lock().unwrap().len())
         .sum();
     let in_mail = realm
+        .mail
         .mails
         .lock()
         .unwrap()
@@ -1974,11 +2122,11 @@ fn a_soulbound_attachment_is_refused_at_send_and_stays_in_the_senders_bags() {
     assert!(matches!(refusal, mail::SendRefusal::AttachmentSoulbound(_)));
     assert_eq!(world.bags_of(GINGER).len(), 1, "still theirs");
     assert_eq!(
-        world.purses.lock().unwrap()[0].1,
+        world.mail.purses.lock().unwrap()[0].1,
         PURSE,
         "and a refused send costs nothing"
     );
-    assert!(world.mail_escrows.lock().unwrap().is_empty());
+    assert!(world.mail.mail_escrows.lock().unwrap().is_empty());
 }
 
 #[test]
@@ -2000,19 +2148,19 @@ fn attaching_an_item_the_sender_does_not_own_is_refused() {
     let refusal = post_item(world.as_ref(), "Trin").expect_err("it is not Ginger's");
     assert!(matches!(refusal, mail::SendRefusal::AttachmentInvalid(_)));
 
-    world.mail_items.lock().unwrap().clear();
+    world.mail.mail_items.lock().unwrap().clear();
     let refusal = post_item(world.as_ref(), "Trin").expect_err("and nothing answers to that guid");
     assert!(matches!(refusal, mail::SendRefusal::AttachmentInvalid(_)));
-    assert!(world.mail_escrows.lock().unwrap().is_empty());
+    assert!(world.mail.mail_escrows.lock().unwrap().is_empty());
 }
 
 #[test]
 fn an_item_in_flight_cannot_be_attached_to_a_second_letter() {
     let (realm, world, _instances, _calls) = sharded_send();
     give_item(&world, GINGER, SWORD_GUID, sword());
-    *realm.mail_kill_at.lock().unwrap() = Some("mail_commit".into());
+    *realm.mail.mail_kill_at.lock().unwrap() = Some("mail_commit".into());
     post_item(world.as_ref(), "Trin").expect_err("realm-core never answered");
-    assert_eq!(world.mail_escrows.lock().unwrap().len(), 1, "held");
+    assert_eq!(world.mail.mail_escrows.lock().unwrap().len(), 1, "held");
 
     let refusal =
         post_item(world.as_ref(), "Trin").expect_err("it is in flight, so it is nobody's");
@@ -2025,8 +2173,8 @@ fn an_item_in_flight_cannot_be_attached_to_a_second_letter() {
     );
 }
 fn delivered_item() -> (
-    std::sync::Arc<InMemoryStore>,
-    std::sync::Arc<InMemoryStore>,
+    std::sync::Arc<WorldFake>,
+    std::sync::Arc<WorldFake>,
     ShardCallLog,
     u64,
 ) {
@@ -2058,7 +2206,10 @@ fn taking_an_item_puts_it_in_the_takers_bags_with_its_state_unchanged() {
         "a mail emptied of its item is still a letter"
     );
     assert_eq!(trins[0].item_entry, 0);
-    assert!(realm.mail_escrows.lock().unwrap().is_empty(), "settled");
+    assert!(
+        realm.mail.mail_escrows.lock().unwrap().is_empty(),
+        "settled"
+    );
 }
 
 /// A Letter Copy mailed on and taken again keeps its text id, so the taker can still read it. The
@@ -2082,7 +2233,10 @@ fn a_taken_letter_keeps_its_text_id() {
     mail::take_item(world.as_ref(), Some(TRIN), MAILBOX, mail_id).expect("the take completes");
 
     assert_eq!(world.bags_of(TRIN), vec![letter]);
-    assert!(realm.mail_escrows.lock().unwrap().is_empty(), "settled");
+    assert!(
+        realm.mail.mail_escrows.lock().unwrap().is_empty(),
+        "settled"
+    );
 }
 
 #[test]
@@ -2119,6 +2273,7 @@ fn a_sharded_item_take_probes_for_room_before_it_fences_anything() {
 fn a_sharded_item_take_waits_out_a_lagging_escrow_cache_and_still_settles() {
     let (realm, world, _calls, mail_id) = delivered_item();
     realm
+        .mail
         .mail_escrow_reads_before_visible
         .store(3, std::sync::atomic::Ordering::SeqCst);
 
@@ -2127,13 +2282,17 @@ fn a_sharded_item_take_waits_out_a_lagging_escrow_cache_and_still_settles() {
 
     assert_eq!(taken, (sword().entry, sword().stack_count));
     assert_eq!(world.bags_of(TRIN), vec![sword()]);
-    assert!(realm.mail_escrows.lock().unwrap().is_empty(), "settled");
+    assert!(
+        realm.mail.mail_escrows.lock().unwrap().is_empty(),
+        "settled"
+    );
 }
 
 #[test]
 fn a_take_into_a_full_bag_is_refused_and_the_item_stays_in_the_mail() {
     let (realm, world, _calls, mail_id) = delivered_item();
     world
+        .mail
         .bags_full
         .store(true, std::sync::atomic::Ordering::Relaxed);
 
@@ -2150,9 +2309,10 @@ fn a_take_into_a_full_bag_is_refused_and_the_item_stays_in_the_mail() {
         sword().entry,
         "the item is still in the letter — nothing was fenced"
     );
-    assert!(realm.mail_escrows.lock().unwrap().is_empty());
+    assert!(realm.mail.mail_escrows.lock().unwrap().is_empty());
 
     world
+        .mail
         .bags_full
         .store(false, std::sync::atomic::Ordering::Relaxed);
     mail::take_item(world.as_ref(), Some(TRIN), MAILBOX, mail_id).expect("once there is room");
@@ -2166,6 +2326,7 @@ fn a_take_into_a_full_bag_on_one_database_leaves_the_item_in_the_mail() {
     post_item(single.as_ref(), "Trin").expect("posted");
     let mail_id = mail::open_mailbox(single.as_ref(), Some(TRIN), MAILBOX).unwrap()[0].id;
     single
+        .mail
         .bags_full
         .store(true, std::sync::atomic::Ordering::Relaxed);
 
@@ -2216,20 +2377,23 @@ fn taking_the_same_item_twice_grants_it_once() {
 fn an_item_send_killed_before_the_commit_is_re_driven_at_the_next_mailbox_visit() {
     let (realm, world, _instances, _calls) = sharded_send();
     give_item(&world, GINGER, SWORD_GUID, sword());
-    *realm.mail_kill_at.lock().unwrap() = Some("mail_commit".into());
+    *realm.mail.mail_kill_at.lock().unwrap() = Some("mail_commit".into());
 
     post_item(world.as_ref(), "Trin").expect_err("realm-core never answered the commit");
     assert!(world.bags_of(GINGER).is_empty());
-    assert_eq!(world.mail_escrows.lock().unwrap().len(), 1, "held");
+    assert_eq!(world.mail.mail_escrows.lock().unwrap().len(), 1, "held");
     assert_eq!(claimable_swords(&[&world], &realm), 0);
 
-    *realm.mail_kill_at.lock().unwrap() = None;
+    *realm.mail.mail_kill_at.lock().unwrap() = None;
     mail::open_mailbox(world.as_ref(), Some(GINGER), MAILBOX).expect("the gate opens");
 
     let trins = mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).unwrap();
     assert_eq!(trins.len(), 1, "the letter finally landed — exactly once");
     assert_eq!(trins[0].item_durability, sword().durability);
-    assert!(world.mail_escrows.lock().unwrap().is_empty(), "and settled");
+    assert!(
+        world.mail.mail_escrows.lock().unwrap().is_empty(),
+        "and settled"
+    );
     assert_eq!(claimable_swords(&[&world], &realm), 1);
 }
 
@@ -2237,7 +2401,7 @@ fn an_item_send_killed_before_the_commit_is_re_driven_at_the_next_mailbox_visit(
 fn an_item_send_killed_after_the_commit_re_drives_into_one_item() {
     let (realm, world, _instances, _calls) = sharded_send();
     give_item(&world, GINGER, SWORD_GUID, sword());
-    *world.mail_kill_at.lock().unwrap() = Some("mail_confirm_delivery".into());
+    *world.mail.mail_kill_at.lock().unwrap() = Some("mail_confirm_delivery".into());
 
     post_item(world.as_ref(), "Trin").expect_err("the attestation never landed");
     assert_eq!(
@@ -2245,9 +2409,13 @@ fn an_item_send_killed_after_the_commit_re_drives_into_one_item() {
         1,
         "in the mailbox only"
     );
-    assert_eq!(world.mail_escrows.lock().unwrap().len(), 1, "still fenced");
+    assert_eq!(
+        world.mail.mail_escrows.lock().unwrap().len(),
+        1,
+        "still fenced"
+    );
 
-    *world.mail_kill_at.lock().unwrap() = None;
+    *world.mail.mail_kill_at.lock().unwrap() = None;
     mail::open_mailbox(world.as_ref(), Some(GINGER), MAILBOX).expect("the gate opens");
 
     assert_eq!(
@@ -2258,55 +2426,65 @@ fn an_item_send_killed_after_the_commit_re_drives_into_one_item() {
         "one letter — the replayed commit found its receipt"
     );
     assert_eq!(claimable_swords(&[&world], &realm), 1);
-    assert!(world.mail_escrows.lock().unwrap().is_empty());
+    assert!(world.mail.mail_escrows.lock().unwrap().is_empty());
 }
 
 #[test]
 fn an_item_send_killed_after_the_attestation_settles_on_the_next_visit() {
     let (realm, world, _instances, _calls) = sharded_send();
     give_item(&world, GINGER, SWORD_GUID, sword());
-    *world.mail_kill_at.lock().unwrap() = Some("mail_settle".into());
+    *world.mail.mail_kill_at.lock().unwrap() = Some("mail_settle".into());
 
     post_item(world.as_ref(), "Trin").expect_err("the settle never landed");
-    assert_eq!(world.mail_escrows.lock().unwrap().len(), 1);
+    assert_eq!(world.mail.mail_escrows.lock().unwrap().len(), 1);
     assert_eq!(claimable_swords(&[&world], &realm), 1);
 
-    *world.mail_kill_at.lock().unwrap() = None;
+    *world.mail.mail_kill_at.lock().unwrap() = None;
     mail::open_mailbox(world.as_ref(), Some(GINGER), MAILBOX).expect("the gate opens");
 
-    assert!(world.mail_escrows.lock().unwrap().is_empty(), "settled");
+    assert!(
+        world.mail.mail_escrows.lock().unwrap().is_empty(),
+        "settled"
+    );
     assert_eq!(claimable_swords(&[&world], &realm), 1);
 }
 
 #[test]
 fn an_item_take_killed_before_the_payout_is_re_driven_at_the_next_mailbox_visit() {
     let (realm, world, _calls, mail_id) = delivered_item();
-    *world.mail_kill_at.lock().unwrap() = Some("mail_item_payout".into());
+    *world.mail.mail_kill_at.lock().unwrap() = Some("mail_item_payout".into());
 
     mail::take_item(world.as_ref(), Some(TRIN), MAILBOX, mail_id)
         .expect_err("the bags were never granted");
     assert!(world.bags_of(TRIN).is_empty());
     assert_eq!(claimable_swords(&[&world], &realm), 0, "held, not lost");
-    assert_eq!(realm.mail_escrows.lock().unwrap().len(), 1);
+    assert_eq!(realm.mail.mail_escrows.lock().unwrap().len(), 1);
 
-    *world.mail_kill_at.lock().unwrap() = None;
+    *world.mail.mail_kill_at.lock().unwrap() = None;
     mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).expect("the gate opens");
 
     assert_eq!(world.bags_of(TRIN), vec![sword()], "granted, once");
-    assert!(realm.mail_escrows.lock().unwrap().is_empty(), "and settled");
+    assert!(
+        realm.mail.mail_escrows.lock().unwrap().is_empty(),
+        "and settled"
+    );
 }
 
 #[test]
 fn an_item_take_killed_after_the_payout_re_drives_into_one_item() {
     let (realm, world, _calls, mail_id) = delivered_item();
-    *realm.mail_kill_at.lock().unwrap() = Some("mail_confirm_delivery".into());
+    *realm.mail.mail_kill_at.lock().unwrap() = Some("mail_confirm_delivery".into());
 
     mail::take_item(world.as_ref(), Some(TRIN), MAILBOX, mail_id)
         .expect_err("the attestation never landed");
     assert_eq!(world.bags_of(TRIN), vec![sword()]);
-    assert_eq!(realm.mail_escrows.lock().unwrap().len(), 1, "still fenced");
+    assert_eq!(
+        realm.mail.mail_escrows.lock().unwrap().len(),
+        1,
+        "still fenced"
+    );
 
-    *realm.mail_kill_at.lock().unwrap() = None;
+    *realm.mail.mail_kill_at.lock().unwrap() = None;
     mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).expect("the gate opens");
 
     assert_eq!(
@@ -2315,7 +2493,7 @@ fn an_item_take_killed_after_the_payout_re_drives_into_one_item() {
         "granted once, not twice"
     );
     assert_eq!(claimable_swords(&[&world], &realm), 1);
-    assert!(realm.mail_escrows.lock().unwrap().is_empty());
+    assert!(realm.mail.mail_escrows.lock().unwrap().is_empty());
 }
 const COD: u32 = 250;
 fn post_cod<St: WorldStore + ?Sized>(
@@ -2336,29 +2514,30 @@ fn post_cod<St: WorldStore + ?Sized>(
     )
 }
 fn delivered_cod() -> (
-    std::sync::Arc<InMemoryStore>,
-    std::sync::Arc<InMemoryStore>,
+    std::sync::Arc<WorldFake>,
+    std::sync::Arc<WorldFake>,
     ShardCallLog,
     u64,
 ) {
     let (realm, world, _instances, calls) = sharded_send();
-    *world.purses.lock().unwrap() = vec![(GINGER, PURSE), (TRIN, PURSE)];
+    *world.mail.purses.lock().unwrap() = vec![(GINGER, PURSE), (TRIN, PURSE)];
     give_item(&world, GINGER, SWORD_GUID, sword());
     post_cod(world.as_ref(), "Trin", COD).expect("posted");
     let mail_id = mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).unwrap()[0].id;
     calls.lock().unwrap().clear();
     (realm, world, calls, mail_id)
 }
-fn delivered_cod_unsharded() -> (std::sync::Arc<InMemoryStore>, u64) {
+fn delivered_cod_unsharded() -> (std::sync::Arc<WorldFake>, u64) {
     let single = unsharded_send();
-    *single.purses.lock().unwrap() = vec![(GINGER, PURSE), (TRIN, PURSE)];
+    *single.mail.purses.lock().unwrap() = vec![(GINGER, PURSE), (TRIN, PURSE)];
     give_item(&single, GINGER, SWORD_GUID, sword());
     post_cod(single.as_ref(), "Trin", COD).expect("posted");
     let mail_id = mail::open_mailbox(single.as_ref(), Some(TRIN), MAILBOX).unwrap()[0].id;
     (single, mail_id)
 }
-fn purse_of(store: &InMemoryStore, guid: u64) -> u32 {
+fn purse_of(store: &WorldFake, guid: u64) -> u32 {
     store
+        .mail
         .purses
         .lock()
         .unwrap()
@@ -2406,14 +2585,17 @@ fn taking_a_priced_item_debits_the_buyer_and_posts_the_copper_to_the_seller() {
         PURSE - lyracore_shared::mail::total_cost(0) + COD,
         "the seller is up the price, less the postage they paid to post the sword"
     );
-    assert!(realm.mail_escrows.lock().unwrap().is_empty(), "settled");
+    assert!(
+        realm.mail.mail_escrows.lock().unwrap().is_empty(),
+        "settled"
+    );
     assert_eq!(claimable_swords(&[&world], &realm), 1);
 }
 
 #[test]
 fn a_buyer_who_cannot_afford_the_price_is_refused_and_nothing_moves() {
     let (realm, world, _calls, mail_id) = delivered_cod();
-    *world.purses.lock().unwrap() = vec![(GINGER, PURSE), (TRIN, COD - 1)];
+    *world.mail.purses.lock().unwrap() = vec![(GINGER, PURSE), (TRIN, COD - 1)];
 
     let refusal = mail::take_item(world.as_ref(), Some(TRIN), MAILBOX, mail_id)
         .expect_err("one copper short");
@@ -2443,7 +2625,7 @@ fn a_buyer_who_cannot_afford_the_price_is_refused_and_nothing_moves() {
 #[test]
 fn a_buyer_who_refuses_the_price_can_return_the_mail_instead() {
     let (realm, world, _calls, mail_id) = delivered_cod();
-    *world.purses.lock().unwrap() = vec![(GINGER, PURSE), (TRIN, COD - 1)];
+    *world.mail.purses.lock().unwrap() = vec![(GINGER, PURSE), (TRIN, COD - 1)];
     mail::take_item(world.as_ref(), Some(TRIN), MAILBOX, mail_id).expect_err("cannot pay");
 
     mail::return_to_sender(world.as_ref(), Some(TRIN), MAILBOX, mail_id).expect("declined");
@@ -2519,8 +2701,8 @@ fn both_planes_settle_the_same_cod() {
     assert_eq!(sharded_seller[0].money, single_seller[0].money);
     assert_eq!(sharded_seller[0].subject, single_seller[0].subject);
     assert!(
-        single.mail_escrows.lock().unwrap().is_empty()
-            && single.mail_receipts.lock().unwrap().is_empty(),
+        single.mail.mail_escrows.lock().unwrap().is_empty()
+            && single.mail.mail_receipts.lock().unwrap().is_empty(),
         "the single-database plane must not route through the escrow — it HAS the transaction"
     );
 }
@@ -2556,6 +2738,7 @@ fn a_sharded_cod_take_pays_before_it_fences_the_item() {
 fn a_full_bag_refuses_a_priced_take_before_any_copper_moves() {
     let (realm, world, _calls, mail_id) = delivered_cod();
     world
+        .mail
         .bags_full
         .store(true, std::sync::atomic::Ordering::Relaxed);
 
@@ -2577,7 +2760,7 @@ fn a_full_bag_refuses_a_priced_take_before_any_copper_moves() {
     );
     assert_eq!(claimable_swords(&[&world], &realm), 1);
 }
-fn assert_the_price_is_in_exactly_one_place(world: &InMemoryStore, realm: &InMemoryStore) {
+fn assert_the_price_is_in_exactly_one_place(world: &WorldFake, realm: &WorldFake) {
     let purse = purse_of(world, TRIN);
     assert!(
         purse == PURSE || purse == PURSE - COD,
@@ -2585,6 +2768,7 @@ fn assert_the_price_is_in_exactly_one_place(world: &InMemoryStore, realm: &InMem
          nothing credits it back"
     );
     let fenced: u32 = world
+        .mail
         .mail_escrows
         .lock()
         .unwrap()
@@ -2592,6 +2776,7 @@ fn assert_the_price_is_in_exactly_one_place(world: &InMemoryStore, realm: &InMem
         .map(|(_, e)| e.money)
         .sum();
     let paid: u32 = realm
+        .mail
         .mails
         .lock()
         .unwrap()
@@ -2615,12 +2800,12 @@ fn assert_the_price_is_in_exactly_one_place(world: &InMemoryStore, realm: &InMem
 #[test]
 fn a_cod_payment_killed_before_the_commit_is_re_driven_at_the_next_mailbox_visit() {
     let (realm, world, _calls, mail_id) = delivered_cod();
-    *realm.mail_kill_at.lock().unwrap() = Some("mail_commit".into());
+    *realm.mail.mail_kill_at.lock().unwrap() = Some("mail_commit".into());
 
     mail::take_item(world.as_ref(), Some(TRIN), MAILBOX, mail_id)
         .expect_err("realm-core never answered the payment");
     assert_eq!(purse_of(&world, TRIN), PURSE - COD, "the buyer has PAID");
-    assert_eq!(world.mail_escrows.lock().unwrap().len(), 1, "held");
+    assert_eq!(world.mail.mail_escrows.lock().unwrap().len(), 1, "held");
     assert_eq!(
         mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).unwrap()[0].item_entry,
         sword().entry,
@@ -2628,7 +2813,7 @@ fn a_cod_payment_killed_before_the_commit_is_re_driven_at_the_next_mailbox_visit
     );
     assert_the_price_is_in_exactly_one_place(&world, &realm);
 
-    *realm.mail_kill_at.lock().unwrap() = None;
+    *realm.mail.mail_kill_at.lock().unwrap() = None;
     mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).expect("the gate opens");
 
     assert_eq!(
@@ -2636,7 +2821,10 @@ fn a_cod_payment_killed_before_the_commit_is_re_driven_at_the_next_mailbox_visit
         COD,
         "the seller is paid, once"
     );
-    assert!(world.mail_escrows.lock().unwrap().is_empty(), "and settled");
+    assert!(
+        world.mail.mail_escrows.lock().unwrap().is_empty(),
+        "and settled"
+    );
     assert_the_price_is_in_exactly_one_place(&world, &realm);
     assert_eq!(claimable_swords(&[&world], &realm), 1);
 }
@@ -2644,9 +2832,9 @@ fn a_cod_payment_killed_before_the_commit_is_re_driven_at_the_next_mailbox_visit
 #[test]
 fn a_second_click_resumes_a_held_payment_rather_than_charging_twice() {
     let (realm, world, _calls, mail_id) = delivered_cod();
-    *realm.mail_kill_at.lock().unwrap() = Some("mail_commit".into());
+    *realm.mail.mail_kill_at.lock().unwrap() = Some("mail_commit".into());
     mail::take_item(world.as_ref(), Some(TRIN), MAILBOX, mail_id).expect_err("never committed");
-    *realm.mail_kill_at.lock().unwrap() = None;
+    *realm.mail.mail_kill_at.lock().unwrap() = None;
 
     mail::take_item(world.as_ref(), Some(TRIN), MAILBOX, mail_id).expect("the second click lands");
 
@@ -2659,14 +2847,14 @@ fn a_second_click_resumes_a_held_payment_rather_than_charging_twice() {
         "and the seller was paid once"
     );
     assert_eq!(world.bags_of(TRIN), vec![sword()]);
-    assert!(world.mail_escrows.lock().unwrap().is_empty());
+    assert!(world.mail.mail_escrows.lock().unwrap().is_empty());
     assert_eq!(claimable_swords(&[&world], &realm), 1);
 }
 
 #[test]
 fn a_cod_take_killed_after_the_payment_hands_the_item_over_for_free_on_the_next_click() {
     let (realm, world, _calls, mail_id) = delivered_cod();
-    *realm.mail_kill_at.lock().unwrap() = Some("mail_take_item_fence".into());
+    *realm.mail.mail_kill_at.lock().unwrap() = Some("mail_take_item_fence".into());
 
     mail::take_item(world.as_ref(), Some(TRIN), MAILBOX, mail_id)
         .expect_err("the item was never fenced");
@@ -2678,7 +2866,7 @@ fn a_cod_take_killed_after_the_payment_hands_the_item_over_for_free_on_the_next_
     );
     assert_the_price_is_in_exactly_one_place(&world, &realm);
 
-    *realm.mail_kill_at.lock().unwrap() = None;
+    *realm.mail.mail_kill_at.lock().unwrap() = None;
     mail::take_item(world.as_ref(), Some(TRIN), MAILBOX, mail_id).expect("the retry lands");
 
     assert_eq!(purse_of(&world, TRIN), PURSE - COD, "charged once in total");
@@ -2689,21 +2877,24 @@ fn a_cod_take_killed_after_the_payment_hands_the_item_over_for_free_on_the_next_
 #[test]
 fn a_cod_take_killed_before_the_item_payout_is_re_driven_at_the_next_mailbox_visit() {
     let (realm, world, _calls, mail_id) = delivered_cod();
-    *world.mail_kill_at.lock().unwrap() = Some("mail_item_payout".into());
+    *world.mail.mail_kill_at.lock().unwrap() = Some("mail_item_payout".into());
 
     mail::take_item(world.as_ref(), Some(TRIN), MAILBOX, mail_id)
         .expect_err("the bags were never granted");
     assert_eq!(purse_of(&world, TRIN), PURSE - COD, "paid");
     assert_eq!(claimable_swords(&[&world], &realm), 0, "held, not lost");
-    assert_eq!(realm.mail_escrows.lock().unwrap().len(), 1);
+    assert_eq!(realm.mail.mail_escrows.lock().unwrap().len(), 1);
     assert_the_price_is_in_exactly_one_place(&world, &realm);
 
-    *world.mail_kill_at.lock().unwrap() = None;
+    *world.mail.mail_kill_at.lock().unwrap() = None;
     mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).expect("the gate opens");
 
     assert_eq!(world.bags_of(TRIN), vec![sword()], "granted, once");
     assert_eq!(purse_of(&world, TRIN), PURSE - COD, "and charged once");
-    assert!(realm.mail_escrows.lock().unwrap().is_empty(), "settled");
+    assert!(
+        realm.mail.mail_escrows.lock().unwrap().is_empty(),
+        "settled"
+    );
     assert_eq!(claimable_swords(&[&world], &realm), 1);
 }
 
@@ -2711,10 +2902,10 @@ fn a_cod_take_killed_before_the_item_payout_is_re_driven_at_the_next_mailbox_vis
 fn a_priced_send_killed_before_the_commit_re_drives_with_its_price_intact() {
     let (realm, world, _instances, _calls) = sharded_send();
     give_item(&world, GINGER, SWORD_GUID, sword());
-    *realm.mail_kill_at.lock().unwrap() = Some("mail_commit".into());
+    *realm.mail.mail_kill_at.lock().unwrap() = Some("mail_commit".into());
 
     post_cod(world.as_ref(), "Trin", COD).expect_err("realm-core never answered");
-    *realm.mail_kill_at.lock().unwrap() = None;
+    *realm.mail.mail_kill_at.lock().unwrap() = None;
     mail::open_mailbox(world.as_ref(), Some(GINGER), MAILBOX).expect("the gate opens");
 
     let trins = mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).unwrap();
@@ -2752,7 +2943,7 @@ fn a_refused_priced_take_reaches_the_client_as_not_enough_money() {
         SMSG_SEND_MAIL_RESULT_MailAction, SMSG_SEND_MAIL_RESULT_MailResult,
     };
     let store = seated_sender();
-    *store.mails.lock().unwrap() = vec![(
+    *store.mail.mails.lock().unwrap() = vec![(
         1,
         codec::MailView {
             id: 7,
@@ -2801,26 +2992,33 @@ fn a_refused_priced_take_reaches_the_client_as_not_enough_money() {
 
     drop(client);
     server.join().unwrap();
-    assert_eq!(store.purses.lock().unwrap()[0].1, PURSE, "charged nothing");
-    assert_eq!(store.mails.lock().unwrap()[0].1.item_entry, sword().entry);
+    assert_eq!(
+        store.mail.purses.lock().unwrap()[0].1,
+        PURSE,
+        "charged nothing"
+    );
+    assert_eq!(
+        store.mail.mails.lock().unwrap()[0].1.item_entry,
+        sword().entry
+    );
 }
 
 /// The same mail rows on both planes, as `(the session's store, the store that holds the rows)`:
 /// a sharded world handle whose rows live on realm-core, and a single-database store.
 fn both_planes(
     mails: Vec<(u64, codec::MailView)>,
-) -> [(std::sync::Arc<InMemoryStore>, std::sync::Arc<InMemoryStore>); 2] {
+) -> [(std::sync::Arc<WorldFake>, std::sync::Arc<WorldFake>); 2] {
     let (realm, world, _calls) = sharded_mailbox();
-    *realm.mails.lock().unwrap() = mails.clone();
+    *realm.mail.mails.lock().unwrap() = mails.clone();
     let single = unsharded_mailbox();
-    *single.mails.lock().unwrap() = mails;
+    *single.mail.mails.lock().unwrap() = mails;
     [(world, realm), (single.clone(), single)]
 }
-fn listed(store: &InMemoryStore, guid: u64) -> Vec<wow_world_messages::vanilla::Mail> {
+fn listed(store: &WorldFake, guid: u64) -> Vec<wow_world_messages::vanilla::Mail> {
     let mails = mail::open_mailbox(store, Some(guid), MAILBOX).expect("the gate opens");
     codec::build_mail_list(&mails, mail::now_secs()).mails
 }
-fn listed_ids(store: &InMemoryStore, guid: u64) -> Vec<u32> {
+fn listed_ids(store: &WorldFake, guid: u64) -> Vec<u32> {
     listed(store, guid).iter().map(|m| m.message_id).collect()
 }
 
@@ -2976,7 +3174,7 @@ fn a_mail_not_yet_delivered_cannot_be_read_deleted_taken_from_or_returned() {
             .expect_err("nothing to return yet");
 
         assert_eq!(
-            *holder.mails.lock().unwrap(),
+            *holder.mail.mails.lock().unwrap(),
             rows,
             "every refusal left the mail as it was"
         );
@@ -3016,7 +3214,7 @@ fn a_mail_with_nobody_to_take_it_back_cannot_be_returned_on_either_plane() {
             );
         }
         assert_eq!(
-            *holder.mails.lock().unwrap(),
+            *holder.mail.mails.lock().unwrap(),
             rows,
             "the copper stays with Ginger"
         );
@@ -3055,7 +3253,7 @@ fn a_returned_mail_lists_as_returned_and_unread_with_no_price_and_a_fresh_countd
     );
     for (store, _) in both_planes(vec![priced]) {
         // Vim is Ginger's alt here, so the item comes back at once.
-        *store.realm_accounts.lock().unwrap() = alts(&[GINGER, VIM]);
+        *store.mail.realm_accounts.lock().unwrap() = alts(&[GINGER, VIM]);
         mail::return_to_sender(store.as_ref(), Some(GINGER), MAILBOX, 1).expect("declined");
 
         let back = &listed(&store, VIM)[0];
@@ -3089,7 +3287,7 @@ fn a_priced_mail_cannot_be_deleted_on_either_plane() {
 #[test]
 fn deleting_a_priced_mail_answers_the_internal_error_and_keeps_the_mail() {
     let store = seated_store();
-    store.mails.lock().unwrap()[0].1.cod = COD;
+    store.mail.mails.lock().unwrap()[0].1.cod = COD;
 
     let (mut client, server_end) = UnixStream::pair().unwrap();
     let server_store = store.clone();
@@ -3126,15 +3324,16 @@ fn deleting_a_priced_mail_answers_the_internal_error_and_keeps_the_mail() {
     drop(client);
     server.join().unwrap();
     assert_eq!(
-        store.mails.lock().unwrap().len(),
+        store.mail.mails.lock().unwrap().len(),
         1,
         "the priced mail stays"
     );
 }
 
 /// Every row `recipient` holds on `plane`, delivered or not.
-fn held_for(plane: &InMemoryStore, recipient: u64) -> Vec<codec::MailView> {
+fn held_for(plane: &WorldFake, recipient: u64) -> Vec<codec::MailView> {
     plane
+        .mail
         .mails
         .lock()
         .unwrap()
@@ -3144,8 +3343,8 @@ fn held_for(plane: &InMemoryStore, recipient: u64) -> Vec<codec::MailView> {
         .collect()
 }
 /// The `same_account` answer each mail send, fence and return on `store` carried.
-fn same_account_seen(store: &InMemoryStore) -> Vec<(&'static str, bool)> {
-    store.same_account_seen.lock().unwrap().clone()
+fn same_account_seen(store: &WorldFake) -> Vec<(&'static str, bool)> {
+    store.mail.same_account_seen.lock().unwrap().clone()
 }
 
 #[test]
@@ -3187,7 +3386,7 @@ fn copper_to_another_account_arrives_at_once() {
 fn an_item_to_an_alt_on_another_shard_arrives_at_once() {
     let (_realm, world, instances, _calls) = sharded_send();
     // Vim is Ginger's alt. Only the instances Shard, where Vim lives, names his Realm Account.
-    *instances.realm_accounts.lock().unwrap() = alts(&[VIM]);
+    *instances.mail.realm_accounts.lock().unwrap() = alts(&[VIM]);
     give_item(&world, GINGER, SWORD_GUID, sword());
 
     post_item(world.as_ref(), "Vim").expect("posted");
@@ -3206,8 +3405,8 @@ fn a_shard_that_holds_a_character_on_a_shadow_account_defers_to_another_shard() 
     let (_realm, world, instances, _calls) = sharded_send();
     // Ginger came over from the instances Shard. The world Shard holds her on a shadow Account and
     // cannot name her Realm Account, and the instances Shard kept her Account Character Owner.
-    *world.realm_accounts.lock().unwrap() = alts(&[TRIN]);
-    *instances.realm_accounts.lock().unwrap() = alts(&[GINGER]);
+    *world.mail.realm_accounts.lock().unwrap() = alts(&[TRIN]);
+    *instances.mail.realm_accounts.lock().unwrap() = alts(&[GINGER]);
     give_item(&world, GINGER, SWORD_GUID, sword());
 
     post_item(world.as_ref(), "Trin").expect("posted");
@@ -3224,7 +3423,7 @@ fn a_shard_that_holds_a_character_on_a_shadow_account_defers_to_another_shard() 
 #[test]
 fn a_character_no_shard_can_name_counts_as_another_account() {
     let (_realm, world, _instances, _calls) = sharded_send();
-    *world.realm_accounts.lock().unwrap() = alts(&[GINGER]);
+    *world.mail.realm_accounts.lock().unwrap() = alts(&[GINGER]);
     give_item(&world, GINGER, SWORD_GUID, sword());
 
     post_item(world.as_ref(), "Trin").expect("posted");
@@ -3242,7 +3441,7 @@ fn the_single_database_send_carries_the_same_account_answer() {
         (vec![(GINGER, ALTS.to_string())], false, 0),
     ] {
         let single = unsharded_send();
-        *single.realm_accounts.lock().unwrap() = accounts;
+        *single.mail.realm_accounts.lock().unwrap() = accounts;
         give_item(&single, GINGER, SWORD_GUID, sword());
 
         post_item(single.as_ref(), "Trin").expect("posted");
@@ -3261,8 +3460,8 @@ fn the_single_database_send_carries_the_same_account_answer() {
 fn an_item_returned_to_another_account_waits_and_to_an_alt_does_not() {
     for (vims_account, same_account, listed) in [(VIMS_ACCOUNT, false, 0), (ALTS, true, 1)] {
         let (realm, world, instances, _calls) = sharded_send();
-        *instances.realm_accounts.lock().unwrap() = vec![(VIM, vims_account.to_string())];
-        *realm.mails.lock().unwrap() = vec![(
+        *instances.mail.realm_accounts.lock().unwrap() = vec![(VIM, vims_account.to_string())];
+        *realm.mail.mails.lock().unwrap() = vec![(
             GINGER,
             codec::MailView {
                 item_entry: sword().entry,
@@ -3293,19 +3492,24 @@ fn an_item_returned_to_another_account_waits_and_to_an_alt_does_not() {
 fn an_item_send_re_driven_after_a_restart_keeps_its_delivery_delay() {
     let (realm, world, instances, _calls) = sharded_send();
     give_item(&world, GINGER, SWORD_GUID, sword());
-    *realm.mail_kill_at.lock().unwrap() = Some("mail_commit".into());
+    *realm.mail.mail_kill_at.lock().unwrap() = Some("mail_commit".into());
 
     post_item(world.as_ref(), "Vim").expect_err("realm-core never answered the commit");
     assert_eq!(
-        world.mail_escrows.lock().unwrap()[0].1.delivery_delay_secs,
+        world.mail.mail_escrows.lock().unwrap()[0]
+            .1
+            .delivery_delay_secs,
         3_600,
         "the fence holds the hour"
     );
 
-    *realm.mail_kill_at.lock().unwrap() = None;
+    *realm.mail.mail_kill_at.lock().unwrap() = None;
     mail::open_mailbox(world.as_ref(), Some(GINGER), MAILBOX).expect("the gate opens");
 
-    assert!(world.mail_escrows.lock().unwrap().is_empty(), "settled");
+    assert!(
+        world.mail.mail_escrows.lock().unwrap().is_empty(),
+        "settled"
+    );
     assert_eq!(held_for(&realm, VIM).len(), 1, "committed once");
     assert!(
         mail::open_mailbox(instances.as_ref(), Some(VIM), MAILBOX)
@@ -3318,7 +3522,7 @@ fn an_item_send_re_driven_after_a_restart_keeps_its_delivery_delay() {
 #[test]
 fn a_cod_letter_to_another_account_waits_and_its_payment_arrives_at_once() {
     let (realm, world, instances, _calls) = sharded_send();
-    *instances.purses.lock().unwrap() = vec![(VIM, PURSE)];
+    *instances.mail.purses.lock().unwrap() = vec![(VIM, PURSE)];
     give_item(&world, GINGER, SWORD_GUID, sword());
 
     post_cod(world.as_ref(), "Vim", COD).expect("posted");
@@ -3328,7 +3532,7 @@ fn a_cod_letter_to_another_account_waits_and_its_payment_arrives_at_once() {
     assert_eq!(purse_of(&instances, VIM), PURSE, "and nothing is charged");
 
     // An hour later.
-    for (_, m) in realm.mails.lock().unwrap().iter_mut() {
+    for (_, m) in realm.mail.mails.lock().unwrap().iter_mut() {
         m.deliver_secs = mail::now_secs();
     }
     mail::take_item(instances.as_ref(), Some(VIM), MAILBOX, id).expect("bought");
@@ -3356,7 +3560,7 @@ fn copying_a_letter_sets_copied_and_grants_one_plain_letter() {
 
     mail::copy_letter(world.as_ref(), Some(GINGER), MAILBOX, 1).expect("the copy completes");
 
-    let flags = realm.mails.lock().unwrap()[0].1.check_flags;
+    let flags = realm.mail.mails.lock().unwrap()[0].1.check_flags;
     assert_eq!(
         flags & lyracore_shared::mail::CHECK_MASK_COPIED,
         lyracore_shared::mail::CHECK_MASK_COPIED,
@@ -3368,12 +3572,13 @@ fn copying_a_letter_sets_copied_and_grants_one_plain_letter() {
         "and the durable GRANTED record, once the Home Shard grant is confirmed"
     );
     assert_eq!(
-        *world.granted_letters.lock().unwrap(),
+        *world.mail.granted_letters.lock().unwrap(),
         vec![(GINGER, GINGERS_LETTER_TEXT_ID)],
         "exactly one Plain Letter, on the Home Shard, carrying the mail's own id as its text id"
     );
     assert_eq!(
         realm
+            .mail
             .item_texts
             .lock()
             .unwrap()
@@ -3392,10 +3597,10 @@ fn a_letter_copy_on_one_database_grants_the_same_way() {
     mail::copy_letter(single.as_ref(), Some(GINGER), MAILBOX, 1).expect("the copy completes");
 
     assert_eq!(
-        *single.granted_letters.lock().unwrap(),
+        *single.mail.granted_letters.lock().unwrap(),
         vec![(GINGER, GINGERS_LETTER_TEXT_ID)]
     );
-    let flags = single.mails.lock().unwrap()[0].1.check_flags;
+    let flags = single.mail.mails.lock().unwrap()[0].1.check_flags;
     assert_eq!(
         flags & lyracore_shared::mail::CHECK_MASK_COPIED,
         lyracore_shared::mail::CHECK_MASK_COPIED
@@ -3410,6 +3615,7 @@ fn a_letter_copy_on_one_database_grants_the_same_way() {
 fn copying_into_a_full_bag_is_refused_and_leaves_the_mail_uncopied() {
     let (realm, world, _calls) = sharded_mailbox();
     world
+        .mail
         .bags_full
         .store(true, std::sync::atomic::Ordering::Relaxed);
 
@@ -3421,12 +3627,13 @@ fn copying_into_a_full_bag_is_refused_and_leaves_the_mail_uncopied() {
         "the client is told to make room, not handed a generic error: {refusal}"
     );
     assert_eq!(
-        realm.mails.lock().unwrap()[0].1.check_flags & lyracore_shared::mail::CHECK_MASK_COPIED,
+        realm.mail.mails.lock().unwrap()[0].1.check_flags
+            & lyracore_shared::mail::CHECK_MASK_COPIED,
         0,
         "a refused copy must not touch the mail plane at all"
     );
-    assert!(world.granted_letters.lock().unwrap().is_empty());
-    assert!(realm.item_texts.lock().unwrap().is_empty());
+    assert!(world.mail.granted_letters.lock().unwrap().is_empty());
+    assert!(realm.mail.item_texts.lock().unwrap().is_empty());
 }
 
 #[test]
@@ -3438,7 +3645,7 @@ fn a_letter_already_granted_refuses_a_second_copy_and_grants_no_second_letter() 
         .expect_err("a completed grant refuses a second click for good");
 
     assert_eq!(
-        *world.granted_letters.lock().unwrap(),
+        *world.mail.granted_letters.lock().unwrap(),
         vec![(GINGER, GINGERS_LETTER_TEXT_ID)],
         "one letter, not two"
     );
@@ -3451,14 +3658,14 @@ fn a_letter_already_granted_refuses_a_second_copy_and_grants_no_second_letter() 
 fn destroying_the_granted_item_does_not_reopen_a_second_grant() {
     let (_realm, world, _calls) = sharded_mailbox();
     mail::copy_letter(world.as_ref(), Some(GINGER), MAILBOX, 1).expect("the first copy completes");
-    world.granted_letters.lock().unwrap().clear(); // the Plain Letter is gone from the bags
+    world.mail.granted_letters.lock().unwrap().clear(); // the Plain Letter is gone from the bags
 
     let refusal = mail::copy_letter(world.as_ref(), Some(GINGER), MAILBOX, 1)
         .expect_err("GRANTED survives the item's destruction");
 
     assert!(matches!(refusal, mail::CopyLetterRefusal::Other(_)));
     assert!(
-        world.granted_letters.lock().unwrap().is_empty(),
+        world.mail.granted_letters.lock().unwrap().is_empty(),
         "no letter is minted for a mail that already used its one grant"
     );
 }
@@ -3469,21 +3676,22 @@ fn destroying_the_granted_item_does_not_reopen_a_second_grant() {
 #[test]
 fn retrying_after_an_interrupted_grant_still_grants_the_letter() {
     let (realm, world, _calls) = sharded_mailbox();
-    realm.mails.lock().unwrap()[0].1.check_flags |= lyracore_shared::mail::CHECK_MASK_COPIED;
+    realm.mail.mails.lock().unwrap()[0].1.check_flags |= lyracore_shared::mail::CHECK_MASK_COPIED;
     realm
+        .mail
         .item_texts
         .lock()
         .unwrap()
         .push((GINGERS_LETTER_TEXT_ID, "left it at the inn".to_string()));
     assert!(
-        world.granted_letters.lock().unwrap().is_empty(),
+        world.mail.granted_letters.lock().unwrap().is_empty(),
         "the fixture models a grant that never landed"
     );
 
     mail::copy_letter(world.as_ref(), Some(GINGER), MAILBOX, 1).expect("the retry completes");
 
     assert_eq!(
-        *world.granted_letters.lock().unwrap(),
+        *world.mail.granted_letters.lock().unwrap(),
         vec![(GINGER, GINGERS_LETTER_TEXT_ID)],
         "the retry must reach the Home Shard grant, not stop at the already-COPIED mail"
     );
@@ -3494,7 +3702,7 @@ fn the_copied_letters_text_is_readable_after_the_mail_is_deleted() {
     let (realm, world, _calls) = sharded_mailbox();
 
     mail::copy_letter(world.as_ref(), Some(GINGER), MAILBOX, 1).expect("the copy completes");
-    realm.mails.lock().unwrap().retain(|(_, m)| m.id != 1);
+    realm.mail.mails.lock().unwrap().retain(|(_, m)| m.id != 1);
 
     assert_eq!(
         mail::item_text(world.as_ref(), Some(GINGER), GINGERS_LETTER_TEXT_ID, 0).unwrap(),
@@ -3545,13 +3753,14 @@ fn a_letter_copy_over_the_wire_acks_made_permanent_ok() {
 
     drop(client);
     server.join().unwrap();
-    assert_eq!(store.granted_letters.lock().unwrap().len(), 1);
+    assert_eq!(store.mail.granted_letters.lock().unwrap().len(), 1);
 }
 
 #[test]
 fn a_letter_copy_into_a_full_bag_over_the_wire_answers_equip_error() {
     let store = seated_store();
     store
+        .mail
         .bags_full
         .store(true, std::sync::atomic::Ordering::Relaxed);
 
@@ -3594,9 +3803,10 @@ fn a_letter_copy_into_a_full_bag_over_the_wire_answers_equip_error() {
 
     drop(client);
     server.join().unwrap();
-    assert!(store.granted_letters.lock().unwrap().is_empty());
+    assert!(store.mail.granted_letters.lock().unwrap().is_empty());
     assert_eq!(
-        store.mails.lock().unwrap()[0].1.check_flags & lyracore_shared::mail::CHECK_MASK_COPIED,
+        store.mail.mails.lock().unwrap()[0].1.check_flags
+            & lyracore_shared::mail::CHECK_MASK_COPIED,
         0,
         "a refused copy leaves the mail uncopied"
     );
@@ -3609,7 +3819,7 @@ fn a_letter_copy_into_a_full_bag_over_the_wire_answers_equip_error() {
 fn item_text_query_refuses_a_caller_who_neither_owns_the_item_nor_the_mail() {
     let (realm, world, _calls) = sharded_mailbox();
     mail::copy_letter(world.as_ref(), Some(GINGER), MAILBOX, 1).expect("Ginger copies their own");
-    realm.mails.lock().unwrap().retain(|(_, m)| m.id != 1);
+    realm.mail.mails.lock().unwrap().retain(|(_, m)| m.id != 1);
 
     assert_eq!(
         mail::item_text(world.as_ref(), Some(TRIN), GINGERS_LETTER_TEXT_ID, 0).unwrap(),
@@ -3677,16 +3887,23 @@ fn card_renewal_letter(recipient: u64, delivery_delay_secs: u32) -> mail::HeldEs
     }
 }
 /// File `letter` on `shard` for `owner`, as the turn-in's transaction leaves it: unattested.
-fn hold_reward_letter(shard: &InMemoryStore, owner: u64, letter: mail::HeldEscrow) {
+fn hold_reward_letter(shard: &WorldFake, owner: u64, letter: mail::HeldEscrow) {
     shard
+        .mail
         .attested
         .lock()
         .unwrap()
         .push((letter.escrow_id, false));
-    shard.mail_escrows.lock().unwrap().push((owner, letter));
+    shard
+        .mail
+        .mail_escrows
+        .lock()
+        .unwrap()
+        .push((owner, letter));
 }
-fn reward_letters(plane: &InMemoryStore, recipient: u64) -> Vec<codec::MailView> {
+fn reward_letters(plane: &WorldFake, recipient: u64) -> Vec<codec::MailView> {
     plane
+        .mail
         .mails
         .lock()
         .unwrap()
@@ -3739,7 +3956,10 @@ fn a_reward_letter_held_on_the_home_shard_is_committed_on_realm_core_at_the_mail
         visible.iter().all(|m| m.sender_kind != 3),
         "and stays hidden until then"
     );
-    assert!(world.mail_escrows.lock().unwrap().is_empty(), "settled");
+    assert!(
+        world.mail.mail_escrows.lock().unwrap().is_empty(),
+        "settled"
+    );
     assert_eq!(
         escrow_steps(&calls),
         vec![
@@ -3754,11 +3974,15 @@ fn a_reward_letter_held_on_the_home_shard_is_committed_on_realm_core_at_the_mail
 fn a_reward_letter_whose_drive_died_after_the_commit_is_delivered_once() {
     let (realm, world, _instances, _calls) = sharded_send();
     hold_reward_letter(&world, GINGER, card_renewal_letter(GINGER, 0));
-    *world.mail_kill_at.lock().unwrap() = Some("mail_confirm_delivery".into());
+    *world.mail.mail_kill_at.lock().unwrap() = Some("mail_confirm_delivery".into());
     mail::open_mailbox(world.as_ref(), Some(GINGER), MAILBOX).expect("the gate opens");
-    assert_eq!(world.mail_escrows.lock().unwrap().len(), 1, "still held");
+    assert_eq!(
+        world.mail.mail_escrows.lock().unwrap().len(),
+        1,
+        "still held"
+    );
 
-    *world.mail_kill_at.lock().unwrap() = None;
+    *world.mail.mail_kill_at.lock().unwrap() = None;
     let visible =
         mail::open_mailbox(world.as_ref(), Some(GINGER), MAILBOX).expect("the gate opens");
 
@@ -3771,7 +3995,10 @@ fn a_reward_letter_whose_drive_died_after_the_commit_is_delivered_once() {
         1,
         "a Reward Letter with no delay is in the list at once"
     );
-    assert!(world.mail_escrows.lock().unwrap().is_empty(), "settled");
+    assert!(
+        world.mail.mail_escrows.lock().unwrap().is_empty(),
+        "settled"
+    );
 }
 
 #[test]
@@ -3784,7 +4011,10 @@ fn a_single_database_drives_a_reward_letter_on_its_own_database() {
     let letters = reward_letters(&store, GINGER);
     assert_eq!(letters.len(), 1, "{letters:?}");
     assert_card_renewal(&letters[0]);
-    assert!(store.mail_escrows.lock().unwrap().is_empty(), "settled");
+    assert!(
+        store.mail.mail_escrows.lock().unwrap().is_empty(),
+        "settled"
+    );
 }
 
 #[test]
@@ -3807,16 +4037,31 @@ fn both_planes_write_the_same_reward_letter() {
 #[test]
 fn a_reward_letter_held_at_world_entry_is_delivered_on_either_plane() {
     for sharded in [false, true] {
-        let realm = std::sync::Arc::new(InMemoryStore {
-            shard: "lyracore-realm".into(),
-            is_realm: true,
+        let realm = std::sync::Arc::new(WorldFake {
+            topology: TopologyState {
+                shard: "lyracore-realm".into(),
+                ..Default::default()
+            },
+            party: PartyState {
+                is_realm: true,
+                ..Default::default()
+            },
             ..Default::default()
         });
-        let home = std::sync::Arc::new(InMemoryStore {
-            shard: "world".into(),
-            login_entity: Some(warrior_entity()),
-            realm: sharded.then(|| realm.clone()),
-            ..tester_store(7)
+        let home = std::sync::Arc::new({
+            let base = tester_store(7);
+            WorldFake {
+                topology: TopologyState {
+                    shard: "world".into(),
+                    realm: sharded.then(|| realm.clone()),
+                    ..base.topology
+                },
+                session: SessionState {
+                    login_entity: Some(warrior_entity()),
+                    ..base.session
+                },
+                ..base
+            }
         });
         hold_reward_letter(&home, 1, card_renewal_letter(1, 86_400));
 
@@ -3829,7 +4074,7 @@ fn a_reward_letter_held_at_world_entry_is_delivered_on_either_plane() {
         assert_eq!(letters.len(), 1, "sharded {sharded}: {letters:?}");
         assert_card_renewal(&letters[0]);
         assert!(
-            home.mail_escrows.lock().unwrap().is_empty(),
+            home.mail.mail_escrows.lock().unwrap().is_empty(),
             "sharded {sharded}: settled"
         );
     }
@@ -3838,15 +4083,21 @@ fn a_reward_letter_held_at_world_entry_is_delivered_on_either_plane() {
 #[test]
 fn a_reward_letter_a_turn_in_files_is_delivered_on_either_plane() {
     for sharded in [false, true] {
-        let realm = std::sync::Arc::new(InMemoryStore {
-            shard: "lyracore-realm".into(),
-            is_realm: true,
+        let realm = std::sync::Arc::new(WorldFake {
+            topology: TopologyState {
+                shard: "lyracore-realm".into(),
+                ..Default::default()
+            },
+            party: PartyState {
+                is_realm: true,
+                ..Default::default()
+            },
             ..Default::default()
         });
         let mut home = quest_store();
-        home.realm = sharded.then(|| realm.clone());
-        home.quest_details = vec![detail_view(3645, "Membership Card Renewal")];
-        home.turn_in_reward_letter = Some(card_renewal_letter(1, 86_400));
+        home.topology.realm = sharded.then(|| realm.clone());
+        home.quest.quest_details = vec![detail_view(3645, "Membership Card Renewal")];
+        home.quest.turn_in_reward_letter = Some(card_renewal_letter(1, 86_400));
         let home = std::sync::Arc::new(home);
 
         let (mut client, mut c_enc, mut c_dec, server) = enter_world(home.clone(), 1);
@@ -3869,7 +4120,7 @@ fn a_reward_letter_a_turn_in_files_is_delivered_on_either_plane() {
         assert_eq!(letters.len(), 1, "sharded {sharded}: {letters:?}");
         assert_card_renewal(&letters[0]);
         assert!(
-            home.mail_escrows.lock().unwrap().is_empty(),
+            home.mail.mail_escrows.lock().unwrap().is_empty(),
             "sharded {sharded}: settled"
         );
     }

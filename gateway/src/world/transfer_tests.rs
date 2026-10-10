@@ -1,4 +1,4 @@
-//! Cross-database Transfer tests through the shared InMemoryStore topology.
+//! Cross-database Transfer tests through the shared WorldFake topology.
 
 use super::shard_routing_tests::{drive_routed_session, sharded_stores, ShardCallLog};
 use super::*;
@@ -42,12 +42,18 @@ fn xstore(
     db: std::sync::Arc<FakeShardDb>,
     calls: ShardCallLog,
     kill_at: Option<&str>,
-) -> std::sync::Arc<InMemoryStore> {
-    std::sync::Arc::new(InMemoryStore {
-        shard: shard.into(),
-        calls,
-        xdb: Some(db),
-        kill_at: kill_at.map(|s| s.to_string()),
+) -> std::sync::Arc<WorldFake> {
+    std::sync::Arc::new(WorldFake {
+        topology: TopologyState {
+            shard: shard.into(),
+            calls,
+            ..Default::default()
+        },
+        transfer: TransferState {
+            xdb: Some(db),
+            kill_at: kill_at.map(|s| s.to_string()),
+            ..Default::default()
+        },
         ..Default::default()
     })
 }
@@ -61,8 +67,8 @@ const XGUID: u64 = 1;
 fn xdb_pair(
     kill_at: Option<&str>,
 ) -> (
-    std::sync::Arc<InMemoryStore>,
-    std::sync::Arc<InMemoryStore>,
+    std::sync::Arc<WorldFake>,
+    std::sync::Arc<WorldFake>,
     std::sync::Arc<FakeShardDb>,
     std::sync::Arc<FakeShardDb>,
     ShardCallLog,
@@ -194,7 +200,8 @@ fn a_character_moves_whole_between_two_databases_with_its_rows() {
 fn an_escrow_row_that_lags_the_reducer_reply_is_waited_for_not_refused() {
     no_hang(30, || {
         let (src, dst, src_db, dst_db, _) = xdb_pair(None);
-        src.escrow_reads_before_visible
+        src.transfer
+            .escrow_reads_before_visible
             .store(3, std::sync::atomic::Ordering::SeqCst);
         super::transfer::settle_transfer(src.as_ref(), dst.as_ref(), XGUID)
             .expect("a late escrow row is lag, not a missing escrow");
@@ -203,7 +210,8 @@ fn an_escrow_row_that_lags_the_reducer_reply_is_waited_for_not_refused() {
             "the character must arrive whole once the row shows up"
         );
         assert_eq!(
-            src.escrow_reads_before_visible
+            src.transfer
+                .escrow_reads_before_visible
                 .load(std::sync::atomic::Ordering::SeqCst),
             0,
             "the driver must have read past every lagging answer"
@@ -227,7 +235,7 @@ fn a_completed_transfer_publishes_the_destination_to_the_realm_core_index() {
         super::transfer::settle_transfer(src.as_ref(), dst.as_ref(), XGUID)
             .expect("transfer completes");
         assert_eq!(
-            *src.realm_index.lock().unwrap(),
+            *src.transfer.realm_index.lock().unwrap(),
             vec![(XGUID, 36, 7)],
             "the drive settled the character on map 36 / instance 7 and told realm-core nothing. \
              Without this write the index is only ever corrected by the login self-heal, so every \
@@ -258,7 +266,7 @@ fn a_resumed_transfer_publishes_the_escrow_destination_not_the_callers_plan() {
         super::transfer::run_transfer_injected(src.as_ref(), dst.as_ref(), &stale, None)
             .expect("the drive completes against the escrow on disk");
         assert_eq!(
-            *src.realm_index.lock().unwrap(),
+            *src.transfer.realm_index.lock().unwrap(),
             vec![(XGUID, 36, 7)],
             "the index was published from the DRIVER'S PLAN instead of the escrow out-row. The plan \
              is whatever the caller happened to hand in; the escrow is what `finish_transfer` just \
@@ -285,11 +293,17 @@ fn a_transfer_whose_index_publish_fails_does_not_report_success() {
             },
         );
         let dst_db = FakeShardDb::empty();
-        let src = std::sync::Arc::new(InMemoryStore {
-            shard: "world".into(),
-            calls: calls.clone(),
-            xdb: Some(src_db.clone()),
-            publish_error: Some("realm-core database lyracore-realm is not connected".into()),
+        let src = std::sync::Arc::new(WorldFake {
+            topology: TopologyState {
+                shard: "world".into(),
+                calls: calls.clone(),
+                ..Default::default()
+            },
+            transfer: TransferState {
+                xdb: Some(src_db.clone()),
+                publish_error: Some("realm-core database lyracore-realm is not connected".into()),
+                ..Default::default()
+            },
             ..Default::default()
         });
         let dst = xstore("instances", dst_db.clone(), calls.clone(), None);
@@ -825,16 +839,22 @@ fn a_failed_transfer_fails_the_login_instead_of_entering_the_world_anyway() {
     // only refusing is honest — and entering anyway is how a character ends up live on the shard
     // that is about to have its copy destroyed.
     let (store, _) = sharded_stores();
-    let failing = std::sync::Arc::new(InMemoryStore {
-        shard: "world".into(),
-        username: "TESTER".into(),
-        session: Some(WorldSession {
-            account_id: 7,
-            session_key: K,
-        }),
+    let failing = std::sync::Arc::new(WorldFake {
+        topology: TopologyState {
+            shard: "world".into(),
+            settle_error: Some("instances shard unreachable".into()),
+            ..Default::default()
+        },
+        session: SessionState {
+            username: "TESTER".into(),
+            session: Some(WorldSession {
+                account_id: 7,
+                session_key: K,
+            }),
+            login_entity: Some(warrior_entity()),
+            ..Default::default()
+        },
         characters: store.characters.clone(),
-        login_entity: Some(warrior_entity()),
-        settle_error: Some("instances shard unreachable".into()),
         ..Default::default()
     });
     let (mut client, server_end) = world_session_socket_pair();
@@ -862,12 +882,13 @@ fn entering_the_world_binds_this_accounts_identity_on_the_shard_it_landed_on() {
     // database the logon tier never touched.
     let (store, calls) = sharded_stores();
     let home = store
+        .topology
         .home
         .clone()
         .expect("the fixture routes to a home shard");
     let _ = drive_routed_session(store, calls.clone());
     assert_eq!(
-        *home.bound_sessions.lock().unwrap(),
+        *home.topology.bound_sessions.lock().unwrap(),
         vec![7],
         "the home shard must have this account's identity bound before player_login runs"
     );
@@ -965,7 +986,7 @@ fn bot_pair(
     dest_map: u32,
     dest_instance: u64,
 ) -> (
-    std::sync::Arc<InMemoryStore>,
+    std::sync::Arc<WorldFake>,
     std::sync::Arc<FakeShardDb>,
     std::sync::Arc<FakeShardDb>,
     ShardCallLog,
@@ -982,22 +1003,28 @@ fn bot_pair(
     let dst_db = FakeShardDb::empty();
     let dst = xstore("instances", dst_db.clone(), calls.clone(), None);
     let source_partition = if dest_map == 0 { (36, 7) } else { (0, 0) };
-    let src = std::sync::Arc::new(InMemoryStore {
-        shard: "world".into(),
-        calls: calls.clone(),
-        xdb: Some(src_db.clone()),
-        location_shard: Some((dest_map, dest_instance, dst)),
-        realm_partition: std::sync::Mutex::new(Some(super::party::RealmCharacterPartition {
-            map_id: source_partition.0,
-            instance_id: source_partition.1,
-            revision: 3,
-            transfer_pending: false,
-            pending_destination_map: 0,
-            pending_destination_instance: 0,
-            bot_source_identity: spacetimedb_sdk::Identity::ZERO,
-            bot_transfer_intent_id: 0,
-            bot_controller_generation: 0,
-        })),
+    let src = std::sync::Arc::new(WorldFake {
+        topology: TopologyState {
+            shard: "world".into(),
+            calls: calls.clone(),
+            location_shard: Some((dest_map, dest_instance, dst)),
+            ..Default::default()
+        },
+        transfer: TransferState {
+            xdb: Some(src_db.clone()),
+            realm_partition: std::sync::Mutex::new(Some(super::party::RealmCharacterPartition {
+                map_id: source_partition.0,
+                instance_id: source_partition.1,
+                revision: 3,
+                transfer_pending: false,
+                pending_destination_map: 0,
+                pending_destination_instance: 0,
+                bot_source_identity: spacetimedb_sdk::Identity::ZERO,
+                bot_transfer_intent_id: 0,
+                bot_controller_generation: 0,
+            })),
+            ..Default::default()
+        },
         ..Default::default()
     });
     (src, src_db, dst_db, calls)
@@ -1036,7 +1063,7 @@ fn a_durable_intent_resumes_from_destination_witnesses_after_source_finish() {
     let first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         super::transfer::run_transfer_injected_for_intent(
             src.as_ref(),
-            src.location_shard.as_ref().unwrap().2.as_ref(),
+            src.topology.location_shard.as_ref().unwrap().2.as_ref(),
             &plan,
             Some("finish_transfer"),
             Some((&intent, 701)),
@@ -1135,7 +1162,7 @@ fn a_bot_abort_at_every_transfer_step_recovers_from_durable_witnesses() {
 fn the_source_instance_lease_survives_a_leave_and_rejoin_during_escrow() {
     let (src, src_db, dst_db, _calls) = bot_pair(36, 7);
     lk(&src_db.instance_partitions).insert(7, (36, 77));
-    lk(&src.mirror).push(super::party::GroupRoster {
+    lk(&src.party.mirror).push(super::party::GroupRoster {
         group_id: 88,
         roster_revision: 3,
         leader_guid: BOT_GUID,
@@ -1172,21 +1199,27 @@ fn a_same_shard_intent_resumes_after_the_realm_locator_settled() {
             payload: "gear+spells".into(),
         },
     );
-    let holder = InMemoryStore {
-        shard: "instances".into(),
-        calls: calls.clone(),
-        xdb: Some(db),
-        realm_partition: std::sync::Mutex::new(Some(super::party::RealmCharacterPartition {
-            map_id: 0,
-            instance_id: 0,
-            revision: 3,
-            transfer_pending: false,
-            pending_destination_map: 0,
-            pending_destination_instance: 0,
-            bot_source_identity: spacetimedb_sdk::Identity::ZERO,
-            bot_transfer_intent_id: 0,
-            bot_controller_generation: 0,
-        })),
+    let holder = WorldFake {
+        topology: TopologyState {
+            shard: "instances".into(),
+            calls: calls.clone(),
+            ..Default::default()
+        },
+        transfer: TransferState {
+            xdb: Some(db),
+            realm_partition: std::sync::Mutex::new(Some(super::party::RealmCharacterPartition {
+                map_id: 0,
+                instance_id: 0,
+                revision: 3,
+                transfer_pending: false,
+                pending_destination_map: 0,
+                pending_destination_instance: 0,
+                bot_source_identity: spacetimedb_sdk::Identity::ZERO,
+                bot_transfer_intent_id: 0,
+                bot_controller_generation: 0,
+            })),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let intent = bot_intent();
@@ -1237,11 +1270,17 @@ fn an_old_bound_worker_cannot_mark_a_newer_realm_locator_pending() {
         bot_transfer_intent_id: 93,
         bot_controller_generation: 6,
     };
-    let holder = InMemoryStore {
-        shard: "world".into(),
-        calls: calls.clone(),
-        xdb: Some(db),
-        realm_partition: std::sync::Mutex::new(Some(newer)),
+    let holder = WorldFake {
+        topology: TopologyState {
+            shard: "world".into(),
+            calls: calls.clone(),
+            ..Default::default()
+        },
+        transfer: TransferState {
+            xdb: Some(db),
+            realm_partition: std::sync::Mutex::new(Some(newer)),
+            ..Default::default()
+        },
         ..Default::default()
     };
 
@@ -1251,7 +1290,10 @@ fn an_old_bound_worker_cannot_mark_a_newer_realm_locator_pending() {
         refusal.to_string().contains("locator changed"),
         "{refusal:#}"
     );
-    assert_eq!(*holder.realm_partition.lock().unwrap(), Some(newer));
+    assert_eq!(
+        *holder.transfer.realm_partition.lock().unwrap(),
+        Some(newer)
+    );
     assert!(
         !calls
             .lock()
@@ -1286,11 +1328,17 @@ fn a_human_arrival_cannot_settle_a_later_same_destination_crossing() {
         bot_transfer_intent_id: 0,
         bot_controller_generation: 0,
     };
-    let destination = InMemoryStore {
-        shard: "instances".into(),
-        calls,
-        xdb: Some(db.clone()),
-        realm_partition: std::sync::Mutex::new(Some(later)),
+    let destination = WorldFake {
+        topology: TopologyState {
+            shard: "instances".into(),
+            calls,
+            ..Default::default()
+        },
+        transfer: TransferState {
+            xdb: Some(db.clone()),
+            realm_partition: std::sync::Mutex::new(Some(later)),
+            ..Default::default()
+        },
         ..Default::default()
     };
 
@@ -1302,7 +1350,10 @@ fn a_human_arrival_cannot_settle_a_later_same_destination_crossing() {
             .contains("pending Realm Transfer phase changed"),
         "{refusal:#}"
     );
-    assert_eq!(*destination.realm_partition.lock().unwrap(), Some(later));
+    assert_eq!(
+        *destination.transfer.realm_partition.lock().unwrap(),
+        Some(later)
+    );
     assert_eq!(lk(&db.in_rows).get(&BOT_GUID), Some(&BOT_GUID));
 
     lk(&db.arrival_sources).insert(BOT_GUID, (0, 0, 3));
@@ -1310,6 +1361,7 @@ fn a_human_arrival_cannot_settle_a_later_same_destination_crossing() {
         .expect("the arrival carrying the exact later predecessor settles and releases");
     assert_eq!(
         destination
+            .transfer
             .realm_partition
             .lock()
             .unwrap()
@@ -1334,10 +1386,16 @@ fn an_old_human_worker_cannot_release_a_newer_arrival_fence() {
     );
     lk(&db.in_rows).insert(BOT_GUID, BOT_GUID);
     lk(&db.arrival_sources).insert(BOT_GUID, (0, 0, 3));
-    let destination = InMemoryStore {
-        shard: "instances".into(),
-        calls,
-        xdb: Some(db.clone()),
+    let destination = WorldFake {
+        topology: TopologyState {
+            shard: "instances".into(),
+            calls,
+            ..Default::default()
+        },
+        transfer: TransferState {
+            xdb: Some(db.clone()),
+            ..Default::default()
+        },
         ..Default::default()
     };
 
@@ -1403,9 +1461,15 @@ fn a_ready_local_intent_releases_its_exact_arrival_fence() {
             intent.created_micros,
         ),
     );
-    let holder = InMemoryStore {
-        shard: "instances".into(),
-        xdb: Some(db.clone()),
+    let holder = WorldFake {
+        topology: TopologyState {
+            shard: "instances".into(),
+            ..Default::default()
+        },
+        transfer: TransferState {
+            xdb: Some(db.clone()),
+            ..Default::default()
+        },
         ..Default::default()
     };
 
@@ -1427,9 +1491,15 @@ fn a_ready_intent_keeps_retrying_when_the_local_character_is_elsewhere() {
             payload: "gear+spells".into(),
         },
     );
-    let holder = InMemoryStore {
-        shard: "world".into(),
-        xdb: Some(db.clone()),
+    let holder = WorldFake {
+        topology: TopologyState {
+            shard: "world".into(),
+            ..Default::default()
+        },
+        transfer: TransferState {
+            xdb: Some(db.clone()),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let ready = super::transfer::BotTransferIntent {
@@ -1441,7 +1511,7 @@ fn a_ready_intent_keeps_retrying_when_the_local_character_is_elsewhere() {
         .expect_err("an unrelated local Character cannot prove the destination released");
 
     assert!(error.to_string().contains("cannot resolve its destination"));
-    assert!(holder.calls.lock().unwrap().is_empty());
+    assert!(holder.topology.calls.lock().unwrap().is_empty());
     assert_eq!(db.get(BOT_GUID).unwrap().map_id, 0);
 }
 
@@ -1449,7 +1519,7 @@ fn a_ready_intent_keeps_retrying_when_the_local_character_is_elsewhere() {
 fn an_unbound_intent_waits_for_configured_realm_core() {
     let (src, src_db, dst_db, calls) = bot_pair(36, 7);
     let mut holder = std::sync::Arc::try_unwrap(src).ok().unwrap();
-    holder.transfer_realm_error = Some("configured Realm-core is unavailable".into());
+    holder.topology.transfer_realm_error = Some("configured Realm-core is unavailable".into());
     let intent = super::transfer::BotTransferIntent {
         source_locator_revision: 0,
         ..bot_intent()
@@ -1687,10 +1757,16 @@ fn a_destination_this_shard_already_serves_is_a_completed_crossing() {
 fn the_bots_arrival_fence_survives_a_party_mirror_failure_and_retry() {
     use super::party_tests::{character, GINGER};
     let calls: ShardCallLog = Default::default();
-    let realm = std::sync::Arc::new(InMemoryStore {
-        shard: "lyracore-realm".into(),
-        calls: calls.clone(),
-        is_realm: true,
+    let realm = std::sync::Arc::new(WorldFake {
+        topology: TopologyState {
+            shard: "lyracore-realm".into(),
+            calls: calls.clone(),
+            ..Default::default()
+        },
+        party: PartyState {
+            is_realm: true,
+            ..Default::default()
+        },
         ..Default::default()
     });
     let src_db = FakeShardDb::with_character(
@@ -1702,38 +1778,56 @@ fn the_bots_arrival_fence_survives_a_party_mirror_failure_and_retry() {
         },
     );
     let dst_db = FakeShardDb::empty();
-    let instances = std::sync::Arc::new(InMemoryStore {
-        shard: "instances".into(),
-        calls: calls.clone(),
-        xdb: Some(dst_db.clone()),
-        realm: Some(realm.clone()),
+    let instances = std::sync::Arc::new(WorldFake {
+        topology: TopologyState {
+            shard: "instances".into(),
+            calls: calls.clone(),
+            realm: Some(realm.clone()),
+            ..Default::default()
+        },
+        transfer: TransferState {
+            xdb: Some(dst_db.clone()),
+            ..Default::default()
+        },
         ..Default::default()
     });
-    let world = std::sync::Arc::new(InMemoryStore {
-        shard: "world".into(),
-        calls: calls.clone(),
-        xdb: Some(src_db.clone()),
-        realm: Some(realm.clone()),
-        location_shard: Some((36, 7, instances.clone())),
-        realm_partition: std::sync::Mutex::new(Some(super::party::RealmCharacterPartition {
-            map_id: 0,
-            instance_id: 0,
-            revision: 3,
-            transfer_pending: false,
-            pending_destination_map: 0,
-            pending_destination_instance: 0,
-            bot_source_identity: spacetimedb_sdk::Identity::ZERO,
-            bot_transfer_intent_id: 0,
-            bot_controller_generation: 0,
-        })),
+    let world = std::sync::Arc::new(WorldFake {
+        topology: TopologyState {
+            shard: "world".into(),
+            calls: calls.clone(),
+            realm: Some(realm.clone()),
+            location_shard: Some((36, 7, instances.clone())),
+            ..Default::default()
+        },
+        transfer: TransferState {
+            xdb: Some(src_db.clone()),
+            realm_partition: std::sync::Mutex::new(Some(super::party::RealmCharacterPartition {
+                map_id: 0,
+                instance_id: 0,
+                revision: 3,
+                transfer_pending: false,
+                pending_destination_map: 0,
+                pending_destination_instance: 0,
+                bot_source_identity: spacetimedb_sdk::Identity::ZERO,
+                bot_transfer_intent_id: 0,
+                bot_controller_generation: 0,
+            })),
+            ..Default::default()
+        },
         characters: vec![character(GINGER, "Ginger"), character(BOT_GUID, "Botty")],
-        // The production shape of a playerbot: a live entity that never logged in.
-        live_guids: vec![GINGER, BOT_GUID],
-        offline_guids: vec![BOT_GUID],
+        session: SessionState {
+            // The production shape of a playerbot: a live entity that never logged in.
+            live_guids: vec![GINGER, BOT_GUID],
+            ..Default::default()
+        },
+        social: SocialState {
+            offline_guids: vec![BOT_GUID],
+            ..Default::default()
+        },
         ..Default::default()
     });
     for shard in [&world, &instances] {
-        *shard.peers.lock().unwrap() = vec![world.clone(), instances.clone()];
+        *shard.topology.peers.lock().unwrap() = vec![world.clone(), instances.clone()];
     }
     super::party::run(
         world.as_ref(),
@@ -1774,6 +1868,7 @@ fn the_bots_arrival_fence_survives_a_party_mirror_failure_and_retry() {
         "the source is finished while the destination arrival remains fenced"
     );
     instances
+        .party
         .mirror_failures
         .store(1, std::sync::atomic::Ordering::SeqCst);
     let first = super::transfer::run_bot_transfer_intent(world.as_ref(), &intent, 702)

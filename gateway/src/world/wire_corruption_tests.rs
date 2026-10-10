@@ -1,7 +1,7 @@
 //! "SMSG_COMPRESSED_MOVES corrupts at crowd scale" — regression pins.
 //!
 //! A child module of `world::tests` for the same reason as its siblings — it reaches
-//! `InMemoryStore`/`client_handshake`/`world_handshake` and drives the ACTUAL `spawn_writer` with a
+//! `WorldFake`/`client_handshake`/`world_handshake` and drives the ACTUAL `spawn_writer` with a
 //! REAL `wow_srp` cipher pair, without widening anything.
 
 use super::*;
@@ -41,12 +41,15 @@ use super::*;
 /// in order. A stream desync from a wrong size field would manifest here as either a decode `Err`
 /// or a frame decoding to the wrong `ServerOpcodeMessage` variant.
 fn movement_burst_over_a_real_cipher(n: usize) {
-    let store = std::sync::Arc::new(InMemoryStore {
-        username: "TESTER".into(),
-        session: Some(WorldSession {
-            account_id: 42,
-            session_key: K,
-        }),
+    let store = std::sync::Arc::new(WorldFake {
+        session: SessionState {
+            username: "TESTER".into(),
+            session: Some(WorldSession {
+                account_id: 42,
+                session_key: K,
+            }),
+            ..Default::default()
+        },
         ..Default::default()
     });
     let (mut client, server_end) = world_session_socket_pair();
@@ -310,12 +313,15 @@ fn writer_trace_dump_writes_a_file_with_the_traced_frames() {
 
 #[test]
 fn oversized_raw_body_ends_the_session_instead_of_wrapping_the_size_field() {
-    let store = std::sync::Arc::new(InMemoryStore {
-        username: "TESTER".into(),
-        session: Some(WorldSession {
-            account_id: 42,
-            session_key: K,
-        }),
+    let store = std::sync::Arc::new(WorldFake {
+        session: SessionState {
+            username: "TESTER".into(),
+            session: Some(WorldSession {
+                account_id: 42,
+                session_key: K,
+            }),
+            ..Default::default()
+        },
         ..Default::default()
     });
     let (mut client, server_end) = world_session_socket_pair();
@@ -408,12 +414,15 @@ fn oversized_raw_body_ends_the_session_instead_of_wrapping_the_size_field() {
 /// here as a decode `Err` or a wrong-variant decode — precisely the crash shape this file guards
 /// against, but attributable to the SPELL/COMBAT plane instead of movement.
 fn combat_cast_burst_over_a_real_cipher(n: usize) {
-    let store = std::sync::Arc::new(InMemoryStore {
-        username: "TESTER".into(),
-        session: Some(WorldSession {
-            account_id: 42,
-            session_key: K,
-        }),
+    let store = std::sync::Arc::new(WorldFake {
+        session: SessionState {
+            username: "TESTER".into(),
+            session: Some(WorldSession {
+                account_id: 42,
+                session_key: K,
+            }),
+            ..Default::default()
+        },
         ..Default::default()
     });
     let (mut client, server_end) = world_session_socket_pair();

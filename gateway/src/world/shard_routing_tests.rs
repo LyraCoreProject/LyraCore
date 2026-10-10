@@ -1,11 +1,11 @@
-//! Multi-shard routing tests through the shared InMemoryStore topology.
+//! Multi-shard routing tests through the shared WorldFake topology.
 
 use super::*;
 
 // ===========================================================================================
 //  Cross-database Transfer and Shard routing
 //  Requirement: reducer calls and subscriptions never target a shard other than the player's home
-//  shard. The `InMemoryStore` pair below stands for two DATABASES sharing one ordered call log, so
+//  shard. The `WorldFake` pair below stands for two DATABASES sharing one ordered call log, so
 //  a test can read off exactly which database served every player-scoped call of a whole live
 //  session.
 // ===========================================================================================
@@ -15,7 +15,7 @@ pub(super) type ShardCallLog = std::sync::Arc<std::sync::Mutex<Vec<(String, Stri
 /// A two-database topology: `world` (the default handle the listener hands every session — where
 /// accounts, sessions, and the character list live) and `instances` (the shard that owns this
 /// character's location, i.e. what `home_shard` resolves to). Both write to one shared call log.
-pub(super) fn sharded_stores() -> (std::sync::Arc<InMemoryStore>, ShardCallLog) {
+pub(super) fn sharded_stores() -> (std::sync::Arc<WorldFake>, ShardCallLog) {
     sharded_stores_with_home_entity(true)
 }
 
@@ -24,28 +24,44 @@ pub(super) fn sharded_stores() -> (std::sync::Arc<InMemoryStore>, ShardCallLog) 
 /// sessions remain in-world and use the default constructor above.
 fn sharded_stores_with_home_entity(
     home_entity_in_world: bool,
-) -> (std::sync::Arc<InMemoryStore>, ShardCallLog) {
+) -> (std::sync::Arc<WorldFake>, ShardCallLog) {
     let calls: ShardCallLog = Default::default();
     // The character's post-world-port entity, for the re-entry test below.
     let mut ported = warrior_entity();
     ported.map_id = 1;
-    let home = std::sync::Arc::new(InMemoryStore {
-        entity_in_world: home_entity_in_world,
-        shard: "instances".into(),
-        calls: calls.clone(),
-        login_entity: Some(warrior_entity()),
-        auction_interaction: Some(imported_auction_interaction()),
-        worldport_entity: Some(ported),
+    let home = std::sync::Arc::new(WorldFake {
+        session: SessionState {
+            entity_in_world: home_entity_in_world,
+            login_entity: Some(warrior_entity()),
+            worldport_entity: Some(ported),
+            ..Default::default()
+        },
+        topology: TopologyState {
+            shard: "instances".into(),
+            calls: calls.clone(),
+            ..Default::default()
+        },
+        auction: AuctionState {
+            auction_interaction: Some(imported_auction_interaction()),
+        },
         ..Default::default()
     });
-    let world = std::sync::Arc::new(InMemoryStore {
-        shard: "world".into(),
-        calls: calls.clone(),
-        username: "TESTER".into(),
-        session: Some(WorldSession {
-            account_id: 7,
-            session_key: K,
-        }),
+    let world = std::sync::Arc::new(WorldFake {
+        topology: TopologyState {
+            shard: "world".into(),
+            calls: calls.clone(),
+            home: Some(home),
+            ..Default::default()
+        },
+        session: SessionState {
+            username: "TESTER".into(),
+            session: Some(WorldSession {
+                account_id: 7,
+                session_key: K,
+            }),
+            login_entity: Some(warrior_entity()),
+            ..Default::default()
+        },
         characters: vec![codec::CharacterView {
             guid: 1,
             name: "Tester".into(),
@@ -54,8 +70,6 @@ fn sharded_stores_with_home_entity(
             level: 1,
             ..Default::default()
         }],
-        login_entity: Some(warrior_entity()),
-        home: Some(home),
         ..Default::default()
     });
     (world, calls)
@@ -112,7 +126,7 @@ fn heartbeat(timestamp: u32) -> wow_world_messages::vanilla::MSG_MOVE_HEARTBEAT_
 /// Drive a full session (char-select → login → movement → an attack → disconnect) and return the
 /// ordered `(shard, call)` log.
 pub(super) fn drive_routed_session(
-    store: std::sync::Arc<InMemoryStore>,
+    store: std::sync::Arc<WorldFake>,
     calls: ShardCallLog,
 ) -> Vec<(String, String)> {
     let (mut client, server_end) = world_session_socket_pair();
@@ -193,18 +207,24 @@ fn a_single_entry_shard_map_never_routes_and_keeps_every_call_on_the_one_databas
     // (default/unconfigured) shard map always answers — the session never swaps handles, so the
     // whole flow is served by the database the listener handed it, byte-identically to before.
     let (store, calls) = sharded_stores();
-    let single = std::sync::Arc::new(InMemoryStore {
-        entity_in_world: true,
-        shard: "world".into(),
-        calls: calls.clone(),
-        username: "TESTER".into(),
-        session: Some(WorldSession {
-            account_id: 7,
-            session_key: K,
-        }),
+    let single = std::sync::Arc::new(WorldFake {
+        session: SessionState {
+            entity_in_world: true,
+            username: "TESTER".into(),
+            session: Some(WorldSession {
+                account_id: 7,
+                session_key: K,
+            }),
+            login_entity: Some(warrior_entity()),
+            ..Default::default()
+        },
+        topology: TopologyState {
+            shard: "world".into(),
+            calls: calls.clone(),
+            home: None, // ← a single-entry shard map: "you are already on the right shard"
+            ..Default::default()
+        },
         characters: store.characters.clone(),
-        login_entity: Some(warrior_entity()),
-        home: None, // ← a single-entry shard map: "you are already on the right shard"
         ..Default::default()
     });
     let log = drive_routed_session(single, calls);
@@ -241,31 +261,52 @@ fn a_routing_flip_re_routes_the_next_entrant_and_leaves_the_resident_alone() {
     //      Nothing moves a live session.
     let calls: ShardCallLog = Default::default();
     let resolutions: std::sync::Arc<std::sync::atomic::AtomicUsize> = Default::default();
-    let instances = std::sync::Arc::new(InMemoryStore {
-        entity_in_world: true,
-        shard: "instances".into(),
-        calls: calls.clone(),
-        home_shard_calls: resolutions.clone(),
-        login_entity: Some(warrior_entity()),
+    let instances = std::sync::Arc::new(WorldFake {
+        session: SessionState {
+            entity_in_world: true,
+            login_entity: Some(warrior_entity()),
+            ..Default::default()
+        },
+        topology: TopologyState {
+            shard: "instances".into(),
+            calls: calls.clone(),
+            home_shard_calls: resolutions.clone(),
+            ..Default::default()
+        },
         ..Default::default()
     });
-    let pool_b = std::sync::Arc::new(InMemoryStore {
-        entity_in_world: true,
-        shard: "pool-b".into(),
-        calls: calls.clone(),
-        home_shard_calls: resolutions.clone(),
-        login_entity: Some(warrior_entity()),
+    let pool_b = std::sync::Arc::new(WorldFake {
+        session: SessionState {
+            entity_in_world: true,
+            login_entity: Some(warrior_entity()),
+            ..Default::default()
+        },
+        topology: TopologyState {
+            shard: "pool-b".into(),
+            calls: calls.clone(),
+            home_shard_calls: resolutions.clone(),
+            ..Default::default()
+        },
         ..Default::default()
     });
-    let world = std::sync::Arc::new(InMemoryStore {
-        shard: "world".into(),
-        calls: calls.clone(),
-        home_shard_calls: resolutions.clone(),
-        username: "TESTER".into(),
-        session: Some(WorldSession {
-            account_id: 7,
-            session_key: K,
-        }),
+    let world = std::sync::Arc::new(WorldFake {
+        topology: TopologyState {
+            shard: "world".into(),
+            calls: calls.clone(),
+            home_shard_calls: resolutions.clone(),
+            home: Some(instances),
+            home_after_flip: Some(pool_b), // the routing flips between the two sessions
+            ..Default::default()
+        },
+        session: SessionState {
+            username: "TESTER".into(),
+            session: Some(WorldSession {
+                account_id: 7,
+                session_key: K,
+            }),
+            login_entity: Some(warrior_entity()),
+            ..Default::default()
+        },
         characters: vec![codec::CharacterView {
             guid: 1,
             name: "Tester".into(),
@@ -274,9 +315,6 @@ fn a_routing_flip_re_routes_the_next_entrant_and_leaves_the_resident_alone() {
             level: 1,
             ..Default::default()
         }],
-        login_entity: Some(warrior_entity()),
-        home: Some(instances),
-        home_after_flip: Some(pool_b), // the routing flips between the two sessions
         ..Default::default()
     });
 
@@ -378,22 +416,39 @@ fn a_spurious_worldport_ack_is_ignored_on_a_session_pinned_off_the_default_shard
     // The gate reads the live entity through the handler's `store`, which `RoutedStore` has
     // already routed home. If either stops holding, the stray ack re-runs the world entry.
     let calls: ShardCallLog = Default::default();
-    let home = std::sync::Arc::new(InMemoryStore {
-        shard: "instances".into(),
-        calls: calls.clone(),
-        login_entity: Some(warrior_entity()),
-        // The live entity IS in the world on the home shard — the ack is spurious.
-        entity_in_world: true,
+    let home = std::sync::Arc::new(WorldFake {
+        topology: TopologyState {
+            shard: "instances".into(),
+            calls: calls.clone(),
+            ..Default::default()
+        },
+        session: SessionState {
+            login_entity: Some(warrior_entity()),
+            // The live entity IS in the world on the home shard — the ack is spurious.
+            entity_in_world: true,
+            ..Default::default()
+        },
         ..Default::default()
     });
-    let world = std::sync::Arc::new(InMemoryStore {
-        shard: "world".into(),
-        calls: calls.clone(),
-        username: "TESTER".into(),
-        session: Some(WorldSession {
-            account_id: 7,
-            session_key: K,
-        }),
+    let world = std::sync::Arc::new(WorldFake {
+        topology: TopologyState {
+            shard: "world".into(),
+            calls: calls.clone(),
+            home: Some(home.clone()),
+            ..Default::default()
+        },
+        session: SessionState {
+            username: "TESTER".into(),
+            session: Some(WorldSession {
+                account_id: 7,
+                session_key: K,
+            }),
+            login_entity: Some(warrior_entity()),
+            // The default handle has NO entity for this guid (it lives on `instances`) — a
+            // default-shard read here would wrongly answer "absent" and re-enter.
+            entity_in_world: false,
+            ..Default::default()
+        },
         characters: vec![codec::CharacterView {
             guid: 1,
             name: "Tester".into(),
@@ -402,11 +457,6 @@ fn a_spurious_worldport_ack_is_ignored_on_a_session_pinned_off_the_default_shard
             level: 1,
             ..Default::default()
         }],
-        login_entity: Some(warrior_entity()),
-        // The default handle has NO entity for this guid (it lives on `instances`) — a
-        // default-shard read here would wrongly answer "absent" and re-enter.
-        entity_in_world: false,
-        home: Some(home.clone()),
         ..Default::default()
     });
 
@@ -431,12 +481,14 @@ fn a_spurious_worldport_ack_is_ignored_on_a_session_pinned_off_the_default_shard
     server.join().unwrap();
 
     assert_eq!(
-        home.login_calls.load(std::sync::atomic::Ordering::SeqCst),
+        home.session
+            .login_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
         1,
         "a spurious ack on a pinned session must be ignored — the world entry ran again"
     );
     assert_eq!(
-        home.subscribed.lock().unwrap().len(),
+        home.session.subscribed.lock().unwrap().len(),
         1,
         "a spurious ack must not tear down and re-register the session's subscriptions"
     );
@@ -446,10 +498,16 @@ fn a_spurious_worldport_ack_is_ignored_on_a_session_pinned_off_the_default_shard
 fn a_spurious_worldport_ack_is_ignored_on_the_default_shard() {
     // The single-database twin of the test above — the `entity_in_world: true` ignore path was
     // untested before these two.
-    let store = std::sync::Arc::new(InMemoryStore {
-        login_entity: Some(warrior_entity()),
-        entity_in_world: true,
-        ..tester_store(7)
+    let store = std::sync::Arc::new({
+        let base = tester_store(7);
+        WorldFake {
+            session: SessionState {
+                login_entity: Some(warrior_entity()),
+                entity_in_world: true,
+                ..base.session
+            },
+            ..base
+        }
     });
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
@@ -470,7 +528,10 @@ fn a_spurious_worldport_ack_is_ignored_on_the_default_shard() {
     server.join().unwrap();
 
     assert_eq!(
-        store.login_calls.load(std::sync::atomic::Ordering::SeqCst),
+        store
+            .session
+            .login_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
         1,
         "a spurious ack with the entity live must be ignored"
     );
@@ -538,7 +599,7 @@ fn a_freshly_created_characters_first_login_transfers_off_the_default_shard() {
     //
     // So this drives the REAL 1.12 flow instead: CREATE, then re-ENUMERATE — `SMSG_CHAR_CREATE`
     // carries no guid, the client is expected to learn it from the next `CMSG_CHAR_ENUM` — and
-    // pick "Newbie"'s guid out of THAT reply before logging in with it. `InMemoryStore::
+    // pick "Newbie"'s guid out of THAT reply before logging in with it. `WorldFake::
     // create_character` now actually records the character (see its doc comment) so this guid is
     // genuinely create-produced, and `sharded_stores()`'s single connected `home` shard
     // (`instances`) stands in for a start map that routes off `world`.

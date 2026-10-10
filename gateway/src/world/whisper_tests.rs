@@ -80,7 +80,12 @@ fn a_playerbot_reaches_nobody_because_the_gate_reads_the_session_flag() {
 #[test]
 fn the_ignore_verdict_is_read_from_whichever_shard_holds_the_target() {
     let (_realm, world, instances, _calls) = party_topology();
-    instances.contacts.lock().unwrap().push((VIM, GINGER, true));
+    instances
+        .social
+        .contacts
+        .lock()
+        .unwrap()
+        .push((VIM, GINGER, true));
     assert!(
         world.contact_lists(VIM).unwrap().1.is_empty(),
         "fixture: the sender's own shard knows nothing about Vim's ignore list"
@@ -97,7 +102,12 @@ fn the_ignore_verdict_is_read_from_whichever_shard_holds_the_target() {
 #[test]
 fn an_ignore_of_somebody_else_is_not_the_speakers() {
     let (_realm, world, _instances, _calls) = party_topology();
-    world.contacts.lock().unwrap().push((TRIN, VIM, true));
+    world
+        .social
+        .contacts
+        .lock()
+        .unwrap()
+        .push((TRIN, VIM, true));
     assert_eq!(
         whisper::target_facts(world.as_ref(), GINGER, "Trin").unwrap(),
         Some(facts(TRIN, "Trin"))
@@ -109,12 +119,18 @@ fn an_ignore_of_somebody_else_is_not_the_speakers() {
 #[test]
 fn an_unreachable_shard_does_not_make_a_whisper_look_ignored() {
     let (_realm, world, _instances, _calls) = party_topology();
-    let broken = std::sync::Arc::new(InMemoryStore {
-        shard: "unreachable".into(),
-        contact_lists_error: Some("shard is unreachable".into()),
+    let broken = std::sync::Arc::new(WorldFake {
+        topology: TopologyState {
+            shard: "unreachable".into(),
+            ..Default::default()
+        },
+        social: SocialState {
+            contact_lists_error: Some("shard is unreachable".into()),
+            ..Default::default()
+        },
         ..Default::default()
     });
-    world.peers.lock().unwrap().push(broken);
+    world.topology.peers.lock().unwrap().push(broken);
     assert_eq!(
         whisper::target_facts(world.as_ref(), GINGER, "Trin").unwrap(),
         Some(facts(TRIN, "Trin"))
@@ -126,7 +142,7 @@ fn an_unreachable_shard_does_not_make_a_whisper_look_ignored() {
 #[test]
 fn an_afk_target_conveys_its_auto_reply_from_its_own_shard() {
     let (_realm, world, instances, _calls) = party_topology();
-    instances.member_entities.lock().unwrap().push((
+    instances.social.member_entities.lock().unwrap().push((
         VIM,
         codec::MemberEntity {
             player_flags: 0x02,
@@ -134,11 +150,13 @@ fn an_afk_target_conveys_its_auto_reply_from_its_own_shard() {
         },
     ));
     instances
+        .social
         .auto_replies
         .lock()
         .unwrap()
         .insert(VIM, "brb food".to_string());
     world
+        .social
         .auto_replies
         .lock()
         .unwrap()
@@ -158,7 +176,7 @@ fn an_afk_target_conveys_its_auto_reply_from_its_own_shard() {
 #[test]
 fn a_dnd_target_without_stored_text_conveys_an_empty_reply() {
     let (_realm, world, instances, _calls) = party_topology();
-    instances.member_entities.lock().unwrap().push((
+    instances.social.member_entities.lock().unwrap().push((
         VIM,
         codec::MemberEntity {
             player_flags: 0x04,
@@ -178,7 +196,7 @@ fn a_dnd_target_without_stored_text_conveys_an_empty_reply() {
 #[test]
 fn a_reply_row_without_the_away_flag_is_ignored() {
     let (_realm, world, instances, _calls) = party_topology();
-    instances.member_entities.lock().unwrap().push((
+    instances.social.member_entities.lock().unwrap().push((
         VIM,
         codec::MemberEntity {
             player_flags: 0x10,
@@ -186,6 +204,7 @@ fn a_reply_row_without_the_away_flag_is_ignored() {
         },
     ));
     instances
+        .social
         .auto_replies
         .lock()
         .unwrap()
@@ -201,28 +220,49 @@ fn a_reply_row_without_the_away_flag_is_ignored() {
 #[test]
 fn a_homonym_on_the_senders_own_shard_does_not_shadow_the_online_target() {
     const HOMONYM: u64 = 9;
-    let realm = std::sync::Arc::new(InMemoryStore {
-        shard: "lyracore-realm".into(),
-        is_realm: true,
+    let realm = std::sync::Arc::new(WorldFake {
+        topology: TopologyState {
+            shard: "lyracore-realm".into(),
+            ..Default::default()
+        },
+        party: PartyState {
+            is_realm: true,
+            ..Default::default()
+        },
         ..Default::default()
     });
-    let world = std::sync::Arc::new(InMemoryStore {
-        shard: "world".into(),
-        realm: Some(realm.clone()),
+    let world = std::sync::Arc::new(WorldFake {
+        topology: TopologyState {
+            shard: "world".into(),
+            realm: Some(realm.clone()),
+            ..Default::default()
+        },
         characters: vec![character(GINGER, "Ginger"), character(HOMONYM, "Vim")],
-        live_guids: vec![GINGER, HOMONYM],
-        offline_guids: vec![HOMONYM],
+        session: SessionState {
+            live_guids: vec![GINGER, HOMONYM],
+            ..Default::default()
+        },
+        social: SocialState {
+            offline_guids: vec![HOMONYM],
+            ..Default::default()
+        },
         ..Default::default()
     });
-    let instances = std::sync::Arc::new(InMemoryStore {
-        shard: "instances".into(),
-        realm: Some(realm.clone()),
+    let instances = std::sync::Arc::new(WorldFake {
+        topology: TopologyState {
+            shard: "instances".into(),
+            realm: Some(realm.clone()),
+            ..Default::default()
+        },
         characters: vec![character(VIM, "Vim")],
-        live_guids: vec![VIM],
+        session: SessionState {
+            live_guids: vec![VIM],
+            ..Default::default()
+        },
         ..Default::default()
     });
     for shard in [&world, &instances] {
-        *shard.peers.lock().unwrap() = vec![world.clone(), instances.clone()];
+        *shard.topology.peers.lock().unwrap() = vec![world.clone(), instances.clone()];
     }
     assert_eq!(
         presence::resolve_by_name(world.as_ref(), "Vim").unwrap(),
@@ -240,12 +280,15 @@ fn a_homonym_on_the_senders_own_shard_does_not_shadow_the_online_target() {
 #[test]
 fn an_unreadable_candidate_is_an_error_not_a_missing_character() {
     let (_realm, world, _instances, _calls) = party_topology();
-    let broken = std::sync::Arc::new(InMemoryStore {
-        shard: "unreachable".into(),
-        world_shard_set_error: Some("shard is unreachable".into()),
+    let broken = std::sync::Arc::new(WorldFake {
+        topology: TopologyState {
+            shard: "unreachable".into(),
+            world_shard_set_error: Some("shard is unreachable".into()),
+            ..Default::default()
+        },
         ..Default::default()
     });
-    world.peers.lock().unwrap().push(broken);
+    world.topology.peers.lock().unwrap().push(broken);
     assert_eq!(
         world.character_guid_by_name("Dormant").unwrap(),
         Some(DORMANT)
@@ -268,7 +311,7 @@ fn say_yell_and_emotes_stay_on_the_players_own_shard_when_sharded() {
     world.send_emote(7, 0, 4, 4, TRIN).expect("targeted emote");
 
     assert_eq!(
-        world.chats.lock().unwrap().clone(),
+        world.speech.chats.lock().unwrap().clone(),
         vec![
             (0, 0, "hello Elwynn".to_string()),
             (1, 0, "HELP".to_string())
@@ -280,7 +323,7 @@ fn say_yell_and_emotes_stay_on_the_players_own_shard_when_sharded() {
         log.iter().all(|(shard, _)| shard == "world"),
         "no spatial chat may reach another database. Calls were {log:?}"
     );
-    assert!(realm.realm_whispers.lock().unwrap().is_empty());
+    assert!(realm.chat.realm_whispers.lock().unwrap().is_empty());
 }
 
 /// A whisper line names its sender by guid and the client resolves the name over
@@ -316,26 +359,35 @@ fn a_name_query_resolves_a_character_on_another_shard() {
 #[test]
 fn a_real_session_whispers_across_shards_as_its_own_character() {
     let (realm, _world, instances, _calls) = party_topology();
-    let session_shard = std::sync::Arc::new(InMemoryStore {
-        shard: "world".into(),
-        username: "TESTER".into(),
-        session: Some(WorldSession {
-            account_id: 7,
-            session_key: K,
-        }),
-        login_entity: Some(warrior_entity()),
-        realm: Some(realm.clone()),
+    let session_shard = std::sync::Arc::new(WorldFake {
+        topology: TopologyState {
+            shard: "world".into(),
+            realm: Some(realm.clone()),
+            ..Default::default()
+        },
+        session: SessionState {
+            username: "TESTER".into(),
+            session: Some(WorldSession {
+                account_id: 7,
+                session_key: K,
+            }),
+            login_entity: Some(warrior_entity()),
+            live_guids: vec![GINGER],
+            ..Default::default()
+        },
         characters: vec![character(GINGER, "Ginger")],
-        live_guids: vec![GINGER],
-        speaker_facts: Some(SpeakerFacts {
-            race: 1,
-            chat_tag: 1,
-            name: "Ginger".to_string(),
-        }),
+        chat: ChatState {
+            speaker_facts: Some(SpeakerFacts {
+                race: 1,
+                chat_tag: 1,
+                name: "Ginger".to_string(),
+            }),
+            ..Default::default()
+        },
         ..Default::default()
     });
-    *session_shard.peers.lock().unwrap() = vec![session_shard.clone(), instances.clone()];
-    *instances.peers.lock().unwrap() = vec![session_shard.clone(), instances.clone()];
+    *session_shard.topology.peers.lock().unwrap() = vec![session_shard.clone(), instances.clone()];
+    *instances.topology.peers.lock().unwrap() = vec![session_shard.clone(), instances.clone()];
 
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = session_shard.clone();
@@ -380,7 +432,7 @@ fn a_real_session_whispers_across_shards_as_its_own_character() {
     server.join().unwrap();
 
     assert_eq!(
-        session_shard.realm_whispers.lock().unwrap().clone(),
+        session_shard.chat.realm_whispers.lock().unwrap().clone(),
         vec![(
             GINGER,
             WhisperRequest {

@@ -14,8 +14,13 @@ use super::party_tests::{character, party_topology, BOT, DORMANT, GINGER, VIM};
 use super::*;
 
 /// Give `shard` a live Member Stats entity for `guid` — the one signal `live_entity` reads.
-fn place(shard: &InMemoryStore, guid: u64, entity: codec::MemberEntity) {
-    shard.member_entities.lock().unwrap().push((guid, entity));
+fn place(shard: &WorldFake, guid: u64, entity: codec::MemberEntity) {
+    shard
+        .social
+        .member_entities
+        .lock()
+        .unwrap()
+        .push((guid, entity));
 }
 
 /// **AC 6 (part 1): `presence::of` answers for a Character on another Shard**, reporting
@@ -65,7 +70,7 @@ fn presence_of_crosses_the_shard_boundary_and_tells_in_world_apart_from_session_
 /// no Away Status at all.
 #[test]
 fn presence_of_reads_away_status_from_the_live_entitys_player_flags() {
-    let store = std::sync::Arc::new(InMemoryStore {
+    let store = std::sync::Arc::new(WorldFake {
         characters: vec![character(GINGER, "Ginger")],
         ..Default::default()
     });
@@ -85,7 +90,7 @@ fn presence_of_reads_away_status_from_the_live_entitys_player_flags() {
         other => panic!("expected InWorld, got {other:?}"),
     }
 
-    let no_entity = std::sync::Arc::new(InMemoryStore {
+    let no_entity = std::sync::Arc::new(WorldFake {
         characters: vec![character(DORMANT, "Dormant")],
         ..Default::default()
     });
@@ -103,22 +108,28 @@ fn presence_of_reads_away_status_from_the_live_entitys_player_flags() {
 #[test]
 fn a_live_hit_beats_a_hit_without_one_regardless_of_shard_order() {
     let calls: ShardCallLog = Default::default();
-    let source = std::sync::Arc::new(InMemoryStore {
-        shard: "source".into(),
-        calls: calls.clone(),
+    let source = std::sync::Arc::new(WorldFake {
+        topology: TopologyState {
+            shard: "source".into(),
+            calls: calls.clone(),
+            ..Default::default()
+        },
         characters: vec![character(GINGER, "Ginger")],
         // No live entity: the frozen source row has none.
         ..Default::default()
     });
-    let destination = std::sync::Arc::new(InMemoryStore {
-        shard: "destination".into(),
-        calls,
+    let destination = std::sync::Arc::new(WorldFake {
+        topology: TopologyState {
+            shard: "destination".into(),
+            calls,
+            ..Default::default()
+        },
         characters: vec![character(GINGER, "Ginger")],
         ..Default::default()
     });
     place(&destination, GINGER, codec::MemberEntity::default());
     for shard in [&source, &destination] {
-        *shard.peers.lock().unwrap() = vec![source.clone(), destination.clone()];
+        *shard.topology.peers.lock().unwrap() = vec![source.clone(), destination.clone()];
     }
 
     let found = presence::of(source.as_ref(), GINGER).unwrap().unwrap();
@@ -135,15 +146,24 @@ fn a_live_hit_beats_a_hit_without_one_regardless_of_shard_order() {
 fn one_shard_topology(
     guid: u64,
     live: bool,
-) -> (std::sync::Arc<InMemoryStore>, std::sync::Arc<InMemoryStore>) {
-    let realm = std::sync::Arc::new(InMemoryStore {
-        shard: "realm".into(),
-        is_realm: true,
+) -> (std::sync::Arc<WorldFake>, std::sync::Arc<WorldFake>) {
+    let realm = std::sync::Arc::new(WorldFake {
+        topology: TopologyState {
+            shard: "realm".into(),
+            ..Default::default()
+        },
+        party: PartyState {
+            is_realm: true,
+            ..Default::default()
+        },
         ..Default::default()
     });
-    let world = std::sync::Arc::new(InMemoryStore {
-        shard: "world".into(),
-        realm: Some(realm.clone()),
+    let world = std::sync::Arc::new(WorldFake {
+        topology: TopologyState {
+            shard: "world".into(),
+            realm: Some(realm.clone()),
+            ..Default::default()
+        },
         characters: vec![character(guid, "Named")],
         ..Default::default()
     });
@@ -160,13 +180,16 @@ fn one_shard_topology(
 #[test]
 fn a_live_entity_on_any_connected_shard_is_live_even_while_another_shard_is_down() {
     let (_realm, world) = one_shard_topology(GINGER, true);
-    let down = std::sync::Arc::new(InMemoryStore {
-        shard: "instances".into(),
-        world_shard_set_error: Some("instances has no healthy Coordinator subscription".into()),
+    let down = std::sync::Arc::new(WorldFake {
+        topology: TopologyState {
+            shard: "instances".into(),
+            world_shard_set_error: Some("instances has no healthy Coordinator subscription".into()),
+            ..Default::default()
+        },
         ..Default::default()
     });
-    *world.peers.lock().unwrap() = vec![world.clone(), down.clone()];
-    *down.peers.lock().unwrap() = vec![world.clone(), down.clone()];
+    *world.topology.peers.lock().unwrap() = vec![world.clone(), down.clone()];
+    *down.topology.peers.lock().unwrap() = vec![world.clone(), down.clone()];
 
     let presence = presence::of(world.as_ref(), GINGER).unwrap().unwrap();
     assert!(
@@ -181,13 +204,16 @@ fn a_live_entity_on_any_connected_shard_is_live_even_while_another_shard_is_down
 #[test]
 fn a_pending_transfer_on_realm_core_is_in_transit() {
     let (realm, world) = one_shard_topology(GINGER, false);
-    *realm.members_in_transit.lock().unwrap() = vec![GINGER];
-    let down = std::sync::Arc::new(InMemoryStore {
-        shard: "instances".into(),
-        world_shard_set_error: Some("down".into()),
+    *realm.party.members_in_transit.lock().unwrap() = vec![GINGER];
+    let down = std::sync::Arc::new(WorldFake {
+        topology: TopologyState {
+            shard: "instances".into(),
+            world_shard_set_error: Some("down".into()),
+            ..Default::default()
+        },
         ..Default::default()
     });
-    *world.peers.lock().unwrap() = vec![world.clone(), down.clone()];
+    *world.topology.peers.lock().unwrap() = vec![world.clone(), down.clone()];
 
     let presence = presence::of(world.as_ref(), GINGER).unwrap().unwrap();
     assert_eq!(presence.whereabouts, presence::Whereabouts::InTransit);
@@ -199,13 +225,19 @@ fn a_pending_transfer_on_realm_core_is_in_transit() {
 #[test]
 fn a_character_between_places_on_any_shard_is_in_transit() {
     let (_realm, world) = one_shard_topology(BOT, false);
-    let instances = std::sync::Arc::new(InMemoryStore {
-        shard: "instances".into(),
-        members_between_places: vec![BOT].into(),
+    let instances = std::sync::Arc::new(WorldFake {
+        topology: TopologyState {
+            shard: "instances".into(),
+            ..Default::default()
+        },
+        social: SocialState {
+            members_between_places: vec![BOT].into(),
+            ..Default::default()
+        },
         ..Default::default()
     });
-    *world.peers.lock().unwrap() = vec![world.clone(), instances.clone()];
-    *instances.peers.lock().unwrap() = vec![world.clone(), instances.clone()];
+    *world.topology.peers.lock().unwrap() = vec![world.clone(), instances.clone()];
+    *instances.topology.peers.lock().unwrap() = vec![world.clone(), instances.clone()];
 
     let presence = presence::of(world.as_ref(), BOT).unwrap().unwrap();
     assert_eq!(presence.whereabouts, presence::Whereabouts::InTransit);
@@ -216,22 +248,28 @@ fn a_character_between_places_on_any_shard_is_in_transit() {
 #[test]
 fn offline_needs_every_configured_shard_healthy() {
     let (_realm, world) = one_shard_topology(DORMANT, false);
-    let down = std::sync::Arc::new(InMemoryStore {
-        shard: "instances".into(),
-        world_shard_set_error: Some("instances has no healthy Coordinator subscription".into()),
+    let down = std::sync::Arc::new(WorldFake {
+        topology: TopologyState {
+            shard: "instances".into(),
+            world_shard_set_error: Some("instances has no healthy Coordinator subscription".into()),
+            ..Default::default()
+        },
         ..Default::default()
     });
-    *world.peers.lock().unwrap() = vec![world.clone(), down.clone()];
+    *world.topology.peers.lock().unwrap() = vec![world.clone(), down.clone()];
     assert!(
         presence::of(world.as_ref(), DORMANT).is_err(),
         "an unhealthy configured Shard must refuse to let Offline through"
     );
 
-    let healthy = std::sync::Arc::new(InMemoryStore {
-        shard: "instances".into(),
+    let healthy = std::sync::Arc::new(WorldFake {
+        topology: TopologyState {
+            shard: "instances".into(),
+            ..Default::default()
+        },
         ..Default::default()
     });
-    *world.peers.lock().unwrap() = vec![world.clone(), healthy.clone()];
+    *world.topology.peers.lock().unwrap() = vec![world.clone(), healthy.clone()];
     let presence = presence::of(world.as_ref(), DORMANT).unwrap().unwrap();
     assert_eq!(presence.whereabouts, presence::Whereabouts::Offline);
 }
@@ -242,13 +280,16 @@ fn offline_needs_every_configured_shard_healthy() {
 /// no entity — reads it as `InTransit` instead, decoupled from `session_online`.
 #[test]
 fn a_frozen_pre_transfer_copy_reads_online_but_not_in_world() {
-    let store = std::sync::Arc::new(InMemoryStore {
+    let store = std::sync::Arc::new(WorldFake {
         characters: vec![character(GINGER, "Ginger")],
-        // Not in `offline_guids`: session-online. No live entity. `members_between_places` is this
-        // Shard's own signal for it, the same one `character_in_transit` reads in production from
-        // `game_character.online` with no entity present — exactly the frozen source row
-        // `begin_transfer` leaves behind.
-        members_between_places: vec![GINGER].into(),
+        social: SocialState {
+            // Not in `offline_guids`: session-online. No live entity. `members_between_places` is this
+            // Shard's own signal for it, the same one `character_in_transit` reads in production from
+            // `game_character.online` with no entity present — exactly the frozen source row
+            // `begin_transfer` leaves behind.
+            members_between_places: vec![GINGER].into(),
+            ..Default::default()
+        },
         ..Default::default()
     });
     let presence = presence::of(store.as_ref(), GINGER).unwrap().unwrap();

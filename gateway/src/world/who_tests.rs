@@ -3,7 +3,7 @@
 //! against hand-written candidates; this file covers what only a Store can exercise.
 //!
 //! What EXECUTES here is production `world::who`, against the same in-memory multi-database
-//! topology `party_tests::party_topology` builds, and a plain single-shard `InMemoryStore` for the
+//! topology `party_tests::party_topology` builds, and a plain single-shard `WorldFake` for the
 //! unsharded case.
 
 use super::party_tests::{character, party_topology};
@@ -85,9 +85,12 @@ fn fifty_matches_list_forty_nine_and_report_fifty() {
         .map(|i| character(100 + i, &format!("Who{i}")))
         .collect();
     let live_guids = characters.iter().map(|c| c.guid).collect();
-    let store = std::sync::Arc::new(InMemoryStore {
+    let store = std::sync::Arc::new(WorldFake {
         characters,
-        live_guids,
+        session: SessionState {
+            live_guids,
+            ..Default::default()
+        },
         ..Default::default()
     });
 
@@ -104,7 +107,7 @@ fn fifty_matches_list_forty_nine_and_report_fifty() {
 /// `world_stores()` fan-out, but the level-range rule still applies exactly as it would sharded.
 #[test]
 fn an_unsharded_gateway_answers_who_with_the_same_filters() {
-    let store = std::sync::Arc::new(InMemoryStore {
+    let store = std::sync::Arc::new(WorldFake {
         characters: vec![
             codec::CharacterView {
                 guid: 1,
@@ -123,7 +126,10 @@ fn an_unsharded_gateway_answers_who_with_the_same_filters() {
                 ..Default::default()
             },
         ],
-        live_guids: vec![1, 2],
+        session: SessionState {
+            live_guids: vec![1, 2],
+            ..Default::default()
+        },
         ..Default::default()
     });
     assert!(
@@ -146,7 +152,7 @@ fn an_unsharded_gateway_answers_who_with_the_same_filters() {
 /// zone the Fake was never told about stays blank and fails the match.
 #[test]
 fn a_search_string_matches_a_zone_name_the_store_resolves() {
-    let store = std::sync::Arc::new(InMemoryStore {
+    let store = std::sync::Arc::new(WorldFake {
         characters: vec![codec::CharacterView {
             guid: 1,
             name: "Ginger".into(),
@@ -156,8 +162,14 @@ fn a_search_string_matches_a_zone_name_the_store_resolves() {
             zone_id: 12,
             ..Default::default()
         }],
-        live_guids: vec![1],
-        zone_names: [(12, "Elwynn Forest".to_string())].into(),
+        session: SessionState {
+            live_guids: vec![1],
+            ..Default::default()
+        },
+        social: SocialState {
+            zone_names: [(12, "Elwynn Forest".to_string())].into(),
+            ..Default::default()
+        },
         ..Default::default()
     });
     let mut request = wide_open_who();
@@ -174,7 +186,7 @@ fn a_search_string_matches_a_zone_name_the_store_resolves() {
 
     // The same request against a Store that never learned the zone's name: the blank lookup must
     // fail the match rather than matching everything by accident.
-    let blank = std::sync::Arc::new(InMemoryStore {
+    let blank = std::sync::Arc::new(WorldFake {
         characters: vec![codec::CharacterView {
             guid: 1,
             name: "Ginger".into(),
@@ -184,7 +196,10 @@ fn a_search_string_matches_a_zone_name_the_store_resolves() {
             zone_id: 12,
             ..Default::default()
         }],
-        live_guids: vec![1],
+        session: SessionState {
+            live_guids: vec![1],
+            ..Default::default()
+        },
         ..Default::default()
     });
     let (_, body) = who::respond(blank.as_ref(), 1, &request)

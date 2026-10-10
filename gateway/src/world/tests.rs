@@ -99,30 +99,30 @@ fn world_session_socket_pair_times_out_when_the_server_writes_nothing() {
 }
 
 /// The realm-wide party routing tests. A child module so they can reach
-/// `InMemoryStore` and its fake realm-core topology without widening anything, kept in their own
+/// `WorldFake` and its fake realm-core topology without widening anything, kept in their own
 /// file because this one is already the largest in the tree.
 #[path = "party_tests.rs"]
 mod party_tests;
 
 /// The Roster Revision Relay against the party topology. A sibling of `party_tests` so it reaches
-/// `InMemoryStore` and that topology without widening anything.
+/// `WorldFake` and that topology without widening anything.
 #[path = "party_mirror_tests.rs"]
 mod party_mirror_tests;
 
 /// Member Stats: the Relay tick and the stats request against the party topology. A sibling of
-/// `party_tests` so it reaches `InMemoryStore` and that topology without widening anything.
+/// `party_tests` so it reaches `WorldFake` and that topology without widening anything.
 #[path = "member_stats_tests.rs"]
 mod member_stats_tests;
 
 /// The realm-wide whisper routing tests. A sibling of `party_tests` for the
-/// same reason — it reaches `InMemoryStore` (and `party_tests`' live topology) without widening
+/// same reason — it reaches `WorldFake` (and `party_tests`' live topology) without widening
 /// anything.
 #[path = "whisper_tests.rs"]
 mod whisper_tests;
 
 /// Realm Presence's multi-shard union (`presence::of`, `presence::in_world_characters`) — reads
 /// that moved out of `party.rs`. A sibling of `party_tests`/`whisper_tests` for the same reason: it
-/// reaches `InMemoryStore` and `party_tests`' fixture characters without widening anything.
+/// reaches `WorldFake` and `party_tests`' fixture characters without widening anything.
 #[path = "presence_tests.rs"]
 mod presence_tests;
 
@@ -133,18 +133,18 @@ mod presence_tests;
 mod who_tests;
 
 /// The realm-wide loot-roll routing/relay tests. A sibling of `party_tests`/`whisper_tests` for
-/// the same reason — it reaches `InMemoryStore` without widening anything.
+/// the same reason — it reaches `WorldFake` without widening anything.
 #[path = "loot_tests.rs"]
 mod loot_tests;
 
 /// The mailbox read-path routing tests. A sibling of the modules above for the same reason — it
-/// reaches `InMemoryStore` (and `party_tests`' fixture characters) without widening anything.
+/// reaches `WorldFake` (and `party_tests`' fixture characters) without widening anything.
 #[path = "mail_tests.rs"]
 mod mail_tests;
 
 /// The inbound FRAMING boundary — malformed, truncated, oversized and unsupported packets
 /// driven as raw bytes over a real cipher. A sibling of the modules above for the same reason (it
-/// reaches `InMemoryStore` and `client_handshake`), kept separate because it is the only file here
+/// reaches `WorldFake` and `client_handshake`), kept separate because it is the only file here
 /// that writes headers no typed builder can produce.
 #[path = "framing_tests.rs"]
 mod framing_tests;
@@ -316,17 +316,105 @@ fn delivered_after(delay_secs: u32) -> i64 {
 }
 
 #[derive(Default)]
-struct InMemoryStore {
-    /// Realm-core Guilds the guild query answers from.
-    guilds: Vec<codec::GuildView>,
-    /// Realm-core member rows. Guild ops are recorded in `calls` as `guild_op:<request>`.
-    guild_memberships: Vec<codec::GuildMemberView>,
-    /// A Fee Hold left on this Home Shard. Fee steps are recorded in `calls` as `guild_fee_<step>`.
-    guild_fee_hold: std::sync::Mutex<Option<crate::world::guild_fee::FeeHold>>,
-    /// Realm-core Petitions.
-    guild_petitions: Vec<codec::PetitionView>,
-    /// Guild Charters the logged-in Character holds on this Home Shard.
-    held_charters: Vec<u64>,
+struct WorldFake {
+    characters: Vec<codec::CharacterView>,
+    /// 195: `npc_refuses_interaction` return — false (derive-Default) keeps every fixture NPC open.
+    npc_refuses: bool,
+    /// When set, buy/sell return this error (a gameplay failure) instead of `Ok`.
+    trade_error: Option<String>,
+    topology: TopologyState,
+    session: SessionState,
+    character: CharacterState,
+    transfer: TransferState,
+    party: PartyState,
+    mail: MailState,
+    social: SocialState,
+    npc: NpcState,
+    trainer: TrainerState,
+    bank: BankState,
+    combat: CombatState,
+    death: DeathState,
+    trade: TradeState,
+    cast: CastState,
+    taxi: TaxiState,
+    melee: MeleeState,
+    chat: ChatState,
+    speech: SpeechState,
+    channel: ChannelState,
+    guild: GuildState,
+    auction: AuctionState,
+    quest: QuestState,
+    vendor: VendorState,
+    item: ItemState,
+    weather: WeatherState,
+    member_stats: MemberStatsState,
+    loot_window: LootWindowState,
+    loot_roll: LootRollState,
+}
+
+#[derive(Default)]
+struct TopologyState {
+    /// Multi-shard routing: the database this handle stands for. `""` (derive-Default) is the
+    /// single-shard world every other test runs in, where nothing routes.
+    shard: String,
+    /// The handle `home_shard()` hands back — the character's home shard. `None` (default) = "you
+    /// are already on the right shard", i.e. the single-entry shard map / pre-sharding behavior.
+    home: Option<std::sync::Arc<WorldFake>>,
+    /// Home-shard reassignment: when set, every `home_shard()` resolution AFTER the first
+    /// answers THIS shard instead of `home` — the mock's stand-in for a routing change landing
+    /// between two logins (a shard-map edit, or the realm-core index re-homing a character). `None`
+    /// (default): every resolution answers `home`, byte-identical to before this field existed.
+    home_after_flip: Option<std::sync::Arc<WorldFake>>,
+    /// The one location this handle routes elsewhere, and where to: `(map_id, instance_id, shard)`.
+    /// `None` (derive-Default) = "this handle serves every location", the single-database answer
+    /// `shard_for_location` gives. Keyed by location on purpose — a caller that asks about the
+    /// wrong place gets `None` and the crossing silently becomes a no-op, which is what the tests
+    /// must be able to tell apart from a crossing that ran.
+    location_shard: Option<(u32, u64, std::sync::Arc<WorldFake>)>,
+    /// How many times `home_shard()` has been asked — drives `home_after_flip`, and is itself the
+    /// assertion that routing is resolved ONCE PER WORLD ENTRY and never mid-session. SHARED
+    /// between a store and the handles it routes to (like `calls`), so a re-resolution asked of the
+    /// *pinned* handle — which is what a mid-session re-route would actually look like, since
+    /// `route_home` asks whichever handle the session currently holds — is counted too.
+    home_shard_calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// SHARED between a store and its `home` handle: `(shard, call)` for every instrumented
+    /// player-scoped call, in order. The routing test asserts nothing lands on the wrong database.
+    calls: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
+    /// The handle `realm_store()` hands back — the database that owns party
+    /// membership realm-wide. `None` (derive-Default) is the SINGLE-DATABASE gateway, which is what
+    /// every other test in this file is, and it is what routes every party op back onto the
+    /// player-facing reducers below.
+    realm: Option<std::sync::Arc<WorldFake>>,
+    /// The connected WORLD shards `world_stores()` fans the roster mirror out to (and the
+    /// cross-shard name/presence lookups walk). Empty = single database. Behind a `Mutex` only so
+    /// the topology can be wired up AFTER every handle exists — production reads the shared
+    /// `ShardSet`, which has the same shape and the same "includes this handle" membership.
+    peers: std::sync::Mutex<Vec<std::sync::Arc<WorldFake>>>,
+    /// When set, the configured World Shard set is incomplete or unhealthy.
+    world_shard_set_error: Option<String>,
+    /// When set, deleted Character cleanup cannot reach Realm-core.
+    party_cleanup_realm_error: Option<String>,
+    party_command_realm_error: Option<String>,
+    transfer_realm_error: Option<String>,
+    /// When set, `settle_home_shard` fails with this message (a transfer that could not be
+    /// driven — an unreachable destination shard, a refused import).
+    settle_error: Option<String>,
+    /// How many `settle_home_shard` calls SUCCEED before `settle_error` starts firing. 0
+    /// (derive-Default) = the very first one fails, i.e. the login-time failure the transfer
+    /// test drives.
+    /// 1 = the login routes fine and the WORLD-PORT's settle is the one that cannot be driven —
+    /// the case that hung a real client on its loading screen forever.
+    settle_ok_calls: usize,
+    /// How many times `settle_home_shard` has been asked (drives `settle_ok_calls`).
+    settle_calls: std::sync::atomic::AtomicUsize,
+    /// Accounts `bind_shard_session` was called for, per shard.
+    bound_sessions: std::sync::Mutex<Vec<u64>>,
+    /// Whether this character still had an addressable viewer at each transfer-resolution call.
+    viewer_present_at_settle: std::sync::Mutex<Vec<bool>>,
+}
+
+#[derive(Default)]
+struct SessionState {
     /// WORLDPORT_ACK gate: true = entity present -> a spurious ack is ignored;
     /// false (derive-Default) = absent -> a genuine transfer is pending.
     entity_in_world: bool,
@@ -335,48 +423,14 @@ struct InMemoryStore {
     entity_presence_checks: std::sync::atomic::AtomicUsize,
     username: String,
     session: Option<WorldSession>,
-    characters: Vec<codec::CharacterView>,
-    /// When set, `character_by_guid` cannot answer from this Shard.
-    character_read_error: Option<String>,
     login_entity: Option<codec::EntityView>,
-    /// The auctioneer's house and faction verdict returned to the focused auction seam.
-    auction_interaction: Option<AuctionInteraction>,
     moves: std::sync::Mutex<Vec<MoveRecord>>,
     client_commands: std::sync::Mutex<Vec<(u64, u64, String, String)>>,
-    /// Vendor stock the seam's `vendor_stock` read returns (empty by default).
-    vendor_stock: Vec<codec::VendorItemView>,
-    /// Imported item templates the query path resolves by entry. Keeping this keyed fixture here
-    /// makes socket tests exercise the same durable read shape as the Coordinator cache.
-    item_templates: Vec<codec::ItemTemplateView>,
-    /// The player's buyback ring as `(item_entry, stack_count, price)`; empty by default, so a
-    /// fixture login replays no buyback tab.
-    buyback_ring: Vec<(u32, u32, u32, u32)>,
-    /// 195: `npc_refuses_interaction` return — false (derive-Default) keeps every fixture NPC open.
-    npc_refuses: bool,
-    /// Spelled as a refusal so derive-Default (false) keeps every fixture trainer serving; the
-    /// trait method reads the negation.
-    trainer_refuses_class: bool,
-    /// When set, buy/sell return this error (a gameplay failure) instead of `Ok`.
-    trade_error: Option<String>,
-    /// When set, the trainer buy answers this Refusal instead of learning the spell.
-    trainer_buy_refusal: Option<lyracore_shared::trainer::TrainerRefusal>,
-    /// Quest-giver evals returned by `giver_quest_evals` (the menu/status input).
-    quest_evals: Vec<codec::GiverQuestEval>,
-    /// Quest details `quest_detail_view(id)` resolves from (matched by `quest_id`).
-    quest_details: Vec<codec::QuestDetailView>,
-    /// The player's quest-log slots `player_quest_log` returns (drives the login descriptor block).
-    quest_log_slots: Vec<codec::update_mask::QuestLogSlot>,
-    /// Recorded `turn_in_quest` dispatches: (account, giver, quest, reward_index) — so the
-    /// choose-reward socket test asserts the player's pick reached the store unchanged.
-    turned_in: std::sync::Mutex<Vec<(u64, u64, u32, u32)>>,
     /// Optional item row whose subscribed relay is queued during a successful turn-in. The paired
     /// sender is retained only for that test and consumed by `turn_in_quest`, so it cannot keep the
     /// session writer alive during teardown.
     turn_in_reward_item: Option<codec::ItemInstanceView>,
     turn_in_tx: std::sync::Mutex<Option<SessionTx>>,
-    /// A Reward Letter a successful `turn_in_quest` files as Escrow for the Character, as
-    /// `gw_turn_in_quest` does in its own transaction.
-    turn_in_reward_letter: Option<mail::HeldEscrow>,
     /// Override for `player_combat_until_ms`: 0 = out of combat (default), non-zero = in combat until
     /// this ms-epoch deadline (use u64::MAX for "always in combat" in tests).
     combat_until_ms: u64,
@@ -385,168 +439,10 @@ struct InMemoryStore {
     /// When set, teardown cannot reach the database after a session-fatal transport loss.
     /// The world session must still close and relinquish its admission seat.
     logout_error: Option<String>,
-    /// Recorded `delete_character` calls: (account_id, character_guid).
-    deleted: std::sync::Mutex<Vec<(u64, u64)>>,
-    /// When set, `delete_character` returns this outcome instead of `Success`.
-    delete_outcome: Option<codec::CharDeleteOutcome>,
-
-    created_characters: std::sync::Mutex<Vec<codec::CharacterView>>,
-    /// The Nth guid `create_character` assigns, offset well above every hand-seeded fixture
-    /// guid in this file (the highest is 100, in the transfer tests) so it can never collide.
-    next_created_guid: std::sync::atomic::AtomicU64,
-    /// Reputation standings `player_reputations` returns — `(reputation_index, standing)` pairs folded
-    /// into the login SMSG_INITIALIZE_FACTIONS (restoring persisted standings instead of the
-    /// all-neutral stub).
-    reputations: Vec<(i32, i32, bool)>,
-    /// Imported action-bar rows `player_actions` returns — `(button, action, action_type)` triples.
-    /// Empty by default (the pre-import fallback path).
-    player_actions: Vec<(u8, u32, u8)>,
-    /// Friend/ignore rows: `(owner_guid, target_guid, is_ignore)`. `add_friend`/
-    /// `add_ignore`/`del_friend`/`del_ignore` mutate it; `contact_lists` reads it scoped to the caller.
-    contacts: std::sync::Mutex<Vec<(u64, u64, bool)>>,
-    group_invites: std::sync::Mutex<Vec<u64>>,
-    /// When set, `start_attack` returns this error. Only the session-fatal desync case is driven
-    /// from here now; the refusal mapping is tested on the melee seam itself.
-    start_attack_error: Option<String>,
-    /// What `speaker_facts` answers for every speaker. `None` models a speaker with no live entity.
-    speaker_facts: Option<SpeakerFacts>,
-    /// What `realm_chat` answers. `None` delivers.
-    realm_chat_outcome: Option<ChatOutcome>,
-    /// What `send_chat` answers; `None` delivers.
-    send_chat_outcome: Option<ChatOutcome>,
-    /// Every Character's GM level, as `speaker_gm_level` reads it.
-    gm_level: u8,
-    /// Recorded `realm_chat` requests, with the speaker guid the session authenticated.
-    realm_chats: std::sync::Mutex<Vec<(u64, RealmChatRequest)>>,
     /// The `WorldEntry` of every `player_login`, in order.
     login_entries: std::sync::Mutex<Vec<codec::WorldEntry>>,
-    /// Recorded `set_away` requests: `(speaker_guid, kind, message)`.
-    away_requests: std::sync::Mutex<Vec<(u64, u8, String)>>,
-    /// This Shard's stored Auto-Replies, by Character guid.
-    auto_replies: std::sync::Mutex<std::collections::HashMap<u64, String>>,
-    /// What `realm_whisper` answers. `None` delivers.
-    realm_whisper_outcome: Option<ChatOutcome>,
-    /// When set, `realm_whisper` fails with this message.
-    realm_whisper_error: Option<String>,
-    /// Recorded `realm_whisper` requests, with the speaker guid the session authenticated.
-    realm_whispers: std::sync::Mutex<Vec<(u64, WhisperRequest)>>,
-    /// When set, `gm_command` returns this error — e.g. `"permission denied"` to
-    /// drive the Say-handler's `Err` → self-only `SMSG_MESSAGECHAT` System relay.
-    gm_command_error: Option<String>,
-    /// Recorded `gm_command` dispatches — the dot-command divert test asserts the
-    /// RIGHT raw text (still carrying its leading `.`) reached the reducer call, and that a NON-dot
-    /// Say never reaches this vec at all.
-    gm_commands: std::sync::Mutex<Vec<(String, String)>>,
-    /// Current Realm-core Alpha Test Tools answer for the next command. `None` leaves the older
-    /// fixed-outcome fixture in place; tests that set it model the production Store's fresh read.
-    gm_alpha_test_tools: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-    /// The authority conveyed with each command when `gm_alpha_test_tools` is in use.
-    gm_authority_results: std::sync::Mutex<Vec<bool>>,
-    /// Home Shard gameplay accepted by the focused Alpha Test Tools Fake. The command parser and
-    /// effects belong to Module tests, so this only records the visible Store outcome.
-    gm_gameplay_changes: std::sync::Mutex<Vec<String>>,
-    /// Recorded `cast_spell` dispatches: (spell_id, target_guid) — pins target threading.
-    casts: std::sync::Mutex<Vec<(u32, u64)>>,
-    /// Recorded `start_ranged_attack` dispatches: (target_guid, spell_id) — the Auto Shot intercept.
-    ranged_attacks: std::sync::Mutex<Vec<(u64, u32)>>,
-    /// Recorded `stop_attack` dispatches: the actor guid. The Auto Shot teardowns reach this
-    /// through `WorldStore`'s `MeleeActionStore` supertrait, so it pins that resolution.
-    stop_attacks: std::sync::Mutex<Vec<u64>>,
-    /// The caller's owned items, for the Auto Shot ammo block on the activation START.
-    player_items_fixture: Vec<codec::ItemInstanceView>,
-    /// Item-instance guid → bag slot, for the vendor repair target.
-    item_slots: Vec<(u64, u8)>,
-    /// Recorded `set_sheathed` dispatches: (self_guid, state), the `CMSG_SETSHEATHED` route.
-    sheathed: std::sync::Mutex<Vec<(u64, u8)>>,
-    /// What `channel_op` answers. `None` succeeds.
-    channel_outcome: Option<ChannelOutcome>,
-    /// Recorded `channel_op` calls: `(actor_guid, op, request)`.
-    channel_ops: std::sync::Mutex<Vec<(u64, u8, ChannelRequest)>>,
-    /// The lootable copper `loot_target_money` reports for any target (default 0).
-    corpse_money: u32,
     /// Parked private System Messages world entry replays (a Package `on_login` hook's output).
     pending_system_messages: Vec<String>,
-    /// Recorded `loot_money` targets — CMSG_LOOT_MONEY must drive the TRACKED guid.
-    money_looted: std::sync::Mutex<Vec<u64>>,
-    /// Recorded target and slot for `CMSG_AUTOSTORE_LOOT_ITEM`.
-    items_looted: std::sync::Mutex<Vec<(u64, u8)>>,
-    /// Recorded `skin_corpse` targets (the empty-loot-window skinning fallback).
-    skinned: std::sync::Mutex<Vec<u64>>,
-    /// Typed legacy skinning refusal returned by the empty-loot fallback.
-    skinning_refusal: Option<LootWindowRefusal>,
-    /// Infrastructure failure returned by the empty-loot skinning fallback.
-    skinning_failure: Option<String>,
-    /// Recorded `vendor_buyback` calls: (vendor_guid, slot) — pins the 69→0 slot mapping.
-    bought_back: std::sync::Mutex<Vec<(u64, u8)>>,
-    /// What `talent_grant_spell` returns (0 = passive talent → no SMSG_LEARNED_SPELL push).
-    talent_grant: u32,
-    /// What `talent_pane_sync` returns: (teach rank-spell, superseded prev, points remaining).
-    talent_pane: (u32, u32, u32),
-    /// What `superseded_old_rank` returns for a trainer buy — the known previous rank a
-    /// non-stacking chain's new rank replaces. `None` (derive-Default) mirrors "no known prior
-    /// rank" -> a trainer buy pushes plain SMSG_LEARNED_SPELL.
-    trainer_superseded: Option<u32>,
-    /// The character's spellbook, as `player_learned_spells` reports it. Empty by default; a
-    /// proficiency test seeds the passive the trainer buy is meant to have granted.
-    learned_spells: Vec<u32>,
-    /// `npc_is_innkeeper` flag for the gossip bind-home routing.
-    innkeeper: bool,
-    /// Whether `bind_home` ran (the innkeeper gossip select).
-    home_bound: std::sync::atomic::AtomicBool,
-    /// Recorded `reset_talents` dispatches: (account_id, self_guid, trainer_guid) — the unlearn-talents
-    /// gossip select.
-    reset_talents_calls: std::sync::Mutex<Vec<(u64, u64, u64)>>,
-    /// When set, `reset_talents` returns this error instead of recording the call.
-    reset_talents_error: Option<String>,
-    /// Recorded `send_chat` lines: (chat_type, language, message).
-    chats: std::sync::Mutex<Vec<(u8, u8, String)>>,
-    /// Imported gossip menu options `gossip_options` returns for ANY npc_guid — empty
-    /// by default (the pre-import fallback path).
-    gossip_opts: Vec<codec::GossipOptionView>,
-    /// Recorded `gossip_select` notifications as `(option_id, option_row_id)` — the clicked POSITION
-    /// and the stable row identity the module is told about.
-    gossip_selects: std::sync::Mutex<Vec<(u32, u32)>>,
-    /// Taxi seam fixtures and operation log. Both direct query opcodes and TAXI gossip must append
-    /// the same `open` operation here.
-    taxi_status: Option<codec::TaxiNodeStatusView>,
-    taxi_map: Option<codec::TaxiMapView>,
-    taxi_activation: codec::TaxiActivationResult,
-    taxi_activation_inputs: std::sync::Mutex<Vec<(u64, u64, u32, u32)>>,
-    taxi_error: Option<String>,
-    taxi_calls: std::sync::Mutex<Vec<(&'static str, u64, u64)>>,
-    /// The caller's quest log for `quest_status`, as `(quest_id, rewarded)` pairs — a quest id present
-    /// here is "taken"; `rewarded` distinguishes active vs. turned-in. Absent = never seen.
-    /// Behind a `Mutex` so a test can change the log WHILE a gossip window is open — the
-    /// HELLO→SELECT race the menu snapshot exists to close.
-    quest_log: std::sync::Mutex<Vec<(u32, bool)>>,
-    /// The `npc_text_for_id` view `npc_text_for_id` returns for ANY text_id — `None` by default (the
-    /// generic-greeting fallback), settable per-test for the 8-slot pin coverage.
-    npc_text_view: Option<codec::NpcTextView>,
-    /// Per-VIEWER corpse loot fixture for `corpse_loot(corpse_guid, viewer_guid)` — different viewers
-    /// of the SAME corpse can see different windows (`quest_only` rows are per-looter) — keyed by
-    /// viewer guid, standing in for whatever the real per-viewer read
-    /// (`gateway/src/stdb/reads.rs::corpse_loot`) would return for that viewer; its own filtering
-    /// decision is unit-tested directly in `reads.rs`, not reproduced here. Empty by default — every
-    /// test that never sets this keeps seeing an empty window, byte-identical to before.
-    corpse_loot_by_viewer: std::collections::HashMap<u64, Vec<codec::LootItemView>>,
-    /// Spawned GameObject type returned for the `CMSG_GAMEOBJ_USE` questgiver classification.
-    gameobject_type: Option<u8>,
-    /// Recorded non-questgiver GameObject uses owned by the loot-window seam.
-    gameobjects_used: std::sync::Mutex<Vec<u64>>,
-
-    corpse_loot_reads: std::sync::Mutex<Vec<(u64, u64)>>,
-    /// Recorded `group_loot_method` calls: (loot_setting, master_guid, loot_threshold).
-    group_loot_methods: std::sync::Mutex<Vec<(u8, u64, u8)>>,
-    /// Recorded `loot_roll` calls: (corpse_guid, loot_slot, vote).
-    loot_rolls: std::sync::Mutex<Vec<(u64, u32, u8)>>,
-    /// Recorded `loot_master_give` calls: (corpse_guid, loot_slot, target_guid).
-    loot_master_gives: std::sync::Mutex<Vec<(u64, u8, u64)>>,
-    /// Typed gameplay Refusal returned by loot-roll and master-loot action tests.
-    loot_action_refusal: Option<LootRefusal>,
-    /// Infrastructure failure returned by loot-roll and master-loot action tests.
-    loot_action_failure: Option<String>,
-    /// Recorded `use_item` slots.
-    used_items: std::sync::Mutex<Vec<u8>>,
     /// Recorded `player_login` call count — the WORLDPORT_ACK test distinguishes the
     /// initial `CMSG_PLAYER_LOGIN` call from a world-port RE-entry call, since both dispatch through
     /// this one trait method (`enter_world` is shared by both call sites).
@@ -570,39 +466,49 @@ struct InMemoryStore {
     /// `Arc` and NOT the `SessionTx` itself: holding a sender clone here would keep the writer's
     /// `rx.recv()` alive forever and hang every `enter_world` test's `server.join()`.
     session_depth: std::sync::Mutex<Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>>,
-    /// Canned `game_zone_weather` rows, keyed by zone. A zone absent here has no row, which the
-    /// Module defines as fine weather — the default, so a store that says nothing about weather
-    /// behaves exactly like today's weatherless world.
-    zone_weather: Vec<(u32, codec::ZoneWeatherView)>,
-    /// When set, every weather read fails with this message — the "the Store could not answer"
-    /// case, which must still leave the player with a sky rather than a failed login.
-    weather_error: Option<String>,
-    /// Multi-shard routing: the database this handle stands for. `""` (derive-Default) is the
-    /// single-shard world every other test runs in, where nothing routes.
-    shard: String,
-    /// The handle `home_shard()` hands back — the character's home shard. `None` (default) = "you
-    /// are already on the right shard", i.e. the single-entry shard map / pre-sharding behavior.
-    home: Option<std::sync::Arc<InMemoryStore>>,
-    /// Home-shard reassignment: when set, every `home_shard()` resolution AFTER the first
-    /// answers THIS shard instead of `home` — the mock's stand-in for a routing change landing
-    /// between two logins (a shard-map edit, or the realm-core index re-homing a character). `None`
-    /// (default): every resolution answers `home`, byte-identical to before this field existed.
-    home_after_flip: Option<std::sync::Arc<InMemoryStore>>,
-    /// The one location this handle routes elsewhere, and where to: `(map_id, instance_id, shard)`.
-    /// `None` (derive-Default) = "this handle serves every location", the single-database answer
-    /// `shard_for_location` gives. Keyed by location on purpose — a caller that asks about the
-    /// wrong place gets `None` and the crossing silently becomes a no-op, which is what the tests
-    /// must be able to tell apart from a crossing that ran.
-    location_shard: Option<(u32, u64, std::sync::Arc<InMemoryStore>)>,
-    /// How many times `home_shard()` has been asked — drives `home_after_flip`, and is itself the
-    /// assertion that routing is resolved ONCE PER WORLD ENTRY and never mid-session. SHARED
-    /// between a store and the handles it routes to (like `calls`), so a re-resolution asked of the
-    /// *pinned* handle — which is what a mid-session re-route would actually look like, since
-    /// `route_home` asks whichever handle the session currently holds — is counted too.
-    home_shard_calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-    /// SHARED between a store and its `home` handle: `(shard, call)` for every instrumented
-    /// player-scoped call, in order. The routing test asserts nothing lands on the wrong database.
-    calls: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
+    /// Guids with a LIVE entity on this shard — the per-guid `entity_in_world` answer a
+    /// realm-wide party frame's online flags are built from. Empty = the single `entity_in_world`
+    /// flag above decides, as it did before.
+    live_guids: Vec<u64>,
+    /// When set, every `movement_update` fails with this message. The case that matters is
+    /// `"mover not in world"` — the module's answer for a packet that arrives after
+    /// `teleport_player` despawned the entity, i.e. the tail of every cross-map port.
+    movement_error: Option<String>,
+    /// Optional real shared view used by world-port ordering tests.
+    relay_view: Option<std::sync::Arc<crate::stdb::world_view::WorldView>>,
+    /// With `relay_view`, the Member Stats a Relay tick delivered between viewer registration and
+    /// the world-entry party frame.
+    member_stats_before_party_frame: Option<u64>,
+}
+
+#[derive(Default)]
+struct CharacterState {
+    /// When set, `character_by_guid` cannot answer from this Shard.
+    character_read_error: Option<String>,
+    /// Recorded `delete_character` calls: (account_id, character_guid).
+    deleted: std::sync::Mutex<Vec<(u64, u64)>>,
+    /// When set, `delete_character` returns this outcome instead of `Success`.
+    delete_outcome: Option<codec::CharDeleteOutcome>,
+    created_characters: std::sync::Mutex<Vec<codec::CharacterView>>,
+    /// The Nth guid `create_character` assigns, offset well above every hand-seeded fixture
+    /// guid in this file (the highest is 100, in the transfer tests) so it can never collide.
+    next_created_guid: std::sync::atomic::AtomicU64,
+    /// Reputation standings `player_reputations` returns — `(reputation_index, standing)` pairs folded
+    /// into the login SMSG_INITIALIZE_FACTIONS (restoring persisted standings instead of the
+    /// all-neutral stub).
+    reputations: Vec<(i32, i32, bool)>,
+    /// Imported action-bar rows `player_actions` returns — `(button, action, action_type)` triples.
+    /// Empty by default (the pre-import fallback path).
+    player_actions: Vec<(u8, u32, u8)>,
+    /// The character's spellbook, as `player_learned_spells` reports it. Empty by default; a
+    /// proficiency test seeds the passive the trainer buy is meant to have granted.
+    learned_spells: Vec<u32>,
+    /// How many times a caller asked for the two-snapshot durable absence check.
+    durable_absence_checks: std::sync::atomic::AtomicUsize,
+}
+
+#[derive(Default)]
+struct TransferState {
     /// The fake DATABASE this handle talks to, for the cross-database transfer tests. `None`
     /// (the default) leaves every transfer trait method at its "this store does not shard" default,
     /// so every other test in this file is untouched.
@@ -610,22 +516,24 @@ struct InMemoryStore {
     /// How many `escrowed_transfer` reads answer `None` before the row shows up — the
     /// cross-connection lag between a reducer's reply and the coordinator cache, made dialable.
     escrow_reads_before_visible: std::sync::atomic::AtomicUsize,
-    /// The handle `realm_store()` hands back — the database that owns party
-    /// membership realm-wide. `None` (derive-Default) is the SINGLE-DATABASE gateway, which is what
-    /// every other test in this file is, and it is what routes every party op back onto the
-    /// player-facing reducers below.
-    realm: Option<std::sync::Arc<InMemoryStore>>,
-    /// The connected WORLD shards `world_stores()` fans the roster mirror out to (and the
-    /// cross-shard name/presence lookups walk). Empty = single database. Behind a `Mutex` only so
-    /// the topology can be wired up AFTER every handle exists — production reads the shared
-    /// `ShardSet`, which has the same shape and the same "includes this handle" membership.
-    peers: std::sync::Mutex<Vec<std::sync::Arc<InMemoryStore>>>,
-    /// When set, the configured World Shard set is incomplete or unhealthy.
-    world_shard_set_error: Option<String>,
-    /// How many times a caller asked for the two-snapshot durable absence check.
-    durable_absence_checks: std::sync::atomic::AtomicUsize,
-    /// A Character whose guild lookup fails, as when one Realm-core read errors.
-    guild_lookup_error_for: Option<u64>,
+    /// The transfer step to fail at, simulating a gateway killed before that step's
+    /// transaction committed. `None` = nothing fails.
+    kill_at: Option<String>,
+    /// The REALM-CORE character→shard index this handle's `publish_shard_index` writes. In
+    /// production that write goes to a third database (`realm_core()`); here it is just a map, so a
+    /// test can assert the drive published the destination it settled on.
+    realm_index: std::sync::Mutex<Vec<(u64, u32, u64)>>,
+    /// Realm-core's ordered transfer phase for cross-Shard caller tests.
+    realm_partition: std::sync::Mutex<Option<super::party::RealmCharacterPartition>>,
+    /// When set, `publish_shard_index` fails with this message — an unreachable realm-core.
+    publish_error: Option<String>,
+}
+
+#[derive(Default)]
+struct PartyState {
+    group_invites: std::sync::Mutex<Vec<u64>>,
+    /// Recorded `group_loot_method` calls: (loot_setting, master_guid, loot_threshold).
+    group_loot_methods: std::sync::Mutex<Vec<(u8, u64, u8)>>,
     /// Unclaimed bot invite intent ids on this World Shard. Two concurrent consumers share this
     /// collection, matching the Module table both Gateways call into.
     bot_invite_intents: std::sync::Mutex<Vec<u64>>,
@@ -652,27 +560,52 @@ struct InMemoryStore {
     /// The Roster Revision each `sync_group_mirror` accepted on THIS shard, kept after the disband
     /// tombstone, as the Module's mirror keeps its `game_group_roster_revision` row.
     mirror_revisions: std::sync::Mutex<std::collections::HashMap<u64, u64>>,
-    /// Guids with a LIVE entity on this shard — the per-guid `entity_in_world` answer a
-    /// realm-wide party frame's online flags are built from. Empty = the single `entity_in_world`
-    /// flag above decides, as it did before.
-    live_guids: Vec<u64>,
-    /// Seeded characters that are nevertheless OFFLINE, so the invite gate's "player not
-    /// online" arm can be driven. Empty = every seeded character is online, as before.
-    offline_guids: Vec<u64>,
-    /// Raw `PLAYER_FLAGS` per guid, for `presence_row`'s Away Status. Empty = every guid reads
-    /// `AwayStatus::None`, as a Character with no live entity does in production.
-    away_flags: std::collections::HashMap<u64, u32>,
-    /// `game_area.name` per zone id, for `/who`'s search-string match. Empty = every zone name
-    /// reads "", the "unimported catalogue" case.
-    zone_names: std::collections::HashMap<u32, String>,
     /// When set, `sync_group_mirror` fails with this message — a world shard that cannot be
     /// mirrored (an unreachable database), which must not fail a party op realm-core already took.
     mirror_error: Option<String>,
     /// How many mirror writes fail before this Shard accepts one.
     mirror_failures: std::sync::atomic::AtomicUsize,
-    /// When set, `contact_lists` fails with this message on THIS shard — the
-    /// unreachable-database arm of the realm-wide ignore-list union.
-    contact_lists_error: Option<String>,
+    /// When set, `realm_group_op(ACCEPT, …)` fails with this message. INJECTED because a real
+    /// one cannot be staged synchronously: every accept-time refusal the module has (already grouped,
+    /// party full, the inviter no longer leads) needs the party to change BETWEEN the invite and the
+    /// accept, and the gateway's bot answer runs in the same call as the invite. The failure is still
+    /// reachable in production — a concurrent op on another socket — and what it must not do is leave
+    /// the invite dialog hanging.
+    party_accept_error: Option<String>,
+    /// How many Realm-core LEAVE calls fail before one reaches the party state.
+    party_leave_failures: std::sync::atomic::AtomicUsize,
+    /// When set, every Group Broadcast op fails as a lost connection would.
+    group_broadcast_error: bool,
+    /// Return a connection failure after the next Realm-core LEAVE commits.
+    party_leave_commit_then_error: std::sync::atomic::AtomicBool,
+    /// Fail one `group_roster` read by its one-based call number.
+    group_roster_error_on_read: std::sync::Mutex<Option<(usize, String)>>,
+    /// Number of `group_roster` reads on this handle.
+    group_roster_reads: std::sync::atomic::AtomicUsize,
+    /// When set, this handle cannot enumerate its mirrored party ids.
+    party_group_ids_error: std::sync::Mutex<Option<String>>,
+    party_command_claims: std::sync::Mutex<Vec<(u64, u64)>>,
+    party_command_finishes:
+        std::sync::Mutex<Vec<(u64, u64, super::party::CompanionCommandOutcome)>>,
+    admitted_party_commands: std::sync::Mutex<Vec<super::party::AdmittedCompanionCommand>>,
+    party_command_apply_outcome: Option<super::party::CompanionCommandOutcome>,
+    party_command_receipt_error: std::sync::Mutex<Option<String>>,
+    party_command_authority_members: std::sync::Mutex<Option<Vec<u64>>>,
+    party_command_in_transit: std::sync::Mutex<Vec<u64>>,
+    party_command_receipts: std::sync::Mutex<
+        Vec<(
+            spacetimedb_sdk::Identity,
+            u64,
+            super::party::CompanionCommandOutcome,
+        )>,
+    >,
+    entity_partitions: std::sync::Mutex<Vec<(u64, u32, u64)>>,
+    /// Characters Realm-core reports in a pending Transfer. Read on the realm handle only.
+    members_in_transit: std::sync::Mutex<Vec<u64>>,
+}
+
+#[derive(Default)]
+struct MailState {
     /// The mail rows on THIS database, as `(recipient_guid, row)`. The realm handle owns them on a
     /// sharded gateway and a world shard's staying empty is how a test tells "the mailbox read went
     /// to the authority" from "it quietly went back to being shard-local"; on a single-database
@@ -723,73 +656,357 @@ struct InMemoryStore {
     /// transaction committed. `transfer`'s `kill_at` for the mail drive, and a `Mutex` because a
     /// re-drive test has to bring the database back up before driving again.
     mail_kill_at: std::sync::Mutex<Option<String>>,
-    /// When set, `realm_group_op(ACCEPT, …)` fails with this message. INJECTED because a real
-    /// one cannot be staged synchronously: every accept-time refusal the module has (already grouped,
-    /// party full, the inviter no longer leads) needs the party to change BETWEEN the invite and the
-    /// accept, and the gateway's bot answer runs in the same call as the invite. The failure is still
-    /// reachable in production — a concurrent op on another socket — and what it must not do is leave
-    /// the invite dialog hanging.
-    party_accept_error: Option<String>,
-    /// How many Realm-core LEAVE calls fail before one reaches the party state.
-    party_leave_failures: std::sync::atomic::AtomicUsize,
-    /// When set, every Group Broadcast op fails as a lost connection would.
-    group_broadcast_error: bool,
-    /// Return a connection failure after the next Realm-core LEAVE commits.
-    party_leave_commit_then_error: std::sync::atomic::AtomicBool,
-    /// Fail one `group_roster` read by its one-based call number.
-    group_roster_error_on_read: std::sync::Mutex<Option<(usize, String)>>,
-    /// Number of `group_roster` reads on this handle.
-    group_roster_reads: std::sync::atomic::AtomicUsize,
-    /// When set, this handle cannot enumerate its mirrored party ids.
-    party_group_ids_error: std::sync::Mutex<Option<String>>,
-    /// When set, deleted Character cleanup cannot reach Realm-core.
-    party_cleanup_realm_error: Option<String>,
-    party_command_realm_error: Option<String>,
-    transfer_realm_error: Option<String>,
-    party_command_claims: std::sync::Mutex<Vec<(u64, u64)>>,
-    party_command_finishes:
-        std::sync::Mutex<Vec<(u64, u64, super::party::CompanionCommandOutcome)>>,
-    admitted_party_commands: std::sync::Mutex<Vec<super::party::AdmittedCompanionCommand>>,
-    party_command_apply_outcome: Option<super::party::CompanionCommandOutcome>,
-    party_command_receipt_error: std::sync::Mutex<Option<String>>,
-    party_command_authority_members: std::sync::Mutex<Option<Vec<u64>>>,
-    party_command_in_transit: std::sync::Mutex<Vec<u64>>,
-    party_command_receipts: std::sync::Mutex<
-        Vec<(
-            spacetimedb_sdk::Identity,
-            u64,
-            super::party::CompanionCommandOutcome,
-        )>,
-    >,
-    entity_partitions: std::sync::Mutex<Vec<(u64, u32, u64)>>,
-    /// The transfer step to fail at, simulating a gateway killed before that step's
-    /// transaction committed. `None` = nothing fails.
-    kill_at: Option<String>,
-    /// When set, `settle_home_shard` fails with this message (a transfer that could not be
-    /// driven — an unreachable destination shard, a refused import).
-    settle_error: Option<String>,
-    /// How many `settle_home_shard` calls SUCCEED before `settle_error` starts firing. 0
-    /// (derive-Default) = the very first one fails, i.e. the login-time failure the transfer
-    /// test drives.
-    /// 1 = the login routes fine and the WORLD-PORT's settle is the one that cannot be driven —
-    /// the case that hung a real client on its loading screen forever.
-    settle_ok_calls: usize,
-    /// How many times `settle_home_shard` has been asked (drives `settle_ok_calls`).
-    settle_calls: std::sync::atomic::AtomicUsize,
-    /// Accounts `bind_shard_session` was called for, per shard.
-    bound_sessions: std::sync::Mutex<Vec<u64>>,
-    /// The REALM-CORE character→shard index this handle's `publish_shard_index` writes. In
-    /// production that write goes to a third database (`realm_core()`); here it is just a map, so a
-    /// test can assert the drive published the destination it settled on.
-    realm_index: std::sync::Mutex<Vec<(u64, u32, u64)>>,
-    /// Realm-core's ordered transfer phase for cross-Shard caller tests.
-    realm_partition: std::sync::Mutex<Option<super::party::RealmCharacterPartition>>,
-    /// When set, `publish_shard_index` fails with this message — an unreachable realm-core.
-    publish_error: Option<String>,
-    /// When set, every `movement_update` fails with this message. The case that matters is
-    /// `"mover not in world"` — the module's answer for a packet that arrives after
-    /// `teleport_player` despawned the entity, i.e. the tail of every cross-map port.
-    movement_error: Option<String>,
+    /// `game_item_instance` on THIS database: `item_guid -> (owner_guid, snapshot)`. The mail
+    /// attachment path deletes from here at send and inserts at take, which is the whole "a fenced
+    /// item is in nobody's bags" property.
+    mail_items: std::sync::Mutex<Vec<(u64, u64, mail::AttachedItem)>>,
+    /// This shard's bags have no room — the fixture behind the full-bag refusal on a take.
+    /// Atomic so a test can flip it AFTER the fixture is wrapped in an `Arc`, like `purses`.
+    bags_full: std::sync::atomic::AtomicBool,
+}
+
+#[derive(Default)]
+struct SocialState {
+    /// Friend/ignore rows: `(owner_guid, target_guid, is_ignore)`. `add_friend`/
+    /// `add_ignore`/`del_friend`/`del_ignore` mutate it; `contact_lists` reads it scoped to the caller.
+    contacts: std::sync::Mutex<Vec<(u64, u64, bool)>>,
+    /// This Shard's stored Auto-Replies, by Character guid.
+    auto_replies: std::sync::Mutex<std::collections::HashMap<u64, String>>,
+    /// Seeded characters that are nevertheless OFFLINE, so the invite gate's "player not
+    /// online" arm can be driven. Empty = every seeded character is online, as before.
+    offline_guids: Vec<u64>,
+    /// Raw `PLAYER_FLAGS` per guid, for `presence_row`'s Away Status. Empty = every guid reads
+    /// `AwayStatus::None`, as a Character with no live entity does in production.
+    away_flags: std::collections::HashMap<u64, u32>,
+    /// `game_area.name` per zone id, for `/who`'s search-string match. Empty = every zone name
+    /// reads "", the "unimported catalogue" case.
+    zone_names: std::collections::HashMap<u32, String>,
+    /// When set, `contact_lists` fails with this message on THIS shard — the
+    /// unreachable-database arm of the realm-wide ignore-list union.
+    contact_lists_error: Option<String>,
+    /// Live `game_world_entity` rows on THIS shard, as the columns Member Stats read.
+    member_entities: std::sync::Mutex<Vec<(u64, codec::MemberEntity)>>,
+    /// Characters THIS shard shows between two places: an online Session with no entity, or a
+    /// bot named by a Transfer Intent.
+    members_between_places: std::sync::Mutex<Vec<u64>>,
+}
+
+#[derive(Default)]
+struct NpcState {
+    /// `npc_is_innkeeper` flag for the gossip bind-home routing.
+    innkeeper: bool,
+    /// Whether `bind_home` ran (the innkeeper gossip select).
+    home_bound: std::sync::atomic::AtomicBool,
+    /// Imported gossip menu options `gossip_options` returns for ANY npc_guid — empty
+    /// by default (the pre-import fallback path).
+    gossip_opts: Vec<codec::GossipOptionView>,
+    /// Recorded `gossip_select` notifications as `(option_id, option_row_id)` — the clicked POSITION
+    /// and the stable row identity the module is told about.
+    gossip_selects: std::sync::Mutex<Vec<(u32, u32)>>,
+    /// The `npc_text_for_id` view `npc_text_for_id` returns for ANY text_id — `None` by default (the
+    /// generic-greeting fallback), settable per-test for the 8-slot pin coverage.
+    npc_text_view: Option<codec::NpcTextView>,
+    /// Spawned GameObject type returned for the `CMSG_GAMEOBJ_USE` questgiver classification.
+    gameobject_type: Option<u8>,
+}
+
+#[derive(Default)]
+struct TrainerState {
+    /// Spelled as a refusal so derive-Default (false) keeps every fixture trainer serving; the
+    /// trait method reads the negation.
+    trainer_refuses_class: bool,
+    /// When set, the trainer buy answers this Refusal instead of learning the spell.
+    trainer_buy_refusal: Option<lyracore_shared::trainer::TrainerRefusal>,
+    /// What `talent_grant_spell` returns (0 = passive talent → no SMSG_LEARNED_SPELL push).
+    talent_grant: u32,
+    /// What `talent_pane_sync` returns: (teach rank-spell, superseded prev, points remaining).
+    talent_pane: (u32, u32, u32),
+    /// What `superseded_old_rank` returns for a trainer buy — the known previous rank a
+    /// non-stacking chain's new rank replaces. `None` (derive-Default) mirrors "no known prior
+    /// rank" -> a trainer buy pushes plain SMSG_LEARNED_SPELL.
+    trainer_superseded: Option<u32>,
+    /// Recorded `reset_talents` dispatches: (account_id, self_guid, trainer_guid) — the unlearn-talents
+    /// gossip select.
+    reset_talents_calls: std::sync::Mutex<Vec<(u64, u64, u64)>>,
+    /// When set, `reset_talents` returns this error instead of recording the call.
+    reset_talents_error: Option<String>,
+    /// Trainer rows `trainer_list` returns for ANY (player, trainer) pair — the
+    /// CMSG_TRAINER_LIST fixture. Empty by default (an empty trainer window).
+    trainer_spells: Vec<codec::TrainerSpellView>,
+    /// `learn_skill_line` per offering id — the skill-teaching offerings the fixture trainer carries.
+    /// Empty by default, so every offering reads as an ordinary spell purchase.
+    trainer_offer_skill_lines: std::collections::HashMap<u32, u32>,
+}
+
+#[derive(Default)]
+struct BankState {
+    /// Recorded `auto_bank_item` slots — backs both CMSG_AUTOBANK_ITEM (deposit) and
+    /// CMSG_AUTOSTORE_BANK_ITEM (withdraw), which both route onto this one store method.
+    auto_banked_items: std::sync::Mutex<Vec<u8>>,
+    /// Recorded `buy_bank_slot` calls — the banker guid named on each `CMSG_BUY_BANK_SLOT`.
+    bought_bank_slots: std::sync::Mutex<Vec<u64>>,
+}
+
+#[derive(Default)]
+struct CombatState {
+    /// Recorded `set_sheathed` dispatches: (self_guid, state), the `CMSG_SETSHEATHED` route.
+    sheathed: std::sync::Mutex<Vec<(u64, u8)>>,
+    /// Recorded `set_target` target guids — CMSG_SET_SELECTION. (`rec("set_target")` already
+    /// pins the per-shard call NAME; this pins the ARGUMENT actually threaded through.)
+    selected_targets: std::sync::Mutex<Vec<u64>>,
+    /// When set, `set_target` fails before the reducer can complete. This models the call pipe
+    /// whose transport dies while an admitted world session is in flight.
+    set_target_error: Option<String>,
+}
+
+#[derive(Default)]
+struct DeathState {
+    /// Recorded `repop` calls — the caller's self_guid, one entry per CMSG_REPOP_REQUEST.
+    repopped: std::sync::Mutex<Vec<u64>>,
+    /// Recorded `reclaim_corpse` calls — `(self_guid, corpse_guid)` off CMSG_RECLAIM_CORPSE.
+    reclaimed_corpses: std::sync::Mutex<Vec<(u64, u64)>>,
+    /// Recorded `resurrect_response` calls — `(self_guid, accept)`, pinning the wire's
+    /// `status != 0` → bool mapping.
+    resurrect_responses: std::sync::Mutex<Vec<(u64, bool)>>,
+    /// Recorded `self_resurrect` calls: the caller's self_guid off CMSG_SELF_RES.
+    self_resurrects: std::sync::Mutex<Vec<u64>>,
+    /// When set, `self_resurrect` returns this Refusal after recording the call.
+    self_resurrect_error: Option<String>,
+    /// Recorded `spirit_healer_res` calls — `(self_guid, healer_guid)` off
+    /// CMSG_SPIRIT_HEALER_ACTIVATE.
+    spirit_healer_calls: std::sync::Mutex<Vec<(u64, u64)>>,
+}
+
+#[derive(Default)]
+struct TradeState {
+    /// Recorded `initiate_trade` calls, `(self_guid, target_guid)` off CMSG_INITIATE_TRADE.
+    initiated_trades: std::sync::Mutex<Vec<(u64, u64)>>,
+    /// Recorded `begin_trade` self_guids, CMSG_BEGIN_TRADE.
+    begun_trades: std::sync::Mutex<Vec<u64>>,
+    /// Recorded `cancel_trade` self_guids, CMSG_CANCEL_TRADE.
+    cancelled_trades: std::sync::Mutex<Vec<u64>>,
+    /// Recorded `set_trade_item` calls — `(self_guid, trade_slot, inv_slot)` AFTER the gateway's
+    /// (bag, slot) → absolute-slot mapping.
+    set_trade_items: std::sync::Mutex<Vec<(u64, u8, u8)>>,
+    /// Recorded `clear_trade_item` calls, `(self_guid, trade_slot)`.
+    cleared_trade_items: std::sync::Mutex<Vec<(u64, u8)>>,
+    /// Recorded `set_trade_gold` calls, `(self_guid, copper)` after the wire's Gold decode.
+    set_trade_golds: std::sync::Mutex<Vec<(u64, u32)>>,
+    /// Recorded `accept_trade` self_guids, CMSG_ACCEPT_TRADE.
+    accepted_trades: std::sync::Mutex<Vec<u64>>,
+    /// Recorded `unaccept_trade` self_guids, CMSG_UNACCEPT_TRADE.
+    unaccepted_trades: std::sync::Mutex<Vec<u64>>,
+    /// Recorded `busy_trade` self_guids, CMSG_BUSY_TRADE.
+    busy_trades: std::sync::Mutex<Vec<u64>>,
+    /// Recorded `ignore_trade` self_guids, CMSG_IGNORE_TRADE.
+    ignore_trades: std::sync::Mutex<Vec<u64>>,
+}
+
+#[derive(Default)]
+struct CastState {
+    /// Imported item templates the query path resolves by entry. Keeping this keyed fixture here
+    /// makes socket tests exercise the same durable read shape as the Coordinator cache.
+    item_templates: Vec<codec::ItemTemplateView>,
+    /// Recorded `cast_spell` dispatches: (spell_id, target_guid) — pins target threading.
+    casts: std::sync::Mutex<Vec<(u32, u64)>>,
+    /// Recorded `start_ranged_attack` dispatches: (target_guid, spell_id) — the Auto Shot intercept.
+    ranged_attacks: std::sync::Mutex<Vec<(u64, u32)>>,
+    /// The caller's owned items, for the Auto Shot ammo block on the activation START.
+    player_items_fixture: Vec<codec::ItemInstanceView>,
+    /// Recorded `cancel_aura` spell ids — CMSG_CANCEL_AURA.
+    cancelled_auras: std::sync::Mutex<Vec<u32>>,
+    /// Recorded `cancel_cast` self_guids — CMSG_CANCEL_CAST.
+    cancelled_casts: std::sync::Mutex<Vec<u64>>,
+}
+
+#[derive(Default)]
+struct TaxiState {
+    /// Taxi seam fixtures and operation log. Both direct query opcodes and TAXI gossip must append
+    /// the same `open` operation here.
+    taxi_status: Option<codec::TaxiNodeStatusView>,
+    taxi_map: Option<codec::TaxiMapView>,
+    taxi_activation: codec::TaxiActivationResult,
+    taxi_activation_inputs: std::sync::Mutex<Vec<(u64, u64, u32, u32)>>,
+    taxi_error: Option<String>,
+    taxi_calls: std::sync::Mutex<Vec<(&'static str, u64, u64)>>,
+}
+
+#[derive(Default)]
+struct MeleeState {
+    /// When set, `start_attack` returns this error. Only the session-fatal desync case is driven
+    /// from here now; the refusal mapping is tested on the melee seam itself.
+    start_attack_error: Option<String>,
+    /// Recorded `stop_attack` dispatches: the actor guid. The Auto Shot teardowns reach this
+    /// through `WorldStore`'s `MeleeActionStore` supertrait, so it pins that resolution.
+    stop_attacks: std::sync::Mutex<Vec<u64>>,
+}
+
+#[derive(Default)]
+struct ChatState {
+    /// What `speaker_facts` answers for every speaker. `None` models a speaker with no live entity.
+    speaker_facts: Option<SpeakerFacts>,
+    /// What `realm_chat` answers. `None` delivers.
+    realm_chat_outcome: Option<ChatOutcome>,
+    /// Every Character's GM level, as `speaker_gm_level` reads it.
+    gm_level: u8,
+    /// Recorded `realm_chat` requests, with the speaker guid the session authenticated.
+    realm_chats: std::sync::Mutex<Vec<(u64, RealmChatRequest)>>,
+    /// Recorded `set_away` requests: `(speaker_guid, kind, message)`.
+    away_requests: std::sync::Mutex<Vec<(u64, u8, String)>>,
+    /// What `realm_whisper` answers. `None` delivers.
+    realm_whisper_outcome: Option<ChatOutcome>,
+    /// When set, `realm_whisper` fails with this message.
+    realm_whisper_error: Option<String>,
+    /// Recorded `realm_whisper` requests, with the speaker guid the session authenticated.
+    realm_whispers: std::sync::Mutex<Vec<(u64, WhisperRequest)>>,
+}
+
+#[derive(Default)]
+struct SpeechState {
+    /// What `send_chat` answers; `None` delivers.
+    send_chat_outcome: Option<ChatOutcome>,
+    /// When set, `gm_command` returns this error — e.g. `"permission denied"` to
+    /// drive the Say-handler's `Err` → self-only `SMSG_MESSAGECHAT` System relay.
+    gm_command_error: Option<String>,
+    /// Recorded `gm_command` dispatches — the dot-command divert test asserts the
+    /// RIGHT raw text (still carrying its leading `.`) reached the reducer call, and that a NON-dot
+    /// Say never reaches this vec at all.
+    gm_commands: std::sync::Mutex<Vec<(String, String)>>,
+    /// Current Realm-core Alpha Test Tools answer for the next command. `None` leaves the older
+    /// fixed-outcome fixture in place; tests that set it model the production Store's fresh read.
+    gm_alpha_test_tools: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// The authority conveyed with each command when `gm_alpha_test_tools` is in use.
+    gm_authority_results: std::sync::Mutex<Vec<bool>>,
+    /// Home Shard gameplay accepted by the focused Alpha Test Tools Fake. The command parser and
+    /// effects belong to Module tests, so this only records the visible Store outcome.
+    gm_gameplay_changes: std::sync::Mutex<Vec<String>>,
+    /// Recorded `send_chat` lines: (chat_type, language, message).
+    chats: std::sync::Mutex<Vec<(u8, u8, String)>>,
+}
+
+#[derive(Default)]
+struct ChannelState {
+    /// What `channel_op` answers. `None` succeeds.
+    channel_outcome: Option<ChannelOutcome>,
+    /// Recorded `channel_op` calls: `(actor_guid, op, request)`.
+    channel_ops: std::sync::Mutex<Vec<(u64, u8, ChannelRequest)>>,
+}
+
+#[derive(Default)]
+struct GuildState {
+    /// Realm-core Guilds the guild query answers from.
+    guilds: Vec<codec::GuildView>,
+    /// Realm-core member rows. Guild ops are recorded in `calls` as `guild_op:<request>`.
+    guild_memberships: Vec<codec::GuildMemberView>,
+    /// A Fee Hold left on this Home Shard. Fee steps are recorded in `calls` as `guild_fee_<step>`.
+    guild_fee_hold: std::sync::Mutex<Option<crate::world::guild_fee::FeeHold>>,
+    /// Realm-core Petitions.
+    guild_petitions: Vec<codec::PetitionView>,
+    /// Guild Charters the logged-in Character holds on this Home Shard.
+    held_charters: Vec<u64>,
+    /// A Character whose guild lookup fails, as when one Realm-core read errors.
+    guild_lookup_error_for: Option<u64>,
+}
+
+#[derive(Default)]
+struct AuctionState {
+    /// The auctioneer's house and faction verdict returned to the focused auction seam.
+    auction_interaction: Option<AuctionInteraction>,
+}
+
+#[derive(Default)]
+struct QuestState {
+    /// Quest-giver evals returned by `giver_quest_evals` (the menu/status input).
+    quest_evals: Vec<codec::GiverQuestEval>,
+    /// Quest details `quest_detail_view(id)` resolves from (matched by `quest_id`).
+    quest_details: Vec<codec::QuestDetailView>,
+    /// The player's quest-log slots `player_quest_log` returns (drives the login descriptor block).
+    quest_log_slots: Vec<codec::update_mask::QuestLogSlot>,
+    /// Recorded `turn_in_quest` dispatches: (account, giver, quest, reward_index) — so the
+    /// choose-reward socket test asserts the player's pick reached the store unchanged.
+    turned_in: std::sync::Mutex<Vec<(u64, u64, u32, u32)>>,
+    /// A Reward Letter a successful `turn_in_quest` files as Escrow for the Character, as
+    /// `gw_turn_in_quest` does in its own transaction.
+    turn_in_reward_letter: Option<mail::HeldEscrow>,
+    /// The caller's quest log for `quest_status`, as `(quest_id, rewarded)` pairs — a quest id present
+    /// here is "taken"; `rewarded` distinguishes active vs. turned-in. Absent = never seen.
+    /// Behind a `Mutex` so a test can change the log WHILE a gossip window is open — the
+    /// HELLO→SELECT race the menu snapshot exists to close.
+    quest_log: std::sync::Mutex<Vec<(u32, bool)>>,
+}
+
+#[derive(Default)]
+struct VendorState {
+    /// Vendor stock the seam's `vendor_stock` read returns (empty by default).
+    vendor_stock: Vec<codec::VendorItemView>,
+    /// The player's buyback ring as `(item_entry, stack_count, price)`; empty by default, so a
+    /// fixture login replays no buyback tab.
+    buyback_ring: Vec<(u32, u32, u32, u32)>,
+    /// Item-instance guid → bag slot, for the vendor repair target.
+    item_slots: Vec<(u64, u8)>,
+    /// Recorded `vendor_buyback` calls: (vendor_guid, slot) — pins the 69→0 slot mapping.
+    bought_back: std::sync::Mutex<Vec<(u64, u8)>>,
+}
+
+#[derive(Default)]
+struct ItemState {
+    /// Recorded `use_item` slots.
+    used_items: std::sync::Mutex<Vec<u8>>,
+}
+
+#[derive(Default)]
+struct WeatherState {
+    /// Canned `game_zone_weather` rows, keyed by zone. A zone absent here has no row, which the
+    /// Module defines as fine weather — the default, so a store that says nothing about weather
+    /// behaves exactly like today's weatherless world.
+    zone_weather: Vec<(u32, codec::ZoneWeatherView)>,
+    /// When set, every weather read fails with this message — the "the Store could not answer"
+    /// case, which must still leave the player with a sky rather than a failed login.
+    weather_error: Option<String>,
+}
+
+#[derive(Default)]
+struct MemberStatsState {
+    /// How many `member_presence` reads reached this handle.
+    member_presence_reads: std::sync::atomic::AtomicUsize,
+}
+
+#[derive(Default)]
+struct LootWindowState {
+    /// The lootable copper `loot_target_money` reports for any target (default 0).
+    corpse_money: u32,
+    /// Recorded `loot_money` targets — CMSG_LOOT_MONEY must drive the TRACKED guid.
+    money_looted: std::sync::Mutex<Vec<u64>>,
+    /// Recorded target and slot for `CMSG_AUTOSTORE_LOOT_ITEM`.
+    items_looted: std::sync::Mutex<Vec<(u64, u8)>>,
+    /// Recorded `skin_corpse` targets (the empty-loot-window skinning fallback).
+    skinned: std::sync::Mutex<Vec<u64>>,
+    /// Typed legacy skinning refusal returned by the empty-loot fallback.
+    skinning_refusal: Option<LootWindowRefusal>,
+    /// Infrastructure failure returned by the empty-loot skinning fallback.
+    skinning_failure: Option<String>,
+    /// Per-VIEWER corpse loot fixture for `corpse_loot(corpse_guid, viewer_guid)` — different viewers
+    /// of the SAME corpse can see different windows (`quest_only` rows are per-looter) — keyed by
+    /// viewer guid, standing in for whatever the real per-viewer read
+    /// (`gateway/src/stdb/reads.rs::corpse_loot`) would return for that viewer; its own filtering
+    /// decision is unit-tested directly in `reads.rs`, not reproduced here. Empty by default — every
+    /// test that never sets this keeps seeing an empty window, byte-identical to before.
+    corpse_loot_by_viewer: std::collections::HashMap<u64, Vec<codec::LootItemView>>,
+    /// Recorded non-questgiver GameObject uses owned by the loot-window seam.
+    gameobjects_used: std::sync::Mutex<Vec<u64>>,
+    corpse_loot_reads: std::sync::Mutex<Vec<(u64, u64)>>,
+}
+
+#[derive(Default)]
+struct LootRollState {
+    /// Recorded `loot_roll` calls: (corpse_guid, loot_slot, vote).
+    loot_rolls: std::sync::Mutex<Vec<(u64, u32, u8)>>,
+    /// Recorded `loot_master_give` calls: (corpse_guid, loot_slot, target_guid).
+    loot_master_gives: std::sync::Mutex<Vec<(u64, u8, u64)>>,
+    /// Typed gameplay Refusal returned by loot-roll and master-loot action tests.
+    loot_action_refusal: Option<LootRefusal>,
+    /// Infrastructure failure returned by loot-roll and master-loot action tests.
+    loot_action_failure: Option<String>,
     /// Records every `realm_loot_op` argument in wire order. The Realm-core handle owns the
     /// recorder so a test can distinguish authority routing from a Shard-local request.
     #[allow(clippy::type_complexity)]
@@ -828,85 +1045,6 @@ struct InMemoryStore {
     /// shape the real `game_group_event.id` high-water mark has, without needing a fake event table.
     /// `Mutex`-wrapped for the same after-`Arc`-construction reason as `pending_rolls`.
     won_events: std::sync::Mutex<Vec<(u64, u8, u64)>>,
-    /// Recorded `auto_bank_item` slots — backs both CMSG_AUTOBANK_ITEM (deposit) and
-    /// CMSG_AUTOSTORE_BANK_ITEM (withdraw), which both route onto this one store method.
-    auto_banked_items: std::sync::Mutex<Vec<u8>>,
-    /// Recorded `buy_bank_slot` calls — the banker guid named on each `CMSG_BUY_BANK_SLOT`.
-    bought_bank_slots: std::sync::Mutex<Vec<u64>>,
-    /// Trainer rows `trainer_list` returns for ANY (player, trainer) pair — the
-    /// CMSG_TRAINER_LIST fixture. Empty by default (an empty trainer window).
-    trainer_spells: Vec<codec::TrainerSpellView>,
-    /// `learn_skill_line` per offering id — the skill-teaching offerings the fixture trainer carries.
-    /// Empty by default, so every offering reads as an ordinary spell purchase.
-    trainer_offer_skill_lines: std::collections::HashMap<u32, u32>,
-    /// Recorded `repop` calls — the caller's self_guid, one entry per CMSG_REPOP_REQUEST.
-    repopped: std::sync::Mutex<Vec<u64>>,
-    /// Recorded `reclaim_corpse` calls — `(self_guid, corpse_guid)` off CMSG_RECLAIM_CORPSE.
-    reclaimed_corpses: std::sync::Mutex<Vec<(u64, u64)>>,
-    /// Recorded `resurrect_response` calls — `(self_guid, accept)`, pinning the wire's
-    /// `status != 0` → bool mapping.
-    resurrect_responses: std::sync::Mutex<Vec<(u64, bool)>>,
-    /// Recorded `self_resurrect` calls: the caller's self_guid off CMSG_SELF_RES.
-    self_resurrects: std::sync::Mutex<Vec<u64>>,
-    /// When set, `self_resurrect` returns this Refusal after recording the call.
-    self_resurrect_error: Option<String>,
-    /// Recorded `spirit_healer_res` calls — `(self_guid, healer_guid)` off
-    /// CMSG_SPIRIT_HEALER_ACTIVATE.
-    spirit_healer_calls: std::sync::Mutex<Vec<(u64, u64)>>,
-    /// Recorded `set_target` target guids — CMSG_SET_SELECTION. (`rec("set_target")` already
-    /// pins the per-shard call NAME; this pins the ARGUMENT actually threaded through.)
-    selected_targets: std::sync::Mutex<Vec<u64>>,
-    /// When set, `set_target` fails before the reducer can complete. This models the call pipe
-    /// whose transport dies while an admitted world session is in flight.
-    set_target_error: Option<String>,
-    /// Optional real shared view used by world-port ordering tests.
-    relay_view: Option<std::sync::Arc<crate::stdb::world_view::WorldView>>,
-    /// Whether this character still had an addressable viewer at each transfer-resolution call.
-    viewer_present_at_settle: std::sync::Mutex<Vec<bool>>,
-    /// Recorded `cancel_aura` spell ids — CMSG_CANCEL_AURA.
-    cancelled_auras: std::sync::Mutex<Vec<u32>>,
-    /// Recorded `cancel_cast` self_guids — CMSG_CANCEL_CAST.
-    cancelled_casts: std::sync::Mutex<Vec<u64>>,
-    /// `game_item_instance` on THIS database: `item_guid -> (owner_guid, snapshot)`. The mail
-    /// attachment path deletes from here at send and inserts at take, which is the whole "a fenced
-    /// item is in nobody's bags" property.
-    mail_items: std::sync::Mutex<Vec<(u64, u64, mail::AttachedItem)>>,
-    /// This shard's bags have no room — the fixture behind the full-bag refusal on a take.
-    /// Atomic so a test can flip it AFTER the fixture is wrapped in an `Arc`, like `purses`.
-    bags_full: std::sync::atomic::AtomicBool,
-    /// Recorded `initiate_trade` calls, `(self_guid, target_guid)` off CMSG_INITIATE_TRADE.
-    initiated_trades: std::sync::Mutex<Vec<(u64, u64)>>,
-    /// Recorded `begin_trade` self_guids, CMSG_BEGIN_TRADE.
-    begun_trades: std::sync::Mutex<Vec<u64>>,
-    /// Recorded `cancel_trade` self_guids, CMSG_CANCEL_TRADE.
-    cancelled_trades: std::sync::Mutex<Vec<u64>>,
-    /// Recorded `set_trade_item` calls — `(self_guid, trade_slot, inv_slot)` AFTER the gateway's
-    /// (bag, slot) → absolute-slot mapping.
-    set_trade_items: std::sync::Mutex<Vec<(u64, u8, u8)>>,
-    /// Recorded `clear_trade_item` calls, `(self_guid, trade_slot)`.
-    cleared_trade_items: std::sync::Mutex<Vec<(u64, u8)>>,
-    /// Recorded `set_trade_gold` calls, `(self_guid, copper)` after the wire's Gold decode.
-    set_trade_golds: std::sync::Mutex<Vec<(u64, u32)>>,
-    /// Recorded `accept_trade` self_guids, CMSG_ACCEPT_TRADE.
-    accepted_trades: std::sync::Mutex<Vec<u64>>,
-    /// Recorded `unaccept_trade` self_guids, CMSG_UNACCEPT_TRADE.
-    unaccepted_trades: std::sync::Mutex<Vec<u64>>,
-    /// Recorded `busy_trade` self_guids, CMSG_BUSY_TRADE.
-    busy_trades: std::sync::Mutex<Vec<u64>>,
-    /// Recorded `ignore_trade` self_guids, CMSG_IGNORE_TRADE.
-    ignore_trades: std::sync::Mutex<Vec<u64>>,
-    /// Live `game_world_entity` rows on THIS shard, as the columns Member Stats read.
-    member_entities: std::sync::Mutex<Vec<(u64, codec::MemberEntity)>>,
-    /// Characters Realm-core reports in a pending Transfer. Read on the realm handle only.
-    members_in_transit: std::sync::Mutex<Vec<u64>>,
-    /// Characters THIS shard shows between two places: an online Session with no entity, or a
-    /// bot named by a Transfer Intent.
-    members_between_places: std::sync::Mutex<Vec<u64>>,
-    /// With `relay_view`, the Member Stats a Relay tick delivered between viewer registration and
-    /// the world-entry party frame.
-    member_stats_before_party_frame: Option<u64>,
-    /// How many `member_presence` reads reached this handle.
-    member_presence_reads: std::sync::atomic::AtomicUsize,
 }
 
 /// The Fake's reducer edge for a party op: the Module answers a Refusal as the bare tag, and
@@ -926,11 +1064,16 @@ fn faked_contact(error: &str) -> Result<ContactOutcome> {
     }
 }
 
-impl InMemoryStore {
+impl WorldFake {
     /// Drop one contact row, or refuse when the owner does not hold it.
     fn remove_contact(&self, target_guid: u64, is_ignore: bool) -> Result<ContactOutcome> {
-        let owner = self.login_entity.as_ref().map(|e| e.guid).unwrap_or(0);
-        let mut contacts = self.contacts.lock().unwrap();
+        let owner = self
+            .session
+            .login_entity
+            .as_ref()
+            .map(|e| e.guid)
+            .unwrap_or(0);
+        let mut contacts = self.social.contacts.lock().unwrap();
         let before = contacts.len();
         contacts.retain(|&(o, t, ig)| !(o == owner && t == target_guid && ig == is_ignore));
         if contacts.len() == before {
@@ -942,25 +1085,27 @@ impl InMemoryStore {
     /// Read realm-core's party the way its Coordinator cache shows it: stale after a lagging
     /// call-pipe commit, current otherwise.
     fn realm_cache<R>(&self, read: impl FnOnce(&FakeParty) -> R) -> R {
-        if let Some(stale) = &*self.stale_party.lock().unwrap() {
+        if let Some(stale) = &*self.party.stale_party.lock().unwrap() {
             return read(stale);
         }
-        read(&self.party.lock().unwrap())
+        read(&self.party.party.lock().unwrap())
     }
 
     /// Record one player-scoped call against THIS handle's shard.
     fn rec(&self, what: &str) {
-        self.calls
+        self.topology
+            .calls
             .lock()
             .unwrap()
-            .push((self.shard.clone(), what.to_string()));
+            .push((self.topology.shard.clone(), what.to_string()));
     }
 
     /// `guid`'s Away Status from `away_flags` (raw `PLAYER_FLAGS`), `AwayStatus::None` when unset —
     /// mirroring "a Character with no live entity has `AwayStatus::None`" for every guid a test
     /// never seeds.
     fn away(&self, guid: u64) -> presence::AwayStatus {
-        self.away_flags
+        self.social
+            .away_flags
             .get(&guid)
             .copied()
             .map(presence::away_from_player_flags)
@@ -970,8 +1115,11 @@ impl InMemoryStore {
     /// One mail-escrow step boundary. `Err` is the gateway dying before this step committed: the
     /// call never lands, and nothing after it in the drive runs either.
     fn mail_kill(&self, step: &str) -> Result<()> {
-        if self.mail_kill_at.lock().unwrap().as_deref() == Some(step) {
-            anyhow::bail!("injected: the gateway died before {step} on {}", self.shard);
+        if self.mail.mail_kill_at.lock().unwrap().as_deref() == Some(step) {
+            anyhow::bail!(
+                "injected: the gateway died before {step} on {}",
+                self.topology.shard
+            );
         }
         Ok(())
     }
@@ -979,7 +1127,7 @@ impl InMemoryStore {
     /// Take `copper` out of a purse on THIS database, or refuse and take nothing — the module's
     /// `charge_postage`, including its "no live entity here" arm for a guid with no purse row.
     fn debit(&self, guid: u64, copper: u32) -> Result<()> {
-        let mut purses = self.purses.lock().unwrap();
+        let mut purses = self.mail.purses.lock().unwrap();
         match purses.iter_mut().find(|(g, _)| *g == guid) {
             Some((_, money)) if *money >= copper => {
                 *money -= copper;
@@ -990,7 +1138,7 @@ impl InMemoryStore {
     }
 
     fn credit(&self, guid: u64, copper: u32) {
-        let mut purses = self.purses.lock().unwrap();
+        let mut purses = self.mail.purses.lock().unwrap();
         if let Some((_, money)) = purses.iter_mut().find(|(g, _)| *g == guid) {
             *money = money.saturating_add(copper);
         }
@@ -1002,7 +1150,7 @@ impl InMemoryStore {
         if item_guid == 0 {
             return Ok(mail::AttachedItem::default());
         }
-        let mut items = self.mail_items.lock().unwrap();
+        let mut items = self.mail.mail_items.lock().unwrap();
         match items
             .iter()
             .position(|(g, owner, _)| *g == item_guid && *owner == sender_guid)
@@ -1018,10 +1166,14 @@ impl InMemoryStore {
     /// The module's `store_instance_state`: one new row carrying the recorded state, or the item
     /// module's own full-bag refusal.
     fn store_snapshot(&self, owner_guid: u64, item: &mail::AttachedItem) -> Result<()> {
-        if self.bags_full.load(std::sync::atomic::Ordering::Relaxed) {
+        if self
+            .mail
+            .bags_full
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             return Err(anyhow!(lyracore_shared::mail::INVENTORY_FULL));
         }
-        let mut items = self.mail_items.lock().unwrap();
+        let mut items = self.mail.mail_items.lock().unwrap();
         let guid = items.iter().map(|(g, _, _)| *g).max().unwrap_or(0) + 1;
         items.push((guid, owner_guid, item.clone()));
         Ok(())
@@ -1030,7 +1182,8 @@ impl InMemoryStore {
     /// Every item `owner` holds on this database — the assertion surface for "it left the bags",
     /// "it arrived unchanged" and "it never arrived twice".
     pub(crate) fn bags_of(&self, owner: u64) -> Vec<mail::AttachedItem> {
-        self.mail_items
+        self.mail
+            .mail_items
             .lock()
             .unwrap()
             .iter()
@@ -1063,7 +1216,7 @@ impl InMemoryStore {
         } else {
             lyracore_shared::mail::CHECK_MASK_HAS_BODY
         };
-        let mut mails = self.mails.lock().unwrap();
+        let mut mails = self.mail.mails.lock().unwrap();
         let id = mails.iter().map(|(_, m)| m.id).max().unwrap_or(0) + 1;
         mails.push((
             recipient_guid,
@@ -1088,7 +1241,8 @@ impl InMemoryStore {
         ));
         drop(mails);
         if item.item_text_id != 0 {
-            self.mail_item_text_ids
+            self.mail
+                .mail_item_text_ids
                 .lock()
                 .unwrap()
                 .push((id, item.item_text_id));
@@ -1097,7 +1251,8 @@ impl InMemoryStore {
 
     /// The text id of the letter attached to mail `mail_id`, 0 for any other attachment.
     fn attached_text_id(&self, mail_id: u64) -> u32 {
-        self.mail_item_text_ids
+        self.mail
+            .mail_item_text_ids
             .lock()
             .unwrap()
             .iter()
@@ -1107,7 +1262,7 @@ impl InMemoryStore {
 
     /// Take the attached letter's text id off mail `mail_id`, as the take clears the attachment.
     fn take_attached_text_id(&self, mail_id: u64) -> u32 {
-        let mut ids = self.mail_item_text_ids.lock().unwrap();
+        let mut ids = self.mail.mail_item_text_ids.lock().unwrap();
         let Some(at) = ids.iter().position(|(id, _)| *id == mail_id) else {
             return 0;
         };
@@ -1115,7 +1270,8 @@ impl InMemoryStore {
     }
 
     fn saw_same_account(&self, call: &'static str, same_account: bool) {
-        self.same_account_seen
+        self.mail
+            .same_account_seen
             .lock()
             .unwrap()
             .push((call, same_account));
@@ -1125,10 +1281,11 @@ impl InMemoryStore {
     /// before this step's transaction committed", which is exactly a truncated drive.
     fn xstep(&self, what: &str) -> Result<&std::sync::Arc<FakeShardDb>> {
         let db = self
+            .transfer
             .xdb
             .as_ref()
             .ok_or_else(|| anyhow!("this store does not implement cross-database transfers"))?;
-        if self.kill_at.as_deref() == Some(what) {
+        if self.transfer.kill_at.as_deref() == Some(what) {
             return Err(anyhow!("gateway killed at {what}"));
         }
         self.rec(what);
@@ -1137,11 +1294,12 @@ impl InMemoryStore {
 
     fn home_shard(&self, _character_guid: u64) -> Option<std::sync::Arc<dyn WorldStore>> {
         let nth = self
+            .topology
             .home_shard_calls
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let resolved = match (&self.home_after_flip, nth) {
+        let resolved = match (&self.topology.home_after_flip, nth) {
             (Some(flipped), n) if n >= 1 => Some(flipped.clone()),
-            _ => self.home.clone(),
+            _ => self.topology.home.clone(),
         };
         resolved.map(|h| h as std::sync::Arc<dyn WorldStore>)
     }
@@ -1154,7 +1312,7 @@ impl InMemoryStore {
         map_id: u32,
         instance_id: u64,
     ) -> Result<()> {
-        if let Some(e) = &self.publish_error {
+        if let Some(e) = &self.transfer.publish_error {
             return Err(anyhow!("{e}"));
         }
         // Through `xstep`, like every other step of the drive — NOT a bare `rec`. Every other
@@ -1162,7 +1320,8 @@ impl InMemoryStore {
         // originally did not, so `kill_at = "publish_shard_index"` was silently inert and the
         // crash matrix reported a PASS for a boundary it never killed at.
         self.xstep("publish_shard_index")?;
-        self.realm_index
+        self.transfer
+            .realm_index
             .lock()
             .unwrap()
             .push((character_guid, map_id, instance_id));
@@ -1170,9 +1329,9 @@ impl InMemoryStore {
     }
 }
 
-impl ShardRoutingStore for InMemoryStore {
+impl ShardRoutingStore for WorldFake {
     fn shard_name(&self) -> &str {
-        &self.shard
+        &self.topology.shard
     }
 
     // The Fake enforces the Module's escrow guards so transfer ordering affects outcomes.
@@ -1181,17 +1340,18 @@ impl ShardRoutingStore for InMemoryStore {
         &self,
         character_guid: u64,
     ) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
-        if let Some(view) = &self.relay_view {
-            self.viewer_present_at_settle.lock().unwrap().push(
+        if let Some(view) = &self.session.relay_view {
+            self.topology.viewer_present_at_settle.lock().unwrap().push(
                 view.viewer_of_owner(crate::stdb::world_view::OwnerGuid(character_guid))
                     .is_some(),
             );
         }
-        if let Some(e) = &self.settle_error {
+        if let Some(e) = &self.topology.settle_error {
             let nth = self
+                .topology
                 .settle_calls
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            if nth >= self.settle_ok_calls {
+            if nth >= self.topology.settle_ok_calls {
                 return Err(anyhow!("{e}"));
             }
         }
@@ -1200,7 +1360,11 @@ impl ShardRoutingStore for InMemoryStore {
 
     fn bind_shard_session(&self, account_id: u64, _session_key: &[u8; 40]) -> Result<()> {
         self.rec("bind_shard_session");
-        self.bound_sessions.lock().unwrap().push(account_id);
+        self.topology
+            .bound_sessions
+            .lock()
+            .unwrap()
+            .push(account_id);
         Ok(())
     }
 
@@ -1209,39 +1373,41 @@ impl ShardRoutingStore for InMemoryStore {
         map_id: u32,
         instance_id: u64,
     ) -> Option<std::sync::Arc<dyn WorldStore>> {
-        let (m, i, shard) = self.location_shard.as_ref()?;
+        let (m, i, shard) = self.topology.location_shard.as_ref()?;
         (*m == map_id && *i == instance_id).then(|| shard.clone() as std::sync::Arc<dyn WorldStore>)
     }
 
     fn realm_store(&self) -> Option<std::sync::Arc<dyn WorldStore>> {
-        self.realm
+        self.topology
+            .realm
             .clone()
             .map(|r| r as std::sync::Arc<dyn WorldStore>)
     }
 
     fn party_cleanup_realm(&self) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
-        if let Some(error) = &self.party_cleanup_realm_error {
+        if let Some(error) = &self.topology.party_cleanup_realm_error {
             return Err(anyhow!(error.clone()));
         }
         Ok(self.realm_store())
     }
 
     fn party_command_realm(&self) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
-        if let Some(error) = &self.party_command_realm_error {
+        if let Some(error) = &self.topology.party_command_realm_error {
             return Err(anyhow!(error.clone()));
         }
         Ok(self.realm_store())
     }
 
     fn transfer_realm(&self) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
-        if let Some(error) = &self.transfer_realm_error {
+        if let Some(error) = &self.topology.transfer_realm_error {
             return Err(anyhow!(error.clone()));
         }
         Ok(self.realm_store())
     }
 
     fn world_stores(&self) -> Vec<std::sync::Arc<dyn WorldStore>> {
-        self.peers
+        self.topology
+            .peers
             .lock()
             .unwrap()
             .iter()
@@ -1250,21 +1416,21 @@ impl ShardRoutingStore for InMemoryStore {
     }
 
     fn party_command_worlds(&self) -> Result<Vec<std::sync::Arc<dyn WorldStore>>> {
-        if let Some(error) = &self.world_shard_set_error {
+        if let Some(error) = &self.topology.world_shard_set_error {
             return Err(anyhow!(error.clone()));
         }
         Ok(self.world_stores())
     }
 }
 
-impl SessionStore for InMemoryStore {
+impl SessionStore for WorldFake {
     fn pending_system_messages(&self, _self_guid: u64) -> Vec<String> {
-        self.pending_system_messages.clone()
+        self.session.pending_system_messages.clone()
     }
 
     fn lookup_session(&self, account_name: &str) -> Result<Option<WorldSession>> {
-        Ok((account_name == self.username)
-            .then(|| self.session.clone())
+        Ok((account_name == self.session.username)
+            .then(|| self.session.session.clone())
             .flatten())
     }
 
@@ -1275,19 +1441,21 @@ impl SessionStore for InMemoryStore {
         entry: codec::WorldEntry,
     ) -> Result<codec::EntityView> {
         self.rec("player_login");
-        self.login_entries.lock().unwrap().push(entry);
+        self.session.login_entries.lock().unwrap().push(entry);
         let call = self
+            .session
             .login_calls
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         if call > 0 {
-            if let Some(e) = &self.worldport_login_error {
+            if let Some(e) = &self.session.worldport_login_error {
                 return Err(anyhow!("{e}"));
             }
-            if let Some(e) = self.worldport_entity.clone() {
+            if let Some(e) = self.session.worldport_entity.clone() {
                 return Ok(e);
             }
         }
-        self.login_entity
+        self.session
+            .login_entity
             .clone()
             .ok_or_else(|| anyhow!("no login entity configured"))
     }
@@ -1300,10 +1468,10 @@ impl SessionStore for InMemoryStore {
         info: &MovementInfo,
     ) -> Result<()> {
         self.rec("movement_update");
-        if let Some(e) = &self.movement_error {
+        if let Some(e) = &self.session.movement_error {
             return Err(anyhow!("movement_update reducer failed: {e}"));
         }
-        self.moves.lock().unwrap().push((
+        self.session.moves.lock().unwrap().push((
             opcode,
             info.position.x,
             info.position.y,
@@ -1322,20 +1490,22 @@ impl SessionStore for InMemoryStore {
         tx: SessionTx,
     ) -> Result<PlayerSubscriptions> {
         self.rec("subscribe_player_events");
-        self.subscribed
-            .lock()
-            .unwrap()
-            .push((self_guid, arrival.map_id, arrival.x, arrival.y));
-        *self.session_depth.lock().unwrap() = Some(tx.depth_handle());
-        if self.turn_in_reward_item.is_some() {
-            *self.turn_in_tx.lock().unwrap() = Some(tx.clone());
+        self.session.subscribed.lock().unwrap().push((
+            self_guid,
+            arrival.map_id,
+            arrival.x,
+            arrival.y,
+        ));
+        *self.session.session_depth.lock().unwrap() = Some(tx.depth_handle());
+        if self.session.turn_in_reward_item.is_some() {
+            *self.session.turn_in_tx.lock().unwrap() = Some(tx.clone());
         }
-        let Some(view) = &self.relay_view else {
+        let Some(view) = &self.session.relay_view else {
             return Ok(PlayerSubscriptions::empty());
         };
         let subs = PlayerSubscriptions::registered_for_test(view.clone(), self_guid, arrival, tx);
         if let (Some(mate), Some(record)) = (
-            self.member_stats_before_party_frame,
+            self.session.member_stats_before_party_frame,
             subs.member_stats_record(),
         ) {
             let delivered = codec::MemberStats::default();
@@ -1353,7 +1523,8 @@ impl SessionStore for InMemoryStore {
         cmd: String,
         payload: String,
     ) -> Result<()> {
-        self.client_commands
+        self.session
+            .client_commands
             .lock()
             .unwrap()
             .push((account_id, self_guid, cmd, payload));
@@ -1361,15 +1532,16 @@ impl SessionStore for InMemoryStore {
     }
 
     fn entity_in_world(&self, guid: u64) -> bool {
-        self.entity_presence_checks
+        self.session
+            .entity_presence_checks
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        if let Some(present) = &self.entity_presence {
+        if let Some(present) = &self.session.entity_presence {
             return present.load(std::sync::atomic::Ordering::SeqCst);
         }
         // `live_guids` is the per-guid answer the realm-wide party frame needs ("is this member
         // live on THIS shard"). Empty by default, so the single flag above is still the answer
         // every test written before realm-wide party routing set.
-        self.entity_in_world || self.live_guids.contains(&guid)
+        self.session.entity_in_world || self.session.live_guids.contains(&guid)
     }
 
     fn entity_max_health(&self, _guid: u64) -> u32 {
@@ -1393,24 +1565,32 @@ impl SessionStore for InMemoryStore {
 
     fn release_session(&self, _token: WorldSessionToken) -> Result<()> {
         self.rec("logout");
-        self.logout_called
+        self.session
+            .logout_called
             .store(true, std::sync::atomic::Ordering::SeqCst);
-        match &self.logout_error {
+        match &self.session.logout_error {
             Some(e) => Err(anyhow!("{e}")),
             None => Ok(()),
         }
     }
 
     fn player_combat_until_ms(&self, _player_guid: u64) -> u64 {
-        self.combat_until_ms
+        self.session.combat_until_ms
     }
 }
 
-impl CharacterStore for InMemoryStore {
+impl CharacterStore for WorldFake {
     fn characters(&self, _account_id: u64) -> Result<Vec<codec::CharacterView>> {
         self.rec("characters");
         let mut out = self.characters.clone();
-        out.extend(self.created_characters.lock().unwrap().iter().cloned());
+        out.extend(
+            self.character
+                .created_characters
+                .lock()
+                .unwrap()
+                .iter()
+                .cloned(),
+        );
         Ok(out)
     }
 
@@ -1425,6 +1605,7 @@ impl CharacterStore for InMemoryStore {
     ) -> Result<codec::CharCreateOutcome> {
         if self.characters.iter().any(|c| c.name == name)
             || self
+                .character
                 .created_characters
                 .lock()
                 .unwrap()
@@ -1435,9 +1616,11 @@ impl CharacterStore for InMemoryStore {
         }
         let guid = 500
             + self
+                .character
                 .next_created_guid
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        self.created_characters
+        self.character
+            .created_characters
             .lock()
             .unwrap()
             .push(codec::CharacterView {
@@ -1456,32 +1639,35 @@ impl CharacterStore for InMemoryStore {
         account_id: u64,
         character_guid: u64,
     ) -> Result<codec::CharDeleteOutcome> {
-        self.deleted
+        self.character
+            .deleted
             .lock()
             .unwrap()
             .push((account_id, character_guid));
         Ok(self
+            .character
             .delete_outcome
             .unwrap_or(codec::CharDeleteOutcome::Success))
     }
 
     fn character_by_guid(&self, guid: u64) -> Result<Option<codec::CharacterView>> {
-        if let Some(error) = &self.character_read_error {
+        if let Some(error) = &self.character.character_read_error {
             return Err(anyhow!(error.clone()));
         }
         Ok(self.characters.iter().find(|c| c.guid == guid).cloned())
     }
 
     fn character_exists_on_any_world_shard(&self, guid: u64) -> Result<bool> {
-        self.durable_absence_checks
+        self.character
+            .durable_absence_checks
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        if let Some(error) = &self.world_shard_set_error {
+        if let Some(error) = &self.topology.world_shard_set_error {
             return Err(anyhow!(error.clone()));
         }
         if self.character_by_guid(guid)?.is_some() {
             return Ok(true);
         }
-        for shard in self.peers.lock().unwrap().iter() {
+        for shard in self.topology.peers.lock().unwrap().iter() {
             if shard.character_by_guid(guid)?.is_some() {
                 return Ok(true);
             }
@@ -1495,7 +1681,8 @@ impl CharacterStore for InMemoryStore {
 
     fn effective_armor(&self, _guid: u64) -> u32 {
         // No gear/auras in the test store → effective == the login entity's armor.
-        self.login_entity
+        self.session
+            .login_entity
             .as_ref()
             .map(|e| e.effective_armor)
             .unwrap_or(0)
@@ -1510,22 +1697,23 @@ impl CharacterStore for InMemoryStore {
     }
 
     fn player_learned_spells(&self, _player_guid: u64) -> Result<Vec<u32>> {
-        Ok(self.learned_spells.clone())
+        Ok(self.character.learned_spells.clone())
     }
 
     fn player_reputations(&self, _player_guid: u64) -> Result<Vec<(i32, i32, bool)>> {
-        Ok(self.reputations.clone())
+        Ok(self.character.reputations.clone())
     }
 
     fn player_actions(&self, _player_guid: u64) -> Result<Vec<(u8, u32, u8)>> {
-        Ok(self.player_actions.clone())
+        Ok(self.character.player_actions.clone())
     }
 }
 
-impl TransferStore for InMemoryStore {
+impl TransferStore for WorldFake {
     fn escrowed_transfer(&self, character_guid: u64) -> Option<super::transfer::EscrowedTransfer> {
-        let db = self.xdb.as_ref()?;
+        let db = self.transfer.xdb.as_ref()?;
         if self
+            .transfer
             .escrow_reads_before_visible
             .fetch_update(
                 std::sync::atomic::Ordering::SeqCst,
@@ -1549,7 +1737,7 @@ impl TransferStore for InMemoryStore {
     }
 
     fn character_destination(&self, character_guid: u64) -> Option<super::transfer::TransferPlan> {
-        let c = self.xdb.as_ref()?.get(character_guid)?;
+        let c = self.transfer.xdb.as_ref()?.get(character_guid)?;
         Some(super::transfer::TransferPlan {
             transfer_id: super::transfer::transfer_id_for(character_guid),
             character_guid,
@@ -1721,7 +1909,7 @@ impl TransferStore for InMemoryStore {
 
     /// `release_transfer`: refuses on a shard that is the SOURCE; replay-safe otherwise.
     fn release_transfer(&self, transfer_id: u64) -> Result<()> {
-        let Some(_) = self.xdb.as_ref() else {
+        let Some(_) = self.transfer.xdb.as_ref() else {
             return Ok(());
         };
         let db = self.xstep("release_transfer")?;
@@ -1746,7 +1934,7 @@ impl TransferStore for InMemoryStore {
         character_guid: u64,
         source: super::transfer::RealmLocatorPredecessor,
     ) -> Result<()> {
-        let Some(db) = self.xdb.as_ref() else {
+        let Some(db) = self.transfer.xdb.as_ref() else {
             return Ok(());
         };
         self.xstep("release_transfer")?;
@@ -1768,7 +1956,7 @@ impl TransferStore for InMemoryStore {
     }
 
     fn transfer_arrival(&self, transfer_id: u64) -> Option<super::transfer::TransferArrival> {
-        let db = self.xdb.as_ref()?;
+        let db = self.transfer.xdb.as_ref()?;
         let character_guid = *lk(&db.in_rows).get(&transfer_id)?;
         let (source, intent_id, generation, _) = lk(&db.bot_arrivals)
             .get(&transfer_id)
@@ -1794,7 +1982,7 @@ impl TransferStore for InMemoryStore {
         plan: &super::transfer::TransferPlan,
         bot_intent: Option<(&super::transfer::BotTransferIntent, u64)>,
     ) -> Result<super::party::RealmCharacterPartition> {
-        let mut phase = self.realm_partition.lock().unwrap();
+        let mut phase = self.transfer.realm_partition.lock().unwrap();
         let Some(current) = *phase else {
             return Ok(super::party::RealmCharacterPartition {
                 map_id: 0,
@@ -1880,7 +2068,7 @@ impl TransferStore for InMemoryStore {
         _source_instance: u64,
         source_revision: u64,
     ) -> Result<()> {
-        let mut phase = self.realm_partition.lock().unwrap();
+        let mut phase = self.transfer.realm_partition.lock().unwrap();
         let Some(current) = *phase else {
             drop(phase);
             return self.publish_shard_index(
@@ -1911,7 +2099,7 @@ impl TransferStore for InMemoryStore {
         _claim_token: u64,
     ) -> Result<()> {
         self.rec("bind_bot_transfer_locator");
-        let Some(current) = *self.realm_partition.lock().unwrap() else {
+        let Some(current) = *self.transfer.realm_partition.lock().unwrap() else {
             return Ok(());
         };
         if current.transfer_pending || current.revision != source_revision {
@@ -1922,7 +2110,7 @@ impl TransferStore for InMemoryStore {
 
     fn publish_bot_shard_index(&self, intent: &super::transfer::BotTransferIntent) -> Result<()> {
         self.rec("publish_bot_shard_index");
-        let mut phase = self.realm_partition.lock().unwrap();
+        let mut phase = self.transfer.realm_partition.lock().unwrap();
         let Some(current) = *phase else {
             drop(phase);
             return self.publish_shard_index(
@@ -1991,7 +2179,7 @@ impl TransferStore for InMemoryStore {
         if arrival.character_guid != character_guid {
             return Err(anyhow!("arrival fence names another Character"));
         }
-        let mut phase = self.realm_partition.lock().unwrap();
+        let mut phase = self.transfer.realm_partition.lock().unwrap();
         let Some(current) = *phase else {
             return Ok(());
         };
@@ -2058,7 +2246,7 @@ impl TransferStore for InMemoryStore {
         transfer_id: u64,
         intent: &super::transfer::BotTransferIntent,
     ) -> bool {
-        let Some(db) = self.xdb.as_ref() else {
+        let Some(db) = self.transfer.xdb.as_ref() else {
             return false;
         };
         lk(&db.in_rows).get(&transfer_id) == Some(&intent.bot_guid)
@@ -2083,7 +2271,7 @@ impl TransferStore for InMemoryStore {
         intent: &super::transfer::BotTransferIntent,
     ) -> Result<()> {
         self.xstep("release_bot_transfer_arrival")?;
-        let Some(db) = self.xdb.as_ref() else {
+        let Some(db) = self.transfer.xdb.as_ref() else {
             return Ok(());
         };
         if transfer_id != intent.bot_guid
@@ -2117,7 +2305,8 @@ impl TransferStore for InMemoryStore {
     }
 
     fn instance_partition(&self, instance_id: u64) -> Option<(u32, u64)> {
-        self.xdb
+        self.transfer
+            .xdb
             .as_ref()
             .and_then(|db| lk(&db.instance_partitions).get(&instance_id).copied())
     }
@@ -2163,7 +2352,7 @@ impl TransferStore for InMemoryStore {
     }
 }
 
-impl PartyStore for InMemoryStore {
+impl PartyStore for WorldFake {
     fn realm_character_partition(
         &self,
         character_guid: u64,
@@ -2174,6 +2363,7 @@ impl PartyStore for InMemoryStore {
         // one guid as pending without disturbing `realm_partition`, which every other test that
         // exercises a real Transfer already drives.
         if self
+            .party
             .members_in_transit
             .lock()
             .unwrap()
@@ -2191,7 +2381,7 @@ impl PartyStore for InMemoryStore {
                 bot_controller_generation: 0,
             }));
         }
-        Ok(*self.realm_partition.lock().unwrap())
+        Ok(*self.transfer.realm_partition.lock().unwrap())
     }
 
     fn party_holder_observation(
@@ -2225,7 +2415,7 @@ impl PartyStore for InMemoryStore {
         if let Some(e) = &self.trade_error {
             return faked_party(e);
         }
-        self.group_invites.lock().unwrap().push(target_guid);
+        self.party.group_invites.lock().unwrap().push(target_guid);
         Ok(PartyOutcome::Ran)
     }
 
@@ -2256,15 +2446,17 @@ impl PartyStore for InMemoryStore {
         if let Some(e) = &self.trade_error {
             return faked_party(e);
         }
-        self.group_loot_methods
-            .lock()
-            .unwrap()
-            .push((loot_setting, master_guid, loot_threshold));
+        self.party.group_loot_methods.lock().unwrap().push((
+            loot_setting,
+            master_guid,
+            loot_threshold,
+        ));
         Ok(PartyOutcome::Ran)
     }
 
     fn claim_party_command_intent(&self, intent_id: u64, claim_token: u64) -> Result<()> {
-        self.party_command_claims
+        self.party
+            .party_command_claims
             .lock()
             .unwrap()
             .push((intent_id, claim_token));
@@ -2288,6 +2480,7 @@ impl PartyStore for InMemoryStore {
         }
         expected_members.sort_unstable();
         let mut current_members = self
+            .party
             .party_command_authority_members
             .lock()
             .unwrap()
@@ -2309,15 +2502,17 @@ impl PartyStore for InMemoryStore {
         &self,
         command: &super::party::AdmittedCompanionCommand,
     ) -> Result<super::party::CompanionCommandOutcome> {
-        self.admitted_party_commands
+        self.party
+            .admitted_party_commands
             .lock()
             .unwrap()
             .push(command.clone());
         let outcome = self
+            .party
             .party_command_apply_outcome
             .unwrap_or(super::party::CompanionCommandOutcome::Applied);
         if outcome != super::party::CompanionCommandOutcome::WaitingForCapacity {
-            self.party_command_receipts.lock().unwrap().push((
+            self.party.party_command_receipts.lock().unwrap().push((
                 command.source_identity,
                 command.intent_id,
                 outcome,
@@ -2332,7 +2527,8 @@ impl PartyStore for InMemoryStore {
         claim_token: u64,
         outcome: super::party::CompanionCommandOutcome,
     ) -> Result<()> {
-        self.party_command_finishes
+        self.party
+            .party_command_finishes
             .lock()
             .unwrap()
             .push((intent_id, claim_token, outcome));
@@ -2344,10 +2540,17 @@ impl PartyStore for InMemoryStore {
         source_identity: spacetimedb_sdk::Identity,
         intent_id: u64,
     ) -> Result<Option<super::party::CompanionCommandOutcome>> {
-        if let Some(error) = self.party_command_receipt_error.lock().unwrap().as_ref() {
+        if let Some(error) = self
+            .party
+            .party_command_receipt_error
+            .lock()
+            .unwrap()
+            .as_ref()
+        {
             return Err(anyhow!(error.clone()));
         }
         Ok(self
+            .party
             .party_command_receipts
             .lock()
             .unwrap()
@@ -2359,6 +2562,7 @@ impl PartyStore for InMemoryStore {
     fn confirm_party_command_holder(&self, guid: u64) -> Result<super::party::PartyCommandHolder> {
         Ok(
             if self
+                .party
                 .party_command_in_transit
                 .lock()
                 .unwrap()
@@ -2378,7 +2582,8 @@ impl PartyStore for InMemoryStore {
     }
 
     fn entity_partition(&self, guid: u64) -> Option<(u32, u64)> {
-        self.entity_partitions
+        self.party
+            .entity_partitions
             .lock()
             .unwrap()
             .iter()
@@ -2388,6 +2593,7 @@ impl PartyStore for InMemoryStore {
 
     fn claim_bot_invite_intent(&self, intent_id: u64) -> Result<PartyOutcome> {
         if let Some(refusal) = self
+            .party
             .bot_intent_claim_refusals
             .lock()
             .unwrap()
@@ -2395,7 +2601,7 @@ impl PartyStore for InMemoryStore {
         {
             return Ok(PartyOutcome::Refused(*refusal));
         }
-        let mut intents = self.bot_invite_intents.lock().unwrap();
+        let mut intents = self.party.bot_invite_intents.lock().unwrap();
         let Some(index) = intents.iter().position(|id| *id == intent_id) else {
             return Ok(PartyOutcome::Refused(GroupRefusal::IntentAlreadyClaimed));
         };
@@ -2406,6 +2612,7 @@ impl PartyStore for InMemoryStore {
     fn admit_sessionless_group_action(&self, character_guid: u64) -> Result<PartyOutcome> {
         self.rec("admit_sessionless_group_action");
         if self
+            .party
             .sessionless_admission_unavailable
             .lock()
             .unwrap()
@@ -2414,6 +2621,7 @@ impl PartyStore for InMemoryStore {
             anyhow::bail!("World Shard admission unavailable");
         }
         if let Some(refusal) = self
+            .party
             .sessionless_admission
             .lock()
             .unwrap()
@@ -2430,12 +2638,14 @@ impl PartyStore for InMemoryStore {
             return Ok(PartyOutcome::Refused(GroupRefusal::ActorUnavailable));
         }
         if self
+            .party
             .suppress_after_admission
             .lock()
             .unwrap()
             .contains(&character_guid)
         {
-            self.sessionless_admission
+            self.party
+                .sessionless_admission
                 .lock()
                 .unwrap()
                 .insert(character_guid, GroupRefusal::ActionSuppressed);
@@ -2445,6 +2655,7 @@ impl PartyStore for InMemoryStore {
 
     /// The module's `realm_group_op`, modelled: the rules the ROUTING depends on, applied to the
     /// authority this handle owns.
+    #[allow(clippy::too_many_lines)] // One arm per realm group op, as the Module's reducer has.
     fn realm_group_op(
         &self,
         op: u8,
@@ -2456,9 +2667,13 @@ impl PartyStore for InMemoryStore {
     ) -> Result<PartyOutcome> {
         use lyracore_shared::group::{event_kind as kind, realm_op, GroupRefusal};
         self.rec("realm_group_op");
-        let mut p = self.party.lock().unwrap();
-        if self.cache_lags.load(std::sync::atomic::Ordering::SeqCst) {
-            let mut stale = self.stale_party.lock().unwrap();
+        let mut p = self.party.party.lock().unwrap();
+        if self
+            .party
+            .cache_lags
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            let mut stale = self.party.stale_party.lock().unwrap();
             if stale.is_none() {
                 *stale = Some(p.clone());
             }
@@ -2483,7 +2698,7 @@ impl PartyStore for InMemoryStore {
                 p.events.push((target_guid, kind::INVITE));
             }
             realm_op::ACCEPT => {
-                if let Some(e) = &self.party_accept_error {
+                if let Some(e) = &self.party.party_accept_error {
                     return faked_party(e);
                 }
                 let Some(inviter) = p
@@ -2540,6 +2755,7 @@ impl PartyStore for InMemoryStore {
             }
             realm_op::LEAVE => {
                 if self
+                    .party
                     .party_leave_failures
                     .fetch_update(
                         std::sync::atomic::Ordering::SeqCst,
@@ -2554,6 +2770,7 @@ impl PartyStore for InMemoryStore {
                     return Ok(GroupRefusal::NotInGroup.into());
                 }
                 if self
+                    .party
                     .party_leave_commit_then_error
                     .swap(false, std::sync::atomic::Ordering::SeqCst)
                 {
@@ -2639,7 +2856,9 @@ impl PartyStore for InMemoryStore {
             realm_op::SWAP_SUBGROUP => return Ok(p.swap_subgroup(actor_guid, target_guid, arg_c)),
             // Group Broadcasts. Who hears each one is the Module's rule; the routing needs only
             // the op on the authority, and a Refusal for a member of no group.
-            realm_op::READY_CHECK_START..=realm_op::RANDOM_ROLL if self.group_broadcast_error => {
+            realm_op::READY_CHECK_START..=realm_op::RANDOM_ROLL
+                if self.party.group_broadcast_error =>
+            {
                 return Err(anyhow!("Realm-core call pipe timed out"));
             }
             realm_op::READY_CHECK_START
@@ -2667,7 +2886,7 @@ impl PartyStore for InMemoryStore {
         arg_c: u64,
     ) -> Result<PartyOutcome> {
         let outcome = self.realm_group_op(op, actor_guid, target_guid, arg_a, arg_b, arg_c);
-        *self.stale_party.lock().unwrap() = None;
+        *self.party.stale_party.lock().unwrap() = None;
         outcome
     }
 
@@ -2687,18 +2906,20 @@ impl PartyStore for InMemoryStore {
 
     fn group_roster(&self, character_guid: u64) -> Result<Option<super::party::GroupRoster>> {
         let read = self
+            .party
             .group_roster_reads
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
             + 1;
-        if let Some((error_read, error)) = &*self.group_roster_error_on_read.lock().unwrap() {
+        if let Some((error_read, error)) = &*self.party.group_roster_error_on_read.lock().unwrap() {
             if read == *error_read {
                 return Err(anyhow!(error.clone()));
             }
         }
-        if self.is_realm {
+        if self.party.is_realm {
             return Ok(self.realm_cache(|p| p.group_of(character_guid).and_then(|g| p.roster(g))));
         }
         Ok(self
+            .party
             .mirror
             .lock()
             .unwrap()
@@ -2722,10 +2943,11 @@ impl PartyStore for InMemoryStore {
     }
 
     fn group_roster_by_id(&self, group_id: u64) -> Result<Option<super::party::GroupRoster>> {
-        if self.is_realm {
+        if self.party.is_realm {
             return Ok(self.realm_cache(|p| p.roster(group_id)));
         }
         Ok(self
+            .party
             .mirror
             .lock()
             .unwrap()
@@ -2746,10 +2968,11 @@ impl PartyStore for InMemoryStore {
     }
 
     fn held_roster_revision(&self, group_id: u64) -> Result<Option<u64>> {
-        if self.is_realm {
+        if self.party.is_realm {
             return Ok(self.realm_cache(|p| p.revisions.get(&group_id).copied()));
         }
         Ok(self
+            .party
             .mirror_revisions
             .lock()
             .unwrap()
@@ -2758,10 +2981,11 @@ impl PartyStore for InMemoryStore {
     }
 
     fn party_member_guids(&self) -> Result<Vec<u64>> {
-        if !self.is_realm {
+        if !self.party.is_realm {
             return Ok(Vec::new());
         }
         Ok(self
+            .party
             .party
             .lock()
             .unwrap()
@@ -2772,11 +2996,12 @@ impl PartyStore for InMemoryStore {
     }
 
     fn party_group_ids(&self) -> Result<Vec<u64>> {
-        if let Some(error) = &*self.party_group_ids_error.lock().unwrap() {
+        if let Some(error) = &*self.party.party_group_ids_error.lock().unwrap() {
             return Err(anyhow!(error.clone()));
         }
-        if self.is_realm {
+        if self.party.is_realm {
             return Ok(self
+                .party
                 .party
                 .lock()
                 .unwrap()
@@ -2786,6 +3011,7 @@ impl PartyStore for InMemoryStore {
                 .collect());
         }
         Ok(self
+            .party
             .mirror
             .lock()
             .unwrap()
@@ -2797,6 +3023,7 @@ impl PartyStore for InMemoryStore {
     fn sync_group_mirror(&self, roster: &super::party::GroupRoster) -> Result<()> {
         self.rec("sync_group_mirror");
         if self
+            .party
             .mirror_failures
             .fetch_update(
                 std::sync::atomic::Ordering::SeqCst,
@@ -2807,14 +3034,15 @@ impl PartyStore for InMemoryStore {
         {
             return Err(anyhow!("World Shard mirror connection interrupted"));
         }
-        if let Some(e) = &self.mirror_error {
+        if let Some(e) = &self.party.mirror_error {
             return Err(anyhow!("{e}"));
         }
-        self.mirror_revisions
+        self.party
+            .mirror_revisions
             .lock()
             .unwrap()
             .insert(roster.group_id, roster.roster_revision);
-        let mut mirror = self.mirror.lock().unwrap();
+        let mut mirror = self.party.mirror.lock().unwrap();
         mirror.retain(|r| r.group_id != roster.group_id);
         // An empty roster is the disband tombstone — the shard forgets the party rather than
         // keeping an empty one, which is what the module's own `sync_group_mirror` does.
@@ -2835,10 +3063,11 @@ impl PartyStore for InMemoryStore {
     }
 }
 
-impl MailStore for InMemoryStore {
+impl MailStore for WorldFake {
     fn mail_list(&self, recipient_guid: u64) -> Result<Vec<codec::MailView>> {
         self.rec("mail_list");
         Ok(self
+            .mail
             .mails
             .lock()
             .unwrap()
@@ -2850,6 +3079,7 @@ impl MailStore for InMemoryStore {
 
     fn mail_by_id(&self, mail_id: u64) -> Result<Option<codec::MailView>> {
         Ok(self
+            .mail
             .mails
             .lock()
             .unwrap()
@@ -2860,6 +3090,7 @@ impl MailStore for InMemoryStore {
 
     fn realm_account_name(&self, character_guid: u64) -> Result<Option<String>> {
         Ok(self
+            .mail
             .realm_accounts
             .lock()
             .unwrap()
@@ -2870,7 +3101,7 @@ impl MailStore for InMemoryStore {
 
     fn mailbox_in_range(&self, mailbox_guid: u64, _player_guid: u64) -> Result<bool> {
         self.rec("mailbox_in_range");
-        Ok(self.mailboxes.contains(&mailbox_guid))
+        Ok(self.mail.mailboxes.contains(&mailbox_guid))
     }
 
     /// Models the module's `apply_mark_read`: the row lookup scoped to `recipient_guid` IS the
@@ -2878,7 +3109,7 @@ impl MailStore for InMemoryStore {
     /// fails the same way a nonexistent id does.
     fn mail_mark_read(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
         self.rec("mail_mark_read");
-        let mut mails = self.mails.lock().unwrap();
+        let mut mails = self.mail.mails.lock().unwrap();
         let now = mail::now_secs();
         match mails
             .iter_mut()
@@ -2896,7 +3127,7 @@ impl MailStore for InMemoryStore {
     /// mark-read, and a priced mail is refused.
     fn mail_delete(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
         self.rec("mail_delete");
-        let mut mails = self.mails.lock().unwrap();
+        let mut mails = self.mail.mails.lock().unwrap();
         let now = mail::now_secs();
         let Some(at) = mails
             .iter()
@@ -2919,7 +3150,7 @@ impl MailStore for InMemoryStore {
     fn mail_return(&self, recipient_guid: u64, mail_id: u64, same_account: bool) -> Result<()> {
         self.rec("mail_return");
         self.saw_same_account("mail_return", same_account);
-        let mut mails = self.mails.lock().unwrap();
+        let mut mails = self.mail.mails.lock().unwrap();
         let now = mail::now_secs();
         let Some((to, m)) = mails
             .iter_mut()
@@ -2961,7 +3192,7 @@ impl MailStore for InMemoryStore {
         self.saw_same_account("mail_send", same_account);
         let item = self.detach(sender_guid, item_guid)?;
         self.debit(sender_guid, lyracore_shared::mail::total_cost(money))?;
-        self.sent_mail.lock().unwrap().push((
+        self.mail.sent_mail.lock().unwrap().push((
             sender_guid,
             recipient_guid,
             subject.clone(),
@@ -2987,7 +3218,7 @@ impl MailStore for InMemoryStore {
     /// letter exactly as it was, and a second take finds an empty one.
     fn mail_take_item(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
         let (item, settlement) = {
-            let mails = self.mails.lock().unwrap();
+            let mails = self.mail.mails.lock().unwrap();
             let now = mail::now_secs();
             let Some((_, m)) = mails
                 .iter()
@@ -3029,7 +3260,7 @@ impl MailStore for InMemoryStore {
             }
             return Err(e);
         }
-        let mut mails = self.mails.lock().unwrap();
+        let mut mails = self.mail.mails.lock().unwrap();
         if let Some((_, m)) = mails
             .iter_mut()
             .find(|(to, m)| *to == recipient_guid && m.id == mail_id)
@@ -3061,7 +3292,11 @@ impl MailStore for InMemoryStore {
 
     fn mail_item_room(&self, _payee_guid: u64) -> Result<()> {
         self.rec("mail_item_room");
-        if self.bags_full.load(std::sync::atomic::Ordering::Relaxed) {
+        if self
+            .mail
+            .bags_full
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             return Err(anyhow!(lyracore_shared::mail::INVENTORY_FULL));
         }
         Ok(())
@@ -3074,7 +3309,7 @@ impl MailStore for InMemoryStore {
     /// a row (a returned mail keeps its id, so a second recipient's copy can reuse it).
     fn mail_copy_text(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
         self.rec("mail_copy_text");
-        let mut mails = self.mails.lock().unwrap();
+        let mut mails = self.mail.mails.lock().unwrap();
         let now = mail::now_secs();
         let Some((_, m)) = mails
             .iter_mut()
@@ -3092,7 +3327,7 @@ impl MailStore for InMemoryStore {
         let text_id = lyracore_shared::mail::item_text_id_for(m.id, &m.body);
         let text = m.body.clone();
         drop(mails);
-        let mut texts = self.item_texts.lock().unwrap();
+        let mut texts = self.mail.item_texts.lock().unwrap();
         if !texts.iter().any(|(id, _)| *id == text_id) {
             texts.push((text_id, text));
         }
@@ -3107,6 +3342,7 @@ impl MailStore for InMemoryStore {
     fn mail_grant_letter(&self, payee_guid: u64, item_text_id: u32) -> Result<()> {
         self.rec("mail_grant_letter");
         if self
+            .mail
             .granted_letters
             .lock()
             .unwrap()
@@ -3115,10 +3351,15 @@ impl MailStore for InMemoryStore {
         {
             return Ok(());
         }
-        if self.bags_full.load(std::sync::atomic::Ordering::Relaxed) {
+        if self
+            .mail
+            .bags_full
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             return Err(anyhow!(lyracore_shared::mail::INVENTORY_FULL));
         }
-        self.granted_letters
+        self.mail
+            .granted_letters
             .lock()
             .unwrap()
             .push((payee_guid, item_text_id));
@@ -3129,7 +3370,7 @@ impl MailStore for InMemoryStore {
     /// `mail_copy_text` refuses for good, whether or not the granted item still exists.
     fn mail_mark_letter_granted(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
         self.rec("mail_mark_letter_granted");
-        let mut mails = self.mails.lock().unwrap();
+        let mut mails = self.mail.mails.lock().unwrap();
         let Some((_, m)) = mails
             .iter_mut()
             .find(|(to, m)| *to == recipient_guid && m.id == mail_id)
@@ -3144,6 +3385,7 @@ impl MailStore for InMemoryStore {
     fn item_text(&self, item_text_id: u32) -> Result<Option<String>> {
         self.rec("item_text");
         Ok(self
+            .mail
             .item_texts
             .lock()
             .unwrap()
@@ -3164,6 +3406,7 @@ impl MailStore for InMemoryStore {
         self.rec("owns_item_with_text");
         Ok(item_text_id != 0
             && self
+                .mail
                 .granted_letters
                 .lock()
                 .unwrap()
@@ -3176,7 +3419,7 @@ impl MailStore for InMemoryStore {
     fn mail_take_money(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
         self.rec("mail_take_money");
         let money = {
-            let mut mails = self.mails.lock().unwrap();
+            let mut mails = self.mail.mails.lock().unwrap();
             let now = mail::now_secs();
             let Some((_, m)) = mails
                 .iter_mut()
@@ -3211,7 +3454,7 @@ impl MailStore for InMemoryStore {
         self.rec("mail_fence");
         self.saw_same_account("mail_fence", same_account);
         self.mail_kill("mail_fence")?;
-        let escrows = self.mail_escrows.lock().unwrap();
+        let escrows = self.mail.mail_escrows.lock().unwrap();
         if escrows.iter().any(|(_, e)| e.escrow_id == escrow_id) {
             return Ok(()); // replay — the purse must not be debited twice for one letter
         }
@@ -3221,7 +3464,7 @@ impl MailStore for InMemoryStore {
         let item = self.detach(sender_guid, item_guid)?;
         self.debit(sender_guid, money.saturating_add(postage))?;
         let delivery_delay_secs = delivery_delay_secs(!item.is_empty(), same_account);
-        self.mail_escrows.lock().unwrap().push((
+        self.mail.mail_escrows.lock().unwrap().push((
             sender_guid,
             mail::HeldEscrow {
                 escrow_id,
@@ -3238,7 +3481,7 @@ impl MailStore for InMemoryStore {
                 reward: None,
             },
         ));
-        self.attested.lock().unwrap().push((escrow_id, false));
+        self.mail.attested.lock().unwrap().push((escrow_id, false));
         Ok(())
     }
 
@@ -3259,14 +3502,14 @@ impl MailStore for InMemoryStore {
     ) -> Result<()> {
         self.rec("mail_commit");
         self.mail_kill("mail_commit")?;
-        let mut receipts = self.mail_receipts.lock().unwrap();
+        let mut receipts = self.mail.mail_receipts.lock().unwrap();
         if receipts.iter().any(|(id, _)| *id == escrow_id) {
             return Ok(());
         }
         // A COD payment pays only a price its payer still owes on a delivered mail.
         if cod_source_mail_id != 0 {
             let now = mail::now_secs();
-            let owed = self.mails.lock().unwrap().iter().any(|(to, m)| {
+            let owed = self.mail.mails.lock().unwrap().iter().any(|(to, m)| {
                 m.id == cod_source_mail_id && *to == sender_guid && m.cod > 0 && m.is_delivered(now)
             });
             if !owed {
@@ -3277,7 +3520,7 @@ impl MailStore for InMemoryStore {
         }
         receipts.push((escrow_id, recipient_guid));
         drop(receipts);
-        self.sent_mail.lock().unwrap().push((
+        self.mail.sent_mail.lock().unwrap().push((
             sender_guid,
             recipient_guid,
             subject.clone(),
@@ -3303,7 +3546,7 @@ impl MailStore for InMemoryStore {
         if let Some(header) = reward {
             // Models `mail::Letter::reward`: from the quest giver, naming its Mail Template.
             let (sender_kind, sender_guid, sender_entry) = header.giver.sender().columns();
-            let mut mails = self.mails.lock().unwrap();
+            let mut mails = self.mail.mails.lock().unwrap();
             if let Some((_, m)) = mails.iter_mut().max_by_key(|(_, m)| m.id) {
                 m.sender_guid = sender_guid;
                 m.sender_kind = sender_kind;
@@ -3317,6 +3560,7 @@ impl MailStore for InMemoryStore {
         // once however the drive is interrupted.
         if cod_source_mail_id != 0 {
             if let Some((_, m)) = self
+                .mail
                 .mails
                 .lock()
                 .unwrap()
@@ -3340,6 +3584,7 @@ impl MailStore for InMemoryStore {
         self.rec("mail_take_money_fence");
         self.mail_kill("mail_take_money_fence")?;
         if self
+            .mail
             .mail_escrows
             .lock()
             .unwrap()
@@ -3349,7 +3594,7 @@ impl MailStore for InMemoryStore {
             return Ok(());
         }
         let money = {
-            let mut mails = self.mails.lock().unwrap();
+            let mut mails = self.mail.mails.lock().unwrap();
             let now = mail::now_secs();
             let Some((_, m)) = mails
                 .iter_mut()
@@ -3367,7 +3612,7 @@ impl MailStore for InMemoryStore {
             }
             std::mem::take(&mut m.money)
         };
-        self.mail_escrows.lock().unwrap().push((
+        self.mail.mail_escrows.lock().unwrap().push((
             payee_guid,
             mail::HeldEscrow {
                 escrow_id,
@@ -3384,7 +3629,7 @@ impl MailStore for InMemoryStore {
                 reward: None,
             },
         ));
-        self.attested.lock().unwrap().push((escrow_id, false));
+        self.mail.attested.lock().unwrap().push((escrow_id, false));
         Ok(())
     }
 
@@ -3399,6 +3644,7 @@ impl MailStore for InMemoryStore {
         self.rec("mail_take_item_fence");
         self.mail_kill("mail_take_item_fence")?;
         if self
+            .mail
             .mail_escrows
             .lock()
             .unwrap()
@@ -3408,7 +3654,7 @@ impl MailStore for InMemoryStore {
             return Ok(());
         }
         let item = {
-            let mut mails = self.mails.lock().unwrap();
+            let mut mails = self.mail.mails.lock().unwrap();
             let now = mail::now_secs();
             let Some((_, m)) = mails
                 .iter_mut()
@@ -3440,7 +3686,7 @@ impl MailStore for InMemoryStore {
             m.item_soulbound = false;
             item
         };
-        self.mail_escrows.lock().unwrap().push((
+        self.mail.mail_escrows.lock().unwrap().push((
             payee_guid,
             mail::HeldEscrow {
                 escrow_id,
@@ -3457,7 +3703,7 @@ impl MailStore for InMemoryStore {
                 reward: None,
             },
         ));
-        self.attested.lock().unwrap().push((escrow_id, false));
+        self.mail.attested.lock().unwrap().push((escrow_id, false));
         Ok(())
     }
 
@@ -3472,13 +3718,14 @@ impl MailStore for InMemoryStore {
     ) -> Result<()> {
         self.rec("mail_item_payout");
         self.mail_kill("mail_item_payout")?;
-        let receipts = self.mail_receipts.lock().unwrap();
+        let receipts = self.mail.mail_receipts.lock().unwrap();
         if receipts.iter().any(|(id, _)| *id == escrow_id) {
             return Ok(());
         }
         drop(receipts);
         self.store_snapshot(payee_guid, &item)?;
-        self.mail_receipts
+        self.mail
+            .mail_receipts
             .lock()
             .unwrap()
             .push((escrow_id, payee_guid));
@@ -3495,11 +3742,12 @@ impl MailStore for InMemoryStore {
     ) -> Result<()> {
         self.rec("mail_payout");
         self.mail_kill("mail_payout")?;
-        let mut receipts = self.mail_receipts.lock().unwrap();
+        let mut receipts = self.mail.mail_receipts.lock().unwrap();
         if receipts.iter().any(|(id, _)| *id == escrow_id) {
             return Ok(());
         }
         if !self
+            .mail
             .purses
             .lock()
             .unwrap()
@@ -3517,7 +3765,7 @@ impl MailStore for InMemoryStore {
     fn mail_confirm_delivery(&self, escrow_id: u64) -> Result<()> {
         self.rec("mail_confirm_delivery");
         self.mail_kill("mail_confirm_delivery")?;
-        let mut attested = self.attested.lock().unwrap();
+        let mut attested = self.mail.attested.lock().unwrap();
         match attested.iter_mut().find(|(id, _)| *id == escrow_id) {
             Some((_, done)) => {
                 *done = true;
@@ -3532,6 +3780,7 @@ impl MailStore for InMemoryStore {
         self.rec("mail_settle");
         self.mail_kill("mail_settle")?;
         let attested = self
+            .mail
             .attested
             .lock()
             .unwrap()
@@ -3544,11 +3793,13 @@ impl MailStore for InMemoryStore {
                 "mail escrow {escrow_id}: delivery not attested — refusing to destroy the fence"
             )),
             Some(true) => {
-                self.mail_escrows
+                self.mail
+                    .mail_escrows
                     .lock()
                     .unwrap()
                     .retain(|(_, e)| e.escrow_id != escrow_id);
-                self.attested
+                self.mail
+                    .attested
                     .lock()
                     .unwrap()
                     .retain(|(id, _)| *id != escrow_id);
@@ -3560,6 +3811,7 @@ impl MailStore for InMemoryStore {
     fn mail_escrows_of(&self, sender_guid: u64) -> Result<Vec<mail::HeldEscrow>> {
         self.rec("mail_escrows_of");
         if self
+            .mail
             .mail_escrow_reads_before_visible
             .fetch_update(
                 std::sync::atomic::Ordering::SeqCst,
@@ -3571,6 +3823,7 @@ impl MailStore for InMemoryStore {
             return Ok(Vec::new()); // the coordinator cache has not caught up yet
         }
         Ok(self
+            .mail
             .mail_escrows
             .lock()
             .unwrap()
@@ -3581,7 +3834,7 @@ impl MailStore for InMemoryStore {
     }
 }
 
-impl SocialStore for InMemoryStore {
+impl SocialStore for WorldFake {
     fn character_identity(&self, guid: u64) -> Result<Option<presence::CharacterIdentity>> {
         Ok(self.characters.iter().find(|c| c.guid == guid).map(|c| {
             presence::CharacterIdentity {
@@ -3593,7 +3846,7 @@ impl SocialStore for InMemoryStore {
                 zone_id: c.zone_id,
                 // `offline_guids` drives the invite gate's "player not online" arm; a seeded
                 // character is session-online unless listed there, mirroring `character_presence`.
-                session_online: !self.offline_guids.contains(&guid),
+                session_online: !self.social.offline_guids.contains(&guid),
             }
         }))
     }
@@ -3605,7 +3858,8 @@ impl SocialStore for InMemoryStore {
         // falling back to `live_guids` or the blanket `entity_in_world` flag would read that guid
         // live again and silently defeat the pin. `in_world_players`'s bulk /who scan has its own,
         // separate fallback for a guid this fixture never gave a precise entity to.
-        self.member_entities
+        self.social
+            .member_entities
             .lock()
             .unwrap()
             .iter()
@@ -3614,23 +3868,27 @@ impl SocialStore for InMemoryStore {
     }
 
     fn character_in_transit(&self, guid: u64) -> bool {
-        self.members_between_places.lock().unwrap().contains(&guid)
+        self.social
+            .members_between_places
+            .lock()
+            .unwrap()
+            .contains(&guid)
     }
 
     fn auto_reply_text(&self, guid: u64) -> Result<Option<String>> {
-        Ok(self.auto_replies.lock().unwrap().get(&guid).cloned())
+        Ok(self.social.auto_replies.lock().unwrap().get(&guid).cloned())
     }
 
     fn every_shard_vouches_for_absence(&self) -> Result<()> {
         // A Realm Presence "gone" claim spans every configured Shard, not just this handle — each
         // Fake instance models one Shard's own connection, so the peer set is checked too, the
         // same reach `Coordinator::world_shards_for_absence` has from any one of its own handles.
-        for peer in self.peers.lock().unwrap().iter() {
-            if let Some(error) = &peer.world_shard_set_error {
+        for peer in self.topology.peers.lock().unwrap().iter() {
+            if let Some(error) = &peer.topology.world_shard_set_error {
                 return Err(anyhow!(error.clone()));
             }
         }
-        if let Some(error) = &self.world_shard_set_error {
+        if let Some(error) = &self.topology.world_shard_set_error {
             return Err(anyhow!(error.clone()));
         }
         Ok(())
@@ -3651,7 +3909,7 @@ impl SocialStore for InMemoryStore {
                 let entity = self.live_entity(c.guid).unwrap_or(codec::MemberEntity {
                     level: u32::from(c.level),
                     zone_id: c.zone_id,
-                    player_flags: self.away_flags.get(&c.guid).copied().unwrap_or(0),
+                    player_flags: self.social.away_flags.get(&c.guid).copied().unwrap_or(0),
                     ..Default::default()
                 });
                 presence::RealmPresence {
@@ -3661,11 +3919,11 @@ impl SocialStore for InMemoryStore {
                     class: c.class,
                     level: u8::try_from(entity.level).unwrap_or(u8::MAX),
                     zone_id: entity.zone_id,
-                    session_online: !self.offline_guids.contains(&c.guid),
+                    session_online: !self.social.offline_guids.contains(&c.guid),
                     whereabouts: presence::Whereabouts::InWorld {
                         away: self.away(c.guid),
                         entity,
-                        shard_name: self.shard.clone(),
+                        shard_name: self.topology.shard.clone(),
                     },
                 }
             })
@@ -3673,14 +3931,18 @@ impl SocialStore for InMemoryStore {
     }
 
     fn zone_name(&self, zone_id: u32) -> String {
-        self.zone_names.get(&zone_id).cloned().unwrap_or_default()
+        self.social
+            .zone_names
+            .get(&zone_id)
+            .cloned()
+            .unwrap_or_default()
     }
 
     fn contact_lists(&self, self_guid: u64) -> Result<(Vec<u64>, Vec<u64>)> {
-        if let Some(e) = &self.contact_lists_error {
+        if let Some(e) = &self.social.contact_lists_error {
             return Err(anyhow!("{e}"));
         }
-        let contacts = self.contacts.lock().unwrap();
+        let contacts = self.social.contacts.lock().unwrap();
         let mut friends = Vec::new();
         let mut ignored = Vec::new();
         for &(owner, target, is_ignore) in contacts.iter() {
@@ -3697,10 +3959,11 @@ impl SocialStore for InMemoryStore {
     }
 
     fn ignored_guids(&self, owner_guid: u64) -> Result<Vec<u64>> {
-        if let Some(e) = &self.contact_lists_error {
+        if let Some(e) = &self.social.contact_lists_error {
             return Err(anyhow!("{e}"));
         }
         Ok(self
+            .social
             .contacts
             .lock()
             .unwrap()
@@ -3728,8 +3991,14 @@ impl SocialStore for InMemoryStore {
         if let Some(e) = &self.trade_error {
             return faked_contact(e);
         }
-        let owner = self.login_entity.as_ref().map(|e| e.guid).unwrap_or(0);
-        self.contacts
+        let owner = self
+            .session
+            .login_entity
+            .as_ref()
+            .map(|e| e.guid)
+            .unwrap_or(0);
+        self.social
+            .contacts
             .lock()
             .unwrap()
             .push((owner, target_guid, false));
@@ -3754,8 +4023,14 @@ impl SocialStore for InMemoryStore {
         if let Some(e) = &self.trade_error {
             return faked_contact(e);
         }
-        let owner = self.login_entity.as_ref().map(|e| e.guid).unwrap_or(0);
-        self.contacts
+        let owner = self
+            .session
+            .login_entity
+            .as_ref()
+            .map(|e| e.guid)
+            .unwrap_or(0);
+        self.social
+            .contacts
             .lock()
             .unwrap()
             .push((owner, target_guid, true));
@@ -3772,7 +4047,7 @@ impl SocialStore for InMemoryStore {
     }
 }
 
-impl NpcStore for InMemoryStore {
+impl NpcStore for WorldFake {
     fn creature_template(&self, _entry: u32) -> Result<Option<codec::CreatureView>> {
         Ok(None)
     }
@@ -3791,7 +4066,7 @@ impl NpcStore for InMemoryStore {
     }
 
     fn gameobject_type(&self, _go_guid: u64) -> Result<Option<u8>> {
-        Ok(self.gameobject_type)
+        Ok(self.npc.gameobject_type)
     }
 
     fn enter_areatrigger(&self, _account_id: u64, _self_guid: u64, _trigger_id: u32) -> Result<()> {
@@ -3803,13 +4078,14 @@ impl NpcStore for InMemoryStore {
     }
 
     fn bind_home(&self, _account_id: u64, _self_guid: u64) -> Result<()> {
-        self.home_bound
+        self.npc
+            .home_bound
             .store(true, std::sync::atomic::Ordering::SeqCst);
         Ok(())
     }
 
     fn npc_is_innkeeper(&self, _guid: u64) -> Result<bool> {
-        Ok(self.innkeeper)
+        Ok(self.npc.innkeeper)
     }
 
     fn npc_gossip_text_id(&self, _npc_guid: u64) -> u32 {
@@ -3817,11 +4093,11 @@ impl NpcStore for InMemoryStore {
     }
 
     fn npc_text_for_id(&self, _text_id: u32) -> Option<codec::NpcTextView> {
-        self.npc_text_view.clone()
+        self.npc.npc_text_view.clone()
     }
 
     fn gossip_options(&self, _npc_guid: u64) -> Result<Vec<codec::GossipOptionView>> {
-        Ok(self.gossip_opts.clone())
+        Ok(self.npc.gossip_opts.clone())
     }
 
     fn inspect(&self, _account_id: u64, _self_guid: u64, target_guid: u64) -> Result<()> {
@@ -3845,7 +4121,8 @@ impl NpcStore for InMemoryStore {
         option_id: u32,
         option_row_id: u32,
     ) -> Result<()> {
-        self.gossip_selects
+        self.npc
+            .gossip_selects
             .lock()
             .unwrap()
             .push((option_id, option_row_id));
@@ -3853,9 +4130,9 @@ impl NpcStore for InMemoryStore {
     }
 }
 
-impl TrainerStore for InMemoryStore {
+impl TrainerStore for WorldFake {
     fn trainer_serves(&self, _player_guid: u64, _trainer_guid: u64) -> Result<bool> {
-        Ok(!self.trainer_refuses_class) // default true — every existing fixture trainer serves
+        Ok(!self.trainer.trainer_refuses_class) // default true — every existing fixture trainer serves
     }
 
     fn trainer_list(
@@ -3863,7 +4140,7 @@ impl TrainerStore for InMemoryStore {
         _player_guid: u64,
         _trainer_guid: u64,
     ) -> Result<Vec<codec::TrainerSpellView>> {
-        Ok(self.trainer_spells.clone())
+        Ok(self.trainer.trainer_spells.clone())
     }
 
     fn buy_trainer_spell(
@@ -3873,7 +4150,7 @@ impl TrainerStore for InMemoryStore {
         _trainer_guid: u64,
         _spell_id: u32,
     ) -> Result<crate::world::TrainerBuyOutcome> {
-        if let Some(refusal) = self.trainer_buy_refusal {
+        if let Some(refusal) = self.trainer.trainer_buy_refusal {
             return Ok(refusal.into());
         }
         match &self.trade_error {
@@ -3883,7 +4160,7 @@ impl TrainerStore for InMemoryStore {
     }
 
     fn talent_grant_spell(&self, _talent_id: u32) -> u32 {
-        self.talent_grant
+        self.trainer.talent_grant
     }
 
     fn set_faction_at_war(
@@ -3908,7 +4185,7 @@ impl TrainerStore for InMemoryStore {
     }
 
     fn talent_pane_sync(&self, _character_guid: u64, _talent_id: u32) -> (u32, u32, u32) {
-        self.talent_pane
+        self.trainer.talent_pane
     }
 
     fn talent_points_spent(&self, _character_guid: u64) -> u32 {
@@ -3923,13 +4200,14 @@ impl TrainerStore for InMemoryStore {
     }
 
     fn reset_talents(&self, account_id: u64, self_guid: u64, trainer_guid: u64) -> Result<()> {
-        if let Some(e) = &self.reset_talents_error {
+        if let Some(e) = &self.trainer.reset_talents_error {
             return Err(anyhow!("{e}"));
         }
-        self.reset_talents_calls
-            .lock()
-            .unwrap()
-            .push((account_id, self_guid, trainer_guid));
+        self.trainer.reset_talents_calls.lock().unwrap().push((
+            account_id,
+            self_guid,
+            trainer_guid,
+        ));
         Ok(())
     }
 
@@ -3939,14 +4217,15 @@ impl TrainerStore for InMemoryStore {
 
     fn trainer_offer_skill_line(&self, _trainer_guid: u64, spell_id: u32) -> u32 {
         // The mock's offerings are spell rows unless a test stages a skill-teaching one.
-        self.trainer_offer_skill_lines
+        self.trainer
+            .trainer_offer_skill_lines
             .get(&spell_id)
             .copied()
             .unwrap_or(0)
     }
 
     fn superseded_old_rank(&self, _new_spell: u32, _player_guid: u64) -> Option<u32> {
-        self.trainer_superseded
+        self.trainer.trainer_superseded
     }
 
     fn character_presence(&self, guid: u64) -> Result<Option<(bool, u8, u8, u32)>> {
@@ -3958,7 +4237,7 @@ impl TrainerStore for InMemoryStore {
             // default, so a seeded character is online exactly as it always was.
             .map(|c| {
                 (
-                    !self.offline_guids.contains(&guid),
+                    !self.social.offline_guids.contains(&guid),
                     c.level,
                     c.class,
                     c.zone_id,
@@ -3967,12 +4246,12 @@ impl TrainerStore for InMemoryStore {
     }
 }
 
-impl BankStore for InMemoryStore {
+impl BankStore for WorldFake {
     fn auto_bank_item(&self, _account_id: u64, _self_guid: u64, slot: u8) -> Result<()> {
         if let Some(e) = &self.trade_error {
             return Err(anyhow!("{e}"));
         }
-        self.auto_banked_items.lock().unwrap().push(slot);
+        self.bank.auto_banked_items.lock().unwrap().push(slot);
         Ok(())
     }
 
@@ -3980,18 +4259,26 @@ impl BankStore for InMemoryStore {
         if let Some(e) = &self.trade_error {
             return Err(anyhow!("{e}"));
         }
-        self.bought_bank_slots.lock().unwrap().push(banker_guid);
+        self.bank
+            .bought_bank_slots
+            .lock()
+            .unwrap()
+            .push(banker_guid);
         Ok(())
     }
 }
 
-impl CombatStore for InMemoryStore {
+impl CombatStore for WorldFake {
     fn set_target(&self, _account_id: u64, _self_guid: u64, target_guid: u64) -> Result<()> {
         self.rec("set_target");
-        if let Some(e) = &self.set_target_error {
+        if let Some(e) = &self.combat.set_target_error {
             return Err(anyhow!("{e}"));
         }
-        self.selected_targets.lock().unwrap().push(target_guid);
+        self.combat
+            .selected_targets
+            .lock()
+            .unwrap()
+            .push(target_guid);
         Ok(())
     }
 
@@ -4006,19 +4293,24 @@ impl CombatStore for InMemoryStore {
     }
 
     fn set_sheathed(&self, _account_id: u64, self_guid: u64, state: u8) -> Result<()> {
-        self.sheathed.lock().unwrap().push((self_guid, state));
+        self.combat
+            .sheathed
+            .lock()
+            .unwrap()
+            .push((self_guid, state));
         Ok(())
     }
 }
 
-impl DeathStore for InMemoryStore {
+impl DeathStore for WorldFake {
     fn repop(&self, _account_id: u64, self_guid: u64) -> Result<()> {
-        self.repopped.lock().unwrap().push(self_guid);
+        self.death.repopped.lock().unwrap().push(self_guid);
         Ok(())
     }
 
     fn reclaim_corpse(&self, _account_id: u64, self_guid: u64, corpse_guid: u64) -> Result<()> {
-        self.reclaimed_corpses
+        self.death
+            .reclaimed_corpses
             .lock()
             .unwrap()
             .push((self_guid, corpse_guid));
@@ -4026,7 +4318,8 @@ impl DeathStore for InMemoryStore {
     }
 
     fn resurrect_response(&self, _account_id: u64, self_guid: u64, accept: bool) -> Result<()> {
-        self.resurrect_responses
+        self.death
+            .resurrect_responses
             .lock()
             .unwrap()
             .push((self_guid, accept));
@@ -4034,15 +4327,16 @@ impl DeathStore for InMemoryStore {
     }
 
     fn self_resurrect(&self, _account_id: u64, self_guid: u64) -> Result<()> {
-        self.self_resurrects.lock().unwrap().push(self_guid);
-        match &self.self_resurrect_error {
+        self.death.self_resurrects.lock().unwrap().push(self_guid);
+        match &self.death.self_resurrect_error {
             Some(e) => Err(anyhow!("{e}")),
             None => Ok(()),
         }
     }
 
     fn spirit_healer_res(&self, _account_id: u64, self_guid: u64, healer_guid: u64) -> Result<()> {
-        self.spirit_healer_calls
+        self.death
+            .spirit_healer_calls
             .lock()
             .unwrap()
             .push((self_guid, healer_guid));
@@ -4054,12 +4348,13 @@ impl DeathStore for InMemoryStore {
     }
 }
 
-impl TradeStore for InMemoryStore {
+impl TradeStore for WorldFake {
     // Trade: pure recorders, the module owns every gate, so the fake just proves which
     // verb the dispatch chose and which args survived the wire.
     fn initiate_trade(&self, _account_id: u64, self_guid: u64, target_guid: u64) -> Result<()> {
         self.rec("initiate_trade");
-        self.initiated_trades
+        self.trade
+            .initiated_trades
             .lock()
             .unwrap()
             .push((self_guid, target_guid));
@@ -4068,13 +4363,13 @@ impl TradeStore for InMemoryStore {
 
     fn begin_trade(&self, _account_id: u64, self_guid: u64) -> Result<()> {
         self.rec("begin_trade");
-        self.begun_trades.lock().unwrap().push(self_guid);
+        self.trade.begun_trades.lock().unwrap().push(self_guid);
         Ok(())
     }
 
     fn cancel_trade(&self, _account_id: u64, self_guid: u64) -> Result<()> {
         self.rec("cancel_trade");
-        self.cancelled_trades.lock().unwrap().push(self_guid);
+        self.trade.cancelled_trades.lock().unwrap().push(self_guid);
         Ok(())
     }
 
@@ -4086,7 +4381,8 @@ impl TradeStore for InMemoryStore {
         inv_slot: u8,
     ) -> Result<()> {
         self.rec("set_trade_item");
-        self.set_trade_items
+        self.trade
+            .set_trade_items
             .lock()
             .unwrap()
             .push((self_guid, trade_slot, inv_slot));
@@ -4095,7 +4391,8 @@ impl TradeStore for InMemoryStore {
 
     fn clear_trade_item(&self, _account_id: u64, self_guid: u64, trade_slot: u8) -> Result<()> {
         self.rec("clear_trade_item");
-        self.cleared_trade_items
+        self.trade
+            .cleared_trade_items
             .lock()
             .unwrap()
             .push((self_guid, trade_slot));
@@ -4104,7 +4401,8 @@ impl TradeStore for InMemoryStore {
 
     fn set_trade_gold(&self, _account_id: u64, self_guid: u64, copper: u32) -> Result<()> {
         self.rec("set_trade_gold");
-        self.set_trade_golds
+        self.trade
+            .set_trade_golds
             .lock()
             .unwrap()
             .push((self_guid, copper));
@@ -4113,25 +4411,25 @@ impl TradeStore for InMemoryStore {
 
     fn accept_trade(&self, _account_id: u64, self_guid: u64) -> Result<()> {
         self.rec("accept_trade");
-        self.accepted_trades.lock().unwrap().push(self_guid);
+        self.trade.accepted_trades.lock().unwrap().push(self_guid);
         Ok(())
     }
 
     fn unaccept_trade(&self, _account_id: u64, self_guid: u64) -> Result<()> {
         self.rec("unaccept_trade");
-        self.unaccepted_trades.lock().unwrap().push(self_guid);
+        self.trade.unaccepted_trades.lock().unwrap().push(self_guid);
         Ok(())
     }
 
     fn busy_trade(&self, _account_id: u64, self_guid: u64) -> Result<()> {
         self.rec("busy_trade");
-        self.busy_trades.lock().unwrap().push(self_guid);
+        self.trade.busy_trades.lock().unwrap().push(self_guid);
         Ok(())
     }
 
     fn ignore_trade(&self, _account_id: u64, self_guid: u64) -> Result<()> {
         self.rec("ignore_trade");
-        self.ignore_trades.lock().unwrap().push(self_guid);
+        self.trade.ignore_trades.lock().unwrap().push(self_guid);
         Ok(())
     }
 }
@@ -4140,7 +4438,7 @@ impl TradeStore for InMemoryStore {
 /// tests need one instant ordinary cast, the two auto-repeat spells, and a record of what each
 /// cancellation asked for. Route variation — cast time, next-swing, ground area, enchant,
 /// disenchant, fishing and lock opening — belongs to the cast seam's own focused adapter.
-impl CastStore for InMemoryStore {
+impl CastStore for WorldFake {
     fn cast_item_target(
         &self,
         _account_id: u64,
@@ -4152,11 +4450,11 @@ impl CastStore for InMemoryStore {
     }
 
     fn cancel_aura(&self, _account_id: u64, _self_guid: u64, spell_id: u32) -> Result<()> {
-        self.cancelled_auras.lock().unwrap().push(spell_id);
+        self.cast.cancelled_auras.lock().unwrap().push(spell_id);
         Ok(())
     }
     fn cancel_cast(&self, _account_id: u64, self_guid: u64) -> Result<()> {
-        self.cancelled_casts.lock().unwrap().push(self_guid);
+        self.cast.cancelled_casts.lock().unwrap().push(self_guid);
         Ok(())
     }
     fn cast_spell(
@@ -4166,7 +4464,11 @@ impl CastStore for InMemoryStore {
         spell_id: u32,
         target_guid: u64,
     ) -> Result<()> {
-        self.casts.lock().unwrap().push((spell_id, target_guid));
+        self.cast
+            .casts
+            .lock()
+            .unwrap()
+            .push((spell_id, target_guid));
         Ok(())
     }
     fn start_ranged_attack(
@@ -4176,7 +4478,8 @@ impl CastStore for InMemoryStore {
         target_guid: u64,
         spell_id: u32,
     ) -> Result<()> {
-        self.ranged_attacks
+        self.cast
+            .ranged_attacks
             .lock()
             .unwrap()
             .push((target_guid, spell_id));
@@ -4242,10 +4545,11 @@ impl CastStore for InMemoryStore {
     // Shared with the character, vendor and query paths, so these two keep real fixtures.
 
     fn player_items(&self, _owner_guid: u64) -> Result<Vec<codec::ItemInstanceView>> {
-        Ok(self.player_items_fixture.clone())
+        Ok(self.cast.player_items_fixture.clone())
     }
     fn item_template(&self, entry: u32) -> Result<Option<codec::ItemTemplateView>> {
         Ok(self
+            .cast
             .item_templates
             .iter()
             .find(|template| template.entry == entry)
@@ -4255,31 +4559,33 @@ impl CastStore for InMemoryStore {
 
 /// Taxi behavior has focused handler tests. The broad encrypted-session store opts out unless a
 /// socket test explicitly needs a taxi reply.
-impl TaxiActionStore for InMemoryStore {
+impl TaxiActionStore for WorldFake {
     fn taxi_node_status(
         &self,
         character_guid: u64,
         npc_guid: u64,
     ) -> Result<Option<codec::TaxiNodeStatusView>> {
-        self.taxi_calls
+        self.taxi
+            .taxi_calls
             .lock()
             .unwrap()
             .push(("status", character_guid, npc_guid));
-        if let Some(error) = &self.taxi_error {
+        if let Some(error) = &self.taxi.taxi_error {
             return Err(anyhow!("{error}"));
         }
-        Ok(self.taxi_status)
+        Ok(self.taxi.taxi_status)
     }
 
     fn open_taxi(&self, character_guid: u64, npc_guid: u64) -> Result<Option<codec::TaxiMapView>> {
-        self.taxi_calls
+        self.taxi
+            .taxi_calls
             .lock()
             .unwrap()
             .push(("open", character_guid, npc_guid));
-        if let Some(error) = &self.taxi_error {
+        if let Some(error) = &self.taxi.taxi_error {
             return Err(anyhow!("{error}"));
         }
-        Ok(self.taxi_map.clone())
+        Ok(self.taxi.taxi_map.clone())
     }
 
     fn activate_taxi(
@@ -4289,24 +4595,26 @@ impl TaxiActionStore for InMemoryStore {
         source_client_node_id: u32,
         destination_client_node_id: u32,
     ) -> Result<codec::TaxiActivationResult> {
-        self.taxi_calls
+        self.taxi
+            .taxi_calls
             .lock()
             .unwrap()
             .push(("activate", character_guid, npc_guid));
-        self.taxi_activation_inputs.lock().unwrap().push((
+        self.taxi.taxi_activation_inputs.lock().unwrap().push((
             character_guid,
             npc_guid,
             source_client_node_id,
             destination_client_node_id,
         ));
-        if let Some(error) = &self.taxi_error {
+        if let Some(error) = &self.taxi.taxi_error {
             return Err(anyhow!("{error}"));
         }
-        Ok(self.taxi_activation)
+        Ok(self.taxi.taxi_activation)
     }
 
     fn arm_taxi_flight(&self, character_guid: u64) -> Result<()> {
-        self.taxi_calls
+        self.taxi
+            .taxi_calls
             .lock()
             .unwrap()
             .push(("arm", character_guid, 0));
@@ -4314,35 +4622,40 @@ impl TaxiActionStore for InMemoryStore {
     }
 }
 
-impl MeleeActionStore for InMemoryStore {
+impl MeleeActionStore for WorldFake {
     fn start_attack(&self, _account_id: u64, _self_guid: u64, _target_guid: u64) -> Result<()> {
         self.rec("start_attack");
-        match &self.start_attack_error {
+        match &self.melee.start_attack_error {
             Some(e) => Err(anyhow!("{e}")),
             None => Ok(()),
         }
     }
     fn stop_attack(&self, _account_id: u64, self_guid: u64) -> Result<()> {
-        self.stop_attacks.lock().unwrap().push(self_guid);
+        self.melee.stop_attacks.lock().unwrap().push(self_guid);
         Ok(())
     }
 }
 
-impl ChatActionStore for InMemoryStore {
+impl ChatActionStore for WorldFake {
     fn speaker_facts(&self, _speaker_guid: u64) -> Result<Option<SpeakerFacts>> {
-        Ok(self.speaker_facts.clone())
+        Ok(self.chat.speaker_facts.clone())
     }
 
     fn realm_chat(&self, speaker_guid: u64, request: RealmChatRequest) -> Result<ChatOutcome> {
-        self.realm_chats
+        self.chat
+            .realm_chats
             .lock()
             .unwrap()
             .push((speaker_guid, request));
-        Ok(self.realm_chat_outcome.unwrap_or(ChatOutcome::Delivered))
+        Ok(self
+            .chat
+            .realm_chat_outcome
+            .unwrap_or(ChatOutcome::Delivered))
     }
 
     fn set_away(&self, speaker_guid: u64, kind: u8, message: String) -> Result<()> {
-        self.away_requests
+        self.chat
+            .away_requests
             .lock()
             .unwrap()
             .push((speaker_guid, kind, message));
@@ -4361,22 +4674,26 @@ impl ChatActionStore for InMemoryStore {
     /// answers, because the speaker guid is the whole authorization of the call.
     fn realm_whisper(&self, speaker_guid: u64, request: WhisperRequest) -> Result<ChatOutcome> {
         self.rec("realm_whisper");
-        self.realm_whispers
+        self.chat
+            .realm_whispers
             .lock()
             .unwrap()
             .push((speaker_guid, request));
-        if let Some(e) = &self.realm_whisper_error {
+        if let Some(e) = &self.chat.realm_whisper_error {
             return Err(anyhow!("{e}"));
         }
-        Ok(self.realm_whisper_outcome.unwrap_or(ChatOutcome::Delivered))
+        Ok(self
+            .chat
+            .realm_whisper_outcome
+            .unwrap_or(ChatOutcome::Delivered))
     }
 
     fn speaker_gm_level(&self, _speaker_guid: u64) -> Result<u8> {
-        Ok(self.gm_level)
+        Ok(self.chat.gm_level)
     }
 }
 
-impl SpeechStore for InMemoryStore {
+impl SpeechStore for WorldFake {
     fn send_chat(
         &self,
         _account_id: u64,
@@ -4388,11 +4705,15 @@ impl SpeechStore for InMemoryStore {
         // Recorded per SHARD like every other player-scoped call, so the partition rule (say/
         // yell stay shard-local and range-scoped) is assertable rather than merely stated.
         self.rec("send_chat");
-        self.chats
+        self.speech
+            .chats
             .lock()
             .unwrap()
             .push((chat_type, language, message));
-        Ok(self.send_chat_outcome.unwrap_or(ChatOutcome::Delivered))
+        Ok(self
+            .speech
+            .send_chat_outcome
+            .unwrap_or(ChatOutcome::Delivered))
     }
 
     fn send_emote(
@@ -4408,23 +4729,29 @@ impl SpeechStore for InMemoryStore {
     }
 
     fn gm_command(&self, account_name: &str, _self_guid: u64, text: String) -> Result<()> {
-        if let Some(alpha_test_tools) = &self.gm_alpha_test_tools {
+        if let Some(alpha_test_tools) = &self.speech.gm_alpha_test_tools {
             let authorized = alpha_test_tools.load(std::sync::atomic::Ordering::SeqCst);
-            self.gm_commands
+            self.speech
+                .gm_commands
                 .lock()
                 .unwrap()
                 .push((account_name.to_string(), text.clone()));
-            self.gm_authority_results.lock().unwrap().push(authorized);
+            self.speech
+                .gm_authority_results
+                .lock()
+                .unwrap()
+                .push(authorized);
             if authorized && (text.starts_with(".speed") || text.starts_with(".tele")) {
-                self.gm_gameplay_changes.lock().unwrap().push(text);
+                self.speech.gm_gameplay_changes.lock().unwrap().push(text);
                 return Ok(());
             }
             return Err(anyhow!("permission denied"));
         }
-        match &self.gm_command_error {
+        match &self.speech.gm_command_error {
             Some(e) => Err(anyhow!("{e}")),
             None => {
-                self.gm_commands
+                self.speech
+                    .gm_commands
                     .lock()
                     .unwrap()
                     .push((account_name.to_string(), text));
@@ -4434,18 +4761,19 @@ impl SpeechStore for InMemoryStore {
     }
 }
 
-impl ChannelActionStore for InMemoryStore {
+impl ChannelActionStore for WorldFake {
     fn channel_op(
         &self,
         actor_guid: u64,
         op: u8,
         request: ChannelRequest,
     ) -> Result<ChannelOutcome> {
-        self.channel_ops
+        self.channel
+            .channel_ops
             .lock()
             .unwrap()
             .push((actor_guid, op, request));
-        Ok(self.channel_outcome.unwrap_or(ChannelOutcome::Done))
+        Ok(self.channel.channel_outcome.unwrap_or(ChannelOutcome::Done))
     }
 
     fn channel_roster(&self, _team: u32, _channel_name: &str) -> Result<Option<ChannelRoster>> {
@@ -4463,7 +4791,7 @@ impl ChannelActionStore for InMemoryStore {
 
 /// The Meeting Stone family is tested against its own Fake in `handlers/meeting_stone.rs`. Here no
 /// stone exists and nobody is queued.
-impl MeetingStoneActionStore for InMemoryStore {
+impl MeetingStoneActionStore for WorldFake {
     fn admit_meeting_stone(&self, _actor_guid: u64, _go_guid: u64) -> Result<MeetingStoneOutcome> {
         Ok(MeetingStoneOutcome::Refused(
             lyracore_shared::meeting_stone::MeetingStoneRefusal::NotAMeetingStone,
@@ -4497,7 +4825,7 @@ impl MeetingStoneActionStore for InMemoryStore {
     }
 }
 
-impl DuelActionStore for InMemoryStore {
+impl DuelActionStore for WorldFake {
     fn duel_accept(&self, _account_id: u64, _actor_guid: u64, _flag_guid: u64) -> Result<()> {
         Ok(())
     }
@@ -4507,9 +4835,10 @@ impl DuelActionStore for InMemoryStore {
     }
 }
 
-impl GuildActionStore for InMemoryStore {
+impl GuildActionStore for WorldFake {
     fn guild_member(&self, character_guid: u64) -> Result<Option<codec::GuildMemberView>> {
         Ok(self
+            .guild
             .guild_memberships
             .iter()
             .find(|member| member.character_guid == character_guid)
@@ -4518,6 +4847,7 @@ impl GuildActionStore for InMemoryStore {
 
     fn guild(&self, guild_id: u32) -> Result<Option<codec::GuildView>> {
         Ok(self
+            .guild
             .guilds
             .iter()
             .find(|guild| guild.guild_id == guild_id)
@@ -4541,7 +4871,7 @@ impl GuildActionStore for InMemoryStore {
                 level: c.level,
                 zone_id: c.zone_id,
                 last_logout_micros: 0,
-                online: !self.offline_guids.contains(&c.guid),
+                online: !self.social.offline_guids.contains(&c.guid),
                 in_transit: false,
                 realm_account_id: 0,
             }))
@@ -4613,6 +4943,7 @@ impl GuildActionStore for InMemoryStore {
         charter_item_guid: u64,
     ) -> Result<Option<codec::PetitionView>> {
         Ok(self
+            .guild
             .guild_petitions
             .iter()
             .find(|petition| petition.charter_item_guid == charter_item_guid)
@@ -4621,6 +4952,7 @@ impl GuildActionStore for InMemoryStore {
 
     fn guild_petition_of_owner(&self, owner_guid: u64) -> Result<Option<codec::PetitionView>> {
         Ok(self
+            .guild
             .guild_petitions
             .iter()
             .find(|petition| petition.owner_guid == owner_guid)
@@ -4629,13 +4961,14 @@ impl GuildActionStore for InMemoryStore {
 
     fn guild_name_taken(&self, name: &str) -> Result<bool> {
         Ok(self
+            .guild
             .guilds
             .iter()
             .any(|guild| guild.name.eq_ignore_ascii_case(name)))
     }
 
     fn guild_holds_charter(&self, _actor_guid: u64, charter_item_guid: u64) -> Result<bool> {
-        Ok(self.held_charters.contains(&charter_item_guid))
+        Ok(self.guild.held_charters.contains(&charter_item_guid))
     }
 
     fn guild_destroy_charter(&self, _actor_guid: u64, _charter_item_guid: u64) -> Result<()> {
@@ -4645,10 +4978,11 @@ impl GuildActionStore for InMemoryStore {
 
     fn guild_character_guids(&self) -> Result<Vec<u64>> {
         let mut guids: Vec<u64> = self
+            .guild
             .guild_memberships
             .iter()
             .map(|member| member.character_guid)
-            .chain(self.guild_petitions.iter().flat_map(|petition| {
+            .chain(self.guild.guild_petitions.iter().flat_map(|petition| {
                 std::iter::once(petition.owner_guid).chain(petition.signers.iter().copied())
             }))
             .collect();
@@ -4658,7 +4992,7 @@ impl GuildActionStore for InMemoryStore {
     }
 
     fn guild_names_character(&self, character_guid: u64) -> Result<bool> {
-        if self.guild_lookup_error_for == Some(character_guid) {
+        if self.guild.guild_lookup_error_for == Some(character_guid) {
             return Err(anyhow!("guild lookup for {character_guid} failed"));
         }
         Ok(self.guild_character_guids()?.contains(&character_guid))
@@ -4673,9 +5007,9 @@ impl GuildActionStore for InMemoryStore {
 }
 
 /// Realm-core refuses every fee: the socket tests only watch the steps run.
-impl crate::world::guild_fee::GuildFeeStore for InMemoryStore {
+impl crate::world::guild_fee::GuildFeeStore for WorldFake {
     fn guild_fee_held(&self, _actor_guid: u64) -> Result<Option<crate::world::guild_fee::FeeHold>> {
-        Ok(self.guild_fee_hold.lock().unwrap().clone())
+        Ok(self.guild.guild_fee_hold.lock().unwrap().clone())
     }
 
     fn guild_fee_hold(
@@ -4706,19 +5040,19 @@ impl crate::world::guild_fee::GuildFeeStore for InMemoryStore {
         _accepted: bool,
     ) -> Result<()> {
         self.rec("guild_fee_finish");
-        *self.guild_fee_hold.lock().unwrap() = None;
+        *self.guild.guild_fee_hold.lock().unwrap() = None;
         Ok(())
     }
 }
 
-impl AuctionActionStore for InMemoryStore {
+impl AuctionActionStore for WorldFake {
     fn auction_interaction(
         &self,
         _player_guid: u64,
         _auctioneer_guid: u64,
     ) -> Result<Option<AuctionInteraction>> {
         self.rec("auction_interaction");
-        Ok(self.auction_interaction)
+        Ok(self.auction.auction_interaction)
     }
 
     fn create_auction(
@@ -4760,17 +5094,18 @@ impl AuctionActionStore for InMemoryStore {
     }
 }
 
-impl QuestActionStore for InMemoryStore {
+impl QuestActionStore for WorldFake {
     fn giver_quest_evals(
         &self,
         _giver_guid: u64,
         _player_guid: u64,
     ) -> Result<Vec<codec::GiverQuestEval>> {
-        Ok(self.quest_evals.clone())
+        Ok(self.quest.quest_evals.clone())
     }
 
     fn quest_detail_view(&self, quest_id: u32) -> Result<Option<codec::QuestDetailView>> {
         Ok(self
+            .quest
             .quest_details
             .iter()
             .find(|d| d.quest_id == quest_id)
@@ -4800,7 +5135,7 @@ impl QuestActionStore for InMemoryStore {
     }
 
     fn player_quest_log(&self, _player_guid: u64) -> Result<Vec<codec::update_mask::QuestLogSlot>> {
-        Ok(self.quest_log_slots.clone())
+        Ok(self.quest.quest_log_slots.clone())
     }
 
     fn abandon_quest(&self, _account_id: u64, _self_guid: u64, _quest_id: u32) -> Result<()> {
@@ -4813,6 +5148,7 @@ impl QuestActionStore for InMemoryStore {
 
     fn quest_status(&self, _player_guid: u64, quest_id: u32) -> (bool, bool) {
         match self
+            .quest
             .quest_log
             .lock()
             .unwrap()
@@ -4835,23 +5171,26 @@ impl QuestActionStore for InMemoryStore {
         if let Some(e) = &self.trade_error {
             return Err(anyhow!("{e}"));
         }
-        self.turned_in
+        self.quest
+            .turned_in
             .lock()
             .unwrap()
             .push((account_id, giver_guid, quest_id, reward_index));
-        if let Some(letter) = self.turn_in_reward_letter.clone() {
-            self.attested
+        if let Some(letter) = self.quest.turn_in_reward_letter.clone() {
+            self.mail
+                .attested
                 .lock()
                 .unwrap()
                 .push((letter.escrow_id, false));
-            self.mail_escrows
+            self.mail
+                .mail_escrows
                 .lock()
                 .unwrap()
                 .push((letter.recipient_guid, letter));
         }
         if let (Some(item), Some(tx)) = (
-            self.turn_in_reward_item.clone(),
-            self.turn_in_tx.lock().unwrap().take(),
+            self.session.turn_in_reward_item.clone(),
+            self.session.turn_in_tx.lock().unwrap().take(),
         ) {
             let mut relay = vec![Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
                 Box::new(codec::build_item_create_object(&item)),
@@ -4881,9 +5220,9 @@ impl QuestActionStore for InMemoryStore {
     }
 }
 
-impl VendorActionStore for InMemoryStore {
+impl VendorActionStore for WorldFake {
     fn vendor_stock(&self, _vendor_guid: u64) -> Result<Vec<codec::VendorItemView>> {
-        Ok(self.vendor_stock.clone())
+        Ok(self.vendor.vendor_stock.clone())
     }
 
     fn vendor_refuses_interaction(&self, _vendor_guid: u64, _player_guid: u64) -> Result<bool> {
@@ -4905,7 +5244,7 @@ impl VendorActionStore for InMemoryStore {
     }
 
     fn buyback_slots(&self, _player_guid: u64) -> Vec<(u32, u32, u32, u32)> {
-        self.buyback_ring.clone()
+        self.vendor.buyback_ring.clone()
     }
 
     fn random_property_enchant_ids(&self, _random_property_id: u32) -> [u32; 3] {
@@ -4913,7 +5252,8 @@ impl VendorActionStore for InMemoryStore {
     }
 
     fn vendor_item_slot(&self, item_guid: u64) -> Option<u8> {
-        self.item_slots
+        self.vendor
+            .item_slots
             .iter()
             .find(|(g, _)| *g == item_guid)
             .map(|&(_, s)| s)
@@ -4955,12 +5295,16 @@ impl VendorActionStore for InMemoryStore {
         if let Some(e) = &self.trade_error {
             return Err(anyhow!("{e}"));
         }
-        self.bought_back.lock().unwrap().push((vendor_guid, slot));
+        self.vendor
+            .bought_back
+            .lock()
+            .unwrap()
+            .push((vendor_guid, slot));
         Ok(())
     }
 }
 
-impl InMemoryStore {
+impl WorldFake {
     /// The Coordinator answers a Refusal tag as an outcome and anything else as a failure with an
     /// unknown durable result, so `trade_error` reaches the item family the same way.
     fn canned_item_action(&self) -> Result<ItemActionResult> {
@@ -4973,7 +5317,7 @@ impl InMemoryStore {
     }
 }
 
-impl ItemActionStore for InMemoryStore {
+impl ItemActionStore for WorldFake {
     fn equip_item(
         &self,
         _account_id: u64,
@@ -5003,17 +5347,18 @@ impl ItemActionStore for InMemoryStore {
     }
 
     fn use_item(&self, _account_id: u64, _self_guid: u64, slot: u8) -> Result<ItemActionResult> {
-        self.used_items.lock().unwrap().push(slot);
+        self.item.used_items.lock().unwrap().push(slot);
         self.canned_item_action()
     }
 }
 
-impl WeatherStore for InMemoryStore {
+impl WeatherStore for WorldFake {
     fn zone_weather(&self, zone_id: u32) -> Result<Option<codec::ZoneWeatherView>> {
-        if let Some(e) = &self.weather_error {
+        if let Some(e) = &self.weather.weather_error {
             return Err(anyhow!("{e}"));
         }
         Ok(self
+            .weather
             .zone_weather
             .iter()
             .find(|(zone, _)| *zone == zone_id)
@@ -5024,16 +5369,17 @@ impl WeatherStore for InMemoryStore {
 /// Member Stats over the same party state the routing tests use: Realm-core's `party` when this
 /// handle has a realm, its own `mirror` on a single database. Presence reads this shard and its
 /// peers, every World Shard, like `Coordinator::member_presence`.
-impl MemberStatsStore for InMemoryStore {
+impl MemberStatsStore for WorldFake {
     fn group_mates(&self, self_guid: u64) -> Result<Vec<u64>> {
-        let roster = match &self.realm {
+        let roster = match &self.topology.realm {
             Some(realm) => {
-                let party = realm.party.lock().unwrap();
+                let party = realm.party.party.lock().unwrap();
                 party
                     .group_of(self_guid)
                     .and_then(|group| party.roster(group))
             }
             None => self
+                .party
                 .mirror
                 .lock()
                 .unwrap()
@@ -5050,7 +5396,8 @@ impl MemberStatsStore for InMemoryStore {
     }
 
     fn member_presence(&self, guid: u64) -> Result<MemberPresence> {
-        self.member_presence_reads
+        self.member_stats
+            .member_presence_reads
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         // Aura slots and a live pet are Member Stats' own overlay in production
         // (`Coordinator::with_member_shard_stats`, keyed by `ShardId`) — this Fake has no
@@ -5069,9 +5416,9 @@ impl MemberStatsStore for InMemoryStore {
     }
 }
 
-impl LootWindowStore for InMemoryStore {
+impl LootWindowStore for WorldFake {
     fn loot_target_money(&self, _target_guid: u64) -> Result<u32> {
-        Ok(self.corpse_money)
+        Ok(self.loot_window.corpse_money)
     }
 
     fn loot_target_items(
@@ -5079,11 +5426,13 @@ impl LootWindowStore for InMemoryStore {
         _target_guid: u64,
         viewer_guid: u64,
     ) -> Result<Vec<codec::LootItemView>> {
-        self.corpse_loot_reads
+        self.loot_window
+            .corpse_loot_reads
             .lock()
             .unwrap()
             .push((_target_guid, viewer_guid));
         Ok(self
+            .loot_window
             .corpse_loot_by_viewer
             .get(&viewer_guid)
             .cloned()
@@ -5096,7 +5445,11 @@ impl LootWindowStore for InMemoryStore {
         _actor_guid: u64,
         target_guid: u64,
     ) -> Result<LootWindowRequestStatus> {
-        self.gameobjects_used.lock().unwrap().push(target_guid);
+        self.loot_window
+            .gameobjects_used
+            .lock()
+            .unwrap()
+            .push(target_guid);
         Ok(LootWindowRequestStatus::Applied)
     }
 
@@ -5115,13 +5468,13 @@ impl LootWindowStore for InMemoryStore {
         _actor_guid: u64,
         target_guid: u64,
     ) -> Result<LootWindowRequestStatus> {
-        if let Some(error) = &self.skinning_failure {
+        if let Some(error) = &self.loot_window.skinning_failure {
             return Err(anyhow!(error.clone()));
         }
-        if let Some(refusal) = self.skinning_refusal {
+        if let Some(refusal) = self.loot_window.skinning_refusal {
             return Ok(LootWindowRequestStatus::Refused(refusal));
         }
-        self.skinned.lock().unwrap().push(target_guid);
+        self.loot_window.skinned.lock().unwrap().push(target_guid);
         Ok(LootWindowRequestStatus::Applied)
     }
 
@@ -5131,7 +5484,11 @@ impl LootWindowStore for InMemoryStore {
         _actor_guid: u64,
         target_guid: u64,
     ) -> Result<LootWindowRequestStatus> {
-        self.money_looted.lock().unwrap().push(target_guid);
+        self.loot_window
+            .money_looted
+            .lock()
+            .unwrap()
+            .push(target_guid);
         Ok(LootWindowRequestStatus::Applied)
     }
 
@@ -5142,7 +5499,8 @@ impl LootWindowStore for InMemoryStore {
         target_guid: u64,
         loot_slot: u8,
     ) -> Result<LootWindowRequestStatus> {
-        self.items_looted
+        self.loot_window
+            .items_looted
             .lock()
             .unwrap()
             .push((target_guid, loot_slot));
@@ -5150,7 +5508,7 @@ impl LootWindowStore for InMemoryStore {
     }
 }
 
-impl LootRollStore for InMemoryStore {
+impl LootRollStore for WorldFake {
     fn loot_roll(
         &self,
         _account_id: u64,
@@ -5159,13 +5517,14 @@ impl LootRollStore for InMemoryStore {
         loot_slot: u32,
         vote: u8,
     ) -> Result<LootActionStatus> {
-        if let Some(failure) = &self.loot_action_failure {
+        if let Some(failure) = &self.loot_roll.loot_action_failure {
             return Err(anyhow!(failure.clone()));
         }
-        if let Some(refusal) = self.loot_action_refusal {
+        if let Some(refusal) = self.loot_roll.loot_action_refusal {
             return Ok(LootActionStatus::Refused(refusal));
         }
-        self.loot_rolls
+        self.loot_roll
+            .loot_rolls
             .lock()
             .unwrap()
             .push((corpse_guid, loot_slot, vote));
@@ -5180,16 +5539,17 @@ impl LootRollStore for InMemoryStore {
         loot_slot: u8,
         target_guid: u64,
     ) -> Result<LootActionStatus> {
-        if let Some(failure) = &self.loot_action_failure {
+        if let Some(failure) = &self.loot_roll.loot_action_failure {
             return Err(anyhow!(failure.clone()));
         }
-        if let Some(refusal) = self.loot_action_refusal {
+        if let Some(refusal) = self.loot_roll.loot_action_refusal {
             return Ok(LootActionStatus::Refused(refusal));
         }
-        self.loot_master_gives
-            .lock()
-            .unwrap()
-            .push((corpse_guid, loot_slot, target_guid));
+        self.loot_roll.loot_master_gives.lock().unwrap().push((
+            corpse_guid,
+            loot_slot,
+            target_guid,
+        ));
         Ok(LootActionStatus::Applied)
     }
 
@@ -5209,7 +5569,7 @@ impl LootRollStore for InMemoryStore {
         source_roll_id: u64,
     ) -> Result<()> {
         self.rec("realm_loot_op");
-        self.realm_loot_ops.lock().unwrap().push((
+        self.loot_roll.realm_loot_ops.lock().unwrap().push((
             op,
             corpse_guid,
             slot,
@@ -5222,7 +5582,7 @@ impl LootRollStore for InMemoryStore {
             promotion_source,
             source_roll_id,
         ));
-        if let Some(e) = &self.realm_loot_op_error {
+        if let Some(e) = &self.loot_roll.realm_loot_op_error {
             return Err(anyhow!("{e}"));
         }
         Ok(())
@@ -5248,24 +5608,26 @@ impl LootRollStore for InMemoryStore {
             spacetimedb_sdk::Identity::ZERO,
             0,
         )?;
-        if let Some(failure) = &self.loot_action_failure {
+        if let Some(failure) = &self.loot_roll.loot_action_failure {
             return Err(anyhow!(failure.clone()));
         }
         Ok(self
+            .loot_roll
             .loot_action_refusal
             .map_or(LootActionStatus::Applied, LootActionStatus::Refused))
     }
 
     fn pending_local_rolls(&self) -> Result<Vec<super::loot::PendingLootRoll>> {
-        Ok(self.pending_rolls.lock().unwrap().clone())
+        Ok(self.loot_roll.pending_rolls.lock().unwrap().clone())
     }
 
     fn settle_loot_roll(&self, corpse_guid: u64, slot: u8, winner_guid: u64) -> Result<()> {
         self.rec("settle_loot_roll");
-        if let Some(e) = &self.settle_loot_roll_error {
+        if let Some(e) = &self.loot_roll.settle_loot_roll_error {
             return Err(anyhow!("{e}"));
         }
-        self.settled_rolls
+        self.loot_roll
+            .settled_rolls
             .lock()
             .unwrap()
             .push((corpse_guid, slot, winner_guid));
@@ -5274,8 +5636,9 @@ impl LootRollStore for InMemoryStore {
 
     fn clear_promoted_loot_roll(&self, roll_id: u64) -> Result<()> {
         self.rec("clear_promoted_loot_roll");
-        self.cleared_rolls.lock().unwrap().push(roll_id);
-        self.pending_rolls
+        self.loot_roll.cleared_rolls.lock().unwrap().push(roll_id);
+        self.loot_roll
+            .pending_rolls
             .lock()
             .unwrap()
             .retain(|r| r.roll_id != roll_id);
@@ -5283,7 +5646,7 @@ impl LootRollStore for InMemoryStore {
     }
 
     fn loot_won_since(&self, after_id: u64) -> Result<(u64, Vec<(u64, u8, u64)>)> {
-        let events = self.won_events.lock().unwrap();
+        let events = self.loot_roll.won_events.lock().unwrap();
         let watermark = events.len() as u64;
         let wins = events
             .iter()
@@ -5362,14 +5725,17 @@ fn auth_session(username: &str, client_seed: u32, client_proof: [u8; 20]) -> CMS
 /// A store for a logged-in TESTER (account `account_id`), with no character/scenario state beyond
 /// the session itself — the shape every handshake/login/logout/movement test overlays with its own
 /// fields via `..`. `quest_store()` is the sibling for tests that also need a login entity.
-fn tester_store(account_id: u64) -> InMemoryStore {
-    InMemoryStore {
-        entity_in_world: true,
-        username: "TESTER".into(),
-        session: Some(WorldSession {
-            account_id,
-            session_key: K,
-        }),
+fn tester_store(account_id: u64) -> WorldFake {
+    WorldFake {
+        session: SessionState {
+            entity_in_world: true,
+            username: "TESTER".into(),
+            session: Some(WorldSession {
+                account_id,
+                session_key: K,
+            }),
+            ..Default::default()
+        },
         ..Default::default()
     }
 }
@@ -5721,7 +6087,7 @@ fn a_restarted_gateway_completes_the_handshake_from_realm_state_alone() {
         account_id: 42,
         session_key: K,
     };
-    let handshake_once = |store: InMemoryStore| {
+    let handshake_once = |store: WorldFake| {
         let (mut client, server_end) = world_session_socket_pair();
         let server = std::thread::spawn(move || {
             let mut s = server_end;
@@ -5735,18 +6101,24 @@ fn a_restarted_gateway_completes_the_handshake_from_realm_state_alone() {
         server.join().unwrap()
     };
 
-    let store_before = InMemoryStore {
-        username: "TESTER".into(),
-        session: Some(realm_session()),
+    let store_before = WorldFake {
+        session: SessionState {
+            username: "TESTER".into(),
+            session: Some(realm_session()),
+            ..Default::default()
+        },
         ..Default::default()
     };
     assert_eq!(handshake_once(store_before), 42);
 
     // ---- the gateway is killed here; every byte of its in-process state is gone ----
 
-    let store_after = InMemoryStore {
-        username: "TESTER".into(),
-        session: Some(realm_session()), // re-READ from the realm, not carried over
+    let store_after = WorldFake {
+        session: SessionState {
+            username: "TESTER".into(),
+            session: Some(realm_session()), // re-READ from the realm, not carried over
+            ..Default::default()
+        },
         ..Default::default()
     };
     assert_eq!(
@@ -5763,9 +6135,12 @@ fn a_gateway_that_cannot_reach_the_session_store_rejects_rather_than_guessing() 
     // `lookup_session` yields no session) rejects the handshake plaintext instead of establishing
     // a session on an unverified key. `CoordinatorStore` reaches this state by way of
     // `Coordinator::realm_core()`'s Err.
-    let store = InMemoryStore {
-        username: "TESTER".into(),
-        session: None,
+    let store = WorldFake {
+        session: SessionState {
+            username: "TESTER".into(),
+            session: None,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let (mut client, server_end) = world_session_socket_pair();
@@ -5794,12 +6169,15 @@ fn a_gateway_that_cannot_reach_the_session_store_rejects_rather_than_guessing() 
 fn bad_proof_is_rejected() {
     // The store hands out a session key, but the client computes its proof against a
     // DIFFERENT key, so the server's digest check must fail.
-    let store = InMemoryStore {
-        username: "TESTER".into(),
-        session: Some(WorldSession {
-            account_id: 1,
-            session_key: K,
-        }),
+    let store = WorldFake {
+        session: SessionState {
+            username: "TESTER".into(),
+            session: Some(WorldSession {
+                account_id: 1,
+                session_key: K,
+            }),
+            ..Default::default()
+        },
         ..Default::default()
     };
 
@@ -5839,9 +6217,12 @@ fn bad_proof_is_rejected() {
 
 #[test]
 fn unknown_account_is_rejected_cleanly() {
-    let store = InMemoryStore {
-        username: "TESTER".into(),
-        session: None, // account exists nowhere / no session
+    let store = WorldFake {
+        session: SessionState {
+            username: "TESTER".into(),
+            session: None, // account exists nowhere / no session
+            ..Default::default()
+        },
         ..Default::default()
     };
 
@@ -5884,9 +6265,12 @@ fn char_enum_returns_the_seeded_character() {
         first_login: true,
         ..Default::default()
     };
-    let store = std::sync::Arc::new(InMemoryStore {
-        characters: vec![tester],
-        ..tester_store(7)
+    let store = std::sync::Arc::new({
+        let base = tester_store(7);
+        WorldFake {
+            characters: vec![tester],
+            ..base
+        }
     });
 
     let (mut client, server_end) = world_session_socket_pair();
@@ -5921,18 +6305,24 @@ fn char_enum_returns_the_seeded_character() {
 
 #[test]
 fn guild_query_answers_at_character_select() {
-    let store = std::sync::Arc::new(InMemoryStore {
-        guilds: vec![codec::GuildView {
-            guild_id: 7,
-            name: "Tracer Guild".into(),
-            ranks: vec![codec::GuildRankView {
-                rank_id: 0,
-                name: "Guild Master".into(),
-                rights: lyracore_shared::guild::rights::ALL,
-            }],
-            ..Default::default()
-        }],
-        ..tester_store(7)
+    let store = std::sync::Arc::new({
+        let base = tester_store(7);
+        WorldFake {
+            guild: GuildState {
+                guilds: vec![codec::GuildView {
+                    guild_id: 7,
+                    name: "Tracer Guild".into(),
+                    ranks: vec![codec::GuildRankView {
+                        rank_id: 0,
+                        name: "Guild Master".into(),
+                        rights: lyracore_shared::guild::rights::ALL,
+                    }],
+                    ..Default::default()
+                }],
+                ..base.guild
+            },
+            ..base
+        }
     });
 
     let (mut client, server_end) = world_session_socket_pair();
@@ -5988,23 +6378,33 @@ fn sync(
 }
 
 /// Character 1 as a member of Guild 7 at rank 3.
-fn guild_member_store() -> InMemoryStore {
-    InMemoryStore {
-        login_entity: Some(warrior_entity()),
-        guild_memberships: vec![codec::GuildMemberView {
-            character_guid: 1,
-            guild_id: 7,
-            rank_id: 3,
-            name: "Warrior".into(),
-            ..Default::default()
-        }],
-        ..tester_store(7)
+fn guild_member_store() -> WorldFake {
+    {
+        let base = tester_store(7);
+        WorldFake {
+            session: SessionState {
+                login_entity: Some(warrior_entity()),
+                ..base.session
+            },
+            guild: GuildState {
+                guild_memberships: vec![codec::GuildMemberView {
+                    character_guid: 1,
+                    guild_id: 7,
+                    rank_id: 3,
+                    name: "Warrior".into(),
+                    ..Default::default()
+                }],
+                ..base.guild
+            },
+            ..base
+        }
     }
 }
 
 /// The recorded operations, in call order, without their Shard.
-fn recorded(store: &InMemoryStore) -> Vec<String> {
+fn recorded(store: &WorldFake) -> Vec<String> {
     store
+        .topology
         .calls
         .lock()
         .unwrap()
@@ -6054,34 +6454,43 @@ fn a_member_enters_the_world_with_its_guild_on_the_self_create_and_signs_on() {
 
 #[test]
 fn every_membership_opcode_reaches_its_durable_request() {
-    let store = std::sync::Arc::new(InMemoryStore {
-        login_entity: Some(warrior_entity()),
-        guild_memberships: vec![codec::GuildMemberView {
-            character_guid: 1,
-            guild_id: 7,
-            rank_id: 3,
-            name: "Warrior".into(),
-            ..Default::default()
-        }],
-        guilds: vec![codec::GuildView {
-            guild_id: 7,
-            name: "Tracer Guild".into(),
-            leader_guid: 1,
-            ..Default::default()
-        }],
-        characters: vec![
-            codec::CharacterView {
-                guid: 1,
-                name: "Warrior".into(),
-                ..Default::default()
+    let store = std::sync::Arc::new({
+        let base = tester_store(7);
+        WorldFake {
+            session: SessionState {
+                login_entity: Some(warrior_entity()),
+                ..base.session
             },
-            codec::CharacterView {
-                guid: 2,
-                name: "Target".into(),
-                ..Default::default()
+            guild: GuildState {
+                guild_memberships: vec![codec::GuildMemberView {
+                    character_guid: 1,
+                    guild_id: 7,
+                    rank_id: 3,
+                    name: "Warrior".into(),
+                    ..Default::default()
+                }],
+                guilds: vec![codec::GuildView {
+                    guild_id: 7,
+                    name: "Tracer Guild".into(),
+                    leader_guid: 1,
+                    ..Default::default()
+                }],
+                ..base.guild
             },
-        ],
-        ..tester_store(7)
+            characters: vec![
+                codec::CharacterView {
+                    guid: 1,
+                    name: "Warrior".into(),
+                    ..Default::default()
+                },
+                codec::CharacterView {
+                    guid: 2,
+                    name: "Target".into(),
+                    ..Default::default()
+                },
+            ],
+            ..base
+        }
     });
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
 
@@ -6175,12 +6584,18 @@ fn logout_signs_the_member_off_before_the_account_claim_is_released() {
 
 #[test]
 fn world_entry_finishes_a_leftover_fee_hold_on_the_home_shard() {
-    let store = std::sync::Arc::new(InMemoryStore {
-        guild_fee_hold: std::sync::Mutex::new(Some(crate::world::guild_fee::FeeHold {
-            operation_id: 5_090_401,
-            terms: crate::world::guild_fee::FeeTerms::Emblem(Default::default()),
-        })),
-        ..guild_member_store()
+    let store = std::sync::Arc::new({
+        let base = guild_member_store();
+        WorldFake {
+            guild: GuildState {
+                guild_fee_hold: std::sync::Mutex::new(Some(crate::world::guild_fee::FeeHold {
+                    operation_id: 5_090_401,
+                    terms: crate::world::guild_fee::FeeTerms::Emblem(Default::default()),
+                })),
+                ..base.guild
+            },
+            ..base
+        }
     });
     let (client, _c_enc, _c_dec, server) = enter_world(store.clone(), 1);
     drop(client);
@@ -6191,7 +6606,7 @@ fn world_entry_finishes_a_leftover_fee_hold_on_the_home_shard() {
             && position(&calls, "guild_fee_decide") < position(&calls, "guild_fee_finish"),
         "{calls:?}"
     );
-    assert_eq!(*store.guild_fee_hold.lock().unwrap(), None);
+    assert_eq!(*store.guild.guild_fee_hold.lock().unwrap(), None);
 }
 
 #[test]
@@ -6241,26 +6656,32 @@ fn a_member_who_is_not_the_leader_saves_no_emblem_over_the_socket() {
 
 #[test]
 fn the_settings_opcodes_reach_their_dispatch_entries_over_the_socket() {
-    let store = std::sync::Arc::new(InMemoryStore {
-        guilds: vec![codec::GuildView {
-            guild_id: 7,
-            name: "Tracer Guild".into(),
-            ranks: vec![codec::GuildRankView {
-                rank_id: 0,
-                name: "Guild Master".into(),
-                rights: lyracore_shared::guild::rights::ALL,
+    let store = std::sync::Arc::new({
+        let base = guild_member_store();
+        WorldFake {
+            guild: GuildState {
+                guilds: vec![codec::GuildView {
+                    guild_id: 7,
+                    name: "Tracer Guild".into(),
+                    ranks: vec![codec::GuildRankView {
+                        rank_id: 0,
+                        name: "Guild Master".into(),
+                        rights: lyracore_shared::guild::rights::ALL,
+                    }],
+                    ..Default::default()
+                }],
+                ..base.guild
+            },
+            // The sentinel below is CMSG_PLAYED_TIME, which only replies once `character_by_guid`
+            // resolves the caller's row (`char.rs`'s own doc comment); without one here, the reply
+            // never comes and the sentinel read blocks until the test's socket timeout fires.
+            characters: vec![codec::CharacterView {
+                guid: 1,
+                name: "Warrior".into(),
+                ..Default::default()
             }],
-            ..Default::default()
-        }],
-        // The sentinel below is CMSG_PLAYED_TIME, which only replies once `character_by_guid`
-        // resolves the caller's row (`char.rs`'s own doc comment); without one here, the reply
-        // never comes and the sentinel read blocks until the test's socket timeout fires.
-        characters: vec![codec::CharacterView {
-            guid: 1,
-            name: "Warrior".into(),
-            ..Default::default()
-        }],
-        ..guild_member_store()
+            ..base
+        }
     });
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
 
@@ -6337,11 +6758,17 @@ fn the_settings_opcodes_reach_their_dispatch_entries_over_the_socket() {
 
 #[test]
 fn a_world_port_that_fails_after_sign_on_still_signs_off() {
-    let store = std::sync::Arc::new(InMemoryStore {
-        // The world-port ack is only actionable after teleport_player removed the old entity.
-        entity_in_world: false,
-        worldport_login_error: Some("character 1 is stranded on map 36".into()),
-        ..guild_member_store()
+    let store = std::sync::Arc::new({
+        let base = guild_member_store();
+        WorldFake {
+            session: SessionState {
+                // The world-port ack is only actionable after teleport_player removed the old entity.
+                entity_in_world: false,
+                worldport_login_error: Some("character 1 is stranded on map 36".into()),
+                ..base.session
+            },
+            ..base
+        }
     });
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
@@ -6381,9 +6808,12 @@ fn char_create_replies_success_then_name_in_use() {
         level: 1,
         ..Default::default()
     };
-    let store = std::sync::Arc::new(InMemoryStore {
-        characters: vec![tester],
-        ..tester_store(7)
+    let store = std::sync::Arc::new({
+        let base = tester_store(7);
+        WorldFake {
+            characters: vec![tester],
+            ..base
+        }
     });
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
@@ -6440,9 +6870,12 @@ fn char_delete_replies_success_and_dispatches_owned_guid() {
         level: 1,
         ..Default::default()
     };
-    let store = std::sync::Arc::new(InMemoryStore {
-        characters: vec![tester],
-        ..tester_store(7)
+    let store = std::sync::Arc::new({
+        let base = tester_store(7);
+        WorldFake {
+            characters: vec![tester],
+            ..base
+        }
     });
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
@@ -6460,7 +6893,7 @@ fn char_delete_replies_success_and_dispatches_owned_guid() {
         }
         other => panic!("expected SMSG_CHAR_DELETE, got {other}"),
     }
-    assert_eq!(*store.deleted.lock().unwrap(), vec![(7, 5)]);
+    assert_eq!(*store.character.deleted.lock().unwrap(), vec![(7, 5)]);
 
     drop(client);
     server.join().unwrap();
@@ -6468,9 +6901,15 @@ fn char_delete_replies_success_and_dispatches_owned_guid() {
 
 #[test]
 fn char_delete_failure_replies_failed_and_keeps_session_alive() {
-    let store = std::sync::Arc::new(InMemoryStore {
-        delete_outcome: Some(codec::CharDeleteOutcome::Failed),
-        ..tester_store(7)
+    let store = std::sync::Arc::new({
+        let base = tester_store(7);
+        WorldFake {
+            character: CharacterState {
+                delete_outcome: Some(codec::CharDeleteOutcome::Failed),
+                ..base.character
+            },
+            ..base
+        }
     });
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
@@ -6507,15 +6946,18 @@ fn char_delete_failure_replies_failed_and_keeps_session_alive() {
 /// Guild state on Realm-core for the deleted-Character reconciliation: Leader 5 and member 6 in
 /// one Guild, and a Petition owned by 7 with a Signature by 8. Characters 5 and 7 still exist on
 /// the `instances` peer; 6 and 8 exist on no World Shard.
-fn guild_cleanup_topology() -> std::sync::Arc<InMemoryStore> {
+fn guild_cleanup_topology() -> std::sync::Arc<WorldFake> {
     guild_cleanup_topology_failing_lookup_for(None)
 }
 
 fn guild_cleanup_topology_failing_lookup_for(
     guild_lookup_error_for: Option<u64>,
-) -> std::sync::Arc<InMemoryStore> {
-    let instances = std::sync::Arc::new(InMemoryStore {
-        shard: "instances".into(),
+) -> std::sync::Arc<WorldFake> {
+    let instances = std::sync::Arc::new(WorldFake {
+        topology: TopologyState {
+            shard: "instances".into(),
+            ..Default::default()
+        },
         characters: [5, 7]
             .into_iter()
             .map(|guid| codec::CharacterView {
@@ -6526,33 +6968,40 @@ fn guild_cleanup_topology_failing_lookup_for(
             .collect(),
         ..Default::default()
     });
-    let world = std::sync::Arc::new(InMemoryStore {
-        shard: "world".into(),
-        guild_memberships: [(5, 0), (6, 4)]
-            .into_iter()
-            .map(|(character_guid, rank_id)| codec::GuildMemberView {
-                character_guid,
-                guild_id: 7,
-                rank_id,
-                ..Default::default()
-            })
-            .collect(),
-        guild_petitions: vec![codec::PetitionView {
-            petition_id: 3,
-            charter_item_guid: 90,
-            owner_guid: 7,
-            name: "Boundary Test".into(),
-            signers: vec![8],
-        }],
-        guild_lookup_error_for,
+    let world = std::sync::Arc::new(WorldFake {
+        topology: TopologyState {
+            shard: "world".into(),
+            ..Default::default()
+        },
+        guild: GuildState {
+            guild_memberships: [(5, 0), (6, 4)]
+                .into_iter()
+                .map(|(character_guid, rank_id)| codec::GuildMemberView {
+                    character_guid,
+                    guild_id: 7,
+                    rank_id,
+                    ..Default::default()
+                })
+                .collect(),
+            guild_petitions: vec![codec::PetitionView {
+                petition_id: 3,
+                charter_item_guid: 90,
+                owner_guid: 7,
+                name: "Boundary Test".into(),
+                signers: vec![8],
+            }],
+            guild_lookup_error_for,
+            ..Default::default()
+        },
         ..Default::default()
     });
-    *world.peers.lock().unwrap() = vec![world.clone(), instances];
+    *world.topology.peers.lock().unwrap() = vec![world.clone(), instances];
     world
 }
 
-fn forgotten(store: &InMemoryStore) -> Vec<String> {
+fn forgotten(store: &WorldFake) -> Vec<String> {
     store
+        .topology
         .calls
         .lock()
         .unwrap()
@@ -6576,8 +7025,9 @@ fn deleted(guids: &[u64]) -> crate::world::GuildCleanup {
     }
 }
 
-fn durable_absence_checks(store: &InMemoryStore) -> usize {
+fn durable_absence_checks(store: &WorldFake) -> usize {
     store
+        .character
         .durable_absence_checks
         .load(std::sync::atomic::Ordering::SeqCst)
 }
@@ -6633,12 +7083,18 @@ fn a_failed_lookup_still_cleans_the_other_deleted_characters() {
 #[test]
 fn an_unavailable_world_shard_defers_every_guild_cleanup() {
     let world = guild_cleanup_topology();
-    let incomplete = InMemoryStore {
-        shard: "world".into(),
-        calls: world.calls.clone(),
-        guild_memberships: world.guild_memberships.clone(),
-        guild_petitions: world.guild_petitions.clone(),
-        world_shard_set_error: Some("instances has no healthy Coordinator subscription".into()),
+    let incomplete = WorldFake {
+        topology: TopologyState {
+            shard: "world".into(),
+            calls: world.topology.calls.clone(),
+            world_shard_set_error: Some("instances has no healthy Coordinator subscription".into()),
+            ..Default::default()
+        },
+        guild: GuildState {
+            guild_memberships: world.guild.guild_memberships.clone(),
+            guild_petitions: world.guild.guild_petitions.clone(),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let error = crate::world::reconcile_deleted_guild_characters(&incomplete, &sweep())
@@ -6651,21 +7107,27 @@ fn an_unavailable_world_shard_defers_every_guild_cleanup() {
 /// Home Shard (`cm:CharacterHandler.cpp:540-546`).
 #[test]
 fn char_delete_of_a_guild_leader_replies_failed_and_deletes_nothing() {
-    let store = std::sync::Arc::new(InMemoryStore {
-        guild_memberships: vec![codec::GuildMemberView {
-            character_guid: 5,
-            guild_id: 7,
-            rank_id: 0,
-            name: "Tester".into(),
-            ..Default::default()
-        }],
-        guilds: vec![codec::GuildView {
-            guild_id: 7,
-            name: "Boundary Test".into(),
-            leader_guid: 5,
-            ..Default::default()
-        }],
-        ..tester_store(7)
+    let store = std::sync::Arc::new({
+        let base = tester_store(7);
+        WorldFake {
+            guild: GuildState {
+                guild_memberships: vec![codec::GuildMemberView {
+                    character_guid: 5,
+                    guild_id: 7,
+                    rank_id: 0,
+                    name: "Tester".into(),
+                    ..Default::default()
+                }],
+                guilds: vec![codec::GuildView {
+                    guild_id: 7,
+                    name: "Boundary Test".into(),
+                    leader_guid: 5,
+                    ..Default::default()
+                }],
+                ..base.guild
+            },
+            ..base
+        }
     });
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
@@ -6683,7 +7145,7 @@ fn char_delete_of_a_guild_leader_replies_failed_and_deletes_nothing() {
         }
         other => panic!("expected SMSG_CHAR_DELETE, got {other}"),
     }
-    assert!(store.deleted.lock().unwrap().is_empty());
+    assert!(store.character.deleted.lock().unwrap().is_empty());
 
     drop(client);
     server.join().unwrap();
@@ -6763,10 +7225,16 @@ fn login_replays_a_pending_package_system_message() {
     // A Package `on_login` hook emits its System Message INSIDE `player_login` — before the
     // session is in the viewer registry, so the live insert relay has nobody to address. World
     // entry must replay the parked row right after the entry sequence.
-    let store = std::sync::Arc::new(InMemoryStore {
-        login_entity: Some(warrior_entity()),
-        pending_system_messages: vec!["Example Package is active.".to_string()],
-        ..tester_store(7)
+    let store = std::sync::Arc::new({
+        let base = tester_store(7);
+        WorldFake {
+            session: SessionState {
+                login_entity: Some(warrior_entity()),
+                pending_system_messages: vec!["Example Package is active.".to_string()],
+                ..base.session
+            },
+            ..base
+        }
     });
 
     let (mut client, server_end) = world_session_socket_pair();
@@ -6800,17 +7268,26 @@ fn player_login_emits_sequence_then_self_create() {
     // CMSG_PLAYER_LOGIN must yield the full login sequence (in order), then the self
     // CREATE_OBJECT2 at the correct position/guid, then the current zone's weather — the clock
     // (SMSG_LOGIN_SETTIMESPEED) before the sky, so the client has both before it renders.
-    let store = std::sync::Arc::new(InMemoryStore {
-        login_entity: Some(warrior_entity()),
-        // Elwynn Forest (the fixture's zone) is raining hard.
-        zone_weather: vec![(
-            12,
-            codec::ZoneWeatherView {
-                weather_type: 1,
-                intensity: 0.8,
+    let store = std::sync::Arc::new({
+        let base = tester_store(7);
+        WorldFake {
+            session: SessionState {
+                login_entity: Some(warrior_entity()),
+                ..base.session
             },
-        )],
-        ..tester_store(7)
+            weather: WeatherState {
+                // Elwynn Forest (the fixture's zone) is raining hard.
+                zone_weather: vec![(
+                    12,
+                    codec::ZoneWeatherView {
+                        weather_type: 1,
+                        intensity: 0.8,
+                    },
+                )],
+                ..base.weather
+            },
+            ..base
+        }
     });
 
     let (mut client, server_end) = world_session_socket_pair();
@@ -6896,7 +7373,7 @@ fn player_login_emits_sequence_then_self_create() {
 }
 
 /// Drive one login to completion and hand back the world-entry weather packet.
-fn world_entry_weather(store: std::sync::Arc<InMemoryStore>) -> SMSG_WEATHER {
+fn world_entry_weather(store: std::sync::Arc<WorldFake>) -> SMSG_WEATHER {
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
@@ -6923,9 +7400,15 @@ fn world_entry_weather(store: std::sync::Arc<InMemoryStore>) -> SMSG_WEATHER {
 /// packet — a client told nothing keeps rendering whatever sky it arrived with.
 #[test]
 fn world_entry_into_a_zone_with_no_weather_row_sends_fine_weather() {
-    let weather = world_entry_weather(std::sync::Arc::new(InMemoryStore {
-        login_entity: Some(warrior_entity()),
-        ..tester_store(7)
+    let weather = world_entry_weather(std::sync::Arc::new({
+        let base = tester_store(7);
+        WorldFake {
+            session: SessionState {
+                login_entity: Some(warrior_entity()),
+                ..base.session
+            },
+            ..base
+        }
     }));
     assert_eq!(weather.weather_type, WeatherType::Fine);
     assert_eq!(weather.grade, 0.0);
@@ -6937,10 +7420,19 @@ fn world_entry_into_a_zone_with_no_weather_row_sends_fine_weather() {
 /// session completes world entry and the player lands under clear skies.
 #[test]
 fn a_weather_read_failure_still_completes_world_entry() {
-    let weather = world_entry_weather(std::sync::Arc::new(InMemoryStore {
-        login_entity: Some(warrior_entity()),
-        weather_error: Some("shard cache unavailable".into()),
-        ..tester_store(7)
+    let weather = world_entry_weather(std::sync::Arc::new({
+        let base = tester_store(7);
+        WorldFake {
+            session: SessionState {
+                login_entity: Some(warrior_entity()),
+                ..base.session
+            },
+            weather: WeatherState {
+                weather_error: Some("shard cache unavailable".into()),
+                ..base.weather
+            },
+            ..base
+        }
     }));
     assert_eq!(weather.weather_type, WeatherType::Fine);
     assert_eq!(weather.grade, 0.0);
@@ -6949,7 +7441,7 @@ fn a_weather_read_failure_still_completes_world_entry() {
 /// Drive one World Session through the handshake and world entry, and hand back the client end
 /// parked on the first packet that comes AFTER world entry.
 fn world_session_in_world(
-    store: std::sync::Arc<InMemoryStore>,
+    store: std::sync::Arc<WorldFake>,
     character_guid: u64,
 ) -> (UnixStream, DecrypterHalf, std::thread::JoinHandle<()>) {
     let (mut client, server_end) = world_session_socket_pair();
@@ -7004,10 +7496,16 @@ fn forced_elwynn_rain_reaches_only_the_client_standing_in_elwynn() {
     westfall_entity.guid = 2;
     westfall_entity.zone_id = WESTFALL;
     let session_store = |entity: codec::EntityView| {
-        std::sync::Arc::new(InMemoryStore {
-            login_entity: Some(entity),
-            relay_view: Some(view.clone()),
-            ..tester_store(7)
+        std::sync::Arc::new({
+            let base = tester_store(7);
+            WorldFake {
+                session: SessionState {
+                    login_entity: Some(entity),
+                    relay_view: Some(view.clone()),
+                    ..base.session
+                },
+                ..base
+            }
         })
     };
 
@@ -7075,13 +7573,22 @@ fn worldport_ack_reenters_with_fresh_subscription_and_empty_loot_state() {
     ported.map_id = 1; // Kalimdor — simulates teleport_player's durable cross-map write
     ported.x = 100.0;
     ported.y = 200.0;
-    let store = std::sync::Arc::new(InMemoryStore {
-        // A real cross-map teleport has despawned the old-map entity before its ack arrives.
-        entity_in_world: false,
-        login_entity: Some(warrior_entity()),
-        worldport_entity: Some(ported),
-        corpse_money: 25,
-        ..tester_store(7)
+    let store = std::sync::Arc::new({
+        let base = tester_store(7);
+        WorldFake {
+            session: SessionState {
+                // A real cross-map teleport has despawned the old-map entity before its ack arrives.
+                entity_in_world: false,
+                login_entity: Some(warrior_entity()),
+                worldport_entity: Some(ported),
+                ..base.session
+            },
+            loot_window: LootWindowState {
+                corpse_money: 25,
+                ..base.loot_window
+            },
+            ..base
+        }
     });
 
     let (mut client, server_end) = world_session_socket_pair();
@@ -7131,7 +7638,7 @@ fn worldport_ack_reenters_with_fresh_subscription_and_empty_loot_state() {
 
     // subscribe_player_events must have fired TWICE: once at login (map 0), once at the world-port
     // re-entry (map 1) — a fresh `created` set is built for the new map each time, never reused.
-    let calls = store.subscribed.lock().unwrap().clone();
+    let calls = store.session.subscribed.lock().unwrap().clone();
     assert_eq!(
         calls.len(),
         2,
@@ -7156,12 +7663,12 @@ fn worldport_ack_reenters_with_fresh_subscription_and_empty_loot_state() {
     drop(client);
     server.join().unwrap();
     assert!(
-        store.money_looted.lock().unwrap().is_empty(),
+        store.loot_window.money_looted.lock().unwrap().is_empty(),
         "world-port re-entry must start with no open loot target"
     );
     // The login ends the Away Status; the world-port rides the reducer that keeps it.
     assert_eq!(
-        store.login_entries.lock().unwrap().as_slice(),
+        store.session.login_entries.lock().unwrap().as_slice(),
         [codec::WorldEntry::FreshLogin, codec::WorldEntry::WorldPort]
     );
 }
@@ -7173,12 +7680,18 @@ fn worldport_removes_the_source_viewer_before_routing_and_registers_a_replacemen
     ported.map_id = 1;
     ported.x = 100.0;
     ported.y = 200.0;
-    let store = std::sync::Arc::new(InMemoryStore {
-        entity_in_world: false,
-        login_entity: Some(warrior_entity()),
-        worldport_entity: Some(ported),
-        relay_view: Some(view.clone()),
-        ..tester_store(7)
+    let store = std::sync::Arc::new({
+        let base = tester_store(7);
+        WorldFake {
+            session: SessionState {
+                entity_in_world: false,
+                login_entity: Some(warrior_entity()),
+                worldport_entity: Some(ported),
+                relay_view: Some(view.clone()),
+                ..base.session
+            },
+            ..base
+        }
     });
 
     let (mut client, server_end) = world_session_socket_pair();
@@ -7206,7 +7719,12 @@ fn worldport_removes_the_source_viewer_before_routing_and_registers_a_replacemen
     }
 
     assert_eq!(
-        store.viewer_present_at_settle.lock().unwrap().as_slice(),
+        store
+            .topology
+            .viewer_present_at_settle
+            .lock()
+            .unwrap()
+            .as_slice(),
         &[false, false],
         "neither initial routing nor world-port routing may see a registered source viewer; the \
          second observation is the transfer-cascade safety boundary"
@@ -7229,12 +7747,21 @@ fn login_initialize_factions_carries_persisted_standing_at_its_reputation_index(
     // A persisted `game_player_reputation` row must land in the login
     // SMSG_INITIALIZE_FACTIONS at its STORED reputation_index slot (0..63), never faction_id — the
     // guardrail that also gates the live SET_FACTION_STANDING relay (McBride ERROR).
-    let store = std::sync::Arc::new(InMemoryStore {
-        login_entity: Some(warrior_entity()),
-        // Stormwind's rep-index is 19 (Faction.dbc ReputationListID), NOT its faction id (72) —
-        // exercising the exact index/id distinction the guardrail protects.
-        reputations: vec![(19, 3175, false)],
-        ..tester_store(7)
+    let store = std::sync::Arc::new({
+        let base = tester_store(7);
+        WorldFake {
+            session: SessionState {
+                login_entity: Some(warrior_entity()),
+                ..base.session
+            },
+            character: CharacterState {
+                // Stormwind's rep-index is 19 (Faction.dbc ReputationListID), NOT its faction id (72) —
+                // exercising the exact index/id distinction the guardrail protects.
+                reputations: vec![(19, 3175, false)],
+                ..base.character
+            },
+            ..base
+        }
     });
 
     let (mut client, server_end) = world_session_socket_pair();
@@ -7278,24 +7805,36 @@ fn login_initialize_factions_carries_persisted_standing_at_its_reputation_index(
 
 #[test]
 fn login_with_resident_items_and_reputation_emits_no_gain_feedback() {
-    let store = std::sync::Arc::new(InMemoryStore {
-        login_entity: Some(warrior_entity()),
-        player_items_fixture: vec![codec::ItemInstanceView {
-            guid: 0x4000_0000_0000_0001,
-            entry: 25,
-            owner_guid: 1,
-            slot: 23,
-            stack_count: 1,
-            durability: 20,
-            max_durability: 20,
-            container_slots: 0,
-            random_property_id: 0,
-            random_property_enchant_ids: [0; 3],
-            item_text_id: 0,
-            enchantment: 0,
-        }],
-        reputations: vec![(19, 3175, false)],
-        ..tester_store(7)
+    let store = std::sync::Arc::new({
+        let base = tester_store(7);
+        WorldFake {
+            session: SessionState {
+                login_entity: Some(warrior_entity()),
+                ..base.session
+            },
+            cast: CastState {
+                player_items_fixture: vec![codec::ItemInstanceView {
+                    guid: 0x4000_0000_0000_0001,
+                    entry: 25,
+                    owner_guid: 1,
+                    slot: 23,
+                    stack_count: 1,
+                    durability: 20,
+                    max_durability: 20,
+                    container_slots: 0,
+                    random_property_id: 0,
+                    random_property_enchant_ids: [0; 3],
+                    item_text_id: 0,
+                    enchantment: 0,
+                }],
+                ..base.cast
+            },
+            character: CharacterState {
+                reputations: vec![(19, 3175, false)],
+                ..base.character
+            },
+            ..base
+        }
     });
 
     let (mut client, server_end) = world_session_socket_pair();
@@ -7336,19 +7875,28 @@ fn login_with_resident_items_and_reputation_emits_no_gain_feedback() {
 #[test]
 fn login_fills_a_resident_suffix_items_enchantment_slots_after_the_entry_batch() {
     let item_guid = 0x4000_0000_0000_0001;
-    let store = std::sync::Arc::new(InMemoryStore {
-        login_entity: Some(warrior_entity()),
-        player_items_fixture: vec![codec::ItemInstanceView {
-            guid: item_guid,
-            entry: 25,
-            owner_guid: 1,
-            slot: 23,
-            stack_count: 1,
-            random_property_id: 22,
-            random_property_enchant_ids: [73, 0, 0],
-            ..Default::default()
-        }],
-        ..tester_store(7)
+    let store = std::sync::Arc::new({
+        let base = tester_store(7);
+        WorldFake {
+            session: SessionState {
+                login_entity: Some(warrior_entity()),
+                ..base.session
+            },
+            cast: CastState {
+                player_items_fixture: vec![codec::ItemInstanceView {
+                    guid: item_guid,
+                    entry: 25,
+                    owner_guid: 1,
+                    slot: 23,
+                    stack_count: 1,
+                    random_property_id: 22,
+                    random_property_enchant_ids: [73, 0, 0],
+                    ..Default::default()
+                }],
+                ..base.cast
+            },
+            ..base
+        }
     });
 
     let (mut client, server_end) = world_session_socket_pair();
@@ -7382,9 +7930,15 @@ fn inbound_movement_is_recorded_under_its_opcode() {
         MSG_MOVE_HEARTBEAT_Client, MovementInfo, MovementInfo_MovementFlags, Vector3d,
     };
 
-    let store = std::sync::Arc::new(InMemoryStore {
-        entity_in_world: true,
-        ..tester_store(7)
+    let store = std::sync::Arc::new({
+        let base = tester_store(7);
+        WorldFake {
+            session: SessionState {
+                entity_in_world: true,
+                ..base.session
+            },
+            ..base
+        }
     });
 
     let (mut client, server_end) = world_session_socket_pair();
@@ -7412,7 +7966,7 @@ fn inbound_movement_is_recorded_under_its_opcode() {
     drop(client); // server reads the heartbeat, then EOF
     server.join().unwrap();
 
-    let moves = store.moves.lock().unwrap();
+    let moves = store.session.moves.lock().unwrap();
     assert_eq!(moves.len(), 1);
     let (opcode, x, _, _, o, t) = moves[0];
     assert_eq!(
@@ -7432,10 +7986,19 @@ fn a_movement_packet_for_a_despawned_entity_never_kills_the_session() {
     };
     let calls: ShardCallLog = Default::default();
     let entity_presence = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let store = std::sync::Arc::new(InMemoryStore {
-        calls: calls.clone(),
-        entity_presence: Some(entity_presence.clone()),
-        ..tester_store(7)
+    let store = std::sync::Arc::new({
+        let base = tester_store(7);
+        WorldFake {
+            topology: TopologyState {
+                calls: calls.clone(),
+                ..base.topology
+            },
+            session: SessionState {
+                entity_presence: Some(entity_presence.clone()),
+                ..base.session
+            },
+            ..base
+        }
     });
 
     let (mut client, server_end) = world_session_socket_pair();
@@ -7463,6 +8026,7 @@ fn a_movement_packet_for_a_despawned_entity_never_kills_the_session() {
         .unwrap();
     for _ in 0..100 {
         if store
+            .session
             .entity_presence_checks
             .load(std::sync::atomic::Ordering::SeqCst)
             != 0
@@ -7473,6 +8037,7 @@ fn a_movement_packet_for_a_despawned_entity_never_kills_the_session() {
     }
     assert_ne!(
         store
+            .session
             .entity_presence_checks
             .load(std::sync::atomic::Ordering::SeqCst),
         0,
@@ -7507,9 +8072,15 @@ fn a_reappearing_entity_resets_the_movement_desync_tolerance() {
         MovementInfo_MovementFlags, Vector3d,
     };
     let present = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let store = std::sync::Arc::new(InMemoryStore {
-        entity_presence: Some(present.clone()),
-        ..tester_store(7)
+    let store = std::sync::Arc::new({
+        let base = tester_store(7);
+        WorldFake {
+            session: SessionState {
+                entity_presence: Some(present.clone()),
+                ..base.session
+            },
+            ..base
+        }
     });
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
@@ -7540,6 +8111,7 @@ fn a_reappearing_entity_resets_the_movement_desync_tolerance() {
     let wait_for_checks = |n| {
         for _ in 0..100 {
             if store
+                .session
                 .entity_presence_checks
                 .load(std::sync::atomic::Ordering::SeqCst)
                 >= n
@@ -7580,7 +8152,7 @@ fn a_reappearing_entity_resets_the_movement_desync_tolerance() {
         .unwrap()
         .expect("a restored entity must reset the tolerance before a later transfer tail arrives");
     assert_eq!(
-        store.moves.lock().unwrap().len(),
+        store.session.moves.lock().unwrap().len(),
         2,
         "only movements sent while the entity was present may reach the shared batch"
     );
@@ -7591,10 +8163,16 @@ fn a_movement_failure_that_is_not_a_desync_is_still_session_fatal() {
     use wow_world_messages::vanilla::{
         MSG_MOVE_HEARTBEAT_Client, MovementInfo, MovementInfo_MovementFlags, Vector3d,
     };
-    let store = std::sync::Arc::new(InMemoryStore {
-        entity_in_world: true,
-        movement_error: Some("timed out after 10s".into()),
-        ..tester_store(7)
+    let store = std::sync::Arc::new({
+        let base = tester_store(7);
+        WorldFake {
+            session: SessionState {
+                entity_in_world: true,
+                movement_error: Some("timed out after 10s".into()),
+                ..base.session
+            },
+            ..base
+        }
     });
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
@@ -7629,10 +8207,16 @@ fn a_movement_desync_that_never_heals_still_ends_the_session() {
         MSG_MOVE_START_FORWARD_Client, MSG_MOVE_STOP_Client, MovementInfo,
         MovementInfo_MovementFlags, Vector3d,
     };
-    let store = std::sync::Arc::new(InMemoryStore {
-        // The entity is gone and is NEVER coming back — not a teleport tail, a real desync.
-        entity_in_world: false,
-        ..tester_store(7)
+    let store = std::sync::Arc::new({
+        let base = tester_store(7);
+        WorldFake {
+            session: SessionState {
+                // The entity is gone and is NEVER coming back — not a teleport tail, a real desync.
+                entity_in_world: false,
+                ..base.session
+            },
+            ..base
+        }
     });
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
@@ -7687,16 +8271,28 @@ fn a_world_port_whose_transfer_cannot_be_driven_aborts_the_clients_loading_scree
             payload: "gear+spells".into(),
         },
     );
-    let store = std::sync::Arc::new(InMemoryStore {
-        // The world-port ack is only actionable after teleport_player removed the old entity.
-        entity_in_world: false,
-        characters: vec![],
-        login_entity: Some(warrior_entity()),
-        xdb: Some(xdb),
-        settle_error: Some("instances shard unreachable".into()),
-        settle_ok_calls: 1, // the LOGIN routes fine; the world-port's settle is the one that fails
-        relay_view: Some(view.clone()),
-        ..tester_store(7)
+    let store = std::sync::Arc::new({
+        let base = tester_store(7);
+        WorldFake {
+            session: SessionState {
+                // The world-port ack is only actionable after teleport_player removed the old entity.
+                entity_in_world: false,
+                login_entity: Some(warrior_entity()),
+                relay_view: Some(view.clone()),
+                ..base.session
+            },
+            characters: vec![],
+            transfer: TransferState {
+                xdb: Some(xdb),
+                ..base.transfer
+            },
+            topology: TopologyState {
+                settle_error: Some("instances shard unreachable".into()),
+                settle_ok_calls: 1, // the LOGIN routes fine; the world-port's settle is the one that fails
+                ..base.topology
+            },
+            ..base
+        }
     });
 
     let (mut client, server_end) = world_session_socket_pair();
@@ -7742,6 +8338,7 @@ fn a_world_port_whose_transfer_cannot_be_driven_aborts_the_clients_loading_scree
     );
     assert!(
         store
+            .session
             .logout_called
             .load(std::sync::atomic::Ordering::SeqCst),
         "early viewer removal keeps InWorld intact so the existing abort teardown still logs out"
@@ -7758,15 +8355,24 @@ fn a_world_port_whose_world_entry_fails_also_aborts_the_clients_loading_screen()
             payload: "gear+spells".into(),
         },
     );
-    let store = std::sync::Arc::new(InMemoryStore {
-        // The world-port ack is only actionable after teleport_player removed the old entity.
-        entity_in_world: false,
-        characters: vec![],
-        login_entity: Some(warrior_entity()),
-        xdb: Some(xdb),
-        // Routing succeeds; the world entry on the far side is what fails.
-        worldport_login_error: Some("character 1 is stranded on map 36".into()),
-        ..tester_store(7)
+    let store = std::sync::Arc::new({
+        let base = tester_store(7);
+        WorldFake {
+            session: SessionState {
+                // The world-port ack is only actionable after teleport_player removed the old entity.
+                entity_in_world: false,
+                login_entity: Some(warrior_entity()),
+                // Routing succeeds; the world entry on the far side is what fails.
+                worldport_login_error: Some("character 1 is stranded on map 36".into()),
+                ..base.session
+            },
+            characters: vec![],
+            transfer: TransferState {
+                xdb: Some(xdb),
+                ..base.transfer
+            },
+            ..base
+        }
     });
 
     let (mut client, server_end) = world_session_socket_pair();
@@ -7866,7 +8472,7 @@ fn movement_state_changes_forward_immediately_and_in_order_never_delayed() {
     drop(client);
     server.join().unwrap();
 
-    let moves = store.moves.lock().unwrap();
+    let moves = store.session.moves.lock().unwrap();
     let opcodes: Vec<u32> = moves.iter().map(|(op, ..)| *op).collect();
     assert_eq!(
         opcodes,
@@ -7942,7 +8548,7 @@ fn non_movement_opcode_flushes_pending_heartbeat_before_being_handled() {
     // Safe to inspect now: the reply we just read could only have been produced AFTER the query's
     // dispatch ran (flush, then the query handler) on the single-threaded reader/dispatch loop.
     {
-        let moves = store.moves.lock().unwrap();
+        let moves = store.session.moves.lock().unwrap();
         assert_eq!(
             moves.len(),
             2,
@@ -7993,10 +8599,16 @@ fn desync_error_classifies_entity_missing_as_fatal_but_not_transient() {
 
 /// A store configured for an in-world TESTER (account 7, char guid 1) with a login entity — the
 /// base fixture every socket test that needs a logged-in player builds on, quest or not.
-fn quest_store() -> InMemoryStore {
-    InMemoryStore {
-        login_entity: Some(warrior_entity()),
-        ..tester_store(7)
+fn quest_store() -> WorldFake {
+    {
+        let base = tester_store(7);
+        WorldFake {
+            session: SessionState {
+                login_entity: Some(warrior_entity()),
+                ..base.session
+            },
+            ..base
+        }
     }
 }
 
@@ -8042,7 +8654,7 @@ fn eval(quest_id: u32, role: u8, active: bool, complete: bool) -> codec::GiverQu
 /// reports back to the SERVER thread's next read as ECONNRESET, not a clean EOF.
 /// Returns the client socket + encrypted halves + the server join handle for the test to drive.
 fn enter_world(
-    store: std::sync::Arc<InMemoryStore>,
+    store: std::sync::Arc<WorldFake>,
     guid: u64,
 ) -> (
     UnixStream,
@@ -8053,7 +8665,7 @@ fn enter_world(
     let (mut client, server_end) = world_session_socket_pair();
     // The login sequence ends with the quest-log VALUES packet IFF the player has quests (mirrors
     // `send_quest_log`'s skip-when-empty). Checked before `store` is moved into the server thread.
-    let has_quest_log = !store.quest_log_slots.is_empty();
+    let has_quest_log = !store.quest.quest_log_slots.is_empty();
     let item_creates = store.player_items(guid).map(|v| v.len()).unwrap_or(0);
     let server_store = store;
     let server = std::thread::spawn(move || {
@@ -8112,7 +8724,7 @@ fn human_warrior_sword_template() -> codec::ItemTemplateView {
 fn item_query_preserves_imported_eligibility_through_the_encrypted_world_session() {
     let template = human_warrior_sword_template();
     let mut fixture = quest_store();
-    fixture.item_templates = vec![template.clone()];
+    fixture.cast.item_templates = vec![template.clone()];
     let store = std::sync::Arc::new(fixture);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
 
@@ -8172,6 +8784,7 @@ fn the_writer_drains_the_egress_depth_back_to_zero_b2() {
     let store = std::sync::Arc::new(quest_store());
     let (client, _c_enc, _c_dec, server) = enter_world(store.clone(), 1);
     let depth = store
+        .session
         .session_depth
         .lock()
         .unwrap()
@@ -8220,7 +8833,7 @@ fn group_invite_by_name_replies_party_command_result_success() {
         }
         other => panic!("expected SMSG_PARTY_COMMAND_RESULT, got {other}"),
     }
-    assert_eq!(store.group_invites.lock().unwrap().as_slice(), &[2]);
+    assert_eq!(store.party.group_invites.lock().unwrap().as_slice(), &[2]);
     drop(client);
     let _ = server.join();
 }
@@ -8275,7 +8888,7 @@ fn a_group_invite_timeout_is_not_answered_as_a_refusal() {
         name: "Buddy".into(),
         ..Default::default()
     }];
-    s.login_entity = Some(warrior_entity());
+    s.session.login_entity = Some(warrior_entity());
     s.trade_error = Some("gw_group_invite reducer timed out after 10s".into());
     let store = std::sync::Arc::new(s);
     let (mut client, server_end) = world_session_socket_pair();
@@ -8325,7 +8938,7 @@ fn group_invite_unknown_name_replies_bad_player_name() {
         }
         other => panic!("expected SMSG_PARTY_COMMAND_RESULT, got {other}"),
     }
-    assert!(store.group_invites.lock().unwrap().is_empty());
+    assert!(store.party.group_invites.lock().unwrap().is_empty());
     drop(client);
     let _ = server.join();
 }
@@ -8417,8 +9030,11 @@ fn add_friend_on_another_shard_answers_added_online_with_presence() {
         ..Default::default()
     }];
     let store = std::sync::Arc::new(s);
-    let peer = std::sync::Arc::new(InMemoryStore {
-        shard: "instances".into(),
+    let peer = std::sync::Arc::new(WorldFake {
+        topology: TopologyState {
+            shard: "instances".into(),
+            ..Default::default()
+        },
         characters: vec![codec::CharacterView {
             guid: 2,
             name: "Vim".into(),
@@ -8426,20 +9042,23 @@ fn add_friend_on_another_shard_answers_added_online_with_presence() {
             class: 4,
             ..Default::default()
         }],
-        // Vim standing IN the instance: a live entity, not just a durable row, so the ADDED_ONLINE
-        // fields below come off `Whereabouts::InWorld`.
-        member_entities: std::sync::Mutex::new(vec![(
-            2,
-            codec::MemberEntity {
-                level: 22,
-                zone_id: 33,
-                ..Default::default()
-            },
-        )]),
+        social: SocialState {
+            // Vim standing IN the instance: a live entity, not just a durable row, so the ADDED_ONLINE
+            // fields below come off `Whereabouts::InWorld`.
+            member_entities: std::sync::Mutex::new(vec![(
+                2,
+                codec::MemberEntity {
+                    level: 22,
+                    zone_id: 33,
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        },
         ..Default::default()
     });
-    *store.peers.lock().unwrap() = vec![store.clone(), peer.clone()];
-    *peer.peers.lock().unwrap() = vec![store.clone(), peer.clone()];
+    *store.topology.peers.lock().unwrap() = vec![store.clone(), peer.clone()];
+    *peer.topology.peers.lock().unwrap() = vec![store.clone(), peer.clone()];
 
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
     CMSG_ADD_FRIEND { name: "Vim".into() }
@@ -8470,10 +9089,13 @@ fn friend_list_shows_a_friend_in_another_shards_instance_online_afk_or_dnd() {
         race: 1,
         ..Default::default()
     }];
-    s.contacts = std::sync::Mutex::new(vec![(1, 2, false)]); // Ginger already friends Vim
+    s.social.contacts = std::sync::Mutex::new(vec![(1, 2, false)]); // Ginger already friends Vim
     let store = std::sync::Arc::new(s);
-    let peer = std::sync::Arc::new(InMemoryStore {
-        shard: "instances".into(),
+    let peer = std::sync::Arc::new(WorldFake {
+        topology: TopologyState {
+            shard: "instances".into(),
+            ..Default::default()
+        },
         characters: vec![codec::CharacterView {
             guid: 2,
             name: "Vim".into(),
@@ -8481,19 +9103,22 @@ fn friend_list_shows_a_friend_in_another_shards_instance_online_afk_or_dnd() {
             class: 4,
             ..Default::default()
         }],
-        member_entities: std::sync::Mutex::new(vec![(
-            2,
-            codec::MemberEntity {
-                level: 22,
-                zone_id: 33,
-                player_flags: lyracore_shared::constants::player_flags::DND,
-                ..Default::default()
-            },
-        )]),
+        social: SocialState {
+            member_entities: std::sync::Mutex::new(vec![(
+                2,
+                codec::MemberEntity {
+                    level: 22,
+                    zone_id: 33,
+                    player_flags: lyracore_shared::constants::player_flags::DND,
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        },
         ..Default::default()
     });
-    *store.peers.lock().unwrap() = vec![store.clone(), peer.clone()];
-    *peer.peers.lock().unwrap() = vec![store.clone(), peer.clone()];
+    *store.topology.peers.lock().unwrap() = vec![store.clone(), peer.clone()];
+    *peer.topology.peers.lock().unwrap() = vec![store.clone(), peer.clone()];
 
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
     CMSG_FRIEND_LIST {}
@@ -8725,7 +9350,7 @@ fn an_add_friend_timeout_is_not_answered_as_a_refusal() {
         name: "Buddy".into(),
         ..Default::default()
     }];
-    s.login_entity = Some(warrior_entity());
+    s.session.login_entity = Some(warrior_entity());
     s.trade_error = Some("gw_add_friend reducer timed out after 10s".into());
     let store = std::sync::Arc::new(s);
     let (mut client, server_end) = world_session_socket_pair();
@@ -8812,7 +9437,7 @@ fn quest_choose_reward_relays_inventory_before_completion_over_the_cipher() {
     // behind CREATE, its inventory pointer and gain feedback on the one writer queue.
     let mut s = quest_store();
     let detail = detail_view(1234, "A Threat Within");
-    s.quest_details = vec![detail.clone()];
+    s.quest.quest_details = vec![detail.clone()];
     let reward_item = codec::ItemInstanceView {
         guid: 0x4000_0000_0000_0042,
         entry: 25,
@@ -8827,7 +9452,7 @@ fn quest_choose_reward_relays_inventory_before_completion_over_the_cipher() {
         item_text_id: 0,
         enchantment: 0,
     };
-    s.turn_in_reward_item = Some(reward_item.clone());
+    s.session.turn_in_reward_item = Some(reward_item.clone());
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
     CMSG_QUESTGIVER_CHOOSE_REWARD {
@@ -8880,7 +9505,7 @@ fn quest_choose_reward_relays_inventory_before_completion_over_the_cipher() {
     drop(client);
     server.join().unwrap();
     assert_eq!(
-        store.turned_in.lock().unwrap().as_slice(),
+        store.quest.turned_in.lock().unwrap().as_slice(),
         &[(7, 50, 1234, 2)]
     );
 }
@@ -8895,7 +9520,7 @@ fn login_sends_the_quest_log_descriptor_raw_update_after_the_create_packet() {
         timer: 0,
     }];
     let mut s = quest_store();
-    s.quest_log_slots = slots.clone();
+    s.quest.quest_log_slots = slots.clone();
     let store = std::sync::Arc::new(s);
 
     let (mut client, server_end) = world_session_socket_pair();
@@ -8945,12 +9570,15 @@ fn inspect_in_range_friendly_target_replies_smsg_inspect_with_the_target_guid() 
 fn inspect_refused_target_sends_no_reply() {
     // CMSG_PLAYED_TIME (below) always replies as long as `character_by_guid` resolves the caller's
     // own guid, so give the store a character row for guid 1 (quest_store() has none).
-    let store = std::sync::Arc::new(InMemoryStore {
-        characters: vec![codec::CharacterView {
-            guid: 1,
-            ..Default::default()
-        }],
-        ..quest_store()
+    let store = std::sync::Arc::new({
+        let base = quest_store();
+        WorldFake {
+            characters: vec![codec::CharacterView {
+                guid: 1,
+                ..Default::default()
+            }],
+            ..base
+        }
     });
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
     // guid 0 is the mock store's stand-in for "out of range / no such target" — the gate rejects it
@@ -8979,10 +9607,16 @@ fn inspect_refused_target_sends_no_reply() {
 fn buy_item_err_sends_smsg_buy_failed() {
     // When `buy_item` returns Err (e.g. "not enough money"), the gateway must send SMSG_BUY_FAILED
     // with the matching BuyResult code so the player gets an on-screen error.
-    let store = std::sync::Arc::new(InMemoryStore {
-        login_entity: Some(warrior_entity()),
-        trade_error: Some("not enough money to buy that item".into()),
-        ..tester_store(7)
+    let store = std::sync::Arc::new({
+        let base = tester_store(7);
+        WorldFake {
+            session: SessionState {
+                login_entity: Some(warrior_entity()),
+                ..base.session
+            },
+            trade_error: Some("not enough money to buy that item".into()),
+            ..base
+        }
     });
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
     CMSG_BUY_ITEM {
@@ -9032,13 +9666,16 @@ fn banker_activate_on_a_standing_refusing_banker_sends_no_reply() {
     // CMSG_PLAYED_TIME (the sentinel below) only replies once `character_by_guid` resolves the
     // caller's own guid, so give the store a character row for guid 1 (quest_store() has none) —
     // same setup as `inspect_refused_target_sends_no_reply`.
-    let store = std::sync::Arc::new(InMemoryStore {
-        npc_refuses: true,
-        characters: vec![codec::CharacterView {
-            guid: 1,
-            ..Default::default()
-        }],
-        ..quest_store()
+    let store = std::sync::Arc::new({
+        let base = quest_store();
+        WorldFake {
+            npc_refuses: true,
+            characters: vec![codec::CharacterView {
+                guid: 1,
+                ..Default::default()
+            }],
+            ..base
+        }
     });
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
     CMSG_BANKER_ACTIVATE {
@@ -9065,7 +9702,7 @@ fn banker_activate_on_a_standing_refusing_banker_sends_no_reply() {
 fn gossip_select_on_an_imported_banker_option_opens_the_bank_window() {
     use lyracore_shared::constants::gossip_option;
     let mut s = quest_store();
-    s.gossip_opts = vec![opt(
+    s.npc.gossip_opts = vec![opt(
         0,
         "I would like to check my deposit box.",
         gossip_option::BANKER,
@@ -9092,7 +9729,7 @@ fn gossip_select_on_an_imported_banker_option_opens_the_bank_window() {
 fn gossip_select_on_a_petitioner_option_opens_the_charter_list() {
     use lyracore_shared::constants::gossip_option;
     let mut s = quest_store();
-    s.gossip_opts = vec![opt(0, "How do I form a guild?", gossip_option::PETITIONER)];
+    s.npc.gossip_opts = vec![opt(0, "How do I form a guild?", gossip_option::PETITIONER)];
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
     gossip_hello(&mut client, &mut c_enc, &mut c_dec, 90);
@@ -9133,7 +9770,10 @@ fn autobank_item_from_the_main_bag_dispatches_auto_bank_item() {
     .unwrap();
     drop(client);
     server.join().unwrap();
-    assert_eq!(store.auto_banked_items.lock().unwrap().as_slice(), &[23]);
+    assert_eq!(
+        store.bank.auto_banked_items.lock().unwrap().as_slice(),
+        &[23]
+    );
 }
 
 #[test]
@@ -9149,16 +9789,22 @@ fn autostore_bank_item_from_the_main_bag_dispatches_auto_bank_item() {
     .unwrap();
     drop(client);
     server.join().unwrap();
-    assert_eq!(store.auto_banked_items.lock().unwrap().as_slice(), &[39]);
+    assert_eq!(
+        store.bank.auto_banked_items.lock().unwrap().as_slice(),
+        &[39]
+    );
 }
 
 #[test]
 fn autobank_item_err_sends_smsg_inventory_change_failure() {
     // A full destination (bank full, or carry space full) is a per-action error relayed as the
     // existing inventory-change-failure reply, never session-fatal.
-    let store = std::sync::Arc::new(InMemoryStore {
-        trade_error: Some("bank full".into()),
-        ..quest_store()
+    let store = std::sync::Arc::new({
+        let base = quest_store();
+        WorldFake {
+            trade_error: Some("bank full".into()),
+            ..base
+        }
     });
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
     CMSG_AUTOBANK_ITEM {
@@ -9190,7 +9836,7 @@ fn autobank_item_from_a_sub_bag_is_unsupported_and_does_not_dispatch() {
     drop(client);
     server.join().unwrap();
     assert!(
-        store.auto_banked_items.lock().unwrap().is_empty(),
+        store.bank.auto_banked_items.lock().unwrap().is_empty(),
         "a sub-bag source must not be routed through auto_bank_item"
     );
 }
@@ -9208,7 +9854,7 @@ fn autostore_bank_item_from_a_sub_bag_is_unsupported_and_does_not_dispatch() {
     drop(client);
     server.join().unwrap();
     assert!(
-        store.auto_banked_items.lock().unwrap().is_empty(),
+        store.bank.auto_banked_items.lock().unwrap().is_empty(),
         "a sub-bag source must not be routed through auto_bank_item"
     );
 }
@@ -9230,7 +9876,10 @@ fn buy_bank_slot_success_sends_ok_and_reaches_the_named_banker() {
     }
     drop(client);
     server.join().unwrap();
-    assert_eq!(store.bought_bank_slots.lock().unwrap().as_slice(), &[88]);
+    assert_eq!(
+        store.bank.bought_bank_slots.lock().unwrap().as_slice(),
+        &[88]
+    );
 }
 
 #[test]
@@ -9274,10 +9923,16 @@ fn buy_bank_slot_failure_maps_the_bracketed_code_to_the_matching_result() {
 fn equip_item_err_sends_smsg_inventory_change_failure() {
     // Socket contract: a gameplay refusal reaches the client as an encrypted
     // SMSG_INVENTORY_CHANGE_FAILURE frame and the session keeps serving the next action.
-    let store = std::sync::Arc::new(InMemoryStore {
-        login_entity: Some(warrior_entity()),
-        trade_error: Some(ItemRefusal::CannotEquip.as_tag().into()),
-        ..tester_store(7)
+    let store = std::sync::Arc::new({
+        let base = tester_store(7);
+        WorldFake {
+            session: SessionState {
+                login_entity: Some(warrior_entity()),
+                ..base.session
+            },
+            trade_error: Some(ItemRefusal::CannotEquip.as_tag().into()),
+            ..base
+        }
     });
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
     // Slot 24 is a backpack slot (>= 23); bag 255 = INVENTORY_SLOT_BAG_0 (main bag).
@@ -9333,10 +9988,16 @@ fn item_action_before_player_login_is_handled_without_panicking() {
 fn item_reducer_transport_loss_ends_the_world_session() {
     // Socket contract: reducer transport loss ends the session with an error and closes the
     // socket instead of being translated into gameplay feedback.
-    let store = std::sync::Arc::new(InMemoryStore {
-        login_entity: Some(warrior_entity()),
-        trade_error: Some("equip_item reducer transport disconnected: channel closed".into()),
-        ..tester_store(7)
+    let store = std::sync::Arc::new({
+        let base = tester_store(7);
+        WorldFake {
+            session: SessionState {
+                login_entity: Some(warrior_entity()),
+                ..base.session
+            },
+            trade_error: Some("equip_item reducer transport disconnected: channel closed".into()),
+            ..base
+        }
     });
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
@@ -9380,10 +10041,19 @@ fn item_reducer_transport_loss_ends_the_world_session() {
 fn logout_while_out_of_combat_succeeds_and_clears_open_loot() {
     // combat_until_ms=0 (default, never in combat) → CMSG_LOGOUT_REQUEST must reply
     // Success/Instant + LOGOUT_COMPLETE and the Store must release Account ownership.
-    let store = std::sync::Arc::new(InMemoryStore {
-        login_entity: Some(warrior_entity()),
-        corpse_money: 25,
-        ..tester_store(7)
+    let store = std::sync::Arc::new({
+        let base = tester_store(7);
+        WorldFake {
+            session: SessionState {
+                login_entity: Some(warrior_entity()),
+                ..base.session
+            },
+            loot_window: LootWindowState {
+                corpse_money: 25,
+                ..base.loot_window
+            },
+            ..base
+        }
     });
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
 
@@ -9423,12 +10093,13 @@ fn logout_while_out_of_combat_succeeds_and_clears_open_loot() {
     // Releasing Account ownership removes the live Character.
     assert!(
         store
+            .session
             .logout_called
             .load(std::sync::atomic::Ordering::SeqCst),
         "Account ownership must be released after successful logout"
     );
     assert!(
-        store.money_looted.lock().unwrap().is_empty(),
+        store.loot_window.money_looted.lock().unwrap().is_empty(),
         "logout must discard the open loot target"
     );
 }
@@ -9440,10 +10111,16 @@ fn logout_while_in_combat_is_denied() {
     // entity was NOT removed during the handler — the player cannot escape combat by logging out.
     // Note: socket teardown (drop below) still calls leave_world/logout as cleanup; that is correct
     // and separate from the CMSG gate.
-    let store = std::sync::Arc::new(InMemoryStore {
-        login_entity: Some(warrior_entity()),
-        combat_until_ms: u64::MAX, // always in combat
-        ..tester_store(7)
+    let store = std::sync::Arc::new({
+        let base = tester_store(7);
+        WorldFake {
+            session: SessionState {
+                login_entity: Some(warrior_entity()),
+                combat_until_ms: u64::MAX, // always in combat
+                ..base.session
+            },
+            ..base
+        }
     });
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
 
@@ -9501,16 +10178,22 @@ fn played_time_replies_with_the_durable_total_plus_the_live_session_span() {
         .as_micros() as u64;
     let session_start_micros = now_micros - session_started_secs_ago * 1_000_000;
 
-    let store = std::sync::Arc::new(InMemoryStore {
-        login_entity: Some(warrior_entity()),
-        characters: vec![codec::CharacterView {
-            guid: 1,
-            name: "Tester".into(),
-            played_total_secs: durable_secs,
-            session_start_micros,
-            ..Default::default()
-        }],
-        ..tester_store(7)
+    let store = std::sync::Arc::new({
+        let base = tester_store(7);
+        WorldFake {
+            session: SessionState {
+                login_entity: Some(warrior_entity()),
+                ..base.session
+            },
+            characters: vec![codec::CharacterView {
+                guid: 1,
+                name: "Tester".into(),
+                played_total_secs: durable_secs,
+                session_start_micros,
+                ..Default::default()
+            }],
+            ..base
+        }
     });
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
 
@@ -9555,9 +10238,14 @@ fn imported_auction_interaction() -> AuctionInteraction {
 
 #[test]
 fn auction_house_round_trip_stays_typed_and_ordered_over_an_encrypted_session() {
-    let store = std::sync::Arc::new(InMemoryStore {
-        auction_interaction: Some(imported_auction_interaction()),
-        ..quest_store()
+    let store = std::sync::Arc::new({
+        let base = quest_store();
+        WorldFake {
+            auction: AuctionState {
+                auction_interaction: Some(imported_auction_interaction()),
+            },
+            ..base
+        }
     });
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
     let auctioneer = Guid::new(42);
@@ -9625,15 +10313,21 @@ fn refused_auctioneer_interaction_keeps_the_encrypted_world_session_alive() {
     // overrides `quest_store`'s blanket flag), so the WHO answer this test cares about is the
     // empty-but-present reply, not "no answer for an unknown requester" (a different rule, pinned
     // in `social.rs`'s own WHO tests).
-    let store = std::sync::Arc::new(InMemoryStore {
-        characters: vec![codec::CharacterView {
-            guid: 1,
-            name: "Tester".into(),
-            race: 1,
-            ..Default::default()
-        }],
-        entity_in_world: false,
-        ..quest_store()
+    let store = std::sync::Arc::new({
+        let base = quest_store();
+        WorldFake {
+            characters: vec![codec::CharacterView {
+                guid: 1,
+                name: "Tester".into(),
+                race: 1,
+                ..Default::default()
+            }],
+            session: SessionState {
+                entity_in_world: false,
+                ..base.session
+            },
+            ..base
+        }
     });
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
 
@@ -9754,7 +10448,7 @@ fn instant_cast_sends_start_then_raw_cast_result_ok_then_go_and_threads_the_targ
     drop(client);
     server.join().unwrap();
     // The unit target rode CMSG → handler → store unchanged (target-keyed effects need it).
-    assert_eq!(store.casts.lock().unwrap().as_slice(), &[(100, 77)]);
+    assert_eq!(store.cast.casts.lock().unwrap().as_slice(), &[(100, 77)]);
 }
 
 #[test]
@@ -9772,7 +10466,7 @@ fn set_sheathed_routes_the_clients_z_press_to_the_store() {
         drop(client);
         server.join().unwrap();
         assert_eq!(
-            store.sheathed.lock().unwrap().as_slice(),
+            store.combat.sheathed.lock().unwrap().as_slice(),
             &[(1, expect)],
             "{sent:?} must reach set_sheathed as byte {expect}"
         );
@@ -9825,11 +10519,11 @@ fn auto_shot_intercept_starts_the_ranged_attack_instead_of_casting() {
         drop(client);
         server.join().unwrap();
         assert_eq!(
-            store.ranged_attacks.lock().unwrap().as_slice(),
+            store.cast.ranged_attacks.lock().unwrap().as_slice(),
             &[(88, spell)]
         );
         assert!(
-            store.casts.lock().unwrap().is_empty(),
+            store.cast.casts.lock().unwrap().is_empty(),
             "spell {spell} must not reach cast_spell"
         );
     }
@@ -9864,7 +10558,7 @@ fn a_cast_before_entering_the_world_answers_nothing_and_keeps_the_session_alive(
     }
     drop(client);
     server.join().unwrap();
-    assert_eq!(store.casts.lock().unwrap().as_slice(), &[(100, 77)]);
+    assert_eq!(store.cast.casts.lock().unwrap().as_slice(), &[(100, 77)]);
 }
 
 #[test]
@@ -9897,7 +10591,7 @@ fn cancelling_auto_repeat_still_tears_the_ranged_loop_down_through_stop_attack()
     }
     drop(client);
     server.join().unwrap();
-    assert_eq!(store.stop_attacks.lock().unwrap().as_slice(), &[1]);
+    assert_eq!(store.melee.stop_attacks.lock().unwrap().as_slice(), &[1]);
 }
 
 // ── Quest giver routing (CMSG_QUESTGIVER_HELLO) ──────────────────────────────────────────────────
@@ -9909,8 +10603,8 @@ fn quest_hello_reaches_the_quest_module_and_its_raw_details_body_survives_the_ci
     // decided at the `dispatch_quest_action` seam and proved there.
     const OP_QUEST_DETAILS: u16 = 0x0188;
     let mut s = quest_store();
-    s.quest_evals = vec![eval(1234, codec::ROLE_START, false, false)];
-    s.quest_details = vec![detail_view(1234, "A Threat Within")];
+    s.quest.quest_evals = vec![eval(1234, codec::ROLE_START, false, false)];
+    s.quest.quest_details = vec![detail_view(1234, "A Threat Within")];
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
     CMSG_QUESTGIVER_HELLO {
@@ -9935,7 +10629,7 @@ fn quest_query_answers_the_raw_definition_body_through_the_cipher() {
     // body crosses the encrypted frame intact. Which quests answer at all is proved at the seam.
     const OP_QUEST_QUERY_RESPONSE: u16 = 0x005D;
     let mut s = quest_store();
-    s.quest_details = vec![detail_view(1234, "A Threat Within")];
+    s.quest.quest_details = vec![detail_view(1234, "A Threat Within")];
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
     CMSG_QUEST_QUERY { quest_id: 1234 }
@@ -9954,10 +10648,11 @@ fn quest_query_answers_the_raw_definition_body_through_the_cipher() {
 #[test]
 fn questgiver_gameobject_bypasses_the_chest_lifecycle() {
     let mut s = quest_store();
-    s.gameobject_type = Some(lyracore_shared::constants::go_type::QUESTGIVER);
-    s.quest_evals = vec![eval(1234, codec::ROLE_START, false, false)];
-    s.quest_details = vec![detail_view(1234, "A Threat Within")];
-    s.corpse_loot_by_viewer
+    s.npc.gameobject_type = Some(lyracore_shared::constants::go_type::QUESTGIVER);
+    s.quest.quest_evals = vec![eval(1234, codec::ROLE_START, false, false)];
+    s.quest.quest_details = vec![detail_view(1234, "A Threat Within")];
+    s.loot_window
+        .corpse_loot_by_viewer
         .insert(1, vec![(0, 2589, 1, 200, 0)]);
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
@@ -9976,14 +10671,24 @@ fn questgiver_gameobject_bypasses_the_chest_lifecycle() {
     }
     drop(client);
     server.join().unwrap();
-    assert!(store.gameobjects_used.lock().unwrap().is_empty());
-    assert!(store.corpse_loot_reads.lock().unwrap().is_empty());
+    assert!(store
+        .loot_window
+        .gameobjects_used
+        .lock()
+        .unwrap()
+        .is_empty());
+    assert!(store
+        .loot_window
+        .corpse_loot_reads
+        .lock()
+        .unwrap()
+        .is_empty());
 }
 
 #[test]
 fn non_chest_gameobject_preserves_the_general_use_path() {
     let mut s = quest_store();
-    s.gameobject_type = Some(0);
+    s.npc.gameobject_type = Some(0);
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
 
@@ -9995,9 +10700,22 @@ fn non_chest_gameobject_preserves_the_general_use_path() {
 
     drop(client);
     server.join().unwrap();
-    assert_eq!(store.gameobjects_used.lock().unwrap().as_slice(), &[91]);
     assert_eq!(
-        store.corpse_loot_reads.lock().unwrap().as_slice(),
+        store
+            .loot_window
+            .gameobjects_used
+            .lock()
+            .unwrap()
+            .as_slice(),
+        &[91]
+    );
+    assert_eq!(
+        store
+            .loot_window
+            .corpse_loot_reads
+            .lock()
+            .unwrap()
+            .as_slice(),
         &[(91, 1)]
     );
 }
@@ -10007,8 +10725,10 @@ fn non_chest_gameobject_preserves_the_general_use_path() {
 #[test]
 fn chest_dispatch_opens_the_shared_window_and_tracks_its_target() {
     let mut s = quest_store();
-    s.gameobject_type = Some(lyracore_shared::constants::go_type::CHEST);
-    s.corpse_loot_by_viewer.insert(1, vec![(4, 117, 2, 321, 0)]);
+    s.npc.gameobject_type = Some(lyracore_shared::constants::go_type::CHEST);
+    s.loot_window
+        .corpse_loot_by_viewer
+        .insert(1, vec![(4, 117, 2, 321, 0)]);
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
 
@@ -10033,12 +10753,28 @@ fn chest_dispatch_opens_the_shared_window_and_tracks_its_target() {
 
     drop(client);
     server.join().unwrap();
-    assert_eq!(store.gameobjects_used.lock().unwrap().as_slice(), &[90]);
     assert_eq!(
-        store.corpse_loot_reads.lock().unwrap().as_slice(),
+        store
+            .loot_window
+            .gameobjects_used
+            .lock()
+            .unwrap()
+            .as_slice(),
+        &[90]
+    );
+    assert_eq!(
+        store
+            .loot_window
+            .corpse_loot_reads
+            .lock()
+            .unwrap()
+            .as_slice(),
         &[(90, 1)]
     );
-    assert_eq!(store.items_looted.lock().unwrap().as_slice(), &[(90, 4)]);
+    assert_eq!(
+        store.loot_window.items_looted.lock().unwrap().as_slice(),
+        &[(90, 4)]
+    );
 }
 
 #[test]
@@ -10060,17 +10796,28 @@ fn loot_before_player_login_is_handled_without_panicking() {
         .join()
         .expect("loot without a selected player must not panic")
         .expect("loot without a selected player remains a handled no-op");
-    assert!(store.corpse_loot_reads.lock().unwrap().is_empty());
-    assert!(store.skinned.lock().unwrap().is_empty());
+    assert!(store
+        .loot_window
+        .corpse_loot_reads
+        .lock()
+        .unwrap()
+        .is_empty());
+    assert!(store.loot_window.skinned.lock().unwrap().is_empty());
 }
 
 #[test]
 fn loot_with_a_zero_player_guid_is_handled_without_panicking() {
     let mut entity = warrior_entity();
     entity.guid = 0;
-    let store = std::sync::Arc::new(InMemoryStore {
-        login_entity: Some(entity),
-        ..tester_store(7)
+    let store = std::sync::Arc::new({
+        let base = tester_store(7);
+        WorldFake {
+            session: SessionState {
+                login_entity: Some(entity),
+                ..base.session
+            },
+            ..base
+        }
     });
     let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 0);
 
@@ -10084,15 +10831,26 @@ fn loot_with_a_zero_player_guid_is_handled_without_panicking() {
     server
         .join()
         .expect("loot with a zero player guid must not panic");
-    assert!(store.corpse_loot_reads.lock().unwrap().is_empty());
-    assert!(store.skinned.lock().unwrap().is_empty());
+    assert!(store
+        .loot_window
+        .corpse_loot_reads
+        .lock()
+        .unwrap()
+        .is_empty());
+    assert!(store.loot_window.skinned.lock().unwrap().is_empty());
 }
 
 #[test]
 fn skinning_refusal_keeps_the_world_session_alive() {
-    let store = std::sync::Arc::new(InMemoryStore {
-        skinning_refusal: Some(LootWindowRefusal::Unanswered),
-        ..quest_store()
+    let store = std::sync::Arc::new({
+        let base = quest_store();
+        WorldFake {
+            loot_window: LootWindowState {
+                skinning_refusal: Some(LootWindowRefusal::Unanswered),
+                ..base.loot_window
+            },
+            ..base
+        }
     });
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
 
@@ -10109,14 +10867,20 @@ fn skinning_refusal_keeps_the_world_session_alive() {
 
     drop(client);
     server.join().unwrap();
-    assert!(store.skinned.lock().unwrap().is_empty());
+    assert!(store.loot_window.skinned.lock().unwrap().is_empty());
 }
 
 #[test]
 fn skinning_infrastructure_failure_ends_the_world_session() {
-    let store = std::sync::Arc::new(InMemoryStore {
-        skinning_failure: Some("gw_skin reducer timed out after 10s".to_string()),
-        ..quest_store()
+    let store = std::sync::Arc::new({
+        let base = quest_store();
+        WorldFake {
+            loot_window: LootWindowState {
+                skinning_failure: Some("gw_skin reducer timed out after 10s".to_string()),
+                ..base.loot_window
+            },
+            ..base
+        }
     });
     let (mut client, mut c_enc, _c_dec, server) = enter_world(store, 1);
 
@@ -10141,7 +10905,7 @@ fn loot_opens_the_window_and_loot_money_drives_the_tracked_guid() {
     // is gone (vanilla never sends it to a solo looter; the client prints its own local "You loot X
     // copper" line). A corpse with money is NOT skinned.
     let mut s = quest_store();
-    s.corpse_money = 25;
+    s.loot_window.corpse_money = 25;
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
 
@@ -10175,12 +10939,12 @@ fn loot_opens_the_window_and_loot_money_drives_the_tracked_guid() {
     drop(client);
     server.join().unwrap();
     assert_eq!(
-        store.money_looted.lock().unwrap().as_slice(),
+        store.loot_window.money_looted.lock().unwrap().as_slice(),
         &[60],
         "the TRACKED guid was looted"
     );
     assert!(
-        store.skinned.lock().unwrap().is_empty(),
+        store.loot_window.skinned.lock().unwrap().is_empty(),
         "a corpse with money is not skinned"
     );
 }
@@ -10208,13 +10972,16 @@ fn loot_money_with_zero_copper_still_clears_with_no_notify() {
     }
     drop(client);
     server.join().unwrap();
-    assert_eq!(store.money_looted.lock().unwrap().as_slice(), &[60]);
+    assert_eq!(
+        store.loot_window.money_looted.lock().unwrap().as_slice(),
+        &[60]
+    );
 }
 
 #[test]
 fn loot_release_clears_the_tracked_target_so_take_requests_are_noops() {
     let mut s = quest_store();
-    s.corpse_money = 25; // non-empty so the skin fallback stays out of the picture
+    s.loot_window.corpse_money = 25; // non-empty so the skin fallback stays out of the picture
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
     let _ = open_loot_window(&mut client, &mut c_enc, &mut c_dec, 60);
@@ -10237,11 +11004,11 @@ fn loot_release_clears_the_tracked_target_so_take_requests_are_noops() {
     drop(client);
     server.join().unwrap();
     assert!(
-        store.money_looted.lock().unwrap().is_empty(),
+        store.loot_window.money_looted.lock().unwrap().is_empty(),
         "release cleared the tracked target"
     );
     assert!(
-        store.items_looted.lock().unwrap().is_empty(),
+        store.loot_window.items_looted.lock().unwrap().is_empty(),
         "release cleared the tracked target before an item take"
     );
 }
@@ -10271,7 +11038,7 @@ fn loot_method_dispatches_the_decoded_setting_threshold_and_master() {
     drop(client);
     server.join().unwrap();
     assert_eq!(
-        store.group_loot_methods.lock().unwrap().as_slice(),
+        store.party.group_loot_methods.lock().unwrap().as_slice(),
         &[(
             GroupLootSetting::MasterLoot.as_int(),
             7,
@@ -10297,7 +11064,7 @@ fn loot_roll_dispatches_the_corpse_slot_and_vote() {
     drop(client);
     server.join().unwrap();
     assert_eq!(
-        store.loot_rolls.lock().unwrap().as_slice(),
+        store.loot_roll.loot_rolls.lock().unwrap().as_slice(),
         &[(60, 2, RollVote::Need.as_int())]
     );
 }
@@ -10319,7 +11086,7 @@ fn loot_master_give_dispatches_the_corpse_slot_and_target() {
     drop(client);
     server.join().unwrap();
     assert_eq!(
-        store.loot_master_gives.lock().unwrap().as_slice(),
+        store.loot_roll.loot_master_gives.lock().unwrap().as_slice(),
         &[(60, 3, 9)]
     );
 }
@@ -10329,7 +11096,7 @@ fn loot_roll_rejection_is_logged_and_ignored_not_session_fatal() {
     // A rejection (no roll open / already voted / not eligible) must not tear the connection down —
     // the SAME session keeps working afterward (mirrors take_loot's per-action ignore discipline).
     let mut s = quest_store();
-    s.loot_action_refusal = Some(LootRefusal::RollUnavailable);
+    s.loot_roll.loot_action_refusal = Some(LootRefusal::RollUnavailable);
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
     CMSG_LOOT_ROLL {
@@ -10362,7 +11129,7 @@ fn loot_master_give_refusals_keep_the_world_session_alive() {
         LootRefusal::RecipientInventoryFull,
     ] {
         let mut s = quest_store();
-        s.loot_action_refusal = Some(refusal);
+        s.loot_roll.loot_action_refusal = Some(refusal);
         let store = std::sync::Arc::new(s);
         let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
         CMSG_LOOT_MASTER_GIVE {
@@ -10388,7 +11155,7 @@ fn loot_master_give_refusals_keep_the_world_session_alive() {
 #[test]
 fn loot_roll_timeout_ends_the_world_session() {
     let mut s = quest_store();
-    s.loot_action_failure = Some("gw_loot_roll reducer timed out after 10s".to_string());
+    s.loot_roll.loot_action_failure = Some("gw_loot_roll reducer timed out after 10s".to_string());
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, _c_dec, server) = enter_world(store, 1);
     CMSG_LOOT_ROLL {
@@ -10409,7 +11176,8 @@ fn loot_roll_timeout_ends_the_world_session() {
 #[test]
 fn loot_master_give_transport_failure_ends_the_world_session() {
     let mut s = quest_store();
-    s.loot_action_failure = Some("gw_loot_master_give reducer transport disconnected".to_string());
+    s.loot_roll.loot_action_failure =
+        Some("gw_loot_master_give reducer transport disconnected".to_string());
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, _c_dec, server) = enter_world(store, 1);
     CMSG_LOOT_MASTER_GIVE {
@@ -10513,7 +11281,7 @@ fn melee_opcodes_at_character_select_answer_nothing_and_keep_the_session_alive()
     drop(client);
     server.join().unwrap();
     assert_eq!(
-        store.stop_attacks.lock().unwrap().as_slice(),
+        store.melee.stop_attacks.lock().unwrap().as_slice(),
         &[0],
         "the stop still reaches the durable seam under the legacy zero actor"
     );
@@ -10526,7 +11294,7 @@ fn attackswing_desync_error_is_session_fatal() {
     // Only the socket half is proved here; which failures are fatal, and which answer a refusal
     // instead, belongs to the melee seam's own tests.
     let mut s = quest_store();
-    s.start_attack_error = Some("no live entity for guid 1".into());
+    s.melee.start_attack_error = Some("no live entity for guid 1".into());
     let store = std::sync::Arc::new(s);
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
@@ -10558,13 +11326,13 @@ fn attackswing_desync_error_is_session_fatal() {
 #[test]
 fn who_reply_lists_every_online_player_with_guild_level_and_zone() {
     let mut s = quest_store();
-    s.guild_memberships = vec![codec::GuildMemberView {
+    s.guild.guild_memberships = vec![codec::GuildMemberView {
         character_guid: 2,
         guild_id: 7,
         name: "Alpha".into(),
         ..Default::default()
     }];
-    s.guilds = vec![codec::GuildView {
+    s.guild.guilds = vec![codec::GuildView {
         guild_id: 7,
         name: "Boundary Test".into(),
         ..Default::default()
@@ -10642,9 +11410,15 @@ fn login_replays_a_persisted_buyback_ring_after_the_login_sequence() {
     // The ring survives logout, so world entry rebuilds the tab: one fabricated item CREATE per
     // entry, then the raw descriptor update. (An EMPTY ring emits nothing — every other login test
     // reads the login sequence and then EOF, which is that case.)
-    let store = std::sync::Arc::new(InMemoryStore {
-        buyback_ring: vec![(2589, 5, 120, 0), (4540, 1, 30, 0)],
-        ..quest_store()
+    let store = std::sync::Arc::new({
+        let base = quest_store();
+        WorldFake {
+            vendor: VendorState {
+                buyback_ring: vec![(2589, 5, 120, 0), (4540, 1, 30, 0)],
+                ..base.vendor
+            },
+            ..base
+        }
     });
     let (mut client, _c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
     for _ in 0..2 {
@@ -10688,7 +11462,7 @@ fn buyback_maps_the_wire_slot_enum_to_zero_based_ring_slots() {
     drop(client);
     server.join().unwrap();
     assert_eq!(
-        store.bought_back.lock().unwrap().as_slice(),
+        store.vendor.bought_back.lock().unwrap().as_slice(),
         &[(99, 0), (99, 12)]
     );
 }
@@ -10724,7 +11498,8 @@ fn trainer_buy_success_replies_succeeded_then_pushes_the_learned_spell() {
 #[test]
 fn a_riding_buy_confirms_without_echoing_the_offering_as_a_learned_spell() {
     let mut s = quest_store();
-    s.trainer_offer_skill_lines
+    s.trainer
+        .trainer_offer_skill_lines
         .insert(50132, lyracore_shared::trainer::RIDING_SKILL_LINE);
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
@@ -10764,7 +11539,8 @@ fn a_riding_buy_confirms_without_echoing_the_offering_as_a_learned_spell() {
 fn a_proficiency_buy_pushes_the_refreshed_armor_mask_after_the_learned_spell() {
     let mut s = quest_store();
     // The passive the buy granted, and the class the mask is derived for.
-    s.learned_spells = vec![lyracore_shared::constants::armor_proficiency::PLATE_PASSIVE_SPELL_ID];
+    s.character.learned_spells =
+        vec![lyracore_shared::constants::armor_proficiency::PLATE_PASSIVE_SPELL_ID];
     s.characters = vec![codec::CharacterView {
         guid: 1,
         class: 1,
@@ -10853,7 +11629,7 @@ fn trainer_buy_rank_upgrade_supersedes_the_previous_rank_spell() {
     // SMSG_LEARNED_SPELL — the client REPLACES the old rank's book entry (vanilla), mirroring the
     // talent rank-upgrade path's cmangos wire order (OLD rides the first u16 slot).
     let mut s = quest_store();
-    s.trainer_superseded = Some(1233); // rank 1 known; buying 1234 (rank 2) supersedes it
+    s.trainer.trainer_superseded = Some(1233); // rank 1 known; buying 1234 (rank 2) supersedes it
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
     CMSG_TRAINER_BUY_SPELL {
@@ -10900,7 +11676,7 @@ fn every_module_refusal_has_one_client_failure_reason() {
     };
     for refusal in TrainerRefusal::ALL {
         let mut s = quest_store();
-        s.trainer_buy_refusal = Some(refusal);
+        s.trainer.trainer_buy_refusal = Some(refusal);
         let store = std::sync::Arc::new(s);
         let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
         CMSG_TRAINER_BUY_SPELL {
@@ -10925,10 +11701,16 @@ fn every_module_refusal_has_one_client_failure_reason() {
 /// gameplay Refusal that says the purchase did not happen.
 #[test]
 fn a_trainer_reducer_timeout_is_not_answered_as_a_refusal() {
-    let store = std::sync::Arc::new(InMemoryStore {
-        login_entity: Some(warrior_entity()),
-        trade_error: Some("gw_trainer_buy reducer timed out after 10s".into()),
-        ..tester_store(7)
+    let store = std::sync::Arc::new({
+        let base = tester_store(7);
+        WorldFake {
+            session: SessionState {
+                login_entity: Some(warrior_entity()),
+                ..base.session
+            },
+            trade_error: Some("gw_trainer_buy reducer timed out after 10s".into()),
+            ..base
+        }
     });
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
@@ -10969,7 +11751,7 @@ fn learn_talent_with_a_grant_spell_pushes_learned_spell() {
     // An ability talent (grant_spell_id != 0) + a successful learn → SMSG_LEARNED_SPELL(grant) so
     // the new button is usable without a relog.
     let mut s = quest_store();
-    s.talent_grant = 2098;
+    s.trainer.talent_grant = 2098;
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
     CMSG_LEARN_TALENT {
@@ -10996,7 +11778,7 @@ fn learn_talent_passive_pushes_rank_spell_and_points() {
     // SPELLS_CHANGED) followed by the PLAYER_CHARACTER_POINTS1 partial VALUES
     // (CHARACTER_POINTS_CHANGED). The old behavior sent NOTHING → pane frozen until relog.
     let mut s = quest_store(); // talent_grant = 0
-    s.talent_pane = (7777, 0, 2); // rank-spell 7777 taught, no superseded prev, 2 points left
+    s.trainer.talent_pane = (7777, 0, 2); // rank-spell 7777 taught, no superseded prev, 2 points left
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
     CMSG_LEARN_TALENT {
@@ -11024,7 +11806,7 @@ fn learn_talent_rank_upgrade_supersedes_the_previous_rank_spell() {
     // Rank N>1: the previous rank's spell is REPLACED in the book — SMSG_SUPERCEDED_SPELL with the
     // cmangos wire order (OLD rides the first u16 slot), mirroring the trainer rank-upgrade path.
     let mut s = quest_store();
-    s.talent_pane = (7778, 7777, 1); // new rank-spell 7778 supersedes 7777, 1 point left
+    s.trainer.talent_pane = (7778, 7777, 1); // new rank-spell 7778 supersedes 7777, 1 point left
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
     CMSG_LEARN_TALENT {
@@ -11058,7 +11840,7 @@ fn learn_talent_rank_upgrade_supersedes_the_previous_rank_spell() {
 #[test]
 fn list_inventory_opens_the_vendor_window_over_the_socket() {
     let mut s = quest_store();
-    s.vendor_stock = vec![codec::VendorItemView {
+    s.vendor.vendor_stock = vec![codec::VendorItemView {
         item_entry: 4540,
         display_id: 6353,
         buy_price: 25,
@@ -11084,7 +11866,7 @@ fn gossip_select_on_a_vendor_opens_the_inventory_window() {
     // Option 0 on a stocked NPC is "browse goods" → the RAW SMSG_LIST_INVENTORY, same as the
     // direct CMSG_LIST_INVENTORY path.
     let mut s = quest_store();
-    s.vendor_stock = vec![codec::VendorItemView {
+    s.vendor.vendor_stock = vec![codec::VendorItemView {
         item_entry: 4540,
         display_id: 6353,
         buy_price: 25,
@@ -11110,14 +11892,17 @@ fn gossip_select_on_a_vendor_opens_the_inventory_window() {
     );
     drop(client);
     server.join().unwrap();
-    assert!(!store.home_bound.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(!store
+        .npc
+        .home_bound
+        .load(std::sync::atomic::Ordering::SeqCst));
 }
 
 #[test]
 fn gossip_select_on_an_innkeeper_binds_home_and_completes() {
     // A non-vendor innkeeper's "Make this inn your home." is option 0 → bind_home + GOSSIP_COMPLETE.
     let mut s = quest_store();
-    s.innkeeper = true;
+    s.npc.innkeeper = true;
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
     let menu = gossip_hello(&mut client, &mut c_enc, &mut c_dec, 81);
@@ -11136,7 +11921,10 @@ fn gossip_select_on_an_innkeeper_binds_home_and_completes() {
     drop(client);
     server.join().unwrap();
     assert!(
-        store.home_bound.load(std::sync::atomic::Ordering::SeqCst),
+        store
+            .npc
+            .home_bound
+            .load(std::sync::atomic::Ordering::SeqCst),
         "bind_home must have run"
     );
 }
@@ -11145,7 +11933,7 @@ fn gossip_select_on_an_innkeeper_binds_home_and_completes() {
 fn gossip_select_of_any_other_option_completes_without_binding() {
     // Farewell (option 1 on an innkeeper NPC) → GOSSIP_COMPLETE only; no bind, no vendor window.
     let mut s = quest_store();
-    s.innkeeper = true;
+    s.npc.innkeeper = true;
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
     gossip_hello(&mut client, &mut c_enc, &mut c_dec, 81);
@@ -11162,7 +11950,10 @@ fn gossip_select_of_any_other_option_completes_without_binding() {
     }
     drop(client);
     server.join().unwrap();
-    assert!(!store.home_bound.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(!store
+        .npc
+        .home_bound
+        .load(std::sync::atomic::Ordering::SeqCst));
 }
 
 // --- Imported gossip menu options + multi-slot npc_text -------------------------------------------
@@ -11199,7 +11990,7 @@ fn opt(icon: u32, text: &str, action: u32) -> codec::GossipOptionView {
 #[test]
 fn taxi_status_query_returns_the_persisted_bit_without_opening() {
     let mut s = quest_store();
-    s.taxi_status = Some(codec::TaxiNodeStatusView {
+    s.taxi.taxi_status = Some(codec::TaxiNodeStatusView {
         npc_guid: 90,
         known: false,
     });
@@ -11217,7 +12008,10 @@ fn taxi_status_query_returns_the_persisted_bit_without_opening() {
         }
         other => panic!("expected SMSG_TAXINODE_STATUS, got {other}"),
     }
-    assert_eq!(*store.taxi_calls.lock().unwrap(), vec![("status", 1, 90)]);
+    assert_eq!(
+        *store.taxi.taxi_calls.lock().unwrap(),
+        vec![("status", 1, 90)]
+    );
     drop(client);
     server.join().unwrap();
 }
@@ -11226,8 +12020,8 @@ fn taxi_status_query_returns_the_persisted_bit_without_opening() {
 fn direct_taxi_query_and_taxi_gossip_share_one_open_operation() {
     use lyracore_shared::constants::gossip_option;
     let mut s = quest_store();
-    s.gossip_opts = vec![opt(0, "Show me your flight routes.", gossip_option::TAXI)];
-    s.taxi_map = Some(codec::TaxiMapView {
+    s.npc.gossip_opts = vec![opt(0, "Show me your flight routes.", gossip_option::TAXI)];
+    s.taxi.taxi_map = Some(codec::TaxiMapView {
         npc_guid: 90,
         source_client_node_id: 255,
         available_client_node_ids: vec![255, 256],
@@ -11267,7 +12061,7 @@ fn direct_taxi_query_and_taxi_gossip_share_one_open_operation() {
     }
 
     assert_eq!(
-        *store.taxi_calls.lock().unwrap(),
+        *store.taxi.taxi_calls.lock().unwrap(),
         vec![("open", 1, 90), ("open", 1, 90)]
     );
     drop(client);
@@ -11277,10 +12071,10 @@ fn direct_taxi_query_and_taxi_gossip_share_one_open_operation() {
 #[test]
 fn activate_taxi_gameplay_refusal_replies_and_keeps_the_socket_alive() {
     let mut s = quest_store();
-    s.taxi_activation = codec::TaxiActivationResult {
+    s.taxi.taxi_activation = codec::TaxiActivationResult {
         result_code: lyracore_shared::constants::taxi_protocol::ACTIVATE_NOT_ENOUGH_MONEY,
     };
-    s.taxi_status = Some(codec::TaxiNodeStatusView {
+    s.taxi.taxi_status = Some(codec::TaxiNodeStatusView {
         npc_guid: 90,
         known: true,
     });
@@ -11302,7 +12096,7 @@ fn activate_taxi_gameplay_refusal_replies_and_keeps_the_socket_alive() {
         other => panic!("expected SMSG_ACTIVATETAXIREPLY, got {other}"),
     }
     assert_eq!(
-        *store.taxi_activation_inputs.lock().unwrap(),
+        *store.taxi.taxi_activation_inputs.lock().unwrap(),
         vec![(1, 90, 255, 256)]
     );
 
@@ -11323,7 +12117,7 @@ fn activate_taxi_gameplay_refusal_replies_and_keeps_the_socket_alive() {
 #[test]
 fn activate_taxi_success_round_trips_over_the_encrypted_socket() {
     let mut s = quest_store();
-    s.taxi_activation = codec::TaxiActivationResult {
+    s.taxi.taxi_activation = codec::TaxiActivationResult {
         result_code: lyracore_shared::constants::taxi_protocol::ACTIVATE_OK,
     };
     let store = std::sync::Arc::new(s);
@@ -11344,7 +12138,7 @@ fn activate_taxi_success_round_trips_over_the_encrypted_socket() {
         other => panic!("expected SMSG_ACTIVATETAXIREPLY, got {other}"),
     }
     assert_eq!(
-        *store.taxi_activation_inputs.lock().unwrap(),
+        *store.taxi.taxi_activation_inputs.lock().unwrap(),
         vec![(1, 90, 255, 256)]
     );
 
@@ -11356,8 +12150,8 @@ fn activate_taxi_success_round_trips_over_the_encrypted_socket() {
 fn taxi_gossip_transport_failure_ends_the_world_session() {
     use lyracore_shared::constants::gossip_option;
     let mut s = quest_store();
-    s.gossip_opts = vec![opt(0, "Show me your flight routes.", gossip_option::TAXI)];
-    s.taxi_error = Some("taxi reducer transport disconnected: channel closed".into());
+    s.npc.gossip_opts = vec![opt(0, "Show me your flight routes.", gossip_option::TAXI)];
+    s.taxi.taxi_error = Some("taxi reducer transport disconnected: channel closed".into());
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
     gossip_hello(&mut client, &mut c_enc, &mut c_dec, 90);
@@ -11381,7 +12175,7 @@ fn gossip_hello_renders_imported_options_verbatim_with_a_trailing_farewell() {
     // strings) — the vendor/innkeeper flags are ignored entirely once options are imported.
     use lyracore_shared::constants::gossip_option;
     let mut s = quest_store();
-    s.gossip_opts = vec![
+    s.npc.gossip_opts = vec![
         opt(0, "Well met, traveler.", gossip_option::GOSSIP),
         opt(1, "I'd like to browse your goods.", gossip_option::VENDOR),
         opt(
@@ -11391,11 +12185,11 @@ fn gossip_hello_renders_imported_options_verbatim_with_a_trailing_farewell() {
         ),
     ];
     // Fallback signals present too — must be ignored while options are imported.
-    s.vendor_stock = vec![codec::VendorItemView {
+    s.vendor.vendor_stock = vec![codec::VendorItemView {
         item_entry: 1,
         ..Default::default()
     }];
-    s.innkeeper = true;
+    s.npc.innkeeper = true;
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
     CMSG_GOSSIP_HELLO {
@@ -11426,8 +12220,8 @@ fn gossip_hello_renders_imported_options_verbatim_with_a_trailing_farewell() {
 fn gossip_select_on_an_imported_vendor_option_opens_the_inventory_window() {
     use lyracore_shared::constants::gossip_option;
     let mut s = quest_store();
-    s.gossip_opts = vec![opt(1, "Browse.", gossip_option::VENDOR)];
-    s.vendor_stock = vec![codec::VendorItemView {
+    s.npc.gossip_opts = vec![opt(1, "Browse.", gossip_option::VENDOR)];
+    s.vendor.vendor_stock = vec![codec::VendorItemView {
         item_entry: 4540,
         display_id: 6353,
         buy_price: 25,
@@ -11452,14 +12246,17 @@ fn gossip_select_on_an_imported_vendor_option_opens_the_inventory_window() {
     );
     drop(client);
     server.join().unwrap();
-    assert!(!store.home_bound.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(!store
+        .npc
+        .home_bound
+        .load(std::sync::atomic::Ordering::SeqCst));
 }
 
 #[test]
 fn gossip_select_on_an_imported_innkeeper_option_binds_home() {
     use lyracore_shared::constants::gossip_option;
     let mut s = quest_store();
-    s.gossip_opts = vec![
+    s.npc.gossip_opts = vec![
         opt(0, "Chat.", gossip_option::GOSSIP),
         opt(0, "Stay here.", gossip_option::INNKEEPER),
     ];
@@ -11480,7 +12277,10 @@ fn gossip_select_on_an_imported_innkeeper_option_binds_home() {
     drop(client);
     server.join().unwrap();
     assert!(
-        store.home_bound.load(std::sync::atomic::Ordering::SeqCst),
+        store
+            .npc
+            .home_bound
+            .load(std::sync::atomic::Ordering::SeqCst),
         "bind_home must have run"
     );
 }
@@ -11499,7 +12299,7 @@ fn the_same_option_row_reaches_the_module_by_row_id_from_either_viewer() {
     };
     // Viewer A has not taken quest 60 → the gated row is hidden, so "Stay here." renders at 0.
     let mut a = quest_store();
-    a.gossip_opts = menu();
+    a.npc.gossip_opts = menu();
     let a = std::sync::Arc::new(a);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(a.clone(), 1);
     let rendered = gossip_hello(&mut client, &mut c_enc, &mut c_dec, 90);
@@ -11517,8 +12317,8 @@ fn the_same_option_row_reaches_the_module_by_row_id_from_either_viewer() {
 
     // Viewer B HAS taken it → the gated row renders first and pushes "Stay here." to position 1.
     let mut b = quest_store();
-    b.gossip_opts = menu();
-    b.quest_log = vec![(60, false)].into();
+    b.npc.gossip_opts = menu();
+    b.quest.quest_log = vec![(60, false)].into();
     let b = std::sync::Arc::new(b);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(b.clone(), 1);
     let rendered = gossip_hello(&mut client, &mut c_enc, &mut c_dec, 90);
@@ -11534,8 +12334,8 @@ fn the_same_option_row_reaches_the_module_by_row_id_from_either_viewer() {
     drop(client);
     server.join().unwrap();
 
-    let (a_pos, a_row) = a.gossip_selects.lock().unwrap()[0];
-    let (b_pos, b_row) = b.gossip_selects.lock().unwrap()[0];
+    let (a_pos, a_row) = a.npc.gossip_selects.lock().unwrap()[0];
+    let (b_pos, b_row) = b.npc.gossip_selects.lock().unwrap()[0];
     assert_ne!(a_pos, b_pos, "the POSITION differs between the two viewers");
     assert_eq!(
         (a_row, b_row),
@@ -11554,7 +12354,7 @@ fn a_quest_taken_while_the_window_is_open_does_not_shift_the_click() {
     gated.cond_value1 = 60;
     let mut inn = opt(0, "Stay here.", gossip_option::INNKEEPER);
     inn.row_id = 4002;
-    s.gossip_opts = vec![gated, inn];
+    s.npc.gossip_opts = vec![gated, inn];
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
     // Rendered while the quest is untaken: the gated line is hidden, "Stay here." is position 0.
@@ -11562,7 +12362,7 @@ fn a_quest_taken_while_the_window_is_open_does_not_shift_the_click() {
     assert_eq!(rendered.gossips[0].message, "Stay here.");
     // The player accepts quest 60 elsewhere (another window, a party member's turn-in) — a fresh
     // filter would now put the gated line at 0 and push "Stay here." to 1.
-    store.quest_log.lock().unwrap().push((60, false));
+    store.quest.quest_log.lock().unwrap().push((60, false));
     CMSG_GOSSIP_SELECT_OPTION {
         guid: Guid::new(90),
         gossip_list_id: 0,
@@ -11577,11 +12377,14 @@ fn a_quest_taken_while_the_window_is_open_does_not_shift_the_click() {
     drop(client);
     server.join().unwrap();
     assert!(
-        store.home_bound.load(std::sync::atomic::Ordering::SeqCst),
+        store
+            .npc
+            .home_bound
+            .load(std::sync::atomic::Ordering::SeqCst),
         "the click must still select the innkeeper line the player was shown"
     );
     assert_eq!(
-        store.gossip_selects.lock().unwrap()[0],
+        store.npc.gossip_selects.lock().unwrap()[0],
         (0, 4002),
         "and the module hears the row the player saw, not the one that moved into that slot"
     );
@@ -11591,7 +12394,7 @@ fn a_quest_taken_while_the_window_is_open_does_not_shift_the_click() {
 fn a_select_with_no_open_menu_just_closes_the_window() {
     use lyracore_shared::constants::gossip_option;
     let mut s = quest_store();
-    s.gossip_opts = vec![opt(0, "Stay here.", gossip_option::INNKEEPER)];
+    s.npc.gossip_opts = vec![opt(0, "Stay here.", gossip_option::INNKEEPER)];
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
     gossip_hello(&mut client, &mut c_enc, &mut c_dec, 90);
@@ -11609,9 +12412,12 @@ fn a_select_with_no_open_menu_just_closes_the_window() {
     }
     drop(client);
     server.join().unwrap();
-    assert!(!store.home_bound.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(!store
+        .npc
+        .home_bound
+        .load(std::sync::atomic::Ordering::SeqCst));
     assert_eq!(
-        store.gossip_selects.lock().unwrap()[0].1,
+        store.npc.gossip_selects.lock().unwrap()[0].1,
         codec::SYNTHESIZED_ROW_ID,
         "no imported row was selected"
     );
@@ -11621,8 +12427,8 @@ fn a_select_with_no_open_menu_just_closes_the_window() {
 fn an_imported_menu_missing_its_vendor_row_still_reaches_the_stock() {
     use lyracore_shared::constants::gossip_option;
     let mut s = quest_store();
-    s.gossip_opts = vec![opt(0, "What is Children's Week?", gossip_option::GOSSIP)];
-    s.vendor_stock = vec![codec::VendorItemView {
+    s.npc.gossip_opts = vec![opt(0, "What is Children's Week?", gossip_option::GOSSIP)];
+    s.vendor.vendor_stock = vec![codec::VendorItemView {
         item_entry: 4540,
         display_id: 6353,
         buy_price: 25,
@@ -11652,8 +12458,8 @@ fn an_imported_menu_missing_its_vendor_row_still_reaches_the_stock() {
 fn an_imported_menu_missing_its_bind_row_still_offers_the_hearth() {
     use lyracore_shared::constants::gossip_option;
     let mut s = quest_store();
-    s.gossip_opts = vec![opt(0, "Tell me about the inn.", gossip_option::GOSSIP)];
-    s.innkeeper = true;
+    s.npc.gossip_opts = vec![opt(0, "Tell me about the inn.", gossip_option::GOSSIP)];
+    s.npc.innkeeper = true;
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
     let menu = gossip_hello(&mut client, &mut c_enc, &mut c_dec, 90);
@@ -11671,20 +12477,26 @@ fn an_imported_menu_missing_its_bind_row_still_offers_the_hearth() {
     }
     drop(client);
     server.join().unwrap();
-    assert!(store.home_bound.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(store
+        .npc
+        .home_bound
+        .load(std::sync::atomic::Ordering::SeqCst));
 }
 
 /// A `quest_store()` fixture whose logged-in character (guid 1) reports `level`, so
 /// `filtered_gossip_options`' level gate has something to read (`quest_store()` itself leaves
 /// `characters` empty, which reads as level 0 — every below-10 test can lean on that default).
-fn quest_store_at_level(level: u8) -> InMemoryStore {
-    InMemoryStore {
-        characters: vec![codec::CharacterView {
-            guid: 1,
-            level,
-            ..Default::default()
-        }],
-        ..quest_store()
+fn quest_store_at_level(level: u8) -> WorldFake {
+    {
+        let base = quest_store();
+        WorldFake {
+            characters: vec![codec::CharacterView {
+                guid: 1,
+                level,
+                ..Default::default()
+            }],
+            ..base
+        }
     }
 }
 
@@ -11695,7 +12507,7 @@ fn gossip_hello_hides_unlearn_talents_below_level_10() {
     // who cannot yet have a talent point.
     use lyracore_shared::constants::gossip_option;
     let mut s = quest_store_at_level(5);
-    s.gossip_opts = vec![
+    s.npc.gossip_opts = vec![
         opt(0, "I require warrior training.", gossip_option::TRAINER),
         opt(
             0,
@@ -11731,7 +12543,7 @@ fn gossip_hello_hides_unlearn_talents_below_level_10() {
 fn gossip_hello_shows_unlearn_talents_at_level_10_and_select_routes_to_reset_talents() {
     use lyracore_shared::constants::gossip_option;
     let mut s = quest_store_at_level(10);
-    s.gossip_opts = vec![
+    s.npc.gossip_opts = vec![
         opt(0, "I require warrior training.", gossip_option::TRAINER),
         opt(
             0,
@@ -11773,7 +12585,7 @@ fn gossip_hello_shows_unlearn_talents_at_level_10_and_select_routes_to_reset_tal
     }
     drop(client);
     server.join().unwrap();
-    let calls = store.reset_talents_calls.lock().unwrap();
+    let calls = store.trainer.reset_talents_calls.lock().unwrap();
     assert_eq!(
         calls.as_slice(),
         &[(7, 1, 90)],
@@ -11788,10 +12600,10 @@ fn gossip_hello_shows_a_quest_gated_option_once_the_quest_is_taken() {
     // client actually receives. The hidden case is covered by the position-alignment test below.
     use lyracore_shared::constants::{gossip_condition, gossip_option};
     let mut s = quest_store();
-    s.gossip_opts = vec![opt(0, "About that favor...", gossip_option::GOSSIP)];
-    s.gossip_opts[0].cond_type = gossip_condition::QUEST_TAKEN;
-    s.gossip_opts[0].cond_value1 = 60;
-    s.quest_log = vec![(60, false)].into(); // taken, not yet turned in
+    s.npc.gossip_opts = vec![opt(0, "About that favor...", gossip_option::GOSSIP)];
+    s.npc.gossip_opts[0].cond_type = gossip_condition::QUEST_TAKEN;
+    s.npc.gossip_opts[0].cond_value1 = 60;
+    s.quest.quest_log = vec![(60, false)].into(); // taken, not yet turned in
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
     CMSG_GOSSIP_HELLO {
@@ -11818,13 +12630,13 @@ fn gossip_hello_and_select_option_stay_position_aligned_under_a_hidden_option() 
     // `filtered_gossip_options` re-derives the IDENTICAL list rather than indexing the raw rows.
     use lyracore_shared::constants::{gossip_condition, gossip_option};
     let mut s = quest_store();
-    s.gossip_opts = vec![
+    s.npc.gossip_opts = vec![
         opt(0, "Chat.", gossip_option::GOSSIP), // raw index 0 -> rendered index 0
         opt(0, "Hidden favor.", gossip_option::GOSSIP), // raw index 1 -> HIDDEN (quest-gated)
         opt(0, "Stay here.", gossip_option::INNKEEPER), // raw index 2 -> rendered index 1
     ];
-    s.gossip_opts[1].cond_type = gossip_condition::QUEST_TAKEN;
-    s.gossip_opts[1].cond_value1 = 60; // never taken in this store
+    s.npc.gossip_opts[1].cond_type = gossip_condition::QUEST_TAKEN;
+    s.npc.gossip_opts[1].cond_value1 = 60; // never taken in this store
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
     CMSG_GOSSIP_HELLO {
@@ -11856,7 +12668,10 @@ fn gossip_hello_and_select_option_stay_position_aligned_under_a_hidden_option() 
     drop(client);
     server.join().unwrap();
     assert!(
-        store.home_bound.load(std::sync::atomic::Ordering::SeqCst),
+        store
+            .npc
+            .home_bound
+            .load(std::sync::atomic::Ordering::SeqCst),
         "position 1 must resolve to the innkeeper option, not the hidden one"
     );
 }
@@ -11875,7 +12690,7 @@ fn npc_text_query_ships_the_imported_8_slot_view() {
         0.4,
     );
     let mut s = quest_store();
-    s.npc_text_view = Some(view);
+    s.npc.npc_text_view = Some(view);
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
     CMSG_NPC_TEXT_QUERY {
@@ -11920,7 +12735,7 @@ fn messagechat_say_and_yell_route_to_chat_types_0_and_1() {
     drop(client); // no reply on success — the speaker sees their line via the broadcast relay
     server.join().unwrap();
     assert_eq!(
-        store.chats.lock().unwrap().as_slice(),
+        store.speech.chats.lock().unwrap().as_slice(),
         &[(0, 0, "hi".to_string()), (1, 0, "HEY".to_string())],
         "Say → type 0, Yell → type 1, language threaded"
     );
@@ -11940,7 +12755,7 @@ fn messagechat_emote_routes_to_chat_type_3() {
     drop(client); // no reply on success — the speaker sees their line via the broadcast relay
     server.join().unwrap();
     assert_eq!(
-        store.chats.lock().unwrap().as_slice(),
+        store.speech.chats.lock().unwrap().as_slice(),
         &[(3, 7, "waves wildly.".to_string())],
         "/e → type 3, language threaded to the Module (which stores it as Universal)"
     );
@@ -11969,12 +12784,12 @@ fn messagechat_dot_say_diverts_to_gm_command_never_touching_chat() {
     drop(client);
     server.join().unwrap();
     assert_eq!(
-        store.gm_commands.lock().unwrap().as_slice(),
+        store.speech.gm_commands.lock().unwrap().as_slice(),
         &[("TESTER".to_string(), ".heal".to_string())],
         "the proof-validated Account name and raw dot-command must reach the Store together"
     );
     assert!(
-        store.chats.lock().unwrap().is_empty(),
+        store.speech.chats.lock().unwrap().is_empty(),
         "a dot-command must NEVER reach send_chat"
     );
 }
@@ -11995,11 +12810,11 @@ fn messagechat_non_dot_say_is_byte_identical_to_before_223() {
     drop(client);
     server.join().unwrap();
     assert_eq!(
-        store.chats.lock().unwrap().as_slice(),
+        store.speech.chats.lock().unwrap().as_slice(),
         &[(0u8, 0u8, "hi".to_string())]
     );
     assert!(
-        store.gm_commands.lock().unwrap().is_empty(),
+        store.speech.gm_commands.lock().unwrap().is_empty(),
         "a plain Say line must never reach gm_command"
     );
 }
@@ -12010,7 +12825,7 @@ fn messagechat_dot_say_error_relays_a_system_chat_line_to_the_sender_only() {
     // to the SENDER as a System SMSG_MESSAGECHAT carrying the module's raw message VERBATIM — no
     // "reducer failed" wrapper prefix, no broadcast, no game_chat_event row.
     let mut s = quest_store();
-    s.gm_command_error = Some("permission denied".to_string());
+    s.speech.gm_command_error = Some("permission denied".to_string());
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
     CMSG_MESSAGECHAT {
@@ -12036,7 +12851,7 @@ fn messagechat_dot_say_error_relays_a_system_chat_line_to_the_sender_only() {
     }
     drop(client);
     server.join().unwrap();
-    assert!(store.chats.lock().unwrap().is_empty());
+    assert!(store.speech.chats.lock().unwrap().is_empty());
 }
 
 #[test]
@@ -12083,7 +12898,7 @@ fn force_run_speed_change_ack_is_swallowed_with_no_reply_and_no_session_teardown
 #[test]
 fn messagechat_whisper_to_an_unknown_player_replies_player_not_found() {
     let mut s = quest_store();
-    s.speaker_facts = Some(human_speaker());
+    s.chat.speaker_facts = Some(human_speaker());
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
     CMSG_MESSAGECHAT {
@@ -12103,18 +12918,21 @@ fn messagechat_whisper_to_an_unknown_player_replies_player_not_found() {
     }
     drop(client);
     server.join().unwrap();
-    assert!(store.realm_whispers.lock().unwrap().is_empty());
+    assert!(store.chat.realm_whispers.lock().unwrap().is_empty());
 }
 
 /// `quest_store` plus the session's own Character row, which the `sync` sentinel needs.
-fn chat_session_store() -> InMemoryStore {
-    InMemoryStore {
-        characters: vec![codec::CharacterView {
-            guid: 1,
-            name: "Warrior".into(),
-            ..Default::default()
-        }],
-        ..quest_store()
+fn chat_session_store() -> WorldFake {
+    {
+        let base = quest_store();
+        WorldFake {
+            characters: vec![codec::CharacterView {
+                guid: 1,
+                name: "Warrior".into(),
+                ..Default::default()
+            }],
+            ..base
+        }
     }
 }
 
@@ -12141,7 +12959,7 @@ fn messagechat_afk_and_dnd_become_set_away_requests_from_the_sessions_character(
     drop(client);
     server.join().unwrap();
     assert_eq!(
-        store.away_requests.lock().unwrap().clone(),
+        store.chat.away_requests.lock().unwrap().clone(),
         vec![(1, 0x14, "Brb".to_string()), (1, 0x15, String::new())]
     );
 }
@@ -12151,7 +12969,7 @@ fn messagechat_afk_and_dnd_become_set_away_requests_from_the_sessions_character(
 #[test]
 fn chat_ignored_becomes_an_ignored_line_to_the_dropped_speaker() {
     let mut s = chat_session_store();
-    s.speaker_facts = Some(SpeakerFacts {
+    s.chat.speaker_facts = Some(SpeakerFacts {
         race: 1,
         chat_tag: 1,
         name: "Warrior".to_string(),
@@ -12167,7 +12985,7 @@ fn chat_ignored_becomes_an_ignored_line_to_the_dropped_speaker() {
     });
     drop(client);
     server.join().unwrap();
-    let requests = store.realm_chats.lock().unwrap();
+    let requests = store.chat.realm_chats.lock().unwrap();
     assert_eq!(
         requests.as_slice(),
         &[(
@@ -12193,7 +13011,7 @@ fn messagechat_guild_becomes_one_realm_chat_request_from_the_sessions_character(
     // `/g` reaches the Realm Chat path with the guid it entered the world with, the same shape as
     // `/p`. No reply on success: the speaker hears the line through the Relay like every member.
     let mut s = quest_store();
-    s.speaker_facts = Some(human_speaker());
+    s.chat.speaker_facts = Some(human_speaker());
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
     CMSG_MESSAGECHAT {
@@ -12214,14 +13032,14 @@ fn messagechat_guild_becomes_one_realm_chat_request_from_the_sessions_character(
     }
     drop(client);
     server.join().unwrap();
-    let requests = store.realm_chats.lock().unwrap();
+    let requests = store.chat.realm_chats.lock().unwrap();
     assert_eq!(requests.len(), 1);
     let (speaker_guid, request) = &requests[0];
     assert_eq!(*speaker_guid, 1);
     assert_eq!(request.kind, lyracore_shared::chat::chat_kind::GUILD);
     assert_eq!(request.message, "hello guild");
     assert!(
-        store.chats.lock().unwrap().is_empty(),
+        store.speech.chats.lock().unwrap().is_empty(),
         "a guild line never becomes a say line"
     );
 }
@@ -12230,7 +13048,7 @@ fn messagechat_guild_becomes_one_realm_chat_request_from_the_sessions_character(
 fn messagechat_officer_becomes_one_realm_chat_request_from_the_sessions_character() {
     // `/o` follows the same path as `/g` with its own Chat Kind.
     let mut s = quest_store();
-    s.speaker_facts = Some(human_speaker());
+    s.chat.speaker_facts = Some(human_speaker());
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
     CMSG_MESSAGECHAT {
@@ -12251,7 +13069,7 @@ fn messagechat_officer_becomes_one_realm_chat_request_from_the_sessions_characte
     }
     drop(client);
     server.join().unwrap();
-    let requests = store.realm_chats.lock().unwrap();
+    let requests = store.chat.realm_chats.lock().unwrap();
     assert_eq!(requests.len(), 1);
     let (speaker_guid, request) = &requests[0];
     assert_eq!(*speaker_guid, 1);
@@ -12272,7 +13090,7 @@ fn messagechat_party_becomes_one_realm_chat_request_from_the_sessions_character(
     // The session's `/p` reaches the Realm Chat path with the guid it entered the world with. No
     // reply on success: the speaker hears the line through the Relay like every other member.
     let mut s = quest_store();
-    s.speaker_facts = Some(human_speaker());
+    s.chat.speaker_facts = Some(human_speaker());
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
     CMSG_MESSAGECHAT {
@@ -12293,7 +13111,7 @@ fn messagechat_party_becomes_one_realm_chat_request_from_the_sessions_character(
     }
     drop(client);
     server.join().unwrap();
-    let requests = store.realm_chats.lock().unwrap();
+    let requests = store.chat.realm_chats.lock().unwrap();
     assert_eq!(requests.len(), 1);
     let (speaker_guid, request) = &requests[0];
     assert_eq!(*speaker_guid, 1);
@@ -12301,7 +13119,7 @@ fn messagechat_party_becomes_one_realm_chat_request_from_the_sessions_character(
     assert_eq!(request.language, 7);
     assert_eq!(request.message, "form up");
     assert!(
-        store.chats.lock().unwrap().is_empty(),
+        store.speech.chats.lock().unwrap().is_empty(),
         "a party line never becomes a say line"
     );
 }
@@ -12309,8 +13127,8 @@ fn messagechat_party_becomes_one_realm_chat_request_from_the_sessions_character(
 #[test]
 fn messagechat_party_from_an_ungrouped_caller_replies_not_in_group() {
     let mut s = quest_store();
-    s.speaker_facts = Some(human_speaker());
-    s.realm_chat_outcome = Some(ChatOutcome::Refused(
+    s.chat.speaker_facts = Some(human_speaker());
+    s.chat.realm_chat_outcome = Some(ChatOutcome::Refused(
         lyracore_shared::chat::ChatRefusal::NotInGroup,
     ));
     let store = std::sync::Arc::new(s);
@@ -12336,15 +13154,21 @@ fn messagechat_party_from_an_ungrouped_caller_replies_not_in_group() {
 }
 
 /// Character 1 in the world, with a Character row so `sync`'s sentinel is answered.
-fn chat_store() -> InMemoryStore {
-    InMemoryStore {
-        speaker_facts: Some(human_speaker()),
-        characters: vec![codec::CharacterView {
-            guid: 1,
-            name: "Tester".into(),
-            ..Default::default()
-        }],
-        ..quest_store()
+fn chat_store() -> WorldFake {
+    {
+        let base = quest_store();
+        WorldFake {
+            chat: ChatState {
+                speaker_facts: Some(human_speaker()),
+                ..base.chat
+            },
+            characters: vec![codec::CharacterView {
+                guid: 1,
+                name: "Tester".into(),
+                ..Default::default()
+            }],
+            ..base
+        }
     }
 }
 
@@ -12390,8 +13214,8 @@ fn a_flooding_session_is_muted_before_any_chat_durable_request() {
     sync(&mut client, &mut c_enc, &mut c_dec, |_, _| {});
     drop(client);
     server.join().unwrap();
-    assert_eq!(store.chats.lock().unwrap().len(), 11);
-    assert!(store.realm_chats.lock().unwrap().is_empty());
+    assert_eq!(store.speech.chats.lock().unwrap().len(), 11);
+    assert!(store.chat.realm_chats.lock().unwrap().is_empty());
 }
 
 #[test]
@@ -12415,7 +13239,7 @@ fn a_muted_session_still_sends_addon_lines() {
     sync(&mut client, &mut c_enc, &mut c_dec, |_, _| {});
     drop(client);
     server.join().unwrap();
-    let requests = store.realm_chats.lock().unwrap();
+    let requests = store.chat.realm_chats.lock().unwrap();
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].1.language, 0xFFFF_FFFF);
 }
@@ -12424,7 +13248,7 @@ fn a_muted_session_still_sends_addon_lines() {
 fn a_game_master_is_never_muted_for_flooding() {
     // cm:Player.cpp:16346-16348 skips the flood count for any account above SEC_PLAYER.
     let mut s = chat_store();
-    s.gm_level = 1;
+    s.chat.gm_level = 1;
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
     sync(&mut client, &mut c_enc, &mut c_dec, |c, e| {
@@ -12436,14 +13260,14 @@ fn a_game_master_is_never_muted_for_flooding() {
     });
     drop(client);
     server.join().unwrap();
-    assert_eq!(store.chats.lock().unwrap().len(), 15);
+    assert_eq!(store.speech.chats.lock().unwrap().len(), 15);
 }
 
 #[test]
 fn a_say_line_in_a_language_the_speaker_does_not_know_answers_the_vanilla_notice() {
     // cm:ChatHandler.cpp:107-110 with cm mangos.sql:4044.
     let mut s = chat_store();
-    s.send_chat_outcome = Some(ChatOutcome::Refused(
+    s.speech.send_chat_outcome = Some(ChatOutcome::Refused(
         lyracore_shared::chat::ChatRefusal::UnknownLanguage,
     ));
     let store = std::sync::Arc::new(s);
@@ -12467,7 +13291,7 @@ fn a_say_line_in_a_language_the_speaker_does_not_know_answers_the_vanilla_notice
 #[test]
 fn join_channel_runs_the_channel_op_as_the_sessions_character() {
     let mut s = quest_store();
-    s.speaker_facts = Some(human_speaker());
+    s.chat.speaker_facts = Some(human_speaker());
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
     wow_world_messages::vanilla::CMSG_JOIN_CHANNEL {
@@ -12487,7 +13311,7 @@ fn join_channel_runs_the_channel_op_as_the_sessions_character() {
     }
     drop(client);
     server.join().unwrap();
-    let ops = store.channel_ops.lock().unwrap();
+    let ops = store.channel.channel_ops.lock().unwrap();
     assert_eq!(ops.len(), 1);
     let (actor_guid, op, request) = &ops[0];
     assert_eq!((*actor_guid, *op), (1, 0));
@@ -12498,8 +13322,8 @@ fn join_channel_runs_the_channel_op_as_the_sessions_character() {
 #[test]
 fn a_refused_join_answers_the_notice_on_the_session() {
     let mut s = quest_store();
-    s.speaker_facts = Some(human_speaker());
-    s.channel_outcome = Some(ChannelOutcome::Refused(
+    s.chat.speaker_facts = Some(human_speaker());
+    s.channel.channel_outcome = Some(ChannelOutcome::Refused(
         lyracore_shared::channel::ChannelRefusal::WrongPassword,
     ));
     let store = std::sync::Arc::new(s);
@@ -12525,7 +13349,7 @@ fn a_refused_join_answers_the_notice_on_the_session() {
 }
 
 // The cross-database transfer TESTS live in `transfer_tests.rs`, but the fixture types
-// below stay here: `InMemoryStore`'s own `Store` impl (the `xdb`/`xstep` glue a few hundred lines up)
+// below stay here: `WorldFake`'s own `Store` impl (the `xdb`/`xstep` glue a few hundred lines up)
 // and two world-port-abort regression tests earlier in this file construct `FakeShardDb`/`FakeChar`
 // directly, so these are a shared fixture rather than section-local. `transfer_tests` reaches them
 // the ordinary way private items in this file reach any child module — no `pub(super)` needed.
@@ -12888,7 +13712,7 @@ fn parse_blob(blob: &[u8]) -> (u64, FakeChar) {
 #[test]
 fn trainer_list_replies_smsg_trainer_list_with_the_fixture_spells() {
     let mut s = quest_store();
-    s.trainer_spells = vec![codec::TrainerSpellView {
+    s.trainer.trainer_spells = vec![codec::TrainerSpellView {
         spell_id: 100,
         cost: 10,
         required_level: 1,
@@ -12918,8 +13742,8 @@ fn trainer_list_replies_smsg_trainer_list_with_the_fixture_spells() {
 #[test]
 fn trainer_list_is_silently_dropped_for_a_player_the_trainer_does_not_serve() {
     let mut s = quest_store();
-    s.trainer_refuses_class = true;
-    s.trainer_spells = vec![codec::TrainerSpellView {
+    s.trainer.trainer_refuses_class = true;
+    s.trainer.trainer_spells = vec![codec::TrainerSpellView {
         spell_id: 100,
         cost: 10,
         required_level: 1,
@@ -12959,7 +13783,7 @@ fn gossip_hides_the_train_and_unlearn_options_for_a_class_the_trainer_does_not_s
     // Level 20 matters: the respec option is independently hidden below level 10, so at the default
     // fixture level this would pass without the class gate doing any work.
     let mut s = quest_store_at_level(20);
-    s.gossip_opts = vec![
+    s.npc.gossip_opts = vec![
         opt(0, "Well met, traveler.", gossip_option::GOSSIP),
         opt(1, "I would like to train.", gossip_option::TRAINER),
         opt(
@@ -12969,7 +13793,7 @@ fn gossip_hides_the_train_and_unlearn_options_for_a_class_the_trainer_does_not_s
         ),
         opt(1, "I'd like to browse your goods.", gossip_option::VENDOR),
     ];
-    s.trainer_refuses_class = true;
+    s.trainer.trainer_refuses_class = true;
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
     CMSG_GOSSIP_HELLO {
@@ -13009,7 +13833,7 @@ fn gossip_keeps_the_train_and_unlearn_options_for_a_class_the_trainer_serves() {
     use lyracore_shared::constants::gossip_option;
     // Same level as its counterpart, so the only difference between the two tests is the gate.
     let mut s = quest_store_at_level(20);
-    s.gossip_opts = vec![
+    s.npc.gossip_opts = vec![
         opt(0, "Well met, traveler.", gossip_option::GOSSIP),
         opt(1, "I would like to train.", gossip_option::TRAINER),
         opt(
@@ -13056,7 +13880,7 @@ fn repop_request_dispatches_repop_for_the_caller() {
         .unwrap();
     drop(client); // repop's revive replicates via the entity VALUES relay, not a direct SMSG here
     server.join().unwrap();
-    assert_eq!(store.repopped.lock().unwrap().as_slice(), &[1]);
+    assert_eq!(store.death.repopped.lock().unwrap().as_slice(), &[1]);
 }
 
 #[test]
@@ -13071,7 +13895,7 @@ fn reclaim_corpse_dispatches_with_the_wire_corpse_guid() {
     drop(client);
     server.join().unwrap();
     assert_eq!(
-        store.reclaimed_corpses.lock().unwrap().as_slice(),
+        store.death.reclaimed_corpses.lock().unwrap().as_slice(),
         &[(1, 777)]
     );
 }
@@ -13089,7 +13913,7 @@ fn resurrect_response_accept_maps_status_byte_to_true() {
     drop(client);
     server.join().unwrap();
     assert_eq!(
-        store.resurrect_responses.lock().unwrap().as_slice(),
+        store.death.resurrect_responses.lock().unwrap().as_slice(),
         &[(1, true)]
     );
 }
@@ -13109,7 +13933,7 @@ fn resurrect_response_decline_maps_status_byte_to_false() {
     drop(client);
     server.join().unwrap();
     assert_eq!(
-        store.resurrect_responses.lock().unwrap().as_slice(),
+        store.death.resurrect_responses.lock().unwrap().as_slice(),
         &[(1, false)]
     );
 }
@@ -13123,14 +13947,20 @@ fn self_res_dispatches_self_resurrect_for_the_caller() {
         .unwrap();
     drop(client); // the revive replicates via the entity VALUES relay, not a direct SMSG here
     server.join().unwrap();
-    assert_eq!(store.self_resurrects.lock().unwrap().as_slice(), &[1]);
+    assert_eq!(store.death.self_resurrects.lock().unwrap().as_slice(), &[1]);
 }
 
 #[test]
 fn a_refused_self_res_sends_nothing_and_keeps_the_session() {
-    let store = std::sync::Arc::new(InMemoryStore {
-        self_resurrect_error: Some("no Self-Resurrection Option".into()),
-        ..quest_store()
+    let store = std::sync::Arc::new({
+        let base = quest_store();
+        WorldFake {
+            death: DeathState {
+                self_resurrect_error: Some("no Self-Resurrection Option".into()),
+                ..base.death
+            },
+            ..base
+        }
     });
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
     CMSG_SELF_RES {}
@@ -13147,7 +13977,7 @@ fn a_refused_self_res_sends_nothing_and_keeps_the_session() {
     }
     drop(client);
     server.join().unwrap();
-    assert_eq!(store.self_resurrects.lock().unwrap().as_slice(), &[1]);
+    assert_eq!(store.death.self_resurrects.lock().unwrap().as_slice(), &[1]);
 }
 
 #[test]
@@ -13170,7 +14000,7 @@ fn spirit_healer_activate_dispatches_and_confirms_the_healer_guid() {
     // The SMSG above echoes the WIRE guid verbatim, so it alone can't catch a swapped-argument bug —
     // this pins that the STORE call also got (self_guid, healer_guid) in the right order.
     assert_eq!(
-        store.spirit_healer_calls.lock().unwrap().as_slice(),
+        store.death.spirit_healer_calls.lock().unwrap().as_slice(),
         &[(1, 888)]
     );
 }
@@ -13179,13 +14009,22 @@ fn spirit_healer_activate_dispatches_and_confirms_the_healer_guid() {
 
 #[test]
 fn reducer_transport_loss_ends_an_admitted_session_and_frees_one_queue_seat() {
-    let store = std::sync::Arc::new(InMemoryStore {
-        login_entity: Some(warrior_entity()),
-        set_target_error: Some("transport disconnected".into()),
-        // The same dead transport makes leave-world cleanup unreachable. Teardown is best-effort,
-        // but the client session and its admission seat must not wait for that reducer.
-        logout_error: Some("transport disconnected".into()),
-        ..tester_store(7)
+    let store = std::sync::Arc::new({
+        let base = tester_store(7);
+        WorldFake {
+            session: SessionState {
+                login_entity: Some(warrior_entity()),
+                // The same dead transport makes leave-world cleanup unreachable. Teardown is best-effort,
+                // but the client session and its admission seat must not wait for that reducer.
+                logout_error: Some("transport disconnected".into()),
+                ..base.session
+            },
+            combat: CombatState {
+                set_target_error: Some("transport disconnected".into()),
+                ..base.combat
+            },
+            ..base
+        }
     });
     let queue = std::sync::Arc::new(LoginQueue::new(1, 0));
     let (mut client, server_end) = world_session_socket_pair();
@@ -13228,6 +14067,7 @@ fn reducer_transport_loss_ends_an_admitted_session_and_frees_one_queue_seat() {
     );
     assert!(
         store
+            .session
             .logout_called
             .load(std::sync::atomic::Ordering::SeqCst),
         "teardown still attempts leave-world cleanup"
@@ -13256,7 +14096,10 @@ fn set_selection_dispatches_set_target_with_the_wire_guid() {
     .unwrap();
     drop(client);
     server.join().unwrap();
-    assert_eq!(store.selected_targets.lock().unwrap().as_slice(), &[321]);
+    assert_eq!(
+        store.combat.selected_targets.lock().unwrap().as_slice(),
+        &[321]
+    );
 }
 
 #[test]
@@ -13268,7 +14111,10 @@ fn cancel_aura_dispatches_with_the_wire_spell_id() {
         .unwrap();
     drop(client);
     server.join().unwrap();
-    assert_eq!(store.cancelled_auras.lock().unwrap().as_slice(), &[5555]);
+    assert_eq!(
+        store.cast.cancelled_auras.lock().unwrap().as_slice(),
+        &[5555]
+    );
 }
 
 #[test]
@@ -13280,7 +14126,7 @@ fn cancel_cast_dispatches_for_the_caller() {
         .unwrap();
     drop(client);
     server.join().unwrap();
-    assert_eq!(store.cancelled_casts.lock().unwrap().as_slice(), &[1]);
+    assert_eq!(store.cast.cancelled_casts.lock().unwrap().as_slice(), &[1]);
 }
 
 #[test]
@@ -13505,29 +14351,38 @@ fn every_petition_opcode_reaches_its_dispatch_entry_over_the_socket() {
         MSG_PETITION_DECLINE, MSG_PETITION_RENAME,
     };
     const CHARTER: u64 = 0x4000_0000_0000_0101;
-    let store = std::sync::Arc::new(InMemoryStore {
-        login_entity: Some(warrior_entity()),
-        characters: vec![
-            codec::CharacterView {
-                guid: 1,
-                name: "Warrior".into(),
-                ..Default::default()
+    let store = std::sync::Arc::new({
+        let base = tester_store(7);
+        WorldFake {
+            session: SessionState {
+                login_entity: Some(warrior_entity()),
+                ..base.session
             },
-            codec::CharacterView {
-                guid: 2,
-                name: "Target".into(),
-                ..Default::default()
+            characters: vec![
+                codec::CharacterView {
+                    guid: 1,
+                    name: "Warrior".into(),
+                    ..Default::default()
+                },
+                codec::CharacterView {
+                    guid: 2,
+                    name: "Target".into(),
+                    ..Default::default()
+                },
+            ],
+            guild: GuildState {
+                guild_petitions: vec![codec::PetitionView {
+                    petition_id: 42,
+                    charter_item_guid: CHARTER,
+                    owner_guid: 1,
+                    name: "Night Watch".into(),
+                    signers: vec![2],
+                }],
+                held_charters: vec![CHARTER],
+                ..base.guild
             },
-        ],
-        guild_petitions: vec![codec::PetitionView {
-            petition_id: 42,
-            charter_item_guid: CHARTER,
-            owner_guid: 1,
-            name: "Night Watch".into(),
-            signers: vec![2],
-        }],
-        held_charters: vec![CHARTER],
-        ..tester_store(7)
+            ..base
+        }
     });
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
     let mut next =

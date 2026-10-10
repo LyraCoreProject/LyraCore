@@ -17,7 +17,10 @@ fn initiate_trade_dispatches_with_the_wire_target_guid() {
         .unwrap();
     drop(client); // every status rides the game_trade_event relay, no direct SMSG here
     server.join().unwrap();
-    assert_eq!(store.initiated_trades.lock().unwrap().as_slice(), &[(1, 2)]);
+    assert_eq!(
+        store.trade.initiated_trades.lock().unwrap().as_slice(),
+        &[(1, 2)]
+    );
 }
 
 /// **AC: tested from both sides** — the SAME wire flow works with the seats swapped: player 2
@@ -31,7 +34,10 @@ fn initiate_trade_dispatches_from_the_other_side_too() {
         .unwrap();
     drop(client);
     server.join().unwrap();
-    assert_eq!(store.initiated_trades.lock().unwrap().as_slice(), &[(2, 1)]);
+    assert_eq!(
+        store.trade.initiated_trades.lock().unwrap().as_slice(),
+        &[(2, 1)]
+    );
 }
 
 /// **AC: the full handshake round trip, one store, both parties** — A proposes, B's client
@@ -58,10 +64,17 @@ fn the_handshake_flow_dispatches_initiate_then_begin_then_cancel() {
     drop(b);
     b_server.join().unwrap();
 
-    assert_eq!(store.initiated_trades.lock().unwrap().as_slice(), &[(1, 2)]);
-    assert_eq!(store.begun_trades.lock().unwrap().as_slice(), &[2]);
-    assert_eq!(store.cancelled_trades.lock().unwrap().as_slice(), &[2]);
+    assert_eq!(
+        store.trade.initiated_trades.lock().unwrap().as_slice(),
+        &[(1, 2)]
+    );
+    assert_eq!(store.trade.begun_trades.lock().unwrap().as_slice(), &[2]);
+    assert_eq!(
+        store.trade.cancelled_trades.lock().unwrap().as_slice(),
+        &[2]
+    );
     let calls: Vec<String> = store
+        .topology
         .calls
         .lock()
         .unwrap()
@@ -97,15 +110,15 @@ fn offer_mutations_dispatch_with_wire_arguments() {
     drop(client);
     server.join().unwrap();
     assert_eq!(
-        store.set_trade_items.lock().unwrap().as_slice(),
+        store.trade.set_trade_items.lock().unwrap().as_slice(),
         &[(1, 2, 23)]
     );
     assert_eq!(
-        store.cleared_trade_items.lock().unwrap().as_slice(),
+        store.trade.cleared_trade_items.lock().unwrap().as_slice(),
         &[(1, 2)]
     );
     assert_eq!(
-        store.set_trade_golds.lock().unwrap().as_slice(),
+        store.trade.set_trade_golds.lock().unwrap().as_slice(),
         &[(1, 1_2345)]
     );
 }
@@ -127,7 +140,7 @@ fn set_trade_item_from_a_sub_bag_is_ignored_not_misaddressed() {
     .unwrap();
     drop(client);
     server.join().unwrap();
-    assert!(store.set_trade_items.lock().unwrap().is_empty());
+    assert!(store.trade.set_trade_items.lock().unwrap().is_empty());
 }
 
 /// **AC: the full loop's wire half**, A initiates and offers an item, B answers, offers
@@ -170,16 +183,22 @@ fn the_full_loop_dispatches_offer_and_dual_accept_in_order() {
     drop(b);
     b_server.join().unwrap();
 
-    assert_eq!(store.initiated_trades.lock().unwrap().as_slice(), &[(1, 2)]);
     assert_eq!(
-        store.set_trade_items.lock().unwrap().as_slice(),
+        store.trade.initiated_trades.lock().unwrap().as_slice(),
+        &[(1, 2)]
+    );
+    assert_eq!(
+        store.trade.set_trade_items.lock().unwrap().as_slice(),
         &[(1, 0, 23)]
     );
     assert_eq!(
-        store.set_trade_golds.lock().unwrap().as_slice(),
+        store.trade.set_trade_golds.lock().unwrap().as_slice(),
         &[(2, 500)]
     );
-    assert_eq!(store.accepted_trades.lock().unwrap().as_slice(), &[1, 2]);
+    assert_eq!(
+        store.trade.accepted_trades.lock().unwrap().as_slice(),
+        &[1, 2]
+    );
 }
 
 /// **AC: the accept-reset wire half**, after an accept, a further offer mutation and an
@@ -202,9 +221,15 @@ fn unaccept_and_post_accept_mutations_dispatch_for_the_acting_seat() {
         .unwrap();
     drop(client);
     server.join().unwrap();
-    assert_eq!(store.accepted_trades.lock().unwrap().as_slice(), &[1]);
-    assert_eq!(store.set_trade_golds.lock().unwrap().as_slice(), &[(1, 9)]);
-    assert_eq!(store.unaccepted_trades.lock().unwrap().as_slice(), &[1]);
+    assert_eq!(store.trade.accepted_trades.lock().unwrap().as_slice(), &[1]);
+    assert_eq!(
+        store.trade.set_trade_golds.lock().unwrap().as_slice(),
+        &[(1, 9)]
+    );
+    assert_eq!(
+        store.trade.unaccepted_trades.lock().unwrap().as_slice(),
+        &[1]
+    );
 }
 
 /// **AC: the decline flow**, the proposed target's client answers a `BeginTrade` it
@@ -222,8 +247,8 @@ fn decline_opcodes_dispatch_their_own_verbs_for_the_declining_side() {
         .unwrap();
     drop(client);
     server.join().unwrap();
-    assert_eq!(store.busy_trades.lock().unwrap().as_slice(), &[2]);
-    assert_eq!(store.ignore_trades.lock().unwrap().as_slice(), &[2]);
+    assert_eq!(store.trade.busy_trades.lock().unwrap().as_slice(), &[2]);
+    assert_eq!(store.trade.ignore_trades.lock().unwrap().as_slice(), &[2]);
 }
 
 /// **AC: either side can cancel** — the initiator's own `CMSG_CANCEL_TRADE` dispatches as
@@ -237,5 +262,8 @@ fn cancel_trade_dispatches_for_the_initiating_side_too() {
         .unwrap();
     drop(client);
     server.join().unwrap();
-    assert_eq!(store.cancelled_trades.lock().unwrap().as_slice(), &[1]);
+    assert_eq!(
+        store.trade.cancelled_trades.lock().unwrap().as_slice(),
+        &[1]
+    );
 }

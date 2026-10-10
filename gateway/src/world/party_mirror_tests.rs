@@ -9,7 +9,7 @@ use super::*;
 use crate::world::party_mirror::RosterRevisionRelay;
 
 /// The split party's id after `form_split_party`.
-fn split_party_id(realm: &InMemoryStore) -> u64 {
+fn split_party_id(realm: &WorldFake) -> u64 {
     realm
         .group_roster(GINGER)
         .unwrap()
@@ -18,8 +18,8 @@ fn split_party_id(realm: &InMemoryStore) -> u64 {
 }
 
 /// Add `guid` to `group_id` on Realm-core and advance its Roster Revision, with no party op.
-fn join_on_realm(realm: &InMemoryStore, group_id: u64, guid: u64) {
-    let mut party = realm.party.lock().unwrap();
+fn join_on_realm(realm: &WorldFake, group_id: u64, guid: u64) {
+    let mut party = realm.party.party.lock().unwrap();
     party.members.push((group_id, guid));
     *party.revisions.entry(group_id).or_insert(0) += 1;
 }
@@ -52,13 +52,13 @@ fn a_roster_change_no_party_op_made_reaches_every_shard_mirror() {
             mirror.member_guids(),
             [GINGER, VIM, TRIN],
             "{}",
-            shard.shard
+            shard.topology.shard
         );
         assert_eq!(
             shard.held_roster_revision(group_id).unwrap(),
             realm_revision,
             "{} holds Realm-core's Roster Revision",
-            shard.shard
+            shard.topology.shard
         );
     }
 }
@@ -69,7 +69,7 @@ fn a_disband_reaches_every_shard_as_the_tombstone() {
     form_split_party(&world, &instances);
     let group_id = split_party_id(&realm);
     {
-        let mut party = realm.party.lock().unwrap();
+        let mut party = realm.party.party.lock().unwrap();
         party.members.retain(|(group, _)| *group != group_id);
         party.groups.retain(|(group, ..)| *group != group_id);
         *party.revisions.get_mut(&group_id).unwrap() += 1;
@@ -85,13 +85,13 @@ fn a_disband_reaches_every_shard_as_the_tombstone() {
             shard.group_roster_by_id(group_id).unwrap(),
             None,
             "{} forgets the party",
-            shard.shard
+            shard.topology.shard
         );
         assert_eq!(
             shard.held_roster_revision(group_id).unwrap(),
             realm_revision,
             "{} keeps the tombstone's Roster Revision",
-            shard.shard
+            shard.topology.shard
         );
     }
 }
@@ -123,6 +123,7 @@ fn five_revisions_before_the_worker_runs_cause_one_push_per_stale_shard() {
     let relay = RosterRevisionRelay::default();
     for _ in 0..5 {
         *realm
+            .party
             .party
             .lock()
             .unwrap()
