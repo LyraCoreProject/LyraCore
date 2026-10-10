@@ -5,7 +5,7 @@ mod support;
 
 use support::Standalone;
 
-const PACKAGE: &str = "example";
+const PACKAGE: &str = "test_fixture";
 
 fn arg(value: &str) -> String {
     serde_json::to_string(value).expect("a string encodes as JSON")
@@ -71,7 +71,7 @@ fn a_package_character_lands_on_an_account_that_records_its_package() {
         ));
         assert_eq!(account.len(), 1, "owned Account {account_id} is missing");
         assert!(
-            account[0]["username"].starts_with("example#"),
+            account[0]["username"].starts_with("test_fixture#"),
             "unexpected username: {account:?}"
         );
         assert_eq!(
@@ -127,7 +127,7 @@ fn a_new_package_account_skips_a_name_an_unowned_account_holds() {
     let shard = stage("package-account-taken-name");
     let first = create(&shard, "Bota", "1", "1");
     assert!(first.status.success(), "{first:?}");
-    // The Account `example#0` stays, but no longer counts as owned.
+    // The Account `test_fixture#0` stays, but no longer counts as owned.
     shard.assert_sql("DELETE FROM game_package_account");
 
     let second = create(&shard, "Botb", "1", "1");
@@ -141,5 +141,5 @@ fn a_new_package_account_skips_a_name_an_unowned_account_holds() {
         "SELECT username FROM game_account WHERE id = {}",
         owned[0]
     ));
-    assert_eq!(account[0]["username"], "example#1");
+    assert_eq!(account[0]["username"], "test_fixture#1");
 }

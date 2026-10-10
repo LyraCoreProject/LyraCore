@@ -101,7 +101,7 @@ fn a_packages_runtime_scripts_reconcile_onto_a_shard() {
     apply(
         &standalone,
         &[artifact(
-            "example.bolt",
+            "test_fixture.bolt",
             HASH_A,
             &[
                 script(100_001, "bolt.greet", "on_login", 0, true, "local a = 1"),
@@ -117,7 +117,7 @@ fn a_packages_runtime_scripts_reconcile_onto_a_shard() {
         "both scripts land, disabled or not: {rows:?}"
     );
     assert_eq!(rows[0].1, "bolt.greet");
-    assert_eq!(rows[0].2, "example.bolt");
+    assert_eq!(rows[0].2, "test_fixture.bolt");
     assert_eq!(rows[0].3, "on_login");
     assert_eq!(
         rows[0].4.len(),
@@ -128,14 +128,17 @@ fn a_packages_runtime_scripts_reconcile_onto_a_shard() {
         rows[0].4, rows[1].4,
         "two different sources hash differently"
     );
-    assert_eq!(provenance(&standalone), [("example.bolt".to_string(), 2)]);
+    assert_eq!(
+        provenance(&standalone),
+        [("test_fixture.bolt".to_string(), 2)]
+    );
 
     // --- Re-applying the same plan is idempotent.
     let before = scripts_on_shard(&standalone);
     apply(
         &standalone,
         &[artifact(
-            "example.bolt",
+            "test_fixture.bolt",
             HASH_A,
             &[
                 script(100_001, "bolt.greet", "on_login", 0, true, "local a = 1"),
@@ -154,7 +157,7 @@ fn a_packages_runtime_scripts_reconcile_onto_a_shard() {
         &standalone,
         &[
             artifact(
-                "example.bolt",
+                "test_fixture.bolt",
                 HASH_A,
                 &[script(
                     100_001,
@@ -166,7 +169,7 @@ fn a_packages_runtime_scripts_reconcile_onto_a_shard() {
                 )],
             ),
             artifact(
-                "example.zeta",
+                "test_fixture.zeta",
                 HASH_B,
                 &[script(
                     100_050,
@@ -192,8 +195,8 @@ fn a_packages_runtime_scripts_reconcile_onto_a_shard() {
     assert_eq!(
         provenance(&standalone),
         [
-            ("example.bolt".to_string(), 1),
-            ("example.zeta".to_string(), 1)
+            ("test_fixture.bolt".to_string(), 1),
+            ("test_fixture.zeta".to_string(), 1)
         ]
     );
 
@@ -201,7 +204,7 @@ fn a_packages_runtime_scripts_reconcile_onto_a_shard() {
     apply(
         &standalone,
         &[artifact(
-            "example.zeta",
+            "test_fixture.zeta",
             HASH_B,
             &[script(
                 100_050,
@@ -214,9 +217,16 @@ fn a_packages_runtime_scripts_reconcile_onto_a_shard() {
         )],
     );
     let rows = scripts_on_shard(&standalone);
-    assert_eq!(rows.len(), 1, "example.bolt's scripts are gone: {rows:?}");
+    assert_eq!(
+        rows.len(),
+        1,
+        "test_fixture.bolt's scripts are gone: {rows:?}"
+    );
     assert_eq!(rows[0].1, "zeta.greet");
-    assert_eq!(provenance(&standalone), [("example.zeta".to_string(), 1)]);
+    assert_eq!(
+        provenance(&standalone),
+        [("test_fixture.zeta".to_string(), 1)]
+    );
 
     // --- An empty plan is the honest "no Package ships a script any more".
     apply(&standalone, &[]);
@@ -237,7 +247,7 @@ fn a_conflicting_plan_leaves_the_shard_exactly_as_it_was() {
     apply(
         &standalone,
         &[artifact(
-            "example.bolt",
+            "test_fixture.bolt",
             HASH_A,
             &[script(
                 100_001,
@@ -258,7 +268,7 @@ fn a_conflicting_plan_leaves_the_shard_exactly_as_it_was() {
             &arg("script"),
             &arg(&[
                 artifact(
-                    "example.first",
+                    "test_fixture.first",
                     HASH_A,
                     &[script(
                         100_002,
@@ -270,7 +280,7 @@ fn a_conflicting_plan_leaves_the_shard_exactly_as_it_was() {
                     )],
                 ),
                 artifact(
-                    "example.second",
+                    "test_fixture.second",
                     HASH_B,
                     &[script(
                         100_002,
@@ -295,7 +305,10 @@ fn a_conflicting_plan_leaves_the_shard_exactly_as_it_was() {
         before,
         "a refused plan writes nothing"
     );
-    assert_eq!(provenance(&standalone), [("example.bolt".to_string(), 1)]);
+    assert_eq!(
+        provenance(&standalone),
+        [("test_fixture.bolt".to_string(), 1)]
+    );
 }
 
 /// A Package Event is an event the Package fires itself, so the Shard has to store the binding
@@ -311,12 +324,12 @@ fn a_package_binds_its_own_event_and_never_another_packages() {
     apply(
         &standalone,
         &[artifact(
-            "example",
+            "test_fixture",
             HASH_A,
             &[script(
                 100_001,
-                "example.chooser",
-                "example.answer",
+                "test_fixture.chooser",
+                "test_fixture.answer",
                 0,
                 true,
                 "return 42",
@@ -327,23 +340,23 @@ fn a_package_binds_its_own_event_and_never_another_packages() {
     let rows = scripts_on_shard(&standalone);
     assert_eq!(rows.len(), 1, "{rows:?}");
     assert_eq!(
-        rows[0].3, "example.answer",
+        rows[0].3, "test_fixture.answer",
         "the Package Event is the dispatch label, so it is stored as written: {rows:?}"
     );
     let before = scripts_on_shard(&standalone);
 
-    // `example.bolt` reaching for `example`'s event. Refused at the parse, before any write.
+    // `test_fixture.bolt` reaching for `test_fixture`'s event. Refused at the parse, before any write.
     let refused = standalone.call(
         "apply_package_deltas",
         &[
             &arg("script"),
             &arg(&artifact(
-                "example.bolt",
+                "test_fixture.bolt",
                 HASH_B,
                 &[script(
                     100_002,
                     "bolt.thief",
-                    "example.answer",
+                    "test_fixture.answer",
                     0,
                     true,
                     "return 1",
@@ -361,7 +374,7 @@ fn a_package_binds_its_own_event_and_never_another_packages() {
         before,
         "a refused plan writes nothing"
     );
-    assert_eq!(provenance(&standalone), [("example".to_string(), 1)]);
+    assert_eq!(provenance(&standalone), [("test_fixture".to_string(), 1)]);
 }
 
 /// The point of the whole feature: a script a Package shipped runs at a real core chokepoint, and
@@ -393,7 +406,7 @@ fn a_package_script_fires_on_a_real_event_and_a_failing_one_does_not_block_the_n
     apply(
         &standalone,
         &[artifact(
-            "example.bolt",
+            "test_fixture.bolt",
             HASH_A,
             &[
                 script(

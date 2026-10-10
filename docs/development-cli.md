@@ -66,7 +66,7 @@ lyracore packages config NAME [KEY [VALUE]] [--new]
 lyracore packages disable NAME [--yes]
 lyracore packages enable NAME
 lyracore packages list
-lyracore packages new NAME
+lyracore packages new NAME [--from RUNG]
 lyracore packages remove NAME [--yes]
 lyracore packages replay [DATABASE ...] [--check] [--yes] [--force-all] [--client-data PATH]
 lyracore packages update [NAME] [--yes]
@@ -99,7 +99,7 @@ lyracore update
 | `packages disable` | run Package Teardown on every Shard, then move the Package out of the build's sight, keeping it on disk |
 | `packages enable` | move a disabled Package back into the build |
 | `packages list` | every installed Package: enabled or disabled, where it came from, and whether it has drifted |
-| `packages new` | scaffold a new Package offline, by copying and renaming the reference Package this checkout ships |
+| `packages new` | copy a Reference Package from the collection tag matching this checkout's Package API |
 | `packages remove` | delete a disabled Package, after a confirmation and a check for local changes |
 | `packages replay` | reapply every enabled Package's claims and Runtime Scripts onto the named Shards, or the whole recorded fixture topology by default |
 | `packages update` | advance a Git-backed Package, or every one of them, to the repository's current commit |
@@ -225,7 +225,8 @@ for you**, so a plain `./lyracore import` never asks twice.
 ./lyracore packages add https://host/greeter.git   # clone a repository whose root is one Package
 ./lyracore packages add greeter                # bare name: resolve from the Official Package Collection
 ./lyracore packages list
-./lyracore packages new my-package             # scaffold one from nothing but this checkout
+./lyracore packages new my-package             # start from example-script
+./lyracore packages new my-package --from example-rust
 ```
 
 A Package is a drop-in folder under `packages/<name>/`. `module/build.rs` discovers it and compiles
@@ -295,18 +296,24 @@ Identity, whether the tree on disk still matches it (`clean` or `LOCALLY DRIFTED
 registers. A Package with no stamp — dropped into `packages/` by hand, or installed before this
 command existed — renders as unrecorded rather than failing the listing.
 
-**`packages new NAME` scaffolds a Package with no network access and nothing external to review.**
-It copies `packages/example/` — the maintained reference Package every LyraCore checkout ships,
-including a fresh public clone — to `packages/NAME/`, renaming the reference's own identifiers into
-the new name, then writes a Provenance Stamp recording a **scaffold** origin rather than a Package
-Source (nothing external was installed, so there is nothing to name) and runs `preflight`. The same
-name and shape refusals as `add` apply before anything is written. The reference Package is
-Rust-only and inert. Its `src/mod.rs` carries one commented hook pattern, and the scaffold has no
-`client/` directory. The printed next steps say to add `client/addons/<Name>/` for addons or `client/mpq/`
-for client-file overrides, and that `client sync` will pack them in once you do. Growing the Rust
-half means wiring more hooks from the catalogue in `module/src/hooks.rs`, following the pattern
-`packages/NAME/src/mod.rs` already shows. A scaffold ships no Datascript: the authoring toolchain
-in `datascripts/` is checkout-wide today, not per-Package.
+`packages new NAME [--from RUNG]` fetches a Reference Package from the Official Package Collection.
+The checkout's Package API version selects its tag, as with `packages add`. The default is
+`example-script`, which needs no Rust. Other rungs are `example-client`, `example-data`,
+`example-rust` and `example-all`. A missing tag or rung leaves the Package Inventory unchanged.
+
+The command copies the source into `packages/NAME/`, renames Package names, Rust identifiers and
+client filenames, prints its Trust Review and runs `preflight`. The Provenance Stamp keeps the
+`scaffold` kind and records the chosen rung and exact collection revision. `packages update`
+does not replace scaffolded code.
+
+Rungs with Runtime Scripts or Datascripts need a lowercase Package name of at most 64 characters.
+Each `<name>.<script file stem>` must also fit the 64-character Runtime Script name limit.
+
+Generated artifacts are omitted because the renamed sources need new Build Identities. Before
+using a copy beside another, choose distinct `@id` values for Runtime Scripts or a distinct Package
+Spell ID in its Datascript. Run `packages build` after editing the sources. A Datascript also needs
+a Base Snapshot from your own client data. Replay the built artifacts through the normal realm
+update; use `client sync` for a client half. Scaffolding requires network access to the collection.
 
 ## `packages enable`, `disable`, `remove` — taking a Package out of the build
 
@@ -456,7 +463,8 @@ then up to eight steps, in this order:
    database.
 2. `bun install --frozen-lockfile` installs exactly what `datascripts/bun.lock` records. Frozen, so
    a build never silently resolves a newer dependency than the next author will get.
-3. `tsc --noEmit` is the typecheck gate. Nothing is emitted; the answer is the exit code.
+3. `tsc --noEmit` typechecks Core's Datascript project and each enabled Package's local Datascripts.
+   The CLI extends Core's compiler configuration in a temporary file. No JavaScript is emitted.
 
 Steps 4 to 8 run only when an enabled Package carries a Datascript or a Runtime Script. A checkout
 with neither builds exactly as it did before those steps existed:
@@ -465,8 +473,9 @@ with neither builds exactly as it did before those steps existed:
    fails fast with the exact `lyracore-importer --spell-snapshot` command to build one, once, rather
    than letting every Datascript fail with the same "cannot read" error in turn. Skipped when no
    Package has a Datascript: a Runtime Script reads no base data.
-5. Every enabled Package's Datascripts run, one `bun run` subprocess per file, in name order. The
-   first script to throw stops the build; later scripts and later Packages never run.
+5. Each enabled Package runs `datascripts/src/<name>/*.ts`, then
+   `packages/<name>/datascripts/*.ts`. Each directory runs in file-name order, with one `bun run`
+   subprocess per file. The first failure stops the build.
 6. Every enabled Package with a `scripts/` folder compiles its Runtime Scripts into one Script
    Artifact, one `bun run` subprocess per Package, in folder-name order. The builder is handed the
    Module's Event Binding catalogue, read from `lyracore-delta-check --print-events`, so a mistyped
@@ -520,6 +529,10 @@ the schema's authority.
 `src/reference.ts` is the standing schema check. It names real columns, so it is the file that fails
 when the schema moves under it. Keep it referencing real columns.
 
+A Package can ship `packages/<name>/datascripts/welcome.ts`. It imports the authoring library as
+`../../../datascripts/lib/index.ts`. The older `datascripts/src/<name>/` location still works.
+The Build Identity covers both source directories, so editing either requires a rebuild.
+
 ### Bun is author-side only
 
 `packages build` is the only command that needs Bun, and authoring Datascripts is the only reason
@@ -541,16 +554,16 @@ Runtime Script Host, with a Fuel Budget and no access to anything the Host did n
 one in TypeScript or in Lua:
 
 ```text
-packages/fire_nova/
+packages/example-script/
   scripts/
-    ember_echo.ts    compiled by the Runtime Script Toolchain
-    bonus.lua        shipped unchanged, for the author who would rather write Lua
+    welcome.ts       compiled by the Runtime Script Toolchain
+    ding.lua         shipped unchanged, for the author who would rather write Lua
   data/.generated/
-    fire_nova.script.json   the Script Artifact. Committed in the Official Package Collection
+    example-script.script.json   the Script Artifact. Committed in the Official Package Collection
 ```
 
-The sources live **inside** the Package, unlike a Datascript. A Datascript sits outside because only
-artifacts belong in a Package folder; a Runtime Script is the Package's own content.
+Runtime Script sources and Package-local Datascripts both live inside their Package. A Runtime
+Script runs on the realm; a Datascript runs on the author's machine.
 
 Every file opens with its **Script Directives**, `//` in TypeScript and `--` in Lua:
 

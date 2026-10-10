@@ -17,7 +17,7 @@ fn build_module_bytes() -> Vec<u8> {
             "--release",
             "--target",
             "wasm32-unknown-unknown",
-            "--features=debug_reducers",
+            "--features=debug_reducers,package_test_fixture",
         ],
     );
     let bytes = std::fs::read(&wasm).expect("the test Module output is missing");

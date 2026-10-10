@@ -1,10 +1,10 @@
-//! `teardown_package` against a real Shard, with the reference Package as the Package torn down.
+//! `teardown_package` against a real Shard, with Core's inert fixture Package.
 
 mod support;
 
 use support::Standalone;
 
-const PACKAGE: &str = "example";
+const PACKAGE: &str = "test_fixture";
 
 fn arg(value: &str) -> String {
     serde_json::to_string(value).expect("a string encodes as JSON")

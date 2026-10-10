@@ -316,10 +316,7 @@ pub struct BotInviteIntent {
 /// player's own CMSG_GROUP_INVITE is a pure gateway-side resolve-then-call with no module-side
 /// pre-check either.
 ///
-/// Its ONLY callers are Packages (see the `package_only!` macro in `actor.rs`): a
-/// build with no REAL package installed — the common case, since only the inert reference Package,
-/// `packages/example/`, ships by default — has no caller for this, which is a designed state, not
-/// dead code.
+/// Only Packages call this operation. A Core checkout without an installed Rust Package has no caller.
 #[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn emit_bot_invite_intent(ctx: &ReducerContext, inviter_guid: u64, target_guid: u64) {
     emit_bot_group_intent(ctx, bot_op::INVITE, inviter_guid, target_guid);

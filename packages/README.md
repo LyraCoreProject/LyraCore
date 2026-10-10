@@ -1,76 +1,72 @@
-# packages/
+# Packages
 
-Every folder here is an ENABLED Package: `module/build.rs` compiles its `src/` into the module wasm
-and `lyracore client sync` packs its `client/` into your game client. No manifest lists them — this
-directory listing is the enabled set.
+Each folder here is an enabled Package. The build compiles its `src/` into the Module, and
+`lyracore client sync` installs its `client/` half. A Package can also contain Runtime Script
+sources in `scripts/`, Datascript sources in `datascripts/`, or generated artifacts in
+`data/.generated/`. Any one of these is enough. Core ships no enabled Packages.
 
-`example/` is the maintained reference Package. `lyracore packages new <name>` copies and renames it
-to scaffold a new one; read its `src/mod.rs` for the structure a Package's Rust half follows.
+Start with the Reference Package ladder in the
+[Official Package Collection](https://github.com/LyraCoreProject/packages#packages):
 
-`docs/package-api.md` is the Package API: the versioned list of what a Package's Rust half may call,
-and what core promises about it. The build lints every file here against that list and fails on a
-path outside it, naming the Package, the file and the line.
+| Rung | Example |
+| --- | --- |
+| `example-script` | TypeScript welcome on login and Lua welcome on level-up |
+| `example-client` | A client addon and a UI Transform |
+| `example-data` | A Datascript that clones one spell |
+| `example-rust` | A Rust hook, Package Config and a Package test |
+| `example-all` | Rust asks a Runtime Script, with Package Config as the fallback |
 
-A Package may also have a DATA half: `data/.generated/*.json`, the Package Deltas a Datascript
-generates, which the importer reapplies after every base import. `fire_nova/` is the worked example;
-its Datascript lives at `datascripts/src/fire_nova/spells.ts`, because only artifacts belong inside
-a Package folder. Any one half — `src/`, `client/`, `scripts/` or `data/` — is a valid Package on
-its own.
-
-A Package may also ship RUNTIME SCRIPTS: `scripts/*.ts` and `scripts/*.lua`, Lua the Module runs on
-a gameplay event inside the Runtime Script Host. These sources DO live inside the Package, unlike a
-Datascript, because they are the Package's own content rather than a description of client-derived
-data. `lyracore packages build` compiles them into one Script Artifact at
-`data/.generated/<name>.script.json`. `fire_nova/scripts/ember_echo.ts` is the worked example; it
-ships switched off. Each file opens with its Script Directives:
-
-```ts
-// @event on_cast_resolved
-// @id 100200
-// @priority 10
-// @enabled false
+```bash
+./lyracore packages new my-welcome
+./lyracore packages new my-welcome --from example-rust
+./lyracore packages add example-script
 ```
 
-`@event` and `@id` are required, `@priority` defaults to 0 and `@enabled` to true. A TypeScript
-script declares `function script(): number | void`; what it returns is the Script Answer the asking
-Package reads back. See `docs/development-cli.md` for the Host API, the identifier band and how the
-build checks an event name against the Module.
+`new` defaults to `example-script`. Both `new` and a bare-name `add` fetch the collection tag
+matching the Package API version in [`docs/package-api.md`](../docs/package-api.md). A missing tag
+refuses the operation. The Provenance Stamp records the collection revision; a scaffold also
+records its rung and remains the author's own copy. `packages update` can advance an installed
+Official Package Source at the compatible tag, but does not replace a scaffold.
 
-A Package that must change a stock FrameXML or GlueXML file declares the edit in
-`client/ui-transforms.json` instead of shipping a whole replacement under `client/mpq/`. Each entry
-names a path under `Interface/FrameXML/` or `Interface/GlueXML/`, one anchor (`before`, `after` or
-`replace`) that must occur exactly once in the file, and the text to insert. Two Packages may edit
-one file while their anchors stay apart. `lyracore client sync` composes the edits against your own
-client's stock bytes, which makes the result baseline-derived: it reaches your client only, and
-`lyracore client pack` refuses to put it in a distributable artifact. See
-`docs/development-cli.md` for the anchors, the conflict rules and the load order.
+A folder or Git URL passed to `packages add` keeps its own source rules. Review a Package as you
+would a Core patch. Its Rust is trusted Module code.
 
-`lyracore packages disable <name>` moves a folder out of here into `.lyracore/packages-disabled/`,
-where the build cannot see it, and `lyracore packages enable <name>` moves it back. The location is
-the enabled state, so this listing stays the whole truth about what compiles.
+## Building source
 
-`lyracore packages add <git-url>` installs a Package from a repository whose root is the Package
-itself, and records the commit it came from. `lyracore packages update <name>` advances that Package
-to the repository's current commit, keeping the old folder until the new one preflights.
+`lyracore packages build` runs Package-local `datascripts/*.ts` as well as Core's legacy
+`datascripts/src/<package>/*.ts`. Datascripts use the Authoring Library and a Base Snapshot from
+your own client data. Their Package Deltas and Build Identities stay local under `data/.generated/`.
+Never commit a Package Delta to the collection.
 
-`lyracore packages add <name>` installs a first-party Package by bare name instead, resolved from
-the Official Package Collection (`LyraCoreProject/packages`) and pinned to the commit it was
-resolved at. `packages update` does not advance this kind.
+Runtime Scripts use `scripts/*.ts` or `scripts/*.lua`. The build compiles them into a Script
+Artifact and records its Build Identity. These two files may be committed to the collection.
+Each source starts with an event and a durable Script ID:
 
-See `docs/development-cli.md` for `lyracore packages add`, `list`, `new`, `enable`, `disable`,
-`remove`, and `update`.
+```ts
+// @event on_login
+// @id 100300
+```
 
-## Operator-tunable config
+Optional `@priority` defaults to `0`, and `@enabled` defaults to `true`. TypeScript declares
+`function script(): number | void`. A numeric Script Answer is what a Package reads through
+`ask()`. Choose distinct IDs before installing multiple copies of a rung. After scaffolding,
+run `packages build` to produce artifacts for the renamed source.
 
-A Package that wants a value the Operator can change without a republish seeds it as Package
-Config: call `crate::package_config::ensure_package_config_default(ctx, "<your package>", "<key>",
-"<default value>")` from your own ensure/init path, every time it runs. The call only inserts when
-the row is absent, so a repeated call never clobbers a value the Operator has since edited.
-`spacetime sql "select * from game_package_config"` then shows real keys with live values, not a
-blank slate someone has to populate by hand.
+## Client content
 
-The Operator changes a value with the `set_package_config` reducer (`package_name, key, value,
-allow_new`). It refuses an unknown `(package_name, key)` pair — naming the package's existing keys —
-unless `allow_new` is set, so a typo in the key name fails loud instead of writing a key nobody
-reads. A dedicated CLI verb for this reducer is planned (#370); until then, call it directly with
-`spacetime call`.
+Put addons under `client/addons/<Name>/`. A UI Transform in `client/ui-transforms.json` inserts
+text at one unique `before`, `after` or `replace` anchor in a FrameXML or GlueXML Baseline.
+`client sync` composes it against your own client's bytes. `client pack` refuses to distribute
+that derived output. The client rung supplies an insertion, never a copied Baseline.
+
+## Config and location
+
+Rust Packages seed Package Config with `ensure_package_config_default` and read it through
+`game_package_config`. Seeding preserves a value the Operator already changed. On a development
+topology, `lyracore packages config NAME KEY VALUE` changes it without a republish.
+
+`packages disable` runs Package Teardown and moves the folder to `.lyracore/packages-disabled/`.
+`packages enable` moves it back. Folder location is the enabled state.
+
+See the [CLI commands](https://github.com/LyraCoreProject/lyracore-cli/blob/main/docs/commands.md)
+for build, replay, client installation and Package management.

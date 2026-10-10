@@ -961,15 +961,15 @@ rows, so the Package's tables must be empty first. `lyracore packages disable` r
 _Avoid_: uninstall, package wipe, cleanup
 
 **Reference Package**:
-The maintained, minimal Package at `packages/example/`, committed to the LyraCore repo and present in every checkout. It doubles as living documentation for a Package's shape and is the template `lyracore packages new` copies and renames. It is deliberately inert: Rust-only, one commented hook pattern, no gameplay behavior.
+One rung of the maintained example ladder in the [Official Package Collection](https://github.com/LyraCoreProject/packages#packages): `example-script`, `example-client`, `example-data`, `example-rust` or `example-all`. Each adds a small welcome at one level of the Package API. `lyracore packages new NAME [--from RUNG]` copies and renames one at the collection tag matching the checkout's Package API version. The default is `example-script`. Core ships no enabled Reference Package.
 _Avoid_: template package, sample package
 
 **Package Source**:
-Where an installed Package was copied from: a local folder on the Operator's machine, a Git Package Source, or an Official Package Source. A scaffolded Package (`lyracore packages new`) has none. It was not copied from anywhere the Operator chose, so its Provenance Stamp records a scaffold origin instead.
+Where an installed Package was copied from: a local folder on the Operator's machine, a Git Package Source, or an Official Package Source. A scaffolded Package records a scaffold origin, its Reference Package rung and the collection revision. The author owns that copy; `packages update` does not replace it.
 _Avoid_: origin, upstream, repo
 
 **Git Package Source**:
-A repository whose root is one Package, named by a URL. `lyracore packages add <git-url>` clones it and installs a copy of its tree, without the `.git`. An installed Package is never a working copy, so `lyracore packages update` re-clones rather than pulling. A Package installed this way is Git-backed, and it is the only kind `update` can advance.
+A repository whose root is one Package, named by a URL. `lyracore packages add <git-url>` clones it and installs a copy of its tree, without the `.git`. An installed Package is never a working copy, so `lyracore packages update` re-clones rather than pulling. A Package installed this way is Git-backed, and `packages update` can advance it.
 _Avoid_: git remote, upstream repo, checkout
 
 **Official Package Collection**:
@@ -977,15 +977,15 @@ The one repository, `LyraCoreProject/packages`, that holds several first-party P
 _Avoid_: registry, package repository, marketplace
 
 **Official Package Source**:
-The top-level directory of the Official Package Collection that a bare `lyracore packages add <name>` installed. Its Provenance Stamp records the collection's URL and the Recorded Revision the directory was resolved at, the same way a Git Package Source records its repository and commit. The commit is pinned at install time: `lyracore packages update` refuses this kind by name, so a later commit to the collection cannot silently change what is installed.
+The top-level directory of the Official Package Collection that a bare `lyracore packages add <name>` installed. Its Provenance Stamp records the collection's URL and the Recorded Revision the directory was resolved at, the same way a Git Package Source records its repository and commit. The checkout's Package API version selects a collection tag. `packages update` resolves that tag again and records the new commit after the update passes its checks.
 _Avoid_: registry entry, published package
 
 **Recorded Revision**:
-The exact commit a Git Package Source or an Official Package Source was installed at, held in its Provenance Stamp. `lyracore packages update` advances a Git Package Source from this rather than from whatever the repository's branch points at now, so it can name both commits when it reports or restores.
+The exact commit a Git Package Source, Official Package Source or Reference Package was copied from, held in its Provenance Stamp. `lyracore packages update` advances a Git Package Source from this rather than from whatever the repository's branch points at now, so it can name both commits when it reports or restores.
 _Avoid_: version, tag, pin
 
 **Provenance Stamp**:
-The record `lyracore packages add` writes inside an installed Package: its Package Source, its Content Identity at install time, when it was installed, and, for a Git or Official Package Source, its Recorded Revision. A Package without one is still a Package; only its history is unknown.
+The record `lyracore packages add` writes inside an installed Package: its Package Source, its Content Identity at install time, when it was installed, and, for a Git or Official Package Source or a scaffold, its Recorded Revision. A scaffold also records its Reference Package rung. A Package without one is still a Package; only its history is unknown.
 _Avoid_: manifest, lockfile, metadata
 
 **Content Identity**:
@@ -1005,7 +1005,7 @@ The maintained, minimal Datascript at `datascripts/src/reference.ts`. It names r
 _Avoid_: sample script, test script
 
 **Authoring Library**:
-The typed API at `datascripts/lib/` that a Datascript writes against: `data.spell(id)`, `.clone(newId)`, `.set(field, value)`, `.effect(0 | 1 | 2)`, and a `run(package, script)` that emits one Package Delta. It reads the Base Snapshot and refuses exactly what the artifact parser refuses, so a Datascript fails at author time rather than at import. Its source lives outside the Package folder; only the generated artifact goes inside.
+The typed API at `datascripts/lib/` that a Datascript writes against: `data.spell(id)`, `.clone(newId)`, `.set(field, value)`, `.effect(0 | 1 | 2)`, and a `run(package, script)` that emits one Package Delta. It reads the Base Snapshot and refuses exactly what the artifact parser refuses, so a Datascript fails at author time rather than at import. The library lives in Core. A Package carries its Datascripts in `datascripts/`; Core's legacy `datascripts/src/<package>/` path also works.
 _Avoid_: SDK, framework, DSL, builder API
 
 **Base Snapshot**:

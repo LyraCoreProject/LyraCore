@@ -190,9 +190,8 @@ macro_rules! character_owned {
 
 /// Registers a periodic pass with the core scheduler tick pipeline. Same build.rs
 /// text-scan mechanism as the `character_owned` marker: write the invocation next to the code it
-/// drives (core src/ or a drop-in `packages/<name>/src/` file — every checkout has at least the
-/// reference Package, `packages/example/`) and the generated `GAME_TICK_PASSES` registry picks it
-/// up with zero core-file edits.
+/// drives, in core src/ or a drop-in `packages/<name>/src/` file. The generated `GAME_TICK_PASSES`
+/// registry picks it up with zero core-file edits.
 ///
 /// The ONE accepted shape (anything else fails the build loudly; commented-out/quoted marker
 /// syntax is inert — build.rs strips comments and strings before scanning):

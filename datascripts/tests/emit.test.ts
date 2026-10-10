@@ -7,7 +7,7 @@
 //
 //   LYRACORE_BASE_SNAPSHOT=datascripts/tests/fixtures/base-snapshot.json \
 //   LYRACORE_PACKAGES_ROOT=<scratch dir> \
-//   bun run datascripts/src/fire_nova/spells.ts
+//   bun run datascripts/tests/fixtures/fire_nova.ts
 //
 // The Datascript is run as a SUBPROCESS rather than imported, because the source hash it records is
 // the entry script's own digest — which only means what it says when the entry script is the
@@ -19,7 +19,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const REPO = join(import.meta.dir, "..", "..");
-const DATASCRIPT = join(REPO, "datascripts", "src", "fire_nova", "spells.ts");
+const DATASCRIPT = join(import.meta.dir, "fixtures", "fire_nova.ts");
 const SNAPSHOT = join(import.meta.dir, "fixtures", "base-snapshot.json");
 const FROZEN = join(import.meta.dir, "fixtures", "fire-nova.expected.json");
 

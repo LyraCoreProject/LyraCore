@@ -55,7 +55,7 @@ publish presents as an unrelated mid-session hang, not a loud "no such table".
 ## 2. Inventory
 
 **285 tables**, all of them in `module/src/**`: 128 public, 157 private. No table comes from a
-package in this tree; `packages/example` is the only in-tree package and it declares none. Recount
+Package in this tree. Packages are installed separately. Recount
 rather than trust the numbers below, which drift on every schema change. The pattern matches both
 `#[table(...)]` and the fully qualified `#[spacetimedb::table(...)]`; missing the second form
 undercounts. The second command lists the tables per file, which is what the rows below add up:
