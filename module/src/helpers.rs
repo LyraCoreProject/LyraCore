@@ -51,7 +51,7 @@ pub fn entity_by_owner(ctx: &ReducerContext, owner: Identity) -> Option<WorldEnt
 }
 
 /// The ACTING entity resolved by guid — `entity_by_owner`'s guid-keyed twin for the trusted
-/// gateway verb surface (stage 4), where the actor arrives as an explicit `actor_guid` on a
+/// gateway verb surface, where the actor arrives as an explicit `actor_guid` on a
 /// `require_operator`-gated reducer instead of via `ctx.sender()`. Same in-transit fence, same
 /// shared [`gate_by_guid`]: a mid-transfer character reads "not in world" on the `gw_*` path
 /// exactly as it does on the sender path. NOT [`live_entity`], which deliberately skips the fence.
@@ -73,11 +73,11 @@ pub fn acting_entity_by_guid(ctx: &ReducerContext, guid: u64) -> Option<WorldEnt
 /// SCOPE — this gate is the REFUSE verdict, and refusal is NOT the right answer everywhere. Three
 /// other verdicts exist and are deliberately not routed through here; the audited table lives in
 /// `transfer.rs`'s module doc:
-///   * DEFER    — `loot::credit_purse` folds a post-begin `money` delta into the escrowed blob
+///   * DEFER, `loot::credit_purse` folds a post-begin `money` delta into the escrowed blob
 ///     (`transfer::defer_money_delta`); refusing would DROP a third party's copper.
 ///   * REGENERATE — `auth::establish_session` rewrites `Character.owner_identity`, which is
 ///     per-CONNECTION derived state the destination rebinds on arrival.
-///   * OPEN     — `group::group_accept`/`group_uninvite`/`group_leave`; spec puts group
+///   * OPEN, `group::group_accept`/`group_uninvite`/`group_leave`; spec puts group
 ///     membership on realm-core, settled by the group slice.
 ///
 /// Same `.find()`-then-check ordering as `entity_by_owner` above, and the same shared
@@ -100,19 +100,7 @@ pub fn character_by_name(ctx: &ReducerContext, name: &str) -> Option<Character> 
     )
 }
 
-/// The ONE place in the tree that asks "is this row's character mid-transfer?" and acts on the
-/// answer. All three chokepoints above route through it; `guid_of` is the only thing they differ in.
-///
-/// It exists because of the shape of the mutation it is defending against. Each
-/// chokepoint used to compute its own `in_transit` boolean inline, and a `!` glued anywhere into
-/// that expression — onto `is_in_transit`, or onto the `candidate.as_ref().is_some_and(..)` around
-/// it — inverts the fence with the same identifiers in the same order, which no `.contains()` scan
-/// can see. The answer used to be pinning all three bodies verbatim as strings inside a test, so
-/// every legitimate edit had to be made twice. Collapsing them to one call site is the structural
-/// version of that pin: there is now a single two-line expression to get wrong, and it is inside
-/// `.cargo/mutants.toml`'s cargo-mutants scope — where `replace gate_by_guid -> None` is CAUGHT.
-///
-/// The DECISION itself stays in [`gate_in_transit`], which is pure and pinned by a direct assertion.
+/// Apply the transfer fence to a candidate row identified by its Character guid.
 fn gate_by_guid<T>(
     ctx: &ReducerContext,
     candidate: Option<T>,
@@ -124,19 +112,7 @@ fn gate_by_guid<T>(
     gate_in_transit(candidate, in_transit)
 }
 
-/// The decision every in-transit fence in this file reduces to, pulled out pure and generic so its
-/// SENSE — not just its presence — can be pinned by a direct assertion instead of a source scan.
-///
-/// Every chokepoint above used to spell this as `.filter(|x| !is_in_transit(..))` at
-/// the call site. A scan can confirm `is_in_transit` is called and in what order, but nothing short
-/// of running the code can tell `!is_in_transit(..)` apart from `is_in_transit(..)` — same
-/// identifiers, same order, opposite meaning. Dropping that one `!` made `entity_by_owner` return
-/// ONLY in-transit entities and `None` for everyone else, and all 533 module tests stayed green.
-///
-/// Now there is no `!` left at any call site for a mutation to flip: [`gate_by_guid`] computes
-/// `in_transit` as a plain (unnegated) boolean and hands it here, where this file's
-/// `gate_in_transit_refuses_an_in_transit_candidate_and_returns_a_normal_one` test pins the branch
-/// directly with concrete values — swap the branches and that test fails by name.
+/// A Character in transit is absent from normal gameplay reads.
 pub(crate) fn gate_in_transit<T>(candidate: Option<T>, in_transit: bool) -> Option<T> {
     if in_transit {
         None
@@ -145,10 +121,6 @@ pub(crate) fn gate_in_transit<T>(candidate: Option<T>, in_transit: bool) -> Opti
     }
 }
 
-/// Squared 3D distance between two entities — the one spelling of the `dx*dx + dy*dy + dz*dz`
-/// range-check shape `npc_interaction_gate` / `apply_inspect` / trainer validation used to paste.
-/// (Loot's corpse variant keeps its scalar-coordinate form in `items/ops.rs` — different signature,
-/// not a copy of this one.)
 pub(crate) fn dist_sq(a: &WorldEntity, b: &WorldEntity) -> f32 {
     let (dx, dy, dz) = (b.x - a.x, b.y - a.y, b.z - a.z);
     dx * dx + dy * dy + dz * dz
@@ -210,8 +182,8 @@ pub(crate) fn player_interaction_gate(
 /// `game_world_entity` scan. Coverage is by WHOLE cells (`spatial::GRID_CELL_SIZE`), so the result
 /// is a superset of the exact circle: callers keep their own precise distance check. Cost scales
 /// with the neighborhood's population, not the world's. `instance_id` is a REQUIRED param (no
-/// default) so the compiler finds every call site (work-item 190 slice 1) — pass the ACTING
-/// entity's own `instance_id`; every slice-1 caller is at instance 0, so behavior is unchanged.
+/// default) so the compiler finds every call site, pass the ACTING
+/// entity's own `instance_id`; every caller is at instance 0, so behavior is unchanged.
 pub(crate) fn entities_near(
     ctx: &ReducerContext,
     map_id: u32,
@@ -241,21 +213,12 @@ pub(crate) fn entities_near(
 }
 
 /// Is `e` in the `(map_id, instance_id)` isolation partition `entities_near` queries for? The exact
-/// predicate the `by_grid` filter tuple encodes (work-item 190 slice 1) — pulled out pure so the
+/// predicate the `by_grid` filter tuple encodes, pulled out pure so the
 /// instance dimension is unit-testable without a live `ReducerContext`.
 pub(crate) fn in_same_partition(e: &WorldEntity, map_id: u32, instance_id: u64) -> bool {
     e.map_id == map_id && e.instance_id == instance_id
 }
 
-/// The nearest live entity to `origin` matching `pred`, restricted to `origin`'s OWN `(map_id,
-/// instance_id)` partition via [`in_same_partition`] — a raw squared distance compared ACROSS maps
-/// or instances is meaningless (two guids can be numerically close while standing on different
-/// continents), so every "nearest X" scan must apply this same partition filter before comparing
-/// distances. Candidates come off the `by_map` index (map-scoped, not a raw `.iter()` — the
-/// partition-discipline tripwire), narrowed to the instance in-code; callers with a natural search
-/// radius should prefer `entities_near` instead (grid-indexed, cheaper at scale). Used by the debug
-/// "nearest" test levers (`debug_kill_nearest`, `debug_ranged_attack_nearest`, `debug_skin_nearest`)
-/// and the nearest-trainer scans in `skill.rs`, which used to duplicate this loop byte-for-byte.
 ///
 /// Every one of those callers is a `debug_reducers` lever ("nearest X" is a test-harness affordance —
 /// the real client always names its target), so the whole helper is gated with them: a production
@@ -315,7 +278,7 @@ pub fn live_entity(ctx: &ReducerContext, guid: u64) -> Result<WorldEntity, Strin
 
 /// [`character_by_guid`], REFUSING (`Err`) instead of `Option::None` — the durable-row twin of
 /// [`live_entity`] for the REFUSE character fence, hand-rolled as `character_by_guid(ctx,
-/// guid).ok_or_else(|| format!("no character ..."))?` at half a dozen call sites. Same
+/// guid).ok_or_else(|| format!("no character..."))?` at half a dozen call sites. Same
 /// zero-behavior-change discipline as `live_entity`: the default message below is what most callers
 /// already spelled verbatim; a caller with different wording keeps it via `.map_err(...)`.
 ///
@@ -352,14 +315,6 @@ pub(crate) fn grid_of(ctx: &ReducerContext, guid: u64) -> (u32, u64, i32, i32) {
         .unwrap_or((0, 0, 0, 0))
 }
 
-/// The same `(map_id, instance_id, grid_x, grid_y)` shape [`grid_of`] returns, read straight off an
-/// already-fetched `WorldEntity` — zero `game_world_entity` lookup. The event-constructor `signal_at`
-/// variants (`SpellCastEvent`/`CombatEvent`, perf catalog 2.3) and the chat broadcast reducer whose
-/// sender entity is fetched up front (`send_emote`) all use this instead of
-/// `grid_of` when the entity is in hand — a landed swing with a seal proc + a queued strike used to
-/// pay the `grid_of` PK lookup up to twelve times over for what is, in every case, the SAME row.
-/// Pulled out pure (module crate convention — no `ReducerContext` test harness) so the field order
-/// can't quietly drift from `grid_of`'s: [`tests::entity_addr_matches_grid_of_field_order`] pins it.
 pub(crate) fn entity_addr(e: &WorldEntity) -> (u32, u64, i32, i32) {
     (e.map_id, e.instance_id, e.grid_x, e.grid_y)
 }
@@ -459,11 +414,6 @@ pub(crate) mod tests {
         }
     }
 
-    /// The real regression this slice exists to prevent: two entities sharing a map AND a grid cell
-    /// but living in DIFFERENT instances must never both come back from the same `entities_near`
-    /// partition query — `in_same_partition` (the pure predicate `entities_near` actually filters
-    /// with) must separate them into disjoint result sets. Fails if the instance dimension is ever
-    /// dropped from the filter (e.g. a future edit narrows it back to `e.map_id == map_id` alone).
     #[test]
     fn entities_near_partitions_distinct_instances_on_the_same_cell_into_disjoint_sets() {
         let same_map = 1u32;
@@ -521,15 +471,6 @@ pub(crate) mod tests {
         );
     }
 
-    /// THE fix. `entity_by_owner` / `character_by_guid` / `character_by_name` all
-    /// reduce to this one pure decision, so pinning it here pins the sense of all three chokepoints
-    /// at once — no `ReducerContext` needed, unlike the reducers that call it.
-    ///
-    /// This is the direct behavioural equivalent of the mutation the issue was filed over: swap the
-    /// two branches below (`in_transit => candidate` / `else => None`) and this test fails by name.
-    /// The old code had no such test — only a source scan checking that `is_in_transit` appeared in
-    /// the right order — and a single dropped `!` at the call site satisfied that scan while
-    /// returning ONLY in-transit rows.
     #[test]
     fn gate_in_transit_refuses_an_in_transit_candidate_and_returns_a_normal_one() {
         assert_eq!(

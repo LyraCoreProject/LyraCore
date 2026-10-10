@@ -1,11 +1,7 @@
-//! Movement wire mapping: the inbound `MSG_MOVE_*` relay (peer animation), the server-driven
-//! `SMSG_MONSTER_MOVE` leg, and the `MovementInfo` ↔ raw-bytes carrier used to ferry a movement
-//! block across the DB. Pure code-motion out of `mod.rs`.
-
 use super::*;
 
 /// The opcode of an inbound movement message, if it's one of the slice's relayed `MSG_MOVE_*`
-/// (Phase 5). Used to record + relay the move under the *same* opcode.
+/// Records and relays movement under the same opcode.
 pub fn relayed_move_opcode(msg: &ClientOpcodeMessage) -> Option<u32> {
     use movement_opcodes as m;
     Some(match msg {
@@ -30,7 +26,7 @@ pub fn relayed_move_opcode(msg: &ClientOpcodeMessage) -> Option<u32> {
     })
 }
 
-/// Re-emit a relayed `MSG_MOVE_*` to an observer (Phase 6): the **same** opcode, the mover's
+/// Re-emit a relayed `MSG_MOVE_*` to an observer: the **same** opcode, the mover's
 /// (packed) guid, and the carried `MovementInfo` verbatim — which is what makes the peer client
 /// animate run/walk/turn rather than teleport. Returns `None` for a non-relayed opcode. The
 /// crate packs the guid and frames the header on write (`ServerOpcodeMessage::write_*_server`).
@@ -270,7 +266,7 @@ pub fn build_force_run_speed(guid: u64, speed: f32) -> SMSG_FORCE_RUN_SPEED_CHAN
     }
 }
 
-/// Build `SMSG_MONSTER_MOVE` for one server-driven creature leg (Phase N2): a straight walk from
+/// Build `SMSG_MONSTER_MOVE` for one server-driven creature leg: a straight walk from
 /// `start` to `dest` over `duration_ms`. EXACTLY ONE destination point — the crate writes a single
 /// spline point absolute, avoiding its multi-point packed-offset encoding (not 1.12-compatible).
 /// `spline_id` must strictly increase per creature or the client ignores the new spline.
@@ -374,7 +370,7 @@ pub fn build_taxi_move_raw(
     Some((0x00DD, body))
 }
 
-/// Build `SMSG_MONSTER_MOVE` as a FACING-ONLY packet (#518): `mover_guid` does not move — `pos` is
+/// Build `SMSG_MONSTER_MOVE` as a FACING-ONLY packet: `mover_guid` does not move, `pos` is
 /// both the spline point and its sole (degenerate) destination, `duration` 0 — but its heading
 /// changes to `angle_rad`. This is the wire tool the issue calls out as "already exists, unwired":
 /// gtker 0.3 models 1.12's `FacingAngle` `MonsterMoveType` (`spline_point`/`splines` framing

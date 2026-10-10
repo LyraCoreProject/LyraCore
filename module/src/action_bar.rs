@@ -1,7 +1,7 @@
 //! Creation-time action-bar rows — `game_player_action` is the per-character bar the gateway's login
 //! sequence reads FIRST (before falling back to synthesizing a bar from the spellbook, see
 //! `gateway/src/codec/entity.rs::login_sequence_messages`). Mirrors the `game_createinfo_spell` /
-//! `game_player_spell` precedent (work-item 178) one level over: `game_createinfo_action` is the
+//! `game_player_spell` precedent one level over: `game_createinfo_action` is the
 //! per-(race, class) dump-sourced default layout (`playercreateinfo_action`), copied into
 //! `game_player_action` at character creation exactly like `grant_createinfo_spells` copies the spell
 //! kit. UNLIKE the spell kit there is no hand-authored fallback seeded into `game_createinfo_action` —
@@ -24,7 +24,7 @@ use crate::spell::spellbook::createinfo_row_matches; // shared (race,class) wild
 /// `action` | `action_type` mirror the client's action-button encoding (`action_type` 0 = spell, other
 /// values = item/macro/etc — see `gateway/src/codec/entity.rs`'s packing). Hand-authored data has no
 /// client DBC of its own (createinfo exists in no DBC); this table is entirely importer-populated
-/// (`playercreateinfo_action`, work-item 212) — never seeded, unlike `game_createinfo_spell`. `row_id`
+/// (`playercreateinfo_action`), never seeded, unlike `game_createinfo_spell`. `row_id`
 /// is an importer-assigned dense id (the `game_start_item`/`game_graveyard_zone` convention), not a
 /// logical key — the table is a flat bag of rows scanned in full, like `game_createinfo_spell`. [static]
 #[table(accessor = game_createinfo_action, public)]

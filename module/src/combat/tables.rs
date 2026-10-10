@@ -31,16 +31,16 @@ pub(crate) const MELEE_RANGE_LEEWAY_SQ: f32 =
                                                                    // standstill does not (no leeway leak into stationary combat).
 pub(crate) const MELEE_RANGE_LEEWAY_CREATURE_SQ: f32 = (5.0 + 8.0 / 3.0) * (5.0 + 8.0 / 3.0); // (7.67 yd)²
 pub(crate) const MELEE_LEEWAY_WINDOW_MS: u32 = 1200;
-pub(crate) const RANGED_RANGE_SQ: f32 = 1225.0; // (35 yd)² — ranged auto-attack max reach; inside MELEE_RANGE_SQ is "too close" (shot hard-fails, 097)
-pub(crate) const RANGED_INITIAL_SHOT_MS: u32 = 500; // Auto Shot wind-up before the FIRST shot (vanilla's 0.5s RANGED_ATTACK timer re-arm), vs firing instantly on activation (097)
+pub(crate) const RANGED_RANGE_SQ: f32 = 1225.0; // (35 yd)² — ranged auto-attack max reach; inside MELEE_RANGE_SQ is "too close" (shot hard-fails)
+pub(crate) const RANGED_INITIAL_SHOT_MS: u32 = 500; // Auto Shot wind-up before the FIRST shot (vanilla's 0.5s RANGED_ATTACK timer re-arm), vs firing instantly on activation
                                                     // Projectile speeds from the real 1.12 Spell.dbc (speed column, calibrated on Fireball=24.0):
                                                     // spell 75 Auto Shot = 40 yd/s, spell 5019 wand Shoot = 20 yd/s. Drive the shot's damage-at-impact
-                                                    // delay (dist/speed) so the hit lands with the client's arrow, not at the muzzle (097).
+                                                    // delay (dist/speed) so the hit lands with the client's arrow, not at the muzzle.
 pub(crate) const AUTO_SHOT_PROJECTILE_SPEED: f32 = 40.0;
 pub(crate) const WAND_PROJECTILE_SPEED: f32 = 20.0;
 // The 1.12 MovementFlags bits that mean "actually translating" (vmangos movementFlagsMask minus the
 // turn/pitch bits): forward|backward|strafe L/R|jumping|falling-far. Turning in place must NOT
-// count — vanilla keeps Auto Shot firing while you spin, but DEFERS shots while you move (097).
+// count — vanilla keeps Auto Shot firing while you spin, but DEFERS shots while you move.
 pub(crate) const MOVE_MASK_MOVING: u32 = 0x1 | 0x2 | 0x4 | 0x8 | 0x2000 | 0x4000;
 /// The single forward bit the SERVER sets on a unit it moves itself (vanilla `MOVEFLAG_FORWARD`,
 /// which its own spline launch records on the unit). A client-driven unit sends its own flags on
@@ -215,12 +215,6 @@ pub fn melee_attack_power(strength: u32, level: u32) -> u32 {
 const CLASS_HUNTER: u8 = 3;
 const CLASS_ROGUE: u8 = 4;
 
-/// Class-specific melee attack power. Agility-based classes (Rogue/Hunter) use the
-/// vanilla `level*2 + Str + Agi - 20` curve so AGILITY feeds the swing — without this a leveling Rogue
-/// gained nothing from their primary stat. Every other class (Warrior/Paladin + the default) keeps the
-/// Str-class `melee_attack_power` curve, so their AP is byte-identical to before (baseline-safe). Clamped
-/// ≥0. Known limitation: pure casters technically use `Str-10` in vanilla, but that's an
-/// unrequested balance change — left on the Str-class default until a caster-melee pass needs it.
 pub fn melee_attack_power_for(class: u8, strength: u32, agility: u32, level: u32) -> u32 {
     match class {
         CLASS_ROGUE | CLASS_HUNTER => (level * 2 + strength + agility).saturating_sub(20),
@@ -275,12 +269,6 @@ pub fn weapon_swing_range_ap(ap: u32, dmg_min: u32, dmg_max: u32, delay_ms: u32)
     (dmg_min + bonus, dmg_max + bonus)
 }
 
-/// The vanilla dual-wield OFF-HAND penalty: an off-hand swing's `[min, max]` (already the AP-scaled
-/// off-hand weapon range from `weapon_swing_range_ap`) lands at 50% of its unpenalized damage, floored
-/// at 1 so a very low-roll off-hander never swings for 0. Pure — unit-tested. `resolve_swing`'s off-hand
-/// roll applies this to the off-hand's own AP-scaled range BEFORE the shared
-/// attack-table roll (`roll_swing_with_range`), so crit/glancing/armor still multiply off the already-
-/// halved base — the same shape as `weapon_swing_range_ap`'s main-hand range feeding `roll_swing`.
 pub fn apply_offhand_penalty(min: u32, max: u32) -> (u32, u32) {
     ((min / 2).max(1), (max / 2).max(1))
 }
@@ -377,12 +365,6 @@ pub fn armor_mitigation_pct(armor: u32, attacker_level: u32) -> u32 {
     (armor * 100 / denom).min(75)
 }
 
-/// Magic-school resistance reduction as a whole-number percent (vanilla average-resist): `75 ×
-/// resistance / (caster_level × 5)`, capped at 75%. Resistance beyond the per-level cap (`caster_level ×
-/// 5`) doesn't help — that's the 75% ceiling. `resistance == 0` (no resist aura — every unit today) or a
-/// 0-level caster → 0%, so a magic hit is byte-identical to before (baseline-safe). The MAGIC twin of
-/// `armor_mitigation_pct` (physical) — both live here as the canonical mitigation formulas; the
-/// spell-damage path folds this in (`spell::apply_resistance`). Pure — unit-tested.
 ///
 /// PROVENANCE: the linear `75 × resist / (level×5)` average-resist with a 75% cap is the widely-used
 /// 1.12 community approximation (the real engine rolls partial-resist bands whose *average* this models)

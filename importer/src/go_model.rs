@@ -95,8 +95,6 @@ struct DoorTemplate {
     size: f32,
 }
 
-/// Every `gameobject_template` row that classifies as DOOR/BUTTON (`classify_go_type` 0/1) — every
-/// other type (CHEST, GOOBER, GATHER, ...) is out of scope for this slice's collider geometry.
 fn door_templates(dump: &str) -> Vec<DoorTemplate> {
     parse_table(dump, "gameobject_template")
         .iter()

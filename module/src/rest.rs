@@ -1,4 +1,4 @@
-//! Rest state (196): entering an inn/rest-area sets the RESTED flag — the client draws the zzz icon and
+//! Rest state: entering an inn/rest-area sets the RESTED flag — the client draws the zzz icon and
 //! turns the XP bar blue (PLAYER_BYTES_2 byte 3) — accrues rested XP LIVE at the full rate while resting,
 //! and (via the durable `Character.resting` stamp) makes an OFFLINE logout in a rest area accrue at the
 //! full rate vs 1/4 in the open field. Rest-area geometry is a hand-authored fixture (the Lion's Pride
@@ -157,7 +157,7 @@ pub fn debug_check_rest_at(
     Ok(())
 }
 
-// Live rested accrual (196): while resting ONLINE, grow the pool at the full rest rate. Lossless —
+// Live rested accrual: while resting ONLINE, grow the pool at the full rest rate. Lossless —
 // materialize from the fixed `rested_since` clock and only advance the clock once the increment banks
 // ≥1 XP, so short ticks (where the sub-1-XP increment rounds to 0) don't lose accrual. Self-quantized to
 // ~30s: this pass fires every 0.5s `tick_creatures` tick, but rested is ~0.1 XP/min so cadence only sets

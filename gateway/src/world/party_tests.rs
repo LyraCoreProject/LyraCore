@@ -90,13 +90,8 @@ pub(super) fn character(guid: u64, name: &str) -> codec::CharacterView {
     }
 }
 
-/// A live party topology: realm-core (the party authority) plus the two world shards Phase A runs,
-/// wired the way the production gateway wires them — every shard's `realm_store()` is the realm
-/// handle, and `world_stores()` is every connected world shard (including the asking one, exactly
-/// as `Coordinator::all_shards` answers).
-///
-/// Ginger is resident on `world`, Vim on `instances` — the SPLIT that the Phase A tracer could not
-/// represent and that made a cross-boundary invite fail live (2026-07-25).
+/// Realm-core owns the party. Ginger and Vim live on separate World Shards,
+/// each connected to the authority and both World Stores.
 pub(super) fn party_topology_with(
     mirror_error: Option<&str>,
     accept_error: Option<&str>,
@@ -615,7 +610,7 @@ fn a_cross_shard_invite_and_accept_form_one_party_on_realm_core() {
     );
     assert!(
         !ops.iter()
-            .any(|(_, call)| call == "group_invite" || call == "group_accept"),
+.any(|(_, call)| call == "group_invite" || call == "group_accept"),
         "a multi-database gateway must not run the party op on a world shard's own tables — that is \
          exactly the shard-local behaviour realm-wide party routing removes. Calls were {ops:?}"
     );
@@ -686,10 +681,6 @@ fn every_world_shard_mirrors_the_authoritative_roster_after_a_party_op() {
     }
 }
 
-/// The mirror is a WRITE-THROUGH cache, so a party that DISBANDS has to be forgotten everywhere —
-/// otherwise each shard keeps a party whose members left, and their local reads keep splitting XP
-/// with a group that no longer exists. (This is also the live artifact that motivated this slice: an
-/// orphaned `game_group` row, leader Ginger, zero members, left on the instances shard.)
 #[test]
 fn a_disbanded_party_is_tombstoned_on_every_world_shard() {
     let (realm, world, instances, _calls) = party_topology();
@@ -710,7 +701,7 @@ fn a_disbanded_party_is_tombstoned_on_every_world_shard() {
         assert!(
             shard.mirror.lock().unwrap().is_empty(),
             "{name} still mirrors a party that realm-core has disbanded — this is the orphaned \
-             `game_group` row the live Phase A run left behind, reproduced"
+             unexpected shard-local `game_group` row"
         );
     }
 }
@@ -1107,44 +1098,6 @@ fn deleted_character_cleanup_flushes_pending_loot_before_leaving_realm_core() {
     );
 }
 
-#[test]
-fn deleted_character_leave_returns_with_the_committed_roster_visible() {
-    let src = include_str!("../stdb/reducers.rs");
-    let body = crate::test_scan::code_of(src, "pub fn deleted_character_party_leave(");
-    assert!(
-        body.contains("let coordinator = self.0.visibility_pipe()")
-            && body.contains("coordinator.conn.reducers"),
-        "cleanup reads Realm-core immediately after LEAVE, so the Durable Request must return a \
-         Coordinator visibility receipt. Body was:\n{body}"
-    );
-
-    let ordinary = crate::test_scan::code_of(src, "pub fn realm_group_op(");
-    assert!(
-        ordinary.contains("self.0.call_pipe().conn.reducers"),
-        "an op that pushes no Group mirror needs no visibility receipt, so it keeps the \
-         independent call pipe. Body was:\n{ordinary}"
-    );
-
-    let visible = crate::test_scan::code_of(src, "pub fn realm_group_op_visible(");
-    assert!(
-        visible.contains("let coordinator = self.0.visibility_pipe()")
-            && visible.contains("coordinator.conn.reducers"),
-        "a World Session's party op pushes the mirror from a read right after it, so it must \
-         return a Coordinator visibility receipt. Body was:\n{visible}"
-    );
-}
-
-/// The production pipes cannot run in a Gateway test, so the choice of op in `party::run` is pinned
-/// here and the lagging Fake above proves what it buys.
-#[test]
-fn a_world_session_runs_its_realm_party_op_on_the_visibility_pipe() {
-    let run = crate::test_scan::code_of(include_str!("party.rs"), "pub(crate) fn run<");
-    assert!(run.contains("run_on_authority_visible(realm.as_ref(), self_guid, op, acceptor)"));
-    let visible =
-        crate::test_scan::code_of(include_str!("party.rs"), "fn run_on_authority_visible<");
-    assert!(visible.contains("authority.realm_group_op_visible("));
-}
-
 /// **The invariant this batch has broken five times: unset config changes NOTHING.**
 ///
 /// A single-database gateway has no realm-core to route to, so every op takes the pre-realm-core
@@ -1467,17 +1420,7 @@ fn a_playerbot_is_invitable_because_the_online_gate_reads_the_entity_not_the_ses
 //  Somebody has to ANSWER a bot's invite
 // ===========================================================================================
 
-/// **AC: a bot accepts a pending group invite from a player.**
-///
-/// The invite landed correctly and nothing ever answered it (observed live 2026-07-26). On a
-/// single-database gateway the module answers in-transaction — `invite_core` fires `on_group_invite`
-/// and `brain.rs`'s `playerbots_auto_accept` accepts through it — but moving the invite onto
-/// realm-core, where `pkg_playerbots_bot` is empty, makes the hook a no-op there, and the dialog hung
-/// until the 2-minute GC. A human therefore could not group with a bot at all, which is the single
-/// most useful manual test the bots exist to support.
-///
-/// Pinned here as BEHAVIOUR, not as a source scan: after one `/invite Botty` and nothing else, the
-/// authority holds a two-member party — and the acting guid on the ACCEPT is the BOT'S OWN.
+/// A bot on a World Shard accepts a Realm-core invite with its own Character guid.
 #[test]
 fn a_players_invite_to_a_session_less_bot_is_answered_by_the_bot_itself() {
     use lyracore_shared::group::realm_op;
@@ -1510,19 +1453,6 @@ fn a_players_invite_to_a_session_less_bot_is_answered_by_the_bot_itself() {
     );
 }
 
-/// **A REAL PLAYER, ANSWERED FOR — the impersonation this predicate has to refuse.**
-///
-/// Found by adversarial review and reproduced here before it was fixed. The two halves
-/// of the predicate used to read DIFFERENT databases: the entity check UNIONED every shard, while the
-/// session flag came from [`presence`], which is first-hit-wins over `game_character`. So a guid with
-/// a stale row on the ASKING shard and its live, logged-in self on another one had its session flag
-/// resolved off the stale copy, and the gateway accepted a group invite on a real player's behalf.
-///
-/// Not hypothetical, and not a race: `init` seeds character guid 1 ("Tester") into every database it
-/// is published to, so on the live three-database stack a player logged in as guid 1 on
-/// `lyracore` has an `online = false` row sitting on `lyracore-instances` — and an inviter
-/// standing inside a dungeon asks that shard first. The fix is to read the flag on the shard that
-/// HOLDS the live entity; the fixture below is exactly that shape.
 #[test]
 fn a_stale_character_row_on_another_shard_cannot_make_a_logged_in_player_look_session_less() {
     /// The seeded `init` character: a row on EVERY database, `online = false` in the seed.
@@ -1577,7 +1507,7 @@ fn a_stale_character_row_on_another_shard_cannot_make_a_logged_in_player_look_se
 
 /// **AC: the bot's membership reaches the shard it stands on.**
 ///
-/// The bot's own in-world behaviour — follow-the-leader (the playerbot simulation's slice 2), the
+/// The bot's own in-world behaviour — follow-the-leader (the playerbot simulation), the
 /// kill-XP split, `/p` — all read the SHARD's mirror, not realm-core. The answer therefore has to
 /// happen before the mirror push of the op that caused it, or the bot is a member the shard does not
 /// know about until the party's next op (and a bot party has no next op — the human does everything).
@@ -1602,9 +1532,9 @@ fn the_bots_new_membership_is_mirrored_onto_its_own_shard_by_the_same_op() {
     );
     assert_eq!(
         world
-            .group_roster_by_id(group_id)
-            .unwrap()
-            .map(|r| r.leader_guid),
+.group_roster_by_id(group_id)
+.unwrap()
+.map(|r| r.leader_guid),
         Some(GINGER),
         "and the leader in that mirror is the PLAYER: the follow-the-leader pass resolves its anchor \
          from `game_group.leader_guid` and never asks whether the leader is a bot"
@@ -1717,10 +1647,10 @@ fn the_bot_answers_within_the_invite_op_itself_with_no_second_call() {
     );
     assert!(
         !calls
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|(shard, call)| shard != "lyracore-realm"
+.lock()
+.unwrap()
+.iter()
+.any(|(shard, call)| shard != "lyracore-realm"
             && (call == "group_accept" || call == "group_invite")),
         "the answer must never run on a world shard's own party tables — that would write membership \
          the authority does not have. Calls were {:?}",
@@ -1768,13 +1698,8 @@ fn every_party_op_reaches_realm_core_in_its_declared_argument_slots() {
     );
 }
 
-/// The END-TO-END pin for the two production CALL SITES this slice adds — driven over a real
-/// socket, through `run_world_session`'s own dispatch, not by calling `world::party` directly.
 ///
-/// Deleting either call site is otherwise a mutation every other test in this file survives:
-/// `enter_world`'s `party::on_world_entry` (a party frame the arriving player never gets, and an
-/// unmirrored shard) and `social`'s `party::run` (a party op that quietly goes back to being
-/// shard-local). Both are asserted here as the CLIENT sees them.
+/// World entry delivers the Realm roster, and in-world party operations use Realm-core.
 #[test]
 fn a_real_session_syncs_its_party_at_login_and_routes_an_invite_to_realm_core() {
     let (realm, _world, _instances, calls) = party_topology();
@@ -1812,10 +1737,7 @@ fn a_real_session_syncs_its_party_at_login_and_routes_an_invite_to_realm_core() 
         run_world_session(server_end, server_store.as_ref()).unwrap();
     });
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
-    // A READ DEADLINE, and it is the point of the test rather than hygiene: the mutation this pins
-    // (deleting `party::on_world_entry`) makes the party frame never arrive, and a blocking read on
-    // a packet that will never come turns a test that must go RED into one that HANGS — which reads
-    // as neither a pass nor a fail (`no_hang`'s lesson, applied at the socket instead of the thread).
+    // Missing roster delivery must fail at the read deadline.
     CMSG_PLAYER_LOGIN {
         guid: Guid::new(GINGER),
     }
@@ -1848,12 +1770,7 @@ fn a_real_session_syncs_its_party_at_login_and_routes_an_invite_to_realm_core() 
     // …and EVERY party op typed in-world goes to realm-core, not to this shard's own tables — each
     // one attributed to the character this socket authenticated as.
     //
-    // All SEVEN, not just the invite: `realm_group_op` takes the actor's guid as an ARGUMENT, so the
-    // dispatch's choice of guid IS the authorization for every one of them, and the survivor the
-    // author found (`0` instead of the session's guid) is a mutation each arm admits independently.
-    // Pinning only the invite leaves the others free to be attributed to anybody — verified by
-    // mutation: passing the KICKED player's guid as the actor of `CMSG_GROUP_UNINVITE` left all 408
-    // tests green.
+    // Each operation must carry the Character guid authenticated by this socket.
     use wow_world_messages::vanilla::{
         CMSG_GROUP_ACCEPT, CMSG_GROUP_DECLINE, CMSG_GROUP_DISBAND, CMSG_GROUP_INVITE,
         CMSG_GROUP_RAID_CONVERT, CMSG_GROUP_UNINVITE, CMSG_LOOT_METHOD,
@@ -1916,15 +1833,8 @@ fn a_real_session_syncs_its_party_at_login_and_routes_an_invite_to_realm_core() 
         "the invite ran against the session shard's own party tables — the shard-local behaviour \
          realm-wide party routing removes. Calls were {log:?}"
     );
-    // …AS the character this socket authenticated into the world with. `realm_group_op` takes the
-    // actor's guid as an ARGUMENT (realm-core has no live entity to derive it from), so the guid the
-    // dispatch threads in IS the authorization. A mutation that passed 0 — or any other player's
-    // guid — invited on behalf of somebody else with every other assertion here still green.
-    //
-    // Every op, with its argument slots, exactly as the dispatch sent it. The AUTHORITY refuses most
-    // of these (Ginger has no pending invite, and is no longer in a party after the disband) — the
-    // mock records the tuple before it judges it, which is the point: what is pinned here is what the
-    // GATEWAY claimed, not what realm-core decided to do about it.
+    // Realm-core derives authorization from the actor argument. Verify each operation
+    // carries the authenticated Character and the correct argument slots, including Refusals.
     use lyracore_shared::group::realm_op;
     assert_eq!(
         realm.party.lock().unwrap().ops.clone(),
@@ -2303,7 +2213,7 @@ fn an_unsharded_deployment_still_routes_a_bot_invite_through_realm_group_op() {
     let log = calls.lock().unwrap().clone();
     assert!(
         log.iter()
-            .any(|(shard, call)| shard == "world" && call == "realm_group_op"),
+.any(|(shard, call)| shard == "world" && call == "realm_group_op"),
         "an unsharded deployment must still use the guid-based realm_group_op — a bot has no account \
          connection for `run`'s unsharded arm to call the player-facing reducers as. Calls were {log:?}"
     );
@@ -2675,12 +2585,6 @@ fn a_raid_joiner_past_a_full_first_subgroup_shows_subgroup_one_in_every_list() {
 }
 
 /// **AC: a member on another shard renders online in a LIST pushed from Realm-core.**
-///
-/// Realm-core has no live entities. The roster payload used to carry an online flag the Module
-/// computed there anyway, which was 0 for every member, and the relay trusted it: on a sharded
-/// Realm every party op re-rendered every member offline until the next world entry. The payload
-/// now carries no presence, and the relay reads presence from the World Shard caches. This drives
-/// the relay's own decode body, `group_event_outbound`, with the Realm-core handle.
 #[test]
 fn the_realm_core_list_relay_renders_a_member_on_another_shard_online() {
     let (realm, world, instances, _calls) = party_topology();

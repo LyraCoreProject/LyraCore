@@ -1,4 +1,4 @@
-//! Regions: the middle rung of the cell / region / shard hierarchy (issue #23, spec #12).
+//! Regions: the middle rung of the cell / region / shard hierarchy.
 //!
 //! Cells (50yd, [`crate::spatial`]) stay the fixed spatial primitive. A **region** is a contiguous
 //! set of cells defined in DATA — never computed from gameplay state — and a **shard** owns one or
@@ -15,8 +15,7 @@
 //!
 //! # The format is content data
 //!
-//! See `docs/region-sharding.md` for the seam-menu format and a worked example; [`RegionMap::parse`]
-//! is its only parser.
+//! [`RegionMap::parse`] defines the region format and geometry rules.
 
 // Deliberate simplification: a region is an axis-aligned cell RECTANGLE, not an arbitrary
 // contiguous cell set. A rectangle is trivially contiguous, `region_of` is four integer
@@ -29,10 +28,8 @@
 
 use crate::spatial::{grid_cell, GRID_CELL_SIZE};
 
-/// The region every cell belongs to until a seam menu says otherwise: "the rest of the map".
-/// Region 0 is never assignable — a point in it routes through the ordinary `(map, instance)` shard
-/// map, i.e. exactly as it did before regions existed. That is what makes an unimported map, or an
-/// imported map with a hole in its menu, a strict no-op.
+/// Cells outside the authored rectangles use the ordinary `(map, instance)` Shard map.
+/// Region zero cannot receive an assignment.
 pub const DEFAULT_REGION: u32 = 0;
 
 /// Minimum side of a region, in cells — the spec's ~10×10 floor. The ~100yd interaction radius is
@@ -97,9 +94,7 @@ impl Region {
 
 /// The baked cell→region lookup for the whole realm: every map's accepted region definitions.
 ///
-/// **Empty is the identity.** A `RegionMap` with no definitions answers [`DEFAULT_REGION`] for every
-/// point, which routes through the ordinary shard map — so an un-imported deployment behaves exactly
-/// as it did before this type existed. Every rejection path below degrades toward that identity.
+/// With no accepted definitions, every point resolves to the ordinary Shard map.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RegionMap {
     regions: Vec<Region>,
@@ -147,7 +142,7 @@ impl RegionMap {
         (Self { regions }, rejected)
     }
 
-    /// Parse the seam-menu content format (`docs/region-sharding.md`). One region per line (or per
+    /// Parse the seam-menu content format (`RegionMap::parse`). One region per line (or per
     /// `;`), `#` starts a comment:
     ///
     /// ```text
@@ -157,13 +152,7 @@ impl RegionMap {
     ///
     /// Returns the map plus one rejection line per row that did not make it, from either the syntax
     /// or the [`RegionMap::build`] rules.
-    /// **`#` is stripped BEFORE `;` is split on, and the order matters.** The other way round, a
-    /// semicolon inside a comment ends the comment: `# a; b` splits into `# a` (a comment) and
-    /// ` b` (which no longer starts with `#`, so it is a malformed ROW). Since
-    /// `import_map_regions` refuses a menu with ANY rejection, one semicolon in an English prose
-    /// comment would fail the whole import — which is exactly what the shipped fixture menu's
-    /// header did before this was fixed (#327). A `;` in row position still separates rows, so
-    /// nothing about the documented format changes.
+    /// Strip comments before splitting row separators. A semicolon in prose must not become a row.
     pub fn parse(text: &str) -> (Self, Vec<String>) {
         let mut rows = Vec::new();
         let mut rejected = Vec::new();
@@ -215,7 +204,7 @@ impl RegionMap {
     }
 
     /// Bucket a set of open-world positions (already resolved to cells) into per-region player
-    /// counts — the pure half of issue #78's "which region is crowded" gauge, shared by the gateway
+    /// counts for the region occupancy gauge shared by the Gateway
     /// (which owns the impure half: reading live positions off its subscription cache) and its
     /// tests.
     ///
@@ -497,7 +486,7 @@ mod tests {
 
     #[test]
     fn a_semicolon_inside_a_comment_does_not_start_a_new_row() {
-        // Found shipping #327's fixture menu: `split(['\n', ';'])` split BEFORE the `#` strip, so
+        // A fixture menu with semicolon-separated rows: `split(['\n', ';'])` split BEFORE the `#` strip, so
         // the tail of any prose comment containing a semicolon became a malformed row — and
         // `import_map_regions` errors on ANY rejection, so a single semicolon in the header would
         // have failed the whole import. Comments run to end of LINE, full stop.

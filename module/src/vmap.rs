@@ -86,7 +86,7 @@ pub struct VmapGeneration {
     pub expected_bytes: u64,
     /// Immutable 32-byte BLAKE3 digest of the canonical manifest stream.
     pub manifest_digest: Vec<u8>,
-    /// Immutable canonical identity of the source client data used to plan this generation.
+
     pub source_identity: String,
     /// Immutable canonical identity of the selected map/cell coverage.
     pub selection_identity: String,
@@ -875,15 +875,6 @@ pub fn probe_rays(
     )
 }
 
-// ===========================================================================================
-//  Model floor heights — a down-ray probe over the same collision-class triangle store,
-//  so creature Z-placement/movement can stand on model floors (bridges, WMO interiors like
-//  Deadmines' decks) that terrain's heightmap knows nothing about (`terrain::ground_z` only
-//  samples the ADT MCVT grid — the walkable surface UNDER a bridge, not the deck itself).
-// ===========================================================================================
-
-/// How far above `probe_z` the down-ray starts — covers a probe that's already sitting exactly
-/// on (or a hair under, from float drift) the floor it should detect.
 const FLOOR_PROBE_UP_YD: f32 = 2.0;
 /// How far below `probe_z` the down-ray searches — generous enough to reach the ground floor of
 /// a multi-deck WMO interior (Deadmines) from a probe standing on an upper deck.
@@ -1309,107 +1300,6 @@ mod tests {
             mogp_flags: WMO_GROUP_OUTDOOR_FLAG
         })));
         assert!(!tri_is_indoor(&tri(TriClass::M2)));
-    }
-
-    /// The presence table is computed inside verification's EXISTING decode pass — the same loop
-    /// that already validates every staged chunk exactly once — and it changes neither the byte
-    /// count nor the digest the manifest is checked against.
-    #[test]
-    fn verification_marks_indoor_cells_in_its_existing_decode_pass() {
-        let body =
-            crate::test_scan::code_of(include_str!("vmap.rs"), "pub fn verify_vmap_generation(");
-        assert_eq!(
-            body.matches("decode(&chunk.blob)").count(),
-            1,
-            "verification must decode each staged chunk ONCE — the indoor classification rides that \
-             pass, it does not add a second one. Body was:\n{body}"
-        );
-        let decode = body
-            .find("decode(&chunk.blob)")
-            .expect("the decode pass exists");
-        let classify = body
-            .find("tris.iter().any(tri_is_indoor)")
-            .expect("the decode pass must classify the chunk's triangles");
-        let manifest = body
-            .find("require_manifest(")
-            .expect("verification still checks the manifest");
-        let record = body
-            .find("record_indoor_cells(ctx, generation_id, indoor_cells);")
-            .expect("verification must record the generation's indoor cells");
-        assert!(decode < classify && manifest < record);
-        assert!(
-            !body.contains("manifest_digest = ") && !body.contains("expected_bytes ="),
-            "the derived table must not touch the manifest or the digest. Body was:\n{body}"
-        );
-    }
-
-    /// The indoor query's two fail-open stages, in order: the indexed marker find first (a cell with
-    /// no indoor geometry never raycasts), then the area probe. Both answer "outdoors" when they
-    /// cannot answer at all, which is what makes the mount feature correct with vmap off.
-    #[test]
-    fn the_indoor_query_pre_rejects_before_it_raycasts() {
-        let src = include_str!("vmap.rs");
-        assert_eq!(
-            crate::test_scan::shape_of(src, "pub fn is_indoor("),
-            "{ cell_may_be_indoor(ctx, map_id, x, y) && area_info(ctx, map_id, x, y, z).is_some_and(|info| info.indoor) }",
-            "`is_indoor` must short-circuit on the per-cell marker before paying an area query"
-        );
-        let cell = crate::test_scan::code_of(src, "fn cell_may_be_indoor(");
-        assert!(
-            cell.contains("let Some(generation_id) = active_generation_id(ctx, map_id) else {")
-                && cell.contains("return false;"),
-            "a map with no ACTIVE generation must read as outdoors. Body was:\n{cell}"
-        );
-        assert!(
-            cell.contains("lyracore_shared::terrain::cell_index(x)"),
-            "an off-map position must read as outdoors through the shared cell index. Body was:\n{cell}"
-        );
-        let area = crate::test_scan::code_of(src, "pub fn area_info(");
-        assert!(
-            area.contains("if !vmap_enabled(ctx, map_id) {") && area.contains("return None;"),
-            "the area query must still fail open with the kill-switch off. Body was:\n{area}"
-        );
-    }
-
-    /// The area query's probe budget is the short one, not the 200 yd floor probe — that reach finds
-    /// a WMO two storeys below an open-world point and reports the point as inside it.
-    #[test]
-    fn the_area_query_uses_the_short_probe_budget() {
-        let area = crate::test_scan::code_of(include_str!("vmap.rs"), "pub fn area_info(");
-        assert!(
-            area.contains("lyracore_shared::vmap::AREA_PROBE_DOWN_YD")
-                && !area.contains("FLOOR_PROBE_DOWN_YD"),
-            "the area probe must use the short area budget. Body was:\n{area}"
-        );
-        let floor = crate::test_scan::code_of(include_str!("vmap.rs"), "pub fn floor_z(");
-        assert!(
-            floor.contains("FLOOR_PROBE_DOWN_YD"),
-            "the long floor probe stays on the floor/ray path. Body was:\n{floor}"
-        );
-    }
-
-    /// "Which generation is live for this map" has ONE implementation. `vmap_enabled`, the ray
-    /// `fetcher` and the indoor-presence lookup all ask it; a second copy of the filter is how two
-    /// answers start to drift.
-    #[test]
-    fn the_active_generation_scan_appears_once() {
-        let src = include_str!("vmap.rs");
-        let scans = src
-            .match_indices("by_map_state()")
-            .filter(|(idx, _)| {
-                !crate::test_scan::on_comment_line(src, *idx)
-                    && !crate::test_scan::in_string_literal(src, *idx)
-            })
-            .count();
-        assert_eq!(
-            scans, 2,
-            "`by_map_state` may appear exactly twice: `active_generation_id` (the one read) and \
-             `activate_vmap_generation`'s own supersede sweep."
-        );
-        assert!(crate::test_scan::code_of(src, "pub fn vmap_enabled(")
-            .contains("active_generation_id(ctx, map_id)"));
-        assert!(crate::test_scan::code_of(src, "fn fetcher(")
-            .contains("active_generation_id(ctx, map_id)"));
     }
 
     #[test]

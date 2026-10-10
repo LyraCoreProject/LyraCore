@@ -1,6 +1,6 @@
-//! `--dump-collision <client Data/ dir>` — work-item 240 SPIKE: prove we can read WMO/M2
-//! collision geometry out of the operator's own client MPQs before building the nav rasterizer
-//! (241). Same licensing firewall as `--dbc`/`--terrain`: in-memory read, nothing written.
+//! `--dump-collision <client Data/ dir>`, SPIKE: prove we can read WMO/M2
+//! collision geometry out of the operator's own client MPQs before building the nav rasterizer.
+//! Same licensing firewall as `--dbc`/`--terrain`: in-memory read, nothing written.
 //!
 //! Reads the ONE root ADT tile containing `--center`, lists its WMO (MODF) and doodad (MDDF)
 //! placements, then opens every referenced WMO root+group file and M2 model and reports

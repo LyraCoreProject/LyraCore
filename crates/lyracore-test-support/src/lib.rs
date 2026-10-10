@@ -1,4 +1,5 @@
 mod module_wasm;
+pub mod source_scan;
 
 pub use module_wasm::{gateway_binary, module_bytes};
 
@@ -260,6 +261,18 @@ impl Standalone {
         self.publish(database, &["--bin-path", path.to_str().unwrap()], &[]);
     }
 
+    /// The published schema as `spacetime describe --json` prints it: tables, reducers and the
+    /// typespace their types refer into.
+    pub fn describe(&self) -> serde_json::Value {
+        let output = self
+            .command()
+            .args(["describe", "-s", &self.server, "--json", &self.database])
+            .output()
+            .expect("failed to describe the database");
+        self.assert_ok(&output);
+        serde_json::from_slice(&output.stdout).expect("the schema is not JSON")
+    }
+
     pub fn call(&self, reducer: &str, args: &[&str]) -> Output {
         self.call_database(&self.database, reducer, args)
     }
@@ -325,7 +338,7 @@ impl Standalone {
         self.assert_ok(&self.call_database(database, reducer, args));
     }
 
-    pub fn assert_call_anonymous(&self, reducer: &str, args: &[&str]) {
+    pub fn call_anonymous(&self, reducer: &str, args: &[&str]) -> Output {
         let mut command = self.command();
         command.args([
             "call",
@@ -336,7 +349,11 @@ impl Standalone {
             reducer,
         ]);
         command.args(args);
-        self.assert_ok(&command.output().expect("failed to call reducer"));
+        command.output().expect("failed to call reducer")
+    }
+
+    pub fn assert_call_anonymous(&self, reducer: &str, args: &[&str]) {
+        self.assert_ok(&self.call_anonymous(reducer, args));
     }
 
     pub fn assert_sql(&self, query: &str) {

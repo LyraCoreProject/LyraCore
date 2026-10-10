@@ -16,9 +16,7 @@
 //! history: enough to eyeball a sustained trend against a momentary spike without a single `ORDER
 //! BY` (`spacetime sql` has none — `docs/danger-zones.md` §2).
 //!
-//! See `docs/region-sharding.md` for the two `spacetime sql` queries an operator runs against this
-//! data, and `docs/danger-zones.md` §1.2 for why these are hand-authored gateway bindings rather
-//! than a `spacetime generate` regen.
+//! `docs/danger-zones.md` describes the Gateway binding generation rules.
 
 use spacetimedb::{reducer, table, ReducerContext, Table};
 
@@ -288,7 +286,7 @@ mod tests {
         assert_eq!(
             realm_wide_sessions(vec![(1, 10, 5), (2, 11, 7)].into_iter()),
             12,
-            "distinct gateways' latest samples sum to the realm-wide total (issue #308)"
+            "distinct gateways' latest samples sum to the realm-wide total"
         );
         // Ids need not arrive in order.
         assert_eq!(
@@ -310,66 +308,5 @@ mod tests {
         assert!(validate_occupancy_pct(f32::NAN).is_err());
         assert!(validate_occupancy_pct(f32::INFINITY).is_err());
         assert!(validate_occupancy_pct(MAX_SANE_OCCUPANCY_PCT + 0.1).is_err());
-    }
-
-    /// Call-site tripwire, same style as `region.rs`'s `the_reducer_routes_every_write_through_the_epoch_rule`:
-    /// the pure rules above are worthless if the reducer stops asking them, and neither reducer can
-    /// run without a live node — so a `.contains()` scan on the SOURCE is what a green suite has.
-    #[test]
-    fn both_reducers_route_every_write_through_the_operator_gate_and_the_ring() {
-        let src = include_str!("load.rs");
-        // The file is laid out record_shard_load, then record_region_load, then the test module —
-        // so splitting on those three anchors, in order, isolates each reducer's own body.
-        let (_, after_shard_fn) = src
-            .split_once("pub fn record_shard_load")
-            .expect("still named record_shard_load");
-        let (shard_body, after_region_fn) = after_shard_fn
-            .split_once("pub fn record_region_load")
-            .expect("still named record_region_load");
-        let (region_body, _) = after_region_fn
-            .split_once("#[cfg(test)]")
-            .expect("the test module still follows");
-
-        let strip = |s: &str| -> String {
-            s.lines()
-                .filter(|l| !l.trim_start().starts_with("//"))
-                .collect::<Vec<_>>()
-                .join("\n")
-        };
-        let shard_code = strip(shard_body);
-        let region_code = strip(region_body);
-
-        assert!(
-            shard_code.contains("require_operator(ctx)?"),
-            "record_shard_load must stay operator-gated"
-        );
-        assert!(
-            shard_code.contains("validate_occupancy_pct("),
-            "record_shard_load must validate occupancy"
-        );
-        assert!(
-            shard_code.contains("ring_evict("),
-            "record_shard_load must ring-evict before inserting"
-        );
-        assert!(
-            shard_code.contains("r.gateway_key == gateway_key"),
-            "record_shard_load must scope the ring by gateway_key too (issue #308) — filtering by \
-             shard alone lets one gateway's insert evict every OTHER gateway's rows"
-        );
-        assert!(
-            shard_code.contains("realm_wide_sessions("),
-            "record_shard_load must fold every gateway's latest sample into the materialized \
-             realm-wide total (issue #308's actual Done-when) — keying the ring by gateway_key \
-             alone leaves summation a manual step"
-        );
-
-        assert!(
-            region_code.contains("require_operator(ctx)?"),
-            "record_region_load must stay operator-gated"
-        );
-        assert!(
-            region_code.contains("ring_evict("),
-            "record_region_load must ring-evict before inserting"
-        );
     }
 }

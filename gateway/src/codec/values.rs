@@ -6,14 +6,6 @@
 
 use super::*;
 
-/// Own the partial-VALUES `dirty_reset` ritual for a UNIT mask, ONCE (review finding D1). Every
-/// `build_*_values` unit builder repeats the same crash-critical discipline: build the mask (whose
-/// `new()` force-seeds `OBJECT_FIELD_TYPE` dirty), `finalize()`, `dirty_reset()` to STRIP that seeded
-/// TYPE bit, then re-apply ONLY the changed field(s) so the wire carries them alone and NEVER
-/// re-sends `OBJECT_FIELD_TYPE` (re-sending it crashes the 5875 client at null+0x110 — see
-/// `build_health_values` for the full root-cause). `apply` sets just the caller's field(s) on the
-/// reset mask; the output bytes are identical to the pre-extraction inline form (pinned by the codec
-/// golden/crash-trap tests). Do NOT migrate this onto the raw encoder.
 pub(super) fn unit_values(guid: u64, apply: impl FnOnce(&mut UpdateUnit)) -> SMSG_UPDATE_OBJECT {
     let mut unit = UpdateUnit::builder().finalize();
     unit.dirty_reset();
@@ -27,12 +19,6 @@ pub(super) fn unit_values(guid: u64, apply: impl FnOnce(&mut UpdateUnit)) -> SMS
     }
 }
 
-/// Own the partial-VALUES `dirty_reset` ritual for a PLAYER mask, ONCE (review finding D1) — the
-/// player-shaped twin of [`unit_values`]. Same discipline: finalize → `dirty_reset()` (strips the
-/// `new()`-seeded `OBJECT_FIELD_TYPE` dirty bit) → re-apply ONLY the changed field(s), so the wire
-/// never re-sends `OBJECT_FIELD_TYPE` (which strips the PLAYER bit on the player's OWN object and
-/// crashes the 5875 client at null+0x110). Byte-identical to the pre-extraction inline form (pinned
-/// by the codec golden/crash-trap tests). Do NOT migrate this onto the raw encoder.
 fn player_values(guid: u64, apply: impl FnOnce(&mut UpdatePlayer)) -> SMSG_UPDATE_OBJECT {
     let mut player = UpdatePlayer::builder().finalize();
     player.dirty_reset();
@@ -175,7 +161,7 @@ pub(crate) fn write_packed_guid_u64(out: &mut Vec<u8>, guid: u64) {
 }
 
 /// Build a VALUES partial-update carrying `UNIT_DYNAMIC_FLAGS` (idx 143) so a corpse's DEAD bit
-/// reaches clients that already have the object (slice 2 killing blow). New observers get it at
+/// reaches clients that already have the object (the killing blow). New observers get it at
 /// CREATE instead (`build_create_object` sets it). Same `dirty_reset` discipline as
 /// `build_health_values` so the wire carries ONLY this field and never re-sends OBJECT_FIELD_TYPE.
 pub fn build_dynamic_flags_values(guid: u64, dynamic_flags: u32) -> SMSG_UPDATE_OBJECT {
@@ -223,7 +209,7 @@ pub fn build_mount_display_values(guid: u64, mount_display_id: u32) -> SMSG_UPDA
 /// moment it happens — the `CMSG_SETSHEATHED` a client sends on `Z`. Unit mask, not player-gated: a
 /// creature draws its weapon on engage too. Same `dirty_reset` discipline as its siblings (the wire
 /// carries only this field, never OBJECT_FIELD_TYPE). Where a stowed weapon HANGS is a different
-/// field entirely — the per-item `sheathe_type` in the item query. [#101]
+/// field entirely, the per-item `sheathe_type` in the item query.
 pub fn build_sheath_values(guid: u64, unit_bytes_2: u32) -> SMSG_UPDATE_OBJECT {
     let (b2a, b2b, b2c, b2d) = unpack4(unit_bytes_2);
     unit_values(guid, |unit| {
@@ -333,13 +319,13 @@ pub fn build_armor_values(guid: u64, total: [u32; 7], pos_buff: u32) -> SMSG_UPD
 }
 
 /// The character-sheet paperdoll numbers — a plain READ of `module::spell::recompute_sheet`'s output
-/// (#517; `stdb::armor::sheet_stats` fetches the row), rendered by [`build_sheet_stats_values`].
+/// (`stdb::armor::sheet_stats` fetches the row), rendered by [`build_sheet_stats_values`].
 /// `strength`/`agility`/`stamina`/`intellect`/`spirit` are the EFFECTIVE attribute (base + bonus, the
 /// white total `UNIT_FIELD_STAT0..4` wants); `*_bonus` is the SIGNED aura+gear(+enchant) delta the
 /// module already folded — split into the green/red paperdoll halves below via plain sign arithmetic,
 /// not a second aura read. `attack_power` is the stat-derived base AP; `ap_mods` is the `A_MOD_COMBAT(ATTACK_POWER)`
 /// aura portion alone (Battle Shout) — vanilla renders those through two different wire fields.
-/// `crit_pct` (#532) is `module::combat::effective_crit_bp`/100.0 — the SAME basis-point value the
+/// `crit_pct` is `module::combat::effective_crit_bp`/100.0, the SAME basis-point value the
 /// swing table rolls against, converted to the float percent `PLAYER_CRIT_PERCENTAGE` wants; no
 /// second crit formula lives on the gateway.
 pub struct SheetStatsValues {
@@ -390,7 +376,7 @@ pub fn build_sheet_stats_values(guid: u64, s: &SheetStatsValues) -> SMSG_UPDATE_
         p.set_player_field_negstat4(s.spi_bonus.min(0));
         p.set_unit_attack_power(s.attack_power as i32);
         // UNIT_FIELD_ATTACK_POWER_MODS packs two UNSIGNED shorts (pos, neg-as-magnitude), mirroring
-        // mangos's `SetInt16Value(field, 0/1, ..)` — never a signed short (a negative AP debuff isn't
+        // mangos's `SetInt16Value(field, 0/1, ..)`, never a signed short (a negative AP debuff isn't
         // wired yet; `ap_mods` is currently always ≥0 from Battle Shout, so `neg` is 0 in practice).
         p.set_unit_attack_power_mods(s.ap_mods.max(0) as u16, (-s.ap_mods).max(0) as u16);
         p.set_unit_mindamage(s.dmg_min as f32);
@@ -416,7 +402,7 @@ pub fn build_resistance_values(guid: u64, total: [u32; 7]) -> SMSG_UPDATE_OBJECT
 }
 
 /// Build a VALUES partial-update carrying `PLAYER_FIELD_COINAGE` so the player's money updates LIVE
-/// after looting (slice 3). Player mask. Same `dirty_reset` discipline as `build_health_values` so
+/// after looting. Player mask. Same `dirty_reset` discipline as `build_health_values` so
 /// the wire carries ONLY the coinage field and never re-sends OBJECT_FIELD_TYPE (the crash field).
 pub fn build_coinage_values(guid: u64, money: u32) -> SMSG_UPDATE_OBJECT {
     player_values(guid, |player| {
@@ -636,11 +622,7 @@ pub fn build_levelup_values(
         }
         player.set_player_xp(xp as i32);
         player.set_player_next_level_xp(next_level_xp as i32);
-        // PLAYER_CHARACTER_POINTS1 = free talent points earned so far (level − 9, floor 0).
-        // Only non-zero from L10 onward (1 point per level starting at 10). The CREATE packet sets
-        // this too, but without a mid-session VALUES update the talent pane stays at 0 until relog.
-        // NOTE: does NOT subtract already-spent points (no game_character_talent read here) — that
-        // refinement is a separate work item.
+
         player.set_player_character_points1((level as i32 - 9).max(0));
     })
 }

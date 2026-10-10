@@ -519,7 +519,6 @@ pub trait WorldStore:
         Ok(None)
     }
 
-    /// One healthy, internally consistent cache observation used to certify a party partition.
     fn party_holder_observation(
         &self,
         character_guid: u64,
@@ -535,8 +534,6 @@ pub trait WorldStore:
         })
     }
 
-    /// Authoritative roster read used to repair mirrors after deleted Character cleanup. A
-    /// configured but unhealthy Realm-core must return `Err`, never a false disband.
     fn party_cleanup_group_roster_by_id(
         &self,
         group_id: u64,
@@ -644,7 +641,7 @@ pub trait WorldStore:
         Ok((after_id, Vec::new()))
     }
 
-    /// The account's characters for the character-select screen (Phase 3). In production this
+    /// The account's characters for the character-select screen. In production this
     /// reads the per-player `game_character` subscription (RLS-restricted to the owner).
     fn characters(&self, account_id: u64) -> Result<Vec<codec::CharacterView>>;
 
@@ -669,7 +666,7 @@ pub trait WorldStore:
         character_guid: u64,
     ) -> Result<codec::CharDeleteOutcome>;
 
-    /// Enter the world with `character_guid` (Phase 4): calls the `player_login` reducer and
+    /// Enter the world with `character_guid`: calls the `player_login` reducer and
     /// returns the live entity to spawn (from the resulting `game_world_entity` row). Errors if
     /// the character isn't the caller's. `entry` picks the reducer: a world-port keeps the Away
     /// Status, a fresh login ends it.
@@ -693,7 +690,7 @@ pub trait WorldStore:
 
     /// Subscribe this player's connection to its per-player views (nearby `game_world_entity`,
     /// addressed `game_movement_event`) and push the resulting peer-spawn / movement-relay / destroy
-    /// SMSG onto `tx` (Phase 6/7). The returned guard tears the subscription + callbacks down on
+    /// SMSG onto `tx`. The returned guard tears the subscription + callbacks down on
     /// drop. Called once, at `CMSG_PLAYER_LOGIN`, when `self_guid` is known.
     ///
     /// `arrival` is the entity the login batch was just built from, so the viewer's map, partition,
@@ -827,7 +824,7 @@ pub trait WorldStore:
         action_type: u8,
     ) -> Result<()>;
 
-    /// Persist the rep pane's At-War checkbox (`CMSG_SET_FACTION_ATWAR`, 195 slice B).
+    /// Persist the rep pane's At-War checkbox (`CMSG_SET_FACTION_ATWAR`).
     /// `reputation_index` is the client's 0..63 rep-array slot, NOT a faction id.
     fn set_faction_at_war(
         &self,
@@ -877,7 +874,7 @@ pub trait WorldStore:
     fn gossip_options(&self, npc_guid: u64) -> Result<Vec<codec::GossipOptionView>>;
 
     /// Respec at `trainer_guid` (the "I wish to unlearn my talents." gossip option, gated to level
-    /// 10+ by `filtered_gossip_options` — #516). Errors (out of range / not enough gold) are
+    /// 10+ by `filtered_gossip_options`). Errors (out of range / not enough gold) are
     /// per-action; the caller just closes the gossip window either way.
     fn reset_talents(&self, account_id: u64, self_guid: u64, trainer_guid: u64) -> Result<()>;
 
@@ -943,7 +940,7 @@ pub trait WorldStore:
 
     /// Draw or stow the player's weapons (`CMSG_SETSHEATHED`, the `Z` key). `state` is 0 stowed /
     /// 1 melee / 2 ranged; the module range-checks it. Writes `UNIT_FIELD_BYTES_2` byte 0, which is
-    /// what makes a drawn or stowed weapon visible to OTHER players. [#101]
+    /// what makes a drawn or stowed weapon visible to OTHER players.
     fn set_sheathed(&self, account_id: u64, self_guid: u64, state: u8) -> Result<()>;
 
     /// The live entity's max health (0 if not in world) — the fall-damage flavor line folds
@@ -1271,7 +1268,7 @@ pub trait WorldStore:
         Ok(Vec::new())
     }
 
-    /// Revive the caller after death (`CMSG_REPOP_REQUEST` / Release Spirit, slice 4): the module
+    /// Revive the caller after death (`CMSG_REPOP_REQUEST` / Release Spirit): the module
     /// restores full health in place and clears the dead state (the client leaves the death screen
     /// once the restored health replicates).
     fn repop(&self, account_id: u64, self_guid: u64) -> Result<()>;
@@ -1290,7 +1287,7 @@ pub trait WorldStore:
     /// Close the matching Shard fences before releasing the Realm-core claim. Stale cleanup is inert.
     fn release_session(&self, token: WorldSessionToken) -> Result<()>;
 
-    /// Reclaim the caller's corpse (`CMSG_RECLAIM_CORPSE`, slice 5): the module validates the caller
+    /// Reclaim the caller's corpse (`CMSG_RECLAIM_CORPSE`): the module validates the caller
     /// is a ghost owning the corpse, in range, past the reclaim delay, then resurrects at 50%.
     fn reclaim_corpse(&self, account_id: u64, self_guid: u64, corpse_guid: u64) -> Result<()>;
 
@@ -1309,7 +1306,7 @@ pub trait WorldStore:
     /// activated healer's guid (passed through to the confirm echo). The module gates on ghost state.
     fn spirit_healer_res(&self, account_id: u64, self_guid: u64, healer_guid: u64) -> Result<()>;
 
-    // --- Trade (#120). Every status — BeginTrade/OpenWindow to the parties, or a refusal back to
+    // --- Trade. Every status, BeginTrade/OpenWindow to the parties, or a refusal back to
     // the caller — rides the `game_trade_event` relay; these calls answer nothing synchronously,
     // and an `Err` is only an unresolved actor (per-action, log + ignore).
 
@@ -1320,7 +1317,7 @@ pub trait WorldStore:
     /// `CMSG_CANCEL_TRADE` — tear the caller's Trade Session down (`TradeCanceled` to both).
     fn cancel_trade(&self, account_id: u64, self_guid: u64) -> Result<()>;
     /// `CMSG_SET_TRADE_ITEM` — `inv_slot` is the ABSOLUTE inventory slot (the gateway maps the
-    /// client's (bag, slot) pair, the item-family convention) (#121).
+    /// client's (bag, slot) pair, the item-family convention).
     fn set_trade_item(
         &self,
         account_id: u64,
@@ -1328,21 +1325,21 @@ pub trait WorldStore:
         trade_slot: u8,
         inv_slot: u8,
     ) -> Result<()>;
-    /// `CMSG_CLEAR_TRADE_ITEM` (#121).
+    /// `CMSG_CLEAR_TRADE_ITEM`.
     fn clear_trade_item(&self, account_id: u64, self_guid: u64, trade_slot: u8) -> Result<()>;
-    /// `CMSG_SET_TRADE_GOLD` — `copper` is the offered amount (#121).
+    /// `CMSG_SET_TRADE_GOLD`, `copper` is the offered amount.
     fn set_trade_gold(&self, account_id: u64, self_guid: u64, copper: u32) -> Result<()>;
     /// `CMSG_ACCEPT_TRADE` — accept the current offer; dual-accept runs the atomic Trade Commit
-    /// module-side (#122).
+    /// module-side.
     fn accept_trade(&self, account_id: u64, self_guid: u64) -> Result<()>;
-    /// `CMSG_UNACCEPT_TRADE` — withdraw an accept; partner hears `BackToTrade` (#122).
+    /// `CMSG_UNACCEPT_TRADE`, withdraw an accept; partner hears `BackToTrade`.
     fn unaccept_trade(&self, account_id: u64, self_guid: u64) -> Result<()>;
-    /// `CMSG_BUSY_TRADE` — decline a pending proposal as busy; initiator hears `Busy` (#123).
+    /// `CMSG_BUSY_TRADE`, decline a pending proposal as busy; initiator hears `Busy`.
     fn busy_trade(&self, account_id: u64, self_guid: u64) -> Result<()>;
-    /// `CMSG_IGNORE_TRADE` — decline via ignore; initiator hears `IgnoreYou` (#123).
+    /// `CMSG_IGNORE_TRADE`, decline via ignore; initiator hears `IgnoreYou`.
     fn ignore_trade(&self, account_id: u64, self_guid: u64) -> Result<()>;
 
-    /// Find `owner_guid`'s corpse location `(map_id, x, y, z)` for `MSG_CORPSE_QUERY` (slice 5).
+    /// Find `owner_guid`'s corpse location `(map_id, x, y, z)` for `MSG_CORPSE_QUERY`.
     fn corpse_location(&self, owner_guid: u64) -> Result<Option<(u32, f32, f32, f32)>>;
 
     /// Return the `combat_until_ms` timestamp for `player_guid`'s entity row (0 if the entity is not

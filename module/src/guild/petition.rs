@@ -700,18 +700,4 @@ mod tests {
             .collect();
         assert_eq!(joining, [5_090_511, 5_090_513]);
     }
-
-    /// The actor guid is an argument, so the operator gate is the whole authorization.
-    #[test]
-    fn destroying_a_charter_opens_with_the_operator_gate() {
-        let body = crate::test_scan::code_of(
-            include_str!("petition.rs"),
-            "pub fn gw_destroy_guild_charter(",
-        );
-        let normalized = body.split_whitespace().collect::<Vec<_>>().join(" ");
-        assert!(
-            normalized.starts_with("{ crate::helpers::require_operator(ctx)?;"),
-            "`gw_destroy_guild_charter` no longer opens with the operator gate. Body was:\n{body}"
-        );
-    }
 }

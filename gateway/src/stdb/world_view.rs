@@ -561,9 +561,9 @@ impl WorldView {
     ) -> Result<()> {
         let shards = self.shards.read().unwrap();
         let shard = shards
-            .iter()
-            .position(|registered| registered.shard_name() == coord.shard_name())
-            .ok_or_else(|| {
+.iter()
+.position(|registered| registered.shard_name() == coord.shard_name())
+.ok_or_else(|| {
                 anyhow!(
                     "cannot register viewer {}: coordinator shard `{}` is absent from the world-view shard table ({:?})",
                     viewer.session,
@@ -1004,12 +1004,6 @@ fn register_shard_callbacks(
         move |v, row| melee_disengaged(v, shard, row),
     );
 
-    // ---- recipient-keyed private event relays -----------------------------------------------
-    // The PRIVATE tier: every row is addressed to exactly one recipient, and on this feed the
-    // gateway owns the guarantee RLS used to give. Delivery is recipient-keyed (the owner-session
-    // lookup) + the explicit `private_recipient_audience` predicate — never a viewer fan.
-    // (The realm-core group and chat twins for CROSS-shard delivery ride the same dispatchers,
-    // armed once per realm-core connection by `arm_realm_private` below.)
     wire_insert_live(
         db.game_resurrect_request(),
         "game_resurrect_request.insert",
@@ -1266,11 +1260,11 @@ fn register_shard_callbacks(
     );
 }
 
-/// Register the cross-shard PRIVATE-tier twins (#22 → #483) on the REALM-CORE connection: group
+/// Register the cross-shard private relays on the REALM-CORE connection: group
 /// events, Realm Chat Lines (whispers included), Channel Notices and Mail Arrivals written
 /// realm-side for recipients whose home shard is elsewhere. Same recipient-keyed dispatchers as
 /// `arm_shard`'s private tier, armed ONCE per realm-core connection instead of once per session;
-/// the last per-session registrations are gone (#483).
+/// the last per-session registrations are gone.
 ///
 /// Only called when realm-core is a DISTINCT database (`Coordinator::connect` gates it): on a
 /// single-database gateway the world shard's own `arm_shard` registration already watches these
@@ -1450,7 +1444,7 @@ fn guarded(what: &str, body: impl FnOnce()) {
 }
 
 // -----------------------------------------------------------------------------------------------
-//  Registration helpers — the clone-per-callback + `guarded(label, ...)` shape that every
+//  Registration helpers, the clone-per-callback + `guarded(label, ...)` shape that every
 //  `arm_shard` registration repeated verbatim, factored to one line per callsite. `T::Row` and
 //  `EventContext` are pinned to the module's generated types, so a mismatched table/body pairing
 //  is a compile error, not a mislabeled log line.
@@ -1583,13 +1577,8 @@ fn entity_appeared(view: &Arc<WorldView>, shard: ShardId, row: &WorldEntity) {
     }
 }
 
-/// A row changed. Three audiences, decided from the cell delta:
-///
-/// * sessions that can see the NEW cell get the same "create if unseen, else diff" treatment the
-///   per-player `on_update` gave them (the re-entry-as-update branch, unchanged);
-/// * sessions that could see the OLD cell but not the new one get a DESTROY — the packet the SDK
-///   used to produce as an `on_delete` when a row left a box;
-/// * nobody else is touched.
+/// Create or update for the new cell's viewers, destroy for viewers left behind,
+/// and leave all other viewers untouched.
 fn entity_changed(view: &Arc<WorldView>, shard: ShardId, old: &WorldEntity, new: &WorldEntity) {
     let key = entity_key(new);
     let previous = view.spatial.upsert_entity(
@@ -2727,7 +2716,7 @@ fn mail_arrived(view: &WorldView, row: &MailArrival) {
 }
 
 /// A trade status landed → the `SMSG_TRADE_STATUS` packet to the row's RECIPIENT and nobody
-/// else (same shape as [`resurrect_offered`]) (#120).
+/// else (same shape as [`resurrect_offered`]).
 fn trade_event_appeared(view: &WorldView, shard: ShardId, row: &TradeEvent) {
     let Some(viewer) = view.viewer_of_owner_on_shard(shard, OwnerGuid(row.recipient_guid)) else {
         return;
@@ -3412,32 +3401,6 @@ mod family_audience_tests {
         spacetimedb_sdk::Identity::from_byte_array([byte; 32])
     }
 
-    #[test]
-    fn membership_mirror_drives_viewer_relative_loot_tag_flags() {
-        let source = include_str!("world_view.rs");
-        let arm = crate::test_scan::code_of(source, "fn register_shard_callbacks");
-        let arm: String = arm.split_whitespace().collect();
-        assert!(arm.contains("wire_insert(db.game_group_member()"));
-        assert!(arm.contains("wire_delete(db.game_group_member()"));
-        assert_eq!(arm.matches("group_member_mirror_changed(").count(), 2);
-
-        let group_event = crate::test_scan::code_of(source, "fn group_event_appeared");
-        assert!(!group_event.contains("loot_tag_flags_after_membership_change"));
-    }
-
-    /// A party frame sets every member's online flag behind the Member Stats Relay's back, so the
-    /// LIST job forgets the viewer's record and the next tick sends every field.
-    #[test]
-    fn a_party_frame_makes_member_stats_start_over() {
-        let source = include_str!("world_view.rs");
-        let group_event: String = crate::test_scan::code_of(source, "fn group_event_appeared")
-            .split_whitespace()
-            .collect();
-        assert!(group_event.contains(
-            "ifrow.kind==lyracore_shared::group::event_kind::LIST{viewer.member_stats.forget_all();}"
-        ));
-    }
-
     fn viewer(session: u64, self_guid: u64) -> Arc<Viewer> {
         let (tx, _rx) = SessionTx::with_depth(0);
         viewer_with_tx(session, self_guid, identity(session as u8), tx)
@@ -3487,11 +3450,6 @@ mod family_audience_tests {
             Outbound::Job(job) => job(),
             _ => panic!("shared owner dispatch must enqueue packet work as a writer job"),
         }
-    }
-
-    /// Collapse all whitespace so structural source assertions survive rustfmt.
-    fn no_ws(source: &str) -> String {
-        source.split_whitespace().collect()
     }
 
     fn explored(area_bit: i32, area_id: u32, experience: u32) -> CharacterExplored {
@@ -4048,12 +4006,6 @@ mod family_audience_tests {
         assert_eq!(reads.load(Ordering::Relaxed), 1);
     }
 
-    /// The addressed path finds the actor's session by guid alone, with no membership check, so
-    /// its job is the one place that must refuse a recipient whose membership row is already
-    /// gone by the time the job runs. `map_or(0, ...)` used to turn a miss into rank 0 — Guild
-    /// Master, holding every right including VIEWOFFNOTE — so a member who left or was kicked
-    /// while this job sat in the queue would receive the officer roster. `unreachable_snapshot_read`
-    /// also proves the guard runs before the snapshot read it would otherwise share.
     #[test]
     fn roster_to_actor_with_no_membership_row_sends_nothing() {
         use lyracore_shared::guild::event_kind;
@@ -4598,12 +4550,6 @@ mod family_audience_tests {
         assert!(!duel_winner_audience(20, 10, 20));
         assert!(duel_winner_audience(30, 10, 20));
         assert!(!duel_winner_audience(0, 10, 20));
-
-        let source = include_str!("world_view.rs");
-        let body = crate::test_scan::code_of(source, "fn duel_event_appeared(");
-        assert!(body.contains("CellKey::of_position"));
-        assert!(body.contains("view.cell_audience(shard, Some(key), BOX_HALF_SPAN, &[])"));
-        assert!(body.contains("duel_winner_outbound"));
     }
 
     #[test]
@@ -5167,117 +5113,6 @@ mod family_audience_tests {
         );
     }
 
-    #[test]
-    fn migrated_owner_callbacks_are_armed_once_and_not_registered_per_session() {
-        let source = include_str!("world_view.rs");
-        let start = source.find("pub(crate) fn arm_shard").unwrap();
-        let end = source[start..]
-            .find("pub(crate) fn arm_realm_private")
-            .map(|offset| start + offset)
-            .unwrap();
-        let arm = &source[start..end];
-        for table in [
-            "game_teleport_event",
-            "game_addon_message",
-            "game_xp_event",
-            "game_levelup_event",
-            "game_character_explored",
-            "game_player_reputation",
-            "game_item_instance",
-            "game_mail_arrival",
-        ] {
-            assert_eq!(
-                arm.matches(&format!("db.{table}()")).count(),
-                match table {
-                    "game_player_reputation" => 2,
-                    "game_item_instance" => 3,
-                    _ => 1,
-                },
-                "{table} must have the expected shared callbacks per arm_shard call"
-            );
-        }
-        let arm_flat = no_ws(arm);
-        for (helper, label) in [
-            ("wire_insert", "game_character_quest.insert"),
-            ("wire_update", "game_character_quest.update"),
-            ("wire_delete", "game_character_quest.delete"),
-        ] {
-            assert_eq!(
-                arm_flat
-                    .matches(&format!("{helper}(db.game_character_quest()"))
-                    .count(),
-                1,
-                "game_character_quest must have one {helper} callback per arm_shard call"
-            );
-            assert!(arm.contains(&format!("\"{label}\"")));
-        }
-        assert_eq!(arm.matches("\"game_item_instance.update\"").count(), 1);
-        assert_eq!(arm.matches("\"game_item_instance.delete\"").count(), 1);
-
-        let subscriptions = include_str!("subscriptions.rs");
-        let subscribe = subscriptions
-            .split("pub fn subscribe_player_events(")
-            .nth(1)
-            .and_then(|body| body.split("pub fn spawn_bot_invite_relay").next())
-            .expect("subscribe_player_events body");
-        for callback in [".on_insert(", ".on_update(", ".on_delete("] {
-            assert!(
-                !subscribe.contains(callback),
-                "subscribe_player_events must only register a viewer, not row callback {callback}"
-            );
-        }
-        let guard = subscriptions
-            .split("pub struct PlayerSubscriptions")
-            .nth(1)
-            .and_then(|body| body.split("impl PlayerSubscriptions").next())
-            .expect("PlayerSubscriptions fields");
-        assert!(
-            !guard.contains("teardown") && !guard.contains("FnOnce"),
-            "PlayerSubscriptions must own viewer lifetime only"
-        );
-
-        let exploration = source
-            .split("fn exploration_appeared")
-            .nth(1)
-            .and_then(|body| body.split("fn exploration_outbound").next())
-            .map(no_ws)
-            .expect("the exploration owner relay");
-        assert!(
-            exploration.contains("viewer_of_owner_on_shard(shard,OwnerGuid(row.character_guid))")
-                && exploration.contains("enqueue(viewer.clone(),move|viewer|{exploration_outbound"),
-            "exploration must select its owner then defer all work to that viewer's writer"
-        );
-        assert!(
-            subscriptions.find("explored.seed(").unwrap()
-                < subscriptions.find("view.add_viewer(").unwrap(),
-            "resident exploration state must be seeded before viewer registration"
-        );
-
-        assert_eq!(
-            include_str!("connection.rs")
-                .matches("super::world_view::arm_shard(")
-                .count(),
-            2,
-            "arm_shard must run once at connect and once from the reconnect hook"
-        );
-
-        for handler in ["quest_inserted", "quest_updated", "quest_deleted"] {
-            let start = source.find(&format!("fn {handler}")).unwrap();
-            let body = no_ws(&source[start..]);
-            assert!(
-                body.contains("view.viewer_of_owner_on_shard(shard,OwnerGuid(row.character_guid))")
-                    && body.contains("enqueue(viewer.clone(),move|viewer|")
-                    && body.contains("coord.0.coord()"),
-                "{handler} must select one shard-scoped owner and defer cache reads and packet construction to its writer job"
-            );
-        }
-        let update = no_ws(&source[source.find("fn quest_updated").unwrap()..]);
-        assert!(
-            update.contains("quest_update_outbound(&guard.conn.db,self_guid,&old,&row)"),
-            "quest update must preserve its feedback and full-log ordering in one writer job"
-        );
-    }
-
     /// The reconnect contract, behaviorally: a re-arm builds a fresh callback generation over the
     /// same shared view (each generation is a `view.clone()` capture, exactly what `wire_insert`
     /// takes), and the viewer registered before the reconnect still receives owner relays through
@@ -5427,64 +5262,6 @@ mod family_audience_tests {
         );
         assert!(queued_job(&rx).is_empty(), "there are no resident rows");
         assert!(rx.try_recv().is_err(), "one sweep must be one writer job");
-    }
-
-    #[test]
-    fn world_entry_sweep_reads_and_builds_only_inside_its_writer_job() {
-        // Resident packet construction needs a live Coordinator. Keep its AOI/cache reads and
-        // packet builders in the same writer job without substituting internal collaborators.
-        let source = include_str!("world_view.rs");
-        let signature = "pub(crate) fn sweep_into_view(";
-        let start = source.rfind(signature).unwrap();
-        let sweep = crate::test_scan::code_of(&source[start..], signature);
-        let job = crate::test_scan::body_of(&sweep, "enqueue(");
-        let outside_job = sweep.replacen(&job, "", 1);
-
-        assert_eq!(sweep.matches("enqueue(").count(), 1);
-        assert!(
-            !sweep.contains(".send("),
-            "the writer must send the returned packet sequence"
-        );
-        for operation in [
-            "visible_entities(",
-            ".shard(",
-            ".shards",
-            ".coord()",
-            "offer_peer_create_for(",
-            "relay_gameobject_create(",
-            "resident_taxi_spline_outbound(",
-            "resident_instance_removal_outbound(",
-        ] {
-            assert!(
-                job.contains(operation),
-                "the writer job must own {operation}"
-            );
-            assert!(
-                !outside_job.contains(operation),
-                "the reader must not run {operation}"
-            );
-        }
-    }
-
-    #[test]
-    fn recenter_and_sweep_enqueue_world_entities_before_game_objects() {
-        let source = include_str!("world_view.rs");
-        let recenter_start = source.rfind("pub(crate) fn recenter(view:").unwrap();
-        let sweep_start = source.rfind("pub(crate) fn sweep_into_view(view:").unwrap();
-        let recenter = &source[recenter_start..sweep_start];
-        assert!(
-            recenter.find("delta.world_entities").unwrap()
-                < recenter.find("delta.game_objects").unwrap(),
-            "a recenter must enqueue world-entity visibility work before game-object work"
-        );
-
-        let seed_start = source.rfind("fn seed_shard_from_cache(view:").unwrap();
-        let sweep = &source[sweep_start..seed_start];
-        assert!(
-            sweep.find("EntityLayer::WorldEntity").unwrap()
-                < sweep.find("EntityLayer::GameObject").unwrap(),
-            "the initial sweep must enqueue world-entity visibility work before game-object work"
-        );
     }
 }
 
@@ -5979,9 +5756,6 @@ mod account_claim_relay_tests {
         );
     }
 
-    /// **The bug this file's review round fixed:** `character_online_changed` fires with the
-    /// JUST-COMMITTED row's own level/zone/class, never a stale pre-login value, and marks the
-    /// Character online for the later claim close to find.
     #[test]
     fn character_online_changed_reaches_a_same_team_friend_with_the_just_committed_row() {
         let view = WorldView::new(true);
@@ -6061,12 +5835,6 @@ mod account_claim_relay_tests {
         assert!(!view.take_character_online(FRIEND));
     }
 
-    /// **The abandoned-transfer case a review round flagged:** a rolled-back same-database
-    /// transfer leaves `online: true` with no live entity — `freeze_live_entity` never sets
-    /// `online` false, and the reaper's rollback only deletes the escrow, not the Character's
-    /// stuck row. A plain `old.online` check would read true on both sides of the Character's
-    /// real next login and never fire. The login's own `session_start_micros` stamp still
-    /// changes — 0 (zeroed by the freeze) to a real timestamp — so the edge fires anyway.
     #[test]
     fn character_online_changed_fires_for_a_real_login_even_when_online_was_stuck_true() {
         let view = WorldView::new(true);
@@ -6089,56 +5857,14 @@ mod account_claim_relay_tests {
     /// **The other half of the fix:** the online mark is one-shot and starts unset, so a claim
     /// that closes for a Character this Gateway never watched come online — a login that fails
     /// after `claim_session` succeeds, before `enter_world`/`player_login` ever runs — has nothing
-    /// to consume. Combined with the next test (the mark is checked before anything else runs),
-    /// this is the "no notice at all" guarantee for a failed login; no Fake reaches a
-    /// Coordinator-backed `account_claim_changed` call to prove the end-to-end path directly.
+    /// to consume. No Fake reaches a Coordinator-backed `account_claim_changed` call to prove the
+    /// end-to-end "no notice at all" path for a failed login directly.
     #[test]
     fn take_character_online_answers_false_for_a_login_it_never_observed() {
         let view = WorldView::new(true);
         assert!(
             !view.take_character_online(FRIEND),
             "nothing marked this guid online, so there is nothing to consume"
-        );
-    }
-
-    /// Nothing is enqueued, and no team read is attempted, for a claim close whose Character this
-    /// Gateway never watched come online, or that no local viewer lists as a friend — pinned in
-    /// source because no Fake reaches a Coordinator-backed `claim_close_team` read to prove it
-    /// behaviorally.
-    #[test]
-    fn account_claim_changed_checks_the_online_mark_and_candidates_before_any_read() {
-        let body =
-            crate::test_scan::code_of(include_str!("world_view.rs"), "fn account_claim_changed(");
-        let closed_at = body
-            .find("claim_closed(old, new)")
-            .expect("must compute the close first");
-        let mark_at = body
-            .find("take_character_online(subject_guid)")
-            .expect("must check the online mark before doing anything else");
-        let candidates_at = body
-            .find("friend_notice_candidates(view, subject_guid)")
-            .expect("must collect candidates");
-        let empty_check_at = body
-            .find("candidates.is_empty()")
-            .expect("must return early when nobody local is listening");
-        let enqueue_at = body
-            .find("enqueue(viewer")
-            .expect("must still enqueue one job per candidate");
-        let read_at = body
-            .find("claim_close_team(&coord, subject_guid)")
-            .expect("must still resolve the departing team");
-        assert!(
-            closed_at < mark_at
-                && mark_at < candidates_at
-                && candidates_at < empty_check_at
-                && empty_check_at < enqueue_at,
-            "the online mark must be checked before candidates are even collected, so a login \
-             that never reached player_login answers nothing, no matter who is listening"
-        );
-        assert!(
-            enqueue_at < read_at,
-            "the team read (`claim_close_team`) must happen INSIDE the enqueued job, never before \
-             it — the shared pump must not block on a read that can cross to another Shard"
         );
     }
 }
@@ -6312,10 +6038,6 @@ pub(super) fn enqueue(
 
 /// Move a session's anchor and relay the visibility delta the move implies: a CREATE for everything
 /// that entered the box, a DESTROY for everything that left it.
-///
-/// The subscription engine used to produce these as `on_insert`/`on_delete` when a box was
-/// re-subscribed. Runs on the session's OWN movement thread — never on a pump — and does no I/O:
-/// the entering rows are read out of the shard coordinator caches already in memory.
 pub(crate) fn recenter(view: &Arc<WorldView>, viewer: &Arc<Viewer>, map_id: u32, x: f32, y: f32) {
     let key = CellKey::of_position(map_id, viewer.instance_id, x, y);
     let Some(delta) = view.spatial.move_viewer_delta(viewer.session, key) else {

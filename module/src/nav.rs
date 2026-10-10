@@ -1,4 +1,4 @@
-//! Nav grid: walkability + line-of-sight obstruction data (work-item 241, decision #8).
+//! Nav grid: walkability and line-of-sight obstruction data.
 //!
 //! One row per terrain MCNK cell that has ANY obstruction, steep slope, or hole — fully-clear
 //! cells emit no row, so a missing chunk means "no obstacles known here" and every reader keeps
@@ -202,9 +202,9 @@ pub fn import_nav_chunks_append(ctx: &ReducerContext, packed: String) -> Result<
 }
 
 // ===========================================================================================
-//  Runtime consumption (work-item 243) — the module-side wrappers over `lyracore_shared::nav`'s
-//  pure queries, gated on `game_config.nav_enabled` (default OFF; the 244 benchmark + live
-//  verify flips it). Every wrapper degrades to the pre-243 straight-line behavior when the
+//  Runtime consumption, the module-side wrappers over `lyracore_shared::nav`'s
+//  pure queries, gated on `game_config.nav_enabled` (default OFF; the benchmark + live
+//  verify flips it). Every wrapper degrades to straight-line behavior when the
 //  flag is off or a chunk is missing. `route_step` holds position when no path exists.
 // ===========================================================================================
 

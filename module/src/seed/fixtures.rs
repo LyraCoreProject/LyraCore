@@ -68,7 +68,7 @@ pub(crate) fn test_wolf_template() -> CreatureTemplate {
         damage_max: 0,
         armor: 0,              // set via `spacetime sql` on this row to mock-test mitigation
         pickpocket_loot_id: 0, // not imported — the test wolf has no pickpocket table
-        // 0 ⇒ `skin_corpse` falls back to the flat Light Leather — the pre-210 verify flow
+        // 0 ⇒ `skin_corpse` falls back to the flat Light Leather — the verify flow
         // (debug_skin_nearest → 1x Light Leather) stays byte-identical without a seeded skin table.
         skin_loot_id: 0,
         trainer_type: 0, // the test wolf is a beast, not a trainer
@@ -572,7 +572,7 @@ pub(crate) fn base_item(entry: u32, name: &str) -> ItemTemplate {
 /// already-migrated dev DB (where `init` did not re-run).
 ///
 /// Weakened Soul (REAL vanilla id 6788) is the hardcoded Power Word: Shield lockout debuff. Its real
-/// Spell.dbc shape (CONFIRMED via a DBC dry-run for work-item 122 — this is NOT the effectless marker
+/// Spell.dbc shape (CONFIRMED via a DBC dry-run; it is NOT the effectless marker
 /// earlier believed) is a single `A_IMMUNITY` (0xB1) aura with MiscValue 19 (MECHANIC_SHIELD): vanilla's
 /// actual "immune to the shield mechanic" (i.e. can't be re-shielded) effect. 15s duration, holy school
 /// (school_mask 2), dispel_type 0 — mirroring the importer's DBC output so a seed-only dev DB matches a
@@ -652,7 +652,7 @@ pub(crate) fn seed_pw_shield_fixture(ctx: &ReducerContext) {
     );
 }
 
-/// Hand-seed the Soul Shard item template (real vanilla item 6265). The .import ETL
+/// Hand-seed the Soul Shard item template (real vanilla item 6265). The import ETL
 /// doesn't reliably carry it, so — mirroring `seed_pw_shield_fixture`'s precedent for a mechanic whose
 /// live-DBC row isn't available in every dev environment — it's authored here. A plain, non-equippable,
 /// non-sellable trade good (vanilla: Soul Shard cannot be sold to a vendor; `sell_price: 0` encodes
@@ -1120,10 +1120,6 @@ pub(crate) const FIXTURE_JERKY: u32 = 5090052;
 /// The reserved reusable MOUNT item — same reserved-entry rationale as the two above.
 pub(crate) const FIXTURE_REINS: u32 = 5090054;
 
-/// Insert the two reserved fixture item templates (insert-if-absent) — built from the same
-/// `tempered_blade_template`/`tough_jerky_template` constructors the mock-seed's Tempered Blade
-/// (50) / Tough Jerky (52) use, under the reserved entries above (this used to be a
-/// hand-copied literal that could drift from the mock-seed's).
 fn seed_fixture_items(ctx: &ReducerContext) {
     let items = ctx.db.game_item_template();
     if items.entry().find(FIXTURE_BLADE).is_none() {
@@ -1317,7 +1313,7 @@ pub(crate) fn seed_fixture_catalogue(ctx: &ReducerContext) {
     }
 }
 
-/// Scenario-runner mock-seed: everything the four wire scenarios need on a
+/// Scenario-runner seed: everything the four wire scenarios need on a
 /// no-import sandbox, insert-if-absent like every other fixture here. Same precedent as
 /// `seed_pw_shield_fixture` — call via `debug_seed_scenario_fixtures` post-publish.
 ///
@@ -1329,7 +1325,7 @@ pub(crate) fn seed_fixture_catalogue(ctx: &ReducerContext) {
 /// - vendor/repairer NPC template 51004 selling Tempered Blade (50) + Tough Jerky (52).
 /// - trainer offering on the seeded Profession Trainer (51001): Lesser Heal (2050, a seeded 1.5s
 ///   heal) for 100c at level 1 — the train-and-cast scenario's purchase.
-/// - Weapon Master NPC template 51005 ("Woo Ping", work-item 202): a second GOSSIP|TRAINER creature
+/// - Weapon Master NPC template 51005 ("Woo Ping"): a second GOSSIP|TRAINER creature
 ///   (mirrors the 51004 vendor block) offering 1H Axe (skill line 44, marker 50130, required_level 1,
 ///   100c) and Polearm (skill line 229, marker 50131, required_level 60, 100c — the level-refusal
 ///   fixture). Both rows carry `learn_skill_line` set to a COMBAT line, so `apply_trainer_buy` routes
@@ -1431,13 +1427,6 @@ pub(crate) fn seed_scenario_fixtures(ctx: &ReducerContext) {
         });
     }
 
-    // 060/187 recurring trap: the world ETL truncates game_creature_template and reloads from the
-    // dump — the INIT-seeded fixture templates (Test Wolf 51000, Profession Trainer 51001) vanish
-    // on every re-import, breaking the wire scenarios until someone reseeds by hand. Re-seed them
-    // HERE (this reducer is the operator's idempotent post-import fixture restore) from the SAME
-    // canonical constructors `seed::init` uses (this used to be a hand-copied literal that
-    // drifted — Profession Trainer was level 10/100hp/"Fixture" here vs level 30/1500hp/"Cooking &
-    // Skinning" in init, and Test Wolf's money_min/max disagreed too).
     let templates = ctx.db.game_creature_template();
     if templates.entry().find(WOLF).is_none() {
         templates.insert(test_wolf_template());
@@ -1612,7 +1601,7 @@ pub(crate) fn seed_scenario_fixtures(ctx: &ReducerContext) {
         });
     }
 
-    // --- WEAPON MASTER (work-item 202): "Woo Ping" (51005) sells weapon proficiencies for gold —
+    // --- WEAPON MASTER: "Woo Ping" (51005) sells weapon proficiencies for gold,
     // the vanilla weapon-master shape (a trainer-list row whose `learn_skill_line` names a weapon line
     // instead of a spell/profession). Mirrors the 51004 vendor block: GOSSIP|TRAINER, faction 35
     // (FRIENDLY, never a kill target).
@@ -1758,7 +1747,7 @@ fn upsert_effect(ctx: &spacetimedb::ReducerContext, row: SpellEffect) {
 }
 
 /// Stacking-family probe fixture — the four real family members a live aura-stacking probe needs
-/// (`docs/aura-stacking-probes.md`).
+/// (`docs/verification/aura-stacking-probes.md`).
 ///
 /// A curated sandbox carries only rank 1 of each aura family and every one of those is self-cast,
 /// so neither "the stronger member wins from either caster" nor "two paladins, one target" can be

@@ -1,30 +1,7 @@
-//! `--vmap <client Data/ dir>` — work-item #520 (part of the #169 full-vmap epic; design record:
-//! `docs/decisions.md` §10). Exact per-cell collision triangles, replacing the nav rasterizer's
-//! obstruction-height half.
-//!
-//! Reuses `nav.rs`'s tile scan (heights + deduped WMO/M2 placements), mesh loading, and MODF-bounds
-//! rotation calibration verbatim — only the consumption differs: instead of rasterizing into a
-//! walkability/obstruction grid, every collision triangle is transformed to world space with FULL
-//! rotation (yaw + pitch + roll — the rasterizer's yaw-only limitation doesn't apply to an exact
-//! per-triangle store), binned by the SAME 33.3 yd terrain cell key the nav grid uses, and packed
-//! into a per-cell blob via `lyracore_shared::vmap` (source class + WMO group id + MOGP flags).
-//!
-//! #520 stopped at extract + pack + report. #521 adds `--apply`: batches each cell's packed blob
-//! into `import_vmap_chunks`/`import_vmap_chunks_append` calls (same convention as `--nav`), and
-//! the module-side table + LoS/collision ray queries those reducers feed live in
-//! `module/src/vmap.rs` + `lyracore_shared::vmap::cast_ray`. Same licensing firewall as
-//! `--nav`/`--terrain`: in-memory only, nothing written to disk.
-//!
-//! `--vmap-prepare-coverage <generation_id>` drives path-grid coverage derivation for an
-//! already-staged generation (`run_coverage` below): no client Data/ dir, since the geometry is
-//! already staged and the module derives coverage from it directly. Enumerates the generation's
-//! own cells, batches `prepare_vmap_nav_coverage` calls, and finalizes — resumable by skipping
-//! cells a prior run already covered.
-//!
-//! An Instance Vmap Slice reads only the ADT tiles crossed by its route collar and uses the same
-//! triangle transform, packer, and generation lifecycle as continent geometry. Instance terrain
-//! and Navigation Coverage remain unavailable because their current rows represent one floor per
-//! cell.
+//! Client geometry extraction for `--vmap` and `--vmap-prepare-coverage`.
+//! Tile scans reuse nav mesh loading and placement calibration. Collision triangles use full
+//! rotation and the shared per-cell codec. `--apply` sends bounded batches to the import reducers.
+//! Client bytes stay in memory.
 
 use anyhow::{bail, Context, Result};
 use lyracore_shared::terrain::cell_key;
@@ -558,18 +535,18 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
                 route.geometry_ready(),
                 format_point(route.samples.first().and_then(|sample| sample.support_floor)),
                 route
-                    .supported_exit_sample
-                    .map(|index| index.to_string())
-                    .unwrap_or_else(|| "none".to_owned()),
+.supported_exit_sample
+.map(|index| index.to_string())
+.unwrap_or_else(|| "none".to_owned()),
                 format_position(
                     route
-                        .supported_exit_sample
-                        .and_then(|index| route.samples[index].supported_position())
+.supported_exit_sample
+.and_then(|index| route.samples[index].supported_position())
                 ),
                 format_point(
                     route
-                        .supported_exit_sample
-                        .and_then(|index| route.samples[index].support_floor)
+.supported_exit_sample
+.and_then(|index| route.samples[index].support_floor)
                 ),
                 format_point(route.samples.last().and_then(|sample| sample.support_floor)),
                 format_hit(route.direct_step_hit),
@@ -603,9 +580,9 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
                     format_point(sample.model_floor),
                     format_point(sample.support_floor),
                     sample
-                        .floor_delta
-                        .map(|value| format!("{value:.4}"))
-                        .unwrap_or_else(|| "none".to_owned()),
+.floor_delta
+.map(|value| format!("{value:.4}"))
+.unwrap_or_else(|| "none".to_owned()),
                     format_hit(sample.headroom_hit),
                     format_hit(sample.step_hit),
                 );
@@ -950,11 +927,11 @@ fn build_instance_plan(
                 placement.name,
                 inspection.unique_id,
                 inspection
-                    .relevant_refs
-                    .iter()
-                    .map(u32::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", ")
+.relevant_refs
+.iter()
+.map(u32::to_string)
+.collect::<Vec<_>>()
+.join(", ")
             ));
         }
         inspections.push((placement, inspection));
@@ -1477,10 +1454,7 @@ fn apply_plan(args: &crate::Args, plan: &VmapPlan) -> Result<()> {
 /// `nav.rs`'s `BATCH_BYTES`).
 const BATCH_BYTES: usize = 28_000;
 
-/// Hard cap on ONE shard's packed byte size, well under the ~128 KB (`MAX_ARG_STRLEN`) a single
-/// Linux argv string can hold even after this blob doubles in size as hex text — the failure this
-/// guards was measured live (`Argument list too long`, os error 7) importing a dense WMO cell near
-/// the Northshire abbey before this cap existed.
+/// Keep each hex-encoded row below Linux's ~128 KB argv-string limit.
 const MAX_ROW_TRI_BYTES: usize = 20_000;
 
 /// Bounds the 45-byte spool records retained by one Instance Vmap Slice to 22.5 MB.
@@ -1826,12 +1800,7 @@ mod tests {
         assert_eq!(back.len(), 5);
     }
 
-    /// A dense cell (more triangles than one `MAX_ROW_TRI_BYTES`-capped blob can hold) splits into
-    /// several shards, each individually decodable and each within the byte cap; the union of
-    /// every shard's decoded triangles recovers the exact original set (unordered) — this is the
-    /// live-measured fix for the `Argument list too long` failure importing a dense WMO cell near
-    /// the Northshire abbey (a single oversized row exceeded Linux's ~128 KB argv-string limit
-    /// before this cap existed).
+    /// Dense cells split into byte-capped shards whose decoded union preserves every triangle.
     #[test]
     fn a_dense_cell_splits_into_byte_capped_shards_that_reassemble_exactly() {
         let per_shard = (MAX_ROW_TRI_BYTES - HEADER_BYTES) / TRI_BYTES;

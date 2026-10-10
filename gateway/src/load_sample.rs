@@ -1,28 +1,3 @@
-//! Periodic per-shard load sampling — the mechanism that lets seam decisions be driven by queryable
-//! load data instead of guesswork.
-//!
-//! The gateway is the one component that can see the whole realm: every shard's own SpacetimeDB
-//! node exposes `/v1/metrics` (the same endpoint this project's internal capacity-benchmark harness
-//! reads for its writer-occupancy number), and every shard's coordinator connection already caches
-//! its live player-session count. This module samples both on a timer and writes them to
-//! realm-core via `record_shard_load` (`module/src/load.rs`), so "which shard is hot" is
-//! answerable with `spacetime sql`.
-//!
-//! # Split: impure I/O vs. the testable driver
-//!
-//! [`OccupancySampler`] does the one genuinely impure thing here (an HTTP GET against a live node)
-//! and is therefore NOT exercised by this crate's tests — same "KNOWN-UNCOVERED, name it" convention
-//! already used elsewhere for `Coordinator::escrow_row`. Its Prometheus text
-//! PARSING and its occupancy-percentage MATH are pure and pinned directly
-//! (the wire harness's `src/bin/bench/metrics.rs` computes the identical thing; this is a
-//! from-scratch reimplementation — see that file's own doc for why sharing it as a library was not
-//! the fit: `lyracore-shared` cannot take an HTTP-capable dependency, it also compiles to wasm).
-//!
-//! [`sample_and_record`], the actual per-cycle DRIVER, takes the already-scraped occupancy numbers
-//! as a plain `HashMap` and is generic over [`crate::realm_core::RealmDb`] — the exact same seam
-//! `realm_core.rs` built for the realm-core split — so it runs under `fake::Handle` in this crate's
-//! own tests, mutation-checked, with no live node at all.
-
 use std::collections::{BTreeMap, HashMap};
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -50,7 +25,7 @@ pub(crate) fn sample_interval() -> Duration {
 }
 
 /// Deterministic 64-bit FNV-1a hash of this gateway's own identity string (`GatewayConfig::gateway_id`,
-/// `LYRACORE_GATEWAY_ID`) — issue #308. `game_shard_load.gateway_key` is `u64`, not `String`: a
+/// `LYRACORE_GATEWAY_ID`). `game_shard_load.gateway_key` is `u64`, not `String`: a
 /// `String` END-appended to an existing table cannot carry a `#[default(...)]`
 /// (`docs/danger-zones.md` §1.2, "cannot default a `String` column"), so the raw identity never
 /// crosses the wire into the table — this hash does instead. FNV-1a (not `DefaultHasher`) because
@@ -190,16 +165,6 @@ impl Snapshot {
 /// Occupancy percentage from a CPU-time delta over a wall-clock delta (the same computation the
 /// internal capacity-benchmark tool uses). Pure, so it is the one piece of this
 /// module pinned directly against concrete numbers.
-///
-/// Clamped to `[0, 100]`... deliberately NOT clamped to 100 — a brief scheduling skew can make a
-/// window read slightly over 100%, and clamping that away would hide a real saturation signal
-/// behind a false ceiling. Only the FLOOR is enforced: a negative delta (the node restarted or the
-/// module republished mid-window, so the counter went backwards) reads as `0.0`, not as a negative
-/// occupancy that would make no sense on a graph. This module does not attempt the capacity
-/// benchmark's stronger counter-reset detection (`Snapshot::first_negative`, which VOIDS a whole
-/// measured rung) — that is the right rigor for a benchmark used to grade a perf claim; this is a
-/// background convenience gauge, and reading one 30s sample as "briefly idle" instead of flagging a
-/// reset is an acceptable trade for not needing a scheduled reaper or a voided-sample state machine.
 pub(crate) fn occupancy_pct(cpu_sec_delta: f64, wall_dt_secs: f64) -> f32 {
     if wall_dt_secs <= 0.0 || !cpu_sec_delta.is_finite() {
         return 0.0;
@@ -290,17 +255,6 @@ impl OccupancySampler {
 //  The driver — pure given the RealmDb abstraction, tested against `realm_core::fake::Handle`.
 // ===================================================================================================
 
-/// Record measured occupancy and cached Session counts for the connected World Shards,
-/// Instance Pools and Realm-core. A single-Shard Realm is sampled once. Returns one "SHARDLOAD ..."
-/// line per shard for the caller to log at the sample cadence (the QUEUESTAT/AOISTAT convention,
-/// `gateway/src/world/mod.rs`) — visible without `spacetime sql`.
-///
-/// `occupancy_by_shard` is whatever [`OccupancySampler::sample_all`] returned THIS cycle — passed
-/// in rather than sampled here so this function stays generic over [`RealmDb`] and therefore
-/// testable without a live node or a live HTTP scrape.
-///
-/// `this_gateway_key` is [`gateway_key`] of this process's own `LYRACORE_GATEWAY_ID` — threaded in
-/// (rather than read from env here) for the same testability reason `occupancy_by_shard` is.
 pub(crate) fn sample_and_record<D: RealmDb>(
     db: &D,
     occupancy_by_shard: &HashMap<String, f32>,
@@ -450,10 +404,6 @@ spacetime_txn_cpu_time_sec_sum{db="zzz999",txn_type="Reducer"} 99.0
         assert!(parse_db_ids("").is_empty());
         assert!(parse_db_ids("   \n # just a comment\n").is_empty());
     }
-
-    // -------------------------------------------------------------------------------------
-    //  The driver, wired against the realm_core fake — no live node, mutation-checked.
-    // -------------------------------------------------------------------------------------
 
     use crate::realm_core::fake::{realm, Handle};
 

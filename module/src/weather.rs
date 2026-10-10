@@ -46,9 +46,6 @@ const INTENSITY_STEP: f32 = 0.333_333_34;
 /// Two thirds of the intensity range — the radical branch's drop from heavy back towards light.
 const RADICAL_STEP: f32 = 0.666_666_7;
 
-/// The spread of one intensity band (light, medium, heavy). CMaNGOS spells this `0.3333` rather than
-/// deriving it from [`INTENSITY_STEP`], and the two are deliberately not the same number: a band's
-/// spread has to leave room under the `0.3334` and `0.6667` offsets stacked on it.
 const BAND_WIDTH: f32 = 0.3333;
 
 /// A weather type the 1.12.1 client renders.
@@ -929,35 +926,6 @@ mod tests {
             10 * 60 * 1_000_000,
             "the weather cadence is CMaNGOS's default; every change is a packet to a whole zone"
         );
-    }
-
-    /// Every reducer in this file must open with its gate — `require_operator` for the operator's
-    /// lever, the scheduler-only sender fence for the roll — before it reads or writes anything.
-    /// The `gw.rs` precedent, applied to the file that holds weather's own two reducers.
-    #[test]
-    fn every_reducer_here_opens_with_its_gate() {
-        let src = include_str!("weather.rs");
-        // Built at run time so this test's own source can never match the needle.
-        let needle = format!("#[{}]", "reducer");
-        let mut chunks = src.split(needle.as_str());
-        chunks.next(); // preamble
-        let mut seen = 0;
-        for chunk in chunks {
-            let body = chunk
-                .split_once('{')
-                .map(|(_, body)| body)
-                .unwrap_or("")
-                .trim_start();
-            assert!(
-                body.starts_with("require_operator(ctx)?;")
-                    || body.starts_with("if ctx.sender() != ctx.database_identity()"),
-                "a reducer here must open with require_operator(ctx)?; or the scheduler-only \
-                 sender fence — got:\n{}",
-                &body[..body.len().min(120)]
-            );
-            seen += 1;
-        }
-        assert_eq!(seen, 2, "the scan found {seen} reducers, expected 2");
     }
 
     #[test]

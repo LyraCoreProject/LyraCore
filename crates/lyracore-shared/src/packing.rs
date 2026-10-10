@@ -18,7 +18,7 @@ pub const fn player_bytes(skin: u8, face: u8, hair_style: u8, hair_color: u8) ->
 /// NORMAL=0x02): byte 3 = 0 makes the 5875 client's `GetRestState()` return a nil exhaustion
 /// multiplier, crashing `MainMenuBar.lua` (the XP/rested bar) with an arithmetic-on-nil error.
 pub const REST_STATE_NORMAL: u8 = 0x02;
-/// RESTED (196) — the client draws the zzz icon + turns the XP bar blue when byte 3 holds this.
+/// RESTED — the client draws the zzz icon + turns the XP bar blue when byte 3 holds this.
 pub const REST_STATE_RESTED: u8 = 0x01;
 
 /// Pack `PLAYER_BYTES_2`: byte0 = facial hair, byte2 = owned bank bag slot count, byte3 = rest state
@@ -27,7 +27,7 @@ pub const fn player_bytes_2(facial_hair: u8, bank_bag_slots: u8) -> u32 {
     player_bytes_2_with_rest(facial_hair, bank_bag_slots, false)
 }
 
-/// Pack `PLAYER_BYTES_2` with an explicit rest state (196) — `resting` → RESTED byte (zzz + blue bar),
+/// Pack `PLAYER_BYTES_2` with an explicit rest state — `resting` → RESTED byte (zzz + blue bar),
 /// else NORMAL. Used at spawn so a character who logged out in an inn logs back in already showing
 /// rested, and the purchased bank bag slot count shows without a relog.
 pub const fn player_bytes_2_with_rest(facial_hair: u8, bank_bag_slots: u8, resting: bool) -> u32 {

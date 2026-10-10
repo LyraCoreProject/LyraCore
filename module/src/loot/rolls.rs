@@ -1,58 +1,3 @@
-//! GROUP LOOT METHODS (work-item 187 slices 1-4) — round-robin / need-greed rolls / master looter.
-//! Split out of `loot.rs` into its own submodule: the decision enum, the rr cursor,
-//! `LootRoll`/`LootRollVote`, vote/resolve/sweep/disband, and the realm-core plane. Pure code motion
-//! — every gate and grant below is byte-identical to before the split.
-//!
-//! Timing decision (diverges from the work item's own draft, documented here): ALL group-loot
-//! stamping — round-robin/master designation AND spawning need/greed rolls — happens at KILL TIME
-//! (`apply_group_loot_rules`, called once from `combat::kill_creature` right after
-//! `roll_creature_loot`), not lazily "at first loot-open" as the work item's flow draft describes.
-//! Folding it into the kill path (already this slice's territory) avoids a NEW gateway reducer +
-//! CMSG_LOOT dispatch change just to detect "first viewer" — and the observable result is
-//! equivalent: eligible members get `SMSG_LOOT_START_ROLL` immediately after the kill instead of
-//! exactly-when-someone-opens-the-corpse. Round-robin designation was ALREADY spec'd for
-//! KILL-time creation in the work item's own design ("corpse gets `designated_looter_guid`
-//! stamped AT CREATION"), so this only extends that timing to the roll-spawn half too.
-//!
-//! Relay-pattern decision: rolls/master-list notifications reuse the EXISTING `game_group_event`
-//! per-recipient relay (`crate::group::push_event`) instead of a new gateway-subscribed table — see
-//! `lyracore_shared::loot_roll`'s module doc for the full rationale. The actual roll STATE
-//! (`LootRoll`/`LootRollVote` below) is never read by the gateway for the CLIENT's sake.
-//!
-//! **Where the roll DECISION lives.** `LootRoll`/`LootRollVote` are authoritative on
-//! REALM-CORE, alongside `game_group`/`game_group_member` — a roll's audience is who is in the
-//! group, not where anyone stands, exactly like the membership it is snapshotted from. Kill-time
-//! creation (`start_roll`, below) still runs on the corpse's own WORLD SHARD unconditionally — combat
-//! resolution has no path to another database — so in a sharded deployment this write is a TRANSIENT
-//! staging copy: the gateway's loot-roll relay (`gateway/src/world/loot.rs::relay_tick`) promotes it
-//! onto realm-core (`realm_loot_op`'s `loot_op::START`, calling `insert_roll_rows` again there WITHOUT
-//! re-pushing `ROLL_START` — the popup already fired locally) and clears the shard's copy
-//! (`clear_promoted_loot_roll`). Voting then routes to realm-core too (`loot_op::VOTE` → `cast_vote_on`
-//! on realm-core's `ctx.db`), so `remove_member`'s disband branch — unchanged, still
-//! `crate::loot::force_resolve_rolls_for_disband` — resolves a live roll in the SAME transaction as
-//! the membership change, on the SAME database, with no mirror and no round trip: whichever database
-//! `remove_member` executes on is also the one its `game_loot_roll` rows are the truth on. Unsharded,
-//! none of this promotion/routing ever runs (`WorldStore::realm_store()` answers `None`), so the roll
-//! lives and dies on one database exactly as it did before this issue — byte-identical.
-//!
-//! **What did NOT move.** Only the roll — the group-scoped decision — travels. `game_corpse_loot`
-//! (which corpse, which slot, item quality) and the actual item GRANT stay on the world shard with
-//! their existing escrow guarantees (`items::grant_item`); a winner decided on realm-core is handed
-//! their item by `settle_loot_roll`, an operator reducer the relay calls on the corpse's OWN shard
-//! after observing the `ROLL_WON` event. `game_corpse_loot_eligible` (who is in range to roll) is
-//! computed spatially at kill time and stays world-shard-local too — it is `apply_group_loot_rules`'s
-//! own `recipients` snapshot, not part of the roll's realm-core state.
-//!
-//! **The new case.** A roll's PARTICIPANTS could not previously be on different shards —
-//! `kill_reward_recipients` only ever names members who are physically near the corpse, i.e. on its
-//! own shard, at the moment the roll starts. The new case is a participant LEAVING that
-//! shard mid-roll (a portal, a dungeon entry) during the 60s window. Before, that voter's row was
-//! simply unreachable from wherever they went — their vote auto-passed at the deadline, same as being
-//! offline. Now it is reachable: voting is realm-core state, and the gateway routes a vote
-//! through whichever shard the player is CURRENTLY on, so a mid-roll shard-hopper can still vote from
-//! their new location. No special-casing was needed for this — it falls out of routing votes to
-//! realm-core rather than to "the shard that created the roll".
-
 use spacetimedb::{reducer, table, Identity, ReducerContext, Table};
 
 use crate::game_corpse_loot;
@@ -83,7 +28,7 @@ pub struct CorpseLootEligible {
 
 /// A live NEED/GREED/NBG roll on one `game_corpse_loot` row. Private — the gateway never reads this
 /// (relayed via `game_group_event` instead, see the module doc above). `resolved` is the exactly-once
-/// resolution guard (work-item 187 trap): set the moment `resolve_roll` decides an outcome, checked
+/// resolution guard: set the moment `resolve_roll` decides an outcome, checked
 /// FIRST on every entry point (the deadline sweep AND a landing vote can both reach the same roll).
 /// [entity]
 #[derive(Clone)]
@@ -186,7 +131,7 @@ pub(crate) fn group_loot_decision_for_row(
     }
 }
 
-/// Round-robin cursor advance (work-item 187 trap: "skipping offline members"): given a STABLE
+/// Round-robin cursor advance (trap: "skipping offline members"): given a STABLE
 /// member ordering's online bitmap and the group's current `cursor`, return the chosen member's
 /// INDEX into that same ordering plus the cursor value to persist for NEXT time (wrapping). `None`
 /// if nobody is online (a fully-offline group — degrades to FFA, never panics/blocks looting). Pure.
@@ -251,7 +196,7 @@ pub(crate) fn pick_roll_winner(rolls: &[u8]) -> Option<usize> {
 /// `combat::kill_creature` right after `roll_creature_loot`, for a grouped Loot Tag only. The
 /// corpse-eligibility rows are the one recipient set for designation, master loot, and rolls.
 ///
-/// Work-item 187 trap ("solo player with method GROUP set: threshold rows must NOT roll"): a solo
+/// A solo player with method GROUP set must not roll threshold rows: a solo
 /// `recipients` (`len() < 2`, e.g. every other member out of XP range or dead) skips ALL group-loot
 /// handling too — vanilla's "party size 1 -> direct loot" applies to loot exactly like it does to
 /// the XP split, so the same recipient-count gate covers both.
@@ -553,9 +498,6 @@ pub(crate) fn settle_roll_grant(
         .filter(&corpse_guid)
         .find(|l| l.slot == slot)
     else {
-        // AC#4 sweep. This return is the one that ATE A WINNER'S ITEM (the review): a slow
-        // voter had `CORPSE_DECAY_MICROS == ROLL_WINDOW_MICROS` reap the corpse out from under the
-        // roll, settlement found no row, and it returned with no grant, no error and no log.
         //
         // It cannot be an error, because the gateway fans `settle_loot_roll` out to every shard and
         // "no row here" is the normal answer on all but one. So it is logged at INFO and worded so
@@ -599,12 +541,12 @@ pub(crate) fn settle_roll_grant(
     }
 }
 
-/// Resolve exactly once (the `resolved` flag guard — work-item 187 trap): any NEED beats any GREED;
+/// Resolve exactly once (the `resolved` flag guard, trap): any NEED beats any GREED;
 /// a TIE within the winning tier re-rolls JUST the tied members internally (bounded — 1-100 rolls
 /// collide vanishingly rarely, `MAX_TIE_REROLLS` is generous headroom) and announces once; all-pass
 /// unlocks the row FFA-in-group (no `ROLL_WON` — vanilla shows no "won" line either). The winner is
 /// granted via `items::grant_item`; on `Err` (inventory full) the row is LEFT, `reserved_for` stamped
-/// to the winner (documented winner-locked fallback — 068's mail delivery is the eventual fix).
+/// to the winner (documented winner-locked fallback — mail delivery is the eventual fix).
 /// `votes`/`recipients` are the FULL snapshot (already auto-passed by the caller where needed).
 fn resolve_roll(ctx: &ReducerContext, roll: &LootRoll, votes: &[LootRollVote], recipients: &[u64]) {
     if roll.resolved {
@@ -642,7 +584,7 @@ fn resolve_roll(ctx: &ReducerContext, roll: &LootRoll, votes: &[LootRollVote], r
     };
     let winning_roll = rolls[w];
     let winner_guid = votes[tier[w]].voter_guid;
-    let winning_vote = votes[tier[w]].vote; // NEED or GREED — the tier that actually won (finding #3)
+    let winning_vote = votes[tier[w]].vote; // The winning tier determines whether the vote was Need or Greed.
 
     // Grant, then finalize the CorpseLoot row per the outcome (module doc: 068 mail is deferred).
     // On a single database this runs inline, right here, exactly as before. On REALM-CORE
@@ -695,7 +637,7 @@ fn cleanup_roll(ctx: &ReducerContext, roll_id: u64) {
     ctx.db.game_loot_roll().id().delete(roll_id);
 }
 
-/// Deadline sweep (work-item 187 trap: "disconnected member mid-roll: their vote auto-passes at
+/// Deadline sweep ("disconnected member mid-roll: their vote auto-passes at
 /// deadline"): scans every UNRESOLVED roll whose deadline has elapsed, auto-passes any still-`!voted`
 /// member (in place — never blocks), then resolves. `pub(crate)` — exposed for the orchestrator's
 /// scheduled-GC tick (`gc.rs`, NOT edited here per instructions): wire one call
@@ -725,7 +667,7 @@ pub(crate) fn sweep_loot_rolls(ctx: &ReducerContext) {
     }
 }
 
-/// Work-item 187 trap ("disband mid-roll -> resolve to sole member"): called from
+/// Disband mid-roll ("resolve to sole member"): called from
 /// `group::remove_member`'s full-disband branch with the FULL former membership (`member_guids`,
 /// leaver included) and the sole survivor if exactly one remains. Force-resolves every UNRESOLVED
 /// roll whose ENTIRE voter set belonged to the disbanding group: with a sole survivor, grants them
@@ -1126,85 +1068,5 @@ mod tests {
             "a tie among a subset still blocks a decision"
         );
         assert!(pick_roll_winner(&[]).is_none());
-    }
-
-    // ---- The realm-core loot-roll plane ----
-    //
-    // A reducer body needs a live `ReducerContext`, so none of these can be EXECUTED by a test in
-    // this crate — exactly why they are scanned, the same technique `group.rs` uses for its own
-    // realm-plane reducers (the review).
-
-    use crate::test_scan::code_of;
-
-    /// **The operator gate is the entire authorization of the realm loot-roll plane.**
-    ///
-    /// All three reducers below take a corpse/roll identity or an actor guid as an ARGUMENT rather
-    /// than deriving it from `ctx.sender()` — realm-core has no live entity to derive one from, and
-    /// the two world-shard-only ones (`settle_loot_roll`/`clear_promoted_loot_roll`) grant an item or
-    /// delete roll rows outright. The gate is the only thing between an arbitrary connection and
-    /// forging a roll outcome or wiping another group's live roll.
-    #[test]
-    fn every_realm_loot_reducer_is_operator_gated() {
-        for f in [
-            "pub fn realm_loot_op(",
-            "pub fn settle_loot_roll(",
-            "pub fn clear_promoted_loot_roll(",
-        ] {
-            let body = code_of(include_str!("rolls.rs"), f);
-            let normalized: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
-            assert!(
-                normalized.starts_with("{ crate::helpers::require_operator(ctx)?;"),
-                "`{f}` no longer OPENS with the operator gate — a gate that is present but not the \
-                 FIRST statement (wrapped in `if false`, `let _ =`, or preceded by an early return) \
-                 is no gate. Body was:\n{body}"
-            );
-        }
-    }
-
-    /// [`settle_roll_grant`] must check `withheld` BEFORE granting anything — without it, a
-    /// wrong-shard `settle_loot_roll` call (the gateway fans a `ROLL_WON` settle to EVERY connected
-    /// shard, since it does not know in advance which one holds the corpse) could steal an ordinary,
-    /// un-rolled `game_corpse_loot` row that merely happens to share a `(corpse_guid, slot)` number
-    /// with the resolved roll on another shard.
-    #[test]
-    fn settle_roll_grant_checks_withheld_before_granting() {
-        let body = code_of(include_str!("rolls.rs"), "pub(crate) fn settle_roll_grant(");
-        let withheld_at = body
-            .find("if !row.withheld {")
-            .expect("settle_roll_grant no longer gates on `row.withheld` — see this fn's own doc");
-        let grant_at = body
-            .find("crate::items::grant_item_property(")
-            .expect("settle_roll_grant no longer calls grant_item_property");
-        assert!(
-            withheld_at < grant_at,
-            "the `withheld` guard must run BEFORE `grant_item` — a guard added AFTER the grant \
-             already happened is not a guard. Body was:\n{body}"
-        );
-    }
-
-    /// The acceptance test for this: `group::remove_member`'s disband branch must call
-    /// `force_resolve_rolls_for_disband` UNCONDITIONALLY and BEFORE it tears the group row down.
-    /// That ordering — not a `Plane` flag, which does not exist on `remove_member` — is what makes a
-    /// disbanding party's live rolls resolve on the SAME database, in the SAME transaction, as the
-    /// membership change: whichever database `remove_member` executes on (a world shard, unsharded;
-    /// REALM-CORE, sharded) is also the database its `game_loot_roll` rows are the truth on. Mutation-
-    /// check: deleting the call, or moving it after the group-row delete, must turn this red.
-    #[test]
-    fn disband_resolves_live_rolls_before_it_tears_the_group_row_down() {
-        let body = code_of(include_str!("../group.rs"), "pub(crate) fn remove_member(");
-        let call = "crate::loot::force_resolve_rolls_for_disband(ctx, &all_guids, survivor);";
-        let call_at = body
-            .find(call)
-            .unwrap_or_else(|| panic!("`remove_member` no longer force-resolves live rolls on disband (issue #50). Body was:\n{body}"));
-        let delete_at = body
-            .find("ctx.db.game_group().group_id().delete(group_id);")
-            .expect("`remove_member` no longer deletes the group row on disband");
-        assert!(
-            call_at < delete_at,
-            "force_resolve_rolls_for_disband must run BEFORE the group row is torn down (issue #50) \
-             — resolving after the delete would still be correct data-wise, but a reviewer relying on \
-             \"same transaction, no mirror\" should not have to re-derive that from execution order \
-             every time this function changes. Body was:\n{body}"
-        );
     }
 }

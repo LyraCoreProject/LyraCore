@@ -812,12 +812,6 @@ fn disband_outbound<St: GuildActionStore + ?Sized>(
 /// The shape CMSG_GUILD_REMOVE, PROMOTE, DEMOTE and LEADER share: resolve `typed_name` against the
 /// actor's own Guild roster, then run the Durable Request and map its outcome
 /// (`cm:GuildHandler.cpp:146-152,290-296,343-349,467-473`).
-///
-/// No match, or two members sharing one name snapshot, sends guid 0 rather than answering locally.
-/// mangos checks the actor's Rank Right before it looks the target up, so an unprivileged actor
-/// hears its Refusal even when the typed name matches nobody; only the Module's Gate order can
-/// reproduce that, since it alone knows the actor's Rank Rights. The Module's own membership lookup
-/// then refuses guid 0 as `TargetNotInGuild`, which maps to the same reply this used to send here.
 fn named_member_op<St, F>(
     store: &St,
     player: GuildActionPlayer,
@@ -994,12 +988,6 @@ fn info_text_outbound<St: GuildActionStore + ?Sized>(
 /// CMSG_GUILD_SET_PUBLIC_NOTE / SET_OFFICER_NOTE, shared: resolve `target_name` against the
 /// actor's own Guild through its member name snapshots (`member_by_name`), same as mangos'
 /// `GetMemberSlot` (`cm:GuildHandler.cpp:526-545,564-582`), then run the edit.
-///
-/// No match sends guid 0 rather than answering locally: mangos checks the actor's Rank Right
-/// before it looks the target up, so an actor without the right hears `NoPermission` even for a
-/// name that matches nobody, and only the Module's own Gate order can reproduce that. The Module's
-/// membership lookup then refuses guid 0 as `TargetNotInGuild`, which maps to the same reply this
-/// used to send here.
 fn set_note_outbound<St: GuildActionStore + ?Sized>(
     store: &St,
     player: GuildActionPlayer,

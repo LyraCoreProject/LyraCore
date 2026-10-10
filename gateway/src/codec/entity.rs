@@ -59,11 +59,11 @@ pub struct EntityView {
     pub player_flags: u32,
     pub xp: u32,
     pub next_level_xp: u32,
-    pub money: u32, // PLAYER_FIELD_COINAGE for a player; corpse loot for a creature (slice 3)
-    pub unit_bytes_1: u32, // UNIT_FIELD_BYTES_1; byte 3 carries UNIT_VIS_FLAG_GHOST while a ghost (slice 5)
+    pub money: u32, // PLAYER_FIELD_COINAGE for a player; corpse loot for a creature
+    pub unit_bytes_1: u32, // UNIT_FIELD_BYTES_1; byte 3 carries UNIT_VIS_FLAG_GHOST while a ghost
     /// `UNIT_FIELD_BYTES_2`; byte 0 is the sheath state (0 stowed / 1 melee drawn / 2 ranged drawn).
     /// Without it in the CREATE, everyone entering AOI range renders this unit permanently unarmed
-    /// no matter what it is holding. [#101]
+    /// no matter what it is holding.
     pub unit_bytes_2: u32,
     // The five base attributes (UNIT_FIELD_STAT0..4) for the character sheet; 0 for a creature.
     pub strength: u32,
@@ -113,7 +113,7 @@ pub enum CreateKind {
 }
 
 /// Map an equipment-slot ordinal (0..=18) to its `VisibleItemIndex` — the `PLAYER_VISIBLE_ITEM[slot]`
-/// descriptor that renders gear on the 3D character model (slice-2). `None` for a non-equipment slot
+/// descriptor that renders gear on the 3D character model. `None` for a non-equipment slot
 /// (equipped bags 19..22, backpack 23..38, bank, …): those carry an inventory-slot guid but nothing
 /// model-visible. The index is 0-based and matches the equipment-slot ordinal 1:1 (15 = MAINHAND).
 pub(crate) fn visible_item_index(slot: u8) -> Option<VisibleItemIndex> {
@@ -321,8 +321,8 @@ pub fn build_create_object(
         let (skin, face, hair_style, hair_color) = unpack4(entity.player_bytes);
         let (facial_hair, pb2_b, pb2_c, pb2_d) = unpack4(entity.player_bytes_2);
         let (pb3_a, pb3_b, pb3_c, pb3_d) = unpack4(entity.player_bytes_3);
-        let (ub1_a, ub1_b, ub1_c, ub1_d) = unpack4(entity.unit_bytes_1); // ghost vis bit in byte 3 (slice 5)
-        let (ub2_a, ub2_b, ub2_c, ub2_d) = unpack4(entity.unit_bytes_2); // sheath state in byte 0 (#101)
+        let (ub1_a, ub1_b, ub1_c, ub1_d) = unpack4(entity.unit_bytes_1); // ghost vis bit in byte 3
+        let (ub2_a, ub2_b, ub2_c, ub2_d) = unpack4(entity.unit_bytes_2); // sheath state in byte 0
 
         // Melee and ranged paperdoll values are stored Module projections. CREATE reads them
         // unchanged so it agrees with later partial sheet updates.
@@ -339,9 +339,9 @@ pub fn build_create_object(
             .set_unit_nativedisplayid(entity.native_display_id as i32)
             .set_unit_flags(entity.unit_flags as i32)
             .set_unit_baseattacktime(entity.base_attack_time_ms as i32)
-            .set_unit_bytes_1(ub1_a, ub1_b, ub1_c, ub1_d) // ghost render bit (slice 5)
+            .set_unit_bytes_1(ub1_a, ub1_b, ub1_c, ub1_d) // ghost render bit
             // gtker NAMES this setter's params after PLAYER_BYTES_2 (facial hair/rest state) — wrong
-            // field, right index (164). Byte 0 is the sheath state; the names are noise. [#101]
+            // field, right index (164). Byte 0 is the sheath state; the names are noise.
             .set_unit_bytes_2(ub2_a, ub2_b, ub2_c, ub2_d)
             .set_player_features(skin, face, hair_style, hair_color)
             .set_player_bytes_2(facial_hair, pb2_b, pb2_c, pb2_d)
@@ -349,9 +349,9 @@ pub fn build_create_object(
             .set_player_flags(entity.player_flags as i32)
             .set_player_xp(entity.xp as i32)
             .set_player_next_level_xp(entity.next_level_xp as i32)
-            .set_player_field_coinage(entity.money as i32) // purse in copper (slice 3)
+            .set_player_field_coinage(entity.money as i32) // purse in copper
             // Free talent points (PLAYER_CHARACTER_POINTS1) so the talent pane shows a non-zero count
-            // (rank 27). Mirrors the module's `talent::talent_points_available`: 1/level from level 10
+            // Mirrors the module's `talent::talent_points_available`: 1/level from level 10
             // (= level - 9), clamped at 0 below 10. NOTE: this does NOT yet subtract points already spent
             // (the gateway doesn't read game_character_talent here) — it's a display of points EARNED, exact
             // for a fresh character and approximate after spending. Learning is reducer-gated server-side;
@@ -485,7 +485,7 @@ pub fn build_create_object(
     } else {
         // Creature (Unit): no player descriptor fields. `entry` is REQUIRED so the client can issue
         // CMSG_CREATURE_QUERY; without it the creature renders nameless.
-        let (cb2_a, cb2_b, cb2_c, cb2_d) = unpack4(entity.unit_bytes_2); // sheath state in byte 0 (#101)
+        let (cb2_a, cb2_b, cb2_c, cb2_d) = unpack4(entity.unit_bytes_2); // sheath state in byte 0
         let mut unit_builder = UpdateUnit::builder()
             .set_object_guid(Guid::new(entity.guid))
             .set_object_entry(entity.entry as i32)
@@ -500,10 +500,10 @@ pub fn build_create_object(
             .set_unit_nativedisplayid(entity.native_display_id as i32)
             .set_unit_flags(entity.unit_flags as i32)
             .set_unit_baseattacktime(entity.base_attack_time_ms as i32)
-            // Sheath state (#101) — a creature draws its weapon on engage exactly like a player, so
+            // Sheath state, a creature draws its weapon on engage exactly like a player, so
             // this belongs on the Unit branch too, not just the player one.
             .set_unit_bytes_2(cb2_a, cb2_b, cb2_c, cb2_d)
-            .set_unit_dynamic_flags(entity.dynamic_flags as i32) // slice 2: corpse/lootable bits
+            .set_unit_dynamic_flags(entity.dynamic_flags as i32) // corpse/lootable bits
             .set_unit_npc_flags(entity.npc_flags as i32); // gossip/vendor/questgiver/trainer icons (item 6)
                                                           // A SUMMONED unit (warlock pet) carries its owner in SUMMONEDBY/CREATEDBY — what the
                                                           // client needs to treat the unit as this player's pet (frame binding). Wild creatures skip
@@ -595,7 +595,7 @@ pub(crate) fn realm_datetime(secs_since_unix_epoch: u64) -> DateTime {
     let minutes = ((secs_of_day % 3_600) / 60) as u8;
 
     let (year, month, month_day) = lyracore_shared::calendar::civil_from_days(days);
-    // 1970-01-01 (days = 0) was a Thursday, and `Weekday::as_int()` numbers Sunday 0 ..
+    // 1970-01-01 (days = 0) was a Thursday, and `Weekday::as_int()` numbers Sunday 0..
     // Saturday 6 — exactly `(days + 4) % 7` for a non-negative day count.
     let weekday = Weekday::try_from(((days + 4) % 7) as u32)
         .expect("(days + 4) % 7 is always 0..=6, a valid Weekday");
@@ -610,7 +610,7 @@ pub(crate) fn realm_datetime(secs_since_unix_epoch: u64) -> DateTime {
     )
 }
 
-/// Emit the post-login SMSG sequence (Phase 4, gateway translation §5) to the owner, in the
+/// Emit the post-login SMSG sequence (gateway translation §5) to the owner, in the
 /// order the client expects — `SMSG_LOGIN_VERIFY_WORLD` must precede `SMSG_TUTORIAL_FLAGS`,
 /// and is sent ONLY for a [`WorldEntry::FreshLogin`] (see the enum's doc for why a world-port
 /// re-entry must omit it).
@@ -734,7 +734,7 @@ pub fn login_sequence_messages(
             // `reputation_index` slot (0..63) — the SAME Faction.dbc ReputationListID the live
             // SET_FACTION_STANDING relay addresses (see build_set_faction_standing_raw's crash note).
             // HARD GUARDRAIL: index by reputation_index, NEVER faction_id — faction_id indexed past the
-            // client's 64-slot array caused the McBride ERROR #132 crash. Slots with no persisted row stay
+            // client's 64-slot array caused the McBride ERROR crash. Slots with no persisted row stay
             // Neutral/0 (the prior stub value), matching a faction the player has never gained rep with.
             factions: {
                 let mut slots: Vec<FactionInitializer> = (0..64)
@@ -777,7 +777,7 @@ pub fn login_sequence_messages(
     Ok(msgs)
 }
 
-/// Build `SMSG_DESTROY_OBJECT` for a guid leaving view (Phase 7). Vanilla carries just the
+/// Build `SMSG_DESTROY_OBJECT` for a guid leaving view. Vanilla carries just the
 /// guid (no `is_on_death`).
 pub fn build_destroy_object(guid: u64) -> SMSG_DESTROY_OBJECT {
     SMSG_DESTROY_OBJECT {
@@ -841,7 +841,7 @@ const SMSG_SET_FACTION_STANDING_OPCODE: u16 = 0x0124;
 /// (a SMALL 0..63 index into the client's fixed rep array), NOT the faction id. SMSG_INITIALIZE_FACTIONS sets up
 /// 64 slots; SET_FACTION_STANDING addresses ONE by that index. We were sending `faction.as_int()` = the faction
 /// id (Stormwind 72), so the client indexed slot 72 — past the 64-slot array → null faction record → `mov
-/// esi,[ebx]` with ebx=0 → ERROR #132 ACCESS_VIOLATION (the client crash dump's args carried opcode 0x124 + the
+/// esi,[ebx]` with ebx=0 → ERROR ACCESS_VIOLATION (the client crash dump's args carried opcode 0x124 + the
 /// standing 3175, confirming this packet). The earlier u16→u32 width fix was a real-but-insufficient symptom fix;
 /// the VALUE was always wrong. `reputation_index` now comes straight off the row (the module stamps it from
 /// game_faction at grant time); callers pass `< 0` rows nowhere (the relay skips them — no rep bar to address).

@@ -100,7 +100,7 @@ pub(crate) fn aura_attack_power_bonus(ctx: &ReducerContext, unit_guid: u64) -> u
 /// Holy damage a unit's active SEAL aura adds to a LANDED melee swing (Seal of Righteousness): the summed
 /// `A_SEAL` aura value, weapon-speed-weighted — vanilla SoR is per-swing, scaled by weapon speed. `(0, 0)`
 /// for a unit with no seal (baseline-safe). Pull model — the swing READS the seal aura, no per-spell code.
-/// Also returns the seal's SPELL id so the swing can name the yellow proc line after it (114).
+/// Also returns the seal's SPELL id so the swing can name the yellow proc line after it.
 pub(crate) fn seal_holy_on_swing(ctx: &ReducerContext, attacker: &WorldEntity) -> (u32, u32) {
     let (amount, spell) = crate::spell::seal_amount_and_spell(ctx, attacker.guid);
     (seal_swing_holy(amount, attacker.base_attack_time_ms), spell)
@@ -627,11 +627,6 @@ pub(crate) fn roll_swing(
     roll_swing_with_range(ctx, attacker, target, range)
 }
 
-/// The shared core of `roll_swing`: identical attack-table roll + mitigation, but takes the `[min, max]`
-/// damage range EXPLICITLY instead of deriving it from `attacker`'s equipped main-hand
-/// (`swing_range_ctx`). Lets the off-hand swing in `resolve_swing` roll through the SAME shared attack
-/// table + armor/block math over the off-hand's OWN (penalized) range, instead of re-deriving the
-/// main-hand range. `roll_swing` is a thin wrapper that passes `swing_range_ctx(ctx, attacker)`.
 pub(crate) fn roll_swing_with_range(
     ctx: &ReducerContext,
     attacker: &WorldEntity,

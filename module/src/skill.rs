@@ -20,7 +20,7 @@ use lyracore_shared::constants::starter_item;
 // `threat::game_threat`), so it's in scope without a `use`. `game_item_template` (items/) is read to
 // resolve the equipped weapon's subclass; `game_world_entity` (world.rs) only by the debug reducer.
 use crate::skilldata::{game_skill_ability, game_skill_availability};
-use crate::{game_item_template, game_world_entity, WorldEntity}; // accessor trait for the autolearn read (282)
+use crate::{game_item_template, game_world_entity, WorldEntity}; // accessor trait for the autolearn read
 
 // ===========================================================================================
 //  Pure skill math + taxonomy (ctx-free, unit-tested) [server]
@@ -35,7 +35,7 @@ pub const SKILL_PER_LEVEL: u32 = 5;
 /// read with no remap — a local enum would force a translation layer at the descriptor boundary). Only
 /// the lines combat/professions can actually produce are defined; ranged lines come with their features.
 ///
-/// DEPRECATION POINTER (work-item 208): `game_skill_line` (`skilldata.rs`), loaded from the operator's
+/// DEPRECATION POINTER: `game_skill_line` (`skilldata.rs`), loaded from the operator's
 /// real `SkillLine.dbc` by the importer, is now the AUTHORITATIVE source for "what skill lines exist" —
 /// it carries every vanilla line (~135), not just the ~17 hand-picked here. These consts stay because
 /// the wire protocol is still keyed on the same verbatim ids (no remap needed either way), but treat
@@ -74,11 +74,7 @@ pub mod skill_line {
     pub const ENGINEERING: u32 = 202;
     pub const ENCHANTING: u32 = 333;
     pub const FISHING: u32 = 356;
-    // Work-item 211 (Lock.dbc): the SkillLine a `ty==LocktypeReference` Lock.dbc index resolves to when
-    // its LockType.dbc id is 1 (Lockpicking). Not otherwise consumed this slice (no lockpicking reducer
-    // yet — `game_lock` is data-only until work-item 119) but kept alongside the other verbatim SkillLine
-    // IDs so the importer's LockType→SkillLine map (`importer/src/dbc.rs`) has ONE source of truth to
-    // cite in its doc comment rather than a bare magic number.
+
     pub const LOCKPICKING: u32 = 633;
     /// Riding — the mount line. Neither a profession nor a combat line: its rank is a TRAINED TIER
     /// (Apprentice 75, Journeyman 150) granted whole by a `trainer_type::MOUNTS` trainer, never climbed
@@ -87,10 +83,6 @@ pub mod skill_line {
     pub const RIDING: u32 = lyracore_shared::trainer::RIDING_SKILL_LINE;
 }
 
-/// Is `line` one of the 13 player professions (primary/secondary craft + gather lines)? Used to
-/// tell a CRAFT recipe's skill-line ability apart from a combat/class spell ability when the recipe
-/// gate reads `game_skill_ability` (282) — a reagent-consuming BUFF (Arcane Intellect) pairs with a
-/// magic-school line, not a profession, so it never counts as a craft.
 pub fn is_profession_line(line: u32) -> bool {
     use skill_line::*;
     matches!(
@@ -201,10 +193,6 @@ const CATCH_UP_LOW_LEVEL_LIFT: f64 = 12.0;
 /// The most intellect can add to a WEAPON line's per-hit chance (as a fraction, so +10 points).
 const INTELLECT_ASSIST_MAX: f64 = 0.10;
 
-/// `(level ceiling, reference level, intellect worth the full assist)` — the assist is scaled both
-/// by how much intellect the character has against the band's reference amount and by how far below
-/// the band's reference level they are. A vanilla realm caps at 60 and so only ever reads the first
-/// band; the rest keep the function total for any level a debug lever might set.
 const INTELLECT_ASSIST_BANDS: [(u32, f64, f64); 4] = [
     (60, 60.0, 750.0),
     (70, 70.0, 1500.0),
@@ -516,7 +504,7 @@ pub fn gain_defense_skill(ctx: &ReducerContext, target: &WorldEntity) {
 /// The COMBAT (weapon + Defense) skill lines — the set whose `max_rank` tracks `level*5`, as opposed to
 /// profession lines (Cooking, Mining, …) whose cap is an independent apprentice/journeyman/…/artisan tier
 /// set by `learn_profession`. Used by `raise_combat_caps` to know which rows to lift on a ding/login and
-/// never touch a profession row's cap. `pub(crate)` (weapon masters, work-item 202): `trainer::apply_trainer_buy`
+/// never touch a profession row's cap. `pub(crate)` (weapon masters): `trainer::apply_trainer_buy`
 /// forks its profession-learn branch on this same taxonomy — a weapon-master offering (`learn_skill_line` set
 /// to a weapon line) needs a LEVEL-derived cap, not the offering's static tier column.
 pub(crate) fn is_combat_skill_line(line: u32) -> bool {
@@ -583,7 +571,7 @@ pub(crate) fn learn_riding(ctx: &ReducerContext, guid: u64, owner: Identity, ran
 /// character whose caps were frozen at first-login level — so a relog alone un-sticks a stale character,
 /// not just future dings). [entity]
 ///
-/// Lockpicking (633, work-item 172) also tracks `level*5` in vanilla but isn't part of
+/// Lockpicking (633) also tracks `level*5` in vanilla but isn't part of
 /// `is_combat_skill_line` — that predicate is shared with `trainer::apply_trainer_buy`'s weapon-master
 /// fork, and Lockpicking is never a trainer offering (it's granted by learning Pick Lock, see
 /// `grant_lockpicking_on_learn`), so it's checked here as a second, dedicated clause instead of joining
@@ -748,7 +736,7 @@ pub(crate) fn gain_profession_skill(
         let Some(new_current) = raise_skill(ctx, guid, line) else {
             return;
         };
-        // AUTOLEARN at threshold (282): climbing may have unlocked acquire_method=2 abilities whose
+        // AUTOLEARN at threshold: climbing may have unlocked acquire_method=2 abilities whose
         // min_skill the new rank now meets. Idempotent; owner from the live caster entity (a skill-up
         // only ever fires for an in-world crafter). Requires a REAL live entity — the "always
         // in-world" invariant broke once already, and minting a `game_player_spell` row under
@@ -804,7 +792,7 @@ pub(crate) fn learn_profession(
             max_rank: cap,
         });
     }
-    // AUTOLEARN (282): learning a profession instantly grants its base abilities — this is how
+    // AUTOLEARN: learning a profession instantly grants its base abilities — this is how
     // Charred Wolf Meat (2538) / Disenchant (13262) arrive in vanilla (NOT from a trainer). Grant
     // at the row's current skill; higher-threshold autolearn abilities land as it climbs (via
     // gain_profession_skill below).
@@ -817,7 +805,7 @@ pub(crate) fn learn_profession(
     grant_autolearn_abilities(ctx, guid, owner, skill_line, current);
 }
 
-/// AUTOLEARN grant (282): for `skill_line`, learn every `game_skill_ability` spell whose real
+/// AUTOLEARN grant: for `skill_line`, learn every `game_skill_ability` spell whose real
 /// `acquire_method` is autolearn (1 = on skill learn, 2 = on reaching the skill rank) and whose
 /// `min_skill <= current`. Idempotent (`learn_spell` dedups), so it's safe to call on every learn +
 /// skill-up. Race/class masks on profession recipes are universal in vanilla, so they're not
@@ -842,14 +830,14 @@ pub(crate) fn grant_autolearn_abilities(
     }
 }
 
-/// Pick Lock (Rogue) — the spell whose learn grants the Lockpicking (633) skill line (work-item 119).
+/// Pick Lock (Rogue), the spell whose learn grants the Lockpicking (633) skill line.
 /// Kept as ONE named constant (the isolated place a spell id is named, like the importer's name rescues)
 /// because the skill GRANT keys on the id: the gateway routes the CAST by the E_OPEN_LOCK effect kind,
 /// but a fresh Rogue must already own the 633 row when their first pick_lock lands — `apply_pick_lock`
 /// reads `game_player_skill(633)`, and an absent row reads skill 0 and refuses every lock.
 pub(crate) const PICK_LOCK_SPELL_ID: u32 = 1804;
 
-/// Grant the Lockpicking (633) skill line when a character learns Pick Lock (work-item 119) — insert
+/// Grant the Lockpicking (633) skill line when a character learns Pick Lock, insert
 /// `1 / level*5` if absent (mirrors `learn_profession`'s NEW-row insert, but LEVEL-capped like a weapon
 /// line: vanilla Lockpicking maxes at level×5, not the 75 apprentice tier). Idempotent — a re-learn
 /// never resets a climbed skill. A no-op for every other spell. Called from the single `learn_spell`
@@ -988,18 +976,12 @@ pub fn debug_learn_profession_from_trainer(
     crate::trainer::apply_trainer_buy(ctx, character_guid, trainer.guid, spell_id)
 }
 
-/// The synthetic "weapon-learn spell" marker ids the seeded Weapon Master (51005) offers (work-item
-/// 202) — same convention as the profession markers above: NEVER resolved as spells (no `game_spell`
-/// header), they exist ONLY as a `game_trainer_spell.spell_id` whose `learn_skill_line` names a COMBAT
-/// line (`is_combat_skill_line`), routing `trainer::apply_trainer_buy` onto the WEAPON fork (level-derived
-/// cap + presence-known) instead of the profession fork (static-tier cap). Picked just past the
-/// profession-breadth batch's high-water mark (50124) to avoid colliding with any seeded marker/recipe id.
 #[cfg(feature = "debug_reducers")]
 const LEARN_AXE_1H_SPELL_ID: u32 = 50130; // -> learn_skill_line = AXE_1H (44), required_level 1 (the buy-succeeds fixture)
 #[cfg(feature = "debug_reducers")]
 const LEARN_POLEARM_SPELL_ID: u32 = 50131; // -> learn_skill_line = POLEARM (229), required_level 60 (the level-refusal fixture)
 
-/// DRIVE the real trainer-buy branch for a WEAPON PROFICIENCY (work-item 202) without the trainer-window
+/// DRIVE the real trainer-buy branch for a WEAPON PROFICIENCY without the trainer-window
 /// UI — the weapon-master twin of `debug_learn_profession_from_trainer` above, same shape: the requested
 /// `skill_line` (Daggers/1H Axe/Polearm/…) maps to its marker spell id, the nearest live TRAINER creature on
 /// the learner's map is resolved SERVER-SIDE (mirroring `debug_skin_nearest`'s nearest-search — the
@@ -1110,17 +1092,17 @@ pub fn debug_learn_riding_from_trainer(
 /// crossbow fall to UNARMED in `weapon_subclass_to_skill_line` and are therefore NOT listed here).
 /// Returns an empty slice for unknown classes (e.g. creatures).
 ///
-/// DEPRECATION POINTER (work-item 208): this hand-authored per-class table could in principle be
+/// DEPRECATION POINTER: this hand-authored per-class table could in principle be
 /// derived from `game_skill_availability` (`SkillRaceClassInfo.dbc`'s `class_mask`, imported by
 /// `skilldata.rs`) joined against `skill_line::*`'s known combat lines — that data-driven replacement
 /// is a follow-up, not done here (this function's behavior is UNCHANGED by this item).
-/// Vanilla STARTING weapon proficiencies (256) — what a FRESH character knows before visiting a
+/// Vanilla STARTING weapon proficiencies — what a FRESH character knows before visiting a
 /// weapon master, matching vanilla's per-race/class proficiency spells (race-merged;
 /// wand/thrown/bow/gun lines are unmodeled — ranged rides the UNARMED fallback). The FULL per-class
 /// list below stays as the "ever learnable by this class" reference; seeding from THAT list gave every
 /// fresh paladin swords/axes/polearms and made the weapon masters pointless (live find, faladin).
 /// Existing characters are GRANDFATHERED: `ensure_player_skills` only inserts missing lines, never
-/// deletes, so a pre-256 character keeps its wide set.
+/// deletes, so an existing character keeps its wide set.
 pub fn class_starting_weapon_skill_lines(class: u8) -> &'static [u32] {
     use skill_line::*;
     match class {
@@ -1547,7 +1529,7 @@ mod tests {
         assert_eq!(skill_diff(300, 315), 0); // higher weapon skill floors at 0
     }
 
-    /// The combat/profession taxonomy `apply_trainer_buy` forks the weapon-master branch on (work-item 202):
+    /// The combat/profession taxonomy `apply_trainer_buy` forks the weapon-master branch on:
     /// a weapon line (DAGGER) is combat (level-capped); a profession line (COOKING) is not (static-tier capped).
     #[test]
     fn is_combat_skill_line_true_for_dagger_false_for_cooking() {

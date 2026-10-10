@@ -1,33 +1,5 @@
-//! Talents — FIRST SLICE: the talent engine + a starter set of PASSIVE Warrior talents.
-//!
-//! A talent is a tree node (`game_talent`) a character spends points into (`game_character_talent`),
-//! whose effect is a PASSIVE aura applied at login / on-learn. The effect rides the existing spell/aura
-//! pipeline: each talent maps to ONE `game_spell` carrying an `A_MOD_*` effect, applied with
-//! `points = rank * base_points` — so rank 3 of Cruelty (+100 crit/rank) applies +300 crit. Re-applying
-//! refreshes the SAME aura (keyed by `effect_id`), so a rank-up updates the magnitude with no stacking and
-//! a relog is idempotent. This reuses the proven combat folds (`effective_crit_bp`/`effective_armor`/…) —
-//! a learned talent is a real, server-verifiable combat change (`debug_compute_swing`).
-//!
-//! Talent points are DERIVED, not stored: `max(0, level-9) - sum(learned ranks)` (the first point at L10,
-//! 1/level to 51 at L60). No `Character` column → no gateway-binding change.
-//!
-//! BASELINE SAFETY: a character with zero learned-talent rows applies nothing → byte-identical combat. The
-//! seeded talent data is inert until a point is spent. The two tables are NEW → `publish` auto-migrates.
-//!
-//! DEFERRED (this slice): ability-granting talents (Mortal Strike/Bloodthirst/… — need a per-player
-//! learnable-spell system; `CASTABLE` is a hardcoded const); the client talent pane (the update-mask
-//! descriptor wall — work-item 031's wire/system half); auto-granting points on a mid-session ding
-//! (re-derived correctly at the next learn); gossip surfacing of "unlearn talents" at the trainer
-//! (work-item 198 follow-up — the reducer is wired, the gateway arm is not). [entity]
-//!
-//! DEMO SEED (work-item 207): `seed_talents` inserts a small hand-authored Warrior tree (ids 1-8) so a
-//! no-DBC sandbox has a talent tree to exercise `learn_talent`/`reset_talents`/the aura pipeline. A real
-//! `TalentTab.dbc`/`Talent.dbc` import normally replaces those rows. If imported tabs coexist with a
-//! tab-less demo row, the owning learn Gate treats the imported catalogue as authoritative and refuses
-//! the demo row. Only a Shard with no `TalentTab` rows may use the Warrior-only demo tree. A character
-//! who learned a demo talent before an import keeps an orphaned `game_character_talent` row;
-//! `apply_learned_talents` logs and skips it at login. The reserved 51xxx demo spell ids do not collide
-//! with imported Spell.dbc ids.
+//! Talent definitions, Character selections, and passive aura application.
+//! Points derive from level and learned ranks. Login and learning apply the same effect pipeline.
 
 use spacetimedb::{table, Identity, ReducerContext, Table};
 
@@ -66,7 +38,7 @@ pub struct Talent {
     /// and this is the granted active. END-appended `#[default(0)]` → auto-migrates. [static]
     #[default(0)]
     pub grant_spell_id: u32,
-    // --- Talent.dbc import columns (work-item 207, END-appended, #[default(0)] → additive auto-migration).
+    // --- Talent.dbc import columns, END-appended, #[default(0)] → additive auto-migration.
     // Every demo-seeded talent (ids 1-8) leaves these at 0 — byte-identical baseline behavior.
     /// The real `game_talent_tab.tab_id` this talent belongs to (Talent.dbc `Talent.tab`) — 0 for a
     /// demo-seeded talent (no real tab). Unlike `tree_id` (which repeats 0/1/2 across EVERY class's tabs),
@@ -75,7 +47,7 @@ pub struct Talent {
     pub tab_id: u32,
     /// Rank 2's passive spell id (Talent.dbc `spell_rank[1]`); 0 if this talent has fewer than 2 ranks.
     /// Applied by `apply_talent_rank` at pick/login (which also SUPERSEDES the lower rank's spell +
-    /// aura, 031 residual). END-appended `#[default(0)]`.
+    /// aura). END-appended `#[default(0)]`.
     #[default(0)]
     pub rank_spell_2: u32,
     /// Rank 3's passive spell id (Talent.dbc `spell_rank[2]`); 0 if this talent has fewer than 3 ranks.
@@ -594,7 +566,7 @@ fn apply_talent_rank(
             crate::spell::learn_spell(ctx, guid, owner, rank_spell);
             let stack = if talent.tab_id != 0 { 1 } else { rank }; // imported: own values; demo: scale by rank
             crate::spell::apply_spell_auras(ctx, rank_spell, guid, level, stack);
-            // Server-side rank SUPERSEDE (031 residual): the imported tree carries a DISTINCT spell
+            // Server-side rank SUPERSEDE: the imported tree carries a DISTINCT spell
             // per rank, so without this every lower rank's book row lingered (the login
             // INITIAL_SPELLS re-grew both ranks) and a mapped-kind passive STACKED with the new
             // rank's aura. Sweep EVERY lower rank (not just N-1) so pre-fix double-rows heal on the
@@ -658,14 +630,6 @@ pub fn apply_learned_talents(ctx: &ReducerContext, guid: u64, owner: Identity, l
     }
 }
 
-// ===========================================================================================
-//  Respec — unlearn every learned talent for an escalating gold cost (work-item 198)
-// ===========================================================================================
-
-/// Gold cost (copper) of a character's NEXT respec, given `respec_count` prior resets: vanilla's
-/// `Player::resetTalentsCost` step table — 1g / 5g / 10g, then +5g per further reset, capped at 50g
-/// (1.12 has no cost decay — that's a TBC addition). Expressed directly in copper (1g = 10_000c, the
-/// server's existing money unit — see `game_trainer_spell.cost`). Pure — unit-tested.
 pub(crate) fn respec_cost_copper(respec_count: u32) -> u32 {
     const CAP_COPPER: u32 = 500_000;
     let copper = match respec_count {
@@ -711,7 +675,7 @@ pub(crate) fn do_reset_talents(
 
     // Snapshot every learned talent's removable spells BEFORE deleting the rows — the join target
     // (`game_talent`) is static, so this is a plain read, not a mutation-order hazard.
-    // 031 residual fix: key on the PER-RANK spells (rank 1..=learned rank), not `def.spell_id`
+    // Key on the PER-RANK spells (rank 1..=learned rank), not `def.spell_id`
     // alone — an imported rank-3 talent's live aura + book row belong to `rank_spell_3`, which the
     // old snapshot missed (rank-3 aura lingered through a respec). Lower ranks are swept too so
     // pre-supersede legacy book rows heal here as well; the demo tree's shared spell id dedups.
@@ -755,8 +719,8 @@ pub(crate) fn do_reset_talents(
     }
     crate::spell::recompute_sheet(ctx, character_guid);
 
-    // Forget every spell the reset talents had put in the book: granted ABILITIES and (031 residual
-    // fix) the passive RANK-SPELLS themselves — the book previously kept every passive through a
+    // Forget every spell the reset talents had put in the book: granted ABILITIES and
+    // the passive RANK-SPELLS themselves — the book previously kept every passive through a
     // respec, so the client re-rendered the talents as still learned after relog.
     for spell_id in granted.iter().chain(passives.iter()) {
         crate::spell::forget_spell(ctx, character_guid, *spell_id);
@@ -774,7 +738,7 @@ pub(crate) fn do_reset_talents(
 //  Seed (shared by init + debug_seed_talents — init does NOT re-run on an auto-migrate publish)
 // ===========================================================================================
 
-/// Seed the first-slice Warrior talents: the `game_talent` metadata + the per-talent passive spell
+/// Seed the first Warrior talents: the `game_talent` metadata + the per-talent passive spell
 /// (`game_spell` + a single `game_spell_effect`). IDEMPOTENT — inserts only rows that are absent — so it is
 /// safe to call from `seed::init` (fresh install) AND from `debug_seed_talents` on an already-migrated dev
 /// DB (where `init` did not re-run). Spell ids live in a reserved 51xxx range, ABOVE the vanilla spell ids

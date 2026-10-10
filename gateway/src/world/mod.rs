@@ -333,7 +333,6 @@ pub struct InWorld {
     /// The guid being melee auto-attacked (combat C1), so `CMSG_ATTACKSTOP` can name it. The
     /// authoritative engagement lives in `game_melee_attack`; this is protocol state.
     pub attacking_target: Option<u64>,
-    /// The target whose loot window is open. Targetless take requests use this protocol state.
     pub open_loot: OpenLootState,
     /// A ranged auto-repeat (Auto Shot / wand Shoot) is armed. Melee and ranged share one
     /// `game_melee_attack` row keyed by attacker, so the melee-stop `CMSG_ATTACKSTOP` the client
@@ -708,13 +707,6 @@ fn world_handshake_with_queue_and_deadline<
     )))
 }
 
-/// Block until `ticket` is admitted, resending `AUTH_WAIT_QUEUE` (with the current position) on
-/// [`QUEUE_RESEND_INTERVAL`] — immediately on the first check, and again sooner than that cadence if
-/// the position changes, so the client's queue screen doesn't sit on a stale number. Polls for
-/// admission itself on the much shorter [`QUEUE_POLL_INTERVAL`], since that's a cheap mutex lock
-/// with no I/O. Returns `Ok(true)` once admitted, `Ok(false)` on a clean disconnect (the write
-/// failed — the client hung up while queued, so the caller should `cancel` rather than treat this as
-/// session-fatal), `Err` on any other I/O error.
 fn wait_for_admission<S: Write>(
     stream: &mut S,
     encrypt: &mut EncrypterHalf,
@@ -904,8 +896,8 @@ fn spawn_writer<S: DuplexStream>(
 ) -> Result<std::thread::JoinHandle<()>> {
     let trace_enabled = crate::config::writer_trace_enabled();
     std::thread::Builder::new()
-        .name("world-writer".into())
-        .spawn(move || {
+.name("world-writer".into())
+.spawn(move || {
             let mut trace = trace_enabled.then(WriterTrace::new);
             while let Ok(out) = rx.recv() {
                 // The other half of the depth counter (`SessionTx::send` adds): this item is off the
@@ -918,10 +910,7 @@ fn spawn_writer<S: DuplexStream>(
                 // BEFORE `tx.send`, so an item can only be received after it has been counted, and
                 // this thread is the only decrementer. `depth >= queued` therefore holds always.
                 depth.fetch_sub(1, Ordering::Relaxed);
-                // A deferred relay job runs HERE, on this session's own writer thread, never
-                // on the shared coordinator pump that enqueued it. `catch_unwind` because a
-                // panicking relay body used to cost one session and must keep costing exactly one
-                // session: the writer stays alive and keeps draining the queue.
+
                 let batch: Vec<Outbound> = match out {
                     Outbound::Job(job) => {
                         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(job)) {
@@ -996,8 +985,8 @@ fn spawn_writer<S: DuplexStream>(
                         } else {
                             let size = (2 + body.len()) as u16;
                             encrypt
-                                .write_encrypted_server_header(&mut wsock, size, opcode)
-                                .and_then(|()| wsock.write_all(&body))
+.write_encrypted_server_header(&mut wsock, size, opcode)
+.and_then(|()| wsock.write_all(&body))
                         }
                     }
                 };
@@ -1012,7 +1001,7 @@ fn spawn_writer<S: DuplexStream>(
                 }
             }
         })
-        .map_err(|e| anyhow!("spawn world writer thread for account {account_id}: {e}"))
+.map_err(|e| anyhow!("spawn world writer thread for account {account_id}: {e}"))
 }
 
 /// Drive one world connection, gated by the unlimited [`LoginQueue`] — see
@@ -1612,7 +1601,7 @@ fn dispatch<St: WorldStore + ?Sized>(
     let Some(msg) = handle_mail(tx, store, conn, msg)? else {
         return Ok(());
     };
-    // Phase 5/6 (§6): MSG_MOVE_* -> movement_update (persist + relay). The relayed peer events
+    // MSG_MOVE_* -> movement_update (persist + relay). The relayed peer events
     // come back on this player's game_movement_event subscription and are re-emitted (same
     // opcode + verbatim MovementInfo) to other players by their own subscription callbacks.
     //
@@ -1693,10 +1682,6 @@ fn dispatch_raw_auction_browse<St: WorldStore + ?Sized>(
     }
 }
 
-/// Enqueue one already-classified movement packet on the shard's shared batch, then recenter AOI.
-/// Called once per packet `CoalesceState` decides to forward: immediately for a state change, later
-/// for a coalesced heartbeat. A forwarded packet's on-wire effect is unchanged; only a pure
-/// heartbeat's timing can differ.
 fn forward_movement<St: WorldStore + ?Sized>(
     store: &St,
     conn: &mut WorldConn,
@@ -1709,26 +1694,6 @@ fn forward_movement<St: WorldStore + ?Sized>(
         WorldState::InWorld(iw) => iw.self_guid,
         _ => 0,
     };
-    // A movement packet for an entity that is GONE is not a session-fatal desync — it is the normal
-    // tail of a cross-map teleport. `teleport_player` despawns the live entity
-    // the moment the portal's reducer commits, but the client only learns about it when
-    // `SMSG_TRANSFER_PENDING`/`SMSG_NEW_WORLD` reach it, so every packet already in flight lands
-    // afterwards — and the wider that window is (a dungeon-entry transaction that spawns a
-    // 200-creature population is hundreds of milliseconds), the more certain at least one is. With
-    // this propagating, one stray heartbeat closed the socket WHILE THE CLIENT WAS ON THE LOADING
-    // SCREEN: no `MSG_MOVE_WORLDPORT_ACK` ever came back, the escrowed transfer that runs on that
-    // ack never ran, and the player hung forever with no error and no recourse. A hang is the worst
-    // outcome there is, and a dropped movement packet costs nothing: the client is authoritative for
-    // its own position and re-sends one every ~100ms (and, mid-port, is about to be rebuilt from the
-    // durable row anyway). CMSG_ATTACKSWING/ATTACKSTOP keep their session-fatal treatment — those
-    // desyncs have no self-healing follow-up.
-    // ...but the tolerance is BOUNDED. "Not in world" is also the answer
-    // for a desync that will NEVER heal, and movement is the highest-frequency detector we have; an
-    // unconditional swallow turns a socket that used to close cleanly into a player walking around a
-    // frozen world forever, never disconnected, with no error — the very outcome `is_desync_error`
-    // was introduced to prevent. So: drop the port tail, then give up. See MOVE_DESYNC_TOLERANCE.
-    // The shared batch has no per-entry reducer verdict. The coordinator cache remains the
-    // authoritative desync signal before enqueueing.
     if !store.entity_in_world(self_guid) {
         conn.move_desync_drops += 1;
         if conn.move_desync_drops > MOVE_DESYNC_TOLERANCE {

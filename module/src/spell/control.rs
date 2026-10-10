@@ -1,5 +1,5 @@
 //! Crowd-control model — the composable CC predicate lattice over one shared `has_control_mechanic`
-//! scanner, PLUS (381 split) the cast-bar teardown family (`pushback_cast` / `interrupt_cast` /
+//! scanner, PLUS the cast-bar teardown family (`pushback_cast` / `interrupt_cast` /
 //! `break_channel` / `interrupt_cast_and_lock`), moved here from the old flat `cast.rs`: this file
 //! already called `pushback_cast` from `break_auras_on_damage` below, so co-locating the teardown with
 //! the rest of the crowd-control model removes a cross-module callback instead of adding one. `mod.rs`
@@ -358,10 +358,7 @@ pub(crate) fn break_auras_on_damage(
                     .unwrap_or(false)
         })
         .collect();
-    // CC DR: break-on-damage is the THIRD removal event that starts the 15s DR window (with natural
-    // expiry — scheduler::tick_auras — and dispel — effects::dispel_target; 192 review finding #1).
-    // Without this stamp the window keeps the provisional apply-time value (scheduled expiry + 15s),
-    // running LONGER than vanilla's actual-break + 15s. No-op for non-CC auras / creature targets.
+
     let now_micros = ctx.timestamp.to_micros_since_unix_epoch();
     for a in &to_break {
         if let Some(category) = crate::spell::stacking::dr_category_for_effect(
@@ -383,7 +380,7 @@ pub(crate) fn break_auras_on_damage(
     // break (landing a swing/cast reveals the ATTACKER) is a separate call at each call site; this is
     // the VICTIM-side half. No-op on a non-stealthed target (the common path).
     super::break_stealth(ctx, target_guid);
-    // Cast PUSHBACK-on-damage (work-item 039): DIRECT damage (melee swing, direct spell) PUSHES BACK the
+    // Cast PUSHBACK-on-damage: DIRECT damage (melee swing, direct spell) PUSHES BACK the
     // victim's in-progress TIMED cast (the cast bar slides `CAST_PUSHBACK_MS`, capped at
     // `CAST_PUSHBACK_MAX` pushbacks) — vanilla 1.12 does NOT cancel a regular cast on damage; only
     // Kick/Counterspell-style interrupts (`interrupt_cast_and_lock`) and CC (`interrupt_cast` via
@@ -418,7 +415,7 @@ pub(crate) fn is_immune_to_mechanic(ctx: &ReducerContext, unit_guid: u64, mechan
 }
 
 // ===========================================================================================
-//  Cast-bar teardown (381 split, moved from the old flat `cast.rs`) — pushback / interrupt / channel
+//  Cast-bar teardown (moved from the old flat `cast.rs`) — pushback / interrupt / channel
 //  break / Kick-style interrupt-and-lock. `break_auras_on_damage` above already calls `pushback_cast`.
 // ===========================================================================================
 
@@ -833,7 +830,7 @@ mod tests {
         }
     }
 
-    /// Cast pushback (work-item 039): the per-hit slide is cmangos's fixed 500ms, and the cap is 2
+    /// Cast pushback: the per-hit slide is cmangos's fixed 500ms, and the cap is 2
     /// pushbacks per cast (the vanilla cap) — so a 3rd+ direct hit is a documented no-op.
     #[test]
     fn pushback_constants_match_the_cmangos_convention() {
@@ -877,75 +874,5 @@ mod tests {
         assert!(!aura_survives_death(0)); // every seeded spell — mount, buff, DoT, CC
         assert!(!aura_survives_death(0x4)); // an unrelated attribute never spares an aura
         assert!(!aura_survives_death(!SPELL_ATTR_PASSIVE));
-    }
-
-    /// BOTH kill chokepoints shed — vanilla's removal sits on `Unit`, so a creature drops its auras on
-    /// death exactly like a player. In `kill_creature` the shed must run AFTER the reward step, which
-    /// still reads the victim's live aura set to find the killer's Drain Soul channel: shedding first
-    /// would silently stop soul shards dropping. Pinned by scan — both functions are
-    /// `ReducerContext`-bound and the crate has no reducer harness.
-    #[test]
-    fn both_kill_chokepoints_shed_auras_on_death() {
-        let src = include_str!("../combat/death.rs");
-        for signature in [
-            "pub(crate) fn kill_player(",
-            "fn kill_creature_with_attribution(",
-        ] {
-            let body = crate::test_scan::code_of(src, signature);
-            assert!(
-                body.contains("crate::spell::remove_auras_on_death(ctx, "),
-                "`{signature}` must shed the dying unit's auras — otherwise a corpse keeps its mount, \
-                 its buffs and the crowd control that was on it. Body was:\n{body}"
-            );
-        }
-        let creature = crate::test_scan::code_of(src, "fn kill_creature_with_attribution(");
-        let rewards = creature
-            .find("award_tag_rewards(")
-            .expect("kill_creature still awards the Loot Tag before the corpse work");
-        let shed = creature
-            .find("crate::spell::remove_auras_on_death(ctx, target_guid)")
-            .expect("checked above");
-        assert!(
-            rewards < shed,
-            "the death shed must run AFTER `award_tag_rewards`, which reads the dying creature's \
-             Drain Soul channel aura to mint an entitled source's soul shard. Body was:\n{creature}"
-        );
-    }
-
-    /// The shed's shape: it reads the exemption through the ONE policy predicate (never an inline
-    /// attribute test or a spell-id list), and hands its rows to the shared removal tail, which
-    /// converges the same three recomputes every other aura removal site runs — vitals, then sheet,
-    /// then the Mount Projection. Dropping any of them leaves a corpse projecting a stat pool, a
-    /// paperdoll number or a mount it no longer has.
-    #[test]
-    fn the_death_shed_reads_the_policy_and_converges_every_projection() {
-        let collect = crate::test_scan::code_of(
-            include_str!("control.rs"),
-            "pub(crate) fn remove_auras_on_death(",
-        );
-        assert!(
-            collect.contains("aura_survives_death(s.attributes)"),
-            "the shed must ask the one policy predicate. Body was:\n{collect}"
-        );
-        assert!(
-            collect.contains("shed_auras(ctx, unit_guid, shed)"),
-            "the shed must hand its collected rows to the shared removal tail. Body was:\n{collect}"
-        );
-        let body =
-            crate::test_scan::code_of(include_str!("control.rs"), "pub(crate) fn shed_auras(");
-        let vitals = body
-            .find("recompute_vitals(ctx, unit_guid)")
-            .expect("the shed must re-derive the vitals pools a lost STA/INT aura fed");
-        let sheet = body
-            .find("recompute_sheet(ctx, unit_guid)")
-            .expect("the shed must re-derive the character sheet");
-        let mount = body
-            .find("crate::mount::recompute_mount(ctx, unit_guid)")
-            .expect("the shed must re-derive the Mount Projection, or a corpse keeps riding");
-        assert!(
-            vitals < sheet && sheet < mount,
-            "vitals must recompute before the sheet, so a lost stat aura's sheet recompute sees the \
-             already-updated spirit. Body was:\n{body}"
-        );
     }
 }

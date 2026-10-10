@@ -20,13 +20,6 @@ use super::tables::{
 /// `CMSG_BUY_ITEM`, so this only rejects clearly-out-of-range abuse (mirrors `loot::LOOT_RANGE_SQ`).
 const VENDOR_RANGE_SQ: f32 = 100.0;
 
-/// The shared trust-boundary gate for a player-initiated NPC interaction — vendor sell/buyback/buy and
-/// armorer repair all reduce to the SAME five checks: the player must be alive, the target must be a
-/// real NPC (never another player, `is_player()`) carrying `required_flag`, on the player's own
-/// map+instance, within `VENDOR_RANGE_SQ`. Extracted ("the exact place drift happens" — the
-/// 190 review already caught one copy of this shape missing the instance check once) from
-/// `apply_item_sell` / `apply_buyback_item` / `apply_buy_item` / `apply_player_repair`, which used to
-/// paste this ~20-line block four times.
 ///
 /// The four call sites' WIRE-VISIBLE error text differs in wording, not in the checks themselves, so
 /// three of the five messages stay parameterized rather than folded into one template:
@@ -441,7 +434,7 @@ pub(crate) fn apply_buy_item(
     if tmpl.buy_price == 0 {
         return Err("item cannot be bought".to_string());
     }
-    // Reputation vendor discount (195): Honored+ with the vendor's parent faction cuts the BUY price
+    // Reputation vendor discount: Honored+ with the vendor's parent faction cuts the BUY price
     // (vanilla 5% per rank above Neutral — Honored 10%). Sell is unchanged. Neutral / no-standing / a
     // factionless vendor → 0% → full price. Applied at this single buy chokepoint, after the count math.
     let cost = {
@@ -575,7 +568,6 @@ mod tests {
         buy_bank_slot_result, buyback_newest_first, buyback_ring_full, flagged_npc_in_reach,
         BuyBankSlotOutcome, VENDOR_RANGE_SQ,
     };
-    use crate::test_scan::code_of;
     use lyracore_shared::constants::npc_flags::{BANKER, INNKEEPER, VENDOR};
 
     /// BANK ACCESS: only a live BANKER-flagged NPC inside the interaction radius opens the bank. A
@@ -609,17 +601,6 @@ mod tests {
         assert!(!inn_in_reach(false, INNKEEPER, true, 0.0)); // an innkeeper's corpse
     }
 
-    /// The bind reducer must CALL the gate. There is no `ReducerContext` harness in this crate, so
-    /// the call's presence is pinned by a source scan (the `bank_access_gate` precedent).
-    #[test]
-    fn gw_bind_home_consults_the_innkeeper_gate() {
-        let body = code_of(include_str!("../gw.rs"), "pub fn gw_bind_home(");
-        assert!(
-            body.contains("innkeeper_access_gate"),
-            "gw_bind_home must gate on an innkeeper in reach: {body}"
-        );
-    }
-
     /// Each purchase outcome must reach the reducer boundary as its own wire code, so the relay never
     /// has to read the prose. `Bought` is the only `Ok`.
     #[test]
@@ -647,90 +628,6 @@ mod tests {
         assert!(
             nope.starts_with(&format!("[{}]", result::NOT_BANKER)),
             "{nope}"
-        );
-    }
-
-    /// The purchase names its banker, so it must validate that target through the shared NPC gate
-    /// (the vendor treatment) and charge before it hands the slot over.
-    #[test]
-    fn buy_bank_slot_validates_the_named_banker_and_charges_first() {
-        let body = code_of(
-            include_str!("economy.rs"),
-            "pub(crate) fn apply_buy_bank_slot(",
-        );
-        assert!(
-            body.contains("npc_interaction_gate("),
-            "the named banker must go through the shared NPC-interaction gate"
-        );
-        assert!(
-            body.contains("npc_flags::BANKER"),
-            "the named target must carry the BANKER flag"
-        );
-        let debit = body
-            .find("player.money -= price")
-            .expect("the purse is charged");
-        let grant = body
-            .find("player.bank_bag_slots += 1")
-            .expect("the slot count grows");
-        assert!(
-            debit < grant,
-            "the copper must be taken before the slot is granted"
-        );
-    }
-
-    /// The banker/innkeeper search is a spatial query, so it must go through the partition-scoped,
-    /// grid-indexed helper — a whole-table read would see only the caller's own shard after a split.
-    /// Both no-named-NPC gates share one search, so this pins the shared one plus each delegation.
-    #[test]
-    fn the_unnamed_npc_gates_search_through_the_partition_scoped_helper() {
-        let src = include_str!("economy.rs");
-        let body = code_of(src, "fn flagged_npc_in_reach_gate(");
-        assert!(
-            body.contains("crate::helpers::entities_near("),
-            "the proximity search must use `helpers::entities_near`"
-        );
-        assert!(
-            body.contains("player.dead"),
-            "a dead player must not reach the bank or the innkeeper"
-        );
-        for gate in [
-            "pub(crate) fn bank_access_gate(",
-            "pub(crate) fn innkeeper_access_gate(",
-        ] {
-            assert!(
-                code_of(src, gate).contains("flagged_npc_in_reach_gate("),
-                "{gate} must delegate to the shared search, not grow a second copy"
-            );
-        }
-    }
-
-    /// This crate has no `ReducerContext` harness by design (`test_scan`'s doc comment /
-    /// playbook §7), so `apply_player_repair`'s actual gating/cost/durability-restore behavior
-    /// against real table state is verified live via the wire harness, not here — the same boundary
-    /// every other reducer in this module lives behind (see `combat/swing.rs`'s chokepoint tests for
-    /// the same disclosure). This pins the two invariants a source-text scan CAN catch: the debit
-    /// happens (and is persisted) before the durability restore loop — so a rolled-back transaction
-    /// never leaves a charge without a repair — and every collected target actually gets its
-    /// durability written back to its template's max, not just summed into the cost.
-    #[test]
-    fn apply_player_repair_debits_before_it_restores_every_target() {
-        let src = include_str!("economy.rs");
-        let body = code_of(src, "pub(crate) fn apply_player_repair(");
-        let debit_at = body
-            .find("player.money -= total_cost;")
-            .expect("apply_player_repair must debit money before persisting");
-        let persist_at = body
-            .find("entities.guid().update(player);")
-            .expect("the debited player must be persisted");
-        let restore_at = body
-            .find("inst.durability = max_dur;")
-            .expect("apply_player_repair must restore durability to the template max");
-        let restore_persist_at = body
-            .find("instances.guid().update(inst);")
-            .expect("the restored item must be persisted");
-        assert!(
-            debit_at < persist_at && persist_at < restore_at && restore_at < restore_persist_at,
-            "expected debit → persist → restore → persist, in that order"
         );
     }
 

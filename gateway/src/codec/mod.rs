@@ -214,7 +214,7 @@ use wow_world_messages::vanilla::{
     UpdatePlayer,
     UpdateUnit,
     Vector3d,
-    // Items slice-2: equip → render on the 3D model via PLAYER_VISIBLE_ITEM.
+    // Items: equip → render on the 3D model via PLAYER_VISIBLE_ITEM.
     VisibleItem,
     VisibleItemIndex,
     Weekday,
@@ -245,7 +245,7 @@ use wow_world_messages::vanilla::{
     SMSG_INSPECT,
     // Inventory-action failure feedback (equip / move / store / use rejection).
     SMSG_INVENTORY_CHANGE_FAILURE,
-    // Items slice-1: the item-query response + the typed item CREATE_OBJECT descriptors.
+    // Items: the item-query response + the typed item CREATE_OBJECT descriptors.
     // UpdateContainer is the container (bag) analogue of UpdateItem — same ITEM+CONTAINER mask.
     SMSG_ITEM_QUERY_SINGLE_RESPONSE,
     SMSG_LEARNED_SPELL,

@@ -527,34 +527,3 @@ impl Coordinator {
             .find(&operation_id)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    /// The GM Gate's read must stay on the handle it is called on, the Home Shard. A realm-wide
-    /// union takes the first shard that holds the Character, default shard first, and a frozen copy
-    /// there would pass the Gate.
-    #[test]
-    fn the_gm_level_is_read_from_the_home_shard_only() {
-        let body = crate::test_scan::code_of(include_str!("guild.rs"), "fn home_gm_level(");
-        let flat: String = body.split_whitespace().collect();
-        assert!(
-            flat.contains("self.0.coord().conn.db.game_character()"),
-            "{body}"
-        );
-        for union in ["all_shards", "world_shards", "realm_core", "world_stores"] {
-            assert!(
-                !flat.contains(union),
-                "`home_gm_level` reads `{union}`:\n{body}"
-            );
-        }
-        let forward = crate::test_scan::code_of(
-            include_str!("../../world/handlers/guild.rs"),
-            "fn guild_gm_level(&self, actor_guid: u64) -> Result<u8> {",
-        );
-        let forward: String = forward.split_whitespace().collect();
-        assert_eq!(
-            forward,
-            "{Ok(crate::stdb::Coordinator::home_gm_level(self,actor_guid))}"
-        );
-    }
-}

@@ -1,10 +1,6 @@
-//! The `init` lifecycle reducer — the single entrypoint that populates a fresh database. `init`
-//! itself is a four-line dispatcher over four banner-stratum fns, each a straight
-//! extraction of what used to be one ~1,600-line function (a reader still sees the whole seed by
-//! reading top to bottom — the split is fn boundaries, not a reorder):
 //!
 //! 1. **`seed_production_core`**: realm, server config, the human-warrior start position, the
-//!    fallback graveyard/graveyard-zone rows (work-item 209), the TEST account + pre-seeded
+//!    fallback graveyard/graveyard-zone rows, the TEST account + pre-seeded
 //!    character (with its starter spellbook/action-bar kit), and the EventAI on-aggro barks. Every
 //!    fresh database needs this regardless of whether it will ever host a real import.
 //! 2. **`seed_map0_demo_content`** (the in-body `DECISION` comment has the full
@@ -51,11 +47,6 @@ use crate::{game_alpha_test_tools_enrollment, AlphaTestToolsEnrollment};
 
 #[reducer(init)]
 pub fn init(ctx: &ReducerContext) {
-    // Four banner strata (split these out of what used to be one ~1,600-line fn — see this
-    // file's header for what each one seeds and why the split points fall where they do). Order
-    // matters: later strata reference nothing from earlier ones (each re-derives its own `hw`
-    // alias), but the production core must exist before anything reads `game_config`/`game_realm`,
-    // and the scheduler must arm last so nothing fires against a half-seeded database.
     seed_production_core(ctx);
     seed_map0_demo_content(ctx);
     seed_spell_registry(ctx);
@@ -65,7 +56,7 @@ pub fn init(ctx: &ReducerContext) {
 
 /// Stratum 1 — the production core every fresh database needs regardless of whether it will ever
 /// host a real import: realm, server config, the human-warrior start position, the fallback
-/// graveyard/graveyard-zone rows (work-item 209), the TEST account + pre-seeded character (with its
+/// graveyard/graveyard-zone rows, the TEST account + pre-seeded character (with its
 /// starter spellbook/action-bar kit), and the EventAI on-aggro barks.
 fn seed_production_core(ctx: &ReducerContext) {
     use constants::start_human_warrior as hw;
@@ -116,7 +107,7 @@ fn seed_production_core(ctx: &ReducerContext) {
         display_id: 49,
     });
 
-    // Graveyard fallback seed (work-item 209): the SAME five Elwynn/Westfall graveyards
+    // Graveyard fallback seed: the SAME five Elwynn/Westfall graveyards
     // `world::graveyard`'s hardcoded consts carry, ALSO row-seeded into `game_graveyard` +
     // `game_graveyard_zone` so a fresh unimported DB and the live `graveyard::resolve_graveyard`
     // path agree exactly — mirrors the `game_start_position` precedent (init seeds; the importer's
@@ -218,12 +209,12 @@ fn seed_production_core(ctx: &ReducerContext) {
         health: 0, // sentinel: spawn at full health
         power: 0,  // sentinel: spawn at starting power
         respec_count: 0,
-        death_expire_micros: 0,                                   // never died
-        pending_instance_id: 0,                                   // open world
-        gm_level: 3, // work-item 223: the seeded Tester is playtest-GM by default
-        pending_ghost: false, // alive (work-item 226)
-        resting: false, // 196
-        rested_since_micros: 0, // 196
+        death_expire_micros: 0, // never died
+        pending_instance_id: 0, // open world
+        gm_level: 3,
+        pending_ghost: false,
+        resting: false,                                           // 196
+        rested_since_micros: 0,                                   // 196
         pending_godmode: false, // 289: GM playtest carry — off until `.god` + a map change
         pending_run_speed_mult_bp: crate::world::RUN_SPEED_BP_1X, // 289: 1×
         bank_bag_slots: 0,
@@ -231,10 +222,10 @@ fn seed_production_core(ctx: &ReducerContext) {
     // The seeded character goes through the same creation-time kit grant as `create_character`
     // (rows restamp to the real owner identity at establish_session, like its other owned rows).
     crate::spell::spellbook::grant_createinfo_spells(ctx, 1, Identity::ZERO, hw::RACE, hw::CLASS);
-    // Action-bar rows (work-item 212) — same no-op-pre-import grant `create_character` calls.
+    // Action-bar rows, same no-op-pre-import grant `create_character` calls.
     crate::action_bar::grant_createinfo_actions(ctx, 1, Identity::ZERO, hw::RACE, hw::CLASS);
 
-    // Creature EventAI (193): the fixture on-aggro barks (Kobold/Defias/Hogger).
+    // Creature EventAI: the fixture on-aggro barks (Kobold/Defias/Hogger).
     crate::creatures::seed_on_aggro_fixtures(ctx);
 }
 
@@ -598,8 +589,8 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
             gather_skill_line: 0, // not a gather node
             respawn_secs: 0, // n/a (a CHEST has no respawn timer); 0 ⇒ the 3-min fallback if ever used
             gather_gray: 0,  // n/a (not a gather node) — the always-skill sentinel
-            lock_id: 0,      // work-item 211: unlocked (seed/demo chest)
-            size: 0.0,       // no dump size — the gateway renders this at 1.0
+            lock_id: 0,
+            size: 0.0, // no dump size, the gateway renders this at 1.0
         });
     ctx.db.game_gameobject().insert(GameObject {
         guid: GO_HIGH | 1,
@@ -612,7 +603,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         state: 0,
         created_at: ctx.timestamp,
         respawn_at_micros: 0, // a freshly-seeded node is ready (no pending respawn)
-        instance_id: 0,       // seeded demo GOs live in the open world (190 slice 2),
+        instance_id: 0,       // seeded demo GOs live in the open world
         grid_x: lyracore_shared::spatial::grid_cell(hw::X + 5.0, hw::Y).0,
         grid_y: lyracore_shared::spatial::grid_cell(hw::X + 5.0, hw::Y).1,
         cell: lyracore_shared::spatial::cell_id_at(hw::X + 5.0, hw::Y),
@@ -633,8 +624,8 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
             gather_skill_line: 0, // not a gather node
             respawn_secs: 0,      // n/a (a GOOBER has no respawn timer)
             gather_gray: 0,       // n/a (not a gather node)
-            lock_id: 0,           // work-item 211: unlocked (seed/demo goober)
-            size: 0.0,            // no dump size — the gateway renders this at 1.0
+            lock_id: 0,
+            size: 0.0, // no dump size, the gateway renders this at 1.0
         });
     ctx.db.game_gameobject().insert(GameObject {
         guid: GO_HIGH | 2,
@@ -647,7 +638,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         state: 0,
         created_at: ctx.timestamp,
         respawn_at_micros: 0, // a freshly-seeded node is ready (no pending respawn)
-        instance_id: 0,       // seeded demo GOs live in the open world (190 slice 2),
+        instance_id: 0,       // seeded demo GOs live in the open world
         grid_x: lyracore_shared::spatial::grid_cell(hw::X + 8.0, hw::Y).0,
         grid_y: lyracore_shared::spatial::grid_cell(hw::X + 8.0, hw::Y).1,
         cell: lyracore_shared::spatial::cell_id_at(hw::X + 8.0, hw::Y),
@@ -674,8 +665,8 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
             gather_skill_line: crate::skill::skill_line::MINING, // 186
             respawn_secs: 0, // 0 ⇒ the 3-min RESPAWN_WINDOW_MICROS fallback
             gather_gray: 0, // 0 ⇒ the always-skill sentinel (deterministic +1 every gather)
-            lock_id: 0,  // work-item 211: gather nodes don't source a lockId this slice
-            size: 0.0,   // no dump size — the ETL carries the real one
+            lock_id: 0,
+            size: 0.0, // no dump size, the ETL carries the real one
         });
     ctx.db.game_gameobject().insert(GameObject {
         guid: GO_HIGH | 3,
@@ -688,7 +679,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         state: 0,
         created_at: ctx.timestamp,
         respawn_at_micros: 0, // a freshly-seeded node is ready (no pending respawn)
-        instance_id: 0,       // seeded demo GOs live in the open world (190 slice 2),
+        instance_id: 0,       // seeded demo GOs live in the open world
         grid_x: lyracore_shared::spatial::grid_cell(hw::X + 6.0, hw::Y).0,
         grid_y: lyracore_shared::spatial::grid_cell(hw::X + 6.0, hw::Y).1,
         cell: lyracore_shared::spatial::cell_id_at(hw::X + 6.0, hw::Y),
@@ -709,8 +700,8 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
             gather_skill_line: crate::skill::skill_line::HERBALISM, // 182
             respawn_secs: 0, // 0 ⇒ the 3-min RESPAWN_WINDOW_MICROS fallback
             gather_gray: 0, // 0 ⇒ the always-skill sentinel (deterministic +1 every gather)
-            lock_id: 0,  // work-item 211: gather nodes don't source a lockId this slice
-            size: 0.0,   // no dump size — the ETL carries the real one
+            lock_id: 0,
+            size: 0.0, // no dump size, the ETL carries the real one
         });
     ctx.db.game_gameobject().insert(GameObject {
         guid: GO_HIGH | 4,
@@ -723,7 +714,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         state: 0,
         created_at: ctx.timestamp,
         respawn_at_micros: 0, // a freshly-seeded node is ready (no pending respawn)
-        instance_id: 0,       // seeded demo GOs live in the open world (190 slice 2),
+        instance_id: 0,       // seeded demo GOs live in the open world
         grid_x: lyracore_shared::spatial::grid_cell(hw::X + 7.0, hw::Y).0,
         grid_y: lyracore_shared::spatial::grid_cell(hw::X + 7.0, hw::Y).1,
         cell: lyracore_shared::spatial::cell_id_at(hw::X + 7.0, hw::Y),
@@ -764,8 +755,8 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
                     gather_skill_line: crate::skill::skill_line::MINING, // 186
                     respawn_secs: 300, // real vanilla mining-node window (5 min); reroll fires at timer-fire
                     gather_gray: 0,    // always-skill sentinel (deterministic +1 every gather)
-                    lock_id: 0, // work-item 211: gather nodes don't source a lockId this slice
-                    size: 0.0,  // no dump size — the gateway renders this at 1.0
+                    lock_id: 0,
+                    size: 0.0, // no dump size, the gateway renders this at 1.0
                 });
         }
     }
@@ -1003,7 +994,7 @@ fn seed_spell_registry(ctx: &ReducerContext) {
     spell(50050, "Test Conjure", 0, 0, 0, 0, 0, 1, 0, false, 0);
     effect(50050, 0, 0x07, 2, 0, 0, 5349, 8); // E_CREATE_ITEM: 2× item 5349 (Conjured Muffin), self
 
-    // Craft RECIPES are no longer seeded (work-item 282): they import from the real Spell.dbc with real
+    // Craft RECIPES are no longer seeded: they import from the real Spell.dbc with real
     // reagents (game_spell_reagent) + skill-up bands (game_skill_ability), offered by the real in-box
     // trainers. The old synthetic recipe spells here (2538 — which was even FABRICATED as "Roasted Boar
     // Meat" when the real 2538 is "Charred Wolf Meat"; 50071; 50090-50097) are gone. Crafted-item ON-USE
@@ -1252,13 +1243,6 @@ fn seed_spell_registry(ctx: &ReducerContext) {
     spell(50022, "Test Fear", 0, 0, 0, 30, 8000, 1, 0, true, 1);
     effect(50022, 0, 0xB0, 0, 0, 1, 3, 3); // A_CONTROL, p0 = M_FEAR (3), p0_kind = P_MECHANIC (3), enemy
 
-    // Test Poly (50023, work-item 192) — the POLYMORPH crowd-control: ONE A_CONTROL (0xB0) effect whose p0
-    // names the MECHANIC M_POLY (4, p0_kind 3 P_MECHANIC), targeting an ENEMY. `is_incapacitated` gates
-    // stun/poly identically (no act, no move) — this fixture exists so CC DIMINISHING RETURNS has a real,
-    // debug-castable spell to drive the live-probe runbook (two poly casts on a player target 15s apart or
-    // less land at 100/50/25/0%; the same double-cast on a CREATURE target is always full duration — see
-    // `spell::stacking`'s DR resolver + the work-item's completion note). 10s duration matches the
-    // pure-fn DR test vector's base duration exactly (10s → 5s → 2.5s at levels 1/2/3). is_negative true.
     spell(50023, "Test Poly", 0, 0, 0, 30, 10000, 1, 0, true, 1);
     effect(50023, 0, 0xB0, 0, 0, 1, 4, 3); // A_CONTROL, p0 = M_POLY (4), p0_kind = P_MECHANIC (3), enemy
 
@@ -1325,8 +1309,8 @@ fn seed_spell_registry(ctx: &ReducerContext) {
     // `debug_seed_talents` (init does NOT re-run on an auto-migrate publish, so the live DB re-seeds via that).
     crate::talent::seed_talents(ctx);
 
-    // Stacking-group starter set (work-item 192) — hand-authored until 102's cmangos `spell_group` SQL
-    // dump lands wholesale. Idempotent + shared with `debug_repair_after_publish`, which is how an
+    // Stacking-group starter set, hand-authored until a cmangos `spell_group` SQL
+    // dump is imported wholesale. Idempotent + shared with `debug_repair_after_publish`, which is how an
     // already-migrated development database picks up reconciled rows (init does NOT re-run).
     seed_spell_groups(ctx);
 }
@@ -1479,7 +1463,6 @@ pub(crate) fn reconcile_curated_starter_role_levels(ctx: &ReducerContext) -> u32
     repaired
 }
 
-#[cfg(feature = "debug_reducers")]
 fn legacy_lesser_heal_header(spell: &Spell) -> bool {
     spell.spell_id == 2050
         && spell.name == "Lesser Heal"
@@ -1508,7 +1491,6 @@ fn legacy_lesser_heal_header(spell: &Spell) -> bool {
         && spell.proc_charges == 0
 }
 
-#[cfg(feature = "debug_reducers")]
 fn legacy_lesser_heal_effect(effect: &SpellEffect) -> bool {
     effect.id == (2050u64 << 2)
         && effect.spell_id == 2050
@@ -1532,7 +1514,6 @@ fn legacy_lesser_heal_effect(effect: &SpellEffect) -> bool {
 
 /// Repair only the exact curated Lesser Heal row, before or after its level reconciliation.
 /// Imported or tuned spell data does not match both complete shapes and remains authoritative.
-#[cfg(feature = "debug_reducers")]
 pub(crate) fn repair_lesser_heal_target(ctx: &ReducerContext) -> u64 {
     let Some(spell) = ctx.db.game_spell().spell_id().find(2050) else {
         return 0;
@@ -1563,7 +1544,7 @@ fn seed_scheduler_arming(ctx: &ReducerContext) {
             scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(EVENT_TTL_MICROS)),
         });
 
-    // Schedule the instance reaper (work-item 190 slice 3) every 60s — minutes-scale occupancy
+    // Schedule the instance reaper every 60s, minutes-scale occupancy
     // stamping + the 30min-empty / reset-requested reap. A live DB (auto-migrate publish) never
     // re-runs init, so re-arm there via `debug_rearm_instance_reaper` (the
     // `debug_rearm_creature_tick` precedent).
@@ -1580,10 +1561,10 @@ fn seed_scheduler_arming(ctx: &ReducerContext) {
     // every tick (smooth, mangos-cadence motion); the O(N) sensing passes only every 8th tick (~4s) —
     // see `tick_creatures`. A live DB (auto-migrate publish) keeps its old interval, so re-arm via the
     // `debug_rearm_creature_tick` reducer (init does NOT re-run on a plain publish).
-    // Work-item 229: this seeded row is the GLOBAL/CATCH-ALL ticker (`GLOBAL_TICK_INSTANCE`) — it
+    // this seeded row is the GLOBAL/CATCH-ALL ticker (`GLOBAL_TICK_INSTANCE`), it
     // covers instance 0 AND every instance without a dedicated row of its own (load-bearing; never
-    // delete it). Dedicated per-instance rows are inserted by 190 slice 2's create_instance (or, until
-    // then, `debug_arm_instance_tick`).
+    // delete it). Dedicated per-instance rows are inserted by `create_instance` (or by
+    // `debug_arm_instance_tick`).
     ctx.db
         .game_creature_move_schedule()
         .insert(CreatureMoveSchedule {
@@ -1628,7 +1609,7 @@ fn seed_scheduler_arming(ctx: &ReducerContext) {
             )),
         });
 
-    // Ground-AoE damage tick every 500ms (118): drives game_ground_area (Consecration/…). 500ms so a
+    // Ground-AoE damage tick every 500ms: drives game_ground_area (Consecration/…). 500ms so a
     // 1s/2s area period fires within ~½ tick of due. Areas gate on their own next_tick_micros.
     ctx.db
         .game_ground_area_schedule()
@@ -1653,10 +1634,10 @@ fn seed_scheduler_arming(ctx: &ReducerContext) {
             )),
         });
 
-    // Gateway lease reaper (stage 4a): despawns the players of a gateway that stopped
+    // Gateway lease reaper: despawns the players of a gateway that stopped
     // heartbeating (the shared-connection crash case). Inert while `game_gateway_session` is
-    // empty — nothing binds sessions to leases until stage 4d — but armed from day one so the
-    // ghost bound exists the moment the first leased session appears. Same three-net story as
+    // empty, but armed from day one so the ghost bound exists the moment the first leased session
+    // appears. Same three-net story as
     // the motion tick above: `debug_repair_after_publish` ensures it on a live DB.
     ctx.db
         .game_gateway_lease_reaper_schedule()
@@ -1708,7 +1689,7 @@ pub(crate) fn seed_createinfo_spells(ctx: &ReducerContext) {
     }
 }
 
-/// The stacking-group starter set (work-item 192) — hand-authored ahead of 102's cmangos `spell_group`/
+/// The stacking-group starter set, hand-authored ahead of a cmangos `spell_group`/
 /// `spell_group_stack_rules` SQL dump, which will fill `game_spell_group`/`game_spell_group_rule`
 /// wholesale and supersede this. Idempotent (only-if-empty, mirroring `seed_createinfo_spells`); shared by
 /// `init` and `debug_repair_after_publish` (init does NOT re-run on an auto-migrate publish). It
@@ -1916,10 +1897,7 @@ pub(crate) const CREATEINFO_KIT: &[(u8, u8, u32)] = &[
 //  auto-migrate publish. Everything it seeds is therefore either only-if-empty or an upsert, and
 //  is additionally reachable from a feature-gated `debug_seed_*` twin so a long-lived shard can be
 //  brought forward without a re-provision. Neither property is checkable at runtime here (no
-//  `ReducerContext` harness exists by design), so the DATA
-//  invariants are asserted directly and the two structural ones are pinned by a source scan
-//  through `test_scan::code_of`, which strips comments (a bare `.contains()` on an unstripped body
-//  is exactly what a trailing-comment needle defeats).
+//  `ReducerContext` harness exists by design), so the DATA invariants are asserted directly.
 // ===========================================================================================
 #[cfg(test)]
 mod tests {
@@ -1998,43 +1976,6 @@ mod tests {
         );
     }
 
-    /// The starting-kit seeder remains only-if-empty: it must not rewrite an operator's kit edits.
-    /// The spell-group seeder is deliberately different: it converges existing development databases
-    /// on the reconciled starter rows while avoiding duplicate memberships.
-    #[test]
-    fn starter_kit_seeder_still_returns_early_before_writing_anything() {
-        let src = include_str!("seed.rs");
-        let body = crate::test_scan::code_of(
-            src,
-            "pub(crate) fn seed_createinfo_spells(ctx: &ReducerContext) {",
-        );
-        let guard_at = body
-            .find("if table.count() > 0 {")
-            .expect("starting-kit guard is gone");
-        let return_at = body[guard_at..]
-            .find("return;")
-            .expect("starting-kit guard does not return");
-        let insert_at = body
-            .find(".insert(")
-            .expect("starting-kit seeder does not insert");
-        assert!(
-            guard_at + return_at < insert_at,
-            "starting-kit guard must precede its first write"
-        );
-    }
-
-    /// The seeder converges an already-migrated database instead of skipping it: rules are updated in
-    /// place and only absent memberships are inserted, so re-running it duplicates nothing.
-    #[test]
-    fn spell_group_seeder_updates_rules_and_never_duplicates_memberships() {
-        let body = crate::test_scan::code_of(
-            include_str!("seed.rs"),
-            "pub(crate) fn seed_spell_groups(ctx: &ReducerContext) {",
-        );
-        assert!(body.contains("rules.group_id().update(rule_row)"));
-        assert!(body.contains(".any(|row| row.spell_id == spell_id)"));
-    }
-
     /// Every rank of every Blessing the starter set claims, checked against the 1.12.1 client's
     /// `Spell.dbc` (see `docs/data-ingestion.md`). Ranks went missing here once already.
     #[test]
@@ -2093,7 +2034,7 @@ mod tests {
 
     /// The live probe's premise: its two stamina buffs share one magnitude-compared family and its
     /// two Blessings share the per-caster family. A membership or rule edit that breaks either pairing
-    /// would leave `docs/aura-stacking-probes.md` describing an outcome the module no longer produces.
+    /// would leave `docs/verification/aura-stacking-probes.md` describing an outcome the module no longer produces.
     #[test]
     fn the_live_probe_fixture_spells_sit_in_the_families_the_probe_documents() {
         let family_of = |spell_id: u32| {
@@ -2203,132 +2144,5 @@ mod tests {
             items.len(),
             "fixture item entries collide: {items:?}"
         );
-    }
-
-    /// REACHABILITY, which is idempotence's other half. `init` does not re-run on an auto-migrate
-    /// publish, so a fixture reachable ONLY from `init` never lands on an already-provisioned
-    /// shard, and one reachable only from a `debug_seed_*` reducer never lands on a fresh one
-    /// unless a harness happens to call it. Both halves have gone wrong here: the comments in
-    /// `init` record `seed_stealth_fixture` having been debug-only (the audit) and
-    /// `seed_fixture_catalogue` being moved into `init` for exactly this reason.
-    ///
-    /// So: every fixture seeder must be called from at least one of the two, and the failure names
-    /// which one is stranded.
-    #[test]
-    fn every_fixture_seeder_is_reachable_from_init_or_from_a_debug_reducer() {
-        let fixtures_src = include_str!("seed/fixtures.rs");
-        let init_src = include_str!("seed.rs");
-        let debug_src = crate::test_scan::debug_dir_src();
-
-        let seeders: Vec<&str> = fixtures_src
-            .lines()
-            .filter_map(|line| {
-                let rest = line.trim().strip_prefix("pub(crate) fn ")?;
-                let name = rest.split('(').next()?;
-                name.starts_with("seed_").then_some(name)
-            })
-            .collect();
-
-        assert!(
-            seeders.len() >= 8,
-            "found only {} fixture seeders in seed/fixtures.rs — the extraction scan has stopped \
-             matching and would pass vacuously. Did the declaration style change?",
-            seeders.len()
-        );
-
-        for name in seeders {
-            let call = format!("{name}(ctx)");
-            let from_init = init_src.contains(&call);
-            let from_debug = debug_src.contains(&call);
-            assert!(
-                from_init || from_debug,
-                "`{name}` is never called: not from `init` (so it never lands on a fresh shard) \
-                 and not from a `debug_*` reducer (so it can never be applied to an existing one). \
-                 A fixture nobody seeds is a test that silently stops testing anything."
-            );
-        }
-    }
-
-    /// DRIFT REGRESSION. The post-import fixture-restore path
-    /// (`seed_scenario_fixtures`/`seed_fixture_items`, run via `debug_seed_scenario_fixtures`
-    /// after a world-ETL re-import truncates `game_creature_template`/`game_item_template`) used
-    /// to re-author full `CreatureTemplate`/`ItemTemplate` literals as hand-copies of `init`'s —
-    /// and they drifted: the Profession Trainer was level 30/1500hp/"Cooking & Skinning" in
-    /// `init` but level 10/100hp/"Fixture" in the restore copy, and the Test Wolf's
-    /// money_min/max disagreed too. A shard restored after an ETL wipe therefore carried
-    /// different fixtures than a fresh one — the exact cross-shard divergence class was
-    /// filed to kill, reintroduced by copy-paste.
-    ///
-    /// The fix collapses both paths onto ONE canonical constructor per fixture
-    /// (`test_wolf_template`, `profession_trainer_template`, `tempered_blade_template`,
-    /// `tough_jerky_template`, all in `seed/fixtures.rs`). This pins that both `init` (via
-    /// `seed_map0_demo_content`, the stratum-2 split-out — see this file's header) and the
-    /// restore path call the SAME constructors — a hand-copied struct literal reintroduced in
-    /// either one fails this test loudly instead of silently drifting again.
-    #[test]
-    fn init_and_the_restore_path_build_shared_fixtures_from_the_same_constructor() {
-        let seed_src = include_str!("seed.rs");
-        let fixtures_src = include_str!("seed/fixtures.rs");
-
-        let init_body = crate::test_scan::code_of(
-            seed_src,
-            "fn seed_map0_demo_content(ctx: &ReducerContext) {",
-        );
-        let restore_body = crate::test_scan::code_of(
-            fixtures_src,
-            "pub(crate) fn seed_scenario_fixtures(ctx: &ReducerContext) {",
-        );
-        let fixture_items_body = crate::test_scan::code_of(
-            fixtures_src,
-            "fn seed_fixture_items(ctx: &ReducerContext) {",
-        );
-
-        for ctor in ["test_wolf_template()", "profession_trainer_template()"] {
-            assert!(
-                init_body.contains(ctor),
-                "`init` no longer calls `{ctor}` — did a hand-authored CreatureTemplate literal \
-                 come back?"
-            );
-            assert!(
-                restore_body.contains(ctor),
-                "`seed_scenario_fixtures` (the post-import fixture-restore path) no longer calls \
-                 `{ctor}` — a hand-copied literal here is exactly the #363 drift bug."
-            );
-        }
-
-        for ctor in ["tempered_blade_template(", "tough_jerky_template("] {
-            assert!(
-                init_body.contains(ctor),
-                "`init` no longer calls `{ctor}` — did a hand-authored ItemTemplate literal come \
-                 back?"
-            );
-            assert!(
-                fixture_items_body.contains(ctor),
-                "`seed_fixture_items` (feeds the restore path's reserved-id fixture catalogue) no \
-                 longer calls `{ctor}` — a hand-copied literal here is exactly the #363 drift bug."
-            );
-        }
-
-        // Belt-and-suspenders, scoped to the fixture the constructor replaced (this function also
-        // hand-authors OTHER, non-duplicated fixtures — Scenario Questgiver/Vendor/Weapon Master —
-        // which is fine; only a WOLF/PROFESSION_TRAINER-entry literal here would be the drift bug
-        // back). Whitespace-collapsed word-pair match, NOT `.contains()` — `target_entry: WOLF`
-        // (the quest objective, which is legitimate) would otherwise false-positive on a plain
-        // substring search for "entry: WOLF".
-        let restore_shape = crate::test_scan::shape_of(
-            fixtures_src,
-            "pub(crate) fn seed_scenario_fixtures(ctx: &ReducerContext) {",
-        );
-        let words: Vec<&str> = restore_shape.split(' ').collect();
-        for needle in [["entry:", "WOLF,"], ["entry:", "PROFESSION_TRAINER,"]] {
-            assert!(
-                !words.windows(2).any(|w| w == needle),
-                "`seed_scenario_fixtures` hand-authors a `CreatureTemplate {{ {} {} ... }}` \
-                 literal again instead of calling the shared constructor — this is how #363 \
-                 happened.",
-                needle[0],
-                needle[1]
-            );
-        }
     }
 }

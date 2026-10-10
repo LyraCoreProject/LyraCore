@@ -140,7 +140,7 @@ pub(crate) fn learn_spell(ctx: &ReducerContext, guid: u64, owner: Identity, spel
         owner_identity: owner,
         spell_id,
     });
-    // Pick Lock (119): learning it grants the Lockpicking (633) skill line, so the first pick_lock cast
+    // Pick Lock: learning it grants the Lockpicking (633) skill line, so the first pick_lock cast
     // reads a real skill row (a no-op for every other spell). Runs on the single grant seam.
     crate::skill::grant_lockpicking_on_learn(ctx, guid, owner, spell_id);
 }
@@ -196,16 +196,6 @@ pub(crate) fn strip_spell_auras(ctx: &ReducerContext, guid: u64, spell_id: u32) 
     moved_vitals
 }
 
-/// A spell's rank-chain link within a spell family (e.g. Fireball Rank 1→2→3): `prev_spell` is the
-/// immediately-lower rank (0 for the family's first rank), `first_spell` the family's rank-1 id, `rank`
-/// this row's own ordinal, `req_spell` an additional required spell (unused this slice — read/stored for
-/// completeness, not yet consulted by any gate). Read by `trainer::apply_trainer_buy`'s rank-prereq gate
-/// (`by_first` is not used there today — kept for a future "list every rank in a family" query, the same
-/// speculative-index posture `game_trainer_spell::by_trainer` set). Sourced from cmangos `spell_chain`
-/// (work-item 102, reduced scope) — PUBLIC since 258 (rank supersession): the gateway subscribes it to
-/// (a) send SMSG_SUPERCEDED_SPELL instead of LEARNED_SPELL when a trainer buy upgrades a known rank and
-/// (b) collapse superseded ranks out of the login SMSG_INITIAL_SPELLS. No Timestamp → plain
-/// `spacetime sql` clear+reload, exactly like `game_createinfo_spell`. [reference]
 #[table(accessor = game_spell_chain, public, index(accessor = by_first, btree(columns = [first_spell])))]
 pub struct SpellChain {
     #[primary_key]
@@ -217,7 +207,7 @@ pub struct SpellChain {
 }
 
 /// One "learning `parent_spell` also auto-teaches `learn_spell`" dependent (cmangos `spell_learn_spell`,
-/// work-item 102 reduced scope) — e.g. a weapon-skill spell that auto-grants a companion passive. Read
+/// reduced scope), e.g. a weapon-skill spell that auto-grants a companion passive. Read
 /// by [`learn_spell_with_dependents`] via `by_parent`. Module-only, no Timestamp, unsubscribed — same
 /// shape/rationale as `SpellChain` above. [reference]
 #[table(accessor = game_spell_learn, index(accessor = by_parent, btree(columns = [parent_spell])))]
@@ -229,17 +219,6 @@ pub struct SpellLearn {
     pub learn_spell: u32,
 }
 
-/// Learn `spell_id`, then auto-teach each ONE-LEVEL dependent listed in `game_spell_learn.by_parent`
-/// (cmangos `spell_learn_spell`, work-item 102 reduced scope). ONE level only, deliberately not
-/// recursive: cmangos classic data never nests an auto-learn chain more than one hop deep, so a second
-/// lookup pass would only ever re-scan empty results — not worth paying for a deeper walk (or its
-/// call-stack/cycle exposure) for data that doesn't need it. `learn_spell`'s own check-before-insert
-/// already makes any individual grant idempotent (so even a malformed cyclic row could never double-teach
-/// or loop within this one level), but capping the walk at one hop means we never even attempt a second
-/// one. TRAINER-PATH ONLY — call this from `trainer::apply_trainer_buy`'s spell-grant arm, NEVER from
-/// plain [`learn_spell`] (character creation / talents / quest rewards): firing dependents universally
-/// would change the createinfo grant's spell COUNT and break work-item 212's provenance count-parity
-/// runbook, which assumes createinfo grants exactly its listed rows. [entity]
 pub(crate) fn learn_spell_with_dependents(
     ctx: &ReducerContext,
     guid: u64,
@@ -259,11 +238,6 @@ pub(crate) fn learn_spell_with_dependents(
     }
 }
 
-/// Projects `game_spell_learn`-shaped `(parent_spell, learn_spell)` pairs down to the dependent spell ids
-/// taught alongside `parent_spell` — the pure part of `learn_spell_with_dependents`'s DB read, extracted
-/// so the "ONE level of dependents" selection is unit-tested without a `ReducerContext` (the module crate
-/// has no ctx harness by design). Named honestly: the ctx-bound `by_parent().filter(...)` read itself is
-/// NOT covered by a test here — only this projection over already-fetched rows is.
 pub(crate) fn dependent_spell_ids(rows: &[(u32, u32)], parent_spell: u32) -> Vec<u32> {
     rows.iter()
         .filter(|&&(parent, _)| parent == parent_spell)
@@ -276,7 +250,7 @@ mod tests {
     use super::{createinfo_row_matches, dependent_spell_ids};
     use crate::seed::CREATEINFO_KIT;
 
-    // --- work-item 102 (reduced scope): spell-chain / spell-learn dependents ------------------------
+    // --- (reduced scope): spell-chain / spell-learn dependents ------------------------
 
     /// `dependent_spell_ids` returns ONLY the rows whose parent matches, in row order, and is empty for
     /// a parent with no dependents at all (the "no game_spell_learn row" fallback: a plain rank-only

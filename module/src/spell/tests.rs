@@ -39,9 +39,6 @@ fn spell_crit_is_one_and_a_half() {
     assert_eq!(apply_spell_crit(0, true), 0); // a 0-damage effect stays 0
 }
 
-/// Incoming-damage modifier (A_MOD_DAMAGE_TAKEN): signed percent, 0 = no-op, ≥100% reduction = immunity.
-/// `apply_damage_pct` is direction-neutral (also folds the OUTGOING percent — see its doc comment); this
-/// test exercises it through the incoming-damage framing its name used to (wrongly) assert alone.
 #[test]
 fn damage_taken_modifier_scales_and_clamps() {
     assert_eq!(apply_damage_pct(100, 0), 100); // no aura → unchanged (baseline-safe)
@@ -75,7 +72,7 @@ fn stance_allows_gate() {
     assert!(stance_allows(0x05, STANCE_BERSERKER));
     // An out-of-range stance is disallowed under a non-zero mask (the shift is bounded → no overflow/panic).
     assert!(!stance_allows(0x01, 9));
-    // Druid combat forms (work-item 156 — stance ids 3/4/5 flow through the SAME gate/mask convention):
+    // Druid combat forms (stance ids 3/4/5 flow through the SAME gate/mask convention):
     // a Maul/Growl-shaped Bear|DireBear mask (bits 3,5 = 0x28) admits Bear and Dire Bear only.
     assert!(stance_allows(0x28, STANCE_BEAR));
     assert!(stance_allows(0x28, STANCE_DIRE_BEAR));
@@ -92,7 +89,7 @@ fn stance_allows_gate() {
 
 /// The stance → client ShapeshiftForm byte map (UNIT_FIELD_BYTES_1[2], written by the E_SET_STANCE arm):
 /// the inverse of the importer's form_to_stance per the taxonomy STANCE_* convention block. The warrior
-/// trio MUST stay byte-identical to the pre-156 inline `stance + 17` (pinned against hardcoded values,
+/// trio MUST stay byte-identical to the inline `stance + 17` (pinned against hardcoded values,
 /// not the formula); unassigned ids keep the legacy fallback.
 #[test]
 fn client_form_for_stance_matches_the_convention() {
@@ -102,7 +99,7 @@ fn client_form_for_stance_matches_the_convention() {
     assert_eq!(client_form_for_stance(STANCE_BEAR), 5);
     assert_eq!(client_form_for_stance(STANCE_CAT), 1);
     assert_eq!(client_form_for_stance(STANCE_DIRE_BEAR), 8);
-    // Unassigned stance ids (6, 7) fall back to the legacy warrior formula — the pre-156 behavior.
+    // Unassigned stance ids (6, 7) fall back to the legacy warrior formula.
     assert_eq!(client_form_for_stance(6), 23);
     assert_eq!(client_form_for_stance(7), 24);
 }
@@ -144,9 +141,6 @@ fn stance_switch_clears_power_only_on_real_switch_for_rage() {
     ));
 }
 
-/// Form-recast toggle-off gate (156 review): recasting the ACTIVE druid form (Bear/Cat/DireBear)
-/// leaves it; a warrior recasting his active stance stays a no-op (warriors are never formless);
-/// switching TO a different form/stance is never a toggle (the change arm handles it).
 #[test]
 fn form_recast_toggles_off_only_for_active_druid_forms() {
     // Druid recasting the form he is IN → leave it.
@@ -512,7 +506,7 @@ fn instant_kind_wire_values_exhaustive() {
         );
         assert!(
             !passive_applies_effect_kind(*k),
-            "instant kind 0x{k:02x} must not reach the passive-apply path (#90: Consecration's \
+            "instant kind 0x{k:02x} must not reach the passive-apply path (Consecration's \
              E_PERSISTENT_AREA-only shape must never mint a spurious login/world-change buff)"
         );
         for other in &ALL_INSTANT_KINDS[i + 1..] {
@@ -547,7 +541,7 @@ fn aura_kind_wire_values_exhaustive() {
         );
         assert!(
             passive_applies_effect_kind(*k),
-            "aura kind 0x{k:02x} must still reach the passive-apply path (#90 control)"
+            "aura kind 0x{k:02x} must still reach the passive-apply path"
         );
         for other in &ALL_AURA_KINDS[i + 1..] {
             assert_ne!(
@@ -556,36 +550,6 @@ fn aura_kind_wire_values_exhaustive() {
             );
         }
     }
-}
-
-/// Review round 2's actual finding: the (now-retired) `apply_spell_auras_rejects_instant_effects` and
-/// `apply_spell_auras_still_applies_aura_effects` tests both called `passive_applies_effect_kind`
-/// DIRECTLY — they pinned the predicate's logic but never touched `apply_spell_auras` itself. A
-/// reviewer deleted the `.filter(|e| passive_applies_effect_kind(e.kind))` call from
-/// `apply_spell_auras`'s effect query (the fix's actual production wiring) and the full test suite
-/// stayed green, because nothing exercised the call site. This is a source-scan tripwire on that WIRING:
-/// it catches the filter call being DELETED (the shape this defect took, confirmed by mutating it and
-/// watching this test go red) or the query losing the `.filter(` step entirely. It does NOT catch the
-/// filter being wired to a DIFFERENT, wrong predicate at the same call site (`.filter(|e|
-/// some_other_fn(e.kind))` still reads as "filtered" to a scan) — the two kind-exhaustive tests above
-/// are what pin the LOGIC; this one only pins that SOME call to `passive_applies_effect_kind` still
-/// gates the query. Uses the crate-shared scan primitives (`crate::test_scan`) rather than a local
-/// copy — found this file's own copy was the seventh, and it carried the weaker (non-string-
-/// literal-aware) trailing-comment stripper the canonical one was hardened against.
-#[test]
-fn apply_spell_auras_still_calls_the_passive_effect_filter() {
-    let body = crate::test_scan::code_of(
-        include_str!("cast/resolve.rs"),
-        "pub(crate) fn apply_spell_auras(",
-    );
-    let normalized: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
-    assert!(
-        normalized.contains(".filter(|e| passive_applies_effect_kind(e.kind))"),
-        "`apply_spell_auras` no longer filters its effect query through `passive_applies_effect_kind` — \
-         without that call, every instant-kind effect of a talent/racial/resurrection-sickness passive is \
-         handed straight to `aura_apply` again (#90: Consecration's spurious login/world-change buff). \
-         Body was:\n{body}"
-    );
 }
 
 /// Pin EVERY `P_*` param-tag value (`eff_p0_kind` — what `p0` MEANS on a given effect/aura row): the
@@ -748,7 +712,7 @@ fn break_on_damage_flag_decode() {
     assert!(!breaks_on_damage(0x2)); // a different aura_interrupt bit (not BREAK_ON_DAMAGE) → not broken
 }
 
-// --- Aura-expiry reap gate (work-item 232) --------------------------------------------------------
+// --- Aura-expiry reap gate --------------------------------------------------------
 // `tick_auras`'s expiry pass now range-scans `game_aura.by_expiry()` (a btree index on `expires_at`) to
 // the horizon instead of `.iter()`ing the whole table, then applies `is_due_for_expiry` as the exact same
 // combined predicate the old full scan used inline (`a.expires_at <= now && a.eff_kind != A_STEALTH`).

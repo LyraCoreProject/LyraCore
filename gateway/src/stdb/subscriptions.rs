@@ -464,12 +464,6 @@ pub(crate) fn instance_relay_gate(row_instance_id: u64, viewer_instance_id: Opti
 pub(crate) static MOTION_CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub(crate) static MOTION_SENT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// The THIRD hop the two counters above could not see: queued → handed to the
-/// writer. Both relays used to push with `let _ = tx.send(..)`, so a send to a session whose writer
-/// half was already gone got discarded with no trace — a delivery path degrading silently, the exact
-/// failure *shape* the stuck-relay incident and other orphaned writers had. Incremented by BOTH
-/// [`relay_entity_motion`] and [`relay_creature_leg`]: they feed the same per-session writer channel,
-/// so one counter answers "is the writer still taking peer-motion packets at all".
 pub(crate) static MOTION_DROPPED: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
@@ -712,18 +706,6 @@ pub(crate) fn relay_corpse_update(row: &Corpse) -> Vec<Outbound> {
     ))]
 }
 
-/// The pre-dedup visibility gate `offer_peer_create` runs before it ever touches the `created` set —
-/// self-skip, instance isolation, spirit-healer ghost-gating, and the
-/// currently-stealthed check. Pure over ALREADY-READ state (the caller does the DB lookups and passes
-/// their results in) so it is unit-testable without a live SDK connection — the three scenarios
-/// this predicate must get right (re-entry re-creates, login sees pre-existing peers, cross-instance
-/// stays excluded) all reduce to "does this predicate return true for this row" plus the dedup-set
-/// mechanics exercised separately below. Order/semantics moved verbatim out of the old inline body:
-/// - Self is never offered (the dedup set is pre-seeded with `self_guid` instead).
-/// - A cross-instance row is excluded BEFORE the dedup insert, so it is never marked `created` even
-///   transiently (the same trap the encode-failure rollback below guards against).
-/// - A spirit-healer creature is visible ONLY to a GHOST viewer (the released-spirit corpse-run state).
-/// - A CURRENTLY-stealthed peer (≥1 A_STEALTH aura) is excluded; the later REVEAL re-offers it.
 fn peer_create_gate(
     row_guid: u64,
     self_guid: u64,
@@ -784,12 +766,6 @@ pub(crate) fn chat_range_yd(chat_type: u8) -> f32 {
 /// The full gated "show this row to the viewer" path — [`peer_create_gate`], then the per-viewer
 /// `created` dedup, then the CREATE send. Shared by the insert dispatch, the update re-entry branch,
 /// the recenter's entered-set, and the world-entry sweep.
-///
-/// `db` is the cache of the shard that HOLDS the row (its aura rows and pet-spell rows live there);
-/// `coord` is that shard's handle, used to read the peer's equipped gear RLS-bypassed. The viewer's
-/// own instance and ghost state come off [`Viewer`] — never a lookup in `db`, because a row on
-/// another shard's cache has no copy of the viewer's row to look them up in (the reason cross-seam
-/// visibility ever needed a second per-player connection at all).
 ///
 /// On a `build_peer_create` encode failure the guid is ROLLED BACK out of `created`: leaving it in
 /// permanently suppresses the peer (a second latent bug in the same re-entry path, below).
@@ -876,8 +852,6 @@ pub(crate) fn offer_peer_create_for(
         .character_guid()
         .find(&row.guid)
     {
-        // CREATE is already first in `out`. A resident flight must follow it in the same writer
-        // work item so AOI entry can never observe MONSTER_MOVE for an unknown passenger.
         append_resident_taxi_after_create(&mut out, &viewer.created, viewer.self_guid, &spline);
     }
     out
@@ -1166,7 +1140,7 @@ pub(crate) fn relay_gameobject_create(
         return Vec::new();
     };
     let view = go_view(row.clone(), &tmpl);
-    // #515: the CREATE_OBJECT's typed descriptor builder can only carry rot0 of the 4-float spawn
+    // The CREATE_OBJECT's typed descriptor builder can only carry rot0 of the 4-float spawn
     // quaternion (gtker's slot-0-only wall), so the other 3 slots — and the yaw-derive fallback for
     // an all-zero stored quaternion — ride a second raw VALUES frame right behind CREATE. The client
     // has already materialized the object by the time this second frame arrives (same ordering the
@@ -1528,14 +1502,7 @@ pub(crate) fn cast_event_outbound(self_guid: u64, row: &SpellCastEvent) -> Vec<O
             go,
         ))));
     }
-    // FIX 2: the floating spell damage number — relay SMSG_SPELLNONMELEEDAMAGELOG when this cast
-    // dealt damage (the module summed it onto the row + stored the school INDEX). 0 damage (heals /
-    // buffs / a begin-START) → no log. Sent after the GO so the number floats over the hit. The
-    // crit flag + resisted/absorbed breakdown ride from the row → CriticalHit hit_info + the
-    // (N resisted)/(N absorbed) suffixes. NOTE: a FULLY-absorbed hit has damage==0 (no health
-    // write) but absorbed>0; this slice keeps the `damage > 0` gate, so a 0-damage full-absorb is
-    // intentionally NOT logged (vanilla's absorb-only "Absorb" text is a separate log variant —
-    // out of scope). Widen the gate to `|| row.absorbed > 0 || row.resisted > 0` to add it later.
+
     if row.damage > 0 {
         let log = codec::build_spell_non_melee_damage_log(
             row.target_guid,
@@ -1567,11 +1534,8 @@ pub(crate) fn cast_event_outbound(self_guid: u64, row: &SpellCastEvent) -> Vec<O
             }),
         )));
     }
-    // SMSG_SPELL_COOLDOWN — ONLY for a spell that actually HAS a cooldown (Mortal Strike, Judgement),
-    // with the REAL value. mangos does NOT send a cooldown packet per cast; we used to send one
-    // (cooldown=0) after EVERY cast, which STUCK the client's action button ("yellow casting outline" +
-    // "Another action is in progress" — could only cast each spell once). The SMSG_SPELL_GO above is
-    // what releases the client's pending-cast state (as in mangos); a 0-cooldown cast sends nothing.
+
+    // SMSG_SPELL_GO releases pending casts. A zero-duration cooldown can leave the button stuck.
     if row.cooldown_ms > 0 {
         let cd = codec::build_spell_cooldown(row.caster_guid, row.spell_id, row.cooldown_ms);
         out.push(Outbound::One(ServerOpcodeMessage::SMSG_SPELL_COOLDOWN(
@@ -1629,14 +1593,8 @@ pub(crate) fn armor_packet(
         Box::new(codec::build_armor_values(self_guid, eff, pos)),
     )))
 }
-// Live PAPERDOLL STR/AGI/STA/INT/SPI/AP/damage-range on an aura apply/expire (#517, the Battle Shout
-// bug): `module::spell::recompute_sheet` is the SOURCE OF TRUTH and already re-derived + wrote
-// `game_world_entity.sheet_*` in the SAME reducer transaction that inserted/deleted `changed` — this
-// is a plain re-push of that row, never a second aura fold (the trap the ORIGINAL gateway-only
-// `sheet_stats` hit: it never read `game_aura` at all). Gated on the aura KIND matching what
-// `recompute_sheet` actually reacts to (`aura_moves_sheet`'s mirror), so an unrelated buff/debuff
-// (a DoT, a slow) doesn't spam the opcode — purely a re-push filter, not aura interpretation. Self-
-// scoped: the sheet shows only your own numbers, so no peer relay is needed.
+// The Module has already persisted sheet stats in the aura transaction. Re-push that row
+// only for aura kinds that affect it; the paperdoll is private to its owner.
 pub(crate) fn sheet_packet(
     coord: &Coordinator,
     changed: &Aura,
@@ -1696,11 +1654,7 @@ pub(crate) fn stealth_visibility(
             if !created.lock().unwrap().insert(changed.target_guid) {
                 return Vec::new();
             }
-            // "Is the peer in this viewer's scope" used to be "is its row in this
-            // connection's cache", which the per-player box subscription made equivalent.
-            // The shared connection's cache holds the whole world, so the question has to be
-            // put to the cell index instead — otherwise a stealther unstealthing on the far
-            // side of the zone would CREATE for everyone.
+
             if !view
                 .spatial
                 .can_see(EntityLayer::WorldEntity, session, changed.target_guid)
@@ -1939,7 +1893,7 @@ pub(crate) fn aura_snapshot_outbound(
     out
 }
 
-/// Trade-status relay (#120): `game_trade_event.kind` → the `SMSG_TRADE_STATUS` variant, to the
+/// Trade-status relay: `game_trade_event.kind` → the `SMSG_TRADE_STATUS` variant, to the
 /// row's recipient and nobody else (audience resolved by the caller, the `auction_notice_outbound`
 /// shape). The kind byte is `lyracore_shared::trade::event_kind` — NOT the vanilla discriminant;
 /// this match IS the wire mapping. An unknown kind (a newer module mid-rollout) drops with a warn
@@ -1948,11 +1902,11 @@ pub(crate) fn trade_event_outbound(row: &TradeEvent) -> Vec<Outbound> {
     use lyracore_shared::trade::event_kind as kind;
     use wow_world_messages::vanilla::SMSG_TRADE_STATUS;
     // The OFFER_* kinds carry a whole-side snapshot and decode to the fixed-444-byte extended
-    // status instead of a plain status (#121); `self_player` is the kind, not an inference.
+    // status instead of a plain status ; `self_player` is the kind, not an inference.
     if row.kind == kind::OFFER_SELF || row.kind == kind::OFFER_PARTNER {
         // WIRE POLARITY (mangoszero `SendUpdateTrade`): the byte is `1 means traders data,
         // 0 means own` — so the field is SET when the packet describes the PARTNER's side,
-        // despite the binding's `self_player` name. Live-client verification is #124's pass.
+        // despite the binding's `self_player` name. The protocol's polarity controls this value.
         return match trade_offer_extended(row.kind == kind::OFFER_PARTNER, &row.payload) {
             Some(msg) => vec![Outbound::One(
                 ServerOpcodeMessage::SMSG_TRADE_STATUS_EXTENDED(Box::new(msg)),
@@ -1983,7 +1937,7 @@ pub(crate) fn trade_event_outbound(row: &TradeEvent) -> Vec<Outbound> {
         kind::TRADE_ACCEPT => Some(SMSG_TRADE_STATUS::TradeAccept),
         kind::BACK_TO_TRADE => Some(SMSG_TRADE_STATUS::BackToTrade),
         kind::TRADE_COMPLETE => Some(SMSG_TRADE_STATUS::TradeComplete),
-        // Commit refused on bag space (#122): the window closes with the inventory error;
+        // Commit refused on bag space: the window closes with the inventory error;
         // `target_error` says WHOSE bags — false = yours, true = the partner's.
         kind::INV_FULL_SELF => Some(SMSG_TRADE_STATUS::CloseWindow {
             inventory_result: wow_world_messages::vanilla::InventoryResult::InventoryFull,
@@ -2149,7 +2103,7 @@ pub(crate) fn duel_winner_outbound(row: &DuelEvent) -> Vec<Outbound> {
     ))]
 }
 
-/// Decode an `OFFER_*` payload into the fixed-444-byte `SMSG_TRADE_STATUS_EXTENDED` (#121):
+/// Decode an `OFFER_*` payload into the fixed-444-byte `SMSG_TRADE_STATUS_EXTENDED`:
 /// counts are 7/7 (the cmangos constant), unused slots stay zeroed (`TradeSlot::default`), and
 /// every filled slot carries the module-resolved stack/durability/enchant fields. Fails closed
 /// with the payload decoder. `describes_partner` sets the wire's misnamed `self_player` byte —
@@ -2321,10 +2275,7 @@ pub(crate) fn group_event_outbound<St: crate::world::WorldStore + ?Sized>(
                 }
             }
         }
-        // A grouped money-loot split's per-recipient share → the SAME
-        // `SMSG_LOOT_MONEY_NOTIFY` the (now-removed) unconditional gateway send used to build,
-        // just per-recipient and carrying the SHARE instead of the total (`amount` here IS the
-        // wire field, matching `codec::build_loot_money_notify`'s single `amount: u32`).
+
         roll_kind::MONEY_SHARE => {
             match lyracore_shared::loot_roll::decode_money_share(&row.payload) {
                 Some(share) => Some(ServerOpcodeMessage::SMSG_LOOT_MONEY_NOTIFY(
@@ -2531,10 +2482,6 @@ fn log_unparseable_broadcast(row: &GroupEvent) {
     );
 }
 
-/// The shared-dispatch "who may see this row" predicate for the PRIVATE recipient-addressed families
-/// (group/loot-roll/quest-share, resurrect prompt, Auction Notice, Mail Arrival, Realm Chat Line):
-/// the row's addressee and nobody else. On the shared feed this, with the owner-session lookup that
-/// enforces it structurally, is the entire privacy guarantee RLS used to provide.
 pub(crate) fn private_recipient_audience(row_recipient_guid: u64, viewer_guid: u64) -> bool {
     // 0 is "unaddressed"/"uninitialized", never a real character — an equality alone would let an
     // unaddressed row match a half-initialized viewer (0 == 0), so zero denies on either side.
@@ -2954,7 +2901,7 @@ pub(crate) fn creature_leg_outbound(
         y: row.sy,
         z: row.sz,
     };
-    // #518: a facing-only leg (the mover doesn't move, `emit_facing_spline`'s carrier) gets the
+    // a facing-only leg (the mover doesn't move, `emit_facing_spline`'s carrier) gets the
     // `FacingAngle` variant — the only 1.12 `SMSG_MONSTER_MOVE` shape that turns a STATIONARY
     // creature without a spline the client would otherwise have nothing to interpolate from.
     if row.facing {
@@ -3016,9 +2963,6 @@ pub(crate) fn creature_leg_outbound(
     ))]
 }
 
-/// Append the still-current part of a resident creature leg to its CREATE work item.
-/// Live leg callbacks use [`creature_leg_outbound`] unchanged; a late viewer instead starts at the
-/// interpolated current point and receives only the remaining duration.
 fn append_resident_creature_after_create(
     created_outbound: &mut Vec<Outbound>,
     created: &Mutex<HashSet<u64>>,
@@ -3242,7 +3186,7 @@ fn entity_update_to_outbound_with_dynamic_flags(
             out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
         }
         // Dynamic-flags VALUES relay: the killing blow sets UNIT_DYNFLAG_LOOTABLE (0x1) on a corpse that
-        // rolled money (slice 3); the loot reducer clears it. NOTE: UNIT_DYNFLAG_DEAD (0x20) is NEVER set
+        // rolled money; the loot reducer clears it. NOTE: UNIT_DYNFLAG_DEAD (0x20) is NEVER set
         // (it is feign-death in vanilla — see combat + lyracore-shared constants).
         if old.dynamic_flags != new.dynamic_flags {
             let m = codec::build_dynamic_flags_values(new.guid, dynamic_flags);
@@ -3289,20 +3233,20 @@ fn entity_update_to_outbound_with_dynamic_flags(
                 out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
             }
         }
-        // Sheath relay (#101): UNIT_FIELD_BYTES_2 byte 0 flipping as a unit draws or stows its weapon.
+        // Sheath relay: UNIT_FIELD_BYTES_2 byte 0 flipping as a unit draws or stows its weapon.
         // Any unit, not player-gated — a creature drawing on engage is the same wire field. Without
         // this arm the server knows the state and no observer ever hears about it.
         if old.unit_bytes_2 != new.unit_bytes_2 {
             let m = codec::build_sheath_values(new.guid, new.unit_bytes_2);
             out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
         }
-        // Live XP-bar update (slice 1): players only (creatures never change xp; player-only fields).
+        // Live XP-bar update: players only (creatures never change xp; player-only fields).
         let xp_changed = old.xp != new.xp || old.next_level_xp != new.next_level_xp;
         if xp_changed && is_player {
             let m = codec::build_player_xp_values(new.guid, new.xp, new.next_level_xp);
             out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
         }
-        // Live purse update (slice 3): PLAYER_FIELD_COINAGE on money change (looting). Players only.
+        // Live purse update: PLAYER_FIELD_COINAGE on money change (looting). Players only.
         if old.money != new.money && is_player {
             let m = codec::build_coinage_values(new.guid, new.money);
             out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
@@ -4921,16 +4865,16 @@ mod tests {
         won.loser_name = "Loser".into();
         let out = duel_event_outbound(&won, None);
         assert!(matches!(
-            out.as_slice(),
-            [
-                Outbound::One(ServerOpcodeMessage::SMSG_DUEL_COMPLETE(_)),
-                Outbound::One(ServerOpcodeMessage::SMSG_DUEL_WINNER(message)),
-                ..
-                // `opponent_name` is written first on the wire and must carry the winner.
-            ] if message.reason == wow_world_base::shared::duel_winner_reason_vanilla_tbc_wrath::DuelWinnerReason::Won
-                && message.opponent_name == "Winner"
-                && message.initiator_name == "Loser"
-        ));
+                    out.as_slice(),
+                    [
+                        Outbound::One(ServerOpcodeMessage::SMSG_DUEL_COMPLETE(_)),
+                        Outbound::One(ServerOpcodeMessage::SMSG_DUEL_WINNER(message)),
+        ..
+                        // `opponent_name` is written first on the wire and must carry the winner.
+                    ] if message.reason == wow_world_base::shared::duel_winner_reason_vanilla_tbc_wrath::DuelWinnerReason::Won
+                        && message.opponent_name == "Winner"
+                        && message.initiator_name == "Loser"
+                ));
 
         let mut fled_event = duel_event(3, 3);
         fled_event.winner_guid = 10;
@@ -4960,7 +4904,7 @@ mod tests {
         ));
     }
 
-    /// The trade-status wire mapping (#120): every `lyracore_shared::trade::event_kind` the module
+    /// The trade-status wire mapping: every `lyracore_shared::trade::event_kind` the module
     /// emits decodes to its `SMSG_TRADE_STATUS` variant — `BeginTrade` carrying the counterparty
     /// guid the client needs to open the window — and an unknown kind (newer module mid-rollout)
     /// drops rather than desyncing the trade window.
@@ -5176,7 +5120,7 @@ mod tests {
         );
     }
 
-    /// The OFFER_* kinds decode to the fixed-444-byte extended status (#121): the polarity byte
+    /// The OFFER_* kinds decode to the fixed-444-byte extended status: the polarity byte
     /// comes from the KIND (never inferred), the window-visible item fields survive the payload
     /// round-trip into the right wire slots, unused slots stay zeroed, and a malformed payload
     /// drops the packet entirely.
@@ -5862,7 +5806,7 @@ mod tests {
         );
     }
 
-    /// #101: a sheath change must relay, or drawing a weapon is invisible to everyone but the player
+    /// a sheath change must relay, or drawing a weapon is invisible to everyone but the player
     /// who did it. The state lives in BYTE 0 of `unit_bytes_2` — pin the decoded packet, and pin that
     /// an unchanged row stays silent (the client re-sends its current state on every weapon swap, and
     /// a relay per no-op is a broadcast amplifier on a busy cell).
@@ -6239,9 +6183,6 @@ mod tests {
 
     #[test]
     fn taxi_landing_emits_one_atomic_presentation_update_not_a_land_mount_duplicate() {
-        // The taxi-landing twin of the activation test above: display AND the flight bit clear
-        // TOGETHER. Must relay through the SAME coupled builder, never the standalone land-mount one
-        // alongside it (the double-fire this ticket's diff separation must avoid).
         let mut old = player_entity();
         old.mount_display_id = 1147;
         old.unit_flags |= lyracore_shared::constants::unit_flags::TAXI_FLIGHT;
@@ -6972,7 +6913,6 @@ mod tests {
         const SPIRITHEALER: u32 = lyracore_shared::constants::npc_flags::SPIRITHEALER;
         // A spirit healer is invisible to a living viewer...
         assert!(!peer_create_gate(2, 1, 0, 0, SPIRITHEALER, false, false));
-        // ...but visible to a ghost.
         assert!(peer_create_gate(2, 1, 0, 0, SPIRITHEALER, true, false));
         // A non-spirit-healer entity is unaffected by the viewer's ghost state.
         assert!(peer_create_gate(2, 1, 0, 0, 0, false, false));
@@ -7109,360 +7049,6 @@ mod tests {
         // not even instance 0: suppress-then-sweep, never guess.
         assert!(!instance_relay_gate(0, None));
         assert!(!instance_relay_gate(7, None));
-    }
-
-    /// Remove line and nested block comments while preserving ordinary string literals.
-    ///
-    /// This is deliberately limited to the Rust source spans scanned in this module. The scans need
-    /// quoted labels, so comment markers inside a quoted label remain part of the source.
-    fn without_comments(text: &str) -> String {
-        let mut output = String::with_capacity(text.len());
-        let mut chars = text.char_indices().peekable();
-        let (mut in_string, mut in_line_comment, mut block_depth) = (false, false, 0usize);
-
-        while let Some((index, character)) = chars.next() {
-            if in_line_comment {
-                if character == '\n' {
-                    in_line_comment = false;
-                    output.push(character);
-                }
-                continue;
-            }
-
-            if block_depth > 0 {
-                if character == '/' && text[index..].starts_with("/*") {
-                    block_depth += 1;
-                    chars.next();
-                } else if character == '*' && text[index..].starts_with("*/") {
-                    block_depth -= 1;
-                    chars.next();
-                } else if character == '\n' {
-                    output.push(character);
-                }
-                continue;
-            }
-
-            if in_string {
-                output.push(character);
-                if character == '\\' {
-                    if let Some((_, escaped)) = chars.next() {
-                        output.push(escaped);
-                    }
-                } else if character == '"' {
-                    in_string = false;
-                }
-                continue;
-            }
-
-            match character {
-                '"' => {
-                    in_string = true;
-                    output.push(character);
-                }
-                '/' if text[index..].starts_with("//") => {
-                    in_line_comment = true;
-                    output.push(' ');
-                }
-                '/' if text[index..].starts_with("/*") => {
-                    block_depth = 1;
-                    output.push(' ');
-                    chars.next();
-                }
-                _ => output.push(character),
-            }
-        }
-
-        output
-    }
-
-    /// The non-test half of this file as the source scans below may read it: comments stripped and
-    /// every whitespace run collapsed to one space.
-    ///
-    /// Both steps are mutation findings, not tidiness. Counting matches in the raw text made every
-    /// scan below satisfiable by a COMMENT quoting the pattern while the real call was deleted —
-    /// live-mutated green, with both gates permanently shut (no discovery toast, no inn-crossing
-    /// relay, ever). Collapsing whitespace is the other half: it stops a rustfmt line-split from
-    /// failing a scan that nothing behavioural broke, and it lets a scan pin a whole STATEMENT
-    /// rather than a bare identifier — which is what makes "call it and throw the packet away"
-    /// visible.
-    fn scanned_source() -> String {
-        let src = include_str!("subscriptions.rs");
-        let body = src
-            .split("mod tests {")
-            .next()
-            .expect("the non-test half of this file");
-        let decommented = without_comments(body);
-        decommented.split_whitespace().collect::<Vec<_>>().join(" ")
-    }
-
-    /// The span of ONE top-level `fn NAME(` in a DIFFERENT file of this module tree — the
-    /// shared-connection model moved the AOI wiring out of this file, and a tripwire that can only
-    /// see this file would have gone
-    /// quiet rather than failing. Brace-matched, so it works on `impl`-nested layouts too. Returns
-    /// the RAW (not comment-stripped) text — callers that need the mutation-hardened decommenting
-    /// run it through [`decommented`] themselves, same two-step `scanned_source` already uses.
-    fn top_level_fn_body_of(file: &str, name: &str) -> &'static str {
-        let src: &'static str = match file {
-            "world_view.rs" => include_str!("world_view.rs"),
-            "connection.rs" => include_str!("connection.rs"),
-            other => panic!("no scanner registered for `{other}`"),
-        };
-        let start = src
-            .find(&format!("fn {name}("))
-            .unwrap_or_else(|| panic!("`fn {name}(` not found in {file}"));
-        let open = src[start..].find('{').expect("a body") + start;
-        let mut depth = 0usize;
-        for (i, c) in src[open..].char_indices() {
-            match c {
-                '{' => depth += 1,
-                '}' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        return &src[open..open + i + 1];
-                    }
-                }
-                _ => {}
-            }
-        }
-        panic!("unbalanced braces scanning `{name}` in {file}");
-    }
-
-    /// Comment-stripped, whitespace-collapsed form of an arbitrary source span — the same two-step
-    /// mutation-hardening [`scanned_source`] applies to the whole file (strip comments
-    /// FIRST, so a scan can't be satisfied by a comment quoting the pattern; collapse whitespace
-    /// SECOND, so a rustfmt line-split can't fail a scan that pins a whole statement).
-    ///
-    /// The last step drops what a broken-out call leaves behind — the space after `(`, the trailing
-    /// comma before `)` — so a needle reads as one written call whichever way rustfmt wrapped it.
-    fn decommented(text: &str) -> String {
-        let stripped = without_comments(text);
-        let one_line = stripped.split_whitespace().collect::<Vec<_>>().join(" ");
-        one_line
-            .replace("( ", "(")
-            .replace(", )", ")")
-            .replace(" )", ")")
-    }
-
-    #[test]
-    fn source_scans_ignore_block_commented_code() {
-        let source = r#"
-            wire_insert_live(
-                db.live_table(),
-                "live.label",
-                &view,
-                |v, row| relay(v, row),
-            );
-            /*
-                wire_insert_live(db.decoy_table(), "decoy.label", &view, relay);
-                /* wire_insert_live(db.nested_decoy(), "nested.label", &view, relay); */
-            */
-            let label = "/* quoted label */";
-        "#;
-
-        let scanned = decommented(source);
-        let compact: String = scanned.chars().filter(|c| !c.is_whitespace()).collect();
-
-        assert!(compact.contains(
-            "wire_insert_live(db.live_table(),\"live.label\",&view,|v,row|relay(v,row));"
-        ));
-        assert!(!scanned.contains("decoy_table"));
-        assert!(!scanned.contains("nested_decoy"));
-        assert!(scanned.contains("\"/* quoted label */\""));
-    }
-
-    /// World entry seeds the viewer's ignore AND friend sets from its own contact rows on this
-    /// Home Shard, read from the Shard's `ContactIndex`, NOT through `contact_lists`, which
-    /// reads the registered Viewer this call is about to create, and would see nothing yet.
-    /// No Fake reaches this coordinator read, so the seed is pinned in source. Without it the sets
-    /// stay empty until the first live contact change: an ignorable Realm Chat Line reaches a
-    /// Character who ignores its speaker, and a friend's login/logout notice never reaches this
-    /// viewer.
-    #[test]
-    fn the_viewer_is_seeded_with_its_own_ignore_and_friend_sets() {
-        let body = crate::test_scan::code_of(
-            include_str!("subscriptions.rs"),
-            "pub fn subscribe_player_events(",
-        );
-        let compact: String = decommented(&body)
-            .chars()
-            .filter(|c| !c.is_whitespace())
-            .collect();
-        assert!(
-            compact.contains("contacts.ignored_by(self_guid)")
-                && compact.contains("contacts.friends_of(self_guid)"),
-            "world entry no longer reads its own contact rows for the ignore/friend seed"
-        );
-        assert!(
-            compact.contains("ignored:Mutex::new(ignored),friends:Mutex::new(friends),team,"),
-            "the viewer is no longer constructed with the seeded ignore/friend sets and team"
-        );
-    }
-
-    /// The call-site tripwire for the shared-view `Viewer`'s construction.
-    ///
-    /// The session's `Viewer` must hold the same dedup/gate state prepared during world entry.
-    /// Hand it a fresh instance and the exactly-once CREATE or spirit-healer gate silently splits.
-    #[test]
-    fn the_viewer_is_registered_with_the_shared_dedup_sets_and_gates() {
-        let code = scanned_source();
-        for field in [
-            "bound_identity: self_identity,",
-            "created: created.clone(),",
-            "gates: viewer_gates.clone(),",
-            "skill_slots: skill_slots.clone(),",
-        ] {
-            assert!(
-                code.contains(field),
-                "the shared-view `Viewer` is no longer constructed with `{field}` — world entry and \
-                 shared writer jobs now use different relay state"
-            );
-        }
-        assert!(
-            code.contains("view.add_viewer( self, viewer.clone(), CellKey::of_position(login_map, login_instance, login_x, login_y), )"),
-            "the session is no longer registered with the shared AOI view at its LOGIN cell — \
-             without the registration the client sees an empty world; with the wrong anchor it sees \
-             somebody else's neighbourhood"
-        );
-    }
-
-    /// Tripwire for the realm-core PRIVATE tier (#22 → #483): the cross-shard group and chat
-    /// twins are armed ONCE per realm-core connection (`arm_realm_private`), gated on realm-core
-    /// being a DISTINCT database. Without the gate a single-database gateway registers a SECOND
-    /// callback on tables `arm_shard` already watches and every private packet is delivered
-    /// twice; without the arming a cross-shard Realm Chat Line is written on realm-core and
-    /// delivered to nobody. No fake in this tree can reach either (a callback on another
-    /// database's live coordinator connection), so the wiring is pinned in source,
-    /// comment-stripped.
-    #[test]
-    fn the_realm_private_tier_is_armed_once_gated_on_a_distinct_database() {
-        let body = decommented(top_level_fn_body_of(
-            "connection.rs",
-            "arm_shared_world_view",
-        ));
-        assert!(
-            body.contains("if let Ok(realm) = self.realm_core() {"),
-            "arming no longer resolves the realm-core handle — pointed anywhere else it hears \
-             nothing at all"
-        );
-        assert!(
-            body.contains("if !shards.iter().any(|s| s.shard_name() == realm.shard_name()) {"),
-            "the realm-core private tier lost its DISTINCT-DATABASE guard. On a single-database \
-             gateway (or with `LYRACORE_REALM_CORE` naming a world shard) `arm_shard` already \
-             watches these tables, so arming realm-core too delivers every invite dialog and \
-             Realm Chat Line twice."
-        );
-        assert!(
-            body.contains(
-                "super::world_view::arm_realm_private(view.clone(), realm.clone(), world.clone());"
-            ),
-            "the realm-core private tier is never armed: a cross-shard Realm Chat Line is \
-             written on realm-core and delivered to nobody"
-        );
-        assert_eq!(
-            body.matches("arm_realm_private(").count(),
-            2,
-            "the realm-core private tier must be armed exactly twice in source: once at connect \
-             and once inside the reconnect re-arm hook — a module republish closes the websocket, \
-             and without the hook the relay dies silently at the first republish"
-        );
-    }
-
-    /// The other half: `arm_realm_private` must register its tables through the same
-    /// recipient-keyed dispatchers as `arm_shard`'s private tier. The recipient filter is
-    /// structural there (`session_of_owner(row.recipient_guid)` + `private_recipient_audience`)
-    /// — these reads ride the OWNER TOKEN, which bypasses RLS, so a dispatcher that fanned to
-    /// viewers instead would hand every player's private lines to every session.
-    #[test]
-    fn the_realm_private_relays_ride_the_recipient_keyed_dispatchers() {
-        let body = decommented(top_level_fn_body_of("world_view.rs", "arm_realm_private"));
-        let compact: String = body.chars().filter(|c| !c.is_whitespace()).collect();
-        assert!(
-            compact.contains("wire_group_events(db,\"realm.game_group_event.insert\",&view,coord.clone(),GroupEventSource::RealmCore);"),
-            "arm_realm_private no longer relays realm-core group events through \
-             `group_event_appeared` (which also carries the QUEST_SHARE detail JOIN through a \
-             WORLD handle — realm-core's cache has no quest catalogue)"
-        );
-        // Realm Chat Lines need BOTH registrations: realm-core's for a sharded Realm, the shard's
-        // own for a Realm whose Realm-core is that database. Only Realm-core writes the table, so
-        // no line is delivered twice.
-        assert!(
-            compact.contains("wire_insert_live(db.game_realm_chat_event(),\"realm.game_realm_chat_event.insert\",&view,|v,row|realm_chat_appeared(v,row));"),
-            "arm_realm_private no longer relays Realm Chat Lines, so every party line and \
-             whisper on a sharded Realm is written and heard by nobody"
-        );
-        let shard = decommented(top_level_fn_body_of(
-            "world_view.rs",
-            "register_shard_callbacks",
-        ));
-        let shard: String = shard.chars().filter(|c| !c.is_whitespace()).collect();
-        assert!(
-            shard.contains("wire_insert_live(db.game_realm_chat_event(),\"game_realm_chat_event.insert\",&view,|v,row|realm_chat_appeared(v,row));"),
-            "arm_shard no longer relays Realm Chat Lines, so every party line on an unsharded \
-             Realm is written and heard by nobody"
-        );
-        let relay = decommented(top_level_fn_body_of("world_view.rs", "realm_chat_appeared"));
-        assert!(
-            relay.contains("session_of_owner(recipient)")
-                && relay.contains("private_recipient_audience(recipient, viewer.self_guid)"),
-            "realm_chat_appeared is no longer recipient-keyed. On an owner-token read every \
-             session would receive every party's chat"
-        );
-        assert!(
-            compact.contains("wire_insert_live(db.game_mail_arrival(),\"realm.game_mail_arrival.insert\",&view,|v,row|mail_arrived(v,row));"),
-            "arm_realm_private no longer relays Mail Arrivals through `mail_arrived`. Mail lives \
-             on realm-core, so no recipient on a World Shard would hear of a new Mail"
-        );
-        // The dispatchers themselves stay recipient-keyed: each body must resolve the recipient's
-        // session FIRST and re-assert the audience predicate.
-        for dispatcher in ["group_event_appeared", "mail_arrived"] {
-            let body = decommented(top_level_fn_body_of("world_view.rs", dispatcher));
-            assert!(
-                body.contains("session_of_owner(row.recipient_guid)")
-                    && body.contains(
-                        "private_recipient_audience(row.recipient_guid, viewer.self_guid)"
-                    ),
-                "{dispatcher} is no longer recipient-keyed — on an owner-token read that is a \
-                 privacy leak: every session would receive every player's private rows"
-            );
-        }
-    }
-
-    /// `game_auction_notice` rides the same private tier: armed once on each shard connection
-    /// (`register_shard_callbacks`) and once more on the realm-core connection (`arm_realm_private`)
-    /// for a cross-shard bidder or seller, both through `auction_notice_appeared`, which is itself
-    /// recipient-keyed the same way `mail_arrived` is above.
-    #[test]
-    fn the_auction_notice_relay_is_armed_on_both_connections_and_recipient_keyed() {
-        let shard = decommented(top_level_fn_body_of(
-            "world_view.rs",
-            "register_shard_callbacks",
-        ));
-        let shard: String = shard.chars().filter(|c| !c.is_whitespace()).collect();
-        assert!(
-            shard.contains("wire_insert_live(db.game_auction_notice(),\"game_auction_notice.insert\",&view,|v,row|auction_notice_appeared(v,row));"),
-            "register_shard_callbacks no longer relays Auction Notices through \
-             `auction_notice_appeared`"
-        );
-
-        let realm = decommented(top_level_fn_body_of("world_view.rs", "arm_realm_private"));
-        let realm: String = realm.chars().filter(|c| !c.is_whitespace()).collect();
-        assert!(
-            realm.contains("wire_insert_live(db.game_auction_notice(),\"realm.game_auction_notice.insert\",&view,|v,row|auction_notice_appeared(v,row));"),
-            "arm_realm_private no longer relays realm-core Auction Notices, so a cross-shard \
-             bidder or seller never hears their outbid, won, sold, expired or new-bid packet"
-        );
-
-        let relay = decommented(top_level_fn_body_of(
-            "world_view.rs",
-            "auction_notice_appeared",
-        ));
-        assert!(
-            relay.contains("session_of_owner(row.recipient_guid)")
-                && relay
-                    .contains("private_recipient_audience(row.recipient_guid, viewer.self_guid)"),
-            "auction_notice_appeared is no longer recipient-keyed — on an owner-token read that \
-             is a privacy leak: every session would receive every auction's notices"
-        );
     }
 
     // ── Peer-motion relay: the CALL SITE, not just the codec helper ──────────
@@ -7790,31 +7376,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn peer_create_dispatch_admits_once_before_appending_resident_movement() {
-        let body = crate::test_scan::code_of(
-            include_str!("subscriptions.rs"),
-            "pub(crate) fn offer_peer_create_for(",
-        );
-        let body: String = body.split_whitespace().collect();
-        let gate = body.find("if!peer_create_gate(").unwrap();
-        let dedup = body
-            .find("if!viewer.created.lock().unwrap().insert(row.guid)")
-            .unwrap();
-        let create = body.find("build_peer_create(").unwrap();
-        let replay = body.find("append_resident_creature_after_create(").unwrap();
-
-        assert!(gate < dedup && dedup < create && create < replay);
-        assert!(body[gate..dedup].contains("{returnVec::new();}"));
-        assert!(body[dedup..create].contains("{returnVec::new();}"));
-        assert_eq!(
-            body.matches("append_resident_creature_after_create(")
-                .count(),
-            1,
-            "the admitted CREATE path must append resident movement exactly once"
-        );
-    }
-
     /// A running-forward movement block plus the bytes the module would have stored for it.
     fn moving_forward() -> (wow_world_messages::vanilla::MovementInfo, Vec<u8>) {
         let info = wow_world_messages::vanilla::MovementInfo {
@@ -7924,9 +7485,6 @@ mod tests {
         );
     }
 
-    /// **Fan-out collapse.** Both relays push with a discarding send; a session whose writer half is
-    /// already gone used to swallow the packet with no trace. Both discard sites are driven here
-    /// (a dropped receiver is exactly the "writer gone" case) and the counter must move for each.
     ///
     /// Deltas rather than absolutes because the counter is a process-global atomic; this is the only
     /// test that increments it, so the deltas are exact.
@@ -7992,7 +7550,7 @@ mod tests {
         );
     }
 
-    /// #518: a `facing`-flagged `game_creature_spline` row relays as `SMSG_MONSTER_MOVE`'s
+    /// a `facing`-flagged `game_creature_spline` row relays as `SMSG_MONSTER_MOVE`'s
     /// `FacingAngle` variant, not the `Normal` one every other leg uses — the whole point being that
     /// a stationary creature otherwise has no wire-level way to tell the client its heading changed.
     #[test]
@@ -8033,7 +7591,7 @@ mod tests {
         );
         assert_eq!(msg.duration, 0);
 
-        // A non-facing leg (the pre-518 baseline) keeps the Normal variant unchanged.
+        // A non-facing leg keeps the Normal variant unchanged.
         let mut normal_row = row.clone();
         normal_row.facing = false;
         normal_row.dur_ms = 500;
@@ -8405,114 +7963,6 @@ mod tests {
             tx.depth(),
             3,
             "a send that queued nothing must not leave the depth raised"
-        );
-    }
-
-    /// The relay's own WIRING, which no unit test can reach: `relay_entity_motion` only ever runs
-    /// because both halves of the `game_entity_motion` subscription call it (insert = a mover's first
-    /// heartbeat in this box, update = every one after). Deleting either closure leaves every test
-    /// above green and freezes peers — the stuck-relay shape, and the "grep every subscriber when a
-    /// relay changes shape" hazard the peer-motion relay work opens with. A scan (not a mock) for the
-    /// reason the other tripwires in this file are: the callbacks are registered on a live
-    /// `DbConnection`.
-    /// Both halves of the motion relay, re-pinned for the shared-connection model: `game_entity_motion` is
-    /// UPSERTED per mover per heartbeat, so `on_insert` is a mover's first heartbeat in the world and
-    /// `on_update` is essentially all peer movement. Dropping either registration is silent — peers
-    /// freeze after their first step, or never move at all. Same for the creature-leg twin.
-    #[test]
-    fn both_halves_of_the_motion_and_spline_relays_are_registered_286() {
-        let arm: String = decommented(top_level_fn_body_of(
-            "world_view.rs",
-            "register_shard_callbacks",
-        ))
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .collect();
-        // #490 factored every registration through `wire_insert`/`wire_update` (world_view.rs),
-        // so the literal `.on_insert(`/`.on_update(` chain off the table handle is gone from
-        // `arm_shard`'s own body — what's left to scan for is the (helper, table, label) triple
-        // that proves the callback is still wired, not skipped.
-        for (helper, table, label, what) in [
-            (
-                "wire_insert",
-                "game_entity_motion",
-                "game_entity_motion.insert",
-                "a mover's FIRST heartbeat",
-            ),
-            (
-                "wire_update",
-                "game_entity_motion",
-                "game_entity_motion.update",
-                "every heartbeat after the first — i.e. all peer movement",
-            ),
-            (
-                "wire_insert",
-                "game_creature_spline",
-                "game_creature_spline.insert",
-                "a creature's first leg",
-            ),
-            (
-                "wire_update",
-                "game_creature_spline",
-                "game_creature_spline.update",
-                "every leg after the first",
-            ),
-        ] {
-            assert!(
-                arm.contains(&format!("{helper}(db.{table}()"))
-                    && arm.contains(&format!("\"{label}\"")),
-                "the {table} {label} half is no longer registered on the shared coordinator \
-                 dispatch — {what} is silently dropped for every session"
-            );
-        }
-        // And the dispatch routes them through the cell index rather than broadcasting.
-        let m = decommented(top_level_fn_body_of("world_view.rs", "motion"));
-        assert!(
-            m.contains("view.cell_audience(shard, Some(key), BOX_HALF_SPAN, &[])"),
-            "peer motion no longer asks the cell index who can see the mover — either every session \
-             gets every mover (the fan-out this issue removed) or none do"
-        );
-    }
-
-    /// And the instrument's wiring: the counters are only ever read by the 10-second task in
-    /// `world::run`. Without this scan, reverting that task to the old hand-formatted line — no
-    /// delivery ratio, no dropped count — leaves the whole suite green, which is precisely how the
-    /// 63 % under-delivery went unlogged in the first place.
-    #[test]
-    fn the_10s_task_prints_the_delivery_instrument_287() {
-        let body = crate::test_scan::code_of(include_str!("../world/mod.rs"), "pub async fn run(");
-        assert!(
-            body.contains("crate::stdb::subscriptions::MOTION_DROPPED.load(Relaxed)")
-                && body.contains("crate::stdb::subscriptions::motionstat_line("),
-            "the MOTIONSTAT task no longer reads MOTION_DROPPED and formats through \
-             `motionstat_line` — the delivery ratio and dropped count are gone from the log, and a \
-             degrading relay is once again silent. Body was:\n{body}"
-        );
-    }
-
-    /// And the fan-out signal's WIRING (task B1). `fanout_health_step` is pure and fully tested above,
-    /// which is exactly the trap playbook §8 names: the decision can be perfect while the only thing
-    /// that CALLS it — the 10-second task in `world::run`, unreachable from a unit test — quietly
-    /// disappears, leaving the suite green and the under-delivery silent again. A scan, because the
-    /// task body is a `tokio::spawn` inside `run`; asserted on both the step call and the `log::warn!`
-    /// that is the entire deliverable (computing the verdict and not printing it would be the same
-    /// "reported the call, not the effect" defect class).
-    #[test]
-    fn the_10s_task_warns_on_a_fanout_collapse_b1() {
-        let body = crate::test_scan::code_of(include_str!("../world/mod.rs"), "pub async fn run(");
-        assert!(
-            body.contains(
-                "crate::stdb::subscriptions::fanout_health_step(fan, fanout, submitted_delta)"
-            ),
-            "the 10s task no longer runs the fan-out collapse check — peer movement can degrade by \
-             40% and the log will say nothing but a MOTIONSTAT line nobody can calibrate. Body \
-             was:\n{body}"
-        );
-        assert!(
-            body.contains("if let Some(low_windows) = fanout_warn {")
-                && body.contains("log::warn!"),
-            "the fan-out verdict is computed but no longer WARNED — the whole point is that it says \
-             something out loud. Body was:\n{body}"
         );
     }
 }

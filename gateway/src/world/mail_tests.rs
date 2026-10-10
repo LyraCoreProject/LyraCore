@@ -1352,11 +1352,6 @@ fn sharded_seated_sender() -> std::sync::Arc<InMemoryStore> {
     store
 }
 
-/// The end-to-end pin for the bug this change fixes: a client sending mail on a sharded realm
-/// while the coordinator cache lagged behind `realm_mail_fence` used to get no usable
-/// `SMSG_SEND_MAIL_RESULT` at all. The escrow stayed HELD until the sender's next mailbox visit
-/// re-drove it. Driven over a real socket through `run_world_session`, not by calling
-/// `world::mail::send` directly, so it proves what the CLIENT sees.
 #[test]
 fn a_real_session_gets_the_send_mail_result_once_a_lagging_escrow_cache_catches_up() {
     let store = sharded_seated_sender();

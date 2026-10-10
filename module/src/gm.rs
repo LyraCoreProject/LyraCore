@@ -1,4 +1,4 @@
-//! GM playtest dot-commands (work-item 223): `.speed/.god/.xprate/.level/.money/.heal/.kill/.tele`
+//! GM playtest dot-commands: `.speed/.god/.xprate/.level/.money/.heal/.kill/.tele`
 //! from Say chat. The gateway's `CMSG_MESSAGECHAT` Say arm intercepts any message starting with `.`
 //! BEFORE the normal chat relay/insert and forwards the raw text to this ONE generic reducer
 //! (`gm_command`) — module-side parsing keeps the command set data-free and easily extended (a new
@@ -200,12 +200,6 @@ fn authority_accepts_command_name(authority: GmAuthority, text: &str) -> bool {
     }
 }
 
-/// Parse a raw dot-command string (`".speed 3"`, `".god"`, …) into a [`GmCommand`]. Pure — no
-/// `ReducerContext`, fully unit-testable. Args are space-separated (`split_whitespace`, so repeated
-/// spaces are tolerant). An out-of-range numeric arg is silently CLAMPED into the command's valid
-/// range (not rejected); a non-numeric/missing arg, an unrecognized `.tele` name, or an unknown
-/// command name is a hard `Err` with a user-facing message (relayed back to the sender as a system
-/// chat line by the gateway on a reducer `Err`).
 pub(crate) fn parse_gm_command(text: &str) -> Result<GmCommand, String> {
     let body = text
         .strip_prefix('.')
@@ -284,9 +278,9 @@ pub(crate) fn parse_gm_command(text: &str) -> Result<GmCommand, String> {
 //  Reducers
 // ===========================================================================================
 
-/// Grant/revoke GM level (operator-only CLI reducer, work-item 223 authz): `level` gates
+/// Grant/revoke GM level (operator-only CLI reducer): `level` gates
 /// [`gm_command`] (`0` = no access — the moderation-facing per-level distinctions beyond "has
-/// access at all" are work-item 205's concern, not this one's). Looked up by character NAME
+/// access at all" are out of scope). Looked up by character NAME
 /// (case-insensitive, as `/w bob` reaches Bob) since an operator drives this via
 /// `spacetime call`, which has no live guid to hand. `require_operator` gates it exactly like the
 /// importer reducers — never player-callable.

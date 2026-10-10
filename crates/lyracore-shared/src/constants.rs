@@ -52,9 +52,7 @@ pub mod player_flags {
     pub const AFK: u32 = 0x0002;
     /// `PLAYER_FLAGS_DND` (0x04), cm:Player.h:371.
     pub const DND: u32 = 0x0004;
-    /// `PLAYER_FLAGS_GHOST` (0x10). The gameplay GHOST state set on Release Spirit: the
-    /// player is dead-but-walking (can move/run to the corpse, can't act). Distinct from the ghost
-    /// *render* — that's `unit_vis_flags::GHOST` in `UNIT_FIELD_BYTES_1`.
+
     pub const GHOST: u32 = 0x0010;
 }
 
@@ -128,7 +126,7 @@ pub mod unit_vis_flags {
 /// `UNIT_FIELD_BYTES_2` BYTE 0 — the sheath state (vanilla 1.12), stored in
 /// `game_world_entity.unit_bytes_2`. Says whether a weapon is DRAWN or STOWED; the per-item
 /// `item_template.sheath` byte (a different field, sent in the item query) says WHERE a stowed
-/// weapon hangs. Both are needed to render a sheathed weapon correctly. [#101]
+/// weapon hangs. Both are needed to render a sheathed weapon correctly.
 pub mod sheath_state {
     /// Nothing drawn — weapons hang in their stow positions. The state every row starts in.
     pub const UNARMED: u8 = 0;
@@ -344,14 +342,14 @@ pub mod taxi_fixture {
         (0xF130_u64 << 48) | ((FLIGHT_MASTER_ENTRY as u64) << 24) | 1;
 }
 
-/// Gossip menu OPTION (work-item 217): `game_gossip_option.action` codes as they land verbatim from
+/// Gossip menu OPTION: `game_gossip_option.action` codes as they land verbatim from
 /// the cmangos dump's `gossip_menu_option.OptionType`/`option_id` column (the importer copies it
 /// through unchanged — this module documents what the values MEAN so the gateway dispatch and the
 /// importer agree without duplicating magic numbers). `[V]` — confirm against your own dump; only
 /// GOSSIP/BANKER/VENDOR/TAXI/TRAINER/INNKEEPER are read by the dispatcher today, the rest are
 /// inert (submenu navigation remains deferred).
 pub mod gossip_option {
-    pub const GOSSIP: u32 = 1; // plain text / submenu link (submenu navigation deferred, work-item 217)
+    pub const GOSSIP: u32 = 1;
     /// Quests reach the window through its QUEST section, never an option row, so the importer drops
     /// these — the dump's rows carry the literal placeholder label "GOSSIP_OPTION_QUESTGIVER".
     pub const QUESTGIVER: u32 = 2;
@@ -366,7 +364,7 @@ pub mod gossip_option {
     /// unlearn my talents." row imports with `action=GOSSIP` (cmangos gates it in C++ code at
     /// GossipHello, not via this column), so the importer reclassifies that specific row's text to
     /// this action at import time (`resolve_gossip_option_text`'s caller in `importer/src/main.rs`).
-    /// Gated to level 10+ (talents don't exist below that) by `filtered_gossip_options` — #516.
+    /// Gated to level 10+ (talents don't exist below that) by `filtered_gossip_options`.
     pub const UNLEARNTALENTS: u32 = 16;
 }
 
@@ -374,7 +372,7 @@ pub mod gossip_option {
 /// hides the talent pane below this). Gates the "I wish to unlearn my talents." gossip option.
 pub const MIN_TALENT_LEVEL: u8 = 10;
 
-/// `game_gossip_option.cond_type` — the MINIMAL condition set work-item 217 enforces (quest-status
+/// `game_gossip_option.cond_type`, the MINIMAL condition set enforces (quest-status
 /// gates, the common case in the dump). Anything the importer can't map to one of these folds to
 /// `NONE` (fail-open + logged), so an unsupported condition never wrongly HIDES an option. The one
 /// exception is `NEVER`, for a gate whose subject does not exist here at all.
@@ -402,7 +400,7 @@ mod tests {
 
     /// `packed_with` must touch BYTE 0 only. Byte 1 is PvP flags, byte 2 pet flags, byte 3 the
     /// shapeshift form — a sheath toggle that cleared a druid's form byte would pop them out of Bear
-    /// on every `Z` press, which is exactly the class of bug a blind `= state as u32` would ship. [#101]
+    /// on every `Z` press, which is exactly the class of bug a blind `= state as u32` would ship.
     #[test]
     fn packing_a_sheath_state_preserves_the_other_three_bytes() {
         let neighbours = 0xAB_CD_EF_00_u32; // bytes 1-3 occupied, byte 0 clear
@@ -449,7 +447,7 @@ mod tests {
         assert_eq!(npc_flags::AUCTIONEER, 0x1000);
     }
 
-    /// Work-item 041: pin the shared GameObject QUESTGIVER type id against cmangos — this is the
+    /// Pins the shared GameObject QUESTGIVER type id against cmangos. This is the
     /// SINGLE source both `module/src/gameobject.rs::go_type::QUESTGIVER` and the gateway's
     /// `CMSG_GAMEOBJ_USE` dispatch read, so a silent edit here would desync both sides at once.
     #[test]
@@ -463,7 +461,7 @@ mod tests {
         assert_eq!(go_type::MEETINGSTONE, 23);
     }
 
-    /// Work-item 217: the gossip option action codes the dispatcher matches on must be pairwise
+    /// The gossip option action codes the dispatcher matches on must be pairwise
     /// distinct — a collision here would silently misroute one action to another's handler.
     #[test]
     fn gossip_option_actions_are_distinct() {

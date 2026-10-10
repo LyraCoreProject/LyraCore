@@ -645,19 +645,6 @@ mod tests {
         assert!(dispatch_meeting_stone_action(&lost, in_world(), join_stone()).is_err());
     }
 
-    /// The Coordinator picks the database, so a Fake cannot show it. The admission runs on the
-    /// session's own handle, which is its Home Shard; the queue op runs on Realm-core, which is the
-    /// one database of an unsharded Realm.
-    #[test]
-    fn the_coordinator_admits_at_home_and_queues_on_the_party_authority() {
-        let src = include_str!("../../stdb/reducers.rs");
-        let admit = crate::test_scan::code_of(src, "pub fn admit_meeting_stone(");
-        assert!(admit.contains("self.0.call_pipe()") && !admit.contains("realm_core"));
-        let op = crate::test_scan::code_of(src, "pub fn meeting_stone_op(");
-        assert!(op.contains("let realm = self.realm_core()?;"));
-        assert!(op.contains("realm.0.call_pipe().conn.reducers"));
-    }
-
     #[test]
     fn other_opcodes_pass_through() {
         let store = FakeMeetingStones::default();

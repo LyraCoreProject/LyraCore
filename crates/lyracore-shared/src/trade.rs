@@ -1,4 +1,4 @@
-//! The module↔gateway TRADE wire contract (#120) — event-kind codes for the Trade Session status
+//! The module↔gateway TRADE wire contract, event-kind codes for the Trade Session status
 //! relay. Cross-boundary constants live HERE, both crates import: a module-side renumber becomes a
 //! compile-visible edit on the gateway side instead of a runtime drift. Same precedent as
 //! `group::event_kind`.
@@ -31,30 +31,30 @@ pub mod event_kind {
     /// Initiator refusal: the target is dead → `TradeStatus::TargetDead`.
     pub const TARGET_DEAD: u8 = 8;
     /// Your OWN offer, echoed back after a mutation (payload = [`super::encode_offer`]) →
-    /// `SMSG_TRADE_STATUS_EXTENDED` with `self_player = true` (#121).
+    /// `SMSG_TRADE_STATUS_EXTENDED` with `self_player = true`.
     pub const OFFER_SELF: u8 = 9;
     /// Your PARTNER's offer after their mutation (same payload grammar) →
-    /// `SMSG_TRADE_STATUS_EXTENDED` with `self_player = false` (#121).
+    /// `SMSG_TRADE_STATUS_EXTENDED` with `self_player = false`.
     pub const OFFER_PARTNER: u8 = 10;
     /// Initiator notice: the target has you ignored — proposal declined →
-    /// `TradeStatus::IgnoreYou` (#123).
+    /// `TradeStatus::IgnoreYou`.
     pub const IGNORE_YOU: u8 = 11;
-    /// Your partner accepted the current offer (#122) → `TradeStatus::TradeAccept`.
+    /// Your partner accepted the current offer → `TradeStatus::TradeAccept`.
     pub const TRADE_ACCEPT: u8 = 12;
     /// An accept was withdrawn — explicit unaccept, or the accept-reset rule firing on an offer
-    /// change (#122) → `TradeStatus::BackToTrade`.
+    /// change → `TradeStatus::BackToTrade`.
     pub const BACK_TO_TRADE: u8 = 13;
-    /// The Trade Commit succeeded (#122) → `TradeStatus::TradeComplete`.
+    /// The Trade Commit succeeded → `TradeStatus::TradeComplete`.
     pub const TRADE_COMPLETE: u8 = 14;
     /// Commit refused, window closes: YOUR bags cannot fit the incoming items →
-    /// `TradeStatus::CloseWindow` with `InventoryResult::InventoryFull`, `target_error: false` (#122).
+    /// `TradeStatus::CloseWindow` with `InventoryResult::InventoryFull`, `target_error: false`.
     pub const INV_FULL_SELF: u8 = 15;
     /// Commit refused, window closes: the PARTNER's bags cannot fit → same `CloseWindow`,
-    /// `target_error: true` (#122).
+    /// `target_error: true`.
     pub const INV_FULL_PARTNER: u8 = 16;
     /// Commit refused, window closes: YOUR purse cannot honour the offer (short, or receipt would
     /// pass the u32 cap) → `CloseWindow` with `InventoryResult::NotEnoughMoney`,
-    /// `target_error: false` (#122).
+    /// `target_error: false`.
     pub const GOLD_FAIL_SELF: u8 = 17;
     /// Commit refused, window closes: the PARTNER's purse failed → same, `target_error: true`.
     pub const GOLD_FAIL_PARTNER: u8 = 18;
@@ -77,7 +77,7 @@ pub struct OfferSlot {
 }
 
 /// Encode one side's whole offer for an `OFFER_*` event payload:
-/// `gold|slot,entry,display,stack,enchant,dur,maxdur;slot,...` — occupied slots only, `gold` in
+/// `gold|slot,entry,display,stack,enchant,dur,maxdur;slot...`, occupied slots only, `gold` in
 /// copper. All-numeric fields, so no delimiter stripping is needed (unlike
 /// `group::RosterPayload::encode`).
 pub fn encode_offer(gold: u32, slots: &[OfferSlot]) -> String {
@@ -129,7 +129,7 @@ pub fn decode_offer(payload: &str) -> Option<(u32, Vec<OfferSlot>)> {
 mod tests {
     use super::*;
 
-    /// The offer payload round-trips with every window-visible field intact (the #121 "real stack
+    /// The offer payload round-trips with every window-visible field intact (the "real stack
     /// count, durability, enchant" AC rides these fields), an empty offer is legal (gold-only or
     /// cleared window), and malformed payloads fail closed as a whole.
     #[test]

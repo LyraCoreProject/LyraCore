@@ -1,4 +1,4 @@
-//! Environmental damage (058): fall damage from the client-reported airborne time. Shared by the
+//! Environmental damage: fall damage from the client-reported airborne time. Shared by the
 //! module (applies the damage in `movement_update`) and the gateway (sends the matching
 //! `SMSG_ENVIRONMENTAL_DAMAGE_LOG` flavor line) so the two can never drift.
 
@@ -77,7 +77,7 @@ pub fn drowning_damage(max_health: u32) -> u32 {
 /// folded into the mangos height curve `damage% = 1.8%*yd - 24.26%` (safe under ~13.5 yd, which is
 /// ~1.18 s airborne). `fall_time_ms` is the client's MovementInfo fall time on MSG_MOVE_FALL_LAND —
 /// it INCLUDES the jump ascent, so a flat-ground hop (~750 ms) lands at 0. Client-authoritative like
-/// all movement (a hacked client can lie; the 255 anti-cheat item owns that). Capped at max_health.
+/// all movement (a hacked client can lie; the movement anti-cheat owns that). Capped at max_health.
 pub fn fall_damage(fall_time_ms: u32, max_health: u32) -> u32 {
     let t = fall_time_ms as f32 / 1000.0;
     let height_yd = 0.5 * 19.29 * t * t;

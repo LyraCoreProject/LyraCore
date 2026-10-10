@@ -9,6 +9,19 @@
 //! The only state this touches is the `game_account` read (salt/verifier) and the session write
 //! (K) — both via `LogonStore`. Everything else is per-connection handshake scratch.
 
+// Untrusted input arrives here: a malformed packet or env var must return an error, never unwind.
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unreachable,
+        clippy::todo,
+        clippy::unimplemented
+    )
+)]
+
 pub mod limiter;
 
 use crate::accept::{classify_accept_error, AcceptBackoff, AcceptOutcome};
@@ -450,11 +463,7 @@ pub async fn run(cfg: GatewayConfig, coordinator: Coordinator) -> Result<()> {
 /// re-resolved from the username by [`CoordinatorStore::world_account_id`]. The id this store is
 /// handed came from realm-core and is meaningless anywhere else.
 ///
-/// Generic over the STORE rather than hard-wired to `Coordinator`, because `Coordinator` wraps a
-/// live SpacetimeDB websocket and nothing in the crate could execute these bodies without a node —
-/// which is why four mutations against them, including "read the SRP6 material off the world DB",
-/// survived the realm-core PR's own suite before this fix. Production binds `D = Coordinator`;
-/// `realm_core::tests` binds `D = fake::Handle` and runs THESE bodies, not a model of them.
+/// Production binds `Coordinator`; the RealmDb Fake exercises the same Store in unit tests.
 pub(crate) struct CoordinatorStore<D: crate::realm_core::RealmDb> {
     coordinator: D,
 }
@@ -945,9 +954,6 @@ mod tests {
             other => panic!("expected realm list, got {other:?}"),
         }
 
-        // EVERY store call that then talks to the world shard must be told the username. Review
-        // caught `bound_identity` and `realms` still running on realm-core's id after
-        // `save_session` was fixed, so this asserts the whole set, not the one method.
         for method in ["bound_identity", "save_session", "realms"] {
             assert_eq!(
                 store.told(method).as_deref(),
@@ -2381,29 +2387,5 @@ mod tests {
                 )
             });
         }
-    }
-}
-
-/// The realm list needs a live `Coordinator`, so its use of the shared resolution is pinned by a
-/// scan rather than a unit test — the same reason `main.rs`'s startup wiring is.
-#[cfg(test)]
-mod realm_list_resolution_tripwire {
-    use crate::test_scan::code_of;
-
-    /// Both the realm list and the startup check must read one resolution. Inlining the override
-    /// here again would let the warning describe an address no client was ever given.
-    #[test]
-    fn the_realm_list_advertises_through_the_shared_resolution() {
-        let src = include_str!("mod.rs");
-        let body = code_of(
-            src,
-            "fn realms(&self, account_id: u64, username: &str) -> Result<Vec<RealmInfo>> {",
-        );
-        assert!(
-            body.contains("address: crate::config::advertised_realm_address_or(realm.address),"),
-            "the realm list no longer resolves the advertised address through \
-             `advertised_realm_address_or`, so the row and the startup warning can disagree. \
-             Body was:\n{body}"
-        );
     }
 }

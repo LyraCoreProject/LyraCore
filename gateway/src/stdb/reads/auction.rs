@@ -291,8 +291,6 @@ mod tests {
         ));
     }
 
-    /// The usable checkbox used to answer from the class ceiling, so a level-1 Warrior saw plate as
-    /// usable and the equip Gate then refused it. It now answers from the Character's own training.
     #[test]
     fn the_usable_filter_follows_trained_armor_not_the_class_ceiling() {
         let plate = BrowseFacts {

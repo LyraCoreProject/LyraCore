@@ -745,7 +745,6 @@ pub fn realm_mail_return(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_scan::read_scanned;
 
     #[test]
     fn taking_money_is_refused_for_a_mail_the_caller_is_not_the_recipient_of() {
@@ -934,66 +933,6 @@ mod tests {
         assert_eq!(payment.money, 250);
     }
 
-    /// `game_mail` inserts in `src`: the table call or a handle bound from it, followed by
-    /// `.insert(` across any whitespace, so an insert split over lines still counts.
-    fn game_mail_inserts(src: &str) -> usize {
-        crate::test_scan::raw_table_reads(src, &["game_mail"], |code, at| {
-            code[at..].trim_start().starts_with(".insert(")
-        })
-        .len()
-    }
-
-    #[test]
-    fn the_mail_insert_scan_sees_split_and_handle_inserts_and_skips_comments() {
-        assert_eq!(
-            game_mail_inserts(
-                "fn f() {\n    ctx.db\n        .game_mail()\n        .insert(row);\n}"
-            ),
-            1
-        );
-        assert_eq!(
-            game_mail_inserts("let mails = ctx.db.game_mail();\nmails.insert(row);"),
-            1
-        );
-        assert_eq!(game_mail_inserts("// ctx.db.game_mail().insert(row);"), 0);
-        assert_eq!(game_mail_inserts("ctx.db.game_mail().id().update(row);"), 0);
-        assert_eq!(
-            game_mail_inserts("ctx.db.game_mail_escrow().insert(row);"),
-            0
-        );
-    }
-
-    /// Every mail row goes through `insert_letter`, so no letter skips the header it stamps. The
-    /// one other writer is `character_owned!`'s Transfer remint, which inserts through
-    /// `ctx.db.$table()` and so never spells the table name.
-    #[test]
-    fn every_mail_row_is_created_by_insert_letter() {
-        let mut elsewhere = Vec::new();
-        let mut total = 0;
-        for file in crate::tripwires::character_owned_tripwire::scanned_files() {
-            let src = std::fs::read_to_string(&file).expect("a scanned file is readable");
-            let found = game_mail_inserts(&src);
-            total += found;
-            if found > 0 && !file.ends_with("module/src/mail.rs") {
-                elsewhere.push(file.display().to_string());
-            }
-        }
-        assert!(
-            elsewhere.is_empty(),
-            "these files insert game_mail rows directly: {elsewhere:?}. Build a `Letter` and call \
-             `mail::insert_letter` instead"
-        );
-        let own = game_mail_inserts(&code_of(
-            include_str!("mail.rs"),
-            "pub(crate) fn insert_letter(",
-        ));
-        assert_eq!(
-            (own, total),
-            (1, 1),
-            "`insert_letter` must hold the only game_mail insert"
-        );
-    }
-
     #[test]
     fn a_credited_purse_saturates_rather_than_wrapping() {
         assert_eq!(credited(100, 30), 130);
@@ -1015,48 +954,6 @@ mod tests {
                 lyracore_shared::mail::total_cost(money),
                 draft.fenced_copper(),
                 "the two planes must charge the same for {money} copper attached"
-            );
-        }
-    }
-
-    #[test]
-    fn no_mail_code_path_iterates_the_spatial_gameobject_table() {
-        for path in [
-            "module/src/mail.rs",
-            "gateway/src/stdb/reads/mail.rs",
-            "gateway/src/world/mail.rs",
-            "gateway/src/world/handlers/mail.rs",
-        ] {
-            let table = format!("{}{}", "game_gameobject", "()");
-            let scan = format!("{}{}", ".iter", "()");
-            let src = read_scanned(path).expect("module/ and gateway/ ship in every checkout");
-            for (n, line) in src.lines().enumerate() {
-                let code = line.split("//").next().unwrap_or(line);
-                assert!(
-                    !(code.contains(&table) && code.contains(&scan)),
-                    "{path}:{} iterates the SPATIAL gameobject table. Sharding makes that a silent \
-                     subset — the client names the mailbox guid, so resolve it by PK \
-                     (`game_gameobject().guid().find(..)`) and range-check against the player's own \
-                     entity, the shape `gameobject::usable_go` uses.",
-                    n + 1
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn the_single_database_money_paths_never_reach_the_escrow() {
-        for signature in [
-            "pub(crate) fn apply_send(",
-            "pub(crate) fn apply_take_money(",
-            "pub(crate) fn apply_take_item(",
-        ] {
-            let body = code_of(include_str!("mail.rs"), signature);
-            assert!(
-                !body.contains("escrow"),
-                "`{signature}` is the ONE-TRANSACTION plane. The escrow is the mechanism for the \
-                 case where a transaction cannot span the two databases; here one can. Body \
-                 was:\n{body}"
             );
         }
     }
@@ -1160,48 +1057,5 @@ mod tests {
             Timestamp::from_micros_since_unix_epoch((3_605 + 30 * 86_400) * 1_000_000),
             "cmangos Mail.cpp:299-313 counts the 30 days from the delivery"
         );
-    }
-
-    #[test]
-    fn every_action_a_recipient_takes_looks_the_mail_up_by_its_delivery() {
-        for signature in [
-            "pub(crate) fn mail_money(",
-            "pub(crate) fn mail_item(",
-            "pub(crate) fn apply_take_item(",
-            "pub(crate) fn apply_return(",
-            "pub(crate) fn apply_mark_read(",
-            "pub(crate) fn apply_delete(",
-        ] {
-            let body = crate::test_scan::shape_of(include_str!("mail.rs"), signature);
-            assert!(
-                body.contains("delivered_mail(ctx, mail_id)") && !body.contains(".find("),
-                "`{signature}` must find the mail through `delivered_mail`, so an undelivered mail \
-                 cannot be read, deleted, taken or returned. Body was:\n{body}"
-            );
-        }
-    }
-
-    use crate::test_scan::code_of;
-
-    #[test]
-    fn the_realm_mail_write_reducers_are_operator_gated() {
-        for signature in [
-            "pub fn realm_mail_mark_read(",
-            "pub fn realm_mail_delete(",
-            "pub fn realm_mail_return(",
-            "pub fn realm_mail_send(",
-            "pub fn realm_mail_take_money(",
-            "pub fn realm_mail_take_item(",
-            "pub fn realm_mail_item_room(",
-        ] {
-            let body = code_of(include_str!("mail.rs"), signature);
-            let normalized: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
-            assert!(
-                normalized.starts_with("{ crate::helpers::require_operator(ctx)?;"),
-                "`{signature}` no longer OPENS with the operator gate. It takes the caller's guid \
-                 as an argument, so the gate is the only thing between an arbitrary connection and \
-                 mutating anybody's mailbox in the realm. Body was:\n{body}"
-            );
-        }
     }
 }

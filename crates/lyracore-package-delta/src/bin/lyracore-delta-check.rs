@@ -115,14 +115,6 @@ enum Artifact {
     Script(ScriptArtifact),
 }
 
-/// Prints [`HOOK_EVENT_NAMES`], one event per line, in catalogue order, and exits.
-///
-/// `--print-events` must be the only argument: this mode reads no artifact, no other file and the
-/// clock never enters it, so the output is byte-stable across machines and runs. A future Package's
-/// TypeScript authoring surface is generated from this output, so it stays the one place outside the
-/// Module's own build that knows the Event Binding catalogue — `HOOK_EVENT_NAMES` here is already a
-/// second copy of `module/build.rs`'s `HOOK_EVENTS`; this prints that copy rather than hand-writing
-/// a third.
 fn print_events(args: &[String]) -> ExitCode {
     if args.len() != 1 {
         eprintln!(

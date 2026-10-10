@@ -1,8 +1,7 @@
 //! What is left of the Area-of-Interest tier after the shared-connection model landed: the
 //! per-viewer state that outlived the per-player subscription, and the frozen SQL oracle its
 //! replacement is tested against.
-//!
-//! # What used to be here
+
 //!
 //! Before the shared-connection model, this file owned a per-player, grid-SCOPED subscription
 //! over four tables that recentered (unsubscribe + resubscribe) as the player crossed cells. All
@@ -55,20 +54,12 @@ impl ViewerGates {
 
 /// The FROZEN subscription-SQL oracle, from before the shared-connection model.
 ///
-/// These builders are byte-for-byte the ones that generated the per-player AOI box subscription this
-/// file used to send. They are compiled only under `cfg(test)` and nothing in the gateway calls them
-/// any more — they exist so
-/// `world_index::tests::the_index_visible_set_equals_the_box_subscription_sql_for_every_viewer` can
-/// keep asserting that the in-process cell index selects EXACTLY the rows the database used to
-/// select, forever, and not merely at the moment of the cutover.
-///
 /// **Do not "fix" these to match the index.** Their whole value is being the independent side of
 /// that comparison; a change here that makes a failing differential test pass has deleted the test.
 #[cfg(test)]
 mod frozen_sql_oracle {
     use lyracore_shared::spatial::GridBox;
 
-    /// The four tables a player's AOI box used to scope.
     pub(crate) const BOX_SCOPED_TABLES: [&str; 4] = [
         "game_world_entity",
         "game_gameobject",

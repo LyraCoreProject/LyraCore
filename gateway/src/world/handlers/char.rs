@@ -50,7 +50,7 @@ fn abort_pending_transfer<St: WorldStore + ?Sized>(
     }
 }
 
-/// Build + send the player's quest-log descriptor fields as a raw VALUES update (Phase 2) — the
+/// Build + send the player's quest-log descriptor fields as a raw VALUES update, the
 /// world-entry copy of the block, sent right after the self CREATE. A no-op when the gate is off
 /// or the player has no active quests (`quest_log_update` returns an empty batch, so the CREATE
 /// packet's already-zeroed fields stand). The in-session relay on accept / progress / turn-in is
@@ -96,7 +96,7 @@ fn enter_world<St: WorldStore + ?Sized>(
         "world: entering world guid={character_guid} -> entity at map {} ({:.1},{:.1},{:.1}); subscribing + sending login sequence + self-spawn",
         entity.map_id, entity.x, entity.y, entity.z
     );
-    // Items slice-1: the character's owned items. Each becomes an item CREATE_OBJECT sent
+    // Items: the character's owned items. Each becomes an item CREATE_OBJECT sent
     // BEFORE the player self-spawn (so the inventory-slot guid resolves to an object the
     // client already has), and the (slot, guid) pairs seed the player's PLAYER_FIELD_INV_SLOT
     // descriptors. Empty for a character that owns nothing — login is otherwise unchanged.
@@ -214,7 +214,7 @@ fn enter_world<St: WorldStore + ?Sized>(
         open_loot: OpenLootState::default(),
         ranged_repeat: false,
     });
-    // Phase 2: the quest-log window. Sent as a separate raw VALUES update AFTER the CREATE
+    // Quest-log window: sent as a separate raw VALUES update AFTER the CREATE
     // (gtker's CREATE can't carry these walled fields), gated behind LYRACORE_QUEST_LOG until verified.
     send_quest_log(tx, store, character_guid)?;
     // If the player carries ammo (a Projectile item, class 6), tell the client it's loaded
@@ -266,7 +266,7 @@ pub(crate) fn handle_char<St: WorldStore + ?Sized>(
     msg: ClientOpcodeMessage,
 ) -> Result<Option<ClientOpcodeMessage>> {
     match msg {
-        // Phase 3 (§4): character-select screen.
+        // Character-select screen.
         ClientOpcodeMessage::CMSG_CHAR_ENUM => {
             let characters = store.characters(conn.account_id)?;
             let enum_msg = codec::build_char_enum(&characters)?;
@@ -336,7 +336,7 @@ pub(crate) fn handle_char<St: WorldStore + ?Sized>(
                 )),
             )?;
         }
-        // Phase 4 (§5): enter world -> register peer subscriptions, then login sequence + self
+        // Enter world -> register peer subscriptions, then login sequence + self
         // CREATE_OBJECT2 as one contiguous batch (so an async peer event can't splice into it).
         ClientOpcodeMessage::CMSG_PLAYER_LOGIN(p) => {
             let character_guid = p.guid.guid();
@@ -415,10 +415,7 @@ pub(crate) fn handle_char<St: WorldStore + ?Sized>(
                     // (`SMSG_TRANSFER_ABORTED`), THEN end the session. Nothing durable is lost —
                     // the escrow is idempotent and the next login re-drives it from the same rows.
                     //
-                    // The guard covers the WHOLE world-port, not just its routing step (adversarial
-                    // review): re-entry can fail on its own — `player_login` refused by the
-                    // stranding guard, a subscription that would not register — with the client on
-                    // exactly the same loading screen, and that window is the wider of the two.
+
                     let mut ported = conn.route_home(store, character_guid);
                     if ported.is_ok() {
                         ported = on_home_shard!(conn, store, |st| enter_world(
@@ -436,7 +433,7 @@ pub(crate) fn handle_char<St: WorldStore + ?Sized>(
                 }
             }
         }
-        // Phase 7: graceful in-game Logout/Exit. Deny if in combat (vanilla behaviour); otherwise
+        // Graceful in-game Logout/Exit. Deny if in combat (vanilla behaviour); otherwise
         // ack instantly + complete, remove the entity (observers see DESTROY), drop the peer
         // subscriptions, and return to character-select with the connection still open.
         ClientOpcodeMessage::CMSG_LOGOUT_REQUEST => {

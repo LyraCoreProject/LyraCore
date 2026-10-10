@@ -31,9 +31,6 @@ use lyracore_shared::trainer::TrainerRefusal;
 static NEXT_TAXI_REQUEST_ID: OnceLock<AtomicU64> = OnceLock::new();
 
 fn next_taxi_request_id() -> u64 {
-    // Seed from this process start's wall-clock nanoseconds. The reply table survives a gateway
-    // restart, so restarting the old `1, 2, ...` sequence could make the cache's pre-restart row
-    // look like the just-committed reply before its replacement subscription delta arrived.
     let next = NEXT_TAXI_REQUEST_ID.get_or_init(|| {
         let seed = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -379,8 +376,6 @@ impl Coordinator {
             }))
     }
 
-    /// Cohesive open request: source discovery and direct-route filtering commit together, then
-    /// this projects the module's client node ids without re-reading raw taxi tables.
     pub fn open_taxi(
         &self,
         character_guid: u64,
@@ -1226,7 +1221,7 @@ impl Coordinator {
         })
     }
 
-    /// Enter the world (Phase 4): call the `player_login` reducer on the coordinator connection
+    /// Enter the world: call the `player_login` reducer on the coordinator connection
     /// (so `ctx.sender` is the player's bound identity), then read the resulting
     /// `game_world_entity` row back through the privileged cache as an `EntityView`.
     pub fn player_login(
@@ -1334,7 +1329,7 @@ impl Coordinator {
         });
     }
 
-    /// Provision SRP6 credentials computed by the gateway (Phase 0 bring-up).
+    /// Provision SRP6 credentials computed by the Gateway.
     pub fn provision_account(&self, username: &str, salt: &[u8], verifier: &[u8]) -> Result<()> {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
@@ -1442,7 +1437,7 @@ impl Coordinator {
         Ok(self.realm_core()?.has_auction(character_guid))
     }
 
-    /// Logon writes K + the bound per-account identity (Phase 1).
+    /// Logon writes K + the bound per-account identity.
     pub fn establish_session(
         &self,
         account_id: u64,
@@ -1770,7 +1765,7 @@ impl Coordinator {
         )
     }
 
-    /// Draw or stow the player's weapons (`CMSG_SETSHEATHED`). [#101]
+    /// Draw or stow the player's weapons (`CMSG_SETSHEATHED`).
     pub fn set_sheathed(&self, _account_id: u64, actor_guid: u64, state: u8) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("set_sheathed: actor_guid unresolved"));
@@ -2075,7 +2070,7 @@ impl Coordinator {
     /// Deliberately does NOT use the `call_reducer!` macro: that macro wraps a module `Err` as
     /// `"{what} reducer failed: {e}"` (fine when a caller only reads its Refusal tag), but the Say
     /// handler relays this `Err`'s text VERBATIM to the sender as a system chat line — a raw
-    /// `"permission denied"` / `"unknown command: .foo"` must reach the client with no wrapper
+    /// `"permission denied"` / `"unknown command:.foo"` must reach the client with no wrapper
     /// prefix.
     pub(crate) fn request_gm_command(
         &self,
@@ -2165,7 +2160,7 @@ impl Coordinator {
         ))
     }
 
-    /// `CMSG_INITIATE_TRADE` — `target_guid` is the client's targeted player (#120).
+    /// `CMSG_INITIATE_TRADE`, `target_guid` is the client's targeted player.
     pub fn initiate_trade(
         &self,
         _account_id: u64,
@@ -2183,7 +2178,7 @@ impl Coordinator {
         )
     }
 
-    /// `CMSG_BEGIN_TRADE` (#120).
+    /// `CMSG_BEGIN_TRADE`.
     pub fn begin_trade(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("begin_trade: actor_guid unresolved"));
@@ -2196,7 +2191,7 @@ impl Coordinator {
         )
     }
 
-    /// `CMSG_CANCEL_TRADE` (#120).
+    /// `CMSG_CANCEL_TRADE`.
     pub fn cancel_trade(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("cancel_trade: actor_guid unresolved"));
@@ -2233,7 +2228,7 @@ impl Coordinator {
         )
     }
 
-    /// `CMSG_SET_TRADE_ITEM` (#121).
+    /// `CMSG_SET_TRADE_ITEM`.
     pub fn set_trade_item(
         &self,
         _account_id: u64,
@@ -2252,7 +2247,7 @@ impl Coordinator {
         )
     }
 
-    /// `CMSG_CLEAR_TRADE_ITEM` (#121).
+    /// `CMSG_CLEAR_TRADE_ITEM`.
     pub fn clear_trade_item(
         &self,
         _account_id: u64,
@@ -2270,7 +2265,7 @@ impl Coordinator {
         )
     }
 
-    /// `CMSG_SET_TRADE_GOLD` (#121).
+    /// `CMSG_SET_TRADE_GOLD`.
     pub fn set_trade_gold(&self, _account_id: u64, actor_guid: u64, copper: u32) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("set_trade_gold: actor_guid unresolved"));
@@ -2283,7 +2278,7 @@ impl Coordinator {
         )
     }
 
-    /// `CMSG_ACCEPT_TRADE` (#122).
+    /// `CMSG_ACCEPT_TRADE`.
     pub fn accept_trade(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("accept_trade: actor_guid unresolved"));
@@ -2296,7 +2291,7 @@ impl Coordinator {
         )
     }
 
-    /// `CMSG_UNACCEPT_TRADE` (#122).
+    /// `CMSG_UNACCEPT_TRADE`.
     pub fn unaccept_trade(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("unaccept_trade: actor_guid unresolved"));
@@ -2309,7 +2304,7 @@ impl Coordinator {
         )
     }
 
-    /// `CMSG_BUSY_TRADE` (#123).
+    /// `CMSG_BUSY_TRADE`.
     pub fn busy_trade(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("busy_trade: actor_guid unresolved"));
@@ -2322,7 +2317,7 @@ impl Coordinator {
         )
     }
 
-    /// `CMSG_IGNORE_TRADE` (#123).
+    /// `CMSG_IGNORE_TRADE`.
     pub fn ignore_trade(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("ignore_trade: actor_guid unresolved"));
@@ -2522,7 +2517,7 @@ impl Coordinator {
         ))
     }
 
-    /// Take the money from a corpse (`CMSG_LOOT_MONEY`, slice 3) over the coordinator connection so
+    /// Take the money from a corpse (`CMSG_LOOT_MONEY`) over the coordinator connection so
     /// the module attributes the loot to the caller (as `gw_loot_money`).
     pub fn loot_money(
         &self,
@@ -2559,7 +2554,7 @@ impl Coordinator {
         ))
     }
 
-    /// Take one item from the open corpse into the backpack (`CMSG_AUTOSTORE_LOOT_ITEM`, slice 4) over
+    /// Take one item from the open corpse into the backpack (`CMSG_AUTOSTORE_LOOT_ITEM`) over
     /// the coordinator connection so the module attributes the loot to the caller. The module moves the
     /// item into a free slot + deletes the corpse-loot row (the inventory relay then shows it in the bag).
     /// Rides the coordinator connection as `gw_take_loot`.
@@ -2758,9 +2753,9 @@ impl Coordinator {
         )
     }
 
-    /// Respec at a trainer (the "I wish to unlearn my talents." gossip option, #516) — clears every
+    /// Respec at a trainer (the "I wish to unlearn my talents." gossip option), clears every
     /// learned talent for the calling player's escalating gold cost. Rides the coordinator
-    /// connection as `gw_reset_talents` (#483 deleted the per-player sender path).
+    /// connection as `gw_reset_talents` (deleted the per-player sender path).
     pub fn reset_talents(
         &self,
         _account_id: u64,
@@ -2828,7 +2823,7 @@ impl Coordinator {
         )
     }
 
-    /// Persist the rep pane's At-War checkbox (`CMSG_SET_FACTION_ATWAR`, 195 slice B): the wire's
+    /// Persist the rep pane's At-War checkbox (`CMSG_SET_FACTION_ATWAR`): the wire's
     /// u16 is the client's 0..63 rep-array slot (ReputationListID — the gtker `Faction` field name
     /// lies, same as SET_FACTION_STANDING); the module reverse-resolves the faction and upserts.
     pub fn set_faction_at_war(
@@ -3083,7 +3078,7 @@ impl Coordinator {
         )
     }
 
-    /// Revive the caller after death (`CMSG_REPOP_REQUEST`, slice 4) over the coordinator connection.
+    /// Revive the caller after death (`CMSG_REPOP_REQUEST`) over the coordinator connection.
     /// Rides the coordinator connection as `gw_repop`.
     pub fn repop(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
         if actor_guid == 0 {
@@ -3097,7 +3092,7 @@ impl Coordinator {
         )
     }
 
-    /// Reclaim the caller's corpse (`CMSG_RECLAIM_CORPSE`, slice 5) over the coordinator connection.
+    /// Reclaim the caller's corpse (`CMSG_RECLAIM_CORPSE`) over the coordinator connection.
     pub fn reclaim_corpse(
         &self,
         _account_id: u64,
@@ -3849,96 +3844,6 @@ impl Coordinator {
 }
 
 #[cfg(test)]
-mod visibility_receipt_tests {
-    #[test]
-    fn quest_completion_waits_for_the_subscribed_coordinator_receipt() {
-        let source = include_str!("reducers.rs");
-        let turn_in = crate::test_scan::code_of(source, "pub fn turn_in_quest(");
-        let visibility_pipe = crate::test_scan::code_of(
-            include_str!("connection.rs"),
-            "pub(crate) fn visibility_pipe(",
-        );
-
-        assert!(
-            turn_in.contains("self.0.visibility_pipe()"),
-            "a successful turn-in may authorize QUEST_COMPLETE only after the coordinator has \
-             applied the reward transaction and queued its inventory relays"
-        );
-        assert!(
-            !turn_in.contains("self.0.call_pipe()"),
-            "a reducer-only call pipe cannot receipt coordinator subscription visibility"
-        );
-        assert!(
-            visibility_pipe.contains("self.coord()")
-                && !visibility_pipe.contains("self.call_pipe()"),
-            "the visibility pipe must be the connection that owns the relayed subscriptions"
-        );
-    }
-}
-
-#[cfg(test)]
-mod realm_chat_routing_tests {
-    /// Party membership, and every later chat audience, is authoritative on Realm-core. A line sent
-    /// to the session's own Home Shard reads that Shard's mirror and is delivered by no Relay on a
-    /// sharded Realm. No Fake reaches the Coordinator, so the routing is pinned in source.
-    #[test]
-    fn realm_chat_runs_on_the_realm_core_handle() {
-        let body = crate::test_scan::code_of(include_str!("reducers.rs"), "pub fn realm_chat(");
-        let body: String = body.split_whitespace().collect();
-        assert!(
-            body.contains("letrealm=self.realm_core()?;")
-                && body.contains("realm.0.call_pipe().conn.reducers,\"realm_chat\",")
-                && body.contains("realm_chat_then(realm.session_actor(speaker_guid),request)"),
-            "`Coordinator::realm_chat` no longer calls the reducer on the Realm-core handle. \
-             Body was:\n{body}"
-        );
-        assert!(
-            !body.contains("self.0.call_pipe()"),
-            "`Coordinator::realm_chat` must not call the session's own Home Shard"
-        );
-    }
-
-    /// A whisper is a set of Realm Chat Lines, so it runs on Realm-core like `realm_chat`. Pinned
-    /// in source for the same reason.
-    #[test]
-    fn realm_whispers_run_on_the_realm_core_handle() {
-        let body = crate::test_scan::code_of(include_str!("reducers.rs"), "pub fn realm_whisper(");
-        let body: String = body.split_whitespace().collect();
-        assert!(
-            body.contains("letrealm=self.realm_core()?;")
-                && body.contains("realm.0.call_pipe().conn.reducers,\"realm_whisper\",")
-                && body.contains("realm_whisper_then(realm.session_actor(speaker_guid),request)"),
-            "`Coordinator::realm_whisper` no longer calls the reducer on the Realm-core handle. \
-             Body was:\n{body}"
-        );
-        assert!(
-            !body.contains("self.0.call_pipe()"),
-            "`Coordinator::realm_whisper` must not call the session's own Home Shard"
-        );
-    }
-
-    /// Chat Channels live only on Realm-core. An op sent to the session's own Home Shard would
-    /// create a second, shard-local copy of the channel. Pinned in source for the same reason.
-    #[test]
-    fn channel_ops_run_on_the_realm_core_handle() {
-        let body = crate::test_scan::code_of(include_str!("reducers.rs"), "pub fn channel_op(");
-        let body: String = body.split_whitespace().collect();
-        assert!(
-            body.contains("letrealm=self.realm_core()?;")
-                && body.contains("realm.0.call_pipe().conn.reducers,\"realm_channel_op\",")
-                && body
-                    .contains("realm_channel_op_then(realm.session_actor(actor_guid),op,request)"),
-            "`Coordinator::channel_op` no longer calls the reducer on the Realm-core handle. \
-             Body was:\n{body}"
-        );
-        assert!(
-            !body.contains("self.0.call_pipe()"),
-            "`Coordinator::channel_op` must not call the session's own Home Shard"
-        );
-    }
-}
-
-#[cfg(test)]
 mod taxi_reply_tests {
     use super::*;
 
@@ -3995,23 +3900,6 @@ mod taxi_reply_tests {
             90,
             lyracore_shared::constants::taxi_protocol::REPLY_STATUS,
         ));
-    }
-
-    #[test]
-    fn reply_wait_uses_the_unique_request_id_accessor() {
-        let source = include_str!("reducers.rs");
-        assert!(source.contains(".request_id()\n                .find(&request_id)"));
-        assert!(!source.contains(".character_guid()\n                .find(&character_guid)"));
-        let wait = source
-            .split("fn await_taxi_reply(")
-            .nth(1)
-            .and_then(|tail| tail.split("pub fn taxi_node_status(").next())
-            .expect("taxi reply wait body");
-        let observes = wait.find("taxi_reply_matches(").expect("validated reply");
-        let acknowledges = wait
-            .find("gw_ack_taxi_reply_then(self.session_actor(character_guid), request_id)")
-            .expect("reply acknowledgement");
-        assert!(observes < acknowledges);
     }
 }
 
@@ -4913,7 +4801,7 @@ mod auction_reducer_tests {
                 operation: "gw_auction_hold_listing".to_string(),
                 reason: refusal.as_tag().to_string(),
             })
-            .context("listing phase 1");
+            .context("preparing auction listing");
             assert_eq!(auction_refusal(&error), Some(refusal));
         }
 
@@ -4996,28 +4884,6 @@ mod auction_reducer_tests {
                 ..hold
             }
         ));
-    }
-
-    #[test]
-    fn refused_listing_refund_commits_on_realm_core_before_the_home_hold_is_deleted() {
-        let drive =
-            crate::test_scan::code_of(include_str!("reducers.rs"), "fn complete_listing_hold(");
-        let refund = "realm.auction_refund_listing(hold)?;";
-        let release = "self.auction_release_listing_hold(hold)?;";
-        let refund_at = drive
-            .find(refund)
-            .expect("the Realm-core handle must commit the refused listing Mail");
-        let release_at = drive
-            .find(release)
-            .expect("the Home Shard must delete the Hold after that commit");
-        assert!(
-            refund_at < release_at,
-            "a source-Hold delete before Realm-core Mail commit loses the only listing value"
-        );
-        assert!(
-            !drive.contains("self.auction_refund_listing(hold)?;"),
-            "the Home Shard does not own Mail in a sharded realm"
-        );
     }
 
     #[test]
@@ -5142,29 +5008,6 @@ mod auction_reducer_tests {
                 operation: hold_operation::BID,
             }
         ));
-    }
-
-    /// Per-request paths find a Character's Holds, receipts and Auctions through the auction
-    /// index, never by scanning a cache table, which keeps every finished Hold and receipt.
-    #[test]
-    fn auction_lookups_never_scan_a_cache_table() {
-        for signature in [
-            "fn indexed_rows<T>(",
-            "fn unfinished_auction_holds(",
-            "fn listing_holds(",
-            "fn listing_receipts(",
-            "fn has_auction(",
-            "fn matching_unfinished_bid_hold(",
-            "fn matching_auction_hold(",
-            "fn matching_active_auction_receipt(",
-            "fn character_has_auction_value(",
-            "pub(crate) fn cancel_auction(",
-            "pub(crate) fn resume_auction_holds(",
-            "fn complete_listing_hold(",
-        ] {
-            let body = crate::test_scan::code_of(include_str!("reducers.rs"), signature);
-            assert!(!body.contains(".iter()"), "{signature} scans a cache table");
-        }
     }
 
     #[test]

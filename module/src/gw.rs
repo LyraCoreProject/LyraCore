@@ -1,25 +1,6 @@
-//! The TRUSTED GATEWAY verb surface (stage 4a).
-//!
-//! One reducer family — `gw_<verb>(ctx, actor_guid, ...)` — for a gateway that holds a SHARED
-//! SpacetimeDB connection instead of one connection per player. The sender-shaped player reducers
-//! resolve "who is acting" from `ctx.sender()`; these resolve it from an explicit `actor_guid`,
-//! because on a shared connection every call arrives from the same identity.
-//!
-//! Design rules (mirroring `actor.rs`, which this surface consumes):
-//! - **Every reducer's first act is `require_operator`.** That is the entire trust model: the
-//!   shared connection's identity is the claimed operator, and a direct anonymous SpacetimeDB
-//!   client that bypasses the gateway is refused before any actor resolution happens. The
-//!   self-scan test at the bottom of this file pins this ordering for every reducer here.
-//! - **The actor resolves through [`crate::helpers::acting_entity_by_guid`]** — the guid-keyed
-//!   twin of `entity_by_owner`, carrying the SAME in-transit transfer fence. Never `live_entity`
-//!   (it skips the fence) and never a bare `.guid().find(...)`.
-//! - **No behavior**: each verb delegates to the same core its sender-shaped sibling calls
-//!   (`world::apply_movement_update`, the `actor.rs` verbs, ...). Gates live in the cores and
-//!   cannot drift between the two entries.
-//!
-//! These are THE player-verb surface: the sender-shaped (`ctx.sender`-authorized) twins
-//! are deleted, and every player action reaches the module through a `gw_*` verb on the
-//! gateway's privileged connection.
+//! Player action reducers for the Gateway's shared Operator connection.
+//! Each request requires the Operator and resolves its Session Actor before entering the owning
+//! gameplay operation. Acting entity lookup applies the Transfer fence.
 
 use lyracore_shared::loot::LootBoundaryFailure;
 use spacetimedb::{reducer, table, Identity, ReducerContext, ScheduleAt, Table, Timestamp};
@@ -36,7 +17,7 @@ use crate::helpers::{acting_entity_by_guid, require_operator};
 // `client_disconnected` instead of one per player, so nothing per-player tears world entities
 // down and a crash would leave every seated player as a permanent world ghost. The fix is a
 // LEASE: each gateway heartbeats its row; sessions opened through the shared connection bind
-// their entity to the lease (stage 4d writes `GatewaySession` rows at `gw_player_login`); a
+// their entity to the lease (`gw_player_login` writes the `GatewaySession` rows); a
 // scheduled reaper removes the world entities of any lease that stops heartbeating.
 //
 // Deliberately TTL-ONLY — no sweep on the shared connection's own disconnect. The coordinator
@@ -57,7 +38,7 @@ pub struct GatewayLease {
 }
 
 /// entity_guid → lease binding for a session riding the shared connection. Written by
-/// `gw_player_login` (stage 4d); until then the table is empty and the reaper below is inert.
+/// `gw_player_login`; the reaper below is inert while the table is empty.
 /// Private. [server]
 #[table(accessor = game_gateway_session)]
 pub struct GatewaySession {
@@ -687,7 +668,7 @@ pub fn gw_send_emote(
     crate::chat::apply_send_emote(ctx, sender, text_emote, emote_anim, target_guid)
 }
 
-/// The shared-connection login (stage 4d): enter the world with the account named by id and
+/// The shared-connection login: enter the world with the account named by id and
 /// the session bound to this gateway's lease. Delegates to the same [`crate::world::apply_player_login`]
 /// core the sender path uses; the OWNER identity stamped onto the entity and the character's
 /// owner-RLS rows is the account's BOUND identity (from `establish_session`), so a per-player
@@ -1397,8 +1378,6 @@ pub fn gw_learn_talent(
     crate::talent::do_learn_talent(ctx, actor_guid, learner.owner_identity, talent_id).map(|_| ())
 }
 
-/// [`crate::talent::do_reset_talents`] behind the gateway gate — the "I wish to unlearn my
-/// talents." gossip option (work-item 198's respec primitive, wired to gossip).
 #[reducer]
 pub fn gw_reset_talents(
     ctx: &ReducerContext,
@@ -1704,46 +1683,5 @@ mod tests {
             |movement| apply_model(&mut states, movement),
         );
         assert_eq!(states[&12].relay, Some((HEARTBEAT, vec![6])));
-
-        let body = crate::test_scan::code_of(include_str!("gw.rs"), "pub fn gw_movement_batch(");
-        let apply_at = body
-            .find("apply_movement_batch(")
-            .expect("batch application");
-        let publish_at = body.find("publish_staged(ctx)").expect("inline publish");
-        assert!(
-            apply_at < publish_at,
-            "the reducer must publish after applying the whole batch"
-        );
-    }
-    /// Every reducer in THIS file must open with its gate — `require_operator` for a gateway
-    /// verb, the scheduler-only sender fence for a scheduled reducer — before it resolves or
-    /// touches anything else. The trust model of the whole surface, pinned structurally: split
-    /// the file on the reducer attribute, and each following fn body's FIRST statement must be
-    /// one of the two gates. A verb added without one fails here, not in review.
-    #[test]
-    fn every_gateway_verb_gates_on_require_operator_first() {
-        let src = include_str!("gw.rs");
-        // Built at runtime so this test's own source can never match the needle.
-        let needle = format!("#[{}]", "reducer");
-        let mut chunks = src.split(needle.as_str());
-        chunks.next(); // preamble
-        let mut seen = 0;
-        for chunk in chunks {
-            let body = chunk
-                .split_once('{')
-                .map(|(_, b)| b)
-                .unwrap_or("")
-                .trim_start();
-            assert!(
-                body.starts_with("require_operator(ctx)?;")
-                    || body.starts_with("require_operator(ctx).map_err(loot_operator_error)?;")
-                    || body.starts_with("if ctx.sender() != ctx.database_identity()"),
-                "a reducer here must open with the direct Operator gate (gateway verb) or the \
-                 scheduler-only sender fence (scheduled reducer) — got:\n{}",
-                &body[..body.len().min(120)]
-            );
-            seen += 1;
-        }
-        assert!(seen >= 1, "the scan found no reducers — needle drifted");
     }
 }

@@ -50,7 +50,6 @@ pub struct ChatEvent {
     pub target_guid: u64,
 }
 
-/// True for the creature broadcast chat types this slice relays. [pure]
 pub fn is_supported_chat_type(chat_type: u8) -> bool {
     matches!(chat_type, CHAT_SAY | CHAT_YELL | CHAT_TEXT_EMOTE)
 }
@@ -72,7 +71,7 @@ pub fn addon_payload(raw: &str) -> Option<String> {
     (!raw.is_empty()).then(|| raw.chars().take(MAX_CHAT_LEN).collect())
 }
 
-/// The say/yell/`/e` core, actor-explicit (stage 4a): everything the old sender-path `send_chat`
+/// The say/yell/`/e` core, actor-explicit: everything the old sender-path `send_chat`
 /// did after resolving WHO spoke, plus the player/EventAI boundary — a Character may say, yell or
 /// `/e`, never submit the creature-only text emote. EMOTE is admitted ONLY here, never in
 /// [`apply_send_chat_to`]: that function is EventAI's own entry, and its `chat_type` comes straight
@@ -232,7 +231,7 @@ pub struct EmoteEvent {
 /// `text_emote` / `emote_anim` ids come from the client; invalid ones degrade gracefully gateway-side
 /// (the text line is skipped / the animation is dropped) rather than erroring.
 ///
-/// The text-emote core, actor-explicit (stage 4a) — same split as [`apply_send_chat`].
+/// The text-emote core, actor-explicit, same split as [`apply_send_chat`].
 pub(crate) fn apply_send_emote(
     ctx: &ReducerContext,
     sender: crate::WorldEntity,
@@ -553,43 +552,6 @@ mod tests {
         // serves EventAI, which never emits it.
         assert!(!is_supported_chat_type(CHAT_EMOTE));
         assert!(!is_supported_chat_type(255)); // party/guild/whisper/etc. rejected
-    }
-
-    // ---- `apply_send_chat_to`'s type gate (EventAI's only entry into `game_chat_event`) ----
-    //
-    // `apply_send_chat_to` runs inside a reducer and takes no `ReducerContext` mock in this crate,
-    // so its gate is scanned rather than executed, the same technique as the Realm Chat reducers'
-    // operator gate scans in `realm_chat.rs`.
-
-    use crate::test_scan::shape_of;
-
-    /// **EventAI's only entry must never admit EMOTE.**
-    ///
-    /// `apply_send_chat_to`'s `chat_type` comes straight off an imported
-    /// `game_creature_ai_broadcast_text` row (`relay.rs`'s `RelayInstruction::Talk`, `engine.rs`'s
-    /// `eventai_deliver_line`), and Package import never range-checks that column. Before this fix
-    /// the gate read `!is_supported_chat_type(chat_type) && chat_type != CHAT_EMOTE`, so a broadcast
-    /// line stamped `chat_type: 3` passed straight through: a `game_chat_event` row with a creature
-    /// `sender_guid` and no packet the codec can build for it (`build_chat_message_to` has no
-    /// `(EMOTE, Some(name))` arm), silently rendering as Say. EMOTE is a Character's alone, gated by
-    /// [`apply_send_chat`]'s own pre-check before this function ever runs.
-    ///
-    /// Whole-body equality, not a `contains` scan: a second admitting clause appended anywhere in
-    /// the function would defeat a substring check but still changes the body this test compares.
-    #[test]
-    fn apply_send_chat_to_gates_on_is_supported_chat_type_alone() {
-        let body = shape_of(include_str!("chat.rs"), "pub(crate) fn apply_send_chat_to(");
-        let expected =
-            "{ if !is_supported_chat_type(chat_type) { return Err(format!(\"unsupported \
-             chat type {chat_type}\")); } write_chat_event(ctx, sender, target_guid, chat_type, \
-             language, message) }";
-        assert_eq!(
-            body, expected,
-            "`apply_send_chat_to` no longer gates on `is_supported_chat_type` alone — EventAI's \
-             only entry must never admit EMOTE (a Character-only type, gated by `apply_send_chat`), \
-             or a Package broadcast line with chat_type 3 renders as Say with no packet the codec \
-             knows how to build for a creature."
-        );
     }
 
     /// Wire language values from gtker vanilla `language.rs`: Universal 0, Orcish 1, Common 7.

@@ -61,12 +61,12 @@ const E_SUMMON_PET: u8 = 0x15; // summon a persistent pet creature owned by the 
 const E_HEAL_MAX_HEALTH: u8 = 0x16; // heal the target to FULL max health (Lay on Hands); mapped from the raw vanilla HealMaxHealth effect (67), split out of E_HEAL because its base_points is ~0 (the magnitude is "fill to max", not a flat N) (lockstep with module taxonomy)
 const E_TAME_CREATURE: u8 = 0x20; // completed Hunter tame; raw vanilla TameCreature effect (55), lockstep with module taxonomy
 const E_FEED_PET: u8 = 0x21; // feed a Hunter pet from the explicit item target; raw effect 101
-const E_POWER_BURN: u8 = 0x19; // drain target mana into damage (Mana Burn); mapped from the raw vanilla PowerBurn effect (62), p1 = EffectMultipleValue*100 basis-points (lockstep with module taxonomy, work-items 117)
-const E_BLINK: u8 = 0x1A; // teleport the caster ~20yd FORWARD along its facing (Mage Blink, 116); reclassified BY NAME from the dead SCRIPT teleport effect (lockstep with module taxonomy)
-const E_PERSISTENT_AREA: u8 = 0x1B; // ground-AoE (118, Consecration): spawns a fixed-position game_ground_area whose tick damages hostiles inside; reclassified BY NAME from the ground A_PERIODIC_DAMAGE effect (lockstep with module taxonomy)
-const E_OPEN_LOCK: u8 = 0x1D; // OPEN LOCK (Pick Lock 1804, work-item 119): gateway-intercepted like E_FISH (0x1C)/E_ENCHANT_ITEM — a CMSG_CAST_SPELL for a spell carrying this kind routes to the `pick_lock` reducer (unlock a locked GameObject, gated on the caster's Lockpicking 633 skill). Mapped from the raw vanilla OpenLock (33) / OpenLockItem (59) effects (lockstep with module taxonomy). 0x1E is reserved for a future E_SUMMON_PORTAL — do NOT reuse.
+const E_POWER_BURN: u8 = 0x19;
+const E_BLINK: u8 = 0x1A; // teleport the caster ~20yd FORWARD along its facing (Mage Blink); reclassified BY NAME from the dead SCRIPT teleport effect (lockstep with module taxonomy)
+const E_PERSISTENT_AREA: u8 = 0x1B; // ground-AoE (Consecration): spawns a fixed-position game_ground_area whose tick damages hostiles inside; reclassified BY NAME from the ground A_PERIODIC_DAMAGE effect (lockstep with module taxonomy)
+const E_OPEN_LOCK: u8 = 0x1D;
 const E_DUEL: u8 = 0x22; // Duel (raw effect 83): p0 is the duel-flag gameobject template entry
-const E_DISENCHANT: u8 = 0x18; // DISENCHANT (real Disenchant 13262, work-item 282): gateway-intercepted, routed to the disenchant reducer by kind. Mapped from raw vanilla effect 99 (SPELL_EFFECT_DISENCHANT); no params (the module validates + yields dust by item). Lockstep with the module taxonomy (module/src/spell/taxonomy.rs E_DISENCHANT).
+const E_DISENCHANT: u8 = 0x18;
 const E_DISMOUNT: u8 = 0x23; // remove the target's active land mount (Dazed's mount-removal half): translated from a raw DISPEL_MECHANIC effect (108) whose misc value names the mount mechanic (21) — see `dismount_effect_kind` below. No params. Lockstep with module taxonomy.
 const E_SUMMON_HOSTILE: u8 = 0x24; // temporary ownerless summon; p0 = creature entry, p1 = required spell focus, header duration = lifetime
 const E_DISTRACT: u8 = 0x25; // turn idle enemy Creatures near the ground point toward it; raw effect 69, amount = seconds (lockstep with module taxonomy)
@@ -174,7 +174,7 @@ const SPEED_MOUNTED: i32 = 3; // ModIncreaseMountedSpeed family; T4 folds this s
 // STANCE/FORM ids (vanilla SpellShapeshiftForm.dbc indices) — the value the ModShapeshift effect's
 // `effect_misc_value` carries (so a stance/form spell arrives as A_FLAG with p0 = the form id). Our
 // engine uses its OWN small 0-based stance id space; `form_to_stance` below is THE one form→stance
-// mapping (work-item 156 widened it past the Warrior trio to the Druid combat forms), consumed by BOTH
+// mapping (widened it past the Warrior trio to the Druid combat forms), consumed by BOTH
 // the E_SET_STANCE p0 remap (`stance_p0`) and the `Stances` usability-mask fold (`translate_stance_mask`)
 // so the two can never drift. The Spell.dbc `Stances` usability mask is a form-BIT mask
 // (`1 << (formId-1)`: bit0=Cat/bit4=Bear/bit7=DireBear/bit16=Battle/bit17=Defensive/bit18=Berserker);
@@ -186,7 +186,7 @@ const SPEED_MOUNTED: i32 = 3; // ModIncreaseMountedSpeed family; T4 folds this s
 //   form 19 Berserker → stance 2        form  8 Dire Bear → stance 5
 // Unmapped forms (Aquatic 4 / Travel 3 / Tree 2 / Ghoul 7 / Moonkin 31 / …) stay out of scope: their
 // mask bits are DROPPED (a spell usable ONLY in an unmapped form imports with the mapped-form bits it
-// has, or 0 = "any stance" — the pre-156 behavior for every non-warrior form).
+// has, or 0 = "any stance").
 const FORM_CAT: i32 = 1;
 const FORM_BEAR: i32 = 5;
 const FORM_DIRE_BEAR: i32 = 8;
@@ -223,7 +223,7 @@ const SPELL_ATTR_REQ_OVERPOWER: u32 = 0x0020; // Overpower: castable only in the
 const SPELL_ATTR_REQ_REVENGE: u32 = 0x0040; // Revenge: castable only in the ~5s window after the caster DODGED/PARRIED/BLOCKED an incoming swing (Tier 2b react window)
 const SPELL_ATTR_CHANNELED: u32 = 0x0080; // CHANNELED (Arcane Missiles): the cast ticks a per-tick effect over duration_ms and breaks on action — set from the DBC AttributesEx1 CHANNELED bit (0x44), by-NAME fallback. Drives the A_PERIODIC_TRIGGER reclassify below
 const SPELL_ATTR_REQ_DAGGER: u32 = 0x0100; // Backstab: castable only with a DAGGER equipped in the main hand (lockstep with module/src/spell/taxonomy.rs)
-const SPELL_ATTR_RANGED_AUTO_REPEAT: u32 = 0x0200; // Auto Shot / wand Shoot: an AUTO-REPEAT ranged attack, not a one-shot cast. The GATEWAY reads this bit (game_spell.cast_flags) to intercept CMSG_CAST_SPELL and arm the ranged swing loop, instead of a hardcoded `spell == 75 || 5019` id list (work-item 097). Set from the DBC AttributesEx2 AUTOREPEAT bit, by-NAME fallback.
+const SPELL_ATTR_RANGED_AUTO_REPEAT: u32 = 0x0200;
 
 // vanilla `AttributesEx1` CHANNELED bits — IS_CHANNELLED (0x04) | CHANNELED_2 (0x40). cmangos: channeled = AttributesEx1 & 0x44.
 const ATTR_EX1_CHANNELED_MASK: u32 = 0x0000_0044;
@@ -365,7 +365,7 @@ fn excludes_eventai_caster(attributes_ex1: u32) -> bool {
 /// ranged-weapon timer until stopped, not as a one-shot cast? Keyed on the DBC `AttributesEx2` AUTOREPEAT
 /// bit (`0x20`), with a by-NAME fallback for the two player abilities in case the bit is not cleanly
 /// readable on this client build. The GATEWAY (never a spell-id list) then routes CMSG_CAST_SPELL on the
-/// resulting `SPELL_ATTR_RANGED_AUTO_REPEAT` cast_flags bit (work-item 097).
+/// resulting `SPELL_ATTR_RANGED_AUTO_REPEAT` cast_flags bit.
 fn is_ranged_auto_repeat(attributes_ex2: u32, name: &str) -> bool {
     attributes_ex2 & ATTR_EX2_AUTOREPEAT != 0 || matches!(name, "Auto Shot" | "Shoot")
 }
@@ -415,7 +415,7 @@ fn power_word_shield_p1_override(spell_id: u32, name: &str, kind: u8, p1: i32) -
     p1
 }
 
-/// `p1` for an `E_POWER_BURN` effect (117, Mana Burn): the DBC `EffectMultipleValue` (a fraction, 0.5
+/// `p1` for an `E_POWER_BURN` effect (Mana Burn): the DBC `EffectMultipleValue` (a fraction, 0.5
 /// for vanilla Mana Burn) carried onto the effect row as basis-points (0.5 -> 50), since `p1` is a
 /// plain `i32`. The module's `mana_burn_damage` treats `<=0` as 100 (1:1) — so a spell whose
 /// `EffectMultipleValue` genuinely reads 0 in the DBC (unauthored/placeholder) still deals full
@@ -428,8 +428,8 @@ fn power_burn_ratio_bp(multiple: f32) -> i32 {
 /// graceful `E_SCRIPTED` no-op. IDs verified against `wow_world_base::vanilla::SpellEffect` (the
 /// `from_int` table): SchoolDamage=2, Heal=10, HealMaxHealth=67, Energize=30, Dispel=38,
 /// TriggerSpell=64, Threat=63/ThreatAll=91, weapon-damage family 17/58/121/31, Resurrect=18,
-/// AddComboPoints=80, ResurrectNew=113, AttackMe=114 (work-item 101 — cross-checked against the
-/// vendored `wow_world_base-0.3.0` vanilla/tbc/wrath `SpellEffect::from_int` tables, all three eras
+/// AddComboPoints=80, ResurrectNew=113, AttackMe=114 (cross-checked against the
+/// vendored `wow_world_base-0.3.0` vanilla/tbc/wrath `SpellEffect::from_int` tables; all three eras
 /// agree on these four numeric ids).
 /// CONFIRMED 2026-07-14 against the real client Spell.dbc (curated-kit dry-run + targeted --only):
 /// Taunt 355 → E_TAUNT, Resurrection 2006 / Redemption 7328 → E_RESURRECT, Cheap Shot 1833 (no
@@ -446,21 +446,21 @@ fn instant_effect_to_kind(effect_id: i32) -> u8 {
         38 => E_DISPEL,          // Dispel
         64 => E_TRIGGER,         // TriggerSpell
         63 | 91 => E_TAUNT,      // Threat / ThreatAll
-        114 => E_TAUNT, // AttackMe (work-item 101) — same force-aggro semantics as Threat/ThreatAll, just a distinct raw id; not known to occur in the curated 1-10 human kit (no Taunt/Mocking Blow/Challenging Shout id is in any IDS_* list), so this widens coverage for a FUTURE (non-Human or higher-level) import, not the curated kit today
+        114 => E_TAUNT,
         24 => E_CREATE_ITEM, // CreateItem (conjure / quest item) — p0 = item entry
-        68 => E_INTERRUPT, // InterruptCast (Kick) — cancel the target's in-progress cast
+        68 => E_INTERRUPT,   // InterruptCast (Kick), cancel the target's in-progress cast
         55 => E_TAME_CREATURE, // TameCreature — explicit wild target, no spell-id branch
         101 => E_FEED_PET, // FeedPet — explicit item target is routed by the gateway/manual cast seam
         56 => E_SUMMON_PET, // Summon (Summon Imp et al.) — p0 = the summoned creature entry (misc_value)
-        62 => E_POWER_BURN, // PowerBurn (Priest Mana Burn) — p1 = EffectMultipleValue*100 (work-items 117)
-        83 => E_DUEL,       // Duel — p0 carries the duel-flag gameobject entry
-        69 => E_DISTRACT,   // Distract: the effect amount is the Distraction's length in seconds
-        33 | 59 => E_OPEN_LOCK, // OpenLock (33) / OpenLockItem (59) — Pick Lock (work-item 119): gateway-intercepted, routed to the pick_lock reducer by kind (Pick Lock 1804 carries the raw OpenLock effect; the item-lock variant 59 covers a lockpick-on-item spell)
-        99 => E_DISENCHANT, // Disenchant (13262, work-item 282): gateway-intercepted, routed to the disenchant reducer by kind — the AUTOLEARN enchanting ability. Was falling through to E_SCRIPTED (a no-op).
-        80 => E_ADD_COMBO, // AddComboPoints (work-item 101) — the curated Rogue generators (Sinister Strike/Backstab/Gouge/Garrote) carry the generic Dummy effect in-kit and are rescued BY NAME in correct_script_effect_kind below, not via this raw id, so this arm is currently unexercised by the curated kit but correct for any spell that DOES carry the raw AddComboPoints effect
+        62 => E_POWER_BURN,
+        83 => E_DUEL,     // Duel, p0 carries the duel-flag gameobject entry
+        69 => E_DISTRACT, // Distract: the effect amount is the Distraction's length in seconds
+        33 | 59 => E_OPEN_LOCK,
+        99 => E_DISENCHANT,
+        80 => E_ADD_COMBO,
         94 => E_SELF_RESURRECT, // SelfResurrect (Soulstone Resurrection, Reincarnation): read by the Module's self-resurrection, never cast
-        18 | 113 => E_RESURRECT, // Resurrect / ResurrectNew (work-item 101) — the curated kit's two resurrects (Priest Resurrection 2006, Paladin Redemption 7328) are ALSO rescued by name below; if either carries raw effect 18/113 in the real DBC (plausible — that is literally what the effect exists for) this arm now resolves them natively too, moving them out of `cov.unmapped_effect` even though the final kind was already E_RESURRECT via the name rescue either way — unverified without a client DBC dump, so [V]
-        _ => E_SCRIPTED,         // remaining vanilla effects: queryable no-op
+        18 | 113 => E_RESURRECT,
+        _ => E_SCRIPTED, // remaining vanilla effects: queryable no-op
     }
 }
 
@@ -486,7 +486,7 @@ fn correct_script_effect_kind(name: &str, kind: u8) -> u8 {
     if kind == E_DAMAGE && matches!(name, "Heroic Strike" | "Cleave") {
         return E_NEXT_SWING;
     }
-    // Feint (Rogue Slice 3): vanilla encodes it as the native Threat effect (→ E_TAUNT) with a NEGATIVE
+    // Feint: vanilla encodes it as the native Threat effect (→ E_TAUNT) with a NEGATIVE
     // base (−150) — i.e. a one-time threat DROP, not a taunt-yank. Reclassify the E_TAUNT effect to our
     // E_REDUCE_THREAT (the handler reduces the caster's CURRENT threat by |base_points|). Fires on the
     // real E_TAUNT effect, before the residue guard. DISTINCT from Fade (a COMBAT_THREAT percent).
@@ -502,37 +502,21 @@ fn correct_script_effect_kind(name: &str, kind: u8) -> u8 {
         // carrying the heal in base_points — and fell to E_SCRIPTED (a hollow no-op "heal") without this.
         "Life Tap" => E_CONVERT_RESOURCE,  // health -> mana, 1:1
         "Charge" => E_CHARGE, // the rush effect (vanilla effect 96) -> teleport-to-target
-        "Blink" => E_BLINK, // Mage Blink (116): the dead SCRIPT teleport effect (raw 29) -> teleport the caster ~20yd FORWARD along its facing. Name-rescued like Charge (raw 29 is a generic teleport with per-spell destination rules; Blink's is "forward"). eff2 (root/snare A_IMMUNITY) already maps natively.
+        "Blink" => E_BLINK, // Mage Blink: the dead SCRIPT teleport effect (raw 29) -> teleport the caster ~20yd FORWARD along its facing. Name-rescued like Charge (raw 29 is a generic teleport with per-spell destination rules; Blink's is "forward"). eff2 (root/snare A_IMMUNITY) already maps natively.
         "Seal of Righteousness" => A_SEAL, // the inert A_FLAG marker IS a proc-on-swing holy seal
         "Stealth" => A_STEALTH, // the inert A_FLAG marker IS the stealth presence (creatures skip it; broken on action)
         "Retaliation" => A_RETALIATE, // the inert A_FLAG marker IS the free-counter-swing self-buff (any melee attacker gets swung back at)
-        // The stance/form-switch spells encode their stance as APPLY_AURA + ModShapeshift(form) → the
-        // inert A_FLAG marker (the form id in p0). Reclassify to E_SET_STANCE; the effect loop then
-        // remaps p0 from the form id to our 0-based stance id via `form_to_stance`. The cast handler
-        // writes WorldEntity.stance. This is the ONE place allowed to name the stance spells. Work-item
-        // 156 added the Druid combat forms (Bear 5487 → stance 3, Cat 768 → 4, Dire Bear 9634 → 5) —
-        // rank-less spells, so exact-name matching covers them; the non-combat forms (Aquatic/Travel/
-        // Moonkin/Tree of Life) stay un-rescued (their marker stays the inert A_FLAG, the pre-156 shape).
+
         "Battle Stance" | "Defensive Stance" | "Berserker Stance" | "Bear Form"
         | "Dire Bear Form" | "Cat Form" => E_SET_STANCE,
         "Judgement" => E_JUDGEMENT, // unleash the active seal
         // Rogue GENERATORS: the inert combo-point Dummy effect (-> E_SCRIPTED) builds a combo point.
         // Garrote's eff2 is the same combo Dummy (its eff1 is the A_PERIODIC_DAMAGE bleed, unchanged).
-        // (work-item 101: `instant_effect_to_kind` now maps the raw AddComboPoints effect id (80) to
+        // `instant_effect_to_kind` now maps the raw AddComboPoints effect id (80) to
         // E_ADD_COMBO natively too, but the in-kit generators carry the generic Dummy effect, not raw
-        // 80, so this name rescue is still the ONLY path that reaches them — kept, not redundant here.)
+        // 80, so this name rescue is still the ONLY path that reaches them — kept, not redundant here.
         "Sinister Strike" | "Backstab" | "Gouge" | "Garrote" => E_ADD_COMBO,
-        // Every class's combat-rez shares the same raw Resurrect effect (18/113) that falls to
-        // E_SCRIPTED without this rescue — and E_SCRIPTED is a graceful-success no-op, so a missed
-        // name here makes the cast "succeed" while reviving nobody (the 176 review caught
-        // Redemption doing exactly that: the healer bot would tunnel a broken rez forever).
-        // (work-item 101: `instant_effect_to_kind` now maps raw Resurrect/ResurrectNew (18/113) to
-        // E_RESURRECT natively; per THIS comment's own prior claim that these spells "share the same
-        // raw Resurrect effect (18/113)", the raw-id arm likely already resolves Resurrection/Redemption
-        // before this rescue ever runs (the `kind != E_SCRIPTED` guard above short-circuits), making this
-        // arm belt-and-braces for those two — still load-bearing for Rebirth/Ancestral Spirit, which
-        // aren't Human-class spells and never ship through this curated kit. Harmless overlap either way;
-        // left in place. [V] — unconfirmed without a client DBC dump.)
+
         "Resurrection" | "Redemption" | "Rebirth" | "Ancestral Spirit" => E_RESURRECT,
         "Pick Pocket" => E_PICKPOCKET, // the script effect grants creature copper without engaging
         // (Feint is handled above — its native Threat effect maps to E_TAUNT, not the E_SCRIPTED residue.)
@@ -569,7 +553,7 @@ fn soulstone_option_spell(aura_spell_id: u32) -> Option<i32> {
 
 /// Translate the vanilla Spell.dbc `Stances` (ShapeshiftMask) bitmask → our 0-based stance usability bits.
 /// Vanilla stores bit `1 << (formId-1)` for each allowed form; every form `form_to_stance` maps (the
-/// Warrior trio AND, since work-item 156, the Druid combat forms Bear/Cat/Dire Bear) folds onto our bit
+/// Warrior trio AND, since, the Druid combat forms Bear/Cat/Dire Bear) folds onto our bit
 /// `1 << stance` — so a druid ability's Bear|DireBear requirement (vanilla 0x90) survives import as our
 /// 0x28 instead of being dropped. Bits for UNMAPPED forms (Aquatic/Travel/Tree/Ghoul/…) are still
 /// dropped, and a 0 mask stays 0 ("usable in any stance"). The result is a u8 (our six stance bits fit
@@ -652,7 +636,7 @@ fn aura_mod_to_kind(aura: AuraMod) -> u8 {
 
         // stat — FLAT (ModStat) vs PERCENT (ModPercentStat / ModTotalStatPercentage). The percent ones fold
         // as a multiplier in recompute_vitals (The Human Spirit = +5% Spirit), so they need a distinct kind.
-        // Spell modifiers (264): the talent-passive class (Improved Fireball's cast-time cut,
+        // Spell modifiers: the talent-passive class (Improved Fireball's cast-time cut,
         // fire-damage-% talents). Op rides EffectMiscValue -> p0 (P_SPELLMOD_OP); the affected-spell
         // family mask rides EffectItemType -> p1. The engine folds them at the cast-time/damage seams.
         AddFlatModifier => A_SPELLMOD_FLAT,
@@ -723,7 +707,7 @@ fn aura_mod_to_kind(aura: AuraMod) -> u8 {
         // the inert A_FLAG so the regen gate can read the magnitude without a spell-id or race check.
         ModRegenDuringCombat | ModHealthRegenInCombat => A_COMBAT_HEALTH_REGEN_PCT,
 
-        // Demon Skin/Armor's health-per-5 (work-item 024): aura 84 SPELL_AURA_MOD_REGEN
+        // Demon Skin/Armor's health-per-5: aura 84 SPELL_AURA_MOD_REGEN
         // is a COMBAT-INDEPENDENT periodic heal tick (it heals a living target on a fixed period
         // whether or not it is in combat) — the same primitive already
         // wired for Renew/bandages/food. Reclassified from the inert A_FLAG marker onto A_PERIODIC_HEAL;
@@ -812,10 +796,7 @@ fn is_wrapper_rank_trigger(kind: u8) -> bool {
 fn resolve_aura_params(kind: u8, aura: AuraMod, misc: u32) -> (i32, u8) {
     use AuraMod::*;
     match kind {
-        // Flat AND percent stat mods resolve the stat the SAME way — from the effect's misc value. -1
-        // (u32::MAX) = all stats (0xFF, e.g. Blessing of Kings/Mark of the Wild); a specific value = that
-        // single stat (The Human Spirit's percent effect names Spirit, NOT all — the old blanket
-        // ModTotalStatPercentage→STAT_ALL force was the bug that made it +5% to every stat). [104]
+        // Flat and percentage modifiers both select the stat from misc. u32::MAX selects all.
         A_MOD_STAT | A_MOD_STAT_PCT => {
             let p0 = if misc == u32::MAX {
                 STAT_ALL
@@ -1098,7 +1079,7 @@ fn derive_spell_rows(
             continue;
         }
 
-        // --- reagents (game_spell_reagent, work-item 282) ---
+        // --- reagents (game_spell_reagent) ---
         // Spell.dbc carries up to 8 (Reagent, ReagentCount) pairs. Every real recipe's true mats
         // live here (and any reagent-consuming buff); the craft gate (module cast.rs) resolves by
         // this data instead of a hardcoded id list. Deterministic id (spell_id<<3)|slot →
@@ -1498,7 +1479,7 @@ fn push_spell_effect_rows(
             power_word_shield_p1_override(spell_id, name, kind, 0i32)
         };
         let script_id = 0u32;
-        // [093] data-driven "this energize enters/holds combat": set on Bloodrage (cast 2687 + trickle
+        // Data-driven "this energize enters/holds combat": set on Bloodrage (cast 2687 + trickle
         // 29131, BOTH named "Bloodrage") so the E_ENERGIZE / A_PERIODIC_ENERGIZE arms read the flag, not
         // a spell id. Any energize can opt in by adding the name.
         let enters_combat = name == "Bloodrage";
@@ -1687,12 +1668,12 @@ fn resolve_effect_kind(
     } else {
         kind
     };
-    // GROUND-AoE (118): a ground-persistent A_PERIODIC_DAMAGE is a FIXED-POSITION area, not a unit
+    // GROUND-AoE: a ground-persistent A_PERIODIC_DAMAGE is a FIXED-POSITION area, not a unit
     // DoT. The DBC encodes it as A_PERIODIC_DAMAGE with a dynobj/self target that resolves WRONG —
     // Consecration → T_SELF would DoT the paladin himself. Reclassify BY NAME to E_PERSISTENT_AREA
     // (the Charge/Blink name-rescue precedent) so it spawns a game_ground_area whose own
-    // tick_ground_areas damages hostiles inside. Consecration is caster-anchored; Flamestrike (262)
-    // is the first CLICKED-GROUND one — the 118 phase-2 dest plumbing (6067df1) anchors the area at
+    // tick_ground_areas damages hostiles inside. Consecration is caster-anchored; Flamestrike
+    // is the first CLICKED-GROUND one: the ground-target dest plumbing anchors the area at
     // the click when the cast carries a DEST_LOCATION block, so the same kind serves both.
     // Blizzard/Rain of Fire remain un-rescued (channeled patches — their channel/tick interplay is
     // its own follow-up; leaving them A_PERIODIC_DAMAGE keeps them out of the curated kit).
@@ -1798,7 +1779,7 @@ fn trainer_offering_rows(
                 Some(&lvl) => {
                     let cost = trainer_cost(lvl);
                     // id=0 → the table's #[auto_inc] PK assigns the real id on insert. END-append
-                    // learn_skill_line=0, learn_skill_cap=75 (professions slices 3 + rank/cap): every
+                    // learn_skill_line=0, learn_skill_cap=75: every
                     // class-spell offering is a normal spell row (the unchanged spell path); profession
                     // offerings are parent-SQL-seeded. The cap is unused on a line-0 row but must be NAMED
                     // on the INSERT; 75 matches the module's #[default(75u32)].
@@ -1829,7 +1810,7 @@ fn trainer_offering_rows(
     trainer_rows
 }
 
-/// Fishing (060): the E_FISH marker effect rows for the three tier ids (skill 356 — 7620/7731/7732,
+/// Fishing: the E_FISH marker effect rows for the three tier ids (skill 356 — 7620/7731/7732,
 /// PROFESSION_LEARN's fishing entry). The gateway routes CMSG_CAST_SPELL to the `fish` reducer by
 /// this KIND (the enchant-route pattern — never a spell-id list). These are OUR OWN taxonomy rows
 /// (not client data, firewall-clean), written by key AFTER the bulk insert so they replace whatever
@@ -1871,7 +1852,7 @@ fn assemble_spell_sql(
         "id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat",
         &rows.effects.iter().map(SpellEffectRow::sql_values).collect::<Vec<_>>(),
     );
-    // Reagents (282): same clear-guard as the spell/effect tables (spell_delete_statements only
+    // Reagents: same clear-guard as the spell/effect tables (spell_delete_statements only
     // wipes < SYNTHETIC_SPELL_ID_FLOOR, so hand/test-fixture reagents survive a curated reload).
     push_insert(
         &mut stmts,
@@ -1898,9 +1879,9 @@ fn assemble_spell_sql(
         ));
     }
 
-    // Trainer offerings (259 INVERSION): the --dump ETL's npc_trainer import is now the PRIMARY
+    // Trainer offerings: the --dump ETL's npc_trainer import is now the PRIMARY
     // source of class offerings (full per-class trees, the dump's real costs/reqlevels — an
-    // operator-local .import read like every other --dump field); this curated pass is the
+    // operator-local.import read like every other --dump field); this curated pass is the
     // OVERRIDE layer for the "specials" cmangos delivers outside npc_trainer (Consecration,
     // Flamestrike, Kick, stances, …). It therefore reloads ONLY ITS OWN reserved-id rows
     // (delete-by-id over the reserved span) and never touches the dump rows or the profession
@@ -1935,22 +1916,12 @@ fn build_spell_sql(
     Ok((sql, cov, samples))
 }
 
-/// Reserved `game_trainer_spell` id range for the CURATED override rows (259): far above the --dump
+/// Reserved `game_trainer_spell` id range for the CURATED override rows: far above the --dump
 /// ETL's explicit ids (~4300) and disjoint from every other reserved range. The reload deletes this
 /// whole span by id, so a shrunken override list leaves no stale rows behind.
 const CURATED_TRAINER_ID_BASE: u64 = 5_200_000;
 const CURATED_TRAINER_ID_SPAN: u64 = 500;
 
-/// Floor of the synthetic/test fixture spell-id range seeded by `module/src/seed.rs` (Combat Insight
-/// 50000, Minor Healing 50110) and `module/src/seed/fixtures.rs` (Test PW:Shield 50072, Test
-/// Regeneration 50137) — NONE of these are re-created by any import script, so a wholesale
-/// `game_spell` / `game_spell_effect` clear must never touch `spell_id >= SYNTHETIC_SPELL_ID_FLOOR`.
-/// The ONE reducer-seeded spell BELOW the floor is Weakened Soul (6788, real vanilla id) — the
-/// wholesale clear DOES wipe the seeded row, and the full import re-creates 6788 from its OWN real DBC
-/// entry, which carries a genuine `A_IMMUNITY` (mechanic-shield) aura effect (confirmed for work-item
-/// 122), so the reload is self-healing with no synthetic needed. The module side has no equivalent named constant (each fixture
-/// hardcodes its own literal id); if one is ever added there, mirror the name
-/// `SYNTHETIC_SPELL_ID_FLOOR` and keep both floors equal — a one-way hand-sync until then.
 const SYNTHETIC_SPELL_ID_FLOOR: u32 = 50_000;
 
 /// The DELETE half of the (clear+)reload, split out so the surgical-vs-wholesale choice is testable.
@@ -1958,22 +1929,12 @@ const SYNTHETIC_SPELL_ID_FLOOR: u32 = 50_000;
 /// DELETE so the import is ADDITIVE + idempotent and never touches the curated seed / test fixtures.
 /// Per-id `WHERE x = N` (sorted, deterministic) avoids relying on SQL `IN(..)` support and keeps each
 /// statement planner-friendly; the allowlist is always a small curated kit.
-///
-/// The wholesale branch guards `spell_id < SYNTHETIC_SPELL_ID_FLOOR` on BOTH tables so the synthetic
-/// fixture spells (50000/50072/50110/50137, none re-created by any import script) survive a full-DBC
-/// reload. `game_spell_effect` is filtered on its own `spell_id` COLUMN (btree `by_spell`,
-/// `module/src/spell/tables.rs:65`) — NOT the packed `id` (`spell_id<<2|effect_index`) — a range filter
-/// on the packed id would not track the fixture floor at all. Per danger-zones.md §2, a single-column
-/// range filter on `spacetime sql` can wrongly return 0 rows; this guard NEEDS LIVE VERIFICATION (the
-/// work-item's runbook) — it has NOT been run against a real node from this sandbox. Bounded blast
-/// radius if it no-ops: `spell_id` is the PK, so the reload's INSERTs collide loudly instead of
-/// corrupting silently.
 fn spell_delete_statements(only: &[u32]) -> Vec<String> {
     if only.is_empty() {
         return vec![
             format!("DELETE FROM game_spell WHERE spell_id < {SYNTHETIC_SPELL_ID_FLOOR}"),
             format!("DELETE FROM game_spell_effect WHERE spell_id < {SYNTHETIC_SPELL_ID_FLOOR}"),
-            // Reagents (282) share the fixture-floor guard so hand/test reagents survive a reload.
+            // Reagents share the fixture-floor guard so hand/test reagents survive a reload.
             format!("DELETE FROM game_spell_reagent WHERE spell_id < {SYNTHETIC_SPELL_ID_FLOOR}"),
             format!("DELETE FROM game_creature_ai_spell_metadata WHERE spell_id < {SYNTHETIC_SPELL_ID_FLOOR}"),
         ];
@@ -2025,7 +1986,7 @@ fn kind_name(kind: u8) -> &'static str {
         E_JUDGEMENT => "E_JUDGEMENT",
         E_ADD_COMBO => "E_ADD_COMBO",
         E_FINISHER_DAMAGE => "E_FINISHER_DAMAGE",
-        E_RESURRECT => "E_RESURRECT", // was missing (work-item 101) — the histogram printed "?" for this kind even though it's been a real, dispatched kind since the by-name rescue landed
+        E_RESURRECT => "E_RESURRECT",
         E_PICKPOCKET => "E_PICKPOCKET",
         E_INTERRUPT => "E_INTERRUPT",
         E_REDUCE_THREAT => "E_REDUCE_THREAT",
@@ -2073,9 +2034,7 @@ fn print_coverage(cov: &Coverage) {
         }
     };
     println!("\n=== SPELL TAXONOMY COVERAGE REPORT ===");
-    // BY DESIGN (work-item 100): a full (non --only) import pulls in the raid/other-class/PvP long
-    // tail, which has no Rust kind mapping yet (that's work-item 101) — so E_SCRIPTED% balloons on a
-    // full run vs. the curated kit. That's the intended end state, NOT a regression to "fix" here.
+
     println!("Total spells imported: {}", cov.spells);
     println!("Total effect rows:     {}", cov.effects);
     println!(
@@ -2088,8 +2047,7 @@ fn print_coverage(cov: &Coverage) {
         cov.scripted,
         pct(cov.scripted, cov.effects)
     );
-    // Procs woke up: every effect that landed natively on the two Proc kinds this ticket added (aura
-    // 42/43, no name rescue). An Operator reviews this count after an import to see what changed.
+
     let proc_trigger = cov.by_kind.get(&A_PROC_TRIGGER).copied().unwrap_or(0);
     let proc_damage = cov.by_kind.get(&A_PROC_DAMAGE).copied().unwrap_or(0);
     println!(
@@ -2197,8 +2155,8 @@ pub fn run_spells(data_dir: &str, args: &Args) -> Result<()> {
                 " [additive allowlist]"
             },
         );
-        // Provenance stamp (work-item 216 convention, mirrored from the --dump loop's per-family
-        // stamp_family calls in main.rs::run_dump). file_hash is "" here: unlike the --dump path
+        // Provenance stamp convention, mirrored from the --dump loop's per-family
+        // stamp_family calls in main.rs::run_dump. file_hash is "" here: unlike the --dump path
         // (which hashes the whole SQL dump's bytes in one shot), the DBC chain is read row-by-row
         // through `read_table`'s parsed-struct API (dbc.rs) with no single raw byte buffer to hash
         // cheaply — threading a chain-wide hash would mean re-reading every source MPQ a second time
@@ -2958,7 +2916,7 @@ mod tests {
             E_CONVERT_RESOURCE
         );
         assert_eq!(correct_script_effect_kind("Charge", E_SCRIPTED), E_CHARGE);
-        // Feint (Rogue Slice 3): vanilla encodes it as the native Threat effect (→ E_TAUNT) with a
+        // Feint: vanilla encodes it as the native Threat effect (→ E_TAUNT) with a
         // negative base; reclassify that E_TAUNT to E_REDUCE_THREAT (a one-time current-threat drop).
         assert_eq!(
             correct_script_effect_kind("Feint", E_TAUNT),
@@ -3055,8 +3013,7 @@ mod tests {
             correct_script_effect_kind("Ancestral Spirit", E_SCRIPTED),
             E_RESURRECT
         ); // Shaman
-           // A same-shaped SCRIPT_EFFECT under any OTHER name stays the graceful no-op (the guard the
-           // 176 review flagged: a missed name here silently makes the cast succeed while reviving nobody).
+
         assert_eq!(
             correct_script_effect_kind("Reincarnation", E_SCRIPTED),
             E_SCRIPTED
@@ -3168,7 +3125,7 @@ mod tests {
         assert_eq!(stance_p0(E_SET_STANCE, 17), 0); // Battle Stance → stance 0
         assert_eq!(stance_p0(E_SET_STANCE, 18), 1); // Defensive Stance → stance 1
         assert_eq!(stance_p0(E_SET_STANCE, 19), 2); // Berserker Stance → stance 2
-                                                    // Druid combat forms (work-item 156): Bear Form 5487 carries ModShapeshift(5), Cat Form 768
+                                                    // Druid combat forms: Bear Form 5487 carries ModShapeshift(5), Cat Form 768
                                                     // carries form 1, Dire Bear Form 9634 carries form 8.
         assert_eq!(stance_p0(E_SET_STANCE, 5), 3); // Bear Form → stance 3
         assert_eq!(stance_p0(E_SET_STANCE, 1), 4); // Cat Form → stance 4
@@ -3183,7 +3140,7 @@ mod tests {
     #[test]
     fn druid_form_switches_name_rescue_to_set_stance() {
         // The Druid combat-form switches carry the same inert ModShapeshift→A_FLAG marker as the Warrior
-        // stances and reclassify to E_SET_STANCE by name (work-item 156).
+        // stances and reclassify to E_SET_STANCE by name.
         assert_eq!(
             correct_script_effect_kind("Bear Form", A_FLAG),
             E_SET_STANCE
@@ -3193,7 +3150,7 @@ mod tests {
             E_SET_STANCE
         );
         assert_eq!(correct_script_effect_kind("Cat Form", A_FLAG), E_SET_STANCE);
-        // Non-combat forms are NOT rescued — their marker stays the inert A_FLAG (the pre-156 shape).
+        // Non-combat forms are NOT rescued — their marker stays the inert A_FLAG.
         assert_eq!(correct_script_effect_kind("Aquatic Form", A_FLAG), A_FLAG);
         assert_eq!(correct_script_effect_kind("Travel Form", A_FLAG), A_FLAG);
         assert_eq!(correct_script_effect_kind("Moonkin Form", A_FLAG), A_FLAG);
@@ -3211,7 +3168,7 @@ mod tests {
         assert_eq!(translate_stance_mask(0x50000), 0x05);
         // Berserker-only would be vanilla bit18 → our bit2 (0x04).
         assert_eq!(translate_stance_mask(0x40000), 0x04);
-        // Druid combat forms survive translation (work-item 156 — previously dropped):
+        // Druid combat forms survive translation (previously dropped):
         // Maul/Growl-shaped Bear|DireBear masks: vanilla bits4,7 (0x90) → our bits3,5 (0x28).
         assert_eq!(translate_stance_mask(0x90), 0x28);
         // Bear-only (vanilla bit4) → our bit3 (0x08); Cat-only (vanilla bit0) → our bit4 (0x10).
@@ -3262,7 +3219,7 @@ mod tests {
             SPELL_ATTR_INCAP_OPENER
         );
         assert_eq!(spell_flag_attributes("Sap") & SPELL_ATTR_REQ_BEHIND, 0);
-        // Garrote (Rogue Slice 3): REQ_BEHIND + REQ_STEALTH, but NOT STEALTH_SAFE (it breaks stealth) and
+        // Garrote: REQ_BEHIND + REQ_STEALTH, but NOT STEALTH_SAFE (it breaks stealth) and
         // NOT INCAP_OPENER (works on any type, in or out of combat — must not inherit Sap's constraints).
         assert_eq!(
             spell_flag_attributes("Garrote") & SPELL_ATTR_REQ_STEALTH,
@@ -3280,12 +3237,12 @@ mod tests {
             spell_flag_attributes("Garrote"),
             SPELL_ATTR_REQ_BEHIND | SPELL_ATTR_REQ_STEALTH
         );
-        // Pick Pocket: STEALTH_SAFE only (fixes the Phase-6 stealth-break) — no REQ flags.
+        // Pick Pocket: STEALTH_SAFE only (fixes the stealth-break), no REQ flags.
         assert_eq!(
             spell_flag_attributes("Pick Pocket"),
             SPELL_ATTR_STEALTH_SAFE
         );
-        // Slice and Dice: the combo-FINISHER duration-scaling bit (Rogue Slice 2) — and ONLY that bit.
+        // Slice and Dice: the combo-FINISHER duration-scaling bit — and ONLY that bit.
         assert_eq!(
             spell_flag_attributes("Slice and Dice"),
             SPELL_ATTR_FINISHER_DURATION
@@ -3492,7 +3449,7 @@ mod tests {
     #[test]
     fn power_word_shield_p1_links_weakened_soul() {
         // The real live Power Word: Shield (17) A_ABSORB effect gets its p1 overridden to link Weakened
-        // Soul (6788) — the generic linked-debuff mechanic (work-item 013).
+        // Soul (6788), the generic linked-debuff mechanic.
         assert_eq!(
             power_word_shield_p1_override(17, "Power Word: Shield", A_ABSORB, 0),
             6788
@@ -3528,7 +3485,7 @@ mod tests {
         assert_eq!(instant_effect_to_kind(91), E_TAUNT); // ThreatAll
         assert_eq!(instant_effect_to_kind(24), E_CREATE_ITEM); // CreateItem (conjure / quest item)
         assert_eq!(instant_effect_to_kind(62), E_POWER_BURN); // PowerBurn (Mana Burn)
-        assert_eq!(instant_effect_to_kind(33), E_OPEN_LOCK); // OpenLock (Pick Lock 1804, work-item 119)
+        assert_eq!(instant_effect_to_kind(33), E_OPEN_LOCK);
         assert_eq!(instant_effect_to_kind(59), E_OPEN_LOCK); // OpenLockItem (the item-lock variant)
                                                              // LearnSpell / Summon are still out of taxonomy → graceful no-op.
         assert_eq!(instant_effect_to_kind(36), E_SCRIPTED);
@@ -3536,7 +3493,7 @@ mod tests {
 
     #[test]
     fn instant_effect_raw_id_arms_land_work_item_101() {
-        // Exact-arm pins for the four raw ids work-item 101 lands (verified against
+        // Exact-arm pins for the four raw ids lands (verified against
         // `wow_world_base-0.3.0`'s vanilla/tbc/wrath `SpellEffect::from_int`, all three eras agree):
         // AttackMe=114, AddComboPoints=80, Resurrect=18, ResurrectNew=113.
         assert_eq!(instant_effect_to_kind(114), E_TAUNT); // AttackMe
@@ -3573,7 +3530,7 @@ mod tests {
         use AuraMod::*;
         assert_eq!(aura_mod_to_kind(PeriodicDamage), A_PERIODIC_DAMAGE);
         assert_eq!(aura_mod_to_kind(PeriodicHeal), A_PERIODIC_HEAL);
-        // Demon Skin/Armor's health-per-5 (work-item 024): ModRegen is a combat-independent periodic
+        // Demon Skin/Armor's health-per-5: ModRegen is a combat-independent periodic
         // heal, reclassified onto the SAME A_PERIODIC_HEAL kind as PeriodicHeal (Renew/bandages/food) —
         // NOT left as the inert A_FLAG marker.
         assert_eq!(aura_mod_to_kind(ModRegen), A_PERIODIC_HEAL);
@@ -3590,7 +3547,7 @@ mod tests {
         // incoming-damage % modifier (Shield Wall / vulnerability) — wired; the FLAT variant stays no-op.
         assert_eq!(aura_mod_to_kind(ModDamagePercentTaken), A_MOD_DAMAGE_TAKEN);
         assert_eq!(aura_mod_to_kind(ModDamageTaken), E_SCRIPTED); // flat damage-taken not handled yet
-                                                                  // Spell modifiers (work-item 264): AddFlatModifier/AddPctModifier were the "unmapped → no-op"
+                                                                  // Spell modifiers: AddFlatModifier/AddPctModifier were the "unmapped → no-op"
                                                                   // example here until the passive-modifier engine landed (2000292) and gave them real kinds —
                                                                   // this assertion is the regression guard for that reclassification, not a stale count.
         assert_eq!(aura_mod_to_kind(AddFlatModifier), A_SPELLMOD_FLAT);
@@ -3737,7 +3694,7 @@ mod tests {
         );
         assert_eq!(resolve_aura_params(A_MOD_STAT, ModStat, 3), (3, P_STAT_ID)); // INT
                                                                                  // ModStat is FLAT; ModTotalStatPercentage / ModPercentStat are PERCENT (distinct kind). BOTH resolve
-                                                                                 // the stat from misc — a SPECIFIC stat (4=Spirit, The Human Spirit), not a blanket all-stats (104).
+                                                                                 // the stat from misc — a SPECIFIC stat (4=Spirit, The Human Spirit), not a blanket all-stats.
         assert_eq!(aura_mod_to_kind(ModStat), A_MOD_STAT);
         assert_eq!(aura_mod_to_kind(ModTotalStatPercentage), A_MOD_STAT_PCT);
         assert_eq!(
@@ -3862,12 +3819,7 @@ mod tests {
             full[3],
             "DELETE FROM game_creature_ai_spell_metadata WHERE spell_id < 50000"
         );
-        // Per danger-zones.md §2, a single-column range filter via `spacetime sql` can silently return
-        // 0 rows in some conditions — this guard's live behavior (fixtures 50000/50072/50110/50137
-        // survive; all non-zero DBC rows below the floor ARE replaced) still NEEDS verification on a
-        // real node per the work-item's runbook; this test only pins the SQL string.
 
-        // Additive allowlist: one surgical delete per table and id, sorted and deduped.
         let surgical = spell_delete_statements(&[7386, 78, 78]);
         assert_eq!(
             surgical.len(),

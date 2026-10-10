@@ -109,7 +109,7 @@ impl Coordinator {
         Ok(quest_detail_view(&guard.conn.db, quest_id))
     }
 
-    /// The player's active (un-rewarded) quests as quest-log descriptor slots (Phase 2: the L window).
+    /// The player's active (un-rewarded) quests as quest-log descriptor slots: the quest-log window.
     /// Deterministic slot assignment (sorted by quest_entry → slot 0..), capped at the 20 vanilla slots;
     /// each slot carries the quest id, per-objective counts, and a state byte (1 = all objectives met,
     /// else 0). The gateway encodes these into the `PLAYER_QUEST_LOG_*` fields. RLS-bypassed read.
@@ -124,12 +124,6 @@ impl Coordinator {
     }
 }
 
-/// Is every objective of `quest_entry` met for this player? MIRRORS the module's `quest_is_complete`
-/// (module/src/quest.rs): a COLLECT_ITEM objective reads LIVE INVENTORY (its progress count is never bumped —
-/// completion follows the bag), every other kind reads the per-objective progress count. THE FIX for
-/// collect-quest turn-in: the gateway used to read `counts` ONLY, so the 121-of-174 collect objectives always
-/// showed incomplete → the client's "Complete Quest" button stayed disabled and the zone's quest backbone was
-/// un-turn-in-able. A quest with no objectives is trivially complete (a pure talk-to-giver quest).
 fn quest_objectives_complete(
     db: &RemoteTables,
     quest_entry: u32,

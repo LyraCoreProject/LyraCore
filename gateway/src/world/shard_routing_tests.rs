@@ -1,14 +1,9 @@
-//! Multi-shard routing — the routing half of Phase A of the elastic-sharding spec.
-//!
-//! A child module of `world::tests` for the same reason as its siblings: it reaches
-//! `InMemoryStore` and its fake realm-core topology without widening anything. `ShardCallLog` and
-//! `sharded_stores` are `pub(super)` — the cross-database transfer tests (`transfer_tests`) reuse
-//! both, the same way `loot_tests` reuses `party_tests`'s fixtures.
+//! Multi-shard routing tests through the shared InMemoryStore topology.
 
 use super::*;
 
 // ===========================================================================================
-//  Multi-shard routing — the routing half of Phase A of the elastic-sharding spec.
+//  Cross-database Transfer and Shard routing
 //  Requirement: reducer calls and subscriptions never target a shard other than the player's home
 //  shard. The `InMemoryStore` pair below stands for two DATABASES sharing one ordered call log, so
 //  a test can read off exactly which database served every player-scoped call of a whole live
@@ -483,12 +478,6 @@ fn a_spurious_worldport_ack_is_ignored_on_the_default_shard() {
 
 #[test]
 fn a_logout_to_character_select_releases_the_home_shard_pin() {
-    // Adversarial-review finding: `leave_world` returns the socket to CharSelect but the session
-    // stays open, so the NEXT character-select frames (char enum / create / delete) are dispatched
-    // through `on_home_shard!` again. Those are REALM-scoped — `game_account` / `game_character`
-    // live on the default database — so a pin left over from the character we just logged out of
-    // would serve the character list off an instance shard (which, being empty, shows the player
-    // no characters at all, and would create/delete rows on the wrong database).
     let (store, calls) = sharded_stores();
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();

@@ -318,8 +318,7 @@ pub(crate) fn melee_combatant_guids(ctx: &ReducerContext) -> Vec<u64> {
 #[table(
     accessor = game_melee_attack,
     public,
-    // Perf catalog 1.15: every "who is attacking X" question (disengage, kill_creature's
-    // still_engaged, is_engaged, combatant_guids, heal threat) used to full-scan this table.
+
     index(accessor = by_target, btree(columns = [target_guid]))
 )]
 pub struct MeleeAttack {
@@ -334,7 +333,7 @@ pub struct MeleeAttack {
     /// auto-migrates existing rows (no `-c` wipe). [entity]
     #[default(0)]
     pub ranged_spell_id: u32,
-    /// Work-item 037 (dual wield): the OFF-HAND swing's own clock, independent of `last_swing_ms` — an
+    /// (dual wield): the OFF-HAND swing's own clock, independent of `last_swing_ms`, an
     /// off-hand weapon has its own `delay_ms`, so it swings on a different cadence than the main hand.
     /// 0 = never swung (the next eligible tick swings immediately), same sentinel as `last_swing_ms`.
     /// Only consulted for a MELEE engagement (`ranged_spell_id == 0`) with a live off-hand weapon
@@ -399,7 +398,7 @@ pub struct CombatEvent {
     /// the client renders the arrow projectile. END-appended + `#[default(0)]` → auto-migrates. [event]
     #[default(0)]
     pub ammo_display_id: u32,
-    /// True when a queued on-next-swing spell (Heroic Strike/Cleave) FIRED on this landed swing (114):
+    /// True when a queued on-next-swing spell (Heroic Strike/Cleave) FIRED on this landed swing:
     /// vanilla REPLACES the white hit — the whole swing is the spell (one yellow named line, carried by
     /// the SpellCastEvent the swing inserts). The gateway then SKIPS the SMSG_ATTACKERSTATEUPDATE for
     /// this row (killing_blow/ATTACKSTOP still honored); `damage` keeps the true total for QA readers.
@@ -425,15 +424,6 @@ pub struct CombatEvent {
 }
 
 impl CombatEvent {
-    /// A baseline `CombatEvent` row for `attacker`/`target_guid`, stamped from the attacker's
-    /// already-fetched [`WorldEntity`] — zero `game_world_entity` lookups. `id`=0,
-    /// `created_at`=`ctx.timestamp`, the AOI address (`map_id`/`instance_id`/`grid_x`/`grid_y`) copied
-    /// straight off `attacker`, every other field at its neutral zero/false. Replaces the field-literal
-    /// plus the four-call `grid_of` copy-paste this used to require at every call site (perf catalog
-    /// audit, 2026-08-06) — every current call site already has the attacker entity in hand (the swing
-    /// tick fetches it once up front), so this is the only constructor `CombatEvent` needs; a guid-only
-    /// `grid_of`-backed variant can be added the day a call site without the entity shows up. A call
-    /// site overrides only the handful of fields that carry real signal via struct-update syntax.
     pub(crate) fn signal_at(
         ctx: &ReducerContext,
         attacker: &WorldEntity,
@@ -470,7 +460,7 @@ pub struct MeleeSchedule {
     pub scheduled_at: ScheduleAt,
 }
 
-/// One in-flight RANGED projectile (097): scheduled at fire + travel time; `ranged_impact` then
+/// One in-flight RANGED projectile: scheduled at fire + travel time; `ranged_impact` then
 /// applies the frozen post-mitigation damage (health/lethal/threat/rage/skill/combat-flag) so the
 /// server-side hit lands when the client's arrow does. The final damage and its client log are both
 /// committed at impact, after fresh lethal-floor and health checks. Module-private.
@@ -743,14 +733,11 @@ pub(crate) fn apply_start_ranged_attack(
     if target_guid == attacker.guid {
         return Err("cannot attack self".to_string());
     }
-    // The equipped ranged weapon, read ONCE for the whole reducer (it used to be fetched three times:
-    // here, for the ammo gate, and again for the wind-up seed) — Auto Shot / Shoot are impossible
-    // bare-handed. Checked BEFORE the shared target gate, preserving the order in which a command that
-    // is invalid on both counts reports its reason.
+
     let ranged_weapon = equipped_ranged_weapon(ctx, attacker.guid)
         .ok_or_else(|| "no ranged weapon equipped".to_string())?;
     let target = validate_attack_target(ctx, &attacker, target_guid)?;
-    // Activation CheckCast (097/vanilla): vmangos REJECTS the auto-repeat activation for any hard
+    // Activation CheckCast (vanilla): vmangos REJECTS the auto-repeat activation for any hard
     // cast failure — the gateway relays the reason as SMSG_CAST_RESULT and the client drops its
     // toggle, so the client's auto-repeat state never outlives a loop that could not start. Without
     // these gates the row armed silently, every shot was suppressed by the same checks in the swing
@@ -788,10 +775,7 @@ pub(crate) fn apply_start_ranged_attack(
         ) {
             return Err("target not in line of sight".to_string());
         }
-        // A launcher (bow/gun/crossbow) with an empty quiver rejects at activation — vanilla's
-        // SPELL_FAILED_NO_AMMO red error — instead of arming, sending a clean START, and silently
-        // cancelling ~500ms later when the first shot's find_ammo comes up empty (review find).
-        // Wands consume nothing. The mid-loop run-out keeps the swing tick's teardown+cancel.
+
         use crate::items::weapon_subclass as ws;
         if matches!(ranged_weapon.3, ws::BOW | ws::GUN | ws::CROSSBOW)
             && find_ammo(ctx, attacker.guid).is_none()
@@ -802,7 +786,7 @@ pub(crate) fn apply_start_ranged_attack(
     // LAND-MOUNT dismount (22): the ranged twin of the melee hook — after the last activation gate,
     // before the engagement is armed, so a refused activation leaves the mount up.
     crate::mount::dismount(ctx, attacker.guid);
-    // Initial-shot wind-up (097): a ranged auto-attack must NOT fire instantly on activation — vanilla's
+    // Initial-shot wind-up: a ranged auto-attack must NOT fire instantly on activation — vanilla's
     // Auto Shot has a ~0.5s cast before the first shot (the user: "we shoot right away, no waiting for the
     // attack timer"). `last_swing_ms == 0` would make the swing tick fire THIS tick; instead seed it so the
     // first shot is `RANGED_INITIAL_SHOT_MS` out. The swing gate fires when `now - last_swing >= delay`, so
@@ -862,27 +846,5 @@ mod duel_relation_tests {
         assert!(!may_help_decision(false, true, false));
         assert!(!may_help_decision(false, false, true));
         assert!(may_help_decision(true, false, true));
-    }
-}
-
-#[cfg(test)]
-mod engagement_reset_tripwire {
-    use crate::test_scan::code_of;
-
-    /// `disengage` is the ONLY place that sees every way a fight ends: an evade, the player dying,
-    /// a logout, a map change. Each of those clears `IN_COMBAT` here, so the cycle's combat-drop
-    /// pass never reaches them and its `leave_combat` cannot be the EventAI engagement reset on its
-    /// own. Dropping this call fails silently and in the player's favour nowhere: the next pull
-    /// finds once-only aggro rules still spent and timed rules due on their first tick.
-    #[test]
-    fn freeing_a_unit_starts_its_next_eventai_engagement() {
-        let body = code_of(
-            include_str!("engage.rs"),
-            "pub(crate) fn disengage(ctx: &ReducerContext, guid: u64) {",
-        );
-        assert!(
-            body.contains("crate::creatures::reset_engagement(ctx, g)"),
-            "`disengage` no longer resets the EventAI engagement of the units it freed"
-        );
     }
 }

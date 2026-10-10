@@ -33,7 +33,7 @@ pub struct PlayerReputation {
     // 0 filler in practice; the 4 pre-migration rows are backfilled at deploy.
     #[default(0)]
     pub reputation_index: i32,
-    // END-APPENDED (195 slice B): the player checked "At War" for this faction in the rep pane
+    // END-APPENDED: the player checked "At War" for this faction in the rep pane
     // (CMSG_SET_FACTION_ATWAR). Persisted so the checkbox survives relog (folded into the login
     // SMSG_INITIALIZE_FACTIONS flag byte); the gateway's interaction-reaction gate treats an
     // at-war faction's NPCs as hostile. Defaulted bool → additive auto-migrate.
@@ -79,7 +79,7 @@ const REP_MAX: i32 = 42000;
 
 /// Reputation RANK (vanilla `ReputationRank`, 0=Hated .. 7=Exalted, Neutral=3) for a raw standing.
 /// Thresholds are the raw lower bounds mangos uses. Pure — unit-tested. `pub(crate)` so vendor pricing
-/// (195) can read it. Neutral is the baseline (an unknown faction → 0 standing → Neutral).
+/// can read it. Neutral is the baseline (an unknown faction → 0 standing → Neutral).
 pub(crate) fn reputation_rank(standing: i32) -> u8 {
     match standing {
         s if s >= 42000 => 7, // Exalted
@@ -93,7 +93,7 @@ pub(crate) fn reputation_rank(standing: i32) -> u8 {
     }
 }
 
-/// Vendor buy-price discount PERCENT for a raw standing (195). Vanilla `GetReputationPriceDiscount`:
+/// Vendor buy-price discount PERCENT for a raw standing. Vanilla `GetReputationPriceDiscount`:
 /// 5% per rank ABOVE Neutral — Friendly 5, Honored 10, Revered 15, Exalted 20; Neutral and below give 0.
 /// Buy only (sell is unchanged). Pure — unit-tested.
 pub(crate) fn reputation_discount_pct(standing: i32) -> u32 {
@@ -107,7 +107,7 @@ pub(crate) fn reputation_discount_pct(standing: i32) -> u32 {
 }
 
 /// The vendor buy-price discount PERCENT `player_guid` gets at a creature whose FactionTemplate is
-/// `faction_template_id` (195). Resolves the template → its parent Faction.dbc id → the player's standing
+/// `faction_template_id`. Resolves the template → its parent Faction.dbc id → the player's standing
 /// with that faction → `reputation_discount_pct`. 0 when the vendor has no parent faction, the faction
 /// has no rep bar, or the player has no standing row (Neutral). Reuses the `grant_reputation` lookup idiom.
 pub(crate) fn vendor_discount_pct(
@@ -288,7 +288,7 @@ mod rep_tests {
         assert_eq!(reputation_discount_pct(0), 0); // Neutral → full price
         assert_eq!(reputation_discount_pct(-10000), 0); // hostile → no discount (never a surcharge)
         assert_eq!(reputation_discount_pct(3000), 5); // Friendly → 5%
-        assert_eq!(reputation_discount_pct(9000), 10); // Honored → 10% (the work-item's headline case)
+        assert_eq!(reputation_discount_pct(9000), 10);
         assert_eq!(reputation_discount_pct(21000), 15); // Revered → 15%
         assert_eq!(reputation_discount_pct(42000), 20); // Exalted → 20%
     }

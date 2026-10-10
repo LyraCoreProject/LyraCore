@@ -47,12 +47,12 @@ pub(crate) fn resolve_cast_at(
     // was already sent at begin_cast). false for an instant cast, a channel, a creature cast, and a
     // triggered cast, which still use the START(0)+GO+COOLDOWN instant packet sequence.
     is_completion: bool,
-    // true ONLY on the player CMSG_CAST_SPELL path (088; threaded via begin_cast from the cast_spell
+    // true ONLY on the player CMSG_CAST_SPELL path (threaded via begin_cast from the cast_spell
     // reducer): the gateway sent that caster's START/RESULT/GO synchronously, so the relay suppresses
     // its duplicate. Channel ticks / triggers / creature / debug / item-use casts pass false and the
     // relay DELIVERS the caster's visual (they never had a synchronous send).
     client_initiated: bool,
-    // The clicked GROUND point (118 phase 2), for a ground-targeted cast (CMSG_CAST_SPELL's
+    // The clicked GROUND point for a ground-targeted cast (CMSG_CAST_SPELL's
     // DEST_LOCATION). `Some` → AREA effects splash from it and a ground patch anchors there; `None` for
     // every non-ground cast (self/unit-target/creature/trigger). Threaded verbatim to select_targets +
     // create_ground_area.
@@ -83,12 +83,12 @@ pub(crate) fn resolve_cast_at_typed(
     // was already sent at begin_cast). false for an instant cast, a channel, a creature cast, and a
     // triggered cast, which still use the START(0)+GO+COOLDOWN instant packet sequence.
     is_completion: bool,
-    // true ONLY on the player CMSG_CAST_SPELL path (088; threaded via begin_cast from the cast_spell
+    // true ONLY on the player CMSG_CAST_SPELL path (threaded via begin_cast from the cast_spell
     // reducer): the gateway sent that caster's START/RESULT/GO synchronously, so the relay suppresses
     // its duplicate. Channel ticks / triggers / creature / debug / item-use casts pass false and the
     // relay DELIVERS the caster's visual (they never had a synchronous send).
     client_initiated: bool,
-    // The clicked GROUND point (118 phase 2), for a ground-targeted cast (CMSG_CAST_SPELL's
+    // The clicked GROUND point for a ground-targeted cast (CMSG_CAST_SPELL's
     // DEST_LOCATION). `Some` → AREA effects splash from it and a ground patch anchors there; `None` for
     // every non-ground cast (self/unit-target/creature/trigger). Threaded verbatim to select_targets +
     // create_ground_area.
@@ -266,7 +266,7 @@ pub(crate) fn resolve_cast_at_typed(
         }
     }
 
-    // Notify-hook (146): the cast fully RESOLVED — every cast path (player, timed completion,
+    // Notify-hook: the cast fully RESOLVED — every cast path (player, timed completion,
     // channel, creature, triggered, debug) funnels through this success exit. Rejections above
     // returned Err and never reach here.
     crate::hooks::fire_on_cast_resolved(
@@ -744,18 +744,6 @@ pub(crate) fn start_creature_spell(
     }
 }
 
-/// The GATE SWEEP `resolve_cast_at` runs before spending anything — extracted (381) from what used to be
-/// a single ~630-line function, where each of these checks landed as its own commented block, one per
-/// work item, in this exact order. Every check here is READ-ONLY (no `.update`/`.insert`/`.delete`, no
-/// `power`/item/reagent spend) — the hard boundary is the COST CHARGE in `resolve_cast_at` right after
-/// this returns `Ok`, so "spend nothing before cost" holds by construction: nothing below can spend, and
-/// everything that spends runs strictly after this call. `effects` is the SAME already-loaded,
-/// already-sorted (E_INTERRUPT-first) vec `resolve_cast_at`'s effect loop reuses.
-///
-/// One deliberate reorder from the pre-381 layout: `is_action_blocked` used to run BEFORE the caster row
-/// was loaded (it only reads `game_aura`, not the row); `check_cast_gates` takes the row already in hand,
-/// so the load now happens first in the caller. Both are independent early-bail reads with no shared
-/// state, so this is a no-observable-difference reorder — not a behavior change.
 fn check_cast_gates(
     ctx: &ReducerContext,
     caster: &WorldEntity,
@@ -1129,7 +1117,7 @@ fn check_cast_gate_suffix(
     if hdr.range_yd > 0 && target_guid != caster_guid {
         if let Some(target) = ctx.db.game_world_entity().guid().find(target_guid) {
             // World coordinates are per-map, so a Euclidean distance is only meaningful when both units
-            // share a map AND instance (work-item 190 slice 1) — a cross-map/cross-instance target is
+            // share a map AND instance, a cross-map/cross-instance target is
             // unreachable (treat as out of range) before trusting it.
             if caster.map_id != target.map_id || caster.instance_id != target.instance_id {
                 return Err(CastRefusal::new(
@@ -1159,7 +1147,7 @@ fn check_cast_gate_suffix(
     // fan-out in `select_targets` re-checks `is_hostile`/`is_friendly` PER resolved target, so a PBAoE
     // (explicit==0, which skips this gate) is still faction-filtered there — no exploit is opened.
     if target_guid != caster_guid {
-        // A_FLAG effects are excluded from BOTH scans (266): an inert marker aura carries whatever
+        // A_FLAG effects are excluded from BOTH scans: an inert marker aura carries whatever
         // target type the DBC happened to encode (Taunt's ModTaunt marker reads ALLY, Slice and
         // Dice's read ally too — the name-fix precedent) and imposes no real faction constraint;
         // letting it vote turned Taunt into "targets allies" and refused every yank.
@@ -1206,7 +1194,7 @@ fn check_cast_gate_suffix(
         )));
     }
 
-    // Blink (116) requires its teleport DISTANCE as data — the effect's DBC radius (`radius_yd`,
+    // Blink requires its teleport DISTANCE as data — the effect's DBC radius (`radius_yd`,
     // SpellRadius.dbc = 20yd for Blink). A 0/unauthored radius is a DATA BUG, not something to paper
     // over with a hardcoded default (a silent fallback would hide a mis-seeded spell forever). Reject
     // the cast LOUD: the Err propagates to the reducer → SMSG_CAST_FAILED at the client AND a server log.
@@ -1219,7 +1207,7 @@ fn check_cast_gate_suffix(
             e.effect_index
         )));
     }
-    // A ground-AoE (118) with no radius is unauthored data — reject LOUD rather than spawn a 0-radius
+    // A ground-AoE with no radius is unauthored data — reject LOUD rather than spawn a 0-radius
     // area that silently damages nobody (same fail-loud stance as Blink's distance).
     if let Some(e) = effects
         .iter()
@@ -1385,9 +1373,9 @@ pub(crate) fn begin_cast(
     spell_id: u32,
     level: u8,
     target_guid: u64,
-    // 088: true only from the cast_spell reducer (the CMSG path) — see resolve_cast_at's param doc.
+
     client_initiated: bool,
-    // The clicked GROUND point (118 phase 2) for a ground-targeted cast. An INSTANT/channel ground cast
+    // The clicked GROUND point for a ground-targeted cast. An INSTANT/channel ground cast
     // passes it straight to resolve_cast_at; a TIMED one stashes it on the PendingCast row so the
     // completion (`fire_pending_cast`) can anchor the patch at the click. `None` for every normal cast.
     dest: Option<(f32, f32, f32)>,
@@ -1461,7 +1449,7 @@ pub(crate) fn begin_cast_with_admission(
     // importer from the DBC), never a spell id. Arcane Missiles' DBC `cast_time_ms` is already 0 so it would
     // take the instant path regardless; this guard makes a channel resolve-now even if a channeled spell
     // carried a nonzero cast time, and documents the channel path explicitly.
-    // Spell-modifier fold (264): the caster's A_SPELLMOD auras (Improved Fireball et al) move THIS
+    // Spell-modifier fold: the caster's A_SPELLMOD auras (Improved Fireball et al) move THIS
     // spell's cast time — flat then percent, floored at 0. The folded value drives the
     // instant-vs-timed branch, the completion schedule AND the START event's cast bar in LOCKSTEP
     // (a bar that lies about the fire time is the wedge class the cast-lock saga taught us).
@@ -1642,7 +1630,7 @@ pub(crate) fn apply_spell_auras(
     };
     // A talent/login PASSIVE with DBC duration 0 is PERMANENT — the pick is its lifetime; only the
     // rank supersede or a respec removes it. Without this the ~1s expiry reap deleted a fresh
-    // Improved Fireball modifier (264 live find: rank-2's A_SPELLMOD aura vanished before the next
+    // Improved Fireball modifier (rank-2's A_SPELLMOD aura vanished before the next
     // cast). u32::MAX is the established infinite sentinel (Devotion Aura/stances). Scoped HERE
     // (the passive-apply path) so combat casts' real durations are untouched.
     if hdr.duration_ms == 0 {

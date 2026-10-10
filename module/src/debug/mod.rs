@@ -1,41 +1,28 @@
-//! Layer 1 — server-side **test-only** reducers that pilot the world for the client-automation
-//! harness. Each puts the world in an exact precondition
-//! (teleport / set HP / spawn-at-feet / force-cast / set level / clear creatures) so most ⭐ tests
-//! lose their blind 3D-navigation step and become deterministic.
+//! Reducers that stage deterministic scenarios for client automation and operator diagnostics.
+//! Teleport, health, spawn, cast, and inventory operations accept explicit Character guids.
 //!
-//! # PROD-SAFETY GATE
-//! The whole module is behind `#![cfg(feature = "debug_reducers")]` — with the feature OFF (the
-//! default, so a plain `spacetime build` / `cargo build` and any production publish) this file
-//! compiles to nothing and the reducers don't exist in the module at all. The test build / the
-//! automation harness opt in explicitly:
+//! # Feature gate
+//! `lib.rs` declares `mod debug;` behind `#[cfg(feature = "debug_reducers")]`. A default build
+//! compiles this directory out. Every `lyracore publish`, production included, builds with the
+//! feature on, so these reducers exist on every published database:
 //!
 //! ```text
 //! spacetime publish -s local --build-options='--features=debug_reducers' lyracore
 //! ```
 //!
-//! (`--build-options` is forwarded verbatim to `cargo build --target=wasm32-… --release`, so the
-//! feature reaches the wasm compile — verified against the 2.5 CLI.)
+//! `docs/danger-zones.md` is authoritative on that posture. The post-publish repair pass lives in
+//! the ungated `operations` module.
 //!
-//! # CRITICAL identity caveat (docs §6 / HANDOFF §10.2)
+//! # Caller identity
 //! A `spacetime call` runs as the **CLI identity**, which is NOT a player's bound identity. So every
 //! reducer here takes an **explicit `character_guid`/`guid`** and operates on that row directly — it
 //! MUST NOT use `entity_by_owner(ctx, ctx.sender())` (that only resolves the gateway's per-player
 //! connection identity). This is the single most important difference from the player reducers.
 //!
-//! # LAYOUT
-//! Split along the section banners after the reseed/rearm collapse: this file (`mod`) holds the
-//! world/combat/item levers + the shared `equip_into` helper; `readout` is the `DebugReadout` table +
-//! its two writers; `audit` is the class-kit/quest-chain content audits; `repair` is the consolidated
-//! post-publish repair pass; `encounter`/`instance` are the work-item 228/190 operator levers; and
-//! `fingerprint` is the catalogue-parity content hash. `lib.rs`'s single `#[cfg(feature =
-//! "debug_reducers")] mod debug;` gates the whole directory unchanged — a directory module resolves
-//! identically to a single file as far as that `cfg` and the crate-root `pub use debug::*;` are
-//! concerned.
-// NOTE: no `#![cfg(feature = "debug_reducers")]` here — `lib.rs` already gates `mod debug;` on that
-// exact feature, so repeating it inside the file is a duplicated `cfg` (clippy::duplicated_attributes)
-// that reads as a second, independent gate while adding nothing. lib.rs:175 is THE gate; if it ever
-// loses its `#[cfg]`, this whole directory compiles into production — that is what preflight check 1
-// (`cargo check --features=debug_reducers`) and the prod-safety note above lib.rs's `mod debug;` guard.
+//! # Layout
+//! This file holds the world, combat and item levers and the shared `equip_into` helper. `readout` is
+//! the `DebugReadout` table and its writers, `audit` the class-kit and quest-chain content audits,
+//! `encounter` and `instance` the operator levers, and `fingerprint` the catalogue-parity hash.
 
 mod audit;
 mod auth;
@@ -47,7 +34,6 @@ mod mail;
 mod meeting_stone;
 mod package_config;
 mod readout;
-mod repair;
 mod runtime_script;
 
 pub use audit::*;
@@ -60,7 +46,6 @@ pub use mail::*;
 pub use meeting_stone::*;
 pub use package_config::*;
 pub use readout::*;
-pub use repair::*;
 pub use runtime_script::*;
 
 use lyracore_shared::{constants, spatial};
@@ -205,12 +190,6 @@ pub fn debug_apply_damage(
 /// (`health = 0` + `dead = true`, then the client shows Release Spirit — vanilla 1.12 has no death
 /// opcode, `UNIT_FIELD_HEALTH == 0` is the sole signal); a CREATURE becomes a corpse (`dead = true`,
 /// disengaged, decay timer armed, loot rolled onto the corpse).
-///
-/// Routes through the SAME shared kill path combat uses (`combat::kill_player` / `combat::kill_creature`)
-/// so a debug kill is byte-identical to a real killing blow, including channel teardown and combat-
-/// deadline zeroing — not a re-expression of the swing-loop kill logic (this doc used to sit,
-/// misattached, above `debug_apply_damage`, and claimed "the combat module has no reusable kill fn",
-/// which the body below has not been true of since `combat::kill_player`/`kill_creature` landed).
 #[reducer]
 pub fn debug_set_health(ctx: &ReducerContext, guid: u64, health: u32) -> Result<(), String> {
     let entities = ctx.db.game_world_entity();
@@ -462,10 +441,6 @@ fn resolve_debug_cast_at(
     )
 }
 
-/// Like `debug_force_cast` but directs the cast at an explicit `target_guid` instead of self —
-/// used to test targeted interrupts (e.g. Kick: caster A casts Kick on target B who is mid-cast).
-/// For interrupt testing the `lockout_ms` value is read from `game_spell.duration_ms` for the
-/// interrupting spell; change that value to verify the lockout window changes with zero engine change.
 #[reducer]
 pub fn debug_force_cast_at(
     ctx: &ReducerContext,
@@ -480,8 +455,8 @@ pub fn debug_force_cast_at(
 /// (`stats::max_health_for`/`max_power_for`, the SAME helpers `player_login` uses — not reimplemented).
 /// Health/power are refilled to the new max for the test. Also recomputes the five base attributes so
 /// the character sheet stays consistent with the new level. Thin wrapper over the shared
-/// `stats::set_character_level` core (work-item 223 factored it out so `gm::gm_command`'s `.level`
-/// reuses the SAME recompute — see that fn's doc).
+/// `stats::set_character_level` core, which `gm::gm_command`'s `.level` also uses, so both run the
+/// SAME recompute (see that fn's doc).
 #[reducer]
 pub fn debug_set_level(
     ctx: &ReducerContext,
@@ -520,7 +495,7 @@ pub fn debug_clear_creatures(ctx: &ReducerContext, map_id: u32) -> Result<(), St
     Ok(())
 }
 
-/// Stamp a `game_ground_area` at `caster_guid`'s position from `spell_id`'s area effect (118 test hook):
+/// Stamp a `game_ground_area` at `caster_guid`'s position from `spell_id`'s area effect (test hook):
 /// looks up the spell header + its periodic-area effect (the one with a radius + period) and inserts the
 /// zone, exactly as an `E_PERSISTENT_AREA` cast would — so the tick engine can be verified server-side
 /// without a live client cast. `tick_ground_areas` then damages hostiles inside for `duration_ms`.
@@ -693,7 +668,7 @@ pub fn debug_sell_item(
 
 /// Enter AreaTrigger `trigger_id` as `character_guid` — drives `enter_areatrigger`'s shared core
 /// (`apply_enter_areatrigger`) by explicit guid for the harness: credits any "explore" quest tied to
-/// the trigger, AND (work-item 225) routes through a cross-map teleport if `trigger_id` is an imported
+/// the trigger, AND routes through a cross-map teleport if `trigger_id` is an imported
 /// `game_areatrigger_teleport` row — the same live runbook this debug twin drives for 224 exercises the
 /// Deadmines portal end-to-end without a physical CMSG_AREATRIGGER from the client.
 #[reducer]
@@ -813,13 +788,13 @@ pub fn debug_spawn_gameobject(
                 gather_skill_line,
                 respawn_secs,
                 gather_gray,
-                lock_id: 0, // work-item 211: the debug spawn lever doesn't carry a lockId this slice
-                size: 0.0,  // no dump size — the gateway renders this at 1.0
+                lock_id: 0,
+                size: 0.0, // no dump size, the gateway renders this at 1.0
             });
     }
     let guid = (0xF110u64 << 48) | template_entry as u64;
     ctx.db.game_gameobject().guid().delete(guid);
-    // Clear any prior Pick-Lock unlock (work-item 119) for this DERIVED guid so a re-spawn of a locked
+    // Clear any prior Pick-Lock unlock for this DERIVED guid so a re-spawn of a locked
     // template is deterministically LOCKED again (the verify's negative case relies on this).
     ctx.db.game_gameobject_unlocked().go_guid().delete(guid);
     let go = ctx
@@ -836,7 +811,7 @@ pub fn debug_spawn_gameobject(
             state: 0,
             created_at: ctx.timestamp,
             respawn_at_micros: 0, // a freshly-spawned node is ready (no pending respawn)
-            instance_id: 0,       // debug spawns land in the open world (190 slice 2)
+            instance_id: 0,       // debug spawns land in the open world
             grid_x: lyracore_shared::spatial::grid_cell(x, y).0,
             grid_y: lyracore_shared::spatial::grid_cell(x, y).1,
             cell: lyracore_shared::spatial::cell_id_at(x, y),
@@ -962,8 +937,8 @@ pub fn debug_setup_gather_pool(
                 gather_skill_line,
                 respawn_secs,
                 gather_gray: 0,
-                lock_id: 0, // work-item 211: pool test templates don't carry a lockId this slice
-                size: 0.0,  // no dump size — the gateway renders this at 1.0
+                lock_id: 0,
+                size: 0.0, // no dump size, the gateway renders this at 1.0
             });
         }
         member_tbl.insert(crate::gameobject::GameObjectPoolMember {
@@ -1128,8 +1103,8 @@ pub fn debug_begin_cast(
     )
 }
 
-/// Cast a GROUND-TARGETED spell at an explicit world point by caster guid — server-side proof of the 118
-/// phase-2 dest plumbing (the CLI owns no entity, so it can't drive the real `cast_spell_at`). Drives the
+/// Cast a GROUND-TARGETED spell at an explicit world point by caster guid — server-side proof of the
+/// ground-target dest plumbing (the CLI owns no entity, so it can't drive the real `cast_spell_at`). Drives the
 /// full `begin_cast(Some(dest))` path, so a TIMED ground spell also exercises the PendingCast dest carry.
 #[reducer]
 pub fn debug_cast_spell_at(
@@ -1239,7 +1214,7 @@ pub fn debug_fill_aura_slots(
     Ok(())
 }
 
-/// Log the reputation vendor discount (195) `player_guid` gets at a creature whose FactionTemplate is
+/// Log the reputation vendor discount `player_guid` gets at a creature whose FactionTemplate is
 /// `faction_template_id` — runs the real `vendor_discount_pct` resolution against live data (server-side
 /// proof without needing to drive a full buy, whose vendor guid >2^53 mangles through `spacetime call`).
 #[reducer]
@@ -1255,10 +1230,6 @@ pub fn debug_log_vendor_discount(
 
 // `#[reducer]`: SpacetimeDB reducers take their arguments FLAT off the wire (`spacetime call`), so a parameter struct is not available.
 #[allow(clippy::too_many_arguments)]
-/// Drive the anti-cheat movement scorer (255) by explicit guid + two positions + move times — the CLI
-/// owns no entity so it can't send a real heartbeat, this proves the live `score_and_log_movement` path
-/// inserts a `game_movement_violation` row on an anomalous delta (and none on a legit one). Server-side
-/// verification only (never in the live movement flow).
 #[reducer]
 pub fn debug_score_movement(
     ctx: &ReducerContext,
@@ -1405,17 +1376,10 @@ pub fn debug_accept_quest(
     crate::actor::accept_quest(ctx, character_guid, giver_guid, quest_entry)
 }
 
-/// 279 relay-stress: ONE transaction shaped like the 277 killer — the relay-carried rows (a quest
+/// Relay-stress: ONE transaction — the relay-carried rows (a quest
 /// kill credit for `victim_entry` and an item grant). The wire test asserts the client still
 /// receives SMSG_QUESTUPDATE_ADD_KILL and SMSG_ITEM_PUSH_RESULT out of this fat transaction — the
 /// delivery guarantee the coordinator relay migration exists to provide.
-///
-/// `junk_rows` used to pad the transaction with `game_creature_move_event` inserts (rows no
-/// subscription matched, reaped by the old 1s event TTL) as ballast for the fat-transaction/AOI-churn
-/// relay-drop class. That table has had no gateway subscriber since perf 2.3 (`gc.rs`), so those
-/// inserts stopped being ballast and became a pure leak — deleted here, not rerouted. Kept as
-/// an accepted-but-ignored arg so an existing caller passing a nonzero value doesn't hit an arity
-/// error; it just no longer does anything.
 #[reducer]
 pub fn debug_stress_relay(
     ctx: &ReducerContext,
@@ -1427,7 +1391,7 @@ pub fn debug_stress_relay(
     if junk_rows > 0 {
         spacetimedb::log::warn!(
             "debug_stress_relay: ignoring junk_rows={junk_rows} — the game_creature_move_event \
-             ballast it padded was retired as a dead-table leak (#357); pass 0"
+             ballast is no longer supported; pass 0"
         );
     }
     crate::quest::on_creature_killed(ctx, character_guid, victim_entry);
@@ -1448,7 +1412,7 @@ pub fn debug_grant_quest(
     crate::actor::stage_quest(ctx, character_guid, quest_entry)
 }
 
-/// Force-expire `character_guid`'s `quest_entry` (work-item 194) — the harness twin of the timed-quest
+/// Force-expire `character_guid`'s `quest_entry`, the harness twin of the timed-quest
 /// tick (`quest::quest_timer_pass`), for the runbook: verify `SMSG_QUESTUPDATE_FAILEDTIMER` fires on
 /// the wire and the quest is re-acceptable, without waiting out `limit_time` seconds live.
 #[reducer]
@@ -1463,7 +1427,7 @@ pub fn debug_expire_quest(
     crate::quest::debug_force_expire(ctx, character_guid, quest_entry)
 }
 
-/// Share `quest_entry` from `character_guid` to its party (work-item 194) — drives
+/// Share `quest_entry` from `character_guid` to its party, drives
 /// `push_quest_to_party` by explicit guid (the CLI identity owns no entity to resolve via
 /// `ctx.sender()`).
 #[reducer]
@@ -1547,10 +1511,6 @@ pub fn debug_kill_creature(
     }
 }
 
-/// Kill the nearest LIVE creature of `creature_entry` to `killer_guid`, crediting the killer — same shared
-/// killing-blow path as [`debug_kill_creature`] but selects the target SERVER-SIDE by entry, so a test can
-/// advance a kill quest with only small args (the creature's own guid is a u64 > 2^53 the CLI `spacetime
-/// call` mangles). Used to verify kill-feedback and the live quest-log update end to end.
 #[reducer]
 pub fn debug_kill_nearest(
     ctx: &ReducerContext,
@@ -1584,7 +1544,7 @@ pub fn debug_skin_nearest(ctx: &ReducerContext, character_guid: u64) -> Result<(
     let looter = crate::helpers::live_entity(ctx, character_guid)
         .map_err(|_| format!("skinner {character_guid} not in world"))?;
     // A skinnable target: a dead non-player BEAST corpse not yet skinned, in the looter's OWN
-    // (map, instance) partition (190 slice 2 — mirrors `loot::can_skin`'s live gate, so the
+    // (map, instance) partition (mirrors `loot::can_skin`'s live gate, so the
     // debug lever can never find a corpse the real skin path would refuse). Same-partition scan
     // via `crate::helpers::nearest_entity`.
     let corpse_guid = crate::helpers::nearest_entity(ctx, &looter, |e| {
@@ -1870,28 +1830,26 @@ pub fn debug_reset_talents(
     crate::talent::do_reset_talents(ctx, character_guid, trainer_guid).map(|_| ())
 }
 
-/// Floor for a dedicated per-instance tick interval (work-item 229's honesty addendum: every firing
-/// is a transaction on the ONE serialized commit stream — 10 instances at 100ms is already 100
-/// extra transactions/sec preempting player actions; anything tighter than 50ms is a foot-gun with
-/// no gameplay payoff at 1.12 animation cadences).
+/// Floor for a dedicated per-instance tick interval. Every firing is a transaction on the ONE
+/// serialized commit stream: 10 instances at 100ms is already 100 extra transactions/sec preempting
+/// player actions. Anything tighter than 50ms has no gameplay payoff at 1.12 animation cadences.
 const INSTANCE_TICK_MS_FLOOR: u64 = 50;
-/// Ceiling for `debug_arm_instance_tick` (229 review): 10 minutes — far beyond any sane cadence
-/// (the pause substitute the runbook suggests is seconds, not minutes), and small enough that
-/// `tick_ms * 1000` can never overflow `i64` into a NEGATIVE interval (a negative scheduled-table
-/// interval risks continuous refiring — the exact commit-stream flood the floor exists to prevent).
+
+/// Ceiling for `debug_arm_instance_tick`: bounds `tick_ms` so `tick_ms * 1000` never overflows into
+/// a negative interval, which would refire continuously.
 const INSTANCE_TICK_MS_CEIL: u64 = 600_000;
 
-/// Arm (or re-arm) a DEDICATED creature-tick row for `instance_id` at `tick_ms` (work-item 229): that
+/// Arm (or re-arm) a DEDICATED creature-tick row for `instance_id` at `tick_ms`: that
 /// instance's creature passes then fire on THIS row at its own cadence, and the catch-all row skips
 /// the instance (coverage is a partition — see `TickScope` in creatures/ai.rs). The global due-time
 /// passes (decay/respawn/regen/combat-drop) STAY on the catch-all row for all instances, so this knob
-/// only smooths movement/AI latency — per the item's honest bound it buys NO parallel throughput and
+/// only smooths movement/AI latency. It buys NO parallel throughput, and
 /// each firing taxes the shared serialized commit stream; use tight cadences sparingly and read the
 /// once-a-minute "pass rows-visited" log line to see what each row actually scans.
 ///
-/// 190 slice 2 LANDED: `instance::create_instance` inserts exactly this row shape (500ms default)
-/// and the instance reap (`instance::teardown_instance`) deletes it — `debug_disarm_instance_tick`'s
-/// body. This reducer remains the operator RETUNE lever for a live instance's cadence.
+/// `instance::create_instance` inserts exactly this row shape (500ms default) and
+/// `instance::teardown_instance` deletes it, as `debug_disarm_instance_tick` does. This reducer is
+/// the operator RETUNE lever for a live instance's cadence.
 /// Idempotent per instance (replaces any existing dedicated row).
 #[reducer]
 pub fn debug_arm_instance_tick(
@@ -1905,7 +1863,7 @@ pub fn debug_arm_instance_tick(
         );
     }
     if tick_ms < INSTANCE_TICK_MS_FLOOR {
-        return Err(format!("tick_ms {tick_ms} below the {INSTANCE_TICK_MS_FLOOR}ms floor (serialized commit-stream tax — see work-item 229)"));
+        return Err(format!("tick_ms {tick_ms} below the {INSTANCE_TICK_MS_FLOOR}ms floor (serialized commit-stream tax)"));
     }
     if tick_ms > INSTANCE_TICK_MS_CEIL {
         return Err(format!("tick_ms {tick_ms} above the {INSTANCE_TICK_MS_CEIL}ms ceiling (overflow guard — see the const's doc)"));
@@ -1928,10 +1886,10 @@ pub fn debug_arm_instance_tick(
     Ok(())
 }
 
-/// Remove the dedicated creature-tick row for `instance_id` (work-item 229) — coverage of that
+/// Remove the dedicated creature-tick row for `instance_id`, coverage of that
 /// instance returns to the catch-all row on its next firing (the `TickScope` rebuild is per firing),
 /// so its creatures keep ticking at the global 0.5s cadence; nothing is ever stranded. This is also
-/// the future instance-reap's tick-row cleanup (190 slice 2).
+/// the future instance-reap's tick-row cleanup.
 #[reducer]
 pub fn debug_disarm_instance_tick(ctx: &ReducerContext, instance_id: u64) -> Result<(), String> {
     if instance_id == crate::creatures::GLOBAL_TICK_INSTANCE {
@@ -1995,7 +1953,7 @@ pub fn debug_verify_combat_regen(ctx: &ReducerContext, character_guid: u64) -> R
 }
 
 /// Cast `spell_id` as `character_guid` THROUGH the spellbook gate (`knows_spell`) — the by-guid mirror of
-/// the sender-bound `cast_spell`, so a test can verify the learnable-spell gate (rank 27 #1): the cast is
+/// the sender-bound `cast_spell`, so a test can verify the learnable-spell gate: the cast is
 /// rejected until the spell is in the baseline kit OR learned (e.g. via an ability talent), then accepted.
 /// Unlike `debug_cast_at` (which drives `resolve_cast_at` and BYPASSES the gate), this exercises the gate.
 #[reducer]
@@ -2063,7 +2021,7 @@ pub fn debug_seed_scenario_fixtures(ctx: &ReducerContext) {
     // row_count: quest 50900 (1) + how many of the 3 scenario NPC templates (questgiver 51003,
     // vendor 51004, weapon master 51005) are present after this call — an anchor-row proxy for the
     // fixture's full spread across quest/text/objective/reward/vendor/trainer tables, not an exact
-    // total (work-item 216 provenance stamp).
+    // total.
     let quest = ctx
         .db
         .game_quest_template()

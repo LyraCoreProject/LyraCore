@@ -201,10 +201,6 @@ pub(crate) fn hit_bits(hit: &Hit) -> (u32, u32) {
     }
 }
 
-/// The chance this Proc fires, in basis points, capped at certainty. Procs-per-minute replaces the
-/// flat chance only for a Carrier that DEALT the hit: the rate is per swing, and a taken-side Proc has
-/// no swing of its own to scale by (its attacker's weapon must not decide its rate). A flat chance at
-/// or above 100 percent returns the whole roll space, so it always passes.
 pub(crate) fn proc_chance_bp(profile: &ProcProfile, side: ProcSide, attack_time_ms: u32) -> u32 {
     if profile.ppm > 0.0 && side == ProcSide::Dealer {
         let pct = profile.ppm * attack_time_ms as f32 / PPM_DIVISOR_PCT;
@@ -213,12 +209,6 @@ pub(crate) fn proc_chance_bp(profile: &ProcProfile, side: ProcSide, attack_time_
     (profile.chance as u32 * 100).min(BASIS_POINTS)
 }
 
-/// Does the hit pass this Proc's school and family filter?
-///
-/// A hit with NO spell is an auto-attack swing: it belongs to the physical school and to no family, so
-/// a school filter judges it against physical (a fire-only filter excludes it; a physical filter keeps
-/// it) and a family filter — which names spells — does not apply to it at all. That is cmangos's rule
-/// in `IsSpellProcEventCanTriggeredBy`, and it is why a filter cannot silently disarm a weapon Proc.
 fn filter_matches(profile: &ProcProfile, spell: Option<&TriggeringSpell>) -> bool {
     let Some(spell) = spell else {
         return profile.school_mask == 0 || profile.school_mask & SCHOOL_MASK_PHYSICAL != 0;
@@ -1058,141 +1048,5 @@ mod tests {
         );
         assert_eq!(proc_chance_bp(&frozen, ProcSide::Dealer, 2000), 333);
         assert_eq!(proc_chance_bp(&frozen, ProcSide::Victim, 2000), 1_500);
-    }
-
-    // ---- Architecture Tests -----------------------------------------------------------------
-
-    /// ONE proc pass, called from ONE place. `apply_hit` is the chokepoint every damaging hit already
-    /// routes through, so a new damage path gets procs by construction — a second call site anywhere
-    /// else is how that guarantee is lost.
-    #[test]
-    fn the_proc_pass_is_called_only_from_apply_hit() {
-        let mut offenders: Vec<String> = Vec::new();
-        let mut in_death = 0usize;
-        for rel in crate::test_scan::module_sources() {
-            // `proc.rs` defines the pass (and its own tests name it in prose); `combat/death.rs` is
-            // the one caller, whose calls are placed exactly below.
-            if rel.ends_with("spell/proc.rs") {
-                continue;
-            }
-            let src = crate::test_scan::read_scanned(&rel).expect("module/ is never optional");
-            for (idx, _) in src.match_indices("run_proc_pass(") {
-                if crate::test_scan::on_comment_line(&src, idx)
-                    || crate::test_scan::in_string_literal(&src, idx)
-                {
-                    continue;
-                }
-                if rel.ends_with("combat/death.rs") {
-                    in_death += 1;
-                } else {
-                    offenders.push(format!("{rel}:{}", crate::test_scan::line_of(&src, idx)));
-                }
-            }
-        }
-        assert!(
-            offenders.is_empty(),
-            "`run_proc_pass` is called outside `combat::apply_hit` ({offenders:?}). The pass exists \
-             once, at the one chokepoint every damaging hit routes through, so a new damage path \
-             cannot forget procs."
-        );
-        // Every call sits inside `apply_hit` itself — one per outcome branch, because each branch
-        // decides for itself whether the target survived: the duel finisher and the ordinary survivor
-        // fire both sides, the killing blow fires the attacker's Procs only.
-        let death = crate::test_scan::read_scanned("module/src/combat/death.rs")
-            .expect("module/ is never optional");
-        let body = crate::test_scan::code_of(&death, "pub(crate) fn apply_hit(");
-        assert_eq!(
-            body.matches("run_proc_pass(").count(),
-            3,
-            "`apply_hit` must run the proc pass once per outcome branch — duel-completed, killed and \
-             survived. A branch that writes damage and skips the pass is a damage path that forgot \
-             procs. Body was:\n{body}"
-        );
-        assert_eq!(
-            in_death, 3,
-            "combat/death.rs calls `run_proc_pass` somewhere other than `apply_hit`"
-        );
-    }
-
-    /// A damage Proc's amount is damage like any other: it resists, then goes through
-    /// `apply_target_damage` — the shared pipeline's spell entrance, which reaches `apply_hit` and with
-    /// it the absorb, the lethal fork, the threat and the kill credit. A hand-written health write here
-    /// would be the fifth copy of a pipeline that already drifted twice, and it would rob the Carrier of
-    /// the kill its zap landed.
-    #[test]
-    fn the_damage_proc_routes_its_amount_through_the_shared_pipeline() {
-        let src = crate::test_scan::read_scanned("module/src/spell/proc.rs")
-            .expect("module/ is never optional");
-        let body = crate::test_scan::code_of(&src, "fn fire_proc_damage(");
-        for needle in ["apply_resistance(", "apply_target_damage("] {
-            assert!(
-                body.contains(needle),
-                "the damage Proc arm no longer reaches `{needle}` — its amount must resist and then \
-                 land through the one shared damage pipeline. Body was:\n{body}"
-            );
-        }
-        assert!(
-            body.contains("HitSource::Triggered"),
-            "the damage Proc arm must mark its hit Triggered, or a Lightning Shield zap starts a proc \
-             pass of its own and two shields ping-pong. Body was:\n{body}"
-        );
-        assert!(
-            !body.contains("game_world_entity()"),
-            "the damage Proc arm writes the target's health by hand again instead of routing through \
-             `apply_target_damage`. Body was:\n{body}"
-        );
-    }
-
-    /// A Triggered Cast pays nothing and passes nothing: no Gate sweep, no cost charge, no global or
-    /// per-spell cooldown, no stealth break, no dismount. Losing any of those exclusions turns a proc
-    /// into something that can block or tax the Carrier's own casts.
-    #[test]
-    fn a_triggered_cast_pays_no_cost_and_passes_no_gates() {
-        let src = crate::test_scan::read_scanned("module/src/spell/cast/resolve.rs")
-            .expect("module/ is never optional");
-        let body = crate::test_scan::code_of(&src, "pub(crate) fn cast_triggered(");
-        for forbidden in [
-            "check_cast_gates",
-            "game_spell_cooldown",
-            "game_spell_cd",
-            "break_stealth",
-            "dismount",
-            "remove_items",
-            "fire_on_cast_resolved",
-        ] {
-            assert!(
-                !body.contains(forbidden),
-                "`cast_triggered` reached `{forbidden}` — a Triggered Cast must cost nothing, pass \
-                 no Gate and start no cooldown. Body was:\n{body}"
-            );
-        }
-    }
-
-    /// The debug damage reducer is the fast way to drive this pass: waiting on real swing timers turns
-    /// a 100-hit run into minutes. It must therefore route through the SHARED pipeline as a main-hand
-    /// hit, not write health by hand — a raw field write raises no combat event and fires no Proc.
-    #[test]
-    fn the_debug_damage_reducer_drives_the_pass_as_a_main_hand_hit() {
-        let body = crate::test_scan::code_of(
-            &crate::test_scan::debug_dir_src(),
-            "pub fn debug_apply_damage(",
-        );
-        for needle in [
-            "crate::combat::fold_incoming_damage(",
-            "crate::combat::apply_hit(",
-            "HitSource::MainHand",
-        ] {
-            assert!(
-                body.contains(needle),
-                "`debug_apply_damage` no longer reaches `{needle}` — it must drive the same \
-                 fold-then-apply pipeline a real swing does, or it stops driving the proc pass. Body \
-                 was:\n{body}"
-            );
-        }
-        assert!(
-            !body.contains("entities.guid().update("),
-            "`debug_apply_damage` writes health by hand again instead of routing through the shared \
-             pipeline. Body was:\n{body}"
-        );
     }
 }

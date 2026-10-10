@@ -10,14 +10,6 @@ use spacetimedb::{table, Identity, ReducerContext, ScheduleAt, Table, Timestamp}
 use super::{fire_pending_cast, fire_spell_impact, tick_auras, tick_ground_areas};
 use crate::WorldEntity;
 
-// ===========================================================================================
-//  Spell definition tables [static] — hand-authored OR importer-filled from Spell.dbc. Public
-//  (reference data the client/gateway read). No Timestamp → SQL/seed-loadable.
-// ===========================================================================================
-
-/// A castable spell's **header** — the whole-spell scalars (mapped ~1:1 from `SpellEntry`). The
-/// per-effect behavior lives in `game_spell_effect`; this row carries only what's shared by every
-/// effect of the spell (duration, school, dispel category, GCD/cost/cast-time, stacking bound). [static]
 #[table(accessor = game_spell, public)]
 pub struct Spell {
     #[primary_key]
@@ -56,7 +48,7 @@ pub struct Spell {
     #[default(0)]
     pub stances: u8,
     /// SpellFamilyName (Spell.dbc `spell_class_set` — MAGE=3, WARRIOR=4, …; 0 = generic). With
-    /// `family_flags` this is how a spell MODIFIER names its affected spells (264): a modifier aura
+    /// `family_flags` this is how a spell MODIFIER names its affected spells: a modifier aura
     /// applies to a cast iff family_name matches AND `family_flags & modifier_mask != 0`.
     /// END-appended + `#[default(0)]` → auto-migrates. [data]
     #[default(0)]
@@ -120,8 +112,8 @@ pub struct SpellEffect {
     pub enters_combat: bool,
 }
 
-/// One REAGENT a spell consumes (work-item 282: the real multi-reagent recipe model that replaced
-/// the hardcoded `cast::RECIPES` map). Filled by the importer from `Spell.dbc` `Reagent[1-8]` /
+/// One REAGENT a spell consumes: the real multi-reagent recipe model that replaced
+/// the hardcoded `cast::RECIPES` map. Filled by the importer from `Spell.dbc` `Reagent[1-8]` /
 /// `ReagentCount[1-8]` during the wholesale spell import — every real recipe (and any reagent-
 /// consuming spell) carries its true mats here, keyed by the REAL vanilla spell id, so the craft
 /// gate resolves by data instead of a hardcoded id list. Module-private (the craft reducer reads
@@ -179,7 +171,7 @@ pub struct SpellProcEvent {
 /// columns are the **frozen typed snapshot** (computed once at apply) so periodic ticks + combat
 /// stat-reads are self-contained — NO template/effect re-join on the hot path. [event]
 ///
-/// `by_expiry` (work-item 232) is a plain INDEX ADD over the already-existing `expires_at` column — no
+/// `by_expiry` is a plain INDEX ADD over the already-existing `expires_at` column, no
 /// new column, no default, no data migration; a schema/metadata-only change on this gateway-SUBSCRIBED
 /// table (verified by `gateway/tests/schema_parity.rs`, which checks columns/bindings, not indexes).
 /// `scheduler::tick_auras`'s expiry pass range-scans `by_expiry().filter(..=now)` instead of `.iter()`ing
@@ -275,21 +267,11 @@ pub struct Aura {
     /// Frozen internal-cooldown length. 0 = no cooldown (fire as often as the roll allows).
     #[default(0u32)]
     pub proc_icd_ms: u32,
-    /// Micros-since-epoch this Proc is ready again. 0 = ready now; stamped `now + proc_icd_ms` on a fire.
     #[default(0i64)]
     pub proc_ready_micros: i64,
 }
 
-// UNIT-keyed character-owned sweep (the warm-handoff hot-state audit). `Aura`'s columns
-// name ANY unit (`target_guid`/`caster_guid` — creatures have auras too), never `character_guid`/
-// `player_guid`/`owner_guid`, so `tripwires.rs`'s `character_owned_tripwire` never flags this table and no
-// marker was mandatory. That silence is exactly why the TRANSFER half went missing while the DELETE
-// half got hand-rolled straight into `world::cascade_delete_character` (see that fn's own comment,
-// "auras ON the character... the character_owned tripwire exempts the tables"): a warm handoff carried
-// every manifest table but dropped a mid-fight buff, a DoT, a HoT, or a Rogue's Stealth on the floor —
-// silently, because nothing here ever claimed otherwise. Scoped to `target_guid == character_guid`,
-// the exact predicate `cascade_delete_character`'s block already uses; a mob's own aura, or a debuff
-// the character CAST on someone else, is untouched either way (`caster_guid` never gates this sweep).
+// Transfer and deletion own auras on the Character. Auras cast on other units remain untouched.
 crate::character_owned!(delete, fn sweep_delete_game_aura(ctx, character_guid) {
     let auras = ctx.db.game_aura();
     let ids: Vec<u64> = auras.by_target().filter(&character_guid).map(|a| a.id).collect();
@@ -400,7 +382,7 @@ pub struct SpellCastEvent {
     // cast each spell once). END-appended + #[default(0u32)] → additive auto-migration.
     #[default(0u32)]
     pub cooldown_ms: u32,
-    // PUSHBACK payload (work-item 039): the number of milliseconds added to the in-progress timed
+    // PUSHBACK payload: the number of milliseconds added to the in-progress timed
     // cast. The Gateway relays SMSG_SPELL_DELAYED{guid, delay_time}. Kind names the signal; this
     // value remains zero on every other kind and preserves decoding for old rows.
     // END-appended + #[default(0u32)] → additive auto-migration (the publish-migration rule).
@@ -408,17 +390,17 @@ pub struct SpellCastEvent {
     pub delay_ms: u32,
     // EFFECTIVE health restored to the primary target by this cast (overheal excluded; summed
     // across E_HEAL effects). >0 on the cast-GO row → the gateway relays SMSG_SPELLHEALLOG (the
-    // green floating number + combat-log line, work-item 251). Binding hand-synced (see the
+    // green floating number + combat-log line). Binding hand-synced (see the
     // delay_ms note above). END-appended + #[default(0u32)] → additive auto-migration.
     #[default(0u32)]
     pub healed: u32,
-    // Legacy compatibility field on a PROC_LOG row (114), such as Seal of Righteousness damage on a
+    // Legacy compatibility field on a PROC_LOG row, such as Seal of Righteousness damage on a
     // landed melee swing. The Gateway sends only SMSG_SPELLNONMELEEDAMAGELOG. An on-next-swing fire
     // uses GO with is_completion=true because the client holds a pending cast for it.
     // END-appended + #[default(false)] -> additive auto-migration.
     #[default(false)]
     pub is_proc_log: bool,
-    // The melee swing outcome an on-next-swing FIRE row rode (114): CombatEvent hit_info codes
+    // The melee swing outcome an on-next-swing FIRE row rode: CombatEvent hit_info codes
     // (0 normal, 1 crit, 2 miss, 3 dodge, 4 parry, ...). The relay shapes the SMSG_SPELL_GO miss
     // list from it when damage == 0 — the client then prints the yellow "Your Heroic Strike
     // missed/was dodged/was parried" line instead of a white MISS. 0 (normal) on every other row.
@@ -461,18 +443,6 @@ pub struct SpellCastEvent {
 }
 
 impl SpellCastEvent {
-    /// A baseline `SpellCastEvent` row for `caster_guid`/`spell_id`: `id`=0, `created_at`=`ctx.timestamp`,
-    /// and the AOI address (`map_id`/`instance_id`/`grid_x`/`grid_y`) stamped from ONE
-    /// [`crate::helpers::grid_of`] lookup — every other field at its neutral zero/false. Replaces the
-    /// ~20-field literal + 4× `grid_of` copy-paste this used to require at every call site (perf catalog
-    /// audit, 2026-08-06): a call site now overrides only the 2-4 fields that carry real signal, via
-    /// struct-update syntax, e.g.
-    /// `SpellCastEvent { is_interrupted: true, ..SpellCastEvent::signal(ctx, caster_guid, spell_id,
-    /// SpellCastEventKind::Interrupt) }`.
-    ///
-    /// Use [`Self::signal_at`] instead when the caster's live [`WorldEntity`] is already in hand — it
-    /// skips this lookup entirely (a landed swing carrying a seal proc + a queued strike used to pay the
-    /// `game_world_entity` PK lookup up to twelve times over for what is, in every case, the SAME row).
     pub(crate) fn signal(
         ctx: &ReducerContext,
         caster_guid: u64,
@@ -600,7 +570,7 @@ pub struct AuraSchedule {
     pub scheduled_at: ScheduleAt,
 }
 
-/// A GROUND-AoE persistent damage area (118): a fixed-position zone spawned by an `E_PERSISTENT_AREA`
+/// A GROUND-AoE persistent damage area: a fixed-position zone spawned by an `E_PERSISTENT_AREA`
 /// cast (Consecration / Blizzard / Rain of Fire / Flamestrike's patch). `tick_ground_areas` re-scans
 /// `radius_yd` around `(x,y,z)` every `period_ms` and applies `amount` `school_mask` damage to every
 /// hostile inside (via the shared apply_resistance→apply_target_damage path), reaping the row at
@@ -627,7 +597,7 @@ pub struct GroundArea {
     pub expires_at: Timestamp,
 }
 
-/// The client-visible half of a ground area (118): a vanilla DYNAMICOBJECT — the 5875 client draws
+/// The client-visible half of a ground area: a vanilla DYNAMICOBJECT — the 5875 client draws
 /// Consecration's ground swirl from a DynamicObject CREATE (DYNAMICOBJECT_SPELLID → SpellVisual),
 /// NEVER from the cast packets alone (live find: no swirl rendered). One row per live
 /// `game_ground_area`, guid = (0xF100 << 48) | area id (HIGHGUID_DYNAMICOBJECT, disjoint from the
@@ -647,7 +617,7 @@ pub struct DynamicObject {
     pub radius_yd: f32,
 }
 
-/// Drives the ground-AoE damage tick (118). [server]
+/// Drives the ground-AoE damage tick. [server]
 #[table(accessor = game_ground_area_schedule, scheduled(tick_ground_areas))]
 pub struct GroundAreaSchedule {
     #[primary_key]
@@ -683,7 +653,7 @@ pub struct PendingCast {
     // auto-migration (the publish-migration rule).
     #[default(0)]
     pub pushback_count: u8,
-    // GROUND-TARGET dest (118 phase 2): the clicked ground point for a ground-AoE cast (Flamestrike patch,
+    // GROUND-TARGET dest: the clicked ground point for a ground-AoE cast (Flamestrike patch,
     // Blizzard, Rain of Fire) so a TIMED ground cast carries its dest from begin_cast to the completion
     // (`fire_pending_cast` → `resolve_cast_at`). `has_dest` distinguishes "no dest" from a legitimate
     // (0,0,0) point. Same END-appended `#[default]` additive auto-migration as `pushback_count`; still no

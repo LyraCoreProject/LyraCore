@@ -24,7 +24,7 @@ use crate::game_world_entity;
 use crate::loot::LOOT_RANGE_SQ;
 
 // ===========================================================================================
-//  SKINNING (professions slice 2) — a skill-gated corpse interaction, modeled on `loot_money`
+//  SKINNING — a skill-gated corpse interaction, modeled on `loot_money`
 // ===========================================================================================
 
 /// The leather a skin yields — the REAL vanilla "Light Leather" `game_item_template` TRADE_GOODS entry
@@ -150,8 +150,8 @@ pub(crate) fn skin_corpse(
         looter.dead,
         corpse.is_player(),
         corpse.dead,
-        // Map + instance (190 slice 2): `can_skin`'s `same_map` conjunct now carries the
-        // instance-equality clause too — the corpse is a `game_world_entity` row, slice-1-tagged.
+        // Map + instance: `can_skin`'s `same_map` conjunct now carries the
+        // instance-equality clause too — the corpse is a `game_world_entity` row, instance-tagged.
         corpse.map_id == looter.map_id && corpse.instance_id == looter.instance_id,
         dist_sq,
         entry_is_beast(ctx, corpse.entry),
@@ -163,11 +163,11 @@ pub(crate) fn skin_corpse(
         return Err("corpse still has loot".to_string());
     }
 
-    // Grant leather — DATA-DRIVEN (work-item 210): the corpse's creature template names a
+    // Grant leather, DATA-DRIVEN: the corpse's creature template names a
     // `skin_loot_id` (cmangos `skinning_loot_template`, level-banded across many creatures sharing a
     // band); roll it and grant every winner. `skin_loot_id == 0` (unimported / a seeded/test beast) OR
     // an empty/no-win roll falls back to the flat `LEATHER_ENTRY`/`LEATHER_COUNT` — byte-identical to
-    // the pre-210 alpha, so a skin never comes up empty-handed. `?`-rollback: ANY winner's `grant_item`
+    // a plain flat drop, so a skin never comes up empty-handed. `?`-rollback: ANY winner's `grant_item`
     // failing (full bag) rolls back the WHOLE skin BEFORE the corpse is marked skinned (the reducer tx
     // rolls the whole call back), so no partial skin — retry after freeing space, exactly the COOKING
     // reagent-gate rollback shape.
@@ -218,7 +218,7 @@ pub(crate) fn skin_corpse(
 
 /// The small-fish FALLBACK pool — REAL low-level cmangos fish `game_item_template` entries (standard
 /// trade-goods present in the imported box). Used when a cast's zone has NO `game_fishing_loot` rows
-/// (unimported, or off-slice) — since work-item 210 the real per-zone table (`game_fishing_loot`) is
+/// (unimported, or off-slice), since the real per-zone table (`game_fishing_loot`) is
 /// tried FIRST; this is the "never comes up empty-handed" floor beneath it (mirrors the skinning
 /// `LEATHER_ENTRY` fallback). If a fish entry isn't in the imported `item_template`, `grant_item`
 /// returns Err and the whole `fish` rolls back (no half-catch) — so verify these three are in-box.
@@ -260,7 +260,7 @@ pub(crate) fn apply_fish(ctx: &ReducerContext, guid: u64) -> Result<(), String> 
         crate::skill::skill_line::FISHING,
         crate::skill::APPRENTICE_CAP,
     );
-    // Zone-keyed catch (work-item 210, resolver hoisted to `terrain::zone_id_at`): resolve the
+    // Zone-keyed catch (resolver hoisted to `terrain::zone_id_at`): resolve the
     // caster's zone and roll its real table; an unresolved zone (unimported terrain/AreaTable, or
     // off-slice) rolls an empty Vec, which `roll_loot_rows` correctly turns into zero winners —
     // `pick_caught_fish` then floors to the flat pool either way. `?`-rollback: a full bag fails here
@@ -390,8 +390,7 @@ pub(crate) fn apply_enchant_item(
                                     // Consume the enchanting mats FIRST (the `?`-rollback point): not enough Strange Dust → Err here,
                                     // BEFORE the instance is stamped, so the item is unchanged and no skill is gained.
     crate::items::remove_items(ctx, guid, DISENCHANT_MATS_ENTRY, DISENCHANT_MATS_COUNT)?;
-    // Stamp the enchant onto THIS instance (the per-instance overlay). The overlay folds through
-    // `equipped_stat_bonus` for every effective-* consumer — server-real, no client display this slice.
+
     let instances = ctx.db.game_item_instance();
     inst.enchant_id = enchant_id;
     instances.guid().update(inst);
@@ -410,7 +409,7 @@ pub(crate) fn apply_enchant_item(
 mod tests {
     use super::*;
 
-    // ---- SKINNING (professions slice 2) ----
+    // ---- SKINNING ----
 
     /// The SKIN gate: every reject condition fails with its reason, and ONLY an alive looter at a dead,
     /// in-range, same-map BEAST corpse that isn't already skinned proceeds (with sufficient Skinning skill).
@@ -510,13 +509,6 @@ mod tests {
         assert_eq!(LEATHER_COUNT, 1);
     }
 
-    // ---- FISHING (completing the 13) ----
-
-    /// Re-scoped (was `fish_grants_one_pooled_fish_and_climbs_fishing`): the "grants one" / "climbs
-    /// fishing" narrative modeled `apply_fish`'s grant+skill-up with a local loop that never calls
-    /// `apply_fish` (a ctx fn) — not exercised here. What's real and worth guarding: the pool itself,
-    /// which `apply_fish` indexes with `ctx.random::<usize>() % FISH_POOL.len()` — a drift guard on its
-    /// exact non-empty, real-entry contents (an empty pool would divide by zero at cast time).
     #[test]
     fn fish_pool_is_nonempty_and_lists_the_real_low_level_fish_entries() {
         assert!(
@@ -549,12 +541,6 @@ mod tests {
         assert_eq!(pick_caught_fish(None, 1), FISH_POOL[1]);
     }
 
-    // ---- ENCHANTING: disenchant (completing the 13) ----
-
-    /// Re-scoped (was `disenchant_consumes_item_and_grants_dust_and_skill`): the consume/grant/skill-up
-    /// narrative modeled `apply_disenchant`'s effect with local counters that never call it (a ctx fn) —
-    /// not exercised here. What's real and worth guarding: the mats entry/count `apply_disenchant` grants,
-    /// a drift guard against the wire-facing item id ever moving.
     #[test]
     fn disenchant_mats_are_the_real_strange_dust_entry() {
         assert_eq!(

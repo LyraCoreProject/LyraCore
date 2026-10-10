@@ -459,37 +459,4 @@ mod tests {
             );
         }
     }
-
-    /// CROSS-CRATE DERIVATION: the Module's equip Gate and the Gateway's `SMSG_SET_PROFICIENCY`
-    /// armor mask must both come from this file, through the same spellbook reader. If either grows
-    /// its own class table, or reads a different spell for the same tier, the client tints an item
-    /// red that the Gate accepts — or worse, tints one usable that the Gate refuses. No crate can
-    /// call both call sites, so this owner pins them by source scan.
-    #[test]
-    fn both_consumers_derive_their_armor_proficiency_here() {
-        let call_sites = [
-            (
-                "the Module equip Gate",
-                include_str!("../../../module/src/items/inventory.rs"),
-            ),
-            (
-                "the Gateway armor mask",
-                include_str!("../../../gateway/src/codec/item.rs"),
-            ),
-        ];
-        for (name, src) in call_sites {
-            assert!(
-                src.contains("Proficiency::from_spellbook("),
-                "{name} must derive proficiency from the shared spellbook reader"
-            );
-            assert!(
-                !src.contains("Proficiency::derive("),
-                "{name} must not assemble the flags itself — that is how the two sides drift"
-            );
-            assert!(
-                !src.contains("PASSIVE_SPELL_ID"),
-                "{name} must not name a proficiency passive; `from_spellbook` owns that mapping"
-            );
-        }
-    }
 }

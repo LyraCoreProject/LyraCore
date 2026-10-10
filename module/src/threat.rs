@@ -55,8 +55,7 @@ use crate::{game_melee_attack, game_world_entity};
     accessor = game_threat,
     public,
     index(accessor = by_creature, btree(columns = [creature_guid])),
-    // Perf catalog 1.17: the source side (clear_for_unit on every death/evade/logout, Feint's
-    // reduce_threat_from_source) used to full-scan the table.
+
     index(accessor = by_source, btree(columns = [source_guid]))
 )]
 pub struct ThreatEntry {
@@ -471,10 +470,6 @@ pub fn clear_all(ctx: &ReducerContext) {
 /// re-points each mob at its new top-threat source (the tank), with zero retarget-code changes. DISTINCT
 /// from Fade (an `A_MOD_COMBAT(COMBAT_THREAT)` percent on FUTURE threat folded inside `add_threat`); this
 /// is a one-shot subtraction on the EXISTING rows. A non-positive `amount` is a no-op (never ADDS threat).
-///
-/// INDEX DISCIPLINE: the caster's source rows come from the `by_source` btree (perf catalog 1.17 added
-/// it; this doc used to say the scan was unavoidable). Still collect the ids first, THEN update — never
-/// mutate while iterating. [entity]
 pub fn reduce_threat_from_source(ctx: &ReducerContext, source_guid: u64, amount: i64) {
     if amount <= 0 {
         return;

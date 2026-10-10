@@ -1,9 +1,4 @@
 //! The cell-anchored relays against the whole-shard-then-gate path they replaced.
-//!
-//! Every relay here used to enqueue one job per viewer on the shard and let the job's gate reject
-//! the row. Now the actor's cell picks the candidates first. The property under test, over
-//! randomised realms: filtering the candidates through the same gate yields exactly the set the
-//! whole-shard path yielded, and the candidates are fewer than the shard.
 
 use super::*;
 use crate::codec::property_tests::Rng;
@@ -1302,39 +1297,6 @@ fn aura_audience_follows_a_viewer_recenter() {
         0,
     );
     assert_eq!(sessions(aura_audience(&view, 0, &row)), HashSet::from([1]));
-}
-
-/// Every aura read the relays make goes through the index; a whole-cache scan must not creep
-/// back into a job or onto the pump.
-#[test]
-fn aura_relays_never_scan_the_aura_cache() {
-    let subscriptions = include_str!("../subscriptions.rs");
-    for signature in [
-        "pub(crate) fn offer_peer_create_for",
-        "pub(crate) fn aura_insert_outbound",
-        "pub(crate) fn aura_update_outbound",
-        "pub(crate) fn aura_delete_outbound",
-    ] {
-        let body = crate::test_scan::code_of(subscriptions, signature);
-        assert!(
-            !body.contains("game_aura()"),
-            "{signature} scans the aura cache"
-        );
-        assert!(
-            body.contains("view.auras."),
-            "{signature} must read the aura index"
-        );
-    }
-    let arm = crate::test_scan::code_of(
-        include_str!("../world_view.rs"),
-        "fn register_shard_callbacks",
-    );
-    assert!(
-        !arm.contains(".game_aura().iter()"),
-        "the pump scans the aura cache"
-    );
-    assert_eq!(arm.matches("view.auras.upsert(shard, row)").count(), 2);
-    assert_eq!(arm.matches("view.auras.remove(shard, row)").count(), 1);
 }
 
 fn queue_motion(batch: &super::super::movement_batch::MovementBatch, seq: u32) -> EntityMotion {

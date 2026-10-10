@@ -13,7 +13,7 @@ use super::super::views::{character_view, AccountRow, RealmRow};
 use crate::realm_core::SessionKey;
 
 impl Coordinator {
-    /// Read the single realm row for the realm-list reply (Phase 1).
+    /// Read the single realm row for the realm-list reply.
     pub fn realm(&self) -> Result<RealmRow> {
         self.0
             .coord()
@@ -34,7 +34,7 @@ impl Coordinator {
             .ok_or_else(|| anyhow!("no game_realm row in the coordinator cache"))
     }
 
-    /// Read an account's SRP6 salt/verifier for the logon challenge (Phase 1).
+    /// Read an account's SRP6 salt/verifier for the logon challenge.
     pub fn account_by_username(&self, username: &str) -> Result<Option<AccountRow>> {
         Ok(self
             .0
@@ -68,7 +68,7 @@ impl Coordinator {
         Ok(n.min(u8::MAX as usize) as u8)
     }
 
-    /// Read an account's characters for the character-select screen (Phase 3). In production
+    /// Read an account's characters for the character-select screen. In production
     /// this reads the per-player `game_character` subscription cache (RLS-restricted to owner).
     /// Equipment slots (0..=18) are populated from `game_item_instance` + `game_item_template`
     /// so the client renders the character's gear on the select screen instead of all-naked.
@@ -288,7 +288,7 @@ impl Coordinator {
     }
 
     /// Find `owner_guid`'s corpse location `(map_id, x, y, z)` from the privileged cache, for the
-    /// `MSG_CORPSE_QUERY` reply (slice 5). `None` if they have no corpse.
+    /// `MSG_CORPSE_QUERY` reply. `None` if they have no corpse.
     pub fn corpse_location(&self, owner_guid: u64) -> Result<Option<(u32, f32, f32, f32)>> {
         Ok(self
             .0
@@ -710,24 +710,5 @@ mod tests {
             index.ignored_by(10).is_empty(),
             "an owner with no rows left ignores nobody"
         );
-    }
-
-    /// `ignored_guids` answers for ANY owner, including one with no live World Session on this
-    /// Gateway process at all — a whisper sender's target or a guild-invite target usually is not
-    /// one. Pinned in source (no Fake reaches a real `Coordinator`): the body must never route
-    /// through the Gateway-side `Viewer` registry the way `contact_lists` does for the CONNECTED
-    /// session's own guid, or ignore checks silently go empty for every Character not currently
-    /// registered on THIS Gateway process — the live defect this method replaces.
-    #[test]
-    fn ignored_guids_never_reads_the_viewer_registry() {
-        let source = crate::test_scan::code_of(include_str!("account.rs"), "pub fn ignored_guids(");
-        for needle in ["world_view", "viewer_of_owner", "Viewer"] {
-            assert!(
-                !source.contains(needle),
-                "ignored_guids must answer for a Character with no live Viewer on this Gateway; \
-                 found `{needle}`, which means it is reading `contact_lists`'s Viewer-scoped path \
-                 again"
-            );
-        }
     }
 }

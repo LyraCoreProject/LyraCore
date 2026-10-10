@@ -200,13 +200,7 @@ pub(crate) fn handle_trainer<St: WorldStore + ?Sized>(
                             )),
                         )?;
                     }
-                    // Live talent-pane refresh (user bug: "talents work server-side but the UI
-                    // doesn't update"). The 1.12 TalentFrame redraws on exactly two events, and a
-                    // PASSIVE pick used to send neither: (a) SPELLS_CHANGED — the pane derives a
-                    // talent's shown rank from which RANK-SPELL is in the spellbook, so relay the
-                    // rank-spell the module just taught (SUPERCEDED replaces the previous rank's
-                    // book entry, same cmangos old-then-new wire order as the trainer path);
-                    // (b) CHARACTER_POINTS_CHANGED — push the decremented unspent counter.
+
                     if let WorldState::InWorld(iw) = &conn.state {
                         let self_guid = iw.self_guid;
                         let (teach, superseded, remaining) =

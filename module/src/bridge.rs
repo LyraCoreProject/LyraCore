@@ -1,4 +1,4 @@
-//! Addon⇄server message bridge (work-item 184) — the UI↔server RPC channel custom features ride.
+//! Addon⇄server message bridge, the UI↔server RPC channel custom features ride.
 //!
 //! Client→server: the 1.12 client's `SendAddonMessage` is `CMSG_MESSAGECHAT` with language
 //! `LANG_ADDON` (0xFFFFFFFF) and text `"<prefix>\t<message>"`. The GATEWAY intercepts those frames
@@ -6,7 +6,7 @@
 //! [`client_command`] reducer AS the player — a command handler has exactly a reducer's authority.
 //!
 //! Server→client: [`send`] inserts a [`AddonMessage`] row; the gateway relays it (COORDINATOR
-//! connection — the 279 delivery law: addon UI state must survive fat transactions) as an
+//! connection — the delivery law: addon UI state must survive fat transactions) as an
 //! addon-language whisper the client surfaces to addons as `CHAT_MSG_ADDON`.
 //!
 //! Core owns `ping`; one installed Package may register a parser, an admitted apply operation and a
@@ -149,9 +149,9 @@ pub struct PartyCommandIssuer {
 
 crate::character_owned!(delete, fn sweep_delete_game_party_command_issuer(ctx, character_guid) {
     ctx.db
-        .game_party_command_issuer()
-        .character_guid()
-        .delete(character_guid);
+.game_party_command_issuer()
+.character_guid()
+.delete(character_guid);
 });
 
 crate::character_owned!(transfer, fn sweep_transfer_game_party_command_issuer(ctx, character_guid, io) {

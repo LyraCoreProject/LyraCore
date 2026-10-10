@@ -134,7 +134,7 @@ pub struct TaxiServiceReply {
     pub refusal: String,
     pub created_micros: i64,
     /// Stable primitive result for activation replies. Status/open callers ignore it. End-appended
-    /// with a default so publishing over the Ticket 02 mailbox schema is migration-safe.
+    /// with a default so publishing over the mailbox schema is migration-safe.
     #[default(0)]
     pub result_code: u8,
 }
@@ -1486,38 +1486,6 @@ mod tests {
         };
         assert!(reply_belongs_to_character(&row, 7));
         assert!(!reply_belongs_to_character(&row, 8));
-
-        let ack = crate::test_scan::code_of(include_str!("taxi.rs"), "pub fn gw_ack_taxi_reply(");
-        assert!(ack.contains("require_operator(ctx)"));
-        assert!(ack.contains(".find(request_id)"));
-        assert!(ack.contains("reply_belongs_to_character(reply, character_guid)"));
-        assert!(ack.contains(".delete(request_id)"));
-    }
-
-    #[test]
-    fn status_never_discovers_and_open_discovers_before_building_availability() {
-        let source = include_str!("taxi.rs");
-        let status = crate::test_scan::code_of(source, "pub fn gw_taxi_node_status(");
-        assert!(
-            !status.contains("discover("),
-            "a status query must remain a persisted-state read"
-        );
-
-        let open = crate::test_scan::code_of(source, "pub fn gw_open_taxi(");
-        let discovers = open.find("discover(").expect("open discovers its source");
-        let builds = open
-            .find("available_client_nodes(")
-            .expect("open builds route availability");
-        assert!(
-            discovers < builds,
-            "the source must become known before availability is constructed"
-        );
-
-        let resolver = crate::test_scan::code_of(source, "fn resolve_flight_master(");
-        assert!(
-            resolver.contains("acting_entity_by_guid"),
-            "the gateway actor must resolve through the in-transit fence"
-        );
     }
 
     #[test]

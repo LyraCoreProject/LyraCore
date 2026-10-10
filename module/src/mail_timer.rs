@@ -180,9 +180,7 @@ fn spaced(dues: &[Timestamp], now: Timestamp) -> Vec<Timestamp> {
 
 /// Arm a timer for every Mail that has none: Mail written before the timer existed, or Mail a
 /// Transfer imported. Mail past its life expires shortly after this transaction commits, spaced
-/// by [`BACKLOG_SPACING_MICROS`]. Returns how many timers it armed. Its caller,
-/// `debug_repair_after_publish`, is a debug reducer.
-#[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
+/// by [`BACKLOG_SPACING_MICROS`]. Returns how many timers it armed.
 pub(crate) fn arm_missing(ctx: &ReducerContext) -> u64 {
     let timers = ctx.db.game_mail_timer();
     let untimed: Vec<Mail> = ctx

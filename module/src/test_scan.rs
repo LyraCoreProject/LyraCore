@@ -1,100 +1,12 @@
-//! Shared source-scan primitives for this crate's `#[cfg(test)]` tripwires. Test-only (there is no
-//! `ReducerContext` harness in this crate by design — playbook §7 — so a scan of the reducer's own
-//! source text is how a chokepoint's PRESENCE gets pinned; the SENSE of a decision should be pulled
-//! into a pure function and asserted on directly instead, wherever that is reachable — see
-//! `helpers::gate_in_transit` for the pattern).
+//! Source-scan primitives for this crate's Architecture Tests (`tripwires.rs`,
+//! `publish_safety.rs`) and the Package API's `package_test` root. Test-only.
 //!
-//! This used to be six near-identical copies (`auth.rs`, `chat.rs`, `group.rs`,
-//! `instance.rs`, `world.rs`, `transfer.rs`), and they had already drifted — two of them stripped a
-//! `// trailing comment` off an otherwise-live line, the other four only dropped a line that was
-//! ENTIRELY a comment. A needle planted in a trailing comment (`let _ = ctx; // the real call used
-//! to be here`) satisfied every `.contains()` scan built on the weak four, while doing nothing. One
-//! implementation, hardened, used everywhere in this crate.
+//! The Rust body scanners (`code_of`, `shape_of`) live in `lyracore_test_support::source_scan`.
 
 use std::io::Write;
 
-/// Isolate a fn (or struct/const/etc.) body by brace-matching from the first byte offset where
-/// `signature` appears. Panics loudly — never silently matches nothing — if the signature or a
-/// balanced `{...}` cannot be found, because a scan that can't find its target has lost its
-/// pin, not passed it.
-pub(crate) fn body_of(src: &str, signature: &str) -> String {
-    let start = src
-        .find(signature)
-        .unwrap_or_else(|| panic!("`{signature}` no longer exists in this source"));
-    let rest = &src[start..];
-    let open = rest.find('{').expect("fn has a body");
-    let mut depth = 0i32;
-    for (i, c) in rest[open..].char_indices() {
-        match c {
-            '{' => depth += 1,
-            '}' => {
-                depth -= 1;
-                if depth == 0 {
-                    return rest[open..=open + i].to_string();
-                }
-            }
-            _ => {}
-        }
-    }
-    panic!("unterminated body for `{signature}`");
-}
-
-/// Strip a Rust line comment from `line`, respecting simple double-quoted string literals so a
-/// `//` inside one (an error message containing a URL, say) is never mistaken for a comment start.
-/// Does not understand raw strings or block comments — nothing this crate scans uses either, and a
-/// miss here fails LOUD (the caller's assertion breaks), never silently.
-fn strip_line_comment(line: &str) -> &str {
-    let bytes = line.as_bytes();
-    let mut in_string = false;
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'\\' if in_string => i += 1, // skip whatever the backslash escapes, incl. `\"`
-            b'"' => in_string = !in_string,
-            b'/' if !in_string && bytes.get(i + 1) == Some(&b'/') => return &line[..i],
-            _ => {}
-        }
-        i += 1;
-    }
-    line
-}
-
-/// [`body_of`] with every comment gone — a whole comment-only line dropped entirely, a trailing
-/// comment on an otherwise-live line truncated at its `//`. Never `.contains()` a raw `body_of`
-/// result; always go through this (or [`shape_of`], for a still-stronger equality check).
-pub(crate) fn code_of(src: &str, signature: &str) -> String {
-    body_of(src, signature)
-        .lines()
-        .map(strip_line_comment)
-        .map(str::trim_end)
-        .filter(|l| !l.trim().is_empty())
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-/// [`code_of`] with every whitespace run collapsed to one space, so a body can be compared for
-/// EQUALITY (or an exact leading slice, for a larger function) instead of `.contains()`. Equality
-/// is what actually distinguishes "this body IS exactly this" from "this text appears somewhere in
-/// this body" — the distinction a `.contains()` scan can never make, and the one every comment- or
-/// dead-branch-based defeat in this codebase's history has slipped through.
-pub(crate) fn shape_of(src: &str, signature: &str) -> String {
-    code_of(src, signature)
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-// ================================================================================================
-//  Shared engine for a "raw table read outside its chokepoint" tripwire.
-// ================================================================================================
-//
-// `partition_discipline_tripwire::raw_scans` (spatial whole-table `.iter()`/`.count()`) and
-// `character_fence_tripwire::raw_lookups` (raw `game_character` point lookups) used to be ~70-line
-// near-clones of this — identical bound-handle walk-back, handle dedup and comment-line filtering
-// — and had already drifted from each other in small ways neither review caught. The exact drift
-// pattern consolidated once already, one layer up (`body_of`/`code_of`, above). One
-// engine now; the two callers differ only in which accessor(s) they watch and what counts as
-// "opens a read" they care about.
+// The engine behind the spatial-scan and transfer-fence Architecture Tests. The two callers differ
+// only in which accessors they watch and what counts as opening a read.
 
 /// `byte_idx` sits on a `//` line, i.e. it is prose rather than code.
 pub(crate) fn on_comment_line(content: &str, byte_idx: usize) -> bool {
@@ -104,7 +16,7 @@ pub(crate) fn on_comment_line(content: &str, byte_idx: usize) -> bool {
 
 /// `byte_idx` sits inside an ordinary double-quoted string literal on its line. Source scanners
 /// must not treat assertion needles as live table reads.
-pub(crate) fn in_string_literal(content: &str, byte_idx: usize) -> bool {
+fn in_string_literal(content: &str, byte_idx: usize) -> bool {
     let line_start = content[..byte_idx].rfind('\n').map(|i| i + 1).unwrap_or(0);
     let bytes = &content.as_bytes()[line_start..byte_idx];
     let mut in_string = false;
@@ -127,7 +39,7 @@ pub(crate) fn line_of(content: &str, byte_idx: usize) -> usize {
 
 /// `name` at `byte_idx` is a standalone identifier, not a substring of a longer one and not a
 /// field access (`self.entities` is somebody else's business).
-pub(crate) fn is_standalone_ident(content: &str, byte_idx: usize, name: &str) -> bool {
+fn is_standalone_ident(content: &str, byte_idx: usize, name: &str) -> bool {
     let before_ok = content[..byte_idx]
         .chars()
         .next_back()
@@ -236,57 +148,6 @@ pub(crate) fn raw_table_reads(
 //   skip ONLY when the whole optional directory is absent — if the directory is there and the
 //   named file is not, that is a PATH TYPO, and the tripwire must fail on it.
 
-/// Concatenate every file in `module/src/debug/` (the `#[cfg(feature = "debug_reducers")]`
-/// directory module split out of the former single `debug.rs`) into one blob, so a text-scan
-/// tripwire that used to `include_str!("debug.rs")` keeps seeing every debug reducer regardless of
-/// which of the seven files it landed in. Directory-read order (unspecified) is fine — every caller
-/// only substring/signature-searches, never anchors on cross-file position or file boundaries.
-pub(crate) fn debug_dir_src() -> String {
-    let dir = repo_root().join("module/src/debug");
-    let mut out = String::new();
-    for entry in
-        std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display()))
-    {
-        let path = entry.expect("readable dir entry").path();
-        if path.extension().map(|e| e == "rs").unwrap_or(false) {
-            out.push_str(
-                &std::fs::read_to_string(&path)
-                    .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display())),
-            );
-            out.push('\n');
-        }
-    }
-    out
-}
-
-/// Every `.rs` file under `module/src`, as repo-relative paths, sorted. For a CRATE-WIDE scan — the
-/// "this call exists in exactly one place" shape, which a per-file `include_str!` cannot express
-/// (a new file is exactly where a second call site would appear).
-pub(crate) fn module_sources() -> Vec<String> {
-    fn walk(dir: &std::path::Path, root: &std::path::Path, out: &mut Vec<String>) {
-        let entries =
-            std::fs::read_dir(dir).unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display()));
-        for entry in entries {
-            let path = entry.expect("readable dir entry").path();
-            if path.is_dir() {
-                walk(&path, root, out);
-            } else if path.extension().is_some_and(|e| e == "rs") {
-                let rel = path
-                    .strip_prefix(root)
-                    .expect("walked from the repo root")
-                    .to_string_lossy()
-                    .replace('\\', "/");
-                out.push(rel);
-            }
-        }
-    }
-    let root = repo_root();
-    let mut out = Vec::new();
-    walk(&root.join("module/src"), &root, &mut out);
-    out.sort();
-    out
-}
-
 /// The repo root: `module/`'s parent.
 pub(crate) fn repo_root() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -346,59 +207,6 @@ pub(crate) fn read_scanned(rel: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    /// The fixture the trailing-comment defeat looked like for real (round-1 review): a `let
-    /// _ = ctx;` no-op with the real call demoted to a trailing comment. The weak four-file version
-    /// of `code_of` (`.filter(|l| !l.trim_start().starts_with("//"))`) left that comment's text
-    /// intact, so `.contains("bump_guid_high_water")` still passed. This must now be gone.
-    #[test]
-    fn code_of_strips_a_trailing_comment_not_just_a_leading_one() {
-        let src = "fn f() {\n    let _ = 1;\n    let _ = ctx; // crate::auth::bump_guid_high_water(ctx, g);\n    // a whole-line comment naming it too: bump_guid_high_water\n}";
-        let code = code_of(src, "fn f(");
-        assert!(
-            !code.contains("bump_guid_high_water"),
-            "a needle sitting in a trailing OR a leading comment must not survive code_of. Got:\n{code}"
-        );
-        // The live code on the trailing-comment line must survive — only the comment is cut.
-        assert!(
-            code.contains("let _ = ctx;"),
-            "code_of must not eat the live half of a line. Got:\n{code}"
-        );
-    }
-
-    /// The other half of the same acceptance criterion: a `//` that is part of a STRING LITERAL —
-    /// an error message quoting a URL, say — must not be mistaken for a comment start and truncate
-    /// real code.
-    #[test]
-    fn code_of_does_not_treat_a_slash_slash_inside_a_string_literal_as_a_comment() {
-        let src = r#"fn f() {
-    Err("see https://example.com/docs for details")?;
-}"#;
-        let code = code_of(src, "fn f(");
-        assert!(
-            code.contains("https://example.com/docs"),
-            "a `//` inside a string literal must survive code_of intact — it is not a comment. Got:\n{code}"
-        );
-    }
-
-    /// A comment containing an escaped quote inside its OWN string-literal-shaped text must not
-    /// desync the in-string tracker for the rest of the line — degenerate but cheap to guard.
-    #[test]
-    fn code_of_handles_an_escaped_quote_inside_a_string_literal() {
-        let src = r#"fn f() {
-    let s = "a \"quoted\" word // not a comment";
-    let t = 1; // this IS a comment
-}"#;
-        let code = code_of(src, "fn f(");
-        assert!(
-            code.contains(r#"a \"quoted\" word // not a comment"#),
-            "escaped quotes desynced the string tracker. Got:\n{code}"
-        );
-        assert!(
-            !code.contains("this IS a comment"),
-            "the real trailing comment on the next line must still be stripped. Got:\n{code}"
-        );
-    }
-
     #[test]
     fn raw_table_reads_ignores_a_table_scan_named_inside_a_string_literal() {
         let src = r#"fn f() {
@@ -411,12 +219,6 @@ mod tests {
             found.is_empty(),
             "an assertion's forbidden-pattern needle is not a live table read: {found:?}"
         );
-    }
-
-    #[test]
-    fn shape_of_collapses_whitespace_for_exact_equality() {
-        let src = "fn f() {\n    let   x =\n        1;\n}";
-        assert_eq!(shape_of(src, "fn f("), "{ let x = 1; }");
     }
 
     // ---- the optional-tree resolver ------------------------------------------------------------
@@ -446,7 +248,10 @@ mod tests {
     fn read_scanned_reads_a_shipped_file() {
         let src = read_scanned("module/src/test_scan.rs")
             .expect("module/ is never optional, so this can never be skipped");
-        assert!(src.contains("fn read_scanned("));
+        assert_eq!(
+            src,
+            std::fs::read_to_string(repo_root().join("module/src/test_scan.rs")).unwrap()
+        );
     }
 
     /// The typo case the tripwires must keep catching: the directory is installed, the named file

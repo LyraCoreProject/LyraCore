@@ -14,7 +14,7 @@
 //! re-exports carry those traits to the crate root. Scheduled tables are co-located with the
 //! reducer they name (`scheduled(...)` resolves the reducer in its own module's scope).
 //!
-//! Built against SpacetimeDB 2.5 (`accessor =` table syntax; `ctx.sender()` /
+//! Built against SpacetimeDB 2.7.1 (`accessor =` table syntax; `ctx.sender()` /
 //! `ctx.db.<accessor>()`; RLS via the `unstable` `client_visibility_filter`). Categories,
 //! visibility, and field-index annotations follow `docs/schema.md`.
 
@@ -54,17 +54,8 @@
 ///
 /// # The transport GRAMMAR, and why it is a grammar
 ///
-/// A transport arm used to be a free-form `$body:block`, so "does this arm actually transport, or
-/// does it silently drop the table's rows?" was a question only a source SCANNER could answer — and
-/// a scanner is an arms race it eventually loses. The review proved it: repointing
-/// `sweep_transfer_game_item_instance` at `not_transported` deleted every character's gear on every
-/// hop with 468 module tests green, and each hardening of the scan (`contains("move_rows")`, then
-/// "exactly once", then "at the top", then "and it filters by the guid") was defeated by the next
-/// dead-branch trick.
-///
-/// So the arm has no body any more. It DECLARES the two facts the transport needs and the macro
-/// writes the code, which makes every one of those mutations a parse error instead of a test the
-/// scanner has to be clever enough to fail:
+/// The transport arm declares its table, Character index, and surrogate key. The macro
+/// generates export and import operations from those declarations.
 ///
 /// ```text
 /// // Transports. Exports the rows `<index>` yields for the transferring guid, and re-inserts each
@@ -225,8 +216,8 @@ macro_rules! game_tick_pass {
 ///
 /// Handlers OBSERVE and may act through the same reducer-internal fns core code uses; they must not
 /// assume any ordering relative to other handlers of the same event beyond the registry's
-/// deterministic (sorted-by-path) order. Mutating/decorator semantics (veto, fold) are explicitly
-/// Phase 2 and NOT this mechanism.
+/// deterministic (sorted-by-path) order. Mutating or decorating semantics (veto, fold) are not
+/// supported by this mechanism.
 #[macro_export]
 macro_rules! game_hook {
     ($event:ident, fn $name:ident($ctx:ident, $payload:ident) $body:block) => {
@@ -309,15 +300,11 @@ mod config;
 mod corpse;
 mod creatures;
 mod exploration;
-// Layer 1 test-only reducers (debug_teleport / set_health / spawn_at_feet / force_cast / set_level /
-// clear_creatures) for the client-automation harness. PROD-SAFE: the whole module is behind the
-// `debug_reducers` Cargo feature (default OFF) — a plain build / production publish compiles it out
-// entirely. Enable for the test build via `--build-options='--features=debug_reducers'`. See
-// debug/mod.rs (split this into a directory along its section banners: mod/readout/audit/
-// repair/encounter/instance/fingerprint).
+// Client-automation test reducers, behind the `debug_reducers` feature. Every publish enables the
+// feature, so they exist on production databases too; see `debug/mod.rs`.
 #[cfg(feature = "debug_reducers")]
 mod debug;
-// Encounter kernel (work-item 228): instance-scoped encounter state, HP-threshold/death/GO-use
+// Encounter kernel: instance-scoped encounter state, HP-threshold/death/GO-use
 // hooks, and the shared choreography primitives Packages consume (`packages/dungeons/` owns it).
 mod duel;
 mod encounter;
@@ -331,7 +318,7 @@ mod go_collider;
 #[cfg(feature = "debug_reducers")]
 mod go_collider_fixture;
 mod go_model;
-// Graveyard resolution (work-item 209/226): the death-release subsystem `world::do_repop` calls to
+// Graveyard resolution: the death-release subsystem `world::do_repop` calls to
 // pick where a ghost teleports. Extracted from `world.rs`.
 mod graveyard;
 mod group;
@@ -340,7 +327,7 @@ mod gw;
 mod helpers;
 pub mod hooks;
 mod import_meta;
-// Dungeon-instancing lifecycle (work-item 190 slices 2+3): game_instance/game_instance_binding,
+// Dungeon-instancing lifecycle: game_instance/game_instance_binding,
 // the areatrigger resolve-or-create entry, per-instance population spawn, and the reset/reap loop.
 mod combo;
 mod instance;
@@ -378,6 +365,8 @@ mod motion;
 /// idempotent dismount every removal path converges on.
 mod mount;
 pub mod nav;
+/// Operator reducers every build carries: the post-publish repair pass.
+mod operations;
 /// Package-owned Accounts: the operation a Package creates its session-less Characters through, and
 /// the record of which Package owns each Account.
 mod package_account;
@@ -401,7 +390,7 @@ mod package_teardown;
 #[cfg(test)]
 mod package_test;
 mod professions;
-/// Deploy-safety tripwire: source-scans `scripts/**` + `tools/**` for a destructive
+/// Publish-safety Architecture Tests scan `scripts/**` + `tools/**` for a destructive
 /// `spacetime publish -c`, and pins the sanctioned deploy script's own argv guard and required
 /// flags. Test-only; reads files, never runs the CLI.
 #[cfg(test)]
@@ -415,7 +404,7 @@ mod region;
 mod reputation;
 mod rest;
 // The Runtime Script Host. Called from `script_binding`'s dispatch on every hook event in a
-// default build, so it no longer needs the "no caller yet" allow the host shipped with.
+// default build.
 mod runtime_script;
 /// The `game_script` table and the Event Binding dispatch: which Runtime Scripts run for which
 /// event. Not re-exported below, for the same reason `package_import` is not — nothing outside this
@@ -440,10 +429,7 @@ mod transfer;
 /// the full-vmap epic). Builds on `nav`'s obstruction-grid approximation with an exact
 /// triangle store; see the module doc comment for the split.
 pub mod vmap;
-// Source-scan tripwires (pulled these out of this file, which had grown to 1,146 lines —
-// four fifths of it cfg(test) scan machinery — so the doc comment atop this file ("this is the thin
-// index") stayed true). See `tripwires.rs`'s own module doc for the roster and the shared engine in
-// `test_scan.rs` it now runs on.
+// Architecture Tests for structural and publish invariants.
 #[cfg(test)]
 mod tripwires;
 /// Per-zone weather: the seasonal climate weights, the current-weather row the gateway relays, the
@@ -472,7 +458,7 @@ pub use creatures::*;
 pub use debug::*;
 pub use duel::*;
 pub use encounter::*;
-pub use exploration::CharacterExplored; // re-exported for the gateway schema-parity test (282)
+pub use exploration::CharacterExplored; // re-exported for the gateway schema-parity test
 pub use faction::*;
 pub use gameobject::*;
 pub use gc::*;

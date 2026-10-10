@@ -440,8 +440,7 @@ fn target_icon_op(update: &MSG_RAID_TARGET_UPDATE_Client) -> party::Op {
 ///
 /// `pub(super)` because every Realm Chat Line needs the same guid for the same reason:
 /// `realm_chat` and `realm_whisper` take the speaker as an argument, so this accessor is the
-/// authorization of every line (see `handlers::chat`). One accessor, so there is one place a
-/// mutation can substitute a literal, and one place the end-to-end tests pin.
+/// authorization of every line (see `handlers::chat`).
 pub(super) fn self_guid(conn: &WorldConn) -> Option<u64> {
     match &conn.state {
         WorldState::InWorld(iw) => Some(iw.self_guid),

@@ -1,21 +1,3 @@
-//! Nav-grid cell math + blob codec shared by the module's runtime queries (242) and the
-//! importer's rasterizer (241) — same one-copy rule as `terrain.rs` (PR-9 review).
-//!
-//! One nav chunk per terrain MCNK cell (33.33 yd): a 64×64 walkability bitmask (0.52 yd nav
-//! cells) and a 32×32 obstruction-height byte grid (1.04 yd) for line-of-sight. Cells with no
-//! obstruction/slope/hole anywhere emit NO row — a missing chunk means "unobstructed here (or
-//! un-imported)", and both readers fall back to today's straight-line behavior.
-//!
-//! Blob formats (fixed, versionless — schema changes reload the table):
-//! - walk: 512 bytes; bit `ny*64+nx`, 1 = standable. Sub-indices count DOWN from the cell's
-//!   high-coordinate corner, the same direction as `terrain::cell_index`.
-//! - obs:  1024 bytes; `oy*32+ox`; 255 = no obstruction, else top-of-obstruction =
-//!   `base_z + value * OBS_STEP` (`base_z` rides on the row). Height-above-BASE, not
-//!   above-terrain, so a LoS ray tests against it with zero interpolation.
-// Deliberate simplification: one obstruction column per 1 yd cell — can't express "clear under the
-// bridge / two floors". Ground-floor WMO surfaces can replace nearby terrain; stacked floors
-// still require navigation layers.
-
 use crate::spatial::MAP_COORD_MAX;
 use crate::terrain::{interpolate, CELL_SIZE};
 use crate::vmap::{TriClass, VmapTri};
@@ -125,9 +107,9 @@ mod tests {
 }
 
 // =============================================================================================
-//  Runtime queries (work-item 242) — pure algorithms over fetched chunks. The chunk source is
+//  Runtime queries, pure algorithms over fetched chunks. The chunk source is
 //  a closure (module: one PK find per cell; tests: synthetic chunks) so ALL pathing/LoS logic
-//  unit-tests here without a database. Missing chunk = "no obstacles known" (the 241 contract:
+//  unit-tests here without a database. Missing chunk = "no obstacles known" (the sparse-chunk contract:
 //  fully-clear cells emit no row), so every query degrades to today's straight-line behavior
 //  off-slice.
 // =============================================================================================
@@ -364,7 +346,7 @@ pub fn walkable_prefix(
 /// including `to`, or None when unreachable within `max_expansions`. The straight-line fast
 /// path returns `[to]` with ZERO expansions — an open-field chase costs one line test.
 /// Callers keep legs SHORT (the 500 ms tick's chase legs); long travel stays on the waypoint
-/// graph (work-item 150).
+/// graph.
 pub fn find_leg(
     fetch: &mut impl FnMut(u16, u16) -> Option<NavCellData>,
     from: (f32, f32),
@@ -374,7 +356,7 @@ pub fn find_leg(
     find_leg_ex(fetch, from, to, max_expansions).map(|(path, _, _)| path)
 }
 
-/// `find_leg` + the expansion count + completeness (exposed for tests and the 244 benchmark).
+/// `find_leg` + the expansion count + completeness (exposed for tests and the benchmark).
 /// When the expansion budget exhausts before reaching the goal, returns the BEST-EFFORT path —
 /// to the explored node nearest the goal (complete=false) — so a per-tick chase leg still makes
 /// real progress around large obstacles and re-plans next tick, instead of falling back to a
@@ -683,7 +665,7 @@ mod runtime_tests {
     /// One synthetic chunk at the Northshire cell: a full-height wall along nx=32 (obs ox=16)
     /// with a 4-sub-cell doorway at ny 30..34 (obs oy 15..17), plus a sealed 4-wall pocket in
     /// the corner (nx 4..12, ny 4..12 ring). Every other cell in the world is "missing" (all
-    /// clear) — exactly the 241 skip-all-clear contract.
+    /// clear) — exactly the skip-all-clear contract.
     fn walled_cell() -> ((u16, u16), NavCellData) {
         let (cx, cy) = (cell_index(-8913.0).unwrap(), cell_index(-184.0).unwrap());
         let mut walk = vec![0xFFu8; WALK_BYTES];

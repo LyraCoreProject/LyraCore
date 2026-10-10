@@ -162,11 +162,7 @@ mod alpha_test_tools_tests;
 mod shard_routing_tests;
 use shard_routing_tests::ShardCallLog;
 
-/// Cross-database transfer — Phase A of the elastic world-sharding design (escrowed transfers,
-/// instance/continent shards, region-level load balancing). A sibling of the
-/// modules above for the same reason; its `FakeShardDb`/`FakeChar`/`lk` fixtures stay in THIS file
-/// (see the comment above `struct FakeChar` below) because this file's own `Store` impl and two
-/// earlier regression tests construct them directly.
+/// Cross-database Transfer tests share the Character and Escrow Fakes defined here.
 #[path = "transfer_tests.rs"]
 mod transfer_tests;
 
@@ -393,11 +389,7 @@ struct InMemoryStore {
     deleted: std::sync::Mutex<Vec<(u64, u64)>>,
     /// When set, `delete_character` returns this outcome instead of `Success`.
     delete_outcome: Option<codec::CharDeleteOutcome>,
-    /// Characters actually produced by a `create_character` call during the test, unioned
-    /// into `characters()`'s answer. Without this, a CMSG_CHAR_CREATE round trip is a no-op the
-    /// fake immediately forgets, so a test driving CREATE then CMSG_CHAR_ENUM/CMSG_PLAYER_LOGIN
-    /// for "the character just created" would actually be exercising a hardcoded/pre-seeded guid
-    /// with no real link to the CREATE call — the tautology a review caught.
+
     created_characters: std::sync::Mutex<Vec<codec::CharacterView>>,
     /// The Nth guid `create_character` assigns, offset well above every hand-seeded fixture
     /// guid in this file (the highest is 100, in the transfer tests) so it can never collide.
@@ -464,7 +456,7 @@ struct InMemoryStore {
     player_items_fixture: Vec<codec::ItemInstanceView>,
     /// Item-instance guid → bag slot, for the vendor repair target.
     item_slots: Vec<(u64, u8)>,
-    /// Recorded `set_sheathed` dispatches: (self_guid, state) — the `CMSG_SETSHEATHED` route (#101).
+    /// Recorded `set_sheathed` dispatches: (self_guid, state), the `CMSG_SETSHEATHED` route.
     sheathed: std::sync::Mutex<Vec<(u64, u8)>>,
     /// What `channel_op` answers. `None` succeeds.
     channel_outcome: Option<ChannelOutcome>,
@@ -502,7 +494,7 @@ struct InMemoryStore {
     /// Whether `bind_home` ran (the innkeeper gossip select).
     home_bound: std::sync::atomic::AtomicBool,
     /// Recorded `reset_talents` dispatches: (account_id, self_guid, trainer_guid) — the unlearn-talents
-    /// gossip select (#516).
+    /// gossip select.
     reset_talents_calls: std::sync::Mutex<Vec<(u64, u64, u64)>>,
     /// When set, `reset_talents` returns this error instead of recording the call.
     reset_talents_error: Option<String>,
@@ -541,7 +533,7 @@ struct InMemoryStore {
     gameobject_type: Option<u8>,
     /// Recorded non-questgiver GameObject uses owned by the loot-window seam.
     gameobjects_used: std::sync::Mutex<Vec<u64>>,
-    /// Recorded generated-loot reads, used to prove questgivers bypass the chest lifecycle.
+
     corpse_loot_reads: std::sync::Mutex<Vec<(u64, u64)>>,
     /// Recorded `group_loot_method` calls: (loot_setting, master_guid, loot_threshold).
     group_loot_methods: std::sync::Mutex<Vec<(u8, u64, u8)>>,
@@ -882,26 +874,26 @@ struct InMemoryStore {
     /// This shard's bags have no room — the fixture behind the full-bag refusal on a take.
     /// Atomic so a test can flip it AFTER the fixture is wrapped in an `Arc`, like `purses`.
     bags_full: std::sync::atomic::AtomicBool,
-    /// Recorded `initiate_trade` calls — `(self_guid, target_guid)` off CMSG_INITIATE_TRADE (#120).
+    /// Recorded `initiate_trade` calls, `(self_guid, target_guid)` off CMSG_INITIATE_TRADE.
     initiated_trades: std::sync::Mutex<Vec<(u64, u64)>>,
-    /// Recorded `begin_trade` self_guids — CMSG_BEGIN_TRADE (#120).
+    /// Recorded `begin_trade` self_guids, CMSG_BEGIN_TRADE.
     begun_trades: std::sync::Mutex<Vec<u64>>,
-    /// Recorded `cancel_trade` self_guids — CMSG_CANCEL_TRADE (#120).
+    /// Recorded `cancel_trade` self_guids, CMSG_CANCEL_TRADE.
     cancelled_trades: std::sync::Mutex<Vec<u64>>,
     /// Recorded `set_trade_item` calls — `(self_guid, trade_slot, inv_slot)` AFTER the gateway's
-    /// (bag, slot) → absolute-slot mapping (#121).
+    /// (bag, slot) → absolute-slot mapping.
     set_trade_items: std::sync::Mutex<Vec<(u64, u8, u8)>>,
-    /// Recorded `clear_trade_item` calls — `(self_guid, trade_slot)` (#121).
+    /// Recorded `clear_trade_item` calls, `(self_guid, trade_slot)`.
     cleared_trade_items: std::sync::Mutex<Vec<(u64, u8)>>,
-    /// Recorded `set_trade_gold` calls — `(self_guid, copper)` after the wire's Gold decode (#121).
+    /// Recorded `set_trade_gold` calls, `(self_guid, copper)` after the wire's Gold decode.
     set_trade_golds: std::sync::Mutex<Vec<(u64, u32)>>,
-    /// Recorded `accept_trade` self_guids — CMSG_ACCEPT_TRADE (#122).
+    /// Recorded `accept_trade` self_guids, CMSG_ACCEPT_TRADE.
     accepted_trades: std::sync::Mutex<Vec<u64>>,
-    /// Recorded `unaccept_trade` self_guids — CMSG_UNACCEPT_TRADE (#122).
+    /// Recorded `unaccept_trade` self_guids, CMSG_UNACCEPT_TRADE.
     unaccepted_trades: std::sync::Mutex<Vec<u64>>,
-    /// Recorded `busy_trade` self_guids — CMSG_BUSY_TRADE (#123).
+    /// Recorded `busy_trade` self_guids, CMSG_BUSY_TRADE.
     busy_trades: std::sync::Mutex<Vec<u64>>,
-    /// Recorded `ignore_trade` self_guids — CMSG_IGNORE_TRADE (#123).
+    /// Recorded `ignore_trade` self_guids, CMSG_IGNORE_TRADE.
     ignore_trades: std::sync::Mutex<Vec<u64>>,
     /// Live `game_world_entity` rows on THIS shard, as the columns Member Stats read.
     member_entities: std::sync::Mutex<Vec<(u64, codec::MemberEntity)>>,
@@ -1162,8 +1154,7 @@ impl WorldStore for InMemoryStore {
         &self.shard
     }
 
-    // --- The escrow protocol, with the MODULE's guards reproduced. A permissive mock would
-    // --- let every ordering mutation in `run_transfer` pass; these are what make the order matter.
+    // The Fake enforces the Module's escrow guards so transfer ordering affects outcomes.
 
     fn settle_home_shard(
         &self,
@@ -1312,10 +1303,7 @@ impl WorldStore for InMemoryStore {
                 return Err(anyhow!("bot Transfer arrival identity is invalid"));
             }
         }
-        // NOTE: every `in_rows` guard below is scoped and dropped before `db.live()`, which locks
-        // `in_rows` itself. `std::sync::Mutex` is not re-entrant, so holding one across that call
-        // self-deadlocks — and a deadlock makes an ordering mutation HANG the suite instead of
-        // turning a named test red, which is a coverage failure wearing a hang's clothes.
+        // Drop each `in_rows` guard before `db.live()`, which locks the same non-reentrant Mutex.
         let replayed = lk(&db.in_rows).get(&transfer_id).copied();
         if let Some(existing) = replayed {
             if existing != guid {
@@ -1916,11 +1904,6 @@ impl WorldStore for InMemoryStore {
         _gender: u8,
         _appearance: codec::Appearance,
     ) -> Result<codec::CharCreateOutcome> {
-        // Fake: a name already among the seeded OR previously created characters is "in use",
-        // else success — and a success actually RECORDS the character, assigning it a real
-        // guid `characters()` then unions in. Before a review caught it, this call was a pure
-        // no-op the fake immediately forgot, which let a test claim to drive "the character
-        // CREATE just produced" while actually logging into an unrelated hardcoded/pre-seeded guid.
         if self.characters.iter().any(|c| c.name == name)
             || self
                 .created_characters
@@ -3263,7 +3246,7 @@ impl WorldStore for InMemoryStore {
         self.rec("group_accept");
         Ok(PartyOutcome::Ran)
     }
-    // Trade (#120): pure recorders — the module owns every gate, so the fake just proves which
+    // Trade: pure recorders, the module owns every gate, so the fake just proves which
     // verb the dispatch chose and which args survived the wire.
     fn initiate_trade(&self, _account_id: u64, self_guid: u64, target_guid: u64) -> Result<()> {
         self.rec("initiate_trade");
@@ -5858,9 +5841,6 @@ fn a_member_enters_the_world_with_its_guild_on_the_self_create_and_signs_on() {
     assert!(recorded(&store).contains(&"guild_op:SignOn".to_string()));
 }
 
-/// Every membership opcode this ticket adds reaches `realm_guild_op`, over a real encrypted
-/// socket. Character 1 leads Guild 7; Character 2 ("Target") is a live realm-wide candidate for
-/// CMSG_GUILD_INVITE.
 #[test]
 fn every_membership_opcode_reaches_its_durable_request() {
     let store = std::sync::Arc::new(InMemoryStore {
@@ -6910,10 +6890,6 @@ fn worldport_ack_reenters_with_fresh_subscription_and_empty_loot_state() {
 
     let _ = open_loot_window(&mut client, &mut c_enc, &mut c_dec, 60);
 
-    // The client finished "loading" the new map (having received TRANSFER_PENDING/NEW_WORLD from the
-    // on_teleport relay, which this InMemoryStore-driven dispatch test doesn't exercise — that's
-    // covered by `stdb::subscriptions::tests::teleport_relay_*` and the codec pins) -> sends the
-    // (empty-body) ack.
     MSG_MOVE_WORLDPORT_ACK {}
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
@@ -7041,7 +7017,7 @@ fn worldport_removes_the_source_viewer_before_routing_and_registers_a_replacemen
 fn login_initialize_factions_carries_persisted_standing_at_its_reputation_index() {
     // A persisted `game_player_reputation` row must land in the login
     // SMSG_INITIALIZE_FACTIONS at its STORED reputation_index slot (0..63), never faction_id — the
-    // guardrail that also gates the live SET_FACTION_STANDING relay (McBride ERROR #132).
+    // guardrail that also gates the live SET_FACTION_STANDING relay (McBride ERROR).
     let store = std::sync::Arc::new(InMemoryStore {
         login_entity: Some(warrior_entity()),
         // Stormwind's rep-index is 19 (Faction.dbc ReputationListID), NOT its faction id (72) —
@@ -7303,11 +7279,11 @@ fn a_movement_packet_for_a_despawned_entity_never_kills_the_session() {
     );
     assert_eq!(
         calls
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|(_, c)| c == "movement_update")
-            .count(),
+.lock()
+.unwrap()
+.iter()
+.filter(|(_, c)| c == "movement_update")
+.count(),
         1,
         "the transfer-tail packet must not enter the batch, while movement resumes when presence returns"
     );
@@ -8698,10 +8674,6 @@ fn quest_choose_reward_relays_inventory_before_completion_over_the_cipher() {
     );
 }
 
-// Abandon-slot resolution and the raw descriptor build are now unit-tested at the quest seam
-// (`handlers/quest.rs`, `InMemoryQuestActions`) — that's where `dispatch_quest_action` and
-// `quest_log_update` actually live. This test proves the one thing the seam test cannot: that a
-// real login wires `send_quest_log` to that same descriptor, sent after the self CREATE.
 #[test]
 fn login_sends_the_quest_log_descriptor_raw_update_after_the_create_packet() {
     let slots = vec![codec::update_mask::QuestLogSlot {
@@ -9576,9 +9548,6 @@ fn instant_cast_sends_start_then_raw_cast_result_ok_then_go_and_threads_the_targ
 
 #[test]
 fn set_sheathed_routes_the_clients_z_press_to_the_store() {
-    // #101: CMSG_SETSHEATHED used to reach NO handler — it fell through every arm of `dispatch` and
-    // was dropped, so UNIT_FIELD_BYTES_2 stayed 0 forever and peers rendered everyone unarmed.
-    // Each of the three real states must reach the store verb with its byte intact.
     for (sent, expect) in [
         (SheathState::Unarmed, 0u8),
         (SheathState::Melee, 1),
@@ -11510,7 +11479,7 @@ fn quest_store_at_level(level: u8) -> InMemoryStore {
 
 #[test]
 fn gossip_hello_hides_unlearn_talents_below_level_10() {
-    // #516: the imported "I wish to unlearn my talents." row (reclassified by the importer to
+    // The imported "I wish to unlearn my talents." row (reclassified by the importer to
     // `UNLEARNTALENTS`, since the raw dump column never carries it) must not render for a character
     // who cannot yet have a talent point.
     use lyracore_shared::constants::gossip_option;
@@ -11768,9 +11737,6 @@ fn messagechat_emote_routes_to_chat_type_3() {
 
 #[test]
 fn messagechat_dot_say_diverts_to_gm_command_never_touching_chat() {
-    // A Say line starting with '.' diverts to gm_command BEFORE send_chat — never a
-    // broadcast, never a game_chat_event insert. No reply on success (the command's own effect is its
-    // own feedback).
     let store = std::sync::Arc::new(quest_store());
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
     CMSG_MESSAGECHAT {
@@ -12372,26 +12338,11 @@ struct FakeEscrow {
     blob: Vec<u8>,
 }
 
-/// EVERY lock on a `FakeShardDb` goes through here, and it is `try_lock`, not `lock`.
-///
-/// The fake is only ever touched from the test's own thread, so a failed `try_lock` can only mean
-/// one thing: one of its own methods is holding that mutex further up the stack. `std::sync::Mutex`
-/// is not re-entrant, so the real `lock()` blocks forever — and `cargo test` has no per-test
-/// timeout, so the suite HANGS instead of failing. A review of the cross-database transfer driver
-/// hit exactly that: an ordering mutation of the driver made the gateway suite hang rather than
-/// turn a named test red, which is a coverage failure wearing a pass's clothes — mutation testing
-/// exists to catch exactly this. A hang must never be a pass.
-///
-/// Deliberate simplification: `try_lock` instead of a watchdog thread per lock — it is one line,
-/// it fires instantly, and it names the offending mutex in the panic. The ceiling: it would also
-/// fire on genuine cross-thread contention, which these tests do not have (one `FakeShardDb` per
-/// test, one thread per test). `transfer_tests::no_hang` is the belt-and-braces net for a hang that
-/// is NOT a re-entrant lock (an unbounded retry loop in the driver, say).
 fn lk<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.try_lock().expect(
         "re-entrant lock on FakeShardDb: a method is already holding this mutex further up the \
          stack. With `lock()` this would be a DEADLOCK and the suite would HANG instead of failing \
-         — see the fn doc on `lk`.",
+        — see the fn doc on `lk`.",
     )
 }
 

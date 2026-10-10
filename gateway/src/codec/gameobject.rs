@@ -17,9 +17,9 @@ pub struct GameObjectView {
     pub state: u8,
     pub type_id: u8,
     pub display_id: u32,
-    /// The cmangos spawn quaternion (issue #515) — `GAMEOBJECT_ROTATION`, the field the 5875 client
+    /// The cmangos spawn quaternion, `GAMEOBJECT_ROTATION`, the field the 5875 client
     /// actually renders a static prop's orientation from. All-zero means "no quaternion stored"
-    /// (every pre-#515 row and every hand-seeded fixture): `build_gameobject_rotation_values` derives
+    /// (every row without rotation data and every hand-seeded fixture): `build_gameobject_rotation_values` derives
     /// a yaw-only fallback from `orientation` in that case rather than sending a degenerate rotation.
     pub rotation_0: f32,
     pub rotation_1: f32,
@@ -92,22 +92,13 @@ pub fn build_gameobject_create_object(go: &GameObjectView) -> SMSG_UPDATE_OBJECT
     }
 }
 
-/// Build the raw `GAMEOBJECT_ROTATION` VALUES update (issue #515) — the 4-float spawn quaternion the
+/// Build the raw `GAMEOBJECT_ROTATION` VALUES update, the 4-float spawn quaternion the
 /// client actually orients a static prop's model from. gtker's typed builder only exposes
 /// `set_gameobject_rotation(f32)`, which reaches slot 0 alone (the same descriptor-setter wall as the
 /// multi-aura array), so all 4 slots (rot0..3, wire index `GAMEOBJECT_ROTATION`..+3) ride the
 /// hand-rolled raw encoder instead. Not a partial UNIT/PLAYER update — `GAMEOBJECT_ROTATION` (10) never
 /// collides with `OBJECT_FIELD_TYPE` (2), so `build_values_update_raw`'s debug_assert is inert here by
 /// construction, same as every other GAMEOBJECT field.
-///
-/// Trap this exists to dodge: an all-zero stored quaternion (every row imported before this migration,
-/// and every hand-seeded fixture that never set these) is NOT a valid "identity" rotation to send
-/// verbatim — a real vanilla spawn's quaternion is never exactly (0,0,0,0) (that's a degenerate,
-/// zero-magnitude quaternion; a true identity is (0,0,0,1)). Sending it as-is renders the client's
-/// DEFAULT orientation regardless of `orientation`, which is the exact bug #515 reports. So the
-/// all-zero case DERIVES a yaw-only quaternion from `orientation` (`rot2 = sin(o/2)`, `rot3 = cos(o/2)`,
-/// matching vanilla's Z-axis-only yaw convention — rot0/rot1 stay 0, i.e. no terrain pitch/roll, which
-/// is the best a bare `orientation` float can express) instead.
 pub fn build_gameobject_rotation_values(go: &GameObjectView) -> (u16, Vec<u8>) {
     let (rot0, rot1, rot2, rot3) = if go.rotation_0 == 0.0
         && go.rotation_1 == 0.0
@@ -154,7 +145,7 @@ pub fn build_gameobject_query_response(
     }
 }
 
-/// A ground-area spell's DYNAMICOBJECT CREATE (118, Consecration's swirl): the 5875 client renders
+/// A ground-area spell's DYNAMICOBJECT CREATE (Consecration's swirl): the 5875 client renders
 /// the persistent ground effect from `DYNAMICOBJECT_SPELLID`'s SpellVisual, sized by RADIUS at
 /// POS — it never draws it from the cast packets alone (live find). Same stationary
 /// `CreateObject2` + `HasPosition` shape as the gameobject CREATE above; entry = the spell id and
@@ -326,7 +317,7 @@ mod tests {
 
     #[test]
     fn gameobject_rotation_values_derives_yaw_only_from_orientation_when_quaternion_is_all_zero() {
-        // Every pre-#515 row and every hand-seeded fixture stores an all-zero quaternion — that must
+        // Every row without rotation data and every hand-seeded fixture stores an all-zero quaternion, that must
         // NOT ride verbatim (a real spawn's quaternion is never exactly (0,0,0,0); sending it as-is
         // is the exact tilted-bench bug this issue reports). Derive rot2/rot3 = sin(o/2)/cos(o/2)
         // (Z-axis-only yaw) instead, leaving rot0/rot1 (terrain pitch) at 0.

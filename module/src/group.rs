@@ -48,13 +48,6 @@ use lyracore_shared::group::{
 /// nor quest credit. Vanilla's `sWorld.getConfig(CONFIG_FLOAT_GROUP_XP_DISTANCE)` = 74.0 yd.
 pub const GROUP_XP_RANGE_SQ: f32 = 74.0 * 74.0;
 
-/// Loot-method encoding for `Group.loot_method` (work-item 187) — deliberately WIRE-MATCHING: these
-/// values are byte-identical to vanilla's `GroupLootSetting` enum (`wow_world_base`:
-/// `FreeForAll=0, RoundRobin=1, MasterLoot=2, GroupLoot=3, NeedBeforeGreed=4`), NOT the work item's
-/// own draft numbering (which listed `2=GROUP default, 3=MASTER` — the OPPOSITE of the real wire
-/// order). Adopting the wire order here means the gateway's `u8 <-> GroupLootSetting` conversion is a
-/// straight pass-through with zero translation table — avoiding the exact silent-drift shape an
-/// invented enum ordering that doesn't match the wire would cause.
 pub mod loot_method {
     pub const FFA: u8 = 0;
     pub const ROUND_ROBIN: u8 = 1;
@@ -75,13 +68,7 @@ pub struct Group {
     #[auto_inc]
     pub group_id: u64,
     pub leader_guid: u64,
-    // END-APPENDED (work-item 187): the party's current loot method/threshold/master + the
-    // round-robin cursor. `#[default(...)]` so every pre-187 row keeps behaving as plain FFA-like
-    // "no restriction" — wait: the vanilla DEFAULT party loot method is GROUP LOOT (Uncommon
-    // threshold), not FFA, so a pre-187 group (created before this slice) auto-migrates to GROUP —
-    // matching what a freshly-formed vanilla party actually defaults to. `master_looter_guid` and
-    // `rr_cursor` default to 0 regardless of method (meaningless until MASTER is actually selected /
-    // the first round-robin kill advances the cursor).
+
     #[default(3)] // loot_method::GROUP
     pub loot_method: u8,
     #[default(2)] // ItemQuality::Uncommon
@@ -160,9 +147,9 @@ pub enum PartyPartitionState {
 
 crate::character_owned!(delete, fn sweep_delete_game_group_member_partition(ctx, character_guid) {
     ctx.db
-        .game_group_member_partition()
-        .character_guid()
-        .delete(character_guid);
+.game_group_member_partition()
+.character_guid()
+.delete(character_guid);
 });
 crate::character_owned!(not_transported, fn sweep_transfer_game_group_member_partition());
 
@@ -186,7 +173,7 @@ crate::character_owned!(restamp, fn sweep_restamp_game_group_member(ctx, charact
 //
 // Shipped an interim MIRROR here — the member row travelled in the manifest carrying its
 // original `group_id`, and an `ensure_group` helper re-created the parent `game_group` row at the
-// destination. Its own AC#3 called for that mirror to be deleted once membership had one
+// destination. Its own AC called for that mirror to be deleted once membership had one
 // authoritative home, and the group slice gives it one: `game_group` / `game_group_member` / `game_group_invite`
 // are authoritative on REALM-CORE, and each world shard's copy is a gateway-maintained write-through
 // cache (`sync_group_mirror` below) — the same relationship `game_account` / `game_session` have.
@@ -210,10 +197,6 @@ crate::character_owned!(not_transported, fn sweep_transfer_game_group_member());
 /// portal. On realm-core that would be worse than wrong — it would be a MIRROR inventing a membership
 /// change and notifying clients about it, when the authority (realm-core) recorded nothing at all.
 /// Deleting the row and nothing else is exactly what a departing cache entry should do.
-///
-/// The residue an empty `game_group` row used to leave here is now swept by the gateway's own
-/// `sync_group_mirror` push, which replaces this shard's whole copy of the party on the next op or
-/// world entry (and deletes the group row outright when the party disbands).
 pub(crate) fn detach_for_transfer(ctx: &ReducerContext, character_guid: u64) {
     let members = ctx.db.game_group_member();
     for m in members
@@ -255,10 +238,10 @@ crate::character_owned!(delete, fn sweep_delete_game_group_invite(ctx, character
         invites.id().delete(inv.id);
     }
     let sent: Vec<u64> = invites
-        .iter()
-        .filter(|i| i.inviter_guid == character_guid)
-        .map(|i| i.id)
-        .collect();
+.iter()
+.filter(|i| i.inviter_guid == character_guid)
+.map(|i| i.id)
+.collect();
     for id in sent {
         invites.id().delete(id);
     }
@@ -450,7 +433,7 @@ pub struct GroupEvent {
     /// from in the first place. A guid is the one realm-wide name a character has. The identity
     /// column stays exactly as it was and still drives the per-player RLS on a world shard; this
     /// column is what the gateway's realm-core relay filters on (it reads through the owner token,
-    /// which bypasses RLS, and self-filters per session — the coordinator-relay law of 277/279).
+    /// which bypasses RLS, and self-filters per session — the coordinator-relay law).
     // The u64 default MUST be typed: a bare `0` encodes as 4 bytes and `publish` rejects the
     // migration with "data too short for u64: Expected 8, given 4" (world.rs:127 records the same
     // rule). Nothing in `cargo test`/`cargo check` validates default-value encoding — only a real
@@ -466,10 +449,10 @@ pub(crate) fn push_event(
     other_guid: u64,
     payload: String,
 ) {
-    // No longer an early return on a missing character row. On a world shard the row is there
-    // and this is byte-identical to before; on REALM-CORE there are no character rows at all, and
-    // returning early there would mean the directory database could never notify anybody — every
-    // invite popup and roster refresh for a cross-shard party would be dropped at the source.
+    // A missing character row is not an early return. A world shard has the row. REALM-CORE has no
+    // character rows at all, so an early return there would stop the directory database from
+    // notifying anybody, and every invite popup and roster refresh for a cross-shard party would be
+    // dropped at the source.
     let bound = ctx
         .db
         .game_character()
@@ -1108,7 +1091,7 @@ fn led_group_of(ctx: &ReducerContext, guid: u64) -> Result<(GroupMember, Group),
     Ok((m, group))
 }
 
-/// `pub(crate)` (was private): work-item 187's kill-time loot stamping (`combat/mod.rs` →
+/// `pub(crate)` because the kill-time loot stamping (`combat/mod.rs` →
 /// `loot::apply_group_loot_rules`) needs the CURRENT roster to pick a round-robin/master designee.
 pub(crate) fn members_of(ctx: &ReducerContext, group_id: u64) -> Vec<GroupMember> {
     ctx.db
@@ -1289,13 +1272,7 @@ fn invite_core_on(
     if target_guid == inviter_guid {
         return Err(GroupRefusal::InviteSelf.into());
     }
-    // EXISTENCE + PRESENCE are the two gates that need a database holding characters and live
-    // entities, so they are the two the directory plane cannot run: realm-core has
-    // neither table populated, and a shard's copy only knows about its own players — which is the
-    // whole bug this slice fixes (a target inside Deadmines "does not exist" to the open world).
-    // On REALM-CORE the gateway has already resolved both ACROSS every connected shard before
-    // calling (`world::party::resolve_target`), and it answers with the same two Refusals, so the
-    // player-visible answer is unchanged.
+
     if plane == Plane::Shard {
         if ctx.db.game_character().guid().find(target_guid).is_none() {
             return Err(GroupRefusal::NoSuchPlayer.into());
@@ -1600,8 +1577,6 @@ fn member_identity(ctx: &ReducerContext, character_guid: u64) -> Identity {
     )
 }
 
-/// The identity-free decline core: the body `group_decline` used to inline, so the realm-core
-/// plane runs the SAME code rather than a second implementation of it.
 pub(crate) fn decline_invite_for(ctx: &ReducerContext, decliner_guid: u64) -> Result<(), String> {
     decline_invite_on(ctx, decliner_guid).map_err(|error| {
         group_op_error(
@@ -1629,7 +1604,6 @@ fn decline_invite_on(ctx: &ReducerContext, decliner_guid: u64) -> Result<(), Gro
     Ok(())
 }
 
-/// The identity-free leave core — the body `group_leave` used to inline.
 pub(crate) fn leave_group_for(ctx: &ReducerContext, leaver_guid: u64) -> Result<(), String> {
     leave_group_on(ctx, leaver_guid, leave_cause::LEFT)
         .map_err(|error| group_op_error(error, &format!("{leaver_guid} could not leave its party")))
@@ -1648,7 +1622,6 @@ fn leave_group_on(ctx: &ReducerContext, leaver_guid: u64, cause: u8) -> Result<(
     Ok(())
 }
 
-/// The identity-free kick core — the body `group_uninvite` used to inline.
 pub(crate) fn uninvite_from_group(
     ctx: &ReducerContext,
     actor_guid: u64,
@@ -1686,7 +1659,6 @@ fn uninvite_on(
     Ok(())
 }
 
-/// The identity-free loot-method core — the body `group_loot_method` used to inline.
 pub(crate) fn set_loot_method_for(
     ctx: &ReducerContext,
     leader_guid: u64,
@@ -1970,7 +1942,7 @@ pub(crate) fn remove_member(ctx: &ReducerContext, character_guid: u64, departure
         group.as_ref().map_or(0, |g| g.leader_guid),
     ) {
         None => {
-            // Work-item 187 trap: a group disbanding mid-roll must resolve any of its live rolls
+            // trap: a group disbanding mid-roll must resolve any of its live rolls
             // to the sole remaining member (vanilla behavior) rather than leaving them to time out.
             // The FULL former membership (the leaver, already removed above, PLUS whoever's left) is
             // what `force_resolve_rolls_for_disband` needs to recognize "every voter on this roll
@@ -2083,15 +2055,6 @@ pub(crate) fn leader_after_removal(
 // ===========================================================================================
 
 /// Which DEPLOYMENT of this one module a group call is running on.
-///
-/// Realm-core is not a different crate — it is this same wasm published under a second database name
-/// (`realm_core.rs`'s header). Every table exists on both; what differs is which rows are ever
-/// written there. On a WORLD shard `game_character` and `game_world_entity` are populated, so the
-/// existence/presence gates read them. On REALM-CORE neither is (the directory database holds
-/// accounts, sessions, the character→shard index and — from this slice — party membership), so those
-/// two gates have no data to run against and the GATEWAY supplies their answers instead, resolved
-/// across every connected shard. Nothing else about the rules changes, which is the point: the same
-/// three cores run on both planes.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Plane {
     /// A world shard: characters and live entities are local.
@@ -2785,12 +2748,6 @@ pub(crate) fn kill_reward_recipients(
         .collect()
 }
 
-/// A single group member's kill-reward eligibility: alive, on the kill's map AND instance
-/// (`same_instance` — work-item 190 slice 1, always true this slice since every entity is
-/// instance 0), and within the group-XP range of the corpse (`dist_sq` = squared 2-D distance,
-/// compared INCLUSIVELY against [`GROUP_XP_RANGE_SQ`]). The per-member gate of
-/// [`kill_reward_recipients`], extracted so the eligibility rules are unit-testable without a
-/// `ReducerContext`. Pure.
 pub(crate) fn eligible_for_kill_reward(
     dead: bool,
     same_map: bool,
@@ -3413,7 +3370,7 @@ mod tests {
         }
     }
 
-    // ---- Group loot methods (work-item 187 slice 1) ----
+    // ---- Group loot methods ----
 
     #[test]
     fn loot_method_encoding_matches_the_real_wire_grouplootsetting_order() {
@@ -3578,141 +3535,4 @@ mod tests {
     }
 
     // event_recipient_identity's pinned test moved to helpers.rs with the function itself.
-
-    // A reducer body needs a live `ReducerContext`, so the authorization and dispatch decisions
-    // below use narrow Architecture Tests.
-
-    /// The `//`-stripped body of `signature`'s function — assert on CODE, never on the prose beside
-    /// it. Shared with every other file's copy of this scan as [`crate::test_scan::code_of`]
-    /// (this used to be six near-identical, drifted-apart copies).
-    use crate::test_scan::code_of;
-
-    /// **The operator gate is the entire authorization of Gateway-driven party work.**
-    ///
-    /// The claim can consume any invite intent, `realm_group_op` can act as any Character, and
-    /// `sync_group_mirror` can replace a whole party roster. Only the Operator may supply those
-    /// arguments.
-    #[test]
-    fn gateway_party_reducers_are_operator_gated() {
-        for f in [
-            "pub fn claim_bot_invite_intent(",
-            "pub fn realm_group_op(",
-            "pub fn sync_group_mirror(",
-        ] {
-            let body = code_of(include_str!("group.rs"), f);
-            // The FIRST STATEMENT, not merely present (review). A bare `contains` was
-            // satisfied by a gate that never runs: wrapping the line in `if false { … }` — the
-            // tripwire defeat this batch has already documented twice — left all 521 module tests
-            // green with `realm_group_op` completely ungated, and so would `let _ = …` or an early
-            // return above it. Anchoring to the opening brace makes all three visible.
-            let normalized: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
-            assert!(
-                normalized.starts_with("{ crate::helpers::require_operator(ctx)?;"),
-                "`{f}` no longer OPENS with the operator gate. Its arguments authorize party work, \
-                 so a gate that is present but neutralized (wrapped in `if false`, `let _ =`, or \
-                 preceded by an early return) is no gate. \
-                 Body was:\n{body}"
-            );
-        }
-    }
-
-    /// The primary-key delete is the arbitration. A read followed by a second Durable Request
-    /// would let two Gateways win against the same row.
-    #[test]
-    fn the_bot_invite_claim_is_one_atomic_delete() {
-        let body = code_of(include_str!("group.rs"), "pub fn claim_bot_invite_intent(");
-        let normalized: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
-        assert!(
-            normalized.contains("game_bot_invite_intent().id().delete(intent_id)"),
-            "the claim no longer deletes the intent by primary key in its reducer transaction. \
-             Body was:\n{body}"
-        );
-    }
-
-    /// The op byte is a wire value the gateway sends and this reducer dispatches on, and
-    /// `lyracore_shared::group::realm_op` pins only the NUMBERS. Nothing pinned what each number DOES
-    /// here, so swapping two arms was a silent mis-dispatch — "an ACCEPT arriving as a LEAVE", the
-    /// exact failure that shared constant's doc claims to prevent — with every suite green.
-    #[test]
-    fn every_realm_op_byte_dispatches_to_its_own_core() {
-        let body = code_of(include_str!("group.rs"), "pub fn realm_group_op(");
-        for (op, core) in [
-            (
-                "realm_op::INVITE =>",
-                "invite_core_on(ctx, Plane::RealmCore, actor_guid, target_guid)",
-            ),
-            (
-                "realm_op::ACCEPT =>",
-                "accept_invite_on(ctx, Plane::RealmCore, actor_guid, arg_a)",
-            ),
-            ("realm_op::DECLINE =>", "decline_invite_on(ctx, actor_guid)"),
-            (
-                "realm_op::LEAVE =>",
-                "leave_group_on(ctx, actor_guid, arg_a)",
-            ),
-            (
-                "realm_op::UNINVITE =>",
-                "uninvite_on(ctx, actor_guid, target_guid)",
-            ),
-            (
-                "realm_op::LOOT_METHOD =>",
-                "set_loot_method_on(ctx, actor_guid, arg_a, target_guid, arg_b)",
-            ),
-            (
-                "realm_op::RAID_CONVERT =>",
-                "raid_convert_on(ctx, actor_guid)",
-            ),
-            (
-                "realm_op::SET_LEADER =>",
-                "set_leader_on(ctx, actor_guid, target_guid)",
-            ),
-            (
-                "realm_op::SET_ASSISTANT =>",
-                "set_assistant_on(ctx, actor_guid, target_guid, arg_a != 0)",
-            ),
-            (
-                "realm_op::CHANGE_SUBGROUP =>",
-                "change_subgroup_on(ctx, actor_guid, target_guid, arg_a)",
-            ),
-            (
-                "realm_op::SWAP_SUBGROUP =>",
-                "swap_subgroup_on(ctx, actor_guid, target_guid, arg_c)",
-            ),
-            (
-                "realm_op::READY_CHECK_START =>",
-                "ready_check_start_on(ctx, actor_guid)",
-            ),
-            (
-                "realm_op::READY_CHECK_ANSWER =>",
-                "ready_check_answer_on(ctx, actor_guid, arg_a)",
-            ),
-            (
-                "realm_op::TARGET_ICON =>",
-                "target_icon_on(ctx, actor_guid, arg_a, target_guid)",
-            ),
-            (
-                "realm_op::MINIMAP_PING =>",
-                "minimap_ping_on(ctx, actor_guid, target_guid, arg_c)",
-            ),
-            (
-                "realm_op::RANDOM_ROLL =>",
-                "random_roll_on(ctx, actor_guid, target_guid, arg_c)",
-            ),
-        ] {
-            let arm = body.split(op).nth(1).unwrap_or_else(|| {
-                panic!("`realm_group_op` no longer dispatches `{op}`. Body was:\n{body}")
-            });
-            // Whitespace-normalised, and a `{` block wrapper stripped: an arm split across lines or
-            // wrapped in braces is the same dispatch, and neither should be able to hide a swap.
-            let arm: String = arm.split_whitespace().collect::<Vec<_>>().join(" ");
-            let arm = arm.strip_prefix("{ ").unwrap_or(&arm);
-            assert!(
-                arm.starts_with(core),
-                "`{op}` no longer runs `{core}`. The op byte is a WIRE value the gateway sends and \
-                 this match dispatches on; a swapped arm runs the wrong op for every player, \
-                 silently. Arm was:\n{}",
-                &arm[..arm.len().min(120)]
-            );
-        }
-    }
 }

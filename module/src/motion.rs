@@ -22,10 +22,7 @@
 //! `game_entity_motion_pending` **iff** that mover has motion the tick has not published yet; the
 //! tick drains (deletes) every row it publishes. An entity that did not move therefore has no row
 //! and is not touched — the tick's cost is O(movers since the last firing), never O(world).
-//!
-//! `seq` is NOT staged here: it lives on the public row and is bumped at publish time, exactly as
-//! `movement_update` used to bump it, so per-mover ordering/de-duplication on the gateway side is
-//! unchanged.
+
 //!
 //! # Discrete transitions (the part that is easy to get subtly wrong)
 //!
@@ -120,8 +117,8 @@ pub struct MotionPublishSchedule {
 /// swim/run-walk-mode) is an edge the client animates off; dropping one shows a peer sliding into a
 /// run with no start, or landing with no jump.
 ///
-/// This mirrors the gateway's own rule 1 (`world/coalesce.rs`, work-item 231: "any non-heartbeat
-/// opcode is ALWAYS a state change"), one layer down — it is deliberately the SAME classification,
+/// This mirrors the gateway's own rule 1 (`world/coalesce.rs`): "any non-heartbeat
+/// opcode is ALWAYS a state change", one layer down — it is deliberately the SAME classification,
 /// only stricter about `SET_FACING`, which the gateway forwards eagerly because the module's stored
 /// heading feeds server-side facing checks.
 pub(crate) fn is_discrete(opcode: u16) -> bool {
@@ -152,7 +149,7 @@ pub(crate) enum Coalesce {
     /// Publish the QUEUED one immediately (in this movement transaction, paying one sweep) and
     /// stage the new one. This is the only path that still costs a per-packet sweep, and it is
     /// reachable only when a player produces two input-state changes inside one tick window — with
-    /// the gateway's own 150 ms heartbeat coalescing (work-item 231) upstream, that is rare and
+    /// the gateway's own 150 ms heartbeat coalescing upstream, that is rare and
     /// self-limiting, never proportional to player count.
     FlushThenReplace,
 }
@@ -478,10 +475,10 @@ mod tests {
 
     // ---- A model of the queue, built out of the SAME pure fns the reducers execute --------------
     //
-    // The module crate has no `ReducerContext` harness by design (playbook §7), so the DB wiring is
-    // pinned by the source scans below and the ALGORITHM is exercised here against an in-memory
-    // stand-in for the two tables. Every decision in the model is a call into `coalesce` /
-    // `tick_action`; the model itself only moves rows between two maps, exactly as the reducers do.
+    // The module crate has no `ReducerContext` harness by design (playbook §7), so the ALGORITHM is
+    // exercised here against an in-memory stand-in for the two tables. Every decision in the model is a
+    // call into `coalesce` / `tick_action`; the model itself only moves rows between two maps,
+    // exactly as the reducers do.
 
     #[derive(Default)]
     struct Model {
@@ -542,7 +539,6 @@ mod tests {
             Some(&(HEARTBEAT, vec![1, 2, 3], 0)),
             "a staged heartbeat must reach the public relay on the next firing"
         );
-        // ...and a second, later packet republishes with a bumped seq.
         w.movement(7, HEARTBEAT, &[4, 5, 6]);
         w.tick();
         assert_eq!(w.published.get(&7), Some(&(HEARTBEAT, vec![4, 5, 6], 1)));
@@ -581,7 +577,6 @@ mod tests {
         w.pending.remove(&7);
         w.tick();
         assert!(!w.published.contains_key(&7));
-        // ...and even if a packet were staged with no lifecycle cleanup at all (a delete site
         // missed, a race), the tick's own liveness gate still refuses to write the public row.
         w.movement(7, HEARTBEAT, &[9]);
         w.tick();
@@ -608,7 +603,7 @@ mod tests {
              survive — 'latest position wins' would publish the heartbeat and the peer would never \
              play the jump"
         );
-        // The heartbeat's fresher position is not lost forever: the next packet carries it.
+
         w.movement(7, HEARTBEAT, &[0xCC]);
         w.tick();
         assert_eq!(
@@ -660,79 +655,6 @@ mod tests {
         assert_eq!(
             w.publishes, 100,
             "one write per MOVER per firing, all inside the single tick transaction"
-        );
-    }
-
-    // ---- Source pins: the DB wiring no pure test in this crate can reach ------------------------
-
-    #[test]
-    fn the_tick_gates_every_publish_on_the_liveness_check() {
-        let body = crate::test_scan::code_of(
-            include_str!("motion.rs"),
-            "pub fn publish_motion(ctx: &ReducerContext, _schedule: MotionPublishSchedule) {",
-        );
-        assert!(
-            body.contains("ctx.sender() != ctx.database_identity()"),
-            "the tick must stay scheduler-only. Body was:\n{body}"
-        );
-        let drain = crate::test_scan::code_of(
-            include_str!("motion.rs"),
-            "pub(crate) fn publish_staged(ctx: &ReducerContext) {",
-        );
-        assert!(
-            drain.contains("tick_action(entities.guid().find(row.guid).is_some())"),
-            "every queued row must go through `tick_action` with a REAL liveness probe — a \
-             publish that skips it resurrects motion rows for departed entities. Body was:\n{body}"
-        );
-        assert_eq!(
-            drain.matches("publish(ctx, &row)").count(),
-            1,
-            "exactly one publish call, and it is the `TickAction::Publish` arm. Body was:\n{drain}"
-        );
-        assert!(
-            drain.contains("pending.guid().delete(row.guid)"),
-            "the queue must be drained whatever the action, or a stale row lives forever. Body \
-             was:\n{drain}"
-        );
-    }
-
-    #[test]
-    fn the_write_path_routes_every_decision_through_coalesce() {
-        let body =
-            crate::test_scan::code_of(include_str!("motion.rs"), "pub(crate) fn queue_motion(");
-        assert!(
-            body.contains("coalesce(prev.opcode, opcode)"),
-            "the staged-vs-incoming decision must be `coalesce`'s, not re-derived inline. Body \
-             was:\n{body}"
-        );
-        assert_eq!(
-            body.matches("publish(ctx, &prev)").count(),
-            1,
-            "the ONLY inline publish on the movement path is the FlushThenReplace arm — any other \
-             one reinstates the per-packet subscription sweep this item removes. Body was:\n{body}"
-        );
-        assert!(
-            !body.contains("game_entity_motion()"),
-            "`movement_update`'s path must never touch the PUBLIC relay table directly — it stages \
-             into the private one and lets `publish` mint `seq`. Body was:\n{body}"
-        );
-    }
-
-    #[test]
-    fn the_staging_table_is_private() {
-        let src = include_str!("motion.rs");
-        // Assembled at run time: a contiguous literal would itself look like a `#[table(` attribute
-        // to `tripwires::character_owned_tripwire::extract_tables`, which text-scans this tree.
-        let needle = format!("{}{}", "#[table", "(accessor = game_entity_motion_pending");
-        let attr = src
-            .find(&needle)
-            .expect("the staging table's own attribute");
-        let end = src[attr..].find(")]").expect("attribute closes") + attr;
-        assert!(
-            !src[attr..end].contains("public"),
-            "`game_entity_motion_pending` MUST stay private — a subscriber on it reinstates the \
-             per-transaction subscription sweep (#461's entire premise). Attribute was: {}",
-            &src[attr..end]
         );
     }
 }

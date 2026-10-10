@@ -1,86 +1,6 @@
-//! Binding schema-parity test.
-//!
-//! `gateway/src/stdb/bindings/*_type.rs` is generated under `docs/danger-zones.md`. A
-//! Module column add/reorder/retype on a
-//! gateway-SUBSCRIBED table that isn't mirrored in the binding breaks live BSATN row decode
-//! SILENTLY — mock-store tests cannot catch it (a real `respec_count` binding drifted silently and
-//! was only found by accident, during unrelated work). This test makes that drift a RED TEST instead.
-//!
-//!
-//! Linux-only, same reason as the armor mirror tests: it needs the `lyracore-module` dev-dep,
-//! whose native build only links where the ELF linker dead-strips the SpacetimeDB wasm-host
-//! intrinsics (see gateway/Cargo.toml). Schema drift is platform-independent; one platform guards it.
+//! Compare the Module schema with generated bindings for every Coordinator subscription.
+//! See `docs/binding-schema-parity.md` for the comparison and its platform scope.
 #![cfg(target_os = "linux")]
-//! # How the comparison works
-//!
-//! Every module `#[table]` struct implements `spacetimedb_sats::SpacetimeType` (the
-//! `#[table(...)]` macro's `__TableHelper` derive expands to the same thing
-//! `#[derive(SpacetimeType)]` would) — `make_type(&mut impl TypespaceBuilder) -> AlgebraicType`
-//! gives its REAL, ordered field-name+type shape, natively, no live node. We call it through
-//! `RawModuleDefV9Builder` — the same `TypespaceBuilder` the real `spacetime` CLI's schema
-//! extraction uses — then `Typespace::inline_typerefs_in_type` to resolve any nested named-type
-//! refs, producing a flat, `PartialEq`-comparable `AlgebraicType::Product`.
-//!
-//! # Premise correction — read before editing this file
-//!
-//! This test's original design assumed the gateway BINDING struct also implements `SpacetimeType`
-//! symmetrically ("every gateway binding struct derives/implements `SpacetimeType`"). That is
-//! **false** as of the SpacetimeDB 2.7.1 codegen actually vendored here:
-//! `spacetimedb-bindings-macro`'s `Serialize`, `Deserialize`, and `SpacetimeType` derives are
-//! three *separate* proc-macros (`derive_serialize` / `derive_deserialize` / `schema_type` in
-//! `spacetimedb-bindings-macro-2.7.1/src/lib.rs`), and every generated `*_type.rs` file derives
-//! only `Serialize, Deserialize, Clone, PartialEq, Debug` — never `SpacetimeType`. So
-//! `check::<ModuleT, BindingT>("game_x")` with both sides bound by `SpacetimeType` does not
-//! compile. Deriving `SpacetimeType` ourselves on the generated file is a non-starter (it would
-//! collide with the file's own `Serialize`/`Deserialize` impls — E0119), and hand-editing a "DO
-//! NOT EDIT, AUTOMATICALLY GENERATED" file is exactly the hazard `docs/danger-zones.md` §2 warns
-//! about (the next `spacetime generate` silently drops the edit).
-//!
-//! The fallback actually implemented here is stronger than field-count-only (the originally
-//! own escape hatch: "get SOMETHING structural working; do not water down to field-count-only").
-//! For each binding struct we build ONE real instance (fields filled via the local `Sentinel`
-//! trait below — real values of the REAL field types, not placeholders) and derive its schema
-//! from that instance two independent ways, using only what the binding struct already derives:
-//!
-//!   1. **Order + names**: a struct's derived `Debug` impl visits fields in true declaration
-//!      order (generated from the exact same parsed field list the `Serialize` derive would use).
-//!      `top_level_debug_fields` parses the top-level `name: value` pairs out of
-//!      `format!("{inst:?}")` — brace/paren/bracket-depth aware, so a nested `Timestamp`'s own
-//!      derived `Debug` output (`Timestamp { __timestamp_micros_since_unix_epoch: .. }`) can't be
-//!      mistaken for a top-level field — and asserts it equals this file's believed field-name
-//!      order. Reordering/renaming/adding/removing a real field changes the true `Debug` order and
-//!      fails this assertion first.
-//!   2. **Types**: each field is read back off the real instance BY NAME (`&inst.<field>`, which
-//!      only compiles against the struct's REAL current field). Primitive and container fields
-//!      delegate to their own `SpacetimeType::make_type`. Generated nested command products read
-//!      their real fields the same way. Generated command sums use exhaustive variant matches and
-//!      assert each variant's actual BSATN tag. (`Identity`/`Timestamp` need no special-case
-//!      mapping: the gateway's `spacetimedb_sdk::Identity`/`Timestamp` and the module's
-//!      `spacetimedb::Identity`/`Timestamp` are the literal same `spacetimedb_lib` type — both
-//!      crates unify on `spacetimedb-lib`/`spacetimedb-sats` 2.7.1 in this workspace's one
-//!      `Cargo.lock` — so their `AlgebraicType`s compare equal directly.)
-//!
-//! Both signals are compared against the module's real, auto-derived `AlgebraicType::Product` for
-//! field COUNT, NAME-per-index, and TYPE-per-index. The literal `check::<ModuleT, BindingT>(name)`
-//! signature originally sketched isn't achievable (no `SpacetimeType` on `BindingT`);
-//! `check::<ModuleT>(name, binding_shape!(BindingT { field, field, .. }))` is the closest faithful
-//! equivalent — one manifest line per table, naming both types, still driven by the REAL types.
-//!
-//! # Scope
-//!
-//! SUBSCRIBED tables only, per the coordinator's own subscription list in `stdb/connection.rs`
-//! (parsed at test time below via `include_str!` — the completeness guard). Per-player
-//! subscriptions set up elsewhere (`stdb/subscriptions.rs`) and reducer-arg parity are out of
-//! scope.
-//!
-//! # No `[lib]` target workaround
-//!
-//! `lyracore-gateway` is a binary-only crate (no `[lib]` in `Cargo.toml`), so this
-//! integration test cannot `use spacetime_core_gateway::...` (nothing to link against). The
-//! generated `gateway/src/stdb/bindings/mod.rs` tree is fully self-contained (only depends on the
-//! `spacetimedb_sdk` crate — verified: zero `crate::`/`super::super` references anywhere under
-//! `stdb/bindings/`), so it's pulled in directly via `#[path]` below and recompiled as part of
-//! this test binary instead. This changes zero gateway `src/` files.
 
 #[path = "../src/stdb/bindings/mod.rs"]
 #[allow(dead_code)]
@@ -413,10 +333,10 @@ fn field_shape<T: BindingFieldShape>(value: &T, ts: &mut RawModuleDefV9Builder) 
 /// `name: value` way inside its own `{ .. }`). Brace/paren/bracket-depth aware; only records
 /// identifiers seen at depth 1 (directly inside the outermost struct's braces).
 ///
-/// NOT string-literal aware (found by review): a Sentinel value whose Debug output embeds
+/// Not string-literal aware: a Sentinel value whose Debug output embeds
 /// `word: ` inside a quoted string would inject a spurious identifier here. Every current sentinel
 /// is empty/zero/None so this cannot fire today, and an injection would surface as a LOUD
-/// order-mismatch failure, not a silent pass — but keep Sentinel impls free of colon/comma-bearing
+/// order-mismatch failure, not a silent pass; keep Sentinel impls free of colon/comma-bearing
 /// string values (or teach this parser about `"` first).
 fn top_level_debug_fields(debug: &str) -> Vec<String> {
     let open = debug
@@ -562,7 +482,7 @@ fn check<M: SpacetimeType>(table: &str, binding: BindingShape, renames: &[(&str,
         if expected_b_name != m_name {
             // A rename entry may ONLY paper over the SDK's cosmetic trailing-digit underscore
             // normalization (data0 -> data_0). Without this guard, a PAIR of same-typed swapped
-            // fields could hide behind two compensating bogus renames (found by review).
+            // fields could hide behind two compensating bogus renames.
             assert_eq!(
                 expected_b_name.replace('_', ""),
                 m_name.replace('_', ""),
@@ -657,8 +577,8 @@ parity_test!(parity_game_region_assignment, "game_region_assignment", lyracore_m
     key, map_id, region_id, shard, epoch, updated_micros,
 });
 // Party state, authoritative on realm-core and mirrored onto each world shard.
-// `game_group_event` earns its entry twice over — it is the one table this slice CHANGED (the
-// END-appended `recipient_guid`), and the gateway decodes it on two different connections.
+// `game_group_event` earns its entry twice over — it is the one table with an
+// END-appended `recipient_guid`, and the gateway decodes it on two different connections.
 parity_test!(parity_game_group, "game_group", lyracore_module::Group, bindings::group_type::Group, {
     group_id, leader_guid, loot_method, loot_threshold, rr_cursor, master_looter_guid, group_type,
 });
@@ -717,7 +637,7 @@ parity_test!(parity_game_corpse_loot_eligible, "game_corpse_loot_eligible", lyra
 parity_test!(parity_game_group_event, "game_group_event", lyracore_module::GroupEvent, bindings::group_event_type::GroupEvent, {
     id, recipient_identity, kind, other_guid, other_name, created_at, payload, recipient_guid,
 });
-// The private per-recipient trade-status relay (#120) — the `game_group_event` shape minus the
+// The private per-recipient trade-status relay — the `game_group_event` shape minus the
 // name/payload columns (no trade status carries either).
 parity_test!(parity_game_trade_event, "game_trade_event", lyracore_module::TradeEvent, bindings::trade_event_type::TradeEvent, {
     id, recipient_identity, kind, other_guid, created_at, recipient_guid, payload,
@@ -1393,7 +1313,7 @@ fn every_subscribed_table_in_connection_rs_has_a_parity_manifest_entry() {
         "connection.rs subscribes {missing:?} but gateway/tests/schema_parity.rs has no \
          `parity_test!` line for it — add one (copy the pattern from any existing entry above) \
          AND add the table name to MANIFEST_TABLES, or a gateway binding drift on this table will \
-         break live BSATN decode silently. See docs/agent-playbook.md failure-mode §1."
+         break live BSATN decode silently."
     );
 }
 

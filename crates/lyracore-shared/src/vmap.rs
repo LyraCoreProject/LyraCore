@@ -1,21 +1,6 @@
-//! Per-cell collision-triangle blob codec — the exact-model half of decision #10 (`docs/decisions.md`
-//! §10, epic #169). One blob per terrain cell (same 33.3 yd `terrain::cell_key` the nav grid bins
-//! by): every world-space collision triangle whose AABB touches that cell, carrying enough source
-//! metadata for the two vanilla ray flavors the next slice adds (LoS = WMO only, collision = WMO +
-//! M2 doodads) — see decision #10 for why LoS excludes doodads.
-//!
-//! Unlike `nav`'s fixed-size blobs this format is variable-length (a cell's triangle count isn't
-//! bounded), so it carries an explicit VERSION byte: a schema change bumps `VMAP_VERSION` and
-//! `decode` rejects anything else outright rather than silently misreading bytes.
-//!
-//! #520 extracted, binned, packed and reported. #521 (this file's `cast_ray` half) adds the query
-//! surface: exact segment–triangle tests, walking only the terrain cells the ray's XY projection
-//! crosses (a 2D DDA, Amanatides–Woo) rather than sampling every few tenths of a yard like
-//! `nav::has_los`'s parametric scan — an exact per-triangle store can afford (and needs) an exact
-//! walk. Two vanilla ray flavors: LoS (`RayFlavor::Los`, WMO-class triangles only — doodads/forests
-//! never block sight) and collision (`RayFlavor::Collision`, WMO + M2 doodads, for movement/reach
-//! clamps). The module-side table + import reducers + `vmap_enabled` gate live in
-//! `module/src/vmap.rs`.
+//! Per-cell collision triangles and exact segment-triangle ray queries.
+//! Line of sight uses WMO triangles; collision also uses M2 doodads. A versioned blob carries source metadata for both ray flavors.
+//! Queries walk only the terrain cells the segment crosses with a two-dimensional DDA.
 
 /// Blob format version. Bump on any layout change; `decode` rejects a mismatch rather than guess.
 pub const VMAP_VERSION: u8 = 1;
@@ -37,8 +22,8 @@ pub struct VmapTri {
 }
 
 /// Bytes per packed triangle: 1 (class tag) + 4 (group_id) + 4 (mogp_flags) + 36 (9 × f32 verts).
-/// `pub` so the importer can size a per-blob shard cap (`#521`: a dense cell's triangle count
-/// isn't bounded, but a single `spacetime call` argument is — see `importer/src/vmap.rs`).
+/// `pub` so the importer can size a per-blob shard cap. A dense cell's triangle count
+/// isn't bounded, but a single `spacetime call` argument is (see `importer/src/vmap.rs`).
 pub const TRI_BYTES: usize = 1 + 4 + 4 + 36;
 /// Header: 1 version byte + 4-byte LE triangle count. `pub` for the same reason as `TRI_BYTES`.
 pub const HEADER_BYTES: usize = 5;
@@ -126,7 +111,7 @@ pub fn decode(blob: &[u8]) -> Result<Vec<VmapTri>, DecodeError> {
 }
 
 // ===========================================================================================
-//  Ray queries (#521) — exact segment–triangle tests over a 2D DDA cell walk.
+//  Ray queries, exact segment–triangle tests over a 2D DDA cell walk.
 // ===========================================================================================
 
 /// Which vanilla ray flavor to cast: LoS ignores doodads (M2 never blocks sight); collision
@@ -544,7 +529,7 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------------------
-    //  Ray-query tests (#521) — a synthetic stand-in for the done-when's live scenarios: a
+    //  Ray-query tests, a synthetic stand-in for live scenarios: a
     //  vertical "column" wall (abbey pillar analogue), a clear segment, and a doodad that
     //  blocks the collision ray but not the LoS ray.
     // -------------------------------------------------------------------------------------
@@ -693,7 +678,7 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------------------
-    //  Area-info tests (#527) — a synthetic stand-in for the done-when's live scenarios: a
+    //  Area-info tests, a synthetic stand-in for live scenarios: a
     //  horizontal floor quad tagged indoor (abbey-interior analogue) under a probe reports the
     //  group + indoor=true; a probe with no WMO geometry in range reports "outdoors" (`None`).
     // -------------------------------------------------------------------------------------

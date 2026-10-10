@@ -181,12 +181,12 @@ pub fn aggro_radius(creature_level: u32, player_level: u32, template_aggro_range
 }
 
 // ===========================================================================================
-//  Active-cell activation radius (work-item 230: grid-activation — only cells near players tick)
+//  Active-cell activation radius (grid-activation, only cells near players tick)
 //  [pure]
 // ===========================================================================================
 
 /// The combat activation radius (yards) around a player within which a creature must be treated as
-/// ACTIVE for the aggro/assist passes this tick, rather than dormant. Two ceilings combine (the larger
+/// active for the aggro/assist passes this tick, rather than dormant. Two ceilings combine (the larger
 /// wins), then the assist margin is added on top:
 ///   - `MAX_AGGRO_RADIUS` (45yd) — the vanilla level-scaled proximity-aggro ceiling that covers every
 ///     creature relying on the DEFAULT scaling (every imported cmangos creature: the ETL never sets
@@ -304,13 +304,6 @@ pub fn feared_flee_step(cx: f32, cy: f32, sx: f32, sy: f32, dist: f32, rand: u32
     (cx + a.cos() * dist, cy + a.sin() * dist)
 }
 
-// ===========================================================================================
-//  Chase (vanilla creature AI: an engaged mob closes on an out-of-range target) [pure helper]
-// ===========================================================================================
-
-/// Squared melee reach — a creature this close (or closer) is in range to swing and must NOT chase.
-/// Aliases combat's `MELEE_RANGE_SQ` ((5 yd)²) directly — a single source of truth, so this pass and
-/// the swing pass agree on the boundary by construction (no lockstep-by-comment).
 pub(crate) const CHASE_MELEE_SQ: f32 = crate::combat::MELEE_RANGE_SQ;
 
 /// Squared chase cutoff — a target beyond this is too far to pursue. An engaged creature chases while its
@@ -429,13 +422,13 @@ pub(crate) const SENSE_EVERY_N_TICKS: i64 = 8;
 
 /// The target SENSE period in micros (~4s) — `MOVE_TICK_MICROS × SENSE_EVERY_N_TICKS`. A tick row of
 /// ANY cadence quantizes its sensing passes to roughly this period (see
-/// `is_sense_tick_for_interval`), so a tight per-instance tick (work-item 229) smooths MOVEMENT
+/// `is_sense_tick_for_interval`), so a tight per-instance tick smooths MOVEMENT
 /// latency without also multiplying the expensive sensing scans or the tick-quantized effect rates
 /// (wander hop chance, aggro re-checks) that assume the ~4s cadence.
 pub(crate) const SENSE_PERIOD_MICROS: i64 = MOVE_TICK_MICROS * SENSE_EVERY_N_TICKS;
 
 /// Is this tick a "sensing" tick (run the ~4s passes)? Generalized to a tick row of ANY interval
-/// (work-item 229 — per-instance tick rows carry their own `ScheduleAt::Interval`): one firing in
+/// (per-instance tick rows carry their own `ScheduleAt::Interval`): one firing in
 /// every `SENSE_PERIOD_MICROS / interval` firings is a sense tick, so the sensing cadence stays ~4s no
 /// matter how fast the row fires. At the seeded default (`interval == MOVE_TICK_MICROS`) the divisor
 /// is exactly `SENSE_EVERY_N_TICKS` (one sense tick in 8). An interval LONGER than the sense period
@@ -453,12 +446,6 @@ pub fn is_sense_tick_for_interval(now_micros: i64, interval_micros: i64) -> bool
     (now_micros / interval) % every_n == 0
 }
 
-/// One tick's worth of SECONDS for a row firing every `interval_micros` — what the per-firing STEP
-/// passes (chase/return/flee/fear-flee) multiply speed by, so a creature's NET speed is
-/// cadence-invariant: a 100ms per-instance tick emits 5× as many legs each 1/5 the length, not 5×
-/// the speed (the multiplied-movement bug the work-item 229 review hunts for). At the default
-/// interval this is EXACTLY `MOVE_TICK_SECS` (500_000/1_000_000 = 0.5, exact in f32) — byte-identical
-/// legs. Same non-positive clamp as `is_sense_tick_for_interval`. Pure — unit-tested.
 pub fn tick_secs_for_interval(interval_micros: i64) -> f32 {
     let interval = if interval_micros > 0 {
         interval_micros
@@ -476,14 +463,6 @@ pub fn fear_step_for_tick(tick_secs: f32) -> f32 {
     FEAR_STEP * (tick_secs / MOVE_TICK_SECS)
 }
 
-/// The ACTUAL seconds between two sense ticks of a row firing every `interval_micros` — i.e.
-/// `every_n × interval` with the same `every_n = max(SENSE_PERIOD_MICROS / interval, 1)` floor as
-/// `is_sense_tick_for_interval` (the two MUST stay in lockstep: this is the leg span a sense-tick
-/// pass must cover to bridge to the NEXT sense tick). NOT always ~4s: the floor makes every firing
-/// of a slower-than-half-the-period row a sense tick, so a 2.5s row's sense period is 2.5s, not 4s
-/// — the pet follow pass hardcoding 4s emitted OVERLAPPING legs there (~1.6× closing speed, 229
-/// review). At the default 500ms interval this is exactly `MOVE_TICK_SECS × SENSE_EVERY_N_TICKS`
-/// (4.0). Same non-positive clamp. Pure — unit-tested.
 pub fn sense_period_secs_for_interval(interval_micros: i64) -> f32 {
     let interval = if interval_micros > 0 {
         interval_micros
@@ -495,32 +474,13 @@ pub fn sense_period_secs_for_interval(interval_micros: i64) -> f32 {
 }
 
 // ===========================================================================================
-//  Per-instance tick scoping (work-item 229) [pure]
+//  Per-instance tick scoping [pure]
 // ===========================================================================================
 //
-// HONEST BOUND (from the work item — repeat it wherever this machinery is documented): SpacetimeDB
-// serializes ALL reducers on ONE commit stream, so per-instance tick rows are LATENCY SMOOTHING +
-// WORK AVOIDANCE, **NOT parallel throughput**. A dedicated row lets one instance tick tighter (or,
-// later, slower/paused) and lets every row scan ONLY its own instances — it never adds CPU in
-// parallel, and every extra firing TAXES the shared serialized stream (10 instances at 100ms = 100
-// extra transactions/sec preempting player actions). Tight cadences are a knob to use sparingly.
 
-/// Sentinel `instance_id` for a `game_creature_move_schedule` row meaning GLOBAL / catch-all: the row
-/// covers every instance WITHOUT a dedicated row of its own — normally including instance 0 (the
-/// open world), but the partition rule has no special case: arming a dedicated row for instance 0
-/// (permitted, if odd) moves the open world's SCOPED passes onto that row, while the global
-/// due-time passes stay on the catch-all firing — and the 230/233 catch-all evidence log lines
-/// would then read ~0 creatures (they describe the catch-all's scoped work; 229 review). u64::MAX —
-/// no real instance ever gets this id (instance ids are allocated small; and even an entity
-/// teleported to a pathological instance u64::MAX would still be covered by the catch-all, never
-/// stranded). The schema default on `CreatureMoveSchedule.instance_id` is this value WRITTEN AS A
-/// LITERAL (`18_446_744_073_709_551_615u64` — the `#[default]` macro wants a literal expression);
-/// the `global_tick_instance_sentinel_is_u64_max` test pins THIS CONST to u64::MAX, but nothing can
-/// programmatically tie it to the `#[default]` attribute literal in tick.rs (migration metadata,
-/// not a Rust `Default`) — editing THAT literal alone reds no test; the schema doc points back here.
 pub(crate) const GLOBAL_TICK_INSTANCE: u64 = u64::MAX;
 
-/// Which instances one FIRING of `tick_creatures` covers (work-item 229). Built per firing from the
+/// Which instances one FIRING of `tick_creatures` covers. Built per firing from the
 /// firing row's `instance_id` + the full (tiny) schedule-row set:
 ///   - a DEDICATED row (`instance_id != GLOBAL_TICK_INSTANCE`) covers EXACTLY its instance;
 ///   - the CATCH-ALL row (`instance_id == GLOBAL_TICK_INSTANCE`) covers every instance EXCEPT those
@@ -528,7 +488,7 @@ pub(crate) const GLOBAL_TICK_INSTANCE: u64 = u64::MAX;
 ///     proven by `tick_scope_partitions_every_instance_exactly_once`).
 ///
 /// ANTI-STRANDING GUARANTEE: an entity can sit in an instance with NO `game_instance` row and NO
-/// dedicated tick row (224's `teleport_player` accepts an arbitrary `instance_id` today) — the
+/// dedicated tick row (`teleport_player` accepts an arbitrary `instance_id` today) — the
 /// catch-all's "everything not dedicated" rule means such an entity is ALWAYS covered; a
 /// strictly-enumerated instance list would freeze it forever.
 pub(crate) enum TickScope {
@@ -564,7 +524,7 @@ impl TickScope {
 
     /// Does THIS firing cover `instance_id`? The one predicate every scoped pass gates on. With only
     /// the seeded catch-all row (no dedicated rows) this is `true` for EVERY instance — the
-    /// equivalence case: the pass visits the identical candidate set it did before work-item 229.
+    /// equivalence case: the pass visits the identical candidate set it did before.
     pub(crate) fn covers(&self, instance_id: u64) -> bool {
         match self {
             TickScope::CatchAll { dedicated } => !dedicated.contains(&instance_id),
@@ -711,7 +671,7 @@ mod tests {
     }
 
     // =========================================================================================
-    //  Active-cell activation math (work-item 230)
+    //  Active-cell activation math
     // =========================================================================================
 
     #[test]
@@ -752,13 +712,6 @@ mod tests {
         assert_eq!(aggro_override_cutoff(ASSIST_RADIUS - 1.0), 0);
     }
 
-    /// Work-item 230's engaged-creature-never-dormant rule ("a player could drag one far away") only
-    /// holds if a creature glued to a player by combat can never wander past the active-cell radius
-    /// before the active set would have covered it anyway. The chase and rout phases don't consult
-    /// the active set at all (see their doc comments) — that's the primary guarantee — but this
-    /// pins the geometric invariant too: the chase cutoff (the farthest a target can be and still be
-    /// pursued) must stay inside `combat_active_radius`, so even a hypothetical future re-gate could
-    /// never sleep a still-engaged creature out from under its target.
     ///
     /// Distance no longer ends a fight, so the cutoff is no longer in lockstep with an evade constant: it
     /// IS the active-cell radius, which is what keeps an engaged creature pursuing while its engagement
@@ -774,7 +727,7 @@ mod tests {
         );
     }
 
-    /// Work-item 230's "mid-leg flee/return either finishes or freezes coherently" requirement: this
+    /// The "mid-leg flee/return either finishes or freezes coherently" requirement: this
     /// repo picks FREEZE (dormancy simply skips the pass, touching nothing). That choice is only
     /// coherent because `chase_step` (the shared return/chase step primitive) is a pure function of the
     /// CURRENT position and target — no elapsed-time or step-count argument — so pausing for any number
@@ -801,9 +754,6 @@ mod tests {
         assert_eq!(next_after_resume, next_if_uninterrupted);
     }
 
-    /// The walk home has no upper bound on displacement: the return pass re-steps ONE tick of run per
-    /// firing (`nav_step` → this primitive), so a creature left far out chains legs to `RETURN_LEASH_SQ`
-    /// instead of single-legging and stalling.
     #[test]
     fn a_creature_displaced_far_from_home_steps_all_the_way_back() {
         let (home_x, home_y) = (-100.0_f32, 250.0_f32);
@@ -908,11 +858,11 @@ mod tests {
         assert_eq!(scale_health_for_rank(2_000_000_000, 4), 3_600_000_000); // ×1.8 < u32::MAX
     }
 
-    /// Schema shape guard (work-item 214, follows `loot.rs`'s `new_loot_family_tables_construct_with_
+    /// Schema shape guard, follows `loot.rs`'s `new_loot_family_tables_construct_with_
     /// the_documented_shape` convention): `game_creature_family` constructs with named fields exactly
     /// like the importer's positional SQL INSERT column list (`family_id,name,pet_food_mask,
     /// pet_talent_type,category`) — a compile-time guard against a silently reordered/renamed column.
-    /// Purely compile-time: the runtime gates (188's feeding + tameable) don't exist yet, so there is
+    /// Purely compile-time: the runtime gates (feeding + tameable) don't exist yet, so there is
     /// nothing behavioral to assert.
     #[test]
     fn new_creature_family_table_constructs_with_the_documented_shape() {
@@ -1158,8 +1108,6 @@ mod tests {
         assert!(approx(wounded_slow_factor(0, 0), 1.0));
     }
 
-    /// Mutation target: an `||` instead of `&&`, or dropping the z arm, and a corrupted coordinate
-    /// reaches the entity row again — where it is invisible to the tick and unshakeable in combat.
     #[test]
     fn finite_point_rejects_every_non_finite_coordinate() {
         assert!(finite_point(-8949.9, -132.4, 83.5));
@@ -1169,9 +1117,6 @@ mod tests {
         assert!(!finite_point(f32::NAN, f32::NAN, f32::NAN));
     }
 
-    /// A godmoded GM is invisible to creature AI. Mutation target: drop the `!godmode` arm and a GM
-    /// standing in a starting zone re-collects the entire local creature population, because nothing
-    /// ever kills them and nothing ever leashes home.
     #[test]
     fn godmode_and_dead_players_are_not_aggro_candidates() {
         assert!(
@@ -1223,7 +1168,7 @@ mod tests {
     }
 
     // =========================================================================================
-    //  Work-item 229 — per-instance tick scope + cadence-generalized sense/step math
+    //  Per-instance tick scope + cadence-generalized sense/step math
     // =========================================================================================
 
     /// Pins the sentinel to u64::MAX — the schema `#[default(18_446_744_073_709_551_615u64)]` on
@@ -1261,8 +1206,7 @@ mod tests {
             scope.covers(0),
             "the catch-all covers instance 0 (the open world)"
         );
-        // THE ANTI-STRANDING CASE the review hunts for: an entity teleported (224) into instance 3,
-        // which has NO game_instance row and NO dedicated tick row — still covered by the catch-all.
+
         assert!(
             scope.covers(3),
             "an instance with no row of its own is covered by the catch-all"
@@ -1298,9 +1242,9 @@ mod tests {
         }
     }
 
-    /// The work-item 233 equivalence-spec pattern, applied to 229: with ONLY the seeded catch-all row
+    /// The equivalence-spec pattern, applied to the per-instance tick scope: with ONLY the seeded catch-all row
     /// and every entity at instance 0 (today's world), the scope filter admits the IDENTICAL visit
-    /// set — the passes behave byte-identically to the pre-229 code (the gate is `covers() == true`
+    /// set — the passes behave byte-identically to an unscoped tick (the gate is `covers() == true`
     /// for every candidate, and the global passes still run).
     #[test]
     fn tick_scope_default_config_visits_the_identical_candidate_set() {
@@ -1396,10 +1340,6 @@ mod tests {
         );
     }
 
-    /// The sense-period span (pet follow legs) must equal the ACTUAL spacing between sense ticks of
-    /// the row — `every_n × interval` with the same floor as `is_sense_tick_for_interval` — or a
-    /// sense-tick pass emits overlapping legs (the 229-review pet bug: a 2.5s row senses EVERY
-    /// firing, so a hardcoded-4s leg re-emitted every 2.5s closed at ~1.6× run).
     #[test]
     fn sense_period_matches_actual_sense_tick_spacing() {
         // Default 500ms row: exactly the old 4s (byte-identical pet legs).

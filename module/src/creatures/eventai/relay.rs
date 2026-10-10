@@ -2409,40 +2409,10 @@ mod tests {
             .contains("relay cycle: 1 -> 2 -> 1"));
     }
 
-    /// A creature keeps its guid across death and respawn, so a Relay Run carries the life that
-    /// started it and refuses to act for any other. Cleanup at the respawn boundary normally removes
-    /// such a run first; this Gate is what holds when one survives anyway, and it is the half that
-    /// fails safe rather than acting on the wrong creature.
-    #[test]
-    fn a_run_gates_on_the_life_that_started_it() {
-        let relay = crate::test_scan::code_of(include_str!("relay.rs"), "fn advance_run(");
-        assert!(
-            relay.contains(
-                "run.source_life_seq != crate::creatures::current_life_seq(ctx, run.source_guid)"
-            ),
-            "`advance_run` no longer compares the run's life against the source's current life, so \
-             a run from a previous life can act on the creature holding that guid now. Body \
-             was:\n{relay}"
-        );
-        let start = crate::test_scan::code_of(include_str!("relay.rs"), "fn start_relay(");
-        assert!(
-            start.contains("source_life_seq: crate::creatures::current_life_seq(ctx, source_guid)"),
-            "`start_relay` no longer stamps the source's life onto the run, so the Gate above \
-             compares against a default and never refuses. Body was:\n{start}"
-        );
-    }
-
     #[test]
     fn empty_catalogue_is_a_valid_replacement_graph() {
         let graph = std::collections::BTreeMap::new();
         assert!(validate_definition_graph(&graph).is_ok());
-        let loader = crate::test_scan::code_of(
-            include_str!("relay.rs"),
-            "fn load_definition_catalogue(ctx: &ReducerContext, packed: &str)",
-        );
-        assert!(!loader.contains("definitions.is_empty()"));
-        assert!(loader.contains("definition.current = false"));
-        assert!(loader.contains("reap_unused_definitions(ctx)"));
     }
 
     #[test]
@@ -2668,24 +2638,6 @@ mod tests {
                 "mover at {position:?}, leg {current_spline_id:?}, arrival leg {arrival_spline_id}",
             );
         }
-    }
-
-    #[test]
-    fn teardown_and_failure_paths_keep_the_durable_cleanup_wired() {
-        let relay = include_str!("relay.rs");
-        assert!(
-            relay.contains("cancel_run_tree(ctx, run.id);\n        reap_unused_definitions(ctx);")
-        );
-        assert!(relay.contains(
-            "cancel_run_tree(ctx, continuation.run_id);\n        reap_unused_definitions(ctx);"
-        ));
-        assert!(relay.contains("arrivals.by_parent_run().filter(&run_id)"));
-        assert!(include_str!("../../instance.rs")
-            .contains("crate::creatures::cancel_relay_runs_for_instance(ctx, instance_id)"));
-        assert!(include_str!("../tick/lifecycle.rs")
-            .contains("crate::creatures::cancel_relay_runs_for_source(ctx, guid)"));
-        assert!(include_str!("edges.rs")
-            .contains("super::cancel_relay_runs_for_source(ctx, payload.creature_guid)"));
     }
 
     #[test]

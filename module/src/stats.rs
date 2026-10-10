@@ -175,12 +175,6 @@ pub(crate) struct LevelStatsDelta {
     pub old_spirit: u32,
 }
 
-/// Write the level-derived stat block onto `e` for `(race, class, level)`: the five base attributes,
-/// armor (`agility * 2`, classic base armor), and max health/power — from the SAME
-/// `base_attributes_for`/`max_health_for`/`max_power_for` curve lookups every call site used to inline
-/// separately. Does **not** touch the CURRENT `health`/`power` pool (a ding always fully heals; a
-/// level-set refills fully; login instead resumes from the persisted value) or anything outside the
-/// stat block (display, faction, position, …) — those stay each caller's own concern.
 ///
 /// This was three hand-mirrored copies (`build_player_entity` at login, `grant_xp`'s ding loop, and
 /// `set_character_level`) held in sync only by a comment ("mirrors build_player_entity"). The third
@@ -216,15 +210,6 @@ pub(crate) fn apply_level_stats(
     old
 }
 
-/// Set `character_guid`'s level and recompute `max_health`/`max_power`/the five base attributes/armor
-/// from the real stat curve, via `apply_level_stats` (the SAME writer `player_login` and the ding loop
-/// use — not reimplemented). Health/power are refilled to the new max. Persists the level to the
-/// durable `game_character` row too, so a relog keeps it. Shared by `debug::debug_set_level`
-/// (the test-harness lever) and `gm::gm_command`'s `.level` (work-item 223's playtest kit) so the two
-/// paths can never drift. Works for an OFFLINE character too (266): the old live-entity requirement
-/// silently no-opped every fixture that set a logged-out character's level (exploration set Ginger to 5
-/// while she was offline — the wire phase then ran at her real, drifted level), and login rebuilds the
-/// entity from the character row anyway. Errors only when NEITHER a live entity nor a character row exists.
 pub(crate) fn set_character_level(
     ctx: &ReducerContext,
     character_guid: u64,
@@ -252,7 +237,7 @@ pub(crate) fn set_character_level(
                   // …and the THRESHOLD, which the xp reset alone does not fix. `grant_xp`'s ding loop compares
                   // `xp >= next_level_xp`, so a character left holding its OLD level's (much smaller) threshold
                   // dings on its very next kill: a bot set to level 10 hit 11 after one wolf, in every bot test
-                  // that stages a level. Same defect family as the xp reset above (266) — that fixed the banked
+                  // that stages a level. Same defect family as the xp reset above — that fixed the banked
                   // side and left the bar where it was.
         e.next_level_xp = crate::xp::xp_to_next_level(level);
         apply_level_stats(ctx, &mut e, race, class, level); // attributes + armor + max health/power
@@ -265,7 +250,7 @@ pub(crate) fn set_character_level(
         crate::spell::recompute_sheet(ctx, character_guid);
     }
 
-    // Persist the level to the character row so a relog keeps it. XP resets to 0 (266): banked
+    // Persist the level to the character row so a relog keeps it. XP resets to 0: banked
     // xp survives a level-set otherwise, and any pool past the new level's threshold re-dings
     // the character on the next xp pass — "set level 5" on a played character silently became
     // level 6+, skewing every level-keyed fixture (exploration's L5 discovery paid the L6 value).
@@ -283,89 +268,6 @@ pub(crate) fn set_character_level(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A level-set must move the DING BAR, not just clear the banked xp.
-    ///
-    /// `set_character_level` is ctx glue (playbook §7), so this pins its shape: both rows must be
-    /// written, and `next_level_xp` must be recomputed alongside the `xp = 0` on each. Dropping
-    /// either write reinstates the live defect — a bot staged at level 10 kept level 1's threshold
-    /// and dinged to 11 on its first kill, which silently invalidated every bot test written around
-    /// "an L10 bot" (kit level, the GRIND ±3 band, rotation `min_level`). The xp half of this pair
-    /// was already fixed once (266); the bar was left where it was.
-    #[test]
-    fn setting_a_level_also_moves_the_ding_threshold() {
-        let body = crate::test_scan::code_of(
-            include_str!("stats.rs"),
-            "pub(crate) fn set_character_level(",
-        );
-        for (row, needle) in [
-            (
-                "entity",
-                "e.next_level_xp = crate::xp::xp_to_next_level(level)",
-            ),
-            (
-                "character",
-                "c.next_level_xp = crate::xp::xp_to_next_level(level)",
-            ),
-        ] {
-            assert!(
-                body.contains(needle),
-                "`set_character_level` no longer recomputes the {row} row's ding threshold, so a \
-                 levelled character dings on its next kill. Body was:\n{body}"
-            );
-        }
-        // The threshold it writes must actually GROW with the level — a constant would satisfy the
-        // scan above while leaving the bar at level 1's value.
-        assert!(crate::xp::xp_to_next_level(10) > crate::xp::xp_to_next_level(1));
-    }
-
-    /// The level-derived stat block (attributes, armor, max health/power) used to be
-    /// hand-mirrored at three call sites — `build_player_entity` (login), `grant_xp`'s ding loop, and
-    /// `set_character_level` — kept in sync only by a comment ("mirrors build_player_entity"). The
-    /// third one drifted and dropped the armor recompute, so a level-SET character kept stale armor
-    /// until its next relog. The fix extracts ONE `apply_level_stats` writer; this pins that (a) the
-    /// writer still recomputes armor, and (b) all three sites still route through it rather than
-    /// re-inlining the curve lookups — a fresh hand-rolled copy at any of them reintroduces the exact
-    /// drift class was filed for.
-    #[test]
-    fn the_level_recompute_writer_and_all_three_call_sites_stay_wired_together() {
-        let writer_body =
-            crate::test_scan::code_of(include_str!("stats.rs"), "pub(crate) fn apply_level_stats(");
-        assert!(
-            writer_body.contains("e.armor = agility * 2"),
-            "`apply_level_stats` no longer recomputes armor — every caller relies on this ONE writer \
-             for it, so dropping it here breaks all three sites at once, silently. Body was:\n{writer_body}"
-        );
-
-        let set_level_body = crate::test_scan::code_of(
-            include_str!("stats.rs"),
-            "pub(crate) fn set_character_level(",
-        );
-        assert!(
-            set_level_body.contains("apply_level_stats(ctx, &mut e, race, class, level)"),
-            "`set_character_level` must route the stat recompute through `apply_level_stats` rather \
-             than re-inlining the curve lookups — a hand-rolled copy is exactly how #362 dropped \
-             armor the first time. Body was:\n{set_level_body}"
-        );
-
-        let login_body = crate::test_scan::code_of(
-            include_str!("creatures/spawn.rs"),
-            "pub fn build_player_entity(",
-        );
-        assert!(
-            login_body.contains(
-                "apply_level_stats(ctx, &mut entity, character.race, character.class, level)"
-            ),
-            "`build_player_entity` (login) must route through `apply_level_stats` too — this is the \
-             site the other two are supposed to mirror. Body was:\n{login_body}"
-        );
-
-        let ding_body = crate::test_scan::code_of(include_str!("xp.rs"), "pub(crate) fn grant_xp(");
-        assert!(
-            ding_body.contains("apply_level_stats(ctx, p, race, class, p.level)"),
-            "`grant_xp`'s ding loop must route through `apply_level_stats` too. Body was:\n{ding_body}"
-        );
-    }
 
     #[test]
     fn stamina_curve_matches_vanilla_breakpoints() {

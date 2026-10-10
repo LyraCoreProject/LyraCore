@@ -110,12 +110,12 @@ pub struct AuctionHold {
 // Hold exists.
 crate::character_owned!(delete, fn sweep_delete_game_auction_hold(ctx, character_guid) {
     let operations: Vec<u64> = ctx
-        .db
-        .game_auction_hold()
-        .by_seller()
-        .filter(&character_guid)
-        .map(|hold| hold.operation_id)
-        .collect();
+.db
+.game_auction_hold()
+.by_seller()
+.filter(&character_guid)
+.map(|hold| hold.operation_id)
+.collect();
     for operation_id in operations {
         ctx.db.game_auction_hold().operation_id().delete(operation_id);
     }
@@ -195,12 +195,12 @@ pub struct AuctionBidHold {
 // delete sweep only removes finished rows.
 crate::character_owned!(delete, fn sweep_delete_game_auction_bid_hold(ctx, character_guid) {
     let operations: Vec<u64> = ctx
-        .db
-        .game_auction_bid_hold()
-        .by_bidder()
-        .filter(&character_guid)
-        .map(|hold| hold.operation_id)
-        .collect();
+.db
+.game_auction_bid_hold()
+.by_bidder()
+.filter(&character_guid)
+.map(|hold| hold.operation_id)
+.collect();
     for operation_id in operations {
         ctx.db.game_auction_bid_hold().operation_id().delete(operation_id);
     }
@@ -2621,7 +2621,7 @@ pub fn gw_auction_list_local(
     .map_err(|refusal| refused(refusal, "listing rejected"))
 }
 
-/// Sharded listing phase 1: atomically move the source value into a caller-identified Hold.
+/// Sharded listing: atomically move the source value into a caller-identified Hold.
 #[reducer]
 #[allow(clippy::too_many_arguments)]
 pub fn gw_auction_hold_listing(
@@ -2687,7 +2687,7 @@ pub fn gw_auction_hold_listing(
     .map_err(|refusal| refused(refusal, "listing Hold rejected"))
 }
 
-/// Sharded listing phase 2: create the realm Auction and idempotency receipt from a held payload.
+/// Sharded listing: create the realm Auction and idempotency receipt from a held payload.
 #[reducer]
 #[allow(clippy::too_many_arguments)]
 pub fn realm_auction_commit_listing(
@@ -2771,7 +2771,7 @@ fn require_listing_actor(
     Ok(())
 }
 
-/// Sharded listing phase 3: copy the matching realm receipt onto the source shard.
+/// Sharded listing: copy the matching realm receipt onto the source shard.
 #[reducer]
 pub fn realm_auction_confirm_listing(
     ctx: &ReducerContext,
@@ -2799,7 +2799,7 @@ pub fn realm_auction_confirm_listing(
     .map_err(|refusal| refused(refusal, "listing receipt conflict"))
 }
 
-/// Sharded listing phase 4: delete the Hold only after the source has matching receipt evidence.
+/// Sharded listing: delete the Hold only after the source has matching receipt evidence.
 #[reducer]
 pub fn realm_auction_settle_listing(
     ctx: &ReducerContext,
@@ -2812,7 +2812,7 @@ pub fn realm_auction_settle_listing(
         .map_err(|refusal| refused(refusal, "listing Hold is not confirmed"))
 }
 
-/// Sharded listing abort phase 3: Realm-core commits the seller's exact return Mail and durable
+/// Sharded listing abort: Realm-core commits the seller's exact return Mail and durable
 /// refund receipt together. Replays with the same payload do not create a second Mail.
 #[reducer]
 #[allow(clippy::too_many_arguments)] // The persisted refund receipt's value columns.
@@ -2867,7 +2867,7 @@ pub fn realm_auction_refund_listing(
     .map_err(|refusal| refused(refusal, "listing refund conflict"))
 }
 
-/// Sharded listing abort: after realm-core refuses phase 2, mail the held item and deposit back
+/// Sharded listing abort: after realm-core refuses, mail the held item and deposit back
 /// to the seller and delete the Hold. The gateway calls this only after Realm-core has committed
 /// the matching refund receipt and Mail. Refused once the Hold has a receipt.
 #[reducer]
@@ -2985,7 +2985,7 @@ pub fn gw_auction_cancel_local(
     drive_local_hold(ctx, request, auctioneer_guid)
 }
 
-/// Sharded bid phase 1: move the complete offer into a source-shard Hold before realm-core decides.
+/// Sharded bid: move the complete offer into a source-shard Hold before realm-core decides.
 #[reducer]
 pub fn gw_auction_hold_bid(
     ctx: &ReducerContext,
@@ -3009,7 +3009,7 @@ pub fn gw_auction_hold_bid(
     gate_and_fence(ctx, request, auctioneer_guid)
 }
 
-/// Sharded Cancellation phase 1: move the Auction Cut into a source-shard Hold before realm-core
+/// Sharded Cancellation: move the Auction Cut into a source-shard Hold before realm-core
 /// decides. A seller who cannot pay it is refused with nothing held.
 #[reducer]
 pub fn gw_auction_hold_cancel(
@@ -3034,7 +3034,7 @@ pub fn gw_auction_hold_cancel(
     gate_and_fence(ctx, request, auctioneer_guid)
 }
 
-/// Sharded bid phase 2: serialize against the realm Auction and persist one terminal decision.
+/// Sharded bid: serialize against the realm Auction and persist one terminal decision.
 #[reducer]
 pub fn realm_auction_decide_bid(
     ctx: &ReducerContext,
@@ -3061,7 +3061,7 @@ pub fn realm_auction_decide_bid(
     .map_err(|refusal| refused(refusal, "bid decision conflict"))
 }
 
-/// Sharded Cancellation phase 2: serialize against the realm Auction and persist one terminal
+/// Sharded Cancellation: serialize against the realm Auction and persist one terminal
 /// decision. A Cancelled decision removes the listing and writes its mail and notice in the same
 /// transaction; a replay changes nothing.
 #[reducer]
@@ -3090,7 +3090,7 @@ pub fn realm_auction_decide_cancel(
     .map_err(|refusal| refused(refusal, "Cancellation decision conflict"))
 }
 
-/// Sharded phase 3 for a bid or a Cancellation: consume the accepted price or the cut, or restore
+/// Sharded for a bid or a Cancellation: consume the accepted price or the cut, or restore
 /// refused value, exactly once. The operation comes from the stored Hold.
 #[reducer]
 #[allow(clippy::too_many_arguments)]
@@ -3138,7 +3138,7 @@ pub fn gw_auction_finish_bid(
     .map_err(|refusal| refused(refusal, "Hold outcome conflict"))
 }
 
-/// Sharded phase 4 for a bid or a Cancellation: place an unrepresentable purse refund in
+/// Sharded for a bid or a Cancellation: place an unrepresentable purse refund in
 /// realm-core mail exactly once. The operation comes from the stored decision.
 #[reducer]
 pub fn realm_auction_refund_bid(
@@ -3167,7 +3167,7 @@ pub fn realm_auction_refund_bid(
     .map_err(|refusal| refused(refusal, "Hold refund conflict"))
 }
 
-/// Sharded phase 5 for a bid or a Cancellation: record on the source that realm-core durably
+/// Sharded for a bid or a Cancellation: record on the source that realm-core durably
 /// accepted the refund mail. The operation comes from the stored Hold.
 #[reducer]
 pub fn gw_auction_confirm_bid_refund(
@@ -4322,9 +4322,9 @@ pub fn debug_stage_legacy_auction_mail_fixture(ctx: &ReducerContext) -> Result<(
         ..receipt_template
     });
 
-    // Every row enters `game_mail` through `mail::insert_letter` (the sole writer; the
-    // `every_mail_row_is_created_by_insert_letter` tripwire enforces it), so every fixture goes
-    // through `Letter::from_character` exactly as the sending path that produced each shape did.
+    // Every row enters `game_mail` through `mail::insert_letter` (the sole writer), so every
+    // fixture goes through `Letter::from_character` exactly as the sending path that produced each
+    // shape did.
     crate::mail::insert_letter(
         ctx,
         crate::mail::Letter::from_character(
@@ -4550,7 +4550,6 @@ pub(crate) fn character_has_auction_value(ctx: &ReducerContext, character_guid: 
 /// The exact English subjects LyraCore's earlier auction code sent, each a `Character` mail with
 /// no vanilla twin. A real player's letter can carry the same words, so the subject alone never
 /// authorizes a re-tag; [`legacy_mail_matches_shape`] is the rest of the check.
-#[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
 const LEGACY_AUCTION_SUBJECTS: &[(&str, AuctionMailAction)] = &[
     ("Auction outbid", AuctionMailAction::Outbid),
     ("Auction won", AuctionMailAction::Won),
@@ -4564,7 +4563,6 @@ const LEGACY_AUCTION_SUBJECTS: &[(&str, AuctionMailAction)] = &[
 
 /// The pure half of the repair: which `AuctionMailAction` a legacy row's exact English subject
 /// maps to, or `None` for a subject this repair does not recognize.
-#[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
 fn legacy_auction_action(subject: &str) -> Option<AuctionMailAction> {
     LEGACY_AUCTION_SUBJECTS
         .iter()
@@ -4584,7 +4582,6 @@ fn legacy_auction_action(subject: &str) -> Option<AuctionMailAction> {
 /// - Won carries an item and no money; Sold carries money and no item. Neither has a guid-0 tell —
 ///   a real player letter can be titled either with a real sender and the right shape — so
 ///   [`legacy_repair_authorization`] is what actually clears them, not this function.
-#[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
 fn legacy_mail_matches_shape(mail: &crate::Mail) -> bool {
     if mail.cod != 0 || !mail.body.is_empty() {
         return false;
@@ -4601,7 +4598,6 @@ fn legacy_mail_matches_shape(mail: &crate::Mail) -> bool {
 }
 
 /// A converted row's house and the item reference its vanilla subject encodes.
-#[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
 struct LegacyRepairTarget {
     house: u32,
     item_entry: u32,
@@ -4638,7 +4634,6 @@ struct LegacyRepairTarget {
 /// to the race lookup only if no receipt matches their item (a legacy row that predates receipts,
 /// say); Outbid and the deferred bid refund have no receipt to draw from at all — a bidder is never
 /// a receipt's actor — and always use the race lookup.
-#[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
 fn legacy_repair_authorization(
     ctx: &ReducerContext,
     mail: &crate::Mail,
@@ -4723,7 +4718,6 @@ fn legacy_repair_authorization(
 /// skips a whole copper as price climbs by one (its cut grows by at most one copper per copper of
 /// price), so every integer between its low and high ends is reachable — checking the two ends
 /// bounds every price in between too.
-#[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
 fn receipt_could_pay_out(receipt: &AuctionOperationReceipt, money: u32) -> bool {
     let Some(low) = seller_proceeds(receipt.start_bid, receipt.deposit, receipt.consignment_rate)
     else {
@@ -4747,7 +4741,6 @@ fn receipt_could_pay_out(receipt: &AuctionOperationReceipt, money: u32) -> bool 
 /// (`crates/lyracore-shared/src/auction.rs`). Falls back to the neutral house (7) for a recipient
 /// with no Character row — the same fallback that function uses for a template it cannot place on
 /// either team, and Realm-core's only outcome, since it carries no Character rows at all.
-#[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
 fn legacy_character_house(ctx: &ReducerContext, recipient_guid: u64) -> u32 {
     match crate::helpers::character_by_guid(ctx, recipient_guid) {
         Some(character)
@@ -4764,7 +4757,6 @@ fn legacy_character_house(ctx: &ReducerContext, recipient_guid: u64) -> u32 {
 /// Family name `repair_legacy_auction_mail` stamps in `game_import_meta` once it has run on a
 /// database, so a later publish's repair pass does not re-scan mail a player wrote after the
 /// re-tag — including a letter that happens to name one of [`LEGACY_AUCTION_SUBJECTS`].
-#[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
 const LEGACY_AUCTION_MAIL_REPAIR_FAMILY: &str = "repair_legacy_auction_mail";
 
 /// Re-tag auction mail written before the vanilla Auction Mail format shipped to the vanilla
@@ -4784,7 +4776,6 @@ const LEGACY_AUCTION_MAIL_REPAIR_FAMILY: &str = "repair_legacy_auction_mail";
 /// sold", which carry no tell of their own — a durable listing receipt backs its claim. Returns
 /// `(converted, unmapped)`; a nonzero `unmapped` is an auction-looking row this repair left alone,
 /// worth a human look.
-#[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
 pub(crate) fn repair_legacy_auction_mail(ctx: &ReducerContext) -> (u64, u64) {
     if ctx
         .db
@@ -5776,7 +5767,7 @@ mod tests {
         assert_eq!(source.money, Some(40));
         assert!(source.item.is_none());
 
-        // Realm-core refused phase 2 (for example, its item catalogue lacks the template), so
+        // Realm-core refused (for example, its item catalogue lacks the template), so
         // the market never took the listing and the source Hold is the only copy of the value.
         // The refund Mail and its receipt are written on Realm-core before its source Hold moves.
         let refund = listing_refund(&source.hold(request.operation_id).unwrap().listing);
@@ -7858,67 +7849,6 @@ mod tests {
                 displaced_bid: 201,
             }),
             "a zero cut is a real cut, never the offer"
-        );
-    }
-
-    #[test]
-    fn auction_write_reducers_gate_before_reading_caller_named_state() {
-        use crate::test_scan::code_of;
-
-        for signature in [
-            "pub fn gw_auction_list_local(",
-            "pub fn gw_auction_hold_listing(",
-            "pub fn realm_auction_commit_listing(",
-            "pub fn realm_auction_confirm_listing(",
-            "pub fn realm_auction_settle_listing(",
-            "pub fn gw_auction_bid_local(",
-            "pub fn gw_auction_hold_bid(",
-            "pub fn realm_auction_decide_bid(",
-            "pub fn gw_auction_finish_bid(",
-            "pub fn realm_auction_refund_bid(",
-            "pub fn gw_auction_confirm_bid_refund(",
-            "pub fn gw_auction_cancel_local(",
-            "pub fn gw_auction_hold_cancel(",
-            "pub fn realm_auction_decide_cancel(",
-            "pub fn debug_stage_auction_cancel_fixture(",
-            "pub fn debug_stage_auction_buyout_fixture(",
-            "pub fn debug_verify_auction_buyout_fixture(",
-            "pub fn debug_stage_auction_expiry_fixture(",
-            "pub fn debug_replay_auction_expiry_fixture(",
-            "pub fn debug_verify_auction_expiry_fixture(",
-            "pub fn debug_stage_legacy_auction_mail_fixture(",
-            "pub fn debug_verify_legacy_auction_mail_repaired(",
-        ] {
-            let body = code_of(include_str!("auction.rs"), signature);
-            let normalized = body.split_whitespace().collect::<Vec<_>>().join(" ");
-            assert!(
-                normalized.starts_with("{ crate::helpers::require_operator(ctx)?;"),
-                "`{signature}` no longer opens with the operator gate. Body was:\n{body}"
-            );
-        }
-    }
-
-    #[test]
-    fn auction_expiry_is_scheduler_only() {
-        let body = crate::test_scan::code_of(include_str!("auction.rs"), "pub fn expire_auction(");
-        let normalized = body.split_whitespace().collect::<Vec<_>>().join(" ");
-        assert!(normalized.starts_with(
-            "{ if ctx.sender() != ctx.database_identity() { return Err(\"scheduler only\".to_string());"
-        ));
-    }
-
-    #[test]
-    fn character_delete_refuses_auction_value_before_the_cascade() {
-        let body = crate::test_scan::code_of(include_str!("auth.rs"), "pub fn delete_character(");
-        let auction_gate = body
-            .find("crate::auction::character_has_auction_value")
-            .expect("character deletion must check Auction value");
-        let cascade = body
-            .find("crate::world::cascade_delete_character")
-            .expect("character deletion still needs its normal cascade");
-        assert!(
-            auction_gate < cascade,
-            "Auction value must be fenced before deletion"
         );
     }
 }

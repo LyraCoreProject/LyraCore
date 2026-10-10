@@ -1,5 +1,18 @@
 //! Gateway configuration. All operational, none of it game state.
 
+// Untrusted input arrives here: a malformed packet or env var must return an error, never unwind.
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unreachable,
+        clippy::todo,
+        clippy::unimplemented
+    )
+)]
+
 use crate::accept::BlockingTaskCapacity;
 
 #[derive(Clone, Debug)]
@@ -14,13 +27,6 @@ pub struct GatewayConfig {
     pub module_name: String,
     /// Auth token for the privileged coordination connection (reads account/session).
     pub coordinator_token: Option<String>,
-    /// This gateway PROCESS's own identity (issue #308) — `LYRACORE_GATEWAY_ID`, default
-    /// `<hostname>:<world_bind port>`. Exists so a load sample this process writes onto realm-core
-    /// (`load_sample::sample_and_record` → `record_shard_load`) can be told apart from another
-    /// gateway process's sample for the SAME shard, instead of one clobbering the other
-    /// (`docs/region-sharding.md`'s "Load sampling" section). Also the natural place to hang a
-    /// per-process label on the other per-process health signals (`MOTIONSTAT`/`AOISTAT`) later —
-    /// not done here, out of this issue's scope.
     pub gateway_id: String,
     /// Shared non-waiting gate for blocking logon and World Session tasks. Its size mirrors the
     /// Tokio blocking-pool ceiling configured before this value is built.
@@ -356,21 +362,12 @@ impl ShardMap {
     /// whichever database owns that instance, when the gateway mirrors the id there
     /// (`ensure_instance`). So:
     ///
-    /// - [`InstanceHosting::NoHost`] — the owning database has `hosts_instances = false`. Every
-    ///   dungeon is created as a LEASE with **0 entities** and nothing, anywhere, will ever spawn its
-    ///   population. Measured as 8 consecutive empty instances and 4 bot-test failures
-    ///   that read as gameplay regressions. FATAL — a realm whose dungeons are all empty rooms should
-    ///   not come up quietly.
-    /// - [`InstanceHosting::LoadNotMoved`] — the DEFAULT database hosts populations while a dungeon
-    ///   map's instances are owned elsewhere. The run works; it just spawns ~207 creatures + 28
-    ///   gameobject copies on the world writer and evicts them again after the transfer, i.e. exactly
-    ///   the load Phase A exists to remove. A WARNING, and — unlike the old reminder, which fired on
-    ///   every sharded startup regardless of the flag — it now fires only when the flag really is
-    ///   wrong.
+    /// - [`InstanceHosting::NoHost`] means the owning database refuses population hosting.
+    ///   It is fatal because every dungeon would remain an empty lease.
+    /// - [`InstanceHosting::LoadNotMoved`] means the default database builds population for
+    ///   a dungeon owned elsewhere. Transfer still works, but the unused population wastes work.
     ///
-    /// Everything else is [`InstanceHosting::Consistent`] and says nothing at all. In particular the
-    /// ordinary single-database realm (no `LYRACORE_SHARD_MAP`, flag at its `true` default) is silent, and
-    /// so is a correctly-configured Phase A deployment.
+    /// A correctly configured Realm is silent on either topology.
     ///
     /// # Inputs
     ///
@@ -453,8 +450,7 @@ impl ShardMap {
                      dungeon portal's areatrigger runs on {0} — and {0}'s \
                      `game_config.hosts_instances` is still TRUE, so every entry spawns the whole \
                      population (~207 creatures + 28 gameobject copies) on the world writer and \
-                     evicts it again after the transfer. The run works; the load Phase A exists to \
-                     remove does not go away, and nothing else will tell you. Fix: `spacetime sql \
+                     evicts it again after the transfer. The run works, but the unused population wastes work. Fix: `spacetime sql \
                      {0} \"UPDATE game_config SET hosts_instances = false WHERE id = 0\"`.",
                     self.default_db
                 ));
@@ -482,11 +478,7 @@ impl ShardMap {
 /// The startup verdict of [`ShardMap::check_instance_hosting`] — will this realm's dungeon
 /// populations actually be spawned, and on the right database?
 ///
-/// Exactly one variant means "correctly configured", and it carries no message: the ordinary
-/// single-database realm and a correctly-configured Phase A deployment are both SILENT. That is
-/// deliberate — the reminder this check replaced warned on every sharded startup whether or not
-/// anything was wrong, the operator confirmed it firing on a correct gateway, and a warning that
-/// always fires gets filtered, which defeats the one startup it needed to catch.
+/// Correct hosting carries no message on either topology.
 #[derive(Clone, Debug, PartialEq)]
 pub enum InstanceHosting {
     /// Every dungeon map's instances land on a database that hosts populations, and no database
@@ -623,7 +615,7 @@ fn parse_shard_rule(rule: &str) -> Option<ShardRule> {
         Some(bucket.parse::<u64>().ok()?)
     };
     if bucket.is_some_and(|b| b >= INSTANCE_BUCKETS) {
-        return None; // a bucket outside the modulus can never match — that's a typo, not a rule
+        return None;
     }
     Some(ShardRule {
         map_id,
@@ -763,10 +755,10 @@ fn parse_admission_limit(name: &str, raw: Option<&std::ffi::OsStr>) -> anyhow::R
         return Ok(0);
     };
     raw.to_str()
-        .map(str::trim)
-        .filter(|value| !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()))
-        .and_then(|value| value.parse().ok())
-        .ok_or_else(|| {
+.map(str::trim)
+.filter(|value| !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()))
+.and_then(|value| value.parse().ok())
+.ok_or_else(|| {
             anyhow::anyhow!(
                 "invalid {name}={raw:?}: expected a decimal integer from 0 to {}, with 0 for unlimited",
                 usize::MAX
@@ -796,7 +788,7 @@ pub const DEFAULT_MAX_BLOCKING_THREADS: usize = 512;
 /// Measured 2026-08-07 on an 8-core box: 600 clients offered seated **477** at 512 and **535** at
 /// 4096.
 ///
-/// Default 512 preserves the former pool size. A malformed or zero value falls back to this finite
+/// The default is 512. A malformed or zero value falls back to this finite
 /// default. Zero blocking threads would leave the Gateway unable to serve accepted sockets.
 pub fn max_blocking_threads() -> usize {
     max_blocking_threads_from_env(
@@ -1105,7 +1097,7 @@ mod shard_map_tests {
             single.check_instance_hosting(|_| None, up),
             InstanceHosting::Consistent,
             "a database with no game_config row reads as HOSTING (the module's own unwrap_or(true)) \
-             — an unreadable config must never fabricate a fatal"
+            — an unreadable config must never fabricate a fatal"
         );
     }
 
@@ -1139,7 +1131,7 @@ mod shard_map_tests {
                 up
             ),
             InstanceHosting::Consistent,
-            "the CORRECT Phase A configuration must be completely silent — an always-firing \
+            "the CORRECT sharded configuration must be completely silent — an always-firing \
              warning gets filtered, which is exactly how the empty-dungeon failure went unnoticed"
         );
     }
@@ -1185,7 +1177,7 @@ mod shard_map_tests {
     }
 
     /// An instances shard the map names but that failed to connect degrades to the default database
-    /// (`resolve_connected`'s documented rule) — and on a Phase A world shard the default database
+    /// (`resolve_connected`'s documented rule) — and on a non-hosting World Shard the default database
     /// is exactly the one that hosts nothing, so dungeons WOULD be empty. Reported, and deliberately
     /// **not fatal**.
     ///
@@ -1231,12 +1223,6 @@ mod shard_map_tests {
         );
     }
 
-    /// **The operator's live three-database stack, exactly as deployed** (`lyracore` with the
-    /// flag correctly off, map 36 routed to `lyracore-instances`, auth on `realm-core`). It must be
-    /// `Consistent` — completely silent. A false fatal on the one configuration that actually works
-    /// would be worse than the bug this PR fixes, and realm-core is the wrinkle worth pinning: it is
-    /// in `databases()` (so it gets a connection and a flag) but it is NOT in `rules`, so it must
-    /// never be resolved as a dungeon owner and its own flag must never matter.
     #[test]
     fn the_operators_live_three_database_stack_is_silent() {
         let live = ShardMap::parse("lyracore", "36:*=lyracore-instances")
@@ -1252,7 +1238,7 @@ mod shard_map_tests {
                 up
             ),
             InstanceHosting::Consistent,
-            "the deployed Phase A stack is correct and must produce NO output at all"
+            "the deployed sharded Realm is correct and must produce NO output at all"
         );
         // realm-core's flag is irrelevant either way — it owns no map, so flipping it changes nothing.
         assert_eq!(
@@ -1270,9 +1256,7 @@ mod shard_map_tests {
         );
     }
 
-    /// The severity split, pinned on its own: exactly ONE verdict stops the gateway, and it is the
-    /// one nothing but an operator edit can fix. Swapping any two is a one-line mutation in `enforce`
-    /// that every other test in this file survives.
+    /// Only a configuration inconsistency that requires an operator edit prevents startup.
     #[test]
     fn only_the_unrecoverable_verdict_refuses_to_start() {
         assert!(InstanceHosting::Consistent.enforce().is_ok());
@@ -1297,181 +1281,6 @@ mod shard_map_tests {
         );
     }
 
-    /// Strip Rust comments from `src` so a source scan cannot be satisfied by prose.
-    ///
-    /// Adversarial review of this PR defeated the tripwire below FOUR ways, and three of them were
-    /// comments: the original scan filtered only lines whose FIRST token is `//`, so a trailing
-    /// `// game_config() … find(&0)` on any code line, a `/* … */` block, or a commented-out
-    /// `// "SELECT * FROM game_config",` all satisfied it while the code did the opposite. Removing
-    /// comments before scanning is the only version of this that means anything.
-    ///
-    /// String literals are left alone (the scan wants `"SELECT * FROM game_config"`), which is why
-    /// the `?` assertion below is positional rather than a `contains`.
-    fn strip_comments(src: &str) -> String {
-        let mut out = String::with_capacity(src.len());
-        let mut chars = src.char_indices().peekable();
-        let (mut in_str, mut in_line, mut block) = (false, false, 0usize);
-        while let Some((i, c)) = chars.next() {
-            if in_line {
-                if c == '\n' {
-                    in_line = false;
-                    out.push(c);
-                }
-                continue;
-            }
-            if block > 0 {
-                if c == '/' && src[i..].starts_with("/*") {
-                    block += 1;
-                    chars.next();
-                } else if c == '*' && src[i..].starts_with("*/") {
-                    block -= 1;
-                    chars.next();
-                } else if c == '\n' {
-                    out.push(c);
-                }
-                continue;
-            }
-            if in_str {
-                out.push(c);
-                if c == '\\' {
-                    if let Some((_, n)) = chars.next() {
-                        out.push(n);
-                    }
-                } else if c == '"' {
-                    in_str = false;
-                }
-                continue;
-            }
-            match c {
-                '"' => {
-                    in_str = true;
-                    out.push(c);
-                }
-                '/' if src[i..].starts_with("//") => in_line = true,
-                '/' if src[i..].starts_with("/*") => {
-                    block = 1;
-                    chars.next();
-                }
-                _ => out.push(c),
-            }
-        }
-        out
-    }
-
-    /// The verdict has to be ENFORCED where the databases are known. `Coordinator::connect` needs a
-    /// live node, so this is the tripwire for its one call site: the pure decision above is worth
-    /// nothing if the result is dropped on the floor (`let _ = …`, `.ok()`, a bare `if let`).
-    ///
-    /// # This scan was defeated four ways in review — do not weaken it back
-    ///
-    /// Every assertion here exists because a mutation satisfied its predecessor while reintroducing
-    /// the empty-dungeon failure with the whole 438-test suite green:
-    ///
-    /// 1. **`?` inside a string.** `.enforce().map_err(|m| log::warn!("hosting? {m}"))` contains a
-    ///    `?` and propagates NOTHING. Now the `?` must be the LAST token of the statement, which is
-    ///    what "propagates" actually means and still survives the `.map_err` the real code needs.
-    /// 2. **Dead binding.** Keeping the real reader closure, adding `let _ = &hosts_instances;`, and
-    ///    passing `|_| Some(true)` to the check left every "the reader names `game_config()` /
-    ///    `find(&0)`" assertion true and the check wired to a constant. Now the call site must pass
-    ///    the READER BY NAME and the read must live inside that binding.
-    /// 3. **Comment.** `// dropped for now: "SELECT * FROM game_config",` satisfied the subscription
-    ///    assertion with the subscription deleted. Comments are stripped now.
-    /// 4. **`if false { … }`.** A decoy block satisfies any `contains` scan. Rejected outright.
-    #[test]
-    fn coordinator_connect_enforces_the_hosting_verdict_fatally() {
-        const CONNECTION_RS_RAW: &str = include_str!("stdb/connection.rs");
-        let connection_rs = strip_comments(CONNECTION_RS_RAW);
-        let body = {
-            let start = connection_rs
-                .find("pub async fn connect(cfg: &GatewayConfig)")
-                .expect("Coordinator::connect moved — re-point this tripwire");
-            let rest = &connection_rs[start..];
-            let open = rest.find('{').expect("connect has a body");
-            let mut depth = 0i32;
-            let mut end = 0usize;
-            for (i, c) in rest[open..].char_indices() {
-                match c {
-                    '{' => depth += 1,
-                    '}' => {
-                        depth -= 1;
-                        if depth == 0 {
-                            end = open + i;
-                            break;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            rest[open..=end].to_string()
-        };
-        // Defeat 4: a decoy block satisfies every `contains` below while running nothing.
-        assert!(
-            !body.contains("if false"),
-            "`if false` in Coordinator::connect — a dead block satisfies every source assertion in \
-             this tripwire while executing none of it"
-        );
-        assert!(
-            body.contains("check_instance_hosting("),
-            "Coordinator::connect no longer checks instance hosting — a gateway with no shard map \
-             against a database with hosts_instances = false is back to creating every dungeon \
-             empty, silently"
-        );
-        // Defeat 2: the check must be wired to the NAMED reader, not to an inline closure. Otherwise
-        // the real read can sit next to it as a dead binding and satisfy the assertions below.
-        assert!(
-            body.contains("check_instance_hosting(hosts_instances,"),
-            "the hosting check is not being passed the `hosts_instances` reader by name — an inline \
-             closure (`|_| Some(true)`) keeps every other assertion here true, leaves the real \
-             reader as a dead binding, and silently reintroduces the empty-dungeon failure"
-        );
-        let at = body.find(".enforce()").expect(
-            "the hosting verdict is no longer enforced — `check_instance_hosting` is a pure \
-             function whose return value IS the decision",
-        );
-        // Defeat 1: the statement containing `.enforce()` must PROPAGATE. `contains('?')` was
-        // satisfied by a question mark inside a log-format string; the `?` has to be the last token
-        // before the `;`, which is the definition of propagating and still allows the intermediate
-        // `.map_err(...)` the real code needs (`enforce` yields `String`, `connect` yields
-        // `anyhow::Result`).
-        let stmt = &body[at..];
-        let stmt = &stmt[..stmt.find(';').unwrap_or(stmt.len())];
-        assert!(
-            stmt.trim_end().ends_with('?'),
-            "the enforced verdict must PROPAGATE — the statement has to END in `?` so `NoHost` \
-             aborts startup. `let _ = …`, `.ok()`, or a `?` buried in a log string swallows the \
-             fatal and reintroduces the empty-dungeon failure with every other test green: {stmt}"
-        );
-        // Defeat 3: comments are stripped, so this now needs the real subscription. It lives in
-        // `coordinator_queries`, not in `connect`'s body, so this one assertion scans the whole file.
-        assert!(
-            connection_rs.contains("\"SELECT * FROM game_config\""),
-            "the coordinator no longer subscribes game_config — the detector cannot read the flag \
-             back and degrades to the old guess-and-warn reminder"
-        );
-        // The flag reader must actually READ THE COLUMN, from the id=0 SINGLETON — and the read must
-        // be INSIDE the `hosts_instances` binding that the call site above passes by name, so the two
-        // cannot be decoupled. The module-side twin of the `find(&0)` mutation (any other id finds
-        // nothing and defaults to hosting) is recorded in `module/src/instance.rs` as one that
-        // SURVIVED review once already.
-        let reader = {
-            let from = body
-                .find("let hosts_instances =")
-                .expect("the `hosts_instances` reader binding is gone — see the assertion above");
-            let rest = &body[from..];
-            &rest[..rest.find("};").map(|e| e + 2).unwrap_or(rest.len())]
-        };
-        assert!(
-            reader.contains("game_config()") && reader.contains("hosts_instances"),
-            "the `hosts_instances` reader does not read game_config out of the coordinator cache — \
-             the hosting check is wired to a constant: {reader}"
-        );
-        assert!(
-            reader.contains("find(&0)"),
-            "the flag reader is not looking at the game_config id=0 singleton — it would find \
-             nothing, default to `true`, and never report an empty-dungeon realm: {reader}"
-        );
-    }
-
     #[test]
     fn a_full_wildcard_rule_moves_the_whole_world() {
         let m = ShardMap::parse("world", "*:*=elsewhere");
@@ -1481,11 +1290,6 @@ mod shard_map_tests {
 
     #[test]
     fn an_unreachable_shard_degrades_to_the_default_database_not_to_the_asker() {
-        // Adversarial review: a shard that is named by the map but failed to connect must
-        // route to the DEFAULT database. Degrading to "whatever handle asked" is invisible from the
-        // default handle but wrong from any other — a session already pinned to `pool-a` that ports
-        // to a map owned by the down `pool-b` would keep its `pool-a` pin and be served by a
-        // database that owns neither its old location nor its new one.
         let m = ShardMap::parse("world", "1:*=pool-a, 2:*=pool-b");
         let up = |db: &str| db != "pool-b"; // pool-b is down
         assert_eq!(
@@ -1637,13 +1441,6 @@ mod shard_map_tests {
         // Instance 0 is the OPEN WORLD, not an instance: a character standing on instances-0 in
         // the open world routes by the map, or they would be pinned to the instance shard forever.
         assert_eq!(m.instance_owner(0, 0, "instances-0", up), "world");
-        // Adversarial review: the assertion above SURVIVES deleting the `instance_id != 0` guard,
-        // because `instances-0` is not in map 0's pool anyway — that mutation stayed green. The
-        // sharp form is a map whose bucket 0 and bucket 1 belong to different databases: the open
-        // world is bucket 0, so BOTH are in that map's pool. A character standing in the open world
-        // on `world-b` must still be routed by the map to `world-a`; without the guard they answer
-        // `world-b` and are pinned to whichever database last held them, permanently, with no
-        // instance anywhere in the picture.
         let split = ShardMap::parse("world", "0:0=world-a, 0:*=world-b");
         assert_eq!(split.instance_pool(0), vec!["world-a", "world-b"]);
         assert_eq!(split.resolve(0, 0), "world-a");

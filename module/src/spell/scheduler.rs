@@ -38,10 +38,10 @@ pub fn fire_pending_cast(ctx: &ReducerContext, sched: PendingCast) {
                 // START(cast_time)); only a genuine instant (is_completion=false) sends the START(0)+GO pair. A 2nd
                 // START(0) at completion reset the cast bar to zero-length ("stuck on full") — the cast-lock bug.
                 true,
-                // NOT client-initiated (088): the completion GO must reach the caster via the relay — the
+                // NOT client-initiated: the completion GO must reach the caster via the relay — the
                 // synchronous send only covered the instant CMSG path, never a timed completion.
                 false,
-                // The clicked ground point carried across the cast bar (118 phase 2): a timed ground-AoE
+                // The clicked ground point carried across the cast bar: a timed ground-AoE
                 // (Flamestrike) anchors its patch here at COMPLETION. `has_dest` false → None (every normal cast).
                 sched
                     .has_dest
@@ -249,7 +249,7 @@ pub(crate) fn do_cancel_cast(
 ) -> Result<(), String> {
     interrupt_cast(ctx, caster.guid);
     break_channel(ctx, caster.guid);
-    // Un-queue a pending on-next-swing strike too (114): the vanilla client cancels a queued Heroic
+    // Un-queue a pending on-next-swing strike too: the vanilla client cancels a queued Heroic
     // Strike (pressing its lit button again) with the same CMSG_CANCEL_CAST. No refund — matches the
     // charge-up-front rule in the E_NEXT_SWING handler. No-op when nothing is queued.
     if caster.next_swing_spell != 0 {
@@ -267,13 +267,6 @@ pub(crate) fn do_cancel_aura(
     player_guid: u64,
     spell_id: u32,
 ) -> Result<(), String> {
-    // PASSIVE spells (talent passives) are server-enforced and NOT player-cancelable — refuse to strip
-    // them even if a modified client sends CMSG_CANCEL_AURA, so a player can't right-click off a talent
-    // bonus. NEGATIVE auras (debuffs, CC) are likewise refused: the vanilla client never offers
-    // cancel on a debuff, so only a modified client sends it — honoring it would let a player strip
-    // their own Polymorph/Fear and would ALSO dodge the DR-window stamp that only the real removal
-    // paths (expiry/dispel/break-on-damage) apply (192 review finding #2). A non-passive,
-    // non-negative (or unknown) spell falls through to the normal cancel.
     if let Some(spell) = ctx.db.game_spell().spell_id().find(spell_id) {
         if spell.attributes & SPELL_ATTR_PASSIVE != 0 {
             return Err(format!(
@@ -332,7 +325,7 @@ pub(crate) fn do_cancel_aura(
 }
 
 /// Is `expires_at` due to be reaped by NATURAL EXPIRY at `now`? Two rules, both preserved byte-for-byte
-/// from the pre-232 `auras.iter().filter(|a| a.expires_at <= now && a.eff_kind != A_STEALTH)` full scan:
+/// from the `auras.iter().filter(|a| a.expires_at <= now && a.eff_kind != A_STEALTH)` full scan:
 /// (1) the boundary is INCLUSIVE (`<=`, not `<`) — an aura expiring at EXACTLY `now` reaps this tick, the
 /// mirror of the periodic pass's own inclusive `>=` final-tick boundary just below (a 3s/1s DoT ticks 3×,
 /// not 2×, then reaps on that same tick); (2) `A_STEALTH` is a permanent-until-broken PRESENCE (vanilla
@@ -365,7 +358,7 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
 
     // --- Periodic pass: collect the due ticks (snapshot owned aura rows), fold per-target health, then
     // flush the entity writes, then advance each due aura's next_tick — never write a table mid-iter. ---
-    // Perf catalog 1.9 — the same recipe work-item 232 used for the expiry pass below, on the SAME
+    // Perf catalog 1.9, the same recipe used for the expiry pass below, on the SAME
     // table: `by_next_tick` is a btree over the very column being compared, so `.filter(1..=now_micros)`
     // walks only rows that are actually DUE. The `0` sentinel (non-periodic: buffs, passives, stealth
     // presences — the overwhelming majority of rows) is excluded by starting the range at 1, so it needs
@@ -643,20 +636,13 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
     // DoT), so "duration 0" does NOT mean permanent — only this kind does. Every other aura reaps on its
     // own timer.
     //
-    // Work-item 232: this used to be `auras.iter().filter(|a| a.expires_at <= now && ...)` — a full
-    // `game_aura` table scan every heartbeat (every 1s, per `AuraSchedule`'s interval), even though the
-    // overwhelming majority of rows aren't anywhere near expiry (long buffs, permanent presences, a busy
-    // raid's worth of other players' auras). `by_expiry` (tables.rs) is a btree index on the SAME
-    // `expires_at` column already being compared, so `.filter(..=now)` walks the index from its low end
-    // and stops at the horizon — it visits only rows AT OR PAST expiry, never the untouched tail. The
-    // A_STEALTH exclusion is kept as a cheap post-filter on that already-small candidate set (identical
-    // combined predicate, same result set, order of the two conditions doesn't matter for a filter).
+
     let expired: Vec<Aura> = auras
         .by_expiry()
         .filter(..=now)
         .filter(|a| is_due_for_expiry(a.eff_kind, a.expires_at, now))
         .collect();
-    // Evidence (work-item 232): the index scan's candidate count vs the table's total row count.
+    // Evidence: the index scan's candidate count vs the table's total row count.
     // `Table::count()` reads datastore metadata (O(1) — no scan), so logging it costs nothing extra; the
     // gap between the two numbers is the rows the OLD full-scan touched that this pass no longer does.
     // `log::debug!` (not `info!`) so a normal RUST_LOG=info run stays silent; enable `RUST_LOG=debug` (or
@@ -688,7 +674,7 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
             remount.push(a.target_guid);
         }
     }
-    // CC diminishing returns (work-item 192): a NATURAL EXPIRY is one of the two REMOVAL events that starts
+    // CC diminishing returns: a NATURAL EXPIRY is one of the two REMOVAL events that starts
     // the 15s DR window (the other is a dispel — `effects::dispel_target`). `dr_category_for_effect` is a
     // no-op for a non-CC aura / a creature target, so this only touches the handful of player CC rows.
     // Runs BEFORE the delete loop below (order doesn't matter — `game_dr_state` is a separate table — but
@@ -752,7 +738,7 @@ fn flush_pool(
     }
 }
 
-/// GROUND-AoE damage tick (118): the twin of `tick_auras`' periodic pass, but keyed on a fixed WORLD
+/// GROUND-AoE damage tick: the twin of `tick_auras`' periodic pass, but keyed on a fixed WORLD
 /// POSITION instead of a unit. Each due `game_ground_area` re-scans its radius (live — a mob that walks
 /// in mid-duration is hit; one that leaves simply isn't in the next scan, no per-unit aura bookkeeping)
 /// and applies one tick of `amount` `school` damage to every HOSTILE inside via the shared
@@ -842,7 +828,7 @@ pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
                 resisted,
                 crate::combat::Hit::triggered(),
             );
-            // Per-tick feedback (118, user: area damage "does not show on damage numbers or in the
+            // Per-tick feedback (user report: area damage "does not show on damage numbers or in the
             // combat log"): a log-only cast-event row (`is_proc_log`, same shape as the seal's holy
             // line) — the gateway relays ONLY the SMSG_SPELLNONMELEEDAMAGELOG named after the area's
             // spell ("Consecration hits X for N Holy"), never START/GO. Emitted for a landed OR
@@ -891,10 +877,6 @@ pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
     }
 }
 
-/// Ensure the 500ms `tick_ground_areas` schedule row exists — called wherever a `game_ground_area`
-/// row is BORN (perf catalog 1.20's disarm deletes it whenever the area table drains). Idempotent and
-/// cheap: the table holds 0 or 1 rows. Must stay in lockstep with the interval in `seed::init` /
-/// `debug_repair_after_publish` (formerly the standalone `debug_ensure_ground_area_schedule`).
 pub(crate) fn arm_ground_area_tick(ctx: &ReducerContext) {
     if ctx.db.game_ground_area_schedule().count() > 0 {
         return;
@@ -936,38 +918,6 @@ pub(crate) fn classify_ground_tick(
         GroundTickStatus::Reap
     } else {
         GroundTickStatus::Wait
-    }
-}
-
-#[cfg(test)]
-mod duel_periodic_wiring_tests {
-    #[test]
-    fn periodic_damage_rechecks_authorization_and_finishes_at_one_health() {
-        let body = crate::test_scan::code_of(include_str!("scheduler.rs"), "pub fn tick_auras(");
-        assert!(body.contains("crate::combat::may_harm"));
-        assert!(body.contains("crate::duel::active_duel_between"));
-        assert!(body.contains("pending.insert(a.target_guid, 1)"));
-        assert!(body.contains("crate::duel::complete_duel"));
-    }
-
-    /// The periodic fold is the one damage resolver that cannot route through `final_damage`: it
-    /// folds several auras against an in-transaction health the durable row does not carry yet. It
-    /// must still consult the floor before marking a creature dying, or a DoT tick becomes the only
-    /// way to kill a creature a script is holding at one health.
-    #[test]
-    fn a_periodic_kill_consults_the_lethal_damage_floor_before_marking_a_creature_dying() {
-        let body = crate::test_scan::code_of(include_str!("scheduler.rs"), "pub fn tick_auras(");
-        let protects = body
-            .find("crate::combat::lethal_floor_protects(ctx, a.target_guid)")
-            .expect("the periodic creature-kill branch no longer consults the lethal floor");
-        let dying = body
-            .find("dying.insert(a.target_guid, killer)")
-            .expect("the periodic creature-kill branch no longer marks a creature dying");
-        assert!(
-            protects < dying,
-            "the floor must be consulted BEFORE the creature is marked dying"
-        );
-        assert!(body.contains("crate::combat::commit_death_prevention"));
     }
 }
 

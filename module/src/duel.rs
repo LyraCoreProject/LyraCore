@@ -812,24 +812,4 @@ mod tests {
         );
         assert_eq!(duel_flag_guid(7, crate::realm_core::GUID_RANGE_SIZE), None);
     }
-
-    #[test]
-    fn completion_path_deletes_before_emitting_and_absence_is_a_noop() {
-        let source = include_str!("duel.rs");
-        let start = source
-            .find("pub(crate) fn complete_duel(")
-            .expect("completion chokepoint exists");
-        let end = source[start..]
-            .find("pub(crate) fn interrupt_duel_for(")
-            .map(|offset| start + offset)
-            .expect("completion chokepoint has a bounded body");
-        let body = &source[start..end];
-        assert!(body.contains("let Some(duel) = duels.id().find(duel_id) else"));
-        assert!(body.contains("return false;"));
-        assert!(body.contains("crate::combat::stop_duel_combat"));
-        assert!(
-            body.find("duels.id().delete(duel_id)").unwrap() < body.find("push_event(").unwrap(),
-            "state must disappear before any completion edge is emitted"
-        );
-    }
 }

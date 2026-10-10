@@ -1,4 +1,4 @@
-//! Terrain heightmap: ground-Z lookups for creature + bot movement (work-items 172/173).
+//! Terrain heightmap: ground-Z lookups for creature + bot movement.
 //!
 //! One row per ADT MCNK cell (33.33 yd square), imported from the operator's own client by
 //! `importer --terrain` (same licensing firewall as `--dbc`: extracted data never enters the
@@ -7,7 +7,7 @@
 //! the content slice; `ground_z` returns `None` off-slice and every caller keeps its current
 //! Z there, so unimported areas behave exactly as before this table existed.
 
-use crate::game_area; // zone_id_at's one-hop parent walk (accessor trait)
+use crate::game_area;
 use lyracore_shared::terrain::{cell_index, cell_key};
 use spacetimedb::{reducer, table, ReducerContext, Table};
 
@@ -35,8 +35,7 @@ pub struct TerrainChunk {
 }
 
 /// Ground height at (x, y), or `None` where no terrain is imported. ONE indexed PK find plus
-/// arithmetic — this sits in the 0.5s movement tick, so it must never scan (work-item 173 /
-/// de-risking spike #5). The cell math + bilinear interpolation live in
+/// arithmetic. This sits in the 0.5s movement tick, so it must never scan. The cell math + bilinear interpolation live in
 /// `lyracore_shared::terrain` (unit-tested there; the importer's self-check shares the SAME code,
 /// so import-time verification covers this exact function).
 pub fn ground_z(ctx: &ReducerContext, map_id: u32, x: f32, y: f32) -> Option<f32> {
@@ -50,7 +49,7 @@ pub fn ground_z(ctx: &ReducerContext, map_id: u32, x: f32, y: f32) -> Option<f32
 }
 
 /// Snap a derived destination Z to terrain, keeping `fallback` off-slice. The one-liner every
-/// wander/flee/fear/bot leg goes through (work-item 174).
+/// wander/flee/fear/bot leg goes through.
 ///
 /// Also takes the `max` against the topmost imported vmap model floor (bridge, WMO
 /// interior deck) at or below this same Z — `vmap::floor_z` returns `None` off vmap-slice/gate,
@@ -97,7 +96,7 @@ pub(crate) fn walking_z(
 /// The imported `AreaTable.dbc` area id (MCNK header field) for the cell at `(x, y)`, or `None` when
 /// no terrain chunk is imported there OR the chunk's `area_id` is 0 (unset — some cells never got a
 /// real client-side AreaTable assignment). Same single indexed lookup as `ground_z` — cheap enough
-/// for the release-time graveyard-zone resolution it feeds (work-item 209, now `zone_id_at` below).
+/// for the release-time graveyard-zone resolution it feeds (now `zone_id_at` below).
 pub fn area_id_at(ctx: &ReducerContext, map_id: u32, x: f32, y: f32) -> Option<u32> {
     let (cx, cy) = (cell_index(x)?, cell_index(y)?);
     let chunk = ctx
@@ -149,12 +148,12 @@ pub fn debug_check_submerged(ctx: &ReducerContext, guid: u64) -> Result<(), Stri
 /// Chase the position's MCNK `area_id` (`area_id_at` above) ONE hop up `game_area.parent_area_id` to
 /// its enclosing zone — e.g. a Goldshire subzone area resolves to zone 12 (Elwynn). NOT a full
 /// recursive area-hierarchy walk (a subzone-of-a-subzone would need more than one hop; deferred to
-/// work-item 200, which needs full area resolution for exploration XP anyway). Returns `None` when
+/// the exploration XP work, which needs full area resolution anyway). Returns `None` when
 /// `game_area` is empty (unimported) or the position's terrain cell has no recorded/imported area, so
 /// callers skip zone-scoping entirely rather than guessing wrong — a wrong guess would silently narrow
 /// a candidate set (graveyards, fishing loot) to the WRONG zone.
 ///
-/// The single canonical zone resolver (work-item 209 idiom): `world::graveyard`'s release pick
+/// The single canonical zone resolver: `world::graveyard`'s release pick
 /// and `loot::apply_fish`'s catch roll both call this instead of each keeping its own one-hop walk.
 pub fn zone_id_at(ctx: &ReducerContext, map_id: u32, x: f32, y: f32) -> Option<u32> {
     area_at(ctx, map_id, x, y).map(|area| zone_of(&area))

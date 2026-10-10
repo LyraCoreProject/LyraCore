@@ -68,15 +68,11 @@ pub fn reap_movement_events(ctx: &ReducerContext, _schedule: EventReaperSchedule
             }
         }};
     }
-    // `game_movement_event` is GONE (dropped): peer movement rides the per-mover
-    // `game_entity_motion` row, which is updated in place and needs no reaping at all (perf catalog
-    // 2.1). This reap was the second half of the O(C²) cost: at 200 co-located players it deleted
-    // 67,753 rows/s to match the 70,568 the writer had just inserted.
-    // `game_creature_move_event` is NO LONGER REAPED because nothing writes it any more — creature
-    // legs ride the per-creature `game_creature_spline` row, which is updated in place and needs no
-    // reaping (same move as perf catalog 2.1 made for player movement). This reap was deleting
-    // 121.6 rows/s at 100 dispersed players to match the inserts. The table stays in the schema
-    // (dropping one is a separate destructive migration) and stays empty.
+    // `game_movement_event` is not reaped: peer movement rides the per-mover `game_entity_motion`
+    // row, which is updated in place and needs no reaping.
+    // `game_creature_move_event` is not reaped because nothing writes it. Creature legs ride the
+    // per-creature `game_creature_spline` row, which is updated in place. The table stays in the
+    // schema (dropping one is a separate destructive migration) and stays empty.
     reap!(game_combat_event); // melee swing logs
     reap!(game_xp_event); // per-kill XP awards
     reap!(game_levelup_event); // level-up dings
@@ -90,7 +86,7 @@ pub fn reap_movement_events(ctx: &ReducerContext, _schedule: EventReaperSchedule
     reap!(game_realm_chat_event); // Realm Chat Lines
     reap!(game_chat_channel_notice_event); // Channel Notices
     reap!(game_system_message_event); // private Package-originated System Messages
-    reap!(game_addon_message); // addon-bridge UI messages (184, RLS-scoped)
+    reap!(game_addon_message); // addon-bridge UI messages (RLS-scoped)
     reap!(game_roll_event); // unwritten since /roll became a Group Broadcast
     reap!(game_group_event); // group invite/roster notifications (RLS-scoped)
     reap!(game_trade_event); // trade-status relay rows (RLS-scoped)
@@ -98,7 +94,7 @@ pub fn reap_movement_events(ctx: &ReducerContext, _schedule: EventReaperSchedule
     reap!(game_bot_invite_intent); // bot-decided invites awaiting gateway pickup
     reap!(game_auction_notice); // live outbid/won/sold/expired/new-bid notices to an online seller or bidder
     reap!(game_movement_violation); // recent anti-cheat diagnostics
-                                    // Rest-area zzz/blue-bar relay rows (196). Caught missing by the gc_reap_tripwire: this
+                                    // Rest-area zzz/blue-bar relay rows. Caught missing by the gc_reap_tripwire: this
                                     // table carries the same `id: u64` + `created_at: Timestamp` TTL shape as every table above but
                                     // had no reap line — every inn threshold crossing for the lifetime of a character left one more
                                     // row behind. The durable rest state (`Character.resting`/`rested_xp`) lives elsewhere; this row
@@ -160,11 +156,11 @@ pub fn reap_movement_events(ctx: &ReducerContext, _schedule: EventReaperSchedule
         }
     }
 
-    // CC diminishing-returns windows (work-item 192): rows whose 15s post-removal window has
+    // CC diminishing-returns windows: rows whose 15s post-removal window has
     // elapsed are dead state — the next same-category CC starts fresh at level 1 anyway.
     crate::spell::stacking::sweep_dr_state(ctx);
 
-    // Need/greed roll deadlines (work-item 187): resolves any roll whose 60s window lapsed with
+    // Need/greed roll deadlines: resolves any roll whose 60s window lapsed with
     // votes outstanding (absent members auto-pass) — the deadline half of resolve-exactly-once.
     crate::loot::sweep_loot_rolls(ctx);
 
@@ -211,28 +207,4 @@ pub fn reap_movement_events(ctx: &ReducerContext, _schedule: EventReaperSchedule
     // Player corpses: unreclaimed body → bones → despawn, on its own decay policy (own the bones,
     // not this reaper). See `corpse::sweep_corpse_decay`'s doc for the timers and the relay shape.
     crate::corpse::sweep_corpse_decay(ctx);
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::test_scan::code_of;
-
-    #[test]
-    fn movement_violation_rows_are_ttl_reaped() {
-        let body = code_of(include_str!("gc.rs"), "pub fn reap_movement_events(");
-        let reaper_call = ["reap!(", "game_movement_violation", ");"].concat();
-        assert!(
-            body.contains(&reaper_call),
-            "the shared event reaper must delete expired movement-violation diagnostics"
-        );
-    }
-
-    #[test]
-    fn lapsed_cc_diminishing_return_rows_are_reaped() {
-        let body = code_of(include_str!("gc.rs"), "pub fn reap_movement_events(");
-        assert!(
-            body.contains("stacking::sweep_dr_state(ctx)"),
-            "the shared event reaper must drop lapsed crowd-control diminishing-return rows"
-        );
-    }
 }

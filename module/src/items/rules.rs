@@ -100,9 +100,6 @@ pub fn binds_on_grant(item_bonding: u8) -> bool {
     item_bonding == bonding::BIND_ON_PICKUP
 }
 
-/// Does a template with this `bonding` value bind the FIRST time it's equipped? Pure — unit-tested.
-/// Only BIND_ON_EQUIP (BoE) does; a BoP item is already bound by `binds_on_grant` before it can ever
-/// be equipped, and every other value never binds on equip in this slice. [reference]
 pub fn binds_on_equip(item_bonding: u8) -> bool {
     item_bonding == bonding::BIND_ON_EQUIP
 }
@@ -135,8 +132,6 @@ pub mod equip_slot {
     pub const END: u8 = TABARD;
 }
 
-/// The vanilla `INVTYPE_*` codes (`item_template.inventory_type`) this slice maps to equipment slots.
-/// A small named subset of the full enum — the ones representing wearable/wieldable gear. [reference]
 pub mod invtype {
     pub const NON_EQUIP: u8 = 0;
     pub const HEAD: u8 = 1;
@@ -718,12 +713,6 @@ pub(crate) mod tests {
         assert_eq!(EquipStat::resistance_for_school(1 << 7), None);
     }
 
-    /// Re-scoped (was `equipped_stat_sum_adds_across_pieces_and_is_zero_for_no_gear`): the original name
-    /// oversold this as covering `equipped_stat_bonus`, but that fn needs a live `ReducerContext` (it
-    /// joins the owner's equipped `ItemInstance` rows through `game_item_template`, filters to the
-    /// equipment slot range, and excludes broken items — none of which this test touches). What's
-    /// actually pinned here is only the pure per-stat SUM `template_stat` feeds into that fold: summing
-    /// `template_stat` over a worn set adds per-stat independently and is 0 for an empty/all-zero set.
     #[test]
     fn template_stat_sums_independently_per_stat_and_is_zero_for_no_gear() {
         let sum = |pieces: &[ItemTemplate], which: EquipStat| -> i32 {

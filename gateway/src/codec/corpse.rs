@@ -1,4 +1,4 @@
-//! Corpse wire mapping: the `MSG_CORPSE_QUERY` reply + the corpse CREATE_OBJECT (slice 5), plus the
+//! Corpse wire mapping: the `MSG_CORPSE_QUERY` reply + the corpse CREATE_OBJECT, plus the
 //! Resurrection accept-prompt.
 
 use super::*;
@@ -20,7 +20,7 @@ pub struct CorpseView {
     pub is_bones: bool,
 }
 
-/// Build the `MSG_CORPSE_QUERY` reply (slice 5): tells the client where the player's corpse is so it
+/// Build the `MSG_CORPSE_QUERY` reply: tells the client where the player's corpse is so it
 /// draws the map marker and offers "Reclaim Corpse" when the ghost is near it. `None` → `NotFound`.
 /// Same map for `map` (ghost map) and `corpse_map` — we have no cross-map corpses (single zone).
 pub fn build_corpse_query_response(
@@ -39,7 +39,7 @@ pub fn build_corpse_query_response(
     }
 }
 
-/// Build the CREATE_OBJECT for a player corpse (slice 5): a CORPSE-type object with a stationary
+/// Build the CREATE_OBJECT for a player corpse: a CORPSE-type object with a stationary
 /// position (`HasPosition`, UPDATEFLAG 0x40) and the `UpdateCorpse` descriptors (owner, position,
 /// display, bytes) so the client renders the dead body. Relayed on `game_corpse` insert; the matching
 /// `SMSG_DESTROY_OBJECT` on delete (reclaim/decay) reuses `build_destroy_object`.

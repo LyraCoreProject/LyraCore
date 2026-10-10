@@ -79,7 +79,7 @@ impl Coordinator {
             .map(|t| t.type_id))
     }
 
-    /// Read an item template by entry for a `CMSG_ITEM_QUERY_SINGLE` reply (items slice-1).
+    /// Read an item template by entry for a `CMSG_ITEM_QUERY_SINGLE` reply.
     pub fn item_template(&self, entry: u32) -> Result<Option<crate::codec::ItemTemplateView>> {
         Ok(self
             .0

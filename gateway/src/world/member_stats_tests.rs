@@ -589,8 +589,6 @@ fn a_stats_request_is_answered_through_the_encrypted_session() {
     let _ = server.join();
 }
 
-/// A read failure used to end the World Session. Now the first request goes unanswered and the
-/// second, for a stranger, still gets its reply on the same socket.
 #[test]
 fn a_stats_request_that_cannot_be_read_does_not_end_the_session() {
     let store = InMemoryStore {
