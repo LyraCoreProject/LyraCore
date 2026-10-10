@@ -32,8 +32,14 @@ fn topology_after_vim_is_deleted() -> (
 ) {
     let (realm, world, instances, calls) = party_topology();
     form_split_party(&world, &instances);
-    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(TRIN)).expect("invite the survivor");
-    party::run(world.as_ref(), 9, TRIN, party::Op::Accept).expect("the survivor accepts");
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::Invite(TRIN),
+    )
+    .expect("invite the survivor");
+    party::run(world.as_ref(), Actor::new(TRIN).unwrap(), party::Op::Accept)
+        .expect("the survivor accepts");
 
     let deleted_from_instances = std::sync::Arc::new(WorldFake {
         topology: TopologyState {
@@ -203,8 +209,9 @@ pub(super) fn party_topology() -> (
 /// Vim accepts. `pub(super)` (`loot_tests` reuses it — a disband-capable op needs a real
 /// party to disband).
 pub(super) fn form_split_party(world: &WorldFake, instances: &WorldFake) {
-    party::run(world, 7, GINGER, party::Op::Invite(VIM)).expect("the invite crosses");
-    party::run(instances, 8, VIM, party::Op::Accept).expect("the accept lands");
+    party::run(world, Actor::new(GINGER).unwrap(), party::Op::Invite(VIM))
+        .expect("the invite crosses");
+    party::run(instances, Actor::new(VIM).unwrap(), party::Op::Accept).expect("the accept lands");
 }
 
 fn command_intent(bot_guid: u64) -> party::PartyCommandIntent {
@@ -240,7 +247,12 @@ fn party_command_abort_configuration_names_only_the_committed_apply_boundary() {
 #[test]
 fn a_companion_command_uses_realm_authority_and_the_bots_actual_world_shard() {
     let (realm, world, instances, _) = party_topology();
-    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(FAR_BOT)).unwrap();
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::Invite(FAR_BOT),
+    )
+    .unwrap();
     let outcome =
         party::run_party_command_intent(world.as_ref(), &command_intent(FAR_BOT), 9001).unwrap();
     assert_eq!(outcome, party::CompanionCommandOutcome::Applied);
@@ -266,7 +278,12 @@ fn a_companion_command_uses_realm_authority_and_the_bots_actual_world_shard() {
 #[test]
 fn changed_leadership_is_terminal_before_target_application() {
     let (realm, world, _instances, _) = party_topology();
-    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(BOT)).unwrap();
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::Invite(BOT),
+    )
+    .unwrap();
     let group_id = realm.party.party.lock().unwrap().group_of(GINGER).unwrap();
     realm
         .party
@@ -337,7 +354,12 @@ fn a_missing_bot_is_terminal_before_party_authority_is_consulted() {
 #[test]
 fn a_nonmember_assist_target_is_refused_by_realm_authority() {
     let (_realm, world, _instances, _) = party_topology();
-    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(BOT)).unwrap();
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::Invite(BOT),
+    )
+    .unwrap();
     let mut intent = command_intent(BOT);
     intent.kind = 2;
     intent.authority_member_guid = TRIN;
@@ -354,7 +376,12 @@ fn a_nonmember_assist_target_is_refused_by_realm_authority() {
 #[test]
 fn a_stale_target_mirror_cannot_grant_command_authority() {
     let (_realm, world, _instances, _) = party_topology();
-    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(BOT)).unwrap();
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::Invite(BOT),
+    )
+    .unwrap();
     world
         .party
         .mirror
@@ -476,8 +503,18 @@ fn a_roster_longer_than_a_raid_is_not_sent_for_command_authority() {
 #[test]
 fn realm_admission_rejects_a_roster_changed_after_the_gateway_read() {
     let (realm, world, instances, _) = party_topology();
-    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(BOT)).unwrap();
-    party::run(world.as_ref(), 8, GINGER, party::Op::Invite(FAR_BOT)).unwrap();
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::Invite(BOT),
+    )
+    .unwrap();
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::Invite(FAR_BOT),
+    )
+    .unwrap();
     let mut changed = realm.group_roster(GINGER).unwrap().unwrap().member_guids();
     changed.retain(|guid| *guid != BOT);
     *realm.party.party_command_authority_members.lock().unwrap() = Some(changed);
@@ -497,7 +534,12 @@ fn realm_admission_rejects_a_roster_changed_after_the_gateway_read() {
 #[test]
 fn an_unavailable_receipt_shard_keeps_the_source_intent_pending() {
     let (_realm, world, instances, _) = party_topology();
-    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(FAR_BOT)).unwrap();
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::Invite(FAR_BOT),
+    )
+    .unwrap();
     *instances.party.party_command_receipt_error.lock().unwrap() =
         Some("receipt read unavailable".to_string());
 
@@ -522,7 +564,12 @@ fn an_unavailable_receipt_shard_keeps_the_source_intent_pending() {
 #[test]
 fn an_in_transit_holder_is_retried_without_a_missing_bot_result() {
     let (_realm, world, instances, _) = party_topology();
-    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(FAR_BOT)).unwrap();
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::Invite(FAR_BOT),
+    )
+    .unwrap();
     instances
         .party
         .party_command_in_transit
@@ -551,7 +598,12 @@ fn an_in_transit_holder_is_retried_without_a_missing_bot_result() {
 #[test]
 fn a_remote_party_member_cannot_direct_a_bot_in_another_partition() {
     let (_realm, world, instances, _) = party_topology();
-    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(FAR_BOT)).unwrap();
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::Invite(FAR_BOT),
+    )
+    .unwrap();
     instances
         .party
         .entity_partitions
@@ -575,7 +627,12 @@ fn a_remote_party_member_cannot_direct_a_bot_in_another_partition() {
 #[test]
 fn a_bot_without_a_partition_cannot_reach_target_application() {
     let (_realm, world, _instances, _) = party_topology();
-    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(BOT)).unwrap();
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::Invite(BOT),
+    )
+    .unwrap();
     world
         .party
         .entity_partitions
@@ -597,9 +654,19 @@ fn a_bot_without_a_partition_cannot_reach_target_application() {
 #[test]
 fn an_assist_member_without_a_partition_cannot_reach_target_application() {
     let (_realm, world, _instances, _) = party_topology();
-    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(BOT)).unwrap();
-    party::run(world.as_ref(), 8, GINGER, party::Op::Invite(TRIN)).unwrap();
-    party::run(world.as_ref(), 9, TRIN, party::Op::Accept).unwrap();
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::Invite(BOT),
+    )
+    .unwrap();
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::Invite(TRIN),
+    )
+    .unwrap();
+    party::run(world.as_ref(), Actor::new(TRIN).unwrap(), party::Op::Accept).unwrap();
     world
         .party
         .entity_partitions
@@ -650,7 +717,12 @@ fn an_unsharded_gateway_uses_the_owning_local_party_authority() {
 #[test]
 fn a_target_receipt_finishes_a_crashed_attempt_without_reapplying() {
     let (_realm, world, instances, _) = party_topology();
-    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(FAR_BOT)).unwrap();
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::Invite(FAR_BOT),
+    )
+    .unwrap();
     let intent = command_intent(FAR_BOT);
     let authority = world
         .topology
@@ -715,7 +787,12 @@ fn an_expired_intent_past_the_receipt_guarantee_reports_unknown() {
 #[test]
 fn equal_numeric_intents_from_distinct_modules_have_distinct_receipts() {
     let (_realm, world, instances, _) = party_topology();
-    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(FAR_BOT)).unwrap();
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::Invite(FAR_BOT),
+    )
+    .unwrap();
     let first = command_intent(FAR_BOT);
     let mut second = first.clone();
     second.source_identity = spacetimedb_sdk::Identity::from_byte_array([8; 32]);
@@ -881,7 +958,12 @@ fn a_disbanded_party_is_tombstoned_on_every_world_shard() {
     );
 
     // Two members: one leaving disbands the party (vanilla — a party of one is no party).
-    party::run(instances.as_ref(), 8, VIM, party::Op::Leave).expect("Vim leaves");
+    party::run(
+        instances.as_ref(),
+        Actor::new(VIM).unwrap(),
+        party::Op::Leave,
+    )
+    .expect("Vim leaves");
 
     assert!(
         realm.group_roster(GINGER).unwrap().is_none(),
@@ -905,10 +987,21 @@ fn leaving_a_party_re_pushes_the_roster_of_the_group_the_leaver_left() {
     let (realm, world, instances, _calls) = party_topology();
     // Three members, so the party SURVIVES the leave and there is a remaining roster to compare.
     form_split_party(&world, &instances);
-    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(TRIN)).expect("invite the third");
-    party::run(world.as_ref(), 9, TRIN, party::Op::Accept).expect("the third accepts");
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::Invite(TRIN),
+    )
+    .expect("invite the third");
+    party::run(world.as_ref(), Actor::new(TRIN).unwrap(), party::Op::Accept)
+        .expect("the third accepts");
 
-    party::run(instances.as_ref(), 8, VIM, party::Op::Leave).expect("Vim leaves");
+    party::run(
+        instances.as_ref(),
+        Actor::new(VIM).unwrap(),
+        party::Op::Leave,
+    )
+    .expect("Vim leaves");
 
     let remaining = realm
         .group_roster(GINGER)
@@ -1350,7 +1443,8 @@ fn an_unsharded_gateway_runs_every_party_op_on_the_players_own_shard() {
             threshold: 3,
         },
     ] {
-        party::run(store.as_ref(), 7, GINGER, op).expect("the legacy path answers");
+        party::run(store.as_ref(), Actor::new(GINGER).unwrap(), op)
+            .expect("the legacy path answers");
     }
 
     let log = calls.lock().unwrap().clone();
@@ -1401,7 +1495,8 @@ fn world_entry_pushes_the_authoritative_roster_onto_the_shard_the_player_arrives
     instances.party.mirror.lock().unwrap().clear();
 
     let (tx, rx) = crate::world::SessionTx::with_depth(0);
-    party::on_world_entry(&tx, instances.as_ref(), VIM).expect("world entry syncs the party");
+    party::on_world_entry(&tx, instances.as_ref(), Actor::new(VIM).unwrap())
+        .expect("world entry syncs the party");
 
     let authoritative = realm.group_roster(VIM).unwrap().unwrap();
     assert_eq!(
@@ -1421,7 +1516,8 @@ fn world_entry_pushes_the_authoritative_roster_onto_the_shard_the_player_arrives
 fn world_entry_is_a_no_op_for_an_ungrouped_character_and_on_a_single_database() {
     let (_realm, world, _instances, calls) = party_topology();
     let (tx, rx) = crate::world::SessionTx::with_depth(0);
-    party::on_world_entry(&tx, world.as_ref(), GINGER).expect("ungrouped entry is fine");
+    party::on_world_entry(&tx, world.as_ref(), Actor::new(GINGER).unwrap())
+        .expect("ungrouped entry is fine");
     assert!(rx.try_recv().is_err(), "no party, no party frame");
     assert!(
         !calls
@@ -1440,7 +1536,8 @@ fn world_entry_is_a_no_op_for_an_ungrouped_character_and_on_a_single_database() 
         ..Default::default()
     });
     let (tx2, rx2) = crate::world::SessionTx::with_depth(0);
-    party::on_world_entry(&tx2, solo.as_ref(), GINGER).expect("unsharded entry is fine");
+    party::on_world_entry(&tx2, solo.as_ref(), Actor::new(GINGER).unwrap())
+        .expect("unsharded entry is fine");
     assert!(
         rx2.try_recv().is_err(),
         "a single-database login sends no extra packet"
@@ -1461,8 +1558,14 @@ fn world_entry_is_a_no_op_for_an_ungrouped_character_and_on_a_single_database() 
 fn world_entry_clears_a_mirror_that_still_lists_a_character_the_authority_dropped() {
     let (realm, world, instances, _calls) = party_topology();
     form_split_party(&world, &instances);
-    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(TRIN)).expect("invite the third");
-    party::run(world.as_ref(), 9, TRIN, party::Op::Accept).expect("the third accepts");
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::Invite(TRIN),
+    )
+    .expect("invite the third");
+    party::run(world.as_ref(), Actor::new(TRIN).unwrap(), party::Op::Accept)
+        .expect("the third accepts");
     let group_id = realm.group_roster(VIM).unwrap().unwrap().group_id;
 
     // Vim leaves while the instances shard is unreachable: the authority commits, that shard's push
@@ -1478,7 +1581,8 @@ fn world_entry_clears_a_mirror_that_still_lists_a_character_the_authority_droppe
 
     // Vim comes back to that shard. This is the "or world entry" half of the self-healing promise.
     let (tx, _rx) = crate::world::SessionTx::with_depth(0);
-    party::on_world_entry(&tx, instances.as_ref(), VIM).expect("world entry is fine for a loner");
+    party::on_world_entry(&tx, instances.as_ref(), Actor::new(VIM).unwrap())
+        .expect("world entry is fine for a loner");
 
     assert_eq!(
         instances.group_roster(VIM).unwrap(),
@@ -1506,11 +1610,21 @@ fn an_invite_to_a_missing_or_offline_target_never_reaches_realm_core() {
     let (realm, world, _instances, _calls) = party_topology();
 
     assert_eq!(
-        party::run(world.as_ref(), 7, GINGER, party::Op::Invite(DORMANT)).unwrap(),
+        party::run(
+            world.as_ref(),
+            Actor::new(GINGER).unwrap(),
+            party::Op::Invite(DORMANT)
+        )
+        .unwrap(),
         PartyOutcome::Refused(GroupRefusal::TargetOffline)
     );
     assert_eq!(
-        party::run(world.as_ref(), 7, GINGER, party::Op::Invite(999)).unwrap(),
+        party::run(
+            world.as_ref(),
+            Actor::new(GINGER).unwrap(),
+            party::Op::Invite(999)
+        )
+        .unwrap(),
         PartyOutcome::Refused(GroupRefusal::NoSuchPlayer)
     );
 
@@ -1585,11 +1699,21 @@ fn a_cross_faction_invite_is_refused_before_realm_core() {
     }
 
     assert_eq!(
-        party::run(world.as_ref(), 7, GINGER, party::Op::Invite(GRUNT)).unwrap(),
+        party::run(
+            world.as_ref(),
+            Actor::new(GINGER).unwrap(),
+            party::Op::Invite(GRUNT)
+        )
+        .unwrap(),
         PartyOutcome::Refused(GroupRefusal::WrongFaction)
     );
     assert_eq!(
-        party::run(world.as_ref(), 7, GINGER, party::Op::Invite(SLEEPING_GRUNT)).unwrap(),
+        party::run(
+            world.as_ref(),
+            Actor::new(GINGER).unwrap(),
+            party::Op::Invite(SLEEPING_GRUNT)
+        )
+        .unwrap(),
         PartyOutcome::Refused(GroupRefusal::TargetOffline),
         "an offline target is refused as offline first, as vanilla's online lookup does"
     );
@@ -1617,7 +1741,12 @@ fn an_unsharded_gateway_refuses_a_cross_faction_invite_too() {
         ..Default::default()
     });
     assert_eq!(
-        party::run(store.as_ref(), 7, GINGER, party::Op::Invite(GRUNT)).unwrap(),
+        party::run(
+            store.as_ref(),
+            Actor::new(GINGER).unwrap(),
+            party::Op::Invite(GRUNT)
+        )
+        .unwrap(),
         PartyOutcome::Refused(GroupRefusal::WrongFaction)
     );
     assert!(
@@ -1650,8 +1779,12 @@ fn a_playerbot_is_invitable_because_the_online_gate_reads_the_entity_not_the_ses
         "fixture: …but its live entity is right there"
     );
 
-    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(BOT))
-        .expect("the invite gate must read the LIVE ENTITY, exactly as the module's own gate does");
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::Invite(BOT),
+    )
+    .expect("the invite gate must read the LIVE ENTITY, exactly as the module's own gate does");
     assert_eq!(
         realm.party.party.lock().unwrap().ops.first().copied(),
         Some((
@@ -1676,7 +1809,12 @@ fn a_players_invite_to_a_session_less_bot_is_answered_by_the_bot_itself() {
     use lyracore_shared::group::realm_op;
     let (realm, world, _instances, _calls) = party_topology();
 
-    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(BOT)).expect("the invite lands");
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::Invite(BOT),
+    )
+    .expect("the invite lands");
 
     let party_state = realm.party.party.lock().unwrap();
     let group_id = party_state
@@ -1752,7 +1890,12 @@ fn a_stale_character_row_on_another_shard_cannot_make_a_logged_in_player_look_se
         *shard.topology.peers.lock().unwrap() = vec![home.clone(), far.clone()];
     }
     // …and end to end: an inviter on the far shard must leave that player's dialog alone.
-    party::run(far.as_ref(), 9, VIM, party::Op::Invite(SEEDED)).expect("the invite itself is fine");
+    party::run(
+        far.as_ref(),
+        Actor::new(VIM).unwrap(),
+        party::Op::Invite(SEEDED),
+    )
+    .expect("the invite itself is fine");
     let state = realm.party.party.lock().unwrap();
     assert_eq!(
         state.ops.clone(),
@@ -1782,7 +1925,12 @@ fn a_stale_character_row_on_another_shard_cannot_make_a_logged_in_player_look_se
 #[test]
 fn the_bots_new_membership_is_mirrored_onto_its_own_shard_by_the_same_op() {
     let (realm, world, instances, _calls) = party_topology();
-    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(BOT)).expect("the invite lands");
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::Invite(BOT),
+    )
+    .expect("the invite lands");
     let group_id = realm
         .party
         .party
@@ -1826,8 +1974,12 @@ fn the_bots_new_membership_is_mirrored_onto_its_own_shard_by_the_same_op() {
 #[test]
 fn a_bot_standing_on_another_shard_answers_the_invite_too() {
     let (realm, world, _instances, _calls) = party_topology();
-    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(FAR_BOT))
-        .expect("a cross-shard bot invite lands");
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::Invite(FAR_BOT),
+    )
+    .expect("a cross-shard bot invite lands");
     let state = realm.party.party.lock().unwrap();
     let group_id = state.group_of(GINGER).expect("Ginger's party formed");
     assert_eq!(
@@ -1844,7 +1996,12 @@ fn a_bot_standing_on_another_shard_answers_the_invite_too() {
 fn a_real_players_invite_dialog_is_left_for_their_own_client_to_answer() {
     use lyracore_shared::group::realm_op;
     let (realm, world, _instances, _calls) = party_topology();
-    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(TRIN)).expect("the invite lands");
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::Invite(TRIN),
+    )
+    .expect("the invite lands");
 
     let state = realm.party.party.lock().unwrap();
     assert_eq!(
@@ -1876,8 +2033,12 @@ fn a_bot_that_cannot_join_declines_out_loud_instead_of_leaving_the_dialog_hangin
     let (realm, world, _instances, _calls) =
         party_topology_with(None, Some("the party is already full"));
 
-    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(BOT))
-        .expect("a bot that cannot join must not fail the PLAYER's invite — it already committed");
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::Invite(BOT),
+    )
+    .expect("a bot that cannot join must not fail the PLAYER's invite — it already committed");
 
     let state = realm.party.party.lock().unwrap();
     assert_eq!(
@@ -1909,7 +2070,12 @@ fn a_bot_that_cannot_join_declines_out_loud_instead_of_leaving_the_dialog_hangin
 #[test]
 fn the_bot_answers_within_the_invite_op_itself_with_no_second_call() {
     let (realm, world, _instances, calls) = party_topology();
-    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(BOT)).expect("the invite lands");
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::Invite(BOT),
+    )
+    .expect("the invite lands");
     assert!(
         realm.party.party.lock().unwrap().group_of(BOT).is_some(),
         "joined already"
@@ -1937,8 +2103,7 @@ fn every_party_op_reaches_realm_core_in_its_declared_argument_slots() {
     form_split_party(&world, &instances);
     party::run(
         world.as_ref(),
-        7,
-        GINGER,
+        Actor::new(GINGER).unwrap(),
         party::Op::LootMethod {
             setting: 2,
             master: VIM,
@@ -1946,8 +2111,18 @@ fn every_party_op_reaches_realm_core_in_its_declared_argument_slots() {
         },
     )
     .expect("the leader sets master loot");
-    party::run(world.as_ref(), 7, GINGER, party::Op::RaidConvert).expect("convert");
-    party::run(world.as_ref(), 7, GINGER, party::Op::Uninvite(VIM)).expect("kick");
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::RaidConvert,
+    )
+    .expect("convert");
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::Uninvite(VIM),
+    )
+    .expect("kick");
 
     assert_eq!(
         realm.party.party.lock().unwrap().ops.clone(),
@@ -2139,9 +2314,18 @@ fn a_shard_that_refuses_the_mirror_does_not_fail_the_party_op() {
     let (realm, world, instances, _calls) =
         party_topology_with(Some("instances is unreachable"), None);
 
-    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(VIM))
-        .expect("the invite must succeed even though one shard cannot be mirrored");
-    party::run(instances.as_ref(), 8, VIM, party::Op::Accept).expect("and so must the accept");
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::Invite(VIM),
+    )
+    .expect("the invite must succeed even though one shard cannot be mirrored");
+    party::run(
+        instances.as_ref(),
+        Actor::new(VIM).unwrap(),
+        party::Op::Accept,
+    )
+    .expect("and so must the accept");
 
     assert!(
         realm.group_roster(GINGER).unwrap().is_some(),
@@ -2539,7 +2723,12 @@ fn suppressed_automatic_answers_leave_human_invitations_pending_on_realm_core() 
         .insert(FAR_BOT, GroupRefusal::ActionSuppressed);
 
     assert_eq!(
-        party::run(world.as_ref(), 7, GINGER, party::Op::Invite(FAR_BOT)).unwrap(),
+        party::run(
+            world.as_ref(),
+            Actor::new(GINGER).unwrap(),
+            party::Op::Invite(FAR_BOT)
+        )
+        .unwrap(),
         PartyOutcome::Ran
     );
 
@@ -2581,7 +2770,12 @@ fn unavailable_admission_leaves_the_invitation_unanswered() {
         .unwrap()
         .push(FAR_BOT);
 
-    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(FAR_BOT)).unwrap();
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::Invite(FAR_BOT),
+    )
+    .unwrap();
 
     let state = realm.party.party.lock().unwrap();
     assert!(state.group_of(FAR_BOT).is_none());
@@ -2601,7 +2795,12 @@ fn current_admission_refuses_a_stale_sessionless_presence_read() {
         .unwrap()
         .insert(FAR_BOT, GroupRefusal::ActorUnavailable);
 
-    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(FAR_BOT)).unwrap();
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::Invite(FAR_BOT),
+    )
+    .unwrap();
 
     let state = realm.party.party.lock().unwrap();
     assert!(state.group_of(FAR_BOT).is_none());
@@ -2646,7 +2845,12 @@ fn a_controller_selection_after_admission_does_not_recall_the_answer() {
         .unwrap()
         .push(FAR_BOT);
 
-    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(FAR_BOT)).unwrap();
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::Invite(FAR_BOT),
+    )
+    .unwrap();
 
     assert!(realm
         .party
@@ -2731,11 +2935,21 @@ fn mirror_calls(calls: &ShardCallLog) -> usize {
 fn a_leader_converts_the_party_on_realm_core_and_every_shard_mirrors_the_raid() {
     let (realm, world, instances, _calls) = party_topology();
     form_split_party(&world, &instances);
-    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(TRIN)).unwrap();
-    party::run(world.as_ref(), 9, TRIN, party::Op::Accept).unwrap();
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::Invite(TRIN),
+    )
+    .unwrap();
+    party::run(world.as_ref(), Actor::new(TRIN).unwrap(), party::Op::Accept).unwrap();
     let events_before = realm.party.party.lock().unwrap().events.len();
 
-    let outcome = party::run(world.as_ref(), 7, GINGER, party::Op::RaidConvert).unwrap();
+    let outcome = party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::RaidConvert,
+    )
+    .unwrap();
 
     assert_eq!(outcome, PartyOutcome::Ran);
     let state = realm.party.party.lock().unwrap();
@@ -2788,10 +3002,20 @@ fn a_leader_converts_the_party_on_realm_core_and_every_shard_mirrors_the_raid() 
 fn converting_a_raid_again_pushes_no_mirror() {
     let (_realm, world, instances, calls) = party_topology();
     form_split_party(&world, &instances);
-    party::run(world.as_ref(), 7, GINGER, party::Op::RaidConvert).unwrap();
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::RaidConvert,
+    )
+    .unwrap();
     let mirrors_before = mirror_calls(&calls);
 
-    let outcome = party::run(world.as_ref(), 7, GINGER, party::Op::RaidConvert).unwrap();
+    let outcome = party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::RaidConvert,
+    )
+    .unwrap();
 
     assert_eq!(outcome, PartyOutcome::Ran, "the client still hears success");
     assert_eq!(mirror_calls(&calls), mirrors_before);
@@ -2805,7 +3029,12 @@ fn a_member_who_does_not_lead_cannot_convert_and_no_mirror_is_pushed() {
     let events_before = realm.party.party.lock().unwrap().events.len();
     let mirrors_before = mirror_calls(&calls);
 
-    let outcome = party::run(instances.as_ref(), 8, VIM, party::Op::RaidConvert).unwrap();
+    let outcome = party::run(
+        instances.as_ref(),
+        Actor::new(VIM).unwrap(),
+        party::Op::RaidConvert,
+    )
+    .unwrap();
 
     assert_eq!(outcome, PartyOutcome::Refused(GroupRefusal::NotLeader));
     assert_eq!(
@@ -2839,7 +3068,12 @@ fn an_unsharded_gateway_converts_through_realm_group_op_on_its_own_shard() {
         p.members.push((5, VIM));
     }
 
-    let outcome = party::run(store.as_ref(), 7, GINGER, party::Op::RaidConvert).unwrap();
+    let outcome = party::run(
+        store.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::RaidConvert,
+    )
+    .unwrap();
 
     assert_eq!(outcome, PartyOutcome::Ran);
     assert_eq!(
@@ -2870,8 +3104,14 @@ fn a_raid_joiner_past_a_full_first_subgroup_shows_subgroup_one_in_every_list() {
         }
         p.raids.push(9);
     }
-    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(TRIN)).expect("the leader invites");
-    party::run(world.as_ref(), 9, TRIN, party::Op::Accept).expect("the sixth member accepts");
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::Invite(TRIN),
+    )
+    .expect("the leader invites");
+    party::run(world.as_ref(), Actor::new(TRIN).unwrap(), party::Op::Accept)
+        .expect("the sixth member accepts");
 
     let authority = realm.group_roster(GINGER).unwrap().unwrap();
     let joiner = authority
@@ -3070,8 +3310,13 @@ fn party_of_three() -> (
 ) {
     let (realm, world, instances, calls) = party_topology();
     form_split_party(&world, &instances);
-    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(TRIN)).unwrap();
-    party::run(world.as_ref(), 9, TRIN, party::Op::Accept).unwrap();
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::Invite(TRIN),
+    )
+    .unwrap();
+    party::run(world.as_ref(), Actor::new(TRIN).unwrap(), party::Op::Accept).unwrap();
     (realm, world, instances, calls)
 }
 
@@ -3093,7 +3338,12 @@ fn the_leader_passes_the_lead_to_a_member_live_on_the_far_shard() {
     let (realm, world, instances, _calls) = party_of_three();
     let events_before = realm.party.party.lock().unwrap().events.len();
 
-    let outcome = party::run(world.as_ref(), 7, GINGER, party::Op::SetLeader(VIM)).unwrap();
+    let outcome = party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::SetLeader(VIM),
+    )
+    .unwrap();
 
     assert_eq!(outcome, PartyOutcome::Ran);
     let authority = realm.group_roster(GINGER).unwrap().unwrap();
@@ -3122,7 +3372,12 @@ fn the_lead_passes_only_to_a_member_live_on_some_shard() {
     let ops_before = realm.party.party.lock().unwrap().ops.len();
     let mirrors_before = mirror_calls(&calls);
 
-    let outcome = party::run(world.as_ref(), 7, GINGER, party::Op::SetLeader(DORMANT)).unwrap();
+    let outcome = party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::SetLeader(DORMANT),
+    )
+    .unwrap();
 
     assert_eq!(outcome, PartyOutcome::Refused(GroupRefusal::TargetOffline));
     assert_eq!(realm.party.party.lock().unwrap().ops.len(), ops_before);
@@ -3133,7 +3388,12 @@ fn the_lead_passes_only_to_a_member_live_on_some_shard() {
     );
 
     for (leader, next) in [(GINGER, TRIN), (TRIN, VIM)] {
-        let outcome = party::run(world.as_ref(), 7, leader, party::Op::SetLeader(next)).unwrap();
+        let outcome = party::run(
+            world.as_ref(),
+            Actor::new(leader).unwrap(),
+            party::Op::SetLeader(next),
+        )
+        .unwrap();
         assert_eq!(
             outcome,
             PartyOutcome::Ran,
@@ -3151,7 +3411,12 @@ fn the_lead_passes_only_to_a_member_live_on_some_shard() {
 #[test]
 fn leadership_ops_reach_realm_core_in_their_declared_argument_slots() {
     let (realm, world, _instances, _calls) = party_of_three();
-    party::run(world.as_ref(), 7, GINGER, party::Op::RaidConvert).unwrap();
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::RaidConvert,
+    )
+    .unwrap();
     let ops_before = realm.party.party.lock().unwrap().ops.len();
 
     for op in [
@@ -3165,7 +3430,7 @@ fn leadership_ops_reach_realm_core_in_their_declared_argument_slots() {
         },
         party::Op::SetLeader(VIM),
     ] {
-        party::run(world.as_ref(), 7, GINGER, op).unwrap();
+        party::run(world.as_ref(), Actor::new(GINGER).unwrap(), op).unwrap();
     }
 
     assert_eq!(
@@ -3183,14 +3448,24 @@ fn leadership_ops_reach_realm_core_in_their_declared_argument_slots() {
 #[test]
 fn a_promoted_assistant_shows_0x80_in_every_list_and_every_mirror() {
     let (realm, world, instances, _calls) = party_of_three();
-    party::run(world.as_ref(), 7, GINGER, party::Op::RaidConvert).unwrap();
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::RaidConvert,
+    )
+    .unwrap();
     let assistant = |promote| party::Op::SetAssistant {
         target: VIM,
         promote,
     };
 
     for (promote, flags) in [(true, 0x80), (false, 0x00)] {
-        let outcome = party::run(world.as_ref(), 7, GINGER, assistant(promote)).unwrap();
+        let outcome = party::run(
+            world.as_ref(),
+            Actor::new(GINGER).unwrap(),
+            assistant(promote),
+        )
+        .unwrap();
         assert_eq!(outcome, PartyOutcome::Ran);
         let authority = realm.group_roster(GINGER).unwrap().unwrap();
         for shard in [&world, &instances] {
@@ -3214,15 +3489,20 @@ fn a_promoted_assistant_shows_0x80_in_every_list_and_every_mirror() {
 #[test]
 fn repeating_a_promotion_pushes_no_mirror() {
     let (_realm, world, _instances, calls) = party_of_three();
-    party::run(world.as_ref(), 7, GINGER, party::Op::RaidConvert).unwrap();
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::RaidConvert,
+    )
+    .unwrap();
     let promote = party::Op::SetAssistant {
         target: VIM,
         promote: true,
     };
-    party::run(world.as_ref(), 7, GINGER, promote).unwrap();
+    party::run(world.as_ref(), Actor::new(GINGER).unwrap(), promote).unwrap();
     let mirrors_before = mirror_calls(&calls);
 
-    let outcome = party::run(world.as_ref(), 7, GINGER, promote).unwrap();
+    let outcome = party::run(world.as_ref(), Actor::new(GINGER).unwrap(), promote).unwrap();
 
     assert_eq!(outcome, PartyOutcome::Ran);
     assert_eq!(mirror_calls(&calls), mirrors_before);
@@ -3257,8 +3537,13 @@ fn an_unsharded_gateway_runs_leadership_ops_on_its_own_shard() {
         promote: true,
     };
 
-    party::run(store.as_ref(), 7, GINGER, promote).unwrap();
-    party::run(store.as_ref(), 7, GINGER, party::Op::SetLeader(VIM)).unwrap();
+    party::run(store.as_ref(), Actor::new(GINGER).unwrap(), promote).unwrap();
+    party::run(
+        store.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::SetLeader(VIM),
+    )
+    .unwrap();
 
     let ran: Vec<_> = calls
         .lock()
@@ -3693,12 +3978,16 @@ fn subgroup_ops_reach_realm_core_in_their_declared_argument_slots() {
     use lyracore_shared::group::realm_op;
     let (realm, world, instances, _calls) = party_topology();
     form_split_party(&world, &instances);
-    party::run(world.as_ref(), 7, GINGER, party::Op::RaidConvert).unwrap();
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::RaidConvert,
+    )
+    .unwrap();
 
     party::run(
         world.as_ref(),
-        7,
-        GINGER,
+        Actor::new(GINGER).unwrap(),
         party::Op::ChangeSubgroup {
             target: VIM,
             subgroup: 2,
@@ -3707,8 +3996,7 @@ fn subgroup_ops_reach_realm_core_in_their_declared_argument_slots() {
     .expect("the leader moves Vim");
     party::run(
         world.as_ref(),
-        7,
-        GINGER,
+        Actor::new(GINGER).unwrap(),
         party::Op::SwapSubgroup {
             first: GINGER,
             second: VIM,
@@ -3732,7 +4020,12 @@ fn subgroup_ops_reach_realm_core_in_their_declared_argument_slots() {
 fn a_leader_moves_a_member_to_another_subgroup_and_every_shard_mirrors_the_slot() {
     let (realm, world, instances, _calls) = party_topology();
     form_split_party(&world, &instances);
-    party::run(world.as_ref(), 7, GINGER, party::Op::RaidConvert).unwrap();
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::RaidConvert,
+    )
+    .unwrap();
     realm
         .party
         .party
@@ -3744,8 +4037,7 @@ fn a_leader_moves_a_member_to_another_subgroup_and_every_shard_mirrors_the_slot(
 
     let outcome = party::run(
         world.as_ref(),
-        7,
-        GINGER,
+        Actor::new(GINGER).unwrap(),
         party::Op::ChangeSubgroup {
             target: VIM,
             subgroup: 2,
@@ -3779,13 +4071,17 @@ fn a_leader_moves_a_member_to_another_subgroup_and_every_shard_mirrors_the_slot(
 fn changing_into_the_same_subgroup_pushes_no_mirror() {
     let (_realm, world, instances, calls) = party_topology();
     form_split_party(&world, &instances);
-    party::run(world.as_ref(), 7, GINGER, party::Op::RaidConvert).unwrap();
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::RaidConvert,
+    )
+    .unwrap();
     let mirrors_before = mirror_calls(&calls);
 
     let outcome = party::run(
         world.as_ref(),
-        7,
-        GINGER,
+        Actor::new(GINGER).unwrap(),
         party::Op::ChangeSubgroup {
             target: VIM,
             subgroup: 0,
@@ -3802,9 +4098,19 @@ fn changing_into_the_same_subgroup_pushes_no_mirror() {
 fn an_assistant_can_move_a_member_a_plain_member_cannot() {
     let (realm, world, instances, _calls) = party_topology();
     form_split_party(&world, &instances);
-    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(TRIN)).unwrap();
-    party::run(world.as_ref(), 9, TRIN, party::Op::Accept).unwrap();
-    party::run(world.as_ref(), 7, GINGER, party::Op::RaidConvert).unwrap();
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::Invite(TRIN),
+    )
+    .unwrap();
+    party::run(world.as_ref(), Actor::new(TRIN).unwrap(), party::Op::Accept).unwrap();
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::RaidConvert,
+    )
+    .unwrap();
     realm
         .party
         .party
@@ -3815,8 +4121,7 @@ fn an_assistant_can_move_a_member_a_plain_member_cannot() {
 
     let outcome = party::run(
         instances.as_ref(),
-        8,
-        VIM,
+        Actor::new(VIM).unwrap(),
         party::Op::ChangeSubgroup {
             target: GINGER,
             subgroup: 3,
@@ -3840,8 +4145,7 @@ fn an_assistant_can_move_a_member_a_plain_member_cannot() {
     let before = realm.group_roster(GINGER).unwrap().unwrap();
     let outcome = party::run(
         world.as_ref(),
-        9,
-        TRIN,
+        Actor::new(TRIN).unwrap(),
         party::Op::ChangeSubgroup {
             target: GINGER,
             subgroup: 4,
@@ -3863,7 +4167,12 @@ fn an_assistant_can_move_a_member_a_plain_member_cannot() {
 fn an_assistant_moves_a_member_and_marks_a_target_icon() {
     let (realm, world, instances, _calls) = party_topology();
     form_split_party(&world, &instances);
-    party::run(world.as_ref(), 7, GINGER, party::Op::RaidConvert).unwrap();
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::RaidConvert,
+    )
+    .unwrap();
     realm
         .party
         .party
@@ -3874,8 +4183,7 @@ fn an_assistant_moves_a_member_and_marks_a_target_icon() {
 
     let moved = party::run(
         instances.as_ref(),
-        8,
-        VIM,
+        Actor::new(VIM).unwrap(),
         party::Op::ChangeSubgroup {
             target: GINGER,
             subgroup: 3,
@@ -3898,8 +4206,7 @@ fn an_assistant_moves_a_member_and_marks_a_target_icon() {
 
     let marked = party::run(
         instances.as_ref(),
-        8,
-        VIM,
+        Actor::new(VIM).unwrap(),
         party::Op::TargetIcon {
             icon: 7,
             target: 900,
@@ -3923,13 +4230,17 @@ fn an_assistant_moves_a_member_and_marks_a_target_icon() {
 fn a_move_to_subgroup_eight_is_refused() {
     let (realm, world, instances, _calls) = party_topology();
     form_split_party(&world, &instances);
-    party::run(world.as_ref(), 7, GINGER, party::Op::RaidConvert).unwrap();
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::RaidConvert,
+    )
+    .unwrap();
     let before = realm.group_roster(GINGER).unwrap().unwrap();
 
     let outcome = party::run(
         world.as_ref(),
-        7,
-        GINGER,
+        Actor::new(GINGER).unwrap(),
         party::Op::ChangeSubgroup {
             target: VIM,
             subgroup: 8,
@@ -3953,8 +4264,7 @@ fn subgroup_ops_in_a_party_are_refused_and_change_nothing() {
 
     let change = party::run(
         world.as_ref(),
-        7,
-        GINGER,
+        Actor::new(GINGER).unwrap(),
         party::Op::ChangeSubgroup {
             target: VIM,
             subgroup: 1,
@@ -3963,8 +4273,7 @@ fn subgroup_ops_in_a_party_are_refused_and_change_nothing() {
     .unwrap();
     let swap = party::run(
         world.as_ref(),
-        7,
-        GINGER,
+        Actor::new(GINGER).unwrap(),
         party::Op::SwapSubgroup {
             first: GINGER,
             second: VIM,
@@ -4005,8 +4314,7 @@ fn a_move_into_a_full_subgroup_is_refused() {
 
     let outcome = party::run(
         world.as_ref(),
-        7,
-        GINGER,
+        Actor::new(GINGER).unwrap(),
         party::Op::ChangeSubgroup {
             target: GINGER,
             subgroup: 1,
@@ -4029,8 +4337,7 @@ fn swapping_members_of_two_full_subgroups_succeeds_and_sends_one_list_per_member
 
     let outcome = party::run(
         world.as_ref(),
-        7,
-        GINGER,
+        Actor::new(GINGER).unwrap(),
         party::Op::SwapSubgroup {
             first: GINGER,
             second: VIM,
@@ -4070,13 +4377,17 @@ fn swapping_members_of_two_full_subgroups_succeeds_and_sends_one_list_per_member
 fn swapping_members_of_one_subgroup_pushes_no_mirror() {
     let (_realm, world, instances, calls) = party_topology();
     form_split_party(&world, &instances);
-    party::run(world.as_ref(), 7, GINGER, party::Op::RaidConvert).unwrap();
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::RaidConvert,
+    )
+    .unwrap();
     let mirrors_before = mirror_calls(&calls);
 
     let outcome = party::run(
         world.as_ref(),
-        7,
-        GINGER,
+        Actor::new(GINGER).unwrap(),
         party::Op::SwapSubgroup {
             first: GINGER,
             second: VIM,
@@ -4168,7 +4479,7 @@ fn a_group_broadcast_runs_once_on_realm_core_and_pushes_no_mirror() {
             .group_roster_reads
             .load(std::sync::atomic::Ordering::SeqCst);
 
-        let outcome = party::run(world.as_ref(), 7, GINGER, op).unwrap();
+        let outcome = party::run(world.as_ref(), Actor::new(GINGER).unwrap(), op).unwrap();
 
         assert_eq!(outcome, PartyOutcome::Ran, "{op:?}");
         assert_eq!(
@@ -4214,7 +4525,7 @@ fn an_unsharded_gateway_runs_every_group_broadcast_on_its_own_shard() {
     for (op, (code, target, arg_a, arg_b, arg_c)) in broadcast_ops() {
         calls.lock().unwrap().clear();
 
-        let outcome = party::run(store.as_ref(), 7, GINGER, op).unwrap();
+        let outcome = party::run(store.as_ref(), Actor::new(GINGER).unwrap(), op).unwrap();
 
         assert_eq!(outcome, PartyOutcome::Ran, "{op:?}");
         assert_eq!(
@@ -4633,9 +4944,19 @@ fn accepts(realm: &WorldFake) -> Vec<(u8, u64, u64, u8, u8, u64)> {
 #[test]
 fn a_client_accept_carries_the_acceptors_class() {
     let (realm, world, instances) = dwarf_priest_topology();
-    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(VIM)).unwrap();
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::Invite(VIM),
+    )
+    .unwrap();
 
-    party::run(instances.as_ref(), 8, VIM, party::Op::Accept).unwrap();
+    party::run(
+        instances.as_ref(),
+        Actor::new(VIM).unwrap(),
+        party::Op::Accept,
+    )
+    .unwrap();
 
     assert_eq!(accepts(&realm), [(realm_op::ACCEPT, VIM, 0, 5, 0, 0)]);
 }
@@ -4646,7 +4967,12 @@ fn a_client_accept_carries_the_acceptors_class() {
 fn a_playerbot_accept_carries_its_class_from_its_own_shard() {
     let (realm, world, _instances) = dwarf_priest_topology();
 
-    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(FAR_BOT)).unwrap();
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::Invite(FAR_BOT),
+    )
+    .unwrap();
 
     assert_eq!(accepts(&realm), [(realm_op::ACCEPT, FAR_BOT, 0, 5, 0, 0)]);
 }
@@ -4657,7 +4983,7 @@ fn an_accept_nobody_can_name_conveys_zero_class() {
     let (realm, world, _instances, _calls) = party_topology();
     realm.party.party.lock().unwrap().invites.push((99, GINGER));
 
-    party::run(world.as_ref(), 9, 99, party::Op::Accept).unwrap();
+    party::run(world.as_ref(), Actor::new(99).unwrap(), party::Op::Accept).unwrap();
 
     assert_eq!(accepts(&realm), [(realm_op::ACCEPT, 99, 0, 0, 0, 0)]);
 }
@@ -4731,7 +5057,7 @@ fn world_entry_asks_for_a_partys_target_icons_after_the_list() {
     form_split_party(&world, &instances);
     let (tx, rx) = crate::world::SessionTx::with_depth(0);
 
-    party::on_world_entry(&tx, instances.as_ref(), VIM).expect("world entry");
+    party::on_world_entry(&tx, instances.as_ref(), Actor::new(VIM).unwrap()).expect("world entry");
 
     group_list(rx.try_recv().expect("the list goes out first"));
     assert_eq!(
@@ -4740,10 +5066,15 @@ fn world_entry_asks_for_a_partys_target_icons_after_the_list() {
         "then the list request, whose answer rides the relay behind the list"
     );
 
-    party::run(world.as_ref(), 7, GINGER, party::Op::RaidConvert).unwrap();
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::RaidConvert,
+    )
+    .unwrap();
     let ops_before = realm.party.party.lock().unwrap().ops.len();
     let (tx, _rx) = crate::world::SessionTx::with_depth(0);
-    party::on_world_entry(&tx, instances.as_ref(), VIM).expect("world entry");
+    party::on_world_entry(&tx, instances.as_ref(), Actor::new(VIM).unwrap()).expect("world entry");
     assert_eq!(
         realm.party.party.lock().unwrap().ops.len(),
         ops_before,
@@ -4798,8 +5129,13 @@ fn mirror_lists(shard: &WorldFake, group_id: u64, member: u64) -> bool {
 fn lagging_three_member_party() -> (std::sync::Arc<WorldFake>, std::sync::Arc<WorldFake>, u64) {
     let (realm, world, instances, _) = party_topology();
     form_split_party(&world, &instances);
-    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(TRIN)).unwrap();
-    party::run(world.as_ref(), 9, TRIN, party::Op::Accept).unwrap();
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::Invite(TRIN),
+    )
+    .unwrap();
+    party::run(world.as_ref(), Actor::new(TRIN).unwrap(), party::Op::Accept).unwrap();
     let group_id = realm.group_roster(VIM).unwrap().unwrap().group_id;
     realm
         .party
@@ -4816,14 +5152,29 @@ fn lagging_three_member_party() -> (std::sync::Arc<WorldFake>, std::sync::Arc<Wo
 fn a_leave_and_a_rejoin_reach_the_instance_pool_while_the_realm_cache_lags() {
     let (world, instances, group_id) = lagging_three_member_party();
 
-    party::run(instances.as_ref(), 8, VIM, party::Op::Leave).unwrap();
+    party::run(
+        instances.as_ref(),
+        Actor::new(VIM).unwrap(),
+        party::Op::Leave,
+    )
+    .unwrap();
     assert!(
         !mirror_lists(&instances, group_id, VIM),
         "the Pool learns that Vim left"
     );
 
-    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(VIM)).unwrap();
-    party::run(instances.as_ref(), 8, VIM, party::Op::Accept).unwrap();
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::Invite(VIM),
+    )
+    .unwrap();
+    party::run(
+        instances.as_ref(),
+        Actor::new(VIM).unwrap(),
+        party::Op::Accept,
+    )
+    .unwrap();
     assert!(
         mirror_lists(&instances, group_id, VIM),
         "the Pool learns that Vim is back"
@@ -4837,7 +5188,12 @@ fn a_leave_and_a_rejoin_reach_the_instance_pool_while_the_realm_cache_lags() {
 fn a_bot_leave_that_disbands_reaches_the_instance_pool_while_the_realm_cache_lags() {
     let (realm, world, instances, _) = party_topology();
     party::run_bot_invite(world.as_ref(), BOT, VIM).unwrap();
-    party::run(instances.as_ref(), 8, VIM, party::Op::Accept).unwrap();
+    party::run(
+        instances.as_ref(),
+        Actor::new(VIM).unwrap(),
+        party::Op::Accept,
+    )
+    .unwrap();
     let group_id = realm.group_roster(VIM).unwrap().unwrap().group_id;
     assert!(mirror_lists(&instances, group_id, VIM));
     realm
@@ -4865,14 +5221,29 @@ fn a_bot_leave_that_disbands_reaches_the_instance_pool_while_the_realm_cache_lag
 #[test]
 fn a_rejoin_retries_a_failed_mirror_push() {
     let (world, instances, group_id) = lagging_three_member_party();
-    party::run(instances.as_ref(), 8, VIM, party::Op::Leave).unwrap();
-    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(VIM)).unwrap();
+    party::run(
+        instances.as_ref(),
+        Actor::new(VIM).unwrap(),
+        party::Op::Leave,
+    )
+    .unwrap();
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::Invite(VIM),
+    )
+    .unwrap();
 
     instances
         .party
         .mirror_failures
         .store(2, std::sync::atomic::Ordering::SeqCst);
-    party::run(instances.as_ref(), 8, VIM, party::Op::Accept).unwrap();
+    party::run(
+        instances.as_ref(),
+        Actor::new(VIM).unwrap(),
+        party::Op::Accept,
+    )
+    .unwrap();
     assert!(mirror_lists(&instances, group_id, VIM));
 }
 
@@ -4953,10 +5324,10 @@ fn every_group_refusal_reaches_the_client_as_one_party_result() {
     }
 }
 
-/// A reducer that timed out left the party in an unknown state, so it must end the session rather
-/// than pose as a gameplay answer the client renders.
+/// A Transport Loss left the party in an unknown state, so it must end the session rather than pose
+/// as a gameplay answer the client renders.
 #[test]
-fn a_group_invite_timeout_is_not_answered_as_a_refusal() {
+fn a_group_invite_transport_loss_is_not_answered_as_a_refusal() {
     let mut s = quest_store();
     s.characters = vec![codec::CharacterView {
         guid: 2,
@@ -4964,7 +5335,7 @@ fn a_group_invite_timeout_is_not_answered_as_a_refusal() {
         ..Default::default()
     }];
     s.session.login_entity = Some(warrior_entity());
-    s.trade_error = Some("gw_group_invite reducer timed out after 10s".into());
+    s.trade_error = Some("transport lost".into());
     let store = std::sync::Arc::new(s);
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
@@ -4987,8 +5358,11 @@ fn a_group_invite_timeout_is_not_answered_as_a_refusal() {
     let error = result_rx
         .recv_timeout(std::time::Duration::from_secs(1))
         .expect("an unknown party outcome must end the session promptly")
-        .expect_err("a timed-out party reducer must be session-fatal");
-    assert!(format!("{error:#}").contains("timed out"));
+        .expect_err("a party Transport Loss must be session-fatal");
+    assert_eq!(
+        crate::stdb::classify(&error),
+        crate::stdb::DurableFailure::TransportLoss
+    );
 }
 
 #[test]

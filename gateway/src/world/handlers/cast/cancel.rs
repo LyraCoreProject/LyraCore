@@ -9,11 +9,7 @@ pub(super) fn cancel_cast<St: CastStore + ?Sized>(
     store: &St,
     player: CastPlayer,
 ) -> Result<CastOutcome> {
-    best_effort(
-        player,
-        "cancel_cast",
-        store.cancel_cast(player.account_id, player.self_guid.unwrap_or(0)),
-    )
+    best_effort(player, "cancel_cast", |actor| store.cancel_cast(actor))
 }
 
 /// `CMSG_CANCEL_AURA`: remove the caller's own aura named by the wire spell id. The aura relay then
@@ -23,22 +19,25 @@ pub(super) fn cancel_aura<St: CastStore + ?Sized>(
     player: CastPlayer,
     spell_id: u32,
 ) -> Result<CastOutcome> {
-    best_effort(
-        player,
-        "cancel_aura",
-        store.cancel_aura(player.account_id, player.self_guid.unwrap_or(0), spell_id),
-    )
+    best_effort(player, "cancel_aura", |actor| {
+        store.cancel_aura(actor, spell_id)
+    })
 }
 
-/// The shared cancellation outcome: nothing on the wire, no session transition, and a refusal that
-/// is logged rather than raised. Only a dead reducer transport ends the session, because no later
-/// request could be served either.
-fn best_effort(player: CastPlayer, what: &str, result: Result<()>) -> Result<CastOutcome> {
-    if let Err(e) = result {
-        if is_transport_failure(&e) {
-            return Err(e);
-        }
-        log::debug!("world: {what} ignored (account {}): {e}", player.account_id);
+/// The shared cancellation outcome: nothing on the wire, no session transition, and a Refusal that
+/// is logged rather than raised. Only a Transport Loss ends the session, because no later request
+/// could be served either. A session with no Actor has nothing to cancel.
+fn best_effort(
+    player: CastPlayer,
+    what: &str,
+    request: impl FnOnce(Actor) -> Result<()>,
+) -> Result<CastOutcome> {
+    if let Some(Err(e)) = player.actor().map(request) {
+        let reason = refusal_reason(e)?;
+        log::debug!(
+            "world: {what} ignored (account {}): {reason}",
+            player.account_id
+        );
     }
     Ok(CastOutcome::Handled {
         transition: CastTransition::default(),
@@ -77,7 +76,7 @@ mod tests {
 
         assert_eq!(
             store.cancel_cast_calls.lock().unwrap().as_slice(),
-            &[(ACCOUNT, CASTER)],
+            &[CASTER],
             "the caller names the cast; the client's spell id is unused"
         );
         assert!(
@@ -96,7 +95,7 @@ mod tests {
 
         assert_eq!(
             store.cancel_aura_calls.lock().unwrap().as_slice(),
-            &[(ACCOUNT, CASTER, 5555)]
+            &[(CASTER, 5555)]
         );
         assert!(outbound.is_empty(), "the aura relay re-syncs the buff bar");
     }
@@ -117,13 +116,16 @@ mod tests {
 
     #[test]
     fn a_dead_reducer_transport_during_cancellation_is_session_fatal() {
-        let store = refusing_store("gw_cancel_cast reducer transport disconnected: channel closed");
+        let store = InMemoryCasts {
+            transport_lost: true,
+            ..Default::default()
+        };
 
         assert!(dispatch_cast(&store, player(), cancel_cast_msg()).is_err());
     }
 
     #[test]
-    fn a_player_with_no_character_in_world_cancels_against_a_zero_actor() {
+    fn a_player_with_no_character_in_world_has_nothing_to_cancel() {
         let store = InMemoryCasts::default();
         let player = CastPlayer {
             self_guid: None,
@@ -132,10 +134,6 @@ mod tests {
 
         handled(dispatch_cast(&store, player, cancel_aura_msg(5555)).unwrap());
 
-        assert_eq!(
-            store.cancel_aura_calls.lock().unwrap().as_slice(),
-            &[(ACCOUNT, 0, 5555)],
-            "the durable call rejects guid 0 rather than the gateway panicking"
-        );
+        assert!(store.cancel_aura_calls.lock().unwrap().is_empty());
     }
 }

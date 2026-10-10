@@ -167,27 +167,21 @@ pub(crate) trait SessionStore: Send + Sync {
     /// is still parked in the shard cache.
     fn pending_system_messages(&self, self_guid: u64) -> Vec<String>;
 
-    /// Enter the world with `character_guid`: calls the `player_login` reducer and
+    /// Enter the world as `character`: calls the `player_login` reducer and
     /// returns the live entity to spawn (from the resulting `game_world_entity` row). Errors if
     /// the character isn't the caller's. `entry` picks the reducer: a world-port keeps the Away
     /// Status, a fresh login ends it.
     fn player_login(
         &self,
         account_id: u64,
-        character_guid: u64,
+        character: Actor,
         entry: codec::WorldEntry,
     ) -> Result<codec::EntityView>;
 
     /// Enqueue an accepted inbound movement on this shard's shared movement batch. The live store
     /// serializes `info` once and preserves the mover, opcode, position, orientation, and timestamp
     /// in the queued entry. Relayed peer events arrive back through the shared dispatch.
-    fn movement_update(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        opcode: u32,
-        info: &MovementInfo,
-    ) -> Result<()>;
+    fn movement_update(&self, actor: Actor, opcode: u32, info: &MovementInfo) -> Result<()>;
 
     /// Subscribe this player's connection to its per-player views (nearby `game_world_entity`,
     /// addressed `game_movement_event`) and push the resulting peer-spawn / movement-relay / destroy
@@ -208,13 +202,7 @@ pub(crate) trait SessionStore: Send + Sync {
 
     /// Forward a parsed addon-bridge command to the module's `client_command` reducer ON
     /// THE PLAYER'S CONNECTION — the handler runs with exactly the player's reducer authority.
-    fn client_command(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        cmd: String,
-        payload: String,
-    ) -> Result<()>;
+    fn client_command(&self, actor: Actor, cmd: String, payload: String) -> Result<()>;
 
     /// Is `guid`'s live entity currently in the world? The WORLDPORT_ACK gate: a cross-map
     /// transfer despawns the entity until the ack rebuilds it, so

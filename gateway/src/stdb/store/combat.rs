@@ -2,26 +2,38 @@
 
 use anyhow::Result;
 
-use crate::world::CombatStore;
-
+use crate::stdb::bindings::*;
+use crate::stdb::connection::call_reducer;
 use crate::stdb::Coordinator;
+use crate::world::{Actor, CombatStore};
 
 impl CombatStore for Coordinator {
-    fn set_target(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()> {
-        self.set_target(account_id, self_guid, target_guid)
+    /// Targets are attributed to the caller through the coordinator connection. `target_guid` 0
+    /// clears the selection.
+    fn set_target(&self, actor: Actor, target_guid: u64) -> Result<()> {
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_set_target",
+            gw_set_target_then(self.session_actor(actor), target_guid)
+        )
     }
 
-    fn pet_command(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        data: u32,
-        target_guid: u64,
-    ) -> Result<()> {
-        self.pet_command(account_id, self_guid, data, target_guid)
+    fn pet_command(&self, actor: Actor, data: u32, target_guid: u64) -> Result<()> {
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_pet_command",
+            gw_pet_command_then(self.session_actor(actor), data, target_guid)
+        )
     }
 
-    fn set_sheathed(&self, account_id: u64, self_guid: u64, state: u8) -> Result<()> {
-        self.set_sheathed(account_id, self_guid, state)
+    fn set_sheathed(&self, actor: Actor, state: u8) -> Result<()> {
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_set_sheathed",
+            gw_set_sheathed_then(self.session_actor(actor), state)
+        )
     }
 }

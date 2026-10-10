@@ -3,6 +3,7 @@
 
 use super::super::*;
 use super::send_show_bank;
+use crate::stdb::{classify, DurableFailure};
 
 /// Bank Durable Requests.
 pub(crate) trait BankStore: Send + Sync {
@@ -10,11 +11,40 @@ pub(crate) trait BankStore: Send + Sync {
     /// — right-click to bank, right-click to withdraw). The module infers the direction from `slot`
     /// and resolves the receiving free slot itself; a full destination (bank or carry space) is a
     /// per-action `Err`.
-    fn auto_bank_item(&self, account_id: u64, self_guid: u64, slot: u8) -> Result<()>;
+    fn auto_bank_item(&self, actor: Actor, slot: u8) -> Result<()>;
 
     /// Buy the next bank bag slot from `banker_guid` (`CMSG_BUY_BANK_SLOT`). A refusal `Err` leads
     /// with its `SMSG_BUY_BANK_SLOT_RESULT` code in brackets (the trainer `[N]` precedent).
-    fn buy_bank_slot(&self, account_id: u64, self_guid: u64, banker_guid: u64) -> Result<()>;
+    fn buy_bank_slot(&self, actor: Actor, banker_guid: u64) -> Result<()>;
+}
+
+/// Move the item in `slot_index` between carry space and the bank. A Refusal, or no Character yet,
+/// answers `SMSG_INVENTORY_CHANGE_FAILURE`; a Transport Loss ends the World Session.
+fn auto_bank<St: BankStore + ?Sized>(
+    tx: &SessionTx,
+    store: &St,
+    conn: &WorldConn,
+    slot_index: u8,
+    direction: &str,
+) -> Result<()> {
+    if let Some(actor) = social::self_guid(conn).and_then(Actor::new) {
+        let Err(error) = store.auto_bank_item(actor, slot_index) else {
+            return Ok(());
+        };
+        if matches!(classify(&error), DurableFailure::TransportLoss) {
+            return Err(error);
+        }
+        log::debug!(
+            "world: auto_bank_item ({direction}) rejected (account {}): {error}",
+            conn.account_id
+        );
+    }
+    send(
+        tx,
+        Outbound::One(ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(
+            Box::new(codec::build_inventory_change_failure()),
+        )),
+    )
 }
 
 /// Bank family: `CMSG_BANKER_ACTIVATE` opens the bank window (a standing-refusing banker gets no
@@ -46,22 +76,7 @@ pub(crate) fn handle_bank<St: BankStore + NpcStore + ?Sized>(
         // Right-click a bag item with the bank open → deposit into the first free bank slot.
         ClientOpcodeMessage::CMSG_AUTOBANK_ITEM(c) => {
             if c.bag_index == MAIN_BAG {
-                if let Err(e) = store.auto_bank_item(
-                    conn.account_id,
-                    social::self_guid(conn).unwrap_or(0),
-                    c.slot_index,
-                ) {
-                    log::debug!(
-                        "world: auto_bank_item (deposit) rejected (account {}): {e}",
-                        conn.account_id
-                    );
-                    send(
-                        tx,
-                        Outbound::One(ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(
-                            Box::new(codec::build_inventory_change_failure()),
-                        )),
-                    )?;
-                }
+                auto_bank(tx, store, conn, c.slot_index, "deposit")?;
             } else {
                 log::debug!(
                     "world: autobank from sub-bag {} unsupported (account {})",
@@ -74,44 +89,35 @@ pub(crate) fn handle_bank<St: BankStore + NpcStore + ?Sized>(
         // `SMSG_BUY_BANK_SLOT_RESULT`; the refusal code rides the module's `[N]` error tag.
         ClientOpcodeMessage::CMSG_BUY_BANK_SLOT(c) => {
             let banker_guid = c.guid.guid();
-            let outcome = store.buy_bank_slot(
-                conn.account_id,
-                social::self_guid(conn).unwrap_or(0),
-                banker_guid,
-            );
-            let err_text = outcome.as_ref().err().map(ToString::to_string);
-            if let Some(e) = &err_text {
+            // No Character yet gets an untagged reason, which answers NotBanker.
+            let refusal = match social::self_guid(conn)
+                .and_then(Actor::new)
+                .map(|actor| store.buy_bank_slot(actor, banker_guid))
+            {
+                Some(Ok(())) => None,
+                None => Some(String::new()),
+                Some(Err(error)) => match classify(&error) {
+                    DurableFailure::Refusal { reason } => Some(reason.to_string()),
+                    DurableFailure::TransportLoss => return Err(error),
+                },
+            };
+            if let Some(reason) = &refusal {
                 log::debug!(
-                    "world: buy_bank_slot rejected (account {}): {e}",
+                    "world: buy_bank_slot rejected (account {}): {reason}",
                     conn.account_id
                 );
             }
             send(
                 tx,
                 Outbound::One(ServerOpcodeMessage::SMSG_BUY_BANK_SLOT_RESULT(
-                    codec::build_buy_bank_slot_reply(err_text.as_deref().map_or(Ok(()), Err)),
+                    codec::build_buy_bank_slot_reply(refusal.as_deref().map_or(Ok(()), Err)),
                 )),
             )?;
         }
         // Right-click a banked item → withdraw into the first free backpack/bag slot.
         ClientOpcodeMessage::CMSG_AUTOSTORE_BANK_ITEM(c) => {
             if c.bag_index == MAIN_BAG {
-                if let Err(e) = store.auto_bank_item(
-                    conn.account_id,
-                    social::self_guid(conn).unwrap_or(0),
-                    c.slot_index,
-                ) {
-                    log::debug!(
-                        "world: auto_bank_item (withdraw) rejected (account {}): {e}",
-                        conn.account_id
-                    );
-                    send(
-                        tx,
-                        Outbound::One(ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(
-                            Box::new(codec::build_inventory_change_failure()),
-                        )),
-                    )?;
-                }
+                auto_bank(tx, store, conn, c.slot_index, "withdraw")?;
             } else {
                 log::debug!(
                     "world: autostore-bank from sub-bag {} unsupported (account {})",

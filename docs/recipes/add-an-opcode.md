@@ -35,8 +35,8 @@ The Gateway carries the client's intent. The Module decides.
 - A Realm-core operation is a `realm_<verb>` reducer and takes the realm-wide facts the Gateway
   read.
 - A Refusal returns `Err` with a tag the Gateway can parse back into a typed Refusal. The Meeting
-  Stone Queue keeps that type in `lyracore_shared::meeting_stone`. A transport failure stays an
-  error, so the two never mix.
+  Stone Queue keeps that type in `lyracore_shared::meeting_stone`. The Gateway's `classify` treats
+  every other error as a Transport Loss, so the two never mix.
 - Declare a new module file in `module/src/lib.rs`.
 
 ## 3. Store what the Relay or a Durable Read needs
@@ -57,28 +57,34 @@ Required for every new table and every new reducer.
   `coordinator_queries` in `gateway/src/stdb/connection.rs`, then add a `parity_test!` and the table
   name to `MANIFEST_TABLES` in `gateway/tests/schema_parity.rs`.
 
-## 5. Call the reducer from the Coordinator
+## 5. Call the reducer from the Store trait method
 
-File: `gateway/src/stdb/reducers.rs`. Add an `impl Coordinator` method that makes the Durable
-Request:
+File: `gateway/src/stdb/store/<family>.rs`, declared in `gateway/src/stdb/store/mod.rs`. It holds
+`impl <Family>ActionStore for Coordinator`. Each trait method makes its Durable Request itself, as
+the `Actor` the handler resolved:
 
 ```rust
-let coord = self.0.call_pipe();
-call_reducer!(
-    coord.conn.reducers,
-    "gw_admit_meeting_stone",
-    gw_admit_meeting_stone_then(self.session_actor(actor_guid), go_guid)
-)
+fn admit_meeting_stone(&self, actor: Actor, go_guid: u64) -> Result<MeetingStoneOutcome> {
+    meeting_stone_outcome(call_reducer!(
+        self.0.call_pipe().conn.reducers,
+        "gw_admit_meeting_stone",
+        gw_admit_meeting_stone_then(self.session_actor(actor), go_guid)
+    ))
+}
 ```
 
-A Realm-core call goes through `self.realm_core()?` first. Turn a parsed Refusal into a typed
-outcome with `reducer_refusal_reason`, and return every other error unchanged.
+Do not add an inherent `impl Coordinator` method for the trait method to forward to. Keep one only
+when a Relay, logon or another family calls it too. A Realm-core call goes through
+`self.realm_core()?` first. A Durable Request the Gateway makes for the World Session, with no
+client acting, uses `self.owner_actor()`. A family with a typed Refusal parses it with
+`reducer_refusal_reason` and returns every other error unchanged.
 
 ## 6. Add the Durable Reads
 
-File: `gateway/src/stdb/reads/<family>.rs`, declared in `gateway/src/stdb/reads/mod.rs`. Each read
-is an `impl Coordinator` method that finds rows in the Coordinator cache by a unique index. The SDK
-cache has no other index, and a whole-table `iter()` holds the lock the pump needs.
+File: `gateway/src/stdb/store/<family>.rs`. Write the read in the trait method. A read that a Relay
+or another family also calls is an `impl Coordinator` method in `gateway/src/stdb/reads/`. Find rows
+in the Coordinator cache by a unique index. The SDK cache has no other index, and a whole-table
+`iter()` holds the lock the pump needs.
 
 ## 7. Write the family dispatcher
 
@@ -87,8 +93,13 @@ a `pub(crate) use` of its public items. For an opcode in an existing family, add
 family's dispatcher and skip to step 10.
 
 - A Store trait, `<Family>ActionStore`. Each method's doc says whether it is a Durable Request or a
-  Durable Read and on which Shard.
-- `impl <Family>ActionStore for crate::stdb::Coordinator`, each method one call to step 5 or 6.
+  Durable Read and on which Shard. A method that acts for a Character takes `actor: Actor`. Steps 5
+  and 6 implement it.
+- The dispatcher resolves the session's Character to `Option<Actor>` once, with `Actor::new`. When
+  it is `None`, make no Durable Request. The client usually gets no answer.
+- When a Store call fails, match on `classify(&error)`. A `DurableFailure::Refusal { reason }` gets
+  the family's answer to the client and the session continues. A `DurableFailure::TransportLoss`
+  returns the `Err`, which ends the World Session.
 - A player struct with the session facts the family needs, and an outcome enum with
   `Handled { outbound }` and `PassThrough(msg)`.
 - `dispatch_<family>_action(store, player, msg)` matches the family's `ClientOpcodeMessage` variants
@@ -132,7 +143,9 @@ File: `gateway/src/stdb/world_view.rs`.
 
 ## 12. Test each seam
 
-- The dispatcher, through its local Fake, in the family file.
+- The dispatcher, through its local Fake, in the family file. One Fake answers
+  `ReducerCallError::refused` and the client gets the Refusal answer. One answers
+  `ReducerCallError::transport_lost` and the dispatcher returns `Err`.
 - The packet bytes, in the codec file.
 - The Relay's recipient choice and packet, in the `world_view.rs` test modules.
 - The Module rule, in a durable test `module/tests/<family>.rs`. CI picks up a new target with no

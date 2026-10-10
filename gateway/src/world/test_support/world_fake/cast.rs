@@ -12,38 +12,20 @@ pub(crate) struct CastState {
 /// Cast behaviour is tested through `InMemoryCasts`. Here every cast operation succeeds and every
 /// spell reads as an unknown, ordinary one; only the two item reads world entry makes are live.
 impl CastStore for WorldFake {
-    fn cast_item_target(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        _spell_id: u32,
-        _slot: u8,
-    ) -> Result<()> {
+    fn cast_item_target(&self, _actor: Actor, _spell_id: u32, _slot: u8) -> Result<()> {
         Ok(())
     }
 
-    fn cancel_aura(&self, _account_id: u64, _self_guid: u64, _spell_id: u32) -> Result<()> {
+    fn cancel_aura(&self, _actor: Actor, _spell_id: u32) -> Result<()> {
         Ok(())
     }
-    fn cancel_cast(&self, _account_id: u64, _self_guid: u64) -> Result<()> {
+    fn cancel_cast(&self, _actor: Actor) -> Result<()> {
         Ok(())
     }
-    fn cast_spell(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        _spell_id: u32,
-        _target_guid: u64,
-    ) -> Result<()> {
+    fn cast_spell(&self, _actor: Actor, _spell_id: u32, _target_guid: u64) -> Result<()> {
         Ok(())
     }
-    fn start_ranged_attack(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        _target_guid: u64,
-        _spell_id: u32,
-    ) -> Result<()> {
+    fn start_ranged_attack(&self, _actor: Actor, _target_guid: u64, _spell_id: u32) -> Result<()> {
         Ok(())
     }
     fn spell_is_ranged_auto_repeat(&self, _spell_id: u32) -> bool {
@@ -69,8 +51,7 @@ impl CastStore for WorldFake {
     }
     fn cast_spell_at(
         &self,
-        _account_id: u64,
-        _self_guid: u64,
+        _actor: Actor,
         _spell_id: u32,
         _target_guid: u64,
         _x: f32,
@@ -79,25 +60,19 @@ impl CastStore for WorldFake {
     ) -> Result<()> {
         Ok(())
     }
-    fn item_slot_by_guid(&self, _account_id: u64, _item_guid: u64) -> Option<u8> {
+    fn item_slot_by_guid(&self, _item_guid: u64) -> Option<u8> {
         None
     }
-    fn disenchant_item(&self, _account_id: u64, _self_guid: u64, _slot: u8) -> Result<()> {
+    fn disenchant_item(&self, _actor: Actor, _slot: u8) -> Result<()> {
         Ok(())
     }
-    fn enchant_item_on_slot(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        _slot: u8,
-        _enchant_id: u32,
-    ) -> Result<()> {
+    fn enchant_item_on_slot(&self, _actor: Actor, _slot: u8, _enchant_id: u32) -> Result<()> {
         Ok(())
     }
-    fn fish(&self, _account_id: u64, _self_guid: u64) -> Result<()> {
+    fn fish(&self, _actor: Actor) -> Result<()> {
         Ok(())
     }
-    fn pick_lock(&self, _account_id: u64, _self_guid: u64, _go_guid: u64) -> Result<()> {
+    fn pick_lock(&self, _actor: Actor, _go_guid: u64) -> Result<()> {
         Ok(())
     }
 

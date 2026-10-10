@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::world::Actor;
 
 #[derive(Default)]
 pub(crate) struct VendorState {
@@ -16,14 +17,13 @@ impl VendorActionStore for WorldFake {
         Ok(self.vendor.vendor_stock.clone())
     }
 
-    fn vendor_refuses_interaction(&self, _vendor_guid: u64, _player_guid: u64) -> Result<bool> {
+    fn vendor_refuses_interaction(&self, _vendor_guid: u64, _actor: Actor) -> Result<bool> {
         Ok(self.npc_refuses)
     }
 
     fn vendor_buy(
         &self,
-        _account_id: u64,
-        _self_guid: u64,
+        _actor: Actor,
         _vendor_guid: u64,
         _item_entry: u32,
         _count: u32,
@@ -43,33 +43,15 @@ impl VendorActionStore for WorldFake {
         None
     }
 
-    fn vendor_repair(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        _npc_guid: u64,
-        _slot: u8,
-    ) -> Result<()> {
+    fn vendor_repair(&self, _actor: Actor, _npc_guid: u64, _slot: u8) -> Result<()> {
         Ok(())
     }
 
-    fn vendor_sell(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        _vendor_guid: u64,
-        _slot: u8,
-    ) -> Result<()> {
+    fn vendor_sell(&self, _actor: Actor, _vendor_guid: u64, _slot: u8) -> Result<()> {
         Ok(())
     }
 
-    fn vendor_buyback(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        _vendor_guid: u64,
-        _slot: u8,
-    ) -> Result<()> {
+    fn vendor_buyback(&self, _actor: Actor, _vendor_guid: u64, _slot: u8) -> Result<()> {
         Ok(())
     }
 }

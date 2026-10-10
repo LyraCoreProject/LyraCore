@@ -3,6 +3,7 @@
 
 use super::handlers::{handle_combat, CombatStore};
 use super::*;
+use crate::stdb::ReducerCallError;
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 
@@ -11,6 +12,8 @@ use std::sync::Mutex;
 struct CombatFake {
     selected: Mutex<BTreeMap<u64, u64>>,
     sheath: Mutex<BTreeMap<u64, u8>>,
+    /// Answered once by the next request, in place of success.
+    failure: Mutex<Option<ReducerCallError>>,
 }
 
 impl CombatFake {
@@ -21,26 +24,39 @@ impl CombatFake {
     fn sheath_of(&self, character: u64) -> Option<u8> {
         self.sheath.lock().unwrap().get(&character).copied()
     }
+
+    fn failing(failure: ReducerCallError) -> Self {
+        Self {
+            failure: Mutex::new(Some(failure)),
+            ..Self::default()
+        }
+    }
+
+    fn answer(&self) -> Result<()> {
+        match self.failure.lock().unwrap().take() {
+            Some(failure) => Err(failure.into()),
+            None => Ok(()),
+        }
+    }
 }
 
 impl CombatStore for CombatFake {
-    fn set_target(&self, _account_id: u64, self_guid: u64, target_guid: u64) -> Result<()> {
-        self.selected.lock().unwrap().insert(self_guid, target_guid);
+    fn set_target(&self, actor: Actor, target_guid: u64) -> Result<()> {
+        self.answer()?;
+        self.selected
+            .lock()
+            .unwrap()
+            .insert(actor.guid(), target_guid);
         Ok(())
     }
 
-    fn pet_command(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        _data: u32,
-        _target_guid: u64,
-    ) -> Result<()> {
-        unimplemented!("pet_command")
+    fn pet_command(&self, _actor: Actor, _data: u32, _target_guid: u64) -> Result<()> {
+        self.answer()
     }
 
-    fn set_sheathed(&self, _account_id: u64, self_guid: u64, state: u8) -> Result<()> {
-        self.sheath.lock().unwrap().insert(self_guid, state);
+    fn set_sheathed(&self, actor: Actor, state: u8) -> Result<()> {
+        self.answer()?;
+        self.sheath.lock().unwrap().insert(actor.guid(), state);
         Ok(())
     }
 }
@@ -79,4 +95,29 @@ fn set_selection_records_the_wire_guid_as_the_target() {
         },
     );
     assert_eq!(store.target_of(1), Some(321));
+}
+
+fn sheathe() -> CMSG_SETSHEATHED {
+    CMSG_SETSHEATHED {
+        sheathed: SheathState::Melee,
+    }
+}
+
+#[test]
+fn transport_loss_ends_the_world_session() {
+    let store = CombatFake::failing(ReducerCallError::transport_lost("gw_set_sheathed"));
+    let mut conn = in_world_conn(7, 1);
+    assert!(handle_combat(&store, &mut conn, sheathe().into()).is_err());
+}
+
+#[test]
+fn refusal_is_ignored_and_the_world_session_continues() {
+    let store = CombatFake::failing(ReducerCallError::refused("gw_set_sheathed", "not in world"));
+    let mut conn = in_world_conn(7, 1);
+    let passed_on = handle_combat(&store, &mut conn, sheathe().into()).unwrap();
+    assert!(
+        passed_on.is_none(),
+        "the combat family still owns the opcode"
+    );
+    assert_eq!(store.sheath_of(1), None);
 }

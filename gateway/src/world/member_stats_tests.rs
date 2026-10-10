@@ -217,8 +217,13 @@ fn ginger_and_trin() -> (
     std::sync::Arc<WorldFake>,
 ) {
     let (realm, world, instances, _) = party_topology();
-    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(TRIN)).expect("invite Trin");
-    party::run(world.as_ref(), 9, TRIN, party::Op::Accept).expect("Trin accepts");
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::Invite(TRIN),
+    )
+    .expect("invite Trin");
+    party::run(world.as_ref(), Actor::new(TRIN).unwrap(), party::Op::Accept).expect("Trin accepts");
     place(&world, GINGER, caster());
     place(&world, TRIN, caster());
     (realm, world, instances)
@@ -403,7 +408,7 @@ fn a_mate_who_leaves_the_group_is_forgotten() {
     let (_realm, world, _instances) = ginger_and_trin();
     let mut snapshots = Snapshots::new();
     tick(&world, &[GINGER], &mut snapshots);
-    party::run(world.as_ref(), 9, TRIN, party::Op::Leave).expect("Trin leaves");
+    party::run(world.as_ref(), Actor::new(TRIN).unwrap(), party::Op::Leave).expect("Trin leaves");
 
     assert!(tick(&world, &[GINGER], &mut snapshots).is_empty());
     assert!(!snapshots.contains_key(&TRIN));
@@ -551,7 +556,12 @@ fn a_failed_read_answers_nothing_and_is_never_offline() {
 #[test]
 fn a_bot_crossing_between_shards_is_never_reported_offline() {
     let (_realm, world, _instances, _) = party_topology();
-    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(BOT)).expect("invite the bot");
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::Invite(BOT),
+    )
+    .expect("invite the bot");
     place(&world, BOT, caster());
     let mut snapshots = Snapshots::new();
     tick(&world, &[GINGER], &mut snapshots);

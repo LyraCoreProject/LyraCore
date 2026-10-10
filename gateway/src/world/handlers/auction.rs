@@ -20,7 +20,7 @@ pub(crate) struct AuctionInteraction {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct CreateAuctionRequest {
-    pub(crate) actor_guid: u64,
+    pub(crate) actor: Actor,
     pub(crate) auctioneer_guid: u64,
     pub(crate) item_guid: u64,
     pub(crate) start_bid: u32,
@@ -50,7 +50,7 @@ impl From<AuctionRefusal> for CreateAuctionOutcome {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct PlaceBidRequest {
-    pub(crate) actor_guid: u64,
+    pub(crate) actor: Actor,
     pub(crate) auctioneer_guid: u64,
     pub(crate) auction_id: u32,
     pub(crate) offer: u32,
@@ -86,7 +86,7 @@ impl From<AuctionRefusal> for PlaceBidOutcome {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct CancelAuctionRequest {
-    pub(crate) actor_guid: u64,
+    pub(crate) actor: Actor,
     pub(crate) auctioneer_guid: u64,
     pub(crate) auction_id: u32,
     pub(crate) house_id: u32,
@@ -149,7 +149,7 @@ pub(crate) struct AuctionPage {
 pub(crate) trait AuctionActionStore: Send + Sync {
     fn auction_interaction(
         &self,
-        player_guid: u64,
+        actor: Actor,
         auctioneer_guid: u64,
     ) -> Result<Option<AuctionInteraction>>;
 
@@ -159,91 +159,17 @@ pub(crate) trait AuctionActionStore: Send + Sync {
 
     fn cancel_auction(&self, request: CancelAuctionRequest) -> Result<CancelAuctionOutcome>;
 
-    /// Drive every unfinished bid or Cancellation Hold of `actor_guid` to its end. A Gateway that
+    /// Drive every unfinished bid or Cancellation Hold of `actor` to its end. A Gateway that
     /// stopped between phases leaves them fenced, and a Cancellation has no natural retry because
     /// the listing leaves the owner list.
-    fn resume_auction_holds(&self, actor_guid: u64) -> Result<()>;
+    fn resume_auction_holds(&self, actor: Actor) -> Result<()>;
 
     fn auction_query(
         &self,
-        player_guid: u64,
+        actor: Actor,
         house_id: u32,
         query: AuctionQuery,
     ) -> Result<AuctionPage>;
-}
-
-impl AuctionActionStore for crate::stdb::Coordinator {
-    fn auction_interaction(
-        &self,
-        player_guid: u64,
-        auctioneer_guid: u64,
-    ) -> Result<Option<AuctionInteraction>> {
-        use crate::stdb::bindings::{
-            GameAuctionHouseTableAccess, GameFactionTemplateTableAccess, GameWorldEntityTableAccess,
-        };
-        let house = {
-            let guard = self.0.coord();
-            let db = &guard.conn.db;
-            let Some(auctioneer) = db.game_world_entity().guid().find(&auctioneer_guid) else {
-                return Ok(None);
-            };
-            let Some(faction_group) = db
-                .game_faction_template()
-                .id()
-                .find(&auctioneer.faction_template)
-                .map(|template| template.faction_group)
-            else {
-                return Ok(None);
-            };
-            let house_id = lyracore_shared::auction::house_for_faction_template(
-                auctioneer.faction_template,
-                faction_group,
-            );
-            let Some(house) =
-                db.game_auction_house()
-                    .id()
-                    .find(&house_id)
-                    .map(|house| AuctionHousePolicy {
-                        id: house.id,
-                        deposit_rate: house.deposit_rate,
-                        consignment_rate: house.consignment_rate,
-                    })
-            else {
-                return Ok(None);
-            };
-            house
-        };
-        let refuses_interaction = self.npc_refuses_interaction(auctioneer_guid, player_guid)?;
-        Ok(Some(AuctionInteraction {
-            house,
-            refuses_interaction,
-        }))
-    }
-
-    fn create_auction(&self, request: CreateAuctionRequest) -> Result<CreateAuctionOutcome> {
-        crate::stdb::Coordinator::create_auction(self, request)
-    }
-
-    fn place_bid(&self, request: PlaceBidRequest) -> Result<PlaceBidOutcome> {
-        crate::stdb::Coordinator::place_bid(self, request)
-    }
-
-    fn cancel_auction(&self, request: CancelAuctionRequest) -> Result<CancelAuctionOutcome> {
-        crate::stdb::Coordinator::cancel_auction(self, request)
-    }
-
-    fn resume_auction_holds(&self, actor_guid: u64) -> Result<()> {
-        crate::stdb::Coordinator::resume_auction_holds(self, actor_guid)
-    }
-
-    fn auction_query(
-        &self,
-        player_guid: u64,
-        house_id: u32,
-        query: AuctionQuery,
-    ) -> Result<AuctionPage> {
-        crate::stdb::Coordinator::auction_query(self, player_guid, house_id, query)
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -323,7 +249,7 @@ pub(crate) fn dispatch_auction_browse_action<St: AuctionActionStore + ?Sized>(
     player: AuctionActionPlayer,
     request: AuctionBrowseRequest,
 ) -> Result<AuctionActionOutcome> {
-    let Some((player_guid, interaction)) =
+    let Some((actor, interaction)) =
         auction_actor_interaction(store, player, request.auctioneer_guid)?
             .filter(|(_, interaction)| !interaction.refuses_interaction)
     else {
@@ -335,11 +261,7 @@ pub(crate) fn dispatch_auction_browse_action<St: AuctionActionStore + ?Sized>(
             )],
         });
     };
-    let page = store.auction_query(
-        player_guid,
-        interaction.house.id,
-        AuctionQuery::Browse(request),
-    )?;
+    let page = store.auction_query(actor, interaction.house.id, AuctionQuery::Browse(request))?;
     Ok(AuctionActionOutcome::Handled {
         outbound: vec![Outbound::One(
             ServerOpcodeMessage::SMSG_AUCTION_LIST_RESULT(Box::new(
@@ -355,13 +277,13 @@ fn auction_actor_interaction<St: AuctionActionStore + ?Sized>(
     store: &St,
     player: AuctionActionPlayer,
     auctioneer_guid: u64,
-) -> Result<Option<(u64, AuctionInteraction)>> {
-    let Some(player_guid) = player.self_guid else {
+) -> Result<Option<(Actor, AuctionInteraction)>> {
+    let Some(actor) = player.self_guid.and_then(Actor::new) else {
         return Ok(None);
     };
     // A missing auctioneer or house is `None`; a failed Durable Read is a failure, not a Refusal.
-    let interaction = store.auction_interaction(player_guid, auctioneer_guid)?;
-    Ok(interaction.map(|interaction| (player_guid, interaction)))
+    let interaction = store.auction_interaction(actor, auctioneer_guid)?;
+    Ok(interaction.map(|interaction| (actor, interaction)))
 }
 
 fn create_result(outcome: CreateAuctionOutcome) -> AuctionActionOutcome {
@@ -502,7 +424,7 @@ pub(crate) fn dispatch_auction_action<St: AuctionActionStore + ?Sized>(
         ClientOpcodeMessage::CMSG_AUCTION_PLACE_BID(message) => {
             let auction_id = message.auction_id;
             let auctioneer_guid = message.auctioneer.guid();
-            let Some((player_guid, interaction)) =
+            let Some((actor, interaction)) =
                 auction_actor_interaction(store, player, auctioneer_guid)?
             else {
                 return Ok(bid_result(auction_id, PlaceBidOutcome::Database));
@@ -510,7 +432,7 @@ pub(crate) fn dispatch_auction_action<St: AuctionActionStore + ?Sized>(
             // A Refusal arrives as an outcome. An error is a failure with an unknown durable
             // result, so it ends the session instead of posing as a gameplay answer.
             let outcome = store.place_bid(PlaceBidRequest {
-                actor_guid: player_guid,
+                actor,
                 auctioneer_guid,
                 auction_id,
                 offer: message.price.as_int(),
@@ -520,13 +442,13 @@ pub(crate) fn dispatch_auction_action<St: AuctionActionStore + ?Sized>(
         }
         ClientOpcodeMessage::CMSG_AUCTION_SELL_ITEM(message) => {
             let auctioneer_guid = message.auctioneer.guid();
-            let Some((player_guid, interaction)) =
+            let Some((actor, interaction)) =
                 auction_actor_interaction(store, player, auctioneer_guid)?
             else {
                 return Ok(create_result(CreateAuctionOutcome::Database));
             };
             let outcome = store.create_auction(CreateAuctionRequest {
-                actor_guid: player_guid,
+                actor,
                 auctioneer_guid,
                 item_guid: message.item.guid(),
                 start_bid: message.starting_bid,
@@ -541,7 +463,7 @@ pub(crate) fn dispatch_auction_action<St: AuctionActionStore + ?Sized>(
             let auctioneer_guid = message.auctioneer.guid();
             // Vanilla ignores a Cancellation away from an auctioneer
             // (`cm:AuctionHouseHandler.cpp:413-415`).
-            let Some((player_guid, interaction)) =
+            let Some((actor, interaction)) =
                 auction_actor_interaction(store, player, auctioneer_guid)?
             else {
                 return Ok(AuctionActionOutcome::Handled {
@@ -549,7 +471,7 @@ pub(crate) fn dispatch_auction_action<St: AuctionActionStore + ?Sized>(
                 });
             };
             let outcome = store.cancel_auction(CancelAuctionRequest {
-                actor_guid: player_guid,
+                actor,
                 auctioneer_guid,
                 auction_id,
                 house_id: interaction.house.id,
@@ -558,13 +480,14 @@ pub(crate) fn dispatch_auction_action<St: AuctionActionStore + ?Sized>(
         }
         other => return Ok(AuctionActionOutcome::PassThrough(other)),
     };
-    if let (AuctionRequest::Hello(_), Some(player_guid)) = (&request, player.self_guid) {
-        store.resume_auction_holds(player_guid)?;
+    if let (AuctionRequest::Hello(_), Some(actor)) =
+        (&request, player.self_guid.and_then(Actor::new))
+    {
+        store.resume_auction_holds(actor)?;
     }
     let auctioneer_guid = auctioneer.guid();
-    let Some((player_guid, interaction)) =
-        auction_actor_interaction(store, player, auctioneer_guid)?
-            .filter(|(_, interaction)| !interaction.refuses_interaction)
+    let Some((actor, interaction)) = auction_actor_interaction(store, player, auctioneer_guid)?
+        .filter(|(_, interaction)| !interaction.refuses_interaction)
     else {
         return Ok(AuctionActionOutcome::Handled {
             outbound: Vec::new(),
@@ -581,8 +504,7 @@ pub(crate) fn dispatch_auction_action<St: AuctionActionStore + ?Sized>(
             }))
         }
         AuctionRequest::Owner(offset) => {
-            let page =
-                store.auction_query(player_guid, house.id, AuctionQuery::Owner { offset })?;
+            let page = store.auction_query(actor, house.id, AuctionQuery::Owner { offset })?;
             ServerOpcodeMessage::SMSG_AUCTION_OWNER_LIST_RESULT(Box::new(
                 codec::build_auction_owner_list_result(&page.rows, page.total, page.now_micros),
             ))
@@ -592,7 +514,7 @@ pub(crate) fn dispatch_auction_action<St: AuctionActionStore + ?Sized>(
             outbid_auction_ids,
         } => {
             let page = store.auction_query(
-                player_guid,
+                actor,
                 house.id,
                 AuctionQuery::Bidder {
                     offset,
@@ -612,6 +534,7 @@ pub(crate) fn dispatch_auction_action<St: AuctionActionStore + ?Sized>(
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
+    use crate::stdb::{classify, DurableFailure, ReducerCallError};
     use std::sync::Mutex;
     use wow_world_messages::shared::Gold;
     use wow_world_messages::vanilla::{
@@ -622,37 +545,40 @@ pub(super) mod tests {
         CMSG_AUCTION_SELL_ITEM,
     };
 
+    /// How a Fake call fails: a constructor for the typed error, so every call builds a fresh one.
+    type Failure = fn() -> ReducerCallError;
+
     pub(crate) struct InMemoryAuctionActions {
-        result: Mutex<Result<Option<AuctionInteraction>, String>>,
+        result: Mutex<Result<Option<AuctionInteraction>, Failure>>,
         lookups: Mutex<Vec<(u64, u64)>>,
         creates: Mutex<Vec<CreateAuctionRequest>>,
-        create_result: Mutex<Result<CreateAuctionOutcome, String>>,
+        create_result: Mutex<Result<CreateAuctionOutcome, Failure>>,
         bids: Mutex<Vec<PlaceBidRequest>>,
-        bid_result: Mutex<Result<PlaceBidOutcome, String>>,
+        bid_result: Mutex<Result<PlaceBidOutcome, Failure>>,
         cancels: Mutex<Vec<CancelAuctionRequest>>,
-        cancel_result: Mutex<Result<CancelAuctionOutcome, String>>,
+        cancel_result: Mutex<Result<CancelAuctionOutcome, Failure>>,
         resumes: Mutex<Vec<u64>>,
-        resume_result: Mutex<Result<(), String>>,
-        query_result: Mutex<Result<AuctionPage, String>>,
+        resume_result: Mutex<Result<(), Failure>>,
+        query_result: Mutex<Result<AuctionPage, Failure>>,
         queries: Mutex<Vec<(u64, u32, AuctionQuery)>>,
     }
 
     impl AuctionActionStore for InMemoryAuctionActions {
         fn auction_interaction(
             &self,
-            player_guid: u64,
+            actor: Actor,
             auctioneer_guid: u64,
         ) -> Result<Option<AuctionInteraction>> {
             self.lookups
                 .lock()
                 .unwrap()
-                .push((player_guid, auctioneer_guid));
+                .push((actor.guid(), auctioneer_guid));
             self.result
                 .lock()
                 .unwrap()
                 .as_ref()
                 .map(Clone::clone)
-                .map_err(|error| anyhow::anyhow!(error.clone()))
+                .map_err(|fail| fail().into())
         }
 
         fn create_auction(&self, request: CreateAuctionRequest) -> Result<CreateAuctionOutcome> {
@@ -662,7 +588,7 @@ pub(super) mod tests {
                 .unwrap()
                 .as_ref()
                 .copied()
-                .map_err(|error| anyhow::anyhow!(error.clone()))
+                .map_err(|fail| fail().into())
         }
 
         fn place_bid(&self, request: PlaceBidRequest) -> Result<PlaceBidOutcome> {
@@ -672,7 +598,7 @@ pub(super) mod tests {
                 .unwrap()
                 .as_ref()
                 .copied()
-                .map_err(|error| anyhow::anyhow!(error.clone()))
+                .map_err(|fail| fail().into())
         }
 
         fn cancel_auction(&self, request: CancelAuctionRequest) -> Result<CancelAuctionOutcome> {
@@ -682,34 +608,33 @@ pub(super) mod tests {
                 .unwrap()
                 .as_ref()
                 .copied()
-                .map_err(|error| anyhow::anyhow!(error.clone()))
+                .map_err(|fail| fail().into())
         }
 
-        fn resume_auction_holds(&self, actor_guid: u64) -> Result<()> {
-            self.resumes.lock().unwrap().push(actor_guid);
+        fn resume_auction_holds(&self, actor: Actor) -> Result<()> {
+            self.resumes.lock().unwrap().push(actor.guid());
             self.resume_result
                 .lock()
                 .unwrap()
-                .clone()
-                .map_err(|error| anyhow::anyhow!(error))
+                .map_err(|fail| fail().into())
         }
 
         fn auction_query(
             &self,
-            player_guid: u64,
+            actor: Actor,
             house_id: u32,
             query: AuctionQuery,
         ) -> Result<AuctionPage> {
             self.queries
                 .lock()
                 .unwrap()
-                .push((player_guid, house_id, query));
+                .push((actor.guid(), house_id, query));
             self.query_result
                 .lock()
                 .unwrap()
                 .as_ref()
                 .map(Clone::clone)
-                .map_err(|error| anyhow::anyhow!(error.clone()))
+                .map_err(|fail| fail().into())
         }
     }
 
@@ -747,9 +672,9 @@ pub(super) mod tests {
         }
     }
 
-    fn store_error(error: &str) -> InMemoryAuctionActions {
+    fn store_error(error: Failure) -> InMemoryAuctionActions {
         InMemoryAuctionActions {
-            result: Mutex::new(Err(error.to_string())),
+            result: Mutex::new(Err(error)),
             lookups: Mutex::default(),
             creates: Mutex::default(),
             create_result: Mutex::new(Ok(CreateAuctionOutcome::Database)),
@@ -1156,7 +1081,7 @@ pub(super) mod tests {
         assert_eq!(
             store.creates.lock().unwrap().as_slice(),
             &[CreateAuctionRequest {
-                actor_guid: 7,
+                actor: Actor::new(7).unwrap(),
                 auctioneer_guid: 42,
                 item_guid: 70,
                 start_bid: 100,
@@ -1174,7 +1099,7 @@ pub(super) mod tests {
         assert_eq!(
             store.bids.lock().unwrap().as_slice(),
             &[PlaceBidRequest {
-                actor_guid: 8,
+                actor: Actor::new(8).unwrap(),
                 auctioneer_guid: 42,
                 auction_id: 41,
                 offer: 107,
@@ -1370,45 +1295,23 @@ pub(super) mod tests {
         }
     }
 
+    fn assert_transport_loss(error: &anyhow::Error) {
+        assert_eq!(classify(error), DurableFailure::TransportLoss);
+    }
+
     #[test]
-    fn a_reducer_timeout_is_not_answered_as_a_refusal() {
+    fn a_transport_loss_ends_the_session_instead_of_answering_as_a_refusal() {
         let store = store_with(Some(valid_interaction()));
         *store.create_result.lock().unwrap() =
-            Err("gw_auction_hold_listing reducer timed out after 10s".to_string());
+            Err(|| ReducerCallError::transport_lost("gw_auction_hold_listing"));
         let error = session_error(sell_outbound(&store), "an unknown listing outcome");
-        assert!(error.to_string().contains("timed out"));
+        assert_transport_loss(&error);
 
         let store = store_with(Some(valid_interaction()));
         *store.bid_result.lock().unwrap() =
-            Err("gw_auction_hold_bid reducer timed out after 10s".to_string());
+            Err(|| ReducerCallError::transport_lost("gw_auction_hold_bid"));
         let error = session_error(bid_outbound(&store), "an unknown bid outcome");
-        assert!(error.to_string().contains("timed out"));
-    }
-
-    #[test]
-    fn sell_transport_failure_is_fatal() {
-        let store = store_with(Some(valid_interaction()));
-        *store.create_result.lock().unwrap() =
-            Err("auction reducer transport disconnected: channel closed".to_string());
-
-        let error = match sell_outbound(&store) {
-            Ok(_) => panic!("a dead reducer transport must end the session"),
-            Err(error) => error,
-        };
-        assert!(error.to_string().contains("transport disconnected"));
-    }
-
-    #[test]
-    fn sell_realm_core_outage_is_fatal() {
-        let store = store_with(Some(valid_interaction()));
-        *store.create_result.lock().unwrap() =
-            Err("realm-core database lyracore-realm is not connected".to_string());
-
-        let error = match sell_outbound(&store) {
-            Ok(_) => panic!("an unavailable realm plane must end the session"),
-            Err(error) => error,
-        };
-        assert!(error.to_string().contains("not connected"));
+        assert_transport_loss(&error);
     }
 
     #[test]
@@ -1500,7 +1403,7 @@ pub(super) mod tests {
         assert_eq!(
             store.cancels.lock().unwrap().as_slice(),
             &[CancelAuctionRequest {
-                actor_guid: 7,
+                actor: Actor::new(7).unwrap(),
                 auctioneer_guid: 42,
                 auction_id: 41,
                 house_id: 4,
@@ -1540,9 +1443,9 @@ pub(super) mod tests {
     fn a_cancellation_with_an_unknown_durable_result_is_fatal() {
         let store = store_with(Some(valid_interaction()));
         *store.cancel_result.lock().unwrap() =
-            Err("gw_auction_hold_cancel reducer timed out after 10s".to_string());
+            Err(|| ReducerCallError::transport_lost("gw_auction_hold_cancel"));
         let error = session_error(cancel_outbound(&store), "an unknown Cancellation outcome");
-        assert!(error.to_string().contains("timed out"));
+        assert_transport_loss(&error);
     }
 
     #[test]
@@ -1568,19 +1471,15 @@ pub(super) mod tests {
 
         let store = store_with(Some(valid_interaction()));
         *store.resume_result.lock().unwrap() =
-            Err("realm_auction_decide_cancel reducer timed out after 10s".to_string());
+            Err(|| ReducerCallError::transport_lost("realm_auction_decide_cancel"));
         let error = session_error(hello_outbound(&store), "an unknown resume outcome");
-        assert!(error.to_string().contains("timed out"));
+        assert_transport_loss(&error);
     }
 
     #[test]
     fn a_failed_interaction_read_is_fatal() {
-        for message in [
-            "auction state unavailable",
-            "auction interaction reducer transport disconnected: channel closed",
-        ] {
-            let error = session_error(hello_outbound(&store_error(message)), "a failed read");
-            assert_eq!(error.to_string(), message);
-        }
+        let store = store_error(|| ReducerCallError::transport_lost("auction_interaction"));
+        let error = session_error(hello_outbound(&store), "a failed read");
+        assert_transport_loss(&error);
     }
 }

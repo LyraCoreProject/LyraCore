@@ -1262,7 +1262,7 @@ fn benilla_bind_and_respec_confirmations_reach_existing_gameplay() {
     assert!(matches!(client.recv(), ServerPacket::GossipComplete));
     assert_eq!(
         *store.trainer.reset_talents_calls.lock().unwrap(),
-        [(7, 1, 99)]
+        [(1, 99)]
     );
     client.logout();
     drop(client);

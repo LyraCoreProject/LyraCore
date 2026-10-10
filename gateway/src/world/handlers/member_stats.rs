@@ -36,16 +36,6 @@ pub(crate) trait MemberStatsStore: Send + Sync {
     fn member_presence(&self, guid: u64) -> Result<MemberPresence>;
 }
 
-impl MemberStatsStore for crate::stdb::Coordinator {
-    fn group_mates(&self, self_guid: u64) -> Result<Vec<u64>> {
-        crate::stdb::Coordinator::group_mates(self, self_guid)
-    }
-
-    fn member_presence(&self, guid: u64) -> Result<MemberPresence> {
-        crate::stdb::Coordinator::member_presence(self, guid)
-    }
-}
-
 /// What the Relay last sent one viewer about one group mate.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum MemberSnapshot {

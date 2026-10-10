@@ -10,7 +10,7 @@ use spacetimedb_sdk::{Table, TableWithPrimaryKey};
 
 use super::super::bindings::*;
 use super::super::connection::Coordinator;
-use crate::world::{guild_fee, CharacterFacts};
+use crate::world::CharacterFacts;
 
 /// The Guild Ranks and members of each Guild, and the Characters that Petitions and Signatures
 /// name, kept from the row callbacks. The SDK cache has no index on these columns, so a guild read
@@ -20,7 +20,7 @@ pub(crate) struct GuildIndex {
     rank_ids: HashMap<u32, BTreeSet<u64>>,
     member_guids: HashMap<u32, BTreeSet<u64>>,
     /// Petition owner or signer guid to the number of Petition and Signature rows naming it.
-    petition_characters: HashMap<u64, usize>,
+    pub(in crate::stdb) petition_characters: HashMap<u64, usize>,
 }
 
 impl GuildIndex {
@@ -46,7 +46,7 @@ impl GuildIndex {
         remove_key(&mut self.member_guids, row.guild_id, row.character_guid);
     }
 
-    fn rank_ids(&self, guild_id: u32) -> Vec<u64> {
+    pub(in crate::stdb) fn rank_ids(&self, guild_id: u32) -> Vec<u64> {
         self.rank_ids
             .get(&guild_id)
             .map(|ids| ids.iter().copied().collect())
@@ -54,7 +54,7 @@ impl GuildIndex {
     }
 
     /// The members of `guild_id`, lowest guid first.
-    fn member_guids(&self, guild_id: u32) -> Vec<u64> {
+    pub(in crate::stdb) fn member_guids(&self, guild_id: u32) -> Vec<u64> {
         self.member_guids
             .get(&guild_id)
             .map(|guids| guids.iter().copied().collect())
@@ -75,7 +75,7 @@ impl GuildIndex {
     }
 
     /// Every member of every Guild, every Petition owner and every signer.
-    fn named_characters(&self) -> BTreeSet<u64> {
+    pub(in crate::stdb) fn named_characters(&self) -> BTreeSet<u64> {
         self.member_guids
             .values()
             .flatten()
@@ -180,7 +180,10 @@ pub(crate) fn watch_guilds(conn: &DbConnection) -> Arc<RwLock<GuildIndex>> {
 }
 
 /// A Petition with its signers, found by key: the SDK cache has no index on the Petition column.
-fn petition_view(db: &RemoteTables, row: GuildPetition) -> crate::codec::PetitionView {
+pub(in crate::stdb) fn petition_view(
+    db: &RemoteTables,
+    row: GuildPetition,
+) -> crate::codec::PetitionView {
     use lyracore_shared::guild::{petition_signature_key, MAX_PETITION_SIGNATURES};
     let signers = (0..MAX_PETITION_SIGNATURES)
         .filter_map(|slot| {
@@ -199,138 +202,7 @@ fn petition_view(db: &RemoteTables, row: GuildPetition) -> crate::codec::Petitio
     }
 }
 
-fn member_view(row: GuildMember) -> crate::codec::GuildMemberView {
-    crate::codec::GuildMemberView {
-        character_guid: row.character_guid,
-        guild_id: row.guild_id,
-        rank_id: row.rank_id,
-        name: row.name,
-        public_note: row.public_note,
-        officer_note: row.officer_note,
-        realm_account_id: row.realm_account_id,
-    }
-}
-
 impl Coordinator {
-    /// The membership row of `character_guid` in THIS handle's cache. Call it on the Realm-core
-    /// handle.
-    pub(crate) fn guild_member_row(
-        &self,
-        character_guid: u64,
-    ) -> Option<crate::codec::GuildMemberView> {
-        self.0
-            .coord()
-            .conn
-            .db
-            .game_guild_member()
-            .character_guid()
-            .find(&character_guid)
-            .map(member_view)
-    }
-
-    /// One Guild and its Guild Ranks in THIS handle's cache, ranks ordered by `rank_id`.
-    pub(crate) fn guild_row(&self, guild_id: u32) -> Option<crate::codec::GuildView> {
-        let guard = self.0.coord();
-        let db = &guard.conn.db;
-        let guild = db.game_guild().guild_id().find(&guild_id)?;
-        let rank_ids = guard.guilds.read().unwrap().rank_ids(guild_id);
-        let ranks_table = db.game_guild_rank();
-        let mut ranks: Vec<crate::codec::GuildRankView> = rank_ids
-            .into_iter()
-            .filter_map(|id| ranks_table.id().find(&id))
-            .map(|rank| crate::codec::GuildRankView {
-                rank_id: rank.rank_id,
-                name: rank.name,
-                rights: rank.rights,
-            })
-            .collect();
-        ranks.sort_by_key(|rank| rank.rank_id);
-        Some(crate::codec::GuildView {
-            guild_id: guild.guild_id,
-            name: guild.name,
-            leader_guid: guild.leader_guid,
-            team: guild.team,
-            motd: guild.motd,
-            info: guild.info,
-            emblem_style: guild.emblem_style,
-            emblem_color: guild.emblem_color,
-            border_style: guild.border_style,
-            border_color: guild.border_color,
-            background_color: guild.background_color,
-            created_micros: guild.created_micros,
-            ranks,
-        })
-    }
-
-    /// Every member row of one Guild in THIS handle's cache, ordered by guid.
-    pub(crate) fn guild_member_rows(&self, guild_id: u32) -> Vec<crate::codec::GuildMemberView> {
-        let guard = self.0.coord();
-        let guids = guard.guilds.read().unwrap().member_guids(guild_id);
-        let members = guard.conn.db.game_guild_member();
-        guids
-            .into_iter()
-            .filter_map(|guid| members.character_guid().find(&guid))
-            .filter(|member| member.guild_id == guild_id)
-            .map(member_view)
-            .collect()
-    }
-
-    /// Every Character that a Guild, a Petition or a Signature in THIS handle's cache names: the
-    /// Characters the deleted-Character reconciliation checks. Call it on the Realm-core handle.
-    /// It fails while the subscription is unhealthy, so a stale cache never hides a Character.
-    pub(crate) fn guild_character_guids(&self) -> Result<Vec<u64>> {
-        let guard = self.0.coord();
-        if !guard.is_healthy() {
-            anyhow::bail!(
-                "{} has no healthy Coordinator subscription for guild cleanup",
-                self.shard_name()
-            );
-        }
-        let named = guard.guilds.read().unwrap().named_characters();
-        Ok(named.into_iter().collect())
-    }
-
-    /// Does a Guild, a Petition or a Signature in THIS handle's cache name `character_guid`? Keyed
-    /// reads only. Call it on the Realm-core handle. Fails while the subscription is unhealthy.
-    pub(crate) fn guild_names_character(&self, character_guid: u64) -> Result<bool> {
-        let guard = self.0.coord();
-        if !guard.is_healthy() {
-            anyhow::bail!(
-                "{} has no healthy Coordinator subscription for guild cleanup",
-                self.shard_name()
-            );
-        }
-        let member = guard
-            .conn
-            .db
-            .game_guild_member()
-            .character_guid()
-            .find(&character_guid)
-            .is_some();
-        Ok(member
-            || guard
-                .guilds
-                .read()
-                .unwrap()
-                .petition_characters
-                .contains_key(&character_guid))
-    }
-
-    /// The name of the Guild `character_guid` belongs to in THIS handle's cache, if any. Two keyed
-    /// reads, cheap enough for every `/who` row.
-    pub(crate) fn guild_name_of_member(&self, character_guid: u64) -> Option<String> {
-        let guard = self.0.coord();
-        let db = &guard.conn.db;
-        let member = db
-            .game_guild_member()
-            .character_guid()
-            .find(&character_guid)?;
-        db.game_guild()
-            .guild_id()
-            .find(&member.guild_id)
-            .map(|guild| guild.name)
-    }
-
     /// The Guild Projection `(guild_id, rank_id)` of `character_guid` in THIS handle's cache.
     /// `(0, 0)` outside a Guild. Cheap enough for a relay job.
     pub(crate) fn guild_projection(&self, character_guid: u64) -> (u32, u32) {
@@ -382,51 +254,6 @@ impl Coordinator {
             .map_or(0, |character| character.gm_level)
     }
 
-    /// The unit `actor_guid` has selected, from THIS handle's live entity. 0 for none.
-    pub(crate) fn selected_target(&self, actor_guid: u64) -> u64 {
-        self.0
-            .coord()
-            .conn
-            .db
-            .game_world_entity()
-            .guid()
-            .find(&actor_guid)
-            .map_or(0, |entity| entity.target_guid)
-    }
-
-    /// The Fee Hold of `payer_guid` in THIS handle's cache. Call it on the payer's Home Shard. A
-    /// kind this Gateway does not know reads as none.
-    pub(crate) fn guild_fee_hold_row(&self, payer_guid: u64) -> Option<guild_fee::FeeHold> {
-        let hold = self
-            .0
-            .coord()
-            .conn
-            .db
-            .game_guild_fee_hold()
-            .payer_guid()
-            .find(&payer_guid)?;
-        let terms = match hold.kind {
-            lyracore_shared::guild::fee_kind::EMBLEM => {
-                guild_fee::FeeTerms::Emblem(guild_fee::Emblem {
-                    emblem_style: hold.emblem_style,
-                    emblem_color: hold.emblem_color,
-                    border_style: hold.border_style,
-                    border_color: hold.border_color,
-                    background_color: hold.background_color,
-                })
-            }
-            lyracore_shared::guild::fee_kind::CHARTER => guild_fee::FeeTerms::Charter {
-                charter_item_guid: hold.charter_item_guid,
-                name: hold.charter_name,
-            },
-            _ => return None,
-        };
-        Some(guild_fee::FeeHold {
-            operation_id: hold.operation_id,
-            terms,
-        })
-    }
-
     /// The open Petition of the Guild Charter `charter_item_guid` in THIS handle's cache. Call it
     /// on the Realm-core handle.
     pub(crate) fn guild_petition_of_charter(
@@ -472,58 +299,5 @@ impl Coordinator {
         {
             item.enchantment = realm.charter_petition_id(item.guid).unwrap_or(0);
         }
-    }
-
-    /// The open Petition `owner_guid` owns in THIS handle's cache. Call it on the Realm-core
-    /// handle.
-    pub(crate) fn guild_petition_of_owner(
-        &self,
-        owner_guid: u64,
-    ) -> Option<crate::codec::PetitionView> {
-        let guard = self.0.coord();
-        let db = &guard.conn.db;
-        let row = db.game_guild_petition().owner_guid().find(&owner_guid)?;
-        Some(petition_view(db, row))
-    }
-
-    /// Does a Guild in THIS handle's cache hold `name`, without regard to case? Call it on the
-    /// Realm-core handle.
-    pub(crate) fn guild_name_taken(&self, name: &str) -> bool {
-        self.0
-            .coord()
-            .conn
-            .db
-            .game_guild()
-            .name_key()
-            .find(&lyracore_shared::guild::name_key(name))
-            .is_some()
-    }
-
-    /// Does `actor_guid` hold the Guild Charter `charter_item_guid` in THIS handle's cache? Call it
-    /// on the actor's Home Shard.
-    pub(crate) fn holds_guild_charter(&self, actor_guid: u64, charter_item_guid: u64) -> bool {
-        self.0
-            .coord()
-            .conn
-            .db
-            .game_item_instance()
-            .guid()
-            .find(&charter_item_guid)
-            .is_some_and(|item| {
-                item.owner_guid == actor_guid
-                    && item.entry == lyracore_shared::guild::GUILD_CHARTER_ENTRY
-            })
-    }
-
-    /// Realm-core's fee decision for `operation_id` in THIS handle's cache. Call it on the
-    /// Realm-core handle.
-    pub(crate) fn guild_fee_decision_row(&self, operation_id: u64) -> Option<GuildFeeDecision> {
-        self.0
-            .coord()
-            .conn
-            .db
-            .game_guild_fee_decision()
-            .operation_id()
-            .find(&operation_id)
     }
 }

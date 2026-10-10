@@ -5,6 +5,7 @@ use crate::accept::BlockingTaskCapacity;
 use crate::config::GatewayConfig;
 use crate::durable_test_support::Standalone;
 use crate::stdb::Coordinator;
+use crate::world::CharacterStore;
 use std::time::{Duration, Instant};
 
 struct Realm {

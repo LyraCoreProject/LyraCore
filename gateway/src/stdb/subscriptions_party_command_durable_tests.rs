@@ -6,9 +6,10 @@ use super::{party_command_intent, Coordinator, DURABLE_TOPOLOGY_ENV_LOCK};
 use crate::accept::BlockingTaskCapacity;
 use crate::config::GatewayConfig;
 use crate::durable_test_support::{module_bytes, poll_until, Standalone, POLL_TIMEOUT};
+use crate::realm_core::RealmDb as _;
 use crate::stdb::bindings::GamePartyCommandIntentTableAccess;
 use crate::world::party::{self, AdmittedCompanionCommand, CompanionCommandOutcome};
-use crate::world::TransferStore;
+use crate::world::{Actor, PartyStore, SessionStore, TransferStore};
 use spacetimedb_sdk::Table;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -525,7 +526,7 @@ fn enter_transferred_actor(
     bound
         .player_login(
             account_id,
-            character_guid,
+            Actor::new(character_guid).unwrap(),
             crate::codec::WorldEntry::FreshLogin,
         )
         .unwrap();
@@ -630,7 +631,9 @@ fn command_receipts_recover_both_gateway_crash_boundaries() {
             |plan| (plan.dest_map_id, plan.dest_instance_id) == (destination_map, 0)
         )));
     let transfer_plan = target.character_destination(bot).unwrap();
-    target.begin_transfer(&transfer_plan).unwrap();
+    target
+        .begin_transfer(Actor::new(bot).unwrap(), &transfer_plan)
+        .unwrap();
     let mut delayed = admitted.clone();
     delayed.intent_id = target_applied + 1_000_000;
     let in_transit = target.apply_admitted_party_command(&delayed).unwrap_err();

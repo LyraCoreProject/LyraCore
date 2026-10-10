@@ -2,8 +2,8 @@
 //! a mail read or delete it, post a letter with copper and one item attached (at a
 //! cash-on-delivery price, or not), take either back out, and return a mail to its sender.
 //!
-//! Every failure is per-action: log, and either answer the packet the client is blocked on or send
-//! nothing. Nothing here tears a session down, matching the vendor/loot/combat arms.
+//! Every Refusal is per-action: log, and either answer the packet the client is blocked on or send
+//! nothing. A Transport Loss ends the World Session.
 
 use super::super::*;
 use wow_world_messages::vanilla::SMSG_SEND_MAIL_RESULT_MailResultTwo;
@@ -24,17 +24,17 @@ pub(crate) fn handle_mail<
         // nothing — the same silent drop the out-of-range gameobject and unfriendly-vendor gates
         // take, since vanilla has no mailbox-refusal packet.
         ClientOpcodeMessage::CMSG_GET_MAIL_LIST(c) => {
-            let self_guid = social::self_guid(conn);
-            match mail::open_mailbox(store, self_guid, c.mailbox.guid()) {
+            match mail::open_mailbox(store, social::self_actor(conn), c.mailbox.guid()) {
                 Ok(mails) => send(
                     tx,
                     Outbound::One(ServerOpcodeMessage::SMSG_MAIL_LIST_RESULT(Box::new(
                         codec::build_mail_list(&mails, mail::now_secs()),
                     ))),
                 )?,
-                Err(e) => log::debug!(
-                    "world: mail list refused (account {}): {e}",
-                    conn.account_id
+                Err(failure) => log::debug!(
+                    "world: mail list refused (account {}): {}",
+                    conn.account_id,
+                    failure.refusal()?
                 ),
             }
         }
@@ -43,13 +43,17 @@ pub(crate) fn handle_mail<
         // answered as "no unread mail" rather than with silence: the client repeats this poll and a
         // dropped reply leaves a stale envelope lit.
         ClientOpcodeMessage::MSG_QUERY_NEXT_MAIL_TIME => {
-            let unread = mail::has_unread(store, social::self_guid(conn)).unwrap_or_else(|e| {
-                log::debug!(
-                    "world: mail poll answered empty (account {}): {e}",
-                    conn.account_id
-                );
-                false
-            });
+            let unread = match mail::has_unread(store, social::self_actor(conn)) {
+                Ok(unread) => unread,
+                Err(failure) => {
+                    log::debug!(
+                        "world: mail poll answered empty (account {}): {}",
+                        conn.account_id,
+                        failure.refusal()?
+                    );
+                    false
+                }
+            };
             send(
                 tx,
                 Outbound::One(ServerOpcodeMessage::MSG_QUERY_NEXT_MAIL_TIME(
@@ -67,19 +71,22 @@ pub(crate) fn handle_mail<
         // mail or item, a deleted mail) answers with EMPTY text rather than silence — the client has
         // already opened the letter and is waiting on this packet.
         ClientOpcodeMessage::CMSG_ITEM_TEXT_QUERY(c) => {
-            let body = mail::item_text(
+            let body = match mail::item_text(
                 store,
-                social::self_guid(conn),
+                social::self_actor(conn),
                 c.item_text_id,
                 u64::from(c.mail_id),
-            )
-            .unwrap_or_else(|e| {
-                log::debug!(
-                    "world: item text query refused (account {}): {e}",
-                    conn.account_id
-                );
-                None
-            });
+            ) {
+                Ok(body) => body,
+                Err(failure) => {
+                    log::debug!(
+                        "world: item text query refused (account {}): {}",
+                        conn.account_id,
+                        failure.refusal()?
+                    );
+                    None
+                }
+            };
             send(
                 tx,
                 Outbound::One(ServerOpcodeMessage::SMSG_ITEM_TEXT_QUERY_RESPONSE(
@@ -95,13 +102,14 @@ pub(crate) fn handle_mail<
         // next CMSG_GET_MAIL_LIST shows the truth. A crafted id (someone else's mail, or a stale
         // one) is refused the same as a genuine miss — never trust a client-supplied mail id.
         ClientOpcodeMessage::CMSG_MAIL_MARK_AS_READ(c) => {
-            let self_guid = social::self_guid(conn);
-            if let Err(e) =
-                mail::mark_read(store, self_guid, c.mailbox.guid(), u64::from(c.mail_id))
+            let actor = social::self_actor(conn);
+            if let Err(failure) =
+                mail::mark_read(store, actor, c.mailbox.guid(), u64::from(c.mail_id))
             {
                 log::debug!(
-                    "world: mail mark-as-read refused (account {}): {e}",
-                    conn.account_id
+                    "world: mail mark-as-read refused (account {}): {}",
+                    conn.account_id,
+                    failure.refusal()?
                 );
             }
         }
@@ -110,14 +118,14 @@ pub(crate) fn handle_mail<
         // ack (`SMSG_SEND_MAIL_RESULT`/Deleted), so both outcomes reply through it, matching the
         // vendor/loot arms' "a failed action still answers" rule.
         ClientOpcodeMessage::CMSG_MAIL_DELETE(c) => {
-            let self_guid = social::self_guid(conn);
-            let ok = match mail::delete(store, self_guid, c.mailbox_id.guid(), u64::from(c.mail_id))
-            {
+            let actor = social::self_actor(conn);
+            let ok = match mail::delete(store, actor, c.mailbox_id.guid(), u64::from(c.mail_id)) {
                 Ok(()) => true,
-                Err(e) => {
+                Err(failure) => {
                     log::debug!(
-                        "world: mail delete refused (account {}): {e}",
-                        conn.account_id
+                        "world: mail delete refused (account {}): {}",
+                        conn.account_id,
+                        failure.refusal()?
                     );
                     false
                 }
@@ -134,18 +142,19 @@ pub(crate) fn handle_mail<
         // the authorization: a mail id is client-supplied, and "not yours" reads the same as "no
         // such mail". Acks through `SMSG_SEND_MAIL_RESULT`/ReturnedToSender either way.
         ClientOpcodeMessage::CMSG_MAIL_RETURN_TO_SENDER(c) => {
-            let self_guid = social::self_guid(conn);
+            let actor = social::self_actor(conn);
             let ok = match mail::return_to_sender(
                 store,
-                self_guid,
+                actor,
                 c.mailbox_id.guid(),
                 u64::from(c.mail_id),
             ) {
                 Ok(()) => true,
-                Err(e) => {
+                Err(failure) => {
                     log::debug!(
-                        "world: mail return refused (account {}): {e}",
-                        conn.account_id
+                        "world: mail return refused (account {}): {}",
+                        conn.account_id,
+                        failure.refusal()?
                     );
                     false
                 }
@@ -163,18 +172,18 @@ pub(crate) fn handle_mail<
         // outcomes ack through `SMSG_SEND_MAIL_RESULT`/MoneyTaken, which is what closes the
         // client's spinner.
         ClientOpcodeMessage::CMSG_MAIL_TAKE_MONEY(c) => {
-            let self_guid = social::self_guid(conn);
-            let ok =
-                match mail::take_money(store, self_guid, c.mailbox.guid(), u64::from(c.mail_id)) {
-                    Ok(()) => true,
-                    Err(e) => {
-                        log::debug!(
-                            "world: mail take-money refused (account {}): {e}",
-                            conn.account_id
-                        );
-                        false
-                    }
-                };
+            let actor = social::self_actor(conn);
+            let ok = match mail::take_money(store, actor, c.mailbox.guid(), u64::from(c.mail_id)) {
+                Ok(()) => true,
+                Err(failure) => {
+                    log::debug!(
+                        "world: mail take-money refused (account {}): {}",
+                        conn.account_id,
+                        failure.refusal()?
+                    );
+                    false
+                }
+            };
             send(
                 tx,
                 Outbound::One(ServerOpcodeMessage::SMSG_SEND_MAIL_RESULT(Box::new(
@@ -188,11 +197,12 @@ pub(crate) fn handle_mail<
         // what leaves a refused buyer free to return it. Every other refusal reads the same, so a
         // crafted mail id learns nothing.
         ClientOpcodeMessage::CMSG_MAIL_TAKE_ITEM(c) => {
-            let self_guid = social::self_guid(conn);
+            let actor = social::self_actor(conn);
             let outcome =
-                match mail::take_item(store, self_guid, c.mailbox.guid(), u64::from(c.mail_id)) {
+                match mail::take_item(store, actor, c.mailbox.guid(), u64::from(c.mail_id)) {
                     Ok(taken) => Ok(taken),
-                    Err(e) => {
+                    Err(failure) => {
+                        let e = failure.refusal()?;
                         log::debug!(
                             "world: mail take-item refused (account {}): {e}",
                             conn.account_id
@@ -224,10 +234,9 @@ pub(crate) fn handle_mail<
         // above — vanilla has no mailbox-refusal packet, and the client only offers Send at a
         // mailbox, so reaching it means a crafted packet or a desynced session.
         ClientOpcodeMessage::CMSG_SEND_MAIL(c) => {
-            let self_guid = social::self_guid(conn);
             let result2 = match mail::send(
                 store,
-                self_guid,
+                social::self_actor(conn),
                 c.mailbox.guid(),
                 &c.receiver,
                 c.subject.clone(),
@@ -237,7 +246,8 @@ pub(crate) fn handle_mail<
                 c.item.guid(),
             ) {
                 Ok(()) => Some(SMSG_SEND_MAIL_RESULT_MailResultTwo::Ok),
-                Err(e) => {
+                Err(failure) => {
+                    let e = failure.refusal()?;
                     log::debug!(
                         "world: mail send refused (account {}): {e}",
                         conn.account_id
@@ -287,26 +297,27 @@ pub(crate) fn handle_mail<
         // `SMSG_SEND_MAIL_RESULT`/MadePermanent; the mailbox gate alone stays silent, matching the
         // other arms.
         ClientOpcodeMessage::CMSG_MAIL_CREATE_TEXT_ITEM(c) => {
-            let self_guid = social::self_guid(conn);
-            let made =
-                match mail::copy_letter(store, self_guid, c.mailbox.guid(), u64::from(c.mail_id)) {
-                    Ok(()) => Some(Ok(())),
-                    Err(e) => {
-                        log::debug!(
-                            "world: letter copy refused (account {}): {e}",
-                            conn.account_id
-                        );
-                        match e {
-                            mail::CopyLetterRefusal::NoMailbox(_) => None,
-                            mail::CopyLetterRefusal::BagsFull(_) => {
-                                Some(Err(codec::MailMadePermanentError::BagsFull))
-                            }
-                            mail::CopyLetterRefusal::Other(_) => {
-                                Some(Err(codec::MailMadePermanentError::Other))
-                            }
+            let actor = social::self_actor(conn);
+            let made = match mail::copy_letter(store, actor, c.mailbox.guid(), u64::from(c.mail_id))
+            {
+                Ok(()) => Some(Ok(())),
+                Err(failure) => {
+                    let e = failure.refusal()?;
+                    log::debug!(
+                        "world: letter copy refused (account {}): {e}",
+                        conn.account_id
+                    );
+                    match e {
+                        mail::CopyLetterRefusal::NoMailbox(_) => None,
+                        mail::CopyLetterRefusal::BagsFull(_) => {
+                            Some(Err(codec::MailMadePermanentError::BagsFull))
+                        }
+                        mail::CopyLetterRefusal::Other(_) => {
+                            Some(Err(codec::MailMadePermanentError::Other))
                         }
                     }
-                };
+                }
+            };
             if let Some(made) = made {
                 send(
                     tx,

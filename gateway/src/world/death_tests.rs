@@ -173,3 +173,20 @@ fn resurrect_response(status: u8) -> ClientOpcodeMessage {
         status,
     }))
 }
+
+#[test]
+fn transport_loss_ends_the_world_session() {
+    let store = HandleLootFake::default()
+        .with_life(SELF_GUID, Life::Dead)
+        .with_transport_loss();
+    let (tx, _rx) = SessionTx::with_depth(0);
+
+    let result = handle_loot(
+        &tx,
+        &store,
+        &mut in_world_conn(),
+        ClientOpcodeMessage::CMSG_REPOP_REQUEST,
+    );
+
+    assert!(result.is_err());
+}

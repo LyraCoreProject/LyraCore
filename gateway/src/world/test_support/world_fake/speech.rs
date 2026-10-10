@@ -4,9 +4,10 @@ use super::super::*;
 pub(crate) struct SpeechState {
     /// What `send_chat` answers; `None` delivers.
     pub(crate) send_chat_outcome: Option<ChatOutcome>,
-    /// When set, `gm_command` returns this error — e.g. `"permission denied"` to
-    /// drive the Say-handler's `Err` → self-only `SMSG_MESSAGECHAT` System relay.
-    pub(crate) gm_command_error: Option<String>,
+    /// When set, `send_chat` fails with this error: a Transport Loss ends the World Session.
+    pub(crate) send_chat_error: Option<fn() -> anyhow::Error>,
+    /// When set, `gm_command` fails with this error: a Refusal the GM reads, or a Transport Loss.
+    pub(crate) gm_command_error: Option<fn() -> anyhow::Error>,
     /// Recorded `gm_command` dispatches — the dot-command divert test asserts the
     /// RIGHT raw text (still carrying its leading `.`) reached the reducer call, and that a NON-dot
     /// Say never reaches this vec at all.
@@ -26,12 +27,14 @@ pub(crate) struct SpeechState {
 impl SpeechStore for WorldFake {
     fn send_chat(
         &self,
-        _account_id: u64,
-        _self_guid: u64,
+        _actor: Actor,
         chat_type: u8,
         language: u8,
         message: String,
     ) -> Result<ChatOutcome> {
+        if let Some(error) = self.speech.send_chat_error {
+            return Err(error());
+        }
         // Recorded per SHARD like every other player-scoped call, so the partition rule (say/
         // yell stay shard-local and range-scoped) is assertable rather than merely stated.
         self.rec("send_chat");
@@ -48,8 +51,7 @@ impl SpeechStore for WorldFake {
 
     fn send_emote(
         &self,
-        _account_id: u64,
-        _self_guid: u64,
+        _actor: Actor,
         _text_emote: u32,
         _emote_anim: u32,
         _target_guid: u64,
@@ -58,7 +60,7 @@ impl SpeechStore for WorldFake {
         Ok(())
     }
 
-    fn gm_command(&self, account_name: &str, _self_guid: u64, text: String) -> Result<()> {
+    fn gm_command(&self, account_name: &str, _actor: Actor, text: String) -> Result<()> {
         if let Some(alpha_test_tools) = &self.speech.gm_alpha_test_tools {
             let authorized = alpha_test_tools.load(std::sync::atomic::Ordering::SeqCst);
             self.speech
@@ -75,10 +77,14 @@ impl SpeechStore for WorldFake {
                 self.speech.gm_gameplay_changes.lock().unwrap().push(text);
                 return Ok(());
             }
-            return Err(anyhow!("permission denied"));
+            return Err(crate::stdb::ReducerCallError::refused(
+                "gw_gm_command",
+                "permission denied",
+            )
+            .into());
         }
-        match &self.speech.gm_command_error {
-            Some(e) => Err(anyhow!("{e}")),
+        match self.speech.gm_command_error {
+            Some(error) => Err(error()),
             None => {
                 self.speech
                     .gm_commands

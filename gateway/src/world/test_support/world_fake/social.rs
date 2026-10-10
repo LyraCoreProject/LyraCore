@@ -27,10 +27,10 @@ pub(crate) struct SocialState {
 }
 
 /// [`faked_party`] for the friends and ignore lists.
-pub(crate) fn faked_contact(error: &str) -> Result<ContactOutcome> {
+pub(crate) fn faked_contact(operation: &str, error: &str) -> Result<ContactOutcome> {
     match lyracore_shared::social::ContactRefusal::parse_tag(error) {
         Some(refusal) => Ok(refusal.into()),
-        None => Err(anyhow!("{error}")),
+        None => Err(crate::stdb::ReducerCallError::transport_lost(operation).into()),
     }
 }
 
@@ -183,13 +183,12 @@ impl SocialStore for WorldFake {
 
     fn add_friend(
         &self,
-        _account_id: u64,
-        _self_guid: u64,
+        _actor: Actor,
         target_guid: u64,
         _target_race: u8,
     ) -> Result<ContactOutcome> {
         if let Some(e) = &self.trade_error {
-            return faked_contact(e);
+            return faked_contact("gw_add_friend", e);
         }
         let owner = self
             .session
@@ -205,23 +204,13 @@ impl SocialStore for WorldFake {
         Ok(ContactOutcome::Done)
     }
 
-    fn del_friend(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        target_guid: u64,
-    ) -> Result<ContactOutcome> {
+    fn del_friend(&self, _actor: Actor, target_guid: u64) -> Result<ContactOutcome> {
         self.remove_contact(target_guid, false)
     }
 
-    fn add_ignore(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        target_guid: u64,
-    ) -> Result<ContactOutcome> {
+    fn add_ignore(&self, _actor: Actor, target_guid: u64) -> Result<ContactOutcome> {
         if let Some(e) = &self.trade_error {
-            return faked_contact(e);
+            return faked_contact("gw_add_ignore", e);
         }
         let owner = self
             .session
@@ -237,12 +226,7 @@ impl SocialStore for WorldFake {
         Ok(ContactOutcome::Done)
     }
 
-    fn del_ignore(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        target_guid: u64,
-    ) -> Result<ContactOutcome> {
+    fn del_ignore(&self, _actor: Actor, target_guid: u64) -> Result<ContactOutcome> {
         self.remove_contact(target_guid, true)
     }
 }

@@ -82,7 +82,7 @@ fn quest_choose_reward_relays_inventory_before_completion_over_the_cipher() {
     server.join().unwrap();
     assert_eq!(
         store.quest.turned_in.lock().unwrap().as_slice(),
-        &[(7, 50, 1234, 2)]
+        &[(1, 50, 1234, 2)]
     );
 }
 

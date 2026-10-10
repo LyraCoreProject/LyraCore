@@ -3,8 +3,7 @@
 use crate::world::ShardRoutingStore;
 use anyhow::Result;
 
-use super::{LootActionStatus, WorldStore};
-use lyracore_shared::loot_roll::loot_op;
+use super::{Actor, LootActionStatus, WorldStore};
 
 /// One unresolved loot roll a world shard has created but not yet had promoted onto realm-core —
 /// [`LootRollStore::pending_local_rolls`]'s answer, and [`relay_tick`]'s promotion input.
@@ -26,18 +25,14 @@ pub struct PendingLootRoll {
 /// Durable Reads and Durable Requests for Loot Rolls: the vote, the master looter's assignment, and
 /// the relay that promotes each roll onto Realm-core and settles its winner.
 pub(crate) trait LootRollStore: Send + Sync {
-    // Mirrors the `realm_loot_op` REDUCER's parameter list 1:1 — this trait is the seam between them, so the shapes have to match.
+    /// Promote a world shard's staging roll onto the database THIS handle names. Called on the
+    /// **realm-core** handle; the Gateway acts as the session owner, not as a Character.
     #[allow(clippy::too_many_arguments)]
-    /// `realm_loot_op` — run one loot-roll op against the database THIS handle names. Called on
-    /// the **realm-core** handle: START promotes a world shard's staging roll, VOTE casts a vote.
-    fn realm_loot_op(
+    fn realm_loot_start(
         &self,
-        op: u8,
         corpse_guid: u64,
         slot: u8,
         item_entry: u32,
-        actor_guid: u64,
-        vote: u8,
         deadline_micros: i64,
         recipients: Vec<u64>,
         random_property_id: u32,
@@ -51,13 +46,13 @@ pub(crate) trait LootRollStore: Send + Sync {
         &self,
         corpse_guid: u64,
         slot: u8,
-        actor_guid: u64,
+        actor: Actor,
         vote: u8,
     ) -> Result<LootActionStatus>;
 
     /// Every UNRESOLVED loot roll this WORLD SHARD has created but not yet had promoted onto
     /// realm-core — the relay's promotion queue. Empty on realm-core's own handle: nothing is ever
-    /// created there directly — only `realm_loot_op`'s START arm writes it, and that is not this
+    /// created there directly — only `realm_loot_start` writes it, and that is not this
     /// method.
     fn pending_local_rolls(&self) -> Result<Vec<PendingLootRoll>>;
 
@@ -80,8 +75,7 @@ pub(crate) trait LootRollStore: Send + Sync {
     /// `CMSG_LOOT_ROLL` — record the caller's need/greed/pass vote.
     fn loot_roll(
         &self,
-        account_id: u64,
-        self_guid: u64,
+        actor: Actor,
         corpse_guid: u64,
         loot_slot: u32,
         vote: u8,
@@ -91,18 +85,17 @@ pub(crate) trait LootRollStore: Send + Sync {
     /// threshold row to `target_guid`.
     fn loot_master_give(
         &self,
-        account_id: u64,
-        self_guid: u64,
+        actor: Actor,
         corpse_guid: u64,
         loot_slot: u8,
         target_guid: u64,
     ) -> Result<LootActionStatus>;
 }
 
-/// Route `CMSG_LOOT_ROLL` for the session that owns `self_guid`.
+/// Route `CMSG_LOOT_ROLL` for the session that owns `actor`.
 ///
 /// Unsharded → the pre-realm-core path, verbatim: `loot_roll` on the player's own connection. Sharded →
-/// realm-core, where the roll is authoritative once promoted; `actor_guid` is the guid the gateway
+/// realm-core, where the roll is authoritative once promoted; `actor` is the Character the gateway
 /// authenticated for this socket, never the client's own claim (there isn't one — `CMSG_LOOT_ROLL`
 /// carries no actor field at all, only the roll's own `(corpse_guid, slot)` and the vote).
 ///
@@ -110,17 +103,16 @@ pub(crate) trait LootRollStore: Send + Sync {
 /// Realm-core refuses a vote for a roll it does not hold, so pending promotions are flushed first.
 pub(crate) fn run_vote<St: LootRollStore + ShardRoutingStore + ?Sized>(
     store: &St,
-    account_id: u64,
-    self_guid: u64,
+    actor: Actor,
     corpse_guid: u64,
     slot: u32,
     vote: u8,
 ) -> Result<LootActionStatus> {
     let Some(realm) = store.realm_store() else {
-        return store.loot_roll(account_id, self_guid, corpse_guid, slot, vote);
+        return store.loot_roll(actor, corpse_guid, slot, vote);
     };
     flush_pending_promotions(store, realm.as_ref());
-    realm.realm_loot_vote(corpse_guid, slot as u8, self_guid, vote)
+    realm.realm_loot_vote(corpse_guid, slot as u8, actor, vote)
 }
 
 /// Promote ONE world shard's staging roll onto realm-core, then clear the staging copy — the shared
@@ -129,13 +121,10 @@ pub(crate) fn run_vote<St: LootRollStore + ShardRoutingStore + ?Sized>(
 /// propagated as an error (the caller's own op — a vote route, a party op — must not fail because a
 /// DIFFERENT roll's promotion did).
 fn promote_one(shard: &dyn WorldStore, realm: &dyn WorldStore, roll: &PendingLootRoll) {
-    match realm.realm_loot_op(
-        loot_op::START,
+    match realm.realm_loot_start(
         roll.corpse_guid,
         roll.slot,
         roll.item_entry,
-        0,
-        0,
         roll.deadline_micros,
         roll.recipients.clone(),
         roll.random_property_id,

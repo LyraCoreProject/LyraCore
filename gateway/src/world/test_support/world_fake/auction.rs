@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::world::Actor;
 
 #[derive(Default)]
 pub(crate) struct AuctionState {
@@ -9,7 +10,7 @@ pub(crate) struct AuctionState {
 impl AuctionActionStore for WorldFake {
     fn auction_interaction(
         &self,
-        _player_guid: u64,
+        _actor: Actor,
         _auctioneer_guid: u64,
     ) -> Result<Option<AuctionInteraction>> {
         self.rec("auction_interaction");
@@ -37,13 +38,13 @@ impl AuctionActionStore for WorldFake {
         Ok(crate::world::handlers::CancelAuctionOutcome::Stale)
     }
 
-    fn resume_auction_holds(&self, _actor_guid: u64) -> Result<()> {
+    fn resume_auction_holds(&self, _actor: Actor) -> Result<()> {
         Ok(())
     }
 
     fn auction_query(
         &self,
-        _player_guid: u64,
+        _actor: Actor,
         _house_id: u32,
         _query: crate::world::handlers::AuctionQuery,
     ) -> Result<crate::world::handlers::AuctionPage> {

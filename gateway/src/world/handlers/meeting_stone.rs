@@ -5,7 +5,7 @@
 //! the group event relay; only a refused party JOIN is answered here.
 
 use super::super::*;
-use super::chat::is_transport_failure;
+use crate::stdb::{classify, DurableFailure};
 use lyracore_shared::group::GROUP_MAX_MEMBERS;
 use lyracore_shared::meeting_stone::{
     join_failure_for, queue_status, realm_op, MeetingStoneRefusal,
@@ -28,7 +28,7 @@ pub(crate) enum MeetingStoneOutcome {
 
 pub(crate) trait MeetingStoneActionStore {
     /// Durable Request on the actor's Home Shard. Writes nothing.
-    fn admit_meeting_stone(&self, actor_guid: u64, go_guid: u64) -> Result<MeetingStoneOutcome>;
+    fn admit_meeting_stone(&self, actor: Actor, go_guid: u64) -> Result<MeetingStoneOutcome>;
     /// Durable Read of the Home Shard cache.
     fn meeting_stone_area(&self, go_guid: u64) -> Result<Option<u32>>;
     /// Durable Read of the party authority, in join order. `None` outside a party.
@@ -38,55 +38,13 @@ pub(crate) trait MeetingStoneActionStore {
     /// Durable Request on the party authority.
     fn meeting_stone_op(
         &self,
-        actor_guid: u64,
+        actor: Actor,
         op: u8,
         area_id: u32,
         seekers: Vec<SeekerFacts>,
     ) -> Result<MeetingStoneOutcome>;
     /// Durable Read of the party authority.
     fn queued_area(&self, character_guid: u64) -> Result<Option<u32>>;
-}
-
-impl MeetingStoneActionStore for crate::stdb::Coordinator {
-    fn admit_meeting_stone(&self, actor_guid: u64, go_guid: u64) -> Result<MeetingStoneOutcome> {
-        crate::stdb::Coordinator::admit_meeting_stone(self, actor_guid, go_guid)
-    }
-
-    fn meeting_stone_area(&self, go_guid: u64) -> Result<Option<u32>> {
-        crate::stdb::Coordinator::meeting_stone_area(self, go_guid)
-    }
-
-    fn party_members(&self, actor_guid: u64) -> Result<Option<Vec<u64>>> {
-        let authority = self.realm_core()?;
-        Ok(
-            crate::stdb::Coordinator::group_roster(&authority, actor_guid)
-                .map(|roster| roster.members.iter().map(|member| member.guid).collect()),
-        )
-    }
-
-    fn seeker_facts(&self, character_guid: u64) -> Result<Option<SeekerFacts>> {
-        Ok(
-            presence::character_anywhere(self, character_guid)?.map(|character| SeekerFacts {
-                character_guid,
-                race: character.race,
-                class: character.class,
-            }),
-        )
-    }
-
-    fn meeting_stone_op(
-        &self,
-        actor_guid: u64,
-        op: u8,
-        area_id: u32,
-        seekers: Vec<SeekerFacts>,
-    ) -> Result<MeetingStoneOutcome> {
-        crate::stdb::Coordinator::meeting_stone_op(self, actor_guid, op, area_id, seekers)
-    }
-
-    fn queued_area(&self, character_guid: u64) -> Result<Option<u32>> {
-        crate::stdb::Coordinator::queued_area(self, character_guid)
-    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -115,25 +73,25 @@ pub(crate) fn dispatch_meeting_stone_action<St: MeetingStoneActionStore + ?Sized
         ClientOpcodeMessage::MSG_LOOKING_FOR_GROUP => Action::LookingForGroup,
         other => return Ok(MeetingStoneActionOutcome::PassThrough(other)),
     };
-    let Some(actor_guid) = player.self_guid else {
+    let Some(actor) = player.self_guid.and_then(Actor::new) else {
         return Ok(MeetingStoneActionOutcome::Handled {
             outbound: Vec::new(),
         });
     };
     let outbound = match action {
-        Action::Join(go_guid) => join(store, player.account_id, actor_guid, go_guid)?,
+        Action::Join(go_guid) => join(store, player.account_id, actor, go_guid)?,
         Action::Leave => {
             run_op(
                 store,
                 player.account_id,
-                actor_guid,
+                actor,
                 realm_op::LEAVE,
                 0,
                 Vec::new(),
             )?;
             Vec::new()
         }
-        Action::Info => info(store, player.account_id, actor_guid)?,
+        Action::Info => info(store, player.account_id, actor)?,
         Action::LookingForGroup => vec![Outbound::One(ServerOpcodeMessage::MSG_LOOKING_FOR_GROUP(
             codec::build_looking_for_group(),
         ))],
@@ -148,16 +106,18 @@ enum Action {
     LookingForGroup,
 }
 
-/// Only a transport loss ends the World Session. Anything else is logged and answered with nothing,
+/// Only a Transport Loss ends the World Session. A Refusal is logged and answered with nothing,
 /// because the client has no message for it.
 fn recoverable<T>(what: &str, account_id: u64, result: Result<T>) -> Result<Option<T>> {
     match result {
         Ok(value) => Ok(Some(value)),
-        Err(error) if is_transport_failure(&error) => Err(error),
-        Err(error) => {
-            log::debug!("world: meeting stone {what} dropped (account {account_id}): {error:#}");
-            Ok(None)
-        }
+        Err(error) => match classify(&error) {
+            DurableFailure::Refusal { reason } => {
+                log::debug!("world: meeting stone {what} refused (account {account_id}): {reason}");
+                Ok(None)
+            }
+            DurableFailure::TransportLoss => Err(error),
+        },
     }
 }
 
@@ -166,13 +126,13 @@ fn recoverable<T>(what: &str, account_id: u64, result: Result<T>) -> Result<Opti
 fn join<St: MeetingStoneActionStore + ?Sized>(
     store: &St,
     account_id: u64,
-    actor_guid: u64,
+    actor: Actor,
     go_guid: u64,
 ) -> Result<Vec<Outbound>> {
     match recoverable(
         "admission",
         account_id,
-        store.admit_meeting_stone(actor_guid, go_guid),
+        store.admit_meeting_stone(actor, go_guid),
     )? {
         Some(MeetingStoneOutcome::Ran) => {}
         Some(MeetingStoneOutcome::Refused(refusal)) => {
@@ -200,19 +160,12 @@ fn join<St: MeetingStoneActionStore + ?Sized>(
     let Some(seekers) = recoverable(
         "seeker facts read",
         account_id,
-        facts_for_join(store, actor_guid),
+        facts_for_join(store, actor),
     )?
     else {
         return Ok(Vec::new());
     };
-    let outcome = run_op(
-        store,
-        account_id,
-        actor_guid,
-        realm_op::JOIN,
-        area_id,
-        seekers,
-    )?;
+    let outcome = run_op(store, account_id, actor, realm_op::JOIN, area_id, seekers)?;
     let failure = match outcome {
         Some(MeetingStoneOutcome::Refused(refusal)) => join_failure_for(refusal),
         _ => None,
@@ -228,11 +181,11 @@ fn join<St: MeetingStoneActionStore + ?Sized>(
 /// a Raid, so a Raid's actor conveys only its own.
 fn facts_for_join<St: MeetingStoneActionStore + ?Sized>(
     store: &St,
-    actor_guid: u64,
+    actor: Actor,
 ) -> Result<Vec<SeekerFacts>> {
-    let guids = match store.party_members(actor_guid)? {
+    let guids = match store.party_members(actor.guid())? {
         Some(members) if members.len() <= GROUP_MAX_MEMBERS => members,
-        _ => vec![actor_guid],
+        _ => vec![actor.guid()],
     };
     let mut facts = Vec::with_capacity(guids.len());
     for guid in guids {
@@ -245,7 +198,7 @@ fn facts_for_join<St: MeetingStoneActionStore + ?Sized>(
 fn run_op<St: MeetingStoneActionStore + ?Sized>(
     store: &St,
     account_id: u64,
-    actor_guid: u64,
+    actor: Actor,
     op: u8,
     area_id: u32,
     seekers: Vec<SeekerFacts>,
@@ -253,7 +206,7 @@ fn run_op<St: MeetingStoneActionStore + ?Sized>(
     let outcome = recoverable(
         "op",
         account_id,
-        store.meeting_stone_op(actor_guid, op, area_id, seekers),
+        store.meeting_stone_op(actor, op, area_id, seekers),
     )?;
     if let Some(MeetingStoneOutcome::Refused(refusal)) = outcome {
         log::debug!(
@@ -269,9 +222,9 @@ fn run_op<St: MeetingStoneActionStore + ?Sized>(
 fn info<St: MeetingStoneActionStore + ?Sized>(
     store: &St,
     account_id: u64,
-    actor_guid: u64,
+    actor: Actor,
 ) -> Result<Vec<Outbound>> {
-    let Some(queued) = recoverable("status read", account_id, store.queued_area(actor_guid))?
+    let Some(queued) = recoverable("status read", account_id, store.queued_area(actor.guid()))?
     else {
         return Ok(Vec::new());
     };
@@ -284,7 +237,10 @@ fn info<St: MeetingStoneActionStore + ?Sized>(
             ServerOpcodeMessage::SMSG_MEETINGSTONE_SETQUEUE(packet),
         )],
         None => {
-            log::warn!("world: meeting stone status for {actor_guid} names unknown area {area_id}");
+            log::warn!(
+                "world: meeting stone status for {} names unknown area {area_id}",
+                actor.guid()
+            );
             Vec::new()
         }
     })
@@ -293,6 +249,7 @@ fn info<St: MeetingStoneActionStore + ?Sized>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::stdb::ReducerCallError;
     use std::collections::HashMap;
     use std::sync::Mutex;
     use wow_world_messages::vanilla::{CMSG_MEETINGSTONE_JOIN, CMSG_PING};
@@ -320,7 +277,7 @@ mod tests {
         party: Option<Vec<u64>>,
         /// Facts by guid, as the World Shards hold them.
         facts: HashMap<u64, SeekerFacts>,
-        op_outcome: Option<Result<MeetingStoneOutcome, String>>,
+        op_outcome: Option<Result<MeetingStoneOutcome, fn() -> anyhow::Error>>,
         queued: Option<u32>,
         calls: Mutex<Vec<(&'static str, &'static str)>>,
         ops: Mutex<Vec<QueueOp>>,
@@ -358,11 +315,7 @@ mod tests {
     }
 
     impl MeetingStoneActionStore for FakeMeetingStones {
-        fn admit_meeting_stone(
-            &self,
-            _actor_guid: u64,
-            _go_guid: u64,
-        ) -> Result<MeetingStoneOutcome> {
+        fn admit_meeting_stone(&self, _actor: Actor, _go_guid: u64) -> Result<MeetingStoneOutcome> {
             self.record("home", "admit");
             Ok(self.admission.expect("admission configured"))
         }
@@ -383,7 +336,7 @@ mod tests {
 
         fn meeting_stone_op(
             &self,
-            actor_guid: u64,
+            actor: Actor,
             op: u8,
             area_id: u32,
             seekers: Vec<SeekerFacts>,
@@ -392,11 +345,11 @@ mod tests {
             self.ops
                 .lock()
                 .unwrap()
-                .push((actor_guid, op, area_id, seekers));
+                .push((actor.guid(), op, area_id, seekers));
             match &self.op_outcome {
                 None => Ok(MeetingStoneOutcome::Ran),
                 Some(Ok(outcome)) => Ok(*outcome),
-                Some(Err(error)) => Err(anyhow!(error.clone())),
+                Some(Err(error)) => Err(error()),
             }
         }
 
@@ -627,19 +580,21 @@ mod tests {
         assert!(store.calls().is_empty());
     }
 
-    /// A Refusal or an untagged error keeps the World Session; a lost transport ends it.
+    /// A Refusal the Module did not tag keeps the World Session; a Transport Loss ends it.
     #[test]
-    fn only_a_lost_transport_ends_the_session() {
+    fn only_a_transport_loss_ends_the_session() {
         let untagged = FakeMeetingStones {
-            op_outcome: Some(Err("realm_meeting_stone_op reducer failed: boom".into())),
+            op_outcome: Some(Err(|| {
+                ReducerCallError::refused("realm_meeting_stone_op", "boom").into()
+            })),
             ..FakeMeetingStones::at_stone()
         };
         assert!(handled(&untagged, join_stone()).is_empty());
 
         let lost = FakeMeetingStones {
-            op_outcome: Some(Err(
-                "realm_meeting_stone_op reducer transport disconnected: channel closed".into(),
-            )),
+            op_outcome: Some(Err(|| {
+                ReducerCallError::transport_lost("realm_meeting_stone_op").into()
+            })),
             ..FakeMeetingStones::at_stone()
         };
         assert!(dispatch_meeting_stone_action(&lost, in_world(), join_stone()).is_err());

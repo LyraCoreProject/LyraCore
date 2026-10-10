@@ -2,54 +2,98 @@
 
 use anyhow::Result;
 
-use crate::world::TradeStore;
+use crate::stdb::bindings::*;
+use crate::stdb::connection::call_reducer;
+use crate::world::{Actor, TradeStore};
 
-use crate::stdb::Coordinator;
-
-impl TradeStore for Coordinator {
-    fn initiate_trade(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()> {
-        self.initiate_trade(account_id, self_guid, target_guid)
+impl TradeStore for crate::stdb::Coordinator {
+    fn initiate_trade(&self, actor: Actor, target_guid: u64) -> Result<()> {
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_initiate_trade",
+            gw_initiate_trade_then(self.session_actor(actor), target_guid)
+        )
     }
 
-    fn begin_trade(&self, account_id: u64, self_guid: u64) -> Result<()> {
-        self.begin_trade(account_id, self_guid)
+    fn begin_trade(&self, actor: Actor) -> Result<()> {
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_begin_trade",
+            gw_begin_trade_then(self.session_actor(actor))
+        )
     }
 
-    fn cancel_trade(&self, account_id: u64, self_guid: u64) -> Result<()> {
-        self.cancel_trade(account_id, self_guid)
+    fn cancel_trade(&self, actor: Actor) -> Result<()> {
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_cancel_trade",
+            gw_cancel_trade_then(self.session_actor(actor))
+        )
     }
 
-    fn set_trade_item(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        trade_slot: u8,
-        inv_slot: u8,
-    ) -> Result<()> {
-        self.set_trade_item(account_id, self_guid, trade_slot, inv_slot)
+    fn set_trade_item(&self, actor: Actor, trade_slot: u8, inv_slot: u8) -> Result<()> {
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_set_trade_item",
+            gw_set_trade_item_then(self.session_actor(actor), trade_slot, inv_slot)
+        )
     }
 
-    fn clear_trade_item(&self, account_id: u64, self_guid: u64, trade_slot: u8) -> Result<()> {
-        self.clear_trade_item(account_id, self_guid, trade_slot)
+    fn clear_trade_item(&self, actor: Actor, trade_slot: u8) -> Result<()> {
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_clear_trade_item",
+            gw_clear_trade_item_then(self.session_actor(actor), trade_slot)
+        )
     }
 
-    fn set_trade_gold(&self, account_id: u64, self_guid: u64, copper: u32) -> Result<()> {
-        self.set_trade_gold(account_id, self_guid, copper)
+    fn set_trade_gold(&self, actor: Actor, copper: u32) -> Result<()> {
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_set_trade_gold",
+            gw_set_trade_gold_then(self.session_actor(actor), copper)
+        )
     }
 
-    fn accept_trade(&self, account_id: u64, self_guid: u64) -> Result<()> {
-        self.accept_trade(account_id, self_guid)
+    fn accept_trade(&self, actor: Actor) -> Result<()> {
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_accept_trade",
+            gw_accept_trade_then(self.session_actor(actor))
+        )
     }
 
-    fn unaccept_trade(&self, account_id: u64, self_guid: u64) -> Result<()> {
-        self.unaccept_trade(account_id, self_guid)
+    fn unaccept_trade(&self, actor: Actor) -> Result<()> {
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_unaccept_trade",
+            gw_unaccept_trade_then(self.session_actor(actor))
+        )
     }
 
-    fn busy_trade(&self, account_id: u64, self_guid: u64) -> Result<()> {
-        self.busy_trade(account_id, self_guid)
+    fn busy_trade(&self, actor: Actor) -> Result<()> {
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_busy_trade",
+            gw_busy_trade_then(self.session_actor(actor))
+        )
     }
 
-    fn ignore_trade(&self, account_id: u64, self_guid: u64) -> Result<()> {
-        self.ignore_trade(account_id, self_guid)
+    fn ignore_trade(&self, actor: Actor) -> Result<()> {
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_ignore_trade",
+            gw_ignore_trade_then(self.session_actor(actor))
+        )
     }
 }

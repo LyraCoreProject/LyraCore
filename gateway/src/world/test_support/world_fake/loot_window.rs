@@ -39,12 +39,7 @@ impl LootWindowStore for WorldFake {
             .unwrap_or_default())
     }
 
-    fn use_gameobject(
-        &self,
-        _account_id: u64,
-        _actor_guid: u64,
-        target_guid: u64,
-    ) -> Result<LootWindowRequestStatus> {
+    fn use_gameobject(&self, _actor: Actor, target_guid: u64) -> Result<LootWindowRequestStatus> {
         self.loot_window
             .gameobjects_used
             .lock()
@@ -55,28 +50,17 @@ impl LootWindowStore for WorldFake {
 
     fn open_creature_loot(
         &self,
-        _account_id: u64,
-        _actor_guid: u64,
+        _actor: Actor,
         _corpse_guid: u64,
     ) -> Result<LootWindowRequestStatus> {
         Ok(LootWindowRequestStatus::Applied)
     }
 
-    fn skin_corpse(
-        &self,
-        _account_id: u64,
-        _actor_guid: u64,
-        _target_guid: u64,
-    ) -> Result<LootWindowRequestStatus> {
+    fn skin_corpse(&self, _actor: Actor, _target_guid: u64) -> Result<LootWindowRequestStatus> {
         Ok(LootWindowRequestStatus::Applied)
     }
 
-    fn loot_money(
-        &self,
-        _account_id: u64,
-        _actor_guid: u64,
-        target_guid: u64,
-    ) -> Result<LootWindowRequestStatus> {
+    fn loot_money(&self, _actor: Actor, target_guid: u64) -> Result<LootWindowRequestStatus> {
         self.loot_window
             .money_looted
             .lock()
@@ -91,8 +75,7 @@ impl LootWindowStore for WorldFake {
 
     fn take_loot(
         &self,
-        _account_id: u64,
-        actor_guid: u64,
+        actor: Actor,
         target_guid: u64,
         loot_slot: u8,
     ) -> Result<LootWindowRequestStatus> {
@@ -107,7 +90,7 @@ impl LootWindowStore for WorldFake {
                 let (_, entry, stack_count, _, random_property_id) = state.loot.remove(index);
                 state.inventory.push(codec::ItemInstanceView {
                     guid: 0x4000_0000_0000_0000 | (u64::from(loot_slot) + 1),
-                    owner_guid: actor_guid,
+                    owner_guid: actor.guid(),
                     entry,
                     stack_count,
                     random_property_id,

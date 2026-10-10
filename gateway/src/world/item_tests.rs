@@ -33,7 +33,7 @@ fn equip_item_err_sends_smsg_inventory_change_failure() {
     // A gameplay refusal reaches the client as an SMSG_INVENTORY_CHANGE_FAILURE and the next
     // action is served normally.
     let actions = InMemoryItemActions {
-        equip_result: Some(Ok(ItemActionResult::Refused(ItemRefusal::CannotEquip))),
+        equip_result: Some(ItemActionResult::Refused(ItemRefusal::CannotEquip)),
         ..Default::default()
     };
     for slot in [24, 25] {
@@ -51,32 +51,34 @@ fn equip_item_err_sends_smsg_inventory_change_failure() {
 }
 
 #[test]
-fn item_action_before_player_login_is_handled_without_panicking() {
+fn item_action_before_player_login_answers_a_refusal_without_a_durable_request() {
     // An item frame arriving after the handshake but before CMSG_PLAYER_LOGIN (no selected
-    // player) must not panic or error the session: the legacy zero-actor fallback stays a
-    // handled gameplay context.
+    // player) must not panic or error the session. It makes no request and answers a Refusal.
     let actions = InMemoryItemActions::default();
     let player = ItemActionPlayer {
         self_guid: None,
         ..PLAYER
     };
     let sent = try_run(&actions, player, autoequip(24))
-        .expect("the legacy zero-actor fallback remains a handled gameplay context");
-    assert!(sent.is_empty());
+        .expect("a session without a Character stays alive");
+    assert!(matches!(
+        sent.as_slice(),
+        [Outbound::One(
+            ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(_)
+        )]
+    ));
+    assert!(actions.equip_requests.lock().unwrap().is_empty());
 }
 
 #[test]
 fn item_reducer_transport_loss_ends_the_world_session() {
-    // Reducer transport loss comes back as an error, which ends the session, instead of being
+    // A Transport Loss comes back as an error, which ends the session, instead of being
     // translated into gameplay feedback.
     let actions = InMemoryItemActions {
-        equip_result: Some(Err(
-            "equip_item reducer transport disconnected: channel closed".into(),
-        )),
+        transport_lost: true,
         ..Default::default()
     };
-    let error = try_run(&actions, PLAYER, autoequip(24))
+    try_run(&actions, PLAYER, autoequip(24))
         .err()
-        .expect("a disconnected item reducer transport must be session-fatal");
-    assert!(format!("{error:#}").contains("reducer transport disconnected"));
+        .expect("a lost item reducer transport must be session-fatal");
 }

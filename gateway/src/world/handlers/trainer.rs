@@ -2,6 +2,7 @@
 //! `world/mod.rs`.
 
 use super::super::*;
+use crate::stdb::{classify, DurableFailure};
 use lyracore_shared::trainer::TrainerRefusal;
 use wow_world_messages::vanilla::TrainingFailureReason;
 
@@ -24,8 +25,7 @@ pub(crate) trait TrainerStore: Send + Sync {
     /// the durable result is unknown.
     fn buy_trainer_spell(
         &self,
-        account_id: u64,
-        self_guid: u64,
+        actor: Actor,
         trainer_guid: u64,
         spell_id: u32,
     ) -> Result<TrainerBuyOutcome>;
@@ -44,8 +44,7 @@ pub(crate) trait TrainerStore: Send + Sync {
     /// Persist one action-bar button (`CMSG_SET_ACTION_BUTTON`); action 0 clears the slot.
     fn set_action_button(
         &self,
-        account_id: u64,
-        self_guid: u64,
+        actor: Actor,
         button: u8,
         action: u32,
         action_type: u8,
@@ -55,8 +54,7 @@ pub(crate) trait TrainerStore: Send + Sync {
     /// `reputation_index` is the client's 0..63 rep-array slot, NOT a faction id.
     fn set_faction_at_war(
         &self,
-        account_id: u64,
-        self_guid: u64,
+        actor: Actor,
         reputation_index: u32,
         at_war: bool,
     ) -> Result<InteractionOutcome>;
@@ -72,18 +70,13 @@ pub(crate) trait TrainerStore: Send + Sync {
 
     /// Spend a talent point on `talent_id` (`CMSG_LEARN_TALENT`). The module gates it (points available
     /// / max rank / prerequisites); a gameplay `Err` is per-action, not session-fatal.
-    fn learn_talent(&self, account_id: u64, self_guid: u64, talent_id: u32) -> Result<()>;
+    fn learn_talent(&self, actor: Actor, talent_id: u32) -> Result<()>;
 
     /// Quote the Module's current talent reset cost for the confirmation dialog.
     fn talent_reset_cost(&self, character_guid: u64) -> Option<u32>;
 
     /// Confirm a talent reset. The Module checks the trainer, range and price.
-    fn reset_talents(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        trainer_guid: u64,
-    ) -> Result<InteractionOutcome>;
+    fn reset_talents(&self, actor: Actor, trainer_guid: u64) -> Result<InteractionOutcome>;
 
     /// The rank a trainer offering actually teaches (LearnSpell wrapper → its trigger; a
     /// self-contained rank resolves to itself). Mirrors the module's buy-time resolution so
@@ -96,6 +89,21 @@ pub(crate) trait TrainerStore: Send + Sync {
     /// A character's live presence `(online, level, class, zone_id)` on THIS Shard only. `None` if
     /// the guid doesn't resolve to any character here.
     fn character_presence(&self, guid: u64) -> Result<Option<(bool, u8, u8, u32)>>;
+}
+
+/// Settle a Durable Request whose failure the client never hears about: a Refusal is logged and the
+/// World Session goes on, and a Transport Loss ends it.
+pub(super) fn settle_per_action(what: &str, account_id: u64, result: Result<()>) -> Result<()> {
+    match result {
+        Ok(()) => Ok(()),
+        Err(error) => match classify(&error) {
+            DurableFailure::Refusal { reason } => {
+                log::debug!("world: {what} ignored (account {account_id}): {reason}");
+                Ok(())
+            }
+            DurableFailure::TransportLoss => Err(error),
+        },
+    }
 }
 
 /// How the Module answered a trainer purchase. A Refusal is a gameplay answer the client can render;
@@ -133,10 +141,13 @@ pub(crate) fn handle_trainer<St: CharacterStore + NpcStore + TrainerStore + ?Siz
     conn: &mut WorldConn,
     msg: ClientOpcodeMessage,
 ) -> Result<Option<ClientOpcodeMessage>> {
-    let self_guid = match &conn.state {
-        WorldState::InWorld(iw) => iw.self_guid,
-        WorldState::CharSelect => return Ok(Some(msg)),
+    let Some(actor) = (match &conn.state {
+        WorldState::InWorld(iw) => Actor::new(iw.self_guid),
+        WorldState::CharSelect => None,
+    }) else {
+        return Ok(Some(msg));
     };
+    let self_guid = actor.guid();
     match msg {
         ClientOpcodeMessage::CMSG_TRAINER_LIST(c) => {
             let trainer_guid = c.guid.guid();
@@ -170,7 +181,7 @@ pub(crate) fn handle_trainer<St: CharacterStore + NpcStore + TrainerStore + ?Siz
             let spell_id = c.id;
             // A Refusal arrives as an outcome. An error leaves the durable result unknown, so it
             // ends the session instead of posing as a gameplay answer.
-            match store.buy_trainer_spell(conn.account_id, self_guid, trainer_guid, spell_id)? {
+            match store.buy_trainer_spell(actor, trainer_guid, spell_id)? {
                 TrainerBuyOutcome::Learned => {
                     // Confirm + push the spell live so it appears on the action bar without a relog.
                     send(
@@ -255,19 +266,16 @@ pub(crate) fn handle_trainer<St: CharacterStore + NpcStore + TrainerStore + ?Siz
         // must never drop the session — the button just won't stick).
         ClientOpcodeMessage::CMSG_SET_ACTION_BUTTON(c) => {
             let action = c.action as u32 | ((c.misc as u32) << 16);
-            if let Err(e) =
-                store.set_action_button(conn.account_id, self_guid, c.button, action, c.action_type)
-            {
-                log::debug!(
-                    "world: set_action_button ignored (account {}): {e}",
-                    conn.account_id
-                );
-            }
+            settle_per_action(
+                "set_action_button",
+                conn.account_id,
+                store.set_action_button(actor, c.button, action, c.action_type),
+            )?;
         }
         ClientOpcodeMessage::CMSG_LEARN_TALENT(c) => {
             let talent_id = c.talent.as_int();
             let grant_spell_id = store.talent_grant_spell(talent_id);
-            match store.learn_talent(conn.account_id, self_guid, talent_id) {
+            match store.learn_talent(actor, talent_id) {
                 Ok(()) => {
                     if grant_spell_id != 0 {
                         send(
@@ -278,52 +286,43 @@ pub(crate) fn handle_trainer<St: CharacterStore + NpcStore + TrainerStore + ?Siz
                         )?;
                     }
 
-                    if let WorldState::InWorld(iw) = &conn.state {
-                        let self_guid = iw.self_guid;
-                        let (teach, superseded, remaining) =
-                            store.talent_pane_sync(self_guid, talent_id);
-                        if teach != 0 && teach != grant_spell_id {
-                            if superseded != 0 {
-                                use wow_world_messages::vanilla::SMSG_SUPERCEDED_SPELL;
-                                send(
-                                    tx,
-                                    Outbound::One(ServerOpcodeMessage::SMSG_SUPERCEDED_SPELL(
-                                        SMSG_SUPERCEDED_SPELL {
-                                            new_spell_id: superseded as u16, // cmangos wire order: OLD rides the first slot
-                                            old_spell_id: teach as u16,
-                                        },
-                                    )),
-                                )?;
-                            } else {
-                                send(
-                                    tx,
-                                    Outbound::One(ServerOpcodeMessage::SMSG_LEARNED_SPELL(
-                                        codec::build_learned_spell(teach),
-                                    )),
-                                )?;
-                            }
-                        }
-                        send(
-                            tx,
-                            Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
-                                codec::build_talent_points_values(self_guid, remaining),
-                            ))),
-                        )?;
-                        // Spell-modifier mirror: the pick may have applied an A_SPELLMOD
-                        // passive — re-send the aggregated totals so the client's cast bars match
-                        // the server's folded timings immediately (idempotent absolute values).
-                        for m in codec::build_spell_modifier_msgs(&store.spell_modifiers(self_guid))
-                        {
-                            send(tx, Outbound::One(m))?;
+                    let (teach, superseded, remaining) =
+                        store.talent_pane_sync(self_guid, talent_id);
+                    if teach != 0 && teach != grant_spell_id {
+                        if superseded != 0 {
+                            use wow_world_messages::vanilla::SMSG_SUPERCEDED_SPELL;
+                            send(
+                                tx,
+                                Outbound::One(ServerOpcodeMessage::SMSG_SUPERCEDED_SPELL(
+                                    SMSG_SUPERCEDED_SPELL {
+                                        new_spell_id: superseded as u16, // cmangos wire order: OLD rides the first slot
+                                        old_spell_id: teach as u16,
+                                    },
+                                )),
+                            )?;
+                        } else {
+                            send(
+                                tx,
+                                Outbound::One(ServerOpcodeMessage::SMSG_LEARNED_SPELL(
+                                    codec::build_learned_spell(teach),
+                                )),
+                            )?;
                         }
                     }
+                    send(
+                        tx,
+                        Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
+                            codec::build_talent_points_values(self_guid, remaining),
+                        ))),
+                    )?;
+                    // Spell-modifier mirror: the pick may have applied an A_SPELLMOD
+                    // passive — re-send the aggregated totals so the client's cast bars match
+                    // the server's folded timings immediately (idempotent absolute values).
+                    for m in codec::build_spell_modifier_msgs(&store.spell_modifiers(self_guid)) {
+                        send(tx, Outbound::One(m))?;
+                    }
                 }
-                Err(e) => {
-                    log::debug!(
-                        "world: learn_talent ignored (account {}): {e}",
-                        conn.account_id
-                    );
-                }
+                Err(error) => settle_per_action("learn_talent", conn.account_id, Err(error))?,
             }
         }
         other => return Ok(Some(other)),
@@ -377,7 +376,7 @@ pub(crate) fn handle_at_war<St: TrainerStore + SessionStore + ?Sized>(
         body.len() == 5 && body[4] <= 1,
         "invalid CMSG_SET_FACTION_ATWAR body"
     );
-    let Some(character_guid) = social::self_guid(conn) else {
+    let Some(actor) = social::self_guid(conn).and_then(Actor::new) else {
         return Ok(());
     };
     let index = u32::from_le_bytes(body[..4].try_into()?);
@@ -385,7 +384,7 @@ pub(crate) fn handle_at_war<St: TrainerStore + SessionStore + ?Sized>(
         forward_movement(store, conn, opcode, &info)?;
     }
     if let InteractionOutcome::Refused(reason) =
-        store.set_faction_at_war(conn.account_id, character_guid, index, body[4] != 0)?
+        store.set_faction_at_war(actor, index, body[4] != 0)?
     {
         send(
             tx,

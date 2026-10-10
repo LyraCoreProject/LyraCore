@@ -17,16 +17,16 @@ impl ChatActionStore for WorldFake {
         Ok(self.chat.speaker_facts.clone())
     }
 
-    fn realm_chat(&self, speaker_guid: u64, request: RealmChatRequest) -> Result<ChatOutcome> {
+    fn realm_chat(&self, actor: Actor, request: RealmChatRequest) -> Result<ChatOutcome> {
         self.chat
             .realm_chats
             .lock()
             .unwrap()
-            .push((speaker_guid, request));
+            .push((actor.guid(), request));
         Ok(ChatOutcome::Delivered)
     }
 
-    fn set_away(&self, _speaker_guid: u64, _kind: u8, _message: String) -> Result<()> {
+    fn set_away(&self, _actor: Actor, _kind: u8, _message: String) -> Result<()> {
         Ok(())
     }
 
@@ -40,13 +40,13 @@ impl ChatActionStore for WorldFake {
 
     /// The Module's `realm_whisper`, modelled: it records what the Gateway conveyed before it
     /// answers, because the speaker guid is the whole authorization of the call.
-    fn realm_whisper(&self, speaker_guid: u64, request: WhisperRequest) -> Result<ChatOutcome> {
+    fn realm_whisper(&self, actor: Actor, request: WhisperRequest) -> Result<ChatOutcome> {
         self.rec("realm_whisper");
         self.chat
             .realm_whispers
             .lock()
             .unwrap()
-            .push((speaker_guid, request));
+            .push((actor.guid(), request));
         Ok(ChatOutcome::Delivered)
     }
 

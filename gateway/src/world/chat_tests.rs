@@ -115,7 +115,9 @@ fn messagechat_dot_say_error_relays_a_system_chat_line_to_the_sender_only() {
     // to the SENDER as a System SMSG_MESSAGECHAT carrying the module's raw message VERBATIM — no
     // "reducer failed" wrapper prefix, no broadcast, no game_chat_event row.
     let mut s = quest_store();
-    s.speech.gm_command_error = Some("permission denied".to_string());
+    s.speech.gm_command_error = Some(|| {
+        crate::stdb::ReducerCallError::refused("gw_gm_command", "permission denied").into()
+    });
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
     CMSG_MESSAGECHAT {
@@ -142,6 +144,38 @@ fn messagechat_dot_say_error_relays_a_system_chat_line_to_the_sender_only() {
     drop(client);
     server.join().unwrap();
     assert!(store.speech.chats.lock().unwrap().is_empty());
+}
+
+#[test]
+fn messagechat_dot_say_transport_loss_ends_the_world_session() {
+    let mut s = quest_store();
+    s.speech.gm_command_error =
+        Some(|| crate::stdb::ReducerCallError::transport_lost("gw_gm_command").into());
+    let store = std::sync::Arc::new(s);
+    let (mut client, server_end) = world_session_socket_pair();
+    let server = std::thread::spawn(move || run_world_session(server_end, store));
+    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
+    CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    drain_world_entry(&mut client, &mut c_dec);
+    CMSG_MESSAGECHAT {
+        chat_type: CMSG_MESSAGECHAT_ChatType::Say,
+        language: Language::Universal,
+        message: ".god".into(),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    while let Ok(message) = ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec) {
+        assert!(
+            !matches!(message, ServerOpcodeMessage::SMSG_MESSAGECHAT(_)),
+            "a lost command is not a Refusal the GM reads"
+        );
+    }
+    assert!(
+        server.join().unwrap().is_err(),
+        "a Transport Loss ends the World Session"
+    );
 }
 
 /// Character 1 in the world, with a Character row so `sync`'s sentinel is answered.

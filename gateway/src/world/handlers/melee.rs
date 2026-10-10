@@ -1,22 +1,13 @@
 //! Melee-attack dispatcher: durable engagement, session transition, and client stance messages.
 
 use super::super::*;
+use crate::stdb::{classify, DurableFailure};
 
 pub(crate) trait MeleeActionStore: Send + Sync {
-    fn start_attack(&self, account_id: u64, actor_guid: u64, target_guid: u64) -> Result<()>;
+    fn start_attack(&self, actor: Actor, target_guid: u64) -> Result<()>;
     /// Disarm the actor's outgoing engagement row. Also the ranged auto-repeat teardown call;
     /// `attack_stop` states the rule the two share.
-    fn stop_attack(&self, account_id: u64, actor_guid: u64) -> Result<()>;
-}
-
-impl MeleeActionStore for crate::stdb::Coordinator {
-    fn start_attack(&self, account_id: u64, actor_guid: u64, target_guid: u64) -> Result<()> {
-        crate::stdb::Coordinator::start_attack(self, account_id, actor_guid, target_guid)
-    }
-
-    fn stop_attack(&self, account_id: u64, actor_guid: u64) -> Result<()> {
-        crate::stdb::Coordinator::stop_attack(self, account_id, actor_guid)
-    }
+    fn stop_attack(&self, actor: Actor) -> Result<()>;
 }
 
 /// The melee-relevant session facts. `self_guid` is `None` outside the world.
@@ -122,17 +113,22 @@ fn attack_start<St: MeleeActionStore + ?Sized>(
     player: MeleeActionPlayer,
     target_guid: u64,
 ) -> Result<MeleeActionOutcome> {
-    if let Err(e) = store.start_attack(
-        player.account_id,
-        player.self_guid.unwrap_or(0),
-        target_guid,
-    ) {
-        let text = e.to_string();
+    // Not in the world: no combat state to arm and no attacker guid to name.
+    let Some(actor) = player.self_guid.and_then(Actor::new) else {
+        return Ok(MeleeActionOutcome::Handled {
+            transition: MeleeTransition::Unchanged,
+            outbound: Vec::new(),
+        });
+    };
+    if let Err(e) = store.start_attack(actor, target_guid) {
+        let DurableFailure::Refusal { reason } = classify(&e) else {
+            return Err(e);
+        };
         // A corpse or a friendly target must be answered: with no refusal the client hangs in
         // combat stance and never swings. Both are transient per-swing failures, not fatal.
-        let refusal = if text.contains(lyracore_shared::ERR_ATTACK_TARGET_DEAD) {
+        let refusal = if reason.contains(lyracore_shared::ERR_ATTACK_TARGET_DEAD) {
             Some(ServerOpcodeMessage::SMSG_ATTACKSWING_DEADTARGET)
-        } else if text.contains(lyracore_shared::ERR_ATTACK_FRIENDLY) {
+        } else if reason.contains(lyracore_shared::ERR_ATTACK_FRIENDLY) {
             Some(ServerOpcodeMessage::SMSG_ATTACKSWING_CANT_ATTACK)
         } else if is_desync_error(&e) {
             return Err(desync_exit(e, "attackswing"));
@@ -150,18 +146,10 @@ fn attack_start<St: MeleeActionStore + ?Sized>(
             outbound: refusal.map(Outbound::One).into_iter().collect(),
         });
     }
-    // Not in the world: no combat state to arm and no attacker guid to name. The durable call
-    // already ran, and the module rejects an unresolved actor.
-    let Some(self_guid) = player.self_guid else {
-        return Ok(MeleeActionOutcome::Handled {
-            transition: MeleeTransition::Unchanged,
-            outbound: Vec::new(),
-        });
-    };
     Ok(MeleeActionOutcome::Handled {
         transition: MeleeTransition::Engaged(target_guid),
         outbound: vec![Outbound::One(ServerOpcodeMessage::SMSG_ATTACKSTART(
-            Box::new(codec::build_attack_start(self_guid, target_guid)),
+            Box::new(codec::build_attack_start(actor.guid(), target_guid)),
         ))],
     })
 }
@@ -182,7 +170,16 @@ fn attack_stop<St: MeleeActionStore + ?Sized>(
             outbound: Vec::new(),
         });
     }
-    if let Err(e) = store.stop_attack(player.account_id, player.self_guid.unwrap_or(0)) {
+    let Some(actor) = player.self_guid.and_then(Actor::new) else {
+        return Ok(MeleeActionOutcome::Handled {
+            transition: MeleeTransition::Disengaged,
+            outbound: Vec::new(),
+        });
+    };
+    if let Err(e) = store.stop_attack(actor) {
+        if matches!(classify(&e), DurableFailure::TransportLoss) {
+            return Err(e);
+        }
         if is_desync_error(&e) {
             return Err(desync_exit(e, "attackstop"));
         }
@@ -193,14 +190,15 @@ fn attack_stop<St: MeleeActionStore + ?Sized>(
             player.account_id
         );
     }
-    let outbound = match (player.self_guid, player.attacking_target) {
-        (Some(self_guid), Some(target_guid)) => {
-            vec![Outbound::One(ServerOpcodeMessage::SMSG_ATTACKSTOP(
-                Box::new(codec::build_attack_stop(self_guid, target_guid)),
-            ))]
-        }
-        _ => Vec::new(),
-    };
+    let outbound = player
+        .attacking_target
+        .map(|target_guid| {
+            Outbound::One(ServerOpcodeMessage::SMSG_ATTACKSTOP(Box::new(
+                codec::build_attack_stop(actor.guid(), target_guid),
+            )))
+        })
+        .into_iter()
+        .collect();
     Ok(MeleeActionOutcome::Handled {
         transition: MeleeTransition::Disengaged,
         outbound,
@@ -210,47 +208,56 @@ fn attack_stop<St: MeleeActionStore + ?Sized>(
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
+    use crate::stdb::ReducerCallError;
     use std::sync::Mutex;
     use wow_world_messages::vanilla::{Guid, CMSG_ATTACKSWING, CMSG_PING};
 
     #[derive(Default)]
     pub(crate) struct InMemoryMeleeActions {
-        pub(crate) start_requests: Mutex<Vec<(u64, u64, u64)>>,
+        /// Recorded `start_attack` calls: actor and target.
+        pub(crate) start_requests: Mutex<Vec<(u64, u64)>>,
+        /// The Module's reason when `start_attack` is refused.
         pub(crate) start_error: Option<String>,
-        pub(crate) stop_requests: Mutex<Vec<(u64, u64)>>,
+        pub(crate) stop_requests: Mutex<Vec<u64>>,
+        /// The Module's reason when `stop_attack` is refused.
         pub(crate) stop_error: Option<String>,
+        /// Every durable call fails with a Transport Loss.
+        pub(crate) transport_lost: bool,
         /// The attackers with a live engagement: a started attack adds its actor, a stop removes it.
         pub(crate) engaged: Mutex<Vec<u64>>,
     }
 
     impl MeleeActionStore for InMemoryMeleeActions {
-        fn start_attack(&self, account_id: u64, actor_guid: u64, target_guid: u64) -> Result<()> {
+        fn start_attack(&self, actor: Actor, target_guid: u64) -> Result<()> {
             self.start_requests
                 .lock()
                 .unwrap()
-                .push((account_id, actor_guid, target_guid));
-            if let Some(error) = &self.start_error {
-                return Err(anyhow::anyhow!("{error}"));
+                .push((actor.guid(), target_guid));
+            if self.transport_lost {
+                return Err(ReducerCallError::transport_lost("gw_attack").into());
+            }
+            if let Some(reason) = &self.start_error {
+                return Err(ReducerCallError::refused("gw_attack", reason).into());
             }
             let mut engaged = self.engaged.lock().unwrap();
-            if !engaged.contains(&actor_guid) {
-                engaged.push(actor_guid);
+            if !engaged.contains(&actor.guid()) {
+                engaged.push(actor.guid());
             }
             Ok(())
         }
 
-        fn stop_attack(&self, account_id: u64, actor_guid: u64) -> Result<()> {
-            self.stop_requests
-                .lock()
-                .unwrap()
-                .push((account_id, actor_guid));
-            if let Some(error) = &self.stop_error {
-                return Err(anyhow::anyhow!("{error}"));
+        fn stop_attack(&self, actor: Actor) -> Result<()> {
+            self.stop_requests.lock().unwrap().push(actor.guid());
+            if self.transport_lost {
+                return Err(ReducerCallError::transport_lost("gw_stop_attack").into());
+            }
+            if let Some(reason) = &self.stop_error {
+                return Err(ReducerCallError::refused("gw_stop_attack", reason).into());
             }
             self.engaged
                 .lock()
                 .unwrap()
-                .retain(|&guid| guid != actor_guid);
+                .retain(|&guid| guid != actor.guid());
             Ok(())
         }
     }
@@ -312,7 +319,7 @@ pub(super) mod tests {
 
         assert_eq!(
             actions.start_requests.lock().unwrap().as_slice(),
-            &[(7, 42, 90)]
+            &[(42, 90)]
         );
         let MeleeActionOutcome::Handled {
             transition,
@@ -392,7 +399,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn an_unresolved_player_requests_the_legacy_zero_actor_and_arms_nothing() {
+    fn an_unresolved_player_requests_nothing_and_arms_nothing() {
         let actions = InMemoryMeleeActions::default();
         let player = MeleeActionPlayer {
             self_guid: None,
@@ -401,10 +408,7 @@ pub(super) mod tests {
 
         let outcome = dispatch_melee_action(&actions, player, attack_swing(90)).unwrap();
 
-        assert_eq!(
-            actions.start_requests.lock().unwrap().as_slice(),
-            &[(7, 0, 90)]
-        );
+        assert!(actions.start_requests.lock().unwrap().is_empty());
         assert!(matches!(
             outcome,
             MeleeActionOutcome::Handled { transition, outbound }
@@ -420,7 +424,7 @@ pub(super) mod tests {
             dispatch_melee_action(&actions, engaged(90), ClientOpcodeMessage::CMSG_ATTACKSTOP)
                 .unwrap();
 
-        assert_eq!(actions.stop_requests.lock().unwrap().as_slice(), &[(7, 42)]);
+        assert_eq!(actions.stop_requests.lock().unwrap().as_slice(), &[42]);
         let MeleeActionOutcome::Handled {
             transition,
             outbound,
@@ -449,7 +453,7 @@ pub(super) mod tests {
         let outcome =
             dispatch_melee_action(&actions, player, ClientOpcodeMessage::CMSG_ATTACKSTOP).unwrap();
 
-        assert_eq!(actions.stop_requests.lock().unwrap().as_slice(), &[(7, 42)]);
+        assert_eq!(actions.stop_requests.lock().unwrap().as_slice(), &[42]);
         assert!(matches!(
             outcome,
             MeleeActionOutcome::Handled { transition, outbound }
@@ -471,7 +475,7 @@ pub(super) mod tests {
 
         assert_eq!(
             actions.stop_requests.lock().unwrap().as_slice(),
-            &[(7, 42)],
+            &[42],
             "the durable stop is attempted before the refusal is swallowed"
         );
         assert!(matches!(
@@ -484,7 +488,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn attack_stop_from_an_unresolved_player_requests_the_legacy_zero_actor_and_echoes_nothing() {
+    fn attack_stop_from_an_unresolved_player_requests_nothing_and_echoes_nothing() {
         let actions = InMemoryMeleeActions::default();
         let player = MeleeActionPlayer {
             self_guid: None,
@@ -494,7 +498,7 @@ pub(super) mod tests {
         let outcome =
             dispatch_melee_action(&actions, player, ClientOpcodeMessage::CMSG_ATTACKSTOP).unwrap();
 
-        assert_eq!(actions.stop_requests.lock().unwrap().as_slice(), &[(7, 0)]);
+        assert!(actions.stop_requests.lock().unwrap().is_empty());
         assert!(matches!(
             outcome,
             MeleeActionOutcome::Handled { transition, outbound }
@@ -587,5 +591,31 @@ pub(super) mod tests {
             text.contains("attackstop"),
             "expected attack-stop context, got: {text}"
         );
+    }
+
+    #[test]
+    fn a_transport_loss_ends_the_session_where_a_refusal_keeps_it_alive() {
+        let lost = InMemoryMeleeActions {
+            transport_lost: true,
+            ..Default::default()
+        };
+        assert!(dispatch_melee_action(&lost, player(), attack_swing(90)).is_err());
+        assert!(
+            dispatch_melee_action(&lost, engaged(90), ClientOpcodeMessage::CMSG_ATTACKSTOP)
+                .is_err()
+        );
+
+        let refusing = InMemoryMeleeActions {
+            start_error: Some("target out of range".into()),
+            stop_error: Some("no engagement for that attacker".into()),
+            ..Default::default()
+        };
+        assert!(dispatch_melee_action(&refusing, player(), attack_swing(90)).is_ok());
+        assert!(dispatch_melee_action(
+            &refusing,
+            engaged(90),
+            ClientOpcodeMessage::CMSG_ATTACKSTOP
+        )
+        .is_ok());
     }
 }

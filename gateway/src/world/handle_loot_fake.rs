@@ -3,12 +3,13 @@
 //! tests that use it.
 
 use crate::codec;
+use crate::stdb::ReducerCallError;
 use crate::world::handlers::{
     DeathStore, LootActionStatus, LootWindowRequestStatus, LootWindowStore, NpcStore,
 };
 use crate::world::loot::{LootRollStore, PendingLootRoll};
-use crate::world::{InteractionOutcome, ShardRoutingStore, WorldStore};
-use anyhow::{anyhow, Result};
+use crate::world::{Actor, InteractionOutcome, ShardRoutingStore, WorldStore};
+use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
@@ -30,6 +31,8 @@ pub(crate) struct HandleLootFake {
     self_res_options: Mutex<HashSet<u64>>,
     spirit_healers: HashSet<u64>,
     loot_by_viewer: HashMap<u64, Vec<codec::LootItemView>>,
+    /// When set, every Durable Request fails as a Transport Loss.
+    transport_lost: bool,
 }
 
 impl HandleLootFake {
@@ -58,6 +61,11 @@ impl HandleLootFake {
         self
     }
 
+    pub(crate) fn with_transport_loss(mut self) -> Self {
+        self.transport_lost = true;
+        self
+    }
+
     pub(crate) fn with_loot(mut self, viewer: u64, items: Vec<codec::LootItemView>) -> Self {
         self.loot_by_viewer.insert(viewer, items);
         self
@@ -81,11 +89,24 @@ impl HandleLootFake {
         self.self_res_options.lock().unwrap().contains(&guid)
     }
 
-    fn require(&self, guid: u64, needed: Life) -> Result<()> {
+    /// The Module refuses a request the character's state does not allow.
+    fn require(&self, operation: &str, guid: u64, needed: Life) -> Result<()> {
+        self.reachable(operation)?;
         match self.life(guid) {
             life if life == needed => Ok(()),
-            life => Err(anyhow!("character {guid} is {life:?}, not {needed:?}")),
+            life => Err(ReducerCallError::refused(
+                operation,
+                &format!("character {guid} is {life:?}, not {needed:?}"),
+            )
+            .into()),
         }
+    }
+
+    fn reachable(&self, operation: &str) -> Result<()> {
+        if self.transport_lost {
+            return Err(ReducerCallError::transport_lost(operation).into());
+        }
+        Ok(())
     }
 
     fn revive(&self, guid: u64) {
@@ -94,26 +115,36 @@ impl HandleLootFake {
 }
 
 impl DeathStore for HandleLootFake {
-    fn repop(&self, _account_id: u64, self_guid: u64) -> Result<()> {
-        self.require(self_guid, Life::Dead)?;
+    fn repop(&self, actor: Actor) -> Result<()> {
+        let self_guid = actor.guid();
+        self.require("gw_repop", self_guid, Life::Dead)?;
         self.revive(self_guid);
         Ok(())
     }
 
-    fn reclaim_corpse(&self, _account_id: u64, self_guid: u64, corpse_guid: u64) -> Result<()> {
-        self.require(self_guid, Life::Ghost)?;
+    fn reclaim_corpse(&self, actor: Actor, corpse_guid: u64) -> Result<()> {
+        let self_guid = actor.guid();
+        self.require("gw_reclaim_corpse", self_guid, Life::Ghost)?;
         if self.corpses.get(&self_guid) != Some(&corpse_guid) {
-            return Err(anyhow!(
-                "corpse {corpse_guid} is not character {self_guid}'s"
-            ));
+            return Err(ReducerCallError::refused(
+                "gw_reclaim_corpse",
+                &format!("corpse {corpse_guid} is not character {self_guid}'s"),
+            )
+            .into());
         }
         self.revive(self_guid);
         Ok(())
     }
 
-    fn resurrect_response(&self, _account_id: u64, self_guid: u64, accept: bool) -> Result<()> {
+    fn resurrect_response(&self, actor: Actor, accept: bool) -> Result<()> {
+        let self_guid = actor.guid();
+        self.reachable("gw_respond_resurrect")?;
         if !self.res_offers.lock().unwrap().remove(&self_guid) {
-            return Err(anyhow!("character {self_guid} has no pending offer"));
+            return Err(ReducerCallError::refused(
+                "gw_respond_resurrect",
+                &format!("character {self_guid} has no pending offer"),
+            )
+            .into());
         }
         if accept {
             self.revive(self_guid);
@@ -121,19 +152,29 @@ impl DeathStore for HandleLootFake {
         Ok(())
     }
 
-    fn self_resurrect(&self, _account_id: u64, self_guid: u64) -> Result<()> {
-        self.require(self_guid, Life::Dead)?;
+    fn self_resurrect(&self, actor: Actor) -> Result<()> {
+        let self_guid = actor.guid();
+        self.require("gw_self_resurrect", self_guid, Life::Dead)?;
         if !self.self_res_options.lock().unwrap().remove(&self_guid) {
-            return Err(anyhow!("no Self-Resurrection Option"));
+            return Err(ReducerCallError::refused(
+                "gw_self_resurrect",
+                "no Self-Resurrection Option",
+            )
+            .into());
         }
         self.revive(self_guid);
         Ok(())
     }
 
-    fn spirit_healer_res(&self, _account_id: u64, self_guid: u64, healer_guid: u64) -> Result<()> {
-        self.require(self_guid, Life::Ghost)?;
+    fn spirit_healer_res(&self, actor: Actor, healer_guid: u64) -> Result<()> {
+        let self_guid = actor.guid();
+        self.require("gw_spirit_res", self_guid, Life::Ghost)?;
         if !self.spirit_healers.contains(&healer_guid) {
-            return Err(anyhow!("{healer_guid} is not a Spirit Healer"));
+            return Err(ReducerCallError::refused(
+                "gw_spirit_res",
+                &format!("{healer_guid} is not a Spirit Healer"),
+            )
+            .into());
         }
         self.revive(self_guid);
         Ok(())
@@ -161,46 +202,29 @@ impl LootWindowStore for HandleLootFake {
             .unwrap_or_default())
     }
 
-    fn use_gameobject(
-        &self,
-        _account_id: u64,
-        _actor_guid: u64,
-        _target_guid: u64,
-    ) -> Result<LootWindowRequestStatus> {
+    fn use_gameobject(&self, _actor: Actor, _target_guid: u64) -> Result<LootWindowRequestStatus> {
         Ok(LootWindowRequestStatus::Applied)
     }
 
     fn open_creature_loot(
         &self,
-        _account_id: u64,
-        _actor_guid: u64,
+        _actor: Actor,
         _corpse_guid: u64,
     ) -> Result<LootWindowRequestStatus> {
         unreachable!("handle_loot opens no creature loot")
     }
 
-    fn skin_corpse(
-        &self,
-        _account_id: u64,
-        _actor_guid: u64,
-        _target_guid: u64,
-    ) -> Result<LootWindowRequestStatus> {
+    fn skin_corpse(&self, _actor: Actor, _target_guid: u64) -> Result<LootWindowRequestStatus> {
         unreachable!("handle_loot skins no corpse")
     }
 
-    fn loot_money(
-        &self,
-        _account_id: u64,
-        _actor_guid: u64,
-        _target_guid: u64,
-    ) -> Result<LootWindowRequestStatus> {
+    fn loot_money(&self, _actor: Actor, _target_guid: u64) -> Result<LootWindowRequestStatus> {
         unreachable!("handle_loot takes no money")
     }
 
     fn take_loot(
         &self,
-        _account_id: u64,
-        _actor_guid: u64,
+        _actor: Actor,
         _target_guid: u64,
         _loot_slot: u8,
     ) -> Result<LootWindowRequestStatus> {
@@ -215,7 +239,7 @@ impl NpcStore for HandleLootFake {
 
     fn pet_name(
         &self,
-        _requester_guid: u64,
+        _requester: Actor,
         _pet_number: u32,
         _pet_guid: u64,
     ) -> Result<Option<codec::PetNameView>> {
@@ -230,7 +254,7 @@ impl NpcStore for HandleLootFake {
         unreachable!("no test reaches the NPC family")
     }
 
-    fn enter_areatrigger(&self, _account_id: u64, _self_guid: u64, _trigger_id: u32) -> Result<()> {
+    fn enter_areatrigger(&self, _actor: Actor, _trigger_id: u32) -> Result<()> {
         unreachable!("no test reaches the NPC family")
     }
 
@@ -238,12 +262,7 @@ impl NpcStore for HandleLootFake {
         unreachable!("no test reaches the NPC family")
     }
 
-    fn bind_home(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        _innkeeper_guid: u64,
-    ) -> Result<InteractionOutcome> {
+    fn bind_home(&self, _actor: Actor, _innkeeper_guid: u64) -> Result<InteractionOutcome> {
         unreachable!("no test reaches the NPC family")
     }
 
@@ -263,14 +282,13 @@ impl NpcStore for HandleLootFake {
         unreachable!("no test reaches the NPC family")
     }
 
-    fn inspect(&self, _account_id: u64, _self_guid: u64, _target_guid: u64) -> Result<()> {
+    fn inspect(&self, _actor: Actor, _target_guid: u64) -> Result<()> {
         unreachable!("no test reaches the NPC family")
     }
 
     fn gossip_select(
         &self,
-        _account_id: u64,
-        _self_guid: u64,
+        _actor: Actor,
         _npc_guid: u64,
         _option_id: u32,
         _option_row_id: u32,
@@ -280,14 +298,11 @@ impl NpcStore for HandleLootFake {
 }
 
 impl LootRollStore for HandleLootFake {
-    fn realm_loot_op(
+    fn realm_loot_start(
         &self,
-        _op: u8,
         _corpse_guid: u64,
         _slot: u8,
         _item_entry: u32,
-        _actor_guid: u64,
-        _vote: u8,
         _deadline_micros: i64,
         _recipients: Vec<u64>,
         _random_property_id: u32,
@@ -301,7 +316,7 @@ impl LootRollStore for HandleLootFake {
         &self,
         _corpse_guid: u64,
         _slot: u8,
-        _actor_guid: u64,
+        _actor: Actor,
         _vote: u8,
     ) -> Result<LootActionStatus> {
         unreachable!("no test rolls for loot")
@@ -325,8 +340,7 @@ impl LootRollStore for HandleLootFake {
 
     fn loot_roll(
         &self,
-        _account_id: u64,
-        _self_guid: u64,
+        _actor: Actor,
         _corpse_guid: u64,
         _loot_slot: u32,
         _vote: u8,
@@ -336,8 +350,7 @@ impl LootRollStore for HandleLootFake {
 
     fn loot_master_give(
         &self,
-        _account_id: u64,
-        _self_guid: u64,
+        _actor: Actor,
         _corpse_guid: u64,
         _loot_slot: u8,
         _target_guid: u64,

@@ -39,7 +39,7 @@ A World of Warcraft 1.12.1 server. Game state lives in SpacetimeDB; the gateway 
 
 **S** [Script Answer](#runtime-scripts) · [Script Artifact](#packages) · [Script Diagnostic](#runtime-scripts) · [Script Directive](#packages) · [Seam](#working-method) · [Seeker](#meeting-stones) · [Self-Resurrection Option](#death-and-resurrection) · [Service Reconciliation](#realm-topology) · [Session](#accounts-characters-and-sessions) · [Session Expiry](#accounts-characters-and-sessions) · [SessionActor](#accounts-characters-and-sessions) · [Sessionless Action Consent](#sharding-and-transfer) · [Settlement](#auctions) · [Shard](#realm-topology) · [Shard Boundary](#sharding-and-transfer) · [Shard Map](#sharding-and-transfer) · [Signature](#guilds) · [Solo Target Claim](#sharding-and-transfer) · [Soulstone](#death-and-resurrection) · [Spatial Claim](#packages) · [Speaker Facts](#chat) · [Spec](#working-method) · [Speech](#chat) · [Spell Cast Event Kind](#procs) · [Staged Effect](#runtime-scripts) · [Standalone Supervisor](#realm-topology) · [Stat Kind](#random-properties) · [Stone Add](#meeting-stones) · [Store](#working-method) · [Strategy](#sharding-and-transfer) · [Subgroup](#sharding-and-transfer) · [Suffix](#random-properties)
 
-**T** [Tabard Designer](#guilds) · [Target Icon](#sharding-and-transfer) · [Ticket](#working-method) · [Tracer](#working-method) · [Trade Commit](#trading) · [Trade Session](#trading) · [Transfer](#sharding-and-transfer) · [Transfer Intent](#sharding-and-transfer) · [Triggered Cast](#procs) · [Trust Review](#packages)
+**T** [Tabard Designer](#guilds) · [Target Icon](#sharding-and-transfer) · [Ticket](#working-method) · [Tracer](#working-method) · [Trade Commit](#trading) · [Trade Session](#trading) · [Transfer](#sharding-and-transfer) · [Transfer Intent](#sharding-and-transfer) · [Transport Loss](#gateway-and-module) · [Triggered Cast](#procs) · [Trust Review](#packages)
 
 **U** [UI Transform](#client-content)
 
@@ -178,8 +178,14 @@ _Avoid_: mutation, write, reducer call (in gateway prose)
 A read of Module state through the Coordinator.
 
 **Refusal**:
-A Gate saying no to a Durable Request. An expected gameplay outcome, not a transport failure.
+A Gate saying no to a Durable Request. An expected gameplay outcome, not a Transport Loss.
 _Avoid_: reject, deny, error (for gameplay refusals)
+
+**Transport Loss**:
+A failed Durable Read or Durable Request that is not a Refusal: the transport dropped, the call
+timed out, or the send failed. Its durable outcome is unknown, so it ends the World Session and the
+client logs in again from durable state.
+_Avoid_: transport failure, fatal error, disconnect
 
 ### Accounts, characters and sessions
 
@@ -208,7 +214,9 @@ A guid-owned player entity.
 _Avoid_: player (as a noun in code)
 
 **Actor**:
-The guid a Gateway Verb acts as.
+The Character a Gateway Verb acts as. In the Gateway it is the `Actor` type, a nonzero guid.
+`Actor::new` returns `None` for guid 0, so no request acts as guid 0. The Coordinator signs an Actor
+into a SessionActor.
 
 **Session**:
 The Module's record that an Account is logged in on a Character.
@@ -510,7 +518,8 @@ _Avoid_: online status, presence cache
 Realm Presence's own state for where a Character is: in world (with a live entity and an Away
 Status), in transit between two places (a pending Transfer, or a Shard's own row reading online
 with no entity there), or offline. A negative Whereabouts, offline or no Character found at all,
-needs every configured World Shard to vouch that none of them is hiding the Character.
+needs every configured World Shard to vouch that none of them is hiding the Character. When one
+cannot, the Whereabouts is unknown: another Shard's health, not a Transport Loss.
 _Avoid_: presence state, location status
 
 **Away Status**:

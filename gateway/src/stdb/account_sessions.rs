@@ -7,7 +7,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use super::bindings::*;
 use super::connection::{call_reducer, Coordinator};
-use crate::world::{SessionTx, WorldSessionToken as Token};
+use crate::world::{Actor, SessionTx, WorldSessionToken as Token};
 
 pub(crate) struct SessionOwnership {
     token: Token,
@@ -116,13 +116,20 @@ impl Coordinator {
         realm_account_of(owner.as_ref(), local_account.as_ref())
     }
 
-    pub(crate) fn session_actor(&self, guid: u64) -> SessionActor {
+    /// `actor` acting under this handle's Account Claim.
+    pub(crate) fn session_actor(&self, actor: Actor) -> SessionActor {
+        self.signed_actor(actor.guid())
+    }
+
+    /// The bound owner's Character, for Durable Requests the Gateway makes on the World Session's
+    /// behalf rather than a client's. Guid 0 when no session is bound.
+    pub(crate) fn owner_actor(&self) -> SessionActor {
+        self.signed_actor(self.2.as_ref().map_or(0, |owner| owner.character_guid))
+    }
+
+    fn signed_actor(&self, guid: u64) -> SessionActor {
         SessionActor {
-            guid: if guid == 0 {
-                self.2.as_ref().map_or(0, |owner| owner.character_guid)
-            } else {
-                guid
-            },
+            guid,
             ownership: self.2.as_ref().map(|owner| wire(owner.token)),
         }
     }
@@ -556,8 +563,10 @@ mod tests {
             old.2.clone(),
         );
         let transfer_id = crate::world::transfer::transfer_id_for(1);
-        winner
-            .begin_transfer(&crate::world::transfer::TransferPlan {
+        crate::world::TransferStore::begin_transfer(
+            winner,
+            Actor::new(1).unwrap(),
+            &crate::world::transfer::TransferPlan {
                 transfer_id,
                 character_guid: 1,
                 dest_map_id: 0,
@@ -566,8 +575,9 @@ mod tests {
                 dest_y: 100.0,
                 dest_z: 20.0,
                 dest_o: 0.0,
-            })
-            .unwrap();
+            },
+        )
+        .unwrap();
         assert!(crate::durable_test_support::poll_until(
             Duration::from_secs(5),
             || winner.escrow_row(1).is_some()
@@ -677,10 +687,16 @@ mod tests {
         a.establish_session(account_id, &[7; 40], identity).unwrap();
         let first = a.claim_session(account_id, 1).unwrap();
         let old = a.bind_session(first).unwrap();
-        old.player_login(account_id, 1, crate::codec::WorldEntry::FreshLogin)
-            .unwrap();
+        let character = Actor::new(1).unwrap();
+        crate::world::SessionStore::player_login(
+            &old,
+            account_id,
+            character,
+            crate::codec::WorldEntry::FreshLogin,
+        )
+        .unwrap();
         assert!(matches!(
-            b.delete_character(account_id, 1).unwrap(),
+            crate::world::CharacterStore::delete_character(&b, account_id, character).unwrap(),
             crate::codec::CharDeleteOutcome::Failed
         ));
         assert_eq!(
@@ -690,7 +706,7 @@ mod tests {
             1
         );
         let queued_before_takeover = GwMove {
-            actor: old.session_actor(1),
+            actor: old.session_actor(Actor::new(1).unwrap()),
             opcode: lyracore_shared::opcodes::movement::MSG_MOVE_HEARTBEAT as u16,
             movement_info: vec![],
             x: 500.0,
@@ -720,14 +736,18 @@ mod tests {
         let second = b.claim_session(account_id, 1).unwrap();
         assert!(second.generation > first.generation);
         let winner = b.bind_session(second).unwrap();
-        winner
-            .player_login(account_id, 1, crate::codec::WorldEntry::FreshLogin)
-            .unwrap();
+        crate::world::SessionStore::player_login(
+            &winner,
+            account_id,
+            character,
+            crate::codec::WorldEntry::FreshLogin,
+        )
+        .unwrap();
         old.release_session(first).unwrap();
         old.release_session(first).unwrap();
         let batch = super::super::movement_batch::MovementBatch::new();
         batch.push(GwMove {
-            actor: winner.session_actor(1),
+            actor: winner.session_actor(Actor::new(1).unwrap()),
             x: 100.0,
             move_time_ms: 100,
             ..queued_before_takeover.clone()
@@ -745,7 +765,8 @@ mod tests {
             fixture.query_rows("SELECT x,last_move_ms FROM game_world_entity WHERE guid = 1");
         assert_eq!(entity[0]["x"].parse::<f32>().unwrap(), 100.0);
         assert_eq!(entity[0]["last_move_ms"], "100");
-        let stale = old.stop_attack(account_id, 1).unwrap_err();
+        let stale =
+            crate::world::MeleeActionStore::stop_attack(&old, Actor::new(1).unwrap()).unwrap_err();
         assert!(
             stale.to_string().contains("STALE_WORLD_SESSION"),
             "{stale:#}"

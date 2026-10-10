@@ -1090,6 +1090,7 @@ fn inbound_movement_is_recorded_under_its_opcode() {
         WorldFake {
             session: SessionState {
                 entity_in_world: true,
+                login_entity: Some(warrior_entity()),
                 ..base.session
             },
             ..base
@@ -1102,7 +1103,11 @@ fn inbound_movement_is_recorded_under_its_opcode() {
         run_world_session(server_end, server_store.clone()).unwrap();
     });
 
-    let (mut c_enc, _c_dec) = client_handshake(&mut client, "TESTER", K);
+    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
+    CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    drain_world_entry(&mut client, &mut c_dec);
     let info = MovementInfo {
         flags: MovementInfo_MovementFlags::empty(),
         timestamp: 12345,
@@ -1150,6 +1155,7 @@ fn a_movement_packet_for_a_despawned_entity_never_kills_the_session() {
             },
             session: SessionState {
                 entity_presence: Some(entity_presence.clone()),
+                login_entity: Some(warrior_entity()),
                 ..base.session
             },
             ..base
@@ -1160,7 +1166,11 @@ fn a_movement_packet_for_a_despawned_entity_never_kills_the_session() {
     let server_store = store.clone();
     let server = std::thread::spawn(move || run_world_session(server_end, server_store.clone()));
 
-    let (mut c_enc, _c_dec) = client_handshake(&mut client, "TESTER", K);
+    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
+    CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    drain_world_entry(&mut client, &mut c_dec);
     let beat = |t: u32| MSG_MOVE_HEARTBEAT_Client {
         info: MovementInfo {
             flags: MovementInfo_MovementFlags::empty(),
@@ -1232,6 +1242,7 @@ fn a_reappearing_entity_resets_the_movement_desync_tolerance() {
         WorldFake {
             session: SessionState {
                 entity_presence: Some(present.clone()),
+                login_entity: Some(warrior_entity()),
                 ..base.session
             },
             ..base
@@ -1240,7 +1251,11 @@ fn a_reappearing_entity_resets_the_movement_desync_tolerance() {
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || run_world_session(server_end, server_store.clone()));
-    let (mut c_enc, _c_dec) = client_handshake(&mut client, "TESTER", K);
+    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
+    CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    drain_world_entry(&mut client, &mut c_dec);
     let info = |t| MovementInfo {
         flags: MovementInfo_MovementFlags::empty(),
         timestamp: t,
@@ -1323,7 +1338,8 @@ fn a_movement_failure_that_is_not_a_desync_is_still_session_fatal() {
         WorldFake {
             session: SessionState {
                 entity_in_world: true,
-                movement_error: Some("timed out after 10s".into()),
+                movement_transport_lost: true,
+                login_entity: Some(warrior_entity()),
                 ..base.session
             },
             ..base
@@ -1332,7 +1348,11 @@ fn a_movement_failure_that_is_not_a_desync_is_still_session_fatal() {
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || run_world_session(server_end, server_store.clone()));
-    let (mut c_enc, _c_dec) = client_handshake(&mut client, "TESTER", K);
+    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
+    CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    drain_world_entry(&mut client, &mut c_dec);
     MSG_MOVE_HEARTBEAT_Client {
         info: MovementInfo {
             flags: MovementInfo_MovementFlags::empty(),
@@ -1353,7 +1373,11 @@ fn a_movement_failure_that_is_not_a_desync_is_still_session_fatal() {
         .join()
         .unwrap()
         .expect_err("a non-desync movement failure must still end the session");
-    assert!(format!("{err:#}").contains("timed out"), "{err:#}");
+    assert_eq!(
+        crate::stdb::classify(&err),
+        crate::stdb::DurableFailure::TransportLoss,
+        "{err:#}"
+    );
 }
 
 #[test]
@@ -2000,11 +2024,11 @@ fn reducer_transport_loss_ends_an_admitted_session_and_frees_one_queue_seat() {
                 login_entity: Some(warrior_entity()),
                 // The same dead transport makes leave-world cleanup unreachable. Teardown is best-effort,
                 // but the client session and its admission seat must not wait for that reducer.
-                logout_error: Some("transport disconnected".into()),
+                logout_transport_lost: true,
                 ..base.session
             },
             combat: CombatState {
-                set_target_error: Some("transport disconnected".into()),
+                set_target_transport_lost: true,
             },
             ..base
         }
@@ -2041,7 +2065,10 @@ fn reducer_transport_loss_ends_an_admitted_session_and_frees_one_queue_seat() {
         .recv_timeout(std::time::Duration::from_secs(1))
         .expect("transport loss must end the session promptly")
         .expect_err("a disconnected reducer transport must end the world session");
-    assert!(format!("{err:#}").contains("transport disconnected"));
+    assert_eq!(
+        crate::stdb::classify(&err),
+        crate::stdb::DurableFailure::TransportLoss
+    );
     assert!(
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).is_err(),
         "the world socket closes after the fatal reducer result"
@@ -2276,4 +2303,25 @@ fn closing_a_world_session_interrupts_a_full_socket_without_draining_its_queue()
         .is_err());
     assert!(matches!(queued.try_recv().unwrap(), Outbound::Raw { .. }));
     writer.join().unwrap();
+}
+
+/// A refused addon-bridge command is dropped and the World Session continues; a Transport Loss
+/// leaves its outcome unknown and ends the session.
+#[test]
+fn an_addon_command_refusal_is_dropped_and_a_transport_loss_ends_the_session() {
+    let conn = in_world_conn(42, 1);
+    let text = "STC\tv1|example.order|same|1/1|follow|77";
+    let answering = |error: fn(&str) -> crate::stdb::ReducerCallError| WorldFake {
+        session: SessionState {
+            client_command_error: Some(error),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let refusing = answering(|op| crate::stdb::ReducerCallError::refused(op, "UNKNOWN_COMMAND"));
+    assert!(handle_addon_message(&refusing, &conn, text).is_ok());
+
+    let lost = answering(crate::stdb::ReducerCallError::transport_lost);
+    assert!(handle_addon_message(&lost, &conn, text).is_err());
 }

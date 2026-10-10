@@ -42,15 +42,23 @@ The identity that publishes and owns the shards, and the only caller of Gateway 
 A `gw_*` reducer the Operator calls on a character's behalf, with the Actor named by guid.
 
 **Actor**:
-The guid a Gateway Verb acts as.
+The Character a Gateway Verb acts as. In the Gateway it is the `Actor` type, a nonzero guid.
+`Actor::new` returns `None` for guid 0, so no request acts as guid 0. The Coordinator signs an Actor
+into the `SessionActor` a reducer receives.
 
 **Gate**:
 A rule that refuses a request. Gates live in the Module, except the realm-wide reads only the Gateway can perform (presence, name resolution, loot-roll fan-out).
 _Avoid_: validation, guard
 
 **Refusal**:
-A Gate saying no to a Durable Request. An expected gameplay outcome, not a transport failure.
+A Gate saying no to a Durable Request. An expected gameplay outcome, not a Transport Loss.
 _Avoid_: reject, deny, error (for gameplay refusals)
+
+**Transport Loss**:
+A failed Durable Read or Durable Request that is not a Refusal: the transport dropped, the call
+timed out, or the send failed. Its durable outcome is unknown, so it ends the World Session and the
+client logs in again from durable state.
+_Avoid_: transport failure, fatal error, disconnect
 
 **Durable Request**:
 A reducer call the Gateway makes that changes Module state.

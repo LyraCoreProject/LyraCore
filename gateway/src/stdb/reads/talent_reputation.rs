@@ -8,22 +8,6 @@ use super::super::bindings::*;
 use super::super::connection::Coordinator;
 
 impl Coordinator {
-    /// The player's persisted reputation standings as `(reputation_index, standing,
-    /// at_war)` triples — chained into the login `SMSG_INITIALIZE_FACTIONS` so a relog carries the
-    /// real standing + the At-War checkbox instead of the all-neutral stub. Rows with
-    /// `reputation_index < 0` (stale pre-migration filler) are skipped — there is no slot to
-    /// address. RLS-bypassed read, like `player_learned_spells`.
-    pub fn player_reputations(&self, player_guid: u64) -> Result<Vec<(i32, i32, bool)>> {
-        let guard = self.0.coord();
-        let db = &guard.conn.db;
-        Ok(db
-            .game_player_reputation()
-            .iter()
-            .filter(|r| r.character_guid == player_guid && r.reputation_index >= 0)
-            .map(|r| (r.reputation_index, r.standing, r.at_war))
-            .collect())
-    }
-
     /// Does `npc_guid` REFUSE to interact with `player_guid` (vanilla
     /// `Unit::GetReactionTo` for the gossip/vendor/trainer/questgiver windows)? The NPC's
     /// faction_template resolves to its parent faction:
@@ -66,108 +50,6 @@ impl Coordinator {
             return Ok(false);
         };
         Ok(faction_template_hostile(&npc_ft, &player_ft))
-    }
-
-    /// Look up the static `Talent` metadata for `talent_id` (from the coordinator's `game_talent` cache).
-    /// Returns `None` if the talent isn't seeded (the dispatch treats an unknown talent as a noop).
-    pub fn talent_by_id(&self, talent_id: u32) -> Option<Talent> {
-        self.0
-            .coord()
-            .conn
-            .db
-            .game_talent()
-            .iter()
-            .find(|t| t.talent_id == talent_id)
-    }
-
-    /// Sum of the character's spent talent ranks (`game_character_talent`, coordinator RLS-bypassed).
-    /// Non-zero gates the post-CREATE login correction of `PLAYER_CHARACTER_POINTS1` (the CREATE's
-    /// formula counts points EARNED only — see `codec/entity.rs`).
-    pub fn talent_points_spent(&self, character_guid: u64) -> u32 {
-        let guard = self.0.coord();
-        guard
-            .conn
-            .db
-            .game_character_talent()
-            .iter()
-            .filter(|t| t.character_guid == character_guid)
-            .map(|t| t.rank as u32)
-            .sum()
-    }
-
-    /// Talent-pane sync data read AFTER a successful `learn_talent` (the blocking reducer call
-    /// returns with the cache already consistent): `(teach_spell, superseded_prev, points_remaining)`.
-    /// `teach_spell` = the rank-spell the module just put in the spellbook — the 1.12 TalentFrame
-    /// derives a talent's shown rank from which rank-spell is KNOWN, so this must relay live as
-    /// SMSG_LEARNED_SPELL or the pane freezes until relog; 0 when the module taught nothing (mirror
-    /// of `talent::apply_talent_rank`'s game_spell-existence gate). `superseded_prev` = the previous
-    /// rank's now-replaced spell (drives SMSG_SUPERCEDED_SPELL; 0 for rank 1 / same-spell demo
-    /// trees). `points_remaining` = earned (level−9, floor 0) minus spent — the live
-    /// `PLAYER_CHARACTER_POINTS1` value. Callers may pass `talent_id = 0` to get just the points.
-    pub fn talent_pane_sync(&self, character_guid: u64, talent_id: u32) -> (u32, u32, u32) {
-        let guard = self.0.coord();
-        let db = &guard.conn.db;
-        let level = db
-            .game_world_entity()
-            .guid()
-            .find(&character_guid)
-            .map(|e| e.level)
-            .unwrap_or(0);
-        let spent: u32 = db
-            .game_character_talent()
-            .iter()
-            .filter(|t| t.character_guid == character_guid)
-            .map(|t| t.rank as u32)
-            .sum();
-        let remaining = (level as i32 - 9).max(0) as u32;
-        let remaining = remaining.saturating_sub(spent);
-        let Some(t) = db.game_talent().iter().find(|t| t.talent_id == talent_id) else {
-            return (0, 0, remaining);
-        };
-        let rank = db
-            .game_character_talent()
-            .iter()
-            .find(|r| r.character_guid == character_guid && r.talent_id == talent_id)
-            .map(|r| r.rank)
-            .unwrap_or(0);
-        let new_spell = pick_rank_spell(rank, &t);
-        let prev_spell = if rank >= 2 {
-            pick_rank_spell(rank - 1, &t)
-        } else {
-            0
-        };
-        // Mirror the module's teach gate: apply_talent_rank only puts the rank-spell in the book
-        // when it exists in game_spell (an unimported rank-spell is skipped there — sending
-        // LEARNED for it would desync the client book from the server).
-        let teach = if new_spell != 0 && db.game_spell().spell_id().find(&new_spell).is_some() {
-            new_spell
-        } else {
-            0
-        };
-        let superseded = if teach != 0 && prev_spell != 0 && prev_spell != teach {
-            prev_spell
-        } else {
-            0
-        };
-        (teach, superseded, remaining)
-    }
-}
-
-/// Mirror of the module's `talent::pick_rank_spell`: rank N's spell from the per-rank columns
-/// (`rank_spell_2..5`), a 0 column falling back to `spell_id` (the demo tree scales ONE spell by
-/// rank; the imported tree has a distinct spell per rank).
-fn pick_rank_spell(rank: u8, t: &Talent) -> u32 {
-    let s = match rank {
-        2 => t.rank_spell_2,
-        3 => t.rank_spell_3,
-        4 => t.rank_spell_4,
-        5 => t.rank_spell_5,
-        _ => t.spell_id,
-    };
-    if s != 0 {
-        s
-    } else {
-        t.spell_id
     }
 }
 

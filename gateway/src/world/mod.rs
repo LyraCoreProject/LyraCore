@@ -35,6 +35,7 @@ use wow_world_messages::vanilla::{
     SMSG_SPIRIT_HEALER_CONFIRM,
 };
 
+mod actor;
 mod chat_flood;
 mod coalesce;
 pub(crate) mod guild_fee;
@@ -51,6 +52,7 @@ mod store;
 pub mod transfer;
 pub mod whisper;
 mod who;
+pub(crate) use actor::Actor;
 use coalesce::CoalesceState;
 pub(crate) use handlers::{
     character_facts, dispatch_meeting_stone_action, reconcile_deleted_guild_characters,
@@ -71,13 +73,14 @@ use handlers::{
     CMSG_AUCTION_LIST_ITEMS_OPCODE,
 };
 pub(crate) use handlers::{
-    member_stats_tick, zone_weather_message, AuctionBrowseRequest, AuctionPage, AuctionQuery,
-    CancelAuctionOutcome, CancelAuctionRequest, ChannelOutcome, ChannelRequest, ChannelRoster,
-    CharacterFacts, ChatOutcome, CreateAuctionOutcome, CreateAuctionRequest, GuildEventSnapshot,
-    GuildOutcome, GuildRequest, ItemActionResult, LootActionStatus, LootWindowRefusal,
-    LootWindowRequestStatus, MeetingStoneOutcome, MemberPresence, MemberStatsRecord,
-    MemberStatsStore, PlaceBidOutcome, PlaceBidRequest, RealmChatRequest, SeekerFacts,
-    SpeakerFacts, TrainerBuyOutcome, WeatherStore, WhisperRequest, WhisperTargetFacts,
+    member_stats_tick, resolve_online_character, zone_weather_message, AuctionBrowseRequest,
+    AuctionHousePolicy, AuctionInteraction, AuctionPage, AuctionQuery, CancelAuctionOutcome,
+    CancelAuctionRequest, ChannelOutcome, ChannelRequest, ChannelRoster, CharacterFacts,
+    ChatOutcome, CreateAuctionOutcome, CreateAuctionRequest, GuildEventSnapshot, GuildOutcome,
+    GuildRequest, ItemActionResult, LootActionStatus, LootWindowRefusal, LootWindowRequestStatus,
+    MeetingStoneOutcome, MemberPresence, MemberStatsRecord, MemberStatsStore, PlaceBidOutcome,
+    PlaceBidRequest, RealmChatRequest, ResolvedTarget, SeekerFacts, SpeakerFacts,
+    TrainerBuyOutcome, WeatherStore, WhisperRequest, WhisperTargetFacts,
 };
 pub(crate) use handlers::{
     AuctionActionStore, BankStore, CastStore, ChannelActionStore, CharacterStore, ChatActionStore,
@@ -1107,7 +1110,7 @@ fn run_world_session_with_queue_and_deadline<S: DuplexStream, C: DeadlineClock>(
                         addon_refill_at = now;
                         if addon_tokens >= 1.0 {
                             addon_tokens -= 1.0;
-                            handle_addon_message(&*conn.store.current(), &conn, &text);
+                            handle_addon_message(&*conn.store.current(), &conn, &text)?;
                         } else if addon_drop_logged_at
                             .is_none_or(|t| now.duration_since(t).as_secs() >= 60)
                         {
@@ -1221,22 +1224,36 @@ fn speaker_race<St: ChatActionStore + ?Sized>(store: &St, character_guid: u64) -
 /// Route one bridge-prefixed addon chat frame: parse the `STC` v1 envelope and forward to the
 /// module's `client_command` reducer as the player. The caller already checked the prefix; a
 /// malformed envelope past that point still drops silently-with-a-debug-line (a truncated or
-/// hand-edited frame is not session-fatal); reducer errors log and drop the same way.
-fn handle_addon_message<St: SessionStore + ?Sized>(store: &St, conn: &WorldConn, text: &str) {
+/// hand-edited frame is not session-fatal), and so does a frame outside the world or a Refusal.
+/// A Transport Loss ends the World Session.
+fn handle_addon_message<St: SessionStore + ?Sized>(
+    store: &St,
+    conn: &WorldConn,
+    text: &str,
+) -> Result<()> {
     let Some((cmd, payload)) = codec::addon::parse_bridge_envelope(text) else {
         log::debug!("addon bridge: non-STC or malformed frame dropped: {text:?}");
-        return;
+        return Ok(());
     };
-    if let Err(e) = store.client_command(
-        conn.account_id,
-        social::self_guid(conn).unwrap_or(0),
-        cmd.clone(),
-        payload,
-    ) {
+    let Some(actor) = social::self_actor(conn) else {
         log::info!(
-            "addon bridge: command {cmd:?} from account {} failed: {e:#}",
+            "addon bridge: command {cmd:?} from account {} dropped outside the world",
             conn.account_id
         );
+        return Ok(());
+    };
+    match store.client_command(actor, cmd.clone(), payload) {
+        Ok(()) => Ok(()),
+        Err(e) => match crate::stdb::classify(&e) {
+            crate::stdb::DurableFailure::Refusal { .. } => {
+                log::info!(
+                    "addon bridge: command {cmd:?} from account {} refused: {e:#}",
+                    conn.account_id
+                );
+                Ok(())
+            }
+            crate::stdb::DurableFailure::TransportLoss => Err(e),
+        },
     }
 }
 
@@ -1726,12 +1743,12 @@ fn forward_movement<St: SessionStore + ?Sized>(
     info: &MovementInfo,
 ) -> Result<()> {
     // The shared-call path names the mover by guid instead of by connection.
-    // Movement only flows in-world, so the guid is always known here; the store rejects 0.
     let self_guid = match &conn.state {
         WorldState::InWorld(iw) => iw.self_guid,
         _ => 0,
     };
-    if !store.entity_in_world(self_guid) {
+    let in_world = store.entity_in_world(self_guid);
+    let Some(actor) = Actor::new(self_guid).filter(|_| in_world) else {
         conn.move_desync_drops += 1;
         if conn.move_desync_drops > MOVE_DESYNC_TOLERANCE {
             let e = anyhow!("player not in world (guid {self_guid})");
@@ -1749,9 +1766,9 @@ fn forward_movement<St: SessionStore + ?Sized>(
             conn.move_desync_drops
         );
         return Ok(());
-    }
+    };
     conn.move_desync_drops = 0;
-    store.movement_update(conn.account_id, self_guid, opcode, info)?;
+    store.movement_update(actor, opcode, info)?;
     // AOI: recenter this player's grid-scoped entity subscription if they crossed a cell. No-op
     // when AOI is disabled (no tracker) or the player stayed in-cell. Same-map (the tracker holds
     // the login map; teleport/zone changes re-anchor in a later phase).

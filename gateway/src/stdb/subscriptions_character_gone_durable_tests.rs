@@ -2,7 +2,9 @@ use super::*;
 use crate::accept::BlockingTaskCapacity;
 use crate::config::GatewayConfig;
 use crate::durable_test_support::{poll_until, Standalone, POLL_TIMEOUT};
+use crate::realm_core::RealmDb as _;
 use crate::world::party::PartyOutcome;
+use crate::world::{Actor, PartyStore};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -232,25 +234,53 @@ fn another_gateway_waits_for_the_transfer_then_cleans_the_deleted_character() {
     use lyracore_shared::group::realm_op;
     assert_eq!(
         realm
-            .realm_group_op(realm_op::INVITE, 1, INSTANCES_SURVIVOR, 0, 0, 0)
+            .realm_group_op(
+                realm_op::INVITE,
+                Actor::new(1).unwrap(),
+                INSTANCES_SURVIVOR,
+                0,
+                0,
+                0
+            )
             .unwrap(),
         PartyOutcome::Ran
     );
     assert_eq!(
         realm
-            .realm_group_op(realm_op::ACCEPT, INSTANCES_SURVIVOR, 0, 0, 0, 0)
+            .realm_group_op(
+                realm_op::ACCEPT,
+                Actor::new(INSTANCES_SURVIVOR).unwrap(),
+                0,
+                0,
+                0,
+                0
+            )
             .unwrap(),
         PartyOutcome::Ran
     );
     assert_eq!(
         realm
-            .realm_group_op(realm_op::INVITE, 1, OTHER_SURVIVOR, 0, 0, 0)
+            .realm_group_op(
+                realm_op::INVITE,
+                Actor::new(1).unwrap(),
+                OTHER_SURVIVOR,
+                0,
+                0,
+                0
+            )
             .unwrap(),
         PartyOutcome::Ran
     );
     assert_eq!(
         realm
-            .realm_group_op(realm_op::ACCEPT, OTHER_SURVIVOR, 0, 0, 0, 0)
+            .realm_group_op(
+                realm_op::ACCEPT,
+                Actor::new(OTHER_SURVIVOR).unwrap(),
+                0,
+                0,
+                0,
+                0
+            )
             .unwrap(),
         PartyOutcome::Ran
     );
@@ -369,7 +399,7 @@ fn another_gateway_waits_for_the_transfer_then_cleans_the_deleted_character() {
     assert!(poll_until(POLL_TIMEOUT, || {
         reconciliation_is_idle(&observer)
             && realm.group_roster(OTHER_SURVIVOR).is_none()
-            && realm.group_roster_revision(group_id) > survivor_revision
+            && realm.group_roster_revision(group_id).unwrap() > survivor_revision
             && world
                 .world_shards()
                 .into_iter()

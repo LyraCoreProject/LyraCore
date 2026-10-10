@@ -8,6 +8,7 @@
 //! render their own copies from the same `codec` builders these functions use.
 
 use super::super::*;
+use crate::stdb::{classify, DurableFailure};
 use wow_world_messages::vanilla::QuestItem;
 
 /// The durable reads and reducer calls the quest family needs, in the seam's own vocabulary so it
@@ -30,13 +31,7 @@ pub(crate) trait QuestActionStore: Send + Sync {
 
     /// Open the quest log row for `quest_id` offered by `giver_guid`. The module gates it, so a
     /// refusal here is a gameplay answer, not a broken session.
-    fn accept_quest(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        giver_guid: u64,
-        quest_id: u32,
-    ) -> Result<()>;
+    fn accept_quest(&self, actor: Actor, giver_guid: u64, quest_id: u32) -> Result<()>;
 
     /// The quest the item in `slot` starts, as `(item instance guid, quest id)`. `None` when the
     /// item starts no quest — an item is its own quest giver, hence the instance guid.
@@ -48,8 +43,7 @@ pub(crate) trait QuestActionStore: Send + Sync {
     /// Escrow in the same transaction.
     fn turn_in_quest(
         &self,
-        account_id: u64,
-        self_guid: u64,
+        actor: Actor,
         giver_guid: u64,
         quest_id: u32,
         reward_index: u32,
@@ -62,82 +56,16 @@ pub(crate) trait QuestActionStore: Send + Sync {
 
     /// Abandon an active quest (`CMSG_QUESTLOG_REMOVE_QUEST`). The module deletes the quest-log row;
     /// the relay clears the slot.
-    fn abandon_quest(&self, account_id: u64, self_guid: u64, quest_id: u32) -> Result<()>;
+    fn abandon_quest(&self, actor: Actor, quest_id: u32) -> Result<()>;
 
     /// Share `quest_id` with the caller's party (`CMSG_PUSHQUESTTOPARTY`). The module validates
     /// grouped + actively-on-the-quest and pushes the per-member `QUEST_SHARE`/`QUEST_PUSH_RESULT`
     /// events itself; a gameplay `Err` is per-action, not session-fatal.
-    fn push_quest(&self, account_id: u64, self_guid: u64, quest_id: u32) -> Result<()>;
+    fn push_quest(&self, actor: Actor, quest_id: u32) -> Result<()>;
 
     /// `(taken, rewarded)` for `quest_id` in `player_guid`'s quest log — feeds the
     /// QUEST_TAKEN/QUEST_REWARDED gossip option conditions.
     fn quest_status(&self, player_guid: u64, quest_id: u32) -> (bool, bool);
-}
-
-impl QuestActionStore for crate::stdb::Coordinator {
-    fn giver_quest_evals(
-        &self,
-        giver_guid: u64,
-        player_guid: u64,
-    ) -> Result<Vec<codec::GiverQuestEval>> {
-        crate::stdb::Coordinator::quest_giver_evals(self, giver_guid, player_guid)
-    }
-
-    fn quest_detail_view(&self, quest_id: u32) -> Result<Option<codec::QuestDetailView>> {
-        crate::stdb::Coordinator::quest_detail(self, quest_id)
-    }
-
-    fn giver_refuses_interaction(&self, giver_guid: u64, player_guid: u64) -> Result<bool> {
-        crate::stdb::Coordinator::npc_refuses_interaction(self, giver_guid, player_guid)
-    }
-
-    fn accept_quest(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        giver_guid: u64,
-        quest_id: u32,
-    ) -> Result<()> {
-        crate::stdb::Coordinator::accept_quest(self, account_id, self_guid, giver_guid, quest_id)
-    }
-
-    fn item_start_quest(&self, owner_guid: u64, slot: u8) -> Option<(u64, u32)> {
-        crate::stdb::Coordinator::item_start_quest(self, owner_guid, slot)
-    }
-
-    fn turn_in_quest(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        giver_guid: u64,
-        quest_id: u32,
-        reward_index: u32,
-    ) -> Result<()> {
-        crate::stdb::Coordinator::turn_in_quest(
-            self,
-            account_id,
-            self_guid,
-            giver_guid,
-            quest_id,
-            reward_index,
-        )
-    }
-
-    fn player_quest_log(&self, player_guid: u64) -> Result<Vec<codec::update_mask::QuestLogSlot>> {
-        crate::stdb::Coordinator::player_quest_log(self, player_guid)
-    }
-
-    fn abandon_quest(&self, account_id: u64, self_guid: u64, quest_id: u32) -> Result<()> {
-        crate::stdb::Coordinator::abandon_quest(self, account_id, self_guid, quest_id)
-    }
-
-    fn push_quest(&self, account_id: u64, self_guid: u64, quest_id: u32) -> Result<()> {
-        crate::stdb::Coordinator::push_quest(self, account_id, self_guid, quest_id)
-    }
-
-    fn quest_status(&self, player_guid: u64, quest_id: u32) -> (bool, bool) {
-        crate::stdb::Coordinator::quest_status(self, player_guid, quest_id)
-    }
 }
 
 /// Who is asking. `self_guid` is `None` before world entry — a questgiver can only be clicked
@@ -160,20 +88,16 @@ pub(crate) enum QuestActionOutcome {
     PassThrough(ClientOpcodeMessage),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum QuestActionErrorClass {
-    GameplayRefusal,
-    Fatal,
-}
-
-fn classify_quest_action_error(error: &anyhow::Error) -> QuestActionErrorClass {
-    if error
-        .chain()
-        .any(|cause| cause.to_string().contains("reducer transport disconnected"))
-    {
-        QuestActionErrorClass::Fatal
-    } else {
-        QuestActionErrorClass::GameplayRefusal
+/// A Refusal of a best-effort quest request is logged and dropped. A Transport Loss ends the
+/// World Session.
+fn ignore_refusal(result: Result<()>, operation: &str, account_id: u64) -> Result<()> {
+    match result {
+        Err(e) if matches!(classify(&e), DurableFailure::TransportLoss) => Err(e),
+        Err(e) => {
+            log::debug!("world: {operation} ignored (account {account_id}): {e}");
+            Ok(())
+        }
+        Ok(()) => Ok(()),
     }
 }
 
@@ -347,9 +271,10 @@ pub(crate) fn dispatch_quest_action<St: QuestActionStore + ?Sized>(
     player: QuestActionPlayer,
     msg: ClientOpcodeMessage,
 ) -> Result<QuestActionOutcome> {
-    let Some(self_guid) = player.self_guid else {
+    let Some(actor) = player.self_guid.and_then(Actor::new) else {
         return Ok(QuestActionOutcome::PassThrough(msg));
     };
+    let self_guid = actor.guid();
     match msg {
         // The client polls each nearby questgiver for its overhead icon (`!` available / `?` turn-in).
         ClientOpcodeMessage::CMSG_QUESTGIVER_STATUS_QUERY(q) => {
@@ -366,22 +291,7 @@ pub(crate) fn dispatch_quest_action<St: QuestActionStore + ?Sized>(
         // QUESTGIVER GameObject reaches the same `quest_giver_menu` helper from session dispatch.
         ClientOpcodeMessage::CMSG_QUESTGIVER_HELLO(h) => {
             let giver = h.guid.guid();
-            let refuses = match store.giver_refuses_interaction(giver, self_guid) {
-                Ok(refuses) => refuses,
-                // The gate fails open — missing standing data must not lock a player out of a
-                // giver — but a dead reducer transport is not missing data and ends the session.
-                Err(e)
-                    if classify_quest_action_error(&e)
-                        == QuestActionErrorClass::GameplayRefusal =>
-                {
-                    log::debug!(
-                        "world: questgiver {giver} interaction gate unavailable (account {}): {e}",
-                        player.account_id
-                    );
-                    false
-                }
-                Err(e) => return Err(e),
-            };
+            let refuses = store.giver_refuses_interaction(giver, self_guid)?;
             Ok(QuestActionOutcome::Handled {
                 outbound: if refuses {
                     Vec::new()
@@ -411,19 +321,11 @@ pub(crate) fn dispatch_quest_action<St: QuestActionStore + ?Sized>(
         // Clicked Accept → the module opens the quest log row (gated). No SMSG on success: the
         // client closes the window itself and the quest-log relay carries the new slot.
         ClientOpcodeMessage::CMSG_QUESTGIVER_ACCEPT_QUEST(a) => {
-            match store.accept_quest(player.account_id, self_guid, a.guid.guid(), a.quest_id) {
-                Ok(()) => {}
-                Err(e)
-                    if classify_quest_action_error(&e)
-                        == QuestActionErrorClass::GameplayRefusal =>
-                {
-                    log::debug!(
-                        "world: accept_quest ignored (account {}): {e}",
-                        player.account_id
-                    );
-                }
-                Err(e) => return Err(e),
-            }
+            ignore_refusal(
+                store.accept_quest(actor, a.guid.guid(), a.quest_id),
+                "accept_quest",
+                player.account_id,
+            )?;
             Ok(QuestActionOutcome::Handled {
                 outbound: Vec::new(),
             })
@@ -439,13 +341,7 @@ pub(crate) fn dispatch_quest_action<St: QuestActionStore + ?Sized>(
         // "Quest Complete" popup for rewards the player did not get. A refusal instead re-opens
         // the current offer when its details remain readable, so the player can correct the choice.
         ClientOpcodeMessage::CMSG_QUESTGIVER_CHOOSE_REWARD(c) => {
-            match store.turn_in_quest(
-                player.account_id,
-                self_guid,
-                c.guid.guid(),
-                c.quest_id,
-                c.reward,
-            ) {
+            match store.turn_in_quest(actor, c.guid.guid(), c.quest_id, c.reward) {
                 // The popup echoes the definition's XP/money/items, so what it shows matches what
                 // the module granted. Unreadable details drop it — the turn-in already happened.
                 Ok(()) => Ok(QuestActionOutcome::TurnedIn {
@@ -458,10 +354,7 @@ pub(crate) fn dispatch_quest_action<St: QuestActionStore + ?Sized>(
                         None => Vec::new(),
                     },
                 }),
-                Err(e)
-                    if classify_quest_action_error(&e)
-                        == QuestActionErrorClass::GameplayRefusal =>
-                {
+                Err(e) if matches!(classify(&e), DurableFailure::Refusal { .. }) => {
                     log::debug!(
                         "world: turn_in_quest refused (quest {}, reward index {}): {e}",
                         c.quest_id,
@@ -492,19 +385,11 @@ pub(crate) fn dispatch_quest_action<St: QuestActionStore + ?Sized>(
                 .into_iter()
                 .find(|s| s.slot == r.slot)
             {
-                match store.abandon_quest(player.account_id, self_guid, s.quest_id) {
-                    Ok(()) => {}
-                    Err(e)
-                        if classify_quest_action_error(&e)
-                            == QuestActionErrorClass::GameplayRefusal =>
-                    {
-                        log::debug!(
-                            "world: abandon_quest ignored (account {}): {e}",
-                            player.account_id
-                        );
-                    }
-                    Err(e) => return Err(e),
-                }
+                ignore_refusal(
+                    store.abandon_quest(actor, s.quest_id),
+                    "abandon_quest",
+                    player.account_id,
+                )?;
             }
             Ok(QuestActionOutcome::Handled {
                 outbound: Vec::new(),
@@ -514,19 +399,11 @@ pub(crate) fn dispatch_quest_action<St: QuestActionStore + ?Sized>(
         // grouped + actively-on-the-quest and pushes the per-member `QUEST_SHARE`/`QUEST_PUSH_RESULT`
         // events itself (relayed by `subscriptions.rs`'s `on_group_event`); no direct SMSG here.
         ClientOpcodeMessage::CMSG_PUSHQUESTTOPARTY(p) => {
-            match store.push_quest(player.account_id, self_guid, p.quest_id) {
-                Ok(()) => {}
-                Err(e)
-                    if classify_quest_action_error(&e)
-                        == QuestActionErrorClass::GameplayRefusal =>
-                {
-                    log::debug!(
-                        "world: push_quest ignored (account {}): {e}",
-                        player.account_id
-                    );
-                }
-                Err(e) => return Err(e),
-            }
+            ignore_refusal(
+                store.push_quest(actor, p.quest_id),
+                "push_quest",
+                player.account_id,
+            )?;
             Ok(QuestActionOutcome::Handled {
                 outbound: Vec::new(),
             })
@@ -538,6 +415,7 @@ pub(crate) fn dispatch_quest_action<St: QuestActionStore + ?Sized>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::stdb::ReducerCallError;
     use std::sync::Mutex;
     use wow_world_messages::vanilla::{
         Guid, QuestGiverStatus, CMSG_PING, CMSG_PUSHQUESTTOPARTY, CMSG_QUESTGIVER_ACCEPT_QUEST,
@@ -552,7 +430,6 @@ mod tests {
     #[derive(Clone, Debug, PartialEq, Eq)]
     enum TurnInCall {
         TurnIn {
-            account_id: u64,
             self_guid: u64,
             giver: u64,
             quest_id: u32,
@@ -566,17 +443,16 @@ mod tests {
         eval_requests: Mutex<Vec<(u64, u64)>>,
         detail_requests: Mutex<Vec<u32>>,
         gate_requests: Mutex<Vec<(u64, u64)>>,
-        accept_requests: Mutex<Vec<(u64, u64, u64, u32)>>,
+        accept_requests: Mutex<Vec<(u64, u64, u32)>>,
         start_quest_requests: Mutex<Vec<(u64, u8)>>,
         turn_in_calls: Mutex<Vec<TurnInCall>>,
         quest_log_requests: Mutex<Vec<u64>>,
-        abandon_requests: Mutex<Vec<(u64, u64, u32)>>,
-        push_requests: Mutex<Vec<(u64, u64, u32)>>,
+        abandon_requests: Mutex<Vec<(u64, u32)>>,
+        push_requests: Mutex<Vec<(u64, u32)>>,
         status_requests: Mutex<Vec<(u64, u32)>>,
         evals: Vec<codec::GiverQuestEval>,
         details: Vec<codec::QuestDetailView>,
         refuses: bool,
-        gate_error: Option<String>,
         accept_error: Option<String>,
         start_quest: Option<(u64, u32)>,
         turn_in_error: Option<String>,
@@ -584,6 +460,20 @@ mod tests {
         abandon_error: Option<String>,
         push_error: Option<String>,
         quest_status: (bool, bool),
+        /// Every durable call and read fails with a Transport Loss.
+        transport_lost: bool,
+    }
+
+    impl InMemoryQuestActions {
+        /// The Module's answer to a durable request: a Refusal with `reason`, or success.
+        fn answer(&self, operation: &str, reason: &Option<String>) -> Result<()> {
+            if self.transport_lost {
+                return Err(ReducerCallError::transport_lost(operation).into());
+            }
+            reason.as_ref().map_or(Ok(()), |reason| {
+                Err(ReducerCallError::refused(operation, reason).into())
+            })
+        }
     }
 
     impl QuestActionStore for InMemoryQuestActions {
@@ -617,26 +507,18 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((giver_guid, player_guid));
-            match &self.gate_error {
-                Some(error) => Err(anyhow::anyhow!("{error}")),
-                None => Ok(self.refuses),
+            if self.transport_lost {
+                return Err(ReducerCallError::transport_lost("npc_refuses_interaction").into());
             }
+            Ok(self.refuses)
         }
 
-        fn accept_quest(
-            &self,
-            account_id: u64,
-            self_guid: u64,
-            giver_guid: u64,
-            quest_id: u32,
-        ) -> Result<()> {
+        fn accept_quest(&self, actor: Actor, giver_guid: u64, quest_id: u32) -> Result<()> {
             self.accept_requests
                 .lock()
                 .unwrap()
-                .push((account_id, self_guid, giver_guid, quest_id));
-            self.accept_error
-                .as_ref()
-                .map_or_else(|| Ok(()), |error| Err(anyhow::anyhow!("{error}")))
+                .push((actor.guid(), giver_guid, quest_id));
+            self.answer("gw_accept_quest", &self.accept_error)
         }
 
         fn item_start_quest(&self, owner_guid: u64, slot: u8) -> Option<(u64, u32)> {
@@ -649,22 +531,18 @@ mod tests {
 
         fn turn_in_quest(
             &self,
-            account_id: u64,
-            self_guid: u64,
+            actor: Actor,
             giver_guid: u64,
             quest_id: u32,
             reward_index: u32,
         ) -> Result<()> {
             self.turn_in_calls.lock().unwrap().push(TurnInCall::TurnIn {
-                account_id,
-                self_guid,
+                self_guid: actor.guid(),
                 giver: giver_guid,
                 quest_id,
                 reward_index,
             });
-            self.turn_in_error
-                .as_ref()
-                .map_or_else(|| Ok(()), |error| Err(anyhow::anyhow!("{error}")))
+            self.answer("gw_turn_in_quest", &self.turn_in_error)
         }
 
         fn player_quest_log(
@@ -675,24 +553,20 @@ mod tests {
             Ok(self.quest_log.clone())
         }
 
-        fn abandon_quest(&self, account_id: u64, self_guid: u64, quest_id: u32) -> Result<()> {
+        fn abandon_quest(&self, actor: Actor, quest_id: u32) -> Result<()> {
             self.abandon_requests
                 .lock()
                 .unwrap()
-                .push((account_id, self_guid, quest_id));
-            self.abandon_error
-                .as_ref()
-                .map_or_else(|| Ok(()), |error| Err(anyhow::anyhow!("{error}")))
+                .push((actor.guid(), quest_id));
+            self.answer("gw_abandon_quest", &self.abandon_error)
         }
 
-        fn push_quest(&self, account_id: u64, self_guid: u64, quest_id: u32) -> Result<()> {
+        fn push_quest(&self, actor: Actor, quest_id: u32) -> Result<()> {
             self.push_requests
                 .lock()
                 .unwrap()
-                .push((account_id, self_guid, quest_id));
-            self.push_error
-                .as_ref()
-                .map_or_else(|| Ok(()), |error| Err(anyhow::anyhow!("{error}")))
+                .push((actor.guid(), quest_id));
+            self.answer("gw_push_quest_to_party", &self.push_error)
         }
 
         fn quest_status(&self, player_guid: u64, quest_id: u32) -> (bool, bool) {
@@ -890,18 +764,6 @@ mod tests {
     }
 
     #[test]
-    fn an_unavailable_interaction_gate_still_opens_the_menu() {
-        let actions = InMemoryQuestActions {
-            gate_error: Some("no reputation row for that faction".into()),
-            ..one_quest(codec::ROLE_START, false, false)
-        };
-
-        let batch = outbound(dispatch_quest_action(&actions, player(), hello(GIVER)).unwrap());
-
-        assert!(matches!(batch.as_slice(), [Outbound::Raw { .. }]));
-    }
-
-    #[test]
     fn a_single_new_quest_opens_its_details_screen_directly() {
         let actions = one_quest(codec::ROLE_START, false, false);
 
@@ -1062,7 +924,7 @@ mod tests {
     // ── Accept ───────────────────────────────────────────────────────────────
 
     #[test]
-    fn accept_requests_the_durable_accept_for_the_account_player_giver_and_quest() {
+    fn accept_requests_the_durable_accept_for_the_player_giver_and_quest() {
         let actions = loaded_quest();
 
         let batch =
@@ -1071,7 +933,7 @@ mod tests {
         assert!(batch.is_empty(), "the client closes the window itself");
         assert_eq!(
             actions.accept_requests.lock().unwrap().as_slice(),
-            &[(7, SELF_GUID, GIVER, QUEST)]
+            &[(SELF_GUID, GIVER, QUEST)]
         );
     }
 
@@ -1091,9 +953,7 @@ mod tests {
     #[test]
     fn a_dead_transport_on_accept_ends_the_session() {
         let actions = InMemoryQuestActions {
-            accept_error: Some(
-                "accept_quest reducer transport disconnected: channel closed".into(),
-            ),
+            transport_lost: true,
             ..loaded_quest()
         };
 
@@ -1102,7 +962,7 @@ mod tests {
             Ok(_) => panic!("a dead reducer transport must end the session"),
         };
 
-        assert!(format!("{error:#}").contains("reducer transport disconnected"));
+        assert!(matches!(classify(&error), DurableFailure::TransportLoss));
     }
 
     // ── The item-started quest ───────────────────────────────────────────────
@@ -1202,7 +1062,7 @@ mod tests {
         );
         assert_eq!(
             actions.abandon_requests.lock().unwrap().as_slice(),
-            &[(7, SELF_GUID, 777)]
+            &[(SELF_GUID, 777)]
         );
     }
 
@@ -1248,9 +1108,7 @@ mod tests {
     fn a_dead_transport_on_abandon_ends_the_session() {
         let actions = InMemoryQuestActions {
             quest_log: vec![log_slot(3, 777)],
-            abandon_error: Some(
-                "abandon_quest reducer transport disconnected: channel closed".into(),
-            ),
+            transport_lost: true,
             ..Default::default()
         };
 
@@ -1259,7 +1117,7 @@ mod tests {
             Ok(_) => panic!("a dead reducer transport must end the session"),
         };
 
-        assert!(format!("{error:#}").contains("reducer transport disconnected"));
+        assert!(matches!(classify(&error), DurableFailure::TransportLoss));
     }
 
     #[test]
@@ -1325,11 +1183,9 @@ mod tests {
     }
 
     #[test]
-    fn reducer_transport_failure_is_session_fatal() {
+    fn a_failed_interaction_gate_read_is_session_fatal() {
         let actions = InMemoryQuestActions {
-            gate_error: Some(
-                "npc_refuses_interaction reducer transport disconnected: channel closed".into(),
-            ),
+            transport_lost: true,
             ..one_quest(codec::ROLE_START, false, false)
         };
 
@@ -1338,7 +1194,7 @@ mod tests {
             Ok(_) => panic!("a dead reducer transport must end the session"),
         };
 
-        assert!(format!("{error:#}").contains("reducer transport disconnected"));
+        assert!(matches!(classify(&error), DurableFailure::TransportLoss));
     }
 
     // ── Pass-through ─────────────────────────────────────────────────────────
@@ -1395,7 +1251,6 @@ mod tests {
 
     fn turn_in_of(reward_index: u32) -> TurnInCall {
         TurnInCall::TurnIn {
-            account_id: 7,
             self_guid: SELF_GUID,
             giver: GIVER,
             quest_id: QUEST,
@@ -1549,9 +1404,7 @@ mod tests {
     #[test]
     fn a_reducer_transport_failure_on_turn_in_is_session_fatal() {
         let actions = InMemoryQuestActions {
-            turn_in_error: Some(
-                "turn_in_quest reducer transport disconnected: channel closed".into(),
-            ),
+            transport_lost: true,
             ..rewarded_turn_in()
         };
 
@@ -1560,7 +1413,7 @@ mod tests {
             Ok(_) => panic!("a dead reducer transport must end the session"),
         };
 
-        assert!(format!("{error:#}").contains("reducer transport disconnected"));
+        assert!(matches!(classify(&error), DurableFailure::TransportLoss));
     }
 
     // ── Party sharing ────────────────────────────────────────────────────────
@@ -1582,7 +1435,7 @@ mod tests {
         );
         assert_eq!(
             actions.push_requests.lock().unwrap().as_slice(),
-            &[(7, SELF_GUID, QUEST)]
+            &[(SELF_GUID, QUEST)]
         );
     }
 
@@ -1602,7 +1455,7 @@ mod tests {
     #[test]
     fn a_dead_transport_on_share_ends_the_session() {
         let actions = InMemoryQuestActions {
-            push_error: Some("push_quest reducer transport disconnected: channel closed".into()),
+            transport_lost: true,
             ..Default::default()
         };
 
@@ -1611,7 +1464,7 @@ mod tests {
             Ok(_) => panic!("a dead reducer transport must end the session"),
         };
 
-        assert!(format!("{error:#}").contains("reducer transport disconnected"));
+        assert!(matches!(classify(&error), DurableFailure::TransportLoss));
     }
 
     // ── The gossip quest section ────────────────────────────────────────────
@@ -1727,8 +1580,14 @@ mod reward_letter_durable_tests {
         let coordinator = runtime.block_on(Coordinator::connect(&cfg)).unwrap();
         assert!(!coordinator.is_sharded());
 
-        QuestActionStore::turn_in_quest(&coordinator, 0, TESTER, GIVER, CARD_QUEST, 0)
-            .expect("the fixture quest is complete");
+        QuestActionStore::turn_in_quest(
+            &coordinator,
+            crate::world::Actor::new(TESTER).unwrap(),
+            GIVER,
+            CARD_QUEST,
+            0,
+        )
+        .expect("the fixture quest is complete");
         crate::world::mail::redrive(&coordinator, TESTER);
 
         assert!(

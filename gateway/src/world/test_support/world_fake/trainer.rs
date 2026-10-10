@@ -8,9 +8,9 @@ pub(crate) struct TrainerState {
     /// Spelled as a refusal so derive-Default (false) keeps every fixture trainer serving; the
     /// trait method reads the negation.
     pub(crate) trainer_refuses_class: bool,
-    /// Recorded `reset_talents` dispatches: (account_id, self_guid, trainer_guid) — the unlearn-talents
+    /// Recorded `reset_talents` dispatches: (actor guid, trainer_guid) — the unlearn-talents
     /// gossip select.
-    pub(crate) reset_talents_calls: std::sync::Mutex<Vec<(u64, u64, u64)>>,
+    pub(crate) reset_talents_calls: std::sync::Mutex<Vec<(u64, u64)>>,
 }
 
 impl TrainerStore for WorldFake {
@@ -32,8 +32,7 @@ impl TrainerStore for WorldFake {
 
     fn buy_trainer_spell(
         &self,
-        _account_id: u64,
-        _self_guid: u64,
+        _actor: Actor,
         _trainer_guid: u64,
         _spell_id: u32,
     ) -> Result<crate::world::TrainerBuyOutcome> {
@@ -46,8 +45,7 @@ impl TrainerStore for WorldFake {
 
     fn set_faction_at_war(
         &self,
-        _account_id: u64,
-        _self_guid: u64,
+        _actor: Actor,
         reputation_index: u32,
         at_war: bool,
     ) -> Result<InteractionOutcome> {
@@ -61,8 +59,7 @@ impl TrainerStore for WorldFake {
 
     fn set_action_button(
         &self,
-        _account_id: u64,
-        _self_guid: u64,
+        _actor: Actor,
         _button: u8,
         _action: u32,
         _action_type: u8,
@@ -78,24 +75,19 @@ impl TrainerStore for WorldFake {
         0 // login stays byte-identical in every existing harness test
     }
 
-    fn learn_talent(&self, _account_id: u64, _self_guid: u64, _talent_id: u32) -> Result<()> {
+    fn learn_talent(&self, _actor: Actor, _talent_id: u32) -> Result<()> {
         Ok(())
     }
 
-    fn reset_talents(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        trainer_guid: u64,
-    ) -> Result<InteractionOutcome> {
+    fn reset_talents(&self, actor: Actor, trainer_guid: u64) -> Result<InteractionOutcome> {
         if let Some(e) = &self.trainer.reset_talents_refusal {
             return Ok(InteractionOutcome::Refused(e.clone()));
         }
-        self.trainer.reset_talents_calls.lock().unwrap().push((
-            account_id,
-            self_guid,
-            trainer_guid,
-        ));
+        self.trainer
+            .reset_talents_calls
+            .lock()
+            .unwrap()
+            .push((actor.guid(), trainer_guid));
         Ok(InteractionOutcome::Done)
     }
 

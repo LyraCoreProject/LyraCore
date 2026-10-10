@@ -2,7 +2,7 @@
 
 use anyhow::{anyhow, Result};
 
-use super::{party, WorldStore};
+use super::{party, Actor, WorldStore};
 
 /// The escrowed cross-shard Transfer steps, and the instance lease a crossing needs.
 pub(crate) trait TransferStore: Send + Sync {
@@ -14,8 +14,9 @@ pub(crate) trait TransferStore: Send + Sync {
     /// the destination there before despawning the entity). `None` = this shard has no row for it.
     fn character_destination(&self, character_guid: u64) -> Option<TransferPlan>;
 
-    /// `begin_transfer` — freeze + serialize + delete the live entity, in one transaction.
-    fn begin_transfer(&self, plan: &TransferPlan) -> Result<()>;
+    /// `begin_transfer` — freeze + serialize + delete the live entity of `character`, the Character
+    /// `plan` names, in one transaction.
+    fn begin_transfer(&self, character: Actor, plan: &TransferPlan) -> Result<()>;
 
     /// Materialise the arrival copy from the carried blob. A session-less crossing binds its exact
     /// source intent identity to the destination fence in the same transaction as the import.
@@ -432,7 +433,9 @@ pub(super) fn run_transfer_injected_for_intent(
         .map(|(intent, token)| (intent, *token));
 
     // 1. FREEZE + SERIALIZE on the source, in one transaction. Idempotent on the transfer id.
-    src.begin_transfer(plan)?;
+    let character = Actor::new(plan.character_guid)
+        .ok_or_else(|| anyhow!("transfer {}: the plan names no Character", plan.transfer_id))?;
+    src.begin_transfer(character, plan)?;
     abort_point(abort_after, "begin_transfer", plan.transfer_id);
 
     // Read the escrow back rather than trusting `plan`: after a resume the row on disk is the

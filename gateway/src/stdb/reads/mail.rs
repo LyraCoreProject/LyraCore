@@ -6,11 +6,9 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use anyhow::Result;
 use spacetimedb_sdk::{Table, TableWithPrimaryKey};
 
 use super::super::bindings::*;
-use super::super::connection::Coordinator;
 
 /// The mail escrow ids each Character holds on one Shard, kept from the `game_mail_escrow` row
 /// callbacks. A drive runs after every quest turn-in, at world entry and at every mailbox visit, so
@@ -38,7 +36,7 @@ impl MailEscrowIndex {
     }
 
     /// The escrow ids `sender_guid` holds, lowest id first.
-    fn of(&self, sender_guid: u64) -> Vec<u64> {
+    pub(in crate::stdb) fn of(&self, sender_guid: u64) -> Vec<u64> {
         self.by_sender
             .get(&sender_guid)
             .map(|ids| ids.iter().copied().collect())
@@ -67,169 +65,6 @@ pub(crate) fn watch_mail_escrows(
         deleted.write().unwrap().remove(row);
     });
     index
-}
-
-fn mail_view(db: &RemoteTables, m: Mail) -> crate::codec::MailView {
-    crate::codec::MailView {
-        id: m.id,
-        sender_guid: m.sender_guid,
-        subject: m.subject,
-        body: m.body,
-        item_entry: m.item_entry,
-        item_stack_count: m.item_stack_count,
-        item_durability: m.item_durability,
-        // The row only ever snapshots CURRENT durability (mail.rs's `ItemSnapshot`); the
-        // true max lives on the attachment's own template, the same read `player_items`
-        // joins for. 0 for no attachment — `entry().find(0)` finds nothing.
-        max_durability: db
-            .game_item_template()
-            .entry()
-            .find(&m.item_entry)
-            .map(|t| t.max_durability)
-            .unwrap_or(0),
-        item_enchant_id: m.item_enchant_id,
-        item_soulbound: m.item_soulbound,
-        random_property_id: m.random_property_id,
-        money: m.money,
-        cod: m.cod,
-        was_read: m.was_read,
-        created_at_secs: m.created_at.to_micros_since_unix_epoch() / 1_000_000,
-        sender_kind: m.sender_kind,
-        sender_entry: m.sender_entry,
-        check_flags: m.check_flags,
-        mail_template_id: m.mail_template_id,
-        // Rounded up to the second. The Gateway compares it with its own clock, which can run
-        // ahead of the Module's, so the Module Gates mark-read, delete, every take, the return
-        // and a COD payment against its own clock again.
-        deliver_secs: m
-            .deliver_micros
-            .saturating_add(999_999)
-            .div_euclid(1_000_000),
-    }
-}
-
-impl Coordinator {
-    /// Every mail addressed to `recipient_guid`, delivered or not, in no set order.
-    /// `codec::build_mail_list` orders the inbox. The SDK exposes only the PK index, so this
-    /// iterates and filters like every other per-owner read here (`player_items`, `player_skills`).
-    pub fn mail_list(&self, recipient_guid: u64) -> Result<Vec<crate::codec::MailView>> {
-        let guard = self.0.coord();
-        let db = &guard.conn.db;
-        Ok(db
-            .game_mail()
-            .iter()
-            .filter(|m| m.recipient_guid == recipient_guid)
-            .map(|m| mail_view(db, m))
-            .collect())
-    }
-
-    /// The mail `mail_id`, delivered or not, by its primary key.
-    pub fn mail_by_id(&self, mail_id: u64) -> Option<crate::codec::MailView> {
-        let guard = self.0.coord();
-        let db = &guard.conn.db;
-        db.game_mail().id().find(&mail_id).map(|m| mail_view(db, m))
-    }
-
-    /// Every mail escrow this database is holding for `sender_guid` — the fences a drive filed and
-    /// never finished.
-    ///
-    /// The one module→gateway data flow the escrow adds, and it exists for the same reason
-    /// `escrowed_transfer` does: the gateway is the only component that can see both databases, so
-    /// re-driving a stalled fence means re-deriving the whole letter from its row. A Character's fresh
-    /// send reads nothing more than its own fence; a Reward Letter, which the Module files at
-    /// turn-in, is always driven from its row. Private table, read through the owner token.
-    ///
-    /// Keyed by `sender_guid`, which on a payout escrow is the PAYEE — the character owed the
-    /// copper either way, and the one whose session is about to re-drive it.
-    pub fn mail_escrows_of(&self, sender_guid: u64) -> Result<Vec<crate::world::mail::HeldEscrow>> {
-        let guard = self.0.coord();
-        let ids = guard.mail_escrows.read().unwrap().of(sender_guid);
-        let escrows = guard.conn.db.game_mail_escrow();
-        Ok(ids
-            .into_iter()
-            .filter_map(|id| escrows.escrow_id().find(&id))
-            .filter_map(|e| {
-                // A row no letter could have written stays held rather than commit as the wrong
-                // letter.
-                let reward = lyracore_shared::mail::RewardHeader::from_columns(
-                    e.sender_kind,
-                    e.sender_entry,
-                    e.mail_template_id,
-                )
-                .map_err(|refusal| {
-                    log::error!("mail escrow {}: not driven: {refusal}", e.escrow_id)
-                })
-                .ok()?;
-                Some((e, reward))
-            })
-            .map(|(e, reward)| crate::world::mail::HeldEscrow {
-                escrow_id: e.escrow_id,
-                recipient_guid: e.recipient_guid,
-                subject: e.subject,
-                body: e.body,
-                money: e.money,
-                postage: e.postage,
-                payout: e.payout,
-                mail_id: e.mail_id,
-                item: crate::world::mail::AttachedItem {
-                    entry: e.item_entry,
-                    stack_count: e.item_stack_count,
-                    durability: e.item_durability,
-                    enchant_id: e.item_enchant_id,
-                    soulbound: e.item_soulbound,
-                    random_property_id: e.random_property_id,
-                    item_text_id: e.item_text_id,
-                },
-                cod: e.cod,
-                delivery_delay_secs: e.delivery_delay_secs,
-                reward,
-            })
-            .collect())
-    }
-
-    /// A copied letter's text, read from `game_item_text` on THIS handle's database. Private table,
-    /// read through the owner token, by its PK — the same shape `mailbox_in_range` uses to resolve
-    /// a gameobject.
-    pub fn item_text(&self, item_text_id: u32) -> Result<Option<String>> {
-        let guard = self.0.coord();
-        Ok(guard
-            .conn
-            .db
-            .game_item_text()
-            .id()
-            .find(&item_text_id)
-            .map(|t| t.text))
-    }
-
-    /// Is `player_guid` standing at the mailbox `mailbox_guid` names?
-    ///
-    /// A PK lookup on `game_gameobject`, then the same map/instance/range check
-    /// `module/src/gameobject.rs::usable_go` applies to a chest. It must STAY a PK lookup:
-    /// `game_gameobject` is spatial, and a scan over a sharded table returns a silent subset, so a
-    /// mailbox availability would depend on which database the session reads.
-    ///
-    /// `false` for an unknown guid, a non-mailbox gameobject, another map or instance, and anything
-    /// out of range — the gate answers the question, and the caller decides what a refusal costs.
-    pub fn mailbox_in_range(&self, mailbox_guid: u64, player_guid: u64) -> Result<bool> {
-        let guard = self.0.coord();
-        let db = &guard.conn.db;
-        let (Some(go), Some(player)) = (
-            db.game_gameobject().guid().find(&mailbox_guid),
-            db.game_world_entity().guid().find(&player_guid),
-        ) else {
-            return Ok(false);
-        };
-        let is_mailbox = db
-            .game_gameobject_template()
-            .entry()
-            .find(&go.template_entry)
-            .is_some_and(|t| t.type_id == lyracore_shared::mail::MAILBOX_GO_TYPE);
-        if !is_mailbox || go.map_id != player.map_id || go.instance_id != player.instance_id {
-            return Ok(false);
-        }
-        let (dx, dy, dz) = (go.x - player.x, go.y - player.y, go.z - player.z);
-        Ok(dx * dx + dy * dy + dz * dz <= lyracore_shared::mail::MAILBOX_RANGE_SQ)
-    }
 }
 
 #[cfg(test)]
