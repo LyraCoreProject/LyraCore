@@ -10,7 +10,7 @@
 //!   - [`pet`]   — the warlock pet system (summon/despawn/follow), riding the creature machinery above
 //!   - [`hunter_pet`] — durable Hunter-pet identity and the completed-tame transition
 //!   - [`pet_progression`] — Hunter-pet XP, levels, live-stat refresh and loyalty
-//!   - [`distraction`] — the Distraction a Distract cast puts on an idle Creature
+//!   - [`distraction`]: the Distraction a Distract cast puts on an idle Creature
 
 mod ai;
 pub(crate) mod cycle;

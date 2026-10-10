@@ -386,8 +386,12 @@ impl IdleSink for CtxWorld<'_> {
             .or_else(|| distraction::expired_facing(self.ctx, guid))
     }
     fn clear_pending_facing(&mut self, guid: u64) {
-        eventai::movement::clear_facing(self.ctx, guid);
-        distraction::end_expired(self.ctx, guid);
+        // Clear only the facing that played, so the other one plays on a later firing.
+        if eventai::movement::facing(self.ctx, guid).is_some() {
+            eventai::movement::clear_facing(self.ctx, guid);
+        } else {
+            distraction::end_expired(self.ctx, guid);
+        }
     }
     fn idle_gait(&self, guid: u64, default: Gait) -> Gait {
         match eventai::movement::intent(self.ctx, guid).map(|intent| intent.walking) {

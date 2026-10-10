@@ -960,20 +960,27 @@ fn check_ground_destination(
     range_yd: u32,
 ) -> Result<(f32, f32, f32), CastRefusal> {
     let Some((x, y, z)) = dest else {
-        return Err(CastRefusal::from(
+        return Err(CastRefusal::new(
+            CastRefusalKind::BadTargets,
             "spell can only target a ground point".to_string(),
         ));
     };
     let dist = distance_3d(caster_at.0, caster_at.1, caster_at.2, x, y, z);
+    check_cast_range("ground point", dist, range_yd)?;
+    Ok((x, y, z))
+}
+
+/// The range Gate shared by a unit target and a ground point: the spell range plus the cast leeway.
+fn check_cast_range(what: &str, dist: f32, range_yd: u32) -> Result<(), CastRefusal> {
     if dist > range_yd as f32 + CAST_RANGE_LEEWAY_YD {
         return Err(CastRefusal::new(
             CastRefusalKind::OutOfRange,
             format!(
-                "ground point out of range ({dist:.1} yd > {range_yd} + {CAST_RANGE_LEEWAY_YD:.1} yd leeway)"
+                "{what} out of range ({dist:.1} yd > {range_yd} + {CAST_RANGE_LEEWAY_YD:.1} yd leeway)"
             ),
         ));
     }
-    Ok((x, y, z))
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1134,15 +1141,7 @@ fn check_cast_gate_suffix(
                 ));
             }
             let dist = distance_3d(caster.x, caster.y, caster.z, target.x, target.y, target.z);
-            if dist > hdr.range_yd as f32 + CAST_RANGE_LEEWAY_YD {
-                return Err(CastRefusal::new(
-                    CastRefusalKind::OutOfRange,
-                    format!(
-                        "target out of range ({dist:.1} yd > {} + {:.1} yd leeway)",
-                        hdr.range_yd, CAST_RANGE_LEEWAY_YD
-                    ),
-                ));
-            }
+            check_cast_range("target", dist, hdr.range_yd)?;
         }
     }
 
@@ -1556,6 +1555,7 @@ mod ground_destination_tests {
     #[test]
     fn a_distract_without_a_ground_point_is_a_bad_target() {
         let refusal = check_ground_destination(CASTER, None, 30).unwrap_err();
+        assert_eq!(refusal.kind, CastRefusalKind::BadTargets);
         assert!(
             refusal.message.contains("only target a ground point"),
             "{refusal}"

@@ -297,7 +297,7 @@ fn aura_interrupt_bits(raw: u32) -> u16 {
 ///   - REQUIRES_BEHIND: Backstab — only castable from the target's rear hemisphere.
 ///   - REQUIRES_STEALTH: Sap — opener; caster must be stealthed (the engine also enforces out-of-combat +
 ///     humanoid for a REQ_STEALTH spell).
-///   - STEALTH_SAFE: Sap, Pick Pocket and Distract — casting keeps the rogue stealthed (vanilla).
+///   - STEALTH_SAFE: Sap, Pick Pocket and Distract. Casting keeps the rogue stealthed (vanilla).
 ///   - REQ_DAGGER: Backstab — only castable with a dagger equipped in the main hand.
 ///
 /// Keyed by NAME so BOTH ranks (the LearnSpell/combo wrapper AND the real spell) carry the flag; the gate
@@ -323,8 +323,8 @@ fn spell_flag_attributes(name: &str) -> u32 {
     if name == "Sap" {
         bits |= SPELL_ATTR_INCAP_OPENER;
     }
-    // STEALTH_SAFE — Sap, Pick Pocket and Distract keep the rogue stealthed when cast (Garrote is NOT
-    // here → it breaks stealth via the cast-path break_stealth chokepoint, correctly revealing the rogue).
+    // STEALTH_SAFE: Sap, Pick Pocket and Distract keep the rogue stealthed. Garrote is not here, so the
+    // cast path's break_stealth reveals the rogue.
     if matches!(name, "Sap" | "Pick Pocket" | "Distract") {
         bits |= SPELL_ATTR_STEALTH_SAFE;
     }
@@ -454,7 +454,7 @@ fn instant_effect_to_kind(effect_id: i32) -> u8 {
         56 => E_SUMMON_PET, // Summon (Summon Imp et al.) — p0 = the summoned creature entry (misc_value)
         62 => E_POWER_BURN, // PowerBurn (Priest Mana Burn) — p1 = EffectMultipleValue*100 (work-items 117)
         83 => E_DUEL,       // Duel — p0 carries the duel-flag gameobject entry
-        69 => E_DISTRACT,   // Distract — the effect amount is the Distraction's length in seconds
+        69 => E_DISTRACT,   // Distract: the effect amount is the Distraction's length in seconds
         33 | 59 => E_OPEN_LOCK, // OpenLock (33) / OpenLockItem (59) — Pick Lock (work-item 119): gateway-intercepted, routed to the pick_lock reducer by kind (Pick Lock 1804 carries the raw OpenLock effect; the item-lock variant 59 covers a lockpick-on-item spell)
         99 => E_DISENCHANT, // Disenchant (13262, work-item 282): gateway-intercepted, routed to the disenchant reducer by kind — the AUTOLEARN enchanting ability. Was falling through to E_SCRIPTED (a no-op).
         80 => E_ADD_COMBO, // AddComboPoints (work-item 101) — the curated Rogue generators (Sinister Strike/Backstab/Gouge/Garrote) carry the generic Dummy effect in-kit and are rescued BY NAME in correct_script_effect_kind below, not via this raw id, so this arm is currently unexercised by the curated kit but correct for any spell that DOES carry the raw AddComboPoints effect

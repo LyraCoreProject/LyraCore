@@ -15,7 +15,7 @@ build, character, and test position.
 - [ ] Select Distract. Confirm the cursor becomes a ground reticle, a point 30 yards away is
       accepted, and a point beyond it gives the out-of-range message.
 - [ ] Cast it at a point 5 yards from an idle Creature. Confirm energy drops by 30, the button shows
-      a 30 second cooldown, and the Rogue stays stealthed if stealthed before the cast.
+      a 30-second cooldown, and the Rogue stays stealthed if stealthed before the cast.
 - [ ] Confirm the Creature turns toward the point. Record whether it snaps or turns smoothly, and
       whether it turns at once.
 - [ ] Confirm it holds that facing for 10 seconds, then turns back to its original facing. Record the

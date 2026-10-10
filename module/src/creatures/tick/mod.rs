@@ -782,6 +782,31 @@ pub(crate) fn stop_where_rendered(ctx: &ReducerContext, mover: &mut WorldEntity)
     );
 }
 
+/// Stop `mover` where the client renders it, then turn it in place to face `point`. The facing row
+/// replaces the stop, so it takes a newer spline id. The caller writes `mover`.
+pub(crate) fn stop_facing(ctx: &ReducerContext, mover: &mut WorldEntity, point: (f32, f32)) {
+    stop_where_rendered(ctx, mover);
+    // A stopped leg is over, so a patrol must not wait for its old ETA.
+    mover.leg_ends_ms = 0;
+    mover.orientation = (point.1 - mover.y).atan2(point.0 - mover.x);
+    let replaced = ctx
+        .db
+        .game_creature_spline()
+        .guid()
+        .find(mover.guid)
+        .map_or(0, |leg| leg.spline_id);
+    emit_facing_spline(
+        ctx,
+        mover.guid,
+        (mover.x, mover.y, mover.z),
+        mover.orientation,
+        next_spline_id(ctx.timestamp.to_micros_since_unix_epoch() as u64, replaced),
+        mover.map_id,
+        mover.instance_id,
+        (mover.grid_x, mover.grid_y),
+    );
+}
+
 /// Move `mover` to where a stop now would leave it on its leg, and return that leg's spline id.
 /// `None` for a mover with no leg, which stays unchanged. The caller writes `mover`.
 fn place_where_rendered(ctx: &ReducerContext, mover: &mut WorldEntity) -> Option<u32> {
@@ -795,7 +820,7 @@ fn place_where_rendered(ctx: &ReducerContext, mover: &mut WorldEntity) -> Option
 
 /// The id for a leg that replaces one with id `previous`. The client ignores an id that does not
 /// exceed the one it replaces, so a second leg in the same millisecond takes `previous + 1`.
-pub(crate) fn next_spline_id(now_micros: u64, previous: u32) -> u32 {
+fn next_spline_id(now_micros: u64, previous: u32) -> u32 {
     ((now_micros / 1000) as u32).max(previous.wrapping_add(1))
 }
 

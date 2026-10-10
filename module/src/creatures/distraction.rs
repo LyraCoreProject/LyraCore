@@ -8,7 +8,7 @@ use lyracore_shared::constants::unit_flags;
 use spacetimedb::{table, ReducerContext, Table};
 
 use super::tick;
-use crate::{game_creature_spawn, game_creature_spline, game_world_entity};
+use crate::{game_creature_spawn, game_world_entity};
 
 #[table(accessor = game_creature_distraction)]
 pub struct CreatureDistraction {
@@ -16,11 +16,6 @@ pub struct CreatureDistraction {
     pub creature_guid: u64,
     /// Epoch milliseconds. Not a `Timestamp`, so a durable test can move it with plain SQL.
     pub ends_ms: u64,
-}
-
-/// The orientation that faces `to` from `from`, in the client's radians.
-fn heading(from: (f32, f32), to: (f32, f32)) -> f32 {
-    (to.1 - from.1).atan2(to.0 - from.0)
 }
 
 /// The effect amount is the length in seconds. A non-positive amount distracts nobody.
@@ -50,12 +45,14 @@ pub(crate) fn distract(
     let Some(mut creature) = entities.guid().find(creature_guid) else {
         return;
     };
-    // Only an idle Creature that can act turns: a fight or crowd control already owns its movement.
-    // It must also see the point, as vmangos requires of an area target at a destination.
+    // Only an idle Creature that can act turns: a fight, the walk home after it, or crowd control
+    // already owns its movement. It must also see the point, as vmangos requires of an area target at
+    // a destination.
     if creature.is_player()
         || creature.dead
         || creature.unit_flags & unit_flags::IN_COMBAT != 0
         || crate::combat::is_engaged(ctx, creature_guid)
+        || super::eventai::movement::returning_home(ctx, creature_guid)
         || crate::spell::is_action_blocked(ctx, creature_guid)
         || !crate::nav::has_los(
             ctx,
@@ -67,26 +64,7 @@ pub(crate) fn distract(
     {
         return;
     }
-    tick::stop_where_rendered(ctx, &mut creature);
-    // A stopped leg is over; the patrol must not wait for its old ETA after the expiry.
-    creature.leg_ends_ms = 0;
-    creature.orientation = heading((creature.x, creature.y), (dest.0, dest.1));
-    let replaced = ctx
-        .db
-        .game_creature_spline()
-        .guid()
-        .find(creature_guid)
-        .map_or(0, |leg| leg.spline_id);
-    tick::emit_facing_spline(
-        ctx,
-        creature_guid,
-        (creature.x, creature.y, creature.z),
-        creature.orientation,
-        tick::next_spline_id(ctx.timestamp.to_micros_since_unix_epoch() as u64, replaced),
-        creature.map_id,
-        creature.instance_id,
-        (creature.grid_x, creature.grid_y),
-    );
+    tick::stop_facing(ctx, &mut creature, (dest.0, dest.1));
     entities.guid().update(creature);
     let row = CreatureDistraction {
         creature_guid,
@@ -155,14 +133,6 @@ pub(crate) fn clear(ctx: &ReducerContext, guid: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::f32::consts::PI;
-
-    #[test]
-    fn heading_faces_the_ground_point() {
-        assert!((heading((0.0, 0.0), (10.0, 0.0)) - 0.0).abs() < 1e-6);
-        assert!((heading((0.0, 0.0), (0.0, 10.0)) - PI / 2.0).abs() < 1e-6);
-        assert!((heading((0.0, 0.0), (-10.0, 0.0)) - PI).abs() < 1e-6);
-    }
 
     #[test]
     fn the_effect_amount_is_the_length_in_seconds() {

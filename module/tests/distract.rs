@@ -6,7 +6,7 @@
 mod support;
 
 use std::collections::BTreeMap;
-use std::f32::consts::TAU;
+use std::f32::consts::{FRAC_PI_4, TAU};
 use std::time::Duration;
 
 use lyracore_shared::constants::unit_flags;
@@ -31,8 +31,8 @@ const DISTRACT_MS: u64 = 10_000;
 const ENERGY: u32 = 100;
 const COST: u32 = 30;
 
-/// The player's position and facing. Creatures spawn along the facing; the point sits 20 yd ahead
-/// and 3 yd to the side, so facing the point differs from the spawn orientation.
+/// The player's position and facing. Creatures spawn along the facing, and each point sits to one
+/// side of it, so facing the point differs from the spawn orientation.
 #[derive(Clone, Copy)]
 struct Line {
     x: f32,
@@ -61,10 +61,6 @@ fn number<T: std::str::FromStr>(row: &Row, column: &str) -> T {
 fn same_angle(a: f32, b: f32) -> bool {
     let d = (a - b).rem_euclid(TAU);
     d < 1e-3 || TAU - d < 1e-3
-}
-
-fn heading(from: (f32, f32), to: (f32, f32, f32)) -> f32 {
-    (to.1 - from.1).atan2(to.0 - from.0)
 }
 
 /// A fresh shard with a level 60 player, so the level 1 Test Wolves never aggro it, and the
@@ -269,14 +265,23 @@ fn assert_faces(shard: &Standalone, guid: u64, angle: f32, when: &str) {
 fn distract_turns_only_the_idle_creatures_near_the_point_and_keeps_the_rogue_hidden() {
     let (shard, line) = shard("distract-cast");
     // No creature tick: nothing reaps the facing rows, and nothing else moves the wolves.
+    // Without the tick nothing regenerates energy either, so refill it once the tick is gone.
     shard.assert_sql("DELETE FROM game_creature_move_schedule");
-    let point = line.at(20.0, 3.0);
+    shard.assert_call(
+        "debug_set_power",
+        &[&PLAYER.to_string(), &ENERGY.to_string()],
+    );
+    // 6 yd ahead of and 6 yd beside the inside wolf, so it turns 45 degrees off the spawn facing.
+    let point = line.at(20.0, 6.0);
     let inside = spawn_wolf(&shard, 14.0);
     let fighting = spawn_wolf(&shard, 18.0);
+    let homing = spawn_wolf(&shard, 16.0);
     let outside = spawn_wolf(&shard, 32.0);
-    // The wolf fights; the player's flag only keeps regeneration off its exact energy readings.
     hold_in_combat(&shard, fighting);
-    hold_in_combat(&shard, PLAYER);
+    // A wolf that walks home after an evade is neither in combat nor engaged, and still keeps going.
+    shard.assert_sql(&format!(
+        "INSERT INTO game_creature_ai_returning_home (creature_guid) VALUES ({homing})"
+    ));
 
     insert_spell(
         &shard,
@@ -321,7 +326,7 @@ fn distract_turns_only_the_idle_creatures_near_the_point_and_keeps_the_rogue_hid
     assert_refused(&cast_at(&shard, line.at(40.0, 0.0)), "out of range");
     assert_eq!(number::<u32>(&entity(&shard, PLAYER), "power"), ENERGY);
 
-    let orientations: Vec<f32> = [fighting, outside]
+    let orientations: Vec<f32> = [fighting, homing, outside]
         .iter()
         .map(|&guid| number(&entity(&shard, guid), "orientation"))
         .collect();
@@ -334,14 +339,8 @@ fn distract_turns_only_the_idle_creatures_near_the_point_and_keeps_the_rogue_hid
         ends_ms >= cast_ms + DISTRACT_MS && ends_ms <= now_ms() + DISTRACT_MS,
         "the Distraction lasts the effect amount, 10 s: ends {ends_ms}, cast at {cast_ms}"
     );
-    let at = entity(&shard, inside);
-    assert_faces(
-        &shard,
-        inside,
-        heading((number(&at, "x"), number(&at, "y")), point),
-        "after the cast",
-    );
-    for (guid, before) in [fighting, outside].into_iter().zip(orientations) {
+    assert_faces(&shard, inside, line.o + FRAC_PI_4, "after the cast");
+    for (guid, before) in [fighting, homing, outside].into_iter().zip(orientations) {
         assert_eq!(
             distraction(&shard, guid),
             None,
@@ -350,9 +349,12 @@ fn distract_turns_only_the_idle_creatures_near_the_point_and_keeps_the_rogue_hid
         assert_eq!(number::<f32>(&entity(&shard, guid), "orientation"), before);
     }
 
+    let rogue = entity(&shard, PLAYER);
+    assert_eq!(number::<u32>(&rogue, "power"), ENERGY - COST);
     assert_eq!(
-        number::<u32>(&entity(&shard, PLAYER), "power"),
-        ENERGY - COST
+        number::<u32>(&rogue, "unit_flags") & unit_flags::IN_COMBAT,
+        0,
+        "Distract does not put the Rogue in combat"
     );
     assert_eq!(
         shard.query_rows(&stealth).len(),
@@ -386,7 +388,8 @@ fn distract_turns_only_the_idle_creatures_near_the_point_and_keeps_the_rogue_hid
     shard.assert_sql(&format!(
         "DELETE FROM game_spell_cd WHERE caster_guid = {PLAYER}"
     ));
-    let second_point = line.at(16.0, -4.0);
+    // 4 yd ahead of and 4 yd to the other side of the inside wolf.
+    let second_point = line.at(18.0, -4.0);
     let second = cast_at(&shard, second_point);
     assert!(second.status.success(), "{second:?}");
     let refreshed = distraction(&shard, inside).expect("the wolf stays distracted");
@@ -394,13 +397,7 @@ fn distract_turns_only_the_idle_creatures_near_the_point_and_keeps_the_rogue_hid
         refreshed >= ends_ms + 1_500,
         "{refreshed} must move past {ends_ms}"
     );
-    let at = entity(&shard, inside);
-    assert_faces(
-        &shard,
-        inside,
-        heading((number(&at, "x"), number(&at, "y")), second_point),
-        "after the second cast",
-    );
+    assert_faces(&shard, inside, line.o - FRAC_PI_4, "after the second cast");
 }
 
 #[test]
@@ -424,7 +421,8 @@ fn a_distraction_holds_idle_movement_until_its_expiry_and_ends_on_an_engagement(
     shard.assert_sql(&format!(
         "UPDATE game_creature_spawn SET movement_type = {MOVEMENT_RANDOM} WHERE guid = {wanderer}"
     ));
-    let idle = spawn_wolf(&shard, 14.0);
+    // 3 yd ahead of and 3 yd beside the point, so it turns 45 degrees off the spawn facing.
+    let idle = spawn_wolf(&shard, 17.0);
     let spawn_orientation = line.o;
 
     // Cast while both the patroller and the wanderer walk a leg. A wander leg starts on about one
@@ -458,9 +456,17 @@ fn a_distraction_holds_idle_movement_until_its_expiry_and_ends_on_an_engagement(
         );
         let at = entity(&shard, guid);
         let (x, y): (f32, f32) = (number(&at, "x"), number(&at, "y"));
-        assert_orientation(&shard, guid, heading((x, y), point), "after the cast");
+        // The walkers stop wherever their leg was, so check the facing points along the line to it.
+        let o: f32 = number(&at, "orientation");
+        let (dx, dy) = (point.0 - x, point.1 - y);
+        let length = dx.hypot(dy);
+        assert!(
+            (o.cos() * dx + o.sin() * dy) / length > 0.9999,
+            "{guid} at ({x}, {y}) faces {o}, not the point {point:?}"
+        );
         held.push((guid, x, y));
     }
+    assert_orientation(&shard, idle, line.o + FRAC_PI_4, "after the cast");
 
     // Keep every Distraction active past the hold window, however slow the runner.
     shard.assert_sql(&format!(
