@@ -8,117 +8,42 @@ use crate::stdb::connection::{call_reducer, reducer_refusal_reason};
 use crate::stdb::reducers::{next_operation_id, wait_for_cache_row};
 use crate::stdb::Coordinator;
 use crate::world::guild_fee;
-use crate::world::guild_fee::{
-    CharterOwner, FeeHold, FeeOutcome, FeeRequest, FeeTerms, GuildFeeStore,
-};
+use crate::world::guild_fee::{FeeHold, FeeOutcome, FeeRequest, FeeTerms, GuildFeeStore};
+use crate::world::Actor;
 
-impl GuildFeeStore for crate::stdb::Coordinator {
-    fn guild_fee_held(&self, actor_guid: u64) -> Result<Option<FeeHold>> {
-        Ok(self.guild_fee_hold_row(actor_guid))
+impl GuildFeeStore for Coordinator {
+    fn guild_fee_held(&self, actor: Actor) -> Result<Option<FeeHold>> {
+        Ok(self.guild_fee_hold_row(actor))
     }
 
+    /// `gw_guild_fee_hold` on this Home Shard under a fresh operation id, then the Hold once this
+    /// handle's cache shows it: the hold mints a Guild Charter's guid. A tagged Refusal answers
+    /// `Ok(Err(_))`. The call is made once per operation id and never retried.
     fn guild_fee_hold(
         &self,
-        actor_guid: u64,
+        actor: Actor,
         request: FeeRequest,
     ) -> Result<Result<FeeHold, GuildRefusal>> {
-        self.hold_guild_fee(actor_guid, request)
-    }
-
-    fn guild_fee_decide(&self, actor_guid: u64, hold: FeeHold) -> Result<FeeOutcome> {
-        let owner = match hold.terms {
-            FeeTerms::Emblem(_) => None,
-            FeeTerms::Charter { .. } => {
-                let facts = crate::stdb::Coordinator::guild_character_facts(self, actor_guid)?
-                    .ok_or_else(|| anyhow!("Guild Charter owner {actor_guid} is unreadable"))?;
-                Some(CharterOwner {
-                    name: facts.name,
-                    team: lyracore_shared::faction::team_for_race(facts.race),
-                })
-            }
-        };
-        self.realm_core()?.decide_guild_fee(actor_guid, hold, owner)
-    }
-
-    fn guild_fee_finish(&self, actor_guid: u64, operation_id: u64, accepted: bool) -> Result<()> {
-        self.finish_guild_fee(actor_guid, operation_id, accepted)
-    }
-}
-
-impl Coordinator {
-    /// The Fee Hold of `payer_guid` in THIS handle's cache. Call it on the payer's Home Shard. A
-    /// kind this Gateway does not know reads as none.
-    pub(crate) fn guild_fee_hold_row(&self, payer_guid: u64) -> Option<guild_fee::FeeHold> {
-        let hold = self
-            .0
-            .coord()
-            .conn
-            .db
-            .game_guild_fee_hold()
-            .payer_guid()
-            .find(&payer_guid)?;
-        let terms = match hold.kind {
-            lyracore_shared::guild::fee_kind::EMBLEM => {
-                guild_fee::FeeTerms::Emblem(guild_fee::Emblem {
-                    emblem_style: hold.emblem_style,
-                    emblem_color: hold.emblem_color,
-                    border_style: hold.border_style,
-                    border_color: hold.border_color,
-                    background_color: hold.background_color,
-                })
-            }
-            lyracore_shared::guild::fee_kind::CHARTER => guild_fee::FeeTerms::Charter {
-                charter_item_guid: hold.charter_item_guid,
-                name: hold.charter_name,
-            },
-            _ => return None,
-        };
-        Some(guild_fee::FeeHold {
-            operation_id: hold.operation_id,
-            terms,
-        })
-    }
-
-    /// Realm-core's fee decision for `operation_id` in THIS handle's cache. Call it on the
-    /// Realm-core handle.
-    pub(crate) fn guild_fee_decision_row(&self, operation_id: u64) -> Option<GuildFeeDecision> {
-        self.0
-            .coord()
-            .conn
-            .db
-            .game_guild_fee_decision()
-            .operation_id()
-            .find(&operation_id)
-    }
-
-    /// `gw_guild_fee_hold` on THIS handle, the actor's Home Shard, under a fresh operation id, then
-    /// the Hold once this handle's cache shows it: the hold mints a Guild Charter's guid. A tagged
-    /// Refusal answers `Ok(Err(_))`. The call is made once per operation id and never retried.
-    pub(crate) fn hold_guild_fee(
-        &self,
-        actor_guid: u64,
-        request: guild_fee::FeeRequest,
-    ) -> Result<Result<guild_fee::FeeHold, GuildRefusal>> {
         let operation_id = next_operation_id()?;
         let request = match request {
-            guild_fee::FeeRequest::Emblem { npc_guid, emblem } => {
+            FeeRequest::Emblem { npc_guid, emblem } => {
                 GuildFeeRequest::Emblem(GuildEmblemPurchase {
                     npc_guid,
                     emblem: guild_emblem(emblem),
                 })
             }
-            guild_fee::FeeRequest::Charter { npc_guid, name } => {
+            FeeRequest::Charter { npc_guid, name } => {
                 GuildFeeRequest::Charter(GuildCharterPurchase { npc_guid, name })
             }
         };
         let result = call_reducer!(
             self.0.call_pipe().conn.reducers,
             "gw_guild_fee_hold",
-            gw_guild_fee_hold_then(operation_id, self.actor_or_owner(actor_guid), request)
+            gw_guild_fee_hold_then(operation_id, self.session_actor(actor), request)
         );
         match result {
             Ok(()) => wait_for_cache_row(operation_id, "guild Fee Hold", || {
-                self.guild_fee_hold_row(actor_guid)
+                self.guild_fee_hold_row(actor)
                     .filter(|hold| hold.operation_id == operation_id)
             })
             .map(Ok),
@@ -129,59 +54,85 @@ impl Coordinator {
         }
     }
 
-    /// `realm_guild_fee_decide` on THIS handle, Realm-core, then the decision once this handle's
-    /// cache shows it. The reducer is idempotent, so a re-drive calls it again. A Charter needs
-    /// `owner`, the facts Realm-core cannot read.
-    pub(crate) fn decide_guild_fee(
-        &self,
-        actor_guid: u64,
-        hold: guild_fee::FeeHold,
-        owner: Option<guild_fee::CharterOwner>,
-    ) -> Result<guild_fee::FeeOutcome> {
-        let terms = match (hold.terms, owner) {
-            (guild_fee::FeeTerms::Emblem(emblem), _) => GuildFeeTerms::Emblem(guild_emblem(emblem)),
-            (
-                guild_fee::FeeTerms::Charter {
-                    charter_item_guid,
-                    name,
-                },
-                Some(owner),
-            ) => GuildFeeTerms::Charter(GuildCharterTerms {
+    /// `realm_guild_fee_decide` on Realm-core, then the decision once Realm-core's cache shows
+    /// it. The reducer is idempotent, so a re-drive calls it again. A Charter needs the owner
+    /// facts Realm-core cannot read.
+    fn guild_fee_decide(&self, actor: Actor, hold: FeeHold) -> Result<FeeOutcome> {
+        let terms = match hold.terms {
+            FeeTerms::Emblem(emblem) => GuildFeeTerms::Emblem(guild_emblem(emblem)),
+            FeeTerms::Charter {
                 charter_item_guid,
                 name,
-                payer_name: owner.name,
-                payer_team: owner.team,
-            }),
-            (guild_fee::FeeTerms::Charter { .. }, None) => {
-                return Err(anyhow!(
-                    "Guild Charter decision {} has no owner facts",
-                    hold.operation_id
-                ));
+            } => {
+                let facts = crate::stdb::Coordinator::guild_character_facts(self, actor.guid())?
+                    .ok_or_else(|| anyhow!("Guild Charter owner {} is unreadable", actor.guid()))?;
+                GuildFeeTerms::Charter(GuildCharterTerms {
+                    charter_item_guid,
+                    name,
+                    payer_name: facts.name,
+                    payer_team: lyracore_shared::faction::team_for_race(facts.race),
+                })
             }
         };
+        let realm = self.realm_core()?;
         call_reducer!(
-            self.0.call_pipe().conn.reducers,
+            realm.0.call_pipe().conn.reducers,
             "realm_guild_fee_decide",
-            realm_guild_fee_decide_then(hold.operation_id, self.actor_or_owner(actor_guid), terms)
+            realm_guild_fee_decide_then(hold.operation_id, realm.session_actor(actor), terms)
         )?;
         let decision = wait_for_cache_row(hold.operation_id, "guild fee decision", || {
-            self.guild_fee_decision_row(hold.operation_id)
+            realm
+                .0
+                .coord()
+                .conn
+                .db
+                .game_guild_fee_decision()
+                .operation_id()
+                .find(&hold.operation_id)
         })?;
         fee_outcome(&decision)
     }
 
-    /// `gw_guild_fee_finish` on THIS handle, the actor's Home Shard.
-    pub(crate) fn finish_guild_fee(
-        &self,
-        actor_guid: u64,
-        operation_id: u64,
-        accepted: bool,
-    ) -> Result<()> {
+    /// `gw_guild_fee_finish` on this Home Shard.
+    fn guild_fee_finish(&self, actor: Actor, operation_id: u64, accepted: bool) -> Result<()> {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "gw_guild_fee_finish",
-            gw_guild_fee_finish_then(operation_id, self.actor_or_owner(actor_guid), accepted)
+            gw_guild_fee_finish_then(operation_id, self.session_actor(actor), accepted)
         )
+    }
+}
+
+impl Coordinator {
+    /// The Fee Hold of `payer` in THIS handle's cache. Call it on the payer's Home Shard. A kind
+    /// this Gateway does not know reads as none.
+    fn guild_fee_hold_row(&self, payer: Actor) -> Option<FeeHold> {
+        let hold = self
+            .0
+            .coord()
+            .conn
+            .db
+            .game_guild_fee_hold()
+            .payer_guid()
+            .find(&payer.guid())?;
+        let terms = match hold.kind {
+            lyracore_shared::guild::fee_kind::EMBLEM => FeeTerms::Emblem(guild_fee::Emblem {
+                emblem_style: hold.emblem_style,
+                emblem_color: hold.emblem_color,
+                border_style: hold.border_style,
+                border_color: hold.border_color,
+                background_color: hold.background_color,
+            }),
+            lyracore_shared::guild::fee_kind::CHARTER => FeeTerms::Charter {
+                charter_item_guid: hold.charter_item_guid,
+                name: hold.charter_name,
+            },
+            _ => return None,
+        };
+        Some(FeeHold {
+            operation_id: hold.operation_id,
+            terms,
+        })
     }
 }
 

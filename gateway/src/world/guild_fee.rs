@@ -12,6 +12,8 @@
 use anyhow::Result;
 use lyracore_shared::guild::GuildRefusal;
 
+use super::Actor;
+
 /// The five tabard design values of a Guild Emblem, in wire order.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Emblem {
@@ -42,14 +44,6 @@ pub(crate) enum FeeTerms {
     },
 }
 
-/// The owner facts a Charter decision carries. Realm-core holds no Character rows.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct CharterOwner {
-    pub(crate) name: String,
-    /// `lyracore_shared::faction::TEAM_*`.
-    pub(crate) team: u32,
-}
-
 /// One Fee Hold on the actor's Home Shard.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct FeeHold {
@@ -68,19 +62,19 @@ pub(crate) enum FeeOutcome {
 /// to Realm-core.
 pub(crate) trait GuildFeeStore: Send + Sync {
     /// The actor's Fee Hold on its Home Shard, if one is left.
-    fn guild_fee_held(&self, actor_guid: u64) -> Result<Option<FeeHold>>;
+    fn guild_fee_held(&self, actor: Actor) -> Result<Option<FeeHold>>;
     /// Move the fee for `request` from the actor's purse into a new Fee Hold under a fresh
     /// operation id. `Ok(Err(_))` is a hold Refusal, and nothing changed.
     fn guild_fee_hold(
         &self,
-        actor_guid: u64,
+        actor: Actor,
         request: FeeRequest,
     ) -> Result<Result<FeeHold, GuildRefusal>>;
     /// Realm-core's one decision for `hold`, committed now unless it already exists.
-    fn guild_fee_decide(&self, actor_guid: u64, hold: FeeHold) -> Result<FeeOutcome>;
+    fn guild_fee_decide(&self, actor: Actor, hold: FeeHold) -> Result<FeeOutcome>;
     /// Spend the Hold when `accepted`, refund it otherwise, then delete it. Without a Hold for
     /// `operation_id` this changes nothing.
-    fn guild_fee_finish(&self, actor_guid: u64, operation_id: u64, accepted: bool) -> Result<()>;
+    fn guild_fee_finish(&self, actor: Actor, operation_id: u64, accepted: bool) -> Result<()>;
 }
 
 /// Pay a guild fee. A leftover Hold is finished first. A hold Refusal (the NPC, the purse)
@@ -88,12 +82,12 @@ pub(crate) trait GuildFeeStore: Send + Sync {
 /// been spent or refunded to match it. `Err` leaves any Hold for the next re-drive.
 pub(crate) fn pay<St: GuildFeeStore + ?Sized>(
     store: &St,
-    actor_guid: u64,
+    actor: Actor,
     request: FeeRequest,
 ) -> Result<FeeOutcome> {
-    finish_leftover(store, actor_guid)?;
-    match store.guild_fee_hold(actor_guid, request)? {
-        Ok(hold) => settle(store, actor_guid, hold),
+    finish_leftover(store, actor)?;
+    match store.guild_fee_hold(actor, request)? {
+        Ok(hold) => settle(store, actor, hold),
         Err(refusal) => Ok(FeeOutcome::Refused(refusal)),
     }
 }
@@ -101,36 +95,42 @@ pub(crate) fn pay<St: GuildFeeStore + ?Sized>(
 /// Finish the actor's leftover Fee Hold at world entry. A failure logs and leaves the Hold for
 /// the next attempt.
 pub(crate) fn redrive<St: GuildFeeStore + ?Sized>(store: &St, actor_guid: u64) {
-    if let Err(error) = finish_leftover(store, actor_guid) {
+    let Some(actor) = Actor::new(actor_guid) else {
+        return;
+    };
+    if let Err(error) = finish_leftover(store, actor) {
         log::warn!("world: Fee Hold of {actor_guid} left for the next re-drive: {error:#}");
     }
 }
 
-fn finish_leftover<St: GuildFeeStore + ?Sized>(store: &St, actor_guid: u64) -> Result<()> {
-    let Some(hold) = store.guild_fee_held(actor_guid)? else {
+fn finish_leftover<St: GuildFeeStore + ?Sized>(store: &St, actor: Actor) -> Result<()> {
+    let Some(hold) = store.guild_fee_held(actor)? else {
         return Ok(());
     };
     let operation_id = hold.operation_id;
-    let outcome = settle(store, actor_guid, hold)?;
-    log::info!("world: finished leftover Fee Hold {operation_id} of {actor_guid}: {outcome:?}");
+    let outcome = settle(store, actor, hold)?;
+    log::info!(
+        "world: finished leftover Fee Hold {operation_id} of {}: {outcome:?}",
+        actor.guid()
+    );
     Ok(())
 }
 
 fn settle<St: GuildFeeStore + ?Sized>(
     store: &St,
-    actor_guid: u64,
+    actor: Actor,
     hold: FeeHold,
 ) -> Result<FeeOutcome> {
     let operation_id = hold.operation_id;
-    let outcome = store.guild_fee_decide(actor_guid, hold)?;
-    store.guild_fee_finish(actor_guid, operation_id, outcome == FeeOutcome::Accepted)?;
+    let outcome = store.guild_fee_decide(actor, hold)?;
+    store.guild_fee_finish(actor, operation_id, outcome == FeeOutcome::Accepted)?;
     Ok(outcome)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use anyhow::anyhow;
+    use crate::stdb::ReducerCallError;
     use lyracore_shared::guild::EMBLEM_COST_COPPER;
     use std::sync::{Arc, Mutex};
 
@@ -145,6 +145,10 @@ mod tests {
         border_color: 14,
         background_color: 15,
     };
+
+    fn actor(guid: u64) -> Actor {
+        Actor::new(guid).unwrap()
+    }
 
     fn purchase() -> FeeRequest {
         FeeRequest::Emblem {
@@ -219,7 +223,7 @@ mod tests {
             let mut crash = self.crash_after.lock().unwrap();
             if *crash == Some(step) {
                 *crash = None;
-                return Err(anyhow!("connection lost after {step:?} committed"));
+                return Err(ReducerCallError::transport_lost(&format!("{step:?}")).into());
             }
             Ok(())
         }
@@ -235,7 +239,8 @@ mod tests {
     }
 
     impl GuildFeeStore for Shard {
-        fn guild_fee_held(&self, actor_guid: u64) -> Result<Option<FeeHold>> {
+        fn guild_fee_held(&self, actor: Actor) -> Result<Option<FeeHold>> {
+            let actor_guid = actor.guid();
             Ok(self
                 .holds
                 .lock()
@@ -247,11 +252,16 @@ mod tests {
 
         fn guild_fee_hold(
             &self,
-            actor_guid: u64,
+            actor: Actor,
             request: FeeRequest,
         ) -> Result<Result<FeeHold, GuildRefusal>> {
-            if self.guild_fee_held(actor_guid)?.is_some() {
-                return Err(anyhow!("guild fee: another Fee Hold is pending"));
+            let actor_guid = actor.guid();
+            if self.guild_fee_held(actor)?.is_some() {
+                return Err(ReducerCallError::refused(
+                    "gw_guild_fee_hold",
+                    "another Fee Hold is pending",
+                )
+                .into());
             }
             if self.purse(actor_guid) < EMBLEM_COST_COPPER {
                 return Ok(Err(GuildRefusal::NotEnoughMoney));
@@ -274,7 +284,8 @@ mod tests {
             Ok(Ok(hold))
         }
 
-        fn guild_fee_decide(&self, actor_guid: u64, hold: FeeHold) -> Result<FeeOutcome> {
+        fn guild_fee_decide(&self, actor: Actor, hold: FeeHold) -> Result<FeeOutcome> {
+            let actor_guid = actor.guid();
             let mut realm = self.realm.lock().unwrap();
             let known = realm
                 .decisions
@@ -303,12 +314,8 @@ mod tests {
             Ok(outcome)
         }
 
-        fn guild_fee_finish(
-            &self,
-            actor_guid: u64,
-            operation_id: u64,
-            accepted: bool,
-        ) -> Result<()> {
+        fn guild_fee_finish(&self, actor: Actor, operation_id: u64, accepted: bool) -> Result<()> {
+            let actor_guid = actor.guid();
             let mut holds = self.holds.lock().unwrap();
             if let Some(at) = holds.iter().position(|(payer, hold, _)| {
                 *payer == actor_guid && hold.operation_id == operation_id
@@ -335,11 +342,11 @@ mod tests {
         let realm = realm_led_by(LEADER);
         let home = Shard::new(&realm, 150_000);
         assert_eq!(
-            pay(&home, LEADER, purchase()).unwrap(),
+            pay(&home, actor(LEADER), purchase()).unwrap(),
             FeeOutcome::Accepted
         );
         assert_eq!(home.purse(LEADER), 50_000);
-        assert_eq!(home.guild_fee_held(LEADER).unwrap(), None);
+        assert_eq!(home.guild_fee_held(actor(LEADER)).unwrap(), None);
         assert_eq!(realm.lock().unwrap().emblem, Some(EMBLEM));
     }
 
@@ -348,11 +355,11 @@ mod tests {
         let realm = realm_led_by(LEADER);
         let home = Shard::new(&realm, 150_000);
         assert_eq!(
-            pay(&home, MEMBER, purchase()).unwrap(),
+            pay(&home, actor(MEMBER), purchase()).unwrap(),
             FeeOutcome::Refused(GuildRefusal::NotLeader)
         );
         assert_eq!(home.purse(MEMBER), 150_000);
-        assert_eq!(home.guild_fee_held(MEMBER).unwrap(), None);
+        assert_eq!(home.guild_fee_held(actor(MEMBER)).unwrap(), None);
         assert_eq!(realm.lock().unwrap().emblem, None);
     }
 
@@ -361,7 +368,7 @@ mod tests {
         let realm = realm_led_by(LEADER);
         let home = Shard::new(&realm, 99_999);
         assert_eq!(
-            pay(&home, LEADER, purchase()).unwrap(),
+            pay(&home, actor(LEADER), purchase()).unwrap(),
             FeeOutcome::Refused(GuildRefusal::NotEnoughMoney)
         );
         assert_eq!(home.purse(LEADER), 99_999);
@@ -377,14 +384,14 @@ mod tests {
                 let realm = realm_led_by(LEADER);
                 let home = Shard::new(&realm, 150_000);
                 home.crash_after(step);
-                assert!(pay(&home, payer, purchase()).is_err(), "{step:?}");
+                assert!(pay(&home, actor(payer), purchase()).is_err(), "{step:?}");
 
                 redrive(&home, payer);
                 redrive(&home, payer);
 
                 let purse = if spent { 50_000 } else { 150_000 };
                 assert_eq!(home.purse(payer), purse, "{step:?} {payer}");
-                assert_eq!(home.guild_fee_held(payer).unwrap(), None, "{step:?}");
+                assert_eq!(home.guild_fee_held(actor(payer)).unwrap(), None, "{step:?}");
                 let realm = realm.lock().unwrap();
                 assert_eq!(realm.decisions.len(), 1, "{step:?}");
                 assert_eq!(realm.emblems_saved, usize::from(spent), "{step:?}");
@@ -393,13 +400,29 @@ mod tests {
     }
 
     #[test]
+    fn a_lost_answer_is_a_transport_loss_and_a_rejected_hold_is_a_refusal() {
+        use crate::stdb::{classify, DurableFailure};
+        let realm = realm_led_by(LEADER);
+        let home = Shard::new(&realm, 250_000);
+        home.crash_after(Step::Hold);
+        let lost = pay(&home, actor(LEADER), purchase()).unwrap_err();
+        assert_eq!(classify(&lost), DurableFailure::TransportLoss);
+
+        let rejected = home.guild_fee_hold(actor(LEADER), purchase()).unwrap_err();
+        assert!(matches!(
+            classify(&rejected),
+            DurableFailure::Refusal { .. }
+        ));
+    }
+
+    #[test]
     fn the_next_fee_finishes_a_leftover_hold_first() {
         let realm = realm_led_by(LEADER);
         let home = Shard::new(&realm, 250_000);
         home.crash_after(Step::Decide);
-        assert!(pay(&home, LEADER, purchase()).is_err());
+        assert!(pay(&home, actor(LEADER), purchase()).is_err());
         assert_eq!(
-            pay(&home, LEADER, purchase()).unwrap(),
+            pay(&home, actor(LEADER), purchase()).unwrap(),
             FeeOutcome::Accepted
         );
         assert_eq!(home.purse(LEADER), 50_000);
@@ -412,7 +435,7 @@ mod tests {
         let old_home = Shard::new(&realm, 150_000);
         let new_home = Shard::new(&realm, 0);
         old_home.crash_after(Step::Hold);
-        assert!(pay(&old_home, MEMBER, purchase()).is_err());
+        assert!(pay(&old_home, actor(MEMBER), purchase()).is_err());
         assert_eq!(old_home.purse(MEMBER), 50_000);
 
         old_home.transfer_holds_to(&new_home);
@@ -420,7 +443,7 @@ mod tests {
         redrive(&new_home, MEMBER);
 
         assert_eq!(new_home.purse(MEMBER), 150_000);
-        assert_eq!(new_home.guild_fee_held(MEMBER).unwrap(), None);
-        assert_eq!(old_home.guild_fee_held(MEMBER).unwrap(), None);
+        assert_eq!(new_home.guild_fee_held(actor(MEMBER)).unwrap(), None);
+        assert_eq!(old_home.guild_fee_held(actor(MEMBER)).unwrap(), None);
     }
 }
