@@ -171,15 +171,16 @@ test("migration adopts existing artifact IDs and refuses a changed durable ID", 
 
 test("adding and removing sources or renaming a function keeps recorded IDs", async () => {
   await scratch(async (dir, build) => {
-    writeFileSync(join(dir, "scripts/welcome.ts"), WELCOME);
+    const source = "local function welcome(event) end\nevents.player.onLogin(welcome)\n";
+    writeFileSync(join(dir, "scripts/welcome.lua"), source);
     const id = (await build()).scripts[0]!.script_id;
-    writeFileSync(join(dir, "scripts/aaa.ts"), WELCOME.replaceAll("welcome", "other"));
-    writeFileSync(join(dir, "scripts/welcome.ts"), WELCOME.replaceAll("welcome", "renamed"));
+    writeFileSync(join(dir, "scripts/aaa.lua"), source.replaceAll("welcome", "other"));
+    writeFileSync(join(dir, "scripts/welcome.lua"), source.replaceAll("welcome", "renamed"));
     expect((await build()).scripts.find((script) => script.name.endsWith(".welcome"))!.script_id).toBe(id);
-    rmSync(join(dir, "scripts/welcome.ts"));
+    rmSync(join(dir, "scripts/welcome.lua"));
     await build();
     expect(JSON.parse(readFileSync(join(dir, "script-ids.json"), "utf8")).ids.welcome).toBe(id);
-    writeFileSync(join(dir, "scripts/welcome.ts"), WELCOME);
+    writeFileSync(join(dir, "scripts/welcome.lua"), source);
     expect((await build()).scripts.find((script) => script.name.endsWith(".welcome"))!.script_id).toBe(id);
   });
 });

@@ -60,7 +60,7 @@ function readDirectives(file: string, source: string): Map<string, string> {
 function requiredDirective(file: string, directives: Map<string, string>, key: string): string {
   const value = directives.get(key);
   if (value === undefined) {
-    refuse(file, `no \`@${key}\` directive. Every Runtime Script declares \`@event\` and \`@id\`.`);
+    refuse(file, `no \`@${key}\` directive. A legacy Runtime Script declares both \`@event\` and \`@id\`.`);
   }
   return value;
 }
@@ -274,6 +274,7 @@ export async function buildPackageScripts(packageName: string): Promise<string> 
     const source = await readFile(path, "utf8");
     const directives = readDirectives(path, source);
     const binding = readBinding(path, source, packageName);
+    if (!binding && directives.size === 0) refuse(path, "declare one top-level Event Binding, such as events.player.onLogin(welcome)");
     if (binding && directives.size !== 0) refuse(path, "use an Event Binding or legacy Script Directives, not both");
     const event = binding?.event ?? requiredDirective(path, directives, "event");
     checkEvent(path, event, packageName, catalogue);
