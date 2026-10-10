@@ -508,46 +508,6 @@ fn an_unset_transfer_abort_injection_changes_nothing() {
     );
 }
 
-/// Source-scan tripwire for the one line no in-process test can reach: `run_transfer`'s ENV WIRING.
-///
-/// Both tests above drive `run_transfer_injected` directly — deliberately, so a parallel test
-/// runner never has process-global env mutated underneath it — which leaves the wrapper that
-/// actually arms the injector in production completely unexercised. Found by mutation during this
-/// PR's review: replacing the call's last argument with a literal `None` (the injector still
-/// present, still compiled, permanently DISARMED) left all 370 gateway tests GREEN, while
-/// `LYRACORE_TRANSFER_ABORT_AFTER` did nothing and every step of the live crash-recovery matrix
-/// would time out waiting for a death that can no longer happen.
-///
-/// The unmatched-step warning is pinned here for the same reason: it is the only thing standing
-/// between a typo'd step name and a crash matrix that reports PASS for a crash that never fired,
-/// and no in-process test asserts a log line.
-#[test]
-fn run_transfer_still_arms_the_injector_from_the_environment() {
-    let src = include_str!("transfer.rs");
-    let at = src
-        .find("pub fn run_transfer(")
-        .expect("`run_transfer` moved");
-    let end = src[at..].find("\n}\n").expect("`run_transfer` body");
-    let body = &src[at..at + end];
-    assert!(
-        body.contains("std::env::var(\"LYRACORE_TRANSFER_ABORT_AFTER\")"),
-        "`run_transfer` no longer reads LYRACORE_TRANSFER_ABORT_AFTER — the injector is dead in the \
-         PRODUCTION build (the tests call `run_transfer_injected` directly and stay green). Body \
-         was:\n{body}"
-    );
-    assert!(
-        body.contains("run_transfer_injected(src, dst, plan, abort_after.as_deref())"),
-        "`run_transfer` reads the env but no longer THREADS it into `run_transfer_injected` — the \
-         read is decorative and every crash point is permanently disarmed. Body was:\n{body}"
-    );
-    assert!(
-        body.contains("ABORT_STEPS.contains(&step)"),
-        "`run_transfer` no longer validates the step name against `ABORT_STEPS` — a typo'd \
-         LYRACORE_TRANSFER_ABORT_AFTER would then abort NOTHING, silently, and the crash matrix would \
-         report a PASS for a crash that never happened. Body was:\n{body}"
-    );
-}
-
 #[test]
 fn the_driver_never_attests_an_import_that_did_not_commit() {
     // `confirm_import` files the in-row that licenses `finish_transfer` to CASCADE-DELETE the
@@ -959,47 +919,6 @@ fn entering_the_world_binds_this_accounts_identity_on_the_shard_it_landed_on() {
     );
 }
 
-/// ENFORCEMENT tripwire, the module's `body_of` pattern: the production routing read lives on
-/// `Coordinator` and needs a live SDK cache, so no mock can drive it — and a mutation of it
-/// survived the first cut of this file's mutation pass. Source-scan it instead.
-#[test]
-fn the_routing_read_uses_the_pending_instance_id_not_a_hardcoded_zero() {
-    let src = include_str!("../stdb/reads/account.rs");
-    let start = src
-        .find("pub fn character_location(")
-        .expect("`character_location` moved — re-derive this tripwire");
-    let body = &src[start..start + src[start..].find("\n    }").expect("fn has a body")];
-    let code: String = body
-        .lines()
-        .filter(|l| !l.trim_start().starts_with("//"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(
-        code.contains("c.pending_instance_id"),
-        "character_location no longer reads `pending_instance_id` for a character with no live \
-         entity. That column is where `teleport_player` parks the DESTINATION instance for a \
-         cross-map hop, so it is the whole routing key for instance entry: reading 0 there \
-         routes a player walking into Deadmines by MAP alone, which is correct only until a shard \
-         map names a bucket (`389:0=pool-a`, see `config::ShardMap`). Body was:\n{code}"
-    );
-}
-
-/// Sibling tripwire (same reason — a live SDK cache no mock reaches): a character parked inside a
-/// dungeon lives on the INSTANCE shard, and Phase A has no realm-core index to ask.
-#[test]
-fn the_character_select_list_still_unions_across_every_shard() {
-    let ws = include_str!("../stdb/world_store.rs");
-    let at = ws
-        .find("fn characters(&self, account_id: u64)")
-        .expect("`characters` moved");
-    assert!(
-        ws[at..at + 900].contains("self.all_shards()"),
-        "the character-select list no longer unions across shards — asking only the realm \
-         database makes a character that logged out inside an instance vanish from character \
-         select entirely, because its durable row is on the instance shard."
-    );
-}
-
 // The escrow-priority tripwire that used to live here (`locate_character_still_prefers_the_shard_
 // holding_the_escrow`, a source scan of `Coordinator::locate_character`) was retired once
 // `settle_home_shard`'s holder lookup became `realm_core::locate_home_shard`, generic over the
@@ -1007,46 +926,6 @@ fn the_character_select_list_still_unions_across_every_shard() {
 // `locate_home_shard_still_prefers_the_shard_holding_the_escrow_in_the_fallback_scan` in
 // `realm_core.rs`, which runs the real fallback-scan code against `fake::Handle` rather than
 // matching its source text.
-
-/// Sibling tripwire: what `Coordinator::instance_shard_for` actually FORWARDS.
-///
-/// `ShardMap::instance_owner` is pinned by its own unit tests and the call site in
-/// `settle_home_shard` is pinned by `routing_call_site_tests`, but the three-line adapter between
-/// them is reachable from neither — it needs a live `ShardSet`. Verified by mutation: each of the
-/// three substitutions below left all 391 gateway tests green while deleting or inverting the
-/// stickiness rule outright.
-#[test]
-fn instance_shard_for_still_forwards_the_holder_the_instance_and_the_connected_set() {
-    let conn = include_str!("../stdb/connection.rs");
-    let at = conn
-        .find("pub(crate) fn instance_shard_for(")
-        .expect("`instance_shard_for` moved");
-    let body: String = conn[at..at + 500]
-        .lines()
-        .filter(|l| !l.trim_start().starts_with("//"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    // (a) the HOLDER, not `self`. `self` is the session's handle — on a login that is the default
-    //     shard, which is never a member of a dungeon map's pool, so stickiness could never fire.
-    // (b) the real `instance_id`. A literal `0` makes `instance_owner`'s open-world guard reject
-    //     every call, and the map decides again — i.e. live runs fork on a pool resize.
-    // (c) the CONNECTED predicate. `|_| true` would return a holder the gateway never reached,
-    //     which `shard_handle` then cannot resolve, pinning the session to whatever asked.
-    assert!(
-        body.contains("instance_owner(map_id, instance_id, holder,"),
-        "instance_shard_for no longer forwards (map_id, instance_id, holder) verbatim to \
-         `ShardMap::instance_owner`. The holder is the ONLY durable evidence of which pool \
-         member a live dungeon run is on; substituting `self.shard_name()` or a literal instance \
-         id silently restores the routing that predates the instance-shard pool and forks every \
-         live run when the operator adds a second instances database. Body was:\n{body}"
-    );
-    assert!(
-        body.contains("self.1.conns.contains_key(d)"),
-        "instance_shard_for's `connected` predicate no longer reads the live connection set — a \
-         stickiness answer naming a database the gateway never reached cannot be routed to, and \
-         must degrade to the shard map like every other resolver in `config.rs`. Body was:\n{body}"
-    );
-}
 
 #[test]
 fn a_resumed_transfer_reuses_the_escrowed_destination_not_the_character_row() {

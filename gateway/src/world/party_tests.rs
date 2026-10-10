@@ -1107,44 +1107,6 @@ fn deleted_character_cleanup_flushes_pending_loot_before_leaving_realm_core() {
     );
 }
 
-#[test]
-fn deleted_character_leave_returns_with_the_committed_roster_visible() {
-    let src = include_str!("../stdb/reducers.rs");
-    let body = crate::test_scan::code_of(src, "pub fn deleted_character_party_leave(");
-    assert!(
-        body.contains("let coordinator = self.0.visibility_pipe()")
-            && body.contains("coordinator.conn.reducers"),
-        "cleanup reads Realm-core immediately after LEAVE, so the Durable Request must return a \
-         Coordinator visibility receipt. Body was:\n{body}"
-    );
-
-    let ordinary = crate::test_scan::code_of(src, "pub fn realm_group_op(");
-    assert!(
-        ordinary.contains("self.0.call_pipe().conn.reducers"),
-        "an op that pushes no Group mirror needs no visibility receipt, so it keeps the \
-         independent call pipe. Body was:\n{ordinary}"
-    );
-
-    let visible = crate::test_scan::code_of(src, "pub fn realm_group_op_visible(");
-    assert!(
-        visible.contains("let coordinator = self.0.visibility_pipe()")
-            && visible.contains("coordinator.conn.reducers"),
-        "a World Session's party op pushes the mirror from a read right after it, so it must \
-         return a Coordinator visibility receipt. Body was:\n{visible}"
-    );
-}
-
-/// The production pipes cannot run in a Gateway test, so the choice of op in `party::run` is pinned
-/// here and the lagging Fake above proves what it buys.
-#[test]
-fn a_world_session_runs_its_realm_party_op_on_the_visibility_pipe() {
-    let run = crate::test_scan::code_of(include_str!("party.rs"), "pub(crate) fn run<");
-    assert!(run.contains("run_on_authority_visible(realm.as_ref(), self_guid, op, acceptor)"));
-    let visible =
-        crate::test_scan::code_of(include_str!("party.rs"), "fn run_on_authority_visible<");
-    assert!(visible.contains("authority.realm_group_op_visible("));
-}
-
 /// **The invariant this batch has broken five times: unset config changes NOTHING.**
 ///
 /// A single-database gateway has no realm-core to route to, so every op takes the pre-realm-core

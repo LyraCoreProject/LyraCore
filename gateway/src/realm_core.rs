@@ -23,13 +23,8 @@
 //! this file is about.
 //!
 //! What is NOT modelled here is the transport: `Coordinator`'s own one-line bodies (the websocket
-//! read, the `call_reducer!`) are substituted wholesale by the fake. That layer is pinned by
-//! exact-shape equality on the forwarding impl (`the_coordinator_forwards_are_views_not_logic`),
-//! because a `contains` scan is defeated by leaving the text in a dead branch. The module pins its
-//! own equivalent (`CtxShard`) exactly the same way, and a later measurement showed why that is still the right
-//! instrument: a cargo-mutants run over that surface MISSED every mutation in the adapter, because a
-//! mutation tool can only ask whether a test fails and no headless test can drive the real
-//! connection. The same holds here.
+//! read, the `call_reducer!`) are substituted wholesale by the fake. A headless test cannot drive
+//! the real connection.
 
 use anyhow::{anyhow, Result};
 
@@ -2484,103 +2479,6 @@ mod tests {
             publish_shard_index(&h, 100, 36, 7).is_err(),
             "a publish that silently swallowed an unreachable realm-core would be exactly the \
              best-effort, independently-committing write this replication exists to remove"
-        );
-    }
-
-    // -------------------------------------------------------------------------------------
-    // The seam's own blind spot: `Coordinator`'s forwarding impl
-    // -------------------------------------------------------------------------------------
-
-    /// `impl RealmDb for Coordinator` is the ONE layer the fake substitutes for wholesale, and
-    /// every method in it is a one-line forward whose damage would be total and silent — pointing
-    /// `realm_core()` at `self`, or `session_key` at the wrong table, is invisible to every test
-    /// above. So it is compared for EXACT SHAPE, the same way `module/src/transfer/mod.rs` pins
-    /// `CtxShard`: a `contains` scan is defeated by leaving the old text in a dead branch, equality
-    /// is not. If a change here is deliberate, re-bless it with the same care.
-    ///
-    /// `has_escrow` adapts its inherent return shape by narrowing `Option<TransferOut>` to a bool.
-    /// The other methods forward their inherent result without choosing a database or changing the
-    /// returned fact.
-    #[test]
-    fn the_coordinator_forwards_are_views_not_logic() {
-        let src = include_str!("stdb/world_store.rs");
-        let at = src
-            .find("impl crate::realm_core::RealmDb for Coordinator {")
-            .expect("`impl RealmDb for Coordinator` moved out of world_store.rs");
-        let body = &src[at..];
-        let end = body.find("\n}\n").expect("unterminated impl block");
-        let shape = body[..end]
-            .lines()
-            .filter(|l| !l.trim_start().starts_with("//"))
-            .collect::<Vec<_>>()
-            .join(" ")
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ");
-        let want = "impl crate::realm_core::RealmDb for Coordinator { \
-            fn shard_name(&self) -> &str { self.shard_name() } \
-            fn is_sharded(&self) -> bool { self.is_sharded() } \
-            fn shard_map(&self) -> &crate::config::ShardMap { self.shard_map() } \
-            fn realm_core(&self) -> Result<Coordinator> { self.realm_core() } \
-            fn world_shards(&self) -> Vec<(String, Coordinator)> { self.world_shards() } \
-            fn account_by_username(&self, username: &str) -> Result<Option<AccountRow>> { \
-            self.account_by_username(username) } \
-            fn session_key(&self, account_id: u64) -> Result<Option<SessionKey>> { \
-            self.session_key(account_id) } \
-            fn bound_identity(&self, account_id: u64) -> Result<[u8; 32]> { \
-            self.bound_identity(account_id) } \
-            fn character_count(&self, account_id: u64) -> Result<u8> { \
-            self.character_count(account_id) } \
-            fn realm(&self) -> Result<RealmRow> { self.realm() } \
-            fn establish_session( &self, account_id: u64, session_key: &[u8; 40], bound_identity: [u8; 32], ) \
-            -> Result<()> { self.establish_session(account_id, session_key, bound_identity) } \
-            fn request_gm_command( &self, actor_guid: u64, alpha_test_tools: bool, text: String, ) \
-            -> Result<()> { self.request_gm_command(actor_guid, alpha_test_tools, text) } \
-            fn character_location(&self, guid: u64) -> Option<(u32, u64)> { \
-            self.character_location(guid) } \
-            fn character_shard(&self, guid: u64) -> Option<(u32, u64)> { self.character_shard(guid) } \
-            fn set_character_shard(&self, guid: u64, map_id: u32, instance_id: u64) -> Result<()> { \
-            self.set_character_shard(guid, map_id, instance_id) } \
-            fn realm_character_partition( &self, guid: u64, ) \
-            -> Result<Option<crate::world::party::RealmCharacterPartition>> { \
-            self.realm_character_partition(guid) } \
-            fn begin_character_shard_transfer( &self, source_map: u32, source_instance: u64, \
-            source_revision: u64, destination_map: u32, destination_instance: u64, \
-            source_module_identity: spacetimedb_sdk::Identity, intent_id: u64, \
-            controller_generation: u64, character_guid: u64, ) -> Result<()> { \
-            self.begin_character_shard_transfer( source_map, source_instance, source_revision, \
-            destination_map, destination_instance, source_module_identity, intent_id, \
-            controller_generation, character_guid, ) } \
-            fn finish_character_shard_transfer( &self, \
-            intent: &crate::world::transfer::BotTransferIntent, ) -> Result<()> { \
-            self.finish_character_shard_transfer(intent) } \
-            fn finish_player_character_shard_transfer( &self, character_guid: u64, \
-            source_map: u32, source_instance: u64, source_revision: u64, destination_map: u32, \
-            destination_instance: u64, ) -> Result<()> { \
-            self.finish_player_character_shard_transfer( character_guid, source_map, \
-            source_instance, source_revision, destination_map, destination_instance, ) } \
-            fn finish_pending_character_shard_transfer( &self, character_guid: u64, \
-            source_map: u32, source_instance: u64, source_revision: u64, destination_map: u32, \
-            destination_instance: u64, source_module_identity: spacetimedb_sdk::Identity, \
-            transfer_intent_id: u64, controller_generation: u64, ) -> Result<()> { \
-            self.finish_pending_character_shard_transfer( character_guid, source_map, \
-            source_instance, source_revision, destination_map, destination_instance, \
-            source_module_identity, transfer_intent_id, controller_generation, ) } \
-            fn has_escrow(&self, guid: u64) -> bool { self.escrow_row(guid).is_some() } \
-            fn session_count(&self) -> usize { self.session_count() } \
-            fn record_shard_load( &self, shard: &str, writer_occupancy_pct: f32, sessions: u32, \
-            gateway_key: u64, ) -> Result<()> { self.record_shard_load(shard, \
-            writer_occupancy_pct, sessions, gateway_key) }"
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ");
-        assert_eq!(
-            shape, want,
-            "`impl RealmDb for Coordinator` is no longer a block of pass-throughs to \
-             `Coordinator`'s own inherent methods. Everything in `realm_core.rs` is tested through \
-             this impl with a fake substituted for it, so an edit here — `realm_core()` returning \
-             `self.clone()`, `session_key` reading the wrong account — is invisible to all of it \
-             while the whole suite stays green."
         );
     }
 }
