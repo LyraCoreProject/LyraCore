@@ -77,9 +77,9 @@ impl GuildActionStore for WorldFake {
         Ok(false)
     }
 
-    fn guild_op(&self, actor_guid: u64, request: GuildRequest) -> Result<GuildOutcome> {
+    fn guild_op(&self, actor: Actor, request: GuildRequest) -> Result<GuildOutcome> {
         if request == GuildRequest::ForgetDeletedCharacter {
-            self.rec(&format!("guild_op:ForgetDeletedCharacter:{actor_guid}"));
+            self.rec(&format!("guild_op:ForgetDeletedCharacter:{}", actor.guid()));
             return Ok(GuildOutcome::Ran);
         }
         self.rec(match request {
@@ -150,7 +150,7 @@ impl GuildActionStore for WorldFake {
         Ok(false)
     }
 
-    fn guild_destroy_charter(&self, _actor_guid: u64, _charter_item_guid: u64) -> Result<()> {
+    fn guild_destroy_charter(&self, _actor: Actor, _charter_item_guid: u64) -> Result<()> {
         Ok(())
     }
 
@@ -171,7 +171,10 @@ impl GuildActionStore for WorldFake {
 
     fn guild_names_character(&self, character_guid: u64) -> Result<bool> {
         if self.guild.guild_lookup_error_for == Some(character_guid) {
-            return Err(anyhow!("guild lookup for {character_guid} failed"));
+            return Err(crate::stdb::ReducerCallError::transport_lost(&format!(
+                "guild lookup for {character_guid}"
+            ))
+            .into());
         }
         Ok(self.guild_character_guids()?.contains(&character_guid))
     }
@@ -186,13 +189,13 @@ impl GuildActionStore for WorldFake {
 
 /// Realm-core refuses every fee: the socket tests only watch a leftover hold finish.
 impl crate::world::guild_fee::GuildFeeStore for WorldFake {
-    fn guild_fee_held(&self, _actor_guid: u64) -> Result<Option<crate::world::guild_fee::FeeHold>> {
+    fn guild_fee_held(&self, _actor: Actor) -> Result<Option<crate::world::guild_fee::FeeHold>> {
         Ok(self.guild.guild_fee_hold.lock().unwrap().clone())
     }
 
     fn guild_fee_hold(
         &self,
-        _actor_guid: u64,
+        _actor: Actor,
         _request: crate::world::guild_fee::FeeRequest,
     ) -> Result<Result<crate::world::guild_fee::FeeHold, lyracore_shared::guild::GuildRefusal>>
     {
@@ -201,7 +204,7 @@ impl crate::world::guild_fee::GuildFeeStore for WorldFake {
 
     fn guild_fee_decide(
         &self,
-        _actor_guid: u64,
+        _actor: Actor,
         _hold: crate::world::guild_fee::FeeHold,
     ) -> Result<crate::world::guild_fee::FeeOutcome> {
         self.rec("guild_fee_decide");
@@ -210,12 +213,7 @@ impl crate::world::guild_fee::GuildFeeStore for WorldFake {
         ))
     }
 
-    fn guild_fee_finish(
-        &self,
-        _actor_guid: u64,
-        _operation_id: u64,
-        _accepted: bool,
-    ) -> Result<()> {
+    fn guild_fee_finish(&self, _actor: Actor, _operation_id: u64, _accepted: bool) -> Result<()> {
         self.rec("guild_fee_finish");
         *self.guild.guild_fee_hold.lock().unwrap() = None;
         Ok(())
