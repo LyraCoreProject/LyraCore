@@ -1,7 +1,6 @@
 # Schema — the SpacetimeDB data model
 
-**Status:** current — verified against the tree on 2026-09-03. This document is a *map* of the data
-model, not a copy of it. **The code is authoritative**: every table is a Rust `#[table]` struct in
+This document is a *map* of the data model, not a copy of it. **The code is authoritative**: every table is a Rust `#[table]` struct in
 `module/src/**` — or in an extension package compiled into the same module — and where a snippet here
 and the code disagree, the code wins.
 

@@ -169,7 +169,7 @@ Several verification tools are **maintainer-side and not included in this reposi
 wire-protocol test suite (a headless client that speaks the real 5875 protocol — SRP6 plus the
 encrypted world stream — and decodes SMSG through gtker), the cross-shard catalogue check, and the
 capacity benchmark. `lyracore-deploy`, which the CLI's production-realm refusal names (distinct from
-the PID-identity refusal in [`development-cli.md`](./development-cli.md)), is maintainer-side too;
+the PID-identity refusal in the [CLI command reference](https://github.com/LyraCoreProject/lyracore-cli/blob/main/docs/commands.md)), is maintainer-side too;
 §3 below is the deploy procedure available here and does the same work by hand. (The world-import ETL is **not** one of these: `importer/scripts/` — including
 `import-world.sh`, the ETL that builds a full zone from operator-supplied data — ships in this
 repository; see [`data-ingestion.md`](./data-ingestion.md).) The traps above are written so they
@@ -224,7 +224,7 @@ a copy, refuses when another active service already owns the node's data directo
 address, and reports a host whose `ActiveState`, `LimitNOFILE` or `StandardError` does not match as
 NOT reconciled rather than as a success. The first three commands stay manual on purpose: it never
 creates the service account, the directories, or the binary, and refuses by name when one of them
-is missing. [`docs/development-cli.md`](./development-cli.md) has its full ordered plan. Prefer it
+is missing. The [CLI command reference](https://github.com/LyraCoreProject/lyracore-cli/blob/main/docs/commands.md) has its full ordered plan. Prefer it
 over typing these by hand, so a repaired host matches the checkout rather than the last operator.
 
 Inspect the service and its durable stderr capture with:

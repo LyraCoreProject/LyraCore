@@ -1,7 +1,7 @@
 # LyraCore architecture
 
-**Status:** current — verified against the tree on 2026-09-03. Every claim below cites the file
-that makes it true; where an older document disagreed with the code, the code won.
+Every claim below cites the file that makes it true. Where this page and the code disagree, the code
+wins.
 
 **Authority note:** [`danger-zones.md`](./danger-zones.md) is authoritative over this document and
 over every other document in this directory for anything about migrations, publishing, or the
@@ -213,8 +213,8 @@ The **local developer fixture has one database per tier above** (#108) — `lyra
 (`lyracore-kalimdor`, one shard where production has a growing set); the other three names are
 production's own. What keeps a fixture off a production node is the **node** it is published to —
 every `dev` publish is `-s local`, against the SpacetimeDB on loopback:3000 that `dev up` starts —
-never the name. See [`development-cli.md`](./development-cli.md) §"Sharded out of the box, on
-purpose".
+never the name. See "Sharded out of the box, on purpose" in the
+[CLI command reference](https://github.com/LyraCoreProject/lyracore-cli/blob/main/docs/commands.md).
 
 **Direction:** the **region tier** — sub-map seams, the seam menu, region→shard assignments, warm
 mid-walk handoff — was **removed 2026-08-08 (#471)**, an operator decision to keep the alpha on the
@@ -320,7 +320,7 @@ un-renamed one is simply unset rather than reported.
 
 **Do not hand-roll the launch.** Use the recipe in [`danger-zones.md`](./danger-zones.md) §3
 verbatim, or the `./lyracore` development CLI documented in
-[`development-cli.md`](./development-cli.md).
+[CLI command reference](https://github.com/LyraCoreProject/lyracore-cli/blob/main/docs/commands.md).
 
 ### 3.3 Syntax of the routing variables
 
@@ -746,13 +746,17 @@ warning banner states plainly, not a contradiction to resolve in this document.
 
 ## 9. Document index
 
-### Architecture and internals — start here
+### Architecture and internals
 
 | Document | What it is |
 |---|---|
+| [`../CONTRIBUTING.md`](../CONTRIBUTING.md) | Where a contributor starts, and the three required reads. |
 | **`architecture.md`** (this file) | The current system: tiers, topology, data model, read plane, sharding, packages. |
-| [`../CONTEXT.md`](../CONTEXT.md) | The glossary. The words this document and the code are supposed to use, and the words to avoid. |
-| [`danger-zones.md`](./danger-zones.md) | **Authoritative.** Traps, tooling gotchas, and the exact deploy/verify procedure. Read before any engine change. |
+| [`../CORE_TERMS.md`](../CORE_TERMS.md) | The thirty-odd terms a contributor meets first. |
+| [`../CONTEXT.md`](../CONTEXT.md) | The full glossary, with an alphabetical index. The words this document and the code use, and the words to avoid. |
+| [`danger-zones.md`](./danger-zones.md) | **Authoritative.** Traps, tooling gotchas, and the exact deploy/verify procedure. |
+| [`testing.md`](./testing.md) | The test tiers and the commands CI runs. |
+| [`recipes/`](./recipes/) | Step lists for common changes: [add an opcode](./recipes/add-an-opcode.md), [add a spell effect](./recipes/add-a-spell-effect.md). |
 | [`schema.md`](./schema.md) | The table-level data model. |
 | [`package-api.md`](./package-api.md) | The Package API, version 1: what a Package's Rust half may call, and what core promises about it. |
 
@@ -761,7 +765,7 @@ warning banner states plainly, not a contradiction to resolve in this document.
 | Document | What it is |
 |---|---|
 | [`quickstart.md`](./quickstart.md) | The shortest path from a clean checkout to a running realm. |
-| [`development-cli.md`](./development-cli.md) | The `./lyracore` CLI: the pinned shim, and the build, preflight, publish and local-stack commands. |
+| [`development-cli.md`](./development-cli.md) | Where the `./lyracore` CLI and its command reference live. |
 | [`data-ingestion.md`](./data-ingestion.md) | Where vanilla content comes from and the licensing firewall. |
 
 ### Verification write-ups

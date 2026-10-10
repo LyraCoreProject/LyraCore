@@ -4,15 +4,15 @@ LyraCore is an alpha, maintained by a very small number of people in their own t
 support contract, no SLA, and no hosted service. What there is: documentation that tries to be
 specific, and a tracker that gets read.
 
-## Start here — the answer is often already written down
+## The answer is often already written down
 
 | Your situation | Where to look |
 |---|---|
 | "I cloned it, now what?" | [`docs/quickstart.md`](./docs/quickstart.md) — prerequisites, `./lyracore dev up`, account creation, `realmlist.wtf`, LAN play. |
 | The stack will not start, a port is busy, `doctor` complains, the client will not connect | [`docs/quickstart.md` §8](./docs/quickstart.md#8-troubleshooting) — one entry per failure mode, with the exact message each one prints. |
-| What does this CLI command do / is it safe | [`docs/development-cli.md`](./docs/development-cli.md). |
+| What does this CLI command do / is it safe | The [CLI command reference](https://github.com/LyraCoreProject/lyracore-cli/blob/main/docs/commands.md) in the `lyracore-cli` repository. |
 | How does the thing actually work | [`docs/architecture.md`](./docs/architecture.md), whose §9 indexes the rest of the documentation. |
-| I want to change something | [`docs/danger-zones.md`](./docs/danger-zones.md) — traps, tooling gotchas, and the exact deploy/verify procedure to read before any change. |
+| I want to change something | [`CONTRIBUTING.md`](./CONTRIBUTING.md): the three documents to read first, what gets in, and how a pull request is judged. |
 | Is it safe to expose this | No — see the warning banner in [`README.md`](./README.md). |
 | Where does world content come from | [`docs/data-ingestion.md`](./docs/data-ingestion.md). |
 
