@@ -23,9 +23,11 @@ fn login_on_kalimdor(gateway: Coordinator, runtime: &tokio::runtime::Runtime, gu
     }
     let (mut client, socket) = world_session_socket_pair();
     let handle = runtime.handle().clone();
+    let (done, finished) = std::sync::mpsc::channel();
     let session = std::thread::spawn(move || {
         let _entered = handle.enter();
-        crate::world::run_world_session(socket, std::sync::Arc::new(gateway))
+        let result = crate::world::run_world_session(socket, std::sync::Arc::new(gateway));
+        let _ = done.send(result);
     });
     let (mut encrypt, mut decrypt) = client_handshake(&mut client, "TEST", [7; 40]);
     CMSG_PLAYER_LOGIN {
@@ -49,8 +51,12 @@ fn login_on_kalimdor(gateway: Coordinator, runtime: &tokio::runtime::Runtime, gu
         answered,
         "the Character must remain connected after Kalimdor entry"
     );
-    drop(client);
-    session.join().unwrap().unwrap();
+    client.shutdown(std::net::Shutdown::Write).unwrap();
+    finished
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("the World Session must stop after the Client closes its write side")
+        .unwrap();
+    session.join().unwrap();
 }
 
 struct TopologyEnv {
