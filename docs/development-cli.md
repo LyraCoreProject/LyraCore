@@ -102,7 +102,7 @@ lyracore update
 | `packages new` | copy a Reference Package from the collection tag matching this checkout's Package API |
 | `packages remove` | delete a disabled Package, after a confirmation and a check for local changes |
 | `packages replay` | reapply every enabled Package's claims and Runtime Scripts onto the named Shards, or the whole recorded fixture topology by default |
-| `packages update` | advance a Git-backed Package, or every one of them, to the repository's current commit |
+| `packages update` | update Git Package Sources from their repository and Official Package Sources from the compatible collection tag |
 | `character gm` | flip GM commands on or off for a character, on whichever world shard has it |
 | `production status` | read-only checks for an explicitly named production topology and the latest gateway start |
 | `service reconcile` | make a production host's Standalone Supervisor match the unit tracked in this checkout. Root only |
@@ -236,8 +236,8 @@ around saying so.
 
 **Everything that can refuse the install happens before anything is copied.** The name must be one
 the build accepts (`[a-zA-Z][a-zA-Z0-9_-]*` — the build maps `my-package` onto the module
-`pkg_my_package` and panics on anything else). The shape must be one the build accepts: client-only
-and Rust-only are both valid, and when `src/` exists, `src/mod.rs` is required. The name must
+`pkg_my_package` and panics on anything else). A Package must carry `src/`, `client/`, `data/`,
+`scripts/` or `datascripts/`. When `src/` exists, `src/mod.rs` is required. The name must
 collide with neither the enabled nor the disabled inventory, compared on the Rust identifier rather
 than the folder name — `my-package` and `my_package` fold onto the same module.
 
@@ -245,10 +245,10 @@ Then it prints a **Trust Review** and asks. The review is a deterministic, read-
 candidate folder using a port of the build's own marker scan, so a commented-out or quoted marker
 registers nothing here either. It reports tables, reducers, hooks, tick passes, character-owned
 sweeps, addons, client overrides and Runtime Script sources. Runtime Scripts are named because they
-run on the realm once the Package is built. A Package cannot ship a Datascript of its own — the
-authoring toolchain lives in `datascripts/`, outside any Package folder — so that row is an explicit
-"none detected" rather than silence. The review states plainly that everything else in the Package's
-Rust is trusted code and that it is an inventory, not a security guarantee.
+run on the Realm once the Package is built. It also names Package-local Datascripts, which
+`packages build` runs as trusted code on the author's machine. The review states plainly that
+everything else in the Package's Rust is trusted code and that it is an inventory, not a security
+guarantee.
 
 On confirmation the folder is **copied, never symlinked**: a linked Package would compile from a
 folder outside the checkout, so `preflight`, `publish` and `client sync` would each read whatever
@@ -271,14 +271,14 @@ waiting on a hidden prompt.
 **A bare word that is not a path on this machine is an Official Package Source.** `packages add
 greeter` resolves `greeter` against the one Official Package Collection this CLI knows,
 `LyraCoreProject/packages`, which holds several first-party Packages side by side, one top-level
-directory each. The collection is cloned the same way a Git Package Source is, the named directory
-goes through the same Trust Review and consent question as any other install, and the rest of the
-clone is discarded. An unknown name is refused before anything is copied; a name that only differs
+directory each. The version in the checkout's `docs/package-api.md` selects a tag such as `api-v1`.
+The CLI fetches that tag and sends the named directory through the same Trust Review and consent
+question as any other install. A missing tag refuses the install; the rest of the clone is
+discarded. An unknown name is refused before anything is copied; a name that only differs
 from one already in the collection by hyphen/underscore folding is named in the refusal instead of
 installed in its place. The Provenance Stamp records the collection's URL and the exact commit the
-directory was resolved at. That commit is pinned at install time: `packages update` refuses this
-kind by name (see below), so a later commit to the collection can never silently change what is
-installed. Picking up a newer one means removing the Package and adding it again.
+directory was resolved at. `packages update` can advance the installed Package to the current
+commit at the compatible tag, after the normal Trust Review and confirmation.
 
 **It publishes nothing.** The two remaining steps are printed for you to run:
 
@@ -379,25 +379,25 @@ Save them outside the checkout first, or delete the folder by hand.
 
 **None of the three publishes or synchronizes a client.** Each prints the steps it did not run.
 
-## `packages update` — advancing a Git-backed Package
+## `packages update`
 
 ```bash
 ./lyracore packages update my-package        # advance one Package, asks first
-./lyracore packages update                   # advance every Git-backed Package
+./lyracore packages update                   # advance every Git or Official Package Source
 ./lyracore packages update --yes             # answer the questions in advance
 ```
 
-**Only a Git-backed Package can be updated.** With a name, anything else is refused by name and told
-why: a Package installed from a local folder has no newer revision to fetch, a scaffold has no
-Package Source at all, an Official Package Source has its commit pinned at install time on purpose,
-and a Package Source kind this CLI does not otherwise know is not cloned on the chance that it might
-be a repository. With no name, `update` walks both inventories and takes the Git-backed Packages,
-disabled ones included. A disabled Package that comes back later should not bring an old revision
-with it.
+Git Package Sources and Official Package Sources can be updated. With a name, other source kinds
+are refused: a local folder has no remote revision to fetch, a scaffold contains code the author
+owns, and an unknown source kind is not cloned. With no name, `update` selects both supported
+source kinds from the enabled and disabled inventories.
 
-Each update clones the recorded repository and compares the commit it finds against the recorded
-one. Same commit, nothing to do. A newer commit gets the same Trust Review and the same question as
-an install, and the question names both commits.
+A Git Package Source uses the recorded repository's current commit. An Official Package Source
+uses the tag matching the checkout's Package API version and resolves the same Package name there.
+A missing tag or Package refuses the update before changing the installed copy.
+
+If the resolved commit matches the Provenance Stamp, there is nothing to do. A different commit
+gets the same Trust Review and confirmation as an install, with both commits named.
 
 **A folder that has drifted from its Provenance Stamp is refused, and nothing is discarded.** An
 update replaces the whole folder, so it may only run when every byte in that folder is recorded
@@ -410,8 +410,7 @@ then is the old folder deleted. If anything fails, the previous revision goes ba
 the candidate is discarded, and the error names both commits. `update` publishes nothing and
 synchronizes no client; it prints the steps it did not run.
 
-Applying and replaying Package Deltas is `packages replay`, below. Advancing an Official Package
-Source through `packages update` remains separate work.
+Applying and replaying Package Deltas is `packages replay`, below.
 
 ## `packages config` — a Package's key-values, on every Shard
 
