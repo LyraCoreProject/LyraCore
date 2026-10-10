@@ -1,12 +1,11 @@
-//! Item wire mapping: the `CMSG_ITEM_QUERY_SINGLE` reply and the item CREATE_OBJECT (items
-//! slice-1), plus the flattened template/instance row views. Pure code-motion out of `mod.rs`.
+//! Item wire mapping: the `CMSG_ITEM_QUERY_SINGLE` reply and the item CREATE_OBJECT, plus the flattened template/instance row views. Pure code-motion out of `mod.rs`.
 
 use super::*;
 
 use lyracore_shared::item::{item_class, weapon_subclass, ItemRefusal, Proficiency};
 
 /// An item-template row as the gateway reads it from `game_item_template`, flattened for the
-/// `CMSG_ITEM_QUERY_SINGLE` reply + the item CREATE (items slice-1). Decoupled from the SDK row
+/// `CMSG_ITEM_QUERY_SINGLE` reply + the item CREATE. Decoupled from the SDK row
 /// type. `class`/`subclass` together pick the typed `ItemClassAndSubClass`; the rest map 1:1.
 #[derive(Clone, Debug, Default)]
 pub struct ItemTemplateView {
@@ -82,7 +81,7 @@ pub struct ItemTemplateView {
     pub random_property: u32,
 }
 
-/// An owned-item instance as the gateway reads it from `game_item_instance` (items slice-1),
+/// An owned-item instance as the gateway reads it from `game_item_instance`,
 /// joined with its template for the CREATE descriptors. Decoupled from the SDK row type.
 #[derive(Clone, Debug, Default)]
 pub struct ItemInstanceView {
@@ -452,7 +451,7 @@ pub fn build_buy_bank_slot_reply(outcome: Result<(), &str>) -> SMSG_BUY_BANK_SLO
     build_buy_bank_slot_result(result)
 }
 
-/// Build the item or container CREATE_OBJECT (items slice-1 / bag extension). A non-spatial object:
+/// Build the item or container CREATE_OBJECT. A non-spatial object:
 /// NO living/position movement block — just `UPDATEFLAG_ALL`. Branches on `inst.container_slots`:
 /// - Regular items (0): `ObjectType::Item` + `UpdateMask::Item` (baseline-safe, byte-identical).
 /// - Bags (> 0): `ObjectType::Container` + `UpdateMask::Container` with `CONTAINER_FIELD_NUM_SLOTS`

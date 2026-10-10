@@ -35,8 +35,7 @@ pub struct TerrainChunk {
 }
 
 /// Ground height at (x, y), or `None` where no terrain is imported. ONE indexed PK find plus
-/// arithmetic, this sits in the 0.5s movement tick, so it must never scan /
-/// de-risking spike). The cell math + bilinear interpolation live in
+/// arithmetic. This sits in the 0.5s movement tick, so it must never scan. The cell math + bilinear interpolation live in
 /// `lyracore_shared::terrain` (unit-tested there; the importer's self-check shares the SAME code,
 /// so import-time verification covers this exact function).
 pub fn ground_z(ctx: &ReducerContext, map_id: u32, x: f32, y: f32) -> Option<f32> {
@@ -149,12 +148,12 @@ pub fn debug_check_submerged(ctx: &ReducerContext, guid: u64) -> Result<(), Stri
 /// Chase the position's MCNK `area_id` (`area_id_at` above) ONE hop up `game_area.parent_area_id` to
 /// its enclosing zone — e.g. a Goldshire subzone area resolves to zone 12 (Elwynn). NOT a full
 /// recursive area-hierarchy walk (a subzone-of-a-subzone would need more than one hop; deferred to
-///, which needs full area resolution for exploration XP anyway). Returns `None` when
+/// the exploration XP work, which needs full area resolution anyway). Returns `None` when
 /// `game_area` is empty (unimported) or the position's terrain cell has no recorded/imported area, so
 /// callers skip zone-scoping entirely rather than guessing wrong — a wrong guess would silently narrow
 /// a candidate set (graveyards, fishing loot) to the WRONG zone.
 ///
-/// The single canonical zone resolver (idiom): `world::graveyard`'s release pick
+/// The single canonical zone resolver: `world::graveyard`'s release pick
 /// and `loot::apply_fish`'s catch roll both call this instead of each keeping its own one-hop walk.
 pub fn zone_id_at(ctx: &ReducerContext, map_id: u32, x: f32, y: f32) -> Option<u32> {
     area_at(ctx, map_id, x, y).map(|area| zone_of(&area))

@@ -23,7 +23,7 @@ pub struct VmapTri {
 
 /// Bytes per packed triangle: 1 (class tag) + 4 (group_id) + 4 (mogp_flags) + 36 (9 × f32 verts).
 /// `pub` so the importer can size a per-blob shard cap. A dense cell's triangle count
-/// isn't bounded, but a single `spacetime call` argument is — see `importer/src/vmap.rs`).
+/// isn't bounded, but a single `spacetime call` argument is (see `importer/src/vmap.rs`).
 pub const TRI_BYTES: usize = 1 + 4 + 4 + 36;
 /// Header: 1 version byte + 4-byte LE triangle count. `pub` for the same reason as `TRI_BYTES`.
 pub const HEADER_BYTES: usize = 5;
@@ -529,7 +529,7 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------------------
-    //  Ray-query tests, a synthetic stand-in for the done-when's live scenarios: a
+    //  Ray-query tests, a synthetic stand-in for live scenarios: a
     //  vertical "column" wall (abbey pillar analogue), a clear segment, and a doodad that
     //  blocks the collision ray but not the LoS ray.
     // -------------------------------------------------------------------------------------
@@ -678,7 +678,7 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------------------
-    //  Area-info tests, a synthetic stand-in for the done-when's live scenarios: a
+    //  Area-info tests, a synthetic stand-in for live scenarios: a
     //  horizontal floor quad tagged indoor (abbey-interior analogue) under a probe reports the
     //  group + indoor=true; a probe with no WMO geometry in range reports "outdoors" (`None`).
     // -------------------------------------------------------------------------------------

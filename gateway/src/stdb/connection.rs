@@ -1207,7 +1207,7 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         "SELECT * FROM game_taxi_service_reply",
         "SELECT * FROM game_start_position",
         "SELECT * FROM game_corpse",
-        // Items slice-1: the static item definitions (for CMSG_ITEM_QUERY_SINGLE) + every
+        // Items: the static item definitions (for CMSG_ITEM_QUERY_SINGLE) + every
         // owned-item instance. The coordinator authenticates as the module owner, which bypasses
         // RLS, so it reads all players' item rows (like game_character) to drive each login spawn.
         "SELECT * FROM game_item_template",
@@ -1223,7 +1223,7 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // Buyback ring: read by the coordinator to rebuild a player's buyback-tab view
         // after sell/buyback and at login (private table — the owner-token coordinator sees it).
         "SELECT * FROM game_character_buyback",
-        // Items slice-4: a creature corpse's item loot, read for the loot window.
+        // Items: a creature corpse's item loot, read for the loot window.
         "SELECT * FROM game_corpse_loot",
         // Vendors (Tier 2): a creature's vendor stock, read for SMSG_LIST_INVENTORY.
         "SELECT * FROM game_npc_vendor",

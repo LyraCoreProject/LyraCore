@@ -51,7 +51,7 @@ pub fn entity_by_owner(ctx: &ReducerContext, owner: Identity) -> Option<WorldEnt
 }
 
 /// The ACTING entity resolved by guid — `entity_by_owner`'s guid-keyed twin for the trusted
-/// gateway verb surface (stage 4), where the actor arrives as an explicit `actor_guid` on a
+/// gateway verb surface, where the actor arrives as an explicit `actor_guid` on a
 /// `require_operator`-gated reducer instead of via `ctx.sender()`. Same in-transit fence, same
 /// shared [`gate_by_guid`]: a mid-transfer character reads "not in world" on the `gw_*` path
 /// exactly as it does on the sender path. NOT [`live_entity`], which deliberately skips the fence.
@@ -183,7 +183,7 @@ pub(crate) fn player_interaction_gate(
 /// is a superset of the exact circle: callers keep their own precise distance check. Cost scales
 /// with the neighborhood's population, not the world's. `instance_id` is a REQUIRED param (no
 /// default) so the compiler finds every call site, pass the ACTING
-/// entity's own `instance_id`; every slice-1 caller is at instance 0, so behavior is unchanged.
+/// entity's own `instance_id`; every caller is at instance 0, so behavior is unchanged.
 pub(crate) fn entities_near(
     ctx: &ReducerContext,
     map_id: u32,

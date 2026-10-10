@@ -113,7 +113,7 @@ pub struct SpellEffect {
 }
 
 /// One REAGENT a spell consumes: the real multi-reagent recipe model that replaced
-/// the hardcoded `cast::RECIPES` map). Filled by the importer from `Spell.dbc` `Reagent[1-8]` /
+/// the hardcoded `cast::RECIPES` map. Filled by the importer from `Spell.dbc` `Reagent[1-8]` /
 /// `ReagentCount[1-8]` during the wholesale spell import — every real recipe (and any reagent-
 /// consuming spell) carries its true mats here, keyed by the REAL vanilla spell id, so the craft
 /// gate resolves by data instead of a hardcoded id list. Module-private (the craft reducer reads
@@ -390,7 +390,7 @@ pub struct SpellCastEvent {
     pub delay_ms: u32,
     // EFFECTIVE health restored to the primary target by this cast (overheal excluded; summed
     // across E_HEAL effects). >0 on the cast-GO row → the gateway relays SMSG_SPELLHEALLOG (the
-    // green floating number + combat-log line. Binding hand-synced (see the
+    // green floating number + combat-log line). Binding hand-synced (see the
     // delay_ms note above). END-appended + #[default(0u32)] → additive auto-migration.
     #[default(0u32)]
     pub healed: u32,
@@ -529,7 +529,7 @@ pub struct SpellCooldown {
 /// can be off-GCD yet still on its own cooldown). A `cooldown_ms == 0` spell writes NO row here, so every
 /// current seed spell is unaffected (baseline-safe). Logical key is `(caster_guid, spell_id)`; mirrors the
 /// `game_aura` idiom — an `#[auto_inc]` PK plus a `by_caster` btree index, the specific spell located with
-/// a `.find(|r| r.spell_id ==..)` on the caster's rows (no lossy u64+u32 PK pack). A NEW table → the GCD
+/// a `.find(|r| r.spell_id == ..)` on the caster's rows (no lossy u64+u32 PK pack). A NEW table → the GCD
 /// binding is untouched; this table's binding must be generated for the gateway to relay SMSG_SPELL_COOLDOWN.
 #[table(accessor = game_spell_cd, public, index(accessor = by_caster, btree(columns = [caster_guid])))]
 pub struct SpellCd {
@@ -545,7 +545,7 @@ pub struct SpellCd {
 /// victim's whole SCHOOL of magic is locked for ~5s: a cast whose `game_spell.school_mask` matches a LIVE
 /// lockout row for that caster is rejected by `resolve_cast_at` (until `until > now`). Logical key is
 /// `(caster_guid, school)`; mirrors the `game_spell_cd` idiom — an `#[auto_inc]` PK plus a `by_caster`
-/// btree, the specific school located with `.find(|r| r.school ==..)` on the caster's rows. A NEW public
+/// btree, the specific school located with `.find(|r| r.school == ..)` on the caster's rows. A NEW public
 /// table → no existing binding changes, and a plain `publish` auto-migrates it (additive, no rows). Public
 /// so the gateway can later relay an SMSG_SPELL_COOLDOWN-style lock (the server-authoritative gate works
 /// without it). Rows are never GC'd (like `game_spell_cd`): the `until > now` predicate makes expired rows
@@ -570,7 +570,7 @@ pub struct AuraSchedule {
     pub scheduled_at: ScheduleAt,
 }
 
-/// A GROUND-AoE persistent damage area (118): a fixed-position zone spawned by an `E_PERSISTENT_AREA`
+/// A GROUND-AoE persistent damage area: a fixed-position zone spawned by an `E_PERSISTENT_AREA`
 /// cast (Consecration / Blizzard / Rain of Fire / Flamestrike's patch). `tick_ground_areas` re-scans
 /// `radius_yd` around `(x,y,z)` every `period_ms` and applies `amount` `school_mask` damage to every
 /// hostile inside (via the shared apply_resistance→apply_target_damage path), reaping the row at
@@ -597,7 +597,7 @@ pub struct GroundArea {
     pub expires_at: Timestamp,
 }
 
-/// The client-visible half of a ground area (118): a vanilla DYNAMICOBJECT — the 5875 client draws
+/// The client-visible half of a ground area: a vanilla DYNAMICOBJECT — the 5875 client draws
 /// Consecration's ground swirl from a DynamicObject CREATE (DYNAMICOBJECT_SPELLID → SpellVisual),
 /// NEVER from the cast packets alone (live find: no swirl rendered). One row per live
 /// `game_ground_area`, guid = (0xF100 << 48) | area id (HIGHGUID_DYNAMICOBJECT, disjoint from the
@@ -617,7 +617,7 @@ pub struct DynamicObject {
     pub radius_yd: f32,
 }
 
-/// Drives the ground-AoE damage tick (118). [server]
+/// Drives the ground-AoE damage tick. [server]
 #[table(accessor = game_ground_area_schedule, scheduled(tick_ground_areas))]
 pub struct GroundAreaSchedule {
     #[primary_key]
@@ -653,7 +653,7 @@ pub struct PendingCast {
     // auto-migration (the publish-migration rule).
     #[default(0)]
     pub pushback_count: u8,
-    // GROUND-TARGET dest (118: the clicked ground point for a ground-AoE cast (Flamestrike patch,
+    // GROUND-TARGET dest: the clicked ground point for a ground-AoE cast (Flamestrike patch,
     // Blizzard, Rain of Fire) so a TIMED ground cast carries its dest from begin_cast to the completion
     // (`fire_pending_cast` → `resolve_cast_at`). `has_dest` distinguishes "no dest" from a legitimate
     // (0,0,0) point. Same END-appended `#[default]` additive auto-migration as `pushback_count`; still no

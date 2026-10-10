@@ -1140,7 +1140,7 @@ pub(crate) fn relay_gameobject_create(
         return Vec::new();
     };
     let view = go_view(row.clone(), &tmpl);
-    // the CREATE_OBJECT's typed descriptor builder can only carry rot0 of the 4-float spawn
+    // The CREATE_OBJECT's typed descriptor builder can only carry rot0 of the 4-float spawn
     // quaternion (gtker's slot-0-only wall), so the other 3 slots — and the yaw-derive fallback for
     // an all-zero stored quaternion — ride a second raw VALUES frame right behind CREATE. The client
     // has already materialized the object by the time this second frame arrives (same ordering the
@@ -3186,7 +3186,7 @@ fn entity_update_to_outbound_with_dynamic_flags(
             out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
         }
         // Dynamic-flags VALUES relay: the killing blow sets UNIT_DYNFLAG_LOOTABLE (0x1) on a corpse that
-        // rolled money (slice 3); the loot reducer clears it. NOTE: UNIT_DYNFLAG_DEAD (0x20) is NEVER set
+        // rolled money; the loot reducer clears it. NOTE: UNIT_DYNFLAG_DEAD (0x20) is NEVER set
         // (it is feign-death in vanilla — see combat + lyracore-shared constants).
         if old.dynamic_flags != new.dynamic_flags {
             let m = codec::build_dynamic_flags_values(new.guid, dynamic_flags);
@@ -3240,13 +3240,13 @@ fn entity_update_to_outbound_with_dynamic_flags(
             let m = codec::build_sheath_values(new.guid, new.unit_bytes_2);
             out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
         }
-        // Live XP-bar update (slice 1): players only (creatures never change xp; player-only fields).
+        // Live XP-bar update: players only (creatures never change xp; player-only fields).
         let xp_changed = old.xp != new.xp || old.next_level_xp != new.next_level_xp;
         if xp_changed && is_player {
             let m = codec::build_player_xp_values(new.guid, new.xp, new.next_level_xp);
             out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
         }
-        // Live purse update (slice 3): PLAYER_FIELD_COINAGE on money change (looting). Players only.
+        // Live purse update: PLAYER_FIELD_COINAGE on money change (looting). Players only.
         if old.money != new.money && is_player {
             let m = codec::build_coinage_values(new.guid, new.money);
             out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));

@@ -33,7 +33,7 @@ pub struct PlayerReputation {
     // 0 filler in practice; the 4 pre-migration rows are backfilled at deploy.
     #[default(0)]
     pub reputation_index: i32,
-    // END-APPENDED (195 slice B): the player checked "At War" for this faction in the rep pane
+    // END-APPENDED: the player checked "At War" for this faction in the rep pane
     // (CMSG_SET_FACTION_ATWAR). Persisted so the checkbox survives relog (folded into the login
     // SMSG_INITIALIZE_FACTIONS flag byte); the gateway's interaction-reaction gate treats an
     // at-war faction's NPCs as hostile. Defaulted bool → additive auto-migrate.

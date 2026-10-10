@@ -41,7 +41,7 @@ pub fn fire_pending_cast(ctx: &ReducerContext, sched: PendingCast) {
                 // NOT client-initiated (088): the completion GO must reach the caster via the relay — the
                 // synchronous send only covered the instant CMSG path, never a timed completion.
                 false,
-                // The clicked ground point carried across the cast bar (118: a timed ground-AoE
+                // The clicked ground point carried across the cast bar: a timed ground-AoE
                 // (Flamestrike) anchors its patch here at COMPLETION. `has_dest` false → None (every normal cast).
                 sched
                     .has_dest
@@ -738,7 +738,7 @@ fn flush_pool(
     }
 }
 
-/// GROUND-AoE damage tick (118): the twin of `tick_auras`' periodic pass, but keyed on a fixed WORLD
+/// GROUND-AoE damage tick: the twin of `tick_auras`' periodic pass, but keyed on a fixed WORLD
 /// POSITION instead of a unit. Each due `game_ground_area` re-scans its radius (live — a mob that walks
 /// in mid-duration is hit; one that leaves simply isn't in the next scan, no per-unit aura bookkeeping)
 /// and applies one tick of `amount` `school` damage to every HOSTILE inside via the shared
@@ -828,7 +828,7 @@ pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
                 resisted,
                 crate::combat::Hit::triggered(),
             );
-            // Per-tick feedback (118, user: area damage "does not show on damage numbers or in the
+            // Per-tick feedback (user report: area damage "does not show on damage numbers or in the
             // combat log"): a log-only cast-event row (`is_proc_log`, same shape as the seal's holy
             // line) — the gateway relays ONLY the SMSG_SPELLNONMELEEDAMAGELOG named after the area's
             // spell ("Consecration hits X for N Holy"), never START/GO. Emitted for a landed OR

@@ -165,7 +165,7 @@ pub(crate) fn select_targets(
     caster_guid: u64,
     explicit: u64,
     e: &SpellEffect,
-    // The clicked GROUND point (118. When `Some`, an AREA effect splashes from the dest
+    // The clicked GROUND point. When `Some`, an AREA effect splashes from the dest
     // (Flamestrike/Blizzard's initial impact centered on the click), NOT the caster/explicit unit.
     dest: Option<(f32, f32, f32)>,
 ) -> Vec<u64> {
@@ -294,13 +294,13 @@ fn pick_aura_slot(
     range.find(|s| !existing.iter().any(|(es, _)| es == s))
 }
 
-/// Delete every aura on `target_guid` whose `spell_id` is in `spell_ids` (381) — the shared
+/// Delete every aura on `target_guid` whose `spell_id` is in `spell_ids` — the shared
 /// collect-then-delete DISPLACEMENT sweep `aura_apply`'s two single-active-buff-class rules both reduce
 /// to: a fresh SEAL displacing the other active seal (every sibling effect sharing its spell_id, not
 /// just the A_SEAL-tagged one), and a same-NAME higher/lower rank displacing the other. Both call sites
 /// compute `spell_ids` with a DIFFERENT predicate (A_SEAL-sibling scan vs. same-name spell resolution)
 /// but converge on this identical shape (mirrored by `stacking.rs`'s group-eviction sweep, a third,
-/// independent instance of the same pattern), a future `spell_chain` import, the real
+/// independent instance of the same pattern). A future `spell_chain` import (the real
 /// rank-chain data) swaps the RANK predicate that feeds this fn, never a second displacement mechanism.
 /// A no-op for an empty set (nothing to displace) — every existing call site is baseline-safe by
 /// construction, since an empty-set filter matches nothing either way.
@@ -741,7 +741,7 @@ pub(crate) fn apply_effect(
     cast_target_guid: u64,
     level: u8,
     points: i32,
-    // The clicked GROUND point (118, only the E_PERSISTENT_AREA arm reads it (anchors the patch
+    // The clicked GROUND point. Only the E_PERSISTENT_AREA arm reads it (anchors the patch
     // at the dest); every other effect ignores it. `None` for all non-ground casts.
     dest: Option<(f32, f32, f32)>,
     // This effect is running inside a **Triggered Cast** (a fired Proc). Every hit it deals is marked
@@ -1280,7 +1280,7 @@ fn apply_reposition_effect(
             EffectHit::none()
         }
         E_PERSISTENT_AREA => {
-            // GROUND-AoE (118): spawn a fixed-position damage area at the resolved target's position
+            // GROUND-AoE: spawn a fixed-position damage area at the resolved target's position
             // (T_SELF/target-0 → the caster; a future clicked-ground variant anchors at the dest coords).
             // `tick_ground_areas` re-scans + damages from here on; this cast effect just STAMPS the row.
             // `points` is the per-tick magnitude. resolve_cast_at already rejected a 0-radius area.
@@ -1695,7 +1695,7 @@ pub(crate) fn blink_forward(ctx: &ReducerContext, caster_guid: u64, dist_yd: f32
     }
 }
 
-/// GROUND-AoE (118): stamp a `game_ground_area` row at `anchor_guid`'s position (T_SELF/target-0 → the
+/// GROUND-AoE: stamp a `game_ground_area` row at `anchor_guid`'s position (T_SELF/target-0 → the
 /// caster; the clicked-ground dest once plumbed). The area lives for the spell's `duration_ms` and its
 /// own `tick_ground_areas` re-scans + damages. `amount` is the per-tick magnitude, `e.radius_yd` the
 /// zone radius (resolve_cast_at already rejected 0). One area per cast (Consecration is T_SELF → the
@@ -1707,7 +1707,7 @@ fn create_ground_area(
     caster_guid: u64,
     anchor_guid: u64,
     amount: i32,
-    // The clicked GROUND point (118. `Some` → the area anchors there (map/instance still come from
+    // The clicked GROUND point. `Some` → the area anchors there (map/instance still come from
     // the caster); `None` → it anchors on `anchor_guid`'s entity position (Consecration's T_SELF paladin).
     dest: Option<(f32, f32, f32)>,
 ) {
@@ -1765,7 +1765,7 @@ fn create_ground_area(
         next_tick_micros: now.to_micros_since_unix_epoch() + (period_ms as i64) * 1000,
         expires_at,
     });
-    // The client-visible swirl (118): one DYNAMICOBJECT per area — the 5875 client renders the
+    // The client-visible swirl: one DYNAMICOBJECT per area — the 5875 client renders the
     // ground effect from its DYNAMICOBJECT_SPELLID SpellVisual (a CREATE relayed by the gateway).
     // Guid = HIGHGUID_DYNAMICOBJECT | the area's fresh id; the tick's reap deletes it in lockstep.
     ctx.db

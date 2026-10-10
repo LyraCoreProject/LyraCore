@@ -7,8 +7,8 @@
 //! Heights are rebased to ABSOLUTE world Z here (MCVT is relative to the chunk header Z), so
 //! the module's `ground_z` is pure arithmetic. Dry-run prints the plan + a self-check; `--apply`
 //! calls the reducers. Honors `--map/--center/--radius`, or `--box X0,X1,Y0,Y1` in place of
-//! `--radius` for an exact rectangle, a wide zone like Westfall+Elwynn together
-//! needs a rectangle, not a center-radius circle's bounding square); `--center` still drives the
+//! `--radius` for an exact rectangle (a wide zone like Westfall+Elwynn together
+//! needs a rectangle, not a center-radius circle's bounding square). `--center` still drives the
 //! interpolate self-check below, so put it INSIDE the box.
 
 use anyhow::{bail, Context, Result};
@@ -107,7 +107,7 @@ fn cell_index(coord: f32) -> i32 {
 }
 
 /// Cell-index range `(x_min, x_max, y_min, y_max)` covering the content slice: a `--box`
-/// rectangle when given, the Westfall widening needed an exact rectangle, not a
+/// rectangle when given (a wide zone like Westfall needs an exact rectangle, not a
 /// center±radius bounding square that either misses corners or overshoots into neighbours), else
 /// the original center±radius square. Cell indices count DOWN as world coordinates grow (see
 /// `cell_index`), so a box's HIGH world coordinate (x1/y1) maps to the LOW cell index and vice
@@ -445,7 +445,7 @@ mod tests {
 
     #[test]
     fn slice_cell_range_from_box_uses_corners_not_center_radius() {
-        // the widened Westfall box. High world X/Y (x1/y1) map to the LOW cell index
+        // The widened Westfall box. High world X/Y (x1/y1) map to the LOW cell index
         // (cell index counts DOWN as world coords grow) — the min/max pairing is corner-derived, not
         // center±radius, and radius is ignored entirely once a box is given.
         let (x0, x1, y0, y1) = (-11400.0f64, -8000.0, -1600.0, 2000.0);

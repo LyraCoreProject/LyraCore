@@ -119,7 +119,7 @@ pub(crate) const INSTANCE_REAPER_INTERVAL_MICROS: i64 = 60 * 1_000_000;
 /// hole. Upgrade path is the one [`teardown_instance_inner`] already names: realm-core owns the
 /// instance→shard index and the lease stops existing. **Single-database realms never reach
 /// this arm at all** — `hosts_instances` defaults to true, so their reap semantics are byte-for-byte
-/// what they were (AC).
+/// what they were.
 pub(crate) const INSTANCE_LEASE_REAP_MICROS: i64 = 12 * 60 * 60 * 1_000_000;
 
 /// The empty-timer this database reaps instances on: [`INSTANCE_EMPTY_REAP_MICROS`] where the
@@ -422,7 +422,7 @@ fn bind_character(ctx: &ReducerContext, character_guid: u64, instance_id: u64, m
     });
 }
 
-/// The dungeon-entry chokepoint (190 slice 2): resolve which instance of `target_map` this
+/// The dungeon-entry chokepoint: resolve which instance of `target_map` this
 /// character enters — party's live instance → own live binding → create — enforcing the 5-player
 /// cap at trigger time. Solo entry allowed (binds to the character, `party_id = 0`). A stale
 /// binding (instance reaped or reset-flagged) self-heals: the row is dropped and resolution falls
@@ -749,7 +749,7 @@ pub(crate) fn create_instance_with_id(
 }
 
 // ===========================================================================================
-//  Reap (slice 3) — scheduled reducer + shared teardown
+//  Reap — scheduled reducer + shared teardown
 // ===========================================================================================
 
 // ===========================================================================================
@@ -998,7 +998,7 @@ pub(crate) fn teardown_instance_inner(ctx: &ReducerContext, instance_id: u64, de
         gos.guid().delete(guid);
     }
 
-    // 4. Encounter-kernel state — the 228 splice (documented on sweep_encounter_state): tracked
+    // 4. Encounter-kernel state (splice documented on sweep_encounter_state): tracked
     //    waves (their untagged spawn rows MUST die here or they'd respawn into instance 0),
     //    encounter state + HP fired-marks, equip rows.
     crate::creatures::cancel_relay_runs_for_instance(ctx, instance_id);
@@ -1052,7 +1052,7 @@ pub(crate) fn teardown_instance_inner(ctx: &ReducerContext, instance_id: u64, de
 }
 
 // ===========================================================================================
-//  reset_instance — the party-leader / solo reset verb (slice 3 item 8)
+//  reset_instance — the party-leader / solo reset verb
 // ===========================================================================================
 
 // Live only under `debug_reducers`: `debug_reset_instance` is its sole caller.

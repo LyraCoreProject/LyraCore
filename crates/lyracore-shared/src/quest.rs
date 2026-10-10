@@ -223,7 +223,7 @@ mod tests {
         assert!(!class_allowed(u32::MAX, u8::MAX));
     }
 
-    // ---- Level-cap payout(e)) ----
+    // ---- Level-cap payout ----
 
     #[test]
     fn max_level_money_reward_uses_the_documented_v_coefficient() {

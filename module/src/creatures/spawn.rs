@@ -235,12 +235,12 @@ pub struct NpcText {
     pub text: String, // slot 0, male (back-compat)
 }
 
-/// The remaining weighted npc_text slots, vanilla ships 8 greeting variants; the
+/// The remaining weighted npc_text slots (vanilla ships 8 greeting variants; the
 /// CLIENT does the random weighted pick from `SMSG_NPC_TEXT_UPDATE`'s 8-slot array, no server RNG,
 /// see `gateway::codec::build_npc_text_update`). A SEPARATE table from `NpcText`, NOT an end-append
 /// of it: SpacetimeDB 2.5's `#[table]` macro cannot default a `String` column — `#[default(String::new())]`
 /// fails to compile (`error[E0493]`: `String`'s `Drop` can't run inside the macro's compile-time
-/// type-check, which is a plain `const {.. }` block, this is a hard Rust limitation, not a repo
+/// type-check, which is a plain `const { .. }` block, this is a hard Rust limitation, not a repo
 /// convention, so it applies to ANY end-appended `String` column, verified in this pass). A brand
 /// NEW table sidesteps it entirely (zero existing rows ⇒ nothing to backfill ⇒ no column needs a
 /// default at all), and this is the SAME one-row-plus-child-rows shape already used everywhere else
@@ -722,7 +722,7 @@ pub fn build_creature_entity(
         skinned: false, // fresh spawn: corpse not yet skinned — re-set here gives the free per-life reset
         mana_regen_paused_until_ms: 0, // creatures have no mana pool; FSR never fires (max_power == 0)
         death_expire_micros: 0, // creatures have no corpse-reclaim escalation (player-only field)
-        instance_id,            // slice 1: every caller passes 0 (open world)
+        instance_id,            // every caller passes 0 (open world)
         run_speed_mult_bp: 10_000, // 1× — GM `.speed` targets players only
         godmode: false,         // GM `.god` targets players only
         resting: false,         // creatures never rest (196)
@@ -874,8 +874,8 @@ pub fn build_player_entity(
         death_expire_micros: character.death_expire_micros,
 
         instance_id: character.pending_instance_id,
-        // GM playtest fields threaded from the DURABLE carry columns,
-        // the `death_expire_micros` precedent). They are NOT durable settings: `persist_entity` clears
+        // GM playtest fields, threaded from the DURABLE carry columns
+        // (the `death_expire_micros` precedent). They are NOT durable settings: `persist_entity` clears
         // them on a real logout/disconnect and carries them across a despawn/rebuild WITHIN a session
         // (`persisted_gm_playtest`), so a login still starts at 1× speed / not-godmode while a
         // CROSS-MAP `.tele` — which despawns the entity and rebuilds it right here — no longer drops

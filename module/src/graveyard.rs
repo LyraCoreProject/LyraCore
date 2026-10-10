@@ -29,7 +29,7 @@ pub struct GraveyardLoc {
 /// One cmangos `game_graveyard_zone` row — links a `game_graveyard.id` (`safe_loc_id`) to the zone
 /// it serves, with an optional faction restriction (0 = both factions; else the cmangos team-faction
 /// id, see `team_for_race`). Imported by the importer's `--dump` mode; see
-/// `importer/src/main.rs::build_graveyard_zone_sql`); `resolve_graveyard` reads it via `by_zone` to
+/// `importer/src/main.rs::build_graveyard_zone_sql`. `resolve_graveyard` reads it via `by_zone` to
 /// prefer a zone-linked graveyard over a merely-closer unlinked one (the cmangos release rule). No
 /// Timestamp → plain SQL. [static]
 #[table(
@@ -83,7 +83,7 @@ const EASTVALE: Graveyard = Graveyard {
 };
 
 // world_safe_locs id ≈80 [V], Sentinel Hill (Westfall, zone 40). Hand-added for
-// (the Westfall 1-20 slice); coords are an UNVERIFIED estimate (this sandbox has no reference
+// the Westfall 1-20 slice; coords are an UNVERIFIED estimate (this sandbox has no reference
 // world-database to read the real row from); orientation defaults to 0.0 (not sourced). CONFIRM
 // x/y/z against your own imported world_safe_locs before relying on this for a live release.
 const SENTINEL_HILL: Graveyard = Graveyard {
@@ -213,7 +213,7 @@ fn zone_linked(
 
 /// Every imported graveyard on `map_id`, regardless of zone — the fallback once zone-scoping
 /// isn't available or didn't resolve (see `resolve_graveyard`). Map-only — same RESOLVED note
-/// as `zone_linked` (190 slice 2): only non-instance-map releases ever reach this chain.
+/// as `zone_linked`: only non-instance-map releases ever reach this chain.
 fn all_on_map(ctx: &ReducerContext, map_id: u32) -> Vec<Graveyard> {
     ctx.db
         .game_graveyard()

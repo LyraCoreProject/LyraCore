@@ -17,7 +17,7 @@ use crate::helpers::{acting_entity_by_guid, require_operator};
 // `client_disconnected` instead of one per player, so nothing per-player tears world entities
 // down and a crash would leave every seated player as a permanent world ghost. The fix is a
 // LEASE: each gateway heartbeats its row; sessions opened through the shared connection bind
-// their entity to the lease (stage 4d writes `GatewaySession` rows at `gw_player_login`); a
+// their entity to the lease (`gw_player_login` writes the `GatewaySession` rows); a
 // scheduled reaper removes the world entities of any lease that stops heartbeating.
 //
 // Deliberately TTL-ONLY — no sweep on the shared connection's own disconnect. The coordinator
@@ -38,7 +38,7 @@ pub struct GatewayLease {
 }
 
 /// entity_guid → lease binding for a session riding the shared connection. Written by
-/// `gw_player_login` (stage 4d); until then the table is empty and the reaper below is inert.
+/// `gw_player_login`; the reaper below is inert while the table is empty.
 /// Private. [server]
 #[table(accessor = game_gateway_session)]
 pub struct GatewaySession {
@@ -668,7 +668,7 @@ pub fn gw_send_emote(
     crate::chat::apply_send_emote(ctx, sender, text_emote, emote_anim, target_guid)
 }
 
-/// The shared-connection login (stage 4d): enter the world with the account named by id and
+/// The shared-connection login: enter the world with the account named by id and
 /// the session bound to this gateway's lease. Delegates to the same [`crate::world::apply_player_login`]
 /// core the sender path uses; the OWNER identity stamped onto the entity and the character's
 /// owner-RLS rows is the account's BOUND identity (from `establish_session`), so a per-player

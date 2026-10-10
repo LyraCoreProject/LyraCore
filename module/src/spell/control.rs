@@ -201,7 +201,7 @@ pub fn is_rooted(ctx: &ReducerContext, unit_guid: u64) -> bool {
 }
 
 /// Is `unit_guid` FEARED — carrying an active `A_CONTROL(M_FEAR)` aura? A feared unit cannot ACT (the
-/// TION gates fold it into `is_action_blocked`) and does not steer its OWN movement; instead the
+/// ACTION gates fold it into `is_action_blocked`) and does not steer its OWN movement; instead the
 /// creature fear-flee pass force-walks it AWAY from the fear source each tick ("flees in terror"). It is
 /// the one mechanic that MOVES the unit: stun/poly freeze (no act, no move), root pins (act, no move),
 /// fear routs (no act, forced flee). Pure read over `game_aura` (no entity write); `false` for any unit

@@ -12,10 +12,10 @@ const SMSG_LOOT_RESPONSE_OPCODE: u16 = 0x0160;
 
 /// One lootable item for the loot window: `(slot, item_id, count, display_id, random_property_id)`. `display_id` is the
 /// item's `ItemDisplayInfo` id (the gateway joins it from `game_item_template`); the client also
-/// queries the item (`CMSG_ITEM_QUERY_SINGLE`) for the name/tooltip (slice-1 path).
+/// queries the item (`CMSG_ITEM_QUERY_SINGLE`) for the name/tooltip (item-query path).
 pub type LootItemView = (u8, u32, u32, u32, u32);
 
-/// Build a RAW `SMSG_LOOT_RESPONSE` (slice 3 money + slice 4 items). RAW because gtker's typed
+/// Build a RAW `SMSG_LOOT_RESPONSE` (money and items). RAW because gtker's typed
 /// `LootItem` is INCOMPLETE for vanilla 1.12 — it encodes only `index:u8 + item:u32 + ty:u8` (6
 /// bytes), omitting the `count`/`display_id`/`random_suffix`/`random_property_id` (u32×4) the 5875
 /// client reads per item (mangos sends 22 bytes/item). Sending items through the typed builder would
@@ -60,12 +60,12 @@ pub fn build_loot_removed(slot: u8) -> SMSG_LOOT_REMOVED {
     SMSG_LOOT_REMOVED { slot }
 }
 
-/// Build `SMSG_LOOT_MONEY_NOTIFY` — tells the client how much coin was just looted (slice 3).
+/// Build `SMSG_LOOT_MONEY_NOTIFY` — tells the client how much coin was just looted.
 pub fn build_loot_money_notify(amount: u32) -> SMSG_LOOT_MONEY_NOTIFY {
     SMSG_LOOT_MONEY_NOTIFY { amount }
 }
 
-/// Build `SMSG_LOOT_RELEASE_RESPONSE` — acks closing the loot window (slice 3). `unknown1 = 1` per
+/// Build `SMSG_LOOT_RELEASE_RESPONSE` — acks closing the loot window. `unknown1 = 1` per
 /// the reference emulators (mangos/cmangos/vmangos).
 pub fn build_loot_release_response(guid: u64) -> SMSG_LOOT_RELEASE_RESPONSE {
     SMSG_LOOT_RELEASE_RESPONSE {

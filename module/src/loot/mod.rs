@@ -53,7 +53,7 @@ pub struct CorpseLoot {
     pub slot: u8,        // loot-window slot index (0-based)
     pub item_entry: u32, // -> game_item_template.entry
     pub count: u32,
-    // END-APPENDED (fixing 210's recorded divergence, module doc decision):
+    // END-APPENDED (see the module doc):
     // does this row carry a QUEST-only item (rolled from a `quest_only` creature/pickpocket/
     // gameobject-loot row)? Quest rows now roll UNCONDITIONALLY (the drop-chance still applies; only
     // the pre-roll killer gate is gone) — visibility (gateway) and takability (`apply_take_loot`) are
@@ -63,10 +63,10 @@ pub struct CorpseLoot {
     pub quest_only: bool,
     // END-APPENDED: `0` = the SHARED, not-yet-split row, any currently-needing
     // character may claim it, which triggers the per-member clone (`clone_quest_loot_for_group`);
-    // nonzero = a character guid, this specific row is a pernted the moment the shared row is first taken). Meaningless when `quest_only` is
-    // false UNLESS it's a group-loot WINNER-LOCKED row (below), GENERALIZED slices
-    // 2-4): nonzero now also marks "this row belongs EXCLUSIVELY to this guid" for a NEED/GREED roll
-    // winner whose bag was full at grant time (`resolve_roll`'s inventory-full fallback — the item
+    // nonzero = a character guid, this specific row is a per-member CLONE reserved for exactly that
+    // character (minted the moment the shared row is first taken). Meaningless when `quest_only` is
+    // false UNLESS it's a group-loot WINNER-LOCKED row (below): nonzero then also marks
+    // "this row belongs EXCLUSIVELY to this guid" for a NEED/GREED roll winner whose bag was full at grant time (`resolve_roll`'s inventory-full fallback — the item
     // sits here until they free space and re-loot). Same predicate on both the gateway's visibility
     // read and `apply_take_loot`'s gate either way: nonzero `reserved_for` always means "only this
     // guid, unconditionally". `#[default(0)]` — additive.
@@ -116,7 +116,7 @@ pub struct CreatureLoot {
     pub group_id: u32, // 0 = independent roll; >0 = pick-one group (≤1 member drops per kill)
     // END-APPENDED: cmangos `ChanceOrQuestChance < 0`, the item is a QUEST-drop, only
     // ever visible to a player who currently needs it (an active matching COLLECT_ITEM objective — see
-    // `killer_needs_item`). Gated at ROLL TIME against the CREDITED KILLER (module doc, decision),
+    // `killer_needs_item`). Gated at ROLL TIME against the CREDITED KILLER (see the module doc),
     // never re-evaluated later. `#[default(false)]` so existing rows (imported pre-210, or seeded) keep
     // rolling exactly as before (never quest-gated) — additive auto-migration.
     #[default(false)]
@@ -362,7 +362,7 @@ pub(crate) fn killer_needs_item(ctx: &ReducerContext, killer: Option<u64>, item:
 }
 
 /// Purge every `game_corpse_loot` / `game_corpse_loot_eligible` row still parked on `guid`, BEFORE a
-/// fresh roll ever writes to it. Two residue sources land here: (a)'s corpse-guid REUSE
+/// fresh roll ever writes to it. Two residue sources land here: (a) corpse-guid REUSE
 /// (a harness SQL teardown or `debug_spawn_at_feet` skipping the decay reaper leaves a departed kill's
 /// `game_corpse_loot_eligible` snapshot behind for the next creature minted at that guid), and (b)
 /// the pickpocket/kill collision — `roll_pickpocket_loot` inserts `game_corpse_loot` rows at
@@ -480,8 +480,8 @@ pub(crate) fn insert_corpse_rows(
 /// Roll a creature's loot table into `game_corpse_loot` rows on its corpse; returns whether anything
 /// dropped (so the caller sets `UNIT_DYNFLAG_LOOTABLE`). Data-driven: reads `game_creature_loot` for
 /// `creature_entry`, then rolls independent rows + one weighted pick per group with the
-/// `roll_loot_rows_quest_aware` core: `quest_only` rows roll UNCONDITIONALLY
-/// now — no killer gate — the flag just rides along onto the inserted row for the gateway/take-path to
+/// `roll_loot_rows_quest_aware` core (`quest_only` rows roll UNCONDITIONALLY, with
+/// no killer gate; the flag just rides along onto the inserted row for the gateway/take-path to
 /// gate per-viewer/per-taker instead), inserting the winners at sequential loot slots with a fresh
 /// `reserved_for = 0` (unclaimed). No table rows → nothing drops (no universal placeholder). Shared by
 /// the real killing blow (combat/) and the debug kill (debug.rs) so both produce identical loot.
@@ -580,8 +580,8 @@ pub struct GameFishingLoot {
 
 /// Roll a creature's PICKPOCKET table into `game_corpse_loot` rows keyed on the LIVE target's guid, then
 /// refresh `UNIT_DYNFLAG_LOOTABLE` (`refresh_lootable`) so a still-alive-but-pickpocketed
-/// creature shows the loot cursor if anything rolled. Quest-only rows roll UNCONDITIONALLY now
-///, no rogue gate; the flag rides onto the row for per-viewer/per-taker gating
+/// creature shows the loot cursor if anything rolled. Quest-only rows roll UNCONDITIONALLY
+/// (no rogue gate; the flag rides onto the row for per-viewer/per-taker gating
 /// downstream). A no-row table (or an all-miss roll) inserts nothing and never touches the flag — the
 /// existing money-only path (spell/cast.rs) is unaffected either way. Called from `E_PICKPOCKET`
 /// (spell/cast.rs), inside the SAME `!target.pickpocketed` once-gate the copper roll already uses, so
@@ -856,8 +856,8 @@ pub(crate) fn apply_loot_money(
             "Loot Source is not a corpse",
         ));
     }
-    // Map + instance gated (190 slice 2): a creature corpse is a `game_world_entity` row, so its
-    // `instance_id` came free with slice 1 — a looter can never reach across an instance wall.
+    // Map + instance gated: a creature corpse is a `game_world_entity` row, so its
+    // `instance_id` is already on it, so a looter can never reach across an instance wall.
     if corpse.map_id != looter.map_id {
         return Err(refused(LootRefusal::OutOfRange, "corpse on another map"));
     }
@@ -935,7 +935,7 @@ pub(crate) fn apply_loot_money(
 
 /// Credit `share` copper to `recipient_guid`'s purse: the live `WorldEntity.money` if currently
 /// online (relayed to their own connection as `PLAYER_FIELD_COINAGE`), else the durable
-/// `Character.money` row directly, an OFFLINE grouped recipient still gets paid;
+/// `Character.money` row directly (an OFFLINE grouped recipient still gets paid;
 /// `build_player_entity` loads `character.money` back into the entity at their next login). Saturating,
 /// mirroring the looter's own transfer in [`apply_loot_money`]. No-op if the guid resolves to neither
 /// (a deleted character mid-flight) — never panics on a stale snapshot row.
@@ -1092,7 +1092,7 @@ mod tests {
     // ---- LOOT-FAMILY COMPLETENESS ----
 
     /// `needs_item_pure` — the pure decision behind `killer_needs_item`: a COLLECT_ITEM objective on an
-    /// TIVE quest matching `item` says yes; a KILL_CREATURE objective (wrong kind), a different item
+    /// ACTIVE quest matching `item` says yes; a KILL_CREATURE objective (wrong kind), a different item
     /// (wrong target), or an objective whose quest ISN'T in `active_quests` (a stale/rewarded quest's
     /// leftover objective row) all say no.
     #[test]
@@ -1129,7 +1129,7 @@ mod tests {
     /// every pre-210 row keeps rolling unconditionally), and the new tables' row shapes construct with
     /// named fields exactly like `CreatureLoot` (a compile-time guard against a silently reordered /
     /// renamed column — the importer's positional SQL INSERT depends on this order matching its
-    /// column list verbatim). `CorpseLoot` now END-carries `quest_only`/`reserved_for` too (187 slice 0).
+    /// column list verbatim). `CorpseLoot` now END-carries `quest_only`/`reserved_for` too.
     #[test]
     fn new_loot_family_tables_construct_with_the_documented_shape() {
         let creature = CreatureLoot {

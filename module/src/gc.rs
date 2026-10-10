@@ -68,15 +68,11 @@ pub fn reap_movement_events(ctx: &ReducerContext, _schedule: EventReaperSchedule
             }
         }};
     }
-    // `game_movement_event` is GONE (dropped): peer movement rides the per-mover
-    // `game_entity_motion` row, which is updated in place and needs no reaping at all (perf catalog
-    // 2.1). This reap was the second half of the O(C²) cost: at 200 co-located players it deleted
-    // 67,753 rows/s to match the 70,568 the writer had just inserted.
-    // `game_creature_move_event` is NO LONGER REAPED because nothing writes it any more — creature
-    // legs ride the per-creature `game_creature_spline` row, which is updated in place and needs no
-    // reaping (same move as perf catalog 2.1 made for player movement). This reap was deleting
-    // 121.6 rows/s at 100 dispersed players to match the inserts. The table stays in the schema
-    // (dropping one is a separate destructive migration) and stays empty.
+    // `game_movement_event` is not reaped: peer movement rides the per-mover `game_entity_motion`
+    // row, which is updated in place and needs no reaping.
+    // `game_creature_move_event` is not reaped because nothing writes it. Creature legs ride the
+    // per-creature `game_creature_spline` row, which is updated in place. The table stays in the
+    // schema (dropping one is a separate destructive migration) and stays empty.
     reap!(game_combat_event); // melee swing logs
     reap!(game_xp_event); // per-kill XP awards
     reap!(game_levelup_event); // level-up dings

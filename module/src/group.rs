@@ -449,10 +449,10 @@ pub(crate) fn push_event(
     other_guid: u64,
     payload: String,
 ) {
-    // No longer an early return on a missing character row. On a world shard the row is there
-    // and this is byte-identical to before; on REALM-CORE there are no character rows at all, and
-    // returning early there would mean the directory database could never notify anybody — every
-    // invite popup and roster refresh for a cross-shard party would be dropped at the source.
+    // A missing character row is not an early return. A world shard has the row. REALM-CORE has no
+    // character rows at all, so an early return there would stop the directory database from
+    // notifying anybody, and every invite popup and roster refresh for a cross-shard party would be
+    // dropped at the source.
     let bound = ctx
         .db
         .game_character()
@@ -1091,7 +1091,7 @@ fn led_group_of(ctx: &ReducerContext, guid: u64) -> Result<(GroupMember, Group),
     Ok((m, group))
 }
 
-/// `pub(crate)` (was private):'s kill-time loot stamping (`combat/mod.rs` →
+/// `pub(crate)` because the kill-time loot stamping (`combat/mod.rs` →
 /// `loot::apply_group_loot_rules`) needs the CURRENT roster to pick a round-robin/master designee.
 pub(crate) fn members_of(ctx: &ReducerContext, group_id: u64) -> Vec<GroupMember> {
     ctx.db

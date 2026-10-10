@@ -194,7 +194,7 @@ pub(crate) fn apply_reclaim_corpse(
         .guid()
         .find(corpse_guid)
         .ok_or_else(|| "no such corpse".to_string())?;
-    // Map + instance gated (190 slice 2 — corpse rows carry `instance_id` now): a ghost must
+    // Map + instance gated (corpse rows carry `instance_id`): a ghost must
     // corpse-run back into the SAME instance it died in (the areatrigger resolve re-binds it to
     // that instance, so the run-back lands right); a ghost in another party's copy — or in the
     // open world — can never reclaim through the wall.

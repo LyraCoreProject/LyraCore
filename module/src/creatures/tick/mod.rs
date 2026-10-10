@@ -32,7 +32,7 @@ pub(crate) use lifecycle::{pass_decay, pass_gameobject_respawn, pass_respawn};
 
 // Re-export so `crate::creatures::tick::despawn_creature_entity` (and, via `creatures::mod.rs`'s own
 // `pub use tick::*`, `crate::creatures::despawn_creature_entity`) still resolves — `encounter.rs`/
-// `instance.rs` call it by that exact path. `pub(crate)`, unchanged from pre-split.
+// `instance.rs` call it by that exact path.
 pub(crate) use lifecycle::despawn_creature_entity;
 
 // ===========================================================================================
@@ -128,7 +128,7 @@ pub struct CreatureSpline {
     /// column of that index is matched by an equality term, and it skips any index with more than 3
     /// columns outright (`MAX_EXACT_INDEX_COLS`); range predicates are never index-served at all
     /// (`IndexProbe::Range` — "we currently never construct this variant") and an `OR` is evaluated
-    /// row-by-row. So a `grid_x BETWEEN.. AND grid_y BETWEEN..` box degrades to a full partition
+    /// row-by-row. So a `grid_x BETWEEN .. AND grid_y BETWEEN ..` box degrades to a full partition
     /// scan — 1.1 BILLION rows examined on `game_gameobject` in a 445-player measurement. Folding the
     /// two grid columns into one makes `by_cell` a 3-column all-equality index, which the planner CAN
     /// serve, and the AOI box becomes 25 point probes instead of a scan.
@@ -176,13 +176,11 @@ pub struct CreatureSpline {
 /// cadences are a knob to use sparingly, measured via the per-pass rows-visited log below.
 ///
 /// PER-INSTANCE `tick_ms` KNOB: the cadence IS `scheduled_at` (`ScheduleAt::Interval(tick_ms)`) on
-/// the dedicated row — no separate `tick_ms` column (it would duplicate `scheduled_at`), and no
-/// `game_instance` table exists yet to hang it on (190 slice 1 landed only the indexes).
-/// SPLICE POINT (190 slice 2): `create_instance` inserts the dedicated row
+/// the dedicated row. There is no separate `tick_ms` column, because it would duplicate
+/// `scheduled_at`. `create_instance` inserts the dedicated row
 /// `{scheduled_id: 0, scheduled_at: ScheduleAt::Interval(tick_ms), instance_id: N}` and the instance
-/// reap deletes it (which automatically returns coverage of N to the catch-all — pause/slow-when-
-/// empty is then "update/delete the dedicated row", also slice-2 lifecycle work). Until then the
-/// operator arms one via `debug_arm_instance_tick` (debug.rs). [server]
+/// reap deletes it, which returns coverage of N to the catch-all. The operator retunes a row via
+/// `debug_arm_instance_tick` (`debug/mod.rs`). [server]
 #[table(accessor = game_creature_move_schedule, scheduled(tick_creatures))]
 pub struct CreatureMoveSchedule {
     #[primary_key]
@@ -215,7 +213,7 @@ pub struct CreatureMoveSchedule {
 /// 0.5s row. This is mangos's one-loop-with-recheck-timers model on one scheduled reducer — a single
 /// tick, so no cross-scheduler `spline_id` collision.
 ///
-/// INSTANCE SCOPE, latency smoothing + work avoidance, NOT parallelism; see the
+/// INSTANCE SCOPE (latency smoothing + work avoidance, NOT parallelism; see the
 /// `CreatureMoveSchedule` doc): every firing resolves a `TickScope` from ITS OWN schedule row. The
 /// catch-all row covers every instance without a dedicated row; a dedicated row covers exactly its
 /// instance. Coverage is a PARTITION, so no creature is ever ticked by two rows.
@@ -271,11 +269,10 @@ pub fn tick_creatures(ctx: &ReducerContext, schedule: CreatureMoveSchedule) {
 }
 
 // ===========================================================================================
-//  Active cells [server],: grid-activation; only cells near players tick
+//  Active cells [server]: grid-activation; only cells near players tick
 // ===========================================================================================
 
-/// Rough heartbeat period (micros) for the active-cell rows-visited log line, the
-/// done-when evidence. NOT every tick (would spam `RUST_LOG=info` at the 0.5s movement cadence);
+/// Rough heartbeat period (micros) for the active-cell rows-visited log line. NOT every tick (would spam `RUST_LOG=info` at the 0.5s movement cadence);
 /// roughly once a minute is plenty to eyeball the before/after ratio on a live node.
 const ACTIVE_CELL_LOG_PERIOD_MICROS: i64 = 60_000_000;
 
@@ -407,9 +404,9 @@ pub(crate) struct TickSweep {
     pub(crate) in_combat: Vec<u64>,
 }
 
-/// done-when evidence: log the active-cell rows-visited/total ratio roughly once a
+/// Evidence log for the active-cell sweep: the rows-visited/total ratio, roughly once a
 /// minute. `total` (a full non-player-entity count) is deliberately gated behind the SAME rare window
-/// so the O(N) count itself never reintroduces the per-tick cost this item removes.
+/// so the O(N) count itself never reintroduces the per-tick cost the active-cell sweep removes.
 fn log_active_cell_stats(ctx: &ReducerContext, awake: usize) {
     let us = ctx.timestamp.to_micros_since_unix_epoch();
     if us.rem_euclid(ACTIVE_CELL_LOG_PERIOD_MICROS) >= MOVE_TICK_MICROS {
@@ -424,7 +421,7 @@ fn log_active_cell_stats(ctx: &ReducerContext, awake: usize) {
     log::info!("tick_creatures active-cell: {awake}/{total} creatures visited this tick");
 }
 
-/// done-when evidence: log the cast/rout/fear rows-visited drop, in
+/// Evidence log for the narrowed passes: the cast/rout/fear rows-visited drop, in
 /// the SAME rare window `log_active_cell_stats` uses (reusing its throttle — no extra per-tick cost).
 /// `melee_rows` is the candidate universe BOTH the cycle's cast and rout phases outer-loop (identical
 /// gate: "currently the attacker in `game_melee_attack`"); `fear_rows` is what the fear phase
@@ -851,7 +848,7 @@ pub(crate) fn advance_needs_persist(
 
 /// The shared gate ladder every ENGAGED/table-driven phase (cast, threat retarget, chase, rout and
 /// fear) opens its per-candidate loop with: resolve `guid` to a live CREATURE (no PLAYER bit, not
-/// dead) whose instance THIS firing's `scope` covers. `None` collapses each site's `let Some(c) =...
+/// dead) whose instance THIS firing's `scope` covers. `None` collapses each site's `let Some(c) = ...
 /// else { continue }; if c.is_player() || c.dead { continue }; if !scope.covers(c.instance_id) {
 /// continue }` into one check — every call site still increments its own `visited` counter only on
 /// `Some`, matching the existing "gate first, then count" order everywhere.

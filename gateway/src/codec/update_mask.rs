@@ -135,6 +135,7 @@ pub mod idx {
     /// `GAMEOBJECT_ROTATION` — a GAMEOBJECT-descriptor field (its own index space, separate from
     /// UNIT/PLAYER above), 4 consecutive f32 slots (rot0..3, this + 0..=3). Cross-checked against
     /// `wow_world_messages` vanilla `UpdateGameObjectBuilder::set_gameobject_rotation` → `set_float(10,
+    /// ..)`. gtker's typed setter only reaches slot 0 (the descriptor-setter wall, same as multi-aura),
     /// so all 4 slots ride the hand-rolled raw encoder. `GAMEOBJECT_STATE` follows
     /// immediately at 14, confirming the 4-slot width.
     pub const GAMEOBJECT_ROTATION: u16 = 10;

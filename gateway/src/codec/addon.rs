@@ -197,7 +197,7 @@ mod tests {
         );
     }
 
-    /// the client's `SendAddonMessage` API distributes over PARTY, RAID, GUILD and
+    /// The client's `SendAddonMessage` API distributes over PARTY, RAID, GUILD and
     /// OFFICER only. RAID_LEADER and RAID_WARNING chat lines cannot carry addon traffic at all,
     /// and WHISPER/CHANNEL addon frames are this bridge's own private channels, not shared wire.
     #[test]

@@ -28,7 +28,7 @@ pub struct CorpseLootEligible {
 
 /// A live NEED/GREED/NBG roll on one `game_corpse_loot` row. Private — the gateway never reads this
 /// (relayed via `game_group_event` instead, see the module doc above). `resolved` is the exactly-once
-/// resolution guard (trap): set the moment `resolve_roll` decides an outcome, checked
+/// resolution guard: set the moment `resolve_roll` decides an outcome, checked
 /// FIRST on every entry point (the deadline sweep AND a landing vote can both reach the same roll).
 /// [entity]
 #[derive(Clone)]
@@ -196,7 +196,7 @@ pub(crate) fn pick_roll_winner(rolls: &[u8]) -> Option<usize> {
 /// `combat::kill_creature` right after `roll_creature_loot`, for a grouped Loot Tag only. The
 /// corpse-eligibility rows are the one recipient set for designation, master loot, and rolls.
 ///
-/// trap ("solo player with method GROUP set: threshold rows must NOT roll"): a solo
+/// A solo player with method GROUP set must not roll threshold rows: a solo
 /// `recipients` (`len() < 2`, e.g. every other member out of XP range or dead) skips ALL group-loot
 /// handling too — vanilla's "party size 1 -> direct loot" applies to loot exactly like it does to
 /// the XP split, so the same recipient-count gate covers both.
@@ -637,7 +637,7 @@ fn cleanup_roll(ctx: &ReducerContext, roll_id: u64) {
     ctx.db.game_loot_roll().id().delete(roll_id);
 }
 
-/// Deadline sweep trap: "disconnected member mid-roll: their vote auto-passes at
+/// Deadline sweep ("disconnected member mid-roll: their vote auto-passes at
 /// deadline"): scans every UNRESOLVED roll whose deadline has elapsed, auto-passes any still-`!voted`
 /// member (in place — never blocks), then resolves. `pub(crate)` — exposed for the orchestrator's
 /// scheduled-GC tick (`gc.rs`, NOT edited here per instructions): wire one call
@@ -667,7 +667,7 @@ pub(crate) fn sweep_loot_rolls(ctx: &ReducerContext) {
     }
 }
 
-/// trap ("disband mid-roll -> resolve to sole member"): called from
+/// Disband mid-roll ("resolve to sole member"): called from
 /// `group::remove_member`'s full-disband branch with the FULL former membership (`member_guids`,
 /// leaver included) and the sole survivor if exactly one remains. Force-resolves every UNRESOLVED
 /// roll whose ENTIRE voter set belonged to the disbanding group: with a sole survivor, grants them

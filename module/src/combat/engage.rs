@@ -13,7 +13,7 @@ use spacetimedb::{table, ReducerContext, ScheduleAt, Table, Timestamp};
 use crate::{game_faction_template, game_world_entity, WorldEntity};
 
 // Tables' pure formulas/consts and the sibling submodules' re-exports (`roll_swing`, `kill_creature`,
-//...) are all pulled in from `mod.rs` (`pub use tables::*` + `pub use folds::*`/`death::*`/`swing::*`)
+// ...) are all pulled in from `mod.rs` (`pub use tables::*` + `pub use folds::*`/`death::*`/`swing::*`)
 // — this ALSO brings `tick_melee`/`ranged_impact` into scope for the `MeleeSchedule`/
 // `RangedImpactSchedule` tables' `scheduled(..)` macros below to resolve, since those two reducers are
 // defined in `swing.rs` (mirrors `spell::tables`'s identical cross-file `scheduled(..)` pattern).

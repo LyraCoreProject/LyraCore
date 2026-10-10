@@ -11,7 +11,7 @@ use lyracore_shared::group::GroupKind;
 use lyracore_shared::item_property::client_enchantment_id;
 
 impl Coordinator {
-    /// Read every item a character owns (items slice-1), joined with its template for the CREATE
+    /// Read every item a character owns, joined with its template for the CREATE
     /// descriptors (max-durability). Read from the privileged cache (the coordinator bypasses RLS),
     /// filtered by `owner_guid` — the SDK exposes only the PK index, so iterate+filter like the other
     /// row queries. Returns the instance views ready for `build_item_create_object` + inventory slots.
@@ -131,7 +131,7 @@ impl Coordinator {
         hit
     }
 
-    /// Read a corpse's item loot for the loot window (items slice-4), joined with each item's
+    /// Read a corpse's item loot for the loot window, joined with each item's
     /// template for the display id, then filtered PER VIEWER for `quest_only` rows (quest items are
     /// per-looter, not gated on whoever got kill credit) AND group-loot rows (a live NEED/GREED
     /// roll is withheld from EVERYONE; a round-robin/master-designated row is visible only to its
@@ -184,7 +184,7 @@ impl Coordinator {
         Ok(items)
     }
 
-    /// Read a corpse's lootable copper for `SMSG_LOOT_RESPONSE` (slice 3) from the privileged cache.
+    /// Read a corpse's lootable copper for `SMSG_LOOT_RESPONSE` from the privileged cache.
     /// Returns 0 if the target is missing or not a corpse — the client only sends `CMSG_LOOT` on a
     /// lootable corpse, but we stay defensive (an empty loot window is harmless).
     pub fn loot_target_money(&self, target_guid: u64) -> Result<u32> {

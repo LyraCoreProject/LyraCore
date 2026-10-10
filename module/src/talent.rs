@@ -38,7 +38,7 @@ pub struct Talent {
     /// and this is the granted active. END-appended `#[default(0)]` → auto-migrates. [static]
     #[default(0)]
     pub grant_spell_id: u32,
-    // --- Talent.dbc import columns, END-appended, #[default(0)] → additive auto-migration).
+    // --- Talent.dbc import columns, END-appended, #[default(0)] → additive auto-migration.
     // Every demo-seeded talent (ids 1-8) leaves these at 0 — byte-identical baseline behavior.
     /// The real `game_talent_tab.tab_id` this talent belongs to (Talent.dbc `Talent.tab`) — 0 for a
     /// demo-seeded talent (no real tab). Unlike `tree_id` (which repeats 0/1/2 across EVERY class's tabs),
@@ -738,7 +738,7 @@ pub(crate) fn do_reset_talents(
 //  Seed (shared by init + debug_seed_talents — init does NOT re-run on an auto-migrate publish)
 // ===========================================================================================
 
-/// Seed the first-slice Warrior talents: the `game_talent` metadata + the per-talent passive spell
+/// Seed the first Warrior talents: the `game_talent` metadata + the per-talent passive spell
 /// (`game_spell` + a single `game_spell_effect`). IDEMPOTENT — inserts only rows that are absent — so it is
 /// safe to call from `seed::init` (fresh install) AND from `debug_seed_talents` on an already-migrated dev
 /// DB (where `init` did not re-run). Spell ids live in a reserved 51xxx range, ABOVE the vanilla spell ids

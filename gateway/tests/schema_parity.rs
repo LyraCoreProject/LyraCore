@@ -577,8 +577,8 @@ parity_test!(parity_game_region_assignment, "game_region_assignment", lyracore_m
     key, map_id, region_id, shard, epoch, updated_micros,
 });
 // Party state, authoritative on realm-core and mirrored onto each world shard.
-// `game_group_event` earns its entry twice over — it is the one table this slice CHANGED (the
-// END-appended `recipient_guid`), and the gateway decodes it on two different connections.
+// `game_group_event` earns its entry twice over — it is the one table with an
+// END-appended `recipient_guid`, and the gateway decodes it on two different connections.
 parity_test!(parity_game_group, "game_group", lyracore_module::Group, bindings::group_type::Group, {
     group_id, leader_guid, loot_method, loot_threshold, rr_cursor, master_looter_guid, group_type,
 });

@@ -50,7 +50,7 @@ pub struct TrainerSpell {
     pub spell_id: u32,      // the spell taught
     pub cost: u32,          // copper charged on purchase
     pub required_level: u8, // minimum character level to learn it
-    // END-APPENDED (professions slice 3), defaulted 0 → `publish` auto-migrates + every existing
+    // END-APPENDED, defaulted 0 → `publish` auto-migrates + every existing
     // class-spell row reads 0 (the unchanged spell path). 0 = a normal spell offering; >0 = this
     // offering TEACHES that skill_line as a profession (Cooking=185 / Skinning=393) — the buy branch
     // grants the skill via `crate::skill::learn_profession` instead of casting/learning a spell. The
@@ -68,7 +68,7 @@ pub struct TrainerSpell {
     pub learn_skill_cap: u32,
 }
 
-/// What a successful trainer purchase GRANTS (professions slice 3) — `crate::skill::learn_profession` for
+/// What a successful trainer purchase GRANTS — `crate::skill::learn_profession` for
 /// a flagged profession/weapon offering, `crate::spell::learn_spell_with_dependents` for a plain class
 /// spell. Each `apply_trainer_buy` arm constructs its OWN variant directly at the point it already knows
 /// which one applies — there is no longer a separate `grant_for` routing function: the old
@@ -91,7 +91,7 @@ pub(crate) enum BuyGrant {
 }
 
 /// Whether a profession offering at `cap` is ALREADY covered by the character's stored `max_rank` for
-/// that skill line (professions slice 3's rank/cap scaling) — the pure comparison the buy path's
+/// that skill line (its rank/cap scaling) — the pure comparison the buy path's
 /// already-known gate keys on for a profession offering (a class-spell offering uses `knows_spell`
 /// instead). Extracted from `apply_trainer_buy` (pure code-motion). `None` (no `game_player_skill` row
 /// at all — never learned) is never capped. `stored_max_rank >= cap` is the boundary: exactly meeting
@@ -500,7 +500,7 @@ pub(crate) fn apply_trainer_buy(
             )
         })?;
 
-    // PROFESSION-LEARN BRANCH (professions slice 3): a flagged offering teaches a SKILL, not a spell —
+    // PROFESSION-LEARN BRANCH: a flagged offering teaches a SKILL, not a spell —
     // it never resolves a wrapper/rank, never casts, never touches `game_player_spell`. `known` mirrors
     // `learn_profession`'s presence check (a `game_player_skill` row for that line → a re-buy is the
     // idempotent already-known no-op), and on Ok it grants the skill at 1/75. The `learn_skill_line == 0`
@@ -767,7 +767,7 @@ mod tests {
         );
     }
 
-    /// THE IDEMPOTENT RE-LEARN (professions slice 3): the profession buy keys its already-known gate on the
+    /// THE IDEMPOTENT RE-LEARN: the profession buy keys its already-known gate on the
     /// PRESENCE of a `game_player_skill` row for the line (the `known` flag the buy path derives), and feeds
     /// it through the SAME `trainer_buy_check`. So a re-buy of an already-learned profession is rejected with
     /// `TrainerRefusal::AlreadyKnown` (no re-charge, no duplicate/reset row) — identical to a re-bought known spell.

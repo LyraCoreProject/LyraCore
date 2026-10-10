@@ -824,7 +824,7 @@ pub trait WorldStore:
         action_type: u8,
     ) -> Result<()>;
 
-    /// Persist the rep pane's At-War checkbox (`CMSG_SET_FACTION_ATWAR`, 195 slice B).
+    /// Persist the rep pane's At-War checkbox (`CMSG_SET_FACTION_ATWAR`).
     /// `reputation_index` is the client's 0..63 rep-array slot, NOT a faction id.
     fn set_faction_at_war(
         &self,
@@ -1268,7 +1268,7 @@ pub trait WorldStore:
         Ok(Vec::new())
     }
 
-    /// Revive the caller after death (`CMSG_REPOP_REQUEST` / Release Spirit, slice 4): the module
+    /// Revive the caller after death (`CMSG_REPOP_REQUEST` / Release Spirit): the module
     /// restores full health in place and clears the dead state (the client leaves the death screen
     /// once the restored health replicates).
     fn repop(&self, account_id: u64, self_guid: u64) -> Result<()>;
@@ -1287,7 +1287,7 @@ pub trait WorldStore:
     /// Close the matching Shard fences before releasing the Realm-core claim. Stale cleanup is inert.
     fn release_session(&self, token: WorldSessionToken) -> Result<()>;
 
-    /// Reclaim the caller's corpse (`CMSG_RECLAIM_CORPSE`, slice 5): the module validates the caller
+    /// Reclaim the caller's corpse (`CMSG_RECLAIM_CORPSE`): the module validates the caller
     /// is a ghost owning the corpse, in range, past the reclaim delay, then resurrects at 50%.
     fn reclaim_corpse(&self, account_id: u64, self_guid: u64, corpse_guid: u64) -> Result<()>;
 
@@ -1339,7 +1339,7 @@ pub trait WorldStore:
     /// `CMSG_IGNORE_TRADE`, decline via ignore; initiator hears `IgnoreYou`.
     fn ignore_trade(&self, account_id: u64, self_guid: u64) -> Result<()>;
 
-    /// Find `owner_guid`'s corpse location `(map_id, x, y, z)` for `MSG_CORPSE_QUERY` (slice 5).
+    /// Find `owner_guid`'s corpse location `(map_id, x, y, z)` for `MSG_CORPSE_QUERY`.
     fn corpse_location(&self, owner_guid: u64) -> Result<Option<(u32, f32, f32, f32)>>;
 
     /// Return the `combat_until_ms` timestamp for `player_guid`'s entity row (0 if the entity is not

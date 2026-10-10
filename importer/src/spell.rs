@@ -428,8 +428,8 @@ fn power_burn_ratio_bp(multiple: f32) -> i32 {
 /// graceful `E_SCRIPTED` no-op. IDs verified against `wow_world_base::vanilla::SpellEffect` (the
 /// `from_int` table): SchoolDamage=2, Heal=10, HealMaxHealth=67, Energize=30, Dispel=38,
 /// TriggerSpell=64, Threat=63/ThreatAll=91, weapon-damage family 17/58/121/31, Resurrect=18,
-/// AddComboPoints=80, ResurrectNew=113, AttackMe=114, cross-checked against the
-/// vendored `wow_world_base-0.3.0` vanilla/tbc/wrath `SpellEffect::from_int` tables, all three eras
+/// AddComboPoints=80, ResurrectNew=113, AttackMe=114 (cross-checked against the
+/// vendored `wow_world_base-0.3.0` vanilla/tbc/wrath `SpellEffect::from_int` tables; all three eras
 /// agree on these four numeric ids).
 /// CONFIRMED 2026-07-14 against the real client Spell.dbc (curated-kit dry-run + targeted --only):
 /// Taunt 355 → E_TAUNT, Resurrection 2006 / Redemption 7328 → E_RESURRECT, Cheap Shot 1833 (no
@@ -486,7 +486,7 @@ fn correct_script_effect_kind(name: &str, kind: u8) -> u8 {
     if kind == E_DAMAGE && matches!(name, "Heroic Strike" | "Cleave") {
         return E_NEXT_SWING;
     }
-    // Feint (Rogue Slice 3): vanilla encodes it as the native Threat effect (→ E_TAUNT) with a NEGATIVE
+    // Feint: vanilla encodes it as the native Threat effect (→ E_TAUNT) with a NEGATIVE
     // base (−150) — i.e. a one-time threat DROP, not a taunt-yank. Reclassify the E_TAUNT effect to our
     // E_REDUCE_THREAT (the handler reduces the caster's CURRENT threat by |base_points|). Fires on the
     // real E_TAUNT effect, before the residue guard. DISTINCT from Fade (a COMBAT_THREAT percent).
@@ -514,7 +514,7 @@ fn correct_script_effect_kind(name: &str, kind: u8) -> u8 {
         // Garrote's eff2 is the same combo Dummy (its eff1 is the A_PERIODIC_DAMAGE bleed, unchanged).
         // `instant_effect_to_kind` now maps the raw AddComboPoints effect id (80) to
         // E_ADD_COMBO natively too, but the in-kit generators carry the generic Dummy effect, not raw
-        // 80, so this name rescue is still the ONLY path that reaches them — kept, not redundant here.)
+        // 80, so this name rescue is still the ONLY path that reaches them — kept, not redundant here.
         "Sinister Strike" | "Backstab" | "Gouge" | "Garrote" => E_ADD_COMBO,
 
         "Resurrection" | "Redemption" | "Rebirth" | "Ancestral Spirit" => E_RESURRECT,
@@ -1668,12 +1668,12 @@ fn resolve_effect_kind(
     } else {
         kind
     };
-    // GROUND-AoE (118): a ground-persistent A_PERIODIC_DAMAGE is a FIXED-POSITION area, not a unit
+    // GROUND-AoE: a ground-persistent A_PERIODIC_DAMAGE is a FIXED-POSITION area, not a unit
     // DoT. The DBC encodes it as A_PERIODIC_DAMAGE with a dynobj/self target that resolves WRONG —
     // Consecration → T_SELF would DoT the paladin himself. Reclassify BY NAME to E_PERSISTENT_AREA
     // (the Charge/Blink name-rescue precedent) so it spawns a game_ground_area whose own
     // tick_ground_areas damages hostiles inside. Consecration is caster-anchored; Flamestrike (262)
-    // is the first CLICKED-GROUND one, the 118 dest plumbing (6067df1) anchors the area at
+    // is the first CLICKED-GROUND one: the ground-target dest plumbing anchors the area at
     // the click when the cast carries a DEST_LOCATION block, so the same kind serves both.
     // Blizzard/Rain of Fire remain un-rescued (channeled patches — their channel/tick interplay is
     // its own follow-up; leaving them A_PERIODIC_DAMAGE keeps them out of the curated kit).
@@ -1779,7 +1779,7 @@ fn trainer_offering_rows(
                 Some(&lvl) => {
                     let cost = trainer_cost(lvl);
                     // id=0 → the table's #[auto_inc] PK assigns the real id on insert. END-append
-                    // learn_skill_line=0, learn_skill_cap=75 (professions slices 3 + rank/cap): every
+                    // learn_skill_line=0, learn_skill_cap=75: every
                     // class-spell offering is a normal spell row (the unchanged spell path); profession
                     // offerings are parent-SQL-seeded. The cap is unused on a line-0 row but must be NAMED
                     // on the INSERT; 75 matches the module's #[default(75u32)].
@@ -2156,7 +2156,7 @@ pub fn run_spells(data_dir: &str, args: &Args) -> Result<()> {
             },
         );
         // Provenance stamp convention, mirrored from the --dump loop's per-family
-        // stamp_family calls in main.rs::run_dump). file_hash is "" here: unlike the --dump path
+        // stamp_family calls in main.rs::run_dump. file_hash is "" here: unlike the --dump path
         // (which hashes the whole SQL dump's bytes in one shot), the DBC chain is read row-by-row
         // through `read_table`'s parsed-struct API (dbc.rs) with no single raw byte buffer to hash
         // cheaply — threading a chain-wide hash would mean re-reading every source MPQ a second time
@@ -2916,7 +2916,7 @@ mod tests {
             E_CONVERT_RESOURCE
         );
         assert_eq!(correct_script_effect_kind("Charge", E_SCRIPTED), E_CHARGE);
-        // Feint (Rogue Slice 3): vanilla encodes it as the native Threat effect (→ E_TAUNT) with a
+        // Feint: vanilla encodes it as the native Threat effect (→ E_TAUNT) with a
         // negative base; reclassify that E_TAUNT to E_REDUCE_THREAT (a one-time current-threat drop).
         assert_eq!(
             correct_script_effect_kind("Feint", E_TAUNT),
@@ -3219,7 +3219,7 @@ mod tests {
             SPELL_ATTR_INCAP_OPENER
         );
         assert_eq!(spell_flag_attributes("Sap") & SPELL_ATTR_REQ_BEHIND, 0);
-        // Garrote (Rogue Slice 3): REQ_BEHIND + REQ_STEALTH, but NOT STEALTH_SAFE (it breaks stealth) and
+        // Garrote: REQ_BEHIND + REQ_STEALTH, but NOT STEALTH_SAFE (it breaks stealth) and
         // NOT INCAP_OPENER (works on any type, in or out of combat — must not inherit Sap's constraints).
         assert_eq!(
             spell_flag_attributes("Garrote") & SPELL_ATTR_REQ_STEALTH,
@@ -3242,7 +3242,7 @@ mod tests {
             spell_flag_attributes("Pick Pocket"),
             SPELL_ATTR_STEALTH_SAFE
         );
-        // Slice and Dice: the combo-FINISHER duration-scaling bit (Rogue Slice 2) — and ONLY that bit.
+        // Slice and Dice: the combo-FINISHER duration-scaling bit — and ONLY that bit.
         assert_eq!(
             spell_flag_attributes("Slice and Dice"),
             SPELL_ATTR_FINISHER_DURATION

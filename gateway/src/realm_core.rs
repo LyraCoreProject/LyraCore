@@ -146,7 +146,7 @@ pub(crate) trait RealmDb: Clone + Sized + Send + Sync {
     /// per-shard population (a point-in-time snapshot, not a windowed average).
     fn session_count(&self) -> usize;
     /// Record `shard`'s occupancy + session sample, tagged with `gateway_key` (this gateway
-    /// process's identity, hashed, `load_sample::gateway_key`, so N gateway processes
+    /// process's identity, hashed by `load_sample::gateway_key`), so N gateway processes
     /// sampling the same shard keep independent ring history instead of clobbering each other.
     fn record_shard_load(
         &self,

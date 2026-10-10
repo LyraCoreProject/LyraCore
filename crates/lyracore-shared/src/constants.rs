@@ -447,7 +447,7 @@ mod tests {
         assert_eq!(npc_flags::AUCTIONEER, 0x1000);
     }
 
-    /// pin the shared GameObject QUESTGIVER type id against cmangos, this is the
+    /// Pins the shared GameObject QUESTGIVER type id against cmangos. This is the
     /// SINGLE source both `module/src/gameobject.rs::go_type::QUESTGIVER` and the gateway's
     /// `CMSG_GAMEOBJ_USE` dispatch read, so a silent edit here would desync both sides at once.
     #[test]
@@ -461,7 +461,7 @@ mod tests {
         assert_eq!(go_type::MEETINGSTONE, 23);
     }
 
-    /// the gossip option action codes the dispatcher matches on must be pairwise
+    /// The gossip option action codes the dispatcher matches on must be pairwise
     /// distinct — a collision here would silently misroute one action to another's handler.
     #[test]
     fn gossip_option_actions_are_distinct() {

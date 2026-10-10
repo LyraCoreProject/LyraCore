@@ -227,7 +227,7 @@ pub fn run(data_dir: &str, args: &Args) -> Result<()> {
         .filter(|r| r.pet_talent_type != -1)
         .count();
 
-    // Locks: Lock.dbc → game_lock, the DATA half of open-lock (119 wires enforcement).
+    // Locks: Lock.dbc → game_lock, the DATA half of open-lock; the Module's lock gate enforces it.
     // Small table (a few hundred rows in vanilla) — load ALL, same "load ALL rows" convention as the
     // other DBC-backed lookups above. No Timestamp → plain SQL, same clear+reload shape.
     let locks: DbcLock = read_table(&mut chain)?;
@@ -250,7 +250,7 @@ pub fn run(data_dir: &str, args: &Args) -> Result<()> {
     }
 
     // Load game_skill_line + game_skill_ability + game_skill_availability from SkillLine.dbc /
-    // SkillLineAbility.dbc / SkillRaceClassInfo.dbc: the skill fabric as data, see
+    // SkillLineAbility.dbc / SkillRaceClassInfo.dbc (the skill fabric as data, see
     // module/src/skilldata.rs). All no-Timestamp → plain SQL, same clear+reload shape as the blocks
     // above. `SkillTiers.dbc` is NOT loaded here (no `game_*` table of its own) — it only feeds
     // `profession_tier_values` below, which `importer/src/main.rs` uses for the profession trainer
@@ -328,13 +328,13 @@ pub fn run(data_dir: &str, args: &Args) -> Result<()> {
     println!("SkillRaceClassInfo: {sav_count} availability rows");
     println!("AuctionHouse: {auction_house_count} houses");
     println!("MailTemplate: {mail_template_count} templates");
-    // coverage prints (always printed, like the skill lines above).
+    // Coverage prints (always printed, like the skill lines above).
     println!("AreaTable: {area_count} areas");
     println!("AreaTrigger: {trigger_count} triggers");
     println!("WorldSafeLocs: {graveyard_count} graveyards");
-    // coverage print (always printed, like the ones above).
+    // Coverage print (always printed, like the ones above).
     println!("CreatureFamily: {family_count} families ({tameable_family_count} tameable)");
-    // coverage print (always printed, like the ones above). Loud about any Lock.dbc
+    // Coverage print (always printed, like the ones above). Loud about any Lock.dbc
     // LocktypeReference id `LOCKTYPE_TO_SKILL_LINE` doesn't cover — see that const's doc comment.
     if lock_unmapped.is_empty() {
         println!("Lock: {lock_count} lock indices");
@@ -509,7 +509,7 @@ fn char_base_info_sql(chain: &mut PatchChain) -> Result<(Vec<String>, usize)> {
 /// The `CharStartOutfit.dbc` (race_class, item) set — shared by `start_item_sql` (the outfit's own
 /// clear+reload) AND `main.rs`'s `build_createinfo_item_sql`: the cmangos dump's
 /// `playercreateinfo_item` EXTRAS are deduped against this SAME set, so an item CharStartOutfit
-/// already grants for a (race, class) is never double-listed). `race == 0 || class == 0` rows are
+/// already grants for a (race, class) is never double-listed. `race == 0 || class == 0` rows are
 /// skipped (not a real playable combo) and `item == 0` slots (empty) are skipped, matching
 /// `start_item_sql`'s own filtering exactly.
 pub(crate) fn outfit_item_set(
@@ -1195,10 +1195,10 @@ fn taxi_catalogue_sql(
     })
 }
 
-/// Clear+reload SQL for `game_creature_family` from `CreatureFamily.dbc`: the 188 pet
+/// Clear+reload SQL for `game_creature_family` from `CreatureFamily.dbc`: the pet
 /// system's data half — `CreatureTemplate.creature_family`/`type_flags` already import via
 /// `main.rs`'s `ct::FAMILY`/`ct::CREATURE_TYPE_FLAGS`, and the Wolf faction fixup already reads
-/// `family_id` off the dump; this is the last missing piece, the family lookup table itself). Name
+/// `family_id` off the dump; this is the last missing piece, the family lookup table itself. Name
 /// via `.en_gb` + `sql_text` (apostrophe-escaping), matching `skill_line_sql`'s convention.
 /// `pet_food_mask`/`pet_talent_type`/`category` are the raw DBC `int32` fields, signed — see
 /// `game_creature_family`'s doc comment (`module/src/creatures/spawn.rs`) for their meaning. Loads
@@ -1247,8 +1247,8 @@ fn locktype_skill_line(locktype_id: u32) -> Option<u32> {
         .map(|&(_, skill)| skill)
 }
 
-/// Clear+reload SQL for `game_lock` from `Lock.dbc`, the DATA half of open-lock; 119
-/// wires the enforcement). Each Lock.dbc row packs FOUR parallel `[;8]` arrays: `ty`/`property`/
+/// Clear+reload SQL for `game_lock` from `Lock.dbc`, the DATA half of open-lock; the Module's
+/// lock gate enforces it. Each Lock.dbc row packs FOUR parallel `[;8]` arrays: `ty`/`property`/
 /// `required_skill`/`action` — up to 8 ALTERNATIVE ways to open the SAME lock (e.g. "the right key OR
 /// enough Lockpicking"). Only the non-`LockType::None` indices are real; a lock with 1 requirement
 /// emits exactly 1 `game_lock` row (see the module's `GameLock` doc, `module/src/gameobject.rs`).

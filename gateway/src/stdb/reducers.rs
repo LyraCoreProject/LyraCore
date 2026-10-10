@@ -2517,7 +2517,7 @@ impl Coordinator {
         ))
     }
 
-    /// Take the money from a corpse (`CMSG_LOOT_MONEY`, slice 3) over the coordinator connection so
+    /// Take the money from a corpse (`CMSG_LOOT_MONEY`) over the coordinator connection so
     /// the module attributes the loot to the caller (as `gw_loot_money`).
     pub fn loot_money(
         &self,
@@ -2554,7 +2554,7 @@ impl Coordinator {
         ))
     }
 
-    /// Take one item from the open corpse into the backpack (`CMSG_AUTOSTORE_LOOT_ITEM`, slice 4) over
+    /// Take one item from the open corpse into the backpack (`CMSG_AUTOSTORE_LOOT_ITEM`) over
     /// the coordinator connection so the module attributes the loot to the caller. The module moves the
     /// item into a free slot + deletes the corpse-loot row (the inventory relay then shows it in the bag).
     /// Rides the coordinator connection as `gw_take_loot`.
@@ -2823,7 +2823,7 @@ impl Coordinator {
         )
     }
 
-    /// Persist the rep pane's At-War checkbox (`CMSG_SET_FACTION_ATWAR`, 195 slice B): the wire's
+    /// Persist the rep pane's At-War checkbox (`CMSG_SET_FACTION_ATWAR`): the wire's
     /// u16 is the client's 0..63 rep-array slot (ReputationListID — the gtker `Faction` field name
     /// lies, same as SET_FACTION_STANDING); the module reverse-resolves the faction and upserts.
     pub fn set_faction_at_war(
@@ -3078,7 +3078,7 @@ impl Coordinator {
         )
     }
 
-    /// Revive the caller after death (`CMSG_REPOP_REQUEST`, slice 4) over the coordinator connection.
+    /// Revive the caller after death (`CMSG_REPOP_REQUEST`) over the coordinator connection.
     /// Rides the coordinator connection as `gw_repop`.
     pub fn repop(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
         if actor_guid == 0 {
@@ -3092,7 +3092,7 @@ impl Coordinator {
         )
     }
 
-    /// Reclaim the caller's corpse (`CMSG_RECLAIM_CORPSE`, slice 5) over the coordinator connection.
+    /// Reclaim the caller's corpse (`CMSG_RECLAIM_CORPSE`) over the coordinator connection.
     pub fn reclaim_corpse(
         &self,
         _account_id: u64,

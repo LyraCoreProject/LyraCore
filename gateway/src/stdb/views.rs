@@ -49,7 +49,7 @@ pub(crate) fn character_view(c: Character) -> crate::codec::CharacterView {
     }
 }
 
-/// Flatten a `game_item_template` row into the codec's `ItemTemplateView` (items slice-1).
+/// Flatten a `game_item_template` row into the codec's `ItemTemplateView`.
 pub(crate) fn item_template_view(t: ItemTemplate) -> crate::codec::ItemTemplateView {
     crate::codec::ItemTemplateView {
         entry: t.entry,
@@ -189,7 +189,7 @@ pub(crate) fn entity_view(e: WorldEntity, durable_zone: u32) -> crate::codec::En
     }
 }
 
-/// Map a `game_corpse` row into the codec's `CorpseView` for the CORPSE CREATE_OBJECT (slice 5).
+/// Map a `game_corpse` row into the codec's `CorpseView` for the CORPSE CREATE_OBJECT.
 pub(crate) fn corpse_view(c: Corpse) -> crate::codec::CorpseView {
     crate::codec::CorpseView {
         guid: c.guid,

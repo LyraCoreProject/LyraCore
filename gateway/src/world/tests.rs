@@ -11479,7 +11479,7 @@ fn quest_store_at_level(level: u8) -> InMemoryStore {
 
 #[test]
 fn gossip_hello_hides_unlearn_talents_below_level_10() {
-    // the imported "I wish to unlearn my talents." row (reclassified by the importer to
+    // The imported "I wish to unlearn my talents." row (reclassified by the importer to
     // `UNLEARNTALENTS`, since the raw dump column never carries it) must not render for a character
     // who cannot yet have a talent point.
     use lyracore_shared::constants::gossip_option;

@@ -34,7 +34,7 @@ use super::*;
 /// and a melee row's attacker/target pair shares one instance at ARM time on every arming path —
 /// `apply_start_attack`/`apply_start_ranged_attack` reject a cross-instance target explicitly, this
 /// file's `aggro_pass` retaliation mirrors an existing (same-instance) row, and `tick_creatures`'s
-/// aggro/assist/pet passes pair within one instance (190 slice 1). So this tick's cost is O(active
+/// aggro/assist/pet passes pair within one instance. So this tick's cost is O(active
 /// engagements) — it scales with combat, NOT with instance count, and scoping it per instance would
 /// divide an already-small table while adding a per-row entity fetch. (Known pre-existing edge, not
 /// widened here: 224's `teleport_player` can move one side of a live pair cross-instance AFTER

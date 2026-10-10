@@ -48,7 +48,7 @@ pub fn grid_cell(x: f32, y: f32) -> (i32, i32) {
 /// index-served at all — `IndexProbe::Range` is documented in that release as "we currently never
 /// construct this variant" — and a disjunction (`OR`) is evaluated row-by-row, never turned into
 /// multiple probes. So the 4-column `by_grid` index `(map_id, instance_id, grid_x, grid_y)` is
-/// *unusable* from SQL, and a `grid_x BETWEEN.. AND grid_y BETWEEN..` box is a residual filter over
+/// *unusable* from SQL, and a `grid_x BETWEEN .. AND grid_y BETWEEN ..` box is a residual filter over
 /// a full scan no matter how the columns are ordered. Folding the two grid columns into one turns the
 /// only shape the planner CAN serve — a 3-column all-equality probe on
 /// `(map_id, instance_id, cell)` — into an exact match for a single grid cell.
@@ -148,7 +148,7 @@ impl GridBox {
 
     /// Inclusive grid-cell bounds of the box (anchor ± [`BOX_HALF_SPAN`]): `(gx_min, gx_max, gy_min,
     /// gy_max)` — the WHERE-clause range the AOI subscription uses (`grid_x BETWEEN gx_min AND gx_max AND
-    /// grid_y BETWEEN...`). The SAME range drives the module's movement-recipient selection, so the
+    /// grid_y BETWEEN ...`). The SAME range drives the module's movement-recipient selection, so the
     /// gateway's spawn set and the peer-movement relay stay aligned.
     pub fn bounds(&self) -> (i32, i32, i32, i32) {
         (
@@ -306,7 +306,7 @@ mod tests {
         );
     }
 
-    /// the packed `cell` id must be a BIJECTION over `(i32, i32)`. Every writer of `grid_x`/
+    /// The packed `cell` id must be a BIJECTION over `(i32, i32)`. Every writer of `grid_x`/
     /// `grid_y` also writes this value and the AOI subscription probes it with an equality, so a
     /// collision would silently merge two cells — two players 500yd apart would see each other, and
     /// the entities of one cell would be delivered to the wrong box. Round-tripping is the proof:

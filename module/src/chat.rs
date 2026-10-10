@@ -71,7 +71,7 @@ pub fn addon_payload(raw: &str) -> Option<String> {
     (!raw.is_empty()).then(|| raw.chars().take(MAX_CHAT_LEN).collect())
 }
 
-/// The say/yell/`/e` core, actor-explicit (stage 4a): everything the old sender-path `send_chat`
+/// The say/yell/`/e` core, actor-explicit: everything the old sender-path `send_chat`
 /// did after resolving WHO spoke, plus the player/EventAI boundary — a Character may say, yell or
 /// `/e`, never submit the creature-only text emote. EMOTE is admitted ONLY here, never in
 /// [`apply_send_chat_to`]: that function is EventAI's own entry, and its `chat_type` comes straight
@@ -231,7 +231,7 @@ pub struct EmoteEvent {
 /// `text_emote` / `emote_anim` ids come from the client; invalid ones degrade gracefully gateway-side
 /// (the text line is skipped / the animation is dropped) rather than erroring.
 ///
-/// The text-emote core, actor-explicit (stage 4a) — same split as [`apply_send_chat`].
+/// The text-emote core, actor-explicit, same split as [`apply_send_chat`].
 pub(crate) fn apply_send_emote(
     ctx: &ReducerContext,
     sender: crate::WorldEntity,

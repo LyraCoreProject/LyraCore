@@ -4,8 +4,8 @@
 //! `build.rs`'s marker scan (see the `game_hook` / `game_tick_pass` macro docs in `lib.rs`). Each
 //! core chokepoint calls exactly ONE `fire_*` fn here, which iterates the generated per-event
 //! registry. Handlers are NOTIFY-ONLY: they observe the payload and may act through the same
-//! reducer-internal fns core code uses (grant, damage, spawn, ...), but there is no veto/fold —
-//! These hooks do not veto or fold a result.
+//! reducer-internal fns core code uses (grant, damage, spawn, ...), but there is no veto/fold.
+//! Hooks cannot change a result.
 //!
 //! The catalog:
 //!
@@ -232,7 +232,7 @@ pub struct HpThresholdPayload {
 /// success exit (player `use_gameobject` and the debug drivers share that core), AFTER the
 /// type-dispatch committed its effect (chest looted, door toggled, goober credited, inert no-op).
 /// Rejected uses (out of range, already-looted chest...) never fire. `instance_id` is the GO
-/// ROW's own (190 slice 2: rows are instance-tagged; per-instance copies carry their instance,
+/// ROW's own (rows are instance-tagged: per-instance copies carry their instance,
 /// static rows carry 0) — handlers key state checks AND primitives off it directly.
 pub struct GoUsedPayload {
     pub go_guid: u64,

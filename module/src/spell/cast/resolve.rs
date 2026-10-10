@@ -52,7 +52,7 @@ pub(crate) fn resolve_cast_at(
     // its duplicate. Channel ticks / triggers / creature / debug / item-use casts pass false and the
     // relay DELIVERS the caster's visual (they never had a synchronous send).
     client_initiated: bool,
-    // The clicked GROUND point (118, for a ground-targeted cast (CMSG_CAST_SPELL's
+    // The clicked GROUND point for a ground-targeted cast (CMSG_CAST_SPELL's
     // DEST_LOCATION). `Some` → AREA effects splash from it and a ground patch anchors there; `None` for
     // every non-ground cast (self/unit-target/creature/trigger). Threaded verbatim to select_targets +
     // create_ground_area.
@@ -88,7 +88,7 @@ pub(crate) fn resolve_cast_at_typed(
     // its duplicate. Channel ticks / triggers / creature / debug / item-use casts pass false and the
     // relay DELIVERS the caster's visual (they never had a synchronous send).
     client_initiated: bool,
-    // The clicked GROUND point (118, for a ground-targeted cast (CMSG_CAST_SPELL's
+    // The clicked GROUND point for a ground-targeted cast (CMSG_CAST_SPELL's
     // DEST_LOCATION). `Some` → AREA effects splash from it and a ground patch anchors there; `None` for
     // every non-ground cast (self/unit-target/creature/trigger). Threaded verbatim to select_targets +
     // create_ground_area.
@@ -1207,7 +1207,7 @@ fn check_cast_gate_suffix(
             e.effect_index
         )));
     }
-    // A ground-AoE (118) with no radius is unauthored data — reject LOUD rather than spawn a 0-radius
+    // A ground-AoE with no radius is unauthored data — reject LOUD rather than spawn a 0-radius
     // area that silently damages nobody (same fail-loud stance as Blink's distance).
     if let Some(e) = effects
         .iter()
@@ -1375,7 +1375,7 @@ pub(crate) fn begin_cast(
     target_guid: u64,
 
     client_initiated: bool,
-    // The clicked GROUND point (118 for a ground-targeted cast. An INSTANT/channel ground cast
+    // The clicked GROUND point for a ground-targeted cast. An INSTANT/channel ground cast
     // passes it straight to resolve_cast_at; a TIMED one stashes it on the PendingCast row so the
     // completion (`fire_pending_cast`) can anchor the patch at the click. `None` for every normal cast.
     dest: Option<(f32, f32, f32)>,

@@ -161,7 +161,7 @@ pub(crate) fn write_packed_guid_u64(out: &mut Vec<u8>, guid: u64) {
 }
 
 /// Build a VALUES partial-update carrying `UNIT_DYNAMIC_FLAGS` (idx 143) so a corpse's DEAD bit
-/// reaches clients that already have the object (slice 2 killing blow). New observers get it at
+/// reaches clients that already have the object (the killing blow). New observers get it at
 /// CREATE instead (`build_create_object` sets it). Same `dirty_reset` discipline as
 /// `build_health_values` so the wire carries ONLY this field and never re-sends OBJECT_FIELD_TYPE.
 pub fn build_dynamic_flags_values(guid: u64, dynamic_flags: u32) -> SMSG_UPDATE_OBJECT {
@@ -402,7 +402,7 @@ pub fn build_resistance_values(guid: u64, total: [u32; 7]) -> SMSG_UPDATE_OBJECT
 }
 
 /// Build a VALUES partial-update carrying `PLAYER_FIELD_COINAGE` so the player's money updates LIVE
-/// after looting (slice 3). Player mask. Same `dirty_reset` discipline as `build_health_values` so
+/// after looting. Player mask. Same `dirty_reset` discipline as `build_health_values` so
 /// the wire carries ONLY the coinage field and never re-sends OBJECT_FIELD_TYPE (the crash field).
 pub fn build_coinage_values(guid: u64, money: u32) -> SMSG_UPDATE_OBJECT {
     player_values(guid, |player| {

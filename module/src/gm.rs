@@ -278,9 +278,9 @@ pub(crate) fn parse_gm_command(text: &str) -> Result<GmCommand, String> {
 //  Reducers
 // ===========================================================================================
 
-/// Grant/revoke GM level (operator-only CLI reducer, authz): `level` gates
+/// Grant/revoke GM level (operator-only CLI reducer): `level` gates
 /// [`gm_command`] (`0` = no access — the moderation-facing per-level distinctions beyond "has
-/// access at all" are's concern, not this one's). Looked up by character NAME
+/// access at all" are out of scope). Looked up by character NAME
 /// (case-insensitive, as `/w bob` reaches Bob) since an operator drives this via
 /// `spacetime call`, which has no live guid to hand. `require_operator` gates it exactly like the
 /// importer reducers — never player-callable.
@@ -398,7 +398,7 @@ pub(crate) fn apply_gm_command(
             // `map_id` comes from the destination, so a cross-map `.tele` (ValleyOfTrials, map 1)
             // rides the same primitive and becomes a full escrowed transfer to whichever database
             // owns that map. Deadmines is still deliberately absent: map 36 has no imported world
-            // data, so it would.tele into an empty room.
+            // data, so it would .tele into an empty room.
             crate::world::teleport_player(ctx, caller.guid, map_id, 0, x, y, z, o);
         }
     }

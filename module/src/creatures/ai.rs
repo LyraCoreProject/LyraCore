@@ -727,7 +727,7 @@ mod tests {
         );
     }
 
-    ///'s "mid-leg flee/return either finishes or freezes coherently" requirement: this
+    /// The "mid-leg flee/return either finishes or freezes coherently" requirement: this
     /// repo picks FREEZE (dormancy simply skips the pass, touching nothing). That choice is only
     /// coherent because `chase_step` (the shared return/chase step primitive) is a pure function of the
     /// CURRENT position and target — no elapsed-time or step-count argument — so pausing for any number
@@ -1168,7 +1168,7 @@ mod tests {
     }
 
     // =========================================================================================
-    //, per-instance tick scope + cadence-generalized sense/step math
+    //  Per-instance tick scope + cadence-generalized sense/step math
     // =========================================================================================
 
     /// Pins the sentinel to u64::MAX — the schema `#[default(18_446_744_073_709_551_615u64)]` on
@@ -1242,9 +1242,9 @@ mod tests {
         }
     }
 
-    /// The equivalence-spec pattern, applied to 229: with ONLY the seeded catch-all row
+    /// The equivalence-spec pattern, applied to the per-instance tick scope: with ONLY the seeded catch-all row
     /// and every entity at instance 0 (today's world), the scope filter admits the IDENTICAL visit
-    /// set — the passes behave byte-identically to the pre-229 code (the gate is `covers() == true`
+    /// set — the passes behave byte-identically to an unscoped tick (the gate is `covers() == true`
     /// for every candidate, and the global passes still run).
     #[test]
     fn tick_scope_default_config_visits_the_identical_candidate_set() {

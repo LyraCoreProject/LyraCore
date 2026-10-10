@@ -160,7 +160,7 @@ const PARTY_SHARE_RANGE_SQ: f32 = crate::group::GROUP_XP_RANGE_SQ;
 /// (`gateway/src/stdb/reads.rs`) — both sides model the same 20-slot vanilla quest log.
 pub(crate) const MAX_QUEST_LOG_SIZE: usize = 20;
 
-/// Vanilla level cap (quest XP→money conversion gate,(e)), matches `xp::xp_to_next_level`'s
+/// Vanilla level cap (quest XP→money conversion gate), matches `xp::xp_to_next_level`'s
 /// own hardcoded cap check (`level >= 60` there too; not re-exported as a shared const, so this is a
 /// second literal by necessity — pinned by a test alongside `xp::xp_to_next_level`'s own cap tests).
 const QUEST_MAX_LEVEL_PAYOUT: u32 = 60;
@@ -231,7 +231,7 @@ pub struct QuestTemplate {
     #[default(false)]
     pub repeatable: bool,
     // --- forward chains + timed quests, END-appended, #[default(0)] → additive
-    // auto-migration) ---
+    // auto-migration ---
     // cmangos NextQuestId/NextQuestInChain: the successor quest auto-offered on this quest's turn-in
     // (0 = no successor). `prev_quest_id`/auto_finish already do the ACCEPT-side gating + the
     // "arm the accept button" wire bit (module/src/quest.rs's prereq check, gateway/src/codec/quest.rs's
@@ -420,7 +420,7 @@ pub struct CharacterQuest {
     pub quest_entry: u32,         // -> QuestTemplate.entry
     pub counts: Vec<u32>, // per-objective kill progress, indexed by QuestObjective.obj_index
     pub rewarded: bool,   // true once turned in — the row stays to block a repeat
-    // --- timed quests, END-appended, #[default(...)] → additive auto-migration) ---
+    // --- timed quests, END-appended, #[default(...)] → additive auto-migration ---
     // Micros-since-epoch deadline stamped by `apply_accept_quest` from `QuestTemplate.limit_time`
     // (`ctx.timestamp` micros + `limit_time * 1_000_000`); 0 = untimed (the vast majority of quests —
     // existing rows default to this, unchanged behavior). Cleared back to 0 the instant the quest
@@ -653,7 +653,7 @@ fn validate_giver(
     // Poster" starts q176 Wanted: Hogger (no creature start giver at all), and the GO 55/56 "Lost
     // Guards" corpses drive the q37/q45/q71 chain. Same map + range gate.
     if let Some(go) = ctx.db.game_gameobject().guid().find(giver_guid) {
-        // GameObject giver: map + instance gated (190 slice 2 — GO rows carry `instance_id` now;
+        // GameObject giver: map + instance gated (GO rows carry `instance_id`;
         // dungeon GOs are per-instance copies, so a giver in another party's Deadmines can never
         // serve this player).
         if go.map_id != player.map_id || go.instance_id != player.instance_id {
@@ -1164,7 +1164,7 @@ pub(crate) fn request_turn_in_quest(
         lyracore_shared::quest::xp_reward(tmpl.quest_level)
     };
     let xp = crate::xp::rated_xp(ctx, base_xp);
-    // Level-cap payout(e)): at the vanilla level cap, quest XP is USELESS (no next
+    // Level-cap payout: at the vanilla level cap, quest XP is USELESS (no next
     // level to fill) — real vanilla instead converts it to copper. Money-converted, never granted as
     // XP (vanilla behaviour: a capped character never dings off a quest). Below the cap, unchanged: XP
     // granted normally, no conversion. `max_level_money_reward` (the gateway's quest-log-preview stub,
@@ -2787,7 +2787,7 @@ pub(crate) fn on_areatrigger_entered(ctx: &ReducerContext, player_guid: u64, tri
 /// Loaded by the importer's `--dump` "globals" family
 /// (`importer/src/main.rs::build_areatrigger_teleport_sql`). Module-only: deliberately NOT `public` —
 /// no client or gateway ever reads a teleport TARGET directly, only its EFFECT (the cross-map teleport
-/// handshake,, which already carries its own `game_teleport_event` wire path), so this
+/// handshake, which already carries its own `game_teleport_event` wire path), so this
 /// table needs no gateway binding at all (danger-zones.md §1's "new table → regenerate bindings" rule
 /// only applies to tables a gateway subscription reads). [`apply_enter_areatrigger`] looks this up by
 /// `trigger_id`; a hit routes the player through [`crate::world::teleport_player`], a miss leaves the
@@ -3037,13 +3037,13 @@ pub(crate) fn enter_sessionless_areatrigger(
 }
 
 /// The shared core behind [`enter_areatrigger`] and `debug_enter_areatrigger`. Quest
-/// credit fires FIRST and UNCONDITIONALLY (unchanged from pre-225 behavior), then — iff `trigger_id`
-/// has an imported `game_areatrigger_teleport` row — the player is routed through 224's cross-map
+/// credit fires FIRST and UNCONDITIONALLY (unchanged), then — iff `trigger_id`
+/// has an imported `game_areatrigger_teleport` row — the player is routed through the cross-map
 /// teleport. A trigger can be BOTH a quest-explore objective AND a teleport (Deadmines' Moonbrook
 /// entrance/exit triggers, `[V]` ids ~1447/~1448 per the design doc) — this is deliberate, not a bug:
 /// the two arms are independent and both fire on the same `CMSG_AREATRIGGER`.
 ///
-/// 190 slice 2 (the former "HOOK POINT"): a teleport whose `target_map` is a DUNGEON
+/// Dungeon entry: a teleport whose `target_map` is a DUNGEON
 /// (`instance::is_dungeon_map` — Deadmines = map 36 today) resolves-or-creates the caller's
 /// instance (`instance::resolve_or_create_instance`: own live binding → party's live instance →
 /// create; solo allowed; 5-player cap enforced here at trigger time) and teleports into it. Every

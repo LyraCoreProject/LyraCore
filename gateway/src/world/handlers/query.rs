@@ -309,7 +309,7 @@ pub(crate) fn handle_query<St: WorldStore + ?Sized>(
                 _ => send(tx, Outbound::One(ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE))?,
             }
         }
-        // Item template resolution (items slice-1): the client queries an item it has encountered
+        // Item template resolution: the client queries an item it has encountered
         // (it holds the object) for its name/tooltip/icon. Always reply — `build_item_query_response`
         // emits a NotFound (`found: None`) for an unknown entry so the client stops re-asking.
         ClientOpcodeMessage::CMSG_ITEM_QUERY_SINGLE(q) => {

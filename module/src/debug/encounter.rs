@@ -133,7 +133,7 @@ pub fn debug_encounter_reset_hp_fired(
 
 /// Sweep EVERY kernel row for an instance (`encounter::sweep_encounter_state`) — kept as the
 /// narrow kernel-only lever; the FULL instance reap (which calls this sweep as its 228 splice)
-/// is `debug_reap_instance` (`debug/instance.rs`, 190 slice 3 landed).
+/// is `debug_reap_instance` (`debug/instance.rs`).
 #[reducer]
 pub fn debug_sweep_encounter_state(ctx: &ReducerContext, instance_id: u64) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;

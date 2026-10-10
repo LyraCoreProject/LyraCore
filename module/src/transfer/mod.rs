@@ -1515,7 +1515,7 @@ pub(crate) fn apply_import_blob<S: ImportSink>(
     sink.detach_for_transfer(guid);
     sink.cascade_delete_character(guid, ListingHolds::Keep);
     sink.insert_character(c);
-    // ratchet this database's guid allocator past `guid` NOW, in the same
+    // Ratchet this database's guid allocator past `guid` NOW, in the same
     // transaction as the materialisation — so a `create_character` racing this import (or run any
     // time after) can never hand the same guid to a brand-new local character.
     //
@@ -1894,7 +1894,7 @@ pub(crate) fn apply_finish<S: FinishSink>(sink: &mut S, transfer_id: u64) {
             sink.detach_for_transfer(out.character_guid);
             sink.cascade_delete_character(out.character_guid, listing_holds_after(&out.blob));
         }
-        // the character→shard index entry is written HERE, inside the same transaction that
+        // The character→shard index entry is written HERE, inside the same transaction that
         // releases the escrow, from the out-row's own destination fields — so "the escrow settled" and
         // "the directory says where it settled" can never disagree on this database.
         //

@@ -107,7 +107,7 @@ pub struct Character {
     pub pending_instance_id: u64,
     /// GM playtest authorization level: `0` = no access to any `.command`; the
     /// operator-only `gm::set_gm_level` reducer is the only writer. Moderation-facing per-level
-    /// distinctions beyond "has access at all" are's concern, not this one's, every
+    /// distinctions beyond "has access at all" are out of scope: every
     /// `gm_command` today only checks `gm_level != 0`. `#[default(0)]` + END-appended so `publish`
     /// auto-migrates existing characters to "no GM access" (safe default). Gateway-subscribed
     /// (`game_character` is in the coordinator's subscription list) → hand-synced in
@@ -131,8 +131,7 @@ pub struct Character {
     /// precedent) + END-appended → auto-migrates.
     #[default(0u64)]
     pub rested_since_micros: u64,
-    /// GM playtest GODMODE carried across an entity REBUILD, the 226 landmine wearing
-    /// a GM hat): a CROSS-MAP `.tele` (and every cross-database shard hop, which rides the same
+    /// GM playtest GODMODE carried across an entity REBUILD: a CROSS-MAP `.tele` (and every cross-database shard hop, which rides the same
     /// primitive) DESPAWNS the live entity, and `build_player_entity` rebuilds it from THIS row — so
     /// before this column, `.god` was silently dropped on arrival and the GM was eaten by the local
     /// wildlife with no message. `persist_entity` stamps it from the live entity on every NON-logout

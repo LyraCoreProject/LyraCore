@@ -11,7 +11,7 @@ use crate::{
     game_gameobject, game_instance, game_world_entity, CreatureSpawn, ServerConfig,
 };
 
-/// THE FIXTURE DUNGEON (190's done-when, headless, zero imports): resolve-or-create an instance of
+/// THE FIXTURE DUNGEON (headless, zero imports): resolve-or-create an instance of
 /// the character's CURRENT map through the REAL production path (`resolve_or_create_instance`:
 /// own binding → party's live instance → create, 5-cap enforced) and same-map-teleport them into
 /// it in place. On the dev map this instances the SEEDED world — the chicken/wolf/trainer roster
@@ -92,7 +92,7 @@ pub fn debug_enter_instance(
     Ok(())
 }
 
-/// Force-reap an instance NOW (the full slice-3 teardown: population → encounter sweep → tick row
+/// Force-reap an instance NOW (the full teardown: population → encounter sweep → tick row
 /// → bindings → row) without waiting out the 30min empty window. It refuses the same live-player,
 /// pending-intent, and Escrow claims as the scheduled reaper. The headless reap-verification lever.
 #[reducer]

@@ -25,10 +25,9 @@
 //!    leg through `creatures::tick::emit_move_spline`; the creature tick advances the stored
 //!    position), and [`encounter_reset`].
 //!
-//! Reset/sweep: 190 slice 3 (instance reap) deletes per-instance kernel state via
+//! Reset/sweep: the instance reap deletes per-instance kernel state via
 //! [`sweep_encounter_state`], called from `instance::teardown_instance_inner` right before the
-//! `game_instance` row itself goes (the splice point is documented on the fn, mirroring 229's
-//! `debug_arm_instance_tick` splice notes). [server]
+//! `game_instance` row itself goes (the splice point is documented on the fn). [server]
 
 use spacetimedb::{table, ReducerContext, Table};
 
@@ -243,7 +242,7 @@ pub const HP_FIRED_NONE: u32 = 101;
 /// PK-pair pattern; see `game_player_reputation`). A missing row reads as
 /// (`ENCOUNTER_NOT_STARTED`, payload 0). `encounter_id`s with [`RESERVED_ENCOUNTER_ID_BIT`] set
 /// are kernel bookkeeping rows (HP dedup), not package encounters. Swept per instance by
-/// [`sweep_encounter_state`] (190 slice 3). [server]
+/// [`sweep_encounter_state`]. [server]
 #[table(accessor = game_encounter_state, index(accessor = by_pair, btree(columns = [instance_id, encounter_id])))]
 pub struct EncounterState {
     #[primary_key]
@@ -818,11 +817,10 @@ fn despawn_tracked(ctx: &ReducerContext, tracked: &[EncounterSpawn]) {
 /// `game_encounter_state` rows (package encounters AND the reserved HP fired-marks), and all
 /// equip rows. HP WATCHES are global template config and deliberately survive.
 ///
-/// SPLICE POINT (190 slice 3, instance reap — mirrors 229's `debug_arm_instance_tick` splice
-/// notes): the reap's population sweep calls `crate::encounter::sweep_encounter_state(ctx,
-/// instance_id)` right next to its entity/corpse/GO-copy deletes, before the `game_instance` row
-/// itself goes (`instance::teardown_instance_inner`). Also exercised directly by the debug-feature
-/// lever `debug_sweep_encounter_state`.
+/// SPLICE POINT: the instance reap's population sweep calls
+/// `crate::encounter::sweep_encounter_state(ctx, instance_id)` right next to its entity/corpse/GO-copy
+/// deletes, before the `game_instance` row itself goes (`instance::teardown_instance_inner`). Also
+/// exercised directly by the debug-feature lever `debug_sweep_encounter_state`.
 pub(crate) fn sweep_encounter_state(ctx: &ReducerContext, instance_id: u64) {
     let tracked: Vec<EncounterSpawn> = ctx
         .db

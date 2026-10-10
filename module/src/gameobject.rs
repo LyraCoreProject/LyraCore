@@ -222,7 +222,7 @@ pub struct GameObject {
     /// column of that index is matched by an equality term, and it skips any index with more than 3
     /// columns outright (`MAX_EXACT_INDEX_COLS`); range predicates are never index-served at all
     /// (`IndexProbe::Range` — "we currently never construct this variant") and an `OR` is evaluated
-    /// row-by-row. So a `grid_x BETWEEN.. AND grid_y BETWEEN..` box degrades to a full partition
+    /// row-by-row. So a `grid_x BETWEEN .. AND grid_y BETWEEN ..` box degrades to a full partition
     /// scan — 1.1 BILLION rows examined on `game_gameobject` in a 445-player measurement. Folding the
     /// two grid columns into one makes `by_cell` a 3-column all-equality index, which the planner CAN
     /// serve, and the AOI box becomes 25 point probes instead of a scan.
@@ -327,7 +327,7 @@ pub struct GameObjectPool {
 }
 
 /// A pool member POINT (cmangos `pool_gameobject` subset). A *potential* spawn location: a point is
-/// TIVE iff a `game_gameobject` row exists at `pool_point_guid(point_id)`, INACTIVE otherwise, the
+/// ACTIVE iff a `game_gameobject` row exists at `pool_point_guid(point_id)`, INACTIVE otherwise, the
 /// active/inactive distinction is the EXISTENCE OF A ROW, not a column (so the spawn row is untouched).
 /// `template_entry` chooses which GO spawns here (a higher-tier template = a rarer member); `weight` is
 /// the relative selection weight (0 = never auto-selected). Public + SQL-loadable (no Timestamp).
@@ -441,7 +441,7 @@ pub(crate) fn reroll_pool(ctx: &ReducerContext, pool_id: u32, gathered_guid: u64
     activate_point(ctx, chosen);
 }
 
-/// TIVATE a pool point, insert its READY `game_gameobject` row at the derived guid. Shared by
+/// ACTIVATE a pool point, insert its READY `game_gameobject` row at the derived guid. Shared by
 /// `arm_pool` (initial fill) and `reroll_pool` (rotation). Idempotent-by-guid: the caller guarantees
 /// the point is currently inactive (no row at its guid), so this is a plain insert.
 fn activate_point(ctx: &ReducerContext, m: &GameObjectPoolMember) {
@@ -456,7 +456,7 @@ fn activate_point(ctx: &ReducerContext, m: &GameObjectPoolMember) {
         state: 0,
         created_at: ctx.timestamp,
         respawn_at_micros: 0,
-        instance_id: 0, // pools are open-world machinery (190 slice 2: never instanced),
+        instance_id: 0, // pools are open-world machinery (never instanced)
         grid_x: lyracore_shared::spatial::grid_cell(m.x, m.y).0,
         grid_y: lyracore_shared::spatial::grid_cell(m.x, m.y).1,
         cell: lyracore_shared::spatial::cell_id_at(m.x, m.y),
@@ -676,7 +676,7 @@ pub(crate) fn usable_go(
     Ok((go, tmpl))
 }
 
-/// Pick the lock on a locked GameObject, Pick Lock 1804, gateway-intercepted by the
+/// Pick the lock on a locked GameObject (Pick Lock 1804, gateway-intercepted by the
 /// E_OPEN_LOCK effect kind). Gated same-map/instance + range like [`apply_use_gameobject`] (the caster
 /// walked up to click it). Reads the GO template's `lock_id`, then scans `game_lock` for a SATISFIABLE
 /// real opener — a SKILL row (kind 2, `property != 0`) the caster's `game_player_skill(property)` meets,
@@ -765,7 +765,7 @@ pub(crate) fn apply_use_gameobject(
     caster_guid: u64,
     go_guid: u64,
 ) -> Result<(), String> {
-    // Map + instance gated (190 slice 2 — GO rows carry `instance_id` now): a player may only use
+    // Map + instance gated (GO rows carry `instance_id`): a player may only use
     // a GO in THEIR OWN instance (dungeon doors/chests are per-instance copies; the static
     // instance-0 originals on a dungeon map are the copy SOURCES, unreachable from inside a run).
     let (go, tmpl) = usable_go(ctx, caster_guid, go_guid).map_err(String::from)?;
@@ -780,7 +780,7 @@ fn use_resolved_gameobject(
 ) -> Result<(), String> {
     // Snapshot for the on_go_used notify hook fired at the success exit below — `go` is moved into
     // an update (or deleted by a pool reroll) inside the dispatch arms. The instance is the GO
-    // ROW'S OWN (190 slice 2, per 228's documented splice note; equal to the user's after the gate
+    // ROW'S OWN (equal to the user's after the gate
     // above, but the row is the authoritative source).
     let (used_go_guid, used_go_entry, used_go_instance) =
         (go.guid, go.template_entry, go.instance_id);
@@ -864,7 +864,7 @@ fn use_resolved_gameobject(
             //
             // (1) ROAMING pool (a pooled point whose pool is `in_place == false`) → the rotation IS the
             //     respawn: `reroll_pool` NOW (delete this point, activate a DIFFERENT inactive one) and RETURN
-            //   , no state flip, no armed timer (reroll_pool deleted the row, so pass_gameobject_respawn
+            //     — no state flip, no armed timer (reroll_pool deleted the row, so pass_gameobject_respawn
             //     never sees this guid → no double-respawn). Deleting the point relays SMSG_DESTROY_OBJECT
             //     (vanishes on gather = correct feedback) and the new point's INSERT relays CREATE_OBJECT (the
             //     node roams visible now). Active count stays max_active. DEBUG-ONLY: vanilla Elwynn is not
@@ -920,7 +920,7 @@ fn use_resolved_gameobject(
             // `on_go_update` relay (subscriptions.rs) that re-emits it live, mirroring the corpse
             // body→bones re-emit. LOCK gate: a DOOR/BUTTON whose lock has a REAL opener
             // (`locked_shut`) refuses the toggle until Pick Lock records a `game_gameobject_unlocked`
-            // row. lock_id 0 / a hand-open (property==0-only) lock toggles freely (unchanged, per 211).
+            // row. lock_id 0 / a hand-open (property==0-only) lock toggles freely (unchanged).
             if locked_shut(ctx, go.guid, tmpl.lock_id) {
                 return Err("it is locked".to_string());
             }
@@ -1097,14 +1097,12 @@ pub fn debug_pick_lock_entry(
 ///
 /// `packed`: rows separated by `;`, fields by `,`, in the order
 /// `guid,template_entry,map_id,x,y,z,orientation,initial_state,rot0,rot1,rot2,rot3`. `created_at` =
-/// `ctx.timestamp`. `initial_state`, END field, widened alongside
-/// `import_gameobjects_append` in the SAME commit, not a table migration: this is a string protocol
-/// between the importer and this reducer, not a reducer arg) lets a DOOR/BUTTON spawn already-open
-/// (cmangos `startOpen`); every other type's importer row carries 0 (ready/closed), byte-identical to
-/// the pre-211 always-0 shape. `rot0..3` (END fields — the cmangos spawn quaternion) ride
-/// AFTER `initial_state` rather than beside `orientation` so every pre-515 packed-row builder in this
-/// file's tests keeps working unmodified; a hand-built row that omits them fails loudly (field-count
-/// check below) rather than silently importing a zero quaternion.
+/// `ctx.timestamp`. `initial_state` is an END field of the string protocol between the importer and
+/// this reducer, not a table migration or a reducer arg. It lets a DOOR/BUTTON spawn already-open
+/// (cmangos `startOpen`); every other type's importer row carries 0 (ready/closed). `rot0..3` (END
+/// fields, the cmangos spawn quaternion) ride AFTER `initial_state` rather than beside `orientation`,
+/// so older packed-row builders in this file's tests keep working unmodified. A hand-built row that
+/// omits them fails loudly (field-count check below) rather than silently importing a zero quaternion.
 #[reducer]
 pub fn import_gameobjects(ctx: &ReducerContext, packed: String) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
@@ -1160,7 +1158,7 @@ fn load_go_batch(ctx: &ReducerContext, packed: &str) -> Result<u32, String> {
                 state: pu8(f[7])?,
                 created_at: now,
                 respawn_at_micros: 0, // a freshly-imported node is ready (no pending respawn)
-                instance_id: 0, // imported static rows are open-world (dungeon copies are runtime, 190 slice 2)
+                instance_id: 0, // imported static rows are open-world (dungeon copies are runtime)
 
                 grid_x: lyracore_shared::spatial::grid_cell(gx_src, gy_src).0,
                 grid_y: lyracore_shared::spatial::grid_cell(gx_src, gy_src).1,

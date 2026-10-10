@@ -282,7 +282,7 @@ fn resistance_values_is_unit_only_no_object_type() {
 
 #[test]
 fn dynamic_flags_values_is_unit_only_no_object_type() {
-    // Corpse render bit (slice 2): the killing-blow dynamic_flags update must be a Unit VALUES
+    // Corpse render bit: the killing-blow dynamic_flags update must be a Unit VALUES
     // mask carrying ONLY UNIT_DYNAMIC_FLAGS — never re-sending OBJECT_FIELD_TYPE (bit 2, value
     // 0x09 = OBJECT|UNIT), which crashes the 1.12 client. Same dirty_reset discipline as
     // build_health_values; this guards that the new builder didn't regress it.
@@ -317,7 +317,7 @@ fn dynamic_flags_values_is_unit_only_no_object_type() {
 
 #[test]
 fn coinage_values_is_player_mask_without_object_type() {
-    // The live purse update (slice 3) must be a Player VALUES mask carrying ONLY
+    // The live purse update must be a Player VALUES mask carrying ONLY
     // PLAYER_FIELD_COINAGE — never re-sending OBJECT_FIELD_TYPE (0x09). Same dirty_reset guard.
     let msg = build_coinage_values(1, 0x111); // 273 copper, a recognizable LE pattern
     match &msg.objects[0] {
@@ -551,7 +551,7 @@ fn loot_money_notify_carries_the_share_not_a_hardcoded_total() {
 
 #[test]
 fn ghost_values_is_player_mask_without_object_type() {
-    // The ghost transition relay (slice 5) carries PLAYER_FLAGS (GHOST) + UNIT_FIELD_BYTES_1 only,
+    // The ghost transition relay carries PLAYER_FLAGS (GHOST) + UNIT_FIELD_BYTES_1 only,
     // and must NOT re-send OBJECT_FIELD_TYPE (0x09) — same dirty_reset discipline as the other
     // partial-VALUES builders (re-sending TYPE crashes the 5875 client).
     let guid = 1;
@@ -588,7 +588,7 @@ fn ghost_values_is_player_mask_without_object_type() {
 
 #[test]
 fn corpse_create_is_a_corpse_object_with_race_in_bytes1() {
-    // The crash regression (slice 5): the client null-derefs if CORPSE_FIELD_BYTES_1 doesn't carry
+    // The crash regression: the client null-derefs if CORPSE_FIELD_BYTES_1 doesn't carry
     // the RACE in byte 1. The module packs bytes_1 = 0 | race<<8 | gender<<16 | skin<<24; this
     // confirms the codec emits a CORPSE object and passes that word through with race in byte 1.
     let corpse = CorpseView {
@@ -1407,7 +1407,7 @@ fn destroy_object_carries_guid() {
     }
 }
 
-// ---- Items slice-1 ---------------------------------------------------------------------------
+// ---- Items ---------------------------------------------------------------------------
 
 /// The hand-authored "Worn Shortsword" template the gateway maps to the wire (mirrors the
 /// module seed: a Poor one-hand sword, mainhand-equip, durability 20).
@@ -1932,7 +1932,7 @@ fn skill_block_reads_learned_rows_override_and_append() {
 
 #[test]
 fn create_object_carries_the_sheath_state_for_player_and_creature() {
-    // the CREATE is how a peer entering AOI range learns a unit's sheath state. Omit
+    // The CREATE is how a peer entering AOI range learns a unit's sheath state. Omit
     // UNIT_FIELD_BYTES_2 and everyone who walks up to a player with a drawn sword sees them
     // empty-handed until the next toggle. Byte 0 is the state; bytes 1-3 ride along untouched.
     let mut e = warrior_entity();
@@ -1970,7 +1970,7 @@ fn create_object_carries_the_sheath_state_for_player_and_creature() {
 
 #[test]
 fn player_create_equips_mainhand_renders_visible_item() {
-    // Slice-2: a weapon in the main-hand equipment slot (15) must set BOTH the inv-slot guid AND
+    // a weapon in the main-hand equipment slot (15) must set BOTH the inv-slot guid AND
     // PLAYER_VISIBLE_ITEM[15] to the item ENTRY, so the 3D model renders the weapon.
     let item_guid = (0x4000u64 << 48) | (1 << 8) | 15;
     let msg = build_create_object(

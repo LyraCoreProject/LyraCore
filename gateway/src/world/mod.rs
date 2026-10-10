@@ -1601,7 +1601,7 @@ fn dispatch<St: WorldStore + ?Sized>(
     let Some(msg) = handle_mail(tx, store, conn, msg)? else {
         return Ok(());
     };
-    // (§6): MSG_MOVE_* -> movement_update (persist + relay). The relayed peer events
+    // MSG_MOVE_* -> movement_update (persist + relay). The relayed peer events
     // come back on this player's game_movement_event subscription and are re-emitted (same
     // opcode + verbatim MovementInfo) to other players by their own subscription callbacks.
     //

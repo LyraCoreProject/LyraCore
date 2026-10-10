@@ -603,7 +603,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         state: 0,
         created_at: ctx.timestamp,
         respawn_at_micros: 0, // a freshly-seeded node is ready (no pending respawn)
-        instance_id: 0,       // seeded demo GOs live in the open world (190 slice 2),
+        instance_id: 0,       // seeded demo GOs live in the open world
         grid_x: lyracore_shared::spatial::grid_cell(hw::X + 5.0, hw::Y).0,
         grid_y: lyracore_shared::spatial::grid_cell(hw::X + 5.0, hw::Y).1,
         cell: lyracore_shared::spatial::cell_id_at(hw::X + 5.0, hw::Y),
@@ -638,7 +638,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         state: 0,
         created_at: ctx.timestamp,
         respawn_at_micros: 0, // a freshly-seeded node is ready (no pending respawn)
-        instance_id: 0,       // seeded demo GOs live in the open world (190 slice 2),
+        instance_id: 0,       // seeded demo GOs live in the open world
         grid_x: lyracore_shared::spatial::grid_cell(hw::X + 8.0, hw::Y).0,
         grid_y: lyracore_shared::spatial::grid_cell(hw::X + 8.0, hw::Y).1,
         cell: lyracore_shared::spatial::cell_id_at(hw::X + 8.0, hw::Y),
@@ -679,7 +679,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         state: 0,
         created_at: ctx.timestamp,
         respawn_at_micros: 0, // a freshly-seeded node is ready (no pending respawn)
-        instance_id: 0,       // seeded demo GOs live in the open world (190 slice 2),
+        instance_id: 0,       // seeded demo GOs live in the open world
         grid_x: lyracore_shared::spatial::grid_cell(hw::X + 6.0, hw::Y).0,
         grid_y: lyracore_shared::spatial::grid_cell(hw::X + 6.0, hw::Y).1,
         cell: lyracore_shared::spatial::cell_id_at(hw::X + 6.0, hw::Y),
@@ -714,7 +714,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         state: 0,
         created_at: ctx.timestamp,
         respawn_at_micros: 0, // a freshly-seeded node is ready (no pending respawn)
-        instance_id: 0,       // seeded demo GOs live in the open world (190 slice 2),
+        instance_id: 0,       // seeded demo GOs live in the open world
         grid_x: lyracore_shared::spatial::grid_cell(hw::X + 7.0, hw::Y).0,
         grid_y: lyracore_shared::spatial::grid_cell(hw::X + 7.0, hw::Y).1,
         cell: lyracore_shared::spatial::cell_id_at(hw::X + 7.0, hw::Y),
@@ -735,7 +735,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
     // REAL entries 1731/1732 (NOT the synthetic 50102 Copper Vein above): both type 25 GATHER, line 186
     // MINING. INIT-ONLY (the live pool/member rows are made here + arm); a re-import (`DELETE FROM
     // game_gameobject_pool WHERE pool_id > 0`) wipes this pool, so on the live/imported DB it is re-seeded
-    // post-import via `debug_setup_gather_pool 2 1 true...`. pool_id 2
+    // post-import via `debug_setup_gather_pool 2 1 true ...`. pool_id 2
     // is distinct from the debug pool (1) and the importer's roaming base (1000). Ensure the two tier
     // templates exist first (idempotent — the bare seed lacks them; the ETL also loads them).
     for (e, name, item, req) in [
@@ -1236,7 +1236,7 @@ fn seed_spell_registry(ctx: &ReducerContext) {
 
     // Test Fear (50022) — the FEAR crowd-control: ONE A_CONTROL (0xB0) effect whose p0 names the MECHANIC
     // M_FEAR (3, p0_kind 3 P_MECHANIC), targeting an ENEMY. A feared unit cannot ACT (no swing/cast — the
-    // TION gates fold fear in) and is force-walked AWAY from the caster by the fear-flee pass each tick
+    // ACTION gates fold fear in) and is force-walked AWAY from the caster by the fear-flee pass each tick
     // ("flees in terror"); it stays engaged so it resumes attacking when the aura ends. SHORT 8s duration
     // (≈2 ticks, like Warlock Fear) — bounded so the test subject doesn't run off the map. aura_interrupt
     // stays 0: base fear does NOT break on damage (unlike polymorph). is_negative true.
@@ -1309,8 +1309,8 @@ fn seed_spell_registry(ctx: &ReducerContext) {
     // `debug_seed_talents` (init does NOT re-run on an auto-migrate publish, so the live DB re-seeds via that).
     crate::talent::seed_talents(ctx);
 
-    // Stacking-group starter set, hand-authored until 102's cmangos `spell_group` SQL
-    // dump lands wholesale. Idempotent + shared with `debug_repair_after_publish`, which is how an
+    // Stacking-group starter set, hand-authored until a cmangos `spell_group` SQL
+    // dump is imported wholesale. Idempotent + shared with `debug_repair_after_publish`, which is how an
     // already-migrated development database picks up reconciled rows (init does NOT re-run).
     seed_spell_groups(ctx);
 }
@@ -1563,8 +1563,8 @@ fn seed_scheduler_arming(ctx: &ReducerContext) {
     // `debug_rearm_creature_tick` reducer (init does NOT re-run on a plain publish).
     // this seeded row is the GLOBAL/CATCH-ALL ticker (`GLOBAL_TICK_INSTANCE`), it
     // covers instance 0 AND every instance without a dedicated row of its own (load-bearing; never
-    // delete it). Dedicated per-instance rows are inserted by 190 slice 2's create_instance (or, until
-    // then, `debug_arm_instance_tick`).
+    // delete it). Dedicated per-instance rows are inserted by `create_instance` (or by
+    // `debug_arm_instance_tick`).
     ctx.db
         .game_creature_move_schedule()
         .insert(CreatureMoveSchedule {
@@ -1609,7 +1609,7 @@ fn seed_scheduler_arming(ctx: &ReducerContext) {
             )),
         });
 
-    // Ground-AoE damage tick every 500ms (118): drives game_ground_area (Consecration/…). 500ms so a
+    // Ground-AoE damage tick every 500ms: drives game_ground_area (Consecration/…). 500ms so a
     // 1s/2s area period fires within ~½ tick of due. Areas gate on their own next_tick_micros.
     ctx.db
         .game_ground_area_schedule()
@@ -1634,10 +1634,10 @@ fn seed_scheduler_arming(ctx: &ReducerContext) {
             )),
         });
 
-    // Gateway lease reaper (stage 4a): despawns the players of a gateway that stopped
+    // Gateway lease reaper: despawns the players of a gateway that stopped
     // heartbeating (the shared-connection crash case). Inert while `game_gateway_session` is
-    // empty — nothing binds sessions to leases until stage 4d — but armed from day one so the
-    // ghost bound exists the moment the first leased session appears. Same three-net story as
+    // empty, but armed from day one so the ghost bound exists the moment the first leased session
+    // appears. Same three-net story as
     // the motion tick above: `debug_repair_after_publish` ensures it on a live DB.
     ctx.db
         .game_gateway_lease_reaper_schedule()
@@ -1689,7 +1689,7 @@ pub(crate) fn seed_createinfo_spells(ctx: &ReducerContext) {
     }
 }
 
-/// The stacking-group starter set, hand-authored ahead of 102's cmangos `spell_group`/
+/// The stacking-group starter set, hand-authored ahead of a cmangos `spell_group`/
 /// `spell_group_stack_rules` SQL dump, which will fill `game_spell_group`/`game_spell_group_rule`
 /// wholesale and supersede this. Idempotent (only-if-empty, mirroring `seed_createinfo_spells`); shared by
 /// `init` and `debug_repair_after_publish` (init does NOT re-run on an auto-migrate publish). It

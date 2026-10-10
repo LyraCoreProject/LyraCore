@@ -118,7 +118,7 @@ pub struct MotionPublishSchedule {
 /// run with no start, or landing with no jump.
 ///
 /// This mirrors the gateway's own rule 1 (`world/coalesce.rs`): "any non-heartbeat
-/// opcode is ALWAYS a state change"), one layer down — it is deliberately the SAME classification,
+/// opcode is ALWAYS a state change", one layer down — it is deliberately the SAME classification,
 /// only stricter about `SET_FACING`, which the gateway forwards eagerly because the module's stored
 /// heading feeds server-side facing checks.
 pub(crate) fn is_discrete(opcode: u16) -> bool {

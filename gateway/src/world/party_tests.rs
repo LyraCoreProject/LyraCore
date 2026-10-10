@@ -1507,7 +1507,7 @@ fn a_stale_character_row_on_another_shard_cannot_make_a_logged_in_player_look_se
 
 /// **AC: the bot's membership reaches the shard it stands on.**
 ///
-/// The bot's own in-world behaviour — follow-the-leader (the playerbot simulation's slice 2), the
+/// The bot's own in-world behaviour — follow-the-leader (the playerbot simulation), the
 /// kill-XP split, `/p` — all read the SHARD's mirror, not realm-core. The answer therefore has to
 /// happen before the mirror push of the op that caused it, or the bot is a member the shard does not
 /// know about until the party's next op (and a bot party has no next op — the human does everything).

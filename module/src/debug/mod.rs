@@ -455,8 +455,8 @@ pub fn debug_force_cast_at(
 /// (`stats::max_health_for`/`max_power_for`, the SAME helpers `player_login` uses — not reimplemented).
 /// Health/power are refilled to the new max for the test. Also recomputes the five base attributes so
 /// the character sheet stays consistent with the new level. Thin wrapper over the shared
-/// `stats::set_character_level` core factored it out so `gm::gm_command`'s `.level`
-/// reuses the SAME recompute — see that fn's doc).
+/// `stats::set_character_level` core, which `gm::gm_command`'s `.level` also uses, so both run the
+/// SAME recompute (see that fn's doc).
 #[reducer]
 pub fn debug_set_level(
     ctx: &ReducerContext,
@@ -811,7 +811,7 @@ pub fn debug_spawn_gameobject(
             state: 0,
             created_at: ctx.timestamp,
             respawn_at_micros: 0, // a freshly-spawned node is ready (no pending respawn)
-            instance_id: 0,       // debug spawns land in the open world (190 slice 2)
+            instance_id: 0,       // debug spawns land in the open world
             grid_x: lyracore_shared::spatial::grid_cell(x, y).0,
             grid_y: lyracore_shared::spatial::grid_cell(x, y).1,
             cell: lyracore_shared::spatial::cell_id_at(x, y),
@@ -965,7 +965,7 @@ pub fn debug_setup_gather_pool(
 /// Force a pool RE-ROLL NOW for a deterministic no-wait verify (the ~4s sense tick would do the same on
 /// the armed timer). Deactivates `gathered_guid` and activates a different inactive weighted-chosen
 /// point — the active count stays `max_active`. `gathered_guid` is the live guid of the point to roll;
-/// resolve it from the SQL `SELECT guid FROM game_gameobject WHERE...` (it's < 2^53 only for small
+/// resolve it from the SQL `SELECT guid FROM game_gameobject WHERE ...` (it's < 2^53 only for small
 /// point_ids — pass it after a `--` if negative-looking, though GO guids are large/unsigned).
 #[reducer]
 pub fn debug_force_pool_reroll(
@@ -1103,8 +1103,8 @@ pub fn debug_begin_cast(
     )
 }
 
-/// Cast a GROUND-TARGETED spell at an explicit world point by caster guid — server-side proof of the 118
-/// dest plumbing (the CLI owns no entity, so it can't drive the real `cast_spell_at`). Drives the
+/// Cast a GROUND-TARGETED spell at an explicit world point by caster guid — server-side proof of the
+/// ground-target dest plumbing (the CLI owns no entity, so it can't drive the real `cast_spell_at`). Drives the
 /// full `begin_cast(Some(dest))` path, so a TIMED ground spell also exercises the PendingCast dest carry.
 #[reducer]
 pub fn debug_cast_spell_at(
@@ -1544,7 +1544,7 @@ pub fn debug_skin_nearest(ctx: &ReducerContext, character_guid: u64) -> Result<(
     let looter = crate::helpers::live_entity(ctx, character_guid)
         .map_err(|_| format!("skinner {character_guid} not in world"))?;
     // A skinnable target: a dead non-player BEAST corpse not yet skinned, in the looter's OWN
-    // (map, instance) partition (190 slice 2 — mirrors `loot::can_skin`'s live gate, so the
+    // (map, instance) partition (mirrors `loot::can_skin`'s live gate, so the
     // debug lever can never find a corpse the real skin path would refuse). Same-partition scan
     // via `crate::helpers::nearest_entity`.
     let corpse_guid = crate::helpers::nearest_entity(ctx, &looter, |e| {
@@ -1830,25 +1830,26 @@ pub fn debug_reset_talents(
     crate::talent::do_reset_talents(ctx, character_guid, trainer_guid).map(|_| ())
 }
 
-/// Floor for a dedicated per-instance tick interval's honesty addendum: every firing
-/// is a transaction on the ONE serialized commit stream — 10 instances at 100ms is already 100
-/// extra transactions/sec preempting player actions; anything tighter than 50ms is a foot-gun with
-/// no gameplay payoff at 1.12 animation cadences).
+/// Floor for a dedicated per-instance tick interval. Every firing is a transaction on the ONE
+/// serialized commit stream: 10 instances at 100ms is already 100 extra transactions/sec preempting
+/// player actions. Anything tighter than 50ms has no gameplay payoff at 1.12 animation cadences.
 const INSTANCE_TICK_MS_FLOOR: u64 = 50;
 
+/// Ceiling for `debug_arm_instance_tick`: bounds `tick_ms` so `tick_ms * 1000` never overflows into
+/// a negative interval, which would refire continuously.
 const INSTANCE_TICK_MS_CEIL: u64 = 600_000;
 
 /// Arm (or re-arm) a DEDICATED creature-tick row for `instance_id` at `tick_ms`: that
 /// instance's creature passes then fire on THIS row at its own cadence, and the catch-all row skips
 /// the instance (coverage is a partition — see `TickScope` in creatures/ai.rs). The global due-time
 /// passes (decay/respawn/regen/combat-drop) STAY on the catch-all row for all instances, so this knob
-/// only smooths movement/AI latency — per the item's honest bound it buys NO parallel throughput and
+/// only smooths movement/AI latency. It buys NO parallel throughput, and
 /// each firing taxes the shared serialized commit stream; use tight cadences sparingly and read the
 /// once-a-minute "pass rows-visited" log line to see what each row actually scans.
 ///
-/// 190 slice 2 LANDED: `instance::create_instance` inserts exactly this row shape (500ms default)
-/// and the instance reap (`instance::teardown_instance`) deletes it — `debug_disarm_instance_tick`'s
-/// body. This reducer remains the operator RETUNE lever for a live instance's cadence.
+/// `instance::create_instance` inserts exactly this row shape (500ms default) and
+/// `instance::teardown_instance` deletes it, as `debug_disarm_instance_tick` does. This reducer is
+/// the operator RETUNE lever for a live instance's cadence.
 /// Idempotent per instance (replaces any existing dedicated row).
 #[reducer]
 pub fn debug_arm_instance_tick(
@@ -1888,7 +1889,7 @@ pub fn debug_arm_instance_tick(
 /// Remove the dedicated creature-tick row for `instance_id`, coverage of that
 /// instance returns to the catch-all row on its next firing (the `TickScope` rebuild is per firing),
 /// so its creatures keep ticking at the global 0.5s cadence; nothing is ever stranded. This is also
-/// the future instance-reap's tick-row cleanup (190 slice 2).
+/// the future instance-reap's tick-row cleanup.
 #[reducer]
 pub fn debug_disarm_instance_tick(ctx: &ReducerContext, instance_id: u64) -> Result<(), String> {
     if instance_id == crate::creatures::GLOBAL_TICK_INSTANCE {
@@ -1952,7 +1953,7 @@ pub fn debug_verify_combat_regen(ctx: &ReducerContext, character_guid: u64) -> R
 }
 
 /// Cast `spell_id` as `character_guid` THROUGH the spellbook gate (`knows_spell`) — the by-guid mirror of
-/// the sender-bound `cast_spell`, so a test can verify the learnable-spell gate (rank 27): the cast is
+/// the sender-bound `cast_spell`, so a test can verify the learnable-spell gate: the cast is
 /// rejected until the spell is in the baseline kit OR learned (e.g. via an ability talent), then accepted.
 /// Unlike `debug_cast_at` (which drives `resolve_cast_at` and BYPASSES the gate), this exercises the gate.
 #[reducer]
@@ -2020,7 +2021,7 @@ pub fn debug_seed_scenario_fixtures(ctx: &ReducerContext) {
     // row_count: quest 50900 (1) + how many of the 3 scenario NPC templates (questgiver 51003,
     // vendor 51004, weapon master 51005) are present after this call — an anchor-row proxy for the
     // fixture's full spread across quest/text/objective/reward/vendor/trainer tables, not an exact
-    // total (provenance stamp).
+    // total.
     let quest = ctx
         .db
         .game_quest_template()

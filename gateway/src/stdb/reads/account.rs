@@ -288,7 +288,7 @@ impl Coordinator {
     }
 
     /// Find `owner_guid`'s corpse location `(map_id, x, y, z)` from the privileged cache, for the
-    /// `MSG_CORPSE_QUERY` reply (slice 5). `None` if they have no corpse.
+    /// `MSG_CORPSE_QUERY` reply. `None` if they have no corpse.
     pub fn corpse_location(&self, owner_guid: u64) -> Result<Option<(u32, f32, f32, f32)>> {
         Ok(self
             .0

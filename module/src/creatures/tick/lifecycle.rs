@@ -61,9 +61,9 @@ pub(crate) fn despawn_creature_entity(ctx: &ReducerContext, guid: u64) {
 /// respawn timer armed to a FUTURE time (so respawn does NOT re-create it the same tick). Reaps the
 /// corpse's item-loot rows.
 ///
-/// classification: STAYS GLOBAL, `despawn_at` is a due-time, not a proximity concern; a
-/// corpse must decay on schedule whether or not a player is anywhere near it.
-/// catch-all firing only, still covering ALL instances (see
+/// Stays GLOBAL: `despawn_at` is a due-time, not a proximity concern, and a
+/// corpse must decay on schedule whether or not a player is anywhere near it. Runs on the
+/// catch-all firing only, which covers ALL instances (see
 /// `TickScope::runs_global_passes`). Returns spawn rows scanned.
 pub(crate) fn pass_decay(ctx: &ReducerContext) -> usize {
     let now_ts = ctx.timestamp;
@@ -174,9 +174,9 @@ pub(crate) fn pass_decay(ctx: &ReducerContext) -> usize {
 /// elapsed, from its persistent spawn record + template. Runs AFTER decay (decay arms a future
 /// `respawn_at`, so a just-decayed creature isn't re-spawned this tick).
 ///
-/// classification: STAYS GLOBAL, `respawn_at` is a due-time; a spawn point must
-/// repopulate on schedule whether or not a player is nearby to see it happen.
-/// catch-all firing only, still covering ALL instances. Returns spawn rows scanned.
+/// Stays GLOBAL: `respawn_at` is a due-time, and a spawn point must
+/// repopulate on schedule whether or not a player is nearby to see it happen. Runs on the
+/// catch-all firing only, which covers ALL instances. Returns spawn rows scanned.
 pub(crate) fn pass_respawn(ctx: &ReducerContext) -> usize {
     let now_ts = ctx.timestamp;
     let entities = ctx.db.game_world_entity();
@@ -232,10 +232,9 @@ pub(crate) fn pass_respawn(ctx: &ReducerContext) -> usize {
 /// `by_state` index would still have visited every depleted node every tick; the due-time range
 /// visits only the ones actually due.
 ///
-/// classification: STAYS GLOBAL, `respawn_at_micros` is a due-time (like creature
-/// respawn/decay), not proximity; GAMEOBJECTS are also out of this item's creature-ticking scope (see
-/// the "defer it" note above, pre-dating 230).
-/// catch-all firing only, still covering ALL instances. Returns GO rows scanned.
+/// Stays GLOBAL: `respawn_at_micros` is a due-time (like creature
+/// respawn/decay), not proximity, and GAMEOBJECTS are outside the creature-ticking scope. Runs on the
+/// catch-all firing only, which covers ALL instances. Returns GO rows scanned.
 pub(crate) fn pass_gameobject_respawn(ctx: &ReducerContext) -> usize {
     let now = ctx.timestamp.to_micros_since_unix_epoch() as u64;
     let gos = ctx.db.game_gameobject();

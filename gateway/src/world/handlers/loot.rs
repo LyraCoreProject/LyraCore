@@ -494,7 +494,7 @@ pub(crate) fn handle_loot<St: WorldStore + ?Sized>(
                 )),
             )?;
         }
-        // Release Spirit after death (slice 4). The client sends this (empty body) when the player
+        // Release Spirit after death. The client sends this (empty body) when the player
         // clicks Release on the death screen. Revive in place at full health; the restored health
         // replicates via the on_update VALUES relay and the client leaves the death screen.
         // SMSG_CORPSE_RECLAIM_DELAY is now relay-driven (the escalated per-corpse
@@ -509,7 +509,7 @@ pub(crate) fn handle_loot<St: WorldStore + ?Sized>(
                 log::debug!("world: repop ignored (account {}): {e}", conn.account_id);
             }
         }
-        // Corpse location query (slice 5): the client asks where the player's corpse is to draw the
+        // Corpse location query: the client asks where the player's corpse is to draw the
         // map marker + offer "Reclaim Corpse" near it. Reply with the corpse's position, or NotFound.
         ClientOpcodeMessage::MSG_CORPSE_QUERY => {
             if let WorldState::InWorld(iw) = &conn.state {
@@ -522,7 +522,7 @@ pub(crate) fn handle_loot<St: WorldStore + ?Sized>(
                 )?;
             }
         }
-        // Reclaim your corpse (slice 5): the ghost, near its corpse and past the 30s delay, resurrects
+        // Reclaim your corpse: the ghost, near its corpse and past the 30s delay, resurrects
         // at 50%. The module validates ownership/ghost/range/delay; a failure (too far, too soon, not
         // a ghost) is expected and silently ignored — the client just stays a ghost.
         ClientOpcodeMessage::CMSG_RECLAIM_CORPSE(r) => {

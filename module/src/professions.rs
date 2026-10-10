@@ -24,7 +24,7 @@ use crate::game_world_entity;
 use crate::loot::LOOT_RANGE_SQ;
 
 // ===========================================================================================
-//  SKINNING (professions slice 2) — a skill-gated corpse interaction, modeled on `loot_money`
+//  SKINNING — a skill-gated corpse interaction, modeled on `loot_money`
 // ===========================================================================================
 
 /// The leather a skin yields — the REAL vanilla "Light Leather" `game_item_template` TRADE_GOODS entry
@@ -150,8 +150,8 @@ pub(crate) fn skin_corpse(
         looter.dead,
         corpse.is_player(),
         corpse.dead,
-        // Map + instance (190 slice 2): `can_skin`'s `same_map` conjunct now carries the
-        // instance-equality clause too — the corpse is a `game_world_entity` row, slice-1-tagged.
+        // Map + instance: `can_skin`'s `same_map` conjunct now carries the
+        // instance-equality clause too — the corpse is a `game_world_entity` row, instance-tagged.
         corpse.map_id == looter.map_id && corpse.instance_id == looter.instance_id,
         dist_sq,
         entry_is_beast(ctx, corpse.entry),
@@ -409,7 +409,7 @@ pub(crate) fn apply_enchant_item(
 mod tests {
     use super::*;
 
-    // ---- SKINNING (professions slice 2) ----
+    // ---- SKINNING ----
 
     /// The SKIN gate: every reject condition fails with its reason, and ONLY an alive looter at a dead,
     /// in-range, same-map BEAST corpse that isn't already skinned proceeds (with sufficient Skinning skill).

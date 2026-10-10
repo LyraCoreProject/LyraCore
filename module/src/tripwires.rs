@@ -203,12 +203,8 @@ pub(crate) mod character_owned_tripwire {
     ];
 
     /// Every `.rs` file that compiles into this crate: core `src/` plus each drop-in
-    /// `packages/*/src/` (build.rs compiles those in, so every source-scanning tripwire must see
-    /// them too). Shared with `partition_discipline_tripwire` below and `gc_reap_tripwire`.
-    ///
-    /// `pub(crate)`, not `pub(super)`: `creatures::tick`'s
-    /// `nothing_writes_the_unsubscribed_move_event_table` walks the whole compiled tree the
-    /// same way, from outside this module entirely.
+    /// `packages/*/src/` (build.rs compiles those in, so every source-scanning Architecture Test
+    /// must see them too). Shared with the other Architecture Tests in this file.
     pub(crate) fn scanned_files() -> Vec<PathBuf> {
         let manifest_dir = env!("CARGO_MANIFEST_DIR");
         let mut files = Vec::new();
@@ -870,9 +866,7 @@ mod partition_discipline_tripwire {
 
     /// `(repo-relative path, allowed raw-scan count, why)`. One line of justification each.
     const WHITELIST: &[(&str, usize, &str)] = &[
-        // Diagnostics and harness code — never on a gameplay path. A split of the former single
-        // `debug.rs` (budget 9, down from 12) into a directory; the 9 raw scans
-        // landed in two of the seven files — same total, just split along the new file boundary.
+        // Diagnostics and harness code, never on a gameplay path.
         ("module/src/debug/mod.rs", 9, "Debug fixture and operator migration reducers inspect the whole Shard, including the packed-cell backfill."),
         ("module/src/debug/instance.rs", 3, "Debug fixture setup and floor validation inspect template populations and guid allocation."),
         // Importers — realm-wide by definition: they wipe and rebuild every partition at once.
@@ -887,14 +881,12 @@ mod partition_discipline_tripwire {
         // Unindexed lookups whose target is co-located with the caller anyway.
         ("module/src/creatures/pet.rs", 1, "`nearest_hostile_near` — KNOWN DEBT, a textbook `entities_near` radius search kept only because pets are rare (one per online warlock)"),
         ("packages/deadmines/src/choreography.rs", 1, "single instance-scoped boss-liveness check inside one encounter"),
-        // Split tick.rs into tick/{mod,movement,lifecycle,sense}.rs; this budget-5 entry
-        // splits with it, same total (3 + 2 = 5), same reasoning as the pre-split note below.
+        // Creature tick scans: `tick/mod.rs` and `cycle/ctx.rs`.
         ("module/src/creatures/tick/mod.rs", 3, "Active-cell classification snapshots all players. Diagnostic counters measure total rows and narrowed pass candidates."),
         ("module/src/creatures/cycle/ctx.rs", 2, "Aggro snapshots all players and regeneration selects entities with health or power. Neither predicate has its own index."),
         ("module/src/spell/cast/targeting.rs", 1, "AoE/chain target resolution by full-iter + squared distance; a textbook `helpers::entities_near` call (perf-catalog Tier 1)"),
-        // Both nearest-trainer scans now route through `helpers::nearest_entity` (an
-        // indexed `by_map` scan, partition-scoped) — this file's raw-scan count dropped to 0, so
-        // it no longer needs a whitelist entry.
+        // Nearest-trainer scans go through `helpers::nearest_entity` (an indexed `by_map` scan,
+        // partition-scoped), so the trainer files have no raw scans and no entry.
     ];
 
     /// The text at `byte_idx` opens a whole-table read: `.iter()`, or `.count()` (the same read
@@ -1004,11 +996,11 @@ mod partition_discipline_tripwire {
     //  EXTENSION: no module game logic may read a SHARD ID.
     // ==========================================================================================
 
-    /// The only files allowed to touch a shard column: the one that DEFINES the assignment table
-    /// and the operator reducer that writes it (`region.rs`), and the one that DEFINES the
-    /// per-shard load-sample table and ITS operator reducer (`load.rs`) — `game_shard_load
-    /// equality, exactly like `RegionAssignment.shard`. Both write or compare; neither branches on
-    /// the value to decide anything gameplay-visible.
+    /// The only files allowed to touch a shard column: `region.rs` defines the assignment table and
+    /// the operator reducer that writes it, and `load.rs` defines the per-shard load-sample table
+    /// and its operator reducer. `game_shard_load.shard` is a database-name LABEL an ops sample is
+    /// filed under, ring-evicted and compared for equality, exactly like `RegionAssignment.shard`.
+    /// Both write or compare. Neither branches on the value to decide anything gameplay-visible.
     const SHARD_ID_OWNERS: &[&str] = &["module/src/region.rs", "module/src/load.rs"];
 
     /// The ways module code could reach a shard id: the assignment table's accessor, the `.shard`
@@ -1061,23 +1053,18 @@ mod partition_discipline_tripwire {
         assert_eq!(shard_id_reads(src), vec![(2, ".shard")]);
     }
 
-    /// of **region definitions are data; shard ids are the gateway's business.** The
-    /// module stores `region_assignment { map_id, region_id, shard, epoch }` (it has to — realm-core
-    /// is this same wasm under another database name), but the instant a reducer *branches* on
-    /// `shard` the module stops being relocatable: the same code on two databases would take two
-    /// different paths, and a region migration would change gameplay instead of changing routing.
-    /// Regions and cells are fair game anywhere; the database name is not.
-    /// The module's own `src` + `packages/*` (what the sibling tripwires scan) **plus
-    /// `crates/lyracore-shared/src`**, which is compiled INTO this module and therefore just as capable
-    /// of naming a database.
+    /// Region definitions are data. Shard ids are the Gateway's business. The Module stores
+    /// `region_assignment { map_id, region_id, shard, epoch }` (it has to, because realm-core is
+    /// this same wasm under another database name). The instant a reducer *branches* on `shard`,
+    /// the Module stops being relocatable: the same code on two databases would take two different
+    /// paths, and a region migration would change gameplay instead of changing routing. Regions and
+    /// cells are fair game anywhere. The database name is not.
     ///
-    /// Moved `DUNGEON_MAPS` out of `module/src/instance.rs` into `lyracore_shared::instance` so
-    /// the gateway and the module could not disagree about which maps are dungeons. A map-id set is a
-    /// world fact and entirely fine here — but the move quietly put a piece of module logic in a crate
-    /// this tripwire did not look at, so "no module game logic reads a shard id" would have stopped
-    /// being enforceable for anything that followed it there. It is scanned now. (Only THIS tripwire
-    /// is extended: the spatial-scan and character-owned tripwires are about `#[table]` definitions
-    /// and spatial iteration, neither of which exists in a `no_std`-shaped shared crate.)
+    /// The scan covers the Module's own `src` + `packages/*` plus `crates/lyracore-shared/src`,
+    /// which compiles INTO this Module and can name a database just as well. `DUNGEON_MAPS` lives
+    /// there, so Module logic that moves into the shared crate stays under this scan. The spatial
+    /// and character-owned scans need no extension, because a shared crate has no `#[table]`
+    /// definitions or spatial iteration.
     fn shard_id_scanned_files() -> Vec<std::path::PathBuf> {
         let mut files = super::character_owned_tripwire::scanned_files();
         let shared = repo_root().join("crates/lyracore-shared/src");
@@ -1355,14 +1342,12 @@ mod character_fence_tripwire {
 /// reaps that accessor — either via `reap!(<accessor>)` or a direct `ctx.db.<accessor>()` call (the
 /// shape the ad-hoc blocks and the sweep fns `gc.rs` calls out to use). A bare substring match on
 /// the accessor NAME would be satisfied by a comment mentioning it (this file's own `gc.rs` carries
-/// exactly that kind of comment about `game_creature_move_event`, explaining why it is no longer
+/// exactly that kind of comment about `game_creature_move_event`, explaining why it is not
 /// reaped), so the check is deliberately narrower than "the name appears somewhere".
 ///
-/// Caught on landing: `game_rest_state_event` (`rest.rs`) carries this exact shape and its own doc
-/// comment calls it "a one-shot relay row with a GC TTL" (`transfer/transport.rs`'s
-/// `NOT_TRANSPORTED` table), but no line in `gc.rs` ever reaped it — every rest-area threshold
-/// crossing for the lifetime of a character left one more row behind. Fixed in the same change by
-/// adding it to the `reap!` list.
+/// `game_rest_state_event` (`rest.rs`) carries this exact shape. Its doc comment calls it "a
+/// one-shot relay row with a GC TTL" (`transfer/transport.rs`'s `NOT_TRANSPORTED` table), so `gc.rs`
+/// must reap it with `reap!`. Otherwise every rest-area threshold crossing leaves one more row behind.
 #[cfg(test)]
 mod gc_reap_tripwire {
     /// Accessors carrying the `id: u64` + `created_at: Timestamp` TTL shape that are deliberately
@@ -1474,12 +1459,12 @@ mod gc_reap_tripwire {
 ///
 /// Nothing in the type system couples them: `grid_x`, `grid_y` and `cell` are three independent
 /// columns, and the census behind this tripwire found **24 independent write sites** across 8 files, with no
-/// shared constructor for `game_world_entity` re-stamps (7 hand-rolled `e.grid_x =..` runs) or for
+/// shared constructor for `game_world_entity` re-stamps (7 hand-rolled `e.grid_x = ..` runs) or for
 /// `game_gameobject` (9 independent struct literals). Adding a 25th and forgetting the third line
 /// compiles clean, passes every existing test, and shows up live as entities that vanish.
 ///
-/// So: this scan requires every `grid_x` WRITE, a `grid_x:..` struct-literal field or a
-/// `<recv>.grid_x =..` assignment, to have a `cell` write within the same short window of source
+/// So: this scan requires every `grid_x` WRITE, a `grid_x: ..` struct-literal field or a
+/// `<recv>.grid_x = ..` assignment, to have a `cell` write within the same short window of source
 /// text. It is deliberately textual and deliberately local: the point is to fail the build next to
 /// the line someone just wrote, not to prove a semantic property.
 #[cfg(test)]
@@ -1536,7 +1521,7 @@ pub(crate) mod grid_cell_tripwire {
         false
     }
 
-    /// `impl` block a `Self {.. }` struct literal at `idx` resolves to. Walks backward for the
+    /// `impl` block a `Self { .. }` struct literal at `idx` resolves to. Walks backward for the
     /// nearest `impl` keyword, then takes `impl<..> TypeName` or, for a trait impl, the identifier
     /// after ` for ` (`impl Trait for TypeName`) — the same rule `Self` follows in the language.
     /// A near-clone of the `impl<..>` generics-skip is unavoidable here (no shared engine, unlike
@@ -1584,10 +1569,10 @@ pub(crate) mod grid_cell_tripwire {
     /// Walks backward from `idx` tracking `{`/`}` depth to find the nearest enclosing brace, then
     /// takes the identifier immediately before it (skipping whitespace). Returns that identifier
     /// only if it looks like a type name (starts uppercase, matching this codebase's convention) —
-    /// `TypeName {.. }` or `TypeName {..prev }`, so `None` correctly falls out for a shorthand
+    /// `TypeName { .. }` or `TypeName { ..prev }`, so `None` correctly falls out for a shorthand
     /// `grid_x,` that is really an ordinary function-CALL argument (`queue_motion(.., grid_x,
     /// grid_y, ..)`: its nearest enclosing `{` is a `fn`/`if`/`match` body brace, not preceded by a
-    /// type name) or any other bare code block. A literal `Self {.. }` constructor resolves through
+    /// type name) or any other bare code block. A literal `Self { .. }` constructor resolves through
     /// [`resolve_self_type`] to the `impl` block's real type name instead of returning `"Self"`
     /// verbatim — `struct_has_cell_field` searches for `struct Self`, which never exists.
     fn enclosing_struct_literal_type(code: &str, idx: usize) -> Option<&str> {
@@ -1635,7 +1620,7 @@ pub(crate) mod grid_cell_tripwire {
         None
     }
 
-    /// `true` if `code` (a single file's text) declares `struct TYPE_NAME {.. pub cell: i64.. }`
+    /// `true` if `code` (a single file's text) declares `struct TYPE_NAME { .. pub cell: i64 .. }`
     /// somewhere — i.e. `TYPE_NAME` is one of the cell-bearing rows this tripwire polices. Every
     /// cell-bearing type's struct literals in this codebase live in the same file as its own `#[table]`
     /// definition, so a same-file search is enough; a type this can't find (or that genuinely has no
@@ -1697,9 +1682,9 @@ pub(crate) mod grid_cell_tripwire {
     /// a `cell` column (`enclosing_struct_literal_type` + `struct_has_cell_field` — excludes both
     /// ordinary function-call arguments, whose enclosing brace is a fn/if/match body not a type name,
     /// and the several event-log tables that carry `grid_x`/`grid_y` with no `cell` column at all,
-    /// by design). `enclosing_struct_literal_type` resolves a literal `Self {.. }` constructor
+    /// by design). `enclosing_struct_literal_type` resolves a literal `Self { .. }` constructor
     /// through `resolve_self_type` to the `impl` block's real type name, so a constructor written as
-    /// `Self {.. }` inside `impl E {.. }` is policed exactly like `E {.. }` would be.
+    /// `Self { .. }` inside `impl E { .. }` is policed exactly like `E { .. }` would be.
     fn grid_x_writes_missing_cell(code: &str) -> Vec<usize> {
         // Assembled at run time — a contiguous literal would match this file's own text.
         let field_init = format!("{}{}", "grid_x", ": ");

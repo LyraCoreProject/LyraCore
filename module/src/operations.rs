@@ -243,7 +243,7 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
         )),
     });
 
-    // Stage 4a: re-arm the gateway lease reaper (bounded ghost lifetime for sessions riding
+    // Re-arm the gateway lease reaper (bounded ghost lifetime for sessions riding
     // the shared connection). Rearm-not-ensure is safe here — unlike the motion tick there is no
     // operator tuning knob to preserve; the canonical interval is the only interval.
     let lease_sched = ctx.db.game_gateway_lease_reaper_schedule();

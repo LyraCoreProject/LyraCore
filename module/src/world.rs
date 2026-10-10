@@ -339,7 +339,7 @@ pub struct WorldEntity {
     /// columns outright (`MAX_EXACT_INDEX_COLS`); range predicates are never index-served at all
     /// (`IndexProbe::Range` — "we currently never construct this variant") and an `OR` is evaluated
     /// row-by-row. So the four-column `by_grid` index is unreachable from SQL, and a
-    /// `grid_x BETWEEN.. AND grid_y BETWEEN..` box degrades to a full partition scan, 1.1 BILLION
+    /// `grid_x BETWEEN .. AND grid_y BETWEEN ..` box degrades to a full partition scan, 1.1 BILLION
     /// rows examined on `game_world_entity` in a 445-player measurement, 53% of all writer time.
     /// Folding the two grid columns into one makes `by_cell` a 3-column all-equality index, which the
     /// planner CAN serve, and the AOI box becomes 25 point probes instead of a scan.
@@ -503,7 +503,7 @@ pub struct EntityMotion {
     /// columns outright (`MAX_EXACT_INDEX_COLS`); range predicates are never index-served at all
     /// (`IndexProbe::Range` — "we currently never construct this variant") and an `OR` is evaluated
     /// row-by-row. So the four-column `by_grid` index is unreachable from SQL, and a
-    /// `grid_x BETWEEN.. AND grid_y BETWEEN..` box degrades to a full partition scan, 1.1 BILLION
+    /// `grid_x BETWEEN .. AND grid_y BETWEEN ..` box degrades to a full partition scan, 1.1 BILLION
     /// rows examined on `game_world_entity` in a 445-player measurement, 53% of all writer time.
     /// Folding the two grid columns into one makes `by_cell` a 3-column all-equality index, which the
     /// planner CAN serve, and the AOI box becomes 25 point probes instead of a scan.
@@ -1107,7 +1107,7 @@ pub(crate) fn apply_player_login(
         character.class,
     );
 
-    // Talents (rank 27): re-apply every learned passive talent's aura at login (idempotent — refreshes by
+    // Talents: re-apply every learned passive talent's aura at login (idempotent — refreshes by
     // effect_id, never stacks). A character with no learned talents applies nothing (baseline-safe).
     crate::talent::apply_learned_talents(ctx, character.guid, owner, character.level as u32);
 
@@ -1402,7 +1402,7 @@ pub(crate) fn plan_movement(
     }
 }
 
-/// The movement core, actor-explicit (stage 4): everything the old sender-path `movement_update`
+/// The movement core, actor-explicit: everything the old sender-path `movement_update`
 /// did after resolving WHO moved. The trusted gateway path (`gw::gw_movement_update`) delegates here
 /// — same shape as every `actor.rs` verb, factored out per that file's own rule for still-inlined cores.
 #[allow(clippy::too_many_arguments)]
@@ -1640,7 +1640,7 @@ pub(crate) fn apply_movement_update(
 //  Targeting
 // ===========================================================================================
 
-/// The target-write core, actor-explicit (stage 4a) — `gw::gw_set_target` delegates here.
+/// The target-write core, actor-explicit — `gw::gw_set_target` delegates here.
 pub(crate) fn apply_set_target(
     ctx: &ReducerContext,
     mut player: WorldEntity,
@@ -1774,7 +1774,7 @@ pub(crate) fn do_repop(ctx: &ReducerContext, guid: u64) -> Result<(), String> {
         created_at: ctx.timestamp,
         reclaim_delay_micros: delay_micros,
         is_bones: false,
-        // 190 slice 2: the corpse stays in the instance the death happened in — the ghost
+        // The corpse stays in the instance the death happened in — the ghost
         // corpse-runs back through the portal (which re-binds them to this same instance).
         instance_id: player.instance_id,
     });
@@ -1802,11 +1802,11 @@ pub(crate) fn do_repop(ctx: &ReducerContext, guid: u64) -> Result<(), String> {
     // cmangos WorldSafeLocs + game_graveyard_zone), falling back to the nearest of every imported
     // graveyard on the map, falling back to the five hardcoded Elwynn/Westfall consts
     // (`graveyard::nearest`) when nothing is imported at all (this sandbox's default state):
-    //   105 Northshire Abbey  (-8935, -188)        , zone 12 Elwynn
-    //   106 Goldshire          (-9339,  171)        , zone 12 Elwynn
-    //   854 Eastvale Logging Camp (-9552, -1374)    , zone 12 Elwynn
-    //   ≈80 Sentinel Hill (-10650, 1180) [V]        , zone 40 Westfall
-    //   ≈81 Westfall coast (-11390, 1590) [V]           (seed.rs also row-seeds these five, see 209)
+    //   105 Northshire Abbey  (-8935, -188)  zone 12 Elwynn
+    //   106 Goldshire          (-9339,  171)  zone 12 Elwynn
+    //   854 Eastvale Logging Camp (-9552, -1374)  zone 12 Elwynn
+    //   ≈80 Sentinel Hill (-10650, 1180) [V]  zone 40 Westfall
+    //   ≈81 Westfall coast (-11390, 1590) [V]           (seed.rs also row-seeds these five)
     // The corpse was just inserted at (death_x, death_y) — use those coords + the player's map/race
     // to resolve the release point, then teleport_player emits MSG_MOVE_TELEPORT_ACK.
     let gy = graveyard::resolve_graveyard(ctx, death_map_id, death_x, death_y, death_race);
@@ -1838,7 +1838,7 @@ pub(crate) fn persisted_pending_ghost(dead: bool, player_flags: u32, set_offline
 pub(crate) const RUN_SPEED_BP_1X: u32 = 10_000;
 
 /// What `(pending_godmode, pending_run_speed_mult_bp)` should be stamped onto the durable Character
-/// row for this persist, the SCOPE DECISION of, in one pure function.
+/// row for this persist, as one pure function.
 ///
 /// `!set_offline` (a cross-map teleport, a shard-transfer freeze, the stale-entity cleanup in
 /// `player_login`) CARRIES the live values, because the entity is about to be rebuilt from this row
@@ -2017,7 +2017,7 @@ pub(crate) fn persist_entity(ctx: &ReducerContext, entity: &WorldEntity, set_off
         c.death_expire_micros = entity.death_expire_micros;
 
         c.pending_instance_id = entity.instance_id;
-        // Released-GHOST state survives an entity despawn (the 224 landmine): a
+        // Released-GHOST state survives an entity despawn: a
         // cross-map graveyard release persists-then-deletes the entity via `teleport_player`, and
         // without this stamp the WORLDPORT_ACK rebuild came back ALIVE with no ghost and (via
         // `player_login`'s corpse delete) no corpse — a silent free resurrect. Re-derived from the
@@ -2352,7 +2352,7 @@ mod tests {
         assert!(!plan_movement(HEARTBEAT, false, false, false, 0.0, false, &stationary).moved);
     }
 
-    // ----: movement plausibility (detect-and-flag) ------------------------------
+    // ---- movement plausibility (detect-and-flag) ------------------------------
     #[test]
     fn movement_violation_flags_speed_and_teleport_but_not_legit_motion() {
         let run = lyracore_shared::constants::speeds::RUN; // 7.0 yd/s
@@ -2381,7 +2381,7 @@ mod tests {
         );
     }
 
-    // ----: cross-map teleport decision ------------------------------------------
+    // ---- cross-map teleport decision ------------------------------------------
 
     #[test]
     fn is_cross_map_teleport_only_when_target_map_differs() {
@@ -2432,7 +2432,7 @@ mod tests {
         );
     }
 
-    // ----: GM playtest state across a cross-map / cross-shard entity rebuild --------
+    // ---- GM playtest state across a cross-map / cross-shard entity rebuild --------
 
     #[test]
     fn gm_playtest_state_carries_across_a_map_change_and_resets_on_a_real_logout() {

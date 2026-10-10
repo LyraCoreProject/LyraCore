@@ -572,7 +572,7 @@ pub(crate) fn base_item(entry: u32, name: &str) -> ItemTemplate {
 /// already-migrated dev DB (where `init` did not re-run).
 ///
 /// Weakened Soul (REAL vanilla id 6788) is the hardcoded Power Word: Shield lockout debuff. Its real
-/// Spell.dbc shape (CONFIRMED via a DBC dry-run for, this is NOT the effectless marker
+/// Spell.dbc shape (CONFIRMED via a DBC dry-run; it is NOT the effectless marker
 /// earlier believed) is a single `A_IMMUNITY` (0xB1) aura with MiscValue 19 (MECHANIC_SHIELD): vanilla's
 /// actual "immune to the shield mechanic" (i.e. can't be re-shielded) effect. 15s duration, holy school
 /// (school_mask 2), dispel_type 0 — mirroring the importer's DBC output so a seed-only dev DB matches a
@@ -652,7 +652,7 @@ pub(crate) fn seed_pw_shield_fixture(ctx: &ReducerContext) {
     );
 }
 
-/// Hand-seed the Soul Shard item template (real vanilla item 6265). The.import ETL
+/// Hand-seed the Soul Shard item template (real vanilla item 6265). The import ETL
 /// doesn't reliably carry it, so — mirroring `seed_pw_shield_fixture`'s precedent for a mechanic whose
 /// live-DBC row isn't available in every dev environment — it's authored here. A plain, non-equippable,
 /// non-sellable trade good (vanilla: Soul Shard cannot be sold to a vendor; `sell_price: 0` encodes
@@ -1313,7 +1313,7 @@ pub(crate) fn seed_fixture_catalogue(ctx: &ReducerContext) {
     }
 }
 
-/// Scenario-runner mock-seed: everything the four wire scenarios need on a
+/// Scenario-runner seed: everything the four wire scenarios need on a
 /// no-import sandbox, insert-if-absent like every other fixture here. Same precedent as
 /// `seed_pw_shield_fixture` — call via `debug_seed_scenario_fixtures` post-publish.
 ///
@@ -1734,7 +1734,7 @@ pub(crate) fn seed_scenario_fixtures(ctx: &ReducerContext) {
 ///
 /// THE DISCIPLINE: delete-then-insert is idempotent BY CONSTRUCTION — calling it twice with
 /// the same row is a no-op, and calling it with a changed shape self-corrects the row in place. So
-/// every call site below calls this UNCONDITIONALLY, with no `if find(id).is_none() {... }` guard
+/// every call site below calls this UNCONDITIONALLY, with no `if find(id).is_none() { ... }` guard
 /// around it. A guard doesn't just add noise: it makes the delete dead code (the branch that would
 /// run it never fires when the row already exists), which silently turns "re-seed self-corrects"
 /// back into "re-seed only fills gaps" — exactly the bug class this fn exists to prevent. If a

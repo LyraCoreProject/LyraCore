@@ -39,7 +39,7 @@ pub struct CharacterView {
     pub guild_id: u32,
 }
 
-/// Build the `SMSG_CHAR_ENUM` reply for the character-select screen, gateway
+/// Build the `SMSG_CHAR_ENUM` reply for the character-select screen (gateway
 /// translation §4). Each [`CharacterView`] becomes a `wow_world_messages` `Character` block;
 /// The five appearance bytes a player picks at character creation, bundled so `create_character`
 /// (dispatch → trait → coordinator) passes one value instead of five positional `u8`s that are
