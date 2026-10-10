@@ -8583,19 +8583,18 @@ mod tests {
         format!("({})", cols.join(","))
     }
 
-    /// A `quest_template` row wide enough to reach `qt::REW_MAIL_DELAY_SECS` (col 103), with a reward
-    /// mail template + delay stamped. Mirrors `quest_template_row_chained_timed`'s pattern.
+    /// Source columns from the pinned ClassicDB schema, independent of the importer offsets.
     fn quest_template_row_with_reward_mail(
         entry: u64,
         title: &str,
         mail_template: u32,
         mail_delay: u32,
     ) -> String {
-        let mut cols = vec!["0".to_string(); qt::REW_MAIL_DELAY_SECS + 1];
-        cols[qt::ENTRY] = entry.to_string();
-        cols[qt::TITLE] = format!("'{title}'");
-        cols[qt::REW_MAIL_TEMPLATE_ID] = mail_template.to_string();
-        cols[qt::REW_MAIL_DELAY_SECS] = mail_delay.to_string();
+        let mut cols = vec!["0".to_string(); 104];
+        cols[0] = entry.to_string();
+        cols[30] = format!("'{title}'");
+        cols[102] = mail_template.to_string();
+        cols[103] = mail_delay.to_string();
         format!("({})", cols.join(","))
     }
 
@@ -9549,15 +9548,15 @@ mod tests {
     fn quest_type_column_reads_into_quest_type_and_counts_raid_quests() {
         let normal_row = {
             let mut row = vec!["0".to_string(); 102];
-            row[qt::ENTRY] = "500".to_string();
-            row[qt::TITLE] = "'Normal quest'".to_string();
+            row[0] = "500".to_string();
+            row[30] = "'Normal quest'".to_string();
             format!("({})", row.join(","))
         };
         let raid_row = {
             let mut row = vec!["0".to_string(); 102];
-            row[qt::ENTRY] = "501".to_string();
-            row[qt::TITLE] = "'Raid quest'".to_string();
-            row[qt::TYPE] = "62".to_string();
+            row[0] = "501".to_string();
+            row[30] = "'Raid quest'".to_string();
+            row[6] = "62".to_string();
             format!("({})", row.join(","))
         };
         let dump = format!(
@@ -9596,8 +9595,8 @@ mod tests {
         for (index, value) in [
             (0, "3645"),
             (30, "'Membership Card Renewal'"),
-            (qt::REW_MAIL_TEMPLATE_ID, "99"),
-            (qt::REW_MAIL_DELAY_SECS, "86400"),
+            (102, "99"),
+            (103, "86400"),
         ] {
             cols[index] = value.to_string();
         }

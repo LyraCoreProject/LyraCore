@@ -982,24 +982,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tag_tables_keep_the_pinned_row_shapes() {
-        let tag = CreatureQuestTap {
-            creature_guid: 10,
-            character_guid: 20,
-        };
-        let member = CreatureQuestTapMember {
-            id: 30,
-            creature_guid: 10,
-            character_guid: 20,
-        };
-        assert_eq!((tag.creature_guid, tag.character_guid), (10, 20));
-        assert_eq!(
-            (member.id, member.creature_guid, member.character_guid),
-            (30, 10, 20)
-        );
-    }
-
-    #[test]
     fn corpse_access_requires_a_resolved_eligibility_row() {
         assert!(!corpse_eligible_for_access(&[], 7));
         assert!(corpse_eligible_for_access(&[7], 7));

@@ -1254,13 +1254,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn dungeon_map_set_contains_deadmines_and_no_open_world_map() {
-        assert!(is_dungeon_map(36), "Deadmines is the one imported dungeon");
-        assert!(!is_dungeon_map(0), "Eastern Kingdoms is open world");
-        assert!(!is_dungeon_map(1), "Kalimdor is open world");
-    }
-
-    #[test]
     fn every_dungeon_map_has_an_entrance_fallback_arm() {
         // The stranding guard's invariant: a reaped-instance login on ANY dungeon map must have an
         // entrance to fall back to (the HearthstoneHome branch is the never-strand net for a

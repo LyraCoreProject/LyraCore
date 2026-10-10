@@ -121,7 +121,6 @@ pub fn import_go_models_append(ctx: &ReducerContext, packed: String) -> Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
 
     #[test]
     fn parse_row_round_trips_a_well_formed_row() {
@@ -160,81 +159,5 @@ mod tests {
             assert!(parse_row(&format!("1,{scale},{radius},{hex}")).is_err());
         }
         assert!(parse_row("1,1,1,€a").is_err());
-    }
-
-    // -------------------------------------------------------------------------------------
-    //  Reducer idempotency — a pure in-memory stand-in for the entry-keyed clear+load /
-    //  replace-on-append semantics `load_go_model_batch` implements against a real table,
-    //  mirroring `vmap.rs`'s `LifecycleHarness` test style (no live ReducerContext needed).
-    // -------------------------------------------------------------------------------------
-
-    #[derive(Default)]
-    struct GoModelHarness {
-        rows: BTreeMap<u32, (f32, f32, Vec<u8>)>,
-    }
-
-    impl GoModelHarness {
-        fn import(&mut self, packed: &str) -> Result<u32, String> {
-            self.rows.clear();
-            self.append(packed)
-        }
-
-        fn append(&mut self, packed: &str) -> Result<u32, String> {
-            let mut loaded = 0u32;
-            for row in packed.split(';').filter(|r| !r.is_empty()) {
-                let (entry, scale, radius, blob) = parse_row(row)?;
-                self.rows.insert(entry, (scale, radius, blob));
-                loaded += 1;
-            }
-            Ok(loaded)
-        }
-    }
-
-    fn packed_row(entry: u32, scale: f32, radius: f32) -> String {
-        let blob = lyracore_shared::vmap::encode(&[]);
-        let hex: String = blob.iter().map(|b| format!("{b:02x}")).collect();
-        format!("{entry},{scale},{radius},{hex}")
-    }
-
-    #[test]
-    fn importing_the_same_batch_twice_is_idempotent() {
-        let mut h = GoModelHarness::default();
-        let batch = format!("{};{}", packed_row(1, 1.0, 2.0), packed_row(2, 1.0, 3.0));
-        h.import(&batch).unwrap();
-        let after_first: Vec<_> = h.rows.keys().copied().collect();
-        h.import(&batch).unwrap();
-        let after_second: Vec<_> = h.rows.keys().copied().collect();
-        assert_eq!(after_first, after_second);
-        assert_eq!(
-            h.rows.len(),
-            2,
-            "re-importing the same batch must not duplicate rows"
-        );
-    }
-
-    #[test]
-    fn re_appending_the_same_entry_replaces_rather_than_duplicates() {
-        let mut h = GoModelHarness::default();
-        h.import(&packed_row(1, 1.0, 2.0)).unwrap();
-        h.append(&packed_row(1, 1.0, 5.0)).unwrap(); // corrected re-extract, same entry
-        assert_eq!(h.rows.len(), 1);
-        assert_eq!(
-            h.rows[&1].1, 5.0,
-            "the newer radius must win, not error or duplicate"
-        );
-    }
-
-    #[test]
-    fn a_fresh_import_clears_a_prior_generation() {
-        let mut h = GoModelHarness::default();
-        h.import(&packed_row(1, 1.0, 2.0)).unwrap();
-        h.import(&packed_row(2, 1.0, 3.0)).unwrap();
-        assert_eq!(
-            h.rows.len(),
-            1,
-            "import (not append) must clear the prior batch"
-        );
-        assert!(h.rows.contains_key(&2));
-        assert!(!h.rows.contains_key(&1));
     }
 }

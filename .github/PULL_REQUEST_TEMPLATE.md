@@ -22,6 +22,8 @@ The commands CI runs, in `.github/workflows/rust.yml`:
 - [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 - [ ] `cargo test -p lyracore-importer`
 - [ ] `cargo test -p lyracore-module --lib --features=debug_reducers`
+- [ ] `cargo test -p lyracore-module --test package_api_lint`
+- [ ] `cargo test -p lyracore-package-delta`
 - [ ] `cargo test -p lyracore-gateway`
 - [ ] `cargo test -p lyracore-shared`
 - [ ] `cargo test -p lyracore-test-support`
@@ -34,7 +36,7 @@ In `.github/workflows/module-durable.yml`, when the change reaches the Module or
 
 In `.github/workflows/runtime-scripts.yml`, when the change reaches `datascripts/`:
 
-- [ ] `bun test tests/runtime-scripts.test.ts` in `datascripts/`
+- [ ] `bun test` in `datascripts/`
 
 Other checks:
 

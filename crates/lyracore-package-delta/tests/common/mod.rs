@@ -199,7 +199,8 @@ pub const WHOLE_QUEST_ROW: &str = r#"{
     "repeatable": { "type": "bool", "value": false },
     "next_quest_id": { "type": "u32", "value": 0 },
     "limit_time": { "type": "u32", "value": 0 },
-    "reward_money_max_level": { "type": "u32", "value": 0 }
+    "reward_money_max_level": { "type": "u32", "value": 0 },
+    "quest_type": { "type": "u32", "value": 0 }
 }"#;
 
 /// One `game_quest_template` claim.

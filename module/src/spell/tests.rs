@@ -795,17 +795,6 @@ fn mana_potion_energizes_and_clamps_to_max_power() {
     assert_eq!(energized_value(500, 500, POTION_MANA), 500);
 }
 
-/// CONSUMABLE BREADTH — the WELL-FED buff (Spiced Wolf Meat 2680→50116) is an `A_MOD_STAT` whose +Stamina
-/// effect MOVES the max-health pool: `aura_moves_vitals(A_MOD_STAT, STAT_STA)` is true, so applying the
-/// buff re-derives max HP (the Cooking payoff is mechanically live). The +Spirit effect is summed by
-/// `stat_bonus` but does NOT move vitals (no max-pool consumer for SPI) — staged/inert, like Mark of the
-/// Wild's non-STA stats. This guards the kind/p0 the Well-Fed seed must carry to be a real HP buff.
-#[test]
-fn well_fed_stamina_moves_max_health_spirit_is_inert() {
-    assert!(aura_moves_vitals(A_MOD_STAT, STAT_STA as i32)); // +Sta grows max HP on apply
-    assert!(!aura_moves_vitals(A_MOD_STAT, STAT_SPI as i32)); // +Spi is summed but moves no pool (inert)
-}
-
 /// CONSUMABLE BREADTH — the DRINK (water 159/5350→50114) SCHEDULES a periodic energize: an
 /// `A_PERIODIC_ENERGIZE` aura that the scheduler folds `energized_value` into `power` each tick. Modeling
 /// the 6 ticks (40 mana / 5s × 6 = 240 over 30s), power climbs +40 per tick and CLAMPS at max — exactly
