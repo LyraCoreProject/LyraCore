@@ -77,24 +77,3 @@ pub fn stamp_import_meta(
     stamp(ctx, &family, &source_sha, &file_hash, row_count);
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn stamp_is_upsert_by_family() {
-        // Pure-logic shape check (no live ReducerContext in a native unit test — the module's other
-        // table-touching tests are exercised via the wire suite / gateway integration, not here).
-        // This test documents the row shape stays what `stamp`/`stamp_import_meta` produce.
-        let row = ImportMeta {
-            family: "quests".to_string(),
-            source_sha: "deadbeef".to_string(),
-            file_hash: "abc123".to_string(),
-            row_count: 42,
-            imported_at: Timestamp::UNIX_EPOCH,
-        };
-        assert_eq!(row.family, "quests");
-        assert_eq!(row.row_count, 42);
-    }
-}

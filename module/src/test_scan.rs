@@ -8,29 +8,7 @@ use std::io::Write;
 // The engine behind the spatial-scan and transfer-fence Architecture Tests. The two callers differ
 // only in which accessors they watch and what counts as opening a read.
 
-/// `byte_idx` sits on a `//` line, i.e. it is prose rather than code.
-pub(crate) fn on_comment_line(content: &str, byte_idx: usize) -> bool {
-    let line_start = content[..byte_idx].rfind('\n').map(|i| i + 1).unwrap_or(0);
-    content[line_start..byte_idx].trim_start().starts_with("//")
-}
-
-/// `byte_idx` sits inside an ordinary double-quoted string literal on its line. Source scanners
-/// must not treat assertion needles as live table reads.
-fn in_string_literal(content: &str, byte_idx: usize) -> bool {
-    let line_start = content[..byte_idx].rfind('\n').map(|i| i + 1).unwrap_or(0);
-    let bytes = &content.as_bytes()[line_start..byte_idx];
-    let mut in_string = false;
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'\\' if in_string => i += 1,
-            b'"' => in_string = !in_string,
-            _ => {}
-        }
-        i += 1;
-    }
-    in_string
-}
+pub(crate) use lyracore_test_support::source_scan::in_comment as on_comment_line;
 
 /// 1-based line number of `byte_idx`.
 pub(crate) fn line_of(content: &str, byte_idx: usize) -> usize {
@@ -71,6 +49,8 @@ pub(crate) fn raw_table_reads(
     accessors: &[&'static str],
     opens: impl Fn(&str, usize) -> bool,
 ) -> Vec<(usize, &'static str)> {
+    let code = lyracore_test_support::source_scan::code_only(content);
+    let content = code.as_str();
     let mut out = Vec::new();
     // `(local handle name, accessor it was bound from)`, deduped by name so a file that binds
     // `entities` a dozen times doesn't count each downstream read a dozen times.
@@ -78,18 +58,12 @@ pub(crate) fn raw_table_reads(
     for accessor in accessors {
         let call = format!("{accessor}()");
         for (idx, _) in content.match_indices(&call) {
-            if on_comment_line(content, idx) || in_string_literal(content, idx) {
-                continue;
-            }
             if opens(content, idx + call.len()) {
                 out.push((line_of(content, idx), *accessor));
             }
         }
         let bind = format!("ctx.db.{accessor}();");
         for (idx, _) in content.match_indices(&bind) {
-            if on_comment_line(content, idx) || in_string_literal(content, idx) {
-                continue;
-            }
             // Walk back over `let [mut] NAME =` on the same line to name the handle.
             let line_start = content[..idx].rfind('\n').map(|i| i + 1).unwrap_or(0);
             let Some(head) = content[line_start..idx].trim_end().strip_suffix('=') else {
@@ -112,10 +86,7 @@ pub(crate) fn raw_table_reads(
     }
     for (name, accessor) in &handles {
         for (idx, _) in content.match_indices(name.as_str()) {
-            if on_comment_line(content, idx)
-                || in_string_literal(content, idx)
-                || !is_standalone_ident(content, idx, name)
-            {
+            if !is_standalone_ident(content, idx, name) {
                 continue;
             }
             if opens(content, idx + name.len()) {
@@ -208,17 +179,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn raw_table_reads_ignores_a_table_scan_named_inside_a_string_literal() {
-        let src = r#"fn f() {
+    fn raw_table_reads_ignores_comments_and_literals_but_keeps_live_reads() {
+        let src = r###"fn f() {
     assert!(!tick.contains("game_world_entity().iter()"));
-}"#;
+    /* game_world_entity().iter(); /* nested */ */
+    let example = r#"game_world_entity().iter()"#;
+    ctx.db.game_world_entity().iter();
+    #[cfg(test)] { ctx.db.game_world_entity().iter(); }
+}"###;
         let found = raw_table_reads(src, &["game_world_entity"], |content, byte_idx| {
             content[byte_idx..].starts_with(".iter()")
         });
-        assert!(
-            found.is_empty(),
-            "an assertion's forbidden-pattern needle is not a live table read: {found:?}"
-        );
+        assert_eq!(found, [(5, "game_world_entity")]);
     }
 
     // ---- the optional-tree resolver ------------------------------------------------------------

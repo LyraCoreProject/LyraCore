@@ -14,7 +14,7 @@
 // Datascript.
 
 import { expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -55,11 +55,20 @@ test("the Fire Nova Datascript emits the frozen artifact, byte for byte", () => 
 });
 
 test("emitting twice produces the same bytes", () => {
-  expect(emit().artifact).toBe(emit().artifact);
+  const first = emit();
+  const second = emit();
+  expect(first.code).toBe(0);
+  expect(second.code).toBe(0);
+  expect(first.artifact).toBeDefined();
+  expect(second.artifact).toBeDefined();
+  expect(first.artifact).toBe(second.artifact);
 });
 
 test("the artifact claims five ranks, each with its cloned effects", () => {
-  const artifact = JSON.parse(readFileSync(FROZEN, "utf8"));
+  const result = emit();
+  expect(result.code).toBe(0);
+  expect(result.artifact).toBeDefined();
+  const artifact = JSON.parse(result.artifact!);
 
   const spells = artifact.claims.filter((c: { table: string }) => c.table === "game_spell");
   const effects = artifact.claims.filter(
@@ -77,7 +86,7 @@ test("the artifact claims five ranks, each with its cloned effects", () => {
 test("a Datascript that is refused writes nothing and exits non-zero", () => {
   const root = mkdtempSync(join(tmpdir(), "lyracore-datascript-"));
   const script = join(root, "refused.ts");
-  Bun.write(
+  writeFileSync(
     script,
     `import { run } from ${JSON.stringify(join(REPO, "datascripts", "lib", "index.ts"))};\n` +
       `await run("fire_nova", (data) => { data.spell(133).clone(200000); });\n`,

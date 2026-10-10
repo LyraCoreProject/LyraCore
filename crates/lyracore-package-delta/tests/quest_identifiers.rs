@@ -113,17 +113,24 @@ fn the_package_range_is_disjoint_from_every_reserved_identifier() {
 
 #[test]
 fn an_incomplete_quest_insert_is_refused() {
+    let mut fields: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(WHOLE_QUEST_ROW).unwrap();
+    fields.remove("reward_money");
+    fields.remove("quest_type");
     let json = artifact(
         "example.pkg",
-        &quest_claim(PACKAGE_QUEST_ID_FLOOR, "insert", A_TITLE),
+        &quest_claim(
+            PACKAGE_QUEST_ID_FLOOR,
+            "insert",
+            &serde_json::to_string(&fields).unwrap(),
+        ),
     );
 
     match PackageDelta::parse(&json).expect_err("the insert must be refused") {
-        DeltaError::IncompleteInsert { table, missing } => {
+        DeltaError::IncompleteInsert { table, mut missing } => {
             assert_eq!(table, Table::Quest);
-            assert_eq!(missing.len(), 18);
-            assert!(missing.contains(&"reward_money".to_owned()));
-            assert!(!missing.contains(&"title".to_owned()));
+            missing.sort();
+            assert_eq!(missing, ["quest_type", "reward_money"]);
         }
         other => panic!("expected an incomplete insert, got {other}"),
     }
