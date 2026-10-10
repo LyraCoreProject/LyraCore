@@ -201,7 +201,7 @@ impl EquipStat {
 }
 
 pub(crate) fn seed_compatibility_enchantments(ctx: &ReducerContext) {
-    for (enchant_id, kind, amount) in kind::COMPATIBILITY_ENCHANTMENTS {
+    for (enchant_id, _, kind, amount) in kind::COMPATIBILITY_ENCHANTMENTS {
         let id = u64::from(enchant_id) << 8;
         if ctx.db.game_item_enchantment().id().find(id).is_none() {
             ctx.db.game_item_enchantment().insert(ItemEnchantment {

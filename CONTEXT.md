@@ -1359,6 +1359,8 @@ reference even when the Stat Kind is unknown.
 Enchantment IDs 7745 and 7748 are authored compatibility entries, with +3 Strength and +3 Stamina.
 They preserve existing stored item meanings. They are not rows from the build 5875 client
 catalogue. The importer refuses a client catalogue that collides with either ID.
+The Gateway sends the client enchantment ID with the same Stat Kind and amount (7745 as 823, 7748 as
+724). The Module keeps the stored ID.
 
 ### GameObject collision
 
