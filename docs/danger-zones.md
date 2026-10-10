@@ -116,7 +116,10 @@ any line in §1 needs a human review before it ships, whoever or whatever wrote 
   and [HTTP body](https://github.com/clockworklabs/SpacetimeDB/blob/v2.7.1/crates/cli/src/api.rs#L69-L76).
 - **`game_package_import` is private and has no gateway binding.** Read it with `spacetime sql`
   only, and with an EQUALITY filter on `family` (a range filter on one column can wrongly return 0
-  rows). `lyracore packages replay` is the supported way to change it; never write it by hand.
+  rows). `lyracore packages apply` is the supported way to change it; never write it by hand.
+  `apply` can publish the Module. See [Applying packages](../packages/README.md#applying-packages)
+  for the publish conditions. Its confirmation covers the Realm changes; `--check` prepares locally
+  without Realm writes.
   An empty Package Delta payload is not "unknown" — it means "no Package claims this family" and
   CLEARS the Package spell range.
 - **`auto_inc` sequences sit BEHIND explicitly-numbered imported rows.** A content import writes
@@ -420,6 +423,7 @@ cargo build
 # `--features=debug_reducers` (a bare `spacetime publish` omits it, drops the feature-gated debug
 # tables, and then false-aborts on a bogus "Removed table: game_debug_readout"), passes `--yes`, and
 # REFUSES `-c` and any other flag-shaped argument. Plain publish = safe auto-migrate. NEVER -c.
+# `packages apply` can also publish the Module. See packages/README.md for its publish conditions.
 ./lyracore publish
 # ⚠ With no names, that publishes the FIXTURE topology recorded in this checkout's own
 # `.lyracore/state.json` — normally absent on a production host, which falls back to the default
@@ -475,8 +479,9 @@ sleep 4
 # RUST_LOG=info deliberately, not info,gateway::world=debug: since the raw-bytes relay, every packet
 # logs a line, which floods at scale.
 
-# ⚠ Now call `debug_repair_after_publish` BY HAND, on EVERY shard you just published. Nothing runs
-# it for you. It re-arms the motion, creature-tick, aura, ground-area, weather, gateway-lease and
+# After `lyracore publish`, call `debug_repair_after_publish` on every published Shard.
+# `packages apply` already calls it on each Shard it publishes.
+# It re-arms the motion, creature-tick, aura, ground-area, weather, gateway-lease and
 # instance-reaper schedules and re-seeds every fixture family `init` seeds but an auto-migrating
 # republish does not re-run. Skipping it presents as a mid-session hang, not an error.
 # Folding it into `lyracore publish` is issue 41 in the lyracore-cli repository.
