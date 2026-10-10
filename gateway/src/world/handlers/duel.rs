@@ -3,8 +3,8 @@
 use super::super::*;
 
 pub(crate) trait DuelActionStore: Send + Sync {
-    fn duel_accept(&self, account_id: u64, actor_guid: u64, flag_guid: u64) -> Result<()>;
-    fn duel_cancel(&self, account_id: u64, actor_guid: u64, flag_guid: u64) -> Result<()>;
+    fn duel_accept(&self, actor: Actor, flag_guid: u64) -> Result<()>;
+    fn duel_cancel(&self, actor: Actor, flag_guid: u64) -> Result<()>;
 }
 
 #[derive(Clone, Copy)]
@@ -28,17 +28,23 @@ pub(crate) fn dispatch_duel_action<St: DuelActionStore + ?Sized>(
         ClientOpcodeMessage::CMSG_DUEL_CANCELLED(request) => (false, request.guid.guid()),
         other => return Ok(DuelActionOutcome::PassThrough(other)),
     };
-    let Some(actor_guid) = player.self_guid else {
+    let Some(actor) = player.self_guid.and_then(Actor::new) else {
         return Ok(DuelActionOutcome::Handled {
             outbound: Vec::new(),
         });
     };
     let result = if accept {
-        store.duel_accept(player.account_id, actor_guid, flag_guid)
+        store.duel_accept(actor, flag_guid)
     } else {
-        store.duel_cancel(player.account_id, actor_guid, flag_guid)
+        store.duel_cancel(actor, flag_guid)
     };
     if let Err(error) = result {
+        if matches!(
+            crate::stdb::classify(&error),
+            crate::stdb::DurableFailure::TransportLoss
+        ) {
+            return Err(error);
+        }
         log::debug!(
             "world: duel action ignored (account {}): {error}",
             player.account_id
@@ -56,26 +62,41 @@ mod tests {
     use wow_world_messages::vanilla::{CMSG_DUEL_ACCEPTED, CMSG_DUEL_CANCELLED, CMSG_PING};
     use wow_world_messages::Guid;
 
+    use crate::stdb::ReducerCallError;
+
     #[derive(Default)]
     struct InMemoryDuelStore {
         calls: Mutex<Vec<(&'static str, u64, u64)>>,
+        failure: Mutex<Option<ReducerCallError>>,
+    }
+
+    impl InMemoryDuelStore {
+        fn failing(failure: ReducerCallError) -> Self {
+            Self {
+                failure: Mutex::new(Some(failure)),
+                ..Self::default()
+            }
+        }
+
+        fn record(&self, call: &'static str, actor: Actor, flag_guid: u64) -> Result<()> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((call, actor.guid(), flag_guid));
+            match self.failure.lock().unwrap().take() {
+                Some(failure) => Err(failure.into()),
+                None => Ok(()),
+            }
+        }
     }
 
     impl DuelActionStore for InMemoryDuelStore {
-        fn duel_accept(&self, _account_id: u64, actor_guid: u64, flag_guid: u64) -> Result<()> {
-            self.calls
-                .lock()
-                .unwrap()
-                .push(("accept", actor_guid, flag_guid));
-            Ok(())
+        fn duel_accept(&self, actor: Actor, flag_guid: u64) -> Result<()> {
+            self.record("accept", actor, flag_guid)
         }
 
-        fn duel_cancel(&self, _account_id: u64, actor_guid: u64, flag_guid: u64) -> Result<()> {
-            self.calls
-                .lock()
-                .unwrap()
-                .push(("cancel", actor_guid, flag_guid));
-            Ok(())
+        fn duel_cancel(&self, actor: Actor, flag_guid: u64) -> Result<()> {
+            self.record("cancel", actor, flag_guid)
         }
     }
 
@@ -131,6 +152,28 @@ mod tests {
         .unwrap();
         assert!(matches!(outcome, DuelActionOutcome::Handled { .. }));
         assert!(store.calls.lock().unwrap().is_empty());
+    }
+
+    fn accept_message() -> ClientOpcodeMessage {
+        ClientOpcodeMessage::CMSG_DUEL_ACCEPTED(CMSG_DUEL_ACCEPTED {
+            guid: Guid::new(99),
+        })
+    }
+
+    #[test]
+    fn transport_loss_ends_the_world_session() {
+        let store = InMemoryDuelStore::failing(ReducerCallError::transport_lost("gw_duel_accept"));
+        assert!(dispatch_duel_action(&store, player(), accept_message()).is_err());
+    }
+
+    #[test]
+    fn refusal_is_ignored_and_the_session_continues() {
+        let store = InMemoryDuelStore::failing(ReducerCallError::refused(
+            "gw_duel_accept",
+            "duel_not_pending",
+        ));
+        let outcome = dispatch_duel_action(&store, player(), accept_message()).unwrap();
+        assert!(matches!(outcome, DuelActionOutcome::Handled { outbound } if outbound.is_empty()));
     }
 
     #[test]
