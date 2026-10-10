@@ -6,54 +6,13 @@ use lyracore_shared::chat::ChatRefusal;
 use crate::stdb::bindings::*;
 use crate::stdb::connection::{call_reducer, reducer_refusal_reason};
 use crate::stdb::Coordinator;
-use crate::world::{whisper, ChatActionStore, ChatOutcome};
+use crate::world::{whisper, Actor, ChatActionStore, ChatOutcome};
 
-impl ChatActionStore for crate::stdb::Coordinator {
-    fn speaker_facts(&self, speaker_guid: u64) -> Result<Option<crate::world::SpeakerFacts>> {
-        crate::stdb::Coordinator::speaker_facts(self, speaker_guid)
-    }
-
-    fn realm_chat(
-        &self,
-        speaker_guid: u64,
-        request: crate::world::RealmChatRequest,
-    ) -> Result<ChatOutcome> {
-        crate::stdb::Coordinator::realm_chat(self, speaker_guid, request)
-    }
-
-    fn set_away(&self, speaker_guid: u64, kind: u8, message: String) -> Result<()> {
-        crate::stdb::Coordinator::set_away(self, speaker_guid, kind, message)
-    }
-
-    fn whisper_target(
-        &self,
-        speaker_guid: u64,
-        typed_name: &str,
-    ) -> Result<Option<crate::world::WhisperTargetFacts>> {
-        whisper::target_facts(self, speaker_guid, typed_name)
-    }
-
-    fn realm_whisper(
-        &self,
-        speaker_guid: u64,
-        request: crate::world::WhisperRequest,
-    ) -> Result<ChatOutcome> {
-        crate::stdb::Coordinator::realm_whisper(self, speaker_guid, request)
-    }
-
-    fn speaker_gm_level(&self, speaker_guid: u64) -> Result<u8> {
-        Ok(crate::stdb::Coordinator::home_gm_level(self, speaker_guid))
-    }
-}
-
-impl Coordinator {
+impl ChatActionStore for Coordinator {
     /// The Speaker Facts for `speaker_guid` on this Home Shard: race from `UNIT_FIELD_BYTES_0`
     /// byte 0 and the chat tag from `PLAYER_FLAGS`, both off the live entity, plus the Character's
     /// name. `None` when the speaker has no live entity here.
-    pub(crate) fn speaker_facts(
-        &self,
-        speaker_guid: u64,
-    ) -> anyhow::Result<Option<crate::world::SpeakerFacts>> {
+    fn speaker_facts(&self, speaker_guid: u64) -> Result<Option<crate::world::SpeakerFacts>> {
         let guard = self.0.coord();
         let db = &guard.conn.db;
         let Some(entity) = db.game_world_entity().guid().find(&speaker_guid) else {
@@ -72,21 +31,11 @@ impl Coordinator {
         }))
     }
 
-    /// `gw_set_away`: one `/afk` or `/dnd` on the Character's Home Shard, where its live entity
-    /// and Auto-Reply live.
-    pub fn set_away(&self, actor_guid: u64, kind: u8, message: String) -> Result<()> {
-        call_reducer!(
-            self.0.call_pipe().conn.reducers,
-            "gw_set_away",
-            gw_set_away_then(self.actor_or_owner(actor_guid), kind, message)
-        )
-    }
-
     /// `realm_chat`: commit one Realm Chat Line on Realm-core, or on the one database of an
     /// unsharded Realm. The Module applies every chat Gate. The speaker's name stays here.
-    pub fn realm_chat(
+    fn realm_chat(
         &self,
-        speaker_guid: u64,
+        actor: Actor,
         request: crate::world::RealmChatRequest,
     ) -> Result<ChatOutcome> {
         let realm = self.realm_core()?;
@@ -104,15 +53,33 @@ impl Coordinator {
         chat_outcome(call_reducer!(
             realm.0.call_pipe().conn.reducers,
             "realm_chat",
-            realm_chat_then(realm.actor_or_owner(speaker_guid), request)
+            realm_chat_then(realm.session_actor(actor), request)
         ))
+    }
+
+    /// `gw_set_away`: one `/afk` or `/dnd` on the Character's Home Shard, where its live entity
+    /// and Auto-Reply live.
+    fn set_away(&self, actor: Actor, kind: u8, message: String) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "gw_set_away",
+            gw_set_away_then(self.session_actor(actor), kind, message)
+        )
+    }
+
+    fn whisper_target(
+        &self,
+        speaker_guid: u64,
+        typed_name: &str,
+    ) -> Result<Option<crate::world::WhisperTargetFacts>> {
+        whisper::target_facts(self, speaker_guid, typed_name)
     }
 
     /// `realm_whisper`: commit one whisper's lines on Realm-core, or on the one database of an
     /// unsharded Realm. The Module applies every whisper Gate. The speaker's name stays here.
-    pub fn realm_whisper(
+    fn realm_whisper(
         &self,
-        speaker_guid: u64,
+        actor: Actor,
         request: crate::world::WhisperRequest,
     ) -> Result<ChatOutcome> {
         let realm = self.realm_core()?;
@@ -136,8 +103,12 @@ impl Coordinator {
         chat_outcome(call_reducer!(
             realm.0.call_pipe().conn.reducers,
             "realm_whisper",
-            realm_whisper_then(realm.actor_or_owner(speaker_guid), request)
+            realm_whisper_then(realm.session_actor(actor), request)
         ))
+    }
+
+    fn speaker_gm_level(&self, speaker_guid: u64) -> Result<u8> {
+        Ok(self.home_gm_level(speaker_guid))
     }
 }
 
@@ -150,5 +121,41 @@ pub(super) fn chat_outcome(result: Result<()>) -> Result<ChatOutcome> {
             Some(refusal) => Ok(ChatOutcome::Refused(refusal)),
             None => Err(error),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::stdb::{classify, DurableFailure, ReducerCallError};
+
+    #[test]
+    fn a_rejected_chat_tag_decodes_to_its_refusal() {
+        let error = ReducerCallError::refused("realm_chat", ChatRefusal::NotInGroup.as_tag());
+        assert_eq!(
+            chat_outcome(Err(error.into())).unwrap(),
+            ChatOutcome::Refused(ChatRefusal::NotInGroup)
+        );
+    }
+
+    #[test]
+    fn a_delivered_line_decodes_to_delivered() {
+        assert_eq!(chat_outcome(Ok(())).unwrap(), ChatOutcome::Delivered);
+    }
+
+    #[test]
+    fn an_unknown_rejection_stays_a_refusal_for_the_handler() {
+        let error = chat_outcome(Err(
+            ReducerCallError::refused("realm_chat", "mystery").into()
+        ))
+        .unwrap_err();
+        assert!(matches!(classify(&error), DurableFailure::Refusal { .. }));
+    }
+
+    #[test]
+    fn a_lost_transport_stays_a_transport_loss() {
+        let error =
+            chat_outcome(Err(ReducerCallError::transport_lost("realm_chat").into())).unwrap_err();
+        assert_eq!(classify(&error), DurableFailure::TransportLoss);
     }
 }

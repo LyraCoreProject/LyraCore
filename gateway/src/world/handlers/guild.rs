@@ -7,6 +7,7 @@
 
 use super::super::guild_fee::{self, GuildFeeStore};
 use super::super::*;
+use crate::stdb::{classify, DurableFailure};
 use lyracore_shared::guild::{event_kind, has_right, rights, GuildRefusal, LEADER_RANK};
 use wow_world_messages::vanilla::{
     BuyResult, GuildCommand, GuildCommandResult, GuildEmblemResult, MSG_SAVE_GUILD_EMBLEM_Client,
@@ -183,8 +184,8 @@ pub(crate) trait GuildActionStore: GuildFeeStore + Send + Sync {
     fn guild_selected_target(&self, actor_guid: u64) -> u64;
     /// Does `owner_guid` have `other_guid` on their ignore list, checked realm-wide?
     fn guild_ignored_by(&self, owner_guid: u64, other_guid: u64) -> Result<bool>;
-    /// Run one guild op on Realm-core as `actor_guid`.
-    fn guild_op(&self, actor_guid: u64, request: GuildRequest) -> Result<GuildOutcome>;
+    /// Run one guild op on Realm-core as `actor`.
+    fn guild_op(&self, actor: Actor, request: GuildRequest) -> Result<GuildOutcome>;
     /// Does the NPC refuse the actor by faction? The one Gate a read path answers here.
     fn guild_npc_refuses(&self, npc_guid: u64, actor_guid: u64) -> Result<bool>;
     /// The open Petition of the Guild Charter `charter_item_guid`.
@@ -201,7 +202,7 @@ pub(crate) trait GuildActionStore: GuildFeeStore + Send + Sync {
     fn guild_holds_charter(&self, actor_guid: u64, charter_item_guid: u64) -> Result<bool>;
     /// Destroy a turned-in Guild Charter on THIS handle, the actor's Home Shard. A Charter
     /// already gone is Ok.
-    fn guild_destroy_charter(&self, actor_guid: u64, charter_item_guid: u64) -> Result<()>;
+    fn guild_destroy_charter(&self, actor: Actor, charter_item_guid: u64) -> Result<()>;
     /// Every Character a Guild, a Petition or a Signature names. Fails while Realm-core cannot
     /// answer, so the deleted-Character reconciliation retries instead of skipping anyone.
     fn guild_character_guids(&self) -> Result<Vec<u64>>;
@@ -223,12 +224,20 @@ pub(crate) enum GuildActionOutcome {
     PassThrough(ClientOpcodeMessage),
 }
 
-/// A lost reducer transport ends the session. Every other failure is a guild outcome the client
-/// hears as silence.
-fn is_fatal(error: &anyhow::Error) -> bool {
-    error
-        .chain()
-        .any(|cause| cause.to_string().contains("reducer transport disconnected"))
+impl GuildActionPlayer {
+    /// The Character this player acts as. `None` before the World Session has one.
+    fn actor(self) -> Option<Actor> {
+        self.self_guid.and_then(Actor::new)
+    }
+}
+
+/// A Transport Loss ends the World Session. A Refusal this Gateway has no answer for comes back
+/// for the caller to drop, and the client hears silence.
+fn unless_transport_loss(error: anyhow::Error) -> Result<anyhow::Error> {
+    match classify(&error) {
+        DurableFailure::TransportLoss => Err(error),
+        DurableFailure::Refusal { .. } => Ok(error),
+    }
 }
 
 pub(crate) fn dispatch_guild_action<St: GuildActionStore + ?Sized>(
@@ -342,8 +351,8 @@ pub(crate) fn dispatch_guild_action<St: GuildActionStore + ?Sized>(
     };
     match outbound {
         Ok(outbound) => Ok(GuildActionOutcome::Handled { outbound }),
-        Err(error) if is_fatal(&error) => Err(error),
         Err(error) => {
+            let error = unless_transport_loss(error)?;
             log::debug!(
                 "world: guild request dropped (account {}): {error:#}",
                 player.account_id
@@ -540,17 +549,18 @@ fn create_outbound<St: GuildActionStore + ?Sized>(
     player: GuildActionPlayer,
     name: String,
 ) -> Result<Vec<Outbound>> {
-    let Some(actor_guid) = player.self_guid else {
+    let Some(actor) = player.actor() else {
         return Ok(Vec::new());
     };
+    let actor_guid = actor.guid();
     let gm_level = store.guild_gm_level(actor_guid)?;
     if gm_level == 0 {
         return Ok(Vec::new());
     }
-    let Some(actor) = store.guild_character_facts(actor_guid)? else {
+    let Some(actor_facts) = store.guild_character_facts(actor_guid)? else {
         return Ok(Vec::new());
     };
-    let outcome = store.guild_op(actor_guid, gm_create(&actor, gm_level, name))?;
+    let outcome = store.guild_op(actor, gm_create(&actor_facts, gm_level, name))?;
     if let GuildOutcome::Refused(refusal) = outcome {
         log::debug!("world: CMSG_GUILD_CREATE from {actor_guid} refused: {refusal:?}");
     }
@@ -592,9 +602,10 @@ fn invite_outbound<St: GuildActionStore + ?Sized>(
     player: GuildActionPlayer,
     typed_name: String,
 ) -> Result<Vec<Outbound>> {
-    let Some(actor_guid) = player.self_guid else {
+    let Some(actor) = player.actor() else {
         return Ok(Vec::new());
     };
+    let actor_guid = actor.guid();
     let Some(target) = live_character_named(store, &typed_name)? else {
         return Ok(vec![command_result(
             GuildCommand::Invite,
@@ -602,15 +613,15 @@ fn invite_outbound<St: GuildActionStore + ?Sized>(
             GuildCommandResult::GuildPlayerNotFoundS,
         )]);
     };
-    let Some(actor) = store.guild_character_facts(actor_guid)? else {
+    let Some(actor_facts) = store.guild_character_facts(actor_guid)? else {
         return Ok(Vec::new());
     };
     let target_ignores_actor = store.guild_ignored_by(target.guid, actor_guid)?;
     let outcome = store.guild_op(
-        actor_guid,
+        actor,
         GuildRequest::Invite {
             target_guid: target.guid,
-            actor_team: lyracore_shared::faction::team_for_race(actor.race),
+            actor_team: lyracore_shared::faction::team_for_race(actor_facts.race),
             target_team: lyracore_shared::faction::team_for_race(target.race),
             target_ignores_actor,
         },
@@ -631,17 +642,18 @@ fn accept_outbound<St: GuildActionStore + ?Sized>(
     store: &St,
     player: GuildActionPlayer,
 ) -> Result<Vec<Outbound>> {
-    let Some(actor_guid) = player.self_guid else {
+    let Some(actor) = player.actor() else {
         return Ok(Vec::new());
     };
-    let Some(actor) = store.guild_character_facts(actor_guid)? else {
+    let actor_guid = actor.guid();
+    let Some(actor_facts) = store.guild_character_facts(actor_guid)? else {
         return Ok(Vec::new());
     };
     let outcome = store.guild_op(
-        actor_guid,
+        actor,
         GuildRequest::Accept {
-            actor_name: actor.name,
-            actor_team: lyracore_shared::faction::team_for_race(actor.race),
+            actor_name: actor_facts.name,
+            actor_team: lyracore_shared::faction::team_for_race(actor_facts.race),
         },
     )?;
     if let GuildOutcome::Refused(refusal) = outcome {
@@ -655,16 +667,17 @@ fn decline_outbound<St: GuildActionStore + ?Sized>(
     store: &St,
     player: GuildActionPlayer,
 ) -> Result<Vec<Outbound>> {
-    let Some(actor_guid) = player.self_guid else {
+    let Some(actor) = player.actor() else {
         return Ok(Vec::new());
     };
-    let Some(actor) = store.guild_character_facts(actor_guid)? else {
+    let actor_guid = actor.guid();
+    let Some(actor_facts) = store.guild_character_facts(actor_guid)? else {
         return Ok(Vec::new());
     };
     let outcome = store.guild_op(
-        actor_guid,
+        actor,
         GuildRequest::Decline {
-            actor_name: actor.name,
+            actor_name: actor_facts.name,
         },
     )?;
     if let GuildOutcome::Refused(refusal) = outcome {
@@ -682,14 +695,15 @@ fn leave_outbound<St: GuildActionStore + ?Sized>(
     store: &St,
     player: GuildActionPlayer,
 ) -> Result<Vec<Outbound>> {
-    let Some(actor_guid) = player.self_guid else {
+    let Some(actor) = player.actor() else {
         return Ok(Vec::new());
     };
+    let actor_guid = actor.guid();
     let Some((_, guild)) = actor_guild(store, player)? else {
         return Ok(vec![not_in_guild()]);
     };
     let is_leader = guild.leader_guid == actor_guid;
-    let outcome = store.guild_op(actor_guid, GuildRequest::Leave)?;
+    let outcome = store.guild_op(actor, GuildRequest::Leave)?;
     Ok(match outcome {
         GuildOutcome::Ran if is_leader => Vec::new(),
         GuildOutcome::Ran => vec![command_result(
@@ -713,10 +727,10 @@ fn disband_outbound<St: GuildActionStore + ?Sized>(
     store: &St,
     player: GuildActionPlayer,
 ) -> Result<Vec<Outbound>> {
-    let Some(actor_guid) = player.self_guid else {
+    let Some(actor) = player.actor() else {
         return Ok(Vec::new());
     };
-    let outcome = store.guild_op(actor_guid, GuildRequest::Disband)?;
+    let outcome = store.guild_op(actor, GuildRequest::Disband)?;
     Ok(match outcome {
         GuildOutcome::Ran => Vec::new(),
         GuildOutcome::Refused(refusal) => {
@@ -744,7 +758,7 @@ where
     St: GuildActionStore + ?Sized,
     F: FnOnce(u64) -> GuildRequest,
 {
-    let Some(actor_guid) = player.self_guid else {
+    let Some(actor) = player.actor() else {
         return Ok(Vec::new());
     };
     let Some((_, guild)) = actor_guild(store, player)? else {
@@ -755,7 +769,7 @@ where
         MemberMatch::Found(guid) => guid,
         MemberMatch::NotInGuild => 0,
     };
-    let outcome = store.guild_op(actor_guid, build_request(target_guid))?;
+    let outcome = store.guild_op(actor, build_request(target_guid))?;
     Ok(match outcome {
         GuildOutcome::Ran => Vec::new(),
         GuildOutcome::Refused(refusal) => {
@@ -868,10 +882,10 @@ fn motd_outbound<St: GuildActionStore + ?Sized>(
     player: GuildActionPlayer,
     text: String,
 ) -> Result<Vec<Outbound>> {
-    let Some(actor_guid) = player.self_guid else {
+    let Some(actor) = player.actor() else {
         return Ok(Vec::new());
     };
-    let outcome = store.guild_op(actor_guid, GuildRequest::SetMotd { text })?;
+    let outcome = store.guild_op(actor, GuildRequest::SetMotd { text })?;
     Ok(match outcome {
         GuildOutcome::Ran => Vec::new(),
         GuildOutcome::Refused(GuildRefusal::NotInGuild) => vec![not_in_guild()],
@@ -890,10 +904,10 @@ fn info_text_outbound<St: GuildActionStore + ?Sized>(
     player: GuildActionPlayer,
     text: String,
 ) -> Result<Vec<Outbound>> {
-    let Some(actor_guid) = player.self_guid else {
+    let Some(actor) = player.actor() else {
         return Ok(Vec::new());
     };
-    let outcome = store.guild_op(actor_guid, GuildRequest::SetInfo { text })?;
+    let outcome = store.guild_op(actor, GuildRequest::SetInfo { text })?;
     Ok(match outcome {
         GuildOutcome::Ran => Vec::new(),
         GuildOutcome::Refused(GuildRefusal::NotInGuild) => vec![not_in_guild()],
@@ -916,7 +930,7 @@ fn set_note_outbound<St: GuildActionStore + ?Sized>(
     text: String,
     request: impl FnOnce(u64, String) -> GuildRequest,
 ) -> Result<Vec<Outbound>> {
-    let Some(actor_guid) = player.self_guid else {
+    let Some(actor) = player.actor() else {
         return Ok(Vec::new());
     };
     let Some((_, guild)) = actor_guild(store, player)? else {
@@ -927,7 +941,7 @@ fn set_note_outbound<St: GuildActionStore + ?Sized>(
         MemberMatch::Found(guid) => guid,
         MemberMatch::NotInGuild => 0,
     };
-    let outcome = store.guild_op(actor_guid, request(target_guid, text))?;
+    let outcome = store.guild_op(actor, request(target_guid, text))?;
     Ok(match outcome {
         GuildOutcome::Refused(GuildRefusal::NoPermission) => vec![command_result(
             GuildCommand::Invite,
@@ -967,11 +981,11 @@ fn edit_rank_outbound<St: GuildActionStore + ?Sized>(
     rights: u32,
     name: String,
 ) -> Result<Vec<Outbound>> {
-    let Some(actor_guid) = player.self_guid else {
+    let Some(actor) = player.actor() else {
         return Ok(Vec::new());
     };
     let outcome = store.guild_op(
-        actor_guid,
+        actor,
         GuildRequest::EditRank {
             rank_id,
             rights,
@@ -987,10 +1001,10 @@ fn add_rank_outbound<St: GuildActionStore + ?Sized>(
     player: GuildActionPlayer,
     name: String,
 ) -> Result<Vec<Outbound>> {
-    let Some(actor_guid) = player.self_guid else {
+    let Some(actor) = player.actor() else {
         return Ok(Vec::new());
     };
-    let outcome = store.guild_op(actor_guid, GuildRequest::AddRank { name })?;
+    let outcome = store.guild_op(actor, GuildRequest::AddRank { name })?;
     Ok(rank_refusal_outbound(outcome))
 }
 
@@ -999,10 +1013,10 @@ fn delete_rank_outbound<St: GuildActionStore + ?Sized>(
     store: &St,
     player: GuildActionPlayer,
 ) -> Result<Vec<Outbound>> {
-    let Some(actor_guid) = player.self_guid else {
+    let Some(actor) = player.actor() else {
         return Ok(Vec::new());
     };
-    let outcome = store.guild_op(actor_guid, GuildRequest::DeleteRank)?;
+    let outcome = store.guild_op(actor, GuildRequest::DeleteRank)?;
     Ok(rank_refusal_outbound(outcome))
 }
 
@@ -1022,9 +1036,10 @@ pub(crate) fn run_guild_dot_command<St: GuildActionStore + ?Sized>(
     player: GuildActionPlayer,
     text: &str,
 ) -> Result<Option<String>> {
-    let Some(actor_guid) = player.self_guid else {
+    let Some(actor) = player.actor() else {
         return Ok(None);
     };
+    let actor_guid = actor.guid();
     let gm_level = store.guild_gm_level(actor_guid)?;
     if gm_level == 0 {
         return Ok(Some("permission denied".into()));
@@ -1035,16 +1050,13 @@ pub(crate) fn run_guild_dot_command<St: GuildActionStore + ?Sized>(
     let leader = match guild_create_leader(store, actor_guid, leader_name) {
         Ok(Ok(leader)) => leader,
         Ok(Err(line)) => return Ok(Some(line)),
-        Err(error) if is_fatal(&error) => return Err(error),
         Err(error) => {
+            let error = unless_transport_loss(error)?;
             log::warn!("world: .guild create by {actor_guid} found no leader: {error:#}");
             return Ok(Some("guild not created".into()));
         }
     };
-    let outcome = store.guild_op(
-        actor_guid,
-        gm_create(&leader, gm_level, guild_name.to_string()),
-    );
+    let outcome = store.guild_op(actor, gm_create(&leader, gm_level, guild_name.to_string()));
     Ok(match outcome {
         Ok(GuildOutcome::Ran) => None,
         Ok(GuildOutcome::Refused(GuildRefusal::NotGameMaster)) => Some("permission denied".into()),
@@ -1052,8 +1064,8 @@ pub(crate) fn run_guild_dot_command<St: GuildActionStore + ?Sized>(
             Some(format!("{} is already in a guild", leader.name))
         }
         Ok(GuildOutcome::Refused(_)) => Some("guild not created".into()),
-        Err(error) if is_fatal(&error) => return Err(error),
         Err(error) => {
+            let error = unless_transport_loss(error)?;
             log::warn!("world: .guild create by {actor_guid} failed: {error:#}");
             Some("guild not created".into())
         }
@@ -1141,9 +1153,10 @@ fn save_emblem_outbound<St: GuildActionStore + ?Sized>(
     player: GuildActionPlayer,
     save: &MSG_SAVE_GUILD_EMBLEM_Client,
 ) -> Result<Vec<Outbound>> {
-    let Some(actor_guid) = player.self_guid else {
+    let Some(actor) = player.actor() else {
         return Ok(Vec::new());
     };
+    let actor_guid = actor.guid();
     let result = match store.guild_member(actor_guid)? {
         None => GuildEmblemResult::NoGuild,
         Some(member) if member.rank_id != LEADER_RANK => GuildEmblemResult::NotGuildMaster,
@@ -1158,13 +1171,13 @@ fn save_emblem_outbound<St: GuildActionStore + ?Sized>(
                     background_color: save.background_color,
                 },
             };
-            match guild_fee::pay(store, actor_guid, request) {
+            match guild_fee::pay(store, actor, request) {
                 Ok(outcome) => emblem_result(outcome),
-                Err(error) if is_fatal(&error) => return Err(error),
                 // The decision may have committed. The Hold is finished at the next fee or world
                 // entry, and the new emblem, if saved, reaches every member as TABARD_CHANGED.
                 // The client still needs an answer to close its wait.
                 Err(error) => {
+                    let error = unless_transport_loss(error)?;
                     log::warn!("world: emblem fee of {actor_guid} left unfinished: {error:#}");
                     GuildEmblemResult::NoMessage
                 }
@@ -1229,9 +1242,10 @@ fn petition_buy_outbound<St: GuildActionStore + ?Sized>(
     npc_guid: u64,
     name: String,
 ) -> Result<Vec<Outbound>> {
-    let Some(actor_guid) = player.self_guid else {
+    let Some(actor) = player.actor() else {
         return Ok(Vec::new());
     };
+    let actor_guid = actor.guid();
     if store.guild_member(actor_guid)?.is_some() {
         return Ok(Vec::new());
     }
@@ -1240,7 +1254,7 @@ fn petition_buy_outbound<St: GuildActionStore + ?Sized>(
             return Ok(Vec::new());
         }
         let closed = store.guild_op(
-            actor_guid,
+            actor,
             GuildRequest::ClosePetition {
                 petition_id: petition.petition_id,
             },
@@ -1266,7 +1280,7 @@ fn petition_buy_outbound<St: GuildActionStore + ?Sized>(
         name: name.clone(),
     };
     Ok(charter_purchase_reply(
-        guild_fee::pay(store, actor_guid, request)?,
+        guild_fee::pay(store, actor, request)?,
         npc_guid,
         name,
     ))
@@ -1370,14 +1384,15 @@ fn rename_petition_outbound<St: GuildActionStore + ?Sized>(
     charter_item_guid: u64,
     name: String,
 ) -> Result<Vec<Outbound>> {
-    let Some(actor_guid) = player.self_guid else {
+    let Some(actor) = player.actor() else {
         return Ok(Vec::new());
     };
+    let actor_guid = actor.guid();
     if !store.guild_holds_charter(actor_guid, charter_item_guid)? {
         return Ok(Vec::new());
     }
     let outcome = store.guild_op(
-        actor_guid,
+        actor,
         GuildRequest::RenamePetition {
             charter_item_guid,
             name: name.clone(),
@@ -1412,9 +1427,10 @@ fn offer_petition_outbound<St: GuildActionStore + ?Sized>(
     charter_item_guid: u64,
     target_guid: u64,
 ) -> Result<Vec<Outbound>> {
-    let Some(actor_guid) = player.self_guid else {
+    let Some(actor) = player.actor() else {
         return Ok(Vec::new());
     };
+    let actor_guid = actor.guid();
     let Some(target) = store
         .guild_character_facts(target_guid)?
         .filter(|facts| facts.online)
@@ -1425,7 +1441,7 @@ fn offer_petition_outbound<St: GuildActionStore + ?Sized>(
         return Ok(Vec::new());
     }
     let outcome = store.guild_op(
-        actor_guid,
+        actor,
         GuildRequest::OfferPetition {
             charter_item_guid,
             target_guid,
@@ -1458,18 +1474,19 @@ fn sign_petition_outbound<St: GuildActionStore + ?Sized>(
     player: GuildActionPlayer,
     charter_item_guid: u64,
 ) -> Result<Vec<Outbound>> {
-    let Some(actor_guid) = player.self_guid else {
+    let Some(actor) = player.actor() else {
         return Ok(Vec::new());
     };
-    let Some(actor) = store.guild_character_facts(actor_guid)? else {
+    let actor_guid = actor.guid();
+    let Some(actor_facts) = store.guild_character_facts(actor_guid)? else {
         return Ok(Vec::new());
     };
     let outcome = store.guild_op(
-        actor_guid,
+        actor,
         GuildRequest::SignPetition {
             charter_item_guid,
-            actor_name: actor.name.clone(),
-            actor_team: lyracore_shared::faction::team_for_race(actor.race),
+            actor_name: actor_facts.name.clone(),
+            actor_team: lyracore_shared::faction::team_for_race(actor_facts.race),
         },
     )?;
     Ok(match outcome {
@@ -1490,12 +1507,12 @@ fn sign_petition_outbound<St: GuildActionStore + ?Sized>(
         )],
         GuildOutcome::Refused(GuildRefusal::AlreadyInGuild) => vec![command_result(
             GuildCommand::Invite,
-            actor.name,
+            actor_facts.name,
             GuildCommandResult::AlreadyInGuildS,
         )],
         GuildOutcome::Refused(GuildRefusal::AlreadyInvited) => vec![command_result(
             GuildCommand::Invite,
-            actor.name,
+            actor_facts.name,
             GuildCommandResult::AlreadyInvitedToGuildS,
         )],
         // Signed or already signed: the Guild Events answer. A full or unknown Petition is silent.
@@ -1510,13 +1527,11 @@ fn decline_petition_outbound<St: GuildActionStore + ?Sized>(
     player: GuildActionPlayer,
     charter_item_guid: u64,
 ) -> Result<Vec<Outbound>> {
-    let Some(actor_guid) = player.self_guid else {
+    let Some(actor) = player.actor() else {
         return Ok(Vec::new());
     };
-    let outcome = store.guild_op(
-        actor_guid,
-        GuildRequest::DeclinePetition { charter_item_guid },
-    )?;
+    let actor_guid = actor.guid();
+    let outcome = store.guild_op(actor, GuildRequest::DeclinePetition { charter_item_guid })?;
     if let GuildOutcome::Refused(refusal) = outcome {
         log::debug!("world: MSG_PETITION_DECLINE from {actor_guid} refused: {refusal:?}");
     }
@@ -1532,9 +1547,10 @@ fn turn_in_petition_outbound<St: GuildActionStore + ?Sized>(
     player: GuildActionPlayer,
     charter_item_guid: u64,
 ) -> Result<Vec<Outbound>> {
-    let Some(actor_guid) = player.self_guid else {
+    let Some(actor) = player.actor() else {
         return Ok(Vec::new());
     };
+    let actor_guid = actor.guid();
     if !store.guild_holds_charter(actor_guid, charter_item_guid)? {
         return Ok(Vec::new());
     }
@@ -1547,16 +1563,11 @@ fn turn_in_petition_outbound<St: GuildActionStore + ?Sized>(
             SMSG_TURN_IN_PETITION_RESULTS { result },
         ))
     };
-    let outcome = store.guild_op(
-        actor_guid,
-        GuildRequest::TurnInPetition { charter_item_guid },
-    )?;
+    let outcome = store.guild_op(actor, GuildRequest::TurnInPetition { charter_item_guid })?;
     Ok(match outcome {
         GuildOutcome::Ran => {
-            if let Err(error) = store.guild_destroy_charter(actor_guid, charter_item_guid) {
-                if is_fatal(&error) {
-                    return Err(error);
-                }
+            if let Err(error) = store.guild_destroy_charter(actor, charter_item_guid) {
+                let error = unless_transport_loss(error)?;
                 log::warn!("world: turned-in Charter {charter_item_guid} left inert: {error:#}");
             }
             // mangos sends both: the founding result from the turn-in handler, since
@@ -1645,6 +1656,9 @@ pub(crate) fn guild_sign_on<St: GuildActionStore + ?Sized>(
     store: &St,
     character_guid: u64,
 ) -> bool {
+    let Some(actor) = Actor::new(character_guid) else {
+        return false;
+    };
     if !matches!(store.guild_member(character_guid), Ok(Some(_))) {
         return false;
     }
@@ -1654,30 +1668,29 @@ pub(crate) fn guild_sign_on<St: GuildActionStore + ?Sized>(
         .flatten()
         .map(|facts| facts.name)
         .unwrap_or_default();
-    run_best_effort(
-        store,
-        character_guid,
-        GuildRequest::SignOn { actor_name },
-        "sign-on",
-    )
+    run_best_effort(store, actor, GuildRequest::SignOn { actor_name }, "sign-on")
 }
 
 /// The guild part of leaving the world: a member signs off. Runs before the Account Claim is
 /// released, while Realm-core still accepts the actor (`cm:WorldSession.cpp:714-724`).
 pub(crate) fn guild_world_exit<St: GuildActionStore + ?Sized>(store: &St, character_guid: u64) {
+    let Some(actor) = Actor::new(character_guid) else {
+        return;
+    };
     if matches!(store.guild_member(character_guid), Ok(Some(_))) {
-        let _ = run_best_effort(store, character_guid, GuildRequest::SignOff, "sign-off");
+        let _ = run_best_effort(store, actor, GuildRequest::SignOff, "sign-off");
     }
 }
 
 /// Run one guild op whose failure must not fail the caller. Answers whether it ran.
 fn run_best_effort<St: GuildActionStore + ?Sized>(
     store: &St,
-    character_guid: u64,
+    actor: Actor,
     request: GuildRequest,
     step: &str,
 ) -> bool {
-    match store.guild_op(character_guid, request) {
+    let character_guid = actor.guid();
+    match store.guild_op(actor, request) {
         Ok(GuildOutcome::Ran) => true,
         Ok(GuildOutcome::Refused(refusal)) => {
             log::debug!("world: guild {step} for {character_guid} refused: {refusal:?}");
@@ -1701,10 +1714,13 @@ pub(crate) fn destroy_inert_charters<St: GuildActionStore + ?Sized>(
     character_guid: u64,
     charter_item_guids: &[u64],
 ) {
+    let Some(actor) = Actor::new(character_guid) else {
+        return;
+    };
     if charter_item_guids.is_empty() {
         return;
     }
-    if !matches!(store.guild_fee_held(character_guid), Ok(None)) {
+    if !matches!(store.guild_fee_held(actor), Ok(None)) {
         return;
     }
     for &charter_item_guid in charter_item_guids {
@@ -1716,7 +1732,7 @@ pub(crate) fn destroy_inert_charters<St: GuildActionStore + ?Sized>(
                 return;
             }
         }
-        match store.guild_destroy_charter(character_guid, charter_item_guid) {
+        match store.guild_destroy_charter(actor, charter_item_guid) {
             Ok(()) => log::info!(
                 "world: destroyed Guild Charter {charter_item_guid} of {character_guid}: no \
                  Petition stands behind it"
@@ -1769,7 +1785,10 @@ pub(crate) fn forget_deleted_character<
     {
         return Ok(DeletedCharacterGuildCleanup::Preserved);
     }
-    match store.guild_op(character_guid, GuildRequest::ForgetDeletedCharacter)? {
+    let Some(actor) = Actor::new(character_guid) else {
+        return Ok(DeletedCharacterGuildCleanup::Preserved);
+    };
+    match store.guild_op(actor, GuildRequest::ForgetDeletedCharacter)? {
         GuildOutcome::Ran => Ok(DeletedCharacterGuildCleanup::Forgotten),
         GuildOutcome::Refused(refusal) => {
             anyhow::bail!(
@@ -1943,6 +1962,7 @@ fn now_micros() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::stdb::ReducerCallError;
     use lyracore_shared::guild::{founding_gate, name_key, DEFAULT_MOTD, DEFAULT_RANKS};
     use std::sync::Mutex;
     use wow_world_messages::vanilla::{
@@ -1971,7 +1991,8 @@ mod tests {
         ignored: Vec<(u64, u64)>,
         selected: u64,
         ops: Mutex<Vec<(u64, GuildRequest)>>,
-        op_error: Option<String>,
+        /// `guild_op` fails like this.
+        op_error: Option<fn() -> anyhow::Error>,
         /// NPCs that refuse every actor by faction.
         refusing_npcs: Vec<u64>,
         /// Every fee request that reached the Home Shard.
@@ -1981,9 +2002,9 @@ mod tests {
         /// What Realm-core decides; `None` accepts.
         fee_refusal: Option<GuildRefusal>,
         /// The decision's answer is lost, as when it commits but is late to the cache.
-        fee_decide_error: Option<String>,
+        fee_decide_error: Option<fn() -> anyhow::Error>,
         /// Realm Presence cannot answer, as when a World Shard's subscription is unhealthy.
-        facts_error: Option<String>,
+        facts_error: Option<fn() -> anyhow::Error>,
         /// What the next non-`GmCreate` op answers; `None` runs it. The Gate arithmetic for every
         /// op lives on the Module, proved by its own unit and durable tests; this seam only proves
         /// the wire mapping from a given outcome, the same shape `GuildFeeStore` below uses for the
@@ -2095,8 +2116,8 @@ mod tests {
         }
 
         fn guild_character_facts(&self, character_guid: u64) -> Result<Option<CharacterFacts>> {
-            if let Some(error) = &self.facts_error {
-                return Err(anyhow!("{error}"));
+            if let Some(error) = self.facts_error {
+                return Err(error());
             }
             Ok(self
                 .characters
@@ -2133,10 +2154,13 @@ mod tests {
                 .any(|(owner, ignored)| *owner == owner_guid && *ignored == other_guid))
         }
 
-        fn guild_op(&self, actor_guid: u64, request: GuildRequest) -> Result<GuildOutcome> {
-            self.ops.lock().unwrap().push((actor_guid, request.clone()));
-            if let Some(error) = &self.op_error {
-                return Err(anyhow!("{error}"));
+        fn guild_op(&self, actor: Actor, request: GuildRequest) -> Result<GuildOutcome> {
+            self.ops
+                .lock()
+                .unwrap()
+                .push((actor.guid(), request.clone()));
+            if let Some(error) = self.op_error {
+                return Err(error());
             }
             // Every op but GmCreate is a Module Gate this Fake does not reproduce (proved by the
             // Module's own unit and durable tests instead): it answers the outcome a test scripts
@@ -2195,7 +2219,7 @@ mod tests {
             Ok(self.held_charters.contains(&charter_item_guid))
         }
 
-        fn guild_destroy_charter(&self, _actor_guid: u64, charter_item_guid: u64) -> Result<()> {
+        fn guild_destroy_charter(&self, _actor: Actor, charter_item_guid: u64) -> Result<()> {
             self.destroyed_charters
                 .lock()
                 .unwrap()
@@ -2227,13 +2251,13 @@ mod tests {
 
     /// The fee answers the seam maps to result codes. `guild_fee`'s own tests drive the protocol.
     impl GuildFeeStore for InMemoryGuildActions {
-        fn guild_fee_held(&self, _actor_guid: u64) -> Result<Option<guild_fee::FeeHold>> {
+        fn guild_fee_held(&self, _actor: Actor) -> Result<Option<guild_fee::FeeHold>> {
             Ok(None)
         }
 
         fn guild_fee_hold(
             &self,
-            _actor_guid: u64,
+            _actor: Actor,
             request: guild_fee::FeeRequest,
         ) -> Result<Result<guild_fee::FeeHold, GuildRefusal>> {
             self.fee_requests.lock().unwrap().push(request.clone());
@@ -2255,11 +2279,11 @@ mod tests {
 
         fn guild_fee_decide(
             &self,
-            _actor_guid: u64,
+            _actor: Actor,
             _hold: guild_fee::FeeHold,
         ) -> Result<guild_fee::FeeOutcome> {
-            if let Some(error) = &self.fee_decide_error {
-                return Err(anyhow!("{error}"));
+            if let Some(error) = self.fee_decide_error {
+                return Err(error());
             }
             Ok(self.fee_refusal.map_or(
                 guild_fee::FeeOutcome::Accepted,
@@ -2269,7 +2293,7 @@ mod tests {
 
         fn guild_fee_finish(
             &self,
-            _actor_guid: u64,
+            _actor: Actor,
             _operation_id: u64,
             _accepted: bool,
         ) -> Result<()> {
@@ -2302,6 +2326,15 @@ mod tests {
             gm_levels: vec![(GM, 1)],
             ..InMemoryGuildActions::default()
         }
+    }
+
+    fn lost_transport() -> anyhow::Error {
+        ReducerCallError::transport_lost("realm_guild_op").into()
+    }
+
+    /// A Module rejection whose tag this Gateway does not know.
+    fn unknown_refusal() -> anyhow::Error {
+        ReducerCallError::refused("realm_guild_op", "mystery").into()
     }
 
     fn in_world(guid: u64) -> GuildActionPlayer {
@@ -2448,17 +2481,14 @@ mod tests {
     }
 
     #[test]
-    fn dot_create_answers_guild_not_created_when_presence_cannot_answer() {
+    fn dot_create_ends_the_session_when_presence_cannot_answer() {
         let store = InMemoryGuildActions {
-            facts_error: Some(
-                "World Shard instances has no healthy Coordinator subscription".into(),
-            ),
+            facts_error: Some(lost_transport),
             ..realm()
         };
-        assert_eq!(
-            run_guild_dot_command(&store, in_world(GM), ".guild create \"Knights\"").unwrap(),
-            Some("guild not created".into())
-        );
+        let error = run_guild_dot_command(&store, in_world(GM), ".guild create \"Knights\"")
+            .expect_err("a failed read is a Transport Loss");
+        assert_eq!(classify(&error), DurableFailure::TransportLoss);
         assert!(store.ops.lock().unwrap().is_empty());
     }
 
@@ -2539,10 +2569,33 @@ mod tests {
     #[test]
     fn a_lost_reducer_transport_ends_the_session() {
         let mut store = realm();
-        store.op_error = Some("realm_guild_op reducer transport disconnected: gone".into());
+        store.op_error = Some(lost_transport);
         let error = run_guild_dot_command(&store, in_world(GM), ".guild create \"Knights\"")
             .expect_err("fatal");
-        assert!(error.to_string().contains("transport disconnected"));
+        assert_eq!(classify(&error), DurableFailure::TransportLoss);
+    }
+
+    #[test]
+    fn an_unrecognised_refusal_answers_guild_not_created_and_keeps_the_session() {
+        let mut store = realm();
+        store.op_error = Some(unknown_refusal);
+        assert_eq!(
+            run_guild_dot_command(&store, in_world(GM), ".guild create \"Knights\"").unwrap(),
+            Some("guild not created".into())
+        );
+    }
+
+    #[test]
+    fn a_lost_transport_on_a_guild_opcode_ends_the_session_and_a_refusal_does_not() {
+        let disband = || ClientOpcodeMessage::CMSG_GUILD_DISBAND;
+        let mut store = realm();
+        store.op_error = Some(lost_transport);
+        assert!(dispatch_guild_action(&store, in_world(GM), disband()).is_err());
+        store.op_error = Some(unknown_refusal);
+        match dispatch_guild_action(&store, in_world(GM), disband()).unwrap() {
+            GuildActionOutcome::Handled { outbound } => assert!(outbound.is_empty()),
+            GuildActionOutcome::PassThrough(_) => panic!("expected Handled"),
+        }
     }
 
     #[test]
@@ -2829,7 +2882,7 @@ mod tests {
     #[test]
     fn a_failed_sign_on_owes_no_sign_off() {
         let mut store = founded_with_members();
-        store.op_error = Some("realm_guild_op reducer transport disconnected: gone".into());
+        store.op_error = Some(lost_transport);
         assert!(!guild_sign_on(&store, BOB));
     }
 
@@ -2905,19 +2958,19 @@ mod tests {
         background_color: 15,
     };
 
+    fn save_emblem_message() -> ClientOpcodeMessage {
+        ClientOpcodeMessage::MSG_SAVE_GUILD_EMBLEM(Box::new(MSG_SAVE_GUILD_EMBLEM_Client {
+            vendor: Guid::new(DESIGNER),
+            emblem_style: EMBLEM.emblem_style,
+            emblem_color: EMBLEM.emblem_color,
+            border_style: EMBLEM.border_style,
+            border_color: EMBLEM.border_color,
+            background_color: EMBLEM.background_color,
+        }))
+    }
+
     fn save_emblem(store: &InMemoryGuildActions, actor: u64) -> GuildEmblemResult {
-        let message = only_message(dispatch(
-            store,
-            in_world(actor),
-            ClientOpcodeMessage::MSG_SAVE_GUILD_EMBLEM(Box::new(MSG_SAVE_GUILD_EMBLEM_Client {
-                vendor: Guid::new(DESIGNER),
-                emblem_style: EMBLEM.emblem_style,
-                emblem_color: EMBLEM.emblem_color,
-                border_style: EMBLEM.border_style,
-                border_color: EMBLEM.border_color,
-                background_color: EMBLEM.background_color,
-            })),
-        ));
+        let message = only_message(dispatch(store, in_world(actor), save_emblem_message()));
         match message {
             ServerOpcodeMessage::MSG_SAVE_GUILD_EMBLEM(saved) => saved.result,
             other => panic!("expected an emblem result, got {other}"),
@@ -2940,9 +2993,21 @@ mod tests {
     }
 
     #[test]
-    fn a_lost_fee_decision_still_answers_the_emblem_window() {
+    fn a_lost_fee_decision_ends_the_session() {
         let store = InMemoryGuildActions {
-            fee_decide_error: Some("guild fee decision 1 not in the cache after 5s".into()),
+            fee_decide_error: Some(lost_transport),
+            ..led_by_bob(None, None)
+        };
+        let error = dispatch_guild_action(&store, in_world(BOB), save_emblem_message())
+            .err()
+            .expect("a Transport Loss is fatal");
+        assert_eq!(classify(&error), DurableFailure::TransportLoss);
+    }
+
+    #[test]
+    fn an_unrecognised_fee_refusal_still_answers_the_emblem_window() {
+        let store = InMemoryGuildActions {
+            fee_decide_error: Some(unknown_refusal),
             ..led_by_bob(None, None)
         };
         assert_eq!(save_emblem(&store, BOB), GuildEmblemResult::NoMessage);

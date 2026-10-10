@@ -6,6 +6,7 @@
 //! every kind this file does not own pass through.
 
 use super::super::*;
+use crate::stdb::{classify, DurableFailure};
 use lyracore_shared::chat::{chat_kind, language, ChatRefusal};
 use wow_world_messages::vanilla::{CMSG_CHAT_IGNORED, SMSG_NOTIFICATION};
 
@@ -67,9 +68,9 @@ pub(crate) trait ChatActionStore: Send + Sync {
     /// Durable Read on the speaker's Home Shard. `None` when the speaker has no live entity.
     fn speaker_facts(&self, speaker_guid: u64) -> Result<Option<SpeakerFacts>>;
     /// Durable Request on Realm-core. The Coordinator picks the database; handlers never do.
-    fn realm_chat(&self, speaker_guid: u64, request: RealmChatRequest) -> Result<ChatOutcome>;
+    fn realm_chat(&self, actor: Actor, request: RealmChatRequest) -> Result<ChatOutcome>;
     /// Durable Request on the speaker's Home Shard: one `/afk` or `/dnd`.
-    fn set_away(&self, speaker_guid: u64, kind: u8, message: String) -> Result<()>;
+    fn set_away(&self, actor: Actor, kind: u8, message: String) -> Result<()>;
     /// Durable Read across every World Shard: the online Character the typed name reaches, with
     /// the facts the Module's whisper Gates need. `None` when no online Character has that name.
     fn whisper_target(
@@ -78,7 +79,7 @@ pub(crate) trait ChatActionStore: Send + Sync {
         typed_name: &str,
     ) -> Result<Option<WhisperTargetFacts>>;
     /// Durable Request on Realm-core.
-    fn realm_whisper(&self, speaker_guid: u64, request: WhisperRequest) -> Result<ChatOutcome>;
+    fn realm_whisper(&self, actor: Actor, request: WhisperRequest) -> Result<ChatOutcome>;
     /// The speaker's GM level, read on its Home Shard. The Chat Flood Limiter never mutes a
     /// Character above 0.
     fn speaker_gm_level(&self, speaker_guid: u64) -> Result<u8>;
@@ -123,6 +124,13 @@ pub(crate) trait SpeechStore: Send + Sync {
 pub(crate) struct ChatActionPlayer {
     pub(crate) account_id: u64,
     pub(crate) self_guid: Option<u64>,
+}
+
+impl ChatActionPlayer {
+    /// The Character this player speaks as. `None` before the World Session has one.
+    pub(crate) fn actor(self) -> Option<Actor> {
+        self.self_guid.and_then(Actor::new)
+    }
 }
 
 pub(crate) enum ChatActionOutcome {
@@ -243,8 +251,7 @@ pub(crate) fn dispatch_chat_action<St: ChatActionStore + ?Sized>(
 
 /// One whisper: the target is resolved realm-wide, the Module applies the Gates on Realm-core, and
 /// the lines return on the Relay. A name no online Character holds answers
-/// `SMSG_CHAT_PLAYER_NOT_FOUND` with the typed name (cm:ChatHandler.cpp:243-266). A target read
-/// that fails without a transport loss answers the same way: this Gateway cannot reach the target.
+/// `SMSG_CHAT_PLAYER_NOT_FOUND` with the typed name (cm:ChatHandler.cpp:243-266).
 fn whisper<St: ChatActionStore + ?Sized>(
     store: &St,
     player: ChatActionPlayer,
@@ -252,23 +259,15 @@ fn whisper<St: ChatActionStore + ?Sized>(
     message: String,
     typed_name: String,
 ) -> Result<Vec<Outbound>> {
-    let Some(speaker_guid) = player.self_guid else {
+    let Some(actor) = player.actor() else {
         return Ok(Vec::new());
     };
-    let Some(speaker) = store.speaker_facts(speaker_guid)? else {
+    let Some(speaker) = store.speaker_facts(actor.guid())? else {
         return Ok(Vec::new());
     };
-    let target = match store.whisper_target(speaker_guid, &typed_name) {
-        Ok(Some(target)) => target,
-        Ok(None) => return Ok(vec![player_not_found(typed_name)]),
-        Err(error) if is_transport_failure(&error) => return Err(error),
-        Err(error) => {
-            log::debug!(
-                "world: whisper target read failed (account {}): {error:#}",
-                player.account_id
-            );
-            return Ok(vec![player_not_found(typed_name)]);
-        }
+    let target = match store.whisper_target(actor.guid(), &typed_name)? {
+        Some(target) => target,
+        None => return Ok(vec![player_not_found(typed_name)]),
     };
     let request = WhisperRequest {
         language,
@@ -276,19 +275,15 @@ fn whisper<St: ChatActionStore + ?Sized>(
         speaker,
         target,
     };
-    match store.realm_whisper(speaker_guid, request) {
+    match store.realm_whisper(actor, request) {
         Ok(ChatOutcome::Delivered) => Ok(Vec::new()),
         // cm:ChatHandler.cpp:268-275, cm:ChatHandler.cpp:824-828: an empty packet.
         Ok(ChatOutcome::Refused(ChatRefusal::WrongFaction)) => Ok(vec![Outbound::One(
             ServerOpcodeMessage::SMSG_CHAT_WRONG_FACTION,
         )]),
         Ok(ChatOutcome::Refused(refusal)) => Ok(refusal_outbound(player, Some(refusal))),
-        Err(error) if is_transport_failure(&error) => Err(error),
         Err(error) => {
-            log::debug!(
-                "world: whisper dropped (account {}): {error:#}",
-                player.account_id
-            );
+            drop_unrecognised_refusal(player, "whisper", error)?;
             Ok(Vec::new())
         }
     }
@@ -308,16 +303,11 @@ fn set_away<St: ChatActionStore + ?Sized>(
     kind: u8,
     message: String,
 ) -> Result<Vec<Outbound>> {
-    let Some(speaker_guid) = player.self_guid else {
+    let Some(actor) = player.actor() else {
         return Ok(Vec::new());
     };
-    match store.set_away(speaker_guid, kind, message) {
-        Ok(()) => {}
-        Err(error) if is_transport_failure(&error) => return Err(error),
-        Err(error) => log::debug!(
-            "world: away kind {kind} dropped (account {}): {error:#}",
-            player.account_id
-        ),
+    if let Err(error) = store.set_away(actor, kind, message) {
+        drop_unrecognised_refusal(player, format_args!("away kind {kind}"), error)?;
     }
     Ok(Vec::new())
 }
@@ -342,16 +332,16 @@ fn chat_ignored<St: ChatActionStore + ?Sized>(
 
 /// Send one line through the Realm Chat path. `request` builds the Durable Request from the
 /// Speaker Facts. `Ok(None)` means the line went out or was dropped; a Refusal comes back for the
-/// calling arm to answer. Only a lost reducer transport is fatal.
+/// calling arm to answer. A Transport Loss is fatal.
 fn send_line<St: ChatActionStore + ?Sized>(
     store: &St,
     player: ChatActionPlayer,
     request: impl FnOnce(SpeakerFacts) -> RealmChatRequest,
 ) -> Result<Option<ChatRefusal>> {
-    let Some(speaker_guid) = player.self_guid else {
+    let Some(actor) = player.actor() else {
         return Ok(None);
     };
-    let Some(speaker) = store.speaker_facts(speaker_guid)? else {
+    let Some(speaker) = store.speaker_facts(actor.guid())? else {
         return Ok(None);
     };
     let request = request(speaker);
@@ -359,13 +349,13 @@ fn send_line<St: ChatActionStore + ?Sized>(
     settle(
         player,
         format_args!("chat kind {kind}"),
-        store.realm_chat(speaker_guid, request),
+        store.realm_chat(actor, request),
     )
 }
 
 /// Sort one chat Durable Request's result. `Ok(None)` means the line went out, or was dropped for
-/// a failure the World Session survives; a Refusal comes back for the caller to answer. Only a
-/// lost reducer transport is fatal.
+/// a Refusal this Gateway does not know; a Refusal it knows comes back for the caller to answer.
+/// A Transport Loss is fatal.
 pub(crate) fn settle(
     player: ChatActionPlayer,
     line: impl std::fmt::Display,
@@ -374,12 +364,8 @@ pub(crate) fn settle(
     match sent {
         Ok(ChatOutcome::Delivered) => Ok(None),
         Ok(ChatOutcome::Refused(refusal)) => Ok(Some(refusal)),
-        Err(error) if is_transport_failure(&error) => Err(error),
         Err(error) => {
-            log::debug!(
-                "world: {line} dropped (account {}): {error:#}",
-                player.account_id
-            );
+            drop_unrecognised_refusal(player, line, error)?;
             Ok(None)
         }
     }
@@ -408,7 +394,27 @@ pub(crate) fn refusal_outbound(
     }
 }
 
-/// A dead reducer transport cannot serve any further request, so it ends the World Session.
+/// A Refusal this Gateway has no answer for drops the request and keeps the World Session. A
+/// Transport Loss leaves the outcome unknown, so it ends the session.
+pub(super) fn drop_unrecognised_refusal(
+    player: ChatActionPlayer,
+    request: impl std::fmt::Display,
+    error: anyhow::Error,
+) -> Result<()> {
+    match classify(&error) {
+        DurableFailure::TransportLoss => Err(error),
+        DurableFailure::Refusal { reason } => {
+            log::debug!(
+                "world: {request} dropped (account {}): {reason}",
+                player.account_id
+            );
+            Ok(())
+        }
+    }
+}
+
+/// The meeting stone handler still classifies by message text through this. Delete it with that
+/// handler's conversion to `classify`.
 pub(super) fn is_transport_failure(error: &anyhow::Error) -> bool {
     error
         .chain()
@@ -418,29 +424,51 @@ pub(super) fn is_transport_failure(error: &anyhow::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::stdb::ReducerCallError;
     use lyracore_shared::channel::ChannelRefusal;
     use std::sync::Mutex;
     use wow_world_messages::vanilla::{Language, CMSG_PING};
 
+    /// How a Fake's Durable Request fails.
+    #[derive(Clone, Copy)]
+    enum Failure {
+        /// The Module rejects with a tag this Gateway does not know.
+        Refused,
+        TransportLost,
+    }
+
+    impl Failure {
+        fn error(self, op: &str) -> anyhow::Error {
+            match self {
+                Self::Refused => ReducerCallError::refused(op, "mystery").into(),
+                Self::TransportLost => ReducerCallError::transport_lost(op).into(),
+            }
+        }
+    }
+
     #[derive(Default)]
     struct InMemoryChatActions {
         facts: Option<SpeakerFacts>,
-        outcome: Option<Result<ChatOutcome, String>>,
+        outcome: Option<Result<ChatOutcome, Failure>>,
         facts_reads: Mutex<Vec<u64>>,
         requests: Mutex<Vec<(u64, RealmChatRequest)>>,
-        away_failure: Option<String>,
+        away_failure: Option<Failure>,
         away_requests: Mutex<Vec<(u64, u8, String)>>,
-        target: Option<Result<Option<WhisperTargetFacts>, String>>,
+        target: Option<Result<Option<WhisperTargetFacts>, Failure>>,
         target_reads: Mutex<Vec<(u64, String)>>,
-        whisper_outcome: Option<Result<ChatOutcome, String>>,
+        whisper_outcome: Option<Result<ChatOutcome, Failure>>,
         whispers: Mutex<Vec<(u64, WhisperRequest)>>,
     }
 
-    fn answer<T: Clone>(configured: &Option<Result<T, String>>, default: T) -> Result<T> {
+    fn answer<T: Clone>(
+        configured: &Option<Result<T, Failure>>,
+        op: &str,
+        default: T,
+    ) -> Result<T> {
         match configured {
             None => Ok(default),
             Some(Ok(value)) => Ok(value.clone()),
-            Some(Err(failure)) => Err(anyhow::anyhow!("{failure}")),
+            Some(Err(failure)) => Err(failure.error(op)),
         }
     }
 
@@ -450,19 +478,19 @@ mod tests {
             Ok(self.facts.clone())
         }
 
-        fn realm_chat(&self, speaker_guid: u64, request: RealmChatRequest) -> Result<ChatOutcome> {
-            self.requests.lock().unwrap().push((speaker_guid, request));
-            answer(&self.outcome, ChatOutcome::Delivered)
+        fn realm_chat(&self, actor: Actor, request: RealmChatRequest) -> Result<ChatOutcome> {
+            self.requests.lock().unwrap().push((actor.guid(), request));
+            answer(&self.outcome, "realm_chat", ChatOutcome::Delivered)
         }
 
-        fn set_away(&self, speaker_guid: u64, kind: u8, message: String) -> Result<()> {
+        fn set_away(&self, actor: Actor, kind: u8, message: String) -> Result<()> {
             self.away_requests
                 .lock()
                 .unwrap()
-                .push((speaker_guid, kind, message));
-            match &self.away_failure {
+                .push((actor.guid(), kind, message));
+            match self.away_failure {
                 None => Ok(()),
-                Some(failure) => Err(anyhow::anyhow!("{failure}")),
+                Some(failure) => Err(failure.error("gw_set_away")),
             }
         }
 
@@ -475,12 +503,16 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((speaker_guid, typed_name.to_string()));
-            answer(&self.target, None)
+            answer(&self.target, "whisper_target", None)
         }
 
-        fn realm_whisper(&self, speaker_guid: u64, request: WhisperRequest) -> Result<ChatOutcome> {
-            self.whispers.lock().unwrap().push((speaker_guid, request));
-            answer(&self.whisper_outcome, ChatOutcome::Delivered)
+        fn realm_whisper(&self, actor: Actor, request: WhisperRequest) -> Result<ChatOutcome> {
+            self.whispers.lock().unwrap().push((actor.guid(), request));
+            answer(
+                &self.whisper_outcome,
+                "realm_whisper",
+                ChatOutcome::Delivered,
+            )
         }
 
         fn speaker_gm_level(&self, _speaker_guid: u64) -> Result<u8> {
@@ -496,7 +528,7 @@ mod tests {
         }
     }
 
-    fn store(outcome: Option<Result<ChatOutcome, String>>) -> InMemoryChatActions {
+    fn store(outcome: Option<Result<ChatOutcome, Failure>>) -> InMemoryChatActions {
         InMemoryChatActions {
             facts: Some(speaker()),
             outcome,
@@ -737,20 +769,16 @@ mod tests {
 
     #[test]
     fn a_lost_reducer_transport_ends_the_session() {
-        let store = store(Some(Err(
-            "realm_chat reducer transport disconnected: channel closed".to_string(),
-        )));
+        let store = store(Some(Err(Failure::TransportLost)));
         let error = dispatch_chat_action(&store, player(), party(Language::Common))
             .err()
             .expect("transport loss is fatal");
-        assert!(error.to_string().contains("transport disconnected"));
+        assert!(matches!(classify(&error), DurableFailure::TransportLoss));
     }
 
     #[test]
-    fn any_other_failure_drops_the_line_and_keeps_the_session() {
-        let store = store(Some(Err(
-            "realm_chat reducer timed out after 10s".to_string()
-        )));
+    fn an_unrecognised_refusal_drops_the_line_and_keeps_the_session() {
+        let store = store(Some(Err(Failure::Refused)));
         let outbound =
             handled(dispatch_chat_action(&store, player(), party(Language::Common)).unwrap());
         assert!(outbound.is_empty());
@@ -852,8 +880,8 @@ mod tests {
     }
 
     fn whisper_store(
-        target: Result<Option<WhisperTargetFacts>, String>,
-        outcome: Option<Result<ChatOutcome, String>>,
+        target: Result<Option<WhisperTargetFacts>, Failure>,
+        outcome: Option<Result<ChatOutcome, Failure>>,
     ) -> InMemoryChatActions {
         InMemoryChatActions {
             target: Some(target),
@@ -911,10 +939,9 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_target_read_answers_player_not_found_and_keeps_the_session() {
-        let store = whisper_store(Err("peer Shard cannot vouch".to_string()), None);
-        let outbound = handled(dispatch_chat_action(&store, player(), whisper_to("Vim")).unwrap());
-        assert_eq!(not_found(outbound), "Vim");
+    fn a_failed_target_read_ends_the_session() {
+        let store = whisper_store(Err(Failure::TransportLost), None);
+        assert!(dispatch_chat_action(&store, player(), whisper_to("Vim")).is_err());
         assert!(store.whispers.lock().unwrap().is_empty());
     }
 
@@ -960,19 +987,13 @@ mod tests {
 
     #[test]
     fn a_lost_transport_on_a_whisper_ends_the_session() {
-        let lost = "realm_whisper reducer transport disconnected: channel closed".to_string();
-        let store = whisper_store(Ok(Some(target())), Some(Err(lost.clone())));
-        assert!(dispatch_chat_action(&store, player(), whisper_to("Vim")).is_err());
-        let store = whisper_store(Err(lost), None);
+        let store = whisper_store(Ok(Some(target())), Some(Err(Failure::TransportLost)));
         assert!(dispatch_chat_action(&store, player(), whisper_to("Vim")).is_err());
     }
 
     #[test]
-    fn any_other_whisper_failure_is_silent() {
-        let store = whisper_store(
-            Ok(Some(target())),
-            Some(Err("realm_whisper reducer timed out after 10s".to_string())),
-        );
+    fn an_unrecognised_whisper_refusal_is_silent() {
+        let store = whisper_store(Ok(Some(target())), Some(Err(Failure::Refused)));
         let outbound = handled(dispatch_chat_action(&store, player(), whisper_to("Vim")).unwrap());
         assert!(outbound.is_empty());
     }
@@ -1001,15 +1022,15 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_away_request_is_fatal_only_for_a_lost_transport() {
+    fn a_failed_away_request_is_fatal_only_for_a_transport_loss() {
         let afk = || line(CMSG_MESSAGECHAT_ChatType::Afk, Language::Universal);
         let refused = InMemoryChatActions {
-            away_failure: Some("mover not in world".to_string()),
+            away_failure: Some(Failure::Refused),
             ..store(None)
         };
         assert!(handled(dispatch_chat_action(&refused, player(), afk()).unwrap()).is_empty());
         let lost = InMemoryChatActions {
-            away_failure: Some("gw_set_away reducer transport disconnected".to_string()),
+            away_failure: Some(Failure::TransportLost),
             ..store(None)
         };
         assert!(dispatch_chat_action(&lost, player(), afk()).is_err());
