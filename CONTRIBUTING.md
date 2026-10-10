@@ -5,7 +5,27 @@ server behave more like 1.12.1, fixes a bug, or makes LyraCore easier to build o
 and green checks, and it must be one small piece. Gameplay that 1.12.1 does not have belongs in a
 Package, not in core.
 
-## Where to start
+## Read first
+
+Three documents are required reading:
+
+1. This file: what gets in and how a pull request is judged.
+2. [`CODING_STANDARDS.md`](CODING_STANDARDS.md): how new and changed code is written.
+3. [`CORE_TERMS.md`](CORE_TERMS.md): the terms the code, the comments and the reviews use.
+
+Look everything else up when a change needs it:
+
+- [`docs/quickstart.md`](docs/quickstart.md): from a clone to a connected client.
+- [`docs/testing.md`](docs/testing.md): the commands CI runs, tier by tier.
+- The recipes for [a new opcode](docs/recipes/add-an-opcode.md) and
+  [a new spell effect](docs/recipes/add-a-spell-effect.md): every file and step, in order.
+- [`CONTEXT.md`](CONTEXT.md): the full glossary, with an alphabetical index.
+- [`docs/architecture.md`](docs/architecture.md): how the tiers fit together, and the index of the
+  other documents.
+- [`docs/danger-zones.md`](docs/danger-zones.md): schema migrations, publishing, and the traps that
+  have broken a Realm.
+
+## Picking an issue
 
 The maintainers file issues in one shape (see "The issue shape"). Each says what 1.12.1 does,
 what LyraCore does instead and where in the code, and how to fix it.
@@ -54,11 +74,11 @@ targets core `main`.
 ## How a change is judged
 
 1. The checks pass. CI runs the Rust workflow and the durable suite on every pull request,
-   including one from a fork. The pull request template lists the commands to run locally first.
+   including one from a fork. The pull request template lists the commands CI runs, and
+   [`docs/testing.md`](docs/testing.md) explains them.
 2. The evidence is stated: what 1.12.1 does, and how you know. A packet capture, a DBC field, a
    real client, or the behaviour of an established emulator all count.
-3. The code follows [`CODING_STANDARDS.md`](CODING_STANDARDS.md) and uses the terms in
-   [`CONTEXT.md`](CONTEXT.md).
+3. The code follows [`CODING_STANDARDS.md`](CODING_STANDARDS.md) and uses the glossary terms.
 4. A schema change follows [`docs/danger-zones.md`](docs/danger-zones.md): append new columns at
    the end with a default, and regenerate the Gateway bindings for a new table.
 5. The title follows the repository's convention, for example
@@ -81,8 +101,9 @@ You need Linux or macOS, Rust, and your own 1.12.1 build 5875 client. [`README.m
 the install, and [`docs/quickstart.md`](docs/quickstart.md) goes from clone to a connected client.
 `./lyracore doctor` says what your machine is missing.
 
-The seeded world needs no client data, and most tests run against it. Tests that need imported
-data skip when it is absent, so a green run without an import does not cover them.
+The seeded world needs no client data, and most tests run against it. Tests that need your own
+client data are ignored by default, so a green run does not cover them.
+[`docs/testing.md`](docs/testing.md) names the variables that run them.
 
 ## The issue shape
 

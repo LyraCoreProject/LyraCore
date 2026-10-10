@@ -756,7 +756,7 @@ warning banner states plainly, not a contradiction to resolve in this document.
 | [`../CONTEXT.md`](../CONTEXT.md) | The full glossary, with an alphabetical index. The words this document and the code use, and the words to avoid. |
 | [`danger-zones.md`](./danger-zones.md) | **Authoritative.** Traps, tooling gotchas, and the exact deploy/verify procedure. |
 | [`testing.md`](./testing.md) | The test tiers and the commands CI runs. |
-| [`recipes/`](./recipes/) | Step lists for common changes: [add an opcode](./recipes/add-an-opcode.md), [add a spell effect](./recipes/add-a-spell-effect.md). |
+| Recipes | Step lists for common changes: [add an opcode](./recipes/add-an-opcode.md), [add a spell effect](./recipes/add-a-spell-effect.md). |
 | [`schema.md`](./schema.md) | The table-level data model. |
 | [`package-api.md`](./package-api.md) | The Package API, version 1: what a Package's Rust half may call, and what core promises about it. |
 

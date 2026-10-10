@@ -392,21 +392,17 @@ there.
 ```bash
 cd <repo-root>
 
-# Build + test BEFORE deploying — every workspace member with tests, every time. This list used to
-# omit lyracore-importer, and two broken tests sat unnoticed through roughly ten "all green" PRs.
+# Build + test BEFORE deploying: the unit commands CI runs (docs/testing.md), every time. This list
+# once omitted lyracore-importer, and two broken tests sat unnoticed through about ten "all green" PRs.
 cargo test -p lyracore-importer
 cargo test -p lyracore-module --lib --features=debug_reducers
 cargo test -p lyracore-gateway
 cargo test -p lyracore-shared
+cargo test -p lyracore-test-support
 cargo build
 # ⚠ Each of these prints SEVERAL `test result:` lines (unit target, integration target, doctests) and
-# some of them are legitimately `0 tests`. SUM them; do not report the last line. Reading a single
-# line has repeatedly produced conclusions like "lyracore-shared has no tests" (it has 75).
-# Expected shape on a green main:
-#   importer 128 | module 603 | gateway 673 + 63 (schema parity) | lyracore-shared 75
-# These numbers drift UP as tests are added; a LOWER count is the signal worth chasing, not an exact
-# match.
-# The `#[ignore]` durable rung (`module/tests/`) now runs in CI: .github/workflows/module-durable.yml
+# some are legitimately `0 tests`. Read every line; the last one is not the crate's total.
+# The `#[ignore]` durable rung (`module/tests/`) runs in CI: .github/workflows/module-durable.yml
 
 # Publish-shaped PREFLIGHT — the deploy-only break class the test suites cannot see.
 # Fully offline: no node, no database, no publish/call/sql. Three checks: the SpacetimeDB version

@@ -66,6 +66,7 @@ cargo test -p lyracore-importer
 cargo test -p lyracore-module --lib --features=debug_reducers
 cargo test -p lyracore-gateway
 cargo test -p lyracore-shared
+cargo test -p lyracore-test-support
 cargo build
 ./lyracore preflight
 ```

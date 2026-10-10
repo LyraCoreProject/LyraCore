@@ -805,7 +805,7 @@ name matches nothing and still exits 1 — indistinguishable from "already stopp
 - The [CLI command reference](https://github.com/LyraCoreProject/lyracore-cli/blob/main/docs/commands.md) in the `lyracore-cli` repository: every command and its safety
   rules.
 - [GitHub Issues](https://github.com/LyraCoreProject/LyraCore/issues) — the work queue. Run the
-  offline checks (`cargo test` per crate) before proposing a change.
+  checks in [`docs/testing.md`](./testing.md) before proposing a change.
 - [`docs/danger-zones.md`](./danger-zones.md) — authoritative traps, tooling gotchas, and the
   production (four-database) deploy procedure. `dev up` runs its own four-database fixture
   topology — the same tiers, on a loopback node — which is the deliberate exception to §3; do not
