@@ -124,8 +124,8 @@ pub(crate) trait CastStore: MeleeActionStore + Send + Sync {
     fn cancel_aura(&self, account_id: u64, self_guid: u64, spell_id: u32) -> Result<()>;
 
     // The two reads below are shared with the character, vendor and query paths. They are declared
-    // here rather than on `WorldStore` because a second declaration of the same name would make
-    // every `St: WorldStore` call ambiguous; `WorldStore: CastStore` keeps them reachable. The
+    // on this family only, because a second declaration of the same name on another family would
+    // make every call through the `WorldStore` umbrella ambiguous. The
     // ranged teardown comes from `MeleeActionStore`: melee and ranged share one durable row, so it
     // has one declaration, on the seam that owns that row.
 
@@ -537,6 +537,13 @@ pub(super) mod tests {
         pub(crate) pick_lock_calls: Mutex<Vec<PickLockCall>>,
         pub(crate) cancel_cast_calls: Mutex<Vec<(u64, u64)>>,
         pub(crate) cancel_aura_calls: Mutex<Vec<CancelAuraCall>>,
+        /// The attackers with a live engagement: an armed ranged loop adds its caster, a stop
+        /// removes it.
+        pub(crate) engaged: Mutex<Vec<u64>>,
+        /// Spell ids of the auras on the caster; a cancellation removes the one it names.
+        pub(crate) auras: Mutex<Vec<u32>>,
+        /// Casters with a pending cast; a cancellation removes the caller's.
+        pub(crate) pending_casts: Mutex<Vec<u64>>,
     }
 
     impl InMemoryCasts {
@@ -696,7 +703,12 @@ pub(super) mod tests {
                 .lock()
                 .unwrap()
                 .push((account_id, self_guid));
-            self.cancel_result()
+            self.cancel_result()?;
+            self.pending_casts
+                .lock()
+                .unwrap()
+                .retain(|&caster| caster != self_guid);
+            Ok(())
         }
 
         fn cancel_aura(&self, account_id: u64, self_guid: u64, spell_id: u32) -> Result<()> {
@@ -704,7 +716,9 @@ pub(super) mod tests {
                 .lock()
                 .unwrap()
                 .push((account_id, self_guid, spell_id));
-            self.cancel_result()
+            self.cancel_result()?;
+            self.auras.lock().unwrap().retain(|&aura| aura != spell_id);
+            Ok(())
         }
 
         fn start_ranged_attack(
@@ -723,6 +737,10 @@ pub(super) mod tests {
                 target_guid,
                 spell_id,
             ));
+            let mut engaged = self.engaged.lock().unwrap();
+            if !engaged.contains(&self_guid) {
+                engaged.push(self_guid);
+            }
             Ok(())
         }
 
@@ -752,6 +770,10 @@ pub(super) mod tests {
                 .lock()
                 .unwrap()
                 .push((account_id, actor_guid));
+            self.engaged
+                .lock()
+                .unwrap()
+                .retain(|&guid| guid != actor_guid);
             Ok(())
         }
     }

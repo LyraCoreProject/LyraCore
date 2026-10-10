@@ -1315,7 +1315,7 @@ fn raw_movement_relay_is_byte_identical_to_the_typed_path() {
     const GUIDS: &[u64] = &[1, 0x0100, u64::MAX, 0, 0x0000_00F3_0000_0042];
     let mut compared = 0usize;
     for (label, info) in movement_info_cases() {
-        // The bytes the module stores are produced by exactly this call (`WorldStore::movement_update`).
+        // The bytes the module stores are produced by exactly this call (`SessionStore::movement_update`).
         let stored = movement_info_to_bytes(&info).unwrap();
         for &opcode in movement_opcodes::SLICE_MOVE_OPCODES {
             for &guid in GUIDS {

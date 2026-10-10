@@ -447,7 +447,7 @@ fn render_buyback_view<St: VendorActionStore + ?Sized>(
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use std::sync::Mutex;
     use wow_world_messages::vanilla::{
@@ -456,7 +456,7 @@ mod tests {
     };
 
     #[derive(Debug, Eq, PartialEq)]
-    struct BuyRequest {
+    pub(crate) struct BuyRequest {
         account_id: u64,
         actor_guid: u64,
         vendor_guid: u64,
@@ -465,24 +465,25 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct InMemoryVendorActions {
-        stock_requests: Mutex<Vec<u64>>,
-        gate_requests: Mutex<Vec<(u64, u64)>>,
-        buy_requests: Mutex<Vec<BuyRequest>>,
-        repair_requests: Mutex<Vec<(u64, u64, u64, u8)>>,
-        sell_requests: Mutex<Vec<(u64, u64, u64, u8)>>,
-        stock: Vec<codec::VendorItemView>,
-        refuses: bool,
-        stock_error: Option<String>,
-        gate_error: Option<String>,
-        buy_error: Option<String>,
-        ring: Vec<(u32, u32, u32, u32)>,
-        random_properties: Vec<(u32, [u32; 3])>,
-        item_slots: Vec<(u64, u8)>,
-        repair_error: Option<String>,
-        sell_error: Option<String>,
-        buyback_requests: Mutex<Vec<(u64, u64, u64, u8)>>,
-        buyback_error: Option<String>,
+    pub(crate) struct InMemoryVendorActions {
+        pub(crate) stock_requests: Mutex<Vec<u64>>,
+        pub(crate) gate_requests: Mutex<Vec<(u64, u64)>>,
+        pub(crate) buy_requests: Mutex<Vec<BuyRequest>>,
+        pub(crate) repair_requests: Mutex<Vec<(u64, u64, u64, u8)>>,
+        pub(crate) sell_requests: Mutex<Vec<(u64, u64, u64, u8)>>,
+        pub(crate) stock: Vec<codec::VendorItemView>,
+        pub(crate) refuses: bool,
+        pub(crate) stock_error: Option<String>,
+        pub(crate) gate_error: Option<String>,
+        pub(crate) buy_error: Option<String>,
+        /// The player's buyback ring; a successful buyback removes the entry it took.
+        pub(crate) ring: Mutex<Vec<(u32, u32, u32, u32)>>,
+        pub(crate) random_properties: Vec<(u32, [u32; 3])>,
+        pub(crate) item_slots: Vec<(u64, u8)>,
+        pub(crate) repair_error: Option<String>,
+        pub(crate) sell_error: Option<String>,
+        pub(crate) buyback_requests: Mutex<Vec<(u64, u64, u64, u8)>>,
+        pub(crate) buyback_error: Option<String>,
     }
 
     impl VendorActionStore for InMemoryVendorActions {
@@ -527,7 +528,7 @@ mod tests {
         }
 
         fn buyback_slots(&self, _player_guid: u64) -> Vec<(u32, u32, u32, u32)> {
-            self.ring.clone()
+            self.ring.lock().unwrap().clone()
         }
 
         fn random_property_enchant_ids(&self, random_property_id: u32) -> [u32; 3] {
@@ -589,10 +590,14 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((account_id, self_guid, vendor_guid, slot));
-            match &self.buyback_error {
-                Some(error) => Err(anyhow::anyhow!("{error}")),
-                None => Ok(()),
+            if let Some(error) = &self.buyback_error {
+                return Err(anyhow::anyhow!("{error}"));
             }
+            let mut ring = self.ring.lock().unwrap();
+            if usize::from(slot) < ring.len() {
+                ring.remove(usize::from(slot));
+            }
+            Ok(())
         }
     }
 
@@ -917,7 +922,7 @@ mod tests {
         let ring = vec![(2589, 1, 120, 0)];
         let actions = InMemoryVendorActions {
             item_slots: vec![(ITEM, 30)],
-            ring: ring.clone(),
+            ring: Mutex::new(ring.clone()),
             ..Default::default()
         };
 
@@ -1064,7 +1069,7 @@ mod tests {
     fn the_buyback_view_renders_one_fabricated_item_per_ring_entry_plus_the_descriptor_update() {
         let ring = vec![(2589, 5, 120, 117), (4540, 1, 30, 0)];
         let actions = InMemoryVendorActions {
-            ring: ring.clone(),
+            ring: Mutex::new(ring.clone()),
             ..Default::default()
         };
 
@@ -1076,7 +1081,7 @@ mod tests {
     #[test]
     fn a_buyback_entry_with_a_random_property_fills_its_enchantment_slots_after_its_create() {
         let actions = InMemoryVendorActions {
-            ring: vec![(2589, 1, 120, 22)],
+            ring: Mutex::new(vec![(2589, 1, 120, 22)]),
             random_properties: vec![(22, [73, 0, 0])],
             ..Default::default()
         };
@@ -1101,7 +1106,7 @@ mod tests {
     fn a_full_ring_renders_all_thirteen_wire_slots_from_the_shared_base() {
         let ring: Vec<(u32, u32, u32, u32)> = (0..12).map(|i| (100 + i, 1, 10 * i, 0)).collect();
         let actions = InMemoryVendorActions {
-            ring: ring.clone(),
+            ring: Mutex::new(ring.clone()),
             ..Default::default()
         };
 
@@ -1130,7 +1135,7 @@ mod tests {
     fn a_login_replay_of_a_persisted_ring_renders_it_like_an_in_session_refresh() {
         let ring = vec![(2589, 5, 120, 0)];
         let actions = InMemoryVendorActions {
-            ring: ring.clone(),
+            ring: Mutex::new(ring.clone()),
             ..Default::default()
         };
 
@@ -1183,7 +1188,7 @@ mod tests {
     fn a_successful_buyback_returns_the_full_rebuilt_view() {
         let ring = vec![(2589, 5, 120, 0), (4540, 1, 30, 0)];
         let actions = InMemoryVendorActions {
-            ring: ring.clone(),
+            ring: Mutex::new(ring.clone()),
             ..Default::default()
         };
 
@@ -1194,13 +1199,13 @@ mod tests {
             VendorActionOutcome::Handled { outbound } => outbound,
             VendorActionOutcome::PassThrough(_) => panic!("buyback must be handled"),
         };
-        assert_renders_ring(&outbound, &ring);
+        assert_renders_ring(&outbound, &ring[1..]);
     }
 
     #[test]
     fn a_buyback_without_an_actor_falls_back_to_the_legacy_zero_actor_and_renders_no_view() {
         let actions = InMemoryVendorActions {
-            ring: vec![(2589, 5, 120, 0)],
+            ring: Mutex::new(vec![(2589, 5, 120, 0)]),
             ..Default::default()
         };
         let player = VendorActionPlayer {

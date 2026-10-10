@@ -208,17 +208,19 @@ fn attack_stop<St: MeleeActionStore + ?Sized>(
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use std::sync::Mutex;
     use wow_world_messages::vanilla::{Guid, CMSG_ATTACKSWING, CMSG_PING};
 
     #[derive(Default)]
-    struct InMemoryMeleeActions {
-        start_requests: Mutex<Vec<(u64, u64, u64)>>,
-        start_error: Option<String>,
-        stop_requests: Mutex<Vec<(u64, u64)>>,
-        stop_error: Option<String>,
+    pub(crate) struct InMemoryMeleeActions {
+        pub(crate) start_requests: Mutex<Vec<(u64, u64, u64)>>,
+        pub(crate) start_error: Option<String>,
+        pub(crate) stop_requests: Mutex<Vec<(u64, u64)>>,
+        pub(crate) stop_error: Option<String>,
+        /// The attackers with a live engagement: a started attack adds its actor, a stop removes it.
+        pub(crate) engaged: Mutex<Vec<u64>>,
     }
 
     impl MeleeActionStore for InMemoryMeleeActions {
@@ -227,9 +229,14 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((account_id, actor_guid, target_guid));
-            self.start_error
-                .as_ref()
-                .map_or_else(|| Ok(()), |error| Err(anyhow::anyhow!("{error}")))
+            if let Some(error) = &self.start_error {
+                return Err(anyhow::anyhow!("{error}"));
+            }
+            let mut engaged = self.engaged.lock().unwrap();
+            if !engaged.contains(&actor_guid) {
+                engaged.push(actor_guid);
+            }
+            Ok(())
         }
 
         fn stop_attack(&self, account_id: u64, actor_guid: u64) -> Result<()> {
@@ -237,9 +244,14 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((account_id, actor_guid));
-            self.stop_error
-                .as_ref()
-                .map_or_else(|| Ok(()), |error| Err(anyhow::anyhow!("{error}")))
+            if let Some(error) = &self.stop_error {
+                return Err(anyhow::anyhow!("{error}"));
+            }
+            self.engaged
+                .lock()
+                .unwrap()
+                .retain(|&guid| guid != actor_guid);
+            Ok(())
         }
     }
 

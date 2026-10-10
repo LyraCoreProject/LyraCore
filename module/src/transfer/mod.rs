@@ -1899,7 +1899,7 @@ pub(crate) fn apply_finish<S: FinishSink>(sink: &mut S, transfer_id: u64) {
         // "the directory says where it settled" can never disagree on this database.
         //
         // Cross-database, this is only HALF the index. There is no transaction spanning
-        // two SpacetimeDB databases, so realm-core's copy — the one `home_shard` actually reads —
+        // two SpacetimeDB databases, so realm-core's copy — the one `locate_home_shard` reads —
         // cannot be written from here at all. What the gateway does instead is REPLICATE this row:
         // `world::transfer::run_transfer` publishes the same `(guid, map, instance)` to realm-core
         // as a required step of the drive, strictly AFTER `finish_transfer` returned Ok, so it can
@@ -1908,12 +1908,9 @@ pub(crate) fn apply_finish<S: FinishSink>(sink: &mut S, transfer_id: u64) {
         // fails) between `finish_transfer` and step 6, realm-core's copy keeps naming the old
         // shard, and the recovery path does not re-drive `run_transfer`, so nothing republishes it.
         // The index is therefore still specified as a HINT the gateway CONFIRMS by probing rather
-        // than trusts, and the login self-heal is still the terminal fallback — except that the
-        // self-heal is currently unreachable in production (the gateway's `settle_home_shard`
-        // overrides the `home_shard` that hosts it and locates the character by scanning instead).
-        // Nothing in production reads this directory yet either, so the two cancel out today; both
-        // have to be fixed together before anything routes on it. See
-        // `gateway/src/realm_core.rs::publish_shard_index`.
+        // than trusts, and the login self-heal is the terminal fallback: `settle_home_shard` runs
+        // `gateway/src/realm_core.rs::locate_home_shard` at every world entry, which confirms the
+        // hint on the Shard it names, scans on a miss, and rewrites a wrong entry.
         //
         // MERGE ORDER: this runs AFTER the cascade, never before. `game_character_shard`
         // is itself character-owned (`realm_core.rs`'s delete sweep), so a cascade that ran second

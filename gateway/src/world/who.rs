@@ -1,9 +1,10 @@
 //! `/who`: a pure filter over [`presence::in_world_characters`], plus the `SMSG_WHO` response
 //! builder `CMSG_WHO` (`social.rs`) drives. Behavior pinned against cm:MiscHandler.cpp:71-268.
 
+use crate::world::{GuildActionStore, ShardRoutingStore, SocialStore};
 use anyhow::Result;
 
-use super::{presence, WorldStore};
+use super::presence;
 use crate::codec;
 use lyracore_shared::faction;
 use wow_world_messages::vanilla::CMSG_WHO;
@@ -106,7 +107,7 @@ fn effective_max_level(wire_max_level: u8) -> u8 {
 /// rule that reads one — the common case (no search string) then costs no zone lookups at all.
 /// The Guild name is two keyed reads of the Realm-core cache per row. When Realm-core cannot
 /// answer, every row lists with an empty Guild name rather than the reply failing.
-pub(crate) fn respond<St: WorldStore + ?Sized>(
+pub(crate) fn respond<St: GuildActionStore + ShardRoutingStore + SocialStore + ?Sized>(
     store: &St,
     requester_race: u8,
     request: &CMSG_WHO,

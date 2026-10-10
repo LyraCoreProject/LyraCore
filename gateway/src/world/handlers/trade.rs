@@ -8,7 +8,50 @@
 use super::super::social::self_guid;
 use super::super::*;
 
-pub(crate) fn handle_trade<St: WorldStore + ?Sized>(
+/// The Trade Session handshake. Every status, BeginTrade/OpenWindow to the parties, or a refusal
+/// back to the caller, rides the `game_trade_event` relay; these calls answer nothing
+/// synchronously, and an `Err` is only an unresolved actor (per-action, log + ignore).
+pub(crate) trait TradeStore: Send + Sync {
+    /// `CMSG_INITIATE_TRADE` — propose a Trade Session against the targeted player.
+    fn initiate_trade(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()>;
+
+    /// `CMSG_BEGIN_TRADE` — the proposed target's client answered; the module opens both windows.
+    fn begin_trade(&self, account_id: u64, self_guid: u64) -> Result<()>;
+
+    /// `CMSG_CANCEL_TRADE` — tear the caller's Trade Session down (`TradeCanceled` to both).
+    fn cancel_trade(&self, account_id: u64, self_guid: u64) -> Result<()>;
+
+    /// `CMSG_SET_TRADE_ITEM` — `inv_slot` is the ABSOLUTE inventory slot (the gateway maps the
+    /// client's (bag, slot) pair, the item-family convention).
+    fn set_trade_item(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        trade_slot: u8,
+        inv_slot: u8,
+    ) -> Result<()>;
+
+    /// `CMSG_CLEAR_TRADE_ITEM`.
+    fn clear_trade_item(&self, account_id: u64, self_guid: u64, trade_slot: u8) -> Result<()>;
+
+    /// `CMSG_SET_TRADE_GOLD`, `copper` is the offered amount.
+    fn set_trade_gold(&self, account_id: u64, self_guid: u64, copper: u32) -> Result<()>;
+
+    /// `CMSG_ACCEPT_TRADE` — accept the current offer; dual-accept runs the atomic Trade Commit
+    /// module-side.
+    fn accept_trade(&self, account_id: u64, self_guid: u64) -> Result<()>;
+
+    /// `CMSG_UNACCEPT_TRADE`, withdraw an accept; partner hears `BackToTrade`.
+    fn unaccept_trade(&self, account_id: u64, self_guid: u64) -> Result<()>;
+
+    /// `CMSG_BUSY_TRADE`, decline a pending proposal as busy; initiator hears `Busy`.
+    fn busy_trade(&self, account_id: u64, self_guid: u64) -> Result<()>;
+
+    /// `CMSG_IGNORE_TRADE`, decline via ignore; initiator hears `IgnoreYou`.
+    fn ignore_trade(&self, account_id: u64, self_guid: u64) -> Result<()>;
+}
+
+pub(crate) fn handle_trade<St: TradeStore + ?Sized>(
     _tx: &SessionTx,
     store: &St,
     conn: &mut WorldConn,

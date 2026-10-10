@@ -195,14 +195,15 @@ fn stats() -> codec::MemberStats {
     codec::MemberStats::from_entity(&caster())
 }
 
-fn place(shard: &InMemoryStore, guid: u64, entity: codec::MemberEntity) {
-    let mut entities = shard.member_entities.lock().unwrap();
+fn place(shard: &WorldFake, guid: u64, entity: codec::MemberEntity) {
+    let mut entities = shard.social.member_entities.lock().unwrap();
     entities.retain(|(g, _)| *g != guid);
     entities.push((guid, entity));
 }
 
-fn despawn(shard: &InMemoryStore, guid: u64) {
+fn despawn(shard: &WorldFake, guid: u64) {
     shard
+        .social
         .member_entities
         .lock()
         .unwrap()
@@ -211,9 +212,9 @@ fn despawn(shard: &InMemoryStore, guid: u64) {
 
 /// Ginger and Trin, both on `world`.
 fn ginger_and_trin() -> (
-    std::sync::Arc<InMemoryStore>,
-    std::sync::Arc<InMemoryStore>,
-    std::sync::Arc<InMemoryStore>,
+    std::sync::Arc<WorldFake>,
+    std::sync::Arc<WorldFake>,
+    std::sync::Arc<WorldFake>,
 ) {
     let (realm, world, instances, _) = party_topology();
     party::run(world.as_ref(), 7, GINGER, party::Op::Invite(TRIN)).expect("invite Trin");
@@ -224,7 +225,7 @@ fn ginger_and_trin() -> (
 }
 
 /// One tick for Ginger, whose client has created only the guids in `created`.
-fn tick(store: &InMemoryStore, created: &[u64], snapshots: &mut Snapshots) -> Vec<(u16, Vec<u8>)> {
+fn tick(store: &WorldFake, created: &[u64], snapshots: &mut Snapshots) -> Vec<(u16, Vec<u8>)> {
     member_stats_tick(store, GINGER, |guid| created.contains(&guid), snapshots)
         .expect("the tick reads")
         .into_iter()
@@ -365,11 +366,11 @@ fn a_mate_in_transfer_gets_nothing_and_is_never_reported_offline() {
     tick(&world, &[GINGER], &mut snapshots);
 
     despawn(&instances, VIM);
-    realm.members_in_transit.lock().unwrap().push(VIM);
+    realm.party.members_in_transit.lock().unwrap().push(VIM);
     assert!(tick(&world, &[GINGER], &mut snapshots).is_empty());
 
     // Arrival with nothing changed: the record survived the Transfer, so nothing is resent.
-    realm.members_in_transit.lock().unwrap().clear();
+    realm.party.members_in_transit.lock().unwrap().clear();
     place(&world, VIM, caster());
     assert!(tick(&world, &[GINGER], &mut snapshots).is_empty());
 }
@@ -387,7 +388,13 @@ fn a_viewer_with_no_group_gets_nothing_and_reads_no_member() {
         "a viewer with no group keeps no records"
     );
     for shard in [&world, &instances] {
-        assert_eq!(shard.member_presence_reads.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            shard
+                .member_stats
+                .member_presence_reads
+                .load(Ordering::SeqCst),
+            0
+        );
     }
 }
 
@@ -403,7 +410,7 @@ fn a_mate_who_leaves_the_group_is_forgotten() {
 }
 
 fn request_with(
-    store: &InMemoryStore,
+    store: &WorldFake,
     self_guid: Option<u64>,
     record: Option<&MemberStatsRecord>,
     guid: u64,
@@ -419,7 +426,7 @@ fn request_with(
     )
 }
 
-fn request(store: &InMemoryStore, self_guid: Option<u64>, guid: u64) -> MemberStatsOutcome {
+fn request(store: &WorldFake, self_guid: Option<u64>, guid: u64) -> MemberStatsOutcome {
     request_with(store, self_guid, None, guid)
 }
 
@@ -483,11 +490,16 @@ fn a_request_for_a_mate_between_two_places_answers_online_and_zone_out() {
     form_split_party(&world, &instances);
     let online_zone_out = vec![(0x02F2, vec![0x01, 0x02, 0x01, 0x00, 0x00, 0x00, 0x21])];
 
-    realm.members_in_transit.lock().unwrap().push(VIM);
+    realm.party.members_in_transit.lock().unwrap().push(VIM);
     assert_eq!(answer(request(&world, Some(GINGER), VIM)), online_zone_out);
 
-    realm.members_in_transit.lock().unwrap().clear();
-    instances.members_between_places.lock().unwrap().push(VIM);
+    realm.party.members_in_transit.lock().unwrap().clear();
+    instances
+        .social
+        .members_between_places
+        .lock()
+        .unwrap()
+        .push(VIM);
     assert_eq!(answer(request(&world, Some(GINGER), VIM)), online_zone_out);
 }
 
@@ -503,9 +515,9 @@ fn after_a_full_answer_the_next_tick_sends_every_field() {
     tick(&world, &[GINGER], &mut record.lock());
 
     despawn(&instances, VIM);
-    realm.members_in_transit.lock().unwrap().push(VIM);
+    realm.party.members_in_transit.lock().unwrap().push(VIM);
     answer(request_with(&world, Some(GINGER), Some(&record), VIM));
-    realm.members_in_transit.lock().unwrap().clear();
+    realm.party.members_in_transit.lock().unwrap().clear();
     place(&world, VIM, caster());
 
     let packets = tick(&world, &[GINGER], &mut record.lock());
@@ -517,13 +529,16 @@ fn a_failed_read_answers_nothing_and_is_never_offline() {
     let (realm, world, instances, _) = party_topology();
     form_split_party(&world, &instances);
     // Vim has no entity, and one World Shard cannot prove the absence.
-    let unhealthy = InMemoryStore {
-        shard: "world".into(),
-        realm: Some(realm),
-        world_shard_set_error: Some("instances has no healthy Coordinator subscription".into()),
+    let unhealthy = WorldFake {
+        topology: TopologyState {
+            shard: "world".into(),
+            realm: Some(realm),
+            world_shard_set_error: Some("instances has no healthy Coordinator subscription".into()),
+            ..Default::default()
+        },
         ..Default::default()
     };
-    *unhealthy.peers.lock().unwrap() = vec![world.clone(), instances.clone()];
+    *unhealthy.topology.peers.lock().unwrap() = vec![world.clone(), instances.clone()];
 
     assert!(answer(request(&unhealthy, Some(GINGER), VIM)).is_empty());
     let mut snapshots = Snapshots::new();
@@ -543,7 +558,12 @@ fn a_bot_crossing_between_shards_is_never_reported_offline() {
 
     // The Package placed the bot and wrote its Transfer Intent; the Gateway has not claimed it.
     despawn(&world, BOT);
-    world.members_between_places.lock().unwrap().push(BOT);
+    world
+        .social
+        .members_between_places
+        .lock()
+        .unwrap()
+        .push(BOT);
 
     assert!(tick(&world, &[GINGER], &mut snapshots).is_empty());
     assert_eq!(
@@ -565,14 +585,20 @@ fn a_stats_request_outside_the_world_passes_through() {
 /// where the party lives in the shard's own tables.
 #[test]
 fn a_stats_request_is_answered_through_the_encrypted_session() {
-    let store = InMemoryStore {
-        mirror: std::sync::Mutex::new(vec![party::GroupRoster {
-            group_id: 1,
-            leader_guid: 1,
-            members: party_members(&[1, 2]),
-            ..Default::default()
-        }]),
-        ..quest_store()
+    let store = {
+        let base = quest_store();
+        WorldFake {
+            party: PartyState {
+                mirror: std::sync::Mutex::new(vec![party::GroupRoster {
+                    group_id: 1,
+                    leader_guid: 1,
+                    members: party_members(&[1, 2]),
+                    ..Default::default()
+                }]),
+                ..base.party
+            },
+            ..base
+        }
     };
     place(&store, 2, caster());
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(std::sync::Arc::new(store), 1);
@@ -591,15 +617,26 @@ fn a_stats_request_is_answered_through_the_encrypted_session() {
 
 #[test]
 fn a_stats_request_that_cannot_be_read_does_not_end_the_session() {
-    let store = InMemoryStore {
-        mirror: std::sync::Mutex::new(vec![party::GroupRoster {
-            group_id: 1,
-            leader_guid: 1,
-            members: party_members(&[1, 2]),
-            ..Default::default()
-        }]),
-        world_shard_set_error: Some("instances has no healthy Coordinator subscription".into()),
-        ..quest_store()
+    let store = {
+        let base = quest_store();
+        WorldFake {
+            party: PartyState {
+                mirror: std::sync::Mutex::new(vec![party::GroupRoster {
+                    group_id: 1,
+                    leader_guid: 1,
+                    members: party_members(&[1, 2]),
+                    ..Default::default()
+                }]),
+                ..base.party
+            },
+            topology: TopologyState {
+                world_shard_set_error: Some(
+                    "instances has no healthy Coordinator subscription".into(),
+                ),
+                ..base.topology
+            },
+            ..base
+        }
     };
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(std::sync::Arc::new(store), 1);
 
@@ -622,26 +659,32 @@ fn a_stats_request_that_cannot_be_read_does_not_end_the_session() {
 fn world_entry_forgets_member_stats_sent_before_the_party_frame() {
     let view = std::sync::Arc::new(crate::stdb::world_view::WorldView::new(true));
     let (realm, _world, _instances, calls) = party_topology();
-    let session_shard = std::sync::Arc::new(InMemoryStore {
-        shard: "world".into(),
-        calls,
-        username: "TESTER".into(),
-        session: Some(WorldSession {
-            account_id: 7,
-            session_key: K,
-        }),
-        login_entity: Some(warrior_entity()),
-        realm: Some(realm.clone()),
+    let session_shard = std::sync::Arc::new(WorldFake {
+        topology: TopologyState {
+            shard: "world".into(),
+            calls,
+            realm: Some(realm.clone()),
+            ..Default::default()
+        },
+        session: SessionState {
+            username: "TESTER".into(),
+            session: Some(WorldSession {
+                account_id: 7,
+                session_key: K,
+            }),
+            login_entity: Some(warrior_entity()),
+            live_guids: vec![GINGER, VIM],
+            relay_view: Some(view.clone()),
+            member_stats_before_party_frame: Some(VIM),
+            ..Default::default()
+        },
         characters: vec![character(GINGER, "Ginger"), character(VIM, "Vim")],
-        live_guids: vec![GINGER, VIM],
-        relay_view: Some(view.clone()),
-        member_stats_before_party_frame: Some(VIM),
         ..Default::default()
     });
-    *session_shard.peers.lock().unwrap() = vec![session_shard.clone()];
+    *session_shard.topology.peers.lock().unwrap() = vec![session_shard.clone()];
     place(&session_shard, VIM, caster());
     {
-        let mut party = realm.party.lock().unwrap();
+        let mut party = realm.party.party.lock().unwrap();
         party.next_group_id = 5;
         party.groups.push((5, GINGER, 3, 2, 0));
         party.members.push((5, GINGER));
@@ -650,7 +693,7 @@ fn world_entry_forgets_member_stats_sent_before_the_party_frame() {
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = session_shard.clone();
     let server = std::thread::spawn(move || {
-        let _ = run_world_session(server_end, server_store.as_ref());
+        let _ = run_world_session(server_end, server_store.clone());
     });
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
     CMSG_PLAYER_LOGIN {

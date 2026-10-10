@@ -7,13 +7,87 @@ use super::taxi::open_taxi_outbound;
 use super::vendor::{vendor_has_stock, vendor_open_outbound};
 use lyracore_shared::chat::broadcast_chat;
 
+/// NPC and gameobject templates, gossip, area triggers and inspect.
+pub(crate) trait NpcStore: Send + Sync {
+    /// Look up a creature template by entry to answer `CMSG_CREATURE_QUERY` (Tier 2 / NPCs).
+    fn creature_template(&self, entry: u32) -> Result<Option<codec::CreatureView>>;
+
+    /// Resolve the public name of a live pet for an in-world requester.
+    fn pet_name(
+        &self,
+        requester_guid: u64,
+        pet_number: u32,
+        pet_guid: u64,
+    ) -> Result<Option<codec::PetNameView>>;
+
+    /// Look up a gameobject template by entry to answer `CMSG_GAMEOBJECT_QUERY`.
+    fn gameobject_template(&self, entry: u32) -> Result<Option<codec::GameObjectTemplateView>>;
+
+    /// The `type_id` of a spawned GameObject by its live guid. `CMSG_GAMEOBJ_USE` sends questgivers
+    /// to the quest window, chests to the loot-window lifecycle, and every other type to the general
+    /// use path.
+    fn gameobject_type(&self, go_guid: u64) -> Result<Option<u8>>;
+
+    /// Enter an area trigger (`CMSG_AREATRIGGER`): credit any active "explore" quest tied to it.
+    fn enter_areatrigger(&self, account_id: u64, self_guid: u64, trigger_id: u32) -> Result<()>;
+
+    /// Standing-derived reaction gate: does this NPC refuse `player_guid` its
+    /// interaction WINDOW? Rep-bar factions refuse at Unfriendly-or-below standing; bar-less
+    /// factions fall back to the FactionTemplate hostility masks. Fail-open on missing data.
+    /// Gossip, trainer and banker ask here; the migrated families ask the same read through their
+    /// own traits (`QuestActionStore::giver_refuses_interaction`,
+    /// `VendorActionStore::vendor_refuses_interaction`).
+    fn npc_refuses_interaction(&self, npc_guid: u64, player_guid: u64) -> Result<bool>;
+
+    /// Bind the caller's hearthstone home to their current position (innkeeper gossip "Make this inn
+    /// your home."). No args — the module resolves the caller via `ctx.sender`.
+    fn bind_home(&self, account_id: u64, self_guid: u64) -> Result<()>;
+
+    /// Does the NPC at `guid` carry the innkeeper flag? Gates the "Make this inn your home." gossip
+    /// option + the bind select.
+    fn npc_is_innkeeper(&self, guid: u64) -> Result<bool>;
+
+    /// Resolve the `title_text_id` to embed in `SMSG_GOSSIP_MESSAGE` for the NPC at `guid`.
+    /// Looks up `game_gossip_menu` by creature entry; falls back to 1 (generic greeting).
+    fn npc_gossip_text_id(&self, npc_guid: u64) -> u32;
+
+    /// Look up the full weighted greeting (all 8 `npc_text` slots) for a `text_id`.
+    /// Returns `None` when no imported `game_npc_text` row exists (the gateway falls back to the
+    /// generic greeting string).
+    fn npc_text_for_id(&self, text_id: u32) -> Option<codec::NpcTextView>;
+
+    /// The imported gossip menu options for the NPC at `guid`, sorted by
+    /// `option_index`, RAW/unfiltered by condition. Empty when nothing is imported for this creature
+    /// (the gateway falls back to the flag-derived vendor/innkeeper synthesis).
+    fn gossip_options(&self, npc_guid: u64) -> Result<Vec<codec::GossipOptionView>>;
+
+    /// Validate a `CMSG_INSPECT` request: `target_guid` must be a real in-world player, on the
+    /// caller's map, in range, and friendly. `Ok(())` → the gateway replies `SMSG_INSPECT(target_guid)`;
+    /// `Err` (out of range / hostile / no such target) → silently ignored, matching the other
+    /// stateless-gate reducers (`enter_areatrigger`, `use_gameobject`).
+    fn inspect(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()>;
+
+    /// NOTIFY-ONLY module chokepoint for a gossip-option click — fired best-effort
+    /// before the gateway's own gossip handling; failure never blocks the gossip reply.
+    fn gossip_select(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        npc_guid: u64,
+        option_id: u32,
+        option_row_id: u32,
+    ) -> Result<()>;
+}
+
 /// The NPC's imported gossip options, condition-filtered against `player_guid`'s quest
 /// state — the SINGLE chokepoint both `CMSG_GOSSIP_HELLO` (render) and `CMSG_GOSSIP_SELECT_OPTION`
 /// (re-derive the click) call, so the two can never disagree about which options are visible (the
 /// "HELLO/SELECT_OPTION alignment" trap: a click's `gossip_list_id` indexes into whatever list HELLO
 /// actually sent, so SELECT must reproduce that exact list, not just re-read the raw unfiltered rows).
 /// Preserves `option_index` order (already sorted by the store read).
-fn filtered_gossip_options<St: WorldStore + ?Sized>(
+fn filtered_gossip_options<
+    St: CharacterStore + NpcStore + QuestActionStore + TrainerStore + ?Sized,
+>(
     store: &St,
     npc_guid: u64,
     player_guid: u64,
@@ -52,7 +126,7 @@ fn filtered_gossip_options<St: WorldStore + ?Sized>(
 /// Say, yell or `/e` (a `broadcast_chat` type) through the speaker's Home Shard. The line itself
 /// returns on the Relay; a Refusal gets the answer every chat line shares, and only a lost reducer
 /// transport ends the World Session.
-fn speak_nearby<St: WorldStore + ?Sized>(
+fn speak_nearby<St: SpeechStore + ?Sized>(
     tx: &SessionTx,
     store: &St,
     conn: &WorldConn,
@@ -86,7 +160,22 @@ fn speak_nearby<St: WorldStore + ?Sized>(
 /// the social tier (say / yell / `/e` chat + text emotes), grouped as the stateless
 /// request→reply / broadcast opcodes.
 #[allow(clippy::too_many_lines)] // One arm per query and social opcode.
-pub(crate) fn handle_query<St: WorldStore + ?Sized>(
+pub(crate) fn handle_query<
+    St: CastStore
+        + CharacterStore
+        + GuildActionStore
+        + NpcStore
+        + PartyStore
+        + QuestActionStore
+        + SessionStore
+        + ShardRoutingStore
+        + SocialStore
+        + SpeechStore
+        + TaxiActionStore
+        + TrainerStore
+        + VendorActionStore
+        + ?Sized,
+>(
     tx: &SessionTx,
     store: &St,
     conn: &mut WorldConn,

@@ -1837,7 +1837,9 @@ pub(crate) enum DeletedCharacterGuildCleanup {
 /// snapshot: a Transfer deletes the source row only after the destination holds one, and a row
 /// that is stale in a cache starts another pass when its delete arrives. Only then comes the
 /// party cleanup's absence check, two durable snapshots of every configured World Shard.
-pub(crate) fn forget_deleted_character<St: WorldStore + ?Sized>(
+pub(crate) fn forget_deleted_character<
+    St: CharacterStore + GuildActionStore + ShardRoutingStore + ?Sized,
+>(
     store: &St,
     character_guid: u64,
 ) -> Result<DeletedCharacterGuildCleanup> {
@@ -1875,7 +1877,9 @@ impl GuildCleanup {
 
 /// Run the guild cleanup `work` asks for. Every Character is tried; the first failure is
 /// returned, so the worker keeps the work and retries it.
-pub(crate) fn reconcile_deleted_guild_characters<St: WorldStore + ?Sized>(
+pub(crate) fn reconcile_deleted_guild_characters<
+    St: CharacterStore + GuildActionStore + ShardRoutingStore + ?Sized,
+>(
     store: &St,
     work: &GuildCleanup,
 ) -> Result<()> {
@@ -3657,6 +3661,76 @@ mod tests {
                 }
             ))
         );
+    }
+
+    #[test]
+    fn every_membership_opcode_reaches_its_durable_request() {
+        use wow_world_messages::vanilla as wire;
+        let mut store = founded_with_members();
+        store.characters.push(facts(DAVE, "Dave"));
+        let named = snapshot_name(BOB);
+        let messages = [
+            (
+                DAVE,
+                ClientOpcodeMessage::CMSG_GUILD_ACCEPT,
+                GuildRequest::Accept {
+                    actor_name: "Dave".into(),
+                    actor_team: lyracore_shared::faction::TEAM_ALLIANCE,
+                },
+            ),
+            (
+                DAVE,
+                ClientOpcodeMessage::CMSG_GUILD_DECLINE,
+                GuildRequest::Decline {
+                    actor_name: "Dave".into(),
+                },
+            ),
+            (
+                GM,
+                ClientOpcodeMessage::CMSG_GUILD_REMOVE(Box::new(wire::CMSG_GUILD_REMOVE {
+                    player_name: named.clone(),
+                })),
+                GuildRequest::Remove { target_guid: BOB },
+            ),
+            (
+                GM,
+                ClientOpcodeMessage::CMSG_GUILD_PROMOTE(Box::new(wire::CMSG_GUILD_PROMOTE {
+                    player_name: named.clone(),
+                })),
+                GuildRequest::Promote { target_guid: BOB },
+            ),
+            (
+                GM,
+                ClientOpcodeMessage::CMSG_GUILD_DEMOTE(Box::new(wire::CMSG_GUILD_DEMOTE {
+                    player_name: named.clone(),
+                })),
+                GuildRequest::Demote { target_guid: BOB },
+            ),
+            (
+                GM,
+                ClientOpcodeMessage::CMSG_GUILD_LEADER(Box::new(wire::CMSG_GUILD_LEADER {
+                    new_guild_leader_name: named,
+                })),
+                GuildRequest::SetLeader { target_guid: BOB },
+            ),
+            (
+                BOB,
+                ClientOpcodeMessage::CMSG_GUILD_LEAVE,
+                GuildRequest::Leave,
+            ),
+            (
+                GM,
+                ClientOpcodeMessage::CMSG_GUILD_DISBAND,
+                GuildRequest::Disband,
+            ),
+        ];
+        for (actor, message, expected) in messages {
+            dispatch(&store, in_world(actor), message);
+            assert_eq!(
+                store.ops.lock().unwrap().last().cloned(),
+                Some((actor, expected))
+            );
+        }
     }
 
     #[test]

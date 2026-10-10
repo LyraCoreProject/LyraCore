@@ -393,7 +393,9 @@ pub(crate) fn dispatch_loot_window<St: LootWindowStore + ?Sized>(
 
 /// Remaining group-loot, non-window GameObject, and death-recovery operations not yet migrated to
 /// a focused action interface.
-pub(crate) fn handle_loot<St: WorldStore + ?Sized>(
+pub(crate) fn handle_loot<
+    St: DeathStore + LootRollStore + LootWindowStore + NpcStore + ShardRoutingStore + ?Sized,
+>(
     tx: &SessionTx,
     store: &St,
     conn: &mut WorldConn,
@@ -1737,5 +1739,133 @@ mod tests {
 
             assert_eq!(error.to_string(), message);
         }
+    }
+
+    /// Run one request as the session does: apply the state transition, return the client traffic.
+    fn run(
+        store: &InMemoryLootWindow,
+        state: &mut OpenLootState,
+        msg: ClientOpcodeMessage,
+    ) -> Vec<Outbound> {
+        let LootWindowOutcome::Handled {
+            next_state,
+            outbound,
+            ..
+        } = dispatch_loot_window(store, player(), *state, msg).unwrap()
+        else {
+            panic!("the request passed through")
+        };
+        *state = next_state;
+        outbound
+    }
+
+    fn take_money() -> ClientOpcodeMessage {
+        ClientOpcodeMessage::CMSG_LOOT_MONEY
+    }
+
+    fn take_item(item_slot: u8) -> ClientOpcodeMessage {
+        ClientOpcodeMessage::CMSG_AUTOSTORE_LOOT_ITEM(CMSG_AUTOSTORE_LOOT_ITEM { item_slot })
+    }
+
+    /// `(slot, item_id, count, display_id)` of item `index` in a raw loot window body: the header is
+    /// 8 guid + 1 method + 4 money + 1 count bytes, then 22 bytes per item.
+    fn window_item(body: &[u8], index: usize) -> (u8, u32, u32, u32) {
+        let base = 14 + index * 22;
+        let word =
+            |at: usize| u32::from_le_bytes(body[base + at..base + at + 4].try_into().unwrap());
+        (body[base], word(1), word(5), word(9))
+    }
+
+    fn assert_clear_money(outbound: &[Outbound]) {
+        // A solo looter gets no SMSG_LOOT_MONEY_NOTIFY: the client prints its own copper line.
+        assert!(matches!(
+            outbound,
+            [Outbound::One(ServerOpcodeMessage::SMSG_LOOT_CLEAR_MONEY)]
+        ));
+    }
+
+    #[test]
+    fn chest_use_then_item_take_removes_the_slot_from_the_tracked_chest() {
+        let mut store = InMemoryLootWindow::default();
+        store.items_by_viewer.insert(42, vec![(4, 117, 2, 321, 0)]);
+        let mut state = OpenLootState::default();
+
+        let opened = run(&store, &mut state, open_chest(90));
+        let [Outbound::Raw { opcode, body }] = opened.as_slice() else {
+            panic!("expected one raw loot window")
+        };
+        assert_eq!(*opcode, 0x0160);
+        assert_eq!(&body[0..8], &90u64.to_le_bytes());
+        assert_eq!(window_item(body, 0), (4, 117, 2, 321));
+        assert_eq!(state.target_guid, Some(90));
+
+        let taken = run(&store, &mut state, take_item(4));
+        assert!(matches!(
+            taken.as_slice(),
+            [Outbound::One(ServerOpcodeMessage::SMSG_LOOT_REMOVED(removed))] if removed.slot == 4
+        ));
+        assert_eq!(
+            store.item_take_requests.lock().unwrap().as_slice(),
+            &[(7, 42, 90, 4)]
+        );
+    }
+
+    #[test]
+    fn corpse_with_money_opens_unskinned_and_money_take_loots_the_tracked_corpse() {
+        let store = InMemoryLootWindow {
+            money: 25,
+            ..Default::default()
+        };
+        let mut state = OpenLootState::default();
+
+        let opened = run(&store, &mut state, open_creature(60));
+        let [Outbound::Raw { opcode, body }] = opened.as_slice() else {
+            panic!("expected one raw loot window")
+        };
+        assert_eq!(*opcode, 0x0160);
+        assert_eq!(&body[0..8], &60u64.to_le_bytes());
+        assert_eq!(&body[9..13], &25u32.to_le_bytes());
+        assert!(store.skin_requests.lock().unwrap().is_empty());
+
+        assert_clear_money(&run(&store, &mut state, take_money()));
+        assert_eq!(
+            store.money_take_requests.lock().unwrap().as_slice(),
+            &[(7, 42, 60)]
+        );
+    }
+
+    #[test]
+    fn money_take_on_a_copperless_corpse_still_clears_the_money_row() {
+        let store = InMemoryLootWindow::default();
+        let mut state = OpenLootState::default();
+        run(&store, &mut state, open_creature(60));
+
+        assert_clear_money(&run(&store, &mut state, take_money()));
+        assert_eq!(
+            store.money_take_requests.lock().unwrap().as_slice(),
+            &[(7, 42, 60)]
+        );
+    }
+
+    #[test]
+    fn takes_after_a_release_do_nothing() {
+        let store = InMemoryLootWindow {
+            money: 25,
+            ..Default::default()
+        };
+        let mut state = OpenLootState::default();
+        run(&store, &mut state, open_creature(60));
+
+        let released = run(&store, &mut state, release(60));
+        assert!(matches!(
+            released.as_slice(),
+            [Outbound::One(ServerOpcodeMessage::SMSG_LOOT_RELEASE_RESPONSE(response))]
+                if response.guid.guid() == 60
+        ));
+
+        assert!(run(&store, &mut state, take_money()).is_empty());
+        assert!(run(&store, &mut state, take_item(3)).is_empty());
+        assert!(store.money_take_requests.lock().unwrap().is_empty());
+        assert!(store.item_take_requests.lock().unwrap().is_empty());
     }
 }

@@ -3,7 +3,7 @@
 //! `dispatch_quest_action`; the gameobject giver, the item-started quest, the world-entry
 //! descriptor block and the gossip quest section call the shared builders here rather than
 //! reaching for the store. Every quest read and reducer the world session needs lives on
-//! `QuestActionStore`; `WorldStore` carries none of them. The stdb-tier relays in
+//! `QuestActionStore`; no other Store family carries them. The stdb-tier relays in
 //! `subscriptions.rs` (quest-log sync, the shared-quest details screen) sit below the session and
 //! render their own copies from the same `codec` builders these functions use.
 

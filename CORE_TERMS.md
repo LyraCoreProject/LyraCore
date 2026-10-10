@@ -66,6 +66,11 @@ The Gateway's subscribed connection per shard, authenticated with the Owner Toke
 Gateway code that turns a table change into a client message.
 _Avoid_: forwarder, pusher
 
+**Speech**:
+A line a Character speaks to the Characters near it: a say, yell or `/e` line, or a text emote. Its
+Durable Request goes to the speaker's Home Shard, and a Relay delivers it to listeners in range.
+_Avoid_: local chat, proximity chat
+
 **AOI**:
 The area of interest that decides which entities a World Session sees.
 _Avoid_: visibility set, interest radius
@@ -113,6 +118,10 @@ _Avoid_: SDK, plugin API, public API, allowlist
 
 **Seam**:
 The interface where session or protocol handling hands work to durable state, expressed as a trait so tests can substitute the far side. Not the Shard Boundary, not any arbitrary trait.
+
+**Protocol Family**:
+A group of client opcodes one Gateway handler owns, with the Store trait that handler calls (for example the vendor family and `VendorActionStore`). `WorldStore` is the umbrella over every family; a handler takes only its family's Store.
+_Avoid_: family (unqualified), domain
 
 **Store**:
 The durable side of a Seam: the trait a handler calls for Durable Reads and Durable Requests. The Coordinator implements it in production, a Fake in tests.

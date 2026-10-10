@@ -24,11 +24,11 @@
 //!
 //! The gateway treats an entry as a hint it must confirm: it accepts the hint only when the shard it
 //! names actually holds the character row, and otherwise falls back to probing the connected shards
-//! and writes the corrected entry back (`gateway/src/config.rs::resolve_home_shard`, and the tests
-//! there). So a stale — or entirely absent, or maliciously wrong — index entry costs one extra cache
-//! lookup at login and then heals a settled row. Party partition projection uses only its ordered
-//! Realm revision and pending phase; a Transfer compare-and-set prevents an old worker from moving
-//! that state backward.
+//! and writes the corrected entry back (`gateway/src/realm_core.rs::locate_home_shard`, and the
+//! tests there). So a stale — or entirely absent, or maliciously wrong — index entry costs one extra
+//! cache lookup at login and then heals a settled row. Party partition projection uses only its
+//! ordered Realm revision and pending phase; a Transfer compare-and-set prevents an old worker from
+//! moving that state backward.
 
 use spacetimedb::{reducer, table, Identity, ReducerContext, Table};
 
@@ -364,14 +364,10 @@ fn next_shard_revision(current: Option<&CharacterShard>, map_id: u32, instance_i
 /// gateway-coordination reducer (`provision_account` / `establish_session`): the index is a routing
 /// input, so a client that could write it could redirect another player's login.
 ///
-/// Two callers, both on the gateway's realm-core handle: `world::transfer::run_transfer` publishes
-/// the settled destination here as a required step of every escrowed transfer (strictly
-/// after `finish_transfer` committed, so it can only ever name a destination the escrow reached),
-/// and `home_shard`'s login self-heal rewrites it whenever the fallback probe disagrees with what
-/// the index says. Only the FIRST of those runs in production today: the gateway's world-entry
-/// resolver is `settle_home_shard`, which overrides `home_shard` and scans the shards instead of
-/// consulting this table, so the index is currently written-but-never-read and its self-heal never
-/// fires. The instance-placement work is what changes that.
+/// The Gateway's one caller is the login self-heal in `realm_core::locate_home_shard`, which
+/// `settle_home_shard` runs at every world entry: it reads this index first, confirms the hint on
+/// the Shard it names, and rewrites the entry when the Shard that holds the Character disagrees.
+/// A Transfer settles its destination through `finish_character_shard_transfer` instead.
 #[reducer]
 pub fn set_character_shard(
     ctx: &ReducerContext,

@@ -3,7 +3,7 @@
 //! against hand-written candidates; this file covers what only a Store can exercise.
 //!
 //! What EXECUTES here is production `world::who`, against the same in-memory multi-database
-//! topology `party_tests::party_topology` builds, and a plain single-shard `InMemoryStore` for the
+//! topology `party_tests::party_topology` builds, and a plain single-shard `WorldFake` for the
 //! unsharded case.
 
 use super::party_tests::{character, party_topology};
@@ -85,9 +85,12 @@ fn fifty_matches_list_forty_nine_and_report_fifty() {
         .map(|i| character(100 + i, &format!("Who{i}")))
         .collect();
     let live_guids = characters.iter().map(|c| c.guid).collect();
-    let store = std::sync::Arc::new(InMemoryStore {
+    let store = std::sync::Arc::new(WorldFake {
         characters,
-        live_guids,
+        session: SessionState {
+            live_guids,
+            ..Default::default()
+        },
         ..Default::default()
     });
 
@@ -104,7 +107,7 @@ fn fifty_matches_list_forty_nine_and_report_fifty() {
 /// `world_stores()` fan-out, but the level-range rule still applies exactly as it would sharded.
 #[test]
 fn an_unsharded_gateway_answers_who_with_the_same_filters() {
-    let store = std::sync::Arc::new(InMemoryStore {
+    let store = std::sync::Arc::new(WorldFake {
         characters: vec![
             codec::CharacterView {
                 guid: 1,
@@ -123,7 +126,10 @@ fn an_unsharded_gateway_answers_who_with_the_same_filters() {
                 ..Default::default()
             },
         ],
-        live_guids: vec![1, 2],
+        session: SessionState {
+            live_guids: vec![1, 2],
+            ..Default::default()
+        },
         ..Default::default()
     });
     assert!(
@@ -146,7 +152,7 @@ fn an_unsharded_gateway_answers_who_with_the_same_filters() {
 /// zone the Fake was never told about stays blank and fails the match.
 #[test]
 fn a_search_string_matches_a_zone_name_the_store_resolves() {
-    let store = std::sync::Arc::new(InMemoryStore {
+    let store = std::sync::Arc::new(WorldFake {
         characters: vec![codec::CharacterView {
             guid: 1,
             name: "Ginger".into(),
@@ -156,8 +162,14 @@ fn a_search_string_matches_a_zone_name_the_store_resolves() {
             zone_id: 12,
             ..Default::default()
         }],
-        live_guids: vec![1],
-        zone_names: [(12, "Elwynn Forest".to_string())].into(),
+        session: SessionState {
+            live_guids: vec![1],
+            ..Default::default()
+        },
+        social: SocialState {
+            zone_names: [(12, "Elwynn Forest".to_string())].into(),
+            ..Default::default()
+        },
         ..Default::default()
     });
     let mut request = wide_open_who();
@@ -174,7 +186,7 @@ fn a_search_string_matches_a_zone_name_the_store_resolves() {
 
     // The same request against a Store that never learned the zone's name: the blank lookup must
     // fail the match rather than matching everything by accident.
-    let blank = std::sync::Arc::new(InMemoryStore {
+    let blank = std::sync::Arc::new(WorldFake {
         characters: vec![codec::CharacterView {
             guid: 1,
             name: "Ginger".into(),
@@ -184,7 +196,10 @@ fn a_search_string_matches_a_zone_name_the_store_resolves() {
             zone_id: 12,
             ..Default::default()
         }],
-        live_guids: vec![1],
+        session: SessionState {
+            live_guids: vec![1],
+            ..Default::default()
+        },
         ..Default::default()
     });
     let (_, body) = who::respond(blank.as_ref(), 1, &request)
@@ -195,4 +210,86 @@ fn a_search_string_matches_a_zone_name_the_store_resolves() {
         listed_players, 0,
         "a blank zone name must not match \"elwynn\""
     );
+}
+
+#[test]
+fn who_reply_lists_every_online_player_with_guild_level_and_zone() {
+    let mut s = quest_store();
+    s.guild.guild_memberships = vec![codec::GuildMemberView {
+        character_guid: 2,
+        guild_id: 7,
+        name: "Alpha".into(),
+        ..Default::default()
+    }];
+    s.guild.guilds = vec![codec::GuildView {
+        guild_id: 7,
+        name: "Boundary Test".into(),
+        ..Default::default()
+    }];
+    s.characters = vec![
+        // The requester. Human like Alpha/Bravo (so the team gate passes them), but a class
+        // outside the request's `class_mask` — the requester is not exempt from its own filters,
+        // so this keeps the assertions below at exactly the two matches.
+        codec::CharacterView {
+            guid: 1,
+            name: "Tester".into(),
+            race: 1,
+            class: 4,
+            level: 10,
+            zone_id: 12,
+            ..Default::default()
+        },
+        codec::CharacterView {
+            guid: 2,
+            name: "Alpha".into(),
+            race: 1,
+            class: 1,
+            level: 5,
+            zone_id: 12,
+            ..Default::default()
+        },
+        codec::CharacterView {
+            guid: 3,
+            name: "Bravo".into(),
+            race: 1,
+            class: 1,
+            level: 60,
+            zone_id: 12,
+            ..Default::default()
+        },
+    ];
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+    CMSG_WHO {
+        minimum_level: Level::new(1),
+        maximum_level: Level::new(60),
+        player_name: String::new(),
+        guild_name: String::new(),
+        race_mask: 1 << 1,  // Human
+        class_mask: 1 << 1, // Warrior
+        zones: Vec::new(),
+        search_strings: Vec::new(),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    // RAW-encoded (codec::build_who_response_raw): gtker's typed reader assumes the wrong 5875
+    // layout (see that builder's doc comment), so this reads the cmangos body by hand.
+    let (opcode, body) = read_raw_frame(&mut client, &mut c_dec);
+    assert_eq!(opcode, codec::social::SMSG_WHO_OPCODE);
+    let online_players = u32::from_le_bytes(body[4..8].try_into().unwrap());
+    assert_eq!(online_players, 2);
+    let mut rest = &body[8..];
+    for (name, guild, level) in [("Alpha", "Boundary Test", 5u32), ("Bravo", "", 60)] {
+        let name_end = rest.iter().position(|&b| b == 0).unwrap();
+        assert_eq!(std::str::from_utf8(&rest[..name_end]).unwrap(), name);
+        rest = &rest[name_end + 1..];
+        let guild_end = rest.iter().position(|&b| b == 0).unwrap();
+        assert_eq!(std::str::from_utf8(&rest[..guild_end]).unwrap(), guild);
+        rest = &rest[guild_end + 1..];
+        assert_eq!(u32::from_le_bytes(rest[0..4].try_into().unwrap()), level);
+        rest = &rest[16..]; // level, class, race, zone: u32 each
+    }
+    assert!(rest.is_empty(), "exactly two listed rows");
+    drop(client);
+    server.join().unwrap();
 }

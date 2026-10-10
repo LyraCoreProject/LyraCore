@@ -1004,7 +1004,7 @@ fn call_pipe_needs_repair(is_healthy: bool, already_reconnecting: bool) -> bool 
 /// before the module was republished never comes back, in a configuration (`LYRACORE_SHARD_MAP` and
 /// `LYRACORE_REALM_CORE` both unset) that multi-shard routing and realm-core both promise costs
 /// nothing. Nothing reads
-/// any of them on a single-database gateway anyway — `WorldStore::home_shard` short-circuits on
+/// any of them on a single-database gateway anyway — `settle_home_shard` short-circuits on
 /// `is_sharded()` before it looks at the index.
 fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
     let mut queries = vec![

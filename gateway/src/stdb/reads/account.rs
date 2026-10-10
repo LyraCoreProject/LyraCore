@@ -164,7 +164,7 @@ impl Coordinator {
     }
 
     /// The realm-core character→shard index entry for `guid`: the `(map_id, instance_id)` the realm
-    /// believes the character is at. A HINT — `config::resolve_home_shard` confirms it against
+    /// believes the character is at. A HINT — `realm_core::locate_home_shard` confirms it against
     /// the shard that actually holds the row before routing anything to it.
     pub fn character_shard(&self, guid: u64) -> Option<(u32, u64)> {
         self.0
@@ -461,7 +461,7 @@ impl Coordinator {
     }
 
     /// `owner_guid`'s friend guids and ignore guids for `CMSG_FRIEND_LIST`, per
-    /// [`crate::world::store::WorldStore::contact_lists`]. `owner_guid` is always the CALLING
+    /// [`crate::world::SocialStore::contact_lists`]. `owner_guid` is always the CALLING
     /// World Session's own guid, which is always live and registered right now, so this reads the
     /// guids off its Gateway-side `Viewer` — the friend and ignore sets `world_view`'s contact
     /// Relay already keeps current — instead of scanning `game_character_contact`. `None` Viewer
@@ -480,7 +480,7 @@ impl Coordinator {
     }
 
     /// `owner_guid`'s ignore guids from this Shard's [`ContactIndex`], realm-wide safe for ANY
-    /// owner, per [`crate::world::store::WorldStore::ignored_guids`]. Unlike `contact_lists`,
+    /// owner, per [`crate::world::SocialStore::ignored_guids`]. Unlike `contact_lists`,
     /// `owner_guid` here is a Character this Gateway process may never have a `Viewer` for at all (a
     /// whisper sender or a guild-invite target is usually a PEER, not the connected session), so
     /// this cannot route through one.

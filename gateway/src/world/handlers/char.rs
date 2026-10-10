@@ -5,6 +5,72 @@ use super::super::*;
 use super::quest::{quest_log_update, QuestActionStore};
 use super::vendor::build_buyback_view_replay;
 
+/// Character select, and the per-Character reads world entry builds the self CREATE from.
+pub(crate) trait CharacterStore: Send + Sync {
+    /// The account's characters for the character-select screen. In production this
+    /// reads the per-player `game_character` subscription (RLS-restricted to the owner).
+    fn characters(&self, account_id: u64) -> Result<Vec<codec::CharacterView>>;
+
+    /// Create a character for the account (`CMSG_CHAR_CREATE`). Returns the game outcome
+    /// (success / name-in-use / failed); `Err` only for an unrecoverable transport failure.
+    fn create_character(
+        &self,
+        account_id: u64,
+        name: &str,
+        race: u8,
+        class: u8,
+        gender: u8,
+        appearance: codec::Appearance,
+    ) -> Result<codec::CharCreateOutcome>;
+
+    /// Delete a character for the account (`CMSG_CHAR_DELETE`). Returns the game
+    /// outcome (success/failed); `Err` only for an unrecoverable transport failure. Ownership is
+    /// enforced module-side (the character must belong to `account_id`).
+    fn delete_character(
+        &self,
+        account_id: u64,
+        character_guid: u64,
+    ) -> Result<codec::CharDeleteOutcome>;
+
+    /// Look up a character by guid (any owner) to answer `CMSG_NAME_QUERY` — the queried guid is
+    /// usually a peer, so this is not account-scoped.
+    fn character_by_guid(&self, guid: u64) -> Result<Option<codec::CharacterView>>;
+
+    /// Does any World Shard hold this Character? `false` means every configured Shard was readable
+    /// and had no row. An incomplete, unhealthy, or changing Shard set must return `Err`.
+    fn character_exists_on_any_world_shard(&self, guid: u64) -> Result<bool>;
+
+    /// The character's learned skill lines as `(skill_line, current, max_rank)` — feeds the self
+    /// CREATE's SkillInfo block. Empty when no `game_player_skill` rows exist.
+    fn player_skills(&self, character_guid: u64) -> Result<Vec<(u32, u16, u16)>>;
+
+    /// The EFFECTIVE armor for `guid` (base + worn gear armor) for the self-login CREATE's
+    /// `UNIT_FIELD_RESISTANCES[0]` — so the character sheet shows real worn armor on relog. Auras aren't
+    /// folded here (they self-correct via the on_aura relay). Mirrors the module's combat `effective_armor`.
+    fn effective_armor(&self, guid: u64) -> u32;
+
+    fn effective_magic_resistances(&self, guid: u64) -> [u32; 6];
+
+    /// The character's active spell-modifier auras as raw (family_mask, op, amount, is_pct) rows —
+    /// the SMSG_SET_FLAT/PCT_SPELL_MODIFIER mirror source.
+    fn spell_modifiers(&self, character_guid: u64) -> Vec<(u32, u8, i32, bool)>;
+
+    /// The player's LEARNED spells (`game_player_spell`, beyond the class kit) — chained into the
+    /// login SMSG_INITIAL_SPELLS so a taught ability (e.g. Auto Shot) reaches the client spellbook.
+    fn player_learned_spells(&self, player_guid: u64) -> Result<Vec<u32>>;
+
+    /// The player's persisted reputation standings (`game_player_reputation`) as `(reputation_index,
+    /// standing)` pairs — folded into the login `SMSG_INITIALIZE_FACTIONS` so a relog shows
+    /// the real standing instead of the all-neutral stub.
+    fn player_reputations(&self, player_guid: u64) -> Result<Vec<(i32, i32, bool)>>;
+
+    /// The player's IMPORTED action-bar rows (`game_player_action`) as `(button,
+    /// action, action_type)` triples — empty pre-import (the common case today), in which case the
+    /// login codec falls back to synthesizing the bar from the spellbook (byte-identical to before
+    /// this method existed).
+    fn player_actions(&self, player_guid: u64) -> Result<Vec<(u8, u32, u8)>>;
+}
+
 /// Tell a client whose world-port cannot complete that it is off, so its loading screen ends with an
 /// error instead of never ending. Best-effort and infallible by design: it runs on
 /// a path that is already failing, and every one of its own failure modes (an unmapped destination
@@ -15,7 +81,7 @@ use super::vendor::build_buyback_view_replay;
 /// `world::teleport_player` wrote the destination into before it despawned the entity, i.e. the map
 /// the client is loading right now. `TransferAbortReason::NotFound` is the closest vanilla reason to
 /// "the shard that owns this instance would not take you"; the operator-facing detail is the log line.
-fn abort_pending_transfer<St: WorldStore + ?Sized>(
+fn abort_pending_transfer<St: TransferStore + ?Sized>(
     tx: &SessionTx,
     store: &St,
     character_guid: u64,
@@ -75,9 +141,9 @@ fn send_quest_log<St: QuestActionStore + ?Sized>(
 /// Rebuild the Character's entity and subscriptions, then send its entry batch.
 /// The bound Store retains Account ownership across a map change. Entry after a map change omits
 /// `SMSG_LOGIN_VERIFY_WORLD`, which would tell the client to load the map again.
-fn enter_world<St: WorldStore + ?Sized>(
+fn enter_world(
     tx: &SessionTx,
-    store: &St,
+    store: &dyn WorldStore,
     conn: &mut WorldConn,
     character_guid: u64,
     entry: codec::WorldEntry,
@@ -259,7 +325,9 @@ fn enter_world<St: WorldStore + ?Sized>(
 
 /// Char / world-entry family (§4/§5): character enum + creation (character-select), then enter world
 /// (`CMSG_PLAYER_LOGIN`) + graceful logout — the session-lifecycle opcodes.
-pub(crate) fn handle_char<St: WorldStore + ?Sized>(
+pub(crate) fn handle_char<
+    St: CharacterStore + GuildActionStore + SessionStore + TransferStore + ?Sized,
+>(
     tx: &SessionTx,
     store: &St,
     conn: &mut WorldConn,
@@ -346,22 +414,22 @@ pub(crate) fn handle_char<St: WorldStore + ?Sized>(
             let token = store.claim_session(conn.account_id, character_guid)?;
             conn.session_claim = Some(token);
             if let Some(bound) = store.bind_session(token)? {
-                conn.home = Some(bound);
+                conn.store.pin(bound);
             }
             // Multi-shard routing: pin this session to the shard that owns the character's
             // location BEFORE `player_login` runs, so the login reducer and viewer registration
             // land on the home shard — and so does every message after this one
-            // (`run_world_session` re-reads `conn.home` per frame).
-            // A single-entry shard map never pins anything → `enter_world` runs on `store`, as it
-            // always did.
-            conn.route_home(store, character_guid)?;
-            on_home_shard!(conn, store, |st| enter_world(
+            // (`run_world_session` reads `conn.store` per frame).
+            // A single-entry shard map never pins anything → `enter_world` runs on `store`.
+            conn.route_home(character_guid)?;
+            let home = conn.store.current();
+            enter_world(
                 tx,
-                st,
+                &*home,
                 conn,
                 character_guid,
-                codec::WorldEntry::FreshLogin
-            ))?;
+                codec::WorldEntry::FreshLogin,
+            )?;
         }
         // Cross-map teleport: the client's ack that it finished loading the map named
         // by our `SMSG_NEW_WORLD` (sent from the `on_teleport` relay when `teleport_player` despawned
@@ -387,7 +455,7 @@ pub(crate) fn handle_char<St: WorldStore + ?Sized>(
                 // despawns the entity until this ack; a live entity means no transfer is in
                 // flight and the ack is spurious — ignore it instead of re-entering the world.
                 // `store` is ALREADY the home-shard handle — the read loop routes every frame
-                // through `on_home_shard!` — so this reads the cache the entity actually lives in.
+                // through `conn.store` — so this reads the cache the entity actually lives in.
                 if store.entity_in_world(character_guid) {
                     log::debug!("world: spurious WORLDPORT_ACK ignored (guid {character_guid} still in world)");
                 } else {
@@ -416,15 +484,16 @@ pub(crate) fn handle_char<St: WorldStore + ?Sized>(
                     // the escrow is idempotent and the next login re-drives it from the same rows.
                     //
 
-                    let mut ported = conn.route_home(store, character_guid);
+                    let mut ported = conn.route_home(character_guid);
                     if ported.is_ok() {
-                        ported = on_home_shard!(conn, store, |st| enter_world(
+                        let home = conn.store.current();
+                        ported = enter_world(
                             tx,
-                            st,
+                            &*home,
                             conn,
                             character_guid,
-                            codec::WorldEntry::WorldPort
-                        ));
+                            codec::WorldEntry::WorldPort,
+                        );
                     }
                     if let Err(e) = ported {
                         abort_pending_transfer(tx, store, character_guid, &e);
@@ -459,7 +528,7 @@ pub(crate) fn handle_char<St: WorldStore + ?Sized>(
             // Leave the world: InWorld → CharSelect drops the relay subs; delete the entity only if
             // we still own it — a newer login on this account supersedes us, and deleting then would
             // vanish them. A `logout` failure here is session-fatal (propagated), as before.
-            conn.leave_world(store)?;
+            conn.leave_world()?;
         }
         // /played: read the durable total + the live session stamp off the
         // character row and fold them in `build_played_time` so an online player's total keeps

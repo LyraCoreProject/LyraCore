@@ -9,13 +9,19 @@ use super::*;
 fn alpha_test_tools_store(
     enabled: bool,
 ) -> (
-    std::sync::Arc<InMemoryStore>,
+    std::sync::Arc<WorldFake>,
     std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) {
     let authority = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(enabled));
-    let store = std::sync::Arc::new(InMemoryStore {
-        gm_alpha_test_tools: Some(authority.clone()),
-        ..quest_store()
+    let store = std::sync::Arc::new({
+        let base = quest_store();
+        WorldFake {
+            speech: SpeechState {
+                gm_alpha_test_tools: Some(authority.clone()),
+                ..base.speech
+            },
+            ..base
+        }
     });
     (store, authority)
 }
@@ -59,23 +65,23 @@ fn alpha_test_tools_dispatch_speed_and_tele_without_say_chat() {
     drop(client);
     server.join().unwrap();
     assert_eq!(
-        store.gm_commands.lock().unwrap().as_slice(),
+        store.speech.gm_commands.lock().unwrap().as_slice(),
         &[
             ("TESTER".to_string(), ".speed 3".to_string()),
             ("TESTER".to_string(), ".tele stormwind".to_string()),
         ]
     );
     assert_eq!(
-        store.gm_authority_results.lock().unwrap().as_slice(),
+        store.speech.gm_authority_results.lock().unwrap().as_slice(),
         &[true, true],
         "each command carries the Realm-core authority result"
     );
     assert_eq!(
-        store.gm_gameplay_changes.lock().unwrap().as_slice(),
+        store.speech.gm_gameplay_changes.lock().unwrap().as_slice(),
         &[".speed 3".to_string(), ".tele stormwind".to_string()]
     );
     assert!(
-        store.chats.lock().unwrap().is_empty(),
+        store.speech.chats.lock().unwrap().is_empty(),
         "dot-Say commands never create ordinary Say chat"
     );
 }
@@ -101,11 +107,11 @@ fn alpha_only_destructive_command_is_private_and_changes_nothing() {
     drop(client);
     server.join().unwrap();
     assert!(
-        store.gm_gameplay_changes.lock().unwrap().is_empty(),
+        store.speech.gm_gameplay_changes.lock().unwrap().is_empty(),
         "a refused command makes no Home Shard gameplay change"
     );
     assert!(
-        store.chats.lock().unwrap().is_empty(),
+        store.speech.chats.lock().unwrap().is_empty(),
         "a refusal never creates ordinary Say chat"
     );
 }
@@ -135,13 +141,13 @@ fn revocation_refuses_the_next_command_without_ending_the_world_session() {
     drop(client);
     server.join().unwrap();
     assert_eq!(
-        store.gm_authority_results.lock().unwrap().as_slice(),
+        store.speech.gm_authority_results.lock().unwrap().as_slice(),
         &[true, false]
     );
     assert_eq!(
-        store.gm_gameplay_changes.lock().unwrap().as_slice(),
+        store.speech.gm_gameplay_changes.lock().unwrap().as_slice(),
         &[".speed 3".to_string()],
         "revocation stops the next Home Shard gameplay change"
     );
-    assert!(store.chats.lock().unwrap().is_empty());
+    assert!(store.speech.chats.lock().unwrap().is_empty());
 }

@@ -28,10 +28,11 @@ mod member_stats_relay; // Member Stats for group mates outside the viewer's AOI
 mod movement_batch;
 mod reads;
 mod reducers;
+mod store; // one Store family adapter per file
 pub(crate) mod subscriptions;
 mod views;
 pub(crate) mod world_index;
-mod world_store; // impl WorldStore for Coordinator (replaces the former WorldCoordinatorStore newtype)
+mod world_store; // impl RealmDb for Coordinator
 pub(crate) mod world_view; // shared per-shard spatial, broadcast, private, and owner dispatch
 
 pub use connection::Coordinator;

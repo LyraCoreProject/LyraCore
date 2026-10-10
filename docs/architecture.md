@@ -577,7 +577,7 @@ This is the sharding model in full: the hierarchy, routing, and transfer.
 ### 6.2 Resolving "which database owns this position"
 
 ```
-world entry:  WorldStore::settle_home_shard   (gateway/src/stdb/world_store.rs)
+world entry:  ShardRoutingStore::settle_home_shard   (gateway/src/stdb/store/shard_routing.rs)
    1. realm-core's character→shard index — a HINT, confirmed against the shard that
       actually holds the row, self-healing on disagreement
    2. the (map_id, instance_id) shard map — shard_for, with instance-pool routing

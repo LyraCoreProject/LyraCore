@@ -100,7 +100,7 @@ impl ChannelActionStore for crate::stdb::Coordinator {
 /// names a Character resolves it realm-wide and requires it online, the same shape whisper's
 /// ONLINE gate uses (`whisper::run`). A channel can only name a Character presently reachable to
 /// notify.
-pub(crate) fn resolve_online_character<St: WorldStore + ?Sized>(
+pub(crate) fn resolve_online_character<St: ShardRoutingStore + SocialStore + ?Sized>(
     store: &St,
     name: &str,
 ) -> Result<Option<ResolvedTarget>> {

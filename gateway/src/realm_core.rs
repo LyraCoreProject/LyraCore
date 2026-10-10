@@ -4,7 +4,7 @@
 
 use anyhow::{anyhow, Result};
 
-use crate::config::{HomeShard, ShardMap};
+use crate::config::ShardMap;
 use crate::stdb::{AccountRow, RealmRow};
 use crate::world::WorldSession;
 
@@ -179,7 +179,7 @@ pub(crate) fn run_gm_command<D: RealmDb>(
 // ===============================================================================================
 
 /// The world handshake's account→K lookup, split across the two databases that own the two halves
-/// of the answer. The body of `impl WorldStore for Coordinator::lookup_session`.
+/// of the answer. The body of `SessionStore::lookup_session` for `Coordinator`.
 ///
 /// **K comes from realm-core**, which is the whole point of a realm-wide session table: the session
 /// key is realm state, not
@@ -240,79 +240,6 @@ pub(crate) fn lookup_session<D: RealmDb>(
 // ===============================================================================================
 //  The character→shard index
 // ===============================================================================================
-
-/// Resolve where `character_guid` lives, from the realm-core index plus a probe of the connected
-/// world shards, and repair the index when the two disagree. The first half of
-/// `impl WorldStore for Coordinator::home_shard`.
-///
-/// `None` means "this handle already owns it" — which is the only answer a single-database gateway
-/// can give, and it is given without a single read (the `is_sharded` short-circuit below is what
-/// makes "`LYRACORE_SHARD_MAP` unset ⇒ byte-identical to the pre-sharding gateway" literal on the login
-/// hot path).
-///
-/// **Still only reachable through `WorldStore::home_shard`, which `world::route_home` never calls**
-/// — `stdb::world_store` overrides it with `settle_home_shard`, so this exact function stays a test
-/// fixture in production. That no longer means the index goes unread, though:
-/// `settle_home_shard` has its OWN index-first lookup, [`locate_home_shard`], built on the same
-/// `RealmDb` trait and the same hint→probe→heal shape as this function, so the hint read and the
-/// self-heal write both run on the live world-entry path now — through the sibling, not through
-/// this one. This function remains the trait DEFAULT's resolver (every mock that does not override
-/// `settle_home_shard` still exercises it) and its own tests below.
-pub(crate) fn settle_shard_index<D: RealmDb>(db: &D, character_guid: u64) -> Option<HomeShard> {
-    // The single-shard short-circuit. With one database in the set the answer is unconditionally
-    // "you are already there", and this costs the login neither the index read, nor the
-    // `character_location` probe, nor an index write.
-    if !db.is_sharded() {
-        return None;
-    }
-    // Consult the realm-core character→shard index first, then confirm/repair it against the shard
-    // that actually holds the character. `realm_core()` failing (configured, not connected) costs
-    // us the hint, not the login — routing degrades to the probe, the pre-index behavior. Only the
-    // AUTH paths fail closed on a missing realm-core.
-    let index = db.realm_core().ok();
-    let hint = index
-        .as_ref()
-        .and_then(|rc| rc.character_shard(character_guid));
-    let shards = db.world_shards();
-    let names: Vec<String> = shards.iter().map(|(name, _)| name.clone()).collect();
-    let resolved = crate::config::resolve_home_shard(db.shard_map(), &names, hint, |want| {
-        shards
-            .iter()
-            .find(|(name, _)| name == want)
-            .and_then(|(_, handle)| handle.character_location(character_guid))
-    })?;
-    // The self-heal write-back. Best effort by design: a failed index write costs the NEXT login
-    // one extra probe and nothing else, so it must never fail a login that already routed fine.
-    if resolved.heal {
-        if let Some(rc) = &index {
-            if let Err(e) =
-                rc.set_character_shard(character_guid, resolved.location.0, resolved.location.1)
-            {
-                log::warn!(
-                    "character {character_guid}: could not heal the realm-core shard index to map \
-                     {}/instance {} ({e:#}) — routing is unaffected, the probe will run again",
-                    resolved.location.0,
-                    resolved.location.1
-                );
-            }
-        }
-    }
-    Some(resolved)
-}
-
-/// Replicate a settled destination into the Realm-core Character locator after source completion.
-/// The source receipt is transactional on its own database; Realm-core replication follows it.
-/// Recovery includes the observed predecessor and crossing identity in the compare-and-set
-/// so a delayed recovery cannot settle a later crossing to the same partition.
-pub(crate) fn publish_shard_index<D: RealmDb>(
-    db: &D,
-    character_guid: u64,
-    map_id: u32,
-    instance_id: u64,
-) -> Result<()> {
-    db.realm_core()?
-        .set_character_shard(character_guid, map_id, instance_id)
-}
 
 pub(crate) fn publish_bot_shard_index<D: RealmDb>(
     db: &D,
@@ -676,7 +603,7 @@ pub(crate) fn locate_home_shard<D: RealmDb>(db: &D, guid: u64) -> Option<D> {
 
 /// Write `guid`'s ACTUAL location (`shard`'s own `character_location`) back into the realm-core
 /// index when it disagrees with what the index currently holds — including "holds nothing yet".
-/// Best effort, mirroring `settle_shard_index`'s identical rule: a failed heal costs the next login
+/// Best effort: a failed heal costs the next login
 /// one extra probe and nothing else, so it must never fail a login that already routed fine.
 fn heal_shard_entry<D: RealmDb>(rc: &D, guid: u64, shard: &D) {
     let Some(actual) = shard.character_location(guid) else {
@@ -698,7 +625,7 @@ fn heal_shard_entry<D: RealmDb>(rc: &D, guid: u64, shard: &D) {
     // only), resolved owner == holder, and `settle_transfer` took its no-op branch — leaving the
     // source copy and its escrow stranded with no component left that would ever re-drive them.
     //
-    // The legitimate way this index moves to the destination is `publish_shard_index`, driven only
+    // The legitimate way this index moves to the destination is `finish_player_shard_index_transfer`, driven only
     // after `finish_transfer` returned Ok. This function only ever confirms where a character IS.
     //
     // Note: declining also covers the case where a shard genuinely holds a character whose map
@@ -1801,85 +1728,6 @@ mod tests {
         h
     }
 
-    #[test]
-    fn a_deliberately_stale_index_entry_still_routes_correctly_and_is_healed_in_place() {
-        let h = routed_realm();
-        // The index insists the character is in the open world on the default shard. It is not.
-        h.db_at(CORE)
-            .shard_index
-            .lock()
-            .unwrap()
-            .insert(100, (0, 0));
-
-        let resolved = settle_shard_index(&h, 100).expect("the probe finds the character");
-        assert_eq!(
-            (resolved.db.as_str(), resolved.location),
-            (INSTANCES, (36, 7)),
-            "a wrong hint must cost one extra probe, never a wrong route — the index is a HINT and \
-             the character's own row is the truth"
-        );
-        assert_eq!(
-            h.db_at(CORE).shard_index.lock().unwrap().get(&100).copied(),
-            Some((36, 7)),
-            "the stale entry was not healed. Without the write-back every login pays the full \
-             shard probe forever, and the index — the thing world entry and instance entry route on \
-            — never becomes \
-             true. This is the fallback that covers a gateway killed between `finish_transfer` and \
-             `publish_shard_index`, so it must keep working."
-        );
-    }
-
-    #[test]
-    fn an_absent_index_entry_is_written_the_first_time_the_probe_answers() {
-        let h = routed_realm();
-        assert!(settle_shard_index(&h, 100).is_some());
-        assert_eq!(
-            h.db_at(CORE).shard_index.lock().unwrap().get(&100).copied(),
-            Some((36, 7)),
-            "the index must be populated by the probe that had to run without it"
-        );
-    }
-
-    #[test]
-    fn a_correct_index_entry_is_not_rewritten() {
-        let h = routed_realm();
-        h.db_at(CORE)
-            .shard_index
-            .lock()
-            .unwrap()
-            .insert(100, (36, 7));
-        settle_shard_index(&h, 100).expect("resolves");
-        assert!(
-            !h.db_at(CORE).touched().iter().any(|c| c.starts_with("set_character_shard")),
-            "an index entry the probe agrees with must not be rewritten — a reducer round trip per \
-             login, forever, for a row that is already correct"
-        );
-    }
-
-    #[test]
-    fn a_single_database_gateway_resolves_the_home_shard_without_reading_anything() {
-        let h = realm(&[WORLD], "", None);
-        h.db_at(WORLD)
-            .characters
-            .lock()
-            .unwrap()
-            .insert(100, (1, (0, 0)));
-        assert_eq!(
-            settle_shard_index(&h, 100),
-            None,
-            "one database can only ever answer `stay put`"
-        );
-        assert!(
-            h.db_at(WORLD).touched().is_empty(),
-            "the `is_sharded` short-circuit is gone: an unconfigured gateway now pays an index \
-             read, a character-location probe and (because the index starts empty) a \
-             `set_character_shard` reducer round trip on EVERY login, to reach the one answer it \
-             could have given for free. `LYRACORE_SHARD_MAP` unset must be byte-identical to the \
-             pre-sharding gateway on the login hot path. Reads were: {:?}",
-            h.db_at(WORLD).touched()
-        );
-    }
-
     // -------------------------------------------------------------------------------------
     // `locate_home_shard`: `settle_home_shard`'s holder lookup, index-first
     // -------------------------------------------------------------------------------------
@@ -2061,9 +1909,7 @@ mod tests {
         assert_eq!(
             h.db_at(CORE).shard_index.lock().unwrap().get(&100).copied(),
             Some((36, 7)),
-            "the stale entry must be healed on THIS path — `settle_shard_index`'s identical rule \
-             does not run in production (it hangs off the unreachable `home_shard`); this is the \
-             function `settle_home_shard` actually calls"
+            "the stale entry must be healed on the path `settle_home_shard` calls"
         );
     }
 
@@ -2109,8 +1955,7 @@ mod tests {
         assert_eq!(
             found.shard_name(),
             INSTANCES,
-            "a dead realm-core must cost the hint, not the login — routing degrades to the scan, \
-             exactly like `settle_shard_index`"
+            "a dead realm-core must cost the hint, not the login — routing degrades to the scan"
         );
     }
 
@@ -2252,27 +2097,6 @@ mod tests {
         );
     }
 
-    // -------------------------------------------------------------------------------------
-    // The realm-core index write on transfer completion
-    // -------------------------------------------------------------------------------------
-
-    #[test]
-    fn publishing_a_settled_transfer_writes_the_realm_core_index_not_the_world_shards() {
-        let h = routed_realm();
-        publish_shard_index(&h, 100, 36, 7).expect("the publish lands");
-        assert_eq!(
-            h.db_at(CORE).shard_index.lock().unwrap().get(&100).copied(),
-            Some((36, 7)),
-            "the transfer's destination was not published to REALM-CORE — the only copy of the \
-             index `home_shard` reads. Writing it on the world handle instead lands it on a copy \
-             nothing consults."
-        );
-        assert!(
-            h.db_at(WORLD).shard_index.lock().unwrap().is_empty(),
-            "the publish must go to realm-core, not to whichever world handle drove the transfer"
-        );
-    }
-
     #[test]
     fn the_realm_fake_refuses_a_repair_during_transfer_and_keeps_both_views_coherent() {
         let h = realm(&[WORLD, CORE], "", Some(CORE));
@@ -2314,15 +2138,5 @@ mod tests {
         assert_eq!((partition.map_id, partition.instance_id), (0, 0));
         assert_eq!(partition.revision, 3);
         assert!(!partition.transfer_pending);
-    }
-
-    #[test]
-    fn publishing_the_index_fails_loudly_when_realm_core_is_unreachable() {
-        let h = realm_with_dead_core(&[WORLD, INSTANCES, CORE], "36:*=instances", CORE);
-        assert!(
-            publish_shard_index(&h, 100, 36, 7).is_err(),
-            "a publish that silently swallowed an unreachable realm-core would be exactly the \
-             best-effort, independently-committing write this replication exists to remove"
-        );
     }
 }

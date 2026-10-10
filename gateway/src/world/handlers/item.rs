@@ -237,7 +237,7 @@ pub(crate) fn dispatch_item_action<St: ItemActionStore + QuestActionStore + ?Siz
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use std::sync::Mutex;
     use wow_world_messages::vanilla::{
@@ -246,17 +246,17 @@ mod tests {
     };
 
     #[derive(Default)]
-    struct InMemoryItemActions {
-        equip_requests: Mutex<Vec<(u64, u64, u8)>>,
-        unequip_requests: Mutex<Vec<(u64, u64, u8)>>,
-        move_requests: Mutex<Vec<(u64, u64, u8, u8)>>,
-        use_requests: Mutex<Vec<(u64, u64, u8)>>,
-        equip_result: Option<Result<ItemActionResult, String>>,
-        unequip_result: Option<Result<ItemActionResult, String>>,
-        move_result: Option<Result<ItemActionResult, String>>,
-        use_result: Option<Result<ItemActionResult, String>>,
-        start_quest: Option<(u64, u32)>,
-        quest_detail: Option<codec::QuestDetailView>,
+    pub(crate) struct InMemoryItemActions {
+        pub(crate) equip_requests: Mutex<Vec<(u64, u64, u8)>>,
+        pub(crate) unequip_requests: Mutex<Vec<(u64, u64, u8)>>,
+        pub(crate) move_requests: Mutex<Vec<(u64, u64, u8, u8)>>,
+        pub(crate) use_requests: Mutex<Vec<(u64, u64, u8)>>,
+        pub(crate) equip_result: Option<Result<ItemActionResult, String>>,
+        pub(crate) unequip_result: Option<Result<ItemActionResult, String>>,
+        pub(crate) move_result: Option<Result<ItemActionResult, String>>,
+        pub(crate) use_result: Option<Result<ItemActionResult, String>>,
+        pub(crate) start_quest: Option<(u64, u32)>,
+        pub(crate) quest_detail: Option<codec::QuestDetailView>,
     }
 
     /// The Coordinator answers either a typed Refusal or a failure with an unknown durable outcome,

@@ -1,19 +1,7 @@
-//! `WorldStore`: the broad storage/coordination seam used by the world session. Deep protocol
-//! families may add focused supertraits such as [`AuctionActionStore`], [`ChannelActionStore`],
-//! [`ChatActionStore`],
-//! [`ItemActionStore`], [`MeetingStoneActionStore`], [`MeleeActionStore`], [`QuestActionStore`],
-//! [`TaxiActionStore`] and
-//! [`VendorActionStore`] so their wire mapping and failure policy can be tested without
-//! implementing this entire interface — a migrated family's operations live only on its own trait,
-//! never here. Kept as one broad trait for the remaining
-//! session operations (only two implementors); the section markers below are load-bearing
-//! navigation, not a split.
+//! `WorldStore`: the umbrella over every Store family a World Session reaches, plus the shard
+//! routing and session families. Each other family trait sits beside the handler that calls it, so
+//! a handler names only the families it needs and a family Fake implements only its own trait.
 
-use super::handlers::{
-    AuctionActionStore, CastStore, ChannelActionStore, ChatActionStore, DuelActionStore,
-    GuildActionStore, ItemActionStore, LootWindowStore, MeetingStoneActionStore, MeleeActionStore,
-    MemberStatsStore, QuestActionStore, TaxiActionStore, VendorActionStore, WeatherStore,
-};
 use super::*;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -23,15 +11,32 @@ pub struct WorldSessionToken {
     pub request_nonce: u128,
 }
 
+/// Every Store family a World Session reaches. The blanket impl below supplies it, so a Store
+/// implements the families and never this trait.
 pub trait WorldStore:
-    AuctionActionStore
+    ShardRoutingStore
+    + SessionStore
+    + CharacterStore
+    + TransferStore
+    + PartyStore
+    + LootWindowStore
+    + LootRollStore
+    + MailStore
+    + SocialStore
+    + NpcStore
+    + TrainerStore
+    + BankStore
+    + CombatStore
+    + DeathStore
+    + TradeStore
+    + AuctionActionStore
     + CastStore
     + ChannelActionStore
     + ChatActionStore
+    + SpeechStore
     + DuelActionStore
     + GuildActionStore
     + ItemActionStore
-    + LootWindowStore
     + MeetingStoneActionStore
     + MeleeActionStore
     + MemberStatsStore
@@ -42,629 +47,118 @@ pub trait WorldStore:
     + Send
     + Sync
 {
-    /// Look up the shared session key K (+ account id) for an (already uppercased) account
-    /// name. `None` when no live session exists for that account (reject the handshake).
-    fn lookup_session(&self, account_name: &str) -> Result<Option<WorldSession>>;
+}
 
-    /// Multi-shard routing: the handle for the shard that OWNS `character_guid`'s location,
-    /// resolved once per world entry and then used for EVERY player-scoped call and subscription of
-    /// that session (see `on_home_shard!`). `None` means "you are already on the right shard" —
-    /// which is what a single-entry shard map, and every mock, always answer, so the session keeps
-    /// the handle it was given and behaves byte-identically to the pre-sharding gateway.
-    fn home_shard(&self, _character_guid: u64) -> Option<std::sync::Arc<dyn WorldStore>> {
-        None
-    }
+impl<T> WorldStore for T where
+    T: ShardRoutingStore
+        + SessionStore
+        + CharacterStore
+        + TransferStore
+        + PartyStore
+        + LootWindowStore
+        + LootRollStore
+        + MailStore
+        + SocialStore
+        + NpcStore
+        + TrainerStore
+        + BankStore
+        + CombatStore
+        + DeathStore
+        + TradeStore
+        + AuctionActionStore
+        + CastStore
+        + ChannelActionStore
+        + ChatActionStore
+        + SpeechStore
+        + DuelActionStore
+        + GuildActionStore
+        + ItemActionStore
+        + MeetingStoneActionStore
+        + MeleeActionStore
+        + MemberStatsStore
+        + QuestActionStore
+        + TaxiActionStore
+        + VendorActionStore
+        + WeatherStore
+        + Send
+        + Sync
+{
+}
 
+/// Shard routing: the handle that serves a Character, a location, Realm-core or every World Shard.
+pub(crate) trait ShardRoutingStore: Send + Sync {
     /// The database this handle targets — routing identity, for logs and for the tests that assert
-    /// no call ever escapes the player's home shard. `""` for mocks that don't model shards.
-    fn shard_name(&self) -> &str {
-        ""
-    }
-
-    /// Undelivered private System Messages addressed to this character, oldest-first. A Package
-    /// `on_login` hook emits its message INSIDE `player_login`, before the session is in the
-    /// viewer registry, so the live insert relay has nobody to address — world entry replays what
-    /// is still parked in the shard cache. Defaults to none for mocks.
-    fn pending_system_messages(&self, _self_guid: u64) -> Vec<String> {
-        Vec::new()
-    }
-
-    // --- Cross-database transfer. Every one defaults to the single-database posture, so a
-    // --- store that does not shard (and every mock that does not exercise transfers) is unchanged.
+    /// no call ever escapes the player's home shard.
+    fn shard_name(&self) -> &str;
 
     /// Put `character_guid` on the shard that owns its location, running the escrowed transfer if
-    /// it is somewhere else, then answer the same question [`home_shard`](Self::home_shard) does.
+    /// it is somewhere else, then answer with that shard's handle, or `None` when this handle
+    /// already serves it.
     /// Called at every world entry; `Err` fails the login rather than letting a half-moved
     /// character into the world on either side.
     fn settle_home_shard(
         &self,
         character_guid: u64,
-    ) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
-        Ok(self.home_shard(character_guid))
-    }
+    ) -> Result<Option<std::sync::Arc<dyn WorldStore>>>;
 
     /// The handle for the shard the Shard Map gives `(map_id, instance_id)`, asked of the handle
     /// that currently HOLDS the character (so a live dungeon run stays on its pool member).
-    /// `None` = this handle already serves that location, which is what a single-database gateway —
-    /// and every mock — always answers.
+    /// `None` = this handle already serves that location, which is what a single-database gateway
+    /// always answers.
     ///
     /// [`settle_home_shard`](Self::settle_home_shard) asks the same question from the character's
     /// own row; this asks it about a location nobody is at yet, which is what a session-less
     /// crossing needs before it has anything to route from.
     fn shard_for_location(
         &self,
-        _map_id: u32,
-        _instance_id: u64,
-    ) -> Option<std::sync::Arc<dyn WorldStore>> {
-        None
-    }
-
-    /// The escrow row this shard holds for `character_guid`, if any — the transfer's identity, its
-    /// destination and the serialized character. `None` = not mid-transfer here.
-    fn escrowed_transfer(&self, _character_guid: u64) -> Option<EscrowedTransfer> {
-        None
-    }
-
-    /// Where this shard's durable row says the character is going (`world::teleport_player` wrote
-    /// the destination there before despawning the entity). `None` = this shard has no row for it.
-    fn character_destination(&self, _character_guid: u64) -> Option<TransferPlan> {
-        None
-    }
-
-    /// `begin_transfer` — freeze + serialize + delete the live entity, in one transaction.
-    fn begin_transfer(&self, _plan: &TransferPlan) -> Result<()> {
-        Err(anyhow!(
-            "this store does not implement cross-database transfers"
-        ))
-    }
-
-    /// Materialise the arrival copy from the carried blob. A session-less crossing binds its exact
-    /// source intent identity to the destination fence in the same transaction as the import.
-    fn import_character_blob(
-        &self,
-        _transfer_id: u64,
-        _blob: &[u8],
-        _source: transfer::RealmLocatorPredecessor,
-        _bot_arrival: Option<&transfer::BotTransferIntent>,
-    ) -> Result<()> {
-        Err(anyhow!(
-            "this store does not implement cross-database transfers"
-        ))
-    }
-
-    /// `confirm_import` — attest, on the SOURCE, that the destination copy is durable.
-    fn confirm_import(&self, _transfer_id: u64) -> Result<()> {
-        Err(anyhow!(
-            "this store does not implement cross-database transfers"
-        ))
-    }
-
-    /// `finish_transfer` — delete-last: destroy the source copy and clear the escrow.
-    fn finish_transfer(&self, _transfer_id: u64) -> Result<()> {
-        Err(anyhow!(
-            "this store does not implement cross-database transfers"
-        ))
-    }
-
-    /// `release_transfer` — drop a migrated blank arrival fence. New human and session-less
-    /// arrivals refuse because their exact crossing-specific reducer owns release.
-    fn release_transfer(&self, _transfer_id: u64) -> Result<()> {
-        Ok(())
-    }
-
-    /// Release one exact human arrival fence.
-    fn release_player_transfer_arrival(
-        &self,
-        _transfer_id: u64,
-        _character_guid: u64,
-        _source: transfer::RealmLocatorPredecessor,
-    ) -> Result<()> {
-        Err(anyhow!("this store does not host player Transfer arrivals"))
-    }
-
-    /// Exact destination fence identity used by the Realm locator recovery compare-and-set.
-    fn transfer_arrival(&self, _transfer_id: u64) -> Option<transfer::TransferArrival> {
-        None
-    }
-
-    /// Reconcile the arriving Character's authoritative party mirror before its destination fence
-    /// drops. A single-database store and a test store without realm-wide parties have no work.
-    fn sync_transfer_arrival(&self, _character_guid: u64) -> Result<()> {
-        Ok(())
-    }
-
-    /// Publish Realm's pending partition before the source is frozen.
-    fn sync_transfer_pending(&self, _character_guid: u64) -> Result<()> {
-        Ok(())
-    }
-
-    /// `set_character_shard` on the REALM-CORE handle — publish where a settled transfer put the
-    /// character. Called by `transfer::run_transfer` immediately after
-    /// `finish_transfer` commits, so it can only ever name a destination the escrow actually
-    /// reached; see `crate::realm_core::publish_shard_index` for why that is the strongest form of
-    /// "transactional" available across two databases.
-    ///
-    /// The default is a no-op so a store that does not shard is unchanged — the same posture as
-    /// every other transfer method. Production overrides it in `stdb::world_store`.
-    fn publish_shard_index(
-        &self,
-        _character_guid: u64,
-        _map_id: u32,
-        _instance_id: u64,
-    ) -> Result<()> {
-        Ok(())
-    }
-
-    /// Record Realm-core's pending phase before the source is frozen and return its predecessor
-    /// locator revision. Single-database stores have no remote phase.
-    fn begin_shard_index_transfer(
-        &self,
-        _plan: &transfer::TransferPlan,
-        bot_intent: Option<(&transfer::BotTransferIntent, u64)>,
-    ) -> Result<party::RealmCharacterPartition> {
-        Ok(party::RealmCharacterPartition {
-            map_id: 0,
-            instance_id: 0,
-            revision: bot_intent.map_or(1, |(intent, _)| intent.source_locator_revision.max(1)),
-            transfer_pending: true,
-            pending_destination_map: _plan.dest_map_id,
-            pending_destination_instance: _plan.dest_instance_id,
-            bot_source_identity: bot_intent
-                .map_or(spacetimedb_sdk::Identity::ZERO, |(intent, _)| {
-                    intent.source_module_identity
-                }),
-            bot_transfer_intent_id: bot_intent.map_or(0, |(intent, _)| intent.id),
-            bot_controller_generation: bot_intent
-                .map_or(0, |(intent, _)| intent.controller_generation),
-        })
-    }
-
-    /// Settle a player crossing against the predecessor returned by
-    /// [`begin_shard_index_transfer`](Self::begin_shard_index_transfer).
-    fn finish_player_shard_index_transfer(
-        &self,
-        plan: &transfer::TransferPlan,
-        _source_map: u32,
-        _source_instance: u64,
-        _source_revision: u64,
-    ) -> Result<()> {
-        self.publish_shard_index(plan.character_guid, plan.dest_map_id, plan.dest_instance_id)
-    }
-
-    /// Resume a Realm pending phase from the destination Character after source finish.
-    fn finish_pending_shard_index_transfer(
-        &self,
-        _character_guid: u64,
-        _destination_map: u32,
-        _destination_instance: u64,
-        _arrival: &transfer::TransferArrival,
-    ) -> Result<()> {
-        Ok(())
-    }
-
-    /// Bind this claimed intent to the Realm locator it is about to move from.
-    fn bind_bot_transfer_locator(
-        &self,
-        _intent: &transfer::BotTransferIntent,
-        _source_revision: u64,
-        _claim_token: u64,
-    ) -> Result<()> {
-        Err(anyhow!("this store does not bind bot Transfer locators"))
-    }
-
-    /// Compare-and-set Realm-core's locator for one exact session-less crossing.
-    fn publish_bot_shard_index(&self, intent: &transfer::BotTransferIntent) -> Result<()> {
-        self.publish_shard_index(
-            intent.bot_guid,
-            intent.destination_map,
-            intent.destination_instance,
-        )
-    }
-
-    /// The source-side lease for a named instance: its map and owning party. Portal admission
-    /// creates this before a cross-Shard Transfer, so it remains the authority if party membership
-    /// changes while the Character is in Escrow.
-    fn instance_partition(&self, _instance_id: u64) -> Option<(u32, u64)> {
-        None
-    }
-
-    /// `ensure_instance` — mirror an instance id onto this shard, spawning its population once.
-    fn ensure_instance(&self, _instance_id: u64, _map_id: u32, _party_id: u64) -> Result<()> {
-        Err(anyhow!(
-            "this store does not implement cross-database transfers"
-        ))
-    }
-
-    /// `evict_instance_population` — drop an instance's population here, keeping the lease row.
-    fn evict_instance_population(&self, _instance_id: u64) -> Result<()> {
-        Err(anyhow!(
-            "this store does not implement cross-database transfers"
-        ))
-    }
+        map_id: u32,
+        instance_id: u64,
+    ) -> Option<std::sync::Arc<dyn WorldStore>>;
 
     /// Bind this shard's per-player connection identity to the account (`establish_session`), so
     /// `player_login` can resolve the caller here. A no-op on the realm shard, where the logon tier
     /// already did it. Called at world entry whenever the session's home shard is not the realm.
-    fn bind_shard_session(&self, _account_id: u64, _session_key: &[u8; 40]) -> Result<()> {
-        Ok(())
-    }
-
-    // --- Realm-wide party state (the realm-core group slice). Every one defaults to the single-database
-    // --- posture, so an unsharded store — and every mock that does not model a realm — is
-    // --- unchanged: `realm_store()` answering `None` is what routes every party op back onto the
-    // --- player's own shard through the pre-realm-core reducers.
+    fn bind_shard_session(&self, account_id: u64, session_key: &[u8; 40]) -> Result<()>;
 
     /// The **realm-core** handle: the database that owns party membership realm-wide.
     ///
     /// `None` is not "no realm-core configured" — it is "this gateway runs against ONE database", in
     /// which case that database already is the authority and there is nothing to route. `world::party`
     /// branches on exactly this, so the single-database path never reads a row it did not read before.
-    fn realm_store(&self) -> Option<std::sync::Arc<dyn WorldStore>> {
-        None
-    }
+    fn realm_store(&self) -> Option<std::sync::Arc<dyn WorldStore>>;
 
     /// Realm-core for deleted Character cleanup. An unavailable configured Realm-core is an
     /// infrastructure failure and cannot fall back to a World Shard.
-    fn party_cleanup_realm(&self) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
-        Ok(self.realm_store())
-    }
+    fn party_cleanup_realm(&self) -> Result<Option<std::sync::Arc<dyn WorldStore>>>;
 
     /// Realm-core for companion command authority. Configured outages fail closed.
-    fn party_command_realm(&self) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
-        Ok(self.realm_store())
-    }
+    fn party_command_realm(&self) -> Result<Option<std::sync::Arc<dyn WorldStore>>>;
 
     /// Realm-core for Transfer locator authority. Only an unsharded Realm uses the local Store;
     /// an unavailable configured Realm-core is an infrastructure failure.
-    fn transfer_realm(&self) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
-        Ok(self.realm_store())
-    }
+    fn transfer_realm(&self) -> Result<Option<std::sync::Arc<dyn WorldStore>>>;
 
     /// Every connected WORLD shard's handle (realm-core excluded — it owns no gameplay reads). The
     /// fan-out set for the roster mirror; empty on a single-database gateway, which is what makes the
     /// mirror push a no-op there.
-    fn world_stores(&self) -> Vec<std::sync::Arc<dyn WorldStore>> {
-        Vec::new()
-    }
+    fn world_stores(&self) -> Vec<std::sync::Arc<dyn WorldStore>>;
 
     /// Every configured World Shard for command receipt and holder admission. Missing or unhealthy
     /// members are an infrastructure error because absence cannot be certified on a partial set.
-    fn party_command_worlds(&self) -> Result<Vec<std::sync::Arc<dyn WorldStore>>> {
-        Ok(self.world_stores())
-    }
+    fn party_command_worlds(&self) -> Result<Vec<std::sync::Arc<dyn WorldStore>>>;
+}
 
-    /// Admit and claim one Group Intent against current World Shard state. Refusals include a
-    /// consumed intent or suppressed action. Transport failures remain distinct.
-    fn claim_bot_invite_intent(&self, intent_id: u64) -> Result<party::PartyOutcome>;
+/// The World Session lifecycle: handshake lookup, Account Claim, world entry, movement and logout reads.
+pub(crate) trait SessionStore: Send + Sync {
+    /// Look up the shared session key K (+ account id) for an (already uppercased) account
+    /// name. `None` when no live session exists for that account (reject the handshake).
+    fn lookup_session(&self, account_name: &str) -> Result<Option<WorldSession>>;
 
-    fn claim_party_command_intent(&self, _intent_id: u64, _claim_token: u64) -> Result<()> {
-        Err(anyhow!(
-            "this store does not host companion command intents"
-        ))
-    }
-
-    fn admit_party_command_authority(
-        &self,
-        _group_id: u64,
-        _leader_guid: u64,
-        _bot_guid: u64,
-        _authority_member_guid: u64,
-        _expected_members: Vec<u64>,
-    ) -> Result<party::CompanionCommandOutcome> {
-        Err(anyhow!(
-            "this store does not host realm-wide party authority"
-        ))
-    }
-
-    fn apply_admitted_party_command(
-        &self,
-        _command: &party::AdmittedCompanionCommand,
-    ) -> Result<party::CompanionCommandOutcome> {
-        Err(anyhow!(
-            "this store does not host companion command application"
-        ))
-    }
-
-    fn finish_party_command_intent(
-        &self,
-        _intent_id: u64,
-        _claim_token: u64,
-        _outcome: party::CompanionCommandOutcome,
-    ) -> Result<()> {
-        Err(anyhow!(
-            "this store does not host companion command intents"
-        ))
-    }
-
-    fn confirm_party_command_receipt(
-        &self,
-        _source_identity: spacetimedb_sdk::Identity,
-        _intent_id: u64,
-    ) -> Result<Option<party::CompanionCommandOutcome>> {
-        Ok(None)
-    }
-
-    fn confirm_party_command_holder(&self, _bot_guid: u64) -> Result<party::PartyCommandHolder> {
-        Err(anyhow!(
-            "this store does not host companion command targets"
-        ))
-    }
-
-    fn entity_partition(&self, _guid: u64) -> Option<(u32, u64)> {
-        None
-    }
-
-    /// Persist the exact claimed intent's destination-ready witness before release.
-    fn mark_bot_transfer_arrival_ready(
-        &self,
-        _intent_id: u64,
-        _bot_guid: u64,
-        _controller_generation: u64,
-        _claim_token: u64,
-    ) -> Result<()> {
-        Err(anyhow!("this store does not host Transfer Intents"))
-    }
-
-    /// Whether the current destination fence belongs to this exact source intent.
-    fn bot_transfer_arrival_matches(
-        &self,
-        _transfer_id: u64,
-        _intent: &transfer::BotTransferIntent,
-    ) -> bool {
-        false
-    }
-
-    /// Release only the destination fence identified by this intent. A newer fence is untouched.
-    fn release_bot_transfer_arrival(
-        &self,
-        _transfer_id: u64,
-        _intent: &transfer::BotTransferIntent,
-    ) -> Result<()> {
-        Err(anyhow!("this store does not host bot Transfer arrivals"))
-    }
-
-    /// Acknowledged World Shard admission for one automatic group action. A later controller
-    /// selection cannot undo admission or membership already committed on Realm-core.
-    fn admit_sessionless_group_action(&self, character_guid: u64) -> Result<party::PartyOutcome>;
-
-    /// `realm_group_op` — run one party op against the database this handle names: realm-core
-    /// when sharded, the only shard otherwise. The op byte and argument slots are
-    /// `lyracore_shared::group::realm_op`.
-    fn realm_group_op(
-        &self,
-        _op: u8,
-        _actor_guid: u64,
-        _target_guid: u64,
-        _arg_a: u8,
-        _arg_b: u8,
-        _arg_c: u64,
-    ) -> Result<party::PartyOutcome> {
-        Err(anyhow!("this store does not host realm-wide party state"))
-    }
-
-    /// [`Self::realm_group_op`] that returns only after this handle's Coordinator cache holds the
-    /// commit, so a roster read right after it sees the op. It waits on the Coordinator pump, so its
-    /// caller must run on another thread. Fakes may reuse the ordinary op.
-    fn realm_group_op_visible(
-        &self,
-        op: u8,
-        actor_guid: u64,
-        target_guid: u64,
-        arg_a: u8,
-        arg_b: u8,
-        arg_c: u64,
-    ) -> Result<party::PartyOutcome> {
-        self.realm_group_op(op, actor_guid, target_guid, arg_a, arg_b, arg_c)
-    }
-
-    /// Realm-core LEAVE for a deleted Character. Production returns after its Coordinator cache
-    /// has the committed roster; Fakes may reuse the ordinary party operation.
-    fn deleted_character_party_leave(&self, character_guid: u64) -> Result<party::PartyOutcome> {
-        self.realm_group_op(
-            lyracore_shared::group::realm_op::LEAVE,
-            character_guid,
-            0,
-            lyracore_shared::group::leave_cause::CHARACTER_DELETED,
-            0,
-            0,
-        )
-    }
-
-    /// The party `character_guid` is in, as THIS handle's database sees it: authoritative on
-    /// realm-core, a mirror on a world shard. `None` = not in a party there.
-    fn group_roster(&self, _character_guid: u64) -> Result<Option<party::GroupRoster>> {
-        Ok(None)
-    }
-
-    /// Bounded party projection used by companion-command authority. A roster longer than a Raid,
-    /// or an otherwise unreadable projection, is an infrastructure failure, never proof of
-    /// membership.
-    fn party_command_group_roster(
-        &self,
-        character_guid: u64,
-    ) -> Result<Option<party::GroupRoster>> {
-        let roster = self.group_roster(character_guid)?;
-        if roster
-            .as_ref()
-            .is_some_and(|roster| roster.members.len() > lyracore_shared::group::RAID_MAX_MEMBERS)
-        {
-            anyhow::bail!("party command roster exceeds the member limit");
-        }
-        Ok(roster)
-    }
-
-    /// [`group_roster`](Self::group_roster) keyed by the group — the read the mirror push needs for a
-    /// party the acting character has just left.
-    fn group_roster_by_id(&self, _group_id: u64) -> Result<Option<party::GroupRoster>> {
-        Ok(None)
-    }
-
-    /// Realm-core's durable order for a complete party roster, including a disbanded party.
-    fn group_roster_revision(&self, _group_id: u64) -> Result<u64> {
-        Ok(1)
-    }
-
-    /// The Roster Revision this database holds for one party, or `None` when it holds no row. On a
-    /// World Shard it is the mirror's revision, kept after a disband; on Realm-core it is the
-    /// authoritative one.
-    fn held_roster_revision(&self, _group_id: u64) -> Result<Option<u64>> {
-        Ok(None)
-    }
-
-    /// Realm-core's ordered locator for one Character. World Shards never supply this fact.
-    fn realm_character_partition(
-        &self,
-        _character_guid: u64,
-    ) -> Result<Option<party::RealmCharacterPartition>> {
-        Ok(None)
-    }
-
-    fn party_holder_observation(
-        &self,
-        character_guid: u64,
-        map_id: u32,
-        instance_id: u64,
-    ) -> Result<party::PartyHolderObservation> {
-        Ok(party::PartyHolderObservation {
-            serves_locator: self.shard_for_location(map_id, instance_id).is_none(),
-            has_escrow: self.escrowed_transfer(character_guid).is_some(),
-            character_partition: self
-                .character_destination(character_guid)
-                .map(|character| (character.dest_map_id, character.dest_instance_id)),
-        })
-    }
-
-    fn party_cleanup_group_roster_by_id(
-        &self,
-        group_id: u64,
-    ) -> Result<Option<party::GroupRoster>> {
-        self.group_roster_by_id(group_id)
-    }
-
-    /// Every Character with authoritative Realm-core party membership.
-    fn party_member_guids(&self) -> Result<Vec<u64>> {
-        Ok(Vec::new())
-    }
-
-    /// Every party id held by this store. Realm-core rows are authoritative; World Shard rows are
-    /// mirrors that reconnect reconciliation must also inspect for stale parties.
-    fn party_group_ids(&self) -> Result<Vec<u64>> {
-        Ok(Vec::new())
-    }
-
-    /// `sync_group_mirror` — replace this shard's mirror of one party with realm-core's roster.
-    /// An empty `roster.members` is the disband tombstone.
-    fn sync_group_mirror(&self, _roster: &party::GroupRoster) -> Result<()> {
-        Ok(())
-    }
-
-    // --- Realm-wide loot rolls. Every one defaults to the single-database posture, so an
-    // --- unsharded store — and every mock that does not model a realm — is unchanged: `realm_store()`
-    // --- answering `None` is what routes `CMSG_LOOT_ROLL` back onto the player's own shard through
-    // --- the original `loot_roll` reducer, and leaves the relay (`loot::relay_tick`) with nothing to do.
-
-    // Mirrors the `realm_loot_op` REDUCER's parameter list 1:1 — this trait is the seam between them, so the shapes have to match.
-    #[allow(clippy::too_many_arguments)]
-    /// `realm_loot_op` — run one loot-roll op against the database THIS handle names. Called on
-    /// the **realm-core** handle: START promotes a world shard's staging roll, VOTE casts a vote.
-    fn realm_loot_op(
-        &self,
-        _op: u8,
-        _corpse_guid: u64,
-        _slot: u8,
-        _item_entry: u32,
-        _actor_guid: u64,
-        _vote: u8,
-        _deadline_micros: i64,
-        _recipients: Vec<u64>,
-        _random_property_id: u32,
-        _promotion_source: spacetimedb_sdk::Identity,
-        _source_roll_id: u64,
-    ) -> Result<()> {
-        Err(anyhow!("this store does not host realm-wide loot rolls"))
-    }
-
-    /// Cast one player vote on realm-core. The Store returns a typed gameplay answer while keeping
-    /// failures with an unknown durable result as `Err`.
-    fn realm_loot_vote(
-        &self,
-        corpse_guid: u64,
-        slot: u8,
-        actor_guid: u64,
-        vote: u8,
-    ) -> Result<LootActionStatus> {
-        self.realm_loot_op(
-            lyracore_shared::loot_roll::loot_op::VOTE,
-            corpse_guid,
-            slot,
-            0,
-            actor_guid,
-            vote,
-            0,
-            Vec::new(),
-            0,
-            spacetimedb_sdk::Identity::ZERO,
-            0,
-        )?;
-        Ok(LootActionStatus::Applied)
-    }
-
-    /// Every UNRESOLVED loot roll this WORLD SHARD has created but not yet had promoted onto
-    /// realm-core — the relay's promotion queue. Empty by default, which is what makes the
-    /// relay a no-op on an unsharded store and on realm-core's own handle (nothing is ever created
-    /// there directly — only `realm_loot_op`'s START arm writes it, and that is not this method).
-    fn pending_local_rolls(&self) -> Result<Vec<loot::PendingLootRoll>> {
-        Ok(Vec::new())
-    }
-
-    /// `settle_loot_roll` — grant a resolved roll's item on THIS world shard, if it holds the
-    /// matching corpse row. A no-op default so an unsharded store, and every shard that does
-    /// not hold the corpse, are unaffected; the module's own `withheld` guard is what makes a
-    /// wrong-shard call harmless in production too.
-    fn settle_loot_roll(&self, _corpse_guid: u64, _slot: u8, _winner_guid: u64) -> Result<()> {
-        Ok(())
-    }
-
-    /// `clear_promoted_loot_roll` — delete a staging roll's rows on THIS world shard, once the relay
-    /// has promoted it onto realm-core. A no-op default, matching `sync_group_mirror`'s shape.
-    fn clear_promoted_loot_roll(&self, _roll_id: u64) -> Result<()> {
-        Ok(())
-    }
-
-    // Same shape as `Coordinator::loot_won_since` (watermark + `(corpse, slot, winner)` triples) — the trait mirrors the read it fronts.
-    #[allow(clippy::type_complexity)]
-    /// Every `ROLL_WON` `game_group_event` row realm-core has pushed with an id greater than
-    /// `after_id` — `(corpse_guid, slot, winner_guid)` triples, plus the new high-water mark to
-    /// poll from next. Called on the **realm-core** handle. `(after_id, [])` by default, so the relay
-    /// never advances its watermark and never settles anything on an unsharded/mock store.
-    fn loot_won_since(&self, after_id: u64) -> Result<(u64, Vec<(u64, u8, u64)>)> {
-        Ok((after_id, Vec::new()))
-    }
-
-    /// The account's characters for the character-select screen. In production this
-    /// reads the per-player `game_character` subscription (RLS-restricted to the owner).
-    fn characters(&self, account_id: u64) -> Result<Vec<codec::CharacterView>>;
-
-    /// Create a character for the account (`CMSG_CHAR_CREATE`). Returns the game outcome
-    /// (success / name-in-use / failed); `Err` only for an unrecoverable transport failure.
-    fn create_character(
-        &self,
-        account_id: u64,
-        name: &str,
-        race: u8,
-        class: u8,
-        gender: u8,
-        appearance: codec::Appearance,
-    ) -> Result<codec::CharCreateOutcome>;
-
-    /// Delete a character for the account (`CMSG_CHAR_DELETE`). Returns the game
-    /// outcome (success/failed); `Err` only for an unrecoverable transport failure. Ownership is
-    /// enforced module-side (the character must belong to `account_id`).
-    fn delete_character(
-        &self,
-        account_id: u64,
-        character_guid: u64,
-    ) -> Result<codec::CharDeleteOutcome>;
+    /// Undelivered private System Messages addressed to this character, oldest-first. A Package
+    /// `on_login` hook emits its message INSIDE `player_login`, before the session is in the
+    /// viewer registry, so the live insert relay has nobody to address — world entry replays what
+    /// is still parked in the shard cache.
+    fn pending_system_messages(&self, self_guid: u64) -> Vec<String>;
 
     /// Enter the world with `character_guid`: calls the `player_login` reducer and
     /// returns the live entity to spawn (from the resulting `game_world_entity` row). Errors if
@@ -705,50 +199,6 @@ pub trait WorldStore:
         tx: SessionTx,
     ) -> Result<PlayerSubscriptions>;
 
-    /// Look up a character by guid (any owner) to answer `CMSG_NAME_QUERY` — the queried guid is
-    /// usually a peer, so this is not account-scoped.
-    fn character_by_guid(&self, guid: u64) -> Result<Option<codec::CharacterView>>;
-
-    /// Does any World Shard hold this Character? `false` means every configured Shard was readable
-    /// and had no row. An incomplete, unhealthy, or changing Shard set must return `Err`.
-    fn character_exists_on_any_world_shard(&self, guid: u64) -> Result<bool> {
-        if self.character_by_guid(guid)?.is_some() {
-            return Ok(true);
-        }
-        for shard in self.world_stores() {
-            if shard.character_by_guid(guid)?.is_some() {
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    }
-
-    /// Look up a creature template by entry to answer `CMSG_CREATURE_QUERY` (Tier 2 / NPCs).
-    fn creature_template(&self, entry: u32) -> Result<Option<codec::CreatureView>>;
-
-    /// Resolve the public name of a live pet for an in-world requester.
-    fn pet_name(
-        &self,
-        _requester_guid: u64,
-        _pet_number: u32,
-        _pet_guid: u64,
-    ) -> Result<Option<codec::PetNameView>> {
-        Ok(None)
-    }
-
-    /// Look up a gameobject template by entry to answer `CMSG_GAMEOBJECT_QUERY`.
-    fn gameobject_template(&self, entry: u32) -> Result<Option<codec::GameObjectTemplateView>>;
-
-    /// The `type_id` of a spawned GameObject by its live guid. `CMSG_GAMEOBJ_USE` sends questgivers
-    /// to the quest window, chests to the loot-window lifecycle, and every other type to the general
-    /// use path. Production overrides the default with the spawned-object read.
-    fn gameobject_type(&self, _go_guid: u64) -> Result<Option<u8>> {
-        Ok(None)
-    }
-
-    /// Enter an area trigger (`CMSG_AREATRIGGER`): credit any active "explore" quest tied to it.
-    fn enter_areatrigger(&self, account_id: u64, self_guid: u64, trigger_id: u32) -> Result<()>;
-
     /// Forward a parsed addon-bridge command to the module's `client_command` reducer ON
     /// THE PLAYER'S CONNECTION — the handler runs with exactly the player's reducer authority.
     fn client_command(
@@ -759,158 +209,6 @@ pub trait WorldStore:
         payload: String,
     ) -> Result<()>;
 
-    /// The character's learned skill lines as `(skill_line, current, max_rank)` — feeds the self
-    /// CREATE's SkillInfo block. Empty when no `game_player_skill` rows exist.
-    fn player_skills(&self, character_guid: u64) -> Result<Vec<(u32, u16, u16)>>;
-
-    /// The EFFECTIVE armor for `guid` (base + worn gear armor) for the self-login CREATE's
-    /// `UNIT_FIELD_RESISTANCES[0]` — so the character sheet shows real worn armor on relog. Auras aren't
-    /// folded here (they self-correct via the on_aura relay). Mirrors the module's combat `effective_armor`.
-    fn effective_armor(&self, guid: u64) -> u32;
-
-    fn effective_magic_resistances(&self, _guid: u64) -> [u32; 6] {
-        [0; 6]
-    }
-
-    /// Standing-derived reaction gate: does this NPC refuse `player_guid` its
-    /// interaction WINDOW? Rep-bar factions refuse at Unfriendly-or-below standing; bar-less
-    /// factions fall back to the FactionTemplate hostility masks. Fail-open on missing data.
-    /// Gossip, trainer and banker ask here; the migrated families ask the same read through their
-    /// own traits (`QuestActionStore::giver_refuses_interaction`,
-    /// `VendorActionStore::vendor_refuses_interaction`).
-    fn npc_refuses_interaction(&self, npc_guid: u64, player_guid: u64) -> Result<bool>;
-
-    /// Does this trainer serve `player_guid`'s class? Gates the window and the "train" gossip
-    /// option through the same predicate the module buys with. Fail-open on missing data.
-    fn trainer_serves(&self, player_guid: u64, trainer_guid: u64) -> Result<bool>;
-
-    /// The spells a class trainer (`trainer_guid`) teaches, each pre-folded with the player's level +
-    /// known-state for the `SMSG_TRAINER_LIST` Green/Red/Gray rendering (`CMSG_TRAINER_LIST`).
-    fn trainer_list(
-        &self,
-        player_guid: u64,
-        trainer_guid: u64,
-    ) -> Result<Vec<codec::TrainerSpellView>>;
-
-    /// Buy/learn `spell_id` from trainer `trainer_guid` (`CMSG_TRAINER_BUY_SPELL`). The module gates it
-    /// (range / level / cost / not-already-known) and a Refusal comes back as an outcome; `Err` means
-    /// the durable result is unknown.
-    fn buy_trainer_spell(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        trainer_guid: u64,
-        spell_id: u32,
-    ) -> Result<TrainerBuyOutcome>;
-
-    /// The skill line a trainer offering teaches (`game_trainer_spell.learn_skill_line`), or 0 for an
-    /// ordinary spell offering. The buy path reads it to tell a SKILL purchase from a SPELL purchase:
-    /// a riding offering's id is a marker with no Spell.dbc row, so echoing it as a learned spell would
-    /// push the client something it cannot resolve. 0 on any missing read (fail toward the spell echo,
-    /// which is the pre-existing behaviour).
-    fn trainer_offer_skill_line(&self, trainer_guid: u64, spell_id: u32) -> u32;
-
-    /// Return the `grant_spell_id` for `talent_id` (0 = passive, no ability granted), so the gateway
-    /// can push `SMSG_LEARNED_SPELL` for ability talents after a successful `learn_talent`.
-    fn talent_grant_spell(&self, talent_id: u32) -> u32;
-
-    /// Persist one action-bar button (`CMSG_SET_ACTION_BUTTON`); action 0 clears the slot.
-    fn set_action_button(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        button: u8,
-        action: u32,
-        action_type: u8,
-    ) -> Result<()>;
-
-    /// Persist the rep pane's At-War checkbox (`CMSG_SET_FACTION_ATWAR`).
-    /// `reputation_index` is the client's 0..63 rep-array slot, NOT a faction id.
-    fn set_faction_at_war(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        reputation_index: u32,
-        at_war: bool,
-    ) -> Result<()>;
-
-    /// Talent-pane sync after a successful `learn_talent`: `(teach_spell, superseded_prev,
-    /// points_remaining)` — the rank-spell to relay as LEARNED/SUPERCEDED (the 1.12 TalentFrame
-    /// derives shown ranks from known rank-spells) and the live PLAYER_CHARACTER_POINTS1 value
-    /// (earned − spent). `talent_id = 0` → just the points.
-    fn talent_pane_sync(&self, character_guid: u64, talent_id: u32) -> (u32, u32, u32);
-
-    /// Sum of the character's spent talent ranks — non-zero gates the login points correction.
-    fn talent_points_spent(&self, character_guid: u64) -> u32;
-
-    /// The character's active spell-modifier auras as raw (family_mask, op, amount, is_pct) rows —
-    /// the SMSG_SET_FLAT/PCT_SPELL_MODIFIER mirror source.
-    fn spell_modifiers(&self, character_guid: u64) -> Vec<(u32, u8, i32, bool)>;
-
-    /// Spend a talent point on `talent_id` (`CMSG_LEARN_TALENT`). The module gates it (points available
-    /// / max rank / prerequisites); a gameplay `Err` is per-action, not session-fatal.
-    fn learn_talent(&self, account_id: u64, self_guid: u64, talent_id: u32) -> Result<()>;
-
-    /// Bind the caller's hearthstone home to their current position (innkeeper gossip "Make this inn
-    /// your home."). No args — the module resolves the caller via `ctx.sender`.
-    fn bind_home(&self, account_id: u64, self_guid: u64) -> Result<()>;
-
-    /// Does the NPC at `guid` carry the innkeeper flag? Gates the "Make this inn your home." gossip
-    /// option + the bind select.
-    fn npc_is_innkeeper(&self, guid: u64) -> Result<bool>;
-
-    /// Resolve the `title_text_id` to embed in `SMSG_GOSSIP_MESSAGE` for the NPC at `guid`.
-    /// Looks up `game_gossip_menu` by creature entry; falls back to 1 (generic greeting).
-    fn npc_gossip_text_id(&self, npc_guid: u64) -> u32;
-
-    /// Look up the full weighted greeting (all 8 `npc_text` slots) for a `text_id`.
-    /// Returns `None` when no imported `game_npc_text` row exists (the gateway falls back to the
-    /// generic greeting string).
-    fn npc_text_for_id(&self, text_id: u32) -> Option<codec::NpcTextView>;
-
-    /// The imported gossip menu options for the NPC at `guid`, sorted by
-    /// `option_index`, RAW/unfiltered by condition. Empty when nothing is imported for this creature
-    /// (the gateway falls back to the flag-derived vendor/innkeeper synthesis).
-    fn gossip_options(&self, npc_guid: u64) -> Result<Vec<codec::GossipOptionView>>;
-
-    /// Respec at `trainer_guid` (the "I wish to unlearn my talents." gossip option, gated to level
-    /// 10+ by `filtered_gossip_options`). Errors (out of range / not enough gold) are
-    /// per-action; the caller just closes the gossip window either way.
-    fn reset_talents(&self, account_id: u64, self_guid: u64, trainer_guid: u64) -> Result<()>;
-
-    /// Auto-bank/auto-store-bank the item in `slot` (`CMSG_AUTOBANK_ITEM`/`CMSG_AUTOSTORE_BANK_ITEM`
-    /// — right-click to bank, right-click to withdraw). The module infers the direction from `slot`
-    /// and resolves the receiving free slot itself; a full destination (bank or carry space) is a
-    /// per-action `Err`.
-    fn auto_bank_item(&self, account_id: u64, self_guid: u64, slot: u8) -> Result<()>;
-
-    /// Buy the next bank bag slot from `banker_guid` (`CMSG_BUY_BANK_SLOT`). A refusal `Err` leads
-    /// with its `SMSG_BUY_BANK_SLOT_RESULT` code in brackets (the trainer `[N]` precedent).
-    fn buy_bank_slot(&self, account_id: u64, self_guid: u64, banker_guid: u64) -> Result<()>;
-
-    /// The player's LEARNED spells (`game_player_spell`, beyond the class kit) — chained into the
-    /// login SMSG_INITIAL_SPELLS so a taught ability (e.g. Auto Shot) reaches the client spellbook.
-    fn player_learned_spells(&self, player_guid: u64) -> Result<Vec<u32>>;
-
-    /// The player's persisted reputation standings (`game_player_reputation`) as `(reputation_index,
-    /// standing)` pairs — folded into the login `SMSG_INITIALIZE_FACTIONS` so a relog shows
-    /// the real standing instead of the all-neutral stub.
-    fn player_reputations(&self, player_guid: u64) -> Result<Vec<(i32, i32, bool)>>;
-
-    /// The player's IMPORTED action-bar rows (`game_player_action`) as `(button,
-    /// action, action_type)` triples — empty pre-import (the common case today), in which case the
-    /// login codec falls back to synthesizing the bar from the spellbook (byte-identical to before
-    /// this method existed).
-    fn player_actions(&self, player_guid: u64) -> Result<Vec<(u8, u32, u8)>>;
-
-    /// The rank a trainer offering actually teaches (LearnSpell wrapper → its trigger; a
-    /// self-contained rank resolves to itself). Mirrors the module's buy-time resolution so
-    /// SMSG_LEARNED_SPELL books the granted spell, never the wrapper.
-    fn resolve_learn_target(&self, spell_id: u32) -> u32;
-
-    /// The KNOWN rank `new_spell` supersedes — Some(prev) drives SMSG_SUPERCEDED_SPELL on a buy.
-    fn superseded_old_rank(&self, new_spell: u32, player_guid: u64) -> Option<u32>;
-
     /// Is `guid`'s live entity currently in the world? The WORLDPORT_ACK gate: a cross-map
     /// transfer despawns the entity until the ack rebuilds it, so
     /// ABSENT = a transfer is genuinely pending; PRESENT = the ack is spurious (double-send or
@@ -918,602 +216,23 @@ pub trait WorldStore:
     /// (visible blink, gateway combat-bookkeeping reset) at zero cost to the client.
     fn entity_in_world(&self, guid: u64) -> bool;
 
-    /// Record the player's current target (`CMSG_SET_SELECTION`, Tier 2 / N3). 0 clears it.
-    fn set_target(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()>;
-
-    /// Validate a `CMSG_INSPECT` request: `target_guid` must be a real in-world player, on the
-    /// caller's map, in range, and friendly. `Ok(())` → the gateway replies `SMSG_INSPECT(target_guid)`;
-    /// `Err` (out of range / hostile / no such target) → silently ignored, matching the other
-    /// stateless-gate reducers (`enter_areatrigger`, `use_gameobject`).
-    fn inspect(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()>;
-
-    /// Relay a pet command-bar action (`CMSG_PET_ACTION`). `data` is the raw packed action
-    /// (flag<<24 | id): flag 0x07 = command (Stay/Follow/Attack/Dismiss), flag 0x06 = react state
-    /// (Passive/Defensive/Aggressive). The module decodes + validates (all pet policy lives there).
-    fn pet_command(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        data: u32,
-        target_guid: u64,
-    ) -> Result<()>;
-
-    /// Draw or stow the player's weapons (`CMSG_SETSHEATHED`, the `Z` key). `state` is 0 stowed /
-    /// 1 melee / 2 ranged; the module range-checks it. Writes `UNIT_FIELD_BYTES_2` byte 0, which is
-    /// what makes a drawn or stowed weapon visible to OTHER players.
-    fn set_sheathed(&self, account_id: u64, self_guid: u64, state: u8) -> Result<()>;
-
     /// The live entity's max health (0 if not in world) — the fall-damage flavor line folds
     /// the shared curve against it.
     fn entity_max_health(&self, guid: u64) -> u32;
 
-    /// Speak (`CMSG_MESSAGECHAT`, social tier): broadcast a say, yell or `/e` line
-    /// (`lyracore_shared::chat::broadcast_chat`). A language the speaker's race does not know is a
-    /// Refusal.
-    fn send_chat(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        chat_type: u8,
-        language: u8,
-        message: String,
-    ) -> Result<crate::world::ChatOutcome>;
-
-    /// Perform an emote (`CMSG_TEXT_EMOTE`, social tier): broadcast the "X dances." line + animation.
-    /// `target_guid` (0 = untargeted) is the client's selected target — the gateway resolves it to a
-    /// name so the chat line reads "X waves at <target>."
-    fn send_emote(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        text_emote: u32,
-        emote_anim: u32,
-        target_guid: u64,
-    ) -> Result<()>;
-
-    /// GM playtest dot-command for the proof-validated, realm-wide `account_name`: `text` is the
-    /// raw Say line, STILL carrying its
-    /// leading `.` — the Say handler intercepts it BEFORE any chat relay/insert and forwards it here
-    /// verbatim (module-side parsing keeps the command set data-free). `Err`'s message is relayed back
-    /// to the SENDER ONLY as a system chat line (never broadcast, never a `game_chat_event` row).
-    fn gm_command(&self, account_name: &str, self_guid: u64, text: String) -> Result<()>;
-
-    /// Every mail addressed to `recipient_guid`, on the database THIS handle names.
-    ///
-    /// Called on the realm-core handle when there is one and on the session's own handle when there
-    /// is not — the two-plane read, which is why this is one method rather than a realm-only twin.
-    /// Empty by default so a mock that models no mailbox answers "no mail" instead of failing a
-    /// session; the real refusals are the gates in `world::mail`, which run before this.
-    fn mail_list(&self, _recipient_guid: u64) -> Result<Vec<codec::MailView>> {
-        Ok(Vec::new())
-    }
-
-    /// The mail `mail_id`, delivered or not, on the database THIS handle names: the same two-plane
-    /// routing as [`mail_list`](Self::mail_list), as one primary key read. `None` by default, so a
-    /// store that models no mailbox finds no mail.
-    fn mail_by_id(&self, _mail_id: u64) -> Result<Option<codec::MailView>> {
-        Ok(None)
-    }
-
-    /// The name of the Realm Account that owns `character_guid`, read on THIS handle only. The
-    /// Account Character Owner names it when this Shard retains one. Otherwise the Character's
-    /// local Account names it, unless that Account is a shadow Account, whose name is not a Realm
-    /// Account's. `None` when this handle cannot name it. `world::mail` asks every World Shard,
-    /// because the Delivery Delay compares the Realm Accounts of two Characters on any Shards.
-    fn realm_account_name(&self, _character_guid: u64) -> Result<Option<String>> {
-        Ok(None)
-    }
-
-    /// Is `player_guid` in range of the gameobject `mailbox_guid` names, and is it a mailbox at all?
-    ///
-    /// Always asked of the session's OWN handle: the mailbox is a gameobject on the shard the player
-    /// is standing on, and realm-core holds none. A PK lookup plus a map/instance/range check —
-    /// never a scan of the spatial gameobject table.
-    fn mailbox_in_range(&self, _mailbox_guid: u64, _player_guid: u64) -> Result<bool> {
-        Ok(false)
-    }
-
-    /// Flip `mail_id`'s read state for `recipient_guid`, on the database THIS handle names.
-    ///
-    /// Called on the realm-core handle when there is one and on the session's own handle when there
-    /// is not — the SAME two-plane routing [`mail_list`](Self::mail_list) takes, because the write
-    /// and the read must never disagree about which database owns the rows. `Err` when `mail_id`
-    /// does not exist, is not `recipient_guid`'s or has not arrived yet — the gates ran in
-    /// `world::mail` before this is ever called, so a refusal here means a crafted id or a Gateway
-    /// clock that runs ahead of the Module's.
-    fn mail_mark_read(&self, recipient_guid: u64, mail_id: u64) -> Result<()>;
-
-    /// Delete `mail_id` for `recipient_guid`, on the database THIS handle names — same two-plane
-    /// routing as [`mail_mark_read`](Self::mail_mark_read). Destroys any attachment the row still
-    /// carries, as vanilla does after its (client-side) confirmation prompt. `Err` for a mail with
-    /// a cash on delivery price or one that has not arrived yet.
-    fn mail_delete(&self, recipient_guid: u64, mail_id: u64) -> Result<()>;
-
-    /// Return `mail_id` to whoever sent it, on the database THIS handle names — same two-plane
-    /// routing as [`mail_delete`](Self::mail_delete). The row is re-addressed IN PLACE: it never
-    /// leaves the plane that already holds it, so there is no sharded variant and no escrow, unlike
-    /// [`mail_send`](Self::mail_send) and the takes below. `Err` when `mail_id` does not exist, is
-    /// not `recipient_guid`'s, is not delivered yet, has no Character sender, or was returned
-    /// already. `same_account` says whether `recipient_guid` and the mail's sender belong to one
-    /// Realm Account; the Module turns it into the return's Delivery Delay.
-    fn mail_return(&self, recipient_guid: u64, mail_id: u64, same_account: bool) -> Result<()>;
-
-    /// Write one sent letter on the database THIS handle names, charging the sender the postage
-    /// plus the attached `money` in the SAME transaction.
-    ///
-    /// **The single-database gateway only**, where the purse and the row are on one database. A
-    /// sharded realm cannot have that transaction and drives [`mail_fence`](Self::mail_fence) and
-    /// friends instead.
-    ///
-    /// Every gate that decides who may write to whom has already run in `world::mail` — realm-core
-    /// can answer none of them — so `sender_guid` must be the guid the socket authenticated.
-    ///
-    /// `cod` is the price the RECIPIENT will owe for the attachment. It costs the sender nothing
-    /// and is not part of the debit; it only rides the row until somebody takes the item.
-    /// `same_account` says whether the sender and the recipient belong to one Realm Account; the
-    /// Module turns it into the letter's Delivery Delay.
-    #[allow(clippy::too_many_arguments)]
-    fn mail_send(
-        &self,
-        sender_guid: u64,
-        recipient_guid: u64,
-        subject: String,
-        body: String,
-        money: u32,
-        cod: u32,
-        item_guid: u64,
-        same_account: bool,
-    ) -> Result<()>;
-
-    /// Credit `mail_id`'s copper to `recipient_guid` and empty the row, in one transaction. The
-    /// single-database twin of [`mail_send`](Self::mail_send), and refused for a mail that is not
-    /// the caller's, is not delivered yet, or has nothing left in it.
-    fn mail_take_money(&self, recipient_guid: u64, mail_id: u64) -> Result<()>;
-
-    /// Re-create `mail_id`'s attached item in `recipient_guid`'s bags and empty the row's
-    /// attachment columns, in one transaction. [`mail_take_money`](Self::mail_take_money)'s twin,
-    /// and refused for a mail that is not the caller's or not delivered yet, one with no
-    /// attachment, or a full bag —
-    /// where the refusal rolls the clear back, so the item stays in the letter.
-    fn mail_take_item(&self, recipient_guid: u64, mail_id: u64) -> Result<()>;
-
-    /// Has `payee_guid` room in their bags here for one more item?
-    ///
-    /// Asked of the TAKER's own handle, before a sharded item take fences anything: the fence is a
-    /// one-way move, so a full bag found afterwards would strand the item in an escrow instead of
-    /// leaving it in the letter. `Err` is the refusal. Answers `Ok` by default, so a store that
-    /// models no bags does not block a take it has no opinion on.
-    fn mail_item_room(&self, _payee_guid: u64) -> Result<()> {
-        Ok(())
-    }
-
-    /// `CMSG_MAIL_CREATE_TEXT_ITEM` step 1 (Letter Copy) — set COPIED on `mail_id` and file its
-    /// body as durable item text, on the database that OWNS THE MAIL ROW (realm-core when sharded,
-    /// this shard's own database otherwise — the same two-plane routing `mail_take_item_fence`
-    /// takes). `Err` for a mail that is not the caller's, is not delivered, has no body, or is
-    /// already GRANTED. A replay before GRANTED is set is `Ok` (a no-op on the mail plane), so a
-    /// retry can still reach the Home Shard grant.
-    fn mail_copy_text(&self, recipient_guid: u64, mail_id: u64) -> Result<()>;
-
-    /// `CMSG_MAIL_CREATE_TEXT_ITEM` step 2 — store one Plain Letter carrying `item_text_id`, on the
-    /// PAYEE's own handle. [`mail_item_room`](Self::mail_item_room)'s real Gate: a full bag found
-    /// here refuses and leaves the mail COPIED with no letter granted. The Plain Letter sells for
-    /// 0, so a grant lost to that race costs nothing — this is deliberately not an escrow. Also a
-    /// no-op `Ok` when the payee already holds an item carrying `item_text_id`: the crash-window
-    /// guard between this call landing and [`mail_mark_letter_granted`](Self::mail_mark_letter_granted)
-    /// recording that it did.
-    fn mail_grant_letter(&self, payee_guid: u64, item_text_id: u32) -> Result<()>;
-
-    /// `CMSG_MAIL_CREATE_TEXT_ITEM` step 3 — the durable record that the grant landed, on the same
-    /// database `mail_copy_text` wrote to. Called once [`mail_grant_letter`](Self::mail_grant_letter)
-    /// returns `Ok`. Unlike the item itself, this bit cannot be destroyed, mailed away, or traded,
-    /// so it is what refuses a second grant for good.
-    fn mail_mark_letter_granted(&self, recipient_guid: u64, mail_id: u64) -> Result<()>;
-
-    /// The durable text behind `item_text_id`, read from `game_item_text` on the database that
-    /// OWNS THE MAIL PLANE (same two-plane routing as [`mail_copy_text`](Self::mail_copy_text)). A
-    /// copied letter's text outlives the mail row that created it, so this answers even after that
-    /// mail is deleted. `None` by default, so a store with no opinion on item text has none.
-    ///
-    /// The mail plane holds every copied letter's text keyed by a small, sequential id, so this
-    /// must never be read for a caller who has not proven they may see it — see
-    /// [`owns_item_with_text`](Self::owns_item_with_text).
-    fn item_text(&self, _item_text_id: u32) -> Result<Option<String>> {
-        Ok(None)
-    }
-
-    /// Does `owner_guid` hold an item carrying `item_text_id` in their own bags, on THIS handle?
-    /// The ownership Gate `mail::item_text` checks before it answers from `game_item_text`: a
-    /// client walking `item_text_id` values must not read another player's Letter Copy that way.
-    /// `hint_item_guid` is `CMSG_ITEM_TEXT_QUERY`'s overloaded second field — often the queried
-    /// item's own guid when it names an item rather than a mail — so an implementation can try a
-    /// cheap PK lookup before falling back to a scan of `owner_guid`'s rows. `false` by default, so
-    /// a store with no opinion on item ownership grants nothing.
-    fn owns_item_with_text(
-        &self,
-        _owner_guid: u64,
-        _item_text_id: u32,
-        _hint_item_guid: u64,
-    ) -> Result<bool> {
-        Ok(false)
-    }
-
-    /// **Escrow step 1 (send)** — take the postage plus the attached coin out of `sender_guid`'s
-    /// purse into a fence keyed by the caller-chosen `escrow_id`, on the database THIS handle names.
-    ///
-    /// Always the SENDER's own handle: the purse is `game_world_entity.money`, on the shard they
-    /// are standing on. `Err` is the atomic affordability refusal — a refused send costs nothing.
-    ///
-    /// A COD PAYMENT is fenced through here too, because it is a letter out of a purse like any
-    /// other: `cod_source_mail_id` names the mail whose price it pays (0 for an ordinary letter),
-    /// and it rides the fence so a re-drive can settle that price without re-deriving anything.
-    ///
-    /// `same_account` says whether the sender and the recipient belong to one Realm Account. The
-    /// fence resolves the letter's Delivery Delay from it and stores it for the commit.
-    #[allow(clippy::too_many_arguments)]
-    fn mail_fence(
-        &self,
-        _escrow_id: u64,
-        _sender_guid: u64,
-        _recipient_guid: u64,
-        _subject: String,
-        _body: String,
-        _money: u32,
-        _postage: u32,
-        _item_guid: u64,
-        _cod: u32,
-        _cod_source_mail_id: u64,
-        _same_account: bool,
-    ) -> Result<()> {
-        anyhow::bail!("mail_fence: this store models no escrow")
-    }
-
-    /// **Escrow step 2 (send)** — write the mail row and its receipt under `escrow_id`, on the
-    /// database THIS handle names (realm-core). Idempotent: a replay writes nothing.
-    ///
-    /// `cod_source_mail_id` (0 for an ordinary letter) is the mail this one PAYS FOR: its price is
-    /// settled in the same transaction as the payout row, which is what makes a COD take charge
-    /// once however the drive is interrupted.
-    ///
-    /// `delivery_delay_secs` is the Delivery Delay the fence stored. The letter arrives that long
-    /// after this commit. `reward` names a Reward Letter's quest giver and Mail Template; `None` is
-    /// a Character's letter from `sender_guid`.
-    #[allow(clippy::too_many_arguments)]
-    fn mail_commit(
-        &self,
-        _escrow_id: u64,
-        _sender_guid: u64,
-        _recipient_guid: u64,
-        _subject: String,
-        _body: String,
-        _money: u32,
-        _item: mail::AttachedItem,
-        _cod: u32,
-        _cod_source_mail_id: u64,
-        _delivery_delay_secs: u32,
-        _reward: Option<lyracore_shared::mail::RewardHeader>,
-    ) -> Result<()> {
-        anyhow::bail!("mail_commit: this store models no escrow")
-    }
-
-    /// **Escrow step 1 (take)** — take `mail_id`'s copper out of the row into a fence, on the
-    /// database that OWNS THE ROW. `expect_money` is the amount the caller is about to pay out; a
-    /// mismatch is refused rather than fenced, because the gateway carries that number across.
-    fn mail_take_money_fence(
-        &self,
-        _escrow_id: u64,
-        _payee_guid: u64,
-        _mail_id: u64,
-        _expect_money: u32,
-    ) -> Result<()> {
-        anyhow::bail!("mail_take_money_fence: this store models no escrow")
-    }
-
-    /// **Escrow step 2 (take)** — credit `amount` to `payee_guid` and file a receipt under
-    /// `escrow_id`, on the PAYEE's own handle. Idempotent: a replay credits nothing.
-    fn mail_payout(
-        &self,
-        _escrow_id: u64,
-        _payee_guid: u64,
-        _mail_id: u64,
-        _amount: u32,
-    ) -> Result<()> {
-        anyhow::bail!("mail_payout: this store models no escrow")
-    }
-
-    /// **Escrow step 1 (item take)** — take `mail_id`'s attachment out of the row into a fence, on
-    /// the database that OWNS THE ROW. `expect_entry` is the item the caller is about to grant; a
-    /// mismatch is refused rather than fenced, because the gateway carries the snapshot across.
-    fn mail_take_item_fence(
-        &self,
-        _escrow_id: u64,
-        _payee_guid: u64,
-        _mail_id: u64,
-        _expect_entry: u32,
-    ) -> Result<()> {
-        anyhow::bail!("mail_take_item_fence: this store models no escrow")
-    }
-
-    /// **Escrow step 2 (item take)** — re-create the fenced item in `payee_guid`'s bags and file a
-    /// receipt under `escrow_id`, on the PAYEE's own handle. Idempotent: a replay grants nothing.
-    /// `Err` on a full bag, which leaves the fence holding the item for the next re-drive.
-    fn mail_item_payout(
-        &self,
-        _escrow_id: u64,
-        _payee_guid: u64,
-        _mail_id: u64,
-        _item: mail::AttachedItem,
-    ) -> Result<()> {
-        anyhow::bail!("mail_item_payout: this store models no escrow")
-    }
-
-    /// **Escrow step 3** — attest, on the handle HOLDING the fence, that the other database
-    /// committed. The only thing that licenses step 4.
-    fn mail_confirm_delivery(&self, _escrow_id: u64) -> Result<()> {
-        anyhow::bail!("mail_confirm_delivery: this store models no escrow")
-    }
-
-    /// **Escrow step 4** — destroy the fence, on the handle holding it. Delete-last: it refuses
-    /// while unattested.
-    fn mail_settle(&self, _escrow_id: u64) -> Result<()> {
-        anyhow::bail!("mail_settle: this store models no escrow")
-    }
-
-    /// Every unfinished mail escrow this database holds for `sender_guid` (the payee, on a payout).
-    ///
-    /// The read that makes re-driving possible at all: a fence carries its whole letter, so a drive
-    /// abandoned by a dead gateway is resumable from the row. Empty by default, so a store that
-    /// models no escrow simply has nothing to re-drive.
-    fn mail_escrows_of(&self, _sender_guid: u64) -> Result<Vec<mail::HeldEscrow>> {
-        Ok(Vec::new())
-    }
-
-    /// Revive the caller after death (`CMSG_REPOP_REQUEST` / Release Spirit): the module
-    /// restores full health in place and clears the dead state (the client leaves the death screen
-    /// once the restored health replicates).
-    fn repop(&self, account_id: u64, self_guid: u64) -> Result<()>;
-
     /// Acquire Realm-core ownership and fence every configured World Shard before returning.
     fn claim_session(&self, account_id: u64, character_guid: u64) -> Result<WorldSessionToken>;
 
-    /// Bind subsequent requests to this World Session. A Fake can retain its existing handle.
+    /// Bind subsequent requests to this World Session. `None` keeps the current handle.
     fn bind_session(
         &self,
-        _token: WorldSessionToken,
-    ) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
-        Ok(None)
-    }
+        token: WorldSessionToken,
+    ) -> Result<Option<std::sync::Arc<dyn WorldStore>>>;
 
     /// Close the matching Shard fences before releasing the Realm-core claim. Stale cleanup is inert.
     fn release_session(&self, token: WorldSessionToken) -> Result<()>;
 
-    /// Reclaim the caller's corpse (`CMSG_RECLAIM_CORPSE`): the module validates the caller
-    /// is a ghost owning the corpse, in range, past the reclaim delay, then resurrects at 50%.
-    fn reclaim_corpse(&self, account_id: u64, self_guid: u64, corpse_guid: u64) -> Result<()>;
-
-    /// Answer a pending resurrect offer (`CMSG_RESURRECT_RESPONSE`): `accept=true` revives the
-    /// caller at the offer's frozen `%`; either way the offer is consumed. A failure (no pending offer
-    /// for the caller) is expected when the offer already lapsed/was answered — per-action, log + ignore.
-    fn resurrect_response(&self, account_id: u64, self_guid: u64, accept: bool) -> Result<()>;
-
-    /// Use the caller's Self-Resurrection Option (`CMSG_SELF_RES`): the module revives the dead
-    /// caller in place and spends the option. A Refusal (alive, or no option) is expected after a
-    /// race. Per-action: log and ignore.
-    fn self_resurrect(&self, account_id: u64, self_guid: u64) -> Result<()>;
-
-    /// Spirit-Healer resurrect (`CMSG_SPIRIT_HEALER_ACTIVATE`): a ghost activates the graveyard Spirit
-    /// Healer to res IN PLACE at 50% health/mana + a Resurrection Sickness debuff. `healer_guid` is the
-    /// activated healer's guid (passed through to the confirm echo). The module gates on ghost state.
-    fn spirit_healer_res(&self, account_id: u64, self_guid: u64, healer_guid: u64) -> Result<()>;
-
-    // --- Trade. Every status, BeginTrade/OpenWindow to the parties, or a refusal back to
-    // the caller — rides the `game_trade_event` relay; these calls answer nothing synchronously,
-    // and an `Err` is only an unresolved actor (per-action, log + ignore).
-
-    /// `CMSG_INITIATE_TRADE` — propose a Trade Session against the targeted player.
-    fn initiate_trade(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()>;
-    /// `CMSG_BEGIN_TRADE` — the proposed target's client answered; the module opens both windows.
-    fn begin_trade(&self, account_id: u64, self_guid: u64) -> Result<()>;
-    /// `CMSG_CANCEL_TRADE` — tear the caller's Trade Session down (`TradeCanceled` to both).
-    fn cancel_trade(&self, account_id: u64, self_guid: u64) -> Result<()>;
-    /// `CMSG_SET_TRADE_ITEM` — `inv_slot` is the ABSOLUTE inventory slot (the gateway maps the
-    /// client's (bag, slot) pair, the item-family convention).
-    fn set_trade_item(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        trade_slot: u8,
-        inv_slot: u8,
-    ) -> Result<()>;
-    /// `CMSG_CLEAR_TRADE_ITEM`.
-    fn clear_trade_item(&self, account_id: u64, self_guid: u64, trade_slot: u8) -> Result<()>;
-    /// `CMSG_SET_TRADE_GOLD`, `copper` is the offered amount.
-    fn set_trade_gold(&self, account_id: u64, self_guid: u64, copper: u32) -> Result<()>;
-    /// `CMSG_ACCEPT_TRADE` — accept the current offer; dual-accept runs the atomic Trade Commit
-    /// module-side.
-    fn accept_trade(&self, account_id: u64, self_guid: u64) -> Result<()>;
-    /// `CMSG_UNACCEPT_TRADE`, withdraw an accept; partner hears `BackToTrade`.
-    fn unaccept_trade(&self, account_id: u64, self_guid: u64) -> Result<()>;
-    /// `CMSG_BUSY_TRADE`, decline a pending proposal as busy; initiator hears `Busy`.
-    fn busy_trade(&self, account_id: u64, self_guid: u64) -> Result<()>;
-    /// `CMSG_IGNORE_TRADE`, decline via ignore; initiator hears `IgnoreYou`.
-    fn ignore_trade(&self, account_id: u64, self_guid: u64) -> Result<()>;
-
-    /// Find `owner_guid`'s corpse location `(map_id, x, y, z)` for `MSG_CORPSE_QUERY`.
-    fn corpse_location(&self, owner_guid: u64) -> Result<Option<(u32, f32, f32, f32)>>;
-
     /// Return the `combat_until_ms` timestamp for `player_guid`'s entity row (0 if the entity is not
     /// found). Used by the logout handler to deny `CMSG_LOGOUT_REQUEST` while the player is in combat.
     fn player_combat_until_ms(&self, player_guid: u64) -> u64;
-
-    /// This Shard's durable Character row for `guid`: identity plus the session flag. `None` if
-    /// this Shard holds no `game_character` row for it.
-    /// [`presence::of`](super::presence::of) unions it across every connected Shard.
-    fn character_identity(&self, guid: u64) -> Result<Option<presence::CharacterIdentity>>;
-
-    /// This Shard's live `game_world_entity` row for `guid`, if any — the Member Stats columns,
-    /// plus level and zone, current unlike the durable row (`persist_entity` only refreshes it on
-    /// logout, cross-map teleport or Transfer). `None` if `guid` has no live entity here.
-    fn live_entity(&self, guid: u64) -> Option<codec::MemberEntity>;
-
-    /// Does this Shard show `guid` between two places: its own Character row reading online with
-    /// no live entity here (a map-change loading screen, or a human Transfer's frozen source
-    /// copy — `begin_transfer` persists with `set_offline: false`), or a Transfer Intent naming a
-    /// session-less bot mid-crossing.
-    fn character_in_transit(&self, guid: u64) -> bool;
-
-    /// This Shard's stored Auto-Reply for `guid`. `None` when this Shard holds none.
-    /// [`presence::auto_reply`] asks the Shard that holds the live entity.
-    fn auto_reply_text(&self, guid: u64) -> Result<Option<String>>;
-
-    /// Does every configured World Shard vouch that it is reachable and healthy enough to trust a
-    /// negative read from? [`presence::of`] asks this before answering `Whereabouts::Offline` or
-    /// `None` — an unreachable or stale-cached Shard could be hiding the Character, so the default
-    /// (`Ok(())`, every Store without a Shard topology to ask) must be overridden by any Store that
-    /// actually has one to check.
-    fn every_shard_vouches_for_absence(&self) -> Result<()> {
-        Ok(())
-    }
-
-    /// Every in-world player Character on this Shard — the per-Shard input
-    /// [`presence::in_world_characters`](super::presence::in_world_characters) unions, and `/who`'s
-    /// ultimate source. A player is "in world" iff their guid appears in `game_world_entity` with
-    /// `entry == 0` (player entity); dead players are included (ghosts are in world). Bots are
-    /// included: they have no session, but they do have a live entity.
-    fn in_world_players(&self) -> Result<Vec<presence::RealmPresence>>;
-
-    /// `game_area.name` for `zone_id` — `/who`'s search-string match against a zone name. Empty
-    /// when the catalogue holds no row for it (unimported, or an id the client sends that the
-    /// imported DBC lacks).
-    fn zone_name(&self, _zone_id: u32) -> String {
-        String::new()
-    }
-
-    /// `self_guid`'s friend guids and ignore guids for `CMSG_FRIEND_LIST`. `self_guid` is always
-    /// the CALLING World Session's own guid, never a peer's, so a Store may answer this from
-    /// whatever cheap per-connection state it keeps for its own connected sessions (the Coordinator
-    /// reads its Gateway-side `Viewer`). A caller that needs a friend's PRESENCE composes it
-    /// separately with `world::social::friend_views`, over `presence::of`; a caller that needs to
-    /// know whether an ARBITRARY (possibly unconnected) Character ignores another uses
-    /// [`WorldStore::ignored_guids`] instead, never this method.
-    fn contact_lists(&self, self_guid: u64) -> Result<(Vec<u64>, Vec<u64>)>;
-
-    /// `owner_guid`'s ignore guids, read directly off this Shard's durable contact rows — realm-wide
-    /// safe for ANY owner, including one with no live World Session on this Gateway process at all
-    /// (a whisper sender or a guild-invite target usually is not). `whisper::ignored_anywhere` fans
-    /// this out across every connected Shard. Unlike `contact_lists`, this never reads a `Viewer`.
-    fn ignored_guids(&self, owner_guid: u64) -> Result<Vec<u64>>;
-
-    /// Resolve a typed contact name to a character guid on THIS Shard (case-insensitive, like the
-    /// Module's `character_by_name`): `presence::resolve_by_name`'s per-Shard primitive. `None`
-    /// if this Shard has no character with that name.
-    fn character_guid_by_name(&self, name: &str) -> Result<Option<u64>>;
-
-    /// A character's live presence `(online, level, class, zone_id)` on THIS Shard only. `None` if
-    /// the guid doesn't resolve to any character here.
-    fn character_presence(&self, guid: u64) -> Result<Option<(bool, u8, u8, u32)>>;
-
-    // Contact ops answer a [`social::ContactOutcome`]: a typed Refusal is a gameplay answer the
-    // client renders, and only a failure with an unknown durable result stays `Err`.
-
-    /// `CMSG_ADD_FRIEND` (the name is already resolved to `target_guid` by the gateway).
-    /// `target_race` is the target's own Speaker Fact, read realm-wide by the gateway: the Module's
-    /// Enemy Gate needs it and holds no Characters of its own to read it from.
-    fn add_friend(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        target_guid: u64,
-        target_race: u8,
-    ) -> Result<social::ContactOutcome>;
-    /// `CMSG_DEL_FRIEND`.
-    fn del_friend(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        target_guid: u64,
-    ) -> Result<social::ContactOutcome>;
-    /// `CMSG_ADD_IGNORE` (the name is already resolved to `target_guid` by the gateway).
-    fn add_ignore(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        target_guid: u64,
-    ) -> Result<social::ContactOutcome>;
-    /// `CMSG_DEL_IGNORE`.
-    fn del_ignore(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        target_guid: u64,
-    ) -> Result<social::ContactOutcome>;
-
-    // The SINGLE-DATABASE party path (`world::party::run`'s `None` arm). Each takes the caller's
-    // `self_guid` as well as its account: the account is what identifies the player CONNECTION these
-    // reducers run on, and the guid is what identifies the CHARACTER to realm-core on the other arm.
-    // Both are threaded through one call site (`world::social`), so the two planes take the same
-    // arguments and a mock sees which character the op was for either way.
-
-    /// `CMSG_GROUP_INVITE` (name gateway-resolved). A `GroupRefusal` arrives as an outcome.
-    fn group_invite(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        target_guid: u64,
-    ) -> Result<party::PartyOutcome>;
-    /// `CMSG_GROUP_ACCEPT`.
-    fn group_accept(&self, account_id: u64, self_guid: u64) -> Result<party::PartyOutcome>;
-    /// `CMSG_GROUP_DECLINE`.
-    fn group_decline(&self, account_id: u64, self_guid: u64) -> Result<party::PartyOutcome>;
-    /// `CMSG_GROUP_DISBAND` (the client's "Leave Party").
-    fn group_leave(&self, account_id: u64, self_guid: u64) -> Result<party::PartyOutcome>;
-    /// `CMSG_GROUP_UNINVITE` (name gateway-resolved) or `CMSG_GROUP_UNINVITE_GUID` — the leader or
-    /// an Assistant kicks a member.
-    fn group_uninvite(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        target_guid: u64,
-    ) -> Result<party::PartyOutcome>;
-    /// `CMSG_LOOT_METHOD` — the leader sets the party's loot method/
-    /// threshold/master. `loot_setting`/`loot_threshold` are the gateway-decoded `GroupLootSetting`/
-    /// `ItemQuality` wire bytes, passed straight through (the module adopted the wire ordering
-    /// verbatim — zero translation).
-    fn group_loot_method(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        loot_setting: u8,
-        master_guid: u64,
-        loot_threshold: u8,
-    ) -> Result<party::PartyOutcome>;
-    /// `CMSG_LOOT_ROLL` — record the caller's need/greed/pass vote.
-    fn loot_roll(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        corpse_guid: u64,
-        loot_slot: u32,
-        vote: u8,
-    ) -> Result<LootActionStatus>;
-    /// `CMSG_LOOT_MASTER_GIVE` — the master looter assigns an above-
-    /// threshold row to `target_guid`.
-    fn loot_master_give(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        corpse_guid: u64,
-        loot_slot: u8,
-        target_guid: u64,
-    ) -> Result<LootActionStatus>;
-    /// NOTIFY-ONLY module chokepoint for a gossip-option click — fired best-effort
-    /// before the gateway's own gossip handling; failure never blocks the gossip reply.
-    fn gossip_select(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        npc_guid: u64,
-        option_id: u32,
-        option_row_id: u32,
-    ) -> Result<()>;
 }

@@ -79,11 +79,22 @@ pub(crate) use handlers::{
     MemberStatsStore, PlaceBidOutcome, PlaceBidRequest, RealmChatRequest, SeekerFacts,
     SpeakerFacts, TrainerBuyOutcome, WeatherStore, WhisperRequest, WhisperTargetFacts,
 };
+pub(crate) use handlers::{
+    AuctionActionStore, BankStore, CastStore, ChannelActionStore, CharacterStore, ChatActionStore,
+    CombatStore, DeathStore, DuelActionStore, GuildActionStore, ItemActionStore, LootWindowStore,
+    MeetingStoneActionStore, MeleeActionStore, NpcStore, QuestActionStore, SpeechStore,
+    TaxiActionStore, TradeStore, TrainerStore, VendorActionStore,
+};
 use login_queue::{Admission, LoginQueue};
+pub(crate) use loot::LootRollStore;
+pub(crate) use mail::MailStore;
+pub(crate) use party::PartyStore;
 use social::handle_social;
 pub(crate) use social::ContactOutcome;
+pub(crate) use social::SocialStore;
+pub(crate) use store::{SessionStore, ShardRoutingStore};
 pub use store::{WorldSessionToken, WorldStore};
-use transfer::{EscrowedTransfer, TransferPlan};
+pub(crate) use transfer::TransferStore;
 
 /// One unit of outbound traffic for the single writer thread. A `Batch` is written contiguously so
 /// the login sequence + self-spawn can never be spliced by an async peer event mid-sequence.
@@ -366,16 +377,8 @@ pub struct WorldConn {
     /// condition-filtered list, so re-deriving that list at click time renumbers it under a quest
     /// accepted while the window was open.
     pub(crate) gossip_menu: Option<GossipMenuSnapshot>,
-    /// Multi-shard routing: the HOME-shard store handle for the character this session is
-    /// playing, resolved at `CMSG_PLAYER_LOGIN` (and re-resolved on a world-port, which can change
-    /// map and therefore shard) from the character's location via `WorldStore::home_shard`. `None`
-    /// = "the handle the listener already handed us is the right one" — the single-shard default,
-    /// and the state of every pre-login message, so nothing about the old path changes.
-    ///
-    /// This is derived, not authoritative: it is recomputed from durable state on every world
-    /// entry, so a gateway restart mid-session re-derives it on the client's relog — the
-    /// gateway stays stateless w.r.t. sessions.
-    home: Option<std::sync::Arc<dyn WorldStore>>,
+    /// The Store every message of this session runs against.
+    store: RoutedStore,
     /// The shared session key K, kept from the world handshake so a session that lands on a NON-
     /// realm shard can call `establish_session` THERE — the module's `account_by_identity`
     /// gate on `player_login` needs the account row on that database bound to this connection's
@@ -424,29 +427,36 @@ const MOVE_DESYNC_TOLERANCE: u32 = 32;
 /// the one Gateway-side realm-wide scan `/who` runs.
 const WHO_THROTTLE: Duration = Duration::from_secs(1);
 
-/// Run `$body` against the session's HOME-shard store handle. `$store` is the handle the
-/// caller holds (the default/realm shard); `$conn.home` overrides it once the player is in the
-/// world. Two arms rather than a coercion because `$store` is a `?Sized` generic and cannot be
-/// unsize-coerced to `&dyn WorldStore`; only one arm ever runs.
-// Deliberate simplification: a macro instead of threading a routed handle through ~15 handler
-// signatures. Ceiling — it only works where `conn` is in scope. Upgrade path: if routing ever
-// needs to change MID-session, fold the handle into a session context struct instead.
-macro_rules! on_home_shard {
-    ($conn:expr, $store:expr, |$s:ident| $body:expr) => {{
-        let home = $conn.home.clone();
-        match home {
-            Some(h) => {
-                let $s: &dyn WorldStore = h.as_ref();
-                $body
-            }
-            None => {
-                let $s = $store;
-                $body
-            }
-        }
-    }};
+/// The Store a World Session talks to: the listener's handle until world entry pins the
+/// Character's Home Shard. Re-resolved from durable state on every world entry (login and
+/// world-port), so a gateway restart mid-session re-derives it on the client's relog.
+pub(crate) struct RoutedStore {
+    default: Arc<dyn WorldStore>,
+    home: Option<Arc<dyn WorldStore>>,
 }
-pub(crate) use on_home_shard;
+
+impl RoutedStore {
+    fn new(default: Arc<dyn WorldStore>) -> Self {
+        Self {
+            default,
+            home: None,
+        }
+    }
+
+    /// The pinned Home Shard, else the listener's handle. A clone, so the caller can hold it
+    /// while it mutates the session.
+    pub(crate) fn current(&self) -> Arc<dyn WorldStore> {
+        self.home.as_ref().unwrap_or(&self.default).clone()
+    }
+
+    fn pin(&mut self, home: Arc<dyn WorldStore>) {
+        self.home = Some(home);
+    }
+
+    fn unpin(&mut self) {
+        self.home = None;
+    }
+}
 
 impl WorldConn {
     /// Re-pin this session to the shard that owns `character_guid`'s location. Asked of the
@@ -458,22 +468,17 @@ impl WorldConn {
     /// fail its login loudly, never proceed into the world on whichever shard happened to answer.
     /// Both are recoverable — the escrow holds and the next login re-drives it — but only one of
     /// them is honest to the player.
-    fn route_home<St: WorldStore + ?Sized>(
-        &mut self,
-        store: &St,
-        character_guid: u64,
-    ) -> Result<()> {
-        // `settle_home_shard`, not `home_shard`: for a session that actually crosses a database
-        // boundary this RUNS the escrowed transfer before answering. Its default impl IS
-        // `home_shard`, so the single-shard path and every mock are unchanged.
-        let resolved = on_home_shard!(self, store, |st| st.settle_home_shard(character_guid))?;
+    fn route_home(&mut self, character_guid: u64) -> Result<()> {
+        // For a session that actually crosses a database boundary this RUNS the escrowed transfer
+        // before answering.
+        let resolved = self.store.current().settle_home_shard(character_guid)?;
         if let Some(h) = resolved {
             log::info!(
                 "world: account {} (guid {character_guid}) routed to shard {}",
                 self.account_id,
                 h.shard_name()
             );
-            self.home = Some(h);
+            self.store.pin(h);
         }
         // Bind this account's identity on the shard we ended up on. On the realm shard the logon
         // tier already did it; on an instance shard the character arrived through
@@ -481,7 +486,7 @@ impl WorldConn {
         // `world::player_login` resolves its caller through `account_by_identity`, so without this
         // the arriving player cannot log in at all. Idempotent, and re-run on every world entry
         // because a gateway restart establishes a fresh bound identity.
-        if let (Some(h), Some(key)) = (&self.home, &self.session_key) {
+        if let (Some(h), Some(key)) = (&self.store.home, &self.session_key) {
             h.bind_shard_session(self.account_id, key)?;
         }
         Ok(())
@@ -491,7 +496,7 @@ impl WorldConn {
     /// A Guild member signs off first, while Realm-core still accepts the Account Claim. The
     /// Character that signed on this session signs off even when a failed world-port left the
     /// state at CharSelect.
-    fn leave_world<St: WorldStore + ?Sized>(&mut self, store: &St) -> Result<()> {
+    fn leave_world(&mut self) -> Result<()> {
         let previous = std::mem::replace(&mut self.state, WorldState::CharSelect);
         let signed_on = self.guild_signed_on.take();
         let left = match &previous {
@@ -499,18 +504,16 @@ impl WorldConn {
             WorldState::CharSelect => signed_on,
         };
         drop(previous);
+        let store = self.store.current();
         if let Some(character_guid) = left {
-            on_home_shard!(self, store, |st| handlers::guild_world_exit(
-                st,
-                character_guid
-            ));
+            handlers::guild_world_exit(&*store, character_guid);
         }
         let outcome = if let Some(token) = self.session_claim.take() {
-            on_home_shard!(self, store, |st| st.release_session(token))
+            store.release_session(token)
         } else {
             Ok(())
         };
-        self.home = None;
+        self.store.unpin();
         outcome
     }
 
@@ -556,9 +559,9 @@ const QUEUE_RESEND_INTERVAL: Duration = Duration::from_millis(50);
 /// Test-only: the listener in [`run`] supplies the process-wide [`LoginQueue`] and the deadline it
 /// started at accept, so an unqueued handshake exists purely for tests.
 #[cfg(test)]
-pub fn world_handshake<S: Read + Write + IoDeadline, St: WorldStore + ?Sized>(
+pub fn world_handshake<S: Read + Write + IoDeadline>(
     stream: &mut S,
-    store: &St,
+    store: Arc<dyn WorldStore>,
 ) -> Result<Option<(WorldConn, EncrypterHalf)>> {
     world_handshake_with_queue(stream, store, &LoginQueue::unlimited())
 }
@@ -580,22 +583,18 @@ pub fn world_handshake<S: Read + Write + IoDeadline, St: WorldStore + ?Sized>(
 /// departs its own seat before propagating the error. A caller that never sees `Ok(Some(..))` never
 /// owes a `depart()` call.
 #[cfg(test)]
-pub fn world_handshake_with_queue<S: Read + Write + IoDeadline, St: WorldStore + ?Sized>(
+pub fn world_handshake_with_queue<S: Read + Write + IoDeadline>(
     stream: &mut S,
-    store: &St,
+    store: Arc<dyn WorldStore>,
     queue: &LoginQueue,
 ) -> Result<Option<(WorldConn, EncrypterHalf)>> {
     let mut deadline = PreAuthDeadline::after(WORLD_AUTH_DEADLINE);
     world_handshake_with_queue_and_deadline(stream, store, queue, &mut deadline)
 }
 
-fn world_handshake_with_queue_and_deadline<
-    S: Read + Write + IoDeadline,
-    St: WorldStore + ?Sized,
-    C: DeadlineClock,
->(
+fn world_handshake_with_queue_and_deadline<S: Read + Write + IoDeadline, C: DeadlineClock>(
     stream: &mut S,
-    store: &St,
+    store: Arc<dyn WorldStore>,
     queue: &LoginQueue,
     deadline: &mut PreAuthDeadline<C>,
 ) -> Result<Option<(WorldConn, EncrypterHalf)>> {
@@ -695,7 +694,7 @@ fn world_handshake_with_queue_and_deadline<
             state: WorldState::CharSelect,
             move_coalesce: CoalesceState::default(),
             gossip_menu: None,
-            home: None,                     // resolved at CMSG_PLAYER_LOGIN
+            store: RoutedStore::new(store), // pinned at CMSG_PLAYER_LOGIN
             session_key: Some(session_key), // for establish_session on a non-realm shard
             guild_signed_on: None,
             move_desync_drops: 0,
@@ -1010,10 +1009,7 @@ fn spawn_writer<S: DuplexStream>(
 /// Test-only, for the same reason as [`world_handshake`]: production supplies the listener's shared
 /// queue and the deadline started at accept.
 #[cfg(test)]
-pub fn run_world_session<S: DuplexStream, St: WorldStore + ?Sized>(
-    stream: S,
-    store: &St,
-) -> Result<()> {
+pub fn run_world_session<S: DuplexStream>(stream: S, store: Arc<dyn WorldStore>) -> Result<()> {
     run_world_session_with_queue(stream, store, &LoginQueue::unlimited())
 }
 
@@ -1042,22 +1038,18 @@ impl Drop for AdmissionSeat<'_> {
 /// admitted (`Ok(Some(..))`), this connection holds a seat in `queue` for the rest of the function —
 /// released by its [`AdmissionSeat`] exactly once, no matter which branch got there.
 #[cfg(test)]
-pub fn run_world_session_with_queue<S: DuplexStream, St: WorldStore + ?Sized>(
+pub fn run_world_session_with_queue<S: DuplexStream>(
     stream: S,
-    store: &St,
+    store: Arc<dyn WorldStore>,
     queue: &LoginQueue,
 ) -> Result<()> {
     let mut deadline = PreAuthDeadline::after(WORLD_AUTH_DEADLINE);
     run_world_session_with_queue_and_deadline(stream, store, queue, &mut deadline)
 }
 
-fn run_world_session_with_queue_and_deadline<
-    S: DuplexStream,
-    St: WorldStore + ?Sized,
-    C: DeadlineClock,
->(
+fn run_world_session_with_queue_and_deadline<S: DuplexStream, C: DeadlineClock>(
     mut stream: S,
-    store: &St,
+    store: Arc<dyn WorldStore>,
     queue: &LoginQueue,
     deadline: &mut PreAuthDeadline<C>,
 ) -> Result<()> {
@@ -1112,7 +1104,7 @@ fn run_world_session_with_queue_and_deadline<
                         addon_refill_at = now;
                         if addon_tokens >= 1.0 {
                             addon_tokens -= 1.0;
-                            handle_addon_message(store, &conn, &text);
+                            handle_addon_message(&*conn.store.current(), &conn, &text);
                         } else if addon_drop_logged_at
                             .is_none_or(|t| now.duration_since(t).as_secs() >= 60)
                         {
@@ -1135,9 +1127,8 @@ fn run_world_session_with_queue_and_deadline<
             if hdr.opcode == CMSG_AUCTION_LIST_ITEMS_OPCODE {
                 let request =
                     decode_auction_browse(&body).map_err(|e| anyhow!("world read error: {e}"))?;
-                on_home_shard!(conn, store, |st| {
-                    dispatch_raw_auction_browse(&tx, st, &mut conn, request)
-                })?;
+                let store = conn.store.current();
+                dispatch_raw_auction_browse(&tx, &*store, &mut conn, request)?;
                 continue;
             }
             if hdr.opcode == CMSG_AUTH_SESSION_OPCODE {
@@ -1155,8 +1146,9 @@ fn run_world_session_with_queue_and_deadline<
             };
             // Every in-world message is dispatched against the player's HOME shard; until
             // CMSG_PLAYER_LOGIN resolves one (and always, with a single-entry shard map) this is
-            // the handle the listener passed in — the unchanged single-database path.
-            on_home_shard!(conn, store, |st| dispatch(&tx, st, &mut conn, msg))?;
+            // the handle the listener passed in.
+            let store = conn.store.current();
+            dispatch(&tx, &*store, &mut conn, msg)?;
         }
     })();
 
@@ -1173,7 +1165,7 @@ fn run_world_session_with_queue_and_deadline<
     // entity delete) and delete the entity ONLY if THIS session still owns it — a stale socket whose
     // player already re-logged on a newer session declines, so we don't vanish the live player.
     // Teardown is already ending the session, so a `logout` failure is logged + swallowed (not fatal).
-    if let Err(e) = conn.leave_world(store) {
+    if let Err(e) = conn.leave_world() {
         log::warn!("logout for account {} failed: {e:#}", conn.account_id);
     }
     drop(tx);
@@ -1185,7 +1177,7 @@ fn run_world_session_with_queue_and_deadline<
 
 /// Does the Character hold a GM level on its Home Shard? A failed read counts as no: the only
 /// effect is that a flooding game master is muted like any other speaker.
-fn is_game_master<St: WorldStore + ?Sized>(store: &St, character_guid: u64) -> bool {
+fn is_game_master<St: ChatActionStore + ?Sized>(store: &St, character_guid: u64) -> bool {
     match store.speaker_gm_level(character_guid) {
         Ok(gm_level) => gm_level > 0,
         Err(error) => {
@@ -1198,7 +1190,7 @@ fn is_game_master<St: WorldStore + ?Sized>(store: &St, character_guid: u64) -> b
 /// The speaker's race, for the Chat Flood Limiter's language check. `None` when the read fails or
 /// the speaker has no live entity here: the line still counts as usual, and the Module's own
 /// language Gate stays the fallback authority.
-fn speaker_race<St: WorldStore + ?Sized>(store: &St, character_guid: u64) -> Option<u8> {
+fn speaker_race<St: ChatActionStore + ?Sized>(store: &St, character_guid: u64) -> Option<u8> {
     match store.speaker_facts(character_guid) {
         Ok(facts) => facts.map(|facts| facts.race),
         Err(error) => {
@@ -1212,17 +1204,17 @@ fn speaker_race<St: WorldStore + ?Sized>(store: &St, character_guid: u64) -> Opt
 /// module's `client_command` reducer as the player. The caller already checked the prefix; a
 /// malformed envelope past that point still drops silently-with-a-debug-line (a truncated or
 /// hand-edited frame is not session-fatal); reducer errors log and drop the same way.
-fn handle_addon_message<St: WorldStore + ?Sized>(store: &St, conn: &WorldConn, text: &str) {
+fn handle_addon_message<St: SessionStore + ?Sized>(store: &St, conn: &WorldConn, text: &str) {
     let Some((cmd, payload)) = codec::addon::parse_bridge_envelope(text) else {
         log::debug!("addon bridge: non-STC or malformed frame dropped: {text:?}");
         return;
     };
-    if let Err(e) = on_home_shard!(conn, store, |st| st.client_command(
+    if let Err(e) = store.client_command(
         conn.account_id,
         social::self_guid(conn).unwrap_or(0),
         cmd.clone(),
         payload,
-    )) {
+    ) {
         log::info!(
             "addon bridge: command {cmd:?} from account {} failed: {e:#}",
             conn.account_id
@@ -1260,9 +1252,9 @@ fn apply_cast_transition(conn: &mut WorldConn, transition: CastTransition) {
 /// Route one decrypted client message through the per-family handlers. Each stage either consumes
 /// its opcode or passes it onward, so the disjoint-family chain ends in the movement-relay catch-all.
 #[allow(clippy::too_many_lines)] // One stage per opcode family.
-fn dispatch<St: WorldStore + ?Sized>(
+fn dispatch(
     tx: &SessionTx,
-    store: &St,
+    store: &dyn WorldStore,
     conn: &mut WorldConn,
     msg: ClientOpcodeMessage,
 ) -> Result<()> {
@@ -1654,7 +1646,7 @@ fn dispatch<St: WorldStore + ?Sized>(
     Ok(())
 }
 
-fn dispatch_raw_auction_browse<St: WorldStore + ?Sized>(
+fn dispatch_raw_auction_browse<St: AuctionActionStore + SessionStore + ?Sized>(
     tx: &SessionTx,
     store: &St,
     conn: &mut WorldConn,
@@ -1682,7 +1674,7 @@ fn dispatch_raw_auction_browse<St: WorldStore + ?Sized>(
     }
 }
 
-fn forward_movement<St: WorldStore + ?Sized>(
+fn forward_movement<St: SessionStore + ?Sized>(
     store: &St,
     conn: &mut WorldConn,
     opcode: u32,
@@ -1942,17 +1934,21 @@ pub async fn run(
         }
         tokio::task::spawn_blocking(move || {
             let _task_permit = task_permit;
-            // `Coordinator` implements `WorldStore` directly (see `stdb::world_store`) — no wrapper.
             // `queue` gates admission INSIDE the handshake — a queued connection just blocks
             // this one `spawn_blocking` thread, never the accept loop above.
-            if let Err(e) =
-                run_world_session_with_queue_and_deadline(std_sock, &coord, &queue, &mut deadline)
-            {
+            if let Err(e) = run_world_session_with_queue_and_deadline(
+                std_sock,
+                Arc::new(coord),
+                &queue,
+                &mut deadline,
+            ) {
                 log::warn!("world session {peer} ended: {e:#}");
             }
         });
     }
 }
 
+#[cfg(all(test, unix))]
+mod test_support;
 #[cfg(all(test, unix))]
 mod tests;
