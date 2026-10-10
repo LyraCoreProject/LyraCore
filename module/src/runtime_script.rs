@@ -1498,8 +1498,7 @@ if #roster > 0 then grant_xp(event.actor, 25) end
             },
             ..engagement()
         };
-        let source =
-            include_str!("../../datascripts/tests/fixtures/typed/welcome.generated.lua");
+        let source = include_str!("../../datascripts/tests/fixtures/typed/welcome.generated.lua");
         assert_eq!(
             committed(&mut host, &event, source).expect("compiled login handler runs"),
             [Committed::Chat {
