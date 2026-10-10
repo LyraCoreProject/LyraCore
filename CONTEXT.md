@@ -920,7 +920,7 @@ _Avoid_: weather event, weather state table
 ### Packages
 
 **Package**:
-A drop-in folder under `packages/<name>/` that adds content to the realm with no core-file edits. Its `src/` is compiled into the Module wasm by the build's own discovery; its `client/` half supplies addons, whole-file client overrides and UI Transforms to the client packer. Either half alone is a valid Package.
+A drop-in folder under `packages/<name>/` that adds content to the realm with no core-file edits. Its `src/` is compiled into the Module wasm by the build's own discovery; its `client/` half supplies addons, whole-file client overrides and UI Transforms to the client packer. A Package can also carry Runtime Scripts in `scripts/`, Datascripts in `datascripts/`, and generated artifacts in `data/.generated/`. Any one of these parts is enough.
 Its data changes ship as Package Deltas rather than as edits to the base data.
 Package-specific tests live with the Package. Core supplies reusable private integration fixtures;
 the Package's test runner selects the Core checkout and owns its compatibility checks.
