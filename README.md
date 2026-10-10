@@ -55,9 +55,11 @@ in TypeScript or Lua, data changes, client addons, Rust code, or any mix of thes
 ```bash
 lyracore packages new my-package    # start your own
 lyracore packages add playerbots    # install an official one
+lyracore packages apply             # build and activate enabled Packages
 ```
 
 The official Packages live in [LyraCoreProject/packages](https://github.com/LyraCoreProject/packages).
+[Applying packages](./packages/README.md#applying-packages) explains what the command changes.
 [`docs/package-api.md`](./docs/package-api.md) lists what a Package's Rust code may call.
 
 ## Architecture

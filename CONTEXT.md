@@ -980,12 +980,8 @@ _Avoid_: config file, setting (unqualified), package setting
 
 **Package Inventory**:
 The two directories that hold installed Packages. `packages/` holds the enabled ones, which the build compiles. `.lyracore/packages-disabled/` holds the disabled ones, which it cannot see. A Package's location IS its enabled state; no file records it, so nothing can disagree with the disk about what the next build compiles. `lyracore packages enable` and `lyracore packages disable` move one folder between the two.
+`lyracore packages apply` applies the enabled set to the chosen Shards. See [Applying packages](packages/README.md#applying-packages) for artifact preparation and Module publishing.
 _Avoid_: registry, package list, enabled flag, state file
-
-`lyracore packages apply` prepares missing or stale artifacts from installed sources, publishes
-the Module when the inventory contains Rust or a target records pending Package Teardown, and
-applies spell and script artifacts to the chosen Shards. It repairs schedules after each publish.
-Client content uses `lyracore client sync`.
 
 **Package Teardown**:
 The Operator step that stops a Package on every Shard before it leaves the Package Inventory. It
