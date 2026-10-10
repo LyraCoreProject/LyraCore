@@ -1,79 +1,36 @@
 //! `Coordinator`'s [`LootWindowStore`] adapter.
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use lyracore_shared::group::GroupKind;
 use lyracore_shared::loot::{LootBoundaryFailure, LootRefusal};
 use spacetimedb_sdk::Table;
 
 use crate::codec;
 use crate::stdb::bindings::*;
-use crate::stdb::connection::{call_reducer, reducer_refusal_reason, LiveConn};
+use crate::stdb::connection::{call_reducer, LiveConn};
 use crate::stdb::reads::player_item_count;
-use crate::stdb::Coordinator;
+use crate::stdb::{classify, Coordinator, DurableFailure};
 use crate::world::{Actor, LootWindowRefusal, LootWindowRequestStatus, LootWindowStore};
 
-impl LootWindowStore for crate::stdb::Coordinator {
+impl LootWindowStore for Coordinator {
+    /// Reads a corpse's lootable copper for `SMSG_LOOT_RESPONSE` from the privileged cache.
+    /// Returns 0 if the target is missing or not a corpse — the client only sends `CMSG_LOOT` on a
+    /// lootable corpse, but we stay defensive (an empty loot window is harmless).
     fn loot_target_money(&self, target_guid: u64) -> Result<u32> {
-        crate::stdb::Coordinator::loot_target_money(self, target_guid)
+        Ok(self
+            .0
+            .coord()
+            .conn
+            .db
+            .game_world_entity()
+            .guid()
+            .find(&target_guid)
+            .filter(|e| e.dead)
+            .map(|e| e.money)
+            .unwrap_or(0))
     }
 
-    fn loot_target_items(
-        &self,
-        target_guid: u64,
-        viewer_guid: u64,
-    ) -> Result<Vec<codec::LootItemView>> {
-        crate::stdb::Coordinator::corpse_loot(self, target_guid, viewer_guid)
-    }
-
-    fn use_gameobject(
-        &self,
-        account_id: u64,
-        actor_guid: u64,
-        target_guid: u64,
-    ) -> Result<LootWindowRequestStatus> {
-        crate::stdb::Coordinator::use_gameobject(self, account_id, actor_guid, target_guid)
-    }
-
-    fn open_creature_loot(
-        &self,
-        account_id: u64,
-        actor_guid: u64,
-        corpse_guid: u64,
-    ) -> Result<LootWindowRequestStatus> {
-        crate::stdb::Coordinator::open_creature_loot(self, account_id, actor_guid, corpse_guid)
-    }
-
-    fn skin_corpse(
-        &self,
-        account_id: u64,
-        actor_guid: u64,
-        target_guid: u64,
-    ) -> Result<LootWindowRequestStatus> {
-        crate::stdb::Coordinator::skin_corpse(self, account_id, actor_guid, target_guid)
-    }
-
-    fn loot_money(
-        &self,
-        account_id: u64,
-        actor_guid: u64,
-        target_guid: u64,
-    ) -> Result<LootWindowRequestStatus> {
-        crate::stdb::Coordinator::loot_money(self, account_id, actor_guid, target_guid)
-    }
-
-    fn take_loot(
-        &self,
-        account_id: u64,
-        actor_guid: u64,
-        target_guid: u64,
-        loot_slot: u8,
-    ) -> Result<LootWindowRequestStatus> {
-        crate::stdb::Coordinator::take_loot(self, account_id, actor_guid, target_guid, loot_slot)
-    }
-}
-
-impl Coordinator {
-    /// Read a corpse's item loot for the loot window, joined with each item's
+    /// Reads a corpse's item loot for the loot window, joined with each item's
     /// template for the display id, then filtered PER VIEWER for `quest_only` rows (quest items are
     /// per-looter, not gated on whoever got kill credit) AND group-loot rows (a live NEED/GREED
     /// roll is withheld from EVERYONE; a round-robin/master-designated row is visible only to its
@@ -81,17 +38,17 @@ impl Coordinator {
     /// `corpse_guid` (iterate+filter, like the other row queries). Returns `(slot, item_id, count,
     /// display_id)` triples for `build_loot_response_raw`. An item whose template isn't loaded falls
     /// back to display 0 (the client still resolves the name via query).
-    pub fn corpse_loot(
+    fn loot_target_items(
         &self,
-        corpse_guid: u64,
+        target_guid: u64,
         viewer_guid: u64,
-    ) -> Result<Vec<crate::codec::LootItemView>> {
+    ) -> Result<Vec<codec::LootItemView>> {
         let guard = self.0.coord();
         let db = &guard.conn.db;
-        let mut items: Vec<crate::codec::LootItemView> = db
+        let mut items: Vec<codec::LootItemView> = db
             .game_corpse_loot()
             .iter()
-            .filter(|l| l.corpse_guid == corpse_guid)
+            .filter(|l| l.corpse_guid == target_guid)
             .filter(|l| {
                 if l.quest_only {
                     let needs = viewer_needs_quest_item(&guard, viewer_guid, l.item_entry);
@@ -126,34 +83,9 @@ impl Coordinator {
         Ok(items)
     }
 
-    /// Read a corpse's lootable copper for `SMSG_LOOT_RESPONSE` from the privileged cache.
-    /// Returns 0 if the target is missing or not a corpse — the client only sends `CMSG_LOOT` on a
-    /// lootable corpse, but we stay defensive (an empty loot window is harmless).
-    pub fn loot_target_money(&self, target_guid: u64) -> Result<u32> {
-        Ok(self
-            .0
-            .coord()
-            .conn
-            .db
-            .game_world_entity()
-            .guid()
-            .find(&target_guid)
-            .filter(|e| e.dead)
-            .map(|e| e.money)
-            .unwrap_or(0))
-    }
-
-    /// Use a gameobject (`CMSG_GAMEOBJ_USE`) — a chest rolls its loot into the corpse-loot table keyed
-    /// on the GO guid, a quest-use object grants quest credit. The module gates range + type.
-    /// Rides the coordinator connection as `gw_use_gameobject`.
-    pub fn use_gameobject(
-        &self,
-        _account_id: u64,
-        actor_guid: u64,
-        go_guid: u64,
-    ) -> Result<LootWindowRequestStatus> {
-        let actor = Actor::new(actor_guid)
-            .ok_or_else(|| anyhow!("use_gameobject: actor_guid unresolved"))?;
+    /// A chest rolls its loot into the corpse-loot table keyed on the GO guid, a quest-use object
+    /// grants quest credit. The module gates range + type.
+    fn use_gameobject(&self, actor: Actor, go_guid: u64) -> Result<LootWindowRequestStatus> {
         let coord = self.0.call_pipe();
         legacy_loot_request_status(call_reducer!(
             coord.conn.reducers,
@@ -162,33 +94,12 @@ impl Coordinator {
         ))
     }
 
-    /// Take the money from a corpse (`CMSG_LOOT_MONEY`) over the coordinator connection so
-    /// the module attributes the loot to the caller (as `gw_loot_money`).
-    pub fn loot_money(
+    /// Authorizes opening a creature corpse before the Gateway reads its loot rows.
+    fn open_creature_loot(
         &self,
-        _account_id: u64,
-        actor_guid: u64,
-        target_guid: u64,
-    ) -> Result<LootWindowRequestStatus> {
-        let actor =
-            Actor::new(actor_guid).ok_or_else(|| anyhow!("loot_money: actor_guid unresolved"))?;
-        let coord = self.0.call_pipe();
-        strict_loot_request_status(call_reducer!(
-            coord.conn.reducers,
-            "gw_loot_money",
-            gw_loot_money_then(self.session_actor(actor), target_guid)
-        ))
-    }
-
-    /// Authorize opening a creature corpse before the Gateway reads its loot rows.
-    pub fn open_creature_loot(
-        &self,
-        _account_id: u64,
-        actor_guid: u64,
+        actor: Actor,
         corpse_guid: u64,
     ) -> Result<LootWindowRequestStatus> {
-        let actor = Actor::new(actor_guid)
-            .ok_or_else(|| anyhow!("open_creature_loot: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         strict_loot_request_status(call_reducer!(
             coord.conn.reducers,
@@ -197,40 +108,37 @@ impl Coordinator {
         ))
     }
 
-    /// Take one item from the open corpse into the backpack (`CMSG_AUTOSTORE_LOOT_ITEM`) over
-    /// the coordinator connection so the module attributes the loot to the caller. The module moves the
-    /// item into a free slot + deletes the corpse-loot row (the inventory relay then shows it in the bag).
-    /// Rides the coordinator connection as `gw_take_loot`.
-    pub fn take_loot(
-        &self,
-        _account_id: u64,
-        actor_guid: u64,
-        corpse_guid: u64,
-        loot_slot: u8,
-    ) -> Result<LootWindowRequestStatus> {
-        let actor =
-            Actor::new(actor_guid).ok_or_else(|| anyhow!("take_loot: actor_guid unresolved"))?;
-        let coord = self.0.call_pipe();
-        strict_loot_request_status(call_reducer!(
-            coord.conn.reducers,
-            "gw_take_loot",
-            gw_take_loot_then(self.session_actor(actor), corpse_guid, loot_slot)
-        ))
-    }
-
-    pub fn skin_corpse(
-        &self,
-        _account_id: u64,
-        actor_guid: u64,
-        corpse_guid: u64,
-    ) -> Result<LootWindowRequestStatus> {
-        let actor =
-            Actor::new(actor_guid).ok_or_else(|| anyhow!("skin_corpse: actor_guid unresolved"))?;
+    fn skin_corpse(&self, actor: Actor, corpse_guid: u64) -> Result<LootWindowRequestStatus> {
         let coord = self.0.call_pipe();
         legacy_loot_request_status(call_reducer!(
             coord.conn.reducers,
             "gw_skin",
             gw_skin_then(self.session_actor(actor), corpse_guid)
+        ))
+    }
+
+    fn loot_money(&self, actor: Actor, target_guid: u64) -> Result<LootWindowRequestStatus> {
+        let coord = self.0.call_pipe();
+        strict_loot_request_status(call_reducer!(
+            coord.conn.reducers,
+            "gw_loot_money",
+            gw_loot_money_then(self.session_actor(actor), target_guid)
+        ))
+    }
+
+    /// The module moves the item into a free slot and deletes the corpse-loot row; the inventory
+    /// relay then shows it in the bag.
+    fn take_loot(
+        &self,
+        actor: Actor,
+        corpse_guid: u64,
+        loot_slot: u8,
+    ) -> Result<LootWindowRequestStatus> {
+        let coord = self.0.call_pipe();
+        strict_loot_request_status(call_reducer!(
+            coord.conn.reducers,
+            "gw_take_loot",
+            gw_take_loot_then(self.session_actor(actor), corpse_guid, loot_slot)
         ))
     }
 }
@@ -396,8 +304,8 @@ fn loot_request_status(
 ) -> Result<LootWindowRequestStatus> {
     match result {
         Ok(()) => Ok(LootWindowRequestStatus::Applied),
-        Err(error) => match reducer_refusal_reason(&error) {
-            Some(reason) => {
+        Err(error) => match classify(&error) {
+            DurableFailure::Refusal { reason } => {
                 if LootBoundaryFailure::parse_tag(reason).is_some() {
                     return Err(error);
                 }
@@ -418,7 +326,7 @@ fn loot_request_status(
                     UntaggedLootRejection::Fatal => Err(error),
                 }
             }
-            None => Err(error),
+            DurableFailure::TransportLoss => Err(error),
         },
     }
 }
@@ -577,11 +485,10 @@ mod loot_reducer_tests {
     }
 
     fn rejected(reason: &str) -> Result<()> {
-        Err(anyhow::Error::from(ReducerCallError::Rejected {
-            operation: "gw_take_loot".to_string(),
-            reason: reason.to_string(),
-        })
-        .context("loot window"))
+        Err(
+            anyhow::Error::from(ReducerCallError::refused("gw_take_loot", reason))
+                .context("loot window"),
+        )
     }
 
     #[test]
@@ -635,15 +542,10 @@ mod loot_reducer_tests {
     }
 
     #[test]
-    fn a_timeout_is_not_answered_as_a_refusal() {
+    fn a_transport_loss_is_not_answered_as_a_refusal() {
         let not_refusals = [
-            anyhow::Error::from(ReducerCallError::fatal(
-                "gw_take_loot reducer timed out after 10s".to_string(),
-            )),
-            anyhow::Error::from(ReducerCallError::fatal(
-                "gw_loot_money reducer failed: transport disconnected".to_string(),
-            )),
-            anyhow!(
+            anyhow::Error::from(ReducerCallError::transport_lost("gw_loot_money")),
+            anyhow::anyhow!(
                 "wrapped text that mentions {}",
                 LootRefusal::LootTagIneligible.as_tag()
             ),

@@ -33,12 +33,7 @@ impl LootWindowStore for WorldFake {
             .unwrap_or_default())
     }
 
-    fn use_gameobject(
-        &self,
-        _account_id: u64,
-        _actor_guid: u64,
-        target_guid: u64,
-    ) -> Result<LootWindowRequestStatus> {
+    fn use_gameobject(&self, _actor: Actor, target_guid: u64) -> Result<LootWindowRequestStatus> {
         self.loot_window
             .gameobjects_used
             .lock()
@@ -49,28 +44,17 @@ impl LootWindowStore for WorldFake {
 
     fn open_creature_loot(
         &self,
-        _account_id: u64,
-        _actor_guid: u64,
+        _actor: Actor,
         _corpse_guid: u64,
     ) -> Result<LootWindowRequestStatus> {
         Ok(LootWindowRequestStatus::Applied)
     }
 
-    fn skin_corpse(
-        &self,
-        _account_id: u64,
-        _actor_guid: u64,
-        _target_guid: u64,
-    ) -> Result<LootWindowRequestStatus> {
+    fn skin_corpse(&self, _actor: Actor, _target_guid: u64) -> Result<LootWindowRequestStatus> {
         Ok(LootWindowRequestStatus::Applied)
     }
 
-    fn loot_money(
-        &self,
-        _account_id: u64,
-        _actor_guid: u64,
-        target_guid: u64,
-    ) -> Result<LootWindowRequestStatus> {
+    fn loot_money(&self, _actor: Actor, target_guid: u64) -> Result<LootWindowRequestStatus> {
         self.loot_window
             .money_looted
             .lock()
@@ -81,8 +65,7 @@ impl LootWindowStore for WorldFake {
 
     fn take_loot(
         &self,
-        _account_id: u64,
-        _actor_guid: u64,
+        _actor: Actor,
         target_guid: u64,
         loot_slot: u8,
     ) -> Result<LootWindowRequestStatus> {
