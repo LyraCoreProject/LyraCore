@@ -65,17 +65,6 @@ impl RealmDb for Coordinator {
         self.character_location(guid)
     }
 
-    fn character_shard(&self, guid: u64) -> Option<(u32, u64)> {
-        self.0
-            .coord()
-            .conn
-            .db
-            .game_character_shard()
-            .character_guid()
-            .find(&guid)
-            .map(|s| (s.map_id, s.instance_id))
-    }
-
     /// Call it on the Realm-core handle: on a World Shard `finish_transfer` maintains the index
     /// in the same transaction.
     fn set_character_shard(&self, guid: u64, map_id: u32, instance_id: u64) -> Result<()> {

@@ -151,6 +151,8 @@ mod presence_tests;
 mod quest_tests;
 #[path = "session_tests.rs"]
 mod session_tests;
+#[path = "shard_routing_durable_tests.rs"]
+mod shard_routing_durable_tests;
 #[path = "shard_routing_tests.rs"]
 mod shard_routing_tests;
 #[path = "social_tests.rs"]
