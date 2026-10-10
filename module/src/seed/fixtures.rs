@@ -1747,7 +1747,7 @@ fn upsert_effect(ctx: &spacetimedb::ReducerContext, row: SpellEffect) {
 }
 
 /// Stacking-family probe fixture — the four real family members a live aura-stacking probe needs
-/// (`docs/aura-stacking-probes.md`).
+/// (`docs/verification/aura-stacking-probes.md`).
 ///
 /// A curated sandbox carries only rank 1 of each aura family and every one of those is self-cast,
 /// so neither "the stronger member wins from either caster" nor "two paladins, one target" can be
