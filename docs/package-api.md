@@ -470,6 +470,9 @@ Other fields follow each event's declaration. Entity Handles keep their existing
 keyed by source-file stem. Commit it with the sources and Script Artifact. Existing artifacts and
 legacy `@event`/`@id` directives supply migration IDs; a conflict is refused. Renaming a function
 keeps its identity. A source-file rename creates a new identity. Deleted entries remain reserved.
+Migration reads every prior Script Artifact in `data/.generated/`, including noncanonical
+filenames. For a new identity, the toolchain resolves a hash collision by choosing an unused ID.
+It reserves recorded and legacy IDs before allocating new ones.
 
 **Runtime Script Toolchain.** Bun, `typescript-to-lua`, the Lua parser, event catalogue, generated
 declarations and emitter live in `datascripts/runtime-scripts/`. They run only at author time.

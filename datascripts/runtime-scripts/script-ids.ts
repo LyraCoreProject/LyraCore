@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 
 export const SCRIPT_IDS_FILE = "script-ids.json";
@@ -35,7 +35,7 @@ async function readJson(path: string): Promise<unknown | undefined> {
   }
 }
 
-/** Recorded IDs outlive source removal, and an existing artifact supplies migration identities. */
+/** Recorded IDs outlive source removal. Prior Script Artifacts supply migration identities. */
 export async function scriptIds(packageDir: string, packageName: string): Promise<ScriptIds> {
   const path = join(packageDir, SCRIPT_IDS_FILE);
   const saved = await readJson(path);
@@ -48,9 +48,29 @@ export async function scriptIds(packageDir: string, packageName: string): Promis
     for (const [stem, id] of Object.entries(saved.ids)) recordId(path, ledger, stem, id);
   }
 
-  const artifactPath = join(packageDir, "data", ".generated", `${packageName}.script.json`);
-  const artifact = await readJson(artifactPath);
-  if (artifact !== undefined) {
+  const generated = join(packageDir, "data", ".generated");
+  const canonicalName = `${packageName}.script.json`;
+  const entries = await readdir(generated, { withFileTypes: true }).catch((error: unknown) => {
+    if (object(error) && error.code === "ENOENT") return [];
+    throw error;
+  });
+  for (const entry of entries.sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0)) {
+    const artifactPath = join(generated, entry.name);
+    const canonical = entry.name === canonicalName;
+    if (!entry.isFile()) {
+      if (canonical) refusal(artifactPath, "expected a regular Script Artifact file");
+      continue;
+    }
+    if (!entry.name.endsWith(".json")) continue;
+    const contents = await readFile(artifactPath, "utf8");
+    let artifact: unknown;
+    try {
+      artifact = JSON.parse(contents);
+    } catch {
+      if (canonical) refusal(artifactPath, "invalid JSON; restore the recorded script identities before building");
+      continue;
+    }
+    if (!canonical && (!object(artifact) || artifact.kind !== "script")) continue;
     if (!object(artifact) || artifact.kind !== "script" || artifact.version !== 1
       || artifact.package !== packageName || !Array.isArray(artifact.scripts)) {
       refusal(artifactPath, "cannot recover script identities from this Script Artifact");
@@ -75,7 +95,7 @@ function recordId(path: string, ledger: ScriptIds, stem: string, id: unknown): n
   }
   for (const [other, reserved] of Object.entries(ledger.ids)) {
     if (other !== stem && reserved === id) {
-      refusal(path, `${stem} collides with ${other} on script ID ${id}; keep published IDs and allocate a different unused ID for the new script in ${SCRIPT_IDS_FILE}`);
+      refusal(path, `${stem} collides with ${other} on recorded script ID ${id}; restore the published identities before building`);
     }
   }
   ledger.ids[stem] = id;
@@ -84,9 +104,18 @@ function recordId(path: string, ledger: ScriptIds, stem: string, id: unknown): n
 
 export function allocateScriptId(path: string, ledger: ScriptIds, stem: string, legacyId?: number): number {
   const recorded = ledger.ids[stem];
+  if (legacyId !== undefined || recorded !== undefined) {
+    return recordId(path, ledger, stem, legacyId ?? recorded);
+  }
   const digest = createHash("sha256").update(ledger.package).update("\0").update(stem).digest();
-  const id = legacyId ?? recorded ?? FLOOR + digest.readUInt32BE(0) % (CEILING - FLOOR + 1);
-  return recordId(path, ledger, stem, id);
+  const first = FLOOR + digest.readUInt32BE(0) % (CEILING - FLOOR + 1);
+  const reserved = new Set(Object.values(ledger.ids));
+  let id = first;
+  do {
+    if (!reserved.has(id)) return recordId(path, ledger, stem, id);
+    id = id === CEILING ? FLOOR : id + 1;
+  } while (id !== first);
+  return refusal(path, `the Package Script Range ${FLOOR}..=${CEILING} has no unused script ID`);
 }
 
 export function renderScriptIds(ledger: ScriptIds): string {
