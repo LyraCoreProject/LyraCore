@@ -411,15 +411,12 @@ pub(crate) fn handle_loot<
         // walks into a trigger zone (e.g. a mine for an "explore" quest). The module credits any active
         // explore quest tied to the trigger id. A transient/no-match result is logged + ignored.
         ClientOpcodeMessage::CMSG_AREATRIGGER(a) => {
-            if let Err(e) = store.enter_areatrigger(
-                conn.account_id,
-                social::self_guid(conn).unwrap_or(0),
-                a.trigger_id,
-            ) {
-                log::debug!(
-                    "world: enter_areatrigger ignored (account {}): {e}",
-                    conn.account_id
-                );
+            if let Some(actor) = social::self_guid(conn).and_then(Actor::new) {
+                super::trainer::settle_per_action(
+                    "enter_areatrigger",
+                    conn.account_id,
+                    store.enter_areatrigger(actor, a.trigger_id),
+                )?;
             }
         }
         // Gameobject template query (CMSG_GAMEOBJECT_QUERY): the client asks for a GO's name/type/display

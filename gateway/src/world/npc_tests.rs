@@ -109,6 +109,108 @@ fn inspect_in_range_friendly_target_replies_smsg_inspect_with_the_target_guid() 
     server.join().unwrap();
 }
 
+/// `enter_world` for a test that needs to see how the session ended: the server thread hands back
+/// its verdict instead of unwrapping it.
+fn enter_world_unjoined(
+    store: std::sync::Arc<WorldFake>,
+    guid: u64,
+) -> (
+    std::os::unix::net::UnixStream,
+    EncrypterHalf,
+    DecrypterHalf,
+    std::thread::JoinHandle<Result<()>>,
+) {
+    let (mut client, server_end) = world_session_socket_pair();
+    let server = std::thread::spawn(move || run_world_session(server_end, store));
+    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
+    CMSG_PLAYER_LOGIN {
+        guid: Guid::new(guid),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    drain_world_entry(&mut client, &mut c_dec);
+    (client, c_enc, c_dec, server)
+}
+
+/// A Transport Loss leaves the inspect gate's outcome unknown, so it ends the World Session. A
+/// Refusal (above) only drops the request.
+#[test]
+fn inspect_transport_loss_ends_the_world_session() {
+    let mut s = quest_store();
+    s.npc.inspect_error =
+        Some(|| crate::stdb::ReducerCallError::transport_lost("gw_inspect").into());
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world_unjoined(store, 1);
+    CMSG_INSPECT {
+        guid: Guid::new(55),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    while let Ok(message) = ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec) {
+        assert!(
+            !matches!(message, ServerOpcodeMessage::SMSG_INSPECT(_)),
+            "a lost inspect is not an acknowledgement"
+        );
+    }
+    assert!(
+        server.join().unwrap().is_err(),
+        "a Transport Loss ends the World Session"
+    );
+}
+
+/// Say, yell and `/e` lines go to the speaker's Home Shard. A lost transport leaves the line's
+/// fate unknown, so it ends the World Session.
+#[test]
+fn a_say_lost_to_a_transport_loss_ends_the_world_session() {
+    let mut s = quest_store();
+    s.speech.send_chat_error =
+        Some(|| crate::stdb::ReducerCallError::transport_lost("gw_send_chat").into());
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, _c_dec, server) = enter_world_unjoined(store, 1);
+    CMSG_MESSAGECHAT {
+        chat_type: CMSG_MESSAGECHAT_ChatType::Say,
+        language: Language::Universal,
+        message: "hello".into(),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    assert!(
+        server.join().unwrap().is_err(),
+        "a Transport Loss ends the World Session"
+    );
+}
+
+/// The Gateway finds a mistyped GM Account itself. The GM reads the reason as a system line and
+/// the World Session goes on.
+#[test]
+fn a_gm_command_for_an_unknown_account_answers_a_system_line_and_keeps_the_session() {
+    let mut s = quest_store();
+    s.speech.gm_command_error = Some(|| {
+        crate::stdb::ReducerCallError::refused(
+            "gm_command",
+            "no Account named TESTER on Realm-core",
+        )
+        .into()
+    });
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world_unjoined(store, 1);
+    CMSG_MESSAGECHAT {
+        chat_type: CMSG_MESSAGECHAT_ChatType::Say,
+        language: Language::Universal,
+        message: ".speed 3".into(),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_MESSAGECHAT(m) => {
+            assert_eq!(m.message, "no Account named TESTER on Realm-core");
+        }
+        other => panic!("expected SMSG_MESSAGECHAT, got {other}"),
+    }
+    drop(client);
+    assert!(server.join().unwrap().is_ok(), "the session goes on");
+}
+
 #[test]
 fn inspect_refused_target_sends_no_reply() {
     // CMSG_PLAYED_TIME (below) always replies as long as `character_by_guid` resolves the caller's
@@ -715,8 +817,8 @@ fn gossip_hello_shows_unlearn_talents_at_level_10_and_select_routes_to_reset_tal
     let calls = store.trainer.reset_talents_calls.lock().unwrap();
     assert_eq!(
         calls.as_slice(),
-        &[(7, 1, 90)],
-        "reset_talents must have been called with (account_id, self_guid, trainer_guid)"
+        &[(1, 90)],
+        "reset_talents must have been called with (actor guid, trainer_guid)"
     );
 }
 

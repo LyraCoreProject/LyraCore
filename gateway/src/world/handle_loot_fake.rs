@@ -7,7 +7,7 @@ use crate::world::handlers::{
     DeathStore, LootActionStatus, LootWindowRequestStatus, LootWindowStore, NpcStore,
 };
 use crate::world::loot::{LootRollStore, PendingLootRoll};
-use crate::world::{ShardRoutingStore, WorldStore};
+use crate::world::{Actor, ShardRoutingStore, WorldStore};
 use anyhow::{anyhow, Result};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -215,7 +215,7 @@ impl NpcStore for HandleLootFake {
 
     fn pet_name(
         &self,
-        _requester_guid: u64,
+        _requester: Actor,
         _pet_number: u32,
         _pet_guid: u64,
     ) -> Result<Option<codec::PetNameView>> {
@@ -230,7 +230,7 @@ impl NpcStore for HandleLootFake {
         unreachable!("no test reaches the NPC family")
     }
 
-    fn enter_areatrigger(&self, _account_id: u64, _self_guid: u64, _trigger_id: u32) -> Result<()> {
+    fn enter_areatrigger(&self, _actor: Actor, _trigger_id: u32) -> Result<()> {
         unreachable!("no test reaches the NPC family")
     }
 
@@ -238,7 +238,7 @@ impl NpcStore for HandleLootFake {
         unreachable!("no test reaches the NPC family")
     }
 
-    fn bind_home(&self, _account_id: u64, _self_guid: u64) -> Result<()> {
+    fn bind_home(&self, _actor: Actor) -> Result<()> {
         unreachable!("no test reaches the NPC family")
     }
 
@@ -258,14 +258,13 @@ impl NpcStore for HandleLootFake {
         unreachable!("no test reaches the NPC family")
     }
 
-    fn inspect(&self, _account_id: u64, _self_guid: u64, _target_guid: u64) -> Result<()> {
+    fn inspect(&self, _actor: Actor, _target_guid: u64) -> Result<()> {
         unreachable!("no test reaches the NPC family")
     }
 
     fn gossip_select(
         &self,
-        _account_id: u64,
-        _self_guid: u64,
+        _actor: Actor,
         _npc_guid: u64,
         _option_id: u32,
         _option_row_id: u32,
