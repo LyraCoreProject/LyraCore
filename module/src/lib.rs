@@ -14,7 +14,7 @@
 //! re-exports carry those traits to the crate root. Scheduled tables are co-located with the
 //! reducer they name (`scheduled(...)` resolves the reducer in its own module's scope).
 //!
-//! Built against SpacetimeDB 2.5 (`accessor =` table syntax; `ctx.sender()` /
+//! Built against SpacetimeDB 2.7.1 (`accessor =` table syntax; `ctx.sender()` /
 //! `ctx.db.<accessor>()`; RLS via the `unstable` `client_visibility_filter`). Categories,
 //! visibility, and field-index annotations follow `docs/schema.md`.
 
@@ -309,12 +309,8 @@ mod config;
 mod corpse;
 mod creatures;
 mod exploration;
-// Layer 1 test-only reducers (debug_teleport / set_health / spawn_at_feet / force_cast / set_level /
-// clear_creatures) for the client-automation harness. PROD-SAFE: the whole module is behind the
-// `debug_reducers` Cargo feature (default OFF) — a plain build / production publish compiles it out
-// entirely. Enable for the test build via `--build-options='--features=debug_reducers'`. See
-// debug/mod.rs (split this into a directory along its section banners: mod/readout/audit/
-// repair/encounter/instance/fingerprint).
+// Client-automation test reducers, behind the `debug_reducers` feature. Every publish enables the
+// feature, so they exist on production databases too; see `debug/mod.rs`.
 #[cfg(feature = "debug_reducers")]
 mod debug;
 // Encounter kernel (work-item 228): instance-scoped encounter state, HP-threshold/death/GO-use
@@ -378,6 +374,8 @@ mod motion;
 /// idempotent dismount every removal path converges on.
 mod mount;
 pub mod nav;
+/// Operator reducers every build carries: the post-publish repair pass.
+mod operations;
 /// Package-owned Accounts: the operation a Package creates its session-less Characters through, and
 /// the record of which Package owns each Account.
 mod package_account;

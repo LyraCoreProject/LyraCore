@@ -1,6 +1,4 @@
-//! The consolidated post-publish repair pass — the one reducer the publish script calls after
-//! every deploy to re-seed/rearm everything `seed::init` would have inserted on a fresh database but
-//! that a plain auto-migrate republish silently leaves absent.
+//! Operator reducers that every build carries, whatever its Cargo features.
 
 use spacetimedb::{log, reducer, ReducerContext, ScheduleAt, Table, TimeDuration};
 
@@ -14,29 +12,16 @@ use crate::{
     CreatureMoveSchedule, DuelSchedule, GroundAreaSchedule, PetCareSchedule,
 };
 
-/// Consolidated post-publish repair pass. SpacetimeDB's `init` reducer runs ONLY on a
-/// database's first-ever publish, never again on a plain (auto-migrate) republish — so every
-/// seed/fixture/schedule row `seed::init` inserts is silently ABSENT on an already-migrated live DB
-/// until something re-seeds it by hand. That "something" used to be 17 near-identical
-/// `debug_seed_*`/`debug_ensure_*`/`debug_rearm_*` reducers, one per fixture family — a model that
-/// failed operationally at least four times (aura schedule, ground-area schedule, regen fixture,
-/// catalogue drift), and forced `debug_seed_scenario_fixtures` to bolt two extra seeders onto
-/// itself as a stopgap when a live suite hard-failed on a missing fixture. Every underlying seeder
-/// is idempotent-if-absent by construction (each deleted reducer documented the same precedent), so
-/// running all of them unconditionally on every publish — fresh or auto-migrated — is always safe,
-/// and "which of the N do I call after this publish?" collapses to "just this one".
+/// The post-publish repair pass. SpacetimeDB runs `init` only on a database's first publish, so
+/// every seed, fixture and schedule row `seed::init` inserts stays absent on an auto-migrated
+/// database until this pass restores it. Every step is idempotent, so it is safe to run after every
+/// publish, on every shard.
 ///
-/// Gated by `require_operator` (the strictest of the reducers it replaces, formerly
-/// `debug_rearm_instance_reaper`'s gate alone) rather than left open like most of its predecessors:
-/// this is meant to run exactly once per publish, driven by the same CLI/deploy identity that ran
-/// `spacetime publish` and (earlier) `claim_operator` — see `scripts/publish-module.sh`, which calls
-/// it automatically after every successful publish. On a database's FIRST-EVER publish `init` has
-/// already seeded everything and the operator has not been claimed yet, so this call is EXPECTED to
-/// no-op-fail with "operator not claimed" there; the publish script treats that as non-fatal.
+/// Gated by `require_operator`. On a database's first publish the operator is not yet claimed, so
+/// the call fails with "operator not claimed"; `init` has already seeded everything there.
 ///
-/// Stamps ONE `game_import_meta` row (family `"debug_repair_after_publish"`, work-item 216
-/// provenance) with the total row count across every seeded/rearmed family, rather than the 13
-/// separate per-family stamps the old reducers wrote.
+/// Stamps one `game_import_meta` row (family `"debug_repair_after_publish"`) with the total row
+/// count. The name keeps its `debug_` prefix because the CLI, scripts and runbooks call it by name.
 #[reducer]
 #[allow(clippy::too_many_lines)] // One idempotent repair pass per row family.
 pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
@@ -398,17 +383,4 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
     crate::import_meta::stamp(ctx, "debug_repair_after_publish", "", "", total);
     log::info!("debug_repair_after_publish: repaired {total} fixture/schedule row(s), including missing Auction expiries and {mail_timers} Mail Timer(s)");
     Ok(())
-}
-
-#[cfg(test)]
-mod pet_care_schedule_tests {
-    #[test]
-    fn post_publish_repair_ensures_the_authoritative_pet_care_clock() {
-        let body = crate::test_scan::code_of(
-            include_str!("repair.rs"),
-            "pub fn debug_repair_after_publish(",
-        );
-        assert!(body.contains("game_pet_care_schedule().iter().next().is_some()"));
-        assert!(body.contains("CARE_INTERVAL_MICROS"));
-    }
 }

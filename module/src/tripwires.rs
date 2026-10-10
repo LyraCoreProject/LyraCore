@@ -1199,9 +1199,7 @@ mod character_fence_tripwire {
         ("module/src/talent.rs", 1, "the guid comes from the caller's own entity_by_owner-resolved entity"),
         ("module/src/gm.rs", 2, "set_gm_level is FENCED (character_by_name); the two raw reads are gm_command's own gm_level probe and its .money write, both on the caller's entity_by_owner-resolved guid"),
         ("module/src/loot/mod.rs", 1, "DEFER: credit_purse writes the durable row AFTER folding the delta into the escrowed blob (`transfer::defer_money_delta`) — refusing would drop a third party's copper"),
-        // Split the former single `debug.rs` into a directory; this lookup lives in the one
-        // reducer the collapse put it in.
-        ("module/src/debug/repair.rs", 1, "`debug_repair_after_publish`'s gm-tester backfill (guid 1, formerly the standalone `debug_seed_gm_tester`); every debug WRITER that touches character state is fenced"),
+        ("module/src/operations.rs", 1, "`debug_repair_after_publish`'s gm-tester backfill (guid 1); every debug WRITER that touches character state is fenced"),
     ];
 
     /// `(path relative to a Package's own root, allowed raw-lookup count, verdict + why)` — keyed
