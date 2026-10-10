@@ -192,7 +192,12 @@ impl WorldImportScope {
                 WorldImportProfile::AllianceSingle => {
                     let mut slices = eastern()?;
                     slices.extend(kalimdor()?);
-                    (slices, vec![36, 369], deadmines(), eastern_forced_creatures())
+                    (
+                        slices,
+                        vec![36, 369],
+                        deadmines(),
+                        eastern_forced_creatures(),
+                    )
                 }
                 WorldImportProfile::Instances => (vec![], vec![36], deadmines(), vec![]),
             };
