@@ -8,7 +8,7 @@
 //!
 //! A live entity is `member_entities` alone (`place`, below) — not `live_guids`, which models a
 //! different, party-eligibility presence and stays independent of it on purpose (see `live_entity`
-//! in `tests.rs`).
+//! in `test_support/world_fake/social.rs`).
 
 use super::party_tests::{character, party_topology, BOT, DORMANT, GINGER, VIM};
 use super::*;

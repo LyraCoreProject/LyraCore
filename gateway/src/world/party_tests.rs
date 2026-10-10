@@ -4875,3 +4875,175 @@ fn a_rejoin_retries_a_failed_mirror_push() {
     party::run(instances.as_ref(), 8, VIM, party::Op::Accept).unwrap();
     assert!(mirror_lists(&instances, group_id, VIM));
 }
+
+#[test]
+fn group_invite_by_name_replies_party_command_result_success() {
+    // CMSG_GROUP_INVITE "Buddy" resolves the name, calls the store, and echoes
+    // SMSG_PARTY_COMMAND_RESULT(Invite, "Buddy", Success); the store recorded the resolved guid.
+    let mut s = quest_store();
+    s.characters = vec![codec::CharacterView {
+        guid: 2,
+        name: "Buddy".into(),
+        class: 1,
+        level: 10,
+        zone_id: 12,
+        ..Default::default()
+    }];
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+
+    wow_world_messages::vanilla::CMSG_GROUP_INVITE {
+        name: "buddy".into(),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_PARTY_COMMAND_RESULT(r) => {
+            assert_eq!(r.result, wow_world_messages::vanilla::PartyResult::Success);
+            assert_eq!(
+                r.operation,
+                wow_world_messages::vanilla::PartyOperation::Invite
+            );
+            assert_eq!(r.member, "buddy");
+        }
+        other => panic!("expected SMSG_PARTY_COMMAND_RESULT, got {other}"),
+    }
+    assert_eq!(store.party.group_invites.lock().unwrap().as_slice(), &[2]);
+    drop(client);
+    let _ = server.join();
+}
+
+/// Every party Refusal the Module can send reaches the client as exactly one `PartyResult`, through
+/// the real store seam rather than the mapping function alone.
+#[test]
+fn every_group_refusal_reaches_the_client_as_one_party_result() {
+    use wow_world_messages::vanilla::PartyResult;
+    for refusal in GroupRefusal::ALL {
+        let want = match refusal {
+            GroupRefusal::AlreadyInGroup => PartyResult::AlreadyInGroup,
+            GroupRefusal::GroupFull => PartyResult::GroupFull,
+            GroupRefusal::NotLeader => PartyResult::NotLeader,
+            GroupRefusal::NotInGroup => PartyResult::NotInGroup,
+            GroupRefusal::TargetNotInGroup => PartyResult::TargetNotInGroup,
+            GroupRefusal::WrongFaction => PartyResult::PlayerWrongFaction,
+            _ => PartyResult::BadPlayerName,
+        };
+        let mut s = quest_store();
+        s.characters = vec![codec::CharacterView {
+            guid: 2,
+            name: "Buddy".into(),
+            ..Default::default()
+        }];
+        s.trade_error = Some(refusal.as_tag().to_string());
+        let store = std::sync::Arc::new(s);
+        let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+        wow_world_messages::vanilla::CMSG_GROUP_INVITE {
+            name: "Buddy".into(),
+        }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+        match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+            ServerOpcodeMessage::SMSG_PARTY_COMMAND_RESULT(r) => {
+                assert_eq!(r.result, want, "{refusal:?} must map to {want:?}")
+            }
+            other => panic!("expected SMSG_PARTY_COMMAND_RESULT, got {other}"),
+        }
+        drop(client);
+        let _ = server.join();
+    }
+}
+
+/// A reducer that timed out left the party in an unknown state, so it must end the session rather
+/// than pose as a gameplay answer the client renders.
+#[test]
+fn a_group_invite_timeout_is_not_answered_as_a_refusal() {
+    let mut s = quest_store();
+    s.characters = vec![codec::CharacterView {
+        guid: 2,
+        name: "Buddy".into(),
+        ..Default::default()
+    }];
+    s.session.login_entity = Some(warrior_entity());
+    s.trade_error = Some("gw_group_invite reducer timed out after 10s".into());
+    let store = std::sync::Arc::new(s);
+    let (mut client, server_end) = world_session_socket_pair();
+    let server_store = store.clone();
+    let (result_tx, result_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        result_tx
+            .send(run_world_session(server_end, server_store.clone()))
+            .unwrap();
+    });
+    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
+    CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    drain_world_entry(&mut client, &mut c_dec);
+    wow_world_messages::vanilla::CMSG_GROUP_INVITE {
+        name: "Buddy".into(),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    let error = result_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("an unknown party outcome must end the session promptly")
+        .expect_err("a timed-out party reducer must be session-fatal");
+    assert!(format!("{error:#}").contains("timed out"));
+}
+
+#[test]
+fn group_invite_unknown_name_replies_bad_player_name() {
+    // An unresolvable name never reaches the store — the reply is BadPlayerName ("player not found").
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+
+    wow_world_messages::vanilla::CMSG_GROUP_INVITE {
+        name: "Nobody".into(),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_PARTY_COMMAND_RESULT(r) => {
+            assert_eq!(
+                r.result,
+                wow_world_messages::vanilla::PartyResult::BadPlayerName
+            );
+        }
+        other => panic!("expected SMSG_PARTY_COMMAND_RESULT, got {other}"),
+    }
+    assert!(store.party.group_invites.lock().unwrap().is_empty());
+    drop(client);
+    let _ = server.join();
+}
+
+#[test]
+fn loot_method_dispatches_the_decoded_setting_threshold_and_master() {
+    // CMSG_LOOT_METHOD (leader sets MASTER LOOT, Epic threshold, master guid 7) must reach the
+    // store with the gateway-decoded wire bytes — a direct pass-through (module adopted the wire
+    // ordering verbatim), no separate ack packet (vanilla sends none for this opcode either).
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_LOOT_METHOD {
+        loot_setting: GroupLootSetting::MasterLoot,
+        loot_master: Guid::new(7),
+        loot_threshold: ItemQuality::Epic,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    // No reply packet for this opcode — send a harmless follow-up (CMSG_LOOT_MONEY, a no-op here
+    // with no tracked target) and confirm it's the NEXT thing the server processes, proving the
+    // method call didn't hang the dispatch loop waiting to send something.
+    CMSG_LOOT_MONEY {}
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    drop(client);
+    server.join().unwrap();
+    assert_eq!(
+        store.party.group_loot_methods.lock().unwrap().as_slice(),
+        &[(
+            GroupLootSetting::MasterLoot.as_int(),
+            7,
+            ItemQuality::Epic.as_int()
+        )]
+    );
+}

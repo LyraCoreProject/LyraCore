@@ -1,7 +1,7 @@
 //! The INBOUND framing boundary: what an authenticated socket does with a header or a
 //! body it cannot make sense of.
 //!
-//! Everything else in `world/tests.rs` sends well-formed `wow_world_messages` types, so the read
+//! Every other World Session socket test sends well-formed `wow_world_messages` types, so the read
 //! loop in `run_world_session_with_queue` (`world/mod.rs`) is only ever exercised on its happy path.
 //! That loop is nonetheless the first thing a hostile or buggy client reaches after the handshake,
 //! and it makes four separate decisions no typed test can reach:

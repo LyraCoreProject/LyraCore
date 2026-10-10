@@ -446,3 +446,29 @@ fn a_real_session_whispers_across_shards_as_its_own_character() {
         )]
     );
 }
+
+#[test]
+fn messagechat_whisper_to_an_unknown_player_replies_player_not_found() {
+    let mut s = quest_store();
+    s.chat.speaker_facts = Some(human_speaker());
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_MESSAGECHAT {
+        chat_type: CMSG_MESSAGECHAT_ChatType::Whisper {
+            target_player: "Ghost".into(),
+        },
+        language: Language::Universal,
+        message: "hello?".into(),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec)
+        .expect("a whisper to nobody must answer SMSG_CHAT_PLAYER_NOT_FOUND, and nothing arrived")
+    {
+        ServerOpcodeMessage::SMSG_CHAT_PLAYER_NOT_FOUND(m) => assert_eq!(m.name, "Ghost"),
+        other => panic!("expected SMSG_CHAT_PLAYER_NOT_FOUND, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+    assert!(store.chat.realm_whispers.lock().unwrap().is_empty());
+}

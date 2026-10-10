@@ -423,3 +423,151 @@ fn a_non_disband_capable_op_never_flushes_pending_rolls() {
     );
     assert!(world.loot_roll.cleared_rolls.lock().unwrap().is_empty());
 }
+
+#[test]
+fn loot_roll_dispatches_the_corpse_slot_and_vote() {
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_LOOT_ROLL {
+        item: Guid::new(60),
+        item_slot: 2,
+        vote: RollVote::Need,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    CMSG_LOOT_MONEY {}
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    drop(client);
+    server.join().unwrap();
+    assert_eq!(
+        store.loot_roll.loot_rolls.lock().unwrap().as_slice(),
+        &[(60, 2, RollVote::Need.as_int())]
+    );
+}
+
+#[test]
+fn loot_master_give_dispatches_the_corpse_slot_and_target() {
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_LOOT_MASTER_GIVE {
+        loot: Guid::new(60),
+        slot_id: 3,
+        player: Guid::new(9),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    CMSG_LOOT_MONEY {}
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    drop(client);
+    server.join().unwrap();
+    assert_eq!(
+        store.loot_roll.loot_master_gives.lock().unwrap().as_slice(),
+        &[(60, 3, 9)]
+    );
+}
+
+#[test]
+fn loot_roll_rejection_is_logged_and_ignored_not_session_fatal() {
+    // A rejection (no roll open / already voted / not eligible) must not tear the connection down —
+    // the SAME session keeps working afterward (mirrors take_loot's per-action ignore discipline).
+    let mut s = quest_store();
+    s.loot_roll.loot_action_refusal = Some(LootRefusal::RollUnavailable);
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_LOOT_ROLL {
+        item: Guid::new(60),
+        item_slot: 2,
+        vote: RollVote::Greed,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    // The session survives: a subsequent CMSG_LOOT still gets a normal reply.
+    CMSG_LOOT {
+        guid: Guid::new(61),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    let (op, _) = read_raw_frame(&mut client, &mut c_dec);
+    assert_eq!(
+        op, OP_LOOT_RESPONSE,
+        "the session must survive a rejected loot_roll"
+    );
+    drop(client);
+    server.join().unwrap();
+}
+
+#[test]
+fn loot_master_give_refusals_keep_the_world_session_alive() {
+    for refusal in [
+        LootRefusal::NotMasterLooter,
+        LootRefusal::RecipientUnavailable,
+        LootRefusal::RecipientInventoryFull,
+    ] {
+        let mut s = quest_store();
+        s.loot_roll.loot_action_refusal = Some(refusal);
+        let store = std::sync::Arc::new(s);
+        let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+        CMSG_LOOT_MASTER_GIVE {
+            loot: Guid::new(60),
+            slot_id: 3,
+            player: Guid::new(9),
+        }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+        CMSG_LOOT {
+            guid: Guid::new(61),
+        }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+
+        let (op, _) = read_raw_frame(&mut client, &mut c_dec);
+        assert_eq!(op, OP_LOOT_RESPONSE, "{refusal:?}");
+        drop(client);
+        server.join().unwrap();
+    }
+}
+
+#[test]
+fn loot_roll_timeout_ends_the_world_session() {
+    let mut s = quest_store();
+    s.loot_roll.loot_action_failure = Some("gw_loot_roll reducer timed out after 10s".to_string());
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store, 1);
+    CMSG_LOOT_ROLL {
+        item: Guid::new(60),
+        item_slot: 2,
+        vote: RollVote::Greed,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    drop(client);
+
+    assert!(
+        server.join().is_err(),
+        "an unknown vote result must end the World Session"
+    );
+}
+
+#[test]
+fn loot_master_give_transport_failure_ends_the_world_session() {
+    let mut s = quest_store();
+    s.loot_roll.loot_action_failure =
+        Some("gw_loot_master_give reducer transport disconnected".to_string());
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store, 1);
+    CMSG_LOOT_MASTER_GIVE {
+        loot: Guid::new(60),
+        slot_id: 3,
+        player: Guid::new(9),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    drop(client);
+
+    assert!(
+        server.join().is_err(),
+        "an unknown master-loot result must end the World Session"
+    );
+}
