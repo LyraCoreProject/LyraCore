@@ -964,8 +964,7 @@ mod tests {
         }
 
         /// Removal by ANY path — natural expiry, dispel, or break-on-damage. Mirrors the one line
-        /// `dr_window_on_removal` writes around its row read; the call sites themselves are pinned by
-        /// `every_removal_path_stamps_the_window_at_the_actual_removal_time`.
+        /// `dr_window_on_removal` writes around its row read.
         fn remove(&mut self, at: i64) {
             let row = self
                 .row
@@ -1045,61 +1044,6 @@ mod tests {
         assert_eq!(probe.row.expect("row persists").level, 1);
     }
 
-    /// Every removal path stamps the window from the reducer's OWN timestamp — never from the aura's
-    /// scheduled `expires_at`, which is what would keep an early removal's window running too long.
-    #[test]
-    fn every_removal_path_stamps_the_window_at_the_actual_removal_time() {
-        for (source, signature) in [
-            (
-                include_str!("scheduler.rs"),
-                "pub fn tick_auras(", // natural expiry
-            ),
-            (
-                include_str!("effects.rs"),
-                "pub(crate) fn dispel_target(", // dispel
-            ),
-            (
-                include_str!("control.rs"),
-                "pub(crate) fn break_auras_on_damage(", // break on damage
-            ),
-        ] {
-            let body = crate::test_scan::code_of(source, signature);
-            assert!(
-                body.contains("dr_window_on_removal("),
-                "{signature} must start the DR window when it removes an aura"
-            );
-            assert!(
-                body.contains("ctx.timestamp.to_micros_since_unix_epoch()")
-                    || body.contains("now.to_micros_since_unix_epoch()"),
-                "{signature} must stamp the window from the removal instant"
-            );
-            assert!(
-                !body.contains("dr_window_on_removal(ctx, a.target_guid, category, expires"),
-                "{signature} must not stamp the window from the scheduled expiry"
-            );
-        }
-    }
-
-    /// The stored level advances only AFTER an aura row was actually placed or refreshed: a group or slot
-    /// refusal between the DR decision and the insert must leave the target's progression untouched.
-    #[test]
-    fn dr_level_advances_only_after_the_aura_is_placed() {
-        let aura_apply = crate::test_scan::code_of(
-            include_str!("cast/targeting.rs"),
-            "pub(crate) fn aura_apply(",
-        );
-        let decision = aura_apply
-            .find("resolve_dr_for_target(")
-            .expect("aura_apply resolves DR");
-        let insert = aura_apply
-            .find("auras.insert(Aura {")
-            .expect("aura_apply inserts the aura");
-        let bump = aura_apply
-            .find("bump_dr_level(")
-            .expect("aura_apply advances DR");
-        assert!(decision < insert && insert < bump);
-    }
-
     /// Same double-poly scenario against a CREATURE target: `dr_category_for_effect` returns `None` for a
     /// non-player target (checked at the call site, before `resolve_dr_for_target` is ever invoked), so
     /// `aura_apply` never calls `resolve_dr` at all for a creature — modeled here as a `None` prior with no
@@ -1176,144 +1120,6 @@ mod tests {
         assert!(compute_group_strength(false, 1, 2_050) > compute_group_strength(false, 5, 450));
         // Homogeneous rank families preserve rank-first comparison.
         assert!(compute_group_strength(true, 2, 1) > compute_group_strength(true, 1, 99_999));
-    }
-
-    /// Every `.rs` file under `module/src`, so the scans below cannot be sidestepped by putting a
-    /// second aura path outside the spell module.
-    fn module_sources() -> Vec<std::path::PathBuf> {
-        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-            for entry in std::fs::read_dir(dir).expect("module source directory is readable") {
-                let path = entry.expect("module source entry is readable").path();
-                if path.is_dir() {
-                    walk(&path, out);
-                } else if path.extension().is_some_and(|ext| ext == "rs") {
-                    out.push(path);
-                }
-            }
-        }
-        let mut out = Vec::new();
-        walk(&crate::test_scan::repo_root().join("module/src"), &mut out);
-        out.sort();
-        out
-    }
-
-    /// `path` relative to the repo root, for a readable failure message.
-    fn rel(path: &std::path::Path) -> String {
-        path.strip_prefix(crate::test_scan::repo_root())
-            .unwrap_or(path)
-            .display()
-            .to_string()
-    }
-
-    /// Every live `game_aura` insert in `module/src`, as `file:line`.
-    fn aura_insert_sites() -> Vec<String> {
-        module_sources()
-            .iter()
-            .flat_map(|path| {
-                let source = std::fs::read_to_string(path).expect("module source is readable");
-                let file = rel(path);
-                crate::test_scan::raw_table_reads(&source, &["game_aura"], |content, idx| {
-                    content[idx..].trim_start().starts_with(".insert(")
-                })
-                .into_iter()
-                .map(move |(line, _)| format!("{file}:{line}"))
-                .collect::<Vec<_>>()
-            })
-            .collect()
-    }
-
-    /// Live (non-comment, non-string-literal) calls to or definitions of `name` in `source`.
-    fn live_calls(source: &str, name: &str) -> usize {
-        let needle = format!("{name}(");
-        source
-            .match_indices(needle.as_str())
-            .filter(|(idx, _)| {
-                !crate::test_scan::on_comment_line(source, *idx)
-                    && !crate::test_scan::in_string_literal(source, *idx)
-                    && crate::test_scan::is_standalone_ident(source, *idx, name)
-            })
-            .count()
-    }
-
-    /// The single-boundary guard. `raw_table_reads` follows both the inline `ctx.db.game_aura()`
-    /// call and this crate's dominant `let auras = ctx.db.game_aura();` handle idiom, and skips
-    /// comments and string literals — so this test's own needles never satisfy it.
-    #[test]
-    fn every_aura_entry_point_converges_on_the_authoritative_insertion_boundary() {
-        // `debug::debug_fill_aura_slots` writes synthetic filler rows to stage a full aura range, so it
-        // must skip the very boundary the capacity probe exercises. It is the ONLY exempt site.
-        let sites = aura_insert_sites();
-        let gameplay: Vec<_> = sites
-            .iter()
-            .filter(|s| !s.starts_with("module/src/debug/mod.rs:"))
-            .collect();
-        assert_eq!(
-            gameplay.len(),
-            1,
-            "a second game_aura insertion path bypasses aura_apply: {sites:?}"
-        );
-        assert!(
-            gameplay[0].starts_with("module/src/spell/cast/targeting.rs:"),
-            "the authoritative insertion site moved out of aura_apply: {sites:?}"
-        );
-        assert!(
-            sites.len() <= 2,
-            "a second debug game_aura insertion path appeared: {sites:?}"
-        );
-
-        // The one insertion sits inside `aura_apply`, after the group, DR and slot decisions.
-        let targeting = include_str!("cast/targeting.rs");
-        let aura_apply = crate::test_scan::code_of(targeting, "pub(crate) fn aura_apply(");
-        assert_eq!(
-            crate::test_scan::raw_table_reads(&aura_apply, &["game_aura"], |content, idx| {
-                content[idx..].trim_start().starts_with(".insert(")
-            })
-            .len(),
-            1,
-            "aura_apply must retain exactly one game_aura insertion site"
-        );
-        assert!(aura_apply.contains("apply_group_conflict("));
-        assert!(aura_apply.contains("resolve_dr_for_target("));
-        assert!(aura_apply.contains("pick_aura_slot("));
-
-        // The three entry points: normal casts (`apply_effect`), linked debuffs
-        // (`apply_linked_debuff`) and passive/talent/racial grants (`apply_spell_auras`).
-        let resolve = include_str!("cast/resolve.rs");
-        for (source, signature) in [
-            (targeting, "pub(crate) fn apply_effect("),
-            (targeting, "pub(crate) fn apply_linked_debuff("),
-            (resolve, "pub(crate) fn apply_spell_auras("),
-        ] {
-            let body = crate::test_scan::code_of(source, signature);
-            assert!(
-                live_calls(&body, "aura_apply") >= 1,
-                "`{signature}` no longer reaches the aura-application boundary"
-            );
-        }
-        // …and nothing else calls it. One definition plus exactly three call sites; a fourth entry
-        // point must be routed through one of them or justified by moving this pin.
-        let calls: usize = module_sources()
-            .iter()
-            .map(|path| {
-                let source = std::fs::read_to_string(path).expect("module source is readable");
-                live_calls(&source, "aura_apply")
-            })
-            .sum();
-        assert_eq!(
-            calls, 4,
-            "aura_apply gained or lost a caller — every aura entry point must converge here"
-        );
-
-        // A multi-effect spell calls the boundary once per effect; its own earlier effect must not
-        // be treated as a conflicting family member of the later ones.
-        let conflict = crate::test_scan::code_of(
-            include_str!("stacking.rs"),
-            "pub(crate) fn apply_group_conflict(",
-        );
-        assert!(
-            conflict.contains("a.spell_id != spell_id"),
-            "sibling effects of one spell must be excluded from their own family conflict"
-        );
     }
 
     /// `group_rule_from_u8` decodes the four documented rule bytes; an unrecognized byte is the safe

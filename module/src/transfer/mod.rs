@@ -7,7 +7,7 @@
 //! |---|---|
 //! | `mod.rs` (here) | the ledger tables, the pure decision core, the SINKS every step is written against, and the reducers that bind them to a `ReducerContext` |
 //! | `transport.rs` | the row transport: `RowIo`/`move_rows`/the bsatn codec, the manifest, and `ExportBlob` — everything that answers "what crosses, and in what shape" |
-//! | `tests.rs` | the crash matrix, the pure-planner enumerations, and the source-scan tripwires |
+//! | `tests.rs` | the crash matrix, the pure-planner enumerations, and the transport ratchets |
 //! | `harness.rs` | `FakeDb` — two in-memory "databases" the real protocol bodies are EXECUTED against |
 //!
 //! # The protocol
@@ -66,7 +66,7 @@
 //! * **REGENERATE at the destination** — `auth::establish_session`, deliberately unfenced.
 //!   `Character.owner_identity` is per-CONNECTION derived state; a carried copy would arrive stale
 //!   and be overwritten immediately, and a field that is always wrong on arrival is worse than no
-//!   field. Pinned by `owner_identity_is_regenerated_at_the_destination_never_carried`.
+//!   field.
 //! * **NOT A TRANSFER CONCERN** — the group verbs, settled: party membership is
 //!   authoritative on realm-core, so there is no source-copy write left to lose. What replaced the
 //!   fence question is a REPLICATION one, answered by putting `game_group_member` on
@@ -79,10 +79,8 @@
 //! verdict; nothing in it is stale, it is simply not something the protocol's own source has to
 //! restate.
 //!
-//! Enforcement: each fenced call site is pinned by a named source-scan tripwire in `tests.rs`
-//! (deleting a fence turns a NAMED test red — a pure model has no reducers in it and sees none of
-//! them), and `tripwires.rs`'s `character_fence_tripwire` is the ratchet that stops a NEW unfenced
-//! by-guid path from being added.
+//! Enforcement: `tripwires.rs`'s `character_fence_tripwire` is the ratchet that stops a NEW
+//! unfenced by-guid path from being added.
 //!
 //! # The CROSS-DATABASE protocol
 //!
@@ -1079,9 +1077,7 @@ pub(crate) trait ReapSink: FinishSink {
 /// in the crate — and cargo-mutants cannot help either, because it can only ask whether a test
 /// FAILS and no test can execute a `ReducerContext` at all (measured: 54 missed mutants across this
 /// struct on the first full run, which is why `.cargo/mutants.toml` excludes it BY NAME with that
-/// number written down). So it stays pinned by exact-shape equality, in
-/// `tests::the_production_adapter_is_the_pass_through_the_harness_assumes` — the one string pin
-/// Kept. Every method below must remain a single expression; if this stops being a layer of
+/// number written down). Every method below must remain a single expression; if this stops being a layer of
 /// pass-throughs, the harness underneath it stops meaning what it claims.
 struct CtxShard<'a> {
     ctx: &'a ReducerContext,

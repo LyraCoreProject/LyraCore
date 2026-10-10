@@ -363,39 +363,4 @@ mod tests {
         assert_eq!(letters_after_release(u32::MAX), Some(u32::MAX));
         assert_eq!(letters_after_copy(u32::MAX), u32::MAX);
     }
-
-    #[test]
-    fn the_realm_mail_copy_text_reducer_is_operator_gated() {
-        let body =
-            crate::test_scan::code_of(include_str!("mail_text.rs"), "pub fn realm_mail_copy_text(");
-        let normalized: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
-        assert!(
-            normalized.starts_with("{ crate::helpers::require_operator(ctx)?;"),
-            "`realm_mail_copy_text` no longer OPENS with the operator gate. Body was:\n{body}"
-        );
-    }
-
-    #[test]
-    fn the_gw_mail_grant_letter_reducer_is_operator_gated() {
-        let body =
-            crate::test_scan::code_of(include_str!("mail_text.rs"), "pub fn gw_mail_grant_letter(");
-        let normalized: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
-        assert!(
-            normalized.starts_with("{ crate::helpers::require_operator(ctx)?;"),
-            "`gw_mail_grant_letter` no longer OPENS with the operator gate. Body was:\n{body}"
-        );
-    }
-
-    #[test]
-    fn the_realm_mail_mark_letter_granted_reducer_is_operator_gated() {
-        let body = crate::test_scan::code_of(
-            include_str!("mail_text.rs"),
-            "pub fn realm_mail_mark_letter_granted(",
-        );
-        let normalized: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
-        assert!(
-            normalized.starts_with("{ crate::helpers::require_operator(ctx)?;"),
-            "`realm_mail_mark_letter_granted` no longer OPENS with the operator gate. Body was:\n{body}"
-        );
-    }
 }

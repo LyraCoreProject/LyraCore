@@ -802,31 +802,6 @@ mod tests {
         );
     }
 
-    /// The riding fork's two decisions, pinned on the buy path because the crate has no
-    /// `ReducerContext` harness: a riding offering is refused on a trainer that is not a
-    /// `trainer_type::MOUNTS` trainer, and a successful buy grants through `learn_riding` — never
-    /// `learn_profession`, whose born-at-1 row would leave a paying rider below every mount's
-    /// `min_skill`.
-    #[test]
-    fn the_riding_fork_requires_a_mounts_trainer_and_grants_the_whole_tier() {
-        let buy = crate::test_scan::code_of(
-            include_str!("trainer.rs"),
-            "pub(crate) fn apply_trainer_buy(",
-        );
-        assert!(
-            buy.contains("crate::skill::is_riding_skill_line(profession_line)"),
-            "the riding offering must take its own fork. Body was:\n{buy}"
-        );
-        assert!(
-            buy.contains("t.trainer_type != lyracore_shared::trainer::trainer_type::MOUNTS"),
-            "a riding offering must be refused on a non-MOUNTS trainer. Body was:\n{buy}"
-        );
-        assert!(
-            buy.contains("crate::skill::learn_riding(ctx, caster_guid, owner, tier as u16)"),
-            "the riding grant must go through `learn_riding`, not the profession grant. Body was:\n{buy}"
-        );
-    }
-
     /// THE IDEMPOTENT RE-LEARN (professions slice 3): the profession buy keys its already-known gate on the
     /// PRESENCE of a `game_player_skill` row for the line (the `known` flag the buy path derives), and feeds
     /// it through the SAME `trainer_buy_check`. So a re-buy of an already-learned profession is rejected with

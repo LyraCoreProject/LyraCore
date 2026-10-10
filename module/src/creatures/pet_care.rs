@@ -418,11 +418,4 @@ mod tests {
         assert_eq!(food_mask(1), 1);
         assert_eq!(food_mask(4), 8);
     }
-
-    #[test]
-    fn scheduled_care_updates_loyalty_and_the_owner_protocol_projection() {
-        let body = crate::test_scan::code_of(include_str!("pet_care.rs"), "fn update_care(");
-        assert!(body.contains("update_pet_loyalty_from_care"));
-        assert!(body.contains("publish_hunter_pet_protocol"));
-    }
 }

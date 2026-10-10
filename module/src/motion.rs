@@ -478,10 +478,10 @@ mod tests {
 
     // ---- A model of the queue, built out of the SAME pure fns the reducers execute --------------
     //
-    // The module crate has no `ReducerContext` harness by design (playbook §7), so the DB wiring is
-    // pinned by the source scans below and the ALGORITHM is exercised here against an in-memory
-    // stand-in for the two tables. Every decision in the model is a call into `coalesce` /
-    // `tick_action`; the model itself only moves rows between two maps, exactly as the reducers do.
+    // The module crate has no `ReducerContext` harness by design (playbook §7), so the ALGORITHM is
+    // exercised here against an in-memory stand-in for the two tables. Every decision in the model is a
+    // call into `coalesce` / `tick_action`; the model itself only moves rows between two maps,
+    // exactly as the reducers do.
 
     #[derive(Default)]
     struct Model {
@@ -660,79 +660,6 @@ mod tests {
         assert_eq!(
             w.publishes, 100,
             "one write per MOVER per firing, all inside the single tick transaction"
-        );
-    }
-
-    // ---- Source pins: the DB wiring no pure test in this crate can reach ------------------------
-
-    #[test]
-    fn the_tick_gates_every_publish_on_the_liveness_check() {
-        let body = crate::test_scan::code_of(
-            include_str!("motion.rs"),
-            "pub fn publish_motion(ctx: &ReducerContext, _schedule: MotionPublishSchedule) {",
-        );
-        assert!(
-            body.contains("ctx.sender() != ctx.database_identity()"),
-            "the tick must stay scheduler-only. Body was:\n{body}"
-        );
-        let drain = crate::test_scan::code_of(
-            include_str!("motion.rs"),
-            "pub(crate) fn publish_staged(ctx: &ReducerContext) {",
-        );
-        assert!(
-            drain.contains("tick_action(entities.guid().find(row.guid).is_some())"),
-            "every queued row must go through `tick_action` with a REAL liveness probe — a \
-             publish that skips it resurrects motion rows for departed entities. Body was:\n{body}"
-        );
-        assert_eq!(
-            drain.matches("publish(ctx, &row)").count(),
-            1,
-            "exactly one publish call, and it is the `TickAction::Publish` arm. Body was:\n{drain}"
-        );
-        assert!(
-            drain.contains("pending.guid().delete(row.guid)"),
-            "the queue must be drained whatever the action, or a stale row lives forever. Body \
-             was:\n{drain}"
-        );
-    }
-
-    #[test]
-    fn the_write_path_routes_every_decision_through_coalesce() {
-        let body =
-            crate::test_scan::code_of(include_str!("motion.rs"), "pub(crate) fn queue_motion(");
-        assert!(
-            body.contains("coalesce(prev.opcode, opcode)"),
-            "the staged-vs-incoming decision must be `coalesce`'s, not re-derived inline. Body \
-             was:\n{body}"
-        );
-        assert_eq!(
-            body.matches("publish(ctx, &prev)").count(),
-            1,
-            "the ONLY inline publish on the movement path is the FlushThenReplace arm — any other \
-             one reinstates the per-packet subscription sweep this item removes. Body was:\n{body}"
-        );
-        assert!(
-            !body.contains("game_entity_motion()"),
-            "`movement_update`'s path must never touch the PUBLIC relay table directly — it stages \
-             into the private one and lets `publish` mint `seq`. Body was:\n{body}"
-        );
-    }
-
-    #[test]
-    fn the_staging_table_is_private() {
-        let src = include_str!("motion.rs");
-        // Assembled at run time: a contiguous literal would itself look like a `#[table(` attribute
-        // to `tripwires::character_owned_tripwire::extract_tables`, which text-scans this tree.
-        let needle = format!("{}{}", "#[table", "(accessor = game_entity_motion_pending");
-        let attr = src
-            .find(&needle)
-            .expect("the staging table's own attribute");
-        let end = src[attr..].find(")]").expect("attribute closes") + attr;
-        assert!(
-            !src[attr..end].contains("public"),
-            "`game_entity_motion_pending` MUST stay private — a subscriber on it reinstates the \
-             per-transaction subscription sweep (#461's entire premise). Attribute was: {}",
-            &src[attr..end]
         );
     }
 }

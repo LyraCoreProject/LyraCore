@@ -36,28 +36,20 @@
 //! * **What is executed here**: the transport plumbing every arm flows through (the codec, the
 //!   guid it is handed, the registry lookup, the export/import loops, `not_transported`), plus every
 //!   `apply_*` step body.
-//! * **What a source scan still covers, and why**:
+//! * **What the generated registry covers**:
 //!   - each REAL table's arm EXISTS (`every_manifest_table_can_cross_a_database_boundary`) — read
 //!     off build.rs's generated `CHARACTER_OWNED_TRANSFER_NAMES`, not off source text;
 //!   - each arm transports rather than declining
 //!     (`the_not_transported_allowlist_matches_the_arms_that_decline`) — likewise generated.
 //!     moved this from a 100-line brace-depth parser to the `character_owned!` marker KIND, so
 //!     "does this arm actually move rows" is a parse-time property now, not a scan's guess;
-//!   - the cross-database eviction keeps the instance LEASE
-//!     (`the_cross_database_eviction_keeps_the_instance_lease`) — one call inside a reducer whose
-//!     only observable effect is real table state, and extracting a sink for it would be more
-//!     scaffolding than the line it protects. A deliberate, written decision.
 //! * **The seam's own blind spot** — `CtxShard`, the thin production layer this harness substitutes
 //!   `FakeDb` for. Nothing here runs any of its methods, and each is a single line whose damage is
 //!   total: no-op'ing `CtxShard::import_rows` means **no manifest table's rows ever arrive**, and an
 //!   early `return Ok(())` in a reducer shim means the reducer the gateway calls does nothing at all
-//!   while every test below still passes. It stays pinned by EXACT-SHAPE equality
-//!   (`tests::the_production_adapter_is_the_pass_through_the_harness_assumes`), and the
-//!   cargo-mutants run is what proved that pin still has to exist: a mutation tool can only ask
-//!   whether a test FAILS, and 54 mutants across `CtxShard` were MISSED because no headless test can
-//!   execute a `ReducerContext` at all. What DID retire is the pins over `begin_transfer`'s and
-//!   `reap_transfers`' 120-line bodies — those bodies are `apply_begin`/`apply_reap` now, and this
-//!   file runs them.
+//!   while every test below still passes. Nothing headless covers that layer; a durable test
+//!   against a real database is the only check. `begin_transfer`'s and `reap_transfers`'
+//!   120-line bodies are `apply_begin`/`apply_reap` now, and this file runs them.
 //! * **What is still not covered anywhere headless**: SpacetimeDB's transaction rollback. A real
 //!   `Err` from `import_character_blob` unwinds every write it made; [`FakeDb`] keeps them. Every
 //!   refusal test below therefore asserts on the **in-row** — the row whose absence is what

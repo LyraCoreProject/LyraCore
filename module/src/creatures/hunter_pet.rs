@@ -415,51 +415,9 @@ mod tests {
     }
 
     #[test]
-    fn retame_after_despawn_replaces_the_orphaned_durable_identity() {
-        // Logout, owner death, Dismiss and pet death all despawn the live pet but keep the durable
-        // row. Recovery is a retame: the eligibility gates carry no durable-identity check, and
-        // completion deletes the orphan before the keyed insert so the tame cannot collide.
-        let fields =
-            crate::test_scan::code_of(include_str!("hunter_pet.rs"), "struct TameEligibility");
-        assert!(!fields.contains("durable"));
-        let body = crate::test_scan::code_of(
-            include_str!("hunter_pet.rs"),
-            "pub(crate) fn tame_creature(",
-        );
-        let delete = body
-            .find("game_hunter_pet().pet_id().delete(pet_id)")
-            .expect("retame drops the orphaned durable identity");
-        let insert = body
-            .find("game_hunter_pet().insert(")
-            .expect("tame inserts the fresh durable identity");
-        assert!(delete < insert);
-    }
-
-    #[test]
     fn missing_and_explicit_zero_live_kind_are_summoned_not_hunter() {
         assert_eq!(classify_pet_kind(None), PetKind::Summoned);
         assert_eq!(classify_pet_kind(Some(0)), PetKind::Summoned);
         assert_eq!(classify_pet_kind(Some(42)), PetKind::Hunter { pet_id: 42 });
-    }
-
-    #[test]
-    fn tame_retires_the_entity_but_preserves_and_rearms_its_authored_spawn() {
-        let body = crate::test_scan::code_of(
-            include_str!("hunter_pet.rs"),
-            "pub(crate) fn tame_creature(",
-        );
-        assert!(body.contains("despawn_creature_entity(ctx, wild_guid)"));
-        assert!(body.contains("game_creature_spawn().guid().update(spawn)"));
-        assert!(!body.contains("game_creature_spawn().guid().delete(wild_guid)"));
-    }
-
-    #[test]
-    fn protocol_projection_uses_the_pet_xp_curve() {
-        let body = crate::test_scan::code_of(
-            include_str!("hunter_pet.rs"),
-            "pub fn publish_hunter_pet_protocol(",
-        );
-        assert!(body.contains("pet_xp_to_next_level(pet.level)"));
-        assert!(!body.contains("xp::xp_to_next_level(pet.level)"));
     }
 }

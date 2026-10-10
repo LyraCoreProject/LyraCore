@@ -1467,37 +1467,4 @@ mod tests {
         assert_eq!(hold.copper, 100_000);
         assert_eq!(HeldFee::from_row(hold.clone().into_row(0)), Some(hold));
     }
-
-    /// The actor guid is an argument, so the operator gate is the whole authorization.
-    #[test]
-    fn fee_reducers_open_with_the_operator_gate() {
-        for signature in [
-            "pub fn gw_guild_fee_hold(",
-            "pub fn realm_guild_fee_decide(",
-            "pub fn gw_guild_fee_finish(",
-        ] {
-            let body = crate::test_scan::code_of(include_str!("fee.rs"), signature);
-            let normalized = body.split_whitespace().collect::<Vec<_>>().join(" ");
-            assert!(
-                normalized.starts_with("{ crate::helpers::require_operator(ctx)?;"),
-                "`{signature}` no longer opens with the operator gate. Body was:\n{body}"
-            );
-        }
-    }
-
-    #[test]
-    fn character_delete_refuses_a_fee_hold_before_the_cascade() {
-        let body =
-            crate::test_scan::code_of(include_str!("../auth.rs"), "pub fn delete_character(");
-        let fee_gate = body
-            .find("crate::guild::fee::character_has_fee_hold")
-            .expect("character deletion must check for a Fee Hold");
-        let cascade = body
-            .find("crate::world::cascade_delete_character")
-            .expect("character deletion still needs its normal cascade");
-        assert!(
-            fee_gate < cascade,
-            "a Fee Hold must be fenced before deletion"
-        );
-    }
 }

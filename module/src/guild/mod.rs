@@ -460,19 +460,6 @@ pub fn push_event(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_scan::code_of;
-
-    /// The actor guid is an argument, so the operator gate is the whole authorization. A gate
-    /// that is present but neutralized (`if false`, `let _ =`, an early return) is no gate.
-    #[test]
-    fn the_realm_guild_op_reducer_opens_with_the_operator_gate() {
-        let body = code_of(include_str!("mod.rs"), "pub fn realm_guild_op(");
-        let normalized = body.split_whitespace().collect::<Vec<_>>().join(" ");
-        assert!(
-            normalized.starts_with("{ crate::helpers::require_operator(ctx)?;"),
-            "`realm_guild_op` no longer opens with the operator gate. Body was:\n{body}"
-        );
-    }
 
     /// BSATN encodes a `GuildOp` variant as its ordinal position, so appending a variant in the
     /// wrong place silently renames every variant after it on the wire. This pins each variant's

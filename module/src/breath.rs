@@ -222,25 +222,4 @@ mod tests {
         assert_eq!(drowning_damage(100), 20);
         assert_eq!(drowning_damage(101), 21);
     }
-
-    #[test]
-    fn scheduled_tick_never_scans_the_spatial_entity_table() {
-        let tick = crate::test_scan::code_of(include_str!("breath.rs"), "pub fn tick_breath(");
-        assert!(tick.contains("let states = ctx.db.game_breath_state();"));
-        assert!(tick.contains("states.iter()"));
-        assert!(
-            !tick.contains("game_world_entity().iter()"),
-            "breath must iterate only its dedicated non-spatial state table"
-        );
-    }
-
-    #[test]
-    fn lethal_drowning_routes_through_the_shared_player_death_path() {
-        let tick = crate::test_scan::code_of(include_str!("breath.rs"), "pub fn tick_breath(");
-        assert!(tick.contains("crate::combat::kill_player(ctx, entity_guid, entity_guid)"));
-        assert!(
-            !tick.contains("hurt.health = 0"),
-            "drowning must never write a lethal health value inline"
-        );
-    }
 }

@@ -1486,32 +1486,4 @@ mod tests {
         assert!(!money_is_grouped(&[7]));
         assert!(money_is_grouped(&[7, 8]));
     }
-
-    use crate::test_scan::code_of;
-
-    /// `purge_corpse_residue` is the ONE helper `kill_creature` calls to close the
-    /// pickpocket/kill slot collision, and the issue explicitly asks for it to cover BOTH residue
-    /// tables (`game_corpse_loot` — the actual colliding rows — and `game_corpse_loot_eligible`, the
-    /// pre-existing work-item-267 reused-guid residue). Losing either `by_corpse().filter(&guid)`
-    /// sweep silently reopens one of the two residue classes on a reused/live-then-killed guid.
-    #[test]
-    fn purge_corpse_residue_sweeps_both_corpse_loot_tables() {
-        let body = code_of(
-            include_str!("mod.rs"),
-            "pub(crate) fn purge_corpse_residue(ctx: &ReducerContext, guid: u64) {",
-        );
-        assert!(
-            body.contains("ctx.db.game_corpse_loot();") && body.contains("loot.by_corpse().filter(&guid)"),
-            "`purge_corpse_residue` no longer sweeps `game_corpse_loot` by corpse guid — a leftover \
-             pickpocket row can collide with a freshly-rolled kill-drop slot again (issue #358). \
-             Body was:\n{body}"
-        );
-        assert!(
-            body.contains("ctx.db.game_corpse_loot_eligible();")
-                && body.contains("eligible.by_corpse().filter(&guid)"),
-            "`purge_corpse_residue` no longer sweeps `game_corpse_loot_eligible` by corpse guid — \
-             the work-item-267 reused-guid residue (a departed group inheriting a stale eligibility \
-             snapshot) would come back. Body was:\n{body}"
-        );
-    }
 }

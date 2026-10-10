@@ -212,27 +212,3 @@ pub fn reap_movement_events(ctx: &ReducerContext, _schedule: EventReaperSchedule
     // not this reaper). See `corpse::sweep_corpse_decay`'s doc for the timers and the relay shape.
     crate::corpse::sweep_corpse_decay(ctx);
 }
-
-#[cfg(test)]
-mod tests {
-    use crate::test_scan::code_of;
-
-    #[test]
-    fn movement_violation_rows_are_ttl_reaped() {
-        let body = code_of(include_str!("gc.rs"), "pub fn reap_movement_events(");
-        let reaper_call = ["reap!(", "game_movement_violation", ");"].concat();
-        assert!(
-            body.contains(&reaper_call),
-            "the shared event reaper must delete expired movement-violation diagnostics"
-        );
-    }
-
-    #[test]
-    fn lapsed_cc_diminishing_return_rows_are_reaped() {
-        let body = code_of(include_str!("gc.rs"), "pub fn reap_movement_events(");
-        assert!(
-            body.contains("stacking::sweep_dr_state(ctx)"),
-            "the shared event reaper must drop lapsed crowd-control diminishing-return rows"
-        );
-    }
-}

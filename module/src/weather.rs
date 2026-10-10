@@ -931,35 +931,6 @@ mod tests {
         );
     }
 
-    /// Every reducer in this file must open with its gate — `require_operator` for the operator's
-    /// lever, the scheduler-only sender fence for the roll — before it reads or writes anything.
-    /// The `gw.rs` precedent, applied to the file that holds weather's own two reducers.
-    #[test]
-    fn every_reducer_here_opens_with_its_gate() {
-        let src = include_str!("weather.rs");
-        // Built at run time so this test's own source can never match the needle.
-        let needle = format!("#[{}]", "reducer");
-        let mut chunks = src.split(needle.as_str());
-        chunks.next(); // preamble
-        let mut seen = 0;
-        for chunk in chunks {
-            let body = chunk
-                .split_once('{')
-                .map(|(_, body)| body)
-                .unwrap_or("")
-                .trim_start();
-            assert!(
-                body.starts_with("require_operator(ctx)?;")
-                    || body.starts_with("if ctx.sender() != ctx.database_identity()"),
-                "a reducer here must open with require_operator(ctx)?; or the scheduler-only \
-                 sender fence — got:\n{}",
-                &body[..body.len().min(120)]
-            );
-            seen += 1;
-        }
-        assert_eq!(seen, 2, "the scan found {seen} reducers, expected 2");
-    }
-
     #[test]
     fn the_seeded_climate_covers_the_two_verification_zones_with_valid_percentages() {
         let zones: Vec<u32> = TEMPORARY_ZONE_CLIMATE

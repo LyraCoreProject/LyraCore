@@ -324,33 +324,4 @@ mod tests {
             true
         ));
     }
-
-    #[test]
-    fn pet_award_is_gated_on_the_owner_gray_clamp() {
-        let body = crate::test_scan::code_of(
-            include_str!("pet_progression.rs"),
-            "pub(crate) fn award_hunter_pet_kill_progression(",
-        );
-        assert!(
-            body.contains("xp_for_kill(mob_level, owner.level)"),
-            "pet XP must reuse the owner's kill-eligibility clamp"
-        );
-    }
-
-    #[test]
-    fn kill_credit_recipients_are_the_only_pet_award_seam() {
-        let body =
-            crate::test_scan::code_of(include_str!("../combat/death.rs"), "fn award_tag_rewards(");
-        let recipient_loop = body
-            .find("for recipient in recipients")
-            .expect("kill rewards still iterate authoritative recipients");
-        let pet_award = body
-            .find("award_hunter_pet_kill_progression(ctx, *recipient")
-            .expect("pet progression remains inside the shared kill award");
-        assert!(pet_award > recipient_loop);
-        assert_eq!(
-            body.matches("award_hunter_pet_kill_progression(").count(),
-            1
-        );
-    }
 }

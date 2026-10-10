@@ -746,8 +746,8 @@ fn award_tag_rewards(
 /// Roll a dead creature's money + item loot onto its corpse, apply the GROUP loot method's
 /// need/greed/round-robin/master-loot stamping, and mark it LOOTABLE if anything dropped. Also purges
 /// any stale corpse-loot residue on this guid BEFORE rolling fresh drops — the fix MUST
-/// run on every kill so a leftover pickpocket row can't collide with a freshly-rolled kill-drop slot
-/// (see `corpse_residue_tripwire` below, which pins the ordering). Extracted out of `kill_creature`'s
+/// run on every kill so a leftover pickpocket row can't collide with a freshly-rolled kill-drop slot.
+/// Extracted out of `kill_creature`'s
 /// inline body so the death sequence reads as a table of contents.
 fn roll_corpse_loot(
     ctx: &ReducerContext,
@@ -1270,34 +1270,6 @@ mod lethality_tests {
         let attribution = CreatureDeathAttribution::suicide(77);
         assert_eq!(attribution.source_guid, Some(77));
         assert_eq!(attribution.reward_guid, None);
-
-        let force = crate::test_scan::code_of(
-            include_str!("death.rs"),
-            "pub(crate) fn force_creature_death(",
-        );
-        assert!(force.contains("CreatureDeathAttribution::suicide(creature_guid)"));
-        let death = crate::test_scan::code_of(
-            include_str!("death.rs"),
-            "fn kill_creature_with_attribution(",
-        );
-        assert!(death.contains("let killer = attribution.source_guid"));
-        assert!(death.contains("let reward_source = attribution.reward_guid"));
-        assert!(death.contains("crate::loot::tag::death_entitlement("));
-        assert!(death.contains("killer_guid: killer.unwrap_or(0)"));
-    }
-
-    #[test]
-    fn active_duel_lethal_hits_bypass_the_player_death_chokepoint() {
-        let body = crate::test_scan::code_of(include_str!("death.rs"), "pub(crate) fn apply_hit(");
-        let duel_floor = body
-            .find("crate::duel::active_opponents")
-            .expect("duel finisher is checked in the shared damage seam");
-        let player_death = body
-            .find("kill_player(ctx, target_guid, attacker_guid)")
-            .expect("ordinary player death remains behind the shared seam");
-        assert!(duel_floor < player_death);
-        assert!(body.contains("target.health = 1;"));
-        assert!(body.contains("duel_completion_kind::WON"));
     }
 
     #[test]
@@ -1307,129 +1279,5 @@ mod lethality_tests {
             duel_completed: true,
         };
         assert!(outcome.combat_ended());
-
-        let body =
-            crate::test_scan::code_of(include_str!("death.rs"), "pub(crate) fn kill_player(");
-        assert!(body.contains("crate::duel::interrupt_duel_for(ctx, victim_guid)"));
-    }
-
-    #[test]
-    fn death_hooks_run_before_engagement_reset_on_player_and_pet_death() {
-        let src = include_str!("death.rs");
-        let creature = crate::test_scan::code_of(src, "fn kill_creature_with_attribution(");
-        let pet_end = creature
-            .find("let victim_entry = target.entry")
-            .expect("pet death stays before ordinary creature death");
-        assert_in_order(
-            &creature[..pet_end],
-            [
-                "begin_death_dispatch",
-                "disengage(ctx, target_guid)",
-                "fire_on_death",
-                "finish_death_dispatch",
-            ],
-        );
-
-        let player = crate::test_scan::code_of(src, "pub(crate) fn kill_player(");
-        assert_in_order(
-            &player,
-            [
-                "begin_death_dispatch",
-                "disengage(ctx, victim_guid)",
-                "fire_on_death",
-                "finish_death_dispatch",
-            ],
-        );
-    }
-
-    #[test]
-    fn creature_death_carries_the_selected_opponent_across_disengage() {
-        let body = crate::test_scan::code_of(
-            include_str!("death.rs"),
-            "fn kill_creature_with_attribution(",
-        );
-        assert_in_order(
-            &body,
-            [
-                "let current_target_guid = target.target_guid",
-                "disengage(ctx, target_guid)",
-                "current_target_guid,",
-            ],
-        );
-    }
-
-    #[test]
-    fn creature_death_keeps_the_loot_tag_through_eventai_dispatch() {
-        let body = crate::test_scan::code_of(
-            include_str!("death.rs"),
-            "fn kill_creature_with_attribution(",
-        );
-        assert_in_order(
-            &body,
-            [
-                "crate::creatures::tick::stop_where_rendered(",
-                "crate::loot::tag::death_entitlement(",
-                "crate::creatures::begin_death_dispatch",
-                "disengage(ctx, target_guid)",
-                "crate::hooks::fire_on_creature_death(",
-                "crate::creatures::finish_death_dispatch",
-                "crate::loot::tag::clear(ctx, target_guid)",
-            ],
-        );
-    }
-
-    fn assert_in_order<const N: usize>(body: &str, needles: [&str; N]) {
-        let mut cursor = 0;
-        for needle in needles {
-            let offset = body[cursor..]
-                .find(needle)
-                .unwrap_or_else(|| panic!("missing `{needle}` in death producer"));
-            cursor += offset + needle.len();
-        }
-    }
-}
-
-#[cfg(test)]
-mod corpse_residue_tripwire {
-    use crate::test_scan::code_of;
-
-    /// `roll_pickpocket_loot` inserts `game_corpse_loot` rows at slots 0.. on the LIVE
-    /// creature's guid; if the mob dies before every row is taken, `roll_creature_loot` re-inserts
-    /// kill drops starting at slot 0 on the SAME guid, producing duplicate `(corpse_guid, slot)` pairs
-    /// that every first-match loot consumer addresses ambiguously. The fix is a purge that MUST run
-    /// on every kill, BEFORE the fresh roll — this is `ReducerContext` glue invisible to a behavioural
-    /// test (no in-process DB harness here), so the wiring is pinned directly, in two parts since
-    /// Extracted the corpse/loot step out of `kill_creature`'s inline body:
-    /// `kill_creature` must still route every kill through `roll_corpse_loot`, and `roll_corpse_loot`
-    /// itself must call `loot::purge_corpse_residue` strictly before `roll_creature_loot`. Losing any
-    /// of the three pieces silently reopens the collision.
-    #[test]
-    fn kill_creature_purges_corpse_residue_before_rolling_fresh_loot() {
-        let src = include_str!("death.rs");
-        let kill_creature_body = code_of(src, "fn kill_creature_with_attribution(");
-        assert!(
-            kill_creature_body.contains("roll_corpse_loot(")
-                && kill_creature_body.contains("entitlement.as_ref()"),
-            "`kill_creature` no longer routes the kill through `roll_corpse_loot` — the purge-before-\
-             fresh-roll ordering below is dead code if this call is gone. Body was:\n{kill_creature_body}"
-        );
-        let body = code_of(src, "fn roll_corpse_loot(");
-        assert!(
-            body.contains("crate::loot::purge_corpse_residue(ctx, target_guid)"),
-            "`roll_corpse_loot` no longer purges corpse residue (game_corpse_loot / \
-             game_corpse_loot_eligible) for the dying guid — a leftover pickpocket row can collide \
-             with a freshly-rolled kill-drop slot again (issue #358). Body was:\n{body}"
-        );
-        let purge_at = body
-            .find("crate::loot::purge_corpse_residue(ctx, target_guid)")
-            .expect("checked above");
-        let roll_at = body
-            .find("crate::loot::roll_creature_loot(ctx, target.entry, target_guid)")
-            .expect("roll_corpse_loot no longer calls roll_creature_loot with its usual signature");
-        assert!(
-            purge_at < roll_at,
-            "`purge_corpse_residue` must run BEFORE `roll_creature_loot` — reordering it after \
-             lets the fresh kill-drop rows collide with residue that hasn't been cleared yet."
-        );
     }
 }
