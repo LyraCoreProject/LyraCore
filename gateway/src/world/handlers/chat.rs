@@ -1,13 +1,14 @@
-//! Realm Chat dispatcher: the `CMSG_MESSAGECHAT` kinds that become Realm Chat Lines, `/afk` and
-//! `/dnd`, and `CMSG_CHAT_IGNORED`. The Gateway reads the Speaker Facts on the Home Shard, the
-//! Module decides the audience on Realm-core, and the Relay
-//! (`stdb::world_view::realm_chat_appeared`) delivers the line. Party, Raid, Raid Leader, Raid
-//! Warning, Channel, Guild, Officer and Whisper lines are all Realm Chat Lines. Say, yell and
-//! every kind this file does not own pass through.
+//! Chat family: every `CMSG_MESSAGECHAT` kind and `CMSG_CHAT_IGNORED`.
+//!
+//! `dispatch_chat_action` takes the Realm Chat Lines (Party, Raid, Raid Leader, Raid Warning,
+//! Channel, Guild, Officer and Whisper), `/afk` and `/dnd`. The Gateway reads the Speaker Facts on
+//! the Home Shard, the Module decides the audience on Realm-core, and the Relay
+//! (`stdb::world_view::realm_chat_appeared`) delivers the line. It passes every other kind on to
+//! `handle_speech`: Speech, and the dot-commands a Say line carries.
 
 use super::super::*;
 use crate::stdb::{classify, DurableFailure};
-use lyracore_shared::chat::{chat_kind, language, ChatRefusal};
+use lyracore_shared::chat::{broadcast_chat, chat_kind, language, ChatRefusal};
 use wow_world_messages::vanilla::{CMSG_CHAT_IGNORED, SMSG_NOTIFICATION};
 
 /// What the speaker's Home Shard knows about them. The Coordinator conveys race and chat tag to
@@ -136,6 +137,9 @@ pub(crate) enum ChatActionOutcome {
     PassThrough(ClientOpcodeMessage),
 }
 
+/// What the GM reads when a dot-command arrives before the session has a Character.
+const NO_CHARACTER_FOR_GM_COMMAND: &str = "gm_command: actor_guid unresolved";
+
 /// cm mangos.sql:4044, sent by cm:ChatHandler.cpp:107-110.
 const UNKNOWN_LANGUAGE_NOTICE: &str = "You don't know that language";
 
@@ -156,9 +160,9 @@ fn silent_refusal_chat_kind(chat_type: &CMSG_MESSAGECHAT_ChatType) -> Option<u8>
     }
 }
 
-/// Consume the `CMSG_MESSAGECHAT` kinds this file owns and `CMSG_CHAT_IGNORED`, and pass
-/// everything else on. A new Chat Kind adds one arm here and answers its own Refusals before the
-/// shared ones.
+/// Consume the Realm Chat kinds, `/afk`, `/dnd` and `CMSG_CHAT_IGNORED`, and pass every other
+/// kind on to [`handle_speech`]. A new Chat Kind adds one arm here and answers its own Refusals
+/// before the shared ones.
 pub(crate) fn dispatch_chat_action<St: ChatActionStore + ?Sized>(
     store: &St,
     player: ChatActionPlayer,
@@ -245,6 +249,121 @@ pub(crate) fn dispatch_chat_action<St: ChatActionStore + ?Sized>(
         }
     };
     Ok(ChatActionOutcome::Handled { outbound })
+}
+
+/// The `CMSG_MESSAGECHAT` kinds `dispatch_chat_action` passes on. A Say line can carry a guild or
+/// GM dot-command; otherwise Say, Yell and `/e` lines are Speech, sent to `send_chat` with no reply
+/// on success (the speaker hears their own line on the Relay). A line in a language the speaker's
+/// race does not know answers "You don't know that language". Every other kind is dropped.
+pub(crate) fn handle_speech<St: GuildActionStore + SpeechStore + ?Sized>(
+    tx: &SessionTx,
+    store: &St,
+    conn: &WorldConn,
+    chat: CMSG_MESSAGECHAT,
+) -> Result<()> {
+    let CMSG_MESSAGECHAT {
+        chat_type,
+        language,
+        message,
+    } = chat;
+    // `None` until the session has a Character in the world.
+    let actor = match &conn.state {
+        WorldState::InWorld(iw) => Actor::new(iw.self_guid),
+        WorldState::CharSelect => None,
+    };
+    let lang = language.as_int() as u8;
+    match chat_type {
+        CMSG_MESSAGECHAT_ChatType::Say if super::is_guild_dot_command(&message) => {
+            let player = super::GuildActionPlayer {
+                account_id: conn.account_id,
+                self_guid: social::self_guid(conn),
+            };
+            if let Some(line) = super::run_guild_dot_command(store, player, &message)? {
+                send(
+                    tx,
+                    Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(
+                        codec::build_gm_system_message(line),
+                    ))),
+                )?;
+            }
+        }
+        // The GM reads the Module's Refusal text verbatim. Any other failure ends the World
+        // Session.
+        CMSG_MESSAGECHAT_ChatType::Say if message.starts_with('.') => {
+            let reply = match actor {
+                Some(actor) => match store.gm_command(&conn.account_name, actor, message) {
+                    Ok(()) => None,
+                    Err(error) => match classify(&error) {
+                        DurableFailure::Refusal { reason } => Some(reason.to_string()),
+                        DurableFailure::TransportLoss => return Err(error),
+                    },
+                },
+                None => Some(NO_CHARACTER_FOR_GM_COMMAND.to_string()),
+            };
+            if let Some(line) = reply {
+                send(
+                    tx,
+                    Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(
+                        codec::build_gm_system_message(line),
+                    ))),
+                )?;
+            }
+        }
+        CMSG_MESSAGECHAT_ChatType::Say => {
+            speak_nearby(tx, store, conn, actor, broadcast_chat::SAY, lang, message)?;
+        }
+        CMSG_MESSAGECHAT_ChatType::Yell => {
+            speak_nearby(tx, store, conn, actor, broadcast_chat::YELL, lang, message)?;
+        }
+        CMSG_MESSAGECHAT_ChatType::Emote => {
+            speak_nearby(tx, store, conn, actor, broadcast_chat::EMOTE, lang, message)?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Say, yell or `/e` (a `broadcast_chat` type) through the speaker's Home Shard. The line itself
+/// returns on the Relay; a Refusal gets the answer every chat line shares, and only a Transport
+/// Loss ends the World Session. A speaker with no Character yet is silent.
+fn speak_nearby<St: SpeechStore + ?Sized>(
+    tx: &SessionTx,
+    store: &St,
+    conn: &WorldConn,
+    actor: Option<Actor>,
+    chat_type: u8,
+    language: u8,
+    message: String,
+) -> Result<()> {
+    let Some(actor) = actor else {
+        log::debug!(
+            "world: broadcast chat type {chat_type} dropped (account {}): no Character",
+            conn.account_id
+        );
+        return Ok(());
+    };
+    let player = ChatActionPlayer {
+        account_id: conn.account_id,
+        self_guid: social::self_guid(conn),
+    };
+    let refusal = match store.send_chat(actor, chat_type, language, message) {
+        Ok(ChatOutcome::Delivered) => None,
+        Ok(ChatOutcome::Refused(refusal)) => Some(refusal),
+        Err(error) => match classify(&error) {
+            DurableFailure::Refusal { reason } => {
+                log::debug!(
+                    "world: broadcast chat type {chat_type} dropped (account {}): {reason}",
+                    player.account_id
+                );
+                None
+            }
+            DurableFailure::TransportLoss => return Err(error),
+        },
+    };
+    for message in refusal_outbound(player, refusal) {
+        send(tx, message)?;
+    }
+    Ok(())
 }
 
 /// One whisper: the target is resolved realm-wide, the Module applies the Gates on Realm-core, and

@@ -64,13 +64,13 @@ use handlers::{
     dispatch_channel_action, dispatch_chat_action, dispatch_duel_action, dispatch_guild_action,
     dispatch_item_action, dispatch_loot_window, dispatch_melee_action, dispatch_member_stats,
     dispatch_quest_action, dispatch_taxi_action, dispatch_vendor_action, handle_bank, handle_char,
-    handle_combat, handle_loot, handle_mail, handle_query, handle_trade, handle_trainer,
-    handle_unavailable, quest_giver_menu, queue_reply_then_arm, AuctionActionOutcome,
-    AuctionActionPlayer, CastOutcome, CastPlayer, CastTransition, ChannelActionOutcome,
-    ChatActionOutcome, ChatActionPlayer, DuelActionOutcome, DuelActionPlayer, GuildActionOutcome,
-    GuildActionPlayer, ItemActionOutcome, ItemActionPlayer, LootWindowOutcome, LootWindowPlayer,
-    MeleeActionOutcome, MeleeActionPlayer, MemberStatsOutcome, MemberStatsPlayer, OpenLootState,
-    QuestActionOutcome, QuestActionPlayer, TaxiActionOutcome, TaxiActionPlayer,
+    handle_combat, handle_loot, handle_mail, handle_query, handle_speech, handle_trade,
+    handle_trainer, handle_unavailable, quest_giver_menu, queue_reply_then_arm,
+    AuctionActionOutcome, AuctionActionPlayer, CastOutcome, CastPlayer, CastTransition,
+    ChannelActionOutcome, ChatActionOutcome, ChatActionPlayer, DuelActionOutcome, DuelActionPlayer,
+    GuildActionOutcome, GuildActionPlayer, ItemActionOutcome, ItemActionPlayer, LootWindowOutcome,
+    LootWindowPlayer, MeleeActionOutcome, MeleeActionPlayer, MemberStatsOutcome, MemberStatsPlayer,
+    OpenLootState, QuestActionOutcome, QuestActionPlayer, TaxiActionOutcome, TaxiActionPlayer,
     VendorActionOutcome, VendorActionPlayer, CMSG_AUCTION_LIST_ITEMS_OPCODE,
 };
 pub(crate) use handlers::{
@@ -1516,9 +1516,10 @@ fn dispatch(
             msg,
         )? {
             ChatActionOutcome::Handled { outbound } => send_all(tx, outbound),
-            ChatActionOutcome::PassThrough(msg) => {
-                pass_on(handle_query(tx, store, conn, msg)?, conn)
+            ChatActionOutcome::PassThrough(ClientOpcodeMessage::CMSG_MESSAGECHAT(chat)) => {
+                handle_speech(tx, store, conn, *chat)
             }
+            ChatActionOutcome::PassThrough(msg) => ignore(conn, msg),
         },
         Family::Channel => match dispatch_channel_action(
             store,

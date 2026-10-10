@@ -1,16 +1,10 @@
-//! Query / social family: name / creature / item lookups + the gossip / npc-text round-trips,
-//! plus who/friend/ignore. Pure code-motion out of `world/mod.rs`.
+//! Npc family: template and name lookups, gossip, and the NPC interactions no other family owns.
 
 use super::super::*;
 use super::quest;
 use super::taxi::open_taxi_outbound;
 use super::trainer::settle_per_action;
 use super::vendor::{vendor_has_stock, vendor_open_outbound};
-use crate::stdb::{classify, DurableFailure};
-use lyracore_shared::chat::broadcast_chat;
-
-/// What the GM reads when a dot-command arrives before the session has a Character.
-const NO_CHARACTER_FOR_GM_COMMAND: &str = "gm_command: actor_guid unresolved";
 
 /// NPC and gameobject templates, gossip, area triggers and inspect.
 pub(crate) trait NpcStore: Send + Sync {
@@ -125,57 +119,12 @@ fn filtered_gossip_options<
         .collect())
 }
 
-/// Say, yell or `/e` (a `broadcast_chat` type) through the speaker's Home Shard. The line itself
-/// returns on the Relay; a Refusal gets the answer every chat line shares, and only a Transport
-/// Loss ends the World Session. A speaker with no Character yet is silent.
-fn speak_nearby<St: SpeechStore + ?Sized>(
-    tx: &SessionTx,
-    store: &St,
-    conn: &WorldConn,
-    actor: Option<Actor>,
-    chat_type: u8,
-    language: u8,
-    message: String,
-) -> Result<()> {
-    let Some(actor) = actor else {
-        log::debug!(
-            "world: broadcast chat type {chat_type} dropped (account {}): no Character",
-            conn.account_id
-        );
-        return Ok(());
-    };
-    let player = super::ChatActionPlayer {
-        account_id: conn.account_id,
-        self_guid: social::self_guid(conn),
-    };
-    let refusal = match store.send_chat(actor, chat_type, language, message) {
-        Ok(ChatOutcome::Delivered) => None,
-        Ok(ChatOutcome::Refused(refusal)) => Some(refusal),
-        Err(error) => match classify(&error) {
-            DurableFailure::Refusal { reason } => {
-                log::debug!(
-                    "world: broadcast chat type {chat_type} dropped (account {}): {reason}",
-                    player.account_id
-                );
-                None
-            }
-            DurableFailure::TransportLoss => return Err(error),
-        },
-    };
-    for message in super::chat::refusal_outbound(player, refusal) {
-        send(tx, message)?;
-    }
-    Ok(())
-}
-
-/// Query / social family: name / creature / item lookups + the gossip / npc-text round-trips, plus
-/// the social tier (say / yell / `/e` chat + text emotes), grouped as the stateless
-/// request→reply / broadcast opcodes.
-#[allow(clippy::too_many_lines)] // One arm per query and social opcode.
+/// Npc family: name, pet, creature and item lookups, the gossip and npc-text round trips, the
+/// innkeeper bind and talent wipe, inspect, text emotes and `/roll`.
+#[allow(clippy::too_many_lines)] // One arm per Npc opcode.
 pub(crate) fn handle_query<
     St: CastStore
         + CharacterStore
-        + GuildActionStore
         + NpcStore
         + PartyStore
         + QuestActionStore
@@ -474,72 +423,6 @@ pub(crate) fn handle_query<
                 tx,
                 Outbound::One(ServerOpcodeMessage::SMSG_ITEM_QUERY_SINGLE_RESPONSE(resp)),
             )?;
-        }
-        // Social tier: say/yell/`/e` -> send_chat (insert a broadcast game_chat_event the gateway
-        // fans back as SMSG_MESSAGECHAT to listeners in range). Whisper, party, raid, guild,
-        // officer chat and `/afk` `/dnd` never reach this arm: `dispatch_chat_action` consumes
-        // them. No reply on success (the speaker sees their own line via the relay). A say, yell
-        // or `/e` line in a language the speaker's race does not know answers "You don't know that
-        // language"; every other Refusal is silent, matching vanilla.
-        //
-        ClientOpcodeMessage::CMSG_MESSAGECHAT(c) => {
-            let CMSG_MESSAGECHAT {
-                chat_type,
-                language,
-                message,
-            } = *c;
-            let lang = language.as_int() as u8;
-            match chat_type {
-                CMSG_MESSAGECHAT_ChatType::Say if super::is_guild_dot_command(&message) => {
-                    let player = super::GuildActionPlayer {
-                        account_id: conn.account_id,
-                        self_guid: social::self_guid(conn),
-                    };
-                    if let Some(line) = super::run_guild_dot_command(store, player, &message)? {
-                        send(
-                            tx,
-                            Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(
-                                codec::build_gm_system_message(line),
-                            ))),
-                        )?;
-                    }
-                }
-                // The GM reads the Module's Refusal text verbatim. Any other failure ends the
-                // World Session.
-                CMSG_MESSAGECHAT_ChatType::Say if message.starts_with('.') => {
-                    let reply = match actor {
-                        Some(actor) => match store.gm_command(&conn.account_name, actor, message) {
-                            Ok(()) => None,
-                            Err(error) => match classify(&error) {
-                                DurableFailure::Refusal { reason } => Some(reason.to_string()),
-                                DurableFailure::TransportLoss => return Err(error),
-                            },
-                        },
-                        None => Some(NO_CHARACTER_FOR_GM_COMMAND.to_string()),
-                    };
-                    if let Some(line) = reply {
-                        send(
-                            tx,
-                            Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(
-                                codec::build_gm_system_message(line),
-                            ))),
-                        )?;
-                    }
-                }
-                CMSG_MESSAGECHAT_ChatType::Say => {
-                    speak_nearby(tx, store, conn, actor, broadcast_chat::SAY, lang, message)?;
-                }
-                CMSG_MESSAGECHAT_ChatType::Yell => {
-                    speak_nearby(tx, store, conn, actor, broadcast_chat::YELL, lang, message)?;
-                }
-                // `/e` custom emote: same broadcast path as Say/Yell, EMOTE type.
-                CMSG_MESSAGECHAT_ChatType::Emote => {
-                    speak_nearby(tx, store, conn, actor, broadcast_chat::EMOTE, lang, message)?;
-                }
-                // Whisper, party, raid, channel, guild and officer lines and `/afk` `/dnd` never
-                // get here: `dispatch_chat_action` consumes them.
-                _ => {}
-            }
         }
         // Social tier: a text emote (/dance, /wave, …) → send_emote (insert a broadcast
         // game_emote_event the gateway fans back as SMSG_TEXT_EMOTE + SMSG_EMOTE). The client supplies

@@ -55,8 +55,8 @@ pub(crate) use channel::{
 pub(crate) use channel::{resolve_online_character, ResolvedTarget};
 pub(crate) use char::{handle_char, CharacterStore};
 pub(crate) use chat::{
-    dispatch_chat_action, ChatActionOutcome, ChatActionPlayer, ChatActionStore, ChatOutcome,
-    RealmChatRequest, SpeakerFacts, SpeechStore, WhisperRequest, WhisperTargetFacts,
+    dispatch_chat_action, handle_speech, ChatActionOutcome, ChatActionPlayer, ChatActionStore,
+    ChatOutcome, RealmChatRequest, SpeakerFacts, SpeechStore, WhisperRequest, WhisperTargetFacts,
 };
 pub(crate) use combat::{handle_combat, CombatStore};
 pub(crate) use death::DeathStore;
