@@ -28,6 +28,7 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test -p lyracore-importer
 cargo test -p lyracore-module --lib --features=debug_reducers
 cargo test -p lyracore-module --test package_api_lint
+cargo test -p lyracore-module --test build_script
 cargo test -p lyracore-package-delta
 cargo test -p lyracore-gateway
 cargo test -p lyracore-shared
@@ -38,9 +39,12 @@ cargo check --target wasm32-unknown-unknown -p lyracore-module --features=debug_
 The wasm check builds the feature set `lyracore publish` builds. A default-feature check would skip
 the published debug reducers.
 
+`package_api_lint` checks that every Package under `packages/` names only Package API paths
+(`docs/package-api.md`). The build does not run it, so run it after you install or change a Package.
+
 CI also builds the Module with every Official Package installed, so a core change that breaks one
 fails before the Package's next publish. To run the same check, link each Package from a checkout of
-`LyraCoreProject/packages` into `packages/` and repeat the wasm check.
+`LyraCoreProject/packages` into `packages/`, then repeat the wasm check and `package_api_lint`.
 
 ## Durable tier
 

@@ -23,6 +23,7 @@ The commands CI runs, in `.github/workflows/rust.yml`:
 - [ ] `cargo test -p lyracore-importer`
 - [ ] `cargo test -p lyracore-module --lib --features=debug_reducers`
 - [ ] `cargo test -p lyracore-module --test package_api_lint`
+- [ ] `cargo test -p lyracore-module --test build_script`
 - [ ] `cargo test -p lyracore-package-delta`
 - [ ] `cargo test -p lyracore-gateway`
 - [ ] `cargo test -p lyracore-shared`

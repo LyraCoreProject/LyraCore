@@ -51,6 +51,7 @@ jobs:
       - run: cargo test -p lyracore-importer
       - run: cargo test -p lyracore-module --lib --features=debug_reducers
       - run: cargo test -p lyracore-module --test package_api_lint
+      - run: cargo test -p lyracore-module --test build_script
       - run: cargo test -p lyracore-package-delta
       - run: cargo test -p lyracore-gateway
       - run: cargo test -p lyracore-shared
@@ -89,3 +90,5 @@ jobs:
       - name: Install the official Packages
         run: for package in official-packages/*/; do ln -s "$PWD/$package" packages/; done
       - run: cargo check --target wasm32-unknown-unknown -p lyracore-module --features=debug_reducers
+      # The build no longer runs the Package API lint; this test checks the installed Packages.
+      - run: cargo test -p lyracore-module --test package_api_lint
