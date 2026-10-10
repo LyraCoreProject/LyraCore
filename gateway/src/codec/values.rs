@@ -527,24 +527,17 @@ pub fn build_inv_slot_values(
 /// Build a VALUES partial-update for `PLAYER_VISIBLE_ITEM[slot]` — the descriptor the client
 /// renders the 3D gear model (and paperdoll slot) from. The LOGIN create sets
 /// these (entity.rs), but a MID-SESSION equip only relayed the INV_SLOT guid pointer, so gear
-/// never appeared on the model until relog. `entry` 0 clears (unequip). `None` for a
+/// never appeared on the model until relog. `item` carries the entry, Random Property and
+/// permanent enchantment; a default view clears (unequip). `None` for a
 /// non-equipment slot (bags/backpack are not model-visible).
 pub fn build_visible_item_values(
     player_guid: u64,
     slot: u8,
-    entry: u32,
-    random_property_id: u32,
+    item: &ItemInstanceView,
 ) -> Option<SMSG_UPDATE_OBJECT> {
     let vi_index = super::entity::visible_item_index(slot)?;
     Some(player_values(player_guid, |player| {
-        player.set_player_visible_item(
-            VisibleItem {
-                item: entry,
-                random_property_id,
-                ..Default::default()
-            },
-            vi_index,
-        );
+        player.set_player_visible_item(super::entity::visible_item_of(item), vi_index);
     }))
 }
 
@@ -557,6 +550,22 @@ pub fn build_item_values(guid: u64, stack_count: u32, durability: u32) -> SMSG_U
     item.dirty_reset();
     item.set_item_stack_count(stack_count.max(1) as i32);
     item.set_item_durability(durability as i32);
+    SMSG_UPDATE_OBJECT {
+        has_transport: 0,
+        objects: vec![Object::Values {
+            guid1: Guid::new(guid),
+            mask1: UpdateMask::Item(item),
+        }],
+    }
+}
+
+/// A VALUES update of an item's permanent enchantment word, so an in-place enchant shows without a
+/// relog. `client_enchant_id` is the ID the client resolves, 0 for none. Like
+/// [`build_item_values`], it never re-sends OBJECT_FIELD_TYPE.
+pub fn build_item_enchantment_values(guid: u64, client_enchant_id: u32) -> SMSG_UPDATE_OBJECT {
+    let mut item = UpdateItem::builder().finalize();
+    item.dirty_reset();
+    item.set_item_enchantment(client_enchant_id as i32);
     SMSG_UPDATE_OBJECT {
         has_transport: 0,
         objects: vec![Object::Values {
@@ -685,9 +694,23 @@ mod lint_tests {
             ),
             (
                 "visible_item",
-                build_visible_item_values(g, 15, 25, 117).unwrap(),
+                build_visible_item_values(
+                    g,
+                    15,
+                    &ItemInstanceView {
+                        entry: 25,
+                        random_property_id: 117,
+                        enchantment: 823,
+                        ..Default::default()
+                    },
+                )
+                .unwrap(),
             ),
             ("item", build_item_values(0x4000_0000_0000_0001, 5, 70)),
+            (
+                "item_enchantment",
+                build_item_enchantment_values(0x4000_0000_0000_0001, 823),
+            ),
         ];
         for (name, m) in msgs {
             let mut buf = Vec::new();

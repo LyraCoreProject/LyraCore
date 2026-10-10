@@ -1,5 +1,6 @@
 //! Vanilla mailbox packet mapping.
 
+use lyracore_shared::item_property::client_enchantment_id;
 use lyracore_shared::mail::{self as mail_rules, MailSender};
 use wow_world_messages::vanilla::{
     Gold, InventoryResult, MSG_QUERY_NEXT_MAIL_TIME_Server, Mail, Mail_MailType,
@@ -64,7 +65,7 @@ pub fn build_mail_list(mails: &[MailView], now_secs: i64) -> SMSG_MAIL_LIST_RESU
                 unknown1: 0,
                 stationery: m.sender().stationery(),
                 item: m.item_entry,
-                item_enchant_id: m.item_enchant_id,
+                item_enchant_id: client_enchantment_id(m.item_enchant_id),
                 item_random_property_id: m.random_property_id,
                 item_suffix_factor: 0,
                 item_stack_size: m.item_stack_count.min(u8::MAX as u32) as u8,
@@ -480,15 +481,27 @@ mod tests {
         m.item_entry = 5_090_001;
         m.item_stack_count = 12;
         m.item_durability = 42;
-        m.item_enchant_id = 7;
+        m.item_enchant_id = 2564;
         let wire = &build_mail_list(&[m], 1_000).mails[0];
         assert_eq!(wire.item, 5_090_001);
         assert_eq!(wire.item_stack_size, 12);
         assert_eq!(wire.durability, 42);
         assert_eq!(
-            wire.item_enchant_id, 7,
+            wire.item_enchant_id, 2564,
             "an enchant dropped here is an enchant the recipient cannot see they are owed"
         );
+    }
+
+    #[test]
+    fn a_compatibility_enchant_on_an_attachment_goes_out_as_its_client_enchantment() {
+        for (stored, client) in [(7745, 823), (7748, 724)] {
+            let mut m = view(1, "here you go");
+            m.item_enchant_id = stored;
+            assert_eq!(
+                build_mail_list(&[m], 1_000).mails[0].item_enchant_id,
+                client
+            );
+        }
     }
 
     #[test]

@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+use lyracore_shared::item_property::client_enchantment_id;
+
 use wow_world_messages::{
     vanilla::{
         AuctionHouse, AuctionListItem, SMSG_AUCTION_BIDDER_LIST_RESULT,
@@ -31,7 +33,7 @@ pub fn build_auction_list_item(view: &AuctionView, now_micros: i64) -> AuctionLi
     AuctionListItem {
         id: view.id,
         item: view.item_entry,
-        item_enchantment: view.item_enchant_id,
+        item_enchantment: client_enchantment_id(view.item_enchant_id),
         item_random_property_id: view.random_property_id,
         item_suffix_factor: 0,
         item_count: view.item_stack_count,
@@ -176,6 +178,18 @@ mod tests {
             highest_bid: 201,
             expires_at_micros: 3_500_000,
             random_property_id: 509_0101,
+        }
+    }
+
+    #[test]
+    fn a_compatibility_enchant_goes_out_as_its_client_enchantment() {
+        for (stored, client) in [(7745, 823), (7748, 724)] {
+            let mut row = view();
+            row.item_enchant_id = stored;
+            assert_eq!(
+                build_auction_list_item(&row, 1_000_000).item_enchantment,
+                client
+            );
         }
     }
 

@@ -104,8 +104,10 @@ pub struct ItemInstanceView {
     /// `ITEM_FIELD_ITEM_TEXT_ID` — nonzero on a Letter Copy's Plain Letter
     /// (`CMSG_MAIL_CREATE_TEXT_ITEM`). Zero means the item carries no readable text.
     pub item_text_id: u32,
-    /// ITEM_FIELD_ENCHANTMENT. A Guild Charter carries its Petition id here, projected from
-    /// Realm-core (`cm:PetitionsHandler.cpp:141`); every other item leaves it 0 and unwritten.
+    /// ITEM_FIELD_ENCHANTMENT. An item with a permanent enchant carries the enchantment ID the
+    /// client resolves (`client_enchantment_id`), not the stored ID. A Guild Charter carries its
+    /// Petition id here, projected from Realm-core (`cm:PetitionsHandler.cpp:141`). Every other
+    /// item leaves it 0 and unwritten.
     pub enchantment: u32,
 }
 
@@ -627,6 +629,17 @@ mod tests {
     #[test]
     fn a_charter_create_carries_its_petition_id_in_the_first_enchantment_word() {
         assert_eq!(item_mask(&charter(42)).item_enchantment(), Some(42));
+    }
+
+    #[test]
+    fn a_permanent_enchant_create_carries_the_client_enchantment_id_in_word_22() {
+        let bracer = ItemInstanceView {
+            entry: 25,
+            slot: 8,
+            enchantment: 823,
+            ..charter(0)
+        };
+        assert_eq!(item_mask(&bracer).item_enchantment(), Some(823));
     }
 
     #[test]
