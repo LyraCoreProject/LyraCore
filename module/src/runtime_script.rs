@@ -321,7 +321,7 @@ pub(crate) struct ScriptEvent {
 /// Payload fields captured at the core hook, before an Invocation reads the entity snapshot.
 #[derive(Clone, PartialEq, Debug, Default)]
 pub(crate) struct ScriptPayload {
-    pub player: bool,
+    pub character: bool,
     pub fields: Vec<(&'static str, ScriptScalar)>,
 }
 
@@ -646,7 +646,7 @@ fn event_table<'gc>(ctx: Context<'gc>, event: &ScriptEvent) -> Table<'gc> {
         };
         set(ctx, table, field, value);
         if field == "actor"
-            && event.payload.player
+            && event.payload.character
             && view.as_ref().is_some_and(|view| view.is_player)
         {
             set(ctx, table, "player", value);
@@ -1493,7 +1493,7 @@ if #roster > 0 then grant_xp(event.actor, 25) end
         let mut host = RuntimeScriptHost::new();
         let event = ScriptEvent {
             payload: ScriptPayload {
-                player: true,
+                character: true,
                 fields: vec![],
             },
             ..engagement()
@@ -1506,7 +1506,19 @@ if #roster > 0 then grant_xp(event.actor, 25) end
                 message: "Welcome, Thrall".to_string(),
             }]
         );
-        let missing = unattended("on_login");
+    }
+
+    #[test]
+    fn compiled_typescript_login_handler_requires_a_character() {
+        let mut host = RuntimeScriptHost::new();
+        let source = include_str!("../../datascripts/tests/fixtures/typed/welcome.generated.lua");
+        let missing = ScriptEvent {
+            payload: ScriptPayload {
+                character: true,
+                fields: vec![],
+            },
+            ..unattended("on_login")
+        };
         let failure = host
             .invoke(script("welcome", source), &missing)
             .expect_err("a typed handler cannot run without its required Character");
@@ -1521,7 +1533,7 @@ if #roster > 0 then grant_xp(event.actor, 25) end
             name: "on_levelup".to_string(),
             actor: Some(player()),
             payload: ScriptPayload {
-                player: true,
+                character: true,
                 fields: vec![("newLevel", ScriptScalar::Number(13.0))],
             },
             ..ScriptEvent::default()
@@ -1541,10 +1553,10 @@ if #roster > 0 then grant_xp(event.actor, 25) end
     }
 
     #[test]
-    fn compiled_package_handler_keeps_zero_and_negative_answers_and_discards_failed_effects() {
+    fn compiled_package_handler_keeps_zero_and_negative_answers() {
         let mut host = RuntimeScriptHost::new();
         let source = include_str!("../../datascripts/tests/fixtures/typed/answer.generated.lua");
-        for level in [12, 11, 0] {
+        for (level, expected_answer) in [(12, 0.0), (11, -1.0)] {
             let mut character = player();
             character.level = level;
             let event = ScriptEvent {
@@ -1554,16 +1566,28 @@ if #roster > 0 then grant_xp(event.actor, 25) end
             let mut sink = FakeEffects::default();
             let (diagnostics, answer) =
                 ask_event(&mut host, &mut sink, &event, &[script("answer", source)]);
-            if level == 0 {
-                assert_eq!(diagnostics.len(), 1);
-                assert_eq!(answer, None);
-                assert!(sink.committed.is_empty());
-            } else {
-                assert!(diagnostics.is_empty());
-                assert_eq!(answer, Some(f64::from(level) - 12.0));
-                assert_eq!(sink.committed, [xp(PLAYER_GUID, 3)]);
-            }
+            assert!(diagnostics.is_empty());
+            assert_eq!(answer, Some(expected_answer));
+            assert_eq!(sink.committed, [xp(PLAYER_GUID, 3)]);
         }
+    }
+
+    #[test]
+    fn compiled_package_handler_discards_staged_effects_when_it_fails() {
+        let mut host = RuntimeScriptHost::new();
+        let source = include_str!("../../datascripts/tests/fixtures/typed/answer.generated.lua");
+        let mut character = player();
+        character.level = 0;
+        let event = ScriptEvent {
+            actor: Some(character),
+            ..unattended("example.scripts.answer")
+        };
+        let mut sink = FakeEffects::default();
+        let (diagnostics, answer) =
+            ask_event(&mut host, &mut sink, &event, &[script("answer", source)]);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(answer, None);
+        assert!(sink.committed.is_empty());
     }
 
     #[test]
@@ -1573,7 +1597,7 @@ if #roster > 0 then grant_xp(event.actor, 25) end
             name: "on_levelup".to_string(),
             actor: Some(player()),
             payload: ScriptPayload {
-                player: true,
+                character: true,
                 fields: vec![("newLevel", ScriptScalar::Number(13.0))],
             },
             ..ScriptEvent::default()
@@ -1601,7 +1625,7 @@ celebrate(event)
         let mut host = RuntimeScriptHost::new();
         let event = ScriptEvent {
             payload: ScriptPayload {
-                player: true,
+                character: true,
                 fields: vec![],
             },
             ..engagement()
@@ -1631,7 +1655,7 @@ welcome(event)
             let event = ScriptEvent {
                 actor,
                 payload: ScriptPayload {
-                    player: true,
+                    character: true,
                     fields: vec![],
                 },
                 ..unattended("on_login")
@@ -1650,7 +1674,7 @@ welcome(event)
         let mut host = RuntimeScriptHost::new();
         let event = ScriptEvent {
             payload: ScriptPayload {
-                player: false,
+                character: false,
                 fields: vec![
                     ("assist", ScriptScalar::Boolean(true)),
                     (

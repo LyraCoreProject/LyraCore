@@ -480,13 +480,13 @@ fn main() {
 
 fn script_payload(fields: &[HookField]) -> String {
     let mut scalar_fields = Vec::new();
-    let mut player = false;
+    let mut character = false;
     for field in fields {
         let source = &field.source;
         let value = match field.field_type {
             HookFieldType::PlayerEntity => {
                 assert!(field.name == "player" && source == "actor");
-                player = true;
+                character = true;
                 continue;
             }
             HookFieldType::Number => format!("Number(({source}) as f64)"),
@@ -499,7 +499,7 @@ fn script_payload(fields: &[HookField]) -> String {
         ));
     }
     format!(
-        "crate::runtime_script::ScriptPayload {{ player: {player}, fields: vec![{}] }}",
+        "crate::runtime_script::ScriptPayload {{ character: {character}, fields: vec![{}] }}",
         scalar_fields.join(", ")
     )
 }
