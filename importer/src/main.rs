@@ -111,7 +111,7 @@ mod ct {
     pub const MIN_LOOT_GOLD: usize = 54;
     pub const MAX_LOOT_GOLD: usize = 55;
     pub const LOOT_ID: usize = 56; // → creature_loot_template.entry (0 = no loot table)
-                                   // Loot-family completeness : PickpocketLootId/SkinLootId sit IMMEDIATELY after LootId
+                                   // Loot-family completeness: PickpocketLootId/SkinLootId sit IMMEDIATELY after LootId
                                    // (LootId, PickpocketLootId, SkinningLootId are consecutive columns). These two carried a `[V]`
                                    // "confirm against your own dump" caveat until the pinned dump's DDL was enumerated directly —
                                    // both are now confirmed, along with every other const here.
@@ -133,7 +133,7 @@ mod gm {
     pub const CONDITION_ID: usize = 3;
 }
 mod npct {
-    // npc_text (full 81-col format): ID, text0_0, text0_1, lang0, prob0, em0_0..5, text1_0,...
+    // npc_text (full 81-col format): ID, text0_0, text0_1, lang0, prob0, em0_0..5, text1_0, ...
     pub const ID: usize = 0;
     pub const NCOLS_FULL: usize = 81; // 1 + 8*(2+1+1+6) = 81 (old schema with embedded strings)
                                       // New cmangos schema packs each slot as a single BroadcastTextId. 17 cols: ID + 8 probs + 8 ids.
@@ -155,7 +155,7 @@ mod npct {
     }
 }
 pub(crate) mod bt {
-    // broadcast_text: Id, Text (male), Text1 (female), ChatTypeID, LanguageID,...
+    // broadcast_text: Id, Text (male), Text1 (female), ChatTypeID, LanguageID, ...
     pub const ID: usize = 0;
     pub const TEXT: usize = 1; // male greeting text
     pub const TEXT1: usize = 2; // female greeting text
@@ -344,7 +344,7 @@ mod it {
     pub const NAME: usize = 3;
     pub const DISPLAY_ID: usize = 4;
     pub const QUALITY: usize = 5;
-    // Flags : the raw item_template.Flags bitmask (unique/conjured/etc, ItemFlag on
+    // Flags: the raw item_template.Flags bitmask (unique/conjured/etc, ItemFlag on
     // the wire). Sits right after Quality(5), before BuyCount(7)/BuyPrice(8) — anchored by the
     // already-verified BUY_PRICE=8 two columns later (Quality(5), Flags(6), BuyCount(7), BuyPrice(8)
     // is the standard cmangos 1.12 item_template column run).
@@ -360,17 +360,17 @@ mod it {
     // sentinel; restrictive masks are unsigned bits and must stay byte-for-byte intact.
     pub const ALLOWED_CLASS: usize = 11;
     pub const ALLOWED_RACE: usize = 12;
-    // RequiredSkill/RequiredSkillRank : weapon-skill / mail-plate proficiency gate.
+    // RequiredSkill/RequiredSkillRank: weapon-skill / mail-plate proficiency gate.
     // Anchored tightly between the already-verified REQUIRED_LEVEL(14) and STACKABLE(23): 14
     // RequiredLevel, 15 RequiredSkill, 16 RequiredSkillRank, 17 RequiredSpell, 18 RequiredHonorRank,
     // 19 RequiredCityRank, 20 RequiredReputationFaction, 21 RequiredReputationRank, 22 maxcount,
     // 23 Stackable(confirmed) — the run lands exactly on the existing STACKABLE=23 anchor.
     pub const REQUIRED_SKILL: usize = 15;
     pub const REQUIRED_SKILL_RANK: usize = 16;
-    // RequiredReputationFaction/Rank : the 195 item half. Same anchored run as above.
+    // RequiredReputationFaction/Rank: the 195 item half. Same anchored run as above.
     pub const REQUIRED_REPUTATION_FACTION: usize = 20;
     pub const REQUIRED_REPUTATION_RANK: usize = 21;
-    // maxcount : unique-item stack cap. Same anchored run, one column before the
+    // maxcount: unique-item stack cap. Same anchored run, one column before the
     // already-verified STACKABLE=23.
     pub const MAX_COUNT: usize = 22;
     pub const ITEM_LEVEL: usize = 13;
@@ -398,7 +398,7 @@ mod it {
     pub const SPELLTRIGGER_1: usize = 71;
     pub const SPELLID_2: usize = 77;
     pub const SPELLTRIGGER_2: usize = 78;
-    // Spell slots 3-5 : each slot is 7 columns wide, same shape as slots 1-2 above.
+    // Spell slots 3-5: each slot is 7 columns wide, same shape as slots 1-2 above.
     // Slot 3 starts right after slot 2's 7 columns (77..=83), slot 4 after slot 3's (84..=90), slot 5
     // after slot 4's (91..=97) — and slot 5's own 7 columns (98..=104) land exactly on the
     // already-verified BONDING=105 anchor one column later, confirming all three slots.
@@ -419,7 +419,7 @@ mod it {
     pub const RANDOM_PROPERTY: usize = 114;
     pub const BLOCK: usize = 115; // shield block value (CREATE TABLE: …RandomProperty(114), block(115), itemset(116))
     pub const MAX_DURABILITY: usize = 117;
-    // BagFamily : bag-type restriction bitmask. Anchored right after the
+    // BagFamily: bag-type restriction bitmask. Anchored right after the
     // already-verified MAX_DURABILITY=117: 117 MaxDurability(confirmed), 118 area, 119 Map,
     // 120 BagFamily.
     pub const BAG_FAMILY: usize = 120;
@@ -504,7 +504,7 @@ mod qt {
 mod dse {
     // dbscripts_on_quest_end — verified against the pinned dump's own `CREATE TABLE`: id, delay,
     // priority, command, datalong, datalong2, datalong3, buddy_entry, search_radius, data_flags,
-    // dataint,.... SCRIPT_COMMAND_SEND_MAIL (cm:ScriptMgr.cpp:2850-2866) is the only command this
+    // dataint, .... SCRIPT_COMMAND_SEND_MAIL (cm:ScriptMgr.cpp:2850-2866) is the only command this
     // importer reads from this table.
     pub const ID: usize = 0; // quest_template.entry the script fires on turn-in
     pub const COMMAND: usize = 3;
@@ -690,7 +690,7 @@ fn go_initial_state(stored_type: u8, data0: u32) -> u8 {
 }
 
 mod nt {
-    // npc_trainer: entry(=creature_template.entry), spell, spellcost, reqskill, reqskillvalue, reqlevel,...
+    // npc_trainer: entry(=creature_template.entry), spell, spellcost, reqskill, reqskillvalue, reqlevel, ...
     pub const ENTRY: usize = 0;
     pub const SPELL: usize = 1;
     pub const COST: usize = 2;
@@ -837,7 +837,7 @@ mod spe {
     pub const COLUMNS: usize = 9;
 }
 pub(crate) mod got {
-    // gameobject_template: entry, type, displayId, name, faction, flags, ExtraFlags, size, data0..23,...
+    // gameobject_template: entry, type, displayId, name, faction, flags, ExtraFlags, size, data0..23, ...
     pub const ENTRY: usize = 0;
     pub const TYPE: usize = 1;
     pub const DISPLAY_ID: usize = 2;
@@ -854,7 +854,7 @@ pub(crate) mod got {
     pub const DATA5: usize = 13;
 }
 mod go {
-    // gameobject (spawn): guid, id(=gameobject_template.entry), map, spawnMask, x, y, z, orientation, rot0..3,...
+    // gameobject (spawn): guid, id(=gameobject_template.entry), map, spawnMask, x, y, z, orientation, rot0..3, ...
     pub const GUID: usize = 0;
     pub const ID: usize = 1;
     pub const MAP: usize = 2;
@@ -1652,7 +1652,7 @@ fn build_start_position_sql(dump: &str) -> Vec<String> {
     stmts
 }
 
-/// Clear+reload SQL for `game_graveyard_zone` from cmangos `game_graveyard_zone` : the
+/// Clear+reload SQL for `game_graveyard_zone` from cmangos `game_graveyard_zone`: the
 /// zone (+ optional faction restriction) each imported graveyard (`game_graveyard`, loaded separately
 /// from `WorldSafeLocs.dbc` by `dbc.rs::graveyard_sql`) serves. `module/src/world.rs`'s
 /// `graveyard::resolve_graveyard` reads this via the `by_zone` index to prefer a zone-linked
@@ -1684,7 +1684,7 @@ fn build_graveyard_zone_sql(dump: &str) -> Vec<String> {
     stmts
 }
 
-/// Clear+reload SQL for `game_areatrigger_teleport` from cmangos `areatrigger_teleport` :
+/// Clear+reload SQL for `game_areatrigger_teleport` from cmangos `areatrigger_teleport`:
 /// dungeon entrance/exit portals — trigger id → target map + destination position. `id` here is the
 /// SAME `AreaTrigger.dbc` trigger id `game_area_trigger` (209, `dbc.rs::area_trigger_sql`) carries as
 /// its primary key: 209 imports the trigger's GEOMETRY (position/shape, from the client DBC), this
@@ -1887,7 +1887,7 @@ fn build_createinfo_item_sql(dump: &str, dbc_dir: Option<&str>) -> Result<Vec<St
     Ok(stmts)
 }
 
-/// Clear+reload SQL for `game_spell_chain` from cmangos `spell_chain`, REDUCED SCOPE ,
+/// Clear+reload SQL for `game_spell_chain` from cmangos `spell_chain`, REDUCED SCOPE,
 /// only the two module-only tables that had no overlap with an already-covered source: talent's
 /// `rank_spell_N` (207) covers TALENT ranks, not class-spell ranks, so this is genuinely new data).
 /// `module/src/trainer.rs`'s rank-prereq gate (`apply_trainer_buy`) reads this via `spell_id` (the PK)
@@ -2282,7 +2282,7 @@ fn resolve_gossip_option_text(
 /// Reclassify a gossip option's `action` by its resolved TEXT, for the handful of cmangos rows whose
 /// real behavior is gated in C++ code at `GossipHello`, not by the dump's `OptionType` column — so
 /// the column the importer copies through unchanged (see `gossip_option`'s doc) doesn't carry it.
-/// Confirmed empirically : every "I wish to unlearn my talents." row across the live dump
+/// Confirmed empirically: every "I wish to unlearn my talents." row across the live dump
 /// (38/38) imports with `OptionType=1` (`gossip_option::GOSSIP`), indistinguishable from a plain
 /// gossip line, so `filtered_gossip_options`' level-10 gate has nothing to key on without this pass.
 /// Falls through to the raw `action` for every other row (the importer-reclassify-by-name pattern —
@@ -2591,7 +2591,7 @@ fn parse_ref_pools(dump: &str) -> std::collections::HashMap<u64, Vec<(u64, f64, 
 
 /// Recursively flatten a `reference_loot_template` pool (`pool_id`) into its direct item rows
 /// `(item, chance, count)`, expanding any NESTED `-ref` row (a pool that itself references another
-/// pool) to FULL DEPTH ,, module doc decision (the module's roll stays one-pass;
+/// pool) to FULL DEPTH,, module doc decision (the module's roll stays one-pass;
 /// nesting is entirely an import-time concern). `visited` cycle-guards a single top-level resolution: a
 /// pool reachable from itself (directly or transitively) stops re-entering rather than looping forever
 /// — cmangos data isn't expected to cycle, but the importer never trusts the operator's dump not to.
@@ -2861,7 +2861,7 @@ fn build_quests(
     };
     let starts = local_relations("creature_questrelation", local_creatures);
     let ends = local_relations("creature_involvedrelation", local_creatures);
-    // GAMEOBJECT giver relations : GO 68 "Wanted Poster" starts q176 Wanted: Hogger
+    // GAMEOBJECT giver relations: GO 68 "Wanted Poster" starts q176 Wanted: Hogger
     // (which has NO creature start giver at all — unobtainable without this), and GO 55/56 "Lost
     // Guards" corpses drive the q37/q45/q71 chain. Scoped to GOs we actually spawn (`local_gameobjects`,
     // populated from the geographic gameobject-spawn loop), exactly like the creature relations above.
@@ -2959,7 +2959,7 @@ fn build_quests(
         let req_races: u32 = field(&row, qt::REQUIRED_RACES).parse().unwrap_or(0);
         let req_classes: u32 = field(&row, qt::REQUIRED_CLASSES).parse().unwrap_or(0);
         let zone_or_sort: i64 = field(&row, qt::ZONE_OR_SORT).parse().unwrap_or(0);
-        // Reputation rewards : 2 of the 5 cmangos RewRepFaction/Value slots (most Elwynn quests use
+        // Reputation rewards: 2 of the 5 cmangos RewRepFaction/Value slots (most Elwynn quests use
         // ≤1). Faction id stays as-is (0 = none); the value keeps its sign (vanilla values are positive,
         // but a rep LOSS is representable). Deliberate simplification: 2 slots — bump to 5 if a
         // quest needs >2 factions.
@@ -2972,7 +2972,7 @@ fn build_quests(
         // COLLECT objective. A dump count of 0 means 1 (cmangos treats 0 as 1; the module floors at 1).
         let src_item: u64 = field(&row, qt::SRC_ITEM_ID).parse().unwrap_or(0);
         let src_item_count: u32 = field(&row, qt::SRC_ITEM_COUNT).parse().unwrap_or(0);
-        // Forward chains + timed quests : NextQuestInChain (0 = no successor; clamp
+        // Forward chains + timed quests: NextQuestInChain (0 = no successor; clamp
         // negative to 0 like prev_quest above) and LimitTime seconds (0 = untimed; cmangos never emits
         // a negative LimitTime, but clamp defensively the same way every other numeric column here does).
         let next_quest_raw: i64 = field(&row, qt::NEXT_QUEST_IN_CHAIN).parse().unwrap_or(0);
@@ -3310,7 +3310,7 @@ fn build_items_and_loot(
         vendor_id += 1;
     }
 
-    // 2.6) npc_vendor_template indirection : 11 spawned vendors (Corina Steele,
+    // 2.6) npc_vendor_template indirection: 11 spawned vendors (Corina Steele,
     // Brog Hamfist, …) have ZERO direct npc_vendor rows — cmangos serves their goods via
     // creature_template.VendorTemplateId → npc_vendor_template. Flatten that into the same
     // per-creature game_npc_vendor rows (our schema deliberately has no template indirection).
@@ -3456,7 +3456,7 @@ fn build_items_and_loot(
         // BuyCount (080): floor at 1 — a 0 in the dump (or a parse miss) must not sell zero items.
         let buy_count: u32 = field(&row, it::BUY_COUNT).parse().unwrap_or(1).max(1);
         let food_type: u8 = field(&row, it::FOOD_TYPE).parse().unwrap_or(0);
-        // ON-USE SPELL OVERRIDE : a curated entry's spellid_1/spelltrigger_1 is OUR synthetic
+        // ON-USE SPELL OVERRIDE: a curated entry's spellid_1/spelltrigger_1 is OUR synthetic
         // on-use cast, forced trigger 0 — see `USE_SPELL_OVERRIDE`'s doc above. Every other item keeps
         // its raw dump value untouched (baseline-safe: the vast majority of the vanilla item catalog is
         // unaffected).
@@ -3479,7 +3479,7 @@ fn build_items_and_loot(
             // ContainerSlots — how many bag slots this item provides (0 for non-bags); col 24 in
             // the cmangos 1.12 item_template schema, immediately after Stackable(23).
             cslots = field(&row, it::CONTAINER_SLOTS).parse::<u8>().unwrap_or(0),
-            // Bonding : 0=NoBind,1=BoP,2=BoE,3=BoU,4/5=QuestItem, mapped straight
+            // Bonding: 0=NoBind,1=BoP,2=BoE,3=BoU,4/5=QuestItem, mapped straight
             // through to the client's "Binds when picked up/equipped" tooltip line.
             bonding = field(&row, it::BONDING).parse::<u8>().unwrap_or(0),
             class = field(&row, it::CLASS),
@@ -3606,7 +3606,7 @@ fn build_mail_loot(
 /// that `spacetime sql` rejects (400) — row-count chunking alone never splits it. No-op for empty `rows`.
 /// Data-row count across a family's generated statement list: DELETEs contribute 0; each
 /// `push_insert`-shaped INSERT contributes its VALUES tuple count (`),(` separators + 1).
-/// Feeds the provenance stamps  for families whose builders return statements
+/// Feeds the provenance stamps for families whose builders return statements
 /// rather than row vectors — statement `.len()` would under-report by the batch factor.
 /// Only sound for numeric-payload tables (a text value containing `),(` would over-count);
 /// the "globals" builders (stats/positions/graveyards/createinfo) are all numeric.
@@ -4061,7 +4061,7 @@ fn build_dump_plan(
         &creature_skin_ids,
         &chest_loot_ids_used,
     );
-    // Gossip menus + NPC text + menu options : map each in-box gossip NPC's
+    // Gossip menus + NPC text + menu options: map each in-box gossip NPC's
     // creature_entry to the npc_text id shown in SMSG_GOSSIP_MESSAGE, import the resolved greeting
     // strings (all 8 weighted slots, not just the first), and import its clickable menu options
     // (vendor/innkeeper/trainer/plain-gossip, quest-status conditions folded). Four-table clear+reload.
@@ -4257,7 +4257,7 @@ fn collect_creature_spawns(dump: &str, scope: &WorldImportScope) -> Vec<Creature
     );
 
     // 1) spawns in range → the content slice.
-    // db_guid, entry, x,y,z,o, movement_type, respawn_secs, map (map END-appended, ,
+    // db_guid, entry, x,y,z,o, movement_type, respawn_secs, map (map END-appended,,
     // an --include-map row carries its OWN map into the packed payload, not args.map).
     let mut spawns: Vec<CreatureSpawnRow> = Vec::new();
     let mut pool_resolved = 0u32;
@@ -4503,7 +4503,7 @@ fn build_creature_templates(
         if loot_id > 0 {
             creature_loot_ids.insert(entry, loot_id);
         }
-        // Loot-family completeness : PickpocketLootId collapses onto creature_entry
+        // Loot-family completeness: PickpocketLootId collapses onto creature_entry
         // directly (like LootId, above); SkinLootId is recorded per-entry too but stays keyed on the
         // loot-id ITSELF in game_skinning_loot (several creatures share one level-banded table).
         let pickpocket_loot_id: u64 = field(&row, ct::PICKPOCKET_LOOT_ID).parse().unwrap_or(0);
@@ -4555,7 +4555,7 @@ fn build_creature_templates(
         // game_creature_template column order (see module/src/creatures/spawn.rs). The trailing
         // `aggro_range` (proximity aggro) has no cmangos source column, so emit 0 (passive —
         // retaliate-only, the column default); aggression tuning is a separate content pass.
-        // `pickpocket_loot_id`/`skin_loot_id`  are END-appended after `armor`.
+        // `pickpocket_loot_id`/`skin_loot_id` are END-appended after `armor`.
         // Trainer service columns, END-appended after `skin_loot_id`. Both parse to `u8` and fall to
         // 0 on an absent or unparseable cell; for `trainer_class` that 0 is the fail-open "serves
         // everyone" value. Not `num_or_zero`: it only rewrites an EMPTY cell and would splice a
@@ -4777,7 +4777,7 @@ fn build_waypoint_rows(
         direct_wp_guids.insert(db_guid);
         wp_id += 1;
     }
-    // 4b) creature_movement_template : ENTRY-keyed paths, expanded onto every
+    // 4b) creature_movement_template: ENTRY-keyed paths, expanded onto every
     // in-slice MovementType=2 spawn of that entry that has NO direct rows (direct always wins).
     // Waypoint Zs — like spawn Zs — ride through VERBATIM (no terrain snap exists in the importer;
     // cmangos waypoints are floor-correct, which Map 36 needs while ground_z remains absent).
@@ -4846,7 +4846,7 @@ fn collect_gameobject_spawns(dump: &str, scope: &WorldImportScope) -> Gameobject
     // curated CHEST/QUESTGIVER) did. `classify_go_type` decides the stored `type_id` (or drops the row
     // — the TYPE-25 COLLISION GUARD); `go_template_row` then builds the per-type SQL row. The spawns
     // load via the import_gameobjects reducer (game_gameobject has a Timestamp); the packed spawn row
-    // carries an `initial_state` field  so a DOOR/BUTTON can spawn already-open.
+    // carries an `initial_state` field so a DOOR/BUTTON can spawn already-open.
     let go_tmpls = parse_table(dump, "gameobject_template");
     let mut dropped_type25: Vec<u64> = Vec::new();
     let go_meta: std::collections::HashMap<u64, GoMeta> = go_tmpls
@@ -5039,7 +5039,7 @@ fn gameobject_template_rows(spawns: &GameobjectSpawns) -> GameobjectTemplateRows
             chest_loot_ids_used.push(loot_id);
         }
     }
-    // Per-type coverage : loud so an operator sees exactly what a box pulled in, which
+    // Per-type coverage: loud so an operator sees exactly what a box pulled in, which
     // types are LIVE (dispatched by `apply_use_gameobject`) vs INERT (template+spawn only, `use` no-ops).
     const GO_LIVE_TYPE_NAMES: &[(u8, &str)] = &[
         (GO_DOOR, "DOOR"),
@@ -5140,7 +5140,7 @@ fn build_trainer_spell_rows(
     // the Apprentice→Artisan tiers (real Spell.dbc id → SMSG_LEARNED_SPELL resolves). cost 0 (the
     // gossip-learn is free in vanilla). Skip a tier whose spell id already collides with a class/recipe
     // row for THIS trainer (so a trainer can't double-insert the same spell_id). Every column is NAMED
-    // (slice-5 lesson). The cap  comes from the REAL client's SkillTiers.dbc data when
+    // (slice-5 lesson). The cap comes from the REAL client's SkillTiers.dbc data when
     // --dbc was given (already parity-checked equal to LEGACY_TIER_CAPS above); without --dbc there's no
     // client data to resolve, so it falls back to LEGACY_TIER_CAPS directly (documented fallback).
     let mut synthesized = 0usize;
@@ -5180,7 +5180,7 @@ fn build_loot_family_rows(
     creature_skin_ids: &std::collections::HashMap<u64, u64>,
     chest_loot_ids_used: &[u32],
 ) -> LootFamilyRows {
-    // Loot-family completeness : pickpocket / skinning / gameobject(chest) / fishing.
+    // Loot-family completeness: pickpocket / skinning / gameobject(chest) / fishing.
     // `refs` (the reference_loot_template pool map) is parsed ONCE here and shared by all four —
     // `parse_creature_drops` above already parsed its own copy for the creature family; a second parse
     // for these four is the same low-cost tradeoff this importer already accepts (content-slice sized).
@@ -5699,7 +5699,7 @@ fn family_stamps(
         eventai,
         ..
     } = content;
-    // Provenance stamps : one entry per family that ACTUALLY had its block pushed
+    // Provenance stamps: one entry per family that ACTUALLY had its block pushed
     // above — mirrors exactly the `family_active` gates this function used, so a stamp only ever
     // corresponds to data this run's plan actually carries.
     let mut stamps: Vec<(&'static str, u64)> = Vec::new();
@@ -5856,7 +5856,7 @@ fn main() -> Result<()> {
         None => None,
     };
 
-    // Optional profession tier-cap resolution : SkillRaceClassInfo.dbc + SkillTiers.dbc
+    // Optional profession tier-cap resolution: SkillRaceClassInfo.dbc + SkillTiers.dbc
     // give the REAL Apprentice→Artisan caps per profession skill line — checked immediately against
     // `LEGACY_TIER_CAPS` (`assert_profession_tier_parity`, bailing loudly on any disagreement) before the
     // trainer-synthesis pass below ever runs. Without --dbc there's no client data to check against, so
@@ -5998,7 +5998,7 @@ fn main() -> Result<()> {
     }
     eprintln!("import applied.");
 
-    // Provenance stamps : `plan.stamps` already carries exactly the families whose
+    // Provenance stamps: `plan.stamps` already carries exactly the families whose
     // block was pushed (see `build_dump_plan`) — stamp each one now that the apply above succeeded.
     let file_hash = sha256_hex(dump.as_bytes())?;
     for (family, row_count) in &plan.stamps {
@@ -6409,7 +6409,7 @@ mod tests {
         assert!(!is_drink_consumable(0, 2, "Elixir of Water Walking")); // elixir (subclass 2) excluded
     }
 
-    // ---- LOOT-FAMILY COMPLETENESS  ----
+    // ---- LOOT-FAMILY COMPLETENESS ----
 
     /// `resolve_ref_pool` flattens a 2-DEEP reference chain (pool 1 → item A direct + a `-ref` to pool 2
     /// → item B) into ONE flat list, and a CYCLE (pool 3 → pool 4 → pool 3) terminates instead of
@@ -9425,7 +9425,7 @@ mod tests {
 
     #[test]
     fn family_quests_filter_produces_only_quest_family_stmts() {
-        // `--family quests` : the plan must carry ONLY the quest tables' DELETE+INSERT
+        // `--family quests`: the plan must carry ONLY the quest tables' DELETE+INSERT
         // — no creature/item/loot/gossip/gameobject/trainer/cast/globals statements — even though every
         // family's prerequisite parsing still ran (the quest giver relation needed the creature entry
         // to resolve, per `build_quests`' doc).

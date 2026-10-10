@@ -7,10 +7,10 @@
 //! Data model — a clean header + list shape (NOT cmangos's one fat row), so the runtime joins are
 //! direct and the importer maps cmangos's flattened columns onto normalized rows:
 //!
-//! - [`QuestTemplate`] , the quest header (level gate, title, money/XP reward). [static]
+//! - [`QuestTemplate`], the quest header (level gate, title, money/XP reward). [static]
 //! - [`QuestObjective`], a quest's objective list (today: kill N of a creature). [static]
 //! - [`QuestRewardItem`] — a quest's guaranteed reward items. [static]
-//! - [`CreatureQuest`] , which creature STARTS (`!`) / ENDS (`?`) which quest (many-to-many). [static]
+//! - [`CreatureQuest`], which creature STARTS (`!`) / ENDS (`?`) which quest (many-to-many). [static]
 //! - [`CharacterQuest`], a character's live quest log: one row per accepted quest with per-objective
 //!   progress counts, RLS-scoped to the owner. Born in `accept_quest`. [entity]
 //!
@@ -148,7 +148,7 @@ pub mod quest_role {
 /// `CMSG_QUESTGIVER_*` op, so this only rejects clearly-out-of-range abuse (mirrors `loot`/vendor range).
 const QUEST_GIVER_RANGE_SQ: f32 = 100.0;
 
-/// Party quest-SHARE range : reuses the group system's own kill-reward range
+/// Party quest-SHARE range: reuses the group system's own kill-reward range
 /// (`crate::group::GROUP_XP_RANGE_SQ`, vanilla's 74yd `CONFIG_FLOAT_GROUP_XP_DISTANCE`) rather than
 /// the tight NPC-interaction [`QUEST_GIVER_RANGE_SQ`] (10yd) — sharing a quest is a party-visibility
 /// action (no walking up to a person), the same range the game already treats as "close enough to
@@ -752,7 +752,7 @@ fn giver_has_quest_role(
     match *giver {
         GiverKind::Creature(entry) => creature_has_quest_role(ctx, entry, quest_entry, role),
         GiverKind::GameObject(entry) => gameobject_has_quest_role(ctx, entry, quest_entry, role),
-        // Item-starts-quest : satisfies START iff the item's OWN template names this
+        // Item-starts-quest: satisfies START iff the item's OWN template names this
         // quest — never END (an item never completes a quest).
         GiverKind::Item(entry) => {
             role == quest_role::START
@@ -763,7 +763,7 @@ fn giver_has_quest_role(
                     .find(entry)
                     .is_some_and(|t| t.start_quest == quest_entry)
         }
-        // Party share : satisfies START iff the sharer is CURRENTLY, ACTIVELY on the
+        // Party share: satisfies START iff the sharer is CURRENTLY, ACTIVELY on the
         // quest (an un-rewarded, un-failed row) — never END. This is the hard gate against a spoofed
         // giver_guid self-authorizing: even a genuinely grouped, in-range peer can't hand out a quest
         // they aren't actually holding right now.
@@ -883,7 +883,7 @@ pub(crate) fn request_accept_quest(
     // Package ask as well. It hands back the row `apply_accept_effects` resets in place, so the
     // reset-in-place-vs-insert decision costs no second point-scan of the same row.
     let existing = accept_gates(ctx, &player, &tmpl)?;
-    // Timed quests : a `limit_time > 0` template stamps a deadline (accept-time
+    // Timed quests: a `limit_time > 0` template stamps a deadline (accept-time
     // ctx.timestamp micros + limit_time seconds, as micros); 0 = untimed (the vast majority).
     let deadline_micros = if tmpl.limit_time > 0 {
         ctx.timestamp.to_micros_since_unix_epoch() + (tmpl.limit_time as i64) * 1_000_000
@@ -3048,7 +3048,7 @@ pub(crate) fn enter_sessionless_areatrigger(
 /// instance (`instance::resolve_or_create_instance`: own live binding → party's live instance →
 /// create; solo allowed; 5-player cap enforced here at trigger time) and teleports into it. Every
 /// NON-dungeon target keeps the byte-identical instance-0 path (`is_dungeon_map` false → the same
-/// `teleport_player(..., 0,...)` call as before), the Deadmines EXIT trigger (map 36 → map 0)
+/// `teleport_player(..., 0, ...)` call as before), the Deadmines EXIT trigger (map 36 → map 0)
 /// rides that arm, correctly landing the leaver back in the open world.
 pub(crate) fn apply_enter_areatrigger(ctx: &ReducerContext, player_guid: u64, trigger_id: u32) {
     let teleport_target = ctx
@@ -3092,7 +3092,7 @@ fn is_expired(now_micros: i64, deadline_micros: i64, rewarded: bool, failed: boo
     deadline_micros != 0 && !rewarded && !failed && now_micros >= deadline_micros
 }
 
-// The timed-quest expiry tick : every `tick_creatures` cadence (0.5s, via the
+// The timed-quest expiry tick: every `tick_creatures` cadence (0.5s, via the
 // `game_tick_pass!` marker — zero core edits needed elsewhere), scan the quest log for rows whose
 // deadline has passed and fail them (`failed = true`, `deadline_micros` cleared back to 0 — a failed
 // row's deadline is meaningless past this point). The gateway's `on_quest_update` relay diffs
@@ -3394,7 +3394,7 @@ mod tests {
         assert!(pick_choice_reward(&choices, u32::MAX, 42).is_err());
     }
 
-    // ---- Timed quests : is_expired boundary tests ----
+    // ---- Timed quests: is_expired boundary tests ----
 
     #[test]
     fn untimed_deadline_never_expires() {

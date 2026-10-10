@@ -117,7 +117,7 @@ pub(crate) fn handle_trade<St: WorldStore + ?Sized>(
             }
             Ok(None)
         }
-        // Proposal declines : the client auto-answers a BeginTrade it can't take, busy
+        // Proposal declines: the client auto-answers a BeginTrade it can't take, busy
         // (already in a dialog) or the initiator is on the ignore list.
         ClientOpcodeMessage::CMSG_BUSY_TRADE => {
             if let Some(me) = self_guid(conn) {

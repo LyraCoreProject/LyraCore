@@ -1,4 +1,4 @@
-//! GM playtest dot-commands : `.speed/.god/.xprate/.level/.money/.heal/.kill/.tele`
+//! GM playtest dot-commands: `.speed/.god/.xprate/.level/.money/.heal/.kill/.tele`
 //! from Say chat. The gateway's `CMSG_MESSAGECHAT` Say arm intercepts any message starting with `.`
 //! BEFORE the normal chat relay/insert and forwards the raw text to this ONE generic reducer
 //! (`gm_command`) — module-side parsing keeps the command set data-free and easily extended (a new

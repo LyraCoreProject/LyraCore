@@ -707,7 +707,7 @@ fn aura_mod_to_kind(aura: AuraMod) -> u8 {
         // the inert A_FLAG so the regen gate can read the magnitude without a spell-id or race check.
         ModRegenDuringCombat | ModHealthRegenInCombat => A_COMBAT_HEALTH_REGEN_PCT,
 
-        // Demon Skin/Armor's health-per-5 : aura 84 SPELL_AURA_MOD_REGEN
+        // Demon Skin/Armor's health-per-5: aura 84 SPELL_AURA_MOD_REGEN
         // is a COMBAT-INDEPENDENT periodic heal tick (it heals a living target on a fixed period
         // whether or not it is in combat) — the same primitive already
         // wired for Renew/bandages/food. Reclassified from the inert A_FLAG marker onto A_PERIODIC_HEAL;
@@ -3125,7 +3125,7 @@ mod tests {
         assert_eq!(stance_p0(E_SET_STANCE, 17), 0); // Battle Stance → stance 0
         assert_eq!(stance_p0(E_SET_STANCE, 18), 1); // Defensive Stance → stance 1
         assert_eq!(stance_p0(E_SET_STANCE, 19), 2); // Berserker Stance → stance 2
-                                                    // Druid combat forms : Bear Form 5487 carries ModShapeshift(5), Cat Form 768
+                                                    // Druid combat forms: Bear Form 5487 carries ModShapeshift(5), Cat Form 768
                                                     // carries form 1, Dire Bear Form 9634 carries form 8.
         assert_eq!(stance_p0(E_SET_STANCE, 5), 3); // Bear Form → stance 3
         assert_eq!(stance_p0(E_SET_STANCE, 1), 4); // Cat Form → stance 4
@@ -3530,7 +3530,7 @@ mod tests {
         use AuraMod::*;
         assert_eq!(aura_mod_to_kind(PeriodicDamage), A_PERIODIC_DAMAGE);
         assert_eq!(aura_mod_to_kind(PeriodicHeal), A_PERIODIC_HEAL);
-        // Demon Skin/Armor's health-per-5 : ModRegen is a combat-independent periodic
+        // Demon Skin/Armor's health-per-5: ModRegen is a combat-independent periodic
         // heal, reclassified onto the SAME A_PERIODIC_HEAL kind as PeriodicHeal (Renew/bandages/food) —
         // NOT left as the inert A_FLAG marker.
         assert_eq!(aura_mod_to_kind(ModRegen), A_PERIODIC_HEAL);
@@ -3547,7 +3547,7 @@ mod tests {
         // incoming-damage % modifier (Shield Wall / vulnerability) — wired; the FLAT variant stays no-op.
         assert_eq!(aura_mod_to_kind(ModDamagePercentTaken), A_MOD_DAMAGE_TAKEN);
         assert_eq!(aura_mod_to_kind(ModDamageTaken), E_SCRIPTED); // flat damage-taken not handled yet
-                                                                  // Spell modifiers : AddFlatModifier/AddPctModifier were the "unmapped → no-op"
+                                                                  // Spell modifiers: AddFlatModifier/AddPctModifier were the "unmapped → no-op"
                                                                   // example here until the passive-modifier engine landed (2000292) and gave them real kinds —
                                                                   // this assertion is the regression guard for that reclassification, not a stale count.
         assert_eq!(aura_mod_to_kind(AddFlatModifier), A_SPELLMOD_FLAT);

@@ -1444,7 +1444,7 @@ fn guarded(what: &str, body: impl FnOnce()) {
 }
 
 // -----------------------------------------------------------------------------------------------
-//  Registration helpers, the clone-per-callback + `guarded(label,...)` shape that every
+//  Registration helpers, the clone-per-callback + `guarded(label, ...)` shape that every
 //  `arm_shard` registration repeated verbatim, factored to one line per callsite. `T::Row` and
 //  `EventContext` are pinned to the module's generated types, so a mismatched table/body pairing
 //  is a compile error, not a mislabeled log line.
@@ -4024,7 +4024,7 @@ mod family_audience_tests {
         assert!(queued_job(&actor_rx).is_empty());
     }
 
-    /// The same guard also has to check which Guild the membership row names: `map_or(0,...)`
+    /// The same guard also has to check which Guild the membership row names: `map_or(0, ...)`
     /// ignored the returned guild_id, so a member who moved to another Guild between this job's
     /// enqueue and its run would still get a roster, rendered under its new Guild's own Rank
     /// Rights.

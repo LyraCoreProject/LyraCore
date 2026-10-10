@@ -370,7 +370,7 @@ pub fn build_taxi_move_raw(
     Some((0x00DD, body))
 }
 
-/// Build `SMSG_MONSTER_MOVE` as a FACING-ONLY packet : `mover_guid` does not move, `pos` is
+/// Build `SMSG_MONSTER_MOVE` as a FACING-ONLY packet: `mover_guid` does not move, `pos` is
 /// both the spline point and its sole (degenerate) destination, `duration` 0 — but its heading
 /// changes to `angle_rad`. This is the wire tool the issue calls out as "already exists, unwired":
 /// gtker 0.3 models 1.12's `FacingAngle` `MonsterMoveType` (`spline_point`/`splines` framing

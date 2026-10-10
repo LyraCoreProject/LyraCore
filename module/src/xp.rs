@@ -394,7 +394,7 @@ pub(crate) fn grant_xp(ctx: &ReducerContext, p: &mut WorldEntity, amount: u32) {
     if amount == 0 {
         return;
     }
-    // GM playtest `.xprate` : a basis-points multiplier (10000 = 1×) ON TOP of the
+    // GM playtest `.xprate`: a basis-points multiplier (10000 = 1×) ON TOP of the
     // realm `xp_rate` (`rated_xp`, already folded in by the caller at each SOURCE — kill XP in
     // `award_xp`, quest XP in `quest.rs`). Applied HERE, the one chokepoint both sources share, so a
     // single multiply can never drift between them. u64 math to avoid a u32*u32 overflow. Missing

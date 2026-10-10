@@ -1490,7 +1490,7 @@ fn spawn_load_sampler(
 ) -> std::thread::JoinHandle<()> {
     let sampler = crate::load_sample::OccupancySampler::from_env(&stdb_uri);
     let interval = crate::load_sample::sample_interval();
-    // Hashed once at startup : `game_shard_load.gateway_key` is what keys this
+    // Hashed once at startup: `game_shard_load.gateway_key` is what keys this
     // process's samples apart from every OTHER gateway process's, so N gateways sampling the same
     // shard sum to a realm-wide total instead of the last writer clobbering the rest.
     let this_gateway_key = crate::load_sample::gateway_key(&gateway_id);
@@ -2723,7 +2723,7 @@ impl Coordinator {
                 }
             }));
         }
-        // The cross-shard group and chat twins  ride realm-core's connection, armed only
+        // The cross-shard group and chat twins ride realm-core's connection, armed only
         // when realm-core is a DISTINCT database (a world shard's own `arm_shard` above already
         // watches these tables, and a second registration would deliver every packet twice).
         if let Ok(realm) = self.realm_core() {

@@ -891,7 +891,7 @@ pub(crate) fn request_take_loot(
         .ok_or_else(|| {
             ActionRefusal::new(ActionRefusalKind::MissingTarget, "no loot in that slot")
         })?;
-    // Quest-only rows : the TAKER's OWN need is re-validated server-side (the
+    // Quest-only rows: the TAKER's OWN need is re-validated server-side (the
     // gateway's window is a display hint, not authoritative) — an unreserved row (`reserved_for == 0`,
     // the shared row nobody has split yet) is claimable by anyone who currently needs it; an already
     // per-member-reserved clone is claimable ONLY by its reserved owner. A non-quest row (the common
@@ -915,7 +915,7 @@ pub(crate) fn request_take_loot(
         row.designated_looter_guid,
         player_guid,
     ) {
-        // Group loot methods : a NEED/GREED winner-locked row
+        // Group loot methods: a NEED/GREED winner-locked row
         // (`reserved_for`), a MASTER-only row, or a round-robin/below-threshold row designated to
         // someone else all reject the plain autostore path here — server-authoritative, the gateway's
         // per-viewer loot-window filter (`reads.rs`) is a display hint only.

@@ -1050,7 +1050,7 @@ pub(crate) fn insert_new_character(
     // the one castability source (`knows_spell`) and the gateway's SMSG_INITIAL_SPELLS both read them.
     let owner = account.identity.unwrap_or(Identity::ZERO);
     crate::spell::spellbook::grant_createinfo_spells(ctx, next_guid, owner, race, class);
-    // Action-bar rows : copies `game_createinfo_action` the same way the spell grant
+    // Action-bar rows: copies `game_createinfo_action` the same way the spell grant
     // above copies `game_createinfo_spell` — a no-op pre-import (table empty), so the gateway's login
     // synth covers it until the dump is imported.
     crate::action_bar::grant_createinfo_actions(ctx, next_guid, owner, race, class);

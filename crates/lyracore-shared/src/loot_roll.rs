@@ -30,7 +30,7 @@ pub mod event_kind {
     pub const MONEY_SHARE: u8 = 8;
 }
 
-/// The REALM-CORE loot-roll ops : the `op` byte of the operator-gated `realm_loot_op`
+/// The REALM-CORE loot-roll ops: the `op` byte of the operator-gated `realm_loot_op`
 /// reducer, mirroring `crate::group::realm_op`'s one-reducer-not-several trade (see that module's
 /// doc for why: a hand-maintained gateway binding per reducer, `docs/danger-zones.md` §1.2).
 ///
@@ -322,7 +322,7 @@ mod tests {
         assert!(decode_money_share("-1").is_none()); // u32, no sign
     }
 
-    // ---- Realm-core loot-roll ops  ----
+    // ---- Realm-core loot-roll ops ----
 
     /// The op byte is a WIRE value the gateway sends and the module dispatches on, deployed
     /// separately — a renumber only one side learns about silently runs the wrong op (a VOTE

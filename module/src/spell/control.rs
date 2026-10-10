@@ -380,7 +380,7 @@ pub(crate) fn break_auras_on_damage(
     // break (landing a swing/cast reveals the ATTACKER) is a separate call at each call site; this is
     // the VICTIM-side half. No-op on a non-stealthed target (the common path).
     super::break_stealth(ctx, target_guid);
-    // Cast PUSHBACK-on-damage : DIRECT damage (melee swing, direct spell) PUSHES BACK the
+    // Cast PUSHBACK-on-damage: DIRECT damage (melee swing, direct spell) PUSHES BACK the
     // victim's in-progress TIMED cast (the cast bar slides `CAST_PUSHBACK_MS`, capped at
     // `CAST_PUSHBACK_MAX` pushbacks) — vanilla 1.12 does NOT cancel a regular cast on damage; only
     // Kick/Counterspell-style interrupts (`interrupt_cast_and_lock`) and CC (`interrupt_cast` via
@@ -830,7 +830,7 @@ mod tests {
         }
     }
 
-    /// Cast pushback : the per-hit slide is cmangos's fixed 500ms, and the cap is 2
+    /// Cast pushback: the per-hit slide is cmangos's fixed 500ms, and the cap is 2
     /// pushbacks per cast (the vanilla cap) — so a 3rd+ direct hit is a documented no-op.
     #[test]
     fn pushback_constants_match_the_cmangos_convention() {

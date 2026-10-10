@@ -20,7 +20,7 @@ use crate::game_world_entity;
 use crate::game_melee_attack;
 // The taxonomy consts, the `Aura` struct + the generated `game_aura`/`game_spell` accessor traits, and
 // every pure helper this file calls (`should_arm_spell_retaliation`, `dispel_category_matches`,
-// `rederive_pool`, `absorb_draw`, `drain_shields`, `stat_bonus`,...) are re-exported by `mod.rs`.
+// `rederive_pool`, `absorb_draw`, `drain_shields`, `stat_bonus`, ...) are re-exported by `mod.rs`.
 use super::*;
 
 /// Should a PLAYER's spell hit arm the target creature's reciprocal melee retaliation? True only when the

@@ -1012,8 +1012,8 @@ mod partition_discipline_tripwire {
     const SHARD_ID_OWNERS: &[&str] = &["module/src/region.rs", "module/src/load.rs"];
 
     /// The ways module code could reach a shard id: the assignment table's accessor, the `.shard`
-    /// column itself (`row.shard`), and the ROW TYPE, because `let RegionAssignment { shard,.. }
-    /// = row;` and `match row { RegionAssignment { shard: db,.. } => … }` bind the column without
+    /// column itself (`row.shard`), and the ROW TYPE, because `let RegionAssignment { shard, .. }
+    /// = row;` and `match row { RegionAssignment { shard: db, .. } => … }` bind the column without
     /// ever writing a dot (both forms were confirmed to slip past the first two). You cannot
     /// destructure a type you may not name. `game_character_shard` / `CharacterShard` deliberately
     /// do NOT count — that table stores a `(map_id, instance_id)` LOCATION precisely so nothing has
@@ -1586,7 +1586,7 @@ pub(crate) mod grid_cell_tripwire {
     /// only if it looks like a type name (starts uppercase, matching this codebase's convention) —
     /// `TypeName {.. }` or `TypeName {..prev }`, so `None` correctly falls out for a shorthand
     /// `grid_x,` that is really an ordinary function-CALL argument (`queue_motion(.., grid_x,
-    /// grid_y,..)`: its nearest enclosing `{` is a `fn`/`if`/`match` body brace, not preceded by a
+    /// grid_y, ..)`: its nearest enclosing `{` is a `fn`/`if`/`match` body brace, not preceded by a
     /// type name) or any other bare code block. A literal `Self {.. }` constructor resolves through
     /// [`resolve_self_type`] to the `impl` block's real type name instead of returning `"Self"`
     /// verbatim — `struct_has_cell_field` searches for `struct Self`, which never exists.

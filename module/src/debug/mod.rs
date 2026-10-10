@@ -668,7 +668,7 @@ pub fn debug_sell_item(
 
 /// Enter AreaTrigger `trigger_id` as `character_guid` — drives `enter_areatrigger`'s shared core
 /// (`apply_enter_areatrigger`) by explicit guid for the harness: credits any "explore" quest tied to
-/// the trigger, AND  routes through a cross-map teleport if `trigger_id` is an imported
+/// the trigger, AND routes through a cross-map teleport if `trigger_id` is an imported
 /// `game_areatrigger_teleport` row — the same live runbook this debug twin drives for 224 exercises the
 /// Deadmines portal end-to-end without a physical CMSG_AREATRIGGER from the client.
 #[reducer]
@@ -794,7 +794,7 @@ pub fn debug_spawn_gameobject(
     }
     let guid = (0xF110u64 << 48) | template_entry as u64;
     ctx.db.game_gameobject().guid().delete(guid);
-    // Clear any prior Pick-Lock unlock  for this DERIVED guid so a re-spawn of a locked
+    // Clear any prior Pick-Lock unlock for this DERIVED guid so a re-spawn of a locked
     // template is deterministically LOCKED again (the verify's negative case relies on this).
     ctx.db.game_gameobject_unlocked().go_guid().delete(guid);
     let go = ctx
@@ -1838,7 +1838,7 @@ const INSTANCE_TICK_MS_FLOOR: u64 = 50;
 
 const INSTANCE_TICK_MS_CEIL: u64 = 600_000;
 
-/// Arm (or re-arm) a DEDICATED creature-tick row for `instance_id` at `tick_ms` : that
+/// Arm (or re-arm) a DEDICATED creature-tick row for `instance_id` at `tick_ms`: that
 /// instance's creature passes then fire on THIS row at its own cadence, and the catch-all row skips
 /// the instance (coverage is a partition — see `TickScope` in creatures/ai.rs). The global due-time
 /// passes (decay/respawn/regen/combat-drop) STAY on the catch-all row for all instances, so this knob

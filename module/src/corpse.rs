@@ -160,7 +160,7 @@ pub struct Corpse {
     #[default(false)]
     pub is_bones: bool,
 
-    // Which instance the death happened in : stamped from the dying
+    // Which instance the death happened in: stamped from the dying
     // player's own entity in `do_repop`; 0 = open world (every existing row auto-migrates to 0).
     // Gates reclaim (below) and the gateway's corpse CREATE relay by viewer instance; the instance
     // reap deletes any corpse left inside (the ghost's outcome is then spirit-healer-only —

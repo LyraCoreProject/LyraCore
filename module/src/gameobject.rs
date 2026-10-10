@@ -1,6 +1,6 @@
 //! Gameobjects — the world's interactive props. A spawned `game_gameobject` is relayed to clients as a
 //! GameObject CREATE_OBJECT (gateway); `use_gameobject` (CMSG_GAMEOBJ_USE) dispatches by template type:
-//! a CHEST rolls its real `game_gameobject_loot` table  into the shared
+//! a CHEST rolls its real `game_gameobject_loot` table into the shared
 //! `game_corpse_loot` table KEYED ON THE GO GUID (so the existing corpse loot window + take path serve
 //! it unchanged) — falling back to the legacy single `data0` drop when the chest has no data-driven
 //! table (the seed/demo chest) — a GOOBER grants quest credit for a USE_GAMEOBJECT objective, a
@@ -46,7 +46,7 @@ pub mod go_type {
     /// and never collides with the CHEST loot-window path. `data0` = item entry granted; `data1` =
     /// required skill level; `gather_skill_line` = MINING/HERBALISM the use requires.
     pub const GATHER: u8 = 25; // synthetic; vanilla has no type 25 — our gather marker
-                               // COLLISION NOTE : real cmangos type 25 IS assigned (GAMEOBJECT_TYPE_FISHINGHOLE) ,
+                               // COLLISION NOTE: real cmangos type 25 IS assigned (GAMEOBJECT_TYPE_FISHINGHOLE),
                                // it just happens to collide with this synthetic marker. The importer's TYPE-25 COLLISION GUARD
                                // (`importer/src/main.rs::classify_go_type`) is the ONLY place that decides what gets stored as
                                // module type 25: a real FISHINGHOLE row is dropped from import, never stored here as GATHER.
@@ -151,7 +151,7 @@ pub struct GameLock {
     pub required_skill: u32, // kind 2: the skill VALUE needed; kind 1: unused (Lock.dbc's own 0/garbage)
 }
 
-/// `game_lock.kind` values : the two opener kinds [`GameLock`] models.
+/// `game_lock.kind` values: the two opener kinds [`GameLock`] models.
 pub(crate) const LOCK_KIND_ITEM: u8 = 1; // property = the key item entry the opener must HOLD
 pub(crate) const LOCK_KIND_SKILL: u8 = 2; // property = a SkillLine id (Lockpicking 633 / Herbalism 182 / Mining 186)
 
@@ -786,7 +786,7 @@ fn use_resolved_gameobject(
         (go.guid, go.template_entry, go.instance_id);
     match tmpl.type_id {
         go_type::CHEST => {
-            // LOCK gate : a CHEST whose lock has a REAL opener (`locked_shut`) refuses
+            // LOCK gate: a CHEST whose lock has a REAL opener (`locked_shut`) refuses
             // the loot roll until Pick Lock (`apply_pick_lock`) records a `game_gameobject_unlocked` row.
             // lock_id 0 / a hand-open (property==0-only) lock opens freely (unchanged). BEFORE the loot.
             if locked_shut(ctx, go.guid, tmpl.lock_id) {
@@ -915,10 +915,10 @@ fn use_resolved_gameobject(
             }
         }
         go_type::DOOR | go_type::BUTTON => {
-            // DOOR/BUTTON toggle : open↔closed is state 0↔1, the same field the
+            // DOOR/BUTTON toggle: open↔closed is state 0↔1, the same field the
             // gateway already relays in the CREATE_OBJECT (`gameobject_state`) — see the new
             // `on_go_update` relay (subscriptions.rs) that re-emits it live, mirroring the corpse
-            // body→bones re-emit. LOCK gate : a DOOR/BUTTON whose lock has a REAL opener
+            // body→bones re-emit. LOCK gate: a DOOR/BUTTON whose lock has a REAL opener
             // (`locked_shut`) refuses the toggle until Pick Lock records a `game_gameobject_unlocked`
             // row. lock_id 0 / a hand-open (property==0-only) lock toggles freely (unchanged, per 211).
             if locked_shut(ctx, go.guid, tmpl.lock_id) {
@@ -934,7 +934,7 @@ fn use_resolved_gameobject(
             // at least usable/clickable without a hard error, not a silent capability promise.
         }
     }
-    // Encounter kernel notify hook : every SUCCESSFUL use, the gates above (range,
+    // Encounter kernel notify hook: every SUCCESSFUL use, the gates above (range,
     // already-looted, skill) `?`-returned before this line, so a rejected use never fires.
     crate::hooks::fire_on_go_used(
         ctx,
@@ -1199,7 +1199,7 @@ mod tests {
         assert_eq!(go_type::GATHER, 25);
         assert_ne!(go_type::GATHER, go_type::CHEST);
         assert_ne!(go_type::GATHER, go_type::GOOBER);
-        // DOOR/BUTTON  sit at cmangos' real 0/1, guard them too, and confirm none of
+        // DOOR/BUTTON sit at cmangos' real 0/1, guard them too, and confirm none of
         // the five LIVE type ids collide with each other.
         assert_eq!(go_type::DOOR, 0);
         assert_eq!(go_type::BUTTON, 1);

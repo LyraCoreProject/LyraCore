@@ -342,7 +342,7 @@ pub mod taxi_fixture {
         (0xF130_u64 << 48) | ((FLIGHT_MASTER_ENTRY as u64) << 24) | 1;
 }
 
-/// Gossip menu OPTION : `game_gossip_option.action` codes as they land verbatim from
+/// Gossip menu OPTION: `game_gossip_option.action` codes as they land verbatim from
 /// the cmangos dump's `gossip_menu_option.OptionType`/`option_id` column (the importer copies it
 /// through unchanged — this module documents what the values MEAN so the gateway dispatch and the
 /// importer agree without duplicating magic numbers). `[V]` — confirm against your own dump; only

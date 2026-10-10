@@ -950,14 +950,14 @@ fn folding_a_money_delta_adds_it_to_the_escrowed_blob() {
 // CROSS-DATABASE: the transport ratchet, and the six-step crash matrix
 // -------------------------------------------------------------------------------------
 
-/// THE RATCHET. A character-owned table with no `character_owned!(transfer,..)` arm does not
+/// THE RATCHET. A character-owned table with no `character_owned!(transfer, ..)` arm does not
 /// cross a database boundary — and unlike a missing delete sweep (which leaks rows, loudly,
 /// forever) that failure is INVISIBLE: the character simply arrives without that table's data,
 /// and the source copy it came from has already been cascade-deleted. There is no second chance
 /// and no error anywhere. So: every manifest table must have an arm, and a NEW character-owned
 /// table fails this test by name in the same edit that adds it.
 ///
-/// "Not transported" is a legal answer, via the `character_owned!(not_transported,..)` marker
+/// "Not transported" is a legal answer, via the `character_owned!(not_transported, ..)` marker
 /// kind, written AT the table (see `rest.rs` / `group.rs`'s invite row) — because a decision
 /// recorded at the table is a different thing from an omission nobody noticed.
 ///

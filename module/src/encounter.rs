@@ -453,7 +453,7 @@ pub fn set_encounter_data(
 // ===========================================================================================
 
 /// Register "fire `on_hp_threshold` when a creature of `entry` reaches `pct`% or below" — the
-/// package-side half of the hook (the `game_hook!(on_hp_threshold,...)` handler is the other).
+/// package-side half of the hook (the `game_hook!(on_hp_threshold, ...)` handler is the other).
 /// Idempotent (check-before-insert, the `learn_spell` grant idiom): packages typically call this
 /// from their seed/fixture reducer or an `on_creature_spawn` handler, either of which may run
 /// repeatedly. `pct` must be 1..=99 (0 is the death hook's job; 100 would fire on any scratch).

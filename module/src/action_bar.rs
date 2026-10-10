@@ -1,7 +1,7 @@
 //! Creation-time action-bar rows — `game_player_action` is the per-character bar the gateway's login
 //! sequence reads FIRST (before falling back to synthesizing a bar from the spellbook, see
 //! `gateway/src/codec/entity.rs::login_sequence_messages`). Mirrors the `game_createinfo_spell` /
-//! `game_player_spell` precedent  one level over: `game_createinfo_action` is the
+//! `game_player_spell` precedent one level over: `game_createinfo_action` is the
 //! per-(race, class) dump-sourced default layout (`playercreateinfo_action`), copied into
 //! `game_player_action` at character creation exactly like `grant_createinfo_spells` copies the spell
 //! kit. UNLIKE the spell kit there is no hand-authored fallback seeded into `game_createinfo_action` —

@@ -61,7 +61,7 @@ pub struct CorpseLoot {
     // non-quest drop) keeps behaving exactly as before — additive auto-migration.
     #[default(false)]
     pub quest_only: bool,
-    // END-APPENDED : `0` = the SHARED, not-yet-split row, any currently-needing
+    // END-APPENDED: `0` = the SHARED, not-yet-split row, any currently-needing
     // character may claim it, which triggers the per-member clone (`clone_quest_loot_for_group`);
     // nonzero = a character guid, this specific row is a pernted the moment the shared row is first taken). Meaningless when `quest_only` is
     // false UNLESS it's a group-loot WINNER-LOCKED row (below), GENERALIZED slices
@@ -114,7 +114,7 @@ pub struct CreatureLoot {
     pub chance_bp: u32, // drop chance in basis points (0..=10000); a group member's weight if group_id>0
     pub count: u32,
     pub group_id: u32, // 0 = independent roll; >0 = pick-one group (≤1 member drops per kill)
-    // END-APPENDED : cmangos `ChanceOrQuestChance < 0`, the item is a QUEST-drop, only
+    // END-APPENDED: cmangos `ChanceOrQuestChance < 0`, the item is a QUEST-drop, only
     // ever visible to a player who currently needs it (an active matching COLLECT_ITEM objective — see
     // `killer_needs_item`). Gated at ROLL TIME against the CREDITED KILLER (module doc, decision),
     // never re-evaluated later. `#[default(false)]` so existing rows (imported pre-210, or seeded) keep
@@ -227,7 +227,7 @@ pub(crate) fn roll_loot_rows(
         .collect()
 }
 
-/// Pure gate : may `taker_guid` claim a `quest_only` row whose current
+/// Pure gate: may `taker_guid` claim a `quest_only` row whose current
 /// reservation is `reserved_for`, given `taker_needs_item` (already resolved by the caller — mirrors
 /// `needs_item_pure`'s ctx/pure split)? An UNRESERVED row (`reserved_for == 0` — the shared row nobody
 /// has split yet) is claimable by anyone who currently needs it; a RESERVED row is claimable by its
@@ -264,7 +264,7 @@ pub(crate) fn group_loot_take_allowed(
     designated_looter_guid == 0 || designated_looter_guid == taker_guid
 }
 
-/// Pure : given `(character_guid, currently_needs_item)` pairs for every OTHER
+/// Pure: given `(character_guid, currently_needs_item)` pairs for every OTHER
 /// group member (the taker already excluded by the caller), which should receive a fresh per-member
 /// clone when the shared `quest_only` row is first taken? Only the still-needing ones — a member who's
 /// already capped on the item (or no longer holds the quest) gets nothing, matching vanilla (the item
@@ -277,7 +277,7 @@ pub(crate) fn clone_targets(other_members: &[(u64, bool)]) -> Vec<u64> {
         .collect()
 }
 
-/// Pure : `count` fresh, ascending loot-window slot indices past whatever is
+/// Pure: `count` fresh, ascending loot-window slot indices past whatever is
 /// already used on a corpse (`used_slots`), so per-member quest clones never collide with the
 /// just-deleted shared row's slot or any sibling drop. Saturating (a corpse loot window is
 /// realistically far under 255 rows — the gateway's RAW `SMSG_LOOT_RESPONSE` builder already caps the
@@ -465,7 +465,7 @@ pub(crate) fn insert_corpse_rows(
             count,
             quest_only,
             reserved_for: 0,
-            // Group-loot stamping  happens AFTER this fn returns, in
+            // Group-loot stamping happens AFTER this fn returns, in
             // `apply_group_loot_rules` (combat::kill_creature) — this insert always starts FFA.
             designated_looter_guid: 0,
             master_only: false,
@@ -1089,7 +1089,7 @@ mod tests {
         assert!(scale_money_for_rank(u32::MAX, 3) >= u32::MAX / 2);
     }
 
-    // ---- LOOT-FAMILY COMPLETENESS  ----
+    // ---- LOOT-FAMILY COMPLETENESS ----
 
     /// `needs_item_pure` — the pure decision behind `killer_needs_item`: a COLLECT_ITEM objective on an
     /// TIVE quest matching `item` says yes; a KILL_CREATURE objective (wrong kind), a different item
@@ -1329,7 +1329,7 @@ mod tests {
         assert_eq!(next_free_slots(&[255], 2), vec![255, 255]);
     }
 
-    // ---- Money-loot split  ----
+    // ---- Money-loot split ----
 
     /// SOLO passthrough: an empty `recipients` slice (no `game_corpse_loot_eligible` snapshot) always
     /// credits the WHOLE amount to the looter in a single entry — byte-identical to the pre-221

@@ -8,7 +8,7 @@ use spacetimedb::{table, ReducerContext, Table};
 
 /// One `WorldSafeLocs.dbc` row (a graveyard's fixed position) — imported by the importer's `--dbc`
 /// mode (see `importer/src/dbc.rs::graveyard_sql`). Replaces the hardcoded
-/// `{NORTHSHIRE, GOLDSHIRE,...}` consts below as the primary data source once imported; those
+/// `{NORTHSHIRE, GOLDSHIRE, ...}` consts below as the primary data source once imported; those
 /// consts remain as the no-import fallback (`nearest`), and `seed.rs` row-seeds the SAME five points
 /// here too, mirroring the `game_start_position` seed/import precedent (init seeds, import
 /// clear+reloads over it). No orientation column — `WorldSafeLocs.dbc` carries none (a graveyard
@@ -112,7 +112,7 @@ const STATIC_CANDIDATES: [Graveyard; 5] = [
     WESTFALL_COAST,
 ];
 
-// ---- Instance-map release  --------------------------------------------------
+// ---- Instance-map release --------------------------------------------------
 //
 
 pub(crate) fn instance_release_zone(map_id: u32) -> Option<u32> {

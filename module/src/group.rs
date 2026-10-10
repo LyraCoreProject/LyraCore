@@ -3370,7 +3370,7 @@ mod tests {
         }
     }
 
-    // ---- Group loot methods  ----
+    // ---- Group loot methods ----
 
     #[test]
     fn loot_method_encoding_matches_the_real_wire_grouplootsetting_order() {

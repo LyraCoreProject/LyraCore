@@ -285,7 +285,7 @@ pub(crate) fn handle_query<St: WorldStore + ?Sized>(
                     )?;
                 }
                 Some(gossip_option::UNLEARNTALENTS) => {
-                    // Respec. Errors (out of range / not enough gold) are per-action ,
+                    // Respec. Errors (out of range / not enough gold) are per-action,
                     // the window closes either way, same as bind_home above.
                     let _ = store.reset_talents(conn.account_id, player_guid, npc);
                     send(tx, Outbound::One(ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE))?;

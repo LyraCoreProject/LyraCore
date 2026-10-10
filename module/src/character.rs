@@ -105,7 +105,7 @@ pub struct Character {
 
     #[default(0u64)]
     pub pending_instance_id: u64,
-    /// GM playtest authorization level : `0` = no access to any `.command`; the
+    /// GM playtest authorization level: `0` = no access to any `.command`; the
     /// operator-only `gm::set_gm_level` reducer is the only writer. Moderation-facing per-level
     /// distinctions beyond "has access at all" are's concern, not this one's, every
     /// `gm_command` today only checks `gm_level != 0`. `#[default(0)]` + END-appended so `publish`

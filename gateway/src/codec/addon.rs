@@ -256,7 +256,7 @@ mod tests {
         }
     }
 
-    /// a SAY addon frame is not a typed chat type, so the caller keeps dropping it ,
+    /// a SAY addon frame is not a typed chat type, so the caller keeps dropping it,
     /// SAY has no chat-kind route to a real player, addon-language or not.
     #[test]
     fn a_say_addon_frame_is_still_dropped() {

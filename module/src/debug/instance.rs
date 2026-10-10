@@ -1041,7 +1041,7 @@ pub fn debug_bench_collision_gate(
     );
 }
 
-/// Backfill the imported default action bar  onto an EXISTING character ,
+/// Backfill the imported default action bar onto an EXISTING character,
 /// chars created before the `game_createinfo_action` import have no `game_player_action` rows and
 /// fall back to the gateway's known-spells synth (which slots passives and misses the stance
 /// pages). Idempotent per button (the grant skips occupied ones). Takes effect next login.

@@ -163,7 +163,7 @@ pub(crate) fn skin_corpse(
         return Err("corpse still has loot".to_string());
     }
 
-    // Grant leather, DATA-DRIVEN : the corpse's creature template names a
+    // Grant leather, DATA-DRIVEN: the corpse's creature template names a
     // `skin_loot_id` (cmangos `skinning_loot_template`, level-banded across many creatures sharing a
     // band); roll it and grant every winner. `skin_loot_id == 0` (unimported / a seeded/test beast) OR
     // an empty/no-win roll falls back to the flat `LEATHER_ENTRY`/`LEATHER_COUNT` — byte-identical to
@@ -364,7 +364,7 @@ pub(crate) fn apply_disenchant(ctx: &ReducerContext, guid: u64, slot: u8) -> Res
 /// ENCHANT the item in `target_slot` with `enchant_id`: validate the id (it must be a known enchant in
 /// `game_item_enchantment`), consume the enchanting mats, stamp `enchant_id` onto the instance, climb Enchanting.
 /// The core (resolved guid), shared by the `enchant_item` reducer + `debug_enchant_item` twin. The enchant
-/// is server-REAL: `equipped_stat_bonus` now folds `enchant_stat(enchant_id,..)`, so an equipped enchanted
+/// is server-REAL: `equipped_stat_bonus` now folds `enchant_stat(enchant_id, ..)`, so an equipped enchanted
 /// piece moves the effective-* readouts (swing/dodge/armor/crit/hit + max HP/mana via recompute_vitals).
 /// The client glow/green-text is DEFERRED (the 5875 client caches item stats by ENTRY). ROLLBACK:
 /// `remove_items` (the mats consume) is `?`-propagated BEFORE the instance is updated, so a missing-mats

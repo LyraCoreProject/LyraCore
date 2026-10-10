@@ -78,7 +78,7 @@ pub struct CreatureTemplate {
     #[default(0)]
     pub armor: u32,
 
-    // Loot-family completeness : the creature's PICKPOCKET and SKIN loot-table ids ,
+    // Loot-family completeness: the creature's PICKPOCKET and SKIN loot-table ids,
     // cmangos `creature_template.PickpocketLootId` / `SkinLootId`, sitting immediately after `LootId`
     // in the real schema (the importer's `ct::PICKPOCKET_LOOT_ID`/`ct::SKIN_LOOT_ID`, `[V]` — confirm
     // against your own dump). `pickpocket_loot_id` keys `game_pickpocket_loot` directly by CREATURE
@@ -268,7 +268,7 @@ pub struct NpcTextSlot {
     pub probability: f32,
 }
 
-/// Per-creature gossip MENU OPTION : a clickable line in `SMSG_GOSSIP_MESSAGE`
+/// Per-creature gossip MENU OPTION: a clickable line in `SMSG_GOSSIP_MESSAGE`
 /// (browse-goods / make-home / "Train me" / plain gossip text / submenu link), imported from cmangos
 /// `gossip_menu_option`. Keyed by creature template `entry` (NOT the cmangos `gossip_menu_option.menu_id`
 /// — the importer collapses the same menu→entry indirection `GossipMenu` already collapses for the
@@ -285,7 +285,7 @@ pub struct NpcTextSlot {
 /// `lyracore_shared::constants::gossip_condition`; an option the importer can't classify gets `cond_type = 0`
 /// (fail-open, always shown) rather than silently hidden, and is logged at import time.
 ///
-/// A NEW table  → auto-migrates with no `-c`. No Timestamp → SQL-seedable,
+/// A NEW table → auto-migrates with no `-c`. No Timestamp → SQL-seedable,
 /// importer-owned (clear+reload each ETL run, like its sibling `GossipMenu`). [static]
 #[table(accessor = game_gossip_option, public, index(accessor = by_entry, btree(columns = [entry])))]
 pub struct GossipOption {
@@ -874,7 +874,7 @@ pub fn build_player_entity(
         death_expire_micros: character.death_expire_micros,
 
         instance_id: character.pending_instance_id,
-        // GM playtest fields  threaded from the DURABLE carry columns ,
+        // GM playtest fields threaded from the DURABLE carry columns,
         // the `death_expire_micros` precedent). They are NOT durable settings: `persist_entity` clears
         // them on a real logout/disconnect and carries them across a despawn/rebuild WITHIN a session
         // (`persisted_gm_playtest`), so a login still starts at 1× speed / not-godmode while a

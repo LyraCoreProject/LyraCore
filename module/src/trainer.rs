@@ -506,7 +506,7 @@ pub(crate) fn apply_trainer_buy(
     // idempotent already-known no-op), and on Ok it grants the skill at 1/75. The `learn_skill_line == 0`
     // arm below is the EXISTING spell path verbatim (byte-identical → no class-spell regression).
     //
-    // WEAPON-MASTER FORK : the SAME `learn_skill_line` column shape also carries weapon
+    // WEAPON-MASTER FORK: the SAME `learn_skill_line` column shape also carries weapon
     // proficiency offerings (Daggers, Polearm, …) — no new row kind. `is_combat_skill_line` tells the two
     // apart and the cap/known computation diverges for each:
     //   - PROFESSION cap is the offering's STATIC tier column (`learn_skill_cap`: Apprentice 75, Journeyman
@@ -727,7 +727,7 @@ mod tests {
         );
     }
 
-    /// WEAPON-LEARN PRESENCE-KNOWN semantics : unlike a profession offering (known = a CAP
+    /// WEAPON-LEARN PRESENCE-KNOWN semantics: unlike a profession offering (known = a CAP
     /// comparison), a weapon offering's "known" is mere ROW PRESENCE — feeding `trainer_buy_check` a bare
     /// `known` bool either way, so the SAME gate enforces both: a class-seeded weapon line (row present,
     /// regardless of its stored cap) refuses as already-known; a lacked line (no row at all) proceeds.

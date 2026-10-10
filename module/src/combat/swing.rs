@@ -15,7 +15,7 @@ use crate::{
 };
 
 // Tables' pure formulas/consts and the sibling submodules' re-exports (`roll_swing`, `apply_hit`,
-// `enter_combat`,...) are all pulled in from `mod.rs` (`pub use tables::*` + `pub use
+// `enter_combat`, ...) are all pulled in from `mod.rs` (`pub use tables::*` + `pub use
 // folds::*`/`death::*`/`engage::*`) so every symbol resolves the same as before the split.
 use super::*;
 

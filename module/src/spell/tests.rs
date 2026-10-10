@@ -712,7 +712,7 @@ fn break_on_damage_flag_decode() {
     assert!(!breaks_on_damage(0x2)); // a different aura_interrupt bit (not BREAK_ON_DAMAGE) → not broken
 }
 
-// --- Aura-expiry reap gate  --------------------------------------------------------
+// --- Aura-expiry reap gate --------------------------------------------------------
 // `tick_auras`'s expiry pass now range-scans `game_aura.by_expiry()` (a btree index on `expires_at`) to
 // the horizon instead of `.iter()`ing the whole table, then applies `is_due_for_expiry` as the exact same
 // combined predicate the old full scan used inline (`a.expires_at <= now && a.eff_kind != A_STEALTH`).

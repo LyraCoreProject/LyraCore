@@ -33,7 +33,7 @@
 use std::collections::BTreeMap;
 
 /// Vanilla (build 5875) UNIT/PLAYER object update-field indices, each a u32 slot. Every number is
-/// the literal `set_int(N,..)` / `set_bytes(N,..)` argument from `wow_world_messages`' setters, so
+/// the literal `set_int(N, ..)` / `set_bytes(N, ..)` argument from `wow_world_messages`' setters, so
 /// the byte-equivalence tests cross-check them against gtker's serializer.
 ///
 /// This is the reference layout for the whole vanilla descriptor, not just the fields a caller
@@ -97,7 +97,7 @@ pub mod idx {
     /// Slot N (0-indexed): `CONTAINER_FIELD_SLOT_1 + N * 2`. The gtker vanilla builder only exposes
     /// `set_container_slot_1` (this index); slots 1+ require the hand-rolled raw encoder (same
     /// 'gtker descriptor-setter wall' as multi-aura). Cross-checked against `wow_world_messages`
-    /// vanilla `UpdateContainerBuilder::set_container_slot_1 → set_guid(50,..)`.
+    /// vanilla `UpdateContainerBuilder::set_container_slot_1 → set_guid(50, ..)`.
     pub const CONTAINER_FIELD_SLOT_1: u16 = 50;
 
     /// `PLAYER_DUEL_ARBITER` — the duel flag gameobject guid, u64 at slots 188 and 189.

@@ -499,7 +499,7 @@ pub fn debug_verify_lethal_damage_floor_fixture(
     Ok(())
 }
 
-// Tables' pure formulas/consts and the sibling submodules' re-exports (`roll_money`, `is_engaged`,...)
+// Tables' pure formulas/consts and the sibling submodules' re-exports (`roll_money`, `is_engaged`, ...)
 // are all pulled in from `mod.rs` (`pub use tables::*` + `pub use folds::*`/`engage::*`/`swing::*`) so
 // every symbol resolves the same as before the split.
 use super::*;
@@ -648,7 +648,7 @@ fn kill_creature_with_attribution(
             victim_is_player: false,
         },
     );
-    // Encounter kernel : the entry-keyed, instance-stamped creature death, the
+    // Encounter kernel: the entry-keyed, instance-stamped creature death, the
     // pet clean-despawn branch above deliberately does NOT fire this (encounters key on wild
     // creatures). Snapshots were taken before the corpse row was mutated.
     crate::hooks::fire_on_creature_death(
@@ -794,7 +794,7 @@ fn roll_corpse_loot(
     // A valid Loot Tag rolls quest-only rows with ordinary corpse loot. Visibility and takability
     // remain per-viewer decisions downstream, so `roll_creature_loot` needs no killing source.
     let dropped = crate::loot::roll_creature_loot(ctx, target.entry, target_guid);
-    // Group loot methods : a GROUPED kill's above-threshold rows may
+    // Group loot methods: a GROUPED kill's above-threshold rows may
     // spawn a need/greed roll, below-threshold/round-robin rows get a designated looter stamped, and
     // above-threshold-under-MASTER rows get restricted to the master — all decided HERE at kill
     // time (see loot.rs's module doc for why not lazily "at loot-open"). A no-op for an ungrouped

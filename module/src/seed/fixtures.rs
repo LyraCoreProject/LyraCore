@@ -1601,7 +1601,7 @@ pub(crate) fn seed_scenario_fixtures(ctx: &ReducerContext) {
         });
     }
 
-    // --- WEAPON MASTER : "Woo Ping" (51005) sells weapon proficiencies for gold ,
+    // --- WEAPON MASTER: "Woo Ping" (51005) sells weapon proficiencies for gold,
     // the vanilla weapon-master shape (a trainer-list row whose `learn_skill_line` names a weapon line
     // instead of a spell/profession). Mirrors the 51004 vendor block: GOSSIP|TRAINER, faction 35
     // (FRIENDLY, never a kill target).

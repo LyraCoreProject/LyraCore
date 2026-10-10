@@ -216,7 +216,7 @@ pub fn run(data_dir: &str, args: &Args) -> Result<()> {
     let safe_locs: DbcWorldSafeLocs = read_table(&mut chain)?;
     let (graveyard_stmts, graveyard_count) = graveyard_sql(&safe_locs);
 
-    // Creature families : CreatureFamily.dbc → game_creature_family. Small table (no
+    // Creature families: CreatureFamily.dbc → game_creature_family. Small table (no
     // map filtering — same "load ALL rows" convention as the other DBC-backed lookups above). No
     // Timestamp → plain SQL, same clear+reload shape.
     let creature_families: DbcCreatureFamily = read_table(&mut chain)?;
@@ -227,7 +227,7 @@ pub fn run(data_dir: &str, args: &Args) -> Result<()> {
         .filter(|r| r.pet_talent_type != -1)
         .count();
 
-    // Locks : Lock.dbc → game_lock, the DATA half of open-lock (119 wires enforcement).
+    // Locks: Lock.dbc → game_lock, the DATA half of open-lock (119 wires enforcement).
     // Small table (a few hundred rows in vanilla) — load ALL, same "load ALL rows" convention as the
     // other DBC-backed lookups above. No Timestamp → plain SQL, same clear+reload shape.
     let locks: DbcLock = read_table(&mut chain)?;
@@ -780,7 +780,7 @@ fn faction_template_sql(chain: &mut PatchChain) -> Result<(Vec<String>, usize)> 
     Ok((stmts, n))
 }
 
-/// Clear+reload SQL for `game_area` from `AreaTable.dbc` : every zone AND subzone row
+/// Clear+reload SQL for `game_area` from `AreaTable.dbc`: every zone AND subzone row
 /// (id, map, parent, area_bit, flags, exploration level, faction group, name). `flags` is the raw
 /// `AreaFlags` bitmask reinterpreted as `u32` (`as_int()` widened) — undecoded here, a consumer
 /// decodes what it needs (rest-state city detection is 196's job). Name via `.en_gb` + `sql_text`
@@ -815,7 +815,7 @@ fn area_sql(table: &DbcAreaTable) -> (Vec<String>, usize) {
     (stmts, n)
 }
 
-/// Clear+reload SQL for `game_area_trigger` from `AreaTrigger.dbc` : the geometric
+/// Clear+reload SQL for `game_area_trigger` from `AreaTrigger.dbc`: the geometric
 /// half of inn triggers (196), dungeon entrances (190), and quest explore objectives — a trigger
 /// volume is either a sphere (`radius`) or a box (`box_length`/`box_width`/`box_height`/`box_yaw`);
 /// the DBC carries both fields for every row regardless of which shape a given trigger actually
@@ -852,8 +852,8 @@ fn area_trigger_sql(table: &DbcAreaTrigger) -> (Vec<String>, usize) {
     (stmts, n)
 }
 
-/// Clear+reload SQL for `game_graveyard` from `WorldSafeLocs.dbc` : a graveyard's
-/// fixed position, replacing the hand-coded `world::graveyard::{NORTHSHIRE, GOLDSHIRE,...}` consts
+/// Clear+reload SQL for `game_graveyard` from `WorldSafeLocs.dbc`: a graveyard's
+/// fixed position, replacing the hand-coded `world::graveyard::{NORTHSHIRE, GOLDSHIRE, ...}` consts
 /// as the primary data source (those consts — and `seed.rs`'s row-seeded twins — remain the
 /// no-import fallback). No orientation column — the DBC carries none. Name via `.en_gb` +
 /// `sql_text`. Loads ALL rows (small table). No Timestamp → plain SQL.

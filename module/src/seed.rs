@@ -1,6 +1,6 @@
 //!
 //! 1. **`seed_production_core`**: realm, server config, the human-warrior start position, the
-//!    fallback graveyard/graveyard-zone rows , the TEST account + pre-seeded
+//!    fallback graveyard/graveyard-zone rows, the TEST account + pre-seeded
 //!    character (with its starter spellbook/action-bar kit), and the EventAI on-aggro barks. Every
 //!    fresh database needs this regardless of whether it will ever host a real import.
 //! 2. **`seed_map0_demo_content`** (the in-body `DECISION` comment has the full
@@ -56,7 +56,7 @@ pub fn init(ctx: &ReducerContext) {
 
 /// Stratum 1 — the production core every fresh database needs regardless of whether it will ever
 /// host a real import: realm, server config, the human-warrior start position, the fallback
-/// graveyard/graveyard-zone rows , the TEST account + pre-seeded character (with its
+/// graveyard/graveyard-zone rows, the TEST account + pre-seeded character (with its
 /// starter spellbook/action-bar kit), and the EventAI on-aggro barks.
 fn seed_production_core(ctx: &ReducerContext) {
     use constants::start_human_warrior as hw;
@@ -107,7 +107,7 @@ fn seed_production_core(ctx: &ReducerContext) {
         display_id: 49,
     });
 
-    // Graveyard fallback seed : the SAME five Elwynn/Westfall graveyards
+    // Graveyard fallback seed: the SAME five Elwynn/Westfall graveyards
     // `world::graveyard`'s hardcoded consts carry, ALSO row-seeded into `game_graveyard` +
     // `game_graveyard_zone` so a fresh unimported DB and the live `graveyard::resolve_graveyard`
     // path agree exactly — mirrors the `game_start_position` precedent (init seeds; the importer's
@@ -994,7 +994,7 @@ fn seed_spell_registry(ctx: &ReducerContext) {
     spell(50050, "Test Conjure", 0, 0, 0, 0, 0, 1, 0, false, 0);
     effect(50050, 0, 0x07, 2, 0, 0, 5349, 8); // E_CREATE_ITEM: 2× item 5349 (Conjured Muffin), self
 
-    // Craft RECIPES are no longer seeded : they import from the real Spell.dbc with real
+    // Craft RECIPES are no longer seeded: they import from the real Spell.dbc with real
     // reagents (game_spell_reagent) + skill-up bands (game_skill_ability), offered by the real in-box
     // trainers. The old synthetic recipe spells here (2538 — which was even FABRICATED as "Roasted Boar
     // Meat" when the real 2538 is "Charred Wolf Meat"; 50071; 50090-50097) are gone. Crafted-item ON-USE
@@ -1544,7 +1544,7 @@ fn seed_scheduler_arming(ctx: &ReducerContext) {
             scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(EVENT_TTL_MICROS)),
         });
 
-    // Schedule the instance reaper  every 60s, minutes-scale occupancy
+    // Schedule the instance reaper every 60s, minutes-scale occupancy
     // stamping + the 30min-empty / reset-requested reap. A live DB (auto-migrate publish) never
     // re-runs init, so re-arm there via `debug_rearm_instance_reaper` (the
     // `debug_rearm_creature_tick` precedent).

@@ -170,7 +170,7 @@ pub struct CreatureSpline {
 /// ai.rs is the coverage rule — a partition, never an overlap, so a second row DIVIDES the per-firing
 /// work instead of multiplying it).
 ///
-/// HONEST BOUND : SpacetimeDB serializes every reducer on ONE commit stream, this is
+/// HONEST BOUND: SpacetimeDB serializes every reducer on ONE commit stream, this is
 /// LATENCY SMOOTHING + WORK AVOIDANCE, **NOT parallelism**. Each extra row's firings preempt the
 /// shared stream (10 instances at 100ms = 100 extra transactions/sec), so tight per-instance
 /// cadences are a knob to use sparingly, measured via the per-pass rows-visited log below.
@@ -271,7 +271,7 @@ pub fn tick_creatures(ctx: &ReducerContext, schedule: CreatureMoveSchedule) {
 }
 
 // ===========================================================================================
-//  Active cells [server] ,: grid-activation; only cells near players tick
+//  Active cells [server],: grid-activation; only cells near players tick
 // ===========================================================================================
 
 /// Rough heartbeat period (micros) for the active-cell rows-visited log line, the
@@ -483,9 +483,9 @@ fn log_pass_stats(
     );
 }
 
-/// The ONE shared creature move-leg writer : every movement decision (the cycle's
+/// The ONE shared creature move-leg writer: every movement decision (the cycle's
 /// idle and chase legs, flee, fear-flee) funnels its ALREADY-STEPPED landing point through here, so a
-/// single ground-snap / anti-desync fix  applies to ALL of them at once. The per-pass
+/// single ground-snap / anti-desync fix applies to ALL of them at once. The per-pass
 /// STEP is computed by the caller BEFORE this call (different math per pass — waypoint segment / chase
 /// step / walk-home / wander hop / flee dash); this owns only what every pass shares:
 ///   1. ground-snap the landing point (`snap_z`) — off-slice / unimported areas fall back to the
@@ -692,7 +692,7 @@ pub(crate) fn emit_creature_leg(
         );
         return;
     }
-    // ONE WRITER : funnel the row build + upsert through `emit_move_spline`, the
+    // ONE WRITER: funnel the row build + upsert through `emit_move_spline`, the
     // SAME call the cycle's spline-advance halt and its chase stop
     // already use, so "one spline writer" is a fact the type system enforces, not doctrine repeated at
     // each call site. Was: a `game_creature_move_event` INSERT (globally subscribed — so every leg was

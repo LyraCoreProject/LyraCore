@@ -1893,7 +1893,7 @@ pub(crate) fn aura_snapshot_outbound(
     out
 }
 
-/// Trade-status relay : `game_trade_event.kind` → the `SMSG_TRADE_STATUS` variant, to the
+/// Trade-status relay: `game_trade_event.kind` → the `SMSG_TRADE_STATUS` variant, to the
 /// row's recipient and nobody else (audience resolved by the caller, the `auction_notice_outbound`
 /// shape). The kind byte is `lyracore_shared::trade::event_kind` — NOT the vanilla discriminant;
 /// this match IS the wire mapping. An unknown kind (a newer module mid-rollout) drops with a warn
@@ -1937,7 +1937,7 @@ pub(crate) fn trade_event_outbound(row: &TradeEvent) -> Vec<Outbound> {
         kind::TRADE_ACCEPT => Some(SMSG_TRADE_STATUS::TradeAccept),
         kind::BACK_TO_TRADE => Some(SMSG_TRADE_STATUS::BackToTrade),
         kind::TRADE_COMPLETE => Some(SMSG_TRADE_STATUS::TradeComplete),
-        // Commit refused on bag space : the window closes with the inventory error;
+        // Commit refused on bag space: the window closes with the inventory error;
         // `target_error` says WHOSE bags — false = yours, true = the partner's.
         kind::INV_FULL_SELF => Some(SMSG_TRADE_STATUS::CloseWindow {
             inventory_result: wow_world_messages::vanilla::InventoryResult::InventoryFull,
@@ -2103,7 +2103,7 @@ pub(crate) fn duel_winner_outbound(row: &DuelEvent) -> Vec<Outbound> {
     ))]
 }
 
-/// Decode an `OFFER_*` payload into the fixed-444-byte `SMSG_TRADE_STATUS_EXTENDED` :
+/// Decode an `OFFER_*` payload into the fixed-444-byte `SMSG_TRADE_STATUS_EXTENDED`:
 /// counts are 7/7 (the cmangos constant), unused slots stay zeroed (`TradeSlot::default`), and
 /// every filled slot carries the module-resolved stack/durability/enchant fields. Fails closed
 /// with the payload decoder. `describes_partner` sets the wire's misnamed `self_player` byte —
@@ -3233,7 +3233,7 @@ fn entity_update_to_outbound_with_dynamic_flags(
                 out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
             }
         }
-        // Sheath relay : UNIT_FIELD_BYTES_2 byte 0 flipping as a unit draws or stows its weapon.
+        // Sheath relay: UNIT_FIELD_BYTES_2 byte 0 flipping as a unit draws or stows its weapon.
         // Any unit, not player-gated — a creature drawing on engage is the same wire field. Without
         // this arm the server knows the state and no observer ever hears about it.
         if old.unit_bytes_2 != new.unit_bytes_2 {
@@ -4904,7 +4904,7 @@ mod tests {
         ));
     }
 
-    /// The trade-status wire mapping : every `lyracore_shared::trade::event_kind` the module
+    /// The trade-status wire mapping: every `lyracore_shared::trade::event_kind` the module
     /// emits decodes to its `SMSG_TRADE_STATUS` variant — `BeginTrade` carrying the counterparty
     /// guid the client needs to open the window — and an unknown kind (newer module mid-rollout)
     /// drops rather than desyncing the trade window.
@@ -5120,7 +5120,7 @@ mod tests {
         );
     }
 
-    /// The OFFER_* kinds decode to the fixed-444-byte extended status : the polarity byte
+    /// The OFFER_* kinds decode to the fixed-444-byte extended status: the polarity byte
     /// comes from the KIND (never inferred), the window-visible item fields survive the payload
     /// round-trip into the right wire slots, unused slots stay zeroed, and a malformed payload
     /// drops the packet entirely.

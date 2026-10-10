@@ -307,7 +307,7 @@ mod tests {
     }
 
     // The former `melee_attack_power_for`/`swing_range_ap` gateway-side mirrors (and the parity tests
-    // that pinned them against `lyracore_module`) are GONE : `sheet_stats` above is now a plain
+    // that pinned them against `lyracore_module`) are GONE: `sheet_stats` above is now a plain
     // read of `module::spell::recompute_sheet`'s output, so there is no gateway-side formula left to
     // drift from the module — the module row IS the source of truth.
 
@@ -316,7 +316,7 @@ mod tests {
         // `effective_armor` itself needs a live `RemoteTables` subscription cache and is NOT
         // unit-tested here (no ReducerContext mocking) — this only pins that its two REAL pure
         // terms (`aura_armor_contribution`, `gear_armor_contribution`) compose by simple addition
-        // with a base, and that the max(0,..) clamp `effective_armor` applies to that same sum
+        // with a base, and that the max(0, ..) clamp `effective_armor` applies to that same sum
         // never underflows on a debuff exceeding base + gear.
         let base = 40i64; // agility 20 * 2
         let aura = aura_armor_contribution(0xA1, 0x01, 160, 1) as i64; // Demon Skin

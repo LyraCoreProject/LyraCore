@@ -72,7 +72,7 @@ fn the_handshake_flow_dispatches_initiate_then_begin_then_cancel() {
     assert_eq!(calls, ["initiate_trade", "begin_trade", "cancel_trade"]);
 }
 
-/// **AC : offer mutations dispatch with the wire's arguments**, set item (main bag →
+/// **AC: offer mutations dispatch with the wire's arguments**, set item (main bag →
 /// absolute slot passthrough), clear item, and gold (the `Gold` wire type decoded back to
 /// copper). One client, three opcodes, three recorders.
 #[test]
@@ -110,7 +110,7 @@ fn offer_mutations_dispatch_with_wire_arguments() {
     );
 }
 
-/// **AC : sub-bag items are out of scope, not mis-addressed**, a `CMSG_SET_TRADE_ITEM`
+/// **AC: sub-bag items are out of scope, not mis-addressed**, a `CMSG_SET_TRADE_ITEM`
 /// from an equipped sub-bag is logged and IGNORED (the item-action dispatcher posture), never
 /// forwarded
 /// with a bag-local slot number that would alias a main-bag slot.
@@ -130,7 +130,7 @@ fn set_trade_item_from_a_sub_bag_is_ignored_not_misaddressed() {
     assert!(store.set_trade_items.lock().unwrap().is_empty());
 }
 
-/// **AC : the full loop's wire half**, A initiates and offers an item, B answers, offers
+/// **AC: the full loop's wire half**, A initiates and offers an item, B answers, offers
 /// gold, and both accept; every opcode dispatches its verb as the right seat, in order. (The
 /// swap itself — items, gold, atomicity — is the module's pure-tested commit core; the fake
 /// store records the dispatch, per the settled seam.)
@@ -182,7 +182,7 @@ fn the_full_loop_dispatches_offer_and_dual_accept_in_order() {
     assert_eq!(store.accepted_trades.lock().unwrap().as_slice(), &[1, 2]);
 }
 
-/// **AC : the accept-reset wire half**, after an accept, a further offer mutation and an
+/// **AC: the accept-reset wire half**, after an accept, a further offer mutation and an
 /// explicit unaccept both dispatch; the reset itself (both flags cleared, BackToTrade to both)
 /// is the module's pure-tested rule.
 #[test]
@@ -207,7 +207,7 @@ fn unaccept_and_post_accept_mutations_dispatch_for_the_acting_seat() {
     assert_eq!(store.unaccepted_trades.lock().unwrap().as_slice(), &[1]);
 }
 
-/// **AC : the decline flow**, the proposed target's client answers a `BeginTrade` it
+/// **AC: the decline flow**, the proposed target's client answers a `BeginTrade` it
 /// can't take with `CMSG_BUSY_TRADE` (already in a dialog) or `CMSG_IGNORE_TRADE` (initiator
 /// ignored); each dispatches its own decline verb as the declining side.
 #[test]

@@ -325,7 +325,7 @@ pub fn build_armor_values(guid: u64, total: [u32; 7], pos_buff: u32) -> SMSG_UPD
 /// module already folded — split into the green/red paperdoll halves below via plain sign arithmetic,
 /// not a second aura read. `attack_power` is the stat-derived base AP; `ap_mods` is the `A_MOD_COMBAT(ATTACK_POWER)`
 /// aura portion alone (Battle Shout) — vanilla renders those through two different wire fields.
-/// `crit_pct`  is `module::combat::effective_crit_bp`/100.0, the SAME basis-point value the
+/// `crit_pct` is `module::combat::effective_crit_bp`/100.0, the SAME basis-point value the
 /// swing table rolls against, converted to the float percent `PLAYER_CRIT_PERCENTAGE` wants; no
 /// second crit formula lives on the gateway.
 pub struct SheetStatsValues {
@@ -376,7 +376,7 @@ pub fn build_sheet_stats_values(guid: u64, s: &SheetStatsValues) -> SMSG_UPDATE_
         p.set_player_field_negstat4(s.spi_bonus.min(0));
         p.set_unit_attack_power(s.attack_power as i32);
         // UNIT_FIELD_ATTACK_POWER_MODS packs two UNSIGNED shorts (pos, neg-as-magnitude), mirroring
-        // mangos's `SetInt16Value(field, 0/1,..)`, never a signed short (a negative AP debuff isn't
+        // mangos's `SetInt16Value(field, 0/1, ..)`, never a signed short (a negative AP debuff isn't
         // wired yet; `ap_mods` is currently always ≥0 from Battle Shout, so `neg` is 0 in practice).
         p.set_unit_attack_power_mods(s.ap_mods.max(0) as u16, (-s.ap_mods).max(0) as u16);
         p.set_unit_mindamage(s.dmg_min as f32);

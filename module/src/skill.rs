@@ -35,7 +35,7 @@ pub const SKILL_PER_LEVEL: u32 = 5;
 /// read with no remap — a local enum would force a translation layer at the descriptor boundary). Only
 /// the lines combat/professions can actually produce are defined; ranged lines come with their features.
 ///
-/// DEPRECATION POINTER : `game_skill_line` (`skilldata.rs`), loaded from the operator's
+/// DEPRECATION POINTER: `game_skill_line` (`skilldata.rs`), loaded from the operator's
 /// real `SkillLine.dbc` by the importer, is now the AUTHORITATIVE source for "what skill lines exist" —
 /// it carries every vanilla line (~135), not just the ~17 hand-picked here. These consts stay because
 /// the wire protocol is still keyed on the same verbatim ids (no remap needed either way), but treat
@@ -981,7 +981,7 @@ const LEARN_AXE_1H_SPELL_ID: u32 = 50130; // -> learn_skill_line = AXE_1H (44), 
 #[cfg(feature = "debug_reducers")]
 const LEARN_POLEARM_SPELL_ID: u32 = 50131; // -> learn_skill_line = POLEARM (229), required_level 60 (the level-refusal fixture)
 
-/// DRIVE the real trainer-buy branch for a WEAPON PROFICIENCY  without the trainer-window
+/// DRIVE the real trainer-buy branch for a WEAPON PROFICIENCY without the trainer-window
 /// UI — the weapon-master twin of `debug_learn_profession_from_trainer` above, same shape: the requested
 /// `skill_line` (Daggers/1H Axe/Polearm/…) maps to its marker spell id, the nearest live TRAINER creature on
 /// the learner's map is resolved SERVER-SIDE (mirroring `debug_skin_nearest`'s nearest-search — the
@@ -1092,7 +1092,7 @@ pub fn debug_learn_riding_from_trainer(
 /// crossbow fall to UNARMED in `weapon_subclass_to_skill_line` and are therefore NOT listed here).
 /// Returns an empty slice for unknown classes (e.g. creatures).
 ///
-/// DEPRECATION POINTER : this hand-authored per-class table could in principle be
+/// DEPRECATION POINTER: this hand-authored per-class table could in principle be
 /// derived from `game_skill_availability` (`SkillRaceClassInfo.dbc`'s `class_mask`, imported by
 /// `skilldata.rs`) joined against `skill_line::*`'s known combat lines — that data-driven replacement
 /// is a follow-up, not done here (this function's behavior is UNCHANGED by this item).
@@ -1529,7 +1529,7 @@ mod tests {
         assert_eq!(skill_diff(300, 315), 0); // higher weapon skill floors at 0
     }
 
-    /// The combat/profession taxonomy `apply_trainer_buy` forks the weapon-master branch on :
+    /// The combat/profession taxonomy `apply_trainer_buy` forks the weapon-master branch on:
     /// a weapon line (DAGGER) is combat (level-capped); a profession line (COOKING) is not (static-tier capped).
     #[test]
     fn is_combat_skill_line_true_for_dagger_false_for_cooking() {

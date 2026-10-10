@@ -171,7 +171,7 @@ pub struct SpellProcEvent {
 /// columns are the **frozen typed snapshot** (computed once at apply) so periodic ticks + combat
 /// stat-reads are self-contained — NO template/effect re-join on the hot path. [event]
 ///
-/// `by_expiry`  is a plain INDEX ADD over the already-existing `expires_at` column, no
+/// `by_expiry` is a plain INDEX ADD over the already-existing `expires_at` column, no
 /// new column, no default, no data migration; a schema/metadata-only change on this gateway-SUBSCRIBED
 /// table (verified by `gateway/tests/schema_parity.rs`, which checks columns/bindings, not indexes).
 /// `scheduler::tick_auras`'s expiry pass range-scans `by_expiry().filter(..=now)` instead of `.iter()`ing
@@ -382,7 +382,7 @@ pub struct SpellCastEvent {
     // cast each spell once). END-appended + #[default(0u32)] → additive auto-migration.
     #[default(0u32)]
     pub cooldown_ms: u32,
-    // PUSHBACK payload : the number of milliseconds added to the in-progress timed
+    // PUSHBACK payload: the number of milliseconds added to the in-progress timed
     // cast. The Gateway relays SMSG_SPELL_DELAYED{guid, delay_time}. Kind names the signal; this
     // value remains zero on every other kind and preserves decoding for old rows.
     // END-appended + #[default(0u32)] → additive auto-migration (the publish-migration rule).
@@ -401,7 +401,7 @@ pub struct SpellCastEvent {
     #[default(false)]
     pub is_proc_log: bool,
     // The melee swing outcome an on-next-swing FIRE row rode (114): CombatEvent hit_info codes
-    // (0 normal, 1 crit, 2 miss, 3 dodge, 4 parry,...). The relay shapes the SMSG_SPELL_GO miss
+    // (0 normal, 1 crit, 2 miss, 3 dodge, 4 parry, ...). The relay shapes the SMSG_SPELL_GO miss
     // list from it when damage == 0 — the client then prints the yellow "Your Heroic Strike
     // missed/was dodged/was parried" line instead of a white MISS. 0 (normal) on every other row.
     // Binding hand-synced. END-appended + #[default(0u8)] -> additive auto-migration.

@@ -39,12 +39,12 @@ pub mod event_kind {
     /// Initiator notice: the target has you ignored — proposal declined →
     /// `TradeStatus::IgnoreYou`.
     pub const IGNORE_YOU: u8 = 11;
-    /// Your partner accepted the current offer  → `TradeStatus::TradeAccept`.
+    /// Your partner accepted the current offer → `TradeStatus::TradeAccept`.
     pub const TRADE_ACCEPT: u8 = 12;
     /// An accept was withdrawn — explicit unaccept, or the accept-reset rule firing on an offer
-    /// change  → `TradeStatus::BackToTrade`.
+    /// change → `TradeStatus::BackToTrade`.
     pub const BACK_TO_TRADE: u8 = 13;
-    /// The Trade Commit succeeded  → `TradeStatus::TradeComplete`.
+    /// The Trade Commit succeeded → `TradeStatus::TradeComplete`.
     pub const TRADE_COMPLETE: u8 = 14;
     /// Commit refused, window closes: YOUR bags cannot fit the incoming items →
     /// `TradeStatus::CloseWindow` with `InventoryResult::InventoryFull`, `target_error: false`.

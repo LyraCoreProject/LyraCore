@@ -233,7 +233,7 @@ mod tests {
         assert_eq!(max_level_money_reward(u32::MAX), u32::MAX); // saturates, never wraps/panics
     }
 
-    // ---- Sharing : share_event_kind distinctness + share_result priority ----
+    // ---- Sharing: share_event_kind distinctness + share_result priority ----
 
     /// `QUEST_SHARE`/`QUEST_PUSH_RESULT` (10/11) follow every loot-roll kind (4..=8) and skip kind
     /// 9, retired party chat, which nothing may reuse.

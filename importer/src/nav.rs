@@ -45,7 +45,7 @@ pub(crate) type Tri = [[f32; 3]; 3];
 // Geometry extraction
 // ---------------------------------------------------------------------------------------------
 
-/// One WMO collision triangle plus the group it came from, `vmap.rs`  packs this
+/// One WMO collision triangle plus the group it came from, `vmap.rs` packs this
 /// per-triangle metadata (source class + group id + MOGP flags); `nav.rs`'s rasterizer only
 /// needs `.tri`.
 pub(crate) struct WmoTri {
@@ -475,7 +475,7 @@ fn rasterize_cell(cell: &crate::terrain::CellRow, tris: &[VmapTri]) -> Option<Na
 }
 
 // ---------------------------------------------------------------------------------------------
-// Shared passes, reused verbatim by `vmap.rs` : tile scan (heights + deduped placements),
+// Shared passes, reused verbatim by `vmap.rs`: tile scan (heights + deduped placements),
 // mesh loading, and rotation calibration are identical between the two importer modes; only the
 // consumption (rasterize vs. transform-and-pack) differs.
 // ---------------------------------------------------------------------------------------------

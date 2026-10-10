@@ -40,7 +40,7 @@
 ///   params (ctx, guid, the new owning identity); expands to `pub(crate) fn <name>(ctx:
 ///   &ReducerContext, guid: u64, identity: Identity)`.
 ///
-///   `character_owned!(transfer, fn <name>(<ctx>, <guid>, <io>) { table =.., by =..,.. })` and
+///   `character_owned!(transfer, fn <name>(<ctx>, <guid>, <io>) { table =.., by =.., .. })` and
 ///   `character_owned!(not_transported, fn <name>())` — the CROSS-DATABASE row transport,
 ///   which is what lets a table's rows actually leave one SpacetimeDB database and arrive in
 ///   another. Both expand to `pub(crate) fn <name>(ctx: &ReducerContext, guid: u64, io: &mut
@@ -304,7 +304,7 @@ mod exploration;
 // feature, so they exist on production databases too; see `debug/mod.rs`.
 #[cfg(feature = "debug_reducers")]
 mod debug;
-// Encounter kernel : instance-scoped encounter state, HP-threshold/death/GO-use
+// Encounter kernel: instance-scoped encounter state, HP-threshold/death/GO-use
 // hooks, and the shared choreography primitives Packages consume (`packages/dungeons/` owns it).
 mod duel;
 mod encounter;
@@ -318,7 +318,7 @@ mod go_collider;
 #[cfg(feature = "debug_reducers")]
 mod go_collider_fixture;
 mod go_model;
-// Graveyard resolution : the death-release subsystem `world::do_repop` calls to
+// Graveyard resolution: the death-release subsystem `world::do_repop` calls to
 // pick where a ghost teleports. Extracted from `world.rs`.
 mod graveyard;
 mod group;
@@ -327,7 +327,7 @@ mod gw;
 mod helpers;
 pub mod hooks;
 mod import_meta;
-// Dungeon-instancing lifecycle : game_instance/game_instance_binding,
+// Dungeon-instancing lifecycle: game_instance/game_instance_binding,
 // the areatrigger resolve-or-create entry, per-instance population spawn, and the reset/reap loop.
 mod combo;
 mod instance;

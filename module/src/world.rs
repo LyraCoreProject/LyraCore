@@ -8,7 +8,7 @@ use lyracore_shared::spatial;
 use spacetimedb::{reducer, table, Identity, ReducerContext, Table};
 
 use crate::faction::game_faction_template;
-// Graveyard resolution  lives in `graveyard.rs` (extraction), this
+// Graveyard resolution lives in `graveyard.rs` (extraction), this
 // alias keeps every `graveyard::...` call site below byte-identical.
 use crate::graveyard;
 use crate::helpers::entity_by_owner;
@@ -1049,7 +1049,7 @@ pub(crate) fn apply_player_login(
     // A relog comes back ALIVE (we don't persist ghost state across a REAL logout), so clear any
     // leftover corpse — else it orphans (rendered with no owning ghost, with a stale reclaim marker
     // that MSG_CORPSE_QUERY keeps offering for a now-alive player). Idempotent (no-op if none).
-    // EXCEPTION : `pending_ghost` means this world entry is the rebuild half of a
+    // EXCEPTION: `pending_ghost` means this world entry is the rebuild half of a
     // released ghost's despawn (a cross-map graveyard release, or a reconnect that raced the ghost's
     // corpse run) — the corpse IS the ghost's reclaim target and MUST survive the rebuild, or a
     // Deadmines death would silently resurrect corpseless at the Westfall graveyard.
@@ -1797,7 +1797,7 @@ pub(crate) fn do_repop(ctx: &ReducerContext, guid: u64) -> Result<(), String> {
     // The cycle's pet phase ALSO despawns a pet whose owner is dead, so this is belt-and-suspenders (prompt; immediate).
     crate::creatures::despawn_pets(ctx, player_guid);
 
-    // Teleport the ghost to the graveyard `graveyard::resolve_graveyard`  resolves for
+    // Teleport the ghost to the graveyard `graveyard::resolve_graveyard` resolves for
     // this death: prefer a zone-linked graveyard (imported `game_graveyard`/`game_graveyard_zone` —
     // cmangos WorldSafeLocs + game_graveyard_zone), falling back to the nearest of every imported
     // graveyard on the map, falling back to the five hardcoded Elwynn/Westfall consts
@@ -2025,7 +2025,7 @@ pub(crate) fn persist_entity(ctx: &ReducerContext, entity: &WorldEntity, set_off
         // logout/disconnect (`set_offline`) — the established "relog comes back alive" rule, whose
         // corpse delete lives in `remove_from_world` right after this persist.
         c.pending_ghost = persisted_pending_ghost(entity.dead, entity.player_flags, set_offline);
-        // GM playtest state  survives an entity despawn the same way, and for the same
+        // GM playtest state survives an entity despawn the same way, and for the same
         // reason: a cross-map `.tele` (or a cross-database shard hop, whose `begin_transfer` freeze
         // calls this with `set_offline: false` too) persists-then-deletes the entity, and without this
         // stamp `build_player_entity` rebuilds it with `.god`/`.speed` silently off. Cleared on a real

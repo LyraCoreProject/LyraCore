@@ -519,7 +519,7 @@ pub(crate) fn aura_apply(
         a.proc_icd_ms = proc.icd_ms;
         auras.id().update(a);
     } else {
-        // Stacking-group conflict : resolve BEFORE picking a slot, so a Refuse never
+        // Stacking-group conflict: resolve BEFORE picking a slot, so a Refuse never
         // consumes a slot and an Apply's evictions free slots for this fresh insert. A same-spell recast
         // never reaches this branch (caught by the `existing`-by-effect_id match above) — matches "same-
         // spell-same-caster refresh keeps the existing precedence rule, runs BEFORE group logic". No-op
@@ -1341,7 +1341,7 @@ fn apply_inventory_effect(
             // life is rejected (the `pickpocketed` marker), so the same spawn can't be drained twice. Money
             // is the creature's TEMPLATE range (`money_min`/`money_max` — the SAME source the kill path
             // uses, reused via `roll_money`), falling back to the level heuristic for un-imported creatures
-            // (`money_max == 0`). NOT rank-scaled (vanilla pickpocket isn't). Item rows :
+            // (`money_max == 0`). NOT rank-scaled (vanilla pickpocket isn't). Item rows:
             // `roll_pickpocket_loot` rolls the creature's `game_pickpocket_loot` table into
             // `game_corpse_loot` keyed on the TARGET's (still-alive) guid, inside this SAME once-gate, so
             // items can never be drained twice per life either. Never on players (no pockets / not a

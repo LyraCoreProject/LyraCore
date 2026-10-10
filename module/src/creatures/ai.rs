@@ -422,7 +422,7 @@ pub(crate) const SENSE_EVERY_N_TICKS: i64 = 8;
 
 /// The target SENSE period in micros (~4s) — `MOVE_TICK_MICROS × SENSE_EVERY_N_TICKS`. A tick row of
 /// ANY cadence quantizes its sensing passes to roughly this period (see
-/// `is_sense_tick_for_interval`), so a tight per-instance tick  smooths MOVEMENT
+/// `is_sense_tick_for_interval`), so a tight per-instance tick smooths MOVEMENT
 /// latency without also multiplying the expensive sensing scans or the tick-quantized effect rates
 /// (wander hop chance, aggro re-checks) that assume the ~4s cadence.
 pub(crate) const SENSE_PERIOD_MICROS: i64 = MOVE_TICK_MICROS * SENSE_EVERY_N_TICKS;
@@ -474,7 +474,7 @@ pub fn sense_period_secs_for_interval(interval_micros: i64) -> f32 {
 }
 
 // ===========================================================================================
-//  Per-instance tick scoping  [pure]
+//  Per-instance tick scoping [pure]
 // ===========================================================================================
 //
 

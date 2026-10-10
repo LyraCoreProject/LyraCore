@@ -73,11 +73,11 @@ pub fn acting_entity_by_guid(ctx: &ReducerContext, guid: u64) -> Option<WorldEnt
 /// SCOPE — this gate is the REFUSE verdict, and refusal is NOT the right answer everywhere. Three
 /// other verdicts exist and are deliberately not routed through here; the audited table lives in
 /// `transfer.rs`'s module doc:
-///   * DEFER  , `loot::credit_purse` folds a post-begin `money` delta into the escrowed blob
+///   * DEFER, `loot::credit_purse` folds a post-begin `money` delta into the escrowed blob
 ///     (`transfer::defer_money_delta`); refusing would DROP a third party's copper.
 ///   * REGENERATE — `auth::establish_session` rewrites `Character.owner_identity`, which is
 ///     per-CONNECTION derived state the destination rebinds on arrival.
-///   * OPEN   , `group::group_accept`/`group_uninvite`/`group_leave`; spec puts group
+///   * OPEN, `group::group_accept`/`group_uninvite`/`group_leave`; spec puts group
 ///     membership on realm-core, settled by the group slice.
 ///
 /// Same `.find()`-then-check ordering as `entity_by_owner` above, and the same shared

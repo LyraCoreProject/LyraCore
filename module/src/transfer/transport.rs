@@ -2,7 +2,7 @@
 //!
 //! `mod.rs` owns the escrow protocol — when a character may move and what each step is allowed to
 //! do. This file owns the cargo: the manifest that says WHICH tables travel, the [`RowIo`] direction
-//! marker and [`move_rows`] shim every `character_owned!(transfer,..)` arm flows through, the bsatn
+//! marker and [`move_rows`] shim every `character_owned!(transfer, ..)` arm flows through, the bsatn
 //! codec underneath it, and [`ExportBlob`], the one value that crosses the wire.
 //!
 //! Everything here is `ReducerContext`-generic or `ReducerContext`-free, which is what lets
@@ -142,7 +142,7 @@ pub(crate) fn admit_command_issuer_import(
 //  Cross-database row transport
 // ===========================================================================================
 
-/// The direction a `character_owned!(transfer,..)` arm is running in. ONE body serves both, so a
+/// The direction a `character_owned!(transfer, ..)` arm is running in. ONE body serves both, so a
 /// table cannot ship rows it does not know how to receive (the drift that would silently drop a
 /// table's data at the destination).
 pub enum RowIo<'a> {
@@ -242,7 +242,7 @@ pub(crate) fn not_transported(io: &mut RowIo<'_>) {
     }
 }
 
-/// One entry of a transport registry: a table name and the `character_owned!(transfer,..)` arm
+/// One entry of a transport registry: a table name and the `character_owned!(transfer, ..)` arm
 /// that moves its rows. `crate::CHARACTER_OWNED_TRANSFERS` is `&[TransportArm<ReducerContext>]`;
 /// the harness supplies its own slice over a fake context.
 pub(crate) type TransportArm<'a, C> = (&'a str, fn(&C, u64, &mut RowIo<'_>));
@@ -445,7 +445,7 @@ pub(crate) fn import_rows(
 /// The manifest is the load-bearing SCHEMA half: the destination compares it against its OWN build
 /// (`manifest()`) and refuses an import from a shard whose character-owned table set differs. The
 /// `payload` alongside it is the DATA half — the actual rows, one entry per manifest
-/// table, produced by that table's `character_owned!(transfer,..)` arm.
+/// table, produced by that table's `character_owned!(transfer, ..)` arm.
 ///
 /// **Nothing that is already inside `character_row` gets a second field here.** Until then
 /// the blob ALSO carried `name`/`level`/`map_id`/`instance_id`/`x`/`y`/`z`/`o`/`health`/`power` as

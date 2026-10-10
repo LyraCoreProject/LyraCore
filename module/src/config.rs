@@ -47,7 +47,7 @@ pub struct ServerConfig {
     #[primary_key]
     pub id: u32, // singleton: always 0
     pub xp_rate: f32,
-    // END-APPENDED : nav-grid consumption gate (chase pathing + aggro/cast/melee
+    // END-APPENDED: nav-grid consumption gate (chase pathing + aggro/cast/melee
     // LoS). Default ON since 244 passed (benchmark: nav cost indistinguishable; live: all four
     // wall/fence/chase/hold-fire scenarios). A world WITHOUT nav data imported behaves exactly
     // as before either way (missing chunk = no obstacles known). Toggle: `debug_set_nav_enabled`

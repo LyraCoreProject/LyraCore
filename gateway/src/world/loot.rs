@@ -89,7 +89,7 @@ fn promote_one(shard: &dyn WorldStore, realm: &dyn WorldStore, roll: &PendingLoo
 /// calls it immediately before dispatching a LEAVE/UNINVITE — the two ops that can shrink a group
 /// below 2 members and reach `remove_member`'s disband branch. This is what closes the disband race
 /// the periodic [`relay_tick`] alone cannot (see this module's doc): by the time
-/// `realm_group_op(LEAVE/UNINVITE,..)` runs right after this returns, every roll that existed
+/// `realm_group_op(LEAVE/UNINVITE, ..)` runs right after this returns, every roll that existed
 /// anywhere in the realm at that moment is already on realm-core for `remove_member` to see.
 ///
 /// Every connected world shard, not just the acting character's own — a party's members, and

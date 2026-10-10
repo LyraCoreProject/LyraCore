@@ -642,7 +642,7 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
         .filter(..=now)
         .filter(|a| is_due_for_expiry(a.eff_kind, a.expires_at, now))
         .collect();
-    // Evidence : the index scan's candidate count vs the table's total row count.
+    // Evidence: the index scan's candidate count vs the table's total row count.
     // `Table::count()` reads datastore metadata (O(1) — no scan), so logging it costs nothing extra; the
     // gap between the two numbers is the rows the OLD full-scan touched that this pass no longer does.
     // `log::debug!` (not `info!`) so a normal RUST_LOG=info run stays silent; enable `RUST_LOG=debug` (or
@@ -674,7 +674,7 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
             remount.push(a.target_guid);
         }
     }
-    // CC diminishing returns : a NATURAL EXPIRY is one of the two REMOVAL events that starts
+    // CC diminishing returns: a NATURAL EXPIRY is one of the two REMOVAL events that starts
     // the 15s DR window (the other is a dispel — `effects::dispel_target`). `dr_category_for_effect` is a
     // no-op for a non-CC aura / a creature target, so this only touches the handful of player CC rows.
     // Runs BEFORE the delete loop below (order doesn't matter — `game_dr_state` is a separate table — but

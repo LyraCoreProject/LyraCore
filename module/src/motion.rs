@@ -149,7 +149,7 @@ pub(crate) enum Coalesce {
     /// Publish the QUEUED one immediately (in this movement transaction, paying one sweep) and
     /// stage the new one. This is the only path that still costs a per-packet sweep, and it is
     /// reachable only when a player produces two input-state changes inside one tick window — with
-    /// the gateway's own 150 ms heartbeat coalescing  upstream, that is rare and
+    /// the gateway's own 150 ms heartbeat coalescing upstream, that is rare and
     /// self-limiting, never proportional to player count.
     FlushThenReplace,
 }
