@@ -4,6 +4,7 @@
 
 use super::handlers::{handle_trade, TradeStore};
 use super::*;
+use crate::stdb::ReducerCallError;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 use wow_world_messages::vanilla::{
@@ -54,9 +55,25 @@ struct Session {
 #[derive(Default)]
 struct TradeFake {
     session: Mutex<Session>,
+    /// Answered once by the next request, in place of success.
+    failure: Mutex<Option<ReducerCallError>>,
 }
 
 impl TradeFake {
+    fn failing(failure: ReducerCallError) -> Self {
+        Self {
+            failure: Mutex::new(Some(failure)),
+            ..Self::default()
+        }
+    }
+
+    fn answer(&self) -> Result<()> {
+        match self.failure.lock().unwrap().take() {
+            Some(failure) => Err(failure.into()),
+            None => Ok(()),
+        }
+    }
+
     fn phase(&self) -> Phase {
         self.session.lock().unwrap().phase
     }
@@ -90,7 +107,9 @@ impl TradeFake {
 }
 
 impl TradeStore for TradeFake {
-    fn initiate_trade(&self, _account_id: u64, self_guid: u64, target_guid: u64) -> Result<()> {
+    fn initiate_trade(&self, actor: Actor, target_guid: u64) -> Result<()> {
+        self.answer()?;
+        let self_guid = actor.guid();
         *self.session.lock().unwrap() = Session {
             phase: Phase::Proposed {
                 initiator: self_guid,
@@ -101,7 +120,9 @@ impl TradeStore for TradeFake {
         Ok(())
     }
 
-    fn begin_trade(&self, _account_id: u64, self_guid: u64) -> Result<()> {
+    fn begin_trade(&self, actor: Actor) -> Result<()> {
+        self.answer()?;
+        let self_guid = actor.guid();
         let mut session = self.session.lock().unwrap();
         if let Phase::Proposed { initiator, target } = session.phase {
             if target == self_guid {
@@ -111,24 +132,24 @@ impl TradeStore for TradeFake {
         Ok(())
     }
 
-    fn cancel_trade(&self, _account_id: u64, self_guid: u64) -> Result<()> {
+    fn cancel_trade(&self, actor: Actor) -> Result<()> {
+        self.answer()?;
+        let self_guid = actor.guid();
         self.session.lock().unwrap().phase = Phase::Cancelled { by: self_guid };
         Ok(())
     }
 
-    fn set_trade_item(
-        &self,
-        _account_id: u64,
-        self_guid: u64,
-        trade_slot: u8,
-        inv_slot: u8,
-    ) -> Result<()> {
+    fn set_trade_item(&self, actor: Actor, trade_slot: u8, inv_slot: u8) -> Result<()> {
+        self.answer()?;
+        let self_guid = actor.guid();
         let mut session = self.session.lock().unwrap();
         session.items.insert((self_guid, trade_slot), inv_slot);
         Ok(())
     }
 
-    fn clear_trade_item(&self, _account_id: u64, self_guid: u64, trade_slot: u8) -> Result<()> {
+    fn clear_trade_item(&self, actor: Actor, trade_slot: u8) -> Result<()> {
+        self.answer()?;
+        let self_guid = actor.guid();
         self.session
             .lock()
             .unwrap()
@@ -137,27 +158,37 @@ impl TradeStore for TradeFake {
         Ok(())
     }
 
-    fn set_trade_gold(&self, _account_id: u64, self_guid: u64, copper: u32) -> Result<()> {
+    fn set_trade_gold(&self, actor: Actor, copper: u32) -> Result<()> {
+        self.answer()?;
+        let self_guid = actor.guid();
         self.session.lock().unwrap().gold.insert(self_guid, copper);
         Ok(())
     }
 
-    fn accept_trade(&self, _account_id: u64, self_guid: u64) -> Result<()> {
+    fn accept_trade(&self, actor: Actor) -> Result<()> {
+        self.answer()?;
+        let self_guid = actor.guid();
         self.session.lock().unwrap().accepted.insert(self_guid);
         Ok(())
     }
 
-    fn unaccept_trade(&self, _account_id: u64, self_guid: u64) -> Result<()> {
+    fn unaccept_trade(&self, actor: Actor) -> Result<()> {
+        self.answer()?;
+        let self_guid = actor.guid();
         self.session.lock().unwrap().accepted.remove(&self_guid);
         Ok(())
     }
 
-    fn busy_trade(&self, _account_id: u64, self_guid: u64) -> Result<()> {
+    fn busy_trade(&self, actor: Actor) -> Result<()> {
+        self.answer()?;
+        let self_guid = actor.guid();
         self.decline_if_proposed(self_guid, Decline::Busy);
         Ok(())
     }
 
-    fn ignore_trade(&self, _account_id: u64, self_guid: u64) -> Result<()> {
+    fn ignore_trade(&self, actor: Actor) -> Result<()> {
+        self.answer()?;
+        let self_guid = actor.guid();
         self.decline_if_proposed(self_guid, Decline::IgnoresInitiator);
         Ok(())
     }
@@ -363,4 +394,24 @@ fn cancel_trade_cancels_for_the_initiating_side_too() {
     run(&store, 1, CMSG_INITIATE_TRADE { guid: Guid::new(2) });
     run(&store, 1, CMSG_CANCEL_TRADE {});
     assert_eq!(store.phase(), Phase::Cancelled { by: 1 });
+}
+
+#[test]
+fn transport_loss_ends_the_world_session() {
+    let store = TradeFake::failing(ReducerCallError::transport_lost("gw_accept_trade"));
+    let mut conn = in_world_conn(7, 1);
+    let msg = CMSG_ACCEPT_TRADE { unknown1: 1 };
+    let result = handle_trade(&SessionTx::with_depth(0).0, &store, &mut conn, msg.into());
+    assert!(result.is_err());
+}
+
+#[test]
+fn refusal_is_ignored_and_the_world_session_continues() {
+    let store = TradeFake::failing(ReducerCallError::refused("gw_accept_trade", "no trade"));
+    let mut conn = in_world_conn(7, 1);
+    let msg = CMSG_ACCEPT_TRADE { unknown1: 1 };
+    let passed_on =
+        handle_trade(&SessionTx::with_depth(0).0, &store, &mut conn, msg.into()).unwrap();
+    assert!(passed_on.is_none(), "the trade family owns this opcode");
+    assert_eq!(store.accepted(), Vec::<u64>::new());
 }
