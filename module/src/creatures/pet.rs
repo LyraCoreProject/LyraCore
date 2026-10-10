@@ -237,6 +237,7 @@ fn despawn_pet_entity(ctx: &ReducerContext, pet: WorldEntity) {
     ctx.db.game_entity_motion().guid().delete(pet.guid); // motion row dies with the entity (2.1)
     ctx.db.game_world_entity().guid().delete(pet.guid);
     super::clear_live_pet_kind(ctx, pet.guid);
+    super::distraction::clear(ctx, pet.guid);
 }
 
 /// Despawn the player's pet (if any): free its melee engagement + threat (`disengage`), then DELETE the

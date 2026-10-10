@@ -45,8 +45,13 @@ In this project we focus on building complex things as simple as possible. We lo
 - Before changing `./lyracore` behaviour or its pin, read `docs/agents/cross-repo-cli.md`. The CLI
   source is the sibling `lyracore-cli` repository, not `.lyracore/cli/`'s installed cache.
 
+## Issues
+
+- File and rewrite issues in the shape `CONTRIBUTING.md` gives under "The issue shape". Check every claim against the code at the commit you name.
+
 ## Pull Requests
 
+- Before opening a PR, read `CONTRIBUTING.md`: what gets in, and where gameplay beyond 1.12.1 goes.
 - File PRs with the `file-pr` skill (`.claude/skills/file-pr/SKILL.md`).
 - Make sure titles follow conventions from the repo. They should be simple and easy to understand. Conventional commit styles in projects that use them, i.e. "fix(player): movement no longer updates twice".
 - PR descriptions should aim for simplicity. Open with a minimal, clear description of the problem. Follow up with how you solved it. Give a little bit of context, talk in ASD-STE100 Simplified Technical English, and use the ubiquitous language from `CONTEXT.md` if available.

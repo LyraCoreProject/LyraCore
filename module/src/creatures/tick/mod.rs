@@ -785,6 +785,31 @@ pub(crate) fn stop_where_rendered(ctx: &ReducerContext, mover: &mut WorldEntity)
     );
 }
 
+/// Stop `mover` where the client renders it, then turn it in place to face `point`. The facing row
+/// replaces the stop, so it takes a newer spline id. The caller writes `mover`.
+pub(crate) fn stop_facing(ctx: &ReducerContext, mover: &mut WorldEntity, point: (f32, f32)) {
+    stop_where_rendered(ctx, mover);
+    // A stopped leg is over, so a patrol must not wait for its old ETA.
+    mover.leg_ends_ms = 0;
+    mover.orientation = (point.1 - mover.y).atan2(point.0 - mover.x);
+    let replaced = ctx
+        .db
+        .game_creature_spline()
+        .guid()
+        .find(mover.guid)
+        .map_or(0, |leg| leg.spline_id);
+    emit_facing_spline(
+        ctx,
+        mover.guid,
+        (mover.x, mover.y, mover.z),
+        mover.orientation,
+        next_spline_id(now_ms(ctx), replaced),
+        mover.map_id,
+        mover.instance_id,
+        (mover.grid_x, mover.grid_y),
+    );
+}
+
 /// Prepare `mover` for a new leg that replaces its current one: place it where a stop now would
 /// leave it, and return the spline id the new leg takes. The caller emits the leg and writes
 /// `mover`.

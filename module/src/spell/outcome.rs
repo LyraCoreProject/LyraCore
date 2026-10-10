@@ -15,6 +15,7 @@ pub enum CastRefusalKind {
     UnsupportedChannel,
     UnlearnedSpell,
     NoLineOfSight,
+    BadTargets,
 }
 
 /// The owning Gate supplies the reason. `Other` preserves a Gate with no caller-specific policy.

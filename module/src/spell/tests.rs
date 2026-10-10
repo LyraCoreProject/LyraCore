@@ -498,10 +498,12 @@ fn kind_wire_values() {
 fn instant_kind_wire_values_exhaustive() {
     assert_eq!(
         ALL_INSTANT_KINDS.len(),
-        36,
+        37,
         "an instant kind was added to (or removed from) taxonomy.rs without a matching, deliberate \
          change to ALL_INSTANT_KINDS — bump this count only when the taxonomy really changed"
     );
+    // The importer writes this value; the two lists move in lockstep.
+    assert_eq!(E_DISTRACT, 0x25);
     for (i, k) in ALL_INSTANT_KINDS.iter().enumerate() {
         assert_eq!(
             k & KIND_AURA_BIT,

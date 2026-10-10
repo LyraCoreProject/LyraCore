@@ -397,17 +397,25 @@ fn ordinary_cast<St: CastStore + ?Sized>(
         if let Some(caster) = player.self_guid {
             // vmangos order: START(0) then the raw CAST_RESULT(OK) then GO. The 5875 client needs
             // that 5-byte ack before GO to make m_currentSpells clearable.
+            // A cast at a clicked ground point echoes the point in both target blocks.
+            let dest = dest_target(c);
+            let start = match dest {
+                Some(dest) => codec::build_spell_start_dest(caster, spell, dest),
+                None => codec::build_spell_start(caster, spell, 0, 0, None),
+            };
             outbound.push(Outbound::One(ServerOpcodeMessage::SMSG_SPELL_START(
-                Box::new(codec::build_spell_start(caster, spell, 0, 0, None)),
+                Box::new(start),
             )));
             outbound.push(Outbound::Raw {
                 opcode: OP_CAST_RESULT,
                 body: codec::build_cast_result_ok(spell),
             });
-            // A ground-area spell (Consecration) impacts the ground: an EMPTY hit list, or the
-            // self-cast fallback puts the caster in `hits[]` and the client plays the impact
-            // animation on the caster.
-            let go = if store.spell_is_ground_area(spell) {
+            // Any cast at a clicked ground point and a caster-anchored ground area (Consecration)
+            // impact the ground: an EMPTY hit list, or the self-cast fallback puts the caster in
+            // `hits[]` and the client plays the impact animation on the caster.
+            let go = if let Some(dest) = dest {
+                codec::build_spell_go_dest(caster, spell, dest)
+            } else if store.spell_is_ground_area(spell) {
                 codec::build_spell_go_area(caster, spell)
             } else {
                 codec::build_spell_go(caster, spell, target, None)
@@ -933,6 +941,51 @@ pub(super) mod tests {
         assert!(
             spell_go(&outbound).hits.is_empty(),
             "a ground area impacts the ground, not a unit"
+        );
+    }
+
+    #[test]
+    fn instant_destination_cast_echoes_the_clicked_point_and_lists_no_hits() {
+        let store = InMemoryCasts::instant();
+
+        let (_, outbound) = handled(
+            dispatch_cast(
+                &store,
+                player(),
+                cast(1725, dest_targets(-8913.5, 554.25, 93.75)),
+            )
+            .unwrap(),
+        );
+
+        assert_eq!(sequence(&outbound), ["START", "CAST_RESULT(OK)", "GO"]);
+        let Outbound::One(ServerOpcodeMessage::SMSG_SPELL_START(start)) = &outbound[0] else {
+            panic!("the sequence opens with START");
+        };
+        let start_point = start
+            .targets
+            .target_flags
+            .get_dest_location()
+            .expect("the START echoes the destination")
+            .destination;
+        assert_eq!(
+            (start_point.x, start_point.y, start_point.z),
+            (-8913.5, 554.25, 93.75)
+        );
+        let go = spell_go(&outbound);
+        assert!(
+            go.hits.is_empty(),
+            "a ground-targeted cast impacts the ground, not the caster"
+        );
+        let point = go
+            .targets
+            .target_flags
+            .get_dest_location()
+            .expect("the GO echoes the destination")
+            .destination;
+        assert_eq!((point.x, point.y, point.z), (-8913.5, 554.25, 93.75));
+        assert_eq!(
+            store.ground_casts.lock().unwrap().as_slice(),
+            &[(ACCOUNT, CASTER, 1725, 0, -8913.5, 554.25, 93.75)]
         );
     }
 

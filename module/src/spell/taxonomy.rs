@@ -116,6 +116,9 @@ pub(crate) const E_DUEL: u8 = 0x22; // Duel (raw effect 83): request a server-au
 /// implements a generic mechanic dispel and never branches on spell 1604 or a spell name.
 pub(crate) const E_DISMOUNT: u8 = 0x23;
 pub(crate) const E_SUMMON_HOSTILE: u8 = 0x24; // temporary ownerless summon; p0 = creature entry, p1 = required spell focus, header duration = lifetime
+/// Start or refresh a Distraction on each idle enemy Creature around the ground point. The effect
+/// amount is its length in seconds; the importer maps raw effect 69 here.
+pub(crate) const E_DISTRACT: u8 = 0x25;
 /// Self-resurrection (vanilla raw effect 94). No cast runs it: [`do_self_resurrect`] reads this row
 /// from the spell a Self-Resurrection Option names. `base_points < 0` restores `-base_points` health and
 /// `p0` ([`P_FLAT_MANA`]) mana. `base_points >= 0` restores that percent of max health and max mana.
@@ -424,6 +427,7 @@ pub(crate) const ALL_INSTANT_KINDS: &[u8] = &[
     E_TAME_CREATURE,
     E_FEED_PET,
     E_DISMOUNT,
+    E_DISTRACT,
     E_SELF_RESURRECT,
 ];
 

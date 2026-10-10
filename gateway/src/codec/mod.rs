@@ -193,6 +193,7 @@ use wow_world_messages::vanilla::{
     SpellCastResult,
     SpellCastTargets,
     SpellCastTargets_SpellCastTargetFlags,
+    SpellCastTargets_SpellCastTargetFlags_DestLocation,
     SpellCastTargets_SpellCastTargetFlags_Unit,
     SpellCooldownStatus,
     SpellMiss,

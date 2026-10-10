@@ -817,9 +817,8 @@ name matches nothing and still exits 1 — indistinguishable from "already stopp
 
 If you are here to contribute rather than to play:
 
-- [GitHub Issues](https://github.com/LyraCoreProject/LyraCore/issues) — where work is tracked;
-  the `good first issue` and `help wanted` labels are where to start. Run `cargo test` before
-  proposing a change.
+- [`CONTRIBUTING.md`](../CONTRIBUTING.md): where to start, what gets in, and how a pull request
+  is judged.
 - [`SUPPORT.md`](../SUPPORT.md) — where to ask a question, and what is in and out of scope.
 - **Security reports** go through GitHub's private
   [vulnerability reporting](https://github.com/LyraCoreProject/LyraCore/security/advisories/new),
