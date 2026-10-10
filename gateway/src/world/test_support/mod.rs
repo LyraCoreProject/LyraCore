@@ -21,6 +21,5 @@ use super::handlers::{
 use super::party::PartyOutcome;
 use super::*;
 use lyracore_shared::group::{GroupKind, GroupRefusal, RaidSlot};
-use lyracore_shared::item::ItemRefusal;
 use lyracore_shared::loot::LootRefusal;
 use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;

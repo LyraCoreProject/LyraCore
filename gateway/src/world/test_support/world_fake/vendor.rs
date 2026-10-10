@@ -7,12 +7,10 @@ pub(crate) struct VendorState {
     /// The player's buyback ring as `(item_entry, stack_count, price)`; empty by default, so a
     /// fixture login replays no buyback tab.
     pub(crate) buyback_ring: Vec<(u32, u32, u32, u32)>,
-    /// Item-instance guid → bag slot, for the vendor repair target.
-    pub(crate) item_slots: Vec<(u64, u8)>,
-    /// Recorded `vendor_buyback` calls: (vendor_guid, slot) — pins the 69→0 slot mapping.
-    pub(crate) bought_back: std::sync::Mutex<Vec<(u64, u8)>>,
 }
 
+/// Vendor behaviour is tested through `InMemoryVendorActions`; here only the reads the session and
+/// the gossip menu make are live.
 impl VendorActionStore for WorldFake {
     fn vendor_stock(&self, _vendor_guid: u64) -> Result<Vec<codec::VendorItemView>> {
         Ok(self.vendor.vendor_stock.clone())
@@ -30,10 +28,7 @@ impl VendorActionStore for WorldFake {
         _item_entry: u32,
         _count: u32,
     ) -> Result<()> {
-        match &self.trade_error {
-            Some(e) => Err(anyhow!("{e}")),
-            None => Ok(()),
-        }
+        Ok(())
     }
 
     fn buyback_slots(&self, _player_guid: u64) -> Vec<(u32, u32, u32, u32)> {
@@ -44,12 +39,8 @@ impl VendorActionStore for WorldFake {
         [0; 3]
     }
 
-    fn vendor_item_slot(&self, item_guid: u64) -> Option<u8> {
-        self.vendor
-            .item_slots
-            .iter()
-            .find(|(g, _)| *g == item_guid)
-            .map(|&(_, s)| s)
+    fn vendor_item_slot(&self, _item_guid: u64) -> Option<u8> {
+        None
     }
 
     fn vendor_repair(
@@ -59,10 +50,7 @@ impl VendorActionStore for WorldFake {
         _npc_guid: u64,
         _slot: u8,
     ) -> Result<()> {
-        match &self.trade_error {
-            Some(e) => Err(anyhow!("{e}")),
-            None => Ok(()),
-        }
+        Ok(())
     }
 
     fn vendor_sell(
@@ -72,27 +60,16 @@ impl VendorActionStore for WorldFake {
         _vendor_guid: u64,
         _slot: u8,
     ) -> Result<()> {
-        match &self.trade_error {
-            Some(e) => Err(anyhow!("{e}")),
-            None => Ok(()),
-        }
+        Ok(())
     }
 
     fn vendor_buyback(
         &self,
         _account_id: u64,
         _self_guid: u64,
-        vendor_guid: u64,
-        slot: u8,
+        _vendor_guid: u64,
+        _slot: u8,
     ) -> Result<()> {
-        if let Some(e) = &self.trade_error {
-            return Err(anyhow!("{e}"));
-        }
-        self.vendor
-            .bought_back
-            .lock()
-            .unwrap()
-            .push((vendor_guid, slot));
         Ok(())
     }
 }

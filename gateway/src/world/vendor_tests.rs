@@ -1,33 +1,42 @@
-//! Vendor opcodes over an encrypted World Session, and the buyback ring at login.
+//! Vendor opcodes through their dispatcher, and the buyback ring at login.
 
+use super::handlers::InMemoryVendorActions;
 use super::*;
+
+const PLAYER: VendorActionPlayer = VendorActionPlayer {
+    account_id: 7,
+    self_guid: Some(1),
+};
+
+/// Dispatch one vendor message and return the packets the session would send for it.
+fn run(actions: &InMemoryVendorActions, msg: impl Into<ClientOpcodeMessage>) -> Vec<Outbound> {
+    match dispatch_vendor_action(actions, PLAYER, msg.into()).unwrap() {
+        VendorActionOutcome::Handled { outbound } => outbound,
+        VendorActionOutcome::PassThrough(_) => {
+            panic!("the vendor dispatcher passed the message on")
+        }
+    }
+}
 
 #[test]
 fn buy_item_err_sends_smsg_buy_failed() {
     // When `buy_item` returns Err (e.g. "not enough money"), the gateway must send SMSG_BUY_FAILED
     // with the matching BuyResult code so the player gets an on-screen error.
-    let store = std::sync::Arc::new({
-        let base = tester_store(7);
-        WorldFake {
-            session: SessionState {
-                login_entity: Some(warrior_entity()),
-                ..base.session
-            },
-            trade_error: Some("not enough money to buy that item".into()),
-            ..base
-        }
-    });
-    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
-    CMSG_BUY_ITEM {
-        vendor: Guid::new(99),
-        item: 1234,
-        amount: 1,
-        unknown1: 1,
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
-        ServerOpcodeMessage::SMSG_BUY_FAILED(p) => {
+    let actions = InMemoryVendorActions {
+        buy_error: Some("not enough money to buy that item".into()),
+        ..Default::default()
+    };
+    let sent = run(
+        &actions,
+        CMSG_BUY_ITEM {
+            vendor: Guid::new(99),
+            item: 1234,
+            amount: 1,
+            unknown1: 1,
+        },
+    );
+    match sent.as_slice() {
+        [Outbound::One(ServerOpcodeMessage::SMSG_BUY_FAILED(p))] => {
             assert_eq!(p.guid.guid(), 99, "vendor guid echoed back");
             assert_eq!(p.item, 1234, "item entry echoed back");
             assert!(
@@ -35,17 +44,16 @@ fn buy_item_err_sends_smsg_buy_failed() {
                 "BuyResult maps to NotEnoughMoney"
             );
         }
-        other => panic!("expected SMSG_BUY_FAILED, got {other}"),
+        other => panic!("expected one SMSG_BUY_FAILED, got {} packets", other.len()),
     }
-    drop(client);
-    server.join().unwrap();
 }
 
 #[test]
 fn login_replays_a_persisted_buyback_ring_after_the_login_sequence() {
     // The ring survives logout, so world entry rebuilds the tab: one fabricated item CREATE per
     // entry, then the raw descriptor update. (An EMPTY ring emits nothing — every other login test
-    // reads the login sequence and then EOF, which is that case.)
+    // reads the login sequence and then EOF, which is that case.) This stays a socket test because
+    // the replay's place in the world entry sequence is the fact under test.
     let store = std::sync::Arc::new({
         let base = quest_store();
         WorldFake {
@@ -73,56 +81,49 @@ fn login_replays_a_persisted_buyback_ring_after_the_login_sequence() {
 
 #[test]
 fn buyback_maps_the_wire_slot_enum_to_zero_based_ring_slots() {
-    // BuybackSlot rides as 69..=81 on the wire; the store reducer takes 0-based ring slots —
-    // Slot1 (69) → 0, Slot13 (81) → 12.
-    let store = std::sync::Arc::new(quest_store());
-    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_BUYBACK_ITEM {
-        guid: Guid::new(99),
-        slot: BuybackSlot::Slot1,
+    // BuybackSlot rides as 69..=81 on the wire; the ring is 0-based, so Slot1 (69) takes entry 0
+    // and Slot13 (81) takes entry 12. The ring holds 13 entries so both ends name a real one, and
+    // the later slot goes first so the earlier take does not shift it.
+    let ring: Vec<(u32, u32, u32, u32)> = (0..13).map(|i| (100 + i, 1, 10, 0)).collect();
+    let actions = InMemoryVendorActions {
+        ring: std::sync::Mutex::new(ring.clone()),
+        ..Default::default()
+    };
+    for slot in [BuybackSlot::Slot13, BuybackSlot::Slot1] {
+        run(
+            &actions,
+            CMSG_BUYBACK_ITEM {
+                guid: Guid::new(99),
+                slot,
+            },
+        );
     }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    CMSG_BUYBACK_ITEM {
-        guid: Guid::new(99),
-        slot: BuybackSlot::Slot13,
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    // 248: a successful buyback now pushes the refreshed tab view (one raw VALUES per call —
-    // the mock ring is empty, so no item CREATEs). Consume both frames before EOF; gtker cannot
-    // DECODE a hand-rolled partial VALUES mask (no OBJECT_FIELD_TYPE — the raw path's whole
-    // reason to exist), so tolerate the parse error: the frame bytes are consumed either way.
-    let _ = ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec);
-    let _ = ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec);
-    drop(client);
-    server.join().unwrap();
-    assert_eq!(
-        store.vendor.bought_back.lock().unwrap().as_slice(),
-        &[(99, 0), (99, 12)]
-    );
+    assert_eq!(actions.ring.lock().unwrap().as_slice(), &ring[1..12]);
 }
 
 #[test]
-fn list_inventory_opens_the_vendor_window_over_the_socket() {
-    let mut s = quest_store();
-    s.vendor.vendor_stock = vec![codec::VendorItemView {
-        item_entry: 4540,
-        display_id: 6353,
-        buy_price: 25,
+fn list_inventory_opens_the_vendor_window() {
+    let actions = InMemoryVendorActions {
+        stock: vec![codec::VendorItemView {
+            item_entry: 4540,
+            display_id: 6353,
+            buy_price: 25,
+            ..Default::default()
+        }],
         ..Default::default()
-    }];
-    let store = std::sync::Arc::new(s);
-    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
-    CMSG_LIST_INVENTORY {
-        guid: Guid::new(80),
+    };
+    let sent = run(
+        &actions,
+        CMSG_LIST_INVENTORY {
+            guid: Guid::new(80),
+        },
+    );
+    match sent.as_slice() {
+        [Outbound::Raw { opcode, body }] => {
+            assert_eq!(*opcode, codec::SMSG_LIST_INVENTORY_OPCODE);
+            assert_eq!(&body[0..8], &80u64.to_le_bytes());
+            assert_eq!(body[8], 1, "one stocked item");
+        }
+        _ => panic!("expected one raw vendor window, got {} packets", sent.len()),
     }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    let (op, body) = read_raw_frame(&mut client, &mut c_dec);
-    assert_eq!(op, codec::SMSG_LIST_INVENTORY_OPCODE);
-    assert_eq!(&body[0..8], &80u64.to_le_bytes());
-    assert_eq!(body[8], 1, "one stocked item");
-    drop(client);
-    server.join().unwrap();
 }
