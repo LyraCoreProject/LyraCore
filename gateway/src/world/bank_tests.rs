@@ -3,6 +3,7 @@
 
 use super::handlers::{handle_bank, BankStore, NpcStore};
 use super::*;
+use crate::stdb::ReducerCallError;
 use std::collections::BTreeSet;
 use std::sync::Mutex;
 
@@ -13,10 +14,12 @@ struct BankFake {
     npc_refuses: bool,
     /// Every banker the Module accepts a bag-slot purchase from.
     bankers: BTreeSet<u64>,
-    /// Refuses `auto_bank_item` with this text, like a full bank.
+    /// Refuses `auto_bank_item` with this reason, like a full bank.
     move_error: Option<String>,
-    /// Refuses `buy_bank_slot` with this text.
+    /// Refuses `buy_bank_slot` with this reason.
     purchase_error: Option<String>,
+    /// Loses the transport on every Durable Request.
+    transport_lost: bool,
     carried: Mutex<BTreeSet<u64>>,
     banked: Mutex<BTreeSet<u64>>,
     bought_slots: Mutex<u32>,
@@ -47,9 +50,12 @@ impl BankFake {
 npc_store_refusing_by!(BankFake, npc_refuses);
 
 impl BankStore for BankFake {
-    fn auto_bank_item(&self, _account_id: u64, _self_guid: u64, slot: u8) -> Result<()> {
-        if let Some(error) = &self.move_error {
-            return Err(anyhow!("{error}"));
+    fn auto_bank_item(&self, _actor: Actor, slot: u8) -> Result<()> {
+        if self.transport_lost {
+            return Err(ReducerCallError::transport_lost("gw_auto_bank_item").into());
+        }
+        if let Some(reason) = &self.move_error {
+            return Err(ReducerCallError::refused("gw_auto_bank_item", reason).into());
         }
         let slot = u64::from(slot);
         let (mut carried, mut banked) = (self.carried.lock().unwrap(), self.banked.lock().unwrap());
@@ -61,12 +67,19 @@ impl BankStore for BankFake {
         Ok(())
     }
 
-    fn buy_bank_slot(&self, _account_id: u64, _self_guid: u64, banker_guid: u64) -> Result<()> {
-        if let Some(error) = &self.purchase_error {
-            return Err(anyhow!("{error}"));
+    fn buy_bank_slot(&self, _actor: Actor, banker_guid: u64) -> Result<()> {
+        if self.transport_lost {
+            return Err(ReducerCallError::transport_lost("gw_buy_bank_slot").into());
+        }
+        if let Some(reason) = &self.purchase_error {
+            return Err(ReducerCallError::refused("gw_buy_bank_slot", reason).into());
         }
         if !self.bankers.contains(&banker_guid) {
-            return Err(anyhow!("[2] target is not a banker"));
+            return Err(ReducerCallError::refused(
+                "gw_buy_bank_slot",
+                "[2] target is not a banker",
+            )
+            .into());
         }
         *self.bought_slots.lock().unwrap() += 1;
         Ok(())
@@ -81,6 +94,16 @@ fn run(store: &BankFake, msg: impl Into<ClientOpcodeMessage>) -> Vec<ServerOpcod
     let passed_on = handle_bank(&tx, store, &mut conn, msg.into()).unwrap();
     assert!(passed_on.is_none(), "the bank family owns this opcode");
     drain_outbound(&rx)
+}
+
+/// What the handler returns when the Store loses the transport.
+fn run_transport_lost(msg: impl Into<ClientOpcodeMessage>) -> Result<Option<ClientOpcodeMessage>> {
+    let store = BankFake {
+        transport_lost: true,
+        ..Default::default()
+    };
+    let (tx, _rx) = SessionTx::with_depth(0);
+    handle_bank(&tx, &store, &mut in_world_conn(7, 1), msg.into())
 }
 
 fn kinds(sent: &[ServerOpcodeMessage]) -> String {
@@ -263,4 +286,24 @@ fn buy_bank_slot_failure_maps_the_bracketed_code_to_the_matching_result() {
         assert_eq!(p.result, want, "store error {err:?} must map to {want:?}");
         assert_eq!(*store.bought_slots.lock().unwrap(), 0);
     }
+}
+
+/// A Transport Loss leaves the durable outcome unknown, so it ends the World Session instead of
+/// posing as a failed bank move or a refused purchase.
+#[test]
+fn a_transport_loss_ends_the_world_session() {
+    assert!(run_transport_lost(CMSG_AUTOBANK_ITEM {
+        bag_index: 255,
+        slot_index: 23,
+    })
+    .is_err());
+    assert!(run_transport_lost(CMSG_AUTOSTORE_BANK_ITEM {
+        bag_index: 255,
+        slot_index: 39,
+    })
+    .is_err());
+    assert!(run_transport_lost(CMSG_BUY_BANK_SLOT {
+        guid: Guid::new(88),
+    })
+    .is_err());
 }
