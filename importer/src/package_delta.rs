@@ -198,7 +198,7 @@ fn read_enabled(root: &Path) -> Result<Vec<Artifact>> {
             // One Package ships every artifact kind it has into this one directory, so the glob
             // above finds a Script Artifact next to a Package Delta. Skipping it is not leniency:
             // this stage is the CLAIM half of an apply, and the script family has no base import to
-            // run behind. `lyracore packages replay` applies that family separately. Anything this
+            // run behind. `lyracore packages apply` applies that family separately. Anything this
             // router cannot read at all still goes to the parser, which names what is wrong with it.
             if matches!(
                 artifact_kind(&json),

@@ -116,7 +116,9 @@ any line in §1 needs a human review before it ships, whoever or whatever wrote 
   and [HTTP body](https://github.com/clockworklabs/SpacetimeDB/blob/v2.7.1/crates/cli/src/api.rs#L69-L76).
 - **`game_package_import` is private and has no gateway binding.** Read it with `spacetime sql`
   only, and with an EQUALITY filter on `family` (a range filter on one column can wrongly return 0
-  rows). `lyracore packages replay` is the supported way to change it; never write it by hand.
+  rows). `lyracore packages apply` is the supported way to change it; never write it by hand.
+  `apply` can build local artifacts and publish the Module for Rust Packages. Its confirmation
+  covers the Realm changes; `--check` prepares locally without Realm writes.
   An empty Package Delta payload is not "unknown" — it means "no Package claims this family" and
   CLEARS the Package spell range.
 - **`auto_inc` sequences sit BEHIND explicitly-numbered imported rows.** A content import writes
