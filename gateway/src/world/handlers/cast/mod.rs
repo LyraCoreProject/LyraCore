@@ -17,6 +17,7 @@ mod ranged;
 
 use super::super::*;
 use super::MeleeActionStore;
+use crate::stdb::{classify, DurableFailure};
 use wow_world_messages::vanilla::CMSG_CAST_SPELL;
 
 /// `SMSG_CAST_RESULT`. Both bodies are hand-rolled (gtker's typed message inverts the status
@@ -50,20 +51,12 @@ pub(crate) trait CastStore: MeleeActionStore + Send + Sync {
 
     /// Cast a spell at a unit. `target_guid` 0 means no unit target — the module then applies its
     /// own self-cast rule.
-    fn cast_spell(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        spell_id: u32,
-        target_guid: u64,
-    ) -> Result<()>;
+    fn cast_spell(&self, actor: Actor, spell_id: u32, target_guid: u64) -> Result<()>;
 
     /// Cast a ground-targeted spell at the exact point the client clicked.
-    #[allow(clippy::too_many_arguments)]
     fn cast_spell_at(
         &self,
-        account_id: u64,
-        self_guid: u64,
+        actor: Actor,
         spell_id: u32,
         target_guid: u64,
         x: f32,
@@ -73,23 +66,11 @@ pub(crate) trait CastStore: MeleeActionStore + Send + Sync {
 
     /// Cast a spell whose explicit target is an owned inventory item. The module validates the
     /// effect kind and consumes the item only after the gameplay gates pass.
-    fn cast_item_target(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        spell_id: u32,
-        slot: u8,
-    ) -> Result<()>;
+    fn cast_item_target(&self, actor: Actor, spell_id: u32, slot: u8) -> Result<()>;
 
     /// Arm the ranged auto-repeat loop on `target_guid` with `spell_id`. The module requires an
     /// equipped ranged weapon; `Err` is the refusal the player sees as a cast failure.
-    fn start_ranged_attack(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        target_guid: u64,
-        spell_id: u32,
-    ) -> Result<()>;
+    fn start_ranged_attack(&self, actor: Actor, target_guid: u64, spell_id: u32) -> Result<()>;
 
     /// The bag slot holding the item instance a client spell-target names, so the enchant and
     /// disenchant operations receive a slot rather than a guid.
@@ -97,31 +78,25 @@ pub(crate) trait CastStore: MeleeActionStore + Send + Sync {
 
     /// Disenchant the item in `slot`. The module validates skill and disenchantability, and yields
     /// the resulting reagents into the bag.
-    fn disenchant_item(&self, account_id: u64, self_guid: u64, slot: u8) -> Result<()>;
+    fn disenchant_item(&self, actor: Actor, slot: u8) -> Result<()>;
 
     /// Apply `enchant_id` to the item in `slot`. The module validates skill, consumes the reagent
     /// and stamps the enchant on the item instance.
-    fn enchant_item_on_slot(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        slot: u8,
-        enchant_id: u32,
-    ) -> Result<()>;
+    fn enchant_item_on_slot(&self, actor: Actor, slot: u8, enchant_id: u32) -> Result<()>;
 
     /// The instant-resolve Fishing catch.
-    fn fish(&self, account_id: u64, self_guid: u64) -> Result<()>;
+    fn fish(&self, actor: Actor) -> Result<()>;
 
     /// Pick the lock on GameObject `go_guid`. The module gates range, the lock requirement and the
     /// caller's skill; `Err` is the refusal the player sees as a cast failure.
-    fn pick_lock(&self, account_id: u64, self_guid: u64, go_guid: u64) -> Result<()>;
+    fn pick_lock(&self, actor: Actor, go_guid: u64) -> Result<()>;
 
     /// Drop the caller's pending cast, so a scheduled completion cannot fire later. Under the
     /// one-pending-cast rule the caller identifies the cast, so the client's spell id is unused.
-    fn cancel_cast(&self, account_id: u64, self_guid: u64) -> Result<()>;
+    fn cancel_cast(&self, actor: Actor) -> Result<()>;
 
     /// Remove the caller's own aura named by the wire spell id. The aura relay re-syncs the buff bar.
-    fn cancel_aura(&self, account_id: u64, self_guid: u64, spell_id: u32) -> Result<()>;
+    fn cancel_aura(&self, actor: Actor, spell_id: u32) -> Result<()>;
 
     // The two reads below are shared with the character, vendor and query paths. They are declared
     // on this family only, because a second declaration of the same name on another family would
@@ -138,14 +113,19 @@ pub(crate) trait CastStore: MeleeActionStore + Send + Sync {
 }
 
 /// Everything the cast module knows about the caller. `self_guid` is `None` when the session has no
-/// character in the world: the durable call then carries guid 0 and no synchronous message is sent,
-/// which is what the pre-seam handler did.
+/// character in the world: no durable request is made and no synchronous message is sent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct CastPlayer {
     pub(crate) account_id: u64,
     pub(crate) self_guid: Option<u64>,
     /// A ranged auto-repeat loop is armed. Only the ranged route reads it.
     pub(crate) ranged_repeat: bool,
+}
+
+impl CastPlayer {
+    fn actor(self) -> Option<Actor> {
+        self.self_guid.and_then(Actor::new)
+    }
 }
 
 /// Session state the dispatcher applies before it sends the outbound batch. The ordinary cast route
@@ -193,12 +173,16 @@ fn route_for<St: CastStore + ?Sized>(store: &St, spell_id: u32) -> CastRoute {
     }
 }
 
-/// A dead reducer transport cannot serve any further request, so it ends the session. Every other
-/// durable error is a gameplay refusal the player sees as a cast failure.
-fn is_transport_failure(error: &anyhow::Error) -> bool {
-    error
-        .chain()
-        .any(|cause| cause.to_string().contains("reducer transport disconnected"))
+/// What the cast failure mapping reads when the session has no Actor to cast as.
+const NO_ACTOR: &str = "no resolved actor";
+
+/// The Module's reason for a Refusal, which the client sees as a cast failure. A Transport Loss
+/// cannot serve any further request, so it ends the World Session.
+fn refusal_reason(error: anyhow::Error) -> Result<String> {
+    match classify(&error) {
+        DurableFailure::Refusal { reason } => Ok(reason.to_string()),
+        DurableFailure::TransportLoss => Err(error),
+    }
 }
 
 /// The client's unit target, or 0 for "none" — the module substitutes the caster.
@@ -232,7 +216,7 @@ pub(crate) fn dispatch_cast<St: CastStore + ?Sized>(
                 manual::manual_completion_cast(store, player, &c, route)
             }
         },
-        ClientOpcodeMessage::CMSG_CANCEL_AUTO_REPEAT_SPELL => Ok(ranged::cancel(store, player)),
+        ClientOpcodeMessage::CMSG_CANCEL_AUTO_REPEAT_SPELL => ranged::cancel(store, player),
         ClientOpcodeMessage::CMSG_CANCEL_CAST(_) => cancel::cancel_cast(store, player),
         ClientOpcodeMessage::CMSG_CANCEL_AURA(c) => cancel::cancel_aura(store, player, c.id),
         other => Ok(CastOutcome::PassThrough(other)),
@@ -262,7 +246,7 @@ fn ordinary_cast<St: CastStore + ?Sized>(
     // sequence below would un-light the button and resolve the cast at queue time.
     let queues_swing = instant && store.spell_queues_next_swing(spell);
     if instant && !queues_swing {
-        if let Some(caster) = player.self_guid {
+        if let Some(caster) = player.actor().map(Actor::guid) {
             // vmangos order: START(0) then the raw CAST_RESULT(OK) then GO. The 5875 client needs
             // that 5-byte ack before GO to make m_currentSpells clearable.
             // A cast at a clicked ground point echoes the point in both target blocks.
@@ -296,43 +280,45 @@ fn ordinary_cast<St: CastStore + ?Sized>(
 
     // A DEST_LOCATION block is a ground click (Flamestrike/Blizzard/Rain of Fire) — the durable
     // ground cast anchors the area there. The clearing sequence above is unchanged either way.
-    let self_guid = player.self_guid.unwrap_or(0);
     let item_guid = match c.targets.target_flags.get_item() {
         Some(wow_world_messages::vanilla::SpellCastTargets_SpellCastTargetFlags_Item::Item {
             item,
         }) => item.guid(),
         _ => 0,
     };
-    let result = if item_guid != 0 {
-        store
-            .item_slot_by_guid(player.account_id, item_guid)
-            .ok_or_else(|| anyhow!("item target {item_guid} is not in the player's bag"))
-            .and_then(|slot| store.cast_item_target(player.account_id, self_guid, spell, slot))
-    } else {
-        match dest_target(c) {
-            Some((x, y, z)) => {
-                store.cast_spell_at(player.account_id, self_guid, spell, target, x, y, z)
+    let refusal = 'request: {
+        let Some(actor) = player.actor() else {
+            break 'request Some(NO_ACTOR.to_string());
+        };
+        let result = if item_guid != 0 {
+            let Some(slot) = store.item_slot_by_guid(player.account_id, item_guid) else {
+                break 'request Some(format!(
+                    "item target {item_guid} is not in the player's bag"
+                ));
+            };
+            store.cast_item_target(actor, spell, slot)
+        } else {
+            match dest_target(c) {
+                Some((x, y, z)) => store.cast_spell_at(actor, spell, target, x, y, z),
+                None => store.cast_spell(actor, spell, target),
             }
-            None => store.cast_spell(player.account_id, self_guid, spell, target),
+        };
+        match result {
+            Ok(()) => None,
+            Err(e) => Some(refusal_reason(e)?),
         }
     };
-    if let Err(e) = result {
-        if is_transport_failure(&e) {
-            return Err(e);
-        }
+    if let Some(reason) = refusal {
         // Carry the mapped REASON so the client prints the red error line ("Not enough rage",
         // "You must be behind your target"). A bare failure only resets the button and leaves
         // server-only gates — behind, stealth, stance, react window — invisible.
         log::debug!(
-            "world: cast {spell} rejected (account {}): {e}",
+            "world: cast {spell} rejected (account {}): {reason}",
             player.account_id
         );
         outbound.push(Outbound::Raw {
             opcode: OP_CAST_RESULT,
-            body: codec::build_cast_result_failed(
-                spell,
-                codec::cast_failure_reason_for(&e.to_string()),
-            ),
+            body: codec::build_cast_result_failed(spell, codec::cast_failure_reason_for(&reason)),
         });
     }
     Ok(CastOutcome::Handled {
@@ -346,6 +332,7 @@ fn ordinary_cast<St: CastStore + ?Sized>(
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
+    use crate::stdb::ReducerCallError;
     use std::sync::Mutex;
     use wow_world_messages::vanilla::{
         Guid, SpellCastTargets, SpellCastTargets_SpellCastTargetFlags,
@@ -355,20 +342,18 @@ pub(super) mod tests {
         Vector3d, CMSG_PING,
     };
 
-    /// One recorded durable cast: account, caster, spell and unit target.
-    pub(crate) type Cast = (u64, u64, u32, u64);
+    /// One recorded durable cast: caster, spell and unit target.
+    pub(crate) type Cast = (u64, u32, u64);
     /// One recorded durable ground cast: a [`Cast`] plus the click point.
-    pub(crate) type GroundCast = (u64, u64, u32, u64, f32, f32, f32);
-    /// One recorded ranged activation: account, caster, unit target and spell.
-    pub(crate) type RangedAttack = (u64, u64, u64, u32);
+    pub(crate) type GroundCast = (u64, u32, u64, f32, f32, f32);
+    /// One recorded ranged activation: caster, unit target and spell.
+    pub(crate) type RangedAttack = (u64, u64, u32);
     /// One recorded `enchant_item_on_slot` call: slot and enchant id.
     pub(crate) type EnchantCall = (u8, u32);
-    /// One recorded `fish` call: account and caster.
-    pub(crate) type FishCall = (u64, u64);
-    /// One recorded `pick_lock` call: account, caster and GameObject guid.
-    pub(crate) type PickLockCall = (u64, u64, u64);
-    /// One recorded `cancel_aura` call: account, caster and wire spell id.
-    pub(crate) type CancelAuraCall = (u64, u64, u32);
+    /// One recorded `pick_lock` call: caster and GameObject guid.
+    pub(crate) type PickLockCall = (u64, u64);
+    /// One recorded `cancel_aura` call: caster and wire spell id.
+    pub(crate) type CancelAuraCall = (u64, u32);
 
     /// Spell-route metadata, item state and durable results for the cast routes, plus a record of
     /// every durable call. Nothing else: no vendors, parties, mail, transfer or unrelated world
@@ -382,9 +367,12 @@ pub(super) mod tests {
         pub(crate) enchant: Option<EnchantRoute>,
         pub(crate) fishing: Vec<u32>,
         pub(crate) open_lock: Vec<u32>,
+        /// The Module's reason when the ordinary cast operations refuse.
         pub(crate) cast_error: Option<String>,
         /// When set, `start_ranged_attack` refuses with this reason.
         pub(crate) ranged_error: Option<String>,
+        /// Every durable operation fails with a Transport Loss.
+        pub(crate) transport_lost: bool,
         /// The caller's owned items, and the templates their entries resolve to.
         pub(crate) items: Vec<codec::ItemInstanceView>,
         pub(crate) templates: Vec<codec::ItemTemplateView>,
@@ -396,14 +384,14 @@ pub(super) mod tests {
         pub(crate) cancel_error: Option<String>,
         pub(crate) casts: Mutex<Vec<Cast>>,
         pub(crate) ground_casts: Mutex<Vec<GroundCast>>,
-        pub(crate) item_target_casts: Mutex<Vec<(u64, u64, u32, u8)>>,
+        pub(crate) item_target_casts: Mutex<Vec<(u64, u32, u8)>>,
         pub(crate) ranged_attacks: Mutex<Vec<RangedAttack>>,
         pub(crate) stop_attacks: Mutex<Vec<u64>>,
         pub(crate) disenchant_calls: Mutex<Vec<u8>>,
         pub(crate) enchant_calls: Mutex<Vec<EnchantCall>>,
-        pub(crate) fish_calls: Mutex<Vec<FishCall>>,
+        pub(crate) fish_calls: Mutex<Vec<u64>>,
         pub(crate) pick_lock_calls: Mutex<Vec<PickLockCall>>,
-        pub(crate) cancel_cast_calls: Mutex<Vec<(u64, u64)>>,
+        pub(crate) cancel_cast_calls: Mutex<Vec<u64>>,
         pub(crate) cancel_aura_calls: Mutex<Vec<CancelAuraCall>>,
         /// The attackers with a live engagement: an armed ranged loop adds its caster, a stop
         /// removes it.
@@ -429,22 +417,14 @@ pub(super) mod tests {
             }
         }
 
-        fn durable_result(&self) -> Result<()> {
-            self.cast_error
-                .as_ref()
-                .map_or_else(|| Ok(()), |e| Err(anyhow!("{e}")))
-        }
-
-        fn manual_result(&self) -> Result<()> {
-            self.manual_error
-                .as_ref()
-                .map_or_else(|| Ok(()), |e| Err(anyhow!("{e}")))
-        }
-
-        fn cancel_result(&self) -> Result<()> {
-            self.cancel_error
-                .as_ref()
-                .map_or_else(|| Ok(()), |e| Err(anyhow!("{e}")))
+        /// The Module's answer to a durable request: a Refusal with `reason`, or success.
+        fn answer(&self, operation: &str, reason: &Option<String>) -> Result<()> {
+            if self.transport_lost {
+                return Err(ReducerCallError::transport_lost(operation).into());
+            }
+            reason.as_ref().map_or(Ok(()), |reason| {
+                Err(ReducerCallError::refused(operation, reason).into())
+            })
         }
     }
 
@@ -477,54 +457,36 @@ pub(super) mod tests {
             self.queues_next_swing
         }
 
-        fn cast_spell(
-            &self,
-            account_id: u64,
-            self_guid: u64,
-            spell_id: u32,
-            target_guid: u64,
-        ) -> Result<()> {
+        fn cast_spell(&self, actor: Actor, spell_id: u32, target_guid: u64) -> Result<()> {
             self.casts
                 .lock()
                 .unwrap()
-                .push((account_id, self_guid, spell_id, target_guid));
-            self.durable_result()
+                .push((actor.guid(), spell_id, target_guid));
+            self.answer("gw_cast_spell", &self.cast_error)
         }
 
         fn cast_spell_at(
             &self,
-            account_id: u64,
-            self_guid: u64,
+            actor: Actor,
             spell_id: u32,
             target_guid: u64,
             x: f32,
             y: f32,
             z: f32,
         ) -> Result<()> {
-            self.ground_casts.lock().unwrap().push((
-                account_id,
-                self_guid,
-                spell_id,
-                target_guid,
-                x,
-                y,
-                z,
-            ));
-            self.durable_result()
+            self.ground_casts
+                .lock()
+                .unwrap()
+                .push((actor.guid(), spell_id, target_guid, x, y, z));
+            self.answer("gw_cast_spell_at", &self.cast_error)
         }
 
-        fn cast_item_target(
-            &self,
-            account_id: u64,
-            self_guid: u64,
-            spell_id: u32,
-            slot: u8,
-        ) -> Result<()> {
+        fn cast_item_target(&self, actor: Actor, spell_id: u32, slot: u8) -> Result<()> {
             self.item_target_casts
                 .lock()
                 .unwrap()
-                .push((account_id, self_guid, spell_id, slot));
-            self.durable_result()
+                .push((actor.guid(), spell_id, slot));
+            self.answer("gw_cast_item_target", &self.cast_error)
         }
 
         fn item_slot_by_guid(&self, _account_id: u64, item_guid: u64) -> Option<u8> {
@@ -534,80 +496,58 @@ pub(super) mod tests {
                 .map(|&(_, s)| s)
         }
 
-        fn disenchant_item(&self, _account_id: u64, _self_guid: u64, slot: u8) -> Result<()> {
+        fn disenchant_item(&self, _actor: Actor, slot: u8) -> Result<()> {
             self.disenchant_calls.lock().unwrap().push(slot);
-            self.manual_result()
+            self.answer("gw_disenchant", &self.manual_error)
         }
 
-        fn enchant_item_on_slot(
-            &self,
-            _account_id: u64,
-            _self_guid: u64,
-            slot: u8,
-            enchant_id: u32,
-        ) -> Result<()> {
+        fn enchant_item_on_slot(&self, _actor: Actor, slot: u8, enchant_id: u32) -> Result<()> {
             self.enchant_calls.lock().unwrap().push((slot, enchant_id));
-            self.manual_result()
+            self.answer("gw_enchant_item", &self.manual_error)
         }
 
-        fn fish(&self, account_id: u64, self_guid: u64) -> Result<()> {
-            self.fish_calls
-                .lock()
-                .unwrap()
-                .push((account_id, self_guid));
-            self.manual_result()
+        fn fish(&self, actor: Actor) -> Result<()> {
+            self.fish_calls.lock().unwrap().push(actor.guid());
+            self.answer("gw_fish", &self.manual_error)
         }
 
-        fn pick_lock(&self, account_id: u64, self_guid: u64, go_guid: u64) -> Result<()> {
+        fn pick_lock(&self, actor: Actor, go_guid: u64) -> Result<()> {
             self.pick_lock_calls
                 .lock()
                 .unwrap()
-                .push((account_id, self_guid, go_guid));
-            self.manual_result()
+                .push((actor.guid(), go_guid));
+            self.answer("gw_pick_lock", &self.manual_error)
         }
 
-        fn cancel_cast(&self, account_id: u64, self_guid: u64) -> Result<()> {
-            self.cancel_cast_calls
-                .lock()
-                .unwrap()
-                .push((account_id, self_guid));
-            self.cancel_result()?;
+        fn cancel_cast(&self, actor: Actor) -> Result<()> {
+            self.cancel_cast_calls.lock().unwrap().push(actor.guid());
+            self.answer("gw_cancel_cast", &self.cancel_error)?;
             self.pending_casts
                 .lock()
                 .unwrap()
-                .retain(|&caster| caster != self_guid);
+                .retain(|&caster| caster != actor.guid());
             Ok(())
         }
 
-        fn cancel_aura(&self, account_id: u64, self_guid: u64, spell_id: u32) -> Result<()> {
+        fn cancel_aura(&self, actor: Actor, spell_id: u32) -> Result<()> {
             self.cancel_aura_calls
                 .lock()
                 .unwrap()
-                .push((account_id, self_guid, spell_id));
-            self.cancel_result()?;
+                .push((actor.guid(), spell_id));
+            self.answer("gw_cancel_aura", &self.cancel_error)?;
             self.auras.lock().unwrap().retain(|&aura| aura != spell_id);
             Ok(())
         }
 
-        fn start_ranged_attack(
-            &self,
-            account_id: u64,
-            self_guid: u64,
-            target_guid: u64,
-            spell_id: u32,
-        ) -> Result<()> {
-            if let Some(e) = &self.ranged_error {
-                return Err(anyhow!("{e}"));
-            }
-            self.ranged_attacks.lock().unwrap().push((
-                account_id,
-                self_guid,
-                target_guid,
-                spell_id,
-            ));
+        fn start_ranged_attack(&self, actor: Actor, target_guid: u64, spell_id: u32) -> Result<()> {
+            self.answer("gw_ranged_attack", &self.ranged_error)?;
+            self.ranged_attacks
+                .lock()
+                .unwrap()
+                .push((actor.guid(), target_guid, spell_id));
             let mut engaged = self.engaged.lock().unwrap();
-            if !engaged.contains(&self_guid) {
-                engaged.push(self_guid);
+            if !engaged.contains(&actor.guid()) {
+                engaged.push(actor.guid());
             }
             Ok(())
         }
@@ -629,6 +569,7 @@ pub(super) mod tests {
         }
 
         fn stop_attack(&self, actor: Actor) -> Result<()> {
+            self.answer("gw_stop_attack", &None)?;
             self.stop_attacks.lock().unwrap().push(actor.guid());
             self.engaged
                 .lock()
@@ -763,10 +704,7 @@ pub(super) mod tests {
             "the 5875 client needs the OK ack between START and GO"
         );
         assert_eq!(transition, CastTransition::default());
-        assert_eq!(
-            store.casts.lock().unwrap().as_slice(),
-            &[(ACCOUNT, CASTER, 100, 77)]
-        );
+        assert_eq!(store.casts.lock().unwrap().as_slice(), &[(CASTER, 100, 77)]);
     }
 
     #[test]
@@ -777,7 +715,7 @@ pub(super) mod tests {
 
         assert_eq!(
             store.casts.lock().unwrap().as_slice(),
-            &[(ACCOUNT, CASTER, 100, 0)],
+            &[(CASTER, 100, 0)],
             "target 0 preserves the module's self-cast fallback"
         );
     }
@@ -867,7 +805,7 @@ pub(super) mod tests {
         assert_eq!((point.x, point.y, point.z), (-8913.5, 554.25, 93.75));
         assert_eq!(
             store.ground_casts.lock().unwrap().as_slice(),
-            &[(ACCOUNT, CASTER, 1725, 0, -8913.5, 554.25, 93.75)]
+            &[(CASTER, 1725, 0, -8913.5, 554.25, 93.75)]
         );
     }
 
@@ -887,10 +825,7 @@ pub(super) mod tests {
             outbound.is_empty(),
             "the cast-event relay owns a timed cast's lifecycle"
         );
-        assert_eq!(
-            store.casts.lock().unwrap().as_slice(),
-            &[(ACCOUNT, CASTER, 100, 77)]
-        );
+        assert_eq!(store.casts.lock().unwrap().as_slice(), &[(CASTER, 100, 77)]);
     }
 
     #[test]
@@ -907,10 +842,7 @@ pub(super) mod tests {
             outbound.is_empty(),
             "the client holds the button until the durable swing fires the completion"
         );
-        assert_eq!(
-            store.casts.lock().unwrap().as_slice(),
-            &[(ACCOUNT, CASTER, 78, 77)]
-        );
+        assert_eq!(store.casts.lock().unwrap().as_slice(), &[(CASTER, 78, 77)]);
     }
 
     // ── Ground targeting ─────────────────────────────────────────────────────
@@ -933,7 +865,7 @@ pub(super) mod tests {
 
         assert_eq!(
             store.ground_casts.lock().unwrap().as_slice(),
-            &[(ACCOUNT, CASTER, 2120, 0, -8913.5, 554.25, 93.75)]
+            &[(CASTER, 2120, 0, -8913.5, 554.25, 93.75)]
         );
         assert!(store.casts.lock().unwrap().is_empty());
     }
@@ -974,7 +906,8 @@ pub(super) mod tests {
     fn a_dead_reducer_transport_is_session_fatal() {
         let store = InMemoryCasts {
             cast_time_ms: Some(1500),
-            ..InMemoryCasts::refusing("cast_spell reducer transport disconnected: channel closed")
+            transport_lost: true,
+            ..Default::default()
         };
 
         let error = match dispatch_cast(&store, player(), cast(100, unit_targets(77))) {
@@ -982,13 +915,13 @@ pub(super) mod tests {
             Ok(_) => panic!("a dead reducer transport must end the session"),
         };
 
-        assert!(format!("{error:#}").contains("reducer transport disconnected"));
+        assert!(matches!(classify(&error), DurableFailure::TransportLoss));
     }
 
     // ── Player context ───────────────────────────────────────────────────────
 
     #[test]
-    fn a_player_with_no_character_in_world_gets_no_messages_and_a_zero_actor() {
+    fn a_player_with_no_character_in_world_makes_no_request_and_gets_a_failed_cast() {
         let store = InMemoryCasts::instant();
         let player = CastPlayer {
             account_id: ACCOUNT,
@@ -999,11 +932,8 @@ pub(super) mod tests {
         let (_, outbound) =
             handled(dispatch_cast(&store, player, cast(100, unit_targets(77))).unwrap());
 
-        assert!(outbound.is_empty());
-        assert_eq!(
-            store.casts.lock().unwrap().as_slice(),
-            &[(ACCOUNT, 0, 100, 77)]
-        );
+        assert_eq!(sequence(&outbound), ["CAST_RESULT(FAILED 0x17)"]);
+        assert!(store.casts.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -1106,10 +1036,7 @@ pub(super) mod tests {
         );
 
         assert_eq!(sequence(&outbound), ["START", "CAST_RESULT(OK)", "GO"]);
-        assert_eq!(
-            store.fish_calls.lock().unwrap().as_slice(),
-            &[(ACCOUNT, CASTER)]
-        );
+        assert_eq!(store.fish_calls.lock().unwrap().as_slice(), &[CASTER]);
     }
 
     #[test]
@@ -1131,7 +1058,7 @@ pub(super) mod tests {
     fn a_dead_reducer_transport_on_a_manual_route_is_session_fatal() {
         let store = InMemoryCasts {
             fishing: vec![7620],
-            manual_error: Some("fish reducer transport disconnected: channel closed".into()),
+            transport_lost: true,
             ..Default::default()
         };
 
@@ -1139,7 +1066,7 @@ pub(super) mod tests {
             Err(error) => error,
             Ok(_) => panic!("a dead reducer transport must end the session"),
         };
-        assert!(format!("{error:#}").contains("reducer transport disconnected"));
+        assert!(matches!(classify(&error), DurableFailure::TransportLoss));
     }
 
     #[test]
@@ -1162,7 +1089,7 @@ pub(super) mod tests {
             assert_eq!(sequence(&outbound), ["START", "CAST_RESULT(OK)", "GO"]);
             assert_eq!(
                 store.pick_lock_calls.lock().unwrap().as_slice(),
-                &[(ACCOUNT, CASTER, 0xABCD)],
+                &[(CASTER, 0xABCD)],
                 "unk_shape={unk_shape}"
             );
         }
@@ -1195,7 +1122,7 @@ pub(super) mod tests {
         assert_eq!(sequence(&outbound), ["START", "CAST_RESULT(OK)", "GO"]);
         assert_eq!(
             *store.item_target_casts.lock().unwrap(),
-            [(ACCOUNT, CASTER, 6991, 7)]
+            [(CASTER, 6991, 7)]
         );
         assert!(store.casts.lock().unwrap().is_empty());
     }

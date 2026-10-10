@@ -1,6 +1,6 @@
 //! `Coordinator`'s [`CastStore`] adapter.
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use spacetimedb_sdk::Table;
 
 use crate::codec;
@@ -10,143 +10,11 @@ use crate::stdb::views::item_template_view;
 use crate::stdb::Coordinator;
 use crate::world::{Actor, CastStore, EnchantRoute};
 
-impl CastStore for crate::stdb::Coordinator {
-    fn spell_is_ranged_auto_repeat(&self, spell_id: u32) -> bool {
-        crate::stdb::Coordinator::spell_is_ranged_auto_repeat(self, spell_id)
-    }
-
-    fn enchant_route(&self, spell_id: u32) -> Option<EnchantRoute> {
-        crate::stdb::Coordinator::enchant_route(self, spell_id)
-    }
-
-    fn spell_is_fishing(&self, spell_id: u32) -> bool {
-        crate::stdb::Coordinator::spell_is_fishing(self, spell_id)
-    }
-
-    fn spell_is_open_lock(&self, spell_id: u32) -> bool {
-        crate::stdb::Coordinator::spell_is_open_lock(self, spell_id)
-    }
-
-    fn spell_is_ground_area(&self, spell_id: u32) -> bool {
-        crate::stdb::Coordinator::spell_is_ground_area(self, spell_id)
-    }
-
-    fn spell_cast_time(&self, spell_id: u32) -> Option<u32> {
-        crate::stdb::Coordinator::spell_cast_time(self, spell_id)
-    }
-
-    fn spell_queues_next_swing(&self, spell_id: u32) -> bool {
-        crate::stdb::Coordinator::spell_queues_next_swing(self, spell_id)
-    }
-
-    fn cast_spell(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        spell_id: u32,
-        target_guid: u64,
-    ) -> Result<()> {
-        crate::stdb::Coordinator::cast_spell(self, account_id, self_guid, spell_id, target_guid)
-    }
-
-    fn cast_spell_at(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        spell_id: u32,
-        target_guid: u64,
-        x: f32,
-        y: f32,
-        z: f32,
-    ) -> Result<()> {
-        crate::stdb::Coordinator::cast_spell_at(
-            self,
-            account_id,
-            self_guid,
-            spell_id,
-            target_guid,
-            x,
-            y,
-            z,
-        )
-    }
-
-    fn cast_item_target(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        spell_id: u32,
-        slot: u8,
-    ) -> Result<()> {
-        crate::stdb::Coordinator::cast_item_target(self, account_id, self_guid, spell_id, slot)
-    }
-
-    fn start_ranged_attack(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        target_guid: u64,
-        spell_id: u32,
-    ) -> Result<()> {
-        crate::stdb::Coordinator::start_ranged_attack(
-            self,
-            account_id,
-            self_guid,
-            target_guid,
-            spell_id,
-        )
-    }
-
-    fn item_slot_by_guid(&self, account_id: u64, item_guid: u64) -> Option<u8> {
-        crate::stdb::Coordinator::item_slot_by_guid(self, account_id, item_guid)
-    }
-
-    fn disenchant_item(&self, account_id: u64, self_guid: u64, slot: u8) -> Result<()> {
-        crate::stdb::Coordinator::disenchant_item(self, account_id, self_guid, slot)
-    }
-
-    fn enchant_item_on_slot(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        slot: u8,
-        enchant_id: u32,
-    ) -> Result<()> {
-        crate::stdb::Coordinator::enchant_item_on_slot(
-            self, account_id, self_guid, slot, enchant_id,
-        )
-    }
-
-    fn fish(&self, account_id: u64, self_guid: u64) -> Result<()> {
-        crate::stdb::Coordinator::fish(self, account_id, self_guid)
-    }
-
-    fn pick_lock(&self, account_id: u64, self_guid: u64, go_guid: u64) -> Result<()> {
-        crate::stdb::Coordinator::pick_lock(self, account_id, self_guid, go_guid)
-    }
-
-    fn cancel_cast(&self, account_id: u64, self_guid: u64) -> Result<()> {
-        crate::stdb::Coordinator::cancel_cast(self, account_id, self_guid)
-    }
-
-    fn cancel_aura(&self, account_id: u64, self_guid: u64, spell_id: u32) -> Result<()> {
-        crate::stdb::Coordinator::cancel_aura(self, account_id, self_guid, spell_id)
-    }
-
-    fn player_items(&self, owner_guid: u64) -> Result<Vec<codec::ItemInstanceView>> {
-        crate::stdb::Coordinator::player_items(self, owner_guid)
-    }
-
-    fn item_template(&self, entry: u32) -> Result<Option<codec::ItemTemplateView>> {
-        crate::stdb::Coordinator::item_template(self, entry)
-    }
-}
-
-impl Coordinator {
+impl CastStore for Coordinator {
     /// The spell's cast time (ms) from the static `game_spell` header — 0 = instant. Used by the
     /// CMSG_CAST_SPELL handler to clear an instant cast SYNCHRONOUSLY (the async relay delivers START/GO
     /// after the aura effects, which wedges the 5875 client's cast slot). None = unknown spell.
-    pub fn spell_cast_time(&self, spell_id: u32) -> Option<u32> {
+    fn spell_cast_time(&self, spell_id: u32) -> Option<u32> {
         self.0
             .coord()
             .conn
@@ -161,8 +29,7 @@ impl Coordinator {
     /// has no item-target enchanting effect (a normal cast). The gateway uses this to route ITEM-target
     /// casts by effect KIND, with the enchant id carried in the effect's `p_0`, instead of a hardcoded
     /// spell-id list — a new enchant spell is a data row, no gateway change.
-    pub fn enchant_route(&self, spell_id: u32) -> Option<crate::world::EnchantRoute> {
-        use crate::world::EnchantRoute;
+    fn enchant_route(&self, spell_id: u32) -> Option<EnchantRoute> {
         const E_ENCHANT_ITEM: u8 = 0x17; // taxonomy E_ENCHANT_ITEM (p_0 = enchant_id)
         const E_DISENCHANT: u8 = 0x18; // taxonomy E_DISENCHANT
         self.0
@@ -184,7 +51,7 @@ impl Coordinator {
     /// default self-cast fallback put the CASTER in `hits[]`, and the 5875 client rendered the
     /// spell's impact animation ON the paladin ("hit animation on the caster"). Kind-routed
     /// like `enchant_route` — a new ground spell is a data row.
-    pub fn spell_is_ground_area(&self, spell_id: u32) -> bool {
+    fn spell_is_ground_area(&self, spell_id: u32) -> bool {
         const E_PERSISTENT_AREA: u8 = 0x1B; // lockstep with module taxonomy
         self.0
             .coord()
@@ -197,7 +64,7 @@ impl Coordinator {
 
     /// True iff `spell_id` is a FISHING cast (taxonomy `E_FISH` 0x1C — the three tier ids carry a
     /// synthesized marker effect row). Kind-routed like `enchant_route`/`spell_is_ground_area`.
-    pub fn spell_is_fishing(&self, spell_id: u32) -> bool {
+    fn spell_is_fishing(&self, spell_id: u32) -> bool {
         const E_FISH: u8 = 0x1C; // lockstep with module taxonomy
         self.0
             .coord()
@@ -211,7 +78,7 @@ impl Coordinator {
     /// True iff `spell_id` is an OPEN-LOCK cast (taxonomy `E_OPEN_LOCK` 0x1D — Pick Lock 1804). Routed to
     /// the `pick_lock` reducer, gateway-intercepted exactly like `spell_is_fishing`/`enchant_route`. The
     /// GO guid the pick targets rides the cast's SpellCastTargets (GAMEOBJECT flag).
-    pub fn spell_is_open_lock(&self, spell_id: u32) -> bool {
+    fn spell_is_open_lock(&self, spell_id: u32) -> bool {
         const E_OPEN_LOCK: u8 = 0x1D; // lockstep with module taxonomy
         self.0
             .coord()
@@ -232,7 +99,7 @@ impl Coordinator {
     /// E_NEXT_SWING). The CMSG_CAST_SPELL handler then sends NO synchronous START/CAST_RESULT/GO: the
     /// 5875 client lights the button locally on the press and holds it as a pending cast until the
     /// swing-fire GO arrives. Kind value LOCKSTEP with module taxonomy.rs::E_NEXT_SWING (0x13).
-    pub fn spell_queues_next_swing(&self, spell_id: u32) -> bool {
+    fn spell_queues_next_swing(&self, spell_id: u32) -> bool {
         const E_NEXT_SWING: u8 = 0x13;
         let guard = self.0.coord();
         let queues = guard
@@ -248,7 +115,7 @@ impl Coordinator {
     /// `SPELL_ATTR_RANGED_AUTO_REPEAT` cast_flags bit set by the importer (from the DBC AttributesEx2
     /// AUTOREPEAT bit / by name). The CMSG_CAST_SPELL handler routes on this instead of a hardcoded
     /// `spell == 75 || 5019` id list, so a new ranged auto-repeat ability onboards as data.
-    pub fn spell_is_ranged_auto_repeat(&self, spell_id: u32) -> bool {
+    fn spell_is_ranged_auto_repeat(&self, spell_id: u32) -> bool {
         const SPELL_ATTR_RANGED_AUTO_REPEAT: u32 = 0x0200; // lockstep with importer::spell.rs
         let guard = self.0.coord();
         guard
@@ -261,7 +128,7 @@ impl Coordinator {
     }
 
     /// Read an item template by entry for a `CMSG_ITEM_QUERY_SINGLE` reply.
-    pub fn item_template(&self, entry: u32) -> Result<Option<crate::codec::ItemTemplateView>> {
+    fn item_template(&self, entry: u32) -> Result<Option<crate::codec::ItemTemplateView>> {
         Ok(self
             .0
             .coord()
@@ -276,15 +143,7 @@ impl Coordinator {
     /// Start the player's RANGED auto-attack on `target_guid` with `spell_id` (75 Auto Shot / 5019 Shoot)
     /// over the coordinator connection so the module attributes the shot to the caller.
     /// Rides the coordinator connection as `gw_ranged_attack`.
-    pub fn start_ranged_attack(
-        &self,
-        _account_id: u64,
-        actor_guid: u64,
-        target_guid: u64,
-        spell_id: u32,
-    ) -> Result<()> {
-        let actor = Actor::new(actor_guid)
-            .ok_or_else(|| anyhow!("start_ranged_attack: actor_guid unresolved"))?;
+    fn start_ranged_attack(&self, actor: Actor, target_guid: u64, spell_id: u32) -> Result<()> {
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
@@ -296,15 +155,7 @@ impl Coordinator {
     /// Cast a spell (`CMSG_CAST_SPELL`, aura tracer) over the coordinator connection so the module
     /// attributes the cast to the caller. `target_guid` is the client's selected unit (0 = none/self →
     /// the module substitutes the caster), threaded so target-keyed effects see the real target.
-    pub fn cast_spell(
-        &self,
-        _account_id: u64,
-        actor_guid: u64,
-        spell_id: u32,
-        target_guid: u64,
-    ) -> Result<()> {
-        let actor =
-            Actor::new(actor_guid).ok_or_else(|| anyhow!("cast_spell: actor_guid unresolved"))?;
+    fn cast_spell(&self, actor: Actor, spell_id: u32, target_guid: u64) -> Result<()> {
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
@@ -314,15 +165,7 @@ impl Coordinator {
     }
 
     /// Resolve an item-target cast through the module's generic item-effect seam.
-    pub fn cast_item_target(
-        &self,
-        _account_id: u64,
-        actor_guid: u64,
-        spell_id: u32,
-        slot: u8,
-    ) -> Result<()> {
-        let actor = Actor::new(actor_guid)
-            .ok_or_else(|| anyhow!("cast_item_target: actor_guid unresolved"))?;
+    fn cast_item_target(&self, actor: Actor, spell_id: u32, slot: u8) -> Result<()> {
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
@@ -336,18 +179,15 @@ impl Coordinator {
     /// the ground click so the module anchors the AoE/patch there.
     // The ground point rides flat because it mirrors the `gw_cast_spell_at` reducer signature.
     #[allow(clippy::too_many_arguments)]
-    pub fn cast_spell_at(
+    fn cast_spell_at(
         &self,
-        _account_id: u64,
-        actor_guid: u64,
+        actor: Actor,
         spell_id: u32,
         target_guid: u64,
         x: f32,
         y: f32,
         z: f32,
     ) -> Result<()> {
-        let actor = Actor::new(actor_guid)
-            .ok_or_else(|| anyhow!("cast_spell_at: actor_guid unresolved"))?;
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
@@ -358,9 +198,7 @@ impl Coordinator {
 
     /// Cancel one of the caller's own auras by spell id (`CMSG_CANCEL_AURA`) over the coordinator
     /// connection so the module attributes the removal to the caller.
-    pub fn cancel_aura(&self, _account_id: u64, actor_guid: u64, spell_id: u32) -> Result<()> {
-        let actor =
-            Actor::new(actor_guid).ok_or_else(|| anyhow!("cancel_aura: actor_guid unresolved"))?;
+    fn cancel_aura(&self, actor: Actor, spell_id: u32) -> Result<()> {
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
@@ -371,9 +209,7 @@ impl Coordinator {
 
     /// Cancel the caller's in-progress cast (`CMSG_CANCEL_CAST`) over the coordinator connection so the
     /// module clears the caller's pending cast — no phantom completion GO.
-    pub fn cancel_cast(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
-        let actor =
-            Actor::new(actor_guid).ok_or_else(|| anyhow!("cancel_cast: actor_guid unresolved"))?;
+    fn cancel_cast(&self, actor: Actor) -> Result<()> {
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
@@ -382,9 +218,7 @@ impl Coordinator {
         )
     }
 
-    pub fn disenchant_item(&self, _account_id: u64, actor_guid: u64, slot: u8) -> Result<()> {
-        let actor = Actor::new(actor_guid)
-            .ok_or_else(|| anyhow!("disenchant_item: actor_guid unresolved"))?;
+    fn disenchant_item(&self, actor: Actor, slot: u8) -> Result<()> {
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
@@ -393,15 +227,7 @@ impl Coordinator {
         )
     }
 
-    pub fn enchant_item_on_slot(
-        &self,
-        _account_id: u64,
-        actor_guid: u64,
-        slot: u8,
-        enchant_id: u32,
-    ) -> Result<()> {
-        let actor = Actor::new(actor_guid)
-            .ok_or_else(|| anyhow!("enchant_item_on_slot: actor_guid unresolved"))?;
+    fn enchant_item_on_slot(&self, actor: Actor, slot: u8, enchant_id: u32) -> Result<()> {
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
@@ -412,8 +238,7 @@ impl Coordinator {
 
     /// Fishing cast: instant-resolve catch — the module's lenient alpha gate auto-learns the
     /// skill and grants the fish straight to the bag. Caller resolved via ctx.sender.
-    pub fn fish(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
-        let actor = Actor::new(actor_guid).ok_or_else(|| anyhow!("fish: actor_guid unresolved"))?;
+    fn fish(&self, actor: Actor) -> Result<()> {
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
@@ -425,14 +250,21 @@ impl Coordinator {
     /// Pick Lock: unlock the locked GameObject `go_guid` over the coordinator connection (so the
     /// module attributes the pick to the caller via ctx.sender). The module gates range / lock
     /// requirement / Lockpicking skill; on success it records the GO unlocked + climbs the skill.
-    pub fn pick_lock(&self, _account_id: u64, actor_guid: u64, go_guid: u64) -> Result<()> {
-        let actor =
-            Actor::new(actor_guid).ok_or_else(|| anyhow!("pick_lock: actor_guid unresolved"))?;
+    fn pick_lock(&self, actor: Actor, go_guid: u64) -> Result<()> {
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_pick_lock",
             gw_pick_lock_then(self.session_actor(actor), go_guid)
         )
+    }
+
+    // The shared reads stay inherent: vendor and the Character reads call them too.
+    fn item_slot_by_guid(&self, account_id: u64, item_guid: u64) -> Option<u8> {
+        Coordinator::item_slot_by_guid(self, account_id, item_guid)
+    }
+
+    fn player_items(&self, owner_guid: u64) -> Result<Vec<codec::ItemInstanceView>> {
+        Coordinator::player_items(self, owner_guid)
     }
 }
