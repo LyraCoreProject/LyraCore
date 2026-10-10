@@ -5,8 +5,8 @@ body:
   - type: markdown
     attributes:
       value: |
-        If you are not sure yet whether this is a good idea, **GitHub Discussions** is the cheaper
-        place to find out. An issue is for a proposal you can state as a change.
+        An issue is for a proposal you can state as a change. Gameplay that 1.12.1 does not have
+        belongs in a Package; see [Building on top](https://github.com/LyraCoreProject/LyraCore/blob/main/CONTRIBUTING.md#building-on-top).
 
         Out of scope for this alpha, and closed as such: public/VPS hosting as a supported product,
         Windows/WSL support, clients other than build 5875, and anything requiring redistributed
@@ -56,7 +56,7 @@ body:
     id: verification
     attributes:
       label: How would this be verified
-      description: "Which rung of the ladder proves it: a unit test, `spacetime sql` server state, a wire-harness assertion, or a human on a real client (`needs-live-eyeball`)? A feature that can only be confirmed by eye costs a scarce resource here — say so up front."
+      description: "Which rung of the ladder proves it: a unit test, `spacetime sql` server state, a wire-harness assertion, or a human on a real client? A feature that can only be confirmed by eye costs a scarce resource here, so say so up front."
     validations:
       required: false
 
