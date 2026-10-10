@@ -39,9 +39,9 @@
 # names and planned maps intentionally carry no rectangles or samples: world_import_scope.rs is the
 # sole catalogue for spatial scope. The map lists are only the script's post-import ownership check.
 WORLD_PROFILES="alliance-eastern alliance-kalimdor alliance-single instances"
-PROFILE_ALLIANCE_EASTERN_MAPS="0"
+PROFILE_ALLIANCE_EASTERN_MAPS="0 369"
 PROFILE_ALLIANCE_KALIMDOR_MAPS="1"
-PROFILE_ALLIANCE_SINGLE_MAPS="0 1 36"
+PROFILE_ALLIANCE_SINGLE_MAPS="0 1 36 369"
 PROFILE_INSTANCES_MAPS="36"
 
 # MAP-AWARENESS: every count floor below is tuned to the MAP-0 Elwynn/Westfall box. A continent import

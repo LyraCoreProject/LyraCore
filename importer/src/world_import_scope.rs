@@ -160,7 +160,7 @@ impl WorldImportScope {
         let (bounded_slices, whole_maps, instance_vmap_slices, forced_creature_entries) =
             match profile {
                 WorldImportProfile::AllianceEastern => {
-                    (eastern()?, vec![], vec![], eastern_forced_creatures())
+                    (eastern()?, vec![369], vec![], eastern_forced_creatures())
                 }
                 WorldImportProfile::AllianceKalimdor => (kalimdor()?, vec![], vec![], vec![]),
                 WorldImportProfile::StartingEastern => {
@@ -171,7 +171,7 @@ impl WorldImportScope {
                         (1_300.0, 2_300.0, 900.0, 2_200.0),
                         (1_814.55, 1_485.20, 90.66),
                     )?);
-                    (slices, vec![], vec![], eastern_forced_creatures())
+                    (slices, vec![369], vec![], eastern_forced_creatures())
                 }
                 WorldImportProfile::StartingKalimdor => {
                     let mut slices = kalimdor()?;
@@ -192,7 +192,12 @@ impl WorldImportScope {
                 WorldImportProfile::AllianceSingle => {
                     let mut slices = eastern()?;
                     slices.extend(kalimdor()?);
-                    (slices, vec![36], deadmines(), eastern_forced_creatures())
+                    (
+                        slices,
+                        vec![36, 369],
+                        deadmines(),
+                        eastern_forced_creatures(),
+                    )
                 }
                 WorldImportProfile::Instances => (vec![], vec![36], deadmines(), vec![]),
             };
@@ -511,7 +516,7 @@ mod tests {
             .expect("eastern profile");
         assert_eq!(eastern.name(), "alliance-eastern");
         assert_eq!(eastern.bounded_slices.len(), 3);
-        assert!(eastern.whole_maps.is_empty());
+        assert_eq!(eastern.whole_maps, vec![369]);
         assert!(eastern.instance_vmap_slices.is_empty());
         assert_eq!(
             eastern.forced_creature_entries,
@@ -530,7 +535,7 @@ mod tests {
         let single = WorldImportScope::canonical(WorldImportProfile::AllianceSingle)
             .expect("single profile");
         assert_eq!(single.bounded_slices.len(), 5);
-        assert_eq!(single.whole_maps, vec![36]);
+        assert_eq!(single.whole_maps, vec![36, 369]);
         assert_eq!(single.instance_vmap_slices.len(), 1);
         assert_eq!(
             single.forced_creature_entries,

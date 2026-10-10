@@ -7757,6 +7757,58 @@ mod tests {
     }
 
     #[test]
+    fn canonical_profiles_import_deeprun_tram_objects_only_on_the_serving_shard() {
+        let dump = "INSERT INTO `gameobject_template` VALUES \
+            (500,5,100,'Station Prop',0,0,0,1,0,0,0,0),\
+            (501,5,101,'Tunnel Prop',0,0,0,1,0,0,0,0),\
+            (502,5,102,'Other Map Prop',0,0,0,1,0,0,0,0); \
+            INSERT INTO `gameobject` VALUES \
+            (10,500,369,0,10,20,-5,0,0,0,0,1),\
+            (11,501,369,0,10,2200,-5,0,0,0,0,1),\
+            (12,502,370,0,10,20,-5,0,0,0,0,1);";
+
+        for (profile, serves_tram) in [
+            ("alliance-eastern", true),
+            ("starting-eastern", true),
+            ("alliance-single", true),
+            ("alliance-kalimdor", false),
+            ("starting-kalimdor", false),
+            ("instances", false),
+        ] {
+            let args = parse_args_from([
+                "--dump",
+                "synthetic.sql",
+                "--family",
+                "gameobjects",
+                "--world-profile",
+                profile,
+            ])
+            .expect("profile command");
+            let plan = build_dump_plan(dump, &args, &None, &None).expect("profile dump plan");
+            let expected_count = if serves_tram { 2 } else { 0 };
+            assert_eq!(plan.go_row_count, expected_count, "{profile} spawn count");
+            let spawns = plan.go_batches.join(";");
+            let templates = plan.stmts.join(";");
+            for (entry, display, name, y) in [
+                (500, 100, "Station Prop", 20),
+                (501, 101, "Tunnel Prop", 2200),
+            ] {
+                assert_eq!(
+                    spawns.contains(&format!(",{entry},369,10,{y},-5,0,0,0,0,0,1")),
+                    serves_tram,
+                    "{profile} spawn {entry} keeps its map, position and rotation"
+                );
+                assert_eq!(
+                    templates.contains(&format!("({entry},5,{display},'{name}',")),
+                    serves_tram,
+                    "{profile} includes the template for spawn {entry}"
+                );
+            }
+            assert!(!templates.contains("'Other Map Prop'"), "{profile}");
+        }
+    }
+
+    #[test]
     fn canonical_eastern_command_keeps_two_disjoint_map_zero_corridors_and_drops_the_gap() {
         let dump = format!(
             "INSERT INTO `creature` VALUES \

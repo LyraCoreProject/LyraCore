@@ -51,6 +51,7 @@ checkout="$sandbox/checkout"
 mkdir -p "$checkout/importer/scripts" "$checkout/target/debug"
 cp "$repo_root/importer/scripts/import-world.sh" "$checkout/importer/scripts/import-world.sh"
 cp "$repo_root/importer/scripts/import-manifest.sh" "$checkout/importer/scripts/import-manifest.sh"
+cp "$repo_root/importer/scripts/classic-db.lock" "$checkout/importer/scripts/classic-db.lock"
 cp "$repo_root/importer/scripts/import-class-spells.sh" "$checkout/importer/scripts/import-class-spells.sh"
 chmod +x "$checkout/importer/scripts/import-world.sh" "$checkout/importer/scripts/import-class-spells.sh"
 under_test="$checkout/importer/scripts/import-world.sh"
@@ -194,7 +195,7 @@ echo "import-world.sh — canonical profile argument"
 STUB_MODE=succeed STUB_ROW_COUNT=150 WORLD_PROFILE=alliance-single run_import
 check "the profile run reaches the assertion stage" not_contains "$out" '[world] ABORT'
 check "the profile is displayed with all of its planned maps" \
-    contains "$out" 'canonical profile alliance-single (planned maps: 0 1 36)'
+    contains "$out" 'canonical profile alliance-single (planned maps: 0 1 36 369)'
 check "the dump ETL receives the canonical profile name" \
     grep -q -- 'lyracore-importer .*--world-profile alliance-single' "$stub_log"
 check "the dump ETL does not recreate a profile as legacy spatial flags" \
