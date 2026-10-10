@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { buildPackageScripts } from "../runtime-scripts/build-scripts.ts";
 
 const PACKAGE = "example";
@@ -27,15 +27,15 @@ async function scratch(run: (dir: string, build: () => Promise<Artifact>) => Pro
   }
 }
 
-function priorArtifact(dir: string, filename: string, ids: Record<string, number>): void {
+function priorArtifact(dir: string, filename: string, ids: Record<string, number>, packageName = PACKAGE): void {
   writeFileSync(join(dir, "data/.generated", filename), JSON.stringify({
     kind: "script",
     version: 1,
-    package: PACKAGE,
+    package: packageName,
     source_hash: "0".repeat(64),
     scripts: Object.entries(ids).map(([stem, script_id]) => ({
       script_id,
-      name: `${PACKAGE}.${stem}`,
+      name: `${packageName}.${stem}`,
       event: "on_login",
       priority: 0,
       enabled: true,
@@ -99,6 +99,102 @@ test("legacy directives reserve IDs before an earlier new source allocates", asy
     await build();
 
     expect(ledger(dir)).toEqual({ s101: 941146, zlegacy: 941145 });
+  });
+});
+
+test("two Packages with the same initial ID keep distinct recorded IDs on rebuild", async () => {
+  await scratch(async (dir, build) => {
+    const sibling = join(dirname(dir), "another");
+    mkdirSync(join(sibling, "scripts"), { recursive: true });
+    writeFileSync(join(sibling, "scripts/s1204858.lua"), SOURCE);
+    writeFileSync(join(dir, "scripts/s101.lua"), SOURCE);
+
+    await buildPackageScripts("another");
+    const first = await build();
+
+    expect(ledger(sibling)).toEqual({ s1204858: 941145 });
+    expect(ledger(dir)).toEqual({ s101: 941146 });
+    await buildPackageScripts("another");
+    expect(await build()).toEqual(first);
+    expect(ledger(sibling)).toEqual({ s1204858: 941145 });
+  });
+});
+
+test("a sibling's removed source keeps its ID reserved in the ledger", async () => {
+  await scratch(async (dir, build) => {
+    const sibling = join(dirname(dir), "another");
+    mkdirSync(sibling);
+    const saved = JSON.stringify({ version: 1, package: "another", ids: { retired: 941145 } });
+    writeFileSync(join(sibling, "script-ids.json"), saved);
+    writeFileSync(join(dir, "scripts/s101.lua"), SOURCE);
+
+    await build();
+
+    expect(ledger(dir)).toEqual({ s101: 941146 });
+    expect(readFileSync(join(sibling, "script-ids.json"), "utf8")).toBe(saved);
+  });
+});
+
+test.each([
+  ["legacy.lua", "-- @event on_login\n-- @id 941145\nreturn\n"],
+  ["legacy.ts", "// @event on_login\n// @id 941145\nfunction script(): void {}\n"],
+])("a sibling's %s reserves its legacy ID before compilation", async (file, source) => {
+  await scratch(async (dir, build) => {
+    const sibling = join(dirname(dir), "another");
+    mkdirSync(join(sibling, "scripts"), { recursive: true });
+    writeFileSync(join(sibling, "scripts", file), source);
+    writeFileSync(join(dir, "scripts/s101.lua"), SOURCE);
+
+    await build();
+
+    expect(ledger(dir)).toEqual({ s101: 941146 });
+    expect(readFileSync(join(sibling, "scripts", file), "utf8")).toBe(source);
+  });
+});
+
+test("a source-free sibling artifact reserves IDs without a ledger", async () => {
+  await scratch(async (dir, build) => {
+    const sibling = join(dirname(dir), "another");
+    mkdirSync(join(sibling, "data/.generated"), { recursive: true });
+    priorArtifact(sibling, "personality.json", { welcome: 941145 }, "another");
+    writeFileSync(join(dir, "scripts/s101.lua"), SOURCE);
+
+    await build();
+
+    expect(ledger(dir)).toEqual({ s101: 941146 });
+  });
+});
+
+test("Package directory symlinks reserve their recorded IDs", async () => {
+  await scratch(async (dir, build) => {
+    const collection = join(dirname(dir), ".collection", "another");
+    mkdirSync(collection, { recursive: true });
+    writeFileSync(join(collection, "script-ids.json"), JSON.stringify({
+      version: 1, package: "another", ids: { retired: 941145 },
+    }));
+    symlinkSync(collection, join(dirname(dir), "another"), "dir");
+    writeFileSync(join(dir, "scripts/s101.lua"), SOURCE);
+
+    await build();
+
+    expect(ledger(dir)).toEqual({ s101: 941146 });
+  });
+});
+
+test("contradictory recorded IDs name both Packages and leave their identities intact", async () => {
+  await scratch(async (dir, build) => {
+    const sibling = join(dirname(dir), "another");
+    mkdirSync(sibling);
+    const currentIds = JSON.stringify({ version: 1, package: PACKAGE, ids: { s101: 941145 } });
+    const siblingIds = JSON.stringify({ version: 1, package: "another", ids: { retired: 941145 } });
+    writeFileSync(join(dir, "script-ids.json"), currentIds);
+    writeFileSync(join(sibling, "script-ids.json"), siblingIds);
+    writeFileSync(join(dir, "scripts/s101.lua"), SOURCE);
+
+    await expect(build()).rejects.toThrow(/another\.retired collides with example\.s101.*941145/);
+
+    expect(readFileSync(join(dir, "script-ids.json"), "utf8")).toBe(currentIds);
+    expect(readFileSync(join(sibling, "script-ids.json"), "utf8")).toBe(siblingIds);
   });
 });
 
