@@ -1293,8 +1293,7 @@ fn the_export_loop_hands_each_mover_the_transferring_guid() {
     );
     assert!(
         decoded::<GearRow>(&nobody, "harness_gear").is_empty(),
-        "guid 0 owns nothing, so it must export nothing — `export_rows` handing every mover a \
-             the reaper must use the escrow's actual Character guid"
+        "the reaper must use the Escrow's Character guid; guid 0 owns no rows"
     );
     assert!(
         !mine.iter().any(|t| t.table == "game_transfer_out"),
