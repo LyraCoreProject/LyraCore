@@ -1,6 +1,5 @@
 //! Per-cell collision triangles and exact segment-triangle ray queries.
-//! See `docs/decisions.md` section 10 for why line of sight uses WMO triangles while collision
-//! also uses M2 doodads. A versioned blob carries source metadata for both ray flavors.
+//! Line of sight uses WMO triangles; collision also uses M2 doodads. A versioned blob carries source metadata for both ray flavors.
 //! Queries walk only the terrain cells the segment crosses with a two-dimensional DDA.
 
 /// Blob format version. Bump on any layout change; `decode` rejects a mismatch rather than guess.

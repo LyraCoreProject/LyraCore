@@ -1,7 +1,7 @@
 //! Client geometry extraction for `--vmap` and `--vmap-prepare-coverage`.
 //! Tile scans reuse nav mesh loading and placement calibration. Collision triangles use full
 //! rotation and the shared per-cell codec. `--apply` sends bounded batches to the import reducers.
-//! Client bytes stay in memory. See `docs/decisions.md` section 10 for the geometry policy.
+//! Client bytes stay in memory.
 
 use anyhow::{bail, Context, Result};
 use lyracore_shared::terrain::cell_key;

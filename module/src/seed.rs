@@ -2034,7 +2034,7 @@ mod tests {
 
     /// The live probe's premise: its two stamina buffs share one magnitude-compared family and its
     /// two Blessings share the per-caster family. A membership or rule edit that breaks either pairing
-    /// would leave `docs/aura-stacking-probes.md` describing an outcome the module no longer produces.
+    /// would leave `docs/verification/aura-stacking-probes.md` describing an outcome the module no longer produces.
     #[test]
     fn the_live_probe_fixture_spells_sit_in_the_families_the_probe_documents() {
         let family_of = |spell_id: u32| {

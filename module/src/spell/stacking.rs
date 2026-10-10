@@ -896,7 +896,7 @@ mod tests {
     }
 
     /// One player target's `(category)` DR state driven through the PRODUCTION policy fns — the
-    /// in-process twin of the live probe in `docs/cc-diminishing-returns.md`, so the ladder, the window
+    /// in-process twin of the live probe in `docs/verification/cc-diminishing-returns-probe.md`, so the ladder, the window
     /// stamping and the level agreement are asserted without a `ReducerContext`.
     struct DrProbe {
         row: Option<DrWindow>,

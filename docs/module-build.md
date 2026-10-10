@@ -2,7 +2,7 @@
 
 `module/build.rs` discovers Package modules and generates registration arrays in `$OUT_DIR`.
 It scans Rust files in `module/src/` and each installed `packages/<name>/src/` directory.
-`packages/example/` is the maintained reference Package and does not enable `has_packages`.
+Any installed Package enables the `has_packages` cfg. Core ships no enabled Packages.
 
 A Package supplies `src/mod.rs` and any sibling modules. Discovery generates `package_mods.rs`
 with a `pkg_<name>` module for each Package, so installing one requires no Core source edit.

@@ -1,4 +1,4 @@
-//! Nav grid: walkability + line-of-sight obstruction data See `docs/decisions.md` section 8.
+//! Nav grid: walkability and line-of-sight obstruction data.
 //!
 //! One row per terrain MCNK cell that has ANY obstruction, steep slope, or hole — fully-clear
 //! cells emit no row, so a missing chunk means "no obstacles known here" and every reader keeps

@@ -29,8 +29,7 @@
 //!   --nav <client Data/ dir>        WMO/M2 nav-grid rasterizer (nav.rs)
 //!   --vmap <client Data/ dir>       exact bounded collision-triangle extract + pack + import
 //!                                   (--apply loads `game_vmap_chunk` via import_vmap_chunks; a
-//!                                   dry run stops at report, vmap.rs,
-//!                                   docs/decisions.md §10)
+//!                                   dry run stops at report, vmap.rs)
 //!   --vmap-prepare-coverage <id>    derive path-grid coverage for an already-staged vmap
 //!                                   generation (--apply calls prepare_/finalize_vmap_nav_coverage,
 //!                                   resumable; a dry run reports the plan) — vmap.rs::run_coverage

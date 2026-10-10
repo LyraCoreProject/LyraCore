@@ -1313,7 +1313,7 @@ fn every_subscribed_table_in_connection_rs_has_a_parity_manifest_entry() {
         "connection.rs subscribes {missing:?} but gateway/tests/schema_parity.rs has no \
          `parity_test!` line for it — add one (copy the pattern from any existing entry above) \
          AND add the table name to MANIFEST_TABLES, or a gateway binding drift on this table will \
-         break live BSATN decode silently. See docs/agent-playbook.md failure-mode §1."
+         break live BSATN decode silently."
     );
 }
 
