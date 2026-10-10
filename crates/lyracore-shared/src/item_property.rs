@@ -27,27 +27,20 @@ pub const DODGE: u8 = 23;
 pub const PARRY: u8 = 24;
 pub const BLOCK: u8 = 25;
 
-/// Authored compatibility entries, separate from client enchantment IDs.
-/// Existing stored items and synthetic enchanting spells use these meanings.
-pub const COMPATIBILITY_ENCHANTMENTS: [(u32, u8, i32); 2] =
-    [(7745, STRENGTH, 3), (7748, STAMINA, 3)];
+/// Authored compatibility entries as `(stored, client, kind, amount)`. Stored items and synthetic
+/// enchanting spells use the stored ID, which the build 5875 client catalogue lacks. The Gateway
+/// sends the client ID instead: the Enchanting result with the same Stat Kind and amount. Random
+/// Properties own 70 and 73, which show the same text.
+pub const COMPATIBILITY_ENCHANTMENTS: [(u32, u32, u8, i32); 2] =
+    [(7745, 823, STRENGTH, 3), (7748, 724, STAMINA, 3)];
 
-/// Client enchantment ID for +3 Strength. It is the ID the Enchant Bracer - Lesser Strength spell
-/// applies, so players read it as the Enchanting result. Random Properties own 70 for the same text.
-const CLIENT_STRENGTH_3: u32 = 823;
-/// Client enchantment ID for +3 Stamina. It is the ID the Lesser Stamina Enchanting spells apply.
-/// Random Properties own 73 for the same text.
-const CLIENT_STAMINA_3: u32 = 724;
-
-/// The enchantment ID the client resolves for a stored enchantment ID. The client catalogue does
-/// not hold the compatibility entries, so each maps to a client entry with the same Stat Kind and
-/// amount. Every other ID, including 0, passes through. Stored IDs never change.
+/// The enchantment ID the client resolves for a stored enchantment ID. Every ID outside
+/// `COMPATIBILITY_ENCHANTMENTS`, including 0, passes through. Stored IDs never change.
 pub fn client_enchantment_id(stored: u32) -> u32 {
-    match stored {
-        7745 => CLIENT_STRENGTH_3,
-        7748 => CLIENT_STAMINA_3,
-        other => other,
-    }
+    COMPATIBILITY_ENCHANTMENTS
+        .iter()
+        .find(|&&(id, ..)| id == stored)
+        .map_or(stored, |&(_, client, ..)| client)
 }
 
 #[cfg(test)]
@@ -64,13 +57,6 @@ mod tests {
     fn other_ids_pass_through() {
         for id in [0, 7, 2564, 7746, 823, 724] {
             assert_eq!(client_enchantment_id(id), id);
-        }
-    }
-
-    #[test]
-    fn every_compatibility_entry_has_a_client_id() {
-        for (id, _, _) in COMPATIBILITY_ENCHANTMENTS {
-            assert_ne!(client_enchantment_id(id), id, "compatibility id {id}");
         }
     }
 }

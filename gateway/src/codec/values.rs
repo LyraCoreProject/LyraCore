@@ -559,10 +559,9 @@ pub fn build_item_values(guid: u64, stack_count: u32, durability: u32) -> SMSG_U
     }
 }
 
-/// Build a VALUES partial-update setting an ITEM object's permanent enchantment word, so an
-/// in-place enchant shows LIVE. `client_enchant_id` is the ID the client resolves, 0 for none. Item
-/// mask + the same `dirty_reset` discipline as [`build_item_values`] (never re-sends
-/// OBJECT_FIELD_TYPE).
+/// A VALUES update of an item's permanent enchantment word, so an in-place enchant shows without a
+/// relog. `client_enchant_id` is the ID the client resolves, 0 for none. Like
+/// [`build_item_values`], it never re-sends OBJECT_FIELD_TYPE.
 pub fn build_item_enchantment_values(guid: u64, client_enchant_id: u32) -> SMSG_UPDATE_OBJECT {
     let mut item = UpdateItem::builder().finalize();
     item.dirty_reset();

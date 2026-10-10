@@ -154,18 +154,6 @@ pub(crate) fn visible_item_of(item: &ItemInstanceView) -> VisibleItem {
     }
 }
 
-/// Build the `SMSG_UPDATE_OBJECT` CREATE_OBJECT2 block for an entity (Phase 4 self-spawn /
-/// Phase 6 first-sighting). The `wow_world_messages` update-mask builder owns the descriptor
-/// bit indices, packed-guid encoding, and the movement-block layout — so the gateway only maps
-/// the row's values to typed setters. The row's packed bytes (`unit_bytes_0`, `player_bytes*`)
-/// are unpacked here into the typed values the builder wants.
-///
-/// `inventory` (items slices 1–2) is the owner's item views, each at its `slot` ordinal. Each seeds the
-/// player's `PLAYER_FIELD_INV_SLOT_*` descriptor (the slot→guid pointer, ANY slot — gtker's typed
-/// `set_player_field_inv(ItemSlot, Guid)` is not walled like the aura array); and for an EQUIPMENT
-/// slot (0..=18) it ALSO sets `PLAYER_VISIBLE_ITEM[slot]` to the item ENTRY, Random Property and
-/// permanent enchantment so the 3D character model renders the gear and the paperdoll tooltip shows
-/// its enchant. Only applied for a player CREATE; pass `&[]` for creatures.
 /// The per-class STATIC skill base (spec schools + weapons + language) — the login CREATE's slot
 /// layout starts from this. Shared with the live skill relay so a line's PLAYER_SKILL_INFO
 /// slot NEVER moves mid-session (the client keys the pane rows on the slot index).
@@ -305,6 +293,13 @@ pub fn skill_slot_layout(class_b: u8, learned: &[(u32, u16, u16)]) -> Vec<(Skill
     lines
 }
 
+/// Build the `SMSG_UPDATE_OBJECT` CREATE_OBJECT2 block for an entity's self-spawn or first
+/// sighting. The `wow_world_messages` update-mask builder owns the descriptor bit indices, the
+/// packed GUID and the movement block, so this only maps the row's values to typed setters.
+///
+/// Each `inventory` view sets the player's `PLAYER_FIELD_INV_SLOT_*` pointer for its slot. An
+/// equipment slot (0..=18) also sets `PLAYER_VISIBLE_ITEM`, so the character model renders the gear
+/// and the paperdoll tooltip shows its enchant. Pass `&[]` for a creature.
 pub fn build_create_object(
     entity: &EntityView,
     kind: CreateKind,
@@ -476,12 +471,8 @@ pub fn build_create_object(
                     builder.set_player_skill_info(SkillInfo::new(skill, 0, min, max, 0, 0), idx);
             }
         }
-        // Items slices 1–2: point the player's inventory-slot descriptors at the items it carries, so
-        // the client renders them in those slots. `set_player_field_inv` writes the 2-word guid at
-        // `PLAYER_FIELD_INV_SLOT_HEAD + slot*2`. An unknown slot ordinal is skipped (never panics).
-        // For an EQUIPMENT slot (0..=18) also set PLAYER_VISIBLE_ITEM[slot] to the item ENTRY — that
-        // descriptor is what makes the weapon/armor appear ON the 3D character model (slice-2). Both
-        // are full-CREATE-mask fields (OBJECT_FIELD_TYPE belongs here), so no dirty_reset concern.
+        // An unknown slot ordinal is skipped. Both descriptors sit in the full CREATE mask, so no
+        // dirty_reset applies.
         for item in inventory {
             if let Ok(s) = ItemSlot::try_from(item.slot) {
                 builder = builder.set_player_field_inv(s, Guid::new(item.guid));

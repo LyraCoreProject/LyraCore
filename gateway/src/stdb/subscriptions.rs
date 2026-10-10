@@ -17,6 +17,7 @@
 use crate::codec::{self, CreateKind};
 use crate::world::{Outbound, SessionTx};
 use anyhow::{anyhow, Result};
+use lyracore_shared::item_property::client_enchantment_id;
 use spacetimedb_sdk::Table;
 use std::collections::HashSet;
 use std::sync::atomic::Ordering;
@@ -28,6 +29,7 @@ use wow_world_messages::vanilla::{AuctionHouse, Vector3d, WeatherChangeType};
 use super::aoi::ViewerGates;
 use super::bindings::*;
 use super::connection::Coordinator;
+use super::reads::view_of_item_row;
 use super::views::{corpse_view, entity_view, go_view, hunter_pet_protocol_view};
 use super::world_index::{CellKey, EntityLayer};
 use super::world_view::{self, Viewer, WorldView};
@@ -2166,7 +2168,7 @@ fn trade_offer_extended(
             item: v.entry,
             display_id: v.display_id,
             stack_count: v.stack_count,
-            enchantment: lyracore_shared::item_property::client_enchantment_id(v.enchantment),
+            enchantment: client_enchantment_id(v.enchantment),
             item_random_properties_id: v.random_property_id,
             max_durability: v.max_durability,
             durability: v.durability,
@@ -3545,18 +3547,11 @@ pub(crate) fn item_instance_insert_outbound(
         .map(|t| (t.max_durability, t.container_slots))
         .unwrap_or((row.durability, 0));
     let view = codec::ItemInstanceView {
-        guid: row.guid,
-        entry: row.entry,
-        owner_guid: row.owner_guid,
-        slot: row.slot,
-        stack_count: row.stack_count,
-        durability: row.durability,
         max_durability,
         container_slots,
-        random_property_id: row.random_property_id,
         random_property_enchant_ids: super::reads::property_enchant_ids(db, row.random_property_id),
-        item_text_id: row.item_text_id,
         enchantment,
+        ..view_of_item_row(row)
     };
     out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
         Box::new(codec::build_item_create_object(&view)),
@@ -3671,7 +3666,7 @@ pub(crate) fn item_instance_update_outbound(
             db.game_item_instance()
                 .iter()
                 .find(|item| item.owner_guid == self_guid && item.slot == slot)
-                .map(|item| look_of_item_row(&item))
+                .map(|item| view_of_item_row(&item))
         });
     }
     out.extend(enchant_change_outbound(self_guid, old, row));
@@ -3696,39 +3691,27 @@ pub(crate) fn item_instance_update_outbound(
     out
 }
 
-/// The parts of an item row that a slot descriptor or a visible item shows. The enchantment is the
-/// ID the client resolves.
-fn look_of_item_row(row: &ItemInstance) -> codec::ItemInstanceView {
-    codec::ItemInstanceView {
-        guid: row.guid,
-        entry: row.entry,
-        slot: row.slot,
-        random_property_id: row.random_property_id,
-        enchantment: lyracore_shared::item_property::client_enchantment_id(row.enchant_id),
-        ..Default::default()
-    }
-}
-
 /// An in-place permanent enchant change: the item's enchantment word and, for worn gear that did
-/// not change slot, its visible item. A change of slot is covered by the slot projection. Empty
-/// when the enchant did not change.
+/// not change slot, its visible item. The slot projection covers a change of slot. Empty when the
+/// enchant did not change, and for a Guild Charter, whose word holds its Petition id.
 fn enchant_change_outbound(
     self_guid: u64,
     old: &ItemInstance,
     row: &ItemInstance,
 ) -> Vec<Outbound> {
-    if old.enchant_id == row.enchant_id {
+    if old.enchant_id == row.enchant_id || row.entry == lyracore_shared::guild::GUILD_CHARTER_ENTRY
+    {
         return Vec::new();
     }
-    let look = look_of_item_row(row);
+    let view = view_of_item_row(row);
     let mut out = vec![Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
         Box::new(codec::build_item_enchantment_values(
             row.guid,
-            look.enchantment,
+            view.enchantment,
         )),
     ))];
     if old.slot == row.slot {
-        if let Some(values) = codec::build_visible_item_values(self_guid, row.slot, &look) {
+        if let Some(values) = codec::build_visible_item_values(self_guid, row.slot, &view) {
             out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
                 Box::new(values),
             )));
@@ -6677,6 +6660,15 @@ mod tests {
     }
 
     #[test]
+    fn an_enchant_change_on_a_guild_charter_leaves_its_petition_id_alone() {
+        let charter = |enchant_id| ItemInstance {
+            entry: lyracore_shared::guild::GUILD_CHARTER_ENTRY,
+            ..item_row(23, enchant_id)
+        };
+        assert!(enchant_change_outbound(7, &charter(0), &charter(7745)).is_empty());
+    }
+
+    #[test]
     fn removing_a_permanent_enchant_in_place_clears_the_word() {
         let out = enchant_change_outbound(7, &item_row(8, 7745), &item_row(8, 0));
         let (item_word, visible_word, _) = enchant_words(&out);
@@ -6696,7 +6688,7 @@ mod tests {
         let committed = item_row(8, 7748);
         let mut out = Vec::new();
         append_final_item_slots(7, 23, 8, &mut out, |slot| {
-            (slot == 8).then(|| look_of_item_row(&committed))
+            (slot == 8).then(|| view_of_item_row(&committed))
         });
         let mut words = Vec::new();
         for message in &out {

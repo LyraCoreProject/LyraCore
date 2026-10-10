@@ -136,7 +136,7 @@ fn catalogue_rows_sql(
     }
     let spells: HashMap<_, _> = spells.iter().map(|row| (row.id, row)).collect();
     let enchant_ids: BTreeSet<_> = enchantments.rows().iter().map(|row| row.id.id).collect();
-    for (id, _, _) in kind::COMPATIBILITY_ENCHANTMENTS {
+    for (id, ..) in kind::COMPATIBILITY_ENCHANTMENTS {
         if enchant_ids.contains(&id) {
             bail!("client enchantment {id} collides with an authored compatibility entry");
         }
@@ -232,7 +232,7 @@ fn catalogue_rows_sql(
             insert_effect(&mut enchant_rows, enchant_id, effect)?;
         }
     }
-    for (id, kind, amount) in kind::COMPATIBILITY_ENCHANTMENTS {
+    for (id, _, kind, amount) in kind::COMPATIBILITY_ENCHANTMENTS {
         insert_effect(
             &mut enchant_rows,
             id,
@@ -589,7 +589,10 @@ mod tests {
     fn authored_enchants_keep_existing_stored_meanings() {
         assert_eq!(
             kind::COMPATIBILITY_ENCHANTMENTS,
-            [(7745, kind::STRENGTH, 3), (7748, kind::STAMINA, 3)]
+            [
+                (7745, 823, kind::STRENGTH, 3),
+                (7748, 724, kind::STAMINA, 3)
+            ]
         );
     }
 }

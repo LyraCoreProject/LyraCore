@@ -42,6 +42,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use anyhow::{anyhow, Result};
+use lyracore_shared::item_property::client_enchantment_id;
 use lyracore_shared::spatial::{BOX_HALF_SPAN, GRID_CELL_SIZE};
 use spacetimedb_sdk::{Table, TableWithPrimaryKey};
 use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
@@ -2132,7 +2133,7 @@ fn item_inserted(view: &WorldView, coord: &Coordinator, shard: ShardId, row: &It
 /// shows the enchantment ID the client resolves for its permanent enchant.
 fn item_enchantment_word(coord: &Coordinator, row: &ItemInstance) -> u32 {
     if row.entry != lyracore_shared::guild::GUILD_CHARTER_ENTRY {
-        return lyracore_shared::item_property::client_enchantment_id(row.enchant_id);
+        return client_enchantment_id(row.enchant_id);
     }
     coord
         .realm_core()

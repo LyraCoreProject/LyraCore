@@ -8,6 +8,7 @@ use super::super::bindings::*;
 use super::super::connection::{Coordinator, LiveConn};
 use super::player_item_count;
 use lyracore_shared::group::GroupKind;
+use lyracore_shared::item_property::client_enchantment_id;
 
 impl Coordinator {
     /// Read every item a character owns (items slice-1), joined with its template for the CREATE
@@ -46,20 +47,10 @@ impl Coordinator {
             .filter_map(|i| {
                 let tmpl = db.game_item_template().entry().find(&i.entry)?;
                 Some(crate::codec::ItemInstanceView {
-                    guid: i.guid,
-                    entry: i.entry,
-                    owner_guid: i.owner_guid,
-                    slot: i.slot,
-                    stack_count: i.stack_count,
-                    durability: i.durability,
                     max_durability: tmpl.max_durability,
                     container_slots: tmpl.container_slots,
-                    random_property_id: i.random_property_id,
                     random_property_enchant_ids: property_enchant_ids(db, i.random_property_id),
-                    item_text_id: i.item_text_id,
-                    enchantment: lyracore_shared::item_property::client_enchantment_id(
-                        i.enchant_id,
-                    ),
+                    ..view_of_item_row(&i)
                 })
             })
             .collect()
@@ -223,6 +214,23 @@ impl Coordinator {
         rows.into_iter()
             .map(|b| (b.item_entry, b.stack_count, b.price, b.random_property_id))
             .collect()
+    }
+}
+
+/// The view fields an item row holds itself, without template or catalogue reads. The enchantment
+/// is the ID the client resolves, so no send path ships a stored compatibility ID.
+pub(crate) fn view_of_item_row(row: &ItemInstance) -> crate::codec::ItemInstanceView {
+    crate::codec::ItemInstanceView {
+        guid: row.guid,
+        entry: row.entry,
+        owner_guid: row.owner_guid,
+        slot: row.slot,
+        stack_count: row.stack_count,
+        durability: row.durability,
+        random_property_id: row.random_property_id,
+        item_text_id: row.item_text_id,
+        enchantment: client_enchantment_id(row.enchant_id),
+        ..Default::default()
     }
 }
 
