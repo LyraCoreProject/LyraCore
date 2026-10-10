@@ -47,6 +47,7 @@ pub mod packet_lint;
 pub mod party;
 pub(crate) mod party_mirror;
 pub mod presence;
+mod routing;
 pub(crate) mod social;
 mod store;
 pub mod transfer;
@@ -64,13 +65,13 @@ use handlers::{
     dispatch_item_action, dispatch_loot_window, dispatch_melee_action, dispatch_member_stats,
     dispatch_quest_action, dispatch_taxi_action, dispatch_vendor_action, handle_bank, handle_char,
     handle_combat, handle_loot, handle_mail, handle_query, handle_trade, handle_trainer,
-    quest_giver_menu, queue_reply_then_arm, AuctionActionOutcome, AuctionActionPlayer, CastOutcome,
-    CastPlayer, CastTransition, ChannelActionOutcome, ChatActionOutcome, ChatActionPlayer,
-    DuelActionOutcome, DuelActionPlayer, GuildActionOutcome, GuildActionPlayer, ItemActionOutcome,
-    ItemActionPlayer, LootWindowOutcome, LootWindowPlayer, MeleeActionOutcome, MeleeActionPlayer,
-    MemberStatsOutcome, MemberStatsPlayer, OpenLootState, QuestActionOutcome, QuestActionPlayer,
-    TaxiActionOutcome, TaxiActionPlayer, VendorActionOutcome, VendorActionPlayer,
-    CMSG_AUCTION_LIST_ITEMS_OPCODE,
+    handle_unavailable, quest_giver_menu, queue_reply_then_arm, AuctionActionOutcome,
+    AuctionActionPlayer, CastOutcome, CastPlayer, CastTransition, ChannelActionOutcome,
+    ChatActionOutcome, ChatActionPlayer, DuelActionOutcome, DuelActionPlayer, GuildActionOutcome,
+    GuildActionPlayer, ItemActionOutcome, ItemActionPlayer, LootWindowOutcome, LootWindowPlayer,
+    MeleeActionOutcome, MeleeActionPlayer, MemberStatsOutcome, MemberStatsPlayer, OpenLootState,
+    QuestActionOutcome, QuestActionPlayer, TaxiActionOutcome, TaxiActionPlayer,
+    VendorActionOutcome, VendorActionPlayer, CMSG_AUCTION_LIST_ITEMS_OPCODE,
 };
 pub(crate) use handlers::{
     member_stats_tick, resolve_online_character, zone_weather_message, AuctionBrowseRequest,
@@ -92,6 +93,7 @@ use login_queue::{Admission, LoginQueue};
 pub(crate) use loot::LootRollStore;
 pub(crate) use mail::MailStore;
 pub(crate) use party::PartyStore;
+use routing::Family;
 use social::handle_social;
 pub(crate) use social::ContactOutcome;
 pub(crate) use social::SocialStore;
@@ -1284,9 +1286,10 @@ fn apply_cast_transition(conn: &mut WorldConn, transition: CastTransition) {
     }
 }
 
-/// Route one decrypted client message through the per-family handlers. Each stage either consumes
-/// its opcode or passes it onward, so the disjoint-family chain ends in the movement-relay catch-all.
-#[allow(clippy::too_many_lines)] // One stage per opcode family.
+/// Route one decrypted client message to the Protocol Family that owns its opcode
+/// ([`routing::owner`]). Two pre-stages run first: the coalesced-movement flush and the Chat Flood
+/// Limiter. An opcode no family owns, or one its family passes on, is logged and ignored.
+#[allow(clippy::too_many_lines)] // One arm per Protocol Family.
 fn dispatch(
     tx: &SessionTx,
     store: &dyn WorldStore,
@@ -1298,7 +1301,7 @@ fn dispatch(
     // gossip/etc. range checks, in particular) must see the CURRENT position, so flush it FIRST —
     // one check here removes the whole "stale position mid-coalesce" class instead of auditing
     // every position-sensitive reducer individually. A movement opcode flushes (if needed) as part
-    // of its own classification below, not here.
+    // of its own classification in `relay_movement`, not here.
     if codec::relayed_move_opcode(&msg).is_none() {
         if let Some((opcode, info)) = conn.move_coalesce.flush_now() {
             forward_movement(store, conn, opcode, &info)?;
@@ -1318,391 +1321,318 @@ fn dispatch(
         return send(tx, Outbound::One(answer));
     }
 
-    let Some(msg) = handle_char(tx, store, conn, msg)? else {
-        return Ok(());
+    let Some(family) = routing::owner(&msg) else {
+        return ignore(conn, msg);
     };
-    let msg = match dispatch_melee_action(store, MeleeActionPlayer::from_conn(conn), msg)? {
-        MeleeActionOutcome::Handled {
-            transition,
-            outbound,
-        } => {
-            transition.apply(&mut conn.state);
-            for message in outbound {
-                send(tx, message)?;
-            }
-            return Ok(());
-        }
-        MeleeActionOutcome::PassThrough(msg) => msg,
-    };
-    // The cast seam owns every cast opcode. Melee runs first only because its two opcodes are
-    // disjoint from the cast set; neither seam sees the other's traffic.
-    let msg = match dispatch_cast(
-        store,
-        CastPlayer {
-            account_id: conn.account_id,
-            self_guid: social::self_guid(conn),
-            ranged_repeat: matches!(&conn.state, WorldState::InWorld(iw) if iw.ranged_repeat),
-        },
-        msg,
-    )? {
-        CastOutcome::Handled {
-            transition,
-            outbound,
-        } => {
-            // The transition lands first: the batch is what the client sees, and session state
-            // must already agree with it when the next request arrives.
-            apply_cast_transition(conn, transition);
-            for message in outbound {
-                send(tx, message)?;
-            }
-            return Ok(());
-        }
-        CastOutcome::PassThrough(msg) => msg,
-    };
-    let Some(msg) = handle_combat(store, conn, msg)? else {
-        return Ok(());
-    };
-    let dispatches_to_loot_window = if let ClientOpcodeMessage::CMSG_GAMEOBJ_USE(request) = &msg {
-        let target_guid = request.guid.guid();
-        match store.gameobject_type(target_guid)? {
-            Some(lyracore_shared::constants::go_type::QUESTGIVER) => {
-                for message in
-                    quest_giver_menu(store, target_guid, social::self_guid(conn).unwrap_or(0))?
-                {
-                    send(tx, message)?;
+    match family {
+        Family::Session => pass_on(handle_char(tx, store, conn, msg)?, conn),
+        Family::Melee => {
+            match dispatch_melee_action(store, MeleeActionPlayer::from_conn(conn), msg)? {
+                MeleeActionOutcome::Handled {
+                    transition,
+                    outbound,
+                } => {
+                    transition.apply(&mut conn.state);
+                    send_all(tx, outbound)
                 }
-                return Ok(());
+                MeleeActionOutcome::PassThrough(msg) => ignore(conn, msg),
             }
-            Some(lyracore_shared::constants::go_type::CHEST) => true,
-            _ => false,
         }
-    } else {
-        true
-    };
-    let current_loot_state = match &conn.state {
-        WorldState::InWorld(iw) => iw.open_loot,
-        WorldState::CharSelect => OpenLootState::default(),
-    };
-    let msg = if dispatches_to_loot_window {
-        match dispatch_loot_window(
+        Family::Cast => match dispatch_cast(
             store,
-            LootWindowPlayer {
+            CastPlayer {
+                account_id: conn.account_id,
+                self_guid: social::self_guid(conn),
+                ranged_repeat: matches!(&conn.state, WorldState::InWorld(iw) if iw.ranged_repeat),
+            },
+            msg,
+        )? {
+            CastOutcome::Handled {
+                transition,
+                outbound,
+            } => {
+                // The transition lands first: the batch is what the client sees, and session state
+                // must already agree with it when the next request arrives.
+                apply_cast_transition(conn, transition);
+                send_all(tx, outbound)
+            }
+            CastOutcome::PassThrough(msg) => ignore(conn, msg),
+        },
+        Family::Combat => pass_on(handle_combat(store, conn, msg)?, conn),
+        Family::Loot => {
+            let dispatches_to_loot_window =
+                if let ClientOpcodeMessage::CMSG_GAMEOBJ_USE(request) = &msg {
+                    let target_guid = request.guid.guid();
+                    match store.gameobject_type(target_guid)? {
+                        Some(lyracore_shared::constants::go_type::QUESTGIVER) => {
+                            let self_guid = social::self_guid(conn).unwrap_or(0);
+                            return send_all(tx, quest_giver_menu(store, target_guid, self_guid)?);
+                        }
+                        Some(lyracore_shared::constants::go_type::CHEST) => true,
+                        _ => false,
+                    }
+                } else {
+                    true
+                };
+            if !dispatches_to_loot_window {
+                return pass_on(handle_loot(tx, store, conn, msg)?, conn);
+            }
+            let current_loot_state = match &conn.state {
+                WorldState::InWorld(iw) => iw.open_loot,
+                WorldState::CharSelect => OpenLootState::default(),
+            };
+            match dispatch_loot_window(
+                store,
+                LootWindowPlayer {
+                    account_id: conn.account_id,
+                    self_guid: social::self_guid(conn),
+                },
+                current_loot_state,
+                msg,
+            )? {
+                LootWindowOutcome::Handled {
+                    next_state,
+                    durable_request: _observed_durable_request,
+                    outbound,
+                } => {
+                    if let WorldState::InWorld(iw) = &mut conn.state {
+                        iw.open_loot = next_state;
+                    }
+                    send_all(tx, outbound)
+                }
+                LootWindowOutcome::PassThrough(msg) => {
+                    pass_on(handle_loot(tx, store, conn, msg)?, conn)
+                }
+            }
+        }
+        Family::Death => pass_on(handle_loot(tx, store, conn, msg)?, conn),
+        Family::Npc => pass_on(handle_query(tx, store, conn, msg)?, conn),
+        Family::Auction => match dispatch_auction_action(
+            store,
+            AuctionActionPlayer {
+                self_guid: social::self_guid(conn),
+            },
+            msg,
+        )? {
+            AuctionActionOutcome::Handled { outbound } => send_all(tx, outbound),
+            AuctionActionOutcome::PassThrough(msg) => ignore(conn, msg),
+        },
+        Family::Vendor => match dispatch_vendor_action(
+            store,
+            VendorActionPlayer {
                 account_id: conn.account_id,
                 self_guid: social::self_guid(conn),
             },
-            current_loot_state,
             msg,
         )? {
-            LootWindowOutcome::Handled {
-                next_state,
-                durable_request: _observed_durable_request,
+            VendorActionOutcome::Handled { outbound } => send_all(tx, outbound),
+            VendorActionOutcome::PassThrough(msg) => ignore(conn, msg),
+        },
+        Family::Bank => pass_on(handle_bank(tx, store, conn, msg)?, conn),
+        Family::Trainer => pass_on(handle_trainer(tx, store, conn, msg)?, conn),
+        Family::Item => match dispatch_item_action(
+            store,
+            ItemActionPlayer {
+                account_id: conn.account_id,
+                self_guid: social::self_guid(conn),
+            },
+            msg,
+        )? {
+            ItemActionOutcome::Handled { outbound } => send_all(tx, outbound),
+            ItemActionOutcome::PassThrough(msg) => ignore(conn, msg),
+        },
+        Family::Quest => match dispatch_quest_action(
+            store,
+            QuestActionPlayer {
+                account_id: conn.account_id,
+                self_guid: social::self_guid(conn),
+            },
+            msg,
+        )? {
+            QuestActionOutcome::Handled { outbound } => send_all(tx, outbound),
+            QuestActionOutcome::TurnedIn { outbound } => {
+                send_all(tx, outbound)?;
+                // The turn-in used the visibility pipe, so a Reward Letter it filed is in the cache
+                // and the escrow index now. A failed drive leaves the letter held for world entry or
+                // the next mailbox visit.
+                if let Some(self_guid) = social::self_guid(conn) {
+                    mail::redrive(store, self_guid);
+                }
+                Ok(())
+            }
+            QuestActionOutcome::PassThrough(msg) => ignore(conn, msg),
+        },
+        Family::Taxi => match dispatch_taxi_action(
+            store,
+            TaxiActionPlayer {
+                self_guid: social::self_guid(conn),
+            },
+            msg,
+        )? {
+            TaxiActionOutcome::Handled { outbound } => send_all(tx, outbound),
+            TaxiActionOutcome::Activated {
                 outbound,
+                character_guid,
+                arm,
             } => {
-                if let WorldState::InWorld(iw) = &mut conn.state {
-                    iw.open_loot = next_state;
-                }
-                for message in outbound {
-                    send(tx, message)?;
-                }
-                return Ok(());
+                // Queue the vanilla result first. Arming mutates the entity and spline tables, whose
+                // callbacks enqueue behind this item on the same writer even if they fire immediately.
+                queue_reply_then_arm(tx, store, outbound, character_guid, arm)
             }
-            LootWindowOutcome::PassThrough(msg) => msg,
-        }
-    } else {
-        msg
-    };
-    let Some(msg) = handle_loot(tx, store, conn, msg)? else {
-        return Ok(());
-    };
-    let msg = match dispatch_auction_action(
-        store,
-        AuctionActionPlayer {
-            self_guid: social::self_guid(conn),
+            TaxiActionOutcome::PassThrough(msg) => ignore(conn, msg),
         },
-        msg,
-    )? {
-        AuctionActionOutcome::Handled { outbound } => {
-            for message in outbound {
-                send(tx, message)?;
+        Family::MemberStats => {
+            let member_stats_player = match &conn.state {
+                WorldState::InWorld(iw) => MemberStatsPlayer {
+                    self_guid: Some(iw.self_guid),
+                    record: iw.subs.member_stats_record(),
+                },
+                WorldState::CharSelect => MemberStatsPlayer::default(),
+            };
+            match dispatch_member_stats(store, member_stats_player, msg) {
+                MemberStatsOutcome::Handled { outbound } => send_all(tx, outbound),
+                MemberStatsOutcome::PassThrough(msg) => ignore(conn, msg),
             }
-            return Ok(());
         }
-        AuctionActionOutcome::PassThrough(msg) => msg,
-    };
-    let msg = match dispatch_vendor_action(
-        store,
-        VendorActionPlayer {
-            account_id: conn.account_id,
-            self_guid: social::self_guid(conn),
+        Family::Social => pass_on(handle_social(tx, store, conn, msg)?, conn),
+        Family::Trade => pass_on(handle_trade(tx, store, conn, msg)?, conn),
+        Family::Duel => match dispatch_duel_action(
+            store,
+            DuelActionPlayer {
+                account_id: conn.account_id,
+                self_guid: social::self_guid(conn),
+            },
+            msg,
+        )? {
+            DuelActionOutcome::Handled { outbound } => send_all(tx, outbound),
+            DuelActionOutcome::PassThrough(msg) => ignore(conn, msg),
         },
-        msg,
-    )? {
-        VendorActionOutcome::Handled { outbound } => {
-            for message in outbound {
-                send(tx, message)?;
+        Family::Chat => match dispatch_chat_action(
+            store,
+            ChatActionPlayer {
+                account_id: conn.account_id,
+                self_guid: social::self_guid(conn),
+            },
+            msg,
+        )? {
+            ChatActionOutcome::Handled { outbound } => send_all(tx, outbound),
+            ChatActionOutcome::PassThrough(msg) => {
+                pass_on(handle_query(tx, store, conn, msg)?, conn)
             }
-            return Ok(());
-        }
-        VendorActionOutcome::PassThrough(msg) => msg,
-    };
-    let Some(msg) = handle_bank(tx, store, conn, msg)? else {
-        return Ok(());
-    };
-    let Some(msg) = handle_trainer(tx, store, conn, msg)? else {
-        return Ok(());
-    };
-    let msg = match dispatch_item_action(
-        store,
-        ItemActionPlayer {
-            account_id: conn.account_id,
-            self_guid: social::self_guid(conn),
         },
-        msg,
-    )? {
-        ItemActionOutcome::Handled { outbound } => {
-            for message in outbound {
-                send(tx, message)?;
-            }
-            return Ok(());
-        }
-        ItemActionOutcome::PassThrough(msg) => msg,
-    };
-    let msg = match dispatch_quest_action(
-        store,
-        QuestActionPlayer {
-            account_id: conn.account_id,
-            self_guid: social::self_guid(conn),
+        Family::Channel => match dispatch_channel_action(
+            store,
+            ChatActionPlayer {
+                account_id: conn.account_id,
+                self_guid: social::self_guid(conn),
+            },
+            msg,
+        )? {
+            ChannelActionOutcome::Handled { outbound } => send_all(tx, outbound),
+            ChannelActionOutcome::PassThrough(msg) => ignore(conn, msg),
         },
-        msg,
-    )? {
-        QuestActionOutcome::Handled { outbound } => {
-            for message in outbound {
-                send(tx, message)?;
-            }
-            return Ok(());
-        }
-        QuestActionOutcome::TurnedIn { outbound } => {
-            for message in outbound {
-                send(tx, message)?;
-            }
-            // The turn-in used the visibility pipe, so a Reward Letter it filed is in the cache
-            // and the escrow index now. A failed drive leaves the letter held for world entry or
-            // the next mailbox visit.
-            if let Some(self_guid) = social::self_guid(conn) {
-                mail::redrive(store, self_guid);
-            }
-            return Ok(());
-        }
-        QuestActionOutcome::PassThrough(msg) => msg,
-    };
-    let msg = match dispatch_taxi_action(
-        store,
-        TaxiActionPlayer {
-            self_guid: social::self_guid(conn),
+        Family::MeetingStone => match dispatch_meeting_stone_action(
+            store,
+            MeetingStonePlayer {
+                account_id: conn.account_id,
+                self_guid: social::self_guid(conn),
+            },
+            msg,
+        )? {
+            MeetingStoneActionOutcome::Handled { outbound } => send_all(tx, outbound),
+            MeetingStoneActionOutcome::PassThrough(msg) => ignore(conn, msg),
         },
-        msg,
-    )? {
-        TaxiActionOutcome::Handled { outbound } => {
-            for message in outbound {
-                send(tx, message)?;
-            }
-            return Ok(());
-        }
-        TaxiActionOutcome::Activated {
-            outbound,
-            character_guid,
-            arm,
-        } => {
-            // Queue the vanilla result first. Arming mutates the entity and spline tables, whose
-            // callbacks enqueue behind this item on the same writer even if they fire immediately.
-            queue_reply_then_arm(tx, store, outbound, character_guid, arm)?;
-            return Ok(());
-        }
-        TaxiActionOutcome::PassThrough(msg) => msg,
-    };
-    let member_stats_player = match &conn.state {
-        WorldState::InWorld(iw) => MemberStatsPlayer {
-            self_guid: Some(iw.self_guid),
-            record: iw.subs.member_stats_record(),
+        Family::Guild => match dispatch_guild_action(
+            store,
+            GuildActionPlayer {
+                account_id: conn.account_id,
+                self_guid: social::self_guid(conn),
+            },
+            msg,
+        )? {
+            GuildActionOutcome::Handled { outbound } => send_all(tx, outbound),
+            GuildActionOutcome::PassThrough(msg) => ignore(conn, msg),
         },
-        WorldState::CharSelect => MemberStatsPlayer::default(),
+        Family::Mail => pass_on(handle_mail(tx, store, conn, msg)?, conn),
+        Family::Movement => relay_movement(tx, store, conn, msg),
+        Family::Unavailable => handle_unavailable(tx, conn, msg),
+    }
+}
+
+/// Send a family's batch in order.
+fn send_all(tx: &SessionTx, outbound: Vec<Outbound>) -> Result<()> {
+    outbound
+        .into_iter()
+        .try_for_each(|message| send(tx, message))
+}
+
+/// A message no Protocol Family takes.
+fn ignore(conn: &WorldConn, msg: ClientOpcodeMessage) -> Result<()> {
+    log::debug!("world: ignoring {msg} (account {})", conn.account_id);
+    Ok(())
+}
+
+/// A message an older handler passed on. No other family owns its opcode, so it is ignored.
+fn pass_on(passed: Option<ClientOpcodeMessage>, conn: &WorldConn) -> Result<()> {
+    passed.map_or(Ok(()), |msg| ignore(conn, msg))
+}
+
+/// MSG_MOVE_* -> movement_update (persist + relay). The relayed peer events come back on this
+/// player's game_movement_event subscription and are re-emitted (same opcode + verbatim
+/// MovementInfo) to other players by their own subscription callbacks.
+///
+/// Every inbound movement packet is classified + coalesced by `CoalesceState` before it ever
+/// reaches the module — a STATE-CHANGE (or a heartbeat whose flags/heading drifted) forwards
+/// immediately; a pure same-vector heartbeat is HELD until the cadence window elapses (or something
+/// else flushes it), dropping the sub-yard same-vector intermediates. See `coalesce.rs` for the
+/// decision table and unit tests.
+fn relay_movement(
+    tx: &SessionTx,
+    store: &dyn WorldStore,
+    conn: &mut WorldConn,
+    msg: ClientOpcodeMessage,
+) -> Result<()> {
+    let Some(opcode) = codec::relayed_move_opcode(&msg) else {
+        return ignore(conn, msg);
     };
-    let msg = match dispatch_member_stats(store, member_stats_player, msg) {
-        MemberStatsOutcome::Handled { outbound } => {
-            for message in outbound {
-                send(tx, message)?;
-            }
-            return Ok(());
-        }
-        MemberStatsOutcome::PassThrough(msg) => msg,
-    };
-    let Some(msg) = handle_social(tx, store, conn, msg)? else {
-        return Ok(());
-    };
-    let Some(msg) = handle_trade(tx, store, conn, msg)? else {
-        return Ok(());
-    };
-    let msg = match dispatch_duel_action(
-        store,
-        DuelActionPlayer {
-            account_id: conn.account_id,
-            self_guid: social::self_guid(conn),
-        },
-        msg,
-    )? {
-        DuelActionOutcome::Handled { outbound } => {
-            for message in outbound {
-                send(tx, message)?;
-            }
-            return Ok(());
-        }
-        DuelActionOutcome::PassThrough(msg) => msg,
-    };
-    let msg = match dispatch_chat_action(
-        store,
-        ChatActionPlayer {
-            account_id: conn.account_id,
-            self_guid: social::self_guid(conn),
-        },
-        msg,
-    )? {
-        ChatActionOutcome::Handled { outbound } => {
-            for message in outbound {
-                send(tx, message)?;
-            }
-            return Ok(());
-        }
-        ChatActionOutcome::PassThrough(msg) => msg,
-    };
-    let msg = match dispatch_channel_action(
-        store,
-        ChatActionPlayer {
-            account_id: conn.account_id,
-            self_guid: social::self_guid(conn),
-        },
-        msg,
-    )? {
-        ChannelActionOutcome::Handled { outbound } => {
-            for message in outbound {
-                send(tx, message)?;
-            }
-            return Ok(());
-        }
-        ChannelActionOutcome::PassThrough(msg) => msg,
-    };
-    let msg = match dispatch_meeting_stone_action(
-        store,
-        MeetingStonePlayer {
-            account_id: conn.account_id,
-            self_guid: social::self_guid(conn),
-        },
-        msg,
-    )? {
-        MeetingStoneActionOutcome::Handled { outbound } => {
-            for message in outbound {
-                send(tx, message)?;
-            }
-            return Ok(());
-        }
-        MeetingStoneActionOutcome::PassThrough(msg) => msg,
-    };
-    let msg = match dispatch_guild_action(
-        store,
-        GuildActionPlayer {
-            account_id: conn.account_id,
-            self_guid: social::self_guid(conn),
-        },
-        msg,
-    )? {
-        GuildActionOutcome::Handled { outbound } => {
-            for message in outbound {
-                send(tx, message)?;
-            }
-            return Ok(());
-        }
-        GuildActionOutcome::PassThrough(msg) => msg,
-    };
-    let Some(msg) = handle_query(tx, store, conn, msg)? else {
-        return Ok(());
-    };
-    let Some(msg) = handle_mail(tx, store, conn, msg)? else {
-        return Ok(());
-    };
-    // MSG_MOVE_* -> movement_update (persist + relay). The relayed peer events
-    // come back on this player's game_movement_event subscription and are re-emitted (same
-    // opcode + verbatim MovementInfo) to other players by their own subscription callbacks.
-    //
-    // Every inbound movement packet is classified + coalesced by `CoalesceState`
-    // before it ever reaches the module — a STATE-CHANGE (or a heartbeat whose flags/heading
-    // drifted) forwards immediately, byte-identical to before this item; a pure same-vector
-    // heartbeat is HELD until the cadence window elapses (or something else flushes it), dropping
-    // the sub-yard same-vector intermediates the item targets. See `coalesce.rs` for the decision
-    // table and unit tests, and `docs/` for the item's write-up.
-    if let Some(opcode) = codec::relayed_move_opcode(&msg) {
-        // 058: a landing may hurt. The MODULE applies the damage inside movement_update (it parses
-        // fall_time from the raw MovementInfo body); this sends only the "You fall and lose N
-        // health" flavor line — computed from the SAME lyracore_shared::env curve, so the line and the
-        // health drop can never disagree. gtker types the wire's u32-ms fall time as f32 (a
-        // field-TYPE lie; cmangos reads u32) — reinterpret the raw bits.
-        if let ClientOpcodeMessage::MSG_MOVE_FALL_LAND(mv) = &msg {
-            if let WorldState::InWorld(iw) = &conn.state {
-                let fall_time_ms = if mv.info.flags.get_on_transport().is_some() {
-                    0
-                } else {
-                    mv.info.fall_time.to_bits()
-                };
-                let dmg = lyracore_shared::env::fall_damage(
-                    fall_time_ms,
-                    store.entity_max_health(iw.self_guid),
-                );
-                if dmg > 0 {
-                    use wow_world_messages::vanilla::{
-                        EnvironmentalDamageType, SMSG_ENVIRONMENTAL_DAMAGE_LOG,
-                    };
-                    send(
-                        tx,
-                        Outbound::One(ServerOpcodeMessage::SMSG_ENVIRONMENTAL_DAMAGE_LOG(
-                            Box::new(SMSG_ENVIRONMENTAL_DAMAGE_LOG {
-                                guid: wow_world_messages::Guid::new(iw.self_guid),
-                                damage_type: EnvironmentalDamageType::Fall,
-                                damage: dmg,
-                                absorb: 0,
-                                resist: 0,
-                            }),
-                        )),
-                    )?;
-                }
-            }
-        }
-        if let Some(info) = msg.movement_info() {
-            for (fwd_opcode, fwd_info) in conn.move_coalesce.on_movement_now(opcode, info) {
-                forward_movement(store, conn, fwd_opcode, &fwd_info)?;
-            }
-        }
-    } else {
-        if handlers::is_control_receipt(&msg) {
-            return Ok(());
-        }
-        if let ClientOpcodeMessage::CMSG_SET_ACTIVE_MOVER(request) = &msg {
-            if social::self_guid(conn) == Some(request.guid.guid()) {
-                return Ok(());
-            }
-            return send(
-                tx,
-                Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(
-                    codec::build_gm_system_message(
-                        "Control of another mover is not available on this realm.".into(),
-                    ),
-                ))),
+    // A landing may hurt. The MODULE applies the damage inside movement_update (it parses
+    // fall_time from the raw MovementInfo body); this sends only the "You fall and lose N
+    // health" flavor line — computed from the SAME lyracore_shared::env curve, so the line and the
+    // health drop can never disagree. gtker types the wire's u32-ms fall time as f32 (a
+    // field-TYPE lie; cmangos reads u32) — reinterpret the raw bits.
+    if let ClientOpcodeMessage::MSG_MOVE_FALL_LAND(mv) = &msg {
+        if let WorldState::InWorld(iw) = &conn.state {
+            let fall_time_ms = if mv.info.flags.get_on_transport().is_some() {
+                0
+            } else {
+                mv.info.fall_time.to_bits()
+            };
+            let dmg = lyracore_shared::env::fall_damage(
+                fall_time_ms,
+                store.entity_max_health(iw.self_guid),
             );
-        }
-        if let Some(outbound) = handlers::unavailable_outbound(&msg, &mut conn.unavailable_notices)
-        {
-            for message in outbound {
-                send(tx, message)?;
+            if dmg > 0 {
+                use wow_world_messages::vanilla::{
+                    EnvironmentalDamageType, SMSG_ENVIRONMENTAL_DAMAGE_LOG,
+                };
+                send(
+                    tx,
+                    Outbound::One(ServerOpcodeMessage::SMSG_ENVIRONMENTAL_DAMAGE_LOG(
+                        Box::new(SMSG_ENVIRONMENTAL_DAMAGE_LOG {
+                            guid: wow_world_messages::Guid::new(iw.self_guid),
+                            damage_type: EnvironmentalDamageType::Fall,
+                            damage: dmg,
+                            absorb: 0,
+                            resist: 0,
+                        }),
+                    )),
+                )?;
             }
-        } else {
-            log::debug!("world: ignoring {msg} (account {})", conn.account_id);
+        }
+    }
+    if let Some(info) = msg.movement_info() {
+        for (fwd_opcode, fwd_info) in conn.move_coalesce.on_movement_now(opcode, info) {
+            forward_movement(store, conn, fwd_opcode, &fwd_info)?;
         }
     }
     Ok(())

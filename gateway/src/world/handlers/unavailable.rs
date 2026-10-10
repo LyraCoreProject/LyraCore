@@ -16,7 +16,40 @@ pub(crate) enum UnavailableNotice {
     Tutorial,
 }
 
-pub(crate) fn unavailable_outbound(
+/// Answer an opcode this realm does not serve. A control receipt and the client's own mover need
+/// no answer; every other notice is sent once per World Session or answered every time.
+pub(crate) fn handle_unavailable(
+    tx: &SessionTx,
+    conn: &mut WorldConn,
+    msg: ClientOpcodeMessage,
+) -> Result<()> {
+    if is_control_receipt(&msg) {
+        return Ok(());
+    }
+    if let ClientOpcodeMessage::CMSG_SET_ACTIVE_MOVER(request) = &msg {
+        if social::self_guid(conn) == Some(request.guid.guid()) {
+            return Ok(());
+        }
+        return send(
+            tx,
+            Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(
+                codec::build_gm_system_message(
+                    "Control of another mover is not available on this realm.".into(),
+                ),
+            ))),
+        );
+    }
+    if let Some(outbound) = unavailable_outbound(&msg, &mut conn.unavailable_notices) {
+        for message in outbound {
+            send(tx, message)?;
+        }
+    } else {
+        log::debug!("world: ignoring {msg} (account {})", conn.account_id);
+    }
+    Ok(())
+}
+
+fn unavailable_outbound(
     msg: &ClientOpcodeMessage,
     notices: &mut std::collections::HashSet<UnavailableNotice>,
 ) -> Option<Vec<Outbound>> {
@@ -238,7 +271,7 @@ fn page_unavailable(page_id: u32) -> Outbound {
 
 /// These receipts do not change the authoritative pose. Movement counters and cinematic
 /// cameras have no durable state yet; ordinary movement still crosses the Store Seam.
-pub(crate) fn is_control_receipt(msg: &ClientOpcodeMessage) -> bool {
+fn is_control_receipt(msg: &ClientOpcodeMessage) -> bool {
     matches!(
         msg,
         ClientOpcodeMessage::MSG_MOVE_TELEPORT_ACK(_)

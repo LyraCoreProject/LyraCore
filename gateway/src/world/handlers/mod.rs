@@ -124,6 +124,4 @@ fn send_show_bank(tx: &SessionTx, banker_guid: u64) -> Result<()> {
     )
 }
 
-pub(crate) use unavailable::{
-    is_control_receipt, raw_unavailable_outbound, unavailable_outbound, UnavailableNotice,
-};
+pub(crate) use unavailable::{handle_unavailable, raw_unavailable_outbound, UnavailableNotice};
