@@ -255,7 +255,8 @@ fn a_resumed_transfer_publishes_the_escrow_destination_not_the_callers_plan() {
         let opened = src
             .character_destination(XGUID)
             .expect("the durable row names a destination");
-        src.begin_transfer(&opened).expect("the escrow opens");
+        src.begin_transfer(Actor::new(XGUID).unwrap(), &opened)
+            .expect("the escrow opens");
         // Now drive with a plan naming somewhere ELSE. `begin_transfer` answers `Replay` — the row
         // on disk is the authority and the plan is ignored — so the transfer settles at 36/7.
         let stale = super::transfer::TransferPlan {
@@ -528,7 +529,8 @@ fn a_transfer_is_never_finished_before_the_destination_copy_is_durable() {
     let plan = src
         .character_destination(XGUID)
         .expect("the durable row names the destination");
-    src.begin_transfer(&plan).expect("escrow opens");
+    src.begin_transfer(Actor::new(XGUID).unwrap(), &plan)
+        .expect("escrow opens");
 
     let err = src
         .finish_transfer(plan.transfer_id)
@@ -547,7 +549,8 @@ fn the_arrival_copy_is_fenced_until_the_source_copy_is_destroyed() {
     let dst = xstore("instances", dst_db.clone(), calls, None);
     let plan = src.character_destination(XGUID).unwrap();
 
-    src.begin_transfer(&plan).unwrap();
+    src.begin_transfer(Actor::new(XGUID).unwrap(), &plan)
+        .unwrap();
     assert!(
         !src_db.live(XGUID) && !dst_db.has(XGUID),
         "frozen on the source, nothing arrived yet"

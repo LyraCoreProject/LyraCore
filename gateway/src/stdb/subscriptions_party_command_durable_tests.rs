@@ -630,7 +630,9 @@ fn command_receipts_recover_both_gateway_crash_boundaries() {
             |plan| (plan.dest_map_id, plan.dest_instance_id) == (destination_map, 0)
         )));
     let transfer_plan = target.character_destination(bot).unwrap();
-    target.begin_transfer(&transfer_plan).unwrap();
+    target
+        .begin_transfer(Actor::new(bot).unwrap(), &transfer_plan)
+        .unwrap();
     let mut delayed = admitted.clone();
     delayed.intent_id = target_applied + 1_000_000;
     let in_transit = target.apply_admitted_party_command(&delayed).unwrap_err();

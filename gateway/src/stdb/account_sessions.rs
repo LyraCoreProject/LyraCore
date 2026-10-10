@@ -568,8 +568,10 @@ mod tests {
             old.2.clone(),
         );
         let transfer_id = crate::world::transfer::transfer_id_for(1);
-        winner
-            .begin_transfer(&crate::world::transfer::TransferPlan {
+        crate::world::TransferStore::begin_transfer(
+            winner,
+            Actor::new(1).unwrap(),
+            &crate::world::transfer::TransferPlan {
                 transfer_id,
                 character_guid: 1,
                 dest_map_id: 0,
@@ -578,8 +580,9 @@ mod tests {
                 dest_y: 100.0,
                 dest_z: 20.0,
                 dest_o: 0.0,
-            })
-            .unwrap();
+            },
+        )
+        .unwrap();
         assert!(crate::durable_test_support::poll_until(
             Duration::from_secs(5),
             || winner.escrow_row(1).is_some()

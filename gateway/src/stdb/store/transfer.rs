@@ -7,7 +7,7 @@ use crate::stdb::bindings::game_transfer_in_table::GameTransferInTableAccess;
 use crate::stdb::bindings::*;
 use crate::stdb::connection::call_reducer;
 use crate::stdb::Coordinator;
-use crate::world::TransferStore;
+use crate::world::{Actor, TransferStore};
 
 impl TransferStore for Coordinator {
     fn escrowed_transfer(
@@ -41,8 +41,28 @@ impl TransferStore for Coordinator {
         })
     }
 
-    fn begin_transfer(&self, plan: &crate::world::transfer::TransferPlan) -> Result<()> {
-        self.begin_transfer(plan)
+    /// `begin_transfer` — freeze the character, serialize it (row + every manifest table's rows),
+    /// and delete its live entity, in ONE transaction. Idempotent on `transfer_id`.
+    fn begin_transfer(
+        &self,
+        character: Actor,
+        plan: &crate::world::transfer::TransferPlan,
+    ) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "begin_transfer",
+            begin_transfer_then(
+                plan.transfer_id,
+                self.session_actor(character),
+                plan.dest_map_id,
+                plan.dest_instance_id,
+                plan.dest_x,
+                plan.dest_y,
+                plan.dest_z,
+                plan.dest_o,
+                true
+            )
+        )
     }
 
     fn import_character_blob(
@@ -63,7 +83,22 @@ impl TransferStore for Coordinator {
                 {
                     anyhow::bail!("bot Transfer Realm locator binding changed before import");
                 }
-                self.import_bot_character_blob(transfer_id, blob, intent)
+                call_reducer!(
+                    self.0.call_pipe().conn.reducers,
+                    "import_bot_character_blob",
+                    import_bot_character_blob_then(
+                        transfer_id,
+                        blob.to_vec(),
+                        intent.source_module_identity,
+                        intent.id,
+                        intent.controller_generation,
+                        intent.created_micros,
+                        intent.source_map,
+                        intent.source_instance,
+                        intent.source_locator_revision,
+                        self.owner_actor()
+                    )
+                )
             }
             None => self.import_player_character_blob(transfer_id, blob, source),
         }
@@ -77,8 +112,13 @@ impl TransferStore for Coordinator {
         self.finish_transfer(transfer_id)
     }
 
+    /// `release_transfer` — drop the arrival copy's fence at the destination.
     fn release_transfer(&self, transfer_id: u64) -> Result<()> {
-        self.release_transfer(transfer_id)
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "release_transfer",
+            release_transfer_then(transfer_id, self.owner_actor())
+        )
     }
 
     fn release_player_transfer_arrival(
@@ -123,12 +163,23 @@ impl TransferStore for Coordinator {
             .map(|row| (row.map_id, row.party_id))
     }
 
+    /// `ensure_instance` — mirror an instance id onto this shard (idempotent), spawning its
+    /// population the first time.
     fn ensure_instance(&self, instance_id: u64, map_id: u32, party_id: u64) -> Result<()> {
-        self.ensure_instance(instance_id, map_id, party_id)
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "ensure_instance",
+            ensure_instance_then(instance_id, map_id, party_id, self.owner_actor())
+        )
     }
 
+    /// `evict_instance_population` — stop this shard ticking an instance whose run moved elsewhere.
     fn evict_instance_population(&self, instance_id: u64) -> Result<()> {
-        self.evict_instance_population(instance_id)
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "evict_instance_population",
+            evict_instance_population_then(instance_id, self.owner_actor())
+        )
     }
 
     fn begin_shard_index_transfer(
@@ -177,7 +228,19 @@ impl TransferStore for Coordinator {
         source_revision: u64,
         claim_token: u64,
     ) -> Result<()> {
-        self.bind_bot_transfer_locator(intent, source_revision, claim_token)
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "bind_bot_transfer_locator",
+            bind_bot_transfer_locator_then(
+                intent.id,
+                intent.bot_guid,
+                intent.controller_generation,
+                claim_token,
+                intent.source_map,
+                intent.source_instance,
+                source_revision
+            )
+        )
     }
 
     fn publish_bot_shard_index(
@@ -202,12 +265,15 @@ impl TransferStore for Coordinator {
         controller_generation: u64,
         claim_token: u64,
     ) -> Result<()> {
-        Coordinator::mark_bot_transfer_arrival_ready(
-            self,
-            intent_id,
-            bot_guid,
-            controller_generation,
-            claim_token,
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "mark_bot_transfer_arrival_ready",
+            mark_bot_transfer_arrival_ready_then(
+                intent_id,
+                bot_guid,
+                controller_generation,
+                claim_token
+            )
         )
     }
 
@@ -240,17 +306,20 @@ impl TransferStore for Coordinator {
         transfer_id: u64,
         intent: &crate::world::transfer::BotTransferIntent,
     ) -> Result<()> {
-        Coordinator::release_bot_transfer_arrival(
-            self,
-            transfer_id,
-            intent.bot_guid,
-            intent.source_module_identity,
-            intent.id,
-            intent.controller_generation,
-            intent.created_micros,
-            intent.source_map,
-            intent.source_instance,
-            intent.source_locator_revision,
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "release_bot_transfer_arrival",
+            release_bot_transfer_arrival_then(
+                transfer_id,
+                intent.bot_guid,
+                intent.source_module_identity,
+                intent.id,
+                intent.controller_generation,
+                intent.created_micros,
+                intent.source_map,
+                intent.source_instance,
+                intent.source_locator_revision
+            )
         )
     }
 }
@@ -278,97 +347,6 @@ impl Coordinator {
         )
     }
 
-    pub fn mark_bot_transfer_arrival_ready(
-        &self,
-        intent_id: u64,
-        bot_guid: u64,
-        controller_generation: u64,
-        claim_token: u64,
-    ) -> Result<()> {
-        call_reducer!(
-            self.0.call_pipe().conn.reducers,
-            "mark_bot_transfer_arrival_ready",
-            mark_bot_transfer_arrival_ready_then(
-                intent_id,
-                bot_guid,
-                controller_generation,
-                claim_token
-            )
-        )
-    }
-
-    // The arguments mirror the World reducer's exact Transfer Gate.
-    #[allow(clippy::too_many_arguments)]
-    pub fn release_bot_transfer_arrival(
-        &self,
-        transfer_id: u64,
-        bot_guid: u64,
-        source_module_identity: spacetimedb_sdk::Identity,
-        intent_id: u64,
-        controller_generation: u64,
-        intent_created_micros: i64,
-        source_map: u32,
-        source_instance: u64,
-        source_locator_revision: u64,
-    ) -> Result<()> {
-        call_reducer!(
-            self.0.call_pipe().conn.reducers,
-            "release_bot_transfer_arrival",
-            release_bot_transfer_arrival_then(
-                transfer_id,
-                bot_guid,
-                source_module_identity,
-                intent_id,
-                controller_generation,
-                intent_created_micros,
-                source_map,
-                source_instance,
-                source_locator_revision
-            )
-        )
-    }
-
-    pub fn bind_bot_transfer_locator(
-        &self,
-        intent: &crate::world::transfer::BotTransferIntent,
-        source_revision: u64,
-        claim_token: u64,
-    ) -> Result<()> {
-        call_reducer!(
-            self.0.call_pipe().conn.reducers,
-            "bind_bot_transfer_locator",
-            bind_bot_transfer_locator_then(
-                intent.id,
-                intent.bot_guid,
-                intent.controller_generation,
-                claim_token,
-                intent.source_map,
-                intent.source_instance,
-                source_revision
-            )
-        )
-    }
-
-    /// `begin_transfer` — freeze the character, serialize it (row + every manifest table's rows),
-    /// and delete its live entity, in ONE transaction. Idempotent on `transfer_id`.
-    pub fn begin_transfer(&self, plan: &crate::world::transfer::TransferPlan) -> Result<()> {
-        call_reducer!(
-            self.0.call_pipe().conn.reducers,
-            "begin_transfer",
-            begin_transfer_then(
-                plan.transfer_id,
-                self.actor_or_owner(plan.character_guid),
-                plan.dest_map_id,
-                plan.dest_instance_id,
-                plan.dest_x,
-                plan.dest_y,
-                plan.dest_z,
-                plan.dest_o,
-                true
-            )
-        )
-    }
-
     /// `import_player_character_blob`, with the Realm locator predecessor written as part of the
     /// destination import transaction.
     pub fn import_player_character_blob(
@@ -391,32 +369,6 @@ impl Coordinator {
         )
     }
 
-    /// `import_bot_character_blob`, with the exact source intent identity written as part of the
-    /// destination import transaction.
-    pub fn import_bot_character_blob(
-        &self,
-        transfer_id: u64,
-        blob: &[u8],
-        intent: &crate::world::transfer::BotTransferIntent,
-    ) -> Result<()> {
-        call_reducer!(
-            self.0.call_pipe().conn.reducers,
-            "import_bot_character_blob",
-            import_bot_character_blob_then(
-                transfer_id,
-                blob.to_vec(),
-                intent.source_module_identity,
-                intent.id,
-                intent.controller_generation,
-                intent.created_micros,
-                intent.source_map,
-                intent.source_instance,
-                intent.source_locator_revision,
-                self.owner_actor()
-            )
-        )
-    }
-
     /// `confirm_import` — attest ON THE SOURCE that the destination copy committed. Called only
     /// after `import_character_blob` returned Ok; see `world::transfer::run_transfer`.
     pub fn confirm_import(&self, transfer_id: u64) -> Result<()> {
@@ -433,34 +385,6 @@ impl Coordinator {
             self.0.call_pipe().conn.reducers,
             "finish_transfer",
             finish_transfer_then(transfer_id, self.owner_actor())
-        )
-    }
-
-    /// `release_transfer` — drop the arrival copy's fence at the destination.
-    pub fn release_transfer(&self, transfer_id: u64) -> Result<()> {
-        call_reducer!(
-            self.0.call_pipe().conn.reducers,
-            "release_transfer",
-            release_transfer_then(transfer_id, self.owner_actor())
-        )
-    }
-
-    /// `ensure_instance` — mirror an instance id onto this shard (idempotent), spawning its
-    /// population the first time.
-    pub fn ensure_instance(&self, instance_id: u64, map_id: u32, party_id: u64) -> Result<()> {
-        call_reducer!(
-            self.0.call_pipe().conn.reducers,
-            "ensure_instance",
-            ensure_instance_then(instance_id, map_id, party_id, self.owner_actor())
-        )
-    }
-
-    /// `evict_instance_population` — stop this shard ticking an instance whose run moved elsewhere.
-    pub fn evict_instance_population(&self, instance_id: u64) -> Result<()> {
-        call_reducer!(
-            self.0.call_pipe().conn.reducers,
-            "evict_instance_population",
-            evict_instance_population_then(instance_id, self.owner_actor())
         )
     }
 }
