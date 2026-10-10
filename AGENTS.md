@@ -19,7 +19,8 @@ We build complex things as simply as possible, and we look for ways to remove co
 - Use the glossary terms in identifiers, comments, commits, docs and PR text. `CORE_TERMS.md` holds
   the common ones, `CONTEXT.md` all of them. Keep the `_Avoid_` words out of new names and prose.
   Existing identifiers, schema names, filenames and pinned artifacts keep their names. When you add
-  or change a term, update both files in the same change.
+  or change a term, update `CONTEXT.md` in the same change. Update `CORE_TERMS.md` when it includes
+  that term; add a term there only when new contributors need it.
 
 ## Working with the user
 

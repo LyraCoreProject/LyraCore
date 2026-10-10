@@ -58,8 +58,8 @@ CI runs every target in three parallel shards with `--test-threads=4 --skip dead
 lethal_floor`. The Deadmines targets need the separately installed dungeons Package, and the
 `lethal_floor` ranged phase is flaky.
 
-CI also runs a few Gateway tests that need a node. Each is a single `--ignored --exact` test, listed
-in the workflow, for example:
+CI also runs Gateway tests that need a node. The workflow names individual tests with
+`--ignored --exact` and runs the party command test group with:
 
 ```bash
 cargo test -p lyracore-gateway --bin lyracore-gateway stdb::subscriptions::party_command_durable_tests -- --ignored --test-threads=1

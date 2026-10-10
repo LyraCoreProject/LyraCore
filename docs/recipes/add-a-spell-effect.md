@@ -73,9 +73,7 @@ Only when the effect outlives the cast. Add the table in the owning family's mod
   (`module/src/creatures/eventai/edges.rs`).
 - Read it where behaviour changes. Distract holds idle movement in the creature behavior cycle's
   `IdleSink` (`module/src/creatures/cycle/ctx.rs`) and faces the point through
-  `module/src/creatures/tick/mod.rs`. On current `main`, a test in
-  `module/src/creatures/cycle/harness.rs` lists every call `IdleSink` makes, so a new call is added
-  there too.
+  `module/src/creatures/tick/mod.rs`.
 
 ## 7. Regenerate the Gateway bindings
 
