@@ -2006,7 +2006,6 @@ fn reducer_transport_loss_ends_an_admitted_session_and_frees_one_queue_seat() {
             },
             combat: CombatState {
                 set_target_error: Some("transport disconnected".into()),
-                ..base.combat
             },
             ..base
         }

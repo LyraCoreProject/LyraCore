@@ -31,7 +31,6 @@ mod vendor;
 mod weather;
 
 pub(crate) use self::auction::*;
-pub(crate) use self::bank::*;
 pub(crate) use self::cast::*;
 pub(crate) use self::channel::*;
 pub(crate) use self::character::*;
@@ -52,7 +51,6 @@ pub(crate) use self::session::*;
 pub(crate) use self::social::*;
 pub(crate) use self::speech::*;
 pub(crate) use self::taxi::*;
-pub(crate) use self::trade::*;
 pub(crate) use self::trainer::*;
 pub(crate) use self::transfer::*;
 pub(crate) use self::vendor::*;
@@ -82,10 +80,8 @@ pub(crate) struct WorldFake {
     pub(crate) social: SocialState,
     pub(crate) npc: NpcState,
     pub(crate) trainer: TrainerState,
-    pub(crate) bank: BankState,
     pub(crate) combat: CombatState,
     pub(crate) death: DeathState,
-    pub(crate) trade: TradeState,
     pub(crate) cast: CastState,
     pub(crate) taxi: TaxiState,
     pub(crate) melee: MeleeState,

@@ -1,191 +1,242 @@
-//! Bank opcodes over an encrypted World Session.
+//! Bank opcodes, run through `handle_bank` against a Fake that holds only the Bank and Npc Stores
+//! the handler is bounded on.
 
+use super::handlers::{handle_bank, BankStore, NpcStore};
+use super::trainer_tests::family_harness::{drain_outbound, in_world_conn, npc_store_refusing_by};
 use super::*;
+use std::collections::BTreeSet;
+use std::sync::Mutex;
+
+/// A bank that moves an item by its source slot: a carried slot goes into the bank, a banked slot
+/// comes back. The Module infers that direction from the slot, so the Fake does too.
+#[derive(Default)]
+struct BankFake {
+    npc_refuses: bool,
+    /// Every banker the Module accepts a bag-slot purchase from.
+    bankers: BTreeSet<u64>,
+    /// Refuses `auto_bank_item` with this text, like a full bank.
+    move_error: Option<String>,
+    /// Refuses `buy_bank_slot` with this text.
+    purchase_error: Option<String>,
+    carried: Mutex<BTreeSet<u64>>,
+    banked: Mutex<BTreeSet<u64>>,
+    bought_slots: Mutex<u32>,
+}
+
+impl BankFake {
+    fn carrying(slot: u8) -> Self {
+        let bank = Self::default();
+        bank.carried.lock().unwrap().insert(slot.into());
+        bank
+    }
+
+    fn banking(slot: u8) -> Self {
+        let bank = Self::default();
+        bank.banked.lock().unwrap().insert(slot.into());
+        bank
+    }
+
+    fn carried(&self) -> Vec<u64> {
+        self.carried.lock().unwrap().iter().copied().collect()
+    }
+
+    fn banked(&self) -> Vec<u64> {
+        self.banked.lock().unwrap().iter().copied().collect()
+    }
+}
+
+npc_store_refusing_by!(BankFake, npc_refuses);
+
+impl BankStore for BankFake {
+    fn auto_bank_item(&self, _account_id: u64, _self_guid: u64, slot: u8) -> Result<()> {
+        if let Some(error) = &self.move_error {
+            return Err(anyhow!("{error}"));
+        }
+        let slot = u64::from(slot);
+        let (mut carried, mut banked) = (self.carried.lock().unwrap(), self.banked.lock().unwrap());
+        if carried.remove(&slot) {
+            banked.insert(slot);
+        } else if banked.remove(&slot) {
+            carried.insert(slot);
+        }
+        Ok(())
+    }
+
+    fn buy_bank_slot(&self, _account_id: u64, _self_guid: u64, banker_guid: u64) -> Result<()> {
+        if let Some(error) = &self.purchase_error {
+            return Err(anyhow!("{error}"));
+        }
+        if !self.bankers.contains(&banker_guid) {
+            return Err(anyhow!("[2] target is not a banker"));
+        }
+        *self.bought_slots.lock().unwrap() += 1;
+        Ok(())
+    }
+}
+
+/// Send `msg` as Character 1 of account 7 and return what the handler sent, in order.
+/// Phase 5 retargets only this helper.
+fn run(store: &BankFake, msg: impl Into<ClientOpcodeMessage>) -> Vec<ServerOpcodeMessage> {
+    let (tx, rx) = SessionTx::with_depth(0);
+    let mut conn = in_world_conn(7, 1);
+    let passed_on = handle_bank(&tx, store, &mut conn, msg.into()).unwrap();
+    assert!(passed_on.is_none(), "the bank family owns this opcode");
+    drain_outbound(&rx)
+}
+
+fn kinds(sent: &[ServerOpcodeMessage]) -> String {
+    sent.iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
 
 #[test]
 fn banker_activate_sends_smsg_show_bank_with_the_banker_guid() {
-    let store = std::sync::Arc::new(quest_store());
-    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
-    CMSG_BANKER_ACTIVATE {
-        guid: Guid::new(77),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
-        ServerOpcodeMessage::SMSG_SHOW_BANK(p) => assert_eq!(p.guid.guid(), 77),
-        other => panic!("expected SMSG_SHOW_BANK, got {other}"),
-    }
-    drop(client);
-    server.join().unwrap();
+    let sent = run(
+        &BankFake::default(),
+        CMSG_BANKER_ACTIVATE {
+            guid: Guid::new(77),
+        },
+    );
+    assert!(
+        matches!(sent.as_slice(), [ServerOpcodeMessage::SMSG_SHOW_BANK(p)] if p.guid.guid() == 77),
+        "expected SMSG_SHOW_BANK for banker 77, got [{}]",
+        kinds(&sent)
+    );
 }
 
 #[test]
 fn banker_activate_on_a_standing_refusing_banker_sends_no_reply() {
-    // CMSG_PLAYED_TIME (the sentinel below) only replies once `character_by_guid` resolves the
-    // caller's own guid, so give the store a character row for guid 1 (quest_store() has none) —
-    // same setup as `inspect_refused_target_sends_no_reply`.
-    let store = std::sync::Arc::new({
-        let base = quest_store();
-        WorldFake {
-            npc_refuses: true,
-            characters: vec![codec::CharacterView {
-                guid: 1,
-                ..Default::default()
-            }],
-            ..base
-        }
-    });
-    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
-    CMSG_BANKER_ACTIVATE {
-        guid: Guid::new(77),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    // Sentinel: a follow-up request with a guaranteed reply. If the refused activate had wrongly
-    // produced an SMSG_SHOW_BANK, it would arrive first and this match would fail.
-    CMSG_PLAYED_TIME {}
-        .write_encrypted_client(&mut client, &mut c_enc)
-        .unwrap();
-    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
-        ServerOpcodeMessage::SMSG_PLAYED_TIME(_) => {} // no SMSG_SHOW_BANK for the refused banker
-        other => {
-            panic!("expected SMSG_PLAYED_TIME (no SMSG_SHOW_BANK for refused banker), got {other}")
-        }
-    }
-    drop(client);
-    server.join().unwrap();
-}
-
-#[test]
-fn autobank_item_from_the_main_bag_dispatches_auto_bank_item() {
-    // Right-click a bag item with the bank open (CMSG_AUTOBANK_ITEM) → the gateway names the source
-    // slot and lets the module resolve the free bank slot; deposit and withdraw share one store method.
-    let store = std::sync::Arc::new(quest_store());
-    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_AUTOBANK_ITEM {
-        bag_index: 255,
-        slot_index: 23,
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    drop(client);
-    server.join().unwrap();
-    assert_eq!(
-        store.bank.auto_banked_items.lock().unwrap().as_slice(),
-        &[23]
+    let store = BankFake {
+        npc_refuses: true,
+        ..Default::default()
+    };
+    let sent = run(
+        &store,
+        CMSG_BANKER_ACTIVATE {
+            guid: Guid::new(77),
+        },
     );
+    assert!(sent.is_empty(), "got [{}]", kinds(&sent));
 }
 
+/// Right-click a bag item with the bank open: the gateway names the source slot and the Module
+/// resolves the free bank slot.
 #[test]
-fn autostore_bank_item_from_the_main_bag_dispatches_auto_bank_item() {
-    // Right-click a banked item (CMSG_AUTOSTORE_BANK_ITEM) → withdraw, same store method as deposit.
-    let store = std::sync::Arc::new(quest_store());
-    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_AUTOSTORE_BANK_ITEM {
-        bag_index: 255,
-        slot_index: 39,
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    drop(client);
-    server.join().unwrap();
-    assert_eq!(
-        store.bank.auto_banked_items.lock().unwrap().as_slice(),
-        &[39]
+fn autobank_item_from_the_main_bag_deposits_the_item() {
+    let store = BankFake::carrying(23);
+    let sent = run(
+        &store,
+        CMSG_AUTOBANK_ITEM {
+            bag_index: 255,
+            slot_index: 23,
+        },
     );
+    assert!(sent.is_empty(), "got [{}]", kinds(&sent));
+    assert_eq!((store.carried(), store.banked()), (vec![], vec![23]));
 }
 
+/// Right-click a banked item: withdraw, through the same Store method as the deposit.
+#[test]
+fn autostore_bank_item_from_the_main_bag_withdraws_the_item() {
+    let store = BankFake::banking(39);
+    let sent = run(
+        &store,
+        CMSG_AUTOSTORE_BANK_ITEM {
+            bag_index: 255,
+            slot_index: 39,
+        },
+    );
+    assert!(sent.is_empty(), "got [{}]", kinds(&sent));
+    assert_eq!((store.carried(), store.banked()), (vec![39], vec![]));
+}
+
+/// A full destination (bank or carry space) is a per-action error. The client gets the existing
+/// inventory-change failure, and the session goes on.
 #[test]
 fn autobank_item_err_sends_smsg_inventory_change_failure() {
-    // A full destination (bank full, or carry space full) is a per-action error relayed as the
-    // existing inventory-change-failure reply, never session-fatal.
-    let store = std::sync::Arc::new({
-        let base = quest_store();
-        WorldFake {
-            trade_error: Some("bank full".into()),
-            ..base
-        }
-    });
-    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
-    CMSG_AUTOBANK_ITEM {
-        bag_index: 255,
-        slot_index: 23,
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
-        ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(_) => {} // correct feedback packet
-        other => panic!("expected SMSG_INVENTORY_CHANGE_FAILURE, got {other}"),
-    }
-    drop(client);
-    server.join().unwrap();
+    let store = BankFake {
+        move_error: Some("bank full".into()),
+        ..BankFake::carrying(23)
+    };
+    let sent = run(
+        &store,
+        CMSG_AUTOBANK_ITEM {
+            bag_index: 255,
+            slot_index: 23,
+        },
+    );
+    assert!(
+        matches!(
+            sent.as_slice(),
+            [ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(_)]
+        ),
+        "expected SMSG_INVENTORY_CHANGE_FAILURE, got [{}]",
+        kinds(&sent)
+    );
+    assert_eq!((store.carried(), store.banked()), (vec![23], vec![]));
+}
+
+/// Only the main pseudo-bag (255) is addressed, like the item handler. A sub-bag index is logged
+/// and ignored, never fatal.
+#[test]
+fn autobank_item_from_a_sub_bag_is_unsupported_and_moves_nothing() {
+    let store = BankFake::carrying(0);
+    let sent = run(
+        &store,
+        CMSG_AUTOBANK_ITEM {
+            bag_index: 19,
+            slot_index: 0,
+        },
+    );
+    assert!(sent.is_empty(), "got [{}]", kinds(&sent));
+    assert_eq!((store.carried(), store.banked()), (vec![0], vec![]));
 }
 
 #[test]
-fn autobank_item_from_a_sub_bag_is_unsupported_and_does_not_dispatch() {
-    // Only the main pseudo-bag (255) is addressed, matching the item handler's restriction — a
-    // sub-bag index is logged and ignored, never fatal.
-    let store = std::sync::Arc::new(quest_store());
-    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_AUTOBANK_ITEM {
-        bag_index: 19,
-        slot_index: 0,
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    drop(client);
-    server.join().unwrap();
-    assert!(
-        store.bank.auto_banked_items.lock().unwrap().is_empty(),
-        "a sub-bag source must not be routed through auto_bank_item"
+fn autostore_bank_item_from_a_sub_bag_is_unsupported_and_moves_nothing() {
+    let store = BankFake::banking(0);
+    let sent = run(
+        &store,
+        CMSG_AUTOSTORE_BANK_ITEM {
+            bag_index: 19,
+            slot_index: 0,
+        },
     );
+    assert!(sent.is_empty(), "got [{}]", kinds(&sent));
+    assert_eq!((store.carried(), store.banked()), (vec![], vec![0]));
 }
 
-#[test]
-fn autostore_bank_item_from_a_sub_bag_is_unsupported_and_does_not_dispatch() {
-    let store = std::sync::Arc::new(quest_store());
-    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_AUTOSTORE_BANK_ITEM {
-        bag_index: 19,
-        slot_index: 0,
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    drop(client);
-    server.join().unwrap();
-    assert!(
-        store.bank.auto_banked_items.lock().unwrap().is_empty(),
-        "a sub-bag source must not be routed through auto_bank_item"
-    );
-}
-
+/// The Fake accepts a purchase only from a banker it knows, so an `Ok` reply shows the wire's
+/// banker guid reached the Store.
 #[test]
 fn buy_bank_slot_success_sends_ok_and_reaches_the_named_banker() {
-    let store = std::sync::Arc::new(quest_store());
-    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_BUY_BANK_SLOT {
-        guid: Guid::new(88),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
-        ServerOpcodeMessage::SMSG_BUY_BANK_SLOT_RESULT(p) => {
-            assert_eq!(p.result, BuyBankSlotResult::Ok);
-        }
-        other => panic!("expected SMSG_BUY_BANK_SLOT_RESULT, got {other}"),
-    }
-    drop(client);
-    server.join().unwrap();
-    assert_eq!(
-        store.bank.bought_bank_slots.lock().unwrap().as_slice(),
-        &[88]
+    let store = BankFake {
+        bankers: [88].into(),
+        ..Default::default()
+    };
+    let sent = run(
+        &store,
+        CMSG_BUY_BANK_SLOT {
+            guid: Guid::new(88),
+        },
     );
+    assert!(
+        matches!(
+            sent.as_slice(),
+            [ServerOpcodeMessage::SMSG_BUY_BANK_SLOT_RESULT(p)] if p.result == BuyBankSlotResult::Ok
+        ),
+        "expected an Ok slot purchase, got [{}]",
+        kinds(&sent)
+    );
+    assert_eq!(*store.bought_slots.lock().unwrap(), 1);
 }
 
+/// The Module tags a refusal with its `SMSG_BUY_BANK_SLOT_RESULT` code in brackets. The gateway
+/// reads the code, not the prose.
 #[test]
 fn buy_bank_slot_failure_maps_the_bracketed_code_to_the_matching_result() {
-    // The module tags a refusal with its `SMSG_BUY_BANK_SLOT_RESULT` code in brackets — parsed by
-    // code, not by matching the prose.
     for (err, want) in [
         (
             "[0] no bank bag slots left to buy",
@@ -197,22 +248,20 @@ fn buy_bank_slot_failure_maps_the_bracketed_code_to_the_matching_result() {
         ),
         ("[2] target is not a banker", BuyBankSlotResult::NotBanker),
     ] {
-        let mut s = quest_store();
-        s.trade_error = Some(err.into());
-        let store = std::sync::Arc::new(s);
-        let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
-        CMSG_BUY_BANK_SLOT {
-            guid: Guid::new(88),
-        }
-        .write_encrypted_client(&mut client, &mut c_enc)
-        .unwrap();
-        match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
-            ServerOpcodeMessage::SMSG_BUY_BANK_SLOT_RESULT(p) => {
-                assert_eq!(p.result, want, "store error {err:?} must map to {want:?}");
-            }
-            other => panic!("expected SMSG_BUY_BANK_SLOT_RESULT, got {other}"),
-        }
-        drop(client);
-        server.join().unwrap();
+        let store = BankFake {
+            purchase_error: Some(err.into()),
+            ..Default::default()
+        };
+        let sent = run(
+            &store,
+            CMSG_BUY_BANK_SLOT {
+                guid: Guid::new(88),
+            },
+        );
+        let [ServerOpcodeMessage::SMSG_BUY_BANK_SLOT_RESULT(p)] = sent.as_slice() else {
+            panic!("expected SMSG_BUY_BANK_SLOT_RESULT, got [{}]", kinds(&sent));
+        };
+        assert_eq!(p.result, want, "store error {err:?} must map to {want:?}");
+        assert_eq!(*store.bought_slots.lock().unwrap(), 0);
     }
 }
