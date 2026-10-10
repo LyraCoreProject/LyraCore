@@ -152,14 +152,13 @@ pub fn buff_status(
 }
 
 fn is_channel_aura(ctx: &ReducerContext, aura: &Aura) -> bool {
-    aura.eff_kind == A_PERIODIC_TRIGGER
-        || (aura.eff_kind == A_PERIODIC_ENERGIZE
-            && ctx
-                .db
-                .game_spell()
-                .spell_id()
-                .find(aura.spell_id)
-                .is_some_and(|spell| spell.cast_flags & SPELL_ATTR_CHANNELED != 0))
+    let flags = ctx
+        .db
+        .game_spell()
+        .spell_id()
+        .find(aura.spell_id)
+        .map_or(0, |spell| spell.cast_flags);
+    lyracore_shared::spell::is_channel_aura(aura.eff_kind, flags)
 }
 
 /// True while a cast bar or channel occupies the unit's non-melee spell slot.
@@ -170,7 +169,12 @@ pub(crate) fn is_non_melee_spell_casting(ctx: &ReducerContext, unit_guid: u64) -
         .filter(&unit_guid)
         .next()
         .is_some()
-        || auras_on(ctx, unit_guid).any(|aura| is_channel_aura(ctx, &aura))
+        || ctx
+            .db
+            .game_aura()
+            .by_caster()
+            .filter(&unit_guid)
+            .any(|aura| is_channel_aura(ctx, &aura))
 }
 
 /// Is `unit_guid` STUNNED — carrying an active `A_CONTROL(M_STUN)` aura? A stunned unit can neither ACT
@@ -565,23 +569,11 @@ pub(crate) fn expire_cast_attempt(
     interrupt_cast_with_outcome(ctx, caster_guid, CastFinish::Expired)
 }
 
-/// BREAK a channel on `caster_guid` — the ONE convergent break path for the four channel-interrupt triggers
-/// (the caster MOVES / starts a NEW cast / is CC'd / its channel target dies). Deletes the caster's
-/// `A_PERIODIC_TRIGGER` channel aura(s) so `tick_auras` stops firing the per-tick missile, AND cancels any
-/// in-progress timed cast via `interrupt_cast` (a channel and a cast-bar are mutually exclusive in practice,
-/// but covering both keeps every call site a single tear-down). Collect-then-delete (never mutate while
-/// iterating), modeled on `break_stealth`. Returns whether anything was broken. NO-OP for a caster with no
-/// channel/cast (the common path) — every call site can fire it unconditionally. Generic over the kind,
-/// never a spell id. [entity]
+/// Remove channel auras from every affected unit and cancel the caster's pending cast.
 pub(crate) fn break_channel(ctx: &ReducerContext, caster_guid: u64) -> bool {
     let auras = ctx.db.game_aura();
-    // A channel is a SELF-aura → it sits on the caster's own `target_guid`; scope by `by_target` then
-    // filter the channel kind (the same idiom as break_stealth's A_STEALTH scope). A_PERIODIC_TRIGGER is
-    // ALWAYS a channel tick (Arcane Missiles). A_PERIODIC_ENERGIZE is channel-borne ONLY when its parent
-    // spell carries the CHANNELED flag (Evocation) — a NON-channeled periodic energize (Bloodrage's rage
-    // trickle) must survive, so it is gated on a header join to `cast_flags & SPELL_ATTR_CHANNELED`.
     let ids: Vec<u64> = auras
-        .by_target()
+        .by_caster()
         .filter(&caster_guid)
         .filter(|aura| is_channel_aura(ctx, aura))
         .map(|a| a.id)

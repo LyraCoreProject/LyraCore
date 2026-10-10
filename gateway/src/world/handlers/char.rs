@@ -1,5 +1,4 @@
-//! Char / world-entry family: character enum + creation (character-select), then enter-world
-//! (login and cross-map world-port). Pure code-motion out of `world/mod.rs`.
+//! Character selection, world entry, and connection-level ping and Realm Clock replies.
 
 use super::super::*;
 use super::quest::{quest_log_update, QuestActionStore};
@@ -201,6 +200,15 @@ fn enter_world(
     for (opcode, body) in items.iter().filter_map(codec::build_random_property_values) {
         send(tx, Outbound::Raw { opcode, body })?;
     }
+    for item in &items {
+        if let Some((bag_slot, position)) = codec::bag_content_parts(item.slot) {
+            if let Some(bag) = items.iter().find(|bag| bag.slot == bag_slot) {
+                let (opcode, body) =
+                    codec::build_container_slot_values(bag.guid, position, item.guid);
+                send(tx, Outbound::Raw { opcode, body })?;
+            }
+        }
+    }
     // Subscribe AFTER the self-spawn batch is on the wire — so the AOI initial-apply creates for
     // entities ALREADY in view (notably a questgiver you spawn right next to) arrive AFTER the
     // client is in-world. Spawning ON a questgiver otherwise left it targetable but with no '!' /
@@ -335,6 +343,29 @@ pub(crate) fn handle_char<
     msg: ClientOpcodeMessage,
 ) -> Result<Option<ClientOpcodeMessage>> {
     match msg {
+        ClientOpcodeMessage::CMSG_PING(ping) => {
+            send(
+                tx,
+                Outbound::One(ServerOpcodeMessage::SMSG_PONG(
+                    wow_world_messages::vanilla::SMSG_PONG {
+                        sequence_id: ping.sequence_id,
+                    },
+                )),
+            )?;
+        }
+        ClientOpcodeMessage::CMSG_QUERY_TIME => {
+            let seconds = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_secs();
+            send(
+                tx,
+                Outbound::One(ServerOpcodeMessage::SMSG_QUERY_TIME_RESPONSE(
+                    wow_world_messages::vanilla::SMSG_QUERY_TIME_RESPONSE {
+                        time: u32::try_from(seconds)?,
+                    },
+                )),
+            )?;
+        }
         // Character-select screen.
         ClientOpcodeMessage::CMSG_CHAR_ENUM => {
             let characters = store.characters(conn.account_id)?;
@@ -502,7 +533,13 @@ pub(crate) fn handle_char<
         // Graceful in-game Logout/Exit. Deny if in combat (vanilla behaviour); otherwise
         // ack instantly + complete, remove the entity (observers see DESTROY), drop the peer
         // subscriptions, and return to character-select with the connection still open.
-        ClientOpcodeMessage::CMSG_LOGOUT_REQUEST => {
+        ClientOpcodeMessage::CMSG_LOGOUT_CANCEL => {
+            send(
+                tx,
+                Outbound::One(ServerOpcodeMessage::SMSG_LOGOUT_CANCEL_ACK),
+            )?;
+        }
+        ClientOpcodeMessage::CMSG_LOGOUT_REQUEST | ClientOpcodeMessage::CMSG_PLAYER_LOGOUT => {
             // In-combat gate: deny logout while combat_until_ms is still in the future. We read the
             // wall-clock here (the gateway is a normal Rust process) and compare against the entity
             // row's ms-epoch timestamp written by `enter_combat`. 0 = never in combat → allowed.

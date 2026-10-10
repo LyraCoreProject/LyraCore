@@ -155,26 +155,22 @@ fn the_bridge_envelope_splitter_never_panics_and_only_accepts_the_stc_shape() {
 //  The movement-info carrier
 // ===========================================================================================
 
-/// `bytes_to_movement_info` re-decodes a raw movement body by wrapping it back into a synthetic
-/// frame — arithmetic on a remote-supplied length. It must return `Result` for every input.
+/// Movement bodies come from clients and must fail cleanly on arbitrary bytes.
 #[test]
 fn the_movement_carrier_decoder_never_panics_on_any_byte_string() {
     let mut rng = Rng::new(0x4D4F_5645);
     for _ in 0..CASES {
         let len = rng.below(96);
-        let _ = movement::bytes_to_movement_info(&rng.bytes(len));
+        let _ = super::movement_info::bytes_to_movement_info(&rng.bytes(len));
     }
 }
 
-/// The one arithmetic edge in that function: it prepends a 4-byte header, so a body within 4 bytes
-/// of `u16::MAX` overflows the frame-size field. That must be an `Err`, not a wrap — a wrapped size
-/// is the "one wrong size field desyncs every later header" failure this codebase has already paid
-/// for once on the outbound side (the `SMSG_COMPRESSED_MOVES` crowd-scale corruption).
+/// A movement body has a bounded set of optional fields. Excess bytes must not be ignored.
 #[test]
-fn a_movement_body_that_would_overflow_the_frame_size_is_an_error_not_a_wrap() {
+fn oversized_movement_bodies_are_refused() {
     for len in [65_531usize, 65_532, 65_535, 70_000] {
         let body = vec![0u8; len];
-        let out = movement::bytes_to_movement_info(&body);
+        let out = super::movement_info::bytes_to_movement_info(&body);
         assert!(
             out.is_err(),
             "a {len}-byte movement body cannot be re-framed under a u16 size field; it must be \

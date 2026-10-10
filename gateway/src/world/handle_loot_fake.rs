@@ -8,7 +8,7 @@ use crate::world::handlers::{
     DeathStore, LootActionStatus, LootWindowRequestStatus, LootWindowStore, NpcStore,
 };
 use crate::world::loot::{LootRollStore, PendingLootRoll};
-use crate::world::{Actor, ShardRoutingStore, WorldStore};
+use crate::world::{Actor, InteractionOutcome, ShardRoutingStore, WorldStore};
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -262,7 +262,7 @@ impl NpcStore for HandleLootFake {
         unreachable!("no test reaches the NPC family")
     }
 
-    fn bind_home(&self, _actor: Actor) -> Result<()> {
+    fn bind_home(&self, _actor: Actor, _innkeeper_guid: u64) -> Result<InteractionOutcome> {
         unreachable!("no test reaches the NPC family")
     }
 

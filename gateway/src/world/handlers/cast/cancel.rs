@@ -1,10 +1,4 @@
-//! The two cancellation routes: `CMSG_CANCEL_CAST` (Esc, moved, recast) and `CMSG_CANCEL_AURA`
-//! (the player right-clicked a buff icon).
-//!
-//! Both are best-effort and silent. The client has already dropped the cast bar or the buff icon
-//! before it sends either one, so the gateway answers nothing; the pending-cast and aura relays are
-//! the only senders. Both race a durable state change — a cast that just completed, an aura that
-//! just expired — so a refusal is normal traffic and must never end the session.
+//! Cast, channel and aura cancellation. Durable changes drive the protocol feedback.
 
 use super::*;
 

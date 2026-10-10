@@ -956,7 +956,7 @@ _Avoid_: matchmaking, auto-invite
 ### World clock and weather
 
 **Realm Clock**:
-The wall clock the realm runs on, always UTC. There is no realm-timezone setting, so no part of the realm reads host-local time. The Gateway packs it into `SMSG_LOGIN_SETTIMESPEED` once per world entry and the client advances it alone afterwards; the Module reads the same clock to pick the weather season.
+The wall clock the realm runs on, always UTC. There is no realm-timezone setting, so no part of the realm reads host-local time. The Gateway packs it into `SMSG_LOGIN_SETTIMESPEED` once per world entry and the client advances it alone afterwards. It also answers `CMSG_QUERY_TIME` with Unix seconds in `SMSG_QUERY_TIME_RESPONSE`, so the client can interpret timed quest deadlines. The Module reads the same clock to pick the weather season.
 _Avoid_: server time, game time, local time
 
 **Zone Weather**:

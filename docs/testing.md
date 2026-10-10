@@ -27,6 +27,8 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test -p lyracore-importer
 cargo test -p lyracore-module --lib --features=debug_reducers
+cargo test -p lyracore-module --test package_api_lint
+cargo test -p lyracore-package-delta
 cargo test -p lyracore-gateway
 cargo test -p lyracore-shared
 cargo test -p lyracore-test-support
@@ -83,7 +85,7 @@ From `.github/workflows/runtime-scripts.yml`:
 ```bash
 cd datascripts
 bun install --frozen-lockfile
-bun test tests/runtime-scripts.test.ts
+bun test
 ```
 
 ## Client data

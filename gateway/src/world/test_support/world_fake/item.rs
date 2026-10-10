@@ -1,7 +1,21 @@
 use super::super::*;
 
-/// Item behaviour is tested through `InMemoryItemActions`; every verb here succeeds.
+/// Item actions shared by the family and Benilla World Session tests.
 impl ItemActionStore for WorldFake {
+    fn destroy_item(&self, _actor: Actor, _slot: u8, _count: u32) -> Result<ItemActionResult> {
+        Ok(lyracore_shared::item::ItemRefusal::ItemNotFound.into())
+    }
+
+    fn split_item(
+        &self,
+        _actor: Actor,
+        _from_slot: u8,
+        _to_slot: u8,
+        _count: u32,
+    ) -> Result<ItemActionResult> {
+        Ok(lyracore_shared::item::ItemRefusal::ItemNotFound.into())
+    }
+
     fn equip_item(&self, _actor: Actor, _from_slot: u8) -> Result<ItemActionResult> {
         Ok(ItemActionResult::Done)
     }
@@ -10,7 +24,17 @@ impl ItemActionStore for WorldFake {
         Ok(ItemActionResult::Done)
     }
 
-    fn move_item(&self, _actor: Actor, _from_slot: u8, _to_slot: u8) -> Result<ItemActionResult> {
+    fn move_item(&self, _actor: Actor, from_slot: u8, to_slot: u8) -> Result<ItemActionResult> {
+        if let Some(state) = &self.benilla_gameplay {
+            let mut state = state.lock().unwrap();
+            for item in &mut state.inventory {
+                if item.slot == from_slot {
+                    item.slot = to_slot;
+                } else if item.slot == to_slot {
+                    item.slot = from_slot;
+                }
+            }
+        }
         Ok(ItemActionResult::Done)
     }
 

@@ -8,7 +8,9 @@ use crate::codec::PetNameView;
 use crate::stdb::bindings::*;
 use crate::stdb::connection::call_reducer;
 use crate::stdb::Coordinator;
-use crate::world::{Actor, NpcStore};
+use crate::world::{Actor, InteractionOutcome, NpcStore};
+
+use super::interaction_outcome;
 
 impl NpcStore for Coordinator {
     /// Standing-derived reaction gate. The inherent read has other callers (vendor, guild, quest).
@@ -134,8 +136,8 @@ impl NpcStore for Coordinator {
             .collect())
     }
 
-    /// Does the NPC at `guid` carry the innkeeper flag? Gates the "Make this inn your home." gossip
-    /// option + the `bind_home` select. Reads `npc_flags` off the entity (privileged cache); absent → false.
+    /// Does the NPC at `guid` carry the innkeeper flag? Shows its gossip option. Reads `npc_flags`
+    /// off the entity (privileged cache); absent → false.
     fn npc_is_innkeeper(&self, guid: u64) -> Result<bool> {
         let guard = self.0.coord();
         let db = &guard.conn.db;
@@ -273,16 +275,14 @@ impl NpcStore for Coordinator {
         )
     }
 
-    /// Bind the caller's hearthstone home to their current position (`CMSG_GOSSIP_SELECT_OPTION` on an
-    /// innkeeper's "Make this inn your home.") over the coordinator connection so the module attributes
-    /// it to the caller's entity. No args — `bind_home` resolves the caller via `ctx.sender`.
-    fn bind_home(&self, actor: Actor) -> Result<()> {
+    /// Bind the Character's home after the Module checks the selected innkeeper.
+    fn bind_home(&self, actor: Actor, innkeeper_guid: u64) -> Result<InteractionOutcome> {
         let coord = self.0.call_pipe();
-        call_reducer!(
+        interaction_outcome(call_reducer!(
             coord.conn.reducers,
             "gw_bind_home",
-            gw_bind_home_then(self.session_actor(actor))
-        )
+            gw_bind_home_then(self.session_actor(actor), innkeeper_guid)
+        ))
     }
 }
 

@@ -126,6 +126,16 @@ pub(crate) fn resolve_cast_at_typed(
         check_distract_destination(ctx, &caster, dest, hdr.range_yd)?;
     }
 
+    // A scheduled completion retains Refusals, so check and consume the complete reagent
+    // batch before charging power or changing caster state. Keep identities for product rollback.
+    let creates_items = effects.iter().any(|effect| effect.kind == E_CREATE_ITEM);
+    let inventory_before_craft =
+        creates_items.then(|| crate::items::carried_items(ctx, caster_guid));
+    if creates_items {
+        crate::items::exchange_items(ctx, caster_guid, &recipe_reagents(ctx, spell_id), &[])
+            .map_err(String::from)?;
+    }
+
     // Charge + flush BEFORE the effects (a self-heal effect re-reads the caster row, so it sees the
     // deducted power; a cost-0 cast writes nothing, preserving the Battle Shout baseline). Deduct ONLY for
     // players — a creature has no pool to drain (and its power stays 0 for the relayed peer view).
@@ -165,20 +175,6 @@ pub(crate) fn resolve_cast_at_typed(
     // swing path (resolve_swing).
     if hdr.cast_flags & SPELL_ATTR_STEALTH_SAFE == 0 {
         break_stealth(ctx, caster_guid);
-    }
-
-    // Keep the original identities so a failed product grant can restore reagents even when the
-    // GUID Range is exhausted. Skills are awarded only after every product grant succeeds.
-    let creates_items = effects.iter().any(|effect| effect.kind == E_CREATE_ITEM);
-    let reagents = if creates_items {
-        recipe_reagents(ctx, spell_id)
-    } else {
-        Vec::new()
-    };
-    let inventory_before_craft =
-        creates_items.then(|| crate::items::carried_items(ctx, caster_guid));
-    for (item, count) in reagents {
-        crate::items::remove_items(ctx, caster_guid, item, count)?;
     }
 
     // The effect loop + the ONE cast visual — shared verbatim with the Triggered Cast (`cast_triggered`),

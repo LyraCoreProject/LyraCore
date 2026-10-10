@@ -153,6 +153,17 @@ pub(crate) fn session_involving(ctx: &ReducerContext, guid: u64) -> Option<Trade
         .or_else(|| sessions.by_target().filter(&guid).next())
 }
 
+/// Whether an item appears in the owner's current trade, including the non-traded slot.
+pub(crate) fn item_is_offered(ctx: &ReducerContext, owner_guid: u64, item_guid: u64) -> bool {
+    session_involving(ctx, owner_guid).is_some_and(|session| {
+        ctx.db
+            .game_trade_slot()
+            .by_session()
+            .filter(&session.id)
+            .any(|slot| slot.owner_guid == owner_guid && slot.item_guid == item_guid)
+    })
+}
+
 /// Delete a session and its slot rows — the one spelling of teardown, shared by cancel, the
 /// character sweep, and the Trade Commit.
 fn remove_session(ctx: &ReducerContext, session: &TradeSession) {
@@ -378,6 +389,15 @@ fn reset_accepts(ctx: &ReducerContext, mut session: TradeSession) -> TradeSessio
         session.initiator_guid,
     );
     session
+}
+
+/// Refresh changed or restored inventory. Both Characters must accept the current offer.
+pub(crate) fn refresh_offer(ctx: &ReducerContext, owner_guid: u64) {
+    if let Some(session) = session_involving(ctx, owner_guid).filter(|session| session.open) {
+        let session = reset_accepts(ctx, session);
+        let session = touch_session(ctx, session);
+        push_offer_events(ctx, &session, owner_guid);
+    }
 }
 
 /// `CMSG_SET_TRADE_ITEM` core: place the item in inventory slot `inv_slot` into window

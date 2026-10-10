@@ -1,8 +1,23 @@
 //! Item wire mapping: the `CMSG_ITEM_QUERY_SINGLE` reply and the item CREATE_OBJECT, plus the flattened template/instance row views. Pure code-motion out of `mod.rs`.
 
 use super::*;
-
 use lyracore_shared::item::{item_class, weapon_subclass, ItemRefusal, Proficiency};
+
+/// Map vanilla bag coordinates to the Module's slot address. Capacity stays a Module Gate.
+pub fn inventory_slot(bag: u8, slot: u8) -> Option<u8> {
+    match (bag, slot) {
+        (255, 0..=62) => Some(slot),
+        (19..=22, 0..=17) => Some(120 + (bag - 19) * 18 + slot),
+        _ => None,
+    }
+}
+
+/// Recover the bag equipment slot and position for a Module bag-content address.
+pub fn bag_content_parts(slot: u8) -> Option<(u8, u8)> {
+    (120..192)
+        .contains(&slot)
+        .then(|| (19 + (slot - 120) / 18, (slot - 120) % 18))
+}
 
 /// An item-template row as the gateway reads it from `game_item_template`, flattened for the
 /// `CMSG_ITEM_QUERY_SINGLE` reply + the item CREATE. Decoupled from the SDK row
@@ -317,6 +332,16 @@ pub fn build_inventory_change_failure() -> SMSG_INVENTORY_CHANGE_FAILURE {
 pub fn build_inventory_refusal(refusal: ItemRefusal) -> SMSG_INVENTORY_CHANGE_FAILURE {
     let (item1, item2, bag_type_subclass) = (Guid::new(0), Guid::new(0), 0);
     match refusal {
+        ItemRefusal::Indestructible => SMSG_INVENTORY_CHANGE_FAILURE::CantDropSoulbound {
+            item1,
+            item2,
+            bag_type_subclass,
+        },
+        ItemRefusal::BagNotEmpty => SMSG_INVENTORY_CHANGE_FAILURE::CanOnlyDoWithEmptyBags {
+            item1,
+            item2,
+            bag_type_subclass,
+        },
         ItemRefusal::ItemNotFound => SMSG_INVENTORY_CHANGE_FAILURE::ItemNotFound {
             item1,
             item2,

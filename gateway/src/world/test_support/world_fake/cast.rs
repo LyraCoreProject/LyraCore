@@ -79,6 +79,9 @@ impl CastStore for WorldFake {
     // Shared with the character, vendor and query paths, so these two keep real fixtures.
 
     fn player_items(&self, _owner_guid: u64) -> Result<Vec<codec::ItemInstanceView>> {
+        if let Some(state) = &self.benilla_gameplay {
+            return Ok(state.lock().unwrap().inventory.clone());
+        }
         Ok(self.cast.player_items_fixture.clone())
     }
     fn item_template(&self, entry: u32) -> Result<Option<codec::ItemTemplateView>> {

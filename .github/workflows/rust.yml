@@ -47,9 +47,11 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      # One job, not four: the crates share a target directory, and a failed step names its crate.
+      # Share compiled dependencies while keeping each crate's result separate.
       - run: cargo test -p lyracore-importer
       - run: cargo test -p lyracore-module --lib --features=debug_reducers
+      - run: cargo test -p lyracore-module --test package_api_lint
+      - run: cargo test -p lyracore-package-delta
       - run: cargo test -p lyracore-gateway
       - run: cargo test -p lyracore-shared
       - run: cargo test -p lyracore-test-support

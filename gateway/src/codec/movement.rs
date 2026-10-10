@@ -26,17 +26,8 @@ pub fn relayed_move_opcode(msg: &ClientOpcodeMessage) -> Option<u32> {
     })
 }
 
-/// Re-emit a relayed `MSG_MOVE_*` to an observer: the **same** opcode, the mover's
-/// (packed) guid, and the carried `MovementInfo` verbatim — which is what makes the peer client
-/// animate run/walk/turn rather than teleport. Returns `None` for a non-relayed opcode. The
-/// crate packs the guid and frames the header on write (`ServerOpcodeMessage::write_*_server`).
-///
-/// **No longer on the hot path**: the peer relay ships
-/// [`build_movement_relay_raw`]'s pre-serialized body instead of paying a decode + re-encode per
-/// observer. This stays as the typed REFERENCE implementation the raw builder is pinned against —
-/// `codec::tests::raw_movement_relay_is_byte_identical_to_the_typed_path` serializes it and demands
-/// the raw bytes match, which is the only thing standing between a memcpy relay and a silent
-/// peer-position desync. Deleting it would delete that proof, so it is deliberately kept.
+/// Typed reference for movement without transport tails. Transport uses the build-5875
+/// codec and the raw relay, since the library's transport layout belongs to later clients.
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn build_movement_relay(
     opcode: u32,
@@ -135,28 +126,15 @@ pub fn build_movement_relay(
 }
 
 /// The shortest legal `MovementInfo` body: `flags u32 + timestamp u32 + position 12 +
-/// orientation f32 + fall_time f32`. Every optional block (transport / pitch / jump / spline
+/// orientation f32 + fall_time u32`. Every optional block (transport / pitch / jump / spline
 /// elevation) only makes it longer, so this is a floor, not an exact size — it exists so a truncated
 /// row can never be framed as a movement packet (the client would parse past the end of the body and
 /// desync its stream).
 const MIN_MOVEMENT_INFO_LEN: usize = 4 + 4 + 12 + 4 + 4;
 
-/// The RAW twin of [`build_movement_relay`]: the same `MSG_MOVE_*` packet, built as
-/// `(opcode, body)` for [`Outbound::Raw`](crate::world::Outbound::Raw) **without decoding
-/// `info_bytes`**. `game_entity_motion.movement_info` already holds exactly the bytes gtker would
-/// serialize a `MovementInfo` into (the gateway put them there via [`movement_info_to_bytes`]), and
-/// the server-side body is `PackedGuid guid` followed by that block verbatim — so the relay is a
-/// packed guid plus a memcpy, not a decode and a re-encode.
-///
-/// Why it matters: this is called once per OBSERVER, per mover, per heartbeat. At 371 co-located
-/// clients that is ~275 k/s, and the typed path paid a full parse + a fresh `ServerOpcodeMessage`
-/// for each one to produce an identical ~30-byte body. Only the header differs per observer, and the
-/// writer already frames and encrypts that per session.
-///
-/// Returns `None` for a non-relayed opcode (matching `build_movement_relay`'s `None`, pinned
-/// exhaustively by `codec::tests`) or for an `info_bytes` too short to be a `MovementInfo`.
-/// **The body is byte-identical to what `build_movement_relay` serializes** — that is the whole
-/// premise, and it is asserted, not assumed, in `raw_movement_relay_is_byte_identical_to_the_typed_path`.
+/// Relay the stored build-5875 movement body under its original opcode, prefixed by the
+/// mover's packed guid. Each observer's writer supplies the frame header and encryption.
+/// Returns None for an unsupported opcode or a body shorter than the fixed movement fields.
 pub fn build_movement_relay_raw(
     opcode: u32,
     mover_guid: u64,
@@ -391,48 +369,6 @@ pub fn build_monster_move_facing(
         spline_flags: SplineFlag::new(0),
         duration: 0,
         splines: vec![pos],
-    }
-}
-
-/// Carry a `MovementInfo` across the DB as opaque bytes (`game_movement_event.movement_info`).
-/// The crate's `MovementInfo` (de)serializer is `pub(crate)`, but `MSG_MOVE_HEARTBEAT_Client`'s
-/// whole body *is* exactly one `MovementInfo` and its codec is public — so we round-trip through
-/// it. The vanilla client header is 6 bytes: `[(body_len+4) as u16 BE][opcode as u32 LE]`.
-const MOVE_HEADER_LEN: usize = 6;
-
-/// Serialize a `MovementInfo` to its raw body bytes (what travels in the event row).
-pub fn movement_info_to_bytes(info: &MovementInfo) -> Result<Vec<u8>> {
-    let mut buf = Vec::new();
-    MSG_MOVE_HEARTBEAT_Client { info: info.clone() }.write_unencrypted_client(&mut buf)?;
-    if buf.len() < MOVE_HEADER_LEN {
-        return Err(anyhow!(
-            "movement body shorter than header ({} bytes)",
-            buf.len()
-        ));
-    }
-    Ok(buf.split_off(MOVE_HEADER_LEN))
-}
-
-/// Reconstruct a `MovementInfo` from raw body bytes by framing them as a `MSG_MOVE_HEARTBEAT`
-/// client packet and decoding. All `MSG_MOVE_*` client bodies are an identical `MovementInfo`, so
-/// HEARTBEAT works as the carrier regardless of the event's real opcode.
-///
-/// The relay stopped calling this once the raw twin shipped (it memcpys the stored block instead), so its
-/// only remaining callers are tests — kept as the decode half of the `movement_info_to_bytes`
-/// round-trip that pins the carrier format the module's rows are written in.
-#[cfg_attr(not(test), allow(dead_code))]
-pub fn bytes_to_movement_info(body: &[u8]) -> Result<MovementInfo> {
-    let size_field = (body.len() as u16)
-        .checked_add(4)
-        .ok_or_else(|| anyhow!("movement body too large"))?;
-    let mut framed = Vec::with_capacity(MOVE_HEADER_LEN + body.len());
-    framed.extend_from_slice(&size_field.to_be_bytes());
-    framed.extend_from_slice(&(movement_opcodes::MSG_MOVE_HEARTBEAT).to_le_bytes());
-    framed.extend_from_slice(body);
-    match ClientOpcodeMessage::read_unencrypted(&mut framed.as_slice()) {
-        Ok(ClientOpcodeMessage::MSG_MOVE_HEARTBEAT(c)) => Ok(c.info),
-        Ok(other) => Err(anyhow!("movement carrier decoded to unexpected {other}")),
-        Err(e) => Err(anyhow!("movement carrier decode failed: {e}")),
     }
 }
 

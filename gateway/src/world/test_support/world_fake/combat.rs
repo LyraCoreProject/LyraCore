@@ -9,9 +9,12 @@ pub(crate) struct CombatState {
 }
 
 impl CombatStore for WorldFake {
-    fn set_target(&self, _actor: Actor, _target_guid: u64) -> Result<()> {
+    fn set_target(&self, _actor: Actor, target_guid: u64) -> Result<()> {
         if self.combat.set_target_transport_lost {
             return Err(ReducerCallError::transport_lost("gw_set_target").into());
+        }
+        if let Some(state) = &self.benilla_gameplay {
+            state.lock().unwrap().selected = target_guid;
         }
         Ok(())
     }

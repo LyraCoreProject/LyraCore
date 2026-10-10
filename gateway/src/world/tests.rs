@@ -111,6 +111,8 @@ mod alpha_test_tools_tests;
 mod auction_tests;
 #[path = "bank_tests.rs"]
 mod bank_tests;
+#[path = "benilla_tests.rs"]
+pub(crate) mod benilla_tests;
 #[path = "cast_tests.rs"]
 mod cast_tests;
 #[path = "character_tests.rs"]

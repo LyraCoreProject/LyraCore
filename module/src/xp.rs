@@ -32,6 +32,9 @@ pub struct XpEvent {
     /// rows + the kill path are unchanged. [entity]
     #[default(true)]
     pub is_kill: bool,
+    /// The rested share of this award. Older events carry no split information.
+    #[default(0u32)]
+    pub rested_bonus: u32,
 }
 
 /// A level-up ("ding"), delivered to the player only → `SMSG_LEVELUP_INFO`. [event]
@@ -372,6 +375,7 @@ pub(crate) fn award_xp(
         total_exp: award,
         created_at: ctx.timestamp,
         is_kill: true,
+        rested_bonus: award - base,
     });
     grant_xp(ctx, &mut p, award);
     entities.guid().update(p);

@@ -542,7 +542,7 @@ parity_test!(parity_game_addon_message, "game_addon_message", lyracore_module::A
     id, recipient_identity, cmd, payload, created_at,
 });
 parity_test!(parity_game_xp_event, "game_xp_event", lyracore_module::XpEvent, bindings::xp_event_type::XpEvent, {
-    id, recipient_identity, killed_guid, total_exp, created_at, is_kill,
+    id, recipient_identity, killed_guid, total_exp, created_at, is_kill, rested_bonus,
 });
 parity_test!(parity_game_levelup_event, "game_levelup_event", lyracore_module::LevelupEvent, bindings::levelup_event_type::LevelupEvent, {
     id, recipient_identity, new_level, health_gained, created_at, mana_gained, strength_gained, agility_gained, stamina_gained, intellect_gained, spirit_gained,

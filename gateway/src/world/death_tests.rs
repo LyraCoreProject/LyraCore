@@ -27,6 +27,7 @@ pub(crate) fn in_world_conn() -> WorldConn {
         }),
         move_coalesce: Default::default(),
         gossip_menu: None,
+        unavailable_notices: Default::default(),
         store: RoutedStore::new(std::sync::Arc::new(WorldFake::default())),
         session_key: None,
         guild_signed_on: None,

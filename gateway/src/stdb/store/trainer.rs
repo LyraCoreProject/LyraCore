@@ -8,9 +8,23 @@ use crate::stdb::bindings::*;
 use crate::stdb::connection::{call_reducer, reducer_refusal_reason};
 use crate::stdb::reads::spell_ranks_stack_in_book;
 use crate::stdb::Coordinator;
-use crate::world::{Actor, TrainerStore};
+use crate::world::{Actor, InteractionOutcome, TrainerStore};
+
+use super::interaction_outcome;
 
 impl TrainerStore for Coordinator {
+    /// The Module's current talent reset price for the confirmation dialog.
+    fn talent_reset_cost(&self, character_guid: u64) -> Option<u32> {
+        self.0
+            .coord()
+            .conn
+            .db
+            .game_character()
+            .guid()
+            .find(&character_guid)
+            .map(|character| lyracore_shared::talent::respec_cost_copper(character.respec_count))
+    }
+
     /// A character's live presence `(online, level, class, zone_id)` for `SMSG_FRIEND_STATUS`/
     /// `SMSG_FRIEND_LIST`. `None` if the guid doesn't resolve to any character (a stale reference).
     fn character_presence(&self, guid: u64) -> Result<Option<(bool, u8, u8, u32)>> {
@@ -317,16 +331,14 @@ impl TrainerStore for Coordinator {
         )
     }
 
-    /// Respec at a trainer (the "I wish to unlearn my talents." gossip option), clears every
-    /// learned talent for the calling player's escalating gold cost. Rides the coordinator
-    /// connection as `gw_reset_talents` (deleted the per-player sender path).
-    fn reset_talents(&self, actor: Actor, trainer_guid: u64) -> Result<()> {
+    /// Confirm a talent reset. The Module checks the trainer, range and price.
+    fn reset_talents(&self, actor: Actor, trainer_guid: u64) -> Result<InteractionOutcome> {
         let coord = self.0.call_pipe();
-        call_reducer!(
+        interaction_outcome(call_reducer!(
             coord.conn.reducers,
             "gw_reset_talents",
             gw_reset_talents_then(self.session_actor(actor), trainer_guid)
-        )
+        ))
     }
 
     /// Persist one action-bar button (`CMSG_SET_ACTION_BUTTON`): upsert by (character, button);
@@ -347,15 +359,20 @@ impl TrainerStore for Coordinator {
     }
 
     /// Persist the rep pane's At-War checkbox (`CMSG_SET_FACTION_ATWAR`): the wire's
-    /// u16 is the client's 0..63 rep-array slot (ReputationListID — the gtker `Faction` field name
+    /// u32 is the client's 0..63 rep-array slot (ReputationListID — the gtker `Faction` field name
     /// lies, same as SET_FACTION_STANDING); the module reverse-resolves the faction and upserts.
-    fn set_faction_at_war(&self, actor: Actor, reputation_index: u32, at_war: bool) -> Result<()> {
+    fn set_faction_at_war(
+        &self,
+        actor: Actor,
+        reputation_index: u32,
+        at_war: bool,
+    ) -> Result<InteractionOutcome> {
         let coord = self.0.call_pipe();
-        call_reducer!(
+        interaction_outcome(call_reducer!(
             coord.conn.reducers,
             "gw_set_faction_at_war",
             gw_set_faction_at_war_then(self.session_actor(actor), reputation_index, at_war)
-        )
+        ))
     }
 }
 

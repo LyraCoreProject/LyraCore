@@ -53,6 +53,30 @@ impl ItemActionStore for Coordinator {
             gw_use_item_then(self.session_actor(actor), slot)
         ))
     }
+
+    fn split_item(
+        &self,
+        actor: Actor,
+        from_slot: u8,
+        to_slot: u8,
+        count: u32,
+    ) -> Result<ItemActionResult> {
+        let coord = self.0.call_pipe();
+        item_action(call_reducer!(
+            coord.conn.reducers,
+            "gw_split_item",
+            gw_split_item_then(self.session_actor(actor), from_slot, to_slot, count)
+        ))
+    }
+
+    fn destroy_item(&self, actor: Actor, slot: u8, count: u32) -> Result<ItemActionResult> {
+        let coord = self.0.call_pipe();
+        item_action(call_reducer!(
+            coord.conn.reducers,
+            "gw_destroy_item",
+            gw_destroy_item_then(self.session_actor(actor), slot, count)
+        ))
+    }
 }
 
 /// The Module's typed item Refusal, on the same rule as the auction family: only a reducer the

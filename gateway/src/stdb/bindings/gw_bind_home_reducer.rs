@@ -10,12 +10,14 @@ use super::session_actor_type::SessionActor;
 #[sats(crate = __lib)]
 pub(super) struct GwBindHomeArgs {
     pub request_actor: SessionActor,
+    pub innkeeper_guid: u64,
 }
 
 impl From<GwBindHomeArgs> for super::Reducer {
     fn from(args: GwBindHomeArgs) -> Self {
         Self::GwBindHome {
             request_actor: args.request_actor,
+            innkeeper_guid: args.innkeeper_guid,
         }
     }
 }
@@ -35,8 +37,8 @@ pub trait gw_bind_home {
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
     /// /// Use [`gw_bind_home:gw_bind_home_then`] to run a callback after the reducer completes.
-    fn gw_bind_home(&self, request_actor: SessionActor) -> __sdk::Result<()> {
-        self.gw_bind_home_then(request_actor, |_, _| {})
+    fn gw_bind_home(&self, request_actor: SessionActor, innkeeper_guid: u64) -> __sdk::Result<()> {
+        self.gw_bind_home_then(request_actor, innkeeper_guid, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `gw_bind_home` to run as soon as possible,
@@ -48,6 +50,7 @@ pub trait gw_bind_home {
     fn gw_bind_home_then(
         &self,
         request_actor: SessionActor,
+        innkeeper_guid: u64,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -59,12 +62,18 @@ impl gw_bind_home for super::RemoteReducers {
     fn gw_bind_home_then(
         &self,
         request_actor: SessionActor,
+        innkeeper_guid: u64,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
-        self.imp
-            .invoke_reducer_with_callback(GwBindHomeArgs { request_actor }, callback)
+        self.imp.invoke_reducer_with_callback(
+            GwBindHomeArgs {
+                request_actor,
+                innkeeper_guid,
+            },
+            callback,
+        )
     }
 }

@@ -22,10 +22,18 @@ impl From<ItemRefusal> for ItemActionResult {
 }
 
 pub(crate) trait ItemActionStore: Send + Sync {
+    fn destroy_item(&self, actor: Actor, slot: u8, count: u32) -> Result<ItemActionResult>;
     fn equip_item(&self, actor: Actor, from_slot: u8) -> Result<ItemActionResult>;
     fn unequip_item(&self, actor: Actor, from_slot: u8) -> Result<ItemActionResult>;
     fn move_item(&self, actor: Actor, from_slot: u8, to_slot: u8) -> Result<ItemActionResult>;
     fn use_item(&self, actor: Actor, slot: u8) -> Result<ItemActionResult>;
+    fn split_item(
+        &self,
+        actor: Actor,
+        from_slot: u8,
+        to_slot: u8,
+        count: u32,
+    ) -> Result<ItemActionResult>;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,6 +69,13 @@ fn act(
     })
 }
 
+/// A request the Gateway refuses before any Durable Request, such as a bag position it cannot map.
+fn refuse(player: ItemActionPlayer, operation: &str, refusal: ItemRefusal) -> ItemActionOutcome {
+    ItemActionOutcome::Handled {
+        outbound: inventory_action_outbound(player.account_id, operation, refusal.into()),
+    }
+}
+
 /// A Refusal answers the client with its own result code; a completed action answers nothing.
 fn inventory_action_outbound(
     account_id: u64,
@@ -91,20 +106,26 @@ pub(crate) fn dispatch_item_action<St: ItemActionStore + QuestActionStore + ?Siz
     msg: ClientOpcodeMessage,
 ) -> Result<ItemActionOutcome> {
     match msg {
-        ClientOpcodeMessage::CMSG_AUTOEQUIP_ITEM(c) if c.source_bag == MAIN_BAG => {
-            act(player, "equip_item", |actor| {
-                store.equip_item(actor, c.source_slot)
-            })
-        }
+        ClientOpcodeMessage::CMSG_DESTROYITEM(c) => match codec::inventory_slot(c.bag, c.slot) {
+            Some(slot) => act(player, "destroy_item", |actor| {
+                store.destroy_item(actor, slot, u32::from(c.amount))
+            }),
+            None => Ok(refuse(player, "destroy_item", ItemRefusal::WrongSlot)),
+        },
+        ClientOpcodeMessage::CMSG_SPLIT_ITEM(c) => match (
+            codec::inventory_slot(c.source_bag, c.source_slot),
+            codec::inventory_slot(c.destination_bag, c.destination_slot),
+        ) {
+            (Some(source), Some(destination)) => act(player, "split_item", |actor| {
+                store.split_item(actor, source, destination, u32::from(c.amount))
+            }),
+            _ => Ok(refuse(player, "split_item", ItemRefusal::WrongSlot)),
+        },
         ClientOpcodeMessage::CMSG_AUTOEQUIP_ITEM(c) => {
-            log::debug!(
-                "world: autoequip from sub-bag {} unsupported (account {})",
-                c.source_bag,
-                player.account_id
-            );
-            Ok(ItemActionOutcome::Handled {
-                outbound: Vec::new(),
-            })
+            match codec::inventory_slot(c.source_bag, c.source_slot) {
+                Some(slot) => act(player, "equip_item", |actor| store.equip_item(actor, slot)),
+                None => Ok(refuse(player, "equip_item", ItemRefusal::WrongSlot)),
+            }
         }
         ClientOpcodeMessage::CMSG_AUTOSTORE_BAG_ITEM(c)
             if c.source_bag == MAIN_BAG
@@ -115,59 +136,35 @@ pub(crate) fn dispatch_item_action<St: ItemActionStore + QuestActionStore + ?Siz
                 store.unequip_item(actor, c.source_slot)
             })
         }
-        ClientOpcodeMessage::CMSG_AUTOSTORE_BAG_ITEM(c) => {
-            log::debug!(
-                "world: autostore (bag {} slot {}) unsupported (account {})",
-                c.source_bag,
-                c.source_slot,
-                player.account_id
-            );
-            Ok(ItemActionOutcome::Handled {
-                outbound: Vec::new(),
-            })
+        ClientOpcodeMessage::CMSG_AUTOSTORE_BAG_ITEM(_) => {
+            Ok(refuse(player, "autostore", ItemRefusal::NotRightNow))
         }
         ClientOpcodeMessage::CMSG_SWAP_INV_ITEM(c) => act(player, "move_item", |actor| {
             store.move_item(actor, c.source_slot.as_int(), c.destination_slot.as_int())
         }),
-        ClientOpcodeMessage::CMSG_SWAP_ITEM(c)
-            if c.source_bag == MAIN_BAG && c.destination_bag == MAIN_BAG =>
-        {
-            act(player, "move_item (swap)", |actor| {
-                store.move_item(actor, c.source_slot, c.destionation_slot)
-            })
-        }
-        ClientOpcodeMessage::CMSG_SWAP_ITEM(_) => {
-            log::debug!(
-                "world: cross-bag swap unsupported (account {})",
-                player.account_id
-            );
-            Ok(ItemActionOutcome::Handled {
-                outbound: Vec::new(),
-            })
-        }
+        ClientOpcodeMessage::CMSG_SWAP_ITEM(c) => match (
+            codec::inventory_slot(c.source_bag, c.source_slot),
+            codec::inventory_slot(c.destination_bag, c.destionation_slot),
+        ) {
+            (Some(source), Some(destination)) => act(player, "move_item", |actor| {
+                store.move_item(actor, source, destination)
+            }),
+            _ => Ok(refuse(player, "move_item", ItemRefusal::WrongSlot)),
+        },
         // Using an item that starts a quest opens that quest instead of consuming the item, so the
         // quest family gets first refusal on the slot.
-        ClientOpcodeMessage::CMSG_USE_ITEM(c) if c.bag_index == MAIN_BAG => {
+        ClientOpcodeMessage::CMSG_USE_ITEM(c) => {
+            let Some(slot) = codec::inventory_slot(c.bag_index, c.bag_slot) else {
+                return Ok(refuse(player, "use_item", ItemRefusal::WrongSlot));
+            };
             let quest_player = QuestActionPlayer {
                 account_id: player.account_id,
                 self_guid: player.self_guid,
             };
-            match item_started_quest(store, quest_player, c.bag_slot)? {
+            match item_started_quest(store, quest_player, slot)? {
                 Some(outbound) => Ok(ItemActionOutcome::Handled { outbound }),
-                None => act(player, "use_item", |actor| {
-                    store.use_item(actor, c.bag_slot)
-                }),
+                None => act(player, "use_item", |actor| store.use_item(actor, slot)),
             }
-        }
-        ClientOpcodeMessage::CMSG_USE_ITEM(c) => {
-            log::debug!(
-                "world: use_item from sub-bag {} unsupported (account {})",
-                c.bag_index,
-                player.account_id
-            );
-            Ok(ItemActionOutcome::Handled {
-                outbound: Vec::new(),
-            })
         }
         other => Ok(ItemActionOutcome::PassThrough(other)),
     }
@@ -215,6 +212,18 @@ pub(super) mod tests {
     }
 
     impl ItemActionStore for InMemoryItemActions {
+        fn destroy_item(&self, _actor: Actor, _slot: u8, _count: u32) -> Result<ItemActionResult> {
+            Ok(ItemRefusal::ItemNotFound.into())
+        }
+        fn split_item(
+            &self,
+            _actor: Actor,
+            _from_slot: u8,
+            _to_slot: u8,
+            _count: u32,
+        ) -> Result<ItemActionResult> {
+            Ok(ItemRefusal::ItemNotFound.into())
+        }
         fn equip_item(&self, actor: Actor, from_slot: u8) -> Result<ItemActionResult> {
             self.equip_requests
                 .lock()
@@ -418,10 +427,10 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn equip_from_a_sub_bag_requests_no_durable_operation() {
+    fn equip_from_an_invalid_bag_position_returns_a_refusal() {
         let actions = InMemoryItemActions::default();
 
-        handled_without_outbound(dispatch_item_action(&actions, player(), equip(19)).unwrap());
+        inventory_failure(dispatch_item_action(&actions, player(), equip(19)).unwrap());
 
         assert_no_durable_requests(&actions);
     }
@@ -455,9 +464,7 @@ pub(super) mod tests {
     fn unequip_from_a_backpack_slot_requests_no_durable_operation() {
         let actions = InMemoryItemActions::default();
 
-        handled_without_outbound(
-            dispatch_item_action(&actions, player(), unequip(24, MAIN_BAG)).unwrap(),
-        );
+        inventory_failure(dispatch_item_action(&actions, player(), unequip(24, MAIN_BAG)).unwrap());
 
         assert_no_durable_requests(&actions);
     }
@@ -466,9 +473,7 @@ pub(super) mod tests {
     fn unequip_into_a_sub_bag_requests_no_durable_operation() {
         let actions = InMemoryItemActions::default();
 
-        handled_without_outbound(
-            dispatch_item_action(&actions, player(), unequip(15, 19)).unwrap(),
-        );
+        inventory_failure(dispatch_item_action(&actions, player(), unequip(15, 19)).unwrap());
 
         assert_no_durable_requests(&actions);
     }
@@ -477,7 +482,7 @@ pub(super) mod tests {
     fn unequip_from_a_sub_bag_requests_no_durable_operation() {
         let actions = InMemoryItemActions::default();
 
-        handled_without_outbound(
+        inventory_failure(
             dispatch_item_action(
                 &actions,
                 player(),
@@ -566,10 +571,10 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn cross_container_swap_requests_no_durable_operation() {
+    fn invalid_bag_position_returns_a_refusal_without_a_durable_request() {
         let actions = InMemoryItemActions::default();
 
-        handled_without_outbound(dispatch_item_action(&actions, player(), swap(19)).unwrap());
+        inventory_failure(dispatch_item_action(&actions, player(), swap(19)).unwrap());
 
         assert_no_durable_requests(&actions);
     }
@@ -597,12 +602,15 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn use_from_a_sub_bag_requests_no_durable_operation() {
+    fn use_from_a_bag_resolves_its_slot_before_the_durable_request() {
         let actions = InMemoryItemActions::default();
 
         handled_without_outbound(dispatch_item_action(&actions, player(), use_item(19)).unwrap());
 
-        assert_no_durable_requests(&actions);
+        assert_eq!(
+            actions.use_requests.lock().unwrap().as_slice(),
+            &[(42, 125)]
+        );
     }
 
     // ── Item-starts-quest ────────────────────────────────────────────────────
@@ -691,6 +699,16 @@ pub(super) mod tests {
         let (item1, item2, bag_type_subclass) = (Guid::new(0), Guid::new(0), 0u8);
         // The vanilla 1.12 result each Refusal must reach the client as.
         let expected = |refusal| match refusal {
+            ItemRefusal::Indestructible => Failure::CantDropSoulbound {
+                item1,
+                item2,
+                bag_type_subclass,
+            },
+            ItemRefusal::BagNotEmpty => Failure::CanOnlyDoWithEmptyBags {
+                item1,
+                item2,
+                bag_type_subclass,
+            },
             ItemRefusal::ItemNotFound => Failure::ItemNotFound {
                 item1,
                 item2,

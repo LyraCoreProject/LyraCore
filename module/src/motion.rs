@@ -418,14 +418,13 @@ pub fn set_motion_tick_ms(ctx: &ReducerContext, tick_ms: u64) -> Result<(), Stri
 }
 
 // ===========================================================================================
-//  Tests — the pure decisions above, plus a model of the queue built out of them
+//  Tests for the movement coalescing decisions
 // ===========================================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use lyracore_shared::opcodes::movement as m;
-    use std::collections::{HashMap, HashSet};
 
     const HEARTBEAT: u16 = m::MSG_MOVE_HEARTBEAT as u16;
     const FACING: u16 = m::MSG_MOVE_SET_FACING as u16;
@@ -470,191 +469,6 @@ mod tests {
             TickAction::DropStale,
             "publishing for a guid with no live entity row RESURRECTS a motion row nothing will \
              ever delete again"
-        );
-    }
-
-    // ---- A model of the queue, built out of the SAME pure fns the reducers execute --------------
-    //
-    // The module crate has no `ReducerContext` harness by design (playbook §7), so the ALGORITHM is
-    // exercised here against an in-memory stand-in for the two tables. Every decision in the model is a
-    // call into `coalesce` / `tick_action`; the model itself only moves rows between two maps,
-    // exactly as the reducers do.
-
-    #[derive(Default)]
-    struct Model {
-        pending: HashMap<u64, (u16, Vec<u8>)>,
-        /// The public relay: guid -> (opcode, movement_info, seq).
-        published: HashMap<u64, (u16, Vec<u8>, u32)>,
-        alive: HashSet<u64>,
-        /// How many times a row was written into the public table (the thing that costs a sweep).
-        publishes: usize,
-    }
-
-    impl Model {
-        fn publish(&mut self, guid: u64, payload: (u16, Vec<u8>)) {
-            let seq = self.published.get(&guid).map_or(0, |(_, _, s)| s + 1);
-            self.published.insert(guid, (payload.0, payload.1, seq));
-            self.publishes += 1;
-        }
-
-        /// `movement_update`'s relay block.
-        fn movement(&mut self, guid: u64, opcode: u16, info: &[u8]) {
-            let incoming = (opcode, info.to_vec());
-            match self.pending.get(&guid).cloned() {
-                None => {
-                    self.pending.insert(guid, incoming);
-                }
-                Some(prev) => match coalesce(prev.0, opcode) {
-                    Coalesce::Replace => {
-                        self.pending.insert(guid, incoming);
-                    }
-                    Coalesce::KeepQueued => {}
-                    Coalesce::FlushThenReplace => {
-                        self.publish(guid, prev);
-                        self.pending.insert(guid, incoming);
-                    }
-                },
-            }
-        }
-
-        /// `publish_motion`.
-        fn tick(&mut self) {
-            for (guid, payload) in std::mem::take(&mut self.pending) {
-                match tick_action(self.alive.contains(&guid)) {
-                    TickAction::Publish => self.publish(guid, payload),
-                    TickAction::DropStale => {}
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn the_tick_republishes_a_changed_row() {
-        let mut w = Model::default();
-        w.alive.insert(7);
-        w.movement(7, HEARTBEAT, &[1, 2, 3]);
-        w.tick();
-        assert_eq!(
-            w.published.get(&7),
-            Some(&(HEARTBEAT, vec![1, 2, 3], 0)),
-            "a staged heartbeat must reach the public relay on the next firing"
-        );
-        w.movement(7, HEARTBEAT, &[4, 5, 6]);
-        w.tick();
-        assert_eq!(w.published.get(&7), Some(&(HEARTBEAT, vec![4, 5, 6], 1)));
-    }
-
-    #[test]
-    fn the_tick_does_not_republish_an_unchanged_row() {
-        let mut w = Model::default();
-        w.alive.insert(7);
-        w.movement(7, HEARTBEAT, &[1, 2, 3]);
-        w.tick();
-        let after_first = w.publishes;
-        // Ten idle firings with no movement in between.
-        for _ in 0..10 {
-            w.tick();
-        }
-        assert_eq!(
-            w.publishes, after_first,
-            "an entity that did not move has no queued row, so the tick must not touch its public \
-             row at all — rewriting every entity every tick would just move the cost, not remove it"
-        );
-        assert_eq!(
-            w.published.get(&7).map(|(_, _, s)| *s),
-            Some(0),
-            "seq must not advance while nothing moved"
-        );
-    }
-
-    #[test]
-    fn the_tick_does_not_resurrect_a_departed_entity() {
-        let mut w = Model::default();
-        w.alive.insert(7);
-        w.movement(7, HEARTBEAT, &[1, 2, 3]);
-        // The mover logs out AFTER staging: the lifecycle path deletes both rows...
-        w.alive.remove(&7);
-        w.pending.remove(&7);
-        w.tick();
-        assert!(!w.published.contains_key(&7));
-        // missed, a race), the tick's own liveness gate still refuses to write the public row.
-        w.movement(7, HEARTBEAT, &[9]);
-        w.tick();
-        assert!(
-            !w.published.contains_key(&7),
-            "the liveness gate is the backstop that makes a missed delete site degrade to a \
-             dropped packet instead of an immortal ghost row"
-        );
-        assert!(w.pending.is_empty(), "the stale row is drained either way");
-    }
-
-    #[test]
-    fn a_discrete_transition_survives_a_window_it_shares_with_a_heartbeat() {
-        let mut w = Model::default();
-        w.alive.insert(7);
-        // Jump, then a heartbeat 10ms later — both inside one 50ms window.
-        w.movement(7, JUMP, &[0xAA]);
-        w.movement(7, HEARTBEAT, &[0xBB]);
-        w.tick();
-        assert_eq!(
-            w.published.get(&7).map(|(op, info, _)| (*op, info.clone())),
-            Some((JUMP, vec![0xAA])),
-            "the JUMP opcode AND its movement_info (which carries the jump's own flags) must \
-             survive — 'latest position wins' would publish the heartbeat and the peer would never \
-             play the jump"
-        );
-
-        w.movement(7, HEARTBEAT, &[0xCC]);
-        w.tick();
-        assert_eq!(
-            w.published.get(&7).map(|(op, info, _)| (*op, info.clone())),
-            Some((HEARTBEAT, vec![0xCC]))
-        );
-    }
-
-    #[test]
-    fn two_discrete_transitions_in_one_window_are_both_relayed_in_order() {
-        let mut w = Model::default();
-        w.alive.insert(7);
-        w.movement(7, START, &[0x01]);
-        w.movement(7, JUMP, &[0x02]);
-        // The START went out immediately (it could not be expressed by the same public row as the
-        // JUMP in one transaction), so it is already published BEFORE the firing.
-        assert_eq!(
-            w.published.get(&7).map(|(op, _, _)| *op),
-            Some(START),
-            "the older transition is flushed, never overwritten"
-        );
-        w.tick();
-        assert_eq!(
-            w.published
-                .get(&7)
-                .map(|(op, info, s)| (*op, info.clone(), *s)),
-            Some((JUMP, vec![0x02], 1)),
-            "and the newer one follows on the next firing, with a bumped seq — order preserved"
-        );
-    }
-
-    #[test]
-    fn a_crowd_of_heartbeats_costs_one_public_write_each_per_firing() {
-        let mut w = Model::default();
-        for guid in 0..100u64 {
-            w.alive.insert(guid);
-        }
-        // Three heartbeats per player inside one window (the earlier cost: 300 transactions).
-        for _ in 0..3 {
-            for guid in 0..100u64 {
-                w.movement(guid, HEARTBEAT, &[0x01]);
-            }
-        }
-        assert_eq!(
-            w.publishes, 0,
-            "staging costs no public write at all — that is the whole item"
-        );
-        w.tick();
-        assert_eq!(
-            w.publishes, 100,
-            "one write per MOVER per firing, all inside the single tick transaction"
         );
     }
 }

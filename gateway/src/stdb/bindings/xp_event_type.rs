@@ -13,6 +13,7 @@ pub struct XpEvent {
     pub total_exp: u32,
     pub created_at: __sdk::Timestamp,
     pub is_kill: bool,
+    pub rested_bonus: u32,
 }
 
 impl __sdk::InModule for XpEvent {
@@ -29,6 +30,7 @@ pub struct XpEventCols {
     pub total_exp: __sdk::__query_builder::Col<XpEvent, u32>,
     pub created_at: __sdk::__query_builder::Col<XpEvent, __sdk::Timestamp>,
     pub is_kill: __sdk::__query_builder::Col<XpEvent, bool>,
+    pub rested_bonus: __sdk::__query_builder::Col<XpEvent, u32>,
 }
 
 impl __sdk::__query_builder::HasCols for XpEvent {
@@ -41,6 +43,7 @@ impl __sdk::__query_builder::HasCols for XpEvent {
             total_exp: __sdk::__query_builder::Col::new(table_name, "total_exp"),
             created_at: __sdk::__query_builder::Col::new(table_name, "created_at"),
             is_kill: __sdk::__query_builder::Col::new(table_name, "is_kill"),
+            rested_bonus: __sdk::__query_builder::Col::new(table_name, "rested_bonus"),
         }
     }
 }

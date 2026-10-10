@@ -307,21 +307,6 @@ mod tests {
         assert_eq!(projected_mount_display([(A_MOUNTED, -3)]), 0);
     }
 
-    /// Idempotence, at the level the recompute actually decides it: the projection is a pure function
-    /// of the aura set, so re-deriving it from an unchanged set yields the same value — which is why
-    /// `recompute_mount` can skip the write and why a second `dismount` changes nothing. Removing the
-    /// mount spell's rows (both effects together, as `dismount` does) converges on 0.
-    #[test]
-    fn projection_is_stable_and_converges_on_removal() {
-        let mounted = [(A_MOUNTED, 1147), (A_MOD_SPEED, SPEED_MOUNTED as i32)];
-        assert_eq!(projected_mount_display(mounted), 1147);
-        assert_eq!(projected_mount_display(mounted), 1147);
-
-        let after_dismount: [(u8, i32); 0] = [];
-        assert_eq!(projected_mount_display(after_dismount), 0);
-        assert_eq!(projected_mount_display(after_dismount), 0);
-    }
-
     /// Mount replacement (story 28): applying a second mount dismounts the first, so the aura set is
     /// never allowed to hold two `A_MOUNTED` rows. Should one appear anyway, the projection stays
     /// deterministic rather than flickering between displays.

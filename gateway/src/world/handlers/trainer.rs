@@ -52,7 +52,12 @@ pub(crate) trait TrainerStore: Send + Sync {
 
     /// Persist the rep pane's At-War checkbox (`CMSG_SET_FACTION_ATWAR`).
     /// `reputation_index` is the client's 0..63 rep-array slot, NOT a faction id.
-    fn set_faction_at_war(&self, actor: Actor, reputation_index: u32, at_war: bool) -> Result<()>;
+    fn set_faction_at_war(
+        &self,
+        actor: Actor,
+        reputation_index: u32,
+        at_war: bool,
+    ) -> Result<InteractionOutcome>;
 
     /// Talent-pane sync after a successful `learn_talent`: `(teach_spell, superseded_prev,
     /// points_remaining)` — the rank-spell to relay as LEARNED/SUPERCEDED (the 1.12 TalentFrame
@@ -67,10 +72,11 @@ pub(crate) trait TrainerStore: Send + Sync {
     /// / max rank / prerequisites); a gameplay `Err` is per-action, not session-fatal.
     fn learn_talent(&self, actor: Actor, talent_id: u32) -> Result<()>;
 
-    /// Respec at `trainer_guid` (the "I wish to unlearn my talents." gossip option, gated to level
-    /// 10+ by `filtered_gossip_options`). Errors (out of range / not enough gold) are
-    /// per-action; the caller just closes the gossip window either way.
-    fn reset_talents(&self, actor: Actor, trainer_guid: u64) -> Result<()>;
+    /// Quote the Module's current talent reset cost for the confirmation dialog.
+    fn talent_reset_cost(&self, character_guid: u64) -> Option<u32>;
+
+    /// Confirm a talent reset. The Module checks the trainer, range and price.
+    fn reset_talents(&self, actor: Actor, trainer_guid: u64) -> Result<InteractionOutcome>;
 
     /// The rank a trainer offering actually teaches (LearnSpell wrapper → its trigger; a
     /// self-contained rank resolves to itself). Mirrors the module's buy-time resolution so
@@ -266,19 +272,6 @@ pub(crate) fn handle_trainer<St: CharacterStore + NpcStore + TrainerStore + ?Siz
                 store.set_action_button(actor, c.button, action, c.action_type),
             )?;
         }
-        // The rep pane's At-War checkbox. The wire's `faction` u16 is the client's
-        // 0..63 rep-array slot (ReputationListID — gtker's field name lies, the same
-        // SET_FACTION_STANDING precedent); `flags` carries the new checkbox state (AT_WAR = 0x02).
-        // Best-effort like SET_ACTION_BUTTON — a failure must never drop the session.
-        ClientOpcodeMessage::CMSG_SET_FACTION_ATWAR(c) => {
-            let reputation_index = c.faction.as_int() as u32;
-            let at_war = c.flags.is_at_war();
-            settle_per_action(
-                "set_faction_at_war",
-                conn.account_id,
-                store.set_faction_at_war(actor, reputation_index, at_war),
-            )?;
-        }
         ClientOpcodeMessage::CMSG_LEARN_TALENT(c) => {
             let talent_id = c.talent.as_int();
             let grant_spell_id = store.talent_grant_spell(talent_id);
@@ -370,4 +363,35 @@ fn send_armor_proficiency<St: CharacterStore + TrainerStore + ?Sized>(
         tx,
         Outbound::One(codec::build_armor_proficiency_msg(player_class, &learned)),
     )
+}
+
+/// The vanilla request names a reputation-list index, not a Faction.dbc id.
+pub(crate) fn handle_at_war<St: TrainerStore + SessionStore + ?Sized>(
+    tx: &SessionTx,
+    store: &St,
+    conn: &mut WorldConn,
+    body: &[u8],
+) -> Result<()> {
+    anyhow::ensure!(
+        body.len() == 5 && body[4] <= 1,
+        "invalid CMSG_SET_FACTION_ATWAR body"
+    );
+    let Some(actor) = social::self_guid(conn).and_then(Actor::new) else {
+        return Ok(());
+    };
+    let index = u32::from_le_bytes(body[..4].try_into()?);
+    if let Some((opcode, info)) = conn.move_coalesce.flush_now() {
+        forward_movement(store, conn, opcode, &info)?;
+    }
+    if let InteractionOutcome::Refused(reason) =
+        store.set_faction_at_war(actor, index, body[4] != 0)?
+    {
+        send(
+            tx,
+            Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(
+                codec::build_gm_system_message(reason),
+            ))),
+        )?;
+    }
+    Ok(())
 }

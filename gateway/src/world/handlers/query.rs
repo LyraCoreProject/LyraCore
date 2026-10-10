@@ -44,12 +44,10 @@ pub(crate) trait NpcStore: Send + Sync {
     /// `VendorActionStore::vendor_refuses_interaction`).
     fn npc_refuses_interaction(&self, npc_guid: u64, player_guid: u64) -> Result<bool>;
 
-    /// Bind the caller's hearthstone home to their current position (innkeeper gossip "Make this inn
-    /// your home."). No args — the module resolves the caller via `ctx.sender`.
-    fn bind_home(&self, actor: Actor) -> Result<()>;
+    /// Bind the Character's home after the Module checks the selected innkeeper.
+    fn bind_home(&self, actor: Actor, innkeeper_guid: u64) -> Result<InteractionOutcome>;
 
-    /// Does the NPC at `guid` carry the innkeeper flag? Gates the "Make this inn your home." gossip
-    /// option + the bind select.
+    /// Does the NPC at `guid` carry the innkeeper flag? Used to display its gossip option.
     fn npc_is_innkeeper(&self, guid: u64) -> Result<bool>;
 
     /// Resolve the `title_text_id` to embed in `SMSG_GOSSIP_MESSAGE` for the NPC at `guid`.
@@ -202,6 +200,39 @@ pub(crate) fn handle_query<
     };
 
     match msg {
+        ClientOpcodeMessage::CMSG_BINDER_ACTIVATE(request) => {
+            let Some(actor) = actor else {
+                return Ok(None);
+            };
+            if let InteractionOutcome::Refused(reason) =
+                store.bind_home(actor, request.guid.guid())?
+            {
+                send(
+                    tx,
+                    Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(
+                        codec::build_gm_system_message(reason),
+                    ))),
+                )?;
+            }
+            send(tx, Outbound::One(ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE))?;
+        }
+        ClientOpcodeMessage::MSG_TALENT_WIPE_CONFIRM(request) => {
+            let Some(actor) = actor else {
+                return Ok(None);
+            };
+            if let InteractionOutcome::Refused(reason) =
+                store.reset_talents(actor, request.wiping_npc.guid())?
+            {
+                send(
+                    tx,
+                    Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(
+                        codec::build_gm_system_message(reason),
+                    ))),
+                )?;
+            }
+            send(tx, Outbound::One(ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE))?;
+        }
+
         // Name resolution: the client asks for a guid's name to render its plate (else "Unknown").
         //
         // Resolved across every connected shard, not just this one. A guid the
@@ -371,13 +402,14 @@ pub(crate) fn handle_query<
                     }
                 }
                 Some(gossip_option::INNKEEPER) => {
-                    // Bind failure (not in world) is per-action; close the window either way (the
-                    // post-bind SMSG_BINDPOINTUPDATE confirmation is cosmetic — sent fresh at next
-                    // login; the recall is server-authoritative regardless).
-                    if let Some(actor) = actor {
-                        settle_per_action("bind_home", conn.account_id, store.bind_home(actor))?;
-                    }
                     send(tx, Outbound::One(ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE))?;
+                    send(
+                        tx,
+                        Outbound::Raw {
+                            opcode: 0x02eb,
+                            body: npc.to_le_bytes().to_vec(),
+                        },
+                    )?;
                 }
                 Some(gossip_option::TRAINER) => {
                     let spells = store.trainer_list(player_guid, npc)?;
@@ -389,16 +421,27 @@ pub(crate) fn handle_query<
                     )?;
                 }
                 Some(gossip_option::UNLEARNTALENTS) => {
-                    // Respec. Errors (out of range / not enough gold) are per-action,
-                    // the window closes either way, same as bind_home above.
-                    if let Some(actor) = actor {
-                        settle_per_action(
-                            "reset_talents",
-                            conn.account_id,
-                            store.reset_talents(actor, npc),
+                    send(tx, Outbound::One(ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE))?;
+                    if let Some(cost) = store.talent_reset_cost(player_guid) {
+                        let mut body = npc.to_le_bytes().to_vec();
+                        body.extend_from_slice(&cost.to_le_bytes());
+                        send(
+                            tx,
+                            Outbound::Raw {
+                                opcode: 0x02aa,
+                                body,
+                            },
+                        )?;
+                    } else {
+                        send(
+                            tx,
+                            Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(
+                                codec::build_gm_system_message(
+                                    "The talent reset quote is not available. Try again.".into(),
+                                ),
+                            ))),
                         )?;
                     }
-                    send(tx, Outbound::One(ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE))?;
                 }
                 Some(gossip_option::TAXI) => {
                     for message in open_taxi_outbound(store, actor, npc)? {

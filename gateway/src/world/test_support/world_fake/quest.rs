@@ -27,7 +27,17 @@ impl QuestActionStore for WorldFake {
         _giver_guid: u64,
         _player_guid: u64,
     ) -> Result<Vec<codec::GiverQuestEval>> {
-        Ok(self.quest.quest_evals.clone())
+        let mut evaluations = self.quest.quest_evals.clone();
+        if self.benilla_gameplay.is_some() {
+            let log = self.quest.quest_log.lock().unwrap();
+            for evaluation in &mut evaluations {
+                if evaluation.role == codec::ROLE_END {
+                    evaluation.active = log.contains(&(evaluation.quest_id, false));
+                    evaluation.complete &= evaluation.active;
+                }
+            }
+        }
+        Ok(evaluations)
     }
 
     fn quest_detail_view(&self, quest_id: u32) -> Result<Option<codec::QuestDetailView>> {
@@ -43,10 +53,13 @@ impl QuestActionStore for WorldFake {
         Ok(self.npc_refuses)
     }
 
-    /// Accept, abandon and share are driven only at the quest seam, where
-    /// `InMemoryQuestActions` records the request — a socket test would prove nothing more, so
-    /// this store just answers success.
-    fn accept_quest(&self, _actor: Actor, _giver_guid: u64, _quest_id: u32) -> Result<()> {
+    fn accept_quest(&self, _actor: Actor, _giver_guid: u64, quest_id: u32) -> Result<()> {
+        if self.benilla_gameplay.is_some() {
+            let mut log = self.quest.quest_log.lock().unwrap();
+            if !log.iter().any(|&(id, _)| id == quest_id) {
+                log.push((quest_id, false));
+            }
+        }
         Ok(())
     }
 
@@ -90,6 +103,22 @@ impl QuestActionStore for WorldFake {
     ) -> Result<()> {
         if let Some(e) = &self.trade_error {
             return Err(crate::stdb::ReducerCallError::refused("gw_turn_in_quest", e).into());
+        }
+        if let Some(state) = &self.benilla_gameplay {
+            let refused =
+                |reason| crate::stdb::ReducerCallError::refused("gw_turn_in_quest", reason);
+            let mut log = self.quest.quest_log.lock().unwrap();
+            let Some((_, rewarded)) = log.iter_mut().find(|(id, _)| *id == quest_id) else {
+                return Err(refused("quest not active").into());
+            };
+            if *rewarded {
+                return Err(refused("quest already rewarded").into());
+            }
+            let detail = self
+                .quest_detail_view(quest_id)?
+                .ok_or_else(|| refused("quest absent"))?;
+            state.lock().unwrap().copper += detail.money_reward;
+            *rewarded = true;
         }
         self.quest.turned_in.lock().unwrap().push((
             actor.guid(),

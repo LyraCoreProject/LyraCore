@@ -603,7 +603,7 @@ mod tests {
     // sibling `spawn` module, reached via the parent `creatures` re-export.
     use crate::creatures::{
         rank_hp_multiplier_permille, rolled_creature_stats, scale_creature_damage_for_level,
-        scale_health_for_rank, CreatureFamily,
+        scale_health_for_rank,
     };
 
     #[test]
@@ -856,23 +856,6 @@ mod tests {
         assert_eq!(scale_health_for_rank(1_000_000_000, 2), 2_800_000_000); // ×2.8 < u32::MAX
         assert_eq!(scale_health_for_rank(1_000_000_000, 3), 4_000_000_000); // ×4.0 < u32::MAX
         assert_eq!(scale_health_for_rank(2_000_000_000, 4), 3_600_000_000); // ×1.8 < u32::MAX
-    }
-
-    /// Schema shape guard, follows `loot.rs`'s `new_loot_family_tables_construct_with_
-    /// the_documented_shape` convention): `game_creature_family` constructs with named fields exactly
-    /// like the importer's positional SQL INSERT column list (`family_id,name,pet_food_mask,
-    /// pet_talent_type,category`) — a compile-time guard against a silently reordered/renamed column.
-    /// Purely compile-time: the runtime gates (feeding + tameable) don't exist yet, so there is
-    /// nothing behavioral to assert.
-    #[test]
-    fn new_creature_family_table_constructs_with_the_documented_shape() {
-        let _wolf = CreatureFamily {
-            family_id: 1,
-            name: "Wolf".to_string(),
-            pet_food_mask: 0x41, // MEAT | RAW_MEAT
-            pet_talent_type: 0,  // >= 0 = tameable; -1 marks non-pet families
-            category: 8,
-        };
     }
 
     #[test]

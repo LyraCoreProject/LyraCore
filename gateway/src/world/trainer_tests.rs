@@ -157,7 +157,7 @@ impl TrainerStore for TrainerFake {
         _actor: Actor,
         _reputation_index: u32,
         _at_war: bool,
-    ) -> Result<()> {
+    ) -> Result<InteractionOutcome> {
         unimplemented!("set_faction_at_war")
     }
 
@@ -176,7 +176,11 @@ impl TrainerStore for TrainerFake {
         }
     }
 
-    fn reset_talents(&self, _actor: Actor, _trainer_guid: u64) -> Result<()> {
+    fn talent_reset_cost(&self, _character_guid: u64) -> Option<u32> {
+        unimplemented!("talent_reset_cost")
+    }
+
+    fn reset_talents(&self, _actor: Actor, _trainer_guid: u64) -> Result<InteractionOutcome> {
         unimplemented!("reset_talents")
     }
 

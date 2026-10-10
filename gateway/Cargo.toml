@@ -16,6 +16,10 @@ description = "LyraCore edge/protocol tier: terminates the WoW client protocol, 
 name = "lyracore-gateway"
 path = "src/main.rs"
 
+[[example]]
+name = "benilla_inventory"
+test = true
+
 [dependencies]
 lyracore-shared.workspace = true
 
@@ -51,8 +55,11 @@ dhat = { version = "0.3", optional = true }
 
 [dev-dependencies]
 lyracore-test-support.workspace = true
+benilla-protocol = { git = "https://github.com/samwhosung/benilla.git", rev = "c2fc3cf304075a0fa1c9accffaf5efb99be9edfe" }
+benilla-srp = { git = "https://github.com/samwhosung/benilla.git", rev = "c2fc3cf304075a0fa1c9accffaf5efb99be9edfe" }
 blake3 = "1"
 serde_json = "1"
+syn = { version = "2", features = ["full", "visit"] }
 # Work-item 220 (binding schema-parity test, gateway/tests/schema_parity.rs): the module crate
 # compiles natively (its own test suite proves it — no wasm-only dep), so a dev-only dependency
 # lets the test compare module `#[table]` structs against the hand-maintained gateway bindings

@@ -1,7 +1,7 @@
 //! Codec: map gateway-side row views to `wow_world_messages` (vanilla) messages.
 //!
-//! The byte layouts — including the update mask, packed guids, and the movement block — are
-//! owned by `wow_world_messages`. This module is the thin mapping from the gateway's flattened
+//! Most byte layouts come from `wow_world_messages`. The build-5875 movement codec corrects
+//! its transport flag and layout. This module is the thin mapping from the gateway's flattened
 //! row views, such as `CharacterView`, `EntityView`, and `AuctionView`, to the crate's typed
 //! messages: char enum, the
 //! `CREATE_OBJECT2` self/peer spawn (built via the crate's `UpdatePlayer::builder()`, which
@@ -37,6 +37,7 @@ mod mail;
 mod meeting_stone;
 mod member_stats;
 mod movement;
+mod movement_info;
 mod npc;
 mod pet;
 mod quest;
@@ -72,6 +73,7 @@ pub use mail::*;
 pub use meeting_stone::*;
 pub use member_stats::*;
 pub use movement::*;
+pub use movement_info::*;
 pub use npc::*;
 pub use pet::*;
 pub use quest::*;
@@ -103,7 +105,6 @@ use wow_world_messages::vanilla::{
     CharacterFlags,
     CharacterGear,
     Class,
-    ClientMessage,
     CreatureFamily,
     DamageInfo,
     DateTime,
@@ -132,7 +133,6 @@ use wow_world_messages::vanilla::{
     LogoutSpeed,
     MSG_CORPSE_QUERY_Server,
     MSG_MOVE_FALL_LAND_Server,
-    MSG_MOVE_HEARTBEAT_Client,
     MSG_MOVE_HEARTBEAT_Server,
     MSG_MOVE_JUMP_Server,
     MSG_MOVE_SET_FACING_Server,
@@ -179,7 +179,6 @@ use wow_world_messages::vanilla::{
     SMSG_CREATURE_QUERY_RESPONSE_found,
     SMSG_GAMEOBJECT_QUERY_RESPONSE_found,
     SMSG_ITEM_QUERY_SINGLE_RESPONSE_found,
-    SMSG_LOG_XPGAIN_ExperienceAwardType,
     SMSG_MONSTER_MOVE_MonsterMoveType,
     SMSG_PET_SPELLS_action_bars,
     SMSG_SPELL_GO_CastFlags,
@@ -253,7 +252,6 @@ use wow_world_messages::vanilla::{
     SMSG_LOGIN_SETTIMESPEED,
     SMSG_LOGIN_VERIFY_WORLD,
     SMSG_LOGOUT_RESPONSE,
-    SMSG_LOG_XPGAIN,
     SMSG_LOOT_MASTER_LIST,
     SMSG_LOOT_MONEY_NOTIFY,
     SMSG_LOOT_RELEASE_RESPONSE,

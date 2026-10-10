@@ -1784,6 +1784,22 @@ pub(crate) fn recv_reducer_on(
 mod coordinator_query_tests {
     use super::{call_pipe_queries, coordinator_queries, CALL_PIPE_LIVENESS_QUERY};
 
+    #[test]
+    fn coordinator_subscribes_bot_intents_in_each_topology() {
+        for sharded in [false, true] {
+            let queries = coordinator_queries(sharded);
+            for query in [
+                "SELECT * FROM game_bot_invite_intent",
+                "SELECT * FROM game_bot_transfer_intent",
+            ] {
+                assert!(
+                    queries.contains(&query),
+                    "missing {query}, sharded={sharded}"
+                );
+            }
+        }
+    }
+
     /// Every table that only exists on a MULTI-DATABASE deployment. A subscription to one of these
     /// against a module that predates it FAILS TO APPLY and takes the whole gateway down on
     /// restart (`coordinator_queries`' doc comment) — so an unconfigured gateway must ask for none.

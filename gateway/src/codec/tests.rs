@@ -5,7 +5,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 // Only the loot byte-match test needs gtker's typed loot response (the runtime path is raw).
 use wow_world_messages::vanilla::ServerMessage;
 use wow_world_messages::vanilla::{
-    EnvironmentalDamageType, SMSG_LOOT_RESPONSE_LootMethod, TimerType, SMSG_LOOT_RESPONSE,
+    EnvironmentalDamageType, MSG_MOVE_HEARTBEAT_Client, SMSG_LOOT_RESPONSE_LootMethod, TimerType,
+    SMSG_LOOT_RESPONSE,
 };
 // Group loot methods: the vote-kind byte constants + wire RollVote enum.
 use lyracore_shared::loot_roll::vote_kind;
@@ -1199,8 +1200,7 @@ fn movement_relay_roundtrips_under_same_opcode() {
 fn movement_info_cases() -> Vec<(&'static str, MovementInfo)> {
     use wow_world_messages::vanilla::{
         MovementInfo_MovementFlags, MovementInfo_MovementFlags_Jumping,
-        MovementInfo_MovementFlags_OnTransport, MovementInfo_MovementFlags_SplineElevation,
-        MovementInfo_MovementFlags_Swimming, TransportInfo,
+        MovementInfo_MovementFlags_SplineElevation, MovementInfo_MovementFlags_Swimming,
     };
     let base = MovementInfo {
         flags: MovementInfo_MovementFlags::empty(),
@@ -1246,26 +1246,6 @@ fn movement_info_cases() -> Vec<(&'static str, MovementInfo)> {
             },
         ),
         (
-            "on a transport (a packed guid nested mid-block)",
-            MovementInfo {
-                flags: MovementInfo_MovementFlags::empty().set_on_transport(
-                    MovementInfo_MovementFlags_OnTransport {
-                        transport: TransportInfo {
-                            guid: Guid::new(0x0000_1234_5678_0000),
-                            position: Vector3d {
-                                x: 1.0,
-                                y: 2.0,
-                                z: 3.0,
-                            },
-                            orientation: 0.5,
-                            timestamp: 77,
-                        },
-                    },
-                ),
-                ..base.clone()
-            },
-        ),
-        (
             "spline elevation (a trailing 4-byte block)",
             MovementInfo {
                 flags: MovementInfo_MovementFlags::empty().set_spline_elevation(
@@ -1298,16 +1278,8 @@ fn movement_info_cases() -> Vec<(&'static str, MovementInfo)> {
     ]
 }
 
-/// **The peer-motion relay's load-bearing premise, asserted rather than argued.** The peer-motion relay no
-/// longer decodes `game_entity_motion.movement_info` and re-encodes it through gtker; it writes a
-/// packed guid and memcpys the stored block. That is only safe if the resulting `(opcode, body)` is
-/// what `build_movement_relay` + gtker's own serializer produced — a wrong layout here does not
-/// error anywhere, it silently desyncs every peer's position on every client.
-///
-/// So: for EVERY relayed opcode × every `MovementInfo` shape × a set of guids chosen to exercise the
-/// packed-guid encoding (1 byte, high bytes only, all 8 bytes, and the zero pattern), serialize the
-/// typed message the old path sent, strip its 4-byte header, and demand the raw builder's opcode and
-/// body match byte for byte.
+/// Non-transport movement agrees with the typed codec across all supported opcodes and
+/// packed mover guids. Benilla checks transport movement independently.
 #[test]
 fn raw_movement_relay_is_byte_identical_to_the_typed_path() {
     // 1 = one low byte; 0x0100 = one HIGH byte (a zero low byte must be skipped, not written);
@@ -1349,7 +1321,7 @@ fn raw_movement_relay_is_byte_identical_to_the_typed_path() {
     }
     assert_eq!(
         compared,
-        7 * 17 * 5,
+        6 * 17 * 5,
         "every case × opcode × guid must have been compared"
     );
 }

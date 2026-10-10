@@ -9,6 +9,9 @@
 use anyhow::{anyhow, Result};
 use std::time::Duration;
 
+use crate::stdb::connection::{classify, DurableFailure};
+use crate::world::InteractionOutcome;
+
 mod auction;
 mod bank;
 mod cast;
@@ -68,6 +71,49 @@ fn next_operation_id() -> Result<u64> {
         let operation_id = u64::from_le_bytes(bytes);
         if operation_id != 0 {
             return Ok(operation_id);
+        }
+    }
+}
+
+/// A Character request whose Refusal the client reads as a system message.
+fn interaction_outcome(result: Result<()>) -> Result<InteractionOutcome> {
+    match result {
+        Ok(()) => Ok(InteractionOutcome::Done),
+        Err(error) => match classify(&error) {
+            DurableFailure::Refusal { reason } => {
+                Ok(InteractionOutcome::Refused(reason.to_owned()))
+            }
+            DurableFailure::TransportLoss => Err(error),
+        },
+    }
+}
+
+#[cfg(test)]
+mod interaction_outcome_tests {
+    use super::*;
+    use crate::stdb::connection::ReducerCallError;
+
+    #[test]
+    fn interaction_outcomes_keep_module_refusals_separate_from_transport_loss() {
+        assert_eq!(
+            interaction_outcome(Ok(())).unwrap(),
+            InteractionOutcome::Done
+        );
+        let refusal = anyhow::Error::from(ReducerCallError::refused(
+            "gw_bind_home",
+            "innkeeper out of range",
+        ))
+        .context("request completion");
+        assert_eq!(
+            interaction_outcome(Err(refusal)).unwrap(),
+            InteractionOutcome::Refused("innkeeper out of range".into())
+        );
+        for failure in [
+            anyhow::Error::from(ReducerCallError::fatal("request timed out".into())),
+            anyhow::Error::from(ReducerCallError::transport_lost("gw_bind_home")),
+            anyhow!("innkeeper out of range"),
+        ] {
+            assert!(interaction_outcome(Err(failure)).is_err());
         }
     }
 }

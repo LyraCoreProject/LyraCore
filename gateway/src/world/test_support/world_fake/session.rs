@@ -6,6 +6,8 @@ pub(crate) type MoveRecord = (u32, f32, f32, f32, f32, u32);
 
 #[derive(Default)]
 pub(crate) struct SessionState {
+    pub(crate) movement_world:
+        Option<std::sync::Arc<crate::world::tests::benilla_tests::MovementWorld>>,
     /// WORLDPORT_ACK gate: true = entity present -> a spurious ack is ignored;
     /// false (derive-Default) = absent -> a genuine transfer is pending.
     pub(crate) entity_in_world: bool,
@@ -111,7 +113,7 @@ impl SessionStore for WorldFake {
             .ok_or_else(|| anyhow!("no login entity configured"))
     }
 
-    fn movement_update(&self, _actor: Actor, opcode: u32, info: &MovementInfo) -> Result<()> {
+    fn movement_update(&self, actor: Actor, opcode: u32, info: &MovementInfo) -> Result<()> {
         self.rec("movement_update");
         if self.session.movement_transport_lost {
             return Err(ReducerCallError::transport_lost("gw_movement_batch").into());
@@ -124,6 +126,9 @@ impl SessionStore for WorldFake {
             info.orientation,
             info.timestamp,
         ));
+        if let Some(world) = &self.session.movement_world {
+            world.update(actor.guid(), opcode, info)?;
+        }
         Ok(())
     }
 

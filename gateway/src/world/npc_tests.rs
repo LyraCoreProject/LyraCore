@@ -361,6 +361,22 @@ fn gossip_select_on_an_innkeeper_binds_home_and_completes() {
         ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE => {}
         other => panic!("expected SMSG_GOSSIP_COMPLETE, got {other}"),
     }
+    let ServerOpcodeMessage::SMSG_BINDER_CONFIRM(confirm) =
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap()
+    else {
+        panic!("expected innkeeper confirmation");
+    };
+    assert!(!store
+        .npc
+        .home_bound
+        .load(std::sync::atomic::Ordering::SeqCst));
+    wow_world_messages::vanilla::CMSG_BINDER_ACTIVATE { guid: confirm.guid }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    assert!(matches!(
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap(),
+        ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE
+    ));
     drop(client);
     server.join().unwrap();
     assert!(
@@ -487,6 +503,7 @@ fn gossip_select_on_an_imported_vendor_option_opens_the_inventory_window() {
 fn gossip_select_on_an_imported_innkeeper_option_binds_home() {
     use lyracore_shared::constants::gossip_option;
     let mut s = quest_store();
+    s.npc.innkeeper = true;
     s.npc.gossip_opts = vec![
         opt(0, "Chat.", gossip_option::GOSSIP),
         opt(0, "Stay here.", gossip_option::INNKEEPER),
@@ -505,6 +522,22 @@ fn gossip_select_on_an_imported_innkeeper_option_binds_home() {
         ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE => {}
         other => panic!("expected SMSG_GOSSIP_COMPLETE, got {other}"),
     }
+    let ServerOpcodeMessage::SMSG_BINDER_CONFIRM(confirm) =
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap()
+    else {
+        panic!("expected innkeeper confirmation");
+    };
+    assert!(!store
+        .npc
+        .home_bound
+        .load(std::sync::atomic::Ordering::SeqCst));
+    wow_world_messages::vanilla::CMSG_BINDER_ACTIVATE { guid: confirm.guid }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    assert!(matches!(
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap(),
+        ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE
+    ));
     drop(client);
     server.join().unwrap();
     assert!(
@@ -543,6 +576,10 @@ fn the_same_option_row_reaches_the_module_by_row_id_from_either_viewer() {
     .write_encrypted_client(&mut client, &mut c_enc)
     .unwrap();
     let _ = ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
+    assert!(matches!(
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap(),
+        ServerOpcodeMessage::SMSG_BINDER_CONFIRM(_)
+    ));
     drop(client);
     server.join().unwrap();
 
@@ -562,6 +599,10 @@ fn the_same_option_row_reaches_the_module_by_row_id_from_either_viewer() {
     .write_encrypted_client(&mut client, &mut c_enc)
     .unwrap();
     let _ = ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
+    assert!(matches!(
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap(),
+        ServerOpcodeMessage::SMSG_BINDER_CONFIRM(_)
+    ));
     drop(client);
     server.join().unwrap();
 
@@ -579,6 +620,7 @@ fn the_same_option_row_reaches_the_module_by_row_id_from_either_viewer() {
 fn a_quest_taken_while_the_window_is_open_does_not_shift_the_click() {
     use lyracore_shared::constants::{gossip_condition, gossip_option};
     let mut s = quest_store();
+    s.npc.innkeeper = true;
     let mut gated = opt(0, "About that favor...", gossip_option::GOSSIP);
     gated.row_id = 4001;
     gated.cond_type = gossip_condition::QUEST_TAKEN;
@@ -605,6 +647,22 @@ fn a_quest_taken_while_the_window_is_open_does_not_shift_the_click() {
         ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE => {}
         other => panic!("expected SMSG_GOSSIP_COMPLETE, got {other}"),
     }
+    let ServerOpcodeMessage::SMSG_BINDER_CONFIRM(confirm) =
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap()
+    else {
+        panic!("expected innkeeper confirmation");
+    };
+    assert!(!store
+        .npc
+        .home_bound
+        .load(std::sync::atomic::Ordering::SeqCst));
+    wow_world_messages::vanilla::CMSG_BINDER_ACTIVATE { guid: confirm.guid }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    assert!(matches!(
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap(),
+        ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE
+    ));
     drop(client);
     server.join().unwrap();
     assert!(
@@ -706,6 +764,22 @@ fn an_imported_menu_missing_its_bind_row_still_offers_the_hearth() {
         ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE => {}
         other => panic!("expected SMSG_GOSSIP_COMPLETE, got {other}"),
     }
+    let ServerOpcodeMessage::SMSG_BINDER_CONFIRM(confirm) =
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap()
+    else {
+        panic!("expected innkeeper confirmation");
+    };
+    assert!(!store
+        .npc
+        .home_bound
+        .load(std::sync::atomic::Ordering::SeqCst));
+    wow_world_messages::vanilla::CMSG_BINDER_ACTIVATE { guid: confirm.guid }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    assert!(matches!(
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap(),
+        ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE
+    ));
     drop(client);
     server.join().unwrap();
     assert!(store
@@ -799,8 +873,7 @@ fn gossip_hello_shows_unlearn_talents_at_level_10_and_select_routes_to_reset_tal
         }
         other => panic!("expected SMSG_GOSSIP_MESSAGE, got {other}"),
     }
-    // Click it (index 1, same list HELLO just rendered) — must route to reset_talents, not just
-    // close the window inert.
+    // Selecting the option quotes the cost without changing talents.
     CMSG_GOSSIP_SELECT_OPTION {
         guid: Guid::new(90),
         gossip_list_id: 1,
@@ -812,6 +885,22 @@ fn gossip_hello_shows_unlearn_talents_at_level_10_and_select_routes_to_reset_tal
         ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE => {}
         other => panic!("expected SMSG_GOSSIP_COMPLETE, got {other}"),
     }
+    let ServerOpcodeMessage::MSG_TALENT_WIPE_CONFIRM(confirm) =
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap()
+    else {
+        panic!("expected talent reset quote");
+    };
+    assert_eq!(confirm.cost_in_copper, 10_000);
+    assert!(store.trainer.reset_talents_calls.lock().unwrap().is_empty());
+    wow_world_messages::vanilla::MSG_TALENT_WIPE_CONFIRM_Client {
+        wiping_npc: confirm.wiping_npc,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    assert!(matches!(
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap(),
+        ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE
+    ));
     drop(client);
     server.join().unwrap();
     let calls = store.trainer.reset_talents_calls.lock().unwrap();
@@ -859,6 +948,7 @@ fn gossip_hello_and_select_option_stay_position_aligned_under_a_hidden_option() 
     // `filtered_gossip_options` re-derives the IDENTICAL list rather than indexing the raw rows.
     use lyracore_shared::constants::{gossip_condition, gossip_option};
     let mut s = quest_store();
+    s.npc.innkeeper = true;
     s.npc.gossip_opts = vec![
         opt(0, "Chat.", gossip_option::GOSSIP), // raw index 0 -> rendered index 0
         opt(0, "Hidden favor.", gossip_option::GOSSIP), // raw index 1 -> HIDDEN (quest-gated)
@@ -894,6 +984,22 @@ fn gossip_hello_and_select_option_stay_position_aligned_under_a_hidden_option() 
         ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE => {}
         other => panic!("expected SMSG_GOSSIP_COMPLETE, got {other}"),
     }
+    let ServerOpcodeMessage::SMSG_BINDER_CONFIRM(confirm) =
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap()
+    else {
+        panic!("expected innkeeper confirmation");
+    };
+    assert!(!store
+        .npc
+        .home_bound
+        .load(std::sync::atomic::Ordering::SeqCst));
+    wow_world_messages::vanilla::CMSG_BINDER_ACTIVATE { guid: confirm.guid }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    assert!(matches!(
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap(),
+        ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE
+    ));
     drop(client);
     server.join().unwrap();
     assert!(

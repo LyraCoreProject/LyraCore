@@ -180,6 +180,7 @@ pub struct SpellProcEvent {
     accessor = game_aura,
     public,
     index(accessor = by_target, btree(columns = [target_guid])),
+    index(accessor = by_caster, btree(columns = [caster_guid])),
     index(accessor = by_expiry, btree(columns = [expires_at])),
     // Creature fear movement runs every firing. This exact pair finds its sparse candidates without
     // reading unrelated buffs, passive effects, periodic effects, or Procs.
