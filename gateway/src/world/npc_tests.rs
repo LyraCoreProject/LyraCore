@@ -1050,6 +1050,50 @@ fn npc_text_query_ships_the_imported_8_slot_view() {
 }
 
 #[test]
+fn gossip_training_selection_sends_the_profession_list_type() {
+    use lyracore_shared::constants::gossip_option;
+    let mut store = quest_store();
+    store.npc.gossip_opts = vec![opt(3, "Train me.", gossip_option::TRAINER)];
+    store.trainer.spells = vec![codec::TrainerSpellView {
+        spell_id: 4036,
+        cost: 0,
+        required_level: 1,
+        player_level: 10,
+        known: false,
+        learn_skill_line: 202,
+    }];
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(std::sync::Arc::new(store), 1);
+    CMSG_GOSSIP_HELLO {
+        guid: Guid::new(90),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    let ServerOpcodeMessage::SMSG_GOSSIP_MESSAGE(menu) =
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap()
+    else {
+        panic!("expected a gossip menu");
+    };
+    assert_eq!(menu.gossips[0].item_icon, 3);
+    CMSG_GOSSIP_SELECT_OPTION {
+        guid: Guid::new(90),
+        gossip_list_id: menu.gossips[0].id,
+        unknown: None,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    let ServerOpcodeMessage::SMSG_TRAINER_LIST(list) =
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap()
+    else {
+        panic!("expected a trainer list");
+    };
+    assert_eq!(list.guid, Guid::new(90));
+    assert_eq!(list.trainer_type, 2);
+    assert_eq!(list.spells[0].spell, 4036);
+    drop(client);
+    server.join().unwrap();
+}
+
+#[test]
 fn gossip_hides_the_train_and_unlearn_options_for_a_class_the_trainer_does_not_serve() {
     use lyracore_shared::constants::gossip_option;
     // Level 20 matters: the respec option is independently hidden below level 10, so at the default

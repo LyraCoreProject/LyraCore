@@ -162,7 +162,7 @@ impl TrainerStore for Coordinator {
                 } else {
                     learned.contains(resolved.get(&t.spell_id).unwrap_or(&t.spell_id))
                 },
-                profession: t.learn_skill_line != 0,
+                learn_skill_line: t.learn_skill_line,
             })
             .collect())
     }
