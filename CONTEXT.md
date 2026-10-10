@@ -211,7 +211,10 @@ the final Gate.
 
 **Character**:
 A guid-owned player entity.
-_Avoid_: player (as a noun in code)
+The public Runtime Script authoring API calls a Character `player`, as in `events.player`,
+`event.player`, `PlayerEntity` and `PlayerLoginEvent`. The public event payload uses the same
+word, for example `victimIsPlayer`. Core code uses Character.
+_Avoid_: player as a noun in Core code outside that authoring contract
 
 **Actor**:
 The Character a Gateway Verb acts as. In the Gateway it is the `Actor` type, a nonzero guid.
@@ -1147,6 +1150,9 @@ source file creates a new one. An independent scaffold starts with new identitie
 A legacy `@key value` comment at the top of a Runtime Script source. Existing directives still
 build and preserve their IDs. New source declares its Event Binding in code; the toolchain records
 its Script Identity.
+Legacy directives select the legacy source contract for the whole file. They remain supported
+while Package API version 1 sources remain supported; their removal requires an explicit API
+migration.
 _Avoid_: annotation, frontmatter, pragma, metadata header
 
 **Runtime Script Toolchain**:

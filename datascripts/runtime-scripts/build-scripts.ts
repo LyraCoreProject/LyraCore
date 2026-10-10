@@ -8,6 +8,7 @@ import { mkdir, mkdtemp, open, readFile, rename, writeFile } from "node:fs/promi
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { bindInvocation, readBinding, type SourceBinding } from "./bindings.ts";
+import { readDirectives } from "./directives.ts";
 import { allocateScriptId, renderScriptIds, scriptIds, SCRIPT_IDS_FILE } from "./script-ids.ts";
 
 /// Where a Package keeps its Runtime Script sources, relative to the Package folder.
@@ -15,10 +16,6 @@ const SCRIPTS_DIR = "scripts";
 
 /// Where a Package's generated artifacts live, relative to the Package folder.
 const GENERATED_DIR = "data/.generated";
-
-/// The Package script band. Mirrors `is_package_script_id` in `lyracore-package-delta`.
-const SCRIPT_ID_FLOOR = 100_000;
-const SCRIPT_ID_CEIL = 999_999;
 
 /// One script, as its directives and its Lua describe it.
 interface RuntimeScript {
@@ -39,39 +36,12 @@ function refuse(file: string, what: string): never {
 
 // ---- directives ----
 
-/// The `@key value` lines at the top of a script file, before the first line that is neither blank
-/// nor a comment. Both comment markers are accepted so one reader serves `.ts` and `.lua`.
-function readDirectives(file: string, source: string): Map<string, string> {
-  const directives = new Map<string, string>();
-  for (const line of source.split("\n")) {
-    const text = line.trim();
-    if (text.length === 0) continue;
-    const comment = text.startsWith("//") ? text.slice(2) : text.startsWith("--") ? text.slice(2) : undefined;
-    if (comment === undefined) break;
-    const match = /^\s*@([a-z]+)\s+(\S+)\s*$/.exec(comment);
-    if (!match) continue;
-    const [, key, value] = match as unknown as [string, string, string];
-    if (directives.has(key)) refuse(file, `\`@${key}\` is declared twice`);
-    directives.set(key, value);
-  }
-  return directives;
-}
-
 function requiredDirective(file: string, directives: Map<string, string>, key: string): string {
   const value = directives.get(key);
   if (value === undefined) {
     refuse(file, `no \`@${key}\` directive. A legacy Runtime Script declares both \`@event\` and \`@id\`.`);
   }
   return value;
-}
-
-function scriptId(file: string, directives: Map<string, string>): number {
-  const raw = requiredDirective(file, directives, "id");
-  const id = Number(raw);
-  if (!Number.isInteger(id) || id < SCRIPT_ID_FLOOR || id > SCRIPT_ID_CEIL) {
-    refuse(file, `\`@id ${raw}\` is not a whole number in ${SCRIPT_ID_FLOOR}..=${SCRIPT_ID_CEIL}, the Package script band`);
-  }
-  return id;
 }
 
 function priority(file: string, directives: Map<string, string>): number {
@@ -273,9 +243,8 @@ export async function buildPackageScripts(packageName: string): Promise<string> 
     const path = join(scriptsDir, file);
     const source = await readFile(path, "utf8");
     const directives = readDirectives(path, source);
-    const binding = readBinding(path, source, packageName);
+    const binding = directives.size === 0 ? readBinding(path, source, packageName) : undefined;
     if (!binding && directives.size === 0) refuse(path, "declare one top-level Event Binding, such as events.player.onLogin(welcome)");
-    if (binding && directives.size !== 0) refuse(path, "use an Event Binding or legacy Script Directives, not both");
     const event = binding?.event ?? requiredDirective(path, directives, "event");
     checkEvent(path, event, packageName, catalogue);
     const stem = file.slice(0, file.lastIndexOf("."));
@@ -286,17 +255,12 @@ export async function buildPackageScripts(packageName: string): Promise<string> 
       file,
       stem,
       binding,
-      legacyId: binding ? undefined : scriptId(path, directives),
+      legacyId: binding ? undefined : Number(requiredDirective(path, directives, "id")),
       name,
       event,
       priority: binding?.priority ?? priority(path, directives),
       enabled: binding?.enabled ?? enabled(path, directives),
     });
-  }
-
-  // A new identity must never take an ID from a legacy source that sorts after it.
-  for (const { file, stem, legacyId } of declared) {
-    if (legacyId !== undefined) allocateScriptId(join(scriptsDir, file), ids, stem, legacyId);
   }
 
   const outDir = mkdtempSync(join(tmpdir(), "lyracore-scripts-"));

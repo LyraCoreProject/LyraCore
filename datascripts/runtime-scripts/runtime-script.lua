@@ -22,7 +22,7 @@
 
 ---@class PackageEvent: ScriptEvent
 
----@class EventRegistrationOptions
+---@class EventBindingOptions
 ---@field priority? integer
 ---@field enabled? boolean
 
@@ -133,92 +133,92 @@ events = {}
 events.combat = {}
 
 ---@param handler fun(event: DamageTakenEvent): number?
----@param options? EventRegistrationOptions
+---@param options? EventBindingOptions
 function events.combat.onDamageTaken(handler, options) end
 
 ---@param handler fun(event: DeathEvent): number?
----@param options? EventRegistrationOptions
+---@param options? EventBindingOptions
 function events.combat.onDeath(handler, options) end
 
 ---@param handler fun(event: KillEvent): number?
----@param options? EventRegistrationOptions
+---@param options? EventBindingOptions
 function events.combat.onKill(handler, options) end
 events.creature = {}
 
 ---@param handler fun(event: CreatureDeathPreventedEvent): number?
----@param options? EventRegistrationOptions
+---@param options? EventBindingOptions
 function events.creature.onDeathPrevented(handler, options) end
 
 ---@param handler fun(event: CreatureSpawnEvent): number?
----@param options? EventRegistrationOptions
+---@param options? EventBindingOptions
 function events.creature.onSpawn(handler, options) end
 
 ---@param handler fun(event: CreatureAggroEvent): number?
----@param options? EventRegistrationOptions
+---@param options? EventBindingOptions
 function events.creature.onAggro(handler, options) end
 
 ---@param handler fun(event: CreatureDeathEvent): number?
----@param options? EventRegistrationOptions
+---@param options? EventBindingOptions
 function events.creature.onDeath(handler, options) end
 
 ---@param handler fun(event: CreatureHpThresholdEvent): number?
----@param options? EventRegistrationOptions
+---@param options? EventBindingOptions
 function events.creature.onHpThreshold(handler, options) end
 events.player = {}
 
 ---@param handler fun(event: PlayerLevelUpEvent): number?
----@param options? EventRegistrationOptions
+---@param options? EventBindingOptions
 function events.player.onLevelUp(handler, options) end
 
 ---@param handler fun(event: PlayerLootEvent): number?
----@param options? EventRegistrationOptions
+---@param options? EventBindingOptions
 function events.player.onLoot(handler, options) end
 
 ---@param handler fun(event: PlayerQuestAcceptEvent): number?
----@param options? EventRegistrationOptions
+---@param options? EventBindingOptions
 function events.player.onQuestAccept(handler, options) end
 
 ---@param handler fun(event: PlayerQuestTurnInEvent): number?
----@param options? EventRegistrationOptions
+---@param options? EventBindingOptions
 function events.player.onQuestTurnIn(handler, options) end
 
 ---@param handler fun(event: PlayerLoginEvent): number?
----@param options? EventRegistrationOptions
+---@param options? EventBindingOptions
 function events.player.onLogin(handler, options) end
 
 ---@param handler fun(event: PlayerRelocatedEvent): number?
----@param options? EventRegistrationOptions
+---@param options? EventBindingOptions
 function events.player.onRelocated(handler, options) end
 
 ---@param handler fun(event: PlayerLogoutEvent): number?
----@param options? EventRegistrationOptions
+---@param options? EventBindingOptions
 function events.player.onLogout(handler, options) end
 
 ---@param handler fun(event: PlayerGossipSelectEvent): number?
----@param options? EventRegistrationOptions
+---@param options? EventBindingOptions
 function events.player.onGossipSelect(handler, options) end
 events.group = {}
 
 ---@param handler fun(event: GroupInviteEvent): number?
----@param options? EventRegistrationOptions
+---@param options? EventBindingOptions
 function events.group.onInvite(handler, options) end
 events.spell = {}
 
 ---@param handler fun(event: SpellCastResolvedEvent): number?
----@param options? EventRegistrationOptions
+---@param options? EventBindingOptions
 function events.spell.onCastResolved(handler, options) end
 
 ---@param handler fun(event: SpellCastFinishedEvent): number?
----@param options? EventRegistrationOptions
+---@param options? EventBindingOptions
 function events.spell.onCastFinished(handler, options) end
 events.gameobject = {}
 
 ---@param handler fun(event: GameobjectUsedEvent): number?
----@param options? EventRegistrationOptions
+---@param options? EventBindingOptions
 function events.gameobject.onUsed(handler, options) end
 
 events.package = {}
 ---@param localName string
 ---@param handler fun(event: PackageEvent): number?
----@param options? EventRegistrationOptions
+---@param options? EventBindingOptions
 function events.package.on(localName, handler, options) end

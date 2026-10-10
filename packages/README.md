@@ -103,12 +103,17 @@ shipping Package's prefix.
 a Script Artifact with its Build Identity. Commit all three files with the sources. The Runtime
 Script name remains `<package>.<file stem>`, so changing the function name keeps its identity.
 Deleted entries stay reserved. `packages new` omits the copied identities and artifacts so the
-new Package gets its own IDs. A filename change creates a new script identity.
+new Package gets its own IDs. A filename change creates a new Script Identity. The full script
+name must fit 64 lowercase letters, digits, dots, underscores or hyphens, as the Script Artifact
+format requires.
 
 Existing `@event` and `@id` Script Directives still build. To migrate, build once to record the
 identities, then replace the directives with a named function and Event Binding. An existing
 Script Artifact also supplies its original IDs. The builder refuses a disagreement between
 recorded identities, legacy directives and an existing artifact.
+An allocation also reserves identities across the enabled Package Inventory. If two previously
+published Packages already claim the same ID, the compiler names both owners and refuses the
+build. Resolve that published identity conflict before installing them together.
 
 After creating or editing a Package, run `packages apply` to build and activate it.
 

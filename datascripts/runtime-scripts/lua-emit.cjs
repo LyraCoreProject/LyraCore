@@ -19,7 +19,7 @@
 // never meets.
 //
 // Named Event Bindings get their invocation wrapper from build-scripts.ts. Legacy sources still
-// declare script(), whose return value becomes the Script Answer through the appended call.
+// declare script(); the appended call preserves its Script Answer.
 
 const ts = require("typescript");
 const tstl = require("typescript-to-lua");

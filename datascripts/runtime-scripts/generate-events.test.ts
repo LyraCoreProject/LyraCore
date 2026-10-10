@@ -20,6 +20,6 @@ test("level-up payload reads the attained level from the core hook", () => {
 test("login and level-up declare a required Character handle", () => {
   for (const name of ["on_login", "on_levelup"]) {
     const definition = EVENTS.find(definition => definition.event === name);
-    expect(definition?.fields).toContainEqual({ name: "player", type: "PlayerEntity", source: "actor", required: true });
+    expect(definition?.fields).toContainEqual({ name: "player", type: "PlayerEntity", source: "actor" });
   }
 });

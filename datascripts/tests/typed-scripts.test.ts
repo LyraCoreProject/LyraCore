@@ -118,7 +118,7 @@ test("legacy scripts retain local events names and UTF-8 source", async () => {
   await scratch(async (dir, build) => {
     const lua = `-- @event on_login
 -- @id 100300
-local events = { greet = function() return "你好" end }
+events = { greet = function() return "你好" end }
 events.greet()
 return 1
 `;

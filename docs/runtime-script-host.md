@@ -27,6 +27,8 @@ never stops the next one, and never stops the core work that follows.
 Authors bind a named function to an event. The toolchain emits a local wrapper that calls that
 function with the event table and returns its Script Answer. Event Binding does not execute
 source during the build or install persistent handlers in the interpreter.
+Top-level source runs before the handler on each Invocation. Host Operations there share the same
+Staged Effects and failure boundary as the handler.
 
 The Host still supplies one global per Host Operation and one `event` table, so existing compiled
 Script Artifacts remain valid:
@@ -59,6 +61,9 @@ Hook payload fields come from `events.json`. The level-up hook carries `newLevel
 Character row stores that level. The required `player` field aliases the actor's opaque handle;
 the generated wrapper refuses to invoke a typed handler if that Character is absent. Scalar
 64-bit identifiers use decimal strings to preserve their value in TypeScript.
+New event payload fields use camelCase. Existing Entity Handle fields keep their snake_case names
+for compatibility. The loot hook's target is a corpse GUID, so it normally has no live Entity
+Handle. The HP threshold hook has no actor; its target is the creature that crossed the threshold.
 
 A host operation called with a missing entity, the wrong type, an out-of-range amount, or past
 the staging cap raises a Lua error naming the call and the fault. The Invocation returns a

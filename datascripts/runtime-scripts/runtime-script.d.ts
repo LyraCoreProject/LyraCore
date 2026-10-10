@@ -27,7 +27,7 @@ interface ScriptEvent {
 
 interface PackageEvent extends ScriptEvent {}
 
-interface EventRegistrationOptions {
+interface EventBindingOptions {
   readonly priority?: number;
   readonly enabled?: boolean;
 }
@@ -149,38 +149,38 @@ interface GameobjectUsedEvent extends ScriptEvent {
 
 declare const events: {
   readonly combat: {
-    onDamageTaken(this: void, handler: (this: void, event: DamageTakenEvent) => number | void, options?: EventRegistrationOptions): void;
-    onDeath(this: void, handler: (this: void, event: DeathEvent) => number | void, options?: EventRegistrationOptions): void;
-    onKill(this: void, handler: (this: void, event: KillEvent) => number | void, options?: EventRegistrationOptions): void;
+    onDamageTaken(this: void, handler: (this: void, event: DamageTakenEvent) => number | void, options?: EventBindingOptions): void;
+    onDeath(this: void, handler: (this: void, event: DeathEvent) => number | void, options?: EventBindingOptions): void;
+    onKill(this: void, handler: (this: void, event: KillEvent) => number | void, options?: EventBindingOptions): void;
   };
   readonly creature: {
-    onDeathPrevented(this: void, handler: (this: void, event: CreatureDeathPreventedEvent) => number | void, options?: EventRegistrationOptions): void;
-    onSpawn(this: void, handler: (this: void, event: CreatureSpawnEvent) => number | void, options?: EventRegistrationOptions): void;
-    onAggro(this: void, handler: (this: void, event: CreatureAggroEvent) => number | void, options?: EventRegistrationOptions): void;
-    onDeath(this: void, handler: (this: void, event: CreatureDeathEvent) => number | void, options?: EventRegistrationOptions): void;
-    onHpThreshold(this: void, handler: (this: void, event: CreatureHpThresholdEvent) => number | void, options?: EventRegistrationOptions): void;
+    onDeathPrevented(this: void, handler: (this: void, event: CreatureDeathPreventedEvent) => number | void, options?: EventBindingOptions): void;
+    onSpawn(this: void, handler: (this: void, event: CreatureSpawnEvent) => number | void, options?: EventBindingOptions): void;
+    onAggro(this: void, handler: (this: void, event: CreatureAggroEvent) => number | void, options?: EventBindingOptions): void;
+    onDeath(this: void, handler: (this: void, event: CreatureDeathEvent) => number | void, options?: EventBindingOptions): void;
+    onHpThreshold(this: void, handler: (this: void, event: CreatureHpThresholdEvent) => number | void, options?: EventBindingOptions): void;
   };
   readonly player: {
-    onLevelUp(this: void, handler: (this: void, event: PlayerLevelUpEvent) => number | void, options?: EventRegistrationOptions): void;
-    onLoot(this: void, handler: (this: void, event: PlayerLootEvent) => number | void, options?: EventRegistrationOptions): void;
-    onQuestAccept(this: void, handler: (this: void, event: PlayerQuestAcceptEvent) => number | void, options?: EventRegistrationOptions): void;
-    onQuestTurnIn(this: void, handler: (this: void, event: PlayerQuestTurnInEvent) => number | void, options?: EventRegistrationOptions): void;
-    onLogin(this: void, handler: (this: void, event: PlayerLoginEvent) => number | void, options?: EventRegistrationOptions): void;
-    onRelocated(this: void, handler: (this: void, event: PlayerRelocatedEvent) => number | void, options?: EventRegistrationOptions): void;
-    onLogout(this: void, handler: (this: void, event: PlayerLogoutEvent) => number | void, options?: EventRegistrationOptions): void;
-    onGossipSelect(this: void, handler: (this: void, event: PlayerGossipSelectEvent) => number | void, options?: EventRegistrationOptions): void;
+    onLevelUp(this: void, handler: (this: void, event: PlayerLevelUpEvent) => number | void, options?: EventBindingOptions): void;
+    onLoot(this: void, handler: (this: void, event: PlayerLootEvent) => number | void, options?: EventBindingOptions): void;
+    onQuestAccept(this: void, handler: (this: void, event: PlayerQuestAcceptEvent) => number | void, options?: EventBindingOptions): void;
+    onQuestTurnIn(this: void, handler: (this: void, event: PlayerQuestTurnInEvent) => number | void, options?: EventBindingOptions): void;
+    onLogin(this: void, handler: (this: void, event: PlayerLoginEvent) => number | void, options?: EventBindingOptions): void;
+    onRelocated(this: void, handler: (this: void, event: PlayerRelocatedEvent) => number | void, options?: EventBindingOptions): void;
+    onLogout(this: void, handler: (this: void, event: PlayerLogoutEvent) => number | void, options?: EventBindingOptions): void;
+    onGossipSelect(this: void, handler: (this: void, event: PlayerGossipSelectEvent) => number | void, options?: EventBindingOptions): void;
   };
   readonly group: {
-    onInvite(this: void, handler: (this: void, event: GroupInviteEvent) => number | void, options?: EventRegistrationOptions): void;
+    onInvite(this: void, handler: (this: void, event: GroupInviteEvent) => number | void, options?: EventBindingOptions): void;
   };
   readonly spell: {
-    onCastResolved(this: void, handler: (this: void, event: SpellCastResolvedEvent) => number | void, options?: EventRegistrationOptions): void;
-    onCastFinished(this: void, handler: (this: void, event: SpellCastFinishedEvent) => number | void, options?: EventRegistrationOptions): void;
+    onCastResolved(this: void, handler: (this: void, event: SpellCastResolvedEvent) => number | void, options?: EventBindingOptions): void;
+    onCastFinished(this: void, handler: (this: void, event: SpellCastFinishedEvent) => number | void, options?: EventBindingOptions): void;
   };
   readonly gameobject: {
-    onUsed(this: void, handler: (this: void, event: GameobjectUsedEvent) => number | void, options?: EventRegistrationOptions): void;
+    onUsed(this: void, handler: (this: void, event: GameobjectUsedEvent) => number | void, options?: EventBindingOptions): void;
   };
   readonly package: {
-    on(this: void, localName: string, handler: (this: void, event: PackageEvent) => number | void, options?: EventRegistrationOptions): void;
+    on(this: void, localName: string, handler: (this: void, event: PackageEvent) => number | void, options?: EventBindingOptions): void;
   };
 };

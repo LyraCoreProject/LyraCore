@@ -22,7 +22,7 @@ function binding(
   if (path.length !== 3 || path[0] !== "events") refuse(file, "use events.<group>.<event>(handler)");
   const group = path[1]!;
   const method = path[2]!;
-  const definition = EVENTS.find((event) => event.registration[0] === group && event.registration[1] === method);
+  const definition = EVENTS.find((event) => event.binding[0] === group && event.binding[1] === method);
   let event = definition?.event;
   if (group === "package" && method === "on") {
     if (!localName || !/^[a-z][a-z0-9_]*$/.test(localName)) {
@@ -220,7 +220,7 @@ export function bindInvocation(source: string, binding: SourceBinding): string {
     `assert(event.name == ${JSON.stringify(binding.event)}, "Event Binding does not match the Invocation")`,
   ];
   for (const field of binding.definition?.fields ?? []) {
-    if (field.type === "PlayerEntity" && field.required) {
+    if (field.type === "PlayerEntity") {
       lines.push(`assert(event.${field.name} and event.${field.name}.is_player, "${binding.event} requires a Character")`);
     }
   }

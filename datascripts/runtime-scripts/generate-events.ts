@@ -6,7 +6,6 @@ export interface EventField {
   readonly name: string;
   readonly type: "number" | "boolean" | "string" | "PlayerEntity";
   readonly source: string;
-  readonly required?: boolean;
 }
 
 export interface EventDefinition {
@@ -14,7 +13,7 @@ export interface EventDefinition {
   readonly payloadType: string;
   readonly actor: string;
   readonly target: string;
-  readonly registration: readonly [string, string];
+  readonly binding: readonly [string, string];
   readonly typeName: string;
   readonly fields: readonly EventField[];
 }
@@ -24,21 +23,21 @@ export const EVENTS: readonly EventDefinition[] = JSON.parse(readFileSync(join(R
 
 function checkCatalogue(): void {
   const names = new Set<string>();
-  const registrations = new Set<string>();
+  const bindings = new Set<string>();
   const types = new Set<string>();
   for (const definition of EVENTS) {
-    const registration = definition.registration.join(".");
-    if (names.has(definition.event) || registrations.has(registration) || types.has(definition.typeName)) {
-      throw new Error(`duplicate event, registration or type in events.json: ${definition.event}`);
+    const binding = definition.binding.join(".");
+    if (names.has(definition.event) || bindings.has(binding) || types.has(definition.typeName)) {
+      throw new Error(`duplicate event, binding or type in events.json: ${definition.event}`);
     }
     names.add(definition.event);
-    registrations.add(registration);
+    bindings.add(binding);
     types.add(definition.typeName);
     const fields = new Set(["name", "actor", "target"]);
     for (const field of definition.fields) {
       if (fields.has(field.name)) throw new Error(`${definition.event}: duplicate field ${field.name}`);
       fields.add(field.name);
-      if (field.type === "PlayerEntity" && (field.name !== "player" || field.source !== "actor" || !field.required)) {
+      if (field.type === "PlayerEntity" && (field.name !== "player" || field.source !== "actor")) {
         throw new Error(`${definition.event}: a required Character Entity must come from the actor`);
       }
     }
@@ -48,7 +47,7 @@ function checkCatalogue(): void {
 function groups(): Map<string, EventDefinition[]> {
   const grouped = new Map<string, EventDefinition[]>();
   for (const definition of EVENTS) {
-    const group = definition.registration[0];
+    const group = definition.binding[0];
     const events = grouped.get(group) ?? [];
     events.push(definition);
     grouped.set(group, events);
@@ -73,13 +72,13 @@ export function typeScriptDeclarations(): string {
   for (const [group, definitions] of groups()) {
     lines.push(`  readonly ${group}: {`);
     for (const definition of definitions) {
-      lines.push(`    ${definition.registration[1]}(this: void, handler: (this: void, event: ${definition.typeName}) => number | void, options?: EventRegistrationOptions): void;`);
+      lines.push(`    ${definition.binding[1]}(this: void, handler: (this: void, event: ${definition.typeName}) => number | void, options?: EventBindingOptions): void;`);
     }
     lines.push("  };");
   }
   lines.push(
     "  readonly package: {",
-    "    on(this: void, localName: string, handler: (this: void, event: PackageEvent) => number | void, options?: EventRegistrationOptions): void;",
+    "    on(this: void, localName: string, handler: (this: void, event: PackageEvent) => number | void, options?: EventBindingOptions): void;",
     "  };",
     "};",
     "",
@@ -113,7 +112,7 @@ export function luaDeclarations(): string {
     "",
     "---@class PackageEvent: ScriptEvent",
     "",
-    "---@class EventRegistrationOptions",
+    "---@class EventBindingOptions",
     "---@field priority? integer",
     "---@field enabled? boolean",
     "",
@@ -145,8 +144,8 @@ export function luaDeclarations(): string {
       lines.push(
         "",
         `---@param handler fun(event: ${definition.typeName}): number?`,
-        "---@param options? EventRegistrationOptions",
-        `function events.${group}.${definition.registration[1]}(handler, options) end`,
+        "---@param options? EventBindingOptions",
+        `function events.${group}.${definition.binding[1]}(handler, options) end`,
       );
     }
   }
@@ -155,7 +154,7 @@ export function luaDeclarations(): string {
     "events.package = {}",
     "---@param localName string",
     "---@param handler fun(event: PackageEvent): number?",
-    "---@param options? EventRegistrationOptions",
+    "---@param options? EventBindingOptions",
     "function events.package.on(localName, handler, options) end",
     "",
   );

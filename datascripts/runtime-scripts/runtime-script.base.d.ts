@@ -26,7 +26,7 @@ interface ScriptEvent {
 
 interface PackageEvent extends ScriptEvent {}
 
-interface EventRegistrationOptions {
+interface EventBindingOptions {
   readonly priority?: number;
   readonly enabled?: boolean;
 }

@@ -4,7 +4,7 @@
     "payloadType": "crate::hooks::DamageTakenPayload",
     "actor": "payload.attacker_guid",
     "target": "payload.target_guid",
-    "registration": [
+    "binding": [
       "combat",
       "onDamageTaken"
     ],
@@ -22,7 +22,7 @@
     "payloadType": "crate::hooks::DeathPreventedPayload",
     "actor": "payload.attacker_guid",
     "target": "payload.creature_guid",
-    "registration": [
+    "binding": [
       "creature",
       "onDeathPrevented"
     ],
@@ -34,7 +34,7 @@
     "payloadType": "crate::hooks::CreatureSpawnPayload",
     "actor": "payload.guid",
     "target": "0",
-    "registration": [
+    "binding": [
       "creature",
       "onSpawn"
     ],
@@ -67,7 +67,7 @@
     "payloadType": "crate::hooks::LevelupPayload",
     "actor": "payload.character_guid",
     "target": "0",
-    "registration": [
+    "binding": [
       "player",
       "onLevelUp"
     ],
@@ -76,8 +76,7 @@
       {
         "name": "player",
         "type": "PlayerEntity",
-        "source": "actor",
-        "required": true
+        "source": "actor"
       },
       {
         "name": "newLevel",
@@ -91,7 +90,7 @@
     "payloadType": "crate::hooks::GroupInvitePayload",
     "actor": "payload.inviter_guid",
     "target": "payload.target_guid",
-    "registration": [
+    "binding": [
       "group",
       "onInvite"
     ],
@@ -103,7 +102,7 @@
     "payloadType": "crate::hooks::DeathPayload",
     "actor": "payload.killer_guid",
     "target": "payload.victim_guid",
-    "registration": [
+    "binding": [
       "combat",
       "onDeath"
     ],
@@ -121,7 +120,7 @@
     "payloadType": "crate::hooks::KillPayload",
     "actor": "payload.killer_guid",
     "target": "payload.victim_guid",
-    "registration": [
+    "binding": [
       "combat",
       "onKill"
     ],
@@ -144,7 +143,7 @@
     "payloadType": "crate::hooks::AggroPayload",
     "actor": "payload.creature_guid",
     "target": "payload.target_guid",
-    "registration": [
+    "binding": [
       "creature",
       "onAggro"
     ],
@@ -162,7 +161,7 @@
     "payloadType": "crate::hooks::CastResolvedPayload",
     "actor": "payload.caster_guid",
     "target": "payload.target_guid",
-    "registration": [
+    "binding": [
       "spell",
       "onCastResolved"
     ],
@@ -180,7 +179,7 @@
     "payloadType": "crate::hooks::CastFinishedPayload",
     "actor": "payload.caster_guid",
     "target": "payload.target_guid",
-    "registration": [
+    "binding": [
       "spell",
       "onCastFinished"
     ],
@@ -203,7 +202,7 @@
     "payloadType": "crate::hooks::LootPayload",
     "actor": "payload.looter_guid",
     "target": "payload.corpse_guid",
-    "registration": [
+    "binding": [
       "player",
       "onLoot"
     ],
@@ -226,7 +225,7 @@
     "payloadType": "crate::hooks::QuestAcceptPayload",
     "actor": "payload.character_guid",
     "target": "0",
-    "registration": [
+    "binding": [
       "player",
       "onQuestAccept"
     ],
@@ -244,7 +243,7 @@
     "payloadType": "crate::hooks::QuestTurninPayload",
     "actor": "payload.character_guid",
     "target": "0",
-    "registration": [
+    "binding": [
       "player",
       "onQuestTurnIn"
     ],
@@ -262,7 +261,7 @@
     "payloadType": "crate::hooks::LoginPayload",
     "actor": "payload.character_guid",
     "target": "0",
-    "registration": [
+    "binding": [
       "player",
       "onLogin"
     ],
@@ -271,8 +270,7 @@
       {
         "name": "player",
         "type": "PlayerEntity",
-        "source": "actor",
-        "required": true
+        "source": "actor"
       }
     ]
   },
@@ -281,7 +279,7 @@
     "payloadType": "crate::hooks::CharacterRelocatedPayload",
     "actor": "payload.character_guid",
     "target": "0",
-    "registration": [
+    "binding": [
       "player",
       "onRelocated"
     ],
@@ -293,7 +291,7 @@
     "payloadType": "crate::hooks::LogoutPayload",
     "actor": "payload.character_guid",
     "target": "0",
-    "registration": [
+    "binding": [
       "player",
       "onLogout"
     ],
@@ -305,7 +303,7 @@
     "payloadType": "crate::hooks::GossipSelectPayload",
     "actor": "payload.character_guid",
     "target": "payload.npc_guid",
-    "registration": [
+    "binding": [
       "player",
       "onGossipSelect"
     ],
@@ -328,7 +326,7 @@
     "payloadType": "crate::hooks::CreatureDeathPayload",
     "actor": "payload.killer_guid",
     "target": "payload.creature_guid",
-    "registration": [
+    "binding": [
       "creature",
       "onDeath"
     ],
@@ -351,7 +349,7 @@
     "payloadType": "crate::hooks::HpThresholdPayload",
     "actor": "0",
     "target": "payload.creature_guid",
-    "registration": [
+    "binding": [
       "creature",
       "onHpThreshold"
     ],
@@ -379,7 +377,7 @@
     "payloadType": "crate::hooks::GoUsedPayload",
     "actor": "payload.user_guid",
     "target": "payload.go_guid",
-    "registration": [
+    "binding": [
       "gameobject",
       "onUsed"
     ],

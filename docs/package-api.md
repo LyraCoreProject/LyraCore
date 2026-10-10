@@ -468,15 +468,19 @@ Other fields follow each event's declaration. Entity Handles keep their existing
 
 **Script Identities.** The toolchain records numeric IDs in the Package-root `script-ids.json`,
 keyed by source-file stem. Commit it with the sources and Script Artifact. Existing artifacts and
-legacy `@event`/`@id` directives supply migration IDs; a conflict is refused. Renaming a function
+legacy `@event`/`@id` directives supply migration IDs; the compiler refuses a conflict. Renaming a function
 keeps its identity. A source-file rename creates a new identity. Deleted entries remain reserved.
 Migration reads every prior Script Artifact in `data/.generated/`, including noncanonical
 filenames. For a new identity, the toolchain resolves a hash collision by choosing an unused ID.
-It reserves recorded and legacy IDs before allocating new ones.
+It reserves recorded and legacy IDs across the enabled Package Inventory before allocating new
+ones. A conflict between previously recorded IDs names both owners and requires reconciling their
+published identities; the compiler never silently renumbers them.
 
 **Runtime Script Toolchain.** Bun, `typescript-to-lua`, the Lua parser, event catalogue, generated
 declarations and emitter live in `datascripts/runtime-scripts/`. They run only at author time.
 The emitted Lua captures the declared function and calls it with the event in one Invocation.
+Top-level source runs on each Invocation before the handler. Any Host Operations there share the
+handler's Staged Effects and failure boundary.
 An Operator can install the prebuilt Script Artifact. See
 [Runtime Script authoring](../packages/README.md#building-source) for examples and migration.
 
