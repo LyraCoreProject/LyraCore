@@ -50,7 +50,7 @@ fn framing_session() -> (
 ) {
     let store = framing_store();
     let (mut client, server_end) = world_session_socket_pair();
-    let server = std::thread::spawn(move || run_world_session(server_end, store.as_ref()));
+    let server = std::thread::spawn(move || run_world_session(server_end, store.clone()));
     let (c_enc, c_dec) = client_handshake(&mut client, "TESTER", K);
     (client, c_enc, c_dec, server)
 }
@@ -284,7 +284,7 @@ fn a_session_ending_in_a_framing_error_still_gives_its_seat_back() {
     let (mut client, server_end) = world_session_socket_pair();
     let server_queue = queue.clone();
     let server = std::thread::spawn(move || {
-        run_world_session_with_queue(server_end, store.as_ref(), &server_queue)
+        run_world_session_with_queue(server_end, store.clone(), &server_queue)
     });
     let (mut c_enc, _c_dec) = client_handshake(&mut client, "TESTER", K);
     assert_eq!(
@@ -332,7 +332,7 @@ fn a_session_that_dies_in_world_still_deletes_the_players_entity() {
     let server_store = store.clone();
     let server_queue = queue.clone();
     let server = std::thread::spawn(move || {
-        run_world_session_with_queue(server_end, server_store.as_ref(), &server_queue)
+        run_world_session_with_queue(server_end, server_store.clone(), &server_queue)
     });
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
 
@@ -382,7 +382,7 @@ fn a_session_that_dies_in_world_still_deletes_the_players_entity() {
 fn a_malformed_addon_envelope_is_dropped_and_the_session_keeps_serving() {
     let store = framing_store();
     let (mut client, server_end) = world_session_socket_pair();
-    let server = std::thread::spawn(move || run_world_session(server_end, store.as_ref()));
+    let server = std::thread::spawn(move || run_world_session(server_end, store.clone()));
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
 
     // A well-FORMED addon chat frame carrying a body the `STC` envelope parser rejects.

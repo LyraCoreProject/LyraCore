@@ -1837,7 +1837,9 @@ pub(crate) enum DeletedCharacterGuildCleanup {
 /// snapshot: a Transfer deletes the source row only after the destination holds one, and a row
 /// that is stale in a cache starts another pass when its delete arrives. Only then comes the
 /// party cleanup's absence check, two durable snapshots of every configured World Shard.
-pub(crate) fn forget_deleted_character<St: WorldStore + ?Sized>(
+pub(crate) fn forget_deleted_character<
+    St: CharacterStore + GuildActionStore + ShardRoutingStore + ?Sized,
+>(
     store: &St,
     character_guid: u64,
 ) -> Result<DeletedCharacterGuildCleanup> {
@@ -1875,7 +1877,9 @@ impl GuildCleanup {
 
 /// Run the guild cleanup `work` asks for. Every Character is tried; the first failure is
 /// returned, so the worker keeps the work and retries it.
-pub(crate) fn reconcile_deleted_guild_characters<St: WorldStore + ?Sized>(
+pub(crate) fn reconcile_deleted_guild_characters<
+    St: CharacterStore + GuildActionStore + ShardRoutingStore + ?Sized,
+>(
     store: &St,
     work: &GuildCleanup,
 ) -> Result<()> {

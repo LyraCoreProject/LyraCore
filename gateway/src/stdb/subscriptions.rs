@@ -15,6 +15,7 @@
 //! queue runs the cache reads, state updates, and packet construction.
 
 use crate::codec::{self, CreateKind};
+use crate::world::{CharacterStore, QuestActionStore, SessionStore, ShardRoutingStore};
 use crate::world::{Outbound, SessionTx};
 use anyhow::{anyhow, Result};
 use lyracore_shared::item_property::client_enchantment_id;
@@ -2146,7 +2147,9 @@ fn trade_offer_extended(
 /// the shared leg). `store` is the connection the row came from: Realm-core on a sharded Realm.
 /// The LIST render reads every World Shard through it, and QUEST_SHARE reads the quest detail.
 #[allow(clippy::too_many_lines)] // One arm per group event kind.
-pub(crate) fn group_event_outbound<St: crate::world::WorldStore + ?Sized>(
+pub(crate) fn group_event_outbound<
+    St: CharacterStore + QuestActionStore + SessionStore + ShardRoutingStore + ?Sized,
+>(
     store: &St,
     self_guid: u64,
     row: &GroupEvent,
@@ -2434,7 +2437,7 @@ pub(crate) fn group_event_outbound<St: crate::world::WorldStore + ?Sized>(
 /// committed durably, so dropping the packet would strand it for the whole GC window. SET_LEADER
 /// skips the packet instead: the roster mirror the Gateway already pushed carries the new leader,
 /// so the line is redundant rather than load-bearing.
-fn other_character_name<St: crate::world::WorldStore + ?Sized>(
+fn other_character_name<St: CharacterStore + ShardRoutingStore + ?Sized>(
     store: &St,
     row: &GroupEvent,
     relay: &str,

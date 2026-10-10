@@ -66,7 +66,7 @@ impl CoalesceState {
     }
 
     /// Production entry point: classify + coalesce one inbound movement packet against the real
-    /// clock. Returns the packets to actually forward to `WorldStore::movement_update`, IN ORDER
+    /// clock. Returns the packets to actually forward to `SessionStore::movement_update`, IN ORDER
     /// (0, 1, or 2 items — a flushed pending heartbeat followed by a state change, when both fire
     /// in the same call; ordering matters for peer extrapolation, rule 2b).
     pub fn on_movement_now(

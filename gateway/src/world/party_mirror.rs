@@ -8,6 +8,7 @@
 
 use super::party;
 use super::WorldStore;
+use crate::world::ShardRoutingStore;
 use std::collections::BTreeSet;
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 
@@ -19,7 +20,9 @@ pub(crate) struct RosterRevisionRelay {
 
 impl RosterRevisionRelay {
     /// Start the worker thread. `store` is any Coordinator handle.
-    pub(crate) fn spawn<St: WorldStore + 'static>(store: St) -> std::io::Result<Arc<Self>> {
+    pub(crate) fn spawn<St: Send + ShardRoutingStore + 'static>(
+        store: St,
+    ) -> std::io::Result<Arc<Self>> {
         let relay = Arc::new(Self::default());
         let worker = relay.clone();
         std::thread::Builder::new()
@@ -61,7 +64,7 @@ impl RosterRevisionRelay {
 
     /// Push every dirty party to the World Shards whose mirror is stale. A party marked during the
     /// pass waits for the next one.
-    pub(crate) fn push_dirty<St: WorldStore + ?Sized>(&self, store: &St) {
+    pub(crate) fn push_dirty<St: ShardRoutingStore + ?Sized>(&self, store: &St) {
         let parties =
             std::mem::take(&mut *self.dirty.lock().unwrap_or_else(PoisonError::into_inner));
         if parties.is_empty() {
@@ -86,7 +89,7 @@ impl RosterRevisionRelay {
     }
 }
 
-fn push_party<St: WorldStore + ?Sized>(
+fn push_party<St: ShardRoutingStore + ?Sized>(
     store: &St,
     realm: &dyn WorldStore,
     shards: &[Arc<dyn WorldStore>],

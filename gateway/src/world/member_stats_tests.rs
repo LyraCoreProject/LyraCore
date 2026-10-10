@@ -650,7 +650,7 @@ fn world_entry_forgets_member_stats_sent_before_the_party_frame() {
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = session_shard.clone();
     let server = std::thread::spawn(move || {
-        let _ = run_world_session(server_end, server_store.as_ref());
+        let _ = run_world_session(server_end, server_store.clone());
     });
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
     CMSG_PLAYER_LOGIN {

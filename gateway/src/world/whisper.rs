@@ -6,10 +6,11 @@
 //! Request. Sharded and unsharded Gateways run this same path; on an unsharded Gateway
 //! `world_stores()` is empty and every read is one cache read.
 
+use crate::world::{ShardRoutingStore, SocialStore};
 use anyhow::Result;
 
 use super::presence::{self, AwayStatus};
-use super::{WhisperTargetFacts, WorldStore};
+use super::WhisperTargetFacts;
 use lyracore_shared::chat::chat_kind;
 
 /// The online Character `typed_name` reaches, with the facts the Module's whisper Gates need.
@@ -23,7 +24,7 @@ use lyracore_shared::chat::chat_kind;
 /// A candidate whose Realm Presence cannot be read is skipped; if no other candidate is online,
 /// that read's error is the answer, so the caller never reports a Character missing when a Shard
 /// only failed to answer.
-pub(crate) fn target_facts<St: WorldStore + ?Sized>(
+pub(crate) fn target_facts<St: ShardRoutingStore + SocialStore + ?Sized>(
     store: &St,
     speaker_guid: u64,
     typed_name: &str,
@@ -84,7 +85,7 @@ fn away_kind_of(away: AwayStatus) -> u8 {
 ///
 /// The session's own handle propagates its `Err` instead: the whole session already reads through
 /// that database, so a failure there is not "one Shard is down".
-pub(crate) fn ignored_anywhere<St: WorldStore + ?Sized>(
+pub(crate) fn ignored_anywhere<St: ShardRoutingStore + SocialStore + ?Sized>(
     store: &St,
     owner_guid: u64,
     other_guid: u64,

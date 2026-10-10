@@ -51,7 +51,7 @@ pub(crate) trait TradeStore: Send + Sync {
     fn ignore_trade(&self, account_id: u64, self_guid: u64) -> Result<()>;
 }
 
-pub(crate) fn handle_trade<St: WorldStore + ?Sized>(
+pub(crate) fn handle_trade<St: TradeStore + ?Sized>(
     _tx: &SessionTx,
     store: &St,
     conn: &mut WorldConn,

@@ -5378,7 +5378,7 @@ fn handshake_succeeds_and_traffic_is_encrypted_both_ways() {
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
         let mut s = server_end;
-        let (mut conn, _encrypt) = world_handshake(&mut s, server_store.as_ref())
+        let (mut conn, _encrypt) = world_handshake(&mut s, server_store.clone())
             .unwrap()
             .expect("handshake should succeed");
         assert_eq!(conn.account_id, 42);
@@ -5418,7 +5418,7 @@ fn an_auth_session_with_an_absurd_addon_size_still_completes_the_handshake() {
     let store = std::sync::Arc::new(tester_store(42));
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
-    let server = std::thread::spawn(move || run_world_session(server_end, server_store.as_ref()));
+    let server = std::thread::spawn(move || run_world_session(server_end, server_store.clone()));
 
     let server_seed = match ServerOpcodeMessage::read_unencrypted(&mut client).unwrap() {
         ServerOpcodeMessage::SMSG_AUTH_CHALLENGE(c) => c.server_seed,
@@ -5465,7 +5465,7 @@ fn a_silent_world_connection_is_closed_at_the_pre_auth_deadline() {
     let server = std::thread::spawn(move || {
         run_world_session_with_queue_and_deadline(
             server_end,
-            &store,
+            std::sync::Arc::new(store),
             &LoginQueue::unlimited(),
             &mut deadline,
         )
@@ -5509,7 +5509,7 @@ fn slow_auth_session_bytes_cannot_extend_the_pre_auth_deadline() {
 
     let result = world_handshake_with_queue_and_deadline(
         &mut stream,
-        &store,
+        std::sync::Arc::new(store),
         &LoginQueue::unlimited(),
         &mut deadline,
     );
@@ -5547,7 +5547,7 @@ fn world_challenge_write_uses_the_absolute_pre_auth_deadline() {
 
     let result = world_handshake_with_queue_and_deadline(
         &mut stream,
-        &store,
+        std::sync::Arc::new(store),
         &LoginQueue::unlimited(),
         &mut deadline,
     );
@@ -5581,7 +5581,7 @@ fn post_auth_world_traffic_has_no_pre_auth_deadline() {
     let server = std::thread::spawn(move || {
         run_world_session_with_queue_and_deadline(
             server_end,
-            server_store.as_ref(),
+            server_store.clone(),
             &LoginQueue::unlimited(),
             &mut deadline,
         )
@@ -5614,7 +5614,7 @@ fn queued_handshake_sends_wait_queue_then_admits_once_a_seat_frees() {
         let mut s = server_end;
         // Blocks in the queue's wait loop until `queue.depart()` (below) frees the one seat.
         let (conn, _encrypt) =
-            world_handshake_with_queue(&mut s, server_store.as_ref(), &server_queue)
+            world_handshake_with_queue(&mut s, server_store.clone(), &server_queue)
                 .unwrap()
                 .expect("handshake should eventually succeed once admitted");
         assert_eq!(conn.account_id, 42);
@@ -5665,7 +5665,7 @@ fn disconnecting_while_queued_leaves_the_line_without_taking_a_seat() {
     let server = std::thread::spawn(move || {
         let mut s = server_end;
         let result =
-            world_handshake_with_queue(&mut s, server_store.as_ref(), &server_queue).unwrap();
+            world_handshake_with_queue(&mut s, server_store.clone(), &server_queue).unwrap();
         assert!(
             result.is_none(),
             "a hangup while queued must end the session cleanly, not error"
@@ -5721,7 +5721,7 @@ fn a_restarted_gateway_completes_the_handshake_from_realm_state_alone() {
         let (mut client, server_end) = world_session_socket_pair();
         let server = std::thread::spawn(move || {
             let mut s = server_end;
-            let established = world_handshake(&mut s, &store)
+            let established = world_handshake(&mut s, std::sync::Arc::new(store))
                 .unwrap()
                 .expect("handshake should succeed");
             established.0.account_id
@@ -5768,7 +5768,9 @@ fn a_gateway_that_cannot_reach_the_session_store_rejects_rather_than_guessing() 
     let server = std::thread::spawn(move || {
         let mut s = server_end;
         assert!(
-            world_handshake(&mut s, &store).unwrap().is_none(),
+            world_handshake(&mut s, std::sync::Arc::new(store))
+                .unwrap()
+                .is_none(),
             "no session material ⇒ no session, never a best-effort one"
         );
     });
@@ -5800,7 +5802,7 @@ fn bad_proof_is_rejected() {
     let (mut client, server_end) = world_session_socket_pair();
     let server = std::thread::spawn(move || {
         let mut s = server_end;
-        let conn = world_handshake(&mut s, &store).unwrap();
+        let conn = world_handshake(&mut s, std::sync::Arc::new(store)).unwrap();
         assert!(conn.is_none(), "bad proof must not establish a connection");
     });
 
@@ -5842,7 +5844,9 @@ fn unknown_account_is_rejected_cleanly() {
     let (mut client, server_end) = world_session_socket_pair();
     let server = std::thread::spawn(move || {
         let mut s = server_end;
-        assert!(world_handshake(&mut s, &store).unwrap().is_none());
+        assert!(world_handshake(&mut s, std::sync::Arc::new(store))
+            .unwrap()
+            .is_none());
     });
 
     let (_enc, _dec) = drive_auth(&mut client, "NOBODY", K);
@@ -5884,7 +5888,7 @@ fn char_enum_returns_the_seeded_character() {
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
+        run_world_session(server_end, server_store.clone()).unwrap();
     });
 
     // Full handshake, then request the character list over the encrypted channel.
@@ -5930,7 +5934,7 @@ fn guild_query_answers_at_character_select() {
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
+        run_world_session(server_end, server_store.clone()).unwrap();
     });
 
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
@@ -6018,7 +6022,7 @@ fn a_member_enters_the_world_with_its_guild_on_the_self_create_and_signs_on() {
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
+        run_world_session(server_end, server_store.clone()).unwrap();
     });
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
@@ -6337,7 +6341,7 @@ fn a_world_port_that_fails_after_sign_on_still_signs_off() {
     });
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
-    let server = std::thread::spawn(move || run_world_session(server_end, server_store.as_ref()));
+    let server = std::thread::spawn(move || run_world_session(server_end, server_store.clone()));
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
@@ -6380,7 +6384,7 @@ fn char_create_replies_success_then_name_in_use() {
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
+        run_world_session(server_end, server_store.clone()).unwrap();
     });
 
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
@@ -6439,7 +6443,7 @@ fn char_delete_replies_success_and_dispatches_owned_guid() {
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
+        run_world_session(server_end, server_store.clone()).unwrap();
     });
 
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
@@ -6467,7 +6471,7 @@ fn char_delete_failure_replies_failed_and_keeps_session_alive() {
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
+        run_world_session(server_end, server_store.clone()).unwrap();
     });
 
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
@@ -6662,7 +6666,7 @@ fn char_delete_of_a_guild_leader_replies_failed_and_deletes_nothing() {
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
+        run_world_session(server_end, server_store.clone()).unwrap();
     });
 
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
@@ -6764,7 +6768,7 @@ fn login_replays_a_pending_package_system_message() {
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
+        run_world_session(server_end, server_store.clone()).unwrap();
     });
 
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
@@ -6808,7 +6812,7 @@ fn player_login_emits_sequence_then_self_create() {
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
+        run_world_session(server_end, server_store.clone()).unwrap();
     });
 
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
@@ -6892,7 +6896,7 @@ fn world_entry_weather(store: std::sync::Arc<InMemoryStore>) -> SMSG_WEATHER {
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
+        run_world_session(server_end, server_store.clone()).unwrap();
     });
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
@@ -6946,7 +6950,7 @@ fn world_session_in_world(
 ) -> (UnixStream, DecrypterHalf, std::thread::JoinHandle<()>) {
     let (mut client, server_end) = world_session_socket_pair();
     let server = std::thread::spawn(move || {
-        run_world_session(server_end, store.as_ref()).unwrap();
+        run_world_session(server_end, store.clone()).unwrap();
     });
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
     CMSG_PLAYER_LOGIN {
@@ -7079,7 +7083,7 @@ fn worldport_ack_reenters_with_fresh_subscription_and_empty_loot_state() {
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
+        run_world_session(server_end, server_store.clone()).unwrap();
     });
 
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
@@ -7176,7 +7180,7 @@ fn worldport_removes_the_source_viewer_before_routing_and_registers_a_replacemen
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
+        run_world_session(server_end, server_store.clone()).unwrap();
     });
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
@@ -7232,7 +7236,7 @@ fn login_initialize_factions_carries_persisted_standing_at_its_reputation_index(
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
+        run_world_session(server_end, server_store.clone()).unwrap();
     });
 
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
@@ -7293,7 +7297,7 @@ fn login_with_resident_items_and_reputation_emits_no_gain_feedback() {
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
+        run_world_session(server_end, server_store.clone()).unwrap();
     });
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
@@ -7346,7 +7350,7 @@ fn login_fills_a_resident_suffix_items_enchantment_slots_after_the_entry_batch()
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
+        run_world_session(server_end, server_store.clone()).unwrap();
     });
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
@@ -7382,7 +7386,7 @@ fn inbound_movement_is_recorded_under_its_opcode() {
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
+        run_world_session(server_end, server_store.clone()).unwrap();
     });
 
     let (mut c_enc, _c_dec) = client_handshake(&mut client, "TESTER", K);
@@ -7432,7 +7436,7 @@ fn a_movement_packet_for_a_despawned_entity_never_kills_the_session() {
 
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
-    let server = std::thread::spawn(move || run_world_session(server_end, server_store.as_ref()));
+    let server = std::thread::spawn(move || run_world_session(server_end, server_store.clone()));
 
     let (mut c_enc, _c_dec) = client_handshake(&mut client, "TESTER", K);
     let beat = |t: u32| MSG_MOVE_HEARTBEAT_Client {
@@ -7505,7 +7509,7 @@ fn a_reappearing_entity_resets_the_movement_desync_tolerance() {
     });
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
-    let server = std::thread::spawn(move || run_world_session(server_end, server_store.as_ref()));
+    let server = std::thread::spawn(move || run_world_session(server_end, server_store.clone()));
     let (mut c_enc, _c_dec) = client_handshake(&mut client, "TESTER", K);
     let info = |t| MovementInfo {
         flags: MovementInfo_MovementFlags::empty(),
@@ -7590,7 +7594,7 @@ fn a_movement_failure_that_is_not_a_desync_is_still_session_fatal() {
     });
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
-    let server = std::thread::spawn(move || run_world_session(server_end, server_store.as_ref()));
+    let server = std::thread::spawn(move || run_world_session(server_end, server_store.clone()));
     let (mut c_enc, _c_dec) = client_handshake(&mut client, "TESTER", K);
     MSG_MOVE_HEARTBEAT_Client {
         info: MovementInfo {
@@ -7628,7 +7632,7 @@ fn a_movement_desync_that_never_heals_still_ends_the_session() {
     });
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
-    let server = std::thread::spawn(move || run_world_session(server_end, server_store.as_ref()));
+    let server = std::thread::spawn(move || run_world_session(server_end, server_store.clone()));
     let (mut c_enc, _c_dec) = client_handshake(&mut client, "TESTER", K);
     let info = |t: u32| MovementInfo {
         flags: MovementInfo_MovementFlags::empty(),
@@ -7693,7 +7697,7 @@ fn a_world_port_whose_transfer_cannot_be_driven_aborts_the_clients_loading_scree
 
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
-    let server = std::thread::spawn(move || run_world_session(server_end, server_store.as_ref()));
+    let server = std::thread::spawn(move || run_world_session(server_end, server_store.clone()));
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
@@ -7763,7 +7767,7 @@ fn a_world_port_whose_world_entry_fails_also_aborts_the_clients_loading_screen()
 
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
-    let server = std::thread::spawn(move || run_world_session(server_end, server_store.as_ref()));
+    let server = std::thread::spawn(move || run_world_session(server_end, server_store.clone()));
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
@@ -8049,7 +8053,7 @@ fn enter_world(
     let item_creates = store.player_items(guid).map(|v| v.len()).unwrap_or(0);
     let server_store = store;
     let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
+        run_world_session(server_end, server_store.clone()).unwrap();
     });
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
     CMSG_PLAYER_LOGIN {
@@ -8275,7 +8279,7 @@ fn a_group_invite_timeout_is_not_answered_as_a_refusal() {
     let (result_tx, result_rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         result_tx
-            .send(run_world_session(server_end, server_store.as_ref()))
+            .send(run_world_session(server_end, server_store.clone()))
             .unwrap();
     });
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
@@ -8725,7 +8729,7 @@ fn an_add_friend_timeout_is_not_answered_as_a_refusal() {
     let (result_tx, result_rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         result_tx
-            .send(run_world_session(server_end, server_store.as_ref()))
+            .send(run_world_session(server_end, server_store.clone()))
             .unwrap();
     });
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
@@ -8893,7 +8897,7 @@ fn login_sends_the_quest_log_descriptor_raw_update_after_the_create_packet() {
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
+        run_world_session(server_end, server_store.clone()).unwrap();
     });
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
@@ -9304,7 +9308,7 @@ fn item_action_before_player_login_is_handled_without_panicking() {
     let store = std::sync::Arc::new(tester_store(7));
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
-    let server = std::thread::spawn(move || run_world_session(server_end, server_store.as_ref()));
+    let server = std::thread::spawn(move || run_world_session(server_end, server_store.clone()));
     let (mut c_enc, _c_dec) = client_handshake(&mut client, "TESTER", K);
 
     CMSG_AUTOEQUIP_ITEM {
@@ -9335,7 +9339,7 @@ fn item_reducer_transport_loss_ends_the_world_session() {
     let (result_tx, result_rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         result_tx
-            .send(run_world_session(server_end, server_store.as_ref()))
+            .send(run_world_session(server_end, server_store.clone()))
             .unwrap();
     });
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
@@ -9836,7 +9840,7 @@ fn a_cast_before_entering_the_world_answers_nothing_and_keeps_the_session_alive(
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
+        run_world_session(server_end, server_store.clone()).unwrap();
     });
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
 
@@ -10038,7 +10042,7 @@ fn loot_before_player_login_is_handled_without_panicking() {
     let store = std::sync::Arc::new(tester_store(7));
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
-    let server = std::thread::spawn(move || run_world_session(server_end, server_store.as_ref()));
+    let server = std::thread::spawn(move || run_world_session(server_end, server_store.clone()));
     let (mut c_enc, _c_dec) = client_handshake(&mut client, "TESTER", K);
 
     CMSG_LOOT {
@@ -10484,7 +10488,7 @@ fn melee_opcodes_at_character_select_answer_nothing_and_keep_the_session_alive()
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
+        run_world_session(server_end, server_store.clone()).unwrap();
     });
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
     CMSG_ATTACKSWING {
@@ -10523,7 +10527,7 @@ fn attackswing_desync_error_is_session_fatal() {
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     // Roll enter_world by hand: the server thread must RETURN the session result (not unwrap it).
-    let server = std::thread::spawn(move || run_world_session(server_end, server_store.as_ref()));
+    let server = std::thread::spawn(move || run_world_session(server_end, server_store.clone()));
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
@@ -10927,7 +10931,7 @@ fn a_trainer_reducer_timeout_is_not_answered_as_a_refusal() {
     let (result_tx, result_rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         result_tx
-            .send(run_world_session(server_end, server_store.as_ref()))
+            .send(run_world_session(server_end, server_store.clone()))
             .unwrap();
     });
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
@@ -13186,7 +13190,7 @@ fn reducer_transport_loss_ends_an_admitted_session_and_frees_one_queue_seat() {
     let (result_tx, result_rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let result =
-            run_world_session_with_queue(server_end, server_store.as_ref(), server_queue.as_ref());
+            run_world_session_with_queue(server_end, server_store.clone(), server_queue.as_ref());
         result_tx.send(result).unwrap();
     });
 
@@ -13291,7 +13295,7 @@ fn competing_world_sessions_close_the_old_socket_without_removing_the_winner() {
         let (done, result) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let _entered = runtime.enter();
-            let _ = done.send(run_world_session(server, &coord));
+            let _ = done.send(run_world_session(server, std::sync::Arc::new(coord)));
         });
         (client, result)
     }

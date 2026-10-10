@@ -53,7 +53,7 @@ fn movement_burst_over_a_real_cipher(n: usize) {
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
         let mut s = server_end;
-        let (_conn, encrypt) = world_handshake(&mut s, server_store.as_ref())
+        let (_conn, encrypt) = world_handshake(&mut s, server_store.clone())
             .unwrap()
             .expect("handshake should succeed");
         (s, encrypt)
@@ -322,7 +322,7 @@ fn oversized_raw_body_ends_the_session_instead_of_wrapping_the_size_field() {
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
         let mut s = server_end;
-        let (_conn, encrypt) = world_handshake(&mut s, server_store.as_ref())
+        let (_conn, encrypt) = world_handshake(&mut s, server_store.clone())
             .unwrap()
             .expect("handshake should succeed");
         (s, encrypt)
@@ -420,7 +420,7 @@ fn combat_cast_burst_over_a_real_cipher(n: usize) {
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
         let mut s = server_end;
-        let (_conn, encrypt) = world_handshake(&mut s, server_store.as_ref())
+        let (_conn, encrypt) = world_handshake(&mut s, server_store.clone())
             .unwrap()
             .expect("handshake should succeed");
         (s, encrypt)

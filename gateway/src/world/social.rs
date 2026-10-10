@@ -3,8 +3,9 @@
 //! shape as the rest of the dispatch chain.
 
 use super::party::PartyOutcome;
-use super::{party, presence, send, who, Outbound, SessionTx, WorldConn, WorldState, WorldStore};
+use super::{party, presence, send, who, Outbound, SessionTx, WorldConn, WorldState};
 use crate::codec;
+use crate::world::{CharacterStore, GuildActionStore, PartyStore, SessionStore, ShardRoutingStore};
 use anyhow::Result;
 use lyracore_shared::group::{GroupRefusal, TARGET_ICON_LIST_REQUEST};
 use lyracore_shared::social::ContactRefusal;
@@ -131,7 +132,15 @@ impl From<ContactRefusal> for ContactOutcome {
 /// opcodes. Each arm consumes its opcode (`Ok(None)`) or passes the message on (`Ok(Some(msg))`),
 /// like the other per-family handlers.
 #[allow(clippy::too_many_lines)] // One arm per social and party opcode.
-pub(super) fn handle_social<St: WorldStore + ?Sized>(
+pub(super) fn handle_social<
+    St: CharacterStore
+        + GuildActionStore
+        + PartyStore
+        + SessionStore
+        + ShardRoutingStore
+        + SocialStore
+        + ?Sized,
+>(
     tx: &SessionTx,
     store: &St,
     conn: &mut WorldConn,
@@ -346,7 +355,9 @@ pub(super) fn handle_social<St: WorldStore + ?Sized>(
 
 /// Run a leave or a kick by guid. Only a Refusal answers, as `SMSG_PARTY_COMMAND_RESULT(Leave, "",
 /// result)`; an op that ran is heard through the relay.
-fn run_answering_refusal<St: WorldStore + ?Sized>(
+fn run_answering_refusal<
+    St: CharacterStore + PartyStore + SessionStore + ShardRoutingStore + SocialStore + ?Sized,
+>(
     tx: &SessionTx,
     store: &St,
     conn: &WorldConn,
@@ -373,7 +384,9 @@ fn run_answering_refusal<St: WorldStore + ?Sized>(
 /// The leader's "Convert to Raid". cmangos answers success with
 /// `SMSG_PARTY_COMMAND_RESULT(Invite, "", Ok)` and every refusal with silence
 /// (cm:GroupHandler.cpp:473-490); the raid list reaches every member through the LIST relay.
-fn raid_convert<St: WorldStore + ?Sized>(
+fn raid_convert<
+    St: CharacterStore + PartyStore + SessionStore + ShardRoutingStore + SocialStore + ?Sized,
+>(
     tx: &SessionTx,
     store: &St,
     conn: &WorldConn,
@@ -405,7 +418,9 @@ fn raid_convert<St: WorldStore + ?Sized>(
 /// Run a party op whose outcome the client hears only through the relay. A Refusal is logged at
 /// debug and sends nothing. cmangos sends nothing for set leader and set Assistant, whatever the
 /// outcome (cm:GroupHandler.cpp:344-362, 527-545).
-fn run_unanswered<St: WorldStore + ?Sized>(
+fn run_unanswered<
+    St: CharacterStore + PartyStore + SessionStore + ShardRoutingStore + SocialStore + ?Sized,
+>(
     store: &St,
     conn: &WorldConn,
     op: party::Op,
@@ -426,7 +441,9 @@ fn run_unanswered<St: WorldStore + ?Sized>(
 /// resolves against the actor's OWN roster rather than realm-wide, so a namesake standing outside
 /// the Raid cannot be reached — the same avoided-homonym rule cmangos applies to Swap Subgroup
 /// alone (cm:GroupHandler.cpp:919-936), extended here to both opcodes.
-fn change_subgroup<St: WorldStore + ?Sized>(
+fn change_subgroup<
+    St: CharacterStore + PartyStore + SessionStore + ShardRoutingStore + SocialStore + ?Sized,
+>(
     store: &St,
     conn: &WorldConn,
     name: &str,
@@ -452,7 +469,9 @@ fn change_subgroup<St: WorldStore + ?Sized>(
 /// roster-only name resolution as [`change_subgroup`] (cm:GroupHandler.cpp:901-944,
 /// cm:GroupHandler.cpp:919-936), with both names resolved against the SAME roster read so the
 /// pair cannot straddle two different snapshots of it.
-fn swap_subgroup<St: WorldStore + ?Sized>(
+fn swap_subgroup<
+    St: CharacterStore + PartyStore + SessionStore + ShardRoutingStore + SocialStore + ?Sized,
+>(
     store: &St,
     conn: &WorldConn,
     name: &str,
@@ -481,7 +500,9 @@ fn swap_subgroup<St: WorldStore + ?Sized>(
 /// opcodes with silence, so a Refusal only logs. A transport failure only logs too: a broadcast
 /// changes no roster and nothing waits on it, so a lost ping or roll must not end the session.
 /// A throttled op sent again inside its cooldown is dropped the same way.
-pub(super) fn run_group_broadcast<St: WorldStore + ?Sized>(
+pub(super) fn run_group_broadcast<
+    St: CharacterStore + PartyStore + SessionStore + ShardRoutingStore + SocialStore + ?Sized,
+>(
     store: &St,
     conn: &mut WorldConn,
     op: party::Op,
@@ -634,7 +655,7 @@ pub(crate) fn friend_online_fields(presence: &presence::RealmPresence) -> codec:
 /// degrades that one row to offline rather than failing the whole list or ending the World
 /// Session. Lives over the `WorldStore` seam, not behind any one Store's own `contact_lists`, so a
 /// Store Fake exercises the exact composition a Coordinator serves.
-pub(crate) fn friend_views<St: WorldStore + ?Sized>(
+pub(crate) fn friend_views<St: ShardRoutingStore + SocialStore + ?Sized>(
     store: &St,
     own_team: u32,
     friend_guids: &[u64],
@@ -675,7 +696,7 @@ pub(crate) fn friend_views<St: WorldStore + ?Sized>(
 /// the OTHER party's guid, and — ONLINE/ADDED_ONLINE only — the trailing presence fields. An
 /// unknown name never reaches the module (guid 0, `NotFound`/`IgnoreNotFound`); everything else
 /// (self/duplicate/cap/team) is the module's own typed Refusal.
-fn resolve_add_contact<St: WorldStore + ?Sized>(
+fn resolve_add_contact<St: CharacterStore + ShardRoutingStore + SocialStore + ?Sized>(
     store: &St,
     account_id: u64,
     actor_guid: u64,
@@ -745,7 +766,7 @@ fn resolve_add_contact<St: WorldStore + ?Sized>(
 /// Call the module's remove reducer (`del_friend`/`del_ignore`) for `target_guid` and translate the
 /// outcome into the `(FriendResult, guid)` pair `SMSG_FRIEND_STATUS` needs. A remove carries no
 /// trailing presence fields, whatever the outcome.
-fn resolve_del_contact<St: WorldStore + ?Sized>(
+fn resolve_del_contact<St: SocialStore + ?Sized>(
     store: &St,
     account_id: u64,
     actor_guid: u64,

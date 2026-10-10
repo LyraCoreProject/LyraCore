@@ -340,7 +340,7 @@ fn a_real_session_whispers_across_shards_as_its_own_character() {
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = session_shard.clone();
     let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
+        run_world_session(server_end, server_store.clone()).unwrap();
     });
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
     CMSG_PLAYER_LOGIN {

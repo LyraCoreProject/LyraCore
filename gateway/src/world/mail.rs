@@ -2,6 +2,7 @@
 //! Sharded moves are fence → commit → attest → settle; local moves stay one transaction. The
 //! turn-in files a Reward Letter as Escrow on every plane, and it is driven the same way.
 
+use crate::world::{CharacterStore, SessionStore, ShardRoutingStore, SocialStore};
 use anyhow::Result;
 
 use super::{presence, WorldStore};
@@ -298,7 +299,7 @@ impl std::fmt::Display for SendRefusal {
 /// The mailbox as its owner sees it, on whichever plane holds it. A mail whose delivery instant is
 /// still ahead is absent, so the list, the unread poll, the body read and every take skip it
 /// (cmangos `MailHandler.cpp:561`, `Player.cpp:3079-3096`).
-pub(crate) fn mail_of<St: WorldStore + ?Sized>(
+pub(crate) fn mail_of<St: MailStore + ShardRoutingStore + ?Sized>(
     store: &St,
     self_guid: u64,
 ) -> Result<Vec<MailView>> {
@@ -316,7 +317,7 @@ pub(crate) fn now_secs() -> i64 {
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
 }
-pub(crate) fn open_mailbox<St: WorldStore + ?Sized>(
+pub(crate) fn open_mailbox<St: MailStore + ShardRoutingStore + ?Sized>(
     store: &St,
     self_guid: Option<u64>,
     mailbox_guid: u64,
@@ -325,7 +326,7 @@ pub(crate) fn open_mailbox<St: WorldStore + ?Sized>(
     redrive(store, self_guid);
     mail_of(store, self_guid)
 }
-pub(crate) fn has_unread<St: WorldStore + ?Sized>(
+pub(crate) fn has_unread<St: MailStore + ShardRoutingStore + ?Sized>(
     store: &St,
     self_guid: Option<u64>,
 ) -> Result<bool> {
@@ -333,7 +334,7 @@ pub(crate) fn has_unread<St: WorldStore + ?Sized>(
         self_guid.ok_or_else(|| anyhow::anyhow!(lyracore_shared::mail::NOT_IN_WORLD))?;
     Ok(mail_of(store, self_guid)?.iter().any(|m| !m.was_read))
 }
-pub(crate) fn letter_body<St: WorldStore + ?Sized>(
+pub(crate) fn letter_body<St: MailStore + ShardRoutingStore + ?Sized>(
     store: &St,
     self_guid: Option<u64>,
     mail_id: u64,
@@ -345,7 +346,7 @@ pub(crate) fn letter_body<St: WorldStore + ?Sized>(
         .find(|m| m.id == mail_id)
         .map(|m| m.body))
 }
-pub(crate) fn mark_read<St: WorldStore + ?Sized>(
+pub(crate) fn mark_read<St: MailStore + ShardRoutingStore + ?Sized>(
     store: &St,
     self_guid: Option<u64>,
     mailbox_guid: u64,
@@ -357,7 +358,7 @@ pub(crate) fn mark_read<St: WorldStore + ?Sized>(
         None => store.mail_mark_read(self_guid, mail_id),
     }
 }
-pub(crate) fn delete<St: WorldStore + ?Sized>(
+pub(crate) fn delete<St: MailStore + ShardRoutingStore + ?Sized>(
     store: &St,
     self_guid: Option<u64>,
     mailbox_guid: u64,
@@ -369,7 +370,7 @@ pub(crate) fn delete<St: WorldStore + ?Sized>(
         None => store.mail_delete(self_guid, mail_id),
     }
 }
-pub(crate) fn return_to_sender<St: WorldStore + ?Sized>(
+pub(crate) fn return_to_sender<St: MailStore + ShardRoutingStore + ?Sized>(
     store: &St,
     self_guid: Option<u64>,
     mailbox_guid: u64,
@@ -395,7 +396,11 @@ pub(crate) fn return_to_sender<St: WorldStore + ?Sized>(
 /// Delay, but it cannot read a Character's Account on another Shard, so the Gateway reads both
 /// realm-wide (`docs/architecture.md` §2.3). An Account that no Shard can name counts as another
 /// Account, so an item waits.
-fn same_realm_account<St: WorldStore + ?Sized>(store: &St, a: u64, b: u64) -> Result<bool> {
+fn same_realm_account<St: MailStore + ShardRoutingStore + ?Sized>(
+    store: &St,
+    a: u64,
+    b: u64,
+) -> Result<bool> {
     Ok(
         match (
             realm_account_anywhere(store, a)?,
@@ -409,7 +414,7 @@ fn same_realm_account<St: WorldStore + ?Sized>(store: &St, a: u64, b: u64) -> Re
 /// The Realm Account name the first handle that can name one holds for `guid`: this handle, then
 /// every World Shard. Admission refuses two Shards that name different Accounts for one Character,
 /// so the first name is the name.
-fn realm_account_anywhere<St: WorldStore + ?Sized>(
+fn realm_account_anywhere<St: MailStore + ShardRoutingStore + ?Sized>(
     store: &St,
     guid: u64,
 ) -> Result<Option<String>> {
@@ -424,7 +429,9 @@ fn realm_account_anywhere<St: WorldStore + ?Sized>(
     Ok(None)
 }
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn send<St: WorldStore + ?Sized>(
+pub(crate) fn send<
+    St: CharacterStore + MailStore + SessionStore + ShardRoutingStore + SocialStore + ?Sized,
+>(
     store: &St,
     self_guid: Option<u64>,
     mailbox_guid: u64,
@@ -530,7 +537,7 @@ pub(crate) fn send<St: WorldStore + ?Sized>(
 }
 fn drive<St, F>(source: &St, escrow_id: u64, commit: F) -> Result<()>
 where
-    St: WorldStore + ?Sized,
+    St: MailStore + ?Sized,
     F: FnOnce() -> Result<()>,
 {
     commit()?;
@@ -565,7 +572,7 @@ const ESCROW_POLL: std::time::Duration = std::time::Duration::from_millis(20);
 /// Delay, from it, exactly as a re-drive does. Waits out the coordinator cache's lag behind the
 /// fence's own call-pipe commit instead of refusing on the first miss. Each read re-acquires the
 /// store's own cache guard, so the wait holds none of it while it sleeps.
-fn held_fence<St: WorldStore + ?Sized>(
+fn held_fence<St: MailStore + ?Sized>(
     store: &St,
     sender_guid: u64,
     escrow_id: u64,
@@ -611,7 +618,7 @@ pub struct HeldEscrow {
 /// abandoned, and it is the only thing that delivers a Reward Letter, which the Module files at
 /// turn-in. On a single-database realm the mail plane is the same database: a Character's send files
 /// no Escrow there, but a Reward Letter does.
-pub(crate) fn redrive<St: WorldStore + ?Sized>(store: &St, self_guid: u64) {
+pub(crate) fn redrive<St: MailStore + ShardRoutingStore + ?Sized>(store: &St, self_guid: u64) {
     let realm = store.realm_store();
     for held in store.mail_escrows_of(self_guid).unwrap_or_default() {
         if held.payout {
@@ -647,7 +654,7 @@ pub(crate) fn redrive<St: WorldStore + ?Sized>(store: &St, self_guid: u64) {
 }
 
 /// Commit the letter `held` describes on the mail plane `plane`, fenced by `sender_guid`.
-fn commit_held<P: WorldStore + ?Sized>(
+fn commit_held<P: MailStore + ?Sized>(
     plane: &P,
     sender_guid: u64,
     held: &HeldEscrow,
@@ -675,7 +682,7 @@ fn log_redrive(kind: &str, escrow_id: u64, outcome: Result<()>) {
         ),
     }
 }
-pub(crate) fn take_money<St: WorldStore + ?Sized>(
+pub(crate) fn take_money<St: MailStore + ShardRoutingStore + ?Sized>(
     store: &St,
     self_guid: Option<u64>,
     mailbox_guid: u64,
@@ -726,7 +733,7 @@ fn take_item_refusal(e: anyhow::Error) -> TakeItemRefusal {
         TakeItemRefusal::Other(text)
     }
 }
-pub(crate) fn take_item<St: WorldStore + ?Sized>(
+pub(crate) fn take_item<St: MailStore + ShardRoutingStore + ?Sized>(
     store: &St,
     self_guid: Option<u64>,
     mailbox_guid: u64,
@@ -765,7 +772,7 @@ pub(crate) fn take_item<St: WorldStore + ?Sized>(
     .map_err(take_item_refusal)?;
     Ok(taken)
 }
-fn pay_cod<St: WorldStore + ?Sized>(
+fn pay_cod<St: MailStore + ?Sized>(
     store: &St,
     realm: &dyn WorldStore,
     taker_guid: u64,
@@ -856,7 +863,7 @@ fn refusal_from_module(e: anyhow::Error) -> SendRefusal {
         SendRefusal::Internal(text)
     }
 }
-fn at_mailbox<St: WorldStore + ?Sized>(
+fn at_mailbox<St: MailStore + ?Sized>(
     store: &St,
     self_guid: Option<u64>,
     mailbox_guid: u64,
@@ -900,7 +907,7 @@ fn copy_letter_refusal(e: anyhow::Error) -> CopyLetterRefusal {
 /// mark is what makes a completed grant refuse a second one for good, even after the player
 /// destroys, mails away, or trades the letter — `mail_grant_letter`'s own held-item check only
 /// covers the narrow window before this call lands.
-pub(crate) fn copy_letter<St: WorldStore + ?Sized>(
+pub(crate) fn copy_letter<St: MailStore + ShardRoutingStore + ?Sized>(
     store: &St,
     self_guid: Option<u64>,
     mailbox_guid: u64,
@@ -935,7 +942,7 @@ pub(crate) fn copy_letter<St: WorldStore + ?Sized>(
 /// gets empty text, the same answer a stale or foreign id has always produced.
 ///
 /// `hint_item_guid` is the wire's own overloaded second field, forwarded to
-/// [`WorldStore::owns_item_with_text`] so it can try a cheap PK lookup before scanning. The
+/// [`MailStore::owns_item_with_text`] so it can try a cheap PK lookup before scanning. The
 /// ownership scan runs only when the mail check does not already answer the question — most
 /// queries are either "read my own undeleted mail" or "reread my own bagged letter," so one lookup
 /// usually settles it.
@@ -943,7 +950,7 @@ pub(crate) fn copy_letter<St: WorldStore + ?Sized>(
 /// A copied letter's text lives in `game_item_text` on the mail plane and outlives the mail that
 /// held it; anything else falls back to the caller's own mail body under the same id, which is
 /// what a letter still sitting in the mailbox resolves through today.
-pub(crate) fn item_text<St: WorldStore + ?Sized>(
+pub(crate) fn item_text<St: MailStore + ShardRoutingStore + ?Sized>(
     store: &St,
     self_guid: Option<u64>,
     item_text_id: u32,

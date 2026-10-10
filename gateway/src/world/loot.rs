@@ -1,15 +1,16 @@
 //! Realm loot routing. See `docs/realm-loot-routing.md` for the contract and rationale.
 
+use crate::world::{LootWindowStore, ShardRoutingStore};
 use anyhow::Result;
 
 use super::{LootActionStatus, WorldStore};
 use lyracore_shared::loot_roll::loot_op;
 
 /// One unresolved loot roll a world shard has created but not yet had promoted onto realm-core —
-/// [`WorldStore::pending_local_rolls`]'s answer, and [`relay_tick`]'s promotion input.
+/// [`LootWindowStore::pending_local_rolls`]'s answer, and [`relay_tick`]'s promotion input.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PendingLootRoll {
-    /// This shard's own row id — what [`WorldStore::clear_promoted_loot_roll`] addresses.
+    /// This shard's own row id — what [`LootWindowStore::clear_promoted_loot_roll`] addresses.
     pub roll_id: u64,
     pub corpse_guid: u64,
     pub slot: u8,
@@ -31,7 +32,7 @@ pub struct PendingLootRoll {
 ///
 /// A client can vote as soon as `SMSG_LOOT_START_ROLL` arrives, before the next [`relay_tick`].
 /// Realm-core refuses a vote for a roll it does not hold, so pending promotions are flushed first.
-pub(crate) fn run_vote<St: WorldStore + ?Sized>(
+pub(crate) fn run_vote<St: LootWindowStore + ShardRoutingStore + ?Sized>(
     store: &St,
     account_id: u64,
     self_guid: u64,
@@ -101,7 +102,7 @@ fn promote_one(shard: &dyn WorldStore, realm: &dyn WorldStore, roll: &PendingLoo
 /// reached leaves its own pending rolls unpromoted for THIS call, and the periodic relay retries them
 /// on its own cadence — a flush that failed must not turn a vote or LEAVE/UNINVITE that would
 /// otherwise succeed into an error.
-pub(crate) fn flush_pending_promotions<St: WorldStore + ?Sized>(
+pub(crate) fn flush_pending_promotions<St: ShardRoutingStore + ?Sized>(
     store: &St,
     realm: &dyn WorldStore,
 ) {
@@ -139,7 +140,7 @@ pub(crate) fn flush_pending_promotions<St: WorldStore + ?Sized>(
 /// Ordinary promotion latency (a roll NOT caught by [`flush_pending_promotions`]) is bounded by this
 /// function's own caller's poll interval, not by anything in here — see this module's doc for why
 /// that caller is a poll rather than a persistent callback.
-pub(crate) fn relay_tick<St: WorldStore + ?Sized>(store: &St, won_watermark: &mut u64) {
+pub(crate) fn relay_tick<St: ShardRoutingStore + ?Sized>(store: &St, won_watermark: &mut u64) {
     let Some(realm) = store.realm_store() else {
         return;
     };

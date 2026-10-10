@@ -118,7 +118,7 @@ pub(super) fn drive_routed_session(
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store;
     let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
+        run_world_session(server_end, server_store.clone()).unwrap();
     });
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
 
@@ -336,7 +336,7 @@ fn a_world_port_keeps_the_pin_when_the_home_shard_still_owns_the_new_map() {
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
+        run_world_session(server_end, server_store.clone()).unwrap();
     });
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
@@ -375,7 +375,7 @@ fn a_world_port_keeps_the_pin_when_the_home_shard_still_owns_the_new_map() {
 
 #[test]
 fn a_spurious_worldport_ack_is_ignored_on_a_session_pinned_off_the_default_shard() {
-    // The gate reads the live entity through the handler's `store`, which `on_home_shard!` has
+    // The gate reads the live entity through the handler's `store`, which `RoutedStore` has
     // already routed home. If either stops holding, the stray ack re-runs the world entry.
     let calls: ShardCallLog = Default::default();
     let home = std::sync::Arc::new(InMemoryStore {
@@ -413,7 +413,7 @@ fn a_spurious_worldport_ack_is_ignored_on_a_session_pinned_off_the_default_shard
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = world.clone();
     let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
+        run_world_session(server_end, server_store.clone()).unwrap();
     });
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
@@ -454,7 +454,7 @@ fn a_spurious_worldport_ack_is_ignored_on_the_default_shard() {
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
+        run_world_session(server_end, server_store.clone()).unwrap();
     });
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
@@ -482,7 +482,7 @@ fn a_logout_to_character_select_releases_the_home_shard_pin() {
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
+        run_world_session(server_end, server_store.clone()).unwrap();
     });
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
 
@@ -528,7 +528,7 @@ fn a_logout_to_character_select_releases_the_home_shard_pin() {
 fn a_freshly_created_characters_first_login_transfers_off_the_default_shard() {
     // Requirement: `create_character` always writes to the DEFAULT/realm shard, even when the
     // start position routes to a different one under `LYRACORE_SHARD_MAP` — a deliberate decision (see
-    // the doc comment on `impl WorldStore for Coordinator::create_character`): create-then-
+    // the doc comment on `CharacterStore::create_character` for `Coordinator`): create-then-
     // transfer-on-first-login, not create-directly-on-the-owning-shard. That decision rides the
     // SAME `route_home`/`settle_home_shard` machinery every other login already uses — prove it
     // end to end for a guid the CREATE call ITSELF produced, not one hardcoded
@@ -547,7 +547,7 @@ fn a_freshly_created_characters_first_login_transfers_off_the_default_shard() {
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
+        run_world_session(server_end, server_store.clone()).unwrap();
     });
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
 

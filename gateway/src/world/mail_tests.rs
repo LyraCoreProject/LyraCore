@@ -255,7 +255,7 @@ fn an_empty_mailbox_is_answered_with_an_empty_list_packet() {
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
+        run_world_session(server_end, server_store.clone()).unwrap();
     });
 
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
@@ -288,7 +288,7 @@ fn a_seeded_mail_reaches_the_client_as_a_mail_list_row() {
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
+        run_world_session(server_end, server_store.clone()).unwrap();
     });
 
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
@@ -616,7 +616,7 @@ fn return_acks_with_send_mail_result_and_the_next_list_is_empty() {
     let (mut client, server_end) = UnixStream::pair().unwrap();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
+        run_world_session(server_end, server_store.clone()).unwrap();
     });
 
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
@@ -673,7 +673,7 @@ fn a_refused_return_still_acks_and_never_kills_the_session() {
     let (mut client, server_end) = UnixStream::pair().unwrap();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
+        run_world_session(server_end, server_store.clone()).unwrap();
     });
 
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
@@ -723,7 +723,7 @@ fn mark_as_read_sends_no_reply_but_the_next_list_shows_it() {
     let (mut client, server_end) = UnixStream::pair().unwrap();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
+        run_world_session(server_end, server_store.clone()).unwrap();
     });
 
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
@@ -765,7 +765,7 @@ fn delete_acks_with_send_mail_result_and_the_next_list_is_empty() {
     let (mut client, server_end) = UnixStream::pair().unwrap();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
+        run_world_session(server_end, server_store.clone()).unwrap();
     });
 
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
@@ -822,7 +822,7 @@ fn a_refused_delete_still_acks_and_never_kills_the_session() {
     let (mut client, server_end) = UnixStream::pair().unwrap();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
+        run_world_session(server_end, server_store.clone()).unwrap();
     });
 
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
@@ -1269,7 +1269,7 @@ fn send_over_the_wire(
     let (mut client, server_end) = UnixStream::pair().unwrap();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
+        run_world_session(server_end, server_store.clone()).unwrap();
     });
 
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
@@ -1399,7 +1399,7 @@ fn a_refused_mail_opcode_costs_a_packet_and_never_the_session() {
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
+        run_world_session(server_end, server_store.clone()).unwrap();
     });
 
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
@@ -1831,7 +1831,7 @@ fn taking_money_over_the_wire_acks_and_credits_the_purse() {
     let (mut client, server_end) = UnixStream::pair().unwrap();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
+        run_world_session(server_end, server_store.clone()).unwrap();
     });
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
@@ -2769,7 +2769,7 @@ fn a_refused_priced_take_reaches_the_client_as_not_enough_money() {
     let (mut client, server_end) = UnixStream::pair().unwrap();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
+        run_world_session(server_end, server_store.clone()).unwrap();
     });
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
@@ -3094,7 +3094,7 @@ fn deleting_a_priced_mail_answers_the_internal_error_and_keeps_the_mail() {
     let (mut client, server_end) = UnixStream::pair().unwrap();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
+        run_world_session(server_end, server_store.clone()).unwrap();
     });
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
@@ -3510,7 +3510,7 @@ fn a_letter_copy_over_the_wire_acks_made_permanent_ok() {
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
+        run_world_session(server_end, server_store.clone()).unwrap();
     });
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
@@ -3558,7 +3558,7 @@ fn a_letter_copy_into_a_full_bag_over_the_wire_answers_equip_error() {
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
+        run_world_session(server_end, server_store.clone()).unwrap();
     });
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }

@@ -23,7 +23,7 @@ pub(crate) trait BankStore: Send + Sync {
 /// into the first free carry slot — both resolve to the same module entry point, which infers the
 /// direction from the source slot and carries the banker-proximity gate for free (it reuses the
 /// move core). Only the main pseudo-bag (255) is addressed, matching the item handler's restriction.
-pub(crate) fn handle_bank<St: WorldStore + ?Sized>(
+pub(crate) fn handle_bank<St: BankStore + NpcStore + ?Sized>(
     tx: &SessionTx,
     store: &St,
     conn: &mut WorldConn,

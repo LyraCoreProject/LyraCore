@@ -542,7 +542,9 @@ pub(crate) fn dispatch_loot_window<St: LootWindowStore + ?Sized>(
 
 /// Remaining group-loot, non-window GameObject, and death-recovery operations not yet migrated to
 /// a focused action interface.
-pub(crate) fn handle_loot<St: WorldStore + ?Sized>(
+pub(crate) fn handle_loot<
+    St: DeathStore + LootWindowStore + NpcStore + ShardRoutingStore + ?Sized,
+>(
     tx: &SessionTx,
     store: &St,
     conn: &mut WorldConn,

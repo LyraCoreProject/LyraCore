@@ -85,7 +85,9 @@ pub(crate) trait NpcStore: Send + Sync {
 /// "HELLO/SELECT_OPTION alignment" trap: a click's `gossip_list_id` indexes into whatever list HELLO
 /// actually sent, so SELECT must reproduce that exact list, not just re-read the raw unfiltered rows).
 /// Preserves `option_index` order (already sorted by the store read).
-fn filtered_gossip_options<St: WorldStore + ?Sized>(
+fn filtered_gossip_options<
+    St: CharacterStore + NpcStore + QuestActionStore + TrainerStore + ?Sized,
+>(
     store: &St,
     npc_guid: u64,
     player_guid: u64,
@@ -124,7 +126,7 @@ fn filtered_gossip_options<St: WorldStore + ?Sized>(
 /// Say, yell or `/e` (a `broadcast_chat` type) through the speaker's Home Shard. The line itself
 /// returns on the Relay; a Refusal gets the answer every chat line shares, and only a lost reducer
 /// transport ends the World Session.
-fn speak_nearby<St: WorldStore + ?Sized>(
+fn speak_nearby<St: ChatActionStore + ?Sized>(
     tx: &SessionTx,
     store: &St,
     conn: &WorldConn,
@@ -158,7 +160,22 @@ fn speak_nearby<St: WorldStore + ?Sized>(
 /// the social tier (say / yell / `/e` chat + text emotes), grouped as the stateless
 /// request→reply / broadcast opcodes.
 #[allow(clippy::too_many_lines)] // One arm per query and social opcode.
-pub(crate) fn handle_query<St: WorldStore + ?Sized>(
+pub(crate) fn handle_query<
+    St: CastStore
+        + CharacterStore
+        + ChatActionStore
+        + GuildActionStore
+        + NpcStore
+        + PartyStore
+        + QuestActionStore
+        + SessionStore
+        + ShardRoutingStore
+        + SocialStore
+        + TaxiActionStore
+        + TrainerStore
+        + VendorActionStore
+        + ?Sized,
+>(
     tx: &SessionTx,
     store: &St,
     conn: &mut WorldConn,

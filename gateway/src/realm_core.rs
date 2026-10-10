@@ -179,7 +179,7 @@ pub(crate) fn run_gm_command<D: RealmDb>(
 // ===============================================================================================
 
 /// The world handshake's account→K lookup, split across the two databases that own the two halves
-/// of the answer. The body of `impl WorldStore for Coordinator::lookup_session`.
+/// of the answer. The body of `SessionStore::lookup_session` for `Coordinator`.
 ///
 /// **K comes from realm-core**, which is the whole point of a realm-wide session table: the session
 /// key is realm state, not

@@ -838,7 +838,7 @@ fn a_failed_transfer_fails_the_login_instead_of_entering_the_world_anyway() {
         ..Default::default()
     });
     let (mut client, server_end) = world_session_socket_pair();
-    let server = std::thread::spawn(move || run_world_session(server_end, failing.as_ref()));
+    let server = std::thread::spawn(move || run_world_session(server_end, failing.clone()));
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)

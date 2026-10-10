@@ -1734,7 +1734,7 @@ fn a_real_session_syncs_its_party_at_login_and_routes_an_invite_to_realm_core() 
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = session_shard.clone();
     let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
+        run_world_session(server_end, server_store.clone()).unwrap();
     });
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
     // Missing roster delivery must fail at the read deadline.

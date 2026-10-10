@@ -29,7 +29,7 @@ pub(crate) trait CombatStore: Send + Sync {
 /// Combat family leftovers: selection, pet commands, the run-speed ack and sheathing. Each arm is
 /// best-effort. The session-fatal desync exits went to the melee seam with the two melee opcodes
 /// that owned them.
-pub(crate) fn handle_combat<St: WorldStore + ?Sized>(
+pub(crate) fn handle_combat<St: CombatStore + ?Sized>(
     store: &St,
     conn: &mut WorldConn,
     msg: ClientOpcodeMessage,

@@ -124,8 +124,8 @@ pub(crate) trait CastStore: MeleeActionStore + Send + Sync {
     fn cancel_aura(&self, account_id: u64, self_guid: u64, spell_id: u32) -> Result<()>;
 
     // The two reads below are shared with the character, vendor and query paths. They are declared
-    // here rather than on `WorldStore` because a second declaration of the same name would make
-    // every `St: WorldStore` call ambiguous; `WorldStore: CastStore` keeps them reachable. The
+    // on this family only, because a second declaration of the same name on another family would
+    // make every call through the `WorldStore` umbrella ambiguous. The
     // ranged teardown comes from `MeleeActionStore`: melee and ranged share one durable row, so it
     // has one declaration, on the seam that owns that row.
 

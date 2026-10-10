@@ -121,7 +121,7 @@ impl From<TrainerRefusal> for TrainerBuyOutcome {
 /// `SMSG_TRAINER_BUY_*` + a live `SMSG_LEARNED_SPELL` so it hits the action bar without a relog).
 /// Needs the in-world player guid (a trainer is only clicked in-world); in CharSelect the opcodes
 /// pass through. A buy Refusal is per-action — surfaced as `SMSG_TRAINER_BUY_FAILED`.
-pub(crate) fn handle_trainer<St: WorldStore + ?Sized>(
+pub(crate) fn handle_trainer<St: CharacterStore + NpcStore + TrainerStore + ?Sized>(
     tx: &SessionTx,
     store: &St,
     conn: &mut WorldConn,
@@ -359,7 +359,7 @@ fn teaches_armor_proficiency(spell_id: u32) -> bool {
 /// re-tints its bags without a relog. Read after the buy: the mask states what the Character knows
 /// now, not what the purchase was meant to grant, so a buy the Module only half-applied never
 /// tints an item the equip Gate would still refuse.
-fn send_armor_proficiency<St: WorldStore + ?Sized>(
+fn send_armor_proficiency<St: CharacterStore + TrainerStore + ?Sized>(
     tx: &SessionTx,
     store: &St,
     self_guid: u64,

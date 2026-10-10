@@ -11,7 +11,7 @@
 //! SPLIT across the boundary never saw itself. Both were observed live (2026-07-25), not theorised.
 //!
 //! This module is the ROUTING half of the fix and the only place that decides which database a party
-//! op runs against. Everything in it is generic over [`WorldStore`], so the decisions execute under
+//! op runs against. Everything in it is generic over the Store families, so the decisions execute under
 //! test against the same in-memory shard topology the cross-database transfer uses — the seam the
 //! transfer-transport test harness built. The database-specific halves are thin: `Coordinator`'s
 //! trait impl (which database a handle names) and the module's `realm_group_op` (the rules, unchanged).
@@ -26,7 +26,7 @@
 //!    (kill-XP split, quest credit, loot rules, the party's dungeon binding) resolve
 //!    membership locally on the hot path and must not become cross-database calls. Same relationship
 //!    `game_account`/`game_session` have had with realm-core from the start.
-//! 3. **A single-database gateway** has no realm-core to route to ([`WorldStore::realm_store`]
+//! 3. **A single-database gateway** has no realm-core to route to ([`ShardRoutingStore::realm_store`]
 //!    answers `None`), so every op takes the pre-realm-core path: the player's own connection, the
 //!    player-facing reducer, the shard's own tables. Byte-identical, and pinned by
 //!    `an_unsharded_gateway_runs_every_party_op_on_the_players_own_shard`.
@@ -38,6 +38,7 @@
 //! Realm Chat Line: Realm-core reads its own membership in the transaction that writes the line, so
 //! the mirror plays no part in who hears it.
 
+use crate::world::{CharacterStore, SessionStore, ShardRoutingStore, SocialStore};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -351,7 +352,7 @@ fn classify_party_partition(
     Ok(state.unwrap_or(PartyPartitionState::Unknown))
 }
 
-fn certify_roster_partitions<St: WorldStore + ?Sized>(
+fn certify_roster_partitions<St: ShardRoutingStore + ?Sized>(
     store: &St,
     realm: &dyn WorldStore,
     mut roster: GroupRoster,
@@ -578,7 +579,7 @@ impl AcceptorFacts {
 
     /// The facts an ACCEPT conveys, read realm-wide. A failed read conveys 0 rather than losing
     /// the accept: the Module treats an unknown class as a seat with no role.
-    fn of<St: WorldStore + ?Sized>(store: &St, guid: u64) -> Self {
+    fn of<St: CharacterStore + ShardRoutingStore + ?Sized>(store: &St, guid: u64) -> Self {
         match presence::character_anywhere(store, guid) {
             Ok(Some(character)) => Self {
                 class: character.class,
@@ -592,7 +593,11 @@ impl AcceptorFacts {
     }
 
     /// [`Self::of`] for an ACCEPT, [`Self::NONE`] for any other op.
-    fn for_op<St: WorldStore + ?Sized>(store: &St, guid: u64, op: Op) -> Self {
+    fn for_op<St: CharacterStore + ShardRoutingStore + ?Sized>(
+        store: &St,
+        guid: u64,
+        op: Op,
+    ) -> Self {
         match op {
             Op::Accept => Self::of(store, guid),
             _ => Self::NONE,
@@ -673,7 +678,7 @@ impl Op {
 /// cache holds the commit, so it is only for an op that pushes no Group mirror after it: a Group
 /// Broadcast, a Target Icon request, a declined invite, or an op on a single database. An ACCEPT
 /// changes a roster, so it never comes here.
-fn run_on_authority<A: WorldStore + ?Sized>(
+fn run_on_authority<A: PartyStore + ?Sized>(
     authority: &A,
     self_guid: u64,
     op: Op,
@@ -686,7 +691,7 @@ fn run_on_authority<A: WorldStore + ?Sized>(
 /// mirror push after it reads the op's own roster. Every op that changes a roster uses it, for a
 /// World Session and for a session-less Character alike. It waits on the Coordinator pump, so the
 /// caller must run on its own thread. `acceptor` is read only for an ACCEPT.
-fn run_on_authority_visible<A: WorldStore + ?Sized>(
+fn run_on_authority_visible<A: PartyStore + ?Sized>(
     authority: &A,
     self_guid: u64,
     op: Op,
@@ -763,7 +768,7 @@ pub enum PartyCommandHolder {
     InTransit,
 }
 
-fn receipt_anywhere<St: WorldStore + ?Sized>(
+fn receipt_anywhere<St: PartyStore + ShardRoutingStore + ?Sized>(
     source: &St,
     source_identity: spacetimedb_sdk::Identity,
     intent_id: u64,
@@ -782,7 +787,7 @@ fn receipt_anywhere<St: WorldStore + ?Sized>(
     Ok(found)
 }
 
-pub(crate) fn finish_expired_party_command_intent<St: WorldStore + ?Sized>(
+pub(crate) fn finish_expired_party_command_intent<St: PartyStore + ShardRoutingStore + ?Sized>(
     source: &St,
     intent: &PartyCommandIntent,
     claim_token: u64,
@@ -987,7 +992,7 @@ impl From<GroupRefusal> for PartyOutcome {
 /// [`resolve_roster_members_by_name`] so a caller resolving more than one name reads the roster
 /// once rather than once per name, which would let two names resolve against two different
 /// snapshots of a roster another op changed in between.
-fn own_group_roster<St: WorldStore + ?Sized>(
+fn own_group_roster<St: PartyStore + ShardRoutingStore + ?Sized>(
     store: &St,
     self_guid: u64,
 ) -> Result<Option<GroupRoster>> {
@@ -998,7 +1003,7 @@ fn own_group_roster<St: WorldStore + ?Sized>(
 }
 
 /// Resolve a typed name against `roster`'s members: `None` for a name matching nobody there.
-fn resolve_in_roster<St: WorldStore + ?Sized>(
+fn resolve_in_roster<St: CharacterStore + ShardRoutingStore + ?Sized>(
     store: &St,
     roster: &GroupRoster,
     name: &str,
@@ -1019,7 +1024,9 @@ fn resolve_in_roster<St: WorldStore + ?Sized>(
 /// refuses afterward when the result is not a member. LyraCore applies the member-list rule to
 /// both opcodes, so neither can reach a namesake standing outside the Raid, unlike
 /// [`presence::resolve_by_name`]. `None` for no Group, or a name matching no member.
-pub(crate) fn resolve_roster_member_by_name<St: WorldStore + ?Sized>(
+pub(crate) fn resolve_roster_member_by_name<
+    St: CharacterStore + PartyStore + ShardRoutingStore + ?Sized,
+>(
     store: &St,
     self_guid: u64,
     name: &str,
@@ -1034,7 +1041,9 @@ pub(crate) fn resolve_roster_member_by_name<St: WorldStore + ?Sized>(
 /// ONE roster read rather than two: reading the roster separately per name could resolve the pair
 /// against two different snapshots if another op changed the roster in between, letting a swap
 /// name a member who had already left. `(None, None)` for no Group.
-pub(crate) fn resolve_roster_members_by_name<St: WorldStore + ?Sized>(
+pub(crate) fn resolve_roster_members_by_name<
+    St: CharacterStore + PartyStore + ShardRoutingStore + ?Sized,
+>(
     store: &St,
     self_guid: u64,
     first_name: &str,
@@ -1051,7 +1060,7 @@ pub(crate) fn resolve_roster_members_by_name<St: WorldStore + ?Sized>(
 
 /// Route admission to the World Shard that reports the live entity. The acknowledged operation
 /// checks current Session ownership and consent there, even if that presence read was stale.
-fn admit_sessionless_answer<St: WorldStore + ?Sized>(
+fn admit_sessionless_answer<St: PartyStore + SessionStore + ShardRoutingStore + ?Sized>(
     store: &St,
     guid: u64,
 ) -> Result<PartyOutcome> {
@@ -1071,7 +1080,13 @@ fn admit_sessionless_answer<St: WorldStore + ?Sized>(
 /// Admit the automatic answer on the owning World Shard, then apply party rules on Realm-core.
 /// Suppression or unavailable admission leaves the invite untouched. Admission and membership
 /// commit on separate Shards, so a later controller selection cannot recall an admitted answer.
-fn answer_for_session_less<St: WorldStore + ?Sized>(store: &St, realm: &dyn WorldStore, guid: u64) {
+fn answer_for_session_less<
+    St: CharacterStore + PartyStore + SessionStore + ShardRoutingStore + ?Sized,
+>(
+    store: &St,
+    realm: &dyn WorldStore,
+    guid: u64,
+) {
     let admission = admit_sessionless_answer(store, guid);
     match admission {
         Ok(PartyOutcome::Ran) => {}
@@ -1111,7 +1126,9 @@ fn answer_for_session_less<St: WorldStore + ?Sized>(store: &St, realm: &dyn Worl
 /// roster. The refresh never fails the op (see [`sync_mirrors`]); an op that changes membership
 /// retries it first ([`sync_membership_mirrors`]). A Group Broadcast runs on Realm-core and nothing
 /// else happens.
-pub(crate) fn run<St: WorldStore + ?Sized>(
+pub(crate) fn run<
+    St: CharacterStore + PartyStore + SessionStore + ShardRoutingStore + SocialStore + ?Sized,
+>(
     store: &St,
     account_id: u64,
     self_guid: u64,
@@ -1208,7 +1225,7 @@ pub(crate) fn run<St: WorldStore + ?Sized>(
 /// shows back in its Group. Each touched Group gets [`sync_group_mirrors_required`]'s retries. The
 /// op has already committed, so a push that still fails is logged, not returned: the next op or
 /// world entry repairs it, as [`sync_mirrors`] documents.
-fn sync_membership_mirrors<St: WorldStore + ?Sized>(
+fn sync_membership_mirrors<St: ShardRoutingStore + ?Sized>(
     store: &St,
     realm: &dyn WorldStore,
     self_guid: u64,
@@ -1273,7 +1290,10 @@ fn op_changed_nothing(op: Op, before: Option<&GroupRoster>) -> bool {
 
 /// The invite gates realm-core cannot run for itself: does the target exist anywhere, and is it in
 /// the world anywhere. `None` means the invite may proceed.
-fn invite_gate<St: WorldStore + ?Sized>(store: &St, target: u64) -> Result<Option<GroupRefusal>> {
+fn invite_gate<St: SessionStore + ShardRoutingStore + SocialStore + ?Sized>(
+    store: &St,
+    target: u64,
+) -> Result<Option<GroupRefusal>> {
     if presence::of(store, target)?.is_none() {
         return Ok(Some(GroupRefusal::NoSuchPlayer));
     }
@@ -1288,7 +1308,7 @@ fn invite_gate<St: WorldStore + ?Sized>(store: &St, target: u64) -> Result<Optio
 /// the Gateway answers it on both planes, the way mail applies `same_team`. It runs only for a live
 /// target: vanilla looks the target up among online players first, so a missing or offline target
 /// keeps its own Refusal.
-fn cross_faction_invite<St: WorldStore + ?Sized>(
+fn cross_faction_invite<St: CharacterStore + SessionStore + ShardRoutingStore + ?Sized>(
     store: &St,
     inviter: u64,
     target: u64,
@@ -1412,7 +1432,7 @@ struct ServerLeave {
     previous_roster: Option<GroupRoster>,
 }
 
-fn run_server_leave<St: WorldStore + ?Sized>(
+fn run_server_leave<St: ShardRoutingStore + ?Sized>(
     store: &St,
     realm: &dyn WorldStore,
     leaver_guid: u64,
@@ -1484,7 +1504,7 @@ pub(crate) enum DeletedCharacterPartyCleanup {
 const DELETED_CHARACTER_LEAVE_ATTEMPTS: usize = 3;
 
 /// Remove a deleted Character from its realm-core party after every World Shard confirms absence.
-pub(crate) fn cleanup_deleted_character<St: WorldStore>(
+pub(crate) fn cleanup_deleted_character<St: CharacterStore + ShardRoutingStore>(
     store: &St,
     character_guid: u64,
 ) -> Result<DeletedCharacterPartyCleanup> {
@@ -1525,7 +1545,9 @@ pub(crate) fn cleanup_deleted_character<St: WorldStore>(
 
 /// Recheck authoritative party members after startup or a Coordinator reconnect. Row-delete
 /// callbacks are not replayed, so this closes cleanup attempts deferred while a Shard was down.
-pub(crate) fn reconcile_deleted_character_parties<St: WorldStore>(store: &St) -> Result<()> {
+pub(crate) fn reconcile_deleted_character_parties<St: CharacterStore + ShardRoutingStore>(
+    store: &St,
+) -> Result<()> {
     let Some(realm) = store.party_cleanup_realm()? else {
         return Ok(());
     };
@@ -1587,7 +1609,7 @@ const MIRROR_RETRY_WINDOW: std::time::Duration = std::time::Duration::from_secs(
 /// Push Realm-core's roster or disband tombstone for one party to each of `shards`, with up to
 /// [`MIRROR_PUSH_ATTEMPTS`] attempts per Shard inside [`MIRROR_RETRY_WINDOW`]. Partition
 /// certification still reads every World Shard.
-pub(crate) fn sync_group_mirrors_required<St: WorldStore + ?Sized>(
+pub(crate) fn sync_group_mirrors_required<St: ShardRoutingStore + ?Sized>(
     store: &St,
     realm: &dyn WorldStore,
     group_id: u64,
@@ -1643,7 +1665,7 @@ pub(crate) fn sync_group_mirrors_required<St: WorldStore + ?Sized>(
 /// local reads (XP split, loot rules) use a stale roster until the next op or the next world entry
 /// re-pushes it, and the party FRAME — which is what the player sees — is rendered from realm-core
 /// through the relay, not from the mirror.
-pub(crate) fn sync_mirrors<St: WorldStore + ?Sized>(
+pub(crate) fn sync_mirrors<St: ShardRoutingStore + ?Sized>(
     store: &St,
     realm: &dyn WorldStore,
     self_guid: u64,
@@ -1713,7 +1735,9 @@ pub(crate) fn sync_mirrors<St: WorldStore + ?Sized>(
 ///
 /// Unsharded → returns immediately, before any read: the shard's own tables already are the
 /// authority and the login path is unchanged.
-pub(crate) fn on_world_entry<St: WorldStore + ?Sized>(
+pub(crate) fn on_world_entry<
+    St: CharacterStore + PartyStore + SessionStore + ShardRoutingStore + ?Sized,
+>(
     tx: &SessionTx,
     store: &St,
     self_guid: u64,
@@ -1732,7 +1756,7 @@ pub(crate) fn on_world_entry<St: WorldStore + ?Sized>(
 /// above carries no Target Icons, so ask the party authority for the full list, as the client's
 /// own `0xFF` request does. The answer rides the group event relay onto the same session writer
 /// and so lands after the list. A failure costs only the marks, so it logs.
-fn request_target_icons<St: WorldStore + ?Sized>(store: &St, self_guid: u64) {
+fn request_target_icons<St: ShardRoutingStore + ?Sized>(store: &St, self_guid: u64) {
     let Some(realm) = store.realm_store() else {
         return;
     };
@@ -1754,7 +1778,7 @@ fn request_target_icons<St: WorldStore + ?Sized>(store: &St, self_guid: u64) {
 /// settlement uses the strict sibling below before it drops an arrival fence.
 ///
 /// Unsharded → `Ok(None)` before any read: the shard's own tables already are the authority.
-pub(crate) fn sync_arrival_mirror<St: WorldStore + ?Sized>(
+pub(crate) fn sync_arrival_mirror<St: PartyStore + ShardRoutingStore + ?Sized>(
     store: &St,
     self_guid: u64,
 ) -> Result<Option<GroupRoster>> {
@@ -1793,7 +1817,7 @@ pub(crate) fn sync_arrival_mirror<St: WorldStore + ?Sized>(
         return Ok(None);
     };
     // The shard the player just entered. `store` is already the session's home-shard handle (every
-    // world-entry caller runs under `on_home_shard!`), so this is the one mirror that must exist
+    // world-entry caller runs on the session's routed Store), so this is the one mirror that must exist
     // before the player takes a single action here.
     store.sync_group_mirror(&roster)?;
     Ok(Some(roster))
@@ -1802,7 +1826,7 @@ pub(crate) fn sync_arrival_mirror<St: WorldStore + ?Sized>(
 /// Reconcile the same authoritative roster as [`sync_arrival_mirror`], but make every destination
 /// write part of Transfer settlement. The arrival fence stays up when realm-core or the mirror is
 /// unavailable, and a later Transfer retry repeats this operation before release.
-pub(crate) fn sync_transfer_arrival_mirror<St: WorldStore + ?Sized>(
+pub(crate) fn sync_transfer_arrival_mirror<St: PartyStore + ShardRoutingStore + ?Sized>(
     store: &St,
     character_guid: u64,
 ) -> Result<()> {
@@ -1848,7 +1872,7 @@ pub(crate) fn sync_transfer_arrival_mirror<St: WorldStore + ?Sized>(
 /// payload already carries is kept; the Module wrote it with the change. A member whose name will
 /// not resolve (a shard that is down) renders with an empty name rather than being dropped from the
 /// frame: a missing row in the party UI reads as "they left", which is a worse lie than a blank one.
-pub(crate) fn render_list<St: WorldStore + ?Sized>(
+pub(crate) fn render_list<St: CharacterStore + SessionStore + ShardRoutingStore + ?Sized>(
     store: &St,
     self_guid: u64,
     roster: &RosterPayload,
