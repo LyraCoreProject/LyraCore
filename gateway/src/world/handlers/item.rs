@@ -311,8 +311,7 @@ pub(super) mod tests {
 
         fn turn_in_quest(
             &self,
-            _account_id: u64,
-            _self_guid: u64,
+            _actor: Actor,
             _giver_guid: u64,
             _quest_id: u32,
             _reward_index: u32,
@@ -320,13 +319,7 @@ pub(super) mod tests {
             unreachable!("no item action turns a quest in")
         }
 
-        fn accept_quest(
-            &self,
-            _account_id: u64,
-            _self_guid: u64,
-            _giver_guid: u64,
-            _quest_id: u32,
-        ) -> Result<()> {
+        fn accept_quest(&self, _actor: Actor, _giver_guid: u64, _quest_id: u32) -> Result<()> {
             unreachable!("no item action accepts a quest")
         }
 
@@ -341,11 +334,11 @@ pub(super) mod tests {
             unreachable!("no item action reads the quest log")
         }
 
-        fn abandon_quest(&self, _account_id: u64, _self_guid: u64, _quest_id: u32) -> Result<()> {
+        fn abandon_quest(&self, _actor: Actor, _quest_id: u32) -> Result<()> {
             unreachable!("no item action abandons a quest")
         }
 
-        fn push_quest(&self, _account_id: u64, _self_guid: u64, _quest_id: u32) -> Result<()> {
+        fn push_quest(&self, _actor: Actor, _quest_id: u32) -> Result<()> {
             unreachable!("no item action shares a quest with the party")
         }
 

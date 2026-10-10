@@ -8,7 +8,7 @@ pub(crate) struct QuestState {
     pub(crate) quest_details: Vec<codec::QuestDetailView>,
     /// The player's quest-log slots `player_quest_log` returns (drives the login descriptor block).
     pub(crate) quest_log_slots: Vec<codec::update_mask::QuestLogSlot>,
-    /// Recorded `turn_in_quest` dispatches: (account, giver, quest, reward_index) — so the
+    /// Recorded `turn_in_quest` dispatches: (actor, giver, quest, reward_index) — so the
     /// choose-reward socket test asserts the player's pick reached the store unchanged.
     pub(crate) turned_in: std::sync::Mutex<Vec<(u64, u64, u32, u32)>>,
     /// A Reward Letter a successful `turn_in_quest` files as Escrow for the Character, as
@@ -46,13 +46,7 @@ impl QuestActionStore for WorldFake {
     /// Accept, abandon and share are driven only at the quest seam, where
     /// `InMemoryQuestActions` records the request — a socket test would prove nothing more, so
     /// this store just answers success.
-    fn accept_quest(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        _giver_guid: u64,
-        _quest_id: u32,
-    ) -> Result<()> {
+    fn accept_quest(&self, _actor: Actor, _giver_guid: u64, _quest_id: u32) -> Result<()> {
         Ok(())
     }
 
@@ -65,11 +59,11 @@ impl QuestActionStore for WorldFake {
         Ok(self.quest.quest_log_slots.clone())
     }
 
-    fn abandon_quest(&self, _account_id: u64, _self_guid: u64, _quest_id: u32) -> Result<()> {
+    fn abandon_quest(&self, _actor: Actor, _quest_id: u32) -> Result<()> {
         Ok(())
     }
 
-    fn push_quest(&self, _account_id: u64, _self_guid: u64, _quest_id: u32) -> Result<()> {
+    fn push_quest(&self, _actor: Actor, _quest_id: u32) -> Result<()> {
         Ok(())
     }
 
@@ -89,20 +83,20 @@ impl QuestActionStore for WorldFake {
 
     fn turn_in_quest(
         &self,
-        account_id: u64,
-        _self_guid: u64,
+        actor: Actor,
         giver_guid: u64,
         quest_id: u32,
         reward_index: u32,
     ) -> Result<()> {
         if let Some(e) = &self.trade_error {
-            return Err(anyhow!("{e}"));
+            return Err(crate::stdb::ReducerCallError::refused("gw_turn_in_quest", e).into());
         }
-        self.quest
-            .turned_in
-            .lock()
-            .unwrap()
-            .push((account_id, giver_guid, quest_id, reward_index));
+        self.quest.turned_in.lock().unwrap().push((
+            actor.guid(),
+            giver_guid,
+            quest_id,
+            reward_index,
+        ));
         if let Some(letter) = self.quest.turn_in_reward_letter.clone() {
             self.mail
                 .attested
