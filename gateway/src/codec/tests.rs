@@ -36,6 +36,43 @@ fn warrior_entity() -> EntityView {
     }
 }
 
+#[test]
+fn fresh_character_create_has_no_watched_faction() {
+    let message = build_create_object(&warrior_entity(), CreateKind::SelfPlayer, &[], &[]).unwrap();
+    let Object::CreateObject2 {
+        mask2: UpdateMask::Player(fields),
+        ..
+    } = &message.objects[0]
+    else {
+        panic!("expected Character CREATE");
+    };
+    assert_eq!(fields.player_field_watched_faction_index(), Some(-1));
+}
+
+#[test]
+fn character_create_restores_the_private_watched_faction() {
+    for index in [-1, 0, 19, 63] {
+        let entity = EntityView {
+            watched_faction_index: Some(index),
+            ..warrior_entity()
+        };
+        for (kind, expected) in [
+            (CreateKind::SelfPlayer, Some(index)),
+            (CreateKind::Peer, None),
+        ] {
+            let message = build_create_object(&entity, kind, &[], &[]).unwrap();
+            let Object::CreateObject2 {
+                mask2: UpdateMask::Player(fields),
+                ..
+            } = &message.objects[0]
+            else {
+                panic!("expected Character CREATE");
+            };
+            assert_eq!(fields.player_field_watched_faction_index(), expected);
+        }
+    }
+}
+
 /// Reputation relay: a known faction id maps to its `Faction` enum value and the signed standing
 /// survives the wire `u32` bit-cast (the client reads it back as `i32`); an unknown faction id yields
 /// `None` so the relay skips silently instead of sending garbage.

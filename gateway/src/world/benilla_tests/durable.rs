@@ -827,3 +827,41 @@ fn benilla_durable_binding_refreshes_the_hearth_point_immediately() {
     client.finish();
     gateway.join().unwrap().unwrap();
 }
+
+#[test]
+#[ignore = "starts a private SpacetimeDB node"]
+fn benilla_durable_watched_faction_survives_reconnect() {
+    let realm = Realm::start("benilla-watched-faction");
+    let (mut client, gateway) = realm.connect("TEST");
+    client.enter_world();
+    client.query_clock();
+    assert_eq!(client.objects[&1].get(&1261), Some(&u32::MAX));
+    client.logout();
+    drop(client);
+    gateway.join().unwrap().unwrap();
+
+    for (before, selected) in [(-1i32, 0i32), (0, 19), (19, -1), (-1, -1)] {
+        let (mut client, gateway) = realm.connect("TEST");
+        client.enter_world();
+        client.query_clock();
+        assert_eq!(client.objects[&1].get(&1261), Some(&(before as u32)));
+        client.send(
+            opcode::CMSG_SET_WATCHED_FACTION,
+            &messages::set_watched_faction(selected),
+        );
+        client.until_view("saved watched faction", |client| {
+            client.objects[&1].get(&1261) == Some(&(selected as u32))
+        });
+        client.query_clock();
+        assert_eq!(
+            realm
+                .standalone
+                .query_rows("SELECT watched_faction_index FROM game_character WHERE guid = 1")[0]
+                ["watched_faction_index"],
+            selected.to_string()
+        );
+        client.logout();
+        drop(client);
+        gateway.join().unwrap().unwrap();
+    }
+}

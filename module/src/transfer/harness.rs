@@ -571,6 +571,7 @@ fn fixture_character(guid: u64, name: &str) -> crate::character::Character {
         pending_run_speed_mult_bp: 30_000,
         // Distinguishable from the column default so a slot count that fails to travel shows up.
         bank_bag_slots: 3,
+        watched_faction_index: -1,
     }
 }
 
@@ -729,6 +730,60 @@ fn a_populated_character_crosses_a_database_with_every_row_and_value() {
         "no shadow `game_account` row — `gw::gw_player_login` resolves the account by id, \
              so the arriving player cannot log in at all"
     );
+}
+
+#[test]
+fn watched_faction_selection_and_clear_cross_with_the_character() {
+    for watched_index in [-1, 0, 19, 63] {
+        let src = FakeDb::populated(GUID);
+        src.chars
+            .borrow_mut()
+            .get_mut(&GUID)
+            .unwrap()
+            .watched_faction_index = watched_index;
+        let blob = export(&src, GUID, XFER, DEST);
+        let mut dst = FakeDb::new();
+        apply_import_blob(&mut dst, XFER, wire(&blob)).unwrap();
+        assert_eq!(
+            dst.with_char(GUID, |c| c.watched_faction_index),
+            watched_index
+        );
+    }
+}
+
+#[test]
+fn escrow_from_before_the_watched_column_imports_with_no_selection() {
+    let src = FakeDb::populated(GUID);
+    let mut blob = export(&src, GUID, XFER, DEST);
+    // The old Character row ended after bank_bag_slots, before the final four-byte i32.
+    blob.character_row.truncate(blob.character_row.len() - 4);
+    let mut dst = FakeDb::new();
+    apply_import_blob(&mut dst, XFER, wire(&blob)).unwrap();
+    assert_eq!(dst.with_char(GUID, |c| c.watched_faction_index), -1);
+    assert_eq!(dst.with_char(GUID, |c| c.bank_bag_slots), 3);
+    assert_eq!(dst.with_char(GUID, |c| c.money), 987_654);
+    assert!(dst.has_in_row(XFER));
+}
+
+#[test]
+fn partial_watched_columns_and_unknown_trailing_columns_refuse_before_import() {
+    for partial_bytes in [1, 2, 3, 5] {
+        let src = FakeDb::populated(GUID);
+        let mut blob = export(&src, GUID, XFER, DEST);
+        blob.character_row
+            .truncate(blob.character_row.len() - partial_bytes);
+        let mut dst = FakeDb::new();
+        assert!(apply_import_blob(&mut dst, XFER, wire(&blob)).is_err());
+        assert!(!dst.has_character(GUID));
+        assert!(!dst.has_in_row(XFER));
+    }
+    let src = FakeDb::populated(GUID);
+    let mut blob = export(&src, GUID, XFER, DEST);
+    blob.character_row.push(0);
+    let mut dst = FakeDb::new();
+    assert!(apply_import_blob(&mut dst, XFER, wire(&blob)).is_err());
+    assert!(!dst.has_character(GUID));
+    assert!(!dst.has_in_row(XFER));
 }
 
 // =======================================================================================

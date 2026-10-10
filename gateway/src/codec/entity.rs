@@ -7,11 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// A minimal mirror of the entity-row fields the encoder needs. The gateway fills this from
 /// the `game_world_entity` subscription cache; it is decoupled from the module's table type.
 ///
-/// `zone_id` is the one field not on the `game_world_entity` row — it rides along from the
-/// `game_character` row at login so the gateway can address `SMSG_BINDPOINTUPDATE` (the world
-/// entity carries only `map_id`/position; deriving a zone from position would need map/area
-/// geometry the entity row deliberately doesn't carry, so the gateway rides the value in from
-/// login instead).
+/// Character fields supply the saved watched faction, hearth point and fallback zone at login.
 #[derive(Clone, Debug, Default)]
 pub struct EntityView {
     pub guid: u64,
@@ -22,6 +18,8 @@ pub struct EntityView {
     /// `player_login` hands back a view, not the row.
     pub instance_id: u64,
     pub zone_id: u32,
+    /// Saved Character selection, sent only to its own client. None clears the watched bar.
+    pub watched_faction_index: Option<i32>,
     pub x: f32,
     pub y: f32,
     pub z: f32,
@@ -415,6 +413,10 @@ pub fn build_create_object(
         builder = builder
             .set_player_guildid(entity.guild_id as i32)
             .set_player_guildrank(entity.guild_rank as i32);
+        if matches!(kind, CreateKind::SelfPlayer) {
+            builder = builder
+                .set_player_field_watched_faction_index(entity.watched_faction_index.unwrap_or(-1));
+        }
         if entity.mount_display_id != 0 {
             builder = builder.set_unit_mountdisplayid(entity.mount_display_id as i32);
         }

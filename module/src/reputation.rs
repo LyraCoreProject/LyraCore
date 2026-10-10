@@ -23,7 +23,7 @@ pub struct PlayerReputation {
     pub owner_identity: Identity,
     pub faction_id: u32,
     pub standing: i32,
-    // END-APPENDED (#[default(0)] → additive auto-migrate; negative defaults aren't accepted by the macro).
+    // END-APPENDED (#[default(0)] → additive auto-migrate).
     // The Faction.dbc ReputationListID — the SMALL 0..63 index the 5875 client's SMSG_SET_FACTION_STANDING
     // addresses in its rep array. The client does NOT key on faction_id: sending faction_id 72 (Stormwind)
     // instead of its rep-index 19 indexes PAST the 64-slot array → null deref → ERROR crash on the first
@@ -265,6 +265,27 @@ pub(crate) fn apply_set_faction_at_war(
         reputation_index: reputation_index as i32,
         at_war,
     });
+    Ok(())
+}
+
+/// Save the watched slot without changing standing, visibility or at-war state.
+pub(crate) fn apply_set_watched_faction(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    reputation_index: i32,
+) -> Result<(), String> {
+    if !(-1..=63).contains(&reputation_index) {
+        return Err(format!(
+            "invalid watched reputation index {reputation_index}"
+        ));
+    }
+    let characters = ctx.db.game_character();
+    let mut character = characters
+        .guid()
+        .find(character_guid)
+        .ok_or_else(|| "Character not found".to_string())?;
+    character.watched_faction_index = reputation_index;
+    characters.guid().update(character);
     Ok(())
 }
 

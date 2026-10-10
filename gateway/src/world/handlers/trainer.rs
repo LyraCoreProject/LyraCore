@@ -8,6 +8,13 @@ use wow_world_messages::vanilla::TrainingFailureReason;
 
 /// Trainer windows, talents, and the action-bar and reputation settings.
 pub(crate) trait TrainerStore: Send + Sync {
+    /// Save a reputation-list index, or -1 to clear the watched bar.
+    fn set_watched_faction(
+        &self,
+        actor: Actor,
+        reputation_index: i32,
+    ) -> Result<InteractionOutcome>;
+
     /// Does this trainer serve `player_guid`'s class? Gates the window and the "train" gossip
     /// option through the same predicate the module buys with. Fail-open on missing data.
     fn trainer_serves(&self, player_guid: u64, trainer_guid: u64) -> Result<bool>;
@@ -394,4 +401,29 @@ pub(crate) fn handle_at_war<St: TrainerStore + SessionStore + ?Sized>(
         )?;
     }
     Ok(())
+}
+
+pub(crate) fn handle_watched_faction<St: TrainerStore + SessionStore + ?Sized>(
+    tx: &SessionTx,
+    store: &St,
+    conn: &mut WorldConn,
+    body: &[u8],
+) -> Result<()> {
+    anyhow::ensure!(body.len() == 4, "invalid CMSG_SET_WATCHED_FACTION body");
+    let Some(actor) = social::self_guid(conn).and_then(Actor::new) else {
+        return Ok(());
+    };
+    let index = i32::from_le_bytes(body.try_into()?);
+    if let Some((opcode, info)) = conn.move_coalesce.flush_now() {
+        forward_movement(store, conn, opcode, &info)?;
+    }
+    let message = match store.set_watched_faction(actor, index)? {
+        InteractionOutcome::Done => ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
+            codec::build_watched_faction_values(actor.guid(), index),
+        )),
+        InteractionOutcome::Refused(reason) => {
+            ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(codec::build_gm_system_message(reason)))
+        }
+    };
+    send(tx, Outbound::One(message))
 }

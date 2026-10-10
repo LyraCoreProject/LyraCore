@@ -1493,10 +1493,7 @@ pub(crate) fn apply_import_blob<S: ImportSink>(
     // the destination coordinates and given the money the blob carries (which is the escrowed value
     // PLUS any `defer_money_delta` folded in after the freeze — the residual, replayed here
     // because this is the hop that reads the blob at the destination).
-    let mut c: crate::character::Character =
-        spacetimedb::sats::bsatn::from_slice(&decoded.character_row).map_err(|e| {
-            format!("transfer {transfer_id}: cannot decode the arriving character row: {e}")
-        })?;
+    let mut c = decode_character_row(transfer_id, &decoded.character_row)?;
     if c.guid != guid {
         return Err(format!(
             "transfer {transfer_id}: the arriving character row is guid {} but the blob names {guid}",

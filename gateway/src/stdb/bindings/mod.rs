@@ -827,6 +827,7 @@ pub mod gw_set_sheathed_reducer;
 pub mod gw_set_target_reducer;
 pub mod gw_set_trade_gold_reducer;
 pub mod gw_set_trade_item_reducer;
+pub mod gw_set_watched_faction_reducer;
 pub mod gw_skin_reducer;
 pub mod gw_spirit_res_reducer;
 pub mod gw_split_item_reducer;
@@ -2009,6 +2010,7 @@ pub use gw_set_sheathed_reducer::gw_set_sheathed;
 pub use gw_set_target_reducer::gw_set_target;
 pub use gw_set_trade_gold_reducer::gw_set_trade_gold;
 pub use gw_set_trade_item_reducer::gw_set_trade_item;
+pub use gw_set_watched_faction_reducer::gw_set_watched_faction;
 pub use gw_skin_reducer::gw_skin;
 pub use gw_spirit_res_reducer::gw_spirit_res;
 pub use gw_split_item_reducer::gw_split_item;
@@ -3837,6 +3839,10 @@ pub enum Reducer {
         trade_slot: u8,
         inv_slot: u8,
     },
+    GwSetWatchedFaction {
+        request_actor: SessionActor,
+        reputation_index: i32,
+    },
     GwSkin {
         request_actor: SessionActor,
         corpse_guid: u64,
@@ -4814,6 +4820,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwSetTarget { .. } => "gw_set_target",
             Reducer::GwSetTradeGold { .. } => "gw_set_trade_gold",
             Reducer::GwSetTradeItem { .. } => "gw_set_trade_item",
+            Reducer::GwSetWatchedFaction { .. } => "gw_set_watched_faction",
             Reducer::GwSkin { .. } => "gw_skin",
             Reducer::GwSpiritRes { .. } => "gw_spirit_res",
             Reducer::GwSplitItem { .. } => "gw_split_item",
@@ -7573,6 +7580,13 @@ Reducer::GwIgnoreTrade{
                 request_actor: request_actor.clone(),
                 trade_slot: trade_slot.clone(),
                 inv_slot: inv_slot.clone(),
+}),
+            Reducer::GwSetWatchedFaction{
+                request_actor,
+                reputation_index,
+}             => __sats::bsatn::to_vec(&gw_set_watched_faction_reducer::GwSetWatchedFactionArgs {
+                request_actor: request_actor.clone(),
+                reputation_index: reputation_index.clone(),
 }),
             Reducer::GwSkin{
                 request_actor,

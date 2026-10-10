@@ -142,6 +142,7 @@ pub(crate) fn tester_store(account_id: u64) -> WorldFake {
 /// `player_login`.
 pub(crate) fn warrior_entity() -> codec::EntityView {
     codec::EntityView {
+        watched_faction_index: None,
         guid: 1,
         map_id: 0,
         instance_id: 0, // the open world

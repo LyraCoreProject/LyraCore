@@ -1146,6 +1146,11 @@ fn run_world_session_with_queue_and_deadline<S: DuplexStream, C: DeadlineClock>(
                 handlers::handle_at_war(&tx, &*store, &mut conn, &body)?;
                 continue;
             }
+            if hdr.opcode == 0x0318 {
+                let store = conn.store.current();
+                handlers::handle_watched_faction(&tx, &*store, &mut conn, &body)?;
+                continue;
+            }
             if let Some(replies) = handlers::raw_unavailable_outbound(hdr.opcode, &body)? {
                 if matches!(conn.state, WorldState::InWorld(_)) {
                     for reply in replies {

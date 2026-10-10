@@ -3,6 +3,8 @@ use super::super::*;
 #[derive(Default)]
 pub(crate) struct TrainerState {
     pub(crate) spells: Vec<codec::TrainerSpellView>,
+    pub(crate) watched_factions: std::sync::Mutex<std::collections::BTreeMap<u64, i32>>,
+    pub(crate) watched_faction_transport_lost: bool,
     pub(crate) reputation_at_war: std::sync::Mutex<std::collections::BTreeMap<u32, bool>>,
     pub(crate) talent_reset_quote: Option<u32>,
     pub(crate) reset_talents_refusal: Option<String>,
@@ -15,6 +17,29 @@ pub(crate) struct TrainerState {
 }
 
 impl TrainerStore for WorldFake {
+    fn set_watched_faction(
+        &self,
+        actor: Actor,
+        reputation_index: i32,
+    ) -> Result<InteractionOutcome> {
+        if self.trainer.watched_faction_transport_lost {
+            return Err(
+                crate::stdb::ReducerCallError::transport_lost("gw_set_watched_faction").into(),
+            );
+        }
+        if !(-1..=63).contains(&reputation_index) {
+            return Ok(InteractionOutcome::Refused(
+                "invalid watched faction index".into(),
+            ));
+        }
+        self.trainer
+            .watched_factions
+            .lock()
+            .unwrap()
+            .insert(actor.guid(), reputation_index);
+        Ok(InteractionOutcome::Done)
+    }
+
     fn talent_reset_cost(&self, _character_guid: u64) -> Option<u32> {
         self.trainer.talent_reset_quote
     }

@@ -52,6 +52,7 @@ pub struct Character {
     pub pending_godmode: bool,
     pub pending_run_speed_mult_bp: u32,
     pub bank_bag_slots: u8,
+    pub watched_faction_index: i32,
 }
 
 impl __sdk::InModule for Character {
@@ -107,6 +108,7 @@ pub struct CharacterCols {
     pub pending_godmode: __sdk::__query_builder::Col<Character, bool>,
     pub pending_run_speed_mult_bp: __sdk::__query_builder::Col<Character, u32>,
     pub bank_bag_slots: __sdk::__query_builder::Col<Character, u8>,
+    pub watched_faction_index: __sdk::__query_builder::Col<Character, i32>,
 }
 
 impl __sdk::__query_builder::HasCols for Character {
@@ -173,6 +175,10 @@ impl __sdk::__query_builder::HasCols for Character {
                 "pending_run_speed_mult_bp",
             ),
             bank_bag_slots: __sdk::__query_builder::Col::new(table_name, "bank_bag_slots"),
+            watched_faction_index: __sdk::__query_builder::Col::new(
+                table_name,
+                "watched_faction_index",
+            ),
         }
     }
 }

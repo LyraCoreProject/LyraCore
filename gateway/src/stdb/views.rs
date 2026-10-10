@@ -119,6 +119,7 @@ pub(crate) fn entity_view(e: WorldEntity, durable_zone: u32) -> crate::codec::En
         guid: e.guid,
         map_id: e.map_id,
         instance_id: e.instance_id,
+        watched_faction_index: None,
         zone_id: if e.zone_id != 0 {
             e.zone_id
         } else {
