@@ -410,3 +410,126 @@ partition before it applies the imported landing and writes one Transfer Intent.
 the Character, instance binding, and intent unchanged.
 
 `nav::LEG_MAX_EXPANSIONS` is the expansion cap used by `nav::route_step`. A Package can reserve that work before selecting movement.
+
+## Runtime Scripts
+
+A Runtime Script is Lua supplied from outside the core rather than compiled into it. It reaches a
+Shard only through a Package's Script Artifact; there is no upload path. Its name lets a diagnostic
+identify it.
+
+**Package Events.** A Package Event runs the same dispatch a core hook event runs, so a Package
+exposes one of its own decisions to a Runtime Script without a new core seam. A Package may only bind
+events it fires. The artifact parser enforces this against the artifact's own Package identity.
+
+**Event Binding and order.** A script binds to a name from the Module's hook catalogue or to a
+Package Event of the shipping Package. The author-time build refuses anything else. Several scripts
+may bind to one event. Lower priority runs first and the script identifier breaks a tie, so every
+Shard runs one plan in one order.
+
+**Script Answer.** The first number returned in dispatch order is the answer. Later scripts still
+run and still stage what they stage. With no answer (nothing bound, nothing returning a number, or
+every script failing) the caller keeps its own fallback. That is what makes a Runtime Script an
+override rather than a dependency.
+
+**The Host.** The Runtime Script Host holds one compiler cache, gives each Invocation a fresh
+environment and a Fuel Budget, and contains every failure. An Invocation starts from an environment
+that holds only the allowlisted standard library, the event with its Entity Handles, and the Host
+Operations. It ends by committing its Staged Effects or by producing a Script Diagnostic.
+
+**Fuel Budget.** Running out of fuel is a failure, so a script that overruns changes nothing.
+
+**Entity Handles.** A handle carries the identity the Host acts on and the curated fields the script
+may read. It carries no guid and no row, so a script can neither forge one nor name an entity the
+Host did not resolve for that Invocation.
+
+**Host Operations.** Today these are `heal`, `send_chat` and `grant_xp`. Each takes an Entity Handle
+and records a Staged Effect. A misuse is refused with a Script Diagnostic that names the call and the
+fault.
+
+**Staged Effects.** A successful Invocation commits its Staged Effects through core operations. Any
+failure discards all of them.
+
+**Script Diagnostics.** A Script Diagnostic records the Runtime Script, the event, the failure kind
+(syntax, runtime or fuel) and a truncated message.
+
+**Script Artifacts.** A Script Artifact holds the Package identity, the source revision, and one
+whole row per script: identifier, name, Event Binding, priority, enabled state and Lua. A Runtime
+Script has no base import, so the Package owns the whole row, and two Packages meeting on one row is
+a collision rather than a merge. Script Artifacts and Package Deltas both live in
+`packages/<name>/data/.generated/`, told apart by a top-level kind.
+
+**Script Directives.** `@event` and `@id` are required. `@priority` and `@enabled` have defaults. The
+identifier is written down rather than derived because it is durable: deriving it from a file index
+would renumber a Package's scripts the moment an author added one.
+
+**Runtime Script Toolchain.** Bun plus `typescript-to-lua`, its config, the hand-maintained Host API
+typings, and the emitter that keeps generated Lua off the interpreter's known call-shape fault. It
+lives in `datascripts/runtime-scripts/` and runs at author time only. An Operator installs the
+prebuilt Lua.
+
+## Package identifier ranges
+
+Each Import Family that lets a Package insert rows owns one Package Identifier Range.
+`crates/lyracore-package-delta/src/ids.rs` holds the numbers. A band's floor sits two decimal orders
+above the highest identifier a real client holds for its tables, clear of every reserved band. An
+apply clears the whole band before it writes.
+
+| Range | Family | Band | Checked against |
+| --- | --- | --- | --- |
+| Package Script Range | script | 100,000 to 999,999 | `game_script` identifier |
+| Package Spell Range | spell | 6,000,000 to 6,999,999 | spell id, for `game_spell` and `game_spell_effect` |
+| Package Item Range | items | 7,000,000 to 7,999,999 | `game_item_template.entry` |
+| Package Quest Range | quest | 8,000,000 to 8,999,999 | `quest_entry` |
+| Package Loot Range | loot | 9,000,000 to 9,999,999 | the loot row's own identifier |
+| Package Cast Range | casts | 10,000,000 to 10,999,999 | `game_creature_spell.id` |
+| Package Trainer Range | trainers | 11,000,000 to 11,999,999 | `game_trainer_spell.id` |
+| Package Gossip Range | gossip | 12,000,000 to 12,999,999 | each insertable gossip table's own key |
+| Package Globals Range | globals | 13,000,000 to 13,999,999 | the surrogate key of three tables |
+| Package Spell Metadata Range | spellmeta | 14,000,000 to 14,999,999 | `game_spell_learn.id` |
+| Package Creature Range | creatures | 15,000,000 to 15,999,999 | template `entry` and spawn `spawn_id` |
+| Package Gameobject Range | gameobjects | 16,000,000 to 16,999,999 | template `entry`, trap `entry` and spawn `spawn_id` |
+| Package EventAI Range | Creature-AI | 17,000,000 to 17,999,999 | three catalogue tables' `id` |
+
+Each band after the spell band sits one whole decade above the one before it, so the millions
+column says which family invented a row.
+
+- **Script.** No client and no import holds a Runtime Script identifier, so the band has no real data
+  to clear and sits below every reserved band rather than above one. It is the whole of
+  `game_script` by construction, which makes a script apply a total reconciliation.
+- **Spell.** Two decimal orders above the highest real client spell and above every reserved band,
+  so an inserted spell never collides with imported or fixture data. It is the worked example the
+  other bands follow.
+- **Quest.** `game_quest_template` and every child table (`game_quest_text` and the rest) are
+  Package-owned exactly when their quest is, so one band covers the whole family.
+- **Loot.** No loot table's owning entity (a creature, a gameobject or a zone) is ever
+  Package-invented, so the band checks a loot row's own identifier. The four loot tables
+  (pickpocket, gameobject or chest, skinning, fishing) share the band; each has its own primary-key
+  space, so they cannot collide.
+- **Casts.** The loot shape: the owning creature is never Package-invented. `game_creature_cast` has
+  no band. Its key names a creature template, which no Package may invent, so every insert on it is
+  refused.
+- **Trainers.** The loot shape. The curated trainer overrides at 5,200,000
+  (`CURATED_TRAINER_ID_BASE`) are a reserved band this range clears, not a Package range.
+- **Gossip.** One band covers `game_npc_text`, `game_npc_text_slot`, `game_gossip_option`,
+  `game_gossip_menu_profile` and `game_gossip_menu_profile_option`. `game_gossip_menu` has no band:
+  its key names a creature template, so every insert on it is refused.
+- **Globals.** Covers `game_graveyard_zone`, `game_createinfo_spell` and `game_createinfo_action`.
+  The other four tables have no band because no Package may invent their keys:
+  `game_class_level_stats`, `game_level_stats` and `game_start_position` key on a race, class and
+  level the client fixes, and `game_areatrigger_teleport` keys on an `AreaTrigger.dbc` trigger id.
+- **Spell metadata.** `game_spell_chain` and `game_spell_proc_event` key on a spell identifier, so an
+  insert there takes the Package Spell Range. A metadata row cannot outlive the `game_spell` row it
+  describes.
+- **Creatures.** A creature spawn's durable guid packs the template entry and the spawn identifier
+  into 24-bit fields, so the whole band must fit inside one. The seeded creature fixtures at 51,000
+  to 51,999 are Fixture-Reserved Identifiers no Package may tune. `game_creature_waypoint` is not
+  claimable: it names its creature by spawn guid and carries no map, so a Spatial Claim on it could
+  not be routed.
+- **Gameobjects.** Template `entry` and trap `entry` share one identifier space on purpose: a trap
+  row describes the template of the same entry. The two gameobject pool tables are not claimable,
+  because no base import writes either, so a claim on one would have no family reload to replay
+  after.
+- **EventAI.** Covers `game_creature_ai_broadcast_text.id`, `game_creature_ai_summon.id` and
+  `game_quest_event_requirement.id`. The family's scripted definitions are not claimable: a
+  definition carries a creature's whole rule set as a nested payload, which no claimed column can
+  state. Reaching a creature's rules from a Package remains a named gap.
