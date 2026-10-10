@@ -153,7 +153,7 @@ fn member_channel_names(realm: &Standalone, guid: u64) -> Vec<String> {
 /// Criteria 1 to 3: one channel per team and name, lines in the speaker's language, and YOU_JOINED
 /// with the wire flags.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn each_team_has_its_own_trade_channel_and_a_line_reaches_every_member() {
     let realm = start("chat-channels-teams");
 
@@ -246,7 +246,7 @@ fn each_team_has_its_own_trade_channel_and_a_line_reaches_every_member() {
 
 /// Criteria 3 to 6: custom channel flags, JOINED, the first owner, succession and the password.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_custom_channel_announces_names_an_owner_and_hands_ownership_on() {
     let realm = start("chat-channels-custom");
 
@@ -336,7 +336,7 @@ fn a_custom_channel_announces_names_an_owner_and_hands_ownership_on() {
 
 /// Criterion 7: leaving, NOT_MEMBER, and the last member taking the password and bans with them.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn the_last_member_leaving_deletes_the_channel_its_password_and_its_bans() {
     let realm = start("chat-channels-delete");
     refused(
@@ -405,7 +405,7 @@ fn claim(realm: &Standalone, nonce: &str) -> String {
 /// Criterion 8: releasing, replacing and reaping an Account Claim each leave every channel, with
 /// LEFT to the others and no YOU_LEFT.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn channel_membership_ends_with_the_account_claim_that_admitted_it() {
     let realm = start("chat-channels-claims");
     op(&realm, &actor("2"), JOIN, "Raiders", "", HUMAN);
@@ -474,7 +474,7 @@ fn channel_membership_ends_with_the_account_claim_that_admitted_it() {
 /// Criteria 9 and 10: no death check, MUTED and WorldDefense refuse, and only a moderator's line
 /// reaches listeners who ignore the speaker.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn channel_speech_follows_the_members_flags_not_the_speakers_health() {
     let realm = start("chat-channels-speech");
     op(&realm, &actor("1"), JOIN, "Raiders", "", HUMAN);
@@ -532,7 +532,7 @@ fn channel_speech_follows_the_members_flags_not_the_speakers_health() {
 /// leave needed). The Character must hold all four new memberships afterward, the same as a
 /// zone-named channel joined with no preceding leave.
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_zone_border_crossing_keeps_every_new_zone_channel_membership() {
     let realm = start("chat-channels-zone-walk");
 

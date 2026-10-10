@@ -169,7 +169,7 @@ Several verification tools are **maintainer-side and not included in this reposi
 wire-protocol test suite (a headless client that speaks the real 5875 protocol — SRP6 plus the
 encrypted world stream — and decodes SMSG through gtker), the cross-shard catalogue check, and the
 capacity benchmark. `lyracore-deploy`, which the CLI's production-realm refusal names (distinct from
-the PID-identity refusal in [`development-cli.md`](./development-cli.md)), is maintainer-side too;
+the PID-identity refusal in the [CLI command reference](https://github.com/LyraCoreProject/lyracore-cli/blob/main/docs/commands.md)), is maintainer-side too;
 §3 below is the deploy procedure available here and does the same work by hand. (The world-import ETL is **not** one of these: `importer/scripts/` — including
 `import-world.sh`, the ETL that builds a full zone from operator-supplied data — ships in this
 repository; see [`data-ingestion.md`](./data-ingestion.md).) The traps above are written so they
@@ -224,7 +224,7 @@ a copy, refuses when another active service already owns the node's data directo
 address, and reports a host whose `ActiveState`, `LimitNOFILE` or `StandardError` does not match as
 NOT reconciled rather than as a success. The first three commands stay manual on purpose: it never
 creates the service account, the directories, or the binary, and refuses by name when one of them
-is missing. [`docs/development-cli.md`](./development-cli.md) has its full ordered plan. Prefer it
+is missing. The [CLI command reference](https://github.com/LyraCoreProject/lyracore-cli/blob/main/docs/commands.md) has its full ordered plan. Prefer it
 over typing these by hand, so a repaired host matches the checkout rather than the last operator.
 
 Inspect the service and its durable stderr capture with:
@@ -249,7 +249,8 @@ of history, and the next deploy had no room to build.
 
 A restart needs only the newest valid snapshot and the segments after it. It falls back to an older
 snapshot if the newest one fails to load, and a gap between segments stops the database from
-starting. `deploy/spacetimedb-prune.sh` follows those rules:
+starting. `deploy/spacetimedb-prune.sh` in the
+[`lyracore-cli`](https://github.com/LyraCoreProject/lyracore-cli) repository follows those rules:
 
 - it keeps the two newest valid snapshots, plus any snapshot that is incomplete or locked;
 - it keeps every segment from the one that holds S2 + 1, where S2 is the older kept snapshot, and
@@ -257,7 +258,8 @@ starting. `deploy/spacetimedb-prune.sh` follows those rules:
 - it deletes module logs from before today (UTC), and skips files changed in the last 30 minutes.
 
 It is safe with the node running. Without `--apply` it only reports. Install it as root, with the
-fifteen-minute timer. Daily cleanup filled Argus's disk during a 1,000-bot run:
+fifteen-minute timer. Daily cleanup filled Argus's disk during a 1,000-bot run. Run these from a
+`lyracore-cli` checkout:
 
 ```bash
 sudo install -d /opt/lyracore/bin
@@ -390,21 +392,17 @@ there.
 ```bash
 cd <repo-root>
 
-# Build + test BEFORE deploying — every workspace member with tests, every time. This list used to
-# omit lyracore-importer, and two broken tests sat unnoticed through roughly ten "all green" PRs.
+# Build + test BEFORE deploying: the unit commands CI runs (docs/testing.md), every time. This list
+# once omitted lyracore-importer, and two broken tests sat unnoticed through about ten "all green" PRs.
 cargo test -p lyracore-importer
 cargo test -p lyracore-module --lib --features=debug_reducers
 cargo test -p lyracore-gateway
 cargo test -p lyracore-shared
+cargo test -p lyracore-test-support
 cargo build
 # ⚠ Each of these prints SEVERAL `test result:` lines (unit target, integration target, doctests) and
-# some of them are legitimately `0 tests`. SUM them; do not report the last line. Reading a single
-# line has repeatedly produced conclusions like "lyracore-shared has no tests" (it has 75).
-# Expected shape on a green main:
-#   importer 128 | module 603 | gateway 673 + 63 (schema parity) | lyracore-shared 75
-# These numbers drift UP as tests are added; a LOWER count is the signal worth chasing, not an exact
-# match.
-# The `#[ignore]` durable rung (`module/tests/`) now runs in CI: .github/workflows/module-durable.yml
+# some are legitimately `0 tests`. Read every line; the last one is not the crate's total.
+# The `#[ignore]` durable rung (`module/tests/`) runs in CI: .github/workflows/module-durable.yml
 
 # Publish-shaped PREFLIGHT — the deploy-only break class the test suites cannot see.
 # Fully offline: no node, no database, no publish/call/sql. Three checks: the SpacetimeDB version

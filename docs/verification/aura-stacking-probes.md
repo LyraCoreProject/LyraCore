@@ -10,7 +10,7 @@ Run these probes on a development database only. Every step writes gameplay stat
 ## Scope and prerequisites
 
 - The module must be published with debug reducers. `./lyracore publish` bakes them in; a bare
-  `spacetime publish` does not. Follow [`danger-zones.md`](./danger-zones.md) §3 for the deploy, and
+  `spacetime publish` does not. Follow [`danger-zones.md`](../danger-zones.md) §3 for the deploy, and
   never pass `-c`.
 - Call `debug_repair_after_publish` by hand after every publish. Nothing runs it for you. That
   reducer re-seeds the stacking families and the probe fixture, because `init` does not re-run on an

@@ -2,8 +2,7 @@ name: Rust
 
 # The Rust gates from docs/danger-zones.md, verbatim, plus the wasm compile that only the
 # deploy-time preflight covered before. Nothing here needs a SpacetimeDB node: the module tests that
-# do are integration tests, and `--lib` leaves them out. `deploy-scripts` checks the SpacetimeDB
-# history prune on a fake data dir.
+# do are integration tests, and `--lib` leaves them out.
 #
 # rustup reads rust-toolchain.toml and installs the pinned toolchain, rustfmt, clippy and the
 # wasm32-unknown-unknown target on the first cargo call, so nothing here repeats the version.
@@ -77,11 +76,3 @@ jobs:
       - name: Install the official Packages
         run: for package in official-packages/*/; do ln -s "$PWD/$package" packages/; done
       - run: cargo check --target wasm32-unknown-unknown -p lyracore-module --features=debug_reducers
-
-  deploy-scripts:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # The history prune deletes database files on the realm host; check its rules on a fake data dir.
-      - run: bash deploy/spacetimedb-prune-test.sh
-      - run: python3 -m unittest discover -s deploy -p 'test_*.py'

@@ -1,7 +1,7 @@
 # LyraCore architecture
 
-**Status:** current — verified against the tree on 2026-09-03. Every claim below cites the file
-that makes it true; where an older document disagreed with the code, the code won.
+Every claim below cites the file that makes it true. Where this page and the code disagree, the code
+wins.
 
 **Authority note:** [`danger-zones.md`](./danger-zones.md) is authoritative over this document and
 over every other document in this directory for anything about migrations, publishing, or the
@@ -213,14 +213,13 @@ The **local developer fixture has one database per tier above** (#108) — `lyra
 (`lyracore-kalimdor`, one shard where production has a growing set); the other three names are
 production's own. What keeps a fixture off a production node is the **node** it is published to —
 every `dev` publish is `-s local`, against the SpacetimeDB on loopback:3000 that `dev up` starts —
-never the name. See [`development-cli.md`](./development-cli.md) §"Sharded out of the box, on
-purpose".
+never the name. See "Sharded out of the box, on purpose" in the
+[CLI command reference](https://github.com/LyraCoreProject/lyracore-cli/blob/main/docs/commands.md).
 
 **Direction:** the **region tier** — sub-map seams, the seam menu, region→shard assignments, warm
 mid-walk handoff — was **removed 2026-08-08 (#471)**, an operator decision to keep the alpha on the
-broad splits above (continents, the instance pool, realm-core) and nothing finer. The design is
-preserved in [`region-sharding.md`](./region-sharding.md) (retired), and the two region tables stay
-in the module schema, unused, because dropping a table is a destructive migration.
+broad splits above (continents, the instance pool, realm-core) and nothing finer. The two region
+tables stay in the module schema, unused, because dropping a table is a destructive migration.
 
 ⚠ **All four databases run on one SpacetimeDB node, and that is a licensing constraint as well as a
 deployment fact.** Seven `spacetimedb-*` crates are BSL-1.1, whose Additional Use Grant permits
@@ -321,7 +320,7 @@ un-renamed one is simply unset rather than reported.
 
 **Do not hand-roll the launch.** Use the recipe in [`danger-zones.md`](./danger-zones.md) §3
 verbatim, or the `./lyracore` development CLI documented in
-[`development-cli.md`](./development-cli.md).
+[CLI command reference](https://github.com/LyraCoreProject/lyracore-cli/blob/main/docs/commands.md).
 
 ### 3.3 Syntax of the routing variables
 
@@ -565,10 +564,8 @@ This is the sharding model in full: the hierarchy, routing, and transfer.
 > **The region tier was removed 2026-08-08 (#471).** Sub-map regions, the seam menu, region→shard
 > assignments, and mid-walk seam detection with its warm handoff are gone from the gateway, by
 > operator decision: the alpha runs on the broad splits alone — the static shard map (continents),
-> the instance pool, and realm-core. The full design is preserved, with its reasoning, in
-> [`region-sharding.md`](./region-sharding.md) (retired). `game_map_region` and
-> `game_region_assignment` stay in the module schema, unused — dropping a table is a destructive
-> migration.
+> the instance pool, and realm-core. `game_map_region` and `game_region_assignment` stay in the
+> module schema, unused, because dropping a table is a destructive migration.
 
 ### 6.1 The hierarchy
 
@@ -665,9 +662,7 @@ coordinator stream feeds ONE in-process cell index keyed by `(map_id, instance_i
 guids are globally unique across databases (#103/#108), so a peer on any connected shard renders
 through the same dispatch. With the region tier gone (#471), no open-world map has two owners — the
 remaining splits are per-map and per-instance, whose populations never share an AOI box, so nothing
-straddles a database boundary mid-walk. The retired per-player view-merge mechanism
-(`LYRACORE_VIEW_MERGE`, `split_box_by_shard`, the seam chat/emote relay) is documented in
-[`region-sharding.md`](./region-sharding.md).
+straddles a database boundary mid-walk.
 
 ### 6.5 Load sampling
 
@@ -723,8 +718,8 @@ The ladder, and the rule that no rung substitutes for another:
 are unrestricted.
 
 Two rungs are recorded as reproducible verification documents rather than as tooling:
-[`vmap-rollout.md`](./vmap-rollout.md) for exact collision, and
-[`cc-diminishing-returns-probe.md`](./cc-diminishing-returns-probe.md) for crowd-control diminishing
+[`vmap-rollout.md`](./verification/vmap-rollout.md) for exact collision, and
+[`cc-diminishing-returns-probe.md`](./verification/cc-diminishing-returns-probe.md) for crowd-control diminishing
 returns, whose persisted state and removal-time window only a live database can show.
 
 The build carries source-scan architecture tests that fail on architectural drift rather than on
@@ -751,48 +746,31 @@ warning banner states plainly, not a contradiction to resolve in this document.
 
 ## 9. Document index
 
-### Architecture and internals — start here
+### Architecture and internals
 
 | Document | What it is |
 |---|---|
+| [`../CONTRIBUTING.md`](../CONTRIBUTING.md) | Where a contributor starts, and the three required reads. |
 | **`architecture.md`** (this file) | The current system: tiers, topology, data model, read plane, sharding, packages. |
-| [`../CONTEXT.md`](../CONTEXT.md) | The glossary. The words this document and the code are supposed to use, and the words to avoid. |
-| [`danger-zones.md`](./danger-zones.md) | **Authoritative.** Traps, tooling gotchas, and the exact deploy/verify procedure. Read before any engine change. |
+| [`../CORE_TERMS.md`](../CORE_TERMS.md) | The thirty-odd terms a contributor meets first. |
+| [`../CONTEXT.md`](../CONTEXT.md) | The full glossary, with an alphabetical index. The words this document and the code use, and the words to avoid. |
+| [`danger-zones.md`](./danger-zones.md) | **Authoritative.** Traps, tooling gotchas, and the exact deploy/verify procedure. |
+| [`testing.md`](./testing.md) | The test tiers and the commands CI runs. |
+| Recipes | Step lists for common changes: [add an opcode](./recipes/add-an-opcode.md), [add a spell effect](./recipes/add-a-spell-effect.md). |
 | [`schema.md`](./schema.md) | The table-level data model. |
 | [`package-api.md`](./package-api.md) | The Package API, version 1: what a Package's Rust half may call, and what core promises about it. |
-| [`region-sharding.md`](./region-sharding.md) | Retired (#471): the removed region tier's design — seam menus, assignments, view merge — kept for reference. |
 
 ### Operating and building
 
 | Document | What it is |
 |---|---|
 | [`quickstart.md`](./quickstart.md) | The shortest path from a clean checkout to a running realm. |
-| [`development-cli.md`](./development-cli.md) | The `./lyracore` CLI: the pinned shim, and the build, preflight, publish and local-stack commands. |
+| [`development-cli.md`](./development-cli.md) | Where the `./lyracore` CLI and its command reference live. |
 | [`data-ingestion.md`](./data-ingestion.md) | Where vanilla content comes from and the licensing firewall. |
 
 ### Verification write-ups
 
-Each of these records one behaviour proven against a live stack, with the fixture, the exact
-procedure, and what the result was. They are reproducible recipes, not status reports. §8 above
-explains why two rungs of the ladder are written down instead of automated.
-
-| Document | What it verifies |
-|---|---|
-| [`aura-capacity-verification.md`](./aura-capacity-verification.md) | The 32-buff/16-debuff cap end to end: refusal, untouched survivors, the overflow log line, and the wire-level `SMSG_SPELL_FAILURE` relay. |
-| [`aura-stacking-probes.md`](./aura-stacking-probes.md) | The stacking-family decision on real `game_aura` rows, as an operator sees it. |
-| [`cc-diminishing-returns-probe.md`](./cc-diminishing-returns-probe.md) | Crowd-control diminishing returns, whose persisted state and removal-time window only a live database shows. |
-| [`vmap-rollout.md`](./vmap-rollout.md) | Exact collision on both populated World Shards, and that the Instance Pool receives no open-world vmap generation. |
-| [`mount-verification.md`](./mount-verification.md) | The land-mount fixture ids, the attended procedure, and the Headless Client scenario. |
-| [`taxi-flight-verification.md`](./taxi-flight-verification.md) | The direct-route flight baseline, and the cancel path when catalogue geometry mutates mid-flight. |
-| [`movement-batch-acceptance.md`](./movement-batch-acceptance.md) | The steady-heartbeat batching path under a load driver, on a `disposable:` realm only. Script in `scripts/`. |
-| [`auction-house-client-check.md`](./auction-house-client-check.md) | The auction house against a real 5875 client. Status: outstanding, needs a human. |
-| [`guild-client-check.md`](./guild-client-check.md) | Guilds between two real 5875 clients across a Shard Boundary: founding, invites, chat, ranks, Transfer, emblem, Charter and deletion. Status: outstanding, needs a human. |
-| [`mail-client-check.md`](./mail-client-check.md) | Mail against a real 5875 client. Status: outstanding, needs a human. |
-| [`meeting-stone-client-check.md`](./meeting-stone-client-check.md) | Meeting stones between two real 5875 clients across a Shard Boundary: the JOIN packet, tooltip, minimap button, every status line, Transfer, logout and a stone-formed Party. Status: outstanding, needs a human. |
-| [`self-resurrection-client-check.md`](./self-resurrection-client-check.md) | The Soulstone Self-Resurrection Option against a real 5875 client: the death dialog button, the revived vitals, the buff duration and the Release Spirit edge. Status: outstanding, needs a human. |
-| [`duel-client-check.md`](./duel-client-check.md) | Duel visuals against a real 5875 client, which the automated tests cannot see. Status: outstanding. |
-| [`chat-client-check.md`](./chat-client-check.md) | Realm-wide chat between two real 5875 clients across a Shard Boundary: party, channels and moderation, AFK and DND, whisper, friends, `/who`, ignore, say range, proximity emotes, the language Gate and the flood mute. Status: outstanding, needs a human. |
-| [`raid-client-check.md`](./raid-client-check.md) | Raids, Group Broadcasts, raid chat, member stats across Shards and the Instance Removal countdown against real 5875 clients. Status: outstanding, needs a human. |
-| [`hunter-pet-live-check.md`](./hunter-pet-live-check.md) | Taming, pet bars and pet lifecycle against a live development realm and a real client. |
+[`verification/`](./verification/README.md) holds the records of behaviour checked against a live
+stack or a real client.
 
 **The work queue is GitHub Issues**, which is the single source of truth for what is open.

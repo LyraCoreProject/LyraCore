@@ -9,6 +9,10 @@ Treat `docs/danger-zones.md` as authoritative. For either branch, first read
 [`references/production-contract.md`](references/production-contract.md) completely; it defines the
 independent production authority, target, topology, redaction, and health proof.
 
+The host scripts for history pruning, the disk guard and diagnostic captures live in `deploy/` of
+the `LyraCoreProject/lyracore-cli` repository. The Standalone Supervisor unit stays in this checkout
+at `deploy/systemd/spacetimedb-standalone.service`.
+
 ## Choose one branch
 
 - **Update:** require an explicit request to change a named host, then read

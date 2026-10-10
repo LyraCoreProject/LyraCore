@@ -28,6 +28,10 @@ Config key to bypass the Gate.
 
 ## Install
 
+The scripts and units live in the `deploy/` directory of the
+[`lyracore-cli`](https://github.com/LyraCoreProject/lyracore-cli) repository. Run the install from a
+`lyracore-cli` checkout.
+
 Review `deploy/disk-guard.example.json` against the named host, approved node and complete topology,
 then install that configuration at `/etc/lyracore/disk-guard.json`. The example is Argus's four-Shard
 topology and pinned CLI path. No credential belongs in this file; the service account retains its
@@ -81,11 +85,17 @@ and evidence still needed for an active acceptance session.
 
 ## Verification and write investigation
 
-Run deployment-script tests on the build host:
+Run the deployment-script tests on the build host. From a `lyracore-cli` checkout, where CI also
+runs them:
 
 ```bash
 python3 -m unittest discover -s deploy -p 'test_*.py'
 bash deploy/spacetimedb-prune-test.sh
+```
+
+From this checkout, check the Standalone Supervisor unit and its runbook:
+
+```bash
 bash deploy/systemd/spacetimedb-standalone-artifact-test.sh
 ```
 

@@ -1,6 +1,53 @@
-# LyraCore
+# LyraCore glossary
+
+The full glossary, for lookup. A contributor reads [`CORE_TERMS.md`](./CORE_TERMS.md) first: it holds
+the terms met in a first change. When a term changes in one file, change it in the other.
 
 A World of Warcraft 1.12.1 server. Game state lives in SpacetimeDB; the gateway speaks the vanilla wire protocol to unmodified clients. Standard WoW vocabulary (guid, opcode, aura, gossip, master looter, round-robin, ...) keeps its client meaning and is listed here only where LyraCore narrows or changes it.
+
+## Index
+
+**A** [Account](#accounts-characters-and-sessions) · [Account Character Owner](#accounts-characters-and-sessions) · [Account Claim](#accounts-characters-and-sessions) · [Account Fence](#accounts-characters-and-sessions) · [Action Outcome](#procs) · [Actor](#accounts-characters-and-sessions) · [Alpha Test Tools](#accounts-characters-and-sessions) · [AOI](#gateway-and-module) · [Architecture Test](#working-method) · [Assistant](#sharding-and-transfer) · [Auction Cut](#auctions) · [Auction Mail](#auctions) · [Auction Market](#auctions) · [Auction Notice](#auctions) · [Authored Casting](#creature-ai) · [Authored Combat](#creature-ai) · [Authored Flee](#creature-ai) · [Authoring Library](#packages) · [Auto-Reply](#chat) · [Away Status](#chat)
+
+**B** [Base Snapshot](#packages) · [Baseline](#client-content) · [Bot Capacity Lease](#sharding-and-transfer) · [Bot Controller](#sharding-and-transfer) · [Bot Objective](#sharding-and-transfer) · [Bounded Map Slice](#realm-topology) · [Build Identity](#packages)
+
+**C** [Cancellation](#auctions) · [Candidate](#sharding-and-transfer) · [Carrier](#procs) · [Cast Handle](#procs) · [Channel Membership](#chat) · [Channel Notice](#chat) · [Character](#accounts-characters-and-sessions) · [Chat Channel](#chat) · [Chat Flood Limiter](#chat) · [Chat Kind](#chat) · [Claim](#packages) · [Claim Conflict](#packages) · [Client Artifact](#client-content) · [Command Receipt](#sharding-and-transfer) · [Companion Order](#sharding-and-transfer) · [Compatibility Manifest](#realm-topology) · [Content Identity](#packages) · [Coordinator](#gateway-and-module) · [Counterparty](#procs) · [Creature-AI Family](#creature-ai)
+
+**D** [Datascript](#packages) · [Delivery Delay](#mail) · [Dismount](#mounts) · [Distraction](#creature-ai) · [Dormant Character](#accounts-characters-and-sessions) · [Durable Read](#gateway-and-module) · [Durable Request](#gateway-and-module)
+
+**E** [Encounter Binding](#realm-topology) · [Encounter Signal](#realm-topology) · [Engagement](#creature-ai) · [Entity Handle](#runtime-scripts) · [Escrow](#sharding-and-transfer) · [Event Binding](#packages) · [EventAI Source Profile](#realm-topology)
+
+**F** [Fake](#working-method) · [Fee Hold](#guilds) · [Fixed Rout](#creature-ai) · [Fixture-Reserved Identifier](#packages) · [Flat Cast](#creature-ai) · [Forced Death](#creature-ai) · [Foreground Action](#sharding-and-transfer) · [Fuel Budget](#runtime-scripts)
+
+**G** [GameObject Collider](#gameobject-collision) · [Gate](#gateway-and-module) · [Gateway](#realm-topology) · [Gateway Verb](#gateway-and-module) · [Git Package Source](#packages) · [Group](#sharding-and-transfer) · [Group Audience](#sharding-and-transfer) · [Group Broadcast](#sharding-and-transfer) · [Group Intent](#sharding-and-transfer) · [GUID Range](#sharding-and-transfer) · [Guild](#guilds) · [Guild Charter](#guilds) · [Guild Emblem](#guilds) · [Guild Event](#guilds) · [Guild Invite](#guilds) · [Guild Leader](#guilds) · [Guild Projection](#guilds) · [Guild Rank](#guilds)
+
+**H** [Headless Client](#working-method) · [Hold](#auctions) · [Home Shard](#sharding-and-transfer) · [Host Operation](#runtime-scripts)
+
+**I** [Idle Bot](#sharding-and-transfer) · [Import Family](#packages) · [Instance Pool](#realm-topology) · [Instance Removal](#sharding-and-transfer) · [Instance Vmap Slice](#realm-topology) · [Invocation](#runtime-scripts) · [Item Exchange](#procs) · [Item Text](#mail)
+
+**L** [Land Mount](#mounts) · [Lethal Damage Floor](#creature-ai) · [Letter Copy](#mail) · [Logon Limiter](#accounts-characters-and-sessions) · [Loot Release](#loot) · [Loot Roll](#loot) · [Loot Roll Promotion](#loot) · [Loot Roll Promotion Receipt](#loot) · [Loot Source](#loot) · [Loot Tag](#loot) · [Loot Window](#loot)
+
+**M** [Mail](#mail) · [Mail Arrival](#mail) · [Mail Expiry](#mail) · [Mail Sender](#mail) · [Mail Template](#mail) · [Mail Timer](#mail) · [Meeting Stone](#meeting-stones) · [Meeting Stone Queue](#meeting-stones) · [Member Stats](#sharding-and-transfer) · [Module](#realm-topology) · [Mount Projection](#mounts) · [Movement Intent](#creature-ai)
+
+**N** [Navigation Inputs](#sharding-and-transfer)
+
+**O** [Officer Note](#guilds) · [Official Package Collection](#packages) · [Official Package Source](#packages) · [Open Role](#meeting-stones) · [Operator](#realm-topology) · [Owner Token](#gateway-and-module)
+
+**P** [Package](#packages) · [Package API](#packages) · [Package Cast Range](#packages) · [Package Config](#packages) · [Package Creature Range](#packages) · [Package Delta](#packages) · [Package Event](#runtime-scripts) · [Package EventAI Range](#packages) · [Package Fixture](#packages) · [Package Gameobject Range](#packages) · [Package Globals Range](#packages) · [Package Gossip Range](#packages) · [Package Identifier Range](#packages) · [Package Import](#packages) · [Package Inventory](#packages) · [Package Item Range](#packages) · [Package Loot Range](#packages) · [Package Quest Range](#packages) · [Package Script Range](#packages) · [Package Source](#packages) · [Package Spell](#packages) · [Package Spell Metadata Range](#packages) · [Package Spell Range](#packages) · [Package Teardown](#packages) · [Package Trainer Range](#packages) · [Package-owned Account](#accounts-characters-and-sessions) · [Party](#sharding-and-transfer) · [Party Partition](#sharding-and-transfer) · [Patrol Pause](#creature-ai) · [Petition](#guilds) · [Petitioner](#guilds) · [Pre-auth I/O Deadline](#accounts-characters-and-sessions) · [Proc](#procs) · [Proficiency](#gateway-and-module) · [Property Pool](#random-properties) · [Prototype](#working-method) · [Provenance Stamp](#packages) · [Provisioning Profile](#sharding-and-transfer) · [Public Note](#guilds)
+
+**R** [Raid](#sharding-and-transfer) · [Raid Quest](#sharding-and-transfer) · [Raid Slot](#sharding-and-transfer) · [Random Property](#random-properties) · [Ranged Posture](#creature-ai) · [Rank Rights](#guilds) · [Ready Check](#sharding-and-transfer) · [Realm](#realm-topology) · [Realm Chat Line](#chat) · [Realm Clock](#world-clock-and-weather) · [Realm Presence](#chat) · [Realm-core](#realm-topology) · [Recorded Revision](#packages) · [Recovery Attempt](#sharding-and-transfer) · [Recovery Scan](#sharding-and-transfer) · [Reference Datascript](#packages) · [Reference Package](#packages) · [Refusal](#gateway-and-module) · [Relay](#gateway-and-module) · [Relay Definition](#realm-topology) · [Relay Run](#realm-topology) · [Returned Mail](#mail) · [Reward Letter](#mail) · [Roster Revision](#sharding-and-transfer) · [Roster Revision Relay](#sharding-and-transfer) · [Route Path](#procs) · [Route Step](#procs) · [Rule State](#creature-ai) · [Runtime Script](#runtime-scripts) · [Runtime Script Host](#runtime-scripts) · [Runtime Script Toolchain](#packages)
+
+**S** [Script Answer](#runtime-scripts) · [Script Artifact](#packages) · [Script Diagnostic](#runtime-scripts) · [Script Directive](#packages) · [Seam](#working-method) · [Seeker](#meeting-stones) · [Self-Resurrection Option](#death-and-resurrection) · [Service Reconciliation](#realm-topology) · [Session](#accounts-characters-and-sessions) · [Session Expiry](#accounts-characters-and-sessions) · [SessionActor](#accounts-characters-and-sessions) · [Sessionless Action Consent](#sharding-and-transfer) · [Settlement](#auctions) · [Shard](#realm-topology) · [Shard Boundary](#sharding-and-transfer) · [Shard Map](#sharding-and-transfer) · [Signature](#guilds) · [Solo Target Claim](#sharding-and-transfer) · [Soulstone](#death-and-resurrection) · [Spatial Claim](#packages) · [Speaker Facts](#chat) · [Spec](#working-method) · [Spell Cast Event Kind](#procs) · [Staged Effect](#runtime-scripts) · [Standalone Supervisor](#realm-topology) · [Stat Kind](#random-properties) · [Stone Add](#meeting-stones) · [Store](#working-method) · [Strategy](#sharding-and-transfer) · [Subgroup](#sharding-and-transfer) · [Suffix](#random-properties)
+
+**T** [Tabard Designer](#guilds) · [Target Icon](#sharding-and-transfer) · [Ticket](#working-method) · [Tracer](#working-method) · [Trade Commit](#trading) · [Trade Session](#trading) · [Transfer](#sharding-and-transfer) · [Transfer Intent](#sharding-and-transfer) · [Triggered Cast](#procs) · [Trust Review](#packages)
+
+**U** [UI Transform](#client-content)
+
+**V** [Verification](#working-method)
+
+**W** [Whereabouts](#chat) · [Will-Not-Be-Traded Slot](#trading) · [World Import Profile](#realm-topology) · [World Import Scope](#realm-topology) · [World Session](#accounts-characters-and-sessions) · [World Session Token](#accounts-characters-and-sessions) · [World Shard](#realm-topology)
+
+**Z** [Zone Weather](#world-clock-and-weather)
 
 ## Language
 
@@ -643,67 +690,6 @@ refreshes it. At the expiry the Creature turns back to its spawn orientation and
 from the same waypoint.
 _Avoid_: distract state, attention state, aggro redirect
 
-### Runtime Scripts
-
-**Runtime Script**:
-Lua the Module runs on a core gameplay event or a Package Event, supplied from outside the core
-rather than compiled into it. Named so a diagnostic can identify it. It reaches a Shard only through
-a Package's Script Artifact; there is no upload path.
-_Avoid_: plugin, mod, addon, user script
-
-**Package Event**:
-An event a Package fires itself, spelled `<package>.<name>`. It runs the same dispatch a core hook
-event runs, so a Package exposes one of its own decisions to a Runtime Script without a new core
-seam. A Package may only bind events it fires, which the artifact parser enforces against the
-artifact's own Package identity.
-_Avoid_: custom event, user event, signal
-
-**Script Answer**:
-The number a Runtime Script returns, read back by the Package that asked. The first number returned
-in dispatch order is the answer; later scripts still run and still stage what they stage. No answer
-— nothing bound, nothing returning a number, or every script failing — leaves the caller on its own
-fallback, which is what makes a Runtime Script an override rather than a dependency.
-_Avoid_: return value, script result, callback
-
-**Runtime Script Host**:
-The Module's embedded Lua interpreter and the boundary around it: one compiler cache, a fresh
-environment per invocation, a Fuel Budget, and the failure containment. Only place a Runtime
-Script executes.
-_Avoid_: sandbox, VM, engine
-
-**Invocation**:
-One run of one Runtime Script for one event. Starts from an environment holding nothing but the
-allowlisted standard library, the event with its Entity Handles, and the Host Operations; ends by
-committing its Staged Effects or by producing a Script Diagnostic. Nothing carries to the next one.
-
-**Fuel Budget**:
-The metered interpreter work one Invocation may spend before the Host cuts it off. The cut-off is a failure,
-so a script that overruns changes nothing.
-_Avoid_: quota, gas, instruction limit
-
-**Entity Handle**:
-The opaque reference a Runtime Script holds to one creature or player. It carries the identity the
-Host acts on and the curated fields the script may read, but no guid and no row, so a script can
-neither forge one nor name an entity the Host did not resolve for that Invocation. It lasts exactly
-as long as the Invocation that minted it.
-_Avoid_: entity id, guid, pointer, reference
-
-**Host Operation**:
-One named gameplay call the Runtime Script Host offers a script — today `heal`, `send_chat` and
-`grant_xp`. Each takes an Entity Handle, records a Staged Effect, and refuses a misuse with a
-Script Diagnostic naming the call and the fault.
-_Avoid_: API function, binding, hook
-
-**Staged Effect**:
-A gameplay operation a Runtime Script asked for, recorded and not yet performed. A successful
-Invocation commits its Staged Effects through core operations; any failure discards all of them.
-_Avoid_: pending action, queued effect, side effect
-
-**Script Diagnostic**:
-The bounded record of a failed Invocation: the Runtime Script, the event, the failure kind
-(syntax, runtime or fuel), and a truncated message. The only thing a failed Invocation produces.
-_Avoid_: error log, stack trace
-
 **Lethal Damage Floor**:
 Combat-owned protection that reduces a creature's final lethal damage so it remains at one health.
 It is applied after mitigation and absorbs, persists across Engagements, and is cleared by its
@@ -720,6 +706,53 @@ creature-leg writer remains the only position writer.
 **Patrol Pause**:
 The durable pause on an active patrol. It keeps the current waypoint cursor so resuming continues
 the same route.
+
+### Runtime Scripts
+
+**Runtime Script**:
+Lua the Module runs on a core gameplay event or a Package Event, supplied from outside the core
+rather than compiled into it. Named so a diagnostic can identify it. It reaches a Shard only through
+a Package's Script Artifact; there is no upload path.
+_Avoid_: plugin, mod, addon, user script
+
+**Package Event**:
+An event a Package fires itself, spelled `<package>.<name>`. It runs the same dispatch a core hook
+event runs.
+_Avoid_: custom event, user event, signal
+
+**Script Answer**:
+The number a Runtime Script returns, read back by the Package that asked. With no answer, the caller
+keeps its own fallback.
+_Avoid_: return value, script result, callback
+
+**Runtime Script Host**:
+The Module's embedded Lua interpreter and the boundary around it. It is the only place a Runtime
+Script executes.
+_Avoid_: sandbox, VM, engine
+
+**Invocation**:
+One run of one Runtime Script for one event. Nothing carries to the next one.
+
+**Fuel Budget**:
+The metered interpreter work one Invocation may spend before the Host cuts it off.
+_Avoid_: quota, gas, instruction limit
+
+**Entity Handle**:
+The opaque reference a Runtime Script holds to one creature or player. It lasts exactly as long as
+the Invocation that minted it.
+_Avoid_: entity id, guid, pointer, reference
+
+**Host Operation**:
+One named gameplay call the Runtime Script Host offers a script.
+_Avoid_: API function, binding, hook
+
+**Staged Effect**:
+A gameplay operation a Runtime Script asked for, recorded and not yet performed.
+_Avoid_: pending action, queued effect, side effect
+
+**Script Diagnostic**:
+The bounded record of a failed Invocation, and the only thing a failed Invocation produces.
+_Avoid_: error log, stack trace
 
 ### Mail
 
@@ -927,13 +960,10 @@ the Package's test runner selects the Core checkout and owns its compatibility c
 _Avoid_: plugin, addon (when meaning the whole folder), mod, extension
 
 **Package API**:
-The part of the Module a Package may name, versioned and written down at `docs/package-api.md`: the
-marker macros, the hook catalogue, the encounter kernel, the actor verbs and helpers, the Package
-Config seam, the Package Event seam, the table accessor conventions, and the list of module roots
-everything else hangs under. Two roots are gated: `package_fixture` exists only with
-`debug_reducers`, and `package_test` only in a test build. The build lints every Package file against it and fails on a path
-outside it, so a core refactor breaks a Package at compile time rather than on a live realm. It is a
-compatibility contract, never a sandbox: compiled Package code is trusted either way.
+The part of the Module a Package may name, versioned and written down at `docs/package-api.md`. The
+build lints every Package file against it and fails on a path outside it, so a core refactor breaks a
+Package at compile time rather than on a live realm. It is a compatibility contract, never a
+sandbox: compiled Package code is trusted either way.
 _Avoid_: SDK, plugin API, public API, allowlist
 
 **Package Fixture**:
@@ -944,9 +974,8 @@ _Avoid_: test harness, debug hook, test helper
 
 **Package Config**:
 A row of `game_package_config`, keyed by `(package_name, key)`: one durable value a Package reads
-and the Operator edits. A Package seeds its own defaults idempotently, from its own ensure/init
-path, so the table always shows real keys with live values. The `set_package_config` reducer is the
-Operator's edit path today; a CLI verb for it is tracked separately.
+and the Operator edits. A Package seeds its own defaults idempotently, so the table always shows
+real keys with live values.
 _Avoid_: config file, setting (unqualified), package setting
 
 **Package Inventory**:
@@ -1070,150 +1099,78 @@ _Avoid_: collision (for a claim), merge error
 
 **Package Identifier Range**:
 The identifiers a Package may invent in one Import Family. Each family that allows inserts owns one
-band, floored two decimal orders above the highest identifier a real client holds for its tables and
-clear of every reserved band. An apply clears the whole band before it writes, so a Package that
-leaves the enabled set takes its invented rows with it. The Package Spell Range is the worked
-example; the Package Item Range is the second family to follow it, and the Package Script Range is
-the case where a table has no real client identifiers to clear. A family whose tables have no
-Package-inventable owning identifier of their own. The Package Loot Range checks the band
-against a row's own identifier instead of an owning one; a family whose child tables share their
-header's owning identifier. The Package Quest Range checks every child through that one band
-rather than owning a second.
+band, and an apply clears the whole band before it writes, so a Package that leaves the enabled set
+takes its invented rows with it. `docs/package-api.md` lists every band.
 _Avoid_: custom id range, synthetic id range
 
 **Package Spell Range**:
-The spell family's Package Identifier Range: 6,000,000 to 6,999,999. Two decimal orders above the
-highest real client spell and above every reserved band, so an inserted spell can never collide with
-imported or fixture data.
+The spell family's Package Identifier Range: 6,000,000 to 6,999,999.
 _Avoid_: custom id range, synthetic spell range
 
 **Package Script Range**:
-The script family's Package Identifier Range: 100,000 to 999,999. No client and no import holds a
-Runtime Script identifier, so the band has no real data to clear and sits below every reserved band
-rather than above one. It is the whole of `game_script` by construction, which is what makes a
-script apply a total reconciliation.
+The script family's Package Identifier Range: 100,000 to 999,999.
 
 **Script Artifact**:
-The versioned artifact recording every Runtime Script one Package ships: the Package identity, the
-source revision, and one whole row per script — identifier, name, Event Binding, priority, enabled
-state, and Lua. Distinct from a Package Delta, which states columns of rows a base import owns: a
-Runtime Script has no base import, so the Package owns the whole row and two Packages meeting on one
-is a collision rather than a merge. Both kinds live in `packages/<name>/data/.generated/` and are
-told apart by a top-level kind.
+The versioned artifact recording every Runtime Script one Package ships. Distinct from a Package
+Delta, which states columns of rows a base import owns.
 _Avoid_: script bundle, script manifest, script delta
 
 **Event Binding**:
 The event a Runtime Script runs for: a name from the Module's hook catalogue, or a Package Event of
-the shipping Package. Anything else is refused at author time. Several scripts may bind to one
-event: lower priority runs first and the script identifier breaks a tie, so every Shard runs one
-plan in one order.
+the shipping Package.
 _Avoid_: hook registration, subscription, listener
 
 **Script Directive**:
 A `@key value` comment line at the top of a Runtime Script source, declaring what the file cannot
-say in its own code: `@event` and `@id` are required, `@priority` and `@enabled` have defaults. The
-identifier is written down rather than derived, because it is durable — deriving it from a file
-index would renumber a Package's scripts the moment an author added one.
+say in its own code.
 _Avoid_: annotation, frontmatter, pragma, metadata header
 
 **Runtime Script Toolchain**:
-The pinned compiler that turns a Package's `scripts/` sources into its Script Artifact: Bun plus
-`typescript-to-lua`, its config, the hand-maintained Host API typings, and the emitter that keeps
-generated Lua off the interpreter's known call-shape fault. It lives in
-`datascripts/runtime-scripts/` and runs at author time only; an Operator installs the prebuilt Lua.
+The pinned author-time compiler that turns a Package's `scripts/` sources into its Script Artifact.
 _Avoid_: transpiler, build pipeline, SDK
 
 **Package Item Range**:
-The items family's Package Identifier Range: 7,000,000 to 7,999,999. Above every reserved band, and
-one whole decade above the Package Spell Range so the millions column stays a family-at-a-glance
-signal across tables, not only within one.
+The items family's Package Identifier Range: 7,000,000 to 7,999,999.
 _Avoid_: custom id range, synthetic item range
 
 **Package Quest Range**:
-The quest family's Package Identifier Range: 8,000,000 to 8,999,999. One whole decade above the
-Package Item Range. Checked against `quest_entry` alone: `game_quest_template` and every child table
-(`game_quest_text` and the rest) are Package-owned exactly when the quest they belong to is, so one
-band covers the whole family the same way the Package Spell Range covers both `game_spell` and
-`game_spell_effect`.
+The quest family's Package Identifier Range: 8,000,000 to 8,999,999.
 _Avoid_: custom id range, synthetic quest range
 
 **Package Loot Range**:
-The loot family's Package Identifier Range: 9,000,000 to 9,999,999. One whole decade above the
-Package Quest Range. No loot table's owning entity (a creature, a gameobject, or a zone) is ever
-Package-invented, so this band is checked against a loot row's own identifier instead of an owning
-one, the same shape the Package Item Range checks against `game_item_template.entry`. Shared across
-all four loot tables (pickpocket, gameobject/chest, skinning, fishing), which cannot collide on it:
-each is an independent SpacetimeDB table with its own primary-key space.
+The loot family's Package Identifier Range: 9,000,000 to 9,999,999.
 _Avoid_: custom id range, synthetic loot range
 
 **Package Cast Range**:
-The casts family's Package Identifier Range: 10,000,000 to 10,999,999. One whole decade above the
-Package Loot Range. Checked against `game_creature_spell.id` alone, the loot shape: its owning
-creature is never Package-invented. `game_creature_cast` carries no range of its own — its primary
-key names a creature template, which no Package may invent, so every insert on it is refused
-outright rather than banded.
+The casts family's Package Identifier Range: 10,000,000 to 10,999,999.
 _Avoid_: custom id range, synthetic cast range
 
 **Package Trainer Range**:
-The trainers family's Package Identifier Range: 11,000,000 to 11,999,999. One whole decade above
-the Package Cast Range. Checked against `game_trainer_spell.id`, the same loot shape. Distinct from
-the curated trainer overrides the importer hands out fixed identifiers for at 5,200,000
-(`CURATED_TRAINER_ID_BASE`), which is a reserved band this range clears, not a Package range.
+The trainers family's Package Identifier Range: 11,000,000 to 11,999,999.
 _Avoid_: custom id range, synthetic trainer range
 
 **Package Gossip Range**:
-The gossip family's Package Identifier Range: 12,000,000 to 12,999,999. One whole decade above the
-Package Trainer Range. One range covers all five insertable gossip tables — `game_npc_text`,
-`game_npc_text_slot`, `game_gossip_option`, `game_gossip_menu_profile` and
-`game_gossip_menu_profile_option` — the loot shape: independent primary-key spaces cannot collide by
-sharing a range. `game_gossip_menu` carries no range: its key names a creature template, so every
-insert on it is refused outright.
+The gossip family's Package Identifier Range: 12,000,000 to 12,999,999.
 _Avoid_: custom id range, synthetic gossip range
 
 **Package Globals Range**:
-The globals family's Package Identifier Range: 13,000,000 to 13,999,999. One whole decade above the
-Package Gossip Range. Covers the three tables of the family whose key is a free surrogate:
-`game_graveyard_zone`, `game_createinfo_spell` and `game_createinfo_action`. The family's other four
-tables carry no range because no Package may invent their keys: `game_class_level_stats`,
-`game_level_stats` and `game_start_position` key on a race, class and level the client fixes, and
-`game_areatrigger_teleport` keys on an `AreaTrigger.dbc` trigger id.
+The globals family's Package Identifier Range: 13,000,000 to 13,999,999.
 _Avoid_: custom id range, synthetic globals range
 
 **Package Spell Metadata Range**:
-The spellmeta family's Package Identifier Range: 14,000,000 to 14,999,999. One whole decade above the
-Package Globals Range. Covers `game_spell_learn.id` alone. `game_spell_chain` and
-`game_spell_proc_event` key on a spell identifier rather than a surrogate, so an insert there takes
-the Package Spell Range instead: a metadata row cannot outlive the `game_spell` row it describes.
+The spellmeta family's Package Identifier Range: 14,000,000 to 14,999,999.
 _Avoid_: custom id range, synthetic spellmeta range
 
 **Package Creature Range**:
-The creatures family's Package Identifier Range: 15,000,000 to 15,999,999. One whole decade above
-the Package Spell Metadata Range. One range covers both insertable tables: a creature template's own
-`entry` and a creature spawn claim's own `spawn_id`, which are independent identifier spaces. Its
-ceiling has a second constraint no earlier range has — a creature spawn's durable guid packs the
-template entry and the spawn identifier into 24-bit fields, so the whole range has to fit inside
-one. The seeded creature fixtures at 51,000 to 51,999 are Fixture-Reserved Identifiers no Package
-may tune. `game_creature_waypoint` is not claimable at all: it names its creature by spawn guid and
-carries no map, so a Spatial Claim on it could not be routed.
+The creatures family's Package Identifier Range: 15,000,000 to 15,999,999.
 _Avoid_: custom id range, synthetic creature range
 
 **Package Gameobject Range**:
-The gameobjects family's Package Identifier Range: 16,000,000 to 16,999,999. One whole decade above
-the Package Creature Range. Covers three tables: `game_gameobject_template.entry`,
-`game_gameobject_trap.entry` and a `game_gameobject` claim's own `spawn_id`. The first two share one
-identifier space on purpose — a trap row describes the template of the same entry, so a Package trap
-is exactly as Package-owned as its template. The two gameobject pool tables are not claimable: no
-base import writes either, so a claim on one would have no family reload to replay after.
+The gameobjects family's Package Identifier Range: 16,000,000 to 16,999,999.
 _Avoid_: custom id range, synthetic gameobject range
 
 **Package EventAI Range**:
-The Creature-AI Family's Package Identifier Range: 17,000,000 to 17,999,999. One whole decade above
-the Package Gameobject Range. Covers three tables that share nothing else:
-`game_creature_ai_broadcast_text.id`, `game_creature_ai_summon.id` and
-`game_quest_event_requirement.id`. The family's scripted definitions are not claimable at all: a
-definition carries a creature's whole rule set as a nested payload, which no claimed column can
-state, and a Claim is typed rows rather than a script blob. Reaching a creature's rules from a
-Package remains a named gap.
+The Creature-AI Family's Package Identifier Range: 17,000,000 to 17,999,999.
 _Avoid_: custom id range, synthetic eventai range
 
 **Spatial Claim**:
@@ -1323,51 +1280,8 @@ _Avoid_: affix, postfix
 
 **Stat Kind**:
 An append-only code for an enchantment effect's contribution, independent of the client encoding.
-The importer retains unmapped effects as kind 0, which contributes nothing. Amounts are flat
-points, except crit, hit, dodge, parry and block, which use basis points, and regeneration, which
-uses points per five seconds. Spell power retains a school mask.
+`docs/schema.md` lists the codes and the effect key layout.
 _Avoid_: stat type, mod type, effect type
-
-| Code | Contribution |
-| --- | --- |
-| 0 | Unknown |
-| 1 | Strength |
-| 2 | Agility |
-| 3 | Stamina |
-| 4 | Intellect |
-| 5 | Spirit |
-| 6 | Health |
-| 7 | Mana |
-| 8 | Holy resistance |
-| 9 | Fire resistance |
-| 10 | Nature resistance |
-| 11 | Frost resistance |
-| 12 | Shadow resistance |
-| 13 | Arcane resistance |
-| 14 | Armor |
-| 15 | Weapon damage |
-| 16 | Spell power |
-| 17 | Healing power |
-| 18 | Mana per five seconds |
-| 19 | Health per five seconds |
-| 20 | Crit |
-| 21 | Hit |
-| 22 | Defense |
-| 23 | Dodge |
-| 24 | Parry |
-| 25 | Block |
-
-Each enchantment effect has key `(u64(enchant_id) << 8) | effect_index`. Indices reserve 64 positions
-per client enchantment slot. A referenced spell's three subeffects each reserve eight positions
-for expanded stats or schools. The index is `slot * 64 + subeffect * 8 + expansion`, from 0 through
-191. Direct effects use subeffect zero and expansion zero. `spell_id` retains the source spell
-reference even when the Stat Kind is unknown.
-
-Enchantment IDs 7745 and 7748 are authored compatibility entries, with +3 Strength and +3 Stamina.
-They preserve existing stored item meanings. They are not rows from the build 5875 client
-catalogue. The importer refuses a client catalogue that collides with either ID.
-The Gateway sends the client enchantment ID with the same Stat Kind and amount (7745 as 823, 7748 as
-724). The Module keeps the stored ID.
 
 ### GameObject collision
 

@@ -39,7 +39,7 @@ fn call_capture(shard: &Standalone, reducer: &str, args: &[&str]) -> serde_json:
 }
 
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn durable_transfer_intent_survives_event_reaping_and_fences_actions() {
     let shard = stage("sessionless-durable-transfer-intent");
     shard.assert_call(
@@ -141,7 +141,7 @@ fn durable_transfer_intent_survives_event_reaping_and_fences_actions() {
 }
 
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn transfer_intent_completion_requires_its_exact_claim_and_ready_arrival() {
     let shard = stage("sessionless-exact-transfer-claim");
     shard.assert_call(
@@ -320,7 +320,7 @@ fn transfer_intent_completion_requires_its_exact_claim_and_ready_arrival() {
 }
 
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn pending_recovery_cannot_settle_a_later_return_crossing() {
     let shard = stage("sessionless-realm-transfer-cas");
     let actor = r#"{"guid":1,"ownership":null}"#;
@@ -476,7 +476,7 @@ fn pending_recovery_cannot_settle_a_later_return_crossing() {
 }
 
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn admission_reads_current_consent_and_session_ownership() {
     let shard = stage("sessionless-admission");
     assert_refusal(
@@ -526,7 +526,7 @@ fn admission_reads_current_consent_and_session_ownership() {
 }
 
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn each_selection_clears_only_its_characters_unclaimed_group_intents() {
     let shard = stage("sessionless-intents");
     // Disable scheduled event GC so row lifetime cannot hide a failed cleanup or claim.
@@ -584,7 +584,7 @@ fn each_selection_clears_only_its_characters_unclaimed_group_intents() {
 }
 
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn unsharded_actor_acceptance_obeys_consent_without_restricting_sessionful_characters() {
     let shard = stage("sessionless-local-answer");
     shard.assert_call("install_guid_range", &["0"]);
@@ -631,7 +631,7 @@ fn unsharded_actor_acceptance_obeys_consent_without_restricting_sessionful_chara
 }
 
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn suppressed_consent_travels_with_the_character_through_export_and_import() {
     let source = stage("sessionless-transfer-source");
     source.assert_call("install_guid_range", &["0"]);
@@ -674,7 +674,7 @@ fn suppressed_consent_travels_with_the_character_through_export_and_import() {
 }
 
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn generic_release_cannot_clear_a_bot_owned_arrival() {
     let source = stage("sessionless-bot-release-source");
     source.assert_call("install_guid_range", &["0"]);
@@ -768,7 +768,7 @@ fn generic_release_cannot_clear_a_bot_owned_arrival() {
 }
 
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn active_account_ownership_refuses_admission_before_character_online_changes() {
     let shard = stage("sessionless-account-ownership");
     shard.assert_call("claim_account", &["1", "1", "501"]);

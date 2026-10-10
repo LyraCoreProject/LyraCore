@@ -13,13 +13,31 @@ Closes #
 
 ## What you verified
 
-<!-- Paste real output, not intentions. Sum the `test result:` lines per crate — each command prints
-     several (unit target, integration target, doctests) and some are legitimately `0 tests`.
-     The `Rust` workflow runs the first three on every PR; fmt and clippy are advisory there. -->
+<!-- Paste real output, not intentions. Each `cargo test` prints several `test result:` lines (unit
+     target, integration target, doctests); read them all. docs/testing.md explains each tier. -->
+
+The commands CI runs, in `.github/workflows/rust.yml`:
 
 - [ ] `cargo fmt --all -- --check`
 - [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- [ ] `cargo test -p lyracore-importer` · `-p lyracore-module --lib --features=debug_reducers` · `-p lyracore-gateway` · `-p lyracore-shared`
+- [ ] `cargo test -p lyracore-importer`
+- [ ] `cargo test -p lyracore-module --lib --features=debug_reducers`
+- [ ] `cargo test -p lyracore-gateway`
+- [ ] `cargo test -p lyracore-shared`
+- [ ] `cargo test -p lyracore-test-support`
+- [ ] `cargo check --target wasm32-unknown-unknown -p lyracore-module --features=debug_reducers`
+
+In `.github/workflows/module-durable.yml`, when the change reaches the Module or the schema:
+
+- [ ] `cargo test -p lyracore-module --test <target> -- --ignored` for each durable target the change touches (CI runs them all)
+- [ ] `scripts/check-gateway-bindings.py`
+
+In `.github/workflows/runtime-scripts.yml`, when the change reaches `datascripts/`:
+
+- [ ] `bun test tests/runtime-scripts.test.ts` in `datascripts/`
+
+Other checks:
+
 - [ ] Module or schema changes: a plain `spacetime publish` against your local stack migrates cleanly (**never** `publish -c`)
 - [ ] `shellcheck --severity=warning` on any shell script you changed
 - [ ] Markdown links you added resolve

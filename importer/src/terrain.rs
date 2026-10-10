@@ -403,24 +403,21 @@ mod tests {
     use super::*;
     use crate::world_import_scope::{WorldImportProfile, WorldImportScope};
 
-    /// The operator's own 1.12.1 client `Data/` dir, when the Verification below may read it.
-    /// Client archives never enter the repo, so without it the test reports itself skipped.
+    /// The operator's own 1.12.1 client `Data/` dir. Client archives never enter the repo, so the
+    /// tests that read it are ignored by default.
     fn client_data_dir() -> Option<std::path::PathBuf> {
         let dir = std::env::var_os("LYRACORE_CLIENT_DATA")?;
         Some(std::path::PathBuf::from(dir))
     }
 
     #[test]
+    #[ignore = "requires the Operator's LYRACORE_CLIENT_DATA"]
     fn alliance_eastern_terrain_dry_run_passes_every_slice_self_check() {
         // Verification against the owned client: the same `collect_scope` a `--terrain
         // --world-profile alliance-eastern` dry run takes, so a green result proves the profile's
         // Human, Dun Morogh and Loch Modan samples stand on the heightmap the Module will read.
-        let Some(data_dir) = client_data_dir() else {
-            eprintln!(
-                "skipped: set LYRACORE_CLIENT_DATA=<client Data/ dir> to run this Verification"
-            );
-            return;
-        };
+        let data_dir = client_data_dir()
+            .expect("LYRACORE_CLIENT_DATA must name the owned client Data directory");
         let scope = WorldImportScope::canonical(WorldImportProfile::AllianceEastern)
             .expect("eastern profile");
         let mut chain = open_terrain_chain(&data_dir).expect("terrain patch chain");

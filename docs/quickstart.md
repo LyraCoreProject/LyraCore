@@ -37,7 +37,7 @@ without it: [§2](#2-clone-and-check) has the plain `git clone` form.
 | Thing | Version | Why that version |
 | --- | --- | --- |
 | **Rust** | **1.93.0** | The workspace declares `rust-version = "1.93.0"` and `rust-toolchain.toml` pins the same. **Nothing lower builds** — `spacetimedb`/`spacetimedb-sdk` 2.7.1 declare `rust-version = "1.93.0"` themselves, so there is no lower MSRV to fall back to. You do **not** install it by hand: rustup reads `rust-toolchain.toml` and fetches/switches to 1.93.0 (plus the `wasm32-unknown-unknown` target) for any `cargo` command run inside the checkout. |
-| **SpacetimeDB CLI** | **exactly 2.7.1** | `module/Cargo.toml` pins `spacetimedb = "=2.7.1"` and `gateway/Cargo.toml` pins the SDK to `=2.7.1`. `./lyracore preflight` enforces an **exact** match and fails on anything else; `./lyracore doctor` reports the version it found. |
+| **SpacetimeDB CLI** | **exactly 2.7.1** | `module/Cargo.toml` pins `spacetimedb = "=2.7.1"` and `gateway/Cargo.toml` pins the SDK to `=2.7.1`. `./lyracore preflight` and CI require an exact match. `./lyracore doctor` only checks for 2.7.1 or newer, so a newer CLI passes `doctor` and then fails `preflight`. Install 2.7.1. |
 | **git**, **curl**, a C toolchain | any current | Cloning, the SpacetimeDB installer, and linking the gateway. |
 | **wasm-opt** (`install.sh` offers a user-local install; otherwise Ubuntu/Debian package `binaryen`, macOS `brew install binaryen`) | any current, *optional* | `spacetime publish` runs it to optimise the module WASM. It is **not required** — publish still succeeds without it — but the module is the server's authoritative game logic, running every reducer on every shard, so skipping it means shipping that logic unoptimised, silently, on every future publish too. Without it you'll see `Could not find wasm-opt to optimise the module` mid-publish; `lyracore doctor` reports it as an optional `⚠` rather than a blocking `✗`. |
 
@@ -237,8 +237,7 @@ portal crosses to the Instance Pool, which the same import populates with map 36
 > The fixture used to carry a second Elwynn database and a **walkable seam** on the road to
 > Goldshire — a mid-session handoff between two databases serving one map. That region tier was
 > removed from the codebase on 2026-08-08 (#471, an operator decision to keep the alpha on the broad
-> splits alone); the design is preserved in
-> [`docs/region-sharding.md`](./region-sharding.md) (retired).
+> splits alone).
 
 ⚠ **Expect empty ground beyond Northshire.** Everything the fixture seeds lives in Northshire
 Valley; the rest of Elwynn stays unpopulated until you run `./lyracore import` (which needs a
@@ -428,7 +427,7 @@ run a stage at a time.
 Exact model/WMO rays are a separate step. `./lyracore import vmaps` imports matching profile
 geometry on each populated World Shard and skips the Instance Pool. It does not enable exact rays.
 `debug_set_vmap_enabled true` remains an explicit Operator decision after the checks in
-[`docs/vmap-rollout.md`](./vmap-rollout.md).
+[`docs/verification/vmap-rollout.md`](./verification/vmap-rollout.md).
 
 The direct importer can dry-run the bounded Map 36 entry and exit route with
 `--vmap <client Data/ dir> --world-profile instances`. This is an archive-derived geometry check.
@@ -803,15 +802,14 @@ name matches nothing and still exits 1 — indistinguishable from "already stopp
 
 ## Where to go next
 
-- [`docs/development-cli.md`](./development-cli.md) — the CLI's full command and safety contract.
+- The [CLI command reference](https://github.com/LyraCoreProject/lyracore-cli/blob/main/docs/commands.md) in the `lyracore-cli` repository: every command and its safety
+  rules.
 - [GitHub Issues](https://github.com/LyraCoreProject/LyraCore/issues) — the work queue. Run the
-  offline checks (`cargo test` per crate) before proposing a change.
+  checks in [`docs/testing.md`](./testing.md) before proposing a change.
 - [`docs/danger-zones.md`](./danger-zones.md) — authoritative traps, tooling gotchas, and the
   production (four-database) deploy procedure. `dev up` runs its own four-database fixture
   topology — the same tiers, on a loopback node — which is the deliberate exception to §3; do not
   use it to launch or repair a production realm.
-- [`docs/region-sharding.md`](./region-sharding.md) — retired (#471): the removed region tier's
-  design — seam menus, assignments, view merge — kept for reference.
 - [`docs/architecture.md`](./architecture.md) and [`docs/schema.md`](./schema.md) — how the module
   and gateway are put together, if you are here to write game logic.
 

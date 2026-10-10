@@ -13,7 +13,8 @@ files, and players connect with an unmodified client.
 
 ### Requirements
 - A World of Warcraft 1.12.1 client, build 5875. None is distributed here.
-- A Linux or macOS machine or container. WSL is untested.
+- [Rust](https://rust-lang.org/tools/install/) through rustup. `rust-toolchain.toml` pins 1.93.0, and rustup installs it on the first `cargo` call.
+- The SpacetimeDB CLI, exactly version 2.7.1. `module/Cargo.toml` pins it, and `lyracore preflight` refuses any other version. `install.sh` offers to install it.- A Linux or macOS machine or container. WSL is untested.
 
 ### Installing
 ```bash
@@ -88,7 +89,8 @@ action into a reducer call. The realm runs on several databases that all run the
 ## Contributing
 
 Anyone can open an issue or a pull request. Start with [`CONTRIBUTING.md`](./CONTRIBUTING.md). It
-says what gets in, how to file an issue, and how a maintainer judges a pull request.
+names the three required reads and explains how to file an issue or a pull request.
+[`docs/quickstart.md`](./docs/quickstart.md) goes from a clone to a connected client.
 
 ## Credits
 

@@ -28,7 +28,8 @@ Use this order when two good practices compete:
 ## Domain language and types
 
 - Use `CONTEXT.md` terms in identifiers, tests, comments, logs, docs, commits, and PRs. Update the
-  glossary in the same change when a term is introduced or sharpened.
+  glossary in the same change when a term is introduced or sharpened, and `CORE_TERMS.md` too when
+  it lists the term.
 - Make illegal states hard to represent. Prefer an enum or a small domain type when it prevents two
   meanings, units, identifiers, or states from being mixed.
 - Do not wrap a primitive only to satisfy a style rule. A domain type earns its place by enforcing an
